@@ -199,10 +199,22 @@ bloc au modèle.
   `−` `+` taille ; `1`…`0` intensité ; `[` `]` rotation du pinceau ; `R` `L`
   rotation de la lumière ; ⌥H ⌥A ⌥S ⌥P ⌥R ⌥F ⌥Y les outils ; ⌘− ⌘+ ⌘0 le zoom ;
   Échap annule le trait en cours ; ⌘Z / ⇧⌘Z, ⌘S, ⌘O, ⌘N, ⌘E.
-- **Dans la vue 3D** : glisser à gauche tourne, à droite déplace, molette ou
-  pincement pour s'approcher. Avec Build, Dig ou Smooth (3D), le bouton gauche
-  sculpte au point visé et le droit inverse ; le bouton du milieu (ou Alt +
-  glisser) tourne, Shift + milieu déplace.
+- **Dans la vue 3D** : toute la carte est visible. Autour de la caméra, sur la
+  distance de vue, chaque bloc est dessiné ; au-delà, un relief lisse (un point
+  tous les 16 blocs, aux couleurs moyennes des terrains) montre le reste de la
+  carte. Glisser à gauche tourne, à droite déplace, molette ou pincement pour
+  s'approcher ; W A S D (ou les flèches) volent, Q / E descendent et montent,
+  Shift accélère ; un double-clic vise le point sous le curseur. La caméra ne
+  colle plus au sol : elle ne suit la hauteur du terrain qu'en douceur quand
+  elle suit le centre de la carte. Avec Build, Dig ou Smooth (3D), le bouton
+  gauche sculpte au point visé et le droit inverse ; le bouton du milieu (ou
+  Alt + glisser) tourne, Shift + milieu déplace.
+- **Zones, comme dans le WorldPainter modernisé** : le menu ⋮ de chaque zone
+  (diviser verticalement ou horizontalement, joindre avec la zone voisine,
+  agrandir, fermer) ; avec Shift enfoncé, une corbeille ferme la zone d'un
+  clic. Tirer le coin haut-droit d'une zone vers l'intérieur la divise à
+  l'endroit relâché (vers la gauche : côte à côte, vers le bas : l'une sur
+  l'autre).
 
 ## Tests
 

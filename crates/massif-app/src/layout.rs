@@ -270,6 +270,45 @@ impl Node {
         self.split(dst, dir, first, moved)
     }
 
+    /// The area sharing `target`'s split, when it is a single area:
+    /// `(its id, its editor, the split direction, whether target comes first)`.
+    pub fn sibling(&self, target: AreaId) -> Option<(AreaId, EditorKind, Dir, bool)> {
+        let Node::Split { dir, a, b, .. } = self else {
+            return None;
+        };
+        let is = |n: &Node| matches!(n, Node::Area { id, .. } if *id == target);
+        let area = |n: &Node| match n {
+            Node::Area { id, editor } => Some((*id, *editor)),
+            _ => None,
+        };
+        if is(a) {
+            return area(b).map(|(id, e)| (id, e, *dir, true));
+        }
+        if is(b) {
+            return area(a).map(|(id, e)| (id, e, *dir, false));
+        }
+        a.sibling(target).or_else(|| b.sibling(target))
+    }
+
+    /// Set the ratio of the split that holds `target` directly.
+    pub fn set_parent_ratio(&mut self, target: AreaId, value: f32) -> bool {
+        let Node::Split { ratio, a, b, .. } = self else {
+            return false;
+        };
+        let is = |n: &Node| matches!(n, Node::Area { id, .. } if *id == target);
+        if is(a) || is(b) {
+            *ratio = value;
+            return true;
+        }
+        a.set_parent_ratio(target, value) || b.set_parent_ratio(target, value)
+    }
+
+    /// The newest area of the tree (tests).
+    #[cfg(test)]
+    pub fn max_id_pub(&self) -> Option<AreaId> {
+        Some(self.max_id())
+    }
+
     fn max_id(&self) -> AreaId {
         match self {
             Node::Area { id, .. } => *id,
@@ -451,6 +490,33 @@ impl Layout {
         id
     }
 
+    /// Split an area at `ratio` of its width (`Dir::Row`) or height; the new,
+    /// empty half comes first when `new_first`.
+    pub fn split_at(&mut self, target: AreaId, dir: Dir, new_first: bool, ratio: f32) -> AreaId {
+        let id = self.fresh_id();
+        let new = Node::Area {
+            id,
+            editor: EditorKind::Empty,
+        };
+        let root = &mut self.current_mut().root;
+        if root.split(target, dir, new_first, new) {
+            root.set_parent_ratio(id, ratio.clamp(0.05, 0.95));
+        }
+        id
+    }
+
+    /// Merge `target` with the area sharing its split: the sibling goes, the
+    /// target takes its place.
+    pub fn join(&mut self, target: AreaId) -> bool {
+        match self.current().root.sibling(target) {
+            Some((other, ..)) => {
+                self.close(other);
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn close(&mut self, target: AreaId) {
         let ws = self.current_mut();
         if ws.root.remove(target).is_some() && ws.maximized == Some(target) {
@@ -547,6 +613,23 @@ mod tests {
         let json = serde_json::to_string(&layout).unwrap();
         let back: Layout = serde_json::from_str(&json).unwrap();
         assert_eq!(back.sanitize(), layout);
+    }
+
+    #[test]
+    fn corner_splits_and_joins() {
+        // Minimal: tools | map.
+        let mut layout = Layout {
+            active: 5,
+            ..Layout::default()
+        };
+        let map = layout.current().root.first_area() + 1;
+        assert_eq!(layout.current().root.editor_of(map), Some(EditorKind::Map));
+        let new = layout.split_at(map, Dir::Row, false, 0.7);
+        let (sib, editor, dir, first) = layout.current().root.sibling(new).unwrap();
+        assert_eq!((sib, editor, dir, first), (map, EditorKind::Map, Dir::Row, false));
+        assert!(layout.join(map));
+        assert_eq!(layout.current().root.editor_of(new), None);
+        assert_eq!(layout.current().root.count(), 2);
     }
 
     #[test]

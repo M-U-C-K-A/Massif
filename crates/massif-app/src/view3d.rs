@@ -50,6 +50,9 @@ pub const EAST: u8 = 2;
 pub const WEST: u8 = 3;
 pub const SOUTH: u8 = 4;
 pub const NORTH: u8 = 5;
+/// A sloped cell of the far terrain: heights at its four corners (`y`, then
+/// `h` packs the x and z deltas as two bytes, `len` the diagonal one + 128).
+pub const SLOPE: u8 = 6;
 
 /// One face, drawn as an instanced quad. Positions are in blocks from the
 /// north-west corner of the chunk.
@@ -551,6 +554,168 @@ fn theme_dark(c: [u8; 3]) -> [u8; 3] {
     [c[0] / 2, c[1] / 2, c[2] / 2]
 }
 
+// ------------------------------------------------------------ far terrain --
+
+/// Blocks per cell of the far terrain.
+pub const FAR_STEP: i32 = 16;
+/// Tiles per side of a far chunk (512 blocks, 32 × 32 cells).
+pub const FAR_TILES: i32 = 4;
+const FAR_CELLS: usize = (FAR_TILES * TILE_SIZE / FAR_STEP) as usize;
+const CELLS_PER_TILE: usize = (TILE_SIZE / FAR_STEP) as usize;
+
+/// The far chunk holding a tile.
+pub fn far_key(tile: TilePos) -> TilePos {
+    TilePos::new(tile.x.div_euclid(FAR_TILES), tile.z.div_euclid(FAR_TILES))
+}
+
+/// The whole map beyond the detailed area: one column sampled every
+/// `FAR_STEP` blocks, drawn as blocks of that size. Positions along x and z
+/// are in cells; faces never span two tiles, so the shader can hide the
+/// tiles drawn in full detail.
+pub fn build_far(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, key: TilePos, style: Style) -> ChunkFaces {
+    let n = FAR_CELLS;
+    let m = n + 2;
+    let (bx, bz) = (key.x * FAR_TILES * TILE_SIZE, key.z * FAR_TILES * TILE_SIZE);
+    let wk = reg.well_known;
+    let colors = Colors {
+        reg,
+        mode: style.mode,
+        sea,
+        auto: AutoBiome::new(reg),
+        stone: reg.block(wk.stone).color,
+        deepslate: reg.block(wk.deepslate).color,
+        mat: Materializer::new(reg, seed, dim.min_y),
+    };
+    let clamp16 = |v: i32| v.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+    // Top, colour and water of every cell, with a ring of neighbours.
+    let mut tops: Vec<Option<(i32, [u8; 3])>> = vec![None; m * m];
+    // A cell stands for 256 columns: in terrain mode it takes the mean
+    // colours of its terrain's layers, not one block picked at random.
+    let mut means: HashMap<u16, ([u8; 3], [u8; 3])> = HashMap::new();
+    let mut mean_colors = |terrain: u16| {
+        *means.entry(terrain).or_insert_with(|| {
+            let def = reg.terrain(TerrainId(terrain));
+            let mean = |i: usize| {
+                let s = def.strata.get(i)?;
+                let total: u32 = s.blocks.iter().map(|b| b.1 as u32).sum::<u32>().max(1);
+                let mut c = [0u32; 3];
+                for &(b, w) in &s.blocks {
+                    let bc = reg.block(b).color;
+                    for k in 0..3 {
+                        c[k] += bc[k] as u32 * w as u32;
+                    }
+                }
+                Some(c.map(|v| (v / total) as u8))
+            };
+            let top = mean(0).unwrap_or(def.color);
+            (top, mean(1).unwrap_or(top))
+        })
+    };
+    let mut wet = vec![i32::MIN; m * m];
+    let mut stacks: HashMap<TilePos, Option<TileStack>> = HashMap::new();
+    let (mut sp, mut fl) = (Vec::new(), Vec::new());
+    let mut sampler = ColumnSampler::default();
+    for j in 0..m {
+        for i in 0..m {
+            let x = bx + (i as i32 - 1) * FAR_STEP + FAR_STEP / 2;
+            let z = bz + (j as i32 - 1) * FAR_STEP + FAR_STEP / 2;
+            let pos = TilePos::containing(x, z);
+            let Some(stack) = stacks.entry(pos).or_insert_with(|| TileStack::new(dim, pos, false)) else {
+                continue;
+            };
+            let cell = local_index(x, z);
+            stack.spans(cell, &mut sp);
+            let Some(top) = sp.last().copied() else { continue };
+            let inner = (1..=n).contains(&i) && (1..=n).contains(&j);
+            let (color, _) = if !inner {
+                ([0; 3], [0; 3])
+            } else if style.mode == MapMode::Terrain {
+                mean_colors(top.terrain.0)
+            } else {
+                let sample = if style.mode == MapMode::Biome { sampler.sample(stack, cell) } else { Sample::EMPTY };
+                colors.top(top.terrain.0, top.y0, top.y1, x, z, 0.0, &sample)
+            };
+            tops[j * m + i] = Some((top.y1, color));
+            if style.water {
+                stack.fluids(cell, &sp, &mut fl);
+                if let Some(&(f0, f1)) = fl.last()
+                    && f0 == top.y1
+                {
+                    wet[j * m + i] = f1;
+                }
+            }
+        }
+        // Rows of tiles behind are done with.
+        if stacks.len() > 32 {
+            let row = TilePos::containing(0, bz + (j as i32 - 1) * FAR_STEP).z;
+            stacks.retain(|p, _| p.z >= row);
+        }
+    }
+    let mut out = ChunkFaces::default();
+    // A smooth surface through the corners of the cells: each corner is the
+    // mean height of the cells around it, so neighbouring far chunks meet.
+    let corner = |ci: usize, cj: usize| -> Option<i32> {
+        let mut sum = 0i32;
+        let mut count = 0;
+        for (a, b) in [(ci, cj), (ci + 1, cj), (ci, cj + 1), (ci + 1, cj + 1)] {
+            if let Some((y, _)) = tops[b * m + a] {
+                sum += y;
+                count += 1;
+            }
+        }
+        (count > 0).then(|| (sum as f32 / count as f32).round() as i32)
+    };
+    let corners: Vec<Option<i32>> = (0..(n + 1) * (n + 1)).map(|c| corner(c % (n + 1), c / (n + 1))).collect();
+    let at_corner = |i: usize, j: usize| corners[j * (n + 1) + i];
+    for j in 0..n {
+        for i in 0..n {
+            let Some((_, color)) = tops[(j + 1) * m + i + 1] else { continue };
+            let (Some(c00), Some(c10), Some(c01), Some(c11)) = (at_corner(i, j), at_corner(i + 1, j), at_corner(i, j + 1), at_corner(i + 1, j + 1))
+            else {
+                continue;
+            };
+            let d = |c: i32| (c - c00).clamp(-127, 127);
+            let (d1, d2, d3) = (d(c10), d(c01), d(c11));
+            out.solid.push(Face {
+                x: i as u8,
+                z: j as u8,
+                dir: SLOPE,
+                len: (d3 + 128) as u8,
+                y: clamp16(c00),
+                h: ((d1 as u8 as u16) | ((d2 as u8 as u16) << 8)) as i16,
+                color: rgba(color, 255),
+            });
+        }
+    }
+    // Water, flat, merged within each tile.
+    if style.water {
+        for tj in 0..FAR_TILES as usize {
+            for ti in 0..FAR_TILES as usize {
+                let (oi, oj) = (ti * CELLS_PER_TILE, tj * CELLS_PER_TILE);
+                greedy(
+                    CELLS_PER_TILE,
+                    |i, j| {
+                        let w = wet[(oj + j + 1) * m + oi + i + 1];
+                        (w != i32::MIN).then_some(w)
+                    },
+                    |i, j, w, h, y| {
+                        out.water.push(Face {
+                            x: (oi + i) as u8,
+                            z: (oj + j) as u8,
+                            dir: UP,
+                            len: w as u8,
+                            y: clamp16(y),
+                            h: h as i16,
+                            color: [52, 104, 210, 168],
+                        })
+                    },
+                );
+            }
+        }
+    }
+    out
+}
+
 // ------------------------------------------------------------- rendering --
 
 #[repr(C)]
@@ -562,6 +727,9 @@ pub struct Globals {
     pub sky: [f32; 4],
     /// Fog start, fog end, ambient weight, sun weight.
     pub fog: [f32; 4],
+    /// The rectangle drawn in full detail (x0, z0, x1, z1, from the origin
+    /// of the frame): the far terrain stays out of it.
+    pub detail: [f32; 4],
 }
 
 /// Where a chunk is, relative to the origin of the frame.
@@ -570,6 +738,8 @@ pub struct Globals {
 struct ChunkUniform {
     /// x, y, z offset; w = 1 for water.
     origin: [f32; 4],
+    /// Blocks per unit along x and z (1, or `FAR_STEP` for the far terrain).
+    params: [f32; 4],
 }
 
 const SHADER: &str = r#"
@@ -579,11 +749,13 @@ struct Globals {
     sun: vec4<f32>,
     sky: vec4<f32>,
     fog: vec4<f32>,
+    detail: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> g: Globals;
 
 struct Chunk {
     origin: vec4<f32>,
+    params: vec4<f32>,
 };
 @group(1) @binding(0) var<uniform> chunk: Chunk;
 
@@ -605,15 +777,44 @@ fn vs_main(@builtin(vertex_index) vi: u32, f: FaceIn) -> VertexOut {
     // Corners (0,0) (1,0) (1,1) (0,0) (1,1) (0,1): two triangles.
     let u = f32((0x16u >> vi) & 1u);
     let v = f32((0x34u >> vi) & 1u);
-    let x = f32(f.xz_dir_len.x);
-    let z = f32(f.xz_dir_len.y);
-    let len = f32(f.xz_dir_len.w);
+    let k = chunk.params.x;
+    let dir = f.xz_dir_len.z;
+    let x = f32(f.xz_dir_len.x) * k;
+    let z = f32(f.xz_dir_len.y) * k;
+    var len = f32(f.xz_dir_len.w) * k;
+    if (dir == 6u) {
+        len = k;
+    }
     let y = f32(f.y_h.x);
-    let h = f32(f.y_h.y);
+    var h = f32(f.y_h.y);
+    if (dir < 2u) {
+        h = h * k;
+    }
+    if (dir == 6u) {
+        h = k;
+    }
+    // The far terrain gives way to the area drawn in full detail: find the
+    // cell the face belongs to and drop the face if it lies there.
+    if (k > 1.5) {
+        var c = vec2<f32>(x + len * 0.5, z + h * 0.5);
+        if (dir == 2u) { c = vec2<f32>(x - k * 0.5, z + len * 0.5); }
+        if (dir == 3u) { c = vec2<f32>(x + k * 0.5, z + len * 0.5); }
+        if (dir == 4u) { c = vec2<f32>(x + len * 0.5, z - k * 0.5); }
+        if (dir == 5u) { c = vec2<f32>(x + len * 0.5, z + k * 0.5); }
+        let w = c + chunk.origin.xz;
+        if (w.x > g.detail.x && w.x < g.detail.z && w.y > g.detail.y && w.y < g.detail.w) {
+            var gone: VertexOut;
+            gone.clip = vec4<f32>(0.0, 0.0, -1.0, 1.0);
+            gone.color = vec4<f32>(0.0);
+            gone.normal = vec3<f32>(0.0, 1.0, 0.0);
+            gone.world = vec3<f32>(0.0);
+            return gone;
+        }
+    }
     var p: vec3<f32>;
     var n: vec3<f32>;
     var top = y + h;
-    switch f.xz_dir_len.z {
+    switch dir {
         case 0u: {
             p = vec3<f32>(x + v * len, y, z + u * h);
             n = vec3<f32>(0.0, 1.0, 0.0);
@@ -636,9 +837,24 @@ fn vs_main(@builtin(vertex_index) vi: u32, f: FaceIn) -> VertexOut {
             p = vec3<f32>(x + u * len, y + v * h, z);
             n = vec3<f32>(0.0, 0.0, 1.0);
         }
-        default: {
+        case 5u: {
             p = vec3<f32>(x + v * len, y + u * h, z);
             n = vec3<f32>(0.0, 0.0, -1.0);
+        }
+        default: {
+            // A sloped cell: corner heights from the packed deltas.
+            let packed = f.y_h.y;
+            let d1 = f32((packed << 24u) >> 24u);
+            let d2 = f32(packed >> 8u);
+            let d3 = f32(i32(f.xz_dir_len.w) - 128);
+            // v runs along x, u along z (counter-clockwise from above).
+            let hx0 = mix(y, y + d1, v);
+            let hx1 = mix(y + d2, y + d3, v);
+            p = vec3<f32>(x + v * k, mix(hx0, hx1, u), z + u * k);
+            let dx = ((d1 + d3) - d2) * 0.5;
+            let dz = ((d2 + d3) - d1) * 0.5;
+            n = normalize(vec3<f32>(-dx / k, 1.0, -dz / k));
+            top = 1.0e9;
         }
     }
     // Water sits a little below the top of its block.
@@ -708,6 +924,8 @@ pub struct Renderer3d {
     slots: u64,
     target: Option<Target>,
     chunks: HashMap<TilePos, GpuChunk>,
+    /// Far terrain, per far chunk.
+    far: HashMap<TilePos, GpuChunk>,
 }
 
 impl Renderer3d {
@@ -816,6 +1034,7 @@ impl Renderer3d {
             slots: 64,
             target: None,
             chunks: HashMap::new(),
+            far: HashMap::new(),
         }
     }
 
@@ -864,6 +1083,15 @@ impl Renderer3d {
         self.chunks.insert(tile, chunk);
     }
 
+    /// Put (or replace) a far chunk on the GPU.
+    pub fn upload_far(&mut self, key: TilePos, faces: &ChunkFaces) {
+        let chunk = GpuChunk {
+            solid: self.upload_faces(&faces.solid, "massif 3d far"),
+            water: self.upload_faces(&faces.water, "massif 3d far water"),
+        };
+        self.far.insert(key, chunk);
+    }
+
     /// Forget the chunks `keep` says no to.
     pub fn retain(&mut self, mut keep: impl FnMut(TilePos) -> bool) {
         self.chunks.retain(|t, _| keep(*t));
@@ -871,6 +1099,7 @@ impl Renderer3d {
 
     pub fn clear(&mut self) {
         self.chunks.clear();
+        self.far.clear();
     }
 
     /// Make sure the render target has `size` pixels. Returns whether it was
@@ -920,13 +1149,22 @@ impl Renderer3d {
         self.target.as_ref().map(|t| &t.resolve_view)
     }
 
-    /// Draw the chunks `tiles` into the render target. Positions are made
-    /// relative to `origin` (block coordinates), the origin of `globals`.
-    pub fn render(&mut self, globals: &Globals, origin: (i32, i32), tiles: &[TilePos]) {
+    /// Draw the detailed chunks `tiles` and the far chunks `far` into the
+    /// render target. Positions are made relative to `origin` (block
+    /// coordinates), the origin of `globals`.
+    pub fn render(&mut self, globals: &Globals, origin: (i32, i32), tiles: &[TilePos], far: &[TilePos]) {
         if self.target.is_none() {
             return;
         }
-        let drawn: Vec<TilePos> = tiles.iter().copied().filter(|t| self.chunks.contains_key(t)).collect();
+        // (key, far?) of everything drawn, with its offset and scale.
+        let mut drawn: Vec<(TilePos, bool, f32, f32, f32)> = Vec::new();
+        for t in tiles.iter().filter(|t| self.chunks.contains_key(t)) {
+            drawn.push((*t, false, (t.x * TILE_SIZE - origin.0) as f32, (t.z * TILE_SIZE - origin.1) as f32, 1.0));
+        }
+        let span = FAR_TILES * TILE_SIZE;
+        for k in far.iter().filter(|k| self.far.contains_key(k)) {
+            drawn.push((*k, true, (k.x * span - origin.0) as f32, (k.z * span - origin.1) as f32, FAR_STEP as f32));
+        }
         let needed = (drawn.len() as u64 * 2).max(1);
         if needed > self.slots {
             self.slots = needed.next_power_of_two();
@@ -936,12 +1174,11 @@ impl Renderer3d {
         }
         // Slot 2k is chunk k's solid faces, 2k + 1 its water.
         let mut data = vec![0u8; (drawn.len() * 2).max(1) * SLOT as usize];
-        for (k, t) in drawn.iter().enumerate() {
-            let ox = (t.x * TILE_SIZE - origin.0) as f32;
-            let oz = (t.z * TILE_SIZE - origin.1) as f32;
+        for (k, &(_, _, ox, oz, scale)) in drawn.iter().enumerate() {
             for (slot, water) in [(2 * k, 0.0), (2 * k + 1, 1.0)] {
                 let u = ChunkUniform {
                     origin: [ox, 0.0, oz, water],
+                    params: [scale, 0.0, 0.0, 0.0],
                 };
                 data[slot * SLOT as usize..][..size_of::<ChunkUniform>()].copy_from_slice(bytemuck::bytes_of(&u));
             }
@@ -987,8 +1224,8 @@ impl Renderer3d {
             // Solid chunks first, then the water over them.
             for water in [false, true] {
                 pass.set_pipeline(if water { &self.water_pipeline } else { &self.opaque_pipeline });
-                for (k, t) in drawn.iter().enumerate() {
-                    let chunk = &self.chunks[t];
+                for (k, (t, is_far, ..)) in drawn.iter().enumerate() {
+                    let chunk = if *is_far { &self.far[t] } else { &self.chunks[t] };
                     let Some(faces) = (if water { &chunk.water } else { &chunk.solid }) else {
                         continue;
                     };
@@ -1090,11 +1327,14 @@ impl Camera {
     }
 
     /// Uniforms for a mesh whose positions are relative to `origin`.
-    pub fn globals(&self, origin: (i32, i32), aspect: f32, view_size: f32, sky: [u8; 3]) -> Globals {
+    /// `view_size` is the side of the detailed area, `extent` that of
+    /// everything drawn (the whole map).
+    pub fn globals(&self, origin: (i32, i32), aspect: f32, view_size: f32, extent: f32, sky: [u8; 3]) -> Globals {
         let local = |p: [f64; 3]| Vec3::new((p[0] - origin.0 as f64) as f32, p[1] as f32, (p[2] - origin.1 as f64) as f32);
         let eye = local(self.eye());
         let target = local(self.target);
-        let far = self.distance + view_size * 2.0 + 600.0;
+        let extent = extent.max(view_size);
+        let far = self.distance + extent * 1.6 + 600.0;
         let near = (self.distance * 0.01).clamp(0.2, 8.0);
         let proj = perspective(FOV_Y, aspect.max(0.01), near, far);
         let view = look_at(eye, target, Vec3::Y);
@@ -1104,7 +1344,8 @@ impl Camera {
             eye: [eye.x, eye.y, eye.z, 1.0],
             sun: [sun.x, sun.y, sun.z, 0.0],
             sky: [sky[0] as f32 / 255.0, sky[1] as f32 / 255.0, sky[2] as f32 / 255.0, 1.0],
-            fog: [self.distance + view_size * 0.35, self.distance + view_size * 1.1, 0.44, 0.66],
+            fog: [self.distance + view_size * 0.6, self.distance + extent * 1.5, 0.44, 0.66],
+            detail: [0.0; 4],
         }
     }
 }
@@ -1136,6 +1377,15 @@ fn look_at(eye: Vec3, center: Vec3, up: Vec3) -> Mat4 {
 
 // ----------------------------------------------------------------- widget --
 
+/// A rectangle of blocks: x0, z0, x1, z1.
+type BlockBox = (i32, i32, i32, i32);
+
+/// Height of the ground (or the water on it) at a point, as composed.
+fn ground_at(doc: &Document, x: f64, z: f64) -> Option<f64> {
+    let p = crate::tools::probe(doc, x.floor() as i32, z.floor() as i32)?;
+    Some(p.height.max(if p.fluid != NO_FLUID { p.fluid as f32 } else { f32::MIN }) as f64)
+}
+
 /// What the view knows of a chunk it built.
 struct ChunkInfo {
     faces: usize,
@@ -1152,10 +1402,12 @@ pub struct View3d {
     renderer: Option<Renderer3d>,
     texture: Option<egui::TextureId>,
     chunks: HashMap<TilePos, ChunkInfo>,
+    /// Far terrain chunks built, for the whole map.
+    far: HashMap<TilePos, ChunkInfo>,
     style: Option<Style>,
     generation: Option<u64>,
     needs_render: bool,
-    last_globals: Option<[f32; 32]>,
+    last_globals: Option<[f32; 36]>,
     /// Chunks still to build in view, and the time the last batch took.
     pending: usize,
     build_ms: f32,
@@ -1164,6 +1416,8 @@ pub struct View3d {
     sculpt: Option<(SculptStroke, Instant)>,
     /// Where the cursor points in the world.
     hover: Option<massif_core::voxel::Hit>,
+    /// The target is still easing toward the ground under the map's centre.
+    settling: bool,
 }
 
 impl Default for View3d {
@@ -1177,6 +1431,7 @@ impl Default for View3d {
             renderer: None,
             texture: None,
             chunks: HashMap::new(),
+            far: HashMap::new(),
             style: None,
             generation: None,
             needs_render: true,
@@ -1186,6 +1441,7 @@ impl Default for View3d {
             error: None,
             sculpt: None,
             hover: None,
+            settling: false,
         }
     }
 }
@@ -1237,6 +1493,9 @@ impl View3d {
     /// (whose walls face it).
     pub fn invalidate(&mut self, tiles: &[TilePos]) {
         for t in tiles {
+            if let Some(c) = self.far.get_mut(&far_key(*t)) {
+                c.stale = true;
+            }
             for (dx, dz) in [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)] {
                 if let Some(c) = self.chunks.get_mut(&t.offset(dx, dz)) {
                     c.stale = true;
@@ -1246,9 +1505,87 @@ impl View3d {
     }
 
     pub fn invalidate_all(&mut self) {
-        for c in self.chunks.values_mut() {
+        for c in self.chunks.values_mut().chain(self.far.values_mut()) {
             c.stale = true;
         }
+    }
+
+    /// Build missing and stale far chunks of the map, nearest first, until
+    /// `deadline`. Returns whether some remain.
+    fn build_far(&mut self, doc: &Document, deadline: Instant, renderer: &mut Renderer3d) -> bool {
+        let dim = doc.dimension();
+        let Some((lo, hi)) = dim.bounds() else { return false };
+        let (a, b) = (far_key(lo), far_key(hi));
+        let (tx, tz) = (self.camera.target[0], self.camera.target[2]);
+        let span = (FAR_TILES * TILE_SIZE) as f64;
+        let mut todo: Vec<(f64, TilePos)> = Vec::new();
+        for z in a.z..=b.z {
+            for x in a.x..=b.x {
+                let k = TilePos::new(x, z);
+                if self.far.get(&k).is_none_or(|c| c.stale) {
+                    let d = ((x as f64 + 0.5) * span - tx).hypot((z as f64 + 0.5) * span - tz);
+                    todo.push((d, k));
+                }
+            }
+        }
+        if todo.is_empty() {
+            return false;
+        }
+        todo.sort_by(|p, q| p.0.total_cmp(&q.0));
+        let style = Style {
+            mode: self.mode,
+            water: self.water,
+        };
+        let reg = &doc.world.registry;
+        let (sea, seed) = (doc.world.meta.sea_level as f32, doc.world.meta.seed);
+        let batch = rayon::current_num_threads().clamp(2, 16);
+        let mut done = 0;
+        for part in todo.chunks(batch) {
+            if Instant::now() > deadline {
+                break;
+            }
+            let built: Vec<(TilePos, ChunkFaces)> = part
+                .par_iter()
+                .map(|&(_, k)| (k, build_far(dim, reg, sea, seed, k, style)))
+                .collect();
+            for (k, faces) in built {
+                renderer.upload_far(k, &faces);
+                self.far.insert(
+                    k,
+                    ChunkInfo {
+                        faces: faces.solid.len() + faces.water.len(),
+                        stale: false,
+                    },
+                );
+                done += 1;
+            }
+            self.needs_render = true;
+        }
+        done < todo.len()
+    }
+
+    /// The detailed tiles to draw: the rings of `view` around the camera
+    /// target that are entirely built, so the far terrain never shows
+    /// through holes. Also returns their rectangle in blocks.
+    fn detailed(&self, view: &[TilePos]) -> (Vec<TilePos>, Option<BlockBox>) {
+        let centre = TilePos::containing(self.camera.target[0].floor() as i32, self.camera.target[2].floor() as i32);
+        let ring = |t: &TilePos| (t.x - centre.x).abs().max((t.z - centre.z).abs());
+        let mut complete = i32::MAX;
+        for t in view {
+            if !self.chunks.contains_key(t) {
+                complete = complete.min(ring(t) - 1);
+            }
+        }
+        let tiles: Vec<TilePos> = view.iter().copied().filter(|t| ring(t) <= complete).collect();
+        let rect = tiles.iter().fold(None, |r: Option<BlockBox>, t| {
+            let (x0, z0) = (t.x * TILE_SIZE, t.z * TILE_SIZE);
+            let (x1, z1) = (x0 + TILE_SIZE, z0 + TILE_SIZE);
+            Some(match r {
+                None => (x0, z0, x1, z1),
+                Some((a, b, c, d)) => (a.min(x0), b.min(z0), c.max(x1), d.max(z1)),
+            })
+        });
+        (tiles, rect)
     }
 
     /// Where the cursor points, with a sculpting tool.
@@ -1380,12 +1717,14 @@ impl View3d {
             let center = doc.dimension().bounds().map_or([0.0, 0.0], |(lo, hi)| {
                 [((lo.x + hi.x + 1) * 64) as f64, ((lo.z + hi.z + 1) * 64) as f64]
             });
+            let ground = ground_at(doc, center[0], center[1]).unwrap_or(64.0);
             self.camera = Camera {
-                target: [center[0], 64.0, center[1]],
+                target: [center[0], ground, center[1]],
                 distance: DISTANCES[self.distance.min(DISTANCES.len() - 1)] as f32 * 0.62,
                 ..Camera::default()
             };
             self.chunks.clear();
+            self.far.clear();
             renderer.clear();
             self.needs_render = true;
         }
@@ -1419,7 +1758,7 @@ impl View3d {
         if orbit {
             let d = response.drag_delta();
             self.camera.yaw -= d.x * 0.008;
-            self.camera.pitch = (self.camera.pitch + d.y * 0.006).clamp(0.05, 1.52);
+            self.camera.pitch = (self.camera.pitch + d.y * 0.006).clamp(-1.2, 1.55);
             moved = true;
         }
         if pan {
@@ -1435,7 +1774,7 @@ impl View3d {
             let (zoom, scroll) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta.y));
             let factor = if zoom != 1.0 { 1.0 / zoom } else { (-scroll * 0.003).exp() };
             if factor != 1.0 {
-                self.camera.distance = (self.camera.distance * factor).clamp(6.0, 8000.0);
+                self.camera.distance = (self.camera.distance * factor).clamp(2.0, 30000.0);
                 moved = true;
             }
         }
@@ -1470,26 +1809,67 @@ impl View3d {
             ui.ctx().request_repaint();
         }
 
+        // Fly with the keyboard while the pointer is over the view: W A S D
+        // (or the arrows) move, Q and E go down and up, Shift goes faster.
+        if response.hovered() && !ui.ctx().egui_wants_keyboard_input() {
+            let (dt, keys) = ui.input(|i| {
+                let k = |a: egui::Key, b: egui::Key| (i.key_down(a) || i.key_down(b)) as i32 as f64;
+                let mods = i.modifiers.command || i.modifiers.ctrl || i.modifiers.alt;
+                let keys = if mods {
+                    [0.0; 3]
+                } else {
+                    [
+                        k(egui::Key::W, egui::Key::ArrowUp) - k(egui::Key::S, egui::Key::ArrowDown),
+                        k(egui::Key::D, egui::Key::ArrowRight) - k(egui::Key::A, egui::Key::ArrowLeft),
+                        k(egui::Key::E, egui::Key::PageUp) - k(egui::Key::Q, egui::Key::PageDown),
+                    ]
+                };
+                (i.stable_dt.min(0.1) as f64, keys)
+            });
+            if keys != [0.0; 3] {
+                let speed = (self.camera.distance as f64).max(40.0) * if shift { 3.0 } else { 1.0 } * dt;
+                let (s, c) = (self.camera.yaw.sin() as f64, self.camera.yaw.cos() as f64);
+                self.camera.target[0] += (-s * keys[0] + c * keys[1]) * speed;
+                self.camera.target[2] += (-c * keys[0] - s * keys[1]) * speed;
+                self.camera.target[1] += keys[2] * speed * 0.6;
+                self.follow_map = false;
+                moved = true;
+                ui.ctx().request_repaint();
+            }
+        }
+        // Double-click: look at the point under the cursor.
+        if response.double_clicked()
+            && let Some(p) = response.interact_pointer_pos()
+        {
+            let (o, d) = self.ray(rect, p);
+            if let Some(hit) = massif_core::voxel::raycast(doc.dimension(), o, d, 100_000.0) {
+                self.camera.target = hit.point;
+                self.follow_map = false;
+                moved = true;
+            }
+        }
+        // Following the map: its centre, with the height easing toward the
+        // ground there (no jumps, and the camera never sticks to the ground).
         if self.follow_map
             && let Some(c) = map_center
-            && (c[0] != self.camera.target[0] || c[1] != self.camera.target[2])
+            && (c[0] != self.camera.target[0] || c[1] != self.camera.target[2] || self.settling)
         {
             self.camera.target[0] = c[0];
             self.camera.target[2] = c[1];
+            if let Some(y) = ground_at(doc, c[0], c[1]) {
+                let dy = y - self.camera.target[1];
+                self.camera.target[1] += dy * 0.25;
+                self.settling = dy.abs() > 0.5;
+                if self.settling {
+                    ui.ctx().request_repaint();
+                }
+            }
             moved = true;
         }
-        if moved || self.chunks.values().any(|c| c.stale) {
-            // Keep the target on the ground.
-            let (tx, tz) = (self.camera.target[0].floor() as i32, self.camera.target[2].floor() as i32);
-            if let Some(p) = crate::tools::probe(doc, tx, tz) {
-                let y = p.height.max(if p.fluid != NO_FLUID { p.fluid as f32 } else { f32::MIN }) as f64;
-                self.camera.target[1] = y;
-            }
-        }
+        let _ = moved;
 
         // ---- chunks ----------------------------------------------------------
         let view = self.tiles_in_view(size);
-        let shown: HashSet<TilePos> = view.iter().copied().collect();
         // Forget chunks well out of view.
         let keep: HashSet<TilePos> = self.tiles_in_view(size + 2 * TILE_SIZE).into_iter().collect();
         let before = self.chunks.len();
@@ -1498,12 +1878,26 @@ impl View3d {
         if self.chunks.len() != before {
             self.needs_render = true;
         }
-        // Until something is on screen, build more at once.
+        // Until something is on screen, build more at once. The detail
+        // nearest the camera comes first, then the far terrain of the map.
         let first = !view.iter().any(|t| self.chunks.contains_key(t));
         let budget = if first { BUILD_BUDGET * 4 } else { BUILD_BUDGET };
-        if self.build_chunks(doc, &view, budget, &mut renderer) {
+        let started = Instant::now();
+        let mut more = self.build_chunks(doc, &view, budget, &mut renderer);
+        if !more || self.far.is_empty() {
+            more |= self.build_far(doc, started + budget, &mut renderer);
+        } else {
+            more = true;
+        }
+        if more {
             ui.ctx().request_repaint();
         }
+        let (detail, detail_rect) = self.detailed(&view);
+        let far_keys: Vec<TilePos> = self.far.keys().copied().collect();
+        let extent = doc
+            .dimension()
+            .bounds()
+            .map_or(size as f32, |(lo, hi)| (((hi.x - lo.x + 1).max(hi.z - lo.z + 1)) * TILE_SIZE) as f32);
 
         // ---- render ----------------------------------------------------------
         let ppp = ui.ctx().pixels_per_point();
@@ -1518,11 +1912,14 @@ impl View3d {
             self.needs_render = true;
         }
         let origin = (self.camera.target[0].floor() as i32, self.camera.target[2].floor() as i32);
-        let globals = self.camera.globals(origin, rect.width() / rect.height().max(1.0), size as f32, pal.sky.to_array()[..3].try_into().unwrap());
-        let key: [f32; 32] = bytemuck::cast(globals);
+        let sky: [u8; 3] = [pal.sky.r(), pal.sky.g(), pal.sky.b()];
+        let mut globals = self.camera.globals(origin, rect.width() / rect.height().max(1.0), size as f32, extent, sky);
+        if let Some((x0, z0, x1, z1)) = detail_rect {
+            globals.detail = [(x0 - origin.0) as f32, (z0 - origin.1) as f32, (x1 - origin.0) as f32, (z1 - origin.1) as f32];
+        }
+        let key: [f32; 36] = bytemuck::cast(globals);
         if self.needs_render || self.last_globals != Some(key) {
-            let drawn: Vec<TilePos> = view.iter().copied().filter(|t| shown.contains(t)).collect();
-            renderer.render(&globals, origin, &drawn);
+            renderer.render(&globals, origin, &detail, &far_keys);
             self.last_globals = Some(key);
             self.needs_render = false;
         }
@@ -1566,8 +1963,9 @@ impl View3d {
         }
 
         // ---- overlay -------------------------------------------------------
-        let faces: usize = view.iter().filter_map(|t| self.chunks.get(t)).map(|c| c.faces).sum();
-        let mut text = format!("Full detail · {} k faces · {} blocks", faces / 1000, size);
+        let faces: usize = view.iter().filter_map(|t| self.chunks.get(t)).map(|c| c.faces).sum::<usize>()
+            + self.far.values().map(|c| c.faces).sum::<usize>();
+        let mut text = format!("Full detail over {size} blocks, the whole map beyond · {} k faces", faces / 1000);
         if self.pending > 0 {
             text.push_str(&format!(" · building {} chunks…", self.pending));
         } else if self.build_ms > 0.0 {
@@ -1769,6 +2167,32 @@ mod tests {
         }
     }
 
+    /// The far terrain covers the map with blocks of `FAR_STEP`, never
+    /// merging across tiles, at the height of the sampled columns.
+    #[test]
+    fn far_terrain_covers_the_map_coarsely() {
+        let w = world();
+        let dim = &w.dims[0];
+        let far = build_far(dim, &w.registry, 63.0, w.meta.seed, TilePos::new(-1, -1), STYLE);
+        let cells: Vec<&Face> = far.solid.iter().filter(|f| f.dir == SLOPE).collect();
+        // The map's 2 × 2 tiles in this far chunk: one sloped cell each.
+        assert_eq!(cells.len(), 4 * CELLS_PER_TILE * CELLS_PER_TILE);
+        // A cell's corner sits near the height of the columns around it.
+        let x = -512 + 19 * FAR_STEP;
+        let z = -512 + 21 * FAR_STEP;
+        let p = TileStack::new(dim, TilePos::containing(x, z), false).unwrap();
+        let mut sp = Vec::new();
+        p.spans(local_index(x, z), &mut sp);
+        let cell = cells.iter().find(|f| (f.x, f.z) == (19, 21)).unwrap();
+        assert!((cell.y as i32 - sp.last().unwrap().y1).abs() < 24, "{} vs {}", cell.y, sp.last().unwrap().y1);
+        // Neighbouring cells share their corners: the surface is closed.
+        let right = cells.iter().find(|f| (f.x, f.z) == (20, 21)).unwrap();
+        let d1 = (cell.h as u16 & 0xff) as u8 as i8 as i32;
+        assert_eq!(cell.y as i32 + d1, right.y as i32);
+        assert!(!far.water.is_empty());
+        assert_eq!(far_key(TilePos::new(-1, 3)), TilePos::new(-1, 0));
+    }
+
     /// Render the preview offscreen. Needs a GPU; skipped without one.
     #[test]
     fn renders_headlessly() {
@@ -1795,7 +2219,12 @@ mod tests {
             ..Camera::default()
         };
         let origin = (20, 0);
-        renderer.render(&camera.globals(origin, 1.6, 768.0, [178, 210, 240]), origin, &tiles);
+        // The far terrain of the whole map around, hidden where the detail is.
+        let far = TilePos::new(-1, -1);
+        renderer.upload_far(far, &build_far(&w.dims[0], &w.registry, 63.0, w.meta.seed, far, STYLE));
+        let mut globals = camera.globals(origin, 1.6, 768.0, 768.0, [178, 210, 240]);
+        globals.detail = [-128.0 - 20.0, -128.0, 128.0 - 20.0, 128.0];
+        renderer.render(&globals, origin, &tiles, &[far]);
         let (width, height, rgba) = renderer.read_image().unwrap();
         assert_eq!((width, height), (640, 400));
         if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR") {

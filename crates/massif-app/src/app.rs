@@ -648,6 +648,8 @@ impl MassifApp {
                     ("⌘S, ⌘O, ⌘N, ⌘E", "Save, open, new, export"),
                     ("Esc", "Cancel the stroke being drawn"),
                     ("Ctrl + Space", "Maximise the area under the mouse"),
+                    ("Shift over an area's header", "A button that closes the area"),
+                    ("Drag an area's top-right corner", "Split it where you let go"),
                 ] {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(keys).monospace());
@@ -659,6 +661,8 @@ impl MassifApp {
                 for (keys, what) in [
                     ("Left drag / right drag", "Turn the view / move it"),
                     ("Scroll, pinch", "Come closer / go back"),
+                    ("W A S D, arrows · Q / E", "Fly over the map · down / up (Shift: faster)"),
+                    ("Double-click", "Look at the point under the cursor"),
                     ("With Build, Dig, Smooth (3D)", "Left sculpts where the cursor points, right inverts"),
                     ("   middle drag, Alt + drag", "Turn the view while sculpting"),
                     ("   Shift + middle drag", "Move the view while sculpting"),
@@ -959,32 +963,108 @@ impl MassifApp {
             }
             _ => {}
         }
+        let shift = ui.input(|i| i.modifiers.shift);
         hui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-            let button = |ui: &mut Ui, icon: Icon, tip: &str, enabled: bool| {
-                ui.add_enabled(enabled, egui::Button::new(RichText::new(theme::glyph(icon).to_string()).size(12.5)).frame(false))
-                    .on_hover_text(tip)
+            ui.add_space(8.0); // room for the corner handle
+            // As in the modernised WorldPainter: a menu of commands, and with
+            // Shift held, a button that closes the area at once.
+            if shift && !single && !maximized {
+                if ui
+                    .add(egui::Button::new(RichText::new(theme::glyph(Icon::Trash2).to_string()).size(12.5)).frame(false))
+                    .on_hover_text("Close this area")
                     .clicked()
-            };
-            if button(ui, Icon::Trash2, "Close this area", !single && !maximized) {
-                self.layout.close(id);
+                {
+                    self.layout.close(id);
+                }
+                return;
             }
-            ui.menu_button(RichText::new(theme::glyph(Icon::Columns2).to_string()).size(12.5), |ui| {
-                if ui.button(theme::with_icon(Icon::Columns2, "Split left / right")).clicked() {
+            let sibling = self.layout.current().root.sibling(id);
+            ui.menu_button(RichText::new(theme::glyph(Icon::EllipsisVertical).to_string()).size(13.0), |ui| {
+                if ui.button(theme::with_icon(Icon::Columns2, "Split vertically")).clicked() {
                     self.layout.split(id, Dir::Row);
                 }
-                if ui.button(theme::with_icon(Icon::Rows2, "Split top / bottom")).clicked() {
+                if ui.button(theme::with_icon(Icon::Rows2, "Split horizontally")).clicked() {
                     self.layout.split(id, Dir::Column);
                 }
-            });
-            let (icon, tip) = if maximized {
-                (Icon::Minimize2, "Restore the layout (Ctrl+Space)")
-            } else {
-                (Icon::Maximize2, "Maximise this area (Ctrl+Space)")
-            };
-            if button(ui, icon, tip, !single) {
-                self.layout.toggle_maximize(id);
-            }
+                ui.add_enabled_ui(sibling.is_some() && !maximized, |ui| {
+                    ui.menu_button(theme::with_icon(Icon::Combine, "Join with"), |ui| {
+                        if let Some((_, editor, dir, first)) = sibling {
+                            let side = match (dir, first) {
+                                (Dir::Row, true) => "on the right",
+                                (Dir::Row, false) => "on the left",
+                                (Dir::Column, true) => "below",
+                                (Dir::Column, false) => "above",
+                            };
+                            if ui.button(theme::with_icon(editor.icon(), &format!("{} {side}", editor.label()))).clicked() {
+                                self.layout.join(id);
+                            }
+                        }
+                    });
+                });
+                ui.separator();
+                let label = if maximized { "Restore the layout" } else { "Maximise area" };
+                let icon = if maximized { Icon::Minimize2 } else { Icon::Maximize2 };
+                if ui
+                    .add_enabled(!single || maximized, egui::Button::new(theme::with_icon(icon, label)).shortcut_text("Ctrl+Space"))
+                    .clicked()
+                {
+                    self.layout.toggle_maximize(id);
+                }
+                if ui
+                    .add_enabled(!single && !maximized, egui::Button::new(theme::with_icon(Icon::X, "Close area")))
+                    .clicked()
+                {
+                    self.layout.close(id);
+                }
+            })
+            .response
+            .on_hover_text("Area commands · Shift: close button · drag the corner to split");
         });
+
+        // ---- corner: drag it into the area to split ----------------------------
+        let corner = Rect::from_min_size(pos2(rect.right() - 12.0, rect.top()), vec2(12.0, 12.0));
+        let handle = ui.interact(corner, Id::unique(("area corner", id)), Sense::drag());
+        let hot = handle.hovered() || handle.dragged();
+        {
+            let c = if hot { pal.accent } else { pal.weak.gamma_multiply(0.6) };
+            for k in [4.0, 8.0] {
+                painter.line_segment(
+                    [pos2(corner.right() - k - 1.0, corner.top() + 1.5), pos2(corner.right() - 1.5, corner.top() + k + 1.0)],
+                    Stroke::new(1.2, c),
+                );
+            }
+        }
+        if hot {
+            ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+        }
+        if handle.dragged()
+            && let (Some(origin), Some(p)) = (handle.interact_pointer_pos().map(|_| corner.center()), ui.input(|i| i.pointer.interact_pos()))
+        {
+            let d = p - origin;
+            let fg = ui.ctx().layer_painter(LayerId::new(Order::Foreground, Id::unique(("corner preview", id))));
+            if d.length() > 12.0 && rect.contains(p) {
+                let line = if d.x.abs() > d.y.abs() {
+                    [pos2(p.x, rect.top()), pos2(p.x, rect.bottom())]
+                } else {
+                    [pos2(rect.left(), p.y), pos2(rect.right(), p.y)]
+                };
+                fg.line_segment(line, Stroke::new(2.0, pal.accent));
+            }
+        }
+        if handle.drag_stopped()
+            && let Some(p) = ui.input(|i| i.pointer.interact_pos())
+        {
+            let d = p - corner.center();
+            if d.length() > 12.0 && rect.contains(p) {
+                if d.x.abs() > d.y.abs() {
+                    // Leftward: the new area on the right, where the corner was.
+                    self.layout.split_at(id, Dir::Row, false, (p.x - rect.left()) / rect.width());
+                } else {
+                    // Downward: the new area on top.
+                    self.layout.split_at(id, Dir::Column, true, (p.y - rect.top()) / rect.height());
+                }
+            }
+        }
 
         // ---- content -------------------------------------------------------
         let mut cui = ui.new_child(
@@ -1862,6 +1942,65 @@ mod tests {
         assert!(!app.doc.dimension().ground().is_empty());
         assert!(app.doc.path.is_none(), "an imported world is saved as a new .massif file");
         h.render().unwrap().save(dir.join("ui-import.png")).unwrap();
+
+        // The whole map in the 3D view, from far away: the far terrain fills
+        // in everything beyond the detailed area.
+        {
+            let app = h.state_mut();
+            app.dialog = None;
+            app.layout.active = 3;
+            app.view3d.camera.distance = 5200.0;
+            app.view3d.camera.pitch = 0.75;
+        }
+        for _ in 0..400 {
+            h.step();
+        }
+        let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+        image::save_buffer(dir.join("import-3d-whole.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+        {
+            let app = h.state_mut();
+            app.view3d.camera.distance = 420.0;
+            app.view3d.camera.pitch = 0.35;
+        }
+        for _ in 0..200 {
+            h.step();
+        }
+        let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+        image::save_buffer(dir.join("import-3d-close.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+    }
+
+    /// Dragging the corner of an area into it splits it there.
+    #[test]
+    fn dragging_a_corner_splits_the_area() {
+        if std::env::var_os("MASSIF_SNAPSHOT_DIR").is_none() {
+            return;
+        }
+        let mut h = harness(ThemeChoice::Light);
+        h.state_mut().layout.active = 5; // Minimal: tools | map
+        h.run_steps(5);
+        let rect = map_rect(h.state(), &h.ctx);
+        let before = h.state().layout.current().root.count();
+        let corner = pos2(rect.right() - 5.0, rect.top() + 5.0);
+        let to = pos2(rect.left() + rect.width() * 0.6, rect.top() + 30.0);
+        let button = |pressed, pos| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        h.event(egui::Event::PointerMoved(corner));
+        h.step();
+        h.event(button(true, corner));
+        h.step();
+        for i in 1..=10 {
+            h.event(egui::Event::PointerMoved(corner + (to - corner) * (i as f32 / 10.0)));
+            h.step();
+        }
+        h.event(button(false, to));
+        h.run_steps(5);
+        assert_eq!(h.state().layout.current().root.count(), before + 1);
+        let new = (h.state().layout.current().root.max_id_pub()).unwrap();
+        assert_eq!(h.state().layout.current().root.editor_of(new), Some(EditorKind::Empty));
     }
 
     #[test]

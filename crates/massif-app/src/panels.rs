@@ -940,7 +940,7 @@ pub fn empty_area(ui: &mut Ui, shown: &HashSet<EditorKind>) -> Option<EditorKind
                 ui.horizontal(|ui| {
                     let r = ui.selectable_label(false, format!("{}  {}", theme::glyph(kind.icon()), kind.label()));
                     if shown.contains(&kind) {
-                        ui.label(RichText::new("●").size(8.0).color(pal.accent)).on_hover_text("Already shown in another area");
+                        ui.label(RichText::new(theme::glyph(Icon::Dot).to_string()).size(12.0).color(pal.accent)).on_hover_text("Already shown in another area");
                     }
                     if r.clicked() {
                         picked = Some(kind);
