@@ -1,0 +1,33 @@
+[package]
+name = "massif-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "massif"
+path = "src/main.rs"
+
+[dependencies]
+massif-core.workspace = true
+massif-format.workspace = true
+massif-anvil.workspace = true
+massif-legacy.workspace = true
+log.workspace = true
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "persistence"] }
+egui = "0.37"
+egui-wgpu = "0.37"
+wgpu = { version = "30", default-features = false, features = ["wgsl", "std", "metal", "dx12", "vulkan", "gles"] }
+lucide-icons = "1.71"
+bytemuck = { version = "1.25", features = ["derive"] }
+glam = "0.34"
+rfd = "0.18"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+pollster = "1"
+
+[dev-dependencies]
+egui_kittest = { version = "0.37", features = ["wgpu", "snapshot", "eframe"] }

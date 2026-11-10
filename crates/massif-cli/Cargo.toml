@@ -1,0 +1,12 @@
+[package]
+name = "massif-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+massif-core.workspace = true
+massif-format.workspace = true
+massif-anvil.workspace = true
+massif-legacy.workspace = true

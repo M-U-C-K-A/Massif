@@ -1,0 +1,17 @@
+[package]
+name = "massif-anvil"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Minecraft Java export: NBT, region (.mca) files, level.dat"
+
+[dependencies]
+massif-core.workspace = true
+rayon.workspace = true
+flate2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+fastanvil = { version = "0.32", default-features = false }
+fastnbt = "2.6"
