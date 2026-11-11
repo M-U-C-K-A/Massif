@@ -18,12 +18,12 @@
 
 use crate::blocks::BlockLibrary;
 use crate::doc::Document;
-use crate::terrain_view::{TerrainView, ViewData, lighting};
+use crate::terrain_view::{TerrainView, ViewData, occlusion};
 use crate::theme::{self, Icon, Palette, RichTextExt};
 use egui::{Color32, ColorImage, Key, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, Vec2, pos2, vec2};
 use massif_core::graph::{
     AutoPalette, Bend, BlockPalette, CellStyle, ColorField, CombineOp, EvalCache, Evaluation, Extent, Family, Field, GradientPreset, Graph, GraphError,
-    MountainStyle, NodeId, NodeKind, NoiseStyle, Outputs, PortType, ShapeKind, TintMode, Value,
+    MountainStyle, NodeId, NodeKind, NoiseStyle, Outputs, PortType, Progress, ShapeKind, TintMode, Value,
 };
 use massif_core::registry::{Registry, TerrainId};
 use massif_core::{BlockRect, TILE_SIZE};
@@ -34,9 +34,17 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Instant;
 
 /// Build resolutions offered, in samples per side.
-pub const RESOLUTIONS: [usize; 5] = [512, 1024, 2048, 3072, 4096];
+pub const RESOLUTIONS: [usize; 7] = [512, 1024, 2048, 4096, 8192, 12288, 16384];
 /// Preview resolutions offered.
-pub const PREVIEWS: [usize; 4] = [256, 384, 512, 768];
+pub const PREVIEWS: [usize; 6] = [256, 384, 512, 768, 1024, 2048];
+/// Sizes of the images the Render panel saves.
+pub const IMAGE_SIZES: [(&str, [u32; 2]); 5] = [
+    ("HD", [1920, 1080]),
+    ("QHD", [2560, 1440]),
+    ("4K", [3840, 2160]),
+    ("Square", [4096, 4096]),
+    ("8K", [7680, 4320]),
+];
 const NODE_WIDTH: f32 = 168.0;
 const HEADER: f32 = 26.0;
 const ROW: f32 = 18.0;
@@ -202,7 +210,7 @@ fn view_data(heights: &Field, paint: &Paint, extent: &Extent, exaggeration: f32)
             let rgb = match paint {
                 Paint::Clay => mix([150.0, 143.0, 132.0], [204.0, 198.0, 188.0], (heights.data[c] - lo) / span),
                 Paint::Mask(m) => mix([44.0, 46.0, 54.0], [244.0, 242.0, 236.0], m.data.get(c).copied().unwrap_or(0.0)),
-                Paint::Color(col) => col.data.get(c).map_or([128; 3], |p| p.map(massif_core::graph::encode_srgb)),
+                Paint::Color(col) => col.data.get(c).copied().unwrap_or([128; 3]),
             };
             [rgb[0], rgb[1], rgb[2], 255]
         })
@@ -211,7 +219,7 @@ fn view_data(heights: &Field, paint: &Paint, extent: &Extent, exaggeration: f32)
         n,
         heights: heights.data.clone(),
         colors,
-        light: lighting(&heights.data, n, extent.spacing(), exaggeration),
+        light: occlusion(&heights.data, n, extent.spacing(), exaggeration),
         size: extent.size as f32,
         exaggeration,
     }
@@ -314,8 +322,17 @@ impl Worker {
     }
 }
 
-/// A build on another thread: its result, and the flag that cancels it.
-type Building = (Receiver<Result<Built, GraphError>>, Arc<AtomicBool>, Instant);
+/// A build on another thread.
+struct Building {
+    rx: Receiver<Result<Built, GraphError>>,
+    /// Stops it.
+    cancel: Arc<AtomicBool>,
+    /// How far it got.
+    progress: Arc<Progress>,
+    started: Instant,
+    /// Samples per side.
+    n: usize,
+}
 
 /// A finished build: what to write to the map.
 struct Built {
@@ -340,9 +357,9 @@ pub struct GraphEditor {
     /// The world the graph belongs to (its generation).
     generation: Option<u64>,
     pub selected: Option<NodeId>,
-    /// A node kept in the viewport whatever is selected.
+    /// The node the viewport shows (V); `None`: the graph's output.
     pinned: Option<NodeId>,
-    /// Which output of the shown node is shown.
+    /// Which output of the viewed node is shown.
     view_output: u8,
     pan: Vec2,
     zoom: f32,
@@ -366,6 +383,12 @@ pub struct GraphEditor {
     fit: bool,
     library: Option<Library>,
     pub view: TerrainView,
+    /// The render settings are open over the viewport.
+    render_open: bool,
+    /// Size of the images saved.
+    pub image_size: [u32; 2],
+    /// What saving an image gave, to show: the file's name, or what failed.
+    saved: Option<Result<String, String>>,
     /// The last canvas rectangle, for keyboard actions.
     canvas: Rect,
 }
@@ -395,6 +418,9 @@ impl Default for GraphEditor {
             fit: true,
             library: None,
             view: TerrainView::default(),
+            render_open: false,
+            image_size: [3840, 2160],
+            saved: None,
             canvas: Rect::NOTHING,
         }
     }
@@ -428,12 +454,15 @@ impl GraphEditor {
         self.fit = true;
     }
 
-    /// Select a node (its output shows in the viewport).
+    /// Select a node and view it, as V does (or go back to the output).
     #[cfg(test)]
-    pub fn select(&mut self, id: Option<NodeId>) {
+    pub fn view(&mut self, id: Option<NodeId>) {
         self.selected = id;
-        self.view_output = 0;
-        self.revision += 1;
+        match id {
+            Some(id) if self.pinned != Some(id) => self.toggle_view(id),
+            Some(_) => {}
+            None => self.view_key(),
+        }
     }
 
     fn store(&mut self, doc: &mut Document, graph: Graph) {
@@ -442,9 +471,33 @@ impl GraphEditor {
         self.revision += 1;
     }
 
-    /// The node the viewport follows, and which of its outputs.
+    /// View a node in the viewport, or go back to the graph's output if it
+    /// is the one viewed.
+    fn toggle_view(&mut self, id: NodeId) {
+        if self.pinned == Some(id) {
+            self.pinned = None;
+        } else {
+            self.pinned = Some(id);
+            self.view_output = 0;
+        }
+        self.revision += 1;
+    }
+
+    /// V: view the selected node, or go back to the output.
+    fn view_key(&mut self) {
+        match self.selected {
+            Some(id) => self.toggle_view(id),
+            None if self.pinned.is_some() => {
+                self.pinned = None;
+                self.revision += 1;
+            }
+            None => {}
+        }
+    }
+
+    /// The node the viewport shows (V), and which of its outputs.
     fn viewed(&self, graph: &Graph) -> Option<(NodeId, u8)> {
-        let id = self.pinned.or(self.selected).filter(|id| graph.node(*id).is_some())?;
+        let id = self.pinned.filter(|id| graph.node(*id).is_some())?;
         let outs = graph.node(id)?.kind.outputs().len() as u8;
         Some((id, if outs == 0 { 0 } else { self.view_output.min(outs - 1) }))
     }
@@ -460,6 +513,9 @@ impl GraphEditor {
             self.revision += 1;
             self.fit = true;
             self.view.camera = Default::default();
+            // Convert at a block per sample, or as close as offered.
+            let side = map_extent(doc, 2).size;
+            self.resolution = RESOLUTIONS.iter().copied().find(|&r| r as f64 >= side).unwrap_or(RESOLUTIONS[RESOLUTIONS.len() - 1]);
         }
         let worker = self.worker.get_or_insert_with(|| Worker::new(ctx.clone()));
         while let Ok(p) = worker.rx.try_recv() {
@@ -489,7 +545,7 @@ impl GraphEditor {
                 view: self.viewed(&graph),
                 graph,
                 extent: map_extent(doc, self.preview),
-                exaggeration: self.view.exaggeration,
+                exaggeration: self.view.render.exaggeration,
                 cancel: Arc::new(AtomicBool::new(false)),
             };
             if let Some(w) = &mut self.worker {
@@ -497,7 +553,7 @@ impl GraphEditor {
             }
             self.asked = self.revision;
         }
-        self.view.sea = Some(doc.world.meta.sea_level as f32);
+        self.view.sea_level = doc.world.meta.sea_level as f32;
     }
 
     // ------------------------------------------------------------ viewport --
@@ -514,7 +570,10 @@ impl GraphEditor {
         let graph = graph_of(doc);
         // What is shown, top left.
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(10.0)).layout(egui::Layout::top_down(egui::Align::Min)));
-        let label = match self.shown.and_then(|(id, out)| graph.node(id).map(|n| (n, out))) {
+        if ui.rect_contains_pointer(rect) && !ui.ctx().egui_wants_keyboard_input() && ui.input(|i| i.key_pressed(Key::V)) {
+            self.view_key();
+        }
+        let label = match self.shown.filter(|_| self.pinned.is_some()).and_then(|(id, out)| graph.node(id).map(|n| (n, out))) {
             Some((n, out)) => {
                 let outs = n.kind.outputs();
                 match outs.get(out as usize) {
@@ -530,10 +589,10 @@ impl GraphEditor {
             .inner_margin(egui::Margin::symmetric(8, 4))
             .show(&mut child, |ui| {
                 ui.horizontal(|ui| {
-                    if self.pinned.is_some() {
-                        ui.label(RichText::new(theme::glyph(Icon::Pin).to_string()).color(Color32::WHITE));
-                    }
+                    ui.label(RichText::new(theme::glyph(Icon::Eye).to_string()).color(Color32::WHITE));
                     ui.label(RichText::new(label).color(Color32::WHITE).medium());
+                    let hint = if self.pinned.is_some() { "V: back to the output" } else { "Select a node and press V to view it" };
+                    ui.label(RichText::new(hint).size(11.0).color(Color32::from_white_alpha(150)));
                     if self.received != self.revision || self.build.is_some() {
                         ui.spinner();
                     }
@@ -550,26 +609,128 @@ impl GraphEditor {
             .show(&mut child, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().interact_size.y = 18.0;
-                    ui.spacing_mut().slider_width = 90.0;
-                    ui.label(RichText::new("Height").size(11.5));
-                    let r = ui.add(egui::Slider::new(&mut self.view.exaggeration, 1.0..=8.0).suffix("×").max_decimals(1));
-                    if r.drag_stopped() || (r.changed() && !r.dragged()) {
-                        self.revision += 1;
-                    }
-                    ui.separator();
-                    ui.toggle_value(&mut self.view.show_sea, theme::with_icon(Icon::Waves, "Sea"))
+                    ui.toggle_value(&mut self.render_open, theme::with_icon(Icon::Sun, "Render"))
+                        .on_hover_text("Sun, clouds, haze, sea and exposure of the view");
+                    ui.toggle_value(&mut self.view.render.clouds, theme::with_icon(Icon::Cloud, "Clouds"));
+                    ui.toggle_value(&mut self.view.render.sea, theme::with_icon(Icon::Waves, "Sea"))
                         .on_hover_text(format!("Water at the world's sea level ({})", doc.world.meta.sea_level));
                     if ui.small_button(theme::glyph(Icon::Focus).to_string()).on_hover_text("Frame the relief").clicked() {
                         self.view.camera = Default::default();
                     }
+                    let [w, h] = self.image_size;
+                    if ui
+                        .small_button(theme::glyph(Icon::Camera).to_string())
+                        .on_hover_text(format!("Save the view as an image, at full quality ({w} × {h})"))
+                        .clicked()
+                    {
+                        self.save_image(doc);
+                    }
+                    match &self.saved {
+                        Some(Ok(name)) => {
+                            ui.label(RichText::new(format!("Saved {name}")).size(11.5).color(pal.weak));
+                        }
+                        Some(Err(e)) => {
+                            ui.label(RichText::new(e).size(11.5).color(pal.danger));
+                        }
+                        None => {}
+                    }
                 });
             });
+        if self.render_open {
+            let exaggeration = self.view.render.exaggeration;
+            egui::Area::new(ui.scope_id().with("render settings"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(pos2(rect.left() + 10.0, rect.top() + 46.0))
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
+                        ui.set_width(300.0);
+                        ui.spacing_mut().slider_width = 150.0;
+                        egui::ScrollArea::vertical().max_height((rect.height() - 70.0).max(160.0)).show(ui, |ui| {
+                            self.view.settings_ui(ui);
+                        });
+                    });
+                });
+            if (self.view.render.exaggeration - exaggeration).abs() > 1e-4 {
+                self.revision += 1;
+            }
+        }
         if !self.view.has_data() {
             let text = match &self.error {
                 Some(e) => e.clone(),
                 None => "Building the preview…".to_owned(),
             };
             ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(13.0), pal.weak);
+        }
+    }
+
+    /// Render the view at full quality and save it where the user says.
+    fn save_image(&mut self, doc: &Document) {
+        let name = format!("{}.png", doc.title());
+        let Some(path) = rfd::FileDialog::new().set_file_name(name).add_filter("PNG image", &["png"]).save_file() else {
+            return;
+        };
+        let Some((w, h, rgba)) = self.view.render_image(self.image_size) else {
+            self.saved = Some(Err("Nothing to render yet".to_owned()));
+            return;
+        };
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        self.saved = Some(match image::save_buffer(&path, &rgba, w, h, image::ColorType::Rgba8) {
+            Ok(()) => Ok(name),
+            Err(e) => Err(format!("The image could not be saved: {e}")),
+        });
+    }
+
+    /// The Render panel: the sun, the sky, the clouds and the sea of the
+    /// viewport, and saving it as an image.
+    pub fn render_ui(&mut self, ui: &mut Ui, doc: &Document) {
+        self.sync(ui.ctx(), doc);
+        let pal = Palette::of(ui);
+        ui.spacing_mut().slider_width = (ui.available_width() - 150.0).clamp(80.0, 240.0);
+        let exaggeration = self.view.render.exaggeration;
+        self.view.settings_ui(ui);
+        if (self.view.render.exaggeration - exaggeration).abs() > 1e-4 {
+            // The light depends on the exaggeration.
+            self.revision += 1;
+        }
+        ui.add_space(6.0);
+        ui.label(RichText::new(theme::with_icon(Icon::Camera, "Image")).size(11.5).color(pal.weak));
+        ui.horizontal(|ui| {
+            ui.add_sized([86.0, 18.0], egui::Label::new(RichText::new("Size").size(12.0)));
+            let [w, h] = self.image_size;
+            egui::ComboBox::from_id_salt("render image size")
+                .selected_text(format!("{w} × {h}"))
+                .width(130.0)
+                .show_ui(ui, |ui| {
+                    for (name, size) in IMAGE_SIZES {
+                        ui.selectable_value(&mut self.image_size, size, format!("{name} · {} × {}", size[0], size[1]));
+                    }
+                });
+        });
+        ui.add_space(4.0);
+        let detail = self.preview;
+        ui.label(
+            RichText::new(format!(
+                "Rendered from the preview, {detail} × {detail} samples: a finer preview (graph toolbar) gives a sharper image."
+            ))
+            .size(11.0)
+            .color(pal.weak),
+        );
+        ui.add_space(4.0);
+        if ui
+            .add_enabled(self.view.has_data(), theme::primary_button(ui, theme::with_icon(Icon::Camera, "Save image…")))
+            .on_hover_text("Render the view at full quality and save it as a PNG")
+            .clicked()
+        {
+            self.save_image(doc);
+        }
+        match &self.saved {
+            Some(Ok(name)) => {
+                ui.label(RichText::new(format!("Saved {name}")).size(11.5).color(pal.weak));
+            }
+            Some(Err(e)) => {
+                ui.colored_label(pal.danger, e);
+            }
+            None => {}
         }
     }
 
@@ -585,10 +746,10 @@ impl GraphEditor {
         let before = graph.clone();
 
         // A build finished: write it to the map.
-        if let Some((rx, _, started)) = &self.build
-            && let Ok(result) = rx.try_recv()
+        if let Some(b) = &self.build
+            && let Ok(result) = b.rx.try_recv()
         {
-            let took = started.elapsed().as_secs_f32();
+            let took = b.started.elapsed().as_secs_f32();
             self.build = None;
             match result {
                 Ok(built) => {
@@ -614,13 +775,22 @@ impl GraphEditor {
         // ---- toolbar ---------------------------------------------------------
         ui.horizontal(|ui| {
             ui.add_space(6.0);
-            if let Some((_, cancel, started)) = &self.build {
+            if let Some(b) = &self.build {
                 ui.spinner();
-                ui.label(format!("Converting… {:.0} s", started.elapsed().as_secs_f32()));
+                let (done, total) = (b.progress.done.load(Ordering::Relaxed), b.progress.total.load(Ordering::Relaxed));
+                let node = graph.node(b.progress.node.load(Ordering::Relaxed)).map(|n| n.kind.label()).unwrap_or("");
+                let fraction = if total == 0 { 0.0 } else { done as f32 / total as f32 };
+                ui.add(
+                    egui::ProgressBar::new(fraction)
+                        .desired_width(120.0)
+                        .desired_height(14.0)
+                        .text(RichText::new(format!("{done} / {total}")).size(10.5)),
+                );
+                ui.label(format!("{} × {}: {node}… {:.0} s", b.n, b.n, b.started.elapsed().as_secs_f32()));
                 if ui.button("Cancel").clicked() {
-                    cancel.store(true, Ordering::Relaxed);
+                    b.cancel.store(true, Ordering::Relaxed);
                 }
-                ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
             } else if ui
                 .add(theme::primary_button(ui, format!("{}  Convert to Minecraft", theme::glyph(Icon::Pickaxe))))
                 .on_hover_text("Build the graph over the whole map at the chosen resolution, and write it to the ground: heights, terrains, and the colours as the closest real blocks (undoable)")
@@ -628,24 +798,34 @@ impl GraphEditor {
             {
                 let (tx, rx) = channel();
                 let cancel = Arc::new(AtomicBool::new(false));
-                let flag = cancel.clone();
+                let progress = Arc::new(Progress::default());
+                let (flag, told) = (cancel.clone(), progress.clone());
                 let extent = map_extent(doc, self.resolution);
                 let g = graph.clone();
                 let ctx = ui.ctx().clone();
                 std::thread::spawn(move || {
-                    let result = g.build(&extent, &flag).map(|outputs| Built { extent, outputs });
+                    let result = g.build_with_progress(&extent, &flag, &told).map(|outputs| Built { extent, outputs });
                     let _ = tx.send(result);
                     ctx.request_repaint();
                 });
-                self.build = Some((rx, cancel, Instant::now()));
+                self.build = Some(Building {
+                    rx,
+                    cancel,
+                    progress,
+                    started: Instant::now(),
+                    n: self.resolution,
+                });
             }
             ui.label(RichText::new("at").color(pal.weak));
             egui::ComboBox::from_id_salt("graph resolution")
                 .selected_text(format!("{0} × {0}", self.resolution))
-                .width(104.0)
+                .width(112.0)
                 .show_ui(ui, |ui| {
                     for r in RESOLUTIONS {
-                        ui.selectable_value(&mut self.resolution, r, format!("{r} × {r}"));
+                        let r_ = ui.selectable_value(&mut self.resolution, r, format!("{r} × {r}"));
+                        if r >= 8192 {
+                            r_.on_hover_text("A large build: it takes a while and several GB of memory");
+                        }
                     }
                 });
             let blocks_per = map_extent(doc, self.resolution).spacing();
@@ -810,14 +990,18 @@ impl GraphEditor {
         // Keys over the graph.
         let typing = ui.ctx().egui_wants_keyboard_input();
         if hovered && !typing && self.library.is_none() {
-            let (tab, space, f, delete) = ui.input(|i| {
+            let (tab, space, f, delete, v) = ui.input(|i| {
                 (
                     i.key_pressed(Key::Tab),
                     i.key_pressed(Key::Space),
                     i.key_pressed(Key::F),
                     i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace),
+                    i.key_pressed(Key::V),
                 )
             });
+            if v {
+                self.view_key();
+            }
             if tab || space {
                 let at = ui.input(|i| i.pointer.hover_pos()).unwrap_or(canvas.center());
                 self.open_library(at, None);
@@ -908,14 +1092,14 @@ impl GraphEditor {
                 painter.text(
                     header.right_center() + vec2(-9.0 * self.zoom, 1.5 * self.zoom),
                     egui::Align2::RIGHT_CENTER,
-                    theme::glyph(if self.pinned == Some(id) { Icon::Pin } else { Icon::Eye }).to_string(),
+                    theme::glyph(Icon::Eye).to_string(),
                     egui::FontId::proportional(11.0 * self.zoom),
                     pal.accent,
                 );
             }
-            // Drag the node by its header; click it to select it, double-click
-            // to keep it in the viewport.
-            let handle = ui.interact(header, ui.scope_id().with(("graph node", id)), Sense::click_and_drag());
+            // Anywhere on the node (but its ports) selects it and drags it;
+            // a double-click views it, as V does.
+            let handle = ui.interact(rect, ui.scope_id().with(("graph node", id)), Sense::click_and_drag());
             if handle.dragged()
                 && let Some(n) = graph.node_mut(id)
             {
@@ -923,16 +1107,11 @@ impl GraphEditor {
                 n.pos = [n.pos[0] + d.x, n.pos[1] + d.y];
             }
             if handle.clicked() || handle.drag_started() {
-                if self.selected != Some(id) {
-                    self.selected = Some(id);
-                    self.view_output = 0;
-                    self.revision += 1;
-                }
+                self.selected = Some(id);
                 self.library = None;
             }
             if handle.double_clicked() {
-                self.pinned = if self.pinned == Some(id) { None } else { Some(id) };
-                self.revision += 1;
+                self.toggle_view(id);
             }
             if failed {
                 handle.clone().on_hover_text(self.failed[&id].clone());
@@ -940,10 +1119,9 @@ impl GraphEditor {
                 handle.clone().on_hover_text(node.kind.description());
             }
             handle.context_menu(|ui| {
-                let pin = if self.pinned == Some(id) { "Unpin from the viewport" } else { "Keep in the viewport" };
-                if ui.button(theme::with_icon(Icon::Pin, pin)).clicked() {
-                    self.pinned = if self.pinned == Some(id) { None } else { Some(id) };
-                    self.revision += 1;
+                let view = if self.pinned == Some(id) { "Back to the output (V)" } else { "View this node (V)" };
+                if ui.button(theme::with_icon(Icon::Eye, view)).clicked() {
+                    self.toggle_view(id);
                     ui.close();
                 }
                 if ui.button(theme::with_icon(Icon::Trash2, "Delete node")).clicked() {
@@ -1156,8 +1334,9 @@ impl GraphEditor {
             ui.label(
                 RichText::new(
                     "Build relief from nodes, as in Gaea: landforms and primitives make it, adjustments and simulations shape it, \
-                     masks pick parts of it, colour nodes paint it. The viewport shows the selected node; when it looks right, \
-                     converting the graph writes its heights, terrains and real blocks to the map.",
+                     masks pick parts of it, colour nodes paint it. The viewport shows the graph's output; select a node and \
+                     press V to see the graph up to it. When it looks right, converting the graph writes its heights, terrains \
+                     and real blocks to the map.",
                 )
                 .size(11.5)
                 .color(pal.weak),
@@ -1178,21 +1357,21 @@ impl GraphEditor {
         ui.label(RichText::new(node.kind.description()).size(11.5).color(pal.weak));
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            let pinned = self.pinned == Some(id);
+            let viewed = self.pinned == Some(id);
             if ui
-                .selectable_label(pinned, theme::with_icon(Icon::Pin, "Keep in view"))
-                .on_hover_text("Keep this node in the viewport whatever is selected (double-click a node)")
+                .selectable_label(viewed, theme::with_icon(Icon::Eye, if viewed { "Viewing (V)" } else { "View (V)" }))
+                .on_hover_text("Show this node in the viewport (V, or double-click it); V again goes back to the graph's output")
                 .clicked()
             {
-                self.pinned = if pinned { None } else { Some(id) };
-                self.revision += 1;
+                self.toggle_view(id);
             }
             let outs = node.kind.outputs();
             if outs.len() > 1 {
                 ui.separator();
                 for (k, (name, _)) in outs.iter().enumerate() {
-                    if ui.selectable_label(self.view_output == k as u8, *name).clicked() {
+                    if ui.selectable_label(viewed && self.view_output == k as u8, *name).clicked() {
                         self.view_output = k as u8;
+                        self.pinned = Some(id);
                         self.revision += 1;
                     }
                 }
@@ -1265,8 +1444,17 @@ fn row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> egui::Response) ->
     .inner
 }
 
+/// A distance in blocks: a plain, linear slider (type a value to go past
+/// its end).
 fn blocks(ui: &mut Ui, label: &str, v: &mut f32, max: f32) -> bool {
-    row(ui, label, |ui| ui.add(egui::Slider::new(v, 1.0..=max).logarithmic(true).suffix(" blocks").max_decimals(0)))
+    row(ui, label, |ui| {
+        ui.add(
+            egui::Slider::new(v, 1.0..=max.min(6000.0))
+                .clamping(egui::SliderClamping::Never)
+                .suffix(" blocks")
+                .max_decimals(0),
+        )
+    })
 }
 
 fn height(ui: &mut Ui, label: &str, v: &mut f32) -> bool {
@@ -1860,6 +2048,25 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
 mod tests {
     use super::*;
     use massif_core::graph::Graph;
+
+    #[test]
+    fn v_views_the_selected_node_and_goes_back_to_the_output() {
+        let mut ed = GraphEditor::default();
+        let r0 = ed.revision;
+        // Selecting does not change what is viewed.
+        ed.selected = Some(3);
+        assert_eq!(ed.pinned, None);
+        ed.view_key();
+        assert_eq!(ed.pinned, Some(3));
+        assert!(ed.revision > r0, "a new preview is asked for");
+        ed.view_key();
+        assert_eq!(ed.pinned, None);
+        // Viewing another node, then V with nothing selected: the output.
+        ed.toggle_view(5);
+        ed.selected = None;
+        ed.view_key();
+        assert_eq!(ed.pinned, None);
+    }
 
     #[test]
     fn the_viewport_shows_the_selected_node_on_the_closest_relief() {

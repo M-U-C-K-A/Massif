@@ -33,6 +33,7 @@ use crate::compose::hash2;
 use crate::coords::{BlockRect, TilePos, local_index};
 use crate::history::Edit;
 use crate::registry::TerrainId;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -1455,20 +1456,39 @@ impl Field {
     }
 }
 
-/// A square grid of colours (linear 0..1 RGB) over the map.
+/// A square grid of colours over the map, kept as sRGB bytes — what colour
+/// maps hold, and a quarter of the memory of floats, which counts at 16k.
+/// Colours are worked on in linear light: [`ColorField::at`] and
+/// [`ColorField::sample`] give linear values, [`ColorField::build`] takes
+/// them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColorField {
     pub n: usize,
-    pub data: Vec<[f32; 3]>,
+    /// sRGB, row-major.
+    pub data: Vec<[u8; 3]>,
 }
 
 impl ColorField {
-    #[inline]
-    pub fn at(&self, i: usize, j: usize) -> [f32; 3] {
-        self.data[j.min(self.n - 1) * self.n + i.min(self.n - 1)]
+    /// A field whose sample `c` (row-major) has the linear colour `f(c)`.
+    pub fn build(n: usize, f: impl Fn(usize) -> [f32; 3] + Sync) -> Self {
+        Self {
+            n,
+            data: (0..n * n).into_par_iter().map(|c| f(c).map(color::encode)).collect(),
+        }
     }
 
-    /// Bilinear sample at fractional grid coordinates.
+    /// The linear colour of sample `c` (row-major).
+    #[inline]
+    pub fn linear(&self, c: usize) -> [f32; 3] {
+        self.data[c].map(color::decode)
+    }
+
+    #[inline]
+    pub fn at(&self, i: usize, j: usize) -> [f32; 3] {
+        self.linear(j.min(self.n - 1) * self.n + i.min(self.n - 1))
+    }
+
+    /// Bilinear sample at fractional grid coordinates, in linear light.
     pub fn sample(&self, u: f32, v: f32) -> [f32; 3] {
         let max = (self.n - 1) as f32;
         let (u, v) = (u.clamp(0.0, max), v.clamp(0.0, max));
@@ -1478,11 +1498,6 @@ impl ColorField {
         let top = lerp(self.at(i, j), self.at(i + 1, j), fu);
         let bottom = lerp(self.at(i, j + 1), self.at(i + 1, j + 1), fu);
         lerp(top, bottom, fv)
-    }
-
-    /// As 8-bit sRGB.
-    pub fn to_srgb8(&self) -> Vec<[u8; 3]> {
-        self.data.iter().map(|c| c.map(color::encode)).collect()
     }
 }
 
@@ -1512,7 +1527,16 @@ impl Value {
     pub fn as_field(&self) -> Arc<Field> {
         match self {
             Value::Field(f) => f.clone(),
-            Value::Color(c) => Arc::new(Field::new(c.n, c.data.iter().map(|p| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]).collect())),
+            Value::Color(c) => Arc::new(Field::new(
+                c.n,
+                (0..c.n * c.n)
+                    .into_par_iter()
+                    .map(|k| {
+                        let p = c.linear(k);
+                        0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]
+                    })
+                    .collect(),
+            )),
         }
     }
 
@@ -1523,10 +1547,7 @@ impl Value {
             Value::Field(f) => {
                 let (lo, hi) = f.range();
                 let span = (hi - lo).max(1e-6);
-                Arc::new(ColorField {
-                    n: f.n,
-                    data: f.data.iter().map(|v| [(v - lo) / span; 3]).collect(),
-                })
+                Arc::new(ColorField::build(f.n, |c| [(f.data[c] - lo) / span; 3]))
             }
         }
     }
@@ -1594,6 +1615,8 @@ pub struct Evaluation {
     pub values: HashMap<(NodeId, u8), Value>,
     /// Nodes that could not be computed, and why.
     pub failed: HashMap<NodeId, GraphError>,
+    /// Milliseconds each node computed took (not those from a cache).
+    pub timings: HashMap<NodeId, f32>,
 }
 
 impl Evaluation {
@@ -1624,6 +1647,16 @@ impl EvalCache {
     }
 }
 
+/// How far a build got.
+#[derive(Debug, Default)]
+pub struct Progress {
+    /// Nodes done, and to do.
+    pub done: std::sync::atomic::AtomicUsize,
+    pub total: std::sync::atomic::AtomicUsize,
+    /// The node being computed.
+    pub node: std::sync::atomic::AtomicU32,
+}
+
 /// What a graph sends to the map.
 #[derive(Debug, Default, Clone)]
 pub struct Outputs {
@@ -1639,24 +1672,38 @@ impl Graph {
     /// every intermediate field is kept (for previews); otherwise fields are
     /// dropped as soon as nothing else needs them.
     pub fn evaluate(&self, extent: &Extent, targets: &[NodeId], keep_all: bool, cancel: &AtomicBool) -> Result<Evaluation, GraphError> {
-        self.evaluate_with(extent, targets, keep_all, None, cancel)
+        self.evaluate_with(extent, targets, keep_all, None, None, cancel, None)
     }
 
     /// Evaluate with a cache: nodes whose settings and inputs did not change
     /// since the cache saw them are not computed again.
     pub fn evaluate_cached(&self, extent: &Extent, targets: &[NodeId], cache: &mut EvalCache, cancel: &AtomicBool) -> Result<Evaluation, GraphError> {
-        self.evaluate_with(extent, targets, true, Some(cache), cancel)
+        self.evaluate_with(extent, targets, true, Some(cache), None, cancel, None)
     }
 
+    /// Evaluate. Without `keep_all`, a field is dropped as soon as nothing
+    /// needs it any more: an output no link uses at once, unless `keep`
+    /// names it (or, without `keep`, its node is a target).
+    #[allow(clippy::too_many_arguments)]
     fn evaluate_with(
         &self,
         extent: &Extent,
         targets: &[NodeId],
         keep_all: bool,
         mut cache: Option<&mut EvalCache>,
+        keep: Option<&HashSet<(NodeId, u8)>>,
         cancel: &AtomicBool,
+        progress: Option<&Progress>,
     ) -> Result<Evaluation, GraphError> {
         let order = self.order(targets)?;
+        if let Some(p) = progress {
+            p.total.store(order.len(), Ordering::Relaxed);
+            p.done.store(0, Ordering::Relaxed);
+        }
+        let kept = |key: &(NodeId, u8)| match keep {
+            Some(set) => set.contains(key),
+            None => targets.contains(&key.0),
+        };
         if let Some(c) = cache.as_deref_mut()
             && c.extent != Some(extent.key())
         {
@@ -1676,6 +1723,9 @@ impl Graph {
                 return Err(GraphError::Cancelled);
             }
             let node = self.node(id).expect("ordered nodes exist");
+            if let Some(p) = progress {
+                p.node.store(id, Ordering::Relaxed);
+            }
             let fingerprint = self.fingerprint(id, &mut memo);
             let cached = cache
                 .as_deref()
@@ -1688,7 +1738,17 @@ impl Graph {
                     let inputs: Vec<Option<Value>> = (0..node.kind.inputs().len())
                         .map(|k| self.input_of(id, k as u8).and_then(|src| out.values.get(&src).cloned()))
                         .collect();
-                    match ops::run(&node.kind, extent, &inputs, cancel) {
+                    // Outputs nothing will use are not even made.
+                    let wanted: Vec<bool> = (0..node.kind.outputs().len())
+                        .map(|k| {
+                            let key = (id, k as u8);
+                            keep_all || kept(&key) || uses.get(&key).is_some_and(|u| *u > 0)
+                        })
+                        .collect();
+                    let started = std::time::Instant::now();
+                    let result = ops::run(&node.kind, extent, &inputs, &wanted, cancel);
+                    out.timings.insert(id, started.elapsed().as_secs_f32() * 1000.0);
+                    match result {
                         Ok(v) => {
                             if let Some(c) = cache.as_deref_mut() {
                                 c.entries.insert(id, (fingerprint, v.clone()));
@@ -1712,7 +1772,11 @@ impl Graph {
                 }
             };
             for (k, v) in made.into_iter().enumerate() {
-                out.values.insert((id, k as u8), v);
+                let key = (id, k as u8);
+                // An output nothing uses is not kept (erosion's masks, say).
+                if keep_all || kept(&key) || uses.get(&key).is_some_and(|u| *u > 0) {
+                    out.values.insert(key, v);
+                }
             }
             if !keep_all {
                 for k in 0..node.kind.inputs().len() {
@@ -1720,11 +1784,14 @@ impl Graph {
                         && let Some(n) = uses.get_mut(&src)
                     {
                         *n -= 1;
-                        if *n == 0 && !targets.contains(&src.0) {
+                        if *n == 0 && !kept(&src) {
                             out.values.remove(&src);
                         }
                     }
                 }
+            }
+            if let Some(p) = progress {
+                p.done.fetch_add(1, Ordering::Relaxed);
             }
         }
         if let Some(c) = cache {
@@ -1735,6 +1802,11 @@ impl Graph {
 
     /// Evaluate what the outputs need, and gather it.
     pub fn build(&self, extent: &Extent, cancel: &AtomicBool) -> Result<Outputs, GraphError> {
+        self.build_with_progress(extent, cancel, &Progress::default())
+    }
+
+    /// [`Graph::build`], saying how far it got in `progress`.
+    pub fn build_with_progress(&self, extent: &Extent, cancel: &AtomicBool, progress: &Progress) -> Result<Outputs, GraphError> {
         let outputs = self.outputs_of();
         // Outputs have no fields of their own: evaluate what feeds them.
         let mut feeds = Vec::new();
@@ -1745,7 +1817,8 @@ impl Graph {
             }
         }
         let targets: Vec<NodeId> = feeds.iter().map(|f| f.0).collect();
-        let eval = self.evaluate(extent, &targets, false, cancel)?;
+        let keep: HashSet<(NodeId, u8)> = feeds.iter().copied().collect();
+        let eval = self.evaluate_with(extent, &targets, false, None, Some(&keep), cancel, Some(progress))?;
         let mut result = Outputs::default();
         for (n, src) in outputs.iter().zip(feeds) {
             let value = eval.values.get(&src).cloned().ok_or(GraphError::Cancelled)?;
@@ -1808,7 +1881,7 @@ pub fn colors_in_use(field: &ColorField, palette: &[[u8; 3]]) -> Vec<bool> {
     }
     let table = Nearest::new(palette);
     for c in &field.data {
-        let s = c.map(|v| color::encode(v) as f32);
+        let s = c.map(|v| v as f32);
         used[table.get(s)] = true;
         for k in 0..3 {
             for d in [-9.0, 9.0] {

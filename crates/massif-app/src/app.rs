@@ -191,6 +191,9 @@ impl MassifApp {
             .and_then(|s| eframe::get_value(s, "massif.tools"))
             .unwrap_or_default();
         let mut app = Self::with_world(default_world(), layout, tools, settings);
+        if let Some(render) = cc.storage.and_then(|s| eframe::get_value(s, "massif.render")) {
+            app.graph.view.render = render;
+        }
         app.unified_titlebar = cfg!(target_os = "macos");
         app.brushes = BrushLibrary::installed();
         app.brushes.load_in_background(&cc.egui_ctx);
@@ -793,7 +796,36 @@ impl MassifApp {
     fn workspace_tabs(&mut self, ui: &mut Ui) {
         let pal = Palette::of(ui);
         ui.horizontal(|ui| {
-            // A segmented control: the workspaces in one pill.
+            // The two sides of Massif: the map editor (WorldPainter's) and
+            // the terrain generator (Gaea's).
+            let terrain = self.layout.terrain();
+            egui::Frame::new()
+                .fill(pal.panel)
+                .stroke(Stroke::new(1.0, pal.border))
+                .corner_radius(10)
+                .inner_margin(egui::Margin::same(3))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        for (side, icon, label, hint) in [
+                            (false, Icon::Map, "World", "Edit the map: sculpt, paint, levels, 3D, export"),
+                            (true, Icon::MountainSnow, "Terrain", "Generate terrain from nodes, render it, convert it to the map"),
+                        ] {
+                            let active = terrain == side;
+                            let text = RichText::new(theme::with_icon(icon, label)).color(if active { pal.text } else { pal.weak });
+                            let button = egui::Button::new(if active { text.medium() } else { text })
+                                .fill(if active { pal.accent_soft } else { Color32::TRANSPARENT })
+                                .stroke(Stroke::NONE)
+                                .corner_radius(7)
+                                .min_size(vec2(0.0, 24.0));
+                            if ui.add(button).on_hover_text(hint).clicked() {
+                                self.layout.switch_side(side);
+                            }
+                        }
+                    });
+                });
+            ui.add_space(4.0);
+            // A segmented control: the workspaces of this side in one pill.
             let mut remove = None;
             egui::Frame::new()
                 .fill(pal.panel)
@@ -804,6 +836,9 @@ impl MassifApp {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
                         for i in 0..self.layout.workspaces.len() {
+                            if self.layout.workspaces[i].terrain != terrain {
+                                continue;
+                            }
                             let active = self.layout.active == i;
                             let name = self.layout.workspaces[i].name.clone();
                             let text = RichText::new(name).color(if active { pal.text } else { pal.weak });
@@ -814,14 +849,14 @@ impl MassifApp {
                                 .min_size(vec2(0.0, 24.0));
                             let r = ui.add(button);
                             if r.clicked() {
-                                self.layout.active = i;
+                                self.layout.activate(i);
                             }
                             r.context_menu(|ui| {
                                 if ui.button("Duplicate").clicked() {
-                                    self.layout.active = i;
+                                    self.layout.activate(i);
                                     self.layout.duplicate_current();
                                 }
-                                if ui.add_enabled(self.layout.workspaces.len() > 1, egui::Button::new("Delete")).clicked() {
+                                if ui.add_enabled(self.layout.side_len(i) > 1, egui::Button::new("Delete")).clicked() {
                                     remove = Some(i);
                                 }
                             });
@@ -1251,7 +1286,12 @@ impl MassifApp {
                 }
             }
             EditorKind::GraphView => self.graph.viewport_ui(&mut cui, frame, &self.doc),
-            EditorKind::GraphProps => self.graph.properties_ui(&mut cui, &mut self.doc),
+            EditorKind::GraphProps => {
+                egui::Frame::new()
+                    .inner_margin(egui::Margin::symmetric(10, 8))
+                    .show(&mut cui, |ui| self.graph.properties_ui(ui, &mut self.doc));
+            }
+            EditorKind::RenderSettings => scrolled(&mut cui, &mut |ui| self.graph.render_ui(ui, &self.doc)),
             EditorKind::Empty => {
                 let mut picked = None;
                 scrolled(&mut cui, &mut |ui| picked = panels::empty_area(ui, shown));
@@ -1686,6 +1726,7 @@ impl eframe::App for MassifApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, LAYOUT_KEY, &self.layout);
         eframe::set_value(storage, "massif.settings", &self.settings);
+        eframe::set_value(storage, "massif.render", &self.graph.view.render);
         eframe::set_value(storage, "massif.tools", &self.tools);
     }
 
@@ -2033,7 +2074,7 @@ fn preview_image(params: &GenParams, reg: &massif_core::Registry, n: usize) -> e
 
 /// Where the layout is saved. A new key when the default layouts change a
 /// lot, so that everyone gets the new editors.
-const LAYOUT_KEY: &str = "massif.layout.v5";
+const LAYOUT_KEY: &str = "massif.layout.v6";
 
 /// Lay out the area tree.
 fn compute(node: &Node, rect: Rect, path: &mut Vec<bool>, areas: &mut Vec<(AreaId, EditorKind, Rect)>, seps: &mut Vec<Sep>) {
@@ -2473,8 +2514,7 @@ mod tests {
         let mut h = harness(ThemeChoice::Dark);
         {
             let app = h.state_mut();
-            app.layout.active = 5; // Generate
-            app.graph.resolution = 512;
+            app.layout.activate(6); // Graph, on the terrain side
             let reg = &app.doc.world.registry;
             let get = |name: &str| reg.terrain_by_name(name).unwrap_or(massif_core::TerrainId::ROCK).0;
             let starter = massif_core::graph::Graph::starter(get("Grass"), massif_core::TerrainId::ROCK.0, get("Snow"), get("Gravel"));
@@ -2498,11 +2538,20 @@ mod tests {
             .as_ref()
             .and_then(|g| g.nodes.iter().find(|n| matches!(n.kind, massif_core::graph::NodeKind::SelectSlope { .. })).map(|n| n.id));
         if let Some(id) = slope {
-            h.state_mut().graph.select(Some(id));
+            h.state_mut().graph.view(Some(id));
             wait_for_graph(&mut h);
             h.render().unwrap().save(dir.join("graph-mask.png")).unwrap();
         }
-        h.state_mut().graph.select(None);
+        h.state_mut().graph.view(None);
+        // The Render workspace: the view, with its sun, sky and clouds.
+        h.state_mut().layout.activate(7);
+        h.run_steps(5);
+        wait_for_graph(&mut h);
+        h.render().unwrap().save(dir.join("graph-render-workspace.png")).unwrap();
+        h.state_mut().layout.activate(6);
+        h.run_steps(3);
+        assert_eq!(h.state().graph.resolution, 1024, "a block per sample on this map");
+        h.state_mut().graph.resolution = 512;
         {
             use egui_kittest::kittest::Queryable;
             h.get_by_label_contains("Convert to Minecraft").click();
@@ -2739,14 +2788,34 @@ mod tests {
             g.connect(color, 0, color_out, 0);
             g
         };
+        use crate::terrain_view::RenderSettings;
         let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.active = 5;
-        for (k, (name, graph)) in [("moon", moon), ("canyon", canyon), ("peaks", peaks)].into_iter().enumerate() {
+        h.state_mut().layout.active = 6;
+        let sunset = RenderSettings {
+            sun_azimuth: 250.0,
+            sun_elevation: 9.0,
+            haze: 0.4,
+            ..RenderSettings::default()
+        };
+        let cloudy = RenderSettings {
+            clouds: true,
+            cloud_base: 170.0,
+            cloud_thickness: 90.0,
+            cloud_cover: 0.5,
+            cloud_size: 260.0,
+            sea: true,
+            ..RenderSettings::default()
+        };
+        for (k, (name, graph, render)) in [("moon", moon, RenderSettings::default()), ("canyon", canyon, sunset), ("peaks", peaks, cloudy)]
+            .into_iter()
+            .enumerate()
+        {
             {
                 let app = h.state_mut();
                 app.doc.world.meta.graph = Some(graph);
                 app.graph.graph_replaced();
                 app.graph.preview = 512;
+                app.graph.view.render = render;
             }
             wait_for_graph(&mut h);
             let (w, hgt, rgba) = h.state().graph.view.read_back().expect("the viewport rendered");
@@ -2755,6 +2824,10 @@ mod tests {
                 h.render().unwrap().save(dir.join("graph-ui.png")).unwrap();
             }
         }
+        // A saved image, at full quality.
+        let (w, hgt, rgba) = h.state_mut().graph.view.render_image([1280, 720]).expect("an image");
+        assert_eq!((w, hgt), (1280, 720));
+        image::save_buffer(dir.join("graph-render.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
     }
 
     /// The game's real blocks: loaded from this computer's installation,
@@ -2857,7 +2930,7 @@ mod tests {
             return;
         }
         let mut h = harness(ThemeChoice::Light);
-        h.state_mut().layout.active = 6; // Minimal: tools | map
+        h.state_mut().layout.active = 5; // Minimal: tools | map
         h.run_steps(5);
         let rect = map_rect(h.state(), &h.ctx);
         let before = h.state().layout.current().root.count();

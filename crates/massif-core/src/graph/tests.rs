@@ -65,7 +65,7 @@ fn every_node_of_the_catalogue_runs() {
             match t {
                 PortType::Color => {
                     let c = v.color().unwrap_or_else(|| panic!("{} {name} is a colour", kind.label()));
-                    assert!(c.data.iter().all(|p| p.iter().all(|x| x.is_finite())), "{}", kind.label());
+                    assert_eq!(c.data.len(), c.n * c.n, "{}", kind.label());
                 }
                 PortType::Mask => {
                     let f = v.field().unwrap();
@@ -641,4 +641,83 @@ fn the_nearest_colour_table_picks_the_closest() {
     assert_eq!(t.get([240.0, 250.0, 245.0]), 1);
     assert_eq!(t.get([190.0, 50.0, 40.0]), 2);
     assert_eq!(t.get([60.0, 150.0, 60.0]), 3);
+}
+
+/// How long the starter graph takes, node by node, at several resolutions.
+/// Runs with MASSIF_GRAPH_TIMING (a list of resolutions, e.g. "1024,4096").
+#[test]
+fn timing_of_the_starter_graph() {
+    let Ok(list) = std::env::var("MASSIF_GRAPH_TIMING") else { return };
+    let g = Graph::starter(1, 2, 3, 4);
+    for n in list.split(',').filter_map(|v| v.trim().parse::<usize>().ok()) {
+        let ext = Extent {
+            x0: -4096.0,
+            z0: -4096.0,
+            size: 8192.0,
+            n,
+        };
+        let ids: Vec<NodeId> = g.nodes.iter().map(|n| n.id).collect();
+        let started = std::time::Instant::now();
+        let e = g.evaluate(&ext, &ids, false, &AtomicBool::new(false)).unwrap();
+        let total = started.elapsed().as_secs_f32();
+        let mut t: Vec<(String, f32)> = e.timings.iter().map(|(id, ms)| (g.node(*id).unwrap().kind.label().to_owned(), *ms)).collect();
+        t.sort_by(|a, b| b.1.total_cmp(&a.1));
+        eprintln!("{n} x {n}: {total:.2} s; slowest: {:?}", &t[..t.len().min(5)]);
+    }
+}
+
+/// A whole build of the starter graph, as Convert does it. Runs with
+/// MASSIF_GRAPH_BUILD (the resolution, e.g. 16384); with MASSIF_GRAPH_APPLY
+/// too, the build is written to a world of as many blocks per side.
+#[test]
+fn build_of_the_starter_graph() {
+    let Some(n) = std::env::var("MASSIF_GRAPH_BUILD").ok().and_then(|v| v.parse::<usize>().ok()) else { return };
+    let g = Graph::starter(1, 2, 3, 4);
+    let ext = Extent {
+        x0: -8192.0,
+        z0: -8192.0,
+        size: 16384.0,
+        n,
+    };
+    // With MASSIF_GRAPH_APPLY, written to a world of one block per sample.
+    if std::env::var_os("MASSIF_GRAPH_APPLY").is_none() {
+        let started = std::time::Instant::now();
+        let out = g.build(&ext, &AtomicBool::new(false)).unwrap();
+        eprintln!("build at {n} x {n}: {:.1} s", started.elapsed().as_secs_f32());
+        assert_eq!(out.heights.as_ref().unwrap().n, n);
+        return;
+    }
+    use crate::generate::{GenParams, Landform, generate};
+    use crate::history::History;
+    let tiles = (n / crate::coords::TILE_SIZE as usize) as i32;
+    let mut world = generate(&GenParams {
+        tiles_x: tiles,
+        tiles_z: tiles,
+        landform: Landform::Flat,
+        ..GenParams::default()
+    });
+    let rect = match world.dims[0].bounds() {
+        Some((lo, hi)) => crate::coords::BlockRect::new(
+            lo.x * crate::coords::TILE_SIZE,
+            lo.z * crate::coords::TILE_SIZE,
+            (hi.x + 1) * crate::coords::TILE_SIZE,
+            (hi.z + 1) * crate::coords::TILE_SIZE,
+        ),
+        None => unreachable!("the world has tiles"),
+    };
+    let ext = Extent::covering(rect, n);
+    let started = std::time::Instant::now();
+    let out = g.build(&ext, &AtomicBool::new(false)).unwrap();
+    eprintln!("build at {n} x {n}: {:.1} s", started.elapsed().as_secs_f32());
+    let reg = &world.registry;
+    let palette = [
+        (reg.terrain_by_name("Grass").unwrap(), [96, 140, 60]),
+        (reg.terrain_by_name("Sand").unwrap(), [220, 200, 150]),
+        (TerrainId::ROCK, [120, 120, 120]),
+    ];
+    let started = std::time::Instant::now();
+    let mut h = History::default();
+    h.begin("graph", 0);
+    apply(&mut h.edit(&mut world, 0), &ext, &out, 1, &palette);
+    eprintln!("written to the map: {:.1} s", started.elapsed().as_secs_f32());
 }

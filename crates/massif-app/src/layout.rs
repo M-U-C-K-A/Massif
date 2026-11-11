@@ -31,11 +31,13 @@ pub enum EditorKind {
     GraphView,
     /// The settings of the selected node of the graph.
     GraphProps,
+    /// Sun, clouds and the rest of how the graph's viewport renders.
+    RenderSettings,
 }
 
 impl EditorKind {
     /// Editors offered in the area menu, by group.
-    pub const GROUPS: [(&'static str, &'static [EditorKind]); 4] = [
+    pub const GROUPS: [(&'static str, &'static [EditorKind]); 5] = [
         ("View", &[EditorKind::Map, EditorKind::View3d]),
         (
             "Tools",
@@ -51,7 +53,11 @@ impl EditorKind {
             "Paint",
             &[EditorKind::Terrain, EditorKind::Blocks, EditorKind::Biomes, EditorKind::Levels],
         ),
-        ("World", &[EditorKind::Info, EditorKind::Graph, EditorKind::GraphView, EditorKind::GraphProps]),
+        ("World", &[EditorKind::Info]),
+        (
+            "Terrain",
+            &[EditorKind::GraphView, EditorKind::Graph, EditorKind::GraphProps, EditorKind::RenderSettings],
+        ),
     ];
 
     pub const fn label(self) -> &'static str {
@@ -72,6 +78,7 @@ impl EditorKind {
             EditorKind::Graph => "Terrain Graph",
             EditorKind::GraphView => "Graph Viewport",
             EditorKind::GraphProps => "Node Properties",
+            EditorKind::RenderSettings => "Render Settings",
         }
     }
 
@@ -93,6 +100,7 @@ impl EditorKind {
             EditorKind::Graph => Icon::Workflow,
             EditorKind::GraphView => Icon::MountainSnow,
             EditorKind::GraphProps => Icon::SlidersHorizontal,
+            EditorKind::RenderSettings => Icon::Sun,
         }
     }
 }
@@ -340,6 +348,10 @@ pub struct Workspace {
     /// Area temporarily shown alone.
     #[serde(default)]
     pub maximized: Option<AreaId>,
+    /// A workspace of the terrain generator (Gaea's side) rather than of the
+    /// map editor (WorldPainter's side).
+    #[serde(default)]
+    pub terrain: bool,
 }
 
 /// All workspaces of the window.
@@ -348,6 +360,9 @@ pub struct Layout {
     pub workspaces: Vec<Workspace>,
     pub active: usize,
     next_id: AreaId,
+    /// The workspace last used on each side: map editor, terrain generator.
+    #[serde(default)]
+    pub last: [usize; 2],
 }
 
 /// Builds trees with fresh area ids.
@@ -392,6 +407,7 @@ impl Default for Layout {
                 name: name.into(),
                 root,
                 maximized: None,
+                terrain: false,
             });
         };
 
@@ -458,21 +474,31 @@ impl Default for Layout {
         let (m1, m2) = (b.area(Map), b.area(Map));
         add("Maps", b.row(0.5, m1, m2));
 
-        // Generate: as in Gaea, the viewport above the graph, the selected
-        // node's settings on the right.
-        let (view, graph) = (b.area(GraphView), b.area(Graph));
-        let left = b.column(0.58, view, graph);
-        let props = b.area(GraphProps);
-        add("Generate", b.row(0.79, left, props));
-
         // Minimal: just tools and the map.
         let (tools, map) = (b.area(Tools), b.area(Map));
         add("Minimal", b.row(0.12, tools, map));
 
+        // The terrain generator. Graph: as in Gaea, the viewport above the
+        // graph, the selected node's settings on the right.
+        let (view, graph) = (b.area(GraphView), b.area(Graph));
+        let left = b.column(0.58, view, graph);
+        let props = b.area(GraphProps);
+        add("Graph", b.row(0.79, left, props));
+        // Render: the view takes the stage, with how it is rendered.
+        let view = b.area(GraphView);
+        let (settings, props) = (b.area(RenderSettings), b.area(GraphProps));
+        let side = b.column(0.7, settings, props);
+        add("Render", b.row(0.79, view, side));
+        for w in workspaces.iter_mut().rev().take(2) {
+            w.terrain = true;
+        }
+
+        let first_terrain = workspaces.iter().position(|w| w.terrain).unwrap_or(0);
         Layout {
             workspaces,
             active: 0,
             next_id,
+            last: [0, first_terrain],
         }
     }
 }
@@ -484,6 +510,9 @@ impl Layout {
             return Self::default();
         }
         self.active = self.active.min(self.workspaces.len() - 1);
+        for l in &mut self.last {
+            *l = (*l).min(self.workspaces.len() - 1);
+        }
         let max = self.workspaces.iter().map(|w| w.root.max_id()).max();
         self.next_id = self.next_id.max(max.unwrap_or(0));
         self
@@ -491,6 +520,37 @@ impl Layout {
 
     pub fn current(&self) -> &Workspace {
         &self.workspaces[self.active]
+    }
+
+    /// Is the terrain generator's side shown?
+    pub fn terrain(&self) -> bool {
+        self.current().terrain
+    }
+
+    /// Show a workspace, remembering it as the last of its side.
+    pub fn activate(&mut self, index: usize) {
+        if index < self.workspaces.len() {
+            self.active = index;
+            self.last[self.workspaces[index].terrain as usize] = index;
+        }
+    }
+
+    /// Go to the map editor's side or the terrain generator's, where it was
+    /// left.
+    pub fn switch_side(&mut self, terrain: bool) {
+        if self.terrain() == terrain {
+            return;
+        }
+        let last = self.last[terrain as usize];
+        let index = if self.workspaces.get(last).is_some_and(|w| w.terrain == terrain) {
+            last
+        } else {
+            match self.workspaces.iter().position(|w| w.terrain == terrain) {
+                Some(i) => i,
+                None => return,
+            }
+        };
+        self.activate(index);
     }
 
     pub fn current_mut(&mut self) -> &mut Workspace {
@@ -573,18 +633,52 @@ impl Layout {
         }
         renumber(&mut copy.root, &mut self.next_id);
         copy.maximized = None;
-        let base = copy.name.trim_end_matches(|c: char| c.is_ascii_digit() || c == ' ');
-        let n = self.workspaces.len() + 1;
+        let base = copy.name.trim_end_matches(|c: char| c.is_ascii_digit() || c == ' ').to_owned();
+        let taken = |name: &str| self.workspaces.iter().any(|w| w.name == name);
+        let n = (2..).find(|n| !taken(&format!("{base} {n}"))).unwrap_or(2);
         copy.name = format!("{base} {n}");
         self.workspaces.push(copy);
-        self.active = self.workspaces.len() - 1;
+        self.activate(self.workspaces.len() - 1);
     }
 
+    /// How many workspaces the side of workspace `index` has.
+    pub fn side_len(&self, index: usize) -> usize {
+        match self.workspaces.get(index) {
+            Some(w) => self.workspaces.iter().filter(|o| o.terrain == w.terrain).count(),
+            None => 0,
+        }
+    }
+
+    /// Remove a workspace, unless it is the last of its side.
     pub fn remove_workspace(&mut self, index: usize) {
-        if self.workspaces.len() > 1 && index < self.workspaces.len() {
-            self.workspaces.remove(index);
-            if self.active >= index && self.active > 0 {
-                self.active -= 1;
+        if self.side_len(index) < 2 {
+            return;
+        }
+        let side = self.workspaces[index].terrain;
+        let was_active = self.active == index;
+        // The tab before it, on its side, takes its place.
+        let before = self.workspaces[..index].iter().rposition(|w| w.terrain == side);
+        self.workspaces.remove(index);
+        let shift = |i: &mut usize| {
+            if *i > index {
+                *i -= 1;
+            }
+        };
+        shift(&mut self.active);
+        for l in &mut self.last {
+            shift(l);
+        }
+        // A side's last workspace may be the one removed.
+        for t in [false, true] {
+            let l = self.last[t as usize];
+            if self.workspaces.get(l).is_none_or(|w| w.terrain != t) {
+                self.last[t as usize] = self.workspaces.iter().position(|w| w.terrain == t).unwrap_or(0);
+            }
+        }
+        if was_active {
+            match before {
+                Some(i) => self.activate(i),
+                None => self.active = self.last[side as usize],
             }
         }
     }
@@ -622,7 +716,9 @@ mod tests {
     #[test]
     fn default_layout_is_well_formed() {
         let layout = Layout::default();
-        assert_eq!(layout.workspaces.len(), 7);
+        assert_eq!(layout.workspaces.len(), 8);
+        // Two sides: six workspaces to edit the map, two to generate terrain.
+        assert_eq!(layout.workspaces.iter().filter(|w| w.terrain).count(), 2);
         let mut seen = std::collections::HashSet::new();
         for ws in &layout.workspaces {
             for id in ids(&ws.root) {
@@ -639,10 +735,43 @@ mod tests {
     }
 
     #[test]
+    fn the_two_sides_remember_their_workspace() {
+        let mut layout = Layout::default();
+        assert!(!layout.terrain());
+        layout.activate(2);
+        layout.switch_side(true);
+        assert!(layout.terrain());
+        assert_eq!(layout.current().name, "Graph");
+        layout.activate(7);
+        layout.switch_side(false);
+        assert_eq!(layout.active, 2, "back where the map editor was left");
+        layout.switch_side(true);
+        assert_eq!(layout.current().name, "Render");
+    }
+
+    #[test]
+    fn each_side_keeps_a_workspace() {
+        let mut layout = Layout::default();
+        layout.activate(7);
+        layout.remove_workspace(7);
+        assert_eq!(layout.workspaces.len(), 7);
+        assert!(layout.terrain(), "still on the terrain side");
+        assert_eq!(layout.current().name, "Graph");
+        layout.remove_workspace(6);
+        assert_eq!(layout.workspaces.len(), 7, "the last terrain workspace stays");
+        layout.switch_side(false);
+        layout.activate(1);
+        layout.remove_workspace(0);
+        assert_eq!(layout.current().name, "Sculpting", "the active workspace stays shown");
+        layout.switch_side(true);
+        assert_eq!(layout.current().name, "Graph");
+    }
+
+    #[test]
     fn corner_splits_and_joins() {
         // Minimal: tools | map.
         let mut layout = Layout {
-            active: 6,
+            active: 5,
             ..Layout::default()
         };
         let map = layout.current().root.first_area() + 1;
@@ -722,10 +851,11 @@ mod tests {
         let n = layout.workspaces.len();
         layout.duplicate_current();
         assert_eq!((layout.workspaces.len(), layout.active), (n + 1, n));
-        assert_eq!(layout.current().name, "Layout 8");
+        assert_eq!(layout.current().name, "Layout 2");
         let (a, b) = (ids(&layout.workspaces[0].root), ids(&layout.current().root));
         assert!(a.iter().all(|id| !b.contains(id)));
         layout.remove_workspace(n);
-        assert_eq!((layout.workspaces.len(), layout.active), (n, n - 1));
+        assert_eq!(layout.workspaces.len(), n);
+        assert_eq!(layout.current().name, "Minimal", "the tab before it, on the same side");
     }
 }

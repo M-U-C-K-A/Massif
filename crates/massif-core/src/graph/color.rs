@@ -4,22 +4,36 @@
 use super::ops::{blur, gradient as slope_at, smoothstep};
 use super::{ColorField, Extent, Field};
 use crate::noise::Noise;
-use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+
+fn decode_exact(c: u8) -> f32 {
+    let v = c as f32 / 255.0;
+    if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+}
+
+fn encode_exact(v: f32) -> u8 {
+    let v = v.clamp(0.0, 1.0);
+    let s = if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+    (s * 255.0).round() as u8
+}
+
+/// Steps of linear light the encoding table has.
+const STEPS: usize = 8192;
+
+static DECODE: std::sync::LazyLock<[f32; 256]> = std::sync::LazyLock::new(|| std::array::from_fn(|c| decode_exact(c as u8)));
+static ENCODE: std::sync::LazyLock<Vec<u8>> =
+    std::sync::LazyLock::new(|| (0..STEPS).map(|k| encode_exact(k as f32 / (STEPS - 1) as f32)).collect());
 
 /// sRGB 8-bit to linear.
 #[inline]
 pub fn decode(c: u8) -> f32 {
-    let v = c as f32 / 255.0;
-    if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+    DECODE[c as usize]
 }
 
 /// Linear to sRGB 8-bit.
 #[inline]
 pub fn encode(v: f32) -> u8 {
-    let v = v.clamp(0.0, 1.0);
-    let s = if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
-    (s * 255.0).round() as u8
+    ENCODE[(v.clamp(0.0, 1.0) * (STEPS - 1) as f32 + 0.5) as usize]
 }
 
 /// Gradients of colours seen from above in nature, from low to high.
@@ -262,23 +276,17 @@ pub(super) fn gradient(f: &Field, e: &Extent, preset: GradientPreset, lo: f32, h
     let span = if (hi - lo).abs() < 1e-6 { 1e-6 } else { hi - lo };
     let noise = Noise::new(seed as u64 ^ 0x6ad1);
     let v = variation.clamp(0.0, 1.0) as f64 * 0.12;
-    ColorField {
-        n,
-        data: (0..n * n)
-            .into_par_iter()
-            .map(|c| {
-                let mut t = (f.data[c] - lo) / span;
-                if v > 0.0 {
-                    let (x, z) = e.world(c % n, c / n);
-                    t += (v * noise.fbm(x / 160.0, z / 160.0, 4, 2.0, 0.5)) as f32;
-                }
-                if reverse {
-                    t = 1.0 - t;
-                }
-                preset.at(t)
-            })
-            .collect(),
-    }
+    ColorField::build(n, |c| {
+        let mut t = (f.data[c] - lo) / span;
+        if v > 0.0 {
+            let (x, z) = e.world(c % n, c / n);
+            t += (v * noise.fbm(x / 160.0, z / 160.0, 4, 2.0, 0.5)) as f32;
+        }
+        if reverse {
+            t = 1.0 - t;
+        }
+        preset.at(t)
+    })
 }
 
 /// Colours of a kind of land, for automatic colouring (sRGB).
@@ -366,11 +374,7 @@ pub(super) fn auto(f: &Field, e: &Extent, palette: AutoPalette, snow_line: f32, 
     let mean = blur(f, (24.0 / spacing).round().max(1.0) as usize);
     let noise = Noise::new(seed as u64 ^ 0xa070);
     let mix = |a: [f32; 3], b: [f32; 3], t: f32| [0, 1, 2].map(|k| a[k] + (b[k] - a[k]) * t.clamp(0.0, 1.0));
-    ColorField {
-        n,
-        data: (0..n * n)
-            .into_par_iter()
-            .map(|c| {
+    ColorField::build(n, |c| {
                 let (i, j) = (c % n, c / n);
                 let h = f.data[c];
                 let t = (h - lo) / span;
@@ -397,9 +401,7 @@ pub(super) fn auto(f: &Field, e: &Extent, palette: AutoPalette, snow_line: f32, 
                 // A little variation of brightness.
                 let k = 1.0 + wobble * 0.08;
                 col.map(|v| v * k)
-            })
-            .collect(),
-    }
+    })
 }
 
 /// Hue (degrees), saturation and brightness (factors) and contrast of a

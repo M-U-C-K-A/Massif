@@ -8,8 +8,11 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 /// Run one node. `Err(true)`: an input is missing; `Err(false)`: cancelled.
-pub(super) fn run(kind: &NodeKind, e: &Extent, inputs: &[Option<Value>], cancel: &AtomicBool) -> Result<Vec<Value>, bool> {
+pub(super) fn run(kind: &NodeKind, e: &Extent, inputs: &[Option<Value>], wanted: &[bool], cancel: &AtomicBool) -> Result<Vec<Value>, bool> {
     let n = e.n;
+    // An output nobody wants: an empty field, never looked at.
+    let want = |k: usize| wanted.get(k).copied().unwrap_or(true);
+    let full = |f: &Field, k: usize| if want(k) { upsample(f, n) } else { Field::new(0, Vec::new()) };
     let field = |k: usize| inputs.get(k).cloned().flatten().map(|v| v.as_field()).ok_or(true);
     let colors = |k: usize| inputs.get(k).cloned().flatten().map(|v| v.as_color()).ok_or(true);
     let one = |f: Field| Ok(vec![Value::Field(Arc::new(f))]);
@@ -167,18 +170,24 @@ pub(super) fn run(kind: &NodeKind, e: &Extent, inputs: &[Option<Value>], cancel:
             seed,
         } => {
             let f = field(0)?;
+            let (work, we) = coarser(&f, e, SIM_MAX);
+            let m = work.n;
             let params = sim::Droplets {
-                drops: ((rain.max(0.0) * (n * n) as f32) as usize).min(64 << 20),
+                drops: ((rain.max(0.0) * (m * m) as f32) as usize).min(256 << 20),
                 erosion: erosion.clamp(0.0, 1.0),
                 deposition: deposition.clamp(0.0, 1.0),
                 capacity: capacity.max(0.0),
                 evaporation: evaporation.clamp(0.0, 0.5),
-                radius: (radius / e.spacing()).round().clamp(1.0, 12.0) as i32,
+                radius: (radius / we.spacing()).round().clamp(1.0, 12.0) as i32,
                 seed,
             };
-            let (h, flow, deposits) = sim::erode(&f, e.spacing(), &params, cancel).ok_or(false)?;
-            let wear = normalized(f.data.iter().zip(&h.data).map(|(a, b)| (a - b).max(0.0)).collect(), n);
-            Ok([h, flow, deposits, wear].into_iter().map(|f| Value::Field(Arc::new(f))).collect())
+            let (h, flow, deposits) = sim::erode(&work, we.spacing(), &params, cancel).ok_or(false)?;
+            let wear = normalized(work.data.par_iter().zip(&h.data).map(|(a, b)| (a - b).max(0.0)).collect(), m);
+            let h = carry(&f, &work, &h);
+            Ok([h, full(&flow, 1), full(&deposits, 2), full(&wear, 3)]
+                .into_iter()
+                .map(|f| Value::Field(Arc::new(f)))
+                .collect())
         }
         NodeKind::Thermal {
             talus,
@@ -186,9 +195,10 @@ pub(super) fn run(kind: &NodeKind, e: &Extent, inputs: &[Option<Value>], cancel:
             strength,
         } => {
             let f = field(0)?;
-            let h = sim::thermal(&f, e.spacing(), talus, iterations.min(500), strength.clamp(0.0, 1.0));
-            let talus = normalized(f.data.iter().zip(&h.data).map(|(a, b)| (b - a).max(0.0)).collect(), n);
-            Ok(vec![Value::Field(Arc::new(h)), Value::Field(Arc::new(talus))])
+            let (work, we) = coarser(&f, e, 2 * SIM_MAX);
+            let h = sim::thermal(&work, we.spacing(), talus, iterations.min(500), strength.clamp(0.0, 1.0));
+            let talus = normalized(work.data.par_iter().zip(&h.data).map(|(a, b)| (b - a).max(0.0)).collect(), work.n);
+            Ok(vec![Value::Field(Arc::new(carry(&f, &work, &h))), Value::Field(Arc::new(full(&talus, 1)))])
         }
         NodeKind::Snow {
             line,
@@ -216,16 +226,19 @@ pub(super) fn run(kind: &NodeKind, e: &Extent, inputs: &[Option<Value>], cancel:
         }
         NodeKind::Rivers { threshold, depth, width } => {
             let f = field(0)?;
-            let (h, rivers) = sim::rivers(&f, e.spacing(), threshold.clamp(0.0, 1.0), depth, width, cancel).ok_or(false)?;
-            Ok(vec![Value::Field(Arc::new(h)), Value::Field(Arc::new(rivers))])
+            let (work, we) = coarser(&f, e, SIM_MAX);
+            let (h, rivers) = sim::rivers(&work, we.spacing(), threshold.clamp(0.0, 1.0), depth, width, cancel).ok_or(false)?;
+            Ok(vec![Value::Field(Arc::new(carry(&f, &work, &h))), Value::Field(Arc::new(full(&rivers, 1)))])
         }
         NodeKind::Lakes { amount } => {
             let f = field(0)?;
-            let filled = sim::fill(&f, 0.0);
+            let (work, _) = coarser(&f, e, SIM_MAX);
+            let m = work.n;
+            let filled = sim::fill(&work, 0.0);
             let a = amount.clamp(0.0, 1.0);
-            let h = Field::new(n, f.data.par_iter().zip(&filled).map(|(&v, &w)| v + (w - v) * a).collect());
-            let lakes = Field::new(n, f.data.par_iter().zip(&filled).map(|(&v, &w)| ((w - v) * a / 1.5).clamp(0.0, 1.0)).collect());
-            Ok(vec![Value::Field(Arc::new(h)), Value::Field(Arc::new(lakes))])
+            let h = Field::new(m, work.data.par_iter().zip(&filled).map(|(&v, &w)| v + (w - v) * a).collect());
+            let lakes = Field::new(m, work.data.par_iter().zip(&filled).map(|(&v, &w)| ((w - v) * a / 1.5).clamp(0.0, 1.0)).collect());
+            Ok(vec![Value::Field(Arc::new(carry(&f, &work, &h))), Value::Field(Arc::new(full(&lakes, 1)))])
         }
         NodeKind::Sea { level, shore } => {
             let f = field(0)?;
@@ -322,12 +335,14 @@ pub(super) fn run(kind: &NodeKind, e: &Extent, inputs: &[Option<Value>], cancel:
         }
         NodeKind::Flow { spread } => {
             let f = field(0)?;
-            let filled = sim::fill(&f, 1e-3);
-            let acc = sim::accumulate(&filled, n);
-            let max = acc.iter().copied().fold(1.0f32, f32::max);
+            let (work, _) = coarser(&f, e, SIM_MAX);
+            let m = work.n;
+            let filled = sim::fill(&work, 1e-3);
+            let acc = sim::accumulate(&filled, m);
+            let max = acc.par_iter().copied().reduce(|| 1.0f32, f32::max);
             let l = (1.0 + max).ln();
             let g = 3.0 + (0.6 - 3.0) * spread.clamp(0.0, 1.0);
-            one(Field::new(n, acc.par_iter().map(|&a| ((1.0 + a).ln() / l).powf(g)).collect()))
+            one(upsample(&Field::new(m, acc.par_iter().map(|&a| ((1.0 + a).ln() / l).powf(g)).collect()), n))
         }
         NodeKind::Gradient {
             preset,
@@ -342,22 +357,14 @@ pub(super) fn run(kind: &NodeKind, e: &Extent, inputs: &[Option<Value>], cancel:
             let (lo, hi) = if auto_range { f.range() } else { (min, max) };
             paint(color::gradient(&f, e, preset, lo, hi, reverse, variation, seed))
         }
-        NodeKind::SolidColor { color: c } => paint(ColorField {
-            n,
-            data: vec![c.map(color::decode); n * n],
-        }),
+        NodeKind::SolidColor { color: c } => paint(ColorField { n, data: vec![c; n * n] }),
         NodeKind::MixColors => {
             let (a, b, m) = (colors(0)?, colors(1)?, field(2)?);
-            paint(ColorField {
-                n,
-                data: (0..n * n)
-                    .into_par_iter()
-                    .map(|c| {
-                        let t = m.data[c].clamp(0.0, 1.0);
-                        [0, 1, 2].map(|k| a.data[c][k] + (b.data[c][k] - a.data[c][k]) * t)
-                    })
-                    .collect(),
-            })
+            paint(ColorField::build(n, |c| {
+                let t = m.data[c].clamp(0.0, 1.0);
+                let (x, y) = (a.linear(c), b.linear(c));
+                [0, 1, 2].map(|k| x[k] + (y[k] - x[k]) * t)
+            }))
         }
         NodeKind::AdjustColor {
             hue,
@@ -366,29 +373,20 @@ pub(super) fn run(kind: &NodeKind, e: &Extent, inputs: &[Option<Value>], cancel:
             contrast,
         } => {
             let a = colors(0)?;
-            paint(ColorField {
-                n,
-                data: a.data.par_iter().map(|&c| color::adjust(c, hue, saturation, brightness, contrast)).collect(),
-            })
+            paint(ColorField::build(n, |c| color::adjust(a.linear(c), hue, saturation, brightness, contrast)))
         }
         NodeKind::Tint { color: tint, mode, strength } => {
             let (a, m) = (colors(0)?, field(1)?);
             let t = tint.map(color::decode);
-            paint(ColorField {
-                n,
-                data: (0..n * n)
-                    .into_par_iter()
-                    .map(|c| {
-                        let k = (m.data[c] * strength).clamp(0.0, 1.0);
-                        let x = a.data[c];
-                        [0, 1, 2].map(|q| match mode {
-                            TintMode::Mix => x[q] + (t[q] - x[q]) * k,
-                            TintMode::Multiply => x[q] * (1.0 + (t[q] - 1.0) * k),
-                            TintMode::Screen => 1.0 - (1.0 - x[q]) * (1.0 - t[q] * k),
-                        })
-                    })
-                    .collect(),
-            })
+            paint(ColorField::build(n, |c| {
+                let k = (m.data[c] * strength).clamp(0.0, 1.0);
+                let x = a.linear(c);
+                [0, 1, 2].map(|q| match mode {
+                    TintMode::Mix => x[q] + (t[q] - x[q]) * k,
+                    TintMode::Multiply => x[q] * (1.0 + (t[q] - 1.0) * k),
+                    TintMode::Screen => 1.0 - (1.0 - x[q]) * (1.0 - t[q] * k),
+                })
+            }))
         }
         NodeKind::AutoColor {
             palette,
@@ -403,6 +401,71 @@ pub(super) fn run(kind: &NodeKind, e: &Extent, inputs: &[Option<Value>], cancel:
         // Generators and landforms were made above.
         _ => Err(true),
     }
+}
+
+/// The most samples a side water simulations (erosion, rivers, lakes, flow)
+/// work at, thermal erosion twice that: beyond, they work on a coarser copy
+/// of the relief and the change they make is carried back to every sample,
+/// so that a 16k build keeps all of its detail and finishes in seconds.
+pub(super) const SIM_MAX: usize = 4096;
+
+/// The field itself if it has at most `max` samples a side, otherwise a
+/// box-filtered copy at `max`; with the extent it covers.
+fn coarser(f: &Arc<Field>, e: &Extent, max: usize) -> (Arc<Field>, Extent) {
+    if f.n <= max {
+        return (f.clone(), *e);
+    }
+    (Arc::new(downsample(f, max)), Extent { n: max, ..*e })
+}
+
+/// A box-filtered copy of a field at `m` samples a side.
+pub(super) fn downsample(f: &Field, m: usize) -> Field {
+    let n = f.n;
+    let k = n as f64 / m as f64;
+    Field::new(
+        m,
+        (0..m * m)
+            .into_par_iter()
+            .map(|c| {
+                let (i, j) = (c % m, c / m);
+                let (a0, a1) = ((i as f64 * k) as usize, (((i + 1) as f64 * k).ceil() as usize).min(n));
+                let (b0, b1) = ((j as f64 * k) as usize, (((j + 1) as f64 * k).ceil() as usize).min(n));
+                let mut sum = 0.0f64;
+                for jj in b0..b1 {
+                    for ii in a0..a1 {
+                        sum += f.data[jj * n + ii] as f64;
+                    }
+                }
+                (sum / ((a1 - a0) * (b1 - b0)).max(1) as f64) as f32
+            })
+            .collect(),
+    )
+}
+
+/// A bilinear copy of a field at `n` samples a side (itself if it has them).
+pub(super) fn upsample(f: &Field, n: usize) -> Field {
+    let m = f.n;
+    if m == n {
+        return f.clone();
+    }
+    let k = m as f32 / n as f32;
+    Field::new(
+        n,
+        (0..n * n)
+            .into_par_iter()
+            .map(|c| f.sample(((c % n) as f32 + 0.5) * k - 0.5, ((c / n) as f32 + 0.5) * k - 0.5))
+            .collect(),
+    )
+}
+
+/// `heights`, changed the way its coarse copy `before` became `after`.
+fn carry(heights: &Field, before: &Field, after: &Field) -> Field {
+    if before.n == heights.n {
+        return after.clone();
+    }
+    let delta = Field::new(after.n, after.data.par_iter().zip(&before.data).map(|(a, b)| a - b).collect());
+    let up = upsample(&delta, heights.n);
+    Field::new(heights.n, heights.data.par_iter().zip(&up.data).map(|(h, d)| h + d).collect())
 }
 
 #[inline]
@@ -472,52 +535,63 @@ fn resample(f: &Field, to: &(dyn Fn(f32, f32) -> (f32, f32) + Sync)) -> Field {
 }
 
 /// Two passes of a separable box blur of `r` samples: close to a Gaussian.
+/// Rows are blurred in place; columns as the rows of a transposed copy, so
+/// the blur needs two fields' worth of memory, not three.
 pub(super) fn blur(f: &Field, r: usize) -> Field {
     let n = f.n;
-    let pass = |src: &[f32], horizontal: bool| -> Vec<f32> {
-        let lines: Vec<Vec<f32>> = (0..n)
-            .into_par_iter()
-            .map(|line| {
-                let at = |t: usize| if horizontal { src[line * n + t] } else { src[t * n + line] };
-                let mut out = vec![0f32; n];
-                let mut sum = 0f32;
-                let mut count = 0f32;
-                for t in 0..n.min(r + 1) {
-                    sum += at(t);
+    let mut a = f.data.clone();
+    let mut t = vec![0f32; n * n];
+    for _ in 0..2 {
+        box_rows(&mut a, n, r);
+        transpose(&a, &mut t, n);
+        box_rows(&mut t, n, r);
+        transpose(&t, &mut a, n);
+    }
+    Field::new(n, a)
+}
+
+/// A box blur of `r` samples along every row of an `n` × `n` grid.
+fn box_rows(data: &mut [f32], n: usize, r: usize) {
+    data.par_chunks_mut(n).for_each_init(
+        || vec![0f32; n],
+        |src, row| {
+            src.copy_from_slice(row);
+            let mut sum = 0f32;
+            let mut count = 0f32;
+            for v in src.iter().take(n.min(r + 1)) {
+                sum += v;
+                count += 1.0;
+            }
+            for (t, o) in row.iter_mut().enumerate() {
+                *o = sum / count;
+                if t + r + 1 < n {
+                    sum += src[t + r + 1];
                     count += 1.0;
                 }
-                for (t, o) in out.iter_mut().enumerate() {
-                    *o = sum / count;
-                    if t + r + 1 < n {
-                        sum += at(t + r + 1);
-                        count += 1.0;
-                    }
-                    if t >= r {
-                        sum -= at(t - r);
-                        count -= 1.0;
-                    }
+                if t >= r {
+                    sum -= src[t - r];
+                    count -= 1.0;
                 }
-                out
-            })
-            .collect();
-        let mut out = vec![0f32; n * n];
-        for (line, values) in lines.into_iter().enumerate() {
-            for (t, v) in values.into_iter().enumerate() {
-                if horizontal {
-                    out[line * n + t] = v;
-                } else {
-                    out[t * n + line] = v;
+            }
+        },
+    );
+}
+
+/// `dst` = `src` transposed, by tiles that stay in the caches.
+fn transpose(src: &[f32], dst: &mut [f32], n: usize) {
+    const B: usize = 64;
+    dst.par_chunks_mut(B * n).enumerate().for_each(|(k, rows)| {
+        let j0 = k * B;
+        let height = rows.len() / n;
+        for i0 in (0..n).step_by(B) {
+            for dj in 0..height {
+                let j = j0 + dj;
+                for i in i0..(i0 + B).min(n) {
+                    rows[dj * n + i] = src[i * n + j];
                 }
             }
         }
-        out
-    };
-    let mut data = f.data.clone();
-    for _ in 0..2 {
-        data = pass(&data, true);
-        data = pass(&data, false);
-    }
-    Field::new(n, data)
+    });
 }
 
 /// Layers of rock of random thickness: within each layer the ground stays
