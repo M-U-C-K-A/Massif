@@ -11,6 +11,7 @@ mod layout;
 mod map_render;
 mod map_view;
 mod panels;
+mod terrain_view;
 mod theme;
 mod tools;
 mod view3d;

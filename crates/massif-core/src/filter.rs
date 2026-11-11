@@ -175,7 +175,7 @@ impl Filter {
         let ring = if self.needs_relief() {
             self.radius.clamp(1, 64)
         } else if self.needs_slope() {
-            1
+            SLOPE_REACH
         } else {
             0
         };
@@ -190,10 +190,7 @@ impl Filter {
                 let Some(col) = surface.column(x, z) else { return 0 };
                 let mut c = col;
                 if self.needs_slope() {
-                    let h = |dx: i32, dz: i32| surface.column(x + dx, z + dz).map_or(c.height, |n| n.height);
-                    let gx = (h(1, 0) - h(-1, 0)) * 0.5;
-                    let gz = (h(0, 1) - h(0, -1)) * 0.5;
-                    c.slope = gx.hypot(gz).atan().to_degrees();
+                    c.slope = trend_slope(|dx, dz| surface.column(x + dx, z + dz).map(|n| n.height), SLOPE_REACH, 1.0);
                 }
                 if let Some(means) = &relief {
                     let j = surface.index(x, z);
@@ -204,6 +201,33 @@ impl Filter {
             .collect();
         Mask { rect, weights }
     }
+}
+
+/// Blocks around a column the slope is measured over, each way.
+pub const SLOPE_REACH: i32 = 4;
+
+/// The slope, in degrees, of the plane that best fits the heights around a
+/// point (least squares over a square of `2 r + 1` samples a side): the
+/// trend of the hillside there, not the steps between single blocks.
+/// `h(dx, dz)` is the height `dx`, `dz` samples away (`None` off the map),
+/// `spacing` the blocks between samples.
+pub fn trend_slope(h: impl Fn(i32, i32) -> Option<f32>, r: i32, spacing: f32) -> f32 {
+    let Some(centre) = h(0, 0) else { return 0.0 };
+    let (mut sx, mut sz, mut w) = (0.0f32, 0.0f32, 0.0f32);
+    for dz in -r..=r {
+        for dx in -r..=r {
+            // Missing samples count as level with the centre.
+            let v = h(dx, dz).unwrap_or(centre) - centre;
+            sx += dx as f32 * v;
+            sz += dz as f32 * v;
+            w += (dx * dx) as f32;
+        }
+    }
+    if w == 0.0 {
+        return 0.0;
+    }
+    let (gx, gz) = (sx / w / spacing, sz / w / spacing);
+    gx.hypot(gz).atan().to_degrees()
 }
 
 /// The weights of a filter over a rectangle.
@@ -332,6 +356,22 @@ impl Surface {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slopes_follow_the_hillside_not_the_steps() {
+        // A staircase of one block every two: 26.6° on the whole, though
+        // every step is either flat or a vertical block.
+        let stairs = |dx: i32, _dz: i32| Some((dx.div_euclid(2)) as f32);
+        let s = trend_slope(stairs, SLOPE_REACH, 1.0);
+        assert!((s - 26.57).abs() < 3.0, "{s}");
+        // Flat ground, and a 45° plane, whatever the spacing.
+        assert_eq!(trend_slope(|_, _| Some(64.0), 4, 1.0), 0.0);
+        let plane = |dx: i32, dz: i32| Some((dx + dz) as f32 * 4.0);
+        let s = trend_slope(plane, 2, 4.0);
+        assert!((s - 54.74).abs() < 0.1, "{s}");
+        // Off the map counts as level.
+        assert_eq!(trend_slope(|dx, dz| (dx == 0 && dz == 0).then_some(10.0), 3, 1.0), 0.0);
+    }
     use crate::tile::Tile;
     use crate::world::DimensionKind;
 

@@ -29,10 +29,13 @@ over every CPU core.
   brushes folder is read as is), radius up to 4,096 blocks, brush filters
   (height band, only on / except on, slope, curvature) and WorldPainter's
   mouse and keyboard bindings.
-- **Terrain graphs.** Build terrain from nodes, as in World Machine or Gaea:
-  noise, cells, gradients, levels, terraces, warp, blur, hydraulic and
-  thermal erosion, combiners, height and slope selectors, and outputs that
-  write heights and terrains to the map. Every node shows a live preview.
+- **A node-based terrain generator, in the manner of Gaea.** More than
+  fifty nodes — landforms (mountains, ranges, volcanoes, craters and crater
+  fields, dunes, canyons, mesas, islands), primitives, adjustments,
+  simulations (water and thermal erosion, snow, rivers, lakes, sea), masks
+  and colour (gradients from nature, automatic colouring, tints) — shown in a
+  smooth, lit 3D viewport with cast shadows, then converted to the map, the
+  colours becoming the closest real Minecraft blocks.
 - **The game's real blocks.** Every block of the Minecraft version you have
   installed (1,288 in 26.3) is read from the game itself, with its real
   textures and colours: terrains show the actual blocks, and any whole block
@@ -135,7 +138,9 @@ what the map shows:
   heights, optionally fading over 4 blocks. A cross-section shows where the
   brush acts; drag its limits.
 - **Only on / except on**: terrains, biomes, water or dry land.
-- **Slope**: above or below an angle.
+- **Slope**: above or below an angle. Slopes are the trend of the hillside
+  (a plane fitted over 9 × 9 columns), not the steps between single blocks;
+  the map and 3D views' Slope mode use the same measure.
 - **Curvature**: hollows or bumps, deeper than a number of blocks compared
   with the columns around.
 
@@ -162,26 +167,38 @@ fraction of a second, every time Massif starts.
 
 ### Terrain graphs
 
-The **Terrain Graph** editor (in the Generate workspace) builds terrain the
-way World Machine and Gaea do. Right-click the canvas to add nodes, drag
-from an output to an input to wire them, and select a node to edit it and
-see a larger preview. Every node previews the whole map as you edit.
+The Generate workspace is laid out like Gaea: the **Graph Viewport** above,
+the **Terrain Graph** below, the **Node Properties** on the right. The
+viewport shows the selected node — heights as a smooth relief, masks in
+white over the relief they come from, colours on it — lit by a sun with soft
+cast shadows and ambient occlusion, with an adjustable height exaggeration
+and an optional sea. Double-click a node (or pin it) to keep it in view.
+
+Right-click the graph or press Tab or Space to open the node library and
+type to search; drop a wire on empty space to add a node already wired.
+Ports and wires are coloured by what they carry: heights, masks or colours.
+Previews are evaluated on another thread with a cache, so changing a
+setting computes only that node and what follows it.
 
 | Family | Nodes |
 |---|---|
-| Generators | Noise (rolling, ridged, billow), Cells (cones, ridges), Radial gradient, Constant |
-| Modifiers | Levels, Terraces, Clamp, Blur, Warp |
-| Erosion | Erosion (simulated raindrops; outputs the heights, the water flow and where soil settled), Thermal erosion (material slides below a talus angle) |
-| Combiners | Combine (add, subtract, multiply, max, min, average), Blend through a mask |
-| Selectors | Select height, Select slope, Invert |
-| Outputs | Height output, Terrain output (paints a terrain through a mask) |
+| Landforms | Mountain (alpine, rounded, eroded, spiky), Mountain range, Volcano, Crater, Crater field, Dunes, Canyon, Mesas, Island, Rocks |
+| Primitives | Noise (rolling, ridged, billow), Cells and cell ridges, Radial and linear gradients, Shape, Constant |
+| Adjust | Levels, Normalize, Curve, Terraces, Stratify, Clamp, Blur, Sharpen, Warp, Transform, Swirl, Fold, Invert height |
+| Simulate | Erosion (heights, flow, deposits, wear), Thermal erosion (heights, talus), Snow, Rivers, Lakes, Sea (water and shore masks) |
+| Combine | Combine (add, subtract, multiply, max, min, average, lerp, screen, overlay, difference), Blend through a mask |
+| Masks | Select height, Select slope, Curvature (ridges or hollows), Facing, Occlusion, Flow, Invert |
+| Colour | Auto colour (eight kinds of land), Gradient (twenty gradients from nature), Solid colour, Mix colours, Tint, Adjust colour |
+| Output | Height output, Terrain output, Colour output |
 
-**Build and apply** evaluates the graph over the whole map at the chosen
-resolution (512 to 4,096 samples per side) on another thread, then writes
-the heights and terrains to the ground as one undoable step. Distances are
-in blocks, so a graph looks the same at every resolution. The graph is saved
-with the world. A starter graph (eroded mountains, rock on steep slopes,
-snow on the peaks, gravel where the water left soil) shows how it works.
+**Convert to Minecraft** builds the graph over the whole map at the chosen
+resolution (512 to 4,096 samples per side) on another thread, then writes it
+to the ground as one undoable step: the heights; the colour output turned
+into real blocks of the game (from natural ground, rock, desert, snow and
+ice, or every block), each column taking the block whose colour is closest,
+two neighbouring blocks mixing where the colour lies between them; and the
+terrain outputs painted over it. Distances are in blocks, so a graph looks
+the same at every resolution. The graph is saved with the world.
 
 ### Controls
 
@@ -320,9 +337,11 @@ Two environment variables enable the heavier tests:
 
 - `MASSIF_SNAPSHOT_DIR=<folder>` renders the whole window offscreen (with
   egui_kittest and wgpu), the map, the 3D view, the brush panels, the
-  dialogs, the terrain graph and the real blocks to PNG files in that
-  folder, and drives the editor with simulated mouse strokes, 3D sculpting,
-  area splitting, a terrain graph build and painting a real block. The real
+  dialogs, the terrain graph and its viewport (a cratered moon, a desert
+  canyon, snowy peaks) and the real blocks to PNG files in that folder, and
+  drives the editor with simulated mouse strokes, 3D sculpting, area
+  splitting, converting a terrain graph to the map and painting a real
+  block. The real
   blocks are only tested when a Minecraft installation is found.
 - `MASSIF_WORLD_SAMPLES=<file.world>` also imports a real WorldPainter world
   through the editor, renders it whole in the 3D view and measures what it
@@ -332,9 +351,9 @@ Two environment variables enable the heavier tests:
 
 - WorldPainter layers (trees, vegetation, ores, frost, roads…) and their
   import from `.world` files, and layers as brush filters and graph outputs.
-- Terrain graphs: more nodes (rivers, sediment layers, height-map import,
-  stamps), graphs applied to a part of the map, tiled builds beyond 4,096
-  samples, a 3D preview of a node.
+- Terrain graphs: GPU evaluation, height-map and image import and export,
+  groups and portals, graphs applied to a part of the map, tiled builds
+  beyond 4,096 samples, more simulations (glaciers, sediment layers).
 - The real blocks' textures in the 3D view, and custom terrains mixing
   real blocks in layers.
 - Custom build limits and older Minecraft versions in new worlds and export.

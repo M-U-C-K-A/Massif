@@ -455,6 +455,7 @@ impl<'a> Colorizer<'a> {
         spacing: f32,
         exaggeration: f32,
         contour: Option<f32>,
+        trend: Option<f32>,
     ) -> Color32 {
         if c.is_empty() {
             return Color32::TRANSPARENT;
@@ -468,7 +469,9 @@ impl<'a> Colorizer<'a> {
             MapMode::Terrain => scale(self.terrain_rgb(c.terrain), shade),
             MapMode::Height => scale(rgb(height_color(c.height, self.sea)), 0.7 + 0.3 * shade),
             MapMode::Slope => {
-                let deg = (dx * dx + dz * dz).sqrt().atan().to_degrees();
+                // The trend of the hillside when it was measured around the
+                // sample, the step to the neighbours otherwise.
+                let deg = trend.unwrap_or_else(|| (dx * dx + dz * dz).sqrt().atan().to_degrees());
                 rgb(slope_color(deg))
             }
             MapMode::Biome => {
@@ -577,8 +580,10 @@ impl ChunkKey {
     fn needed_tiles(&self, out: &mut HashSet<TilePos>) {
         let n = CHUNK_PX as isize;
         if self.lod <= 6 {
-            // Every tile under the chunk plus a ring for the shading.
-            let (a, b) = (self.sample_point(-1, -1), self.sample_point(n, n));
+            // Every tile under the chunk plus a ring for the shading and
+            // the slope.
+            let r = slope_ring(self.lod) as isize;
+            let (a, b) = (self.sample_point(-r, -r), self.sample_point(n + r - 1, n + r - 1));
             let (lo, hi) = (TilePos::containing(a.0, a.1), TilePos::containing(b.0, b.1));
             for z in lo.z..=hi.z {
                 for x in lo.x..=hi.x {
@@ -633,22 +638,37 @@ fn contour_interval(lod: u8) -> f32 {
     }
 }
 
+/// Samples around a pixel the slope is measured over, each way, at a level
+/// of detail: the same reach in blocks (`SLOPE_REACH`) whatever the zoom.
+fn slope_ring(lod: u8) -> usize {
+    ((massif_core::filter::SLOPE_REACH as usize) >> lod).max(1)
+}
+
 fn build_chunk(key: ChunkKey, sources: &Sources, colorizer: &Colorizer) -> ColorImage {
-    const W: usize = CHUNK_PX + 2;
-    let mut samples = vec![Sample::EMPTY; W * W];
-    for j in 0..W {
-        for i in 0..W {
-            let (x, z) = key.sample_point(i as isize - 1, j as isize - 1);
-            samples[j * W + i] = sources.sample(key.lod, x, z);
+    let slope = colorizer.style.mode == MapMode::Slope;
+    let ring = if slope { slope_ring(key.lod) } else { 1 };
+    let w = CHUNK_PX + 2 * ring;
+    let mut samples = vec![Sample::EMPTY; w * w];
+    for j in 0..w {
+        for i in 0..w {
+            let (x, z) = key.sample_point(i as isize - ring as isize, j as isize - ring as isize);
+            samples[j * w + i] = sources.sample(key.lod, x, z);
         }
     }
     let spacing = (1u32 << key.lod) as f32;
     let exaggeration = 1.0 + 0.3 * key.lod as f32;
     let contour = colorizer.style.contours.then(|| contour_interval(key.lod));
     let mut pixels = Vec::with_capacity(CHUNK_PX * CHUNK_PX);
-    for j in 1..=CHUNK_PX {
-        for i in 1..=CHUNK_PX {
-            let at = |di: isize, dj: isize| &samples[(j as isize + dj) as usize * W + (i as isize + di) as usize];
+    for j in ring..ring + CHUNK_PX {
+        for i in ring..ring + CHUNK_PX {
+            let at = |di: isize, dj: isize| &samples[(j as isize + dj) as usize * w + (i as isize + di) as usize];
+            let trend = slope.then(|| {
+                let h = |dx: i32, dz: i32| {
+                    let s = at(dx as isize, dz as isize);
+                    (!s.is_empty()).then_some(s.height)
+                };
+                massif_core::filter::trend_slope(h, ring as i32, spacing)
+            });
             pixels.push(colorizer.pixel(
                 at(0, 0),
                 at(-1, 0),
@@ -658,6 +678,7 @@ fn build_chunk(key: ChunkKey, sources: &Sources, colorizer: &Colorizer) -> Color
                 spacing,
                 exaggeration,
                 contour,
+                trend,
             ));
         }
     }

@@ -1,84 +1,69 @@
-//! The terrain graph editor: nodes on a canvas, wired output to input, with
-//! a live preview of every node and a build that writes the result to the
-//! map, in the manner of World Machine or Gaea.
+//! The terrain graph editor, in the manner of Gaea: a node graph, a 3D
+//! viewport showing the selected node as a smooth, coloured and lit relief,
+//! and the properties of the selected node. When the result is right, it is
+//! converted to the map: heights, terrains, and the colours of the ground
+//! turned into the closest real blocks of the game.
 //!
-//! - Right-click the canvas to add a node; drag a node by its title.
+//! - Right-click the graph, or press Tab or Space, to add a node (type to
+//!   search). Drop a wire on empty space to add a node already wired.
 //! - Drag from an output (right) to an input (left) to wire them; click a
-//!   wired input to unplug it.
-//! - Scroll or drag the background with the middle button to move around,
-//!   ⌘/Ctrl + scroll or pinch to zoom.
-//! - The selected node's settings and a larger preview are on the right.
+//!   wired input to pick its wire up again.
+//! - Drag a node by its title; Delete removes the selected node.
+//! - Scroll or drag the background to move around, ⌘/Ctrl + scroll or pinch
+//!   to zoom, F to frame everything.
+//! - The viewport follows the selected node; pin it to keep one in view.
+//!
+//! Previews are evaluated on another thread with a cache, so changing a
+//! setting only computes that node and what follows it.
 
+use crate::blocks::BlockLibrary;
 use crate::doc::Document;
+use crate::terrain_view::{TerrainView, ViewData, lighting};
 use crate::theme::{self, Icon, Palette, RichTextExt};
-use egui::{Color32, ColorImage, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, Vec2, pos2, vec2};
-use massif_core::graph::{CellStyle, CombineOp, Extent, Family, Graph, GraphError, NodeId, NodeKind, NoiseStyle, Outputs};
+use egui::{Color32, ColorImage, Key, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, Vec2, pos2, vec2};
+use massif_core::graph::{
+    AutoPalette, Bend, BlockPalette, CellStyle, ColorField, CombineOp, EvalCache, Evaluation, Extent, Family, Field, GradientPreset, Graph, GraphError,
+    MountainStyle, NodeId, NodeKind, NoiseStyle, Outputs, PortType, ShapeKind, TintMode, Value,
+};
 use massif_core::registry::{Registry, TerrainId};
 use massif_core::{BlockRect, TILE_SIZE};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::time::Instant;
 
-/// Samples per side of the previews.
-const PREVIEW: usize = 160;
-const NODE_WIDTH: f32 = 176.0;
-const HEADER: f32 = 24.0;
-const ROW: f32 = 18.0;
-const THUMB: f32 = 88.0;
 /// Build resolutions offered, in samples per side.
 pub const RESOLUTIONS: [usize; 5] = [512, 1024, 2048, 3072, 4096];
+/// Preview resolutions offered.
+pub const PREVIEWS: [usize; 4] = [256, 384, 512, 768];
+const NODE_WIDTH: f32 = 168.0;
+const HEADER: f32 = 26.0;
+const ROW: f32 = 18.0;
+const THUMB: f32 = 68.0;
+/// Pixels of the thumbnails.
+const THUMB_PX: usize = 96;
 
-type Previews = HashMap<(NodeId, u8), ColorImage>;
-/// A build on another thread: its result, and the flag that cancels it.
-type Building = (Receiver<Result<Built, GraphError>>, Arc<AtomicBool>);
-
-/// A finished build: what to write to the map.
-struct Built {
-    extent: Extent,
-    outputs: Outputs,
+/// Colour of a family of nodes.
+pub fn family_color(f: Family) -> Color32 {
+    match f {
+        Family::Landform => Color32::from_rgb(86, 196, 120),
+        Family::Generator => Color32::from_rgb(52, 186, 176),
+        Family::Modifier => Color32::from_rgb(86, 146, 255),
+        Family::Erosion => Color32::from_rgb(245, 146, 64),
+        Family::Combiner => Color32::from_rgb(168, 124, 255),
+        Family::Selector => Color32::from_rgb(236, 192, 64),
+        Family::Color => Color32::from_rgb(236, 96, 164),
+        Family::Output => Color32::from_rgb(244, 84, 104),
+    }
 }
 
-pub struct GraphEditor {
-    /// The world the graph belongs to (its generation).
-    generation: Option<u64>,
-    selected: Option<NodeId>,
-    /// Output shown in the large preview.
-    shown_output: u8,
-    pan: Vec2,
-    zoom: f32,
-    /// A wire being drawn from an output.
-    wiring: Option<(NodeId, u8)>,
-    textures: HashMap<(NodeId, u8), TextureHandle>,
-    /// Revision of the graph, and of the last preview asked for.
-    revision: u64,
-    previewed: u64,
-    preview: Option<Receiver<(u64, Result<Previews, GraphError>)>>,
-    pub resolution: usize,
-    build: Option<Building>,
-    error: Option<String>,
-    /// Frame the whole graph at the next opportunity.
-    fit: bool,
-}
-
-impl Default for GraphEditor {
-    fn default() -> Self {
-        Self {
-            generation: None,
-            selected: None,
-            shown_output: 0,
-            pan: vec2(20.0, 20.0),
-            zoom: 1.0,
-            wiring: None,
-            textures: HashMap::new(),
-            revision: 1,
-            previewed: 0,
-            preview: None,
-            resolution: 1024,
-            build: None,
-            error: None,
-            fit: true,
-        }
+/// Colour of what flows along a wire.
+fn port_color(t: PortType) -> Color32 {
+    match t {
+        PortType::Height => Color32::from_rgb(176, 188, 206),
+        PortType::Mask => Color32::from_rgb(236, 192, 64),
+        PortType::Color => Color32::from_rgb(236, 96, 164),
     }
 }
 
@@ -91,167 +76,537 @@ fn map_extent(doc: &Document, n: usize) -> Extent {
     Extent::covering(rect, n)
 }
 
-/// Is this output a mask (0..1) rather than heights? Selectors make masks,
-/// and so does what reshapes or mixes a mask.
-fn is_mask(graph: &Graph, id: NodeId, output: u8) -> bool {
-    let Some(node) = graph.node(id) else { return false };
-    match &node.kind {
-        k if k.family() == Family::Selector => true,
-        NodeKind::Erosion { .. } => output > 0,
-        NodeKind::Radial { height, base, .. } => *height <= 1.0 && *base == 0.0,
-        NodeKind::Constant { value } => (0.0..=1.0).contains(value),
-        NodeKind::Levels { out_max, out_min, .. } => *out_min >= 0.0 && *out_max <= 1.0,
-        NodeKind::Noise { .. } | NodeKind::Cells { .. } => false,
-        _ => graph.input_of(id, 0).is_some_and(|(src, out)| src != id && is_mask(graph, src, out)),
+// -------------------------------------------------------------- previews --
+
+/// A small picture of a node's output: shaded relief for heights, grey for
+/// masks, the colours themselves for colours.
+fn thumbnail(value: &Value, kind: PortType, spacing: f32) -> ColorImage {
+    let px = THUMB_PX;
+    let mut pixels = Vec::with_capacity(px * px);
+    match value {
+        Value::Color(c) => {
+            let k = c.n as f32 / px as f32;
+            for j in 0..px {
+                for i in 0..px {
+                    let s = c.sample((i as f32 + 0.5) * k - 0.5, (j as f32 + 0.5) * k - 0.5);
+                    let e = s.map(massif_core::graph::encode_srgb);
+                    pixels.push(Color32::from_rgb(e[0], e[1], e[2]));
+                }
+            }
+        }
+        Value::Field(f) => {
+            let k = f.n as f32 / px as f32;
+            let (lo, hi) = f.range();
+            let span = (hi - lo).max(1e-3);
+            for j in 0..px {
+                for i in 0..px {
+                    let (u, v) = ((i as f32 + 0.5) * k - 0.5, (j as f32 + 0.5) * k - 0.5);
+                    let h = f.sample(u, v);
+                    if kind == PortType::Mask {
+                        let g = (h.clamp(0.0, 1.0) * 255.0) as u8;
+                        pixels.push(Color32::from_rgb(g, g, g));
+                        continue;
+                    }
+                    let t = (h - lo) / span;
+                    let dx = (f.sample(u + k, v) - f.sample(u - k, v)) / (2.0 * spacing * k);
+                    let dz = (f.sample(u, v + k) - f.sample(u, v - k)) / (2.0 * spacing * k);
+                    let shade = (1.0 + (dx + dz) * 1.4).clamp(0.35, 1.5);
+                    let g = ((40.0 + 170.0 * t) * shade).clamp(0.0, 255.0);
+                    pixels.push(Color32::from_rgb(g as u8, (g * 1.01).min(255.0) as u8, (g * 1.04).min(255.0) as u8));
+                }
+            }
+        }
+    }
+    ColorImage::new([px, px], pixels)
+}
+
+/// What the viewport shows on the relief.
+enum Paint {
+    /// A neutral clay, to judge the forms.
+    Clay,
+    Mask(Arc<Field>),
+    Color(Arc<ColorField>),
+}
+
+/// The closest heights before a node: the first height output met going
+/// back through its inputs.
+fn height_before(graph: &Graph, eval: &Evaluation, id: NodeId) -> Option<Arc<Field>> {
+    let mut queue = std::collections::VecDeque::from([id]);
+    let mut seen = std::collections::HashSet::new();
+    while let Some(n) = queue.pop_front() {
+        if !seen.insert(n) {
+            continue;
+        }
+        let Some(node) = graph.node(n) else { continue };
+        for k in 0..node.kind.inputs().len() {
+            if let Some((src, out)) = graph.input_of(n, k as u8) {
+                if graph.output_type(src, out) == PortType::Height
+                    && let Some(f) = eval.field(src, out)
+                {
+                    return Some(f.clone());
+                }
+                queue.push_back(src);
+            }
+        }
+    }
+    None
+}
+
+/// What feeds the first output node of a kind.
+fn source_of(graph: &Graph, pick: impl Fn(&NodeKind) -> bool) -> Option<(NodeId, u8)> {
+    let node = graph.nodes.iter().find(|n| pick(&n.kind))?;
+    graph.input_of(node.id, 0)
+}
+
+/// The relief and colours the viewport shows for `view` (a node's output),
+/// or for the graph's outputs.
+fn pick_view(graph: &Graph, eval: &Evaluation, view: Option<(NodeId, u8)>) -> Option<(Arc<Field>, Paint, (NodeId, u8))> {
+    let final_height = source_of(graph, |k| matches!(k, NodeKind::HeightOutput));
+    let final_color = source_of(graph, |k| matches!(k, NodeKind::ColorOutput { .. }));
+    let colors_of = |src: Option<(NodeId, u8)>| src.and_then(|s| eval.values.get(&s)).map(|v| v.as_color());
+    // Output nodes show what they receive.
+    let view = view.map(|(id, out)| match graph.node(id).map(|n| &n.kind) {
+        Some(k) if k.family() == Family::Output => graph.input_of(id, 0).unwrap_or((id, out)),
+        _ => (id, out),
+    });
+    let (id, out) = view.or(final_height).or(final_color)?;
+    let value = eval.values.get(&(id, out))?;
+    let fallback = || final_height.and_then(|s| eval.field(s.0, s.1).cloned());
+    match graph.output_type(id, out) {
+        PortType::Height => {
+            let heights = value.as_field();
+            let paint = match colors_of(final_color) {
+                Some(c) if Some((id, out)) == final_height => Paint::Color(c),
+                _ => Paint::Clay,
+            };
+            Some((heights, paint, (id, out)))
+        }
+        PortType::Mask => {
+            let heights = height_before(graph, eval, id).or_else(fallback)?;
+            Some((heights, Paint::Mask(value.as_field()), (id, out)))
+        }
+        PortType::Color => {
+            let heights = height_before(graph, eval, id).or_else(fallback)?;
+            Some((heights, Paint::Color(value.as_color()), (id, out)))
+        }
     }
 }
 
-/// A picture of a field: shaded relief for heights, grey for masks.
-fn picture(field: &massif_core::graph::Field, mask: bool, spacing: f32) -> ColorImage {
-    let n = field.n;
-    let (lo, hi) = field.range();
+fn view_data(heights: &Field, paint: &Paint, extent: &Extent, exaggeration: f32) -> ViewData {
+    let n = heights.n;
+    let (lo, hi) = heights.range();
     let span = (hi - lo).max(1e-3);
-    let mut pixels = Vec::with_capacity(n * n);
-    for j in 0..n {
-        for i in 0..n {
-            let v = field.at(i, j);
-            if mask {
-                let g = (v.clamp(0.0, 1.0) * 255.0) as u8;
-                pixels.push(Color32::from_rgb(g, g, g));
-                continue;
-            }
-            let t = (v - lo) / span;
-            // Low green, mid brown, high grey to white.
-            let ramp = [
-                (0.0, [62.0, 112.0, 58.0]),
-                (0.45, [128.0, 116.0, 74.0]),
-                (0.75, [150.0, 146.0, 140.0]),
-                (1.0, [245.0, 245.0, 248.0]),
-            ];
-            let mut c = ramp[0].1;
-            for w in ramp.windows(2) {
-                if t >= w[0].0 && t <= w[1].0 {
-                    let k = (t - w[0].0) / (w[1].0 - w[0].0);
-                    c = [0, 1, 2].map(|q| w[0].1[q] + (w[1].1[q] - w[0].1[q]) * k);
+    let mix = |a: [f32; 3], b: [f32; 3], t: f32| [0, 1, 2].map(|k| (a[k] + (b[k] - a[k]) * t.clamp(0.0, 1.0)) as u8);
+    let colors: Vec<[u8; 4]> = (0..n * n)
+        .map(|c| {
+            let rgb = match paint {
+                Paint::Clay => mix([150.0, 143.0, 132.0], [204.0, 198.0, 188.0], (heights.data[c] - lo) / span),
+                Paint::Mask(m) => mix([44.0, 46.0, 54.0], [244.0, 242.0, 236.0], m.data.get(c).copied().unwrap_or(0.0)),
+                Paint::Color(col) => col.data.get(c).map_or([128; 3], |p| p.map(massif_core::graph::encode_srgb)),
+            };
+            [rgb[0], rgb[1], rgb[2], 255]
+        })
+        .collect();
+    ViewData {
+        n,
+        heights: heights.data.clone(),
+        colors,
+        light: lighting(&heights.data, n, extent.spacing(), exaggeration),
+        size: extent.size as f32,
+        exaggeration,
+    }
+}
+
+struct Request {
+    revision: u64,
+    graph: Graph,
+    extent: Extent,
+    view: Option<(NodeId, u8)>,
+    exaggeration: f32,
+    cancel: Arc<AtomicBool>,
+}
+
+struct Preview {
+    revision: u64,
+    thumbs: Vec<((NodeId, u8), ColorImage)>,
+    failed: HashMap<NodeId, String>,
+    view: Option<(Arc<ViewData>, (NodeId, u8))>,
+    error: Option<String>,
+    ms: f32,
+}
+
+/// Evaluates previews on its own thread, keeping a cache between them.
+struct Worker {
+    tx: Sender<Request>,
+    rx: Receiver<Preview>,
+    cancel: Option<Arc<AtomicBool>>,
+}
+
+impl Worker {
+    fn new(ctx: egui::Context) -> Self {
+        let (tx, requests) = channel::<Request>();
+        let (answers, rx) = channel();
+        std::thread::Builder::new()
+            .name("massif graph previews".into())
+            .spawn(move || {
+                let mut cache = EvalCache::default();
+                // What each thumbnail was drawn from.
+                let mut drawn: HashMap<(NodeId, u8), usize> = HashMap::new();
+                while let Ok(mut req) = requests.recv() {
+                    while let Ok(newer) = requests.try_recv() {
+                        req = newer;
+                    }
+                    let started = Instant::now();
+                    let ids: Vec<NodeId> = req.graph.nodes.iter().map(|n| n.id).collect();
+                    let eval = match req.graph.evaluate_cached(&req.extent, &ids, &mut cache, &req.cancel) {
+                        Ok(e) => e,
+                        Err(GraphError::Cancelled) => continue,
+                        Err(e) => {
+                            let _ = answers.send(Preview {
+                                revision: req.revision,
+                                thumbs: Vec::new(),
+                                failed: HashMap::new(),
+                                view: None,
+                                error: Some(e.to_string()),
+                                ms: 0.0,
+                            });
+                            ctx.request_repaint();
+                            continue;
+                        }
+                    };
+                    let spacing = req.extent.spacing();
+                    let mut thumbs = Vec::new();
+                    drawn.retain(|k, _| eval.values.contains_key(k));
+                    for (key, value) in &eval.values {
+                        let ptr = match value {
+                            Value::Field(f) => Arc::as_ptr(f) as usize,
+                            Value::Color(c) => Arc::as_ptr(c) as usize,
+                        };
+                        if drawn.get(key) != Some(&ptr) {
+                            thumbs.push((*key, thumbnail(value, req.graph.output_type(key.0, key.1), spacing)));
+                            drawn.insert(*key, ptr);
+                        }
+                    }
+                    let view = pick_view(&req.graph, &eval, req.view)
+                        .map(|(h, paint, shown)| (Arc::new(view_data(&h, &paint, &req.extent, req.exaggeration)), shown));
+                    let failed = eval.failed.iter().map(|(k, e)| (*k, e.to_string())).collect();
+                    let _ = answers.send(Preview {
+                        revision: req.revision,
+                        thumbs,
+                        failed,
+                        view,
+                        error: None,
+                        ms: started.elapsed().as_secs_f32() * 1000.0,
+                    });
+                    ctx.request_repaint();
                 }
-            }
-            let dx = (field.at(i + 1, j) - field.at(i.saturating_sub(1), j)) / (2.0 * spacing);
-            let dz = (field.at(i, j + 1) - field.at(i, j.saturating_sub(1))) / (2.0 * spacing);
-            let shade = (1.0 - (dx + dz) * 0.9).clamp(0.4, 1.4);
-            pixels.push(Color32::from_rgb(
-                (c[0] * shade).min(255.0) as u8,
-                (c[1] * shade).min(255.0) as u8,
-                (c[2] * shade).min(255.0) as u8,
-            ));
+            })
+            .expect("a thread for previews");
+        Self { tx, rx, cancel: None }
+    }
+
+    fn request(&mut self, req: Request) {
+        if let Some(c) = self.cancel.take() {
+            c.store(true, Ordering::Relaxed);
+        }
+        self.cancel = Some(req.cancel.clone());
+        let _ = self.tx.send(req);
+    }
+}
+
+/// A build on another thread: its result, and the flag that cancels it.
+type Building = (Receiver<Result<Built, GraphError>>, Arc<AtomicBool>, Instant);
+
+/// A finished build: what to write to the map.
+struct Built {
+    extent: Extent,
+    outputs: Outputs,
+}
+
+/// The node library opened over the graph.
+struct Library {
+    /// Where it opened, in graph coordinates, and on screen.
+    at: [f32; 2],
+    screen: Pos2,
+    query: String,
+    /// A wire dropped on empty space: the new node gets it.
+    from: Option<(NodeId, u8)>,
+    focus: bool,
+}
+
+// ----------------------------------------------------------------- editor --
+
+pub struct GraphEditor {
+    /// The world the graph belongs to (its generation).
+    generation: Option<u64>,
+    pub selected: Option<NodeId>,
+    /// A node kept in the viewport whatever is selected.
+    pinned: Option<NodeId>,
+    /// Which output of the shown node is shown.
+    view_output: u8,
+    pan: Vec2,
+    zoom: f32,
+    /// A wire being drawn from an output.
+    wiring: Option<(NodeId, u8)>,
+    textures: HashMap<(NodeId, u8), TextureHandle>,
+    failed: HashMap<NodeId, String>,
+    /// Revision of the graph, of the last preview asked for and received.
+    revision: u64,
+    asked: u64,
+    received: u64,
+    worker: Option<Worker>,
+    /// What the viewport shows, as the worker last said.
+    shown: Option<(NodeId, u8)>,
+    pub resolution: usize,
+    pub preview: usize,
+    build: Option<Building>,
+    error: Option<String>,
+    preview_ms: f32,
+    /// Frame the whole graph at the next opportunity.
+    fit: bool,
+    library: Option<Library>,
+    pub view: TerrainView,
+    /// The last canvas rectangle, for keyboard actions.
+    canvas: Rect,
+}
+
+impl Default for GraphEditor {
+    fn default() -> Self {
+        Self {
+            generation: None,
+            selected: None,
+            pinned: None,
+            view_output: 0,
+            pan: vec2(20.0, 20.0),
+            zoom: 1.0,
+            wiring: None,
+            textures: HashMap::new(),
+            failed: HashMap::new(),
+            revision: 1,
+            asked: 0,
+            received: 0,
+            worker: None,
+            shown: None,
+            resolution: 1024,
+            preview: 384,
+            build: None,
+            error: None,
+            preview_ms: 0.0,
+            fit: true,
+            library: None,
+            view: TerrainView::default(),
+            canvas: Rect::NOTHING,
         }
     }
-    ColorImage::new([n, n], pixels)
+}
+
+/// The graph of the world, or the starter one.
+fn graph_of(doc: &Document) -> Graph {
+    match &doc.world.meta.graph {
+        Some(g) => g.clone(),
+        None => {
+            let reg = &doc.world.registry;
+            let get = |name: &str| reg.terrain_by_name(name).unwrap_or(TerrainId::ROCK).0;
+            Graph::starter(get("Grass"), TerrainId::ROCK.0, get("Snow"), get("Gravel"))
+        }
+    }
 }
 
 impl GraphEditor {
-    fn changed(&mut self, doc: &mut Document, graph: Graph) {
+    /// Is the preview up to date with the graph?
+    #[cfg(test)]
+    pub fn is_current(&self) -> bool {
+        self.received == self.revision && self.asked == self.revision && self.view.has_data()
+    }
+
+    /// The world's graph was replaced from outside the editor.
+    #[cfg(test)]
+    pub fn graph_replaced(&mut self) {
+        self.selected = None;
+        self.pinned = None;
+        self.revision += 1;
+        self.fit = true;
+    }
+
+    /// Select a node (its output shows in the viewport).
+    #[cfg(test)]
+    pub fn select(&mut self, id: Option<NodeId>) {
+        self.selected = id;
+        self.view_output = 0;
+        self.revision += 1;
+    }
+
+    fn store(&mut self, doc: &mut Document, graph: Graph) {
         doc.world.meta.graph = Some(graph);
         doc.mark_changed();
         self.revision += 1;
     }
 
-    /// Start previewing the current graph on another thread.
-    fn request_preview(&mut self, ctx: &egui::Context, graph: Graph, extent: Extent) {
-        let (tx, rx) = channel();
-        let revision = self.revision;
-        let ctx = ctx.clone();
-        std::thread::spawn(move || {
-            let ids: Vec<NodeId> = graph.nodes.iter().map(|n| n.id).collect();
-            let result = graph
-                .evaluate(&extent, &ids, true, &AtomicBool::new(false))
-                .or_else(|e| {
-                    // Evaluate what can be: nodes whose inputs are all there.
-                    let ok: Vec<NodeId> = ids
-                        .iter()
-                        .copied()
-                        .filter(|&id| graph.evaluate(&extent, &[id], false, &AtomicBool::new(false)).is_ok())
-                        .collect();
-                    if ok.is_empty() { Err(e) } else { graph.evaluate(&extent, &ok, true, &AtomicBool::new(false)) }
-                })
-                .map(|eval| {
-                    eval.fields
-                        .iter()
-                        .map(|(&(id, out), f)| {
-                            ((id, out), picture(f, is_mask(&graph, id, out), extent.spacing()))
-                        })
-                        .collect()
-                });
-            let _ = tx.send((revision, result));
-            ctx.request_repaint();
-        });
-        self.preview = Some(rx);
-        self.previewed = revision;
+    /// The node the viewport follows, and which of its outputs.
+    fn viewed(&self, graph: &Graph) -> Option<(NodeId, u8)> {
+        let id = self.pinned.or(self.selected).filter(|id| graph.node(*id).is_some())?;
+        let outs = graph.node(id)?.kind.outputs().len() as u8;
+        Some((id, if outs == 0 { 0 } else { self.view_output.min(outs - 1) }))
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, doc: &mut Document) -> Option<String> {
-        let mut feedback = None;
-        let pal = Palette::of(ui);
-        // A new world: its graph, or one to start from.
+    /// Keep up with the world and the previews: called by every part of
+    /// the editor each frame, the first call does the work.
+    fn sync(&mut self, ctx: &egui::Context, doc: &Document) {
         if self.generation != Some(doc.generation) {
             self.generation = Some(doc.generation);
             self.textures.clear();
             self.selected = None;
+            self.pinned = None;
             self.revision += 1;
             self.fit = true;
+            self.view.camera = Default::default();
         }
-        let mut graph = match &doc.world.meta.graph {
-            Some(g) => g.clone(),
-            None => {
-                let reg = &doc.world.registry;
-                let get = |name: &str| reg.terrain_by_name(name).unwrap_or(TerrainId::ROCK).0;
-                Graph::starter(get("Grass"), TerrainId::ROCK.0, get("Snow"), get("Gravel"))
-            }
-        };
-        let before = graph.clone();
-
-        // Previews come back from their thread.
-        if let Some(rx) = &self.preview
-            && let Ok((revision, result)) = rx.try_recv()
-        {
-            self.preview = None;
-            match result {
-                Ok(images) => {
-                    self.error = None;
-                    self.textures.retain(|k, _| images.contains_key(k));
-                    for (key, image) in images {
-                        let name = format!("graph {key:?}");
-                        match self.textures.get_mut(&key) {
-                            Some(t) => t.set(image, TextureOptions::LINEAR),
-                            None => {
-                                self.textures.insert(key, ui.ctx().load_texture(name, image, TextureOptions::LINEAR));
-                            }
-                        }
+        let worker = self.worker.get_or_insert_with(|| Worker::new(ctx.clone()));
+        while let Ok(p) = worker.rx.try_recv() {
+            self.received = self.received.max(p.revision);
+            self.error = p.error;
+            self.failed = p.failed;
+            self.preview_ms = p.ms;
+            for (key, image) in p.thumbs {
+                match self.textures.get_mut(&key) {
+                    Some(t) => t.set(image, TextureOptions::LINEAR),
+                    None => {
+                        let t = ctx.load_texture(format!("graph {key:?}"), image, TextureOptions::LINEAR);
+                        self.textures.insert(key, t);
                     }
                 }
-                Err(e) => self.error = Some(e.to_string()),
             }
-            let _ = revision;
+            if let Some((data, shown)) = p.view {
+                self.view.set(data);
+                self.shown = Some(shown);
+            }
         }
-        if self.preview.is_none() && self.previewed != self.revision {
-            self.request_preview(ui.ctx(), graph.clone(), map_extent(doc, PREVIEW));
+        if self.asked != self.revision {
+            let graph = graph_of(doc);
+            self.textures.retain(|k, _| graph.node(k.0).is_some());
+            let req = Request {
+                revision: self.revision,
+                view: self.viewed(&graph),
+                graph,
+                extent: map_extent(doc, self.preview),
+                exaggeration: self.view.exaggeration,
+                cancel: Arc::new(AtomicBool::new(false)),
+            };
+            if let Some(w) = &mut self.worker {
+                w.request(req);
+            }
+            self.asked = self.revision;
         }
+        self.view.sea = Some(doc.world.meta.sea_level as f32);
+    }
+
+    // ------------------------------------------------------------ viewport --
+
+    /// The 3D viewport of the graph.
+    pub fn viewport_ui(&mut self, ui: &mut Ui, frame: &eframe::Frame, doc: &Document) {
+        self.sync(ui.ctx(), doc);
+        let pal = Palette::of(ui);
+        let rect = ui.available_rect_before_wrap();
+        if self.view.ui(ui, frame) {
+            // The light depends on the exaggeration.
+            self.revision += 1;
+        }
+        let graph = graph_of(doc);
+        // What is shown, top left.
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink(10.0)).layout(egui::Layout::top_down(egui::Align::Min)));
+        let label = match self.shown.and_then(|(id, out)| graph.node(id).map(|n| (n, out))) {
+            Some((n, out)) => {
+                let outs = n.kind.outputs();
+                match outs.get(out as usize) {
+                    Some((name, _)) if outs.len() > 1 => format!("{} · {}", n.kind.label(), name),
+                    _ => n.kind.label().to_owned(),
+                }
+            }
+            None => "The graph's output".to_owned(),
+        };
+        egui::Frame::new()
+            .fill(Color32::from_black_alpha(120))
+            .corner_radius(6)
+            .inner_margin(egui::Margin::symmetric(8, 4))
+            .show(&mut child, |ui| {
+                ui.horizontal(|ui| {
+                    if self.pinned.is_some() {
+                        ui.label(RichText::new(theme::glyph(Icon::Pin).to_string()).color(Color32::WHITE));
+                    }
+                    ui.label(RichText::new(label).color(Color32::WHITE).medium());
+                    if self.received != self.revision || self.build.is_some() {
+                        ui.spinner();
+                    }
+                });
+            });
+        // Controls, bottom left.
+        let bar = Rect::from_min_max(pos2(rect.left() + 10.0, rect.bottom() - 40.0), pos2(rect.right() - 10.0, rect.bottom() - 8.0));
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(bar).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        egui::Frame::new()
+            .fill(pal.panel.gamma_multiply(0.92))
+            .stroke(Stroke::new(1.0, pal.border))
+            .corner_radius(8)
+            .inner_margin(egui::Margin::symmetric(8, 3))
+            .show(&mut child, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().interact_size.y = 18.0;
+                    ui.spacing_mut().slider_width = 90.0;
+                    ui.label(RichText::new("Height").size(11.5));
+                    let r = ui.add(egui::Slider::new(&mut self.view.exaggeration, 1.0..=8.0).suffix("×").max_decimals(1));
+                    if r.drag_stopped() || (r.changed() && !r.dragged()) {
+                        self.revision += 1;
+                    }
+                    ui.separator();
+                    ui.toggle_value(&mut self.view.show_sea, theme::with_icon(Icon::Waves, "Sea"))
+                        .on_hover_text(format!("Water at the world's sea level ({})", doc.world.meta.sea_level));
+                    if ui.small_button(theme::glyph(Icon::Focus).to_string()).on_hover_text("Frame the relief").clicked() {
+                        self.view.camera = Default::default();
+                    }
+                });
+            });
+        if !self.view.has_data() {
+            let text = match &self.error {
+                Some(e) => e.clone(),
+                None => "Building the preview…".to_owned(),
+            };
+            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(13.0), pal.weak);
+        }
+    }
+
+    // --------------------------------------------------------------- graph --
+
+    /// The node graph, with its toolbar. Returns a message for the status
+    /// bar.
+    pub fn canvas_ui(&mut self, ui: &mut Ui, doc: &mut Document, blocks: &BlockLibrary) -> Option<String> {
+        self.sync(ui.ctx(), doc);
+        let mut feedback = None;
+        let pal = Palette::of(ui);
+        let mut graph = graph_of(doc);
+        let before = graph.clone();
+
         // A build finished: write it to the map.
-        if let Some((rx, _)) = &self.build
+        if let Some((rx, _, started)) = &self.build
             && let Ok(result) = rx.try_recv()
         {
+            let took = started.elapsed().as_secs_f32();
             self.build = None;
             match result {
                 Ok(built) => {
+                    let palette = match &built.outputs.colors {
+                        Some((colors, set)) => block_palette(doc, blocks, *set, colors),
+                        None => Vec::new(),
+                    };
                     doc.history.begin("Terrain graph", doc.dim);
                     let seed = doc.world.meta.seed as u64;
-                    massif_core::graph::apply(&mut doc.history.edit(&mut doc.world, 0), &built.extent, &built.outputs, seed);
+                    massif_core::graph::apply(&mut doc.history.edit(&mut doc.world, 0), &built.extent, &built.outputs, seed, &palette);
                     doc.commit();
+                    let blocks_note = if palette.is_empty() { String::new() } else { format!(", in {} kinds of blocks", palette.len()) };
                     feedback = Some(format!(
-                        "Built the terrain graph at {} × {} and applied it to the map",
+                        "Converted the graph to the map at {} × {} in {took:.1} s{blocks_note}",
                         built.extent.n, built.extent.n
                     ));
                 }
-                Err(GraphError::Cancelled) => feedback = Some("Build cancelled".to_owned()),
+                Err(GraphError::Cancelled) => feedback = Some("Conversion cancelled".to_owned()),
                 Err(e) => feedback = Some(format!("The graph cannot be built: {e}")),
             }
         }
@@ -259,18 +614,16 @@ impl GraphEditor {
         // ---- toolbar ---------------------------------------------------------
         ui.horizontal(|ui| {
             ui.add_space(6.0);
-            let building = self.build.is_some();
-            if building {
+            if let Some((_, cancel, started)) = &self.build {
                 ui.spinner();
-                ui.label("Building…");
-                if ui.button("Cancel").clicked()
-                    && let Some((_, cancel)) = &self.build
-                {
+                ui.label(format!("Converting… {:.0} s", started.elapsed().as_secs_f32()));
+                if ui.button("Cancel").clicked() {
                     cancel.store(true, Ordering::Relaxed);
                 }
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
             } else if ui
-                .add(theme::primary_button(ui, format!("{}  Build and apply", theme::glyph(Icon::Play))))
-                .on_hover_text("Build the graph at the chosen resolution over the whole map, and write the heights and terrains to the ground (undoable)")
+                .add(theme::primary_button(ui, format!("{}  Convert to Minecraft", theme::glyph(Icon::Pickaxe))))
+                .on_hover_text("Build the graph over the whole map at the chosen resolution, and write it to the ground: heights, terrains, and the colours as the closest real blocks (undoable)")
                 .clicked()
             {
                 let (tx, rx) = channel();
@@ -284,31 +637,57 @@ impl GraphEditor {
                     let _ = tx.send(result);
                     ctx.request_repaint();
                 });
-                self.build = Some((rx, cancel));
+                self.build = Some((rx, cancel, Instant::now()));
             }
             ui.label(RichText::new("at").color(pal.weak));
             egui::ComboBox::from_id_salt("graph resolution")
                 .selected_text(format!("{0} × {0}", self.resolution))
-                .width(110.0)
+                .width(104.0)
                 .show_ui(ui, |ui| {
                     for r in RESOLUTIONS {
                         ui.selectable_value(&mut self.resolution, r, format!("{r} × {r}"));
                     }
                 });
-            let blocks = map_extent(doc, self.resolution);
-            ui.label(RichText::new(format!("{:.1} blocks per sample", blocks.spacing())).size(11.5).color(pal.weak));
+            let blocks_per = map_extent(doc, self.resolution).spacing();
+            ui.label(RichText::new(format!("{blocks_per:.1} blocks per sample")).size(11.5).color(pal.weak));
+            ui.separator();
+            ui.label(RichText::new("Preview").color(pal.weak));
+            let before_preview = self.preview;
+            egui::ComboBox::from_id_salt("graph preview")
+                .selected_text(format!("{0}", self.preview))
+                .width(64.0)
+                .show_ui(ui, |ui| {
+                    for r in PREVIEWS {
+                        ui.selectable_value(&mut self.preview, r, format!("{r} × {r}"));
+                    }
+                });
+            if self.preview != before_preview {
+                self.revision += 1;
+            }
+            if self.received != self.revision {
+                ui.spinner();
+            } else if self.preview_ms > 0.0 {
+                ui.label(RichText::new(format!("{:.0} ms", self.preview_ms)).size(11.5).color(pal.weak));
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.small_button("Start over").on_hover_text("Replace the graph by the starter one").clicked() {
                     doc.world.meta.graph = None;
+                    graph = graph_of(doc);
                     self.revision += 1;
                     self.selected = None;
+                    self.pinned = None;
                     self.fit = true;
                 }
-                if ui.small_button(theme::with_icon(Icon::Maximize, "Fit")).on_hover_text("Show the whole graph").clicked() {
+                if ui.small_button(theme::with_icon(Icon::Maximize, "Fit")).on_hover_text("Show the whole graph (F)").clicked() {
                     self.fit = true;
                 }
-                if self.preview.is_some() {
-                    ui.spinner();
+                if ui
+                    .small_button(theme::with_icon(Icon::Plus, "Add"))
+                    .on_hover_text("Add a node (Tab)")
+                    .clicked()
+                {
+                    let c = self.canvas.center();
+                    self.open_library(c, None);
                 }
                 if let Some(e) = &self.error {
                     ui.colored_label(pal.danger, e);
@@ -317,33 +696,32 @@ impl GraphEditor {
         });
         ui.separator();
 
-        // ---- canvas and inspector ---------------------------------------------
-        let full = ui.available_rect_before_wrap();
-        let side = if full.width() > 640.0 { 280.0 } else { 0.0 };
-        let canvas = Rect::from_min_max(full.min, pos2(full.max.x - side, full.max.y));
-        let inspector = Rect::from_min_max(pos2(canvas.max.x, full.min.y), full.max);
+        let canvas = ui.available_rect_before_wrap();
+        self.canvas = canvas;
         self.canvas(ui, canvas, &mut graph, &doc.world.registry);
-        if side > 0.0 {
-            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inspector.shrink2(vec2(10.0, 6.0))).layout(egui::Layout::top_down(egui::Align::Min)));
-            egui::ScrollArea::vertical().id_salt("graph inspector").show(&mut child, |ui| {
-                self.inspector(ui, &mut graph, &doc.world.registry);
-            });
-        }
-        ui.allocate_rect(full, Sense::hover());
+        ui.allocate_rect(canvas, Sense::hover());
         if graph != before {
-            self.changed(doc, graph);
+            self.store(doc, graph);
         }
         feedback
     }
 
-    fn to_screen(&self, canvas: Rect, p: [f32; 2]) -> Pos2 {
-        canvas.min + self.pan + vec2(p[0], p[1]) * self.zoom
+    fn to_screen(&self, p: [f32; 2]) -> Pos2 {
+        self.canvas.min + self.pan + vec2(p[0], p[1]) * self.zoom
     }
 
-    fn node_rect(&self, canvas: Rect, kind: &NodeKind, pos: [f32; 2]) -> Rect {
+    fn to_graph(&self, p: Pos2) -> [f32; 2] {
+        let v = (p - self.canvas.min - self.pan) / self.zoom;
+        [v.x, v.y]
+    }
+
+    fn node_height(kind: &NodeKind) -> f32 {
         let rows = kind.inputs().len().max(kind.outputs().len()) as f32;
-        let h = HEADER + rows * ROW + if kind.outputs().is_empty() { 6.0 } else { THUMB + 10.0 };
-        Rect::from_min_size(self.to_screen(canvas, pos), vec2(NODE_WIDTH, h) * self.zoom)
+        HEADER + rows * ROW + if kind.outputs().is_empty() { 8.0 } else { THUMB + 12.0 }
+    }
+
+    fn node_rect(&self, kind: &NodeKind, pos: [f32; 2]) -> Rect {
+        Rect::from_min_size(self.to_screen(pos), vec2(NODE_WIDTH, Self::node_height(kind)) * self.zoom)
     }
 
     fn input_pos(&self, rect: Rect, k: usize) -> Pos2 {
@@ -355,27 +733,37 @@ impl GraphEditor {
     }
 
     /// Zoom and move so that every node is in view.
-    fn frame(&mut self, canvas: Rect, graph: &Graph) {
+    fn frame(&mut self, graph: &Graph) {
         if graph.nodes.is_empty() {
             return;
         }
         let (mut lo, mut hi) = (vec2(f32::MAX, f32::MAX), vec2(f32::MIN, f32::MIN));
         for n in &graph.nodes {
-            let rows = n.kind.inputs().len().max(n.kind.outputs().len()) as f32;
-            let size = vec2(NODE_WIDTH, HEADER + rows * ROW + THUMB + 10.0);
+            let size = vec2(NODE_WIDTH, Self::node_height(&n.kind));
             lo = lo.min(vec2(n.pos[0], n.pos[1]));
             hi = hi.max(vec2(n.pos[0], n.pos[1]) + size);
         }
         let span = hi - lo + vec2(60.0, 60.0);
-        self.zoom = (canvas.width() / span.x).min(canvas.height() / span.y).clamp(0.3, 1.2);
+        let canvas = self.canvas;
+        self.zoom = (canvas.width() / span.x).min(canvas.height() / span.y).clamp(0.25, 1.1);
         let centre = (lo + hi) * 0.5;
         self.pan = canvas.size() * 0.5 - centre * self.zoom;
+    }
+
+    fn open_library(&mut self, screen: Pos2, from: Option<(NodeId, u8)>) {
+        self.library = Some(Library {
+            at: self.to_graph(screen),
+            screen,
+            query: String::new(),
+            from,
+            focus: true,
+        });
     }
 
     fn canvas(&mut self, ui: &mut Ui, canvas: Rect, graph: &mut Graph, reg: &Registry) {
         let pal = Palette::of(ui);
         if self.fit && canvas.width() > 50.0 {
-            self.frame(canvas, graph);
+            self.frame(graph);
             self.fit = false;
         }
         let background = ui.interact(canvas, ui.scope_id().with("graph canvas"), Sense::click_and_drag());
@@ -399,7 +787,8 @@ impl GraphEditor {
         if background.dragged_by(egui::PointerButton::Middle) || background.dragged_by(egui::PointerButton::Primary) {
             self.pan += background.drag_delta();
         }
-        if background.hovered() || ui.rect_contains_pointer(canvas) {
+        let hovered = ui.rect_contains_pointer(canvas);
+        if hovered && self.library.is_none() {
             let (scroll, zoom, cmd) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers.command || i.modifiers.ctrl));
             let pointer = ui.input(|i| i.pointer.hover_pos()).unwrap_or(canvas.center());
             let factor = if zoom != 1.0 {
@@ -410,65 +799,69 @@ impl GraphEditor {
                 1.0
             };
             if factor != 1.0 {
-                let new_zoom = (self.zoom * factor).clamp(0.3, 2.5);
+                let new_zoom = (self.zoom * factor).clamp(0.25, 2.5);
                 let anchor = pointer - canvas.min - self.pan;
                 self.pan -= anchor * (new_zoom / self.zoom - 1.0);
                 self.zoom = new_zoom;
-            } else if scroll != Vec2::ZERO && ui.rect_contains_pointer(canvas) {
+            } else if scroll != Vec2::ZERO {
                 self.pan += scroll;
             }
         }
-        // Add a node where the menu was opened.
-        let menu_at = ui.ctx().memory(|m| m.data.get_temp::<Pos2>(ui.scope_id().with("graph menu at")));
-        background.context_menu(|ui| {
-            let at = menu_at.unwrap_or(canvas.center());
-            let pos = (at - canvas.min - self.pan) / self.zoom;
-            ui.label(RichText::new("Add a node").bold());
-            for family in [Family::Generator, Family::Modifier, Family::Erosion, Family::Combiner, Family::Selector, Family::Output] {
-                let name = match family {
-                    Family::Generator => "Generators",
-                    Family::Modifier => "Modifiers",
-                    Family::Erosion => "Erosion",
-                    Family::Combiner => "Combiners",
-                    Family::Selector => "Selectors",
-                    Family::Output => "Outputs",
-                };
-                ui.menu_button(name, |ui| {
-                    for kind in NodeKind::catalogue().into_iter().filter(|k| k.family() == family) {
-                        if ui.button(kind.label()).clicked() {
-                            let id = graph.add(kind, [pos.x, pos.y]);
-                            self.selected = Some(id);
-                            ui.close();
-                        }
-                    }
-                });
+        // Keys over the graph.
+        let typing = ui.ctx().egui_wants_keyboard_input();
+        if hovered && !typing && self.library.is_none() {
+            let (tab, space, f, delete) = ui.input(|i| {
+                (
+                    i.key_pressed(Key::Tab),
+                    i.key_pressed(Key::Space),
+                    i.key_pressed(Key::F),
+                    i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace),
+                )
+            });
+            if tab || space {
+                let at = ui.input(|i| i.pointer.hover_pos()).unwrap_or(canvas.center());
+                self.open_library(at, None);
             }
-        });
+            if f {
+                self.fit = true;
+            }
+            if delete && let Some(id) = self.selected.take() {
+                graph.remove(id);
+                if self.pinned == Some(id) {
+                    self.pinned = None;
+                }
+                self.revision += 1;
+            }
+        }
         if background.secondary_clicked()
             && let Some(p) = background.interact_pointer_pos()
         {
-            ui.ctx().memory_mut(|m| m.data.insert_temp(ui.scope_id().with("graph menu at"), p));
+            self.open_library(p, None);
         }
         if background.clicked() {
             self.selected = None;
+            self.library = None;
+            self.revision += 1;
         }
 
-        // Wires.
-        let rects: HashMap<NodeId, Rect> = graph.nodes.iter().map(|n| (n.id, self.node_rect(canvas, &n.kind, n.pos))).collect();
-        let wire = |painter: &egui::Painter, a: Pos2, b: Pos2, color: Color32| {
-            let d = ((b.x - a.x).abs() * 0.5).max(30.0 * self.zoom);
-            let curve = egui::epaint::CubicBezierShape::from_points_stroke(
+        // Wires, coloured by what flows along them.
+        let rects: HashMap<NodeId, Rect> = graph.nodes.iter().map(|n| (n.id, self.node_rect(&n.kind, n.pos))).collect();
+        let zoom = self.zoom;
+        let wire = |painter: &egui::Painter, a: Pos2, b: Pos2, color: Color32, width: f32| {
+            let d = ((b.x - a.x).abs() * 0.5).max(30.0 * zoom);
+            painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
                 [a, a + vec2(d, 0.0), b - vec2(d, 0.0), b],
                 false,
                 Color32::TRANSPARENT,
-                Stroke::new(2.0 * self.zoom.max(0.6), color),
-            );
-            painter.add(curve);
+                Stroke::new(width * zoom.max(0.6), color),
+            ));
         };
         for l in &graph.links {
             let (Some(a), Some(b)) = (rects.get(&l.from), rects.get(&l.to)) else { continue };
-            let color = if self.selected == Some(l.from) || self.selected == Some(l.to) { pal.accent } else { pal.weak };
-            wire(&painter, self.output_pos(*a, l.output as usize), self.input_pos(*b, l.input as usize), color);
+            let t = graph.output_type(l.from, l.output);
+            let near = self.selected == Some(l.from) || self.selected == Some(l.to);
+            let color = if near { port_color(t) } else { port_color(t).gamma_multiply(0.6) };
+            wire(&painter, self.output_pos(*a, l.output as usize), self.input_pos(*b, l.input as usize), color, if near { 2.4 } else { 1.8 });
         }
 
         // Nodes.
@@ -476,44 +869,52 @@ impl GraphEditor {
         let pointer = ui.input(|i| i.pointer.interact_pos());
         let released = ui.input(|i| i.pointer.any_released());
         let mut remove = None;
+        let mut pick_up = None;
         let ids: Vec<NodeId> = graph.nodes.iter().map(|n| n.id).collect();
+        let shown = self.shown.map(|s| s.0);
         for id in ids {
             let node = graph.node(id).expect("listed").clone();
             let rect = rects[&id];
-            let family_color = match node.kind.family() {
-                Family::Generator => Color32::from_rgb(52, 199, 120),
-                Family::Modifier => Color32::from_rgb(76, 141, 255),
-                Family::Erosion => Color32::from_rgb(245, 140, 60),
-                Family::Combiner => Color32::from_rgb(168, 120, 255),
-                Family::Selector => Color32::from_rgb(240, 196, 60),
-                Family::Output => Color32::from_rgb(244, 84, 120),
-            };
+            let family = family_color(node.kind.family());
             let selected = self.selected == Some(id);
-            // A card with a coloured dot for its family, as on node canvases
-            // of current tools.
-            painter.rect(
-                rect,
-                10,
-                pal.header,
-                Stroke::new(if selected { 1.5 } else { 1.0 }, if selected { pal.accent } else { pal.border }),
-                StrokeKind::Inside,
-            );
+            let failed = self.failed.contains_key(&id);
+            let border = if failed {
+                pal.danger
+            } else if selected {
+                pal.accent
+            } else {
+                pal.border
+            };
+            painter.rect(rect, 8, pal.panel, Stroke::new(if selected { 1.6 } else { 1.0 }, border), StrokeKind::Inside);
+            // A band of the family's colour across the top.
+            let band = Rect::from_min_size(rect.min, vec2(rect.width(), 3.0 * self.zoom));
+            painter.rect_filled(band, egui::CornerRadius { nw: 8, ne: 8, sw: 0, se: 0 }, family);
             let header = Rect::from_min_size(rect.min, vec2(rect.width(), HEADER * self.zoom));
-            painter.hline(header.x_range().shrink(1.0), header.bottom(), Stroke::new(1.0, pal.border));
-            painter.circle_filled(header.left_center() + vec2(11.0 * self.zoom, 0.0), 3.5 * self.zoom, family_color);
             let title = match &node.kind {
-                NodeKind::TerrainOutput { terrain } => format!("{} · {}", node.kind.label(), reg.terrain(TerrainId(*terrain)).name),
-                NodeKind::Combine { op, .. } => format!("{} · {}", node.kind.label(), op.label()),
+                NodeKind::TerrainOutput { terrain } => format!("Terrain · {}", reg.terrain(TerrainId(*terrain)).name),
+                NodeKind::Combine { op, .. } => format!("Combine · {}", op.label()),
+                NodeKind::Gradient { preset, .. } => format!("Gradient · {}", preset.label()),
+                NodeKind::Mountain { style, .. } => format!("Mountain · {}", style.label()),
                 _ => node.kind.label().to_owned(),
             };
             painter.text(
-                header.left_center() + vec2(20.0 * self.zoom, 0.0),
+                header.left_center() + vec2(10.0 * self.zoom, 1.5 * self.zoom),
                 egui::Align2::LEFT_CENTER,
                 title,
                 egui::FontId::proportional(12.0 * self.zoom),
                 pal.text,
             );
-            // Drag the node by its header; click it to select it.
+            if shown == Some(id) {
+                painter.text(
+                    header.right_center() + vec2(-9.0 * self.zoom, 1.5 * self.zoom),
+                    egui::Align2::RIGHT_CENTER,
+                    theme::glyph(if self.pinned == Some(id) { Icon::Pin } else { Icon::Eye }).to_string(),
+                    egui::FontId::proportional(11.0 * self.zoom),
+                    pal.accent,
+                );
+            }
+            // Drag the node by its header; click it to select it, double-click
+            // to keep it in the viewport.
             let handle = ui.interact(header, ui.scope_id().with(("graph node", id)), Sense::click_and_drag());
             if handle.dragged()
                 && let Some(n) = graph.node_mut(id)
@@ -522,24 +923,46 @@ impl GraphEditor {
                 n.pos = [n.pos[0] + d.x, n.pos[1] + d.y];
             }
             if handle.clicked() || handle.drag_started() {
-                self.selected = Some(id);
+                if self.selected != Some(id) {
+                    self.selected = Some(id);
+                    self.view_output = 0;
+                    self.revision += 1;
+                }
+                self.library = None;
+            }
+            if handle.double_clicked() {
+                self.pinned = if self.pinned == Some(id) { None } else { Some(id) };
+                self.revision += 1;
+            }
+            if failed {
+                handle.clone().on_hover_text(self.failed[&id].clone());
+            } else {
+                handle.clone().on_hover_text(node.kind.description());
             }
             handle.context_menu(|ui| {
+                let pin = if self.pinned == Some(id) { "Unpin from the viewport" } else { "Keep in the viewport" };
+                if ui.button(theme::with_icon(Icon::Pin, pin)).clicked() {
+                    self.pinned = if self.pinned == Some(id) { None } else { Some(id) };
+                    self.revision += 1;
+                    ui.close();
+                }
                 if ui.button(theme::with_icon(Icon::Trash2, "Delete node")).clicked() {
                     remove = Some(id);
                     ui.close();
                 }
             });
-            // Ports.
-            let r = 5.0 * self.zoom;
-            for (k, name) in node.kind.inputs().iter().enumerate() {
+            // Ports, coloured by type.
+            let r = 4.5 * self.zoom;
+            let font = egui::FontId::proportional(10.5 * self.zoom);
+            for (k, (name, t)) in node.kind.inputs().iter().enumerate() {
                 let p = self.input_pos(rect, k);
                 let wired = graph.input_of(id, k as u8).is_some();
-                painter.circle(p, r, if wired { pal.text } else { pal.header }, Stroke::new(1.5, pal.weak));
-                painter.text(p + vec2(9.0 * self.zoom, 0.0), egui::Align2::LEFT_CENTER, *name, egui::FontId::proportional(11.0 * self.zoom), pal.text);
-                let port = ui.interact(Rect::from_center_size(p, vec2(16.0, 16.0) * self.zoom.max(0.7)), ui.scope_id().with(("in", id, k)), Sense::click());
-                if port.clicked() && wired {
-                    graph.disconnect(id, k as u8);
+                let c = port_color(*t);
+                painter.circle(p, r, if wired { c } else { pal.panel }, Stroke::new(1.5, c));
+                painter.text(p + vec2(9.0 * self.zoom, 0.0), egui::Align2::LEFT_CENTER, *name, font.clone(), pal.weak);
+                let port = ui.interact(Rect::from_center_size(p, vec2(16.0, 16.0) * self.zoom.max(0.7)), ui.scope_id().with(("in", id, k)), Sense::click_and_drag());
+                if (port.clicked() || port.drag_started()) && wired {
+                    pick_up = Some((id, k as u8));
                 }
                 if self.wiring.is_some() && pointer.is_some_and(|q| q.distance(p) < 14.0 * self.zoom.max(0.7)) {
                     painter.circle_stroke(p, r + 3.0, Stroke::new(2.0, pal.accent));
@@ -548,24 +971,29 @@ impl GraphEditor {
                     }
                 }
             }
-            for (k, name) in node.kind.outputs().iter().enumerate() {
+            for (k, (name, _)) in node.kind.outputs().iter().enumerate() {
                 let p = self.output_pos(rect, k);
-                painter.circle(p, r, pal.text, Stroke::new(1.5, pal.weak));
-                painter.text(p - vec2(9.0 * self.zoom, 0.0), egui::Align2::RIGHT_CENTER, *name, egui::FontId::proportional(11.0 * self.zoom), pal.text);
+                let c = port_color(graph.output_type(id, k as u8));
+                painter.circle(p, r, c, Stroke::new(1.5, c));
+                painter.text(p - vec2(9.0 * self.zoom, 0.0), egui::Align2::RIGHT_CENTER, *name, font.clone(), pal.weak);
                 let port = ui.interact(Rect::from_center_size(p, vec2(16.0, 16.0) * self.zoom.max(0.7)), ui.scope_id().with(("out", id, k)), Sense::drag());
                 if port.drag_started() {
                     self.wiring = Some((id, k as u8));
                 }
             }
-            // Thumbnail of the first output.
+            // Thumbnail of the output shown (the first one, or the one picked).
             if !node.kind.outputs().is_empty() {
                 let rows = node.kind.inputs().len().max(node.kind.outputs().len()) as f32;
-                let top = rect.top() + (HEADER + rows * ROW + 4.0) * self.zoom;
-                let side = THUMB * self.zoom;
-                let thumb = Rect::from_min_size(pos2(rect.center().x - side / 2.0, top), vec2(side, side));
-                match self.textures.get(&(id, 0)) {
+                let top = rect.top() + (HEADER + rows * ROW + 6.0) * self.zoom;
+                let out = if selected { self.view_output.min(node.kind.outputs().len() as u8 - 1) } else { 0 };
+                let thumb = Rect::from_min_size(pos2(rect.left() + 8.0 * self.zoom, top), vec2(rect.width() - 16.0 * self.zoom, THUMB * self.zoom));
+                match self.textures.get(&(id, out)) {
                     Some(t) => {
-                        painter.image(t.id(), thumb, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                        // Square pixels: crop the picture to the strip.
+                        let aspect = thumb.height() / thumb.width();
+                        let uv = Rect::from_min_max(pos2(0.0, 0.5 - aspect / 2.0), pos2(1.0, 0.5 + aspect / 2.0));
+                        painter.image(t.id(), thumb, uv, Color32::WHITE);
+                        painter.rect_stroke(thumb, 4, Stroke::new(1.0, pal.border), StrokeKind::Inside);
                     }
                     None => {
                         painter.rect_filled(thumb, 4, pal.header);
@@ -573,176 +1001,619 @@ impl GraphEditor {
                 }
             }
         }
+        if let Some((to, input)) = pick_up
+            && let Some((from, output)) = graph.input_of(to, input)
+        {
+            graph.disconnect(to, input);
+            self.wiring = Some((from, output));
+        }
         if let Some(id) = remove {
             graph.remove(id);
             if self.selected == Some(id) {
                 self.selected = None;
             }
+            if self.pinned == Some(id) {
+                self.pinned = None;
+            }
         }
         // The wire being drawn.
         if let Some((from, output)) = self.wiring {
             if let (Some(a), Some(p)) = (rects.get(&from), pointer) {
-                wire(&painter, self.output_pos(*a, output as usize), p, pal.accent);
+                wire(&painter, self.output_pos(*a, output as usize), p, port_color(graph.output_type(from, output)), 2.4);
             }
             if released {
-                if let Some((to, input)) = drop_on
-                    && !graph.connect(from, output, to, input)
-                {
-                    ui.ctx().debug_text("That would make a loop");
+                match drop_on {
+                    Some((to, input)) => {
+                        if !graph.connect(from, output, to, input) {
+                            ui.ctx().debug_text("That would make a loop");
+                        }
+                    }
+                    // Dropped on empty space: add a node there, wired.
+                    None => {
+                        if let Some(p) = pointer.filter(|p| canvas.contains(*p) && !rects.values().any(|r| r.contains(*p))) {
+                            self.open_library(p, Some((from, output)));
+                        }
+                    }
                 }
                 self.wiring = None;
             }
         }
-        // Delete the selected node with the keyboard.
-        if let Some(id) = self.selected
-            && ui.rect_contains_pointer(canvas)
-            && !ui.ctx().egui_wants_keyboard_input()
-            && ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
-        {
-            graph.remove(id);
-            self.selected = None;
-        }
         if graph.nodes.is_empty() {
-            painter.text(canvas.center(), egui::Align2::CENTER_CENTER, "Right-click to add a node", egui::FontId::proportional(14.0), pal.weak);
+            painter.text(canvas.center(), egui::Align2::CENTER_CENTER, "Right-click or press Tab to add a node", egui::FontId::proportional(14.0), pal.weak);
+        }
+        self.library_ui(ui, graph);
+    }
+
+    /// The library of nodes: type to search, Enter adds the first match.
+    fn library_ui(&mut self, ui: &mut Ui, graph: &mut Graph) {
+        let Some(lib) = &mut self.library else { return };
+        let pal = Palette::of(ui);
+        let mut close = ui.input(|i| i.key_pressed(Key::Escape));
+        let mut add: Option<NodeKind> = None;
+        let screen = lib.screen;
+        let wanted = lib.from.map(|(id, out)| graph.output_type(id, out));
+        let area = egui::Area::new(ui.scope_id().with("graph library"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen)
+            .constrain(true)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
+                    ui.set_width(280.0);
+                    let edit = ui.add(
+                        egui::TextEdit::singleline(&mut lib.query)
+                            .hint_text(format!("{}  Search nodes", theme::glyph(Icon::Search)))
+                            .desired_width(f32::INFINITY),
+                    );
+                    if lib.focus {
+                        edit.request_focus();
+                        lib.focus = false;
+                    }
+                    let q = lib.query.to_lowercase();
+                    let matches: Vec<NodeKind> = NodeKind::catalogue()
+                        .into_iter()
+                        .filter(|k| {
+                            q.is_empty() || k.label().to_lowercase().contains(&q) || k.description().to_lowercase().contains(&q) || k.family().label().to_lowercase().contains(&q)
+                        })
+                        // With a wire in hand, only nodes that take it.
+                        .filter(|k| match wanted {
+                            None => true,
+                            Some(PortType::Color) => k.inputs().iter().any(|i| i.1 == PortType::Color),
+                            Some(_) => k.inputs().iter().any(|i| i.1 != PortType::Color),
+                        })
+                        .collect();
+                    if edit.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                        add = matches.first().cloned();
+                    }
+                    ui.add_space(4.0);
+                    egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                        for family in Family::ALL {
+                            let in_family: Vec<&NodeKind> = matches.iter().filter(|k| k.family() == family).collect();
+                            if in_family.is_empty() {
+                                continue;
+                            }
+                            ui.horizontal(|ui| {
+                                let (dot, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
+                                ui.painter().circle_filled(dot.center(), 3.5, family_color(family));
+                                ui.label(RichText::new(family.label()).size(11.0).color(pal.weak).medium());
+                            });
+                            for k in in_family {
+                                let r = ui.add(egui::Button::new(k.label()).frame(false).min_size(vec2(260.0, 20.0)));
+                                if r.clicked() {
+                                    add = Some(k.clone());
+                                }
+                                r.on_hover_text(k.description());
+                            }
+                            ui.add_space(2.0);
+                        }
+                        if matches.is_empty() {
+                            ui.label(RichText::new("No node by that name").color(pal.weak));
+                        }
+                    });
+                });
+            });
+        // A click elsewhere closes it.
+        if ui.input(|i| i.pointer.any_pressed()) && !area.response.contains_pointer() && add.is_none() {
+            let p = ui.input(|i| i.pointer.interact_pos());
+            if p.is_some_and(|p| !area.response.rect.contains(p)) {
+                close = true;
+            }
+        }
+        if let Some(kind) = add {
+            let lib = self.library.take().expect("open");
+            let id = graph.add(kind, lib.at);
+            if let Some((from, output)) = lib.from {
+                // Wire the first input of a matching type.
+                let t = graph.output_type(from, output);
+                let inputs = graph.node(id).map(|n| n.kind.inputs()).unwrap_or(&[]);
+                let k = inputs
+                    .iter()
+                    .position(|i| (i.1 == PortType::Color) == (t == PortType::Color))
+                    .unwrap_or(0);
+                if !inputs.is_empty() {
+                    graph.connect(from, output, id, k as u8);
+                }
+            }
+            self.selected = Some(id);
+            self.view_output = 0;
+            self.revision += 1;
+        } else if close {
+            self.library = None;
         }
     }
 
-    fn inspector(&mut self, ui: &mut Ui, graph: &mut Graph, reg: &Registry) {
+    // ---------------------------------------------------------- properties --
+
+    /// The settings of the selected node.
+    pub fn properties_ui(&mut self, ui: &mut Ui, doc: &mut Document) {
+        self.sync(ui.ctx(), doc);
         let pal = Palette::of(ui);
+        let mut graph = graph_of(doc);
+        let before = graph.clone();
+        ui.spacing_mut().slider_width = (ui.available_width() - 120.0).clamp(80.0, 240.0);
         let Some(id) = self.selected.filter(|id| graph.node(*id).is_some()) else {
             ui.label(RichText::new("Terrain graph").bold().size(14.0));
+            ui.add_space(2.0);
             ui.label(
                 RichText::new(
-                    "Build terrain from nodes, as in World Machine or Gaea: generators make relief, modifiers and erosion shape it, \
-                     selectors make masks, outputs send heights and terrains to the map. Select a node to edit it; right-click the canvas to add one.",
+                    "Build relief from nodes, as in Gaea: landforms and primitives make it, adjustments and simulations shape it, \
+                     masks pick parts of it, colour nodes paint it. The viewport shows the selected node; when it looks right, \
+                     converting the graph writes its heights, terrains and real blocks to the map.",
                 )
                 .size(11.5)
                 .color(pal.weak),
             );
+            ui.add_space(8.0);
+            ui.label(RichText::new(format!("{} nodes, {} links", graph.nodes.len(), graph.links.len())).size(11.5).color(pal.weak));
+            ui.label(RichText::new("Right-click the graph or press Tab to add a node.").size(11.5).color(pal.weak));
             return;
         };
         let node = graph.node_mut(id).expect("checked");
-        ui.label(RichText::new(node.kind.label()).bold().size(14.0));
+        let family = node.kind.family();
+        ui.horizontal(|ui| {
+            let (dot, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
+            ui.painter().circle_filled(dot.center(), 4.0, family_color(family));
+            ui.label(RichText::new(node.kind.label()).bold().size(15.0));
+            ui.label(RichText::new(family.label()).size(11.0).color(pal.weak));
+        });
+        ui.label(RichText::new(node.kind.description()).size(11.5).color(pal.weak));
         ui.add_space(4.0);
-        edit_kind(ui, &mut node.kind, reg);
-        let outputs = node.kind.outputs();
-        if !outputs.is_empty() {
-            ui.add_space(8.0);
-            if outputs.len() > 1 {
-                ui.horizontal(|ui| {
-                    for (k, name) in outputs.iter().enumerate() {
-                        ui.selectable_value(&mut self.shown_output, k as u8, *name);
+        ui.horizontal(|ui| {
+            let pinned = self.pinned == Some(id);
+            if ui
+                .selectable_label(pinned, theme::with_icon(Icon::Pin, "Keep in view"))
+                .on_hover_text("Keep this node in the viewport whatever is selected (double-click a node)")
+                .clicked()
+            {
+                self.pinned = if pinned { None } else { Some(id) };
+                self.revision += 1;
+            }
+            let outs = node.kind.outputs();
+            if outs.len() > 1 {
+                ui.separator();
+                for (k, (name, _)) in outs.iter().enumerate() {
+                    if ui.selectable_label(self.view_output == k as u8, *name).clicked() {
+                        self.view_output = k as u8;
+                        self.revision += 1;
                     }
-                });
-            }
-            let k = self.shown_output.min(outputs.len() as u8 - 1);
-            let side = ui.available_width().min(260.0);
-            let (rect, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
-            match self.textures.get(&(id, k)) {
-                Some(t) => {
-                    ui.painter().image(t.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-                }
-                None => {
-                    ui.painter().rect_filled(rect, 4, pal.header);
                 }
             }
-            ui.label(RichText::new("The whole map, seen from above.").size(11.0).color(pal.weak));
+        });
+        if let Some(e) = self.failed.get(&id) {
+            ui.colored_label(pal.danger, e);
         }
-        ui.add_space(8.0);
-        if ui.button(theme::with_icon(Icon::Trash2, "Delete node")).clicked() {
+        ui.add_space(6.0);
+        let mut delete = false;
+        egui::ScrollArea::vertical().id_salt("node properties").show(ui, |ui| {
+            properties(ui, &mut node.kind, &doc.world.registry);
+            ui.add_space(10.0);
+            delete = ui.button(theme::with_icon(Icon::Trash2, "Delete node")).clicked();
+        });
+        if delete {
             graph.remove(id);
             self.selected = None;
+            if self.pinned == Some(id) {
+                self.pinned = None;
+            }
+        }
+        if graph != before {
+            self.store(doc, graph);
         }
     }
 }
 
-/// The settings of a node.
-fn edit_kind(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
-    let row = |ui: &mut Ui, label: &str, add: &mut dyn FnMut(&mut Ui)| {
-        ui.horizontal(|ui| {
-            ui.add_sized([96.0, 18.0], egui::Label::new(label));
-            add(ui);
-        });
-    };
-    fn drag(v: &mut f32, speed: f64, range: std::ops::RangeInclusive<f32>) -> egui::DragValue<'_> {
-        egui::DragValue::new(v).speed(speed).range(range)
+/// Turn a build's colours into terrains of real blocks: the blocks of the
+/// palette (read from the game, or Massif's terrains without it), only
+/// those the colours come close to, made terrains of the world.
+fn block_palette(doc: &mut Document, blocks: &BlockLibrary, set: BlockPalette, colors: &ColorField) -> Vec<(TerrainId, [u8; 3])> {
+    match &blocks.catalogue {
+        Some(cat) => {
+            let wanted = set.blocks();
+            let candidates: Vec<&massif_assets::Block> = if wanted.is_empty() {
+                cat.blocks.iter().filter(|b| b.full_cube && b.top.is_some()).collect()
+            } else {
+                wanted.iter().filter_map(|id| cat.block(id)).filter(|b| b.full_cube).collect()
+            };
+            let rgb: Vec<[u8; 3]> = candidates.iter().map(|b| b.color).collect();
+            let used = massif_core::graph::colors_in_use(colors, &rgb);
+            candidates
+                .into_iter()
+                .zip(used)
+                .filter(|(_, u)| *u)
+                .map(|(b, _)| (massif_assets::block_terrain(&mut doc.world.registry, b), b.color))
+                .collect()
+        }
+        None => doc
+            .world
+            .registry
+            .terrains
+            .iter()
+            .enumerate()
+            .map(|(k, t)| (TerrainId(k as u16), t.color))
+            .collect(),
     }
+}
+
+// ------------------------------------------------------------- settings --
+
+/// A row of settings: a label, then the control.
+fn row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> egui::Response) -> bool {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().interact_size.y = 18.0;
+        let l = ui.add_sized([96.0, 18.0], egui::Label::new(RichText::new(label).size(12.0)).truncate());
+        add(ui).labelled_by(l.id).changed()
+    })
+    .inner
+}
+
+fn blocks(ui: &mut Ui, label: &str, v: &mut f32, max: f32) -> bool {
+    row(ui, label, |ui| ui.add(egui::Slider::new(v, 1.0..=max).logarithmic(true).suffix(" blocks").max_decimals(0)))
+}
+
+fn height(ui: &mut Ui, label: &str, v: &mut f32) -> bool {
+    row(ui, label, |ui| {
+        ui.add(
+            egui::Slider::new(v, -64.0..=320.0)
+                .clamping(egui::SliderClamping::Never)
+                .max_decimals(0),
+        )
+    })
+}
+
+fn amount(ui: &mut Ui, label: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>) -> bool {
+    row(ui, label, |ui| ui.add(egui::Slider::new(v, range).max_decimals(2)))
+}
+
+fn fraction(ui: &mut Ui, label: &str, v: &mut f32) -> bool {
+    row(ui, label, |ui| {
+        ui.add(
+            egui::Slider::new(v, 0.0..=1.0)
+                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
+        )
+    })
+}
+
+fn angle(ui: &mut Ui, label: &str, v: &mut f32) -> bool {
+    row(ui, label, |ui| ui.add(egui::Slider::new(v, 0.0..=360.0).suffix("°").max_decimals(0)))
+}
+
+fn count(ui: &mut Ui, label: &str, v: &mut u32, range: std::ops::RangeInclusive<u32>) -> bool {
+    row(ui, label, |ui| ui.add(egui::Slider::new(v, range)))
+}
+
+fn seed(ui: &mut Ui, v: &mut u32) -> bool {
+    ui.horizontal(|ui| {
+        ui.add_sized([96.0, 18.0], egui::Label::new(RichText::new("Seed").size(12.0)));
+        let mut changed = ui.add(egui::DragValue::new(v)).changed();
+        if ui.small_button(theme::glyph(Icon::Dices).to_string()).on_hover_text("Another seed").clicked() {
+            *v = v.wrapping_mul(1_103_515_245).wrapping_add(12_345) % 100_000;
+            changed = true;
+        }
+        changed
+    })
+    .inner
+}
+
+fn choice<T: PartialEq + Copy>(ui: &mut Ui, label: &str, v: &mut T, options: &[(T, &str)]) -> bool {
+    row(ui, label, |ui| {
+        let current = options.iter().find(|o| o.0 == *v).map_or("", |o| o.1);
+        let mut changed = false;
+        let mut r = egui::ComboBox::from_id_salt(label)
+            .selected_text(current)
+            .width(150.0)
+            .show_ui(ui, |ui| {
+                for (o, name) in options {
+                    if ui.selectable_value(v, *o, *name).changed() {
+                        changed = true;
+                    }
+                }
+            })
+            .response;
+        if changed {
+            r.mark_changed();
+        }
+        r
+    })
+}
+
+fn color(ui: &mut Ui, label: &str, v: &mut [u8; 3]) -> bool {
+    row(ui, label, |ui| ui.color_edit_button_srgb(v))
+}
+
+fn flag(ui: &mut Ui, label: &str, v: &mut bool) -> bool {
+    row(ui, label, |ui| ui.checkbox(v, ""))
+}
+
+/// Swatches of the gradients, to pick one.
+fn gradient_picker(ui: &mut Ui, preset: &mut GradientPreset) -> bool {
+    let mut changed = false;
+    let pal = Palette::of(ui);
+    let width = ((ui.available_width() - 8.0) / 2.0).max(60.0);
+    egui::Grid::new("gradient presets").num_columns(2).spacing(vec2(6.0, 4.0)).show(ui, |ui| {
+        for (k, p) in GradientPreset::ALL.iter().enumerate() {
+            let (rect, r) = ui.allocate_exact_size(vec2(width, 20.0), Sense::click());
+            let painter = ui.painter();
+            let steps = 24;
+            for s in 0..steps {
+                let t = s as f32 / (steps - 1) as f32;
+                let c = p.at(t).map(massif_core::graph::encode_srgb);
+                let x0 = rect.left() + rect.width() * s as f32 / steps as f32;
+                let x1 = rect.left() + rect.width() * (s + 1) as f32 / steps as f32;
+                painter.rect_filled(Rect::from_min_max(pos2(x0, rect.top()), pos2(x1 + 0.5, rect.bottom())), 0, Color32::from_rgb(c[0], c[1], c[2]));
+            }
+            let selected = *preset == *p;
+            painter.rect_stroke(rect, 3, Stroke::new(if selected { 2.0 } else { 1.0 }, if selected { pal.accent } else { pal.border }), StrokeKind::Inside);
+            painter.text(rect.left_center() + vec2(6.0, 0.0), egui::Align2::LEFT_CENTER, p.label(), egui::FontId::proportional(10.5), Color32::WHITE);
+            if r.clicked() {
+                *preset = *p;
+                changed = true;
+            }
+            if k % 2 == 1 {
+                ui.end_row();
+            }
+        }
+    });
+    changed
+}
+
+/// The settings of a node. Every control reports changes through the graph
+/// comparison done by the caller.
+fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
+    let pal = Palette::of(ui);
+    let section = |ui: &mut Ui, name: &str| {
+        ui.add_space(6.0);
+        ui.label(RichText::new(name).size(11.0).color(pal.weak).medium());
+    };
     match kind {
         NodeKind::Noise {
             style,
             scale,
             octaves,
             roughness,
-            height,
+            height: h,
             base,
-            seed,
+            seed: s,
         } => {
-            row(ui, "Style", &mut |ui| {
-                ui.selectable_value(style, NoiseStyle::Fbm, "Rolling");
-                ui.selectable_value(style, NoiseStyle::Ridged, "Ridged");
-                ui.selectable_value(style, NoiseStyle::Billow, "Billow");
-            });
-            row(ui, "Feature size", &mut |ui| {
-                ui.add(drag(scale, 4.0, 8.0..=20000.0).suffix(" blocks"));
-            });
-            row(ui, "Detail", &mut |ui| {
-                ui.add(egui::DragValue::new(octaves).range(1..=12).suffix(" octaves"));
-            });
-            row(ui, "Roughness", &mut |ui| {
-                ui.add(drag(roughness, 0.01, 0.05..=0.95));
-            });
-            row(ui, "Height", &mut |ui| {
-                ui.add(drag(height, 1.0, -400.0..=400.0).suffix(" blocks"));
-            });
-            row(ui, "Base", &mut |ui| {
-                ui.add(drag(base, 1.0, -64.0..=319.0));
-            });
-            seed_row(ui, seed);
+            choice(ui, "Style", style, &[(NoiseStyle::Fbm, "Rolling"), (NoiseStyle::Ridged, "Ridged"), (NoiseStyle::Billow, "Billow")]);
+            blocks(ui, "Feature size", scale, 20000.0);
+            count(ui, "Detail", octaves, 1..=12);
+            amount(ui, "Roughness", roughness, 0.05..=0.95);
+            height(ui, "Height", h);
+            height(ui, "Base", base);
+            seed(ui, s);
         }
         NodeKind::Cells {
             style,
             scale,
             jitter,
-            height,
+            height: h,
             base,
-            seed,
+            seed: s,
         } => {
-            row(ui, "Style", &mut |ui| {
-                ui.selectable_value(style, CellStyle::Cones, "Cones");
-                ui.selectable_value(style, CellStyle::Ridges, "Ridges");
-            });
-            row(ui, "Cell size", &mut |ui| {
-                ui.add(drag(scale, 4.0, 8.0..=20000.0).suffix(" blocks"));
-            });
-            row(ui, "Jitter", &mut |ui| {
-                ui.add(drag(jitter, 0.01, 0.0..=1.0));
-            });
-            row(ui, "Height", &mut |ui| {
-                ui.add(drag(height, 1.0, -400.0..=400.0).suffix(" blocks"));
-            });
-            row(ui, "Base", &mut |ui| {
-                ui.add(drag(base, 1.0, -64.0..=319.0));
-            });
-            seed_row(ui, seed);
+            choice(ui, "Style", style, &[(CellStyle::Cones, "Cones"), (CellStyle::Ridges, "Ridges")]);
+            blocks(ui, "Cell size", scale, 20000.0);
+            fraction(ui, "Jitter", jitter);
+            height(ui, "Height", h);
+            height(ui, "Base", base);
+            seed(ui, s);
         }
-        NodeKind::Radial { inner, outer, height, base } => {
-            row(ui, "Inner", &mut |ui| {
-                ui.add(drag(inner, 0.01, 0.0..=1.5));
-            });
-            row(ui, "Outer", &mut |ui| {
-                ui.add(drag(outer, 0.01, 0.0..=1.5));
-            });
-            row(ui, "Height", &mut |ui| {
-                ui.add(drag(height, 0.5, -400.0..=400.0));
-            });
-            row(ui, "Base", &mut |ui| {
-                ui.add(drag(base, 0.5, -400.0..=400.0));
-            });
-            hint(ui, "Height 1 and base 0 make a mask for Blend: 1 in the middle of the map, 0 at its edges.");
+        NodeKind::Radial {
+            inner,
+            outer,
+            height: h,
+            base,
+        } => {
+            fraction(ui, "Fall starts", inner);
+            fraction(ui, "Fall ends", outer);
+            amount(ui, "Height", h, -400.0..=400.0);
+            amount(ui, "Base", base, -64.0..=320.0);
         }
-        NodeKind::Constant { value } => row(ui, "Value", &mut |ui| {
-            ui.add(drag(value, 0.5, -400.0..=400.0));
-        }),
+        NodeKind::Constant { value } => {
+            row(ui, "Value", |ui| ui.add(egui::DragValue::new(value).speed(0.5)));
+        }
+        NodeKind::LinearGradient { angle: a, height: h, base } => {
+            angle(ui, "Rises toward", a);
+            amount(ui, "Height", h, -400.0..=400.0);
+            amount(ui, "Base", base, -64.0..=320.0);
+        }
+        NodeKind::Shape {
+            shape,
+            x,
+            z,
+            radius,
+            falloff,
+            height: h,
+            base,
+        } => {
+            choice(ui, "Shape", shape, &ShapeKind::ALL.map(|s| (s, s.label())));
+            fraction(ui, "Across (x)", x);
+            fraction(ui, "Down (z)", z);
+            blocks(ui, "Radius", radius, 10000.0);
+            fraction(ui, "Soft edge", falloff);
+            amount(ui, "Height", h, -400.0..=400.0);
+            amount(ui, "Base", base, -64.0..=320.0);
+        }
+        NodeKind::Mountain {
+            style,
+            x,
+            z,
+            radius,
+            height: h,
+            base,
+            detail,
+            seed: s,
+        } => {
+            choice(ui, "Style", style, &MountainStyle::ALL.map(|s| (s, s.label())));
+            blocks(ui, "Radius", radius, 10000.0);
+            height(ui, "Height", h);
+            height(ui, "Base", base);
+            fraction(ui, "Detail", detail);
+            section(ui, "Where");
+            fraction(ui, "Across (x)", x);
+            fraction(ui, "Down (z)", z);
+            seed(ui, s);
+        }
+        NodeKind::MountainRange {
+            angle: a,
+            width,
+            scale,
+            height: h,
+            base,
+            seed: s,
+        } => {
+            angle(ui, "Runs toward", a);
+            blocks(ui, "Width", width, 10000.0);
+            blocks(ui, "Peak size", scale, 5000.0);
+            height(ui, "Height", h);
+            height(ui, "Base", base);
+            seed(ui, s);
+        }
+        NodeKind::Volcano {
+            x,
+            z,
+            radius,
+            height: h,
+            base,
+            crater,
+            depth,
+            seed: s,
+        } => {
+            blocks(ui, "Radius", radius, 10000.0);
+            height(ui, "Height", h);
+            height(ui, "Base", base);
+            fraction(ui, "Crater width", crater);
+            amount(ui, "Crater depth", depth, 0.0..=200.0);
+            section(ui, "Where");
+            fraction(ui, "Across (x)", x);
+            fraction(ui, "Down (z)", z);
+            seed(ui, s);
+        }
+        NodeKind::Crater {
+            x,
+            z,
+            radius,
+            depth,
+            rim,
+            peak,
+            base,
+            seed: s,
+        } => {
+            blocks(ui, "Radius", radius, 5000.0);
+            amount(ui, "Depth", depth, 0.0..=200.0);
+            amount(ui, "Rim", rim, 0.0..=100.0);
+            amount(ui, "Central peak", peak, 0.0..=100.0);
+            height(ui, "Plain", base);
+            section(ui, "Where");
+            fraction(ui, "Across (x)", x);
+            fraction(ui, "Down (z)", z);
+            seed(ui, s);
+        }
+        NodeKind::CraterField {
+            count: c,
+            min_radius,
+            max_radius,
+            depth,
+            base,
+            seed: s,
+        } => {
+            count(ui, "Craters", c, 1..=2000);
+            blocks(ui, "Smallest", min_radius, 2000.0);
+            blocks(ui, "Largest", max_radius, 5000.0);
+            fraction(ui, "Depth", depth);
+            height(ui, "Plain", base);
+            seed(ui, s);
+        }
+        NodeKind::Dunes {
+            angle: a,
+            wavelength,
+            height: h,
+            base,
+            sharpness,
+            seed: s,
+        } => {
+            angle(ui, "Wind toward", a);
+            blocks(ui, "Spacing", wavelength, 2000.0);
+            amount(ui, "Height", h, 0.0..=120.0);
+            height(ui, "Base", base);
+            fraction(ui, "Steep lee side", sharpness);
+            seed(ui, s);
+        }
+        NodeKind::Canyon {
+            angle: a,
+            width,
+            depth,
+            meander,
+            steps,
+            base,
+            seed: s,
+        } => {
+            angle(ui, "Runs toward", a);
+            blocks(ui, "Width", width, 5000.0);
+            amount(ui, "Depth", depth, 0.0..=300.0);
+            blocks(ui, "Winding", meander, 3000.0);
+            count(ui, "Steps", steps, 0..=20);
+            height(ui, "Plateau", base);
+            seed(ui, s);
+        }
+        NodeKind::Mesas {
+            scale,
+            coverage,
+            height: h,
+            base,
+            steps,
+            seed: s,
+        } => {
+            blocks(ui, "Size", scale, 5000.0);
+            fraction(ui, "Coverage", coverage);
+            amount(ui, "Height", h, 0.0..=300.0);
+            height(ui, "Base", base);
+            count(ui, "Steps", steps, 1..=12);
+            seed(ui, s);
+        }
+        NodeKind::Island {
+            size,
+            height: h,
+            base,
+            coast,
+            seed: s,
+        } => {
+            fraction(ui, "Size", size);
+            amount(ui, "Height", h, 0.0..=380.0);
+            height(ui, "Sea floor", base);
+            fraction(ui, "Ragged coast", coast);
+            seed(ui, s);
+        }
+        NodeKind::Rocks {
+            scale,
+            height: h,
+            sharpness,
+            seed: s,
+        } => {
+            blocks(ui, "Size", scale, 2000.0);
+            amount(ui, "Height", h, 0.0..=100.0);
+            fraction(ui, "Sharpness", sharpness);
+            seed(ui, s);
+        }
         NodeKind::Levels {
             in_min,
             in_max,
@@ -750,43 +1621,74 @@ fn edit_kind(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             out_max,
             gamma,
         } => {
-            row(ui, "From", &mut |ui| {
-                ui.add(drag(in_min, 0.5, -1000.0..=1000.0));
-                ui.add(drag(in_max, 0.5, -1000.0..=1000.0));
-            });
-            row(ui, "To", &mut |ui| {
-                ui.add(drag(out_min, 0.5, -1000.0..=1000.0));
-                ui.add(drag(out_max, 0.5, -1000.0..=1000.0));
-            });
-            row(ui, "Gamma", &mut |ui| {
-                ui.add(drag(gamma, 0.01, 0.05..=8.0));
-            });
+            section(ui, "From");
+            height(ui, "Low", in_min);
+            height(ui, "High", in_max);
+            section(ui, "To");
+            height(ui, "Low", out_min);
+            height(ui, "High", out_max);
+            amount(ui, "Gamma", gamma, 0.1..=5.0);
         }
         NodeKind::Terrace { steps, strength } => {
-            row(ui, "Steps", &mut |ui| {
-                ui.add(egui::DragValue::new(steps).range(1..=64));
-            });
-            row(ui, "Strength", &mut |ui| {
-                ui.add(drag(strength, 0.01, 0.0..=1.0));
-            });
+            count(ui, "Steps", steps, 1..=64);
+            fraction(ui, "Strength", strength);
         }
         NodeKind::Clamp { min, max } => {
-            row(ui, "Between", &mut |ui| {
-                ui.add(drag(min, 0.5, -1000.0..=1000.0));
-                ui.add(drag(max, 0.5, -1000.0..=1000.0));
-            });
+            height(ui, "Lowest", min);
+            height(ui, "Highest", max);
         }
-        NodeKind::Blur { radius } => row(ui, "Radius", &mut |ui| {
-            ui.add(drag(radius, 0.5, 1.0..=512.0).suffix(" blocks"));
-        }),
-        NodeKind::Warp { amount, scale, seed } => {
-            row(ui, "Amount", &mut |ui| {
-                ui.add(drag(amount, 1.0, 0.0..=2000.0).suffix(" blocks"));
-            });
-            row(ui, "Feature size", &mut |ui| {
-                ui.add(drag(scale, 4.0, 8.0..=20000.0).suffix(" blocks"));
-            });
-            seed_row(ui, seed);
+        NodeKind::Blur { radius } => {
+            blocks(ui, "Radius", radius, 500.0);
+        }
+        NodeKind::Warp { amount: a, scale, seed: s } => {
+            blocks(ui, "Distance", a, 2000.0);
+            blocks(ui, "Size", scale, 10000.0);
+            seed(ui, s);
+        }
+        NodeKind::Normalize { min, max } => {
+            height(ui, "Lowest", min);
+            height(ui, "Highest", max);
+        }
+        NodeKind::Curve { gamma, contrast } => {
+            amount(ui, "Gamma", gamma, 0.1..=6.0);
+            amount(ui, "Contrast", contrast, -1.0..=1.0);
+        }
+        NodeKind::Transform {
+            scale,
+            rotate,
+            offset_x,
+            offset_z,
+        } => {
+            amount(ui, "Scale", scale, 0.1..=8.0);
+            row(ui, "Turn", |ui| ui.add(egui::Slider::new(rotate, -180.0..=180.0).suffix("°").max_decimals(0)));
+            amount(ui, "Move across", offset_x, -1.0..=1.0);
+            amount(ui, "Move down", offset_z, -1.0..=1.0);
+        }
+        NodeKind::Swirl { angle: a, radius } => {
+            row(ui, "Turn", |ui| ui.add(egui::Slider::new(a, -720.0..=720.0).suffix("°").max_decimals(0)));
+            fraction(ui, "Reach", radius);
+        }
+        NodeKind::Fold { level, strength } => {
+            height(ui, "Level", level);
+            fraction(ui, "Strength", strength);
+        }
+        NodeKind::Stratify {
+            layers,
+            strength,
+            tilt,
+            seed: s,
+        } => {
+            count(ui, "Layers", layers, 1..=80);
+            fraction(ui, "Strength", strength);
+            row(ui, "Tilt", |ui| ui.add(egui::Slider::new(tilt, -45.0..=45.0).suffix("°").max_decimals(0)));
+            seed(ui, s);
+        }
+        NodeKind::Sharpen { radius, amount: a } => {
+            blocks(ui, "Radius", radius, 500.0);
+            amount(ui, "Amount", a, 0.0..=4.0);
+        }
+        NodeKind::InvertHeight | NodeKind::Blend | NodeKind::Invert | NodeKind::MixColors | NodeKind::HeightOutput => {
+            ui.label(RichText::new("No settings.").size(11.5).color(pal.weak));
         }
         NodeKind::Erosion {
             rain,
@@ -795,100 +1697,243 @@ fn edit_kind(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             capacity,
             evaporation,
             radius,
-            seed,
+            seed: s,
         } => {
-            row(ui, "Rain", &mut |ui| {
-                ui.add(drag(rain, 0.05, 0.0..=10.0).suffix(" drops / sample"));
-            });
-            row(ui, "Erosion", &mut |ui| {
-                ui.add(drag(erosion, 0.01, 0.0..=1.0));
-            });
-            row(ui, "Deposition", &mut |ui| {
-                ui.add(drag(deposition, 0.01, 0.0..=1.0));
-            });
-            row(ui, "Capacity", &mut |ui| {
-                ui.add(drag(capacity, 0.05, 0.0..=32.0));
-            });
-            row(ui, "Evaporation", &mut |ui| {
-                ui.add(drag(evaporation, 0.001, 0.0..=0.5));
-            });
-            row(ui, "Brush radius", &mut |ui| {
-                ui.add(drag(radius, 0.5, 1.0..=64.0).suffix(" blocks"));
-            });
-            seed_row(ui, seed);
-            hint(ui, "Outputs the eroded heights, the flow of water and where soil settled (masks).");
+            amount(ui, "Rain", rain, 0.05..=8.0);
+            fraction(ui, "Erosion", erosion);
+            fraction(ui, "Deposition", deposition);
+            amount(ui, "Capacity", capacity, 0.1..=20.0);
+            amount(ui, "Evaporation", evaporation, 0.0..=0.5);
+            blocks(ui, "Brush", radius, 100.0);
+            seed(ui, s);
         }
-        NodeKind::Thermal { talus, iterations, strength } => {
-            row(ui, "Talus", &mut |ui| {
-                ui.add(drag(talus, 0.5, 1.0..=89.0).suffix("°"));
-            });
-            row(ui, "Iterations", &mut |ui| {
-                ui.add(egui::DragValue::new(iterations).range(1..=500));
-            });
-            row(ui, "Strength", &mut |ui| {
-                ui.add(drag(strength, 0.01, 0.0..=1.0));
-            });
+        NodeKind::Thermal {
+            talus,
+            iterations,
+            strength,
+        } => {
+            row(ui, "Steepest", |ui| ui.add(egui::Slider::new(talus, 5.0..=85.0).suffix("°").max_decimals(0)));
+            count(ui, "Passes", iterations, 1..=500);
+            fraction(ui, "Strength", strength);
+        }
+        NodeKind::Snow {
+            line,
+            slope,
+            depth,
+            softness,
+        } => {
+            height(ui, "Snow line", line);
+            row(ui, "Steepest", |ui| ui.add(egui::Slider::new(slope, 5.0..=85.0).suffix("°").max_decimals(0)));
+            amount(ui, "Depth", depth, 0.0..=20.0);
+            amount(ui, "Fade", softness, 0.5..=100.0);
+        }
+        NodeKind::Rivers { threshold, depth, width } => {
+            fraction(ui, "Fewer", threshold);
+            amount(ui, "Depth", depth, 0.0..=40.0);
+            blocks(ui, "Width", width, 200.0);
+        }
+        NodeKind::Lakes { amount: a } => {
+            fraction(ui, "Fill", a);
+        }
+        NodeKind::Sea { level, shore } => {
+            height(ui, "Level", level);
+            amount(ui, "Shore", shore, 0.5..=40.0);
         }
         NodeKind::Combine { op, weight } => {
-            row(ui, "Operation", &mut |ui| {
-                egui::ComboBox::from_id_salt("combine op").selected_text(op.label()).show_ui(ui, |ui| {
-                    for o in CombineOp::ALL {
-                        ui.selectable_value(op, o, o.label());
-                    }
-                });
-            });
-            row(ui, "Weight of B", &mut |ui| {
-                ui.add(drag(weight, 0.01, -10.0..=10.0));
-            });
+            choice(ui, "Operation", op, &CombineOp::ALL.map(|o| (o, o.label())));
+            amount(ui, "Weight of B", weight, -4.0..=4.0);
         }
-        NodeKind::Blend => hint(ui, "A where the mask is 0, B where it is 1."),
         NodeKind::SelectHeight { min, max, falloff } => {
-            row(ui, "Between", &mut |ui| {
-                ui.add(drag(min, 0.5, -64.0..=1000.0));
-                ui.add(drag(max, 0.5, -64.0..=1000.0));
-            });
-            row(ui, "Falloff", &mut |ui| {
-                ui.add(drag(falloff, 0.5, 0.0..=200.0).suffix(" blocks"));
-            });
+            height(ui, "From", min);
+            height(ui, "To", max);
+            amount(ui, "Fade", falloff, 0.1..=100.0);
         }
         NodeKind::SelectSlope { min, max, falloff } => {
-            row(ui, "Between", &mut |ui| {
-                ui.add(drag(min, 0.5, 0.0..=90.0).suffix("°"));
-                ui.add(drag(max, 0.5, 0.0..=90.0).suffix("°"));
-            });
-            row(ui, "Falloff", &mut |ui| {
-                ui.add(drag(falloff, 0.5, 0.0..=45.0).suffix("°"));
+            row(ui, "From", |ui| ui.add(egui::Slider::new(min, 0.0..=90.0).suffix("°").max_decimals(0)));
+            row(ui, "To", |ui| ui.add(egui::Slider::new(max, 0.0..=90.0).suffix("°").max_decimals(0)));
+            amount(ui, "Fade", falloff, 0.1..=30.0);
+        }
+        NodeKind::Curvature { bend, radius, strength } => {
+            choice(ui, "Pick", bend, &[(Bend::Convex, "Ridges"), (Bend::Concave, "Hollows")]);
+            blocks(ui, "Size", radius, 1000.0);
+            amount(ui, "Strength", strength, 0.1..=5.0);
+        }
+        NodeKind::Facing { angle: a, spread } => {
+            angle(ui, "Facing", a);
+            row(ui, "Spread", |ui| ui.add(egui::Slider::new(spread, 5.0..=180.0).suffix("°").max_decimals(0)));
+        }
+        NodeKind::Occlusion { radius } => {
+            blocks(ui, "Radius", radius, 1000.0);
+        }
+        NodeKind::Flow { spread } => {
+            fraction(ui, "Small rills", spread);
+        }
+        NodeKind::Gradient {
+            preset,
+            auto_range,
+            min,
+            max,
+            reverse,
+            variation,
+            seed: s,
+        } => {
+            gradient_picker(ui, preset);
+            ui.add_space(4.0);
+            flag(ui, "Fit the range", auto_range);
+            if !*auto_range {
+                amount(ui, "From", min, -64.0..=320.0);
+                amount(ui, "To", max, -64.0..=320.0);
+            }
+            flag(ui, "Reverse", reverse);
+            fraction(ui, "Variation", variation);
+            seed(ui, s);
+        }
+        NodeKind::SolidColor { color: c } => {
+            color(ui, "Colour", c);
+        }
+        NodeKind::AdjustColor {
+            hue,
+            saturation,
+            brightness,
+            contrast,
+        } => {
+            row(ui, "Hue", |ui| ui.add(egui::Slider::new(hue, -180.0..=180.0).suffix("°").max_decimals(0)));
+            amount(ui, "Saturation", saturation, 0.0..=3.0);
+            amount(ui, "Brightness", brightness, 0.0..=3.0);
+            amount(ui, "Contrast", contrast, 0.0..=3.0);
+        }
+        NodeKind::Tint { color: c, mode, strength } => {
+            color(ui, "Colour", c);
+            choice(ui, "Mode", mode, &TintMode::ALL.map(|m| (m, m.label())));
+            fraction(ui, "Strength", strength);
+        }
+        NodeKind::AutoColor {
+            palette,
+            snow_line,
+            rock_slope,
+            seed: s,
+        } => {
+            choice(ui, "Land", palette, &AutoPalette::ALL.map(|p| (p, p.label())));
+            height(ui, "Snow line", snow_line);
+            row(ui, "Rock from", |ui| ui.add(egui::Slider::new(rock_slope, 5.0..=80.0).suffix("°").max_decimals(0)));
+            seed(ui, s);
+        }
+        NodeKind::TerrainOutput { terrain } => {
+            row(ui, "Terrain", |ui| {
+                let mut changed = false;
+                let mut r = egui::ComboBox::from_id_salt("output terrain")
+                    .selected_text(reg.terrain(TerrainId(*terrain)).name.clone())
+                    .width(170.0)
+                    .height(320.0)
+                    .show_ui(ui, |ui| {
+                        for (k, t) in reg.terrains.iter().enumerate() {
+                            if ui.selectable_value(terrain, k as u16, &t.name).changed() {
+                                changed = true;
+                            }
+                        }
+                    })
+                    .response;
+                if changed {
+                    r.mark_changed();
+                }
+                r
             });
         }
-        NodeKind::Invert => hint(ui, "1 − the input: turns a mask inside out."),
-        NodeKind::HeightOutput => hint(ui, "What reaches this node becomes the height of the ground."),
-        NodeKind::TerrainOutput { terrain } => {
-            row(ui, "Terrain", &mut |ui| {
-                egui::ComboBox::from_id_salt("graph terrain")
-                    .selected_text(&reg.terrain(TerrainId(*terrain)).name)
-                    .height(300.0)
-                    .show_ui(ui, |ui| {
-                        for (i, t) in reg.terrains.iter().enumerate() {
-                            ui.selectable_value(terrain, i as u16, &t.name);
-                        }
-                    });
-            });
-            hint(ui, "Painted where the mask is 1, scattered where it is between 0 and 1. Later outputs paint over earlier ones.");
+        NodeKind::ColorOutput { blocks: b, palette } => {
+            flag(ui, "Real blocks", b);
+            if *b {
+                choice(ui, "From", palette, &BlockPalette::ALL.map(|p| (p, p.label())));
+            }
+            ui.label(
+                RichText::new(
+                    "When converted, every column takes the real block of the game whose colour is closest to the graph's, \
+                     two neighbouring blocks mixing where the colour lies between them.",
+                )
+                .size(11.0)
+                .color(pal.weak),
+            );
         }
     }
 }
 
-fn seed_row(ui: &mut Ui, seed: &mut u32) {
-    ui.horizontal(|ui| {
-        ui.add_sized([96.0, 18.0], egui::Label::new("Seed"));
-        ui.add(egui::DragValue::new(seed));
-        if ui.small_button(theme::glyph(Icon::Dice5).to_string()).on_hover_text("Another seed").clicked() {
-            *seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345) % 100_000;
-        }
-    });
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use massif_core::graph::Graph;
 
-fn hint(ui: &mut Ui, text: &str) {
-    let pal = Palette::of(ui);
-    ui.label(RichText::new(text).size(11.5).color(pal.weak));
+    #[test]
+    fn the_viewport_shows_the_selected_node_on_the_closest_relief() {
+        let mut g = Graph::default();
+        let hills = g.add(
+            NodeKind::Noise {
+                style: NoiseStyle::Fbm,
+                scale: 200.0,
+                octaves: 4,
+                roughness: 0.5,
+                height: 100.0,
+                base: 50.0,
+                seed: 1,
+            },
+            [0.0; 2],
+        );
+        let slope = g.add(
+            NodeKind::SelectSlope {
+                min: 10.0,
+                max: 90.0,
+                falloff: 2.0,
+            },
+            [0.0; 2],
+        );
+        let paint = g.add(
+            NodeKind::AutoColor {
+                palette: AutoPalette::Temperate,
+                snow_line: 140.0,
+                rock_slope: 30.0,
+                seed: 1,
+            },
+            [0.0; 2],
+        );
+        let out = g.add(NodeKind::HeightOutput, [0.0; 2]);
+        let color_out = g.add(
+            NodeKind::ColorOutput {
+                blocks: true,
+                palette: BlockPalette::Natural,
+            },
+            [0.0; 2],
+        );
+        g.connect(hills, 0, slope, 0);
+        g.connect(hills, 0, paint, 0);
+        g.connect(hills, 0, out, 0);
+        g.connect(paint, 0, color_out, 0);
+        let extent = Extent {
+            x0: 0.0,
+            z0: 0.0,
+            size: 512.0,
+            n: 32,
+        };
+        let ids: Vec<NodeId> = g.nodes.iter().map(|n| n.id).collect();
+        let eval = g.evaluate(&extent, &ids, true, &AtomicBool::new(false)).unwrap();
+        // Nothing selected: the output, in its colours.
+        let (h, paint_of, shown) = pick_view(&g, &eval, None).unwrap();
+        assert_eq!(shown, (hills, 0));
+        assert!(matches!(paint_of, Paint::Color(_)));
+        assert_eq!(h.n, 32);
+        // A mask: shown on the relief before it.
+        let (_, p, shown) = pick_view(&g, &eval, Some((slope, 0))).unwrap();
+        assert!(matches!(p, Paint::Mask(_)) && shown == (slope, 0));
+        // A colour node, and the colour output (which shows what it gets).
+        let (_, p, _) = pick_view(&g, &eval, Some((paint, 0))).unwrap();
+        assert!(matches!(p, Paint::Color(_)));
+        let (_, _, shown) = pick_view(&g, &eval, Some((color_out, 0))).unwrap();
+        assert_eq!(shown, (paint, 0));
+        // The data for the viewport, with its light.
+        let (h, p, _) = pick_view(&g, &eval, Some((slope, 0))).unwrap();
+        let data = view_data(&h, &p, &extent, 2.0);
+        assert_eq!((data.colors.len(), data.light.len()), (32 * 32, 32 * 32));
+        // Thumbnails of each kind.
+        for (key, value) in &eval.values {
+            let img = thumbnail(value, g.output_type(key.0, key.1), extent.spacing());
+            assert_eq!(img.size, [THUMB_PX, THUMB_PX]);
+        }
+    }
 }

@@ -1,29 +1,41 @@
 //! Terrain graphs: procedural terrain from a graph of nodes, in the manner of
-//! World Machine or Gaea.
+//! Gaea or World Machine.
 //!
-//! Every node makes a *field*: a square grid of values over the whole map,
-//! heights in blocks or masks from 0 to 1. Generators make fields from
-//! nothing (noise, cells, gradients), modifiers reshape one field (levels,
-//! terraces, warp, blur, hydraulic and thermal erosion), combiners mix two
-//! or three, selectors turn heights into masks (by height or slope), and
-//! outputs say what goes to the map: the height of the ground and where
-//! each terrain is painted.
+//! Every node makes *fields* — square grids of values over the whole map —
+//! or *colour fields*. A field holds heights in blocks, or a mask from 0 to
+//! 1; a colour field the colour of the ground. Primitives and landforms make
+//! fields from nothing (noise, cells, mountains, volcanoes, craters, dunes,
+//! canyons…), adjustments reshape one (levels, curves, terraces, strata,
+//! warps…), simulations wear it the way nature does (water erosion, thermal
+//! erosion, snow, rivers, lakes), combiners mix several, masks pick parts of
+//! the relief (by height, slope, curvature, facing, occlusion, flow), colour
+//! nodes paint it (gradients from nature, automatic colouring, mixes), and
+//! outputs say what goes to the map: the height of the ground, where each
+//! terrain is painted, and the colour the ground takes, which becomes the
+//! nearest real Minecraft blocks.
 //!
 //! A graph is evaluated at a resolution chosen for the job (a few hundred
 //! samples per side for previews, thousands for the final build) over the
-//! extent of the map, and the result is sampled per block column when it is
-//! applied. Distances are in blocks, so a graph looks the same at every
-//! resolution.
+//! extent of the map, and sampled per block column when it is applied.
+//! Distances are in blocks, so a graph looks the same at every resolution.
+//! Evaluations can keep a cache: only the nodes that changed, and those
+//! after them, are computed again.
+
+mod color;
+mod landforms;
+mod ops;
+mod sim;
+
+pub use color::{AutoPalette, BlockPalette, GradientPreset, decode as decode_srgb, encode as encode_srgb};
 
 use crate::codec::snap_height;
 use crate::compose::hash2;
 use crate::coords::{BlockRect, TilePos, local_index};
 use crate::history::Edit;
-use crate::noise::Noise;
 use crate::registry::TerrainId;
-use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -55,16 +67,28 @@ pub enum CombineOp {
     Max,
     Min,
     Average,
+    /// The first input, moved toward the second by the weight.
+    Lerp,
+    /// Brighter wherever either is: 1 − (1 − a)(1 − b), for masks.
+    Screen,
+    /// Contrast: multiply the low end, screen the high end, for masks.
+    Overlay,
+    /// How far apart they are.
+    Difference,
 }
 
 impl CombineOp {
-    pub const ALL: [CombineOp; 6] = [
+    pub const ALL: [CombineOp; 10] = [
         CombineOp::Add,
         CombineOp::Subtract,
         CombineOp::Multiply,
         CombineOp::Max,
         CombineOp::Min,
         CombineOp::Average,
+        CombineOp::Lerp,
+        CombineOp::Screen,
+        CombineOp::Overlay,
+        CombineOp::Difference,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -75,14 +99,96 @@ impl CombineOp {
             CombineOp::Max => "Max",
             CombineOp::Min => "Min",
             CombineOp::Average => "Average",
+            CombineOp::Lerp => "Lerp",
+            CombineOp::Screen => "Screen",
+            CombineOp::Overlay => "Overlay",
+            CombineOp::Difference => "Difference",
         }
     }
 }
 
-/// What a node does, with its settings.
+/// The character of a mountain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MountainStyle {
+    /// Sharp ridges and deep gullies.
+    Alpine,
+    /// Soft, old, rounded.
+    Rounded,
+    /// Worn by water: branching valleys.
+    Eroded,
+    /// A narrow, steep peak.
+    Spiky,
+}
+
+impl MountainStyle {
+    pub const ALL: [MountainStyle; 4] = [MountainStyle::Alpine, MountainStyle::Rounded, MountainStyle::Eroded, MountainStyle::Spiky];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            MountainStyle::Alpine => "Alpine",
+            MountainStyle::Rounded => "Rounded",
+            MountainStyle::Eroded => "Eroded",
+            MountainStyle::Spiky => "Spiky",
+        }
+    }
+}
+
+/// Simple shapes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ShapeKind {
+    Circle,
+    Square,
+    Cone,
+    Dome,
+}
+
+impl ShapeKind {
+    pub const ALL: [ShapeKind; 4] = [ShapeKind::Circle, ShapeKind::Square, ShapeKind::Cone, ShapeKind::Dome];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            ShapeKind::Circle => "Circle",
+            ShapeKind::Square => "Square",
+            ShapeKind::Cone => "Cone",
+            ShapeKind::Dome => "Dome",
+        }
+    }
+}
+
+/// Which bends of the ground a curvature mask picks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Bend {
+    /// Ridges, crests, edges of cliffs.
+    Convex,
+    /// Valleys, hollows, feet of slopes.
+    Concave,
+}
+
+/// How a tint is laid over a colour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TintMode {
+    Mix,
+    Multiply,
+    Screen,
+}
+
+impl TintMode {
+    pub const ALL: [TintMode; 3] = [TintMode::Mix, TintMode::Multiply, TintMode::Screen];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            TintMode::Mix => "Mix",
+            TintMode::Multiply => "Multiply",
+            TintMode::Screen => "Screen",
+        }
+    }
+}
+
+/// What a node does, with its settings. Positions (`x`, `z`) are fractions
+/// of the map (0.5: its middle); sizes and heights are in blocks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum NodeKind {
-    // Generators.
+    // ---- primitives
     Noise {
         style: NoiseStyle,
         /// Size of the largest features, in blocks.
@@ -115,7 +221,136 @@ pub enum NodeKind {
     Constant {
         value: f32,
     },
-    // Modifiers.
+    /// A ramp across the map.
+    LinearGradient {
+        /// Direction it rises toward, in degrees (0: north, 90: east).
+        angle: f32,
+        height: f32,
+        base: f32,
+    },
+    /// One shape somewhere on the map.
+    Shape {
+        shape: ShapeKind,
+        x: f32,
+        z: f32,
+        radius: f32,
+        /// Softness of the edge, as a fraction of the radius.
+        falloff: f32,
+        height: f32,
+        base: f32,
+    },
+    // ---- landforms
+    Mountain {
+        style: MountainStyle,
+        x: f32,
+        z: f32,
+        radius: f32,
+        height: f32,
+        base: f32,
+        /// Fine detail on the flanks (0..1).
+        detail: f32,
+        seed: u32,
+    },
+    /// A chain of ridged peaks across the map.
+    MountainRange {
+        /// Direction the range runs, in degrees.
+        angle: f32,
+        /// How wide the range is, in blocks.
+        width: f32,
+        /// Size of its peaks and valleys.
+        scale: f32,
+        height: f32,
+        base: f32,
+        seed: u32,
+    },
+    Volcano {
+        x: f32,
+        z: f32,
+        radius: f32,
+        height: f32,
+        base: f32,
+        /// Width of the crater, as a fraction of the radius.
+        crater: f32,
+        /// Depth of the crater below the rim, in blocks.
+        depth: f32,
+        seed: u32,
+    },
+    Crater {
+        x: f32,
+        z: f32,
+        radius: f32,
+        depth: f32,
+        /// Height of the rim above the plain.
+        rim: f32,
+        /// Height of a central peak (0: none).
+        peak: f32,
+        base: f32,
+        seed: u32,
+    },
+    /// Craters of all sizes over the whole map, the way meteorites leave
+    /// them on a moon.
+    CraterField {
+        count: u32,
+        min_radius: f32,
+        max_radius: f32,
+        /// Depth of a crater as a fraction of its radius.
+        depth: f32,
+        base: f32,
+        seed: u32,
+    },
+    Dunes {
+        /// Direction the wind blows toward, in degrees.
+        angle: f32,
+        /// Distance between crests, in blocks.
+        wavelength: f32,
+        height: f32,
+        base: f32,
+        /// How steep the lee side is (0..1).
+        sharpness: f32,
+        seed: u32,
+    },
+    /// A winding river canyon cut into a plateau, with stepped walls.
+    Canyon {
+        angle: f32,
+        width: f32,
+        depth: f32,
+        /// How far it winds, in blocks.
+        meander: f32,
+        /// Steps of its walls (0: smooth).
+        steps: u32,
+        /// Height of the plateau.
+        base: f32,
+        seed: u32,
+    },
+    /// Flat-topped hills with steep, stepped sides.
+    Mesas {
+        scale: f32,
+        /// How much of the map they cover (0..1).
+        coverage: f32,
+        height: f32,
+        base: f32,
+        steps: u32,
+        seed: u32,
+    },
+    Island {
+        /// Size, as a fraction of the map.
+        size: f32,
+        height: f32,
+        /// Height of the sea floor around it.
+        base: f32,
+        /// How ragged the coast is (0..1).
+        coast: f32,
+        seed: u32,
+    },
+    /// Rocky detail around 0, to add to a relief.
+    Rocks {
+        scale: f32,
+        height: f32,
+        /// 0: rounded boulders, 1: sharp crags.
+        sharpness: f32,
+        seed: u32,
+    },
+    // ---- adjustments
     Levels {
         in_min: f32,
         in_max: f32,
@@ -143,6 +378,54 @@ pub enum NodeKind {
         scale: f32,
         seed: u32,
     },
+    /// Stretch the field to a range of heights.
+    Normalize {
+        min: f32,
+        max: f32,
+    },
+    /// Reshape the heights: a gamma and an S-curve, over the field's range.
+    Curve {
+        /// Above 1: lower ground widens; below 1: higher ground does.
+        gamma: f32,
+        /// −1 (flatter middle) to 1 (steeper middle).
+        contrast: f32,
+    },
+    /// Scale, turn and move the field.
+    Transform {
+        scale: f32,
+        /// Degrees.
+        rotate: f32,
+        /// Fractions of the map.
+        offset_x: f32,
+        offset_z: f32,
+    },
+    /// Twist around the middle of the map.
+    Swirl {
+        /// Degrees of turn at the middle.
+        angle: f32,
+        /// Fraction of the map it reaches.
+        radius: f32,
+    },
+    /// Mirror what rises over `level` back down: ridges and folds.
+    Fold {
+        level: f32,
+        strength: f32,
+    },
+    /// Layers of rock of uneven thickness: steps on the slopes.
+    Stratify {
+        layers: u32,
+        strength: f32,
+        /// Tilt of the layers, in degrees.
+        tilt: f32,
+        seed: u32,
+    },
+    Sharpen {
+        radius: f32,
+        amount: f32,
+    },
+    /// Flip the heights upside down (within their range).
+    InvertHeight,
+    // ---- simulations
     /// Water running down the slopes carries soil from the heights to the
     /// valleys: gullies, smoothed slopes, alluvial fans.
     Erosion {
@@ -165,7 +448,36 @@ pub enum NodeKind {
         iterations: u32,
         strength: f32,
     },
-    // Combiners.
+    /// Snow settles above a line, on slopes gentle enough to hold it.
+    Snow {
+        /// Height of the snow line.
+        line: f32,
+        /// Steepest slope that holds snow, in degrees.
+        slope: f32,
+        /// Depth of the snow, in blocks.
+        depth: f32,
+        /// How gradually the snow line fades, in blocks.
+        softness: f32,
+    },
+    /// Rivers dug where the water of the whole map gathers.
+    Rivers {
+        /// How much water makes a river (0..1: more, fewer rivers).
+        threshold: f32,
+        depth: f32,
+        width: f32,
+    },
+    /// Fill the hollows water would fill: lakes and flat valley floors.
+    Lakes {
+        /// 0: nothing, 1: every hollow full.
+        amount: f32,
+    },
+    /// A sea level: where the ground is under water, and its shore.
+    Sea {
+        level: f32,
+        /// Width of the shore, in blocks of height around the level.
+        shore: f32,
+    },
+    // ---- combining
     Combine {
         op: CombineOp,
         /// Weight of the second input.
@@ -173,7 +485,7 @@ pub enum NodeKind {
     },
     /// The first input where the mask is 0, the second where it is 1.
     Blend,
-    // Selectors.
+    // ---- masks
     SelectHeight {
         min: f32,
         max: f32,
@@ -188,30 +500,226 @@ pub enum NodeKind {
     },
     /// 1 − the input, for masks.
     Invert,
-    // Outputs.
+    Curvature {
+        bend: Bend,
+        /// Size of the bends looked at, in blocks.
+        radius: f32,
+        strength: f32,
+    },
+    /// Slopes facing a direction (snow on the shady side, moss…).
+    Facing {
+        /// Degrees: 0 north, 90 east.
+        angle: f32,
+        /// How far around it, in degrees.
+        spread: f32,
+    },
+    /// How open to the sky the ground is: dark in hollows and crevices.
+    Occlusion {
+        radius: f32,
+    },
+    /// Where the water of the map runs and gathers.
+    Flow {
+        /// 0..1: how much small rills show next to big rivers.
+        spread: f32,
+    },
+    // ---- colour
+    /// Colour a field with a gradient taken from nature.
+    Gradient {
+        preset: GradientPreset,
+        /// Use the field's own range rather than `min`..`max`.
+        auto_range: bool,
+        min: f32,
+        max: f32,
+        reverse: bool,
+        /// Breaks the bands up a little (0..1).
+        variation: f32,
+        seed: u32,
+    },
+    SolidColor {
+        color: [u8; 3],
+    },
+    /// The first colour where the mask is 0, the second where it is 1.
+    MixColors,
+    AdjustColor {
+        /// Degrees around the colour wheel.
+        hue: f32,
+        saturation: f32,
+        brightness: f32,
+        contrast: f32,
+    },
+    /// Lay a colour over another where a mask says.
+    Tint {
+        color: [u8; 3],
+        mode: TintMode,
+        strength: f32,
+    },
+    /// Natural colours from the relief alone: valleys, meadows, rock on the
+    /// steep slopes, snow on the peaks.
+    AutoColor {
+        palette: AutoPalette,
+        /// Where snow starts, in blocks.
+        snow_line: f32,
+        /// Slope where rock shows, in degrees.
+        rock_slope: f32,
+        seed: u32,
+    },
+    // ---- outputs
     /// The height of the ground.
     HeightOutput,
     /// Paint a terrain where the mask is high (dithered in between).
     TerrainOutput {
         terrain: u16,
     },
+    /// The colour of the ground: shown in the preview, and, if `blocks`,
+    /// turned into the real blocks of the game closest to it.
+    ColorOutput {
+        blocks: bool,
+        palette: BlockPalette,
+    },
+}
+
+/// What flows along a link.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PortType {
+    /// Heights, in blocks.
+    Height,
+    /// 0 to 1.
+    Mask,
+    /// A colour per sample.
+    Color,
 }
 
 /// Families of nodes, for the editor's menus and colours.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Family {
     Generator,
+    Landform,
     Modifier,
     Erosion,
     Combiner,
     Selector,
+    Color,
     Output,
 }
+
+impl Family {
+    pub const ALL: [Family; 8] = [
+        Family::Landform,
+        Family::Generator,
+        Family::Modifier,
+        Family::Erosion,
+        Family::Combiner,
+        Family::Selector,
+        Family::Color,
+        Family::Output,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Family::Generator => "Primitives",
+            Family::Landform => "Landforms",
+            Family::Modifier => "Adjust",
+            Family::Erosion => "Simulate",
+            Family::Combiner => "Combine",
+            Family::Selector => "Masks",
+            Family::Color => "Colour",
+            Family::Output => "Output",
+        }
+    }
+}
+
+use PortType::{Color as C, Height as H, Mask as M};
 
 impl NodeKind {
     /// A node of each kind with sensible settings, for the "add" menu.
     pub fn catalogue() -> Vec<NodeKind> {
         vec![
+            // Landforms.
+            NodeKind::Mountain {
+                style: MountainStyle::Alpine,
+                x: 0.5,
+                z: 0.5,
+                radius: 900.0,
+                height: 220.0,
+                base: 40.0,
+                detail: 0.5,
+                seed: 1,
+            },
+            NodeKind::MountainRange {
+                angle: 30.0,
+                width: 1200.0,
+                scale: 700.0,
+                height: 200.0,
+                base: 40.0,
+                seed: 2,
+            },
+            NodeKind::Volcano {
+                x: 0.5,
+                z: 0.5,
+                radius: 800.0,
+                height: 200.0,
+                base: 40.0,
+                crater: 0.18,
+                depth: 40.0,
+                seed: 3,
+            },
+            NodeKind::Crater {
+                x: 0.5,
+                z: 0.5,
+                radius: 400.0,
+                depth: 50.0,
+                rim: 20.0,
+                peak: 0.0,
+                base: 80.0,
+                seed: 4,
+            },
+            NodeKind::CraterField {
+                count: 160,
+                min_radius: 20.0,
+                max_radius: 450.0,
+                depth: 0.25,
+                base: 90.0,
+                seed: 5,
+            },
+            NodeKind::Dunes {
+                angle: 60.0,
+                wavelength: 120.0,
+                height: 20.0,
+                base: 64.0,
+                sharpness: 0.7,
+                seed: 6,
+            },
+            NodeKind::Canyon {
+                angle: 20.0,
+                width: 500.0,
+                depth: 90.0,
+                meander: 300.0,
+                steps: 6,
+                base: 150.0,
+                seed: 7,
+            },
+            NodeKind::Mesas {
+                scale: 500.0,
+                coverage: 0.4,
+                height: 60.0,
+                base: 70.0,
+                steps: 3,
+                seed: 8,
+            },
+            NodeKind::Island {
+                size: 0.75,
+                height: 140.0,
+                base: 20.0,
+                coast: 0.6,
+                seed: 9,
+            },
+            NodeKind::Rocks {
+                scale: 90.0,
+                height: 12.0,
+                sharpness: 0.6,
+                seed: 10,
+            },
+            // Primitives.
             NodeKind::Noise {
                 style: NoiseStyle::Fbm,
                 scale: 600.0,
@@ -230,6 +738,15 @@ impl NodeKind {
                 base: 40.0,
                 seed: 2,
             },
+            NodeKind::Noise {
+                style: NoiseStyle::Billow,
+                scale: 500.0,
+                octaves: 5,
+                roughness: 0.5,
+                height: 60.0,
+                base: 50.0,
+                seed: 3,
+            },
             NodeKind::Cells {
                 style: CellStyle::Cones,
                 scale: 500.0,
@@ -238,13 +755,36 @@ impl NodeKind {
                 base: 50.0,
                 seed: 3,
             },
+            NodeKind::Cells {
+                style: CellStyle::Ridges,
+                scale: 500.0,
+                jitter: 0.8,
+                height: 100.0,
+                base: 50.0,
+                seed: 4,
+            },
             NodeKind::Radial {
                 inner: 0.3,
                 outer: 0.95,
                 height: 1.0,
                 base: 0.0,
             },
+            NodeKind::LinearGradient {
+                angle: 90.0,
+                height: 100.0,
+                base: 40.0,
+            },
+            NodeKind::Shape {
+                shape: ShapeKind::Dome,
+                x: 0.5,
+                z: 0.5,
+                radius: 600.0,
+                falloff: 0.5,
+                height: 1.0,
+                base: 0.0,
+            },
             NodeKind::Constant { value: 64.0 },
+            // Adjustments.
             NodeKind::Levels {
                 in_min: 0.0,
                 in_max: 255.0,
@@ -252,17 +792,36 @@ impl NodeKind {
                 out_max: 255.0,
                 gamma: 1.0,
             },
+            NodeKind::Normalize { min: 40.0, max: 260.0 },
+            NodeKind::Curve { gamma: 1.4, contrast: 0.2 },
             NodeKind::Terrace {
                 steps: 8,
                 strength: 0.7,
             },
+            NodeKind::Stratify {
+                layers: 14,
+                strength: 0.7,
+                tilt: 6.0,
+                seed: 5,
+            },
             NodeKind::Clamp { min: -64.0, max: 319.0 },
             NodeKind::Blur { radius: 8.0 },
+            NodeKind::Sharpen { radius: 24.0, amount: 0.8 },
             NodeKind::Warp {
                 amount: 60.0,
                 scale: 400.0,
                 seed: 4,
             },
+            NodeKind::Transform {
+                scale: 1.0,
+                rotate: 0.0,
+                offset_x: 0.0,
+                offset_z: 0.0,
+            },
+            NodeKind::Swirl { angle: 120.0, radius: 0.5 },
+            NodeKind::Fold { level: 120.0, strength: 1.0 },
+            NodeKind::InvertHeight,
+            // Simulations.
             NodeKind::Erosion {
                 rain: 1.0,
                 erosion: 0.3,
@@ -277,11 +836,26 @@ impl NodeKind {
                 iterations: 40,
                 strength: 0.5,
             },
+            NodeKind::Snow {
+                line: 190.0,
+                slope: 40.0,
+                depth: 3.0,
+                softness: 20.0,
+            },
+            NodeKind::Rivers {
+                threshold: 0.55,
+                depth: 6.0,
+                width: 12.0,
+            },
+            NodeKind::Lakes { amount: 1.0 },
+            NodeKind::Sea { level: 62.0, shore: 4.0 },
+            // Combining.
             NodeKind::Combine {
                 op: CombineOp::Add,
                 weight: 1.0,
             },
             NodeKind::Blend,
+            // Masks.
             NodeKind::SelectHeight {
                 min: 150.0,
                 max: 400.0,
@@ -292,9 +866,51 @@ impl NodeKind {
                 max: 90.0,
                 falloff: 5.0,
             },
+            NodeKind::Curvature {
+                bend: Bend::Concave,
+                radius: 24.0,
+                strength: 1.0,
+            },
+            NodeKind::Facing { angle: 0.0, spread: 60.0 },
+            NodeKind::Occlusion { radius: 32.0 },
+            NodeKind::Flow { spread: 0.5 },
             NodeKind::Invert,
+            // Colour.
+            NodeKind::AutoColor {
+                palette: AutoPalette::Temperate,
+                snow_line: 200.0,
+                rock_slope: 38.0,
+                seed: 1,
+            },
+            NodeKind::Gradient {
+                preset: GradientPreset::Alpine,
+                auto_range: true,
+                min: 0.0,
+                max: 255.0,
+                reverse: false,
+                variation: 0.15,
+                seed: 1,
+            },
+            NodeKind::SolidColor { color: [124, 150, 92] },
+            NodeKind::MixColors,
+            NodeKind::Tint {
+                color: [70, 60, 50],
+                mode: TintMode::Multiply,
+                strength: 0.5,
+            },
+            NodeKind::AdjustColor {
+                hue: 0.0,
+                saturation: 1.0,
+                brightness: 1.0,
+                contrast: 1.0,
+            },
+            // Outputs.
             NodeKind::HeightOutput,
             NodeKind::TerrainOutput { terrain: 0 },
+            NodeKind::ColorOutput {
+                blocks: true,
+                palette: BlockPalette::Natural,
+            },
         ]
     }
 
@@ -303,62 +919,208 @@ impl NodeKind {
             NodeKind::Noise { style: NoiseStyle::Fbm, .. } => "Noise",
             NodeKind::Noise { style: NoiseStyle::Ridged, .. } => "Ridged noise",
             NodeKind::Noise { style: NoiseStyle::Billow, .. } => "Billow noise",
-            NodeKind::Cells { .. } => "Cells",
+            NodeKind::Cells { style: CellStyle::Cones, .. } => "Cells",
+            NodeKind::Cells { style: CellStyle::Ridges, .. } => "Cell ridges",
             NodeKind::Radial { .. } => "Radial gradient",
             NodeKind::Constant { .. } => "Constant",
+            NodeKind::LinearGradient { .. } => "Linear gradient",
+            NodeKind::Shape { .. } => "Shape",
+            NodeKind::Mountain { .. } => "Mountain",
+            NodeKind::MountainRange { .. } => "Mountain range",
+            NodeKind::Volcano { .. } => "Volcano",
+            NodeKind::Crater { .. } => "Crater",
+            NodeKind::CraterField { .. } => "Crater field",
+            NodeKind::Dunes { .. } => "Dunes",
+            NodeKind::Canyon { .. } => "Canyon",
+            NodeKind::Mesas { .. } => "Mesas",
+            NodeKind::Island { .. } => "Island",
+            NodeKind::Rocks { .. } => "Rocks",
             NodeKind::Levels { .. } => "Levels",
             NodeKind::Terrace { .. } => "Terraces",
             NodeKind::Clamp { .. } => "Clamp",
             NodeKind::Blur { .. } => "Blur",
             NodeKind::Warp { .. } => "Warp",
+            NodeKind::Normalize { .. } => "Normalize",
+            NodeKind::Curve { .. } => "Curve",
+            NodeKind::Transform { .. } => "Transform",
+            NodeKind::Swirl { .. } => "Swirl",
+            NodeKind::Fold { .. } => "Fold",
+            NodeKind::Stratify { .. } => "Stratify",
+            NodeKind::Sharpen { .. } => "Sharpen",
+            NodeKind::InvertHeight => "Invert height",
             NodeKind::Erosion { .. } => "Erosion",
             NodeKind::Thermal { .. } => "Thermal erosion",
+            NodeKind::Snow { .. } => "Snow",
+            NodeKind::Rivers { .. } => "Rivers",
+            NodeKind::Lakes { .. } => "Lakes",
+            NodeKind::Sea { .. } => "Sea",
             NodeKind::Combine { .. } => "Combine",
             NodeKind::Blend => "Blend",
             NodeKind::SelectHeight { .. } => "Select height",
             NodeKind::SelectSlope { .. } => "Select slope",
             NodeKind::Invert => "Invert",
+            NodeKind::Curvature { .. } => "Curvature",
+            NodeKind::Facing { .. } => "Facing",
+            NodeKind::Occlusion { .. } => "Occlusion",
+            NodeKind::Flow { .. } => "Flow",
+            NodeKind::Gradient { .. } => "Gradient",
+            NodeKind::SolidColor { .. } => "Solid colour",
+            NodeKind::MixColors => "Mix colours",
+            NodeKind::AdjustColor { .. } => "Adjust colour",
+            NodeKind::Tint { .. } => "Tint",
+            NodeKind::AutoColor { .. } => "Auto colour",
             NodeKind::HeightOutput => "Height output",
             NodeKind::TerrainOutput { .. } => "Terrain output",
+            NodeKind::ColorOutput { .. } => "Colour output",
+        }
+    }
+
+    /// One line on what the node does, for the library and tooltips.
+    pub fn description(&self) -> &'static str {
+        match self {
+            NodeKind::Noise { .. } => "Fractal noise: rolling, ridged or billowy relief at every scale",
+            NodeKind::Cells { .. } => "Voronoi cells: cones at their centres or ridges along their edges",
+            NodeKind::Radial { .. } => "High in the middle of the map, falling to its edges",
+            NodeKind::Constant { .. } => "One value everywhere",
+            NodeKind::LinearGradient { .. } => "A ramp rising across the map",
+            NodeKind::Shape { .. } => "A circle, square, cone or dome",
+            NodeKind::Mountain { .. } => "One mountain, alpine, rounded, eroded or spiky",
+            NodeKind::MountainRange { .. } => "A chain of ridged peaks across the map",
+            NodeKind::Volcano { .. } => "A cone with a crater and gullies down its flanks",
+            NodeKind::Crater { .. } => "One impact crater: bowl, rim and central peak",
+            NodeKind::CraterField { .. } => "Craters of every size over the whole map",
+            NodeKind::Dunes { .. } => "Sand dunes shaped by the wind",
+            NodeKind::Canyon { .. } => "A winding canyon cut into a plateau",
+            NodeKind::Mesas { .. } => "Flat-topped hills with steep, stepped sides",
+            NodeKind::Island { .. } => "An island rising from the sea floor",
+            NodeKind::Rocks { .. } => "Rocky detail to add to a relief",
+            NodeKind::Levels { .. } => "Map one range of heights onto another",
+            NodeKind::Terrace { .. } => "Flat steps with steep risers",
+            NodeKind::Clamp { .. } => "Keep heights between two limits",
+            NodeKind::Blur { .. } => "Smooth the field",
+            NodeKind::Warp { .. } => "Push the field around with noise",
+            NodeKind::Normalize { .. } => "Stretch the field to a range of heights",
+            NodeKind::Curve { .. } => "Reshape heights with a gamma and an S-curve",
+            NodeKind::Transform { .. } => "Scale, turn and move the field",
+            NodeKind::Swirl { .. } => "Twist the field around the middle",
+            NodeKind::Fold { .. } => "Fold heights over a level: ridges",
+            NodeKind::Stratify { .. } => "Rock layers of uneven thickness",
+            NodeKind::Sharpen { .. } => "Bring out the detail",
+            NodeKind::InvertHeight => "Valleys become ridges and ridges valleys",
+            NodeKind::Erosion { .. } => "Rain wears the slopes: gullies, fans, flow and deposits",
+            NodeKind::Thermal { .. } => "Loose rock slides down steep slopes",
+            NodeKind::Snow { .. } => "Snow above a line, on slopes that hold it",
+            NodeKind::Rivers { .. } => "Rivers dug where the water gathers",
+            NodeKind::Lakes { .. } => "Water fills the hollows: lakes, flat valley floors",
+            NodeKind::Sea { .. } => "A sea level, with masks of the water and the shore",
+            NodeKind::Combine { .. } => "Add, subtract, multiply… two fields",
+            NodeKind::Blend => "Two fields mixed by a mask",
+            NodeKind::SelectHeight { .. } => "Mask of a band of heights",
+            NodeKind::SelectSlope { .. } => "Mask of a band of slopes",
+            NodeKind::Invert => "1 − the mask",
+            NodeKind::Curvature { .. } => "Mask of ridges or of hollows",
+            NodeKind::Facing { .. } => "Mask of slopes facing a direction",
+            NodeKind::Occlusion { .. } => "How open to the sky the ground is",
+            NodeKind::Flow { .. } => "Where water runs and gathers",
+            NodeKind::Gradient { .. } => "Colour a field with a gradient from nature",
+            NodeKind::SolidColor { .. } => "One colour everywhere",
+            NodeKind::MixColors => "Two colours mixed by a mask",
+            NodeKind::AdjustColor { .. } => "Hue, saturation, brightness and contrast",
+            NodeKind::Tint { .. } => "Lay a colour where a mask says",
+            NodeKind::AutoColor { .. } => "Natural colours from the relief alone",
+            NodeKind::HeightOutput => "The height of the ground of the map",
+            NodeKind::TerrainOutput { .. } => "Paint a terrain where the mask says",
+            NodeKind::ColorOutput { .. } => "The colour of the ground, turned into real blocks",
         }
     }
 
     pub fn family(&self) -> Family {
         match self {
-            NodeKind::Noise { .. } | NodeKind::Cells { .. } | NodeKind::Radial { .. } | NodeKind::Constant { .. } => Family::Generator,
-            NodeKind::Levels { .. } | NodeKind::Terrace { .. } | NodeKind::Clamp { .. } | NodeKind::Blur { .. } | NodeKind::Warp { .. } => {
-                Family::Modifier
-            }
-            NodeKind::Erosion { .. } | NodeKind::Thermal { .. } => Family::Erosion,
+            NodeKind::Noise { .. }
+            | NodeKind::Cells { .. }
+            | NodeKind::Radial { .. }
+            | NodeKind::Constant { .. }
+            | NodeKind::LinearGradient { .. }
+            | NodeKind::Shape { .. } => Family::Generator,
+            NodeKind::Mountain { .. }
+            | NodeKind::MountainRange { .. }
+            | NodeKind::Volcano { .. }
+            | NodeKind::Crater { .. }
+            | NodeKind::CraterField { .. }
+            | NodeKind::Dunes { .. }
+            | NodeKind::Canyon { .. }
+            | NodeKind::Mesas { .. }
+            | NodeKind::Island { .. }
+            | NodeKind::Rocks { .. } => Family::Landform,
+            NodeKind::Levels { .. }
+            | NodeKind::Terrace { .. }
+            | NodeKind::Clamp { .. }
+            | NodeKind::Blur { .. }
+            | NodeKind::Warp { .. }
+            | NodeKind::Normalize { .. }
+            | NodeKind::Curve { .. }
+            | NodeKind::Transform { .. }
+            | NodeKind::Swirl { .. }
+            | NodeKind::Fold { .. }
+            | NodeKind::Stratify { .. }
+            | NodeKind::Sharpen { .. }
+            | NodeKind::InvertHeight => Family::Modifier,
+            NodeKind::Erosion { .. }
+            | NodeKind::Thermal { .. }
+            | NodeKind::Snow { .. }
+            | NodeKind::Rivers { .. }
+            | NodeKind::Lakes { .. }
+            | NodeKind::Sea { .. } => Family::Erosion,
             NodeKind::Combine { .. } | NodeKind::Blend => Family::Combiner,
-            NodeKind::SelectHeight { .. } | NodeKind::SelectSlope { .. } | NodeKind::Invert => Family::Selector,
-            NodeKind::HeightOutput | NodeKind::TerrainOutput { .. } => Family::Output,
+            NodeKind::SelectHeight { .. }
+            | NodeKind::SelectSlope { .. }
+            | NodeKind::Invert
+            | NodeKind::Curvature { .. }
+            | NodeKind::Facing { .. }
+            | NodeKind::Occlusion { .. }
+            | NodeKind::Flow { .. } => Family::Selector,
+            NodeKind::Gradient { .. }
+            | NodeKind::SolidColor { .. }
+            | NodeKind::MixColors
+            | NodeKind::AdjustColor { .. }
+            | NodeKind::Tint { .. }
+            | NodeKind::AutoColor { .. } => Family::Color,
+            NodeKind::HeightOutput | NodeKind::TerrainOutput { .. } | NodeKind::ColorOutput { .. } => Family::Output,
         }
     }
 
-    /// Names of the inputs.
-    pub fn inputs(&self) -> &'static [&'static str] {
-        match self.family() {
-            Family::Generator => &[],
-            Family::Combiner => match self {
-                NodeKind::Blend => &["A", "B", "Mask"],
-                _ => &["A", "B"],
-            },
-            Family::Output => match self {
-                NodeKind::TerrainOutput { .. } => &["Mask"],
-                _ => &["Height"],
-            },
-            _ => &["In"],
-        }
-    }
-
-    /// Names of the outputs.
-    pub fn outputs(&self) -> &'static [&'static str] {
+    /// Names and types of the inputs.
+    pub fn inputs(&self) -> &'static [(&'static str, PortType)] {
         match self {
-            NodeKind::Erosion { .. } => &["Height", "Flow", "Deposits"],
-            NodeKind::HeightOutput | NodeKind::TerrainOutput { .. } => &[],
-            _ if self.family() == Family::Selector => &["Mask"],
-            _ => &["Out"],
+            k if k.family() == Family::Generator || k.family() == Family::Landform => &[],
+            NodeKind::SolidColor { .. } => &[],
+            NodeKind::Combine { .. } => &[("A", H), ("B", H)],
+            NodeKind::Blend => &[("A", H), ("B", H), ("Mask", M)],
+            NodeKind::Invert => &[("Mask", M)],
+            NodeKind::Gradient { .. } => &[("In", H)],
+            NodeKind::MixColors => &[("A", C), ("B", C), ("Mask", M)],
+            NodeKind::AdjustColor { .. } => &[("Colour", C)],
+            NodeKind::Tint { .. } => &[("Colour", C), ("Mask", M)],
+            NodeKind::AutoColor { .. } => &[("Height", H)],
+            NodeKind::TerrainOutput { .. } => &[("Mask", M)],
+            NodeKind::ColorOutput { .. } => &[("Colour", C)],
+            _ => &[("In", H)],
+        }
+    }
+
+    /// Names and types of the outputs.
+    pub fn outputs(&self) -> &'static [(&'static str, PortType)] {
+        match self {
+            NodeKind::Erosion { .. } => &[("Height", H), ("Flow", M), ("Deposits", M), ("Wear", M)],
+            NodeKind::Thermal { .. } => &[("Height", H), ("Talus", M)],
+            NodeKind::Snow { .. } => &[("Height", H), ("Snow", M)],
+            NodeKind::Rivers { .. } => &[("Height", H), ("Rivers", M)],
+            NodeKind::Lakes { .. } => &[("Height", H), ("Lakes", M)],
+            NodeKind::Sea { .. } => &[("Height", H), ("Water", M), ("Shore", M)],
+            NodeKind::HeightOutput | NodeKind::TerrainOutput { .. } | NodeKind::ColorOutput { .. } => &[],
+            k if k.family() == Family::Selector => &[("Mask", M)],
+            k if k.family() == Family::Color => &[("Colour", C)],
+            _ => &[("Out", H)],
         }
     }
 }
@@ -453,6 +1215,38 @@ impl Graph {
         self.links.iter().find(|l| l.to == node && l.input == input).map(|l| (l.from, l.output))
     }
 
+    /// The type of what an output makes. Masks pass through adjustments,
+    /// so a blurred mask is still a mask.
+    pub fn output_type(&self, id: NodeId, output: u8) -> PortType {
+        let mut seen = HashSet::new();
+        self.output_type_inner(id, output, &mut seen)
+    }
+
+    fn output_type_inner(&self, id: NodeId, output: u8, seen: &mut HashSet<NodeId>) -> PortType {
+        let Some(node) = self.node(id) else { return H };
+        let declared = node.kind.outputs().get(output as usize).map_or(H, |o| o.1);
+        if declared != H || !seen.insert(id) {
+            return declared;
+        }
+        let follows = |g: &Graph, k: u8, seen: &mut HashSet<NodeId>| {
+            g.input_of(id, k).map(|(src, out)| g.output_type_inner(src, out, seen))
+        };
+        match &node.kind {
+            NodeKind::Radial { height, base, .. } if *height <= 1.0 && *base == 0.0 => M,
+            NodeKind::Shape { height, base, .. } if *height <= 1.0 && *base == 0.0 => M,
+            NodeKind::Constant { value } if (0.0..=1.0).contains(value) => M,
+            NodeKind::Levels { out_min, out_max, .. } if *out_min >= 0.0 && *out_max <= 1.0 => M,
+            NodeKind::Normalize { min, max } if *min >= 0.0 && *max <= 1.0 => M,
+            k if k.family() == Family::Modifier => follows(self, 0, seen).unwrap_or(H),
+            NodeKind::Combine { .. } | NodeKind::Blend => {
+                let a = follows(self, 0, seen);
+                let b = follows(self, 1, seen);
+                if a == Some(M) && b.is_none_or(|b| b == M) { M } else { H }
+            }
+            _ => H,
+        }
+    }
+
     /// The nodes `targets` need, in an order where every node comes after
     /// its inputs.
     fn order(&self, targets: &[NodeId]) -> Result<Vec<NodeId>, GraphError> {
@@ -465,7 +1259,9 @@ impl Graph {
                 _ => {}
             }
             state.insert(n, 1);
-            for l in g.links.iter().filter(|l| l.to == n) {
+            let mut inputs: Vec<&Link> = g.links.iter().filter(|l| l.to == n).collect();
+            inputs.sort_by_key(|l| l.input);
+            for l in inputs {
                 visit(g, l.from, state, order)?;
             }
             state.insert(n, 2);
@@ -478,33 +1274,60 @@ impl Graph {
         Ok(order)
     }
 
-    /// A graph to start from: eroded mountains with rock on the steep
-    /// slopes, snow on the peaks and gravel where the water left it.
+    /// A fingerprint of what a node computes: its settings, and those of
+    /// everything before it. Two evaluations of nodes with the same
+    /// fingerprint over the same extent give the same fields.
+    fn fingerprint(&self, id: NodeId, memo: &mut HashMap<NodeId, u64>) -> u64 {
+        if let Some(&f) = memo.get(&id) {
+            return f;
+        }
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        if let Some(node) = self.node(id) {
+            format!("{:?}", node.kind).hash(&mut h);
+            for k in 0..node.kind.inputs().len() {
+                match self.input_of(id, k as u8) {
+                    Some((src, out)) => (k, self.fingerprint(src, memo), out).hash(&mut h),
+                    None => (k, u64::MAX).hash(&mut h),
+                }
+            }
+        }
+        let f = h.finish();
+        memo.insert(id, f);
+        f
+    }
+
+    /// The output nodes, in the graph's order (later terrains win).
+    fn outputs_of(&self) -> Vec<&Node> {
+        self.nodes.iter().filter(|n| n.kind.family() == Family::Output).collect()
+    }
+
+    /// A graph to start from: an eroded mountain range with natural colours
+    /// that turn into real blocks, snow on the peaks, rock on the cliffs.
     pub fn starter(grass: u16, rock: u16, snow: u16, gravel: u16) -> Self {
+        let _ = (grass, gravel);
         let mut g = Graph::default();
-        let base = g.add(
-            NodeKind::Noise {
-                style: NoiseStyle::Fbm,
-                scale: 1400.0,
-                octaves: 5,
-                roughness: 0.5,
-                height: 60.0,
-                base: 50.0,
-                seed: 7,
-            },
-            [40.0, 60.0],
-        );
-        let ridges = g.add(
-            NodeKind::Noise {
-                style: NoiseStyle::Ridged,
-                scale: 900.0,
-                octaves: 7,
-                roughness: 0.5,
-                height: 150.0,
+        let range = g.add(
+            NodeKind::MountainRange {
+                angle: 25.0,
+                width: 2600.0,
+                scale: 800.0,
+                height: 170.0,
                 base: 0.0,
                 seed: 11,
             },
-            [40.0, 220.0],
+            [40.0, 40.0],
+        );
+        let hills = g.add(
+            NodeKind::Noise {
+                style: NoiseStyle::Fbm,
+                scale: 1400.0,
+                octaves: 6,
+                roughness: 0.5,
+                height: 60.0,
+                base: 52.0,
+                seed: 7,
+            },
+            [40.0, 240.0],
         );
         let add = g.add(
             NodeKind::Combine {
@@ -533,52 +1356,62 @@ impl Graph {
             },
             [660.0, 140.0],
         );
-        let out = g.add(NodeKind::HeightOutput, [900.0, 60.0]);
-        // Grass everywhere first; the outputs below paint over it.
-        let everywhere = g.add(NodeKind::Constant { value: 1.0 }, [900.0, -130.0]);
-        let grass_out = g.add(NodeKind::TerrainOutput { terrain: grass }, [1110.0, -130.0]);
+        let out = g.add(NodeKind::HeightOutput, [920.0, 40.0]);
+        let color = g.add(
+            NodeKind::AutoColor {
+                palette: AutoPalette::Alpine,
+                snow_line: 190.0,
+                rock_slope: 36.0,
+                seed: 1,
+            },
+            [920.0, 160.0],
+        );
+        let wet = g.add(
+            NodeKind::Tint {
+                color: [96, 112, 70],
+                mode: TintMode::Mix,
+                strength: 0.35,
+            },
+            [1140.0, 160.0],
+        );
+        let color_out = g.add(
+            NodeKind::ColorOutput {
+                blocks: true,
+                palette: BlockPalette::Natural,
+            },
+            [1360.0, 160.0],
+        );
         let slope = g.add(
             NodeKind::SelectSlope {
-                min: 38.0,
+                min: 42.0,
                 max: 90.0,
                 falloff: 6.0,
             },
-            [900.0, 180.0],
+            [920.0, 340.0],
         );
-        let rock_out = g.add(NodeKind::TerrainOutput { terrain: rock }, [1110.0, 180.0]);
+        let rock_out = g.add(NodeKind::TerrainOutput { terrain: rock }, [1140.0, 340.0]);
         let high = g.add(
             NodeKind::SelectHeight {
                 min: 205.0,
                 max: 400.0,
                 falloff: 12.0,
             },
-            [900.0, 340.0],
+            [920.0, 480.0],
         );
-        let snow_out = g.add(NodeKind::TerrainOutput { terrain: snow }, [1110.0, 340.0]);
-        // Only where soil really piled up.
-        let heaps = g.add(
-            NodeKind::Levels {
-                in_min: 0.6,
-                in_max: 0.9,
-                out_min: 0.0,
-                out_max: 1.0,
-                gamma: 1.0,
-            },
-            [900.0, 500.0],
-        );
-        let gravel_out = g.add(NodeKind::TerrainOutput { terrain: gravel }, [1110.0, 500.0]);
-        g.connect(base, 0, add, 0);
-        g.connect(ridges, 0, add, 1);
+        let snow_out = g.add(NodeKind::TerrainOutput { terrain: snow }, [1140.0, 480.0]);
+        g.connect(range, 0, add, 0);
+        g.connect(hills, 0, add, 1);
         g.connect(add, 0, warp, 0);
         g.connect(warp, 0, erosion, 0);
         g.connect(erosion, 0, out, 0);
-        g.connect(everywhere, 0, grass_out, 0);
+        g.connect(erosion, 0, color, 0);
+        g.connect(color, 0, wet, 0);
+        g.connect(erosion, 1, wet, 1);
+        g.connect(wet, 0, color_out, 0);
         g.connect(erosion, 0, slope, 0);
         g.connect(slope, 0, rock_out, 0);
         g.connect(erosion, 0, high, 0);
         g.connect(high, 0, snow_out, 0);
-        g.connect(erosion, 2, heaps, 0);
-        g.connect(heaps, 0, gravel_out, 0);
         g
     }
 }
@@ -593,7 +1426,7 @@ pub struct Field {
 }
 
 impl Field {
-    fn new(n: usize, data: Vec<f32>) -> Self {
+    pub(crate) fn new(n: usize, data: Vec<f32>) -> Self {
         debug_assert_eq!(data.len(), n * n);
         Self { n, data }
     }
@@ -619,6 +1452,83 @@ impl Field {
         self.data
             .iter()
             .fold((f32::MAX, f32::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)))
+    }
+}
+
+/// A square grid of colours (linear 0..1 RGB) over the map.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColorField {
+    pub n: usize,
+    pub data: Vec<[f32; 3]>,
+}
+
+impl ColorField {
+    #[inline]
+    pub fn at(&self, i: usize, j: usize) -> [f32; 3] {
+        self.data[j.min(self.n - 1) * self.n + i.min(self.n - 1)]
+    }
+
+    /// Bilinear sample at fractional grid coordinates.
+    pub fn sample(&self, u: f32, v: f32) -> [f32; 3] {
+        let max = (self.n - 1) as f32;
+        let (u, v) = (u.clamp(0.0, max), v.clamp(0.0, max));
+        let (i, j) = (u.floor() as usize, v.floor() as usize);
+        let (fu, fv) = (u - i as f32, v - j as f32);
+        let lerp = |a: [f32; 3], b: [f32; 3], t: f32| [0, 1, 2].map(|k| a[k] + (b[k] - a[k]) * t);
+        let top = lerp(self.at(i, j), self.at(i + 1, j), fu);
+        let bottom = lerp(self.at(i, j + 1), self.at(i + 1, j + 1), fu);
+        lerp(top, bottom, fv)
+    }
+
+    /// As 8-bit sRGB.
+    pub fn to_srgb8(&self) -> Vec<[u8; 3]> {
+        self.data.iter().map(|c| c.map(color::encode)).collect()
+    }
+}
+
+/// What a node output holds.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Value {
+    Field(Arc<Field>),
+    Color(Arc<ColorField>),
+}
+
+impl Value {
+    pub fn field(&self) -> Option<&Arc<Field>> {
+        match self {
+            Value::Field(f) => Some(f),
+            Value::Color(_) => None,
+        }
+    }
+
+    pub fn color(&self) -> Option<&Arc<ColorField>> {
+        match self {
+            Value::Color(c) => Some(c),
+            Value::Field(_) => None,
+        }
+    }
+
+    /// As a field: colours become their brightness.
+    pub fn as_field(&self) -> Arc<Field> {
+        match self {
+            Value::Field(f) => f.clone(),
+            Value::Color(c) => Arc::new(Field::new(c.n, c.data.iter().map(|p| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]).collect())),
+        }
+    }
+
+    /// As colours: fields become greys over their range.
+    pub fn as_color(&self) -> Arc<ColorField> {
+        match self {
+            Value::Color(c) => c.clone(),
+            Value::Field(f) => {
+                let (lo, hi) = f.range();
+                let span = (hi - lo).max(1e-6);
+                Arc::new(ColorField {
+                    n: f.n,
+                    data: f.data.iter().map(|v| [(v - lo) / span; 3]).collect(),
+                })
+            }
+        }
     }
 }
 
@@ -658,20 +1568,60 @@ impl Extent {
         (self.x0 + (i as f64 + 0.5) * s, self.z0 + (j as f64 + 0.5) * s)
     }
 
+    /// World position of a point given as fractions of the extent.
+    #[inline]
+    pub fn at_fraction(&self, x: f32, z: f32) -> (f64, f64) {
+        (self.x0 + x as f64 * self.size, self.z0 + z as f64 * self.size)
+    }
+
     /// Fractional grid coordinates of a world position.
     #[inline]
     pub fn grid(&self, x: f64, z: f64) -> (f32, f32) {
         let s = self.size / self.n as f64;
         (((x - self.x0) / s - 0.5) as f32, ((z - self.z0) / s - 0.5) as f32)
     }
+
+    fn key(&self) -> [u64; 4] {
+        [self.x0.to_bits(), self.z0.to_bits(), self.size.to_bits(), self.n as u64]
+    }
 }
 
 // ------------------------------------------------------------- evaluating --
 
-/// Fields made by an evaluation, per node output.
+/// What an evaluation made, per node output.
 #[derive(Debug, Default, Clone)]
 pub struct Evaluation {
-    pub fields: HashMap<(NodeId, u8), Arc<Field>>,
+    pub values: HashMap<(NodeId, u8), Value>,
+    /// Nodes that could not be computed, and why.
+    pub failed: HashMap<NodeId, GraphError>,
+}
+
+impl Evaluation {
+    pub fn field(&self, id: NodeId, output: u8) -> Option<&Arc<Field>> {
+        self.values.get(&(id, output)).and_then(Value::field)
+    }
+}
+
+/// Outputs of nodes already computed, kept between evaluations so that
+/// only what changed is computed again.
+#[derive(Debug, Default)]
+pub struct EvalCache {
+    extent: Option<[u64; 4]>,
+    entries: HashMap<NodeId, (u64, Vec<Value>)>,
+}
+
+impl EvalCache {
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 }
 
 /// What a graph sends to the map.
@@ -680,6 +1630,8 @@ pub struct Outputs {
     pub heights: Option<Arc<Field>>,
     /// Masks of the terrain outputs, in the graph's order (later ones win).
     pub terrains: Vec<(TerrainId, Arc<Field>)>,
+    /// The colour of the ground, to turn into blocks of a palette.
+    pub colors: Option<(Arc<ColorField>, BlockPalette)>,
 }
 
 impl Graph {
@@ -687,31 +1639,80 @@ impl Graph {
     /// every intermediate field is kept (for previews); otherwise fields are
     /// dropped as soon as nothing else needs them.
     pub fn evaluate(&self, extent: &Extent, targets: &[NodeId], keep_all: bool, cancel: &AtomicBool) -> Result<Evaluation, GraphError> {
+        self.evaluate_with(extent, targets, keep_all, None, cancel)
+    }
+
+    /// Evaluate with a cache: nodes whose settings and inputs did not change
+    /// since the cache saw them are not computed again.
+    pub fn evaluate_cached(&self, extent: &Extent, targets: &[NodeId], cache: &mut EvalCache, cancel: &AtomicBool) -> Result<Evaluation, GraphError> {
+        self.evaluate_with(extent, targets, true, Some(cache), cancel)
+    }
+
+    fn evaluate_with(
+        &self,
+        extent: &Extent,
+        targets: &[NodeId],
+        keep_all: bool,
+        mut cache: Option<&mut EvalCache>,
+        cancel: &AtomicBool,
+    ) -> Result<Evaluation, GraphError> {
         let order = self.order(targets)?;
+        if let Some(c) = cache.as_deref_mut()
+            && c.extent != Some(extent.key())
+        {
+            c.entries.clear();
+            c.extent = Some(extent.key());
+        }
         let mut uses: HashMap<(NodeId, u8), usize> = HashMap::new();
         for l in &self.links {
             if order.contains(&l.to) {
                 *uses.entry((l.from, l.output)).or_default() += 1;
             }
         }
+        let mut memo = HashMap::new();
         let mut out = Evaluation::default();
         for id in order {
             if cancel.load(Ordering::Relaxed) {
                 return Err(GraphError::Cancelled);
             }
             let node = self.node(id).expect("ordered nodes exist");
-            let inputs: Vec<Option<Arc<Field>>> = (0..node.kind.inputs().len())
-                .map(|k| self.input_of(id, k as u8).and_then(|src| out.fields.get(&src).cloned()))
-                .collect();
-            let made = run(&node.kind, extent, &inputs, cancel).map_err(|missing| {
-                if missing {
-                    GraphError::MissingInput(node.kind.label().to_owned())
-                } else {
-                    GraphError::Cancelled
+            let fingerprint = self.fingerprint(id, &mut memo);
+            let cached = cache
+                .as_deref()
+                .and_then(|c| c.entries.get(&id))
+                .filter(|(f, _)| *f == fingerprint)
+                .map(|(_, v)| v.clone());
+            let made = match cached {
+                Some(v) => v,
+                None => {
+                    let inputs: Vec<Option<Value>> = (0..node.kind.inputs().len())
+                        .map(|k| self.input_of(id, k as u8).and_then(|src| out.values.get(&src).cloned()))
+                        .collect();
+                    match ops::run(&node.kind, extent, &inputs, cancel) {
+                        Ok(v) => {
+                            if let Some(c) = cache.as_deref_mut() {
+                                c.entries.insert(id, (fingerprint, v.clone()));
+                            }
+                            v
+                        }
+                        Err(missing) => {
+                            if !missing {
+                                return Err(GraphError::Cancelled);
+                            }
+                            let e = GraphError::MissingInput(node.kind.label().to_owned());
+                            if keep_all {
+                                // Carry on with the rest: what depends on
+                                // this node fails in turn.
+                                out.failed.insert(id, e);
+                                continue;
+                            }
+                            return Err(e);
+                        }
+                    }
                 }
-            })?;
-            for (k, f) in made.into_iter().enumerate() {
-                out.fields.insert((id, k as u8), Arc::new(f));
+            };
+            for (k, v) in made.into_iter().enumerate() {
+                out.values.insert((id, k as u8), v);
             }
             if !keep_all {
                 for k in 0..node.kind.inputs().len() {
@@ -720,18 +1721,21 @@ impl Graph {
                     {
                         *n -= 1;
                         if *n == 0 && !targets.contains(&src.0) {
-                            out.fields.remove(&src);
+                            out.values.remove(&src);
                         }
                     }
                 }
             }
+        }
+        if let Some(c) = cache {
+            c.entries.retain(|id, _| self.node(*id).is_some());
         }
         Ok(out)
     }
 
     /// Evaluate what the outputs need, and gather it.
     pub fn build(&self, extent: &Extent, cancel: &AtomicBool) -> Result<Outputs, GraphError> {
-        let outputs: Vec<&Node> = self.nodes.iter().filter(|n| n.kind.family() == Family::Output).collect();
+        let outputs = self.outputs_of();
         // Outputs have no fields of their own: evaluate what feeds them.
         let mut feeds = Vec::new();
         for n in &outputs {
@@ -744,10 +1748,11 @@ impl Graph {
         let eval = self.evaluate(extent, &targets, false, cancel)?;
         let mut result = Outputs::default();
         for (n, src) in outputs.iter().zip(feeds) {
-            let field = eval.fields.get(&src).cloned().ok_or(GraphError::Cancelled)?;
+            let value = eval.values.get(&src).cloned().ok_or(GraphError::Cancelled)?;
             match n.kind {
-                NodeKind::HeightOutput => result.heights = Some(field),
-                NodeKind::TerrainOutput { terrain } => result.terrains.push((TerrainId(terrain), field)),
+                NodeKind::HeightOutput => result.heights = Some(value.as_field()),
+                NodeKind::TerrainOutput { terrain } => result.terrains.push((TerrainId(terrain), value.as_field())),
+                NodeKind::ColorOutput { blocks: true, palette } => result.colors = Some((value.as_color(), palette)),
                 _ => {}
             }
         }
@@ -755,469 +1760,79 @@ impl Graph {
     }
 }
 
-/// Run one node. `Err(true)`: an input is missing; `Err(false)`: cancelled.
-fn run(kind: &NodeKind, e: &Extent, inputs: &[Option<Arc<Field>>], cancel: &AtomicBool) -> Result<Vec<Field>, bool> {
-    let n = e.n;
-    let input = |k: usize| inputs.get(k).cloned().flatten().ok_or(true);
-    let map = |f: &Field, op: &(dyn Fn(f32) -> f32 + Sync)| Field::new(n, f.data.par_iter().map(|&v| op(v)).collect());
-    let generate = |op: &(dyn Fn(f64, f64) -> f32 + Sync)| {
-        Field::new(
-            n,
-            (0..n * n)
-                .into_par_iter()
-                .map(|c| {
-                    let (x, z) = e.world(c % n, c / n);
-                    op(x, z)
-                })
-                .collect(),
-        )
-    };
-    let field = match *kind {
-        NodeKind::Noise {
-            style,
-            scale,
-            octaves,
-            roughness,
-            height,
-            base,
-            seed,
-        } => {
-            let noise = Noise::new(seed as u64 ^ 0x006e_6f69_7365);
-            let s = scale.max(1.0) as f64;
-            let oct = octaves.clamp(1, 12);
-            let gain = roughness.clamp(0.05, 0.95) as f64;
-            generate(&|x, z| {
-                let v = match style {
-                    NoiseStyle::Fbm => noise.fbm(x / s, z / s, oct, 2.0, gain) * 0.5 + 0.5,
-                    NoiseStyle::Ridged => noise.ridged(x / s, z / s, oct, 2.0, gain),
-                    NoiseStyle::Billow => noise.fbm(x / s, z / s, oct, 2.0, gain).abs(),
-                };
-                base + height * v.clamp(0.0, 1.0) as f32
-            })
-        }
-        NodeKind::Cells {
-            style,
-            scale,
-            jitter,
-            height,
-            base,
-            seed,
-        } => {
-            let s = scale.max(1.0) as f64;
-            let j = jitter.clamp(0.0, 1.0) as f64;
-            generate(&|x, z| {
-                let (fx, fz) = (x / s, z / s);
-                let (cx, cz) = (fx.floor() as i32, fz.floor() as i32);
-                let (mut d1, mut d2) = (f64::MAX, f64::MAX);
-                for dz in -1..=1 {
-                    for dx in -1..=1 {
-                        let (gx, gz) = (cx + dx, cz + dz);
-                        let h = hash2(gx, gz, seed as u64 ^ 0xce11);
-                        let ox = 0.5 + j * ((h & 0xffff) as f64 / 65535.0 - 0.5);
-                        let oz = 0.5 + j * ((h >> 16) as f64 / 65535.0 - 0.5);
-                        let d = (gx as f64 + ox - fx).hypot(gz as f64 + oz - fz);
-                        if d < d1 {
-                            d2 = d1;
-                            d1 = d;
-                        } else if d < d2 {
-                            d2 = d;
-                        }
-                    }
-                }
-                let v = match style {
-                    CellStyle::Cones => (1.0 - d1 / 0.75).max(0.0),
-                    CellStyle::Ridges => (1.0 - (d2 - d1) * 2.0).clamp(0.0, 1.0),
-                };
-                base + height * v as f32
-            })
-        }
-        NodeKind::Radial {
-            inner,
-            outer,
-            height,
-            base,
-        } => {
-            let (cx, cz) = (e.x0 + e.size / 2.0, e.z0 + e.size / 2.0);
-            let half = e.size / 2.0;
-            let (a, b) = (inner as f64, outer.max(inner + 0.001) as f64);
-            generate(&|x, z| {
-                let r = (x - cx).hypot(z - cz) / half;
-                let t = ((r - a) / (b - a)).clamp(0.0, 1.0);
-                let v = 1.0 - t * t * (3.0 - 2.0 * t);
-                base + height * v as f32
-            })
-        }
-        NodeKind::Constant { value } => Field::new(n, vec![value; n * n]),
-        NodeKind::Levels {
-            in_min,
-            in_max,
-            out_min,
-            out_max,
-            gamma,
-        } => {
-            let f = input(0)?;
-            let span = (in_max - in_min).max(1e-6);
-            let g = gamma.max(0.01);
-            map(&f, &|v| {
-                let t = ((v - in_min) / span).clamp(0.0, 1.0).powf(g);
-                out_min + t * (out_max - out_min)
-            })
-        }
-        NodeKind::Terrace { steps, strength } => {
-            let f = input(0)?;
-            let (lo, hi) = f.range();
-            let span = (hi - lo).max(1e-6);
-            let k = steps.max(1) as f32;
-            let s = strength.clamp(0.0, 1.0);
-            map(&f, &|v| {
-                let t = (v - lo) / span * k;
-                let floor = t.floor();
-                let frac = t - floor;
-                // Flat steps with steep risers, softened by the strength.
-                let riser = (frac - 0.85).max(0.0) / 0.15;
-                let stepped = (floor + riser * riser * (3.0 - 2.0 * riser)) / k;
-                let t = t / k;
-                lo + (t + (stepped - t) * s) * span
-            })
-        }
-        NodeKind::Clamp { min, max } => {
-            let f = input(0)?;
-            map(&f, &|v| v.clamp(min, max.max(min)))
-        }
-        NodeKind::Blur { radius } => {
-            let f = input(0)?;
-            blur(&f, (radius / e.spacing()).round().max(1.0) as usize)
-        }
-        NodeKind::Warp { amount, scale, seed } => {
-            let f = input(0)?;
-            let nx = Noise::new(seed as u64 ^ 0x77a2);
-            let nz = nx.derive(1);
-            let s = scale.max(1.0) as f64;
-            let a = amount as f64 / e.spacing() as f64;
-            let data = (0..n * n)
-                .into_par_iter()
-                .map(|c| {
-                    let (i, j) = (c % n, c / n);
-                    let (x, z) = e.world(i, j);
-                    let dx = nx.fbm(x / s, z / s, 3, 2.0, 0.5) * a;
-                    let dz = nz.fbm(x / s, z / s, 3, 2.0, 0.5) * a;
-                    f.sample((i as f64 + dx) as f32, (j as f64 + dz) as f32)
-                })
-                .collect();
-            Field::new(n, data)
-        }
-        NodeKind::Erosion {
-            rain,
-            erosion,
-            deposition,
-            capacity,
-            evaporation,
-            radius,
-            seed,
-        } => {
-            let f = input(0)?;
-            let params = Droplets {
-                drops: ((rain.max(0.0) * (n * n) as f32) as usize).min(64 << 20),
-                erosion: erosion.clamp(0.0, 1.0),
-                deposition: deposition.clamp(0.0, 1.0),
-                capacity: capacity.max(0.0),
-                evaporation: evaporation.clamp(0.0, 0.5),
-                radius: (radius / e.spacing()).round().clamp(1.0, 12.0) as i32,
-                seed,
-            };
-            let (h, flow, deposits) = erode(&f, e.spacing(), &params, cancel).ok_or(false)?;
-            return Ok(vec![h, flow, deposits]);
-        }
-        NodeKind::Thermal {
-            talus,
-            iterations,
-            strength,
-        } => {
-            let f = input(0)?;
-            thermal(&f, e.spacing(), talus, iterations.min(500), strength.clamp(0.0, 1.0))
-        }
-        NodeKind::Combine { op, weight } => {
-            let (a, b) = (input(0)?, input(1)?);
-            let data = a
-                .data
-                .par_iter()
-                .zip(&b.data)
-                .map(|(&x, &y)| {
-                    let y = y * weight;
-                    match op {
-                        CombineOp::Add => x + y,
-                        CombineOp::Subtract => x - y,
-                        CombineOp::Multiply => x * y,
-                        CombineOp::Max => x.max(y),
-                        CombineOp::Min => x.min(y),
-                        CombineOp::Average => (x + y) * 0.5,
-                    }
-                })
-                .collect();
-            Field::new(n, data)
-        }
-        NodeKind::Blend => {
-            let (a, b, m) = (input(0)?, input(1)?, input(2)?);
-            let data = (0..n * n)
-                .into_par_iter()
-                .map(|c| {
-                    let t = m.data[c].clamp(0.0, 1.0);
-                    a.data[c] + (b.data[c] - a.data[c]) * t
-                })
-                .collect();
-            Field::new(n, data)
-        }
-        NodeKind::SelectHeight { min, max, falloff } => {
-            let f = input(0)?;
-            map(&f, &|v| band(v, min, max, falloff))
-        }
-        NodeKind::SelectSlope { min, max, falloff } => {
-            let f = input(0)?;
-            let s = e.spacing();
-            let data = (0..n * n)
-                .into_par_iter()
-                .map(|c| {
-                    let (i, j) = (c % n, c / n);
-                    let gx = (f.at(i + 1, j) - f.at(i.saturating_sub(1), j)) / (2.0 * s);
-                    let gz = (f.at(i, j + 1) - f.at(i, j.saturating_sub(1))) / (2.0 * s);
-                    band(gx.hypot(gz).atan().to_degrees(), min, max, falloff)
-                })
-                .collect();
-            Field::new(n, data)
-        }
-        NodeKind::Invert => {
-            let f = input(0)?;
-            map(&f, &|v| 1.0 - v)
-        }
-        NodeKind::HeightOutput | NodeKind::TerrainOutput { .. } => return Ok(Vec::new()),
-    };
-    Ok(vec![field])
-}
-
-/// 1 inside `[min, max]`, fading to 0 over `falloff` outside.
-#[inline]
-fn band(v: f32, min: f32, max: f32, falloff: f32) -> f32 {
-    let f = falloff.max(1e-4);
-    let lo = ((v - min) / f + 0.5).clamp(0.0, 1.0);
-    let hi = ((max - v) / f + 0.5).clamp(0.0, 1.0);
-    lo.min(hi)
-}
-
-/// Two passes of a separable box blur of `r` samples: close to a Gaussian.
-fn blur(f: &Field, r: usize) -> Field {
-    let n = f.n;
-    let pass = |src: &[f32], horizontal: bool| -> Vec<f32> {
-        let lines: Vec<Vec<f32>> = (0..n)
-            .into_par_iter()
-            .map(|line| {
-                let at = |t: usize| if horizontal { src[line * n + t] } else { src[t * n + line] };
-                let mut out = vec![0f32; n];
-                let mut sum = 0f32;
-                let mut count = 0f32;
-                for t in 0..n.min(r + 1) {
-                    sum += at(t);
-                    count += 1.0;
-                }
-                for (t, o) in out.iter_mut().enumerate() {
-                    *o = sum / count;
-                    if t + r + 1 < n {
-                        sum += at(t + r + 1);
-                        count += 1.0;
-                    }
-                    if t >= r {
-                        sum -= at(t - r);
-                        count -= 1.0;
-                    }
-                }
-                out
-            })
-            .collect();
-        let mut out = vec![0f32; n * n];
-        for (line, values) in lines.into_iter().enumerate() {
-            for (t, v) in values.into_iter().enumerate() {
-                if horizontal {
-                    out[line * n + t] = v;
-                } else {
-                    out[t * n + line] = v;
-                }
-            }
-        }
-        out
-    };
-    let mut data = f.data.clone();
-    for _ in 0..2 {
-        data = pass(&data, true);
-        data = pass(&data, false);
-    }
-    Field::new(n, data)
-}
-
-struct Droplets {
-    drops: usize,
-    erosion: f32,
-    deposition: f32,
-    capacity: f32,
-    evaporation: f32,
-    radius: i32,
-    seed: u32,
-}
-
-/// Hydraulic erosion by simulated raindrops (after Hans Beyer's method):
-/// each drop runs downhill, picks up soil where it speeds up and drops it
-/// where it slows down. Returns the eroded heights, the flow of water
-/// (0..1) and where soil settled (0..1).
-fn erode(f: &Field, spacing: f32, p: &Droplets, cancel: &AtomicBool) -> Option<(Field, Field, Field)> {
-    let n = f.n;
-    // Work in units of samples so that slopes are true whatever the
-    // resolution.
-    let mut h: Vec<f32> = f.data.iter().map(|v| v / spacing).collect();
-    let mut flow = vec![0f32; n * n];
-    let mut settled = vec![0f32; n * n];
-    // The erosion brush.
-    let r = p.radius;
-    let mut brush: Vec<(i32, i32, f32)> = Vec::new();
-    for dz in -r..=r {
-        for dx in -r..=r {
-            let d = ((dx * dx + dz * dz) as f32).sqrt();
-            if d <= r as f32 {
-                brush.push((dx, dz, 1.0 - d / (r as f32 + 1.0)));
-            }
-        }
-    }
-    let total: f32 = brush.iter().map(|b| b.2).sum();
-    for b in &mut brush {
-        b.2 /= total;
-    }
-    let inertia = 0.05f32;
-    let gravity = 4.0f32;
-    let min_capacity = 0.01f32;
-    let max_steps = 80;
-    let mut rng = (p.seed as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
-    let mut next = || {
-        rng ^= rng << 13;
-        rng ^= rng >> 7;
-        rng ^= rng << 17;
-        (rng >> 40) as f32 / (1u64 << 24) as f32
-    };
-    let last = (n - 1) as f32;
-    let height_grad = |h: &[f32], x: f32, z: f32| -> (f32, f32, f32) {
-        let (i, j) = (x as usize, z as usize);
-        let (u, v) = (x - i as f32, z - j as f32);
-        let at = |i: usize, j: usize| h[j.min(n - 1) * n + i.min(n - 1)];
-        let (a, b, c, d) = (at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1));
-        let gx = (b - a) * (1.0 - v) + (d - c) * v;
-        let gz = (c - a) * (1.0 - u) + (d - b) * u;
-        let height = a * (1.0 - u) * (1.0 - v) + b * u * (1.0 - v) + c * (1.0 - u) * v + d * u * v;
-        (height, gx, gz)
-    };
-    for drop in 0..p.drops {
-        if drop % 65536 == 0 && cancel.load(Ordering::Relaxed) {
-            return None;
-        }
-        let (mut x, mut z) = (next() * last, next() * last);
-        let (mut dx, mut dz) = (0f32, 0f32);
-        let (mut speed, mut water, mut sediment) = (1f32, 1f32, 0f32);
-        for _ in 0..max_steps {
-            let (i, j) = (x as usize, z as usize);
-            let (u, v) = (x - i as f32, z - j as f32);
-            let (height, gx, gz) = height_grad(&h, x, z);
-            dx = dx * inertia - gx * (1.0 - inertia);
-            dz = dz * inertia - gz * (1.0 - inertia);
-            let len = dx.hypot(dz);
-            if len < 1e-6 {
-                break;
-            }
-            dx /= len;
-            dz /= len;
-            x += dx;
-            z += dz;
-            if !(0.0..last).contains(&x) || !(0.0..last).contains(&z) {
-                break;
-            }
-            let (new_height, _, _) = height_grad(&h, x, z);
-            let dh = new_height - height;
-            let cap = (-dh * speed * water * p.capacity).max(min_capacity);
-            let cell = j * n + i;
-            if sediment > cap || dh > 0.0 {
-                // Drop soil: all it takes to fill the hole when going up,
-                // part of the excess otherwise.
-                let amount = if dh > 0.0 { dh.min(sediment) } else { (sediment - cap) * p.deposition };
-                sediment -= amount;
-                h[cell] += amount * (1.0 - u) * (1.0 - v);
-                h[cell + 1] += amount * u * (1.0 - v);
-                h[cell + n] += amount * (1.0 - u) * v;
-                h[cell + n + 1] += amount * u * v;
-                settled[cell] += amount;
-            } else {
-                let amount = ((cap - sediment) * p.erosion).min(-dh);
-                for &(bx, bz, w) in &brush {
-                    let (ci, cj) = (i as i32 + bx, j as i32 + bz);
-                    if ci < 0 || cj < 0 || ci >= n as i32 || cj >= n as i32 {
-                        continue;
-                    }
-                    h[cj as usize * n + ci as usize] -= amount * w;
-                }
-                sediment += amount;
-            }
-            flow[cell] += water;
-            speed = (speed * speed + dh * gravity).max(0.0).sqrt();
-            water *= 1.0 - p.evaporation;
-        }
-    }
-    let normalise = |v: Vec<f32>| {
-        let max = v.iter().copied().fold(0.0f32, f32::max).max(1e-6);
-        let l = (1.0 + max).ln();
-        Field::new(n, v.into_iter().map(|x| (1.0 + x.max(0.0)).ln() / l).collect())
-    };
-    let heights = Field::new(n, h.into_iter().map(|v| v * spacing).collect());
-    Some((heights, normalise(flow), normalise(settled)))
-}
-
-/// Thermal erosion: wherever two neighbours differ by more than the talus
-/// slope allows, material slides from the higher to the lower.
-fn thermal(f: &Field, spacing: f32, talus: f32, iterations: u32, strength: f32) -> Field {
-    let n = f.n;
-    let limit = talus.clamp(1.0, 89.0).to_radians().tan() * spacing;
-    let k = strength * 0.25;
-    let mut h = f.data.clone();
-    for _ in 0..iterations {
-        let src = &h;
-        let next: Vec<f32> = (0..n * n)
-            .into_par_iter()
-            .map(|c| {
-                let (i, j) = (c % n, c / n);
-                let mine = src[c];
-                let mut change = 0.0;
-                for (di, dj) in [(-1i32, 0i32), (1, 0), (0, -1), (0, 1)] {
-                    let (ni, nj) = (i as i32 + di, j as i32 + dj);
-                    if ni < 0 || nj < 0 || ni >= n as i32 || nj >= n as i32 {
-                        continue;
-                    }
-                    let other = src[nj as usize * n + ni as usize];
-                    let d = mine - other;
-                    if d > limit {
-                        change -= k * (d - limit);
-                    } else if -d > limit {
-                        change += k * (-d - limit);
-                    }
-                }
-                mine + change
-            })
-            .collect();
-        h = next;
-    }
-    Field::new(n, h)
-}
-
 // --------------------------------------------------------------- applying --
 
+/// Picks, for any colour, the closest of a few: a table over the colour
+/// cube, so that millions of columns are matched quickly.
+struct Nearest {
+    table: Vec<u16>,
+}
+
+const LUT: usize = 32;
+
+impl Nearest {
+    fn new(colors: &[[u8; 3]]) -> Self {
+        // A distance close to how different colours look ("redmean").
+        let distance = |a: [f32; 3], b: [u8; 3]| {
+            let (r1, g1, b1) = (a[0], a[1], a[2]);
+            let (r2, g2, b2) = (b[0] as f32, b[1] as f32, b[2] as f32);
+            let rm = (r1 + r2) / 2.0;
+            let (dr, dg, db) = (r1 - r2, g1 - g2, b1 - b2);
+            (2.0 + rm / 256.0) * dr * dr + 4.0 * dg * dg + (2.0 + (255.0 - rm) / 256.0) * db * db
+        };
+        let table = (0..LUT * LUT * LUT)
+            .map(|k| {
+                let c = [k % LUT, (k / LUT) % LUT, k / (LUT * LUT)].map(|v| (v as f32 + 0.5) * 256.0 / LUT as f32);
+                (0..colors.len())
+                    .min_by(|&a, &b| distance(c, colors[a]).total_cmp(&distance(c, colors[b])))
+                    .unwrap_or(0) as u16
+            })
+            .collect();
+        Self { table }
+    }
+
+    #[inline]
+    fn get(&self, c: [f32; 3]) -> usize {
+        let q = |v: f32| ((v.clamp(0.0, 255.0) * LUT as f32 / 256.0) as usize).min(LUT - 1);
+        self.table[q(c[2]) * LUT * LUT + q(c[1]) * LUT + q(c[0])] as usize
+    }
+}
+
+/// Which colours of `palette` a colour field comes close enough to that
+/// [`apply`] may pick them (allowing for its dithering): the blocks worth
+/// making terrains of.
+pub fn colors_in_use(field: &ColorField, palette: &[[u8; 3]]) -> Vec<bool> {
+    let mut used = vec![false; palette.len()];
+    if palette.is_empty() {
+        return used;
+    }
+    let table = Nearest::new(palette);
+    for c in &field.data {
+        let s = c.map(|v| color::encode(v) as f32);
+        used[table.get(s)] = true;
+        for k in 0..3 {
+            for d in [-9.0, 9.0] {
+                let mut t = s;
+                t[k] += d;
+                used[table.get(t)] = true;
+            }
+        }
+    }
+    used
+}
+
 /// Write a build to the ground level: heights sampled per column from the
-/// height field, terrains painted where their masks are high (dithered in
-/// between, later outputs over earlier ones). Recorded for undo.
-pub fn apply(edit: &mut Edit, extent: &Extent, outputs: &Outputs, seed: u64) {
+/// height field, the colour of the ground turned into the terrains of
+/// `palette` (the closest colour, slightly dithered so that two blocks mix
+/// where the colour lies between them), then terrains painted where their
+/// masks are high (dithered in between, later outputs over earlier ones).
+/// Recorded for undo.
+pub fn apply(edit: &mut Edit, extent: &Extent, outputs: &Outputs, seed: u64, palette: &[(TerrainId, [u8; 3])]) {
     let (lo, hi) = (edit.dim().min_y as f32, (edit.dim().max_y - 1) as f32);
     let tiles: Vec<TilePos> = edit.level().positions().collect();
     let everywhere = BlockRect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX);
+    let colors: Vec<[u8; 3]> = palette.iter().map(|p| p.1).collect();
+    let nearest = (outputs.colors.is_some() && !palette.is_empty()).then(|| Nearest::new(&colors));
     edit.par_tiles(tiles, everywhere, false, |pos, _, tile| {
         let (ox, oz) = pos.origin();
         let n = crate::coords::TILE_SIZE;
@@ -1228,6 +1843,12 @@ pub fn apply(edit: &mut Edit, extent: &Extent, outputs: &Outputs, seed: u64) {
                 let i = local_index(x, z);
                 if let Some(h) = &outputs.heights {
                     tile.top.set(i, snap_height(h.sample(u, v).clamp(lo, hi)));
+                }
+                if let (Some(table), Some((field, _))) = (&nearest, &outputs.colors) {
+                    let c = field.sample(u, v);
+                    let jitter = |k: u64| (hash2(x, z, seed ^ k) as f32 / u32::MAX as f32 - 0.5) * 18.0;
+                    let srgb = [0, 1, 2].map(|k| color::encode(c[k]) as f32 + jitter(0xc0 + k as u64));
+                    tile.terrain.set(i, palette[table.get(srgb)].0.0);
                 }
                 for (k, (terrain, mask)) in outputs.terrains.iter().enumerate() {
                     let m = mask.sample(u, v);
@@ -1243,257 +1864,4 @@ pub fn apply(edit: &mut Edit, extent: &Extent, outputs: &Outputs, seed: u64) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn extent(n: usize) -> Extent {
-        Extent {
-            x0: -512.0,
-            z0: -512.0,
-            size: 1024.0,
-            n,
-        }
-    }
-
-    fn eval_one(g: &Graph, id: NodeId, n: usize) -> Arc<Field> {
-        let e = g.evaluate(&extent(n), &[id], true, &AtomicBool::new(false)).unwrap();
-        e.fields[&(id, 0)].clone()
-    }
-
-    #[test]
-    fn generators_stay_in_their_range_and_are_deterministic() {
-        for kind in NodeKind::catalogue().into_iter().filter(|k| k.family() == Family::Generator) {
-            let mut g = Graph::default();
-            let id = g.add(kind.clone(), [0.0; 2]);
-            let f = eval_one(&g, id, 64);
-            let (lo, hi) = f.range();
-            let (base, height) = match kind {
-                NodeKind::Noise { base, height, .. } | NodeKind::Cells { base, height, .. } | NodeKind::Radial { base, height, .. } => {
-                    (base, height)
-                }
-                NodeKind::Constant { value } => (value, 0.0),
-                _ => unreachable!(),
-            };
-            assert!(lo >= base - 1e-3 && hi <= base + height + 1e-3, "{}: {lo}..{hi}", kind.label());
-            assert_eq!(eval_one(&g, id, 64).data, f.data, "{}", kind.label());
-        }
-    }
-
-    #[test]
-    fn the_same_graph_looks_the_same_at_every_resolution() {
-        let mut g = Graph::default();
-        let id = g.add(NodeKind::catalogue()[0].clone(), [0.0; 2]);
-        let coarse = eval_one(&g, id, 64);
-        let fine = eval_one(&g, id, 256);
-        // Sample (10, 20) of the coarse grid is sample (41.5, 81.5) of the fine one.
-        let (x, z) = extent(64).world(10, 20);
-        let (u, v) = extent(256).grid(x, z);
-        assert!((coarse.at(10, 20) - fine.sample(u, v)).abs() < 1.0);
-    }
-
-    #[test]
-    fn links_refuse_loops_and_missing_inputs_are_reported() {
-        let mut g = Graph::default();
-        let a = g.add(NodeKind::Constant { value: 1.0 }, [0.0; 2]);
-        let b = g.add(NodeKind::Blur { radius: 4.0 }, [0.0; 2]);
-        let c = g.add(NodeKind::Blur { radius: 4.0 }, [0.0; 2]);
-        assert!(g.connect(a, 0, b, 0));
-        assert!(g.connect(b, 0, c, 0));
-        assert!(!g.connect(c, 0, b, 0), "a loop");
-        assert!(g.depends_on(c, a));
-        let lone = g.add(NodeKind::Invert, [0.0; 2]);
-        let err = g.evaluate(&extent(16), &[lone], true, &AtomicBool::new(false)).unwrap_err();
-        assert_eq!(err, GraphError::MissingInput("Invert".into()));
-        // Reconnecting an input replaces the old link.
-        let d = g.add(NodeKind::Constant { value: 5.0 }, [0.0; 2]);
-        assert!(g.connect(d, 0, c, 0));
-        assert_eq!(g.input_of(c, 0), Some((d, 0)));
-        g.remove(d);
-        assert_eq!(g.input_of(c, 0), None);
-    }
-
-    #[test]
-    fn combiners_selectors_and_modifiers() {
-        let mut g = Graph::default();
-        let a = g.add(NodeKind::Constant { value: 10.0 }, [0.0; 2]);
-        let b = g.add(NodeKind::Constant { value: 4.0 }, [0.0; 2]);
-        for (op, want) in [
-            (CombineOp::Add, 14.0),
-            (CombineOp::Subtract, 6.0),
-            (CombineOp::Multiply, 40.0),
-            (CombineOp::Max, 10.0),
-            (CombineOp::Min, 4.0),
-            (CombineOp::Average, 7.0),
-        ] {
-            let c = g.add(NodeKind::Combine { op, weight: 1.0 }, [0.0; 2]);
-            g.connect(a, 0, c, 0);
-            g.connect(b, 0, c, 1);
-            assert_eq!(eval_one(&g, c, 8).data[0], want, "{op:?}");
-        }
-        let sel = g.add(
-            NodeKind::SelectHeight {
-                min: 5.0,
-                max: 20.0,
-                falloff: 1.0,
-            },
-            [0.0; 2],
-        );
-        g.connect(a, 0, sel, 0);
-        assert_eq!(eval_one(&g, sel, 8).data[0], 1.0);
-        g.connect(b, 0, sel, 0);
-        assert_eq!(eval_one(&g, sel, 8).data[0], 0.0);
-        let levels = g.add(
-            NodeKind::Levels {
-                in_min: 0.0,
-                in_max: 20.0,
-                out_min: 100.0,
-                out_max: 200.0,
-                gamma: 1.0,
-            },
-            [0.0; 2],
-        );
-        g.connect(a, 0, levels, 0);
-        assert_eq!(eval_one(&g, levels, 8).data[0], 150.0);
-        // A slope: steep where a radial gradient falls.
-        let radial = g.add(
-            NodeKind::Radial {
-                inner: 0.2,
-                outer: 0.6,
-                height: 300.0,
-                base: 0.0,
-            },
-            [0.0; 2],
-        );
-        let steep = g.add(
-            NodeKind::SelectSlope {
-                min: 20.0,
-                max: 90.0,
-                falloff: 1.0,
-            },
-            [0.0; 2],
-        );
-        g.connect(radial, 0, steep, 0);
-        let f = eval_one(&g, steep, 64);
-        assert_eq!(f.at(32, 32), 0.0, "flat top");
-        assert_eq!(f.at(0, 0), 0.0, "flat plain");
-        assert!(f.at(32 + 13, 32) > 0.9, "the flank");
-    }
-
-    #[test]
-    fn erosion_carves_and_settles_and_thermal_limits_slopes() {
-        let mut g = Graph::default();
-        let hills = g.add(
-            NodeKind::Noise {
-                style: NoiseStyle::Ridged,
-                scale: 400.0,
-                octaves: 5,
-                roughness: 0.5,
-                height: 120.0,
-                base: 40.0,
-                seed: 9,
-            },
-            [0.0; 2],
-        );
-        let eroded = g.add(
-            NodeKind::Erosion {
-                rain: 2.0,
-                erosion: 0.3,
-                deposition: 0.3,
-                capacity: 4.0,
-                evaporation: 0.02,
-                radius: 12.0,
-                seed: 1,
-            },
-            [0.0; 2],
-        );
-        g.connect(hills, 0, eroded, 0);
-        let e = g.evaluate(&extent(128), &[eroded], true, &AtomicBool::new(false)).unwrap();
-        let before = &e.fields[&(hills, 0)];
-        let after = &e.fields[&(eroded, 0)];
-        let flow = &e.fields[&(eroded, 1)];
-        let deposits = &e.fields[&(eroded, 2)];
-        let changed = before.data.iter().zip(&after.data).filter(|(a, b)| (*a - *b).abs() > 0.05).count();
-        assert!(changed > 128 * 128 / 4, "erosion changed only {changed} samples");
-        // Peaks wear down: the highest point is lower.
-        assert!(after.range().1 < before.range().1);
-        let (flo, fhi) = flow.range();
-        assert!(flo >= 0.0 && fhi <= 1.0 && fhi > 0.9);
-        assert!(deposits.range().1 > 0.5);
-        // Water gathers in valleys: more flow where it is lower.
-        let mean = |pick: &dyn Fn(f32) -> bool| {
-            let v: Vec<f32> = (0..128 * 128).filter(|&c| pick(after.data[c])).map(|c| flow.data[c]).collect();
-            v.iter().sum::<f32>() / v.len().max(1) as f32
-        };
-        let (lo, hi) = after.range();
-        let mid = (lo + hi) / 2.0;
-        assert!(mean(&|h| h < mid) > mean(&|h| h > mid));
-
-        // Thermal erosion: a cliff becomes a slope no steeper than the talus.
-        let step = g.add(
-            NodeKind::Radial {
-                inner: 0.5,
-                outer: 0.505,
-                height: 100.0,
-                base: 0.0,
-            },
-            [0.0; 2],
-        );
-        let slid = g.add(
-            NodeKind::Thermal {
-                talus: 45.0,
-                iterations: 400,
-                strength: 1.0,
-            },
-            [0.0; 2],
-        );
-        g.connect(step, 0, slid, 0);
-        let f = eval_one(&g, slid, 64);
-        let spacing = extent(64).spacing();
-        let steepest = (1..64)
-            .map(|i| (f.at(i, 32) - f.at(i - 1, 32)).abs() / spacing)
-            .fold(0.0f32, f32::max);
-        assert!(steepest < 1.6, "steepest slope {steepest}");
-    }
-
-    #[test]
-    fn the_starter_graph_builds_and_applies() {
-        use crate::generate::{GenParams, Landform, generate};
-        use crate::history::History;
-        let mut world = generate(&GenParams {
-            tiles_x: 4,
-            tiles_z: 4,
-            landform: Landform::Flat,
-            ..GenParams::default()
-        });
-        let reg = &world.registry;
-        let (rock, snow, gravel) = (
-            TerrainId::ROCK.0,
-            reg.terrain_by_name("Snow").unwrap().0,
-            reg.terrain_by_name("Gravel").unwrap().0,
-        );
-        let grass = reg.terrain_by_name("Grass").unwrap().0;
-        let g = Graph::starter(grass, rock, snow, gravel);
-        let rect = BlockRect::new(-256, -256, 256, 256);
-        let ext = Extent::covering(rect, 128);
-        let outputs = g.build(&ext, &AtomicBool::new(false)).unwrap();
-        assert!(outputs.heights.is_some());
-        assert_eq!(outputs.terrains.len(), 4);
-        let mut h = History::default();
-        h.begin("graph", 0);
-        apply(&mut h.edit(&mut world, 0), &ext, &outputs, 1);
-        h.commit();
-        let tile = world.dims[0].ground().view(TilePos::new(0, 0)).unwrap();
-        let heights: Vec<f32> = (0..128 * 128).map(|i| tile.top.get(i)).collect();
-        let (lo, hi) = heights.iter().fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
-        assert!(hi - lo > 20.0, "the flat world got relief: {lo}..{hi}");
-        // Undo puts the flat world back.
-        h.undo(&mut world);
-        let tile = world.dims[0].ground().view(TilePos::new(0, 0)).unwrap();
-        assert_eq!(tile.top.get(0), 64.0);
-        // A graph survives serialisation (it is saved with the editor).
-        let json = serde_json::to_string(&g).unwrap();
-        assert_eq!(serde_json::from_str::<Graph>(&json).unwrap(), g);
-        // Cancelling stops a build.
-        assert_eq!(g.build(&ext, &AtomicBool::new(true)).unwrap_err(), GraphError::Cancelled);
-    }
-}
+mod tests;

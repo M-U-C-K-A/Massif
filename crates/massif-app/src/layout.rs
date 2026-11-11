@@ -27,6 +27,10 @@ pub enum EditorKind {
     Info,
     /// The terrain graph (procedural generation and erosion).
     Graph,
+    /// The graph's 3D viewport: the selected node as a smooth relief.
+    GraphView,
+    /// The settings of the selected node of the graph.
+    GraphProps,
 }
 
 impl EditorKind {
@@ -47,7 +51,7 @@ impl EditorKind {
             "Paint",
             &[EditorKind::Terrain, EditorKind::Blocks, EditorKind::Biomes, EditorKind::Levels],
         ),
-        ("World", &[EditorKind::Info, EditorKind::Graph]),
+        ("World", &[EditorKind::Info, EditorKind::Graph, EditorKind::GraphView, EditorKind::GraphProps]),
     ];
 
     pub const fn label(self) -> &'static str {
@@ -66,6 +70,8 @@ impl EditorKind {
             EditorKind::Levels => "Levels",
             EditorKind::Info => "Info",
             EditorKind::Graph => "Terrain Graph",
+            EditorKind::GraphView => "Graph Viewport",
+            EditorKind::GraphProps => "Node Properties",
         }
     }
 
@@ -85,6 +91,8 @@ impl EditorKind {
             EditorKind::Levels => Icon::Layers,
             EditorKind::Info => Icon::Info,
             EditorKind::Graph => Icon::Workflow,
+            EditorKind::GraphView => Icon::MountainSnow,
+            EditorKind::GraphProps => Icon::SlidersHorizontal,
         }
     }
 }
@@ -450,12 +458,12 @@ impl Default for Layout {
         let (m1, m2) = (b.area(Map), b.area(Map));
         add("Maps", b.row(0.5, m1, m2));
 
-        // Generate: the terrain graph, with the map and the 3D view to see
-        // what it makes.
-        let graph = b.area(Graph);
-        let (map, view) = (b.area(Map), b.area(View3d));
-        let side = b.column(0.5, map, view);
-        add("Generate", b.row(0.62, graph, side));
+        // Generate: as in Gaea, the viewport above the graph, the selected
+        // node's settings on the right.
+        let (view, graph) = (b.area(GraphView), b.area(Graph));
+        let left = b.column(0.58, view, graph);
+        let props = b.area(GraphProps);
+        add("Generate", b.row(0.79, left, props));
 
         // Minimal: just tools and the map.
         let (tools, map) = (b.area(Tools), b.area(Map));

@@ -27,6 +27,7 @@ use egui::{Align2, Color32, FontId, PointerButton, Rect, Sense, Ui, pos2, vec2};
 use glam::{Mat4, Vec3, Vec4};
 use massif_core::compose::{Materializer, Span, TileStack};
 use massif_core::coords::{TILE_SIZE, TilePos, local_index};
+use massif_core::filter::{SLOPE_REACH, trend_slope};
 use massif_core::registry::{BlockId, Registry, TerrainId};
 use massif_core::tile::NO_FLUID;
 use massif_core::world::Dimension;
@@ -97,6 +98,8 @@ struct CellSpan {
     y0: i32,
     y1: i32,
     terrain: u16,
+    /// The exact height of its top (y1 is the top of its last block).
+    top: f32,
 }
 
 /// Merged solid spans, surface water and top sample of every column of a
@@ -124,7 +127,7 @@ impl Grid {
     }
 
     fn top(&self, x: i32, z: i32) -> Option<f32> {
-        self.spans(x, z).last().map(|s| s.y1 as f32)
+        self.spans(x, z).last().map(|s| s.top)
     }
 
     fn cell(&self, x: i32, z: i32) -> usize {
@@ -168,11 +171,13 @@ fn compose_area(dim: &Dimension, x0: i32, z0: i32, w: usize, d: usize, mode: Map
                         let last = grid.spans.last_mut().expect("checked above");
                         last.y1 = s.y1;
                         last.terrain = s.terrain.0;
+                        last.top = s.top;
                     } else {
                         grid.spans.push(CellSpan {
                             y0: s.y0,
                             y1: s.y1,
                             terrain: s.terrain.0,
+                            top: s.top,
                         });
                     }
                 }
@@ -220,7 +225,7 @@ impl Colors<'_> {
     }
 
     /// Colour of the top face of a span, and of the soil just under it, for
-    /// the column `(x, z)`.
+    /// the column `(x, z)` whose ground slopes `slope` degrees.
     #[allow(clippy::too_many_arguments)]
     fn top(&self, terrain: u16, y0: i32, y1: i32, x: i32, z: i32, slope: f32, sample: &Sample) -> ([u8; 3], [u8; 3]) {
         match self.mode {
@@ -244,7 +249,7 @@ impl Colors<'_> {
                 (c, c)
             }
             MapMode::Slope => {
-                let c = slope_color(slope.atan().to_degrees());
+                let c = slope_color(slope);
                 (c, [150, 150, 150])
             }
             MapMode::Biome => {
@@ -384,8 +389,10 @@ pub struct TileBuild {
 pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: TilePos, style: Style) -> TileBuild {
     let n = TILE_SIZE as usize;
     let (cx, cz) = (tile.x * TILE_SIZE, tile.z * TILE_SIZE);
-    // The tile and a ring of neighbour columns, for walls and slopes.
-    let grid = compose_area(dim, cx - 1, cz - 1, n + 2, n + 2, style.mode, style.water);
+    // The tile and a ring of neighbour columns, for walls, and for slopes,
+    // measured as the trend of the ground around each column.
+    let ring = if style.mode == MapMode::Slope { SLOPE_REACH } else { 1 };
+    let grid = compose_area(dim, cx - ring, cz - ring, n + 2 * ring as usize, n + 2 * ring as usize, style.mode, style.water);
     let wk = reg.well_known;
     let colors = Colors {
         reg,
@@ -411,13 +418,10 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
     for j in 0..n as i32 {
         for i in 0..n as i32 {
             let (x, z) = (cx + i, cz + j);
-            let slope = match (grid.top(x, z), grid.top(x - 1, z), grid.top(x + 1, z), grid.top(x, z - 1), grid.top(x, z + 1)) {
-                (Some(c), l, r, u, d) => {
-                    let dx = (r.unwrap_or(c) - l.unwrap_or(c)) / 2.0;
-                    let dz = (d.unwrap_or(c) - u.unwrap_or(c)) / 2.0;
-                    (dx * dx + dz * dz).sqrt()
-                }
-                _ => 0.0,
+            let slope = if style.mode == MapMode::Slope {
+                trend_slope(|dx, dz| grid.top(x + dx, z + dz), SLOPE_REACH, 1.0)
+            } else {
+                0.0
             };
             let sample = grid.top[grid.cell(x, z)];
             tops.push(
@@ -686,9 +690,13 @@ pub struct Globals {
     pub view_proj: [[f32; 4]; 4],
     pub eye: [f32; 4],
     pub sun: [f32; 4],
+    /// The sky overhead, and at the horizon.
     pub sky: [f32; 4],
+    pub horizon: [f32; 4],
     /// Fog start, fog end, ambient weight, sun weight.
     pub fog: [f32; 4],
+    /// Colour of the haze far away, and how much of it at most.
+    pub mist: [f32; 4],
     /// The camera's forward, right and up directions, for the tracer's rays.
     pub cam_f: [f32; 4],
     pub cam_s: [f32; 4],
@@ -731,7 +739,9 @@ struct Globals {
     eye: vec4<f32>,
     sun: vec4<f32>,
     sky: vec4<f32>,
+    horizon: vec4<f32>,
     fog: vec4<f32>,
+    mist: vec4<f32>,
     cam_f: vec4<f32>,
     cam_s: vec4<f32>,
     cam_u: vec4<f32>,
@@ -743,13 +753,21 @@ fn to_linear(c: vec3<f32>) -> vec3<f32> {
     return pow(c, vec3<f32>(2.2));
 }
 
-/// Light and fog of a surface of colour `base` facing `n`, `d` blocks away.
+/// Light and haze of a surface of colour `base` facing `n`, `d` blocks
+/// away: the light of the whole sky (strongest from above) and of the sun,
+/// so that tops keep their colour and walls stay readable.
 fn shade(base: vec3<f32>, n: vec3<f32>, d: f32) -> vec3<f32> {
     let sun = max(dot(n, g.sun.xyz), 0.0);
-    let sky = 0.55 + 0.45 * n.y;
+    let sky = 0.72 + 0.28 * n.y;
     let c = to_linear(base) * (g.fog.z * sky + g.fog.w * sun);
     let f = clamp((d - g.fog.x) / max(g.fog.y - g.fog.x, 1.0), 0.0, 1.0);
-    return mix(c, to_linear(g.sky.rgb), f * f);
+    return mix(c, to_linear(g.mist.rgb), f * f * g.mist.w);
+}
+
+/// The sky in direction `d`: the horizon colour low, the zenith's high.
+fn sky_color(d: vec3<f32>) -> vec3<f32> {
+    let t = clamp(d.y * 1.8 + 0.06, 0.0, 1.0);
+    return mix(to_linear(g.horizon.rgb), to_linear(g.sky.rgb), sqrt(t));
 }
 "#;
 
@@ -1003,6 +1021,12 @@ fn trace(o: vec3<f32>, d: vec3<f32>, t_in: f32, t_out: f32, axis_in: i32, pix: f
     return hit;
 }
 
+/// Height of the ground at a point of the grid (the bottom of the world
+/// where there is none).
+fn ground_height(q: vec2<f32>) -> f32 {
+    return terrain.origin.z + f32(column(vec2<i32>(floor(q))) & 0xfffu);
+}
+
 /// The colour of a packed column at height `y`: its top, the soil of its
 /// first blocks down, the rock under them.
 fn surface_color(col: u32, y: f32, up: bool) -> vec3<f32> {
@@ -1040,8 +1064,11 @@ fn fs_trace(in: TraceOut) -> TraceFrag {
     let far = max(ta, tb);
     let t0 = max(max(near.x, near.z), max(near.y, 0.0));
     let t1 = min(min(far.x, far.z), far.y);
+    var out: TraceFrag;
     if (t1 <= t0 || terrain.origin.w <= terrain.origin.z) {
-        discard;
+        out.color = vec4<f32>(sky_color(d), 1.0);
+        out.depth = 1.0;
+        return out;
     }
     var axis = 2;
     if (t0 > 0.0) {
@@ -1053,16 +1080,19 @@ fn fs_trace(in: TraceOut) -> TraceFrag {
     }
     let hit = trace(o, d, t0, t1, axis, g.cam_k.z);
     if (!hit.found) {
-        discard;
+        out.color = vec4<f32>(sky_color(d), 1.0);
+        out.depth = 1.0;
+        return out;
     }
     let p = o + d * hit.t;
-    let up = hit.normal.y > 0.5;
     var base: vec3<f32>;
+    var normal = hit.normal;
     if (hit.level == 0) {
-        base = surface_color(column(hit.cell), p.y, up);
+        base = surface_color(column(hit.cell), p.y, hit.normal.y > 0.5);
     } else {
-        // A square smaller than a pixel: the mean of four of its columns,
-        // so that far mixed ground does not flicker.
+        // A square smaller than a pixel: the ground seen from afar, smooth.
+        // Its colour is the mean of the tops of four of its columns (mixed
+        // ground does not flicker), its light that of the hillside.
         let size = f32(1 << u32(hit.level));
         let corner = vec2<f32>(hit.cell) * size;
         var sum = vec3<f32>(0.0);
@@ -1071,14 +1101,19 @@ fn fs_trace(in: TraceOut) -> TraceFrag {
             let q = corner + size * vec2<f32>(0.25 + 0.5 * f32(k & 1), 0.25 + 0.5 * f32(k >> 1u));
             let col = column(vec2<i32>(floor(q)));
             if (col != 0u) {
-                sum += surface_color(col, p.y, up);
+                sum += surface_color(col, p.y, true);
                 count += 1.0;
             }
         }
         base = select(textureLoad(palette, vec2<i32>(0, 0), 0).rgb, sum / max(count, 1.0), count > 0.0);
+        let mid = corner + vec2<f32>(size * 0.5);
+        let hl = ground_height(mid - vec2<f32>(size, 0.0));
+        let hr = ground_height(mid + vec2<f32>(size, 0.0));
+        let hu = ground_height(mid - vec2<f32>(0.0, size));
+        let hd = ground_height(mid + vec2<f32>(0.0, size));
+        normal = normalize(vec3<f32>(-(hr - hl) / (2.0 * size), 1.0, -(hd - hu) / (2.0 * size)));
     }
-    var out: TraceFrag;
-    out.color = vec4<f32>(shade(base, hit.normal, hit.t), 1.0);
+    out.color = vec4<f32>(shade(base, normal, hit.t), 1.0);
     let world = vec3<f32>(p.x + terrain.origin.x, p.y, p.z + terrain.origin.y);
     let clip = g.view_proj * vec4<f32>(world, 1.0);
     out.depth = clamp(clip.z / clip.w, 0.0, 1.0);
@@ -1113,6 +1148,8 @@ struct Target {
     #[cfg_attr(not(test), allow(dead_code))]
     resolve: wgpu::Texture,
     resolve_view: wgpu::TextureView,
+    /// The same image as plain bytes, for egui.
+    display_view: wgpu::TextureView,
     depth: wgpu::TextureView,
 }
 
@@ -1348,7 +1385,14 @@ impl Renderer3d {
                 buffers: &[],
             },
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: depth(true),
+            // First in the frame, it writes every pixel, the sky included.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
             multisample,
             fragment: Some(wgpu::FragmentState {
                 module: &trace_shader,
@@ -1717,6 +1761,9 @@ impl Renderer3d {
             height: size[1],
             depth_or_array_layers: 1,
         };
+        // The image egui shows is read as plain bytes: egui works with
+        // gamma-encoded colours, and an sRGB view would decode them once
+        // more, darkening everything.
         let texture = |label: &str, format, samples, usage| {
             self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
@@ -1726,7 +1773,7 @@ impl Renderer3d {
                 dimension: wgpu::TextureDimension::D2,
                 format,
                 usage,
-                view_formats: &[],
+                view_formats: if format == COLOR_FORMAT { &[wgpu::TextureFormat::Rgba8Unorm] } else { &[] },
             })
         };
         let msaa = texture("massif 3d msaa", COLOR_FORMAT, SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT);
@@ -1742,6 +1789,10 @@ impl Renderer3d {
             size,
             msaa: view(&msaa),
             resolve_view: view(&resolve),
+            display_view: resolve.create_view(&wgpu::TextureViewDescriptor {
+                format: Some(wgpu::TextureFormat::Rgba8Unorm),
+                ..Default::default()
+            }),
             resolve,
             depth: view(&depth),
         });
@@ -1749,7 +1800,7 @@ impl Renderer3d {
     }
 
     pub fn image_view(&self) -> Option<&wgpu::TextureView> {
-        self.target.as_ref().map(|t| &t.resolve_view)
+        self.target.as_ref().map(|t| &t.display_view)
     }
 
     /// Draw the traced columns and the meshed chunks of `tiles` into the
@@ -1805,7 +1856,7 @@ impl Renderer3d {
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("massif 3d") });
         {
-            let sky = globals.sky;
+            let sky = globals.horizon;
             let lin = |c: f32| (c as f64).powf(2.2);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("massif 3d"),
@@ -1912,6 +1963,49 @@ impl Renderer3d {
     }
 }
 
+/// Colours of the sky behind the terrain and of the haze over it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Sky {
+    pub zenith: [u8; 3],
+    pub horizon: [u8; 3],
+    /// The haze far away, and how much of it at most (0..1).
+    pub mist: [u8; 3],
+    pub haze: f32,
+}
+
+impl Sky {
+    /// A daylight sky in the light theme, a dusk one in the dark theme; the
+    /// haze stays light in both, so the far ground never sinks into the dark.
+    pub fn of(pal: &Palette) -> Sky {
+        if pal.dark {
+            Sky {
+                zenith: [22, 28, 40],
+                horizon: [58, 70, 90],
+                mist: [150, 162, 182],
+                haze: 0.32,
+            }
+        } else {
+            Sky {
+                zenith: [128, 168, 220],
+                horizon: [214, 226, 241],
+                mist: [214, 226, 241],
+                haze: 0.5,
+            }
+        }
+    }
+
+    /// One flat colour: tests tell the sky from the ground by it.
+    #[cfg(test)]
+    pub fn flat(c: [u8; 3]) -> Sky {
+        Sky {
+            zenith: c,
+            horizon: c,
+            mist: c,
+            haze: 0.0,
+        }
+    }
+}
+
 /// An orbit camera.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Camera {
@@ -1950,7 +2044,7 @@ impl Camera {
     /// Uniforms for a frame whose positions are relative to `origin`.
     /// `extent` is the side of the map, `height` that of the image in
     /// pixels.
-    pub fn globals(&self, origin: (i32, i32), aspect: f32, extent: f32, sky: [u8; 3], height: u32) -> Globals {
+    pub fn globals(&self, origin: (i32, i32), aspect: f32, extent: f32, sky: Sky, height: u32) -> Globals {
         let local = |p: [f64; 3]| Vec3::new((p[0] - origin.0 as f64) as f32, p[1] as f32, (p[2] - origin.1 as f64) as f32);
         let eye = local(self.eye());
         let target = local(self.target);
@@ -1965,13 +2059,16 @@ impl Camera {
         let s = f.cross(Vec3::Y).normalize();
         let u = s.cross(f);
         let tan = (FOV_Y * 0.5).tan();
+        let unit = |c: [u8; 3], w: f32| [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0, w];
         Globals {
             view_proj: (proj * view).to_cols_array_2d(),
             eye: [eye.x, eye.y, eye.z, 1.0],
             sun: [sun.x, sun.y, sun.z, 0.0],
-            sky: [sky[0] as f32 / 255.0, sky[1] as f32 / 255.0, sky[2] as f32 / 255.0, 1.0],
-            // The fog only veils what is far beyond the map's middle.
-            fog: [self.distance + extent * 0.45, self.distance + extent * 1.6, 0.44, 0.66],
+            sky: unit(sky.zenith, 1.0),
+            horizon: unit(sky.horizon, 1.0),
+            // The haze only veils what is far beyond the map's middle.
+            fog: [self.distance + extent * 0.4, self.distance + extent * 1.6, 0.62, 0.5],
+            mist: unit(sky.mist, sky.haze),
             cam_f: [f.x, f.y, f.z, 0.0],
             cam_s: [s.x, s.y, s.z, 0.0],
             cam_u: [u.x, u.y, u.z, 0.0],
@@ -2092,7 +2189,7 @@ pub struct View3d {
     style: Option<Style>,
     generation: Option<u64>,
     needs_render: bool,
-    last_globals: Option<[f32; 48]>,
+    last_globals: Option<[f32; 56]>,
     /// Tiles still to build, and the time the last batch took.
     pending: usize,
     build_ms: f32,
@@ -2459,9 +2556,8 @@ impl View3d {
             self.needs_render = true;
         }
         let origin = (self.camera.target[0].floor() as i32, self.camera.target[2].floor() as i32);
-        let sky: [u8; 3] = [pal.sky.r(), pal.sky.g(), pal.sky.b()];
-        let globals = self.camera.globals(origin, rect.width() / rect.height().max(1.0), extent, sky, px[1].max(1));
-        let key: [f32; 48] = bytemuck::cast(globals);
+        let globals = self.camera.globals(origin, rect.width() / rect.height().max(1.0), extent, Sky::of(&pal), px[1].max(1));
+        let key: [f32; 56] = bytemuck::cast(globals);
         if self.needs_render || self.last_globals != Some(key) {
             let m = Mat4::from_cols_array_2d(&globals.view_proj);
             let dim = doc.dimension();
@@ -2608,7 +2704,10 @@ mod tests {
     #[test]
     fn walls_only_where_neighbours_leave_air() {
         let mut out = Vec::new();
-        let cover = [CellSpan { y0: -64, y1: 10, terrain: 0 }, CellSpan { y0: 20, y1: 30, terrain: 0 }];
+        let cover = [
+            CellSpan { y0: -64, y1: 10, terrain: 0, top: 10.0 },
+            CellSpan { y0: 20, y1: 30, terrain: 0, top: 30.0 },
+        ];
         uncovered(-64, 64, &cover, &mut out);
         assert_eq!(out, vec![(10, 20), (30, 64)]);
         uncovered(0, 5, &cover, &mut out);
@@ -2870,7 +2969,8 @@ mod tests {
         h.commit();
         let mut renderer = Renderer3d::new(&device, &queue);
         let tiles = load(&mut renderer, &w, STYLE);
-        let sky = [178u8, 210, 240];
+        // A flat magenta sky: whatever has that colour is sky.
+        let sky = [255u8, 0, 255];
         renderer.ensure_target([400, 400]);
         // Straight down on the middle of the map.
         let above = Camera {
@@ -2879,7 +2979,7 @@ mod tests {
             pitch: 1.55,
             distance: 160.0,
         };
-        let globals = above.globals((0, 0), 1.0, 256.0, sky, 400);
+        let globals = above.globals((0, 0), 1.0, 256.0, Sky::flat(sky), 400);
         renderer.render(&globals, (0, 0), &tiles, w.dims[0].min_y, substrate(&w));
         let (width, height, rgba) = renderer.read_image().unwrap();
         if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR") {
@@ -2904,7 +3004,7 @@ mod tests {
             pitch: 0.12,
             distance: 90.0,
         };
-        let globals = side.globals((0, 0), 1.0, 256.0, sky, 400);
+        let globals = side.globals((0, 0), 1.0, 256.0, Sky::flat(sky), 400);
         renderer.render(&globals, (0, 0), &tiles, w.dims[0].min_y, substrate(&w));
         let (width, height, rgba) = renderer.read_image().unwrap();
         if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR") {
@@ -2940,7 +3040,7 @@ mod tests {
             ..Camera::default()
         };
         let origin = (20, 0);
-        let globals = camera.globals(origin, 1.6, 512.0, [178, 210, 240], 400);
+        let globals = camera.globals(origin, 1.6, 512.0, Sky::flat([255, 0, 255]), 400);
         renderer.render(&globals, origin, &tiles, w.dims[0].min_y, substrate(&w));
         let (width, height, rgba) = renderer.read_image().unwrap();
         assert_eq!((width, height), (640, 400));
@@ -2948,7 +3048,7 @@ mod tests {
             image::save_buffer(std::path::Path::new(&dir).join("view3d.png"), &rgba, width, height, image::ColorType::Rgba8).unwrap();
         }
         // The terrain covers a good part of the frame, and it is shaded.
-        let sky = [178u8, 210, 240];
+        let sky = [255u8, 0, 255];
         let mut terrain = 0;
         let mut colours = std::collections::HashSet::new();
         for px in rgba.as_chunks::<4>().0 {

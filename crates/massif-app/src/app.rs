@@ -1246,10 +1246,12 @@ impl MassifApp {
                 }
             }
             EditorKind::Graph => {
-                if let Some(msg) = self.graph.ui(&mut cui, &mut self.doc) {
+                if let Some(msg) = self.graph.canvas_ui(&mut cui, &mut self.doc, &self.blocks) {
                     self.feedback = Some(msg);
                 }
             }
+            EditorKind::GraphView => self.graph.viewport_ui(&mut cui, frame, &self.doc),
+            EditorKind::GraphProps => self.graph.properties_ui(&mut cui, &mut self.doc),
             EditorKind::Empty => {
                 let mut picked = None;
                 scrolled(&mut cui, &mut |ui| picked = panels::empty_area(ui, shown));
@@ -1346,10 +1348,14 @@ impl MassifApp {
                     ui.set_width(920.0);
                     ui.label(RichText::new("Create New World").bold().size(16.0));
                     ui.add_space(6.0);
+                    let max_height = (ctx.content_rect().height() - 200.0).max(240.0);
                     ui.horizontal_top(|ui| {
                         ui.vertical(|ui| {
                             ui.set_width(560.0);
-                            new_world_form(ui, &mut form);
+                            egui::ScrollArea::vertical().id_salt("new world form").max_height(max_height).show(ui, |ui| {
+                                ui.set_width(550.0);
+                                new_world_form(ui, &mut form);
+                            });
                         });
                         ui.add_space(12.0);
                         ui.vertical(|ui| new_world_preview(ui, &mut form));
@@ -1389,15 +1395,29 @@ impl MassifApp {
                     let pal = Palette::of(ui);
                     ui.label(RichText::new("Export to Minecraft").bold().size(16.0));
                     ui.add_space(6.0);
+                    // The form scrolls when the screen is short; the tabs
+                    // sit beside it behind a hairline as tall as the form
+                    // (a separator here would take all the height there is,
+                    // and the window would grow forever).
+                    let max_height = (ctx.content_rect().height() - 200.0).max(240.0);
                     ui.horizontal_top(|ui| {
-                        ui.vertical(|ui| {
-                            ui.set_width(700.0);
-                            match form.tab {
-                                ExportTab::General => export_general(ui, &mut form),
-                                ExportTab::World => export_world(ui, &mut form),
-                            }
-                        });
-                        ui.separator();
+                        let form_rect = ui
+                            .vertical(|ui| {
+                                ui.set_width(700.0);
+                                egui::ScrollArea::vertical().id_salt("export form").max_height(max_height).show(ui, |ui| {
+                                    ui.set_width(690.0);
+                                    match form.tab {
+                                        ExportTab::General => export_general(ui, &mut form),
+                                        ExportTab::World => export_world(ui, &mut form),
+                                    }
+                                });
+                            })
+                            .response
+                            .rect;
+                        ui.add_space(6.0);
+                        let x = ui.cursor().min.x;
+                        ui.painter().vline(x, form_rect.y_range(), Stroke::new(1.0, pal.border));
+                        ui.add_space(7.0);
                         ui.vertical(|ui| {
                             ui.set_min_width(110.0);
                             for (tab, label) in [(ExportTab::General, "General"), (ExportTab::World, "World")] {
@@ -2013,7 +2033,7 @@ fn preview_image(params: &GenParams, reg: &massif_core::Registry, n: usize) -> e
 
 /// Where the layout is saved. A new key when the default layouts change a
 /// lot, so that everyone gets the new editors.
-const LAYOUT_KEY: &str = "massif.layout.v4";
+const LAYOUT_KEY: &str = "massif.layout.v5";
 
 /// Lay out the area tree.
 fn compute(node: &Node, rect: Rect, path: &mut Vec<bool>, areas: &mut Vec<(AreaId, EditorKind, Rect)>, seps: &mut Vec<Sep>) {
@@ -2430,40 +2450,311 @@ mod tests {
         image::save_buffer(dir.join("import-3d-close.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
     }
 
-    /// The terrain graph: previews of every node, then a build applied to
-    /// the map. Needs a GPU: runs with MASSIF_SNAPSHOT_DIR.
+    /// Step until the terrain graph's preview has caught up with the graph.
+    fn wait_for_graph(h: &mut egui_kittest::Harness<'static, MassifApp>) {
+        let started = std::time::Instant::now();
+        h.run_steps(3);
+        while !h.state().graph.is_current() {
+            assert!(started.elapsed().as_secs() < 90, "the preview did not come");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+        h.run_steps(4);
+    }
+
+    /// The terrain graph: previews of every node and the viewport, then the
+    /// conversion to the map, with real blocks from its colours. Needs a
+    /// GPU: runs with MASSIF_SNAPSHOT_DIR.
     #[test]
-    fn terrain_graph_previews_and_builds() {
+    fn terrain_graph_previews_and_converts() {
         let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
             return;
         };
         let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.active = 5; // Generate
-        h.state_mut().graph.resolution = 512;
-        let started = std::time::Instant::now();
-        // Previews are made on another thread.
-        while started.elapsed().as_secs_f32() < 4.0 {
-            h.step();
-            std::thread::sleep(std::time::Duration::from_millis(20));
+        {
+            let app = h.state_mut();
+            app.layout.active = 5; // Generate
+            app.graph.resolution = 512;
+            let reg = &app.doc.world.registry;
+            let get = |name: &str| reg.terrain_by_name(name).unwrap_or(massif_core::TerrainId::ROCK).0;
+            let starter = massif_core::graph::Graph::starter(get("Grass"), massif_core::TerrainId::ROCK.0, get("Snow"), get("Gravel"));
+            app.doc.world.meta.graph = Some(starter);
+            app.graph.graph_replaced();
         }
-        h.run_steps(5);
+        wait_for_graph(&mut h);
         h.render().unwrap().save(dir.join("graph.png")).unwrap();
+        let (w, hgt, rgba) = h.state().graph.view.read_back().expect("the viewport rendered");
+        image::save_buffer(dir.join("graph-viewport.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+        // The relief fills a good part of the viewport.
+        let distinct: std::collections::HashSet<[u8; 3]> = rgba.as_chunks::<4>().0.iter().map(|p| [p[0], p[1], p[2]]).collect();
+        assert!(distinct.len() > 2000, "{} colours in the viewport", distinct.len());
+        // A mask, selected, shows on the relief.
+        let slope = h
+            .state()
+            .doc
+            .world
+            .meta
+            .graph
+            .as_ref()
+            .and_then(|g| g.nodes.iter().find(|n| matches!(n.kind, massif_core::graph::NodeKind::SelectSlope { .. })).map(|n| n.id));
+        if let Some(id) = slope {
+            h.state_mut().graph.select(Some(id));
+            wait_for_graph(&mut h);
+            h.render().unwrap().save(dir.join("graph-mask.png")).unwrap();
+        }
+        h.state_mut().graph.select(None);
         {
             use egui_kittest::kittest::Queryable;
-            h.get_by_label_contains("Build and apply").click();
+            h.get_by_label_contains("Convert to Minecraft").click();
         }
         let started = std::time::Instant::now();
         while h.state().doc.history.undo_label() != Some("Terrain graph") {
-            assert!(started.elapsed().as_secs() < 120, "the build did not finish");
+            assert!(started.elapsed().as_secs() < 120, "the conversion did not finish");
             h.step();
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        for _ in 0..120 {
+        h.run_steps(10);
+        h.render().unwrap().save(dir.join("graph-applied.png")).unwrap();
+        // The colours became several kinds of ground.
+        let tile = h.state().doc.dimension().ground().view(TilePos::new(0, 0)).unwrap();
+        let kinds: std::collections::HashSet<u16> = (0..128 * 128).map(|i| tile.terrain.get(i)).collect();
+        assert!(kinds.len() >= 3, "{} terrains", kinds.len());
+        // And the map in 3D.
+        h.state_mut().layout.active = 3;
+        h.run_steps(5);
+        while h.state().view3d.pending() > 0 {
             h.step();
         }
-        h.render().unwrap().save(dir.join("graph-applied.png")).unwrap();
+        h.run_steps(3);
         let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
         image::save_buffer(dir.join("graph-applied-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+    }
+
+    /// Graphs in the manner of Gaea's examples, as the viewport shows them:
+    /// a cratered moon, a desert canyon, eroded peaks. Needs a GPU: runs
+    /// with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn gaea_like_graphs_render() {
+        use massif_core::graph::*;
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let moon = {
+            let mut g = Graph::default();
+            let craters = g.add(
+                NodeKind::CraterField {
+                    count: 260,
+                    min_radius: 10.0,
+                    max_radius: 190.0,
+                    depth: 0.28,
+                    base: 90.0,
+                    seed: 4,
+                },
+                [0.0, 0.0],
+            );
+            let range = g.add(
+                NodeKind::MountainRange {
+                    angle: 35.0,
+                    width: 420.0,
+                    scale: 260.0,
+                    height: 110.0,
+                    base: 0.0,
+                    seed: 2,
+                },
+                [0.0, 200.0],
+            );
+            let add = g.add(NodeKind::Combine { op: CombineOp::Add, weight: 1.0 }, [220.0, 100.0]);
+            let eroded = g.add(
+                NodeKind::Erosion {
+                    rain: 0.8,
+                    erosion: 0.25,
+                    deposition: 0.3,
+                    capacity: 4.0,
+                    evaporation: 0.02,
+                    radius: 4.0,
+                    seed: 1,
+                },
+                [440.0, 100.0],
+            );
+            let grad = g.add(
+                NodeKind::Gradient {
+                    preset: GradientPreset::Lunar,
+                    auto_range: true,
+                    min: 0.0,
+                    max: 1.0,
+                    reverse: false,
+                    variation: 0.3,
+                    seed: 1,
+                },
+                [660.0, 160.0],
+            );
+            let occ = g.add(NodeKind::Occlusion { radius: 24.0 }, [660.0, 320.0]);
+            let dark = g.add(NodeKind::Invert, [860.0, 320.0]);
+            let tint = g.add(
+                NodeKind::Tint {
+                    color: [60, 62, 66],
+                    mode: TintMode::Multiply,
+                    strength: 0.7,
+                },
+                [880.0, 160.0],
+            );
+            let out = g.add(NodeKind::HeightOutput, [660.0, 0.0]);
+            let color = g.add(
+                NodeKind::ColorOutput {
+                    blocks: true,
+                    palette: BlockPalette::Rock,
+                },
+                [1100.0, 160.0],
+            );
+            g.connect(craters, 0, add, 0);
+            g.connect(range, 0, add, 1);
+            g.connect(add, 0, eroded, 0);
+            g.connect(eroded, 0, out, 0);
+            g.connect(eroded, 0, grad, 0);
+            g.connect(eroded, 0, occ, 0);
+            g.connect(occ, 0, dark, 0);
+            g.connect(grad, 0, tint, 0);
+            g.connect(dark, 0, tint, 1);
+            g.connect(tint, 0, color, 0);
+            g
+        };
+        let canyon = {
+            let mut g = Graph::default();
+            let canyon = g.add(
+                NodeKind::Canyon {
+                    angle: 30.0,
+                    width: 300.0,
+                    depth: 100.0,
+                    meander: 160.0,
+                    steps: 7,
+                    base: 170.0,
+                    seed: 3,
+                },
+                [0.0, 0.0],
+            );
+            let rocks = g.add(
+                NodeKind::Rocks {
+                    scale: 60.0,
+                    height: 8.0,
+                    sharpness: 0.7,
+                    seed: 2,
+                },
+                [0.0, 200.0],
+            );
+            let add = g.add(NodeKind::Combine { op: CombineOp::Add, weight: 1.0 }, [220.0, 100.0]);
+            let strata = g.add(
+                NodeKind::Stratify {
+                    layers: 18,
+                    strength: 0.6,
+                    tilt: 4.0,
+                    seed: 5,
+                },
+                [440.0, 100.0],
+            );
+            let grad = g.add(
+                NodeKind::Gradient {
+                    preset: GradientPreset::RedRock,
+                    auto_range: true,
+                    min: 0.0,
+                    max: 1.0,
+                    reverse: false,
+                    variation: 0.4,
+                    seed: 2,
+                },
+                [660.0, 160.0],
+            );
+            let out = g.add(NodeKind::HeightOutput, [660.0, 0.0]);
+            let color = g.add(
+                NodeKind::ColorOutput {
+                    blocks: true,
+                    palette: BlockPalette::Desert,
+                },
+                [880.0, 160.0],
+            );
+            g.connect(canyon, 0, add, 0);
+            g.connect(rocks, 0, add, 1);
+            g.connect(add, 0, strata, 0);
+            g.connect(strata, 0, out, 0);
+            g.connect(strata, 0, grad, 0);
+            g.connect(grad, 0, color, 0);
+            g
+        };
+        let peaks = {
+            let mut g = Graph::default();
+            let mountain = g.add(
+                NodeKind::Mountain {
+                    style: MountainStyle::Alpine,
+                    x: 0.5,
+                    z: 0.5,
+                    radius: 520.0,
+                    height: 230.0,
+                    base: 50.0,
+                    detail: 0.6,
+                    seed: 8,
+                },
+                [0.0, 0.0],
+            );
+            let eroded = g.add(
+                NodeKind::Erosion {
+                    rain: 1.2,
+                    erosion: 0.35,
+                    deposition: 0.3,
+                    capacity: 4.0,
+                    evaporation: 0.02,
+                    radius: 4.0,
+                    seed: 3,
+                },
+                [220.0, 0.0],
+            );
+            let snow = g.add(
+                NodeKind::Snow {
+                    line: 190.0,
+                    slope: 42.0,
+                    depth: 2.0,
+                    softness: 14.0,
+                },
+                [440.0, 0.0],
+            );
+            let color = g.add(
+                NodeKind::AutoColor {
+                    palette: AutoPalette::Alpine,
+                    snow_line: 185.0,
+                    rock_slope: 36.0,
+                    seed: 2,
+                },
+                [660.0, 120.0],
+            );
+            let out = g.add(NodeKind::HeightOutput, [660.0, 0.0]);
+            let color_out = g.add(
+                NodeKind::ColorOutput {
+                    blocks: true,
+                    palette: BlockPalette::Natural,
+                },
+                [880.0, 120.0],
+            );
+            g.connect(mountain, 0, eroded, 0);
+            g.connect(eroded, 0, snow, 0);
+            g.connect(snow, 0, out, 0);
+            g.connect(snow, 0, color, 0);
+            g.connect(color, 0, color_out, 0);
+            g
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.state_mut().layout.active = 5;
+        for (k, (name, graph)) in [("moon", moon), ("canyon", canyon), ("peaks", peaks)].into_iter().enumerate() {
+            {
+                let app = h.state_mut();
+                app.doc.world.meta.graph = Some(graph);
+                app.graph.graph_replaced();
+                app.graph.preview = 512;
+            }
+            wait_for_graph(&mut h);
+            let (w, hgt, rgba) = h.state().graph.view.read_back().expect("the viewport rendered");
+            image::save_buffer(dir.join(format!("graph-{name}.png")), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+            if k == 0 {
+                h.render().unwrap().save(dir.join("graph-ui.png")).unwrap();
+            }
+        }
     }
 
     /// The game's real blocks: loaded from this computer's installation,
@@ -2544,6 +2835,14 @@ mod tests {
         h.state_mut().open_export_dialog();
         h.run_steps(5);
         h.render().unwrap().save(dir.join("dialog-export.png")).unwrap();
+        // Once laid out, the window keeps its size: it used to grow taller
+        // every frame.
+        let height = |h: &egui_kittest::Harness<'static, MassifApp>| h.ctx.memory(|m| m.area_rect(Id::unique("export"))).map(|r| r.height());
+        h.run_steps(10);
+        let first = height(&h).expect("the export window is shown");
+        h.run_steps(60);
+        let later = height(&h).expect("the export window is shown");
+        assert!(later < 1000.0 && (later - first).abs() < 1.0, "the export window went from {first} to {later} points high");
         if let Some(Dialog::Export(form)) = &mut h.state_mut().dialog {
             form.tab = ExportTab::World;
         }

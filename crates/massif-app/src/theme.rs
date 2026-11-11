@@ -41,7 +41,6 @@ pub struct Palette {
     pub success: Color32,
     /// Backdrop of the map and 3D canvases.
     pub canvas: Color32,
-    pub sky: Color32,
 }
 
 impl Palette {
@@ -58,7 +57,6 @@ impl Palette {
         danger: Color32::from_rgb(220, 38, 38),
         success: Color32::from_rgb(22, 163, 74),
         canvas: Color32::from_rgb(236, 236, 239),
-        sky: Color32::from_rgb(200, 222, 244),
     };
 
     pub const DARK: Palette = Palette {
@@ -74,7 +72,6 @@ impl Palette {
         danger: Color32::from_rgb(244, 84, 84),
         success: Color32::from_rgb(52, 199, 120),
         canvas: Color32::from_rgb(14, 14, 16),
-        sky: Color32::from_rgb(28, 36, 52),
     };
 
     pub fn of(ui: &egui::Ui) -> Palette {
