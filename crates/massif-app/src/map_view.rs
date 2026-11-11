@@ -575,6 +575,7 @@ impl MapView {
                 self.zoom_at(canvas, c, 0.5);
             }
             let mut log = self.zoom.log2();
+            ui.spacing_mut().interact_size.y = 16.0;
             let slider = egui::Slider::new(&mut log, MIN_ZOOM.log2()..=MAX_ZOOM.log2()).show_value(false);
             if ui.add_sized([90.0, 16.0], slider).changed() {
                 self.zoom = log.exp2();

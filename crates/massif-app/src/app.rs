@@ -7,11 +7,11 @@ use crate::layout::{AreaId, Dir, EditorKind, Layout, Node, Zone};
 use crate::map_render::MapCache;
 use crate::map_view::{MapInput, MapView};
 use crate::panels;
-use crate::theme::{self, Icon, Palette};
+use crate::theme::{self, Icon, Palette, RichTextExt};
 use crate::tools::{Tool, ToolState};
 use crate::view3d::View3d;
 use egui::{
-    Align, Align2, CornerRadius, CursorIcon, FontId, Id, Key, KeyboardShortcut, LayerId,
+    Align, Align2, Color32, CursorIcon, FontId, Id, Key, KeyboardShortcut, LayerId,
     Modifiers, Order, Rect, RichText, Sense, Stroke, StrokeKind, Ui, UiBuilder, ViewportCommand,
     pos2, vec2,
 };
@@ -22,8 +22,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-const HEADER: f32 = 32.0;
-const GAP: f32 = 5.0;
+const HEADER: f32 = 36.0;
+const GAP: f32 = 6.0;
 const MIN_AREA: f32 = 90.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -675,7 +675,7 @@ impl MassifApp {
                     self.dialog = Some(Dialog::About);
                 }
                 ui.separator();
-                ui.label(RichText::new("Shortcuts (as in WorldPainter)").strong());
+                ui.label(RichText::new("Shortcuts (as in WorldPainter)").bold());
                 for (keys, what) in [
                     ("Left / right button", "Apply the tool / its inverse (also Alt + left)"),
                     ("Scroll", "Brush size (Shift: one block at a time)"),
@@ -700,7 +700,7 @@ impl MassifApp {
                     });
                 }
                 ui.separator();
-                ui.label(RichText::new("3D view").strong());
+                ui.label(RichText::new("3D view").bold());
                 for (keys, what) in [
                     ("Left drag / right drag", "Turn the view / move it"),
                     ("Scroll, pinch", "Come closer / go back"),
@@ -778,31 +778,51 @@ impl MassifApp {
     fn workspace_tabs(&mut self, ui: &mut Ui) {
         let pal = Palette::of(ui);
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
+            // A segmented control: the workspaces in one pill.
             let mut remove = None;
-            for i in 0..self.layout.workspaces.len() {
-                let active = self.layout.active == i;
-                let name = self.layout.workspaces[i].name.clone();
-                let text = if active { RichText::new(name).strong() } else { RichText::new(name) };
-                let r = ui.selectable_label(active, text);
-                if r.clicked() {
-                    self.layout.active = i;
-                }
-                r.context_menu(|ui| {
-                    if ui.button("Duplicate").clicked() {
-                        self.layout.active = i;
-                        self.layout.duplicate_current();
-                    }
-                    if ui.add_enabled(self.layout.workspaces.len() > 1, egui::Button::new("Delete")).clicked() {
-                        remove = Some(i);
-                    }
+            egui::Frame::new()
+                .fill(pal.panel)
+                .stroke(Stroke::new(1.0, pal.border))
+                .corner_radius(10)
+                .inner_margin(egui::Margin::same(3))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        for i in 0..self.layout.workspaces.len() {
+                            let active = self.layout.active == i;
+                            let name = self.layout.workspaces[i].name.clone();
+                            let text = RichText::new(name).color(if active { pal.text } else { pal.weak });
+                            let button = egui::Button::new(if active { text.medium() } else { text })
+                                .fill(if active { pal.accent_soft } else { Color32::TRANSPARENT })
+                                .stroke(Stroke::NONE)
+                                .corner_radius(7)
+                                .min_size(vec2(0.0, 24.0));
+                            let r = ui.add(button);
+                            if r.clicked() {
+                                self.layout.active = i;
+                            }
+                            r.context_menu(|ui| {
+                                if ui.button("Duplicate").clicked() {
+                                    self.layout.active = i;
+                                    self.layout.duplicate_current();
+                                }
+                                if ui.add_enabled(self.layout.workspaces.len() > 1, egui::Button::new("Delete")).clicked() {
+                                    remove = Some(i);
+                                }
+                            });
+                        }
+                        let plus = egui::Button::new(RichText::new(theme::glyph(Icon::Plus).to_string()).color(pal.weak))
+                            .fill(Color32::TRANSPARENT)
+                            .stroke(Stroke::NONE)
+                            .corner_radius(7)
+                            .min_size(vec2(24.0, 24.0));
+                        if ui.add(plus).on_hover_text("New workspace (a copy of this one)").clicked() {
+                            self.layout.duplicate_current();
+                        }
+                    });
                 });
-            }
             if let Some(i) = remove {
                 self.layout.remove_workspace(i);
-            }
-            if ui.small_button(theme::glyph(Icon::Plus).to_string()).on_hover_text("New workspace (a copy of this one)").clicked() {
-                self.layout.duplicate_current();
             }
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                 ui.label(
@@ -821,9 +841,9 @@ impl MassifApp {
             if let Some(status) = &self.status {
                 let age = now - status.at;
                 if age < 12.0 || status.error {
-                    let color = if status.error { pal.danger } else { pal.text };
-                    let icon = if status.error { Icon::TriangleAlert } else { Icon::Check };
-                    ui.label(RichText::new(theme::with_icon(icon, &status.text)).color(color).size(12.0));
+                    let (icon, color) = if status.error { (Icon::TriangleAlert, pal.danger) } else { (Icon::CircleCheck, pal.success) };
+                    ui.label(RichText::new(theme::glyph(icon).to_string()).color(color).size(12.0));
+                    ui.label(RichText::new(&status.text).color(if status.error { pal.danger } else { pal.text }).size(12.0));
                     if let Some(path) = &status.reveal
                         && ui.small_button("Show in Finder").clicked() {
                             jobs::reveal(path);
@@ -953,19 +973,9 @@ impl MassifApp {
     fn area(&mut self, ui: &mut Ui, frame: &eframe::Frame, id: AreaId, editor: EditorKind, rect: Rect, shown: &HashSet<EditorKind>) {
         let pal = Palette::of(ui);
         let painter = ui.painter_at(rect.expand(1.0));
-        painter.rect(rect, 8, pal.panel, Stroke::new(1.0, pal.border), StrokeKind::Inside);
+        painter.rect(rect, 12, pal.panel, Stroke::new(1.0, pal.border), StrokeKind::Inside);
         let header = Rect::from_min_size(rect.min, vec2(rect.width(), HEADER));
-        painter.rect_filled(
-            header.shrink(1.0),
-            CornerRadius {
-                nw: 7,
-                ne: 7,
-                sw: 0,
-                se: 0,
-            },
-            pal.header,
-        );
-        painter.hline(header.x_range(), header.bottom(), Stroke::new(1.0, pal.border));
+        painter.hline(header.x_range().shrink(1.0), header.bottom(), Stroke::new(1.0, pal.border));
         let content = Rect::from_min_max(pos2(rect.min.x + 1.0, header.bottom() + 1.0), pos2(rect.max.x - 1.0, rect.max.y - 1.0));
         let maximized = self.layout.current().maximized == Some(id);
         let single = self.layout.current().root.count() == 1;
@@ -974,7 +984,7 @@ impl MassifApp {
         let mut hui = ui.new_child(
             UiBuilder::new()
                 .id_salt(("area header", id))
-                .max_rect(header.shrink2(vec2(6.0, 3.0)))
+                .max_rect(header.shrink2(vec2(8.0, 4.0)))
                 .layout(egui::Layout::left_to_right(Align::Center)),
         );
         hui.set_clip_rect(header.intersect(ui.clip_rect()));
@@ -990,7 +1000,7 @@ impl MassifApp {
             }
         });
         let title = hui
-            .add(egui::Label::new(RichText::new(editor.label()).strong()).sense(Sense::drag()).selectable(false))
+            .add(egui::Label::new(RichText::new(editor.label()).bold()).sense(Sense::drag()).selectable(false))
             .on_hover_cursor(CursorIcon::Grab);
         if title.drag_started() && !single {
             self.dragging_area = Some(id);
@@ -1229,7 +1239,7 @@ impl MassifApp {
                 ui.set_width(360.0);
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label(RichText::new(label).strong());
+                    ui.label(RichText::new(label).bold());
                 });
                 if let Some(f) = progress {
                     ui.add(egui::ProgressBar::new(f).show_percentage());
@@ -1256,7 +1266,7 @@ impl MassifApp {
                 let mut choice = None;
                 let response = egui::Modal::new(Id::unique("unsaved")).show(ctx, |ui| {
                     ui.set_width(380.0);
-                    ui.label(RichText::new(format!("Save the changes to “{}”?", self.doc.world.meta.name)).strong().size(15.0));
+                    ui.label(RichText::new(format!("Save the changes to “{}”?", self.doc.world.meta.name)).bold().size(15.0));
                     ui.label(RichText::new("Your changes will be lost if you don't save them.").color(Palette::of(ui).weak));
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
@@ -1264,7 +1274,7 @@ impl MassifApp {
                             choice = Some(1);
                         }
                         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                            if ui.button(RichText::new("Save").strong()).clicked() {
+                            if ui.add(theme::primary_button(ui, "Save")).clicked() {
                                 choice = Some(2);
                             }
                             if ui.button("Cancel").clicked() {
@@ -1301,7 +1311,7 @@ impl MassifApp {
                 let mut create = false;
                 let response = egui::Modal::new(Id::unique("new world")).show(ctx, |ui| {
                     ui.set_width(920.0);
-                    ui.label(RichText::new("Create New World").strong().size(16.0));
+                    ui.label(RichText::new("Create New World").bold().size(16.0));
                     ui.add_space(6.0);
                     ui.horizontal_top(|ui| {
                         ui.vertical(|ui| {
@@ -1317,7 +1327,7 @@ impl MassifApp {
                             if ui.button("Cancel").clicked() {
                                 keep = false;
                             }
-                            if ui.add(egui::Button::new(RichText::new("Create").strong()).fill(Palette::of(ui).accent_soft)).clicked() {
+                            if ui.add(theme::primary_button(ui, "Create")).clicked() {
                                 create = true;
                             }
                         });
@@ -1344,7 +1354,7 @@ impl MassifApp {
                 let response = egui::Modal::new(Id::unique("export")).show(ctx, |ui| {
                     ui.set_width(840.0);
                     let pal = Palette::of(ui);
-                    ui.label(RichText::new("Export to Minecraft").strong().size(16.0));
+                    ui.label(RichText::new("Export to Minecraft").bold().size(16.0));
                     ui.add_space(6.0);
                     ui.horizontal_top(|ui| {
                         ui.vertical(|ui| {
@@ -1385,7 +1395,7 @@ impl MassifApp {
                             }
                             let ok = !form.name.trim().is_empty() && (!exists || form.overwrite);
                             if ui
-                                .add_enabled(ok, egui::Button::new(RichText::new("Export").strong()).fill(pal.accent_soft))
+                                .add_enabled(ok, theme::primary_button(ui, "Export"))
                                 .clicked()
                             {
                                 start = Some(false);
@@ -1432,7 +1442,7 @@ impl MassifApp {
                 let response = egui::Modal::new(Id::unique("import report")).show(ctx, |ui| {
                     ui.set_width(520.0);
                     let pal = Palette::of(ui);
-                    ui.label(RichText::new(format!("Imported “{}”", report.name)).strong().size(16.0));
+                    ui.label(RichText::new(format!("Imported “{}”", report.name)).bold().size(16.0));
                     let origin: Vec<&str> = [report.saved_by.as_deref(), report.platform.as_deref()].into_iter().flatten().collect();
                     if !origin.is_empty() {
                         ui.label(RichText::new(origin.join(" · ")).size(11.5).color(pal.weak));
@@ -1497,7 +1507,7 @@ impl MassifApp {
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                            if ui.button(RichText::new("Save as .massif…").strong()).clicked() {
+                            if ui.add(theme::primary_button(ui, "Save as .massif…")).clicked() {
                                 save = true;
                             }
                             if ui.button("Close").clicked() {
@@ -1518,7 +1528,7 @@ impl MassifApp {
             Dialog::About => {
                 let response = egui::Modal::new(Id::unique("about")).show(ctx, |ui| {
                     ui.set_width(400.0);
-                    ui.label(RichText::new(format!("{}  Massif", theme::glyph(Icon::MountainSnow))).strong().size(18.0));
+                    ui.label(RichText::new(format!("{}  Massif", theme::glyph(Icon::MountainSnow))).bold().size(18.0));
                     ui.label(RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).color(Palette::of(ui).weak));
                     ui.add_space(6.0);
                     ui.label("A map editor for Minecraft worlds of any size: sculpt and paint in 2D on a multi-level surface (ground, overhangs, floating islands, caves), preview in 3D, export to Anvil.");
@@ -1569,9 +1579,9 @@ impl MassifApp {
         }
 
         let pal = Palette::of(ui);
-        let margin = if self.unified_titlebar { 7 } else { 4 };
+        let margin = if self.unified_titlebar { 9 } else { 6 };
         let bar = egui::Panel::top("menu bar")
-            .frame(egui::Frame::new().fill(pal.header).inner_margin(egui::Margin::symmetric(8, margin)).stroke(Stroke::new(1.0, pal.border)))
+            .frame(egui::Frame::new().fill(pal.app_bg).inner_margin(egui::Margin::symmetric(10, margin)))
             .show(ui, |ui| {
                 ui.horizontal(|ui| self.top_bar(ui));
             });
@@ -1579,13 +1589,13 @@ impl MassifApp {
             frame.set_traffic_lights_position(&ctx, bar.response.rect.y_range(), 14.0);
         }
         egui::Panel::top("workspaces")
-            .frame(egui::Frame::new().fill(pal.app_bg).inner_margin(egui::Margin { left: 8, right: 10, top: 5, bottom: 1 }))
+            .frame(egui::Frame::new().fill(pal.app_bg).inner_margin(egui::Margin { left: 10, right: 12, top: 0, bottom: 2 }))
             .show(ui, |ui| self.workspace_tabs(ui));
         egui::Panel::bottom("status bar")
-            .frame(egui::Frame::new().fill(pal.header).inner_margin(egui::Margin::symmetric(10, 4)).stroke(Stroke::new(1.0, pal.border)))
+            .frame(egui::Frame::new().fill(pal.app_bg).inner_margin(egui::Margin::symmetric(14, 5)))
             .show(ui, |ui| self.status_bar(ui));
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(pal.app_bg).inner_margin(egui::Margin::same(4)))
+            .frame(egui::Frame::new().fill(pal.app_bg).inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 0 }))
             .show(ui, |ui| self.dock(ui, frame));
 
         self.dialogs(&ctx);
@@ -1624,7 +1634,7 @@ impl eframe::App for MassifApp {
 fn card(ui: &mut Ui, title: &str, subtitle: &str, add: impl FnOnce(&mut Ui)) {
     let pal = Palette::of(ui);
     ui.add_space(4.0);
-    ui.label(RichText::new(title).strong());
+    ui.label(RichText::new(title).bold());
     if !subtitle.is_empty() {
         ui.label(RichText::new(subtitle).size(11.5).color(pal.weak));
     }

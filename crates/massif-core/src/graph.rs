@@ -543,18 +543,18 @@ impl Graph {
                 max: 90.0,
                 falloff: 6.0,
             },
-            [900.0, 170.0],
+            [900.0, 180.0],
         );
-        let rock_out = g.add(NodeKind::TerrainOutput { terrain: rock }, [1110.0, 170.0]);
+        let rock_out = g.add(NodeKind::TerrainOutput { terrain: rock }, [1110.0, 180.0]);
         let high = g.add(
             NodeKind::SelectHeight {
                 min: 205.0,
                 max: 400.0,
                 falloff: 12.0,
             },
-            [900.0, 280.0],
+            [900.0, 340.0],
         );
-        let snow_out = g.add(NodeKind::TerrainOutput { terrain: snow }, [1110.0, 280.0]);
+        let snow_out = g.add(NodeKind::TerrainOutput { terrain: snow }, [1110.0, 340.0]);
         // Only where soil really piled up.
         let heaps = g.add(
             NodeKind::Levels {
@@ -564,9 +564,9 @@ impl Graph {
                 out_max: 1.0,
                 gamma: 1.0,
             },
-            [900.0, 390.0],
+            [900.0, 500.0],
         );
-        let gravel_out = g.add(NodeKind::TerrainOutput { terrain: gravel }, [1110.0, 390.0]);
+        let gravel_out = g.add(NodeKind::TerrainOutput { terrain: gravel }, [1110.0, 500.0]);
         g.connect(base, 0, add, 0);
         g.connect(ridges, 0, add, 1);
         g.connect(add, 0, warp, 0);

@@ -5,7 +5,7 @@ use crate::brushes::{BrushLibrary, BrushSource};
 use crate::doc::Document;
 use crate::layout::EditorKind;
 use crate::map_render::ColumnSampler;
-use crate::theme::{self, Icon, Palette};
+use crate::theme::{self, Icon, Palette, RichTextExt};
 use crate::tools::{AnchorMode, SurfaceChoice, Tool, ToolState};
 use egui::{Align, Color32, CornerRadius, Rect, RichText, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use massif_core::compose::TileStack;
@@ -23,7 +23,7 @@ fn section(ui: &mut Ui, icon: Icon, title: &str) {
     ui.label(
         RichText::new(format!("{}  {}", theme::glyph(icon), title.to_uppercase()))
             .size(10.5)
-            .strong()
+            .bold()
             .color(pal.weak),
     );
 }
@@ -79,6 +79,8 @@ pub fn tools_panel(ui: &mut Ui, tools: &mut ToolState) {
 
 fn slider_row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> egui::Response) -> bool {
     ui.horizontal(|ui| {
+        // Slim sliders: the handle's size follows the row height.
+        ui.spacing_mut().interact_size.y = 18.0;
         let label = ui.add_sized([72.0, 18.0], egui::Label::new(label).truncate());
         add(ui).labelled_by(label.id).changed()
     })
@@ -91,7 +93,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
     let tool = tools.tool;
     ui.horizontal(|ui| {
         ui.label(RichText::new(theme::glyph(tool.icon()).to_string()).size(18.0).color(pal.accent));
-        ui.label(RichText::new(tool.label()).strong().size(14.0));
+        ui.label(RichText::new(tool.label()).bold().size(14.0));
     });
     hint(ui, tool.help());
 
@@ -129,7 +131,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
                 let (r, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
                 let (top, side) = terrain_colors(&doc.world.registry, tools.terrain);
                 cube_icon(ui.painter(), r, top, side);
-                ui.label(RichText::new(&def.name).strong());
+                ui.label(RichText::new(&def.name).bold());
             });
             hint(ui, "Choose terrains in the Terrain panel; Alt-click picks one from the map.");
         }
@@ -138,7 +140,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
             let def = reg.biome(BiomeId(tools.biome));
             ui.horizontal(|ui| {
                 swatch(ui, theme::rgb(def.color));
-                ui.label(RichText::new(&def.name).strong());
+                ui.label(RichText::new(&def.name).bold());
             });
             hint(ui, "Choose biomes in the Biomes panel. Automatic lets the exporter decide from the terrain and the water.");
         }
@@ -435,7 +437,7 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
             .image(texture, rect.shrink(4.0), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         ui.vertical(|ui| {
             ui.add_space(6.0);
-            ui.label(RichText::new(library.name(&tools.brush_source)).strong().size(14.0));
+            ui.label(RichText::new(library.name(&tools.brush_source)).bold().size(14.0));
             let kind = match tools.brush_source {
                 BrushSource::Symmetric(..) => "Built-in brush",
                 BrushSource::Stamp(_) => "Terrain stamp",
@@ -475,7 +477,7 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
     let f = &mut tools.filter;
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Options").strong());
+        ui.label(RichText::new("Options").bold());
         if f.is_active() {
             ui.label(RichText::new(theme::glyph(Icon::Funnel).to_string()).color(pal.accent))
                 .on_hover_text("A filter is on: the brushes only act where it lets them");
@@ -815,7 +817,7 @@ pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &Registry, solo: &
             continue;
         }
         ui.add_space(4.0);
-        ui.label(RichText::new(group.to_uppercase()).size(10.5).strong().color(pal.weak));
+        ui.label(RichText::new(group.to_uppercase()).size(10.5).bold().color(pal.weak));
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
             for (i, def) in members {
@@ -849,7 +851,7 @@ pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &Registry, solo: &
     }
     ui.add_space(6.0);
     ui.separator();
-    ui.label(RichText::new(&reg.terrain(TerrainId(tools.terrain)).name).strong());
+    ui.label(RichText::new(&reg.terrain(TerrainId(tools.terrain)).name).bold());
     hint(ui, &describe_terrain(reg, tools.terrain));
     solo_changed || (*solo && picked.is_some())
 }
@@ -972,7 +974,7 @@ pub fn levels_panel(ui: &mut Ui, doc: &mut Document, rename: &mut Option<(usize,
                         }
                     }
                     _ => {
-                        let label = egui::Label::new(RichText::new(&name).strong().color(if visible { pal.text } else { pal.weak }))
+                        let label = egui::Label::new(RichText::new(&name).bold().color(if visible { pal.text } else { pal.weak }))
                             .sense(Sense::click())
                             .truncate();
                         let r = ui.add(label).on_hover_text(format!("{} level · {tiles} tiles · double-click to rename", kind.label()));
@@ -1119,7 +1121,7 @@ pub fn info_panel(ui: &mut Ui, doc: &mut Document, hover: Option<(i32, i32)>, ca
 
 fn column_info(ui: &mut Ui, doc: &Document, x: i32, z: i32) {
     let pal = Palette::of(ui);
-    ui.label(RichText::new(format!("Column {x}, {z}")).strong());
+    ui.label(RichText::new(format!("Column {x}, {z}")).bold());
     let dim = doc.dimension();
     let Some(stack) = TileStack::new(dim, TilePos::containing(x, z), true) else {
         hint(ui, "Outside the map");
@@ -1179,7 +1181,7 @@ pub fn empty_area(ui: &mut Ui, shown: &HashSet<EditorKind>) -> Option<EditorKind
     let mut picked = None;
     ui.vertical_centered(|ui| {
         ui.add_space((ui.available_height() * 0.28).max(12.0));
-        ui.label(RichText::new("What should this area show?").strong().size(15.0));
+        ui.label(RichText::new("What should this area show?").bold().size(15.0));
         ui.add_space(4.0);
         ui.label(
             RichText::new(

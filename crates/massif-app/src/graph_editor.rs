@@ -10,7 +10,7 @@
 //! - The selected node's settings and a larger preview are on the right.
 
 use crate::doc::Document;
-use crate::theme::{self, Icon, Palette};
+use crate::theme::{self, Icon, Palette, RichTextExt};
 use egui::{Color32, ColorImage, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, Vec2, pos2, vec2};
 use massif_core::graph::{CellStyle, CombineOp, Extent, Family, Graph, GraphError, NodeId, NodeKind, NoiseStyle, Outputs};
 use massif_core::registry::{Registry, TerrainId};
@@ -269,7 +269,7 @@ impl GraphEditor {
                     cancel.store(true, Ordering::Relaxed);
                 }
             } else if ui
-                .add(egui::Button::new(RichText::new(format!("{}  Build and apply", theme::glyph(Icon::Play))).strong()).fill(pal.accent_soft))
+                .add(theme::primary_button(ui, format!("{}  Build and apply", theme::glyph(Icon::Play))))
                 .on_hover_text("Build the graph at the chosen resolution over the whole map, and write the heights and terrains to the ground (undoable)")
                 .clicked()
             {
@@ -423,7 +423,7 @@ impl GraphEditor {
         background.context_menu(|ui| {
             let at = menu_at.unwrap_or(canvas.center());
             let pos = (at - canvas.min - self.pan) / self.zoom;
-            ui.label(RichText::new("Add a node").strong());
+            ui.label(RichText::new("Add a node").bold());
             for family in [Family::Generator, Family::Modifier, Family::Erosion, Family::Combiner, Family::Selector, Family::Output] {
                 let name = match family {
                     Family::Generator => "Generators",
@@ -481,32 +481,37 @@ impl GraphEditor {
             let node = graph.node(id).expect("listed").clone();
             let rect = rects[&id];
             let family_color = match node.kind.family() {
-                Family::Generator => Color32::from_rgb(64, 132, 96),
-                Family::Modifier => Color32::from_rgb(70, 110, 170),
-                Family::Erosion => Color32::from_rgb(150, 104, 60),
-                Family::Combiner => Color32::from_rgb(120, 90, 160),
-                Family::Selector => Color32::from_rgb(160, 140, 60),
-                Family::Output => Color32::from_rgb(170, 70, 70),
+                Family::Generator => Color32::from_rgb(52, 199, 120),
+                Family::Modifier => Color32::from_rgb(76, 141, 255),
+                Family::Erosion => Color32::from_rgb(245, 140, 60),
+                Family::Combiner => Color32::from_rgb(168, 120, 255),
+                Family::Selector => Color32::from_rgb(240, 196, 60),
+                Family::Output => Color32::from_rgb(244, 84, 120),
             };
             let selected = self.selected == Some(id);
-            painter.rect(rect, 6, pal.panel, Stroke::new(if selected { 2.0 } else { 1.0 }, if selected { pal.accent } else { pal.border }), StrokeKind::Inside);
-            let header = Rect::from_min_size(rect.min, vec2(rect.width(), HEADER * self.zoom));
-            painter.rect_filled(
-                header.shrink(1.0),
-                egui::CornerRadius { nw: 5, ne: 5, sw: 0, se: 0 },
-                family_color,
+            // A card with a coloured dot for its family, as on node canvases
+            // of current tools.
+            painter.rect(
+                rect,
+                10,
+                pal.header,
+                Stroke::new(if selected { 1.5 } else { 1.0 }, if selected { pal.accent } else { pal.border }),
+                StrokeKind::Inside,
             );
+            let header = Rect::from_min_size(rect.min, vec2(rect.width(), HEADER * self.zoom));
+            painter.hline(header.x_range().shrink(1.0), header.bottom(), Stroke::new(1.0, pal.border));
+            painter.circle_filled(header.left_center() + vec2(11.0 * self.zoom, 0.0), 3.5 * self.zoom, family_color);
             let title = match &node.kind {
                 NodeKind::TerrainOutput { terrain } => format!("{} · {}", node.kind.label(), reg.terrain(TerrainId(*terrain)).name),
                 NodeKind::Combine { op, .. } => format!("{} · {}", node.kind.label(), op.label()),
                 _ => node.kind.label().to_owned(),
             };
             painter.text(
-                header.left_center() + vec2(8.0 * self.zoom, 0.0),
+                header.left_center() + vec2(20.0 * self.zoom, 0.0),
                 egui::Align2::LEFT_CENTER,
                 title,
                 egui::FontId::proportional(12.0 * self.zoom),
-                Color32::WHITE,
+                pal.text,
             );
             // Drag the node by its header; click it to select it.
             let handle = ui.interact(header, ui.scope_id().with(("graph node", id)), Sense::click_and_drag());
@@ -530,7 +535,7 @@ impl GraphEditor {
             for (k, name) in node.kind.inputs().iter().enumerate() {
                 let p = self.input_pos(rect, k);
                 let wired = graph.input_of(id, k as u8).is_some();
-                painter.circle(p, r, if wired { pal.accent } else { pal.panel }, Stroke::new(1.5, pal.accent));
+                painter.circle(p, r, if wired { pal.text } else { pal.header }, Stroke::new(1.5, pal.weak));
                 painter.text(p + vec2(9.0 * self.zoom, 0.0), egui::Align2::LEFT_CENTER, *name, egui::FontId::proportional(11.0 * self.zoom), pal.text);
                 let port = ui.interact(Rect::from_center_size(p, vec2(16.0, 16.0) * self.zoom.max(0.7)), ui.scope_id().with(("in", id, k)), Sense::click());
                 if port.clicked() && wired {
@@ -545,7 +550,7 @@ impl GraphEditor {
             }
             for (k, name) in node.kind.outputs().iter().enumerate() {
                 let p = self.output_pos(rect, k);
-                painter.circle(p, r, pal.accent, Stroke::new(1.5, pal.accent));
+                painter.circle(p, r, pal.text, Stroke::new(1.5, pal.weak));
                 painter.text(p - vec2(9.0 * self.zoom, 0.0), egui::Align2::RIGHT_CENTER, *name, egui::FontId::proportional(11.0 * self.zoom), pal.text);
                 let port = ui.interact(Rect::from_center_size(p, vec2(16.0, 16.0) * self.zoom.max(0.7)), ui.scope_id().with(("out", id, k)), Sense::drag());
                 if port.drag_started() {
@@ -605,7 +610,7 @@ impl GraphEditor {
     fn inspector(&mut self, ui: &mut Ui, graph: &mut Graph, reg: &Registry) {
         let pal = Palette::of(ui);
         let Some(id) = self.selected.filter(|id| graph.node(*id).is_some()) else {
-            ui.label(RichText::new("Terrain graph").strong().size(14.0));
+            ui.label(RichText::new("Terrain graph").bold().size(14.0));
             ui.label(
                 RichText::new(
                     "Build terrain from nodes, as in World Machine or Gaea: generators make relief, modifiers and erosion shape it, \
@@ -617,7 +622,7 @@ impl GraphEditor {
             return;
         };
         let node = graph.node_mut(id).expect("checked");
-        ui.label(RichText::new(node.kind.label()).strong().size(14.0));
+        ui.label(RichText::new(node.kind.label()).bold().size(14.0));
         ui.add_space(4.0);
         edit_kind(ui, &mut node.kind, reg);
         let outputs = node.kind.outputs();
