@@ -2554,7 +2554,7 @@ mod tests {
         h.state_mut().graph.resolution = 512;
         {
             use egui_kittest::kittest::Queryable;
-            h.get_by_label_contains("Convert to Minecraft").click();
+            h.get_by_label_contains("Convert to voxels").click();
         }
         let started = std::time::Instant::now();
         while h.state().doc.history.undo_label() != Some("Terrain graph") {
@@ -2828,6 +2828,47 @@ mod tests {
         let (w, hgt, rgba) = h.state_mut().graph.view.render_image([1280, 720]).expect("an image");
         assert_eq!((w, hgt), (1280, 720));
         image::save_buffer(dir.join("graph-render.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+    }
+
+    /// The templates: the picker with their pictures, a card replacing the
+    /// graph, and every template in the viewport with its own sky. Needs a
+    /// GPU: runs with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn templates_render() {
+        use massif_core::graph::{NodeKind, Template};
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.state_mut().layout.activate(6);
+        h.run_steps(2);
+        h.state_mut().graph.open_templates();
+        let started = std::time::Instant::now();
+        while h.state().graph.pictures_ready() < Template::ALL.len() {
+            assert!(started.elapsed().as_secs() < 60, "the pictures were not made");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        h.run_steps(3);
+        h.render().unwrap().save(dir.join("graph-templates.png")).unwrap();
+        {
+            use egui_kittest::kittest::Queryable;
+            h.get_by_label("Archipelago").click();
+        }
+        h.run_steps(3);
+        let graph = h.state().doc.world.meta.graph.clone().expect("a graph");
+        assert!(graph.nodes.iter().any(|n| matches!(n.kind, NodeKind::Sea { .. })), "the archipelago replaced the graph");
+        for t in Template::ALL {
+            {
+                let app = h.state_mut();
+                app.graph.preview = 512;
+                app.graph.use_template(&mut app.doc, t);
+            }
+            wait_for_graph(&mut h);
+            let (w, hgt, rgba) = h.state().graph.view.read_back().expect("the viewport rendered");
+            let name = t.label().to_lowercase().replace(' ', "-");
+            image::save_buffer(dir.join(format!("template-{name}.png")), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+        }
     }
 
     /// The game's real blocks: loaded from this computer's installation,

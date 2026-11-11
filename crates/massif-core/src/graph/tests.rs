@@ -721,3 +721,36 @@ fn build_of_the_starter_graph() {
     apply(&mut h.edit(&mut world, 0), &ext, &out, 1, &palette);
     eprintln!("written to the map: {:.1} s", started.elapsed().as_secs_f32());
 }
+
+/// Every template builds, within the world's heights, and looks like what
+/// it says: islands in a sea, pillars, a river, dunes without water…
+#[test]
+fn templates_make_their_landscapes() {
+    let reg = crate::registry::Registry::vanilla();
+    let sea = 62.0;
+    let ext = Extent {
+        x0: -1024.0,
+        z0: -1024.0,
+        size: 2048.0,
+        n: 192,
+    };
+    for t in Template::ALL {
+        let g = t.graph(&reg, sea, 2048.0);
+        let out = g.build(&ext, &AtomicBool::new(false)).unwrap_or_else(|e| panic!("{}: {e}", t.label()));
+        let h = out.heights.expect("a height output");
+        assert!(out.colors.is_some(), "{}: no colours", t.label());
+        let (lo, hi) = h.range();
+        assert!(lo > -64.0 && hi < 320.0, "{}: heights {lo}..{hi}", t.label());
+        let wet = h.data.iter().filter(|&&v| v < sea).count() as f32 / h.data.len() as f32;
+        let steep = ops::slope_degrees(&h, ext.spacing()).data.iter().filter(|&&s| s > 60.0).count() as f32 / h.data.len() as f32;
+        eprintln!("{:16} heights {lo:6.1}..{hi:6.1}, {:4.1} % under the sea, {:4.1} % steeper than 60°", t.label(), wet * 100.0, steep * 100.0);
+        match t {
+            Template::Archipelago => assert!((0.35..0.85).contains(&wet), "islands in a sea: {wet}"),
+            Template::VolcanicIsland => assert!(wet > 0.3 && hi > sea + 120.0, "a high island: {wet}, {hi}"),
+            Template::KarstTowers => assert!(steep > 0.01 && hi > sea + 100.0, "pillars: {steep}, {hi}"),
+            Template::RiverValley | Template::DesertCanyon => assert!(wet > 0.001 && wet < 0.2, "a river: {wet}"),
+            Template::DuneSea => assert_eq!(wet, 0.0, "no water in the desert"),
+            Template::Alpine | Template::RollingHills => assert!(wet < 0.5, "mostly land: {wet}"),
+        }
+    }
+}

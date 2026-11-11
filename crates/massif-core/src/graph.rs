@@ -25,8 +25,10 @@ mod color;
 mod landforms;
 mod ops;
 mod sim;
+mod templates;
 
 pub use color::{AutoPalette, BlockPalette, GradientPreset, decode as decode_srgb, encode as encode_srgb};
+pub use templates::Template;
 
 use crate::codec::snap_height;
 use crate::compose::hash2;

@@ -34,10 +34,12 @@ over every CPU core.
   volcanoes, craters and crater fields, dunes, canyons, mesas, islands),
   primitives, adjustments, simulations (water and thermal erosion, snow,
   rivers, lakes, sea), masks and colour (gradients from nature, automatic
-  colouring, tints) — rendered with a sun you turn, a sky that follows it,
-  volumetric clouds, haze and a sea, saved as images up to 8K, then built at
-  up to 16,384 × 16,384 and converted to the map, the colours becoming the
-  closest real Minecraft blocks.
+  colouring, tints), eight landscapes to start from (archipelago, karst
+  towers, river valley, desert canyon, volcanic island…) — rendered with a
+  sun you turn, a sky that follows it, volumetric clouds, haze and a sea,
+  saved as images up to 8K, then built at up to 16,384 × 16,384 and
+  converted to voxels, the colours becoming the closest real Minecraft
+  blocks.
 - **The game's real blocks.** Every block of the Minecraft version you have
   installed (1,288 in 26.3) is read from the game itself, with its real
   textures and colours: terrains show the actual blocks, and any whole block
@@ -207,6 +209,25 @@ Settings** beside it, as when a Gaea terrain is rendered in Blender:
 In the viewport, left drag turns the view, right or middle drag moves it,
 the wheel or a pinch comes closer, a double-click frames the relief.
 
+**Templates** (in the graph's toolbar) start from a ready-made landscape,
+each an ordinary graph to change, shown with a picture of what it makes on
+this map:
+
+| Template | What it makes |
+|---|---|
+| Alpine range | Eroded peaks over green hills, snow on the summits (the starter graph) |
+| Archipelago | Tropical islands in a shallow sea, sandy beaches, green and rocky peaks |
+| Karst towers | Sheer stone pillars with green tops and mossy walls over a jungle crossed by rivers, low clouds between them |
+| River valley | A wide valley between snowy ridged mountains, a river along its floor |
+| Desert canyon | A winding, stepped canyon in a red plateau, buttes, a river at the bottom |
+| Volcanic island | A volcano rising from the sea, black beaches, green lower slopes |
+| Dune sea | Long dunes shaped by the wind, ripples over them |
+| Rolling hills | Meadows, streams and ponds |
+
+Templates follow the world: their sea is the world's sea level, and their
+features grow with the map. Each also sets the sun, the clouds and the sea
+of the viewport to suit it. "Back to the previous graph" undoes the choice.
+
 Right-click the graph or press Tab or Space to open the node library and
 type to search; drop a wire on empty space to add a node already wired.
 Ports and wires are coloured by what they carry: heights, masks or colours.
@@ -224,7 +245,7 @@ setting computes only that node and what follows it.
 | Colour | Auto colour (eight kinds of land), Gradient (twenty gradients from nature), Solid colour, Mix colours, Tint, Adjust colour |
 | Output | Height output, Terrain output, Colour output |
 
-**Convert to Minecraft** builds the graph over the whole map at the chosen
+**Convert to voxels** builds the graph over the whole map at the chosen
 resolution (512 to 16,384 samples per side; it starts at one block per
 sample) on another thread, showing which node it is at, then writes it to
 the ground as one undoable step: the heights; the colour output turned
@@ -379,7 +400,7 @@ Two environment variables enable the heavier tests:
 - `MASSIF_SNAPSHOT_DIR=<folder>` renders the whole window offscreen (with
   egui_kittest and wgpu), the map, the 3D view, the brush panels, the
   dialogs, the terrain graph and its viewport (a cratered moon, a desert
-  canyon, snowy peaks under clouds) and the real blocks to PNG files in that folder, and
+  canyon, snowy peaks under clouds, every template) and the real blocks to PNG files in that folder, and
   drives the editor with simulated mouse strokes, 3D sculpting, area
   splitting, converting a terrain graph to the map and painting a real
   block. The real

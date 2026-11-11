@@ -18,12 +18,12 @@
 
 use crate::blocks::BlockLibrary;
 use crate::doc::Document;
-use crate::terrain_view::{TerrainView, ViewData, occlusion};
+use crate::terrain_view::{RenderSettings, TerrainView, ViewData, occlusion};
 use crate::theme::{self, Icon, Palette, RichTextExt};
 use egui::{Color32, ColorImage, Key, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, Vec2, pos2, vec2};
 use massif_core::graph::{
     AutoPalette, Bend, BlockPalette, CellStyle, ColorField, CombineOp, EvalCache, Evaluation, Extent, Family, Field, GradientPreset, Graph, GraphError,
-    MountainStyle, NodeId, NodeKind, NoiseStyle, Outputs, PortType, Progress, ShapeKind, TintMode, Value,
+    MountainStyle, NodeId, NodeKind, NoiseStyle, Outputs, PortType, Progress, ShapeKind, Template, TintMode, Value,
 };
 use massif_core::registry::{Registry, TerrainId};
 use massif_core::{BlockRect, TILE_SIZE};
@@ -351,6 +351,144 @@ struct Library {
     focus: bool,
 }
 
+// ------------------------------------------------------------- templates --
+
+/// How a template's landscape is best seen: its sun, sky, clouds and sea.
+fn template_render(t: Template, sea: f32, exaggeration: f32) -> RenderSettings {
+    let d = RenderSettings {
+        exaggeration,
+        ..RenderSettings::default()
+    };
+    let clouds = |cover: f32, base: f32, thickness: f32, size: f32| RenderSettings {
+        clouds: true,
+        cloud_cover: cover,
+        cloud_base: sea + base,
+        cloud_thickness: thickness,
+        cloud_size: size,
+        ..d
+    };
+    match t {
+        Template::Alpine => clouds(0.38, 170.0, 80.0, 300.0),
+        Template::Archipelago => RenderSettings {
+            sea: true,
+            sun_azimuth: 210.0,
+            sun_elevation: 52.0,
+            haze: 0.35,
+            ..clouds(0.32, 110.0, 50.0, 200.0)
+        },
+        Template::KarstTowers => RenderSettings {
+            sea: true,
+            cloud_density: 1.3,
+            sun_azimuth: 115.0,
+            sun_elevation: 32.0,
+            haze: 0.7,
+            ..clouds(0.5, 55.0, 45.0, 150.0)
+        },
+        Template::RiverValley => RenderSettings {
+            sea: true,
+            sun_azimuth: 140.0,
+            sun_elevation: 26.0,
+            haze: 0.4,
+            ..clouds(0.36, 190.0, 70.0, 280.0)
+        },
+        Template::DesertCanyon => RenderSettings {
+            sea: true,
+            sun_azimuth: 250.0,
+            sun_elevation: 9.0,
+            haze: 0.4,
+            ..d
+        },
+        Template::VolcanicIsland => RenderSettings {
+            sea: true,
+            sun_azimuth: 300.0,
+            sun_elevation: 30.0,
+            haze: 0.45,
+            ..clouds(0.42, 150.0, 70.0, 240.0)
+        },
+        Template::DuneSea => RenderSettings {
+            sun_azimuth: 100.0,
+            sun_elevation: 12.0,
+            haze: 0.5,
+            ..d
+        },
+        Template::RollingHills => RenderSettings {
+            sea: true,
+            sun_azimuth: 200.0,
+            sun_elevation: 45.0,
+            ..clouds(0.45, 130.0, 70.0, 260.0)
+        },
+    }
+}
+
+/// A small picture of what a template makes: its colours shaded by its
+/// relief, the sea over what lies under it.
+fn template_picture(t: Template, reg: &Registry, sea: f32, extent: &Extent) -> Option<ColorImage> {
+    let graph = t.graph(reg, sea, extent.size as f32);
+    let out = graph.build(extent, &AtomicBool::new(false)).ok()?;
+    let h = out.heights?;
+    let colors = out.colors.map(|(c, _)| c);
+    let n = h.n;
+    let spacing = extent.spacing();
+    let light = {
+        let l = [-0.6f32, 0.75, -0.45];
+        let k = (l[0] * l[0] + l[1] * l[1] + l[2] * l[2]).sqrt();
+        l.map(|v| v / k)
+    };
+    let water = [0.03f32, 0.16, 0.28].map(|v| v * 0.8);
+    let mut rgb = Vec::with_capacity(n * n * 3);
+    for j in 0..n {
+        for i in 0..n {
+            let v = h.at(i, j);
+            let dx = (h.at(i + 1, j) - h.at(i.saturating_sub(1), j)) / (2.0 * spacing);
+            let dz = (h.at(i, j + 1) - h.at(i, j.saturating_sub(1))) / (2.0 * spacing);
+            let k = (dx * dx + 1.0 + dz * dz).sqrt();
+            let lit = ((-dx * light[0] + light[1] - dz * light[2]) / k).max(0.0);
+            let shade = 0.25 + 0.95 * lit;
+            let base = colors.as_ref().map_or([0.4, 0.4, 0.4], |c| c.linear(j * n + i));
+            let mut c = base.map(|b| b * shade);
+            if v < sea {
+                let deep = 0.55 + 0.4 * ((sea - v) / 24.0).min(1.0);
+                c = [0, 1, 2].map(|k| c[k] + (water[k] - c[k]) * deep);
+            }
+            rgb.extend(c.map(massif_core::graph::encode_srgb));
+        }
+    }
+    Some(ColorImage::from_rgb([n, n], &rgb))
+}
+
+/// The pictures of the templates, made on another thread for the map they
+/// show.
+#[derive(Default)]
+struct TemplatePictures {
+    /// The world (its generation), sea and size they were made for.
+    made_for: Option<(u64, i32, u64)>,
+    rx: Option<Receiver<(Template, ColorImage)>>,
+    textures: HashMap<Template, TextureHandle>,
+}
+
+/// A template in the picker: its picture, name and what it is.
+fn template_card(ui: &mut Ui, t: Template, picture: Option<&TextureHandle>, pal: &Palette) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(300.0, 78.0), Sense::click());
+    let painter = ui.painter_at(rect);
+    let fill = if response.hovered() { pal.accent_soft } else { pal.panel };
+    painter.rect(rect, 9.0, fill, Stroke::new(1.0, pal.border), StrokeKind::Inside);
+    let pic = Rect::from_min_size(rect.min + vec2(7.0, 7.0), vec2(64.0, 64.0));
+    match picture {
+        Some(tex) => {
+            egui::Image::new(tex).corner_radius(6).paint_at(ui, pic);
+        }
+        None => {
+            painter.rect_filled(pic, 6.0, pal.border);
+        }
+    }
+    let text = Rect::from_min_max(pos2(pic.right() + 10.0, rect.top() + 9.0), rect.max - vec2(8.0, 6.0));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text).layout(egui::Layout::top_down(egui::Align::Min)));
+    child.spacing_mut().item_spacing.y = 2.0;
+    child.add(egui::Label::new(RichText::new(t.label()).size(13.5).color(pal.text).medium()).selectable(false));
+    child.add(egui::Label::new(RichText::new(t.description()).size(11.5).color(pal.weak)).selectable(false));
+    response.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 // ----------------------------------------------------------------- editor --
 
 pub struct GraphEditor {
@@ -391,6 +529,13 @@ pub struct GraphEditor {
     saved: Option<Result<String, String>>,
     /// The last canvas rectangle, for keyboard actions.
     canvas: Rect,
+    /// The template picker is open, under this point.
+    templates_open: bool,
+    templates_at: Pos2,
+    templates_up: bool,
+    pictures: TemplatePictures,
+    /// The graph a template replaced, to go back to.
+    replaced: Option<Graph>,
 }
 
 impl Default for GraphEditor {
@@ -422,6 +567,11 @@ impl Default for GraphEditor {
             image_size: [3840, 2160],
             saved: None,
             canvas: Rect::NOTHING,
+            templates_open: false,
+            templates_at: Pos2::ZERO,
+            templates_up: false,
+            pictures: TemplatePictures::default(),
+            replaced: None,
         }
     }
 }
@@ -763,7 +913,7 @@ impl GraphEditor {
                     doc.commit();
                     let blocks_note = if palette.is_empty() { String::new() } else { format!(", in {} kinds of blocks", palette.len()) };
                     feedback = Some(format!(
-                        "Converted the graph to the map at {} × {} in {took:.1} s{blocks_note}",
+                        "Converted the graph to voxels at {} × {} in {took:.1} s{blocks_note}",
                         built.extent.n, built.extent.n
                     ));
                 }
@@ -773,6 +923,7 @@ impl GraphEditor {
         }
 
         // ---- toolbar ---------------------------------------------------------
+        let mut toggled = false;
         ui.horizontal(|ui| {
             ui.add_space(6.0);
             if let Some(b) = &self.build {
@@ -792,7 +943,7 @@ impl GraphEditor {
                 }
                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
             } else if ui
-                .add(theme::primary_button(ui, format!("{}  Convert to Minecraft", theme::glyph(Icon::Pickaxe))))
+                .add(theme::primary_button(ui, format!("{}  Convert to voxels", theme::glyph(Icon::Boxes))))
                 .on_hover_text("Build the graph over the whole map at the chosen resolution, and write it to the ground: heights, terrains, and the colours as the closest real blocks (undoable)")
                 .clicked()
             {
@@ -850,14 +1001,22 @@ impl GraphEditor {
                 ui.label(RichText::new(format!("{:.0} ms", self.preview_ms)).size(11.5).color(pal.weak));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("Start over").on_hover_text("Replace the graph by the starter one").clicked() {
-                    doc.world.meta.graph = None;
-                    graph = graph_of(doc);
-                    self.revision += 1;
-                    self.selected = None;
-                    self.pinned = None;
-                    self.fit = true;
+                let button = ui
+                    .add(egui::Button::new(theme::with_icon(Icon::LayoutTemplate, "Templates")).selected(self.templates_open))
+                    .on_hover_text("Start from a ready-made landscape: an archipelago, karst towers, a river valley, a canyon…");
+                if button.clicked() {
+                    self.templates_open = !self.templates_open;
+                    toggled = true;
                 }
+                // Under the button, or over it when the window has no room
+                // below.
+                let room = ui.ctx().content_rect().bottom() - button.rect.bottom();
+                self.templates_up = room < 440.0;
+                self.templates_at = if self.templates_up {
+                    button.rect.right_top() - vec2(0.0, 6.0)
+                } else {
+                    button.rect.right_bottom() + vec2(0.0, 6.0)
+                };
                 if ui.small_button(theme::with_icon(Icon::Maximize, "Fit")).on_hover_text("Show the whole graph (F)").clicked() {
                     self.fit = true;
                 }
@@ -876,6 +1035,10 @@ impl GraphEditor {
         });
         ui.separator();
 
+        if self.templates_open {
+            self.templates_ui(ui, doc, &mut graph, toggled, &mut feedback);
+        }
+
         let canvas = ui.available_rect_before_wrap();
         self.canvas = canvas;
         self.canvas(ui, canvas, &mut graph, &doc.world.registry);
@@ -884,6 +1047,134 @@ impl GraphEditor {
             self.store(doc, graph);
         }
         feedback
+    }
+
+    /// The template picker, over the graph.
+    fn templates_ui(&mut self, ui: &mut Ui, doc: &Document, graph: &mut Graph, toggled: bool, feedback: &mut Option<String>) {
+        self.make_pictures(ui.ctx(), doc);
+        let pal = Palette::of(ui);
+        let mut chosen = None;
+        let mut back = false;
+        let area = egui::Area::new(ui.scope_id().with("templates"))
+            .order(egui::Order::Foreground)
+            .pivot(if self.templates_up { egui::Align2::RIGHT_BOTTOM } else { egui::Align2::RIGHT_TOP })
+            .fixed_pos(self.templates_at)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(12)).show(ui, |ui| {
+                    ui.label(RichText::new("Start from a landscape").size(14.0).medium());
+                    ui.label(
+                        RichText::new("Replaces the graph, and sets the sun, clouds and sea of the view to suit it.")
+                            .size(11.5)
+                            .color(pal.weak),
+                    );
+                    ui.add_space(6.0);
+                    egui::Grid::new("template cards").spacing([8.0, 8.0]).show(ui, |ui| {
+                        for (k, t) in Template::ALL.into_iter().enumerate() {
+                            if template_card(ui, t, self.pictures.textures.get(&t), &pal).clicked() {
+                                chosen = Some(t);
+                            }
+                            if k % 2 == 1 {
+                                ui.end_row();
+                            }
+                        }
+                    });
+                    if self.replaced.is_some() {
+                        ui.add_space(4.0);
+                        if ui
+                            .button(theme::with_icon(Icon::Undo2, "Back to the previous graph"))
+                            .on_hover_text("The graph the last template replaced")
+                            .clicked()
+                        {
+                            back = true;
+                        }
+                    }
+                });
+            });
+        let escape = ui.input(|i| i.key_pressed(Key::Escape));
+        if (area.response.clicked_elsewhere() && !toggled) || escape {
+            self.templates_open = false;
+        }
+        if let Some(t) = chosen {
+            self.start_from(doc, t, graph);
+            *feedback = Some(format!("Started from the {} template", t.label()));
+        }
+        if back && let Some(previous) = self.replaced.take() {
+            self.replaced = Some(std::mem::replace(graph, previous));
+            self.selected = None;
+            self.pinned = None;
+            self.fit = true;
+            self.templates_open = false;
+        }
+    }
+
+    /// Replace `graph` by a template's, and set the view to suit it.
+    fn start_from(&mut self, doc: &Document, t: Template, graph: &mut Graph) {
+        let sea = doc.world.meta.sea_level as f32;
+        let side = map_extent(doc, 2).size as f32;
+        let new = t.graph(&doc.world.registry, sea, side);
+        self.replaced = Some(std::mem::replace(graph, new));
+        self.view.render = template_render(t, sea, self.view.render.exaggeration);
+        self.view.camera = Default::default();
+        self.selected = None;
+        self.pinned = None;
+        self.fit = true;
+        self.templates_open = false;
+    }
+
+    /// Start drawing the templates' pictures for this map, and take those
+    /// that are ready.
+    fn make_pictures(&mut self, ctx: &egui::Context, doc: &Document) {
+        let sea = doc.world.meta.sea_level;
+        let extent = map_extent(doc, 112);
+        let key = (doc.generation, sea, extent.size.to_bits());
+        let p = &mut self.pictures;
+        if p.made_for != Some(key) {
+            p.made_for = Some(key);
+            p.textures.clear();
+            let (tx, rx) = channel();
+            let reg = doc.world.registry.clone();
+            let ctx = ctx.clone();
+            std::thread::Builder::new()
+                .name("massif template pictures".into())
+                .spawn(move || {
+                    for t in Template::ALL {
+                        if let Some(image) = template_picture(t, &reg, sea as f32, &extent) {
+                            if tx.send((t, image)).is_err() {
+                                return;
+                            }
+                            ctx.request_repaint();
+                        }
+                    }
+                })
+                .expect("a thread for template pictures");
+            p.rx = Some(rx);
+        }
+        if let Some(rx) = &p.rx {
+            while let Ok((t, image)) = rx.try_recv() {
+                let texture = ctx.load_texture(format!("template {t:?}"), image, TextureOptions::LINEAR);
+                p.textures.insert(t, texture);
+            }
+        }
+    }
+
+    /// Start from a template, as its card does.
+    #[cfg(test)]
+    pub fn use_template(&mut self, doc: &mut Document, t: Template) {
+        let mut graph = graph_of(doc);
+        self.start_from(doc, t, &mut graph);
+        self.store(doc, graph);
+    }
+
+    /// Open the template picker.
+    #[cfg(test)]
+    pub fn open_templates(&mut self) {
+        self.templates_open = true;
+    }
+
+    /// How many template pictures are ready.
+    #[cfg(test)]
+    pub fn pictures_ready(&self) -> usize {
+        self.pictures.textures.len()
     }
 
     fn to_screen(&self, p: [f32; 2]) -> Pos2 {
