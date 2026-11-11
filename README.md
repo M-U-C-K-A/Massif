@@ -29,13 +29,15 @@ over every CPU core.
   brushes folder is read as is), radius up to 4,096 blocks, brush filters
   (height band, only on / except on, slope, curvature) and WorldPainter's
   mouse and keyboard bindings.
-- **A node-based terrain generator, in the manner of Gaea.** More than
-  fifty nodes — landforms (mountains, ranges, volcanoes, craters and crater
-  fields, dunes, canyons, mesas, islands), primitives, adjustments,
-  simulations (water and thermal erosion, snow, rivers, lakes, sea), masks
-  and colour (gradients from nature, automatic colouring, tints) — shown in a
-  smooth, lit 3D viewport with cast shadows, then converted to the map, the
-  colours becoming the closest real Minecraft blocks.
+- **A node-based terrain generator, in the manner of Gaea.** The Terrain
+  side of the app: more than fifty nodes — landforms (mountains, ranges,
+  volcanoes, craters and crater fields, dunes, canyons, mesas, islands),
+  primitives, adjustments, simulations (water and thermal erosion, snow,
+  rivers, lakes, sea), masks and colour (gradients from nature, automatic
+  colouring, tints) — rendered with a sun you turn, a sky that follows it,
+  volumetric clouds, haze and a sea, saved as images up to 8K, then built at
+  up to 16,384 × 16,384 and converted to the map, the colours becoming the
+  closest real Minecraft blocks.
 - **The game's real blocks.** Every block of the Minecraft version you have
   installed (1,288 in 26.3) is read from the game itself, with its real
   textures and colours: terrains show the actual blocks, and any whole block
@@ -53,6 +55,16 @@ over every CPU core.
   nothing, corruption is detected and contained.
 
 ## Getting started
+
+### Download
+
+Builds for Windows, macOS (Apple silicon and Intel) and Linux are on the
+[releases page](https://github.com/M-U-C-K-A/Massif/releases). They are not
+signed: on macOS, right-click Massif.app and choose Open the first time (or
+run `xattr -dr com.apple.quarantine Massif.app`); on Windows, choose More
+info ▸ Run anyway if SmartScreen asks.
+
+### From source
 
 Massif needs a Rust toolchain. The exact version is pinned in
 `rust-toolchain.toml` and `rustup` installs it automatically.
@@ -91,8 +103,12 @@ brushes, terrain and biome palettes, levels or world info.
 - Drag the top-right corner of an area into it to split it where you let go.
 - Drag an area by its title onto another to move it, or onto its centre to
   swap the two. Drag the gaps between areas to resize them.
-- Workspaces (Layout, Sculpting, Painting, 3D, Maps, Generate, Minimal) are tabs of
-  arrangements; duplicate one with `+`. The layout is remembered.
+- The app has two sides, switched at the top left: **World**, the map
+  editor (workspaces Layout, Sculpting, Painting, 3D, Maps, Minimal), and
+  **Terrain**, the terrain generator (Graph and Render). Each side
+  remembers the workspace it was left on.
+- Workspaces are tabs of arrangements; duplicate one with `+`, right-click
+  it to delete it. The layout is remembered.
 
 ### New worlds and export
 
@@ -167,12 +183,29 @@ fraction of a second, every time Massif starts.
 
 ### Terrain graphs
 
-The Generate workspace is laid out like Gaea: the **Graph Viewport** above,
-the **Terrain Graph** below, the **Node Properties** on the right. The
-viewport shows the selected node — heights as a smooth relief, masks in
-white over the relief they come from, colours on it — lit by a sun with soft
-cast shadows and ambient occlusion, with an adjustable height exaggeration
-and an optional sea. Double-click a node (or pin it) to keep it in view.
+The Terrain side holds the generator. Its **Graph** workspace is laid out
+like Gaea: the **Graph Viewport** above, the **Terrain Graph** below, the
+**Node Properties** on the right. The viewport shows the graph's output;
+select a node and press **V** (or double-click it) to see the graph up to
+that node — heights as a relief, masks in white over the relief they come
+from, colours on it — and V again to go back to the output.
+
+The **Render** workspace gives the viewport the stage, with the **Render
+Settings** beside it, as when a Gaea terrain is rendered in Blender:
+
+- the sun's direction, height and strength (Shift + drag in the viewport
+  turns it), with soft cast shadows over the relief;
+- a sky that follows it, blue by day, warm at sunset;
+- volumetric clouds — cover, height, thickness, density, size, a seed to
+  move them — lit by the sun and casting their shadows on the ground;
+- haze with distance, a sea at the world's sea level, the exposure and the
+  height exaggeration;
+- **Save image** renders the view at full quality, from 1920 × 1080 to
+  7680 × 4320, as a PNG. The view is drawn from the preview: a finer
+  preview (up to 2,048 samples) gives a sharper image.
+
+In the viewport, left drag turns the view, right or middle drag moves it,
+the wheel or a pinch comes closer, a double-click frames the relief.
 
 Right-click the graph or press Tab or Space to open the node library and
 type to search; drop a wire on empty space to add a node already wired.
@@ -192,13 +225,21 @@ setting computes only that node and what follows it.
 | Output | Height output, Terrain output, Colour output |
 
 **Convert to Minecraft** builds the graph over the whole map at the chosen
-resolution (512 to 4,096 samples per side) on another thread, then writes it
-to the ground as one undoable step: the heights; the colour output turned
+resolution (512 to 16,384 samples per side; it starts at one block per
+sample) on another thread, showing which node it is at, then writes it to
+the ground as one undoable step: the heights; the colour output turned
 into real blocks of the game (from natural ground, rock, desert, snow and
 ice, or every block), each column taking the block whose colour is closest,
 two neighbouring blocks mixing where the colour lies between them; and the
 terrain outputs painted over it. Distances are in blocks, so a graph looks
 the same at every resolution. The graph is saved with the world.
+
+Builds are made for large maps: nodes run on every core, erosion in
+parallel blocks; simulations run at 4,096 samples at most and carry what
+they changed to the full resolution, so the finest details are kept. The
+starter graph builds at 16,384 × 16,384 in about 25 seconds and writes to a
+16k map in about 2 more, in about 5.5 GB of memory; 8,192 × 8,192 takes
+about 12 seconds and 2 GB.
 
 ### Controls
 
@@ -338,7 +379,7 @@ Two environment variables enable the heavier tests:
 - `MASSIF_SNAPSHOT_DIR=<folder>` renders the whole window offscreen (with
   egui_kittest and wgpu), the map, the 3D view, the brush panels, the
   dialogs, the terrain graph and its viewport (a cratered moon, a desert
-  canyon, snowy peaks) and the real blocks to PNG files in that folder, and
+  canyon, snowy peaks under clouds) and the real blocks to PNG files in that folder, and
   drives the editor with simulated mouse strokes, 3D sculpting, area
   splitting, converting a terrain graph to the map and painting a real
   block. The real
@@ -346,6 +387,9 @@ Two environment variables enable the heavier tests:
 - `MASSIF_WORLD_SAMPLES=<file.world>` also imports a real WorldPainter world
   through the editor, renders it whole in the 3D view and measures what it
   costs.
+- `MASSIF_GRAPH_BUILD=<samples>` times a whole build of the starter graph
+  (run it with `--release`), and with `MASSIF_GRAPH_APPLY=1` its writing to
+  a map of as many blocks.
 
 ## Roadmap
 
@@ -353,7 +397,8 @@ Two environment variables enable the heavier tests:
   import from `.world` files, and layers as brush filters and graph outputs.
 - Terrain graphs: GPU evaluation, height-map and image import and export,
   groups and portals, graphs applied to a part of the map, tiled builds
-  beyond 4,096 samples, more simulations (glaciers, sediment layers).
+  beyond 16,384 samples, more simulations (glaciers, sediment layers), the
+  render drawn from the full-resolution build.
 - The real blocks' textures in the 3D view, and custom terrains mixing
   real blocks in layers.
 - Custom build limits and older Minecraft versions in new worlds and export.
