@@ -33,6 +33,10 @@ over every CPU core.
   noise, cells, gradients, levels, terraces, warp, blur, hydraulic and
   thermal erosion, combiners, height and slope selectors, and outputs that
   write heights and terrains to the map. Every node shows a live preview.
+- **The game's real blocks.** Every block of the Minecraft version you have
+  installed (1,288 in 26.3) is read from the game itself, with its real
+  textures and colours: terrains show the actual blocks, and any whole block
+  can be painted on the map.
 - **Full-detail 3D view.** Every block column around the camera is meshed at
   full resolution; the rest of the map is drawn as a smooth relief, so the
   whole map is always in view.
@@ -129,6 +133,27 @@ what the map shows:
 - **Slope**: above or below an angle.
 - **Curvature**: hollows or bumps, deeper than a number of blocks compared
   with the columns around.
+
+### Real blocks
+
+Massif reads the blocks of the game from your own installation: the client
+jar of a released version, found where the official launcher, CurseForge or
+Prism keep them (on any drive), or chosen by hand. Nothing of the game is
+copied into Massif or the repository; the jar is read in place, in a
+fraction of a second, every time Massif starts.
+
+- Every block state file gives a block; its model, followed through its
+  parents, gives the textures of its top, sides and bottom; grass, leaves
+  and water are tinted as in the game (plains colours).
+- The blocks and terrains of the open world take the real colours of their
+  textures, on the map and in the 3D view.
+- The **Terrain** panel draws each terrain with its main block's textures.
+- The **Blocks** panel lists every block of the game by family (soil,
+  stone, ores, wood, plants, building blocks, coloured blocks, Nether,
+  End), with a search field and the version to read from. Clicking a whole
+  block makes it a terrain of the world (grass, podzol and mycelium over
+  dirt, as in the game; other blocks a few deep over the natural rock) and
+  paints it.
 
 ### Terrain graphs
 
@@ -265,6 +290,7 @@ smooth relief sampled every 16 blocks shows the rest of the map.
 | `massif-format` | Reading and writing `.massif` files. |
 | `massif-anvil` | Minecraft Java export: NBT, region files, `level.dat`. |
 | `massif-legacy` | WorldPainter `.world` import, with a Java serialization reader written in Rust. |
+| `massif-assets` | The game's real blocks: finds the installed client jars, reads their block states, models and textures (with its own small zip reader), real colours and textured block icons. |
 | `massif-app` | The editor (egui and wgpu): areas, map, 3D view, panels. |
 | `massif-cli` | The command-line tool. |
 
@@ -278,9 +304,10 @@ Two environment variables enable the heavier tests:
 
 - `MASSIF_SNAPSHOT_DIR=<folder>` renders the whole window offscreen (with
   egui_kittest and wgpu), the map, the 3D view, the brush panels, the
-  dialogs and the terrain graph to PNG files in that folder, and drives the
-  editor with simulated mouse strokes, 3D sculpting, area splitting and a
-  terrain graph build.
+  dialogs, the terrain graph and the real blocks to PNG files in that
+  folder, and drives the editor with simulated mouse strokes, 3D sculpting,
+  area splitting, a terrain graph build and painting a real block. The real
+  blocks are only tested when a Minecraft installation is found.
 - `MASSIF_WORLD_SAMPLES=<file.world>` also imports a real WorldPainter world
   through the editor and measures the 3D meshing of it.
 
@@ -291,6 +318,8 @@ Two environment variables enable the heavier tests:
 - Terrain graphs: more nodes (rivers, sediment layers, height-map import,
   stamps), graphs applied to a part of the map, tiled builds beyond 4,096
   samples, a 3D preview of a node.
+- The real blocks' textures in the 3D view, and custom terrains mixing
+  real blocks in layers.
 - Custom build limits and older Minecraft versions in new worlds and export.
 - Selections, copy and paste, height-map import.
 - Nether and End editing from the editor, customisable key bindings.

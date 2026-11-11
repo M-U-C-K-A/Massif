@@ -20,6 +20,8 @@ pub enum EditorKind {
     Brushes,
     CustomBrushes,
     Terrain,
+    /// Every real block of the game, to paint.
+    Blocks,
     Biomes,
     Levels,
     Info,
@@ -43,7 +45,7 @@ impl EditorKind {
         ),
         (
             "Paint",
-            &[EditorKind::Terrain, EditorKind::Biomes, EditorKind::Levels],
+            &[EditorKind::Terrain, EditorKind::Blocks, EditorKind::Biomes, EditorKind::Levels],
         ),
         ("World", &[EditorKind::Info, EditorKind::Graph]),
     ];
@@ -59,6 +61,7 @@ impl EditorKind {
             EditorKind::Brushes => "Brushes",
             EditorKind::CustomBrushes => "Custom Brushes",
             EditorKind::Terrain => "Terrain",
+            EditorKind::Blocks => "Blocks",
             EditorKind::Biomes => "Biomes",
             EditorKind::Levels => "Levels",
             EditorKind::Info => "Info",
@@ -77,6 +80,7 @@ impl EditorKind {
             EditorKind::Brushes => Icon::Brush,
             EditorKind::CustomBrushes => Icon::Images,
             EditorKind::Terrain => Icon::Mountain,
+            EditorKind::Blocks => Icon::Blocks,
             EditorKind::Biomes => Icon::Trees,
             EditorKind::Levels => Icon::Layers,
             EditorKind::Info => Icon::Info,
@@ -426,12 +430,12 @@ impl Default for Layout {
             b.column(0.3, tools, lower)
         };
         let right = {
-            let (terrain, biomes, brushes) = (b.area(Terrain), b.area(Biomes), b.area(Brushes));
-            let lower = b.column(0.5, biomes, brushes);
-            b.column(0.5, terrain, lower)
+            let (terrain, blocks, biomes) = (b.area(Terrain), b.area(Blocks), b.area(Biomes));
+            let lower = b.column(0.62, blocks, biomes);
+            b.column(0.4, terrain, lower)
         };
         let map = b.area(Map);
-        let centre = b.row(0.76, map, right);
+        let centre = b.row(0.72, map, right);
         add("Painting", b.row(0.16, left, centre));
 
         // 3D: the preview takes the stage.

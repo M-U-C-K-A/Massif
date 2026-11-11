@@ -1,5 +1,6 @@
 //! The application: window chrome, workspaces and areas, dialogs, jobs.
 
+use crate::blocks::BlockLibrary;
 use crate::brushes::{BrushLibrary, BrushSource};
 use crate::doc::Document;
 use crate::jobs::{self, Job, Outcome};
@@ -42,6 +43,9 @@ struct Settings {
     solo: bool,
     /// Where the light of the map comes from (R and L turn it).
     light: u8,
+    /// The Minecraft client jar the real blocks are read from; the newest
+    /// one found when unset.
+    minecraft_jar: Option<PathBuf>,
 }
 
 impl Default for Settings {
@@ -51,6 +55,7 @@ impl Default for Settings {
             recent: Vec::new(),
             solo: false,
             light: crate::map_render::DEFAULT_LIGHT,
+            minecraft_jar: None,
         }
     }
 }
@@ -155,6 +160,8 @@ pub struct MassifApp {
     new_group: Option<String>,
     /// The terrain graph editor.
     graph: crate::graph_editor::GraphEditor,
+    /// The game's real blocks.
+    blocks: BlockLibrary,
     allow_close: bool,
     title: String,
     applied_theme: Option<ThemeChoice>,
@@ -187,6 +194,7 @@ impl MassifApp {
         app.unified_titlebar = cfg!(target_os = "macos");
         app.brushes = BrushLibrary::installed();
         app.brushes.load_in_background(&cc.egui_ctx);
+        app.blocks.load(&cc.egui_ctx, app.settings.minecraft_jar.clone());
         if let Some(path) = open {
             app.jobs.push(Job::open(&cc.egui_ctx, path));
         }
@@ -218,6 +226,7 @@ impl MassifApp {
             brushes: BrushLibrary::default(),
             new_group: None,
             graph: Default::default(),
+            blocks: BlockLibrary::default(),
             allow_close: false,
             title: String::new(),
             applied_theme: None,
@@ -366,7 +375,13 @@ impl MassifApp {
             width: params.tiles_x * 128,
             depth: params.tiles_z * 128,
             params,
-            registry: massif_core::Registry::vanilla(),
+            registry: {
+                let mut reg = massif_core::Registry::vanilla();
+                if let Some(cat) = &self.blocks.catalogue {
+                    massif_assets::apply_colors(&mut reg, cat);
+                }
+                reg
+            },
             preview: None,
         }));
     }
@@ -1164,7 +1179,18 @@ impl MassifApp {
             }
             EditorKind::View3d => self.view3d.ui(&mut cui, frame, &mut self.doc, &self.tools, self.map_center),
             EditorKind::Tools => scrolled(&mut cui, &mut |ui| panels::tools_panel(ui, &mut self.tools)),
-            EditorKind::ToolSettings => scrolled(&mut cui, &mut |ui| panels::tool_settings(ui, &mut self.tools, &mut self.doc)),
+            EditorKind::ToolSettings => {
+                scrolled(&mut cui, &mut |ui| panels::tool_settings(ui, &mut self.tools, &mut self.doc, &mut self.blocks))
+            }
+            EditorKind::Blocks => {
+                let mut feedback = None;
+                scrolled(&mut cui, &mut |ui| {
+                    feedback = panels::blocks_panel(ui, &mut self.tools, &mut self.doc, &mut self.blocks, &mut self.settings.minecraft_jar);
+                });
+                if feedback.is_some() {
+                    self.feedback = feedback;
+                }
+            }
             EditorKind::BrushSettings => {
                 let (min_y, max_y) = (self.doc.dimension().min_y, self.doc.dimension().max_y);
                 scrolled(&mut cui, &mut |ui| {
@@ -1190,7 +1216,14 @@ impl MassifApp {
             EditorKind::Terrain => {
                 let mut solo_changed = false;
                 scrolled(&mut cui, &mut |ui| {
-                    solo_changed |= panels::terrain_panel(ui, &mut self.tools, &self.doc.world.registry, &mut self.settings.solo, &mut self.terrain_search);
+                    solo_changed |= panels::terrain_panel(
+                        ui,
+                        &mut self.tools,
+                        &self.doc.world.registry,
+                        &mut self.settings.solo,
+                        &mut self.terrain_search,
+                        &mut self.blocks,
+                    );
                 });
                 let _ = solo_changed; // the solo style is part of the cache key
             }
@@ -1570,6 +1603,17 @@ impl MassifApp {
             if !panels::select_brush(&mut self.tools, &self.brushes, source) {
                 panels::select_brush(&mut self.tools, &self.brushes, BrushSource::default());
             }
+        }
+        // The game's blocks give the world's blocks and terrains their real
+        // colours.
+        self.blocks.poll();
+        if let Some(cat) = self.blocks.catalogue.clone()
+            && self.blocks.applied != Some(self.doc.generation)
+        {
+            massif_assets::apply_colors(&mut self.doc.world.registry, &cat);
+            self.blocks.applied = Some(self.doc.generation);
+            self.map_cache.invalidate_all();
+            self.view3d.invalidate_all();
         }
         self.handle_close(&ctx);
         self.shortcuts(&ctx);
@@ -1969,7 +2013,7 @@ fn preview_image(params: &GenParams, reg: &massif_core::Registry, n: usize) -> e
 
 /// Where the layout is saved. A new key when the default layouts change a
 /// lot, so that everyone gets the new editors.
-const LAYOUT_KEY: &str = "massif.layout.v3";
+const LAYOUT_KEY: &str = "massif.layout.v4";
 
 /// Lay out the area tree.
 fn compute(node: &Node, rect: Rect, path: &mut Vec<bool>, areas: &mut Vec<(AreaId, EditorKind, Rect)>, seps: &mut Vec<Sep>) {
@@ -2391,6 +2435,63 @@ mod tests {
         h.render().unwrap().save(dir.join("graph-applied.png")).unwrap();
         let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
         image::save_buffer(dir.join("graph-applied-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+    }
+
+    /// The game's real blocks: loaded from this computer's installation,
+    /// shown with their textures, painted on the map. Runs with
+    /// MASSIF_SNAPSHOT_DIR, when a Minecraft jar is installed.
+    #[test]
+    fn real_blocks_show_and_paint() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        if massif_assets::find_jars().is_empty() {
+            eprintln!("no Minecraft installation: skipping");
+            return;
+        }
+        for (theme, name) in [(ThemeChoice::Dark, "blocks-dark.png"), (ThemeChoice::Light, "blocks-light.png")] {
+            let mut h = harness(theme);
+            let ctx = h.ctx.clone();
+            h.state_mut().blocks.load(&ctx, None);
+            h.state_mut().layout.active = 2; // Painting: terrain, blocks, biomes
+            let started = std::time::Instant::now();
+            while h.state().blocks.catalogue.is_none() {
+                assert!(started.elapsed().as_secs() < 60, "the blocks did not load: {:?}", h.state().blocks.error);
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            h.run_steps(10);
+            // Real colours: the grass terrain is green, from the game's texture.
+            let app = h.state();
+            let reg = &app.doc.world.registry;
+            let grass = reg.terrain(reg.terrain_by_name("Grass").unwrap()).color;
+            assert!(grass[1] > grass[0] && grass[1] > grass[2], "{grass:?}");
+            // Paint stone bricks: a terrain made of the real block.
+            let cat = app.blocks.catalogue.clone().unwrap();
+            let bricks = cat.block("minecraft:stone_bricks").unwrap().clone();
+            let app = h.state_mut();
+            let terrain = massif_assets::block_terrain(&mut app.doc.world.registry, &bricks);
+            app.tools.terrain = terrain.0;
+            app.tools.select(Tool::PaintTerrain);
+            let rect = map_rect(h.state(), &h.ctx);
+            let at = rect.center();
+            let button = |pressed| egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            };
+            h.event(egui::Event::PointerMoved(at));
+            h.step();
+            h.event(button(true));
+            for _ in 0..10 {
+                h.step();
+            }
+            h.event(button(false));
+            h.run_steps(20);
+            assert_eq!(h.state().doc.history.undo_label(), Some("Paint terrain"));
+            h.render().unwrap().save(dir.join(name)).unwrap();
+        }
     }
 
     /// The new-world and export dialogs, rendered.

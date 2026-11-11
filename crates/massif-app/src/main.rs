@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod blocks;
 mod brushes;
 mod doc;
 mod graph_editor;

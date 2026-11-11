@@ -1,6 +1,7 @@
 //! The side editors: tools, tool settings, brushes, terrain and biome
 //! palettes, levels, world info, and the chooser shown by empty areas.
 
+use crate::blocks::BlockLibrary;
 use crate::brushes::{BrushLibrary, BrushSource};
 use crate::doc::Document;
 use crate::layout::EditorKind;
@@ -87,7 +88,7 @@ fn slider_row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> egui::Respo
     .inner
 }
 
-pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
+pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary) {
     let pal = Palette::of(ui);
     ui.spacing_mut().slider_width = (ui.available_width() - 76.0 - 84.0).clamp(60.0, 220.0);
     let tool = tools.tool;
@@ -128,12 +129,11 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
         Tool::PaintTerrain => {
             let def = doc.world.registry.terrain(TerrainId(tools.terrain));
             ui.horizontal(|ui| {
-                let (r, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
-                let (top, side) = terrain_colors(&doc.world.registry, tools.terrain);
-                cube_icon(ui.painter(), r, top, side);
+                let (r, _) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::hover());
+                terrain_icon(ui, r, &doc.world.registry, tools.terrain, blocks);
                 ui.label(RichText::new(&def.name).bold());
             });
-            hint(ui, "Choose terrains in the Terrain panel; Alt-click picks one from the map.");
+            hint(ui, "Choose terrains in the Terrain panel or any block of the game in Blocks; Alt-click picks one from the map.");
         }
         Tool::PaintBiome => {
             let reg = &doc.world.registry;
@@ -784,13 +784,147 @@ pub fn cube_icon(painter: &egui::Painter, rect: Rect, top: Color32, side: Color3
     painter.add(egui::Shape::closed_line(vec![t, r, r + down, b + down, l + down, l], edge));
 }
 
+/// The icon of a terrain: its main block with the game's own textures when
+/// they are loaded, a drawn cube otherwise.
+pub fn terrain_icon(ui: &mut Ui, rect: Rect, reg: &Registry, terrain: u16, blocks: &mut BlockLibrary) {
+    let ctx = ui.ctx().clone();
+    if let Some(cat) = blocks.catalogue.clone()
+        && let Some(block) = massif_assets::terrain_block(reg, &cat, TerrainId(terrain))
+        && let Some(texture) = blocks.icon(&ctx, block)
+    {
+        ui.painter().image(texture, rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        return;
+    }
+    let (top, side) = terrain_colors(reg, terrain);
+    cube_icon(ui.painter(), rect, top, side);
+}
+
+/// Every block of the game, with its real textures: click one to paint it.
+pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary, jar: &mut Option<std::path::PathBuf>) -> Option<String> {
+    use massif_assets::Category;
+    let pal = Palette::of(ui);
+    let ctx = ui.ctx().clone();
+    let mut feedback = None;
+
+    // Where the blocks come from: a version of the game installed here.
+    ui.horizontal(|ui| {
+        let current = blocks.catalogue.as_ref().map(|c| (c.version.clone(), c.source.clone()));
+        let label = match &current {
+            Some((v, _)) => format!("Minecraft {v}"),
+            None if blocks.is_loading() => "Reading the game…".to_owned(),
+            None => "No game found".to_owned(),
+        };
+        egui::ComboBox::from_id_salt("minecraft version")
+            .selected_text(label)
+            .show_ui(ui, |ui| {
+                for j in blocks.jars.clone() {
+                    let selected = current.as_ref().is_some_and(|(_, p)| *p == j.path);
+                    if ui.selectable_label(selected, format!("Minecraft {}", j.version)).on_hover_text(j.path.display().to_string()).clicked() {
+                        *jar = Some(j.path.clone());
+                        blocks.load(&ctx, jar.clone());
+                    }
+                }
+                if blocks.jars.is_empty() {
+                    ui.label(RichText::new("No version found in the usual places").color(pal.weak));
+                }
+            });
+        if ui
+            .button(theme::with_icon(Icon::FolderOpen, "Choose…"))
+            .on_hover_text("Read the blocks of another version: its client jar, versions/<version>/<version>.jar in the game's folder")
+            .clicked()
+            && let Some(path) = rfd::FileDialog::new().set_title("Choose the Minecraft jar").add_filter("Minecraft", &["jar"]).pick_file()
+        {
+            *jar = Some(path);
+            blocks.load(&ctx, jar.clone());
+        }
+        if blocks.is_loading() {
+            ui.spinner();
+        }
+    });
+    hint(
+        ui,
+        "The blocks of your own installation of the game, with their real textures and colours. Click a block to paint it on the map; it is added to this world's terrains.",
+    );
+    if let Some(e) = &blocks.error {
+        ui.label(RichText::new(e).color(pal.danger).size(11.5));
+    }
+    let Some(cat) = blocks.catalogue.clone() else { return feedback };
+
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut blocks.search)
+                .hint_text(format!("{}  Search {} blocks", theme::glyph(Icon::Search), cat.blocks.len()))
+                .desired_width((ui.available_width() - 110.0).max(80.0)),
+        );
+        ui.checkbox(&mut blocks.all, "All shapes")
+            .on_hover_text("Also show the blocks that are not whole cubes (flowers, torches, slabs…); they cannot be ground");
+    });
+    let needle = blocks.search.to_lowercase();
+    let reg = &doc.world.registry;
+    let current = massif_assets::terrain_block(reg, &cat, TerrainId(tools.terrain)).map(|b| b.id.clone());
+    let mut picked: Option<&massif_assets::Block> = None;
+    for category in Category::ALL {
+        let list: Vec<&massif_assets::Block> = cat
+            .blocks
+            .iter()
+            .filter(|b| b.category == category && (blocks.all || b.full_cube))
+            .filter(|b| needle.is_empty() || b.name.to_lowercase().contains(&needle) || b.id.contains(&needle))
+            .collect();
+        if list.is_empty() {
+            continue;
+        }
+        ui.add_space(6.0);
+        ui.label(RichText::new(format!("{}  ·  {}", category.label().to_uppercase(), list.len())).size(10.5).bold().color(pal.weak));
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+            for block in list {
+                let (rect, response) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::click());
+                let selected = current.as_deref() == Some(block.id.as_str());
+                let fill = if selected {
+                    pal.accent_soft
+                } else if response.hovered() {
+                    pal.header
+                } else {
+                    Color32::TRANSPARENT
+                };
+                let stroke = if selected { Stroke::new(1.5, pal.accent) } else { Stroke::NONE };
+                ui.painter().rect(rect, 6, fill, stroke, StrokeKind::Inside);
+                if let Some(texture) = blocks.icon(&ctx, block) {
+                    let tint = if block.full_cube { Color32::WHITE } else { Color32::from_white_alpha(150) };
+                    ui.painter()
+                        .image(texture, rect.shrink(4.0), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
+                }
+                let tip = format!("{}\n{}{}", block.name, block.id, if block.full_cube { "" } else { "\nNot a whole block: it cannot be ground" });
+                if response.on_hover_text(tip).clicked() {
+                    picked = Some(block);
+                }
+            }
+        });
+    }
+    if let Some(block) = picked {
+        if block.full_cube {
+            let terrain = massif_assets::block_terrain(&mut doc.world.registry, block);
+            doc.mark_changed();
+            tools.terrain = terrain.0;
+            if tools.tool != Tool::PaintTerrain {
+                tools.select(Tool::PaintTerrain);
+            }
+            feedback = Some(format!("Painting {}", block.name));
+        } else {
+            feedback = Some(format!("{} is not a whole block: it cannot be the ground", block.name));
+        }
+    }
+    feedback
+}
+
 fn swatch(ui: &mut Ui, color: Color32) {
     let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
     ui.painter().rect(r, 3, color, Stroke::new(1.0, Color32::from_black_alpha(60)), StrokeKind::Inside);
 }
 
 /// Returns true when the solo setting changed.
-pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &Registry, solo: &mut bool, search: &mut String) -> bool {
+pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &Registry, solo: &mut bool, search: &mut String, blocks: &mut BlockLibrary) -> bool {
     let pal = Palette::of(ui);
     hint(ui, "The block type of the ground surface: grass, sand, stone, snow…");
     let solo_changed = ui
@@ -833,8 +967,7 @@ pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &Registry, solo: &
                 };
                 let stroke = if selected { Stroke::new(1.5, pal.accent) } else { Stroke::new(1.0, pal.border) };
                 painter.rect(rect, 6, fill, stroke, StrokeKind::Inside);
-                let (top, side) = terrain_colors(reg, i as u16);
-                cube_icon(painter, rect.shrink(6.0), top, side);
+                terrain_icon(ui, rect.shrink(4.0), reg, i as u16, blocks);
                 let tip = describe_terrain(reg, i as u16);
                 if response.on_hover_text(tip).clicked() {
                     picked = Some(i as u16);

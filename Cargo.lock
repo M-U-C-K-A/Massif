@@ -1658,6 +1658,7 @@ dependencies = [
  "log",
  "lucide-icons",
  "massif-anvil",
+ "massif-assets",
  "massif-core",
  "massif-format",
  "massif-legacy",
@@ -1667,6 +1668,18 @@ dependencies = [
  "serde",
  "serde_json",
  "wgpu",
+]
+
+[[package]]
+name = "massif-assets"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "image",
+ "massif-core",
+ "rayon",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

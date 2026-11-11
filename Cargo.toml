@@ -13,6 +13,7 @@ massif-core = { path = "crates/massif-core" }
 massif-format = { path = "crates/massif-format" }
 massif-anvil = { path = "crates/massif-anvil" }
 massif-legacy = { path = "crates/massif-legacy" }
+massif-assets = { path = "crates/massif-assets" }
 
 rayon = "1.12"
 zstd = "0.14"

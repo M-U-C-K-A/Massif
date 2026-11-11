@@ -14,6 +14,7 @@ massif-core.workspace = true
 massif-format.workspace = true
 massif-anvil.workspace = true
 massif-legacy.workspace = true
+massif-assets.workspace = true
 log.workspace = true
 rayon.workspace = true
 serde.workspace = true
