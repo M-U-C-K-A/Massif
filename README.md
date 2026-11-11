@@ -34,12 +34,13 @@ over every CPU core.
   volcanoes, craters and crater fields, dunes, canyons, mesas, islands),
   primitives, adjustments, simulations (water and thermal erosion, snow,
   rivers, lakes, sea), masks and colour (gradients from nature, automatic
-  colouring, tints), eight landscapes to start from (archipelago, karst
-  towers, river valley, desert canyon, volcanic island…) — rendered with a
-  sun you turn, a sky that follows it, volumetric clouds, haze and a sea,
-  saved as images up to 8K, then built at up to 16,384 × 16,384 and
-  converted to voxels, the colours becoming the closest real Minecraft
-  blocks.
+  colouring, tints), rock over the void (floating islands, overhanging
+  cliffs) and nine landscapes to start from (archipelago, karst towers,
+  floating mountains, river valley, desert canyon, volcanic island…) —
+  rendered with a sun you turn, a sky that follows it, volumetric clouds,
+  haze and a sea, saved as images up to 8K, then built at up to
+  16,384 × 16,384 and converted to voxels: the colours become the closest
+  real Minecraft blocks, the floating rock levels of the map.
 - **The game's real blocks.** Every block of the Minecraft version you have
   installed (1,288 in 26.3) is read from the game itself, with its real
   textures and colours: terrains show the actual blocks, and any whole block
@@ -217,7 +218,8 @@ this map:
 |---|---|
 | Alpine range | Eroded peaks over green hills, snow on the summits (the starter graph) |
 | Archipelago | Tropical islands in a shallow sea, sandy beaches, green and rocky peaks |
-| Karst towers | Sheer stone pillars with green tops and mossy walls over a jungle crossed by rivers, low clouds between them |
+| Karst towers | A forest of stone pillars, cut from a plateau along two sets of joints as sandstone weathers: narrow clefts, flat green tops, mossy walls, a jungle crossed by rivers below |
+| Floating mountains | Mountains of rock floating over the pillars, their undersides hanging to a point, and rims overhanging the cliffs: two levels of rock over the void, above the mist |
 | River valley | A wide valley between snowy ridged mountains, a river along its floor |
 | Desert canyon | A winding, stepped canyon in a red plateau, buttes, a river at the bottom |
 | Volcanic island | A volcano rising from the sea, black beaches, green lower slopes |
@@ -236,23 +238,37 @@ setting computes only that node and what follows it.
 
 | Family | Nodes |
 |---|---|
-| Landforms | Mountain (alpine, rounded, eroded, spiky), Mountain range, Volcano, Crater, Crater field, Dunes, Canyon, Mesas, Island, Rocks |
+| Landforms | Mountain (alpine, rounded, eroded, spiky), Mountain range, Volcano, Crater, Crater field, Dunes, Canyon, Mesas, Island, Rocks, Floating islands (top, bottom, mask) |
 | Primitives | Noise (rolling, ridged, billow), Cells and cell ridges, Radial and linear gradients, Shape, Constant |
-| Adjust | Levels, Normalize, Curve, Terraces, Stratify, Clamp, Blur, Sharpen, Warp, Transform, Swirl, Fold, Invert height |
+| Adjust | Levels, Normalize, Curve, Terraces, Stratify, Clamp, Blur, Sharpen, Warp, Transform, Swirl, Fold, Invert height, Overhang (the rims of cliffs over the void) |
 | Simulate | Erosion (heights, flow, deposits, wear), Thermal erosion (heights, talus), Snow, Rivers, Lakes, Sea (water and shore masks) |
 | Combine | Combine (add, subtract, multiply, max, min, average, lerp, screen, overlay, difference), Blend through a mask |
 | Masks | Select height, Select slope, Curvature (ridges or hollows), Facing, Occlusion, Flow, Invert |
 | Colour | Auto colour (eight kinds of land), Gradient (twenty gradients from nature), Solid colour, Mix colours, Tint, Adjust colour |
-| Output | Height output, Terrain output, Colour output |
+| Output | Height output, Terrain output, Colour output, Layer output (rock between two heights, over the ground) |
+
+A height map cannot hold an overhang or an island in the air; the map
+can, its levels being spans of rock stacked in each column. **Layer
+output** is the way from one to the other: it takes a top and a bottom —
+from **Floating islands**, from **Overhang**, or from any two heights —
+and optionally the colour of the top. The viewport draws up to two layers
+over the relief, lit, casting their shadows on the ground and on each
+other; viewing one of these nodes (V) shows it over the graph's ground.
+Converted, each layer becomes a Solid level of the map named after what
+makes it ("Floating islands (graph 2)"), filled again by later
+conversions and removed when its output goes: columns of ground, air,
+then rock, exported to Minecraft as they are.
 
 **Convert to voxels** builds the graph over the whole map at the chosen
 resolution (512 to 16,384 samples per side; it starts at one block per
 sample) on another thread, showing which node it is at, then writes it to
 the ground as one undoable step: the heights; the colour output turned
 into real blocks of the game (from natural ground, rock, desert, snow and
-ice, or every block), each column taking the block whose colour is closest,
-two neighbouring blocks mixing where the colour lies between them; and the
-terrain outputs painted over it. Distances are in blocks, so a graph looks
+ice, or every block), each column taking the block whose colour is closest
+— by hue before lightness, so that a dark green is moss or grass rather
+than mud — two neighbouring blocks mixing where the colour lies between
+them; the terrain outputs painted over it; and the layers as levels over
+the ground. Distances are in blocks, so a graph looks
 the same at every resolution. The graph is saved with the world.
 
 Builds are made for large maps: nodes run on every core, erosion in
@@ -260,7 +276,8 @@ parallel blocks; simulations run at 4,096 samples at most and carry what
 they changed to the full resolution, so the finest details are kept. The
 starter graph builds at 16,384 × 16,384 in about 25 seconds and writes to a
 16k map in about 2 more, in about 5.5 GB of memory; 8,192 × 8,192 takes
-about 12 seconds and 2 GB.
+about 12 seconds and 2 GB. The floating mountains, with their two layers,
+take about 55 seconds and 8 GB at 16,384 × 16,384.
 
 ### Controls
 
@@ -410,7 +427,8 @@ Two environment variables enable the heavier tests:
   costs.
 - `MASSIF_GRAPH_BUILD=<samples>` times a whole build of the starter graph
   (run it with `--release`), and with `MASSIF_GRAPH_APPLY=1` its writing to
-  a map of as many blocks.
+  a map of as many blocks; `MASSIF_GRAPH_TEMPLATE=<word>` times a template
+  instead (`floating`, `karst`…).
 
 ## Roadmap
 
@@ -419,7 +437,8 @@ Two environment variables enable the heavier tests:
 - Terrain graphs: GPU evaluation, height-map and image import and export,
   groups and portals, graphs applied to a part of the map, tiled builds
   beyond 16,384 samples, more simulations (glaciers, sediment layers), the
-  render drawn from the full-resolution build.
+  render drawn from the full-resolution build, carved layers (caves and
+  arches) and water on floating rock (lakes, falls).
 - The real blocks' textures in the 3D view, and custom terrains mixing
   real blocks in layers.
 - Custom build limits and older Minecraft versions in new worlds and export.

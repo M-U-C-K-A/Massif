@@ -109,6 +109,8 @@ fn generators_stay_in_their_range_and_are_deterministic() {
             NodeKind::Crater { base, depth, rim, peak, .. } => (base - depth, depth + rim + peak),
             NodeKind::CraterField { base, max_radius, depth, .. } => (base - max_radius * depth * 4.0, max_radius * depth * 8.0),
             NodeKind::Canyon { base, depth, .. } => (base - depth - 5.0, depth + 10.0),
+            // Their tops: from the lowest island's edge to the highest crag.
+            NodeKind::FloatingIslands { altitude, spread, size, .. } => (altitude - spread, 2.0 * spread + size * 1.5),
             _ => unreachable!("{}", kind.label()),
         };
         let slack = height.abs() * 0.25 + 1e-3;
@@ -644,11 +646,12 @@ fn the_nearest_colour_table_picks_the_closest() {
 }
 
 /// How long the starter graph takes, node by node, at several resolutions.
-/// Runs with MASSIF_GRAPH_TIMING (a list of resolutions, e.g. "1024,4096").
+/// Runs with MASSIF_GRAPH_TIMING (a list of resolutions, e.g. "1024,4096"),
+/// and with MASSIF_GRAPH_TEMPLATE, on a template rather than the starter.
 #[test]
 fn timing_of_the_starter_graph() {
     let Ok(list) = std::env::var("MASSIF_GRAPH_TIMING") else { return };
-    let g = Graph::starter(1, 2, 3, 4);
+    let g = benchmark_graph();
     for n in list.split(',').filter_map(|v| v.trim().parse::<usize>().ok()) {
         let ext = Extent {
             x0: -4096.0,
@@ -662,17 +665,31 @@ fn timing_of_the_starter_graph() {
         let total = started.elapsed().as_secs_f32();
         let mut t: Vec<(String, f32)> = e.timings.iter().map(|(id, ms)| (g.node(*id).unwrap().kind.label().to_owned(), *ms)).collect();
         t.sort_by(|a, b| b.1.total_cmp(&a.1));
-        eprintln!("{n} x {n}: {total:.2} s; slowest: {:?}", &t[..t.len().min(5)]);
+        eprintln!("{n} x {n}: {total:.2} s; slowest: {:?}", &t[..t.len().min(8)]);
+    }
+}
+
+/// The graph the timing tests run: the starter, or with
+/// MASSIF_GRAPH_TEMPLATE the template whose name holds that word.
+fn benchmark_graph() -> Graph {
+    match std::env::var("MASSIF_GRAPH_TEMPLATE") {
+        Ok(name) => {
+            let t = Template::ALL.into_iter().find(|t| t.label().to_lowercase().contains(&name.to_lowercase())).expect("a template of that name");
+            eprintln!("template: {}", t.label());
+            t.graph(&crate::registry::Registry::vanilla(), 62.0, 16384.0)
+        }
+        Err(_) => Graph::starter(1, 2, 3, 4),
     }
 }
 
 /// A whole build of the starter graph, as Convert does it. Runs with
 /// MASSIF_GRAPH_BUILD (the resolution, e.g. 16384); with MASSIF_GRAPH_APPLY
-/// too, the build is written to a world of as many blocks per side.
+/// too, the build is written to a world of as many blocks per side, and
+/// with MASSIF_GRAPH_TEMPLATE, of a template rather than the starter.
 #[test]
 fn build_of_the_starter_graph() {
     let Some(n) = std::env::var("MASSIF_GRAPH_BUILD").ok().and_then(|v| v.parse::<usize>().ok()) else { return };
-    let g = Graph::starter(1, 2, 3, 4);
+    let g = benchmark_graph();
     let ext = Extent {
         x0: -8192.0,
         z0: -8192.0,
@@ -683,7 +700,7 @@ fn build_of_the_starter_graph() {
     if std::env::var_os("MASSIF_GRAPH_APPLY").is_none() {
         let started = std::time::Instant::now();
         let out = g.build(&ext, &AtomicBool::new(false)).unwrap();
-        eprintln!("build at {n} x {n}: {:.1} s", started.elapsed().as_secs_f32());
+        eprintln!("build at {n} x {n}: {:.1} s, {} layers over the ground", started.elapsed().as_secs_f32(), out.layers.len());
         assert_eq!(out.heights.as_ref().unwrap().n, n);
         return;
     }
@@ -737,7 +754,7 @@ fn templates_make_their_landscapes() {
     for t in Template::ALL {
         let g = t.graph(&reg, sea, 2048.0);
         let out = g.build(&ext, &AtomicBool::new(false)).unwrap_or_else(|e| panic!("{}: {e}", t.label()));
-        let h = out.heights.expect("a height output");
+        let h = out.heights.clone().expect("a height output");
         assert!(out.colors.is_some(), "{}: no colours", t.label());
         let (lo, hi) = h.range();
         assert!(lo > -64.0 && hi < 320.0, "{}: heights {lo}..{hi}", t.label());
@@ -748,9 +765,144 @@ fn templates_make_their_landscapes() {
             Template::Archipelago => assert!((0.35..0.85).contains(&wet), "islands in a sea: {wet}"),
             Template::VolcanicIsland => assert!(wet > 0.3 && hi > sea + 120.0, "a high island: {wet}, {hi}"),
             Template::KarstTowers => assert!(steep > 0.01 && hi > sea + 100.0, "pillars: {steep}, {hi}"),
+            Template::FloatingMountains => {
+                assert!(steep > 0.004, "pillars: {steep}");
+                assert_eq!(out.layers.len(), 2, "overhangs and floating islands");
+                for layer in &out.layers {
+                    let thick = layer.top.data.iter().zip(&layer.bottom.data).filter(|(t, b)| *t - *b >= 1.0).count();
+                    assert!(thick > 0, "{} has rock", layer.name);
+                    assert!(layer.top.range().1 < 320.0, "{} under the build limit", layer.name);
+                }
+                // The islands float clear of the ground.
+                let (islands, ground) = (&out.layers[1], &h);
+                for c in 0..h.data.len() {
+                    if islands.top.data[c] - islands.bottom.data[c] >= 1.0 {
+                        assert!(islands.bottom.data[c] >= ground.data[c] + 13.0, "an island touches the ground");
+                    }
+                }
+            }
             Template::RiverValley | Template::DesertCanyon => assert!(wet > 0.001 && wet < 0.2, "a river: {wet}"),
             Template::DuneSea => assert_eq!(wet, 0.0, "no water in the desert"),
             Template::Alpine | Template::RollingHills => assert!(wet < 0.5, "mostly land: {wet}"),
         }
     }
+}
+
+/// Floating islands float: a rolling top over an underside hanging below,
+/// nothing elsewhere, a fair share of the sky covered.
+#[test]
+fn floating_islands_float() {
+    let ext = Extent {
+        x0: -1024.0,
+        z0: -1024.0,
+        size: 2048.0,
+        n: 256,
+    };
+    let (top, bottom, mask) = layers::floating_islands(&ext, 220.0, 20.0, 90.0, 0.6, 1.3, 4);
+    let mut covered = 0;
+    let mut deepest = 0.0f32;
+    for c in 0..ext.n * ext.n {
+        assert!(top.data[c] >= bottom.data[c], "the top is never under the bottom");
+        let thick = top.data[c] - bottom.data[c];
+        if mask.data[c] > 0.5 {
+            covered += 1;
+            assert!(thick > 0.5, "an island has rock: {thick}");
+            assert!(bottom.data[c] > 220.0 - 20.0 - 90.0 * 1.3 * 1.05, "hangs no deeper than it may");
+            deepest = deepest.max(thick);
+        } else if mask.data[c] == 0.0 {
+            assert!(thick < 3.0, "no rock outside the islands: {thick}");
+        }
+    }
+    let share = covered as f32 / (ext.n * ext.n) as f32;
+    assert!((0.03..0.6).contains(&share), "{share} of the sky has islands");
+    assert!(deepest > 60.0, "the largest hang deep: {deepest}");
+}
+
+/// Rims jut out from the top of a cliff over the void at its foot, and
+/// nowhere else.
+#[test]
+fn overhangs_jut_out_over_the_void() {
+    let ext = Extent {
+        x0: 0.0,
+        z0: 0.0,
+        size: 256.0,
+        n: 256,
+    };
+    // A plateau 80 blocks above the plain, its edge at x = 128.
+    let ground = Field::new(ext.n, (0..ext.n * ext.n).map(|c| if c % ext.n < 128 { 100.0 } else { 20.0 }).collect());
+    let (top, bottom) = layers::overhang(&ground, &ext, 12.0, 6.0, 20.0, 0.0, 1);
+    let at = |i: usize| (top.data[100 * ext.n + i], bottom.data[100 * ext.n + i]);
+    // Just past the edge: a rim at the plateau's height, above the void.
+    let (t, b) = at(131);
+    assert!((t - 100.0).abs() < 3.0, "the rim is at the cliff's top: {t}");
+    assert!(t - b >= 2.0 && b > 23.0, "a rim of rock over the void: {t}..{b}");
+    // On the plateau, and far out on the plain: nothing.
+    for i in [60, 200] {
+        let (t, b) = at(i);
+        assert!(t - b < 1.0, "no rim at {i}: {t}..{b}");
+    }
+}
+
+/// Converted, a layer becomes a Solid level: under an island, the column
+/// is ground, then air, then the island's rock.
+#[test]
+fn layers_become_solid_levels() {
+    use crate::compose::TileStack;
+    use crate::generate::{GenParams, Landform, generate};
+    use crate::history::History;
+    let mut world = generate(&GenParams {
+        tiles_x: 4,
+        tiles_z: 4,
+        landform: Landform::Flat,
+        ..GenParams::default()
+    });
+    let mut g = Graph::default();
+    let ground = g.add(NodeKind::Constant { value: 40.0 }, [0.0, 0.0]);
+    let out = g.add(NodeKind::HeightOutput, [200.0, 0.0]);
+    g.connect(ground, 0, out, 0);
+    let islands = g.add(
+        NodeKind::FloatingIslands {
+            altitude: 150.0,
+            spread: 0.0,
+            size: 60.0,
+            coverage: 1.0,
+            depth: 1.0,
+            seed: 3,
+        },
+        [0.0, 200.0],
+    );
+    let layer = g.add(
+        NodeKind::LayerOutput {
+            slot: 1,
+            palette: BlockPalette::Natural,
+        },
+        [200.0, 200.0],
+    );
+    g.connect(islands, 0, layer, 0);
+    g.connect(islands, 1, layer, 1);
+    let rect = crate::coords::BlockRect::new(-256, -256, 256, 256);
+    let ext = Extent::covering(rect, 256);
+    let built = g.build(&ext, &AtomicBool::new(false)).unwrap();
+    assert_eq!(built.layers.len(), 1);
+    assert_eq!(built.layers[0].name, "Floating islands (graph 1)");
+    let mut h = History::default();
+    h.begin("graph", 0);
+    let index = h.edit(&mut world, 0).structure().add_level(built.layers[0].name.clone(), crate::level::LevelKind::Solid);
+    apply(&mut h.edit(&mut world, 0), &ext, &built, 1, &[]);
+    apply_layer(&mut h.edit(&mut world, index), &ext, &built.layers[0], 1, &[], TerrainId::ROCK);
+    h.commit();
+    // Some column holds the ground, air, then an island.
+    let dim = &world.dims[0];
+    let mut spans = Vec::new();
+    let mut floating = 0;
+    for pos in dim.ground().positions() {
+        let stack = TileStack::new(dim, pos, false).unwrap();
+        for cell in 0..128 * 128 {
+            stack.spans(cell, &mut spans);
+            if spans.len() >= 2 && spans[0].y1 <= 41 && spans[1].y0 > 60 {
+                floating += 1;
+            }
+        }
+    }
+    assert!(floating > 1000, "{floating} columns with an island over the void");
 }

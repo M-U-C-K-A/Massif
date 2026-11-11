@@ -18,15 +18,15 @@
 
 use crate::blocks::BlockLibrary;
 use crate::doc::Document;
-use crate::terrain_view::{RenderSettings, TerrainView, ViewData, occlusion};
+use crate::terrain_view::{MAX_SLABS, RenderSettings, Slab, TerrainView, ViewData, occlusion};
 use crate::theme::{self, Icon, Palette, RichTextExt};
 use egui::{Color32, ColorImage, Key, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, Vec2, pos2, vec2};
 use massif_core::graph::{
     AutoPalette, Bend, BlockPalette, CellStyle, ColorField, CombineOp, EvalCache, Evaluation, Extent, Family, Field, GradientPreset, Graph, GraphError,
-    MountainStyle, NodeId, NodeKind, NoiseStyle, Outputs, PortType, Progress, ShapeKind, Template, TintMode, Value,
+    LayerOut, MountainStyle, NodeId, NodeKind, NoiseStyle, Outputs, PortType, Progress, ShapeKind, Template, TintMode, Value,
 };
 use massif_core::registry::{Registry, TerrainId};
-use massif_core::{BlockRect, TILE_SIZE};
+use massif_core::{BlockRect, LevelKind, TILE_SIZE};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -200,7 +200,79 @@ fn pick_view(graph: &Graph, eval: &Evaluation, view: Option<(NodeId, u8)>) -> Op
     }
 }
 
-fn view_data(heights: &Field, paint: &Paint, extent: &Extent, exaggeration: f32) -> ViewData {
+/// Rock over the ground to show: a top, a bottom and maybe its colours.
+type ShownLayer = (Arc<Field>, Arc<Field>, Option<Arc<ColorField>>);
+
+/// Whether a node makes rock over the ground (a top and a bottom).
+fn makes_layer(kind: &NodeKind) -> bool {
+    matches!(kind, NodeKind::FloatingIslands { .. } | NodeKind::Overhang { .. })
+}
+
+/// The rock over the ground the viewport shows: the layer outputs' with the
+/// graph's output, or the viewed node's own.
+fn layers_shown(graph: &Graph, eval: &Evaluation, view: Option<(NodeId, u8)>) -> Vec<ShownLayer> {
+    let field = |src: Option<(NodeId, u8)>| src.and_then(|(id, out)| eval.field(id, out).cloned());
+    match view.and_then(|(id, _)| graph.node(id)) {
+        Some(node) if makes_layer(&node.kind) => field(Some((node.id, 0))).zip(field(Some((node.id, 1)))).map(|(t, b)| (t, b, None)).into_iter().collect(),
+        Some(_) => Vec::new(),
+        None => {
+            let mut outputs: Vec<_> = graph.nodes.iter().filter(|n| matches!(n.kind, NodeKind::LayerOutput { .. })).collect();
+            outputs.sort_by_key(|n| match n.kind {
+                NodeKind::LayerOutput { slot, .. } => slot,
+                _ => 0,
+            });
+            outputs
+                .into_iter()
+                .filter_map(|n| {
+                    let top = field(graph.input_of(n.id, 0))?;
+                    let bottom = field(graph.input_of(n.id, 1))?;
+                    let colors = graph.input_of(n.id, 2).and_then(|s| eval.values.get(&s)).map(|v| v.as_color());
+                    Some((top, bottom, colors))
+                })
+                .collect()
+        }
+    }
+}
+
+/// Layers as the viewport takes them: two at most, the others laid into
+/// the second where it has no rock.
+fn slabs_of(layers: &[ShownLayer], n: usize) -> Vec<Slab> {
+    let mut slabs: Vec<Slab> = Vec::new();
+    for (k, (top, bottom, colors)) in layers.iter().enumerate() {
+        if top.n != n || bottom.n != n {
+            continue;
+        }
+        let shape: Vec<[f32; 2]> = (0..n * n)
+            .map(|c| {
+                let (t, b) = (top.data[c], bottom.data[c]);
+                if t - b > 0.5 { [t, b] } else { [t, t] }
+            })
+            .collect();
+        let paint: Vec<[u8; 4]> = (0..n * n)
+            .map(|c| {
+                let rgb = colors.as_ref().and_then(|col| col.data.get(c).copied()).unwrap_or([150, 143, 132]);
+                [rgb[0], rgb[1], rgb[2], 255]
+            })
+            .collect();
+        if k < MAX_SLABS {
+            slabs.push(Slab {
+                top_bottom: shape,
+                colors: paint,
+            });
+        } else if let Some(last) = slabs.last_mut() {
+            for c in 0..n * n {
+                let [t, b] = last.top_bottom[c];
+                if t - b <= 0.5 && shape[c][0] - shape[c][1] > 0.5 {
+                    last.top_bottom[c] = shape[c];
+                    last.colors[c] = paint[c];
+                }
+            }
+        }
+    }
+    slabs
+}
+
+fn view_data(heights: &Field, paint: &Paint, extent: &Extent, exaggeration: f32, layers: &[ShownLayer]) -> ViewData {
     let n = heights.n;
     let (lo, hi) = heights.range();
     let span = (hi - lo).max(1e-3);
@@ -222,6 +294,7 @@ fn view_data(heights: &Field, paint: &Paint, extent: &Extent, exaggeration: f32)
         light: occlusion(&heights.data, n, extent.spacing(), exaggeration),
         size: extent.size as f32,
         exaggeration,
+        slabs: slabs_of(layers, n),
     }
 }
 
@@ -295,8 +368,18 @@ impl Worker {
                             drawn.insert(*key, ptr);
                         }
                     }
-                    let view = pick_view(&req.graph, &eval, req.view)
-                        .map(|(h, paint, shown)| (Arc::new(view_data(&h, &paint, &req.extent, req.exaggeration)), shown));
+                    // A node that makes rock over the ground is shown over
+                    // the graph's ground.
+                    let viewed = |pick: &dyn Fn(&NodeKind) -> bool| req.view.filter(|(id, _)| req.graph.node(*id).is_some_and(|n| pick(&n.kind)));
+                    let layer_node = viewed(&makes_layer);
+                    // A layer output shows the whole of the graph's output.
+                    let layer_output = viewed(&|k| matches!(k, NodeKind::LayerOutput { .. }));
+                    let layers = layers_shown(&req.graph, &eval, if layer_output.is_some() { None } else { req.view });
+                    let relief_of = if layer_node.is_some() || layer_output.is_some() { None } else { req.view };
+                    let view = pick_view(&req.graph, &eval, relief_of).map(|(h, paint, shown)| {
+                        let data = view_data(&h, &paint, &req.extent, req.exaggeration, &layers);
+                        (Arc::new(data), layer_node.or(layer_output).unwrap_or(shown))
+                    });
                     let failed = eval.failed.iter().map(|(k, e)| (*k, e.to_string())).collect();
                     let _ = answers.send(Preview {
                         revision: req.revision,
@@ -384,6 +467,14 @@ fn template_render(t: Template, sea: f32, exaggeration: f32) -> RenderSettings {
             haze: 0.7,
             ..clouds(0.5, 55.0, 45.0, 150.0)
         },
+        Template::FloatingMountains => RenderSettings {
+            sea: true,
+            cloud_density: 1.25,
+            sun_azimuth: 120.0,
+            sun_elevation: 30.0,
+            haze: 0.6,
+            ..clouds(0.5, 70.0, 45.0, 160.0)
+        },
         Template::RiverValley => RenderSettings {
             sea: true,
             sun_azimuth: 140.0,
@@ -435,24 +526,46 @@ fn template_picture(t: Template, reg: &Registry, sea: f32, extent: &Extent) -> O
         l.map(|v| v / k)
     };
     let water = [0.03f32, 0.16, 0.28].map(|v| v * 0.8);
-    let mut rgb = Vec::with_capacity(n * n * 3);
+    // A surface lit from the north-west.
+    let shade = |f: &Field, i: usize, j: usize| {
+        let dx = (f.at(i + 1, j) - f.at(i.saturating_sub(1), j)) / (2.0 * spacing);
+        let dz = (f.at(i, j + 1) - f.at(i, j.saturating_sub(1))) / (2.0 * spacing);
+        let k = (dx * dx + 1.0 + dz * dz).sqrt();
+        0.25 + 0.95 * ((-dx * light[0] + light[1] - dz * light[2]) / k).max(0.0)
+    };
+    let mut picture: Vec<[f32; 3]> = Vec::with_capacity(n * n);
     for j in 0..n {
         for i in 0..n {
             let v = h.at(i, j);
-            let dx = (h.at(i + 1, j) - h.at(i.saturating_sub(1), j)) / (2.0 * spacing);
-            let dz = (h.at(i, j + 1) - h.at(i, j.saturating_sub(1))) / (2.0 * spacing);
-            let k = (dx * dx + 1.0 + dz * dz).sqrt();
-            let lit = ((-dx * light[0] + light[1] - dz * light[2]) / k).max(0.0);
-            let shade = 0.25 + 0.95 * lit;
             let base = colors.as_ref().map_or([0.4, 0.4, 0.4], |c| c.linear(j * n + i));
-            let mut c = base.map(|b| b * shade);
+            let mut c = base.map(|b| b * shade(&h, i, j));
             if v < sea {
                 let deep = 0.55 + 0.4 * ((sea - v) / 24.0).min(1.0);
                 c = [0, 1, 2].map(|k| c[k] + (water[k] - c[k]) * deep);
             }
-            rgb.extend(c.map(massif_core::graph::encode_srgb));
+            picture.push(c);
         }
     }
+    // Rock over the ground, seen from above, and its shadow under it.
+    for layer in &out.layers {
+        let there = |i: usize, j: usize| layer.top.at(i, j) - layer.bottom.at(i, j) >= 1.0;
+        for j in 0..n {
+            for i in 0..n {
+                if i >= 2 && j >= 2 && there(i - 2, j - 2) && !there(i, j) {
+                    picture[j * n + i] = picture[j * n + i].map(|v| v * 0.55);
+                }
+            }
+        }
+        for j in 0..n {
+            for i in 0..n {
+                if there(i, j) {
+                    let base = layer.colors.as_ref().map_or([0.3, 0.42, 0.2], |(c, _)| c.linear(j * n + i));
+                    picture[j * n + i] = base.map(|b| b * shade(&layer.top, i, j) * 1.1);
+                }
+            }
+        }
+    }
+    let rgb: Vec<u8> = picture.into_iter().flat_map(|c| c.map(massif_core::graph::encode_srgb)).collect();
     Some(ColorImage::from_rgb([n, n], &rgb))
 }
 
@@ -907,13 +1020,34 @@ impl GraphEditor {
                         Some((colors, set)) => block_palette(doc, blocks, *set, colors),
                         None => Vec::new(),
                     };
+                    let layer_palettes: Vec<_> = built
+                        .outputs
+                        .layers
+                        .iter()
+                        .map(|l| match &l.colors {
+                            Some((colors, set)) => block_palette(doc, blocks, *set, colors),
+                            None => Vec::new(),
+                        })
+                        .collect();
                     doc.history.begin("Terrain graph", doc.dim);
+                    let levels = layer_levels(doc, &built.outputs.layers);
                     let seed = doc.world.meta.seed as u64;
                     massif_core::graph::apply(&mut doc.history.edit(&mut doc.world, 0), &built.extent, &built.outputs, seed, &palette);
+                    let grass = doc.world.registry.terrain_by_name("Grass").unwrap_or(TerrainId::ROCK);
+                    for ((layer, index), layer_palette) in built.outputs.layers.iter().zip(&levels).zip(&layer_palettes) {
+                        let edit = &mut doc.history.edit(&mut doc.world, *index);
+                        massif_core::graph::apply_layer(edit, &built.extent, layer, seed, layer_palette, grass);
+                    }
                     doc.commit();
+                    doc.clamp_active_level();
                     let blocks_note = if palette.is_empty() { String::new() } else { format!(", in {} kinds of blocks", palette.len()) };
+                    let layers_note = match built.outputs.layers.len() {
+                        0 => String::new(),
+                        1 => ", with one level of rock over the void".to_owned(),
+                        k => format!(", with {k} levels of rock over the void"),
+                    };
                     feedback = Some(format!(
-                        "Converted the graph to voxels at {} × {} in {took:.1} s{blocks_note}",
+                        "Converted the graph to voxels at {} × {} in {took:.1} s{blocks_note}{layers_note}",
                         built.extent.n, built.extent.n
                     ));
                 }
@@ -1011,7 +1145,7 @@ impl GraphEditor {
                 // Under the button, or over it when the window has no room
                 // below.
                 let room = ui.ctx().content_rect().bottom() - button.rect.bottom();
-                self.templates_up = room < 440.0;
+                self.templates_up = room < 560.0;
                 self.templates_at = if self.templates_up {
                     button.rect.right_top() - vec2(0.0, 6.0)
                 } else {
@@ -1163,6 +1297,12 @@ impl GraphEditor {
         let mut graph = graph_of(doc);
         self.start_from(doc, t, &mut graph);
         self.store(doc, graph);
+    }
+
+    /// Whether a conversion is under way.
+    #[cfg(test)]
+    pub fn converting(&self) -> bool {
+        self.build.is_some()
     }
 
     /// Open the template picker.
@@ -1694,6 +1834,39 @@ impl GraphEditor {
 /// Turn a build's colours into terrains of real blocks: the blocks of the
 /// palette (read from the game, or Massif's terrains without it), only
 /// those the colours come close to, made terrains of the world.
+/// The Solid levels the layers of a conversion go to, in their order: those
+/// earlier conversions made, new ones for the others. Levels of layers the
+/// graph no longer has are removed. Called at the start of the history step.
+fn layer_levels(doc: &mut Document, layers: &[LayerOut]) -> Vec<usize> {
+    let find = |doc: &Document, slot: u32| {
+        doc.dimension()
+            .levels
+            .iter()
+            .position(|l| l.kind == LevelKind::Solid && LayerOut::is_level_of(&l.name, slot))
+    };
+    let graph_level = |name: &str| (1..=64).any(|slot| LayerOut::is_level_of(name, slot));
+    let stale: Vec<usize> = doc
+        .dimension()
+        .levels
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.kind == LevelKind::Solid && graph_level(&l.name) && !layers.iter().any(|o| LayerOut::is_level_of(&l.name, o.slot)))
+        .map(|(k, _)| k)
+        .collect();
+    let missing: Vec<&LayerOut> = layers.iter().filter(|l| find(doc, l.slot).is_none()).collect();
+    if !stale.is_empty() || !missing.is_empty() {
+        let mut edit = doc.history.edit(&mut doc.world, 0);
+        let dim = edit.structure();
+        for k in stale.into_iter().rev() {
+            dim.remove_level(k);
+        }
+        for l in missing {
+            dim.add_level(l.name.clone(), LevelKind::Solid);
+        }
+    }
+    layers.iter().map(|l| find(doc, l.slot).expect("the level was just made")).collect()
+}
+
 fn block_palette(doc: &mut Document, blocks: &BlockLibrary, set: BlockPalette, colors: &ColorField) -> Vec<(TerrainId, [u8; 3])> {
     match &blocks.catalogue {
         Some(cat) => {
@@ -2318,6 +2491,58 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
                 r
             });
         }
+        NodeKind::FloatingIslands {
+            altitude,
+            spread,
+            size,
+            coverage,
+            depth,
+            seed: s,
+        } => {
+            height(ui, "Altitude", altitude);
+            blocks(ui, "Altitude spread", spread, 150.0);
+            blocks(ui, "Largest radius", size, 600.0);
+            fraction(ui, "Coverage", coverage);
+            amount(ui, "Underside", depth, 0.2..=3.0);
+            seed(ui, s);
+            ui.label(
+                RichText::new(
+                    "Wire Top and Bottom to a Layer output: the islands become a level of the map, floating over the void.",
+                )
+                .size(11.0)
+                .color(pal.weak),
+            );
+        }
+        NodeKind::Overhang {
+            reach,
+            thickness,
+            drop,
+            variation,
+            seed: s,
+        } => {
+            blocks(ui, "Reach", reach, 64.0);
+            blocks(ui, "Thickness", thickness, 48.0);
+            blocks(ui, "Cliff drop", drop, 160.0);
+            fraction(ui, "Variation", variation);
+            seed(ui, s);
+            ui.label(
+                RichText::new("Wire Top and Bottom to a Layer output: the rims jut out over the void at the foot of the cliffs.")
+                    .size(11.0)
+                    .color(pal.weak),
+            );
+        }
+        NodeKind::LayerOutput { slot, palette } => {
+            count(ui, "Layer", slot, 1..=8);
+            choice(ui, "Blocks from", palette, &BlockPalette::ALL.map(|p| (p, p.label())));
+            ui.label(
+                RichText::new(
+                    "When converted, the rock between Top and Bottom becomes a Solid level of the map, its columns spans over \
+                     the void (one level per layer number). Without a colour, its top is grass.",
+                )
+                .size(11.0)
+                .color(pal.weak),
+            );
+        }
         NodeKind::ColorOutput { blocks: b, palette } => {
             flag(ui, "Real blocks", b);
             if *b {
@@ -2426,7 +2651,7 @@ mod tests {
         assert_eq!(shown, (paint, 0));
         // The data for the viewport, with its light.
         let (h, p, _) = pick_view(&g, &eval, Some((slope, 0))).unwrap();
-        let data = view_data(&h, &p, &extent, 2.0);
+        let data = view_data(&h, &p, &extent, 2.0, &[]);
         assert_eq!((data.colors.len(), data.light.len()), (32 * 32, 32 * 32));
         // Thumbnails of each kind.
         for (key, value) in &eval.values {

@@ -11,6 +11,7 @@ pub enum Template {
     Alpine,
     Archipelago,
     KarstTowers,
+    FloatingMountains,
     RiverValley,
     DesertCanyon,
     VolcanicIsland,
@@ -19,10 +20,11 @@ pub enum Template {
 }
 
 impl Template {
-    pub const ALL: [Template; 8] = [
+    pub const ALL: [Template; 9] = [
         Template::Alpine,
         Template::Archipelago,
         Template::KarstTowers,
+        Template::FloatingMountains,
         Template::RiverValley,
         Template::DesertCanyon,
         Template::VolcanicIsland,
@@ -35,6 +37,7 @@ impl Template {
             Template::Alpine => "Alpine range",
             Template::Archipelago => "Archipelago",
             Template::KarstTowers => "Karst towers",
+            Template::FloatingMountains => "Floating mountains",
             Template::RiverValley => "River valley",
             Template::DesertCanyon => "Desert canyon",
             Template::VolcanicIsland => "Volcanic island",
@@ -47,7 +50,8 @@ impl Template {
         match self {
             Template::Alpine => "Eroded peaks over green hills, snow on the summits",
             Template::Archipelago => "Tropical islands in a shallow sea, beaches and green peaks",
-            Template::KarstTowers => "Sheer stone pillars over a jungle, green tops, mist between them",
+            Template::KarstTowers => "A forest of stone pillars cut along their joints, over a jungle",
+            Template::FloatingMountains => "Mountains floating over stone pillars and overhanging cliffs, above the mist",
             Template::RiverValley => "A wide valley between snowy mountains, a river along its floor",
             Template::DesertCanyon => "A winding canyon in a red plateau, stepped walls, buttes, a river",
             Template::VolcanicIsland => "A volcano rising from the sea, black beaches, green lower slopes",
@@ -69,6 +73,7 @@ impl Template {
             }
             Template::Archipelago => archipelago(&mut b, sea, f, terrain("Sand")),
             Template::KarstTowers => karst(&mut b, sea, f),
+            Template::FloatingMountains => floating_mountains(&mut b, sea, f),
             Template::RiverValley => valley(&mut b, sea, f, terrain("Gravel"), terrain("Snow"), TerrainId::ROCK.0),
             Template::DesertCanyon => canyon(&mut b, sea, f),
             Template::VolcanicIsland => volcano(&mut b, sea, f),
@@ -223,18 +228,20 @@ fn archipelago(b: &mut Builder, sea: f32, f: f32, sand: u16) {
     b.wire(sandy, 0, out, 0);
 }
 
-/// Pillars with sheer walls and rounded tops, in clusters over a low,
-/// wet jungle floor.
-fn karst(b: &mut Builder, sea: f32, f: f32) {
-    // Pillars stay pillars: they grow less than the map, and never shrink
-    // to needles.
+/// A forest of stone pillars, as sandstone weathers where two sets of
+/// vertical joints cut a plateau: deep, narrow clefts open along the
+/// joints, the blocks between them stand as pillars with flat, green tops,
+/// and the plateau breaks up into them at its edges. Returns the ground.
+fn pillar_forest(b: &mut Builder, sea: f32, f: f32, top: f32) -> NodeId {
+    // Pillars stay pillars: they grow less than the map.
     let p = f.clamp(1.0, 2.0);
-    let floor = b.add(noise(NoiseStyle::Fbm, 700.0 * f, 6, 36.0, sea - 8.0, 31), 0.0, 0.0);
-    let cells = b.add(
+    let floor = b.add(noise(NoiseStyle::Fbm, 700.0 * f, 6, 30.0, sea - 6.0, 31), 0.0, 0.0);
+    // Two sets of joints, the clefts along them a few blocks wide.
+    let joints = b.add(
         NodeKind::Cells {
-            style: CellStyle::Cones,
-            scale: 110.0 * p,
-            jitter: 0.9,
+            style: CellStyle::Ridges,
+            scale: 56.0 * p,
+            jitter: 0.85,
             height: 1.0,
             base: 0.0,
             seed: 32,
@@ -242,62 +249,162 @@ fn karst(b: &mut Builder, sea: f32, f: f32) {
         0.0,
         1.0,
     );
-    // Sheer walls, then a rounded top.
-    let pillars = b.then(levels(0.55, 0.72, 0.0, 1.0, 0.12), (cells, 0), 1.0, 1.0);
-    let spread = b.add(noise(NoiseStyle::Fbm, 520.0 * f, 4, 1.0, 0.0, 33), 0.0, 2.0);
-    let clusters = b.then(levels(0.49, 0.6, 0.0, 1.0, 1.0), (spread, 0), 1.0, 2.0);
-    let rise = b.add(noise(NoiseStyle::Fbm, 160.0 * p, 3, 1.0, 0.0, 34), 0.0, 3.0);
-    let tall = b.then(levels(0.3, 0.7, 70.0, 185.0, 1.0), (rise, 0), 1.0, 3.0);
-    let standing = b.combine(CombineOp::Multiply, 1.0, (pillars, 0), (clusters, 0), 2.0, 1.5);
-    let towers = b.combine(CombineOp::Multiply, 1.0, (standing, 0), (tall, 0), 3.0, 2.0);
-    let land = b.combine(CombineOp::Add, 1.0, (floor, 0), (towers, 0), 4.0, 0.5);
+    let solid = b.then(levels(0.6, 0.68, 1.0, 0.0, 1.0), (joints, 0), 1.0, 1.0);
+    let cross = b.add(
+        NodeKind::Cells {
+            style: CellStyle::Ridges,
+            scale: 92.0 * p,
+            jitter: 0.9,
+            height: 1.0,
+            base: 0.0,
+            seed: 33,
+        },
+        0.0,
+        2.0,
+    );
+    let solid2 = b.then(levels(0.72, 0.78, 1.0, 0.0, 1.0), (cross, 0), 1.0, 2.0);
+    let blocks = b.combine(CombineOp::Multiply, 1.0, (solid, 0), (solid2, 0), 2.0, 1.5);
+    // The plateau, and pillars standing in patches around it.
+    let land_noise = b.add(noise(NoiseStyle::Fbm, 1000.0 * f, 5, 1.0, 0.0, 34), 0.0, 3.0);
+    let plateau = b.then(levels(0.53, 0.56, 0.0, 1.0, 1.0), (land_noise, 0), 1.0, 3.0);
+    let around = b.then(NodeKind::Blur { radius: 110.0 * f }, (plateau, 0), 2.0, 3.0);
+    let near = b.then(levels(0.06, 0.3, 0.0, 1.0, 1.0), (around, 0), 3.0, 3.0);
+    let patches_noise = b.add(noise(NoiseStyle::Fbm, 170.0 * p, 4, 1.0, 0.0, 35), 2.0, 4.0);
+    let patches = b.then(levels(0.42, 0.55, 0.0, 1.0, 1.0), (patches_noise, 0), 3.0, 4.0);
+    let scattered = b.combine(CombineOp::Multiply, 1.0, (near, 0), (patches, 0), 4.0, 3.5);
+    let standing = b.combine(CombineOp::Max, 1.0, (plateau, 0), (scattered, 0), 5.0, 3.0);
+    let rock = b.combine(CombineOp::Multiply, 1.0, (blocks, 0), (standing, 0), 6.0, 2.0);
+    // Their heights change from one group to the next, in steps: tops
+    // stay flat.
+    let rise = b.add(noise(NoiseStyle::Fbm, 200.0 * p, 2, 1.0, 0.0, 36), 5.0, 4.5);
+    let steps = b.then(NodeKind::Terrace { steps: 7, strength: 0.9 }, (rise, 0), 6.0, 4.5);
+    let tall = b.then(levels(0.3, 0.7, top * 0.55, top, 1.0), (steps, 0), 7.0, 4.5);
+    let towers = b.combine(CombineOp::Multiply, 1.0, (rock, 0), (tall, 0), 7.0, 2.5);
+    // Crags on the walls.
+    let land = b.combine(CombineOp::Add, 1.0, (floor, 0), (towers, 0), 9.0, 1.0);
     let rocks = b.add(
         NodeKind::Rocks {
-            scale: 14.0,
-            height: 5.0,
-            sharpness: 0.8,
-            seed: 35,
+            scale: 9.0,
+            height: 3.0,
+            sharpness: 0.9,
+            seed: 37,
         },
-        4.0,
-        1.5,
+        9.0,
+        2.0,
     );
-    let rough = b.combine(CombineOp::Add, 1.0, (land, 0), (rocks, 0), 5.0, 0.5);
-    let rivers = b.then(
+    let rough = b.combine(CombineOp::Add, 1.0, (land, 0), (rocks, 0), 10.0, 1.0);
+    b.then(
         NodeKind::Rivers {
             threshold: 0.55,
             depth: 5.0,
             width: 6.0,
         },
         (rough, 0),
-        6.0,
-        0.5,
-    );
-    let water = b.then(NodeKind::Sea { level: sea, shore: 2.0 }, (rivers, 0), 7.0, 0.5);
-    let out = b.add(NodeKind::HeightOutput, 8.0, 0.0);
-    b.wire(water, 0, out, 0);
-    let colour = b.then(auto(AutoPalette::Tropical, sea + 1000.0, 52.0, 4), (water, 0), 8.0, 1.0);
-    let steep = b.then(slope(58.0, 90.0), (water, 0), 8.0, 2.0);
-    let stone = b.tint([128, 124, 112], 0.55, colour, (steep, 0), 9.0, 1.0);
-    // Moss and creepers in patches down the walls.
-    let scatter = b.add(noise(NoiseStyle::Fbm, 26.0, 4, 1.0, 0.0, 36), 8.0, 5.0);
-    let patches = b.then(levels(0.42, 0.62, 0.0, 1.0, 1.0), (scatter, 0), 9.0, 5.0);
-    let shaded = b.combine(CombineOp::Multiply, 1.0, (steep, 0), (patches, 0), 10.0, 4.5);
+        11.0,
+        1.0,
+    )
+}
+
+/// The colours of a jungle of stone: lush tops, pale stone walls with moss
+/// and creepers in patches, a green floor. Returns the colour node.
+fn jungle_colours(b: &mut Builder, sea: f32, ground: NodeId, col: f32, row: f32) -> NodeId {
+    let colour = b.then(auto(AutoPalette::Tropical, sea + 1000.0, 52.0, 4), (ground, 0), col, row + 1.0);
+    let steep = b.then(slope(58.0, 90.0), (ground, 0), col, row + 2.0);
+    let stone = b.tint([132, 126, 112], 0.6, colour, (steep, 0), col + 1.0, row + 1.0);
+    let scatter = b.add(noise(NoiseStyle::Fbm, 26.0, 4, 1.0, 0.0, 38), col, row + 3.0);
+    let patches = b.then(levels(0.42, 0.62, 0.0, 1.0, 1.0), (scatter, 0), col + 1.0, row + 3.0);
+    let mossy_walls = b.combine(CombineOp::Multiply, 1.0, (steep, 0), (patches, 0), col + 2.0, row + 2.5);
+    let mossy = b.tint([58, 92, 44], 0.65, stone, (mossy_walls, 0), col + 2.0, row + 1.0);
     let high = b.then(
         NodeKind::SelectHeight {
-            min: sea + 60.0,
+            min: sea + 40.0,
             max: sea + 1000.0,
-            falloff: 20.0,
+            falloff: 14.0,
+        },
+        (ground, 0),
+        col,
+        row + 4.0,
+    );
+    let flat = b.then(slope(0.0, 40.0), (ground, 0), col, row + 5.0);
+    let tops = b.combine(CombineOp::Multiply, 1.0, (high, 0), (flat, 0), col + 1.0, row + 4.5);
+    b.tint([44, 98, 36], 0.75, mossy, (tops, 0), col + 3.0, row + 1.0)
+}
+
+/// Stone pillars over a wet jungle floor crossed by rivers.
+fn karst(b: &mut Builder, sea: f32, f: f32) {
+    let ground = pillar_forest(b, sea, f, 150.0);
+    let water = b.then(NodeKind::Sea { level: sea, shore: 2.0 }, (ground, 0), 12.0, 1.0);
+    let out = b.add(NodeKind::HeightOutput, 13.0, 0.0);
+    b.wire(water, 0, out, 0);
+    let colour = jungle_colours(b, sea, water, 13.0, 0.0);
+    let out = b.add(colours(BlockPalette::Natural), 17.0, 1.0);
+    b.wire(colour, 0, out, 0);
+}
+
+/// Mountains floating over a jungle of stone pillars, the plateau's cliffs
+/// overhanging the void: rock over rock, two levels of the map. The
+/// islands float above the pillars' tops, never into them.
+fn floating_mountains(b: &mut Builder, sea: f32, f: f32) {
+    let ground = pillar_forest(b, sea, f, 85.0);
+    let water = b.then(NodeKind::Sea { level: sea, shore: 2.0 }, (ground, 0), 12.0, 1.0);
+    let out = b.add(NodeKind::HeightOutput, 13.0, 0.0);
+    b.wire(water, 0, out, 0);
+    let colour = jungle_colours(b, sea, water, 13.0, 0.0);
+    let out = b.add(colours(BlockPalette::Natural), 17.0, 1.0);
+    b.wire(colour, 0, out, 0);
+    // Rims over the void at the top of the cliffs.
+    let rims = b.then(
+        NodeKind::Overhang {
+            reach: 8.0,
+            thickness: 7.0,
+            drop: 45.0,
+            variation: 0.75,
+            seed: 91,
         },
         (water, 0),
-        8.0,
-        3.0,
+        13.0,
+        7.0,
     );
-    let flat = b.then(slope(0.0, 40.0), (water, 0), 8.0, 4.0);
-    let tops = b.combine(CombineOp::Multiply, 1.0, (high, 0), (flat, 0), 9.0, 3.5);
-    let lush = b.tint([46, 100, 38], 0.75, stone, (tops, 0), 10.0, 1.0);
-    let mossy = b.tint([58, 92, 44], 0.65, lush, (shaded, 0), 11.0, 1.0);
-    let out = b.add(colours(BlockPalette::Natural), 12.0, 1.0);
-    b.wire(mossy, 0, out, 0);
+    let rim_colour = b.then(auto(AutoPalette::Tropical, sea + 1000.0, 52.0, 5), (rims, 0), 14.0, 7.5);
+    let out = b.add(
+        NodeKind::LayerOutput {
+            slot: 1,
+            palette: BlockPalette::Natural,
+        },
+        15.0,
+        7.0,
+    );
+    b.wire(rims, 0, out, 0);
+    b.wire(rims, 1, out, 1);
+    b.wire(rim_colour, 0, out, 2);
+    // The floating mountains, high over the pillars.
+    let islands = b.add(
+        NodeKind::FloatingIslands {
+            altitude: sea + 180.0,
+            spread: 15.0,
+            size: 70.0 * f.clamp(0.8, 1.15),
+            coverage: 0.45,
+            depth: 1.25,
+            seed: 92,
+        },
+        11.0,
+        9.0,
+    );
+    let clearance = b.add(NodeKind::Constant { value: 14.0 }, 11.0, 10.5);
+    let above = b.combine(CombineOp::Add, 1.0, (water, 0), (clearance, 0), 12.0, 10.0);
+    let bottom = b.combine(CombineOp::Max, 1.0, (islands, 1), (above, 0), 13.0, 9.5);
+    let green = jungle_colours(b, sea, islands, 13.0, 11.0);
+    let out = b.add(
+        NodeKind::LayerOutput {
+            slot: 2,
+            palette: BlockPalette::Natural,
+        },
+        15.0,
+        9.5,
+    );
+    b.wire(islands, 0, out, 0);
+    b.wire(bottom, 0, out, 1);
+    b.wire(green, 0, out, 2);
 }
 
 /// A wide valley with a flat floor between ridged mountains, and a river

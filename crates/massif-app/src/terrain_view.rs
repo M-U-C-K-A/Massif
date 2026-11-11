@@ -123,7 +123,21 @@ pub struct ViewData {
     pub size: f32,
     /// Vertical exaggeration the occlusion was worked out for.
     pub exaggeration: f32,
+    /// Rock over the ground (floating islands, overhangs), two at most.
+    pub slabs: Vec<Slab>,
 }
+
+/// Rock between two heights over the ground, at the relief's resolution.
+#[derive(Debug, Clone)]
+pub struct Slab {
+    /// Top and bottom of each sample, in blocks; equal where there is none.
+    pub top_bottom: Vec<[f32; 2]>,
+    /// sRGB colours of its top.
+    pub colors: Vec<[u8; 4]>,
+}
+
+/// How many slabs the viewport draws.
+pub const MAX_SLABS: usize = 2;
 
 /// How open to the sky every sample is: how far the ground around rises
 /// above it, at a few scales.
@@ -240,6 +254,10 @@ struct U {
 @group(0) @binding(2) var colors: texture_2d<f32>;
 @group(0) @binding(3) var light: texture_2d<f32>;
 @group(0) @binding(4) var smooth_sampler: sampler;
+@group(0) @binding(5) var slab0: texture_2d<f32>;
+@group(0) @binding(6) var slab0_colors: texture_2d<f32>;
+@group(0) @binding(7) var slab1: texture_2d<f32>;
+@group(0) @binding(8) var slab1_colors: texture_2d<f32>;
 
 const EXTINCTION: f32 = 0.045;
 
@@ -249,11 +267,29 @@ fn height_at(i: i32, j: i32) -> f32 {
     return textureLoad(heights, c, 0).r * u.grid.z;
 }
 
-/// The drawn height of the ground under a point of the scene.
-fn ground(p: vec2<f32>) -> f32 {
+/// The sample of the grid under a point of the scene.
+fn cell_of(p: vec2<f32>) -> vec2<i32> {
     let spacing = u.grid.y / u.grid.x;
     let g = (p + vec2<f32>(u.grid.y * 0.5)) / spacing - 0.5;
-    return height_at(i32(round(g.x)), i32(round(g.y)));
+    return vec2<i32>(i32(round(g.x)), i32(round(g.y)));
+}
+
+/// The drawn height of the ground under a point of the scene.
+fn ground(p: vec2<f32>) -> f32 {
+    let c = cell_of(p);
+    return height_at(c.x, c.y);
+}
+
+/// Top and bottom (drawn heights) of slab `k` at a sample: rock over the
+/// ground, floating islands or overhangs. Equal where there is none.
+fn slab_at(k: u32, i: i32, j: i32) -> vec2<f32> {
+    let n = i32(u.grid.x);
+    let c = clamp(vec2<i32>(i, j), vec2<i32>(0), vec2<i32>(n - 1));
+    var s = textureLoad(slab0, c, 0).rg;
+    if (k == 1u) {
+        s = textureLoad(slab1, c, 0).rg;
+    }
+    return s * u.grid.z;
 }
 
 // ---- the sky
@@ -436,8 +472,17 @@ fn relief_shadow(p: vec3<f32>) -> f32 {
         if (abs(q.x) > half || abs(q.z) > half) {
             break;
         }
-        let h = ground(q.xz);
+        let c = cell_of(q.xz);
+        let h = height_at(c.x, c.y);
         lit = min(lit, clamp((q.y - h) / t * 10.0 + 0.4, 0.0, 1.0));
+        // Rock over the ground casts its shadow too.
+        for (var k = 0u; k < u32(u.sea.z); k++) {
+            let s = slab_at(k, c.x, c.y);
+            if (s.x - s.y > 0.3) {
+                let outside = max(s.y - q.y, q.y - s.x);
+                lit = min(lit, clamp(outside / t * 10.0 + 0.4, 0.0, 1.0));
+            }
+        }
         if (lit <= 0.0) {
             break;
         }
@@ -549,6 +594,84 @@ fn fs_main(in: Out) -> @location(0) vec4<f32> {
     return vec4<f32>(aces(c * u.horizon.w), 1.0);
 }
 
+struct SlabOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) world: vec3<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) normal: vec3<f32>,
+    @location(3) thick: f32,
+    @location(4) under: f32,
+    @location(5) @interpolate(flat) layer: u32,
+};
+
+fn slab_side(k: u32, i: i32, j: i32, under: bool) -> f32 {
+    let s = slab_at(k, i, j);
+    return select(s.x, s.y, under);
+}
+
+/// A slab: its top (vertices 0..n²) and its underside (n²..2n²), meeting at
+/// its edges, where its thickness falls to nothing.
+@vertex
+fn vs_slab(@builtin(vertex_index) vi: u32, @builtin(instance_index) k: u32) -> SlabOut {
+    let n = i32(u.grid.x);
+    let spacing = u.grid.y / f32(n);
+    let nn = u32(n * n);
+    let under = vi >= nn;
+    let v = i32(select(vi, vi - nn, under));
+    let i = v % n;
+    let j = v / n;
+    let s = slab_at(k, i, j);
+    let dx = (slab_side(k, i + 1, j, under) - slab_side(k, i - 1, j, under)) / (2.0 * spacing);
+    let dz = (slab_side(k, i, j + 1, under) - slab_side(k, i, j - 1, under)) / (2.0 * spacing);
+    var normal = normalize(vec3<f32>(-dx, 1.0, -dz));
+    if (under) {
+        normal = -normal;
+    }
+    let half = u.grid.y * 0.5;
+    let p = vec3<f32>((f32(i) + 0.5) * spacing - half, select(s.x, s.y, under), (f32(j) + 0.5) * spacing - half);
+    var out: SlabOut;
+    out.clip = u.view_proj * vec4<f32>(p, 1.0);
+    out.world = p;
+    out.uv = (vec2<f32>(f32(i), f32(j)) + 0.5) / f32(n);
+    out.normal = normal;
+    out.thick = s.x - s.y;
+    out.under = select(0.0, 1.0, under);
+    out.layer = k;
+    return out;
+}
+
+@fragment
+fn fs_slab(in: SlabOut) -> @location(0) vec4<f32> {
+    let c0 = textureSample(slab0_colors, smooth_sampler, in.uv).rgb;
+    let c1 = textureSample(slab1_colors, smooth_sampler, in.uv).rgb;
+    if (in.thick < 0.3) {
+        discard;
+    }
+    let n = normalize(in.normal);
+    let top_color = select(c0, c1, in.layer == 1u);
+    var base = top_color;
+    var open = 0.9;
+    if (in.under > 0.5) {
+        // The underside: bare rock, in the shade, lit from below by the
+        // ground and the haze.
+        base = mix(vec3<f32>(0.24, 0.215, 0.19), top_color * 0.6, 0.2);
+        open = 0.6;
+    }
+    let spacing = u.grid.y / u.grid.x;
+    let sun_seen = relief_shadow(in.world + n * spacing * 0.35) * cloud_shadow(in.world);
+    let direct = u.sun_color.rgb * max(dot(n, u.sun.xyz), 0.0) * sun_seen;
+    let sky_col = mix(u.horizon.rgb, u.zenith.rgb, 0.5 + 0.5 * n.y);
+    let sky_light = mix(vec3<f32>(dot(sky_col, vec3<f32>(0.2126, 0.7152, 0.0722))), sky_col, 0.5) * open * 0.85;
+    // Sunlight thrown back up by the ground below, and around.
+    let from_below = u.sun_color.rgb * max(u.sun.y, 0.0) * 0.22 * max(-n.y, 0.0);
+    let bounce = u.sun_color.rgb * base * 0.06 * (1.0 - abs(n.y));
+    var c = base * (direct + sky_light + from_below) + bounce;
+    let v = in.world - u.eye.xyz;
+    let dist = length(v);
+    c = atmosphere(c, v / dist, dist, in.clip.xy);
+    return vec4<f32>(aces(c * u.horizon.w), 1.0);
+}
+
 struct SkyOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) ndc: vec2<f32>,
@@ -625,6 +748,11 @@ struct Relief {
     group: wgpu::BindGroup,
     indices: wgpu::Buffer,
     count: u32,
+    /// The triangles of a slab (its top, then its underside), and how many
+    /// slabs to draw.
+    slab_indices: wgpu::Buffer,
+    slab_count: u32,
+    slabs: u32,
 }
 
 /// GPU side of the viewport.
@@ -632,6 +760,7 @@ pub struct TerrainRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     relief_pipeline: wgpu::RenderPipeline,
+    slab_pipeline: wgpu::RenderPipeline,
     sky_pipeline: wgpu::RenderPipeline,
     sea_pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
@@ -679,6 +808,10 @@ impl TerrainRenderer {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                texture(5, false),
+                texture(6, true),
+                texture(7, false),
+                texture(8, true),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -723,6 +856,7 @@ impl TerrainRenderer {
             })
         };
         let relief_pipeline = pipeline("massif graph relief", "vs_main", "fs_main", wgpu::BlendState::REPLACE, true, wgpu::CompareFunction::Less);
+        let slab_pipeline = pipeline("massif graph slabs", "vs_slab", "fs_slab", wgpu::BlendState::REPLACE, true, wgpu::CompareFunction::Less);
         let sky_pipeline = pipeline("massif graph sky", "vs_sky", "fs_sky", wgpu::BlendState::REPLACE, false, wgpu::CompareFunction::LessEqual);
         let sea_pipeline = pipeline("massif graph sea", "vs_sea", "fs_sea", wgpu::BlendState::ALPHA_BLENDING, false, wgpu::CompareFunction::Less);
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
@@ -743,6 +877,7 @@ impl TerrainRenderer {
             device: device.clone(),
             queue: queue.clone(),
             relief_pipeline,
+            slab_pipeline,
             sky_pipeline,
             sea_pipeline,
             layout,
@@ -755,8 +890,11 @@ impl TerrainRenderer {
 
     /// Put a relief on the GPU.
     pub fn upload(&mut self, data: &ViewData) {
-        let n = data.n as u32;
         let texture = |label: &str, format: wgpu::TextureFormat, bytes: &[u8], texel: u32| {
+            // Empty: a texture of one sample, never read.
+            let n = if bytes.is_empty() { 1 } else { data.n as u32 };
+            let blank = vec![0u8; texel as usize];
+            let bytes = if bytes.is_empty() { &blank[..] } else { bytes };
             let t = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
                 size: wgpu::Extent3d {
@@ -790,6 +928,17 @@ impl TerrainRenderer {
         let heights = texture("massif graph heights", wgpu::TextureFormat::R32Float, bytemuck::cast_slice(&data.heights), 4);
         let colors = texture("massif graph colours", wgpu::TextureFormat::Rgba8UnormSrgb, bytemuck::cast_slice(&data.colors), 4);
         let light = texture("massif graph light", wgpu::TextureFormat::Rg8Unorm, bytemuck::cast_slice(&data.light), 2);
+        let slab = |k: usize| {
+            let s = data.slabs.get(k);
+            let shape = s.map_or(&[][..], |s| bytemuck::cast_slice(&s.top_bottom));
+            let colors = s.map_or(&[][..], |s| bytemuck::cast_slice(&s.colors));
+            (
+                texture("massif graph slab", wgpu::TextureFormat::Rg32Float, shape, 8),
+                texture("massif graph slab colours", wgpu::TextureFormat::Rgba8UnormSrgb, colors, 4),
+            )
+        };
+        let (slab0, slab0_colors) = slab(0);
+        let (slab1, slab1_colors) = slab(1);
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("massif graph view"),
             layout: &self.layout,
@@ -814,22 +963,46 @@ impl TerrainRenderer {
                     binding: 4,
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&slab0),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(&slab0_colors),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&slab1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::TextureView(&slab1_colors),
+                },
             ],
         });
         // Reuse the triangles while the size stays.
-        let (indices, count) = match self.relief.take() {
-            Some(r) if r.n == data.n => (r.indices, r.count),
+        let buffer = |label: &str, idx: &[u32]| {
+            wgpu::util::DeviceExt::create_buffer_init(
+                &self.device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: bytemuck::cast_slice(idx),
+                    usage: wgpu::BufferUsages::INDEX,
+                },
+            )
+        };
+        let (indices, count, slab_indices, slab_count) = match self.relief.take() {
+            Some(r) if r.n == data.n => (r.indices, r.count, r.slab_indices, r.slab_count),
             _ => {
                 let idx = grid_indices(data.n);
-                let buffer = wgpu::util::DeviceExt::create_buffer_init(
-                    &self.device,
-                    &wgpu::util::BufferInitDescriptor {
-                        label: Some("massif graph triangles"),
-                        contents: bytemuck::cast_slice(&idx),
-                        usage: wgpu::BufferUsages::INDEX,
-                    },
-                );
-                (buffer, idx.len() as u32)
+                let slab = slab_indices(data.n);
+                (
+                    buffer("massif graph triangles", &idx),
+                    idx.len() as u32,
+                    buffer("massif graph slab triangles", &slab),
+                    slab.len() as u32,
+                )
             }
         };
         self.relief = Some(Relief {
@@ -837,6 +1010,9 @@ impl TerrainRenderer {
             group,
             indices,
             count,
+            slab_indices,
+            slab_count,
+            slabs: data.slabs.len().min(MAX_SLABS) as u32,
         });
     }
 
@@ -935,6 +1111,11 @@ impl TerrainRenderer {
                 pass.set_pipeline(&self.relief_pipeline);
                 pass.set_index_buffer(relief.indices.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..relief.count, 0, 0..1);
+                if relief.slabs > 0 {
+                    pass.set_pipeline(&self.slab_pipeline);
+                    pass.set_index_buffer(relief.slab_indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..relief.slab_count, 0, 0..relief.slabs);
+                }
                 pass.set_pipeline(&self.sky_pipeline);
                 pass.draw(0..3, 0..1);
                 if sea {
@@ -1004,6 +1185,23 @@ impl TerrainRenderer {
     pub fn read_image(&self) -> Option<(u32, u32, Vec<u8>)> {
         self.read(self.target.as_ref()?)
     }
+}
+
+/// Triangles of a slab: its top, an `n` × `n` grid, then its underside, the
+/// same grid over the next n² vertices.
+fn slab_indices(n: usize) -> Vec<u32> {
+    let n32 = n as u32;
+    let mut idx = Vec::with_capacity((n - 1) * (n - 1) * 12);
+    for base in [0, n32 * n32] {
+        for j in 0..n32 - 1 {
+            for i in 0..n32 - 1 {
+                let a = base + j * n32 + i;
+                let (b, c, d) = (a + 1, a + n32, a + n32 + 1);
+                idx.extend_from_slice(&[a, c, b, b, c, d]);
+            }
+        }
+    }
+    idx
 }
 
 /// Triangles of an `n` × `n` grid, then of its four sides (see the vertex
@@ -1100,7 +1298,14 @@ impl Default for TerrainView {
 impl TerrainView {
     /// Show a new relief.
     pub fn set(&mut self, data: Arc<ViewData>) {
-        let (lo, hi) = data.heights.iter().fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+        let (lo, mut hi) = data.heights.iter().fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+        for slab in &data.slabs {
+            for &[top, bottom] in &slab.top_bottom {
+                if top - bottom > 0.5 {
+                    hi = hi.max(top);
+                }
+            }
+        }
         self.range = (lo, hi);
         self.data = Some(data);
         self.uploaded = None;
@@ -1168,7 +1373,7 @@ impl TerrainView {
             grid: [data.n as f32, size, ex, lo * ex - size * 0.03],
             zenith: [zenith[0], zenith[1], zenith[2], haze],
             horizon: [horizon[0], horizon[1], horizon[2], r.exposure.max(0.05)],
-            sea: [self.sea_level * ex, r.sea as u8 as f32, 0.0, 0.0],
+            sea: [self.sea_level * ex, r.sea as u8 as f32, data.slabs.len().min(MAX_SLABS) as f32, 0.0],
             clouds: [r.cloud_base * ex, (r.cloud_base + r.cloud_thickness.max(1.0)) * ex, r.cloud_cover.clamp(0.0, 1.0), r.cloud_density.max(0.0)],
             clouds2: [r.cloud_size.max(10.0), (r.cloud_seed % 1000) as f32 * 7.31, r.clouds as u8 as f32, 0.0],
             cam: [tan * aspect, tan, 0.0, 0.0],

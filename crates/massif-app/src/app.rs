@@ -2869,6 +2869,65 @@ mod tests {
             let name = t.label().to_lowercase().replace(' ', "-");
             image::save_buffer(dir.join(format!("template-{name}.png")), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
         }
+        // The floating mountains close up, as a saved image.
+        {
+            let app = h.state_mut();
+            app.graph.preview = 1024;
+            app.graph.use_template(&mut app.doc, Template::FloatingMountains);
+        }
+        wait_for_graph(&mut h);
+        let view = &mut h.state_mut().graph.view;
+        view.camera.distance = 0.62;
+        view.camera.pitch = 0.3;
+        view.camera.yaw = 2.2;
+        let (w, hgt, rgba) = view.render_image([1600, 900]).expect("an image");
+        image::save_buffer(dir.join("template-floating-mountains-close.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+        // Converted to voxels: two Solid levels over the ground, columns of
+        // several spans, seen in the 3D view of the map.
+        h.state_mut().graph.resolution = 1024;
+        {
+            use egui_kittest::kittest::Queryable;
+            h.get_by_label_contains("Convert to voxels").click();
+        }
+        let started = std::time::Instant::now();
+        while h.state().doc.history.undo_label() != Some("Terrain graph") {
+            assert!(started.elapsed().as_secs() < 120, "the conversion did not finish");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let names: Vec<String> = h.state().doc.dimension().levels.iter().map(|l| l.name.clone()).collect();
+        assert!(names.iter().any(|n| n == "Overhang (graph 1)"), "{names:?}");
+        assert!(names.iter().any(|n| n == "Floating islands (graph 2)"), "{names:?}");
+        {
+            let app = h.state_mut();
+            app.layout.activate(3);
+            app.view3d.camera.distance = 1250.0;
+            app.view3d.camera.pitch = 0.42;
+        }
+        h.run_steps(5);
+        while h.state().view3d.pending() > 0 {
+            h.step();
+        }
+        h.run_steps(3);
+        let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+        image::save_buffer(dir.join("template-floating-mountains-voxels.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+        // Converting again reuses the levels.
+        let levels = h.state().doc.dimension().levels.len();
+        h.state_mut().layout.activate(6);
+        h.run_steps(3);
+        {
+            use egui_kittest::kittest::Queryable;
+            h.get_by_label_contains("Convert to voxels").click();
+        }
+        h.run_steps(2);
+        assert!(h.state().graph.converting(), "the second conversion started");
+        let started = std::time::Instant::now();
+        while h.state().graph.converting() {
+            assert!(started.elapsed().as_secs() < 120, "the second conversion did not finish");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(h.state().doc.dimension().levels.len(), levels, "the same levels");
     }
 
     /// The game's real blocks: loaded from this computer's installation,

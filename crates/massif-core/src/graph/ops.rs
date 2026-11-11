@@ -1,7 +1,7 @@
 //! Running one node: adjustments, combinations, masks and the dispatch to
 //! landforms, simulations and colours.
 
-use super::{Bend, ColorField, CombineOp, Extent, Field, NodeKind, TintMode, Value, color, landforms, sim};
+use super::{Bend, ColorField, CombineOp, Extent, Field, NodeKind, TintMode, Value, color, landforms, layers, sim};
 use crate::noise::Noise;
 use rayon::prelude::*;
 use std::sync::Arc;
@@ -397,7 +397,29 @@ pub(super) fn run(kind: &NodeKind, e: &Extent, inputs: &[Option<Value>], wanted:
             let f = field(0)?;
             paint(color::auto(&f, e, palette, snow_line, rock_slope, seed))
         }
-        NodeKind::HeightOutput | NodeKind::TerrainOutput { .. } | NodeKind::ColorOutput { .. } => Ok(Vec::new()),
+        NodeKind::FloatingIslands {
+            altitude,
+            spread,
+            size,
+            coverage,
+            depth,
+            seed,
+        } => {
+            let (top, bottom, mask) = layers::floating_islands(e, altitude, spread, size, coverage, depth, seed);
+            Ok(vec![Value::Field(Arc::new(top)), Value::Field(Arc::new(bottom)), Value::Field(Arc::new(mask))])
+        }
+        NodeKind::Overhang {
+            reach,
+            thickness,
+            drop,
+            variation,
+            seed,
+        } => {
+            let f = field(0)?;
+            let (top, bottom) = layers::overhang(&f, e, reach, thickness, drop, variation, seed);
+            Ok(vec![Value::Field(Arc::new(top)), Value::Field(Arc::new(bottom))])
+        }
+        NodeKind::HeightOutput | NodeKind::TerrainOutput { .. } | NodeKind::ColorOutput { .. } | NodeKind::LayerOutput { .. } => Ok(Vec::new()),
         // Generators and landforms were made above.
         _ => Err(true),
     }
@@ -578,7 +600,7 @@ fn box_rows(data: &mut [f32], n: usize, r: usize) {
 }
 
 /// `dst` = `src` transposed, by tiles that stay in the caches.
-fn transpose(src: &[f32], dst: &mut [f32], n: usize) {
+pub(super) fn transpose(src: &[f32], dst: &mut [f32], n: usize) {
     const B: usize = 64;
     dst.par_chunks_mut(B * n).enumerate().for_each(|(k, rows)| {
         let j0 = k * B;

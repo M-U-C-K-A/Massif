@@ -23,6 +23,7 @@
 
 mod color;
 mod landforms;
+mod layers;
 mod ops;
 mod sim;
 mod templates;
@@ -345,6 +346,21 @@ pub enum NodeKind {
         coast: f32,
         seed: u32,
     },
+    /// Islands of rock floating in the air: a rolling top on sheer sides,
+    /// over an underside that hangs down to a point. Outputs their top,
+    /// their bottom (equal to the top where there is no island) and a mask.
+    FloatingIslands {
+        /// Height of their middles, in blocks, and how much it varies.
+        altitude: f32,
+        spread: f32,
+        /// Radius of the largest, in blocks.
+        size: f32,
+        /// How many of the places where one could float have one (0..1).
+        coverage: f32,
+        /// How far the underside hangs, as a multiple of the radius.
+        depth: f32,
+        seed: u32,
+    },
     /// Rocky detail around 0, to add to a relief.
     Rocks {
         scale: f32,
@@ -428,6 +444,19 @@ pub enum NodeKind {
     },
     /// Flip the heights upside down (within their range).
     InvertHeight,
+    /// Rims that jut out from the top of cliffs over the void below: a slab
+    /// of rock, given as its top and bottom (equal where there is none).
+    Overhang {
+        /// How far the rims jut out, in blocks.
+        reach: f32,
+        /// Thickness of a rim where it leaves the cliff, in blocks.
+        thickness: f32,
+        /// Smallest drop that makes a cliff, in blocks.
+        drop: f32,
+        /// How unevenly the rims jut out along the cliffs (0..1).
+        variation: f32,
+        seed: u32,
+    },
     // ---- simulations
     /// Water running down the slopes carries soil from the heights to the
     /// valleys: gullies, smoothed slopes, alluvial fans.
@@ -579,6 +608,15 @@ pub enum NodeKind {
         blocks: bool,
         palette: BlockPalette,
     },
+    /// Rock between two heights above the ground — floating islands,
+    /// overhangs — which becomes a level of the map: columns of several
+    /// spans, over the void.
+    LayerOutput {
+        /// Which layer of the map it fills (one level per number).
+        slot: u32,
+        /// Blocks its colours turn into.
+        palette: BlockPalette,
+    },
 }
 
 /// What flows along a link.
@@ -721,6 +759,14 @@ impl NodeKind {
                 height: 12.0,
                 sharpness: 0.6,
                 seed: 10,
+            },
+            NodeKind::FloatingIslands {
+                altitude: 230.0,
+                spread: 25.0,
+                size: 70.0,
+                coverage: 0.5,
+                depth: 1.3,
+                seed: 11,
             },
             // Primitives.
             NodeKind::Noise {
@@ -907,11 +953,22 @@ impl NodeKind {
                 brightness: 1.0,
                 contrast: 1.0,
             },
+            NodeKind::Overhang {
+                reach: 10.0,
+                thickness: 8.0,
+                drop: 24.0,
+                variation: 0.6,
+                seed: 12,
+            },
             // Outputs.
             NodeKind::HeightOutput,
             NodeKind::TerrainOutput { terrain: 0 },
             NodeKind::ColorOutput {
                 blocks: true,
+                palette: BlockPalette::Natural,
+            },
+            NodeKind::LayerOutput {
+                slot: 1,
                 palette: BlockPalette::Natural,
             },
         ]
@@ -938,6 +995,8 @@ impl NodeKind {
             NodeKind::Mesas { .. } => "Mesas",
             NodeKind::Island { .. } => "Island",
             NodeKind::Rocks { .. } => "Rocks",
+            NodeKind::FloatingIslands { .. } => "Floating islands",
+            NodeKind::Overhang { .. } => "Overhang",
             NodeKind::Levels { .. } => "Levels",
             NodeKind::Terrace { .. } => "Terraces",
             NodeKind::Clamp { .. } => "Clamp",
@@ -975,6 +1034,7 @@ impl NodeKind {
             NodeKind::HeightOutput => "Height output",
             NodeKind::TerrainOutput { .. } => "Terrain output",
             NodeKind::ColorOutput { .. } => "Colour output",
+            NodeKind::LayerOutput { .. } => "Layer output",
         }
     }
 
@@ -997,6 +1057,8 @@ impl NodeKind {
             NodeKind::Mesas { .. } => "Flat-topped hills with steep, stepped sides",
             NodeKind::Island { .. } => "An island rising from the sea floor",
             NodeKind::Rocks { .. } => "Rocky detail to add to a relief",
+            NodeKind::FloatingIslands { .. } => "Islands of rock floating in the air, their undersides hanging to a point",
+            NodeKind::Overhang { .. } => "Rims jutting out from the top of cliffs, over the void",
             NodeKind::Levels { .. } => "Map one range of heights onto another",
             NodeKind::Terrace { .. } => "Flat steps with steep risers",
             NodeKind::Clamp { .. } => "Keep heights between two limits",
@@ -1034,6 +1096,7 @@ impl NodeKind {
             NodeKind::HeightOutput => "The height of the ground of the map",
             NodeKind::TerrainOutput { .. } => "Paint a terrain where the mask says",
             NodeKind::ColorOutput { .. } => "The colour of the ground, turned into real blocks",
+            NodeKind::LayerOutput { .. } => "Rock between two heights over the ground: a level of the map, over the void",
         }
     }
 
@@ -1054,7 +1117,8 @@ impl NodeKind {
             | NodeKind::Canyon { .. }
             | NodeKind::Mesas { .. }
             | NodeKind::Island { .. }
-            | NodeKind::Rocks { .. } => Family::Landform,
+            | NodeKind::Rocks { .. }
+            | NodeKind::FloatingIslands { .. } => Family::Landform,
             NodeKind::Levels { .. }
             | NodeKind::Terrace { .. }
             | NodeKind::Clamp { .. }
@@ -1067,7 +1131,8 @@ impl NodeKind {
             | NodeKind::Fold { .. }
             | NodeKind::Stratify { .. }
             | NodeKind::Sharpen { .. }
-            | NodeKind::InvertHeight => Family::Modifier,
+            | NodeKind::InvertHeight
+            | NodeKind::Overhang { .. } => Family::Modifier,
             NodeKind::Erosion { .. }
             | NodeKind::Thermal { .. }
             | NodeKind::Snow { .. }
@@ -1088,7 +1153,9 @@ impl NodeKind {
             | NodeKind::AdjustColor { .. }
             | NodeKind::Tint { .. }
             | NodeKind::AutoColor { .. } => Family::Color,
-            NodeKind::HeightOutput | NodeKind::TerrainOutput { .. } | NodeKind::ColorOutput { .. } => Family::Output,
+            NodeKind::HeightOutput | NodeKind::TerrainOutput { .. } | NodeKind::ColorOutput { .. } | NodeKind::LayerOutput { .. } => {
+                Family::Output
+            }
         }
     }
 
@@ -1107,6 +1174,7 @@ impl NodeKind {
             NodeKind::AutoColor { .. } => &[("Height", H)],
             NodeKind::TerrainOutput { .. } => &[("Mask", M)],
             NodeKind::ColorOutput { .. } => &[("Colour", C)],
+            NodeKind::LayerOutput { .. } => &[("Top", H), ("Bottom", H), ("Colour", C)],
             _ => &[("In", H)],
         }
     }
@@ -1120,7 +1188,9 @@ impl NodeKind {
             NodeKind::Rivers { .. } => &[("Height", H), ("Rivers", M)],
             NodeKind::Lakes { .. } => &[("Height", H), ("Lakes", M)],
             NodeKind::Sea { .. } => &[("Height", H), ("Water", M), ("Shore", M)],
-            NodeKind::HeightOutput | NodeKind::TerrainOutput { .. } | NodeKind::ColorOutput { .. } => &[],
+            NodeKind::FloatingIslands { .. } => &[("Top", H), ("Bottom", H), ("Islands", M)],
+            NodeKind::Overhang { .. } => &[("Top", H), ("Bottom", H)],
+            NodeKind::HeightOutput | NodeKind::TerrainOutput { .. } | NodeKind::ColorOutput { .. } | NodeKind::LayerOutput { .. } => &[],
             k if k.family() == Family::Selector => &[("Mask", M)],
             k if k.family() == Family::Color => &[("Colour", C)],
             _ => &[("Out", H)],
@@ -1667,6 +1737,34 @@ pub struct Outputs {
     pub terrains: Vec<(TerrainId, Arc<Field>)>,
     /// The colour of the ground, to turn into blocks of a palette.
     pub colors: Option<(Arc<ColorField>, BlockPalette)>,
+    /// Rock over the ground, each a level of the map.
+    pub layers: Vec<LayerOut>,
+}
+
+/// Rock a graph lays over the ground — floating islands, overhangs —
+/// between two heights: a level of the map.
+#[derive(Debug, Clone)]
+pub struct LayerOut {
+    /// The layer output's number.
+    pub slot: u32,
+    /// The name of its level: what makes it, and its number.
+    pub name: String,
+    pub top: Arc<Field>,
+    pub bottom: Arc<Field>,
+    /// Its colours, to turn into blocks of a palette.
+    pub colors: Option<(Arc<ColorField>, BlockPalette)>,
+}
+
+impl LayerOut {
+    /// The name of the level of layer `slot`, made by `what`.
+    pub fn level_name(what: &str, slot: u32) -> String {
+        format!("{what} (graph {slot})")
+    }
+
+    /// Whether a level of that name holds layer `slot`.
+    pub fn is_level_of(name: &str, slot: u32) -> bool {
+        name.ends_with(&format!("(graph {slot})"))
+    }
 }
 
 impl Graph {
@@ -1810,24 +1908,43 @@ impl Graph {
     /// [`Graph::build`], saying how far it got in `progress`.
     pub fn build_with_progress(&self, extent: &Extent, cancel: &AtomicBool, progress: &Progress) -> Result<Outputs, GraphError> {
         let outputs = self.outputs_of();
-        // Outputs have no fields of their own: evaluate what feeds them.
-        let mut feeds = Vec::new();
+        // Outputs have no fields of their own: evaluate what feeds them. A
+        // layer needs its top and bottom; its colour may be left out.
+        let mut feeds: Vec<Vec<Option<(NodeId, u8)>>> = Vec::new();
         for n in &outputs {
-            match self.input_of(n.id, 0) {
-                Some(src) => feeds.push(src),
-                None => return Err(GraphError::MissingInput(n.kind.label().to_owned())),
+            let mut inputs = Vec::new();
+            for k in 0..n.kind.inputs().len() {
+                let src = self.input_of(n.id, k as u8);
+                let optional = matches!(n.kind, NodeKind::LayerOutput { .. }) && k == 2;
+                if src.is_none() && !optional {
+                    return Err(GraphError::MissingInput(n.kind.label().to_owned()));
+                }
+                inputs.push(src);
             }
+            feeds.push(inputs);
         }
-        let targets: Vec<NodeId> = feeds.iter().map(|f| f.0).collect();
-        let keep: HashSet<(NodeId, u8)> = feeds.iter().copied().collect();
+        let wanted: Vec<(NodeId, u8)> = feeds.iter().flatten().flatten().copied().collect();
+        let targets: Vec<NodeId> = wanted.iter().map(|f| f.0).collect();
+        let keep: HashSet<(NodeId, u8)> = wanted.iter().copied().collect();
         let eval = self.evaluate_with(extent, &targets, false, None, Some(&keep), cancel, Some(progress))?;
         let mut result = Outputs::default();
-        for (n, src) in outputs.iter().zip(feeds) {
-            let value = eval.values.get(&src).cloned().ok_or(GraphError::Cancelled)?;
+        for (n, inputs) in outputs.iter().zip(feeds) {
+            let value = |k: usize| inputs.get(k).copied().flatten().and_then(|src| eval.values.get(&src).cloned());
+            let needed = |k: usize| value(k).ok_or(GraphError::Cancelled);
             match n.kind {
-                NodeKind::HeightOutput => result.heights = Some(value.as_field()),
-                NodeKind::TerrainOutput { terrain } => result.terrains.push((TerrainId(terrain), value.as_field())),
-                NodeKind::ColorOutput { blocks: true, palette } => result.colors = Some((value.as_color(), palette)),
+                NodeKind::HeightOutput => result.heights = Some(needed(0)?.as_field()),
+                NodeKind::TerrainOutput { terrain } => result.terrains.push((TerrainId(terrain), needed(0)?.as_field())),
+                NodeKind::ColorOutput { blocks: true, palette } => result.colors = Some((needed(0)?.as_color(), palette)),
+                NodeKind::LayerOutput { slot, palette } => {
+                    let what = inputs[0].and_then(|(src, _)| self.node(src)).map_or("Layer", |s| s.kind.label());
+                    result.layers.push(LayerOut {
+                        slot,
+                        name: LayerOut::level_name(what, slot),
+                        top: needed(0)?.as_field(),
+                        bottom: needed(1)?.as_field(),
+                        colors: value(2).map(|c| (c.as_color(), palette)),
+                    });
+                }
                 _ => {}
             }
         }
@@ -1845,22 +1962,37 @@ struct Nearest {
 
 const LUT: usize = 32;
 
+/// An sRGB colour (0..255) in Oklab: lightness, green–red, blue–yellow,
+/// where equal steps look equally different.
+fn oklab(c: [f32; 3]) -> [f32; 3] {
+    let lin = c.map(|v| {
+        let v = (v / 255.0).clamp(0.0, 1.0);
+        if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+    });
+    let l = (0.412_221_46 * lin[0] + 0.536_332_55 * lin[1] + 0.051_445_995 * lin[2]).cbrt();
+    let m = (0.211_903_5 * lin[0] + 0.680_699_5 * lin[1] + 0.107_396_96 * lin[2]).cbrt();
+    let s = (0.088_302_46 * lin[0] + 0.281_718_85 * lin[1] + 0.629_978_7 * lin[2]).cbrt();
+    [
+        0.210_454_26 * l + 0.793_617_8 * m - 0.004_072_047 * s,
+        1.977_998_5 * l - 2.428_592_2 * m + 0.450_593_7 * s,
+        0.025_904_037 * l + 0.782_771_77 * m - 0.808_675_77 * s,
+    ]
+}
+
 impl Nearest {
     fn new(colors: &[[u8; 3]]) -> Self {
-        // A distance close to how different colours look ("redmean").
-        let distance = |a: [f32; 3], b: [u8; 3]| {
-            let (r1, g1, b1) = (a[0], a[1], a[2]);
-            let (r2, g2, b2) = (b[0] as f32, b[1] as f32, b[2] as f32);
-            let rm = (r1 + r2) / 2.0;
-            let (dr, dg, db) = (r1 - r2, g1 - g2, b1 - b2);
-            (2.0 + rm / 256.0) * dr * dr + 4.0 * dg * dg + (2.0 + (255.0 - rm) / 256.0) * db * db
+        // How different two colours look, the hue counting for more than
+        // the lightness: a dark green is moss or grass, not mud, and the
+        // light of the day is not the ground's to hold.
+        let labs: Vec<[f32; 3]> = colors.iter().map(|c| oklab(c.map(|v| v as f32))).collect();
+        let distance = |a: [f32; 3], b: [f32; 3]| {
+            let (dl, da, db) = ((a[0] - b[0]) * 0.55, a[1] - b[1], a[2] - b[2]);
+            dl * dl + da * da + db * db
         };
         let table = (0..LUT * LUT * LUT)
             .map(|k| {
-                let c = [k % LUT, (k / LUT) % LUT, k / (LUT * LUT)].map(|v| (v as f32 + 0.5) * 256.0 / LUT as f32);
-                (0..colors.len())
-                    .min_by(|&a, &b| distance(c, colors[a]).total_cmp(&distance(c, colors[b])))
-                    .unwrap_or(0) as u16
+                let c = oklab([k % LUT, (k / LUT) % LUT, k / (LUT * LUT)].map(|v| (v as f32 + 0.5) * 256.0 / LUT as f32));
+                (0..labs.len()).min_by(|&a, &b| distance(c, labs[a]).total_cmp(&distance(c, labs[b]))).unwrap_or(0) as u16
             })
             .collect();
         Self { table }
@@ -1936,6 +2068,51 @@ pub fn apply(edit: &mut Edit, extent: &Extent, outputs: &Outputs, seed: u64, pal
         }
         tile.compact();
     });
+}
+
+/// Write a layer to the slab level `edit` works on: rock between its
+/// bottom and top wherever it is at least a block thick, nothing elsewhere
+/// (columns it no longer covers are cleared). Its colours become the
+/// closest terrain of `palette`, or `fallback`.
+pub fn apply_layer(edit: &mut Edit, extent: &Extent, layer: &LayerOut, seed: u64, palette: &[(TerrainId, [u8; 3])], fallback: TerrainId) {
+    let (lo, hi) = (edit.dim().min_y as f32, (edit.dim().max_y - 1) as f32);
+    let tiles: Vec<TilePos> = edit.dim().ground().positions().collect();
+    let everywhere = BlockRect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX);
+    let colors: Vec<[u8; 3]> = palette.iter().map(|p| p.1).collect();
+    let nearest = (layer.colors.is_some() && !palette.is_empty()).then(|| Nearest::new(&colors));
+    edit.par_tiles(tiles.clone(), everywhere, true, |pos, _, tile| {
+        let (ox, oz) = pos.origin();
+        let n = crate::coords::TILE_SIZE;
+        for lz in 0..n {
+            for lx in 0..n {
+                let (x, z) = (ox + lx, oz + lz);
+                let (u, v) = extent.grid(x as f64 + 0.5, z as f64 + 0.5);
+                let i = local_index(x, z);
+                let top = layer.top.sample(u, v).clamp(lo, hi);
+                let bottom = layer.bottom.sample(u, v).clamp(lo, hi);
+                let Some(under) = tile.bottom.as_mut() else { continue };
+                if top - bottom < 1.0 {
+                    tile.top.set(i, 0.0);
+                    under.set(i, 0.0);
+                    continue;
+                }
+                tile.top.set(i, snap_height(top));
+                under.set(i, snap_height(bottom));
+                let terrain = match (&nearest, &layer.colors) {
+                    (Some(table), Some((field, _))) => {
+                        let c = field.sample(u, v);
+                        let jitter = |k: u64| (hash2(x, z, seed ^ k) as f32 / u32::MAX as f32 - 0.5) * 18.0;
+                        let srgb = [0, 1, 2].map(|k| color::encode(c[k]) as f32 + jitter(0x1a0 + k as u64));
+                        palette[table.get(srgb)].0
+                    }
+                    _ => fallback,
+                };
+                tile.terrain.set(i, terrain.0);
+            }
+        }
+        tile.compact();
+    });
+    edit.prune_empty(tiles);
 }
 
 #[cfg(test)]
