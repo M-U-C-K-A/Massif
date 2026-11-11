@@ -462,7 +462,8 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
     });
     let mut degrees = if b.rotation > 180.0 { b.rotation - 360.0 } else { b.rotation };
     let turned = slider_row(ui, "Rotation", |ui| {
-        ui.add(egui::Slider::new(&mut degrees, -180.0..=180.0).step_by(15.0).suffix("°").max_decimals(0))
+        // No steps: the wheel turns the brush 5° (or 1°) at a time.
+        ui.add(egui::Slider::new(&mut degrees, -180.0..=180.0).suffix("°").max_decimals(0))
     });
     if turned {
         b.rotation = degrees.rem_euclid(360.0);
@@ -470,7 +471,11 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
     ui.add_space(2.0);
     hint(
         ui,
-        "Scroll on the map or − + for the size (with Shift: one block at a time), 1…0 for the intensity, [ ] to turn the brush. The right button inverts the tool.",
+        if cfg!(target_os = "macos") {
+            "Scroll on the map or − + for the size (with Shift: one block at a time), 1…0 for the intensity, ⌘ + scroll (the Windows key on a PC keyboard) or [ ] to turn the brush. The right button inverts the tool."
+        } else {
+            "Scroll on the map or − + for the size (with Shift: one block at a time), 1…0 for the intensity, Ctrl + Shift + scroll or [ ] to turn the brush. The right button inverts the tool."
+        },
     );
 
     // ---- options ---------------------------------------------------------

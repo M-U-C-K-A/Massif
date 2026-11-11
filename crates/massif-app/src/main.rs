@@ -80,9 +80,25 @@ fn main() -> eframe::Result {
             .with_titlebar_shown(false)
             .with_title_shown(false);
     }
+    // The 3D view keeps the map in texture arrays of 1024 × 1024 pages:
+    // ask for as many layers as the GPU has (Apple's hold 2048).
+    let mut setup = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
+    let base = setup.device_descriptor.clone();
+    setup.device_descriptor = std::sync::Arc::new(move |adapter| {
+        let mut desc = base(adapter);
+        desc.required_limits.max_texture_array_layers = desc
+            .required_limits
+            .max_texture_array_layers
+            .max(adapter.limits().max_texture_array_layers.min(2048));
+        desc
+    });
     let options = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Wgpu,
+        wgpu_options: egui_wgpu::WgpuConfiguration {
+            wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(setup),
+            ..Default::default()
+        },
         ..Default::default()
     };
     eframe::run_native(

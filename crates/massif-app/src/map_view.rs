@@ -16,6 +16,14 @@ const MAX_ZOOM: f32 = 48.0;
 const FOOTER: f32 = 28.0;
 /// Points of scrolling per brush size step (about one wheel notch).
 const WHEEL_STEP: f32 = 20.0;
+/// Degrees the brush turns per wheel notch (one with Shift).
+const TURN_STEP: f32 = 5.0;
+/// Points of scrolling per line, for wheels that count in lines.
+const LINE_POINTS: f32 = 40.0;
+/// Screen pixels per block from which the brush is outlined block by block.
+const EXACT_ZOOM: f32 = 3.0;
+/// Largest brush (half its footprint, in blocks) outlined block by block.
+const EXACT_REACH: f32 = 320.0;
 
 /// Tabs for the display modes, or a drop-down when space is short.
 pub fn mode_selector(ui: &mut Ui, mode: &mut MapMode, narrow: bool, id: &str) {
@@ -52,6 +60,8 @@ pub struct MapView {
     probe: Option<((i32, i32, u64), Option<tools::Probe>)>,
     /// Scrolling not yet turned into brush size steps.
     wheel: f32,
+    /// Scrolling not yet turned into brush rotation steps.
+    turn: f32,
     /// Where the canvas was last drawn, for keyboard zooming.
     canvas: Rect,
 }
@@ -69,6 +79,7 @@ impl Default for MapView {
             last_time: 0.0,
             probe: None,
             wheel: 0.0,
+            turn: 0.0,
             canvas: Rect::NOTHING,
         }
     }
@@ -178,9 +189,10 @@ impl MapView {
         }
 
         // ---- navigation, the WorldPainter way ----------------------------
-        // The wheel sizes the brush (Shift: one block at a time); with Ctrl,
-        // ⌘ or Alt, or with a pinch, it zooms. The middle button (or Space,
-        // or the Pan tool) moves the map.
+        // The wheel sizes the brush (Shift: one block at a time); with ⌘ (the
+        // Windows key of a PC keyboard) it turns the brush, with Ctrl or Alt,
+        // or with a pinch, it zooms. The middle button (or Space, or the Pan
+        // tool) moves the map.
         let (time, modifiers, pointer) = ui.input(|i| (i.time, i.modifiers, i.pointer.interact_pos()));
         let (pressed, down) = ui.input(|i| {
             let p = &i.pointer;
@@ -203,28 +215,57 @@ impl MapView {
         if response.hovered()
             && let Some(p) = response.hover_pos()
         {
-            let (zoom_delta, scroll) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta));
-            if zoom_delta != 1.0 {
-                self.zoom_at(canvas, p, zoom_delta);
-            } else if scroll != Vec2::ZERO {
-                // Shift turns vertical scrolling into horizontal on some systems.
-                let amount = if scroll.y != 0.0 { scroll.y } else { scroll.x };
-                if modifiers.ctrl || modifiers.alt || modifiers.command {
-                    self.zoom_at(canvas, p, (amount * 0.004).exp());
-                } else if tools.tool.uses_brush() {
-                    self.wheel += amount;
-                    while self.wheel.abs() >= WHEEL_STEP {
-                        // Scrolling up makes the brush smaller, as in WorldPainter.
-                        let up = self.wheel > 0.0;
-                        self.wheel -= WHEEL_STEP.copysign(self.wheel);
-                        let r = tools.brush.radius;
-                        let next = match (modifiers.shift, up) {
-                            (true, true) => r - 1.0,
-                            (true, false) => r + 1.0,
-                            (false, true) => (r / 1.1).min(r - 1.0),
-                            (false, false) => (r * 1.1).max(r + 1.0),
-                        };
-                        tools.brush.radius = next.round().clamp(1.0, massif_core::MAX_RADIUS);
+            if turns_brush(modifiers) && tools.tool.uses_brush() {
+                // egui reads ⌘ and the wheel as a zoom: take the wheel itself.
+                let height = canvas.height();
+                self.turn += ui.input(|i| {
+                    i.events
+                        .iter()
+                        .filter_map(|e| match e {
+                            egui::Event::MouseWheel { unit, delta, .. } => {
+                                let k = match unit {
+                                    egui::MouseWheelUnit::Point => 1.0,
+                                    egui::MouseWheelUnit::Line => LINE_POINTS,
+                                    egui::MouseWheelUnit::Page => height,
+                                };
+                                Some(if delta.y != 0.0 { delta.y } else { delta.x } * k)
+                            }
+                            _ => None,
+                        })
+                        .sum::<f32>()
+                });
+                let step = if modifiers.shift && cfg!(target_os = "macos") { 1.0 } else { TURN_STEP };
+                while self.turn.abs() >= WHEEL_STEP {
+                    // Scrolling up turns clockwise, like a knob.
+                    let up = self.turn > 0.0;
+                    self.turn -= WHEEL_STEP.copysign(self.turn);
+                    tools.brush.rotate(if up { step } else { -step });
+                }
+            } else {
+                self.turn = 0.0;
+                let (zoom_delta, scroll) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta));
+                if zoom_delta != 1.0 {
+                    self.zoom_at(canvas, p, zoom_delta);
+                } else if scroll != Vec2::ZERO {
+                    // Shift turns vertical scrolling into horizontal on some systems.
+                    let amount = if scroll.y != 0.0 { scroll.y } else { scroll.x };
+                    if modifiers.ctrl || modifiers.alt || modifiers.command {
+                        self.zoom_at(canvas, p, (amount * 0.004).exp());
+                    } else if tools.tool.uses_brush() {
+                        self.wheel += amount;
+                        while self.wheel.abs() >= WHEEL_STEP {
+                            // Scrolling up makes the brush smaller, as in WorldPainter.
+                            let up = self.wheel > 0.0;
+                            self.wheel -= WHEEL_STEP.copysign(self.wheel);
+                            let r = tools.brush.radius;
+                            let next = match (modifiers.shift, up) {
+                                (true, true) => r - 1.0,
+                                (true, false) => r + 1.0,
+                                (false, true) => (r / 1.1).min(r - 1.0),
+                                (false, false) => (r * 1.1).max(r + 1.0),
+                            };
+                            tools.brush.radius = next.round().clamp(1.0, massif_core::MAX_RADIUS);
+                        }
                     }
                 }
             }
@@ -410,38 +451,46 @@ impl MapView {
             if panning {
                 ui.ctx().set_cursor_icon(if down[0] { CursorIcon::Grabbing } else { CursorIcon::Grab });
             } else if tools.tool.uses_brush() {
-                let r = tools.brush.radius * self.zoom;
+                let brush = &tools.brush;
                 let shadow = Line::new(3.0, Color32::from_black_alpha(90));
                 let line = Line::new(1.4, Color32::WHITE);
-                if let Some(outline) = tools.brush.outline() {
-                    // A custom brush: where its image paints.
-                    let segments: Vec<[Pos2; 2]> = outline
-                        .iter()
-                        .map(|[a, b]| [p + vec2(a.0 * self.zoom, a.1 * self.zoom), p + vec2(b.0 * self.zoom, b.1 * self.zoom)])
-                        .collect();
-                    for seg in &segments {
-                        painter.line_segment(*seg, shadow);
+                let mut rings: Vec<Vec<Pos2>> = Vec::new();
+                if let Some((x, z)) = world_pointer
+                    && self.zoom * ppp >= EXACT_ZOOM
+                    && brush.reach() <= EXACT_REACH
+                {
+                    // Close enough to see the blocks: exactly the columns the
+                    // brush changes.
+                    for ring in brush.footprint_outline(x as f32, z as f32) {
+                        rings.push(ring.iter().map(|&(bx, bz)| self.to_screen(canvas, bx as f64, bz as f64)).collect());
                     }
-                    for seg in &segments {
-                        painter.line_segment(*seg, line);
+                } else if let Some(outline) = brush.outline() {
+                    // A custom brush: where its image paints, pixel by pixel.
+                    for ring in outline {
+                        rings.push(thin(ring.iter().map(|&(dx, dz)| p + vec2(dx * self.zoom, dz * self.zoom)), 0.75));
                     }
                 } else {
-                    match tools.brush.shape {
+                    match brush.shape {
                         BrushShape::Circle => {
+                            let r = brush.radius * self.zoom;
                             painter.circle_stroke(p, r, shadow);
                             painter.circle_stroke(p, r, line);
                         }
-                        BrushShape::Square => {
-                            let corners: Vec<Pos2> = tools
-                                .brush
+                        BrushShape::Square => rings.push(
+                            brush
                                 .square_corners(0.0, 0.0)
                                 .iter()
                                 .map(|(x, z)| p + vec2(x * self.zoom, z * self.zoom))
-                                .collect();
-                            painter.add(egui::Shape::closed_line(corners.clone(), shadow));
-                            painter.add(egui::Shape::closed_line(corners, line));
-                        }
+                                .collect(),
+                        ),
                     }
+                }
+                rings.retain(|r| r.len() > 2);
+                for ring in &rings {
+                    painter.add(egui::Shape::closed_line(ring.clone(), shadow));
+                }
+                for ring in rings {
+                    painter.add(egui::Shape::closed_line(ring, line));
                 }
                 painter.circle_filled(p, 1.5, Color32::WHITE);
                 ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
@@ -582,4 +631,22 @@ impl MapView {
             }
         });
     }
+}
+
+/// Whether the wheel turns the brush: with ⌘ on a Mac (the Windows key of a
+/// PC keyboard), with Ctrl + Shift elsewhere, where the Windows key does not
+/// reach applications.
+fn turns_brush(m: egui::Modifiers) -> bool {
+    m.mac_cmd || (!cfg!(target_os = "macos") && m.ctrl && m.shift)
+}
+
+/// The points of a path, without those closer than `min` to the last kept.
+fn thin(points: impl Iterator<Item = Pos2>, min: f32) -> Vec<Pos2> {
+    let mut out: Vec<Pos2> = Vec::new();
+    for p in points {
+        if out.last().is_none_or(|q| q.distance(p) >= min) {
+            out.push(p);
+        }
+    }
+    out
 }

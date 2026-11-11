@@ -2197,6 +2197,22 @@ mod tests {
             let z1 = h.state().maps[&map].zoom;
             assert!(z1 < z0, "Alt + scrolling down should zoom out: {z0} -> {z1}");
             assert_eq!(h.state().tools.brush.radius, r1);
+            // ⌘ and the wheel (the Windows key of a PC keyboard) turn the
+            // brush, 5° a notch, without zooming.
+            let turn = if cfg!(target_os = "macos") {
+                Modifiers::MAC_CMD | Modifiers::COMMAND
+            } else {
+                Modifiers::CTRL | Modifiers::SHIFT | Modifiers::COMMAND
+            };
+            let a0 = h.state().tools.brush.rotation;
+            h.event(egui::Event::ModifiersChanged(turn));
+            h.event(wheel(80.0, turn));
+            h.run_steps(20);
+            h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+            let a1 = h.state().tools.brush.rotation;
+            assert_eq!(a1, (a0 + 20.0).rem_euclid(360.0), "four notches up turn the brush 20° clockwise");
+            assert_eq!(h.state().maps[&map].zoom, z1, "turning the brush does not zoom");
+            assert_eq!(h.state().tools.brush.radius, r1);
             // Number keys set the intensity, Alt + a letter picks a tool.
             h.key_press(Key::Num3);
             h.key_press_modifiers(Modifiers::ALT, Key::A);
@@ -2255,6 +2271,16 @@ mod tests {
             h.run_steps(10);
             assert!(h.state().tools.brush.radius > 900.0, "{}", h.state().tools.brush.radius);
             assert!(h.state().tools.brush.radius <= massif_core::MAX_RADIUS);
+            // Zoomed in, the outline follows the blocks the brush changes.
+            {
+                let app = h.state_mut();
+                app.tools.brush.radius = 14.0;
+                let id = app.active_map.expect("the map was hovered");
+                app.maps.get_mut(&id).unwrap().zoom = 9.0;
+            }
+            h.event(egui::Event::PointerMoved(rect.center() + vec2(3.0, 2.0)));
+            h.run_steps(10);
+            h.render().unwrap().save(dir.join(format!("exact-{name}"))).unwrap();
 
             // The brush options, maximised: a height band, only on grass and
             // water, on slopes over 20°.
@@ -2299,7 +2325,6 @@ mod tests {
             app.tools.select(Tool::Dig);
             app.tools.brush.radius = 14.0;
             app.tools.brush.strength = 1.0;
-            app.view3d.follow_map = false;
             app.view3d.camera.distance = 160.0;
         }
         h.run_steps(30);
@@ -2375,8 +2400,7 @@ mod tests {
         assert!(app.doc.path.is_none(), "an imported world is saved as a new .massif file");
         h.render().unwrap().save(dir.join("ui-import.png")).unwrap();
 
-        // The whole map in the 3D view, from far away: the far terrain fills
-        // in everything beyond the detailed area.
+        // The whole map in the 3D view, from far away, every block of it.
         {
             let app = h.state_mut();
             app.dialog = None;
@@ -2384,9 +2408,14 @@ mod tests {
             app.view3d.camera.distance = 5200.0;
             app.view3d.camera.pitch = 0.75;
         }
-        for _ in 0..400 {
+        let started = std::time::Instant::now();
+        h.run_steps(5);
+        while h.state().view3d.pending() > 0 {
+            assert!(started.elapsed().as_secs() < 60, "the 3D view did not finish building");
             h.step();
         }
+        eprintln!("whole map built in the 3D view in {:.1} s", started.elapsed().as_secs_f32());
+        h.run_steps(3);
         let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
         image::save_buffer(dir.join("import-3d-whole.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
         {

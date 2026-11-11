@@ -37,9 +37,10 @@ over every CPU core.
   installed (1,288 in 26.3) is read from the game itself, with its real
   textures and colours: terrains show the actual blocks, and any whole block
   can be painted on the map.
-- **Full-detail 3D view.** Every block column around the camera is meshed at
-  full resolution; the rest of the map is drawn as a smooth relief, so the
-  whole map is always in view.
+- **The whole map in 3D, every block.** The 3D view draws the entire map at
+  block resolution, at any distance: a GPU ray tracer walks the height field
+  of the ground (4 bytes per column), and the overhangs, islands, caves and
+  water are meshed. It moves independently of the map view.
 - **WorldPainter import.** `.world` files are read directly (no JVM) and
   converted in about a second for a 100 MB world.
 - **Minecraft export.** Region files and `level.dat` in the 1.18 chunk layout,
@@ -123,6 +124,10 @@ a rotation:
 Brush operations run tile by tile in parallel, so even a brush 8,000 blocks
 across stays responsive and light on memory.
 
+The outline on the map is exact: zoomed in, it follows the blocks the brush
+will change, block by block; zoomed out, a custom brush is outlined through
+every pixel of its image.
+
 **Brush options** (in Brush Settings) limit where every brush acts, from
 what the map shows:
 
@@ -186,7 +191,8 @@ Massif follows WorldPainter's defaults.
 |---|---|
 | Left / right button (or Alt + left) | Apply the tool / its inverse (lower, erase, drain…) |
 | Scroll | Brush size (Shift: one block at a time) |
-| ⌘, Ctrl or Alt + scroll, pinch | Zoom the map |
+| ⌘ + scroll (the Windows key on a PC keyboard) | Turn the brush, 5° a notch (Shift: 1°); Ctrl + Shift + scroll on Windows and Linux |
+| Ctrl or Alt + scroll, pinch | Zoom the map |
 | Middle button, Space + drag | Move the map |
 | `−` `+` | Brush size |
 | `1` … `9`, `0` | Intensity 10 % … 100 % |
@@ -204,6 +210,7 @@ In the 3D view:
 | Scroll, pinch | Come closer / go back |
 | W A S D or arrows, Q / E | Fly over the map, down / up (Shift: faster) |
 | Double-click | Look at the point under the cursor |
+| Header buttons | Look at the middle of the map view; show the whole map |
 | With Build, Dig, Smooth (3D) | Left sculpts where the cursor points, right inverts; middle drag or Alt + drag turns, Shift + middle drag moves |
 
 ## How it works
@@ -275,12 +282,21 @@ back with an independent Anvil reader and compare every block with the model.
 
 ### The 3D view
 
-The view keeps one mesh per tile on the GPU, rebuilt only where the world
-changed, nearest first, within a time budget per frame. Faces of the same
-height and colour are merged and drawn as 12-byte instances. On a mountainous
-100 MB WorldPainter world, a 768-block view takes 700k faces built in 24 ms;
-2,048 blocks take 6.5M faces (77 MB) in 0.16 s. Beyond the detailed area, a
-smooth relief sampled every 16 blocks shows the rest of the map.
+Most columns of a map are one span of ground on the bottom of the world: a
+height field. The view keeps those in GPU textures, pages of 1024 × 1024
+columns holding each column's height and colours in 4 bytes, with a max
+pyramid (the highest column of every 2 × 2, 4 × 4… square). A ray tracer in
+the fragment shader walks down the pyramid, skipping the air above the
+ground, and stops on a column, or on a square smaller than a pixel: the whole
+map is drawn block by block at any distance, with no level of detail and no
+"view distance". The other columns (overhangs, floating islands, caves open
+to the side) and the water are meshed per tile, with faces of the same height
+and colour merged into 12-byte instances; tracer and meshes share the depth
+buffer. Tiles are rebuilt only where the world changed, nearest first.
+
+On a mountainous 100 MB WorldPainter world of 6,144 × 6,144 blocks, the whole
+map is built in about a second and takes 176 MB of GPU memory; meshing it
+instead would have taken some 58 million faces.
 
 ## Project layout
 
@@ -309,7 +325,8 @@ Two environment variables enable the heavier tests:
   area splitting, a terrain graph build and painting a real block. The real
   blocks are only tested when a Minecraft installation is found.
 - `MASSIF_WORLD_SAMPLES=<file.world>` also imports a real WorldPainter world
-  through the editor and measures the 3D meshing of it.
+  through the editor, renders it whole in the 3D view and measures what it
+  costs.
 
 ## Roadmap
 
