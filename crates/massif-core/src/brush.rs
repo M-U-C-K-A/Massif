@@ -205,6 +205,9 @@ pub struct Brush {
     /// The image of a custom brush; replaces shape and profile.
     #[serde(skip)]
     pub mask: Option<Arc<BrushMask>>,
+    /// Where on the map the brush acts (WorldPainter's brush options).
+    #[serde(skip)]
+    pub filter: Option<Arc<crate::filter::Filter>>,
 }
 
 impl Default for Brush {
@@ -216,6 +219,7 @@ impl Default for Brush {
             strength: 0.5,
             rotation: 0.0,
             mask: None,
+            filter: None,
         }
     }
 }

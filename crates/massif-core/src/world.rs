@@ -13,6 +13,12 @@ pub struct WorldMeta {
     pub spawn: [i32; 3],
     /// Default fluid surface elevation of new tiles (63 = vanilla sea level).
     pub sea_level: i32,
+    /// The world's fluid is lava rather than water.
+    #[serde(default)]
+    pub lava: bool,
+    /// The terrain graph of the world, if one was made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph: Option<crate::graph::Graph>,
 }
 
 impl Default for WorldMeta {
@@ -22,6 +28,8 @@ impl Default for WorldMeta {
             seed: 0,
             spawn: [0, 80, 0],
             sea_level: 63,
+            lava: false,
+            graph: None,
         }
     }
 }

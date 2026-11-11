@@ -18,6 +18,31 @@ pub enum GameMode {
     Spectator = 3,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Difficulty {
+    Peaceful = 0,
+    Easy = 1,
+    Normal = 2,
+    Hard = 3,
+}
+
+/// The border Minecraft draws around the world.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WorldBorder {
+    pub center: [f64; 2],
+    /// Side of the square, in blocks.
+    pub size: f64,
+}
+
+impl Default for WorldBorder {
+    fn default() -> Self {
+        Self {
+            center: [0.0, 0.0],
+            size: 60_000_000.0,
+        }
+    }
+}
+
 /// What Minecraft generates outside the exported map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Surroundings {
@@ -39,6 +64,11 @@ pub struct LevelSettings {
     pub generate_structures: bool,
     /// Milliseconds since the Unix epoch.
     pub last_played: i64,
+    pub difficulty: Difficulty,
+    pub hardcore: bool,
+    pub border: WorldBorder,
+    /// Data packs to enable besides vanilla, by their id (`file/name.zip`).
+    pub datapacks: Vec<String>,
 }
 
 fn noise_dimension(w: &mut NbtWriter, id: &str, settings: &str, seed: i64, biome_source: impl FnOnce(&mut NbtWriter)) {
@@ -71,9 +101,9 @@ pub fn level_nbt(s: &LevelSettings) -> Vec<u8> {
     w.string("LevelName", &s.name);
     w.long("LastPlayed", s.last_played);
     w.int("GameType", s.game_mode as i32);
-    w.byte("Difficulty", 2);
+    w.byte("Difficulty", s.difficulty as i8);
     w.bool("DifficultyLocked", false);
-    w.bool("hardcore", false);
+    w.bool("hardcore", s.hardcore);
     w.bool("allowCommands", s.allow_commands);
     // Tells the game the spawn point is already chosen.
     w.bool("initialized", true);
@@ -92,10 +122,10 @@ pub fn level_nbt(s: &LevelSettings) -> Vec<u8> {
     w.int("thunderTime", 0);
     w.int("clearWeatherTime", 0);
 
-    w.double("BorderCenterX", 0.0);
-    w.double("BorderCenterZ", 0.0);
-    w.double("BorderSize", 60_000_000.0);
-    w.double("BorderSizeLerpTarget", 60_000_000.0);
+    w.double("BorderCenterX", s.border.center[0]);
+    w.double("BorderCenterZ", s.border.center[1]);
+    w.double("BorderSize", s.border.size);
+    w.double("BorderSizeLerpTarget", s.border.size);
     w.long("BorderSizeLerpTime", 0);
     w.double("BorderSafeZone", 5.0);
     w.double("BorderDamagePerBlock", 0.2);
@@ -106,8 +136,11 @@ pub fn level_nbt(s: &LevelSettings) -> Vec<u8> {
     w.int("WanderingTraderSpawnDelay", 24000);
 
     w.compound("DataPacks");
-    w.list("Enabled", TagType::String, 1);
+    w.list("Enabled", TagType::String, 1 + s.datapacks.len());
     w.item_string("vanilla");
+    for pack in &s.datapacks {
+        w.item_string(pack);
+    }
     w.list("Disabled", TagType::String, 0);
     w.end();
 
@@ -188,6 +221,13 @@ mod tests {
             surroundings,
             generate_structures: false,
             last_played: 1_793_000_000_000,
+            difficulty: Difficulty::Hard,
+            hardcore: true,
+            border: WorldBorder {
+                center: [100.0, -50.0],
+                size: 4096.0,
+            },
+            datapacks: vec!["file/rivers.zip".into()],
         }
     }
 
@@ -222,6 +262,14 @@ mod tests {
         assert_eq!(source["preset"], Value::String("minecraft:overworld".into()));
         let end = compound(&compound(&dims["minecraft:the_end"])["generator"]);
         assert_eq!(compound(&end["biome_source"])["seed"], Value::Long(-42));
+        assert_eq!(data["Difficulty"], Value::Byte(3));
+        assert_eq!(data["hardcore"], Value::Byte(1));
+        assert_eq!(data["BorderCenterX"], Value::Double(100.0));
+        assert_eq!(data["BorderSize"], Value::Double(4096.0));
+        match &compound(&data["DataPacks"])["Enabled"] {
+            Value::List(packs) => assert_eq!(packs, &vec![Value::String("vanilla".into()), Value::String("file/rivers.zip".into())]),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

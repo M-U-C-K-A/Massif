@@ -619,6 +619,8 @@ pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Re
             seed,
             spawn: [sx, spawn_y, sz],
             sea_level,
+            lava: false,
+            graph: None,
         },
         registry: mapper.registry,
         dims,

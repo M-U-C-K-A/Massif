@@ -16,7 +16,7 @@ use egui::{
     pos2, vec2,
 };
 use massif_anvil::{ExportOptions, GameMode, Surroundings};
-use massif_core::World;
+use massif_core::{TilePos, World};
 use massif_core::generate::{GenParams, Landform, generate};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -69,15 +69,38 @@ struct NewWorldForm {
     seed: String,
     width: i32,
     depth: i32,
+    /// The terrains a new world starts with (for the surface choice and the
+    /// preview).
+    registry: massif_core::Registry,
+    /// The preview, and the settings it shows.
+    preview: Option<(String, egui::TextureHandle)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExportTab {
+    General,
+    World,
 }
 
 struct ExportForm {
+    tab: ExportTab,
     parent: PathBuf,
     name: String,
     game_mode: GameMode,
+    difficulty: massif_anvil::Difficulty,
+    hardcore: bool,
+    allow_cheats: bool,
     surroundings: Surroundings,
     structures: bool,
     overwrite: bool,
+    border: massif_anvil::WorldBorder,
+    datapacks: Vec<PathBuf>,
+    selected_pack: Option<usize>,
+    spawn: [i32; 3],
+    /// Centre of the test export, in blocks (the map view's centre).
+    test_centre: (i32, i32),
+    /// A border just around the map: centre and size.
+    fit: Option<([f64; 2], f64)>,
 }
 
 enum Dialog {
@@ -130,6 +153,8 @@ pub struct MassifApp {
     brushes: BrushLibrary,
     /// Name of the brush group being made, while its field is shown.
     new_group: Option<String>,
+    /// The terrain graph editor.
+    graph: crate::graph_editor::GraphEditor,
     allow_close: bool,
     title: String,
     applied_theme: Option<ThemeChoice>,
@@ -192,6 +217,7 @@ impl MassifApp {
             biome_search: String::new(),
             brushes: BrushLibrary::default(),
             new_group: None,
+            graph: Default::default(),
             allow_close: false,
             title: String::new(),
             applied_theme: None,
@@ -304,13 +330,28 @@ impl MassifApp {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| self.doc.world.meta.name.clone());
+        let centre = self.map_center.map_or((0, 0), |c| (c[0].floor() as i32, c[1].floor() as i32));
         self.dialog = Some(Dialog::Export(ExportForm {
+            tab: ExportTab::General,
             parent,
             name,
             game_mode: GameMode::Creative,
+            difficulty: massif_anvil::Difficulty::Normal,
+            hardcore: false,
+            allow_cheats: true,
             surroundings: Surroundings::Vanilla,
             structures: true,
             overwrite: false,
+            border: massif_anvil::WorldBorder::default(),
+            datapacks: Vec::new(),
+            selected_pack: None,
+            spawn: self.doc.world.meta.spawn,
+            test_centre: centre,
+            fit: self.doc.dimension().bounds().map(|(lo, hi)| {
+                let (x0, z0) = (lo.x as f64 * 128.0, lo.z as f64 * 128.0);
+                let (x1, z1) = ((hi.x + 1) as f64 * 128.0, (hi.z + 1) as f64 * 128.0);
+                ([(x0 + x1) / 2.0, (z0 + z1) / 2.0], (x1 - x0).max(z1 - z0))
+            }),
         }));
     }
 
@@ -325,6 +366,8 @@ impl MassifApp {
             width: params.tiles_x * 128,
             depth: params.tiles_z * 128,
             params,
+            registry: massif_core::Registry::vanilla(),
+            preview: None,
         }));
     }
 
@@ -1112,7 +1155,12 @@ impl MassifApp {
             EditorKind::View3d => self.view3d.ui(&mut cui, frame, &mut self.doc, &self.tools, self.map_center),
             EditorKind::Tools => scrolled(&mut cui, &mut |ui| panels::tools_panel(ui, &mut self.tools)),
             EditorKind::ToolSettings => scrolled(&mut cui, &mut |ui| panels::tool_settings(ui, &mut self.tools, &mut self.doc)),
-            EditorKind::BrushSettings => scrolled(&mut cui, &mut |ui| panels::brush_settings(ui, &mut self.tools, &mut self.brushes)),
+            EditorKind::BrushSettings => {
+                let (min_y, max_y) = (self.doc.dimension().min_y, self.doc.dimension().max_y);
+                scrolled(&mut cui, &mut |ui| {
+                    panels::brush_settings(ui, &mut self.tools, &mut self.brushes, &self.doc.world.registry, min_y, max_y)
+                })
+            }
             EditorKind::Brushes => {
                 let mut feedback = None;
                 scrolled(&mut cui, &mut |ui| {
@@ -1152,6 +1200,11 @@ impl MassifApp {
                 if affects_map {
                     self.map_cache.invalidate_all();
                     self.view3d.invalidate_all();
+                }
+            }
+            EditorKind::Graph => {
+                if let Some(msg) = self.graph.ui(&mut cui, &mut self.doc) {
+                    self.feedback = Some(msg);
                 }
             }
             EditorKind::Empty => {
@@ -1247,70 +1300,25 @@ impl MassifApp {
             Dialog::NewWorld(mut form) => {
                 let mut create = false;
                 let response = egui::Modal::new(Id::unique("new world")).show(ctx, |ui| {
-                    ui.set_width(460.0);
-                    ui.label(RichText::new("New world").strong().size(16.0));
+                    ui.set_width(920.0);
+                    ui.label(RichText::new("Create New World").strong().size(16.0));
                     ui.add_space(6.0);
-                    egui::Grid::new("new world form").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-                        ui.label("Name");
-                        ui.text_edit_singleline(&mut form.params.name);
-                        ui.end_row();
-                        ui.label("Seed");
-                        ui.horizontal(|ui| {
-                            ui.add(egui::TextEdit::singleline(&mut form.seed).desired_width(180.0));
-                            if ui.button(theme::glyph(Icon::Dice5).to_string()).on_hover_text("Random seed").clicked() {
-                                form.seed = random_seed().to_string();
-                            }
-                        });
-                        ui.end_row();
-                        ui.label("Size");
+                    ui.horizontal_top(|ui| {
                         ui.vertical(|ui| {
-                            ui.horizontal_wrapped(|ui| {
-                                for (blocks, label) in [(512, "512"), (1024, "1k"), (2048, "2k"), (4096, "4k"), (8192, "8k"), (16384, "16k")] {
-                                    let selected = form.width == blocks && form.depth == blocks;
-                                    if ui.selectable_label(selected, label).clicked() {
-                                        form.width = blocks;
-                                        form.depth = blocks;
-                                    }
-                                }
-                            });
-                            ui.horizontal(|ui| {
-                                ui.add(egui::DragValue::new(&mut form.width).range(128..=65536).speed(128.0).suffix(" wide"));
-                                ui.label("×");
-                                ui.add(egui::DragValue::new(&mut form.depth).range(128..=65536).speed(128.0).suffix(" deep"));
-                                ui.label(RichText::new("blocks").color(Palette::of(ui).weak));
-                            });
+                            ui.set_width(560.0);
+                            new_world_form(ui, &mut form);
                         });
-                        ui.end_row();
-                        ui.label("Landform");
-                        ui.horizontal_wrapped(|ui| {
-                            for l in Landform::ALL {
-                                ui.selectable_value(&mut form.params.landform, l, l.label());
-                            }
-                        });
-                        ui.end_row();
-                        ui.label("Water level");
-                        ui.add(egui::DragValue::new(&mut form.params.sea_level).range(-63..=318));
-                        ui.end_row();
+                        ui.add_space(12.0);
+                        ui.vertical(|ui| new_world_preview(ui, &mut form));
                     });
-                    let tiles = ((form.width + 127) / 128) as i64 * ((form.depth + 127) / 128) as i64;
-                    ui.add_space(4.0);
-                    ui.label(
-                        RichText::new(format!(
-                            "{} tiles · roughly {} on disk. Tiles stay compressed in memory until you edit them.",
-                            tiles,
-                            panels::human((tiles * 12_000) as u64)
-                        ))
-                        .size(11.5)
-                        .color(Palette::of(ui).weak),
-                    );
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                            if ui.button(RichText::new("Create").strong()).clicked() {
-                                create = true;
-                            }
                             if ui.button("Cancel").clicked() {
                                 keep = false;
+                            }
+                            if ui.add(egui::Button::new(RichText::new("Create").strong()).fill(Palette::of(ui).accent_soft)).clicked() {
+                                create = true;
                             }
                         });
                     });
@@ -1332,47 +1340,29 @@ impl MassifApp {
                 }
             }
             Dialog::Export(mut form) => {
-                let mut start = false;
+                let mut start = None;
                 let response = egui::Modal::new(Id::unique("export")).show(ctx, |ui| {
-                    ui.set_width(520.0);
+                    ui.set_width(840.0);
                     let pal = Palette::of(ui);
                     ui.label(RichText::new("Export to Minecraft").strong().size(16.0));
-                    ui.label(
-                        RichText::new("Writes a Minecraft Java world (region files and level.dat). It opens in 1.18.2 and every later version, which upgrades it on load.")
-                            .size(11.5)
-                            .color(pal.weak),
-                    );
                     ui.add_space(6.0);
-                    egui::Grid::new("export form").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-                        ui.label("Saves folder");
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(form.parent.display().to_string()).size(11.5));
-                            if ui.small_button("Choose…").clicked()
-                                && let Some(dir) = rfd::FileDialog::new().set_directory(&form.parent).pick_folder()
-                            {
-                                form.parent = dir;
+                    ui.horizontal_top(|ui| {
+                        ui.vertical(|ui| {
+                            ui.set_width(700.0);
+                            match form.tab {
+                                ExportTab::General => export_general(ui, &mut form),
+                                ExportTab::World => export_world(ui, &mut form),
                             }
                         });
-                        ui.end_row();
-                        ui.label("World folder");
-                        ui.text_edit_singleline(&mut form.name);
-                        ui.end_row();
-                        ui.label("Game mode");
-                        ui.horizontal(|ui| {
-                            ui.selectable_value(&mut form.game_mode, GameMode::Creative, "Creative");
-                            ui.selectable_value(&mut form.game_mode, GameMode::Survival, "Survival");
-                            ui.selectable_value(&mut form.game_mode, GameMode::Adventure, "Adventure");
+                        ui.separator();
+                        ui.vertical(|ui| {
+                            ui.set_min_width(110.0);
+                            for (tab, label) in [(ExportTab::General, "General"), (ExportTab::World, "World")] {
+                                if ui.add_sized([110.0, 24.0], egui::Button::selectable(form.tab == tab, label)).clicked() {
+                                    form.tab = tab;
+                                }
+                            }
                         });
-                        ui.end_row();
-                        ui.label("Around the map");
-                        ui.horizontal(|ui| {
-                            ui.selectable_value(&mut form.surroundings, Surroundings::Vanilla, "Vanilla terrain");
-                            ui.selectable_value(&mut form.surroundings, Surroundings::Void, "Void");
-                        });
-                        ui.end_row();
-                        ui.label("");
-                        ui.checkbox(&mut form.structures, "Generate structures beyond the map");
-                        ui.end_row();
                     });
                     let target = form.parent.join(form.name.trim());
                     let exists = target.exists();
@@ -1383,13 +1373,22 @@ impl MassifApp {
                     }
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
+                        let test = ui
+                            .button("Test Export…")
+                            .on_hover_text("Export only the 3 × 3 tiles (384 × 384 blocks) around the centre of the map view, to a separate folder, to check the result quickly in Minecraft");
+                        if test.clicked() {
+                            start = Some(true);
+                        }
                         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                            let ok = !form.name.trim().is_empty() && (!exists || form.overwrite);
-                            if ui.add_enabled(ok, egui::Button::new(RichText::new("Export").strong())).clicked() {
-                                start = true;
-                            }
                             if ui.button("Cancel").clicked() {
                                 keep = false;
+                            }
+                            let ok = !form.name.trim().is_empty() && (!exists || form.overwrite);
+                            if ui
+                                .add_enabled(ok, egui::Button::new(RichText::new("Export").strong()).fill(pal.accent_soft))
+                                .clicked()
+                            {
+                                start = Some(false);
                             }
                         });
                     });
@@ -1397,16 +1396,31 @@ impl MassifApp {
                 if response.should_close() {
                     keep = false;
                 }
-                if start {
-                    let dir = form.parent.join(form.name.trim());
-                    let options = ExportOptions {
+                if let Some(test) = start {
+                    let mut options = ExportOptions {
                         level_name: Some(form.name.trim().to_owned()),
                         game_mode: form.game_mode,
+                        allow_commands: form.allow_cheats,
                         surroundings: form.surroundings,
                         generate_structures: form.structures,
                         overwrite: form.overwrite,
+                        difficulty: form.difficulty,
+                        hardcore: form.hardcore,
+                        border: form.border,
+                        datapacks: form.datapacks.clone(),
+                        spawn: Some(form.spawn),
                         ..ExportOptions::default()
                     };
+                    let mut dir = form.parent.join(form.name.trim());
+                    if test {
+                        let c = TilePos::containing(form.test_centre.0, form.test_centre.1);
+                        options.area = Some((c.offset(-1, -1), c.offset(1, 1)));
+                        options.overwrite = false;
+                        options.level_name = Some(format!("{} (test)", form.name.trim()));
+                        dir = massif_anvil::unique_dir(&form.parent, &format!("{} test", form.name.trim()));
+                        // Spawn in the middle of what is exported.
+                        options.spawn = Some([form.test_centre.0, form.spawn[1].max(self.doc.world.meta.sea_level + 1), form.test_centre.1]);
+                    }
                     let snapshot = self.doc.world.snapshot();
                     self.jobs.push(Job::export(ctx, snapshot, dir, options));
                 } else if keep {
@@ -1606,9 +1620,346 @@ impl eframe::App for MassifApp {
     }
 }
 
+/// A titled group of settings, as in WorldPainter's dialogs.
+fn card(ui: &mut Ui, title: &str, subtitle: &str, add: impl FnOnce(&mut Ui)) {
+    let pal = Palette::of(ui);
+    ui.add_space(4.0);
+    ui.label(RichText::new(title).strong());
+    if !subtitle.is_empty() {
+        ui.label(RichText::new(subtitle).size(11.5).color(pal.weak));
+    }
+    egui::Frame::new()
+        .fill(pal.panel)
+        .stroke(Stroke::new(1.0, pal.border))
+        .corner_radius(8)
+        .inner_margin(egui::Margin::symmetric(12, 8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add(ui);
+        });
+    ui.add_space(6.0);
+}
+
+/// A row of a card: a label on the left, the control on the right.
+fn row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
+    ui.horizontal(|ui| {
+        ui.add_sized([96.0, 20.0], egui::Label::new(label).truncate());
+        add(ui);
+    });
+}
+
+fn export_general(ui: &mut Ui, form: &mut ExportForm) {
+    let pal = Palette::of(ui);
+    card(ui, "Where to save it", "The folder the world is saved in, and the name it has in Minecraft.", |ui| {
+        row(ui, "Saves folder", |ui| {
+            ui.add(egui::Label::new(RichText::new(form.parent.display().to_string()).size(11.5)).truncate());
+            if ui.small_button("…").on_hover_text("Choose the folder").clicked()
+                && let Some(dir) = rfd::FileDialog::new().set_directory(&form.parent).pick_folder()
+            {
+                form.parent = dir;
+            }
+        });
+        row(ui, "Name", |ui| {
+            ui.add(egui::TextEdit::singleline(&mut form.name).desired_width(f32::INFINITY));
+        });
+        row(ui, "Map format", |ui| {
+            ui.label("Minecraft Java 1.18 chunks: opens in 1.18.2 and every later version");
+        });
+    });
+    ui.columns(2, |cols| {
+        let (left, right) = cols.split_at_mut(1);
+        card(&mut left[0], "Game", "The rules of the world when it is first played.", |ui| {
+            row(ui, "Game mode", |ui| {
+                egui::ComboBox::from_id_salt("game mode")
+                    .selected_text(format!("{:?}", form.game_mode))
+                    .show_ui(ui, |ui| {
+                        for m in [GameMode::Survival, GameMode::Creative, GameMode::Adventure, GameMode::Spectator] {
+                            ui.selectable_value(&mut form.game_mode, m, format!("{m:?}"));
+                        }
+                    });
+            });
+            row(ui, "Difficulty", |ui| {
+                use massif_anvil::Difficulty;
+                egui::ComboBox::from_id_salt("difficulty")
+                    .selected_text(format!("{:?}", form.difficulty))
+                    .show_ui(ui, |ui| {
+                        for d in [Difficulty::Peaceful, Difficulty::Easy, Difficulty::Normal, Difficulty::Hard] {
+                            ui.selectable_value(&mut form.difficulty, d, format!("{d:?}"));
+                        }
+                    });
+            });
+            row(ui, "", |ui| {
+                ui.checkbox(&mut form.allow_cheats, "Allow cheats");
+            });
+            row(ui, "", |ui| {
+                ui.checkbox(&mut form.hardcore, "Hardcore");
+            });
+            row(ui, "", |ui| {
+                ui.checkbox(&mut form.structures, "Generate structures beyond the map");
+            });
+        });
+        card(&mut right[0], "World border", "The border Minecraft shows around the world.", |ui| {
+            row(ui, "Centre", |ui| {
+                ui.add(egui::DragValue::new(&mut form.border.center[0]).speed(16.0));
+                ui.add(egui::DragValue::new(&mut form.border.center[1]).speed(16.0));
+            });
+            row(ui, "Size", |ui| {
+                ui.add(egui::DragValue::new(&mut form.border.size).range(16.0..=60_000_000.0).speed(64.0).suffix(" blocks"));
+            });
+            row(ui, "", |ui| {
+                if ui.small_button("Fit the map").on_hover_text("Centre the border on the map, just large enough for it").clicked()
+                    && let Some((c, size)) = form.fit
+                {
+                    form.border.center = c;
+                    form.border.size = size;
+                }
+            });
+        });
+    });
+    card(ui, "Data packs", "Folders or zip files copied into the world's datapacks folder and enabled. Massif does not check that they suit the Minecraft version.", |ui| {
+        ui.horizontal_top(|ui| {
+            egui::Frame::new().stroke(Stroke::new(1.0, pal.border)).corner_radius(4).inner_margin(4).show(ui, |ui| {
+                ui.set_min_size(vec2(ui.available_width() - 40.0, 90.0));
+                if form.datapacks.is_empty() {
+                    ui.label(RichText::new("No data packs").color(pal.weak));
+                }
+                for (i, p) in form.datapacks.iter().enumerate() {
+                    let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    if ui.selectable_label(form.selected_pack == Some(i), name).on_hover_text(p.display().to_string()).clicked() {
+                        form.selected_pack = Some(i);
+                    }
+                }
+            });
+            ui.vertical(|ui| {
+                if ui.button(theme::glyph(Icon::Plus).to_string()).on_hover_text("Add data packs (zip files)").clicked()
+                    && let Some(files) = rfd::FileDialog::new().add_filter("Data packs", &["zip"]).pick_files()
+                {
+                    form.datapacks.extend(files);
+                }
+                if ui.button(theme::glyph(Icon::FolderOpen).to_string()).on_hover_text("Add a data pack folder").clicked()
+                    && let Some(dir) = rfd::FileDialog::new().pick_folder()
+                {
+                    form.datapacks.push(dir);
+                }
+                if ui
+                    .add_enabled(form.selected_pack.is_some(), egui::Button::new(theme::glyph(Icon::Trash2).to_string()))
+                    .on_hover_text("Remove")
+                    .clicked()
+                    && let Some(i) = form.selected_pack.take()
+                    && i < form.datapacks.len()
+                {
+                    form.datapacks.remove(i);
+                }
+            });
+        });
+    });
+}
+
+fn export_world(ui: &mut Ui, form: &mut ExportForm) {
+    let pal = Palette::of(ui);
+    card(ui, "Around the map", "What Minecraft generates beyond the edges of the map.", |ui| {
+        ui.radio_value(&mut form.surroundings, Surroundings::Vanilla, "Vanilla terrain from the world's seed");
+        ui.radio_value(&mut form.surroundings, Surroundings::Void, "Nothing: the map floats in the void");
+    });
+    card(ui, "Spawn point", "Where players appear the first time.", |ui| {
+        row(ui, "x, y, z", |ui| {
+            ui.add(egui::DragValue::new(&mut form.spawn[0]));
+            ui.add(egui::DragValue::new(&mut form.spawn[1]).range(-64..=319));
+            ui.add(egui::DragValue::new(&mut form.spawn[2]));
+        });
+        ui.label(RichText::new("The world's spawn point, set in the Info panel; changed here for this export only.").size(11.5).color(pal.weak));
+    });
+}
+
+fn new_world_form(ui: &mut Ui, form: &mut NewWorldForm) {
+    let pal = Palette::of(ui);
+    egui::ScrollArea::vertical().max_height(560.0).auto_shrink([false, true]).show(ui, |ui| {
+        ui.columns(2, |cols| {
+            let (left, right) = cols.split_at_mut(1);
+            let (ui, ui2) = (&mut left[0], &mut right[0]);
+            card(ui, "Map", "The name of the map, and the seed Minecraft uses around it.", |ui| {
+                row(ui, "Name", |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut form.params.name).desired_width(f32::INFINITY));
+                });
+                row(ui, "Seed", |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut form.seed).desired_width(110.0));
+                    if ui.button(theme::glyph(Icon::Dice5).to_string()).on_hover_text("Random seed").clicked() {
+                        form.seed = random_seed().to_string();
+                    }
+                });
+                row(ui, "Map format", |ui| {
+                    ui.label("Minecraft Java 1.18 and later");
+                });
+            });
+            card(ui2, "Size and shape", "How large the map is, and how high and deep it can go.", |ui| {
+                row(ui, "Dimensions", |ui| {
+                    ui.add(egui::DragValue::new(&mut form.width).range(128..=65536).speed(128.0));
+                    ui.label("×");
+                    ui.add(egui::DragValue::new(&mut form.depth).range(128..=65536).speed(128.0));
+                });
+                ui.horizontal_wrapped(|ui| {
+                    ui.add_space(100.0);
+                    for (blocks, label) in [(512, "512"), (1024, "1k"), (2048, "2k"), (4096, "4k"), (8192, "8k"), (16384, "16k")] {
+                        let selected = form.width == blocks && form.depth == blocks;
+                        if ui.selectable_label(selected, label).clicked() {
+                            form.width = blocks;
+                            form.depth = blocks;
+                        }
+                    }
+                });
+                // Whole tiles only.
+                form.width = (form.width + 127) / 128 * 128;
+                form.depth = (form.depth + 127) / 128 * 128;
+                row(ui, "", |ui| {
+                    ui.label(RichText::new("blocks, in multiples of 128").size(11.5).color(pal.weak));
+                });
+                row(ui, "Build limits", |ui| {
+                    ui.label("-64 to 320");
+                });
+                // About 4.3 blocks per second on foot.
+                let minutes = form.width.max(form.depth) as f32 / 4.317 / 60.0;
+                row(ui, "Walking time", |ui| {
+                    ui.label(if minutes < 1.0 { "under a minute".to_owned() } else { format!("{minutes:.0} min. across") });
+                });
+                let tiles = (form.width / 128) as i64 * (form.depth / 128) as i64;
+                row(ui, "On disk", |ui| {
+                    ui.label(RichText::new(format!("{tiles} tiles · roughly {}", panels::human((tiles * 12_000) as u64))).color(pal.weak));
+                });
+            });
+        });
+        ui.columns(2, |cols| {
+            let (left, right) = cols.split_at_mut(1);
+            let (ui, ui2) = (&mut left[0], &mut right[0]);
+            card(ui, "Land", "The shape the map starts with, before you paint it.", |ui| {
+                row(ui, "Topography", |ui| {
+                    egui::ComboBox::from_id_salt("landform")
+                        .selected_text(form.params.landform.label())
+                        .show_ui(ui, |ui| {
+                            for l in Landform::ALL {
+                                ui.selectable_value(&mut form.params.landform, l, l.label());
+                            }
+                        });
+                });
+                let hilly = form.params.landform != Landform::Flat;
+                row(ui, "Relief height", |ui| {
+                    ui.add_enabled(hilly, egui::DragValue::new(&mut form.params.relief).range(0.0..=400.0).speed(1.0).suffix(" %"));
+                });
+                row(ui, "Feature size", |ui| {
+                    ui.add_enabled(hilly, egui::DragValue::new(&mut form.params.feature_size).range(10.0..=1000.0).speed(1.0).suffix(" %"));
+                });
+                let mut level = form.params.level.unwrap_or(if hilly { form.params.sea_level as f32 } else { form.params.flat_height });
+                row(ui, "Level", |ui| {
+                    if ui.add(egui::DragValue::new(&mut level).range(-63.0..=318.0).speed(0.5)).changed() {
+                        form.params.level = Some(level);
+                        form.params.flat_height = level;
+                    }
+                });
+                row(ui, "Water level", |ui| {
+                    ui.add(egui::DragValue::new(&mut form.params.sea_level).range(-63..=318));
+                    ui.label(RichText::new("(Minecraft: 63)").size(11.5).color(pal.weak));
+                });
+                row(ui, "", |ui| {
+                    ui.checkbox(&mut form.params.lava, "Lava instead of water");
+                });
+                row(ui, "", |ui| {
+                    ui.add_enabled(form.params.surface.is_none(), egui::Checkbox::new(&mut form.params.beaches, "Beaches"));
+                });
+            });
+            card(ui2, "Surface", "What the land is covered with.", |ui| {
+                let mut simple = form.params.surface.is_some();
+                ui.radio_value(&mut simple, false, "Automatic: grass, sand, rock and snow by height and slope");
+                ui.horizontal(|ui| {
+                    ui.radio_value(&mut simple, true, "One terrain:");
+                    let reg = &form.registry;
+                    let current = form.params.surface.unwrap_or_else(|| reg.terrain_by_name("Grass").unwrap_or(massif_core::TerrainId::ROCK));
+                    let mut chosen = current;
+                    ui.add_enabled_ui(simple, |ui| {
+                        egui::ComboBox::from_id_salt("surface terrain")
+                            .selected_text(&reg.terrain(current).name)
+                            .height(320.0)
+                            .show_ui(ui, |ui| {
+                                for (i, t) in reg.terrains.iter().enumerate() {
+                                    ui.selectable_value(&mut chosen, massif_core::TerrainId(i as u16), &t.name);
+                                }
+                            });
+                    });
+                    if simple {
+                        form.params.surface = Some(chosen);
+                    }
+                });
+                if !simple {
+                    form.params.surface = None;
+                }
+            });
+        });
+    });
+}
+
+fn new_world_preview(ui: &mut Ui, form: &mut NewWorldForm) {
+    let pal = Palette::of(ui);
+    let mut params = form.params.clone();
+    params.seed = parse_seed(&form.seed);
+    params.tiles_x = (form.width + 127) / 128;
+    params.tiles_z = (form.depth + 127) / 128;
+    let key = format!("{params:?}");
+    if form.preview.as_ref().is_none_or(|(k, _)| *k != key) {
+        let image = preview_image(&params, &form.registry, 180);
+        let texture = ui.ctx().load_texture("new world preview", image, egui::TextureOptions::LINEAR);
+        form.preview = Some((key, texture));
+    }
+    let side = 320.0;
+    let (rect, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
+    ui.painter().rect_filled(rect, 8, pal.canvas);
+    if let Some((_, texture)) = &form.preview {
+        // Non-square maps keep their proportions.
+        let (w, d) = (form.width as f32, form.depth as f32);
+        let k = side / w.max(d);
+        let r = Rect::from_center_size(rect.center(), vec2(w * k, d * k));
+        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(w / w.max(d), d / w.max(d)));
+        ui.painter().image(texture.id(), r, uv, egui::Color32::WHITE);
+    }
+    ui.label(RichText::new("Preview of the whole map; the cross is the centre.").size(11.0).color(pal.weak));
+    let c = rect.center();
+    ui.painter().line_segment([c - vec2(5.0, 0.0), c + vec2(5.0, 0.0)], Stroke::new(1.0, egui::Color32::WHITE));
+    ui.painter().line_segment([c - vec2(0.0, 5.0), c + vec2(0.0, 5.0)], Stroke::new(1.0, egui::Color32::WHITE));
+}
+
+/// What a new world will look like from above: terrain colours, water and
+/// hill shading, over the whole map.
+fn preview_image(params: &GenParams, reg: &massif_core::Registry, n: usize) -> egui::ColorImage {
+    let p = massif_core::generate::preview(params, reg, n);
+    let sea = params.sea_level as f32;
+    let fluid = if params.lava { [214.0, 96.0, 18.0] } else { [48.0, 96.0, 200.0] };
+    let s = p.spacing as f32;
+    let mut pixels = Vec::with_capacity(n * n);
+    for z in 0..n {
+        for x in 0..n {
+            let at = |x: usize, z: usize| p.heights[z.min(n - 1) * n + x.min(n - 1)];
+            let h = at(x, z);
+            let (top, _) = panels::terrain_colors(reg, p.terrains[z * n + x].0);
+            let mut c = [top.r() as f32, top.g() as f32, top.b() as f32];
+            // Lit from the north-west.
+            let dx = (at(x + 1, z) - at(x.saturating_sub(1), z)) / (2.0 * s);
+            let dz = (at(x, z + 1) - at(x, z.saturating_sub(1))) / (2.0 * s);
+            let shade = (1.0 - (dx + dz) * 1.6).clamp(0.45, 1.35);
+            for v in &mut c {
+                *v *= shade;
+            }
+            if h < sea {
+                let t = 0.55 + 0.4 * ((sea - h) / 20.0).min(1.0);
+                for i in 0..3 {
+                    c[i] = c[i] * (1.0 - t) + fluid[i] * t;
+                }
+            }
+            pixels.push(egui::Color32::from_rgb(c[0].clamp(0.0, 255.0) as u8, c[1].clamp(0.0, 255.0) as u8, c[2].clamp(0.0, 255.0) as u8));
+        }
+    }
+    egui::ColorImage::new([n, n], pixels)
+}
+
 /// Where the layout is saved. A new key when the default layouts change a
 /// lot, so that everyone gets the new editors.
-const LAYOUT_KEY: &str = "massif.layout.v2";
+const LAYOUT_KEY: &str = "massif.layout.v3";
 
 /// Lay out the area tree.
 fn compute(node: &Node, rect: Rect, path: &mut Vec<bool>, areas: &mut Vec<(AreaId, EditorKind, Rect)>, seps: &mut Vec<Sep>) {
@@ -1850,6 +2201,33 @@ mod tests {
             h.run_steps(10);
             assert!(h.state().tools.brush.radius > 900.0, "{}", h.state().tools.brush.radius);
             assert!(h.state().tools.brush.radius <= massif_core::MAX_RADIUS);
+
+            // The brush options, maximised: a height band, only on grass and
+            // water, on slopes over 20°.
+            {
+                let app = h.state_mut();
+                let grass = app.doc.world.registry.terrain_by_name("Grass").unwrap().0;
+                app.tools.filter = massif_core::filter::Filter {
+                    above: Some(40),
+                    below: Some(120),
+                    fade: true,
+                    only_on: Some(vec![massif_core::filter::Match::Terrain(grass), massif_core::filter::Match::Water]),
+                    slope_above: true,
+                    slope: 20.0,
+                    ..Default::default()
+                };
+                let mut areas = Vec::new();
+                app.layout.current().root.areas(&mut areas);
+                let id = areas.iter().find(|(_, e)| *e == EditorKind::BrushSettings).unwrap().0;
+                app.layout.toggle_maximize(id);
+            }
+            h.run_steps(10);
+            h.render().unwrap().save(dir.join(format!("brush-settings-{name}"))).unwrap();
+            let app = h.state_mut();
+            let mut areas = Vec::new();
+            app.layout.current().root.areas(&mut areas);
+            let id = areas.iter().find(|(_, e)| *e == EditorKind::BrushSettings).unwrap().0;
+            app.layout.toggle_maximize(id);
         }
     }
 
@@ -1969,6 +2347,70 @@ mod tests {
         image::save_buffer(dir.join("import-3d-close.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
     }
 
+    /// The terrain graph: previews of every node, then a build applied to
+    /// the map. Needs a GPU: runs with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn terrain_graph_previews_and_builds() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.state_mut().layout.active = 5; // Generate
+        h.state_mut().graph.resolution = 512;
+        let started = std::time::Instant::now();
+        // Previews are made on another thread.
+        while started.elapsed().as_secs_f32() < 4.0 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        h.run_steps(5);
+        h.render().unwrap().save(dir.join("graph.png")).unwrap();
+        {
+            use egui_kittest::kittest::Queryable;
+            h.get_by_label_contains("Build and apply").click();
+        }
+        let started = std::time::Instant::now();
+        while h.state().doc.history.undo_label() != Some("Terrain graph") {
+            assert!(started.elapsed().as_secs() < 120, "the build did not finish");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        for _ in 0..120 {
+            h.step();
+        }
+        h.render().unwrap().save(dir.join("graph-applied.png")).unwrap();
+        let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+        image::save_buffer(dir.join("graph-applied-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+    }
+
+    /// The new-world and export dialogs, rendered.
+    #[test]
+    fn dialogs_render() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Light);
+        h.run_steps(5);
+        h.state_mut().open_new_dialog();
+        if let Some(Dialog::NewWorld(form)) = &mut h.state_mut().dialog {
+            form.params.landform = Landform::Mountains;
+            form.width = 4096;
+            form.depth = 4096;
+        }
+        h.run_steps(5);
+        h.render().unwrap().save(dir.join("dialog-new-world.png")).unwrap();
+        assert!(matches!(&h.state().dialog, Some(Dialog::NewWorld(f)) if f.preview.is_some()));
+        h.state_mut().dialog = None;
+        h.state_mut().open_export_dialog();
+        h.run_steps(5);
+        h.render().unwrap().save(dir.join("dialog-export.png")).unwrap();
+        if let Some(Dialog::Export(form)) = &mut h.state_mut().dialog {
+            form.tab = ExportTab::World;
+        }
+        h.run_steps(5);
+        h.render().unwrap().save(dir.join("dialog-export-world.png")).unwrap();
+    }
+
     /// Dragging the corner of an area into it splits it there.
     #[test]
     fn dragging_a_corner_splits_the_area() {
@@ -1976,7 +2418,7 @@ mod tests {
             return;
         }
         let mut h = harness(ThemeChoice::Light);
-        h.state_mut().layout.active = 5; // Minimal: tools | map
+        h.state_mut().layout.active = 6; // Minimal: tools | map
         h.run_steps(5);
         let rect = map_rect(h.state(), &h.ctx);
         let before = h.state().layout.current().root.count();

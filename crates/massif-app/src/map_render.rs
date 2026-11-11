@@ -238,6 +238,7 @@ impl Default for MapStyle {
             solo: None,
             highlight: None,
             light: DEFAULT_LIGHT,
+            lava: false,
         }
     }
 }
@@ -274,6 +275,8 @@ pub struct MapStyle {
     /// Where the light of the shading comes from, in steps of 22.5°
     /// clockwise from north (14 = north-west).
     pub light: u8,
+    /// The world's fluid is lava.
+    pub lava: bool,
 }
 
 /// Default light direction: from the north-west, like WorldPainter.
@@ -482,7 +485,9 @@ impl<'a> Colorizer<'a> {
         let depth = c.water_depth();
         if depth > 0.0 && !matches!(self.style.mode, MapMode::Slope | MapMode::Biome) {
             let t = (depth / 18.0).min(1.0);
-            let water = if self.style.mode == MapMode::Relief {
+            let water = if self.style.lava {
+                [214.0, 96.0, 18.0]
+            } else if self.style.mode == MapMode::Relief {
                 [70.0, 110.0, 170.0]
             } else {
                 WATER
@@ -1017,6 +1022,7 @@ mod tests {
             strength: 1.0,
             rotation: 0.0,
             mask: None,
+            filter: None,
         };
         ops::stamp_slab(&mut h.edit(&mut w, lvl), &brush, 60.0, -60.0, Anchor::Absolute(140.0), 30.0);
         h.commit();

@@ -4,6 +4,7 @@
 mod app;
 mod brushes;
 mod doc;
+mod graph_editor;
 mod jobs;
 mod layout;
 mod map_render;

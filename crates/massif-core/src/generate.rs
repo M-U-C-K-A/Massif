@@ -52,6 +52,33 @@ pub struct GenParams {
     pub sea_level: i32,
     /// Elevation of flat worlds.
     pub flat_height: f32,
+    /// Base elevation of the land; `None`: the water level.
+    #[serde(default)]
+    pub level: Option<f32>,
+    /// Height of the relief, in percent of the landform's own.
+    #[serde(default = "hundred")]
+    pub relief: f32,
+    /// Horizontal size of the features (hills, ranges, islands), in percent.
+    #[serde(default = "hundred")]
+    pub feature_size: f32,
+    /// Sand along the shores.
+    #[serde(default = "yes")]
+    pub beaches: bool,
+    /// One terrain for the whole surface instead of the automatic ones
+    /// (grass, sand, rock and snow by height and slope).
+    #[serde(default)]
+    pub surface: Option<TerrainId>,
+    /// Lava instead of water.
+    #[serde(default)]
+    pub lava: bool,
+}
+
+fn hundred() -> f32 {
+    100.0
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl Default for GenParams {
@@ -64,6 +91,12 @@ impl Default for GenParams {
             landform: Landform::Hills,
             sea_level: 63,
             flat_height: 64.0,
+            level: None,
+            relief: 100.0,
+            feature_size: 100.0,
+            beaches: true,
+            surface: None,
+            lava: false,
         }
     }
 }
@@ -80,8 +113,11 @@ impl GenParams {
 /// The height field of a landform, sampled per block column.
 pub struct HeightField {
     landform: Landform,
+    /// Base elevation the relief is built on.
     sea: f64,
     flat: f64,
+    relief: f64,
+    scale: f64,
     base: Noise,
     detail: Noise,
     ridge: Noise,
@@ -94,8 +130,10 @@ impl HeightField {
         let root = Noise::new(params.seed as u64);
         Self {
             landform: params.landform,
-            sea: params.sea_level as f64,
-            flat: params.flat_height as f64,
+            sea: params.level.unwrap_or(params.sea_level as f32) as f64,
+            flat: params.level.unwrap_or(params.flat_height) as f64,
+            relief: (params.relief as f64 / 100.0).max(0.0),
+            scale: (params.feature_size as f64 / 100.0).max(0.05),
             base: root.derive(1),
             detail: root.derive(2),
             ridge: root.derive(3),
@@ -106,13 +144,22 @@ impl HeightField {
 
     /// Surface elevation at block column `(x, z)`.
     pub fn height(&self, x: f64, z: f64) -> f32 {
+        if self.landform == Landform::Flat {
+            return self.flat as f32;
+        }
+        let (x, z) = (x / self.scale, z / self.scale);
+        let h = self.raw(x, z);
+        (self.sea + (h - self.sea) * self.relief) as f32
+    }
+
+    fn raw(&self, x: f64, z: f64) -> f64 {
         // Domain warping bends the features so they do not look like plain
         // value noise.
         let wx = x + 60.0 * self.warp.fbm(x / 420.0, z / 420.0, 2, 2.0, 0.5);
         let wz = z + 60.0 * self.warp.fbm(x / 420.0 + 91.7, z / 420.0 - 33.1, 2, 2.0, 0.5);
         let detail = self.detail.fbm(x / 48.0, z / 48.0, 3, 2.0, 0.5);
         let sea = self.sea;
-        let h = match self.landform {
+        match self.landform {
             Landform::Flat => self.flat,
             Landform::Plains => {
                 sea + 4.0 + 7.0 * self.base.fbm(wx / 520.0, wz / 520.0, 4, 2.0, 0.5) + 1.2 * detail
@@ -141,8 +188,7 @@ impl HeightField {
                 };
                 sea + 1.0 + shaped + 2.0 * detail * (0.3 + land.max(0.0))
             }
-        };
-        h as f32
+        }
     }
 }
 
@@ -173,9 +219,14 @@ impl Theme {
     /// Pick a terrain from elevation and slope (blocks of rise per block).
     /// `jitter` in `-1..1` breaks up the altitude bands.
     pub fn terrain(&self, h: f32, slope: f32, sea: f32, jitter: f32) -> TerrainId {
+        self.terrain_with(h, slope, sea, jitter, true)
+    }
+
+    /// [`Theme::terrain`], with or without sandy shores.
+    pub fn terrain_with(&self, h: f32, slope: f32, sea: f32, jitter: f32, beaches: bool) -> TerrainId {
         if h < sea - 14.0 + 3.0 * jitter {
             self.gravel
-        } else if h < sea + 2.2 + 0.8 * jitter && slope < 0.9 {
+        } else if beaches && h < sea + 2.2 + 0.8 * jitter && slope < 0.9 {
             self.sand
         } else if slope > 1.35 {
             self.rock
@@ -190,11 +241,13 @@ impl Theme {
 }
 
 /// Generate one ground tile.
-pub fn generate_tile(pos: TilePos, field: &HeightField, theme: &Theme, sea_level: i32) -> Tile {
+pub fn generate_tile(pos: TilePos, field: &HeightField, theme: &Theme, params: &GenParams) -> Tile {
     let n = TILE_SIZE as usize;
     let (ox, oz) = pos.origin();
+    let sea_level = params.sea_level;
     if field.landform == Landform::Flat {
-        return Tile::ground(snap_height(field.flat as f32), theme.grass.0, sea_level as i16);
+        let terrain = params.surface.unwrap_or(theme.grass);
+        return Tile::ground(snap_height(field.flat as f32), terrain.0, sea_level as i16);
     }
 
     // One extra column on every side for the slope estimate.
@@ -223,7 +276,10 @@ pub fn generate_tile(pos: TilePos, field: &HeightField, theme: &Theme, sea_level
                 as f32;
             let i = z * n + x;
             top[i] = snap_height(h[c]);
-            terrain[i] = theme.terrain(h[c], slope, sea, jitter).0;
+            terrain[i] = match params.surface {
+                Some(t) => t.0,
+                None => theme.terrain_with(h[c], slope, sea, jitter, params.beaches).0,
+            };
         }
     }
 
@@ -242,6 +298,8 @@ pub fn generate(params: &GenParams) -> World {
         seed: params.seed,
         spawn: [0, 0, 0],
         sea_level: params.sea_level,
+        lava: params.lava,
+        graph: None,
     });
     let field = HeightField::new(params);
     let theme = Theme::new(&world.registry);
@@ -253,7 +311,7 @@ pub fn generate(params: &GenParams) -> World {
     let blobs: Vec<(TilePos, Blob)> = positions
         .par_iter()
         .map(|&pos| {
-            let tile = generate_tile(pos, &field, &theme, params.sea_level);
+            let tile = generate_tile(pos, &field, &theme, params);
             (pos, Blob::from(tile.encode()))
         })
         .collect();
@@ -265,6 +323,48 @@ pub fn generate(params: &GenParams) -> World {
     let surface = field.height(0.5, 0.5).max(params.sea_level as f32);
     world.meta.spawn = [0, crate::compose::block_top(surface) + 1, 0];
     world
+}
+
+/// A small picture of what [`generate`] will make: heights and terrains on
+/// an `n` × `n` grid spread over the whole map, for previews.
+pub struct Preview {
+    pub n: usize,
+    pub heights: Vec<f32>,
+    pub terrains: Vec<TerrainId>,
+    /// Blocks between two samples.
+    pub spacing: f64,
+}
+
+pub fn preview(params: &GenParams, reg: &Registry, n: usize) -> Preview {
+    let field = HeightField::new(params);
+    let theme = Theme::new(reg);
+    let (min, max) = params.bounds();
+    let (x0, z0) = (min.x as f64 * TILE_SIZE as f64, min.z as f64 * TILE_SIZE as f64);
+    let width = ((max.x - min.x + 1) as f64 * TILE_SIZE as f64).max((max.z - min.z + 1) as f64 * TILE_SIZE as f64);
+    let spacing = width / n as f64;
+    let heights: Vec<f32> = (0..n * n)
+        .into_par_iter()
+        .map(|i| field.height(x0 + ((i % n) as f64 + 0.5) * spacing, z0 + ((i / n) as f64 + 0.5) * spacing))
+        .collect();
+    let sea = params.sea_level as f32;
+    let terrains = (0..n * n)
+        .map(|i| {
+            if let Some(t) = params.surface {
+                return t;
+            }
+            let (x, z) = (i % n, i / n);
+            let at = |x: usize, z: usize| heights[z.min(n - 1) * n + x.min(n - 1)];
+            let dx = (at(x + 1, z) - at(x.saturating_sub(1), z)) / (2.0 * spacing as f32);
+            let dz = (at(x, z + 1) - at(x, z.saturating_sub(1))) / (2.0 * spacing as f32);
+            theme.terrain_with(heights[i], dx.abs().max(dz.abs()), sea, 0.0, params.beaches)
+        })
+        .collect();
+    Preview {
+        n,
+        heights,
+        terrains,
+        spacing,
+    }
 }
 
 #[cfg(test)]
@@ -361,4 +461,49 @@ mod tests {
         assert_eq!(t.terrain(200.0, 0.2, 63.0, 0.0), t.snow);
         assert_ne!(t.grass, t.rock);
     }
+    #[test]
+    fn level_relief_size_beaches_and_surface() {
+        let base = GenParams {
+            tiles_x: 4,
+            tiles_z: 4,
+            landform: Landform::Hills,
+            ..GenParams::default()
+        };
+        let range = |p: &GenParams| {
+            let field = HeightField::new(p);
+            let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+            for z in (-256..256).step_by(4) {
+                for x in (-256..256).step_by(4) {
+                    let h = field.height(x as f64, z as f64);
+                    lo = lo.min(h);
+                    hi = hi.max(h);
+                }
+            }
+            (lo, hi)
+        };
+        let (lo, hi) = range(&base);
+        // Half the relief: half the spread around the same base.
+        let (lo2, hi2) = range(&GenParams { relief: 50.0, ..base.clone() });
+        assert!(((hi2 - lo2) - (hi - lo) * 0.5).abs() < 1.0, "{lo}..{hi} vs {lo2}..{hi2}");
+        // A higher level lifts everything.
+        let (lo3, _) = range(&GenParams { level: Some(100.0), relief: 0.0, ..base.clone() });
+        assert_eq!(lo3, 100.0);
+        // One terrain everywhere.
+        let rock = GenParams { surface: Some(TerrainId::ROCK), ..base.clone() };
+        let w = generate(&rock);
+        let tile = w.dims[0].ground().view(TilePos::new(0, 0)).unwrap();
+        assert!((0..TILE_AREA).all(|i| tile.terrain.get(i) == TerrainId::ROCK.0));
+        // Lava worlds remember it.
+        assert!(generate(&GenParams { lava: true, ..base.clone() }).meta.lava);
+        // Previews cover the map.
+        let p = preview(&base, &Registry::vanilla(), 32);
+        assert_eq!(p.heights.len(), 32 * 32);
+        assert_eq!(p.spacing, 512.0 / 32.0);
+        // Bigger features vary more slowly.
+        let field = HeightField::new(&GenParams { feature_size: 400.0, ..base.clone() });
+        let small = HeightField::new(&base);
+        let wiggle = |f: &HeightField| (0..64).map(|i| (f.height(i as f64 * 4.0, 0.0) - f.height(i as f64 * 4.0 + 4.0, 0.0)).abs()).sum::<f32>();
+        assert!(wiggle(&field) < wiggle(&small));
+    }
+
 }

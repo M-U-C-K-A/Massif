@@ -629,6 +629,7 @@ mod tests {
             strength: 1.0,
             rotation: 0.0,
             mask: None,
+            filter: None,
         };
         hist.begin("stamp", 0);
         ops::stamp_slab(&mut hist.edit(&mut world, island), &brush, -3.0, 5.0, Anchor::Absolute(150.0), 24.0);

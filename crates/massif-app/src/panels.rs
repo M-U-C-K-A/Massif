@@ -7,7 +7,7 @@ use crate::layout::EditorKind;
 use crate::map_render::ColumnSampler;
 use crate::theme::{self, Icon, Palette};
 use crate::tools::{AnchorMode, SurfaceChoice, Tool, ToolState};
-use egui::{Color32, CornerRadius, Rect, RichText, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use egui::{Align, Color32, CornerRadius, Rect, RichText, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 use massif_core::compose::TileStack;
 use massif_core::coords::local_index;
 use massif_core::level::LevelKind;
@@ -420,11 +420,12 @@ pub fn custom_brushes_panel(ui: &mut Ui, tools: &mut ToolState, library: &mut Br
     feedback
 }
 
-/// Size, intensity and rotation of the brush, with a preview.
-pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibrary) {
+/// Size, intensity and rotation of the brush, with a preview, then the
+/// options that limit where it acts (WorldPainter's brush options).
+pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibrary, reg: &Registry, min_y: i32, max_y: i32) {
     let pal = Palette::of(ui);
     let dark = ui.visuals().dark_mode;
-    ui.spacing_mut().slider_width = (ui.available_width() - 76.0 - 84.0).clamp(60.0, 240.0);
+    ui.spacing_mut().slider_width = (ui.available_width() - 76.0 - 84.0).clamp(60.0, 260.0);
     let ctx = ui.ctx().clone();
     ui.horizontal(|ui| {
         let texture = library.preview(&ctx, &tools.brush_source, &tools.brush, dark);
@@ -469,6 +470,266 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
         ui,
         "Scroll on the map or − + for the size (with Shift: one block at a time), 1…0 for the intensity, [ ] to turn the brush. The right button inverts the tool.",
     );
+
+    // ---- options ---------------------------------------------------------
+    let f = &mut tools.filter;
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Options").strong());
+        if f.is_active() {
+            ui.label(RichText::new(theme::glyph(Icon::Funnel).to_string()).color(pal.accent))
+                .on_hover_text("A filter is on: the brushes only act where it lets them");
+            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                if ui.small_button("Reset").on_hover_text("Act everywhere again").clicked() {
+                    *f = massif_core::filter::Filter::default();
+                }
+            });
+        }
+    });
+
+    section(ui, Icon::ArrowUpDown, "Height limits");
+    height_graph(ui, f, min_y, max_y);
+    ui.horizontal(|ui| {
+        let both = f.above.is_some() && f.below.is_some();
+        ui.add_enabled_ui(both, |ui| {
+            let half = (ui.available_width() - 8.0) / 2.0;
+            if ui.add_sized([half, 20.0], egui::Button::selectable(!f.beyond, "Between")).clicked() {
+                f.beyond = false;
+            }
+            if ui.add_sized([half, 20.0], egui::Button::selectable(f.beyond, "Beyond")).clicked() {
+                f.beyond = true;
+            }
+        });
+    });
+    let caption = match (f.above, f.below) {
+        (None, None) => "Applies at every height".to_owned(),
+        (Some(a), None) => format!("Applies at {a} and above"),
+        (None, Some(b)) => format!("Applies at {b} and below"),
+        (Some(a), Some(b)) if f.beyond => format!("Applies below {a} and above {b}"),
+        (Some(a), Some(b)) => format!("Applies from {a} to {b}"),
+    };
+    ui.vertical_centered(|ui| hint(ui, &caption));
+    ui.horizontal_wrapped(|ui| {
+        let mut above = f.above.is_some();
+        if ui.checkbox(&mut above, "at or above").changed() {
+            f.above = above.then_some(f.below.map_or(64, |b| b.min(64)));
+        }
+        let mut v = f.above.unwrap_or(min_y);
+        if ui.add_enabled(above, egui::DragValue::new(&mut v).range(min_y..=max_y)).changed() {
+            f.above = Some(v);
+        }
+        ui.add_space(16.0);
+        let mut below = f.below.is_some();
+        if ui.checkbox(&mut below, "at or below").changed() {
+            f.below = below.then_some(f.above.map_or(100, |a| a.max(100)));
+        }
+        let mut v = f.below.unwrap_or(max_y - 1);
+        if ui.add_enabled(below, egui::DragValue::new(&mut v).range(min_y..=max_y)).changed() {
+            f.below = Some(v);
+        }
+    });
+    ui.add_enabled(
+        f.above.is_some() || f.below.is_some(),
+        egui::Checkbox::new(&mut f.fade, format!("fade at the limits ({} blocks)", massif_core::filter::FADE)),
+    );
+
+    section(ui, Icon::Layers, "What is on the map");
+    match_list(ui, "only on", &mut f.only_on, reg, "only on");
+    match_list(ui, "except on", &mut f.except_on, reg, "except on");
+
+    section(ui, Icon::TrendingUp, "Slope");
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut f.slope_above, "above");
+        ui.checkbox(&mut f.slope_below, "below");
+        ui.add_enabled(
+            f.slope_above || f.slope_below,
+            egui::DragValue::new(&mut f.slope).range(0.0..=90.0).speed(0.5).suffix("°"),
+        );
+    });
+
+    section(ui, Icon::Waves, "Curvature");
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut f.hollows, "hollows").on_hover_text("Columns lower than the ones around them");
+        ui.checkbox(&mut f.bumps, "bumps").on_hover_text("Columns higher than the ones around them");
+    });
+    let on = f.hollows || f.bumps;
+    ui.horizontal(|ui| {
+        ui.add_enabled(on, egui::DragValue::new(&mut f.depth).range(0.1..=64.0).speed(0.1).max_decimals(1));
+        ui.label("blocks deep");
+        ui.add_enabled(on, egui::DragValue::new(&mut f.radius).range(1..=64));
+        ui.label("blocks around");
+    });
+}
+
+/// A stylised cross-section of a landscape, with the height band the filter
+/// lets through. The limits can be dragged.
+fn height_graph(ui: &mut Ui, f: &mut massif_core::filter::Filter, min_y: i32, max_y: i32) {
+    let pal = Palette::of(ui);
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 120.0), Sense::click_and_drag());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 4, pal.header);
+    let gutter = 34.0;
+    let plot = Rect::from_min_max(pos2(rect.left() + gutter, rect.top() + 4.0), pos2(rect.right() - 4.0, rect.bottom() - 4.0));
+    let (lo, hi) = (min_y as f32, max_y as f32);
+    let to_y = |h: f32| plot.bottom() - (h - lo) / (hi - lo).max(1.0) * plot.height();
+    let from_y = |y: f32| lo + (plot.bottom() - y) / plot.height().max(1.0) * (hi - lo);
+    // Axis labels.
+    for h in [min_y, 0, 100, 200, max_y - 1] {
+        if h < min_y || h >= max_y {
+            continue;
+        }
+        let y = to_y(h as f32);
+        painter.text(pos2(rect.left() + gutter - 4.0, y), egui::Align2::RIGHT_CENTER, h.to_string(), egui::FontId::proportional(9.5), pal.weak);
+        painter.hline(plot.x_range(), y, Stroke::new(0.5, pal.border));
+    }
+    // The landscape: valleys, hills, mountains.
+    let profile = |t: f32| {
+        let base = 70.0 + 30.0 * (t * 7.0).sin() + 25.0 * (t * 13.0 + 1.0).sin();
+        let valley = -90.0 * (-((t - 0.3) * 7.0).powi(2)).exp();
+        let mountains = 160.0 * (-((t - 0.78) * 4.5).powi(2)).exp();
+        (base + valley + mountains).clamp(lo + 4.0, hi - 4.0)
+    };
+    let n = 96;
+    let points: Vec<egui::Pos2> = (0..=n)
+        .map(|i| {
+            let t = i as f32 / n as f32;
+            pos2(plot.left() + t * plot.width(), to_y(profile(t)))
+        })
+        .collect();
+    // Fill under the profile column by column (it is not convex).
+    for w in points.windows(2) {
+        let quad = vec![w[0], w[1], pos2(w[1].x, plot.bottom()), pos2(w[0].x, plot.bottom())];
+        painter.add(egui::Shape::convex_polygon(quad, pal.weak.gamma_multiply(0.35), Stroke::NONE));
+    }
+    // The band.
+    let band_lo = f.above.map_or(lo, |a| a as f32);
+    let band_hi = f.below.map_or(hi, |b| b as f32);
+    let shade = pal.accent.gamma_multiply(0.12);
+    if f.above.is_some() && f.below.is_some() && f.beyond {
+        painter.rect_filled(Rect::from_min_max(pos2(plot.left(), to_y(band_hi)), pos2(plot.right(), plot.top())), 0, shade);
+        painter.rect_filled(Rect::from_min_max(pos2(plot.left(), plot.bottom()), pos2(plot.right(), to_y(band_lo))), 0, shade);
+    } else if f.above.is_some() || f.below.is_some() {
+        painter.rect_filled(Rect::from_min_max(pos2(plot.left(), to_y(band_hi)), pos2(plot.right(), to_y(band_lo))), 0, shade);
+    }
+    // The surface, in blue where the brush acts.
+    for (i, w) in points.windows(2).enumerate() {
+        let t = (i as f32 + 0.5) / n as f32;
+        let weight = f.height_weight(profile(t));
+        let color = if weight > 0.0 { pal.accent.gamma_multiply(0.3 + 0.7 * weight) } else { pal.text.gamma_multiply(0.5) };
+        painter.line_segment([w[0], w[1]], Stroke::new(if weight > 0.0 { 2.5 } else { 1.2 }, color));
+    }
+    // The limits, dashed, with their values.
+    let limit = |painter: &egui::Painter, h: i32, label: String| {
+        let y = to_y(h as f32);
+        painter.add(egui::Shape::dashed_line(&[pos2(plot.left(), y), pos2(plot.right(), y)], Stroke::new(1.2, pal.accent), 5.0, 3.0));
+        let galley = painter.layout_no_wrap(label, egui::FontId::proportional(10.0), pal.accent);
+        let at = pos2(plot.right() - galley.size().x - 4.0, (y - galley.size().y - 2.0).max(plot.top()));
+        painter.rect_filled(Rect::from_min_size(at - vec2(2.0, 1.0), galley.size() + vec2(4.0, 2.0)), 2, pal.panel);
+        painter.galley(at, galley, pal.accent);
+    };
+    if let Some(a) = f.above {
+        limit(&painter, a, format!("≥ {a}"));
+    }
+    if let Some(b) = f.below {
+        limit(&painter, b, format!("≤ {b}"));
+    }
+    // Dragging moves the nearest limit.
+    let id = response.id.with("dragging");
+    if response.drag_started()
+        && let Some(p) = response.interact_pointer_pos()
+    {
+        let dist = |h: Option<i32>| h.map(|h| (to_y(h as f32) - p.y).abs());
+        let which = match (dist(f.above), dist(f.below)) {
+            (Some(a), Some(b)) => Some(if a <= b { 0u8 } else { 1 }),
+            (Some(_), None) => Some(0),
+            (None, Some(_)) => Some(1),
+            (None, None) => None,
+        };
+        ui.data_mut(|d| d.insert_temp(id, which));
+    }
+    if response.dragged()
+        && let Some(p) = response.interact_pointer_pos()
+    {
+        let which: Option<u8> = ui.data(|d| d.get_temp(id)).flatten();
+        let h = from_y(p.y).round().clamp(lo, hi - 1.0) as i32;
+        match which {
+            Some(0) => f.above = Some(f.below.map_or(h, |b| h.min(b))),
+            Some(1) => f.below = Some(f.above.map_or(h, |a| h.max(a))),
+            _ => {}
+        }
+    }
+    if response.hovered() && (f.above.is_some() || f.below.is_some()) {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+    }
+}
+
+/// A list of terrains, biomes, water or land the filter matches, as chips,
+/// with a menu to add more.
+fn match_list(ui: &mut Ui, label: &str, list: &mut Option<Vec<massif_core::filter::Match>>, reg: &Registry, id: &str) {
+    use massif_core::filter::Match;
+    let pal = Palette::of(ui);
+    let mut on = list.is_some();
+    if ui.checkbox(&mut on, label).changed() {
+        *list = on.then(Vec::new);
+    }
+    let Some(items) = list else { return };
+    let name = |m: &Match| match *m {
+        Match::Terrain(t) => reg.terrain(TerrainId(t)).name.clone(),
+        Match::Biome(b) => reg.biome(BiomeId(b)).name.clone(),
+        Match::Water => "Water".to_owned(),
+        Match::Land => "Dry land".to_owned(),
+    };
+    ui.horizontal_wrapped(|ui| {
+        ui.add_space(20.0);
+        let mut remove = None;
+        for (i, m) in items.iter().enumerate() {
+            let text = format!("{}  {}", name(m), theme::glyph(Icon::X));
+            if ui.add(egui::Button::new(RichText::new(text).size(11.5)).corner_radius(10)).on_hover_text("Remove").clicked() {
+                remove = Some(i);
+            }
+        }
+        if let Some(i) = remove {
+            items.remove(i);
+        }
+        ui.menu_button(theme::with_icon(Icon::Plus, "Add"), |ui| {
+            ui.set_max_height(360.0);
+            let add = |m: Match, items: &mut Vec<Match>| {
+                if !items.contains(&m) {
+                    items.push(m);
+                }
+            };
+            if ui.button("Water").clicked() {
+                add(Match::Water, items);
+            }
+            if ui.button("Dry land").clicked() {
+                add(Match::Land, items);
+            }
+            ui.menu_button("Terrains", |ui| {
+                egui::ScrollArea::vertical().id_salt((id, "terrains")).max_height(320.0).show(ui, |ui| {
+                    for (i, t) in reg.terrains.iter().enumerate() {
+                        if ui.button(&t.name).clicked() {
+                            add(Match::Terrain(i as u16), items);
+                        }
+                    }
+                });
+            });
+            ui.menu_button("Biomes", |ui| {
+                egui::ScrollArea::vertical().id_salt((id, "biomes")).max_height(320.0).show(ui, |ui| {
+                    for (i, b) in reg.biomes.iter().enumerate().skip(1) {
+                        if ui.button(&b.name).clicked() {
+                            add(Match::Biome(i as u16), items);
+                        }
+                    }
+                });
+            });
+        });
+    });
+    if items.is_empty() {
+        ui.horizontal(|ui| {
+            ui.add_space(20.0);
+            ui.label(RichText::new("Add what the brush should act on").size(11.0).color(pal.weak));
+        });
+    }
 }
 
 fn level_label((name, kind): &(String, LevelKind)) -> String {

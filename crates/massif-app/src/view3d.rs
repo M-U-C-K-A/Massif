@@ -186,6 +186,8 @@ fn compose_area(dim: &Dimension, x0: i32, z0: i32, w: usize, d: usize, mode: Map
 pub struct Style {
     pub mode: MapMode,
     pub water: bool,
+    /// The world's fluid is lava.
+    pub lava: bool,
 }
 
 struct Colors<'a> {
@@ -500,7 +502,7 @@ pub fn build_chunk(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: T
     // Water: its surface merged into rectangles, and its sides where the
     // map ends.
     if style.water {
-        let blue = [52, 104, 210, 168];
+        let blue = if style.lava { [214, 96, 18, 230] } else { [52, 104, 210, 168] };
         greedy(
             n,
             |i, j| {
@@ -706,7 +708,7 @@ pub fn build_far(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, key: Tile
                             len: w as u8,
                             y: clamp16(y),
                             h: h as i16,
-                            color: [52, 104, 210, 168],
+                            color: if style.lava { [214, 96, 18, 230] } else { [52, 104, 210, 168] },
                         })
                     },
                 );
@@ -1535,6 +1537,7 @@ impl View3d {
         let style = Style {
             mode: self.mode,
             water: self.water,
+            lava: doc.world.meta.lava,
         };
         let reg = &doc.world.registry;
         let (sea, seed) = (doc.world.meta.sea_level as f32, doc.world.meta.seed);
@@ -1625,6 +1628,7 @@ impl View3d {
         let style = Style {
             mode: self.mode,
             water: self.water,
+            lava: doc.world.meta.lava,
         };
         let dim = doc.dimension();
         let ground = dim.ground();
@@ -1731,6 +1735,7 @@ impl View3d {
         let style = Style {
             mode: self.mode,
             water: self.water,
+            lava: doc.world.meta.lava,
         };
         if self.style != Some(style) {
             self.style = Some(style);
@@ -2017,6 +2022,7 @@ mod tests {
             strength: 1.0,
             rotation: 0.0,
             mask: None,
+            filter: None,
         };
         h.begin("stamp", 0);
         ops::stamp_slab(&mut h.edit(&mut w, island), &brush, 60.0, -60.0, Anchor::Absolute(150.0), 30.0);
@@ -2028,6 +2034,7 @@ mod tests {
     const STYLE: Style = Style {
         mode: MapMode::Terrain,
         water: true,
+        lava: false,
     };
 
     #[test]
@@ -2111,7 +2118,7 @@ mod tests {
         let w = world();
         let dim = &w.dims[0];
         let tile = TilePos::new(-1, -1);
-        let faces = build_chunk(dim, &w.registry, 63.0, w.meta.seed, tile, Style { mode: MapMode::Height, water: false });
+        let faces = build_chunk(dim, &w.registry, 63.0, w.meta.seed, tile, Style { mode: MapMode::Height, water: false, lava: false });
         let grid = compose_area(dim, -129, -129, 130, 130, MapMode::Height, false);
         let (cx, cz) = (-128, -128);
         let mut expected = 0i64;

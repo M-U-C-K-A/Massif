@@ -101,7 +101,7 @@ impl<'a> ExportContext<'a> {
             sea_level: world.meta.sea_level,
             states,
             biomes,
-            water: wk.water.0,
+            water: if world.meta.lava { wk.lava.0 } else { wk.water.0 },
             plains: biome("minecraft:plains"),
             ocean: biome("minecraft:ocean"),
             deep_ocean: biome("minecraft:deep_ocean"),

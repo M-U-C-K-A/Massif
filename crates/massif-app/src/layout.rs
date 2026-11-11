@@ -23,6 +23,8 @@ pub enum EditorKind {
     Biomes,
     Levels,
     Info,
+    /// The terrain graph (procedural generation and erosion).
+    Graph,
 }
 
 impl EditorKind {
@@ -43,7 +45,7 @@ impl EditorKind {
             "Paint",
             &[EditorKind::Terrain, EditorKind::Biomes, EditorKind::Levels],
         ),
-        ("World", &[EditorKind::Info]),
+        ("World", &[EditorKind::Info, EditorKind::Graph]),
     ];
 
     pub const fn label(self) -> &'static str {
@@ -60,6 +62,7 @@ impl EditorKind {
             EditorKind::Biomes => "Biomes",
             EditorKind::Levels => "Levels",
             EditorKind::Info => "Info",
+            EditorKind::Graph => "Terrain Graph",
         }
     }
 
@@ -77,6 +80,7 @@ impl EditorKind {
             EditorKind::Biomes => Icon::Trees,
             EditorKind::Levels => Icon::Layers,
             EditorKind::Info => Icon::Info,
+            EditorKind::Graph => Icon::Workflow,
         }
     }
 }
@@ -442,6 +446,13 @@ impl Default for Layout {
         let (m1, m2) = (b.area(Map), b.area(Map));
         add("Maps", b.row(0.5, m1, m2));
 
+        // Generate: the terrain graph, with the map and the 3D view to see
+        // what it makes.
+        let graph = b.area(Graph);
+        let (map, view) = (b.area(Map), b.area(View3d));
+        let side = b.column(0.5, map, view);
+        add("Generate", b.row(0.62, graph, side));
+
         // Minimal: just tools and the map.
         let (tools, map) = (b.area(Tools), b.area(Map));
         add("Minimal", b.row(0.12, tools, map));
@@ -599,7 +610,7 @@ mod tests {
     #[test]
     fn default_layout_is_well_formed() {
         let layout = Layout::default();
-        assert_eq!(layout.workspaces.len(), 6);
+        assert_eq!(layout.workspaces.len(), 7);
         let mut seen = std::collections::HashSet::new();
         for ws in &layout.workspaces {
             for id in ids(&ws.root) {
@@ -619,7 +630,7 @@ mod tests {
     fn corner_splits_and_joins() {
         // Minimal: tools | map.
         let mut layout = Layout {
-            active: 5,
+            active: 6,
             ..Layout::default()
         };
         let map = layout.current().root.first_area() + 1;
@@ -699,7 +710,7 @@ mod tests {
         let n = layout.workspaces.len();
         layout.duplicate_current();
         assert_eq!((layout.workspaces.len(), layout.active), (n + 1, n));
-        assert_eq!(layout.current().name, "Layout 7");
+        assert_eq!(layout.current().name, "Layout 8");
         let (a, b) = (ids(&layout.workspaces[0].root), ids(&layout.current().root));
         assert!(a.iter().all(|id| !b.contains(id)));
         layout.remove_workspace(n);

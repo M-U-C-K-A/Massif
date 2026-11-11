@@ -1,7 +1,7 @@
 //! Exporting a dimension as a Minecraft Java world folder.
 
 use crate::chunk::{ExportContext, Scratch, build_chunk};
-use crate::level_dat::{GameMode, LevelSettings, Surroundings, level_dat};
+use crate::level_dat::{Difficulty, GameMode, LevelSettings, Surroundings, WorldBorder, level_dat};
 use crate::region::RegionBuilder;
 use massif_core::TilePos;
 use massif_core::compose::TileStack;
@@ -47,6 +47,15 @@ pub struct ExportOptions {
     pub overwrite: bool,
     /// zlib level for chunk data (1 = fastest, 9 = smallest).
     pub compression: u32,
+    pub difficulty: Difficulty,
+    pub hardcore: bool,
+    pub border: WorldBorder,
+    /// Data packs (folders or zip files) copied into the world and enabled.
+    pub datapacks: Vec<PathBuf>,
+    /// Where players appear; `None`: the world's own spawn point.
+    pub spawn: Option<[i32; 3]>,
+    /// Only export the tiles in this rectangle (inclusive), for a quick test.
+    pub area: Option<(TilePos, TilePos)>,
 }
 
 impl Default for ExportOptions {
@@ -60,6 +69,12 @@ impl Default for ExportOptions {
             generate_structures: true,
             overwrite: false,
             compression: 3,
+            difficulty: Difficulty::Normal,
+            hardcore: false,
+            border: WorldBorder::default(),
+            datapacks: Vec::new(),
+            spawn: None,
+            area: None,
         }
     }
 }
@@ -121,7 +136,8 @@ pub fn export(
 
     // Group the map's tiles by region file.
     let mut regions: HashMap<(i32, i32), Vec<TilePos>> = HashMap::new();
-    for pos in dim.ground().positions() {
+    let in_area = |p: TilePos| options.area.is_none_or(|(lo, hi)| p.x >= lo.x && p.x <= hi.x && p.z >= lo.z && p.z <= hi.z);
+    for pos in dim.ground().positions().filter(|p| in_area(*p)) {
         let key = (
             pos.x.div_euclid(TILES_PER_REGION),
             pos.z.div_euclid(TILES_PER_REGION),
@@ -192,18 +208,33 @@ pub fn export(
             Ok(())
         })?;
 
+    // Data packs: copied into the world's datapacks folder and enabled.
+    let mut packs = Vec::new();
+    if !options.datapacks.is_empty() {
+        let target = dir.join("datapacks");
+        std::fs::create_dir_all(&target)?;
+        for pack in &options.datapacks {
+            let Some(name) = pack.file_name() else { continue };
+            copy_recursively(pack, &target.join(name))?;
+            packs.push(format!("file/{}", name.to_string_lossy()));
+        }
+    }
     let settings = LevelSettings {
         name: options
             .level_name
             .clone()
             .unwrap_or_else(|| world.meta.name.clone()),
         seed: world.meta.seed,
-        spawn: world.meta.spawn,
+        spawn: options.spawn.unwrap_or(world.meta.spawn),
         game_mode: options.game_mode,
         allow_commands: options.allow_commands,
         surroundings: options.surroundings,
         generate_structures: options.generate_structures,
         last_played: now.as_millis() as i64,
+        difficulty: options.difficulty,
+        hardcore: options.hardcore,
+        border: options.border,
+        datapacks: packs,
     };
     std::fs::write(dir.join("level.dat"), level_dat(&settings)?)?;
 
@@ -213,6 +244,20 @@ pub fn export(
         bytes: bytes.load(Ordering::Relaxed),
         elapsed: started.elapsed(),
     })
+}
+
+/// Copy a file, or a folder and everything in it.
+fn copy_recursively(from: &Path, to: &Path) -> io::Result<()> {
+    if from.is_dir() {
+        std::fs::create_dir_all(to)?;
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            copy_recursively(&entry.path(), &to.join(entry.file_name()))?;
+        }
+        Ok(())
+    } else {
+        std::fs::copy(from, to).map(|_| ())
+    }
 }
 
 /// A folder name inside `parent` that does not exist yet: `name`, or

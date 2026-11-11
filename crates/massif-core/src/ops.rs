@@ -33,6 +33,35 @@ pub enum Anchor {
     Ground(f32),
 }
 
+/// The brush at one dab: its shape around `(cx, cz)`, times its filter.
+struct Dab<'a> {
+    brush: &'a Brush,
+    cx: f32,
+    cz: f32,
+    mask: Option<crate::filter::Mask>,
+}
+
+impl<'a> Dab<'a> {
+    fn new(edit: &Edit, brush: &'a Brush, cx: f32, cz: f32) -> Self {
+        let mask = brush
+            .filter
+            .as_ref()
+            .filter(|f| f.is_active())
+            .map(|f| f.mask(edit.dim(), BlockRect::around(cx, cz, brush.radius)));
+        Self { brush, cx, cz, mask }
+    }
+
+    /// Strength at column `(x, z)`, filter included, without the intensity.
+    #[inline]
+    fn weight(&self, x: i32, z: i32) -> f32 {
+        let w = self.brush.weight(x as f32 + 0.5 - self.cx, z as f32 + 0.5 - self.cz);
+        match &self.mask {
+            Some(m) if w > 0.0 => w * m.get(x, z),
+            _ => w,
+        }
+    }
+}
+
 /// Visit the cells of `rect` tile by tile. `f` receives the tile position and
 /// the part of `rect` inside that tile.
 fn clip_tiles(rect: BlockRect) -> impl Iterator<Item = (TilePos, BlockRect)> {
@@ -71,6 +100,7 @@ fn edit_heights_by_tile<G>(
     } else {
         Surface::Top
     };
+    let dab = Dab::new(edit, brush, cx, cz);
     let footprint = BlockRect::around(cx, cz, brush.radius);
     edit.par_tiles(footprint.tiles(), footprint, false, |pos, clip, tile| {
         let mut f = per_tile(pos, clip);
@@ -79,7 +109,7 @@ fn edit_heights_by_tile<G>(
         let mut bottom = bottom.as_mut().map(Plane::dense_mut);
         for z in clip.z0..clip.z1 {
             for x in clip.x0..clip.x1 {
-                let w = brush.weight(x as f32 + 0.5 - cx, z as f32 + 0.5 - cz);
+                let w = dab.weight(x, z);
                 if w <= 0.0 {
                     continue;
                 }
@@ -272,12 +302,13 @@ fn paint_plane(
     value: u16,
     plane: impl Fn(&mut Tile) -> &mut Plane<u16> + Sync,
 ) {
+    let dab = Dab::new(edit, brush, cx, cz);
     let footprint = BlockRect::around(cx, cz, brush.radius);
     edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
         let slab = tile.bottom.is_some();
         for z in clip.z0..clip.z1 {
             for x in clip.x0..clip.x1 {
-                let w = brush.weight(x as f32 + 0.5 - cx, z as f32 + 0.5 - cz);
+                let w = dab.weight(x, z);
                 if w <= 0.0 || !paint_hit(w, brush.strength, x, z, salt) {
                     continue;
                 }
@@ -301,12 +332,13 @@ pub fn paint_terrain_with(
     salt: u64,
     choose: impl Fn(f32) -> TerrainId + Sync,
 ) {
+    let dab = Dab::new(edit, brush, cx, cz);
     let footprint = BlockRect::around(cx, cz, brush.radius);
     edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
         let slab = tile.bottom.is_some();
         for z in clip.z0..clip.z1 {
             for x in clip.x0..clip.x1 {
-                let w = brush.weight(x as f32 + 0.5 - cx, z as f32 + 0.5 - cz);
+                let w = dab.weight(x, z);
                 if w <= 0.0 || !paint_hit(w, brush.strength, x, z, salt) {
                     continue;
                 }
@@ -333,11 +365,12 @@ pub fn paint_biome(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, biome: Biom
 
 /// Set the fluid surface (or [`NO_FLUID`]) under the whole footprint.
 pub fn set_fluid(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, level: i16) {
+    let dab = Dab::new(edit, brush, cx, cz);
     let footprint = BlockRect::around(cx, cz, brush.radius);
     edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
         for z in clip.z0..clip.z1 {
             for x in clip.x0..clip.x1 {
-                if brush.weight(x as f32 + 0.5 - cx, z as f32 + 0.5 - cz) > 0.0 {
+                if dab.weight(x, z) > 0.0 {
                     tile.fluid.set(local_index(x, z), level);
                 }
             }
@@ -354,6 +387,7 @@ pub fn stamp_slab(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, anchor: Anch
     }
     let (lo, hi) = (edit.dim().min_y as f32, edit.dim().max_y as f32);
     let rect = BlockRect::around(cx, cz, brush.radius);
+    let dab = Dab::new(edit, brush, cx, cz);
     let inside: Vec<TilePos> = rect.tiles().filter(|p| edit.dim().ground().contains(*p)).collect();
     edit.par_tiles_with(inside, rect, true, |pos, clip, tile, others| {
         let Tile { top, bottom, .. } = tile;
@@ -363,7 +397,7 @@ pub fn stamp_slab(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, anchor: Anch
         let ground = ground.as_ref().map(|g| g.top.dense());
         for z in clip.z0..clip.z1 {
             for x in clip.x0..clip.x1 {
-                let w = brush.weight(x as f32 + 0.5 - cx, z as f32 + 0.5 - cz);
+                let w = dab.weight(x, z);
                 let half = thickness * 0.5 * w;
                 if half < 0.5 {
                     continue; // thinner than a block: nothing to show
@@ -397,6 +431,7 @@ pub fn erase_slab(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32) {
     if edit.kind() == LevelKind::Ground {
         return;
     }
+    let dab = Dab::new(edit, brush, cx, cz);
     let rect = BlockRect::around(cx, cz, brush.radius);
     edit.par_tiles(rect.tiles(), rect, false, |_, clip, tile| {
         let Tile { top, bottom, .. } = tile;
@@ -404,7 +439,7 @@ pub fn erase_slab(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32) {
         let (top, bottom) = (top.dense_mut(), bottom.dense_mut());
         for z in clip.z0..clip.z1 {
             for x in clip.x0..clip.x1 {
-                if brush.weight(x as f32 + 0.5 - cx, z as f32 + 0.5 - cz) > 0.0 {
+                if dab.weight(x, z) > 0.0 {
                     let i = local_index(x, z);
                     top[i] = 0.0;
                     bottom[i] = 0.0;
@@ -673,6 +708,7 @@ mod tests {
             strength: 1.0,
             rotation: 0.0,
             mask: None,
+            filter: None,
         }
     }
 
@@ -887,4 +923,55 @@ mod tests {
         hist.undo(&mut w);
         assert_eq!(w.dims[0].ground().len(), 4);
     }
+    #[test]
+    fn filters_limit_where_brushes_act() {
+        use crate::filter::{Filter, Match};
+        use std::sync::Arc;
+        let mut w = world(2);
+        let mut hist = History::default();
+        // Only above 70: the flat ground at 64 is left alone.
+        let high = Brush {
+            filter: Some(Arc::new(Filter {
+                above: Some(70),
+                ..Filter::default()
+            })),
+            ..hard_brush(10.0)
+        };
+        hist.begin("raise", 0);
+        raise(&mut hist.edit(&mut w, 0), &high, 0.0, 0.0, 5.0, Surface::Top);
+        hist.commit();
+        assert_eq!(h(&w, 0, 0), 64.0);
+        // Except on grass (terrain 1, everywhere here): nothing either.
+        let except = Brush {
+            filter: Some(Arc::new(Filter {
+                except_on: Some(vec![Match::Terrain(1)]),
+                ..Filter::default()
+            })),
+            ..hard_brush(10.0)
+        };
+        hist.begin("raise", 0);
+        raise(&mut hist.edit(&mut w, 0), &except, 0.0, 0.0, 5.0, Surface::Top);
+        hist.commit();
+        assert_eq!(h(&w, 0, 0), 64.0);
+        // Only below 70: it raises.
+        let low = Brush {
+            filter: Some(Arc::new(Filter {
+                below: Some(70),
+                ..Filter::default()
+            })),
+            ..hard_brush(10.0)
+        };
+        hist.begin("raise", 0);
+        raise(&mut hist.edit(&mut w, 0), &low, 0.0, 0.0, 5.0, Surface::Top);
+        hist.commit();
+        assert_eq!(h(&w, 0, 0), 69.0);
+        // Painting obeys filters too.
+        let sand = TerrainId(7);
+        hist.begin("paint", 0);
+        paint_terrain(&mut hist.edit(&mut w, 0), &high, 0.0, 0.0, sand, 1);
+        hist.commit();
+        let tile = w.dims[0].ground().view(TilePos::containing(0, 0)).unwrap();
+        assert_eq!(tile.terrain.get(local_index(0, 0)), 1);
+    }
+
 }

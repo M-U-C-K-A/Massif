@@ -305,6 +305,7 @@ impl MapView {
             solo: solo.then_some(tools.terrain),
             highlight: (doc.active_level > 0).then_some(doc.active_level.min(7) as u8),
             light,
+            lava: doc.world.meta.lava,
         };
         let ppp = ui.ctx().pixels_per_point();
         let blocks_per_px = 1.0 / (self.zoom * ppp);

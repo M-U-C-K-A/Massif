@@ -210,6 +210,8 @@ pub struct ToolState {
     pub brush: Brush,
     /// Where the brush comes from: its image is found again from this.
     pub brush_source: BrushSource,
+    /// Where on the map brushes act (WorldPainter's brush options).
+    pub filter: massif_core::filter::Filter,
     /// Blocks per second at the brush centre, full strength.
     pub raise_speed: f32,
     pub target_height: f32,
@@ -232,6 +234,7 @@ impl Default for ToolState {
             tool: Tool::Raise,
             brush: Brush::default(),
             brush_source: BrushSource::default(),
+            filter: massif_core::filter::Filter::default(),
             raise_speed: 24.0,
             target_height: 64.0,
             roughness: 4.0,
@@ -254,6 +257,14 @@ impl ToolState {
             self.previous = self.tool;
         }
         self.tool = tool;
+    }
+
+    /// The brush strokes use: the brush with the filter, if one is on.
+    pub fn stroke_brush(&self) -> Brush {
+        Brush {
+            filter: self.filter.is_active().then(|| std::sync::Arc::new(self.filter.clone())),
+            ..self.brush.clone()
+        }
     }
 
     pub fn surface(&self) -> Surface {
@@ -331,7 +342,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
             doc.world.meta.sea_level as f32,
         )
     });
-    let brush = &tools.brush;
+    let brush = &tools.stroke_brush();
     let (dx, dz) = (to.0 - stroke.last.0, to.1 - stroke.last.1);
     let len = (dx * dx + dz * dz).sqrt();
     let spacing = (brush.radius * 0.25).max(1.0);

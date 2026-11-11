@@ -713,6 +713,7 @@ mod tests {
             strength: 1.0,
             rotation: 0.0,
             mask: None,
+            filter: None,
         }
     }
 

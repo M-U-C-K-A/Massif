@@ -25,6 +25,7 @@ fn hard(radius: f32) -> Brush {
         strength: 1.0,
         rotation: 0.0,
         mask: None,
+        filter: None,
     }
 }
 
@@ -248,6 +249,48 @@ fn exported_blocks_match_the_world_model() {
     }
 
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn test_exports_datapacks_and_settings() {
+    let mut world = build_world();
+    let dir = temp_dir("test-area");
+    // A data pack folder to copy in.
+    let pack = temp_dir("pack");
+    std::fs::create_dir_all(pack.join("data")).unwrap();
+    std::fs::write(pack.join("pack.mcmeta"), r#"{"pack":{"pack_format":9,"description":"test"}}"#).unwrap();
+    let options = ExportOptions {
+        area: Some((TilePos::new(0, 0), TilePos::new(0, 0))),
+        datapacks: vec![pack.clone()],
+        spawn: Some([5, 90, 6]),
+        difficulty: massif_anvil::Difficulty::Peaceful,
+        border: massif_anvil::WorldBorder {
+            center: [64.0, 64.0],
+            size: 256.0,
+        },
+        ..ExportOptions::default()
+    };
+    let stats = export(&world.snapshot(), &dir, &options, &Progress::default()).unwrap();
+    // One tile: 8 × 8 chunks in one region.
+    assert_eq!((stats.regions, stats.chunks), (1, 64));
+    assert!(dir.join("region/r.0.0.mca").is_file());
+    assert!(!dir.join("region/r.-1.-1.mca").exists());
+    let name = pack.file_name().unwrap();
+    assert!(dir.join("datapacks").join(name).join("pack.mcmeta").is_file());
+    let raw = {
+        use std::io::Read;
+        let bytes = std::fs::read(dir.join("level.dat")).unwrap();
+        let mut raw = Vec::new();
+        flate2::read::GzDecoder::new(&bytes[..]).read_to_end(&mut raw).unwrap();
+        raw
+    };
+    let root: HashMap<String, fastnbt::Value> = fastnbt::from_bytes(&raw).unwrap();
+    let fastnbt::Value::Compound(data) = &root["Data"] else { panic!() };
+    assert_eq!(data["SpawnY"], fastnbt::Value::Int(90));
+    assert_eq!(data["Difficulty"], fastnbt::Value::Byte(0));
+    assert_eq!(data["BorderSize"], fastnbt::Value::Double(256.0));
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&pack).unwrap();
 }
 
 #[test]

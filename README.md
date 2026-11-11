@@ -1,242 +1,300 @@
 # Massif
 
-Un éditeur de cartes Minecraft en Rust, successeur moderne de WorldPainter : on
-sculpte et on peint en 2D sur une **surface multi-niveaux** (sol, surplombs,
-îles flottantes, grottes), on prévisualise en 3D, et on exporte un monde
-Minecraft Java (`.mca` / NBT). Les mondes sont enregistrés au format
-**`.massif`**, un conteneur indexé de tuiles compressées indépendamment.
+Massif is a map editor for Minecraft Java Edition, written in Rust. It is a
+modern successor to [WorldPainter](https://www.worldpainter.net/): you shape
+and paint huge maps from above, sculpt real 3D features where you need them,
+preview everything in 3D, and export a world Minecraft can open.
 
-## Lancer
+It is built for maps tens of thousands of blocks wide: no garbage-collector
+pauses, a few hundred megabytes of memory for a 16k × 16k map, and work spread
+over every CPU core.
+
+> Status: early development. Worlds, tools and file format work end to end
+> and are covered by tests, but some of WorldPainter's features (layers in
+> particular) are still on the way. See the [roadmap](#roadmap).
+
+## Highlights
+
+- **Multi-level surface.** A dimension is a stack of levels: the ground
+  height map, *solid* levels that add matter (overhangs, arches, floating
+  islands) and *carve* levels that remove it (caves, tunnels, pits). All of
+  them are edited with 2D brushes.
+- **True 3D where it matters.** Build, Dig and Smooth (3D) sculpt sparse
+  16³ voxel chunks that override the levels only where you sculpt. The 3D
+  smooth works in every direction: cliff edges round off, sharp hollows fill
+  in, flat faces stay where they are.
+- **WorldPainter brushes and controls.** The twelve symmetric brushes with
+  WorldPainter's profiles, 22 generated terrain stamps (peaks, ranges,
+  volcanoes, mesas…), custom greyscale-image brushes (your WorldPainter
+  brushes folder is read as is), radius up to 4,096 blocks, brush filters
+  (height band, only on / except on, slope, curvature) and WorldPainter's
+  mouse and keyboard bindings.
+- **Terrain graphs.** Build terrain from nodes, as in World Machine or Gaea:
+  noise, cells, gradients, levels, terraces, warp, blur, hydraulic and
+  thermal erosion, combiners, height and slope selectors, and outputs that
+  write heights and terrains to the map. Every node shows a live preview.
+- **Full-detail 3D view.** Every block column around the camera is meshed at
+  full resolution; the rest of the map is drawn as a smooth relief, so the
+  whole map is always in view.
+- **WorldPainter import.** `.world` files are read directly (no JVM) and
+  converted in about a second for a 100 MB world.
+- **Minecraft export.** Region files and `level.dat` in the 1.18 chunk layout,
+  which every later version opens and upgrades.
+- **A compact, robust file format.** `.massif` stores each 128 × 128 tile as
+  an independent, checksummed zstd frame: saving copies bytes, opening decodes
+  nothing, corruption is detected and contained.
+
+## Getting started
+
+Massif needs a Rust toolchain. The exact version is pinned in
+`rust-toolchain.toml` and `rustup` installs it automatically.
 
 ```bash
 cargo run --release -p massif-app
 ```
 
-Ouvrir directement un monde : `cargo run --release -p massif-app -- chemin/monde.massif`
-(un `.world` de WorldPainter est importé de la même façon).
-
-Outil en ligne de commande (générer, inspecter, vérifier, exporter sans ouvrir
-l'éditeur) :
+Open a world directly (a WorldPainter `.world` file is imported the same way):
 
 ```bash
-cargo run --release -p massif-cli -- new monde.massif --size 125x125 --landform mountains
-cargo run --release -p massif-cli -- info monde.massif
-cargo run --release -p massif-cli -- export monde.massif ~/Library/Application\ Support/minecraft/saves/MonMonde
-cargo run --release -p massif-cli -- import ancien.world monde.massif
+cargo run --release -p massif-app -- path/to/world.massif
 ```
 
-La version de Rust est épinglée dans `rust-toolchain.toml` (egui 0.37 demande
-Rust ≥ 1.95) ; `rustup` l'installe tout seul, la toolchain par défaut du
-système n'est pas modifiée.
+The command-line tool creates, inspects, verifies, imports and exports worlds
+without opening the editor:
 
-## Organisation
+```bash
+cargo run --release -p massif-cli -- new world.massif --size 125x125 --landform mountains
+cargo run --release -p massif-cli -- info world.massif
+cargo run --release -p massif-cli -- verify world.massif
+cargo run --release -p massif-cli -- import old.world world.massif
+cargo run --release -p massif-cli -- export world.massif ~/Library/Application\ Support/minecraft/saves/MyWorld
+```
 
-| Crate | Rôle |
+## Using the editor
+
+### Areas and workspaces
+
+The window is made of areas, as in Blender. Each area shows any editor: the
+map, the 3D view, tools, tool settings, brush settings, brushes, custom
+brushes, terrain and biome palettes, levels or world info.
+
+- The ⋮ menu of an area splits it, joins it with its neighbour, maximises it
+  (Ctrl+Space) or closes it. Hold Shift for a one-click close button.
+- Drag the top-right corner of an area into it to split it where you let go.
+- Drag an area by its title onto another to move it, or onto its centre to
+  swap the two. Drag the gaps between areas to resize them.
+- Workspaces (Layout, Sculpting, Painting, 3D, Maps, Generate, Minimal) are tabs of
+  arrangements; duplicate one with `+`. The layout is remembered.
+
+### New worlds and export
+
+**File ▸ New** asks for the name, seed, size (in multiples of 128 blocks),
+the topography (flat, plains, hills, mountains, islands) with its relief
+height and feature size, the base level, the water level, lava instead of
+water, beaches, and either automatic terrains (grass, sand, rock and snow
+by height and slope) or a single terrain; a preview of the whole map
+updates as you change them.
+
+**File ▸ Export** writes the world to a Minecraft saves folder with its
+game mode, difficulty, cheats, hardcore, structures beyond the map, world
+border, spawn point, what surrounds the map (vanilla terrain or void) and
+data packs (copied in and enabled). **Test Export** writes only the 3 × 3
+tiles around the centre of the map view to a separate folder, to check the
+result in the game quickly.
+
+### Brushes
+
+Brushes work as in WorldPainter. A brush has a shape (one of the twelve
+built-in brushes, a terrain stamp, or an image), a radius, an intensity and
+a rotation:
+
+- **Built-in brushes**: circle or square with a Constant, Linear, Sine,
+  Plateau, Spike or Dome profile.
+- **Terrain stamps**: generated height-map brushes for landforms; use them
+  with Raise to stamp a peak, with Lower to carve a valley.
+- **Custom brushes**: greyscale images (white paints, black does not),
+  stretched over the brush. Massif reads its own `brushes` folder (every
+  sub-folder is a group) and WorldPainter's brushes folders, in place.
+
+Brush operations run tile by tile in parallel, so even a brush 8,000 blocks
+across stays responsive and light on memory.
+
+**Brush options** (in Brush Settings) limit where every brush acts, from
+what the map shows:
+
+- **Height limits**: at or above, at or below, between or beyond two
+  heights, optionally fading over 4 blocks. A cross-section shows where the
+  brush acts; drag its limits.
+- **Only on / except on**: terrains, biomes, water or dry land.
+- **Slope**: above or below an angle.
+- **Curvature**: hollows or bumps, deeper than a number of blocks compared
+  with the columns around.
+
+### Terrain graphs
+
+The **Terrain Graph** editor (in the Generate workspace) builds terrain the
+way World Machine and Gaea do. Right-click the canvas to add nodes, drag
+from an output to an input to wire them, and select a node to edit it and
+see a larger preview. Every node previews the whole map as you edit.
+
+| Family | Nodes |
 |---|---|
-| `massif-core` | Modèle du monde : coordonnées signées, plans RLE, tuiles, niveaux, composition des colonnes, pinceaux, outils, annulation, génération procédurale. Aucune dépendance graphique. |
-| `massif-format` | Lecture / écriture du format `.massif`. |
-| `massif-anvil` | Export Minecraft Java : NBT, fichiers région `.mca`, `level.dat`. |
-| `massif-legacy` | Import des mondes WorldPainter `.world` (lecteur de sérialisation Java écrit en Rust, sans JVM). |
-| `massif-app` | L'éditeur (egui + wgpu) : zones façon Blender, carte 2D, vue 3D, panneaux. |
-| `massif-cli` | Outil en ligne de commande. |
+| Generators | Noise (rolling, ridged, billow), Cells (cones, ridges), Radial gradient, Constant |
+| Modifiers | Levels, Terraces, Clamp, Blur, Warp |
+| Erosion | Erosion (simulated raindrops; outputs the heights, the water flow and where soil settled), Thermal erosion (material slides below a talus angle) |
+| Combiners | Combine (add, subtract, multiply, max, min, average), Blend through a mask |
+| Selectors | Select height, Select slope, Invert |
+| Outputs | Height output, Terrain output (paints a terrain through a mask) |
 
-## Le modèle : une surface multi-niveaux
+**Build and apply** evaluates the graph over the whole map at the chosen
+resolution (512 to 4,096 samples per side) on another thread, then writes
+the heights and terrains to the ground as one undoable step. Distances are
+in blocks, so a graph looks the same at every resolution. The graph is saved
+with the world. A starter graph (eroded mountains, rock on steep slopes,
+snow on the peaks, gravel where the water left soil) shows how it works.
 
-Une dimension est une **pile de niveaux**. Chaque niveau est une grille éparse
-de tuiles de 128×128 colonnes ; chaque colonne a une hauteur haute, une hauteur
-basse (sauf pour le sol), un terrain, un niveau d'eau et un biome.
+### Controls
 
-- **Ground** : la heightmap classique, pleine du bas du monde jusqu'à sa surface.
-- **Solid** : ajoute de la matière entre ses deux surfaces → surplombs, arches,
-  îles flottantes.
-- **Carve** : retire de la matière entre ses deux surfaces → grottes, tunnels,
-  fosses.
+Massif follows WorldPainter's defaults.
 
-Les niveaux s'appliquent dans l'ordre ; le plus haut dans la liste gagne. Une
-colonne composée devient une courte liste de segments pleins le long de Y,
-c'est-à-dire un RLE vertical. Tous les outils de niveaux restent des pinceaux
-2D en O(surface), quel que soit le niveau édité.
+| Input | Action |
+|---|---|
+| Left / right button (or Alt + left) | Apply the tool / its inverse (lower, erase, drain…) |
+| Scroll | Brush size (Shift: one block at a time) |
+| ⌘, Ctrl or Alt + scroll, pinch | Zoom the map |
+| Middle button, Space + drag | Move the map |
+| `−` `+` | Brush size |
+| `1` … `9`, `0` | Intensity 10 % … 100 % |
+| `[` `]` | Turn the brush |
+| `R` `L` | Turn the light of the map |
+| ⌥H ⌥A ⌥S ⌥P ⌥R ⌥F ⌥Y | Height, Flatten, Smooth, Paint, Spray, Flood, Eyedropper |
+| ⌘Z / ⇧⌘Z, ⌘S, ⌘O, ⌘N, ⌘E | Undo / redo, save, open, new, export |
+| Esc | Cancel the stroke being drawn |
 
-### La vraie 3D : les volumes sculptés
+In the 3D view:
 
-Là où l'on sculpte en 3D (grottes de n'importe quelle forme, surplombs au-delà
-de la verticale, arêtes de falaise arrondies), la dimension garde un **chunk de
-voxels** de 16³ blocs : une densité de 0 à 255 par bloc (plein à partir de 128)
-qui remplace ce que les niveaux composent dans ce cube. Un chunk naît comme une
-copie exacte de la composition (la hauteur fractionnaire de la surface devient
-la densité des blocs du dessus), donc sculpter ne change rien à côté du
-pinceau. Partout ailleurs, le monde reste en colonnes RLE : une carte de 16 000
-blocs ne paie que pour les cubes sculptés.
+| Input | Action |
+|---|---|
+| Left drag / right drag | Turn / move the view |
+| Scroll, pinch | Come closer / go back |
+| W A S D or arrows, Q / E | Fly over the map, down / up (Shift: faster) |
+| Double-click | Look at the point under the cursor |
+| With Build, Dig, Smooth (3D) | Left sculpts where the cursor points, right inverts; middle drag or Alt + drag turns, Shift + middle drag moves |
 
-- **Build (3D)** ajoute de la matière dans une boule, **Dig (3D)** en retire,
-  le bouton droit inverse ; dans la vue 3D la boule se pose au point visé, sur
-  la carte à la surface.
-- **Smooth (3D)** floute la densité en 3D (flou séparable, deux passes, proche
-  d'une gaussienne) : une arête convexe s'arrondit, un creux vif se comble, une
-  paroi plane reste exactement en place. Ce n'est pas un lissage couche par
-  couche à la WorldEdit.
-- La matière sculptée à l'air libre prend le terrain de la surface de la
-  colonne (herbe, terre puis pierre) ; sous autre chose, c'est de la roche.
-- Tout passe par l'annulation (les chunks sont partagés en copie-sur-écriture),
-  l'enregistrement, l'export Minecraft, la carte et la vue 3D.
+## How it works
 
-Côté mémoire, chaque plan d'une tuile est `Uniform` (aucune allocation), `Rle`
-(valeurs et longueurs en flux séparés, lecture en O(log R) sans décompression)
-ou `Dense`, et repasse en RLE après chaque modification. Une tuile est
-« chaude » (décodée, éditable) ou « froide » (un bloc zstd) ; seules les
-tuiles touchées récemment restent décodées. Exemple mesuré : une carte de
-**16 000 × 16 000 blocs** en montagnes se génère en 5,6 s, pèse 182 Mo sur
-disque (0,74 octet par colonne), et l'outil en ligne de commande qui la
-génère et l'enregistre plafonne à 236 Mo de RAM.
+### The world model
 
-## Le format `.massif`
+Each level of a dimension is a sparse grid of tiles of 128 × 128 columns.
+Every column stores a top height (1/256 of a block), a bottom height for slab
+levels, a terrain, a fluid level and a biome. Composing the levels of a column
+yields a short list of solid spans along Y, which is a run-length encoding of
+the column: the exporter turns spans into blocks, the 3D view into faces, the
+map shows the top one.
 
-Petit-boutiste, conçu pour l'accès aléatoire :
+Each plane of a tile is uniform (no allocation), run-length encoded (split
+streams, O(log n) lookup without decompression) or dense, and is compacted
+back after edits. Tiles are either *hot* (decoded and editable) or *cold*
+(one compressed blob, the exact bytes the file stores); only recently touched
+tiles stay decoded. A 16,000 × 16,000 mountain map generates in 5.6 s, takes
+182 MB on disk (0.74 byte per column), and the tool that generates and saves
+it peaks at 236 MB of memory.
+
+### Sculpted volumes
+
+Where you sculpt in 3D, the dimension keeps a 16³ chunk of densities (0–255,
+solid from 128) that replaces what the levels compose inside that cube. A new
+chunk starts as an exact copy of the composition, with the fractional surface
+height as the density of the top blocks, so sculpting never changes anything
+outside the brush. Chunks are shared copy-on-write, which makes undo cheap.
+Sculpted matter open to the sky takes the terrain of the column's surface;
+under something else it is rock.
+
+### The `.massif` format
+
+Little-endian and built for random access:
 
 ```text
-en-tête (64 octets)  magic "MASSIF\x1a\n", version, version minimale de lecteur,
-                     offset et CRC32C du répertoire, longueur du fichier,
-                     CRC32C de l'en-tête
-frames de tuiles     une frame zstd par tuile, indépendante
-sections             META : réglages, registre et niveaux (JSON compressé)
-                     TIDX : index des tuiles d'un niveau, 24 octets par tuile
-                            (x, z, offset, longueur, CRC32C)
-                     VOXL : chunks sculptés d'une dimension (x, y, z puis
-                            4 096 densités par chunk, zstd)
-répertoire           32 octets par section (type, id, offset, longueur, CRC32C)
+header (64 bytes)   magic "MASSIF\x1a\n", format version, oldest reader version,
+                    directory offset and CRC32C, file length, header CRC32C
+tile frames         one zstd frame per tile, independent of the others
+sections            META  world settings, registry and levels (zstd JSON)
+                    TIDX  tile index of a level: x, z, offset, length, CRC32C
+                    VOXL  sculpted chunks of a dimension (zstd)
+directory           32 bytes per section: kind, id, offset, length, CRC32C, flags
 ```
 
-- Chaque tuile a son propre checksum : une corruption est localisée, jamais
-  silencieuse.
-- Une frame est exactement la forme « froide » d'une tuile en mémoire :
-  enregistrer copie des octets, ouvrir ne décode rien.
-- Les types de sections et de plans inconnus sont ignorés ou conservés tels
-  quels : le format peut évoluer sans casser les anciens fichiers.
-- L'enregistrement est atomique (fichier temporaire puis renommage).
-- Les hauteurs sont stockées au 1/256 de bloc avec un prédicteur de gradient :
-  un terrain lisse coûte moins d'un octet par colonne avant zstd.
+Every tile and section has its own checksum. Unknown section kinds and tile
+planes are skipped, so the format can grow without breaking older files or
+older readers. Saving is atomic (a temporary file renamed over the target).
 
-### Par rapport à la spécification `.rworld`
+### WorldPainter import
 
-Repris de ta spec : index (TOC) en fin de fichier pointé par l'en-tête, frames
-zstd indépendantes et décodage parallèle, coordonnées `i32` signées avec
-`div_euclid` / `rem_euclid`, RLE split-stream avec palette locale et repli
-dense, valeurs uniformes quasi gratuites, CRC32C.
+A `.world` file is a gzip stream (whose header carries a JPEG thumbnail)
+holding a Java `ObjectOutputStream` of a `World2`. Massif reads it with its
+own implementation of the Java serialization protocol and converts tiles in
+parallel as they are read. Heights, terrains (custom terrains are rebuilt
+from their mixed materials), water, painted biomes, the Nether and the End,
+seed, spawn and build limits are imported. Layers (trees, vegetation, frost,
+caves…), lava and the ceiling, cave floor and floating dimensions are not
+yet; the import report lists what was left out.
 
-Changé :
+### Minecraft export
 
-- **Des chunks voxels 16³ seulement là où l'on sculpte**, au lieu d'un monde
-  entier en chunks avec une sentinelle `INHERIT_2D` : la surface multi-niveaux
-  reste 2D à l'édition, et la section `VOXL` porte les volumes sculptés en 3D.
-- **Métadonnées en JSON compressé** plutôt qu'en postcard : quelques kilo-octets,
-  lisibles par n'importe quel outil.
-- **Nom** : `.massif`, du nom de l'application. Changer l'extension tient en une
-  constante (`massif_format::EXTENSION`).
+The exporter writes `region/r.X.Z.mca` and `level.dat` in the chunk layout
+introduced in Minecraft 1.18 (DataVersion 2975, 1.18.2); every later version
+opens these worlds and upgrades them on load. Regions are built in parallel
+(4,096 chunks in 0.15 s). Around the map, Minecraft generates either vanilla
+terrain from the world seed or nothing. The tests read the exported regions
+back with an independent Anvil reader and compare every block with the model.
 
-## Import des mondes WorldPainter
+### The 3D view
 
-Fichier ▸ Import WorldPainter World… (ou Ouvrir, ou glisser le chemin en
-argument) convertit un `.world` : un flux gzip (dont l'en-tête porte la
-miniature JPEG) contenant un `ObjectOutputStream` Java de `World2`. Massif le lit
-avec son propre lecteur du protocole de sérialisation Java, sans JVM, et
-convertit chaque tuile dès qu'elle est lue, en parallèle : un monde de 108 Mo
-(2 304 tuiles) s'importe en moins d'une seconde.
+The view keeps one mesh per tile on the GPU, rebuilt only where the world
+changed, nearest first, within a time budget per frame. Faces of the same
+height and colour are merged and drawn as 12-byte instances. On a mountainous
+100 MB WorldPainter world, a 768-block view takes 700k faces built in 24 ms;
+2,048 blocks take 6.5M faces (77 MB) in 0.16 s. Beyond the detailed area, a
+smooth relief sampled every 16 blocks shows the rest of the map.
 
-Sont repris : les hauteurs (au 1/256 de bloc), les terrains (ceux de WorldPainter
-réutilisent les terrains Massif équivalents ou en créent, les terrains
-personnalisés sont reconstruits depuis leurs `MixedMaterial` avec leur nom, leurs
-blocs et leur couleur), le niveau d'eau, les biomes peints, la surface, le Nether
-et l'End, la graine, le point d'apparition et les limites de hauteur. Ne sont pas
-encore repris : les calques (arbres, végétation, givre, grottes…), la lave, les
-dimensions de plafond, de sol de grotte et de sol flottant ; le rapport
-d'import les liste avec le nombre de tuiles concernées.
+## Project layout
 
-## Export Minecraft
+| Crate | Purpose |
+|---|---|
+| `massif-core` | The world model: coordinates, RLE planes, tiles, levels, column composition, voxel chunks, brushes, stamps and filters, editing operations, undo, terrain generation and terrain graphs. No graphics dependency. |
+| `massif-format` | Reading and writing `.massif` files. |
+| `massif-anvil` | Minecraft Java export: NBT, region files, `level.dat`. |
+| `massif-legacy` | WorldPainter `.world` import, with a Java serialization reader written in Rust. |
+| `massif-app` | The editor (egui and wgpu): areas, map, 3D view, panels. |
+| `massif-cli` | The command-line tool. |
 
-L'export écrit `region/r.X.Z.mca` et `level.dat` au format de chunk introduit en
-1.18 (`DataVersion` 2975, Minecraft 1.18.2) : toutes les versions plus récentes
-l'ouvrent et le mettent à jour au chargement. Les régions sont construites en
-parallèle (4 096 chunks en 0,15 s). Autour de la carte, Minecraft génère soit
-le terrain vanilla de la graine, soit du vide. Les tests relisent les régions
-exportées avec un lecteur Anvil indépendant (`fastanvil`) et comparent chaque
-bloc au modèle.
-
-## L'éditeur
-
-- **Zones** : chaque zone affiche un éditeur au choix (carte, vue 3D, outils,
-  réglages, réglages du pinceau, pinceaux, pinceaux perso, terrain, biomes,
-  niveaux, infos). On les divise, les ferme, les
-  agrandit (Ctrl+Espace), on les redimensionne en tirant les séparateurs et on
-  les déplace en faisant glisser leur titre sur une autre zone.
-- **Espaces de travail** : Layout, Sculpting, Painting, 3D, Maps, Minimal ;
-  dupliquer avec `+`, supprimer par clic droit. La disposition est mémorisée.
-- **Carte** : modes Terrain, Height, Slope, Biome, Relief, courbes de niveau,
-  grille, niveaux de détail jusqu'à 1 texel pour 1 024 blocs.
-- **Pinceaux, comme dans WorldPainter** : les douze pinceaux symétriques
-  (cercle ou carré × Constant, Linear, Sine, Plateau, Spike, Dome, avec les
-  formules de WorldPainter), 22 tampons de relief générés (pic, chaîne, volcan,
-  mesa, cirque glaciaire…) et les pinceaux perso : des images en niveaux de gris
-  (blanc = peint, noir = rien) étirées sur le diamètre. Le dossier `brushes` de
-  Massif (Pinceaux ▸ Open the folder) en est la source, chaque sous-dossier est
-  un groupe ; ceux de WorldPainter (`WorldPainter [MODERNISED]/brushes`,
-  `WorldPainter/brushes`) sont lus directement. Le contour du pinceau sur la
-  carte suit la forme de l'image, tournée. Taille jusqu'à 4 096 de rayon
-  (molette ×1,1 par cran comme WorldPainter), intensité, rotation par pas de 15°
-  dans Brush Settings. Les outils s'appliquent en parallèle, tuile par tuile,
-  et le lissage travaille tuile par tuile : la mémoire reste faible même avec
-  un pinceau de 8 000 blocs de large.
-- **Vue 3D en détail complet** : chaque colonne est maillée au bloc près, quelle
-  que soit la distance de vue (qui ne fait que limiter l'étendue, jusqu'à 3 072
-  blocs). Un chunk par tuile, faces de même hauteur et couleur fusionnées,
-  12 octets par face instanciée ; les chunks sont gardés sur le GPU et
-  reconstruits seulement là où le monde change, les plus proches d'abord, dans
-  un budget de temps par image. Sur Alpine Valley (montagnes) : 768 blocs →
-  700 k faces en 24 ms ; 2 048 blocs → 6,5 M faces (77 Mo) en 0,16 s.
-- **Souris et clavier, comme WorldPainter** : bouton gauche = outil, bouton
-  droit (ou Alt + gauche) = son inverse (abaisser, effacer, assécher…) ; molette
-  = taille du pinceau (Shift : bloc par bloc) ; ⌘, Ctrl ou Alt + molette, ou
-  pincement = zoom ; bouton du milieu ou Espace + glisser = déplacer la carte ;
-  `−` `+` taille ; `1`…`0` intensité ; `[` `]` rotation du pinceau ; `R` `L`
-  rotation de la lumière ; ⌥H ⌥A ⌥S ⌥P ⌥R ⌥F ⌥Y les outils ; ⌘− ⌘+ ⌘0 le zoom ;
-  Échap annule le trait en cours ; ⌘Z / ⇧⌘Z, ⌘S, ⌘O, ⌘N, ⌘E.
-- **Dans la vue 3D** : toute la carte est visible. Autour de la caméra, sur la
-  distance de vue, chaque bloc est dessiné ; au-delà, un relief lisse (un point
-  tous les 16 blocs, aux couleurs moyennes des terrains) montre le reste de la
-  carte. Glisser à gauche tourne, à droite déplace, molette ou pincement pour
-  s'approcher ; W A S D (ou les flèches) volent, Q / E descendent et montent,
-  Shift accélère ; un double-clic vise le point sous le curseur. La caméra ne
-  colle plus au sol : elle ne suit la hauteur du terrain qu'en douceur quand
-  elle suit le centre de la carte. Avec Build, Dig ou Smooth (3D), le bouton
-  gauche sculpte au point visé et le droit inverse ; le bouton du milieu (ou
-  Alt + glisser) tourne, Shift + milieu déplace.
-- **Zones, comme dans le WorldPainter modernisé** : le menu ⋮ de chaque zone
-  (diviser verticalement ou horizontalement, joindre avec la zone voisine,
-  agrandir, fermer) ; avec Shift enfoncé, une corbeille ferme la zone d'un
-  clic. Tirer le coin haut-droit d'une zone vers l'intérieur la divise à
-  l'endroit relâché (vers la gauche : côte à côte, vers le bas : l'une sur
-  l'autre).
-
-## Tests
+## Testing
 
 ```bash
 cargo test --workspace
 ```
 
-Avec `MASSIF_SNAPSHOT_DIR=<dossier>`, les tests de l'éditeur rendent aussi la
-fenêtre complète hors écran (egui_kittest + wgpu), la carte, la vue 3D et les
-panneaux de pinceaux en PNG dans ce dossier, simulent un coup de pinceau à la
-souris et une sculpture dans la vue 3D. `MASSIF_WORLD_SAMPLES=<monde.world>`
-ajoute l'import d'un vrai monde WorldPainter et la mesure du maillage 3D.
+Two environment variables enable the heavier tests:
 
-## Suite prévue
+- `MASSIF_SNAPSHOT_DIR=<folder>` renders the whole window offscreen (with
+  egui_kittest and wgpu), the map, the 3D view, the brush panels, the
+  dialogs and the terrain graph to PNG files in that folder, and drives the
+  editor with simulated mouse strokes, 3D sculpting, area splitting and a
+  terrain graph build.
+- `MASSIF_WORLD_SAMPLES=<file.world>` also imports a real WorldPainter world
+  through the editor and measures the 3D meshing of it.
 
-- Calques façon WorldPainter (arbres, végétation, minerais, routes), et leur
-  import depuis les `.world`.
-- Filtres de pinceau façon WorldPainter (« seulement sur », « sauf sur »,
-  au-dessus / en dessous d'une hauteur).
-- Sculpture 3D : aplanir selon un plan, pinceaux images en 3D, matériau choisi
-  pour la matière ajoutée, nettoyage des chunks redevenus identiques aux
-  niveaux.
-- Raccourcis personnalisables, plus de réglages d'export.
-- Sélection, copier-coller, import de heightmaps.
-- Édition des dimensions Nether et End depuis l'interface.
+## Roadmap
+
+- WorldPainter layers (trees, vegetation, ores, frost, roads…) and their
+  import from `.world` files, and layers as brush filters and graph outputs.
+- Terrain graphs: more nodes (rivers, sediment layers, height-map import,
+  stamps), graphs applied to a part of the map, tiled builds beyond 4,096
+  samples, a 3D preview of a node.
+- Custom build limits and older Minecraft versions in new worlds and export.
+- Selections, copy and paste, height-map import.
+- Nether and End editing from the editor, customisable key bindings.
+
+## License
+
+Massif is declared GPL-3.0-or-later in `Cargo.toml`, like WorldPainter.
