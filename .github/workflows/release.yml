@@ -1,0 +1,158 @@
+name: Release
+
+# Builds Massif for Windows, macOS (Apple silicon and Intel in one app) and
+# Linux. A tag `v*` publishes the builds as a GitHub release; running the
+# workflow by hand only builds them (to check that every platform builds).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos
+            os: macos-latest
+          - name: windows
+            os: windows-latest
+          - name: linux
+            os: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else
+            echo "VERSION=dev-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Rust
+        shell: bash
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          fi
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Linux libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev
+
+      - name: Build (macOS, both architectures)
+        if: runner.os == 'macOS'
+        run: |
+          cargo build --release --locked --target aarch64-apple-darwin -p massif-app -p massif-cli
+          cargo build --release --locked --target x86_64-apple-darwin -p massif-app -p massif-cli
+
+      - name: Build
+        if: runner.os != 'macOS'
+        run: cargo build --release --locked -p massif-app -p massif-cli
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          app=dist/Massif.app
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          lipo -create -output "$app/Contents/MacOS/massif" \
+            target/aarch64-apple-darwin/release/massif target/x86_64-apple-darwin/release/massif
+          lipo -create -output dist/massif-cli \
+            target/aarch64-apple-darwin/release/massif-cli target/x86_64-apple-darwin/release/massif-cli
+          cp crates/massif-app/assets/icon.icns "$app/Contents/Resources/Massif.icns"
+          cat > "$app/Contents/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>Massif</string>
+            <key>CFBundleDisplayName</key><string>Massif</string>
+            <key>CFBundleIdentifier</key><string>io.github.m-u-c-k-a.massif</string>
+            <key>CFBundleExecutable</key><string>massif</string>
+            <key>CFBundleIconFile</key><string>Massif</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+            <key>CFBundleVersion</key><string>${VERSION}</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          EOF
+          # Not notarized: signed ad hoc so that Apple silicon runs it.
+          codesign --force --deep --sign - "$app"
+          codesign --force --sign - dist/massif-cli
+          (cd dist && ditto -c -k --keepParent Massif.app "Massif-${VERSION}-macos.zip")
+          hdiutil create -volname Massif -srcfolder "$app" -ov -format UDZO "dist/Massif-${VERSION}-macos.dmg"
+          (cd dist && zip -q "massif-cli-${VERSION}-macos.zip" massif-cli)
+          mkdir -p out && mv dist/*.zip dist/*.dmg out/
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/Massif | Out-Null
+          Copy-Item target/release/massif.exe dist/Massif/Massif.exe
+          Copy-Item target/release/massif-cli.exe dist/Massif/massif-cli.exe
+          Copy-Item README.md dist/Massif/README.md
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          Compress-Archive -Path dist/Massif -DestinationPath "out/Massif-$env:VERSION-windows-x86_64.zip"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          dir=dist/massif-${VERSION}
+          mkdir -p "$dir"
+          cp target/release/massif target/release/massif-cli README.md "$dir/"
+          cp crates/massif-app/assets/icon.png "$dir/massif.png"
+          cat > "$dir/massif.desktop" <<EOF
+          [Desktop Entry]
+          Type=Application
+          Name=Massif
+          Comment=A map editor for Minecraft worlds
+          Exec=massif %f
+          Icon=massif
+          Categories=Graphics;Game;
+          EOF
+          mkdir -p out
+          tar -C dist -czf "out/Massif-${VERSION}-linux-x86_64.tar.gz" "massif-${VERSION}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: massif-${{ matrix.name }}
+          path: out/*
+
+  release:
+    name: Publish the release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" out/* \
+            --title "Massif ${GITHUB_REF_NAME}" \
+            --notes-file .github/RELEASE_NOTES.md

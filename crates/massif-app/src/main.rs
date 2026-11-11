@@ -18,51 +18,16 @@ mod view3d;
 
 use std::path::PathBuf;
 
-/// The window icon: a snowy mountain on a blue tile, drawn procedurally.
+/// The window icon: Massif's logo.
 fn icon() -> egui::IconData {
-    const N: usize = 128;
-    let mut rgba = vec![0u8; N * N * 4];
-    let ridge = |x: f32| -> f32 {
-        // Two peaks, in units of the icon size (0 = top).
-        let a = 0.30 + (x - 0.38).abs() * 1.25;
-        let b = 0.45 + (x - 0.70).abs() * 1.1;
-        a.min(b)
-    };
-    for y in 0..N {
-        for x in 0..N {
-            let (fx, fy) = ((x as f32 + 0.5) / N as f32, (y as f32 + 0.5) / N as f32);
-            // Rounded square mask.
-            let (dx, dy) = ((fx - 0.5).abs() - 0.32, (fy - 0.5).abs() - 0.32);
-            let outside = (dx.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt() - 0.14;
-            let alpha = (0.5 - outside * N as f32).clamp(0.0, 1.0);
-            let sky = [
-                (40.0 + 40.0 * fy) as u8,
-                (110.0 + 60.0 * fy) as u8,
-                (235.0 - 20.0 * fy) as u8,
-            ];
-            let r = ridge(fx);
-            let color = if fy > r && fy < 0.86 {
-                if fy < r + 0.09 {
-                    [244, 248, 252]
-                } else if fx < 0.5 {
-                    [74, 140, 80]
-                } else {
-                    [58, 118, 70]
-                }
-            } else if fy >= 0.86 {
-                [52, 104, 210]
-            } else {
-                sky
-            };
-            let i = (y * N + x) * 4;
-            rgba[i..i + 3].copy_from_slice(&color);
-            rgba[i + 3] = (alpha * 255.0) as u8;
-        }
-    }
+    let image = image::load_from_memory(include_bytes!("../assets/icon.png"))
+        .expect("the icon is a PNG")
+        .into_rgba8();
+    let (width, height) = image.dimensions();
     egui::IconData {
-        rgba,
-        width: N as u32,
-        height: N as u32,
+        rgba: image.into_raw(),
+        width,
+        height,
     }
 }
 

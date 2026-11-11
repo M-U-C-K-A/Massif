@@ -5,6 +5,8 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+build = "build.rs"
+
 [[bin]]
 name = "massif"
 path = "src/main.rs"
@@ -19,7 +21,7 @@ log.workspace = true
 rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "persistence"] }
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "persistence", "clipboard", "links", "x11", "wayland"] }
 egui = "0.37"
 egui-wgpu = "0.37"
 wgpu = { version = "30", default-features = false, features = ["wgsl", "std", "metal", "dx12", "vulkan", "gles"] }
@@ -32,3 +34,7 @@ pollster = "1"
 
 [dev-dependencies]
 egui_kittest = { version = "0.37", features = ["wgpu", "snapshot", "eframe"] }
+
+[build-dependencies]
+# The icon of massif.exe in Windows' Explorer.
+winresource = "0.1"
