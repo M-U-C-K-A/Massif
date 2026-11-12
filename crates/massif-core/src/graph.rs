@@ -24,13 +24,18 @@
 mod color;
 mod landforms;
 mod layers;
+mod climate;
 mod map;
 mod ops;
+mod rivers;
 mod sim;
+mod tectonics;
 mod templates;
 
 pub use color::{AutoPalette, BlockPalette, GradientPreset, decode as decode_srgb, encode as encode_srgb};
-pub use map::{GroundMap, MapSample, MapSource, SampledMap, sample_ground};
+pub use map::{GroundMap, MapSample, MapSource, SampledMap, reads_level, sample_map, surface_of};
+pub use climate::{Climate, ClimateTable};
+pub use tectonics::{Plate, scatter as scatter_plates};
 pub use templates::Template;
 
 /// The level of water where there is none: far under any ground.
@@ -39,6 +44,16 @@ pub const NO_WATER: f32 = -10_000.0;
 /// The sea of graphs saved before rivers and lakes knew of it: none.
 fn no_sea() -> f32 {
     NO_WATER
+}
+
+/// 1, for values graphs saved before them did not have.
+fn one() -> f32 {
+    1.0
+}
+
+/// 0.5, for values graphs saved before them did not have.
+fn half() -> f32 {
+    0.5
 }
 
 use crate::codec::snap_height;
@@ -511,16 +526,29 @@ pub enum NodeKind {
         /// How gradually the snow line fades, in blocks.
         softness: f32,
     },
-    /// Rivers dug where the water of the whole map gathers.
+    /// Rivers traced where the water of the whole map runs: main rivers
+    /// from the sea up to their sources, tributaries joining them, wider
+    /// and deeper downstream, dug into the bottoms of their valleys with
+    /// water that only runs down; lakes in the hollows they cross.
     Rivers {
-        /// How much water makes a river (0..1: more, fewer rivers).
+        /// How much of the land must drain to a place for a river to run
+        /// there (0..1: higher, fewer and larger rivers).
         threshold: f32,
+        /// Depth of the largest river, in blocks.
         depth: f32,
+        /// Width of the largest river, in blocks.
         width: f32,
         /// The level of the sea: rivers end where the ground goes under
-        /// it, and nothing is dug below ([`NO_WATER`]: no sea).
+        /// it ([`NO_WATER`]: no sea).
         #[serde(default = "no_sea")]
         sea: f32,
+        /// How far the banks slope down to the water, in river widths.
+        #[serde(default = "one")]
+        banks: f32,
+        /// Which hollows the rivers run through hold lakes (0: none, the
+        /// rivers cut through their rims; 1: all, even shallow ones).
+        #[serde(default = "half")]
+        lakes: f32,
     },
     /// Fill the hollows water would fill: lakes and flat valley floors.
     Lakes {
@@ -623,6 +651,40 @@ pub enum NodeKind {
         rock_slope: f32,
         seed: u32,
     },
+    // ---- climate
+    /// How warm the land is: warm on one side of the map, cold on the
+    /// other, colder with height. A mask: 0 is −30 °C, 1 is +45 °C.
+    Temperature {
+        /// °C at the sea's level on the warm side.
+        warm: f32,
+        /// °C at the sea's level on the cold side.
+        cold: f32,
+        /// Where the warm side is, in degrees: 0 north, 90 east.
+        toward: f32,
+        /// °C lost for every 100 blocks over the sea.
+        lapse: f32,
+        sea: f32,
+        /// °C of noise.
+        variation: f32,
+        seed: u32,
+    },
+    /// How wet the land is: moist air from the sea, carried by the wind,
+    /// raining out on the slopes that face it; dry behind the mountains.
+    Humidity {
+        /// Where the wind blows from, in degrees: 0 north, 90 east.
+        from: f32,
+        /// Humidity of the air far from any water (0..1).
+        base: f32,
+        /// How far over land the sea's moisture reaches, in blocks.
+        reach: f32,
+        /// How much rain the slopes facing the wind wring out (0..1).
+        shadow: f32,
+        sea: f32,
+        variation: f32,
+        seed: u32,
+    },
+    /// The colours of the land's climate: deserts, forests, tundra, jungle…
+    Biomes { sea: f32 },
     // ---- outputs
     /// The height of the ground.
     HeightOutput,
@@ -649,6 +711,22 @@ pub enum NodeKind {
         /// Blocks its colours turn into.
         palette: BlockPalette,
     },
+    /// The game's biomes from the climate, and with `paint` its ground
+    /// painted to suit: sand in the deserts, snow in the tundra…
+    BiomeOutput { sea: f32, paint: bool },
+    /// Relief from tectonic plates: continents and oceans, mountains where
+    /// plates collide, rifts where they pull apart. The plates can be moved.
+    Tectonic {
+        plates: Vec<Plate>,
+        /// Height of the highest ranges, in blocks.
+        relief: f32,
+        /// Width of the belts along the boundaries, in blocks.
+        width: f32,
+        /// How much the boundaries wind (0..1).
+        roughness: f32,
+        sea: f32,
+        seed: u32,
+    },
 }
 
 /// What flows along a link.
@@ -671,18 +749,20 @@ pub enum Family {
     Erosion,
     Combiner,
     Selector,
+    Climate,
     Color,
     Output,
 }
 
 impl Family {
-    pub const ALL: [Family; 8] = [
+    pub const ALL: [Family; 9] = [
         Family::Landform,
         Family::Generator,
         Family::Modifier,
         Family::Erosion,
         Family::Combiner,
         Family::Selector,
+        Family::Climate,
         Family::Color,
         Family::Output,
     ];
@@ -695,6 +775,7 @@ impl Family {
             Family::Erosion => "Simulate",
             Family::Combiner => "Combine",
             Family::Selector => "Masks",
+            Family::Climate => "Climate",
             Family::Color => "Colour",
             Family::Output => "Output",
         }
@@ -708,6 +789,14 @@ impl NodeKind {
     pub fn catalogue() -> Vec<NodeKind> {
         vec![
             // Landforms.
+            NodeKind::Tectonic {
+                plates: tectonics::scatter(9, 7),
+                relief: 170.0,
+                width: 260.0,
+                roughness: 0.6,
+                sea: 63.0,
+                seed: 7,
+            },
             NodeKind::Mountain {
                 style: MountainStyle::Alpine,
                 x: 0.5,
@@ -926,9 +1015,11 @@ impl NodeKind {
             },
             NodeKind::Rivers {
                 threshold: 0.55,
-                depth: 6.0,
-                width: 12.0,
+                depth: 5.0,
+                width: 14.0,
                 sea: 63.0,
+                banks: 1.0,
+                lakes: 0.5,
             },
             NodeKind::Lakes { amount: 1.0, sea: 63.0 },
             NodeKind::Sea { level: 62.0, shore: 4.0 },
@@ -994,6 +1085,26 @@ impl NodeKind {
                 variation: 0.6,
                 seed: 12,
             },
+            // Climate.
+            NodeKind::Temperature {
+                warm: 28.0,
+                cold: -8.0,
+                toward: 180.0,
+                lapse: 10.0,
+                sea: 63.0,
+                variation: 3.0,
+                seed: 1,
+            },
+            NodeKind::Humidity {
+                from: 270.0,
+                base: 0.25,
+                reach: 1500.0,
+                shadow: 0.7,
+                sea: 63.0,
+                variation: 0.08,
+                seed: 1,
+            },
+            NodeKind::Biomes { sea: 63.0 },
             // Outputs.
             NodeKind::HeightOutput,
             NodeKind::TerrainOutput { terrain: 0 },
@@ -1006,6 +1117,7 @@ impl NodeKind {
                 slot: 1,
                 palette: BlockPalette::Natural,
             },
+            NodeKind::BiomeOutput { sea: 63.0, paint: true },
         ]
     }
 
@@ -1073,6 +1185,11 @@ impl NodeKind {
             NodeKind::ColorOutput { .. } => "Colour output",
             NodeKind::LayerOutput { .. } => "Layer output",
             NodeKind::WaterOutput => "Water output",
+            NodeKind::Temperature { .. } => "Temperature",
+            NodeKind::Humidity { .. } => "Humidity",
+            NodeKind::Biomes { .. } => "Biomes",
+            NodeKind::BiomeOutput { .. } => "Biome output",
+            NodeKind::Tectonic { .. } => "Tectonic plates",
         }
     }
 
@@ -1114,7 +1231,7 @@ impl NodeKind {
             NodeKind::Erosion { .. } => "Rain wears the slopes: gullies, fans, flow and deposits",
             NodeKind::Thermal { .. } => "Loose rock slides down steep slopes",
             NodeKind::Snow { .. } => "Snow above a line, on slopes that hold it",
-            NodeKind::Rivers { .. } => "Rivers dug where the water gathers",
+            NodeKind::Rivers { .. } => "Rivers traced where the water runs, with tributaries, banks and lakes",
             NodeKind::Lakes { .. } => "Water fills the hollows: lakes, flat valley floors",
             NodeKind::Sea { .. } => "A sea level, with masks of the water and the shore",
             NodeKind::Combine { .. } => "Add, subtract, multiply… two fields",
@@ -1137,6 +1254,11 @@ impl NodeKind {
             NodeKind::ColorOutput { .. } => "The colour of the ground, turned into real blocks",
             NodeKind::LayerOutput { .. } => "Rock between two heights over the ground: a level of the map, over the void",
             NodeKind::WaterOutput => "Water up to a level: the rivers and lakes above the sea, running down with their beds",
+            NodeKind::Temperature { .. } => "How warm the land is: by latitude and by height",
+            NodeKind::Humidity { .. } => "How wet the land is: from the sea, carried by the wind, dry behind the mountains",
+            NodeKind::Biomes { .. } => "The colours of the climate: deserts, forests, tundra, jungle…",
+            NodeKind::BiomeOutput { .. } => "The game's biomes from the climate, and the ground painted to suit",
+            NodeKind::Tectonic { .. } => "Continents and oceans from plates you move: ranges where they collide, rifts where they part",
         }
     }
 
@@ -1159,7 +1281,8 @@ impl NodeKind {
             | NodeKind::Mesas { .. }
             | NodeKind::Island { .. }
             | NodeKind::Rocks { .. }
-            | NodeKind::FloatingIslands { .. } => Family::Landform,
+            | NodeKind::FloatingIslands { .. }
+            | NodeKind::Tectonic { .. } => Family::Landform,
             NodeKind::Levels { .. }
             | NodeKind::Terrace { .. }
             | NodeKind::Clamp { .. }
@@ -1188,6 +1311,7 @@ impl NodeKind {
             | NodeKind::Facing { .. }
             | NodeKind::Occlusion { .. }
             | NodeKind::Flow { .. } => Family::Selector,
+            NodeKind::Temperature { .. } | NodeKind::Humidity { .. } | NodeKind::Biomes { .. } => Family::Climate,
             NodeKind::Gradient { .. }
             | NodeKind::SolidColor { .. }
             | NodeKind::MixColors
@@ -1198,7 +1322,8 @@ impl NodeKind {
             | NodeKind::TerrainOutput { .. }
             | NodeKind::ColorOutput { .. }
             | NodeKind::LayerOutput { .. }
-            | NodeKind::WaterOutput => Family::Output,
+            | NodeKind::WaterOutput
+            | NodeKind::BiomeOutput { .. } => Family::Output,
         }
     }
 
@@ -1219,6 +1344,8 @@ impl NodeKind {
             NodeKind::ColorOutput { .. } => &[("Colour", C)],
             NodeKind::LayerOutput { .. } => &[("Top", H), ("Bottom", H), ("Colour", C)],
             NodeKind::WaterOutput => &[("Level", H)],
+            NodeKind::Temperature { .. } | NodeKind::Humidity { .. } => &[("Height", H)],
+            NodeKind::Biomes { .. } | NodeKind::BiomeOutput { .. } => &[("Height", H), ("Temperature", M), ("Humidity", M)],
             _ => &[("In", H)],
         }
     }
@@ -1235,11 +1362,16 @@ impl NodeKind {
             NodeKind::Sea { .. } => &[("Height", H), ("Water", M), ("Shore", M)],
             NodeKind::FloatingIslands { .. } => &[("Top", H), ("Bottom", H), ("Islands", M)],
             NodeKind::Overhang { .. } => &[("Top", H), ("Bottom", H)],
+            NodeKind::Tectonic { .. } => &[("Height", H), ("Ranges", M), ("Faults", M)],
+            NodeKind::Temperature { .. } => &[("Temperature", M)],
+            NodeKind::Humidity { .. } => &[("Humidity", M)],
+            NodeKind::Biomes { .. } => &[("Colour", C)],
             NodeKind::HeightOutput
             | NodeKind::TerrainOutput { .. }
             | NodeKind::ColorOutput { .. }
             | NodeKind::LayerOutput { .. }
-            | NodeKind::WaterOutput => &[],
+            | NodeKind::WaterOutput
+            | NodeKind::BiomeOutput { .. } => &[],
             k if k.family() == Family::Selector => &[("Mask", M)],
             k if k.family() == Family::Color => &[("Colour", C)],
             _ => &[("Out", H)],
@@ -1269,6 +1401,11 @@ pub struct Graph {
     pub nodes: Vec<Node>,
     pub links: Vec<Link>,
     pub next_id: NodeId,
+    /// The side of the square of the world the terrain covers, in blocks
+    /// (`None`: the map's own). Larger than the map, converting adds the
+    /// tiles it lacks.
+    #[serde(default)]
+    pub size: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -1795,6 +1932,60 @@ pub struct Outputs {
     /// The level of the water of each column ([`NO_WATER`] where there is
     /// none): rivers and lakes above the sea.
     pub water: Option<Arc<Field>>,
+    /// The colour the ground is shown in: the colour output's, turned into
+    /// blocks or not.
+    pub shown: Option<Arc<ColorField>>,
+    /// The climate the biome output got.
+    pub biomes: Option<BiomeOut>,
+}
+
+/// The climate a biome output got: what it writes.
+#[derive(Debug, Clone)]
+pub struct BiomeOut {
+    pub height: Arc<Field>,
+    pub temperature: Arc<Field>,
+    pub humidity: Arc<Field>,
+    pub sea: f32,
+    /// Paint the ground of each climate with its terrain.
+    pub paint: bool,
+}
+
+impl BiomeOut {
+    /// The climate at `(u, v)` of the build's extent.
+    pub fn at(&self, u: f32, v: f32) -> Climate {
+        Climate::of(self.height.sample(u, v), self.sea, climate::to_celsius(self.temperature.sample(u, v)), self.humidity.sample(u, v))
+    }
+}
+
+/// The colours of the ground as converting paints it, for previews: the
+/// colour output's (`base`; without one, clay lighter with height), with
+/// each terrain output's colour (`colors`, by terrain) laid over it where
+/// its mask is high, later ones over earlier ones.
+pub fn painted_colors(heights: &Field, base: Option<&ColorField>, terrains: &[(TerrainId, Arc<Field>)], colors: &[[u8; 3]]) -> Option<ColorField> {
+    let n = heights.n;
+    let base = base.filter(|b| b.n == n);
+    let masks: Vec<(&Field, [f32; 3])> = terrains
+        .iter()
+        .filter(|(_, m)| m.n == n)
+        .map(|(t, m)| (&**m, colors.get(t.0 as usize).copied().unwrap_or([128; 3]).map(color::decode)))
+        .collect();
+    if base.is_none() && masks.is_empty() {
+        return None;
+    }
+    let (lo, hi) = heights.range();
+    let span = (hi - lo).max(1e-3);
+    let (clay_lo, clay_hi) = ([150u8, 143, 132].map(color::decode), [204u8, 198, 188].map(color::decode));
+    let lerp = |a: [f32; 3], b: [f32; 3], t: f32| [0, 1, 2].map(|k| a[k] + (b[k] - a[k]) * t);
+    Some(ColorField::build(n, |c| {
+        let mut col = match base {
+            Some(b) => b.linear(c),
+            None => lerp(clay_lo, clay_hi, ((heights.data[c] - lo) / span).clamp(0.0, 1.0)),
+        };
+        for (mask, tc) in &masks {
+            col = lerp(col, *tc, mask.data[c].clamp(0.0, 1.0));
+        }
+        col
+    }))
 }
 
 /// Rock a graph lays over the ground — floating islands, overhangs —
@@ -1834,6 +2025,19 @@ impl Graph {
     /// Whether the graph reads the map (has a Map node).
     pub fn reads_the_map(&self) -> bool {
         self.nodes.iter().any(|n| n.kind == NodeKind::MapHeight)
+    }
+
+    /// The levels converting the graph writes, as the endings of their
+    /// names: what it digs and raises over the map, and its layers. Its
+    /// Map node does not read them.
+    pub fn own_levels(&self) -> Vec<String> {
+        let mut own = vec![LayerOut::level_name("", 0)];
+        for n in &self.nodes {
+            if let NodeKind::LayerOutput { slot, .. } = n.kind {
+                own.push(LayerOut::level_name("", slot));
+            }
+        }
+        own
     }
 
     /// [`Graph::evaluate_cached`] for a graph that may read the map.
@@ -2013,8 +2217,23 @@ impl Graph {
             match n.kind {
                 NodeKind::HeightOutput => result.heights = Some(needed(0)?.as_field()),
                 NodeKind::TerrainOutput { terrain } => result.terrains.push((TerrainId(terrain), needed(0)?.as_field())),
-                NodeKind::ColorOutput { blocks: true, palette } => result.colors = Some((needed(0)?.as_color(), palette)),
+                NodeKind::ColorOutput { blocks, palette } => {
+                    let colors = needed(0)?.as_color();
+                    if blocks {
+                        result.colors = Some((colors.clone(), palette));
+                    }
+                    result.shown = Some(colors);
+                }
                 NodeKind::WaterOutput => result.water = Some(needed(0)?.as_field()),
+                NodeKind::BiomeOutput { sea, paint } => {
+                    result.biomes = Some(BiomeOut {
+                        height: needed(0)?.as_field(),
+                        temperature: needed(1)?.as_field(),
+                        humidity: needed(2)?.as_field(),
+                        sea,
+                        paint,
+                    })
+                }
                 NodeKind::LayerOutput { slot, palette } => {
                     let what = inputs[0].and_then(|(src, _)| self.node(src)).map_or("Layer", |s| s.kind.label());
                     result.layers.push(LayerOut {
@@ -2108,19 +2327,113 @@ pub fn colors_in_use(field: &ColorField, palette: &[[u8; 3]]) -> Vec<bool> {
     used
 }
 
+/// The terrain a build gives column `(x, z)` (at `(u, v)` of its extent),
+/// if it gives one: the closest of `palette` to its colour, slightly
+/// dithered so that two blocks mix where the colour lies between them,
+/// then the terrains painted where their masks are high (dithered in
+/// between, later outputs over earlier ones).
+#[allow(clippy::too_many_arguments)]
+fn chosen_terrain(outputs: &Outputs, nearest: Option<&Nearest>, paint: &Painting, seed: u64, x: i32, z: i32, u: f32, v: f32) -> Option<u16> {
+    let mut chosen = None;
+    if let (Some(table), Some((field, _))) = (nearest, &outputs.colors) {
+        let c = field.sample(u, v);
+        let jitter = |k: u64| (hash2(x, z, seed ^ k) as f32 / u32::MAX as f32 - 0.5) * 18.0;
+        let srgb = [0, 1, 2].map(|k| color::encode(c[k]) as f32 + jitter(0xc0 + k as u64));
+        chosen = Some(paint.palette[table.get(srgb)].0.0);
+    }
+    // The terrain of the climate, its edges dithered a little.
+    if let (Some(b), Some(table)) = (&outputs.biomes, paint.climate)
+        && b.paint
+    {
+        let jitter = |k: u64| (hash2(x, z, seed ^ k) as f32 / u32::MAX as f32 - 0.5) * 0.9;
+        if let Some(t) = table.terrain(b.at(u + jitter(0xb1), v + jitter(0xb2))) {
+            chosen = Some(t.0);
+        }
+    }
+    for (k, (terrain, mask)) in outputs.terrains.iter().enumerate() {
+        let dither = hash2(x, z, seed ^ (k as u64 + 1).wrapping_mul(0x51ed)) as f32 / u32::MAX as f32;
+        if mask.sample(u, v) > dither {
+            chosen = Some(terrain.0);
+        }
+    }
+    chosen
+}
+
+/// Whether a build paints the ground at all.
+fn paints(outputs: &Outputs) -> bool {
+    outputs.colors.is_some() || !outputs.terrains.is_empty() || outputs.biomes.as_ref().is_some_and(|b| b.paint)
+}
+
+/// How a build's colours and climate become terrains.
+#[derive(Clone, Copy)]
+pub struct Painting<'a> {
+    /// The terrains its colours turn into, each with its colour.
+    pub palette: &'a [(TerrainId, [u8; 3])],
+    /// What its climates write: biomes, and terrains.
+    pub climate: Option<&'a ClimateTable>,
+}
+
+impl<'a> Painting<'a> {
+    /// Colours alone.
+    pub fn colors(palette: &'a [(TerrainId, [u8; 3])]) -> Self {
+        Self { palette, climate: None }
+    }
+}
+
+/// Which tiles [`apply`] writes, and how.
+pub struct GroundWrite<'a> {
+    /// The tiles of the ground to write.
+    pub tiles: &'a [TilePos],
+    /// Make those the ground lacks: they take the build as it is.
+    pub create: bool,
+    /// For a graph that started from the map: the levels it writes
+    /// ([`Graph::own_levels`]).
+    pub map: Option<&'a [String]>,
+    /// The sea's level.
+    pub sea: i32,
+    /// The terrain of new tiles where the build paints none.
+    pub blank: TerrainId,
+}
+
 /// Write a build to the ground level: heights sampled per column from the
-/// height field, the colour of the ground turned into the terrains of
-/// `palette` (the closest colour, slightly dithered so that two blocks mix
-/// where the colour lies between them), then terrains painted where their
-/// masks are high (dithered in between, later outputs over earlier ones).
-/// Recorded for undo.
-pub fn apply(edit: &mut Edit, extent: &Extent, outputs: &Outputs, seed: u64, palette: &[(TerrainId, [u8; 3])], sea: i32) {
+/// height field, the terrains of [`chosen_terrain`]. Recorded for undo.
+///
+/// With `map` (the levels of [`Graph::own_levels`], for a graph that
+/// started from the map), only the columns whose surface is the ground's
+/// get the build's heights and water; the rock other levels lay over the
+/// ground stays as it is, and terrains are left to [`paint_surface`].
+pub fn apply(edit: &mut Edit, extent: &Extent, outputs: &Outputs, seed: u64, paint: &Painting, how: &GroundWrite) {
+    let palette = paint.palette;
     let (lo, hi) = (edit.dim().min_y as f32, (edit.dim().max_y - 1) as f32);
-    let tiles: Vec<TilePos> = edit.level().positions().collect();
+    let (map, sea) = (how.map, how.sea);
     let everywhere = BlockRect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX);
     let colors: Vec<[u8; 3]> = palette.iter().map(|p| p.1).collect();
     let nearest = (outputs.colors.is_some() && !palette.is_empty()).then(|| Nearest::new(&colors));
-    edit.par_tiles(tiles, everywhere, false, |pos, _, tile| {
+    let made: HashSet<TilePos> = how.tiles.iter().copied().filter(|p| !edit.level().contains(*p)).collect();
+    edit.par_tiles_with(how.tiles.iter().copied(), everywhere, how.create, |pos, _, tile, others| {
+        // A tile made for the build: all of it the build's, with the sea
+        // where the build has no water of its own.
+        let new = made.contains(&pos);
+        if new {
+            tile.terrain = crate::Plane::Uniform(how.blank.0);
+            tile.fluid = crate::Plane::Uniform(sea as i16);
+        }
+        // The columns whose surface is the ground's (all, without a map).
+        let ground_on_top: Option<Vec<bool>> = map.filter(|_| !new).and_then(|own| {
+            let stack = others.stack(pos, Some((LevelKind::Ground, &*tile)), |_, l| map::reads_level(l, own))?;
+            if stack.is_ground_only() {
+                return None;
+            }
+            let mut spans = Vec::new();
+            Some(
+                (0..crate::coords::TILE_SIZE as usize * crate::coords::TILE_SIZE as usize)
+                    .map(|i| {
+                        stack.spans(i, &mut spans);
+                        spans.last().is_some_and(|top| stack.surface_level(i, top) == Some(0))
+                    })
+                    .collect(),
+            )
+        });
         let (ox, oz) = pos.origin();
         let n = crate::coords::TILE_SIZE;
         for lz in 0..n {
@@ -2128,6 +2441,9 @@ pub fn apply(edit: &mut Edit, extent: &Extent, outputs: &Outputs, seed: u64, pal
                 let (x, z) = (ox + lx, oz + lz);
                 let (u, v) = extent.grid(x as f64 + 0.5, z as f64 + 0.5);
                 let i = local_index(x, z);
+                if ground_on_top.as_ref().is_some_and(|on_top| !on_top[i]) {
+                    continue;
+                }
                 if let Some(h) = &outputs.heights {
                     tile.top.set(i, snap_height(h.sample(u, v).clamp(lo, hi)));
                 }
@@ -2138,18 +2454,10 @@ pub fn apply(edit: &mut Edit, extent: &Extent, outputs: &Outputs, seed: u64, pal
                     let wet = level > tile.top.get(i) + 0.3;
                     tile.fluid.set(i, if wet { level.round().clamp(lo, hi) as i16 } else { sea as i16 });
                 }
-                if let (Some(table), Some((field, _))) = (&nearest, &outputs.colors) {
-                    let c = field.sample(u, v);
-                    let jitter = |k: u64| (hash2(x, z, seed ^ k) as f32 / u32::MAX as f32 - 0.5) * 18.0;
-                    let srgb = [0, 1, 2].map(|k| color::encode(c[k]) as f32 + jitter(0xc0 + k as u64));
-                    tile.terrain.set(i, palette[table.get(srgb)].0.0);
-                }
-                for (k, (terrain, mask)) in outputs.terrains.iter().enumerate() {
-                    let m = mask.sample(u, v);
-                    let dither = hash2(x, z, seed ^ (k as u64 + 1).wrapping_mul(0x51ed)) as f32 / u32::MAX as f32;
-                    if m > dither {
-                        tile.terrain.set(i, terrain.0);
-                    }
+                if (map.is_none() || new)
+                    && let Some(t) = chosen_terrain(outputs, nearest.as_ref(), paint, seed, x, z, u, v)
+                {
+                    tile.terrain.set(i, t);
                 }
             }
         }
@@ -2188,24 +2496,29 @@ impl Overlay {
     }
 }
 
-/// Write a build *over* the map, leaving its ground as it is: `edit` works
-/// on the level of one `side`, which gets the difference between the
-/// graph's heights and the ground — what was dug, or what was raised —
+/// Write a build *over* the map, leaving it as it is: `edit` works on the
+/// level of one `side`, which gets the difference between the graph's
+/// heights and the map's surface (its ground, with the rock and the pits
+/// of its levels, and what was sculpted; not the levels of `own`, the
+/// graph's: [`Graph::own_levels`]) — what was dug, or what was raised —
 /// with the terrain of the new surface and the graph's water. Converting
 /// again writes the levels again; deleting them gives the map back.
 ///
-/// Columns the graph leaves within half a block of the ground are not
-/// touched (their terrain neither), except to hold water: a slab one block
-/// thick, of the ground's own terrain, carries a lake's level.
-pub fn apply_overlay(edit: &mut Edit, side: Overlay, extent: &Extent, outputs: &Outputs, seed: u64, palette: &[(TerrainId, [u8; 3])]) {
+/// Columns the graph leaves within half a block of the surface are not
+/// touched (their terrain is [`paint_surface`]'s), except to hold water:
+/// a slab one block thick, of the surface's own terrain, carries a lake's
+/// level.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_overlay(edit: &mut Edit, side: Overlay, extent: &Extent, outputs: &Outputs, seed: u64, paint: &Painting, own: &[String], tiles: &[TilePos]) {
+    let palette = paint.palette;
     let Some(heights) = &outputs.heights else { return };
     let (lo, hi) = (edit.dim().min_y as f32, (edit.dim().max_y - 1) as f32);
-    let tiles: Vec<TilePos> = edit.dim().ground().positions().collect();
+    let tiles: Vec<TilePos> = tiles.iter().copied().filter(|p| edit.dim().ground().contains(*p)).collect();
     let everywhere = BlockRect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX);
     let colors: Vec<[u8; 3]> = palette.iter().map(|p| p.1).collect();
     let nearest = (outputs.colors.is_some() && !palette.is_empty()).then(|| Nearest::new(&colors));
     edit.par_tiles_with(tiles.clone(), everywhere, true, |pos, _, tile, others| {
-        let Some(ground) = others.get(0).and_then(|l| l.view(pos)) else { return };
+        let Some(stack) = others.stack(pos, None, |_, l| map::reads_level(l, own)) else { return };
         let Tile {
             top,
             bottom: Some(bottom),
@@ -2216,6 +2529,7 @@ pub fn apply_overlay(edit: &mut Edit, side: Overlay, extent: &Extent, outputs: &
         else {
             return;
         };
+        let (mut spans, mut wet) = (Vec::new(), Vec::new());
         let (ox, oz) = pos.origin();
         let n = crate::coords::TILE_SIZE;
         for lz in 0..n {
@@ -2223,7 +2537,15 @@ pub fn apply_overlay(edit: &mut Edit, side: Overlay, extent: &Extent, outputs: &
                 let (x, z) = (ox + lx, oz + lz);
                 let (u, v) = extent.grid(x as f64 + 0.5, z as f64 + 0.5);
                 let i = local_index(x, z);
-                let base = ground.top.get(i);
+                let clear = |top: &mut crate::Plane<f32>, bottom: &mut crate::Plane<f32>, fluid: &mut crate::Plane<i16>| {
+                    top.set(i, 0.0);
+                    bottom.set(i, 0.0);
+                    fluid.set(i, NO_FLUID);
+                };
+                let Some((base, _, base_terrain)) = map::surface_of(&stack, i, &mut spans, &mut wet) else {
+                    clear(top, bottom, fluid);
+                    continue;
+                };
                 let new = snap_height(heights.sample(u, v).clamp(lo, hi));
                 let water = outputs.water.as_ref().map_or(NO_WATER, |w| w.at(u.round().max(0.0) as usize, v.round().max(0.0) as usize));
                 let dug = new < base - 0.5;
@@ -2237,31 +2559,15 @@ pub fn apply_overlay(edit: &mut Edit, side: Overlay, extent: &Extent, outputs: &
                     _ => (None, None),
                 };
                 let Some((y0, y1)) = span else {
-                    top.set(i, 0.0);
-                    bottom.set(i, 0.0);
-                    fluid.set(i, NO_FLUID);
+                    clear(top, bottom, fluid);
                     continue;
                 };
                 bottom.set(i, snap_height(y0));
                 top.set(i, snap_height(y1));
                 fluid.set(i, level.map_or(NO_FLUID, |l| l.round().clamp(lo, hi) as i16));
                 // The terrain of the new surface: the graph's, or the
-                // ground's own.
-                let mut chosen = ground.terrain.get(i);
-                if (new - base).abs() > 0.5 {
-                    if let (Some(table), Some((field, _))) = (&nearest, &outputs.colors) {
-                        let c = field.sample(u, v);
-                        let jitter = |k: u64| (hash2(x, z, seed ^ k) as f32 / u32::MAX as f32 - 0.5) * 18.0;
-                        let srgb = [0, 1, 2].map(|k| color::encode(c[k]) as f32 + jitter(0xc0 + k as u64));
-                        chosen = palette[table.get(srgb)].0.0;
-                    }
-                    for (k, (t, mask)) in outputs.terrains.iter().enumerate() {
-                        let dither = hash2(x, z, seed ^ (k as u64 + 1).wrapping_mul(0x51ed)) as f32 / u32::MAX as f32;
-                        if mask.sample(u, v) > dither {
-                            chosen = t.0;
-                        }
-                    }
-                }
+                // surface's own.
+                let chosen = chosen_terrain(outputs, nearest.as_ref(), paint, seed, x, z, u, v).unwrap_or(base_terrain);
                 terrain.set(i, chosen);
             }
         }
@@ -2270,13 +2576,92 @@ pub fn apply_overlay(edit: &mut Edit, side: Overlay, extent: &Extent, outputs: &
     edit.prune_empty(tiles);
 }
 
+/// Paint the build's terrains on the surface the level `edit` works on
+/// holds: the columns whose top is its own (the top of its rock, the floor
+/// it opened, or the ground), the map composed of its visible levels.
+/// Nothing for a build that paints nothing. Heights are left as they are.
+pub fn paint_surface(edit: &mut Edit, extent: &Extent, outputs: &Outputs, seed: u64, paint: &Painting, tiles: &[TilePos]) {
+    let palette = paint.palette;
+    if !paints(outputs) {
+        return;
+    }
+    let index = edit.level_index();
+    let kind = edit.kind();
+    let tiles: Vec<TilePos> = tiles.iter().copied().filter(|p| edit.level().contains(*p)).collect();
+    let everywhere = BlockRect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX);
+    let colors: Vec<[u8; 3]> = palette.iter().map(|p| p.1).collect();
+    let nearest = (outputs.colors.is_some() && !palette.is_empty()).then(|| Nearest::new(&colors));
+    edit.par_tiles_with(tiles, everywhere, false, |pos, _, tile, others| {
+        let painted: Vec<(usize, u16)> = {
+            let Some(stack) = others.stack(pos, Some((kind, &*tile)), |_, l| l.visible) else { return };
+            let mut spans = Vec::new();
+            let (ox, oz) = pos.origin();
+            let n = crate::coords::TILE_SIZE;
+            let mut painted = Vec::new();
+            for lz in 0..n {
+                for lx in 0..n {
+                    let (x, z) = (ox + lx, oz + lz);
+                    let i = local_index(x, z);
+                    let ours = if stack.is_ground_only() {
+                        index == 0
+                    } else {
+                        stack.spans(i, &mut spans);
+                        spans.last().is_some_and(|top| stack.surface_level(i, top) == Some(index))
+                    };
+                    if !ours {
+                        continue;
+                    }
+                    let (u, v) = extent.grid(x as f64 + 0.5, z as f64 + 0.5);
+                    if let Some(t) = chosen_terrain(outputs, nearest.as_ref(), paint, seed, x, z, u, v) {
+                        painted.push((i, t));
+                    }
+                }
+            }
+            painted
+        };
+        for (i, t) in painted {
+            tile.terrain.set(i, t);
+        }
+        tile.compact();
+    });
+}
+
+/// Write the biomes of a build's climate to the ground level `edit` works
+/// on, over `tiles`: each column's climate's biome, rivers' where the
+/// build's water runs above the sea. Nothing without a biome output.
+pub fn apply_biomes(edit: &mut Edit, extent: &Extent, outputs: &Outputs, table: &ClimateTable, tiles: &[TilePos]) {
+    let Some(b) = &outputs.biomes else { return };
+    let tiles: Vec<TilePos> = tiles.iter().copied().filter(|p| edit.level().contains(*p)).collect();
+    let everywhere = BlockRect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX);
+    edit.par_tiles(tiles, everywhere, false, |pos, _, tile| {
+        let (ox, oz) = pos.origin();
+        let n = crate::coords::TILE_SIZE;
+        for lz in 0..n {
+            for lx in 0..n {
+                let (x, z) = (ox + lx, oz + lz);
+                let (u, v) = extent.grid(x as f64 + 0.5, z as f64 + 0.5);
+                let i = local_index(x, z);
+                let climate = b.at(u, v);
+                let river = outputs.water.as_ref().is_some_and(|w| {
+                    let level = w.sample(u, v);
+                    level > b.height.sample(u, v) + 0.3 && level > b.sea + 0.2
+                });
+                let biome = if river { table.river(climate::to_celsius(b.temperature.sample(u, v)) < 0.0) } else { table.biome(climate) };
+                tile.biome.set(i, biome.0);
+            }
+        }
+        tile.compact();
+    });
+}
+
 /// Write a layer to the slab level `edit` works on: rock between its
 /// bottom and top wherever it is at least a block thick, nothing elsewhere
 /// (columns it no longer covers are cleared). Its colours become the
 /// closest terrain of `palette`, or `fallback`.
-pub fn apply_layer(edit: &mut Edit, extent: &Extent, layer: &LayerOut, seed: u64, palette: &[(TerrainId, [u8; 3])], fallback: TerrainId) {
+#[allow(clippy::too_many_arguments)]
+pub fn apply_layer(edit: &mut Edit, extent: &Extent, layer: &LayerOut, seed: u64, palette: &[(TerrainId, [u8; 3])], fallback: TerrainId, tiles: &[TilePos]) {
     let (lo, hi) = (edit.dim().min_y as f32, (edit.dim().max_y - 1) as f32);
-    let tiles: Vec<TilePos> = edit.dim().ground().positions().collect();
+    let tiles: Vec<TilePos> = tiles.iter().copied().filter(|p| edit.dim().ground().contains(*p)).collect();
     let everywhere = BlockRect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX);
     let colors: Vec<[u8; 3]> = palette.iter().map(|p| p.1).collect();
     let nearest = (layer.colors.is_some() && !palette.is_empty()).then(|| Nearest::new(&colors));

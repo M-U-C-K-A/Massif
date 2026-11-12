@@ -6,7 +6,7 @@
 //! preview turns them into faces, the map shows the topmost one.
 
 use crate::coords::TilePos;
-use crate::level::{LevelKind, TileRef};
+use crate::level::{Level, LevelKind, TileRef};
 use crate::registry::{BlockId, Registry, TerrainId};
 use crate::tile::{NO_FLUID, Tile};
 use crate::world::Dimension;
@@ -47,30 +47,54 @@ impl<'a> TileStack<'a> {
     /// Gather the tiles at `pos`. Returns `None` where the map has no ground
     /// tile. Hidden levels are skipped unless `include_hidden` is set.
     pub fn new(dim: &'a Dimension, pos: TilePos, include_hidden: bool) -> Option<Self> {
+        Self::new_with(dim, pos, |_, level| level.visible || include_hidden)
+    }
+
+    /// [`TileStack::new`] with only the levels `keep` accepts (given their
+    /// index and the level); the ground is always there.
+    pub fn new_with(dim: &'a Dimension, pos: TilePos, keep: impl Fn(usize, &Level) -> bool) -> Option<Self> {
         let ground = dim.ground().view(pos)?;
-        let mut layers = vec![Layer {
-            kind: LevelKind::Ground,
-            index: 0,
-            tile: ground,
-        }];
+        let mut layers = vec![(0, LevelKind::Ground, ground)];
         for (index, level) in dim.levels.iter().enumerate().skip(1) {
-            if !(level.visible || include_hidden) {
-                continue;
-            }
-            if let Some(tile) = level.view(pos) {
-                layers.push(Layer {
-                    kind: level.kind,
-                    index,
-                    tile,
-                });
+            if keep(index, level)
+                && let Some(tile) = level.view(pos)
+            {
+                layers.push((index, level.kind, tile));
             }
         }
-        Some(Self {
-            min_y: dim.min_y,
-            max_y: dim.max_y,
-            layers,
-            sculpt: crate::voxel::tile_columns(&dim.voxels, pos),
-        })
+        Some(Self::gather(dim.min_y, dim.max_y, &dim.voxels, pos, layers))
+    }
+
+    /// A stack of the given tiles — `(level index, kind, tile)`, the
+    /// ground's first, bottom of the stack first — with the chunks sculpted
+    /// over `pos`.
+    pub fn gather(min_y: i32, max_y: i32, voxels: &'a crate::voxel::VoxelLayer, pos: TilePos, layers: Vec<(usize, LevelKind, TileRef<'a>)>) -> Self {
+        debug_assert!(layers.first().is_some_and(|l| l.1 == LevelKind::Ground), "a stack starts with the ground");
+        Self {
+            min_y,
+            max_y,
+            layers: layers.into_iter().map(|(index, kind, tile)| Layer { kind, index, tile }).collect(),
+            sculpt: crate::voxel::tile_columns(voxels, pos),
+        }
+    }
+
+    /// The level whose surface is the top of column `cell`, `top` being
+    /// its topmost span: a slab's top, the floor a carve opened, or the
+    /// ground's. `None` where none is (a top that was sculpted).
+    pub fn surface_level(&self, cell: usize, top: &Span) -> Option<usize> {
+        let mut found = None;
+        for layer in &self.layers {
+            let tile = &*layer.tile;
+            let on_top = match layer.kind {
+                LevelKind::Ground => block_top(tile.top.get(cell)) == top.y1,
+                LevelKind::Solid => tile.present(cell) && block_top(tile.top.get(cell)) == top.y1,
+                LevelKind::Carve => tile.present(cell) && tile.bottom.as_ref().is_some_and(|b| block_top(b.get(cell)) == top.y1),
+            };
+            if on_top {
+                found = Some(layer.index);
+            }
+        }
+        found
     }
 
     /// True when only the ground level has data here (the common fast path).

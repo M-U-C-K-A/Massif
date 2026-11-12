@@ -51,6 +51,22 @@ fn wire_inputs(g: &mut Graph, id: NodeId) {
     }
 }
 
+/// The tiles of a world's ground.
+fn map_tiles(world: &crate::world::World) -> Vec<TilePos> {
+    world.dims[0].ground().positions().collect()
+}
+
+/// How the tests write a build to the ground: its own tiles, made none.
+fn write(tiles: &[TilePos]) -> GroundWrite<'_> {
+    GroundWrite {
+        tiles,
+        create: false,
+        map: None,
+        sea: 62,
+        blank: TerrainId::ROCK,
+    }
+}
+
 #[test]
 fn every_node_of_the_catalogue_runs() {
     // (The Map node needs a map: it has its own test.)
@@ -112,6 +128,8 @@ fn generators_stay_in_their_range_and_are_deterministic() {
             NodeKind::Canyon { base, depth, .. } => (base - depth - 5.0, depth + 10.0),
             // Their tops: from the lowest island's edge to the highest crag.
             NodeKind::FloatingIslands { altitude, spread, size, .. } => (altitude - spread, 2.0 * spread + size * 1.5),
+            // From the trenches to the highest ranges.
+            NodeKind::Tectonic { relief, sea, .. } => (sea - 0.9 * relief, 2.2 * relief),
             _ => unreachable!("{}", kind.label()),
         };
         let slack = height.abs() * 0.25 + 1e-3;
@@ -230,6 +248,8 @@ fn simulations_fill_dig_and_cover() {
             depth: 6.0,
             width: 16.0,
             sea: NO_WATER,
+            banks: 1.0,
+            lakes: 0.5,
         },
         [0.0; 2],
     );
@@ -618,7 +638,8 @@ fn the_starter_graph_builds_and_applies_with_real_block_colours() {
     let palette = [(grass, [96, 140, 60]), (sand, [220, 200, 150])];
     let mut h = History::default();
     h.begin("graph", 0);
-    apply(&mut h.edit(&mut world, 0), &ext, &outputs, 1, &palette, 62);
+    let tiles = map_tiles(&world);
+    apply(&mut h.edit(&mut world, 0), &ext, &outputs, 1, &Painting::colors(&palette), &write(&tiles));
     h.commit();
     let tile = world.dims[0].ground().view(TilePos::new(0, 0)).unwrap();
     let heights: Vec<f32> = (0..128 * 128).map(|i| tile.top.get(i)).collect();
@@ -737,7 +758,8 @@ fn build_of_the_starter_graph() {
     let started = std::time::Instant::now();
     let mut h = History::default();
     h.begin("graph", 0);
-    apply(&mut h.edit(&mut world, 0), &ext, &out, 1, &palette, 62);
+    let tiles = map_tiles(&world);
+    apply(&mut h.edit(&mut world, 0), &ext, &out, 1, &Painting::colors(&palette), &write(&tiles));
     eprintln!("written to the map: {:.1} s", started.elapsed().as_secs_f32());
 }
 
@@ -755,15 +777,15 @@ fn templates_make_their_landscapes() {
     };
     for t in Template::ALL {
         let g = t.graph(&reg, sea, 2048.0);
-        if t == Template::MapRivers {
+        assert_eq!(g.reads_the_map(), t.reads_the_map(), "{}", t.label());
+        if t.reads_the_map() {
             // It works on a map: on its own, it has nothing to read.
-            assert!(g.reads_the_map());
             assert!(g.build(&ext, &AtomicBool::new(false)).is_err());
             continue;
         }
         let out = g.build(&ext, &AtomicBool::new(false)).unwrap_or_else(|e| panic!("{}: {e}", t.label()));
         let h = out.heights.clone().expect("a height output");
-        assert!(out.colors.is_some(), "{}: no colours", t.label());
+        assert!(out.colors.is_some() || out.shown.is_some(), "{}: no colours", t.label());
         let (lo, hi) = h.range();
         assert!(lo > -64.0 && hi < 320.0, "{}: heights {lo}..{hi}", t.label());
         let wet = h.data.iter().filter(|&&v| v < sea).count() as f32 / h.data.len() as f32;
@@ -791,8 +813,12 @@ fn templates_make_their_landscapes() {
             }
             Template::RiverValley | Template::DesertCanyon => assert!(wet > 0.001 && wet < 0.2, "a river: {wet}"),
             Template::DuneSea => assert_eq!(wet, 0.0, "no water in the desert"),
+            Template::Continents => {
+                assert!((0.15..0.85).contains(&wet), "continents and oceans: {wet}");
+                assert!(out.biomes.as_ref().is_some_and(|b| b.paint), "its climate");
+            }
             Template::Alpine | Template::RollingHills => assert!(wet < 0.5, "mostly land: {wet}"),
-            Template::MapRivers => unreachable!(),
+            Template::PaintMap | Template::MapRivers => unreachable!(),
         }
     }
 }
@@ -897,8 +923,9 @@ fn layers_become_solid_levels() {
     let mut h = History::default();
     h.begin("graph", 0);
     let index = h.edit(&mut world, 0).structure().add_level(built.layers[0].name.clone(), crate::level::LevelKind::Solid);
-    apply(&mut h.edit(&mut world, 0), &ext, &built, 1, &[], 62);
-    apply_layer(&mut h.edit(&mut world, index), &ext, &built.layers[0], 1, &[], TerrainId::ROCK);
+    let tiles = map_tiles(&world);
+    apply(&mut h.edit(&mut world, 0), &ext, &built, 1, &Painting::colors(&[]), &write(&tiles));
+    apply_layer(&mut h.edit(&mut world, index), &ext, &built.layers[0], 1, &[], TerrainId::ROCK, &tiles);
     h.commit();
     // Some column holds the ground, air, then an island.
     let dim = &world.dims[0];
@@ -958,7 +985,7 @@ fn the_map_feeds_a_graph() {
     let ext = Extent::covering(crate::coords::BlockRect::new(0, 0, 256, 256), 256);
     let cancel = AtomicBool::new(false);
     assert!(matches!(g.build(&ext, &cancel), Err(GraphError::MissingInput(name)) if name == "Map"));
-    let source = GroundMap::new(world.dims[0].snapshot(), 1, 0.0, vec![[10, 20, 30], [40, 50, 60]]);
+    let source = GroundMap::new(world.dims[0].snapshot(), 1, 0.0, vec![[10, 20, 30], [40, 50, 60]], Vec::new());
     let built = g.build_on(Some(&source), &ext, &cancel, &Progress::default()).unwrap();
     let h = built.heights.unwrap();
     assert_eq!(h.at(64, 64), 90.0, "the bottom of the bowl");
@@ -980,31 +1007,287 @@ fn the_map_feeds_a_graph() {
     let first = g.evaluate_cached_on(Some(&source), &ext, &ids, &mut cache, &cancel).unwrap();
     assert_eq!(first.field(map, 0).unwrap().at(64, 64), 90.0);
     world.dims[0].ground_mut().tile_mut(TilePos::new(0, 0)).unwrap().top.set(crate::coords::cell_index(64, 64), 50.0);
-    let stale = GroundMap::new(world.dims[0].snapshot(), 1, 0.0, Vec::new());
+    let stale = GroundMap::new(world.dims[0].snapshot(), 1, 0.0, Vec::new(), Vec::new());
     let same = g.evaluate_cached_on(Some(&stale), &ext, &ids, &mut cache, &cancel).unwrap();
     assert_eq!(same.field(map, 0).unwrap().at(64, 64), 90.0, "the same revision: not read again");
-    let fresh = GroundMap::new(world.dims[0].snapshot(), 2, 0.0, Vec::new());
+    let fresh = GroundMap::new(world.dims[0].snapshot(), 2, 0.0, Vec::new(), Vec::new());
     let again = g.evaluate_cached_on(Some(&fresh), &ext, &ids, &mut cache, &cancel).unwrap();
     assert_eq!(again.field(map, 0).unwrap().at(64, 64), 50.0);
 }
 
-/// A river's water stands a little under its banks and runs down with its
-/// valley; its bed is dug deep enough to hold it.
+/// The Map node reads the map as it shows from the sky: the rock a level
+/// adds, the pit another carves, what was sculpted — not the levels the
+/// graph writes itself. Converting a graph that paints it leaves the rock
+/// where it is and paints the surfaces that show: the tower's top, the
+/// pit's floor, the ground around.
+#[test]
+fn the_map_is_read_in_3d() {
+    use crate::compose::TileStack;
+    use crate::history::History;
+    use crate::voxel::{ChunkPos, densities_at};
+    let mut world = bowl_world();
+    let at = |x: usize, z: usize| crate::coords::cell_index(x, z);
+    let everywhere = crate::coords::BlockRect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX);
+    let mut h = History::default();
+    h.begin("levels", 0);
+    let (tower, pit, dug) = {
+        let mut edit = h.edit(&mut world, 0);
+        let dim = edit.structure();
+        (
+            dim.add_level("Tower", LevelKind::Solid),
+            dim.add_level("Pit", LevelKind::Carve),
+            dim.add_level(Overlay::Dug.level_name(), Overlay::Dug.kind()),
+        )
+    };
+    // A tower from 99 to 140 over x, z in 20..30; a pit from 92 up over
+    // x in 100..110; and an old dig of the graph's at (10, 10).
+    for (level, x0, (y0, y1)) in [(tower, 20, (99.0, 140.0)), (pit, 100, (92.0, 101.0)), (dug, 8, (80.0, 101.0))] {
+        h.edit(&mut world, level).par_tiles([TilePos::new(0, 0)], everywhere, true, |_, _, tile| {
+            for z in 20..30 {
+                for x in x0..x0 + 10 {
+                    let z = if level == dug { z - 12 } else { z };
+                    tile.top.set(at(x, z), y1);
+                    tile.bottom.as_mut().unwrap().set(at(x, z), y0);
+                    tile.terrain.set(at(x, z), 1);
+                }
+            }
+        });
+    }
+    h.commit();
+    // A column sculpted up to y = 110 at (56, 104), where the ground is at 100.
+    let pos = ChunkPos { x: 3, y: 6, z: 6 };
+    let mut chunk = densities_at(&world.dims[0], pos);
+    for y in 0..14 {
+        chunk.set(8, y, 8, 255);
+    }
+    world.dims[0].voxels.insert(pos, Arc::new(chunk));
+
+    let own = Graph::default().own_levels();
+    let ext = Extent::covering(crate::coords::BlockRect::new(0, 0, 256, 256), 256);
+    let read = sample_map(&world.dims[0], &ext, 0.0, &[[0; 3], [9; 3]], &own);
+    let hgt = &read.heights;
+    assert_eq!(hgt.at(25, 25), 140.0, "the top of the tower");
+    assert_eq!(read.colors.data[25 * 256 + 25], [9; 3], "the tower's terrain");
+    assert_eq!(hgt.at(105, 25), 92.0, "the floor of the pit");
+    assert!(hgt.at(56, 104) > 108.0, "the sculpted column: {}", hgt.at(56, 104));
+    assert_eq!(hgt.at(12, 12), 100.0, "the graph's own dig is not the map's");
+    assert_eq!(hgt.at(40, 40), 100.0);
+
+    // A graph that paints the whole map with terrain 2, heights untouched.
+    let mut g = Graph::default();
+    let map = g.add(NodeKind::MapHeight, [0.0, 0.0]);
+    let all = g.add(NodeKind::SelectHeight { min: -1000.0, max: 1000.0, falloff: 0.0 }, [200.0, 100.0]);
+    let height = g.add(NodeKind::HeightOutput, [400.0, 0.0]);
+    let paint = g.add(NodeKind::TerrainOutput { terrain: 2 }, [400.0, 100.0]);
+    g.connect(map, 0, height, 0);
+    g.connect(map, 0, all, 0);
+    g.connect(all, 0, paint, 0);
+    let source = GroundMap::new(world.dims[0].snapshot(), 1, 0.0, Vec::new(), own.clone());
+    let built = g.build_on(Some(&source), &ext, &AtomicBool::new(false), &Progress::default()).unwrap();
+    h.begin("graph", 0);
+    let tiles = map_tiles(&world);
+    let raised = h.edit(&mut world, 0).structure().add_level(Overlay::Raised.level_name(), Overlay::Raised.kind());
+    for (index, side) in [(dug, Overlay::Dug), (raised, Overlay::Raised)] {
+        apply_overlay(&mut h.edit(&mut world, index), side, &ext, &built, 1, &Painting::colors(&[]), &own, &tiles);
+    }
+    for index in [0, tower, pit] {
+        paint_surface(&mut h.edit(&mut world, index), &ext, &built, 1, &Painting::colors(&[]), &tiles);
+    }
+    h.commit();
+    let dim = &world.dims[0];
+    let level_tile = |k: usize| dim.levels[k].view(TilePos::new(0, 0)).unwrap();
+    assert_eq!(level_tile(tower).top.get(at(25, 25)), 140.0, "the tower stands as it was");
+    assert_eq!(level_tile(tower).terrain.get(at(25, 25)), 2, "its top painted");
+    assert_eq!(level_tile(0).terrain.get(at(25, 25)), 1, "the ground under it not");
+    assert_eq!(level_tile(pit).terrain.get(at(105, 25)), 2, "the pit's floor painted");
+    assert_eq!(level_tile(0).terrain.get(at(40, 40)), 2, "the ground around");
+    assert!(dim.levels[dug].view(TilePos::new(0, 0)).is_none_or(|t| !t.present(at(12, 12))), "the old dig is gone: the graph digs nothing");
+    // Every surface that shows is the graph's terrain.
+    let stack = TileStack::new(dim, TilePos::new(0, 0), false).unwrap();
+    let mut spans = Vec::new();
+    for (x, z) in [(25, 25), (105, 25), (40, 40), (12, 12), (200 - 128, 30)] {
+        stack.spans(at(x, z), &mut spans);
+        assert_eq!(spans.last().unwrap().terrain.0, 2, "the surface at ({x}, {z})");
+    }
+}
+
+/// With MASSIF_RIVER_DEBUG set to a folder, a picture of a relief and its
+/// water there (a PPM: shaded relief, water in blue), to look at.
+fn debug_picture(name: &str, h: &Field, water: &Field, spacing: f32) {
+    let Some(dir) = std::env::var_os("MASSIF_RIVER_DEBUG") else { return };
+    let n = h.n;
+    let mut out = format!("P6 {n} {n} 255\n").into_bytes();
+    let (lo, hi) = h.range();
+    for j in 0..n {
+        for i in 0..n {
+            let dx = (h.at(i + 1, j) - h.at(i.saturating_sub(1), j)) / (2.0 * spacing);
+            let dz = (h.at(i, j + 1) - h.at(i, j.saturating_sub(1))) / (2.0 * spacing);
+            let shade = (0.55 + 0.45 * ((-dx * 0.6 + 0.75 + dz * 0.45) / (dx * dx + 1.0 + dz * dz).sqrt())).clamp(0.0, 1.0);
+            let t = (h.at(i, j) - lo) / (hi - lo).max(1.0);
+            let mut c = [0.35 + 0.45 * t, 0.5 + 0.3 * t, 0.25 + 0.4 * t].map(|v| v * shade);
+            let w = water.at(i, j);
+            if w != NO_WATER {
+                let deep = ((w - h.at(i, j)) / 4.0).clamp(0.3, 1.0);
+                c = [0.1, 0.35, 0.75].map(|v| v * (1.2 - 0.4 * deep));
+            }
+            out.extend(c.map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8));
+        }
+    }
+    std::fs::write(std::path::Path::new(&dir).join(format!("{name}.ppm")), out).unwrap();
+}
+
+/// A river follows its valley: laid in the bottom of it, its water a
+/// little under the banks and running down with it, its bed dug deep
+/// enough to hold the water, its banks sloping down to it.
 #[test]
 fn rivers_hold_water_that_runs_down() {
-    // A valley falling to the south (larger j), its floor along i = 64.
+    // A valley falling to the south (larger j), its floor along i = 70,
+    // offset from the middle of the grid.
     let n = 128;
-    let f = Field::new(n, (0..n * n).map(|c| 140.0 - 0.2 * (c / n) as f32 + 0.5 * ((c % n) as f32 - 64.0).abs()).collect());
-    let (dug, mask, level) = sim::rivers(&f, 1.0, 0.2, 5.0, 8.0, NO_WATER, &AtomicBool::new(false)).unwrap();
-    let c = |j: usize| j * n + 64;
+    let f = Field::new(n, (0..n * n).map(|c| 140.0 - 0.2 * (c / n) as f32 + 0.5 * ((c % n) as f32 - 70.0).abs()).collect());
+    let params = rivers::RiverParams {
+        threshold: 0.6,
+        depth: 5.0,
+        width: 8.0,
+        banks: 1.0,
+        lakes: 0.5,
+        sea: NO_WATER,
+    };
+    let r = rivers::rivers(&f, 1.0, params, &AtomicBool::new(false)).unwrap();
+    assert!(r.count >= 1, "a river runs");
+    let c = |j: usize| j * n + 70;
     for j in [20, 60, 100] {
-        assert!(mask.data[c(j)] > 0.5, "the river follows the valley floor at {j}: {}", mask.data[c(j)]);
-        let depth = level.data[c(j)] - dug.data[c(j)];
-        assert!(depth > 1.5 && depth < 6.0, "water in the bed at {j}: {depth}");
-        // Under the banks: the ground twelve blocks to the side.
-        assert!(level.data[c(j)] < f.data[c(j) + 12], "the water stays in its valley at {j}");
+        assert!(r.mask.data[c(j)] > 0.9, "the river follows the valley floor at {j}: {}", r.mask.data[c(j)]);
+        assert!(r.mask.data[c(j) - 12] < 0.1, "and not its sides at {j}");
+        // Shallow near its source, deeper as water joins it.
+        let depth = r.water.data[c(j)] - r.dug.data[c(j)];
+        assert!(depth > 1.0 && depth < 7.0, "water in the bed at {j}: {depth}");
+        // Under the banks: the ground eight blocks to the side.
+        assert!(r.water.data[c(j)] < r.dug.data[c(j) + 8], "the water stays in its valley at {j}");
+        // Nothing raised.
+        assert!((0..n).all(|i| r.dug.data[j * n + i] <= f.data[j * n + i] + 1e-4));
     }
-    assert!(level.data[c(20)] > level.data[c(60)] + 4.0 && level.data[c(60)] > level.data[c(100)] + 4.0, "it runs down");
+    let level = |j: usize| r.water.data[c(j)];
+    assert!(level(20) > level(60) + 4.0 && level(60) > level(100) + 4.0, "it runs down");
+    // Downstream, it never rises.
+    let along: Vec<f32> = (10..118).map(level).filter(|&l| l != NO_WATER).collect();
+    assert!(along.len() > 90, "water all along: {}", along.len());
+    assert!(along.windows(2).all(|w| w[1] <= w[0] + 1e-3), "it only goes down");
+}
+
+/// With MASSIF_RIVER_BENCH set: how long rivers take on a large build.
+#[test]
+fn rivers_on_a_large_build() {
+    let Some(n) = std::env::var("MASSIF_RIVER_BENCH").ok().and_then(|v| v.parse::<usize>().ok()) else { return };
+    let noise = crate::noise::Noise::new(3);
+    let started = std::time::Instant::now();
+    let f = Field::new(
+        n,
+        (0..n * n)
+            .into_par_iter()
+            .map(|c| {
+                let (i, j) = ((c % n) as f64 / n as f64, (c / n) as f64 / n as f64);
+                (150.0 - 70.0 * j + 60.0 * noise.fbm(i * 8.0, j * 8.0, 7, 2.0, 0.5)) as f32
+            })
+            .collect(),
+    );
+    eprintln!("relief {n}²: {:.1} s", started.elapsed().as_secs_f32());
+    let started = std::time::Instant::now();
+    let params = rivers::RiverParams {
+        threshold: 0.5,
+        depth: 5.0,
+        width: 16.0,
+        banks: 1.0,
+        lakes: 0.5,
+        sea: 62.0,
+    };
+    let r = rivers::rivers(&f, 1.0, params, &AtomicBool::new(false)).unwrap();
+    let wet = r.water.data.iter().filter(|&&w| w != NO_WATER).count();
+    eprintln!("rivers {n}²: {:.1} s, {} rivers, {wet} samples of water", started.elapsed().as_secs_f32(), r.count);
+    // A picture of it, a sample in eight.
+    let m = n / 8;
+    let pick = |f: &Field| Field::new(m, (0..m * m).map(|c| f.data[(c / m) * 8 * n + (c % m) * 8]).collect());
+    debug_picture("rivers-large", &pick(&r.dug), &pick(&r.water), 8.0);
+}
+
+/// On a relief of hills, rivers find their own valleys: they run in the
+/// lowest ground around them, join into larger ones that grow wider
+/// downstream, and reach the sea; their water is everywhere under the
+/// ground at the edge of their beds.
+#[test]
+fn rivers_find_their_valleys() {
+    let n = 256;
+    let noise = crate::noise::Noise::new(7);
+    // Hills falling to the sea along the south edge.
+    let f = Field::new(
+        n,
+        (0..n * n)
+            .map(|c| {
+                let (i, j) = ((c % n) as f64, (c / n) as f64);
+                (120.0 - 0.28 * j + 22.0 * noise.fbm(i / 60.0, j / 60.0, 5, 2.0, 0.5)) as f32
+            })
+            .collect(),
+    );
+    let sea = 62.0;
+    let params = rivers::RiverParams {
+        threshold: 0.35,
+        depth: 4.0,
+        width: 10.0,
+        banks: 1.0,
+        lakes: 1.0,
+        sea,
+    };
+    let r = rivers::rivers(&f, 2.0, params, &AtomicBool::new(false)).unwrap();
+    debug_picture("rivers-hills", &r.dug, &r.water, 2.0);
+    assert!(r.count >= 3, "a network of rivers: {}", r.count);
+    // In the bottom of their valleys: river samples are lower than most
+    // of the ground around them (where one crosses the rim of a hollow,
+    // only the two sides of the pass are higher).
+    let (mut checked, mut higher_sum, mut low) = (0, 0, 0);
+    for j in (8..n - 8).step_by(3) {
+        for i in (8..n - 8).step_by(3) {
+            let c = j * n + i;
+            if r.mask.data[c] < 0.99 || f.data[c] <= sea + 2.0 {
+                continue;
+            }
+            let higher = [(-6i32, 0i32), (6, 0), (0, -6), (0, 6), (-4, -4), (4, 4), (-4, 4), (4, -4)]
+                .iter()
+                .filter(|(di, dj)| f.data[(j as i32 + dj) as usize * n + (i as i32 + di) as usize] > f.data[c])
+                .count();
+            higher_sum += higher;
+            low += (higher < 3) as usize;
+            checked += 1;
+        }
+    }
+    assert!(checked > 20, "{checked} river samples looked at");
+    let mean = higher_sum as f32 / checked as f32;
+    assert!(mean > 4.5, "rivers run in valleys: {mean:.1} of 8 around them are higher");
+    assert!(low * 8 < checked, "{low} of {checked} river samples are not in a valley");
+    // Water held: wherever there is water, the samples next to it off the
+    // river's bed are either water too or ground at least as high (along
+    // the bed, water runs down).
+    let mut leaks = 0;
+    for j in 1..n - 1 {
+        for i in 1..n - 1 {
+            let c = j * n + i;
+            let w = r.water.data[c];
+            if w == NO_WATER {
+                continue;
+            }
+            for (di, dj) in [(-1i32, 0i32), (1, 0), (0, -1), (0, 1)] {
+                let o = (j as i32 + dj) as usize * n + (i as i32 + di) as usize;
+                if r.water.data[o] == NO_WATER && r.mask.data[o] < 0.99 && r.dug.data[o] < w - 0.6 && r.dug.data[o] > sea {
+                    leaks += 1;
+                    if leaks < 12 {
+                        eprintln!("leak at ({i}, {j}) water {w:.2} mask {:.2} → ({}, {}) dug {:.2} mask {:.2}", r.mask.data[c], i as i32 + di, j as i32 + dj, r.dug.data[o], r.mask.data[o]);
+                    }
+                }
+            }
+        }
+    }
+    let wet = r.water.data.iter().filter(|&&w| w != NO_WATER).count();
+    assert!(wet > 300, "{wet} samples of water");
+    assert!(leaks * 50 < wet, "{leaks} leaks for {wet} samples of water");
 }
 
 /// Water output: the hollows of the map become lakes at the level they
@@ -1022,12 +1305,13 @@ fn water_output_fills_the_hollows() {
     g.connect(lakes, 0, height, 0);
     g.connect(lakes, 2, water, 0);
     let ext = Extent::covering(crate::coords::BlockRect::new(0, 0, 256, 256), 256);
-    let source = GroundMap::new(world.dims[0].snapshot(), 1, 0.0, vec![[10, 20, 30], [40, 50, 60]]);
+    let source = GroundMap::new(world.dims[0].snapshot(), 1, 0.0, vec![[10, 20, 30], [40, 50, 60]], Vec::new());
     let built = g.build_on(Some(&source), &ext, &AtomicBool::new(false), &Progress::default()).unwrap();
     assert!(built.water.is_some());
     let mut h = History::default();
     h.begin("graph", 0);
-    apply(&mut h.edit(&mut world, 0), &ext, &built, 1, &[], 62);
+    let tiles = map_tiles(&world);
+    apply(&mut h.edit(&mut world, 0), &ext, &built, 1, &Painting::colors(&[]), &write(&tiles));
     h.commit();
     let tile = world.dims[0].ground().view(TilePos::new(0, 0)).unwrap();
     let at = |x: usize, z: usize| crate::coords::cell_index(x, z);
@@ -1052,7 +1336,7 @@ fn overlays_leave_the_ground_alone() {
     let mut world = bowl_world();
     let before = world.dims[0].snapshot();
     let ext = Extent::covering(crate::coords::BlockRect::new(0, 0, 256, 256), 256);
-    let base = sample_ground(&world.dims[0], &ext, 0.0, &[]).heights;
+    let base = sample_map(&world.dims[0], &ext, 0.0, &[], &[]).heights;
     // A trench six blocks deep along x = 20..30 with water two under its
     // banks, a mound five blocks high along x = 200..210, and the bowl
     // full to its rim.
@@ -1082,8 +1366,10 @@ fn overlays_leave_the_ground_alone() {
         let dim = edit.structure();
         (dim.add_level(Overlay::Dug.level_name(), Overlay::Dug.kind()), dim.add_level(Overlay::Raised.level_name(), Overlay::Raised.kind()))
     };
-    apply_overlay(&mut h.edit(&mut world, dug), Overlay::Dug, &ext, &outputs, 1, &[]);
-    apply_overlay(&mut h.edit(&mut world, raised), Overlay::Raised, &ext, &outputs, 1, &[]);
+    let own = Graph::default().own_levels();
+    let tiles = map_tiles(&world);
+    apply_overlay(&mut h.edit(&mut world, dug), Overlay::Dug, &ext, &outputs, 1, &Painting::colors(&[]), &own, &tiles);
+    apply_overlay(&mut h.edit(&mut world, raised), Overlay::Raised, &ext, &outputs, 1, &Painting::colors(&[]), &own, &tiles);
     h.commit();
     assert_eq!(world.dims[0].levels[dug].name, "Dug (graph 0)");
 

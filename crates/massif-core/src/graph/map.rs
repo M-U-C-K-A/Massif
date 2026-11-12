@@ -1,13 +1,18 @@
-//! The map as an input of a graph: its ground, read over an extent.
+//! The map as an input of a graph: its surface, read over an extent.
 //!
 //! A graph usually makes its relief from nothing; with a Map node it starts
 //! from the map as it is — one that was painted by hand, or imported from
 //! WorldPainter — and works on that: rivers dug where its water gathers,
-//! erosion over its slopes. Only the ground level is read, never the levels
-//! a graph made itself, so that converting twice does not dig twice.
+//! its slopes painted. What is read is the surface the map shows from the
+//! sky: the ground, with the rock its levels add (towers, floating islands,
+//! overhangs), the pits they carve and what was sculpted in 3D. The levels
+//! the graph writes itself are left out, so that converting twice does not
+//! dig twice.
 
 use super::{ColorField, Extent, Field};
+use crate::compose::{Span, TileStack};
 use crate::coords::{TILE_SIZE, TilePos, cell_index};
+use crate::level::Level;
 use crate::tile::NO_FLUID;
 use crate::world::Dimension;
 use rayon::prelude::*;
@@ -19,11 +24,11 @@ pub trait MapSource: Sync {
     /// it changed is out of date.
     fn revision(&self) -> u64;
 
-    /// The ground over `extent`.
+    /// The surface over `extent`.
     fn sample(&self, extent: &Extent) -> MapSample;
 }
 
-/// The ground of a map over an extent.
+/// The surface of a map over an extent.
 pub struct MapSample {
     /// Its heights, in blocks.
     pub heights: Field,
@@ -33,14 +38,36 @@ pub struct MapSample {
     pub colors: ColorField,
 }
 
-/// Read the ground of `dim` at every sample of `extent`: its height,
+/// Whether a graph reads level `level` of the map: a visible one that is
+/// not among those it writes (`own`: endings of their names, as
+/// [`super::Graph::own_levels`] gives them).
+pub fn reads_level(level: &Level, own: &[String]) -> bool {
+    level.visible && !own.iter().any(|o| level.name.ends_with(o.as_str()))
+}
+
+/// The surface of column `cell` of a stack: its height, whether water lies
+/// on it, and its terrain. `None` for a column with nothing in it.
+pub fn surface_of(stack: &TileStack, cell: usize, spans: &mut Vec<Span>, fluids: &mut Vec<(i32, i32)>) -> Option<(f32, bool, u16)> {
+    if stack.is_ground_only() {
+        let g = stack.ground();
+        let (height, fluid) = (g.top.get(cell), g.fluid.get(cell));
+        return Some((height, fluid != NO_FLUID && fluid as f32 > height, g.terrain.get(cell)));
+    }
+    stack.spans(cell, spans);
+    let top = *spans.last()?;
+    stack.fluids(cell, spans, fluids);
+    let wet = fluids.last().is_some_and(|&(f0, f1)| f0 == top.y1 && f1 > top.y1);
+    Some((top.top, wet, top.terrain.0))
+}
+
+/// Read the surface of `dim` at every sample of `extent`: its height,
 /// whether it is under water, and the colour of its terrain (`colors`, by
-/// terrain). Samples off the map get `fallback`, no water and grey. Each
-/// tile is decoded once, bands of tiles in parallel.
-pub fn sample_ground(dim: &Dimension, e: &Extent, fallback: f32, colors: &[[u8; 3]]) -> MapSample {
+/// terrain), the levels of `own` left out. Samples off the map get
+/// `fallback`, no water and grey. Each tile is composed once, bands of
+/// tiles in parallel.
+pub fn sample_map(dim: &Dimension, e: &Extent, fallback: f32, colors: &[[u8; 3]], own: &[String]) -> MapSample {
     let n = e.n;
     let spacing = e.size / n as f64;
-    let ground = dim.ground();
     let mut heights = vec![fallback; n * n];
     let mut water = vec![0f32; n * n];
     let mut paint = vec![[128u8; 3]; n * n];
@@ -68,6 +95,7 @@ pub fn sample_ground(dim: &Dimension, e: &Extent, fallback: f32, colors: &[[u8; 
     parts.into_par_iter().for_each(|(j0, h, w, c)| {
         let tz = tile_row(j0);
         let rows = h.len() / n;
+        let (mut spans, mut fluids) = (Vec::new(), Vec::new());
         let mut i = 0;
         while i < n {
             // The samples of this band over one tile.
@@ -77,18 +105,18 @@ pub fn sample_ground(dim: &Dimension, e: &Extent, fallback: f32, colors: &[[u8; 
             while end < n && ((e.x0 + (end as f64 + 0.5) * spacing).floor() as i32).div_euclid(TILE_SIZE) == tx {
                 end += 1;
             }
-            if let Some(tile) = ground.view(TilePos::new(tx, tz)) {
+            if let Some(stack) = TileStack::new_with(dim, TilePos::new(tx, tz), |_, level| reads_level(level, own)) {
                 for r in 0..rows {
                     let z = (e.z0 + ((j0 + r) as f64 + 0.5) * spacing).floor() as i32;
                     let lz = z.rem_euclid(TILE_SIZE) as usize;
                     for k in i..end {
                         let x = (e.x0 + (k as f64 + 0.5) * spacing).floor() as i32;
                         let cell = cell_index(x.rem_euclid(TILE_SIZE) as usize, lz);
-                        let height = tile.top.get(cell);
-                        let fluid = tile.fluid.get(cell);
-                        h[r * n + k] = height;
-                        w[r * n + k] = (fluid != NO_FLUID && fluid as f32 > height) as u8 as f32;
-                        c[r * n + k] = colors.get(tile.terrain.get(cell) as usize).copied().unwrap_or([128; 3]);
+                        if let Some((height, wet, terrain)) = surface_of(&stack, cell, &mut spans, &mut fluids) {
+                            h[r * n + k] = height;
+                            w[r * n + k] = wet as u8 as f32;
+                            c[r * n + k] = colors.get(terrain as usize).copied().unwrap_or([128; 3]);
+                        }
                     }
                 }
             }
@@ -108,18 +136,21 @@ pub struct GroundMap {
     revision: u64,
     fallback: f32,
     colors: Vec<[u8; 3]>,
+    own: Vec<String>,
 }
 
 impl GroundMap {
     /// `dim` is usually a snapshot ([`Dimension::snapshot`]); `fallback` is
     /// the height of what lies off the map, `colors` the colour of every
-    /// terrain of the world's registry.
-    pub fn new(dim: Dimension, revision: u64, fallback: f32, colors: Vec<[u8; 3]>) -> Self {
+    /// terrain of the world's registry, `own` the levels the graph writes
+    /// ([`super::Graph::own_levels`]).
+    pub fn new(dim: Dimension, revision: u64, fallback: f32, colors: Vec<[u8; 3]>, own: Vec<String>) -> Self {
         Self {
             dim,
             revision,
             fallback,
             colors,
+            own,
         }
     }
 }
@@ -130,7 +161,7 @@ impl MapSource for GroundMap {
     }
 
     fn sample(&self, extent: &Extent) -> MapSample {
-        sample_ground(&self.dim, extent, self.fallback, &self.colors)
+        sample_map(&self.dim, extent, self.fallback, &self.colors, &self.own)
     }
 }
 

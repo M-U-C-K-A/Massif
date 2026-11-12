@@ -30,13 +30,16 @@ over every CPU core.
   (height band, only on / except on, slope, curvature) and WorldPainter's
   mouse and keyboard bindings.
 - **A node-based terrain generator, in the manner of Gaea.** The Terrain
-  side of the app: more than fifty nodes — landforms (mountains, ranges,
-  volcanoes, craters and crater fields, dunes, canyons, mesas, islands),
-  primitives, adjustments, simulations (water and thermal erosion, snow,
-  rivers, lakes, sea), masks and colour (gradients from nature, automatic
-  colouring, tints), rock over the void (floating islands, overhanging
-  cliffs) and nine landscapes to start from (archipelago, karst towers,
-  floating mountains, river valley, desert canyon, volcanic island…) —
+  side of the app: about sixty nodes — landforms (tectonic plates you move
+  by hand, mountains, ranges, volcanoes, craters and crater fields, dunes,
+  canyons, mesas, islands), primitives, adjustments, simulations (water and
+  thermal erosion, snow, rivers traced from the sea to their sources, lakes,
+  sea), masks, climate (temperature, humidity with its rain shadows, the
+  game's biomes) and colour (gradients from nature, automatic colouring,
+  tints), rock over the void (floating islands, overhanging cliffs), ten
+  landscapes to start from (continents, archipelago, karst towers, floating
+  mountains, river valley, desert canyon, volcanic island…) and two
+  templates for the map you have (paint it, give it rivers) —
   rendered with a sun you turn, a sky that follows it, volumetric clouds,
   haze and a sea, saved as images up to 8K, then built at up to
   16,384 × 16,384 and converted to voxels: the colours become the closest
@@ -59,8 +62,9 @@ over every CPU core.
 - **Rivers.** Draw a river's course on the map — a few clicks — and it is
   dug with banks easing into the land and water that only runs down, as
   narrow as a brook or hundreds of blocks wide, branching from rivers and
-  flowing into them; or let the generator find where a map's water
-  gathers and fill those beds with water.
+  flowing into them; or let the generator trace them over a map: main
+  rivers and their tributaries in the bottoms of the valleys, growing
+  downstream, dug at the block, lakes in the hollows they cross.
 - **Maps the size of WorldPainter's.** 60,000 × 50,000 blocks: generated
   in a minute, 1.2 GB compressed, edited at once, shown whole in 3D (a
   column every few blocks when every block would not fit the GPU).
@@ -313,6 +317,9 @@ this map:
 | Volcanic island | A volcano rising from the sea, black beaches, green lower slopes |
 | Dune sea | Long dunes shaped by the wind, ripples over them |
 | Rolling hills | Meadows, streams and ponds |
+| Continents | Continents and oceans from tectonic plates, ranges where they collide, rivers to the sea, and climates from tundra to jungle written as the game's biomes |
+| Paint this map | The map as it is, painted from its relief: grass, worn ground on the steeper slopes, rock on the cliffs, gravel where water runs, sand on the shores, snow on the heights |
+| Rivers on this map | The map as it is, with rivers traced in its valleys and lakes in its hollows |
 
 Templates follow the world: their sea is the world's sea level, and their
 features grow with the map. Each also sets the sun, the clouds and the sea
@@ -326,14 +333,15 @@ setting computes only that node and what follows it.
 
 | Family | Nodes |
 |---|---|
-| Landforms | Mountain (alpine, rounded, eroded, spiky), Mountain range, Volcano, Crater, Crater field, Dunes, Canyon, Mesas, Island, Rocks, Floating islands (top, bottom, mask) |
+| Landforms | Tectonic plates (height, ranges, faults), Mountain (alpine, rounded, eroded, spiky), Mountain range, Volcano, Crater, Crater field, Dunes, Canyon, Mesas, Island, Rocks, Floating islands (top, bottom, mask) |
 | Primitives | Noise (rolling, ridged, billow), Cells (cones, ridges, or one height per cell), Radial and linear gradients, Shape, Constant |
 | Adjust | Levels, Normalize, Curve, Terraces, Stratify, Clamp, Blur, Sharpen, Warp, Transform, Swirl, Fold, Invert height, Overhang (the rims of cliffs over the void) |
 | Simulate | Erosion (heights, flow, deposits, wear), Thermal erosion (heights, talus), Snow, Rivers, Lakes, Sea (water and shore masks) |
 | Combine | Combine (add, subtract, multiply, max, min, average, lerp, screen, overlay, difference), Blend through a mask |
 | Masks | Select height, Select slope, Curvature (ridges or hollows), Facing, Occlusion, Flow, Invert |
+| Climate | Temperature, Humidity, Biomes (the colours of the climate) |
 | Colour | Auto colour (eight kinds of land), Gradient (twenty gradients from nature), Solid colour, Mix colours, Tint, Adjust colour |
-| Output | Height output, Terrain output, Colour output, Layer output (rock between two heights, over the ground) |
+| Output | Height output, Terrain output, Colour output, Water output, Layer output (rock between two heights, over the ground), Biome output |
 
 A height map cannot hold an overhang or an island in the air; the map
 can, its levels being spans of rock stacked in each column. **Layer
@@ -347,14 +355,52 @@ makes it ("Floating islands (graph 1)"), filled again by later
 conversions and removed when its output goes: columns of ground, air,
 then rock, exported to Minecraft as they are.
 
-**Working on a map that exists.** The **Map** node gives the map's ground
-as it is — its heights, where its water lies and the colours of its
-terrains — read again whenever the map changes. Wire it where a landform
-would go: into **Rivers**, which digs beds where the map's water gathers
-and gives the level of their water (running down with them, ending at the
-sea), into **Lakes**, which fills its hollows, into Erosion… and the
-**Water output** fills those beds and hollows when converted. The template
-**Rivers on this map** does exactly that.
+**Working on a map that exists.** The **Map** node gives the map as it
+shows from the sky — its ground with the rock its levels add (towers,
+floating islands, overhangs), the pits they carve and what was sculpted in
+3D — with where its water lies and the colours of its terrains, read again
+whenever the map changes (the levels the graph writes itself are left out).
+Wire it where a landform would go: into Rivers, Lakes, Erosion, masks of
+slope or height… The template **Paint this map** paints it from its relief
+without moving a block of it — the tops of its towers and the floors of its
+pits included — and **Rivers on this map** traces rivers in its valleys.
+
+**Rivers.** The Rivers node finds the way the water of the whole relief
+goes: flooded up from the sea and the map's edges, every place drains to
+its lowest way out, across hollows by their bottom, across flats as water
+would wander. Where enough of the land drains (**Fewer**), a river runs: a
+main stem from each mouth up to its farthest source, its tributaries off
+it. Each is a smooth line laid in the bottom of its valley on the relief
+itself, wider and deeper as water joins it (**Width** and **Depth** are the
+largest river's); its water only ever goes down, stays under its banks and
+meets the sea. Beds and banks (**Banks**: how far they slope down to the
+water) are dug at every sample of the build — a 16k build gets rivers drawn
+at the block, in under a second at 8k. The hollows a river runs through hold
+lakes up to where they spill (**Lakes**: which ones; through the others the
+river cuts a gorge). Its outputs: the dug relief, the beds as a mask (gravel
+in them), and the water's level for the **Water output**.
+
+**Climate.** **Temperature** is warm on one side of the map and cold on the
+other, colder with height; **Humidity** comes from the sea, rides the wind
+inland and rains out on the slopes facing it, leaving the land behind the
+mountains dry. Both are masks (temperature from −30 °C to +45 °C).
+**Biomes** gives the colours of the climate they make, and **Biome output**
+writes it to the map: every column gets the biome of the game for its
+climate (snowy plains, taiga, plains, forest, swamp, savanna, desert,
+badlands, jungle, beaches, stony or frozen peaks, the oceans by their
+warmth, rivers where the water runs) and, painted, its ground to suit
+(snow, grass, sand, red sand, rock, gravel).
+
+**Tectonic plates.** A landform from plates, continental (land) or oceanic
+(under the sea), each moving its own way: plates running into each other
+raise ranges (the highest between two continents, a coastal range over a
+trench where an ocean dives under a continent, an arc of islands between two
+oceans), plates pulling apart open rifts or ridges under the sea, plates
+sliding past each other leave faults; coasts wind, with capes, bays and
+islands. In its settings, the plates are on a map of their own: drag one to
+move it, the tip of its arrow to change how it moves, right-click it to make
+it a continent or an ocean or to remove it; add plates, or scatter them
+anew. The template **Continents** puts it all together.
 
 **Over the map, not into it.** With "over the map" checked (the default
 for a graph that starts from the map), converting leaves the map's ground
@@ -364,10 +410,18 @@ Change the graph, or paint the map, and convert again: nothing is baked
 in. Deleting the two levels gives the map back; unchecked, the graph
 replaces the ground.
 
-**Convert to voxels** builds the graph over the whole map at the chosen
-resolution (512 to 16,384 samples per side; it starts at one block per
-sample) on another thread, showing which node it is at, then writes it to
-the ground as one undoable step: the heights; the colour output turned
+**Size** says how much of the world the terrain covers: the map as it is
+(the default: it writes to the map's own tiles), or a square of 1k to 32k
+blocks around its middle — larger than the map, converting adds the tiles
+it lacks, so a graph started on a 1k map makes a 16k world when set to 16k.
+The viewport says the size it shows. Nodes measure in blocks, so a larger
+terrain holds more mountains of the same size, not larger ones (templates
+fit their features to it). Converting always works at one sample per block,
+up to 16,384 a side, a little coarser beyond.
+
+**Convert to voxels** builds the graph over all of its size on another
+thread, showing which node it is at, then writes it to the map as one
+undoable step: the heights; the colour output turned
 into real blocks of the game (from natural ground, rock, desert, snow and
 ice, or every block), each column taking the block whose colour is closest
 — by hue before lightness, so that a dark green is moss or grass rather

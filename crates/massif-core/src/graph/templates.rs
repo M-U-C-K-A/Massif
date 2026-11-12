@@ -17,12 +17,21 @@ pub enum Template {
     VolcanicIsland,
     DuneSea,
     RollingHills,
+    /// Continents from tectonic plates, with their climates.
+    Continents,
+    /// Not a landscape: the map as it is, painted from its relief.
+    PaintMap,
     /// Not a landscape: the map as it is, with rivers and lakes.
     MapRivers,
 }
 
 impl Template {
-    pub const ALL: [Template; 10] = [
+    /// Whether it starts from the map rather than making a landscape.
+    pub const fn reads_the_map(self) -> bool {
+        matches!(self, Template::PaintMap | Template::MapRivers)
+    }
+
+    pub const ALL: [Template; 12] = [
         Template::Alpine,
         Template::Archipelago,
         Template::KarstTowers,
@@ -32,6 +41,8 @@ impl Template {
         Template::VolcanicIsland,
         Template::DuneSea,
         Template::RollingHills,
+        Template::Continents,
+        Template::PaintMap,
         Template::MapRivers,
     ];
 
@@ -46,6 +57,8 @@ impl Template {
             Template::VolcanicIsland => "Volcanic island",
             Template::DuneSea => "Dune sea",
             Template::RollingHills => "Rolling hills",
+            Template::Continents => "Continents",
+            Template::PaintMap => "Paint this map",
             Template::MapRivers => "Rivers on this map",
         }
     }
@@ -61,6 +74,8 @@ impl Template {
             Template::VolcanicIsland => "A volcano rising from the sea, black beaches, green lower slopes",
             Template::DuneSea => "Long dunes shaped by the wind, crests and slip faces",
             Template::RollingHills => "Gentle countryside: meadows, streams and ponds",
+            Template::Continents => "Continents and oceans from tectonic plates, rivers, and climates from tundra to jungle, with their biomes",
+            Template::PaintMap => "The map as it is, painted from its relief: grass, worn slopes, rock cliffs, gravel gullies, beaches, snow",
             Template::MapRivers => "The map as it is, with rivers where its water gathers, lakes in its hollows",
         }
     }
@@ -84,6 +99,8 @@ impl Template {
             Template::VolcanicIsland => volcano(&mut b, sea, f),
             Template::DuneSea => dunes(&mut b, sea, f),
             Template::RollingHills => hills(&mut b, sea, f),
+            Template::Continents => continents(&mut b, sea, f, terrain("Gravel")),
+            Template::PaintMap => paint_map(&mut b, sea, &terrain),
             Template::MapRivers => map_rivers(&mut b, sea, f, terrain("Gravel")),
         }
         b.g
@@ -297,8 +314,10 @@ fn pillar_forest(b: &mut Builder, sea: f32, f: f32, top: f32) -> NodeId {
         NodeKind::Rivers {
             threshold: 0.55,
             depth: 5.0,
-            width: 6.0,
+            width: 16.0,
             sea,
+            banks: 1.2,
+            lakes: 0.5,
         },
         (rough, 0),
         10.0,
@@ -677,8 +696,10 @@ fn hills(b: &mut Builder, sea: f32, f: f32) {
         NodeKind::Rivers {
             threshold: 0.6,
             depth: 3.0,
-            width: 4.0,
+            width: 8.0,
             sea,
+            banks: 0.5,
+            lakes: 0.3,
         },
         (eroded, 0),
         3.0,
@@ -696,14 +717,190 @@ fn hills(b: &mut Builder, sea: f32, f: f32) {
 
 /// The map, with rivers dug where its water gathers and water in them and
 /// in its hollows: what to start from to work on a map that exists.
+/// Continents and oceans from tectonic plates — ranges where they collide —
+/// worn by rain, rivers to the sea, and the climate: warm in the south,
+/// rain from the west, biomes from tundra to jungle.
+fn continents(b: &mut Builder, sea: f32, f: f32, gravel: u16) {
+    let plates = b.add(
+        NodeKind::Tectonic {
+            plates: super::tectonics::scatter(9, 11),
+            relief: 165.0,
+            width: 240.0 * f,
+            roughness: 0.65,
+            sea,
+            seed: 11,
+        },
+        0.0,
+        0.0,
+    );
+    let hills = b.add(noise(NoiseStyle::Fbm, 380.0 * f, 6, 34.0, -17.0, 12), 0.0, 1.0);
+    let rough = b.combine(CombineOp::Add, 1.0, (plates, 0), (hills, 0), 1.0, 0.5);
+    let worn = b.erosion(rough, (1.0, 0.3, 4.0), 13, 2.0, 0.5);
+    let rivers = b.then(
+        NodeKind::Rivers {
+            threshold: 0.55,
+            depth: 4.0,
+            width: 12.0 * f.clamp(1.0, 2.5),
+            sea,
+            banks: 1.0,
+            lakes: 0.5,
+        },
+        (worn, 0),
+        3.0,
+        0.5,
+    );
+    let out = b.add(NodeKind::HeightOutput, 5.0, 0.0);
+    b.wire(rivers, 0, out, 0);
+    let out = b.add(NodeKind::WaterOutput, 5.0, 1.0);
+    b.wire(rivers, 2, out, 0);
+    let warmth = b.then(
+        NodeKind::Temperature {
+            warm: 30.0,
+            cold: -4.0,
+            toward: 180.0,
+            lapse: 11.0,
+            sea,
+            variation: 3.0,
+            seed: 14,
+        },
+        (rivers, 0),
+        4.0,
+        2.0,
+    );
+    let wet = b.then(
+        NodeKind::Humidity {
+            from: 270.0,
+            base: 0.22,
+            reach: 1600.0 * f,
+            shadow: 0.75,
+            sea,
+            variation: 0.1,
+            seed: 15,
+        },
+        (rivers, 0),
+        4.0,
+        3.0,
+    );
+    let colours = b.add(NodeKind::Biomes { sea }, 5.0, 2.0);
+    let biomes = b.add(NodeKind::BiomeOutput { sea, paint: true }, 5.0, 3.0);
+    for to in [colours, biomes] {
+        b.wire(rivers, 0, to, 0);
+        b.wire(warmth, 0, to, 1);
+        b.wire(wet, 0, to, 2);
+    }
+    let out = b.add(
+        NodeKind::ColorOutput {
+            blocks: false,
+            palette: BlockPalette::Natural,
+        },
+        6.0,
+        2.0,
+    );
+    b.wire(colours, 0, out, 0);
+    let out = b.add(NodeKind::TerrainOutput { terrain: gravel }, 5.0, 4.0);
+    b.wire(rivers, 1, out, 0);
+}
+
+/// The map as it is, its relief left alone, painted from it: grass, worn
+/// ground on the steeper slopes, rock on the cliffs, gravel where the water
+/// runs and in the beds of the map's water, sand on the shores, snow on
+/// the heights that hold it. Each paint its own terrain output, later ones
+/// over earlier ones: take one away, the map keeps its own paint there.
+fn paint_map(b: &mut Builder, sea: f32, terrain: &dyn Fn(&str) -> u16) {
+    let map = b.add(NodeKind::MapHeight, 0.0, 0.0);
+    let out = b.add(NodeKind::HeightOutput, 4.0, 0.0);
+    b.wire(map, 0, out, 0);
+    // The map's own colours under the paint, to see it by.
+    let shown = b.add(
+        NodeKind::ColorOutput {
+            blocks: false,
+            palette: BlockPalette::Natural,
+        },
+        4.0,
+        1.0,
+    );
+    b.wire(map, 2, shown, 0);
+    let mut row = 2.0;
+    let mut paint = |b: &mut Builder, mask: (NodeId, u8), name: &str| {
+        let out = b.add(NodeKind::TerrainOutput { terrain: terrain(name) }, 4.0, row);
+        b.wire(mask.0, mask.1, out, 0);
+        row += 1.0;
+    };
+    let everywhere = b.then(
+        NodeKind::SelectHeight {
+            min: -10_000.0,
+            max: 10_000.0,
+            falloff: 0.0,
+        },
+        (map, 0),
+        1.0,
+        2.0,
+    );
+    paint(b, (everywhere, 0), "Grass");
+    let worn = b.then(
+        NodeKind::SelectSlope {
+            min: 27.0,
+            max: 41.0,
+            falloff: 4.0,
+        },
+        (map, 0),
+        1.0,
+        3.0,
+    );
+    paint(b, (worn, 0), "Coarse Dirt");
+    let cliffs = b.then(
+        NodeKind::SelectSlope {
+            min: 41.0,
+            max: 90.0,
+            falloff: 5.0,
+        },
+        (map, 0),
+        1.0,
+        4.0,
+    );
+    paint(b, (cliffs, 0), "Rock");
+    let flow = b.then(NodeKind::Flow { spread: 0.35 }, (map, 0), 1.0, 5.0);
+    let gullies = b.then(
+        NodeKind::Levels {
+            in_min: 0.5,
+            in_max: 0.72,
+            out_min: 0.0,
+            out_max: 1.0,
+            gamma: 1.0,
+        },
+        (flow, 0),
+        2.0,
+        5.0,
+    );
+    paint(b, (gullies, 0), "Gravel");
+    // Under the map's water, gravel; on the shores of the sea, sand.
+    paint(b, (map, 1), "Gravel");
+    let shore = b.then(NodeKind::Sea { level: sea, shore: 2.5 }, (map, 0), 1.0, 7.0);
+    paint(b, (shore, 2), "Sand");
+    let snow = b.then(
+        NodeKind::Snow {
+            line: sea + 120.0,
+            slope: 38.0,
+            depth: 1.0,
+            softness: 14.0,
+        },
+        (map, 0),
+        1.0,
+        8.0,
+    );
+    paint(b, (snow, 1), "Snow");
+}
+
 fn map_rivers(b: &mut Builder, sea: f32, f: f32, gravel: u16) {
     let map = b.add(NodeKind::MapHeight, 0.0, 0.0);
     let rivers = b.then(
         NodeKind::Rivers {
             threshold: 0.5,
-            depth: 5.0,
-            width: 8.0 * f.clamp(1.0, 3.0),
+            depth: 4.0,
+            width: 10.0 * f.clamp(1.0, 2.5),
             sea,
+            banks: 1.0,
+            lakes: 0.5,
         },
         (map, 0),
         1.0,

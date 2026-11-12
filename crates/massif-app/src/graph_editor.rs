@@ -23,7 +23,8 @@ use crate::theme::{self, Icon, Palette, RichTextExt};
 use egui::{Color32, ColorImage, Key, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, Vec2, pos2, vec2};
 use massif_core::graph::{
     AutoPalette, Bend, BlockPalette, CellStyle, ColorField, CombineOp, EvalCache, Evaluation, Extent, Family, Field, GradientPreset, Graph, GraphError,
-    GroundMap, LayerOut, MapSource, Overlay, MountainStyle, NodeId, NodeKind, NoiseStyle, Outputs, PortType, Progress, SampledMap, ShapeKind, Template, TintMode, Value,
+    Climate, ClimateTable, GroundMap, LayerOut, MapSource, Overlay, MountainStyle, NodeId, NodeKind, NoiseStyle, Outputs, Painting, Plate, PortType, Progress, SampledMap,
+    ShapeKind, Template, TintMode, Value,
 };
 use massif_core::registry::{Registry, TerrainId};
 use massif_core::{BlockRect, LevelKind, TILE_SIZE};
@@ -33,8 +34,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Instant;
 
-/// Build resolutions offered, in samples per side.
-pub const RESOLUTIONS: [usize; 7] = [512, 1024, 2048, 4096, 8192, 12288, 16384];
+/// Sizes of terrain offered besides the map's own, in blocks a side.
+pub const SIZES: [u32; 6] = [1024, 2048, 4096, 8192, 16384, 32768];
+/// The most samples a side a conversion builds: a block each up to there,
+/// beyond it a little more than a block (finer would not fit in memory).
+pub const MAX_BUILD: usize = 16384;
 /// Preview resolutions offered.
 pub const PREVIEWS: [usize; 6] = [256, 384, 512, 768, 1024, 2048];
 /// Sizes of the images the Render panel saves.
@@ -61,6 +65,7 @@ pub fn family_color(f: Family) -> Color32 {
         Family::Erosion => Color32::from_rgb(245, 146, 64),
         Family::Combiner => Color32::from_rgb(168, 124, 255),
         Family::Selector => Color32::from_rgb(236, 192, 64),
+        Family::Climate => Color32::from_rgb(92, 196, 236),
         Family::Color => Color32::from_rgb(236, 96, 164),
         Family::Output => Color32::from_rgb(244, 84, 104),
     }
@@ -75,13 +80,61 @@ fn port_color(t: PortType) -> Color32 {
     }
 }
 
-/// The square of the world the graph covers: the whole map.
-fn map_extent(doc: &Document, n: usize) -> Extent {
-    let rect = match doc.dimension().bounds() {
+/// The blocks the map covers (a square around the origin while it is
+/// empty).
+fn map_rect(doc: &Document) -> BlockRect {
+    match doc.dimension().bounds() {
         Some((lo, hi)) => BlockRect::new(lo.x * TILE_SIZE, lo.z * TILE_SIZE, (hi.x + 1) * TILE_SIZE, (hi.z + 1) * TILE_SIZE),
         None => BlockRect::new(-512, -512, 512, 512),
-    };
-    Extent::covering(rect, n)
+    }
+}
+
+/// The square of the world the graph covers, `n` samples a side: the map
+/// (`size` `None`), or a square of `size` blocks around its middle, on the
+/// bounds of tiles.
+fn terrain_extent(doc: &Document, size: Option<u32>, n: usize) -> Extent {
+    let rect = map_rect(doc);
+    match size {
+        None => Extent::covering(rect, n),
+        Some(side) => {
+            let half = side as i32 / 2;
+            let corner = |mid: i32| (mid - half).div_euclid(TILE_SIZE) * TILE_SIZE;
+            Extent {
+                x0: corner((rect.x0 + rect.x1) / 2) as f64,
+                z0: corner((rect.z0 + rect.z1) / 2) as f64,
+                size: side as f64,
+                n,
+            }
+        }
+    }
+}
+
+/// Samples a side to build a terrain `side` blocks wide at: one a block,
+/// up to [`MAX_BUILD`].
+fn build_samples(side: f64) -> usize {
+    (side.ceil() as usize).clamp(64, MAX_BUILD)
+}
+
+/// The tiles converting a terrain of `size` over `extent` writes: the
+/// map's own, or every tile of the square (made if missing).
+fn terrain_tiles(doc: &Document, size: Option<u32>, extent: &Extent) -> Vec<massif_core::TilePos> {
+    match size {
+        None => doc.dimension().ground().positions().collect(),
+        Some(_) => {
+            let (x0, z0) = (extent.x0.floor() as i32, extent.z0.floor() as i32);
+            let side = extent.size.ceil() as i32;
+            BlockRect::new(x0, z0, x0 + side, z0 + side).tiles().collect()
+        }
+    }
+}
+
+/// A size of terrain, as the toolbar says it.
+fn size_label(side: u32) -> String {
+    if side.is_multiple_of(1024) {
+        format!("{}k × {}k", side / 1024, side / 1024)
+    } else {
+        format!("{side} × {side}")
+    }
 }
 
 // -------------------------------------------------------------- previews --
@@ -168,7 +221,7 @@ fn source_of(graph: &Graph, pick: impl Fn(&NodeKind) -> bool) -> Option<(NodeId,
 
 /// The relief and colours the viewport shows for `view` (a node's output),
 /// or for the graph's outputs.
-fn pick_view(graph: &Graph, eval: &Evaluation, view: Option<(NodeId, u8)>) -> Option<(Arc<Field>, Paint, (NodeId, u8))> {
+fn pick_view(graph: &Graph, eval: &Evaluation, view: Option<(NodeId, u8)>, terrains: &[[u8; 3]]) -> Option<(Arc<Field>, Paint, (NodeId, u8))> {
     let final_height = source_of(graph, |k| matches!(k, NodeKind::HeightOutput));
     let final_color = source_of(graph, |k| matches!(k, NodeKind::ColorOutput { .. }));
     let colors_of = |src: Option<(NodeId, u8)>| src.and_then(|s| eval.values.get(&s)).map(|v| v.as_color());
@@ -183,9 +236,23 @@ fn pick_view(graph: &Graph, eval: &Evaluation, view: Option<(NodeId, u8)>) -> Op
     match graph.output_type(id, out) {
         PortType::Height => {
             let heights = value.as_field();
-            let paint = match colors_of(final_color) {
-                Some(c) if Some((id, out)) == final_height => Paint::Color(c),
-                _ => Paint::Clay,
+            // The graph's output: painted as converting would paint it.
+            let paint = if Some((id, out)) == final_height {
+                let painted: Vec<(TerrainId, Arc<Field>)> = graph
+                    .nodes
+                    .iter()
+                    .filter_map(|n| match n.kind {
+                        NodeKind::TerrainOutput { terrain } => Some((TerrainId(terrain), graph.input_of(n.id, 0).and_then(|(s, o)| eval.field(s, o).cloned())?)),
+                        _ => None,
+                    })
+                    .collect();
+                let base = colors_of(final_color);
+                match massif_core::graph::painted_colors(&heights, base.as_deref(), &painted, terrains) {
+                    Some(c) => Paint::Color(Arc::new(c)),
+                    None => Paint::Clay,
+                }
+            } else {
+                Paint::Clay
             };
             Some((heights, paint, (id, out)))
         }
@@ -318,6 +385,8 @@ struct Request {
     extent: Extent,
     view: Option<(NodeId, u8)>,
     exaggeration: f32,
+    /// The colour of every terrain of the world, by its number.
+    terrains: Arc<Vec<[u8; 3]>>,
     cancel: Arc<AtomicBool>,
 }
 
@@ -393,7 +462,7 @@ impl Worker {
                     let relief_of = if layer_node.is_some() || layer_output.is_some() { None } else { req.view };
                     // Rivers and lakes show with the graph's output.
                     let water = if relief_of.is_none() { water_shown(&req.graph, &eval) } else { None };
-                    let view = pick_view(&req.graph, &eval, relief_of).map(|(h, paint, shown)| {
+                    let view = pick_view(&req.graph, &eval, relief_of, &req.terrains).map(|(h, paint, shown)| {
                         let data = view_data(&h, &paint, &req.extent, req.exaggeration, &layers, water.as_deref());
                         (Arc::new(data), layer_node.or(layer_output).unwrap_or(shown))
                     });
@@ -438,6 +507,12 @@ struct Building {
 struct Built {
     extent: Extent,
     outputs: Outputs,
+    /// The tiles it covers.
+    tiles: Vec<massif_core::TilePos>,
+    /// Whether the graph started from the map.
+    reads_map: bool,
+    /// The levels it writes ([`Graph::own_levels`]).
+    own: Vec<String>,
 }
 
 /// The levels an overlay conversion writes to (what the graph digs, what it
@@ -552,7 +627,14 @@ fn template_render(t: Template, sea: f32, exaggeration: f32) -> RenderSettings {
             sun_elevation: 45.0,
             ..clouds(0.45, 130.0, 70.0, 260.0)
         },
-        Template::MapRivers => RenderSettings { sea: true, ..d },
+        Template::Continents => RenderSettings {
+            sea: true,
+            sun_azimuth: 160.0,
+            sun_elevation: 34.0,
+            haze: 0.45,
+            ..clouds(0.34, 150.0, 60.0, 320.0)
+        },
+        Template::PaintMap | Template::MapRivers => RenderSettings { sea: true, ..d },
     }
 }
 
@@ -563,7 +645,8 @@ fn template_picture(t: Template, reg: &Registry, sea: f32, extent: &Extent, map:
     let source = map.map(|m| m as &dyn MapSource);
     let out = graph.build_on(source, extent, &AtomicBool::new(false), &Progress::default()).ok()?;
     let h = out.heights?;
-    let colors = out.colors.map(|(c, _)| c);
+    let terrain_colors: Vec<[u8; 3]> = reg.terrains.iter().map(|t| t.color).collect();
+    let colors = massif_core::graph::painted_colors(&h, out.shown.as_deref(), &out.terrains, &terrain_colors);
     let n = h.n;
     let spacing = extent.spacing();
     let light = {
@@ -671,7 +754,8 @@ pub struct GraphEditor {
     worker: Option<Worker>,
     /// What the viewport shows, as the worker last said.
     shown: Option<(NodeId, u8)>,
-    pub resolution: usize,
+    /// Samples a side to convert at instead of one a block (for tests).
+    pub draft: Option<usize>,
     pub preview: usize,
     build: Option<Building>,
     error: Option<String>,
@@ -725,7 +809,7 @@ impl Default for GraphEditor {
             received: 0,
             worker: None,
             shown: None,
-            resolution: 1024,
+            draft: None,
             preview: 384,
             build: None,
             error: None,
@@ -805,7 +889,7 @@ impl GraphEditor {
         match &self.map {
             Some(m) if !changed && same_extent(m) => m.clone(),
             _ => {
-                let read = massif_core::graph::sample_ground(doc.dimension(), extent, doc.world.meta.sea_level as f32 - 8.0, &terrain_colors(doc));
+                let read = massif_core::graph::sample_map(doc.dimension(), extent, doc.world.meta.sea_level as f32 - 8.0, &terrain_colors(doc), &graph_of(doc).own_levels());
                 // What the nodes after it remember depends on what was read.
                 let mut hash = std::collections::hash_map::DefaultHasher::new();
                 for v in read.heights.data.iter().chain(&read.water.data) {
@@ -867,9 +951,6 @@ impl GraphEditor {
             self.revision += 1;
             self.fit = true;
             self.view.camera = Default::default();
-            // Convert at a block per sample, or as close as offered.
-            let side = map_extent(doc, 2).size;
-            self.resolution = RESOLUTIONS.iter().copied().find(|&r| r as f64 >= side).unwrap_or(RESOLUTIONS[RESOLUTIONS.len() - 1]);
         }
         let worker = self.worker.get_or_insert_with(|| Worker::new(ctx.clone()));
         while let Ok(p) = worker.rx.try_recv() {
@@ -898,7 +979,7 @@ impl GraphEditor {
         if self.asked != self.revision {
             let graph = graph_of(doc);
             self.textures.retain(|k, _| graph.node(k.0).is_some());
-            let extent = map_extent(doc, self.preview);
+            let extent = terrain_extent(doc, graph.size, self.preview);
             let map = graph.reads_the_map().then(|| self.read_map(doc, &extent));
             let req = Request {
                 revision: self.revision,
@@ -907,6 +988,7 @@ impl GraphEditor {
                 map,
                 extent,
                 exaggeration: self.view.render.exaggeration,
+                terrains: Arc::new(terrain_colors(doc)),
                 cancel: Arc::new(AtomicBool::new(false)),
             };
             if let Some(w) = &mut self.worker {
@@ -952,6 +1034,8 @@ impl GraphEditor {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(theme::glyph(Icon::Eye).to_string()).color(Color32::WHITE));
                     ui.label(RichText::new(label).color(Color32::WHITE).medium());
+                    let side = terrain_extent(doc, graph.size, 2).size;
+                    ui.label(RichText::new(format!("{side:.0} × {side:.0} blocks")).size(11.0).color(Color32::from_white_alpha(190)));
                     let hint = if self.pinned.is_some() { "V: back to the output" } else { "Select a node and press V to view it" };
                     ui.label(RichText::new(hint).size(11.0).color(Color32::from_white_alpha(150)));
                     if self.received != self.revision || self.build.is_some() {
@@ -1128,26 +1212,72 @@ impl GraphEditor {
                         })
                         .collect();
                     doc.history.begin("Terrain graph", doc.dim);
-                    // Over the map (its ground left as it is) or into it.
+                    // Over the map (left as it is) or into its ground.
                     let over = self.building_over && built.outputs.heights.is_some();
                     let overlay = overlay_levels(doc, over);
-                    let levels = layer_levels(doc, &built.outputs.layers);
+                    let levels = layer_levels(doc, &built.outputs.layers, built.reads_map);
                     let overlay = overlay.map(|_| overlay_levels(doc, true).expect("made above"));
                     let seed = doc.world.meta.seed as u64;
                     let sea = doc.world.meta.sea_level;
+                    let own = &built.own;
+                    let tiles = &built.tiles;
+                    let grass = doc.world.registry.terrain_by_name("Grass").unwrap_or(TerrainId::ROCK);
+                    let climate = ClimateTable::new(&doc.world.registry);
+                    let paint = Painting {
+                        palette: &palette,
+                        climate: Some(&climate),
+                    };
+                    // The tiles the terrain adds to the map take it as it is.
+                    let missing: Vec<massif_core::TilePos> = tiles.iter().copied().filter(|p| !doc.dimension().ground().contains(*p)).collect();
+                    let write = |tiles, map| massif_core::graph::GroundWrite {
+                        tiles,
+                        create: true,
+                        map,
+                        sea,
+                        blank: grass,
+                    };
                     match overlay {
                         Some((dug, raised)) => {
+                            if !missing.is_empty() {
+                                let edit = &mut doc.history.edit(&mut doc.world, 0);
+                                massif_core::graph::apply(edit, &built.extent, &built.outputs, seed, &paint, &write(&missing, None));
+                            }
                             for (index, side) in [(dug, Overlay::Dug), (raised, Overlay::Raised)] {
                                 let edit = &mut doc.history.edit(&mut doc.world, index);
-                                massif_core::graph::apply_overlay(edit, side, &built.extent, &built.outputs, seed, &palette);
+                                massif_core::graph::apply_overlay(edit, side, &built.extent, &built.outputs, seed, &paint, own, tiles);
                             }
                         }
-                        None => massif_core::graph::apply(&mut doc.history.edit(&mut doc.world, 0), &built.extent, &built.outputs, seed, &palette, sea),
+                        None => {
+                            let map = built.reads_map.then_some(&own[..]);
+                            let edit = &mut doc.history.edit(&mut doc.world, 0);
+                            massif_core::graph::apply(edit, &built.extent, &built.outputs, seed, &paint, &write(tiles, map));
+                        }
                     }
-                    let grass = doc.world.registry.terrain_by_name("Grass").unwrap_or(TerrainId::ROCK);
                     for ((layer, index), layer_palette) in built.outputs.layers.iter().zip(&levels).zip(&layer_palettes) {
                         let edit = &mut doc.history.edit(&mut doc.world, *index);
-                        massif_core::graph::apply_layer(edit, &built.extent, layer, seed, layer_palette, grass);
+                        massif_core::graph::apply_layer(edit, &built.extent, layer, seed, layer_palette, grass, tiles);
+                    }
+                    // The terrains of the map's own surfaces — its ground,
+                    // the tops of its rock, the floors of its pits — where
+                    // the graph left them where they were.
+                    if overlay.is_some() || built.reads_map {
+                        let painted: Vec<usize> = doc
+                            .dimension()
+                            .levels
+                            .iter()
+                            .enumerate()
+                            .filter(|(k, l)| *k == 0 || massif_core::graph::reads_level(l, own))
+                            .map(|(k, _)| k)
+                            .collect();
+                        for index in painted {
+                            let edit = &mut doc.history.edit(&mut doc.world, index);
+                            massif_core::graph::paint_surface(edit, &built.extent, &built.outputs, seed, &paint, tiles);
+                        }
+                    }
+                    // The biomes of its climate.
+                    if built.outputs.biomes.is_some() {
+                        let edit = &mut doc.history.edit(&mut doc.world, 0);
+                        massif_core::graph::apply_biomes(edit, &built.extent, &built.outputs, &climate, tiles);
                     }
                     doc.commit();
                     doc.clamp_active_level();
@@ -1195,7 +1325,10 @@ impl GraphEditor {
                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
             } else if ui
                 .add(theme::primary_button(ui, format!("{}  Convert to voxels", theme::glyph(Icon::Boxes))))
-                .on_hover_text("Build the graph over the whole map at the chosen resolution, and write it to the ground: heights, terrains, and the colours as the closest real blocks (undoable)")
+                .on_hover_text(
+                    "Build the terrain over all of its size, a sample for every block, and write it to the map: heights, terrains, \
+                     water, and the colours as the closest real blocks (undoable). A terrain larger than the map adds the tiles it lacks.",
+                )
                 .clicked()
             {
                 self.building_over = self.over.unwrap_or_else(|| graph.reads_the_map());
@@ -1203,16 +1336,25 @@ impl GraphEditor {
                 let cancel = Arc::new(AtomicBool::new(false));
                 let progress = Arc::new(Progress::default());
                 let (flag, told) = (cancel.clone(), progress.clone());
-                let extent = map_extent(doc, self.resolution);
+                let side = terrain_extent(doc, graph.size, 2).size;
+                let extent = terrain_extent(doc, graph.size, self.draft.unwrap_or_else(|| build_samples(side)));
+                let tiles = terrain_tiles(doc, graph.size, &extent);
                 let g = graph.clone();
                 let ctx = ui.ctx().clone();
                 // The map, as it is now, for a graph that starts from it.
                 let fallback = doc.world.meta.sea_level as f32 - 8.0;
                 let colors = terrain_colors(doc);
-                let map = g.reads_the_map().then(|| GroundMap::new(doc.world.dims[doc.dim].snapshot(), doc.revision, fallback, colors));
+                let map = g.reads_the_map().then(|| GroundMap::new(doc.world.dims[doc.dim].snapshot(), doc.revision, fallback, colors, g.own_levels()));
                 std::thread::spawn(move || {
                     let source = map.as_ref().map(|m| m as &dyn MapSource);
-                    let result = g.build_on(source, &extent, &flag, &told).map(|outputs| Built { extent, outputs });
+                    let (reads_map, own) = (g.reads_the_map(), g.own_levels());
+                    let result = g.build_on(source, &extent, &flag, &told).map(|outputs| Built {
+                        extent,
+                        outputs,
+                        reads_map,
+                        own,
+                        tiles,
+                    });
                     let _ = tx.send(result);
                     ctx.request_repaint();
                 });
@@ -1221,7 +1363,7 @@ impl GraphEditor {
                     cancel,
                     progress,
                     started: Instant::now(),
-                    n: self.resolution,
+                    n: extent.n,
                 });
             }
             if self.build.is_none() {
@@ -1240,20 +1382,43 @@ impl GraphEditor {
                     self.over = Some(over);
                 }
             }
-            ui.label(RichText::new("at").color(pal.weak));
-            egui::ComboBox::from_id_salt("graph resolution")
-                .selected_text(format!("{0} × {0}", self.resolution))
-                .width(112.0)
+            ui.separator();
+            // How much of the world the terrain covers.
+            ui.label(RichText::new("Size").color(pal.weak));
+            let map = map_rect(doc);
+            let map_label = format!("The map · {} × {}", map.x1 - map.x0, map.z1 - map.z0);
+            egui::ComboBox::from_id_salt("graph size")
+                .selected_text(match graph.size {
+                    None => map_label.clone(),
+                    Some(side) => size_label(side),
+                })
+                .width(150.0)
                 .show_ui(ui, |ui| {
-                    for r in RESOLUTIONS {
-                        let r_ = ui.selectable_value(&mut self.resolution, r, format!("{r} × {r}"));
-                        if r >= 8192 {
-                            r_.on_hover_text("A large build: it takes a while and several GB of memory");
+                    ui.selectable_value(&mut graph.size, None, map_label.clone())
+                        .on_hover_text("The terrain covers the map as it is, and writes only to its tiles");
+                    let widest = (map.x1 - map.x0).max(map.z1 - map.z0) as u32;
+                    for side in SIZES {
+                        let choice = ui.selectable_value(&mut graph.size, Some(side), format!("{} blocks", size_label(side)));
+                        if side > widest {
+                            choice.on_hover_text("Larger than the map: converting adds the tiles it lacks, and the world becomes this size");
+                        } else if side < widest {
+                            choice.on_hover_text("Smaller than the map: the terrain covers a square in its middle, the rest is left as it is");
                         }
                     }
-                });
-            let blocks_per = map_extent(doc, self.resolution).spacing();
-            ui.label(RichText::new(format!("{blocks_per:.1} blocks per sample")).size(11.5).color(pal.weak));
+                })
+                .response
+                .on_hover_text(
+                    "The square of the world the terrain covers, in blocks. Nodes measure in blocks too: a larger terrain holds \
+                     more mountains of the same size, not larger ones (templates fit theirs to it).",
+                );
+            let side = terrain_extent(doc, graph.size, 2).size;
+            let spacing = side / build_samples(side) as f64;
+            let detail = if spacing <= 1.001 { "every block".to_owned() } else { format!("a sample every {spacing:.1} blocks") };
+            ui.label(RichText::new(detail).size(11.5).color(pal.weak)).on_hover_text(if spacing <= 1.001 {
+                "Converted at full detail: one sample of the graph for every column of blocks"
+            } else {
+                "Beyond 16k blocks, the graph is built a little coarser than a block and smoothed in between: finer would not fit in memory"
+            });
             ui.separator();
             ui.label(RichText::new("Preview").color(pal.weak));
             let before_preview = self.preview;
@@ -1383,8 +1548,10 @@ impl GraphEditor {
     /// Replace `graph` by a template's, and set the view to suit it.
     fn start_from(&mut self, doc: &Document, t: Template, graph: &mut Graph) {
         let sea = doc.world.meta.sea_level as f32;
-        let side = map_extent(doc, 2).size as f32;
-        let new = t.graph(&doc.world.registry, sea, side);
+        // The terrain keeps its size.
+        let side = terrain_extent(doc, graph.size, 2).size as f32;
+        let mut new = t.graph(&doc.world.registry, sea, side);
+        new.size = graph.size;
         self.replaced = Some(std::mem::replace(graph, new));
         self.view.render = template_render(t, sea, self.view.render.exaggeration);
         self.view.camera = Default::default();
@@ -1402,7 +1569,7 @@ impl GraphEditor {
     /// that are ready.
     fn make_pictures(&mut self, ctx: &egui::Context, doc: &Document) {
         let sea = doc.world.meta.sea_level;
-        let extent = map_extent(doc, 112);
+        let extent = terrain_extent(doc, graph_of(doc).size, 112);
         let key = (doc.generation, sea, extent.size.to_bits());
         let p = &mut self.pictures;
         if p.made_for != Some(key) {
@@ -1414,7 +1581,7 @@ impl GraphEditor {
             // The map, for the templates that work on it (not read on very
             // large maps, where even a small picture touches every tile).
             let map = (doc.dimension().ground().len() <= 4096).then(|| {
-                let read = massif_core::graph::sample_ground(doc.dimension(), &extent, sea as f32 - 8.0, &terrain_colors(doc));
+                let read = massif_core::graph::sample_map(doc.dimension(), &extent, sea as f32 - 8.0, &terrain_colors(doc), &Graph::default().own_levels());
                 SampledMap {
                     extent,
                     heights: Arc::new(read.heights),
@@ -1991,8 +2158,9 @@ impl GraphEditor {
 /// those the colours come close to, made terrains of the world.
 /// The Solid levels the layers of a conversion go to, in their order: those
 /// earlier conversions made, new ones for the others. Levels of layers the
-/// graph no longer has are removed. Called at the start of the history step.
-fn layer_levels(doc: &mut Document, layers: &[LayerOut]) -> Vec<usize> {
+/// graph no longer has are removed — unless it starts from the map, which
+/// they are part of. Called at the start of the history step.
+fn layer_levels(doc: &mut Document, layers: &[LayerOut], reads_map: bool) -> Vec<usize> {
     let find = |doc: &Document, slot: u32| {
         doc.dimension()
             .levels
@@ -2005,7 +2173,7 @@ fn layer_levels(doc: &mut Document, layers: &[LayerOut]) -> Vec<usize> {
         .levels
         .iter()
         .enumerate()
-        .filter(|(_, l)| l.kind == LevelKind::Solid && graph_level(&l.name) && !layers.iter().any(|o| LayerOut::is_level_of(&l.name, o.slot)))
+        .filter(|(_, l)| !reads_map && l.kind == LevelKind::Solid && graph_level(&l.name) && !layers.iter().any(|o| LayerOut::is_level_of(&l.name, o.slot)))
         .map(|(k, _)| k)
         .collect();
     let missing: Vec<&LayerOut> = layers.iter().filter(|l| find(doc, l.slot).is_none()).collect();
@@ -2049,6 +2217,149 @@ fn block_palette(doc: &mut Document, blocks: &BlockLibrary, set: BlockPalette, c
             .map(|(k, t)| (TerrainId(k as u16), t.color))
             .collect(),
     }
+}
+
+// ------------------------------------------------------------- climate --
+
+/// The climates, each with its colour; with `written`, the biome and the
+/// terrain converting writes for it.
+fn climate_legend(ui: &mut Ui, written: bool) {
+    let pal = Palette::of(ui);
+    egui::Grid::new(("climates", written)).num_columns(2).spacing(vec2(8.0, 2.0)).show(ui, |ui| {
+        for c in Climate::ALL {
+            let [r, g, b] = c.color();
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
+                ui.painter().rect_filled(rect, 2, Color32::from_rgb(r, g, b));
+                ui.label(RichText::new(c.label()).size(11.0));
+            });
+            if written {
+                let biome = c.biome().trim_start_matches("minecraft:");
+                ui.label(RichText::new(format!("{biome} · {}", c.terrain())).size(10.5).color(pal.weak));
+            } else {
+                ui.label("");
+            }
+            ui.end_row();
+        }
+    });
+}
+
+/// The plates of a Tectonic node, to move: drag a plate's centre to move
+/// it, the tip of its arrow to change how it moves; right-click it to make
+/// it a continent or an ocean, or to remove it.
+fn plate_editor(ui: &mut Ui, plates: &mut Vec<Plate>, seed: &mut u32) -> bool {
+    let pal = Palette::of(ui);
+    let side = ui.available_width().clamp(160.0, 280.0);
+    let (rect, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
+    let painter = ui.painter_at(rect);
+    let land = Color32::from_rgb(132, 150, 96);
+    let sea = Color32::from_rgb(48, 92, 150);
+    // Who owns each spot, and how near a boundary.
+    let px = 80;
+    let mut pixels = Vec::with_capacity(px * px);
+    for j in 0..px {
+        for i in 0..px {
+            let (x, z) = ((i as f32 + 0.5) / px as f32, (j as f32 + 0.5) / px as f32);
+            let (mut a, mut da, mut db) = (0, f32::MAX, f32::MAX);
+            for (k, p) in plates.iter().enumerate() {
+                let d = (p.x - x).powi(2) + (p.z - z).powi(2);
+                if d < da {
+                    db = da;
+                    (a, da) = (k, d);
+                } else if d < db {
+                    db = d;
+                }
+            }
+            let base = plates.get(a).map_or(sea, |p| if p.continental { land } else { sea });
+            let edge = db.sqrt() - da.sqrt() < 0.012;
+            pixels.push(if edge { base.gamma_multiply(0.55) } else { base });
+        }
+    }
+    let image = ColorImage {
+        size: [px, px],
+        pixels,
+        source_size: vec2(px as f32, px as f32),
+    };
+    // Kept from frame to frame: a texture dropped is gone before it is drawn.
+    let kept = egui::Id::unique("tectonic plates picture");
+    let texture = match ui.ctx().data(|d| d.get_temp::<egui::TextureHandle>(kept)) {
+        Some(mut t) => {
+            t.set(image, TextureOptions::NEAREST);
+            t
+        }
+        None => {
+            let t = ui.ctx().load_texture("tectonic plates", image, TextureOptions::NEAREST);
+            ui.ctx().data_mut(|d| d.insert_temp(kept, t.clone()));
+            t
+        }
+    };
+    painter.image(texture.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    painter.rect_stroke(rect, 3, Stroke::new(1.0, pal.border), StrokeKind::Inside);
+    let reach = side * 0.12;
+    let mut changed = false;
+    let mut removed = None;
+    for (k, p) in plates.iter_mut().enumerate() {
+        let centre = rect.min + vec2(p.x, p.z) * side;
+        let tip = centre + vec2(p.dx, p.dz) * reach;
+        painter.arrow(centre, tip - centre, Stroke::new(2.0, Color32::WHITE));
+        let id = ui.scope_id().with(("plate", k));
+        let moved = ui.interact(Rect::from_center_size(centre, vec2(16.0, 16.0)), id, Sense::click_and_drag());
+        if moved.dragged()
+            && let Some(at) = moved.interact_pointer_pos()
+        {
+            let at = (at - rect.min) / side;
+            (p.x, p.z) = (at.x.clamp(0.0, 1.0), at.y.clamp(0.0, 1.0));
+            changed = true;
+        }
+        moved.context_menu(|ui| {
+            if ui.button(if p.continental { "Make it an ocean" } else { "Make it a continent" }).clicked() {
+                p.continental = !p.continental;
+                changed = true;
+                ui.close();
+            }
+            if ui.button("Remove the plate").clicked() {
+                removed = Some(k);
+                ui.close();
+            }
+        });
+        let aimed = ui.interact(Rect::from_center_size(tip, vec2(14.0, 14.0)), id.with("tip"), Sense::drag());
+        if aimed.dragged()
+            && let Some(at) = aimed.interact_pointer_pos()
+        {
+            let d = (at - centre) / reach;
+            (p.dx, p.dz) = (d.x.clamp(-1.6, 1.6), d.y.clamp(-1.6, 1.6));
+            changed = true;
+        }
+        let fill = if p.continental { land } else { sea };
+        painter.circle(centre, if moved.hovered() || moved.dragged() { 7.5 } else { 6.0 }, fill, Stroke::new(2.0, Color32::WHITE));
+        painter.circle_filled(tip, if aimed.hovered() || aimed.dragged() { 4.5 } else { 3.0 }, Color32::WHITE);
+        moved.on_hover_text("Drag to move the plate; right-click to make it a continent or an ocean");
+        aimed.on_hover_text("Drag to change how the plate moves: plates running into each other raise mountains");
+    }
+    if let Some(k) = removed {
+        plates.remove(k);
+        changed = true;
+    }
+    ui.horizontal(|ui| {
+        if ui.small_button(theme::with_icon(Icon::Plus, "Add a plate")).clicked() {
+            plates.push(Plate {
+                x: 0.5,
+                z: 0.5,
+                dx: 0.6,
+                dz: 0.0,
+                continental: true,
+            });
+            changed = true;
+        }
+        if ui.small_button(theme::with_icon(Icon::Dices, "Scatter")).on_hover_text("New plates, as many, scattered anew").clicked() {
+            *seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345) % 100_000;
+            *plates = massif_core::graph::scatter_plates(plates.len().max(2), *seed);
+            changed = true;
+        }
+        let continents = plates.iter().filter(|p| p.continental).count();
+        ui.label(RichText::new(format!("{} plates, {continents} continents", plates.len())).size(11.0).color(pal.weak));
+    });
+    changed
 }
 
 // ------------------------------------------------------------- settings --
@@ -2523,6 +2834,85 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
                 .color(pal.weak),
             );
         }
+        NodeKind::Temperature {
+            warm,
+            cold,
+            toward,
+            lapse,
+            sea,
+            variation,
+            seed: s,
+        } => {
+            row(ui, "Warm side", |ui| ui.add(egui::Slider::new(warm, -30.0..=45.0).suffix(" °C").max_decimals(0)));
+            row(ui, "Cold side", |ui| ui.add(egui::Slider::new(cold, -30.0..=45.0).suffix(" °C").max_decimals(0)));
+            angle(ui, "Warm toward", toward);
+            row(ui, "Height cools", |ui| ui.add(egui::Slider::new(lapse, 0.0..=30.0).suffix(" °C / 100 blocks").max_decimals(1)));
+            height(ui, "Sea level", sea);
+            row(ui, "Variation", |ui| ui.add(egui::Slider::new(variation, 0.0..=15.0).suffix(" °C").max_decimals(1)));
+            seed(ui, s);
+            ui.label(
+                RichText::new(
+                    "Warm toward: the side of the map that is warm (0° north, 90° east, 180° south). A mask from −30 °C (black) \
+                     to +45 °C (white): wire it to Biomes and to a Biome output, or select a band of it with Levels.",
+                )
+                .size(11.0)
+                .color(pal.weak),
+            );
+        }
+        NodeKind::Humidity {
+            from,
+            base,
+            reach,
+            shadow,
+            sea,
+            variation,
+            seed: s,
+        } => {
+            angle(ui, "Wind from", from);
+            fraction(ui, "Inland air", base);
+            blocks(ui, "Reach", reach, 6000.0);
+            fraction(ui, "Rain shadow", shadow);
+            height(ui, "Sea level", sea);
+            fraction(ui, "Variation", variation);
+            seed(ui, s);
+            ui.label(
+                RichText::new(
+                    "The sea's moisture rides the wind inland (Reach: how far), and rains out on the slopes facing it: the land \
+                     behind the mountains stays dry (Rain shadow: how much). Inland air: how wet the air is far from any water.",
+                )
+                .size(11.0)
+                .color(pal.weak),
+            );
+        }
+        NodeKind::Biomes { sea } => {
+            height(ui, "Sea level", sea);
+            climate_legend(ui, false);
+        }
+        NodeKind::BiomeOutput { sea, paint } => {
+            height(ui, "Sea level", sea);
+            row(ui, "Paint the ground", |ui| ui.checkbox(paint, ""));
+            ui.label(
+                RichText::new("Converted, every column gets the biome of its climate — rivers theirs — and, painted, its terrain:")
+                    .size(11.0)
+                    .color(pal.weak),
+            );
+            climate_legend(ui, true);
+        }
+        NodeKind::Tectonic {
+            plates,
+            relief,
+            width,
+            roughness,
+            sea,
+            seed: s,
+        } => {
+            plate_editor(ui, plates, s);
+            blocks(ui, "Relief", relief, 320.0);
+            blocks(ui, "Belt width", width, 2000.0);
+            fraction(ui, "Winding", roughness);
+            height(ui, "Sea level", sea);
+            seed(ui, s);
+        }
         NodeKind::WaterOutput => {
             ui.label(
                 RichText::new(
@@ -2571,12 +2961,31 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             amount(ui, "Depth", depth, 0.0..=20.0);
             amount(ui, "Fade", softness, 0.5..=100.0);
         }
-        NodeKind::Rivers { threshold, depth, width, sea } => {
+        NodeKind::Rivers {
+            threshold,
+            depth,
+            width,
+            sea,
+            banks,
+            lakes,
+        } => {
             fraction(ui, "Fewer", threshold);
-            amount(ui, "Depth", depth, 0.0..=40.0);
+            amount(ui, "Depth", depth, 0.5..=40.0);
             blocks(ui, "Width", width, 200.0);
-            sea_level(ui, sea, "Rivers end at the sea, and dig nothing under it");
-            ui.label(RichText::new("Wire Water to a Water output to fill the beds: the water runs down with them.").size(11.0).color(pal.weak));
+            amount(ui, "Banks", banks, 0.0..=4.0);
+            fraction(ui, "Lakes", lakes);
+            sea_level(ui, sea, "Rivers run to the sea and end there");
+            ui.label(
+                RichText::new(
+                    "Fewer: how much land must drain to a place for a river to run there. Depth and Width are the largest river's; \
+                     its tributaries are smaller. Banks: how far they slope down to the water, in river widths. Lakes: which of the \
+                     hollows a river runs through it fills (deep ones first) rather than cutting a gorge through their rim.\n\n\
+                     Each river is traced from the sea up to its sources, laid in the bottom of its valley and dug at every sample; \
+                     its water only runs down and stays under its banks, and the hollows it crosses hold lakes. Wire Water to a Water output.",
+                )
+                .size(11.0)
+                .color(pal.weak),
+            );
         }
         NodeKind::Lakes { amount: a, sea } => {
             fraction(ui, "Fill", a);
@@ -2837,20 +3246,20 @@ mod tests {
         let ids: Vec<NodeId> = g.nodes.iter().map(|n| n.id).collect();
         let eval = g.evaluate(&extent, &ids, true, &AtomicBool::new(false)).unwrap();
         // Nothing selected: the output, in its colours.
-        let (h, paint_of, shown) = pick_view(&g, &eval, None).unwrap();
+        let (h, paint_of, shown) = pick_view(&g, &eval, None, &[]).unwrap();
         assert_eq!(shown, (hills, 0));
         assert!(matches!(paint_of, Paint::Color(_)));
         assert_eq!(h.n, 32);
         // A mask: shown on the relief before it.
-        let (_, p, shown) = pick_view(&g, &eval, Some((slope, 0))).unwrap();
+        let (_, p, shown) = pick_view(&g, &eval, Some((slope, 0)), &[]).unwrap();
         assert!(matches!(p, Paint::Mask(_)) && shown == (slope, 0));
         // A colour node, and the colour output (which shows what it gets).
-        let (_, p, _) = pick_view(&g, &eval, Some((paint, 0))).unwrap();
+        let (_, p, _) = pick_view(&g, &eval, Some((paint, 0)), &[]).unwrap();
         assert!(matches!(p, Paint::Color(_)));
-        let (_, _, shown) = pick_view(&g, &eval, Some((color_out, 0))).unwrap();
+        let (_, _, shown) = pick_view(&g, &eval, Some((color_out, 0)), &[]).unwrap();
         assert_eq!(shown, (paint, 0));
         // The data for the viewport, with its light.
-        let (h, p, _) = pick_view(&g, &eval, Some((slope, 0))).unwrap();
+        let (h, p, _) = pick_view(&g, &eval, Some((slope, 0)), &[]).unwrap();
         let data = view_data(&h, &p, &extent, 2.0, &[], None);
         assert_eq!((data.colors.len(), data.light.len()), (32 * 32, 32 * 32));
         // Thumbnails of each kind.

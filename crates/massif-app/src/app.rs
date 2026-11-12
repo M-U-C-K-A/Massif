@@ -2702,8 +2702,11 @@ mod tests {
         h.render().unwrap().save(dir.join("graph-render-workspace.png")).unwrap();
         h.state_mut().layout.activate(6);
         h.run_steps(3);
-        assert_eq!(h.state().graph.resolution, 1024, "a block per sample on this map");
-        h.state_mut().graph.resolution = 512;
+        {
+            use egui_kittest::kittest::Queryable;
+            h.get_by_label("every block");
+        }
+        h.state_mut().graph.draft = Some(512);
         {
             use egui_kittest::kittest::Queryable;
             h.get_by_label_contains("Convert to voxels").click();
@@ -3326,6 +3329,248 @@ mod tests {
         assert_ne!(ground(h.state()), before, "the beds are dug in the ground itself");
     }
 
+    /// The two templates that start from the map, on a map with real
+    /// relief (an alpine range converted into it) and a tower of rock as a
+    /// level: the Map node sees the tower; painting paints its top and the
+    /// ground, without moving either; rivers are dug into the valleys.
+    /// Needs a GPU: runs with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn map_templates_on_a_real_map() {
+        use massif_core::graph::Template;
+        use massif_core::level::LevelKind;
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.state_mut().layout.activate(6);
+        h.run_steps(2);
+        let convert = |h: &mut egui_kittest::Harness<'_, MassifApp>| {
+            {
+                use egui_kittest::kittest::Queryable;
+                h.get_by_label_contains("Convert to voxels").click();
+            }
+            h.run_steps(2);
+            assert!(h.state().graph.converting(), "the conversion started");
+            let started = std::time::Instant::now();
+            while h.state().graph.converting() {
+                assert!(started.elapsed().as_secs() < 180, "the conversion did not finish");
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            h.run_steps(3);
+        };
+        let shot_3d = |h: &mut egui_kittest::Harness<'static, MassifApp>, name: &str| {
+            {
+                let app = h.state_mut();
+                app.layout.activate(3);
+                app.view3d.camera.distance = 900.0;
+                app.view3d.camera.pitch = 0.62;
+                app.view3d.camera.yaw = 0.7;
+            }
+            h.run_steps(5);
+            while h.state().view3d.pending() > 0 {
+                h.step();
+            }
+            h.run_steps(3);
+            let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+            image::save_buffer(dir.join(name), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+            h.state_mut().layout.activate(6);
+            h.run_steps(3);
+        };
+        // Mountains, into the map's ground.
+        {
+            let app = h.state_mut();
+            app.graph.preview = 512;
+            app.graph.use_template(&mut app.doc, Template::Alpine);
+            app.graph.over = Some(false);
+        }
+        wait_for_graph(&mut h);
+        convert(&mut h);
+        // A tower of rock, 40 blocks wide, as a level over the ground.
+        let (tower, centre) = {
+            let app = h.state_mut();
+            let doc = &mut app.doc;
+            doc.history.begin("Tower", doc.dim);
+            let tower = doc.history.edit(&mut doc.world, 0).structure().add_level("Tower", LevelKind::Solid);
+            let (lo, _) = doc.dimension().bounds().unwrap();
+            let (cx, cz) = (lo.x * 128 + 300, lo.z * 128 + 300);
+            let ground = doc.dimension().ground().view(massif_core::TilePos::containing(cx, cz)).unwrap().top.get(massif_core::coords::local_index(cx, cz));
+            let rect = massif_core::BlockRect::new(cx - 20, cz - 20, cx + 20, cz + 20);
+            let tiles: Vec<_> = rect.tiles().collect();
+            doc.history.edit(&mut doc.world, tower).par_tiles(tiles, rect, true, |_, clip, tile| {
+                for z in clip.z0..clip.z1 {
+                    for x in clip.x0..clip.x1 {
+                        let i = massif_core::coords::local_index(x, z);
+                        tile.top.set(i, ground + 70.0);
+                        tile.bottom.as_mut().unwrap().set(i, ground - 4.0);
+                    }
+                }
+            });
+            doc.commit();
+            (tower, (cx, cz))
+        };
+        // Painted from its relief.
+        {
+            let app = h.state_mut();
+            app.graph.over = None;
+            app.graph.use_template(&mut app.doc, Template::PaintMap);
+        }
+        wait_for_graph(&mut h);
+        h.render().unwrap().save(dir.join("paint-map-graph.png")).unwrap();
+        let tower_top = |app: &MassifApp| {
+            let t = app.doc.dimension().levels[tower].view(massif_core::TilePos::containing(centre.0, centre.1)).unwrap();
+            let i = massif_core::coords::local_index(centre.0, centre.1);
+            (t.top.get(i), t.terrain.get(i))
+        };
+        let before = tower_top(h.state());
+        convert(&mut h);
+        let after = tower_top(h.state());
+        assert_eq!(after.0, before.0, "the tower stands where it was");
+        assert_ne!(after.1, before.1, "its top was painted");
+        shot_3d(&mut h, "paint-map-3d.png");
+        // Rivers in its valleys.
+        {
+            let app = h.state_mut();
+            app.graph.use_template(&mut app.doc, Template::MapRivers);
+        }
+        wait_for_graph(&mut h);
+        h.render().unwrap().save(dir.join("map-rivers-graph.png")).unwrap();
+        convert(&mut h);
+        shot_3d(&mut h, "map-rivers-3d.png");
+    }
+
+    /// A terrain larger than the map: the toolbar says its size, and
+    /// converting it makes the world that size, the new tiles built like
+    /// the others, with the sea where they lie under it. Needs a GPU: runs
+    /// with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn a_terrain_larger_than_the_map_grows_it() {
+        use massif_core::graph::Template;
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.state_mut().layout.activate(6);
+        h.run_steps(2);
+        let before = h.state().doc.dimension().ground().len();
+        {
+            let app = h.state_mut();
+            app.graph.preview = 384;
+            app.graph.use_template(&mut app.doc, Template::Archipelago);
+            let mut graph = app.doc.world.meta.graph.clone().unwrap();
+            graph.size = Some(2048);
+            app.doc.world.meta.graph = Some(graph);
+            app.doc.mark_changed();
+        }
+        wait_for_graph(&mut h);
+        h.render().unwrap().save(dir.join("graph-size-2k.png")).unwrap();
+        {
+            use egui_kittest::kittest::Queryable;
+            h.get_by_label("every block");
+        }
+        {
+            use egui_kittest::kittest::Queryable;
+            h.get_by_label_contains("Convert to voxels").click();
+        }
+        h.run_steps(2);
+        let started = std::time::Instant::now();
+        while h.state().graph.converting() {
+            assert!(started.elapsed().as_secs() < 180, "the conversion did not finish");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        h.run_steps(3);
+        let dim = h.state().doc.dimension();
+        assert_eq!(before, 64, "a map of 1024 blocks");
+        assert_eq!(dim.ground().len(), 256, "a world of 2048 blocks");
+        let (lo, hi) = dim.bounds().unwrap();
+        assert_eq!((hi.x - lo.x + 1, hi.z - lo.z + 1), (16, 16));
+        // A new tile at a corner, built and under the sea where it is low.
+        let corner = dim.ground().view(lo).unwrap();
+        let sea = h.state().doc.world.meta.sea_level as i16;
+        let wet = (0..128 * 128).filter(|&i| corner.fluid.get(i) == sea && corner.top.get(i) < sea as f32).count();
+        let shaped = (0..128 * 128).map(|i| corner.top.get(i)).fold((f32::MAX, f32::MIN), |(a, b), v| (a.min(v), b.max(v)));
+        assert!(shaped.0 < shaped.1, "the new tile has relief: {shaped:?}");
+        assert!(wet > 0 || shaped.0 >= sea as f32, "its sea: {wet}");
+    }
+
+    /// Continents from tectonic plates with their climate: the plates to
+    /// move in the node's settings, temperature and humidity as masks, and
+    /// converted, the biomes of the game written with the ground painted
+    /// to suit. Needs a GPU: runs with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn continents_with_climate() {
+        use massif_core::graph::{NodeKind, Template};
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.state_mut().layout.activate(6);
+        h.run_steps(2);
+        {
+            let app = h.state_mut();
+            app.graph.preview = 512;
+            let mut graph = app.doc.world.meta.graph.clone().unwrap_or_default();
+            graph.size = Some(2048);
+            app.doc.world.meta.graph = Some(graph);
+            app.graph.use_template(&mut app.doc, Template::Continents);
+        }
+        wait_for_graph(&mut h);
+        h.render().unwrap().save(dir.join("continents-graph.png")).unwrap();
+        let graph = h.state().doc.world.meta.graph.clone().unwrap();
+        assert_eq!(graph.size, Some(2048), "the template keeps the terrain's size");
+        let find = |pick: &dyn Fn(&NodeKind) -> bool| graph.nodes.iter().find(|n| pick(&n.kind)).unwrap().id;
+        for (name, id) in [
+            ("continents-plates.png", find(&|k| matches!(k, NodeKind::Tectonic { .. }))),
+            ("continents-temperature.png", find(&|k| matches!(k, NodeKind::Temperature { .. }))),
+            ("continents-humidity.png", find(&|k| matches!(k, NodeKind::Humidity { .. }))),
+        ] {
+            h.state_mut().graph.view(Some(id));
+            wait_for_graph(&mut h);
+            h.render().unwrap().save(dir.join(name)).unwrap();
+        }
+        h.state_mut().graph.view(None);
+        wait_for_graph(&mut h);
+        {
+            use egui_kittest::kittest::Queryable;
+            h.get_by_label_contains("Convert to voxels").click();
+        }
+        h.run_steps(2);
+        let started = std::time::Instant::now();
+        while h.state().graph.converting() {
+            assert!(started.elapsed().as_secs() < 240, "the conversion did not finish");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        h.run_steps(3);
+        let doc = &h.state().doc;
+        assert_eq!(doc.dimension().ground().len(), 256, "a world of 2048 blocks");
+        let mut biomes = std::collections::BTreeSet::new();
+        for p in doc.dimension().ground().positions() {
+            let tile = doc.dimension().ground().view(p).unwrap();
+            for i in (0..128 * 128).step_by(97) {
+                biomes.insert(tile.biome.get(i));
+            }
+        }
+        let names: Vec<&str> = biomes.iter().map(|&b| doc.world.registry.biome(massif_core::registry::BiomeId(b)).id.as_str()).collect();
+        eprintln!("biomes written: {names:?}");
+        assert!(!biomes.contains(&0) && biomes.len() >= 5, "climates of every kind: {names:?}");
+        {
+            let app = h.state_mut();
+            app.layout.activate(3);
+            app.view3d.camera.distance = 1900.0;
+            app.view3d.camera.pitch = 0.75;
+            app.view3d.camera.yaw = 0.5;
+        }
+        h.run_steps(5);
+        while h.state().view3d.pending() > 0 {
+            h.step();
+        }
+        h.run_steps(3);
+        let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+        image::save_buffer(dir.join("continents-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+    }
+
     /// The templates: the picker with their pictures, a card replacing the
     /// graph, and every template in the viewport with its own sky. Needs a
     /// GPU: runs with MASSIF_SNAPSHOT_DIR.
@@ -3391,7 +3636,7 @@ mod tests {
         view.camera.yaw = 2.2;
         // Converted to voxels: a Solid level over the ground, columns of
         // several spans, seen in the 3D view of the map.
-        h.state_mut().graph.resolution = 1024;
+        h.state_mut().graph.draft = None;
         {
             use egui_kittest::kittest::Queryable;
             h.get_by_label_contains("Convert to voxels").click();

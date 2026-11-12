@@ -537,7 +537,7 @@ mod giant {
         // The graph's Map node over the whole map, at a preview's size.
         let t = std::time::Instant::now();
         let ext = crate::graph::Extent::covering(world.dims[0].bounds().map(|(lo, hi)| crate::coords::BlockRect::new(lo.x * 128, lo.z * 128, (hi.x + 1) * 128, (hi.z + 1) * 128)).unwrap(), 512);
-        let read = crate::graph::sample_ground(&world.dims[0], &ext, 0.0, &[]);
+        let read = crate::graph::sample_map(&world.dims[0], &ext, 0.0, &[], &[]);
         eprintln!("the map read at 512 × 512 in {:.1} s ({} high)", t.elapsed().as_secs_f32(), read.heights.range().1);
         // A brush stroke somewhere.
         let t = std::time::Instant::now();

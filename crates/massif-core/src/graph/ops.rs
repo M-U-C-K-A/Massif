@@ -33,6 +33,39 @@ pub(super) fn run(
     if let Some(f) = landforms::generate_kind(kind, e) {
         return one(f);
     }
+    match kind {
+        NodeKind::Temperature {
+            warm,
+            cold,
+            toward,
+            lapse,
+            sea,
+            variation,
+            seed,
+        } => return one(super::climate::temperature(&*field(0)?, e, *warm, *cold, *toward, *lapse, *sea, *variation, *seed)),
+        NodeKind::Humidity {
+            from,
+            base,
+            reach,
+            shadow,
+            sea,
+            variation,
+            seed,
+        } => return one(super::climate::humidity(&*field(0)?, e, *from, *base, *reach, *shadow, *sea, *variation, *seed)),
+        NodeKind::Biomes { sea } => return paint(super::climate::colors(&*field(0)?, &*field(1)?, &*field(2)?, *sea)),
+        NodeKind::Tectonic {
+            plates,
+            relief,
+            width,
+            roughness,
+            sea,
+            seed,
+        } => {
+            let r = super::tectonics::relief(plates, e, *relief, *width, *roughness, *sea, *seed);
+            return Ok(vec![Value::Field(Arc::new(r.height)), Value::Field(Arc::new(r.ranges)), Value::Field(Arc::new(r.faults))]);
+        }
+        _ => {}
+    }
     match *kind {
         NodeKind::Levels {
             in_min,
@@ -236,29 +269,25 @@ pub(super) fn run(
             let h = Field::new(n, f.data.par_iter().zip(&mask.data).map(|(&v, &m)| v + depth * m).collect());
             Ok(vec![Value::Field(Arc::new(h)), Value::Field(Arc::new(mask))])
         }
-        NodeKind::Rivers { threshold, depth, width, sea } => {
+        NodeKind::Rivers {
+            threshold,
+            depth,
+            width,
+            sea,
+            banks,
+            lakes,
+        } => {
             let f = field(0)?;
-            let (work, we) = coarser(&f, e, SIM_MAX);
-            let (h, rivers, level) = sim::rivers(&work, we.spacing(), threshold.clamp(0.0, 1.0), depth, width, sea, cancel).ok_or(false)?;
-            let dug = carry(&f, &work, &h);
-            // Water where the bed is dug enough to hold it, up to a level
-            // that runs down with the valley, and no lower than the sea.
-            let water = if want(2) {
-                let (mask, level) = (upsample(&rivers, n), upsample(&level, n));
-                Field::new(
-                    n,
-                    (0..n * n)
-                        .into_par_iter()
-                        .map(|c| {
-                            let l = level.data[c].max(sea);
-                            if mask.data[c] > 0.3 && l > dug.data[c] + 0.3 && l > sea + 0.2 { l } else { super::NO_WATER }
-                        })
-                        .collect(),
-                )
-            } else {
-                Field::new(0, Vec::new())
+            let params = super::rivers::RiverParams {
+                threshold,
+                depth: depth.max(0.5),
+                width: width.max(1.0),
+                banks,
+                lakes,
+                sea,
             };
-            Ok(vec![Value::Field(Arc::new(dug)), Value::Field(Arc::new(full(&rivers, 1))), Value::Field(Arc::new(water))])
+            let r = super::rivers::rivers(&f, e.spacing(), params, cancel).ok_or(false)?;
+            Ok(vec![Value::Field(Arc::new(r.dug)), Value::Field(Arc::new(r.mask)), Value::Field(Arc::new(r.water))])
         }
         NodeKind::Lakes { amount, sea } => {
             let f = field(0)?;

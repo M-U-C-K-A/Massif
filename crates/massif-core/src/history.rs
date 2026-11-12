@@ -177,6 +177,9 @@ fn swap(step: Step, world: &mut World) -> Step {
 pub struct Others<'a> {
     before: &'a [Level],
     after: &'a [Level],
+    voxels: &'a crate::voxel::VoxelLayer,
+    min_y: i32,
+    max_y: i32,
 }
 
 impl<'a> Others<'a> {
@@ -188,6 +191,32 @@ impl<'a> Others<'a> {
         index
             .checked_sub(self.before.len() + 1)
             .and_then(|i| self.after.get(i))
+    }
+
+    /// The columns of the dimension at `pos`, composed of the levels `keep`
+    /// accepts and of the sculpted chunks. `edited` is the edited level's
+    /// tile there, as it is now, with its kind (`None`: leave it out).
+    pub fn stack<'t>(&'t self, pos: TilePos, edited: Option<(LevelKind, &'t Tile)>, keep: impl Fn(usize, &Level) -> bool) -> Option<crate::compose::TileStack<'t>> {
+        let at = self.before.len();
+        let mut layers = Vec::new();
+        for index in 0..at + 1 + self.after.len() {
+            if index == at {
+                if let Some((kind, tile)) = edited {
+                    layers.push((index, kind, TileRef::Hot(tile)));
+                }
+                continue;
+            }
+            let Some(level) = self.get(index) else { continue };
+            if (index == 0 || keep(index, level))
+                && let Some(tile) = level.view(pos)
+            {
+                layers.push((index, level.kind, tile));
+            }
+        }
+        if layers.first().is_none_or(|l| l.1 != LevelKind::Ground) {
+            return None;
+        }
+        Some(crate::compose::TileStack::gather(self.min_y, self.max_y, self.voxels, pos, layers))
     }
 }
 
@@ -285,11 +314,16 @@ impl Edit<'_> {
             return;
         }
         self.touch_all(&positions);
+        let (min_y, max_y) = (self.dim.min_y, self.dim.max_y);
+        let voxels = &self.dim.voxels;
         let (before, rest) = self.dim.levels.split_at_mut(self.level);
         let (level, after) = rest.split_first_mut().expect("the edited level exists");
         let others = Others {
             before: &*before,
             after: &*after,
+            voxels,
+            min_y,
+            max_y,
         };
         let taken: Vec<_> = positions
             .into_iter()
