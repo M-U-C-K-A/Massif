@@ -14,11 +14,13 @@ USAGE
   massif-cli new <out.massif> [--size WxD] [--landform NAME] [--seed N] [--name TEXT]
   massif-cli info <world.massif>
   massif-cli verify <world.massif>
-  massif-cli export <world.massif> <folder> [--void] [--survival] [--overwrite]
+  massif-cli export <world.massif> <folder> [--version V] [--void] [--survival] [--overwrite]
   massif-cli import <old.world> <out.massif>
 
   --size      map size in tiles of 128 blocks (default 8x8 = 1024x1024 blocks)
   --landform  flat | plains | hills | mountains | islands (default hills)
+  --version   the Minecraft version to export for, 1.7.10 to 26.3 (default 1.18.2,
+              which every later version opens)
   --void      nothing generates around the exported map (default: vanilla terrain)
 ";
 
@@ -170,7 +172,15 @@ fn cmd_verify(args: Args) -> Res<()> {
 }
 
 fn cmd_export(mut args: Args) -> Res<()> {
+    let target = match args.option("--version")? {
+        Some(name) => massif_anvil::Target::release(&name).ok_or_else(|| {
+            let known: Vec<&str> = massif_anvil::version::RELEASES.iter().map(|r| r.0).collect();
+            format!("unknown Minecraft version {name}; known: {}", known.join(", "))
+        })?,
+        None => massif_anvil::Target::default(),
+    };
     let options = ExportOptions {
+        target,
         surroundings: if args.flag("--void") {
             Surroundings::Void
         } else {

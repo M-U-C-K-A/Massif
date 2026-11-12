@@ -144,6 +144,42 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             });
             hint(ui, "Choose biomes in the Biomes panel. Automatic lets the exporter decide from the terrain and the water.");
         }
+        Tool::AutoBiome | Tool::AutoPaint => {
+            let biomes = tool == Tool::AutoBiome;
+            hint(
+                ui,
+                if biomes {
+                    "Brush where the biomes should follow the land, or do the whole map at once."
+                } else {
+                    "Brush where the ground should follow its biomes, or do the whole map at once. Where the biome is automatic, the ground is painted as the land it is."
+                },
+            );
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .button(theme::with_icon(Icon::Map, "Whole map"))
+                    .on_hover_text(if biomes {
+                        "Give every column of the map the biome its land calls for (undoable)"
+                    } else {
+                        "Paint every column of the map as its biome calls for (undoable)"
+                    })
+                    .clicked()
+                {
+                    let changed = if biomes { doc.auto_biome(&tools.auto) } else { doc.auto_paint(&tools.auto) };
+                    tools.auto_done = Some((biomes, changed));
+                }
+                if ui
+                    .button(theme::with_icon(Icon::Settings2, "Rules…"))
+                    .on_hover_text("The biome of each kind of land, the terrains of each biome")
+                    .clicked()
+                {
+                    tools.open_rules = true;
+                }
+            });
+            if let Some((_, changed)) = tools.auto_done.filter(|(b, _)| *b == biomes) {
+                hint(ui, &format!("{changed} columns changed over the whole map."));
+            }
+        }
         Tool::Flood | Tool::Water => {
             slider_row(ui, "Water level", |ui| {
                 ui.add(egui::DragValue::new(&mut tools.water_level).range(doc.dimension().min_y as i16..=doc.dimension().max_y as i16))
@@ -424,7 +460,7 @@ pub fn custom_brushes_panel(ui: &mut Ui, tools: &mut ToolState, library: &mut Br
 
 /// Size, intensity and rotation of the brush, with a preview, then the
 /// options that limit where it acts (WorldPainter's brush options).
-pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibrary, reg: &Registry, min_y: i32, max_y: i32) {
+pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibrary, reg: &Registry, min_y: i32, max_y: i32, light: f32) {
     let pal = Palette::of(ui);
     let dark = ui.visuals().dark_mode;
     ui.spacing_mut().slider_width = (ui.available_width() - 76.0 - 84.0).clamp(60.0, 260.0);
@@ -554,6 +590,47 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
         );
     });
 
+    section(ui, Icon::Compass, "Facing");
+    ui.horizontal(|ui| {
+        facing_dial(ui, f);
+        ui.vertical(|ui| {
+            ui.checkbox(&mut f.facing_on, "only slopes facing")
+                .on_hover_text("Only the slopes turned this way: the side the sun lights, the side in the shade. Level ground faces nowhere.");
+            ui.horizontal(|ui| {
+                ui.add_enabled(
+                    f.facing_on,
+                    egui::DragValue::new(&mut f.facing)
+                        .range(0.0..=360.0)
+                        .speed(1.0)
+                        .max_decimals(0)
+                        .suffix("°")
+                        .custom_formatter(|v, _| format!("{} {:.0}", compass(v as f32), v)),
+                );
+                ui.label("±");
+                ui.add_enabled(f.facing_on, egui::DragValue::new(&mut f.facing_spread).range(5.0..=180.0).speed(1.0).max_decimals(0).suffix("°"));
+            });
+            ui.horizontal(|ui| {
+                if ui
+                    .small_button(theme::with_icon(Icon::Sun, "Sun"))
+                    .on_hover_text("The slopes the light of the map falls on (R and L turn it)")
+                    .clicked()
+                {
+                    f.facing_on = true;
+                    f.facing = light.rem_euclid(360.0);
+                }
+                if ui
+                    .small_button(theme::with_icon(Icon::Moon, "Shade"))
+                    .on_hover_text("The slopes turned away from the light of the map")
+                    .clicked()
+                {
+                    f.facing_on = true;
+                    f.facing = (light + 180.0).rem_euclid(360.0);
+                }
+            });
+        });
+    });
+    f.facing = f.facing.rem_euclid(360.0);
+
     section(ui, Icon::Waves, "Curvature");
     ui.horizontal(|ui| {
         ui.checkbox(&mut f.hollows, "hollows").on_hover_text("Columns lower than the ones around them");
@@ -566,6 +643,167 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
         ui.add_enabled(on, egui::DragValue::new(&mut f.radius).range(1..=64));
         ui.label("blocks around");
     });
+}
+
+/// The rules of the automatic biomes: how the land is read, and the biome
+/// of each kind of it.
+pub fn land_rules(ui: &mut Ui, rules: &mut massif_core::auto::BiomeRules, reg: &Registry) {
+    use massif_core::auto::Land;
+    let pal = Palette::of(ui);
+    section(ui, Icon::Ruler, "Reading the land");
+    egui::Grid::new("land thresholds").num_columns(4).spacing([10.0, 4.0]).show(ui, |ui| {
+        let blocks = |ui: &mut Ui, label: &str, v: &mut f32, hover: &str| {
+            ui.label(label).on_hover_text(hover);
+            ui.add(egui::DragValue::new(v).range(0.0..=384.0).speed(0.5).max_decimals(0).suffix(" blocks"));
+        };
+        blocks(ui, "Deep water from", &mut rules.deep_water, "Water at least this deep is deep water");
+        ui.label("Rivers up to").on_hover_text("Water with a bank on both sides within this width is a river");
+        ui.add(egui::DragValue::new(&mut rules.river_width).range(4..=64).suffix(" blocks wide"));
+        ui.end_row();
+        blocks(ui, "Shores up to", &mut rules.shore_height, "Ground at most this high over the water beside it is its shore");
+        ui.label("Cliffs from").on_hover_text("Slopes at least this steep are rock, whatever grows on them");
+        ui.add(egui::DragValue::new(&mut rules.steep).range(10.0..=85.0).speed(0.5).max_decimals(0).suffix("°"));
+        ui.end_row();
+        blocks(ui, "Hills from", &mut rules.hills, "Height over the sea where the hills begin");
+        blocks(ui, "Mountains from", &mut rules.mountains, "Height over the sea where the mountains begin");
+        ui.end_row();
+        blocks(ui, "Peaks from", &mut rules.peaks, "Height over the sea where the peaks begin");
+        ui.end_row();
+    });
+    rules.mountains = rules.mountains.max(rules.hills);
+    rules.peaks = rules.peaks.max(rules.mountains);
+    section(ui, Icon::Trees, "The biome of each kind of land");
+    egui::Grid::new("land biomes").num_columns(2).spacing([14.0, 4.0]).striped(true).show(ui, |ui| {
+        for land in Land::ALL {
+            ui.label(land.label()).on_hover_text(land.hint());
+            let current = rules.biome_of(land).to_owned();
+            let name = reg.biome_by_id(&current).map_or(current.as_str(), |b| reg.biome(b).name.as_str()).to_owned();
+            let mut picked = None;
+            ui.horizontal(|ui| {
+                if let Some(b) = reg.biome_by_id(&current) {
+                    swatch(ui, theme::rgb(reg.biome(b).color));
+                }
+                egui::ComboBox::from_id_salt(("land biome", land)).selected_text(name).width(210.0).show_ui(ui, |ui| {
+                    for biome in reg.biomes.iter().skip(1) {
+                        if ui.selectable_label(biome.id == current, &biome.name).clicked() {
+                            picked = Some(biome.id.clone());
+                        }
+                    }
+                });
+                ui.label(RichText::new(land.hint()).size(11.0).color(pal.weak));
+            });
+            if let Some(id) = picked {
+                rules.set_biome(land, &id);
+            }
+            ui.end_row();
+        }
+    });
+}
+
+/// The rules of the automatic paint: the terrains of each biome.
+pub fn paint_rules(ui: &mut Ui, rules: &mut massif_core::auto::PaintRules, reg: &Registry) {
+    let pal = Palette::of(ui);
+    ui.horizontal(|ui| {
+        ui.label("Cliffs from").on_hover_text("Slopes at least this steep get the cliffs' terrain");
+        ui.add(egui::DragValue::new(&mut rules.steep).range(10.0..=85.0).speed(0.5).max_decimals(0).suffix("°"));
+        ui.add_space(12.0);
+        ui.checkbox(&mut rules.read_the_land, "where the biome is automatic, paint as the land is")
+            .on_hover_text("Columns with no biome set are painted as the biome the automatic biomes would give them");
+    });
+    ui.add_space(4.0);
+    egui::Grid::new("biome paint").num_columns(4).spacing([10.0, 4.0]).striped(true).show(ui, |ui| {
+        for title in ["Biome", "Ground", "Cliffs", "Under water"] {
+            ui.label(RichText::new(title).size(11.5).color(pal.weak));
+        }
+        ui.end_row();
+        for biome in reg.biomes.iter().skip(1) {
+            ui.horizontal(|ui| {
+                swatch(ui, theme::rgb(biome.color));
+                ui.label(&biome.name);
+            });
+            let paint = rules.of(&biome.id).cloned();
+            let mut changed: Option<(usize, String)> = None;
+            for k in 0..3 {
+                let current = paint.as_ref().map_or("", |p| [p.ground.as_str(), p.cliffs.as_str(), p.underwater.as_str()][k]).to_owned();
+                let shown = if current.is_empty() { "— as it is".to_owned() } else { current.clone() };
+                egui::ComboBox::from_id_salt(("biome paint", &biome.id, k)).selected_text(shown).width(128.0).show_ui(ui, |ui| {
+                    if ui.selectable_label(current.is_empty(), "— as it is").clicked() {
+                        changed = Some((k, String::new()));
+                    }
+                    for terrain in &reg.terrains {
+                        if ui.selectable_label(terrain.name == current, &terrain.name).clicked() {
+                            changed = Some((k, terrain.name.clone()));
+                        }
+                    }
+                });
+            }
+            if let Some((k, name)) = changed {
+                let p = rules.of_mut(&biome.id);
+                match k {
+                    0 => p.ground = name,
+                    1 => p.cliffs = name,
+                    _ => p.underwater = name,
+                }
+            }
+            ui.end_row();
+        }
+    });
+}
+
+/// The point of the compass nearest a direction in degrees.
+fn compass(degrees: f32) -> &'static str {
+    const POINTS: [&str; 8] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+    POINTS[((degrees.rem_euclid(360.0) + 22.5) / 45.0) as usize % 8]
+}
+
+/// A compass to point the facing test: north up, as on the map. Dragging
+/// turns it; the wedge is the spread it accepts.
+fn facing_dial(ui: &mut Ui, f: &mut massif_core::filter::Filter) {
+    let pal = Palette::of(ui);
+    let (rect, response) = ui.allocate_exact_size(vec2(64.0, 64.0), Sense::click_and_drag());
+    let (centre, radius) = (rect.center(), 26.0);
+    if let Some(p) = response.interact_pointer_pos().filter(|_| response.dragged() || response.clicked()) {
+        let d = p - centre;
+        if d.length() > 3.0 {
+            // Up is north, clockwise to the east.
+            f.facing = d.x.atan2(-d.y).to_degrees().rem_euclid(360.0).round();
+            f.facing_on = true;
+        }
+    }
+    let painter = ui.painter_at(rect);
+    let on = f.facing_on;
+    let ink = if on { pal.accent } else { pal.weak };
+    painter.circle(centre, radius, pal.header, Stroke::new(1.0, pal.border));
+    let at = |degrees: f32, r: f32| {
+        let a = degrees.to_radians();
+        centre + vec2(a.sin(), -a.cos()) * r
+    };
+    if on {
+        // The wedge of directions let through.
+        let spread = f.facing_spread.clamp(1.0, 180.0);
+        let steps = (spread / 6.0).ceil().max(2.0) as i32;
+        let mut points = vec![centre];
+        for k in -steps..=steps {
+            points.push(at(f.facing + spread * k as f32 / steps as f32, radius - 1.0));
+        }
+        if spread >= 179.0 {
+            painter.circle_filled(centre, radius - 1.0, ink.gamma_multiply(0.28));
+        } else {
+            // A fan of triangles: the wedge may be wider than half a turn.
+            for pair in points[1..].windows(2) {
+                painter.add(egui::Shape::convex_polygon(vec![centre, pair[0], pair[1]], ink.gamma_multiply(0.28), Stroke::NONE));
+            }
+        }
+    }
+    for (degrees, name) in [(0.0, "N"), (90.0, "E"), (180.0, "S"), (270.0, "W")] {
+        painter.text(at(degrees, radius - 7.0), egui::Align2::CENTER_CENTER, name, egui::FontId::proportional(8.5), pal.weak);
+    }
+    painter.line_segment([centre, at(f.facing, radius - 2.0)], Stroke::new(if on { 2.0 } else { 1.0 }, ink));
+    painter.circle_filled(at(f.facing, radius - 2.0), 3.0, ink);
+    painter.circle_filled(centre, 2.0, ink);
+    response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text("Drag to turn: the way the slopes must face (north is up, as on the map)");
 }
 
 /// A stylised cross-section of a landscape, with the height band the filter

@@ -51,8 +51,16 @@ over every CPU core.
   water are meshed. It moves independently of the map view.
 - **WorldPainter import.** `.world` files are read directly (no JVM) and
   converted in about a second for a 100 MB world.
-- **Minecraft export.** Region files and `level.dat` in the 1.18 chunk layout,
-  which every later version opens and upgrades.
+- **Minecraft export, for the version you play.** From 1.7.10 to the
+  newest release (26.3, and whatever is installed on the computer): each
+  version gets the chunks it reads natively — numbered blocks up to 1.12,
+  named ones from 1.14, today's layout from 1.18 — with only the blocks
+  and biomes it knows.
+- **Automatic biomes and paint.** Auto biome reads the land (deep water,
+  rivers, beaches, plains, hills, deserts, snow, rock) and gives it its
+  biomes; Auto paint gives each biome its ground, its cliffs and what lies
+  under its water. Both with a brush or over the whole map, by rules you
+  can change.
 - **A compact, robust file format.** `.massif` stores each 128 × 128 tile as
   an independent, checksummed zstd frame: saving copies bytes, opening decodes
   nothing, corruption is detected and contained.
@@ -90,7 +98,7 @@ cargo run --release -p massif-cli -- new world.massif --size 125x125 --landform 
 cargo run --release -p massif-cli -- info world.massif
 cargo run --release -p massif-cli -- verify world.massif
 cargo run --release -p massif-cli -- import old.world world.massif
-cargo run --release -p massif-cli -- export world.massif ~/Library/Application\ Support/minecraft/saves/MyWorld
+cargo run --release -p massif-cli -- export world.massif ~/Library/Application\ Support/minecraft/saves/MyWorld --version 1.21.11
 ```
 
 ## Using the editor
@@ -122,10 +130,13 @@ water, beaches, and either automatic terrains (grass, sand, rock and snow
 by height and slope) or a single terrain; a preview of the whole map
 updates as you change them.
 
-**File ▸ Export** writes the world to a Minecraft saves folder with its
-game mode, difficulty, cheats, hardcore, structures beyond the map, world
-border, spawn point, what surrounds the map (vanilla terrain or void) and
-data packs (copied in and enabled). **Test Export** writes only the 3 × 3
+**File ▸ Export** writes the world to a Minecraft saves folder for the
+version of the game you choose — the newest one installed on the computer
+to begin with — with its game mode, difficulty, cheats, hardcore,
+structures beyond the map, world border, spawn point, what surrounds the
+map (vanilla terrain or void) and data packs (copied in and enabled).
+Versions before 1.18 hold 256 blocks of height: the map is cut below 0 and
+above 255, and the dialog says so. **Test Export** writes only the 3 × 3
 tiles around the centre of the map view to a separate folder, to check the
 result in the game quickly.
 
@@ -148,7 +159,10 @@ across stays responsive and light on memory.
 
 The outline on the map is exact: zoomed in, it follows the blocks the brush
 will change, block by block; zoomed out, a custom brush is outlined through
-every pixel of its image.
+every pixel of its image. Inside it, the brush shows how hard it presses:
+the map is lighter where it presses more, with a line where its strength
+is a quarter, a half and three quarters — the rings of a soft round brush,
+the peaks of a terrain stamp.
 
 **Brush options** (in Brush Settings) limit where every brush acts, from
 what the map shows:
@@ -160,8 +174,35 @@ what the map shows:
 - **Slope**: above or below an angle. Slopes are the trend of the hillside
   (a plane fitted over 9 × 9 columns), not the steps between single blocks;
   the map and 3D views' Slope mode use the same measure.
+- **Facing**: only the slopes turned a given way, give or take an angle —
+  the side the sun lights, the side in the shade. A compass sets the
+  direction (north up, as on the map); **Sun** and **Shade** take it from
+  the light of the map. Level ground faces nowhere. Snow on the northern
+  slopes, moss in the shade, bleached rock in the sun: one stroke each.
 - **Curvature**: hollows or bumps, deeper than a number of blocks compared
   with the columns around.
+
+### Automatic biomes and paint
+
+Two tools of the Paint group work from what the map already is, with a
+brush (and its options) or over the whole map at once:
+
+- **Auto biome** reads the land and gives it biomes. Every column is one
+  of twenty kinds of land, told from its water (deep, shallow, or with a
+  bank close on both sides: a river), its height over the sea (lowland,
+  hills, mountains, peaks), its slope (cliffs are rock, whatever grows on
+  them) and what its ground is made of (grass, sand, red sand, snow, moss,
+  mud, mycelium, podzol, stone); sand at the water's edge is a beach, not
+  a desert. Each kind has a biome.
+- **Auto paint** goes the other way: every biome has a terrain for its
+  ground, one for its cliffs and one for what lies under its water. Where
+  no biome is set, the ground is painted as the land it is.
+
+**Rules…** (in Tool Settings, or Edit ▸ Automatic rules) opens both tables:
+the depths, heights and slopes the land is read with, the biome of each
+kind of land, the three terrains of each biome. They are kept with the
+settings. Forests are told from the ground for now (podzol, coarse dirt);
+trees will count when layers exist.
 
 ### Real blocks
 
@@ -218,8 +259,8 @@ this map:
 |---|---|
 | Alpine range | Eroded peaks over green hills, snow on the summits (the starter graph) |
 | Archipelago | Tropical islands in a shallow sea, sandy beaches, green and rocky peaks |
-| Karst towers | A forest of stone pillars, cut from a plateau along two sets of joints as sandstone weathers: narrow clefts, flat green tops, mossy walls, a jungle crossed by rivers below |
-| Floating mountains | Mountains of rock floating over the pillars, their undersides hanging to a point, and rims overhanging the cliffs: two levels of rock over the void, above the mist |
+| Karst towers | A forest of stone towers, each of its own height, with sheer walls broken by ledges, scree at their feet, green tops and mossy walls, over a jungle crossed by rivers |
+| Floating mountains | Mountains of rock floating over such towers, each of several masses with their undersides hanging to points: a level of rock over the void, above the mist |
 | River valley | A wide valley between snowy ridged mountains, a river along its floor |
 | Desert canyon | A winding, stepped canyon in a red plateau, buttes, a river at the bottom |
 | Volcanic island | A volcano rising from the sea, black beaches, green lower slopes |
@@ -239,7 +280,7 @@ setting computes only that node and what follows it.
 | Family | Nodes |
 |---|---|
 | Landforms | Mountain (alpine, rounded, eroded, spiky), Mountain range, Volcano, Crater, Crater field, Dunes, Canyon, Mesas, Island, Rocks, Floating islands (top, bottom, mask) |
-| Primitives | Noise (rolling, ridged, billow), Cells and cell ridges, Radial and linear gradients, Shape, Constant |
+| Primitives | Noise (rolling, ridged, billow), Cells (cones, ridges, or one height per cell), Radial and linear gradients, Shape, Constant |
 | Adjust | Levels, Normalize, Curve, Terraces, Stratify, Clamp, Blur, Sharpen, Warp, Transform, Swirl, Fold, Invert height, Overhang (the rims of cliffs over the void) |
 | Simulate | Erosion (heights, flow, deposits, wear), Thermal erosion (heights, talus), Snow, Rivers, Lakes, Sea (water and shore masks) |
 | Combine | Combine (add, subtract, multiply, max, min, average, lerp, screen, overlay, difference), Blend through a mask |
@@ -255,7 +296,7 @@ and optionally the colour of the top. The viewport draws up to two layers
 over the relief, lit, casting their shadows on the ground and on each
 other; viewing one of these nodes (V) shows it over the graph's ground.
 Converted, each layer becomes a Solid level of the map named after what
-makes it ("Floating islands (graph 2)"), filled again by later
+makes it ("Floating islands (graph 1)"), filled again by later
 conversions and removed when its output goes: columns of ground, air,
 then rock, exported to Minecraft as they are.
 
@@ -369,12 +410,27 @@ yet; the import report lists what was left out.
 
 ### Minecraft export
 
-The exporter writes `region/r.X.Z.mca` and `level.dat` in the chunk layout
-introduced in Minecraft 1.18 (DataVersion 2975, 1.18.2); every later version
-opens these worlds and upgrades them on load. Regions are built in parallel
-(4,096 chunks in 0.15 s). Around the map, Minecraft generates either vanilla
-terrain from the world seed or nothing. The tests read the exported regions
-back with an independent Anvil reader and compare every block with the model.
+The exporter writes `region/r.X.Z.mca` and `level.dat` for one version of
+the game. The blocks of a chunk are worked out once, then stored the way
+that version does:
+
+| Versions | Chunks |
+|---|---|
+| 1.7.10 – 1.12.2 | Numbered blocks (an id and four bits of data), a biome per column, the light of the sky worked out; 256 blocks high |
+| 1.14 – 1.15 | A palette of named block states per section, indices packed end to end; biomes numbered, in 4 × 4 × 4 cells from 1.15 |
+| 1.16 – 1.17 | The same, indices no longer straddling two longs |
+| 1.18 – 26.3 and later | Today's layout: palettes of blocks and of biomes, −64 to 320 |
+
+Blocks and biomes a version does not have yet become the closest it has
+(deepslate is stone before 1.17, moss is grass, mud is coarse dirt…).
+Versions newer than the built-in list are taken from the game itself when
+it is installed (its jar says which data version it writes). `level.dat`
+keeps the shape of 1.18.2 for every later version, which bring it up to
+date when they open the world; 1.13 is left out (it lights chunks in a way
+of its own). Regions are built in parallel (4,096 chunks in 0.15 s).
+Around the map, Minecraft generates either vanilla terrain from the world
+seed or nothing. The tests read every era's regions back with an
+independent Anvil reader and compare the blocks with the model.
 
 ### The 3D view
 
@@ -441,7 +497,8 @@ Two environment variables enable the heavier tests:
   arches) and water on floating rock (lakes, falls).
 - The real blocks' textures in the 3D view, and custom terrains mixing
   real blocks in layers.
-- Custom build limits and older Minecraft versions in new worlds and export.
+- Custom build limits in new worlds and export; trees and plants as a sign
+  of forests for the automatic biomes.
 - Selections, copy and paste, height-map import.
 - Nether and End editing from the editor, customisable key bindings.
 

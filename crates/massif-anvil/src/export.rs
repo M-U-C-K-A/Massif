@@ -3,6 +3,7 @@
 use crate::chunk::{ExportContext, Scratch, build_chunk};
 use crate::level_dat::{Difficulty, GameMode, LevelSettings, Surroundings, WorldBorder, level_dat};
 use crate::region::RegionBuilder;
+use crate::version::Target;
 use massif_core::TilePos;
 use massif_core::compose::TileStack;
 use massif_core::world::World;
@@ -56,6 +57,8 @@ pub struct ExportOptions {
     pub spawn: Option<[i32; 3]>,
     /// Only export the tiles in this rectangle (inclusive), for a quick test.
     pub area: Option<(TilePos, TilePos)>,
+    /// The version of Minecraft the world is written for.
+    pub target: Target,
 }
 
 impl Default for ExportOptions {
@@ -75,6 +78,7 @@ impl Default for ExportOptions {
             datapacks: Vec::new(),
             spawn: None,
             area: None,
+            target: Target::default(),
         }
     }
 }
@@ -132,7 +136,7 @@ pub fn export(
         .dims
         .get(options.dimension)
         .ok_or_else(|| ExportError::Unsupported("no such dimension".into()))?;
-    let ctx = ExportContext::new(world, dim).map_err(ExportError::Unsupported)?;
+    let ctx = ExportContext::new(world, dim, &options.target).map_err(ExportError::Unsupported)?;
 
     // Group the map's tiles by region file.
     let mut regions: HashMap<(i32, i32), Vec<TilePos>> = HashMap::new();
@@ -236,7 +240,7 @@ pub fn export(
         border: options.border,
         datapacks: packs,
     };
-    std::fs::write(dir.join("level.dat"), level_dat(&settings)?)?;
+    std::fs::write(dir.join("level.dat"), level_dat(&settings, &options.target)?)?;
 
     Ok(ExportStats {
         regions: regions.len(),

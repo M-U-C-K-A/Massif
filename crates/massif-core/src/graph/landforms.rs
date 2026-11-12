@@ -67,6 +67,7 @@ pub(super) fn generate_kind(kind: &NodeKind, e: &Extent) -> Option<Field> {
                 let (fx, fz) = (x / s, z / s);
                 let (cx, cz) = (fx.floor() as i32, fz.floor() as i32);
                 let (mut d1, mut d2) = (f64::MAX, f64::MAX);
+                let mut nearest = (0, 0);
                 for dz in -1..=1 {
                     for dx in -1..=1 {
                         let (gx, gz) = (cx + dx, cz + dz);
@@ -77,6 +78,7 @@ pub(super) fn generate_kind(kind: &NodeKind, e: &Extent) -> Option<Field> {
                         if d < d1 {
                             d2 = d1;
                             d1 = d;
+                            nearest = (gx, gz);
                         } else if d < d2 {
                             d2 = d;
                         }
@@ -85,6 +87,7 @@ pub(super) fn generate_kind(kind: &NodeKind, e: &Extent) -> Option<Field> {
                 let v = match style {
                     CellStyle::Cones => (1.0 - d1 / 0.75).max(0.0),
                     CellStyle::Ridges => (1.0 - (d2 - d1) * 2.0).clamp(0.0, 1.0),
+                    CellStyle::Plates => hash2(nearest.0, nearest.1, seed as u64 ^ 0x0091_a7e5) as f64 / u32::MAX as f64,
                 };
                 base + height * v as f32
             })

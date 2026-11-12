@@ -4,7 +4,7 @@
 //! on load (spawn point, world generation settings and so on are migrated by
 //! the game's own data fixers).
 
-use crate::chunk::{DATA_VERSION, DATA_VERSION_NAME};
+use crate::version::{Era, Target};
 use crate::nbt::{NbtWriter, TagType};
 use flate2::Compression;
 use flate2::write::GzEncoder;
@@ -85,18 +85,29 @@ fn noise_dimension(w: &mut NbtWriter, id: &str, settings: &str, seed: i64, biome
     w.end();
 }
 
-/// The uncompressed NBT of `level.dat`.
-pub fn level_nbt(s: &LevelSettings) -> Vec<u8> {
+/// The uncompressed NBT of `level.dat`, as `target` reads it: the world's
+/// generator went from a name (up to 1.15) to the settings of every
+/// dimension (1.16), whose biomes changed source in 1.18.
+pub fn level_nbt(s: &LevelSettings, target: &Target) -> Vec<u8> {
+    let era = target.era();
+    let named = era != Era::Numbered;
+    let (data_version, version_name) = target.level_version();
     let mut w = NbtWriter::new();
     w.compound("Data");
-    w.int("DataVersion", DATA_VERSION);
+    if data_version > 0 {
+        w.int("DataVersion", data_version);
+    }
     w.int("version", 19133);
-    w.compound("Version");
-    w.int("Id", DATA_VERSION);
-    w.string("Name", DATA_VERSION_NAME);
-    w.string("Series", "main");
-    w.bool("Snapshot", false);
-    w.end();
+    if named {
+        w.compound("Version");
+        w.int("Id", data_version);
+        w.string("Name", version_name);
+        if era == Era::Modern {
+            w.string("Series", "main");
+        }
+        w.bool("Snapshot", false);
+        w.end();
+    }
 
     w.string("LevelName", &s.name);
     w.long("LastPlayed", s.last_played);
@@ -107,12 +118,11 @@ pub fn level_nbt(s: &LevelSettings) -> Vec<u8> {
     w.bool("allowCommands", s.allow_commands);
     // Tells the game the spawn point is already chosen.
     w.bool("initialized", true);
-    w.bool("WasModded", false);
 
     w.int("SpawnX", s.spawn[0]);
-    w.int("SpawnY", s.spawn[1]);
+    // Before 1.18 a world ends at 255.
+    w.int("SpawnY", if era == Era::Modern { s.spawn[1] } else { s.spawn[1].clamp(1, 255) });
     w.int("SpawnZ", s.spawn[2]);
-    w.float("SpawnAngle", 0.0);
 
     w.long("Time", 0);
     w.long("DayTime", 1000);
@@ -132,68 +142,115 @@ pub fn level_nbt(s: &LevelSettings) -> Vec<u8> {
     w.double("BorderWarningBlocks", 5.0);
     w.double("BorderWarningTime", 15.0);
 
-    w.int("WanderingTraderSpawnChance", 25);
-    w.int("WanderingTraderSpawnDelay", 24000);
-
-    w.compound("DataPacks");
-    w.list("Enabled", TagType::String, 1 + s.datapacks.len());
-    w.item_string("vanilla");
-    for pack in &s.datapacks {
-        w.item_string(pack);
+    if named {
+        w.compound("DataPacks");
+        w.list("Enabled", TagType::String, 1 + s.datapacks.len());
+        w.item_string("vanilla");
+        for pack in &s.datapacks {
+            w.item_string(pack);
+        }
+        w.list("Disabled", TagType::String, 0);
+        w.end();
     }
-    w.list("Disabled", TagType::String, 0);
-    w.end();
 
-    w.compound("WorldGenSettings");
-    w.long("seed", s.seed);
-    w.bool("generate_features", s.generate_structures);
-    w.bool("bonus_chest", false);
-    w.compound("dimensions");
-    match s.surroundings {
-        Surroundings::Vanilla => {
-            noise_dimension(&mut w, "minecraft:overworld", "minecraft:overworld", s.seed, |w| {
+    let void = s.surroundings == Surroundings::Void;
+    match era {
+        Era::Numbered => {
+            w.long("RandomSeed", s.seed);
+            w.string("generatorName", if void { "flat" } else { "default" });
+            w.int("generatorVersion", if void { 0 } else { 1 });
+            w.string("generatorOptions", if void { target.void_preset() } else { "" });
+            w.bool("MapFeatures", s.generate_structures);
+            w.long("SizeOnDisk", 0);
+        }
+        Era::Flat14 | Era::Flat15 => {
+            w.long("RandomSeed", s.seed);
+            w.string("generatorName", if void { "flat" } else { "default" });
+            w.int("generatorVersion", if void { 0 } else { 1 });
+            w.compound("generatorOptions");
+            if void {
+                w.string("biome", "minecraft:the_void");
+                w.list("layers", TagType::Compound, 1);
+                w.item_compound();
+                w.string("block", "minecraft:air");
+                w.byte("height", 1);
+                w.end();
+                w.compound("structures");
+                w.end();
+            }
+            w.end();
+            w.bool("MapFeatures", s.generate_structures);
+        }
+        Era::Flat16 | Era::Modern => {
+            w.bool("WasModded", false);
+            w.float("SpawnAngle", 0.0);
+            w.int("WanderingTraderSpawnChance", 25);
+            w.int("WanderingTraderSpawnDelay", 24000);
+            w.compound("WorldGenSettings");
+            w.long("seed", s.seed);
+            w.bool("generate_features", s.generate_structures);
+            w.bool("bonus_chest", false);
+            w.compound("dimensions");
+            if void {
+                w.compound("minecraft:overworld");
+                w.string("type", "minecraft:overworld");
+                w.compound("generator");
+                w.string("type", "minecraft:flat");
+                w.compound("settings");
+                w.string("biome", "minecraft:the_void");
+                w.bool("features", false);
+                w.bool("lakes", false);
+                w.list("layers", TagType::Compound, 1);
+                w.item_compound();
+                w.string("block", "minecraft:air");
+                w.int("height", 1);
+                w.end();
+                if era == Era::Flat16 {
+                    // 1.16 and 1.17 want to be told there are no structures.
+                    w.compound("structures");
+                    w.compound("structures");
+                    w.end();
+                    w.end();
+                }
+                w.end();
+                w.end();
+                w.end();
+            } else {
+                noise_dimension(&mut w, "minecraft:overworld", "minecraft:overworld", s.seed, |w| {
+                    if era == Era::Flat16 {
+                        w.string("type", "minecraft:vanilla_layered");
+                        w.long("seed", s.seed);
+                        w.bool("large_biomes", false);
+                    } else {
+                        w.string("type", "minecraft:multi_noise");
+                        w.string("preset", "minecraft:overworld");
+                    }
+                });
+            }
+            noise_dimension(&mut w, "minecraft:the_nether", "minecraft:nether", s.seed, |w| {
                 w.string("type", "minecraft:multi_noise");
-                w.string("preset", "minecraft:overworld");
+                if era == Era::Flat16 {
+                    w.long("seed", s.seed);
+                }
+                w.string("preset", "minecraft:nether");
             });
-        }
-        Surroundings::Void => {
-            w.compound("minecraft:overworld");
-            w.string("type", "minecraft:overworld");
-            w.compound("generator");
-            w.string("type", "minecraft:flat");
-            w.compound("settings");
-            w.string("biome", "minecraft:the_void");
-            w.bool("features", false);
-            w.bool("lakes", false);
-            w.list("layers", TagType::Compound, 1);
-            w.item_compound();
-            w.string("block", "minecraft:air");
-            w.int("height", 1);
-            w.end();
-            w.end();
-            w.end();
-            w.end();
+            noise_dimension(&mut w, "minecraft:the_end", "minecraft:end", s.seed, |w| {
+                w.string("type", "minecraft:the_end");
+                w.long("seed", s.seed);
+            });
+            w.end(); // dimensions
+            w.end(); // WorldGenSettings
         }
     }
-    noise_dimension(&mut w, "minecraft:the_nether", "minecraft:nether", s.seed, |w| {
-        w.string("type", "minecraft:multi_noise");
-        w.string("preset", "minecraft:nether");
-    });
-    noise_dimension(&mut w, "minecraft:the_end", "minecraft:end", s.seed, |w| {
-        w.string("type", "minecraft:the_end");
-        w.long("seed", s.seed);
-    });
-    w.end(); // dimensions
-    w.end(); // WorldGenSettings
 
     w.end(); // Data
     w.finish()
 }
 
 /// The gzip-compressed bytes of `level.dat`.
-pub fn level_dat(settings: &LevelSettings) -> io::Result<Vec<u8>> {
+pub fn level_dat(settings: &LevelSettings, target: &Target) -> io::Result<Vec<u8>> {
     let mut gz = GzEncoder::new(Vec::new(), Compression::default());
-    gz.write_all(&level_nbt(settings))?;
+    gz.write_all(&level_nbt(settings, target))?;
     gz.finish()
 }
 
@@ -233,7 +290,7 @@ mod tests {
 
     #[test]
     fn level_dat_is_gzipped_nbt_with_the_expected_fields() {
-        let bytes = level_dat(&settings(Surroundings::Vanilla)).unwrap();
+        let bytes = level_dat(&settings(Surroundings::Vanilla), &Target::default()).unwrap();
         assert_eq!(&bytes[..2], &[0x1f, 0x8b]);
         let mut raw = Vec::new();
         flate2::read::GzDecoder::new(&bytes[..]).read_to_end(&mut raw).unwrap();
@@ -275,7 +332,7 @@ mod tests {
     #[test]
     fn void_surroundings_use_an_empty_flat_generator() {
         let root: HashMap<String, Value> =
-            fastnbt::from_bytes(&level_nbt(&settings(Surroundings::Void))).unwrap();
+            fastnbt::from_bytes(&level_nbt(&settings(Surroundings::Void), &Target::default())).unwrap();
         let wgs = compound(&compound(&root["Data"])["WorldGenSettings"]);
         let overworld = compound(&compound(&wgs["dimensions"])["minecraft:overworld"]);
         let generator = compound(&overworld["generator"]);

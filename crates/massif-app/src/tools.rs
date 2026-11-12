@@ -20,6 +20,9 @@ pub enum Tool {
     Roughen,
     PaintTerrain,
     PaintBiome,
+    /// The biome the land calls for; the terrain the biome calls for.
+    AutoBiome,
+    AutoPaint,
     Eyedropper,
     Flood,
     Drain,
@@ -43,7 +46,7 @@ impl Tool {
         (
             "Paint",
             Icon::Paintbrush,
-            &[Tool::PaintTerrain, Tool::PaintBiome, Tool::Eyedropper],
+            &[Tool::PaintTerrain, Tool::PaintBiome, Tool::AutoPaint, Tool::AutoBiome, Tool::Eyedropper],
         ),
         ("Water", Icon::Droplet, &[Tool::Flood, Tool::Drain, Tool::Water]),
         ("Levels", Icon::Layers, &[Tool::StampSlab, Tool::EraseSlab]),
@@ -60,6 +63,8 @@ impl Tool {
             Tool::Roughen => "Roughen",
             Tool::PaintTerrain => "Paint terrain",
             Tool::PaintBiome => "Paint biome",
+            Tool::AutoBiome => "Auto biome",
+            Tool::AutoPaint => "Auto paint",
             Tool::Eyedropper => "Eyedropper",
             Tool::Flood => "Flood",
             Tool::Drain => "Drain",
@@ -82,6 +87,8 @@ impl Tool {
             Tool::Roughen => Icon::Sparkles,
             Tool::PaintTerrain => Icon::Paintbrush,
             Tool::PaintBiome => Icon::Trees,
+            Tool::AutoBiome => Icon::Earth,
+            Tool::AutoPaint => Icon::WandSparkles,
             Tool::Eyedropper => Icon::Pipette,
             Tool::Flood => Icon::PaintBucket,
             Tool::Drain => Icon::DropletOff,
@@ -138,6 +145,12 @@ impl Tool {
                 "Paint the selected terrain; the right button puts back the terrain the height calls for."
             }
             Tool::PaintBiome => "Paint the selected biome; the right button resets columns to automatic.",
+            Tool::AutoBiome => {
+                "Give the land under the brush its biomes: deep water, rivers, beaches, plains, hills, deserts, snow… read from the water, the height, the slope and the ground. The right button resets columns to automatic."
+            }
+            Tool::AutoPaint => {
+                "Paint the ground under the brush as its biomes call for: their ground, their cliffs, what lies under their water. The right button puts back the terrain the height calls for."
+            }
             Tool::Eyedropper => "Click to pick the terrain, biome, height and water level under the cursor.",
             Tool::Flood => "Fill the basin under the cursor with water up to the water level; the right button drains it.",
             Tool::Drain => "Remove the body of water under the cursor; the right button floods it.",
@@ -226,6 +239,15 @@ pub struct ToolState {
     pub surface: SurfaceChoice,
     /// Tool to come back to after the eyedropper.
     pub previous: Tool,
+    /// The biome of each kind of land, and the terrains of each biome.
+    pub auto: massif_core::auto::AutoRules,
+    /// Asked from a panel: open the rules of the automatic tools.
+    #[serde(skip)]
+    pub open_rules: bool,
+    /// What the last automatic pass over the whole map changed: whether
+    /// it was of biomes, and how many columns.
+    #[serde(skip)]
+    pub auto_done: Option<(bool, usize)>,
 }
 
 impl Default for ToolState {
@@ -247,6 +269,9 @@ impl Default for ToolState {
             slab_height: 140.0,
             surface: SurfaceChoice::Top,
             previous: Tool::PaintTerrain,
+            auto: massif_core::auto::AutoRules::default(),
+            open_rules: false,
+            auto_done: None,
         }
     }
 }
@@ -336,7 +361,10 @@ pub fn begin_stroke(doc: &mut Document, tools: &ToolState, at: (f32, f32), inver
 /// Continue a stroke to `to`. `dt` is the time since the previous call.
 pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Stroke, to: (f32, f32), dt: f32) {
     let invert = stroke.inverse;
-    let theme = (stroke.tool == Tool::PaintTerrain && invert).then(|| {
+    // The automatic tools read the land with the rules of the settings.
+    let reader = matches!(stroke.tool, Tool::AutoBiome | Tool::AutoPaint)
+        .then(|| massif_core::auto::Reader::new(&tools.auto, &doc.world.registry, doc.world.meta.sea_level));
+    let theme = (matches!(stroke.tool, Tool::PaintTerrain | Tool::AutoPaint) && invert).then(|| {
         (
             massif_core::generate::Theme::new(&doc.world.registry),
             doc.world.meta.sea_level as f32,
@@ -391,6 +419,17 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                 let biome = if invert { 0 } else { tools.biome };
                 ops::paint_biome(&mut edit, brush, x, z, BiomeId(biome), stroke.salt)
             }
+            Tool::AutoBiome => match &reader {
+                Some(reader) if !invert => ops::auto_biome(&mut edit, brush, x, z, stroke.salt, reader),
+                _ => ops::paint_biome(&mut edit, brush, x, z, BiomeId(0), stroke.salt),
+            },
+            Tool::AutoPaint => match (&theme, &reader) {
+                (Some((theme, sea)), _) => ops::paint_terrain_with(&mut edit, brush, x, z, stroke.salt, |h| {
+                    theme.terrain(h - 1.0, 0.0, *sea, 0.0)
+                }),
+                (None, Some(reader)) => ops::auto_paint(&mut edit, brush, x, z, stroke.salt, reader),
+                (None, None) => {}
+            },
             Tool::Water => {
                 let level = if invert { NO_FLUID } else { tools.water_level };
                 ops::set_fluid(&mut edit, brush, x, z, level);

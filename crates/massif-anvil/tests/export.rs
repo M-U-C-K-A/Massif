@@ -4,7 +4,7 @@
 
 use fastanvil::biome::Biome;
 use fastanvil::{Chunk, JavaChunk, Region};
-use massif_anvil::{ExportError, ExportOptions, Progress, export};
+use massif_anvil::{Era, ExportError, ExportOptions, Progress, Target, export};
 use massif_core::compose::{Materializer, TileStack};
 use massif_core::coords::local_index;
 use massif_core::generate::{GenParams, Landform, generate};
@@ -96,6 +96,8 @@ fn temp_dir(name: &str) -> PathBuf {
 struct Reader {
     dir: PathBuf,
     chunks: HashMap<(i32, i32), JavaChunk>,
+    /// Chunks of older versions are read too.
+    any_version: bool,
 }
 
 impl Reader {
@@ -103,6 +105,7 @@ impl Reader {
         Self {
             dir: dir.to_owned(),
             chunks: HashMap::new(),
+            any_version: false,
         }
     }
 
@@ -119,6 +122,7 @@ impl Reader {
                 .unwrap_or_else(|| panic!("chunk ({cx}, {cz}) is missing"));
             match JavaChunk::from_bytes(&data).unwrap() {
                 chunk @ JavaChunk::Post18(_) => chunk,
+                chunk if self.any_version => chunk,
                 _ => panic!("chunk ({cx}, {cz}) was not read as a 1.18+ chunk"),
             }
         })
@@ -249,6 +253,90 @@ fn exported_blocks_match_the_world_model() {
     }
 
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The same world, written for versions of every era: each is read back
+/// as that era's chunks, with the blocks the version has.
+#[test]
+fn every_era_gets_its_own_chunks() {
+    let mut world = build_world();
+    let snapshot = world.snapshot();
+    for name in ["26.3", "1.21.4", "1.19.2", "1.17.1", "1.16.5", "1.15.2", "1.14.4", "1.12.2", "1.8.9"] {
+        let target = Target::release(name).unwrap();
+        let dir = temp_dir(&format!("era-{name}"));
+        let options = ExportOptions {
+            target: target.clone(),
+            ..ExportOptions::default()
+        };
+        let stats = export(&snapshot, &dir, &options, &Progress::default()).unwrap();
+        assert_eq!((stats.regions, stats.chunks), (4, 256), "{name}");
+        let mut reader = Reader::new(&dir);
+        reader.any_version = true;
+        let era = target.era();
+        {
+            let chunk = reader.chunk(0, 0);
+            match (era, chunk) {
+                (Era::Modern, JavaChunk::Post18(_)) => {
+                    assert_eq!(chunk.status(), target.full_status(), "{name}");
+                    assert_eq!(chunk.y_range(), -64..320, "{name}");
+                }
+                // Sections of air are left out: the range is what is there.
+                (Era::Flat14 | Era::Flat15 | Era::Flat16, JavaChunk::Pre18(_)) => assert_eq!(chunk.y_range().start, 0, "{name}"),
+                (Era::Numbered, JavaChunk::Pre13(_)) => {}
+                _ => panic!("{name}: the chunk was not read as its era's"),
+            }
+        }
+        let mut b = |x, y, z| reader.block(x, y, z);
+        // The grass plateau at 100, down to the bedrock: at −64 from 1.18,
+        // at 0 before.
+        // (Before 1.13 the block of grass was plainly called grass.)
+        let grass = if era == Era::Numbered { "minecraft:grass" } else { "minecraft:grass_block" };
+        assert_eq!(b(-40, 100, -40), "minecraft:air", "{name}");
+        assert_eq!(b(-40, 99, -40), grass, "{name}");
+        assert_eq!(b(-40, 98, -40), "minecraft:dirt", "{name}");
+        assert_eq!(b(-40, 60, -40), "minecraft:stone", "{name}");
+        if era == Era::Modern {
+            assert_eq!(b(-40, -30, -40), "minecraft:deepslate", "{name}");
+            assert_eq!(b(-40, -64, -40), "minecraft:bedrock", "{name}");
+        } else {
+            assert_eq!(b(-40, 0, -40), "minecraft:bedrock", "{name}");
+            // Just above it, deepslate where the version has it (1.17),
+            // stone before.
+            let rock = b(-40, 1, -40);
+            assert!(rock == "minecraft:stone" || (target.data_version >= 2724 && rock == "minecraft:deepslate"), "{name}: {rock}");
+        }
+        // The sandy basin under its water, the floating slab over the void.
+        assert_eq!(b(40, 49, 40), "minecraft:sand", "{name}");
+        assert_eq!(b(40, 62, 40), "minecraft:water", "{name}");
+        assert_eq!(b(40, 63, 40), "minecraft:air", "{name}");
+        assert_eq!(b(-40, 154, 40), "minecraft:sand", "{name}");
+        assert_eq!(b(-40, 145, 40), "minecraft:stone", "{name}");
+        assert_eq!(b(-40, 144, 40), "minecraft:air", "{name}");
+        // Moss came with 1.17: grass stands in for it before.
+        let moss = if target.data_version >= 2724 { "minecraft:moss_block" } else { grass };
+        assert_eq!(b(40, 55, -40), moss, "{name}");
+        assert_eq!(reader.biome(-40, 99, -40), Biome::Plains, "{name}");
+        assert_eq!(reader.biome(40, 55, 40), Biome::Ocean, "{name}");
+
+        // level.dat says which version it is for, and how the world goes on.
+        let mut raw = Vec::new();
+        std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(std::fs::File::open(dir.join("level.dat")).unwrap()), &mut raw).unwrap();
+        let level: fastnbt::Value = fastnbt::from_bytes(&raw).unwrap();
+        let fastnbt::Value::Compound(root) = &level else { panic!("{name}: level.dat") };
+        let fastnbt::Value::Compound(data) = &root["Data"] else { panic!("{name}: Data") };
+        if target.data_version > 0 {
+            // From 1.18.2 on, level.dat is 1.18.2's: later versions bring
+            // it up to date themselves.
+            assert_eq!(data["DataVersion"], fastnbt::Value::Int(target.data_version.min(2975)), "{name}");
+        } else {
+            assert!(!data.contains_key("DataVersion"), "{name}: versions before 1.9 have no data version");
+        }
+        match era {
+            Era::Modern | Era::Flat16 => assert!(data.contains_key("WorldGenSettings"), "{name}"),
+            _ => assert_eq!(data["generatorName"], fastnbt::Value::String("default".into()), "{name}"),
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }
 
 #[test]

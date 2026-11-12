@@ -2,8 +2,10 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 
 ## In this version
 
-- **World**, the map editor: a multi-level surface (ground, solid and carve levels), 3D sculpting, WorldPainter's brushes and controls, the game's real blocks, the whole map in 3D at block resolution, WorldPainter `.world` import, Minecraft export.
+- **World**, the map editor: a multi-level surface (ground, solid and carve levels), 3D sculpting, WorldPainter's brushes and controls, the game's real blocks, the whole map in 3D at block resolution, WorldPainter `.world` import, Minecraft export for versions 1.7.10 to 26.3.
 - **Terrain**, the generator: more than fifty nodes (landforms, primitives, adjustments, erosion and other simulations, masks, colours); rock over the void (floating islands, overhanging cliffs) that becomes levels of the map; nine landscapes to start from (alpine range, archipelago, karst towers, floating mountains, river valley, desert canyon, volcanic island, dune sea, rolling hills); a viewport with a sun you turn, a sky that follows it, volumetric clouds, haze and a sea; images saved up to 8K; builds up to 16,384 × 16,384, converted to voxels as real blocks.
+
+- **New in 0.2**: export for the version you play, from 1.7.10 to 26.3; Auto biome and Auto paint, by rules you can change; a brush option for the way slopes face (the sunny side, the shade); a brush preview that shows where it presses hardest; rock over the void in the generator (floating islands, overhangs) that becomes levels of the map; stone towers and floating mountains among the landscapes to start from.
 
 ## Downloads
 

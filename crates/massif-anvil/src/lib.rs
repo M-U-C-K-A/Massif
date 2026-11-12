@@ -10,9 +10,11 @@ pub mod export;
 pub mod level_dat;
 pub mod nbt;
 pub mod region;
+pub mod version;
 
 pub use chunk::{DATA_VERSION, DATA_VERSION_NAME};
 pub use export::{
     ExportError, ExportOptions, ExportStats, Progress, default_saves_dir, export, unique_dir,
 };
 pub use level_dat::{Difficulty, GameMode, Surroundings, WorldBorder};
+pub use version::{Era, Target};

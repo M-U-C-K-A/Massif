@@ -55,7 +55,18 @@ pub struct Filter {
     pub bumps: bool,
     pub depth: f32,
     pub radius: i32,
+    /// Act only on slopes that face `facing` (degrees: 0 north, 90 east),
+    /// give or take `facing_spread` degrees: the side the sun lights, the
+    /// side in the shade. Level ground faces nowhere.
+    pub facing_on: bool,
+    pub facing: f32,
+    pub facing_spread: f32,
 }
+
+/// Degrees over which the facing test softens at its limits.
+pub const FACING_FADE: f32 = 12.0;
+/// Slopes gentler than this (degrees) face nowhere.
+pub const FACING_MIN_SLOPE: f32 = 4.0;
 
 impl Default for Filter {
     fn default() -> Self {
@@ -73,6 +84,9 @@ impl Default for Filter {
             bumps: false,
             depth: 1.0,
             radius: 4,
+            facing_on: false,
+            facing: 180.0,
+            facing_spread: 60.0,
         }
     }
 }
@@ -88,6 +102,9 @@ pub struct Column {
     pub slope: f32,
     /// Height minus the mean height around.
     pub relief: f32,
+    /// The way the slope faces, in degrees (0 north, 90 east); `None`
+    /// when not worked out.
+    pub aspect: Option<f32>,
 }
 
 impl Filter {
@@ -101,10 +118,23 @@ impl Filter {
             || self.slope_below
             || self.hollows
             || self.bumps
+            || self.facing_on
     }
 
     fn needs_slope(&self) -> bool {
-        self.slope_above || self.slope_below
+        self.slope_above || self.slope_below || self.facing_on
+    }
+
+    /// Weight of the facing test for a slope of `slope` degrees that faces
+    /// `aspect`: 1 within the spread, fading to 0 just outside it.
+    pub fn facing_weight(&self, slope: f32, aspect: Option<f32>) -> f32 {
+        if !self.facing_on {
+            return 1.0;
+        }
+        let Some(aspect) = aspect.filter(|_| slope >= FACING_MIN_SLOPE) else { return 0.0 };
+        let away = ((aspect - self.facing + 540.0).rem_euclid(360.0) - 180.0).abs();
+        let spread = self.facing_spread.clamp(1.0, 180.0);
+        ((spread - away) / FACING_FADE + 0.5).clamp(0.0, 1.0)
     }
 
     fn needs_relief(&self) -> bool {
@@ -155,7 +185,7 @@ impl Filter {
         {
             return 0.0;
         }
-        if self.needs_slope() {
+        if self.slope_above || self.slope_below {
             let ok = (self.slope_above && c.slope >= self.slope) || (self.slope_below && c.slope <= self.slope);
             if !ok {
                 return 0.0;
@@ -167,7 +197,7 @@ impl Filter {
                 return 0.0;
             }
         }
-        self.height_weight(c.height)
+        self.height_weight(c.height) * self.facing_weight(c.slope, c.aspect)
     }
 
     /// The weights of the columns of `rect` (row-major).
@@ -190,7 +220,9 @@ impl Filter {
                 let Some(col) = surface.column(x, z) else { return 0 };
                 let mut c = col;
                 if self.needs_slope() {
-                    c.slope = trend_slope(|dx, dz| surface.column(x + dx, z + dz).map(|n| n.height), SLOPE_REACH, 1.0);
+                    let (gx, gz) = trend_gradient(|dx, dz| surface.column(x + dx, z + dz).map(|n| n.height), SLOPE_REACH, 1.0);
+                    c.slope = gx.hypot(gz).atan().to_degrees();
+                    c.aspect = aspect_of(gx, gz);
                 }
                 if let Some(means) = &relief {
                     let j = surface.index(x, z);
@@ -212,7 +244,25 @@ pub const SLOPE_REACH: i32 = 4;
 /// `h(dx, dz)` is the height `dx`, `dz` samples away (`None` off the map),
 /// `spacing` the blocks between samples.
 pub fn trend_slope(h: impl Fn(i32, i32) -> Option<f32>, r: i32, spacing: f32) -> f32 {
-    let Some(centre) = h(0, 0) else { return 0.0 };
+    let (gx, gz) = trend_gradient(h, r, spacing);
+    gx.hypot(gz).atan().to_degrees()
+}
+
+/// The way a hillside faces, in degrees (0 north, 90 east), from the rise
+/// of its heights toward the east (`gx`) and the south (`gz`): the way
+/// water would run down it. `None` on level ground.
+pub fn aspect_of(gx: f32, gz: f32) -> Option<f32> {
+    if gx == 0.0 && gz == 0.0 {
+        return None;
+    }
+    // Downhill is (−gx, −gz); north is −z.
+    Some((-gx).atan2(gz).to_degrees().rem_euclid(360.0))
+}
+
+/// The rise of the best-fitting plane (see [`trend_slope`]) toward the east
+/// and toward the south, in blocks per block.
+pub fn trend_gradient(h: impl Fn(i32, i32) -> Option<f32>, r: i32, spacing: f32) -> (f32, f32) {
+    let Some(centre) = h(0, 0) else { return (0.0, 0.0) };
     let (mut sx, mut sz, mut w) = (0.0f32, 0.0f32, 0.0f32);
     for dz in -r..=r {
         for dx in -r..=r {
@@ -224,10 +274,9 @@ pub fn trend_slope(h: impl Fn(i32, i32) -> Option<f32>, r: i32, spacing: f32) ->
         }
     }
     if w == 0.0 {
-        return 0.0;
+        return (0.0, 0.0);
     }
-    let (gx, gz) = (sx / w / spacing, sz / w / spacing);
-    gx.hypot(gz).atan().to_degrees()
+    (sx / w / spacing, sz / w / spacing)
 }
 
 /// The weights of a filter over a rectangle.
@@ -279,6 +328,7 @@ impl Surface {
                             wet: fluid != NO_FLUID && fluid as f32 > height,
                             slope: 0.0,
                             relief: 0.0,
+                            aspect: None,
                         };
                         out.push(((z - rect.z0) as usize * width + (x - rect.x0) as usize, column));
                     }
@@ -383,7 +433,78 @@ mod tests {
             wet: false,
             slope: 10.0,
             relief: 0.0,
+            aspect: None,
         }
+    }
+
+    #[test]
+    fn slopes_face_the_way_water_runs() {
+        // Rising toward the south: the hillside faces north.
+        assert_eq!(aspect_of(0.0, 1.0), Some(0.0));
+        // Rising toward the east: it faces west.
+        assert_eq!(aspect_of(1.0, 0.0), Some(270.0));
+        assert_eq!(aspect_of(-1.0, 0.0), Some(90.0));
+        assert_eq!(aspect_of(0.0, -1.0), Some(180.0));
+        assert_eq!(aspect_of(0.0, 0.0), None);
+        let south = Filter {
+            facing_on: true,
+            facing: 180.0,
+            facing_spread: 45.0,
+            ..Filter::default()
+        };
+        assert!(south.is_active());
+        assert_eq!(south.facing_weight(30.0, Some(180.0)), 1.0);
+        assert_eq!(south.facing_weight(30.0, Some(200.0)), 1.0);
+        assert_eq!(south.facing_weight(30.0, Some(0.0)), 0.0, "the north side");
+        assert_eq!(south.facing_weight(30.0, Some(270.0)), 0.0);
+        assert_eq!(south.facing_weight(1.0, Some(180.0)), 0.0, "level ground faces nowhere");
+        // The limit is soft.
+        let edge = south.facing_weight(30.0, Some(225.0));
+        assert!((edge - 0.5).abs() < 1e-4, "{edge}");
+        // Across north: 350° is 20° from 10°.
+        let north = Filter {
+            facing_on: true,
+            facing: 10.0,
+            facing_spread: 30.0,
+            ..Filter::default()
+        };
+        assert_eq!(north.facing_weight(20.0, Some(350.0)), 1.0);
+    }
+
+    #[test]
+    fn the_facing_test_reads_the_map() {
+        // A pyramid: each of its four sides faces its own way.
+        let mut dim = Dimension::new(DimensionKind::Overworld, -64, 320);
+        let mut tile = Tile::ground(60.0, 1, NO_FLUID);
+        for z in 0..128i32 {
+            for x in 0..128i32 {
+                let d = (x - 64).abs().max((z - 64).abs());
+                tile.top.set(local_index(x, z), 60.0 + (50 - d).max(0) as f32);
+            }
+        }
+        dim.ground_mut().insert(TilePos::new(0, 0), tile);
+        let rect = BlockRect::new(0, 0, 128, 128);
+        let facing = |degrees: f32| {
+            Filter {
+                facing_on: true,
+                facing: degrees,
+                facing_spread: 40.0,
+                ..Filter::default()
+            }
+            .mask(&dim, rect)
+        };
+        // North is −z: the north side is above the middle on the map.
+        let north = facing(0.0);
+        assert_eq!(north.get(64, 34), 1.0);
+        assert_eq!(north.get(64, 94), 0.0);
+        assert_eq!(north.get(34, 64), 0.0);
+        let east = facing(90.0);
+        assert_eq!(east.get(94, 64), 1.0);
+        assert_eq!(east.get(34, 64), 0.0);
+        let south = facing(180.0);
+        assert_eq!(south.get(64, 94), 1.0);
+        // The plain around faces nowhere.
+        assert_eq!(south.get(5, 120), 0.0);
     }
 
     #[test]

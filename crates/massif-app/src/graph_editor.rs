@@ -1249,6 +1249,10 @@ impl GraphEditor {
         self.replaced = Some(std::mem::replace(graph, new));
         self.view.render = template_render(t, sea, self.view.render.exaggeration);
         self.view.camera = Default::default();
+        // Sheer towers and floating rock need a finer preview to read.
+        if matches!(t, Template::KarstTowers | Template::FloatingMountains) {
+            self.preview = self.preview.max(768);
+        }
         self.selected = None;
         self.pinned = None;
         self.fit = true;
@@ -2062,7 +2066,7 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             base,
             seed: s,
         } => {
-            choice(ui, "Style", style, &[(CellStyle::Cones, "Cones"), (CellStyle::Ridges, "Ridges")]);
+            choice(ui, "Style", style, &[(CellStyle::Cones, "Cones"), (CellStyle::Ridges, "Ridges"), (CellStyle::Plates, "Plates")]);
             blocks(ui, "Cell size", scale, 20000.0);
             fraction(ui, "Jitter", jitter);
             height(ui, "Height", h);

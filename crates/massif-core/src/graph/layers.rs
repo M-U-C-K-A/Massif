@@ -24,6 +24,9 @@ struct Island {
     altitude: f64,
     tower: f64,
     lowest: (f64, f64),
+    /// Two smaller masses of rock grown onto it: where, from its centre,
+    /// and how large, as a share of its radius.
+    lobes: [(f64, f64, f64); 2],
 }
 
 /// Floating islands over the map: their top, their bottom and their mask.
@@ -61,6 +64,11 @@ pub(super) fn floating_islands(e: &Extent, altitude: f32, spread: f32, size: f32
             centre.0 + radius * 0.3 * (rand(seed, cx, cz, 6) - 0.5),
             centre.1 + radius * 0.3 * (rand(seed, cx, cz, 7) - 0.5),
         );
+        let lobe = |k: u64| {
+            let angle = std::f64::consts::TAU * rand(seed, cx, cz, 8 + k);
+            let away = radius * (0.4 + 0.3 * rand(seed, cx, cz, 10 + k));
+            (angle.cos() * away, angle.sin() * away, 0.4 + 0.25 * rand(seed, cx, cz, 12 + k))
+        };
         Some(Island {
             cell: (cx, cz),
             centre,
@@ -68,6 +76,7 @@ pub(super) fn floating_islands(e: &Extent, altitude: f32, spread: f32, size: f32
             altitude,
             tower: rand(seed, cx, cz, 5),
             lowest,
+            lobes: [lobe(0), lobe(1)],
         })
     };
     // The islands of every cell the map touches, and of those around.
@@ -87,26 +96,30 @@ pub(super) fn floating_islands(e: &Extent, altitude: f32, spread: f32, size: f32
         .map(|c| {
             let (x, z) = e.world(c % n, c / n);
             let (gx, gz) = (cell_of(x), cell_of(z));
-            // The island whose edge is farthest out here.
-            let mut best: Option<(f64, Island)> = None;
+            // The island whose edge is farthest out here, and how deep
+            // into each of its masses of rock the point is.
+            let mut best: Option<(f64, Island, [f64; 3])> = None;
             for dz in -1..=1 {
                 for dx in -1..=1 {
                     let Some(isl) = island_at(gx + dx, gz + dz) else { continue };
                     let d = (x - isl.centre.0).hypot(z - isl.centre.1);
                     // Well outside it, its ragged edge does not matter.
-                    let q = if d > isl.radius * 1.4 {
-                        d / isl.radius
+                    let (q, parts) = if d > isl.radius * 2.0 {
+                        (d / isl.radius, [2.0; 3])
                     } else {
                         let (ox, oz) = (isl.cell.0 as f64 * 7.31, isl.cell.1 as f64 * 3.17);
                         let k = isl.radius * 0.42;
-                        d / (isl.radius * (1.0 + 0.32 * noise.fbm(x / k + ox, z / k + oz, 5, 2.0, 0.5)))
+                        let ragged = isl.radius * (1.0 + 0.32 * noise.fbm(x / k + ox, z / k + oz, 5, 2.0, 0.5));
+                        let lobe = |l: (f64, f64, f64)| (x - isl.centre.0 - l.0).hypot(z - isl.centre.1 - l.1) / (ragged * l.2);
+                        let parts = [d / ragged, lobe(isl.lobes[0]), lobe(isl.lobes[1])];
+                        (parts[0].min(parts[1]).min(parts[2]), parts)
                     };
                     if best.is_none_or(|b| q < b.0) {
-                        best = Some((q, isl));
+                        best = Some((q, isl, parts));
                     }
                 }
             }
-            let Some((q, isl)) = best else {
+            let Some((q, isl, parts)) = best else {
                 return [altitude, altitude, 0.0];
             };
             if q >= 1.0 {
@@ -128,7 +141,10 @@ pub(super) fn floating_islands(e: &Extent, altitude: f32, spread: f32, size: f32
             let rib = ribs.ridged(angle * 4.0 + isl.cell.0 as f64, q * 2.5 + isl.cell.1 as f64, 4, 2.0, 0.5);
             let off = ((x - isl.lowest.0).hypot(z - isl.lowest.1) / r).min(1.0);
             let jag = ribs.fbm(x / (r * 0.18), z / (r * 0.18), 4, 2.0, 0.5);
-            let hanging = r * hang * (1.0 - q).powf(1.1) * (0.55 + 0.45 * rib) * (1.3 - 0.6 * off) * (1.0 + 0.25 * jag);
+            // Each mass of rock hangs to its own point.
+            let deep = |k: usize, share: f64| share * (1.0 - parts[k].min(1.0)).powf(1.1);
+            let depth = deep(0, 1.0).max(deep(1, isl.lobes[0].2 * 1.3)).max(deep(2, isl.lobes[1].2 * 1.3));
+            let hanging = r * hang * depth * (0.55 + 0.45 * rib) * (1.3 - 0.6 * off) * (1.0 + 0.25 * jag);
             let bottom = isl.altitude - 1.5 * rim - hanging.max(0.0);
             [top as f32, bottom.min(top - 0.01) as f32, smoothstep(1.0, 0.9, q as f32)]
         })

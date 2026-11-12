@@ -147,6 +147,26 @@ impl Document {
         self.active_level = index;
     }
 
+    /// Give the whole map the biomes its land calls for (one undoable
+    /// step). Returns how many columns changed.
+    pub fn auto_biome(&mut self, rules: &massif_core::auto::AutoRules) -> usize {
+        let reader = massif_core::auto::Reader::new(rules, &self.world.registry, self.world.meta.sea_level);
+        self.history.begin("Auto biome", self.dim);
+        let changed = massif_core::auto::biomes_over_the_map(&mut self.history.edit(&mut self.world, 0), &reader);
+        self.commit();
+        changed
+    }
+
+    /// Paint the whole map as its biomes call for (one undoable step).
+    /// Returns how many columns changed.
+    pub fn auto_paint(&mut self, rules: &massif_core::auto::AutoRules) -> usize {
+        let reader = massif_core::auto::Reader::new(rules, &self.world.registry, self.world.meta.sea_level);
+        self.history.begin("Auto paint", self.dim);
+        let changed = massif_core::auto::paint_over_the_map(&mut self.history.edit(&mut self.world, 0), &reader);
+        self.commit();
+        changed
+    }
+
     pub fn remove_level(&mut self, index: usize) {
         if index == 0 || index >= self.dimension().levels.len() {
             return;

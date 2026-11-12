@@ -61,6 +61,10 @@ pub enum CellStyle {
     Cones,
     /// Ridges along the edges between cells: plates, mesas.
     Ridges,
+    /// One height per cell, flat across it: pillars and blocks of every
+    /// height (with the same scale, jitter and seed, the cells are those of
+    /// the other styles).
+    Plates,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -981,6 +985,7 @@ impl NodeKind {
             NodeKind::Noise { style: NoiseStyle::Billow, .. } => "Billow noise",
             NodeKind::Cells { style: CellStyle::Cones, .. } => "Cells",
             NodeKind::Cells { style: CellStyle::Ridges, .. } => "Cell ridges",
+            NodeKind::Cells { style: CellStyle::Plates, .. } => "Cell plates",
             NodeKind::Radial { .. } => "Radial gradient",
             NodeKind::Constant { .. } => "Constant",
             NodeKind::LinearGradient { .. } => "Linear gradient",

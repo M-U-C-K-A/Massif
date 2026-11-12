@@ -767,14 +767,14 @@ fn templates_make_their_landscapes() {
             Template::KarstTowers => assert!(steep > 0.01 && hi > sea + 100.0, "pillars: {steep}, {hi}"),
             Template::FloatingMountains => {
                 assert!(steep > 0.004, "pillars: {steep}");
-                assert_eq!(out.layers.len(), 2, "overhangs and floating islands");
+                assert_eq!(out.layers.len(), 1, "the floating islands");
                 for layer in &out.layers {
                     let thick = layer.top.data.iter().zip(&layer.bottom.data).filter(|(t, b)| *t - *b >= 1.0).count();
                     assert!(thick > 0, "{} has rock", layer.name);
                     assert!(layer.top.range().1 < 320.0, "{} under the build limit", layer.name);
                 }
                 // The islands float clear of the ground.
-                let (islands, ground) = (&out.layers[1], &h);
+                let (islands, ground) = (&out.layers[0], &h);
                 for c in 0..h.data.len() {
                     if islands.top.data[c] - islands.bottom.data[c] >= 1.0 {
                         assert!(islands.bottom.data[c] >= ground.data[c] + 13.0, "an island touches the ground");

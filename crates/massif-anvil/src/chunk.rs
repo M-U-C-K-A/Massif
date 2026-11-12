@@ -1,11 +1,19 @@
 //! Turning the columns of one chunk into chunk NBT.
 //!
-//! The chunk layout is the one introduced by Minecraft 1.18 and still read by
-//! every later version: 16³ sections holding a block-state palette with
-//! bit-packed indices (Y, Z, X order, entries never straddle a `long`) and a
-//! 4³ biome palette. Light is left for the game to compute (`isLightOn: 0`).
+//! The blocks of a chunk are worked out once, then written the way the
+//! target version stores them (see [`crate::version`]):
+//!
+//! - 1.18 and later: 16³ sections holding a block-state palette with
+//!   bit-packed indices (Y, Z, X order, entries never straddle a `long`)
+//!   and a 4³ biome palette;
+//! - 1.14 to 1.17: the same palettes under a `Level` compound, biomes as
+//!   numbers, the world 256 blocks high;
+//! - up to 1.12: numbered blocks, with the light of the sky worked out.
+//!
+//! From 1.14 on, light is left for the game to compute (`isLightOn: 0`).
 
 use crate::nbt::{NbtWriter, TagType};
+use crate::version::{Era, Target};
 use massif_core::compose::{Materializer, Span, TileStack, block_top};
 use massif_core::coords::{TilePos, cell_index};
 use massif_core::registry::{BiomeId, Registry, TerrainId};
@@ -32,6 +40,14 @@ pub struct ExportContext<'a> {
     states: Vec<(String, Vec<(String, String)>)>,
     /// Biome identifiers by `BiomeId`.
     biomes: Vec<String>,
+    /// The version written for, and how it stores chunks.
+    target: Target,
+    era: Era,
+    /// Before 1.13: the number and data of each block, by `BlockId`.
+    numbered: Vec<(u8, u8)>,
+    /// Before 1.18: the number of each biome, by `BiomeId`.
+    biome_numbers: Vec<i32>,
+    bedrock: u16,
     water: u16,
     plains: u16,
     ocean: u16,
@@ -43,9 +59,11 @@ pub struct ExportContext<'a> {
 impl<'a> ExportContext<'a> {
     /// Fails with a description if the registry or the build limits cannot be
     /// exported.
-    pub fn new(world: &'a World, dim: &Dimension) -> Result<Self, String> {
+    pub fn new(world: &'a World, dim: &Dimension, target: &Target) -> Result<Self, String> {
         let reg = &world.registry;
-        if dim.min_y % 16 != 0 || dim.max_y % 16 != 0 || dim.max_y <= dim.min_y {
+        let era = target.era();
+        let (min_y, max_y) = target.heights(dim.min_y, dim.max_y);
+        if era == Era::Modern && (dim.min_y % 16 != 0 || dim.max_y % 16 != 0 || dim.max_y <= dim.min_y) {
             return Err(format!(
                 "build limits {}..{} are not multiples of 16",
                 dim.min_y, dim.max_y
@@ -70,17 +88,20 @@ impl<'a> ExportContext<'a> {
                 return Err(format!("terrain \"{}\" uses an unknown block", t.name));
             }
         }
+        // Blocks the version does not have yet become the closest it has.
         let states = reg
             .blocks
             .iter()
             .map(|b| {
-                let props = b
-                    .properties()
-                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
-                    .collect();
-                (b.name().to_owned(), props)
+                let (name, kept) = target.block(b.name());
+                let props = if kept { b.properties().map(|(k, v)| (k.to_owned(), v.to_owned())).collect() } else { Vec::new() };
+                (name.to_owned(), props)
             })
             .collect();
+        let numbered = match era {
+            Era::Numbered => reg.blocks.iter().map(|b| target.numbered(b.name())).collect(),
+            _ => Vec::new(),
+        };
         let biomes = reg
             .biomes
             .iter()
@@ -93,14 +114,23 @@ impl<'a> ExportContext<'a> {
             })
             .collect();
         let biome = |id: &str| reg.biome_by_id(id).unwrap_or(BiomeId::AUTO).0;
+        let biome_numbers = match era {
+            Era::Modern => Vec::new(),
+            _ => reg.biomes.iter().map(|b| target.biome_number(if b.id.is_empty() { "minecraft:plains" } else { &b.id })).collect(),
+        };
         Ok(Self {
             reg,
             mat: Materializer::new(reg, world.meta.seed, dim.min_y),
-            min_y: dim.min_y,
-            max_y: dim.max_y,
+            min_y,
+            max_y,
             sea_level: world.meta.sea_level,
             states,
             biomes,
+            target: target.clone(),
+            era,
+            numbered,
+            biome_numbers,
+            bedrock: wk.bedrock.0,
             water: if world.meta.lava { wk.lava.0 } else { wk.water.0 },
             plains: biome("minecraft:plains"),
             ocean: biome("minecraft:ocean"),
@@ -142,6 +172,11 @@ impl<'a> ExportContext<'a> {
             .get(id as usize)
             .map(String::as_str)
             .unwrap_or("minecraft:plains")
+    }
+
+    /// The number of a biome, for the versions that number them.
+    fn biome_number(&self, id: u16) -> i32 {
+        self.biome_numbers.get(id as usize).copied().unwrap_or(1)
     }
 }
 
@@ -213,7 +248,7 @@ pub fn build_chunk(
 ) -> Vec<u8> {
     let (ox, oz) = tile.origin();
     let (bx0, bz0) = (ox + cx as i32 * 16, oz + cz as i32 * 16);
-    let min_y = ctx.min_y;
+    let (min_y, max_y) = (ctx.min_y, ctx.max_y);
     let sections = ctx.sections();
     let Scratch {
         blocks,
@@ -243,17 +278,22 @@ pub fn build_chunk(
                 } else {
                     span.y1 - recipe as i32
                 };
-                for y in span.y0..split {
+                // What lies outside the version's heights is left out.
+                for y in span.y0.max(min_y)..split.min(max_y) {
                     blocks[at(y)] = ctx.mat.substrate(x, y, z).0;
                 }
-                for y in split..span.y1 {
+                for y in split.max(min_y)..span.y1.min(max_y) {
                     blocks[at(y)] = ctx.mat.block(span, x, y, z, submerged).0;
                 }
             }
             for &(y0, y1) in fluids.iter() {
-                for y in y0..y1 {
+                for y in y0.max(min_y)..y1.min(max_y) {
                     blocks[at(y)] = ctx.water;
                 }
+            }
+            // A world cut at 0 gets its floor of bedrock there.
+            if ctx.era != Era::Modern && blocks[at(min_y)] != 0 {
+                blocks[at(min_y)] = ctx.bedrock;
             }
         }
     }
@@ -288,12 +328,17 @@ pub fn build_chunk(
     }
 
     // ---- NBT ---------------------------------------------------------------
+    match ctx.era {
+        Era::Modern => {}
+        Era::Numbered => return numbered_chunk(ctx, blocks, biome_columns, bx0 >> 4, bz0 >> 4),
+        _ => return flat_chunk(ctx, blocks, biome_columns, lookup, palette, packed, bx0 >> 4, bz0 >> 4),
+    }
     let mut w = NbtWriter::with_capacity(32 * 1024);
-    w.int("DataVersion", DATA_VERSION);
+    w.int("DataVersion", ctx.target.data_version);
     w.int("xPos", bx0 >> 4);
     w.int("yPos", min_y >> 4);
     w.int("zPos", bz0 >> 4);
-    w.string("Status", "full");
+    w.string("Status", ctx.target.full_status());
     w.long("LastUpdate", 0);
     w.long("InhabitedTime", 0);
     w.bool("isLightOn", false);
@@ -400,9 +445,226 @@ pub fn build_chunk(
     w.finish()
 }
 
+/// Pack `values` into longs, `bits` per entry, end to end: an entry may
+/// begin in one long and end in the next (1.14 and 1.15).
+fn pack_spanning(values: impl Iterator<Item = u64>, count: usize, bits: usize, out: &mut Vec<i64>) {
+    out.clear();
+    out.resize((count * bits).div_ceil(64), 0);
+    for (i, v) in values.enumerate() {
+        let (word, shift) = (i * bits / 64, i * bits % 64);
+        out[word] |= (v << shift) as i64;
+        if shift + bits > 64 {
+            out[word + 1] |= (v >> (64 - shift)) as i64;
+        }
+    }
+}
+
+/// The biome of the 4-block cell `c` (of the chunk's 16) at height `y`.
+fn biome_at(columns: &[BiomeColumn], c: usize, y: i32) -> u16 {
+    let column = &columns[c];
+    let mut id = column.base;
+    for &(y0, y1, biome) in &column.overrides {
+        if y >= y0 && y < y1 {
+            id = biome;
+        }
+    }
+    id
+}
+
+/// A chunk as 1.14 to 1.17 store it: everything under `Level`, sections
+/// with a palette of block states, biomes as numbers, 256 blocks high.
+#[allow(clippy::too_many_arguments)]
+fn flat_chunk(
+    ctx: &ExportContext,
+    blocks: &[u16],
+    biome_columns: &[BiomeColumn],
+    lookup: &mut [u16],
+    palette: &mut Vec<u16>,
+    packed: &mut Vec<i64>,
+    chunk_x: i32,
+    chunk_z: i32,
+) -> Vec<u8> {
+    let mut w = NbtWriter::with_capacity(32 * 1024);
+    w.int("DataVersion", ctx.target.data_version);
+    w.compound("Level");
+    w.int("xPos", chunk_x);
+    w.int("zPos", chunk_z);
+    w.string("Status", "full");
+    w.long("LastUpdate", 0);
+    w.long("InhabitedTime", 0);
+    w.bool("isLightOn", false);
+
+    // Biomes: a number per column in 1.14, per 4×4×4 cell after.
+    let biomes: Vec<i32> = if ctx.era == Era::Flat14 {
+        (0..256).map(|i| ctx.biome_number(biome_at(biome_columns, ((i >> 4) / 4) * 4 + (i & 15) / 4, ctx.sea_level))).collect()
+    } else {
+        (0..1024)
+            .map(|i| {
+                let (y4, z4, x4) = (i >> 4, (i >> 2) & 3, i & 3);
+                ctx.biome_number(biome_at(biome_columns, z4 * 4 + x4, ctx.min_y + y4 as i32 * 4 + 2))
+            })
+            .collect()
+    };
+    w.int_array("Biomes", &biomes);
+
+    let sections: Vec<usize> = (0..ctx.sections()).filter(|s| blocks[s * SECTION_VOLUME..(s + 1) * SECTION_VOLUME].iter().any(|&b| b != 0)).collect();
+    w.list("Sections", TagType::Compound, sections.len());
+    for s in sections {
+        let section = &blocks[s * SECTION_VOLUME..(s + 1) * SECTION_VOLUME];
+        w.item_compound();
+        w.byte("Y", ((ctx.min_y >> 4) + s as i32) as i8);
+        palette.clear();
+        for &b in section {
+            if lookup[b as usize] == UNSET {
+                lookup[b as usize] = palette.len() as u16;
+                palette.push(b);
+            }
+        }
+        w.list("Palette", TagType::Compound, palette.len());
+        for &b in palette.iter() {
+            let (name, props) = &ctx.states[b as usize];
+            w.item_compound();
+            w.string("Name", name);
+            if !props.is_empty() {
+                w.compound("Properties");
+                for (k, v) in props {
+                    w.string(k, v);
+                }
+                w.end();
+            }
+            w.end();
+        }
+        let bits = bits_for(palette.len().max(2)).max(4);
+        let indices = section.iter().map(|&b| lookup[b as usize] as u64);
+        if ctx.era == Era::Flat16 {
+            pack(indices, SECTION_VOLUME, bits, packed);
+        } else {
+            pack_spanning(indices, SECTION_VOLUME, bits, packed);
+        }
+        w.long_array("BlockStates", packed);
+        for &b in palette.iter() {
+            lookup[b as usize] = UNSET;
+        }
+        w.end();
+    }
+
+    w.list("Entities", TagType::Compound, 0);
+    w.list("TileEntities", TagType::Compound, 0);
+    w.list("TileTicks", TagType::Compound, 0);
+    w.list("LiquidTicks", TagType::Compound, 0);
+    w.compound("Heightmaps");
+    w.end();
+    w.compound("Structures");
+    w.compound("References");
+    w.end();
+    w.compound("Starts");
+    w.end();
+    w.end();
+    w.end(); // Level
+    w.finish()
+}
+
+/// How much of the sky's light a numbered block lets through: all of it
+/// (air), some (water and ice dim it by three), none.
+fn sky_dimming(id: u8) -> u8 {
+    match id {
+        0 => 0,
+        8 | 9 | 79 => 3,
+        _ => 15,
+    }
+}
+
+/// A chunk as the versions up to 1.12 store it: numbered blocks with four
+/// bits of data, a biome per column, and the light of the sky falling
+/// straight down (the game spreads it sideways when it loads the chunk).
+fn numbered_chunk(ctx: &ExportContext, blocks: &[u16], biome_columns: &[BiomeColumn], chunk_x: i32, chunk_z: i32) -> Vec<u8> {
+    let height = (ctx.max_y - ctx.min_y) as usize;
+    let numbered = |i: usize| ctx.numbered.get(blocks[i] as usize).copied().unwrap_or((1, 0));
+    // Light of the sky and height of every column, from the top down.
+    let mut sky = vec![0u8; height * 256];
+    let mut heights = [0i32; 256];
+    for (column, top) in heights.iter_mut().enumerate() {
+        let mut light = 15u8;
+        for y in (0..height).rev() {
+            let i = (y << 8) | column;
+            let dim = sky_dimming(numbered(i).0);
+            if dim > 0 && *top == 0 {
+                *top = y as i32 + 1;
+            }
+            light = light.saturating_sub(dim);
+            sky[i] = light;
+        }
+    }
+
+    let mut w = NbtWriter::with_capacity(48 * 1024);
+    if ctx.target.data_version > 0 {
+        w.int("DataVersion", ctx.target.data_version);
+    }
+    w.compound("Level");
+    w.int("xPos", chunk_x);
+    w.int("zPos", chunk_z);
+    w.long("LastUpdate", 0);
+    w.long("InhabitedTime", 0);
+    w.bool("TerrainPopulated", true);
+    w.bool("LightPopulated", false);
+    let biomes: Vec<u8> = (0..256).map(|i| ctx.biome_number(biome_at(biome_columns, ((i >> 4) / 4) * 4 + (i & 15) / 4, ctx.sea_level)) as u8).collect();
+    w.byte_array("Biomes", &biomes);
+    w.int_array("HeightMap", &heights);
+
+    let sections: Vec<usize> = (0..ctx.sections()).filter(|s| blocks[s * SECTION_VOLUME..(s + 1) * SECTION_VOLUME].iter().any(|&b| b != 0)).collect();
+    w.list("Sections", TagType::Compound, sections.len());
+    let mut ids = vec![0u8; SECTION_VOLUME];
+    let mut data = vec![0u8; SECTION_VOLUME / 2];
+    let mut sky_light = vec![0u8; SECTION_VOLUME / 2];
+    let block_light = vec![0u8; SECTION_VOLUME / 2];
+    for s in sections {
+        data.fill(0);
+        sky_light.fill(0);
+        for k in 0..SECTION_VOLUME {
+            let i = s * SECTION_VOLUME + k;
+            let (id, d) = numbered(i);
+            ids[k] = id;
+            // Two blocks to a byte, the first in the low half.
+            data[k / 2] |= (d & 15) << ((k & 1) * 4);
+            sky_light[k / 2] |= sky[i] << ((k & 1) * 4);
+        }
+        w.item_compound();
+        w.byte("Y", s as i8);
+        w.byte_array("Blocks", &ids);
+        w.byte_array("Data", &data);
+        w.byte_array("BlockLight", &block_light);
+        w.byte_array("SkyLight", &sky_light);
+        w.end();
+    }
+    w.list("Entities", TagType::Compound, 0);
+    w.list("TileEntities", TagType::Compound, 0);
+    w.end(); // Level
+    w.finish()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spanning_packing_runs_end_to_end() {
+        for bits in [4usize, 5, 6, 7, 9, 13] {
+            let mask = (1u64 << bits) - 1;
+            let values: Vec<u64> = (0..4096u64).map(|i| (i * 2_654_435_761) & mask).collect();
+            let mut out = Vec::new();
+            pack_spanning(values.iter().copied(), 4096, bits, &mut out);
+            assert_eq!(out.len(), (4096 * bits).div_ceil(64), "{bits} bits");
+            let read = |i: usize| {
+                let (word, shift) = (i * bits / 64, i * bits % 64);
+                let mut v = (out[word] as u64) >> shift;
+                if shift + bits > 64 {
+                    v |= (out[word + 1] as u64) << (64 - shift);
+                }
+                v & mask
+            };
+            assert!((0..4096).all(|i| read(i) == values[i]), "{bits} bits");
+        }
+    }
 
     fn unpack(longs: &[i64], count: usize, bits: usize) -> Vec<u64> {
         let per_long = 64 / bits;

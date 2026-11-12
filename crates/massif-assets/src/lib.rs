@@ -97,6 +97,15 @@ pub fn find_jars() -> Vec<Jar> {
     jars
 }
 
+/// The number a client jar stamps on the worlds it saves (its
+/// `version.json` says, from 1.14 on).
+pub fn data_version(jar: &Path) -> Option<i32> {
+    let archive = zip::Archive::open(jar).ok()?;
+    let json: Value = serde_json::from_slice(&archive.read("version.json")?.ok()?).ok()?;
+    let version = json.get("world_version")?.as_i64()?;
+    i32::try_from(version).ok()
+}
+
 /// How the game colours a texture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tint {
@@ -683,6 +692,20 @@ pub fn flat_icon(cat: &Catalogue, block: &Block, size: usize) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    /// The games installed here say which data version they write (only
+    /// checked where a game is installed).
+    #[test]
+    fn installed_games_tell_their_data_version() {
+        for jar in find_jars() {
+            let version = data_version(&jar.path);
+            eprintln!("{}: data version {version:?}", jar.version);
+            if release_numbers(&jar.version).is_some_and(|n| n >= vec![1, 14]) {
+                assert!(version.is_some_and(|v| v >= 1952), "{}: {version:?}", jar.version);
+            }
+        }
+    }
 
     #[test]
     fn versions_order_like_the_game() {

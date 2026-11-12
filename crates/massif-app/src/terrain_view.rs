@@ -456,6 +456,42 @@ fn cloud_shadow(p: vec3<f32>) -> f32 {
 
 // ---- the relief
 
+/// The normal a fragment is lit with: the smooth one of the grid on gentle
+/// ground, the true one of its face where the ground is steep, so that
+/// cliffs are facets of rock, not ramps. Returns it with how steep the face
+/// is (0 level, 1 sheer).
+fn lit_normal(smooth_normal: vec3<f32>, face: vec3<f32>) -> vec4<f32> {
+    let n = normalize(smooth_normal);
+    var g = face;
+    if (dot(g, n) < 0.0) {
+        g = -g;
+    }
+    let steep = smoothstep(0.42, 0.8, 1.0 - abs(g.y));
+    return vec4<f32>(normalize(mix(n, g, steep)), steep);
+}
+
+/// The colour of the ground with what a few samples cannot hold: mottling
+/// everywhere, and on steep faces rock drawn in the world's own space —
+/// beds of uneven shade, streaks running down — instead of colours
+/// stretched over the height of a cliff.
+fn ground_detail(base: vec3<f32>, world: vec3<f32>, steep: f32) -> vec3<f32> {
+    // In blocks, whatever the exaggeration.
+    let p = vec3<f32>(world.x, world.y / max(u.grid.z, 0.01), world.z);
+    let mottle = noise3(p * 0.09 + 3.1) * 0.6 + noise3(p * 0.37 + 9.7) * 0.4;
+    var c = base * mix(0.8, 1.14, mottle);
+    if (steep > 0.01) {
+        let wobble = noise3(vec3<f32>(p.x * 0.04, 0.0, p.z * 0.04)) * 7.0;
+        let beds = noise3(vec3<f32>(1.7, (p.y + wobble) * 0.26, 4.2)) * 0.65 + noise3(vec3<f32>(8.3, (p.y + wobble) * 0.9, 0.4)) * 0.35;
+        let streaks = noise3(vec3<f32>(p.x * 0.45, p.y * 0.04, p.z * 0.45)) * 0.6 + noise3(vec3<f32>(p.x * 1.3, p.y * 0.09, p.z * 1.3)) * 0.4;
+        // Rock keeps a little of what grows on it.
+        let luma = dot(base, vec3<f32>(0.3, 0.55, 0.15));
+        let rock = mix(vec3<f32>(luma) * vec3<f32>(1.08, 0.98, 0.86), base, 0.4);
+        let shade = mix(0.66, 1.14, beds) * mix(0.74, 1.1, streaks);
+        c = mix(c, rock * shade, steep);
+    }
+    return c;
+}
+
 /// How much of the sun a point of the ground sees: soft shadows of the
 /// relief, marched toward the sun through the heights.
 fn relief_shadow(p: vec3<f32>) -> f32 {
@@ -567,10 +603,16 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> Out {
 
 @fragment
 fn fs_main(in: Out) -> @location(0) vec4<f32> {
-    let n = normalize(in.normal);
+    let face = normalize(cross(dpdy(in.world), dpdx(in.world)));
     var base = textureSample(colors, smooth_sampler, in.uv).rgb;
     var open = textureSample(light, smooth_sampler, in.uv).g;
+    var n = normalize(in.normal);
     var sun_seen = 1.0;
+    if (in.side < 0.5) {
+        let lit = lit_normal(in.normal, face);
+        n = lit.xyz;
+        base = ground_detail(base, in.world, lit.w);
+    }
     if (in.side > 0.5) {
         // The cut through the ground: earth darkening with depth.
         let depth = clamp((in.world.y - u.grid.w) / max(u.grid.y * 0.05, 1.0), 0.0, 1.0);
@@ -644,17 +686,20 @@ fn vs_slab(@builtin(vertex_index) vi: u32, @builtin(instance_index) k: u32) -> S
 fn fs_slab(in: SlabOut) -> @location(0) vec4<f32> {
     let c0 = textureSample(slab0_colors, smooth_sampler, in.uv).rgb;
     let c1 = textureSample(slab1_colors, smooth_sampler, in.uv).rgb;
+    let face = normalize(cross(dpdy(in.world), dpdx(in.world)));
     if (in.thick < 0.3) {
         discard;
     }
-    let n = normalize(in.normal);
+    let lit = lit_normal(in.normal, face);
+    let n = lit.xyz;
     let top_color = select(c0, c1, in.layer == 1u);
-    var base = top_color;
+    var base = ground_detail(top_color, in.world, lit.w);
     var open = 0.9;
     if (in.under > 0.5) {
         // The underside: bare rock, in the shade, lit from below by the
         // ground and the haze.
-        base = mix(vec3<f32>(0.24, 0.215, 0.19), top_color * 0.6, 0.2);
+        let rock = mix(vec3<f32>(0.24, 0.215, 0.19), top_color * 0.6, 0.2);
+        base = ground_detail(rock, in.world, 1.0);
         open = 0.6;
     }
     let spacing = u.grid.y / u.grid.x;

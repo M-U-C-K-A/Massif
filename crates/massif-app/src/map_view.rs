@@ -8,8 +8,69 @@ use egui::{
     Align2, Color32, CursorIcon, FontId, PointerButton, Pos2, Rect, Sense, Stroke as Line,
     StrokeKind, Ui, Vec2, pos2, vec2,
 };
-use massif_core::{BrushShape, TILE_SIZE, TerrainId};
+use massif_core::{Brush, BrushShape, TILE_SIZE, TerrainId};
 use std::time::Duration;
+
+/// Samples across the picture of a brush's strength.
+const STRENGTH_PX: usize = 128;
+/// Strengths at which the brush preview draws a line.
+const STRENGTH_LEVELS: [f32; 3] = [0.25, 0.5, 0.75];
+
+/// How strongly a brush presses over its footprint: a picture, white where
+/// it presses hardest, and the lines where its strength is a quarter, a
+/// half and three quarters. Made again when the brush changes shape.
+struct BrushPreview {
+    /// Shape, profile, rotation and image the picture was made for.
+    key: (BrushShape, massif_core::Profile, u32, usize),
+    texture: egui::TextureHandle,
+    /// Closed lines, in fractions of the footprint's square.
+    levels: [Vec<Vec<(f32, f32)>>; 3],
+}
+
+impl BrushPreview {
+    fn key(brush: &Brush) -> (BrushShape, massif_core::Profile, u32, usize) {
+        let image = brush.mask.as_ref().map_or(0, |m| std::sync::Arc::as_ptr(m) as usize);
+        (brush.shape, brush.profile, brush.rotation.to_bits(), image)
+    }
+
+    fn new(ctx: &egui::Context, brush: &Brush) -> Self {
+        let n = STRENGTH_PX;
+        // The picture does not depend on the size: any radius will do.
+        let mut b = brush.clone();
+        b.radius = n as f32 / 2.0;
+        b.filter = None;
+        let reach = b.reach();
+        let weights: Vec<f32> = (0..n * n)
+            .map(|c| {
+                let at = |k: usize| ((k as f32 + 0.5) / n as f32 - 0.5) * 2.0 * reach;
+                b.weight(at(c % n), at(c / n)).clamp(0.0, 1.0)
+            })
+            .collect();
+        let bytes: Vec<u8> = weights.iter().flat_map(|&w| [(w * 125.0) as u8; 4]).collect();
+        let image = egui::ColorImage::from_rgba_premultiplied([n, n], &bytes);
+        let texture = ctx.load_texture("brush strength", image, egui::TextureOptions::LINEAR);
+        let levels = STRENGTH_LEVELS.map(|level| {
+            massif_core::brush::trace_cells(n, n, |i, j| weights[j * n + i] >= level)
+                .into_iter()
+                .map(|ring| {
+                    // The corners of the cells, eased into a line.
+                    let k = ring.len();
+                    (0..k)
+                        .map(|a| {
+                            let (p, q) = (ring[a], ring[(a + 1) % k]);
+                            ((p.0 + q.0) as f32 / (2 * n) as f32, (p.1 + q.1) as f32 / (2 * n) as f32)
+                        })
+                        .collect()
+                })
+                .collect()
+        });
+        Self {
+            key: Self::key(brush),
+            texture,
+            levels,
+        }
+    }
+}
 
 const MIN_ZOOM: f32 = 1.0 / 2048.0;
 const MAX_ZOOM: f32 = 48.0;
@@ -64,6 +125,8 @@ pub struct MapView {
     turn: f32,
     /// Where the canvas was last drawn, for keyboard zooming.
     canvas: Rect,
+    /// The picture of the brush's strength, under the pointer.
+    strength: Option<BrushPreview>,
 }
 
 impl Default for MapView {
@@ -80,6 +143,7 @@ impl Default for MapView {
             probe: None,
             wheel: 0.0,
             turn: 0.0,
+            strength: None,
             canvas: Rect::NOTHING,
         }
     }
@@ -454,6 +518,32 @@ impl MapView {
                 let brush = &tools.brush;
                 let shadow = Line::new(3.0, Color32::from_black_alpha(90));
                 let line = Line::new(1.4, Color32::WHITE);
+                // How hard the brush presses: lighter where it presses
+                // more, with a line at a quarter, a half and three quarters
+                // of its strength.
+                let key = BrushPreview::key(brush);
+                if self.strength.as_ref().is_none_or(|s| s.key != key) {
+                    self.strength = Some(BrushPreview::new(ui.ctx(), brush));
+                }
+                if let Some(preview) = &self.strength {
+                    let side = 2.0 * brush.reach() * self.zoom;
+                    if side >= 12.0 {
+                        let square = Rect::from_center_size(p, Vec2::splat(side));
+                        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+                        painter.image(preview.texture.id(), square, uv, Color32::WHITE);
+                        for (k, rings) in preview.levels.iter().enumerate() {
+                            let ink = Line::new(1.1, Color32::from_white_alpha(105 + 45 * k as u8));
+                            let under = Line::new(2.4, Color32::from_black_alpha(55));
+                            for ring in rings {
+                                let points = thin(ring.iter().map(|&(u, v)| square.min + vec2(u, v) * side), 1.5);
+                                if points.len() > 2 {
+                                    painter.add(egui::Shape::closed_line(points.clone(), under));
+                                    painter.add(egui::Shape::closed_line(points, ink));
+                                }
+                            }
+                        }
+                    }
+                }
                 let mut rings: Vec<Vec<Pos2>> = Vec::new();
                 if let Some((x, z)) = world_pointer
                     && self.zoom * ppp >= EXACT_ZOOM

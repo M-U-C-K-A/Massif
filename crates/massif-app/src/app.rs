@@ -106,6 +106,31 @@ struct ExportForm {
     test_centre: (i32, i32),
     /// A border just around the map: centre and size.
     fit: Option<([f64; 2], f64)>,
+    /// The version exported for, among those offered: the releases known,
+    /// and the games installed here (marked).
+    target: massif_anvil::Target,
+    versions: Vec<(massif_anvil::Target, bool)>,
+    /// The heights of the map, to say what a version cuts.
+    heights: (i32, i32),
+}
+
+/// The versions the export offers, newest first: every release known, and
+/// the games installed on this computer (true), whose own data version is
+/// read from them when they are newer than the list.
+fn export_versions() -> Vec<(massif_anvil::Target, bool)> {
+    let mut versions: Vec<(massif_anvil::Target, bool)> = massif_anvil::Target::releases().into_iter().map(|t| (t, false)).collect();
+    for jar in massif_assets::find_jars() {
+        match versions.iter_mut().find(|(t, _)| t.name == jar.version) {
+            Some(entry) => entry.1 = true,
+            None => {
+                if let Some(data_version) = massif_assets::data_version(&jar.path) {
+                    versions.push((massif_anvil::Target::installed(&jar.version, data_version), true));
+                }
+            }
+        }
+    }
+    versions.sort_by_key(|(t, _)| std::cmp::Reverse(t.data_version));
+    versions
 }
 
 enum Dialog {
@@ -113,6 +138,8 @@ enum Dialog {
     Export(ExportForm),
     Unsaved(Pending),
     About,
+    /// The rules of the automatic biomes (false) or paint (true).
+    AutoRules(bool),
     /// What an import brought in, with the file's thumbnail.
     ImportReport(Box<massif_legacy::ImportReport>, Option<egui::TextureHandle>),
 }
@@ -343,7 +370,14 @@ impl MassifApp {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| self.doc.world.meta.name.clone());
         let centre = self.map_center.map_or((0, 0), |c| (c[0].floor() as i32, c[1].floor() as i32));
+        // For the game installed here, the newest; without one, 1.18.2,
+        // which every later version opens.
+        let versions = export_versions();
+        let target = versions.iter().find(|(_, installed)| *installed).map_or_else(massif_anvil::Target::default, |(t, _)| t.clone());
         self.dialog = Some(Dialog::Export(ExportForm {
+            target,
+            versions,
+            heights: (self.doc.dimension().min_y, self.doc.dimension().max_y),
             tab: ExportTab::General,
             parent,
             name,
@@ -675,6 +709,28 @@ impl MassifApp {
                 let redo = self.doc.history.redo_label().map(|l| format!("Redo {l}"));
                 if ui.add_enabled(redo.is_some(), egui::Button::new(theme::with_icon(Icon::Redo2, redo.as_deref().unwrap_or("Redo")))).clicked() {
                     self.redo(&ctx);
+                }
+                ui.separator();
+                if ui
+                    .button(theme::with_icon(Icon::Earth, "Auto biome: whole map"))
+                    .on_hover_text("Give every column the biome its land calls for")
+                    .clicked()
+                {
+                    let changed = self.doc.auto_biome(&self.tools.auto);
+                    self.tools.auto_done = Some((true, changed));
+                    self.feedback = Some(format!("Auto biome over the whole map: {changed} columns changed"));
+                }
+                if ui
+                    .button(theme::with_icon(Icon::WandSparkles, "Auto paint: whole map"))
+                    .on_hover_text("Paint every column as its biome calls for")
+                    .clicked()
+                {
+                    let changed = self.doc.auto_paint(&self.tools.auto);
+                    self.tools.auto_done = Some((false, changed));
+                    self.feedback = Some(format!("Auto paint over the whole map: {changed} columns changed"));
+                }
+                if ui.button(theme::with_icon(Icon::Settings2, "Automatic rules…")).clicked() {
+                    self.dialog = Some(Dialog::AutoRules(false));
                 }
             });
             ui.menu_button("View", |ui| {
@@ -1229,7 +1285,8 @@ impl MassifApp {
             EditorKind::BrushSettings => {
                 let (min_y, max_y) = (self.doc.dimension().min_y, self.doc.dimension().max_y);
                 scrolled(&mut cui, &mut |ui| {
-                    panels::brush_settings(ui, &mut self.tools, &mut self.brushes, &self.doc.world.registry, min_y, max_y)
+                    let light = self.settings.light as f32 * 22.5;
+                    panels::brush_settings(ui, &mut self.tools, &mut self.brushes, &self.doc.world.registry, min_y, max_y, light)
                 })
             }
             EditorKind::Brushes => {
@@ -1334,9 +1391,63 @@ impl MassifApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
             return;
         }
+        if std::mem::take(&mut self.tools.open_rules) && self.dialog.is_none() {
+            self.dialog = Some(Dialog::AutoRules(self.tools.tool == Tool::AutoPaint));
+        }
         let Some(dialog) = self.dialog.take() else { return };
         let mut keep = true;
         match dialog {
+            Dialog::AutoRules(mut paint) => {
+                let response = egui::Modal::new(Id::unique("auto rules")).show(ctx, |ui| {
+                    ui.set_width(700.0);
+                    ui.label(RichText::new("Automatic biomes and paint").bold().size(15.0));
+                    ui.label(
+                        RichText::new("Auto biome reads the land and gives it biomes; Auto paint gives each biome its ground. Both follow these rules, with a brush or over the whole map.")
+                            .size(11.5)
+                            .color(Palette::of(ui).weak),
+                    );
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut paint, false, theme::with_icon(Icon::Earth, "Biomes from the land"));
+                        ui.selectable_value(&mut paint, true, theme::with_icon(Icon::WandSparkles, "Paint from the biomes"));
+                    });
+                    ui.separator();
+                    egui::ScrollArea::vertical().max_height(440.0).auto_shrink([false, true]).show(ui, |ui| {
+                        if paint {
+                            panels::paint_rules(ui, &mut self.tools.auto.paint, &self.doc.world.registry);
+                        } else {
+                            panels::land_rules(ui, &mut self.tools.auto.land, &self.doc.world.registry);
+                        }
+                    });
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        if ui.button("Reset to defaults").clicked() {
+                            if paint {
+                                self.tools.auto.paint = Default::default();
+                            } else {
+                                self.tools.auto.land = Default::default();
+                            }
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                            if ui.add(theme::primary_button(ui, "Done")).clicked() {
+                                keep = false;
+                            }
+                            let label = if paint { "Paint the whole map" } else { "Give the whole map its biomes" };
+                            if ui.button(label).on_hover_text("One undoable step").clicked() {
+                                let changed = if paint { self.doc.auto_paint(&self.tools.auto) } else { self.doc.auto_biome(&self.tools.auto) };
+                                self.tools.auto_done = Some((!paint, changed));
+                                self.feedback = Some(format!("{} over the whole map: {changed} columns changed", if paint { "Auto paint" } else { "Auto biome" }));
+                            }
+                        });
+                    });
+                });
+                if response.should_close() {
+                    keep = false;
+                }
+                if keep {
+                    self.dialog = Some(Dialog::AutoRules(paint));
+                }
+            }
             Dialog::Unsaved(pending) => {
                 let mut choice = None;
                 let response = egui::Modal::new(Id::unique("unsaved")).show(ctx, |ui| {
@@ -1512,6 +1623,7 @@ impl MassifApp {
                         border: form.border,
                         datapacks: form.datapacks.clone(),
                         spawn: Some(form.spawn),
+                        target: form.target.clone(),
                         ..ExportOptions::default()
                     };
                     let mut dir = form.parent.join(form.name.trim());
@@ -1777,9 +1889,32 @@ fn export_general(ui: &mut Ui, form: &mut ExportForm) {
         row(ui, "Name", |ui| {
             ui.add(egui::TextEdit::singleline(&mut form.name).desired_width(f32::INFINITY));
         });
-        row(ui, "Map format", |ui| {
-            ui.label("Minecraft Java 1.18 chunks: opens in 1.18.2 and every later version");
+        row(ui, "Minecraft", |ui| {
+            egui::ComboBox::from_id_salt("export version")
+                .selected_text(format!("Java {}", form.target.name))
+                .width(170.0)
+                .height(320.0)
+                .show_ui(ui, |ui| {
+                    for (version, installed) in &form.versions {
+                        let label = if *installed { format!("{}  ·  installed", version.name) } else { version.name.clone() };
+                        if ui.selectable_label(form.target == *version, label).clicked() {
+                            form.target = version.clone();
+                        }
+                    }
+                });
+            let note = match form.target.era() {
+                massif_anvil::Era::Modern => "today's chunks, −64 to 320",
+                massif_anvil::Era::Flat16 | massif_anvil::Era::Flat15 | massif_anvil::Era::Flat14 => "named blocks, 0 to 255",
+                massif_anvil::Era::Numbered => "numbered blocks, 0 to 255",
+            };
+            ui.label(RichText::new(note).size(11.5).color(pal.weak));
         });
+        let caveat = form.target.caveat(form.heights.0, form.heights.1);
+        if !caveat.is_empty() {
+            row(ui, "", |ui| {
+                ui.add(egui::Label::new(RichText::new(format!("For {}, {caveat}.", form.target.name)).size(11.5).color(pal.weak)).wrap());
+            });
+        }
     });
     ui.columns(2, |cols| {
         let (left, right) = cols.split_at_mut(1);
@@ -2342,6 +2477,20 @@ mod tests {
             h.event(egui::Event::PointerMoved(rect.center() + vec2(3.0, 2.0)));
             h.run_steps(10);
             h.render().unwrap().save(dir.join(format!("exact-{name}"))).unwrap();
+            // A soft round brush shows where it presses hardest.
+            {
+                let app = h.state_mut();
+                app.tools.brush.mask = None;
+                app.tools.brush.shape = massif_core::BrushShape::Circle;
+                app.tools.brush.profile = massif_core::Profile::Sine;
+                app.tools.brush.radius = 90.0;
+                app.tools.brush.rotation = 0.0;
+                let id = app.active_map.expect("the map was hovered");
+                app.maps.get_mut(&id).unwrap().zoom = 2.0;
+            }
+            h.event(egui::Event::PointerMoved(rect.center() + vec2(5.0, 3.0)));
+            h.run_steps(10);
+            h.render().unwrap().save(dir.join(format!("strength-{name}"))).unwrap();
 
             // The brush options, maximised: a height band, only on grass and
             // water, on slopes over 20°.
@@ -2355,6 +2504,9 @@ mod tests {
                     only_on: Some(vec![massif_core::filter::Match::Terrain(grass), massif_core::filter::Match::Water]),
                     slope_above: true,
                     slope: 20.0,
+                    facing_on: true,
+                    facing: 135.0,
+                    facing_spread: 50.0,
                     ..Default::default()
                 };
                 let mut areas = Vec::new();
@@ -2830,6 +2982,69 @@ mod tests {
         image::save_buffer(dir.join("graph-render.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
     }
 
+    /// The automatic tools over the whole map: biomes read from the land,
+    /// shown by the biome mode, then the paint that follows a changed rule;
+    /// and the dialog of their rules. Needs a GPU: runs with
+    /// MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn auto_biome_and_paint_follow_their_rules() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(3);
+        let rect = map_rect(h.state(), &h.ctx);
+        h.event(egui::Event::PointerMoved(rect.center()));
+        h.run_steps(3);
+        let changed = {
+            let app = h.state_mut();
+            app.doc.auto_biome(&app.tools.auto)
+        };
+        assert!(changed > 100_000, "{changed} columns got a biome");
+        assert_eq!(h.state().doc.history.undo_label(), Some("Auto biome"));
+        // The sea and the land have their own biomes.
+        let ids: std::collections::HashSet<String> = {
+            let app = h.state();
+            let reg = &app.doc.world.registry;
+            let ground = app.doc.dimension().ground();
+            ground
+                .positions()
+                .flat_map(|pos| {
+                    let tile = ground.view(pos).unwrap();
+                    (0..128 * 128).step_by(97).map(|i| reg.biome(massif_core::BiomeId(tile.biome.get(i))).id.clone()).collect::<Vec<_>>()
+                })
+                .collect()
+        };
+        for wanted in ["minecraft:ocean", "minecraft:plains", "minecraft:beach"] {
+            assert!(ids.contains(wanted), "{wanted} among {ids:?}");
+        }
+        {
+            let app = h.state_mut();
+            let id = app.active_map.expect("the map was hovered");
+            app.maps.get_mut(&id).unwrap().mode = crate::map_render::MapMode::Biome;
+        }
+        h.run_steps(20);
+        h.render().unwrap().save(dir.join("auto-biomes.png")).unwrap();
+        // Plains of podzol, by a rule of the settings.
+        let painted = {
+            let app = h.state_mut();
+            app.tools.auto.paint.of_mut("minecraft:plains").ground = "Podzol".into();
+            app.doc.auto_paint(&app.tools.auto)
+        };
+        assert!(painted > 10_000, "{painted} columns painted");
+        {
+            let app = h.state_mut();
+            let id = app.active_map.unwrap();
+            app.maps.get_mut(&id).unwrap().mode = crate::map_render::MapMode::Terrain;
+            app.dialog = Some(Dialog::AutoRules(false));
+        }
+        h.run_steps(10);
+        h.render().unwrap().save(dir.join("auto-rules-land.png")).unwrap();
+        h.state_mut().dialog = Some(Dialog::AutoRules(true));
+        h.run_steps(10);
+        h.render().unwrap().save(dir.join("auto-rules-paint.png")).unwrap();
+    }
+
     /// The templates: the picker with their pictures, a card replacing the
     /// graph, and every template in the viewport with its own sky. Needs a
     /// GPU: runs with MASSIF_SNAPSHOT_DIR.
@@ -2882,7 +3097,18 @@ mod tests {
         view.camera.yaw = 2.2;
         let (w, hgt, rgba) = view.render_image([1600, 900]).expect("an image");
         image::save_buffer(dir.join("template-floating-mountains-close.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
-        // Converted to voxels: two Solid levels over the ground, columns of
+        // And from among the pillars, looking at their cliffs.
+        view.camera.distance = 0.3;
+        view.camera.pitch = 0.24;
+        view.camera.yaw = 0.9;
+        view.render.clouds = false;
+        let (w, hgt, rgba) = view.render_image([1600, 900]).expect("an image");
+        image::save_buffer(dir.join("template-floating-mountains-cliffs.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+        view.render.clouds = true;
+        view.camera.distance = 0.62;
+        view.camera.pitch = 0.3;
+        view.camera.yaw = 2.2;
+        // Converted to voxels: a Solid level over the ground, columns of
         // several spans, seen in the 3D view of the map.
         h.state_mut().graph.resolution = 1024;
         {
@@ -2896,8 +3122,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         let names: Vec<String> = h.state().doc.dimension().levels.iter().map(|l| l.name.clone()).collect();
-        assert!(names.iter().any(|n| n == "Overhang (graph 1)"), "{names:?}");
-        assert!(names.iter().any(|n| n == "Floating islands (graph 2)"), "{names:?}");
+        assert!(names.iter().any(|n| n == "Floating islands (graph 1)"), "{names:?}");
         {
             let app = h.state_mut();
             app.layout.activate(3);
