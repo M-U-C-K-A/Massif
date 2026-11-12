@@ -56,6 +56,14 @@ over every CPU core.
   version gets the chunks it reads natively — numbered blocks up to 1.12,
   named ones from 1.14, today's layout from 1.18 — with only the blocks
   and biomes it knows.
+- **Rivers.** Draw a river's course on the map — a few clicks — and it is
+  dug with banks easing into the land and water that only runs down, as
+  narrow as a brook or hundreds of blocks wide, branching from rivers and
+  flowing into them; or let the generator find where a map's water
+  gathers and fill those beds with water.
+- **Maps the size of WorldPainter's.** 60,000 × 50,000 blocks: generated
+  in a minute, 1.2 GB compressed, edited at once, shown whole in 3D (a
+  column every few blocks when every block would not fit the GPU).
 - **Automatic biomes and paint.** Auto biome reads the land (deep water,
   rivers, beaches, plains, hills, deserts, snow, rock) and gives it its
   biomes; Auto paint gives each biome its ground, its cliffs and what lies
@@ -204,6 +212,43 @@ kind of land, the three terrains of each biome. They are kept with the
 settings. Forests are told from the ground for now (podzol, coarse dirt);
 trees will count when layers exist.
 
+### Patterns of terrains
+
+Paint terrain can lay several terrains at once (Tool Settings ▸ a pattern
+of terrains): grass with patches of coarse dirt and podzol, stone veined
+with gravel, a patchwork of fields. The pattern is a noise — **patches**,
+**veins**, **blobs**, **cells** or wavering **stripes** at an angle — of the
+size you choose, with soft or sharp edges and a seed; every terrain gets
+the share of the ground its weight says, whatever the pattern (the pattern
+learns its own spread and paints by rank). A picture shows it before the
+first stroke, and the brush, its intensity and its options apply as with
+any paint.
+
+### Rivers
+
+The **River** tool (Water group) draws rivers by hand: click the points of
+the course on the map — the course, its water and its banks are drawn as
+you go — then double-click or press Enter to dig it (one undoable step);
+the right button takes the last point back, Esc drops the course.
+
+- The points are joined by a smooth curve through all of them.
+- Water runs from the higher end to the lower one, whichever end was drawn
+  first. Its level along the river is the lowest the land allows so far, a
+  little under the banks: it never rises downstream, whatever the bumps.
+- The bed is `depth` deep in the middle and rises to the water's edge;
+  banks of the chosen width climb back to the ground, smoothly. Only the
+  ground is lowered: nothing is raised.
+- The width goes from the source to the mouth (2 to 400 blocks): a brook
+  that becomes a river 100 blocks wide.
+- A course that starts on a river is a branch, leaving it at its level; one
+  that ends on a river or a lake is a tributary, meeting it at its level.
+  Two branches that meet again make a split stream.
+- The bed gets a terrain (gravel, sand…), the water a river biome.
+
+The water's level is a whole block per column, so it stands in steps
+along the river: still water, as Minecraft keeps it; mods that let water
+flow over water (Streams Reflowing) make a current of it.
+
 ### Real blocks
 
 Massif reads the blocks of the game from your own installation: the client
@@ -227,7 +272,9 @@ fraction of a second, every time Massif starts.
 
 ### Terrain graphs
 
-The Terrain side holds the generator. Its **Graph** workspace is laid out
+The Terrain side holds the generator. A graph makes its relief from
+nothing — or starts from the map as it is, painted or imported from
+WorldPainter, with the **Map** node (see below). Its **Graph** workspace is laid out
 like Gaea: the **Graph Viewport** above, the **Terrain Graph** below, the
 **Node Properties** on the right. The viewport shows the graph's output;
 select a node and press **V** (or double-click it) to see the graph up to
@@ -299,6 +346,23 @@ Converted, each layer becomes a Solid level of the map named after what
 makes it ("Floating islands (graph 1)"), filled again by later
 conversions and removed when its output goes: columns of ground, air,
 then rock, exported to Minecraft as they are.
+
+**Working on a map that exists.** The **Map** node gives the map's ground
+as it is — its heights, where its water lies and the colours of its
+terrains — read again whenever the map changes. Wire it where a landform
+would go: into **Rivers**, which digs beds where the map's water gathers
+and gives the level of their water (running down with them, ending at the
+sea), into **Lakes**, which fills its hollows, into Erosion… and the
+**Water output** fills those beds and hollows when converted. The template
+**Rivers on this map** does exactly that.
+
+**Over the map, not into it.** With "over the map" checked (the default
+for a graph that starts from the map), converting leaves the map's ground
+as it is: what the graph digs goes to a Carve level, what it raises to a
+Solid level, with its water, both written again at every conversion.
+Change the graph, or paint the map, and convert again: nothing is baked
+in. Deleting the two levels gives the map back; unchecked, the graph
+replaces the ground.
 
 **Convert to voxels** builds the graph over the whole map at the chosen
 resolution (512 to 16,384 samples per side; it starts at one block per
@@ -450,6 +514,24 @@ On a mountainous 100 MB WorldPainter world of 6,144 × 6,144 blocks, the whole
 map is built in about a second and takes 176 MB of GPU memory; meshing it
 instead would have taken some 58 million faces.
 
+Every block of a 60,000 × 50,000 map would take some 13 GB of textures.
+Past 400 pages (about 1.9 GB), the view keeps a column every 2, 4, 8 or 16
+blocks — the coarsest that fits — and still draws the whole map: each of
+its tiles holds that many tiles of the map, their water drawn as a surface,
+and the rays are walked in its coarser grid. The header says so. A map of
+24,000 × 24,000 blocks (35,000 tiles) is shown at a column every 2 blocks
+in 672 MB, built in 25 seconds, nearest the camera first.
+
+### Very large maps
+
+Tiles are kept compressed (cold) and decoded when they are needed, so a
+map costs its compressed size. Measured on a hilly map of 60,000 × 50,000
+blocks (183,379 tiles): generated in 57 seconds on 10 cores, 1.2 GB
+compressed and 1.4 GB of memory at most; a brush 400 blocks across applies
+in 2 ms; the whole map read by a graph's Map node, at 512 × 512, in 2
+seconds. WorldPainter worlds are imported as a stream: each tile is
+converted and freed as it is read.
+
 ## Project layout
 
 | Crate | Purpose |
@@ -494,7 +576,8 @@ Two environment variables enable the heavier tests:
   groups and portals, graphs applied to a part of the map, tiled builds
   beyond 16,384 samples, more simulations (glaciers, sediment layers), the
   render drawn from the full-resolution build, carved layers (caves and
-  arches) and water on floating rock (lakes, falls).
+  arches) and water on floating rock (lakes, falls), river courses drawn
+  in the graph, the direction of rivers' flow for fluid mods.
 - The real blocks' textures in the 3D view, and custom terrains mixing
   real blocks in layers.
 - Custom build limits in new worlds and export; trees and plants as a sign

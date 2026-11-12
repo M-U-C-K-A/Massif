@@ -7,6 +7,8 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 
 - **New in 0.2**: export for the version you play, from 1.7.10 to 26.3; Auto biome and Auto paint, by rules you can change; a brush option for the way slopes face (the sunny side, the shade); a brush preview that shows where it presses hardest; rock over the void in the generator (floating islands, overhangs) that becomes levels of the map; stone towers and floating mountains among the landscapes to start from.
 
+- **New in 0.3**: rivers drawn by hand (River tool: a course of clicks, water that only runs down, banks easing into the land, branches and tributaries, up to 400 blocks wide); rivers and lakes that hold water in the generator, and a Map node to work on an existing map (painted or imported from WorldPainter); conversion over the map that leaves its ground as it is; patterns of terrains to paint with (patches, veins, blobs, cells, stripes); maps of 60,000 × 50,000 blocks, shown whole in 3D.
+
 ## Downloads
 
 | System | File |

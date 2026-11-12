@@ -3045,6 +3045,287 @@ mod tests {
         h.render().unwrap().save(dir.join("auto-rules-paint.png")).unwrap();
     }
 
+    /// A very large map in the 3D view: drawn whole, a column every few
+    /// blocks. Runs with MASSIF_SNAPSHOT_DIR and MASSIF_GIANT_3D (the size
+    /// in blocks, e.g. "24000x24000"); best with `--release`.
+    #[test]
+    fn giant_maps_in_3d() {
+        let (Some(dir), Ok(size)) = (std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from), std::env::var("MASSIF_GIANT_3D")) else {
+            return;
+        };
+        let (w, d) = size.split_once('x').map(|(w, d)| (w.parse::<i32>().unwrap(), d.parse::<i32>().unwrap())).expect("WxD");
+        let mut h = harness(ThemeChoice::Dark);
+        let started = std::time::Instant::now();
+        {
+            let app = h.state_mut();
+            let world = generate(&GenParams {
+                tiles_x: (w + 127) / 128,
+                tiles_z: (d + 127) / 128,
+                landform: Landform::Islands,
+                ..GenParams::default()
+            });
+            app.doc = crate::doc::Document::new(world, None, 11);
+            app.map_cache.invalidate_all();
+            app.view3d.invalidate_all();
+            app.layout.activate(3);
+        }
+        eprintln!("generated in {:.1} s", started.elapsed().as_secs_f32());
+        h.run_steps(5);
+        let started = std::time::Instant::now();
+        while h.state().view3d.pending() > 0 {
+            assert!(started.elapsed().as_secs() < 600, "the 3D view did not finish");
+            h.step();
+        }
+        h.run_steps(3);
+        eprintln!("3D view built in {:.1} s", started.elapsed().as_secs_f32());
+        h.render().unwrap().save(dir.join("giant-3d-ui.png")).unwrap();
+        let (iw, ih, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+        image::save_buffer(dir.join("giant-3d.png"), &rgba, iw, ih, image::ColorType::Rgba8).unwrap();
+        // The map view too, zoomed out over all of it.
+        h.state_mut().layout.activate(0);
+        let started = std::time::Instant::now();
+        h.run_steps(40);
+        eprintln!("map view: {:.1} s for 40 frames", started.elapsed().as_secs_f32());
+        h.render().unwrap().save(dir.join("giant-map.png")).unwrap();
+    }
+
+    /// Paint with a pattern: one stroke lays several terrains out by a
+    /// noise, each over its share. Needs a GPU: runs with
+    /// MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn patterns_paint_the_ground() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        {
+            let app = h.state_mut();
+            let world = generate(&GenParams {
+                tiles_x: 8,
+                tiles_z: 8,
+                landform: Landform::Hills,
+                ..GenParams::default()
+            });
+            app.doc = crate::doc::Document::new(world, None, 9);
+            app.map_cache.invalidate_all();
+            app.view3d.invalidate_all();
+            app.tools.select(Tool::PaintTerrain);
+            app.tools.brush.radius = 140.0;
+            app.tools.brush.strength = 1.0;
+            app.tools.brush.profile = massif_core::Profile::Constant;
+            app.tools.pattern.on = true;
+            app.tools.pattern.pattern.kind = massif_core::pattern::PatternKind::Patches;
+            app.tools.pattern.pattern.scale = 14.0;
+            app.tools.pattern.terrains = vec![("Grass".into(), 2.0), ("Podzol".into(), 1.0), ("Gravel".into(), 1.0)];
+        }
+        h.run_steps(5);
+        let rect = map_rect(h.state(), &h.ctx);
+        let c = rect.center();
+        let button = |pressed| egui::Event::PointerButton {
+            pos: c,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        h.event(egui::Event::PointerMoved(c));
+        h.step();
+        h.event(button(true));
+        h.run_steps(4);
+        h.event(button(false));
+        h.run_steps(10);
+        assert_eq!(h.state().doc.history.undo_label(), Some("Paint terrain"));
+        // Under the stroke, the three terrains.
+        let app = h.state();
+        let reg = &app.doc.world.registry;
+        let at = app.maps.get(&app.active_map.unwrap()).unwrap().center;
+        let (cx, cz) = (at[0].floor() as i32, at[1].floor() as i32);
+        let mut seen = std::collections::HashMap::new();
+        for dz in -40..40 {
+            for dx in -40..40 {
+                let (x, z) = (cx + dx, cz + dz);
+                let tile = app.doc.dimension().ground().view(TilePos::containing(x, z)).unwrap();
+                let name = reg.terrain(massif_core::TerrainId(tile.terrain.get(massif_core::coords::local_index(x, z)))).name.clone();
+                *seen.entry(name).or_insert(0usize) += 1;
+            }
+        }
+        for name in ["Grass", "Podzol", "Gravel"] {
+            assert!(seen.get(name).copied().unwrap_or(0) > 400, "{name}: {seen:?}");
+        }
+        h.event(egui::Event::PointerMoved(c + vec2(500.0, 0.0)));
+        h.run_steps(10);
+        h.render().unwrap().save(dir.join("pattern-paint.png")).unwrap();
+    }
+
+    /// The River tool: points clicked on the map, Enter, and a river is dug
+    /// with water running down it. Needs a GPU: runs with
+    /// MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn rivers_are_drawn_on_the_map() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        {
+            let app = h.state_mut();
+            let world = generate(&GenParams {
+                tiles_x: 8,
+                tiles_z: 8,
+                landform: Landform::Hills,
+                ..GenParams::default()
+            });
+            app.doc = crate::doc::Document::new(world, None, 7);
+            app.map_cache.invalidate_all();
+            app.view3d.invalidate_all();
+            app.tools.select(Tool::River);
+            app.tools.river.width = 10.0;
+            app.tools.river.width_end = 40.0;
+        }
+        h.run_steps(5);
+        let rect = map_rect(h.state(), &h.ctx);
+        let click = |h: &mut egui_kittest::Harness<'_, MassifApp>, p: egui::Pos2, button: egui::PointerButton| {
+            h.event(egui::Event::PointerMoved(p));
+            h.step();
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton {
+                    pos: p,
+                    button,
+                    pressed,
+                    modifiers: Modifiers::NONE,
+                });
+                h.step();
+            }
+            h.run_steps(30);
+        };
+        let c = rect.center();
+        for d in [vec2(-320.0, -260.0), vec2(-150.0, -60.0), vec2(40.0, 30.0), vec2(200.0, 200.0), vec2(330.0, 330.0)] {
+            click(&mut h, c + d, egui::PointerButton::Primary);
+        }
+        // A stray point, taken back with the right button.
+        click(&mut h, c + vec2(-330.0, 300.0), egui::PointerButton::Primary);
+        click(&mut h, c, egui::PointerButton::Secondary);
+        assert_eq!(h.state().tools.river_points.len(), 5);
+        h.event(egui::Event::PointerMoved(c + vec2(360.0, 360.0)));
+        h.run_steps(3);
+        h.render().unwrap().save(dir.join("river-course.png")).unwrap();
+        h.event(egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(10);
+        assert_eq!(h.state().doc.history.undo_label(), Some("River"));
+        assert!(h.state().tools.river_points.is_empty());
+        let note = h.state().tools.river_note.clone().unwrap_or_default();
+        assert!(note.starts_with("Dug a river"), "{note}");
+        h.render().unwrap().save(dir.join("river-dug.png")).unwrap();
+        {
+            let app = h.state_mut();
+            app.layout.activate(3);
+            app.view3d.camera.distance = 420.0;
+            app.view3d.camera.pitch = 0.55;
+        }
+        h.run_steps(5);
+        while h.state().view3d.pending() > 0 {
+            h.step();
+        }
+        h.run_steps(3);
+        let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+        image::save_buffer(dir.join("river-dug-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+    }
+
+    /// Rivers on the map, converted over it: the ground is left as it is,
+    /// the beds and their water are in levels of the graph's own, written
+    /// again by the next conversion. Needs a GPU: runs with
+    /// MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn rivers_are_converted_over_the_map() {
+        use massif_core::graph::Template;
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.state_mut().layout.activate(6);
+        h.run_steps(2);
+        {
+            let app = h.state_mut();
+            app.graph.preview = 512;
+            app.graph.use_template(&mut app.doc, Template::MapRivers);
+        }
+        wait_for_graph(&mut h);
+        h.render().unwrap().save(dir.join("rivers-graph.png")).unwrap();
+        // The ground, before.
+        let ground = |app: &MassifApp| -> Vec<f32> {
+            let level = app.doc.dimension().ground();
+            let mut tiles: Vec<_> = level.positions().collect();
+            tiles.sort_by_key(|p| (p.z, p.x));
+            tiles.iter().flat_map(|p| (0..128 * 128).step_by(61).map(|i| level.view(*p).unwrap().top.get(i)).collect::<Vec<_>>()).collect()
+        };
+        let before = ground(h.state());
+        let convert = |h: &mut egui_kittest::Harness<'_, MassifApp>| {
+            {
+                use egui_kittest::kittest::Queryable;
+                h.get_by_label_contains("Convert to voxels").click();
+            }
+            h.run_steps(2);
+            assert!(h.state().graph.converting(), "the conversion started");
+            let started = std::time::Instant::now();
+            while h.state().graph.converting() {
+                assert!(started.elapsed().as_secs() < 120, "the conversion did not finish");
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            h.run_steps(3);
+        };
+        convert(&mut h);
+        assert_eq!(h.state().doc.history.undo_label(), Some("Terrain graph"));
+        assert_eq!(ground(h.state()), before, "the ground of the map did not move");
+        let names: Vec<String> = h.state().doc.dimension().levels.iter().map(|l| l.name.clone()).collect();
+        assert_eq!(names.len(), 3, "{names:?}");
+        assert!(names.contains(&"Dug (graph 0)".to_owned()) && names.contains(&"Raised (graph 0)".to_owned()), "{names:?}");
+        // Water in the beds, above the sea.
+        let sea = h.state().doc.world.meta.sea_level as i16;
+        let wet = {
+            let dim = h.state().doc.dimension();
+            let dug = dim.levels.iter().find(|l| l.name == "Dug (graph 0)").unwrap();
+            dug.positions()
+                .map(|p| {
+                    let tile = dug.view(p).unwrap();
+                    (0..128 * 128).filter(|&i| tile.present(i) && tile.fluid.get(i) > sea).count()
+                })
+                .sum::<usize>()
+        };
+        assert!(wet > 200, "{wet} columns of river water above the sea");
+        h.render().unwrap().save(dir.join("rivers-converted.png")).unwrap();
+        // The map in 3D, with its rivers.
+        {
+            let app = h.state_mut();
+            app.layout.activate(3);
+            app.view3d.camera.distance = 520.0;
+            app.view3d.camera.pitch = 0.6;
+        }
+        h.run_steps(5);
+        while h.state().view3d.pending() > 0 {
+            h.step();
+        }
+        h.run_steps(3);
+        let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+        image::save_buffer(dir.join("rivers-converted-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+        // Again: the same levels, written again; and into the map when
+        // asked, the levels gone.
+        h.state_mut().layout.activate(6);
+        h.run_steps(3);
+        convert(&mut h);
+        assert_eq!(h.state().doc.dimension().levels.len(), 3);
+        assert_eq!(ground(h.state()), before);
+        h.state_mut().graph.over = Some(false);
+        h.run_steps(2);
+        convert(&mut h);
+        assert_eq!(h.state().doc.dimension().levels.len(), 1, "written into the ground: no level of the graph's left");
+        assert_ne!(ground(h.state()), before, "the beds are dug in the ground itself");
+    }
+
     /// The templates: the picker with their pictures, a card replacing the
     /// graph, and every template in the viewport with its own sky. Needs a
     /// GPU: runs with MASSIF_SNAPSHOT_DIR.

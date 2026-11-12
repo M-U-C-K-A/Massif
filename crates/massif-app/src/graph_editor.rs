@@ -23,7 +23,7 @@ use crate::theme::{self, Icon, Palette, RichTextExt};
 use egui::{Color32, ColorImage, Key, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, Vec2, pos2, vec2};
 use massif_core::graph::{
     AutoPalette, Bend, BlockPalette, CellStyle, ColorField, CombineOp, EvalCache, Evaluation, Extent, Family, Field, GradientPreset, Graph, GraphError,
-    LayerOut, MountainStyle, NodeId, NodeKind, NoiseStyle, Outputs, PortType, Progress, ShapeKind, Template, TintMode, Value,
+    GroundMap, LayerOut, MapSource, Overlay, MountainStyle, NodeId, NodeKind, NoiseStyle, Outputs, PortType, Progress, SampledMap, ShapeKind, Template, TintMode, Value,
 };
 use massif_core::registry::{Registry, TerrainId};
 use massif_core::{BlockRect, LevelKind, TILE_SIZE};
@@ -272,7 +272,18 @@ fn slabs_of(layers: &[ShownLayer], n: usize) -> Vec<Slab> {
     slabs
 }
 
-fn view_data(heights: &Field, paint: &Paint, extent: &Extent, exaggeration: f32, layers: &[ShownLayer]) -> ViewData {
+/// The colour of every terrain of the world, by its number.
+fn terrain_colors(doc: &Document) -> Vec<[u8; 3]> {
+    doc.world.registry.terrains.iter().map(|t| t.color).collect()
+}
+
+/// The level of the graph's water (its Water output), if it has one.
+fn water_shown(graph: &Graph, eval: &Evaluation) -> Option<Arc<Field>> {
+    let (id, out) = source_of(graph, |k| matches!(k, NodeKind::WaterOutput))?;
+    eval.field(id, out).cloned()
+}
+
+fn view_data(heights: &Field, paint: &Paint, extent: &Extent, exaggeration: f32, layers: &[ShownLayer], water: Option<&Field>) -> ViewData {
     let n = heights.n;
     let (lo, hi) = heights.range();
     let span = (hi - lo).max(1e-3);
@@ -295,12 +306,15 @@ fn view_data(heights: &Field, paint: &Paint, extent: &Extent, exaggeration: f32,
         size: extent.size as f32,
         exaggeration,
         slabs: slabs_of(layers, n),
+        water: water.filter(|w| w.n == n).map(|w| w.data.clone()).unwrap_or_default(),
     }
 }
 
 struct Request {
     revision: u64,
     graph: Graph,
+    /// The map, read over the extent, for graphs that start from it.
+    map: Option<Arc<SampledMap>>,
     extent: Extent,
     view: Option<(NodeId, u8)>,
     exaggeration: f32,
@@ -339,7 +353,8 @@ impl Worker {
                     }
                     let started = Instant::now();
                     let ids: Vec<NodeId> = req.graph.nodes.iter().map(|n| n.id).collect();
-                    let eval = match req.graph.evaluate_cached(&req.extent, &ids, &mut cache, &req.cancel) {
+                    let map = req.map.as_deref().map(|m| m as &dyn MapSource);
+                    let eval = match req.graph.evaluate_cached_on(map, &req.extent, &ids, &mut cache, &req.cancel) {
                         Ok(e) => e,
                         Err(GraphError::Cancelled) => continue,
                         Err(e) => {
@@ -376,8 +391,10 @@ impl Worker {
                     let layer_output = viewed(&|k| matches!(k, NodeKind::LayerOutput { .. }));
                     let layers = layers_shown(&req.graph, &eval, if layer_output.is_some() { None } else { req.view });
                     let relief_of = if layer_node.is_some() || layer_output.is_some() { None } else { req.view };
+                    // Rivers and lakes show with the graph's output.
+                    let water = if relief_of.is_none() { water_shown(&req.graph, &eval) } else { None };
                     let view = pick_view(&req.graph, &eval, relief_of).map(|(h, paint, shown)| {
-                        let data = view_data(&h, &paint, &req.extent, req.exaggeration, &layers);
+                        let data = view_data(&h, &paint, &req.extent, req.exaggeration, &layers, water.as_deref());
                         (Arc::new(data), layer_node.or(layer_output).unwrap_or(shown))
                     });
                     let failed = eval.failed.iter().map(|(k, e)| (*k, e.to_string())).collect();
@@ -421,6 +438,33 @@ struct Building {
 struct Built {
     extent: Extent,
     outputs: Outputs,
+}
+
+/// The levels an overlay conversion writes to (what the graph digs, what it
+/// raises), made if they are missing; without `wanted`, they are removed:
+/// the graph is then written to the ground itself. Called at the start of
+/// the history step. Returns their indices.
+fn overlay_levels(doc: &mut Document, wanted: bool) -> Option<(usize, usize)> {
+    let find = |doc: &Document, side: Overlay| doc.dimension().levels.iter().position(|l| l.kind == side.kind() && l.name == side.level_name());
+    let sides = [Overlay::Dug, Overlay::Raised];
+    let present = sides.map(|side| find(doc, side));
+    if wanted && present.iter().any(Option::is_none) || !wanted && present.iter().any(Option::is_some) {
+        let mut edit = doc.history.edit(&mut doc.world, 0);
+        let dim = edit.structure();
+        for side in sides {
+            let at = dim.levels.iter().position(|l| l.kind == side.kind() && l.name == side.level_name());
+            match (wanted, at) {
+                (true, None) => {
+                    dim.add_level(side.level_name(), side.kind());
+                }
+                (false, Some(k)) => {
+                    dim.remove_level(k);
+                }
+                _ => {}
+            }
+        }
+    }
+    wanted.then(|| (find(doc, Overlay::Dug).expect("just made"), find(doc, Overlay::Raised).expect("just made")))
 }
 
 /// The node library opened over the graph.
@@ -508,14 +552,16 @@ fn template_render(t: Template, sea: f32, exaggeration: f32) -> RenderSettings {
             sun_elevation: 45.0,
             ..clouds(0.45, 130.0, 70.0, 260.0)
         },
+        Template::MapRivers => RenderSettings { sea: true, ..d },
     }
 }
 
 /// A small picture of what a template makes: its colours shaded by its
 /// relief, the sea over what lies under it.
-fn template_picture(t: Template, reg: &Registry, sea: f32, extent: &Extent) -> Option<ColorImage> {
+fn template_picture(t: Template, reg: &Registry, sea: f32, extent: &Extent, map: Option<&SampledMap>) -> Option<ColorImage> {
     let graph = t.graph(reg, sea, extent.size as f32);
-    let out = graph.build(extent, &AtomicBool::new(false)).ok()?;
+    let source = map.map(|m| m as &dyn MapSource);
+    let out = graph.build_on(source, extent, &AtomicBool::new(false), &Progress::default()).ok()?;
     let h = out.heights?;
     let colors = out.colors.map(|(c, _)| c);
     let n = h.n;
@@ -649,6 +695,17 @@ pub struct GraphEditor {
     pictures: TemplatePictures,
     /// The graph a template replaced, to go back to.
     replaced: Option<Graph>,
+    /// The map as the preview reads it, for graphs with a Map node; the
+    /// document's revision it was read at, and the one of the editor's own
+    /// last change (the graph's, which does not touch the map).
+    map: Option<Arc<SampledMap>>,
+    map_seen: u64,
+    own: u64,
+    /// Convert over the map (its ground left alone) rather than into it;
+    /// `None`: over it when the graph starts from the map.
+    pub over: Option<bool>,
+    /// What the conversion under way was started as.
+    building_over: bool,
 }
 
 impl Default for GraphEditor {
@@ -685,6 +742,11 @@ impl Default for GraphEditor {
             templates_up: false,
             pictures: TemplatePictures::default(),
             replaced: None,
+            map: None,
+            map_seen: 0,
+            own: 0,
+            over: None,
+            building_over: false,
         }
     }
 }
@@ -731,7 +793,36 @@ impl GraphEditor {
     fn store(&mut self, doc: &mut Document, graph: Graph) {
         doc.world.meta.graph = Some(graph);
         doc.mark_changed();
+        self.own = doc.revision;
         self.revision += 1;
+    }
+
+    /// The map over the preview's extent, read again when it changed.
+    fn read_map(&mut self, doc: &Document, extent: &Extent) -> Arc<SampledMap> {
+        let same_extent = |m: &SampledMap| (m.extent.x0, m.extent.z0, m.extent.size, m.extent.n) == (extent.x0, extent.z0, extent.size, extent.n);
+        let changed = doc.revision != self.map_seen && doc.revision != self.own;
+        self.map_seen = doc.revision;
+        match &self.map {
+            Some(m) if !changed && same_extent(m) => m.clone(),
+            _ => {
+                let read = massif_core::graph::sample_ground(doc.dimension(), extent, doc.world.meta.sea_level as f32 - 8.0, &terrain_colors(doc));
+                // What the nodes after it remember depends on what was read.
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                for v in read.heights.data.iter().chain(&read.water.data) {
+                    std::hash::Hash::hash(&v.to_bits(), &mut hash);
+                }
+                std::hash::Hash::hash(&read.colors.data, &mut hash);
+                let map = Arc::new(SampledMap {
+                    extent: *extent,
+                    heights: Arc::new(read.heights),
+                    water: Arc::new(read.water),
+                    colors: Arc::new(read.colors),
+                    revision: std::hash::Hasher::finish(&hash),
+                });
+                self.map = Some(map.clone());
+                map
+            }
+        }
     }
 
     /// View a node in the viewport, or go back to the graph's output if it
@@ -800,14 +891,21 @@ impl GraphEditor {
                 self.shown = Some(shown);
             }
         }
+        // A graph that starts from the map follows the map.
+        if doc.revision != self.map_seen && doc.revision != self.own && graph_of(doc).reads_the_map() {
+            self.revision += 1;
+        }
         if self.asked != self.revision {
             let graph = graph_of(doc);
             self.textures.retain(|k, _| graph.node(k.0).is_some());
+            let extent = map_extent(doc, self.preview);
+            let map = graph.reads_the_map().then(|| self.read_map(doc, &extent));
             let req = Request {
                 revision: self.revision,
                 view: self.viewed(&graph),
                 graph,
-                extent: map_extent(doc, self.preview),
+                map,
+                extent,
                 exaggeration: self.view.render.exaggeration,
                 cancel: Arc::new(AtomicBool::new(false)),
             };
@@ -1030,9 +1128,22 @@ impl GraphEditor {
                         })
                         .collect();
                     doc.history.begin("Terrain graph", doc.dim);
+                    // Over the map (its ground left as it is) or into it.
+                    let over = self.building_over && built.outputs.heights.is_some();
+                    let overlay = overlay_levels(doc, over);
                     let levels = layer_levels(doc, &built.outputs.layers);
+                    let overlay = overlay.map(|_| overlay_levels(doc, true).expect("made above"));
                     let seed = doc.world.meta.seed as u64;
-                    massif_core::graph::apply(&mut doc.history.edit(&mut doc.world, 0), &built.extent, &built.outputs, seed, &palette);
+                    let sea = doc.world.meta.sea_level;
+                    match overlay {
+                        Some((dug, raised)) => {
+                            for (index, side) in [(dug, Overlay::Dug), (raised, Overlay::Raised)] {
+                                let edit = &mut doc.history.edit(&mut doc.world, index);
+                                massif_core::graph::apply_overlay(edit, side, &built.extent, &built.outputs, seed, &palette);
+                            }
+                        }
+                        None => massif_core::graph::apply(&mut doc.history.edit(&mut doc.world, 0), &built.extent, &built.outputs, seed, &palette, sea),
+                    }
                     let grass = doc.world.registry.terrain_by_name("Grass").unwrap_or(TerrainId::ROCK);
                     for ((layer, index), layer_palette) in built.outputs.layers.iter().zip(&levels).zip(&layer_palettes) {
                         let edit = &mut doc.history.edit(&mut doc.world, *index);
@@ -1041,11 +1152,17 @@ impl GraphEditor {
                     doc.commit();
                     doc.clamp_active_level();
                     let blocks_note = if palette.is_empty() { String::new() } else { format!(", in {} kinds of blocks", palette.len()) };
-                    let layers_note = match built.outputs.layers.len() {
+                    let mut layers_note = match built.outputs.layers.len() {
                         0 => String::new(),
                         1 => ", with one level of rock over the void".to_owned(),
                         k => format!(", with {k} levels of rock over the void"),
                     };
+                    if built.outputs.water.is_some() {
+                        layers_note.push_str(", water in its rivers and lakes");
+                    }
+                    if overlay.is_some() {
+                        layers_note.push_str("; the map's ground is left as it is, under two levels of the graph's own");
+                    }
                     feedback = Some(format!(
                         "Converted the graph to voxels at {} × {} in {took:.1} s{blocks_note}{layers_note}",
                         built.extent.n, built.extent.n
@@ -1081,6 +1198,7 @@ impl GraphEditor {
                 .on_hover_text("Build the graph over the whole map at the chosen resolution, and write it to the ground: heights, terrains, and the colours as the closest real blocks (undoable)")
                 .clicked()
             {
+                self.building_over = self.over.unwrap_or_else(|| graph.reads_the_map());
                 let (tx, rx) = channel();
                 let cancel = Arc::new(AtomicBool::new(false));
                 let progress = Arc::new(Progress::default());
@@ -1088,8 +1206,13 @@ impl GraphEditor {
                 let extent = map_extent(doc, self.resolution);
                 let g = graph.clone();
                 let ctx = ui.ctx().clone();
+                // The map, as it is now, for a graph that starts from it.
+                let fallback = doc.world.meta.sea_level as f32 - 8.0;
+                let colors = terrain_colors(doc);
+                let map = g.reads_the_map().then(|| GroundMap::new(doc.world.dims[doc.dim].snapshot(), doc.revision, fallback, colors));
                 std::thread::spawn(move || {
-                    let result = g.build_with_progress(&extent, &flag, &told).map(|outputs| Built { extent, outputs });
+                    let source = map.as_ref().map(|m| m as &dyn MapSource);
+                    let result = g.build_on(source, &extent, &flag, &told).map(|outputs| Built { extent, outputs });
                     let _ = tx.send(result);
                     ctx.request_repaint();
                 });
@@ -1100,6 +1223,22 @@ impl GraphEditor {
                     started: Instant::now(),
                     n: self.resolution,
                 });
+            }
+            if self.build.is_none() {
+                // Over the map, or into it: by default over it for a graph
+                // that starts from the map.
+                let mut over = self.over.unwrap_or_else(|| graph.reads_the_map());
+                if ui
+                    .checkbox(&mut over, "over the map")
+                    .on_hover_text(
+                        "Leave the map's ground as it is: what the graph digs and what it raises go to two levels of their own, \
+                         with its water, written again at every conversion. Change the graph or the map and convert again: nothing \
+                         is baked in. Delete the two levels to get the map back.\n\nUnchecked, the graph replaces the ground.",
+                    )
+                    .changed()
+                {
+                    self.over = Some(over);
+                }
             }
             ui.label(RichText::new("at").color(pal.weak));
             egui::ComboBox::from_id_salt("graph resolution")
@@ -1272,11 +1411,23 @@ impl GraphEditor {
             let (tx, rx) = channel();
             let reg = doc.world.registry.clone();
             let ctx = ctx.clone();
+            // The map, for the templates that work on it (not read on very
+            // large maps, where even a small picture touches every tile).
+            let map = (doc.dimension().ground().len() <= 4096).then(|| {
+                let read = massif_core::graph::sample_ground(doc.dimension(), &extent, sea as f32 - 8.0, &terrain_colors(doc));
+                SampledMap {
+                    extent,
+                    heights: Arc::new(read.heights),
+                    water: Arc::new(read.water),
+                    colors: Arc::new(read.colors),
+                    revision: 0,
+                }
+            });
             std::thread::Builder::new()
                 .name("massif template pictures".into())
                 .spawn(move || {
                     for t in Template::ALL {
-                        if let Some(image) = template_picture(t, &reg, sea as f32, &extent) {
+                        if let Some(image) = template_picture(t, &reg, sea as f32, &extent, map.as_ref()) {
                             if tx.send((t, image)).is_err() {
                                 return;
                             }
@@ -1957,6 +2108,22 @@ fn count(ui: &mut Ui, label: &str, v: &mut u32, range: std::ops::RangeInclusive<
     row(ui, label, |ui| ui.add(egui::Slider::new(v, range)))
 }
 
+/// The sea a simulation knows of: a level, or none.
+fn sea_level(ui: &mut Ui, v: &mut f32, hover: &str) -> bool {
+    let mut on = *v > massif_core::graph::NO_WATER + 1.0;
+    let before = *v;
+    ui.horizontal(|ui| {
+        ui.add_sized([96.0, 18.0], egui::Label::new(RichText::new("Sea level").size(12.0)));
+        if ui.checkbox(&mut on, "").on_hover_text(hover).changed() {
+            *v = if on { 63.0 } else { massif_core::graph::NO_WATER };
+        }
+        if on {
+            ui.add(egui::DragValue::new(v).range(-64.0..=320.0).speed(0.5).max_decimals(0));
+        }
+    });
+    *v != before
+}
+
 fn seed(ui: &mut Ui, v: &mut u32) -> bool {
     ui.horizontal(|ui| {
         ui.add_sized([96.0, 18.0], egui::Label::new(RichText::new("Seed").size(12.0)));
@@ -2346,6 +2513,27 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
         NodeKind::InvertHeight | NodeKind::Blend | NodeKind::Invert | NodeKind::MixColors | NodeKind::HeightOutput => {
             ui.label(RichText::new("No settings.").size(11.5).color(pal.weak));
         }
+        NodeKind::MapHeight => {
+            ui.label(
+                RichText::new(
+                    "The map as it is: the ground you painted or imported from WorldPainter, read again whenever it changes. Wire it \
+                     where a landform would go — into Rivers, Erosion, Lakes… — to work on the map instead of making a new one.",
+                )
+                .size(11.5)
+                .color(pal.weak),
+            );
+        }
+        NodeKind::WaterOutput => {
+            ui.label(
+                RichText::new(
+                    "Wire the Water of Rivers or Lakes here: converted, every column gets water up to that level where it is over \
+                     the ground, and the sea's level elsewhere. A river's level runs down with its bed, block by block: still water \
+                     in steps for the game, a current for mods that let water flow over water (Streams Reflowing).",
+                )
+                .size(11.5)
+                .color(pal.weak),
+            );
+        }
         NodeKind::Erosion {
             rain,
             erosion,
@@ -2383,13 +2571,21 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             amount(ui, "Depth", depth, 0.0..=20.0);
             amount(ui, "Fade", softness, 0.5..=100.0);
         }
-        NodeKind::Rivers { threshold, depth, width } => {
+        NodeKind::Rivers { threshold, depth, width, sea } => {
             fraction(ui, "Fewer", threshold);
             amount(ui, "Depth", depth, 0.0..=40.0);
             blocks(ui, "Width", width, 200.0);
+            sea_level(ui, sea, "Rivers end at the sea, and dig nothing under it");
+            ui.label(RichText::new("Wire Water to a Water output to fill the beds: the water runs down with them.").size(11.0).color(pal.weak));
         }
-        NodeKind::Lakes { amount: a } => {
+        NodeKind::Lakes { amount: a, sea } => {
             fraction(ui, "Fill", a);
+            sea_level(ui, sea, "What lies under the sea is the sea's, not a lake");
+            ui.label(
+                RichText::new("Fill raises the ground of the hollows; at 0 it is left alone, and Water, wired to a Water output, makes them lakes.")
+                    .size(11.0)
+                    .color(pal.weak),
+            );
         }
         NodeKind::Sea { level, shore } => {
             height(ui, "Level", level);
@@ -2655,7 +2851,7 @@ mod tests {
         assert_eq!(shown, (paint, 0));
         // The data for the viewport, with its light.
         let (h, p, _) = pick_view(&g, &eval, Some((slope, 0))).unwrap();
-        let data = view_data(&h, &p, &extent, 2.0, &[]);
+        let data = view_data(&h, &p, &extent, 2.0, &[], None);
         assert_eq!((data.colors.len(), data.light.len()), (32 * 32, 32 * 32));
         // Thumbnails of each kind.
         for (key, value) in &eval.values {

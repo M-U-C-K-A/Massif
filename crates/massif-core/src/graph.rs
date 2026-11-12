@@ -24,18 +24,30 @@
 mod color;
 mod landforms;
 mod layers;
+mod map;
 mod ops;
 mod sim;
 mod templates;
 
 pub use color::{AutoPalette, BlockPalette, GradientPreset, decode as decode_srgb, encode as encode_srgb};
+pub use map::{GroundMap, MapSample, MapSource, SampledMap, sample_ground};
 pub use templates::Template;
+
+/// The level of water where there is none: far under any ground.
+pub const NO_WATER: f32 = -10_000.0;
+
+/// The sea of graphs saved before rivers and lakes knew of it: none.
+fn no_sea() -> f32 {
+    NO_WATER
+}
 
 use crate::codec::snap_height;
 use crate::compose::hash2;
 use crate::coords::{BlockRect, TilePos, local_index};
 use crate::history::Edit;
+use crate::level::LevelKind;
 use crate::registry::TerrainId;
+use crate::tile::{NO_FLUID, Tile};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -229,6 +241,10 @@ pub enum NodeKind {
     Constant {
         value: f32,
     },
+    /// The map as it is: the heights of its ground, and where its water
+    /// lies. What a graph that works on a map — painted, or imported from
+    /// WorldPainter — starts from.
+    MapHeight,
     /// A ramp across the map.
     LinearGradient {
         /// Direction it rises toward, in degrees (0: north, 90: east).
@@ -501,11 +517,19 @@ pub enum NodeKind {
         threshold: f32,
         depth: f32,
         width: f32,
+        /// The level of the sea: rivers end where the ground goes under
+        /// it, and nothing is dug below ([`NO_WATER`]: no sea).
+        #[serde(default = "no_sea")]
+        sea: f32,
     },
     /// Fill the hollows water would fill: lakes and flat valley floors.
     Lakes {
         /// 0: nothing, 1: every hollow full.
         amount: f32,
+        /// The level of the sea: what lies under it is the sea's, not a
+        /// lake ([`NO_WATER`]: no sea).
+        #[serde(default = "no_sea")]
+        sea: f32,
     },
     /// A sea level: where the ground is under water, and its shore.
     Sea {
@@ -612,6 +636,10 @@ pub enum NodeKind {
         blocks: bool,
         palette: BlockPalette,
     },
+    /// Water up to a level, wherever that level is over the ground: the
+    /// rivers and the lakes that lie above the sea. Each column has its own
+    /// level, so a river's water runs down with its bed.
+    WaterOutput,
     /// Rock between two heights above the ground — floating islands,
     /// overhangs — which becomes a level of the map: columns of several
     /// spans, over the void.
@@ -773,6 +801,7 @@ impl NodeKind {
                 seed: 11,
             },
             // Primitives.
+            NodeKind::MapHeight,
             NodeKind::Noise {
                 style: NoiseStyle::Fbm,
                 scale: 600.0,
@@ -899,8 +928,9 @@ impl NodeKind {
                 threshold: 0.55,
                 depth: 6.0,
                 width: 12.0,
+                sea: 63.0,
             },
-            NodeKind::Lakes { amount: 1.0 },
+            NodeKind::Lakes { amount: 1.0, sea: 63.0 },
             NodeKind::Sea { level: 62.0, shore: 4.0 },
             // Combining.
             NodeKind::Combine {
@@ -971,6 +1001,7 @@ impl NodeKind {
                 blocks: true,
                 palette: BlockPalette::Natural,
             },
+            NodeKind::WaterOutput,
             NodeKind::LayerOutput {
                 slot: 1,
                 palette: BlockPalette::Natural,
@@ -988,6 +1019,7 @@ impl NodeKind {
             NodeKind::Cells { style: CellStyle::Plates, .. } => "Cell plates",
             NodeKind::Radial { .. } => "Radial gradient",
             NodeKind::Constant { .. } => "Constant",
+            NodeKind::MapHeight => "Map",
             NodeKind::LinearGradient { .. } => "Linear gradient",
             NodeKind::Shape { .. } => "Shape",
             NodeKind::Mountain { .. } => "Mountain",
@@ -1040,6 +1072,7 @@ impl NodeKind {
             NodeKind::TerrainOutput { .. } => "Terrain output",
             NodeKind::ColorOutput { .. } => "Colour output",
             NodeKind::LayerOutput { .. } => "Layer output",
+            NodeKind::WaterOutput => "Water output",
         }
     }
 
@@ -1050,6 +1083,7 @@ impl NodeKind {
             NodeKind::Cells { .. } => "Voronoi cells: cones at their centres or ridges along their edges",
             NodeKind::Radial { .. } => "High in the middle of the map, falling to its edges",
             NodeKind::Constant { .. } => "One value everywhere",
+            NodeKind::MapHeight => "The map as it is: the heights of its ground, and where its water lies",
             NodeKind::LinearGradient { .. } => "A ramp rising across the map",
             NodeKind::Shape { .. } => "A circle, square, cone or dome",
             NodeKind::Mountain { .. } => "One mountain, alpine, rounded, eroded or spiky",
@@ -1102,6 +1136,7 @@ impl NodeKind {
             NodeKind::TerrainOutput { .. } => "Paint a terrain where the mask says",
             NodeKind::ColorOutput { .. } => "The colour of the ground, turned into real blocks",
             NodeKind::LayerOutput { .. } => "Rock between two heights over the ground: a level of the map, over the void",
+            NodeKind::WaterOutput => "Water up to a level: the rivers and lakes above the sea, running down with their beds",
         }
     }
 
@@ -1111,6 +1146,7 @@ impl NodeKind {
             | NodeKind::Cells { .. }
             | NodeKind::Radial { .. }
             | NodeKind::Constant { .. }
+            | NodeKind::MapHeight
             | NodeKind::LinearGradient { .. }
             | NodeKind::Shape { .. } => Family::Generator,
             NodeKind::Mountain { .. }
@@ -1158,9 +1194,11 @@ impl NodeKind {
             | NodeKind::AdjustColor { .. }
             | NodeKind::Tint { .. }
             | NodeKind::AutoColor { .. } => Family::Color,
-            NodeKind::HeightOutput | NodeKind::TerrainOutput { .. } | NodeKind::ColorOutput { .. } | NodeKind::LayerOutput { .. } => {
-                Family::Output
-            }
+            NodeKind::HeightOutput
+            | NodeKind::TerrainOutput { .. }
+            | NodeKind::ColorOutput { .. }
+            | NodeKind::LayerOutput { .. }
+            | NodeKind::WaterOutput => Family::Output,
         }
     }
 
@@ -1180,6 +1218,7 @@ impl NodeKind {
             NodeKind::TerrainOutput { .. } => &[("Mask", M)],
             NodeKind::ColorOutput { .. } => &[("Colour", C)],
             NodeKind::LayerOutput { .. } => &[("Top", H), ("Bottom", H), ("Colour", C)],
+            NodeKind::WaterOutput => &[("Level", H)],
             _ => &[("In", H)],
         }
     }
@@ -1190,12 +1229,17 @@ impl NodeKind {
             NodeKind::Erosion { .. } => &[("Height", H), ("Flow", M), ("Deposits", M), ("Wear", M)],
             NodeKind::Thermal { .. } => &[("Height", H), ("Talus", M)],
             NodeKind::Snow { .. } => &[("Height", H), ("Snow", M)],
-            NodeKind::Rivers { .. } => &[("Height", H), ("Rivers", M)],
-            NodeKind::Lakes { .. } => &[("Height", H), ("Lakes", M)],
+            NodeKind::Rivers { .. } => &[("Height", H), ("Rivers", M), ("Water", H)],
+            NodeKind::Lakes { .. } => &[("Height", H), ("Lakes", M), ("Water", H)],
+            NodeKind::MapHeight => &[("Height", H), ("Water", M), ("Colour", C)],
             NodeKind::Sea { .. } => &[("Height", H), ("Water", M), ("Shore", M)],
             NodeKind::FloatingIslands { .. } => &[("Top", H), ("Bottom", H), ("Islands", M)],
             NodeKind::Overhang { .. } => &[("Top", H), ("Bottom", H)],
-            NodeKind::HeightOutput | NodeKind::TerrainOutput { .. } | NodeKind::ColorOutput { .. } | NodeKind::LayerOutput { .. } => &[],
+            NodeKind::HeightOutput
+            | NodeKind::TerrainOutput { .. }
+            | NodeKind::ColorOutput { .. }
+            | NodeKind::LayerOutput { .. }
+            | NodeKind::WaterOutput => &[],
             k if k.family() == Family::Selector => &[("Mask", M)],
             k if k.family() == Family::Color => &[("Colour", C)],
             _ => &[("Out", H)],
@@ -1355,16 +1399,20 @@ impl Graph {
     /// A fingerprint of what a node computes: its settings, and those of
     /// everything before it. Two evaluations of nodes with the same
     /// fingerprint over the same extent give the same fields.
-    fn fingerprint(&self, id: NodeId, memo: &mut HashMap<NodeId, u64>) -> u64 {
+    fn fingerprint(&self, id: NodeId, memo: &mut HashMap<NodeId, u64>, map: u64) -> u64 {
         if let Some(&f) = memo.get(&id) {
             return f;
         }
         let mut h = std::collections::hash_map::DefaultHasher::new();
         if let Some(node) = self.node(id) {
             format!("{:?}", node.kind).hash(&mut h);
+            // What reads the map is out of date when the map changes.
+            if node.kind == NodeKind::MapHeight {
+                map.hash(&mut h);
+            }
             for k in 0..node.kind.inputs().len() {
                 match self.input_of(id, k as u8) {
-                    Some((src, out)) => (k, self.fingerprint(src, memo), out).hash(&mut h),
+                    Some((src, out)) => (k, self.fingerprint(src, memo, map), out).hash(&mut h),
                     None => (k, u64::MAX).hash(&mut h),
                 }
             }
@@ -1744,6 +1792,9 @@ pub struct Outputs {
     pub colors: Option<(Arc<ColorField>, BlockPalette)>,
     /// Rock over the ground, each a level of the map.
     pub layers: Vec<LayerOut>,
+    /// The level of the water of each column ([`NO_WATER`] where there is
+    /// none): rivers and lakes above the sea.
+    pub water: Option<Arc<Field>>,
 }
 
 /// Rock a graph lays over the ground — floating islands, overhangs —
@@ -1777,13 +1828,30 @@ impl Graph {
     /// every intermediate field is kept (for previews); otherwise fields are
     /// dropped as soon as nothing else needs them.
     pub fn evaluate(&self, extent: &Extent, targets: &[NodeId], keep_all: bool, cancel: &AtomicBool) -> Result<Evaluation, GraphError> {
-        self.evaluate_with(extent, targets, keep_all, None, None, cancel, None)
+        self.evaluate_with(extent, targets, keep_all, None, None, cancel, None, None)
+    }
+
+    /// Whether the graph reads the map (has a Map node).
+    pub fn reads_the_map(&self) -> bool {
+        self.nodes.iter().any(|n| n.kind == NodeKind::MapHeight)
+    }
+
+    /// [`Graph::evaluate_cached`] for a graph that may read the map.
+    pub fn evaluate_cached_on(
+        &self,
+        map: Option<&dyn MapSource>,
+        extent: &Extent,
+        targets: &[NodeId],
+        cache: &mut EvalCache,
+        cancel: &AtomicBool,
+    ) -> Result<Evaluation, GraphError> {
+        self.evaluate_with(extent, targets, true, Some(cache), None, cancel, None, map)
     }
 
     /// Evaluate with a cache: nodes whose settings and inputs did not change
     /// since the cache saw them are not computed again.
     pub fn evaluate_cached(&self, extent: &Extent, targets: &[NodeId], cache: &mut EvalCache, cancel: &AtomicBool) -> Result<Evaluation, GraphError> {
-        self.evaluate_with(extent, targets, true, Some(cache), None, cancel, None)
+        self.evaluate_with(extent, targets, true, Some(cache), None, cancel, None, None)
     }
 
     /// Evaluate. Without `keep_all`, a field is dropped as soon as nothing
@@ -1799,6 +1867,7 @@ impl Graph {
         keep: Option<&HashSet<(NodeId, u8)>>,
         cancel: &AtomicBool,
         progress: Option<&Progress>,
+        map: Option<&dyn MapSource>,
     ) -> Result<Evaluation, GraphError> {
         let order = self.order(targets)?;
         if let Some(p) = progress {
@@ -1831,7 +1900,7 @@ impl Graph {
             if let Some(p) = progress {
                 p.node.store(id, Ordering::Relaxed);
             }
-            let fingerprint = self.fingerprint(id, &mut memo);
+            let fingerprint = self.fingerprint(id, &mut memo, map.map_or(0, |m| m.revision()));
             let cached = cache
                 .as_deref()
                 .and_then(|c| c.entries.get(&id))
@@ -1851,7 +1920,7 @@ impl Graph {
                         })
                         .collect();
                     let started = std::time::Instant::now();
-                    let result = ops::run(&node.kind, extent, &inputs, &wanted, cancel);
+                    let result = ops::run(&node.kind, extent, &inputs, &wanted, cancel, map);
                     out.timings.insert(id, started.elapsed().as_secs_f32() * 1000.0);
                     match result {
                         Ok(v) => {
@@ -1912,6 +1981,11 @@ impl Graph {
 
     /// [`Graph::build`], saying how far it got in `progress`.
     pub fn build_with_progress(&self, extent: &Extent, cancel: &AtomicBool, progress: &Progress) -> Result<Outputs, GraphError> {
+        self.build_on(None, extent, cancel, progress)
+    }
+
+    /// [`Graph::build_with_progress`] for a graph that may read the map.
+    pub fn build_on(&self, map: Option<&dyn MapSource>, extent: &Extent, cancel: &AtomicBool, progress: &Progress) -> Result<Outputs, GraphError> {
         let outputs = self.outputs_of();
         // Outputs have no fields of their own: evaluate what feeds them. A
         // layer needs its top and bottom; its colour may be left out.
@@ -1931,7 +2005,7 @@ impl Graph {
         let wanted: Vec<(NodeId, u8)> = feeds.iter().flatten().flatten().copied().collect();
         let targets: Vec<NodeId> = wanted.iter().map(|f| f.0).collect();
         let keep: HashSet<(NodeId, u8)> = wanted.iter().copied().collect();
-        let eval = self.evaluate_with(extent, &targets, false, None, Some(&keep), cancel, Some(progress))?;
+        let eval = self.evaluate_with(extent, &targets, false, None, Some(&keep), cancel, Some(progress), map)?;
         let mut result = Outputs::default();
         for (n, inputs) in outputs.iter().zip(feeds) {
             let value = |k: usize| inputs.get(k).copied().flatten().and_then(|src| eval.values.get(&src).cloned());
@@ -1940,6 +2014,7 @@ impl Graph {
                 NodeKind::HeightOutput => result.heights = Some(needed(0)?.as_field()),
                 NodeKind::TerrainOutput { terrain } => result.terrains.push((TerrainId(terrain), needed(0)?.as_field())),
                 NodeKind::ColorOutput { blocks: true, palette } => result.colors = Some((needed(0)?.as_color(), palette)),
+                NodeKind::WaterOutput => result.water = Some(needed(0)?.as_field()),
                 NodeKind::LayerOutput { slot, palette } => {
                     let what = inputs[0].and_then(|(src, _)| self.node(src)).map_or("Layer", |s| s.kind.label());
                     result.layers.push(LayerOut {
@@ -2039,7 +2114,7 @@ pub fn colors_in_use(field: &ColorField, palette: &[[u8; 3]]) -> Vec<bool> {
 /// where the colour lies between them), then terrains painted where their
 /// masks are high (dithered in between, later outputs over earlier ones).
 /// Recorded for undo.
-pub fn apply(edit: &mut Edit, extent: &Extent, outputs: &Outputs, seed: u64, palette: &[(TerrainId, [u8; 3])]) {
+pub fn apply(edit: &mut Edit, extent: &Extent, outputs: &Outputs, seed: u64, palette: &[(TerrainId, [u8; 3])], sea: i32) {
     let (lo, hi) = (edit.dim().min_y as f32, (edit.dim().max_y - 1) as f32);
     let tiles: Vec<TilePos> = edit.level().positions().collect();
     let everywhere = BlockRect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX);
@@ -2055,6 +2130,13 @@ pub fn apply(edit: &mut Edit, extent: &Extent, outputs: &Outputs, seed: u64, pal
                 let i = local_index(x, z);
                 if let Some(h) = &outputs.heights {
                     tile.top.set(i, snap_height(h.sample(u, v).clamp(lo, hi)));
+                }
+                // Water: the graph's where it stands over the ground, the
+                // sea's everywhere else.
+                if let Some(w) = &outputs.water {
+                    let level = w.at(u.round().max(0.0) as usize, v.round().max(0.0) as usize);
+                    let wet = level > tile.top.get(i) + 0.3;
+                    tile.fluid.set(i, if wet { level.round().clamp(lo, hi) as i16 } else { sea as i16 });
                 }
                 if let (Some(table), Some((field, _))) = (&nearest, &outputs.colors) {
                     let c = field.sample(u, v);
@@ -2073,6 +2155,119 @@ pub fn apply(edit: &mut Edit, extent: &Extent, outputs: &Outputs, seed: u64, pal
         }
         tile.compact();
     });
+}
+
+/// A side of the map's ground an overlay level holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overlay {
+    /// What the graph digs out of the ground: a Carve level, with the
+    /// water of what was dug.
+    Dug,
+    /// What it adds on the ground: a Solid level, with the water that
+    /// stands on ground it did not dig.
+    Raised,
+}
+
+impl Overlay {
+    /// The name of its level.
+    pub fn level_name(self) -> String {
+        LayerOut::level_name(
+            match self {
+                Overlay::Dug => "Dug",
+                Overlay::Raised => "Raised",
+            },
+            0,
+        )
+    }
+
+    pub const fn kind(self) -> LevelKind {
+        match self {
+            Overlay::Dug => LevelKind::Carve,
+            Overlay::Raised => LevelKind::Solid,
+        }
+    }
+}
+
+/// Write a build *over* the map, leaving its ground as it is: `edit` works
+/// on the level of one `side`, which gets the difference between the
+/// graph's heights and the ground — what was dug, or what was raised —
+/// with the terrain of the new surface and the graph's water. Converting
+/// again writes the levels again; deleting them gives the map back.
+///
+/// Columns the graph leaves within half a block of the ground are not
+/// touched (their terrain neither), except to hold water: a slab one block
+/// thick, of the ground's own terrain, carries a lake's level.
+pub fn apply_overlay(edit: &mut Edit, side: Overlay, extent: &Extent, outputs: &Outputs, seed: u64, palette: &[(TerrainId, [u8; 3])]) {
+    let Some(heights) = &outputs.heights else { return };
+    let (lo, hi) = (edit.dim().min_y as f32, (edit.dim().max_y - 1) as f32);
+    let tiles: Vec<TilePos> = edit.dim().ground().positions().collect();
+    let everywhere = BlockRect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX);
+    let colors: Vec<[u8; 3]> = palette.iter().map(|p| p.1).collect();
+    let nearest = (outputs.colors.is_some() && !palette.is_empty()).then(|| Nearest::new(&colors));
+    edit.par_tiles_with(tiles.clone(), everywhere, true, |pos, _, tile, others| {
+        let Some(ground) = others.get(0).and_then(|l| l.view(pos)) else { return };
+        let Tile {
+            top,
+            bottom: Some(bottom),
+            terrain,
+            fluid,
+            ..
+        } = tile
+        else {
+            return;
+        };
+        let (ox, oz) = pos.origin();
+        let n = crate::coords::TILE_SIZE;
+        for lz in 0..n {
+            for lx in 0..n {
+                let (x, z) = (ox + lx, oz + lz);
+                let (u, v) = extent.grid(x as f64 + 0.5, z as f64 + 0.5);
+                let i = local_index(x, z);
+                let base = ground.top.get(i);
+                let new = snap_height(heights.sample(u, v).clamp(lo, hi));
+                let water = outputs.water.as_ref().map_or(NO_WATER, |w| w.at(u.round().max(0.0) as usize, v.round().max(0.0) as usize));
+                let dug = new < base - 0.5;
+                // The span of the level here, and the water it holds.
+                let (span, level) = match side {
+                    Overlay::Dug if dug => (Some((new, base)), (water > new + 0.3).then_some(water)),
+                    Overlay::Raised if new > base + 0.5 => (Some((base, new)), (water > new + 0.3).then_some(water)),
+                    // A lake on ground left alone: its top block again,
+                    // to carry the water.
+                    Overlay::Raised if !dug && water > base + 0.3 => (Some((base - 1.0, base)), Some(water)),
+                    _ => (None, None),
+                };
+                let Some((y0, y1)) = span else {
+                    top.set(i, 0.0);
+                    bottom.set(i, 0.0);
+                    fluid.set(i, NO_FLUID);
+                    continue;
+                };
+                bottom.set(i, snap_height(y0));
+                top.set(i, snap_height(y1));
+                fluid.set(i, level.map_or(NO_FLUID, |l| l.round().clamp(lo, hi) as i16));
+                // The terrain of the new surface: the graph's, or the
+                // ground's own.
+                let mut chosen = ground.terrain.get(i);
+                if (new - base).abs() > 0.5 {
+                    if let (Some(table), Some((field, _))) = (&nearest, &outputs.colors) {
+                        let c = field.sample(u, v);
+                        let jitter = |k: u64| (hash2(x, z, seed ^ k) as f32 / u32::MAX as f32 - 0.5) * 18.0;
+                        let srgb = [0, 1, 2].map(|k| color::encode(c[k]) as f32 + jitter(0xc0 + k as u64));
+                        chosen = palette[table.get(srgb)].0.0;
+                    }
+                    for (k, (t, mask)) in outputs.terrains.iter().enumerate() {
+                        let dither = hash2(x, z, seed ^ (k as u64 + 1).wrapping_mul(0x51ed)) as f32 / u32::MAX as f32;
+                        if mask.sample(u, v) > dither {
+                            chosen = t.0;
+                        }
+                    }
+                }
+                terrain.set(i, chosen);
+            }
+        }
+        tile.compact();
+    });
+    edit.prune_empty(tiles);
 }
 
 /// Write a layer to the slab level `edit` works on: rock between its

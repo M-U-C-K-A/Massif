@@ -358,7 +358,14 @@ impl MapView {
             let secondary = button == PointerButton::Secondary;
             let inverse = secondary || modifiers.alt;
             let (bx, bz) = (x.floor() as i32, z.floor() as i32);
-            if tools.tool.is_click() {
+            if tools.tool == Tool::River {
+                // Points of the course; the right button takes one back.
+                if secondary {
+                    tools.river_points.pop();
+                } else {
+                    tools.river_points.push((x as f32, z as f32));
+                }
+            } else if tools.tool.is_click() {
                 *feedback = tools::click(doc, tools, bx, bz, inverse);
             } else if tools.tool.uses_brush() {
                 let (stroke, msg) = tools::begin_stroke(doc, tools, (x as f32, z as f32), inverse, secondary);
@@ -367,6 +374,23 @@ impl MapView {
                     tools::continue_stroke(doc, tools, &mut stroke, (x as f32, z as f32), 1.0 / 60.0);
                     self.stroke = Some(stroke);
                 }
+            }
+        }
+        if tools.tool == Tool::River && !tools.river_points.is_empty() {
+            let (enter, escape) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
+            if response.double_clicked() || enter {
+                // A double-click leaves two points on top of each other.
+                if response.double_clicked() && tools.river_points.len() >= 2 {
+                    let n = tools.river_points.len();
+                    let (a, b) = (tools.river_points[n - 1], tools.river_points[n - 2]);
+                    if (a.0 - b.0).hypot(a.1 - b.1) * self.zoom < 6.0 {
+                        tools.river_points.pop();
+                    }
+                }
+                *feedback = tools::dig_river(doc, tools);
+            } else if escape {
+                tools.river_points.clear();
+                *feedback = Some("Course dropped".into());
             }
         }
         if ui.input(|i| i.key_pressed(egui::Key::Escape))
@@ -506,6 +530,48 @@ impl MapView {
             let red = Color32::from_rgb(230, 40, 40);
             painter.line_segment([o - vec2(0.0, 7.0), o + vec2(0.0, 7.0)], Line::new(1.5, red));
             painter.line_segment([o - vec2(4.0, 0.0), o + vec2(4.0, 0.0)], Line::new(1.5, red));
+        }
+
+        // The course of the river being drawn: its middle, the edges of its
+        // water and of its banks, and the next leg to the pointer.
+        if tools.tool == Tool::River && !tools.river_points.is_empty() {
+            let mut points = tools.river_points.clone();
+            if let Some((x, z)) = world_pointer.filter(|_| response.hovered()) {
+                points.push((x as f32, z as f32));
+            }
+            let course = massif_core::river::smooth_course(&points);
+            let r = &tools.river;
+            let n = course.len();
+            let screen = |x: f32, z: f32| self.to_screen(canvas, x as f64, z as f64);
+            let side = |off: f32, bank: f32| -> Vec<Pos2> {
+                (0..n)
+                    .map(|k| {
+                        let (a, b) = (course[k.saturating_sub(1)], course[(k + 1).min(n - 1)]);
+                        let (dx, dz) = (b.0 - a.0, b.1 - a.1);
+                        let len = dx.hypot(dz).max(1e-3);
+                        let t = if n > 1 { k as f32 / (n - 1) as f32 } else { 0.0 };
+                        let half = (r.width + (r.width_end - r.width) * t) / 2.0 + bank;
+                        let (nx, nz) = (-dz / len * half * off, dx / len * half * off);
+                        screen(course[k].0 + nx, course[k].1 + nz)
+                    })
+                    .collect()
+            };
+            let water = Line::new(1.6, Color32::from_rgb(90, 170, 255));
+            let banks = Line::new(1.0, Color32::from_rgba_unmultiplied(90, 170, 255, 110));
+            for (off, bank, line) in [(1.0, 0.0, water), (-1.0, 0.0, water), (1.0, r.banks, banks), (-1.0, r.banks, banks)] {
+                let pts = thin(side(off, bank).into_iter(), 1.5);
+                if pts.len() > 1 {
+                    painter.add(egui::Shape::line(pts, line));
+                }
+            }
+            let middle = thin(course.iter().map(|&(x, z)| screen(x, z)), 1.5);
+            if middle.len() > 1 {
+                painter.add(egui::Shape::dashed_line(&middle, Line::new(1.0, Color32::WHITE), 6.0, 4.0));
+            }
+            for (k, &(x, z)) in tools.river_points.iter().enumerate() {
+                let p = screen(x, z);
+                painter.circle(p, if k == 0 { 5.0 } else { 3.5 }, Color32::from_rgb(90, 170, 255), Line::new(1.5, Color32::WHITE));
+            }
         }
 
         // Brush outline.

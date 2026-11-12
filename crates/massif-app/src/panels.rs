@@ -127,13 +127,19 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             slider_row(ui, "Amplitude", |ui| ui.add(egui::Slider::new(&mut tools.roughness, 0.5..=40.0).suffix(" blocks")));
         }
         Tool::PaintTerrain => {
-            let def = doc.world.registry.terrain(TerrainId(tools.terrain));
-            ui.horizontal(|ui| {
-                let (r, _) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::hover());
-                terrain_icon(ui, r, &doc.world.registry, tools.terrain, blocks);
-                ui.label(RichText::new(&def.name).bold());
-            });
-            hint(ui, "Choose terrains in the Terrain panel or any block of the game in Blocks; Alt-click picks one from the map.");
+            ui.checkbox(&mut tools.pattern.on, "a pattern of terrains")
+                .on_hover_text("Paint several terrains at once, laid out by a noise: patches, veins, blobs, cells or stripes");
+            if tools.pattern.on {
+                pattern_settings(ui, tools, doc, blocks);
+            } else {
+                let def = doc.world.registry.terrain(TerrainId(tools.terrain));
+                ui.horizontal(|ui| {
+                    let (r, _) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::hover());
+                    terrain_icon(ui, r, &doc.world.registry, tools.terrain, blocks);
+                    ui.label(RichText::new(&def.name).bold());
+                });
+                hint(ui, "Choose terrains in the Terrain panel or any block of the game in Blocks; Alt-click picks one from the map.");
+            }
         }
         Tool::PaintBiome => {
             let reg = &doc.world.registry;
@@ -178,6 +184,50 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             });
             if let Some((_, changed)) = tools.auto_done.filter(|(b, _)| *b == biomes) {
                 hint(ui, &format!("{changed} columns changed over the whole map."));
+            }
+        }
+        Tool::River => {
+            let r = &mut tools.river;
+            slider_row(ui, "Width", |ui| ui.add(egui::Slider::new(&mut r.width, 2.0..=400.0).suffix(" blocks").max_decimals(0)));
+            slider_row(ui, "At the mouth", |ui| ui.add(egui::Slider::new(&mut r.width_end, 2.0..=400.0).suffix(" blocks").max_decimals(0)));
+            slider_row(ui, "Depth", |ui| ui.add(egui::Slider::new(&mut r.depth, 1.0..=40.0).suffix(" blocks").max_decimals(0)));
+            slider_row(ui, "Banks", |ui| ui.add(egui::Slider::new(&mut r.banks, 0.0..=120.0).suffix(" blocks").max_decimals(0)));
+            ui.checkbox(&mut r.water, "fill it with water");
+            ui.checkbox(&mut r.biome, "a river biome where the water is");
+            ui.horizontal(|ui| {
+                ui.add_sized([72.0, 18.0], egui::Label::new("Bed"));
+                let shown = if r.bed.is_empty() { "— as it is".to_owned() } else { r.bed.clone() };
+                egui::ComboBox::from_id_salt("river bed").selected_text(shown).width(150.0).show_ui(ui, |ui| {
+                    if ui.selectable_label(r.bed.is_empty(), "— as it is").clicked() {
+                        r.bed.clear();
+                    }
+                    for t in &doc.world.registry.terrains {
+                        if ui.selectable_label(t.name == r.bed, &t.name).clicked() {
+                            r.bed = t.name.clone();
+                        }
+                    }
+                });
+            });
+            ui.add_space(4.0);
+            let points = tools.river_points.len();
+            hint(
+                ui,
+                &if points == 0 {
+                    "Click on the map where the river goes, point after point.".to_owned()
+                } else {
+                    format!("{points} point{} — double-click or Enter to dig, Esc to drop.", if points == 1 { "" } else { "s" })
+                },
+            );
+            ui.horizontal(|ui| {
+                if ui.add_enabled(points >= 2, egui::Button::new(theme::with_icon(Icon::Route, "Dig the river"))).clicked() {
+                    tools.river_note = crate::tools::dig_river(doc, tools);
+                }
+                if ui.add_enabled(points > 0, egui::Button::new("Drop the course")).clicked() {
+                    tools.river_points.clear();
+                }
+            });
+            if let Some(note) = &tools.river_note {
+                hint(ui, note);
             }
         }
         Tool::Flood | Tool::Water => {
@@ -643,6 +693,107 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
         ui.add_enabled(on, egui::DragValue::new(&mut f.radius).range(1..=64));
         ui.label("blocks around");
     });
+}
+
+/// The pattern of the Paint tool: its shape, its terrains and their
+/// weights, and a picture of it.
+fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &Document, blocks: &mut BlockLibrary) {
+    use massif_core::pattern::PatternKind;
+    let reg = &doc.world.registry;
+    let ps = &mut tools.pattern;
+    let p = &mut ps.pattern;
+    ui.horizontal(|ui| {
+        ui.add_sized([72.0, 18.0], egui::Label::new("Shape"));
+        egui::ComboBox::from_id_salt("pattern kind").selected_text(p.kind.label()).width(120.0).show_ui(ui, |ui| {
+            for k in PatternKind::ALL {
+                ui.selectable_value(&mut p.kind, k, k.label());
+            }
+        });
+    });
+    slider_row(ui, "Size", |ui| ui.add(egui::Slider::new(&mut p.scale, 2.0..=600.0).suffix(" blocks").max_decimals(0)));
+    if p.kind == PatternKind::Stripes {
+        slider_row(ui, "Direction", |ui| ui.add(egui::Slider::new(&mut p.angle, 0.0..=180.0).suffix("°").max_decimals(0)));
+    }
+    slider_row(ui, "Soft edges", |ui| {
+        ui.add(
+            egui::Slider::new(&mut p.softness, 0.0..=1.0)
+                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
+        )
+    });
+    ui.horizontal(|ui| {
+        ui.add_sized([72.0, 18.0], egui::Label::new("Seed"));
+        ui.add(egui::DragValue::new(&mut p.seed));
+        if ui.small_button(theme::glyph(Icon::Dices).to_string()).on_hover_text("Another layout").clicked() {
+            p.seed = p.seed.wrapping_mul(1_103_515_245).wrapping_add(12_345) % 100_000;
+        }
+    });
+    ui.add_space(4.0);
+    // The terrains and their shares.
+    let total: f32 = ps.terrains.iter().map(|t| t.1.max(0.0)).sum::<f32>().max(1e-6);
+    let mut remove = None;
+    for (k, (name, weight)) in ps.terrains.iter_mut().enumerate() {
+        ui.horizontal(|ui| {
+            let id = reg.terrain_by_name(name);
+            let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
+            if let Some(t) = id {
+                terrain_icon(ui, r, reg, t.0, blocks);
+            }
+            egui::ComboBox::from_id_salt(("pattern terrain", k)).selected_text(name.as_str()).width(110.0).show_ui(ui, |ui| {
+                for t in &reg.terrains {
+                    if ui.selectable_label(t.name == *name, &t.name).clicked() {
+                        *name = t.name.clone();
+                    }
+                }
+            });
+            ui.add(egui::DragValue::new(weight).range(0.0..=100.0).speed(0.05).max_decimals(1));
+            ui.label(RichText::new(format!("{:.0}%", weight.max(0.0) / total * 100.0)).size(11.0).color(Palette::of(ui).weak));
+            if ui.small_button(theme::glyph(Icon::X).to_string()).clicked() {
+                remove = Some(k);
+            }
+        });
+    }
+    if let Some(k) = remove {
+        ps.terrains.remove(k);
+    }
+    if ui
+        .button(theme::with_icon(Icon::Plus, "Add the selected terrain"))
+        .on_hover_text("The terrain picked in the Terrain panel, or any block chosen in Blocks")
+        .clicked()
+    {
+        ps.terrains.push((reg.terrain(TerrainId(tools.terrain)).name.clone(), 1.0));
+    }
+    // A picture of the pattern, eight of its features across.
+    let key = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        format!("{:?}{:?}", tools.pattern.pattern, tools.pattern.terrains).hash(&mut h);
+        reg.terrains.iter().map(|t| t.color).collect::<Vec<_>>().hash(&mut h);
+        h.finish()
+    };
+    let id = egui::Id::unique("pattern picture");
+    let cached: Option<(u64, egui::TextureHandle)> = ui.ctx().data(|d| d.get_temp(id));
+    let texture = match cached {
+        Some((k, t)) if k == key => Some(t),
+        _ => tools.pattern.sampler(reg).map(|sampler| {
+            let n = 128usize;
+            let span = (tools.pattern.pattern.scale * 8.0).max(32.0) / n as f32;
+            let rgb: Vec<u8> = (0..n * n)
+                .flat_map(|c| {
+                    let (x, z) = (((c % n) as f32 * span) as i32, ((c / n) as f32 * span) as i32);
+                    sampler.terrain(x, z).map_or([60, 60, 60], |t| reg.terrain(t).color)
+                })
+                .collect();
+            let t = ui.ctx().load_texture("pattern picture", egui::ColorImage::from_rgb([n, n], &rgb), egui::TextureOptions::NEAREST);
+            ui.ctx().data_mut(|d| d.insert_temp(id, (key, t.clone())));
+            t
+        }),
+    };
+    if let Some(t) = texture {
+        ui.add_space(4.0);
+        ui.add(egui::Image::new(&t).fit_to_exact_size(vec2(ui.available_width().min(220.0), ui.available_width().min(220.0))).corner_radius(6));
+        hint(ui, &format!("{:.0} blocks across", tools.pattern.pattern.scale * 8.0));
+    }
 }
 
 /// The rules of the automatic biomes: how the land is read, and the biome

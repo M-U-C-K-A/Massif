@@ -507,3 +507,48 @@ mod tests {
     }
 
 }
+
+/// Very large maps, as WorldPainter's: how long they take and how much they
+/// weigh. Runs with MASSIF_GIANT (the size in blocks, e.g. "60000x50000");
+/// run it with `--release`.
+#[cfg(test)]
+mod giant {
+    use super::*;
+    use crate::history::History;
+
+    #[test]
+    fn giant_maps() {
+        let Ok(size) = std::env::var("MASSIF_GIANT") else { return };
+        let (w, d) = size.split_once('x').map(|(w, d)| (w.parse::<i32>().unwrap(), d.parse::<i32>().unwrap())).expect("WxD");
+        let t = std::time::Instant::now();
+        let mut world = generate(&GenParams {
+            tiles_x: (w + 127) / 128,
+            tiles_z: (d + 127) / 128,
+            landform: Landform::Hills,
+            ..GenParams::default()
+        });
+        let tiles = world.dims[0].ground().len();
+        eprintln!("generated {tiles} tiles in {:.1} s", t.elapsed().as_secs_f32());
+        let bytes: usize = {
+            let ground = world.dims[0].ground();
+            ground.positions().map(|p| ground.blob_len(p)).sum()
+        };
+        eprintln!("compressed: {:.2} GB", bytes as f64 / 1e9);
+        // The graph's Map node over the whole map, at a preview's size.
+        let t = std::time::Instant::now();
+        let ext = crate::graph::Extent::covering(world.dims[0].bounds().map(|(lo, hi)| crate::coords::BlockRect::new(lo.x * 128, lo.z * 128, (hi.x + 1) * 128, (hi.z + 1) * 128)).unwrap(), 512);
+        let read = crate::graph::sample_ground(&world.dims[0], &ext, 0.0, &[]);
+        eprintln!("the map read at 512 × 512 in {:.1} s ({} high)", t.elapsed().as_secs_f32(), read.heights.range().1);
+        // A brush stroke somewhere.
+        let t = std::time::Instant::now();
+        let mut h = History::default();
+        h.begin("raise", 0);
+        let brush = crate::brush::Brush {
+            radius: 200.0,
+            ..Default::default()
+        };
+        crate::ops::raise(&mut h.edit(&mut world, 0), &brush, 1000.0, 1000.0, 5.0, crate::ops::Surface::Top);
+        h.commit();
+        eprintln!("a brush of 400 blocks in {:.3} s", t.elapsed().as_secs_f32());
+    }
+}

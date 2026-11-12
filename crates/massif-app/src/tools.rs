@@ -27,6 +27,8 @@ pub enum Tool {
     Flood,
     Drain,
     Water,
+    /// A river along a course of points.
+    River,
     StampSlab,
     EraseSlab,
     /// True 3D: add matter, dig, round off.
@@ -48,7 +50,7 @@ impl Tool {
             Icon::Paintbrush,
             &[Tool::PaintTerrain, Tool::PaintBiome, Tool::AutoPaint, Tool::AutoBiome, Tool::Eyedropper],
         ),
-        ("Water", Icon::Droplet, &[Tool::Flood, Tool::Drain, Tool::Water]),
+        ("Water", Icon::Droplet, &[Tool::Flood, Tool::Drain, Tool::Water, Tool::River]),
         ("Levels", Icon::Layers, &[Tool::StampSlab, Tool::EraseSlab]),
         ("Sculpt 3D", Icon::Box, &[Tool::Build, Tool::Dig, Tool::Smooth3d]),
         ("Navigate", Icon::Compass, &[Tool::Pan]),
@@ -69,6 +71,7 @@ impl Tool {
             Tool::Flood => "Flood",
             Tool::Drain => "Drain",
             Tool::Water => "Water brush",
+            Tool::River => "River",
             Tool::StampSlab => "Stamp slab",
             Tool::EraseSlab => "Erase slab",
             Tool::Build => "Build (3D)",
@@ -93,6 +96,7 @@ impl Tool {
             Tool::Flood => Icon::PaintBucket,
             Tool::Drain => Icon::DropletOff,
             Tool::Water => Icon::Droplets,
+            Tool::River => Icon::Route,
             Tool::StampSlab => Icon::Cuboid,
             Tool::EraseSlab => Icon::Eraser,
             Tool::Build => Icon::Hammer,
@@ -155,6 +159,9 @@ impl Tool {
             Tool::Flood => "Fill the basin under the cursor with water up to the water level; the right button drains it.",
             Tool::Drain => "Remove the body of water under the cursor; the right button floods it.",
             Tool::Water => "Set the water level under the brush; the right button removes water.",
+            Tool::River => {
+                "Click the points of a river's course, then double-click (or Enter) to dig it: a smooth bed with water running down, banks easing into the land. The right button takes back the last point, Esc drops the course. Start on a river for a branch, end on one for a tributary."
+            }
             Tool::StampSlab => {
                 "Add a slab to the active Solid or Carve level (overhangs, arches, floating islands, caves); the right button erases."
             }
@@ -173,7 +180,7 @@ impl Tool {
     }
 
     pub const fn uses_brush(self) -> bool {
-        !matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Drain | Tool::Pan)
+        !matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Drain | Tool::Pan | Tool::River)
     }
 
     /// Tools that apply once per click rather than continuously.
@@ -248,6 +255,73 @@ pub struct ToolState {
     /// it was of biomes, and how many columns.
     #[serde(skip)]
     pub auto_done: Option<(bool, usize)>,
+    /// How rivers are dug, and the course being drawn.
+    pub river: RiverSettings,
+    #[serde(skip)]
+    pub river_points: Vec<(f32, f32)>,
+    /// What the last river dug.
+    #[serde(skip)]
+    pub river_note: Option<String>,
+    /// Paint a pattern of terrains rather than one.
+    pub pattern: PatternSettings,
+}
+
+/// A pattern of terrains for the Paint tool.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PatternSettings {
+    pub on: bool,
+    pub pattern: massif_core::pattern::Pattern,
+    /// Terrains by name, with their weights.
+    pub terrains: Vec<(String, f32)>,
+}
+
+impl Default for PatternSettings {
+    fn default() -> Self {
+        Self {
+            on: false,
+            pattern: Default::default(),
+            terrains: vec![("Grass".into(), 3.0), ("Coarse Dirt".into(), 1.0), ("Podzol".into(), 1.0)],
+        }
+    }
+}
+
+impl PatternSettings {
+    /// The pattern with its terrains, those of the registry.
+    pub fn sampler(&self, reg: &massif_core::Registry) -> Option<massif_core::pattern::PatternSampler> {
+        let terrains: Vec<(TerrainId, f32)> = self.terrains.iter().filter_map(|(name, w)| Some((reg.terrain_by_name(name)?, *w))).collect();
+        (!terrains.is_empty()).then(|| self.pattern.sampler(&terrains))
+    }
+}
+
+/// The settings of the River tool.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RiverSettings {
+    /// Width of the water at the source and at the mouth.
+    pub width: f32,
+    pub width_end: f32,
+    pub depth: f32,
+    pub banks: f32,
+    pub water: bool,
+    /// Terrain of the bed, by name ("": left as it is).
+    pub bed: String,
+    /// Make the water a river biome.
+    pub biome: bool,
+}
+
+impl Default for RiverSettings {
+    fn default() -> Self {
+        Self {
+            width: 12.0,
+            width_end: 20.0,
+            depth: 4.0,
+            banks: 12.0,
+            water: true,
+            bed: "Gravel".into(),
+            biome: true,
+        }
+    }
 }
 
 impl Default for ToolState {
@@ -272,6 +346,10 @@ impl Default for ToolState {
             auto: massif_core::auto::AutoRules::default(),
             open_rules: false,
             auto_done: None,
+            river: RiverSettings::default(),
+            river_points: Vec::new(),
+            river_note: None,
+            pattern: PatternSettings::default(),
         }
     }
 }
@@ -364,6 +442,9 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
     // The automatic tools read the land with the rules of the settings.
     let reader = matches!(stroke.tool, Tool::AutoBiome | Tool::AutoPaint)
         .then(|| massif_core::auto::Reader::new(&tools.auto, &doc.world.registry, doc.world.meta.sea_level));
+    let pattern = (stroke.tool == Tool::PaintTerrain && tools.pattern.on && !invert)
+        .then(|| tools.pattern.sampler(&doc.world.registry))
+        .flatten();
     let theme = (matches!(stroke.tool, Tool::PaintTerrain | Tool::AutoPaint) && invert).then(|| {
         (
             massif_core::generate::Theme::new(&doc.world.registry),
@@ -408,12 +489,13 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                 let amp = tools.roughness * brush.strength * dt * 4.0 * share;
                 ops::roughen(&mut edit, brush, x, z, if invert { -amp } else { amp }, stroke.salt >> 7, surface);
             }
-            Tool::PaintTerrain => match &theme {
+            Tool::PaintTerrain => match (&theme, &pattern) {
                 // The inverse puts back the terrain the height calls for.
-                Some((theme, sea)) => ops::paint_terrain_with(&mut edit, brush, x, z, stroke.salt, |h| {
+                (Some((theme, sea)), _) => ops::paint_terrain_with(&mut edit, brush, x, z, stroke.salt, |h| {
                     theme.terrain(h - 1.0, 0.0, *sea, 0.0)
                 }),
-                None => ops::paint_terrain(&mut edit, brush, x, z, TerrainId(tools.terrain), stroke.salt),
+                (None, Some(pattern)) => ops::paint_pattern(&mut edit, brush, x, z, stroke.salt, pattern),
+                (None, None) => ops::paint_terrain(&mut edit, brush, x, z, TerrainId(tools.terrain), stroke.salt),
             },
             Tool::PaintBiome => {
                 let biome = if invert { 0 } else { tools.biome };
@@ -451,7 +533,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                     massif_core::voxel::sculpt(&mut edit, brush, [x, y, z], strength, mode);
                 }
             }
-            Tool::Eyedropper | Tool::Flood | Tool::Drain | Tool::Pan => {}
+            Tool::Eyedropper | Tool::Flood | Tool::Drain | Tool::Pan | Tool::River => {}
         }
     }
     stroke.last = to;
@@ -522,6 +604,38 @@ pub fn probe(doc: &Document, x: i32, z: i32) -> Option<Probe> {
         biome: s.biome,
         fluid: s.fluid,
     })
+}
+
+/// Dig the river whose course is being drawn (one undoable step).
+pub fn dig_river(doc: &mut Document, tools: &mut ToolState) -> Feedback {
+    let points = std::mem::take(&mut tools.river_points);
+    if points.len() < 2 {
+        return Some("A river needs two points or more: click its course on the map".into());
+    }
+    let reg = &doc.world.registry;
+    let r = &tools.river;
+    let spec = massif_core::river::RiverSpec {
+        width: r.width,
+        width_end: r.width_end,
+        depth: r.depth,
+        banks: r.banks,
+        water: r.water,
+        bed: if r.bed.is_empty() { None } else { reg.terrain_by_name(&r.bed) },
+        biome: r.biome.then(|| reg.biome_by_id("minecraft:river")).flatten(),
+    };
+    doc.history.begin("River", doc.dim);
+    let report = massif_core::river::carve_river(&mut doc.history.edit(&mut doc.world, 0), &points, &spec);
+    doc.commit();
+    let note = if report.columns + report.wet == 0 {
+        "The river is off the map: nothing dug".to_owned()
+    } else {
+        format!(
+            "Dug a river {:.0} blocks long, its water from {:.0} down to {:.0}",
+            report.length, report.source, report.mouth
+        )
+    };
+    tools.river_note = Some(note.clone());
+    Some(note)
 }
 
 /// A single-click tool at block `(x, z)`. `inverse` is the right button.

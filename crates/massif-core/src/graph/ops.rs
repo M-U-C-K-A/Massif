@@ -8,7 +8,14 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 /// Run one node. `Err(true)`: an input is missing; `Err(false)`: cancelled.
-pub(super) fn run(kind: &NodeKind, e: &Extent, inputs: &[Option<Value>], wanted: &[bool], cancel: &AtomicBool) -> Result<Vec<Value>, bool> {
+pub(super) fn run(
+    kind: &NodeKind,
+    e: &Extent,
+    inputs: &[Option<Value>],
+    wanted: &[bool],
+    cancel: &AtomicBool,
+    source: Option<&dyn super::MapSource>,
+) -> Result<Vec<Value>, bool> {
     let n = e.n;
     // An output nobody wants: an empty field, never looked at.
     let want = |k: usize| wanted.get(k).copied().unwrap_or(true);
@@ -18,6 +25,11 @@ pub(super) fn run(kind: &NodeKind, e: &Extent, inputs: &[Option<Value>], wanted:
     let one = |f: Field| Ok(vec![Value::Field(Arc::new(f))]);
     let paint = |c: ColorField| Ok(vec![Value::Color(Arc::new(c))]);
     let map = |f: &Field, op: &(dyn Fn(f32) -> f32 + Sync)| Field::new(n, f.data.par_iter().map(|&v| op(v)).collect());
+    if *kind == NodeKind::MapHeight {
+        // Without a map to read (a graph on its own), the node has nothing.
+        let read = source.ok_or(true)?.sample(e);
+        return Ok(vec![Value::Field(Arc::new(read.heights)), Value::Field(Arc::new(read.water)), Value::Color(Arc::new(read.colors))]);
+    }
     if let Some(f) = landforms::generate_kind(kind, e) {
         return one(f);
     }
@@ -224,21 +236,51 @@ pub(super) fn run(kind: &NodeKind, e: &Extent, inputs: &[Option<Value>], wanted:
             let h = Field::new(n, f.data.par_iter().zip(&mask.data).map(|(&v, &m)| v + depth * m).collect());
             Ok(vec![Value::Field(Arc::new(h)), Value::Field(Arc::new(mask))])
         }
-        NodeKind::Rivers { threshold, depth, width } => {
+        NodeKind::Rivers { threshold, depth, width, sea } => {
             let f = field(0)?;
             let (work, we) = coarser(&f, e, SIM_MAX);
-            let (h, rivers) = sim::rivers(&work, we.spacing(), threshold.clamp(0.0, 1.0), depth, width, cancel).ok_or(false)?;
-            Ok(vec![Value::Field(Arc::new(carry(&f, &work, &h))), Value::Field(Arc::new(full(&rivers, 1)))])
+            let (h, rivers, level) = sim::rivers(&work, we.spacing(), threshold.clamp(0.0, 1.0), depth, width, sea, cancel).ok_or(false)?;
+            let dug = carry(&f, &work, &h);
+            // Water where the bed is dug enough to hold it, up to a level
+            // that runs down with the valley, and no lower than the sea.
+            let water = if want(2) {
+                let (mask, level) = (upsample(&rivers, n), upsample(&level, n));
+                Field::new(
+                    n,
+                    (0..n * n)
+                        .into_par_iter()
+                        .map(|c| {
+                            let l = level.data[c].max(sea);
+                            if mask.data[c] > 0.3 && l > dug.data[c] + 0.3 && l > sea + 0.2 { l } else { super::NO_WATER }
+                        })
+                        .collect(),
+                )
+            } else {
+                Field::new(0, Vec::new())
+            };
+            Ok(vec![Value::Field(Arc::new(dug)), Value::Field(Arc::new(full(&rivers, 1))), Value::Field(Arc::new(water))])
         }
-        NodeKind::Lakes { amount } => {
+        NodeKind::Lakes { amount, sea } => {
             let f = field(0)?;
             let (work, _) = coarser(&f, e, SIM_MAX);
             let m = work.n;
-            let filled = sim::fill(&work, 0.0);
+            // What lies under the sea is the sea's: its surface is where
+            // the hollows spill to.
+            let land = Field::new(m, work.data.iter().map(|&v| v.max(sea)).collect());
+            let filled = sim::fill(&land, 0.0);
             let a = amount.clamp(0.0, 1.0);
-            let h = Field::new(m, work.data.par_iter().zip(&filled).map(|(&v, &w)| v + (w - v) * a).collect());
-            let lakes = Field::new(m, work.data.par_iter().zip(&filled).map(|(&v, &w)| ((w - v) * a / 1.5).clamp(0.0, 1.0)).collect());
-            Ok(vec![Value::Field(Arc::new(carry(&f, &work, &h))), Value::Field(Arc::new(full(&lakes, 1)))])
+            let h = Field::new(m, work.data.par_iter().zip(&filled).map(|(&v, &w)| if v < sea { v } else { v + (w - v) * a }).collect());
+            let lakes = Field::new(m, land.data.par_iter().zip(&filled).map(|(&v, &w)| ((w - v) * a / 1.5).clamp(0.0, 1.0)).collect());
+            // Water up to where each hollow spills, wherever it is deep
+            // enough to show; with the ground left as it was (amount 0),
+            // the hollows become lakes.
+            let water = if want(2) {
+                let (level, deep) = (upsample(&Field::new(m, filled.clone()), n), upsample(&Field::new(m, land.data.iter().zip(&filled).map(|(&v, &w)| w - v).collect()), n));
+                Field::new(n, level.data.par_iter().zip(&deep.data).map(|(&l, &d)| if d > 0.6 && l > sea + 0.2 { l } else { super::NO_WATER }).collect())
+            } else {
+                Field::new(0, Vec::new())
+            };
+            Ok(vec![Value::Field(Arc::new(carry(&f, &work, &h))), Value::Field(Arc::new(full(&lakes, 1))), Value::Field(Arc::new(water))])
         }
         NodeKind::Sea { level, shore } => {
             let f = field(0)?;
@@ -419,7 +461,9 @@ pub(super) fn run(kind: &NodeKind, e: &Extent, inputs: &[Option<Value>], wanted:
             let (top, bottom) = layers::overhang(&f, e, reach, thickness, drop, variation, seed);
             Ok(vec![Value::Field(Arc::new(top)), Value::Field(Arc::new(bottom))])
         }
-        NodeKind::HeightOutput | NodeKind::TerrainOutput { .. } | NodeKind::ColorOutput { .. } | NodeKind::LayerOutput { .. } => Ok(Vec::new()),
+        NodeKind::HeightOutput | NodeKind::TerrainOutput { .. } | NodeKind::ColorOutput { .. } | NodeKind::LayerOutput { .. } | NodeKind::WaterOutput => {
+            Ok(Vec::new())
+        }
         // Generators and landforms were made above.
         _ => Err(true),
     }

@@ -363,6 +363,31 @@ pub fn paint_biome(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, biome: Biom
     paint_plane(edit, brush, cx, cz, salt, biome.0, |t| &mut t.biome);
 }
 
+/// Paint the terrains of a pattern under the brush (see
+/// [`crate::pattern`]). `salt` should change from dab to dab.
+pub fn paint_pattern(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, salt: u64, pattern: &crate::pattern::PatternSampler) {
+    let dab = Dab::new(edit, brush, cx, cz);
+    let footprint = BlockRect::around(cx, cz, brush.radius);
+    edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
+        let slab = tile.bottom.is_some();
+        for z in clip.z0..clip.z1 {
+            for x in clip.x0..clip.x1 {
+                let w = dab.weight(x, z);
+                if w <= 0.0 || !paint_hit(w, brush.strength, x, z, salt) {
+                    continue;
+                }
+                let i = local_index(x, z);
+                if slab && !tile.present(i) {
+                    continue;
+                }
+                if let Some(t) = pattern.terrain(x, z) {
+                    tile.terrain.set(i, t.0);
+                }
+            }
+        }
+    });
+}
+
 /// Give the columns under the brush the biome their land calls for (see
 /// [`crate::auto`]). `salt` should change from dab to dab.
 pub fn auto_biome(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, salt: u64, reader: &crate::auto::Reader) {

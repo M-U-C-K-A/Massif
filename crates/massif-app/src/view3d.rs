@@ -55,6 +55,9 @@ const PAGE_SHIFT: u32 = 10;
 const PAGE_TILES: i32 = PAGE / TILE_SIZE;
 /// Colour pairs (top, soil) the tracer tells apart.
 pub const MAX_PAIRS: usize = 4096;
+/// Pages the tracer may hold (about 1.9 GB). A larger map is drawn with a
+/// column every 2, 4, 8… blocks: still all of it, coarser.
+const PAGE_BUDGET: usize = 400;
 /// Bits of a packed column holding its height above the bottom of the world
 /// (0: nothing for the tracer); the colour pair takes the next 12.
 const HEIGHT_BITS: u32 = 12;
@@ -720,7 +723,8 @@ struct TerrainUniform {
     /// x and z of the grid's corner from the origin of the frame, bottom of
     /// the world, top of the highest column.
     origin: [f32; 4],
-    /// Columns across, columns down, top level of the max pyramid, unused.
+    /// Columns across, columns down, top level of the max pyramid, blocks
+    /// per column.
     size: [i32; 4],
     stone: [f32; 4],
     deepslate: [f32; 4],
@@ -1051,10 +1055,14 @@ struct TraceFrag {
 
 @fragment
 fn fs_trace(in: TraceOut) -> TraceFrag {
-    var d = normalize(g.cam_f.xyz + g.cam_s.xyz * (in.ndc.x * g.cam_k.x) + g.cam_u.xyz * (in.ndc.y * g.cam_k.y));
+    let view_d = normalize(g.cam_f.xyz + g.cam_s.xyz * (in.ndc.x * g.cam_k.x) + g.cam_u.xyz * (in.ndc.y * g.cam_k.y));
+    // On a very large map a column of the grid is `stride` blocks wide: the
+    // ray goes into the grid's own coordinates (t stays the distance).
+    let stride = f32(max(terrain.size.w, 1));
+    var d = vec3<f32>(view_d.x / stride, view_d.y, view_d.z / stride);
     // Never exactly along a plane of the grid: the walk divides by these.
     d = select(d, vec3<f32>(1.0e-7), abs(d) < vec3<f32>(1.0e-7)) ;
-    let o = vec3<f32>(g.eye.x - terrain.origin.x, g.eye.y, g.eye.z - terrain.origin.y);
+    let o = vec3<f32>((g.eye.x - terrain.origin.x) / stride, g.eye.y, (g.eye.z - terrain.origin.y) / stride);
     // The ray inside the box of the map.
     let lo = vec3<f32>(0.0, terrain.origin.z, 0.0);
     let hi = vec3<f32>(f32(terrain.size.x), terrain.origin.w, f32(terrain.size.y));
@@ -1066,7 +1074,7 @@ fn fs_trace(in: TraceOut) -> TraceFrag {
     let t1 = min(min(far.x, far.z), far.y);
     var out: TraceFrag;
     if (t1 <= t0 || terrain.origin.w <= terrain.origin.z) {
-        out.color = vec4<f32>(sky_color(d), 1.0);
+        out.color = vec4<f32>(sky_color(view_d), 1.0);
         out.depth = 1.0;
         return out;
     }
@@ -1078,9 +1086,9 @@ fn fs_trace(in: TraceOut) -> TraceFrag {
             axis = 1;
         }
     }
-    let hit = trace(o, d, t0, t1, axis, g.cam_k.z);
+    let hit = trace(o, d, t0, t1, axis, g.cam_k.z / stride);
     if (!hit.found) {
-        out.color = vec4<f32>(sky_color(d), 1.0);
+        out.color = vec4<f32>(sky_color(view_d), 1.0);
         out.depth = 1.0;
         return out;
     }
@@ -1111,10 +1119,10 @@ fn fs_trace(in: TraceOut) -> TraceFrag {
         let hr = ground_height(mid + vec2<f32>(size, 0.0));
         let hu = ground_height(mid - vec2<f32>(0.0, size));
         let hd = ground_height(mid + vec2<f32>(0.0, size));
-        normal = normalize(vec3<f32>(-(hr - hl) / (2.0 * size), 1.0, -(hd - hu) / (2.0 * size)));
+        normal = normalize(vec3<f32>(-(hr - hl) / (2.0 * size * stride), 1.0, -(hd - hu) / (2.0 * size * stride)));
     }
     out.color = vec4<f32>(shade(base, normal, hit.t), 1.0);
-    let world = vec3<f32>(p.x + terrain.origin.x, p.y, p.z + terrain.origin.y);
+    let world = vec3<f32>(p.x * stride + terrain.origin.x, p.y, p.z * stride + terrain.origin.y);
     let clip = g.view_proj * vec4<f32>(world, 1.0);
     out.depth = clamp(clip.z / clip.w, 0.0, 1.0);
     return out;
@@ -1156,6 +1164,8 @@ struct Target {
 /// The tracer's textures for a grid of pages, and what the CPU keeps to
 /// update their max pyramids.
 struct Tracer {
+    /// Blocks per column of the grid (1, or more on very large maps).
+    stride: i32,
     /// The page at the grid's north-west corner, and pages across and down.
     page0: (i32, i32),
     pages: (u32, u32),
@@ -1450,7 +1460,7 @@ impl Renderer3d {
     /// Make the tracer's textures for a grid of `pages` pages from `page0`,
     /// with a layer for each page `present` says holds tiles (row-major).
     /// Everything uploaded before is dropped.
-    pub fn set_grid(&mut self, page0: (i32, i32), pages: (u32, u32), present: &[bool]) -> Result<(), String> {
+    pub fn set_grid(&mut self, stride: i32, page0: (i32, i32), pages: (u32, u32), present: &[bool]) -> Result<(), String> {
         let count = present.iter().filter(|p| **p).count().max(1) as u32;
         let limit = self.device.limits().max_texture_array_layers;
         if count > limit {
@@ -1529,6 +1539,7 @@ impl Renderer3d {
         });
         let per_layer = (page * page * 4) as u64 + (page * page / 4 * 2) as u64 * 4 / 3;
         self.tracer = Some(Tracer {
+            stride: stride.max(1),
             page0,
             pages,
             table,
@@ -1840,12 +1851,12 @@ impl Renderer3d {
             let unit = |c: [u8; 3]| [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0, 1.0];
             let u = TerrainUniform {
                 origin: [
-                    (tr.page0.0 * PAGE - origin.0) as f32,
-                    (tr.page0.1 * PAGE - origin.1) as f32,
+                    (tr.page0.0 * PAGE * tr.stride - origin.0) as f32,
+                    (tr.page0.1 * PAGE * tr.stride - origin.1) as f32,
                     bottom as f32,
                     (bottom + top as i32) as f32,
                 ],
-                size: [tr.pages.0 as i32 * PAGE, tr.pages.1 as i32 * PAGE, tr.top, 0],
+                size: [tr.pages.0 as i32 * PAGE, tr.pages.1 as i32 * PAGE, tr.top, tr.stride],
                 stone: unit(substrate.stone),
                 deepslate: unit(substrate.deepslate),
             };
@@ -2148,24 +2159,96 @@ fn framing(doc: &Document) -> Camera {
 /// The pages of the tracer's textures a map needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GridShape {
+    /// Blocks per column of the grid: 1, or 2, 4, 8, 16 on maps too large
+    /// for the GPU at every block. With a stride, the grid's tiles are
+    /// virtual: each holds `stride` × `stride` tiles of the map.
+    stride: i32,
     page0: (i32, i32),
     pages: (u32, u32),
     /// Pages holding tiles, row-major.
     present: Vec<bool>,
 }
 
+/// The tile of the grid a tile of the map is drawn in, at `stride`.
+fn grid_tile(t: TilePos, stride: i32) -> TilePos {
+    TilePos::new(t.x.div_euclid(stride), t.z.div_euclid(stride))
+}
+
 impl GridShape {
+    /// The pages a map needs, at the finest stride that fits the budget.
     fn of(dim: &Dimension) -> Option<Self> {
+        let mut shape = Self::at(dim, 1)?;
+        while shape.present.iter().filter(|p| **p).count() > PAGE_BUDGET && shape.stride < 16 {
+            shape = Self::at(dim, shape.stride * 2)?;
+        }
+        Some(shape)
+    }
+
+    fn at(dim: &Dimension, stride: i32) -> Option<Self> {
         let (lo, hi) = dim.bounds()?;
+        let (lo, hi) = (grid_tile(lo, stride), grid_tile(hi, stride));
         let page0 = (lo.x.div_euclid(PAGE_TILES), lo.z.div_euclid(PAGE_TILES));
         let page1 = (hi.x.div_euclid(PAGE_TILES), hi.z.div_euclid(PAGE_TILES));
         let pages = ((page1.0 - page0.0 + 1) as u32, (page1.1 - page0.1 + 1) as u32);
         let mut present = vec![false; (pages.0 * pages.1) as usize];
         for t in dim.ground().positions() {
+            let t = grid_tile(t, stride);
             let (px, pz) = (t.x.div_euclid(PAGE_TILES) - page0.0, t.z.div_euclid(PAGE_TILES) - page0.1);
             present[pz as usize * pages.0 as usize + px as usize] = true;
         }
-        Some(Self { page0, pages, present })
+        Some(Self { stride, page0, pages, present })
+    }
+}
+
+/// A tile of the grid on a very large map: `stride` × `stride` tiles of the
+/// map, a column every `stride` blocks, their water drawn as a surface (the
+/// meshes are left out at this scale).
+fn build_coarse(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, cell: TilePos, stride: i32, style: Style) -> TileBuild {
+    let n = TILE_SIZE as usize;
+    let per = n / stride as usize;
+    let ground = dim.ground();
+    let mut heights = vec![0u16; n * n];
+    let mut colors = vec![0u16; n * n];
+    let mut pairs: Vec<([u8; 3], [u8; 3])> = Vec::new();
+    let water_pair = if style.lava { ([207, 92, 20], [160, 60, 10]) } else { ([52, 96, 200], [40, 70, 160]) };
+    let mut water_at: Option<u16> = None;
+    for rz in 0..stride {
+        for rx in 0..stride {
+            let real = TilePos::new(cell.x * stride + rx, cell.z * stride + rz);
+            let Some(view) = ground.view(real) else { continue };
+            let b = build_tile(dim, reg, sea, seed, real, style);
+            let base = pairs.len() as u16;
+            pairs.extend(&b.pairs);
+            for j in 0..per {
+                for i in 0..per {
+                    let (lx, lz) = (i * stride as usize + stride as usize / 2, j * stride as usize + stride as usize / 2);
+                    let c = lz * n + lx;
+                    let k = (rz as usize * per + j) * n + rx as usize * per + i;
+                    let top = view.top.get(c);
+                    let fluid = view.fluid.get(c);
+                    let (mut h, mut col) = (b.heights[c], base + b.colors[c]);
+                    if h == 0 {
+                        // Overhangs and caves: their ground, at this scale.
+                        h = (massif_core::compose::block_top(top) - dim.min_y).clamp(1, HEIGHT_MASK as i32) as u16;
+                    }
+                    if style.water && fluid != NO_FLUID && fluid as f32 > top + 0.3 {
+                        h = (fluid as i32 - dim.min_y).clamp(1, HEIGHT_MASK as i32) as u16;
+                        col = *water_at.get_or_insert_with(|| {
+                            pairs.push(water_pair);
+                            (pairs.len() - 1) as u16
+                        });
+                    }
+                    heights[k] = h;
+                    colors[k] = col;
+                }
+            }
+        }
+    }
+    TileBuild {
+        heights,
+        colors,
+        pairs,
+        faces: ChunkFaces::default(),
     }
 }
 
@@ -2255,9 +2338,10 @@ impl View3d {
     /// Terrain changed: rebuild the tiles showing it, and their neighbours
     /// (whose walls and slopes depend on it).
     pub fn invalidate(&mut self, tiles: &[TilePos]) {
+        let stride = self.grid.as_ref().map_or(1, |g| g.stride);
         for t in tiles {
             for (dx, dz) in [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)] {
-                if let Some(c) = self.tiles.get_mut(&t.offset(dx, dz)) {
+                if let Some(c) = self.tiles.get_mut(&grid_tile(t.offset(dx, dz), stride)) {
                     c.stale = true;
                 }
             }
@@ -2298,6 +2382,10 @@ impl View3d {
         };
         let dim = doc.dimension();
         let ground = dim.ground();
+        let stride = self.grid.as_ref().map_or(1, |g| g.stride);
+        if stride > 1 {
+            return self.build_coarse_tiles(doc, budget, renderer, style, stride);
+        }
         // Tiles gone from the map.
         let gone: Vec<TilePos> = self.tiles.keys().copied().filter(|t| !ground.contains(*t)).collect();
         for t in gone {
@@ -2339,6 +2427,49 @@ impl View3d {
                         stale: false,
                     },
                 );
+                done += 1;
+            }
+            self.needs_render = true;
+        }
+        if done > 0 {
+            renderer.flush();
+            self.build_ms = started.elapsed().as_secs_f32() * 1000.0;
+        }
+        if self.pairs.dirty {
+            renderer.set_palette(self.pairs.list());
+            self.pairs.dirty = false;
+        }
+        self.pending = todo.len() - done;
+        self.pending > 0
+    }
+
+    /// [`View3d::build_tiles`] on a map drawn with a column every `stride`
+    /// blocks: the grid's tiles, each from `stride` × `stride` of the map's.
+    fn build_coarse_tiles(&mut self, doc: &Document, budget: Duration, renderer: &mut Renderer3d, style: Style, stride: i32) -> bool {
+        let dim = doc.dimension();
+        let (tx, tz) = (self.camera.target[0], self.camera.target[2]);
+        let cells: HashSet<TilePos> = dim.ground().positions().map(|t| grid_tile(t, stride)).collect();
+        let span = (TILE_SIZE * stride) as f64;
+        let mut todo: Vec<(f64, TilePos)> = cells
+            .into_iter()
+            .filter(|t| self.tiles.get(t).is_none_or(|c| c.stale))
+            .map(|t| (((t.x as f64 + 0.5) * span - tx).hypot((t.z as f64 + 0.5) * span - tz), t))
+            .collect();
+        todo.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let started = Instant::now();
+        let batch = rayon::current_num_threads().clamp(2, 16);
+        let reg = &doc.world.registry;
+        let (sea, seed) = (doc.world.meta.sea_level as f32, doc.world.meta.seed);
+        let mut done = 0;
+        for part in todo.chunks(batch) {
+            if done > 0 && started.elapsed() > budget {
+                break;
+            }
+            let built: Vec<(TilePos, TileBuild)> = part.par_iter().map(|&(_, t)| (t, build_coarse(dim, reg, sea, seed, t, stride, style))).collect();
+            for (t, b) in built {
+                let packed = self.pairs.pack(&b);
+                renderer.upload_columns(t, &packed);
+                self.tiles.insert(t, TileInfo { faces: 0, stale: false });
                 done += 1;
             }
             self.needs_render = true;
@@ -2524,8 +2655,15 @@ impl View3d {
         let dim = doc.dimension();
         let shape = GridShape::of(dim);
         if self.grid != shape {
+            // Another stride: the tiles of the grid are not the same ones.
+            if self.grid.as_ref().map(|g| g.stride) != shape.as_ref().map(|g| g.stride) {
+                for t in self.tiles.keys() {
+                    renderer.remove(*t);
+                }
+                self.tiles.clear();
+            }
             match &shape {
-                Some(s) => match renderer.set_grid(s.page0, s.pages, &s.present) {
+                Some(s) => match renderer.set_grid(s.stride, s.page0, s.pages, &s.present) {
                     Ok(()) => self.error = None,
                     Err(e) => self.error = Some(e),
                 },
@@ -2630,11 +2768,16 @@ impl View3d {
         }
 
         // ---- overlay -------------------------------------------------------
-        let mut text = format!(
-            "The whole map, every block · {} tiles · {} MB",
-            self.tiles.len(),
-            bytes.div_ceil(1 << 20)
-        );
+        let stride = self.grid.as_ref().map_or(1, |g| g.stride);
+        let mut text = if stride > 1 {
+            format!(
+                "The whole map, a column every {stride} blocks (too large for every block) · {} tiles · {} MB",
+                self.tiles.len() * (stride * stride) as usize,
+                bytes.div_ceil(1 << 20)
+            )
+        } else {
+            format!("The whole map, every block · {} tiles · {} MB", self.tiles.len(), bytes.div_ceil(1 << 20))
+        };
         if self.pending > 0 {
             text.push_str(&format!(" · building {} tiles…", self.pending));
         } else if self.build_ms > 0.0 {
@@ -2904,7 +3047,7 @@ mod tests {
     fn load(renderer: &mut Renderer3d, w: &World, style: Style) -> Vec<TilePos> {
         let dim = &w.dims[0];
         let shape = GridShape::of(dim).unwrap();
-        renderer.set_grid(shape.page0, shape.pages, &shape.present).unwrap();
+        renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).unwrap();
         let mut pairs = Pairs::default();
         let tiles: Vec<TilePos> = dim.ground().positions().collect();
         for &t in &tiles {

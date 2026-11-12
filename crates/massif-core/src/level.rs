@@ -325,6 +325,16 @@ impl Level {
     }
 
     /// The compressed form of a tile, encoding (and caching) it if needed.
+    /// Bytes the tile at `pos` takes, compressed (0 when it is hot and has
+    /// not been encoded yet).
+    pub fn blob_len(&self, pos: TilePos) -> usize {
+        match self.tiles.get(&pos) {
+            Some(Slot::Cold(blob)) => blob.len(),
+            Some(Slot::Hot { blob: Some(blob), .. }) => blob.len(),
+            _ => 0,
+        }
+    }
+
     pub fn blob(&mut self, pos: TilePos) -> Option<Blob> {
         match self.tiles.get_mut(&pos)? {
             Slot::Cold(blob) => Some(blob.clone()),

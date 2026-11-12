@@ -17,10 +17,12 @@ pub enum Template {
     VolcanicIsland,
     DuneSea,
     RollingHills,
+    /// Not a landscape: the map as it is, with rivers and lakes.
+    MapRivers,
 }
 
 impl Template {
-    pub const ALL: [Template; 9] = [
+    pub const ALL: [Template; 10] = [
         Template::Alpine,
         Template::Archipelago,
         Template::KarstTowers,
@@ -30,6 +32,7 @@ impl Template {
         Template::VolcanicIsland,
         Template::DuneSea,
         Template::RollingHills,
+        Template::MapRivers,
     ];
 
     pub const fn label(self) -> &'static str {
@@ -43,6 +46,7 @@ impl Template {
             Template::VolcanicIsland => "Volcanic island",
             Template::DuneSea => "Dune sea",
             Template::RollingHills => "Rolling hills",
+            Template::MapRivers => "Rivers on this map",
         }
     }
 
@@ -57,6 +61,7 @@ impl Template {
             Template::VolcanicIsland => "A volcano rising from the sea, black beaches, green lower slopes",
             Template::DuneSea => "Long dunes shaped by the wind, crests and slip faces",
             Template::RollingHills => "Gentle countryside: meadows, streams and ponds",
+            Template::MapRivers => "The map as it is, with rivers where its water gathers, lakes in its hollows",
         }
     }
 
@@ -79,6 +84,7 @@ impl Template {
             Template::VolcanicIsland => volcano(&mut b, sea, f),
             Template::DuneSea => dunes(&mut b, sea, f),
             Template::RollingHills => hills(&mut b, sea, f),
+            Template::MapRivers => map_rivers(&mut b, sea, f, terrain("Gravel")),
         }
         b.g
     }
@@ -292,6 +298,7 @@ fn pillar_forest(b: &mut Builder, sea: f32, f: f32, top: f32) -> NodeId {
             threshold: 0.55,
             depth: 5.0,
             width: 6.0,
+            sea,
         },
         (rough, 0),
         10.0,
@@ -671,6 +678,7 @@ fn hills(b: &mut Builder, sea: f32, f: f32) {
             threshold: 0.6,
             depth: 3.0,
             width: 4.0,
+            sea,
         },
         (eroded, 0),
         3.0,
@@ -684,4 +692,40 @@ fn hills(b: &mut Builder, sea: f32, f: f32) {
     let shore = b.tint([200, 186, 140], 0.6, wet, (water, 2), 7.0, 1.0);
     let out = b.add(colours(BlockPalette::Natural), 8.0, 1.0);
     b.wire(shore, 0, out, 0);
+}
+
+/// The map, with rivers dug where its water gathers and water in them and
+/// in its hollows: what to start from to work on a map that exists.
+fn map_rivers(b: &mut Builder, sea: f32, f: f32, gravel: u16) {
+    let map = b.add(NodeKind::MapHeight, 0.0, 0.0);
+    let rivers = b.then(
+        NodeKind::Rivers {
+            threshold: 0.5,
+            depth: 5.0,
+            width: 8.0 * f.clamp(1.0, 3.0),
+            sea,
+        },
+        (map, 0),
+        1.0,
+        0.0,
+    );
+    // The ground of the hollows is left alone: only their water is added.
+    let lakes = b.then(NodeKind::Lakes { amount: 0.0, sea }, (rivers, 0), 2.0, 0.0);
+    let out = b.add(NodeKind::HeightOutput, 3.0, 0.0);
+    b.wire(lakes, 0, out, 0);
+    let water = b.combine(CombineOp::Max, 1.0, (rivers, 2), (lakes, 2), 3.0, 1.0);
+    let out = b.add(NodeKind::WaterOutput, 4.0, 1.0);
+    b.wire(water, 0, out, 0);
+    let out = b.add(NodeKind::TerrainOutput { terrain: gravel }, 2.0, 1.5);
+    b.wire(rivers, 1, out, 0);
+    // The map's own colours, to see it by: they are not converted.
+    let out = b.add(
+        NodeKind::ColorOutput {
+            blocks: false,
+            palette: BlockPalette::Natural,
+        },
+        1.0,
+        1.5,
+    );
+    b.wire(map, 2, out, 0);
 }

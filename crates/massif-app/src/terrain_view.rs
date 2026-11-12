@@ -125,6 +125,10 @@ pub struct ViewData {
     pub exaggeration: f32,
     /// Rock over the ground (floating islands, overhangs), two at most.
     pub slabs: Vec<Slab>,
+    /// The level of the water of each sample, in blocks (far under the
+    /// ground where there is none): rivers and lakes. Empty: no water but
+    /// the sea.
+    pub water: Vec<f32>,
 }
 
 /// Rock between two heights over the ground, at the relief's resolution.
@@ -258,6 +262,7 @@ struct U {
 @group(0) @binding(6) var slab0_colors: texture_2d<f32>;
 @group(0) @binding(7) var slab1: texture_2d<f32>;
 @group(0) @binding(8) var slab1_colors: texture_2d<f32>;
+@group(0) @binding(9) var water: texture_2d<f32>;
 
 const EXTINCTION: f32 = 0.045;
 
@@ -740,6 +745,53 @@ fn fs_sky(in: SkyOut) -> @location(0) vec4<f32> {
     return vec4<f32>(aces(c * u.horizon.w), 1.0);
 }
 
+struct WaterOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) world: vec3<f32>,
+    @location(1) depth: f32,
+};
+
+/// The water of rivers and lakes: the grid again, at the water's level
+/// where there is water, on the ground at its banks.
+@vertex
+fn vs_water(@builtin(vertex_index) vi: u32) -> WaterOut {
+    let n = i32(u.grid.x);
+    let spacing = u.grid.y / f32(n);
+    let i = i32(vi) % n;
+    let j = i32(vi) / n;
+    let ground_y = height_at(i, j);
+    let level = textureLoad(water, vec2<i32>(i, j), 0).r * u.grid.z;
+    let depth = max(level - ground_y, 0.0) / max(u.grid.z, 0.01);
+    let half = u.grid.y * 0.5;
+    let p = vec3<f32>((f32(i) + 0.5) * spacing - half, max(level, ground_y), (f32(j) + 0.5) * spacing - half);
+    var out: WaterOut;
+    out.clip = u.view_proj * vec4<f32>(p, 1.0);
+    out.world = p;
+    out.depth = depth;
+    return out;
+}
+
+@fragment
+fn fs_water(in: WaterOut) -> @location(0) vec4<f32> {
+    if (in.depth <= 0.12) {
+        discard;
+    }
+    let v = u.eye.xyz - in.world;
+    let dist = length(v);
+    let to_eye = v / dist;
+    let fresnel = 0.02 + 0.98 * pow(1.0 - max(to_eye.y, 0.0), 5.0);
+    let r = reflect(-to_eye, vec3<f32>(0.0, 1.0, 0.0));
+    let reflected = sky_color(r) + sun_disc(r);
+    let lit = u.sun_color.rgb * max(u.sun.y, 0.0) * cloud_shadow(in.world) * relief_shadow(in.world + vec3<f32>(0.0, 0.3, 0.0)) * 0.35
+        + mix(u.horizon.rgb, u.zenith.rgb, 0.7) * 0.8;
+    // Rivers are shallow: clearer and greener than the sea.
+    let body = mix(vec3<f32>(0.10, 0.36, 0.34), vec3<f32>(0.015, 0.09, 0.13), clamp(in.depth / 10.0, 0.0, 1.0)) * lit;
+    var c = mix(body, reflected, fresnel);
+    c = atmosphere(c, -to_eye, dist, in.clip.xy);
+    let alpha = clamp(0.5 + in.depth / 5.0, 0.5, 0.94);
+    return vec4<f32>(aces(c * u.horizon.w), max(alpha, fresnel));
+}
+
 struct SeaOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) world: vec3<f32>,
@@ -798,6 +850,8 @@ struct Relief {
     slab_indices: wgpu::Buffer,
     slab_count: u32,
     slabs: u32,
+    /// Whether rivers and lakes are drawn (over the slab's top triangles).
+    water: bool,
 }
 
 /// GPU side of the viewport.
@@ -808,6 +862,7 @@ pub struct TerrainRenderer {
     slab_pipeline: wgpu::RenderPipeline,
     sky_pipeline: wgpu::RenderPipeline,
     sea_pipeline: wgpu::RenderPipeline,
+    water_pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     uniforms: wgpu::Buffer,
     sampler: wgpu::Sampler,
@@ -857,6 +912,7 @@ impl TerrainRenderer {
                 texture(6, true),
                 texture(7, false),
                 texture(8, true),
+                texture(9, false),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -904,6 +960,7 @@ impl TerrainRenderer {
         let slab_pipeline = pipeline("massif graph slabs", "vs_slab", "fs_slab", wgpu::BlendState::REPLACE, true, wgpu::CompareFunction::Less);
         let sky_pipeline = pipeline("massif graph sky", "vs_sky", "fs_sky", wgpu::BlendState::REPLACE, false, wgpu::CompareFunction::LessEqual);
         let sea_pipeline = pipeline("massif graph sea", "vs_sea", "fs_sea", wgpu::BlendState::ALPHA_BLENDING, false, wgpu::CompareFunction::Less);
+        let water_pipeline = pipeline("massif graph water", "vs_water", "fs_water", wgpu::BlendState::ALPHA_BLENDING, false, wgpu::CompareFunction::Less);
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("massif graph view"),
             size: size_of::<Uniforms>() as u64,
@@ -925,6 +982,7 @@ impl TerrainRenderer {
             slab_pipeline,
             sky_pipeline,
             sea_pipeline,
+            water_pipeline,
             layout,
             uniforms,
             sampler,
@@ -984,6 +1042,7 @@ impl TerrainRenderer {
         };
         let (slab0, slab0_colors) = slab(0);
         let (slab1, slab1_colors) = slab(1);
+        let water = texture("massif graph water", wgpu::TextureFormat::R32Float, bytemuck::cast_slice(&data.water), 4);
         let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("massif graph view"),
             layout: &self.layout,
@@ -1024,6 +1083,10 @@ impl TerrainRenderer {
                     binding: 8,
                     resource: wgpu::BindingResource::TextureView(&slab1_colors),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: wgpu::BindingResource::TextureView(&water),
+                },
             ],
         });
         // Reuse the triangles while the size stays.
@@ -1058,6 +1121,7 @@ impl TerrainRenderer {
             slab_indices,
             slab_count,
             slabs: data.slabs.len().min(MAX_SLABS) as u32,
+            water: data.water.len() == data.n * data.n,
         });
     }
 
@@ -1166,6 +1230,12 @@ impl TerrainRenderer {
                 if sea {
                     pass.set_pipeline(&self.sea_pipeline);
                     pass.draw(0..6, 0..1);
+                }
+                if relief.water {
+                    // The first half of a slab's triangles: one grid.
+                    pass.set_pipeline(&self.water_pipeline);
+                    pass.set_index_buffer(relief.slab_indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..relief.slab_count / 2, 0, 0..1);
                 }
             }
         }

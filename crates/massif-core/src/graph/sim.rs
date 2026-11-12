@@ -314,10 +314,16 @@ pub(super) fn accumulate(h: &[f32], n: usize) -> Vec<f32> {
 }
 
 /// Dig rivers where the water of the map gathers: the more water, the
-/// deeper and wider. Returns the dug heights and the rivers' mask.
-pub(super) fn rivers(f: &Field, spacing: f32, threshold: f32, depth: f32, width: f32, cancel: &AtomicBool) -> Option<(Field, Field)> {
+/// deeper and wider. Returns the dug heights, the rivers' mask, and the
+/// level their water stands at: a little under the banks, running down
+/// with the valley (the ground with its hollows filled never rises
+/// downstream).
+pub(super) fn rivers(f: &Field, spacing: f32, threshold: f32, depth: f32, width: f32, sea: f32, cancel: &AtomicBool) -> Option<(Field, Field, Field)> {
     let n = f.n;
-    let filled = fill(f, 1e-3);
+    // Under the sea the ground counts as the sea's surface: rivers end
+    // there, and nothing is dug below.
+    let land = Field::new(n, f.data.iter().map(|&v| v.max(sea)).collect());
+    let filled = fill(&land, 1e-3);
     if cancel.load(Ordering::Relaxed) {
         return None;
     }
@@ -327,7 +333,11 @@ pub(super) fn rivers(f: &Field, spacing: f32, threshold: f32, depth: f32, width:
     let t0 = 0.35 + 0.6 * threshold;
     let channels: Vec<f32> = acc
         .par_iter()
-        .map(|&a| {
+        .zip(&f.data)
+        .map(|(&a, &ground)| {
+            if ground < sea {
+                return 0.0;
+            }
             let t = (1.0 + a).ln() / l;
             smoothstep(t0, t0 + 0.12, t) * (0.4 + 0.6 * smoothstep(t0, 1.0, t))
         })
@@ -335,6 +345,11 @@ pub(super) fn rivers(f: &Field, spacing: f32, threshold: f32, depth: f32, width:
     let wide = blur(&Field::new(n, channels), ((width / 2.0) / spacing).round().max(1.0) as usize);
     let peak = wide.range().1.max(1e-6);
     let mask: Vec<f32> = wide.data.iter().map(|v| (v / peak * 1.6).clamp(0.0, 1.0)).collect();
-    let dug = Field::new(n, f.data.par_iter().zip(&mask).map(|(&v, &m)| v - depth * m * (2.0 - m)).collect());
-    Some((dug, Field::new(n, mask)))
+    let dug = Field::new(n, f.data.par_iter().zip(&mask).map(|(&v, &m)| if v < sea { v } else { v - depth * m * (2.0 - m) }).collect());
+    let freeboard = (depth * 0.25).max(0.6);
+    // The banks' height, smoothed along the river so that its water does
+    // not step with every bump of the ground.
+    let banks = blur(&Field::new(n, filled), ((width / 2.0) / spacing).round().max(1.0) as usize);
+    let level = Field::new(n, banks.data.par_iter().map(|&b| b - freeboard).collect());
+    Some((dug, Field::new(n, mask), level))
 }
