@@ -1635,13 +1635,13 @@ impl TerrainView {
         };
         section(ui, Icon::Sun, "Sun");
         row(ui, "Direction", &mut |ui| {
-            ui.add(egui::Slider::new(&mut r.sun_azimuth, 0.0..=360.0).suffix("°").max_decimals(0));
+            ui.add(crate::widgets::Field::new(&mut r.sun_azimuth, 0.0..=360.0).suffix("°").max_decimals(0));
         });
         row(ui, "Height", &mut |ui| {
-            ui.add(egui::Slider::new(&mut r.sun_elevation, 1.0..=89.0).suffix("°").max_decimals(0));
+            ui.add(crate::widgets::Field::new(&mut r.sun_elevation, 1.0..=89.0).suffix("°").max_decimals(0));
         });
         row(ui, "Strength", &mut |ui| {
-            ui.add(egui::Slider::new(&mut r.sun_intensity, 0.0..=3.0).max_decimals(2));
+            ui.add(crate::widgets::Field::new(&mut r.sun_intensity, 0.0..=3.0).max_decimals(2));
         });
         ui.label(RichText::new("Shift + drag in the view turns the sun.").size(11.0).color(pal.weak));
         section(ui, Icon::Cloud, "Clouds");
@@ -1650,19 +1650,19 @@ impl TerrainView {
         });
         if r.clouds {
             row(ui, "Cover", &mut |ui| {
-                ui.add(egui::Slider::new(&mut r.cloud_cover, 0.0..=1.0).max_decimals(2));
+                ui.add(crate::widgets::Field::new(&mut r.cloud_cover, 0.0..=1.0).max_decimals(2));
             });
             row(ui, "Base", &mut |ui| {
-                ui.add(egui::Slider::new(&mut r.cloud_base, -64.0..=600.0).suffix(" blocks").max_decimals(0));
+                ui.add(crate::widgets::Field::new(&mut r.cloud_base, -64.0..=600.0).suffix(" blocks").max_decimals(0));
             });
             row(ui, "Thickness", &mut |ui| {
-                ui.add(egui::Slider::new(&mut r.cloud_thickness, 5.0..=400.0).suffix(" blocks").max_decimals(0));
+                ui.add(crate::widgets::Field::new(&mut r.cloud_thickness, 5.0..=400.0).suffix(" blocks").max_decimals(0));
             });
             row(ui, "Density", &mut |ui| {
-                ui.add(egui::Slider::new(&mut r.cloud_density, 0.05..=3.0).max_decimals(2));
+                ui.add(crate::widgets::Field::new(&mut r.cloud_density, 0.05..=3.0).max_decimals(2));
             });
             row(ui, "Size", &mut |ui| {
-                ui.add(egui::Slider::new(&mut r.cloud_size, 20.0..=3000.0).suffix(" blocks").max_decimals(0));
+                ui.add(crate::widgets::Field::new(&mut r.cloud_size, 20.0..=3000.0).suffix(" blocks").max_decimals(0));
             });
             row(ui, "Shape", &mut |ui| {
                 ui.add(egui::DragValue::new(&mut r.cloud_seed).range(0..=999));
@@ -1670,16 +1670,16 @@ impl TerrainView {
         }
         section(ui, Icon::Mountain, "Scene");
         row(ui, "Height ×", &mut |ui| {
-            ui.add(egui::Slider::new(&mut r.exaggeration, 1.0..=8.0).max_decimals(1));
+            ui.add(crate::widgets::Field::new(&mut r.exaggeration, 1.0..=8.0).max_decimals(1));
         });
         row(ui, "Haze", &mut |ui| {
-            ui.add(egui::Slider::new(&mut r.haze, 0.0..=1.0).max_decimals(2));
+            ui.add(crate::widgets::Field::new(&mut r.haze, 0.0..=1.0).max_decimals(2));
         });
         row(ui, "Sea", &mut |ui| {
             ui.checkbox(&mut r.sea, "");
         });
         row(ui, "Exposure", &mut |ui| {
-            ui.add(egui::Slider::new(&mut r.exposure, 0.2..=3.0).max_decimals(2));
+            ui.add(crate::widgets::Field::new(&mut r.exposure, 0.2..=3.0).max_decimals(2));
         });
         if ui.small_button("Reset").clicked() {
             *r = RenderSettings::default();

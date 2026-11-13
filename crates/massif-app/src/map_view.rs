@@ -89,7 +89,7 @@ const EXACT_REACH: f32 = 320.0;
 /// Tabs for the display modes, or a drop-down when space is short.
 pub fn mode_selector(ui: &mut Ui, mode: &mut MapMode, narrow: bool, id: &str) {
     if narrow {
-        egui::ComboBox::from_id_salt(id)
+        crate::widgets::combo(id)
             .width(84.0)
             .selected_text(mode.label())
             .show_ui(ui, |ui| {
@@ -107,6 +107,29 @@ pub fn mode_selector(ui: &mut Ui, mode: &mut MapMode, narrow: bool, id: &str) {
 }
 
 /// Per-area state of a map editor.
+/// How near a handle of a river the pointer takes hold of it, in points.
+const HANDLE_REACH: f32 = 11.0;
+
+/// What the pointer is over, on a river being laid out.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum RiverHit {
+    /// One of its anchors: the source, a point it passes, its end.
+    Anchor(usize),
+    /// The end of the way it runs by itself.
+    Mouth,
+    /// Its course, at this point of it.
+    Course(usize),
+}
+
+/// What the automatic tools would change under the brush: the new terrain
+/// (or biome) of each column, drawn over the map before painting.
+struct AutoPreview {
+    key: (Tool, i32, i32, u64, u64),
+    /// The footprint, in blocks: x0, z0, x1, z1.
+    rect: [i32; 4],
+    texture: Option<egui::TextureHandle>,
+}
+
 pub struct MapView {
     /// Block coordinates at the centre of the view.
     pub center: [f64; 2],
@@ -127,14 +150,15 @@ pub struct MapView {
     canvas: Rect,
     /// The picture of the brush's strength, under the pointer.
     strength: Option<BrushPreview>,
-    /// A river's course being drawn by dragging: how many points it had
-    /// when the button went down.
-    river_drag: Option<usize>,
-    /// Where water let go under the pointer would go (River source): for
-    /// the block and the document's revision it was found for.
+    /// The anchor of the river being laid out that is being dragged.
+    river_grab: Option<usize>,
+    /// Where water let go under the pointer would go (River tool, before a
+    /// source is placed): for the block and the document's revision it was
+    /// found for.
     spring: Option<((i32, i32, u64), massif_core::river::Descent)>,
     /// The block the pointer rests on, and since when.
     spring_rest: Option<((i32, i32, u64), f64)>,
+    auto_preview: Option<AutoPreview>,
 }
 
 impl Default for MapView {
@@ -153,9 +177,10 @@ impl Default for MapView {
             turn: 0.0,
             strength: None,
             canvas: Rect::NOTHING,
-            river_drag: None,
+            river_grab: None,
             spring: None,
             spring_rest: None,
+            auto_preview: None,
         }
     }
 }
@@ -184,6 +209,251 @@ impl MapView {
             .on_hover_text("Contour lines");
         ui.toggle_value(&mut self.grid, theme::glyph(Icon::Grid3x3).to_string())
             .on_hover_text("Tile and chunk grid");
+    }
+
+    /// What the pointer at `p` is over, on the river being laid out.
+    fn river_hit(&self, canvas: Rect, draft: &tools::RiverDraft, settings: &tools::RiverSettings, p: Pos2) -> Option<RiverHit> {
+        let screen = |q: (f32, f32)| self.to_screen(canvas, q.0 as f64, q.1 as f64);
+        let anchors = draft.layout.anchors();
+        for (k, &a) in anchors.iter().enumerate().rev() {
+            if screen(a).distance(p) <= HANDLE_REACH {
+                return Some(RiverHit::Anchor(k));
+            }
+        }
+        if draft.layout.end.is_none()
+            && let Some(&m) = draft.plan.course.last()
+            && screen(m).distance(p) <= HANDLE_REACH
+        {
+            return Some(RiverHit::Mouth);
+        }
+        let reach = (settings.width * (1.0 + 2.0 * settings.flow) * self.zoom / 2.0).max(7.0);
+        let mut best: Option<(usize, f32)> = None;
+        for (i, &c) in draft.plan.course.iter().enumerate() {
+            let d = screen(c).distance(p);
+            if d <= reach && best.is_none_or(|b| d < b.1) {
+                best = Some((i, d));
+            }
+        }
+        best.map(|(i, _)| RiverHit::Course(i))
+    }
+
+    /// Draw a river's course on the map: its banks, its water, the way it
+    /// flows, its lakes; and the handles of a river being laid out.
+    fn draw_river(
+        &self,
+        painter: &egui::Painter,
+        canvas: Rect,
+        plan: &massif_core::river::Descent,
+        spec: &massif_core::river::RiverSpec,
+        handles: Option<(&tools::RiverDraft, Option<RiverHit>, Option<usize>)>,
+    ) {
+        let water = Color32::from_rgb(56, 146, 255);
+        for (cells, _) in &plan.lakes {
+            let mut rows: Vec<(i32, i32)> = cells.iter().map(|&(x, z)| (z, x)).collect();
+            rows.sort_unstable();
+            let mut k = 0;
+            while k < rows.len() {
+                let (z, x0) = rows[k];
+                let mut x1 = x0;
+                while k + 1 < rows.len() && rows[k + 1] == (z, x1 + 1) {
+                    k += 1;
+                    x1 += 1;
+                }
+                let a = self.to_screen(canvas, x0 as f64, z as f64);
+                let b = self.to_screen(canvas, x1 as f64 + 1.0, z as f64 + 1.0);
+                painter.rect_filled(Rect::from_min_max(a, b), 0, water.gamma_multiply(0.5));
+                k += 1;
+            }
+        }
+        let n = plan.course.len();
+        if n >= 2 {
+            // Points a pixel and a half apart at least, with how far down
+            // the river they are.
+            let mut pts: Vec<(Pos2, f32)> = Vec::with_capacity(n.min(4096));
+            for (k, &(x, z)) in plan.course.iter().enumerate() {
+                let p = self.to_screen(canvas, x as f64, z as f64);
+                if k + 1 == n || pts.last().is_none_or(|q| q.0.distance(p) >= 1.5) {
+                    pts.push((p, k as f32 / (n - 1) as f32));
+                }
+            }
+            let width = |t: f32| (spec.width + (spec.width_end - spec.width) * t) * self.zoom;
+            // In pieces of steady width, the width growing downstream.
+            let pieces: Vec<&[(Pos2, f32)]> = pts.chunks(24).collect();
+            let joined = |k: usize| -> Vec<Pos2> {
+                let mut v: Vec<Pos2> = pieces[k].iter().map(|p| p.0).collect();
+                if let Some(next) = pieces.get(k + 1).and_then(|p| p.first()) {
+                    v.push(next.0);
+                }
+                v
+            };
+            for (layer, color) in [
+                (0, water.gamma_multiply(0.14)),
+                (1, Color32::from_rgba_unmultiplied(6, 24, 56, 170)),
+                (2, water.gamma_multiply(0.92)),
+            ] {
+                for k in 0..pieces.len() {
+                    let t = pieces[k][pieces[k].len() / 2].1;
+                    let w = width(t);
+                    let stroke = match layer {
+                        0 => w + 2.0 * spec.banks * self.zoom,
+                        1 => w.max(2.5) + 2.0,
+                        _ => w.max(2.5),
+                    };
+                    let line = joined(k);
+                    if line.len() >= 2 {
+                        painter.add(egui::Shape::line(line, Line::new(stroke, color)));
+                    }
+                }
+            }
+            // Which way it flows: a chevron every so often.
+            let mut run = 0.0;
+            for w in pts.windows(2) {
+                let (a, b) = (w[0].0, w[1].0);
+                let d = a.distance(b);
+                run += d;
+                if run >= 120.0 && d > 0.5 {
+                    run = 0.0;
+                    let dir = (b - a) / d;
+                    let side = vec2(-dir.y, dir.x);
+                    let tip = b + dir * 3.0;
+                    let ink = Line::new(1.6, Color32::from_white_alpha(210));
+                    painter.line_segment([tip - dir * 6.0 + side * 4.5, tip], ink);
+                    painter.line_segment([tip - dir * 6.0 - side * 4.5, tip], ink);
+                }
+            }
+        }
+        let Some((draft, hover, grab)) = handles else {
+            if let Some(&(x, z)) = plan.course.first() {
+                let p = self.to_screen(canvas, x as f64, z as f64);
+                painter.circle(p, 6.0, water, Line::new(2.0, Color32::WHITE));
+            }
+            return;
+        };
+        let lit = |k: usize| hover == Some(RiverHit::Anchor(k)) || grab == Some(k);
+        let anchors = draft.layout.anchors();
+        let last = anchors.len() - 1;
+        if draft.layout.end.is_none()
+            && let Some(&(x, z)) = plan.course.last()
+        {
+            // Where it runs to by itself: a ring to take hold of.
+            let p = self.to_screen(canvas, x as f64, z as f64);
+            let r = if hover == Some(RiverHit::Mouth) { 7.5 } else { 5.5 };
+            painter.circle_stroke(p, r + 1.0, Line::new(3.0, Color32::from_black_alpha(90)));
+            painter.circle_stroke(p, r, Line::new(2.0, Color32::WHITE));
+        }
+        for (k, &(x, z)) in anchors.iter().enumerate() {
+            let p = self.to_screen(canvas, x as f64, z as f64);
+            let grow = if lit(k) { 2.0 } else { 0.0 };
+            painter.circle_filled(p + vec2(0.0, 1.0), 8.0 + grow, Color32::from_black_alpha(70));
+            if k == 0 {
+                // The source.
+                painter.circle(p, 7.0 + grow, water, Line::new(2.0, Color32::WHITE));
+                painter.circle_filled(p, 2.2, Color32::WHITE);
+            } else if k == last && draft.layout.end.is_some() {
+                // The end it was given.
+                painter.circle(p, 6.5 + grow, Color32::WHITE, Line::new(2.5, water));
+                painter.circle_filled(p, 2.5, water);
+            } else {
+                painter.circle(p, 5.0 + grow, Color32::WHITE, Line::new(2.0, water));
+            }
+        }
+    }
+
+    /// The bar over a river being laid out: how long it is and where it
+    /// goes, and the buttons to dig it or drop it.
+    #[allow(clippy::too_many_arguments)]
+    fn river_bar(&mut self, ui: &mut Ui, painter: &egui::Painter, canvas: Rect, id: egui::Id, doc: &mut Document, tools: &mut ToolState, feedback: &mut Option<String>) {
+        let Some(draft) = &tools.river_draft else { return };
+        let font = FontId::proportional(12.5);
+        let text = painter.layout_no_wrap(draft.summary(), font.clone(), Color32::from_gray(225));
+        let dig = painter.layout_no_wrap("Dig river".to_owned(), FontId::proportional(12.5), Color32::WHITE);
+        let enter = painter.layout_no_wrap("⏎".to_owned(), FontId::proportional(11.0), Color32::from_white_alpha(170));
+        let cancel = painter.layout_no_wrap("Cancel".to_owned(), font, Color32::from_gray(210));
+        let esc = painter.layout_no_wrap("esc".to_owned(), FontId::proportional(10.5), Color32::from_gray(130));
+        let (pad, gap, h) = (12.0, 8.0, 28.0);
+        let dig_w = dig.size().x + enter.size().x + 26.0;
+        let cancel_w = cancel.size().x + esc.size().x + 24.0;
+        let width = pad + text.size().x + 16.0 + dig_w + gap + cancel_w + 6.0;
+        let bar = Rect::from_center_size(canvas.center_bottom() - vec2(0.0, 30.0), vec2(width, h + 12.0));
+        painter.rect_filled(bar.translate(vec2(0.0, 3.0)).expand(1.0), 12, Color32::from_black_alpha(70));
+        painter.rect(bar, 12, Color32::from_rgba_unmultiplied(19, 21, 26, 242), Line::new(1.0, Color32::from_white_alpha(20)), StrokeKind::Inside);
+        let mid = bar.center().y;
+        painter.galley(pos2(bar.min.x + pad, mid - text.size().y / 2.0), text.clone(), Color32::from_gray(225));
+        let dig_rect = Rect::from_min_size(pos2(bar.min.x + pad + text.size().x + 16.0, mid - h / 2.0), vec2(dig_w, h));
+        let cancel_rect = Rect::from_min_size(pos2(dig_rect.max.x + gap, mid - h / 2.0), vec2(cancel_w, h));
+        let dig_hit = ui.interact(dig_rect, id.with("dig river"), Sense::click()).on_hover_text("Dig it into the map (Enter)");
+        let cancel_hit = ui.interact(cancel_rect, id.with("drop river"), Sense::click()).on_hover_text("Drop this river (Esc)");
+        let accent = Color32::from_rgb(46, 128, 240);
+        painter.rect_filled(dig_rect, 8, if dig_hit.hovered() { Color32::from_rgb(66, 146, 255) } else { accent });
+        painter.galley(pos2(dig_rect.min.x + 12.0, mid - dig.size().y / 2.0), dig, Color32::WHITE);
+        painter.galley(pos2(dig_rect.max.x - 12.0 - enter.size().x, mid - enter.size().y / 2.0), enter, Color32::from_white_alpha(170));
+        if cancel_hit.hovered() {
+            painter.rect_filled(cancel_rect, 8, Color32::from_white_alpha(16));
+        }
+        painter.galley(pos2(cancel_rect.min.x + 10.0, mid - cancel.size().y / 2.0), cancel, Color32::from_gray(210));
+        painter.galley(pos2(cancel_rect.max.x - 10.0 - esc.size().x, mid - esc.size().y / 2.0 + 0.5), esc, Color32::from_gray(130));
+        if dig_hit.hovered() || cancel_hit.hovered() {
+            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+        }
+        if dig_hit.clicked() {
+            *feedback = tools::dig_draft(doc, tools);
+            self.river_grab = None;
+        } else if cancel_hit.clicked() {
+            tools.river_draft = None;
+            self.river_grab = None;
+            *feedback = Some("River dropped".into());
+        }
+    }
+
+    /// Draw what Auto paint or Auto biome would change under the brush at
+    /// `at`: the columns that would change, in their new colour.
+    fn show_auto_preview(&mut self, ctx: &egui::Context, painter: &egui::Painter, canvas: Rect, doc: &Document, tools: &ToolState, at: (f64, f64)) {
+        use std::hash::{Hash, Hasher};
+        let biomes = tools.tool == Tool::AutoBiome;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        format!("{:?}", tools.auto).hash(&mut h);
+        BrushPreview::key(&tools.brush).hash(&mut h);
+        tools.brush.radius.to_bits().hash(&mut h);
+        tools.brush.strength.to_bits().hash(&mut h);
+        let key = (tools.tool, at.0.floor() as i32, at.1.floor() as i32, doc.revision, h.finish());
+        if self.auto_preview.as_ref().is_none_or(|a| a.key != key) {
+            let reader = massif_core::auto::Reader::new(&tools.auto, &doc.world.registry, doc.world.meta.sea_level);
+            let brush = tools.stroke_brush();
+            let (rect, cols) = massif_core::ops::auto_preview(doc.dimension(), &brush, at.0 as f32, at.1 as f32, &reader, biomes);
+            let reg = &doc.world.registry;
+            // What changes in its new colour; what stays, darkened.
+            let colour = |p: &massif_core::ops::Preview| match p {
+                massif_core::ops::Preview::Outside => Color32::TRANSPARENT,
+                massif_core::ops::Preview::Same => Color32::from_black_alpha(120),
+                massif_core::ops::Preview::Becomes(id) => {
+                    let c = if biomes { reg.biomes.get(*id as usize).map(|b| b.color) } else { reg.terrains.get(*id as usize).map(|t| t.color) };
+                    let [r, g, b] = c.unwrap_or([255, 0, 255]);
+                    Color32::from_rgb(r, g, b)
+                }
+            };
+            let texture = cols.iter().any(|p| *p != massif_core::ops::Preview::Outside).then(|| {
+                let pixels = cols.iter().map(colour).collect();
+                let image = egui::ColorImage::new([rect.width() as usize, rect.depth() as usize], pixels);
+                ctx.load_texture("auto preview", image, egui::TextureOptions::NEAREST)
+            });
+            self.auto_preview = Some(AutoPreview {
+                key,
+                rect: [rect.x0, rect.z0, rect.x1, rect.z1],
+                texture,
+            });
+        }
+        if let Some(AutoPreview { rect, texture: Some(texture), .. }) = &self.auto_preview {
+            let min = self.to_screen(canvas, rect[0] as f64, rect[1] as f64);
+            let max = self.to_screen(canvas, rect[2] as f64, rect[3] as f64);
+            let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+            painter.image(texture.id(), Rect::from_min_max(min, max), uv, Color32::WHITE);
+        }
+    }
+
+    /// Where block coordinates `(x, z)` were on the screen, last frame.
+    #[cfg(test)]
+    pub fn screen_of(&self, x: f64, z: f64) -> Pos2 {
+        self.to_screen(self.canvas, x, z)
     }
 
     fn to_screen(&self, canvas: Rect, x: f64, z: f64) -> Pos2 {
@@ -370,12 +640,47 @@ impl MapView {
             let inverse = secondary || modifiers.alt;
             let (bx, bz) = (x.floor() as i32, z.floor() as i32);
             if tools.tool == Tool::River {
-                // Points of the course; the right button takes one back.
-                if secondary {
-                    tools.river_points.pop();
-                } else {
-                    tools.river_points.push((x as f32, z as f32));
-                    self.river_drag = Some(tools.river_points.len());
+                let at = (x as f32, z as f32);
+                let hit = match (&tools.river_draft, pointer) {
+                    (Some(draft), Some(p)) => self.river_hit(canvas, draft, &tools.river, p),
+                    _ => None,
+                };
+                match (&mut tools.river_draft, hit, secondary) {
+                    // The first click: where it springs (dragged, it moves).
+                    (None, _, false) => {
+                        *feedback = tools::start_river(doc, tools, at.0, at.1);
+                        if tools.river_draft.is_some() {
+                            self.river_grab = Some(0);
+                        }
+                    }
+                    (Some(_), Some(RiverHit::Anchor(k)), false) => self.river_grab = Some(k),
+                    // A point it passes, or its chosen end, taken away.
+                    (Some(draft), Some(RiverHit::Anchor(k)), true) if k > 0 => {
+                        if k <= draft.layout.through.len() {
+                            draft.layout.through.remove(k - 1);
+                        } else {
+                            draft.layout.end = None;
+                        }
+                        draft.plan(doc, &tools.river, None);
+                    }
+                    // Where it runs to by itself, held: its end, to move.
+                    (Some(draft), Some(RiverHit::Mouth), false) => {
+                        draft.layout.end = draft.plan.course.last().copied();
+                        self.river_grab = Some(draft.layout.anchors().len() - 1);
+                    }
+                    // The course itself, held: a point it must pass, to drag.
+                    (Some(draft), Some(RiverHit::Course(i)), false) => {
+                        let leg = draft.stops.iter().rposition(|&s| s <= i).unwrap_or(0);
+                        let k = leg.min(draft.layout.through.len());
+                        draft.layout.through.insert(k, at);
+                        self.river_grab = Some(k + 1);
+                    }
+                    // Anywhere else: that is where it ends.
+                    (Some(draft), None, false) => {
+                        draft.layout.end = Some(at);
+                        self.river_grab = Some(draft.layout.anchors().len() - 1);
+                    }
+                    _ => {}
                 }
             } else if tools.tool.is_click() {
                 *feedback = tools::click(doc, tools, bx, bz, inverse);
@@ -388,47 +693,43 @@ impl MapView {
                 }
             }
         }
-        // Dragging draws the course; let go, and the river is dug.
-        if let Some(start) = self.river_drag {
-            if tools.tool != Tool::River {
-                self.river_drag = None;
-            } else if down[0] {
-                if let (Some((x, z)), Some(&(lx, lz))) = (world_pointer, tools.river_points.last()) {
-                    let step = (12.0 / self.zoom).max(3.0);
-                    if (x as f32 - lx).hypot(z as f32 - lz) >= step {
-                        tools.river_points.push((x as f32, z as f32));
+        // A held anchor of the river follows the pointer; let go, its
+        // course is worked out finely.
+        if let Some(k) = self.river_grab {
+            match tools.river_draft.as_mut() {
+                Some(draft) if tools.tool == Tool::River => {
+                    if down[0] {
+                        if let Some((x, z)) = world_pointer {
+                            draft.layout.set(k, (x as f32, z as f32));
+                            draft.plan(doc, &tools.river, Some(k));
+                        }
+                        ui.ctx().request_repaint();
+                    } else {
+                        self.river_grab = None;
+                        draft.plan(doc, &tools.river, None);
                     }
                 }
-                ui.ctx().request_repaint();
-            } else {
-                self.river_drag = None;
-                if tools.river_points.len() >= start + 3 {
-                    *feedback = tools::dig_river(doc, tools);
-                }
+                _ => self.river_grab = None,
             }
         }
-        if tools.tool == Tool::River && !tools.river_points.is_empty() {
+        if tools.tool == Tool::River
+            && tools.river_draft.is_some()
+            && !ui.ctx().egui_wants_keyboard_input()
+        {
             let (enter, escape) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
-            if response.double_clicked() || enter {
-                // A double-click leaves two points on top of each other.
-                if response.double_clicked() && tools.river_points.len() >= 2 {
-                    let n = tools.river_points.len();
-                    let (a, b) = (tools.river_points[n - 1], tools.river_points[n - 2]);
-                    if (a.0 - b.0).hypot(a.1 - b.1) * self.zoom < 6.0 {
-                        tools.river_points.pop();
-                    }
-                }
-                *feedback = tools::dig_river(doc, tools);
+            if enter {
+                *feedback = tools::dig_draft(doc, tools);
             } else if escape {
-                tools.river_points.clear();
-                *feedback = Some("Course dropped".into());
+                tools.river_draft = None;
+                self.river_grab = None;
+                *feedback = Some("River dropped".into());
             }
         }
         if ui.input(|i| i.key_pressed(egui::Key::Escape))
             && let Some(stroke) = self.stroke.take()
         {
             // Escape abandons the stroke being drawn.
-            tools::end_stroke(doc, stroke);
+            let _ = tools::end_stroke(doc, stroke);
             doc.undo();
             *feedback = Some("Stroke cancelled".into());
         }
@@ -439,24 +740,30 @@ impl MapView {
                     tools::continue_stroke(doc, tools, stroke, (x as f32, z as f32), dt);
                 }
                 ui.ctx().request_repaint();
-            } else if let Some(stroke) = self.stroke.take() {
-                tools::end_stroke(doc, stroke);
+            } else if let Some(stroke) = self.stroke.take()
+                && let Some(note) = tools::end_stroke(doc, stroke)
+            {
+                *feedback = Some(note);
             }
         }
 
         // ---- drawing -------------------------------------------------------
         let painter = ui.painter_at(canvas);
         painter.rect_filled(canvas, 0, pal.canvas);
-        let dot = theme::mix(pal.canvas, pal.weak, 0.35);
-        let spacing = 22.0;
-        let mut y = canvas.top() + spacing / 2.0;
-        while y < canvas.bottom() {
-            let mut x = canvas.left() + spacing / 2.0;
-            while x < canvas.right() {
-                painter.circle_filled(pos2(x, y), 0.9, dot);
-                x += spacing;
-            }
-            y += spacing;
+        // The map lies on the canvas, a soft shadow under it.
+        if let Some((lo, hi)) = doc.dimension().bounds() {
+            let t = TILE_SIZE as f64;
+            let under = Rect::from_min_max(
+                self.to_screen(canvas, lo.x as f64 * t, lo.z as f64 * t),
+                self.to_screen(canvas, (hi.x + 1) as f64 * t, (hi.z + 1) as f64 * t),
+            );
+            let shadow = egui::epaint::Shadow {
+                offset: [0, 8],
+                blur: 36,
+                spread: 2,
+                color: Color32::from_black_alpha(if pal.dark { 170 } else { 70 }),
+            };
+            painter.add(shadow.as_shape(under, 3));
         }
 
         let style = MapStyle {
@@ -563,127 +870,61 @@ impl MapView {
             painter.line_segment([o - vec2(4.0, 0.0), o + vec2(4.0, 0.0)], Line::new(1.5, red));
         }
 
-        // The course of the river being drawn: its middle, the edges of its
-        // water and of its banks, and the next leg to the pointer.
-        if tools.tool == Tool::River && !tools.river_points.is_empty() {
-            let mut points = tools.river_points.clone();
-            if let Some((x, z)) = world_pointer.filter(|_| response.hovered()) {
-                points.push((x as f32, z as f32));
-            }
-            let course = massif_core::river::smooth_course(&points);
-            let r = &tools.river;
-            let n = course.len();
-            let screen = |x: f32, z: f32| self.to_screen(canvas, x as f64, z as f64);
-            let side = |off: f32, bank: f32| -> Vec<Pos2> {
-                (0..n)
-                    .map(|k| {
-                        let (a, b) = (course[k.saturating_sub(1)], course[(k + 1).min(n - 1)]);
-                        let (dx, dz) = (b.0 - a.0, b.1 - a.1);
-                        let len = dx.hypot(dz).max(1e-3);
-                        let t = if n > 1 { k as f32 / (n - 1) as f32 } else { 0.0 };
-                        let half = (r.width + (r.width_end - r.width) * t) / 2.0 + bank;
-                        let (nx, nz) = (-dz / len * half * off, dx / len * half * off);
-                        screen(course[k].0 + nx, course[k].1 + nz)
-                    })
-                    .collect()
-            };
-            let water = Line::new(1.6, Color32::from_rgb(90, 170, 255));
-            let banks = Line::new(1.0, Color32::from_rgba_unmultiplied(90, 170, 255, 110));
-            for (off, bank, line) in [(1.0, 0.0, water), (-1.0, 0.0, water), (1.0, r.banks, banks), (-1.0, r.banks, banks)] {
-                let pts = thin(side(off, bank).into_iter(), 1.5);
-                if pts.len() > 1 {
-                    painter.add(egui::Shape::line(pts, line));
+        // The river being laid out, with its handles; before a source is
+        // placed, where water let go under the pointer would go.
+        if tools.tool == Tool::River {
+            let spec = tools.river.spring_spec(&doc.world.registry);
+            if let Some(draft) = &tools.river_draft {
+                self.spring = None;
+                let hover = match (self.river_grab, pointer.filter(|_| response.hovered())) {
+                    (None, Some(p)) => self.river_hit(canvas, draft, &tools.river, p),
+                    _ => None,
+                };
+                self.draw_river(&painter, canvas, &draft.plan, &spec, Some((draft, hover, self.river_grab)));
+                if response.hovered() {
+                    ui.ctx().set_cursor_icon(match (self.river_grab, hover) {
+                        (Some(_), _) => CursorIcon::Grabbing,
+                        (None, Some(RiverHit::Anchor(_) | RiverHit::Mouth)) => CursorIcon::Grab,
+                        (None, Some(RiverHit::Course(_))) => CursorIcon::PointingHand,
+                        (None, None) => CursorIcon::Crosshair,
+                    });
                 }
-            }
-            let middle = thin(course.iter().map(|&(x, z)| screen(x, z)), 1.5);
-            if middle.len() > 1 {
-                painter.add(egui::Shape::dashed_line(&middle, Line::new(1.0, Color32::WHITE), 6.0, 4.0));
-            }
-            for (k, &(x, z)) in tools.river_points.iter().enumerate() {
-                let p = screen(x, z);
-                painter.circle(p, if k == 0 { 5.0 } else { 3.5 }, Color32::from_rgb(90, 170, 255), Line::new(1.5, Color32::WHITE));
-            }
-        }
-
-        // Where the water of a spring under the pointer would go: its course
-        // and the lakes it would fill.
-        if tools.tool == Tool::Spring {
-            // Worked out once the pointer rests, the way the river goes.
-            if let Some((x, z)) = world_pointer.filter(|_| response.hovered()) {
-                let key = (x.floor() as i32, z.floor() as i32, doc.revision ^ (tools.river.lakes.to_bits() as u64) << 32);
-                let now = ui.input(|i| i.time);
-                match self.spring_rest {
-                    Some((k, since)) if k == key => {
-                        if now - since > 0.12 && self.spring.as_ref().is_none_or(|s| s.0 != key) {
-                            let sea = doc.world.meta.sea_level as f32;
-                            let d = massif_core::river::descend(doc.dimension().ground(), (key.0, key.1), sea, 30_000, 600_000, tools.river.lake_depth());
-                            self.spring = Some((key, d));
+            } else {
+                // Worked out once the pointer rests, the way the river goes.
+                if let Some((x, z)) = world_pointer.filter(|_| response.hovered()) {
+                    let key = (x.floor() as i32, z.floor() as i32, doc.revision ^ (tools.river.lakes.to_bits() as u64) << 32);
+                    let now = ui.input(|i| i.time);
+                    match self.spring_rest {
+                        Some((k, since)) if k == key => {
+                            if now - since > 0.12 && self.spring.as_ref().is_none_or(|s| s.0 != key) {
+                                let sea = doc.world.meta.sea_level as f32;
+                                let d = massif_core::river::descend(doc.dimension().ground(), (key.0, key.1), sea, 30_000, 600_000, tools.river.lake_depth());
+                                self.spring = Some((key, d));
+                            }
                         }
+                        _ => self.spring_rest = Some((key, now)),
                     }
-                    _ => self.spring_rest = Some((key, now)),
+                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(130));
                 }
-                ui.ctx().request_repaint_after(std::time::Duration::from_millis(130));
-            }
-            if let Some((_, d)) = &self.spring {
-                let water = Color32::from_rgb(70, 160, 255);
-                for (cells, _) in &d.lakes {
-                    let mut rows: Vec<(i32, i32)> = cells.iter().map(|&(x, z)| (z, x)).collect();
-                    rows.sort_unstable();
-                    let mut k = 0;
-                    while k < rows.len() {
-                        let (z, x0) = rows[k];
-                        let mut x1 = x0;
-                        while k + 1 < rows.len() && rows[k + 1] == (z, x1 + 1) {
-                            k += 1;
-                            x1 += 1;
-                        }
-                        let a = self.to_screen(canvas, x0 as f64, z as f64);
-                        let b = self.to_screen(canvas, x1 as f64 + 1.0, z as f64 + 1.0);
-                        painter.rect_filled(Rect::from_min_max(a, b), 0, water.gamma_multiply(0.45));
-                        k += 1;
-                    }
+                if let Some((_, d)) = &self.spring {
+                    self.draw_river(&painter, canvas, d, &spec, None);
                 }
-                let spec = tools.river.spring_spec(&doc.world.registry);
-                let n = d.course.len().max(2);
-                let pts: Vec<Pos2> = d.course.iter().map(|&(x, z)| self.to_screen(canvas, x as f64, z as f64)).collect();
-                for (k, w) in pts.windows(2).enumerate() {
-                    let t = k as f32 / (n - 1) as f32;
-                    let width = (spec.width + (spec.width_end - spec.width) * t) * self.zoom;
-                    painter.line_segment([w[0], w[1]], Line::new(width.max(2.0), water.gamma_multiply(0.85)));
-                }
-                if let Some(&first) = pts.first() {
-                    painter.circle(first, 6.0, water, Line::new(2.0, Color32::WHITE));
-                }
+                let hint = match self.spring.as_ref().map(|s| &s.1) {
+                    Some(d) if d.course.len() >= 3 => format!("Click: a river springs here and runs to {}", d.mouth.map_or("", |m| m.label())),
+                    _ => "Click on land: where the river springs".to_owned(),
+                };
+                let at = canvas.center_bottom() - vec2(0.0, 22.0);
+                let galley = painter.layout_no_wrap(hint, FontId::proportional(12.5), Color32::from_gray(235));
+                let back = Rect::from_center_size(at, galley.size() + vec2(24.0, 12.0));
+                painter.rect_filled(back.translate(vec2(0.0, 2.0)), 9, Color32::from_black_alpha(60));
+                painter.rect(back, 9, Color32::from_rgba_unmultiplied(20, 22, 27, 235), Line::new(1.0, Color32::from_white_alpha(18)), StrokeKind::Inside);
+                painter.galley(back.min + vec2(12.0, 6.0), galley, Color32::from_gray(235));
             }
         } else {
             self.spring = None;
         }
-
-        // How to draw a river, on the map itself.
-        if tools.tool == Tool::River || tools.tool == Tool::Spring {
-            let hint = if tools.tool == Tool::Spring {
-                match self.spring.as_ref().and_then(|s| s.1.mouth) {
-                    Some(m) if self.spring.as_ref().is_some_and(|s| s.1.course.len() >= 3) => {
-                        let lakes = self.spring.as_ref().map_or(0, |s| s.1.lakes.len());
-                        let lakes = match lakes {
-                            0 => String::new(),
-                            1 => ", through a lake".to_owned(),
-                            n => format!(", through {n} lakes"),
-                        };
-                        format!("Click: a river from here to {}{lakes}", m.label())
-                    }
-                    _ => "Hover: see where the water goes · click: dig the river".to_owned(),
-                }
-            } else if tools.river_points.is_empty() {
-                "Drag along the course, release to dig".to_owned()
-            } else {
-                "Enter: dig · right-click: remove a point · Esc: cancel".to_owned()
-            };
-            let at = canvas.center_bottom() - vec2(0.0, 18.0);
-            let galley = painter.layout_no_wrap(hint, egui::FontId::proportional(12.5), Color32::WHITE);
-            let back = Rect::from_center_size(at, galley.size() + vec2(20.0, 10.0));
-            painter.rect_filled(back, 8, Color32::from_black_alpha(170));
-            painter.galley(back.min + vec2(10.0, 5.0), galley, Color32::WHITE);
+        if tools.tool == Tool::River && tools.river_draft.is_some() {
+            self.river_bar(ui, &painter, canvas, response.id, doc, tools, feedback);
         }
 
         // Brush outline.
@@ -696,6 +937,14 @@ impl MapView {
                 let brush = &tools.brush;
                 let shadow = Line::new(3.0, Color32::from_black_alpha(90));
                 let line = Line::new(1.4, Color32::WHITE);
+                // The automatic tools show what they would change.
+                if matches!(tools.tool, Tool::AutoPaint | Tool::AutoBiome)
+                    && !modifiers.alt
+                    && self.stroke.is_none()
+                    && let Some((x, z)) = world_pointer
+                {
+                    self.show_auto_preview(ui.ctx(), &painter, canvas, doc, tools, (x, z));
+                }
                 // How hard the brush presses: lighter where it presses
                 // more, with a line at a quarter, a half and three quarters
                 // of its strength.
@@ -703,7 +952,8 @@ impl MapView {
                 if self.strength.as_ref().is_none_or(|s| s.key != key) {
                     self.strength = Some(BrushPreview::new(ui.ctx(), brush));
                 }
-                if let Some(preview) = &self.strength {
+                let automatic = matches!(tools.tool, Tool::AutoPaint | Tool::AutoBiome);
+                if let Some(preview) = self.strength.as_ref().filter(|_| !automatic) {
                     let side = 2.0 * brush.reach() * self.zoom;
                     if side >= 12.0 {
                         let square = Rect::from_center_size(p, Vec2::splat(side));
@@ -762,7 +1012,7 @@ impl MapView {
                 }
                 painter.circle_filled(p, 1.5, Color32::WHITE);
                 ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
-            } else {
+            } else if tools.tool != Tool::River || tools.river_draft.is_none() {
                 ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
             }
         }

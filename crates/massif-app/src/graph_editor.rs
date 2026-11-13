@@ -1207,7 +1207,7 @@ impl GraphEditor {
         ui.horizontal(|ui| {
             ui.add_sized([86.0, 18.0], egui::Label::new(RichText::new("Size").size(12.0)));
             let [w, h] = self.image_size;
-            egui::ComboBox::from_id_salt("render image size")
+            crate::widgets::combo("render image size")
                 .selected_text(format!("{w} × {h}"))
                 .width(130.0)
                 .show_ui(ui, |ui| {
@@ -1451,7 +1451,7 @@ impl GraphEditor {
             ui.label(RichText::new("Size").color(pal.weak));
             let map = map_rect(doc);
             let map_label = format!("The map · {} × {}", map.x1 - map.x0, map.z1 - map.z0);
-            egui::ComboBox::from_id_salt("graph size")
+            crate::widgets::combo("graph size")
                 .selected_text(match graph.size {
                     None => map_label.clone(),
                     Some(side) => size_label(side),
@@ -1485,7 +1485,7 @@ impl GraphEditor {
             ui.separator();
             ui.label(RichText::new("Preview").color(pal.weak));
             let before_preview = self.preview;
-            egui::ComboBox::from_id_salt("graph preview")
+            crate::widgets::combo("graph preview")
                 .selected_text(format!("{0}", self.preview))
                 .width(64.0)
                 .show_ui(ui, |ui| {
@@ -2863,7 +2863,7 @@ fn row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> egui::Response) ->
 fn blocks(ui: &mut Ui, label: &str, v: &mut f32, max: f32) -> bool {
     row(ui, label, |ui| {
         ui.add(
-            egui::Slider::new(v, 1.0..=max.min(6000.0))
+            crate::widgets::Field::new(v, 1.0..=max.min(6000.0))
                 .clamping(egui::SliderClamping::Never)
                 .suffix(" blocks")
                 .max_decimals(0),
@@ -2874,7 +2874,7 @@ fn blocks(ui: &mut Ui, label: &str, v: &mut f32, max: f32) -> bool {
 fn height(ui: &mut Ui, label: &str, v: &mut f32) -> bool {
     row(ui, label, |ui| {
         ui.add(
-            egui::Slider::new(v, -64.0..=320.0)
+            crate::widgets::Field::new(v, -64.0..=320.0)
                 .clamping(egui::SliderClamping::Never)
                 .max_decimals(0),
         )
@@ -2882,13 +2882,13 @@ fn height(ui: &mut Ui, label: &str, v: &mut f32) -> bool {
 }
 
 fn amount(ui: &mut Ui, label: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>) -> bool {
-    row(ui, label, |ui| ui.add(egui::Slider::new(v, range).max_decimals(2)))
+    row(ui, label, |ui| ui.add(crate::widgets::Field::new(v, range).max_decimals(2)))
 }
 
 fn fraction(ui: &mut Ui, label: &str, v: &mut f32) -> bool {
     row(ui, label, |ui| {
         ui.add(
-            egui::Slider::new(v, 0.0..=1.0)
+            crate::widgets::Field::new(v, 0.0..=1.0)
                 .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
                 .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
         )
@@ -2896,11 +2896,11 @@ fn fraction(ui: &mut Ui, label: &str, v: &mut f32) -> bool {
 }
 
 fn angle(ui: &mut Ui, label: &str, v: &mut f32) -> bool {
-    row(ui, label, |ui| ui.add(egui::Slider::new(v, 0.0..=360.0).suffix("°").max_decimals(0)))
+    row(ui, label, |ui| ui.add(crate::widgets::Field::new(v, 0.0..=360.0).suffix("°").max_decimals(0)))
 }
 
 fn count(ui: &mut Ui, label: &str, v: &mut u32, range: std::ops::RangeInclusive<u32>) -> bool {
-    row(ui, label, |ui| ui.add(egui::Slider::new(v, range)))
+    row(ui, label, |ui| ui.add(crate::widgets::Field::new(v, range)))
 }
 
 /// The sea a simulation knows of: a level, or none.
@@ -2936,7 +2936,7 @@ fn choice<T: PartialEq + Copy>(ui: &mut Ui, label: &str, v: &mut T, options: &[(
     row(ui, label, |ui| {
         let current = options.iter().find(|o| o.0 == *v).map_or("", |o| o.1);
         let mut changed = false;
-        let mut r = egui::ComboBox::from_id_salt(label)
+        let mut r = crate::widgets::combo(label)
             .selected_text(current)
             .width(150.0)
             .show_ui(ui, |ui| {
@@ -3280,12 +3280,12 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             offset_z,
         } => {
             amount(ui, "Scale", scale, 0.1..=8.0);
-            row(ui, "Turn", |ui| ui.add(egui::Slider::new(rotate, -180.0..=180.0).suffix("°").max_decimals(0)));
+            row(ui, "Turn", |ui| ui.add(crate::widgets::Field::new(rotate, -180.0..=180.0).suffix("°").max_decimals(0)));
             amount(ui, "Move across", offset_x, -1.0..=1.0);
             amount(ui, "Move down", offset_z, -1.0..=1.0);
         }
         NodeKind::Swirl { angle: a, radius } => {
-            row(ui, "Turn", |ui| ui.add(egui::Slider::new(a, -720.0..=720.0).suffix("°").max_decimals(0)));
+            row(ui, "Turn", |ui| ui.add(crate::widgets::Field::new(a, -720.0..=720.0).suffix("°").max_decimals(0)));
             fraction(ui, "Reach", radius);
         }
         NodeKind::Fold { level, strength } => {
@@ -3300,7 +3300,7 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
         } => {
             count(ui, "Layers", layers, 1..=80);
             fraction(ui, "Strength", strength);
-            row(ui, "Tilt", |ui| ui.add(egui::Slider::new(tilt, -45.0..=45.0).suffix("°").max_decimals(0)));
+            row(ui, "Tilt", |ui| ui.add(crate::widgets::Field::new(tilt, -45.0..=45.0).suffix("°").max_decimals(0)));
             seed(ui, s);
         }
         NodeKind::Sharpen { radius, amount: a } => {
@@ -3374,12 +3374,12 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             variation,
             seed: s,
         } => {
-            row(ui, "Warm side", |ui| ui.add(egui::Slider::new(warm, -30.0..=45.0).suffix(" °C").max_decimals(0)));
-            row(ui, "Cold side", |ui| ui.add(egui::Slider::new(cold, -30.0..=45.0).suffix(" °C").max_decimals(0)));
+            row(ui, "Warm side", |ui| ui.add(crate::widgets::Field::new(warm, -30.0..=45.0).suffix(" °C").max_decimals(0)));
+            row(ui, "Cold side", |ui| ui.add(crate::widgets::Field::new(cold, -30.0..=45.0).suffix(" °C").max_decimals(0)));
             angle(ui, "Warm toward", toward);
-            row(ui, "Height cools", |ui| ui.add(egui::Slider::new(lapse, 0.0..=30.0).suffix(" °C / 100 blocks").max_decimals(1)));
+            row(ui, "Height cools", |ui| ui.add(crate::widgets::Field::new(lapse, 0.0..=30.0).suffix(" °C / 100 blocks").max_decimals(1)));
             height(ui, "Sea level", sea);
-            row(ui, "Variation", |ui| ui.add(egui::Slider::new(variation, 0.0..=15.0).suffix(" °C").max_decimals(1)));
+            row(ui, "Variation", |ui| ui.add(crate::widgets::Field::new(variation, 0.0..=15.0).suffix(" °C").max_decimals(1)));
             seed(ui, s);
         }
         NodeKind::Humidity {
@@ -3457,7 +3457,7 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             iterations,
             strength,
         } => {
-            row(ui, "Steepest", |ui| ui.add(egui::Slider::new(talus, 5.0..=85.0).suffix("°").max_decimals(0)));
+            row(ui, "Steepest", |ui| ui.add(crate::widgets::Field::new(talus, 5.0..=85.0).suffix("°").max_decimals(0)));
             count(ui, "Passes", iterations, 1..=500);
             fraction(ui, "Strength", strength);
         }
@@ -3468,7 +3468,7 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             softness,
         } => {
             height(ui, "Snow line", line);
-            row(ui, "Steepest", |ui| ui.add(egui::Slider::new(slope, 5.0..=85.0).suffix("°").max_decimals(0)));
+            row(ui, "Steepest", |ui| ui.add(crate::widgets::Field::new(slope, 5.0..=85.0).suffix("°").max_decimals(0)));
             amount(ui, "Depth", depth, 0.0..=20.0);
             amount(ui, "Fade", softness, 0.5..=100.0);
         }
@@ -3505,8 +3505,8 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             amount(ui, "Fade", falloff, 0.1..=100.0);
         }
         NodeKind::SelectSlope { min, max, falloff } => {
-            row(ui, "From", |ui| ui.add(egui::Slider::new(min, 0.0..=90.0).suffix("°").max_decimals(0)));
-            row(ui, "To", |ui| ui.add(egui::Slider::new(max, 0.0..=90.0).suffix("°").max_decimals(0)));
+            row(ui, "From", |ui| ui.add(crate::widgets::Field::new(min, 0.0..=90.0).suffix("°").max_decimals(0)));
+            row(ui, "To", |ui| ui.add(crate::widgets::Field::new(max, 0.0..=90.0).suffix("°").max_decimals(0)));
             amount(ui, "Fade", falloff, 0.1..=30.0);
         }
         NodeKind::Curvature { bend, radius, strength } => {
@@ -3516,7 +3516,7 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
         }
         NodeKind::Facing { angle: a, spread } => {
             angle(ui, "Facing", a);
-            row(ui, "Spread", |ui| ui.add(egui::Slider::new(spread, 5.0..=180.0).suffix("°").max_decimals(0)));
+            row(ui, "Spread", |ui| ui.add(crate::widgets::Field::new(spread, 5.0..=180.0).suffix("°").max_decimals(0)));
         }
         NodeKind::Occlusion { radius } => {
             blocks(ui, "Radius", radius, 1000.0);
@@ -3553,7 +3553,7 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             brightness,
             contrast,
         } => {
-            row(ui, "Hue", |ui| ui.add(egui::Slider::new(hue, -180.0..=180.0).suffix("°").max_decimals(0)));
+            row(ui, "Hue", |ui| ui.add(crate::widgets::Field::new(hue, -180.0..=180.0).suffix("°").max_decimals(0)));
             amount(ui, "Saturation", saturation, 0.0..=3.0);
             amount(ui, "Brightness", brightness, 0.0..=3.0);
             amount(ui, "Contrast", contrast, 0.0..=3.0);
@@ -3571,13 +3571,13 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
         } => {
             choice(ui, "Land", palette, &AutoPalette::ALL.map(|p| (p, p.label())));
             height(ui, "Snow line", snow_line);
-            row(ui, "Rock from", |ui| ui.add(egui::Slider::new(rock_slope, 5.0..=80.0).suffix("°").max_decimals(0)));
+            row(ui, "Rock from", |ui| ui.add(crate::widgets::Field::new(rock_slope, 5.0..=80.0).suffix("°").max_decimals(0)));
             seed(ui, s);
         }
         NodeKind::TerrainOutput { terrain } => {
             row(ui, "Terrain", |ui| {
                 let mut changed = false;
-                let mut r = egui::ComboBox::from_id_salt("output terrain")
+                let mut r = crate::widgets::combo("output terrain")
                     .selected_text(reg.terrain(TerrainId(*terrain)).name.clone())
                     .width(170.0)
                     .height(320.0)

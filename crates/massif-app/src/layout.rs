@@ -14,6 +14,8 @@ pub enum EditorKind {
     Empty,
     Map,
     View3d,
+    /// The world in 3D with the tools to build and dig in it.
+    Sculpt3d,
     Tools,
     ToolSettings,
     BrushSettings,
@@ -38,7 +40,7 @@ pub enum EditorKind {
 impl EditorKind {
     /// Editors offered in the area menu, by group.
     pub const GROUPS: [(&'static str, &'static [EditorKind]); 5] = [
-        ("View", &[EditorKind::Map, EditorKind::View3d]),
+        ("View", &[EditorKind::Map, EditorKind::View3d, EditorKind::Sculpt3d]),
         (
             "Tools",
             &[
@@ -65,6 +67,7 @@ impl EditorKind {
             EditorKind::Empty => "Empty area",
             EditorKind::Map => "Map",
             EditorKind::View3d => "3D View",
+            EditorKind::Sculpt3d => "3D Sculpt",
             EditorKind::Tools => "Tools",
             EditorKind::ToolSettings => "Tool Settings",
             EditorKind::BrushSettings => "Brush Settings",
@@ -87,6 +90,7 @@ impl EditorKind {
             EditorKind::Empty => Icon::LayoutGrid,
             EditorKind::Map => Icon::Map,
             EditorKind::View3d => Icon::Box,
+            EditorKind::Sculpt3d => Icon::Pickaxe,
             EditorKind::Tools => Icon::Wrench,
             EditorKind::ToolSettings => Icon::SlidersHorizontal,
             EditorKind::BrushSettings => Icon::Settings2,
@@ -166,6 +170,14 @@ impl Node {
         match self {
             Node::Area { id, .. } => *id,
             Node::Split { a, .. } => a.first_area(),
+        }
+    }
+
+    /// Whether an area under this node shows `kind`.
+    pub fn shows(&self, kind: EditorKind) -> bool {
+        match self {
+            Node::Area { editor, .. } => *editor == kind,
+            Node::Split { a, b, .. } => a.shows(kind) || b.shows(kind),
         }
     }
 
@@ -363,7 +375,14 @@ pub struct Layout {
     /// The workspace last used on each side: map editor, terrain generator.
     #[serde(default)]
     pub last: [usize; 2],
+    /// Which workspaces of later versions it has had added: 1, 3D Sculpt.
+    #[serde(default)]
+    version: u32,
 }
+
+/// The workspaces a layout saved by an older version lacks are added to it
+/// once: this is the version they come with.
+const LAYOUT_VERSION: u32 = 1;
 
 /// Builds trees with fresh area ids.
 struct Builder<'a>(&'a mut AreaId);
@@ -394,6 +413,16 @@ impl Builder<'_> {
             b: Box::new(b),
         }
     }
+}
+
+/// The 3D Sculpt workspace: its editor, with the map and the levels beside.
+fn sculpt_workspace(b: &mut Builder) -> Node {
+    let side = {
+        let (map, levels) = (b.area(EditorKind::Map), b.area(EditorKind::Levels));
+        b.column(0.62, map, levels)
+    };
+    let view = b.area(EditorKind::Sculpt3d);
+    b.row(0.76, view, side)
 }
 
 impl Default for Layout {
@@ -470,6 +499,9 @@ impl Default for Layout {
         let view = b.area(View3d);
         add("3D", b.row(0.72, view, side));
 
+        // 3D Sculpt: the world in 3D to build and dig in, with its tools.
+        add("3D Sculpt", sculpt_workspace(&mut b));
+
         // Maps: two map views side by side, to compare display modes.
         let (m1, m2) = (b.area(Map), b.area(Map));
         add("Maps", b.row(0.5, m1, m2));
@@ -499,6 +531,7 @@ impl Default for Layout {
             active: 0,
             next_id,
             last: [0, first_terrain],
+            version: LAYOUT_VERSION,
         }
     }
 }
@@ -515,6 +548,32 @@ impl Layout {
         }
         let max = self.workspaces.iter().map(|w| w.root.max_id()).max();
         self.next_id = self.next_id.max(max.unwrap_or(0));
+        if self.version < 1 && !self.workspaces.iter().any(|w| w.root.shows(EditorKind::Sculpt3d)) {
+            // Laid out before the 3D Sculpt editor: its workspace, after
+            // the 3D one (or the last of the map editor's).
+            let at = self
+                .workspaces
+                .iter()
+                .position(|w| !w.terrain && w.name == "3D")
+                .or_else(|| self.workspaces.iter().rposition(|w| !w.terrain))
+                .map_or(0, |k| k + 1);
+            let root = sculpt_workspace(&mut Builder(&mut self.next_id));
+            self.workspaces.insert(
+                at,
+                Workspace {
+                    name: "3D Sculpt".into(),
+                    root,
+                    maximized: None,
+                    terrain: false,
+                },
+            );
+            for k in [&mut self.active].into_iter().chain(self.last.iter_mut()) {
+                if *k >= at {
+                    *k += 1;
+                }
+            }
+        }
+        self.version = LAYOUT_VERSION;
         self
     }
 
@@ -716,8 +775,8 @@ mod tests {
     #[test]
     fn default_layout_is_well_formed() {
         let layout = Layout::default();
-        assert_eq!(layout.workspaces.len(), 8);
-        // Two sides: six workspaces to edit the map, two to generate terrain.
+        assert_eq!(layout.workspaces.len(), 9);
+        // Two sides: seven workspaces to edit the map, two to generate terrain.
         assert_eq!(layout.workspaces.iter().filter(|w| w.terrain).count(), 2);
         let mut seen = std::collections::HashSet::new();
         for ws in &layout.workspaces {
@@ -742,23 +801,55 @@ mod tests {
         layout.switch_side(true);
         assert!(layout.terrain());
         assert_eq!(layout.current().name, "Graph");
-        layout.activate(7);
+        layout.activate(8);
         layout.switch_side(false);
         assert_eq!(layout.active, 2, "back where the map editor was left");
         layout.switch_side(true);
         assert_eq!(layout.current().name, "Render");
     }
 
+    /// A layout saved before the 3D Sculpt editor gets its workspace, once,
+    /// after the 3D one.
+    #[test]
+    fn old_layouts_get_the_sculpt_workspace() {
+        let mut old = Layout::default();
+        old.workspaces.retain(|w| w.name != "3D Sculpt");
+        old.version = 0;
+        old.active = 6;
+        let json = serde_json::to_string(&old).unwrap().replace(",\"version\":0", "");
+        let back: Layout = serde_json::from_str(&json).unwrap();
+        let back = back.sanitize();
+        let names: Vec<&str> = back.workspaces.iter().map(|w| w.name.as_str()).collect();
+        assert_eq!(names[3..5], ["3D", "3D Sculpt"]);
+        assert_eq!(back.current().name, "Graph", "the same workspace shown");
+        let ids: std::collections::HashSet<AreaId> = back
+            .workspaces
+            .iter()
+            .flat_map(|w| {
+                let mut v = Vec::new();
+                w.root.areas(&mut v);
+                v.into_iter().map(|a| a.0)
+            })
+            .collect();
+        let count: usize = back.workspaces.iter().map(|w| w.root.count()).sum();
+        assert_eq!(ids.len(), count, "fresh area ids");
+        // Removed by the user, it does not come back.
+        let mut gone = back.clone();
+        gone.workspaces.retain(|w| w.name != "3D Sculpt");
+        let again = serde_json::from_str::<Layout>(&serde_json::to_string(&gone).unwrap()).unwrap().sanitize();
+        assert!(!again.workspaces.iter().any(|w| w.name == "3D Sculpt"));
+    }
+
     #[test]
     fn each_side_keeps_a_workspace() {
         let mut layout = Layout::default();
-        layout.activate(7);
-        layout.remove_workspace(7);
-        assert_eq!(layout.workspaces.len(), 7);
+        layout.activate(8);
+        layout.remove_workspace(8);
+        assert_eq!(layout.workspaces.len(), 8);
         assert!(layout.terrain(), "still on the terrain side");
         assert_eq!(layout.current().name, "Graph");
-        layout.remove_workspace(6);
-        assert_eq!(layout.workspaces.len(), 7, "the last terrain workspace stays");
+        layout.remove_workspace(7);
+        assert_eq!(layout.workspaces.len(), 8, "the last terrain workspace stays");
         layout.switch_side(false);
         layout.activate(1);
         layout.remove_workspace(0);
@@ -771,7 +862,7 @@ mod tests {
     fn corner_splits_and_joins() {
         // Minimal: tools | map.
         let mut layout = Layout {
-            active: 5,
+            active: 6,
             ..Layout::default()
         };
         let map = layout.current().root.first_area() + 1;

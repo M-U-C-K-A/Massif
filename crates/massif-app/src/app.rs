@@ -23,8 +23,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-const HEADER: f32 = 36.0;
-const GAP: f32 = 6.0;
+const HEADER: f32 = 32.0;
+const GAP: f32 = 4.0;
 const MIN_AREA: f32 = 90.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -188,6 +188,8 @@ pub struct MassifApp {
     maps: HashMap<AreaId, MapView>,
     map_cache: MapCache,
     view3d: View3d,
+    /// The 3D Sculpt editor's view: its own camera and tiles.
+    sculpt3d: View3d,
     hover: Option<(i32, i32)>,
     map_center: Option<[f64; 2]>,
     /// The map editor keyboard zooming applies to: the last one used.
@@ -248,10 +250,15 @@ impl MassifApp {
             .storage
             .and_then(|s| eframe::get_value(s, "massif.settings"))
             .unwrap_or_default();
-        let tools: ToolState = cc
+        let mut tools: ToolState = cc
             .storage
             .and_then(|s| eframe::get_value(s, "massif.tools"))
             .unwrap_or_default();
+        // The 3D tools live in the 3D Sculpt editor now, not on the map.
+        if tools.tool.is_sculpt() {
+            tools.sculpt.tool = tools.tool;
+            tools.tool = Tool::Raise;
+        }
         let mut app = Self::with_world(default_world(), layout, tools, settings);
         if let Some(render) = cc.storage.and_then(|s| eframe::get_value(s, "massif.render")) {
             app.graph.view.render = render;
@@ -367,6 +374,7 @@ impl MassifApp {
             maps: HashMap::new(),
             map_cache: MapCache::default(),
             view3d: View3d::default(),
+            sculpt3d: View3d::default(),
             hover: None,
             map_center: None,
             active_map: None,
@@ -577,6 +585,7 @@ impl MassifApp {
             self.say(ctx, format!("Undid {label}"), false, None);
             self.map_cache.invalidate_all();
             self.view3d.invalidate_all();
+            self.sculpt3d.invalidate_all();
         }
     }
 
@@ -592,6 +601,7 @@ impl MassifApp {
             self.say(ctx, format!("Redid {label}"), false, None);
             self.map_cache.invalidate_all();
             self.view3d.invalidate_all();
+            self.sculpt3d.invalidate_all();
         }
     }
 
@@ -1244,9 +1254,11 @@ impl MassifApp {
     fn area(&mut self, ui: &mut Ui, frame: &eframe::Frame, id: AreaId, editor: EditorKind, rect: Rect, shown: &HashSet<EditorKind>) {
         let pal = Palette::of(ui);
         let painter = ui.painter_at(rect.expand(1.0));
-        painter.rect(rect, 12, pal.panel, Stroke::new(1.0, pal.border), StrokeKind::Inside);
+        painter.rect_filled(rect, 8, pal.panel);
         let header = Rect::from_min_size(rect.min, vec2(rect.width(), HEADER));
+        painter.rect_filled(header, egui::CornerRadius { nw: 8, ne: 8, sw: 0, se: 0 }, pal.header);
         painter.hline(header.x_range().shrink(1.0), header.bottom(), Stroke::new(1.0, pal.border));
+        painter.rect_stroke(rect, 8, Stroke::new(1.0, pal.border), StrokeKind::Inside);
         let content = Rect::from_min_max(pos2(rect.min.x + 1.0, header.bottom() + 1.0), pos2(rect.max.x - 1.0, rect.max.y - 1.0));
         let maximized = self.layout.current().maximized == Some(id);
         let single = self.layout.current().root.count() == 1;
@@ -1284,6 +1296,19 @@ impl MassifApp {
             EditorKind::View3d => {
                 hui.add_space(8.0);
                 self.view3d.header(&mut hui);
+                hui.separator();
+                if hui
+                    .button(theme::with_icon(Icon::Pickaxe, "Sculpt"))
+                    .on_hover_text("Build and dig in 3D: the 3D Sculpt workspace")
+                    .clicked()
+                    && let Some(k) = self.layout.workspaces.iter().position(|w| w.root.shows(EditorKind::Sculpt3d))
+                {
+                    self.layout.activate(k);
+                }
+            }
+            EditorKind::Sculpt3d => {
+                hui.add_space(8.0);
+                self.sculpt3d.header(&mut hui);
             }
             _ => {}
         }
@@ -1433,7 +1458,13 @@ impl MassifApp {
                     self.map_center = Some(view.center);
                 }
             }
-            EditorKind::View3d => self.view3d.ui(&mut cui, frame, &mut self.doc, &self.tools, self.map_center),
+            EditorKind::View3d => self.view3d.ui(&mut cui, frame, &mut self.doc, &self.tools, self.map_center, false),
+            EditorKind::Sculpt3d => {
+                egui::Frame::new()
+                    .inner_margin(egui::Margin::symmetric(8, 6))
+                    .show(&mut cui, |ui| panels::sculpt_toolbar(ui, &mut self.tools.sculpt));
+                self.sculpt3d.ui(&mut cui, frame, &mut self.doc, &self.tools, self.map_center, true);
+            }
             EditorKind::Tools => scrolled(&mut cui, &mut |ui| panels::tools_panel(ui, &mut self.tools)),
             EditorKind::ToolSettings => {
                 scrolled(&mut cui, &mut |ui| panels::tool_settings(ui, &mut self.tools, &mut self.doc, &mut self.blocks))
@@ -1491,6 +1522,7 @@ impl MassifApp {
                 if change.composition {
                     self.map_cache.invalidate_all();
                     self.view3d.invalidate_all();
+                    self.sculpt3d.invalidate_all();
                 }
             }
             EditorKind::Info => {
@@ -1500,6 +1532,7 @@ impl MassifApp {
                 if affects_map {
                     self.map_cache.invalidate_all();
                     self.view3d.invalidate_all();
+                    self.sculpt3d.invalidate_all();
                 }
             }
             EditorKind::Graph => {
@@ -1591,23 +1624,23 @@ impl MassifApp {
                                 ui.text_edit_singleline(&mut h.name);
                             });
                             ui.add(
-                                egui::Slider::new(&mut h.scale, 0.25..=16.0)
+                                crate::widgets::Field::new(&mut h.scale, 0.25..=16.0)
                                     .logarithmic(true)
                                     .text("blocks a pixel")
                                     .max_decimals(2),
                             );
                             ui.add(
-                                egui::Slider::new(&mut h.low, -64.0..=319.0)
+                                crate::widgets::Field::new(&mut h.low, -64.0..=319.0)
                                     .text("black is Y")
                                     .max_decimals(0),
                             );
                             ui.add(
-                                egui::Slider::new(&mut h.high, -64.0..=319.0)
+                                crate::widgets::Field::new(&mut h.high, -64.0..=319.0)
                                     .text("white is Y")
                                     .max_decimals(0),
                             );
                             ui.add(
-                                egui::Slider::new(&mut h.sea_level, -64..=319).text("sea level"),
+                                crate::widgets::Field::new(&mut h.sea_level, -64..=319).text("sea level"),
                             );
                             let (w, d) = (
                                 form.map.width as f32 * h.scale,
@@ -1799,8 +1832,8 @@ impl MassifApp {
                             action =
                                 Some(Box::new(|app, _| app.start_terrain(Template::MapRivers)));
                         }
-                        if wide(&mut cols[2], Icon::Route, "Draw a river by hand")
-                            .on_hover_text("The River tool: drag along a river's course, let go")
+                        if wide(&mut cols[2], Icon::Route, "Lay out a river")
+                            .on_hover_text("The River tool: click a source, the water finds its way down")
                             .clicked()
                         {
                             action = Some(Box::new(|app, _| {
@@ -2293,6 +2326,7 @@ impl MassifApp {
             self.blocks.applied = Some(self.doc.generation);
             self.map_cache.invalidate_all();
             self.view3d.invalidate_all();
+            self.sculpt3d.invalidate_all();
         }
         self.handle_close(&ctx);
         self.shortcuts(&ctx);
@@ -2327,6 +2361,7 @@ impl MassifApp {
         if !dirty.is_empty() {
             self.map_cache.invalidate(&dirty);
             self.view3d.invalidate(&dirty);
+            self.sculpt3d.invalidate(&dirty);
             ctx.request_repaint();
         }
         let title = format!("{}{} — Massif", self.doc.title(), if self.doc.is_modified() { " •" } else { "" });
@@ -2397,7 +2432,7 @@ fn export_general(ui: &mut Ui, form: &mut ExportForm) {
             ui.add(egui::TextEdit::singleline(&mut form.name).desired_width(f32::INFINITY));
         });
         row(ui, "Minecraft", |ui| {
-            egui::ComboBox::from_id_salt("export version")
+            crate::widgets::combo("export version")
                 .selected_text(format!("Java {}", form.target.name))
                 .width(170.0)
                 .height(320.0)
@@ -2427,7 +2462,7 @@ fn export_general(ui: &mut Ui, form: &mut ExportForm) {
         let (left, right) = cols.split_at_mut(1);
         card(&mut left[0], "Game", "The rules of the world when it is first played.", |ui| {
             row(ui, "Game mode", |ui| {
-                egui::ComboBox::from_id_salt("game mode")
+                crate::widgets::combo("game mode")
                     .selected_text(format!("{:?}", form.game_mode))
                     .show_ui(ui, |ui| {
                         for m in [GameMode::Survival, GameMode::Creative, GameMode::Adventure, GameMode::Spectator] {
@@ -2437,7 +2472,7 @@ fn export_general(ui: &mut Ui, form: &mut ExportForm) {
             });
             row(ui, "Difficulty", |ui| {
                 use massif_anvil::Difficulty;
-                egui::ComboBox::from_id_salt("difficulty")
+                crate::widgets::combo("difficulty")
                     .selected_text(format!("{:?}", form.difficulty))
                     .show_ui(ui, |ui| {
                         for d in [Difficulty::Peaceful, Difficulty::Easy, Difficulty::Normal, Difficulty::Hard] {
@@ -2589,7 +2624,7 @@ fn new_world_form(ui: &mut Ui, form: &mut NewWorldForm) {
             let (ui, ui2) = (&mut left[0], &mut right[0]);
             card(ui, "Land", "The shape the map starts with, before you paint it.", |ui| {
                 row(ui, "Topography", |ui| {
-                    egui::ComboBox::from_id_salt("landform")
+                    crate::widgets::combo("landform")
                         .selected_text(form.params.landform.label())
                         .show_ui(ui, |ui| {
                             for l in Landform::ALL {
@@ -2631,7 +2666,7 @@ fn new_world_form(ui: &mut Ui, form: &mut NewWorldForm) {
                     let current = form.params.surface.unwrap_or_else(|| reg.terrain_by_name("Grass").unwrap_or(massif_core::TerrainId::ROCK));
                     let mut chosen = current;
                     ui.add_enabled_ui(simple, |ui| {
-                        egui::ComboBox::from_id_salt("surface terrain")
+                        crate::widgets::combo("surface terrain")
                             .selected_text(&reg.terrain(current).name)
                             .height(320.0)
                             .show_ui(ui, |ui| {
@@ -3041,23 +3076,23 @@ mod tests {
         let mut h = harness(ThemeChoice::Dark);
         {
             let app = h.state_mut();
-            app.layout.active = 3; // 3D: the preview takes the stage
-            app.tools.select(Tool::Dig);
-            app.tools.brush.radius = 14.0;
-            app.tools.brush.strength = 1.0;
-            app.view3d.camera.distance = 160.0;
+            app.layout.active = 4; // 3D Sculpt
+            app.tools.sculpt.tool = Tool::Dig;
+            app.tools.sculpt.brush.radius = 14.0;
+            app.tools.sculpt.brush.strength = 1.0;
+            app.sculpt3d.camera.distance = 160.0;
         }
         h.run_steps(30);
         let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
         let view = areas
             .into_iter()
-            .find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::View3d))
+            .find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::Sculpt3d))
             .map(|(_, r)| r)
-            .expect("the 3D workspace shows the 3D view");
-        let at = view.center();
+            .expect("the 3D Sculpt workspace shows its editor");
+        let at = view.center() + vec2(0.0, 20.0);
         h.event(egui::Event::PointerMoved(at));
         h.run_steps(3);
-        assert!(h.state().view3d.hover().is_some(), "the cursor points at the terrain");
+        assert!(h.state().sculpt3d.hover().is_some(), "the cursor points at the terrain");
         let press = |pressed, button| egui::Event::PointerButton {
             pos: at,
             button,
@@ -3071,10 +3106,10 @@ mod tests {
         }
         h.event(press(false, egui::PointerButton::Primary));
         h.run_steps(30);
-        assert_eq!(h.state().doc.history.undo_label(), Some("Dig (3D)"));
+        assert_eq!(h.state().doc.history.undo_label(), Some("Dig"));
         assert!(!h.state().doc.dimension().voxels.is_empty());
         h.render().unwrap().save(dir.join("sculpt-dig.png")).unwrap();
-        let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+        let (w, hgt, rgba) = h.state().sculpt3d.read_back().expect("the 3D view rendered");
         image::save_buffer(dir.join("sculpt-dig-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
         // The right button builds.
         h.event(press(true, egui::PointerButton::Secondary));
@@ -3084,9 +3119,9 @@ mod tests {
         }
         h.event(press(false, egui::PointerButton::Secondary));
         h.run_steps(30);
-        assert_eq!(h.state().doc.history.undo_label(), Some("Dig (3D)"));
+        assert_eq!(h.state().doc.history.undo_label(), Some("Dig"));
         assert!(h.state().doc.history.can_undo());
-        let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+        let (w, hgt, rgba) = h.state().sculpt3d.read_back().expect("the 3D view rendered");
         image::save_buffer(dir.join("sculpt-build-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
     }
 
@@ -3173,7 +3208,7 @@ mod tests {
         let mut h = harness(ThemeChoice::Dark);
         {
             let app = h.state_mut();
-            app.layout.activate(6); // Graph, on the terrain side
+            app.layout.activate(7); // Graph, on the terrain side
             let reg = &app.doc.world.registry;
             let get = |name: &str| reg.terrain_by_name(name).unwrap_or(massif_core::TerrainId::ROCK).0;
             let starter = massif_core::graph::Graph::starter(get("Grass"), massif_core::TerrainId::ROCK.0, get("Snow"), get("Gravel"));
@@ -3203,11 +3238,11 @@ mod tests {
         }
         h.state_mut().graph.view(None);
         // The Render workspace: the view, with its sun, sky and clouds.
-        h.state_mut().layout.activate(7);
+        h.state_mut().layout.activate(8);
         h.run_steps(5);
         wait_for_graph(&mut h);
         h.render().unwrap().save(dir.join("graph-render-workspace.png")).unwrap();
-        h.state_mut().layout.activate(6);
+        h.state_mut().layout.activate(7);
         h.run_steps(3);
         {
             use egui_kittest::kittest::Queryable;
@@ -3452,7 +3487,7 @@ mod tests {
         };
         use crate::terrain_view::RenderSettings;
         let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.active = 6;
+        h.state_mut().layout.active = 7;
         let sunset = RenderSettings {
             sun_azimuth: 250.0,
             sun_elevation: 9.0,
@@ -3691,30 +3726,19 @@ mod tests {
             app.tools.river.width_end = 40.0;
         }
         h.run_steps(5);
-        let rect = map_rect(h.state(), &h.ctx);
-        let click = |h: &mut egui_kittest::Harness<'_, MassifApp>, p: egui::Pos2, button: egui::PointerButton| {
-            h.event(egui::Event::PointerMoved(p));
-            h.step();
-            for pressed in [true, false] {
-                h.event(egui::Event::PointerButton {
-                    pos: p,
-                    button,
-                    pressed,
-                    modifiers: Modifiers::NONE,
-                });
-                h.step();
-            }
-            h.run_steps(30);
-        };
-        let c = rect.center();
-        for d in [vec2(-320.0, -260.0), vec2(-150.0, -60.0), vec2(40.0, 30.0), vec2(200.0, 200.0), vec2(330.0, 330.0)] {
-            click(&mut h, c + d, egui::PointerButton::Primary);
-        }
-        // A stray point, taken back with the right button.
-        click(&mut h, c + vec2(-330.0, 300.0), egui::PointerButton::Primary);
-        click(&mut h, c, egui::PointerButton::Secondary);
-        assert_eq!(h.state().tools.river_points.len(), 5);
-        h.event(egui::Event::PointerMoved(c + vec2(360.0, 360.0)));
+        let (source, end) = river_ends(h.state());
+        let at = |h: &egui_kittest::Harness<'_, MassifApp>, p: (f32, f32)| h.state().maps.values().next().unwrap().screen_of(p.0 as f64, p.1 as f64);
+        let p = at(&h, source);
+        click_on(&mut h, p, egui::PointerButton::Primary);
+        h.render().unwrap().save(dir.join("river-source.png")).unwrap();
+        let p = at(&h, end);
+        click_on(&mut h, p, egui::PointerButton::Primary);
+        // Bent through a point dragged off its course.
+        let course = h.state().tools.river_draft.as_ref().unwrap().plan.course.clone();
+        let mid = at(&h, course[course.len() / 2]);
+        drag_on(&mut h, mid, mid + vec2(60.0, -40.0));
+        assert_eq!(h.state().tools.river_draft.as_ref().unwrap().layout.through.len(), 1);
+        h.event(egui::Event::PointerMoved(mid + vec2(60.0, -40.0)));
         h.run_steps(3);
         h.render().unwrap().save(dir.join("river-course.png")).unwrap();
         h.event(egui::Event::Key {
@@ -3726,7 +3750,7 @@ mod tests {
         });
         h.run_steps(10);
         assert_eq!(h.state().doc.history.undo_label(), Some("River"));
-        assert!(h.state().tools.river_points.is_empty());
+        assert!(h.state().tools.river_draft.is_none());
         let note = h.state().tools.river_note.clone().unwrap_or_default();
         assert!(note.starts_with("Dug a river"), "{note}");
         h.render().unwrap().save(dir.join("river-dug.png")).unwrap();
@@ -3756,7 +3780,7 @@ mod tests {
             return;
         };
         let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.activate(6);
+        h.state_mut().layout.activate(7);
         h.run_steps(2);
         {
             let app = h.state_mut();
@@ -3824,7 +3848,7 @@ mod tests {
         image::save_buffer(dir.join("rivers-converted-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
         // Again: the same levels, written again; and into the map when
         // asked, the levels gone.
-        h.state_mut().layout.activate(6);
+        h.state_mut().layout.activate(7);
         h.run_steps(3);
         convert(&mut h);
         assert_eq!(h.state().doc.dimension().levels.len(), 3);
@@ -3849,7 +3873,7 @@ mod tests {
             return;
         };
         let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.activate(6);
+        h.state_mut().layout.activate(7);
         h.run_steps(2);
         let convert = |h: &mut egui_kittest::Harness<'_, MassifApp>| {
             {
@@ -3881,7 +3905,7 @@ mod tests {
             h.run_steps(3);
             let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
             image::save_buffer(dir.join(name), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
-            h.state_mut().layout.activate(6);
+            h.state_mut().layout.activate(7);
             h.run_steps(3);
         };
         // Mountains, into the map's ground.
@@ -3957,7 +3981,7 @@ mod tests {
             return;
         };
         let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.activate(6);
+        h.state_mut().layout.activate(7);
         h.run_steps(2);
         let before = h.state().doc.dimension().ground().len();
         {
@@ -4012,7 +4036,7 @@ mod tests {
             return;
         };
         let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.activate(6);
+        h.state_mut().layout.activate(7);
         h.run_steps(2);
         {
             let app = h.state_mut();
@@ -4078,10 +4102,130 @@ mod tests {
         image::save_buffer(dir.join("continents-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
     }
 
-    /// A river drawn by dragging along its course: let go, and it is dug,
-    /// with water. No GPU needed.
+    /// A click and the pointer let go at `p`.
+    fn click_on(h: &mut egui_kittest::Harness<'_, MassifApp>, p: egui::Pos2, button: egui::PointerButton) {
+        h.event(egui::Event::PointerMoved(p));
+        h.step();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: p,
+                button,
+                pressed,
+                modifiers: Modifiers::NONE,
+            });
+            h.step();
+        }
+        h.run_steps(3);
+    }
+
+    /// The left button held from `from` to `to`.
+    fn drag_on(h: &mut egui_kittest::Harness<'_, MassifApp>, from: egui::Pos2, to: egui::Pos2) {
+        h.event(egui::Event::PointerMoved(from));
+        h.step();
+        h.event(egui::Event::PointerButton {
+            pos: from,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        });
+        h.step();
+        for k in 1..=12 {
+            h.event(egui::Event::PointerMoved(from + (to - from) * (k as f32 / 12.0)));
+            h.step();
+        }
+        h.event(egui::Event::PointerButton {
+            pos: to,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(3);
+    }
+
+    /// Where a river may spring on the map in view (its highest dry land,
+    /// near the middle), and a point far below it to end at.
+    fn river_ends(app: &MassifApp) -> ((f32, f32), (f32, f32)) {
+        let m = app.maps.values().next().unwrap();
+        let (cx, cz) = (m.center[0] as f32, m.center[1] as f32);
+        let reach = 220.0 / m.zoom;
+        let mut best = ((cx, cz), f32::MIN);
+        let mut low = ((cx, cz), f32::MAX);
+        for j in -6..=6 {
+            for i in -6..=6 {
+                let p = (cx + i as f32 * reach / 6.0, cz + j as f32 * reach / 6.0);
+                if let Some(probe) = crate::tools::probe(&app.doc, p.0 as i32, p.1 as i32) {
+                    let sea = app.doc.world.meta.sea_level as f32;
+                    let dry = probe.height > sea && (probe.fluid == massif_core::tile::NO_FLUID || probe.fluid as f32 <= probe.height);
+                    if dry && probe.height > best.1 {
+                        best = (p, probe.height);
+                    }
+                    if probe.height < low.1 {
+                        low = (p, probe.height);
+                    }
+                }
+            }
+        }
+        (best.0, low.0)
+    }
+
+    /// Auto paint, hovered over the map: the columns it would repaint
+    /// shown in their new colour before anything is painted. Needs a GPU:
+    /// runs with MASSIF_SNAPSHOT_DIR.
     #[test]
-    fn a_river_is_drawn_by_dragging() {
+    fn auto_paint_shows_what_it_changes() {
+        use massif_core::generate::{GenParams, Landform, generate};
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        {
+            let app = h.state_mut();
+            let world = generate(&GenParams {
+                tiles_x: 8,
+                tiles_z: 8,
+                landform: Landform::Mountains,
+                ..GenParams::default()
+            });
+            app.doc = crate::doc::Document::new(world, None, 13);
+            app.map_cache.invalidate_all();
+            app.view3d.invalidate_all();
+            app.tools.select(Tool::AutoPaint);
+            app.tools.brush.radius = 60.0;
+        }
+        h.run_steps(5);
+        // Where the rules have the most to change, in view.
+        let (spot, count) = {
+            let app = h.state();
+            let m = app.maps.values().next().unwrap();
+            let reader = massif_core::auto::Reader::new(&app.tools.auto, &app.doc.world.registry, app.doc.world.meta.sea_level);
+            let mut best = ((0.0f32, 0.0f32), 0usize);
+            for j in -4..=4 {
+                for i in -4..=4 {
+                    let p = (m.center[0] as f32 + i as f32 * 60.0, m.center[1] as f32 + j as f32 * 60.0);
+                    let (_, cols) = massif_core::ops::auto_preview(app.doc.dimension(), &app.tools.brush, p.0, p.1, &reader, false);
+                    let n = cols.iter().filter(|c| c.becomes().is_some()).count();
+                    if n > best.1 {
+                        best = (p, n);
+                    }
+                }
+            }
+            best
+        };
+        assert!(count > 100, "something to repaint: {count}");
+        let at = h.state().maps.values().next().unwrap().screen_of(spot.0 as f64, spot.1 as f64);
+        h.event(egui::Event::PointerMoved(at));
+        h.run_steps(5);
+        h.render().unwrap().save(dir.join("auto-paint-preview.png")).unwrap();
+        drag_on(&mut h, at, at + vec2(4.0, 0.0));
+        let note = h.state().status.as_ref().map(|s| s.text.clone()).unwrap_or_default();
+        assert!(note.starts_with("Repainted"), "{note}");
+    }
+
+    /// The River tool: a click and the water finds its way down from the
+    /// source; the course dragged bends it, a click elsewhere gives it an
+    /// end, a right-click takes a point back, Enter digs it. No GPU needed.
+    #[test]
+    fn a_river_is_laid_out_and_dug() {
         use massif_core::generate::{GenParams, Landform, generate};
         let mut h = harness(ThemeChoice::Dark);
         {
@@ -4096,39 +4240,45 @@ mod tests {
             app.map_cache.invalidate_all();
             app.view3d.invalidate_all();
             app.tools.select(Tool::River);
-            app.tools.river.width = 9.0;
-            app.tools.river.width_end = 20.0;
+            app.tools.river.width = 8.0;
         }
         h.run_steps(5);
-        let rect = map_rect(h.state(), &h.ctx);
-        let c = rect.center();
-        let from = c + vec2(-300.0, -220.0);
-        h.event(egui::Event::PointerMoved(from));
-        h.step();
-        h.event(egui::Event::PointerButton {
-            pos: from,
-            button: egui::PointerButton::Primary,
+        let at = |h: &egui_kittest::Harness<'_, MassifApp>, p: (f32, f32)| h.state().maps.values().next().unwrap().screen_of(p.0 as f64, p.1 as f64);
+        let (source, end) = river_ends(h.state());
+        let p = at(&h, source);
+        click_on(&mut h, p, egui::PointerButton::Primary);
+        let draft = h.state().tools.river_draft.clone().expect("a click places the source");
+        assert!(draft.plan.course.len() > 10, "the water finds its way: {}", draft.plan.course.len());
+        assert!(draft.layout.through.is_empty() && draft.layout.end.is_none());
+        // The course held and dragged: a point it must pass.
+        let mid = draft.plan.course[draft.plan.course.len() / 3];
+        let from = at(&h, mid);
+        drag_on(&mut h, from, from + vec2(30.0, 25.0));
+        let draft = h.state().tools.river_draft.clone().unwrap();
+        assert_eq!(draft.layout.through.len(), 1, "{:?}", draft.layout);
+        let bend = draft.layout.through[0];
+        assert!(draft.plan.course.iter().any(|p| (p.0 - bend.0).hypot(p.1 - bend.1) < 2.0), "through the point it was dragged to");
+        // A click elsewhere: where it ends.
+        let p = at(&h, end);
+        click_on(&mut h, p, egui::PointerButton::Primary);
+        let draft = h.state().tools.river_draft.clone().unwrap();
+        assert!(draft.layout.end.is_some());
+        let last = *draft.plan.course.last().unwrap();
+        assert!((last.0 - end.0).hypot(last.1 - end.1) < 2.0, "it ends there: {last:?} {end:?}");
+        // The point taken back with the right button.
+        let p = at(&h, bend);
+        click_on(&mut h, p, egui::PointerButton::Secondary);
+        assert!(h.state().tools.river_draft.as_ref().unwrap().layout.through.is_empty());
+        h.event(egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
             pressed: true,
-            modifiers: Modifiers::NONE,
-        });
-        h.step();
-        let mut last = from;
-        for k in 1..=40 {
-            let t = k as f32 / 40.0;
-            last = from + vec2(600.0 * t, 440.0 * t + 60.0 * (t * 6.0).sin());
-            h.event(egui::Event::PointerMoved(last));
-            h.step();
-        }
-        assert!(h.state().tools.river_points.len() > 8, "the course follows the pointer: {}", h.state().tools.river_points.len());
-        h.event(egui::Event::PointerButton {
-            pos: last,
-            button: egui::PointerButton::Primary,
-            pressed: false,
+            repeat: false,
             modifiers: Modifiers::NONE,
         });
         h.run_steps(5);
-        assert_eq!(h.state().doc.history.undo_label(), Some("River"), "let go, the river is dug");
-        assert!(h.state().tools.river_points.is_empty());
+        assert_eq!(h.state().doc.history.undo_label(), Some("River"), "Enter digs it");
+        assert!(h.state().tools.river_draft.is_none());
         let note = h.state().tools.river_note.clone().unwrap_or_default();
         assert!(note.starts_with("Dug a river"), "{note}");
     }
@@ -4167,30 +4317,18 @@ mod tests {
             m.zoom = 0.75;
         }
         h.run_steps(5);
-        let rect = map_rect(h.state(), &h.ctx);
-        let screen = |x: f64, z: f64| rect.center() + vec2(((x - centre[0]) * 0.75) as f32, ((z - centre[1]) * 0.75) as f32);
-        let from = screen(150.0, -560.0);
-        h.event(egui::Event::PointerMoved(from));
-        h.step();
-        h.event(egui::Event::PointerButton {
-            pos: from,
-            button: egui::PointerButton::Primary,
-            pressed: true,
-            modifiers: Modifiers::NONE,
-        });
-        h.step();
-        let mut last = from;
-        for k in 1..=60 {
-            let t = k as f64 / 60.0;
-            last = screen(150.0 + 500.0 * t + 70.0 * (t * 9.0).sin(), -560.0 + 790.0 * t);
-            h.event(egui::Event::PointerMoved(last));
-            h.step();
-        }
+        let at = |h: &egui_kittest::Harness<'_, MassifApp>, x: f64, z: f64| h.state().maps.values().next().unwrap().screen_of(x, z);
+        let p = at(&h, 150.0, -560.0);
+        click_on(&mut h, p, egui::PointerButton::Primary);
+        let p = at(&h, 650.0, 230.0);
+        click_on(&mut h, p, egui::PointerButton::Primary);
         h.render().unwrap().save(dir.join("real-river-tool-course.png")).unwrap();
-        h.event(egui::Event::PointerButton {
-            pos: last,
-            button: egui::PointerButton::Primary,
-            pressed: false,
+        eprintln!("{}", h.state().tools.river_draft.as_ref().map(|d| d.summary()).unwrap_or_default());
+        h.event(egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
             modifiers: Modifiers::NONE,
         });
         h.run_steps(20);
@@ -4239,7 +4377,7 @@ mod tests {
         {
             let app = h.state_mut();
             app.dialog = None;
-            app.tools.select(Tool::Spring);
+            app.tools.select(Tool::River);
             app.tools.river.width = 6.0;
             app.tools.river.flow = 0.6;
             app.tools.river.depth = 3.0;
@@ -4285,10 +4423,19 @@ mod tests {
             h.step();
         }
         h.run_steps(10);
+        h.render().unwrap().save(dir.join("real-spring-draft.png")).unwrap();
+        h.event(egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(10);
         let note = h.state().tools.river_note.clone().unwrap_or_default();
         eprintln!("{note}");
-        assert_eq!(h.state().doc.history.undo_label(), Some("River from a source"), "{note}");
-        assert!(note.starts_with("A river"), "{note}");
+        assert_eq!(h.state().doc.history.undo_label(), Some("River"), "{note}");
+        assert!(note.starts_with("Dug a river"), "{note}");
         h.render().unwrap().save(dir.join("real-spring-map.png")).unwrap();
         // A second one, in the hills over the western plain.
         let centre = [-560.0, 420.0];
@@ -4313,6 +4460,14 @@ mod tests {
             });
             h.step();
         }
+        h.run_steps(10);
+        h.event(egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
         h.run_steps(10);
         eprintln!("{}", h.state().tools.river_note.clone().unwrap_or_default());
         h.render().unwrap().save(dir.join("real-spring-map-2.png")).unwrap();
@@ -4389,7 +4544,7 @@ mod tests {
         assert!((y(back.sample(255.5, 255.5)) - 200.0).abs() < 3.0, "{}", y(back.sample(255.5, 255.5)));
         assert!((y(back.data[0]) - 40.0).abs() < 3.0);
         // A graph reading the picture, and saved as a height map.
-        h.state_mut().layout.activate(6);
+        h.state_mut().layout.activate(7);
         h.run_steps(2);
         {
             let app = h.state_mut();
@@ -4482,7 +4637,7 @@ mod tests {
     fn graph_canvas_selects_moves_and_undoes() {
         use massif_core::graph::Template;
         let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.activate(6);
+        h.state_mut().layout.activate(7);
         h.run_steps(2);
         {
             let app = h.state_mut();
@@ -4692,7 +4847,7 @@ mod tests {
             image::save_buffer(dir.join("real-map-top.png"), &rgb, n as u32, n as u32, image::ColorType::Rgb8).unwrap();
             let _ = NodeKind::HeightOutput;
         }
-        h.state_mut().layout.activate(6);
+        h.state_mut().layout.activate(7);
         h.run_steps(3);
         {
             let app = h.state_mut();
@@ -4752,7 +4907,7 @@ mod tests {
             return;
         };
         let mut h = harness(ThemeChoice::Dark);
-        h.state_mut().layout.activate(6);
+        h.state_mut().layout.activate(7);
         h.run_steps(2);
         h.state_mut().graph.open_templates();
         let started = std::time::Instant::now();
@@ -4835,7 +4990,7 @@ mod tests {
         image::save_buffer(dir.join("template-floating-mountains-voxels.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
         // Converting again reuses the levels.
         let levels = h.state().doc.dimension().levels.len();
-        h.state_mut().layout.activate(6);
+        h.state_mut().layout.activate(7);
         h.run_steps(3);
         {
             use egui_kittest::kittest::Queryable;
@@ -4966,7 +5121,7 @@ mod tests {
             return;
         }
         let mut h = harness(ThemeChoice::Light);
-        h.state_mut().layout.active = 5; // Minimal: tools | map
+        h.state_mut().layout.active = 6; // Minimal: tools | map
         h.run_steps(5);
         let rect = map_rect(h.state(), &h.ctx);
         let before = h.state().layout.current().root.count();

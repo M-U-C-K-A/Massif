@@ -43,11 +43,15 @@ struct Dab<'a> {
 
 impl<'a> Dab<'a> {
     fn new(edit: &Edit, brush: &'a Brush, cx: f32, cz: f32) -> Self {
+        Self::on(edit.dim(), brush, cx, cz)
+    }
+
+    fn on(dim: &Dimension, brush: &'a Brush, cx: f32, cz: f32) -> Self {
         let mask = brush
             .filter
             .as_ref()
             .filter(|f| f.is_active())
-            .map(|f| f.mask(edit.dim(), BlockRect::around(cx, cz, brush.radius)));
+            .map(|f| f.mask(dim, BlockRect::around(cx, cz, brush.radius)));
         Self { brush, cx, cz, mask }
     }
 
@@ -288,6 +292,17 @@ fn local_averages(level: &Level, clip: BlockRect, k: i32, surface: Surface) -> V
 /// Whether a paint dab hits a cell of weight `w`: the core is solid, the
 /// falloff is dithered so that repeated dabs build up like a spray.
 #[inline]
+/// Whether the automatic tools change column `(x, z)`: always in the core of
+/// the brush, which widens with the intensity (all of it at 100%), here and
+/// there along its edge so that it blends.
+fn auto_hit(w: f32, strength: f32, x: i32, z: i32, salt: u64) -> bool {
+    if w <= 0.0 {
+        return false;
+    }
+    let p = if strength >= 0.99 { 1.0 } else { (w / (1.0 - strength.clamp(0.0, 0.99))).min(1.0) };
+    p >= 1.0 || (hash2(x, z, salt) as f32) < p * u32::MAX as f32
+}
+
 fn paint_hit(w: f32, strength: f32, x: i32, z: i32, salt: u64) -> bool {
     let p = (w * strength * 2.0).min(1.0);
     p >= 1.0 || (hash2(x, z, salt) as f32) < p * p * u32::MAX as f32
@@ -390,54 +405,121 @@ pub fn paint_pattern(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, salt: u64
 
 /// Give the columns under the brush the biome their land calls for (see
 /// [`crate::auto`]). `salt` should change from dab to dab.
-pub fn auto_biome(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, salt: u64, reader: &crate::auto::Reader) {
+/// Returns how many columns changed.
+pub fn auto_biome(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, salt: u64, reader: &crate::auto::Reader) -> usize {
     let dab = Dab::new(edit, brush, cx, cz);
     let footprint = BlockRect::around(cx, cz, brush.radius);
     let survey = reader.survey(edit.dim(), footprint);
+    let changed = std::sync::atomic::AtomicUsize::new(0);
     edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
         let slab = tile.bottom.is_some();
+        let mut n = 0;
         for z in clip.z0..clip.z1 {
             for x in clip.x0..clip.x1 {
                 let w = dab.weight(x, z);
-                if w <= 0.0 || !paint_hit(w, brush.strength, x, z, salt) {
+                if !auto_hit(w, brush.strength, x, z, salt) {
                     continue;
                 }
                 let i = local_index(x, z);
                 if slab && !tile.present(i) {
                     continue;
                 }
-                if let Some(biome) = reader.biome(&survey, x, z) {
+                if let Some(biome) = reader.biome(&survey, x, z)
+                    && tile.biome.get(i) != biome.0
+                {
                     tile.biome.set(i, biome.0);
+                    n += 1;
                 }
             }
         }
+        changed.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
     });
+    changed.into_inner()
 }
 
 /// Paint the columns under the brush with the terrain their biome calls
 /// for (see [`crate::auto`]). `salt` should change from dab to dab.
-pub fn auto_paint(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, salt: u64, reader: &crate::auto::Reader) {
+/// Returns how many columns changed.
+pub fn auto_paint(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, salt: u64, reader: &crate::auto::Reader) -> usize {
     let dab = Dab::new(edit, brush, cx, cz);
     let footprint = BlockRect::around(cx, cz, brush.radius);
     let survey = reader.survey(edit.dim(), footprint);
+    let changed = std::sync::atomic::AtomicUsize::new(0);
     edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
         let slab = tile.bottom.is_some();
+        let mut n = 0;
         for z in clip.z0..clip.z1 {
             for x in clip.x0..clip.x1 {
                 let w = dab.weight(x, z);
-                if w <= 0.0 || !paint_hit(w, brush.strength, x, z, salt) {
+                if !auto_hit(w, brush.strength, x, z, salt) {
                     continue;
                 }
                 let i = local_index(x, z);
                 if slab && !tile.present(i) {
                     continue;
                 }
-                if let Some(terrain) = reader.terrain(&survey, x, z) {
+                if let Some(terrain) = reader.terrain(&survey, x, z)
+                    && tile.terrain.get(i) != terrain.0
+                {
                     tile.terrain.set(i, terrain.0);
+                    n += 1;
                 }
             }
         }
+        changed.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
     });
+    changed.into_inner()
+}
+
+/// What an automatic tool would do to a column under the brush.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Preview {
+    /// Off the brush.
+    Outside,
+    /// Under it, left as it is.
+    Same,
+    /// Given this terrain (or biome).
+    Becomes(u16),
+}
+
+impl Preview {
+    pub fn becomes(self) -> Option<u16> {
+        match self {
+            Preview::Becomes(v) => Some(v),
+            _ => None,
+        }
+    }
+}
+
+/// What the automatic tools would change under the brush at `(cx, cz)`:
+/// the footprint, and for each of its columns (row by row) the terrain
+/// (`biomes` false) or biome it would get.
+pub fn auto_preview(dim: &Dimension, brush: &Brush, cx: f32, cz: f32, reader: &crate::auto::Reader, biomes: bool) -> (BlockRect, Vec<Preview>) {
+    let dab = Dab::on(dim, brush, cx, cz);
+    let footprint = BlockRect::around(cx, cz, brush.radius);
+    let survey = reader.survey(dim, footprint);
+    let mut out = vec![Preview::Outside; (footprint.width() * footprint.depth()) as usize];
+    for (pos, clip) in clip_tiles(footprint) {
+        let Some(stack) = crate::compose::TileStack::new(dim, pos, false) else { continue };
+        let ground = stack.ground();
+        for z in clip.z0..clip.z1 {
+            for x in clip.x0..clip.x1 {
+                if dab.weight(x, z) <= 0.0 {
+                    continue;
+                }
+                let k = ((z - footprint.z0) * footprint.width() + (x - footprint.x0)) as usize;
+                out[k] = Preview::Same;
+                let new = if biomes { reader.biome(&survey, x, z).map(|b| b.0) } else { reader.terrain(&survey, x, z).map(|t| t.0) };
+                let Some(new) = new else { continue };
+                let cell = local_index(x, z);
+                let old = if biomes { ground.biome.get(cell) } else { ground.terrain.get(cell) };
+                if old != new {
+                    out[k] = Preview::Becomes(new);
+                }
+            }
+        }
+    }
+    (footprint, out)
 }
 
 /// Set the fluid surface (or [`NO_FLUID`]) under the whole footprint.

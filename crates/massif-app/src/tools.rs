@@ -27,10 +27,10 @@ pub enum Tool {
     Flood,
     Drain,
     Water,
-    /// A river along a course of points.
+    /// A river laid out from its source: the water finds its way down,
+    /// guided by the points it is dragged through.
+    #[serde(alias = "Spring")]
     River,
-    /// A river from a spring, one click: the water finds its way down.
-    Spring,
     StampSlab,
     EraseSlab,
     /// True 3D: add matter, dig, round off.
@@ -41,7 +41,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const GROUPS: [(&'static str, Icon, &'static [Tool]); 6] = [
+    pub const GROUPS: [(&'static str, Icon, &'static [Tool]); 5] = [
         (
             "Sculpt terrain",
             Icon::Mountain,
@@ -52,9 +52,8 @@ impl Tool {
             Icon::Paintbrush,
             &[Tool::PaintTerrain, Tool::PaintBiome, Tool::AutoPaint, Tool::AutoBiome, Tool::Eyedropper],
         ),
-        ("Water", Icon::Droplet, &[Tool::Flood, Tool::Drain, Tool::Water, Tool::Spring, Tool::River]),
+        ("Water", Icon::Droplet, &[Tool::River, Tool::Flood, Tool::Drain, Tool::Water]),
         ("Levels", Icon::Layers, &[Tool::StampSlab, Tool::EraseSlab]),
-        ("Sculpt 3D", Icon::Box, &[Tool::Build, Tool::Dig, Tool::Smooth3d]),
         ("Navigate", Icon::Compass, &[Tool::Pan]),
     ];
 
@@ -74,12 +73,11 @@ impl Tool {
             Tool::Drain => "Drain",
             Tool::Water => "Water brush",
             Tool::River => "River",
-            Tool::Spring => "River source",
             Tool::StampSlab => "Stamp slab",
             Tool::EraseSlab => "Erase slab",
-            Tool::Build => "Build (3D)",
-            Tool::Dig => "Dig (3D)",
-            Tool::Smooth3d => "Smooth (3D)",
+            Tool::Build => "Build",
+            Tool::Dig => "Dig",
+            Tool::Smooth3d => "Smooth",
             Tool::Pan => "Pan",
         }
     }
@@ -100,7 +98,6 @@ impl Tool {
             Tool::Drain => Icon::DropletOff,
             Tool::Water => Icon::Droplets,
             Tool::River => Icon::Route,
-            Tool::Spring => Icon::MapPin,
             Tool::StampSlab => Icon::Cuboid,
             Tool::EraseSlab => Icon::Eraser,
             Tool::Build => Icon::Hammer,
@@ -154,20 +151,17 @@ impl Tool {
             }
             Tool::PaintBiome => "Paint a biome. Right button: back to automatic.",
             Tool::AutoBiome => {
-                "Biomes from the land. Right button: reset."
+                "Sets the biome the land calls for: beach, forest, peaks…"
             }
             Tool::AutoPaint => {
-                "Terrain from the biomes. Right button: reset."
+                "Paints what the land calls for: rock on cliffs, sand on shores…"
             }
             Tool::Eyedropper => "Pick the terrain, biome, height and water under the cursor.",
             Tool::Flood => "Fill a basin with water. Right button: drain.",
             Tool::Drain => "Drain a body of water. Right button: fill.",
             Tool::Water => "Set the water level. Right button: remove water.",
             Tool::River => {
-                "Drag along a river's course to dig it."
-            }
-            Tool::Spring => {
-                "Click a source: the water finds its way down."
+                "Click a source: the water finds its way down. Drag it to guide it."
             }
             Tool::StampSlab => {
                 "Add rock to the active level. Right button: erase."
@@ -187,12 +181,12 @@ impl Tool {
     }
 
     pub const fn uses_brush(self) -> bool {
-        !matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Drain | Tool::Pan | Tool::River | Tool::Spring)
+        !matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Drain | Tool::Pan | Tool::River)
     }
 
     /// Tools that apply once per click rather than continuously.
     pub const fn is_click(self) -> bool {
-        matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Drain | Tool::Spring)
+        matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Drain)
     }
 
     pub const fn needs_slab_level(self) -> bool {
@@ -262,15 +256,43 @@ pub struct ToolState {
     /// it was of biomes, and how many columns.
     #[serde(skip)]
     pub auto_done: Option<(bool, usize)>,
-    /// How rivers are dug, and the course being drawn.
+    /// How rivers are dug, and the river being laid out.
     pub river: RiverSettings,
     #[serde(skip)]
-    pub river_points: Vec<(f32, f32)>,
+    pub river_draft: Option<RiverDraft>,
     /// What the last river dug.
     #[serde(skip)]
     pub river_note: Option<String>,
     /// Paint a pattern of terrains rather than one.
     pub pattern: PatternSettings,
+    /// The tool and brush of the 3D Sculpt editor.
+    pub sculpt: SculptSettings,
+}
+
+/// The tool and brush of the 3D Sculpt editor, apart from the map's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SculptSettings {
+    /// Build, Dig or Smooth (3D).
+    pub tool: Tool,
+    pub brush: Brush,
+}
+
+impl Default for SculptSettings {
+    fn default() -> Self {
+        Self {
+            tool: Tool::Build,
+            brush: Brush {
+                radius: 6.0,
+                ..Brush::default()
+            },
+        }
+    }
+}
+
+impl SculptSettings {
+    /// The tools of the 3D Sculpt editor.
+    pub const TOOLS: [Tool; 3] = [Tool::Build, Tool::Dig, Tool::Smooth3d];
 }
 
 /// A pattern of terrains for the Paint tool.
@@ -370,30 +392,184 @@ impl RiverSettings {
 pub const SPRING_REACH: usize = 60_000;
 pub const SPRING_LAKE: usize = 2_000_000;
 
-/// Let a river spring at block `(x, z)` and dig it down to where its water
-/// goes.
-pub fn dig_spring(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32) -> Feedback {
-    let sea = doc.world.meta.sea_level as f32;
-    let descent = massif_core::river::descend(doc.dimension().ground(), (x, z), sea, SPRING_REACH, SPRING_LAKE, tools.river.lake_depth());
-    if descent.course.len() < 3 {
-        let note = match descent.mouth {
-            Some(massif_core::river::Mouth::Edge) => "That is off the map: click on land",
-            _ => "Already water: click on dry land",
+/// Where a river laid out with the River tool runs: from its source
+/// through the points it is dragged through, to the end it was given — or
+/// on down to where its water goes.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RiverLayout {
+    pub source: (f32, f32),
+    pub through: Vec<(f32, f32)>,
+    pub end: Option<(f32, f32)>,
+}
+
+impl RiverLayout {
+    /// The source, the points it passes, and the end if it has one.
+    pub fn anchors(&self) -> Vec<(f32, f32)> {
+        let mut a = Vec::with_capacity(self.through.len() + 2);
+        a.push(self.source);
+        a.extend(&self.through);
+        a.extend(self.end);
+        a
+    }
+
+    /// Move anchor `k` (in the order of [`Self::anchors`]).
+    pub fn set(&mut self, k: usize, p: (f32, f32)) {
+        match k {
+            0 => self.source = p,
+            k if k <= self.through.len() => self.through[k - 1] = p,
+            _ => self.end = Some(p),
+        }
+    }
+}
+
+/// A leg of a course already worked out: its ends (to a quarter of a
+/// block) and how finely.
+type LegKey = ((i32, i32), (i32, i32), usize);
+/// Where a course runs on by itself from, how deep a hollow must be to
+/// hold a lake, how far it may go.
+type TailKey = ((i32, i32), u32, usize);
+
+/// A river being laid out: where it runs, and what that gives.
+#[derive(Debug, Clone, Default)]
+pub struct RiverDraft {
+    pub layout: RiverLayout,
+    /// Its course, the lakes on its way and where it ends.
+    pub plan: massif_core::river::Descent,
+    /// Where each anchor lies on the course (indices into it).
+    pub stops: Vec<usize>,
+    planned: Option<u64>,
+    revision: u64,
+    legs: std::collections::HashMap<LegKey, Vec<(f32, f32)>>,
+    tail: Option<(TailKey, massif_core::river::Descent)>,
+}
+
+impl PartialEq for RiverDraft {
+    fn eq(&self, other: &Self) -> bool {
+        self.layout == other.layout
+    }
+}
+
+/// Samples of the ground a leg of a river is routed over: finely for the
+/// real thing, coarsely while its anchors are dragged.
+const FINE_LEG: usize = 400_000;
+const COARSE_LEG: usize = 40_000;
+
+impl RiverDraft {
+    pub fn new(source: (f32, f32)) -> Self {
+        Self {
+            layout: RiverLayout {
+                source,
+                ..RiverLayout::default()
+            },
+            ..Self::default()
+        }
+    }
+
+    /// Work out its course, again only where its anchors moved. `moving`:
+    /// the anchor being dragged, whose legs are worked out coarsely.
+    pub fn plan(&mut self, doc: &Document, settings: &RiverSettings, moving: Option<usize>) {
+        use std::hash::{Hash, Hasher};
+        let lake_depth = settings.lake_depth();
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        format!("{:?}", self.layout).hash(&mut h);
+        (doc.revision, lake_depth.to_bits(), moving).hash(&mut h);
+        let key = h.finish();
+        if self.planned == Some(key) {
+            return;
+        }
+        if self.revision != doc.revision {
+            self.legs.clear();
+            self.tail = None;
+            self.revision = doc.revision;
+        }
+        let level = doc.dimension().ground();
+        let sea = doc.world.meta.sea_level as f32;
+        let quarter = |p: (f32, f32)| ((p.0 * 4.0).round() as i32, (p.1 * 4.0).round() as i32);
+        let anchors = self.layout.anchors();
+        let mut course = vec![anchors[0]];
+        let mut stops = vec![0];
+        for (k, w) in anchors.windows(2).enumerate() {
+            let cells = if moving.is_some_and(|m| m == k || m == k + 1) { COARSE_LEG } else { FINE_LEG };
+            let leg = self
+                .legs
+                .entry((quarter(w[0]), quarter(w[1]), cells))
+                .or_insert_with(|| massif_core::river::route(level, w[0], w[1], cells));
+            course.extend(leg.iter().skip(1));
+            stops.push(course.len() - 1);
+        }
+        let (lakes, mouth) = match self.layout.end {
+            Some(end) => {
+                let probe = probe(doc, end.0.floor() as i32, end.1.floor() as i32);
+                let mouth = match probe {
+                    None => massif_core::river::Mouth::Edge,
+                    Some(p) if p.height < sea => massif_core::river::Mouth::Sea,
+                    Some(p) if p.fluid != NO_FLUID && p.fluid as f32 > p.height => massif_core::river::Mouth::Water,
+                    _ => massif_core::river::Mouth::Chosen,
+                };
+                (Vec::new(), Some(mouth))
+            }
+            None => {
+                let last = *anchors.last().expect("a source");
+                let reach = if moving == Some(anchors.len() - 1) { 6_000 } else { SPRING_REACH };
+                let tk = ((last.0.floor() as i32, last.1.floor() as i32), lake_depth.to_bits(), reach);
+                if self.tail.as_ref().is_none_or(|t| t.0 != tk) {
+                    let lake_cap = if reach < SPRING_REACH { 150_000 } else { SPRING_LAKE };
+                    let d = massif_core::river::descend(level, tk.0, sea, reach, lake_cap, lake_depth);
+                    self.tail = Some((tk, d));
+                }
+                let tail = &self.tail.as_ref().expect("worked out").1;
+                course.extend(tail.course.iter().skip(1));
+                (tail.lakes.clone(), tail.mouth)
+            }
         };
-        tools.river_note = Some(note.to_owned());
-        return Some(note.into());
+        self.plan = massif_core::river::Descent { course, lakes, mouth };
+        self.stops = stops;
+        self.planned = Some(key);
+    }
+
+    /// Its length in blocks, and where it ends, in words.
+    pub fn summary(&self) -> String {
+        let length: f32 = self.plan.course.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum();
+        let lakes = match self.plan.lakes.len() {
+            0 => String::new(),
+            1 => " · 1 lake".to_owned(),
+            n => format!(" · {n} lakes"),
+        };
+        let into = self.plan.mouth.map_or("", |m| m.label());
+        format!("{length:.0} blocks to {into}{lakes}")
+    }
+}
+
+/// Begin a river at block `(x, z)`: its source. Refused in water.
+pub fn start_river(doc: &Document, tools: &mut ToolState, x: f32, z: f32) -> Feedback {
+    let sea = doc.world.meta.sea_level as f32;
+    match probe(doc, x.floor() as i32, z.floor() as i32) {
+        None => return Some("That is off the map: click on land".into()),
+        Some(p) if p.height < sea || (p.fluid != NO_FLUID && p.fluid as f32 > p.height) => {
+            return Some("Already water: click on dry land, where it springs".into());
+        }
+        _ => {}
+    }
+    let mut draft = RiverDraft::new((x, z));
+    draft.plan(doc, &tools.river, None);
+    tools.river_draft = Some(draft);
+    None
+}
+
+/// Dig the river being laid out (one undoable step).
+pub fn dig_draft(doc: &mut Document, tools: &mut ToolState) -> Feedback {
+    let mut draft = tools.river_draft.take()?;
+    draft.plan(doc, &tools.river, None);
+    if draft.plan.course.len() < 3 {
+        let note = "Too short to dig: drag its end further".to_owned();
+        tools.river_note = Some(note.clone());
+        return Some(note);
     }
     let spec = tools.river.spring_spec(&doc.world.registry);
-    doc.history.begin("River from a source", doc.dim);
-    let report = massif_core::river::dig_descent(&mut doc.history.edit(&mut doc.world, 0), &descent, &spec);
+    doc.history.begin("River", doc.dim);
+    let report = massif_core::river::dig_descent(&mut doc.history.edit(&mut doc.world, 0), &draft.plan, &spec);
     doc.commit();
-    let lakes = match descent.lakes.len() {
-        0 => String::new(),
-        1 => ", through a lake".to_owned(),
-        n => format!(", through {n} lakes"),
-    };
-    let into = descent.mouth.map_or("", |m| m.label());
-    let note = format!("{:.0} blocks long, from Y {:.0} to {into}{lakes}", report.length, report.source);
+    let note = format!("Dug a river {} · from Y {:.0}", draft.summary(), report.source);
     tools.river_note = Some(note.clone());
     Some(note)
 }
@@ -421,7 +597,8 @@ impl Default for ToolState {
             open_rules: false,
             auto_done: None,
             river: RiverSettings::default(),
-            river_points: Vec::new(),
+            river_draft: None,
+            sculpt: SculptSettings::default(),
             river_note: None,
             pattern: PatternSettings::default(),
         }
@@ -468,6 +645,8 @@ pub struct Stroke {
     secondary: bool,
     /// Height to flatten toward: where the stroke started.
     flatten_to: Option<f32>,
+    /// Columns the automatic tools changed.
+    changed: usize,
 }
 
 impl Stroke {
@@ -506,6 +685,7 @@ pub fn begin_stroke(doc: &mut Document, tools: &ToolState, at: (f32, f32), inver
         inverse,
         secondary,
         flatten_to,
+        changed: 0,
     };
     (Some(stroke), None)
 }
@@ -576,14 +756,14 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                 ops::paint_biome(&mut edit, brush, x, z, BiomeId(biome), stroke.salt)
             }
             Tool::AutoBiome => match &reader {
-                Some(reader) if !invert => ops::auto_biome(&mut edit, brush, x, z, stroke.salt, reader),
+                Some(reader) if !invert => stroke.changed += ops::auto_biome(&mut edit, brush, x, z, stroke.salt, reader),
                 _ => ops::paint_biome(&mut edit, brush, x, z, BiomeId(0), stroke.salt),
             },
             Tool::AutoPaint => match (&theme, &reader) {
                 (Some((theme, sea)), _) => ops::paint_terrain_with(&mut edit, brush, x, z, stroke.salt, |h| {
                     theme.terrain(h - 1.0, 0.0, *sea, 0.0)
                 }),
-                (None, Some(reader)) => ops::auto_paint(&mut edit, brush, x, z, stroke.salt, reader),
+                (None, Some(reader)) => stroke.changed += ops::auto_paint(&mut edit, brush, x, z, stroke.salt, reader),
                 (None, None) => {}
             },
             Tool::Water => {
@@ -607,14 +787,23 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                     massif_core::voxel::sculpt(&mut edit, brush, [x, y, z], strength, mode);
                 }
             }
-            Tool::Eyedropper | Tool::Flood | Tool::Drain | Tool::Pan | Tool::River | Tool::Spring => {}
+            Tool::Eyedropper | Tool::Flood | Tool::Drain | Tool::Pan | Tool::River => {}
         }
     }
     stroke.last = to;
 }
 
-pub fn end_stroke(doc: &mut Document, _stroke: Stroke) {
+/// End a stroke: one step to undo. The automatic tools say what they did.
+pub fn end_stroke(doc: &mut Document, stroke: Stroke) -> Feedback {
     doc.commit();
+    match stroke.tool {
+        Tool::AutoPaint | Tool::AutoBiome if !stroke.inverse => Some(match (stroke.changed, stroke.tool) {
+            (0, _) => "Nothing to change here: the land already follows the rules".to_owned(),
+            (n, Tool::AutoPaint) => format!("Repainted {n} columns"),
+            (n, _) => format!("Changed the biome of {n} columns"),
+        }),
+        _ => None,
+    }
 }
 
 /// How far one sculpting dab goes, for a dab lasting `dt` seconds.
@@ -638,16 +827,18 @@ pub struct SculptStroke {
 
 /// Begin sculpting in the 3D view. `None` when the tool does not sculpt.
 pub fn begin_sculpt(doc: &mut Document, tools: &ToolState, inverse: bool) -> Option<SculptStroke> {
-    let mode = tools.tool.sculpt_mode(inverse)?;
-    doc.history.begin(tools.tool.label(), doc.dim);
+    let tool = tools.sculpt.tool;
+    let mode = tool.sculpt_mode(inverse)?;
+    doc.history.begin(tool.label(), doc.dim);
     Some(SculptStroke { mode })
 }
 
 /// One dab of a 3D stroke at `center`, lasting `dt` seconds.
 pub fn sculpt_dab(doc: &mut Document, tools: &ToolState, stroke: &SculptStroke, center: [f32; 3], dt: f32) -> usize {
-    let strength = sculpt_strength(&tools.brush, dt.clamp(0.0, 0.1));
+    let brush = &tools.sculpt.brush;
+    let strength = sculpt_strength(brush, dt.clamp(0.0, 0.1));
     let mut edit = doc.history.edit(&mut doc.world, 0);
-    massif_core::voxel::sculpt(&mut edit, &tools.brush, center, strength, stroke.mode)
+    massif_core::voxel::sculpt(&mut edit, brush, center, strength, stroke.mode)
 }
 
 pub fn end_sculpt(doc: &mut Document, _stroke: SculptStroke) {
@@ -680,39 +871,6 @@ pub fn probe(doc: &Document, x: i32, z: i32) -> Option<Probe> {
     })
 }
 
-/// Dig the river whose course is being drawn (one undoable step).
-pub fn dig_river(doc: &mut Document, tools: &mut ToolState) -> Feedback {
-    let points = std::mem::take(&mut tools.river_points);
-    if points.len() < 2 {
-        return Some("A river needs two points or more: click its course on the map".into());
-    }
-    let reg = &doc.world.registry;
-    let r = &tools.river;
-    let spec = massif_core::river::RiverSpec {
-        width: r.width,
-        width_end: r.width_end,
-        depth: r.depth,
-        depth_end: r.depth,
-        banks: r.banks,
-        water: r.water,
-        bed: if r.bed.is_empty() { None } else { reg.terrain_by_name(&r.bed) },
-        biome: r.biome.then(|| reg.biome_by_id("minecraft:river")).flatten(),
-    };
-    doc.history.begin("River", doc.dim);
-    let report = massif_core::river::carve_river(&mut doc.history.edit(&mut doc.world, 0), &points, &spec);
-    doc.commit();
-    let note = if report.columns + report.wet == 0 {
-        "The river is off the map: nothing dug".to_owned()
-    } else {
-        format!(
-            "Dug a river {:.0} blocks long, from Y {:.0} to {:.0}",
-            report.length, report.source, report.mouth
-        )
-    };
-    tools.river_note = Some(note.clone());
-    Some(note)
-}
-
 /// A single-click tool at block `(x, z)`. `inverse` is the right button.
 pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse: bool) -> Feedback {
     match tools.tool {
@@ -731,7 +889,6 @@ pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse:
             tools.tool = tools.previous;
             Some(format!("Picked {terrain_name} at height {}", block_top(p.height)))
         }
-        Tool::Spring if !inverse => dig_spring(doc, tools, x, z),
         Tool::Flood | Tool::Drain => {
             let flood = (tools.tool == Tool::Flood) != inverse;
             let mode = if flood { Flood::Fill(tools.water_level) } else { Flood::Drain };
@@ -765,6 +922,55 @@ mod tests {
 
     fn height(doc: &Document, x: i32, z: i32) -> f32 {
         probe(doc, x, z).unwrap().height
+    }
+
+    #[test]
+    fn auto_paint_does_what_its_preview_shows() {
+        let world = generate(&GenParams {
+            tiles_x: 4,
+            tiles_z: 4,
+            landform: Landform::Mountains,
+            ..GenParams::default()
+        });
+        let mut d = Document::new(world, None, 1);
+        let mut tools = ToolState {
+            tool: Tool::AutoPaint,
+            ..ToolState::default()
+        };
+        tools.brush.radius = 30.0;
+        tools.brush.strength = 1.0;
+        let reader = massif_core::auto::Reader::new(&tools.auto, &d.world.registry, d.world.meta.sea_level);
+        // Where the rules have the most to change.
+        let mut best = (0, (0.0, 0.0), Vec::new(), massif_core::coords::BlockRect::new(0, 0, 0, 0));
+        for z in (-240..240).step_by(40) {
+            for x in (-240..240).step_by(40) {
+                let at = (x as f32, z as f32);
+                let (rect, cols) = ops::auto_preview(d.dimension(), &tools.brush, at.0, at.1, &reader, false);
+                let n = cols.iter().filter(|c| c.becomes().is_some()).count();
+                if n > best.0 {
+                    best = (n, at, cols, rect);
+                }
+            }
+        }
+        let (n, at, cols, rect) = best;
+        assert!(n > 50, "somewhere to repaint: {n}");
+        let (stroke, _) = begin_stroke(&mut d, &tools, at, false, false);
+        let mut stroke = stroke.unwrap();
+        continue_stroke(&mut d, &tools, &mut stroke, at, 0.05);
+        let note = end_stroke(&mut d, stroke).unwrap();
+        assert!(note.contains("Repainted"), "{note}");
+        // At full intensity, every column the preview showed is painted.
+        for (k, c) in cols.iter().enumerate() {
+            if let Some(t) = c.becomes() {
+                let (x, z) = (rect.x0 + k as i32 % rect.width(), rect.z0 + k as i32 / rect.width());
+                assert_eq!(probe(&d, x, z).unwrap().terrain, t, "at {x}, {z}");
+            }
+        }
+        // Painted again, nothing is left to change, and it says so.
+        let (stroke, _) = begin_stroke(&mut d, &tools, at, false, false);
+        let mut stroke = stroke.unwrap();
+        continue_stroke(&mut d, &tools, &mut stroke, at, 0.05);
+        assert!(end_stroke(&mut d, stroke).unwrap().starts_with("Nothing to change"));
     }
 
     #[test]
@@ -895,12 +1101,15 @@ mod tests {
         end_stroke(&mut d, stroke);
         assert!(height(&d, 20, 20) < 64.0, "a pit was dug");
         assert!(!d.dimension().voxels.is_empty());
-        assert_eq!(d.history.undo_label(), Some("Dig (3D)"));
+        assert_eq!(d.history.undo_label(), Some("Dig"));
         d.undo();
         assert_eq!(height(&d, 20, 20), 64.0);
         assert!(d.dimension().voxels.is_empty());
 
-        // In the 3D view, the right button builds with the Dig tool.
+        // In the 3D Sculpt editor, the right button builds with the Dig tool.
+        tools.sculpt.tool = Tool::Dig;
+        tools.sculpt.brush.radius = 6.0;
+        tools.sculpt.brush.strength = 1.0;
         let s = begin_sculpt(&mut d, &tools, true).unwrap();
         let n = sculpt_dab(&mut d, &tools, &s, [5.5, 70.5, 5.5], 0.1);
         end_sculpt(&mut d, s);

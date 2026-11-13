@@ -92,6 +92,50 @@ pub fn tools_panel(ui: &mut Ui, tools: &mut ToolState) {
 
 // --------------------------------------------------------- tool settings --
 
+/// The tools of the 3D Sculpt editor, along its top: which one, how big,
+/// how hard.
+pub fn sculpt_toolbar(ui: &mut Ui, s: &mut crate::tools::SculptSettings) {
+    let pal = Palette::of(ui);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing = vec2(4.0, 0.0);
+        ui.spacing_mut().interact_size.y = 22.0;
+        for tool in crate::tools::SculptSettings::TOOLS {
+            if ui
+                .selectable_label(s.tool == tool, theme::with_icon(tool.icon(), tool.label()))
+                .on_hover_text(tool.help())
+                .clicked()
+            {
+                s.tool = tool;
+            }
+        }
+        ui.add_space(10.0);
+        ui.separator();
+        ui.add_space(6.0);
+        ui.label("Radius");
+        ui.add(crate::widgets::Field::new(&mut s.brush.radius, 1.0..=64.0).suffix(" blocks").max_decimals(0));
+        ui.add_space(10.0);
+        ui.label("Strength");
+        ui.add(
+            crate::widgets::Field::new(&mut s.brush.strength, 0.05..=1.0)
+                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                .custom_parser(|t| t.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(RichText::new("Left: apply · right: inverse · middle: orbit · shift+middle: pan").size(11.5).color(pal.weak));
+        });
+    });
+}
+
+/// A row like [`slider_row`] that says what the setting is for.
+fn tip_row(ui: &mut Ui, label: &str, tip: &str, add: impl FnOnce(&mut Ui) -> egui::Response) -> bool {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().interact_size.y = 18.0;
+        let label = ui.add_sized([72.0, 18.0], egui::Label::new(label).truncate()).on_hover_text(tip);
+        add(ui).on_hover_text(tip).labelled_by(label.id).changed()
+    })
+    .inner
+}
+
 fn slider_row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> egui::Response) -> bool {
     ui.horizontal(|ui| {
         // Slim sliders: the handle's size follows the row height.
@@ -116,7 +160,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
     match tool {
         Tool::Raise => {
             slider_row(ui, "Speed", |ui| {
-                ui.add(egui::Slider::new(&mut tools.raise_speed, 1.0..=120.0).logarithmic(true).suffix(" b/s"))
+                ui.add(crate::widgets::Field::new(&mut tools.raise_speed, 1.0..=120.0).logarithmic(true).suffix(" b/s"))
             });
         }
         Tool::Flatten | Tool::SetHeight => {
@@ -126,7 +170,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             hint(ui, "Alt-click on the map to pick a height.");
         }
         Tool::Roughen => {
-            slider_row(ui, "Amplitude", |ui| ui.add(egui::Slider::new(&mut tools.roughness, 0.5..=40.0).suffix(" blocks")));
+            slider_row(ui, "Amplitude", |ui| ui.add(crate::widgets::Field::new(&mut tools.roughness, 0.5..=40.0).suffix(" blocks")));
         }
         Tool::PaintTerrain => {
             ui.checkbox(&mut tools.pattern.on, "a pattern of terrains")
@@ -157,7 +201,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
         }
         Tool::AutoBiome | Tool::AutoPaint => {
             let biomes = tool == Tool::AutoBiome;
-            hint(ui, "Brush it, or do the whole map.");
+            hint(ui, "Hover: see what changes, in colour · drag: paint it.");
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 if ui
@@ -184,68 +228,27 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
                 hint(ui, &format!("{changed} columns changed over the whole map."));
             }
         }
-        Tool::Spring => {
-            let r = &mut tools.river;
-            slider_row(ui, "Width", |ui| ui.add(egui::Slider::new(&mut r.width, 2.0..=200.0).suffix(" blocks").max_decimals(0)));
-            slider_row(ui, "Flow", |ui| {
-                ui.add(
-                    egui::Slider::new(&mut r.flow, 0.0..=1.0)
-                        .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
-                        .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
-                )
-            });
-            slider_row(ui, "Depth", |ui| ui.add(egui::Slider::new(&mut r.depth, 1.0..=30.0).suffix(" blocks").max_decimals(0)));
-            slider_row(ui, "Erosion", |ui| {
-                ui.add(
-                    egui::Slider::new(&mut r.erosion, 0.0..=1.0)
-                        .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
-                        .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
-                )
-            });
-            slider_row(ui, "Banks", |ui| ui.add(egui::Slider::new(&mut r.banks, 0.0..=120.0).suffix(" blocks").max_decimals(0)));
-            slider_row(ui, "Lakes", |ui| {
-                ui.add(
-                    egui::Slider::new(&mut r.lakes, 0.0..=1.0)
-                        .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
-                        .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
-                )
-            });
-            ui.checkbox(&mut r.water, "fill it with water");
-            ui.checkbox(&mut r.biome, "a river biome where the water is");
-            hint(
-                ui,
-                &if r.lakes <= 0.001 {
-                    "No lakes: it cuts through hollows.".to_owned()
-                } else {
-                    format!("Lakes in hollows deeper than {:.0} blocks.", r.lake_depth())
-                },
-            );
-            let spec = r.spring_spec(&doc.world.registry);
-            hint(
-                ui,
-                &format!(
-                    "{:.0}×{:.0} at the source → {:.0}×{:.0} at the end (width × depth).",
-                    spec.width, spec.depth, spec.width_end, spec.depth_end
-                ),
-            );
-            hint(ui, "Hover: see its course. Click: dig it.");
-            if let Some(note) = &tools.river_note {
-                hint(ui, note);
-            }
-        }
         Tool::River => {
             let r = &mut tools.river;
-            slider_row(ui, "Width", |ui| ui.add(egui::Slider::new(&mut r.width, 2.0..=400.0).suffix(" blocks").max_decimals(0)));
-            slider_row(ui, "At the mouth", |ui| ui.add(egui::Slider::new(&mut r.width_end, 2.0..=400.0).suffix(" blocks").max_decimals(0)));
-            slider_row(ui, "Depth", |ui| ui.add(egui::Slider::new(&mut r.depth, 1.0..=40.0).suffix(" blocks").max_decimals(0)));
-            slider_row(ui, "Banks", |ui| ui.add(egui::Slider::new(&mut r.banks, 0.0..=120.0).suffix(" blocks").max_decimals(0)));
-            ui.checkbox(&mut r.water, "fill it with water");
-            ui.checkbox(&mut r.biome, "a river biome where the water is");
+            fn percent(v: &mut f32) -> crate::widgets::Field<'_> {
+                crate::widgets::Field::new(v, 0.0..=1.0)
+                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                    .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0))
+            }
+            let mut changed = false;
+            changed |= tip_row(ui, "Width", "Width of the water at the source", |ui| ui.add(crate::widgets::Field::new(&mut r.width, 2.0..=200.0).suffix(" blocks").max_decimals(0)));
+            changed |= tip_row(ui, "Flow", "How much wider and deeper it grows downstream", |ui| ui.add(percent(&mut r.flow)));
+            changed |= tip_row(ui, "Depth", "Depth of the water at the source", |ui| ui.add(crate::widgets::Field::new(&mut r.depth, 1.0..=30.0).suffix(" blocks").max_decimals(0)));
+            changed |= tip_row(ui, "Erosion", "How much it wears the land beside its bed", |ui| ui.add(percent(&mut r.erosion)));
+            changed |= tip_row(ui, "Banks", "How far its banks slope back up to the land", |ui| ui.add(crate::widgets::Field::new(&mut r.banks, 0.0..=120.0).suffix(" blocks").max_decimals(0)));
+            changed |= tip_row(ui, "Lakes", "Which hollows on its way fill up as lakes: none, the deep ones, all", |ui| ui.add(percent(&mut r.lakes)));
+            ui.checkbox(&mut r.water, "Fill it with water");
+            ui.checkbox(&mut r.biome, "River biome on its water");
             ui.horizontal(|ui| {
                 ui.add_sized([72.0, 18.0], egui::Label::new("Bed"));
-                let shown = if r.bed.is_empty() { "— as it is".to_owned() } else { r.bed.clone() };
-                egui::ComboBox::from_id_salt("river bed").selected_text(shown).width(150.0).show_ui(ui, |ui| {
-                    if ui.selectable_label(r.bed.is_empty(), "— as it is").clicked() {
+                let shown = if r.bed.is_empty() { "As it is".to_owned() } else { r.bed.clone() };
+                crate::widgets::combo("river bed").selected_text(shown).width(150.0).show_ui(ui, |ui| {
+                    if ui.selectable_label(r.bed.is_empty(), "As it is").clicked() {
                         r.bed.clear();
                     }
                     for t in &doc.world.registry.terrains {
@@ -255,24 +258,33 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
                     }
                 });
             });
-            ui.add_space(4.0);
-            let points = tools.river_points.len();
+            let spec = r.spring_spec(&doc.world.registry);
             hint(
                 ui,
-                &if points == 0 {
-                    "Click on the map where the river goes, point after point.".to_owned()
-                } else {
-                    format!("{points} point{} — double-click or Enter to dig, Esc to drop.", if points == 1 { "" } else { "s" })
-                },
+                &format!(
+                    "{:.0} × {:.0} at the source, {:.0} × {:.0} at the end (width × depth).",
+                    spec.width, spec.depth, spec.width_end, spec.depth_end
+                ),
             );
-            ui.horizontal(|ui| {
-                if ui.add_enabled(points >= 2, egui::Button::new(theme::with_icon(Icon::Route, "Dig the river"))).clicked() {
-                    tools.river_note = crate::tools::dig_river(doc, tools);
+            ui.add_space(4.0);
+            if changed && let Some(draft) = &mut tools.river_draft {
+                draft.plan(doc, &tools.river, None);
+            }
+            match &tools.river_draft {
+                None => hint(ui, "Click on land: where it springs. The water finds its way down."),
+                Some(draft) => {
+                    ui.label(RichText::new(draft.summary()).strong());
+                    hint(ui, "Drag the river to guide it · click elsewhere: where it ends · right-click a point: remove it.");
+                    ui.horizontal(|ui| {
+                        if ui.button(theme::with_icon(Icon::Route, "Dig river")).on_hover_text("Enter").clicked() {
+                            tools.river_note = crate::tools::dig_draft(doc, tools);
+                        }
+                        if ui.button("Cancel").on_hover_text("Esc").clicked() {
+                            tools.river_draft = None;
+                        }
+                    });
                 }
-                if ui.add_enabled(points > 0, egui::Button::new("Drop the course")).clicked() {
-                    tools.river_points.clear();
-                }
-            });
+            }
             if let Some(note) = &tools.river_note {
                 hint(ui, note);
             }
@@ -290,7 +302,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
         }
         Tool::StampSlab => {
             slider_row(ui, "Thickness", |ui| {
-                ui.add(egui::Slider::new(&mut tools.slab_thickness, 1.0..=128.0).logarithmic(true).suffix(" blocks"))
+                ui.add(crate::widgets::Field::new(&mut tools.slab_thickness, 1.0..=128.0).logarithmic(true).suffix(" blocks"))
             });
             ui.horizontal(|ui| {
                 ui.add_sized([72.0, 18.0], egui::Label::new("Centre"));
@@ -331,7 +343,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
         let levels: Vec<(String, LevelKind)> = doc.dimension().levels.iter().map(|l| (l.name.clone(), l.kind)).collect();
         ui.horizontal(|ui| {
             ui.add_sized([72.0, 18.0], egui::Label::new("Edit"));
-            egui::ComboBox::from_id_salt("active level")
+            crate::widgets::combo("active level")
                 .selected_text(level_label(&levels[doc.active_level.min(levels.len() - 1)]))
                 .show_ui(ui, |ui| {
                     for (i, l) in levels.iter().enumerate() {
@@ -584,11 +596,11 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
     ui.add_space(4.0);
     let b = &mut tools.brush;
     slider_row(ui, "Size", |ui| {
-        ui.add(egui::Slider::new(&mut b.radius, 1.0..=MAX_RADIUS).logarithmic(true).suffix(" radius").max_decimals(0))
+        ui.add(crate::widgets::Field::new(&mut b.radius, 1.0..=MAX_RADIUS).logarithmic(true).suffix(" radius").max_decimals(0))
     });
     slider_row(ui, "Intensity", |ui| {
         ui.add(
-            egui::Slider::new(&mut b.strength, 0.01..=1.0)
+            crate::widgets::Field::new(&mut b.strength, 0.01..=1.0)
                 .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
                 .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
         )
@@ -596,7 +608,7 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
     let mut degrees = if b.rotation > 180.0 { b.rotation - 360.0 } else { b.rotation };
     let turned = slider_row(ui, "Rotation", |ui| {
         // No steps: the wheel turns the brush 5° (or 1°) at a time.
-        ui.add(egui::Slider::new(&mut degrees, -180.0..=180.0).suffix("°").max_decimals(0))
+        ui.add(crate::widgets::Field::new(&mut degrees, -180.0..=180.0).suffix("°").max_decimals(0))
     });
     if turned {
         b.rotation = degrees.rem_euclid(360.0);
@@ -751,19 +763,19 @@ fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &Document, blocks: 
     let p = &mut ps.pattern;
     ui.horizontal(|ui| {
         ui.add_sized([72.0, 18.0], egui::Label::new("Shape"));
-        egui::ComboBox::from_id_salt("pattern kind").selected_text(p.kind.label()).width(120.0).show_ui(ui, |ui| {
+        crate::widgets::combo("pattern kind").selected_text(p.kind.label()).width(120.0).show_ui(ui, |ui| {
             for k in PatternKind::ALL {
                 ui.selectable_value(&mut p.kind, k, k.label());
             }
         });
     });
-    slider_row(ui, "Size", |ui| ui.add(egui::Slider::new(&mut p.scale, 2.0..=600.0).suffix(" blocks").max_decimals(0)));
+    slider_row(ui, "Size", |ui| ui.add(crate::widgets::Field::new(&mut p.scale, 2.0..=600.0).suffix(" blocks").max_decimals(0)));
     if p.kind == PatternKind::Stripes {
-        slider_row(ui, "Direction", |ui| ui.add(egui::Slider::new(&mut p.angle, 0.0..=180.0).suffix("°").max_decimals(0)));
+        slider_row(ui, "Direction", |ui| ui.add(crate::widgets::Field::new(&mut p.angle, 0.0..=180.0).suffix("°").max_decimals(0)));
     }
     slider_row(ui, "Soft edges", |ui| {
         ui.add(
-            egui::Slider::new(&mut p.softness, 0.0..=1.0)
+            crate::widgets::Field::new(&mut p.softness, 0.0..=1.0)
                 .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
                 .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
         )
@@ -786,7 +798,7 @@ fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &Document, blocks: 
             if let Some(t) = id {
                 terrain_icon(ui, r, reg, t.0, blocks);
             }
-            egui::ComboBox::from_id_salt(("pattern terrain", k)).selected_text(name.as_str()).width(110.0).show_ui(ui, |ui| {
+            crate::widgets::combo(("pattern terrain", k)).selected_text(name.as_str()).width(110.0).show_ui(ui, |ui| {
                 for t in &reg.terrains {
                     if ui.selectable_label(t.name == *name, &t.name).clicked() {
                         *name = t.name.clone();
@@ -881,7 +893,7 @@ pub fn land_rules(ui: &mut Ui, rules: &mut massif_core::auto::BiomeRules, reg: &
                 if let Some(b) = reg.biome_by_id(&current) {
                     swatch(ui, theme::rgb(reg.biome(b).color));
                 }
-                egui::ComboBox::from_id_salt(("land biome", land)).selected_text(name).width(210.0).show_ui(ui, |ui| {
+                crate::widgets::combo(("land biome", land)).selected_text(name).width(210.0).show_ui(ui, |ui| {
                     for biome in reg.biomes.iter().skip(1) {
                         if ui.selectable_label(biome.id == current, &biome.name).clicked() {
                             picked = Some(biome.id.clone());
@@ -924,7 +936,7 @@ pub fn paint_rules(ui: &mut Ui, rules: &mut massif_core::auto::PaintRules, reg: 
             for k in 0..3 {
                 let current = paint.as_ref().map_or("", |p| [p.ground.as_str(), p.cliffs.as_str(), p.underwater.as_str()][k]).to_owned();
                 let shown = if current.is_empty() { "— as it is".to_owned() } else { current.clone() };
-                egui::ComboBox::from_id_salt(("biome paint", &biome.id, k)).selected_text(shown).width(128.0).show_ui(ui, |ui| {
+                crate::widgets::combo(("biome paint", &biome.id, k)).selected_text(shown).width(128.0).show_ui(ui, |ui| {
                     if ui.selectable_label(current.is_empty(), "— as it is").clicked() {
                         changed = Some((k, String::new()));
                     }
@@ -1255,7 +1267,7 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
             None if blocks.is_loading() => "Reading the game…".to_owned(),
             None => "No game found".to_owned(),
         };
-        egui::ComboBox::from_id_salt("minecraft version")
+        crate::widgets::combo("minecraft version")
             .selected_text(label)
             .show_ui(ui, |ui| {
                 for j in blocks.jars.clone() {

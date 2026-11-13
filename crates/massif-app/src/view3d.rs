@@ -577,7 +577,7 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
     // Water: its surface merged into rectangles, and its sides where the
     // map ends.
     if style.water {
-        let blue = if style.lava { [214, 96, 18, 230] } else { [52, 104, 210, 168] };
+        let blue = if style.lava { [214, 96, 18, 230] } else { [26, 92, 150, 205] };
         greedy(
             n,
             |i, j| {
@@ -792,6 +792,7 @@ struct VertexOut {
     @location(0) color: vec4<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) world: vec3<f32>,
+    @location(3) water: f32,
 };
 
 @vertex
@@ -846,12 +847,29 @@ fn vs_main(@builtin(vertex_index) vi: u32, f: FaceIn) -> VertexOut {
     out.color = f.color;
     out.normal = n;
     out.world = world;
+    out.water = chunk.origin.w;
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-    let c = shade(in.color.rgb, normalize(in.normal), distance(in.world, g.eye.xyz));
+    let n = normalize(in.normal);
+    let d = distance(in.world, g.eye.xyz);
+    if (in.water > 0.5 && in.color.b > in.color.r) {
+        // Water: its own colour seen from above, the sky mirrored where it
+        // is seen at a grazing angle, a glint of the sun.
+        let v = normalize(g.eye.xyz - in.world);
+        let fres = pow(1.0 - max(dot(n, v), 0.0), 3.0);
+        let sky = sky_color(reflect(-v, n));
+        let h = normalize(v + g.sun.xyz);
+        let glint = pow(max(dot(n, h), 0.0), 2400.0) * 1.4 * max(n.y, 0.0);
+        var c = to_linear(in.color.rgb) * (g.fog.z + 0.3 * g.fog.w);
+        c = mix(c, sky, 0.1 + 0.7 * fres) + vec3<f32>(glint);
+        let f = clamp((d - g.fog.x) / max(g.fog.y - g.fog.x, 1.0), 0.0, 1.0);
+        c = mix(c, to_linear(g.mist.rgb), f * f * g.mist.w);
+        return vec4<f32>(c, mix(in.color.a, 1.0, 0.55 * fres));
+    }
+    let c = shade(in.color.rgb, n, d);
     return vec4<f32>(c, in.color.a);
 }
 "#;
@@ -1985,22 +2003,24 @@ pub struct Sky {
 }
 
 impl Sky {
-    /// A daylight sky in the light theme, a dusk one in the dark theme; the
-    /// haze stays light in both, so the far ground never sinks into the dark.
+    /// The sky over the terrain, and the haze, light in both themes so
+    /// that the far ground never sinks into the dark.
     pub fn of(pal: &Palette) -> Sky {
+        // Daylight in both themes, as a terrain is looked at outdoors; a
+        // deeper blue in the dark one, so that it does not glare.
         if pal.dark {
             Sky {
-                zenith: [22, 28, 40],
-                horizon: [58, 70, 90],
-                mist: [150, 162, 182],
-                haze: 0.32,
+                zenith: [52, 98, 170],
+                horizon: [160, 186, 216],
+                mist: [176, 198, 224],
+                haze: 0.4,
             }
         } else {
             Sky {
-                zenith: [128, 168, 220],
-                horizon: [214, 226, 241],
-                mist: [214, 226, 241],
-                haze: 0.5,
+                zenith: [86, 140, 214],
+                horizon: [200, 218, 238],
+                mist: [206, 222, 240],
+                haze: 0.46,
             }
         }
     }
@@ -2502,7 +2522,9 @@ impl View3d {
         (eye, [d.x as f64, d.y as f64, d.z as f64])
     }
 
-    pub fn ui(&mut self, ui: &mut Ui, frame: &eframe::Frame, doc: &mut Document, tools: &ToolState, map_center: Option<[f64; 2]>) {
+    /// Show the view; `sculpt`: the 3D Sculpt editor's, where the buttons
+    /// sculpt with its tool.
+    pub fn ui(&mut self, ui: &mut Ui, frame: &eframe::Frame, doc: &mut Document, tools: &ToolState, map_center: Option<[f64; 2]>, sculpt: bool) {
         let pal = Palette::of(ui);
         let rect = ui.available_rect_before_wrap();
         let response = ui.allocate_rect(rect, Sense::click_and_drag());
@@ -2553,7 +2575,7 @@ impl View3d {
         // With a sculpting tool the buttons sculpt (the right one inverts);
         // the middle button turns the view (Alt + drag too), Shift + middle
         // pans. Otherwise the left button turns, the right one pans.
-        let sculpting = tools.tool.is_sculpt();
+        let sculpting = sculpt && tools.sculpt.tool.is_sculpt();
         let (shift, alt) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt));
         let (orbit, pan) = if sculpting {
             (
@@ -2746,7 +2768,7 @@ impl View3d {
             // Two axes across the face that was hit.
             let a = if n[1] != 0.0 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
             let b = [n[1] * a[2] - n[2] * a[1], n[2] * a[0] - n[0] * a[2], n[0] * a[1] - n[1] * a[0]];
-            let r = tools.brush.radius as f64;
+            let r = tools.sculpt.brush.radius as f64;
             let ring: Vec<egui::Pos2> = (0..64)
                 .filter_map(|i| {
                     let t = i as f64 / 64.0 * std::f64::consts::TAU;

@@ -46,32 +46,32 @@ pub struct Palette {
 impl Palette {
     pub const LIGHT: Palette = Palette {
         dark: false,
-        app_bg: Color32::from_rgb(240, 240, 242),
-        panel: Color32::from_rgb(255, 255, 255),
-        header: Color32::from_rgb(246, 246, 248),
-        border: Color32::from_rgb(228, 228, 232),
+        app_bg: Color32::from_rgb(222, 223, 227),
+        panel: Color32::from_rgb(248, 248, 250),
+        header: Color32::from_rgb(237, 238, 241),
+        border: Color32::from_rgb(212, 213, 219),
         text: Color32::from_rgb(24, 24, 27),
         weak: Color32::from_rgb(113, 113, 122),
         accent: Color32::from_rgb(37, 99, 235),
         accent_soft: Color32::from_rgb(236, 236, 240),
         danger: Color32::from_rgb(220, 38, 38),
         success: Color32::from_rgb(22, 163, 74),
-        canvas: Color32::from_rgb(236, 236, 239),
+        canvas: Color32::from_rgb(228, 229, 233),
     };
 
     pub const DARK: Palette = Palette {
         dark: true,
-        app_bg: Color32::from_rgb(10, 10, 11),
-        panel: Color32::from_rgb(19, 19, 21),
-        header: Color32::from_rgb(26, 26, 29),
-        border: Color32::from_rgb(38, 38, 43),
-        text: Color32::from_rgb(237, 237, 239),
-        weak: Color32::from_rgb(139, 139, 148),
-        accent: Color32::from_rgb(76, 141, 255),
-        accent_soft: Color32::from_rgb(38, 38, 43),
+        app_bg: Color32::from_rgb(11, 12, 14),
+        panel: Color32::from_rgb(24, 25, 29),
+        header: Color32::from_rgb(30, 31, 36),
+        border: Color32::from_rgb(43, 45, 52),
+        text: Color32::from_rgb(232, 233, 237),
+        weak: Color32::from_rgb(142, 145, 155),
+        accent: Color32::from_rgb(77, 144, 254),
+        accent_soft: Color32::from_rgb(44, 46, 54),
         danger: Color32::from_rgb(244, 84, 84),
         success: Color32::from_rgb(52, 199, 120),
-        canvas: Color32::from_rgb(14, 14, 16),
+        canvas: Color32::from_rgb(17, 18, 21),
     };
 
     pub fn of(ui: &egui::Ui) -> Palette {
@@ -85,7 +85,7 @@ impl Palette {
     /// Fill of a control at rest.
     pub fn control(&self) -> Color32 {
         if self.dark {
-            Color32::from_rgb(29, 29, 32)
+            Color32::from_rgb(35, 37, 43)
         } else {
             Color32::from_rgb(255, 255, 255)
         }
@@ -97,7 +97,7 @@ impl Palette {
         } else {
             Visuals::light()
         };
-        let radius = CornerRadius::same(8);
+        let radius = CornerRadius::same(6);
         v.panel_fill = self.panel;
         v.window_fill = self.panel;
         v.window_stroke = Stroke::new(1.0, self.border);
@@ -277,7 +277,7 @@ pub fn install(ctx: &egui::Context) {
         .into();
         style.spacing.item_spacing = vec2(8.0, 6.0);
         style.spacing.button_padding = vec2(10.0, 4.0);
-        style.spacing.interact_size = vec2(28.0, 26.0);
+        style.spacing.interact_size = vec2(28.0, 24.0);
         style.spacing.slider_width = 120.0;
         style.spacing.slider_rail_height = 4.0;
         style.spacing.combo_height = 320.0;

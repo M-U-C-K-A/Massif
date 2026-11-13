@@ -101,6 +101,10 @@ Massif needs a Rust toolchain. The exact version is pinned in
 cargo run --release -p massif-app
 ```
 
+On a Mac, `tools/install-macos.sh` builds it and installs **Massif.app** in
+Applications (or the folder given), to open like any other app; run it again
+after pulling changes to update it.
+
 Open a world directly (a WorldPainter `.world` file is imported the same way):
 
 ```bash
@@ -132,7 +136,8 @@ brushes, terrain and biome palettes, levels or world info.
 - Drag an area by its title onto another to move it, or onto its centre to
   swap the two. Drag the gaps between areas to resize them.
 - The app has two sides, switched at the top left: **World**, the map
-  editor (workspaces Layout, Sculpting, Painting, 3D, Maps, Minimal), and
+  editor (workspaces Layout, Sculpting, Painting, 3D, 3D Sculpt, Maps,
+  Minimal), and
   **Terrain**, the terrain generator (Graph and Render). Each side
   remembers the workspace it was left on.
 - Workspaces are tabs of arrangements; duplicate one with `+`, right-click
@@ -215,6 +220,12 @@ brush (and its options) or over the whole map at once:
   ground, one for its cliffs and one for what lies under its water. Where
   no biome is set, the ground is painted as the land it is.
 
+Hovered over the map, both show what they would change before anything is
+painted: under the brush, the columns that would change in their new colour,
+the others darkened. A stroke changes every column in the core of the brush
+(all of it at 100% intensity, with a blended edge below), and says how many
+it changed — or that the land already follows the rules.
+
 **Rules…** (in Tool Settings, or Edit ▸ Automatic rules) opens both tables:
 the depths, heights and slopes the land is read with, the biome of each
 kind of land, the three terrains of each biome. They are kept with the
@@ -235,22 +246,37 @@ any paint.
 
 ### Rivers
 
-The **River** tool (Water group) draws rivers by hand: drag along the
-course on the map and let go, and it is dug (one undoable step); or click
-the points of the course one by one — the course, its water and its banks
-are drawn as you go — then double-click or press Enter to dig it. The right
-button takes the last point back, Esc drops the course; the map says so
-while the tool is on.
+The **River** tool (Water group) lays a river out from its source:
 
-- The points are joined by a smooth curve through all of them.
-- Water runs from the higher end to the lower one, whichever end was drawn
-  first. Its level along the river is the lowest the land allows so far, a
+- **Click** on land: the river springs there, and its water finds its own
+  way down — down the slope, a block at a time; a hollow it meets fills up
+  to where it overflows, and it goes on from there — to the sea, into water
+  already there, or off the map. Before the click, hovering shows where the
+  water would go.
+- **Click elsewhere**: that is where it ends. The way there is worked out
+  over the land, as water would take it: along the valleys, climbing as
+  little as it can, into the water it meets.
+- **Drag the river** anywhere along its course to bend it: the point held
+  becomes a point it must pass, and the way on either side follows the land
+  again. Drag the source, those points or the end to move them; right-click
+  one to take it away (the end: back to where the water goes by itself).
+- **Dig river** (or Enter) digs it, one undoable step; **Cancel** (or Esc)
+  drops it. The bar over the map says how long it is and where it goes.
+
+Its settings: **Width** at the source, **Flow** (how much it grows
+downstream: up to five times wider and two and a half times deeper),
+**Depth**, **Erosion** (how much it wears the land beside its bed: a wider
+valley), **Banks**, **Lakes** (which hollows fill: deep ones only, or every
+one, or none — through the others it cuts a gorge), the terrain of its bed
+and a river biome on its water.
+
+- The course is smoothed into a curve through its points.
+- Water runs from the source down. Its level along the river is the lowest
+  the land allows so far, a
   little under the banks: it never rises downstream, whatever the bumps.
 - The bed is `depth` deep in the middle and rises to the water's edge;
   banks of the chosen width climb back to the ground, smoothly. Only the
   ground is lowered: nothing is raised.
-- The width goes from the source to the mouth (2 to 400 blocks): a brook
-  that becomes a river 100 blocks wide.
 - A course that starts on a river is a branch, leaving it at its level; one
   that ends on a river or a lake is a tributary, meeting it at its level.
   Two branches that meet again make a split stream.
@@ -259,18 +285,6 @@ while the tool is on.
 The water's level is a whole block per column, so it stands in steps
 along the river: still water, as Minecraft keeps it; mods that let water
 flow over water (Streams Reflowing) make a current of it.
-
-**River source** (Water group) makes one in a single click: click where a
-river springs, and its water finds its own way down the land — down the
-slope, a block at a time; a hollow it meets fills up to where it overflows,
-and it goes on from there — to the sea, into water already there, or off
-the map. Hovering the map shows where the water would go, and the lakes it
-would fill, before the click. Its settings: **Width** at the spring,
-**Flow** (how much it grows downstream: up to five times wider and two and
-a half times deeper), **Depth**, **Erosion** (how much it wears the land
-beside its bed: a wider valley), **Banks**, and **Lakes** (which hollows
-fill: deep ones only, or every one, or none — through the others it cuts a
-gorge).
 
 ### Height maps
 
@@ -547,6 +561,12 @@ it peaks at 236 MB of memory.
 
 ### Sculpted volumes
 
+Sculpting in 3D has its own editor, **3D Sculpt** (its workspace sits next
+to 3D; the 3D View's **Sculpt** button opens it): a 3D view with its tools
+along the top — **Build**, **Dig**, **Smooth**, their radius and strength.
+The left button applies the tool, the right one its inverse, the middle one
+turns the view (Shift: moves it). The ordinary 3D View only shows the world.
+
 Where you sculpt in 3D, the dimension keeps a 16³ chunk of densities (0–255,
 solid from 128) that replaces what the levels compose inside that cube. A new
 chunk starts as an exact copy of the composition, with the fractional surface
@@ -677,7 +697,7 @@ Two environment variables enable the heavier tests:
   costs.
 - `MASSIF_RIVER_WORLD=<world.massif>` (with `MASSIF_SNAPSHOT_DIR`) runs the
   rivers on a real map as a user does — the Rivers on this map template,
-  the River tool dragged from the mountains, a River source — and renders
+  a river laid out from the mountains to the sea, another let go at a source — and renders
   them from above and in 3D.
 - `MASSIF_GRAPH_BUILD=<samples>` times a whole build of the starter graph
   (run it with `--release`), and with `MASSIF_GRAPH_APPLY=1` its writing to

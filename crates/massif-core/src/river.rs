@@ -304,6 +304,8 @@ pub enum Mouth {
     Lake,
     /// It ran as far as it was let.
     Far,
+    /// Where it was asked to end.
+    Chosen,
 }
 
 impl Mouth {
@@ -314,6 +316,7 @@ impl Mouth {
             Mouth::Edge => "the edge of the map",
             Mouth::Lake => "a lake",
             Mouth::Far => "as far as it may run",
+            Mouth::Chosen => "the end you chose",
         }
     }
 }
@@ -643,6 +646,154 @@ pub fn dig_descent(edit: &mut Edit, descent: &Descent, spec: &RiverSpec) -> Rive
     carve_river(edit, &points, spec)
 }
 
+// ------------------------------------------------------------- routes --
+
+/// What climbing a block costs a river laid out by hand, in blocks of
+/// level ground it would rather run.
+const CLIMB: f32 = 14.0;
+
+/// The way water takes from `from` to `to` over the ground of `level`:
+/// along the valleys, climbing as little as it can, into the water it
+/// meets — the cheapest path over a grid of the ground of `cells` samples
+/// at most (coarser for longer ways). Points in blocks, `from` first and
+/// `to` last; a straight line where no way is found.
+pub fn route(level: &crate::level::Level, from: (f32, f32), to: (f32, f32), cells: usize) -> Vec<(f32, f32)> {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+    #[derive(PartialEq)]
+    struct Key(f32);
+    impl Eq for Key {}
+    impl Ord for Key {
+        fn cmp(&self, o: &Self) -> std::cmp::Ordering {
+            self.0.total_cmp(&o.0)
+        }
+    }
+    impl PartialOrd for Key {
+        fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> {
+            Some(self.cmp(o))
+        }
+    }
+    let dist = (to.0 - from.0).hypot(to.1 - from.1);
+    if dist < 3.0 {
+        return vec![from, to];
+    }
+    let margin = (dist * 0.35).max(48.0);
+    let (x0, z0) = (from.0.min(to.0) - margin, from.1.min(to.1) - margin);
+    let (x1, z1) = (from.0.max(to.0) + margin, from.1.max(to.1) + margin);
+    let step = (((x1 - x0) * (z1 - z0)) / cells.max(1_000) as f32).sqrt().ceil().max(1.0);
+    let nx = ((x1 - x0) / step).ceil() as usize + 1;
+    let nz = ((z1 - z0) / step).ceil() as usize + 1;
+    let at = |k: usize| (x0 + (k % nx) as f32 * step, z0 + (k / nx) as f32 * step);
+    // The height of each sample — the water's surface where there is
+    // water — NaN off the map.
+    let mut ground = Ground { level, tiles: HashMap::new() };
+    let mut h = vec![f32::NAN; nx * nz];
+    let mut wet = vec![false; nx * nz];
+    for (k, (hk, wk)) in h.iter_mut().zip(wet.iter_mut()).enumerate() {
+        let (x, z) = at(k);
+        if let Some((g, w)) = ground.at(x.floor() as i32, z.floor() as i32) {
+            *hk = w.unwrap_or(g);
+            *wk = w.is_some();
+        }
+    }
+    let sample = |p: (f32, f32)| {
+        let i = (((p.0 - x0) / step).round().max(0.0) as usize).min(nx - 1);
+        let j = (((p.1 - z0) / step).round().max(0.0) as usize).min(nz - 1);
+        j * nx + i
+    };
+    let (start, goal) = (sample(from), sample(to));
+    if !h[start].is_finite() || !h[goal].is_finite() {
+        return vec![from, to];
+    }
+    let (lo, hi) = h.iter().filter(|v| v.is_finite()).fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+    let span = (hi - lo).max(1.0);
+    let noise = crate::noise::Noise::new(0x7a11_0e5d);
+    // What crossing a sample costs, a block at a time: more the higher it
+    // lies, with a little noise so that the way wanders as rivers do; a
+    // little on water.
+    let cost: Vec<f32> = (0..nx * nz)
+        .map(|k| {
+            if !h[k].is_finite() {
+                return f32::INFINITY;
+            }
+            if wet[k] {
+                return 0.35;
+            }
+            let (x, z) = at(k);
+            1.0 + 1.6 * (h[k] - lo) / span + 0.3 * noise.fbm(x as f64 / 40.0, z as f64 / 40.0, 3, 2.0, 0.5) as f32
+        })
+        .collect();
+    let (gx, gz) = at(goal);
+    let guess = |k: usize| {
+        let (x, z) = at(k);
+        0.6 * (x - gx).hypot(z - gz)
+    };
+    let mut best = vec![f32::INFINITY; nx * nz];
+    let mut came = vec![u32::MAX; nx * nz];
+    let mut heap = BinaryHeap::new();
+    best[start] = 0.0;
+    heap.push(Reverse((Key(guess(start)), start as u32)));
+    while let Some(Reverse((Key(f), c))) = heap.pop() {
+        let c = c as usize;
+        if c == goal {
+            break;
+        }
+        let g = best[c];
+        if f > g + guess(c) + 1e-3 {
+            continue;
+        }
+        let (ci, cj) = ((c % nx) as i32, (c / nx) as i32);
+        for (di, dj) in AROUND {
+            let (ni, nj) = (ci + di, cj + dj);
+            if ni < 0 || nj < 0 || ni >= nx as i32 || nj >= nz as i32 {
+                continue;
+            }
+            let n = nj as usize * nx + ni as usize;
+            if !cost[n].is_finite() {
+                continue;
+            }
+            let d = if di != 0 && dj != 0 { step * std::f32::consts::SQRT_2 } else { step };
+            let next = g + d * 0.5 * (cost[c] + cost[n]) + CLIMB * (h[n] - h[c]).max(0.0);
+            if next < best[n] {
+                best[n] = next;
+                came[n] = c as u32;
+                heap.push(Reverse((Key(next + guess(n)), n as u32)));
+            }
+        }
+    }
+    if goal != start && came[goal] == u32::MAX {
+        return vec![from, to];
+    }
+    let mut way = vec![goal];
+    while *way.last().expect("the goal") != start {
+        way.push(came[*way.last().expect("the goal")] as usize);
+    }
+    way.reverse();
+    let mut points: Vec<(f32, f32)> = Vec::with_capacity(way.len() + 2);
+    points.push(from);
+    points.extend(way[1..way.len().saturating_sub(1)].iter().map(|&k| at(k)).map(|(x, z)| (x + 0.5, z + 0.5)));
+    points.push(to);
+    // The corners of the grid cut, twice.
+    for _ in 0..2 {
+        let mut cut = Vec::with_capacity(points.len() * 2);
+        cut.push(points[0]);
+        for w in points.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            cut.push((a.0 + (b.0 - a.0) * 0.25, a.1 + (b.1 - a.1) * 0.25));
+            cut.push((a.0 + (b.0 - a.0) * 0.75, a.1 + (b.1 - a.1) * 0.75));
+        }
+        cut.push(*points.last().expect("two points"));
+        points = cut;
+    }
+    let mut out: Vec<(f32, f32)> = Vec::with_capacity(points.len());
+    for (k, &p) in points.iter().enumerate() {
+        if k + 1 == points.len() || out.last().is_none_or(|q: &(f32, f32)| (q.0 - p.0).hypot(q.1 - p.1) >= 1.5) {
+            out.push(p);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -677,6 +828,39 @@ mod tests {
     fn column(world: &World, x: i32, z: i32) -> (f32, i16) {
         let tile = world.dims[0].ground().view(TilePos::containing(x, z)).unwrap();
         (tile.top.get(local_index(x, z)), tile.fluid.get(local_index(x, z)))
+    }
+
+    /// A way from one side of a hill to the other goes round it, through
+    /// the low ground, without a break.
+    #[test]
+    fn a_route_goes_round_a_hill() {
+        let mut world = World::new(WorldMeta::default());
+        let mut dim = Dimension::new(DimensionKind::Overworld, -64, 320);
+        for tz in 0..2 {
+            for tx in 0..2 {
+                let mut tile = Tile::ground(70.0, 1, NO_FLUID);
+                for z in 0..128 {
+                    for x in 0..128 {
+                        let (bx, bz) = (tx * 128 + x, tz * 128 + z);
+                        let d = ((bx - 128) as f32).hypot((bz - 128) as f32);
+                        tile.top.set(local_index(bx, bz), 70.0 + (90.0 - d).max(0.0) * 1.2);
+                    }
+                }
+                dim.ground_mut().insert(TilePos::new(tx, tz), tile);
+            }
+        }
+        world.dims = vec![dim];
+        let level = world.dims[0].ground();
+        for cells in [400_000, 20_000] {
+            let way = route(level, (10.0, 128.0), (246.0, 128.0), cells);
+            assert_eq!(way.first(), Some(&(10.0, 128.0)));
+            assert_eq!(way.last(), Some(&(246.0, 128.0)));
+            let mut ground = Ground { level, tiles: HashMap::new() };
+            let top = way.iter().map(|p| ground.at(p.0 as i32, p.1 as i32).unwrap().0).fold(0.0f32, f32::max);
+            assert!(top < 95.0, "round the hill, not over it: up to {top}");
+            let gap = way.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).fold(0.0f32, f32::max);
+            assert!(gap < 12.0, "no break: {gap}");
+        }
     }
 
     /// Water let go on a slope runs down it, into the lake at its foot.

@@ -15,6 +15,7 @@ mod terrain_view;
 mod theme;
 mod tools;
 mod view3d;
+mod widgets;
 
 use std::path::PathBuf;
 
