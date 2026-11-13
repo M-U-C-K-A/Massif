@@ -21,10 +21,11 @@
 //! Evaluations can keep a cache: only the nodes that changed, and those
 //! after them, are computed again.
 
+mod climate;
 mod color;
+mod files;
 mod landforms;
 mod layers;
-mod climate;
 mod map;
 mod ops;
 mod rivers;
@@ -32,9 +33,10 @@ mod sim;
 mod tectonics;
 mod templates;
 
-pub use color::{AutoPalette, BlockPalette, GradientPreset, decode as decode_srgb, encode as encode_srgb};
-pub use map::{GroundMap, MapSample, MapSource, SampledMap, reads_level, sample_map, surface_of};
 pub use climate::{Climate, ClimateTable};
+pub use color::{AutoPalette, BlockPalette, GradientPreset, decode as decode_srgb, encode as encode_srgb};
+pub use files::{is_world, set_world_reader};
+pub use map::{GroundMap, MapSample, MapSource, SampledMap, reads_level, sample_map, surface_of};
 pub use tectonics::{Plate, scatter as scatter_plates};
 pub use templates::Template;
 
@@ -49,6 +51,11 @@ fn no_sea() -> f32 {
 /// 1, for values graphs saved before them did not have.
 fn one() -> f32 {
     1.0
+}
+
+/// True, for switches graphs saved before them did not have.
+fn yes() -> bool {
+    true
 }
 
 /// 0.5, for values graphs saved before them did not have.
@@ -260,14 +267,17 @@ pub enum NodeKind {
     /// lies. What a graph that works on a map — painted, or imported from
     /// WorldPainter — starts from.
     MapHeight,
-    /// A greyscale image as relief, stretched over the terrain: a height
-    /// map from Gaea, World Machine, an image editor (16-bit PNG, JPEG,
-    /// raw .r16 / .r32).
-    Heightmap {
+    /// A file brought in: a height map (16-bit PNG, JPEG, raw .r16 /
+    /// .r32) stretched over the terrain, or a world (WorldPainter's .world,
+    /// Massif's .massif) with its surface, water and terrain colours.
+    FileInput {
         path: String,
-        /// The heights black and white stand for.
+        /// For a height map: the heights black and white stand for.
         low: f32,
         high: f32,
+        /// For a world: stretched over the terrain, or at its own blocks.
+        #[serde(default = "yes")]
+        fit: bool,
     },
     /// A ramp across the map.
     LinearGradient {
@@ -900,10 +910,11 @@ impl NodeKind {
             },
             // Primitives.
             NodeKind::MapHeight,
-            NodeKind::Heightmap {
+            NodeKind::FileInput {
                 path: String::new(),
                 low: 40.0,
                 high: 220.0,
+                fit: true,
             },
             NodeKind::Noise {
                 style: NoiseStyle::Fbm,
@@ -1146,7 +1157,7 @@ impl NodeKind {
             NodeKind::Radial { .. } => "Radial gradient",
             NodeKind::Constant { .. } => "Constant",
             NodeKind::MapHeight => "Map",
-            NodeKind::Heightmap { .. } => "Height map",
+            NodeKind::FileInput { .. } => "File input",
             NodeKind::LinearGradient { .. } => "Linear gradient",
             NodeKind::Shape { .. } => "Shape",
             NodeKind::Mountain { .. } => "Mountain",
@@ -1211,12 +1222,12 @@ impl NodeKind {
     /// One line on what the node does, for the library and tooltips.
     pub fn description(&self) -> &'static str {
         match self {
-            NodeKind::Noise { .. } => "Fractal noise: rolling, ridged or billowy relief at every scale",
-            NodeKind::Cells { .. } => "Voronoi cells: cones at their centres or ridges along their edges",
+            NodeKind::Noise { .. } => "Fractal noise relief",
+            NodeKind::Cells { .. } => "Voronoi cells: cones or ridges",
             NodeKind::Radial { .. } => "High in the middle of the map, falling to its edges",
             NodeKind::Constant { .. } => "One value everywhere",
-            NodeKind::MapHeight => "The map as it is, in 3D: its surface, its water and the colours of its terrains",
-            NodeKind::Heightmap { .. } => "A greyscale image as relief: a height map from Gaea, World Machine, an image editor",
+            NodeKind::MapHeight => "The open map: surface, water, colours",
+            NodeKind::FileInput { .. } => "A height map, a .world or a .massif file as relief",
             NodeKind::LinearGradient { .. } => "A ramp rising across the map",
             NodeKind::Shape { .. } => "A circle, square, cone or dome",
             NodeKind::Mountain { .. } => "One mountain, alpine, rounded, eroded or spiky",
@@ -1229,7 +1240,7 @@ impl NodeKind {
             NodeKind::Mesas { .. } => "Flat-topped hills with steep, stepped sides",
             NodeKind::Island { .. } => "An island rising from the sea floor",
             NodeKind::Rocks { .. } => "Rocky detail to add to a relief",
-            NodeKind::FloatingIslands { .. } => "Islands of rock floating in the air, their undersides hanging to a point",
+            NodeKind::FloatingIslands { .. } => "Floating islands of rock",
             NodeKind::Overhang { .. } => "Rims jutting out from the top of cliffs, over the void",
             NodeKind::Levels { .. } => "Map one range of heights onto another",
             NodeKind::Terrace { .. } => "Flat steps with steep risers",
@@ -1247,7 +1258,7 @@ impl NodeKind {
             NodeKind::Erosion { .. } => "Rain wears the slopes: gullies, fans, flow and deposits",
             NodeKind::Thermal { .. } => "Loose rock slides down steep slopes",
             NodeKind::Snow { .. } => "Snow above a line, on slopes that hold it",
-            NodeKind::Rivers { .. } => "Rivers traced where the water runs, with tributaries, banks and lakes",
+            NodeKind::Rivers { .. } => "Rivers where the water runs",
             NodeKind::Lakes { .. } => "Water fills the hollows: lakes, flat valley floors",
             NodeKind::Sea { .. } => "A sea level, with masks of the water and the shore",
             NodeKind::Combine { .. } => "Add, subtract, multiply… two fields",
@@ -1268,13 +1279,13 @@ impl NodeKind {
             NodeKind::HeightOutput => "The height of the ground of the map",
             NodeKind::TerrainOutput { .. } => "Paint a terrain where the mask says",
             NodeKind::ColorOutput { .. } => "The colour of the ground, turned into real blocks",
-            NodeKind::LayerOutput { .. } => "Rock between two heights over the ground: a level of the map, over the void",
-            NodeKind::WaterOutput => "Water up to a level: the rivers and lakes above the sea, running down with their beds",
+            NodeKind::LayerOutput { .. } => "Rock between two heights: a level of the map",
+            NodeKind::WaterOutput => "Water of rivers and lakes",
             NodeKind::Temperature { .. } => "How warm the land is: by latitude and by height",
-            NodeKind::Humidity { .. } => "How wet the land is: from the sea, carried by the wind, dry behind the mountains",
-            NodeKind::Biomes { .. } => "The colours of the climate: deserts, forests, tundra, jungle…",
-            NodeKind::BiomeOutput { .. } => "The game's biomes from the climate, and the ground painted to suit",
-            NodeKind::Tectonic { .. } => "Continents and oceans from plates you move: ranges where they collide, rifts where they part",
+            NodeKind::Humidity { .. } => "How wet the land is",
+            NodeKind::Biomes { .. } => "Colours of the climate",
+            NodeKind::BiomeOutput { .. } => "Biomes and ground from the climate",
+            NodeKind::Tectonic { .. } => "Continents and mountains from moving plates",
         }
     }
 
@@ -1285,7 +1296,7 @@ impl NodeKind {
             | NodeKind::Radial { .. }
             | NodeKind::Constant { .. }
             | NodeKind::MapHeight
-            | NodeKind::Heightmap { .. }
+            | NodeKind::FileInput { .. }
             | NodeKind::LinearGradient { .. }
             | NodeKind::Shape { .. } => Family::Generator,
             NodeKind::Mountain { .. }
@@ -1376,7 +1387,13 @@ impl NodeKind {
             NodeKind::Snow { .. } => &[("Height", H), ("Snow", M)],
             NodeKind::Rivers { .. } => &[("Height", H), ("Rivers", M), ("Water", H)],
             NodeKind::Lakes { .. } => &[("Height", H), ("Lakes", M), ("Water", H)],
-            NodeKind::MapHeight => &[("Height", H), ("Water", M), ("Colour", C), ("Water level", H)],
+            NodeKind::MapHeight => &[
+                ("Height", H),
+                ("Water", M),
+                ("Colour", C),
+                ("Water level", H),
+            ],
+            NodeKind::FileInput { .. } => &[("Height", H), ("Water", M), ("Colour", C)],
             NodeKind::Sea { .. } => &[("Height", H), ("Water", M), ("Shore", M)],
             NodeKind::FloatingIslands { .. } => &[("Top", H), ("Bottom", H), ("Islands", M)],
             NodeKind::Overhang { .. } => &[("Top", H), ("Bottom", H)],
@@ -1566,8 +1583,11 @@ impl Graph {
             if node.kind == NodeKind::MapHeight {
                 map.hash(&mut h);
             }
-            if let NodeKind::Heightmap { path, .. } = &node.kind {
-                std::fs::metadata(path).and_then(|m| m.modified()).ok().hash(&mut h);
+            if let NodeKind::FileInput { path, .. } = &node.kind {
+                std::fs::metadata(path)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .hash(&mut h);
             }
             for k in 0..node.kind.inputs().len() {
                 match self.input_of(id, k as u8) {

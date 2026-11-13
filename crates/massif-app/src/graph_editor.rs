@@ -27,9 +27,10 @@ use crate::terrain_view::{MAX_SLABS, RenderSettings, Slab, TerrainView, ViewData
 use crate::theme::{self, Icon, Palette, RichTextExt};
 use egui::{Color32, ColorImage, Key, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, Vec2, pos2, vec2};
 use massif_core::graph::{
-    AutoPalette, Bend, BlockPalette, CellStyle, ColorField, CombineOp, EvalCache, Evaluation, Extent, Family, Field, GradientPreset, Graph, GraphError,
-    Climate, ClimateTable, GroundMap, LayerOut, MapSource, Overlay, MountainStyle, NodeId, NodeKind, NoiseStyle, Outputs, Painting, Plate, PortType, Progress, SampledMap,
-    ShapeKind, Template, TintMode, Value,
+    AutoPalette, Bend, BlockPalette, CellStyle, Climate, ClimateTable, ColorField, CombineOp,
+    EvalCache, Evaluation, Extent, Family, Field, GradientPreset, Graph, GraphError, GroundMap,
+    LayerOut, MapSource, MountainStyle, NodeId, NodeKind, NoiseStyle, Outputs, Overlay, Painting,
+    Plate, PortType, Progress, SampledMap, ShapeKind, Template, TintMode, Value,
 };
 use massif_core::registry::{Registry, TerrainId};
 use massif_core::{BlockRect, LevelKind, TILE_SIZE};
@@ -1100,7 +1101,7 @@ impl GraphEditor {
                     ui.label(RichText::new(label).color(Color32::WHITE).medium());
                     let side = terrain_extent(doc, graph.size, 2).size;
                     ui.label(RichText::new(format!("{side:.0} × {side:.0} blocks")).size(11.0).color(Color32::from_white_alpha(190)));
-                    let hint = if self.pinned.is_some() { "V: back to the output" } else { "Select a node and press V to view it" };
+                    let hint = if self.pinned.is_some() { "V: back to the output" } else { "V: view the selected node" };
                     ui.label(RichText::new(hint).size(11.0).color(Color32::from_white_alpha(150)));
                     if self.received != self.revision || self.build.is_some() {
                         ui.spinner();
@@ -1219,7 +1220,7 @@ impl GraphEditor {
         let detail = self.preview;
         ui.label(
             RichText::new(format!(
-                "Rendered from the preview, {detail} × {detail} samples: a finer preview (graph toolbar) gives a sharper image."
+                "From the preview, {detail} × {detail} samples."
             ))
             .size(11.0)
             .color(pal.weak),
@@ -1367,20 +1368,20 @@ impl GraphEditor {
                     // ⌘Z on the Terrain side undoes it in turn.
                     self.undo.push(Step::Converted);
                     self.redo.clear();
-                    let blocks_note = if palette.is_empty() { String::new() } else { format!(", in {} kinds of blocks", palette.len()) };
+                    let blocks_note = if palette.is_empty() { String::new() } else { format!(", {} kinds of blocks", palette.len()) };
                     let mut layers_note = match built.outputs.layers.len() {
                         0 => String::new(),
-                        1 => ", with one level of rock over the void".to_owned(),
-                        k => format!(", with {k} levels of rock over the void"),
+                        1 => ", 1 rock level".to_owned(),
+                        k => format!(", {k} rock levels"),
                     };
                     if built.outputs.water.is_some() {
-                        layers_note.push_str(", water in its rivers and lakes");
+                        layers_note.push_str(", water");
                     }
                     if overlay.is_some() {
-                        layers_note.push_str("; the map's ground is left as it is, under two levels of the graph's own");
+                        layers_note.push_str(" · map ground kept");
                     }
                     feedback = Some(format!(
-                        "Converted the graph to voxels at {} × {} in {took:.1} s{blocks_note}{layers_note}",
+                        "Converted at {} × {} in {took:.1} s{blocks_note}{layers_note}",
                         built.extent.n, built.extent.n
                     ));
                 }
@@ -1412,8 +1413,7 @@ impl GraphEditor {
             } else if ui
                 .add(theme::primary_button(ui, format!("{}  Convert to voxels", theme::glyph(Icon::Boxes))))
                 .on_hover_text(
-                    "Build the terrain over all of its size, a sample for every block, and write it to the map: heights, terrains, \
-                     water, and the colours as the closest real blocks (undoable). A terrain larger than the map adds the tiles it lacks.",
+                    "Write the terrain to the map (undoable).",
                 )
                 .clicked()
             {
@@ -1422,7 +1422,7 @@ impl GraphEditor {
             if self.build.is_none()
                 && ui
                     .small_button(theme::with_icon(Icon::ImageDown, "Height map…"))
-                    .on_hover_text("Build the terrain at full size, as for the conversion, and save its relief as a 16-bit PNG height map (for Gaea, World Machine, WorldPainter…) instead of writing it to the map")
+                    .on_hover_text("Save the terrain as a 16-bit PNG height map.")
                     .clicked()
                 && let Some(path) = rfd::FileDialog::new()
                     .set_title("Save the terrain as a height map")
@@ -1439,9 +1439,7 @@ impl GraphEditor {
                 if ui
                     .checkbox(&mut over, "over the map")
                     .on_hover_text(
-                        "Leave the map's ground as it is: what the graph digs and what it raises go to two levels of their own, \
-                         with its water, written again at every conversion. Change the graph or the map and convert again: nothing \
-                         is baked in. Delete the two levels to get the map back.\n\nUnchecked, the graph replaces the ground.",
+                        "On: the changes go to levels you can delete. Off: the graph replaces the ground.",
                     )
                     .changed()
                 {
@@ -1461,29 +1459,28 @@ impl GraphEditor {
                 .width(150.0)
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut graph.size, None, map_label.clone())
-                        .on_hover_text("The terrain covers the map as it is, and writes only to its tiles");
+                        .on_hover_text("Write only to the map's tiles");
                     let widest = (map.x1 - map.x0).max(map.z1 - map.z0) as u32;
                     for side in SIZES {
                         let choice = ui.selectable_value(&mut graph.size, Some(side), format!("{} blocks", size_label(side)));
                         if side > widest {
-                            choice.on_hover_text("Larger than the map: converting adds the tiles it lacks, and the world becomes this size");
+                            choice.on_hover_text("Larger than the map: the world grows to this size");
                         } else if side < widest {
-                            choice.on_hover_text("Smaller than the map: the terrain covers a square in its middle, the rest is left as it is");
+                            choice.on_hover_text("Smaller than the map: covers a square in its middle");
                         }
                     }
                 })
                 .response
                 .on_hover_text(
-                    "The square of the world the terrain covers, in blocks. Nodes measure in blocks too: a larger terrain holds \
-                     more mountains of the same size, not larger ones (templates fit theirs to it).",
+                    "How much of the world the terrain covers, in blocks.",
                 );
             let side = terrain_extent(doc, graph.size, 2).size;
             let spacing = side / build_samples(side) as f64;
             let detail = if spacing <= 1.001 { "every block".to_owned() } else { format!("a sample every {spacing:.1} blocks") };
             ui.label(RichText::new(detail).size(11.5).color(pal.weak)).on_hover_text(if spacing <= 1.001 {
-                "Converted at full detail: one sample of the graph for every column of blocks"
+                "Full detail: one sample per block"
             } else {
-                "Beyond 16k blocks, the graph is built a little coarser than a block and smoothed in between: finer would not fit in memory"
+                "Over 16k blocks, a little coarser than a block."
             });
             ui.separator();
             ui.label(RichText::new("Preview").color(pal.weak));
@@ -1507,7 +1504,7 @@ impl GraphEditor {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let button = ui
                     .add(egui::Button::new(theme::with_icon(Icon::LayoutTemplate, "Templates")).selected(self.templates_open))
-                    .on_hover_text("Start from a ready-made landscape: an archipelago, karst towers, a river valley, a canyon…");
+                    .on_hover_text("Ready-made landscapes");
                 if button.clicked() {
                     self.templates_open = !self.templates_open;
                     toggled = true;
@@ -1567,7 +1564,7 @@ impl GraphEditor {
                 egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(12)).show(ui, |ui| {
                     ui.label(RichText::new("Start from a landscape").size(14.0).medium());
                     ui.label(
-                        RichText::new("Replaces the graph, and sets the sun, clouds and sea of the view to suit it.")
+                        RichText::new("Replaces the graph and sets the sky and sea of the view.")
                             .size(11.5)
                             .color(pal.weak),
                     );
@@ -2386,9 +2383,9 @@ impl GraphEditor {
         }
         // How to work it, along the bottom.
         let hint = match self.picked.len() {
-            0 => "Click a node to select it · drag on the background to select several · right-drag, middle-drag or Space+drag to move · wheel or pinch to zoom · Tab or right-click to add a node · F to frame · ⌘Z to undo".to_owned(),
-            1 => "Drag to move · ⇧/⌘-click to select more · ⌘D duplicate · ⌘C / ⌘V copy and paste · ⌫ delete · V view in 3D · F frame · ⌘Z undo".to_owned(),
-            k => format!("{k} nodes selected · drag one to move them all · ⌘D duplicate · ⌘C / ⌘V copy and paste · ⌫ delete · F frame them · Esc to deselect"),
+            0 => "Tab: add · drag: select · right-drag: pan · wheel: zoom · F: frame".to_owned(),
+            1 => "Drag: move · ⇧-click: add · ⌘D: duplicate · ⌫: delete · V: view".to_owned(),
+            k => format!("{k} selected · drag: move · ⌘D · ⌘C/⌘V · ⌫ · F · Esc"),
         };
         painter.text(canvas.left_bottom() + vec2(10.0, -8.0), egui::Align2::LEFT_BOTTOM, hint, egui::FontId::proportional(11.0), pal.weak.gamma_multiply(0.85));
         self.library_ui(ui, graph);
@@ -2507,18 +2504,20 @@ impl GraphEditor {
             ui.label(RichText::new("Terrain graph").bold().size(14.0));
             ui.add_space(2.0);
             ui.label(
-                RichText::new(
-                    "Build relief from nodes, as in Gaea: landforms and primitives make it, adjustments and simulations shape it, \
-                     masks pick parts of it, colour nodes paint it. The viewport shows the graph's output; select a node and \
-                     press V to see the graph up to it. When it looks right, converting the graph writes its heights, terrains \
-                     and real blocks to the map.",
-                )
+                RichText::new("Click a node to edit it · Tab: add one")
+                    .size(11.5)
+                    .color(pal.weak),
+            );
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new(format!(
+                    "{} nodes, {} links",
+                    graph.nodes.len(),
+                    graph.links.len()
+                ))
                 .size(11.5)
                 .color(pal.weak),
             );
-            ui.add_space(8.0);
-            ui.label(RichText::new(format!("{} nodes, {} links", graph.nodes.len(), graph.links.len())).size(11.5).color(pal.weak));
-            ui.label(RichText::new("Right-click the graph or press Tab to add a node.").size(11.5).color(pal.weak));
             return;
         };
         let node = graph.node_mut(id).expect("checked");
@@ -2532,17 +2531,23 @@ impl GraphEditor {
         ui.label(RichText::new(node.kind.description()).size(11.5).color(pal.weak));
         if self.picked.len() > 1 {
             ui.label(
-                RichText::new(format!("{} nodes selected: these are the settings of the last one picked.", self.picked.len()))
-                    .size(11.0)
-                    .color(pal.accent),
+                RichText::new(format!(
+                    "{} nodes selected: settings of the last one.",
+                    self.picked.len()
+                ))
+                .size(11.0)
+                .color(pal.accent),
             );
         }
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             let viewed = self.pinned == Some(id);
             if ui
-                .selectable_label(viewed, theme::with_icon(Icon::Eye, if viewed { "Viewing (V)" } else { "View (V)" }))
-                .on_hover_text("Show this node in the viewport (V, or double-click it); V again goes back to the graph's output")
+                .selectable_label(
+                    viewed,
+                    theme::with_icon(Icon::Eye, if viewed { "Viewing (V)" } else { "View (V)" }),
+                )
+                .on_hover_text("Show this node in the viewport (V)")
                 .clicked()
             {
                 self.toggle_view(id);
@@ -2551,7 +2556,10 @@ impl GraphEditor {
             if outs.len() > 1 {
                 ui.separator();
                 for (k, (name, _)) in outs.iter().enumerate() {
-                    if ui.selectable_label(viewed && self.view_output == k as u8, *name).clicked() {
+                    if ui
+                        .selectable_label(viewed && self.view_output == k as u8, *name)
+                        .clicked()
+                    {
                         self.view_output = k as u8;
                         self.pinned = Some(id);
                         self.revision += 1;
@@ -2759,8 +2767,8 @@ fn plate_editor(ui: &mut Ui, plates: &mut Vec<Plate>, seed: &mut u32) -> bool {
         let fill = if p.continental { land } else { sea };
         painter.circle(centre, if moved.hovered() || moved.dragged() { 7.5 } else { 6.0 }, fill, Stroke::new(2.0, Color32::WHITE));
         painter.circle_filled(tip, if aimed.hovered() || aimed.dragged() { 4.5 } else { 3.0 }, Color32::WHITE);
-        moved.on_hover_text("Drag to move the plate; right-click to make it a continent or an ocean");
-        aimed.on_hover_text("Drag to change how the plate moves: plates running into each other raise mountains");
+        moved.on_hover_text("Drag: move · right-click: land or ocean");
+        aimed.on_hover_text("Drag: how the plate moves");
     }
     if let Some(k) = removed {
         plates.remove(k);
@@ -2790,11 +2798,61 @@ fn plate_editor(ui: &mut Ui, plates: &mut Vec<Plate>, seed: &mut u32) -> bool {
 
 // ------------------------------------------------------------- settings --
 
+/// What the settings of the node being edited are for, by name.
+type Tips = &'static [(&'static str, &'static str)];
+
+fn tips_id() -> egui::Id {
+    egui::Id::unique("massif node setting tips")
+}
+
+/// What each setting of `kind` is for, shown over its name.
+fn tips(kind: &NodeKind) -> Tips {
+    match kind {
+        NodeKind::Rivers { .. } => &[
+            ("Fewer", "Higher: fewer, bigger rivers"),
+            ("Depth", "Depth of the largest rivers"),
+            ("Width", "Width of the largest rivers"),
+            ("Banks", "How gently the banks slope to the water"),
+            ("Lakes", "How many hollows fill up as lakes"),
+        ],
+        NodeKind::Humidity { .. } => &[
+            (
+                "Wind from",
+                "Where the wet wind comes from: 0° north, 90° east",
+            ),
+            ("Inland air", "Moisture far from any sea"),
+            ("Reach", "How far inland the sea's moisture goes"),
+            ("Rain shadow", "How dry it is behind mountains"),
+            ("Variation", "Patches of wetter and drier land"),
+        ],
+        NodeKind::Temperature { .. } => &[
+            ("Warm side", "Temperature on the warm side of the map"),
+            ("Cold side", "Temperature on the cold side"),
+            ("Warm toward", "Where it is warm: 0° north, 90° east"),
+            ("Height cools", "How much colder it gets going up"),
+            ("Variation", "Patches of warmer and colder land"),
+        ],
+        NodeKind::Lakes { .. } => &[("Fill", "How much the hollows' ground is raised")],
+        _ => &[],
+    }
+}
+
 /// A row of settings: a label, then the control.
 fn row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> egui::Response) -> bool {
+    let tip = ui.data(|d| d.get_temp::<Tips>(tips_id())).and_then(|t| {
+        t.iter()
+            .find(|(name, _)| *name == label)
+            .map(|(_, tip)| *tip)
+    });
     ui.horizontal(|ui| {
         ui.spacing_mut().interact_size.y = 18.0;
-        let l = ui.add_sized([96.0, 18.0], egui::Label::new(RichText::new(label).size(12.0)).truncate());
+        let mut l = ui.add_sized(
+            [96.0, 18.0],
+            egui::Label::new(RichText::new(label).size(12.0)).truncate(),
+        );
+        if let Some(tip) = tip {
+            l = l.on_hover_text(tip);
+        }
         add(ui).labelled_by(l.id).changed()
     })
     .inner
@@ -2940,6 +2998,8 @@ fn gradient_picker(ui: &mut Ui, preset: &mut GradientPreset) -> bool {
 /// comparison done by the caller.
 fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
     let pal = Palette::of(ui);
+    let tips = tips(kind);
+    ui.data_mut(|d| d.insert_temp(tips_id(), tips));
     let section = |ui: &mut Ui, name: &str| {
         ui.add_space(6.0);
         ui.label(RichText::new(name).size(11.0).color(pal.weak).medium());
@@ -3252,36 +3312,55 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
         }
         NodeKind::MapHeight => {
             ui.label(
-                RichText::new(
-                    "The map as it is: the ground you painted or imported from WorldPainter, read again whenever it changes. Wire it \
-                     where a landform would go — into Rivers, Erosion, Lakes… — to work on the map instead of making a new one.",
-                )
-                .size(11.5)
-                .color(pal.weak),
+                RichText::new("The open map's surface, water and colours.")
+                    .size(11.5)
+                    .color(pal.weak),
             );
         }
-        NodeKind::Heightmap { path, low, high } => {
+        NodeKind::FileInput {
+            path,
+            low,
+            high,
+            fit,
+        } => {
             ui.horizontal(|ui| {
-                let shown = std::path::Path::new(path.as_str()).file_name().and_then(|n| n.to_str()).unwrap_or("— none");
-                ui.add_sized([96.0, 18.0], egui::Label::new(RichText::new("Image").size(12.0)));
-                ui.label(RichText::new(shown).size(12.0)).on_hover_text(path.as_str());
+                let shown = std::path::Path::new(path.as_str())
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("— none");
+                ui.add_sized(
+                    [96.0, 18.0],
+                    egui::Label::new(RichText::new("File").size(12.0)),
+                );
+                ui.label(RichText::new(shown).size(12.0))
+                    .on_hover_text(path.as_str());
                 if ui.button("Choose…").clicked()
                     && let Some(p) = rfd::FileDialog::new()
-                        .set_title("A height map")
-                        .add_filter("Height maps", &["png", "jpg", "jpeg", "r16", "r32", "raw"])
+                        .set_title("A height map or a world")
+                        .add_filter(
+                            "Height maps and worlds",
+                            &["png", "jpg", "jpeg", "r16", "r32", "raw", "world", "massif"],
+                        )
                         .pick_file()
                 {
                     *path = p.display().to_string();
                 }
             });
-            height(ui, "Black is", low);
-            height(ui, "White is", high);
+            let file = std::path::Path::new(path.as_str());
             let state = if path.is_empty() {
-                "No image yet: choose one. 16-bit PNG keeps the most detail; .r16 and .r32 (raw, square) are read too.".to_owned()
+                "PNG, JPEG, .r16, .r32, .world or .massif".to_owned()
+            } else if massif_core::graph::is_world(file) {
+                row(ui, "Fit to terrain", |ui| ui.checkbox(fit, ""));
+                "A world: its surface, water and terrain colours.".to_owned()
             } else {
-                match massif_core::heightmap::cached(std::path::Path::new(path.as_str())) {
-                    Ok(m) => format!("{} × {} pixels, stretched over the whole terrain; read again when the file changes.", m.width, m.height),
-                    Err(e) => format!("It cannot be read: {e}"),
+                height(ui, "Black is", low);
+                height(ui, "White is", high);
+                match massif_core::heightmap::cached(file) {
+                    Ok(m) => format!(
+                        "{} × {} pixels, stretched over the terrain.",
+                        m.width, m.height
+                    ),
+                    Err(e) => format!("Cannot be read: {e}"),
                 }
             };
             ui.label(RichText::new(state).size(11.0).color(pal.weak));
@@ -3302,14 +3381,6 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             height(ui, "Sea level", sea);
             row(ui, "Variation", |ui| ui.add(egui::Slider::new(variation, 0.0..=15.0).suffix(" °C").max_decimals(1)));
             seed(ui, s);
-            ui.label(
-                RichText::new(
-                    "Warm toward: the side of the map that is warm (0° north, 90° east, 180° south). A mask from −30 °C (black) \
-                     to +45 °C (white): wire it to Biomes and to a Biome output, or select a band of it with Levels.",
-                )
-                .size(11.0)
-                .color(pal.weak),
-            );
         }
         NodeKind::Humidity {
             from,
@@ -3327,14 +3398,6 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             height(ui, "Sea level", sea);
             fraction(ui, "Variation", variation);
             seed(ui, s);
-            ui.label(
-                RichText::new(
-                    "The sea's moisture rides the wind inland (Reach: how far), and rains out on the slopes facing it: the land \
-                     behind the mountains stays dry (Rain shadow: how much). Inland air: how wet the air is far from any water.",
-                )
-                .size(11.0)
-                .color(pal.weak),
-            );
         }
         NodeKind::Biomes { sea } => {
             height(ui, "Sea level", sea);
@@ -3344,7 +3407,7 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             height(ui, "Sea level", sea);
             row(ui, "Paint the ground", |ui| ui.checkbox(paint, ""));
             ui.label(
-                RichText::new("Converted, every column gets the biome of its climate — rivers theirs — and, painted, its terrain:")
+                RichText::new("Writes each climate's biome and terrain:")
                     .size(11.0)
                     .color(pal.weak),
             );
@@ -3367,13 +3430,9 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
         }
         NodeKind::WaterOutput => {
             ui.label(
-                RichText::new(
-                    "Wire the Water of Rivers or Lakes here: converted, every column gets water up to that level where it is over \
-                     the ground, and the sea's level elsewhere. A river's level runs down with its bed, block by block: still water \
-                     in steps for the game, a current for mods that let water flow over water (Streams Reflowing).",
-                )
-                .size(11.5)
-                .color(pal.weak),
+                RichText::new("Water up to this level, where it is over the ground.")
+                    .size(11.5)
+                    .color(pal.weak),
             );
         }
         NodeKind::Erosion {
@@ -3427,26 +3486,10 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             amount(ui, "Banks", banks, 0.0..=4.0);
             fraction(ui, "Lakes", lakes);
             sea_level(ui, sea, "Rivers run to the sea and end there");
-            ui.label(
-                RichText::new(
-                    "Fewer: how much land must drain to a place for a river to run there. Depth and Width are the largest river's; \
-                     its tributaries are smaller. Banks: how far they slope down to the water, in river widths. Lakes: which of the \
-                     hollows a river runs through it fills (deep ones first) rather than cutting a gorge through their rim.\n\n\
-                     Each river is traced from the sea up to its sources, laid in the bottom of its valley and dug at every sample; \
-                     its water only runs down and stays under its banks, and the hollows it crosses hold lakes. Wire Water to a Water output.",
-                )
-                .size(11.0)
-                .color(pal.weak),
-            );
         }
         NodeKind::Lakes { amount: a, sea } => {
             fraction(ui, "Fill", a);
             sea_level(ui, sea, "What lies under the sea is the sea's, not a lake");
-            ui.label(
-                RichText::new("Fill raises the ground of the hollows; at 0 it is left alone, and Water, wired to a Water output, makes them lakes.")
-                    .size(11.0)
-                    .color(pal.weak),
-            );
         }
         NodeKind::Sea { level, shore } => {
             height(ui, "Level", level);
@@ -3567,11 +3610,9 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             amount(ui, "Underside", depth, 0.2..=3.0);
             seed(ui, s);
             ui.label(
-                RichText::new(
-                    "Wire Top and Bottom to a Layer output: the islands become a level of the map, floating over the void.",
-                )
-                .size(11.0)
-                .color(pal.weak),
+                RichText::new("Top + Bottom → Layer output.")
+                    .size(11.0)
+                    .color(pal.weak),
             );
         }
         NodeKind::Overhang {
@@ -3587,7 +3628,7 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             fraction(ui, "Variation", variation);
             seed(ui, s);
             ui.label(
-                RichText::new("Wire Top and Bottom to a Layer output: the rims jut out over the void at the foot of the cliffs.")
+                RichText::new("Top + Bottom → Layer output.")
                     .size(11.0)
                     .color(pal.weak),
             );
@@ -3596,12 +3637,9 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             count(ui, "Layer", slot, 1..=8);
             choice(ui, "Blocks from", palette, &BlockPalette::ALL.map(|p| (p, p.label())));
             ui.label(
-                RichText::new(
-                    "When converted, the rock between Top and Bottom becomes a Solid level of the map, its columns spans over \
-                     the void (one level per layer number). Without a colour, its top is grass.",
-                )
-                .size(11.0)
-                .color(pal.weak),
+                RichText::new("Rock between Top and Bottom, as a level of the map.")
+                    .size(11.0)
+                    .color(pal.weak),
             );
         }
         NodeKind::ColorOutput { blocks: b, palette } => {
@@ -3610,12 +3648,9 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
                 choice(ui, "From", palette, &BlockPalette::ALL.map(|p| (p, p.label())));
             }
             ui.label(
-                RichText::new(
-                    "When converted, every column takes the real block of the game whose colour is closest to the graph's, \
-                     two neighbouring blocks mixing where the colour lies between them.",
-                )
-                .size(11.0)
-                .color(pal.weak),
+                RichText::new("Each column takes the closest real block.")
+                    .size(11.0)
+                    .color(pal.weak),
             );
         }
     }

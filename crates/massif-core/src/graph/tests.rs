@@ -122,7 +122,7 @@ fn generators_stay_in_their_range_and_are_deterministic() {
             | NodeKind::Mesas { base, height, .. }
             | NodeKind::Island { base, height, .. } => (base, height),
             NodeKind::Constant { value } => (value, 0.0),
-            NodeKind::Heightmap { low, high, .. } => (low, high - low),
+            NodeKind::FileInput { low, high, .. } => (low, high - low),
             NodeKind::Rocks { height, .. } => (-height / 2.0, height),
             NodeKind::Crater { base, depth, rim, peak, .. } => (base - depth, depth + rim + peak),
             NodeKind::CraterField { base, max_radius, depth, .. } => (base - max_radius * depth * 4.0, max_radius * depth * 8.0),

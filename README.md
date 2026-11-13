@@ -282,10 +282,13 @@ gorge).
 - **File ▸ Export Height Map…** saves the map's surface (with its levels and
   what was sculpted) as a 16-bit PNG, black the bottom of the world, white
   its top.
-- In a graph, the **Height map** node stretches an image over the terrain,
-  read again when the file changes; **Height map…** beside Convert to
-  voxels builds the terrain at full size and saves its relief as a 16-bit
-  PNG instead of writing it to the map.
+- In a graph, the **File input** node brings in a file as relief: a height
+  map (stretched over the terrain, black and white set to any height), a
+  WorldPainter `.world` or a `.massif` (fitted to the terrain, or read at
+  its own place). Its Height, Water and Colour outputs work like the Map
+  node's, and the file is read again when it changes. **Height map…**
+  beside Convert to voxels builds the terrain at full size and saves its
+  relief as a 16-bit PNG instead of writing it to the map.
 
 ### Real blocks
 

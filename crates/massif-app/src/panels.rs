@@ -13,14 +13,14 @@ use massif_core::compose::TileStack;
 use massif_core::coords::local_index;
 use massif_core::level::LevelKind;
 use massif_core::registry::{BiomeId, Registry, TerrainId};
-use massif_core::tile::NO_FLUID;
 use massif_core::stamps::{Family, Stamp};
+use massif_core::tile::NO_FLUID;
 use massif_core::{MAX_RADIUS, TilePos};
 use std::collections::HashSet;
 
 fn section(ui: &mut Ui, icon: Icon, title: &str) {
     let pal = Palette::of(ui);
-    ui.add_space(4.0);
+    ui.add_space(2.0);
     ui.label(
         RichText::new(format!("{}  {}", theme::glyph(icon), title.to_uppercase()))
             .size(10.5)
@@ -52,7 +52,7 @@ fn icon_button(ui: &mut Ui, icon: Icon, selected: bool, size: f32) -> egui::Resp
         rect.center(),
         egui::Align2::CENTER_CENTER,
         theme::glyph(icon),
-        egui::FontId::proportional(size * 0.52),
+        egui::FontId::proportional(size * 0.6),
         if selected { pal.accent } else { pal.text },
     );
     response
@@ -61,14 +61,28 @@ fn icon_button(ui: &mut Ui, icon: Icon, selected: bool, size: f32) -> egui::Resp
 // ------------------------------------------------------------------ tools --
 
 pub fn tools_panel(ui: &mut Ui, tools: &mut ToolState) {
+    let pal = Palette::of(ui);
+    // A line a group: its sign, then its tools, close together.
+    ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
     for (group, icon, list) in Tool::GROUPS {
-        section(ui, icon, group);
         ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+            ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+            let (r, sign) = ui.allocate_exact_size(vec2(16.0, 26.0), Sense::hover());
+            ui.painter().text(
+                r.center(),
+                egui::Align2::CENTER_CENTER,
+                theme::glyph(icon),
+                egui::FontId::proportional(11.0),
+                pal.weak,
+            );
+            sign.on_hover_text(group);
             for &tool in list {
                 let key = tool.shortcut_text().map(|k| format!("  ({k})")).unwrap_or_default();
                 let tip = format!("{}{key}\n{}", tool.label(), tool.help());
-                if icon_button(ui, tool.icon(), tools.tool == tool, 32.0).on_hover_text(tip).clicked() {
+                if icon_button(ui, tool.icon(), tools.tool == tool, 26.0)
+                    .on_hover_text(tip)
+                    .clicked()
+                {
                     tools.select(tool);
                 }
             }
@@ -98,18 +112,6 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
     });
     hint(ui, tool.help());
 
-    if tool.uses_brush() {
-        let b = &tools.brush;
-        hint(
-            ui,
-            &format!(
-                "Brush: radius {}, intensity {:.0}% — change it in Brush Settings, pick another in Brushes.",
-                b.radius.round(),
-                b.strength * 100.0
-            ),
-        );
-    }
-
     section(ui, Icon::SlidersHorizontal, "Options");
     match tool {
         Tool::Raise => {
@@ -128,7 +130,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
         }
         Tool::PaintTerrain => {
             ui.checkbox(&mut tools.pattern.on, "a pattern of terrains")
-                .on_hover_text("Paint several terrains at once, laid out by a noise: patches, veins, blobs, cells or stripes");
+                .on_hover_text("Several terrains at once, mixed by a noise");
             if tools.pattern.on {
                 pattern_settings(ui, tools, doc, blocks);
             } else {
@@ -138,7 +140,10 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
                     terrain_icon(ui, r, &doc.world.registry, tools.terrain, blocks);
                     ui.label(RichText::new(&def.name).bold());
                 });
-                hint(ui, "Choose terrains in the Terrain panel or any block of the game in Blocks; Alt-click picks one from the map.");
+                hint(
+                    ui,
+                    "Pick it in Terrain or Blocks; Alt-click picks it on the map.",
+                );
             }
         }
         Tool::PaintBiome => {
@@ -148,26 +153,19 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
                 swatch(ui, theme::rgb(def.color));
                 ui.label(RichText::new(&def.name).bold());
             });
-            hint(ui, "Choose biomes in the Biomes panel. Automatic lets the exporter decide from the terrain and the water.");
+            hint(ui, "Pick it in Biomes.");
         }
         Tool::AutoBiome | Tool::AutoPaint => {
             let biomes = tool == Tool::AutoBiome;
-            hint(
-                ui,
-                if biomes {
-                    "Brush where the biomes should follow the land, or do the whole map at once."
-                } else {
-                    "Brush where the ground should follow its biomes, or do the whole map at once. Where the biome is automatic, the ground is painted as the land it is."
-                },
-            );
+            hint(ui, "Brush it, or do the whole map.");
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 if ui
                     .button(theme::with_icon(Icon::Map, "Whole map"))
                     .on_hover_text(if biomes {
-                        "Give every column of the map the biome its land calls for (undoable)"
+                        "Set the biomes of the whole map (undoable)"
                     } else {
-                        "Paint every column of the map as its biome calls for (undoable)"
+                        "Paint the whole map (undoable)"
                     })
                     .clicked()
                 {
@@ -217,20 +215,20 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             hint(
                 ui,
                 &if r.lakes <= 0.001 {
-                    "Lakes: none — it cuts its way through every hollow it meets.".to_owned()
+                    "No lakes: it cuts through hollows.".to_owned()
                 } else {
-                    format!("Lakes: hollows deeper than {:.0} blocks fill up; through the others it cuts its way.", r.lake_depth())
+                    format!("Lakes in hollows deeper than {:.0} blocks.", r.lake_depth())
                 },
             );
             let spec = r.spring_spec(&doc.world.registry);
             hint(
                 ui,
                 &format!(
-                    "From {:.0} blocks wide and {:.0} deep at the spring to {:.0} wide and {:.0} deep where it ends.",
+                    "{:.0}×{:.0} at the source → {:.0}×{:.0} at the end (width × depth).",
                     spec.width, spec.depth, spec.width_end, spec.depth_end
                 ),
             );
-            hint(ui, "Hover the map to see where the water would go; click to let it spring there (⌘Z undoes it).");
+            hint(ui, "Hover: see its course. Click: dig it.");
             if let Some(note) = &tools.river_note {
                 hint(ui, note);
             }
@@ -301,8 +299,14 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             });
             match tools.anchor {
                 AnchorMode::AboveGround => {
-                    slider_row(ui, "Offset", |ui| ui.add(egui::DragValue::new(&mut tools.slab_offset).speed(0.5).suffix(" blocks")));
-                    hint(ui, "Negative offsets put the slab underground: on a Carve level that makes a cave.");
+                    slider_row(ui, "Offset", |ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut tools.slab_offset)
+                                .speed(0.5)
+                                .suffix(" blocks"),
+                        )
+                    });
+                    hint(ui, "Negative: underground.");
                 }
                 AnchorMode::Absolute => {
                     slider_row(ui, "Height", |ui| {
@@ -312,19 +316,13 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             }
         }
         Tool::Build | Tool::Dig | Tool::Smooth3d => {
-            hint(
-                ui,
-                "Works best in the 3D view: the brush is a ball at the point under the cursor. There the middle button (or Alt + drag) turns the view, Shift + middle button pans.",
-            );
-            hint(ui, "On the map it sculpts at the surface. Size, intensity and profile come from Brush Settings.");
+            hint(ui, "Best in the 3D view.");
             let sculpted = doc.dimension().voxels.len();
             if sculpted > 0 {
                 hint(ui, &format!("{sculpted} sculpted chunks of 16³ blocks in this dimension."));
             }
         }
-        Tool::Eyedropper => hint(ui, "Picks terrain, biome and height, then returns to the previous tool."),
-        Tool::Smooth | Tool::Drain | Tool::EraseSlab => hint(ui, "No other option: the brush is all there is."),
-        Tool::Pan => hint(ui, "Two-finger scroll or the middle button pans with any tool; pinch or the wheel zooms."),
+        Tool::Eyedropper | Tool::Smooth | Tool::Drain | Tool::EraseSlab | Tool::Pan => {}
     }
 
     // Which level the tool edits.
@@ -414,7 +412,7 @@ fn brush_grid(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibrary, br
         }
         if let Some(add) = add {
             let r = icon_button(ui, Icon::Plus, false, 44.0)
-                .on_hover_text("Add brushes made from images (greyscale: white paints, black doesn't) to this group");
+                .on_hover_text("Add greyscale images as brushes");
             *add |= r.clicked();
         }
     });
@@ -510,7 +508,7 @@ pub fn brushes_panel(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibr
     }
     hint(
         ui,
-        "Brushes are greyscale images: white paints, black doesn't. Each folder in the brushes folder is a group of its own, in Custom Brushes; WorldPainter's brushes are there too.",
+        "Greyscale images: white paints, black doesn't.",
     );
     feedback
 }
@@ -526,7 +524,7 @@ pub fn custom_brushes_panel(ui: &mut Ui, tools: &mut ToolState, library: &mut Br
         return None;
     }
     if library.groups.is_empty() {
-        hint(ui, "No custom brushes yet. A brush is a greyscale image: white paints, black doesn't.");
+        hint(ui, "No custom brushes yet.");
         if ui.button(theme::with_icon(Icon::Plus, "Add brushes…")).clicked() {
             feedback = add_brushes(library, None, ui.ctx());
         }
@@ -607,9 +605,9 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
     hint(
         ui,
         if cfg!(target_os = "macos") {
-            "Scroll on the map or − + for the size (with Shift: one block at a time), 1…0 for the intensity, ⌘ + scroll (the Windows key on a PC keyboard) or [ ] to turn the brush. The right button inverts the tool."
+            "Scroll: size · 1…0: intensity · ⌘+scroll: turn"
         } else {
-            "Scroll on the map or − + for the size (with Shift: one block at a time), 1…0 for the intensity, Ctrl + Shift + scroll or [ ] to turn the brush. The right button inverts the tool."
+            "Scroll: size · 1…0: intensity · Ctrl+Shift+scroll: turn"
         },
     );
 
@@ -694,7 +692,7 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
         facing_dial(ui, f);
         ui.vertical(|ui| {
             ui.checkbox(&mut f.facing_on, "only slopes facing")
-                .on_hover_text("Only the slopes turned this way: the side the sun lights, the side in the shade. Level ground faces nowhere.");
+                .on_hover_text("Only slopes facing this way.");
             ui.horizontal(|ui| {
                 ui.add_enabled(
                     f.facing_on,
@@ -807,7 +805,7 @@ fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &Document, blocks: 
     }
     if ui
         .button(theme::with_icon(Icon::Plus, "Add the selected terrain"))
-        .on_hover_text("The terrain picked in the Terrain panel, or any block chosen in Blocks")
+        .on_hover_text("From Terrain or Blocks")
         .clicked()
     {
         ps.terrains.push((reg.terrain(TerrainId(tools.terrain)).name.clone(), 1.0));
@@ -908,7 +906,7 @@ pub fn paint_rules(ui: &mut Ui, rules: &mut massif_core::auto::PaintRules, reg: 
         ui.add(egui::DragValue::new(&mut rules.steep).range(10.0..=85.0).speed(0.5).max_decimals(0).suffix("°"));
         ui.add_space(12.0);
         ui.checkbox(&mut rules.read_the_land, "where the biome is automatic, paint as the land is")
-            .on_hover_text("Columns with no biome set are painted as the biome the automatic biomes would give them");
+            .on_hover_text("Unset biomes count as automatic");
     });
     ui.add_space(4.0);
     egui::Grid::new("biome paint").num_columns(4).spacing([10.0, 4.0]).striped(true).show(ui, |ui| {
@@ -1003,7 +1001,7 @@ fn facing_dial(ui: &mut Ui, f: &mut massif_core::filter::Filter) {
     painter.circle_filled(centre, 2.0, ink);
     response
         .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text("Drag to turn: the way the slopes must face (north is up, as on the map)");
+        .on_hover_text("Drag to turn (north up)");
 }
 
 /// A stylised cross-section of a landscape, with the height band the filter
@@ -1273,7 +1271,7 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
             });
         if ui
             .button(theme::with_icon(Icon::FolderOpen, "Choose…"))
-            .on_hover_text("Read the blocks of another version: its client jar, versions/<version>/<version>.jar in the game's folder")
+            .on_hover_text("Another version's client jar")
             .clicked()
             && let Some(path) = rfd::FileDialog::new().set_title("Choose the Minecraft jar").add_filter("Minecraft", &["jar"]).pick_file()
         {
@@ -1286,7 +1284,7 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     });
     hint(
         ui,
-        "The blocks of your own installation of the game, with their real textures and colours. Click a block to paint it on the map; it is added to this world's terrains.",
+        "Your game's real blocks. Click one to paint with it.",
     );
     if let Some(e) = &blocks.error {
         ui.label(RichText::new(e).color(pal.danger).size(11.5));
@@ -1301,7 +1299,7 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                 .desired_width((ui.available_width() - 110.0).max(80.0)),
         );
         ui.checkbox(&mut blocks.all, "All shapes")
-            .on_hover_text("Also show the blocks that are not whole cubes (flowers, torches, slabs…); they cannot be ground");
+            .on_hover_text("Also non-cube blocks");
     });
     let needle = blocks.search.to_lowercase();
     let reg = &doc.world.registry;
@@ -1369,7 +1367,7 @@ fn swatch(ui: &mut Ui, color: Color32) {
 /// Returns true when the solo setting changed.
 pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &Registry, solo: &mut bool, search: &mut String, blocks: &mut BlockLibrary) -> bool {
     let pal = Palette::of(ui);
-    hint(ui, "The block type of the ground surface: grass, sand, stone, snow…");
+    hint(ui, "The block on top of the ground.");
     let solo_changed = ui
         .checkbox(solo, "Solo")
         .on_hover_text("Fade every other terrain on the map")
@@ -1462,7 +1460,7 @@ fn describe_terrain(reg: &Registry, terrain: u16) -> String {
 // ----------------------------------------------------------------- biomes --
 
 pub fn biome_panel(ui: &mut Ui, tools: &mut ToolState, reg: &Registry, search: &mut String) {
-    hint(ui, "Painted biomes override the automatic choice (from terrain and water depth).");
+    hint(ui, "Painted biomes override automatic.");
     ui.add(egui::TextEdit::singleline(search).hint_text(format!("{}  Search biomes", theme::glyph(Icon::Search))).desired_width(f32::INFINITY));
     let needle = search.to_lowercase();
     for (i, b) in reg.biomes.iter().enumerate() {
@@ -1494,8 +1492,7 @@ pub fn levels_panel(ui: &mut Ui, doc: &mut Document, rename: &mut Option<(usize,
     let mut change = LevelsChange::default();
     hint(
         ui,
-        "The multi-level surface: the ground, then Solid levels that add matter (overhangs, arches, \
-         floating islands) and Carve levels that remove it (caves, tunnels, pits). Higher in the list wins.",
+        "Solid adds rock, Carve removes it. Higher wins.",
     );
     ui.horizontal(|ui| {
         if ui.button(format!("{} Solid", theme::glyph(Icon::Plus))).on_hover_text("Add a level that adds matter").clicked() {
@@ -1761,8 +1758,7 @@ pub fn empty_area(ui: &mut Ui, shown: &HashSet<EditorKind>) -> Option<EditorKind
         ui.add_space(4.0);
         ui.label(
             RichText::new(
-                "Any editor can be shown in any area. Drag an area by its title onto another to move it, \
-                 or drop it in the middle to swap the two.",
+                "Drag an area's title to move or swap it.",
             )
             .size(12.0)
             .color(pal.weak),

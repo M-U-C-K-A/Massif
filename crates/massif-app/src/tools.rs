@@ -144,45 +144,45 @@ impl Tool {
 
     pub const fn help(self) -> &'static str {
         match self {
-            Tool::Raise => "Raise the surface under the brush; the right button (or Alt) lowers it.",
-            Tool::Smooth => "Blend the surface toward its local average.",
-            Tool::Flatten => "Flatten toward the height where the stroke starts, as WorldPainter does.",
-            Tool::SetHeight => "Set the surface to exactly the target height (the eyedropper picks it).",
-            Tool::Roughen => "Add noise to break up smooth areas; the right button subtracts it.",
+            Tool::Raise => "Raise the ground. Right button: lower.",
+            Tool::Smooth => "Smooth the ground.",
+            Tool::Flatten => "Flatten to the height where the stroke starts.",
+            Tool::SetHeight => "Set the ground to the target height.",
+            Tool::Roughen => "Roughen the ground. Right button: smoother.",
             Tool::PaintTerrain => {
-                "Paint the selected terrain; the right button puts back the terrain the height calls for."
+                "Paint a terrain. Right button: back to automatic."
             }
-            Tool::PaintBiome => "Paint the selected biome; the right button resets columns to automatic.",
+            Tool::PaintBiome => "Paint a biome. Right button: back to automatic.",
             Tool::AutoBiome => {
-                "Give the land under the brush its biomes: deep water, rivers, beaches, plains, hills, deserts, snow… read from the water, the height, the slope and the ground. The right button resets columns to automatic."
+                "Biomes from the land. Right button: reset."
             }
             Tool::AutoPaint => {
-                "Paint the ground under the brush as its biomes call for: their ground, their cliffs, what lies under their water. The right button puts back the terrain the height calls for."
+                "Terrain from the biomes. Right button: reset."
             }
-            Tool::Eyedropper => "Click to pick the terrain, biome, height and water level under the cursor.",
-            Tool::Flood => "Fill the basin under the cursor with water up to the water level; the right button drains it.",
-            Tool::Drain => "Remove the body of water under the cursor; the right button floods it.",
-            Tool::Water => "Set the water level under the brush; the right button removes water.",
+            Tool::Eyedropper => "Pick the terrain, biome, height and water under the cursor.",
+            Tool::Flood => "Fill a basin with water. Right button: drain.",
+            Tool::Drain => "Drain a body of water. Right button: fill.",
+            Tool::Water => "Set the water level. Right button: remove water.",
             Tool::River => {
-                "Drag along a river's course and let go to dig it — or click its points one by one, then double-click (or Enter): a smooth bed with water running down, banks easing into the land. The right button takes back the last point, Esc drops the course. Start on a river for a branch, end on one for a tributary."
+                "Drag along a river's course to dig it."
             }
             Tool::Spring => {
-                "Click where a river springs: its water finds its own way down the land, eroding a bed as it goes, fills the hollows it meets into lakes and runs on to the sea. The map shows where it would go before you click. Flow makes it grow wider and deeper downstream."
+                "Click a source: the water finds its way down."
             }
             Tool::StampSlab => {
-                "Add a slab to the active Solid or Carve level (overhangs, arches, floating islands, caves); the right button erases."
+                "Add rock to the active level. Right button: erase."
             }
-            Tool::EraseSlab => "Remove the active Solid or Carve level under the brush; the right button stamps.",
+            Tool::EraseSlab => "Erase the active level. Right button: add.",
             Tool::Build => {
-                "Add matter in a ball where the 3D view points (on the map: at the surface): overhangs past vertical, arches, spires. The right button digs."
+                "Add matter in 3D. Right button: dig."
             }
             Tool::Dig => {
-                "Dig a ball out where the 3D view points (on the map: at the surface): caves of any shape, tunnels, cut-backs. The right button builds."
+                "Dig in 3D: caves, tunnels. Right button: build."
             }
             Tool::Smooth3d => {
-                "Round off in 3D where the 3D view points: cliff edges become rounded, sharp hollows fill in; flat faces stay put."
+                "Round off in 3D."
             }
-            Tool::Pan => "Drag to move the map. With any tool the middle button, or Space held, moves it too.",
+            Tool::Pan => "Move the map (also: middle button, Space).",
         }
     }
 
@@ -378,7 +378,7 @@ pub fn dig_spring(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32) -> 
     if descent.course.len() < 3 {
         let note = match descent.mouth {
             Some(massif_core::river::Mouth::Edge) => "That is off the map: click on land",
-            _ => "That is water already: click on dry land, where the river springs",
+            _ => "Already water: click on dry land",
         };
         tools.river_note = Some(note.to_owned());
         return Some(note.into());
@@ -393,7 +393,7 @@ pub fn dig_spring(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32) -> 
         n => format!(", through {n} lakes"),
     };
     let into = descent.mouth.map_or("", |m| m.label());
-    let note = format!("A river {:.0} blocks long, its water from {:.0} down to {into}{lakes}", report.length, report.source);
+    let note = format!("{:.0} blocks long, from Y {:.0} to {into}{lakes}", report.length, report.source);
     tools.river_note = Some(note.clone());
     Some(note)
 }
@@ -490,7 +490,7 @@ pub fn begin_stroke(doc: &mut Document, tools: &ToolState, at: (f32, f32), inver
     if tool.needs_slab_level() && doc.active_kind() == LevelKind::Ground {
         return (
             None,
-            Some("Stamping needs a Solid or Carve level: add one in the Levels panel and select it.".into()),
+            Some("Stamps need a Solid or Carve level (Levels panel).".into()),
         );
     }
     let flatten_to = (tool == Tool::Flatten)
@@ -705,7 +705,7 @@ pub fn dig_river(doc: &mut Document, tools: &mut ToolState) -> Feedback {
         "The river is off the map: nothing dug".to_owned()
     } else {
         format!(
-            "Dug a river {:.0} blocks long, its water from {:.0} down to {:.0}",
+            "Dug a river {:.0} blocks long, from Y {:.0} to {:.0}",
             report.length, report.source, report.mouth
         )
     };

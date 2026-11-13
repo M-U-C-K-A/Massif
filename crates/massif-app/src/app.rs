@@ -17,8 +17,8 @@ use egui::{
     pos2, vec2,
 };
 use massif_anvil::{ExportOptions, GameMode, Surroundings};
-use massif_core::{TILE_SIZE, TilePos, World};
 use massif_core::generate::{GenParams, Landform, generate};
+use massif_core::{TILE_SIZE, TilePos, World};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -217,6 +217,21 @@ pub struct MassifApp {
     unified_titlebar: bool,
 }
 
+/// A world from a file: a Massif world, or a WorldPainter one imported.
+fn read_any_world(path: &std::path::Path) -> Result<World, String> {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("world") => massif_legacy::import_world(path, None)
+            .map(|(w, _)| w)
+            .map_err(|e| e.to_string()),
+        _ => massif_format::load(path).map_err(|e| e.to_string()),
+    }
+}
+
 fn default_world() -> World {
     generate(&GenParams::default())
 }
@@ -340,6 +355,9 @@ impl MassifApp {
     }
 
     fn with_world(world: World, layout: Layout, tools: ToolState, settings: Settings) -> Self {
+        // Graphs' File input nodes read worlds with the readers of the
+        // formats.
+        massif_core::graph::set_world_reader(read_any_world);
         Self {
             doc: Document::new(world, None, 1),
             next_generation: 1,
@@ -1079,7 +1097,7 @@ impl MassifApp {
             }
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                 ui.label(
-                    RichText::new("Ctrl+Space maximises the area under the mouse · drag an area's title to move it")
+                    RichText::new("Ctrl+Space: maximise · drag a title: move")
                         .size(11.5)
                         .color(pal.weak),
                 );
@@ -1549,8 +1567,16 @@ impl MassifApp {
                 let response = egui::Modal::new(Id::unique("from height map")).show(ctx, |ui| {
                     ui.set_width(560.0);
                     let pal = Palette::of(ui);
-                    ui.label(RichText::new("A new world from a height map").bold().size(16.0));
-                    ui.label(RichText::new(form.path.display().to_string()).size(11.0).color(pal.weak));
+                    ui.label(
+                        RichText::new("A new world from a height map")
+                            .bold()
+                            .size(16.0),
+                    );
+                    ui.label(
+                        RichText::new(form.path.display().to_string())
+                            .size(11.0)
+                            .color(pal.weak),
+                    );
                     ui.add_space(8.0);
                     ui.horizontal_top(|ui| {
                         if let Some(t) = &form.picture {
@@ -1564,15 +1590,33 @@ impl MassifApp {
                                 ui.label("Name");
                                 ui.text_edit_singleline(&mut h.name);
                             });
-                            ui.add(egui::Slider::new(&mut h.scale, 0.25..=16.0).logarithmic(true).text("blocks a pixel").max_decimals(2));
-                            ui.add(egui::Slider::new(&mut h.low, -64.0..=319.0).text("black is Y").max_decimals(0));
-                            ui.add(egui::Slider::new(&mut h.high, -64.0..=319.0).text("white is Y").max_decimals(0));
-                            ui.add(egui::Slider::new(&mut h.sea_level, -64..=319).text("sea level"));
-                            let (w, d) = (form.map.width as f32 * h.scale, form.map.height as f32 * h.scale);
+                            ui.add(
+                                egui::Slider::new(&mut h.scale, 0.25..=16.0)
+                                    .logarithmic(true)
+                                    .text("blocks a pixel")
+                                    .max_decimals(2),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut h.low, -64.0..=319.0)
+                                    .text("black is Y")
+                                    .max_decimals(0),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut h.high, -64.0..=319.0)
+                                    .text("white is Y")
+                                    .max_decimals(0),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut h.sea_level, -64..=319).text("sea level"),
+                            );
+                            let (w, d) = (
+                                form.map.width as f32 * h.scale,
+                                form.map.height as f32 * h.scale,
+                            );
                             ui.add_space(4.0);
                             ui.label(
                                 RichText::new(format!(
-                                    "{} × {} pixels → a map of {w:.0} × {d:.0} blocks, from Y {:.0} to {:.0}; terrains painted from height and slope.",
+                                    "{} × {} pixels → {w:.0} × {d:.0} blocks, Y {:.0} to {:.0}.",
                                     form.map.width, form.map.height, h.low, h.high
                                 ))
                                 .size(11.5)
@@ -1582,7 +1626,10 @@ impl MassifApp {
                     });
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
-                        if ui.add(theme::primary_button(ui, "Make the world")).clicked() {
+                        if ui
+                            .add(theme::primary_button(ui, "Make the world"))
+                            .clicked()
+                        {
                             make = true;
                         }
                         if ui.button("Cancel").clicked() {
@@ -1605,9 +1652,16 @@ impl MassifApp {
                 let response = egui::Modal::new(Id::unique("welcome")).show(ctx, |ui| {
                     ui.set_width(860.0);
                     let pal = Palette::of(ui);
-                    ui.label(RichText::new(format!("{}  Welcome to Massif", theme::glyph(Icon::MountainSnow))).bold().size(20.0));
                     ui.label(
-                        RichText::new("Minecraft maps of any size: paint them by hand, or generate them from nodes, then export them to the game.")
+                        RichText::new(format!(
+                            "{}  Welcome to Massif",
+                            theme::glyph(Icon::MountainSnow)
+                        ))
+                        .bold()
+                        .size(20.0),
+                    );
+                    ui.label(
+                        RichText::new("Paint or generate Minecraft maps, then export them.")
                             .size(13.0)
                             .color(pal.weak),
                     );
@@ -1615,78 +1669,149 @@ impl MassifApp {
                     // The way it goes, in three steps.
                     ui.horizontal(|ui| {
                         for (k, (title, what)) in [
-                            ("Make the land", "paint it on the World side, or generate it on the Terrain side"),
-                            ("Shape it", "rivers, paint, biomes, caves and overhangs"),
-                            ("Export it", "File → Export (⌘E), for the version you play"),
+                            ("Make the land", "paint it (World) or generate it (Terrain)"),
+                            ("Shape it", "rivers, paint, biomes"),
+                            ("Export it", "File → Export (⌘E)"),
                         ]
                         .into_iter()
                         .enumerate()
                         {
-                            egui::Frame::new().fill(pal.header).corner_radius(10).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
-                                ui.set_width(256.0);
-                                ui.label(RichText::new(format!("{}  {title}", k + 1)).bold().size(13.5));
-                                ui.label(RichText::new(what).size(11.5).color(pal.weak));
-                            });
+                            egui::Frame::new()
+                                .fill(pal.header)
+                                .corner_radius(10)
+                                .inner_margin(egui::Margin::same(10))
+                                .show(ui, |ui| {
+                                    ui.set_width(256.0);
+                                    ui.label(
+                                        RichText::new(format!("{}  {title}", k + 1))
+                                            .bold()
+                                            .size(13.5),
+                                    );
+                                    ui.label(RichText::new(what).size(11.5).color(pal.weak));
+                                });
                         }
                     });
                     ui.add_space(12.0);
                     ui.columns(3, |cols| {
                         let card = |ui: &mut Ui, icon: Icon, title: &str, what: &str| {
-                            ui.label(RichText::new(format!("{}  {title}", theme::glyph(icon))).bold().size(14.5));
+                            ui.label(
+                                RichText::new(format!("{}  {title}", theme::glyph(icon)))
+                                    .bold()
+                                    .size(14.5),
+                            );
                             ui.label(RichText::new(what).size(11.5).color(pal.weak));
                             ui.add_space(6.0);
                         };
-                        let wide = |ui: &mut Ui, icon: Icon, text: &str| ui.add_sized([ui.available_width(), 30.0], egui::Button::new(theme::with_icon(icon, text)));
+                        let wide = |ui: &mut Ui, icon: Icon, text: &str| {
+                            ui.add_sized(
+                                [ui.available_width(), 30.0],
+                                egui::Button::new(theme::with_icon(icon, text)),
+                            )
+                        };
                         // A map of one's own.
-                        card(&mut cols[0], Icon::Map, "A map", "Start a map to paint, or open one");
+                        card(&mut cols[0], Icon::Map, "A map", "New, opened or imported");
                         if wide(&mut cols[0], Icon::FilePlus2, "New map…").clicked() {
                             action = Some(Box::new(|app, _| app.open_new_dialog()));
                         }
-                        if wide(&mut cols[0], Icon::FolderOpen, "Open a .massif world…").clicked() {
-                            action = Some(Box::new(|app, ctx| app.request(ctx, Pending::Open(None))));
+                        if wide(&mut cols[0], Icon::FolderOpen, "Open a .massif world…").clicked()
+                        {
+                            action =
+                                Some(Box::new(|app, ctx| app.request(ctx, Pending::Open(None))));
                         }
-                        if wide(&mut cols[0], Icon::ImageUp, "From a height map (Gaea, World Machine…)").clicked() {
+                        if wide(
+                            &mut cols[0],
+                            Icon::ImageUp,
+                            "From a height map (Gaea, World Machine…)",
+                        )
+                        .clicked()
+                        {
                             action = Some(Box::new(|app, ctx| app.pick_heightmap(ctx)));
                         }
-                        if wide(&mut cols[0], Icon::Import, "Import a WorldPainter world…").clicked() {
+                        if wide(&mut cols[0], Icon::Import, "Import a WorldPainter world…")
+                            .clicked()
+                        {
                             action = Some(Box::new(|app, ctx| {
-                                if let Some(path) = rfd::FileDialog::new().set_title("Import a WorldPainter world").add_filter("WorldPainter world", &["world"]).pick_file() {
+                                if let Some(path) = rfd::FileDialog::new()
+                                    .set_title("Import a WorldPainter world")
+                                    .add_filter("WorldPainter world", &["world"])
+                                    .pick_file()
+                                {
                                     app.request(ctx, Pending::Open(Some(path)));
                                 }
                             }));
                         }
-                        let recent: Vec<PathBuf> = self.settings.recent.iter().take(4).cloned().collect();
+                        let recent: Vec<PathBuf> =
+                            self.settings.recent.iter().take(4).cloned().collect();
                         if !recent.is_empty() {
                             cols[0].add_space(6.0);
                             cols[0].label(RichText::new("Recent").size(11.0).color(pal.weak));
                             for path in recent {
-                                if cols[0].link(jobs::display_name(&path)).on_hover_text(path.display().to_string()).clicked() {
-                                    action = Some(Box::new(move |app, ctx| app.request(ctx, Pending::Open(Some(path)))));
+                                if cols[0]
+                                    .link(jobs::display_name(&path))
+                                    .on_hover_text(path.display().to_string())
+                                    .clicked()
+                                {
+                                    action = Some(Box::new(move |app, ctx| {
+                                        app.request(ctx, Pending::Open(Some(path)))
+                                    }));
                                 }
                             }
                         }
                         // A landscape from nodes.
-                        card(&mut cols[1], Icon::Mountain, "A landscape", "Generate one on the Terrain side, then Convert to voxels");
-                        for t in [Template::Continents, Template::Alpine, Template::Archipelago, Template::RiverValley, Template::FloatingMountains, Template::DesertCanyon] {
-                            if wide(&mut cols[1], Icon::LayoutTemplate, t.label()).on_hover_text(t.description()).clicked() {
+                        card(
+                            &mut cols[1],
+                            Icon::Mountain,
+                            "A landscape",
+                            "Generated from nodes",
+                        );
+                        for t in [
+                            Template::Continents,
+                            Template::Alpine,
+                            Template::Archipelago,
+                            Template::RiverValley,
+                            Template::FloatingMountains,
+                            Template::DesertCanyon,
+                        ] {
+                            if wide(&mut cols[1], Icon::LayoutTemplate, t.label())
+                                .on_hover_text(t.description())
+                                .clicked()
+                            {
                                 action = Some(Box::new(move |app, _| app.start_terrain(t)));
                             }
                         }
                         // The map one has.
-                        card(&mut cols[2], Icon::Brush, "The map you have", "Work on the map that is open");
-                        if wide(&mut cols[2], Icon::Paintbrush, "Paint it from its relief").on_hover_text(Template::PaintMap.description()).clicked() {
+                        card(
+                            &mut cols[2],
+                            Icon::Brush,
+                            "The map you have",
+                            "Work on the open map",
+                        );
+                        if wide(&mut cols[2], Icon::Paintbrush, "Paint it from its relief")
+                            .on_hover_text(Template::PaintMap.description())
+                            .clicked()
+                        {
                             action = Some(Box::new(|app, _| app.start_terrain(Template::PaintMap)));
                         }
-                        if wide(&mut cols[2], Icon::Waves, "Give it rivers").on_hover_text(Template::MapRivers.description()).clicked() {
-                            action = Some(Box::new(|app, _| app.start_terrain(Template::MapRivers)));
+                        if wide(&mut cols[2], Icon::Waves, "Give it rivers")
+                            .on_hover_text(Template::MapRivers.description())
+                            .clicked()
+                        {
+                            action =
+                                Some(Box::new(|app, _| app.start_terrain(Template::MapRivers)));
                         }
-                        if wide(&mut cols[2], Icon::Route, "Draw a river by hand").on_hover_text("The River tool: drag along a river's course, let go").clicked() {
+                        if wide(&mut cols[2], Icon::Route, "Draw a river by hand")
+                            .on_hover_text("The River tool: drag along a river's course, let go")
+                            .clicked()
+                        {
                             action = Some(Box::new(|app, _| {
                                 app.layout.switch_side(false);
                                 app.tools.select(Tool::River);
                             }));
                         }
-                        if wide(&mut cols[2], Icon::Paintbrush2, "Paint by hand").on_hover_text("The brushes of the World side, as in WorldPainter").clicked() {
+                        if wide(&mut cols[2], Icon::Paintbrush2, "Paint by hand")
+                            .on_hover_text("The brushes of the World side, as in WorldPainter")
+                            .clicked()
+                        {
                             action = Some(Box::new(|app, _| {
                                 app.layout.switch_side(false);
                                 app.tools.select(Tool::PaintTerrain);
@@ -1697,7 +1822,11 @@ impl MassifApp {
                     ui.separator();
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut self.settings.welcome, "Show this at startup");
-                        ui.label(RichText::new("· Help → Welcome brings it back").size(11.0).color(pal.weak));
+                        ui.label(
+                            RichText::new("· Help → Welcome brings it back")
+                                .size(11.0)
+                                .color(pal.weak),
+                        );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.button("Close").clicked() {
                                 keep = false;
@@ -1719,25 +1848,48 @@ impl MassifApp {
             Dialog::AutoRules(mut paint) => {
                 let response = egui::Modal::new(Id::unique("auto rules")).show(ctx, |ui| {
                     ui.set_width(700.0);
-                    ui.label(RichText::new("Automatic biomes and paint").bold().size(15.0));
                     ui.label(
-                        RichText::new("Auto biome reads the land and gives it biomes; Auto paint gives each biome its ground. Both follow these rules, with a brush or over the whole map.")
+                        RichText::new("Automatic biomes and paint")
+                            .bold()
+                            .size(15.0),
+                    );
+                    ui.label(
+                        RichText::new("Biomes from the land, ground from the biomes.")
                             .size(11.5)
                             .color(Palette::of(ui).weak),
                     );
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
-                        ui.selectable_value(&mut paint, false, theme::with_icon(Icon::Earth, "Biomes from the land"));
-                        ui.selectable_value(&mut paint, true, theme::with_icon(Icon::WandSparkles, "Paint from the biomes"));
+                        ui.selectable_value(
+                            &mut paint,
+                            false,
+                            theme::with_icon(Icon::Earth, "Biomes from the land"),
+                        );
+                        ui.selectable_value(
+                            &mut paint,
+                            true,
+                            theme::with_icon(Icon::WandSparkles, "Paint from the biomes"),
+                        );
                     });
                     ui.separator();
-                    egui::ScrollArea::vertical().max_height(440.0).auto_shrink([false, true]).show(ui, |ui| {
-                        if paint {
-                            panels::paint_rules(ui, &mut self.tools.auto.paint, &self.doc.world.registry);
-                        } else {
-                            panels::land_rules(ui, &mut self.tools.auto.land, &self.doc.world.registry);
-                        }
-                    });
+                    egui::ScrollArea::vertical()
+                        .max_height(440.0)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            if paint {
+                                panels::paint_rules(
+                                    ui,
+                                    &mut self.tools.auto.paint,
+                                    &self.doc.world.registry,
+                                );
+                            } else {
+                                panels::land_rules(
+                                    ui,
+                                    &mut self.tools.auto.land,
+                                    &self.doc.world.registry,
+                                );
+                            }
+                        });
                     ui.separator();
                     ui.horizontal(|ui| {
                         if ui.button("Reset to defaults").clicked() {
@@ -1751,11 +1903,26 @@ impl MassifApp {
                             if ui.add(theme::primary_button(ui, "Done")).clicked() {
                                 keep = false;
                             }
-                            let label = if paint { "Paint the whole map" } else { "Give the whole map its biomes" };
-                            if ui.button(label).on_hover_text("One undoable step").clicked() {
-                                let changed = if paint { self.doc.auto_paint(&self.tools.auto) } else { self.doc.auto_biome(&self.tools.auto) };
+                            let label = if paint {
+                                "Paint the whole map"
+                            } else {
+                                "Give the whole map its biomes"
+                            };
+                            if ui
+                                .button(label)
+                                .on_hover_text("One undoable step")
+                                .clicked()
+                            {
+                                let changed = if paint {
+                                    self.doc.auto_paint(&self.tools.auto)
+                                } else {
+                                    self.doc.auto_biome(&self.tools.auto)
+                                };
                                 self.tools.auto_done = Some((!paint, changed));
-                                self.feedback = Some(format!("{} over the whole map: {changed} columns changed", if paint { "Auto paint" } else { "Auto biome" }));
+                                self.feedback = Some(format!(
+                                    "{} over the whole map: {changed} columns changed",
+                                    if paint { "Auto paint" } else { "Auto biome" }
+                                ));
                             }
                         });
                     });
@@ -1874,24 +2041,36 @@ impl MassifApp {
                         let form_rect = ui
                             .vertical(|ui| {
                                 ui.set_width(700.0);
-                                egui::ScrollArea::vertical().id_salt("export form").max_height(max_height).show(ui, |ui| {
-                                    ui.set_width(690.0);
-                                    match form.tab {
-                                        ExportTab::General => export_general(ui, &mut form),
-                                        ExportTab::World => export_world(ui, &mut form),
-                                    }
-                                });
+                                egui::ScrollArea::vertical()
+                                    .id_salt("export form")
+                                    .max_height(max_height)
+                                    .show(ui, |ui| {
+                                        ui.set_width(690.0);
+                                        match form.tab {
+                                            ExportTab::General => export_general(ui, &mut form),
+                                            ExportTab::World => export_world(ui, &mut form),
+                                        }
+                                    });
                             })
                             .response
                             .rect;
                         ui.add_space(6.0);
                         let x = ui.cursor().min.x;
-                        ui.painter().vline(x, form_rect.y_range(), Stroke::new(1.0, pal.border));
+                        ui.painter()
+                            .vline(x, form_rect.y_range(), Stroke::new(1.0, pal.border));
                         ui.add_space(7.0);
                         ui.vertical(|ui| {
                             ui.set_min_width(110.0);
-                            for (tab, label) in [(ExportTab::General, "General"), (ExportTab::World, "World")] {
-                                if ui.add_sized([110.0, 24.0], egui::Button::selectable(form.tab == tab, label)).clicked() {
+                            for (tab, label) in
+                                [(ExportTab::General, "General"), (ExportTab::World, "World")]
+                            {
+                                if ui
+                                    .add_sized(
+                                        [110.0, 24.0],
+                                        egui::Button::selectable(form.tab == tab, label),
+                                    )
+                                    .clicked()
+                                {
                                     form.tab = tab;
                                 }
                             }
@@ -1902,13 +2081,16 @@ impl MassifApp {
                     if exists {
                         ui.add_space(4.0);
                         ui.colored_label(pal.danger, "This folder already exists.");
-                        ui.checkbox(&mut form.overwrite, "Replace its region files (everything else is kept)");
+                        ui.checkbox(
+                            &mut form.overwrite,
+                            "Replace its region files (everything else is kept)",
+                        );
                     }
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
                         let test = ui
                             .button("Test Export…")
-                            .on_hover_text("Export only the 3 × 3 tiles (384 × 384 blocks) around the centre of the map view, to a separate folder, to check the result quickly in Minecraft");
+                            .on_hover_text("Export 384 × 384 blocks around the view, to test it");
                         if test.clicked() {
                             start = Some(true);
                         }
@@ -2052,12 +2234,18 @@ impl MassifApp {
             Dialog::About => {
                 let response = egui::Modal::new(Id::unique("about")).show(ctx, |ui| {
                     ui.set_width(400.0);
-                    ui.label(RichText::new(format!("{}  Massif", theme::glyph(Icon::MountainSnow))).bold().size(18.0));
-                    ui.label(RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).color(Palette::of(ui).weak));
+                    ui.label(
+                        RichText::new(format!("{}  Massif", theme::glyph(Icon::MountainSnow)))
+                            .bold()
+                            .size(18.0),
+                    );
+                    ui.label(
+                        RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
+                            .color(Palette::of(ui).weak),
+                    );
                     ui.add_space(6.0);
-                    ui.label("A map editor for Minecraft worlds of any size: sculpt and paint in 2D on a multi-level surface (ground, overhangs, floating islands, caves), preview in 3D, export to Anvil.");
+                    ui.label("A map editor for Minecraft worlds of any size.");
                     ui.add_space(6.0);
-                    ui.label(RichText::new("Worlds are saved as .massif files: an indexed container of independently compressed, checksummed tiles.").size(11.5).color(Palette::of(ui).weak));
                     ui.add_space(8.0);
                     if ui.button("Close").clicked() {
                         keep = false;
@@ -2196,7 +2384,7 @@ fn row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
 
 fn export_general(ui: &mut Ui, form: &mut ExportForm) {
     let pal = Palette::of(ui);
-    card(ui, "Where to save it", "The folder the world is saved in, and the name it has in Minecraft.", |ui| {
+    card(ui, "Where to save it", "Its folder, and its name in Minecraft.", |ui| {
         row(ui, "Saves folder", |ui| {
             ui.add(egui::Label::new(RichText::new(form.parent.display().to_string()).size(11.5)).truncate());
             if ui.small_button("…").on_hover_text("Choose the folder").clicked()
@@ -2285,7 +2473,7 @@ fn export_general(ui: &mut Ui, form: &mut ExportForm) {
             });
         });
     });
-    card(ui, "Data packs", "Folders or zip files copied into the world's datapacks folder and enabled. Massif does not check that they suit the Minecraft version.", |ui| {
+    card(ui, "Data packs", "Data packs copied into the world.", |ui| {
         ui.horizontal_top(|ui| {
             egui::Frame::new().stroke(Stroke::new(1.0, pal.border)).corner_radius(4).inner_margin(4).show(ui, |ui| {
                 ui.set_min_size(vec2(ui.available_width() - 40.0, 90.0));
@@ -2336,7 +2524,7 @@ fn export_world(ui: &mut Ui, form: &mut ExportForm) {
             ui.add(egui::DragValue::new(&mut form.spawn[1]).range(-64..=319));
             ui.add(egui::DragValue::new(&mut form.spawn[2]));
         });
-        ui.label(RichText::new("The world's spawn point, set in the Info panel; changed here for this export only.").size(11.5).color(pal.weak));
+        ui.label(RichText::new("Spawn point for this export.").size(11.5).color(pal.weak));
     });
 }
 
@@ -4208,10 +4396,11 @@ mod tests {
             app.graph.use_template(&mut app.doc, Template::Alpine);
             let mut g = massif_core::graph::Graph::default();
             let pic = g.add(
-                NodeKind::Heightmap {
+                NodeKind::FileInput {
                     path: png.display().to_string(),
                     low: 60.0,
                     high: 160.0,
+                    fit: true,
                 },
                 [0.0, 0.0],
             );
@@ -4234,6 +4423,54 @@ mod tests {
         assert_eq!((saved.width, saved.height), (128, 128));
         assert!((y(saved.sample(63.5, 63.5)) - 160.0).abs() < 3.0, "the cone's top, as the node maps it: {}", y(saved.sample(63.5, 63.5)));
         assert!((y(saved.data[0]) - 60.0).abs() < 3.0);
+        // A world file as input: the cone world saved, read back by the
+        // node, fitted to the terrain — its peak in the middle.
+        let massif = dir.join("cone.massif");
+        let mut cone_world = massif_core::generate::from_heightmap(
+            &massif_core::heightmap::read(&png).unwrap(),
+            &massif_core::generate::FromHeightmap {
+                name: "Cone".into(),
+                scale: 2.0,
+                low: 40.0,
+                high: 200.0,
+                sea_level: 63,
+            },
+        );
+        cone_world.meta.graph = None;
+        massif_format::save(&cone_world, &massif).unwrap();
+        let mut g = massif_core::graph::Graph::default();
+        let input = g.add(
+            NodeKind::FileInput {
+                path: massif.display().to_string(),
+                low: 0.0,
+                high: 0.0,
+                fit: true,
+            },
+            [0.0, 0.0],
+        );
+        let out = g.add(NodeKind::HeightOutput, [220.0, 0.0]);
+        g.connect(input, 0, out, 0);
+        let ext = massif_core::graph::Extent {
+            x0: 5000.0,
+            z0: 5000.0,
+            size: 1000.0,
+            n: 64,
+        };
+        let built = g
+            .build(&ext, &std::sync::atomic::AtomicBool::new(false))
+            .unwrap();
+        let hgt = built.heights.unwrap();
+        // A sample covers 8 blocks of the cone: within a few blocks of its tip.
+        assert!(
+            (hgt.at(32, 32) - 200.0).abs() < 7.0,
+            "the world's peak, fitted to the terrain: {}",
+            hgt.at(32, 32)
+        );
+        assert!(
+            (hgt.at(1, 1) - 40.0).abs() < 4.0,
+            "its foot: {}",
+            hgt.at(1, 1)
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

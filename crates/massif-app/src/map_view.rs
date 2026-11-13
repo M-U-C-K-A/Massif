@@ -670,14 +670,14 @@ impl MapView {
                             1 => ", through a lake".to_owned(),
                             n => format!(", through {n} lakes"),
                         };
-                        format!("Click: a river springs here and runs down to {}{lakes}", m.label())
+                        format!("Click: a river from here to {}{lakes}", m.label())
                     }
-                    _ => "River source: hover the land to see where its water would go, click to let it spring".to_owned(),
+                    _ => "Hover: see where the water goes · click: dig the river".to_owned(),
                 }
             } else if tools.river_points.is_empty() {
-                "River: drag along its course and let go to dig it — or click its points one by one".to_owned()
+                "Drag along the course, release to dig".to_owned()
             } else {
-                "Enter or double-click: dig it · right-click: take back the last point · Esc: drop the course".to_owned()
+                "Enter: dig · right-click: remove a point · Esc: cancel".to_owned()
             };
             let at = canvas.center_bottom() - vec2(0.0, 18.0);
             let galley = painter.layout_no_wrap(hint, egui::FontId::proportional(12.5), Color32::WHITE);

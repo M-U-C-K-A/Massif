@@ -67,16 +67,16 @@ impl Template {
         match self {
             Template::Alpine => "Eroded peaks over green hills, snow on the summits",
             Template::Archipelago => "Tropical islands in a shallow sea, beaches and green peaks",
-            Template::KarstTowers => "A forest of stone towers, each its own height, over a jungle",
-            Template::FloatingMountains => "Mountains floating over a jungle of stone towers, above the mist",
-            Template::RiverValley => "A wide valley between snowy mountains, a river along its floor",
-            Template::DesertCanyon => "A winding canyon in a red plateau, stepped walls, buttes, a river",
-            Template::VolcanicIsland => "A volcano rising from the sea, black beaches, green lower slopes",
+            Template::KarstTowers => "Stone towers over a jungle",
+            Template::FloatingMountains => "Floating mountains over stone towers",
+            Template::RiverValley => "A river valley between snowy peaks",
+            Template::DesertCanyon => "A winding red canyon with a river",
+            Template::VolcanicIsland => "A volcano rising from the sea",
             Template::DuneSea => "Long dunes shaped by the wind, crests and slip faces",
             Template::RollingHills => "Gentle countryside: meadows, streams and ponds",
-            Template::Continents => "Continents and oceans from tectonic plates, rivers, and climates from tundra to jungle, with their biomes",
-            Template::PaintMap => "The map as it is, painted from its relief: grass, worn slopes, rock cliffs, gravel gullies, beaches, snow",
-            Template::MapRivers => "The map as it is, with rivers where its water gathers, lakes in its hollows",
+            Template::Continents => "Continents, rivers and climates, with biomes",
+            Template::PaintMap => "Paints your map from its relief",
+            Template::MapRivers => "Adds rivers to your map",
         }
     }
 
