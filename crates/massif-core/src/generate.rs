@@ -325,6 +325,72 @@ pub fn generate(params: &GenParams) -> World {
     world
 }
 
+/// How a height map becomes a world.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FromHeightmap {
+    pub name: String,
+    /// Blocks a pixel covers.
+    pub scale: f32,
+    /// The heights black and white stand for.
+    pub low: f32,
+    pub high: f32,
+    pub sea_level: i32,
+}
+
+/// A world whose ground is height map `map`, centred on the origin, its
+/// terrains painted from height and slope as [`generate`] paints them, the
+/// sea at its level.
+pub fn from_heightmap(map: &crate::heightmap::Heightmap, how: &FromHeightmap) -> World {
+    let mut world = World::new(WorldMeta {
+        name: how.name.clone(),
+        seed: 0,
+        spawn: [0, 0, 0],
+        sea_level: how.sea_level,
+        lava: false,
+        graph: None,
+    });
+    let theme = Theme::new(&world.registry);
+    let scale = how.scale.max(0.01);
+    let (w, d) = (map.width as f32 * scale, map.height as f32 * scale);
+    let (tx, tz) = ((w / TILE_SIZE as f32).ceil().max(1.0) as i32, (d / TILE_SIZE as f32).ceil().max(1.0) as i32);
+    let (x0, z0) = (-(tx / 2) * TILE_SIZE, -(tz / 2) * TILE_SIZE);
+    // The picture's corner on the first tile's, the rest of the last tiles
+    // as its edge goes on.
+    let height = |bx: f32, bz: f32| how.low + (how.high - how.low) * map.sample((bx - x0 as f32) / scale - 0.5, (bz - z0 as f32) / scale - 0.5);
+    let sea = how.sea_level as f32;
+    let positions: Vec<TilePos> = (0..tz).flat_map(|z| (0..tx).map(move |x| TilePos::new(x0.div_euclid(TILE_SIZE) + x, z0.div_euclid(TILE_SIZE) + z))).collect();
+    let blobs: Vec<(TilePos, Blob)> = positions
+        .par_iter()
+        .map(|&pos| {
+            let (ox, oz) = pos.origin();
+            let n = TILE_SIZE as usize;
+            let mut top = vec![0f32; TILE_AREA];
+            let mut terrain = vec![0u16; TILE_AREA];
+            for z in 0..n {
+                for x in 0..n {
+                    let (bx, bz) = ((ox + x as i32) as f32 + 0.5, (oz + z as i32) as f32 + 0.5);
+                    let h = height(bx, bz);
+                    let slope = (height(bx + 1.0, bz) - height(bx - 1.0, bz)).abs().max((height(bx, bz + 1.0) - height(bx, bz - 1.0)).abs()) * 0.5;
+                    top[z * n + x] = snap_height(h);
+                    terrain[z * n + x] = theme.terrain(h, slope, sea, 0.0).0;
+                }
+            }
+            let mut tile = Tile::ground(0.0, 0, how.sea_level as i16);
+            tile.top = Plane::from_vec(top);
+            tile.terrain = Plane::from_vec(terrain);
+            tile.compact();
+            (pos, Blob::from(tile.encode()))
+        })
+        .collect();
+    let ground = world.dims[0].ground_mut();
+    for (pos, blob) in blobs {
+        ground.insert_blob(pos, blob);
+    }
+    let surface = height(0.5, 0.5).max(sea);
+    world.meta.spawn = [0, crate::compose::block_top(surface) + 1, 0];
+    world
+}
+
 /// A small picture of what [`generate`] will make: heights and terrains on
 /// an `n` × `n` grid spread over the whole map, for previews.
 pub struct Preview {
@@ -550,5 +616,31 @@ mod giant {
         crate::ops::raise(&mut h.edit(&mut world, 0), &brush, 1000.0, 1000.0, 5.0, crate::ops::Surface::Top);
         h.commit();
         eprintln!("a brush of 400 blocks in {:.3} s", t.elapsed().as_secs_f32());
+    }
+
+    #[test]
+    fn a_world_is_made_from_a_height_map() {
+        // A ramp from black in the west to white in the east, 300 × 200.
+        let map = crate::heightmap::Heightmap {
+            width: 300,
+            height: 200,
+            data: (0..300 * 200).map(|k| (k % 300) as f32 / 299.0).collect(),
+        };
+        let how = FromHeightmap {
+            name: "Ramp".into(),
+            scale: 2.0,
+            low: 40.0,
+            high: 200.0,
+            sea_level: 63,
+        };
+        let world = from_heightmap(&map, &how);
+        let (lo, hi) = world.dims[0].bounds().unwrap();
+        // 600 × 400 blocks: 5 × 4 tiles.
+        assert_eq!((hi.x - lo.x + 1, hi.z - lo.z + 1), (5, 4));
+        let at = |x: i32, z: i32| world.dims[0].ground().view(TilePos::containing(x, z)).unwrap().top.get(crate::coords::local_index(x, z));
+        let (x0, z0) = (lo.x * 128, lo.z * 128);
+        assert!((at(x0, z0 + 10) - 40.0).abs() < 1.0, "black is low: {}", at(x0, z0 + 10));
+        assert!((at(x0 + 599, z0 + 10) - 200.0).abs() < 1.0, "white is high: {}", at(x0 + 599, z0 + 10));
+        assert!((at(x0 + 300, z0 + 10) - 120.0).abs() < 2.0, "in between: {}", at(x0 + 300, z0 + 10));
     }
 }

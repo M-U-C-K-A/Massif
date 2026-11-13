@@ -260,6 +260,15 @@ pub enum NodeKind {
     /// lies. What a graph that works on a map — painted, or imported from
     /// WorldPainter — starts from.
     MapHeight,
+    /// A greyscale image as relief, stretched over the terrain: a height
+    /// map from Gaea, World Machine, an image editor (16-bit PNG, JPEG,
+    /// raw .r16 / .r32).
+    Heightmap {
+        path: String,
+        /// The heights black and white stand for.
+        low: f32,
+        high: f32,
+    },
     /// A ramp across the map.
     LinearGradient {
         /// Direction it rises toward, in degrees (0: north, 90: east).
@@ -891,6 +900,11 @@ impl NodeKind {
             },
             // Primitives.
             NodeKind::MapHeight,
+            NodeKind::Heightmap {
+                path: String::new(),
+                low: 40.0,
+                high: 220.0,
+            },
             NodeKind::Noise {
                 style: NoiseStyle::Fbm,
                 scale: 600.0,
@@ -1132,6 +1146,7 @@ impl NodeKind {
             NodeKind::Radial { .. } => "Radial gradient",
             NodeKind::Constant { .. } => "Constant",
             NodeKind::MapHeight => "Map",
+            NodeKind::Heightmap { .. } => "Height map",
             NodeKind::LinearGradient { .. } => "Linear gradient",
             NodeKind::Shape { .. } => "Shape",
             NodeKind::Mountain { .. } => "Mountain",
@@ -1201,6 +1216,7 @@ impl NodeKind {
             NodeKind::Radial { .. } => "High in the middle of the map, falling to its edges",
             NodeKind::Constant { .. } => "One value everywhere",
             NodeKind::MapHeight => "The map as it is, in 3D: its surface, its water and the colours of its terrains",
+            NodeKind::Heightmap { .. } => "A greyscale image as relief: a height map from Gaea, World Machine, an image editor",
             NodeKind::LinearGradient { .. } => "A ramp rising across the map",
             NodeKind::Shape { .. } => "A circle, square, cone or dome",
             NodeKind::Mountain { .. } => "One mountain, alpine, rounded, eroded or spiky",
@@ -1269,6 +1285,7 @@ impl NodeKind {
             | NodeKind::Radial { .. }
             | NodeKind::Constant { .. }
             | NodeKind::MapHeight
+            | NodeKind::Heightmap { .. }
             | NodeKind::LinearGradient { .. }
             | NodeKind::Shape { .. } => Family::Generator,
             NodeKind::Mountain { .. }
@@ -1544,9 +1561,13 @@ impl Graph {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         if let Some(node) = self.node(id) {
             format!("{:?}", node.kind).hash(&mut h);
-            // What reads the map is out of date when the map changes.
+            // What reads the map is out of date when the map changes, what
+            // reads a file when the file does.
             if node.kind == NodeKind::MapHeight {
                 map.hash(&mut h);
+            }
+            if let NodeKind::Heightmap { path, .. } = &node.kind {
+                std::fs::metadata(path).and_then(|m| m.modified()).ok().hash(&mut h);
             }
             for k in 0..node.kind.inputs().len() {
                 match self.input_of(id, k as u8) {

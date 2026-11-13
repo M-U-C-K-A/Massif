@@ -17,7 +17,7 @@ use egui::{
     pos2, vec2,
 };
 use massif_anvil::{ExportOptions, GameMode, Surroundings};
-use massif_core::{TilePos, World};
+use massif_core::{TILE_SIZE, TilePos, World};
 use massif_core::generate::{GenParams, Landform, generate};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -72,7 +72,17 @@ type WelcomeAction = Box<dyn FnOnce(&mut MassifApp, &egui::Context)>;
 enum Pending {
     New(GenParams),
     Open(Option<PathBuf>),
+    /// A new world from a height map.
+    FromHeightmap(std::sync::Arc<massif_core::heightmap::Heightmap>, massif_core::generate::FromHeightmap),
     Quit,
+}
+
+/// A height map to make a world of, and how.
+struct HeightmapForm {
+    path: PathBuf,
+    map: std::sync::Arc<massif_core::heightmap::Heightmap>,
+    how: massif_core::generate::FromHeightmap,
+    picture: Option<egui::TextureHandle>,
 }
 
 struct NewWorldForm {
@@ -146,6 +156,8 @@ enum Dialog {
     About,
     /// Where to start: what Massif does, and the ways in.
     Welcome,
+    /// A new world from a height map.
+    FromHeightmap(HeightmapForm),
     /// The rules of the automatic biomes (false) or paint (true).
     AutoRules(bool),
     /// What an import brought in, with the file's thumbnail.
@@ -239,6 +251,86 @@ impl MassifApp {
             app.dialog = Some(Dialog::Welcome);
         }
         app
+    }
+
+    /// Pick a height map, and show how it would become a world.
+    fn pick_heightmap(&mut self, ctx: &egui::Context) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("A height map to make a world of")
+            .add_filter("Height maps", &["png", "jpg", "jpeg", "r16", "r32", "raw"])
+            .pick_file()
+        else {
+            return;
+        };
+        match massif_core::heightmap::read(&path) {
+            Ok(map) => {
+                // A small picture of it.
+                let side = 256usize;
+                let (w, h) = (side, (side * map.height / map.width.max(1)).clamp(16, 512));
+                let pixels: Vec<u8> = (0..w * h)
+                    .map(|k| (map.sample((k % w) as f32 * map.width as f32 / w as f32, (k / w) as f32 * map.height as f32 / h as f32) * 255.0) as u8)
+                    .collect();
+                let picture = ctx.load_texture("height map", egui::ColorImage::from_gray([w, h], &pixels), egui::TextureOptions::LINEAR);
+                let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Height map").to_owned();
+                self.dialog = Some(Dialog::FromHeightmap(HeightmapForm {
+                    path,
+                    map: std::sync::Arc::new(map),
+                    how: massif_core::generate::FromHeightmap {
+                        name,
+                        scale: 1.0,
+                        low: 20.0,
+                        high: 230.0,
+                        sea_level: 63,
+                    },
+                    picture: Some(picture),
+                }));
+            }
+            Err(e) => self.say(ctx, format!("That height map cannot be read: {e}"), true, None),
+        }
+    }
+
+    /// Save the map's surface as a 16-bit height map: black the bottom of
+    /// the world, white its top.
+    fn export_heightmap(&mut self, ctx: &egui::Context) {
+        if self.doc.dimension().bounds().is_none() {
+            self.say(ctx, "The map is empty", true, None);
+            return;
+        }
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Save the height map")
+            .add_filter("16-bit PNG", &["png"])
+            .set_file_name(format!("{} height map.png", self.doc.world.meta.name))
+            .save_file()
+        else {
+            return;
+        };
+        self.save_heightmap(ctx, &path);
+    }
+
+    /// Save the map's surface at `path` as a 16-bit height map.
+    fn save_heightmap(&mut self, ctx: &egui::Context, path: &std::path::Path) {
+        let dim = self.doc.dimension();
+        let Some((lo, hi)) = dim.bounds() else { return };
+        let (w, d) = ((hi.x - lo.x + 1) * TILE_SIZE, (hi.z - lo.z + 1) * TILE_SIZE);
+        let side = w.max(d) as usize;
+        let n = side.min(16384);
+        let rect = massif_core::BlockRect::new(lo.x * TILE_SIZE, lo.z * TILE_SIZE, (hi.x + 1) * TILE_SIZE, (hi.z + 1) * TILE_SIZE);
+        let extent = massif_core::graph::Extent::covering(rect, n);
+        let (min_y, max_y) = (dim.min_y as f32, dim.max_y as f32);
+        let read = massif_core::graph::sample_map(dim, &extent, min_y, &[], &[]);
+        // Only the map itself, not the square around it.
+        let k = n as f32 / side as f32;
+        let (pw, pd) = (((w as f32) * k).round() as usize, ((d as f32) * k).round() as usize);
+        let samples: Vec<f32> = (0..pw * pd).map(|c| (read.heights.data[(c / pw) * n + c % pw] - min_y) / (max_y - min_y)).collect();
+        match massif_core::heightmap::write_png16(path, pw, pd, &samples) {
+            Ok(()) => self.say(
+                ctx,
+                format!("Saved a height map of {pw} × {pd}: black is Y {min_y:.0}, white Y {max_y:.0}{}", if k < 1.0 { format!(", {:.1} blocks a pixel", 1.0 / k) } else { String::new() }),
+                false,
+                path.parent().map(|p| p.to_path_buf()),
+            ),
+            Err(e) => self.say(ctx, format!("The height map could not be saved: {e}"), true, None),
+        }
     }
 
     /// Go to the Terrain side and start from a template.
@@ -344,6 +436,20 @@ impl MassifApp {
                 if let Some(path) = path {
                     self.jobs.push(Job::open(ctx, path));
                 }
+            }
+            Pending::FromHeightmap(map, how) => {
+                let started = std::time::Instant::now();
+                let world = massif_core::generate::from_heightmap(&map, &how);
+                self.next_generation += 1;
+                self.doc = Document::new(world, None, self.next_generation);
+                self.rename = None;
+                let (w, d) = (map.width as f32 * how.scale, map.height as f32 * how.scale);
+                self.say(
+                    ctx,
+                    format!("Made a world of {w:.0} × {d:.0} blocks from the height map in {:.1} s", started.elapsed().as_secs_f32()),
+                    false,
+                    None,
+                );
             }
             Pending::Quit => {
                 self.allow_close = true;
@@ -707,6 +813,9 @@ impl MassifApp {
                 {
                     self.request(&ctx, Pending::Open(Some(path)));
                 }
+                if ui.button(theme::with_icon(Icon::ImageUp, "New World from Height Map…")).clicked() {
+                    self.pick_heightmap(&ctx);
+                }
                 let recent = self.settings.recent.clone();
                 ui.add_enabled_ui(!recent.is_empty(), |ui| {
                     ui.menu_button(theme::with_icon(Icon::FolderInput, "Open Recent"), |ui| {
@@ -725,6 +834,9 @@ impl MassifApp {
                     self.save(&ctx, true);
                 }
                 ui.separator();
+                if ui.button(theme::with_icon(Icon::ImageDown, "Export Height Map…")).clicked() {
+                    self.export_heightmap(&ctx);
+                }
                 if ui.button(theme::with_icon(Icon::Package, "Export to Minecraft…")).clicked() {
                     self.open_export_dialog();
                 }
@@ -1432,6 +1544,61 @@ impl MassifApp {
         let Some(dialog) = self.dialog.take() else { return };
         let mut keep = true;
         match dialog {
+            Dialog::FromHeightmap(mut form) => {
+                let mut make = false;
+                let response = egui::Modal::new(Id::unique("from height map")).show(ctx, |ui| {
+                    ui.set_width(560.0);
+                    let pal = Palette::of(ui);
+                    ui.label(RichText::new("A new world from a height map").bold().size(16.0));
+                    ui.label(RichText::new(form.path.display().to_string()).size(11.0).color(pal.weak));
+                    ui.add_space(8.0);
+                    ui.horizontal_top(|ui| {
+                        if let Some(t) = &form.picture {
+                            let size = t.size_vec2();
+                            let k = (200.0 / size.x).min(200.0 / size.y);
+                            ui.image((t.id(), size * k));
+                        }
+                        ui.vertical(|ui| {
+                            let h = &mut form.how;
+                            ui.horizontal(|ui| {
+                                ui.label("Name");
+                                ui.text_edit_singleline(&mut h.name);
+                            });
+                            ui.add(egui::Slider::new(&mut h.scale, 0.25..=16.0).logarithmic(true).text("blocks a pixel").max_decimals(2));
+                            ui.add(egui::Slider::new(&mut h.low, -64.0..=319.0).text("black is Y").max_decimals(0));
+                            ui.add(egui::Slider::new(&mut h.high, -64.0..=319.0).text("white is Y").max_decimals(0));
+                            ui.add(egui::Slider::new(&mut h.sea_level, -64..=319).text("sea level"));
+                            let (w, d) = (form.map.width as f32 * h.scale, form.map.height as f32 * h.scale);
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new(format!(
+                                    "{} × {} pixels → a map of {w:.0} × {d:.0} blocks, from Y {:.0} to {:.0}; terrains painted from height and slope.",
+                                    form.map.width, form.map.height, h.low, h.high
+                                ))
+                                .size(11.5)
+                                .color(pal.weak),
+                            );
+                        });
+                    });
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui.add(theme::primary_button(ui, "Make the world")).clicked() {
+                            make = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            keep = false;
+                        }
+                    });
+                });
+                if response.should_close() {
+                    keep = false;
+                }
+                if make {
+                    self.request(ctx, Pending::FromHeightmap(form.map.clone(), form.how.clone()));
+                } else if keep {
+                    self.dialog = Some(Dialog::FromHeightmap(form));
+                }
+            }
             Dialog::Welcome => {
                 use massif_core::graph::Template;
                 let mut action: Option<WelcomeAction> = None;
@@ -1477,6 +1644,9 @@ impl MassifApp {
                         }
                         if wide(&mut cols[0], Icon::FolderOpen, "Open a .massif world…").clicked() {
                             action = Some(Box::new(|app, ctx| app.request(ctx, Pending::Open(None))));
+                        }
+                        if wide(&mut cols[0], Icon::ImageUp, "From a height map (Gaea, World Machine…)").clicked() {
+                            action = Some(Box::new(|app, ctx| app.pick_heightmap(ctx)));
                         }
                         if wide(&mut cols[0], Icon::Import, "Import a WorldPainter world…").clicked() {
                             action = Some(Box::new(|app, ctx| {
@@ -3855,6 +4025,216 @@ mod tests {
         h.run_steps(3);
         let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
         image::save_buffer(dir.join("real-river-tool-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+    }
+
+    /// A river from a source on a real map (MASSIF_RIVER_WORLD): hovering
+    /// shows where its water would go, a click lets it spring there and dig
+    /// its way down. Needs a GPU: runs with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn spring_on_a_real_world() {
+        let (Some(dir), Some(path)) = (
+            std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from),
+            std::env::var_os("MASSIF_RIVER_WORLD").map(PathBuf::from),
+        ) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let ctx = h.ctx.clone();
+        h.state_mut().jobs.push(Job::open(&ctx, path));
+        while !h.state().jobs.is_empty() {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        h.run_steps(10);
+        let centre = [300.0, -200.0];
+        {
+            let app = h.state_mut();
+            app.dialog = None;
+            app.tools.select(Tool::Spring);
+            app.tools.river.width = 6.0;
+            app.tools.river.flow = 0.6;
+            app.tools.river.depth = 3.0;
+            app.tools.river.erosion = 0.3;
+        }
+        h.run_steps(5);
+        for m in h.state_mut().maps.values_mut() {
+            m.center = centre;
+            m.zoom = 0.45;
+        }
+        h.run_steps(5);
+        let rect = map_rect(h.state(), &h.ctx);
+        let at = rect.center() + vec2(((150.0 - centre[0]) * 0.45) as f32, ((-560.0 - centre[1]) * 0.45) as f32);
+        h.event(egui::Event::PointerMoved(at));
+        for _ in 0..20 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+        h.render().unwrap().save(dir.join("real-spring-preview.png")).unwrap();
+        {
+            let app = h.state();
+            let started = std::time::Instant::now();
+            let d = massif_core::river::descend(app.doc.dimension().ground(), (150, -560), 63.0, 60_000, 2_000_000, app.tools.river.lake_depth());
+            eprintln!("descent in {:.2} s: {} points, mouth {:?}", started.elapsed().as_secs_f32(), d.course.len(), d.mouth);
+            for (k, p) in d.course.iter().enumerate().step_by(400) {
+                eprintln!("  {k}: {:.0}, {:.0}", p.0, p.1);
+            }
+            for (cells, level) in d.lakes.iter().take(40) {
+                let (mut x0, mut z0, mut x1, mut z1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+                for &(x, z) in cells {
+                    (x0, z0, x1, z1) = (x0.min(x), z0.min(z), x1.max(x), z1.max(z));
+                }
+                eprintln!("  lake {} cells at {level:.1}: {x0},{z0} .. {x1},{z1}", cells.len());
+            }
+        }
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            });
+            h.step();
+        }
+        h.run_steps(10);
+        let note = h.state().tools.river_note.clone().unwrap_or_default();
+        eprintln!("{note}");
+        assert_eq!(h.state().doc.history.undo_label(), Some("River from a source"), "{note}");
+        assert!(note.starts_with("A river"), "{note}");
+        h.render().unwrap().save(dir.join("real-spring-map.png")).unwrap();
+        // A second one, in the hills over the western plain.
+        let centre = [-560.0, 420.0];
+        for m in h.state_mut().maps.values_mut() {
+            m.center = centre;
+            m.zoom = 0.4;
+        }
+        h.run_steps(5);
+        let at = rect.center() + vec2(((-760.0 - centre[0]) * 0.4) as f32, ((180.0 - centre[1]) * 0.4) as f32);
+        h.event(egui::Event::PointerMoved(at));
+        for _ in 0..20 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+        h.render().unwrap().save(dir.join("real-spring-preview-2.png")).unwrap();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            });
+            h.step();
+        }
+        h.run_steps(10);
+        eprintln!("{}", h.state().tools.river_note.clone().unwrap_or_default());
+        h.render().unwrap().save(dir.join("real-spring-map-2.png")).unwrap();
+        {
+            let app = h.state_mut();
+            app.layout.activate(3);
+            app.view3d.camera.target = [230.0, 110.0, -470.0];
+            app.view3d.camera.distance = 520.0;
+            app.view3d.camera.pitch = 0.7;
+            app.view3d.camera.yaw = 2.6;
+        }
+        h.run_steps(5);
+        while h.state().view3d.pending() > 0 {
+            h.step();
+        }
+        h.run_steps(3);
+        let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+        image::save_buffer(dir.join("real-spring-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+    }
+
+    /// Height maps, in and out: a world made from a 16-bit picture, its
+    /// relief saved back, the picture read by a graph's Height map node,
+    /// and a graph's terrain saved as a height map. No GPU needed.
+    #[test]
+    fn height_maps_in_and_out() {
+        use massif_core::graph::{NodeKind, Template};
+        let dir = std::env::temp_dir().join(format!("massif-heightmaps-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A cone: white in the middle, black at the edges, 256 × 256.
+        let n = 256;
+        let cone: Vec<f32> = (0..n * n)
+            .map(|k| {
+                let (x, z) = ((k % n) as f32 - 127.5, (k / n) as f32 - 127.5);
+                (1.0 - (x * x + z * z).sqrt() / 128.0).max(0.0)
+            })
+            .collect();
+        let png = dir.join("cone.png");
+        massif_core::heightmap::write_png16(&png, n, n, &cone).unwrap();
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(3);
+        let map = std::sync::Arc::new(massif_core::heightmap::read(&png).unwrap());
+        h.state_mut().dialog = Some(Dialog::FromHeightmap(HeightmapForm {
+            path: png.clone(),
+            map,
+            how: massif_core::generate::FromHeightmap {
+                name: "Cone".into(),
+                scale: 2.0,
+                low: 40.0,
+                high: 200.0,
+                sea_level: 63,
+            },
+            picture: None,
+        }));
+        h.run_steps(3);
+        {
+            use egui_kittest::kittest::Queryable;
+            h.get_by_label("Make the world").click();
+        }
+        h.run_steps(5);
+        let doc = &h.state().doc;
+        assert_eq!(doc.world.meta.name, "Cone");
+        let (lo, hi) = doc.dimension().bounds().unwrap();
+        assert_eq!((hi.x - lo.x + 1, hi.z - lo.z + 1), (4, 4), "512 blocks a side");
+        let top = |doc: &crate::doc::Document, x: i32, z: i32| doc.dimension().ground().view(massif_core::TilePos::containing(x, z)).unwrap().top.get(massif_core::coords::local_index(x, z));
+        assert!((top(doc, 0, 0) - 200.0).abs() < 3.0, "the peak: {}", top(doc, 0, 0));
+        assert!((top(doc, -255, -255) - 40.0).abs() < 1.0, "the foot: {}", top(doc, -255, -255));
+        // Its relief, saved back: the peak white, the corners black.
+        let out = dir.join("out.png");
+        let ctx = h.ctx.clone();
+        h.state_mut().save_heightmap(&ctx, &out);
+        let back = massif_core::heightmap::read(&out).unwrap();
+        assert_eq!((back.width, back.height), (512, 512));
+        let y = |v: f32| -64.0 + v * 384.0;
+        assert!((y(back.sample(255.5, 255.5)) - 200.0).abs() < 3.0, "{}", y(back.sample(255.5, 255.5)));
+        assert!((y(back.data[0]) - 40.0).abs() < 3.0);
+        // A graph reading the picture, and saved as a height map.
+        h.state_mut().layout.activate(6);
+        h.run_steps(2);
+        {
+            let app = h.state_mut();
+            app.graph.use_template(&mut app.doc, Template::Alpine);
+            let mut g = massif_core::graph::Graph::default();
+            let pic = g.add(
+                NodeKind::Heightmap {
+                    path: png.display().to_string(),
+                    low: 60.0,
+                    high: 160.0,
+                },
+                [0.0, 0.0],
+            );
+            let out = g.add(NodeKind::HeightOutput, [220.0, 0.0]);
+            g.connect(pic, 0, out, 0);
+            app.doc.world.meta.graph = Some(g);
+            app.doc.mark_changed();
+            app.graph.draft = Some(128);
+            let graph = app.doc.world.meta.graph.clone().unwrap();
+            app.graph.start_build(&ctx, &mut app.doc, &graph, Some(dir.join("graph.png")));
+        }
+        let started = std::time::Instant::now();
+        while h.state().graph.converting() {
+            assert!(started.elapsed().as_secs() < 60);
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.run_steps(3);
+        let saved = massif_core::heightmap::read(&dir.join("graph.png")).unwrap();
+        assert_eq!((saved.width, saved.height), (128, 128));
+        assert!((y(saved.sample(63.5, 63.5)) - 160.0).abs() < 3.0, "the cone's top, as the node maps it: {}", y(saved.sample(63.5, 63.5)));
+        assert!((y(saved.data[0]) - 60.0).abs() < 3.0);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// The graph canvas worked with the mouse and the keyboard: a box

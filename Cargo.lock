@@ -2002,6 +2002,7 @@ dependencies = [
 name = "massif-core"
 version = "0.3.1"
 dependencies = [
+ "image",
  "log",
  "rayon",
  "serde",

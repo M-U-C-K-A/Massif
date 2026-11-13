@@ -29,6 +29,8 @@ pub enum Tool {
     Water,
     /// A river along a course of points.
     River,
+    /// A river from a spring, one click: the water finds its way down.
+    Spring,
     StampSlab,
     EraseSlab,
     /// True 3D: add matter, dig, round off.
@@ -50,7 +52,7 @@ impl Tool {
             Icon::Paintbrush,
             &[Tool::PaintTerrain, Tool::PaintBiome, Tool::AutoPaint, Tool::AutoBiome, Tool::Eyedropper],
         ),
-        ("Water", Icon::Droplet, &[Tool::Flood, Tool::Drain, Tool::Water, Tool::River]),
+        ("Water", Icon::Droplet, &[Tool::Flood, Tool::Drain, Tool::Water, Tool::Spring, Tool::River]),
         ("Levels", Icon::Layers, &[Tool::StampSlab, Tool::EraseSlab]),
         ("Sculpt 3D", Icon::Box, &[Tool::Build, Tool::Dig, Tool::Smooth3d]),
         ("Navigate", Icon::Compass, &[Tool::Pan]),
@@ -72,6 +74,7 @@ impl Tool {
             Tool::Drain => "Drain",
             Tool::Water => "Water brush",
             Tool::River => "River",
+            Tool::Spring => "River source",
             Tool::StampSlab => "Stamp slab",
             Tool::EraseSlab => "Erase slab",
             Tool::Build => "Build (3D)",
@@ -97,6 +100,7 @@ impl Tool {
             Tool::Drain => Icon::DropletOff,
             Tool::Water => Icon::Droplets,
             Tool::River => Icon::Route,
+            Tool::Spring => Icon::MapPin,
             Tool::StampSlab => Icon::Cuboid,
             Tool::EraseSlab => Icon::Eraser,
             Tool::Build => Icon::Hammer,
@@ -162,6 +166,9 @@ impl Tool {
             Tool::River => {
                 "Drag along a river's course and let go to dig it — or click its points one by one, then double-click (or Enter): a smooth bed with water running down, banks easing into the land. The right button takes back the last point, Esc drops the course. Start on a river for a branch, end on one for a tributary."
             }
+            Tool::Spring => {
+                "Click where a river springs: its water finds its own way down the land, eroding a bed as it goes, fills the hollows it meets into lakes and runs on to the sea. The map shows where it would go before you click. Flow makes it grow wider and deeper downstream."
+            }
             Tool::StampSlab => {
                 "Add a slab to the active Solid or Carve level (overhangs, arches, floating islands, caves); the right button erases."
             }
@@ -180,12 +187,12 @@ impl Tool {
     }
 
     pub const fn uses_brush(self) -> bool {
-        !matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Drain | Tool::Pan | Tool::River)
+        !matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Drain | Tool::Pan | Tool::River | Tool::Spring)
     }
 
     /// Tools that apply once per click rather than continuously.
     pub const fn is_click(self) -> bool {
-        matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Drain)
+        matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Drain | Tool::Spring)
     }
 
     pub const fn needs_slab_level(self) -> bool {
@@ -308,6 +315,15 @@ pub struct RiverSettings {
     pub bed: String,
     /// Make the water a river biome.
     pub biome: bool,
+    /// From a spring: how much water — the river grows wider and deeper
+    /// downstream (0..1).
+    pub flow: f32,
+    /// From a spring: how much the water wears the land beside its bed
+    /// (0..1).
+    pub erosion: f32,
+    /// From a spring: which hollows it fills with a lake (0: none, it cuts
+    /// through their rims; 1: all).
+    pub lakes: f32,
 }
 
 impl Default for RiverSettings {
@@ -320,8 +336,66 @@ impl Default for RiverSettings {
             water: true,
             bed: "Gravel".into(),
             biome: true,
+            flow: 0.5,
+            erosion: 0.3,
+            lakes: 0.5,
         }
     }
+}
+
+impl RiverSettings {
+    /// The least depth of a hollow a river from a spring fills with a lake.
+    pub fn lake_depth(&self) -> f32 {
+        if self.lakes <= 0.001 { f32::MAX } else { 1.0 + (1.0 - self.lakes.min(1.0)) * 24.0 }
+    }
+
+    /// How a river from a spring is dug: wider and deeper downstream with
+    /// its flow, its banks wider with its erosion.
+    pub fn spring_spec(&self, reg: &massif_core::registry::Registry) -> massif_core::river::RiverSpec {
+        let flow = self.flow.clamp(0.0, 1.0);
+        massif_core::river::RiverSpec {
+            width: self.width,
+            width_end: self.width * (1.0 + 4.0 * flow),
+            depth: self.depth,
+            depth_end: self.depth * (1.0 + 1.5 * flow),
+            banks: self.banks + self.erosion.clamp(0.0, 1.0) * 4.0 * self.width,
+            water: self.water,
+            bed: if self.bed.is_empty() { None } else { reg.terrain_by_name(&self.bed) },
+            biome: self.biome.then(|| reg.biome_by_id("minecraft:river")).flatten(),
+        }
+    }
+}
+
+/// How far water let go at a spring may run, and the widest hollow it fills.
+pub const SPRING_REACH: usize = 60_000;
+pub const SPRING_LAKE: usize = 2_000_000;
+
+/// Let a river spring at block `(x, z)` and dig it down to where its water
+/// goes.
+pub fn dig_spring(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32) -> Feedback {
+    let sea = doc.world.meta.sea_level as f32;
+    let descent = massif_core::river::descend(doc.dimension().ground(), (x, z), sea, SPRING_REACH, SPRING_LAKE, tools.river.lake_depth());
+    if descent.course.len() < 3 {
+        let note = match descent.mouth {
+            Some(massif_core::river::Mouth::Edge) => "That is off the map: click on land",
+            _ => "That is water already: click on dry land, where the river springs",
+        };
+        tools.river_note = Some(note.to_owned());
+        return Some(note.into());
+    }
+    let spec = tools.river.spring_spec(&doc.world.registry);
+    doc.history.begin("River from a source", doc.dim);
+    let report = massif_core::river::dig_descent(&mut doc.history.edit(&mut doc.world, 0), &descent, &spec);
+    doc.commit();
+    let lakes = match descent.lakes.len() {
+        0 => String::new(),
+        1 => ", through a lake".to_owned(),
+        n => format!(", through {n} lakes"),
+    };
+    let into = descent.mouth.map_or("", |m| m.label());
+    let note = format!("A river {:.0} blocks long, its water from {:.0} down to {into}{lakes}", report.length, report.source);
+    tools.river_note = Some(note.clone());
+    Some(note)
 }
 
 impl Default for ToolState {
@@ -533,7 +607,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                     massif_core::voxel::sculpt(&mut edit, brush, [x, y, z], strength, mode);
                 }
             }
-            Tool::Eyedropper | Tool::Flood | Tool::Drain | Tool::Pan | Tool::River => {}
+            Tool::Eyedropper | Tool::Flood | Tool::Drain | Tool::Pan | Tool::River | Tool::Spring => {}
         }
     }
     stroke.last = to;
@@ -618,6 +692,7 @@ pub fn dig_river(doc: &mut Document, tools: &mut ToolState) -> Feedback {
         width: r.width,
         width_end: r.width_end,
         depth: r.depth,
+        depth_end: r.depth,
         banks: r.banks,
         water: r.water,
         bed: if r.bed.is_empty() { None } else { reg.terrain_by_name(&r.bed) },
@@ -656,6 +731,7 @@ pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse:
             tools.tool = tools.previous;
             Some(format!("Picked {terrain_name} at height {}", block_top(p.height)))
         }
+        Tool::Spring if !inverse => dig_spring(doc, tools, x, z),
         Tool::Flood | Tool::Drain => {
             let flood = (tools.tool == Tool::Flood) != inverse;
             let mode = if flood { Flood::Fill(tools.water_level) } else { Flood::Drain };

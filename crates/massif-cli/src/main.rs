@@ -16,12 +16,17 @@ USAGE
   massif-cli verify <world.massif>
   massif-cli export <world.massif> <folder> [--version V] [--void] [--survival] [--overwrite]
   massif-cli import <old.world> <out.massif>
+  massif-cli probe <world.massif> [<x> <z>…] [--random N]
 
   --size      map size in tiles of 128 blocks (default 8x8 = 1024x1024 blocks)
   --landform  flat | plains | hills | mountains | islands (default hills)
   --version   the Minecraft version to export for, 1.7.10 to 26.3 (default 1.18.2,
               which every later version opens)
   --void      nothing generates around the exported map (default: vanilla terrain)
+
+  probe prints, for each column, what the export writes there, one JSON object a
+  line: its top solid block (y and block state), the water over it, its biome —
+  what tools/minecraft_check.py asks the game itself to confirm.
 ";
 
 type Res<T> = Result<T, String>;
@@ -241,6 +246,57 @@ fn cmd_import(args: Args) -> Res<()> {
     Ok(())
 }
 
+fn cmd_probe(mut args: Args) -> Res<()> {
+    let random: usize = args.option("--random")?.map(|v| v.parse().map_err(|_| format!("--random needs a number, not {v}"))).transpose()?.unwrap_or(0);
+    let mut rest = args.0.into_iter();
+    let path = PathBuf::from(rest.next().ok_or("probe needs <world.massif>")?);
+    let mut coords: Vec<i32> = rest.map(|a| a.parse::<i32>().map_err(|_| format!("not a block coordinate: {a}"))).collect::<Res<_>>()?;
+    if !coords.len().is_multiple_of(2) || (coords.is_empty() && random == 0) {
+        return Err("probe needs pairs of block coordinates (<x> <z>), or --random N".into());
+    }
+    let world = massif_format::load(&path).map_err(|e| e.to_string())?;
+    let dim = &world.dims[0];
+    // Columns spread over the map's tiles, the same every time.
+    let mut tiles: Vec<massif_core::TilePos> = dim.ground().positions().collect();
+    tiles.sort_by_key(|p| (p.z, p.x));
+    for k in 0..random {
+        if tiles.is_empty() {
+            break;
+        }
+        let h = massif_core::compose::hash2(k as i32, 7, 0x9e0b);
+        let t = tiles[h as usize % tiles.len()];
+        let (ox, oz) = t.origin();
+        coords.push(ox + (h >> 8) as i32 % 128);
+        coords.push(oz + (h >> 16) as i32 % 128);
+    }
+    let reg = &world.registry;
+    let mat = massif_core::compose::Materializer::new(reg, world.meta.seed, dim.min_y);
+    let (mut spans, mut fluids) = (Vec::new(), Vec::new());
+    for pair in coords.chunks(2) {
+        let (x, z) = (pair[0], pair[1]);
+        let pos = massif_core::TilePos::containing(x, z);
+        let Some(stack) = massif_core::compose::TileStack::new(dim, pos, false) else {
+            println!("{{\"x\":{x},\"z\":{z},\"top\":null}}");
+            continue;
+        };
+        let cell = massif_core::coords::local_index(x, z);
+        stack.spans(cell, &mut spans);
+        stack.fluids(cell, &spans, &mut fluids);
+        let Some(top) = spans.last().copied() else {
+            println!("{{\"x\":{x},\"z\":{z},\"top\":null}}");
+            continue;
+        };
+        let y = top.y1 - 1;
+        let water = fluids.last().filter(|f| f.0 == top.y1).copied();
+        let block = reg.block(mat.block(&top, x, y, z, water.is_some())).state.clone();
+        let biome = stack.layers().filter(|(_, _, t)| t.present(cell)).map(|(_, _, t)| t.biome.get(cell)).filter(|b| *b != 0).last();
+        let biome = biome.map(|b| format!("\"{}\"", reg.biome(massif_core::registry::BiomeId(b)).id)).unwrap_or_else(|| "null".into());
+        let water = water.map(|(a, b)| format!("[{a},{b}]")).unwrap_or_else(|| "null".into());
+        println!("{{\"x\":{x},\"z\":{z},\"top\":{y},\"block\":\"{block}\",\"water\":{water},\"biome\":{biome}}}");
+    }
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() || args.iter().any(|a| a == "--help" || a == "-h") {
@@ -255,6 +311,7 @@ fn main() -> ExitCode {
         "verify" => cmd_verify(args),
         "export" => cmd_export(args),
         "import" => cmd_import(args),
+        "probe" => cmd_probe(args),
         other => Err(format!("unknown command \"{other}\"\n\n{USAGE}")),
     };
     match result {

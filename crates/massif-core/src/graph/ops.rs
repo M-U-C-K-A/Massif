@@ -39,6 +39,25 @@ pub(super) fn run(
         return one(f);
     }
     match kind {
+        NodeKind::Heightmap { path, low, high } => {
+            // Stretched over the terrain; flat at black while it has no
+            // picture to read.
+            let read = if path.is_empty() { Err(String::new()) } else { crate::heightmap::cached(std::path::Path::new(path)) };
+            let Ok(map) = read else {
+                return one(Field::new(n, vec![*low; n * n]));
+            };
+            let (w, h) = (map.width as f32, map.height as f32);
+            return one(Field::new(
+                n,
+                (0..n * n)
+                    .into_par_iter()
+                    .map(|c| {
+                        let (u, v) = (((c % n) as f32 + 0.5) / n as f32 * w - 0.5, ((c / n) as f32 + 0.5) / n as f32 * h - 0.5);
+                        low + (high - low) * map.sample(u, v)
+                    })
+                    .collect(),
+            ));
+        }
         NodeKind::Temperature {
             warm,
             cold,

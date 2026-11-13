@@ -260,6 +260,33 @@ The water's level is a whole block per column, so it stands in steps
 along the river: still water, as Minecraft keeps it; mods that let water
 flow over water (Streams Reflowing) make a current of it.
 
+**River source** (Water group) makes one in a single click: click where a
+river springs, and its water finds its own way down the land — down the
+slope, a block at a time; a hollow it meets fills up to where it overflows,
+and it goes on from there — to the sea, into water already there, or off
+the map. Hovering the map shows where the water would go, and the lakes it
+would fill, before the click. Its settings: **Width** at the spring,
+**Flow** (how much it grows downstream: up to five times wider and two and
+a half times deeper), **Depth**, **Erosion** (how much it wears the land
+beside its bed: a wider valley), **Banks**, and **Lakes** (which hollows
+fill: deep ones only, or every one, or none — through the others it cuts a
+gorge).
+
+### Height maps
+
+- **File ▸ New World from Height Map…** makes a world of a greyscale image
+  — a 16-bit PNG from Gaea, World Machine or an image editor (JPEG, and raw
+  square `.r16` / `.r32` are read too): what height black and white stand
+  for, how many blocks a pixel covers, the sea's level; terrains are painted
+  from height and slope. The Welcome screen offers it too.
+- **File ▸ Export Height Map…** saves the map's surface (with its levels and
+  what was sculpted) as a 16-bit PNG, black the bottom of the world, white
+  its top.
+- In a graph, the **Height map** node stretches an image over the terrain,
+  read again when the file changes; **Height map…** beside Convert to
+  voxels builds the terrain at full size and saves its relief as a 16-bit
+  PNG instead of writing it to the map.
+
 ### Real blocks
 
 Massif reads the blocks of the game from your own installation: the client
@@ -645,17 +672,35 @@ Two environment variables enable the heavier tests:
 - `MASSIF_WORLD_SAMPLES=<file.world>` also imports a real WorldPainter world
   through the editor, renders it whole in the 3D view and measures what it
   costs.
+- `MASSIF_RIVER_WORLD=<world.massif>` (with `MASSIF_SNAPSHOT_DIR`) runs the
+  rivers on a real map as a user does — the Rivers on this map template,
+  the River tool dragged from the mountains, a River source — and renders
+  them from above and in 3D.
 - `MASSIF_GRAPH_BUILD=<samples>` times a whole build of the starter graph
   (run it with `--release`), and with `MASSIF_GRAPH_APPLY=1` its writing to
   a map of as many blocks; `MASSIF_GRAPH_TEMPLATE=<word>` times a template
   instead (`floating`, `karst`…).
 
+### In the game itself
+
+`tools/minecraft_check.py` checks an export in Minecraft: it exports a
+world for a version, starts that version's own server on it without a
+window (the game installed on the computer: its client jar, libraries and
+Java), and has the game confirm, column by column, what
+`massif-cli probe` says was written there — the top block, the water over
+it, the biome — then reports what matches, what does not and any error the
+game logged while reading the chunks. Running a server means accepting
+Mojang's EULA: it only starts one with `--accept-eula`.
+
+```bash
+tools/minecraft_check.py --world my.massif --version 1.21.11 --minecraft "<game folder>" --accept-eula
+```
+
 ## Roadmap
 
 - WorldPainter layers (trees, vegetation, ores, frost, roads…) and their
   import from `.world` files, and layers as brush filters and graph outputs.
-- Terrain graphs: GPU evaluation, height-map and image import and export,
-  groups and portals, graphs applied to a part of the map, tiled builds
+- Terrain graphs: GPU evaluation, groups and portals, graphs applied to a part of the map, tiled builds
   beyond 16,384 samples, more simulations (glaciers, sediment layers), the
   render drawn from the full-resolution build, carved layers (caves and
   arches) and water on floating rock (lakes, falls), river courses drawn

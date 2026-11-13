@@ -26,6 +26,7 @@ pub mod coords;
 pub mod filter;
 pub mod generate;
 pub mod graph;
+pub mod heightmap;
 pub mod history;
 pub mod level;
 pub mod noise;

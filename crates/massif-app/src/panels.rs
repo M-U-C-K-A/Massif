@@ -186,6 +186,55 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
                 hint(ui, &format!("{changed} columns changed over the whole map."));
             }
         }
+        Tool::Spring => {
+            let r = &mut tools.river;
+            slider_row(ui, "Width", |ui| ui.add(egui::Slider::new(&mut r.width, 2.0..=200.0).suffix(" blocks").max_decimals(0)));
+            slider_row(ui, "Flow", |ui| {
+                ui.add(
+                    egui::Slider::new(&mut r.flow, 0.0..=1.0)
+                        .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                        .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
+                )
+            });
+            slider_row(ui, "Depth", |ui| ui.add(egui::Slider::new(&mut r.depth, 1.0..=30.0).suffix(" blocks").max_decimals(0)));
+            slider_row(ui, "Erosion", |ui| {
+                ui.add(
+                    egui::Slider::new(&mut r.erosion, 0.0..=1.0)
+                        .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                        .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
+                )
+            });
+            slider_row(ui, "Banks", |ui| ui.add(egui::Slider::new(&mut r.banks, 0.0..=120.0).suffix(" blocks").max_decimals(0)));
+            slider_row(ui, "Lakes", |ui| {
+                ui.add(
+                    egui::Slider::new(&mut r.lakes, 0.0..=1.0)
+                        .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                        .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
+                )
+            });
+            ui.checkbox(&mut r.water, "fill it with water");
+            ui.checkbox(&mut r.biome, "a river biome where the water is");
+            hint(
+                ui,
+                &if r.lakes <= 0.001 {
+                    "Lakes: none — it cuts its way through every hollow it meets.".to_owned()
+                } else {
+                    format!("Lakes: hollows deeper than {:.0} blocks fill up; through the others it cuts its way.", r.lake_depth())
+                },
+            );
+            let spec = r.spring_spec(&doc.world.registry);
+            hint(
+                ui,
+                &format!(
+                    "From {:.0} blocks wide and {:.0} deep at the spring to {:.0} wide and {:.0} deep where it ends.",
+                    spec.width, spec.depth, spec.width_end, spec.depth_end
+                ),
+            );
+            hint(ui, "Hover the map to see where the water would go; click to let it spring there (⌘Z undoes it).");
+            if let Some(note) = &tools.river_note {
+                hint(ui, note);
+            }
+        }
         Tool::River => {
             let r = &mut tools.river;
             slider_row(ui, "Width", |ui| ui.add(egui::Slider::new(&mut r.width, 2.0..=400.0).suffix(" blocks").max_decimals(0)));

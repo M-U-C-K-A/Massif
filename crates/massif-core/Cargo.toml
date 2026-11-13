@@ -12,6 +12,7 @@ zstd.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 log.workspace = true
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
 [dev-dependencies]
 serde_json.workspace = true

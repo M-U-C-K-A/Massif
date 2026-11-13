@@ -130,6 +130,11 @@ pub struct MapView {
     /// A river's course being drawn by dragging: how many points it had
     /// when the button went down.
     river_drag: Option<usize>,
+    /// Where water let go under the pointer would go (River source): for
+    /// the block and the document's revision it was found for.
+    spring: Option<((i32, i32, u64), massif_core::river::Descent)>,
+    /// The block the pointer rests on, and since when.
+    spring_rest: Option<((i32, i32, u64), f64)>,
 }
 
 impl Default for MapView {
@@ -149,6 +154,8 @@ impl Default for MapView {
             strength: None,
             canvas: Rect::NOTHING,
             river_drag: None,
+            spring: None,
+            spring_rest: None,
         }
     }
 }
@@ -598,15 +605,82 @@ impl MapView {
             }
         }
 
+        // Where the water of a spring under the pointer would go: its course
+        // and the lakes it would fill.
+        if tools.tool == Tool::Spring {
+            // Worked out once the pointer rests, the way the river goes.
+            if let Some((x, z)) = world_pointer.filter(|_| response.hovered()) {
+                let key = (x.floor() as i32, z.floor() as i32, doc.revision ^ (tools.river.lakes.to_bits() as u64) << 32);
+                let now = ui.input(|i| i.time);
+                match self.spring_rest {
+                    Some((k, since)) if k == key => {
+                        if now - since > 0.12 && self.spring.as_ref().is_none_or(|s| s.0 != key) {
+                            let sea = doc.world.meta.sea_level as f32;
+                            let d = massif_core::river::descend(doc.dimension().ground(), (key.0, key.1), sea, 30_000, 600_000, tools.river.lake_depth());
+                            self.spring = Some((key, d));
+                        }
+                    }
+                    _ => self.spring_rest = Some((key, now)),
+                }
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(130));
+            }
+            if let Some((_, d)) = &self.spring {
+                let water = Color32::from_rgb(70, 160, 255);
+                for (cells, _) in &d.lakes {
+                    let mut rows: Vec<(i32, i32)> = cells.iter().map(|&(x, z)| (z, x)).collect();
+                    rows.sort_unstable();
+                    let mut k = 0;
+                    while k < rows.len() {
+                        let (z, x0) = rows[k];
+                        let mut x1 = x0;
+                        while k + 1 < rows.len() && rows[k + 1] == (z, x1 + 1) {
+                            k += 1;
+                            x1 += 1;
+                        }
+                        let a = self.to_screen(canvas, x0 as f64, z as f64);
+                        let b = self.to_screen(canvas, x1 as f64 + 1.0, z as f64 + 1.0);
+                        painter.rect_filled(Rect::from_min_max(a, b), 0, water.gamma_multiply(0.45));
+                        k += 1;
+                    }
+                }
+                let spec = tools.river.spring_spec(&doc.world.registry);
+                let n = d.course.len().max(2);
+                let pts: Vec<Pos2> = d.course.iter().map(|&(x, z)| self.to_screen(canvas, x as f64, z as f64)).collect();
+                for (k, w) in pts.windows(2).enumerate() {
+                    let t = k as f32 / (n - 1) as f32;
+                    let width = (spec.width + (spec.width_end - spec.width) * t) * self.zoom;
+                    painter.line_segment([w[0], w[1]], Line::new(width.max(2.0), water.gamma_multiply(0.85)));
+                }
+                if let Some(&first) = pts.first() {
+                    painter.circle(first, 6.0, water, Line::new(2.0, Color32::WHITE));
+                }
+            }
+        } else {
+            self.spring = None;
+        }
+
         // How to draw a river, on the map itself.
-        if tools.tool == Tool::River {
-            let hint = if tools.river_points.is_empty() {
-                "River: drag along its course and let go to dig it — or click its points one by one"
+        if tools.tool == Tool::River || tools.tool == Tool::Spring {
+            let hint = if tools.tool == Tool::Spring {
+                match self.spring.as_ref().and_then(|s| s.1.mouth) {
+                    Some(m) if self.spring.as_ref().is_some_and(|s| s.1.course.len() >= 3) => {
+                        let lakes = self.spring.as_ref().map_or(0, |s| s.1.lakes.len());
+                        let lakes = match lakes {
+                            0 => String::new(),
+                            1 => ", through a lake".to_owned(),
+                            n => format!(", through {n} lakes"),
+                        };
+                        format!("Click: a river springs here and runs down to {}{lakes}", m.label())
+                    }
+                    _ => "River source: hover the land to see where its water would go, click to let it spring".to_owned(),
+                }
+            } else if tools.river_points.is_empty() {
+                "River: drag along its course and let go to dig it — or click its points one by one".to_owned()
             } else {
-                "Enter or double-click: dig it · right-click: take back the last point · Esc: drop the course"
+                "Enter or double-click: dig it · right-click: take back the last point · Esc: drop the course".to_owned()
             };
             let at = canvas.center_bottom() - vec2(0.0, 18.0);
-            let galley = painter.layout_no_wrap(hint.to_owned(), egui::FontId::proportional(12.5), Color32::WHITE);
+            let galley = painter.layout_no_wrap(hint, egui::FontId::proportional(12.5), Color32::WHITE);
             let back = Rect::from_center_size(at, galley.size() + vec2(20.0, 10.0));
             painter.rect_filled(back, 8, Color32::from_black_alpha(170));
             painter.galley(back.min + vec2(10.0, 5.0), galley, Color32::WHITE);

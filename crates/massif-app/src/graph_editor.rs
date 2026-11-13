@@ -506,6 +506,8 @@ struct Building {
     started: Instant,
     /// Samples per side.
     n: usize,
+    /// A height map to save it as, rather than writing it to the map.
+    export: Option<std::path::PathBuf>,
 }
 
 /// A change to undo: the graph as it was, or a conversion (undone in the
@@ -1257,8 +1259,27 @@ impl GraphEditor {
             && let Ok(result) = b.rx.try_recv()
         {
             let took = b.started.elapsed().as_secs_f32();
+            let export = b.export.clone();
             self.build = None;
             match result {
+                Ok(built) if export.is_some() => {
+                    let path = export.expect("checked");
+                    let dim = doc.dimension();
+                    let (lo, hi) = (dim.min_y as f32, dim.max_y as f32);
+                    feedback = Some(match &built.outputs.heights {
+                        Some(h) => {
+                            let samples: Vec<f32> = h.data.iter().map(|v| (v - lo) / (hi - lo)).collect();
+                            match massif_core::heightmap::write_png16(&path, h.n, h.n, &samples) {
+                                Ok(()) => format!(
+                                    "Saved the terrain as a height map of {0} × {0} in {took:.1} s: black is Y {lo:.0}, white Y {hi:.0}",
+                                    h.n
+                                ),
+                                Err(e) => format!("The height map could not be saved: {e}"),
+                            }
+                        }
+                        None => "The graph has no Height output to save".to_owned(),
+                    });
+                }
                 Ok(built) => {
                     let palette = match &built.outputs.colors {
                         Some((colors, set)) => block_palette(doc, blocks, *set, colors),
@@ -1396,40 +1417,20 @@ impl GraphEditor {
                 )
                 .clicked()
             {
-                self.building_over = self.over.unwrap_or_else(|| graph.reads_the_map());
-                let (tx, rx) = channel();
-                let cancel = Arc::new(AtomicBool::new(false));
-                let progress = Arc::new(Progress::default());
-                let (flag, told) = (cancel.clone(), progress.clone());
-                let side = terrain_extent(doc, graph.size, 2).size;
-                let extent = terrain_extent(doc, graph.size, self.draft.unwrap_or_else(|| build_samples(side)));
-                let tiles = terrain_tiles(doc, graph.size, &extent);
-                let g = graph.clone();
-                let ctx = ui.ctx().clone();
-                // The map, as it is now, for a graph that starts from it.
-                let fallback = doc.world.meta.sea_level as f32 - 8.0;
-                let colors = terrain_colors(doc);
-                let map = g.reads_the_map().then(|| GroundMap::new(doc.world.dims[doc.dim].snapshot(), doc.revision, fallback, colors, g.own_levels()));
-                std::thread::spawn(move || {
-                    let source = map.as_ref().map(|m| m as &dyn MapSource);
-                    let (reads_map, own) = (g.reads_the_map(), g.own_levels());
-                    let result = g.build_on(source, &extent, &flag, &told).map(|outputs| Built {
-                        extent,
-                        outputs,
-                        reads_map,
-                        own,
-                        tiles,
-                    });
-                    let _ = tx.send(result);
-                    ctx.request_repaint();
-                });
-                self.build = Some(Building {
-                    rx,
-                    cancel,
-                    progress,
-                    started: Instant::now(),
-                    n: extent.n,
-                });
+                self.start_build(ui.ctx(), doc, &graph, None);
+            }
+            if self.build.is_none()
+                && ui
+                    .small_button(theme::with_icon(Icon::ImageDown, "Height map…"))
+                    .on_hover_text("Build the terrain at full size, as for the conversion, and save its relief as a 16-bit PNG height map (for Gaea, World Machine, WorldPainter…) instead of writing it to the map")
+                    .clicked()
+                && let Some(path) = rfd::FileDialog::new()
+                    .set_title("Save the terrain as a height map")
+                    .add_filter("16-bit PNG", &["png"])
+                    .set_file_name("terrain height map.png")
+                    .save_file()
+            {
+                self.start_build(ui.ctx(), doc, &graph, Some(path));
             }
             if self.build.is_none() {
                 // Over the map, or into it: by default over it for a graph
@@ -1771,6 +1772,46 @@ impl GraphEditor {
         self.zoom = (canvas.width() / span.x).min(canvas.height() / span.y).clamp(0.25, 1.1);
         let centre = (lo + hi) * 0.5;
         self.pan = canvas.size() * 0.5 - centre * self.zoom;
+    }
+
+    /// Build the graph at full size on another thread: to write it to the
+    /// map, or (`export`) to save it as a height map.
+    pub fn start_build(&mut self, ctx: &egui::Context, doc: &mut Document, graph: &Graph, export: Option<std::path::PathBuf>) {
+        self.building_over = self.over.unwrap_or_else(|| graph.reads_the_map());
+        let (tx, rx) = channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let progress = Arc::new(Progress::default());
+        let (flag, told) = (cancel.clone(), progress.clone());
+        let side = terrain_extent(doc, graph.size, 2).size;
+        let extent = terrain_extent(doc, graph.size, self.draft.unwrap_or_else(|| build_samples(side)));
+        let tiles = terrain_tiles(doc, graph.size, &extent);
+        let g = graph.clone();
+        let ctx = ctx.clone();
+        // The map, as it is now, for a graph that starts from it.
+        let fallback = doc.world.meta.sea_level as f32 - 8.0;
+        let colors = terrain_colors(doc);
+        let map = g.reads_the_map().then(|| GroundMap::new(doc.world.dims[doc.dim].snapshot(), doc.revision, fallback, colors, g.own_levels()));
+        std::thread::spawn(move || {
+            let source = map.as_ref().map(|m| m as &dyn MapSource);
+            let (reads_map, own) = (g.reads_the_map(), g.own_levels());
+            let result = g.build_on(source, &extent, &flag, &told).map(|outputs| Built {
+                extent,
+                outputs,
+                reads_map,
+                own,
+                tiles,
+            });
+            let _ = tx.send(result);
+            ctx.request_repaint();
+        });
+        self.build = Some(Building {
+            rx,
+            cancel,
+            progress,
+            started: Instant::now(),
+            n: extent.n,
+            export,
+        });
     }
 
     // ---------------------------------------------------------- selection --
@@ -3218,6 +3259,32 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
                 .size(11.5)
                 .color(pal.weak),
             );
+        }
+        NodeKind::Heightmap { path, low, high } => {
+            ui.horizontal(|ui| {
+                let shown = std::path::Path::new(path.as_str()).file_name().and_then(|n| n.to_str()).unwrap_or("— none");
+                ui.add_sized([96.0, 18.0], egui::Label::new(RichText::new("Image").size(12.0)));
+                ui.label(RichText::new(shown).size(12.0)).on_hover_text(path.as_str());
+                if ui.button("Choose…").clicked()
+                    && let Some(p) = rfd::FileDialog::new()
+                        .set_title("A height map")
+                        .add_filter("Height maps", &["png", "jpg", "jpeg", "r16", "r32", "raw"])
+                        .pick_file()
+                {
+                    *path = p.display().to_string();
+                }
+            });
+            height(ui, "Black is", low);
+            height(ui, "White is", high);
+            let state = if path.is_empty() {
+                "No image yet: choose one. 16-bit PNG keeps the most detail; .r16 and .r32 (raw, square) are read too.".to_owned()
+            } else {
+                match massif_core::heightmap::cached(std::path::Path::new(path.as_str())) {
+                    Ok(m) => format!("{} × {} pixels, stretched over the whole terrain; read again when the file changes.", m.width, m.height),
+                    Err(e) => format!("It cannot be read: {e}"),
+                }
+            };
+            ui.label(RichText::new(state).size(11.0).color(pal.weak));
         }
         NodeKind::Temperature {
             warm,
