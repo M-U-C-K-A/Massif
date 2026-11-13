@@ -172,6 +172,8 @@ struct Point {
     depth: f32,
     /// The level of its water.
     level: f32,
+    /// In water already on the map: nothing is dug there.
+    held: bool,
 }
 
 /// A moving average of the points' positions, its ends left where they are.
@@ -256,8 +258,11 @@ struct Segment {
 }
 
 /// Trace the rivers of relief `f` (`spacing` blocks between its samples)
-/// and dig them in. `None` if cancelled.
-pub(super) fn rivers(f: &Field, spacing: f32, p: RiverParams, cancel: &AtomicBool) -> Option<RiverMaps> {
+/// and dig them in. `existing`: the level of the water already on the map
+/// (rivers and lakes painted by hand): rivers keep to it, dig nothing
+/// where it lies, and it stays in the water given back. `None` if
+/// cancelled.
+pub(super) fn rivers(f: &Field, existing: Option<&Field>, spacing: f32, p: RiverParams, cancel: &AtomicBool) -> Option<RiverMaps> {
     let n = f.n;
     let unchanged = || RiverMaps {
         dug: f.clone(),
@@ -276,14 +281,24 @@ pub(super) fn rivers(f: &Field, spacing: f32, p: RiverParams, cancel: &AtomicBoo
     // across flats as it would, not in straight lines.
     let noise = Noise::new(0x51ee_7a11);
     let cell = k * spacing;
+    let sea = p.sea;
+    // The water already standing on the land (not the sea's) at a sample.
+    let standing = |i: usize, j: usize| -> f32 {
+        let Some(w) = existing.filter(|w| w.n == n) else { return NO_WATER };
+        let (i, j) = (i.min(n - 1), j.min(n - 1));
+        let level = w.data[j * n + i];
+        if level > f.data[j * n + i] + 0.3 && (sea == NO_WATER || level > sea + 0.2) { level } else { NO_WATER }
+    };
     let route: Vec<f32> = (0..m * m)
         .into_par_iter()
         .map(|c| {
             let (x, z) = ((c % m) as f64 * cell as f64, (c / m) as f64 * cell as f64);
-            coarse.data[c] + 0.3 * noise.fbm(x / 40.0, z / 40.0, 3, 2.0, 0.5) as f32
+            // Water already there draws the rivers into its bed.
+            let (si, sj) = ((((c % m) as f32 + 0.5) * k) as usize, (((c / m) as f32 + 0.5) * k) as usize);
+            let held = if standing(si, sj) != NO_WATER { 2.5 } else { 0.0 };
+            coarse.data[c] + 0.3 * noise.fbm(x / 40.0, z / 40.0, 3, 2.0, 0.5) as f32 - held
         })
         .collect();
-    let sea = p.sea;
     let land = |c: usize| route[c] > sea;
     let d = drain(&route, m, sea, cancel)?;
     let mut area = vec![1.0f32; m * m];
@@ -535,7 +550,15 @@ pub(super) fn rivers(f: &Field, spacing: f32, p: RiverParams, cancel: &AtomicBoo
             let (u, v) = coarse_at(q.x, q.y);
             let cell = (v.round().clamp(0.0, (m - 1) as f32) as usize) * m + u.round().clamp(0.0, (m - 1) as f32) as usize;
             let freeboard = (0.25 * q.depth).clamp(0.5, 1.5);
-            let raw = if lake[cell] != NO_WATER { lake[cell] } else { lowest - freeboard };
+            let held = standing(q.x.round().max(0.0) as usize, q.y.round().max(0.0) as usize);
+            q.held = held != NO_WATER;
+            let raw = if q.held {
+                held
+            } else if lake[cell] != NO_WATER {
+                lake[cell]
+            } else {
+                lowest - freeboard
+            };
             level = level.min(raw);
             if sea != NO_WATER {
                 level = level.max(sea);
@@ -549,6 +572,10 @@ pub(super) fn rivers(f: &Field, spacing: f32, p: RiverParams, cancel: &AtomicBoo
     let mut segments: Vec<Segment> = Vec::new();
     for line in &lines {
         for w in line.windows(2) {
+            // Where the map holds the water already, it is left as it is.
+            if w[0].held && w[1].held {
+                continue;
+            }
             let bank = bank_of(w[0].hw.max(w[1].hw));
             segments.push(Segment { a: w[0], b: w[1], bank });
         }
@@ -628,7 +655,10 @@ pub(super) fn rivers(f: &Field, spacing: f32, p: RiverParams, cancel: &AtomicBoo
                     };
                     drow[i] = h;
                     mrow[i] = mk;
-                    if wl > h + 0.25 && (sea == NO_WATER || wl > sea + 0.2) {
+                    // Water at the sea's level stays where the river runs
+                    // over land (a low coastal plain); over what was sea,
+                    // the sea's own water is there already.
+                    if wl > h + 0.25 && (sea == NO_WATER || wl > sea + 0.2 || ground > sea) {
                         wrow[i] = wl;
                     }
                 }
@@ -666,6 +696,17 @@ pub(super) fn rivers(f: &Field, spacing: f32, p: RiverParams, cancel: &AtomicBoo
                 let l = grown[cj * m + ci];
                 if l != NO_WATER && l > drow[i] + 0.25 {
                     wrow[i] = wrow[i].max(l);
+                }
+            }
+        });
+    }
+    // The water already on the map stays.
+    if existing.is_some() {
+        water.par_chunks_mut(n).zip(dug.par_chunks(n)).enumerate().for_each(|(j, (wrow, drow))| {
+            for i in 0..n {
+                let held = standing(i, j);
+                if held != NO_WATER && held > drow[i] + 0.25 {
+                    wrow[i] = wrow[i].max(held);
                 }
             }
         });

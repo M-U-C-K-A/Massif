@@ -8,9 +8,14 @@
 //!   search). Drop a wire on empty space to add a node already wired.
 //! - Drag from an output (right) to an input (left) to wire them; click a
 //!   wired input to pick its wire up again.
-//! - Drag a node by its title; Delete removes the selected node.
-//! - Scroll or drag the background to move around, ⌘/Ctrl + scroll or pinch
-//!   to zoom, F to frame everything.
+//! - Click a node to select it, Shift or ⌘ to select more, or drag a box on
+//!   the background; drag a node to move the selection; ⌘D duplicates it,
+//!   ⌘C / ⌘X / ⌘V copy, cut and paste it (between worlds too), Delete
+//!   removes it, Esc deselects; right-click or Alt-click a wire to cut it.
+//! - Right-drag, middle-drag or Space + drag to move around, the wheel or a
+//!   pinch to zoom (two fingers on a trackpad move), F to frame the
+//!   selection or everything. ⌘Z undoes changes to the graph, and
+//!   conversions, in turn.
 //! - The viewport follows the selected node; pin it to keep one in view.
 //!
 //! Previews are evaluated on another thread with a cache, so changing a
@@ -503,6 +508,29 @@ struct Building {
     n: usize,
 }
 
+/// A change to undo: the graph as it was, or a conversion (undone in the
+/// map's own history).
+enum Step {
+    Graph(Graph),
+    Converted,
+}
+
+/// What undoing or redoing on the Terrain side did.
+pub enum Undone {
+    /// A change to the graph.
+    Graph,
+    /// It came to a conversion: the map's own history takes it.
+    Converted,
+}
+
+/// Nodes on the clipboard: their kinds and places, and the links between
+/// them.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Clip {
+    massif_nodes: Vec<(NodeId, NodeKind, [f32; 2])>,
+    links: Vec<massif_core::graph::Link>,
+}
+
 /// A finished build: what to write to the map.
 struct Built {
     extent: Extent,
@@ -737,6 +765,19 @@ pub struct GraphEditor {
     /// The world the graph belongs to (its generation).
     generation: Option<u64>,
     pub selected: Option<NodeId>,
+    /// Every node selected, the last picked last (`selected` is the one
+    /// whose settings show).
+    picked: Vec<NodeId>,
+    /// Where a box selection started, on the screen.
+    marquee: Option<Pos2>,
+    /// The canvas is being moved with the left button (Space or Alt held).
+    panning: bool,
+    /// Changes to the graph to undo and to redo, conversions among them.
+    undo: Vec<Step>,
+    redo: Vec<Step>,
+    /// When the graph last changed in the step under way (`None`: the next
+    /// change starts a step).
+    last_edit: Option<Instant>,
     /// The node the viewport shows (V); `None`: the graph's output.
     pinned: Option<NodeId>,
     /// Which output of the viewed node is shown.
@@ -797,6 +838,12 @@ impl Default for GraphEditor {
         Self {
             generation: None,
             selected: None,
+            picked: Vec::new(),
+            marquee: None,
+            panning: false,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            last_edit: None,
             pinned: None,
             view_output: 0,
             pan: vec2(20.0, 20.0),
@@ -857,7 +904,7 @@ impl GraphEditor {
     /// The world's graph was replaced from outside the editor.
     #[cfg(test)]
     pub fn graph_replaced(&mut self) {
-        self.selected = None;
+        self.clear_selection();
         self.pinned = None;
         self.revision += 1;
         self.fit = true;
@@ -866,7 +913,10 @@ impl GraphEditor {
     /// Select a node and view it, as V does (or go back to the output).
     #[cfg(test)]
     pub fn view(&mut self, id: Option<NodeId>) {
-        self.selected = id;
+        match id {
+            Some(id) => self.select_only(id),
+            None => self.clear_selection(),
+        }
         match id {
             Some(id) if self.pinned != Some(id) => self.toggle_view(id),
             Some(_) => {}
@@ -875,6 +925,15 @@ impl GraphEditor {
     }
 
     fn store(&mut self, doc: &mut Document, graph: Graph) {
+        // Every change of one press or key (a drag, a slider) is one step.
+        if self.last_edit.is_none() {
+            self.undo.push(Step::Graph(graph_of(doc)));
+            if self.undo.len() > 300 {
+                self.undo.remove(0);
+            }
+        }
+        self.redo.clear();
+        self.last_edit = Some(Instant::now());
         doc.world.meta.graph = Some(graph);
         doc.mark_changed();
         self.own = doc.revision;
@@ -892,7 +951,7 @@ impl GraphEditor {
                 let read = massif_core::graph::sample_map(doc.dimension(), extent, doc.world.meta.sea_level as f32 - 8.0, &terrain_colors(doc), &graph_of(doc).own_levels());
                 // What the nodes after it remember depends on what was read.
                 let mut hash = std::collections::hash_map::DefaultHasher::new();
-                for v in read.heights.data.iter().chain(&read.water.data) {
+                for v in read.heights.data.iter().chain(&read.water.data).chain(&read.level.data) {
                     std::hash::Hash::hash(&v.to_bits(), &mut hash);
                 }
                 std::hash::Hash::hash(&read.colors.data, &mut hash);
@@ -901,6 +960,7 @@ impl GraphEditor {
                     heights: Arc::new(read.heights),
                     water: Arc::new(read.water),
                     colors: Arc::new(read.colors),
+                    level: Arc::new(read.level),
                     revision: std::hash::Hasher::finish(&hash),
                 });
                 self.map = Some(map.clone());
@@ -946,7 +1006,9 @@ impl GraphEditor {
         if self.generation != Some(doc.generation) {
             self.generation = Some(doc.generation);
             self.textures.clear();
-            self.selected = None;
+            self.clear_selection();
+            self.undo.clear();
+            self.redo.clear();
             self.pinned = None;
             self.revision += 1;
             self.fit = true;
@@ -1281,6 +1343,9 @@ impl GraphEditor {
                     }
                     doc.commit();
                     doc.clamp_active_level();
+                    // ⌘Z on the Terrain side undoes it in turn.
+                    self.undo.push(Step::Converted);
+                    self.redo.clear();
                     let blocks_note = if palette.is_empty() { String::new() } else { format!(", in {} kinds of blocks", palette.len()) };
                     let mut layers_note = match built.outputs.layers.len() {
                         0 => String::new(),
@@ -1538,7 +1603,7 @@ impl GraphEditor {
         }
         if back && let Some(previous) = self.replaced.take() {
             self.replaced = Some(std::mem::replace(graph, previous));
-            self.selected = None;
+            self.clear_selection();
             self.pinned = None;
             self.fit = true;
             self.templates_open = false;
@@ -1559,7 +1624,7 @@ impl GraphEditor {
         if matches!(t, Template::KarstTowers | Template::FloatingMountains) {
             self.preview = self.preview.max(768);
         }
-        self.selected = None;
+        self.clear_selection();
         self.pinned = None;
         self.fit = true;
         self.templates_open = false;
@@ -1587,6 +1652,7 @@ impl GraphEditor {
                     heights: Arc::new(read.heights),
                     water: Arc::new(read.water),
                     colors: Arc::new(read.colors),
+                    level: Arc::new(read.level),
                     revision: 0,
                 }
             });
@@ -1614,11 +1680,33 @@ impl GraphEditor {
     }
 
     /// Start from a template, as its card does.
-    #[cfg(test)]
     pub fn use_template(&mut self, doc: &mut Document, t: Template) {
         let mut graph = graph_of(doc);
         self.start_from(doc, t, &mut graph);
         self.store(doc, graph);
+    }
+
+    /// The nodes selected (for tests).
+    #[cfg(test)]
+    pub fn picked(&self) -> Vec<NodeId> {
+        self.picked.clone()
+    }
+
+    /// Where a node is drawn on the screen, and the graph canvas (for tests).
+    #[cfg(test)]
+    pub fn screen_of(&self, graph: &Graph, id: NodeId) -> Rect {
+        let n = graph.node(id).expect("a node");
+        self.node_rect(&n.kind, n.pos)
+    }
+
+    #[cfg(test)]
+    pub fn canvas_rect(&self) -> Rect {
+        self.canvas
+    }
+
+    #[cfg(test)]
+    pub fn zoom(&self) -> f32 {
+        self.zoom
     }
 
     /// Whether a conversion is under way.
@@ -1670,8 +1758,10 @@ impl GraphEditor {
         if graph.nodes.is_empty() {
             return;
         }
+        // The selection, or everything.
+        let some = graph.nodes.iter().any(|n| self.is_picked(n.id));
         let (mut lo, mut hi) = (vec2(f32::MAX, f32::MAX), vec2(f32::MIN, f32::MIN));
-        for n in &graph.nodes {
+        for n in graph.nodes.iter().filter(|n| !some || self.is_picked(n.id)) {
             let size = vec2(NODE_WIDTH, Self::node_height(&n.kind));
             lo = lo.min(vec2(n.pos[0], n.pos[1]));
             hi = hi.max(vec2(n.pos[0], n.pos[1]) + size);
@@ -1681,6 +1771,141 @@ impl GraphEditor {
         self.zoom = (canvas.width() / span.x).min(canvas.height() / span.y).clamp(0.25, 1.1);
         let centre = (lo + hi) * 0.5;
         self.pan = canvas.size() * 0.5 - centre * self.zoom;
+    }
+
+    // ---------------------------------------------------------- selection --
+
+    /// Select `id` alone.
+    fn select_only(&mut self, id: NodeId) {
+        self.picked = vec![id];
+        self.selected = Some(id);
+    }
+
+    /// Add `id` to the selection, or take it out.
+    fn toggle_pick(&mut self, id: NodeId) {
+        if let Some(k) = self.picked.iter().position(|p| *p == id) {
+            self.picked.remove(k);
+            if self.selected == Some(id) {
+                self.selected = self.picked.last().copied();
+            }
+        } else {
+            self.picked.push(id);
+            self.selected = Some(id);
+        }
+    }
+
+    fn clear_selection(&mut self) {
+        self.picked.clear();
+        self.selected = None;
+    }
+
+    fn is_picked(&self, id: NodeId) -> bool {
+        self.selected == Some(id) || self.picked.contains(&id)
+    }
+
+    /// The nodes selected, as text for the clipboard.
+    fn clip_of(&self, graph: &Graph) -> Option<String> {
+        let ids: Vec<NodeId> = graph.nodes.iter().map(|n| n.id).filter(|id| self.is_picked(*id)).collect();
+        if ids.is_empty() {
+            return None;
+        }
+        let clip = Clip {
+            massif_nodes: graph.nodes.iter().filter(|n| ids.contains(&n.id)).map(|n| (n.id, n.kind.clone(), n.pos)).collect(),
+            links: graph.links.iter().filter(|l| ids.contains(&l.from) && ids.contains(&l.to)).copied().collect(),
+        };
+        serde_json::to_string(&clip).ok()
+    }
+
+    /// Add the nodes of `text` (from [`GraphEditor::clip_of`]) to the graph,
+    /// wired as they were, their corner at `at` (or next to where they
+    /// were); they become the selection.
+    fn paste(&mut self, graph: &mut Graph, text: &str, at: Option<[f32; 2]>) -> usize {
+        let Ok(clip) = serde_json::from_str::<Clip>(text) else { return 0 };
+        if clip.massif_nodes.is_empty() {
+            return 0;
+        }
+        let corner = clip.massif_nodes.iter().fold([f32::MAX, f32::MAX], |c, n| [c[0].min(n.2[0]), c[1].min(n.2[1])]);
+        let to = at.unwrap_or([corner[0] + 40.0, corner[1] + 40.0]);
+        let mut new_ids = HashMap::new();
+        self.picked.clear();
+        for (old, kind, pos) in clip.massif_nodes {
+            let id = graph.add(kind, [pos[0] - corner[0] + to[0], pos[1] - corner[1] + to[1]]);
+            new_ids.insert(old, id);
+            self.picked.push(id);
+        }
+        for l in clip.links {
+            if let (Some(&from), Some(&to)) = (new_ids.get(&l.from), new_ids.get(&l.to)) {
+                graph.connect(from, l.output, to, l.input);
+            }
+        }
+        self.selected = self.picked.last().copied();
+        self.revision += 1;
+        new_ids.len()
+    }
+
+    /// Delete the nodes selected.
+    fn delete_picked(&mut self, graph: &mut Graph) {
+        let gone: Vec<NodeId> = graph.nodes.iter().map(|n| n.id).filter(|id| self.is_picked(*id)).collect();
+        for id in &gone {
+            graph.remove(*id);
+            if self.pinned == Some(*id) {
+                self.pinned = None;
+            }
+        }
+        if !gone.is_empty() {
+            self.revision += 1;
+        }
+        self.clear_selection();
+    }
+
+    // ------------------------------------------------------------ history --
+
+    /// Undo the last change made on the Terrain side: a change to the
+    /// graph (done here), or a conversion (`Converted`: for the map's
+    /// history). `None`: nothing left here.
+    pub fn undo(&mut self, doc: &mut Document) -> Option<Undone> {
+        match self.undo.pop()? {
+            Step::Graph(graph) => {
+                self.redo.push(Step::Graph(graph_of(doc)));
+                self.put(doc, graph);
+                Some(Undone::Graph)
+            }
+            Step::Converted => {
+                self.redo.push(Step::Converted);
+                Some(Undone::Converted)
+            }
+        }
+    }
+
+    /// Redo what [`GraphEditor::undo`] undid.
+    pub fn redo(&mut self, doc: &mut Document) -> Option<Undone> {
+        match self.redo.pop()? {
+            Step::Graph(graph) => {
+                self.undo.push(Step::Graph(graph_of(doc)));
+                self.put(doc, graph);
+                Some(Undone::Graph)
+            }
+            Step::Converted => {
+                self.undo.push(Step::Converted);
+                Some(Undone::Converted)
+            }
+        }
+    }
+
+    /// Put a graph back without recording it.
+    fn put(&mut self, doc: &mut Document, graph: Graph) {
+        self.picked.retain(|id| graph.node(*id).is_some());
+        if self.selected.is_some_and(|id| graph.node(id).is_none()) {
+            self.selected = self.picked.last().copied();
+        }
+        if self.pinned.is_some_and(|id| graph.node(id).is_none()) {
+            self.pinned = None;
+        }
+        doc.world.meta.graph = Some(graph);
+        doc.mark_changed();
+        self.own = doc.revision;
+        self.revision += 1;
+        self.last_edit = None;
     }
 
     fn open_library(&mut self, screen: Pos2, from: Option<(NodeId, u8)>) {
@@ -1699,6 +1924,10 @@ impl GraphEditor {
             self.frame(graph);
             self.fit = false;
         }
+        // Every press or key starts a new step to undo.
+        if ui.input(|i| i.pointer.any_pressed() || i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. }))) {
+            self.last_edit = None;
+        }
         let background = ui.interact(canvas, ui.scope_id().with("graph canvas"), Sense::click_and_drag());
         let painter = ui.painter_at(canvas);
         painter.rect_filled(canvas, 0, pal.canvas);
@@ -1716,113 +1945,225 @@ impl GraphEditor {
                 y += step;
             }
         }
-        // Moving and zooming.
-        if background.dragged_by(egui::PointerButton::Middle) || background.dragged_by(egui::PointerButton::Primary) {
+        let hovered = ui.rect_contains_pointer(canvas);
+        let typing = ui.ctx().egui_wants_keyboard_input();
+        let modifiers = ui.input(|i| i.modifiers);
+        let adding = modifiers.shift || modifiers.command || modifiers.ctrl;
+        let space = hovered && !typing && ui.input(|i| i.key_down(Key::Space));
+
+        // Moving around: the middle or right button, or the left one with
+        // Space or Alt held.
+        if background.drag_started_by(egui::PointerButton::Primary) && (space || modifiers.alt) {
+            self.panning = true;
+        }
+        if background.dragged_by(egui::PointerButton::Middle) || background.dragged_by(egui::PointerButton::Secondary) || (self.panning && background.dragged()) {
             self.pan += background.drag_delta();
         }
-        let hovered = ui.rect_contains_pointer(canvas);
+        if !ui.input(|i| i.pointer.primary_down()) {
+            self.panning = false;
+        }
+        // A mouse wheel or a pinch zooms; two fingers on a trackpad move.
         if hovered && self.library.is_none() {
-            let (scroll, zoom, cmd) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers.command || i.modifiers.ctrl));
+            let (wheel, pinch) = ui.input(|i| {
+                let mut wheel = Vec2::ZERO;
+                let mut slide = Vec2::ZERO;
+                for e in &i.events {
+                    if let egui::Event::MouseWheel { unit, delta, source, modifiers, .. } = e {
+                        let lines = match unit {
+                            egui::MouseWheelUnit::Point => 1.0,
+                            egui::MouseWheelUnit::Line => 40.0,
+                            egui::MouseWheelUnit::Page => 400.0,
+                        };
+                        let zooms = modifiers.command || modifiers.ctrl || matches!(source, egui::MouseWheelSource::Wheel) || (*unit != egui::MouseWheelUnit::Point && !matches!(source, egui::MouseWheelSource::Trackpad | egui::MouseWheelSource::Momentum));
+                        if zooms {
+                            wheel += *delta * lines;
+                        } else {
+                            slide += *delta * lines;
+                        }
+                    }
+                }
+                ((wheel, slide), i.zoom_delta())
+            });
+            let (wheel, slide) = wheel;
+            let factor = if pinch != 1.0 { pinch } else { (wheel.y * 0.0035).exp() };
             let pointer = ui.input(|i| i.pointer.hover_pos()).unwrap_or(canvas.center());
-            let factor = if zoom != 1.0 {
-                zoom
-            } else if cmd && scroll.y != 0.0 {
-                (scroll.y * 0.004).exp()
-            } else {
-                1.0
-            };
-            if factor != 1.0 {
-                let new_zoom = (self.zoom * factor).clamp(0.25, 2.5);
+            if (factor - 1.0).abs() > 1e-4 {
+                let new_zoom = (self.zoom * factor).clamp(0.2, 2.5);
                 let anchor = pointer - canvas.min - self.pan;
                 self.pan -= anchor * (new_zoom / self.zoom - 1.0);
                 self.zoom = new_zoom;
-            } else if scroll != Vec2::ZERO {
-                self.pan += scroll;
             }
+            self.pan += slide;
         }
+
         // Keys over the graph.
-        let typing = ui.ctx().egui_wants_keyboard_input();
+        let mut paste: Option<String> = None;
         if hovered && !typing && self.library.is_none() {
-            let (tab, space, f, delete, v) = ui.input(|i| {
+            let (tab, f, delete, v, all, duplicate, escape, copy, cut) = ui.input(|i| {
                 (
                     i.key_pressed(Key::Tab),
-                    i.key_pressed(Key::Space),
                     i.key_pressed(Key::F),
                     i.key_pressed(Key::Delete) || i.key_pressed(Key::Backspace),
-                    i.key_pressed(Key::V),
+                    i.key_pressed(Key::V) && !i.modifiers.command && !i.modifiers.ctrl,
+                    i.key_pressed(Key::A) && (i.modifiers.command || i.modifiers.ctrl),
+                    i.key_pressed(Key::D) && (i.modifiers.command || i.modifiers.ctrl),
+                    i.key_pressed(Key::Escape),
+                    i.events.iter().any(|e| matches!(e, egui::Event::Copy)),
+                    i.events.iter().any(|e| matches!(e, egui::Event::Cut)),
                 )
+            });
+            paste = ui.input(|i| {
+                i.events.iter().find_map(|e| match e {
+                    egui::Event::Paste(text) => Some(text.clone()),
+                    _ => None,
+                })
             });
             if v {
                 self.view_key();
             }
-            if tab || space {
+            if tab {
                 let at = ui.input(|i| i.pointer.hover_pos()).unwrap_or(canvas.center());
                 self.open_library(at, None);
             }
             if f {
                 self.fit = true;
             }
-            if delete && let Some(id) = self.selected.take() {
-                graph.remove(id);
-                if self.pinned == Some(id) {
-                    self.pinned = None;
-                }
-                self.revision += 1;
+            if all {
+                self.picked = graph.nodes.iter().map(|n| n.id).collect();
+                self.selected = self.picked.last().copied();
+            }
+            if escape {
+                self.clear_selection();
+            }
+            if (copy || cut)
+                && let Some(text) = self.clip_of(graph)
+            {
+                ui.ctx().copy_text(text);
+            }
+            if duplicate && let Some(text) = self.clip_of(graph) {
+                self.paste(graph, &text, None);
+            }
+            if delete || cut {
+                self.delete_picked(graph);
             }
         }
-        if background.secondary_clicked()
+        if let Some(text) = paste {
+            let at = ui.input(|i| i.pointer.hover_pos()).filter(|p| canvas.contains(*p)).map(|p| self.to_graph(p));
+            self.paste(graph, &text, at);
+        }
+
+        // Wires, coloured by what flows along them; the one under the
+        // pointer can be cut with a right-click, or a click with Alt.
+        let rects: HashMap<NodeId, Rect> = graph.nodes.iter().map(|n| (n.id, self.node_rect(&n.kind, n.pos))).collect();
+        let zoom = self.zoom;
+        let curve = |a: Pos2, b: Pos2| {
+            let d = ((b.x - a.x).abs() * 0.5).max(30.0 * zoom);
+            [a, a + vec2(d, 0.0), b - vec2(d, 0.0), b]
+        };
+        let wire = |painter: &egui::Painter, a: Pos2, b: Pos2, color: Color32, width: f32| {
+            painter.add(egui::epaint::CubicBezierShape::from_points_stroke(curve(a, b), false, Color32::TRANSPARENT, Stroke::new(width * zoom.max(0.6), color)));
+        };
+        let pointer = ui.input(|i| i.pointer.interact_pos());
+        let over_node = pointer.is_some_and(|p| rects.values().any(|r| r.expand(10.0 * zoom).contains(p)));
+        let mut hot_wire: Option<massif_core::graph::Link> = None;
+        if let (Some(p), false, None) = (pointer.filter(|_| hovered), over_node, self.wiring) {
+            let mut best = 7.0f32;
+            for l in &graph.links {
+                let (Some(a), Some(b)) = (rects.get(&l.from), rects.get(&l.to)) else { continue };
+                let pts = curve(self.output_pos(*a, l.output as usize), self.input_pos(*b, l.input as usize));
+                let shape = egui::epaint::CubicBezierShape::from_points_stroke(pts, false, Color32::TRANSPARENT, Stroke::NONE);
+                for q in shape.flatten(Some(0.5)).windows(2) {
+                    let (s, e) = (q[0], q[1]);
+                    let t = ((p - s).dot(e - s) / (e - s).length_sq().max(1e-6)).clamp(0.0, 1.0);
+                    let d = p.distance(s + (e - s) * t);
+                    if d < best {
+                        best = d;
+                        hot_wire = Some(*l);
+                    }
+                }
+            }
+        }
+        for l in &graph.links {
+            let (Some(a), Some(b)) = (rects.get(&l.from), rects.get(&l.to)) else { continue };
+            let t = graph.output_type(l.from, l.output);
+            let near = self.is_picked(l.from) || self.is_picked(l.to);
+            let hot = hot_wire == Some(*l);
+            let color = if hot {
+                pal.danger
+            } else if near {
+                port_color(t)
+            } else {
+                port_color(t).gamma_multiply(0.6)
+            };
+            wire(&painter, self.output_pos(*a, l.output as usize), self.input_pos(*b, l.input as usize), color, if near || hot { 2.4 } else { 1.8 });
+        }
+        if let Some(l) = hot_wire {
+            let cut = background.secondary_clicked() || (background.clicked() && modifiers.alt);
+            if cut {
+                graph.disconnect(l.to, l.input);
+            } else {
+                background.clone().on_hover_text("Right-click (or Alt-click) to cut this wire");
+            }
+        } else if background.secondary_clicked()
             && let Some(p) = background.interact_pointer_pos()
         {
             self.open_library(p, None);
         }
-        if background.clicked() {
-            self.selected = None;
+
+        // A box to select nodes with, dragged on the background.
+        if background.drag_started_by(egui::PointerButton::Primary) && !self.panning {
+            self.marquee = ui.input(|i| i.pointer.press_origin());
+            if !adding {
+                self.clear_selection();
+            }
+        }
+        if let (Some(start), Some(now)) = (self.marquee, pointer) {
+            let area = Rect::from_two_pos(start, now);
+            painter.rect(area, 2, pal.accent.gamma_multiply(0.08), Stroke::new(1.0, pal.accent.gamma_multiply(0.8)), StrokeKind::Inside);
+            if !ui.input(|i| i.pointer.primary_down()) {
+                for (id, r) in &rects {
+                    if area.intersects(*r) && !self.picked.contains(id) {
+                        self.picked.push(*id);
+                    }
+                }
+                self.selected = self.picked.last().copied();
+                self.marquee = None;
+                self.library = None;
+            }
+        }
+        if background.clicked() && hot_wire.is_none() && !adding {
+            self.clear_selection();
             self.library = None;
             self.revision += 1;
         }
 
-        // Wires, coloured by what flows along them.
-        let rects: HashMap<NodeId, Rect> = graph.nodes.iter().map(|n| (n.id, self.node_rect(&n.kind, n.pos))).collect();
-        let zoom = self.zoom;
-        let wire = |painter: &egui::Painter, a: Pos2, b: Pos2, color: Color32, width: f32| {
-            let d = ((b.x - a.x).abs() * 0.5).max(30.0 * zoom);
-            painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
-                [a, a + vec2(d, 0.0), b - vec2(d, 0.0), b],
-                false,
-                Color32::TRANSPARENT,
-                Stroke::new(width * zoom.max(0.6), color),
-            ));
-        };
-        for l in &graph.links {
-            let (Some(a), Some(b)) = (rects.get(&l.from), rects.get(&l.to)) else { continue };
-            let t = graph.output_type(l.from, l.output);
-            let near = self.selected == Some(l.from) || self.selected == Some(l.to);
-            let color = if near { port_color(t) } else { port_color(t).gamma_multiply(0.6) };
-            wire(&painter, self.output_pos(*a, l.output as usize), self.input_pos(*b, l.input as usize), color, if near { 2.4 } else { 1.8 });
-        }
-
         // Nodes.
         let mut drop_on: Option<(NodeId, u8)> = None;
-        let pointer = ui.input(|i| i.pointer.interact_pos());
         let released = ui.input(|i| i.pointer.any_released());
         let mut remove = None;
+        let mut duplicate = None;
         let mut pick_up = None;
         let ids: Vec<NodeId> = graph.nodes.iter().map(|n| n.id).collect();
         let shown = self.shown.map(|s| s.0);
+        let mut moved = Vec2::ZERO;
         for id in ids {
             let node = graph.node(id).expect("listed").clone();
             let rect = rects[&id];
             let family = family_color(node.kind.family());
-            let selected = self.selected == Some(id);
+            let picked = self.is_picked(id);
+            let primary = self.selected == Some(id);
             let failed = self.failed.contains_key(&id);
             let border = if failed {
                 pal.danger
-            } else if selected {
+            } else if picked {
                 pal.accent
             } else {
                 pal.border
             };
-            painter.rect(rect, 8, pal.panel, Stroke::new(if selected { 1.6 } else { 1.0 }, border), StrokeKind::Inside);
+            if picked {
+                painter.rect_stroke(rect.expand(2.5), 10, Stroke::new(if primary { 2.0 } else { 1.2 }, pal.accent.gamma_multiply(0.5)), StrokeKind::Outside);
+            }
+            painter.rect(rect, 8, pal.panel, Stroke::new(if picked { 1.6 } else { 1.0 }, border), StrokeKind::Inside);
             // A band of the family's colour across the top.
             let band = Rect::from_min_size(rect.min, vec2(rect.width(), 3.0 * self.zoom));
             painter.rect_filled(band, egui::CornerRadius { nw: 8, ne: 8, sw: 0, se: 0 }, family);
@@ -1850,17 +2191,30 @@ impl GraphEditor {
                     pal.accent,
                 );
             }
-            // Anywhere on the node (but its ports) selects it and drags it;
-            // a double-click views it, as V does.
+            // Anywhere on the node (but its ports) selects it and drags
+            // it, with the rest of the selection; Shift or ⌘ adds it to the
+            // selection; a double-click views it, as V does.
             let handle = ui.interact(rect, ui.scope_id().with(("graph node", id)), Sense::click_and_drag());
-            if handle.dragged()
-                && let Some(n) = graph.node_mut(id)
-            {
-                let d = handle.drag_delta() / self.zoom;
-                n.pos = [n.pos[0] + d.x, n.pos[1] + d.y];
+            if handle.drag_started_by(egui::PointerButton::Primary) && !picked {
+                if adding {
+                    self.toggle_pick(id);
+                } else {
+                    self.select_only(id);
+                }
+                self.library = None;
             }
-            if handle.clicked() || handle.drag_started() {
-                self.selected = Some(id);
+            if handle.dragged_by(egui::PointerButton::Primary) {
+                moved = handle.drag_delta() / self.zoom;
+            }
+            if handle.dragged_by(egui::PointerButton::Secondary) || handle.dragged_by(egui::PointerButton::Middle) {
+                self.pan += handle.drag_delta();
+            }
+            if handle.clicked() {
+                if adding {
+                    self.toggle_pick(id);
+                } else {
+                    self.select_only(id);
+                }
                 self.library = None;
             }
             if handle.double_clicked() {
@@ -1877,7 +2231,11 @@ impl GraphEditor {
                     self.toggle_view(id);
                     ui.close();
                 }
-                if ui.button(theme::with_icon(Icon::Trash2, "Delete node")).clicked() {
+                if ui.button(theme::with_icon(Icon::Copy, "Duplicate (⌘D)")).clicked() {
+                    duplicate = Some(id);
+                    ui.close();
+                }
+                if ui.button(theme::with_icon(Icon::Trash2, "Delete (⌫)")).clicked() {
                     remove = Some(id);
                     ui.close();
                 }
@@ -1916,7 +2274,7 @@ impl GraphEditor {
             if !node.kind.outputs().is_empty() {
                 let rows = node.kind.inputs().len().max(node.kind.outputs().len()) as f32;
                 let top = rect.top() + (HEADER + rows * ROW + 6.0) * self.zoom;
-                let out = if selected { self.view_output.min(node.kind.outputs().len() as u8 - 1) } else { 0 };
+                let out = if primary { self.view_output.min(node.kind.outputs().len() as u8 - 1) } else { 0 };
                 let thumb = Rect::from_min_size(pos2(rect.left() + 8.0 * self.zoom, top), vec2(rect.width() - 16.0 * self.zoom, THUMB * self.zoom));
                 match self.textures.get(&(id, out)) {
                     Some(t) => {
@@ -1932,20 +2290,33 @@ impl GraphEditor {
                 }
             }
         }
+        // The selection moves as one.
+        if moved != Vec2::ZERO {
+            for id in self.picked.clone() {
+                if let Some(n) = graph.node_mut(id) {
+                    n.pos = [n.pos[0] + moved.x, n.pos[1] + moved.y];
+                }
+            }
+        }
         if let Some((to, input)) = pick_up
             && let Some((from, output)) = graph.input_of(to, input)
         {
             graph.disconnect(to, input);
             self.wiring = Some((from, output));
         }
+        if let Some(id) = duplicate {
+            if !self.is_picked(id) {
+                self.select_only(id);
+            }
+            if let Some(text) = self.clip_of(graph) {
+                self.paste(graph, &text, None);
+            }
+        }
         if let Some(id) = remove {
-            graph.remove(id);
-            if self.selected == Some(id) {
-                self.selected = None;
+            if !self.is_picked(id) {
+                self.select_only(id);
             }
-            if self.pinned == Some(id) {
-                self.pinned = None;
-            }
+            self.delete_picked(graph);
         }
         // The wire being drawn.
         if let Some((from, output)) = self.wiring {
@@ -1970,8 +2341,15 @@ impl GraphEditor {
             }
         }
         if graph.nodes.is_empty() {
-            painter.text(canvas.center(), egui::Align2::CENTER_CENTER, "Right-click or press Tab to add a node", egui::FontId::proportional(14.0), pal.weak);
+            painter.text(canvas.center(), egui::Align2::CENTER_CENTER, "Right-click or press Tab to add a node — or pick a template", egui::FontId::proportional(14.0), pal.weak);
         }
+        // How to work it, along the bottom.
+        let hint = match self.picked.len() {
+            0 => "Click a node to select it · drag on the background to select several · right-drag, middle-drag or Space+drag to move · wheel or pinch to zoom · Tab or right-click to add a node · F to frame · ⌘Z to undo".to_owned(),
+            1 => "Drag to move · ⇧/⌘-click to select more · ⌘D duplicate · ⌘C / ⌘V copy and paste · ⌫ delete · V view in 3D · F frame · ⌘Z undo".to_owned(),
+            k => format!("{k} nodes selected · drag one to move them all · ⌘D duplicate · ⌘C / ⌘V copy and paste · ⌫ delete · F frame them · Esc to deselect"),
+        };
+        painter.text(canvas.left_bottom() + vec2(10.0, -8.0), egui::Align2::LEFT_BOTTOM, hint, egui::FontId::proportional(11.0), pal.weak.gamma_multiply(0.85));
         self.library_ui(ui, graph);
     }
 
@@ -2064,7 +2442,7 @@ impl GraphEditor {
                     graph.connect(from, output, id, k as u8);
                 }
             }
-            self.selected = Some(id);
+            self.select_only(id);
             self.view_output = 0;
             self.revision += 1;
         } else if close {
@@ -2077,6 +2455,9 @@ impl GraphEditor {
     /// The settings of the selected node.
     pub fn properties_ui(&mut self, ui: &mut Ui, doc: &mut Document) {
         self.sync(ui.ctx(), doc);
+        if ui.rect_contains_pointer(ui.max_rect()) && ui.input(|i| i.pointer.any_pressed()) {
+            self.last_edit = None;
+        }
         let pal = Palette::of(ui);
         let mut graph = graph_of(doc);
         let before = graph.clone();
@@ -2108,6 +2489,13 @@ impl GraphEditor {
             ui.label(RichText::new(family.label()).size(11.0).color(pal.weak));
         });
         ui.label(RichText::new(node.kind.description()).size(11.5).color(pal.weak));
+        if self.picked.len() > 1 {
+            ui.label(
+                RichText::new(format!("{} nodes selected: these are the settings of the last one picked.", self.picked.len()))
+                    .size(11.0)
+                    .color(pal.accent),
+            );
+        }
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             let viewed = self.pinned == Some(id);
@@ -2138,14 +2526,11 @@ impl GraphEditor {
         egui::ScrollArea::vertical().id_salt("node properties").show(ui, |ui| {
             properties(ui, &mut node.kind, &doc.world.registry);
             ui.add_space(10.0);
-            delete = ui.button(theme::with_icon(Icon::Trash2, "Delete node")).clicked();
+            let label = if self.picked.len() > 1 { format!("Delete the {} nodes selected", self.picked.len()) } else { "Delete node".to_owned() };
+            delete = ui.button(theme::with_icon(Icon::Trash2, &label)).clicked();
         });
         if delete {
-            graph.remove(id);
-            self.selected = None;
-            if self.pinned == Some(id) {
-                self.pinned = None;
-            }
+            self.delete_picked(&mut graph);
         }
         if graph != before {
             self.store(doc, graph);

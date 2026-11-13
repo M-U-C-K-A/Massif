@@ -28,7 +28,12 @@ pub(super) fn run(
     if *kind == NodeKind::MapHeight {
         // Without a map to read (a graph on its own), the node has nothing.
         let read = source.ok_or(true)?.sample(e);
-        return Ok(vec![Value::Field(Arc::new(read.heights)), Value::Field(Arc::new(read.water)), Value::Color(Arc::new(read.colors))]);
+        return Ok(vec![
+            Value::Field(Arc::new(read.heights)),
+            Value::Field(Arc::new(read.water)),
+            Value::Color(Arc::new(read.colors)),
+            Value::Field(Arc::new(read.level)),
+        ]);
     }
     if let Some(f) = landforms::generate_kind(kind, e) {
         return one(f);
@@ -286,7 +291,9 @@ pub(super) fn run(
                 lakes,
                 sea,
             };
-            let r = super::rivers::rivers(&f, e.spacing(), params, cancel).ok_or(false)?;
+            // The water already on the map, if wired: rivers keep to it.
+            let existing = inputs.get(1).cloned().flatten().map(|v| v.as_field());
+            let r = super::rivers::rivers(&f, existing.as_deref(), e.spacing(), params, cancel).ok_or(false)?;
             Ok(vec![Value::Field(Arc::new(r.dug)), Value::Field(Arc::new(r.mask)), Value::Field(Arc::new(r.water))])
         }
         NodeKind::Lakes { amount, sea } => {

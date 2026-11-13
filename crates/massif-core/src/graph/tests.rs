@@ -1153,7 +1153,7 @@ fn rivers_hold_water_that_runs_down() {
         lakes: 0.5,
         sea: NO_WATER,
     };
-    let r = rivers::rivers(&f, 1.0, params, &AtomicBool::new(false)).unwrap();
+    let r = rivers::rivers(&f, None, 1.0, params, &AtomicBool::new(false)).unwrap();
     assert!(r.count >= 1, "a river runs");
     let c = |j: usize| j * n + 70;
     for j in [20, 60, 100] {
@@ -1173,6 +1173,46 @@ fn rivers_hold_water_that_runs_down() {
     let along: Vec<f32> = (10..118).map(level).filter(|&l| l != NO_WATER).collect();
     assert!(along.len() > 90, "water all along: {}", along.len());
     assert!(along.windows(2).all(|w| w[1] <= w[0] + 1e-3), "it only goes down");
+}
+
+/// On a plain barely over the sea — as many maps painted by hand have —
+/// the rivers keep their water all the way to the coast: their level may
+/// come down to the sea's, but over land the water stays in their beds.
+#[test]
+fn rivers_hold_water_on_low_plains() {
+    let n = 256;
+    let noise = crate::noise::Noise::new(9);
+    let sea = 62.0;
+    // From four blocks over the sea in the north to the coast in the south.
+    let f = Field::new(
+        n,
+        (0..n * n)
+            .map(|c| {
+                let (i, j) = ((c % n) as f64, (c / n) as f64);
+                let land = sea as f64 + 4.0 - 4.5 * j / 230.0 + 1.5 * noise.fbm(i / 50.0, j / 50.0, 4, 2.0, 0.5);
+                (if j > 235.0 { sea as f64 - 6.0 } else { land }) as f32
+            })
+            .collect(),
+    );
+    let params = rivers::RiverParams {
+        threshold: 0.4,
+        depth: 3.0,
+        width: 8.0,
+        banks: 1.0,
+        lakes: 0.5,
+        sea,
+    };
+    let r = rivers::rivers(&f, None, 2.0, params, &AtomicBool::new(false)).unwrap();
+    let (mut bed, mut wet) = (0, 0);
+    for c in 0..n * n {
+        // The bed itself, dug more than a block: its rim is at the water's edge.
+        if r.mask.data[c] >= 0.99 && f.data[c] > sea && f.data[c] - r.dug.data[c] > 1.0 {
+            bed += 1;
+            wet += (r.water.data[c] != NO_WATER) as usize;
+        }
+    }
+    assert!(bed > 200, "rivers run: {bed}");
+    assert!(wet as f32 > 0.97 * bed as f32, "their beds hold water: {wet} of {bed}");
 }
 
 /// With MASSIF_RIVER_BENCH set: how long rivers take on a large build.
@@ -1201,7 +1241,7 @@ fn rivers_on_a_large_build() {
         lakes: 0.5,
         sea: 62.0,
     };
-    let r = rivers::rivers(&f, 1.0, params, &AtomicBool::new(false)).unwrap();
+    let r = rivers::rivers(&f, None, 1.0, params, &AtomicBool::new(false)).unwrap();
     let wet = r.water.data.iter().filter(|&&w| w != NO_WATER).count();
     eprintln!("rivers {n}²: {:.1} s, {} rivers, {wet} samples of water", started.elapsed().as_secs_f32(), r.count);
     // A picture of it, a sample in eight.
@@ -1237,7 +1277,7 @@ fn rivers_find_their_valleys() {
         lakes: 1.0,
         sea,
     };
-    let r = rivers::rivers(&f, 2.0, params, &AtomicBool::new(false)).unwrap();
+    let r = rivers::rivers(&f, None, 2.0, params, &AtomicBool::new(false)).unwrap();
     debug_picture("rivers-hills", &r.dug, &r.water, 2.0);
     assert!(r.count >= 3, "a network of rivers: {}", r.count);
     // In the bottom of their valleys: river samples are lower than most

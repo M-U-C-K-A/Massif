@@ -46,6 +46,8 @@ struct Settings {
     /// The Minecraft client jar the real blocks are read from; the newest
     /// one found when unset.
     minecraft_jar: Option<PathBuf>,
+    /// Show the welcome screen at startup.
+    welcome: bool,
 }
 
 impl Default for Settings {
@@ -56,9 +58,13 @@ impl Default for Settings {
             solo: false,
             light: crate::map_render::DEFAULT_LIGHT,
             minecraft_jar: None,
+            welcome: true,
         }
     }
 }
+
+/// What a button of the welcome screen does, once it has closed.
+type WelcomeAction = Box<dyn FnOnce(&mut MassifApp, &egui::Context)>;
 
 /// An action that replaces or closes the document, run once unsaved changes
 /// are dealt with.
@@ -138,6 +144,8 @@ enum Dialog {
     Export(ExportForm),
     Unsaved(Pending),
     About,
+    /// Where to start: what Massif does, and the ways in.
+    Welcome,
     /// The rules of the automatic biomes (false) or paint (true).
     AutoRules(bool),
     /// What an import brought in, with the file's thumbnail.
@@ -227,8 +235,16 @@ impl MassifApp {
         app.blocks.load(&cc.egui_ctx, app.settings.minecraft_jar.clone());
         if let Some(path) = open {
             app.jobs.push(Job::open(&cc.egui_ctx, path));
+        } else if app.settings.welcome {
+            app.dialog = Some(Dialog::Welcome);
         }
         app
+    }
+
+    /// Go to the Terrain side and start from a template.
+    fn start_terrain(&mut self, t: massif_core::graph::Template) {
+        self.layout.switch_side(true);
+        self.graph.use_template(&mut self.doc, t);
     }
 
     fn with_world(world: World, layout: Layout, tools: ToolState, settings: Settings) -> Self {
@@ -424,6 +440,15 @@ impl MassifApp {
     }
 
     fn undo(&mut self, ctx: &egui::Context) {
+        // On the Terrain side, the graph's changes and its conversions, in
+        // the order they were made.
+        if self.layout.terrain()
+            && let Some(done) = self.graph.undo(&mut self.doc)
+            && matches!(done, crate::graph_editor::Undone::Graph)
+        {
+            self.say(ctx, "Undid a change to the graph", false, None);
+            return;
+        }
         if let Some(label) = self.doc.undo() {
             self.say(ctx, format!("Undid {label}"), false, None);
             self.map_cache.invalidate_all();
@@ -432,6 +457,13 @@ impl MassifApp {
     }
 
     fn redo(&mut self, ctx: &egui::Context) {
+        if self.layout.terrain()
+            && let Some(done) = self.graph.redo(&mut self.doc)
+            && matches!(done, crate::graph_editor::Undone::Graph)
+        {
+            self.say(ctx, "Redid a change to the graph", false, None);
+            return;
+        }
         if let Some(label) = self.doc.redo() {
             self.say(ctx, format!("Redid {label}"), false, None);
             self.map_cache.invalidate_all();
@@ -745,6 +777,9 @@ impl MassifApp {
                 }
             });
             ui.menu_button("Help", |ui| {
+                if ui.button(theme::with_icon(Icon::House, "Welcome: where to start")).clicked() {
+                    self.dialog = Some(Dialog::Welcome);
+                }
                 if ui.button(theme::with_icon(Icon::Info, "About Massif")).clicked() {
                     self.dialog = Some(Dialog::About);
                 }
@@ -1397,6 +1432,120 @@ impl MassifApp {
         let Some(dialog) = self.dialog.take() else { return };
         let mut keep = true;
         match dialog {
+            Dialog::Welcome => {
+                use massif_core::graph::Template;
+                let mut action: Option<WelcomeAction> = None;
+                let response = egui::Modal::new(Id::unique("welcome")).show(ctx, |ui| {
+                    ui.set_width(860.0);
+                    let pal = Palette::of(ui);
+                    ui.label(RichText::new(format!("{}  Welcome to Massif", theme::glyph(Icon::MountainSnow))).bold().size(20.0));
+                    ui.label(
+                        RichText::new("Minecraft maps of any size: paint them by hand, or generate them from nodes, then export them to the game.")
+                            .size(13.0)
+                            .color(pal.weak),
+                    );
+                    ui.add_space(10.0);
+                    // The way it goes, in three steps.
+                    ui.horizontal(|ui| {
+                        for (k, (title, what)) in [
+                            ("Make the land", "paint it on the World side, or generate it on the Terrain side"),
+                            ("Shape it", "rivers, paint, biomes, caves and overhangs"),
+                            ("Export it", "File → Export (⌘E), for the version you play"),
+                        ]
+                        .into_iter()
+                        .enumerate()
+                        {
+                            egui::Frame::new().fill(pal.header).corner_radius(10).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
+                                ui.set_width(256.0);
+                                ui.label(RichText::new(format!("{}  {title}", k + 1)).bold().size(13.5));
+                                ui.label(RichText::new(what).size(11.5).color(pal.weak));
+                            });
+                        }
+                    });
+                    ui.add_space(12.0);
+                    ui.columns(3, |cols| {
+                        let card = |ui: &mut Ui, icon: Icon, title: &str, what: &str| {
+                            ui.label(RichText::new(format!("{}  {title}", theme::glyph(icon))).bold().size(14.5));
+                            ui.label(RichText::new(what).size(11.5).color(pal.weak));
+                            ui.add_space(6.0);
+                        };
+                        let wide = |ui: &mut Ui, icon: Icon, text: &str| ui.add_sized([ui.available_width(), 30.0], egui::Button::new(theme::with_icon(icon, text)));
+                        // A map of one's own.
+                        card(&mut cols[0], Icon::Map, "A map", "Start a map to paint, or open one");
+                        if wide(&mut cols[0], Icon::FilePlus2, "New map…").clicked() {
+                            action = Some(Box::new(|app, _| app.open_new_dialog()));
+                        }
+                        if wide(&mut cols[0], Icon::FolderOpen, "Open a .massif world…").clicked() {
+                            action = Some(Box::new(|app, ctx| app.request(ctx, Pending::Open(None))));
+                        }
+                        if wide(&mut cols[0], Icon::Import, "Import a WorldPainter world…").clicked() {
+                            action = Some(Box::new(|app, ctx| {
+                                if let Some(path) = rfd::FileDialog::new().set_title("Import a WorldPainter world").add_filter("WorldPainter world", &["world"]).pick_file() {
+                                    app.request(ctx, Pending::Open(Some(path)));
+                                }
+                            }));
+                        }
+                        let recent: Vec<PathBuf> = self.settings.recent.iter().take(4).cloned().collect();
+                        if !recent.is_empty() {
+                            cols[0].add_space(6.0);
+                            cols[0].label(RichText::new("Recent").size(11.0).color(pal.weak));
+                            for path in recent {
+                                if cols[0].link(jobs::display_name(&path)).on_hover_text(path.display().to_string()).clicked() {
+                                    action = Some(Box::new(move |app, ctx| app.request(ctx, Pending::Open(Some(path)))));
+                                }
+                            }
+                        }
+                        // A landscape from nodes.
+                        card(&mut cols[1], Icon::Mountain, "A landscape", "Generate one on the Terrain side, then Convert to voxels");
+                        for t in [Template::Continents, Template::Alpine, Template::Archipelago, Template::RiverValley, Template::FloatingMountains, Template::DesertCanyon] {
+                            if wide(&mut cols[1], Icon::LayoutTemplate, t.label()).on_hover_text(t.description()).clicked() {
+                                action = Some(Box::new(move |app, _| app.start_terrain(t)));
+                            }
+                        }
+                        // The map one has.
+                        card(&mut cols[2], Icon::Brush, "The map you have", "Work on the map that is open");
+                        if wide(&mut cols[2], Icon::Paintbrush, "Paint it from its relief").on_hover_text(Template::PaintMap.description()).clicked() {
+                            action = Some(Box::new(|app, _| app.start_terrain(Template::PaintMap)));
+                        }
+                        if wide(&mut cols[2], Icon::Waves, "Give it rivers").on_hover_text(Template::MapRivers.description()).clicked() {
+                            action = Some(Box::new(|app, _| app.start_terrain(Template::MapRivers)));
+                        }
+                        if wide(&mut cols[2], Icon::Route, "Draw a river by hand").on_hover_text("The River tool: drag along a river's course, let go").clicked() {
+                            action = Some(Box::new(|app, _| {
+                                app.layout.switch_side(false);
+                                app.tools.select(Tool::River);
+                            }));
+                        }
+                        if wide(&mut cols[2], Icon::Paintbrush2, "Paint by hand").on_hover_text("The brushes of the World side, as in WorldPainter").clicked() {
+                            action = Some(Box::new(|app, _| {
+                                app.layout.switch_side(false);
+                                app.tools.select(Tool::PaintTerrain);
+                            }));
+                        }
+                    });
+                    ui.add_space(12.0);
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut self.settings.welcome, "Show this at startup");
+                        ui.label(RichText::new("· Help → Welcome brings it back").size(11.0).color(pal.weak));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Close").clicked() {
+                                keep = false;
+                            }
+                        });
+                    });
+                });
+                if response.should_close() {
+                    keep = false;
+                }
+                if let Some(act) = action {
+                    keep = false;
+                    act(self, ctx);
+                }
+                if keep {
+                    self.dialog = Some(Dialog::Welcome);
+                }
+            }
             Dialog::AutoRules(mut paint) => {
                 let response = egui::Modal::new(Id::unique("auto rules")).show(ctx, |ui| {
                     ui.set_width(700.0);
@@ -3571,6 +3720,411 @@ mod tests {
         image::save_buffer(dir.join("continents-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
     }
 
+    /// A river drawn by dragging along its course: let go, and it is dug,
+    /// with water. No GPU needed.
+    #[test]
+    fn a_river_is_drawn_by_dragging() {
+        use massif_core::generate::{GenParams, Landform, generate};
+        let mut h = harness(ThemeChoice::Dark);
+        {
+            let app = h.state_mut();
+            let world = generate(&GenParams {
+                tiles_x: 8,
+                tiles_z: 8,
+                landform: Landform::Hills,
+                ..GenParams::default()
+            });
+            app.doc = crate::doc::Document::new(world, None, 9);
+            app.map_cache.invalidate_all();
+            app.view3d.invalidate_all();
+            app.tools.select(Tool::River);
+            app.tools.river.width = 9.0;
+            app.tools.river.width_end = 20.0;
+        }
+        h.run_steps(5);
+        let rect = map_rect(h.state(), &h.ctx);
+        let c = rect.center();
+        let from = c + vec2(-300.0, -220.0);
+        h.event(egui::Event::PointerMoved(from));
+        h.step();
+        h.event(egui::Event::PointerButton {
+            pos: from,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        });
+        h.step();
+        let mut last = from;
+        for k in 1..=40 {
+            let t = k as f32 / 40.0;
+            last = from + vec2(600.0 * t, 440.0 * t + 60.0 * (t * 6.0).sin());
+            h.event(egui::Event::PointerMoved(last));
+            h.step();
+        }
+        assert!(h.state().tools.river_points.len() > 8, "the course follows the pointer: {}", h.state().tools.river_points.len());
+        h.event(egui::Event::PointerButton {
+            pos: last,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(5);
+        assert_eq!(h.state().doc.history.undo_label(), Some("River"), "let go, the river is dug");
+        assert!(h.state().tools.river_points.is_empty());
+        let note = h.state().tools.river_note.clone().unwrap_or_default();
+        assert!(note.starts_with("Dug a river"), "{note}");
+    }
+
+    /// The River tool on a real map (MASSIF_RIVER_WORLD): a course dragged
+    /// from the mountains to the sea, dug as the user digs it, seen in 3D.
+    /// Needs a GPU: runs with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn river_tool_on_a_real_world() {
+        let (Some(dir), Some(path)) = (
+            std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from),
+            std::env::var_os("MASSIF_RIVER_WORLD").map(PathBuf::from),
+        ) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let ctx = h.ctx.clone();
+        h.state_mut().jobs.push(Job::open(&ctx, path));
+        while !h.state().jobs.is_empty() {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        h.run_steps(10);
+        let centre = [400.0, -165.0];
+        {
+            let app = h.state_mut();
+            app.dialog = None;
+            app.tools.select(Tool::River);
+            app.tools.river.width = 8.0;
+            app.tools.river.width_end = 26.0;
+        }
+        h.run_steps(5);
+        for m in h.state_mut().maps.values_mut() {
+            m.center = centre;
+            m.zoom = 0.75;
+        }
+        h.run_steps(5);
+        let rect = map_rect(h.state(), &h.ctx);
+        let screen = |x: f64, z: f64| rect.center() + vec2(((x - centre[0]) * 0.75) as f32, ((z - centre[1]) * 0.75) as f32);
+        let from = screen(150.0, -560.0);
+        h.event(egui::Event::PointerMoved(from));
+        h.step();
+        h.event(egui::Event::PointerButton {
+            pos: from,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::NONE,
+        });
+        h.step();
+        let mut last = from;
+        for k in 1..=60 {
+            let t = k as f64 / 60.0;
+            last = screen(150.0 + 500.0 * t + 70.0 * (t * 9.0).sin(), -560.0 + 790.0 * t);
+            h.event(egui::Event::PointerMoved(last));
+            h.step();
+        }
+        h.render().unwrap().save(dir.join("real-river-tool-course.png")).unwrap();
+        h.event(egui::Event::PointerButton {
+            pos: last,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(20);
+        let note = h.state().tools.river_note.clone().unwrap_or_default();
+        eprintln!("{note}");
+        assert!(note.starts_with("Dug a river"), "{note}");
+        h.render().unwrap().save(dir.join("real-river-tool-map.png")).unwrap();
+        {
+            let app = h.state_mut();
+            app.layout.activate(3);
+            app.view3d.camera.target = [400.0, 80.0, -165.0];
+            app.view3d.camera.distance = 700.0;
+            app.view3d.camera.pitch = 0.62;
+            app.view3d.camera.yaw = 0.4;
+        }
+        h.run_steps(5);
+        while h.state().view3d.pending() > 0 {
+            h.step();
+        }
+        h.run_steps(3);
+        let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+        image::save_buffer(dir.join("real-river-tool-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+    }
+
+    /// The graph canvas worked with the mouse and the keyboard: a box
+    /// selects several nodes, dragging one moves them all, ⌘D duplicates
+    /// them, Delete removes them, ⌘Z takes it all back step by step; the
+    /// wheel zooms; copied nodes paste with their wires.
+    #[test]
+    fn graph_canvas_selects_moves_and_undoes() {
+        use massif_core::graph::Template;
+        let mut h = harness(ThemeChoice::Dark);
+        h.state_mut().layout.activate(6);
+        h.run_steps(2);
+        {
+            let app = h.state_mut();
+            app.graph.use_template(&mut app.doc, Template::Alpine);
+        }
+        h.run_steps(8);
+        let graph = |h: &egui_kittest::Harness<'_, MassifApp>| h.state().doc.world.meta.graph.clone().unwrap();
+        let count = graph(&h).nodes.len();
+        let canvas = h.state().graph.canvas_rect();
+        assert!(canvas.width() > 100.0, "the canvas is laid out: {canvas:?}");
+        let drag = |h: &mut egui_kittest::Harness<'_, MassifApp>, from: egui::Pos2, to: egui::Pos2, modifiers: Modifiers| {
+            h.event(egui::Event::PointerMoved(from));
+            h.step();
+            h.event(egui::Event::PointerButton {
+                pos: from,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers,
+            });
+            h.step();
+            for k in 1..=8 {
+                h.event(egui::Event::PointerMoved(from + (to - from) * (k as f32 / 8.0)));
+                h.step();
+            }
+            h.event(egui::Event::PointerButton {
+                pos: to,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers,
+            });
+            h.run_steps(3);
+        };
+        // A box around the first three nodes of the graph.
+        let g = graph(&h);
+        let rects: Vec<egui::Rect> = g.nodes.iter().take(3).map(|n| h.state().graph.screen_of(&g, n.id)).collect();
+        let around = rects.iter().fold(rects[0], |a, r| a.union(*r)).expand(12.0);
+        assert!(canvas.contains(around.min) && canvas.contains(around.max), "the nodes are in view");
+        let free = g.nodes.iter().all(|n| !h.state().graph.screen_of(&g, n.id).contains(around.min));
+        assert!(free, "the box starts on the background");
+        drag(&mut h, around.min, around.max, Modifiers::NONE);
+        let picked = h.state().graph.picked();
+        assert!(picked.len() >= 3, "a box selects several nodes: {picked:?}");
+        // Drag one: they all move.
+        let before: Vec<[f32; 2]> = picked.iter().map(|id| graph(&h).node(*id).unwrap().pos).collect();
+        let grab = h.state().graph.screen_of(&graph(&h), picked[0]).center_top() + egui::vec2(0.0, 12.0);
+        drag(&mut h, grab, grab + egui::vec2(60.0, 40.0), Modifiers::NONE);
+        let zoom = h.state().graph.zoom();
+        for (id, was) in picked.iter().zip(&before) {
+            let now = graph(&h).node(*id).unwrap().pos;
+            assert!((now[0] - was[0] - 60.0 / zoom).abs() < 2.0 && (now[1] - was[1] - 40.0 / zoom).abs() < 2.0, "node {id} moved with the others: {was:?} → {now:?}");
+        }
+        assert_eq!(h.state().graph.picked().len(), picked.len(), "and they stay selected");
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            h.render().unwrap().save(dir.join("graph-selection.png")).unwrap();
+        }
+        // Duplicate, then delete the copies.
+        h.event(egui::Event::PointerMoved(canvas.center()));
+        h.key_press_modifiers(Modifiers::COMMAND, Key::D);
+        h.run_steps(3);
+        assert_eq!(graph(&h).nodes.len(), count + picked.len(), "⌘D duplicates the selection");
+        let copies = h.state().graph.picked();
+        assert!(copies.iter().all(|id| !picked.contains(id)), "the copies are selected");
+        h.key_press(Key::Delete);
+        h.run_steps(3);
+        assert_eq!(graph(&h).nodes.len(), count, "Delete removes the selection");
+        // Undo, step by step: the copies come back, go, the move is undone.
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        h.run_steps(3);
+        assert_eq!(graph(&h).nodes.len(), count + picked.len());
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        h.run_steps(3);
+        assert_eq!(graph(&h).nodes.len(), count);
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        h.run_steps(3);
+        for (id, was) in picked.iter().zip(&before) {
+            assert_eq!(graph(&h).node(*id).unwrap().pos, *was, "the move is undone");
+        }
+        h.key_press_modifiers(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
+        h.run_steps(3);
+        assert_ne!(graph(&h).node(picked[0]).unwrap().pos, before[0], "and redone");
+        // Copy and paste: the nodes and the wires between them.
+        let g = graph(&h);
+        let rects: Vec<egui::Rect> = picked.iter().map(|id| h.state().graph.screen_of(&g, *id)).collect();
+        let around = rects.iter().fold(rects[0], |a, r| a.union(*r)).expand(12.0);
+        drag(&mut h, around.min, around.max, Modifiers::NONE);
+        let picked = h.state().graph.picked();
+        assert!(picked.len() >= 3);
+        h.event(egui::Event::PointerMoved(canvas.center()));
+        let links = graph(&h).links.len();
+        let inner = graph(&h).links.iter().filter(|l| picked.contains(&l.from) && picked.contains(&l.to)).count();
+        h.event(egui::Event::Copy);
+        h.step();
+        let text = h
+            .output()
+            .platform_output
+            .commands
+            .iter()
+            .find_map(|c| match c {
+                egui::OutputCommand::CopyText(t) => Some(t.clone()),
+                _ => None,
+            })
+            .expect("the selection is copied");
+        assert!(text.contains("massif_nodes"), "copied as text: {text:.40}");
+        h.event(egui::Event::Paste(text));
+        h.run_steps(3);
+        assert_eq!(graph(&h).nodes.len(), count + picked.len(), "pasted");
+        assert_eq!(graph(&h).links.len(), links + inner, "with their wires");
+        // The wheel zooms around the pointer.
+        let zoom = h.state().graph.zoom();
+        h.event(egui::Event::PointerMoved(canvas.center()));
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, 3.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(3);
+        assert!(h.state().graph.zoom() > zoom * 1.2, "the wheel zooms: {zoom} → {}", h.state().graph.zoom());
+    }
+
+    /// Rivers on a real map (MASSIF_RIVER_WORLD: a .massif or .world), as a
+    /// user gets them: the template, its preview, the conversion and the
+    /// map in 3D. Needs a GPU: runs with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn rivers_on_a_real_world() {
+        use massif_core::graph::Template;
+        let (Some(dir), Some(path)) = (
+            std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from),
+            std::env::var_os("MASSIF_RIVER_WORLD").map(PathBuf::from),
+        ) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let ctx = h.ctx.clone();
+        h.state_mut().jobs.push(Job::open(&ctx, path));
+        let started = std::time::Instant::now();
+        while !h.state().jobs.is_empty() {
+            assert!(started.elapsed().as_secs() < 120, "opening timed out");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        h.run_steps(10);
+        h.state_mut().dialog = None;
+        let sea = h.state().doc.world.meta.sea_level;
+        let (lo, hi) = h.state().doc.dimension().bounds().unwrap();
+        eprintln!("map {}x{} tiles, sea {sea}", hi.x - lo.x + 1, hi.z - lo.z + 1);
+        // The map from above with the rivers the template traces, at 2048.
+        {
+            use massif_core::graph::{Extent, GroundMap, NodeKind, Progress};
+            let doc = &mut h.state_mut().doc;
+            let g = Template::MapRivers.graph(&doc.world.registry, sea as f32, 4096.0);
+            let rect = {
+                let (lo, hi) = doc.dimension().bounds().unwrap();
+                massif_core::BlockRect::new(lo.x * 128, lo.z * 128, (hi.x + 1) * 128, (hi.z + 1) * 128)
+            };
+            let ext = Extent::covering(rect, 2048);
+            let colors: Vec<[u8; 3]> = doc.world.registry.terrains.iter().map(|t| t.color).collect();
+            let snapshot = doc.world.dims[doc.dim].snapshot();
+            let map = GroundMap::new(snapshot, 1, sea as f32 - 8.0, colors, g.own_levels());
+            let started = std::time::Instant::now();
+            let out = g.build_on(Some(&map), &ext, &std::sync::atomic::AtomicBool::new(false), &Progress::default()).unwrap();
+            eprintln!("built at 2048 in {:.1} s", started.elapsed().as_secs_f32());
+            let (hgt, water) = (out.heights.unwrap(), out.water.unwrap());
+            let n = hgt.n;
+            let mut rgb = Vec::with_capacity(n * n * 3);
+            for j in 0..n {
+                for i in 0..n {
+                    let v = hgt.at(i, j);
+                    let dx = hgt.at(i + 1, j) - hgt.at(i.saturating_sub(1), j);
+                    let dz = hgt.at(i, j + 1) - hgt.at(i, j.saturating_sub(1));
+                    let shade = (0.75 + 0.08 * (-dx + dz)).clamp(0.25, 1.2);
+                    let c = if water.at(i, j) > v + 0.25 {
+                        [40.0, 110.0, 230.0]
+                    } else if v < sea as f32 {
+                        [30.0, 50.0, 90.0]
+                    } else {
+                        let t = ((v - sea as f32) / 120.0).clamp(0.0, 1.0);
+                        [110.0 + 90.0 * t, 150.0 + 40.0 * t, 80.0 + 110.0 * t].map(|c| c * shade)
+                    };
+                    rgb.extend(c.map(|c| c.clamp(0.0, 255.0) as u8));
+                }
+            }
+            image::save_buffer(dir.join("real-rivers-top.png"), &rgb, n as u32, n as u32, image::ColorType::Rgb8).unwrap();
+            // The map as it was, to compare.
+            let read = massif_core::graph::sample_map(&doc.world.dims[doc.dim], &ext, sea as f32 - 8.0, &[], &g.own_levels());
+            let (hgt, water) = (read.heights, read.water);
+            let mut rgb = Vec::with_capacity(n * n * 3);
+            for j in 0..n {
+                for i in 0..n {
+                    let v = hgt.at(i, j);
+                    let dx = hgt.at(i + 1, j) - hgt.at(i.saturating_sub(1), j);
+                    let dz = hgt.at(i, j + 1) - hgt.at(i, j.saturating_sub(1));
+                    let shade = (0.75 + 0.08 * (-dx + dz)).clamp(0.25, 1.2);
+                    let c = if water.at(i, j) > 0.5 && v >= sea as f32 - 0.5 {
+                        [40.0, 110.0, 230.0]
+                    } else if v < sea as f32 {
+                        [30.0, 50.0, 90.0]
+                    } else {
+                        let t = ((v - sea as f32) / 120.0).clamp(0.0, 1.0);
+                        [110.0 + 90.0 * t, 150.0 + 40.0 * t, 80.0 + 110.0 * t].map(|c| c * shade)
+                    };
+                    rgb.extend(c.map(|c| c.clamp(0.0, 255.0) as u8));
+                }
+            }
+            image::save_buffer(dir.join("real-map-top.png"), &rgb, n as u32, n as u32, image::ColorType::Rgb8).unwrap();
+            let _ = NodeKind::HeightOutput;
+        }
+        h.state_mut().layout.activate(6);
+        h.run_steps(3);
+        {
+            let app = h.state_mut();
+            app.graph.preview = 768;
+            app.graph.use_template(&mut app.doc, Template::MapRivers);
+        }
+        wait_for_graph(&mut h);
+        h.render().unwrap().save(dir.join("real-rivers-graph.png")).unwrap();
+        {
+            use egui_kittest::kittest::Queryable;
+            h.get_by_label_contains("Convert to voxels").click();
+        }
+        h.run_steps(2);
+        let started = std::time::Instant::now();
+        while h.state().graph.converting() {
+            assert!(started.elapsed().as_secs() < 400, "the conversion did not finish");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        h.run_steps(3);
+        let dim = h.state().doc.dimension();
+        let names: Vec<String> = dim.levels.iter().map(|l| l.name.clone()).collect();
+        let wet = dim
+            .levels
+            .iter()
+            .filter(|l| l.name.starts_with("Dug"))
+            .flat_map(|l| l.positions().map(move |p| (l, p)))
+            .map(|(l, p)| {
+                let t = l.view(p).unwrap();
+                (0..128 * 128).filter(|&i| t.present(i) && t.fluid.get(i) as i32 > sea).count()
+            })
+            .sum::<usize>();
+        eprintln!("levels {names:?}, {wet} columns of river water above the sea");
+        // The middle of the map in 3D, from above.
+        {
+            let app = h.state_mut();
+            app.layout.activate(3);
+            app.view3d.camera.distance = 2600.0;
+            app.view3d.camera.pitch = 0.95;
+        }
+        h.run_steps(5);
+        while h.state().view3d.pending() > 0 {
+            h.step();
+        }
+        h.run_steps(3);
+        let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+        image::save_buffer(dir.join("real-rivers-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+    }
+
     /// The templates: the picker with their pictures, a card replacing the
     /// graph, and every template in the viewport with its own sky. Needs a
     /// GPU: runs with MASSIF_SNAPSHOT_DIR.
@@ -3746,6 +4300,20 @@ mod tests {
         };
         let mut h = harness(ThemeChoice::Light);
         h.run_steps(5);
+        // The welcome screen, and a template started from it.
+        h.state_mut().dialog = Some(Dialog::Welcome);
+        h.run_steps(5);
+        h.render().unwrap().save(dir.join("dialog-welcome.png")).unwrap();
+        {
+            use egui_kittest::kittest::Queryable;
+            h.get_by_label_contains("Give it rivers").click();
+        }
+        h.run_steps(5);
+        assert!(h.state().dialog.is_none(), "the welcome screen closes");
+        assert!(h.state().layout.terrain(), "on the Terrain side");
+        assert!(h.state().doc.world.meta.graph.as_ref().is_some_and(|g| g.reads_the_map()), "with rivers on the map");
+        h.state_mut().layout.switch_side(false);
+        h.run_steps(3);
         h.state_mut().open_new_dialog();
         if let Some(Dialog::NewWorld(form)) = &mut h.state_mut().dialog {
             form.params.landform = Landform::Mountains;

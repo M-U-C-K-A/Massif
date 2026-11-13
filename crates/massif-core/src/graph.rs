@@ -1200,7 +1200,7 @@ impl NodeKind {
             NodeKind::Cells { .. } => "Voronoi cells: cones at their centres or ridges along their edges",
             NodeKind::Radial { .. } => "High in the middle of the map, falling to its edges",
             NodeKind::Constant { .. } => "One value everywhere",
-            NodeKind::MapHeight => "The map as it is: the heights of its ground, and where its water lies",
+            NodeKind::MapHeight => "The map as it is, in 3D: its surface, its water and the colours of its terrains",
             NodeKind::LinearGradient { .. } => "A ramp rising across the map",
             NodeKind::Shape { .. } => "A circle, square, cone or dome",
             NodeKind::Mountain { .. } => "One mountain, alpine, rounded, eroded or spiky",
@@ -1345,6 +1345,7 @@ impl NodeKind {
             NodeKind::LayerOutput { .. } => &[("Top", H), ("Bottom", H), ("Colour", C)],
             NodeKind::WaterOutput => &[("Level", H)],
             NodeKind::Temperature { .. } | NodeKind::Humidity { .. } => &[("Height", H)],
+            NodeKind::Rivers { .. } => &[("In", H), ("Water level", H)],
             NodeKind::Biomes { .. } | NodeKind::BiomeOutput { .. } => &[("Height", H), ("Temperature", M), ("Humidity", M)],
             _ => &[("In", H)],
         }
@@ -1358,7 +1359,7 @@ impl NodeKind {
             NodeKind::Snow { .. } => &[("Height", H), ("Snow", M)],
             NodeKind::Rivers { .. } => &[("Height", H), ("Rivers", M), ("Water", H)],
             NodeKind::Lakes { .. } => &[("Height", H), ("Lakes", M), ("Water", H)],
-            NodeKind::MapHeight => &[("Height", H), ("Water", M), ("Colour", C)],
+            NodeKind::MapHeight => &[("Height", H), ("Water", M), ("Colour", C), ("Water level", H)],
             NodeKind::Sea { .. } => &[("Height", H), ("Water", M), ("Shore", M)],
             NodeKind::FloatingIslands { .. } => &[("Top", H), ("Bottom", H), ("Islands", M)],
             NodeKind::Overhang { .. } => &[("Top", H), ("Bottom", H)],
@@ -2542,7 +2543,7 @@ pub fn apply_overlay(edit: &mut Edit, side: Overlay, extent: &Extent, outputs: &
                     bottom.set(i, 0.0);
                     fluid.set(i, NO_FLUID);
                 };
-                let Some((base, _, base_terrain)) = map::surface_of(&stack, i, &mut spans, &mut wet) else {
+                let Some((base, standing, base_terrain)) = map::surface_of(&stack, i, &mut spans, &mut wet) else {
                     clear(top, bottom, fluid);
                     continue;
                 };
@@ -2554,8 +2555,9 @@ pub fn apply_overlay(edit: &mut Edit, side: Overlay, extent: &Extent, outputs: &
                     Overlay::Dug if dug => (Some((new, base)), (water > new + 0.3).then_some(water)),
                     Overlay::Raised if new > base + 0.5 => (Some((base, new)), (water > new + 0.3).then_some(water)),
                     // A lake on ground left alone: its top block again,
-                    // to carry the water.
-                    Overlay::Raised if !dug && water > base + 0.3 => (Some((base - 1.0, base)), Some(water)),
+                    // to carry the water (none where the map holds that
+                    // water already).
+                    Overlay::Raised if !dug && water > base + 0.3 && water > standing + 0.3 => (Some((base - 1.0, base)), Some(water)),
                     _ => (None, None),
                 };
                 let Some((y0, y1)) = span else {

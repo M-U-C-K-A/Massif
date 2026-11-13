@@ -127,6 +127,9 @@ pub struct MapView {
     canvas: Rect,
     /// The picture of the brush's strength, under the pointer.
     strength: Option<BrushPreview>,
+    /// A river's course being drawn by dragging: how many points it had
+    /// when the button went down.
+    river_drag: Option<usize>,
 }
 
 impl Default for MapView {
@@ -145,6 +148,7 @@ impl Default for MapView {
             turn: 0.0,
             strength: None,
             canvas: Rect::NOTHING,
+            river_drag: None,
         }
     }
 }
@@ -364,6 +368,7 @@ impl MapView {
                     tools.river_points.pop();
                 } else {
                     tools.river_points.push((x as f32, z as f32));
+                    self.river_drag = Some(tools.river_points.len());
                 }
             } else if tools.tool.is_click() {
                 *feedback = tools::click(doc, tools, bx, bz, inverse);
@@ -373,6 +378,25 @@ impl MapView {
                 if let Some(mut stroke) = stroke {
                     tools::continue_stroke(doc, tools, &mut stroke, (x as f32, z as f32), 1.0 / 60.0);
                     self.stroke = Some(stroke);
+                }
+            }
+        }
+        // Dragging draws the course; let go, and the river is dug.
+        if let Some(start) = self.river_drag {
+            if tools.tool != Tool::River {
+                self.river_drag = None;
+            } else if down[0] {
+                if let (Some((x, z)), Some(&(lx, lz))) = (world_pointer, tools.river_points.last()) {
+                    let step = (12.0 / self.zoom).max(3.0);
+                    if (x as f32 - lx).hypot(z as f32 - lz) >= step {
+                        tools.river_points.push((x as f32, z as f32));
+                    }
+                }
+                ui.ctx().request_repaint();
+            } else {
+                self.river_drag = None;
+                if tools.river_points.len() >= start + 3 {
+                    *feedback = tools::dig_river(doc, tools);
                 }
             }
         }
@@ -572,6 +596,20 @@ impl MapView {
                 let p = screen(x, z);
                 painter.circle(p, if k == 0 { 5.0 } else { 3.5 }, Color32::from_rgb(90, 170, 255), Line::new(1.5, Color32::WHITE));
             }
+        }
+
+        // How to draw a river, on the map itself.
+        if tools.tool == Tool::River {
+            let hint = if tools.river_points.is_empty() {
+                "River: drag along its course and let go to dig it — or click its points one by one"
+            } else {
+                "Enter or double-click: dig it · right-click: take back the last point · Esc: drop the course"
+            };
+            let at = canvas.center_bottom() - vec2(0.0, 18.0);
+            let galley = painter.layout_no_wrap(hint.to_owned(), egui::FontId::proportional(12.5), Color32::WHITE);
+            let back = Rect::from_center_size(at, galley.size() + vec2(20.0, 10.0));
+            painter.rect_filled(back, 8, Color32::from_black_alpha(170));
+            painter.galley(back.min + vec2(10.0, 5.0), galley, Color32::WHITE);
         }
 
         // Brush outline.

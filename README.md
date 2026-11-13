@@ -79,6 +79,11 @@ over every CPU core.
 
 ## Getting started
 
+At startup, the **Welcome** screen (Help → Welcome brings it back) says how
+it goes — make the land, shape it, export it — and opens the ways in: a new
+map, an opened or imported one, a landscape to generate, or the map you
+have to paint or to give rivers.
+
 ### Download
 
 Builds for Windows, macOS (Apple silicon and Intel) and Linux are on the
@@ -230,10 +235,12 @@ any paint.
 
 ### Rivers
 
-The **River** tool (Water group) draws rivers by hand: click the points of
-the course on the map — the course, its water and its banks are drawn as
-you go — then double-click or press Enter to dig it (one undoable step);
-the right button takes the last point back, Esc drops the course.
+The **River** tool (Water group) draws rivers by hand: drag along the
+course on the map and let go, and it is dug (one undoable step); or click
+the points of the course one by one — the course, its water and its banks
+are drawn as you go — then double-click or press Enter to dig it. The right
+button takes the last point back, Esc drops the course; the map says so
+while the tool is on.
 
 - The points are joined by a smooth curve through all of them.
 - Water runs from the higher end to the lower one, whichever end was drawn
@@ -325,9 +332,23 @@ Templates follow the world: their sea is the world's sea level, and their
 features grow with the map. Each also sets the sun, the clouds and the sea
 of the viewport to suit it. "Back to the previous graph" undoes the choice.
 
-Right-click the graph or press Tab or Space to open the node library and
-type to search; drop a wire on empty space to add a node already wired.
-Ports and wires are coloured by what they carry: heights, masks or colours.
+Right-click the graph or press Tab to open the node library and type to
+search; drop a wire on empty space to add a node already wired. Ports and
+wires are coloured by what they carry: heights, masks or colours.
+
+- Click a node to select it; Shift or ⌘ adds nodes to the selection, and a
+  box dragged on the background selects all it touches. Dragging a node
+  moves the whole selection.
+- ⌘D duplicates the selection, ⌘C / ⌘X / ⌘V copy, cut and paste it with its
+  wires (between worlds too), Delete removes it, ⌘A selects everything, Esc
+  nothing; right-click (or Alt-click) a wire to cut it.
+- Right-drag, middle-drag or Space + drag moves around; a mouse wheel or a
+  pinch zooms, two fingers on a trackpad move; F frames the selection (or
+  everything).
+- ⌘Z / ⇧⌘Z on the Terrain side undo and redo the changes to the graph —
+  and the conversions, in the order they were made.
+- A line along the bottom of the graph says what can be done with what is
+  selected.
 Previews are evaluated on another thread with a cache, so changing a
 setting computes only that node and what follows it.
 
@@ -379,6 +400,13 @@ at the block, in under a second at 8k. The hollows a river runs through hold
 lakes up to where they spill (**Lakes**: which ones; through the others the
 river cuts a gorge). Its outputs: the dug relief, the beds as a mask (gravel
 in them), and the water's level for the **Water output**.
+
+Wire the Map's **Water level** into the Rivers' second input (the template
+does) and the water already on the map — rivers and lakes painted in
+WorldPainter — is kept: the rivers traced keep to its beds and join them,
+nothing is dug where it lies, and it stays in the water given back. Rivers
+over a coastal plain barely above the sea keep their water down to the
+coast.
 
 **Climate.** **Temperature** is warm on one side of the map and cold on the
 other, colder with height; **Humidity** comes from the sea, rides the wind

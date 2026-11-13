@@ -36,6 +36,9 @@ pub struct MapSample {
     pub water: Field,
     /// The colours of its terrains.
     pub colors: ColorField,
+    /// The level of the water on it ([`super::NO_WATER`] where dry): its
+    /// rivers, lakes and sea as they are.
+    pub level: Field,
 }
 
 /// Whether a graph reads level `level` of the map: a visible one that is
@@ -45,19 +48,24 @@ pub fn reads_level(level: &Level, own: &[String]) -> bool {
     level.visible && !own.iter().any(|o| level.name.ends_with(o.as_str()))
 }
 
-/// The surface of column `cell` of a stack: its height, whether water lies
-/// on it, and its terrain. `None` for a column with nothing in it.
-pub fn surface_of(stack: &TileStack, cell: usize, spans: &mut Vec<Span>, fluids: &mut Vec<(i32, i32)>) -> Option<(f32, bool, u16)> {
+/// The surface of column `cell` of a stack: its height, the level of the
+/// water on it ([`super::NO_WATER`] if dry), and its terrain. `None` for a
+/// column with nothing in it.
+pub fn surface_of(stack: &TileStack, cell: usize, spans: &mut Vec<Span>, fluids: &mut Vec<(i32, i32)>) -> Option<(f32, f32, u16)> {
     if stack.is_ground_only() {
         let g = stack.ground();
         let (height, fluid) = (g.top.get(cell), g.fluid.get(cell));
-        return Some((height, fluid != NO_FLUID && fluid as f32 > height, g.terrain.get(cell)));
+        let level = if fluid != NO_FLUID && fluid as f32 > height { fluid as f32 } else { super::NO_WATER };
+        return Some((height, level, g.terrain.get(cell)));
     }
     stack.spans(cell, spans);
     let top = *spans.last()?;
     stack.fluids(cell, spans, fluids);
-    let wet = fluids.last().is_some_and(|&(f0, f1)| f0 == top.y1 && f1 > top.y1);
-    Some((top.top, wet, top.terrain.0))
+    let level = match fluids.last() {
+        Some(&(f0, f1)) if f0 == top.y1 && f1 > top.y1 => f1 as f32,
+        _ => super::NO_WATER,
+    };
+    Some((top.top, level, top.terrain.0))
 }
 
 /// Read the surface of `dim` at every sample of `extent`: its height,
@@ -70,6 +78,7 @@ pub fn sample_map(dim: &Dimension, e: &Extent, fallback: f32, colors: &[[u8; 3]]
     let spacing = e.size / n as f64;
     let mut heights = vec![fallback; n * n];
     let mut water = vec![0f32; n * n];
+    let mut levels = vec![super::NO_WATER; n * n];
     let mut paint = vec![[128u8; 3]; n * n];
     // Rows of samples, cut where they pass from one row of tiles to the
     // next: each band is filled by itself.
@@ -82,17 +91,18 @@ pub fn sample_map(dim: &Dimension, e: &Extent, fallback: f32, colors: &[[u8; 3]]
             start = j;
         }
     }
-    type Band<'a> = (usize, &'a mut [f32], &'a mut [f32], &'a mut [[u8; 3]]);
+    type Band<'a> = (usize, &'a mut [f32], &'a mut [f32], &'a mut [f32], &'a mut [[u8; 3]]);
     let mut parts: Vec<Band> = Vec::with_capacity(bands.len());
-    let (mut rest_h, mut rest_w, mut rest_c) = (&mut heights[..], &mut water[..], &mut paint[..]);
+    let (mut rest_h, mut rest_w, mut rest_l, mut rest_c) = (&mut heights[..], &mut water[..], &mut levels[..], &mut paint[..]);
     for &(j0, j1) in &bands {
         let (h, tail_h) = rest_h.split_at_mut((j1 - j0) * n);
         let (w, tail_w) = rest_w.split_at_mut((j1 - j0) * n);
+        let (l, tail_l) = rest_l.split_at_mut((j1 - j0) * n);
         let (c, tail_c) = rest_c.split_at_mut((j1 - j0) * n);
-        parts.push((j0, h, w, c));
-        (rest_h, rest_w, rest_c) = (tail_h, tail_w, tail_c);
+        parts.push((j0, h, w, l, c));
+        (rest_h, rest_w, rest_l, rest_c) = (tail_h, tail_w, tail_l, tail_c);
     }
-    parts.into_par_iter().for_each(|(j0, h, w, c)| {
+    parts.into_par_iter().for_each(|(j0, h, w, l, c)| {
         let tz = tile_row(j0);
         let rows = h.len() / n;
         let (mut spans, mut fluids) = (Vec::new(), Vec::new());
@@ -112,9 +122,10 @@ pub fn sample_map(dim: &Dimension, e: &Extent, fallback: f32, colors: &[[u8; 3]]
                     for k in i..end {
                         let x = (e.x0 + (k as f64 + 0.5) * spacing).floor() as i32;
                         let cell = cell_index(x.rem_euclid(TILE_SIZE) as usize, lz);
-                        if let Some((height, wet, terrain)) = surface_of(&stack, cell, &mut spans, &mut fluids) {
+                        if let Some((height, level, terrain)) = surface_of(&stack, cell, &mut spans, &mut fluids) {
                             h[r * n + k] = height;
-                            w[r * n + k] = wet as u8 as f32;
+                            w[r * n + k] = (level != super::NO_WATER) as u8 as f32;
+                            l[r * n + k] = level;
                             c[r * n + k] = colors.get(terrain as usize).copied().unwrap_or([128; 3]);
                         }
                     }
@@ -127,6 +138,7 @@ pub fn sample_map(dim: &Dimension, e: &Extent, fallback: f32, colors: &[[u8; 3]]
         heights: Field::new(n, heights),
         water: Field::new(n, water),
         colors: ColorField { n, data: paint },
+        level: Field::new(n, levels),
     }
 }
 
@@ -172,6 +184,7 @@ pub struct SampledMap {
     pub heights: Arc<Field>,
     pub water: Arc<Field>,
     pub colors: Arc<ColorField>,
+    pub level: Arc<Field>,
     pub revision: u64,
 }
 
@@ -186,6 +199,7 @@ impl MapSource for SampledMap {
                 heights: (*self.heights).clone(),
                 water: (*self.water).clone(),
                 colors: (*self.colors).clone(),
+                level: (*self.level).clone(),
             };
         }
         let n = extent.n;
@@ -212,10 +226,26 @@ impl MapSource for SampledMap {
                 self.colors.data[at(v) * m + at(u)]
             })
             .collect();
+        // Levels by the nearest sample: no water is far under any ground,
+        // and must not be blended with it.
+        let lm = self.level.n;
+        let level = Field::new(
+            n,
+            (0..n * n)
+                .into_par_iter()
+                .map(|c| {
+                    let (x, z) = extent.world(c % n, c / n);
+                    let (u, v) = self.extent.grid(x, z);
+                    let at = |t: f32| (t.round().max(0.0) as usize).min(lm - 1);
+                    self.level.data[at(v) * lm + at(u)]
+                })
+                .collect(),
+        );
         MapSample {
             heights: read(&self.heights),
             water: read(&self.water),
             colors: ColorField { n, data: colors },
+            level,
         }
     }
 }

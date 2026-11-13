@@ -160,7 +160,7 @@ impl Tool {
             Tool::Drain => "Remove the body of water under the cursor; the right button floods it.",
             Tool::Water => "Set the water level under the brush; the right button removes water.",
             Tool::River => {
-                "Click the points of a river's course, then double-click (or Enter) to dig it: a smooth bed with water running down, banks easing into the land. The right button takes back the last point, Esc drops the course. Start on a river for a branch, end on one for a tributary."
+                "Drag along a river's course and let go to dig it — or click its points one by one, then double-click (or Enter): a smooth bed with water running down, banks easing into the land. The right button takes back the last point, Esc drops the course. Start on a river for a branch, end on one for a tributary."
             }
             Tool::StampSlab => {
                 "Add a slab to the active Solid or Carve level (overhangs, arches, floating islands, caves); the right button erases."

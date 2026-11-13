@@ -906,13 +906,14 @@ fn map_rivers(b: &mut Builder, sea: f32, f: f32, gravel: u16) {
         1.0,
         0.0,
     );
-    // The ground of the hollows is left alone: only their water is added.
-    let lakes = b.then(NodeKind::Lakes { amount: 0.0, sea }, (rivers, 0), 2.0, 0.0);
+    // The water already on the map: rivers keep to it, and it stays.
+    b.wire(map, 3, rivers, 1);
+    // The lakes are the rivers' own: the hollows they run through. (A
+    // Lakes node would fill every hollow of the map, the smallest too.)
     let out = b.add(NodeKind::HeightOutput, 3.0, 0.0);
-    b.wire(lakes, 0, out, 0);
-    let water = b.combine(CombineOp::Max, 1.0, (rivers, 2), (lakes, 2), 3.0, 1.0);
-    let out = b.add(NodeKind::WaterOutput, 4.0, 1.0);
-    b.wire(water, 0, out, 0);
+    b.wire(rivers, 0, out, 0);
+    let out = b.add(NodeKind::WaterOutput, 3.0, 1.0);
+    b.wire(rivers, 2, out, 0);
     let out = b.add(NodeKind::TerrainOutput { terrain: gravel }, 2.0, 1.5);
     b.wire(rivers, 1, out, 0);
     // The map's own colours, to see it by: they are not converted.

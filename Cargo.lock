@@ -1939,7 +1939,7 @@ checksum = "373f5eceeeab7925e0c1098212f2fbc4d416adec9d35051a6ab251e824c1854a"
 
 [[package]]
 name = "massif-anvil"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "fastanvil",
  "fastnbt",
@@ -1951,7 +1951,7 @@ dependencies = [
 
 [[package]]
 name = "massif-app"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bytemuck",
  "eframe",
@@ -1978,7 +1978,7 @@ dependencies = [
 
 [[package]]
 name = "massif-assets"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "flate2",
  "image",
@@ -1990,7 +1990,7 @@ dependencies = [
 
 [[package]]
 name = "massif-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "massif-anvil",
  "massif-core",
@@ -2000,7 +2000,7 @@ dependencies = [
 
 [[package]]
 name = "massif-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "log",
  "rayon",
@@ -2012,7 +2012,7 @@ dependencies = [
 
 [[package]]
 name = "massif-format"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "crc32c",
  "massif-core",
@@ -2025,7 +2025,7 @@ dependencies = [
 
 [[package]]
 name = "massif-legacy"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "flate2",
  "log",
