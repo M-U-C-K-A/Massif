@@ -6,6 +6,7 @@ mod blocks;
 mod brushes;
 mod doc;
 mod graph_editor;
+mod home;
 mod jobs;
 mod layout;
 mod map_render;

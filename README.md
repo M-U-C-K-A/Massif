@@ -79,10 +79,18 @@ over every CPU core.
 
 ## Getting started
 
-At startup, the **Welcome** screen (Help → Welcome brings it back) says how
-it goes — make the land, shape it, export it — and opens the ways in: a new
-map, an opened or imported one, a landscape to generate, or the map you
-have to paint or to give rivers.
+Massif opens on its **home screen**, not on a map made up for it: on the
+left, the ways in — a new map, a map from a height map, a map of your own to
+open (`.massif`), a WorldPainter world to import (`.world`) — and the maps
+opened lately (or, at first, an empty list that says so); in the middle,
+the settings of a new map with its preview, and **Create map**. Behind
+them, ridges drawn in dots, lit by the accent colour. A `.massif`, a
+`.world` or a height map dropped on the window opens. **File ▸ New** (⌘N)
+comes back to it, with a way back to the open map (Esc).
+
+**Settings** (⌘, or the home screen's sidebar) choose the theme and the
+accent colour: the colour of what is chosen, of the main buttons and of the
+home screen's art (eight colours, or any other).
 
 ### Download
 
@@ -145,12 +153,14 @@ brushes, terrain and biome palettes, levels or world info.
 
 ### New worlds and export
 
-**File ▸ New** asks for the name, seed, size (in multiples of 128 blocks),
-the topography (flat, plains, hills, mountains, islands) with its relief
-height and feature size, the base level, the water level, lava instead of
-water, beaches, and either automatic terrains (grass, sand, rock and snow
-by height and slope) or a single terrain; a preview of the whole map
-updates as you change them.
+A new map (the home screen) takes a name, a size (512 to 16k, or any
+multiple of 128 blocks), its land — a topography (flat, plains, hills,
+mountains, islands) with its relief height, feature size and ground level,
+or a template of the terrain generator (alpine range, continents,
+archipelago…), whose map then opens on the Terrain side with its nodes —
+the water level, lava instead of water, beaches, automatic terrains (grass,
+sand, rock and snow by height and slope) or a single one, and a seed; a
+preview of the whole map updates as you change them.
 
 **File ▸ Export** writes the world to a Minecraft saves folder for the
 version of the game you choose — the newest one installed on the computer
@@ -292,7 +302,7 @@ flow over water (Streams Reflowing) make a current of it.
   — a 16-bit PNG from Gaea, World Machine or an image editor (JPEG, and raw
   square `.r16` / `.r32` are read too): what height black and white stand
   for, how many blocks a pixel covers, the sea's level; terrains are painted
-  from height and slope. The Welcome screen offers it too.
+  from height and slope. The home screen offers it too.
 - **File ▸ Export Height Map…** saves the map's surface (with its levels and
   what was sculpted) as a 16-bit PNG, black the bottom of the world, white
   its top.

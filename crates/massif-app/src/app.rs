@@ -3,6 +3,7 @@
 use crate::blocks::BlockLibrary;
 use crate::brushes::{BrushLibrary, BrushSource};
 use crate::doc::Document;
+use crate::home::{self, HomeAction, Page};
 use crate::jobs::{self, Job, Outcome};
 use crate::layout::{AreaId, Dir, EditorKind, Layout, Node, Zone};
 use crate::map_render::MapCache;
@@ -17,7 +18,7 @@ use egui::{
     pos2, vec2,
 };
 use massif_anvil::{ExportOptions, GameMode, Surroundings};
-use massif_core::generate::{GenParams, Landform, generate};
+use massif_core::generate::{GenParams, generate};
 use massif_core::{TILE_SIZE, TilePos, World};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -46,8 +47,9 @@ struct Settings {
     /// The Minecraft client jar the real blocks are read from; the newest
     /// one found when unset.
     minecraft_jar: Option<PathBuf>,
-    /// Show the welcome screen at startup.
-    welcome: bool,
+    /// The accent colour: what is chosen, the main buttons, the art of the
+    /// home screen.
+    accent: [u8; 3],
 }
 
 impl Default for Settings {
@@ -58,13 +60,10 @@ impl Default for Settings {
             solo: false,
             light: crate::map_render::DEFAULT_LIGHT,
             minecraft_jar: None,
-            welcome: true,
+            accent: theme::DEFAULT_ACCENT,
         }
     }
 }
-
-/// What a button of the welcome screen does, once it has closed.
-type WelcomeAction = Box<dyn FnOnce(&mut MassifApp, &egui::Context)>;
 
 /// An action that replaces or closes the document, run once unsaved changes
 /// are dealt with.
@@ -75,26 +74,6 @@ enum Pending {
     /// A new world from a height map.
     FromHeightmap(std::sync::Arc<massif_core::heightmap::Heightmap>, massif_core::generate::FromHeightmap),
     Quit,
-}
-
-/// A height map to make a world of, and how.
-struct HeightmapForm {
-    path: PathBuf,
-    map: std::sync::Arc<massif_core::heightmap::Heightmap>,
-    how: massif_core::generate::FromHeightmap,
-    picture: Option<egui::TextureHandle>,
-}
-
-struct NewWorldForm {
-    params: GenParams,
-    seed: String,
-    width: i32,
-    depth: i32,
-    /// The terrains a new world starts with (for the surface choice and the
-    /// preview).
-    registry: massif_core::Registry,
-    /// The preview, and the settings it shows.
-    preview: Option<(String, egui::TextureHandle)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,14 +129,11 @@ fn export_versions() -> Vec<(massif_anvil::Target, bool)> {
 }
 
 enum Dialog {
-    NewWorld(NewWorldForm),
     Export(ExportForm),
     Unsaved(Pending),
     About,
-    /// Where to start: what Massif does, and the ways in.
-    Welcome,
-    /// A new world from a height map.
-    FromHeightmap(HeightmapForm),
+    /// The theme and the accent colour.
+    Preferences,
     /// The rules of the automatic biomes (false) or paint (true).
     AutoRules(bool),
     /// What an import brought in, with the file's thumbnail.
@@ -181,6 +157,13 @@ struct Sep {
 
 pub struct MassifApp {
     doc: Document,
+    /// Whether the document is a map the user made or opened (not the one
+    /// held while the home screen is shown at startup).
+    has_map: bool,
+    /// The home screen, shown instead of the editor.
+    home: Option<home::Home>,
+    /// The template the map being made takes its relief from.
+    after_create: Option<massif_core::graph::Template>,
     next_generation: u64,
     layout: Layout,
     tools: ToolState,
@@ -259,6 +242,7 @@ impl MassifApp {
             tools.sculpt.tool = tools.tool;
             tools.tool = Tool::Raise;
         }
+        theme::set_accent(&cc.egui_ctx, settings.accent);
         let mut app = Self::with_world(default_world(), layout, tools, settings);
         if let Some(render) = cc.storage.and_then(|s| eframe::get_value(s, "massif.render")) {
             app.graph.view.render = render;
@@ -269,45 +253,127 @@ impl MassifApp {
         app.blocks.load(&cc.egui_ctx, app.settings.minecraft_jar.clone());
         if let Some(path) = open {
             app.jobs.push(Job::open(&cc.egui_ctx, path));
-        } else if app.settings.welcome {
-            app.dialog = Some(Dialog::Welcome);
+        } else {
+            // No map yet: the home screen, not a map made up for it.
+            app.has_map = false;
+            app.open_home(Page::NewMap);
         }
         app
     }
 
-    /// Pick a height map, and show how it would become a world.
+    /// Pick a height map, and show on the home screen how it would become
+    /// a map.
     fn pick_heightmap(&mut self, ctx: &egui::Context) {
-        let Some(path) = rfd::FileDialog::new()
-            .set_title("A height map to make a world of")
+        if let Some(path) = rfd::FileDialog::new()
+            .set_title("A height map to make a map of")
             .add_filter("Height maps", &["png", "jpg", "jpeg", "r16", "r32", "raw"])
             .pick_file()
-        else {
-            return;
-        };
-        match massif_core::heightmap::read(&path) {
-            Ok(map) => {
-                // A small picture of it.
-                let side = 256usize;
-                let (w, h) = (side, (side * map.height / map.width.max(1)).clamp(16, 512));
-                let pixels: Vec<u8> = (0..w * h)
-                    .map(|k| (map.sample((k % w) as f32 * map.width as f32 / w as f32, (k / w) as f32 * map.height as f32 / h as f32) * 255.0) as u8)
-                    .collect();
-                let picture = ctx.load_texture("height map", egui::ColorImage::from_gray([w, h], &pixels), egui::TextureOptions::LINEAR);
-                let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("Height map").to_owned();
-                self.dialog = Some(Dialog::FromHeightmap(HeightmapForm {
-                    path,
-                    map: std::sync::Arc::new(map),
-                    how: massif_core::generate::FromHeightmap {
-                        name,
-                        scale: 1.0,
-                        low: 20.0,
-                        high: 230.0,
-                        sea_level: 63,
-                    },
-                    picture: Some(picture),
-                }));
+        {
+            self.take_heightmap(ctx, path);
+        }
+    }
+
+    /// Read the height map at `path` into the home screen.
+    fn take_heightmap(&mut self, ctx: &egui::Context, path: PathBuf) {
+        match home::HeightmapPick::read(ctx, path) {
+            Ok(pick) => {
+                self.open_home(Page::FromHeightmap);
+                if let Some(home) = &mut self.home {
+                    home.heightmap = Some(pick);
+                }
             }
             Err(e) => self.say(ctx, format!("That height map cannot be read: {e}"), true, None),
+        }
+    }
+
+    /// Show the home screen, on `page`; with a map open, the way back to it.
+    fn open_home(&mut self, page: Page) {
+        if self.home.is_none() {
+            let mut registry = massif_core::Registry::vanilla();
+            if let Some(cat) = &self.blocks.catalogue {
+                massif_assets::apply_colors(&mut registry, cat);
+            }
+            self.home = Some(home::Home::new(registry));
+        }
+        let back_to = self.has_map.then(|| self.doc.world.meta.name.clone());
+        if let Some(home) = &mut self.home {
+            home.page = page;
+            home.back_to = back_to;
+        }
+    }
+
+    /// Do what the home screen asks.
+    fn home_action(&mut self, ctx: &egui::Context, action: HomeAction) {
+        match action {
+            HomeAction::Create(params, template) => {
+                self.after_create = template;
+                self.request(ctx, Pending::New(params));
+            }
+            HomeAction::FromHeightmap(map, how) => self.request(ctx, Pending::FromHeightmap(map, how)),
+            HomeAction::PickHeightmap => self.pick_heightmap(ctx),
+            HomeAction::Open => {
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_title("Open a map")
+                    .add_filter("Massif map", &[massif_format::EXTENSION])
+                    .pick_file()
+                {
+                    self.request(ctx, Pending::Open(Some(path)));
+                }
+            }
+            HomeAction::Import => {
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_title("Import a WorldPainter world")
+                    .add_filter("WorldPainter world", &["world"])
+                    .pick_file()
+                {
+                    self.request(ctx, Pending::Open(Some(path)));
+                }
+            }
+            HomeAction::OpenRecent(path) => {
+                if path.exists() {
+                    self.request(ctx, Pending::Open(Some(path)));
+                } else {
+                    self.say(ctx, format!("{} is no longer there", path.display()), true, None);
+                }
+            }
+            HomeAction::Forget(path) => self.settings.recent.retain(|p| *p != path),
+            HomeAction::Reveal(path) => jobs::reveal(&path),
+            HomeAction::Back => {
+                self.home = None;
+                self.after_create = None;
+            }
+            HomeAction::Settings => self.dialog = Some(Dialog::Preferences),
+            HomeAction::Dropped(path) => {
+                let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+                match ext.as_str() {
+                    "png" | "jpg" | "jpeg" | "r16" | "r32" | "raw" => self.take_heightmap(ctx, path),
+                    "world" => self.request(ctx, Pending::Open(Some(path))),
+                    e if e == massif_format::EXTENSION => self.request(ctx, Pending::Open(Some(path))),
+                    _ => self.say(ctx, "Massif opens .massif maps, WorldPainter .world worlds and height maps", true, None),
+                }
+            }
+        }
+    }
+
+    /// The home screen over the whole window, and the dialogs over it.
+    fn home_ui(&mut self, ui: &mut Ui, frame: &eframe::Frame, ctx: &egui::Context) {
+        if self.unified_titlebar {
+            frame.set_traffic_lights_position(ctx, egui::Rangef::new(0.0, 40.0), 16.0);
+        }
+        let now = ctx.input(|i| i.time);
+        let note = self.status.as_ref().filter(|s| now - s.at < 8.0).map(|s| (s.text.clone(), s.error));
+        let recent = self.settings.recent.clone();
+        let mut action = None;
+        egui::CentralPanel::default().frame(egui::Frame::new()).show(ui, |ui| {
+            if let Some(home) = &mut self.home {
+                action = home.ui(ui, &recent, note.as_ref().map(|(t, e)| (t.as_str(), *e)));
+            }
+        });
+        if let Some(action) = action {
+            self.home_action(ctx, action);
+        }
+        if note.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
         }
     }
 
@@ -367,6 +433,9 @@ impl MassifApp {
         massif_core::graph::set_world_reader(read_any_world);
         Self {
             doc: Document::new(world, None, 1),
+            has_map: true,
+            home: None,
+            after_create: None,
             next_generation: 1,
             layout,
             tools,
@@ -469,6 +538,8 @@ impl MassifApp {
                 self.next_generation += 1;
                 self.doc = Document::new(world, None, self.next_generation);
                 self.rename = None;
+                self.home = None;
+                self.has_map = true;
                 let (w, d) = (map.width as f32 * how.scale, map.height as f32 * how.scale);
                 self.say(
                     ctx,
@@ -549,28 +620,6 @@ impl MassifApp {
         }));
     }
 
-    fn open_new_dialog(&mut self) {
-        let params = GenParams {
-            name: "New World".into(),
-            seed: random_seed(),
-            ..GenParams::default()
-        };
-        self.dialog = Some(Dialog::NewWorld(NewWorldForm {
-            seed: params.seed.to_string(),
-            width: params.tiles_x * 128,
-            depth: params.tiles_z * 128,
-            params,
-            registry: {
-                let mut reg = massif_core::Registry::vanilla();
-                if let Some(cat) = &self.blocks.catalogue {
-                    massif_assets::apply_colors(&mut reg, cat);
-                }
-                reg
-            },
-            preview: None,
-        }));
-    }
-
     fn undo(&mut self, ctx: &egui::Context) {
         // On the Terrain side, the graph's changes and its conversions, in
         // the order they were made.
@@ -622,12 +671,20 @@ impl MassifApp {
                     let name = world.meta.name.clone();
                     self.doc = Document::new(world, path.clone(), self.next_generation);
                     self.rename = None;
+                    self.home = None;
+                    self.has_map = true;
                     match path {
                         Some(p) => {
                             self.remember(p);
                             self.say(ctx, format!("Opened “{name}” in {secs:.1} s"), false, None);
                         }
-                        None => self.say(ctx, format!("Created “{name}” in {secs:.1} s"), false, None),
+                        None => {
+                            self.say(ctx, format!("Created “{name}” in {secs:.1} s"), false, None);
+                            // Its relief from a template: on the Terrain side.
+                            if let Some(t) = self.after_create.take() {
+                                self.start_terrain(t);
+                            }
+                        }
                     }
                 }
                 Outcome::Saved { path, revision, bytes } => {
@@ -657,6 +714,8 @@ impl MassifApp {
                     self.next_generation += 1;
                     self.doc = Document::new(world, None, self.next_generation);
                     self.rename = None;
+                    self.home = None;
+                    self.has_map = true;
                     self.remember(source.clone());
                     let msg = format!("Imported {} in {secs:.1} s: {}", jobs::display_name(&source), report.summary());
                     self.say(ctx, msg, false, None);
@@ -685,6 +744,17 @@ impl MassifApp {
         let cmd = |key| KeyboardShortcut::new(Modifiers::COMMAND, key);
         let cmd_shift = |key| KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, key);
         let pressed = |s: KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(&s));
+        if pressed(cmd(Key::Comma)) {
+            self.dialog = Some(Dialog::Preferences);
+            return;
+        }
+        if self.home.is_some() {
+            // No map on the home screen: only the ways in.
+            if pressed(cmd(Key::O)) {
+                self.home_action(ctx, HomeAction::Open);
+            }
+            return;
+        }
         if pressed(cmd_shift(Key::Z)) || pressed(cmd(Key::Y)) {
             self.redo(ctx);
         } else if pressed(cmd(Key::Z)) {
@@ -699,7 +769,7 @@ impl MassifApp {
             self.request(ctx, Pending::Open(None));
         }
         if pressed(cmd(Key::N)) {
-            self.open_new_dialog();
+            self.open_home(Page::NewMap);
         }
         if pressed(cmd(Key::E)) {
             self.open_export_dialog();
@@ -828,7 +898,7 @@ impl MassifApp {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
                 if ui.button(theme::with_icon(Icon::FilePlus2, "New World…")).clicked() {
-                    self.open_new_dialog();
+                    self.open_home(Page::NewMap);
                 }
                 if ui.button(theme::with_icon(Icon::FolderOpen, "Open…")).clicked() {
                     self.request(&ctx, Pending::Open(None));
@@ -842,7 +912,7 @@ impl MassifApp {
                     self.request(&ctx, Pending::Open(Some(path)));
                 }
                 if ui.button(theme::with_icon(Icon::ImageUp, "New World from Height Map…")).clicked() {
-                    self.pick_heightmap(&ctx);
+                    self.open_home(Page::FromHeightmap);
                 }
                 let recent = self.settings.recent.clone();
                 ui.add_enabled_ui(!recent.is_empty(), |ui| {
@@ -912,13 +982,16 @@ impl MassifApp {
                     }
                 }
                 ui.separator();
+                if ui.button(theme::with_icon(Icon::Settings, "Settings… (⌘,)")).clicked() {
+                    self.dialog = Some(Dialog::Preferences);
+                }
                 if ui.button("Reset workspaces").clicked() {
                     self.layout = Layout::default();
                 }
             });
             ui.menu_button("Help", |ui| {
-                if ui.button(theme::with_icon(Icon::House, "Welcome: where to start")).clicked() {
-                    self.dialog = Some(Dialog::Welcome);
+                if ui.button(theme::with_icon(Icon::House, "Home screen")).clicked() {
+                    self.open_home(Page::NewMap);
                 }
                 if ui.button(theme::with_icon(Icon::Info, "About Massif")).clicked() {
                     self.dialog = Some(Dialog::About);
@@ -974,7 +1047,7 @@ impl MassifApp {
                     .clicked()
             };
             if icon(ui, Icon::FilePlus2, "New world (⌘N)", !busy) {
-                self.open_new_dialog();
+                self.open_home(Page::NewMap);
             }
             if icon(ui, Icon::FolderOpen, "Open (⌘O)", !busy) {
                 self.request(&ctx, Pending::Open(None));
@@ -1595,77 +1668,53 @@ impl MassifApp {
         let Some(dialog) = self.dialog.take() else { return };
         let mut keep = true;
         match dialog {
-            Dialog::FromHeightmap(mut form) => {
-                let mut make = false;
-                let response = egui::Modal::new(Id::unique("from height map")).show(ctx, |ui| {
-                    ui.set_width(560.0);
+            Dialog::Preferences => {
+                let response = egui::Modal::new(Id::unique("preferences")).show(ctx, |ui| {
+                    ui.set_width(440.0);
                     let pal = Palette::of(ui);
+                    ui.label(RichText::new("Settings").bold().size(16.0));
+                    ui.add_space(12.0);
+                    ui.label(RichText::new("Appearance").size(11.5).color(pal.weak));
+                    ui.add_space(6.0);
+                    row(ui, "Theme", |ui| {
+                        for (choice, label) in [(ThemeChoice::System, "System"), (ThemeChoice::Light, "Light"), (ThemeChoice::Dark, "Dark")] {
+                            if ui.selectable_label(self.settings.theme == choice, label).clicked() {
+                                self.settings.theme = choice;
+                            }
+                        }
+                    });
+                    ui.add_space(6.0);
+                    row(ui, "Accent", |ui| {
+                        let mut chosen = None;
+                        for (name, rgb) in theme::ACCENTS {
+                            let (rect, swatch) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+                            let on = self.settings.accent == rgb;
+                            ui.painter().circle_filled(rect.center(), 9.0, theme::rgb(rgb));
+                            if on || swatch.hovered() {
+                                ui.painter().circle_stroke(rect.center(), 11.0, Stroke::new(1.5, if on { pal.text } else { pal.weak }));
+                            }
+                            if swatch.on_hover_text(name).clicked() {
+                                chosen = Some(rgb);
+                            }
+                        }
+                        ui.add_space(6.0);
+                        let mut custom = self.settings.accent;
+                        if egui::color_picker::color_edit_button_srgb(ui, &mut custom).on_hover_text("Any colour").changed() {
+                            chosen = Some(custom);
+                        }
+                        if let Some(rgb) = chosen {
+                            self.settings.accent = rgb;
+                            theme::set_accent(ctx, rgb);
+                        }
+                    });
                     ui.label(
-                        RichText::new("A new world from a height map")
-                            .bold()
-                            .size(16.0),
-                    );
-                    ui.label(
-                        RichText::new(form.path.display().to_string())
-                            .size(11.0)
+                        RichText::new("The colour of what is chosen, of the main buttons and of the home screen's art.")
+                            .size(11.5)
                             .color(pal.weak),
                     );
-                    ui.add_space(8.0);
-                    ui.horizontal_top(|ui| {
-                        if let Some(t) = &form.picture {
-                            let size = t.size_vec2();
-                            let k = (200.0 / size.x).min(200.0 / size.y);
-                            ui.image((t.id(), size * k));
-                        }
-                        ui.vertical(|ui| {
-                            let h = &mut form.how;
-                            ui.horizontal(|ui| {
-                                ui.label("Name");
-                                ui.text_edit_singleline(&mut h.name);
-                            });
-                            ui.add(
-                                crate::widgets::Field::new(&mut h.scale, 0.25..=16.0)
-                                    .logarithmic(true)
-                                    .text("blocks a pixel")
-                                    .max_decimals(2),
-                            );
-                            ui.add(
-                                crate::widgets::Field::new(&mut h.low, -64.0..=319.0)
-                                    .text("black is Y")
-                                    .max_decimals(0),
-                            );
-                            ui.add(
-                                crate::widgets::Field::new(&mut h.high, -64.0..=319.0)
-                                    .text("white is Y")
-                                    .max_decimals(0),
-                            );
-                            ui.add(
-                                crate::widgets::Field::new(&mut h.sea_level, -64..=319).text("sea level"),
-                            );
-                            let (w, d) = (
-                                form.map.width as f32 * h.scale,
-                                form.map.height as f32 * h.scale,
-                            );
-                            ui.add_space(4.0);
-                            ui.label(
-                                RichText::new(format!(
-                                    "{} × {} pixels → {w:.0} × {d:.0} blocks, Y {:.0} to {:.0}.",
-                                    form.map.width, form.map.height, h.low, h.high
-                                ))
-                                .size(11.5)
-                                .color(pal.weak),
-                            );
-                        });
-                    });
-                    ui.add_space(10.0);
-                    ui.horizontal(|ui| {
-                        if ui
-                            .add(theme::primary_button(ui, "Make the world"))
-                            .clicked()
-                        {
-                            make = true;
-                        }
-                        if ui.button("Cancel").clicked() {
+                    ui.add_space(14.0);
+                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                        if ui.add(theme::primary_button(ui, "Done")).clicked() {
                             keep = false;
                         }
                     });
@@ -1673,209 +1722,8 @@ impl MassifApp {
                 if response.should_close() {
                     keep = false;
                 }
-                if make {
-                    self.request(ctx, Pending::FromHeightmap(form.map.clone(), form.how.clone()));
-                } else if keep {
-                    self.dialog = Some(Dialog::FromHeightmap(form));
-                }
-            }
-            Dialog::Welcome => {
-                use massif_core::graph::Template;
-                let mut action: Option<WelcomeAction> = None;
-                let response = egui::Modal::new(Id::unique("welcome")).show(ctx, |ui| {
-                    ui.set_width(860.0);
-                    let pal = Palette::of(ui);
-                    ui.label(
-                        RichText::new(format!(
-                            "{}  Welcome to Massif",
-                            theme::glyph(Icon::MountainSnow)
-                        ))
-                        .bold()
-                        .size(20.0),
-                    );
-                    ui.label(
-                        RichText::new("Paint or generate Minecraft maps, then export them.")
-                            .size(13.0)
-                            .color(pal.weak),
-                    );
-                    ui.add_space(10.0);
-                    // The way it goes, in three steps.
-                    ui.horizontal(|ui| {
-                        for (k, (title, what)) in [
-                            ("Make the land", "paint it (World) or generate it (Terrain)"),
-                            ("Shape it", "rivers, paint, biomes"),
-                            ("Export it", "File → Export (⌘E)"),
-                        ]
-                        .into_iter()
-                        .enumerate()
-                        {
-                            egui::Frame::new()
-                                .fill(pal.header)
-                                .corner_radius(10)
-                                .inner_margin(egui::Margin::same(10))
-                                .show(ui, |ui| {
-                                    ui.set_width(256.0);
-                                    ui.label(
-                                        RichText::new(format!("{}  {title}", k + 1))
-                                            .bold()
-                                            .size(13.5),
-                                    );
-                                    ui.label(RichText::new(what).size(11.5).color(pal.weak));
-                                });
-                        }
-                    });
-                    ui.add_space(12.0);
-                    ui.columns(3, |cols| {
-                        let card = |ui: &mut Ui, icon: Icon, title: &str, what: &str| {
-                            ui.label(
-                                RichText::new(format!("{}  {title}", theme::glyph(icon)))
-                                    .bold()
-                                    .size(14.5),
-                            );
-                            ui.label(RichText::new(what).size(11.5).color(pal.weak));
-                            ui.add_space(6.0);
-                        };
-                        let wide = |ui: &mut Ui, icon: Icon, text: &str| {
-                            ui.add_sized(
-                                [ui.available_width(), 30.0],
-                                egui::Button::new(theme::with_icon(icon, text)),
-                            )
-                        };
-                        // A map of one's own.
-                        card(&mut cols[0], Icon::Map, "A map", "New, opened or imported");
-                        if wide(&mut cols[0], Icon::FilePlus2, "New map…").clicked() {
-                            action = Some(Box::new(|app, _| app.open_new_dialog()));
-                        }
-                        if wide(&mut cols[0], Icon::FolderOpen, "Open a .massif world…").clicked()
-                        {
-                            action =
-                                Some(Box::new(|app, ctx| app.request(ctx, Pending::Open(None))));
-                        }
-                        if wide(
-                            &mut cols[0],
-                            Icon::ImageUp,
-                            "From a height map (Gaea, World Machine…)",
-                        )
-                        .clicked()
-                        {
-                            action = Some(Box::new(|app, ctx| app.pick_heightmap(ctx)));
-                        }
-                        if wide(&mut cols[0], Icon::Import, "Import a WorldPainter world…")
-                            .clicked()
-                        {
-                            action = Some(Box::new(|app, ctx| {
-                                if let Some(path) = rfd::FileDialog::new()
-                                    .set_title("Import a WorldPainter world")
-                                    .add_filter("WorldPainter world", &["world"])
-                                    .pick_file()
-                                {
-                                    app.request(ctx, Pending::Open(Some(path)));
-                                }
-                            }));
-                        }
-                        let recent: Vec<PathBuf> =
-                            self.settings.recent.iter().take(4).cloned().collect();
-                        if !recent.is_empty() {
-                            cols[0].add_space(6.0);
-                            cols[0].label(RichText::new("Recent").size(11.0).color(pal.weak));
-                            for path in recent {
-                                if cols[0]
-                                    .link(jobs::display_name(&path))
-                                    .on_hover_text(path.display().to_string())
-                                    .clicked()
-                                {
-                                    action = Some(Box::new(move |app, ctx| {
-                                        app.request(ctx, Pending::Open(Some(path)))
-                                    }));
-                                }
-                            }
-                        }
-                        // A landscape from nodes.
-                        card(
-                            &mut cols[1],
-                            Icon::Mountain,
-                            "A landscape",
-                            "Generated from nodes",
-                        );
-                        for t in [
-                            Template::Continents,
-                            Template::Alpine,
-                            Template::Archipelago,
-                            Template::RiverValley,
-                            Template::FloatingMountains,
-                            Template::DesertCanyon,
-                        ] {
-                            if wide(&mut cols[1], Icon::LayoutTemplate, t.label())
-                                .on_hover_text(t.description())
-                                .clicked()
-                            {
-                                action = Some(Box::new(move |app, _| app.start_terrain(t)));
-                            }
-                        }
-                        // The map one has.
-                        card(
-                            &mut cols[2],
-                            Icon::Brush,
-                            "The map you have",
-                            "Work on the open map",
-                        );
-                        if wide(&mut cols[2], Icon::Paintbrush, "Paint it from its relief")
-                            .on_hover_text(Template::PaintMap.description())
-                            .clicked()
-                        {
-                            action = Some(Box::new(|app, _| app.start_terrain(Template::PaintMap)));
-                        }
-                        if wide(&mut cols[2], Icon::Waves, "Give it rivers")
-                            .on_hover_text(Template::MapRivers.description())
-                            .clicked()
-                        {
-                            action =
-                                Some(Box::new(|app, _| app.start_terrain(Template::MapRivers)));
-                        }
-                        if wide(&mut cols[2], Icon::Route, "Lay out a river")
-                            .on_hover_text("The River tool: click a source, the water finds its way down")
-                            .clicked()
-                        {
-                            action = Some(Box::new(|app, _| {
-                                app.layout.switch_side(false);
-                                app.tools.select(Tool::River);
-                            }));
-                        }
-                        if wide(&mut cols[2], Icon::Paintbrush2, "Paint by hand")
-                            .on_hover_text("The brushes of the World side, as in WorldPainter")
-                            .clicked()
-                        {
-                            action = Some(Box::new(|app, _| {
-                                app.layout.switch_side(false);
-                                app.tools.select(Tool::PaintTerrain);
-                            }));
-                        }
-                    });
-                    ui.add_space(12.0);
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        ui.checkbox(&mut self.settings.welcome, "Show this at startup");
-                        ui.label(
-                            RichText::new("· Help → Welcome brings it back")
-                                .size(11.0)
-                                .color(pal.weak),
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("Close").clicked() {
-                                keep = false;
-                            }
-                        });
-                    });
-                });
-                if response.should_close() {
-                    keep = false;
-                }
-                if let Some(act) = action {
-                    keep = false;
-                    act(self, ctx);
-                }
                 if keep {
-                    self.dialog = Some(Dialog::Welcome);
+                    self.dialog = Some(Dialog::Preferences);
                 }
             }
             Dialog::AutoRules(mut paint) => {
@@ -2010,52 +1858,6 @@ impl MassifApp {
                     }
                 }
                 if keep {
-                }
-            }
-            Dialog::NewWorld(mut form) => {
-                let mut create = false;
-                let response = egui::Modal::new(Id::unique("new world")).show(ctx, |ui| {
-                    ui.set_width(920.0);
-                    ui.label(RichText::new("Create New World").bold().size(16.0));
-                    ui.add_space(6.0);
-                    let max_height = (ctx.content_rect().height() - 200.0).max(240.0);
-                    ui.horizontal_top(|ui| {
-                        ui.vertical(|ui| {
-                            ui.set_width(560.0);
-                            egui::ScrollArea::vertical().id_salt("new world form").max_height(max_height).show(ui, |ui| {
-                                ui.set_width(550.0);
-                                new_world_form(ui, &mut form);
-                            });
-                        });
-                        ui.add_space(12.0);
-                        ui.vertical(|ui| new_world_preview(ui, &mut form));
-                    });
-                    ui.add_space(10.0);
-                    ui.horizontal(|ui| {
-                        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                            if ui.button("Cancel").clicked() {
-                                keep = false;
-                            }
-                            if ui.add(theme::primary_button(ui, "Create")).clicked() {
-                                create = true;
-                            }
-                        });
-                    });
-                });
-                if response.should_close() {
-                    keep = false;
-                }
-                if create {
-                    let mut params = form.params.clone();
-                    params.seed = parse_seed(&form.seed);
-                    params.tiles_x = (form.width + 127) / 128;
-                    params.tiles_z = (form.depth + 127) / 128;
-                    if params.name.trim().is_empty() {
-                        params.name = "New World".into();
-                    }
-                    self.request(ctx, Pending::New(params));
-                } else if keep {
-                    self.dialog = Some(Dialog::NewWorld(form));
                 }
             }
             Dialog::Export(mut form) => {
@@ -2334,6 +2136,15 @@ impl MassifApp {
         if let Some(msg) = self.feedback.take() {
             self.say(&ctx, msg, false, None);
         }
+        if self.home.is_some() {
+            self.home_ui(ui, frame, &ctx);
+            self.dialogs(&ctx);
+            if self.title != "Massif" {
+                ctx.send_viewport_cmd(ViewportCommand::Title("Massif".to_owned()));
+                self.title = "Massif".to_owned();
+            }
+            return;
+        }
 
         let pal = Palette::of(ui);
         let margin = if self.unified_titlebar { 9 } else { 6 };
@@ -2563,192 +2374,6 @@ fn export_world(ui: &mut Ui, form: &mut ExportForm) {
     });
 }
 
-fn new_world_form(ui: &mut Ui, form: &mut NewWorldForm) {
-    let pal = Palette::of(ui);
-    egui::ScrollArea::vertical().max_height(560.0).auto_shrink([false, true]).show(ui, |ui| {
-        ui.columns(2, |cols| {
-            let (left, right) = cols.split_at_mut(1);
-            let (ui, ui2) = (&mut left[0], &mut right[0]);
-            card(ui, "Map", "The name of the map, and the seed Minecraft uses around it.", |ui| {
-                row(ui, "Name", |ui| {
-                    ui.add(egui::TextEdit::singleline(&mut form.params.name).desired_width(f32::INFINITY));
-                });
-                row(ui, "Seed", |ui| {
-                    ui.add(egui::TextEdit::singleline(&mut form.seed).desired_width(110.0));
-                    if ui.button(theme::glyph(Icon::Dice5).to_string()).on_hover_text("Random seed").clicked() {
-                        form.seed = random_seed().to_string();
-                    }
-                });
-                row(ui, "Map format", |ui| {
-                    ui.label("Minecraft Java 1.18 and later");
-                });
-            });
-            card(ui2, "Size and shape", "How large the map is, and how high and deep it can go.", |ui| {
-                row(ui, "Dimensions", |ui| {
-                    ui.add(egui::DragValue::new(&mut form.width).range(128..=65536).speed(128.0));
-                    ui.label("×");
-                    ui.add(egui::DragValue::new(&mut form.depth).range(128..=65536).speed(128.0));
-                });
-                ui.horizontal_wrapped(|ui| {
-                    ui.add_space(100.0);
-                    for (blocks, label) in [(512, "512"), (1024, "1k"), (2048, "2k"), (4096, "4k"), (8192, "8k"), (16384, "16k")] {
-                        let selected = form.width == blocks && form.depth == blocks;
-                        if ui.selectable_label(selected, label).clicked() {
-                            form.width = blocks;
-                            form.depth = blocks;
-                        }
-                    }
-                });
-                // Whole tiles only.
-                form.width = (form.width + 127) / 128 * 128;
-                form.depth = (form.depth + 127) / 128 * 128;
-                row(ui, "", |ui| {
-                    ui.label(RichText::new("blocks, in multiples of 128").size(11.5).color(pal.weak));
-                });
-                row(ui, "Build limits", |ui| {
-                    ui.label("-64 to 320");
-                });
-                // About 4.3 blocks per second on foot.
-                let minutes = form.width.max(form.depth) as f32 / 4.317 / 60.0;
-                row(ui, "Walking time", |ui| {
-                    ui.label(if minutes < 1.0 { "under a minute".to_owned() } else { format!("{minutes:.0} min. across") });
-                });
-                let tiles = (form.width / 128) as i64 * (form.depth / 128) as i64;
-                row(ui, "On disk", |ui| {
-                    ui.label(RichText::new(format!("{tiles} tiles · roughly {}", panels::human((tiles * 12_000) as u64))).color(pal.weak));
-                });
-            });
-        });
-        ui.columns(2, |cols| {
-            let (left, right) = cols.split_at_mut(1);
-            let (ui, ui2) = (&mut left[0], &mut right[0]);
-            card(ui, "Land", "The shape the map starts with, before you paint it.", |ui| {
-                row(ui, "Topography", |ui| {
-                    crate::widgets::combo("landform")
-                        .selected_text(form.params.landform.label())
-                        .show_ui(ui, |ui| {
-                            for l in Landform::ALL {
-                                ui.selectable_value(&mut form.params.landform, l, l.label());
-                            }
-                        });
-                });
-                let hilly = form.params.landform != Landform::Flat;
-                row(ui, "Relief height", |ui| {
-                    ui.add_enabled(hilly, egui::DragValue::new(&mut form.params.relief).range(0.0..=400.0).speed(1.0).suffix(" %"));
-                });
-                row(ui, "Feature size", |ui| {
-                    ui.add_enabled(hilly, egui::DragValue::new(&mut form.params.feature_size).range(10.0..=1000.0).speed(1.0).suffix(" %"));
-                });
-                let mut level = form.params.level.unwrap_or(if hilly { form.params.sea_level as f32 } else { form.params.flat_height });
-                row(ui, "Level", |ui| {
-                    if ui.add(egui::DragValue::new(&mut level).range(-63.0..=318.0).speed(0.5)).changed() {
-                        form.params.level = Some(level);
-                        form.params.flat_height = level;
-                    }
-                });
-                row(ui, "Water level", |ui| {
-                    ui.add(egui::DragValue::new(&mut form.params.sea_level).range(-63..=318));
-                    ui.label(RichText::new("(Minecraft: 63)").size(11.5).color(pal.weak));
-                });
-                row(ui, "", |ui| {
-                    ui.checkbox(&mut form.params.lava, "Lava instead of water");
-                });
-                row(ui, "", |ui| {
-                    ui.add_enabled(form.params.surface.is_none(), egui::Checkbox::new(&mut form.params.beaches, "Beaches"));
-                });
-            });
-            card(ui2, "Surface", "What the land is covered with.", |ui| {
-                let mut simple = form.params.surface.is_some();
-                ui.radio_value(&mut simple, false, "Automatic: grass, sand, rock and snow by height and slope");
-                ui.horizontal(|ui| {
-                    ui.radio_value(&mut simple, true, "One terrain:");
-                    let reg = &form.registry;
-                    let current = form.params.surface.unwrap_or_else(|| reg.terrain_by_name("Grass").unwrap_or(massif_core::TerrainId::ROCK));
-                    let mut chosen = current;
-                    ui.add_enabled_ui(simple, |ui| {
-                        crate::widgets::combo("surface terrain")
-                            .selected_text(&reg.terrain(current).name)
-                            .height(320.0)
-                            .show_ui(ui, |ui| {
-                                for (i, t) in reg.terrains.iter().enumerate() {
-                                    ui.selectable_value(&mut chosen, massif_core::TerrainId(i as u16), &t.name);
-                                }
-                            });
-                    });
-                    if simple {
-                        form.params.surface = Some(chosen);
-                    }
-                });
-                if !simple {
-                    form.params.surface = None;
-                }
-            });
-        });
-    });
-}
-
-fn new_world_preview(ui: &mut Ui, form: &mut NewWorldForm) {
-    let pal = Palette::of(ui);
-    let mut params = form.params.clone();
-    params.seed = parse_seed(&form.seed);
-    params.tiles_x = (form.width + 127) / 128;
-    params.tiles_z = (form.depth + 127) / 128;
-    let key = format!("{params:?}");
-    if form.preview.as_ref().is_none_or(|(k, _)| *k != key) {
-        let image = preview_image(&params, &form.registry, 180);
-        let texture = ui.ctx().load_texture("new world preview", image, egui::TextureOptions::LINEAR);
-        form.preview = Some((key, texture));
-    }
-    let side = 320.0;
-    let (rect, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
-    ui.painter().rect_filled(rect, 8, pal.canvas);
-    if let Some((_, texture)) = &form.preview {
-        // Non-square maps keep their proportions.
-        let (w, d) = (form.width as f32, form.depth as f32);
-        let k = side / w.max(d);
-        let r = Rect::from_center_size(rect.center(), vec2(w * k, d * k));
-        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(w / w.max(d), d / w.max(d)));
-        ui.painter().image(texture.id(), r, uv, egui::Color32::WHITE);
-    }
-    ui.label(RichText::new("Preview of the whole map; the cross is the centre.").size(11.0).color(pal.weak));
-    let c = rect.center();
-    ui.painter().line_segment([c - vec2(5.0, 0.0), c + vec2(5.0, 0.0)], Stroke::new(1.0, egui::Color32::WHITE));
-    ui.painter().line_segment([c - vec2(0.0, 5.0), c + vec2(0.0, 5.0)], Stroke::new(1.0, egui::Color32::WHITE));
-}
-
-/// What a new world will look like from above: terrain colours, water and
-/// hill shading, over the whole map.
-fn preview_image(params: &GenParams, reg: &massif_core::Registry, n: usize) -> egui::ColorImage {
-    let p = massif_core::generate::preview(params, reg, n);
-    let sea = params.sea_level as f32;
-    let fluid = if params.lava { [214.0, 96.0, 18.0] } else { [48.0, 96.0, 200.0] };
-    let s = p.spacing as f32;
-    let mut pixels = Vec::with_capacity(n * n);
-    for z in 0..n {
-        for x in 0..n {
-            let at = |x: usize, z: usize| p.heights[z.min(n - 1) * n + x.min(n - 1)];
-            let h = at(x, z);
-            let (top, _) = panels::terrain_colors(reg, p.terrains[z * n + x].0);
-            let mut c = [top.r() as f32, top.g() as f32, top.b() as f32];
-            // Lit from the north-west.
-            let dx = (at(x + 1, z) - at(x.saturating_sub(1), z)) / (2.0 * s);
-            let dz = (at(x, z + 1) - at(x, z.saturating_sub(1))) / (2.0 * s);
-            let shade = (1.0 - (dx + dz) * 1.6).clamp(0.45, 1.35);
-            for v in &mut c {
-                *v *= shade;
-            }
-            if h < sea {
-                let t = 0.55 + 0.4 * ((sea - h) / 20.0).min(1.0);
-                for i in 0..3 {
-                    c[i] = c[i] * (1.0 - t) + fluid[i] * t;
-                }
-            }
-            pixels.push(egui::Color32::from_rgb(c[0].clamp(0.0, 255.0) as u8, c[1].clamp(0.0, 255.0) as u8, c[2].clamp(0.0, 255.0) as u8));
-        }
-    }
-    egui::ColorImage::new([n, n], pixels)
-}
-
 /// Where the layout is saved. A new key when the default layouts change a
 /// lot, so that everyone gets the new editors.
 const LAYOUT_KEY: &str = "massif.layout.v6";
@@ -2813,31 +2438,11 @@ fn zone_of(r: Rect, p: egui::Pos2) -> Zone {
         .unwrap_or(Zone::Center)
 }
 
-fn random_seed() -> i64 {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0) as u64;
-    let mut x = nanos ^ 0x9e37_79b9_7f4a_7c15;
-    x ^= x >> 33;
-    x = x.wrapping_mul(0xff51_afd7_ed55_8ccd);
-    x ^= x >> 33;
-    (x >> 16) as i64
-}
-
-/// Numbers are used as-is; any other text is hashed, like Minecraft does.
-fn parse_seed(text: &str) -> i64 {
-    let t = text.trim();
-    if let Ok(n) = t.parse::<i64>() {
-        return n;
-    }
-    // Java's String.hashCode.
-    t.encode_utf16().fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(c as i32)) as i64
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::home::parse_seed;
+    use massif_core::generate::Landform;
 
     fn harness(theme: ThemeChoice) -> egui_kittest::Harness<'static, MassifApp> {
         egui_kittest::Harness::builder()
@@ -4508,25 +4113,30 @@ mod tests {
         massif_core::heightmap::write_png16(&png, n, n, &cone).unwrap();
         let mut h = harness(ThemeChoice::Dark);
         h.run_steps(3);
-        let map = std::sync::Arc::new(massif_core::heightmap::read(&png).unwrap());
-        h.state_mut().dialog = Some(Dialog::FromHeightmap(HeightmapForm {
-            path: png.clone(),
-            map,
-            how: massif_core::generate::FromHeightmap {
+        // Dropped on the home screen, it is read there.
+        h.state_mut().open_home(Page::NewMap);
+        let ctx = h.ctx.clone();
+        h.state_mut().home_action(&ctx, HomeAction::Dropped(png.clone()));
+        h.run_steps(3);
+        {
+            let home = h.state_mut().home.as_mut().expect("the home screen");
+            assert_eq!(home.page, Page::FromHeightmap);
+            let pick = home.heightmap.as_mut().expect("the height map read");
+            pick.how = massif_core::generate::FromHeightmap {
                 name: "Cone".into(),
                 scale: 2.0,
                 low: 40.0,
                 high: 200.0,
                 sea_level: 63,
-            },
-            picture: None,
-        }));
+            };
+        }
         h.run_steps(3);
         {
             use egui_kittest::kittest::Queryable;
-            h.get_by_label("Make the world").click();
+            h.get_by_label("Create map").click();
         }
         h.run_steps(5);
+        assert!(h.state().home.is_none(), "the map is shown");
         let doc = &h.state().doc;
         assert_eq!(doc.world.meta.name, "Cone");
         let (lo, hi) = doc.dimension().bounds().unwrap();
@@ -5064,6 +4674,84 @@ mod tests {
         }
     }
 
+    /// Massif opens on the home screen: no map, the ways in, the settings of
+    /// a new map. Making one shows it; the home screen comes back with ⌘N,
+    /// with the way back to the map; a template's map goes to the Terrain
+    /// side. With MASSIF_SNAPSHOT_DIR, the screens are saved.
+    #[test]
+    fn the_home_screen_comes_first() {
+        use egui_kittest::kittest::Queryable;
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let mut h = harness(ThemeChoice::Dark);
+        {
+            let app = h.state_mut();
+            app.has_map = false;
+            app.settings.recent.clear();
+            app.open_home(Page::NewMap);
+        }
+        h.run_steps(5);
+        h.get_by_label("No maps yet");
+        assert!(h.query_by_label_contains("Back to").is_none(), "no map to go back to");
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("home-dark.png")).unwrap();
+        }
+        {
+            let home = h.state_mut().home.as_mut().unwrap();
+            home.new_map.params.name = "Test map".into();
+            home.new_map.width = 512;
+            home.new_map.depth = 512;
+        }
+        h.run_steps(2);
+        h.get_by_label("Create map").click();
+        h.run_steps(2);
+        while !h.state().jobs.is_empty() {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.run_steps(3);
+        assert!(h.state().home.is_none(), "the new map is shown");
+        assert_eq!(h.state().doc.world.meta.name, "Test map");
+        // ⌘N: the home screen again, with the way back.
+        h.event(egui::Event::Key {
+            key: egui::Key::N,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        });
+        h.run_steps(3);
+        assert!(h.state().home.is_some());
+        h.get_by_label("Back to Test map").click();
+        h.run_steps(3);
+        assert!(h.state().home.is_none(), "back to the map");
+        // A map whose relief comes from a template, made on the Terrain side.
+        h.state_mut().open_home(Page::NewMap);
+        {
+            let home = h.state_mut().home.as_mut().unwrap();
+            home.new_map.template = Some(massif_core::graph::Template::Archipelago);
+            home.new_map.width = 512;
+            home.new_map.depth = 512;
+        }
+        h.state_mut().settings.recent = vec![PathBuf::from("/nowhere/Alpine test.massif"), PathBuf::from("/nowhere/Old island.world")];
+        for _ in 0..40 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("home-template.png")).unwrap();
+        }
+        h.get_by_label("Create map").click();
+        h.run_steps(2);
+        while !h.state().jobs.is_empty() {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.run_steps(3);
+        assert!(h.state().home.is_none());
+        assert!(h.state().layout.terrain(), "on the Terrain side");
+        assert!(h.state().doc.world.meta.graph.is_some(), "with the template's graph");
+    }
+
     /// The new-world and export dialogs, rendered.
     #[test]
     fn dialogs_render() {
@@ -5072,29 +4760,20 @@ mod tests {
         };
         let mut h = harness(ThemeChoice::Light);
         h.run_steps(5);
-        // The welcome screen, and a template started from it.
-        h.state_mut().dialog = Some(Dialog::Welcome);
-        h.run_steps(5);
-        h.render().unwrap().save(dir.join("dialog-welcome.png")).unwrap();
-        {
-            use egui_kittest::kittest::Queryable;
-            h.get_by_label_contains("Give it rivers").click();
+        // The home screen, with the settings of a new map.
+        h.state_mut().open_home(Page::NewMap);
+        if let Some(home) = &mut h.state_mut().home {
+            home.new_map.params.landform = Landform::Mountains;
+            home.new_map.width = 4096;
+            home.new_map.depth = 4096;
         }
         h.run_steps(5);
-        assert!(h.state().dialog.is_none(), "the welcome screen closes");
-        assert!(h.state().layout.terrain(), "on the Terrain side");
-        assert!(h.state().doc.world.meta.graph.as_ref().is_some_and(|g| g.reads_the_map()), "with rivers on the map");
-        h.state_mut().layout.switch_side(false);
-        h.run_steps(3);
-        h.state_mut().open_new_dialog();
-        if let Some(Dialog::NewWorld(form)) = &mut h.state_mut().dialog {
-            form.params.landform = Landform::Mountains;
-            form.width = 4096;
-            form.depth = 4096;
-        }
+        h.render().unwrap().save(dir.join("home-light.png")).unwrap();
+        h.state_mut().home = None;
+        // The settings: theme and accent colour.
+        h.state_mut().dialog = Some(Dialog::Preferences);
         h.run_steps(5);
-        h.render().unwrap().save(dir.join("dialog-new-world.png")).unwrap();
-        assert!(matches!(&h.state().dialog, Some(Dialog::NewWorld(f)) if f.preview.is_some()));
+        h.render().unwrap().save(dir.join("dialog-settings.png")).unwrap();
         h.state_mut().dialog = None;
         h.state_mut().open_export_dialog();
         h.run_steps(5);

@@ -12,6 +12,40 @@ use egui::{
     Color32, CornerRadius, FontData, FontFamily, FontId, RichText, Stroke, TextStyle, Theme, Visuals, vec2,
 };
 pub use lucide_icons::Icon;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// The accent colours offered in the settings: the colour of what is
+/// chosen, of the main buttons, of the art of the home screen.
+pub const ACCENTS: [(&str, [u8; 3]); 8] = [
+    ("Ember", [255, 112, 40]),
+    ("Ocean", [77, 144, 254]),
+    ("Moss", [72, 190, 110]),
+    ("Glacier", [56, 196, 204]),
+    ("Amethyst", [158, 112, 255]),
+    ("Rose", [244, 92, 132]),
+    ("Gold", [232, 182, 64]),
+    ("Silver", [196, 200, 210]),
+];
+pub const DEFAULT_ACCENT: [u8; 3] = ACCENTS[0].1;
+
+const fn pack(c: [u8; 3]) -> u32 {
+    ((c[0] as u32) << 16) | ((c[1] as u32) << 8) | c[2] as u32
+}
+
+static ACCENT: AtomicU32 = AtomicU32::new(pack(DEFAULT_ACCENT));
+
+/// The accent colour chosen in the settings.
+pub fn accent() -> Color32 {
+    let v = ACCENT.load(Ordering::Relaxed);
+    Color32::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)
+}
+
+/// Use `c` as the accent colour, everywhere.
+pub fn set_accent(ctx: &egui::Context, c: [u8; 3]) {
+    ACCENT.store(pack(c), Ordering::Relaxed);
+    ctx.set_visuals_of(Theme::Light, Palette::light().visuals());
+    ctx.set_visuals_of(Theme::Dark, Palette::dark().visuals());
+}
 
 /// The `wght` axis of variable fonts.
 pub const WGHT: u32 = u32::from_be_bytes(*b"wght");
@@ -75,10 +109,22 @@ impl Palette {
     };
 
     pub fn of(ui: &egui::Ui) -> Palette {
-        if ui.visuals().dark_mode {
-            Self::DARK
-        } else {
-            Self::LIGHT
+        if ui.visuals().dark_mode { Self::dark() } else { Self::light() }
+    }
+
+    /// The dark palette, with the accent of the settings.
+    pub fn dark() -> Palette {
+        Palette {
+            accent: accent(),
+            ..Self::DARK
+        }
+    }
+
+    /// The light palette, with the accent of the settings.
+    pub fn light() -> Palette {
+        Palette {
+            accent: accent(),
+            ..Self::LIGHT
         }
     }
 
@@ -288,8 +334,8 @@ pub fn install(ctx: &egui::Context) {
         style.spacing.icon_spacing = 6.0;
         style.interaction.selectable_labels = false;
     });
-    ctx.set_visuals_of(Theme::Light, Palette::LIGHT.visuals());
-    ctx.set_visuals_of(Theme::Dark, Palette::DARK.visuals());
+    ctx.set_visuals_of(Theme::Light, Palette::light().visuals());
+    ctx.set_visuals_of(Theme::Dark, Palette::dark().visuals());
 }
 
 /// The glyph of an icon, to embed in text.

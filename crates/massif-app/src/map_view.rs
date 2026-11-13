@@ -383,8 +383,8 @@ impl MapView {
         let cancel_rect = Rect::from_min_size(pos2(dig_rect.max.x + gap, mid - h / 2.0), vec2(cancel_w, h));
         let dig_hit = ui.interact(dig_rect, id.with("dig river"), Sense::click()).on_hover_text("Dig it into the map (Enter)");
         let cancel_hit = ui.interact(cancel_rect, id.with("drop river"), Sense::click()).on_hover_text("Drop this river (Esc)");
-        let accent = Color32::from_rgb(46, 128, 240);
-        painter.rect_filled(dig_rect, 8, if dig_hit.hovered() { Color32::from_rgb(66, 146, 255) } else { accent });
+        let accent = theme::accent();
+        painter.rect_filled(dig_rect, 8, if dig_hit.hovered() { theme::mix(accent, Color32::WHITE, 0.15) } else { accent });
         painter.galley(pos2(dig_rect.min.x + 12.0, mid - dig.size().y / 2.0), dig, Color32::WHITE);
         painter.galley(pos2(dig_rect.max.x - 12.0 - enter.size().x, mid - enter.size().y / 2.0), enter, Color32::from_white_alpha(170));
         if cancel_hit.hovered() {

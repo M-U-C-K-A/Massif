@@ -21,6 +21,7 @@ pub struct Field<'a> {
     text: Option<String>,
     max_decimals: Option<usize>,
     logarithmic: bool,
+    width: Option<f32>,
     clamping: SliderClamping,
     formatter: Option<Formatter<'a>>,
     parser: Option<Parser<'a>>,
@@ -41,6 +42,7 @@ impl<'a> Field<'a> {
             text: None,
             max_decimals: None,
             logarithmic: false,
+            width: None,
             clamping: SliderClamping::Always,
             formatter: None,
             parser: None,
@@ -67,6 +69,12 @@ impl<'a> Field<'a> {
     /// Spread the range evenly in ratios rather than in steps.
     pub fn logarithmic(mut self, on: bool) -> Self {
         self.logarithmic = on;
+        self
+    }
+
+    /// How wide it is, rather than what the row leaves it.
+    pub fn width(mut self, width: f32) -> Self {
+        self.width = Some(width);
         self
     }
 
@@ -145,7 +153,7 @@ impl Widget for Field<'_> {
     fn ui(mut self, ui: &mut Ui) -> Response {
         let pal = Palette::of(ui);
         let height = ui.spacing().interact_size.y.clamp(20.0, 24.0);
-        let width = ui.available_width().min(ui.spacing().slider_width + 70.0).max(56.0);
+        let width = self.width.unwrap_or_else(|| ui.available_width().min(ui.spacing().slider_width + 70.0)).max(56.0);
         let (rect, mut response) = ui.allocate_exact_size(vec2(width, height), Sense::click_and_drag());
         let id = response.id;
         let value = self.get();

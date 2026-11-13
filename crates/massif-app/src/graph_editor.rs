@@ -671,7 +671,7 @@ fn template_render(t: Template, sea: f32, exaggeration: f32) -> RenderSettings {
 
 /// A small picture of what a template makes: its colours shaded by its
 /// relief, the sea over what lies under it.
-fn template_picture(t: Template, reg: &Registry, sea: f32, extent: &Extent, map: Option<&SampledMap>) -> Option<ColorImage> {
+pub(crate) fn template_picture(t: Template, reg: &Registry, sea: f32, extent: &Extent, map: Option<&SampledMap>) -> Option<ColorImage> {
     let graph = t.graph(reg, sea, extent.size as f32);
     let source = map.map(|m| m as &dyn MapSource);
     let out = graph.build_on(source, extent, &AtomicBool::new(false), &Progress::default()).ok()?;
