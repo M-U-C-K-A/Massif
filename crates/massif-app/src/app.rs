@@ -4758,6 +4758,15 @@ mod tests {
         if let Some(dir) = &dir {
             h.render().unwrap().save(dir.join("home-dark.png")).unwrap();
         }
+        // The most Minecraft allows, and back.
+        h.get_by_label("4064").click();
+        h.run_steps(2);
+        let p = &h.state().home.as_ref().unwrap().new_map.params;
+        assert_eq!((p.min_y, p.max_y), (-2032, 2032));
+        h.get_by_label("320").click();
+        h.run_steps(2);
+        let p = &h.state().home.as_ref().unwrap().new_map.params;
+        assert_eq!((p.min_y, p.max_y), (-64, 320));
         {
             let home = h.state_mut().home.as_mut().unwrap();
             home.new_map.params.name = "Test map".into();

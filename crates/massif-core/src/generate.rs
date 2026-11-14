@@ -503,6 +503,19 @@ pub fn preview(params: &GenParams, reg: &Registry, n: usize) -> Preview {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build limits are what Minecraft takes: whole sections, at least its
+    /// own, at most −2032 to 2032 (4064 blocks).
+    #[test]
+    fn build_limits_stay_within_minecraft() {
+        assert_eq!(build_limits(-64, 320), (-64, 320));
+        assert_eq!(build_limits(-2032, 2032), (-2032, 2032));
+        assert_eq!(build_limits(-5000, 5000), (-2032, 2032));
+        assert_eq!(build_limits(0, 100), (-64, 320));
+        assert_eq!(build_limits(-70, 1000), (-80, 1008));
+        let (b, t) = build_limits(-2032, 2032);
+        assert_eq!(t - b, 4064);
+    }
     use crate::coords::local_index;
 
     fn small(landform: Landform) -> GenParams {

@@ -156,7 +156,8 @@ brushes, terrain and biome palettes, levels or world info.
 
 A new map (the home screen) takes a name, a size (width × depth, in
 multiples of 128 blocks, up to 65,536), its **height** — Minecraft's own (−64 to 320) or
-taller, up to 512, 1024 or 2032, and as deep as −2032 — its land — a
+taller, up to 512, 1024 or 2032, and as deep as −2032 (**4064**: the whole
+range, the most Minecraft allows) — its land — a
 topography (flat, plains, hills, mountains, islands) with its relief height
 (up to fifteen times the landform's in a tall world; peaks close in on the
 top of the world rather than being cut flat), feature size and ground
