@@ -108,6 +108,16 @@ impl<'a> TileStack<'a> {
         self.layers.iter().find(|l| l.index == level).map_or(0, |l| l.tile.cover.get(cell))
     }
 
+    /// The object layer painted on the top of column `cell` (see
+    /// [`TileStack::surface_cover`]).
+    pub fn surface_objects(&self, cell: usize, top: &Span) -> u16 {
+        if self.is_ground_only() {
+            return self.ground().objects.get(cell);
+        }
+        let level = self.surface_level(cell, top).unwrap_or(0);
+        self.layers.iter().find(|l| l.index == level).map_or(0, |l| l.tile.objects.get(cell))
+    }
+
     /// True when only the ground level has data here (the common fast path).
     pub fn is_ground_only(&self) -> bool {
         self.layers.len() == 1 && self.sculpt.is_none()

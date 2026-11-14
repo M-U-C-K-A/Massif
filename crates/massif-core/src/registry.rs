@@ -315,6 +315,12 @@ pub struct Registry {
     /// before covers existed get those of a new world.
     #[serde(default = "vanilla_covers")]
     pub covers: Vec<CoverDef>,
+    /// Custom objects, read from schematics.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub objects: Vec<crate::objects::ObjectDef>,
+    /// Object layers, numbered from 1 (0 in a tile: none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub object_layers: Vec<crate::objects::ObjectLayerDef>,
 }
 
 impl Registry {
@@ -346,6 +352,19 @@ impl Registry {
     pub fn add_cover(&mut self, def: CoverDef) -> u16 {
         self.covers.push(def);
         self.covers.len() as u16
+    }
+
+    /// The object layer numbered `n` in a tile's object plane; `None` for
+    /// 0, for a number past the list, and for a removed layer.
+    pub fn object_layer(&self, n: u16) -> Option<&crate::objects::ObjectLayerDef> {
+        let def = self.object_layers.get((n as usize).checked_sub(1)?)?;
+        (!def.removed).then_some(def)
+    }
+
+    /// Add an object layer and return its number.
+    pub fn add_object_layer(&mut self, def: crate::objects::ObjectLayerDef) -> u16 {
+        self.object_layers.push(def);
+        self.object_layers.len() as u16
     }
 
     /// Find a block by its exact state string, registering it if needed.
@@ -384,6 +403,8 @@ impl Registry {
             terrains: Vec::new(),
             biomes: Vec::new(),
             covers: vanilla_covers(),
+            objects: Vec::new(),
+            object_layers: Vec::new(),
             well_known: WellKnown {
                 stone: BlockId(0),
                 deepslate: BlockId(0),

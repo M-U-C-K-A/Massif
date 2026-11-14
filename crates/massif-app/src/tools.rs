@@ -22,6 +22,8 @@ pub enum Tool {
     PaintBiome,
     /// What grows on the ground: grass, flowers, snow… (a cover).
     Cover,
+    /// Objects of a layer — trees, rocks — standing where it is painted.
+    Objects,
     /// The biome the land calls for; the terrain the biome calls for.
     AutoBiome,
     AutoPaint,
@@ -43,7 +45,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const GROUPS: [(&'static str, Icon, &'static [Tool]); 5] = [
+    pub const GROUPS: [(&'static str, Icon, &'static [Tool]); 6] = [
         (
             "Sculpt terrain",
             Icon::Mountain,
@@ -52,8 +54,9 @@ impl Tool {
         (
             "Paint",
             Icon::Paintbrush,
-            &[Tool::PaintTerrain, Tool::PaintBiome, Tool::Cover, Tool::AutoPaint, Tool::AutoBiome],
+            &[Tool::PaintTerrain, Tool::PaintBiome, Tool::AutoPaint, Tool::AutoBiome],
         ),
+        ("Decorate the land", Icon::Shrub, &[Tool::Cover, Tool::Objects]),
         ("Water", Icon::Droplet, &[Tool::River, Tool::Flood, Tool::Drain, Tool::Water]),
         ("Levels", Icon::Layers, &[Tool::StampSlab, Tool::EraseSlab]),
         ("Navigate", Icon::Compass, &[Tool::Pan, Tool::Eyedropper]),
@@ -69,6 +72,7 @@ impl Tool {
             Tool::PaintTerrain => "Paint terrain",
             Tool::PaintBiome => "Paint biome",
             Tool::Cover => "Ground cover",
+            Tool::Objects => "Objects",
             Tool::AutoBiome => "Auto biome",
             Tool::AutoPaint => "Auto paint",
             Tool::Eyedropper => "Eyedropper",
@@ -95,6 +99,7 @@ impl Tool {
             Tool::PaintTerrain => Icon::Paintbrush,
             Tool::PaintBiome => Icon::Trees,
             Tool::Cover => Icon::Sprout,
+            Tool::Objects => Icon::TreePine,
             Tool::AutoBiome => Icon::Earth,
             Tool::AutoPaint => Icon::WandSparkles,
             Tool::Eyedropper => Icon::Pipette,
@@ -155,6 +160,7 @@ impl Tool {
             }
             Tool::PaintBiome => "Paint a biome. Right button: back to automatic.",
             Tool::Cover => "Paint what grows: grass, flowers, snow… Right button: remove it.",
+            Tool::Objects => "Paint where objects stand: trees, rocks… Right button: remove them.",
             Tool::AutoBiome => {
                 "Sets the biome the land calls for: beach, forest, peaks…"
             }
@@ -246,6 +252,8 @@ pub struct ToolState {
     pub biome: u16,
     /// The cover painted, by its number.
     pub cover: u16,
+    /// The object layer painted, by its number (0: none yet).
+    pub object_layer: u16,
     pub water_level: i16,
     pub slab_thickness: f32,
     pub anchor: AnchorMode,
@@ -270,6 +278,9 @@ pub struct ToolState {
     /// What the last river dug.
     #[serde(skip)]
     pub river_note: Option<String>,
+    /// What the last import of objects read.
+    #[serde(skip)]
+    pub objects_note: Option<String>,
     /// Paint a pattern of terrains rather than one.
     pub pattern: PatternSettings,
     /// The tool and brush of the 3D Sculpt editor.
@@ -598,6 +609,7 @@ impl Default for ToolState {
             terrain: 1,
             biome: 0,
             cover: 1,
+            object_layer: 0,
             water_level: 63,
             slab_thickness: 16.0,
             anchor: AnchorMode::AboveGround,
@@ -612,6 +624,7 @@ impl Default for ToolState {
             river_draft: None,
             sculpt: SculptSettings::default(),
             river_note: None,
+            objects_note: None,
             pattern: PatternSettings::default(),
         }
     }
@@ -768,6 +781,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                 ops::paint_biome(&mut edit, brush, x, z, BiomeId(biome), stroke.salt)
             }
             Tool::Cover => ops::paint_cover(&mut edit, brush, x, z, if invert { 0 } else { tools.cover }, stroke.salt),
+            Tool::Objects => ops::paint_objects(&mut edit, brush, x, z, if invert { 0 } else { tools.object_layer }, stroke.salt),
             Tool::AutoBiome => match &reader {
                 Some(reader) if !invert => stroke.changed += ops::auto_biome(&mut edit, brush, x, z, stroke.salt, reader),
                 _ => ops::paint_biome(&mut edit, brush, x, z, BiomeId(0), stroke.salt),
@@ -868,6 +882,8 @@ pub struct Probe {
     pub fluid: i16,
     /// The cover painted on the surface; 0: none.
     pub cover: u16,
+    /// The object layer painted on the surface; 0: none.
+    pub objects: u16,
 }
 
 pub fn probe(doc: &Document, x: i32, z: i32) -> Option<Probe> {
@@ -885,6 +901,7 @@ pub fn probe(doc: &Document, x: i32, z: i32) -> Option<Probe> {
         biome: s.biome,
         fluid: s.fluid,
         cover: s.cover,
+        objects: s.objects,
     })
 }
 
@@ -905,6 +922,9 @@ pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse:
             }
             if p.cover != 0 {
                 tools.cover = p.cover;
+            }
+            if p.objects != 0 {
+                tools.object_layer = p.objects;
             }
             tools.tool = tools.previous;
             Some(format!("Picked {terrain_name} at height {}", block_top(p.height)))

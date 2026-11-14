@@ -27,6 +27,7 @@ const TAG_TERRAIN: u8 = 3;
 const TAG_FLUID: u8 = 4;
 const TAG_BIOME: u8 = 5;
 const TAG_COVER: u8 = 6;
+const TAG_OBJECTS: u8 = 7;
 
 /// One tile of one level.
 ///
@@ -49,6 +50,9 @@ pub struct Tile {
     /// Painted ground cover: 0 for none, else the cover's number (see
     /// [`crate::registry::Registry::cover`]).
     pub cover: Plane<u16>,
+    /// Painted object layer: 0 for none, else the layer's number (see
+    /// [`crate::registry::Registry::object_layer`]).
+    pub objects: Plane<u16>,
     /// Planes written by a newer version, preserved verbatim.
     pub unknown: Vec<(u8, Vec<u8>)>,
 }
@@ -63,6 +67,7 @@ impl Tile {
             fluid: Plane::Uniform(fluid),
             biome: Plane::Uniform(0),
             cover: Plane::Uniform(0),
+            objects: Plane::Uniform(0),
             unknown: Vec::new(),
         }
     }
@@ -76,6 +81,7 @@ impl Tile {
             fluid: Plane::Uniform(NO_FLUID),
             biome: Plane::Uniform(0),
             cover: Plane::Uniform(0),
+            objects: Plane::Uniform(0),
             unknown: Vec::new(),
         }
     }
@@ -114,6 +120,7 @@ impl Tile {
         self.fluid.compact();
         self.biome.compact();
         self.cover.compact();
+        self.objects.compact();
     }
 
     pub fn heap_bytes(&self) -> usize {
@@ -123,6 +130,7 @@ impl Tile {
             + self.fluid.heap_bytes()
             + self.biome.heap_bytes()
             + self.cover.heap_bytes()
+            + self.objects.heap_bytes()
     }
 
     /// Encode to the compressed cold form (a zstd frame).
@@ -160,6 +168,9 @@ impl Tile {
         if self.cover.uniform_value() != Some(0) {
             plane(TAG_COVER, &mut |o| codec::encode_categorical(&self.cover, o));
         }
+        if self.objects.uniform_value() != Some(0) {
+            plane(TAG_OBJECTS, &mut |o| codec::encode_categorical(&self.objects, o));
+        }
         for (tag, payload) in &self.unknown {
             plane(*tag, &mut |o| o.extend_from_slice(payload));
         }
@@ -182,6 +193,7 @@ impl Tile {
             fluid: Plane::Uniform(NO_FLUID),
             biome: Plane::Uniform(0),
             cover: Plane::Uniform(0),
+            objects: Plane::Uniform(0),
             unknown: Vec::new(),
         };
         loop {
@@ -201,6 +213,7 @@ impl Tile {
                 }
                 TAG_BIOME => tile.biome = codec::decode_categorical(&mut p)?,
                 TAG_COVER => tile.cover = codec::decode_categorical(&mut p)?,
+                TAG_OBJECTS => tile.objects = codec::decode_categorical(&mut p)?,
                 _ => tile.unknown.push((tag, payload.to_vec())),
             }
         }
@@ -246,6 +259,9 @@ mod tests {
         for i in 500..900 {
             t.cover.set(i, 2);
         }
+        for i in 700..1200 {
+            t.objects.set(i, 1);
+        }
         t
     }
 
@@ -260,6 +276,7 @@ mod tests {
         assert_eq!(back.fluid.dense(), t.fluid.dense());
         assert_eq!(back.biome.dense(), t.biome.dense());
         assert_eq!(back.cover.dense(), t.cover.dense());
+        assert_eq!(back.objects.dense(), t.objects.dense());
         // Encoding is canonical: re-encoding the decoded tile is identical.
         assert_eq!(back.encode(), blob);
     }

@@ -17,6 +17,7 @@ massif-format.workspace = true
 massif-anvil.workspace = true
 massif-legacy.workspace = true
 massif-assets.workspace = true
+massif-objects.workspace = true
 log.workspace = true
 rayon.workspace = true
 serde.workspace = true
@@ -34,6 +35,8 @@ pollster = "1"
 
 [dev-dependencies]
 egui_kittest = { version = "0.37", features = ["wgpu", "snapshot", "eframe"] }
+fastnbt = "2.6"
+flate2.workspace = true
 
 [build-dependencies]
 # The icon of massif.exe in Windows' Explorer.

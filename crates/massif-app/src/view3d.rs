@@ -103,6 +103,73 @@ struct CellSpan {
     terrain: u16,
     /// The exact height of its top (y1 is the top of its last block).
     top: f32,
+    /// Blocks of an object, all of this colour.
+    color: Option<[u8; 3]>,
+}
+
+/// What stands on the land: the objects of the world's layers.
+#[derive(Clone, Copy)]
+struct Standing<'a> {
+    reg: &'a Registry,
+    seed: i64,
+    lava: bool,
+}
+
+/// The blocks of the objects standing over the `w` × `d` rectangle at
+/// `(x0, z0)`, column by column: runs `(y0, y1, colour)`, low to high.
+fn object_runs(dim: &Dimension, s: Standing, x0: i32, z0: i32, w: usize, d: usize) -> Vec<Vec<(i32, i32, [u8; 3])>> {
+    use massif_core::objects::{max_reach, tile_placements};
+    let mut runs: Vec<Vec<(i32, i32, [u8; 3])>> = vec![Vec::new(); w * d];
+    let reg = s.reg;
+    if !reg.object_layers.iter().any(|l| !l.removed && !l.objects.is_empty()) {
+        return runs;
+    }
+    let area = massif_core::BlockRect::new(x0, z0, x0 + w as i32, z0 + d as i32);
+    let mat = Materializer::new(reg, s.seed, dim.min_y);
+    let mut placed = Vec::new();
+    for t in area.expand(max_reach(reg)).tiles() {
+        let Some(stack) = TileStack::new(dim, t, false) else { continue };
+        for p in tile_placements(reg, &mat, s.seed as u64, s.lava, &stack, t) {
+            if reg.objects.get(p.object as usize).is_some_and(|def| !p.bounds(def).intersect(&area).is_empty()) {
+                placed.push(p);
+            }
+        }
+    }
+    placed.sort_unstable_by_key(|p| (p.layer, p.x, p.z));
+    let mut blocks: Vec<Vec<(i32, [u8; 3])>> = vec![Vec::new(); w * d];
+    for p in &placed {
+        let def = &reg.objects[p.object as usize];
+        let [bw, bh, bl] = def.size.map(|v| v as i32);
+        for bz in 0..bl {
+            for bx in 0..bw {
+                let (x, y, z) = p.world(def, bx, 0, bz);
+                let (i, j) = (x - x0, z - z0);
+                if i < 0 || j < 0 || i >= w as i32 || j >= d as i32 {
+                    continue;
+                }
+                let column = &mut blocks[j as usize * w + i as usize];
+                for by in 0..bh {
+                    let k = def.at(bx as usize, by as usize, bz as usize);
+                    if k != 0 {
+                        column.push((y + by, def.color(k)));
+                    }
+                }
+            }
+        }
+    }
+    for (c, column) in blocks.iter_mut().enumerate() {
+        // The last object standing wins where two meet, as in the export.
+        column.reverse();
+        column.sort_by_key(|b| b.0);
+        column.dedup_by_key(|b| b.0);
+        for &(y, color) in column.iter() {
+            match runs[c].last_mut() {
+                Some(r) if r.1 == y && r.2 == color => r.1 = y + 1,
+                _ => runs[c].push((y, y + 1, color)),
+            }
+        }
+    }
+    runs
 }
 
 /// Merged solid spans, surface water and top sample of every column of a
@@ -140,8 +207,11 @@ impl Grid {
     }
 }
 
-/// Compose the columns of the `w` × `d` rectangle at `(x0, z0)`.
-fn compose_area(dim: &Dimension, x0: i32, z0: i32, w: usize, d: usize, mode: MapMode, water: bool) -> Grid {
+/// Compose the columns of the `w` × `d` rectangle at `(x0, z0)`, with the
+/// objects `standing` on them.
+#[allow(clippy::too_many_arguments)]
+fn compose_area(dim: &Dimension, x0: i32, z0: i32, w: usize, d: usize, mode: MapMode, water: bool, standing: Option<Standing>) -> Grid {
+    let runs = standing.map(|s| object_runs(dim, s, x0, z0, w, d));
     let mut grid = Grid {
         x0,
         z0,
@@ -185,6 +255,7 @@ fn compose_area(dim: &Dimension, x0: i32, z0: i32, w: usize, d: usize, mode: Map
                             y1: s.y1,
                             terrain: s.terrain.0,
                             top: s.top,
+                            color: None,
                         });
                     }
                 }
@@ -199,6 +270,22 @@ fn compose_area(dim: &Dimension, x0: i32, z0: i32, w: usize, d: usize, mode: Map
                 }
                 if let Some(t) = sp.last() {
                     cover = stack.surface_cover(cell, t);
+                }
+            }
+            // The objects over the column, where it is air.
+            if let Some(runs) = &runs {
+                let here = &runs[(j as usize) * w + i as usize];
+                if !here.is_empty() {
+                    let ground: Vec<(i32, i32)> = grid.spans[start..].iter().map(|s| (s.y0, s.y1)).collect();
+                    let mut free = Vec::new();
+                    for &(y0, y1, color) in here {
+                        let solid: Vec<CellSpan> = ground.iter().map(|&(a, b)| CellSpan { y0: a, y1: b, terrain: 0, top: b as f32, color: None }).collect();
+                        uncovered(y0, y1, &solid, &mut free);
+                        for &(a, b) in &free {
+                            grid.spans.push(CellSpan { y0: a, y1: b, terrain: 0, top: b as f32, color: Some(color) });
+                        }
+                    }
+                    grid.spans[start..].sort_by_key(|s| s.y0);
                 }
             }
             grid.offsets.push(grid.spans.len() as u32);
@@ -419,7 +506,8 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
     // The tile and a ring of neighbour columns, for walls, and for slopes,
     // measured as the trend of the ground around each column.
     let ring = if style.mode == MapMode::Slope { SLOPE_REACH } else { 1 };
-    let grid = compose_area(dim, cx - ring, cz - ring, n + 2 * ring as usize, n + 2 * ring as usize, style.mode, style.water);
+    let standing = Standing { reg, seed, lava: style.lava };
+    let grid = compose_area(dim, cx - ring, cz - ring, n + 2 * ring as usize, n + 2 * ring as usize, style.mode, style.water, Some(standing));
     let wk = reg.well_known;
     let colors = Colors {
         reg,
@@ -455,12 +543,17 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
             let c = grid.cell(x, z);
             let (sample, cover, wet) = (grid.top[c], grid.cover[c], grid.water[c] != i32::MIN);
             let spans = grid.spans(x, z);
+            // The cover grows on the top of the land, under any object.
+            let land = spans.iter().rposition(|s| s.color.is_none());
             tops.push(
                 spans
                     .iter()
                     .enumerate()
                     .map(|(k, s)| {
-                        let on_top = k + 1 == spans.len();
+                        if let Some(c) = s.color {
+                            return (c, c);
+                        }
+                        let on_top = Some(k) == land;
                         colors.top(s.terrain, s.y0, s.y1, x, z, slope, &sample, if on_top { cover } else { 0 }, on_top && wet)
                     })
                     .collect(),
@@ -535,6 +628,10 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
                     });
                 }
                 if s.y0 > min_y {
+                    let under = match s.color {
+                        Some(c) => c.map(|v| (v as f32 * 0.6) as u8),
+                        None => theme_dark(colors.substrate(s.y0)),
+                    };
                     out.solid.push(Face {
                         x: i as u8,
                         z: j as u8,
@@ -542,7 +639,7 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
                         len: 1,
                         y: clamp16(s.y0),
                         h: 1,
-                        color: rgba(theme_dark(colors.substrate(s.y0)), 255),
+                        color: rgba(under, 255),
                     });
                 }
             }
@@ -560,6 +657,10 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
         let (i, j) = ((x - cx) as usize, (z - cz) as usize);
         for (k, s) in grid.spans(x, z).iter().enumerate() {
             uncovered(s.y0, s.y1, grid.spans(nx, nz), &mut gaps);
+            if let Some(c) = s.color {
+                pieces.extend(gaps.iter().map(|&(a, b)| (a, b, rgba(c, 255))));
+                continue;
+            }
             let soil_floor = (s.y1 - 3).max(s.y0);
             for &(a, b) in &gaps {
                 for (lo, hi, soil) in [(a, b.min(soil_floor), false), (a.max(soil_floor), b, true)] {
@@ -2423,7 +2524,8 @@ impl View3d {
     pub fn invalidate(&mut self, tiles: &[TilePos]) {
         let stride = self.grid.as_ref().map_or(1, |g| g.stride);
         for t in tiles {
-            for (dx, dz) in [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)] {
+            // Walls look at the neighbours; objects reach over the corners.
+            for (dx, dz) in [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
                 if let Some(c) = self.tiles.get_mut(&grid_tile(t.offset(dx, dz), stride)) {
                     c.stale = true;
                 }
@@ -2958,8 +3060,8 @@ mod tests {
     fn walls_only_where_neighbours_leave_air() {
         let mut out = Vec::new();
         let cover = [
-            CellSpan { y0: -64, y1: 10, terrain: 0, top: 10.0 },
-            CellSpan { y0: 20, y1: 30, terrain: 0, top: 30.0 },
+            CellSpan { y0: -64, y1: 10, terrain: 0, top: 10.0, color: None },
+            CellSpan { y0: 20, y1: 30, terrain: 0, top: 30.0, color: None },
         ];
         uncovered(-64, 64, &cover, &mut out);
         assert_eq!(out, vec![(10, 20), (30, 64)]);
@@ -2994,7 +3096,7 @@ mod tests {
         let tile = TilePos::new(0, -1);
         let b = build_tile(dim, &w.registry, 63.0, w.meta.seed, tile, STYLE);
         assert!(!b.faces.solid.is_empty() && !b.faces.water.is_empty());
-        let grid = compose_area(dim, 0, -128, 128, 128, MapMode::Terrain, false);
+        let grid = compose_area(dim, 0, -128, 128, 128, MapMode::Terrain, false, None);
         // Top faces of the meshed columns, per column.
         let mut tops = vec![0u8; 128 * 128];
         for f in b.faces.solid.iter().filter(|f| f.dir == UP) {
@@ -3056,7 +3158,7 @@ mod tests {
         let dim = &w.dims[0];
         let tile = TilePos::new(0, -1);
         let b = build_tile(dim, &w.registry, 63.0, w.meta.seed, tile, Style { mode: MapMode::Height, water: false, lava: false });
-        let grid = compose_area(dim, -1, -129, 130, 130, MapMode::Height, false);
+        let grid = compose_area(dim, -1, -129, 130, 130, MapMode::Height, false, None);
         let mut expected = 0i64;
         let mut gaps = Vec::new();
         for z in -128..0 {

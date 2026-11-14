@@ -1958,6 +1958,8 @@ dependencies = [
  "egui",
  "egui-wgpu",
  "egui_kittest",
+ "fastnbt",
+ "flate2",
  "glam",
  "image",
  "log",
@@ -1967,6 +1969,7 @@ dependencies = [
  "massif-core",
  "massif-format",
  "massif-legacy",
+ "massif-objects",
  "pollster",
  "rayon",
  "rfd",
@@ -2032,6 +2035,16 @@ dependencies = [
  "log",
  "massif-core",
  "rayon",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "massif-objects"
+version = "0.3.1"
+dependencies = [
+ "fastnbt",
+ "flate2",
+ "massif-core",
  "thiserror 2.0.21",
 ]
 

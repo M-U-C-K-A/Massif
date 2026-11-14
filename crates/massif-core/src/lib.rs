@@ -30,6 +30,7 @@ pub mod heightmap;
 pub mod history;
 pub mod level;
 pub mod noise;
+pub mod objects;
 pub mod ops;
 pub mod pattern;
 pub mod plane;

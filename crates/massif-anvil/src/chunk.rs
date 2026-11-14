@@ -15,7 +15,8 @@
 use crate::nbt::{NbtWriter, TagType};
 use crate::version::{Era, Target};
 use massif_core::compose::{Materializer, Span, TileStack, block_top};
-use massif_core::coords::{TilePos, cell_index};
+use massif_core::coords::{BlockRect, TilePos, cell_index};
+use massif_core::objects::Placement;
 use massif_core::registry::{BiomeId, BlockDef, Registry, TerrainId, is_soil, is_tall_plant};
 use massif_core::tile::NO_FLUID;
 use massif_core::world::{Dimension, World};
@@ -28,6 +29,8 @@ pub const DATA_VERSION_NAME: &str = "1.18.2";
 
 const SECTION_VOLUME: usize = 4096;
 const UNSET: u16 = u16::MAX;
+/// A block of an object the version has nothing like: left out.
+const SKIP: u16 = u16::MAX;
 
 /// Everything that stays constant while a dimension is exported.
 pub struct ExportContext<'a> {
@@ -57,6 +60,15 @@ pub struct ExportContext<'a> {
     covers: Vec<Vec<Option<Plant>>>,
     /// Whether each block of the registry is soil that plants grow on.
     soil: Vec<bool>,
+    /// The states of each object's palette as it stands each way: index
+    /// `turn + 4` when mirrored, `turn` otherwise; [`SKIP`] for a block the
+    /// version has nothing like. Empty for objects no layer uses.
+    objects: Vec<Vec<Vec<u16>>>,
+    /// The first state that is not a block of the registry: plants of
+    /// covers and blocks of objects, which objects may take the place of.
+    first_extra: u16,
+    /// How far any object reaches from its anchor; 0 without objects.
+    pub reach: i32,
     plains: u16,
     ocean: u16,
     deep_ocean: u16,
@@ -147,9 +159,68 @@ impl<'a> ExportContext<'a> {
             }
             covers.push(plants);
         }
-        if states.len() >= UNSET as usize {
-            return Err("the covers use too many blocks".into());
+        // The objects of the layers, each way they may stand.
+        let used: std::collections::HashSet<u32> = reg.object_layers.iter().filter(|l| !l.removed).flat_map(|l| l.objects.iter().map(|o| o.0)).collect();
+        let mut known: std::collections::HashMap<String, u16> = std::collections::HashMap::new();
+        let mut objects = Vec::with_capacity(reg.objects.len());
+        for (k, def) in reg.objects.iter().enumerate() {
+            if !used.contains(&(k as u32)) {
+                objects.push(Vec::new());
+                continue;
+            }
+            let mut ways = Vec::with_capacity(8);
+            for way in 0..8u8 {
+                let ids = def
+                    .palette
+                    .iter()
+                    .enumerate()
+                    .map(|(i, state)| {
+                        if i == 0 {
+                            return SKIP;
+                        }
+                        let state = massif_core::objects::transform_state(state, way & 3, way >= 4);
+                        if let Some(&id) = known.get(&state) {
+                            return id;
+                        }
+                        let block = BlockDef { state: state.clone(), color: [0; 3] };
+                        let (name, kept) = target.block(block.name());
+                        let number = match era {
+                            // Logs lie along their axis, leaves stay.
+                            Era::Numbered => target.numbered_known(name).map(|(id, data)| {
+                                let axis = block.properties().find(|p| p.0 == "axis").map(|p| p.1);
+                                let bits = match (name.ends_with("_log"), axis) {
+                                    (true, Some("x")) => 4,
+                                    (true, Some("z")) => 8,
+                                    _ if name.ends_with("_leaves") => 4,
+                                    _ => 0,
+                                };
+                                (id, data | bits)
+                            }),
+                            _ => Some((0, 0)),
+                        };
+                        let id = match number {
+                            Some(number) if name != "minecraft:air" && name.contains(':') => {
+                                let props = if kept { block.properties().map(|(k, v)| (k.to_owned(), v.to_owned())).collect() } else { Vec::new() };
+                                states.push((name.to_owned(), props));
+                                if era == Era::Numbered {
+                                    numbered.push(number);
+                                }
+                                (states.len() - 1).min(SKIP as usize - 1) as u16
+                            }
+                            _ => SKIP,
+                        };
+                        known.insert(state, id);
+                        id
+                    })
+                    .collect();
+                ways.push(ids);
+            }
+            objects.push(ways);
         }
+        if states.len() >= UNSET as usize {
+            return Err("the covers and objects use too many blocks".into());
+        }
+        let reach = if used.is_empty() { 0 } else { massif_core::objects::max_reach(reg) };
         let soil = reg.blocks.iter().map(|b| is_soil(b.name())).collect();
         let biomes = reg
             .biomes
@@ -185,6 +256,9 @@ impl<'a> ExportContext<'a> {
             seed: world.meta.seed as u64,
             covers,
             soil,
+            objects,
+            first_extra: reg.blocks.len() as u16,
+            reach,
             plains: biome("minecraft:plains"),
             ocean: biome("minecraft:ocean"),
             deep_ocean: biome("minecraft:deep_ocean"),
@@ -329,14 +403,69 @@ fn pack(values: impl Iterator<Item = u64>, count: usize, bits: usize, out: &mut 
     }
 }
 
+/// The objects standing with their anchor in tile `pos` (see
+/// [`massif_core::objects::tile_placements`]).
+pub fn tile_placements(ctx: &ExportContext, world: &World, dim: &Dimension, pos: TilePos) -> Vec<Placement> {
+    if ctx.reach == 0 {
+        return Vec::new();
+    }
+    match TileStack::new(dim, pos, true) {
+        Some(stack) => massif_core::objects::tile_placements(ctx.reg, &ctx.mat, world.meta.seed as u64, world.meta.lava, &stack, pos),
+        None => Vec::new(),
+    }
+}
+
+/// Stand objects in the blocks of the chunk whose corner is `(x0, z0)`.
+fn stand_objects(ctx: &ExportContext, objects: &[Placement], x0: i32, z0: i32, blocks: &mut [u16]) {
+    let (min_y, max_y) = (ctx.min_y, ctx.max_y);
+    for p in objects {
+        let (Some(def), Some(ways)) = (ctx.reg.objects.get(p.object as usize), ctx.objects.get(p.object as usize)) else { continue };
+        let Some(states) = ways.get((p.turn & 3) as usize + if p.mirror { 4 } else { 0 }) else { continue };
+        let replace = ctx.reg.object_layer(p.layer).is_some_and(|l| l.replace);
+        let [w, h, l] = def.size.map(|s| s as i32);
+        let base = p.y - def.anchor[1] as i32;
+        for bz in 0..l {
+            for bx in 0..w {
+                let (x, _, z) = p.world(def, bx, 0, bz);
+                let (lx, lz) = (x - x0, z - z0);
+                if !(0..16).contains(&lx) || !(0..16).contains(&lz) {
+                    continue;
+                }
+                let column = ((lz << 4) | lx) as usize;
+                for by in 0..h {
+                    let y = base + by;
+                    if y < min_y || y >= max_y {
+                        continue;
+                    }
+                    let k = def.at(bx as usize, by as usize, bz as usize);
+                    let state = states.get(k as usize).copied().unwrap_or(SKIP);
+                    if k == 0 || state == SKIP {
+                        continue;
+                    }
+                    let i = (((y - min_y) as usize) << 8) | column;
+                    let old = blocks[i];
+                    // Unless it replaces the ground, an object only takes
+                    // the place of air, water, plants and other objects.
+                    if replace || old == 0 || old == ctx.water || old >= ctx.first_extra {
+                        blocks[i] = state;
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Build the NBT of the chunk at chunk position `(cx, cz)` *within* the tile
-/// (both in `0..8`).
+/// (both in `0..8`), with the objects of `objects` that reach into it (in
+/// the same order for every chunk, so that where two meet, the same one
+/// wins).
 pub fn build_chunk(
     ctx: &ExportContext,
     stack: &TileStack,
     tile: TilePos,
     cx: usize,
     cz: usize,
+    objects: &[Placement],
     scratch: &mut Scratch,
 ) -> Vec<u8> {
     let (ox, oz) = tile.origin();
@@ -398,6 +527,17 @@ pub fn build_chunk(
                 blocks[at(min_y)] = ctx.bedrock;
             }
         }
+    }
+
+    // ---- objects -----------------------------------------------------------
+    if !objects.is_empty() {
+        let chunk = BlockRect::new(bx0, bz0, bx0 + 16, bz0 + 16);
+        let near: Vec<Placement> = objects
+            .iter()
+            .filter(|p| ctx.reg.objects.get(p.object as usize).is_some_and(|def| !p.bounds(def).intersect(&chunk).is_empty()))
+            .copied()
+            .collect();
+        stand_objects(ctx, &near, bx0, bz0, blocks);
     }
 
     // ---- biomes: one sample per 4×4 column ---------------------------------

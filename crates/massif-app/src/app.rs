@@ -2149,14 +2149,22 @@ impl MassifApp {
             self.view3d.invalidate_all();
             self.sculpt3d.invalidate_all();
         }
-        // A cover changed colour, thickness or plants.
-        let covers = covers_key(&self.doc.world.registry.covers);
+        // A cover or an object layer changed how it looks.
+        let covers = covers_key(&self.doc.world.registry);
         if self.covers_key.is_some_and(|k| k != covers) {
             self.map_cache.invalidate_all();
             self.view3d.invalidate_all();
             self.sculpt3d.invalidate_all();
         }
         self.covers_key = Some(covers);
+        // Objects dropped on the window: a layer of their own.
+        if self.home.is_none() {
+            let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| panels::is_object_file(p)).collect());
+            if !dropped.is_empty() {
+                let note = panels::import_objects(&mut self.doc, &mut self.tools, &dropped, None, self.blocks.catalogue.as_deref());
+                self.feedback = Some(note);
+            }
+        }
         self.handle_close(&ctx);
         self.shortcuts(&ctx);
         self.map_cache.sync_generation(self.doc.generation);
@@ -2467,12 +2475,18 @@ fn zone_of(r: Rect, p: egui::Pos2) -> Zone {
         .unwrap_or(Zone::Center)
 }
 
-/// What of the covers shows on the map and in 3D.
-fn covers_key(covers: &[massif_core::registry::CoverDef]) -> u64 {
+/// What of the covers and object layers shows on the map and in 3D.
+fn covers_key(reg: &massif_core::Registry) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    for c in covers {
+    for c in &reg.covers {
         (c.color, c.density.to_bits(), c.removed, c.soil_only, c.underwater, c.height, &c.plants).hash(&mut h);
+    }
+    for l in &reg.object_layers {
+        (l.spacing, l.density.to_bits(), l.rotate, l.mirror, l.soil_only, l.underwater, l.sink, l.replace, l.removed, &l.objects).hash(&mut h);
+    }
+    for o in &reg.objects {
+        (o.size, o.anchor, &o.colors).hash(&mut h);
     }
     h.finish()
 }
@@ -5090,6 +5104,161 @@ mod tests {
         assert_eq!(crate::panels::block_cover(reg, &poppy), n);
         let def = reg.cover(n).unwrap();
         assert_eq!((def.name.as_str(), def.plants.clone(), def.soil_only), ("Poppy", vec![("minecraft:poppy".to_owned(), 1)], true));
+    }
+
+    /// A Sponge schematic of a little oak — a trunk on a block of dirt, a
+    /// crown of leaves, a vine — written to `path`.
+    fn write_oak(path: &std::path::Path) {
+        use fastnbt::Value;
+        use std::io::Write;
+        let (w, h, l) = (5i32, 7i32, 5i32);
+        let states = ["minecraft:air", "minecraft:dirt", "minecraft:oak_log[axis=y]", "minecraft:oak_leaves[distance=1,persistent=true,waterlogged=false]", "minecraft:vine[east=false,north=false,south=false,up=false,west=true]"];
+        let mut data = Vec::new();
+        for y in 0..h {
+            for z in 0..l {
+                for x in 0..w {
+                    let crown = (3..7).contains(&y) && (x - 2).abs() + (z - 2).abs() <= if y == 6 { 1 } else { 3 };
+                    let k = match (x, y, z) {
+                        (2, 0, 2) => 1,
+                        (2, 1..=4, 2) => 2,
+                        (3, 2, 2) => 4,
+                        _ if crown => 3,
+                        _ => 0,
+                    };
+                    data.push(k as i8);
+                }
+            }
+        }
+        let palette = Value::Compound(states.iter().enumerate().map(|(k, s)| ((*s).to_owned(), Value::Int(k as i32))).collect());
+        let root = Value::Compound(
+            [
+                ("Version", Value::Int(2)),
+                ("Width", Value::Short(w as i16)),
+                ("Height", Value::Short(h as i16)),
+                ("Length", Value::Short(l as i16)),
+                ("Palette", palette),
+                ("BlockData", Value::ByteArray(fastnbt::ByteArray::new(data))),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v))
+            .collect(),
+        );
+        let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        e.write_all(&fastnbt::to_bytes(&root).unwrap()).unwrap();
+        std::fs::write(path, e.finish().unwrap()).unwrap();
+    }
+
+    /// Objects: a schematic read into a layer of its own, painted on the
+    /// map, shown there and in 3D, taken off with the right button. With
+    /// MASSIF_SNAPSHOT_DIR, the map, the 3D view and the settings are
+    /// saved.
+    #[test]
+    fn objects_are_imported_painted_and_shown() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let file = std::env::temp_dir().join(format!("massif-oak-{}.schem", std::process::id()));
+        write_oak(&file);
+        let mut h = harness(ThemeChoice::Dark);
+        {
+            let app = h.state_mut();
+            let world = generate(&GenParams {
+                tiles_x: 4,
+                tiles_z: 4,
+                landform: Landform::Hills,
+                ..GenParams::default()
+            });
+            app.doc = crate::doc::Document::new(world, None, 9);
+            app.map_cache.invalidate_all();
+            app.view3d.invalidate_all();
+            let app = &mut *app;
+            let note = panels::import_objects(&mut app.doc, &mut app.tools, std::slice::from_ref(&file), None, None);
+            assert_eq!(note, "Read 1 object (Sponge schematic)");
+            app.tools.brush.radius = 60.0;
+            app.tools.brush.strength = 1.0;
+            app.tools.brush.profile = massif_core::Profile::Constant;
+        }
+        let _ = std::fs::remove_file(&file);
+        let reg = &h.state().doc.world.registry;
+        assert_eq!((reg.objects.len(), reg.object_layers.len()), (1, 1));
+        assert_eq!(reg.objects[0].anchor, [2, 1, 2]);
+        assert_eq!(h.state().tools.object_layer, 1);
+        assert_eq!(h.state().tools.tool, Tool::Objects);
+        h.run_steps(5);
+        let rect = map_rect(h.state(), &h.ctx);
+        let c = rect.center();
+        drag_on(&mut h, c, c + vec2(30.0, 0.0));
+        h.run_steps(10);
+        assert_eq!(h.state().doc.history.undo_label(), Some("Objects"));
+        let at = |h: &egui_kittest::Harness<'static, MassifApp>| {
+            let app = h.state();
+            let at = app.maps.get(&app.active_map.unwrap()).unwrap().center;
+            (at[0].floor() as i32, at[1].floor() as i32)
+        };
+        let painted = |h: &egui_kittest::Harness<'static, MassifApp>| {
+            let (cx, cz) = at(h);
+            let dim = h.state().doc.dimension();
+            (cz - 20..cz + 20).flat_map(|z| (cx - 20..cx + 20).map(move |x| (x, z))).filter(|&(x, z)| dim.ground().view(TilePos::containing(x, z)).unwrap().objects.get(massif_core::coords::local_index(x, z)) == 1).count()
+        };
+        assert_eq!(painted(&h), 1600);
+        // Trees stand there: as many as the grid holds, more or less.
+        let (cx, cz) = at(&h);
+        let app = h.state();
+        let dim = app.doc.dimension();
+        let mat = massif_core::compose::Materializer::new(&app.doc.world.registry, app.doc.world.meta.seed, dim.min_y);
+        let pos = TilePos::containing(cx, cz);
+        let stack = massif_core::TileStack::new(dim, pos, false).unwrap();
+        let trees = massif_core::objects::tile_placements(&app.doc.world.registry, &mat, app.doc.world.meta.seed as u64, false, &stack, pos);
+        assert!(!trees.is_empty());
+        // Close up on the map, each tree from above.
+        let id = h.state().active_map.unwrap();
+        let zoom = h.state().maps.get(&id).unwrap().zoom;
+        h.state_mut().maps.get_mut(&id).unwrap().zoom = zoom * 3.0;
+        h.event(egui::Event::PointerMoved(rect.right_bottom() - vec2(40.0, 60.0)));
+        h.run_steps(20);
+        h.render().unwrap().save(dir.join("objects-map.png")).unwrap();
+        h.state_mut().maps.get_mut(&id).unwrap().zoom = zoom;
+        // The settings, the whole window for them.
+        let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        let settings = areas.iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::ToolSettings)).unwrap().0;
+        h.state_mut().layout.toggle_maximize(settings);
+        h.run_steps(10);
+        h.render().unwrap().save(dir.join("objects-settings.png")).unwrap();
+        h.state_mut().layout.toggle_maximize(settings);
+        h.run_steps(5);
+        // In 3D, close.
+        {
+            let app = h.state_mut();
+            app.layout.activate(3);
+            let y = trees[0].y as f64;
+            app.view3d.camera.target = [trees[0].x as f64, y, trees[0].z as f64];
+            app.view3d.camera.distance = 70.0;
+            app.view3d.camera.pitch = 0.5;
+        }
+        h.run_steps(5);
+        while h.state().view3d.pending() > 0 {
+            h.step();
+        }
+        h.run_steps(3);
+        let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+        image::save_buffer(dir.join("objects-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+        h.state_mut().layout.activate(0);
+        h.run_steps(5);
+        // The right button takes them off.
+        let c = map_rect(h.state(), &h.ctx).center();
+        h.event(egui::Event::PointerMoved(c));
+        h.step();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: c,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            });
+            h.run_steps(4);
+        }
+        h.run_steps(5);
+        assert_eq!(painted(&h), 0);
     }
 
     /// Dragging the corner of an area into it splits it there.

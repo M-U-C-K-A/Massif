@@ -73,6 +73,12 @@ over every CPU core.
   options, grown over the ground at the density you set, only on soil or
   under water as they need, in two halves for tall plants and 1 to 3 high
   for cane; each plant shows on the map in its own colour.
+- **Custom objects.** Trees, rocks, ruins read from Sponge `.schem`
+  (WorldEdit), MCEdit `.schematic`, Axiom `.bp`, Litematica `.litematic`
+  and structure `.nbt` files, painted as layers: spaced on a grid, turned
+  and mirrored at random, on soil or under water, standing whole across
+  chunks in the export, drawn from above on the map and block by block in
+  the 3D view.
 - **Automatic biomes and paint.** Auto biome reads the land (deep water,
   rivers, beaches, plains, hills, deserts, snow, rock) and gives it its
   biomes; Auto paint gives each biome its ground, its cliffs and what lies
@@ -289,6 +295,40 @@ its own colour (dandelions yellow, poppies red, cornflowers blue…), and the
 the game without a plant get the closest they have (short grass is grass
 before 1.20.3, cornflowers are blue orchids before 1.14, and before 1.13
 plants are numbered, tall ones as double plants).
+
+### Custom objects
+
+The **Objects** tool (in Decorate, beside Ground cover) paints where objects
+stand. **Import objects…** in its settings — or files dropped on the window
+— reads them from:
+
+| File | From |
+|---|---|
+| `.schem` | WorldEdit and FAWE (Sponge schematics, versions 1 to 3) |
+| `.schematic` | MCEdit, Schematica and old WorldEdit (blocks numbered before 1.13, turned into today's: logs and their axis, leaves, flowers, slabs, stairs…) |
+| `.bp` | Axiom blueprints |
+| `.litematic` | Litematica (all its regions in one object) |
+| `.nbt` | Structure blocks |
+
+Air and structure voids are left out; an object stands on its lowest layer
+that is not soil or hanging plants — the foot of a trunk — and the dirt a
+tree was copied with goes into the ground. Files imported together make a
+layer, and every layer has its objects with their weights, a **spacing**
+(the side of the squares of its grid: one object at most in each), a
+**density** (the share of the squares that get one), a random **turn** and
+**mirror** (their blocks follow: logs lie along the new axis, stairs and
+vines face the new way), **only on soil**, **under water**, a **sink** (how
+deep they go into the ground) and **replace the ground** (otherwise their
+blocks only take the place of air, water and plants). The right button takes
+a layer off; Add objects… reads more files into a layer.
+
+Where each object stands is decided from the world's seed, square by
+square, where the layer is painted on the top of the land: the map draws the
+objects from above with their shadows when zoomed in, the 3D view block by
+block in their colours (the game's own when its blocks are loaded), and the
+export writes them whole, across chunks and tiles, for every version the
+blocks exist in. Block entities (chests' contents, signs' text) and entities
+are not kept.
 
 ### Rivers
 
@@ -593,7 +633,8 @@ In the 3D view:
 
 Each level of a dimension is a sparse grid of tiles of 128 × 128 columns.
 Every column stores a top height (1/256 of a block), a bottom height for slab
-levels, a terrain, a fluid level, a biome and a ground cover. Composing the levels of a column
+levels, a terrain, a fluid level, a biome, a ground cover and an object
+layer. Composing the levels of a column
 yields a short list of solid spans along Y, which is a run-length encoding of
 the column: the exporter turns spans into blocks, the 3D view into faces, the
 map shows the top one.
@@ -674,7 +715,10 @@ Blocks and biomes a version does not have yet become the closest it has
 (deepslate is stone before 1.17, moss is grass, mud is coarse dirt…).
 Ground covers are grown on the top of each column, after its blocks and its
 water: in the air above dry ground, in the water for those that grow there,
-on soil only for those that need it, where the whole plant has room.
+on soil only for those that need it, where the whole plant has room. Then
+the objects that reach into the chunk, from its tile or the next ones, are
+stood in it in a fixed order, so that where two meet the same one wins on
+both sides of a chunk border.
 Versions newer than the built-in list are taken from the game itself when
 it is installed (its jar says which data version it writes). `level.dat`
 keeps the shape of 1.18.2 for every later version, which bring it up to
@@ -731,6 +775,7 @@ converted and freed as it is read.
 | `massif-format` | Reading and writing `.massif` files. |
 | `massif-anvil` | Minecraft Java export: NBT, region files, `level.dat`. |
 | `massif-legacy` | WorldPainter `.world` import, with a Java serialization reader written in Rust. |
+| `massif-objects` | Custom objects: Sponge, MCEdit, Axiom, Litematica and structure files read into objects. |
 | `massif-assets` | The game's real blocks: finds the installed client jars, reads their block states, models and textures (with its own small zip reader), real colours and textured block icons. |
 | `massif-app` | The editor (egui and wgpu): areas, map, 3D view, panels. |
 | `massif-cli` | The command-line tool. |
@@ -780,10 +825,9 @@ tools/minecraft_check.py --world my.massif --version 1.21.11 --minecraft "<game 
 
 ## Roadmap
 
-- Custom objects (`.schem`, `.schematic`, Axiom `.bp`) painted as layers,
-  for trees and rocks; WorldPainter layers (trees, ores, frost, roads…) and
-  their import from `.world` files; layers as brush filters and graph
-  outputs.
+- WorldPainter layers (trees, ores, frost, roads…) and their import from
+  `.world` files; layers as brush filters and graph outputs; block
+  entities of custom objects.
 - Terrain graphs: GPU evaluation, groups and portals, graphs applied to a part of the map, tiled builds
   beyond 16,384 samples, more simulations (glaciers, sediment layers), the
   render drawn from the full-resolution build, carved layers (caves and

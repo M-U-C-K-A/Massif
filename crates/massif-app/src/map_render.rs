@@ -47,6 +47,8 @@ pub struct Sample {
     pub biome: u16,
     /// Ground cover painted on the surface; 0 = none.
     pub cover: u16,
+    /// Object layer painted on the surface; 0 = none.
+    pub objects: u16,
     pub flags: u8,
     /// Bit `i` set when level `i` (`i < 8`) has the column.
     pub levels: u8,
@@ -59,6 +61,7 @@ impl Sample {
         fluid: NO_FLUID,
         biome: 0,
         cover: 0,
+        objects: 0,
         flags: 0,
         levels: 0,
     };
@@ -80,7 +83,7 @@ impl Sample {
 }
 
 #[inline]
-fn ground_sample(top: f32, terrain: u16, fluid: i16, biome: u16, cover: u16) -> Sample {
+fn ground_sample(top: f32, terrain: u16, fluid: i16, biome: u16, cover: u16, objects: u16) -> Sample {
     let fluid = if fluid != NO_FLUID && fluid as i32 > block_top(top) {
         fluid
     } else {
@@ -92,6 +95,7 @@ fn ground_sample(top: f32, terrain: u16, fluid: i16, biome: u16, cover: u16) -> 
         fluid,
         biome,
         cover,
+        objects,
         flags: 0,
         levels: 1,
     }
@@ -115,6 +119,7 @@ impl ColumnSampler {
                 g.fluid.get(cell),
                 g.biome.get(cell),
                 g.cover.get(cell),
+                g.objects.get(cell),
             );
         }
         stack.spans(cell, &mut self.spans);
@@ -179,6 +184,7 @@ impl ColumnSampler {
             fluid,
             biome,
             cover: stack.surface_cover(cell, &top),
+            objects: stack.surface_objects(cell, &top),
             flags,
             levels,
         }
@@ -194,9 +200,9 @@ impl SurfaceGrid {
         let samples = if stack.is_ground_only() {
             let g = stack.ground();
             let (top, terrain) = (g.top.dense(), g.terrain.dense());
-            let (fluid, biome, cover) = (g.fluid.dense(), g.biome.dense(), g.cover.dense());
+            let (fluid, biome, cover, objects) = (g.fluid.dense(), g.biome.dense(), g.cover.dense(), g.objects.dense());
             (0..TILE_AREA)
-                .map(|i| ground_sample(top[i], terrain[i], fluid[i], biome[i], cover[i]))
+                .map(|i| ground_sample(top[i], terrain[i], fluid[i], biome[i], cover[i], objects[i]))
                 .collect()
         } else {
             let mut sampler = ColumnSampler::default();
@@ -750,7 +756,89 @@ fn build_chunk(key: ChunkKey, sources: &Sources, colorizer: &Colorizer) -> Color
             ));
         }
     }
+    draw_objects(key, sources, colorizer, &mut pixels);
     ColorImage::new([CHUNK_PX, CHUNK_PX], pixels)
+}
+
+/// The objects standing on the chunk at `key`, seen from above, over its
+/// pixels: when a pixel is at most four blocks across. Where they stand is
+/// asked of the same grid as the export, from the columns the map knows.
+fn draw_objects(key: ChunkKey, sources: &Sources, colorizer: &Colorizer, pixels: &mut [Color32]) {
+    let reg = colorizer.reg;
+    if key.lod > 2 || colorizer.style.mode == MapMode::Slope || !reg.object_layers.iter().any(|l| !l.removed && !l.objects.is_empty()) {
+        return;
+    }
+    let lod = key.lod as i64;
+    let (x0, z0) = key.origin();
+    let span = key.blocks();
+    let reach = massif_core::objects::max_reach(reg) as i64;
+    let seed = colorizer.style.seed as u64;
+    let mut placed = Vec::new();
+    for (k, layer) in reg.object_layers.iter().enumerate() {
+        if layer.removed || layer.objects.is_empty() {
+            continue;
+        }
+        let n = k as u16 + 1;
+        let s = layer.spacing.max(1) as i64;
+        for j in (z0 - reach).div_euclid(s)..=(z0 + span + reach).div_euclid(s) {
+            for i in (x0 - reach).div_euclid(s)..=(x0 + span + reach).div_euclid(s) {
+                let Some(c) = layer.candidate(seed, n, i as i32, j as i32) else { continue };
+                let Some(def) = reg.objects.get(c.object as usize) else { continue };
+                let r = def.reach() as i64;
+                if (c.x as i64) + r < x0 || (c.x as i64) - r >= x0 + span || (c.z as i64) + r < z0 || (c.z as i64) - r >= z0 + span {
+                    continue;
+                }
+                let at = sources.sample(0, c.x, c.z);
+                if at.is_empty() || at.objects != n {
+                    continue;
+                }
+                let wet = at.water_depth() > 0.0;
+                if wet != layer.underwater || (wet && colorizer.style.lava) || (layer.soil_only && !colorizer.soil.get(at.terrain as usize).copied().unwrap_or(false)) {
+                    continue;
+                }
+                placed.push(massif_core::objects::Placement { layer: n, object: c.object, x: c.x, y: 0, z: c.z, turn: c.turn, mirror: c.mirror });
+            }
+        }
+    }
+    placed.sort_unstable_by_key(|p| (p.layer, p.x, p.z));
+    let mut views: HashMap<u32, Vec<(u16, u16)>> = HashMap::new();
+    // The texels of each object's top, its shadow a block to the south-east.
+    let texels = |p: &massif_core::objects::Placement, views: &mut HashMap<u32, Vec<(u16, u16)>>, shift: i64| -> Vec<(usize, u16, u16)> {
+        let def = &reg.objects[p.object as usize];
+        let w = def.size[0] as usize;
+        let tops = views.entry(p.object).or_insert_with(|| def.top_view());
+        let mut out = Vec::new();
+        for (c, &(k, y)) in tops.iter().enumerate() {
+            if k == 0 {
+                continue;
+            }
+            let (x, _, z) = p.world(def, (c % w) as i32, 0, (c / w) as i32);
+            let (i, j) = ((x as i64 + shift - x0) >> lod, (z as i64 + shift - z0) >> lod);
+            if (0..CHUNK_PX as i64).contains(&i) && (0..CHUNK_PX as i64).contains(&j) {
+                out.push((j as usize * CHUNK_PX + i as usize, k, y));
+            }
+        }
+        out
+    };
+    let mut shaded = vec![false; pixels.len()];
+    for p in &placed {
+        for (t, _, _) in texels(p, &mut views, 1 << lod) {
+            if !shaded[t] {
+                shaded[t] = true;
+                let c = pixels[t];
+                pixels[t] = Color32::from_rgb((c.r() as f32 * 0.72) as u8, (c.g() as f32 * 0.72) as u8, (c.b() as f32 * 0.72) as u8);
+            }
+        }
+    }
+    for p in &placed {
+        let def = &reg.objects[p.object as usize];
+        let h = def.size[1].max(1) as f32;
+        for (t, k, y) in texels(p, &mut views, 0) {
+            // Higher up, lighter: a crown shows its round.
+            let shade = 0.72 + 0.4 * (y as f32 + 1.0) / h;
+            pixels[t] = to_color(scale(rgb(def.color(k)), shade));
+        }
+    }
 }
 
 // ------------------------------------------------------------------ cache --

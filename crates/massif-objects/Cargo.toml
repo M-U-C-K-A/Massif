@@ -1,0 +1,13 @@
+[package]
+name = "massif-objects"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Custom objects for Massif: schematics read from Sponge .schem, MCEdit .schematic, Axiom .bp, Litematica .litematic and structure .nbt files"
+
+[dependencies]
+massif-core.workspace = true
+flate2.workspace = true
+thiserror.workspace = true
+fastnbt = "2.6"

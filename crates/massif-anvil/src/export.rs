@@ -1,6 +1,6 @@
 //! Exporting a dimension as a Minecraft Java world folder.
 
-use crate::chunk::{ExportContext, Scratch, build_chunk};
+use crate::chunk::{ExportContext, Scratch, build_chunk, tile_placements};
 use crate::level_dat::{Difficulty, GameMode, LevelSettings, Surroundings, WorldBorder, level_dat};
 use crate::region::RegionBuilder;
 use crate::version::{Era, Target};
@@ -183,6 +183,10 @@ pub fn export(
         .try_for_each(|((rx, rz), tiles)| -> Result<(), ExportError> {
             let mut scratch = Scratch::new(&ctx);
             let mut region = RegionBuilder::new();
+            // The objects of the tiles within their reach of each tile:
+            // those of the region's edges stand on its neighbours too.
+            let ring = (ctx.reach + 127) / 128;
+            let mut placed: HashMap<TilePos, Vec<massif_core::objects::Placement>> = HashMap::new();
             for &pos in tiles {
                 if progress.cancel.load(Ordering::Relaxed) {
                     return Err(ExportError::Cancelled);
@@ -190,9 +194,21 @@ pub fn export(
                 let Some(stack) = TileStack::new(dim, pos, true) else {
                     continue;
                 };
+                let mut objects = Vec::new();
+                if ctx.reach > 0 {
+                    let area = pos.rect().expand(ctx.reach);
+                    for tz in pos.z - ring..=pos.z + ring {
+                        for tx in pos.x - ring..=pos.x + ring {
+                            let t = TilePos::new(tx, tz);
+                            let here = placed.entry(t).or_insert_with(|| tile_placements(&ctx, world, dim, t));
+                            objects.extend(here.iter().filter(|p| area.x0 <= p.x && p.x < area.x1 && area.z0 <= p.z && p.z < area.z1).copied());
+                        }
+                    }
+                    objects.sort_unstable_by_key(|p| (p.layer, p.x, p.z));
+                }
                 for cz in 0..CHUNKS_PER_TILE {
                     for cx in 0..CHUNKS_PER_TILE {
-                        let nbt = build_chunk(&ctx, &stack, pos, cx, cz, &mut scratch);
+                        let nbt = build_chunk(&ctx, &stack, pos, cx, cz, &objects, &mut scratch);
                         let chunk_x = pos.x * CHUNKS_PER_TILE as i32 + cx as i32;
                         let chunk_z = pos.z * CHUNKS_PER_TILE as i32 + cz as i32;
                         region.put(

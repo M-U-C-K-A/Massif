@@ -384,6 +384,12 @@ pub fn paint_cover(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, cover: u16,
     paint_plane(edit, brush, cx, cz, salt, cover, |t| &mut t.cover);
 }
 
+/// Paint an object layer by its number (0 removes it). `salt` should
+/// change from dab to dab.
+pub fn paint_objects(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, layer: u16, salt: u64) {
+    paint_plane(edit, brush, cx, cz, salt, layer, |t| &mut t.objects);
+}
+
 /// Paint the terrains of a pattern under the brush (see
 /// [`crate::pattern`]). `salt` should change from dab to dab.
 pub fn paint_pattern(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, salt: u64, pattern: &crate::pattern::PatternSampler) {

@@ -11,6 +11,7 @@ use massif_core::generate::{GenParams, Landform, generate};
 use massif_core::history::History;
 use massif_core::level::LevelKind;
 use massif_core::ops::{self, Anchor, Surface};
+use massif_core::objects::{ObjectDef, ObjectLayerDef, transform_state};
 use massif_core::registry::{BiomeId, CoverDef, TerrainId};
 use massif_core::{Brush, BrushShape, Profile, TilePos, World};
 use std::collections::HashMap;
@@ -525,6 +526,140 @@ fn covers_grow_where_they_are_painted() {
         assert_eq!(r.block(-40, 155, 40), if name == "1.12.2" { "minecraft:reeds" } else { "minecraft:sugar_cane" }, "{name}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
+}
+
+/// A little oak: a trunk 3 high on a block of dirt, leaves around its
+/// top, a vine on the east of its trunk.
+fn little_oak() -> ObjectDef {
+    let (w, h, l) = (5usize, 6usize, 5usize);
+    let palette = vec![
+        "minecraft:air".to_owned(),
+        "minecraft:dirt".to_owned(),
+        "minecraft:oak_log[axis=x]".to_owned(),
+        "minecraft:oak_leaves[distance=1,persistent=true,waterlogged=false]".to_owned(),
+        "minecraft:vine[east=false,north=false,south=false,up=false,west=true]".to_owned(),
+    ];
+    let mut blocks = vec![0u16; w * h * l];
+    let at = |x: usize, y: usize, z: usize| x + z * w + y * w * l;
+    blocks[at(2, 0, 2)] = 1;
+    for y in 1..4 {
+        blocks[at(2, y, 2)] = 2;
+    }
+    for y in 3..6 {
+        for z in 1..4 {
+            for x in 0..5 {
+                if blocks[at(x, y, z)] == 0 {
+                    blocks[at(x, y, z)] = 3;
+                }
+            }
+        }
+    }
+    blocks[at(3, 2, 2)] = 4;
+    ObjectDef::new("Little oak", [w as u16, h as u16, l as u16], palette, blocks)
+}
+
+/// `minecraft:vine[east=true,…]` and `minecraft:vine|east=true,…` (as the
+/// reader gives it, leaving out whether a block is waterlogged) name the
+/// same block.
+fn same_state(want: &str, got: &str) -> bool {
+    let parse = |s: &str, sep: char| {
+        let (name, props) = s.split_once(sep).unwrap_or((s, ""));
+        let mut props: Vec<String> = props.trim_end_matches(']').split(',').filter(|p| !p.is_empty() && !p.starts_with("waterlogged=")).map(str::to_owned).collect();
+        props.sort();
+        (name.to_owned(), props)
+    };
+    parse(want, '[') == parse(got, '|')
+}
+
+/// Objects of a layer painted across the border of two tiles stand whole,
+/// turned and mirrored, in every chunk they reach.
+#[test]
+fn objects_stand_across_chunks_and_tiles() {
+    let mut w = generate(&GenParams {
+        tiles_x: 4,
+        tiles_z: 2,
+        landform: Landform::Hills,
+        seed: 7,
+        ..GenParams::default()
+    });
+    let k = w.registry.objects.len() as u32;
+    w.registry.objects.push(little_oak());
+    let mut layer = ObjectLayerDef::new("Oaks", &[k], &w.registry);
+    layer.spacing = 12;
+    layer.density = 1.0;
+    layer.soil_only = false;
+    let n = w.registry.add_object_layer(layer);
+    let mut h = History::default();
+    h.begin("oaks", 0);
+    {
+        let mut e = h.edit(&mut w, 0);
+        ops::set_height(&mut e, &hard(40.0), 128.0, -40.0, 90.0, Surface::Top);
+        ops::paint_objects(&mut e, &hard(30.0), 128.0, -40.0, n, 1);
+    }
+    h.commit();
+    let snapshot = w.snapshot();
+    let def = &w.registry.objects[k as usize];
+    let dim = &w.dims[0];
+    let mat = Materializer::new(&w.registry, w.meta.seed, dim.min_y);
+    let mut placements = Vec::new();
+    for pos in [TilePos::new(0, -1), TilePos::new(1, -1)] {
+        let stack = TileStack::new(dim, pos, true).unwrap();
+        placements.extend(massif_core::objects::tile_placements(&w.registry, &mat, w.meta.seed as u64, false, &stack, pos));
+    }
+    assert!(placements.len() >= 12, "{} oaks", placements.len());
+    // Some across the two tiles, some across two chunks, every way round.
+    assert!(placements.iter().any(|p| p.bounds(def).x0 < 128 && p.bounds(def).x1 > 128), "{placements:?}");
+    assert!(placements.iter().any(|p| {
+        let b = p.bounds(def);
+        b.x0.div_euclid(16) != (b.x1 - 1).div_euclid(16) && (b.x0 >= 128 || b.x1 <= 128)
+    }));
+    assert!(placements.iter().any(|p| p.mirror) && placements.iter().any(|p| p.turn % 2 == 1));
+
+    let dir = temp_dir("objects");
+    let options = ExportOptions {
+        target: Target::release("1.21.11").unwrap(),
+        ..ExportOptions::default()
+    };
+    export(&snapshot, &dir, &options, &Progress::default()).unwrap();
+    let mut r = Reader::new(&dir);
+    for p in &placements {
+        assert_eq!(p.y, 90, "{p:?}");
+        for by in 0..6 {
+            for bz in 0..5 {
+                for bx in 0..5 {
+                    let k = def.at(bx, by, bz);
+                    let (x, y, z) = p.world(def, bx as i32, by as i32, bz as i32);
+                    let got = r.state(x, y, z);
+                    if by == 0 {
+                        // The dirt goes into the ground, which it leaves as
+                        // it is.
+                        assert_eq!(r.block(x, y, z), "minecraft:grass_block", "{p:?}");
+                        continue;
+                    }
+                    let want = if k == 0 { "minecraft:air".to_owned() } else { transform_state(&def.palette[k as usize], p.turn, p.mirror) };
+                    assert!(same_state(&want, &got), "{p:?} block {bx} {by} {bz} at ({x}, {y}, {z}): want {want}, got {got}");
+                }
+            }
+        }
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    // Before 1.13, numbered: the crowns are there. (The reader cannot
+    // name logs lying along x or z before 1.13: axis bits 4 and 8, as the
+    // game writes them, are beyond what it expects.)
+    let dir = temp_dir("objects-1.12");
+    let options = ExportOptions {
+        target: Target::release("1.12.2").unwrap(),
+        ..ExportOptions::default()
+    };
+    export(&snapshot, &dir, &options, &Progress::default()).unwrap();
+    let mut r = Reader::new(&dir);
+    r.any_version = true;
+    for p in &placements {
+        let (x, y, z) = p.world(def, 2, 5, 2);
+        assert_eq!(r.block(x, y, z), "minecraft:oak_leaves", "{p:?}");
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]

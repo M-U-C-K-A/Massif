@@ -242,6 +242,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             }
         }
         Tool::Cover => cover_settings(ui, tools, doc, blocks),
+        Tool::Objects => object_settings(ui, tools, doc, blocks),
         Tool::PaintBiome => {
             let reg = &doc.world.registry;
             let def = reg.biome(BiomeId(tools.biome));
@@ -808,6 +809,290 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
 
 /// The pattern of the Paint tool: its shape, its terrains and their
 /// weights, and a picture of it.
+/// Whether a file holds an object Massif reads (by its extension).
+pub fn is_object_file(path: &std::path::Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| massif_objects::EXTENSIONS.iter().any(|x| e.eq_ignore_ascii_case(x)))
+}
+
+/// Read objects from files into the world: into layer `into`, or a new
+/// layer named after them, which becomes the one painted. The game's
+/// colours are given to their blocks when its blocks are loaded. Returns
+/// what was read, to say.
+pub fn import_objects(doc: &mut Document, tools: &mut ToolState, files: &[std::path::PathBuf], into: Option<u16>, catalogue: Option<&massif_assets::Catalogue>) -> String {
+    let reg = &mut doc.world.registry;
+    let mut added = Vec::new();
+    let mut failed = Vec::new();
+    let mut formats: Vec<&str> = Vec::new();
+    let mut left_out = 0;
+    for path in files {
+        match massif_objects::read(path) {
+            Ok(mut imported) => {
+                let o = &mut imported.object;
+                o.colors = o
+                    .palette
+                    .iter()
+                    .map(|state| match catalogue.and_then(|c| c.block(state)) {
+                        // Trunks show their bark; the rest, its top.
+                        Some(b) if state.contains("log") || state.contains("wood") || state.contains("stem") => b.side_color,
+                        Some(b) => b.color,
+                        None => massif_core::objects::guess_color(state),
+                    })
+                    .collect();
+                if !formats.contains(&imported.format) {
+                    formats.push(imported.format);
+                }
+                left_out += imported.left_out;
+                reg.objects.push(imported.object);
+                added.push((reg.objects.len() - 1) as u32);
+            }
+            Err(e) => failed.push(format!("{}: {e}", path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())),
+        }
+    }
+    if !added.is_empty() {
+        match into.and_then(|n| n.checked_sub(1)).and_then(|k| reg.object_layers.get_mut(k as usize)).filter(|l| !l.removed) {
+            Some(layer) => layer.objects.extend(added.iter().map(|&k| (k, 1))),
+            None => {
+                let name = if added.len() == 1 { reg.objects[added[0] as usize].name.clone() } else { format!("{} and {} more", reg.objects[added[0] as usize].name, added.len() - 1) };
+                let layer = massif_core::objects::ObjectLayerDef::new(&name, &added, reg);
+                tools.object_layer = reg.add_object_layer(layer);
+            }
+        }
+        doc.mark_changed();
+        if tools.tool != Tool::Objects {
+            tools.select(Tool::Objects);
+        }
+    }
+    let mut note = match added.len() {
+        0 => String::new(),
+        1 => format!("Read 1 object ({})", formats.join(", ")),
+        n => format!("Read {n} objects ({})", formats.join(", ")),
+    };
+    if left_out > 0 {
+        note.push_str(&format!(" · {left_out} blocks of unknown numbers left out"));
+    }
+    if !failed.is_empty() {
+        if !note.is_empty() {
+            note.push_str(" · ");
+        }
+        note.push_str(&format!("Could not read {}", failed.join("; ")));
+    }
+    tools.objects_note = Some(note.clone());
+    note
+}
+
+/// A picture of an object: its blocks seen from a corner, the nearest
+/// drawn last.
+pub fn object_picture(def: &massif_core::objects::ObjectDef) -> egui::ColorImage {
+    let [w, h, l] = def.size.map(|s| s as usize);
+    // Very large objects: seen from above.
+    if w * h * l > 1 << 21 {
+        let tops = def.top_view();
+        let pixels = tops.iter().map(|&(k, y)| if k == 0 { Color32::TRANSPARENT } else { theme::scale(theme::rgb(def.color(k)), 0.7 + 0.3 * y as f32 / h.max(1) as f32) }).collect();
+        return egui::ColorImage::new([w, l], pixels);
+    }
+    let (iw, ih) = ((w + l) * 2 + 2, w + l + 2 * h + 2);
+    let mut pixels = vec![Color32::TRANSPARENT; iw * ih];
+    let mut put = |x: usize, y: usize, c: Color32| {
+        if x < iw && y < ih {
+            pixels[y * iw + x] = c;
+        }
+    };
+    for d in 0..w + l {
+        for y in 0..h {
+            for x in d.saturating_sub(l - 1)..=d.min(w - 1) {
+                let z = d - x;
+                let k = def.at(x, y, z);
+                if k == 0 {
+                    continue;
+                }
+                let c = theme::rgb(def.color(k));
+                let sx = (x + l - 1 - z) * 2;
+                let sy = x + z + 2 * (h - 1 - y);
+                // Top lit, the sides darker.
+                for (dx, dy, f) in [(0, 0, 1.12), (1, 0, 1.12), (2, 0, 1.12), (3, 0, 1.12), (0, 1, 1.12), (1, 1, 1.12), (2, 1, 1.12), (3, 1, 1.12), (0, 2, 0.82), (1, 2, 0.82), (2, 2, 0.64), (3, 2, 0.64), (0, 3, 0.82), (1, 3, 0.82), (2, 3, 0.64), (3, 3, 0.64)] {
+                    put(sx + dx, sy + dy, theme::scale(c, f));
+                }
+            }
+        }
+    }
+    egui::ColorImage::new([iw, ih], pixels)
+}
+
+/// The picture of object `k`, made once.
+fn object_texture(ui: &Ui, k: usize, def: &massif_core::objects::ObjectDef) -> egui::TextureHandle {
+    let id = egui::Id::unique(("object picture", k));
+    let key = (def.name.clone(), def.size, def.blocks.len(), def.colors.len());
+    if let Some((cached, t)) = ui.ctx().data(|d| d.get_temp::<((String, [u16; 3], usize, usize), egui::TextureHandle)>(id))
+        && cached == key
+    {
+        return t;
+    }
+    let t = ui.ctx().load_texture(format!("object {k}"), object_picture(def), egui::TextureOptions::NEAREST);
+    ui.ctx().data_mut(|d| d.insert_temp(id, (key, t.clone())));
+    t
+}
+
+/// The object layers of the world, and the one painted: its objects and
+/// how they stand.
+fn object_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary) {
+    let pal = Palette::of(ui);
+    let before = (doc.world.registry.object_layers.clone(), doc.world.registry.objects.len());
+    let pick = |title: &str| {
+        rfd::FileDialog::new()
+            .set_title(title)
+            .add_filter("Schematics", &massif_objects::EXTENSIONS)
+            .pick_files()
+            .unwrap_or_default()
+    };
+    if ui
+        .button(theme::with_icon(Icon::FolderOpen, "Import objects…"))
+        .on_hover_text("Sponge .schem, MCEdit .schematic, Axiom .bp, Litematica .litematic, structure .nbt")
+        .clicked()
+    {
+        let files = pick("Import objects");
+        if !files.is_empty() {
+            import_objects(doc, tools, &files, None, blocks.catalogue.as_deref());
+        }
+    }
+    hint(ui, "Trees, rocks, ruins from .schem, .schematic, .bp, .litematic or .nbt files — or drop them on the window.");
+    if let Some(note) = &tools.objects_note {
+        ui.label(RichText::new(note).size(11.5).color(if note.contains("Could not") { pal.danger } else { pal.weak }));
+    }
+
+    // The layers to choose from.
+    let mut picked = None;
+    ui.spacing_mut().item_spacing.y = 2.0;
+    for (k, layer) in doc.world.registry.object_layers.iter().enumerate() {
+        if layer.removed {
+            continue;
+        }
+        let n = k as u16 + 1;
+        let selected = tools.object_layer == n;
+        let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
+        let fill = if selected {
+            pal.accent_soft
+        } else if response.hovered() {
+            pal.header
+        } else {
+            Color32::TRANSPARENT
+        };
+        let painter = ui.painter();
+        painter.rect(rect, 6, fill, if selected { Stroke::new(1.0, pal.accent) } else { Stroke::NONE }, StrokeKind::Inside);
+        let dot = Rect::from_center_size(rect.left_center() + vec2(13.0, 0.0), vec2(11.0, 11.0));
+        painter.rect(dot, 3, theme::rgb(layer.color), Stroke::new(1.0, Color32::from_black_alpha(60)), StrokeKind::Inside);
+        painter.text(rect.left_center() + vec2(26.0, 0.0), egui::Align2::LEFT_CENTER, &layer.name, egui::FontId::proportional(12.5), pal.text);
+        let count = layer.objects.len();
+        painter.text(rect.right_center() - vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, format!("{count} object{}", if count == 1 { "" } else { "s" }), egui::FontId::proportional(11.0), pal.weak);
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &layer.name));
+        if response.clicked() {
+            picked = Some(n);
+        }
+    }
+    ui.spacing_mut().item_spacing.y = 4.0;
+    if let Some(n) = picked {
+        tools.object_layer = n;
+    }
+
+    // The selected layer.
+    let k = tools.object_layer.checked_sub(1).map(|k| k as usize);
+    if k.and_then(|k| doc.world.registry.object_layers.get(k)).is_none_or(|l| l.removed) {
+        if doc.world.registry.object_layers.iter().all(|l| l.removed) {
+            hint(ui, "No objects yet: import some to paint them.");
+        }
+        return;
+    }
+    let k = k.expect("checked above");
+    let reg = &mut doc.world.registry;
+    let objects = std::mem::take(&mut reg.objects);
+    let layer = &mut reg.object_layers[k];
+    ui.add_space(4.0);
+    section(ui, Icon::TreePine, &layer.name.clone());
+    ui.horizontal(|ui| {
+        ui.add_sized([72.0, 18.0], egui::Label::new("Name"));
+        ui.add(egui::TextEdit::singleline(&mut layer.name).desired_width((ui.available_width() - 40.0).max(60.0)));
+        let mut c = Color32::from_rgb(layer.color[0], layer.color[1], layer.color[2]);
+        if egui::color_picker::color_edit_button_srgba(ui, &mut c, egui::color_picker::Alpha::Opaque).on_hover_text("Its colour in the list").changed() {
+            layer.color = [c.r(), c.g(), c.b()];
+        }
+    });
+    tip_row(ui, "Spacing", "One object at most in each square of this side", |ui| {
+        ui.add(crate::widgets::Field::new(&mut layer.spacing, 2..=256).suffix(" blocks").max_decimals(0))
+    });
+    tip_row(ui, "Density", "Share of those squares where one stands", |ui| {
+        ui.add(
+            crate::widgets::Field::new(&mut layer.density, 0.0..=1.0)
+                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
+        )
+    });
+    tip_row(ui, "Sink", "How many blocks into the ground they go (rocks bedded in)", |ui| {
+        ui.add(crate::widgets::Field::new(&mut layer.sink, -16..=32).suffix(" blocks").max_decimals(0))
+    });
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut layer.rotate, "Turn at random").on_hover_text("A quarter turn picked for each");
+        ui.checkbox(&mut layer.mirror, "Mirror").on_hover_text("Half of them mirrored");
+    });
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut layer.soil_only, "Only on soil").on_hover_text("Grass, dirt, podzol, moss, mud…");
+        ui.checkbox(&mut layer.underwater, "Under water").on_hover_text("Coral, wrecks: in the water rather than the air");
+    });
+    ui.checkbox(&mut layer.replace, "Replace the ground").on_hover_text("Their blocks take the place of the ground they reach; otherwise only of air, water and plants");
+
+    section(ui, Icon::Boxes, &format!("Objects · {}", layer.objects.len()));
+    let total: f32 = layer.objects.iter().map(|o| o.1 as f32).sum::<f32>().max(1.0);
+    let mut remove = None;
+    for (row, (index, weight)) in layer.objects.iter_mut().enumerate() {
+        let Some(def) = objects.get(*index as usize) else { continue };
+        ui.horizontal(|ui| {
+            let texture = object_texture(ui, *index as usize, def);
+            let (r, _) = ui.allocate_exact_size(vec2(44.0, 44.0), Sense::hover());
+            let size = texture.size_vec2();
+            let fit = (r.width() / size.x).min(r.height() / size.y);
+            ui.painter().image(texture.id(), Rect::from_center_size(r.center(), size * fit), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 1.0;
+                ui.add(egui::Label::new(RichText::new(&def.name).strong()).truncate()).on_hover_text(&def.source);
+                ui.label(RichText::new(format!("{} × {} × {} · {} blocks", def.size[0], def.size[1], def.size[2], def.count())).size(11.0).color(pal.weak));
+                ui.horizontal(|ui| {
+                    ui.add(egui::DragValue::new(weight).range(1..=1000).speed(0.2)).on_hover_text("Weight: how often it stands against the others");
+                    ui.label(RichText::new(format!("{:.0}%", *weight as f32 * 100.0 / total)).size(11.0).color(pal.weak));
+                    if ui.add(egui::Button::new(theme::glyph(Icon::X).to_string()).frame(false).small()).on_hover_text("Take it out of the layer").clicked() {
+                        remove = Some(row);
+                    }
+                });
+            });
+        });
+    }
+    if let Some(row) = remove {
+        layer.objects.remove(row);
+    }
+    let add = ui.button(theme::with_icon(Icon::Plus, "Add objects…")).on_hover_text("Read more files into this layer").clicked();
+    if layer.objects.is_empty() {
+        hint(ui, "Nothing stands yet: add objects.");
+    }
+    ui.add_space(6.0);
+    let removed = ui
+        .button(RichText::new(theme::with_icon(Icon::Trash2, "Remove this layer")).color(pal.danger))
+        .on_hover_text("Nothing stands where it was painted any more")
+        .clicked();
+    if removed {
+        layer.removed = true;
+    }
+    reg.objects = objects;
+    if removed {
+        tools.object_layer = reg.object_layers.iter().position(|l| !l.removed).map_or(0, |k| k as u16 + 1);
+    }
+    if add {
+        let files = pick("Add objects");
+        if !files.is_empty() {
+            import_objects(doc, tools, &files, Some(k as u16 + 1), blocks.catalogue.as_deref());
+        }
+    }
+    if (doc.world.registry.object_layers.clone(), doc.world.registry.objects.len()) != before {
+        doc.mark_changed();
+    }
+}
+
 /// Plants offered when the game's blocks are not loaded.
 const COMMON_PLANTS: [&str; 24] = [
     "minecraft:short_grass",
