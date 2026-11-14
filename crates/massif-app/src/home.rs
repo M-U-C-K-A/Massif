@@ -7,7 +7,7 @@
 //! dots, lit by the accent colour.
 
 use crate::theme::{self, Icon, Palette, RichTextExt};
-use crate::widgets::Field;
+use crate::widgets::{Field, Part, button_group, input_group};
 use egui::{Align, Align2, Color32, CursorIcon, FontId, Rect, Response, RichText, Sense, Stroke, StrokeKind, TextureHandle, Ui, UiBuilder, pos2, vec2};
 use massif_core::generate::{FromHeightmap, GenParams, Landform};
 use massif_core::graph::Template;
@@ -148,6 +148,17 @@ struct Backdrop {
     cells: TextureHandle,
     grid: TextureHandle,
     pitch: usize,
+    twinkles: Vec<Twinkle>,
+}
+
+/// A dot of the ridges that lights up now and then, each at its own pace.
+#[derive(Debug, Clone, Copy)]
+struct Twinkle {
+    col: u16,
+    row: u16,
+    color: Color32,
+    phase: f32,
+    speed: f32,
 }
 
 pub struct Home {
@@ -328,18 +339,14 @@ impl Home {
         ui.add_space(2.0);
         ui.label(RichText::new(subtitle).size(13.0).color(pal.weak));
         ui.add_space(22.0);
-        egui::Frame::new()
-            .fill(card_fill(&pal))
-            .stroke(Stroke::new(1.0, pal.border))
-            .corner_radius(14)
-            .inner_margin(egui::Margin::same(16))
-            .show(ui, |ui| {
-                ui.set_width(width - 34.0);
-                match self.page {
-                    Page::NewMap => self.new_map_card(ui, action),
-                    Page::FromHeightmap => self.heightmap_card(ui, action),
-                }
-            });
+        // Laid on the backdrop itself, not in a card.
+        ui.allocate_ui_with_layout(vec2(width - 34.0, 0.0), egui::Layout::top_down(Align::Min), |ui| {
+            ui.set_width(width - 34.0);
+            match self.page {
+                Page::NewMap => self.new_map_card(ui, action),
+                Page::FromHeightmap => self.heightmap_card(ui, action),
+            }
+        });
         ui.add_space(14.0);
         let links: [(Icon, &str, HomeAction); 3] = [
             (Icon::FolderOpen, "Open a map", HomeAction::Open),
@@ -357,11 +364,11 @@ impl Home {
         let bg = backdrop_fill(&pal);
         let shade = egui::epaint::Shadow {
             offset: [0, 0],
-            blur: 110,
-            spread: 10,
-            color: Color32::from_rgba_unmultiplied(bg.r(), bg.g(), bg.b(), if pal.dark { 235 } else { 225 }),
+            blur: 150,
+            spread: 24,
+            color: Color32::from_rgba_unmultiplied(bg.r(), bg.g(), bg.b(), if pal.dark { 242 } else { 232 }),
         };
-        ui.painter().set(veil, shade.as_shape(ui.min_rect().expand2(vec2(30.0, 16.0)), 60));
+        ui.painter().set(veil, shade.as_shape(ui.min_rect().expand2(vec2(40.0, 24.0)), 80));
     }
 
     fn new_map_card(&mut self, ui: &mut Ui, action: &mut Option<HomeAction>) {
@@ -384,17 +391,11 @@ impl Home {
                 ui.add_space(12.0);
                 let third = ((left - 76.0 - 12.0) / 3.0).floor();
                 setting(ui, "Size", |ui| {
-                    for (blocks, label) in [(512, "512"), (1024, "1k"), (2048, "2k"), (4096, "4k"), (8192, "8k"), (16384, "16k")] {
-                        let on = nm.width == blocks && nm.depth == blocks;
-                        if chip(ui, label, on).on_hover_text(format!("{blocks} × {blocks} blocks")).clicked() {
-                            nm.width = blocks;
-                            nm.depth = blocks;
-                        }
-                    }
-                });
-                setting(ui, "", |ui| {
-                    ui.add(egui::DragValue::new(&mut nm.width).range(128..=65536).speed(128.0).suffix(" ×"));
-                    ui.add(egui::DragValue::new(&mut nm.depth).range(128..=65536).speed(128.0).suffix(" blocks"));
+                    input_group(
+                        ui,
+                        "home size",
+                        &mut [Part::Int(&mut nm.width, 128..=65536, 64.0), Part::Text("×"), Part::Int(&mut nm.depth, 128..=65536, 64.0), Part::Text("blocks")],
+                    );
                     // Whole tiles only.
                     nm.width = (nm.width + 127) / 128 * 128;
                     nm.depth = (nm.depth + 127) / 128 * 128;
@@ -458,19 +459,22 @@ impl Home {
                 });
                 setting(ui, "Water", |ui| {
                     ui.add(Field::new(&mut nm.params.sea_level, bottom + 1..=top - 2).text("Level").width(third));
-                    if chip(ui, "Lava", nm.params.lava).on_hover_text("Lava instead of water, with scorched shores").clicked() {
-                        nm.params.lava = !nm.params.lava;
+                    let lava = nm.params.lava;
+                    match button_group(ui, "home fluid", &["Water", "Lava"], &[!lava, lava]) {
+                        Some(0) => nm.params.lava = false,
+                        Some(_) => nm.params.lava = true,
+                        None => {}
                     }
                     if !nm.params.lava {
                         let beaches = nm.params.beaches && nm.params.surface.is_none();
-                        if chip(ui, "Beaches", beaches).on_hover_text("Sand along the shores").clicked() {
+                        if button_group(ui, "home beaches", &["Beaches"], &[beaches]).is_some() {
                             nm.params.beaches = !nm.params.beaches;
                         }
                     }
                 });
                 setting(ui, "Seed", |ui| {
-                    ui.add(egui::TextEdit::singleline(&mut nm.seed).desired_width(third * 1.4));
-                    if ui.button(theme::glyph(Icon::Dices).to_string()).on_hover_text("Another seed").clicked() {
+                    let (_, dice) = input_group(ui, "home seed", &mut [Part::Edit(&mut nm.seed, third * 1.4), Part::Button(Icon::Dices, "Another seed")]);
+                    if dice.is_some() {
                         nm.seed = random_seed().to_string();
                     }
                 });
@@ -604,7 +608,8 @@ impl Home {
         let key = (cols, rows, pal.accent.to_array(), pal.dark);
         if self.backdrop.as_ref().is_none_or(|b| b.key != key || b.pitch != pitch) {
             let nearest = egui::TextureOptions::NEAREST;
-            let cells = ui.ctx().load_texture("home backdrop", ridges(cols, rows, pal.accent, pal.dark, bg), nearest);
+            let (image, twinkles) = ridges(cols, rows, pal.accent, pal.dark, bg);
+            let cells = ui.ctx().load_texture("home backdrop", image, nearest);
             let grid = ui.ctx().load_texture(
                 "home dots",
                 dots(pitch, bg),
@@ -613,13 +618,34 @@ impl Home {
                     ..nearest
                 },
             );
-            self.backdrop = Some(Backdrop { key, cells, grid, pitch });
+            self.backdrop = Some(Backdrop {
+                key,
+                cells,
+                grid,
+                pitch,
+                twinkles,
+            });
         }
         if let Some(b) = &self.backdrop {
             let shown = Rect::from_min_size(rect.min, vec2(cols as f32, rows as f32) * pitch as f32 / ppp);
             let painter = ui.painter_at(rect);
             painter.image(b.cells.id(), shown, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             painter.image(b.grid.id(), shown, Rect::from_min_max(pos2(0.0, 0.0), pos2(cols as f32, rows as f32)), Color32::WHITE);
+            // Now and then a dot of the ridges lights up: barely, a few at
+            // a time.
+            let t = ui.input(|i| i.time) as f32;
+            let cell = pitch as f32 / ppp;
+            let dot = (pitch - (pitch / 3).max(1)) as f32 / ppp;
+            for tw in &b.twinkles {
+                let a = (0.5 + 0.5 * (t * tw.speed + tw.phase).sin()).powi(30);
+                if a < 0.03 {
+                    continue;
+                }
+                let r = Rect::from_min_size(shown.min + vec2(tw.col as f32 * cell, tw.row as f32 * cell), vec2(dot, dot));
+                let c = if pal.dark { theme::mix(tw.color, Color32::WHITE, 0.55) } else { theme::mix(tw.color, pal.accent, 0.6) };
+                painter.rect_filled(r, 0, Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), (a * 170.0) as u8));
+            }
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(66));
         }
     }
 }
@@ -632,12 +658,6 @@ fn sidebar_fill(pal: &Palette) -> Color32 {
 
 fn backdrop_fill(pal: &Palette) -> Color32 {
     if pal.dark { Color32::from_rgb(8, 8, 9) } else { Color32::from_rgb(248, 248, 249) }
-}
-
-fn card_fill(pal: &Palette) -> Color32 {
-    let base = if pal.dark { Color32::from_rgb(20, 20, 23) } else { Color32::from_rgb(255, 255, 255) };
-    let tinted = theme::mix(base, pal.accent, if pal.dark { 0.035 } else { 0.015 });
-    Color32::from_rgba_unmultiplied(tinted.r(), tinted.g(), tinted.b(), 240)
 }
 
 /// An entry of the sidebar.
@@ -745,46 +765,16 @@ fn setting(ui: &mut Ui, name: &str, add: impl FnOnce(&mut Ui)) {
 /// The build limits of a new map: the top among Minecraft's own and taller
 /// ones, the bottom as deep as it may go.
 fn limits(ui: &mut Ui, min_y: &mut i32, max_y: &mut i32) {
-    for (top, label, tip) in [
-        (320, "320", "Minecraft's own height: −64 to 320"),
-        (512, "512", "Up to 512, with a data pack"),
-        (1024, "1024", "Up to 1024, with a data pack"),
-        (2032, "2032", "As high as Minecraft goes: 2032, with a data pack"),
-    ] {
-        if chip(ui, label, *max_y == top).on_hover_text(tip).clicked() {
-            *max_y = top;
-        }
+    const TOPS: [i32; 4] = [320, 512, 1024, 2032];
+    let on = TOPS.map(|t| *max_y == t);
+    if let Some(k) = button_group(ui, "build limits", &["320", "512", "1024", "2032"], &on) {
+        *max_y = TOPS[k];
     }
-    ui.add_space(4.0);
     let mut bottom = *min_y;
-    ui.add(egui::DragValue::new(&mut bottom).range(-2032..=-64).speed(16.0).prefix("from Y "))
-        .on_hover_text("The bottom of the world: −64, or deeper with a data pack (to −2032)");
+    input_group(ui, "build bottom", &mut [Part::Text("from Y"), Part::Int(&mut bottom, -2032..=-64, 16.0)]);
     let (b, t) = massif_core::generate::build_limits(bottom, *max_y);
     *min_y = b;
     *max_y = t;
-}
-
-/// A small button that is on or off.
-fn chip(ui: &mut Ui, text: &str, on: bool) -> Response {
-    let pal = Palette::of(ui);
-    let galley = ui.painter().layout_no_wrap(text.to_owned(), FontId::proportional(12.5), pal.text);
-    let (rect, response) = ui.allocate_exact_size(vec2(galley.size().x + 18.0, 24.0), Sense::click());
-    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, on, text));
-    let base = pal.control();
-    let fill = if on {
-        theme::mix(base, pal.accent, 0.28)
-    } else if response.hovered() {
-        theme::mix(base, pal.text, 0.06)
-    } else {
-        base
-    };
-    let stroke = if on { pal.accent.gamma_multiply(0.7) } else { pal.border };
-    ui.painter().rect(rect, 7, fill, Stroke::new(1.0, stroke), StrokeKind::Inside);
-    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, if on { pal.text } else { theme::mix(pal.text, pal.weak, 0.4) });
-    if response.hovered() {
-        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-    }
-    response
 }
 
 /// The main button: filled with the accent colour, its key after it.
@@ -873,6 +863,13 @@ fn preview(ui: &mut Ui, nm: &mut NewMap) {
         nm.preview = Some((key, texture));
     }
     let (rect, _) = ui.allocate_exact_size(vec2(PREVIEW, PREVIEW), Sense::hover());
+    let shadow = egui::epaint::Shadow {
+        offset: [0, 10],
+        blur: 34,
+        spread: 0,
+        color: Color32::from_black_alpha(if pal.dark { 170 } else { 60 }),
+    };
+    ui.painter().add(shadow.as_shape(rect, 10));
     ui.painter().rect_filled(rect, 10, pal.canvas);
     if let Some((_, texture)) = &nm.preview {
         // Maps that are not square keep their proportions.
@@ -987,7 +984,7 @@ pub fn preview_image(params: &GenParams, reg: &massif_core::Registry, n: usize) 
 /// from far (high on the screen) to near, their crests bright, their sides
 /// fading into the dark, a sun going down behind them in the accent colour.
 /// Halftoned with an ordered dither, as an ASCII picture would be.
-fn ridges(cols: usize, rows: usize, accent: Color32, dark: bool, bg: Color32) -> egui::ColorImage {
+fn ridges(cols: usize, rows: usize, accent: Color32, dark: bool, bg: Color32) -> (egui::ColorImage, Vec<Twinkle>) {
     const LAYERS: usize = 8;
     let noise = massif_core::noise::Noise::new(0x6d61_7373);
     let aspect = cols as f32 / rows.max(1) as f32;
@@ -1012,6 +1009,7 @@ fn ridges(cols: usize, rows: usize, accent: Color32, dark: bool, bg: Color32) ->
     const BAYER: [[f32; 4]; 4] = [[0.0, 8.0, 2.0, 10.0], [12.0, 4.0, 14.0, 6.0], [3.0, 11.0, 1.0, 9.0], [15.0, 7.0, 13.0, 5.0]];
     let ink = if dark { Color32::from_rgb(196, 198, 204) } else { Color32::from_rgb(60, 62, 70) };
     let mut pixels = vec![bg; cols * rows];
+    let mut twinkles = Vec::new();
     for (j, row) in pixels.chunks_mut(cols).enumerate() {
         let v = (j as f32 + 0.5) / rows as f32;
         for (i, px) in row.iter_mut().enumerate() {
@@ -1036,9 +1034,21 @@ fn ridges(cols: usize, rows: usize, accent: Color32, dark: bool, bg: Color32) ->
             let tint = (glow * 2.2).min(1.0);
             let colour = theme::mix(ink, accent, tint);
             *px = if dark { theme::scale(colour, b) } else { theme::mix(bg, colour, b * 0.85) };
+            // A few of the brighter dots twinkle.
+            let hash = (i as u32).wrapping_mul(0x9e37_79b1) ^ (j as u32).wrapping_mul(0x85eb_ca77);
+            let hash = hash ^ (hash >> 15);
+            if b > 0.3 && hash.is_multiple_of(7) && twinkles.len() < 1600 {
+                twinkles.push(Twinkle {
+                    col: i as u16,
+                    row: j as u16,
+                    color: colour,
+                    phase: (hash >> 8) as f32 / (1u32 << 24) as f32 * std::f32::consts::TAU,
+                    speed: 0.45 + 0.9 * ((hash >> 3) & 0xff) as f32 / 255.0,
+                });
+            }
         }
     }
-    egui::ColorImage::new([cols, rows], pixels)
+    (egui::ColorImage::new([cols, rows], pixels), twinkles)
 }
 
 /// One dot of the backdrop: the dot clear, the gap around it in the

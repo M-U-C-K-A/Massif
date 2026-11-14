@@ -4830,6 +4830,10 @@ mod tests {
             let home = h.state_mut().home.as_mut().unwrap();
             home.new_map.params.lava = true;
             home.new_map.params.sea_level = 96;
+            // The ground under the lava's level, so that it has lakes and
+            // shores whatever the seed.
+            home.new_map.params.level = Some(88.0);
+            home.new_map.seed = "7".into();
             home.new_map.params.landform = Landform::Mountains;
             home.new_map.width = 1024;
             home.new_map.depth = 1024;

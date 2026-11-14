@@ -83,8 +83,9 @@ Massif opens on its **home screen**, not on a map made up for it: on the
 left, the ways in — a new map, a map from a height map, a map of your own to
 open (`.massif`), a WorldPainter world to import (`.world`) — and the maps
 opened lately (or, at first, an empty list that says so); in the middle,
-the settings of a new map with its preview, and **Create map**. Behind
-them, ridges drawn in dots, lit by the accent colour. A `.massif`, a
+the settings of a new map with its preview, and **Create map**, laid on the
+backdrop itself: ridges drawn in dots, lit by the accent colour, a few of
+them twinkling now and then. A `.massif`, a
 `.world` or a height map dropped on the window opens. **File ▸ New** (⌘N)
 comes back to it, with a way back to the open map (Esc).
 
@@ -153,8 +154,8 @@ brushes, terrain and biome palettes, levels or world info.
 
 ### New worlds and export
 
-A new map (the home screen) takes a name, a size (512 to 16k, or any
-multiple of 128 blocks), its **height** — Minecraft's own (−64 to 320) or
+A new map (the home screen) takes a name, a size (width × depth, in
+multiples of 128 blocks, up to 65,536), its **height** — Minecraft's own (−64 to 320) or
 taller, up to 512, 1024 or 2032, and as deep as −2032 — its land — a
 topography (flat, plains, hills, mountains, islands) with its relief height
 (up to fifteen times the landform's in a tall world; peaks close in on the

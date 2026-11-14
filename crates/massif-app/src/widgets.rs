@@ -4,9 +4,9 @@
 //! filled up to its value, the value written in it. Dragged sideways it
 //! changes (Shift: finely); clicked, it is typed in.
 
-use crate::theme::{self, Palette};
+use crate::theme::{self, Icon, Palette};
 use egui::emath::Numeric;
-use egui::{Align2, CursorIcon, FontId, Rect, Response, Sense, SliderClamping, Stroke, StrokeKind, TextEdit, Ui, Widget, vec2};
+use egui::{Align2, Color32, CornerRadius, CursorIcon, FontId, Rect, Response, Sense, SliderClamping, Stroke, StrokeKind, TextEdit, Ui, UiBuilder, Widget, pos2, vec2};
 use std::ops::RangeInclusive;
 
 type Formatter<'a> = Box<dyn 'a + Fn(f64, RangeInclusive<usize>) -> String>;
@@ -265,3 +265,165 @@ fn chevron(ui: &Ui, rect: Rect, visuals: &egui::style::WidgetVisuals, _open: boo
     let stroke = Stroke::new(1.4, visuals.fg_stroke.color.gamma_multiply(0.75));
     ui.painter().line(vec![c + vec2(-s, -s * 0.45), c + vec2(0.0, s * 0.55), c + vec2(s, -s * 0.45)], stroke);
 }
+
+// --------------------------------------------------------------- groups --
+//
+// As shadcn's input and button groups: the parts of one setting joined in
+// one outline, a hairline between them, what is not to be edited muted.
+
+const GROUP_H: f32 = 28.0;
+const GROUP_R: u8 = 8;
+
+fn group_fill(pal: &Palette) -> Color32 {
+    let c = pal.control();
+    Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 235)
+}
+
+/// The rounding of part `k` of `n` joined parts.
+fn corners(k: usize, n: usize) -> CornerRadius {
+    let (first, last) = (k == 0, k + 1 == n);
+    CornerRadius {
+        nw: if first { GROUP_R } else { 0 },
+        sw: if first { GROUP_R } else { 0 },
+        ne: if last { GROUP_R } else { 0 },
+        se: if last { GROUP_R } else { 0 },
+    }
+}
+
+/// A child of `ui` over `rect` whose widgets draw no frame of their own.
+fn bare(ui: &mut Ui, rect: Rect) -> Ui {
+    let mut child = ui.new_child(UiBuilder::new().max_rect(rect).layout(egui::Layout::centered_and_justified(egui::Direction::TopDown)));
+    let v = child.visuals_mut();
+    v.extreme_bg_color = Color32::TRANSPARENT;
+    v.text_edit_bg_color = Some(Color32::TRANSPARENT);
+    for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] {
+        w.bg_fill = Color32::TRANSPARENT;
+        w.weak_bg_fill = Color32::TRANSPARENT;
+        w.bg_stroke = Stroke::NONE;
+        w.expansion = 0.0;
+    }
+    child
+}
+
+/// One part of an input group.
+pub enum Part<'a> {
+    /// Muted words: a unit, a sign, a name.
+    Text(&'a str),
+    /// A whole number to type or drag: its range, how fast it drags.
+    Int(&'a mut i32, RangeInclusive<i32>, f64),
+    /// A line of text, this wide.
+    Edit(&'a mut String, f32),
+    /// A button showing an icon, with what it does.
+    Button(Icon, &'a str),
+}
+
+/// Parts joined in one outline, as one control. Returns whether a value
+/// changed, and the index of a button clicked.
+pub fn input_group(ui: &mut Ui, id: &str, parts: &mut [Part]) -> (bool, Option<usize>) {
+    let pal = Palette::of(ui);
+    let font = FontId::proportional(12.5);
+    let widths: Vec<f32> = parts
+        .iter()
+        .map(|p| match p {
+            Part::Text(t) => ui.painter().layout_no_wrap((*t).to_owned(), font.clone(), pal.weak).size().x + 20.0,
+            Part::Int(..) => 66.0,
+            Part::Edit(_, w) => *w,
+            Part::Button(..) => 32.0,
+        })
+        .collect();
+    let (rect, _) = ui.allocate_exact_size(vec2(widths.iter().sum(), GROUP_H), Sense::hover());
+    let painter = ui.painter().clone();
+    painter.rect_filled(rect, GROUP_R, group_fill(&pal));
+    let n = parts.len();
+    let (mut changed, mut clicked) = (false, None);
+    let mut x = rect.min.x;
+    for (k, (part, w)) in parts.iter_mut().zip(&widths).enumerate() {
+        let seg = Rect::from_min_size(pos2(x, rect.min.y), vec2(*w, GROUP_H));
+        match part {
+            Part::Text(t) => {
+                painter.rect_filled(seg, corners(k, n), theme::mix(pal.control(), pal.text, 0.045));
+                painter.text(seg.center(), Align2::CENTER_CENTER, *t, font.clone(), pal.weak);
+            }
+            Part::Int(v, range, speed) => {
+                let mut child = bare(ui, seg.shrink2(vec2(4.0, 3.0)));
+                changed |= child.add(egui::DragValue::new(*v).range(range.clone()).speed(*speed)).changed();
+            }
+            Part::Edit(text, _) => {
+                let mut child = bare(ui, seg.shrink2(vec2(2.0, 3.0)));
+                changed |= child
+                    .add(
+                        TextEdit::singleline(*text)
+                            .frame(egui::Frame::NONE)
+                            .margin(vec2(8.0, 0.0))
+                            .font(font.clone())
+                            .align(Align2::LEFT_CENTER),
+                    )
+                    .changed();
+            }
+            Part::Button(icon, tip) => {
+                let r = ui.interact(seg, egui::Id::unique((id, k)), Sense::click()).on_hover_text(*tip);
+                r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, *tip));
+                if r.hovered() {
+                    painter.rect_filled(seg, corners(k, n), theme::mix(pal.control(), pal.text, 0.08));
+                    ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                }
+                painter.text(seg.center(), Align2::CENTER_CENTER, theme::glyph(*icon).to_string(), FontId::proportional(13.5), pal.text);
+                if r.clicked() {
+                    clicked = Some(k);
+                }
+            }
+        }
+        if k > 0 {
+            painter.vline(x, seg.y_range(), Stroke::new(1.0, pal.border));
+        }
+        x += w;
+    }
+    painter.rect_stroke(rect, GROUP_R, Stroke::new(1.0, pal.border), StrokeKind::Inside);
+    (changed, clicked)
+}
+
+/// Buttons joined in one outline, as shadcn's button groups; those `on`
+/// are pressed. Returns the one clicked.
+pub fn button_group(ui: &mut Ui, id: &str, labels: &[&str], on: &[bool]) -> Option<usize> {
+    let pal = Palette::of(ui);
+    let font = FontId::proportional(12.5);
+    let galleys: Vec<_> = labels.iter().map(|t| ui.painter().layout_no_wrap((*t).to_owned(), font.clone(), pal.text)).collect();
+    let widths: Vec<f32> = galleys.iter().map(|g| g.size().x + 24.0).collect();
+    let (rect, _) = ui.allocate_exact_size(vec2(widths.iter().sum(), GROUP_H), Sense::hover());
+    let painter = ui.painter().clone();
+    painter.rect_filled(rect, GROUP_R, group_fill(&pal));
+    let n = labels.len();
+    let mut clicked = None;
+    let mut x = rect.min.x;
+    for (k, (galley, w)) in galleys.into_iter().zip(&widths).enumerate() {
+        let seg = Rect::from_min_size(pos2(x, rect.min.y), vec2(*w, GROUP_H));
+        let pressed = on.get(k).copied().unwrap_or(false);
+        let r = ui.interact(seg, egui::Id::unique((id, k)), Sense::click());
+        r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, pressed, labels[k]));
+        let fill = if pressed {
+            theme::mix(pal.control(), pal.text, 0.12)
+        } else if r.hovered() {
+            theme::mix(pal.control(), pal.text, 0.06)
+        } else {
+            Color32::TRANSPARENT
+        };
+        if fill != Color32::TRANSPARENT {
+            painter.rect_filled(seg, corners(k, n), fill);
+        }
+        if r.hovered() {
+            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+        }
+        let ink = if pressed { pal.text } else { theme::mix(pal.text, pal.weak, 0.45) };
+        painter.galley_with_override_text_color(seg.center() - galley.size() / 2.0, galley, ink);
+        if k > 0 {
+            painter.vline(x, seg.y_range(), Stroke::new(1.0, pal.border));
+        }
+        if r.clicked() {
+            clicked = Some(k);
+        }
+        x += w;
+    }
+    painter.rect_stroke(rect, GROUP_R, Stroke::new(1.0, pal.border), StrokeKind::Inside);
+    clicked
+}
+
