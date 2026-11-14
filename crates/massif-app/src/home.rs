@@ -766,23 +766,9 @@ fn setting(ui: &mut Ui, name: &str, add: impl FnOnce(&mut Ui)) {
 /// ones, the bottom as deep as it may go.
 fn limits(ui: &mut Ui, min_y: &mut i32, max_y: &mut i32) {
     const TOPS: [i32; 4] = [320, 512, 1024, 2032];
-    // The most Minecraft allows: 4064 blocks, from −2032 to 2032.
-    let (deepest, highest) = massif_core::generate::MAX_LIMITS;
-    let full = *min_y == deepest && *max_y == highest;
-    let mut on: Vec<bool> = TOPS.iter().map(|t| *max_y == *t && !full).collect();
-    on.push(full);
-    match button_group(ui, "build limits", &["320", "512", "1024", "2032", "4064"], &on) {
-        Some(4) => {
-            *min_y = deepest;
-            *max_y = highest;
-        }
-        Some(k) => {
-            if full {
-                *min_y = massif_core::generate::VANILLA_LIMITS.0;
-            }
-            *max_y = TOPS[k];
-        }
-        None => {}
+    let on = TOPS.map(|t| *max_y == t);
+    if let Some(k) = button_group(ui, "build limits", &["320", "512", "1024", "2032"], &on) {
+        *max_y = TOPS[k];
     }
     let mut bottom = *min_y;
     input_group(ui, "build bottom", &mut [Part::Text("from Y"), Part::Int(&mut bottom, -2032..=-64, 16.0)]);

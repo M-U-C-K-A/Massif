@@ -4,7 +4,7 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 
 **A home screen.** Massif opens on it, not on a map made up for it: on the left, a new map, a map from a height map, a map of your own to open, a WorldPainter world to import, and the maps opened lately; in the middle, the settings of a new map with its preview, laid on ridges drawn in dots that twinkle now and then. A file dropped on the window opens. **File ▸ New** (⌘N) comes back to it.
 
-**Maps taller than the game.** A new map can be 320, 512, 1024 or 2032 blocks high, and as deep as −2032 — up to 4,064 blocks, the most Minecraft allows. The export adds a data pack that gives the world that height.
+**Maps taller than the game.** A new map can rise to 512, 1024 or 2032 — the highest Minecraft allows — and go as deep as −2032. The export adds a data pack that gives the world that height.
 
 **Rivers laid out, not drawn.** Click the source: the water finds its own way down, eroding a bed and filling the hollows it meets into lakes (the map shows where before the click). Click elsewhere to give it an end, reached along the valleys; drag the river to bend it; **Dig river** or Enter digs it. On real WorldPainter maps, the rivers and lakes already there are kept and joined.
 

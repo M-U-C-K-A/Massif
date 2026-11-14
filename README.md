@@ -156,8 +156,8 @@ brushes, terrain and biome palettes, levels or world info.
 
 A new map (the home screen) takes a name, a size (width × depth, in
 multiples of 128 blocks, up to 65,536), its **height** — Minecraft's own (−64 to 320) or
-taller, up to 512, 1024 or 2032, and as deep as −2032 (**4064**: the whole
-range, the most Minecraft allows) — its land — a
+taller, up to 512, 1024 or 2032 (the highest Minecraft allows), and as deep
+as −2032 — its land — a
 topography (flat, plains, hills, mountains, islands) with its relief height
 (up to fifteen times the landform's in a tall world; peaks close in on the
 top of the world rather than being cut flat), feature size and ground
@@ -650,7 +650,7 @@ Around the map, Minecraft generates either vanilla terrain from the world
 seed or nothing. A map taller (or deeper) than the game's −64 to 320 gets
 its sections up to its top and a data pack, `massif_build_limits`, enabled
 in `level.dat`, that gives the overworld that height (Minecraft allows −2032
-to 2032, 4,064 blocks at most; the data pack's format follows the version). The tests read every era's regions back with an
+to 2032; the data pack's format follows the version). The tests read every era's regions back with an
 independent Anvil reader and compare the blocks with the model.
 
 ### The 3D view
