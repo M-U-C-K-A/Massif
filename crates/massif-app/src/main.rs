@@ -37,8 +37,10 @@ fn icon() -> egui::IconData {
 
 fn main() -> eframe::Result {
     let open = std::env::args_os().nth(1).map(PathBuf::from);
-    // Files the Finder asks to open.
+    // Files the Finder asks to open; on Windows, `.massif` files made
+    // Massif's, with their maps as their icons.
     finder::listen();
+    finder::register();
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Massif")
         .with_app_id("massif")

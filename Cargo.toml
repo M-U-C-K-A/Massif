@@ -15,6 +15,7 @@ massif-anvil = { path = "crates/massif-anvil" }
 massif-legacy = { path = "crates/massif-legacy" }
 massif-assets = { path = "crates/massif-assets" }
 massif-objects = { path = "crates/massif-objects" }
+massif-thumbnails = { path = "crates/massif-thumbnails" }
 
 rayon = "1.12"
 zstd = "0.14"

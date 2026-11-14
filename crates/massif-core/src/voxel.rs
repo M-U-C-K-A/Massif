@@ -281,7 +281,10 @@ const SCULPTED: crate::registry::TerrainId = crate::registry::TerrainId(u16::MAX
 /// Sculpted rock open to the sky takes the terrain of the column's surface;
 /// rock under something else is plain rock, as under a solid level.
 pub(crate) fn apply(spans: &mut Vec<Span>, column: &[(i32, &VoxelChunk)], lx: i32, lz: i32, min_y: i32, max_y: i32, surface: crate::registry::TerrainId) {
-    for &(cy, chunk) in column {
+    // The exact heights of the tops the levels had, for runs that end where
+    // one did and whose block above is not sculpted.
+    let before: Vec<(i32, f32)> = spans.iter().map(|s| (s.y1, s.top)).collect();
+    for (n, &(cy, chunk)) in column.iter().enumerate() {
         let base = cy * SIZE;
         let (ya, yb) = (base.max(min_y), (base + SIZE).min(max_y));
         if yb <= ya {
@@ -298,6 +301,19 @@ pub(crate) fn apply(spans: &mut Vec<Span>, column: &[(i32, &VoxelChunk)], lx: i3
             while y < yb && chunk.solid(lx, y - base, lz) {
                 y += 1;
             }
+            // Its top at the height its densities give: the matter of its
+            // last block and of the one above, as `densities_at` lays a
+            // fractional surface into them — so that sculpting keeps the
+            // heights it does not change, to the 1/256 of a block.
+            let above = if y < base + SIZE {
+                Some(chunk.get(lx, y - base, lz))
+            } else {
+                column.get(n + 1).filter(|(next, _)| *next == cy + 1).map(|(_, c)| c.get(lx, 0, lz))
+            };
+            let top = match above {
+                Some(above) => (y - 1) as f32 + (chunk.get(lx, y - 1 - base, lz) as f32 + above as f32) / 255.0,
+                None => before.iter().find(|b| b.0 == y).map_or(y as f32, |b| b.1),
+            };
             let at = spans.partition_point(|s| s.y0 < start);
             spans.insert(
                 at,
@@ -305,7 +321,7 @@ pub(crate) fn apply(spans: &mut Vec<Span>, column: &[(i32, &VoxelChunk)], lx: i3
                     y0: start,
                     y1: y,
                     terrain: SCULPTED,
-                    top: y as f32,
+                    top: top.clamp(y as f32 - 0.5, y as f32 + 0.499),
                 },
             );
         }
@@ -517,9 +533,22 @@ pub fn sculpt_at(edit: &mut Edit, brush: &Brush, center: [f32; 3], normal: Optio
         return 0;
     }
 
-    // Smoothing reads the neighbourhood before anything changes.
+    // Smoothing reads the neighbourhood before anything changes, and aims
+    // at it smoothed in two steps (Taubin's): blurred, then pushed back
+    // out a little, so that bumps and steps melt away while the land keeps
+    // its matter — a hill is not worn down, a hollow not filled in.
     let k = ((r * 0.25).round() as i32).clamp(1, 4);
-    let blurred = (mode == SculptMode::Smooth).then(|| Field::gather(edit.dim(), lo, hi, k).blurred(k));
+    let blurred = (mode == SculptMode::Smooth).then(|| {
+        const SHRINK: f32 = 0.8;
+        const INFLATE: f32 = -0.85;
+        let field = Field::gather(edit.dim(), lo, hi, 2 * k);
+        let step = |f: Field, by: f32| {
+            let b = f.clone().blurred(k);
+            let values = f.values.iter().zip(&b.values).map(|(v, b)| v + by * (b - v)).collect();
+            Field { values, ..f }
+        };
+        step(step(field, SHRINK), INFLATE)
+    });
 
     let strength = strength.clamp(0.0, 1.0);
     let profile = brush.profile;
@@ -566,7 +595,8 @@ pub fn sculpt_at(edit: &mut Edit, brush: &Brush, center: [f32; 3], normal: Optio
                         SculptMode::Remove => old * (1.0 - w),
                         SculptMode::Smooth => {
                             let target = blurred.as_ref().map_or(old, |f| f.at(x, y, z));
-                            old + (target - old) * w
+                            // Once smooth enough, left as it is.
+                            if (target - old).abs() < 0.5 { old } else { old + (target - old) * w }
                         }
                     };
                     let new = new.round().clamp(0.0, 255.0) as u8;
@@ -582,6 +612,7 @@ pub fn sculpt_at(edit: &mut Edit, brush: &Brush, center: [f32; 3], normal: Optio
 }
 
 /// Densities of a box of the world, for smoothing.
+#[derive(Clone)]
 struct Field {
     lo: [i32; 3],
     size: [usize; 3],
@@ -953,6 +984,84 @@ mod tests {
         assert_eq!((spans[1].y0, spans[1].y1), (85, 96));
         // Its top is open to the sky: it takes the surface's terrain.
         assert_eq!(spans[1].terrain, crate::registry::TerrainId(1));
+    }
+
+    /// Smoothing in 3D as the Sculpt editor does — dabs held at one spot
+    /// for two seconds, laid along the ground — melts bumps away without
+    /// wearing the land down, and only under the brush.
+    #[test]
+    fn smoothing_keeps_the_land() {
+        use crate::ops::{self, Surface};
+        for case in ["flat", "rough", "hill"] {
+            let mut w = world();
+            let mut h = History::default();
+            h.begin("shape", 0);
+            {
+                let mut e = h.edit(&mut w, 0);
+                match case {
+                    "rough" => ops::roughen(&mut e, &brush(30.0), 0.5, 0.5, 4.0, 7, Surface::Top),
+                    "hill" => {
+                        let mut b = brush(14.0);
+                        b.profile = Profile::Linear;
+                        ops::raise(&mut e, &b, 0.5, 0.5, 12.0, Surface::Top)
+                    }
+                    _ => {}
+                }
+            }
+            h.commit();
+            let tops = |w: &World| -> (f32, f32, f32) {
+                let (mut inside, mut outside, mut ni, mut no, mut rough) = (0.0, 0.0, 0.0, 0.0, 0.0);
+                for z in -20..20 {
+                    for x in -20..20 {
+                        let s = spans_at(w, x, z);
+                        let top = s.last().map_or(0.0, |s| s.top);
+                        let d = ((x as f32 + 0.5).powi(2) + (z as f32 + 0.5).powi(2)).sqrt();
+                        if d < 6.0 {
+                            inside += top;
+                            ni += 1.0;
+                            let east = spans_at(w, x + 1, z).last().map_or(0.0, |s| s.top);
+                            rough += (east - top).abs();
+                        } else if d > 10.0 { outside += top; no += 1.0 }
+                    }
+                }
+                (inside / ni, outside / no, rough / ni)
+            };
+            let before = tops(&w);
+            let y = spans_at(&w, 0, 0).last().unwrap().top;
+            h.begin("Smooth", 0);
+            for _ in 0..120 {
+                sculpt_at(&mut h.edit(&mut w, 0), &brush(8.0), [0.5, y, 0.5], Some([0.0, 1.0, 0.0]), 0.1, SculptMode::Smooth);
+            }
+            h.commit();
+            let after = tops(&w);
+            // Nothing moves away from the brush (but for the 1/255 of a
+            // block densities hold heights to).
+            assert!((before.1 - after.1).abs() < 0.005, "{case}: outside {before:?} -> {after:?}");
+            match case {
+                "flat" => assert!((after.0 - before.0).abs() < 0.01, "{case}: {before:?} -> {after:?}"),
+                "rough" => {
+                    assert!((after.0 - before.0).abs() < 0.12, "{case}: sank {before:?} -> {after:?}");
+                    assert!(after.2 < before.2 * 0.6, "{case}: as rough {before:?} -> {after:?}");
+                }
+                _ => assert!(before.0 - after.0 < 0.5, "{case}: worn down {before:?} -> {after:?}"),
+            }
+        }
+    }
+
+    /// A sculpted chunk keeps the exact heights of the columns it does not
+    /// change: sculpting one spot does not move the rest of its 16 × 16.
+    #[test]
+    fn sculpted_chunks_keep_their_heights() {
+        let mut w = World::new(WorldMeta::default());
+        w.dims[0].ground_mut().insert(TilePos::new(0, 0), Tile::ground(64.4, 1, crate::tile::NO_FLUID));
+        let mut h = History::default();
+        h.begin("Build", 0);
+        sculpt(&mut h.edit(&mut w, 0), &brush(2.0), [3.5, 70.5, 3.5], 1.0, SculptMode::Add);
+        h.commit();
+        assert!(!w.dims[0].voxels.is_empty());
+        // Far from the dab, in the same chunk: the same height as before.
+        let top = spans_at(&w, 13, 12).last().unwrap().top;
+        assert!((top - 64.4).abs() < 0.01, "{top}");
     }
 
     #[test]

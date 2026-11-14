@@ -72,7 +72,7 @@ jobs:
 
       - name: Build
         if: runner.os != 'macOS'
-        run: cargo build --release --locked -p massif-app -p massif-cli
+        run: cargo build --release --locked -p massif-app -p massif-cli -p massif-thumbnails
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
@@ -119,6 +119,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist/Massif | Out-Null
           Copy-Item target/release/massif.exe dist/Massif/Massif.exe
           Copy-Item target/release/massif-cli.exe dist/Massif/massif-cli.exe
+          # Explorer's thumbnails of .massif files: Massif registers it when it starts.
+          Copy-Item target/release/massif_thumbnails.dll dist/Massif/MassifThumbnails.dll
           Copy-Item README.md dist/Massif/README.md
           New-Item -ItemType Directory -Force -Path out | Out-Null
           Compress-Archive -Path dist/Massif -DestinationPath "out/Massif-$env:VERSION-windows-x86_64.zip"

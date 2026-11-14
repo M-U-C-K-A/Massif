@@ -159,13 +159,23 @@ land it raises, shaded and contoured on a block of ground, turning slowly
 from side to side, so that its shape is easy to make out. (As in the user's
 WorldPainter fork, whose cards these are.)
 
-### In the Finder
+### In the Finder and Explorer
 
-A `.massif` file shows its map as its icon, and in Quick Look: Massif keeps
-a small picture of the map in the file, which the Quick Look extension that
-comes with the app (`tools/macos`) reads without opening the map — as
-WorldPainter's fork does for `.world` files. A double-click on a `.massif`
-opens it in Massif; Open With ▸ Massif imports a WorldPainter `.world`.
+A `.massif` file shows its map as its icon: Massif keeps a small picture of
+the map in the file, which the system reads without opening the map — as
+WorldPainter's fork does for `.world` files.
+
+- **macOS**: the Quick Look extension that comes with the app
+  (`tools/macos`) draws it, in the Finder and in Quick Look. A double-click
+  on a `.massif` opens it in Massif; Open With ▸ Massif imports a
+  WorldPainter `.world`.
+- **Windows**: `MassifThumbnails.dll`, next to `Massif.exe`
+  (`crates/massif-thumbnails`), draws it in Explorer. Massif registers it
+  for the current user each time it starts (no installer, no administrator
+  rights), with `.massif` files opening in Massif on a double-click; moving
+  its folder and starting it again moves the registration.
+
+Maps saved before this have no picture until they are saved again.
 
 ### Areas and workspaces
 
@@ -799,6 +809,7 @@ converted and freed as it is read.
 | `massif-format` | Reading and writing `.massif` files. |
 | `massif-anvil` | Minecraft Java export: NBT, region files, `level.dat`. |
 | `massif-legacy` | WorldPainter `.world` import, with a Java serialization reader written in Rust. |
+| `massif-thumbnails` | Windows Explorer's thumbnails of `.massif` files (a COM thumbnail handler). |
 | `massif-objects` | Custom objects: Sponge, MCEdit, Axiom, Litematica and structure files read into objects. |
 | `massif-assets` | The game's real blocks: finds the installed client jars, reads their block states, models and textures (with its own small zip reader), real colours and textured block icons. |
 | `massif-app` | The editor (egui and wgpu): areas, map, 3D view, panels. |

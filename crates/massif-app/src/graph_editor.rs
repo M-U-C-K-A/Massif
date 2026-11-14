@@ -56,6 +56,9 @@ pub const IMAGE_SIZES: [(&str, [u32; 2]); 5] = [
     ("8K", [7680, 4320]),
 ];
 const NODE_WIDTH: f32 = 168.0;
+/// How far from a port's circle it can still be grabbed, in points at full
+/// size.
+const PORT_REACH: f32 = 12.0;
 const HEADER: f32 = 26.0;
 const ROW: f32 = 18.0;
 const THUMB: f32 = 68.0;
@@ -1751,6 +1754,13 @@ impl GraphEditor {
         pos2(rect.right(), rect.top() + (HEADER + (k as f32 + 0.5) * ROW) * self.zoom)
     }
 
+    /// The row of input `k`, from beyond its circle to the middle of the
+    /// node: dropping a wire anywhere on it plugs it in.
+    fn input_row(&self, rect: Rect, k: usize) -> Rect {
+        let top = rect.top() + (HEADER + k as f32 * ROW) * self.zoom;
+        Rect::from_min_max(pos2(rect.left() - PORT_REACH * self.zoom.max(0.7), top), pos2(rect.center().x, top + ROW * self.zoom))
+    }
+
     /// Zoom and move so that every node is in view.
     fn frame(&mut self, graph: &Graph) {
         if graph.nodes.is_empty() {
@@ -2175,6 +2185,28 @@ impl GraphEditor {
             self.revision += 1;
         }
 
+        // Where a wire being drawn would go: the input under the pointer —
+        // on its row, or near its circle — the nearest if several.
+        let drop_target = match (self.wiring, pointer) {
+            (Some((from, _)), Some(q)) => {
+                let reach = PORT_REACH * self.zoom.max(0.7);
+                let mut best: Option<((NodeId, u8), f32)> = None;
+                for n in graph.nodes.iter().filter(|n| n.id != from) {
+                    let rect = rects[&n.id];
+                    for k in 0..n.kind.inputs().len() {
+                        let p = self.input_pos(rect, k);
+                        let d = q.distance(p);
+                        let on_row = self.input_row(rect, k).contains(q);
+                        if (on_row || d < reach * 1.4) && best.is_none_or(|b| d < b.1) {
+                            best = Some(((n.id, k as u8), d));
+                        }
+                    }
+                }
+                best.map(|b| b.0)
+            }
+            _ => None,
+        };
+
         // Nodes.
         let mut drop_on: Option<(NodeId, u8)> = None;
         let released = ui.input(|i| i.pointer.any_released());
@@ -2198,13 +2230,17 @@ impl GraphEditor {
             } else {
                 pal.border
             };
-            if picked {
-                painter.rect_stroke(rect.expand(2.5), 10, Stroke::new(if primary { 2.0 } else { 1.2 }, pal.accent.gamma_multiply(0.5)), StrokeKind::Outside);
-            }
-            painter.rect(rect, 8, pal.panel, Stroke::new(if picked { 1.6 } else { 1.0 }, border), StrokeKind::Inside);
-            // A band of the family's colour across the top.
-            let band = Rect::from_min_size(rect.min, vec2(rect.width(), 3.0 * self.zoom));
-            painter.rect_filled(band, egui::CornerRadius { nw: 8, ne: 8, sw: 0, se: 0 }, family);
+            // The node with one border (the accent's when picked), and across
+            // its top, following its rounded corners, its family's colour.
+            let round = (8.0 * self.zoom).clamp(2.0, 8.0);
+            let width = match (picked, primary) {
+                (true, true) => 2.0,
+                (true, false) => 1.5,
+                _ => 1.0,
+            };
+            painter.rect(rect, round, pal.panel, Stroke::new(width, border), StrokeKind::Inside);
+            let band = Rect::from_min_size(rect.min, vec2(rect.width(), (3.0 * self.zoom).max(2.0)));
+            painter.with_clip_rect(band.intersect(painter.clip_rect())).rect_filled(rect, round, family);
             let header = Rect::from_min_size(rect.min, vec2(rect.width(), HEADER * self.zoom));
             let title = match &node.kind {
                 NodeKind::TerrainOutput { terrain } => format!("Terrain · {}", reg.terrain(TerrainId(*terrain)).name),
@@ -2278,23 +2314,35 @@ impl GraphEditor {
                     ui.close();
                 }
             });
-            // Ports, coloured by type.
+            // Ports, coloured by type. They are grabbed well beyond their
+            // circle, and a wire is dropped on an input anywhere on its row.
             let r = 4.5 * self.zoom;
             let font = egui::FontId::proportional(10.5 * self.zoom);
+            let reach = PORT_REACH * self.zoom.max(0.7);
             for (k, (name, t)) in node.kind.inputs().iter().enumerate() {
                 let p = self.input_pos(rect, k);
                 let wired = graph.input_of(id, k as u8).is_some();
                 let c = port_color(*t);
+                let target = self.wiring.is_some() && drop_target == Some((id, k as u8));
+                if target {
+                    painter.rect_filled(self.input_row(rect, k), 3, pal.accent.gamma_multiply(0.14));
+                }
                 painter.circle(p, r, if wired { c } else { pal.panel }, Stroke::new(1.5, c));
                 painter.text(p + vec2(9.0 * self.zoom, 0.0), egui::Align2::LEFT_CENTER, *name, font.clone(), pal.weak);
-                let port = ui.interact(Rect::from_center_size(p, vec2(16.0, 16.0) * self.zoom.max(0.7)), ui.scope_id().with(("in", id, k)), Sense::click_and_drag());
-                if (port.clicked() || port.drag_started()) && wired {
-                    pick_up = Some((id, k as u8));
-                }
-                if self.wiring.is_some() && pointer.is_some_and(|q| q.distance(p) < 14.0 * self.zoom.max(0.7)) {
+                if target {
                     painter.circle_stroke(p, r + 3.0, Stroke::new(2.0, pal.accent));
                     if released {
                         drop_on = Some((id, k as u8));
+                    }
+                }
+                // A wired input picks its wire up again.
+                if wired {
+                    let port = ui.interact(Rect::from_center_size(p, Vec2::splat(2.0 * reach)), ui.scope_id().with(("in", id, k)), Sense::click_and_drag());
+                    if port.hovered() && self.wiring.is_none() {
+                        painter.circle_stroke(p, r + 2.5, Stroke::new(1.5, c));
+                    }
+                    if port.clicked() || port.drag_started() {
+                        pick_up = Some((id, k as u8));
                     }
                 }
             }
@@ -2303,7 +2351,10 @@ impl GraphEditor {
                 let c = port_color(graph.output_type(id, k as u8));
                 painter.circle(p, r, c, Stroke::new(1.5, c));
                 painter.text(p - vec2(9.0 * self.zoom, 0.0), egui::Align2::RIGHT_CENTER, *name, font.clone(), pal.weak);
-                let port = ui.interact(Rect::from_center_size(p, vec2(16.0, 16.0) * self.zoom.max(0.7)), ui.scope_id().with(("out", id, k)), Sense::drag());
+                let port = ui.interact(Rect::from_center_size(p, Vec2::splat(2.0 * reach)), ui.scope_id().with(("out", id, k)), Sense::drag());
+                if port.hovered() && self.wiring.is_none() {
+                    painter.circle_stroke(p, r + 2.5, Stroke::new(1.5, c));
+                }
                 if port.drag_started() {
                     self.wiring = Some((id, k as u8));
                 }
