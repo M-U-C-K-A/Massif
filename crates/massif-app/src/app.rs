@@ -1543,7 +1543,7 @@ impl MassifApp {
             EditorKind::Sculpt3d => {
                 egui::Frame::new()
                     .inner_margin(egui::Margin::symmetric(8, 6))
-                    .show(&mut cui, |ui| panels::sculpt_toolbar(ui, &mut self.tools.sculpt, &mut self.brushes));
+                    .show(&mut cui, |ui| panels::sculpt_toolbar(ui, &mut self.tools, &mut self.brushes, &self.doc.world.registry));
                 self.sculpt3d.ui(&mut cui, frame, &mut self.doc, &mut self.tools, self.map_center, true);
             }
             EditorKind::Tools => scrolled(&mut cui, &mut |ui| panels::tools_panel(ui, &mut self.tools)),
@@ -2124,17 +2124,6 @@ impl MassifApp {
             let source = self.tools.brush_source.clone();
             if !panels::select_brush(&mut self.tools, &self.brushes, source) {
                 panels::select_brush(&mut self.tools, &self.brushes, BrushSource::default());
-            }
-            // The 3D Sculpt editor's too.
-            let sculpt = &mut self.tools.sculpt;
-            match self.brushes.brush(&sculpt.source, &sculpt.brush) {
-                Some(brush) => sculpt.brush = brush,
-                None => {
-                    sculpt.source = BrushSource::default();
-                    if let Some(brush) = self.brushes.brush(&sculpt.source, &sculpt.brush) {
-                        sculpt.brush = brush;
-                    }
-                }
             }
         }
         // The game's blocks give the world's blocks and terrains their real
@@ -2802,20 +2791,34 @@ mod tests {
         h.run_steps(5);
         assert_eq!(h.state().doc.history.undo_count(), steps, "nothing sculpted");
         assert_ne!(h.state().sculpt3d.camera.target, target, "the view moved");
-        // Alt + wheel: the size of the brush.
+        let wheel = |h: &mut egui_kittest::Harness<'_, MassifApp>, modifiers: Modifiers| {
+            h.event(egui::Event::PointerMoved(at));
+            h.event(egui::Event::ModifiersChanged(modifiers));
+            h.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: vec2(0.0, 120.0),
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
+                modifiers,
+            });
+            h.run_steps(10);
+            h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+            h.step();
+        };
+        // ⌘ + wheel: the size of the brush.
         let radius = h.state().tools.sculpt.brush.radius;
-        h.event(egui::Event::PointerMoved(at));
-        h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
-        h.event(egui::Event::MouseWheel {
-            unit: egui::MouseWheelUnit::Point,
-            delta: vec2(0.0, 120.0),
-            phase: egui::TouchPhase::Move,
-            source: egui::MouseWheelSource::Unknown,
-            modifiers: Modifiers::ALT,
-        });
-        h.run_steps(10);
-        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        wheel(&mut h, Modifiers::COMMAND);
         assert!(h.state().tools.sculpt.brush.radius > radius, "{} after {radius}", h.state().tools.sculpt.brush.radius);
+        // Alt + wheel: toward the point under the cursor.
+        let (target, distance) = (h.state().sculpt3d.camera.target, h.state().sculpt3d.camera.distance);
+        let pointed = h.state().sculpt3d.hover().expect("the cursor points at the terrain").point;
+        wheel(&mut h, Modifiers::ALT);
+        let camera = h.state().sculpt3d.camera;
+        assert!(camera.distance < distance, "nearer: {} after {distance}", camera.distance);
+        let gap = |t: [f64; 3]| ((t[0] - pointed[0]).powi(2) + (t[2] - pointed[2]).powi(2)).sqrt();
+        assert!(gap(camera.target) < gap(target), "toward the point: {:?} after {target:?}", camera.target);
+        h.state_mut().sculpt3d.camera = crate::view3d::Camera { target, distance, ..camera };
+        h.run_steps(5);
         // The left button adds matter.
         h.event(egui::Event::PointerMoved(at));
         h.step();
@@ -2828,6 +2831,29 @@ mod tests {
         h.run_steps(30);
         assert_eq!(h.state().doc.history.undo_label(), Some("Sculpt"));
         assert!(h.state().doc.history.can_undo());
+        // Paint, in 3D: the terrain of the columns under the brush.
+        let sand = h.state().doc.world.registry.terrain_by_name("Sand").unwrap();
+        {
+            let app = h.state_mut();
+            app.tools.sculpt.tool = Tool::PaintTerrain;
+            app.tools.terrain = sand.0;
+            app.tools.brush.strength = 1.0;
+        }
+        h.event(egui::Event::PointerMoved(at));
+        h.run_steps(3);
+        let hit = h.state().sculpt3d.hover().expect("the cursor points at the terrain");
+        h.event(press(true, egui::PointerButton::Primary));
+        for _ in 0..10 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.event(press(false, egui::PointerButton::Primary));
+        h.run_steps(20);
+        assert_eq!(h.state().doc.history.undo_label(), Some("Paint terrain"));
+        let (x, z) = (hit.block.0, hit.block.2);
+        let tile = h.state().doc.dimension().ground().view(TilePos::containing(x, z)).unwrap();
+        assert_eq!(tile.terrain.get(massif_core::coords::local_index(x, z)), sand.0, "painted at ({x}, {z})");
+        h.render().unwrap().save(dir.join("sculpt-paint.png")).unwrap();
         let (w, hgt, rgba) = h.state().sculpt3d.read_back().expect("the 3D view rendered");
         image::save_buffer(dir.join("sculpt-build-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
     }
@@ -5266,6 +5292,79 @@ mod tests {
         }
         h.run_steps(5);
         assert_eq!(painted(&h), 0);
+    }
+
+    /// Three clicks of the Sculpt tool with a large brush of the shape
+    /// chosen for every tool (a stamp here) raise a bump in that shape, a
+    /// few blocks high — not a mountain. Needs a GPU: runs with
+    /// MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn three_clicks_raise_a_bump() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        {
+            let app = h.state_mut();
+            app.layout.active = 4; // 3D Sculpt
+            let source = BrushSource::Stamp(massif_core::stamps::Stamp::ALL[3]);
+            assert!(panels::select_brush(&mut app.tools, &app.brushes, source), "the stamp is a brush");
+            app.tools.sculpt.tool = Tool::Build;
+            app.tools.sculpt.brush.radius = 40.0;
+            app.tools.sculpt.brush.strength = 0.5;
+        }
+        // Once the view has framed the map: over the highest land near
+        // its middle.
+        h.run_steps(5);
+        {
+            let app = h.state_mut();
+            let (x, z, y) = (-300..300)
+                .step_by(10)
+                .flat_map(|z| (-300..300).step_by(10).map(move |x| (x, z)))
+                .filter_map(|(x, z)| crate::tools::probe(&app.doc, x, z).map(|p| (x, z, p.height)))
+                .fold((0, 0, f32::MIN), |b, c| if c.2 > b.2 { c } else { b });
+            app.sculpt3d.camera = crate::view3d::Camera { target: [x as f64, y as f64, z as f64], yaw: 0.6, pitch: 0.55, distance: 220.0 };
+        }
+        h.run_steps(30);
+        let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        let view = areas.into_iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::Sculpt3d)).map(|(_, r)| r).unwrap();
+        let at = view.center();
+        h.event(egui::Event::PointerMoved(at));
+        h.run_steps(3);
+        let hit = h.state().sculpt3d.hover().expect("the cursor points at the terrain");
+        let (w, hgt, rgba) = h.state().sculpt3d.read_back().expect("the 3D view rendered");
+        image::save_buffer(dir.join("sculpt-three-clicks-before.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+        let tops = |h: &egui_kittest::Harness<'static, MassifApp>| -> Vec<f32> {
+            let dim = h.state().doc.dimension();
+            let mut spans = Vec::new();
+            (-40..=40)
+                .flat_map(|dz| (-40..=40).map(move |dx| (hit.block.0 + dx, hit.block.2 + dz)))
+                .map(|(x, z)| {
+                    let stack = massif_core::TileStack::new(dim, TilePos::containing(x, z), false).unwrap();
+                    stack.spans(massif_core::coords::local_index(x, z), &mut spans);
+                    spans.last().map_or(0.0, |s| s.top)
+                })
+                .collect()
+        };
+        let before = tops(&h);
+        // Three clicks, as quick as a hand makes them.
+        for _ in 0..3 {
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+                for _ in 0..6 {
+                    h.step();
+                    std::thread::sleep(std::time::Duration::from_millis(16));
+                }
+            }
+        }
+        h.run_steps(20);
+        let after = tops(&h);
+        let rise = before.iter().zip(&after).map(|(a, b)| b - a).fold(0.0f32, f32::max);
+        // A few blocks (more on a steep slope, pushed along it); the brush
+        // 80 blocks across used to fill tens of blocks of it.
+        assert!(rise > 0.5 && rise < 12.0, "the land rose by {rise} blocks");
+        let (w, hgt, rgba) = h.state().sculpt3d.read_back().expect("the 3D view rendered");
+        image::save_buffer(dir.join("sculpt-three-clicks.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
     }
 
     /// Dragging the corner of an area into it splits it there.

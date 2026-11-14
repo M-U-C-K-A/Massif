@@ -291,11 +291,11 @@ pub struct ToolState {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SculptSettings {
-    /// Sculpt (left adds, right digs) or Smooth.
+    /// Sculpt (left adds, right digs), Smooth or Paint.
     pub tool: Tool,
+    /// The size and strength of the brush in 3D; its shape is the brush
+    /// chosen for every tool (see [`ToolState::sculpt_brush`]).
     pub brush: Brush,
-    /// Where the brush comes from: its image is found again from this.
-    pub source: BrushSource,
 }
 
 impl Default for SculptSettings {
@@ -306,15 +306,18 @@ impl Default for SculptSettings {
                 radius: 6.0,
                 ..Brush::default()
             },
-            source: BrushSource::default(),
         }
     }
 }
 
 impl SculptSettings {
     /// The tools of the 3D Sculpt editor: one to add matter and (with the
-    /// right button) dig, one to smooth.
-    pub const TOOLS: [Tool; 2] = [Tool::Build, Tool::Smooth3d];
+    /// right button) dig, one to smooth, one to paint the terrain.
+    pub const TOOLS: [Tool; 3] = [Tool::Build, Tool::Smooth3d, Tool::PaintTerrain];
+
+    /// How many blocks a dab of the Sculpt tool pushes the surface by in a
+    /// second, at full strength.
+    pub const GROWTH: f32 = 16.0;
 }
 
 /// A pattern of terrains for the Paint tool.
@@ -638,6 +641,18 @@ impl ToolState {
         self.tool = tool;
     }
 
+    /// The brush of the 3D Sculpt editor: the brush chosen for every tool
+    /// (a custom one too, turned as it is), at the editor's own size and
+    /// strength.
+    pub fn sculpt_brush(&self) -> Brush {
+        Brush {
+            radius: self.sculpt.brush.radius,
+            strength: self.sculpt.brush.strength,
+            filter: None,
+            ..self.brush.clone()
+        }
+    }
+
     /// The brush strokes use: the brush with the filter, if one is on.
     pub fn stroke_brush(&self) -> Brush {
         Brush {
@@ -847,26 +862,70 @@ fn surface_at(dim: &massif_core::Dimension, x: f32, z: f32) -> Option<f32> {
     spans.last().map(|s| s.y1 as f32)
 }
 
-/// A sculpting stroke in the 3D view: dabs where the view points.
+/// A stroke in the 3D Sculpt editor: dabs where the view points.
 pub struct SculptStroke {
-    mode: massif_core::voxel::SculptMode,
+    what: Stroke3d,
+    salt: u64,
 }
 
-/// Begin sculpting in the 3D view. `None` when the tool does not sculpt.
+#[derive(Clone, Copy)]
+enum Stroke3d {
+    Sculpt(massif_core::voxel::SculptMode),
+    /// Paint the terrain; the inverse puts back what the height calls for.
+    Paint { inverse: bool },
+}
+
+/// Begin a stroke in the 3D Sculpt editor. `None` when its tool does
+/// nothing there.
 pub fn begin_sculpt(doc: &mut Document, tools: &ToolState, inverse: bool) -> Option<SculptStroke> {
     let tool = tools.sculpt.tool;
-    let mode = tool.sculpt_mode(inverse)?;
+    let what = match tool {
+        Tool::PaintTerrain => Stroke3d::Paint { inverse },
+        _ => Stroke3d::Sculpt(tool.sculpt_mode(inverse)?),
+    };
     doc.history.begin(tool.label(), doc.dim);
-    Some(SculptStroke { mode })
+    let salt = doc.revision.wrapping_mul(0x9e37_79b9) ^ 0x3d5c_ab71;
+    Some(SculptStroke { what, salt })
 }
 
 /// One dab of a 3D stroke on the surface at `frame`, lasting `dt` seconds:
-/// the brush laid along the slope there.
-pub fn sculpt_dab(doc: &mut Document, tools: &ToolState, stroke: &SculptStroke, frame: &massif_core::voxel::Frame, dt: f32) -> usize {
-    let brush = &tools.sculpt.brush;
-    let strength = sculpt_strength(brush, dt.clamp(0.0, 0.1));
-    let mut edit = doc.history.edit(&mut doc.world, 0);
-    massif_core::voxel::sculpt_at(&mut edit, brush, frame.center, Some(frame.normal), strength, stroke.mode)
+/// the brush laid along the slope there. Sculpting pushes the surface out
+/// (or in) a little — [`SculptSettings::GROWTH`] blocks a second at full
+/// strength —, smoothing melts its bumps, painting paints the terrain of
+/// the columns under the brush.
+pub fn sculpt_dab(doc: &mut Document, tools: &ToolState, stroke: &mut SculptStroke, frame: &massif_core::voxel::Frame, dt: f32) -> usize {
+    use massif_core::voxel::{self, SculptMode};
+    let brush = tools.sculpt_brush();
+    let dt = dt.clamp(0.0, 0.1);
+    stroke.salt = stroke.salt.wrapping_add(0x632b_e59b);
+    match stroke.what {
+        Stroke3d::Sculpt(SculptMode::Smooth) => {
+            let mut edit = doc.history.edit(&mut doc.world, 0);
+            voxel::sculpt_at(&mut edit, &brush, frame.center, Some(frame.normal), sculpt_strength(&brush, dt), SculptMode::Smooth)
+        }
+        Stroke3d::Sculpt(mode) => {
+            let mut edit = doc.history.edit(&mut doc.world, 0);
+            voxel::displace_at(&mut edit, &brush, frame.center, frame.normal, brush.strength * SculptSettings::GROWTH * dt, mode)
+        }
+        Stroke3d::Paint { inverse } => {
+            let reg = &doc.world.registry;
+            let pattern = (!inverse && tools.pattern.on).then(|| tools.pattern.sampler(reg)).flatten();
+            let theme = inverse.then(|| (massif_core::generate::Theme::new(reg), doc.world.meta.sea_level as f32));
+            let brush = Brush {
+                filter: tools.filter.is_active().then(|| std::sync::Arc::new(tools.filter.clone())),
+                ..brush
+            };
+            let level = doc.active_level.min(doc.dimension().levels.len() - 1);
+            let (x, z) = (frame.center[0], frame.center[2]);
+            let mut edit = doc.history.edit(&mut doc.world, level);
+            match (&theme, &pattern) {
+                (Some((theme, sea)), _) => ops::paint_terrain_with(&mut edit, &brush, x, z, stroke.salt, |h| theme.terrain(h - 1.0, 0.0, *sea, 0.0)),
+                (None, Some(pattern)) => ops::paint_pattern(&mut edit, &brush, x, z, stroke.salt, pattern),
+                (None, None) => ops::paint_terrain(&mut edit, &brush, x, z, TerrainId(tools.terrain), stroke.salt),
+            }
+            1
+        }
+    }
 }
 
 pub fn end_sculpt(doc: &mut Document, _stroke: SculptStroke) {
@@ -1150,12 +1209,13 @@ mod tests {
         tools.sculpt.tool = Tool::Dig;
         tools.sculpt.brush.radius = 6.0;
         tools.sculpt.brush.strength = 1.0;
-        let s = begin_sculpt(&mut d, &tools, true).unwrap();
+        tools.brush = Brush::default();
+        let mut s = begin_sculpt(&mut d, &tools, true).unwrap();
         let frame = massif_core::voxel::Frame {
             center: [5.5, 64.0, 5.5],
             normal: [0.0, 1.0, 0.0],
         };
-        let n = sculpt_dab(&mut d, &tools, &s, &frame, 0.1);
+        let n = sculpt_dab(&mut d, &tools, &mut s, &frame, 0.1);
         end_sculpt(&mut d, s);
         assert!(n > 0);
         assert!(height(&d, 5, 5) > 64.0);

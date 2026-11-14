@@ -97,22 +97,25 @@ pub fn tools_panel(ui: &mut Ui, tools: &mut ToolState) {
 // --------------------------------------------------------- tool settings --
 
 /// The tools of the 3D Sculpt editor, along its top: which one, with which
-/// brush (custom ones too), how big, how hard.
-pub fn sculpt_toolbar(ui: &mut Ui, s: &mut crate::tools::SculptSettings, library: &mut BrushLibrary) {
+/// brush — the one chosen for every tool, a custom one too —, how big, how
+/// hard; with Paint, the terrain it paints.
+pub fn sculpt_toolbar(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibrary, reg: &Registry) {
     let pal = Palette::of(ui);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(4.0, 0.0);
         ui.spacing_mut().interact_size.y = 22.0;
         for tool in crate::tools::SculptSettings::TOOLS {
-            if crate::cards::tool(ui.selectable_label(s.tool == tool, theme::with_icon(tool.icon(), tool.label())), tool).clicked() {
-                s.tool = tool;
+            let label = if tool == Tool::PaintTerrain { "Paint" } else { tool.label() };
+            if crate::cards::tool(ui.selectable_label(tools.sculpt.tool == tool, theme::with_icon(tool.icon(), label)), tool).clicked() {
+                tools.sculpt.tool = tool;
             }
         }
         ui.add_space(8.0);
         ui.separator();
         ui.add_space(4.0);
-        // The brush: any of the library's, a custom image too.
-        let name = library.name(&s.source);
+        // The brush: the one chosen for every tool, from any of the
+        // library's groups, a custom image too.
+        let name = library.name(&tools.brush_source);
         ui.menu_button(theme::with_icon(Icon::Brush, &name), |ui| {
             ui.set_max_width(330.0);
             let dark = ui.visuals().dark_mode;
@@ -136,18 +139,14 @@ pub fn sculpt_toolbar(ui: &mut Ui, s: &mut crate::tools::SculptSettings, library
                         for source in list {
                             let texture = library.thumbnail(&ctx, &source, dark);
                             let tip = library.name(&source);
-                            let response = brush_button(ui, texture, s.source == source, 40.0);
+                            let response = brush_button(ui, texture, tools.brush_source == source, 40.0);
                             let response = if response.hovered() {
-                                let shape = library.brush(&source, &s.brush);
+                                let shape = library.brush(&source, &tools.brush);
                                 crate::cards::brush(response, &tip, &format!("{source:?}"), shape.as_ref())
                             } else {
                                 response
                             };
-                            if response.clicked()
-                                && let Some(brush) = library.brush(&source, &s.brush)
-                            {
-                                s.brush = brush;
-                                s.source = source;
+                            if response.clicked() && select_brush(tools, library, source) {
                                 ui.close();
                             }
                         }
@@ -157,6 +156,7 @@ pub fn sculpt_toolbar(ui: &mut Ui, s: &mut crate::tools::SculptSettings, library
             });
         });
         ui.add_space(6.0);
+        let s = &mut tools.sculpt;
         ui.add(crate::widgets::Field::new(&mut s.brush.radius, 1.0..=64.0).text("Radius").suffix(" blocks").max_decimals(0).width(150.0));
         ui.add(
             crate::widgets::Field::new(&mut s.brush.strength, 0.05..=1.0)
@@ -165,12 +165,21 @@ pub fn sculpt_toolbar(ui: &mut Ui, s: &mut crate::tools::SculptSettings, library
                 .custom_parser(|t| t.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0))
                 .width(150.0),
         );
+        // What Paint paints: the terrain chosen (in Terrain or Blocks).
+        if s.tool == Tool::PaintTerrain {
+            ui.add_space(6.0);
+            let def = reg.terrain(TerrainId(tools.terrain));
+            swatch(ui, theme::rgb(def.color));
+            let what = if tools.pattern.on { "a pattern of terrains".to_owned() } else { def.name.clone() };
+            ui.label(RichText::new(what).size(12.0)).on_hover_text("Pick it in Terrain or Blocks");
+        }
+        let hint = match tools.sculpt.tool {
+            Tool::PaintTerrain => "Left: paint · right: what the height calls for · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point",
+            Tool::Smooth3d => "Left: smooth · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point",
+            _ => "Left: add · right: dig · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point",
+        };
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(
-                RichText::new("Left: add · right: dig · Shift+drag: move · Alt+drag: turn · Alt+wheel: size")
-                    .size(11.5)
-                    .color(pal.weak),
-            );
+            ui.add(egui::Label::new(RichText::new(hint).size(11.5).color(pal.weak)).truncate());
         });
     });
 }

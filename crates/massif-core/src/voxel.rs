@@ -611,6 +611,89 @@ pub fn sculpt_at(edit: &mut Edit, brush: &Brush, center: [f32; 3], normal: Optio
     changed.into_inner()
 }
 
+/// Push the surface at `center`, facing `normal`, out (adding matter) or in
+/// (removing it) by up to `amount` blocks: the brush's shape (a custom
+/// image too) laid on the slope sets how far each point goes, fading off
+/// the slope. Only matter within `amount` of the surface moves: a dab adds
+/// a layer, it does not fill the brush's whole volume. Returns the number
+/// of voxels changed.
+pub fn displace_at(edit: &mut Edit, brush: &Brush, center: [f32; 3], normal: [f32; 3], amount: f32, mode: SculptMode) -> usize {
+    let outward = match mode {
+        SculptMode::Add => 1.0f32,
+        SculptMode::Remove => -1.0,
+        SculptMode::Smooth => return 0,
+    };
+    let amount = amount.clamp(0.0, 64.0);
+    if amount <= 0.0 {
+        return 0;
+    }
+    let r = brush.radius.max(0.5);
+    let reach = brush.reach().max(r) + amount + 1.0;
+    let (t1, t2) = tangents(normal);
+    let (min_y, max_y) = (edit.dim().min_y, edit.dim().max_y);
+    let lo = [(center[0] - reach).floor() as i32, ((center[1] - reach).floor() as i32).max(min_y), (center[2] - reach).floor() as i32];
+    let hi = [(center[0] + reach).ceil() as i32, ((center[1] + reach).ceil() as i32).min(max_y), (center[2] + reach).ceil() as i32];
+    if hi[1] <= lo[1] {
+        return 0;
+    }
+    let ground = edit.dim().ground();
+    let mut positions = Vec::new();
+    let (c0, c1) = (ChunkPos::containing(lo[0], lo[1], lo[2]), ChunkPos::containing(hi[0] - 1, hi[1] - 1, hi[2] - 1));
+    for cy in c0.y..=c1.y {
+        for cz in c0.z..=c1.z {
+            for cx in c0.x..=c1.x {
+                let pos = ChunkPos::new(cx, cy, cz);
+                if ground.contains(pos.tile()) {
+                    positions.push(pos);
+                }
+            }
+        }
+    }
+    if positions.is_empty() {
+        return 0;
+    }
+    // The matter as it is, to read it moved from.
+    let field = Field::gather(edit.dim(), lo, hi, amount.ceil() as i32 + 2);
+    let changed = std::sync::atomic::AtomicUsize::new(0);
+    edit.par_voxels(&positions, |pos, chunk| {
+        let (x0, y0, z0) = pos.origin();
+        for ly in 0..SIZE {
+            let y = y0 + ly;
+            if y < lo[1] || y >= hi[1] {
+                continue;
+            }
+            for lz in 0..SIZE {
+                for lx in 0..SIZE {
+                    let (x, z) = (x0 + lx, z0 + lz);
+                    let at = [x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5];
+                    let p = [at[0] - center[0], at[1] - center[1], at[2] - center[2]];
+                    let w = p[0] * normal[0] + p[1] * normal[1] + p[2] * normal[2];
+                    let across = 1.0 - (w / r).powi(2);
+                    if across <= 0.0 {
+                        continue;
+                    }
+                    let u = p[0] * t1[0] + p[1] * t1[1] + p[2] * t1[2];
+                    let v = p[0] * t2[0] + p[1] * t2[1] + p[2] * t2[2];
+                    let shift = amount * brush.weight(u, v) * across * outward;
+                    if shift.abs() < 0.01 {
+                        continue;
+                    }
+                    // What lies `shift` blocks back along the normal comes here.
+                    let moved = field.sample([at[0] - normal[0] * shift, at[1] - normal[1] * shift, at[2] - normal[2] * shift]);
+                    let old = chunk.get(lx, ly, lz);
+                    let new = if outward > 0.0 { (old as f32).max(moved) } else { (old as f32).min(moved) };
+                    let new = new.round().clamp(0.0, 255.0) as u8;
+                    if new != old {
+                        chunk.set(lx, ly, lz, new);
+                        changed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+    });
+    changed.into_inner()
+}
+
 /// Densities of a box of the world, for smoothing.
 #[derive(Clone)]
 struct Field {
@@ -1046,6 +1129,33 @@ mod tests {
                 _ => assert!(before.0 - after.0 < 0.5, "{case}: worn down {before:?} -> {after:?}"),
             }
         }
+    }
+
+    /// The Sculpt editor's dabs push the surface by what they are given, a
+    /// layer at a time, and only under the brush.
+    #[test]
+    fn dabs_add_a_layer_not_a_mountain() {
+        let mut w = world();
+        let mut h = History::default();
+        h.begin("Sculpt", 0);
+        // A brush 20 blocks across, half a block a dab, four dabs.
+        for _ in 0..4 {
+            displace_at(&mut h.edit(&mut w, 0), &brush(10.0), [0.5, 64.0, 0.5], [0.0, 1.0, 0.0], 0.5, SculptMode::Add);
+        }
+        h.commit();
+        let top = |w: &World, x: i32, z: i32| spans_at(w, x, z).last().unwrap().top;
+        // Two blocks up under the brush, nothing beyond it.
+        assert!((top(&w, 0, 0) - 66.0).abs() < 0.6, "{}", top(&w, 0, 0));
+        assert!((top(&w, 6, 3) - 66.0).abs() < 0.6, "{}", top(&w, 6, 3));
+        assert_eq!(top(&w, 14, 0), 64.0);
+        // Digging takes it back down, and on.
+        h.begin("Dig", 0);
+        for _ in 0..8 {
+            displace_at(&mut h.edit(&mut w, 0), &brush(10.0), [0.5, 66.0, 0.5], [0.0, 1.0, 0.0], 0.5, SculptMode::Remove);
+        }
+        h.commit();
+        assert!((top(&w, 0, 0) - 62.0).abs() < 0.6, "{}", top(&w, 0, 0));
+        assert_eq!(top(&w, 14, 0), 64.0);
     }
 
     /// A sculpted chunk keeps the exact heights of the columns it does not

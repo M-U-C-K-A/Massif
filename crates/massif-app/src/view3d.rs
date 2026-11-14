@@ -2737,11 +2737,12 @@ impl View3d {
         let extent = map_rect(doc).map_or(512.0, |(x0, z0, x1, z1)| (x1 - x0).max(z1 - z0) as f32);
 
         // ---- camera control ------------------------------------------------
-        // With a sculpting tool the buttons sculpt (the right one inverts);
-        // Shift + drag moves the view, Alt + drag (or the middle button)
-        // turns it. Otherwise the left button turns, the right one moves.
-        let sculpting = sculpt && tools.sculpt.tool.is_sculpt();
-        let (shift, alt) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt));
+        // With a tool of the Sculpt editor the buttons sculpt or paint (the
+        // right one inverts); Shift + drag moves the view, Alt + drag (or
+        // the middle button) turns it. Otherwise the left button turns, the
+        // right one moves.
+        let sculpting = sculpt && crate::tools::SculptSettings::TOOLS.contains(&tools.sculpt.tool);
+        let (shift, alt, command) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt, i.modifiers.command || i.modifiers.ctrl));
         let (orbit, pan) = if sculpting {
             (
                 (response.dragged_by(PointerButton::Middle) && !shift) || (response.dragged_by(PointerButton::Primary) && alt && !shift),
@@ -2765,18 +2766,39 @@ impl View3d {
             self.camera.target[0] -= (d.x as f64 * c + d.y as f64 * s) * k;
             self.camera.target[2] -= (-d.x as f64 * s + d.y as f64 * c) * k;
         }
+        // The wheel: closer or farther around what the view turns about;
+        // with Shift, forward or back over the land; with Alt, toward the
+        // point under the cursor or away from it; with ⌘ (Ctrl), the size
+        // of the sculpting brush.
         if response.hovered() {
             let (zoom, scroll) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta.y + i.smooth_scroll_delta.x));
-            if sculpting && alt && zoom == 1.0 {
-                // Alt + wheel: the size of the brush.
-                if scroll != 0.0 {
-                    let r = &mut tools.sculpt.brush.radius;
-                    *r = (*r * (scroll * 0.004).exp()).clamp(1.0, 64.0);
+            let far = (extent * 3.0).max(30000.0);
+            if sculpting && command && zoom != 1.0 {
+                let r = &mut tools.sculpt.brush.radius;
+                *r = (*r * zoom).clamp(1.0, 64.0);
+            } else if alt && scroll != 0.0 {
+                let factor = (-scroll * 0.003).exp();
+                if let Some(p) = response.hover_pos() {
+                    let (o, d) = self.ray(rect, p);
+                    let to = massif_core::voxel::raycast(doc.dimension(), o, d, (self.camera.distance as f64 + extent as f64) * 1.5)
+                        .map(|hit| hit.point)
+                        .unwrap_or([o[0] + d[0] * self.camera.distance as f64, o[1] + d[1] * self.camera.distance as f64, o[2] + d[2] * self.camera.distance as f64]);
+                    // The point stays under the cursor as the view nears it.
+                    let k = 1.0 - factor as f64;
+                    for (t, p) in self.camera.target.iter_mut().zip(to) {
+                        *t += (p - *t) * k;
+                    }
                 }
+                self.camera.distance = (self.camera.distance * factor).clamp(2.0, far);
+            } else if shift && scroll != 0.0 {
+                let step = self.camera.distance as f64 * 0.002 * scroll as f64;
+                let (s, c) = (self.camera.yaw.sin() as f64, self.camera.yaw.cos() as f64);
+                self.camera.target[0] -= s * step;
+                self.camera.target[2] -= c * step;
             } else {
                 let factor = if zoom != 1.0 { 1.0 / zoom } else { (-scroll * 0.003).exp() };
                 if factor != 1.0 {
-                    self.camera.distance = (self.camera.distance * factor).clamp(2.0, (extent * 3.0).max(30000.0));
+                    self.camera.distance = (self.camera.distance * factor).clamp(2.0, far);
                 }
             }
         }
@@ -2959,7 +2981,7 @@ impl View3d {
             };
             let (t1, t2) = massif_core::voxel::tangents(f.normal);
             let on = |u: f32, v: f32| to_screen([f.center[0] + t1[0] * u + t2[0] * v, f.center[1] + t1[1] * u + t2[1] * v, f.center[2] + t1[2] * u + t2[2] * v]);
-            let brush = &tools.sculpt.brush;
+            let brush = &tools.sculpt_brush();
             let r = brush.radius;
             let rings: Vec<Vec<egui::Pos2>> = match brush.outline() {
                 Some(outline) => outline.iter().map(|ring| ring.iter().filter_map(|&(u, v)| on(u, v)).collect()).collect(),

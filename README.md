@@ -685,19 +685,34 @@ it peaks at 236 MB of memory.
 Sculpting in 3D has its own editor, **3D Sculpt** (its workspace sits next
 to 3D; the 3D View's **Sculpt** button opens it): a 3D view with its tools
 along the top — **Sculpt** (the left button adds matter, the right one
-digs) and **Smooth** — the brush (any of the library, custom images too),
-its radius and strength. Shift + drag moves the view, Alt + drag (or the
-middle button) turns it, Alt + wheel sizes the brush. The brush is laid on
-the slope under the cursor, read from the matter around smoothed over five
-blocks — not on the face of the block hit — so it glides over the steps of
-the terrain without shaking, and a custom brush keeps its shape on a
-hillside. The ordinary 3D View only shows the world.
+digs), **Smooth** and **Paint** (the terrain chosen in Terrain or Blocks, or
+a pattern; the right button puts back what the height calls for) — with the
+brush chosen for every tool (custom images too, turned as they are), its
+radius and strength in 3D.
+
+- Sculpt pushes the surface out or in under the brush, along its slope, a
+  layer at a time — 16 blocks a second at full strength —, the brush's
+  shape setting how far each point goes: a click adds a bump, holding grows
+  it.
+- Smooth melts bumps and steps away without wearing the land down: it blurs
+  the matter, then pushes it back out a little (Taubin's smoothing), so a
+  hill keeps its height and a hollow its depth.
+- Shift + drag moves the view, Alt + drag (or the middle button) turns it.
+  The wheel brings the view closer around what it turns about; Shift +
+  wheel moves forward over the land; Alt + wheel flies toward the point
+  under the cursor; ⌘ (Ctrl) + wheel sizes the brush.
+
+The brush is laid on the slope under the cursor, read from the matter
+around smoothed over five blocks — not on the face of the block hit — so it
+glides over the steps of the terrain without shaking, and a custom brush
+keeps its shape on a hillside. The ordinary 3D View only shows the world
+(its wheel works the same).
 
 Where you sculpt in 3D, the dimension keeps a 16³ chunk of densities (0–255,
 solid from 128) that replaces what the levels compose inside that cube. A new
 chunk starts as an exact copy of the composition, with the fractional surface
-height as the density of the top blocks, so sculpting never changes anything
-outside the brush. Chunks are shared copy-on-write, which makes undo cheap.
+height as the density of the top blocks — and read back from them, to the
+1/255 of a block —, so sculpting never changes anything outside the brush. Chunks are shared copy-on-write, which makes undo cheap.
 Sculpted matter open to the sky takes the terrain of the column's surface;
 under something else it is rock.
 
