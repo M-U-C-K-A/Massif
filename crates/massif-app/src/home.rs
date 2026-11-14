@@ -785,13 +785,13 @@ fn primary(ui: &mut Ui, text: &str, key: &str) -> Response {
     let ink = if light { Color32::from_rgb(18, 14, 10) } else { Color32::WHITE };
     let label = ui.painter().layout_no_wrap(text.to_owned(), FontId::proportional(13.5), ink);
     let hint = ui.painter().layout_no_wrap(key.to_owned(), FontId::proportional(12.0), ink.gamma_multiply(0.6));
-    let (rect, response) = ui.allocate_exact_size(vec2(label.size().x + hint.size().x + 34.0, 34.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(vec2(label.size().x + hint.size().x + 42.0, 34.0), Sense::click());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, text));
     let fill = if response.hovered() { theme::mix(accent, Color32::WHITE, 0.12) } else { accent };
-    ui.painter().rect_filled(rect, 9, fill);
+    ui.painter().rect_filled(rect, theme::PILL, fill);
     let y = rect.center().y;
-    ui.painter().galley(pos2(rect.min.x + 14.0, y - label.size().y / 2.0), label, ink);
-    ui.painter().galley(pos2(rect.max.x - 14.0 - hint.size().x, y - hint.size().y / 2.0), hint, ink);
+    ui.painter().galley(pos2(rect.min.x + 18.0, y - label.size().y / 2.0), label, ink);
+    ui.painter().galley(pos2(rect.max.x - 16.0 - hint.size().x, y - hint.size().y / 2.0), hint, ink);
     if response.hovered() {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }
@@ -877,8 +877,8 @@ fn preview(ui: &mut Ui, nm: &mut NewMap) {
         let k = PREVIEW / w.max(d);
         let shown = Rect::from_center_size(rect.center(), vec2(w * k, d * k));
         let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(w / w.max(d), d / w.max(d)));
-        ui.painter().image(texture.id(), shown, uv, Color32::WHITE);
-        ui.painter().rect_stroke(shown, 2, Stroke::new(1.0, Color32::from_white_alpha(28)), StrokeKind::Inside);
+        ui.painter().add(egui::epaint::RectShape::filled(shown, 10, Color32::WHITE).with_texture(texture.id(), uv));
+        ui.painter().rect_stroke(shown, 10, Stroke::new(1.0, Color32::from_white_alpha(28)), StrokeKind::Inside);
     }
     let c = rect.center();
     ui.painter().line_segment([c - vec2(5.0, 0.0), c + vec2(5.0, 0.0)], Stroke::new(1.0, Color32::WHITE));
@@ -928,8 +928,8 @@ fn template_preview(ui: &mut Ui, nm: &mut NewMap, t: Template) {
     ui.painter().rect_filled(rect, 10, pal.canvas);
     match shown {
         Some(id) => {
-            ui.painter().image(id, rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-            ui.painter().rect_stroke(rect, 2, Stroke::new(1.0, Color32::from_white_alpha(28)), StrokeKind::Inside);
+            ui.painter().add(egui::epaint::RectShape::filled(rect, 10, Color32::WHITE).with_texture(id, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))));
+            ui.painter().rect_stroke(rect, 10, Stroke::new(1.0, Color32::from_white_alpha(28)), StrokeKind::Inside);
         }
         None => {
             ui.put(Rect::from_center_size(rect.center(), vec2(24.0, 24.0)), egui::Spinner::new());

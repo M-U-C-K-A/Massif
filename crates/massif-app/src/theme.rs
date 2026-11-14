@@ -1,10 +1,10 @@
 //! Look and feel: fonts, icons, and the light / dark palettes.
 //!
-//! The style follows current desktop tools: near-black (or near-white)
-//! backgrounds, cards with hairline borders and generous corners, neutral
-//! fills for what is selected, one accent used sparingly, pill-shaped
-//! controls, and the system's own typeface (SF Pro on macOS) with real
-//! weights.
+//! The style follows current product design: neutral near-black (or
+//! near-white) surfaces, cards with hairline borders and generous corners,
+//! wells a shade darker for what is grouped, pill-shaped buttons, slim
+//! sliders, neutral fills for what is selected, one accent used sparingly,
+//! and the system's own typeface (SF Pro on macOS) with real weights.
 
 use egui::epaint::Shadow;
 use egui::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
@@ -47,6 +47,16 @@ pub fn set_accent(ctx: &egui::Context, c: [u8; 3]) {
     ctx.set_visuals_of(Theme::Dark, Palette::dark().visuals());
 }
 
+/// Corner radii, in points: of an area (a card), of a dialog, of a popover
+/// or menu, of a group of settings inside one, of a tile or small chip —
+/// and of controls, which are pills.
+pub const CARD_RADIUS: u8 = 12;
+pub const WINDOW_RADIUS: u8 = 16;
+pub const POPUP_RADIUS: u8 = 12;
+pub const GROUP_RADIUS: u8 = 10;
+pub const TILE_RADIUS: u8 = 8;
+pub const PILL: u8 = 255;
+
 /// The `wght` axis of variable fonts.
 pub const WGHT: u32 = u32::from_be_bytes(*b"wght");
 /// Weights used in the interface.
@@ -80,32 +90,33 @@ pub struct Palette {
 impl Palette {
     pub const LIGHT: Palette = Palette {
         dark: false,
-        app_bg: Color32::from_rgb(222, 223, 227),
-        panel: Color32::from_rgb(248, 248, 250),
-        header: Color32::from_rgb(237, 238, 241),
-        border: Color32::from_rgb(212, 213, 219),
-        text: Color32::from_rgb(24, 24, 27),
-        weak: Color32::from_rgb(113, 113, 122),
+        app_bg: Color32::from_rgb(228, 228, 231),
+        panel: Color32::from_rgb(250, 250, 251),
+        header: Color32::from_rgb(240, 240, 242),
+        border: Color32::from_rgb(222, 222, 226),
+        text: Color32::from_rgb(23, 23, 25),
+        weak: Color32::from_rgb(113, 113, 120),
         accent: Color32::from_rgb(37, 99, 235),
-        accent_soft: Color32::from_rgb(236, 236, 240),
+        accent_soft: Color32::from_rgb(234, 234, 237),
         danger: Color32::from_rgb(220, 38, 38),
         success: Color32::from_rgb(22, 163, 74),
-        canvas: Color32::from_rgb(228, 229, 233),
+        canvas: Color32::from_rgb(234, 234, 237),
     };
 
+    // Neutral greys, as the references: no tint.
     pub const DARK: Palette = Palette {
         dark: true,
-        app_bg: Color32::from_rgb(11, 12, 14),
-        panel: Color32::from_rgb(24, 25, 29),
-        header: Color32::from_rgb(30, 31, 36),
-        border: Color32::from_rgb(43, 45, 52),
-        text: Color32::from_rgb(232, 233, 237),
-        weak: Color32::from_rgb(142, 145, 155),
+        app_bg: Color32::from_rgb(9, 9, 10),
+        panel: Color32::from_rgb(20, 20, 21),
+        header: Color32::from_rgb(29, 29, 31),
+        border: Color32::from_rgb(40, 40, 43),
+        text: Color32::from_rgb(237, 237, 239),
+        weak: Color32::from_rgb(141, 141, 147),
         accent: Color32::from_rgb(77, 144, 254),
-        accent_soft: Color32::from_rgb(44, 46, 54),
+        accent_soft: Color32::from_rgb(44, 44, 47),
         danger: Color32::from_rgb(244, 84, 84),
         success: Color32::from_rgb(52, 199, 120),
-        canvas: Color32::from_rgb(17, 18, 21),
+        canvas: Color32::from_rgb(14, 14, 15),
     };
 
     pub fn of(ui: &egui::Ui) -> Palette {
@@ -131,10 +142,35 @@ impl Palette {
     /// Fill of a control at rest.
     pub fn control(&self) -> Color32 {
         if self.dark {
-            Color32::from_rgb(35, 37, 43)
+            Color32::from_rgb(33, 33, 35)
         } else {
             Color32::from_rgb(255, 255, 255)
         }
+    }
+
+    /// Fill of a well: what groups settings, a shade under the card.
+    pub fn well(&self) -> Color32 {
+        if self.dark {
+            Color32::from_rgb(14, 14, 15)
+        } else {
+            Color32::from_rgb(244, 244, 246)
+        }
+    }
+
+    /// The hairline around a control: a little lighter than its fill.
+    pub fn control_border(&self) -> Color32 {
+        if self.dark {
+            Color32::from_rgb(50, 50, 53)
+        } else {
+            Color32::from_rgb(214, 214, 219)
+        }
+    }
+
+    /// The ink that reads on the accent: dark on a light one.
+    pub fn on_accent(&self) -> Color32 {
+        let a = self.accent;
+        let luma = 0.299 * a.r() as f32 + 0.587 * a.g() as f32 + 0.114 * a.b() as f32;
+        if luma > 165.0 { Color32::from_rgb(16, 16, 18) } else { Color32::WHITE }
     }
 
     fn visuals(&self) -> Visuals {
@@ -143,12 +179,13 @@ impl Palette {
         } else {
             Visuals::light()
         };
-        let radius = CornerRadius::same(6);
+        // Buttons, fields and tabs are pills; what only frames is rounded.
+        let radius = CornerRadius::same(PILL);
         v.panel_fill = self.panel;
         v.window_fill = self.panel;
         v.window_stroke = Stroke::new(1.0, self.border);
-        v.window_corner_radius = CornerRadius::same(14);
-        v.menu_corner_radius = CornerRadius::same(10);
+        v.window_corner_radius = CornerRadius::same(WINDOW_RADIUS);
+        v.menu_corner_radius = CornerRadius::same(POPUP_RADIUS);
         let shadow = |blur: u8, alpha: u8| Shadow {
             offset: [0, 8],
             blur,
@@ -157,11 +194,7 @@ impl Palette {
         };
         v.window_shadow = shadow(32, if self.dark { 150 } else { 40 });
         v.popup_shadow = shadow(20, if self.dark { 120 } else { 30 });
-        v.extreme_bg_color = if self.dark {
-            Color32::from_rgb(14, 14, 16)
-        } else {
-            Color32::from_rgb(250, 250, 251)
-        };
+        v.extreme_bg_color = if self.dark { self.well() } else { Color32::WHITE };
         v.text_edit_bg_color = Some(v.extreme_bg_color);
         v.faint_bg_color = self.header;
         v.code_bg_color = self.header;
@@ -190,32 +223,32 @@ impl Palette {
         w.noninteractive.weak_bg_fill = self.panel;
         w.noninteractive.bg_stroke = Stroke::new(1.0, self.border);
         w.noninteractive.fg_stroke = Stroke::new(1.0, self.text);
-        w.noninteractive.corner_radius = radius;
+        w.noninteractive.corner_radius = CornerRadius::same(GROUP_RADIUS);
 
         w.inactive.bg_fill = lift(control, 8 * up);
         w.inactive.weak_bg_fill = control;
-        w.inactive.bg_stroke = Stroke::new(1.0, self.border);
+        w.inactive.bg_stroke = Stroke::new(1.0, self.control_border());
         w.inactive.fg_stroke = Stroke::new(1.0, self.text);
         w.inactive.corner_radius = radius;
         w.inactive.expansion = 0.0;
 
         w.hovered.bg_fill = lift(control, 14 * up);
         w.hovered.weak_bg_fill = lift(control, 8 * up);
-        w.hovered.bg_stroke = Stroke::new(1.0, lift(self.border, 14 * up));
+        w.hovered.bg_stroke = Stroke::new(1.0, lift(self.control_border(), 12 * up));
         w.hovered.fg_stroke = Stroke::new(1.0, self.text);
         w.hovered.corner_radius = radius;
         w.hovered.expansion = 0.0;
 
         w.active.bg_fill = lift(control, 20 * up);
         w.active.weak_bg_fill = lift(control, 14 * up);
-        w.active.bg_stroke = Stroke::new(1.0, lift(self.border, 24 * up));
+        w.active.bg_stroke = Stroke::new(1.0, lift(self.control_border(), 22 * up));
         w.active.fg_stroke = Stroke::new(1.0, self.text);
         w.active.corner_radius = radius;
         w.active.expansion = 0.0;
 
         w.open.bg_fill = lift(control, 10 * up);
         w.open.weak_bg_fill = lift(control, 10 * up);
-        w.open.bg_stroke = Stroke::new(1.0, self.border);
+        w.open.bg_stroke = Stroke::new(1.0, self.control_border());
         w.open.fg_stroke = Stroke::new(1.0, self.text);
         w.open.corner_radius = radius;
         v
@@ -322,13 +355,13 @@ pub fn install(ctx: &egui::Context) {
         ]
         .into();
         style.spacing.item_spacing = vec2(8.0, 6.0);
-        style.spacing.button_padding = vec2(10.0, 4.0);
-        style.spacing.interact_size = vec2(28.0, 24.0);
+        style.spacing.button_padding = vec2(12.0, 4.0);
+        style.spacing.interact_size = vec2(28.0, 26.0);
         style.spacing.slider_width = 120.0;
         style.spacing.slider_rail_height = 4.0;
         style.spacing.combo_height = 320.0;
         style.spacing.menu_margin = egui::Margin::same(8);
-        style.spacing.window_margin = egui::Margin::same(16);
+        style.spacing.window_margin = egui::Margin::same(20);
         style.spacing.icon_width = 15.0;
         style.spacing.icon_width_inner = 9.0;
         style.spacing.icon_spacing = 6.0;

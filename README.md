@@ -108,6 +108,14 @@ comes back to it, with a way back to the open map (Esc).
 accent colour: the colour of what is chosen, of the main buttons and of the
 home screen's art (eight colours, or any other).
 
+The interface keeps to neutral greys and one accent. Each area is a rounded
+card, its commands in its header without frames (its menu behind **…**);
+settings sit in wells, one per row with a hairline between rows; buttons are
+pills, and choices among a few are segmented controls. A slider is a slim
+track with its value after it: click the track to jump there, drag the thumb
+(Shift: finer), drag the value sideways, or click it to type one. A narrow
+Tools area keeps each row of tools on one line, its name under the pointer.
+
 ### Download
 
 Builds for Windows, macOS (Apple silicon and Intel) and Linux are on the

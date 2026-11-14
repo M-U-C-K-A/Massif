@@ -812,7 +812,7 @@ pub struct GraphEditor {
     library: Option<Library>,
     pub view: TerrainView,
     /// The render settings are open over the viewport.
-    render_open: bool,
+    pub(crate) render_open: bool,
     /// Size of the images saved.
     pub image_size: [u32; 2],
     /// What saving an image gave, to show: the file's name, or what failed.
@@ -1095,9 +1095,9 @@ impl GraphEditor {
             None => "The graph's output".to_owned(),
         };
         egui::Frame::new()
-            .fill(Color32::from_black_alpha(120))
-            .corner_radius(6)
-            .inner_margin(egui::Margin::symmetric(8, 4))
+            .fill(Color32::from_black_alpha(130))
+            .corner_radius(theme::PILL)
+            .inner_margin(egui::Margin::symmetric(12, 5))
             .show(&mut child, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(theme::glyph(Icon::Eye).to_string()).color(Color32::WHITE));
@@ -1115,24 +1115,33 @@ impl GraphEditor {
         let bar = Rect::from_min_max(pos2(rect.left() + 10.0, rect.bottom() - 40.0), pos2(rect.right() - 10.0, rect.bottom() - 8.0));
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(bar).layout(egui::Layout::left_to_right(egui::Align::Center)));
         egui::Frame::new()
-            .fill(pal.panel.gamma_multiply(0.92))
+            .fill(pal.panel.gamma_multiply(0.94))
             .stroke(Stroke::new(1.0, pal.border))
-            .corner_radius(8)
-            .inner_margin(egui::Margin::symmetric(8, 3))
+            .corner_radius(theme::PILL)
+            .inner_margin(egui::Margin::symmetric(5, 4))
             .show(&mut child, |ui| {
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().interact_size.y = 18.0;
+                    ui.spacing_mut().interact_size.y = 22.0;
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    // Its commands show under the pointer, and when on.
+                    {
+                        let w = &mut ui.visuals_mut().widgets;
+                        w.inactive.weak_bg_fill = Color32::TRANSPARENT;
+                        for state in [&mut w.inactive, &mut w.hovered, &mut w.active] {
+                            state.bg_stroke = Stroke::NONE;
+                        }
+                    }
                     ui.toggle_value(&mut self.render_open, theme::with_icon(Icon::Sun, "Render"))
                         .on_hover_text("Sun, clouds, haze, sea and exposure of the view");
                     ui.toggle_value(&mut self.view.render.clouds, theme::with_icon(Icon::Cloud, "Clouds"));
                     ui.toggle_value(&mut self.view.render.sea, theme::with_icon(Icon::Waves, "Sea"))
                         .on_hover_text(format!("Water at the world's sea level ({})", doc.world.meta.sea_level));
-                    if ui.small_button(theme::glyph(Icon::Focus).to_string()).on_hover_text("Frame the relief").clicked() {
+                    if ui.button(theme::glyph(Icon::Focus).to_string()).on_hover_text("Frame the relief").clicked() {
                         self.view.camera = Default::default();
                     }
                     let [w, h] = self.image_size;
                     if ui
-                        .small_button(theme::glyph(Icon::Camera).to_string())
+                        .button(theme::glyph(Icon::Camera).to_string())
                         .on_hover_text(format!("Save the view as an image, at full quality ({w} × {h})"))
                         .clicked()
                     {
@@ -1155,9 +1164,8 @@ impl GraphEditor {
                 .order(egui::Order::Foreground)
                 .fixed_pos(pos2(rect.left() + 10.0, rect.top() + 46.0))
                 .show(ui.ctx(), |ui| {
-                    egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
-                        ui.set_width(300.0);
-                        ui.spacing_mut().slider_width = 150.0;
+                    egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(14)).show(ui, |ui| {
+                        ui.set_width(330.0);
                         egui::ScrollArea::vertical().max_height((rect.height() - 70.0).max(160.0)).show(ui, |ui| {
                             self.view.settings_ui(ui);
                         });
@@ -1198,37 +1206,36 @@ impl GraphEditor {
     pub fn render_ui(&mut self, ui: &mut Ui, doc: &Document) {
         self.sync(ui.ctx(), doc);
         let pal = Palette::of(ui);
-        ui.spacing_mut().slider_width = (ui.available_width() - 150.0).clamp(80.0, 240.0);
         let exaggeration = self.view.render.exaggeration;
         self.view.settings_ui(ui);
         if (self.view.render.exaggeration - exaggeration).abs() > 1e-4 {
             // The light depends on the exaggeration.
             self.revision += 1;
         }
-        ui.add_space(6.0);
-        ui.label(RichText::new(theme::with_icon(Icon::Camera, "Image")).size(11.5).color(pal.weak));
-        ui.horizontal(|ui| {
-            ui.add_sized([86.0, 18.0], egui::Label::new(RichText::new("Size").size(12.0)));
-            let [w, h] = self.image_size;
-            crate::widgets::combo("render image size")
-                .selected_text(format!("{w} × {h}"))
-                .width(130.0)
-                .show_ui(ui, |ui| {
-                    for (name, size) in IMAGE_SIZES {
-                        ui.selectable_value(&mut self.image_size, size, format!("{name} · {} × {}", size[0], size[1]));
-                    }
-                });
-        });
-        ui.add_space(4.0);
+        ui.add_space(14.0);
         let detail = self.preview;
-        ui.label(
-            RichText::new(format!(
-                "From the preview, {detail} × {detail} samples."
-            ))
-            .size(11.0)
-            .color(pal.weak),
-        );
-        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(theme::glyph(Icon::Camera).to_string()).size(13.0).color(pal.weak));
+            ui.label(RichText::new("Image").size(13.0).medium());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(RichText::new(format!("from the preview, {detail} × {detail} samples")).size(11.0).color(pal.weak));
+            });
+        });
+        ui.add_space(2.0);
+        crate::widgets::well(ui, |ui| {
+            crate::widgets::row(ui, "Size", |ui| {
+                let [w, h] = self.image_size;
+                crate::widgets::combo("render image size")
+                    .selected_text(format!("{w} × {h}"))
+                    .width(130.0)
+                    .show_ui(ui, |ui| {
+                        for (name, size) in IMAGE_SIZES {
+                            ui.selectable_value(&mut self.image_size, size, format!("{name} · {} × {}", size[0], size[1]));
+                        }
+                    });
+            });
+        });
+        ui.add_space(10.0);
         if ui
             .add_enabled(self.view.has_data(), theme::primary_button(ui, theme::with_icon(Icon::Camera, "Save image…")))
             .on_hover_text("Render the view at full quality and save it as a PNG")
@@ -1439,8 +1446,7 @@ impl GraphEditor {
                 // Over the map, or into it: by default over it for a graph
                 // that starts from the map.
                 let mut over = self.over.unwrap_or_else(|| graph.reads_the_map());
-                if ui
-                    .checkbox(&mut over, "over the map")
+                if crate::widgets::checkbox(ui, &mut over, "over the map")
                     .on_hover_text(
                         "On: the changes go to levels you can delete. Off: the graph replaces the ground.",
                     )
@@ -2974,7 +2980,7 @@ fn sea_level(ui: &mut Ui, v: &mut f32, hover: &str) -> bool {
     let before = *v;
     ui.horizontal(|ui| {
         ui.add_sized([96.0, 18.0], egui::Label::new(RichText::new("Sea level").size(12.0)));
-        if ui.checkbox(&mut on, "").on_hover_text(hover).changed() {
+        if crate::widgets::checkbox(ui, &mut on, "").on_hover_text(hover).changed() {
             *v = if on { 63.0 } else { massif_core::graph::NO_WATER };
         }
         if on {
@@ -3025,7 +3031,7 @@ fn color(ui: &mut Ui, label: &str, v: &mut [u8; 3]) -> bool {
 }
 
 fn flag(ui: &mut Ui, label: &str, v: &mut bool) -> bool {
-    row(ui, label, |ui| ui.checkbox(v, ""))
+    row(ui, label, |ui| crate::widgets::checkbox(ui, v, ""))
 }
 
 /// Swatches of the gradients, to pick one.
@@ -3416,7 +3422,7 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             let state = if path.is_empty() {
                 "PNG, JPEG, .r16, .r32, .world or .massif".to_owned()
             } else if massif_core::graph::is_world(file) {
-                row(ui, "Fit to terrain", |ui| ui.checkbox(fit, ""));
+                row(ui, "Fit to terrain", |ui| crate::widgets::checkbox(ui, fit, ""));
                 "A world: its surface, water and terrain colours.".to_owned()
             } else {
                 height(ui, "Black is", low);
@@ -3471,7 +3477,7 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
         }
         NodeKind::BiomeOutput { sea, paint } => {
             height(ui, "Sea level", sea);
-            row(ui, "Paint the ground", |ui| ui.checkbox(paint, ""));
+            row(ui, "Paint the ground", |ui| crate::widgets::checkbox(ui, paint, ""));
             ui.label(
                 RichText::new("Writes each climate's biome and terrain:")
                     .size(11.0)

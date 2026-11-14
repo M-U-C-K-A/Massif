@@ -1114,7 +1114,7 @@ impl MassifApp {
             egui::Frame::new()
                 .fill(pal.panel)
                 .stroke(Stroke::new(1.0, pal.border))
-                .corner_radius(10)
+                .corner_radius(theme::PILL)
                 .inner_margin(egui::Margin::same(3))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -1128,7 +1128,7 @@ impl MassifApp {
                             let button = egui::Button::new(if active { text.medium() } else { text })
                                 .fill(if active { pal.accent_soft } else { Color32::TRANSPARENT })
                                 .stroke(Stroke::NONE)
-                                .corner_radius(7)
+                                .corner_radius(theme::PILL)
                                 .min_size(vec2(0.0, 24.0));
                             if ui.add(button).on_hover_text(hint).clicked() {
                                 self.layout.switch_side(side);
@@ -1142,7 +1142,7 @@ impl MassifApp {
             egui::Frame::new()
                 .fill(pal.panel)
                 .stroke(Stroke::new(1.0, pal.border))
-                .corner_radius(10)
+                .corner_radius(theme::PILL)
                 .inner_margin(egui::Margin::same(3))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -1335,12 +1335,10 @@ impl MassifApp {
     fn area(&mut self, ui: &mut Ui, frame: &eframe::Frame, id: AreaId, editor: EditorKind, rect: Rect, shown: &HashSet<EditorKind>) {
         let pal = Palette::of(ui);
         let painter = ui.painter_at(rect.expand(1.0));
-        painter.rect_filled(rect, 8, pal.panel);
+        // A card: its title and commands along its top, on the card itself.
+        painter.rect_filled(rect, theme::CARD_RADIUS, pal.panel);
         let header = Rect::from_min_size(rect.min, vec2(rect.width(), HEADER));
-        painter.rect_filled(header, egui::CornerRadius { nw: 8, ne: 8, sw: 0, se: 0 }, pal.header);
-        painter.hline(header.x_range().shrink(1.0), header.bottom(), Stroke::new(1.0, pal.border));
-        painter.rect_stroke(rect, 8, Stroke::new(1.0, pal.border), StrokeKind::Inside);
-        let content = Rect::from_min_max(pos2(rect.min.x + 1.0, header.bottom() + 1.0), pos2(rect.max.x - 1.0, rect.max.y - 1.0));
+        let content = Rect::from_min_max(pos2(rect.min.x + 1.0, header.bottom()), pos2(rect.max.x - 1.0, rect.max.y - 1.0));
         let maximized = self.layout.current().maximized == Some(id);
         let single = self.layout.current().root.count() == 1;
 
@@ -1348,11 +1346,23 @@ impl MassifApp {
         let mut hui = ui.new_child(
             UiBuilder::new()
                 .id_salt(("area header", id))
-                .max_rect(header.shrink2(vec2(8.0, 4.0)))
+                .max_rect(header.shrink2(vec2(8.0, 5.0)))
                 .layout(egui::Layout::left_to_right(Align::Center)),
         );
         hui.set_clip_rect(header.intersect(ui.clip_rect()));
         hui.spacing_mut().item_spacing.x = 4.0;
+        hui.spacing_mut().interact_size.y = 24.0;
+        hui.spacing_mut().button_padding = vec2(8.0, 3.0);
+        // The commands of a header have no outline: they show under the
+        // pointer, and when chosen.
+        {
+            let w = &mut hui.visuals_mut().widgets;
+            w.inactive.weak_bg_fill = Color32::TRANSPARENT;
+            w.inactive.bg_fill = Color32::TRANSPARENT;
+            for state in [&mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
+                state.bg_stroke = Stroke::NONE;
+            }
+        }
         hui.menu_button(format!("{} {}", theme::glyph(editor.icon()), theme::glyph(Icon::ChevronDown)), |ui| {
             for (group, kinds) in EditorKind::GROUPS {
                 ui.label(RichText::new(group).size(11.0).color(Palette::of(ui).weak));
@@ -1364,7 +1374,7 @@ impl MassifApp {
             }
         });
         let title = hui
-            .add(egui::Label::new(RichText::new(editor.label()).bold()).sense(Sense::drag()).selectable(false))
+            .add(egui::Label::new(RichText::new(editor.label()).medium()).sense(Sense::drag()).selectable(false))
             .on_hover_cursor(CursorIcon::Grab);
         if title.drag_started() && !single {
             self.dragging_area = Some(id);
@@ -1395,7 +1405,6 @@ impl MassifApp {
         }
         let shift = ui.input(|i| i.modifiers.shift);
         hui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-            ui.add_space(8.0); // room for the corner handle
             // As in the modernised WorldPainter: a menu of commands, and with
             // Shift held, a button that closes the area at once.
             if shift && !single && !maximized {
@@ -1409,7 +1418,7 @@ impl MassifApp {
                 return;
             }
             let sibling = self.layout.current().root.sibling(id);
-            ui.menu_button(RichText::new(theme::glyph(Icon::EllipsisVertical).to_string()).size(13.0), |ui| {
+            ui.menu_button(RichText::new(theme::glyph(Icon::Ellipsis).to_string()).size(14.0).color(pal.weak), |ui| {
                 if ui.button(theme::with_icon(Icon::Columns2, "Split vertically")).clicked() {
                     self.layout.split(id, Dir::Row);
                 }
@@ -1452,19 +1461,19 @@ impl MassifApp {
         });
 
         // ---- corner: drag it into the area to split ----------------------------
-        let corner = Rect::from_min_size(pos2(rect.right() - 12.0, rect.top()), vec2(12.0, 12.0));
+        // Nothing shows there until the pointer is on it: then the corner
+        // lights up, with a cross for a cursor.
+        let corner = Rect::from_min_size(pos2(rect.right() - 10.0, rect.top()), vec2(10.0, 10.0));
         let handle = ui.interact(corner, Id::unique(("area corner", id)), Sense::drag());
         let hot = handle.hovered() || handle.dragged();
-        {
-            let c = if hot { pal.accent } else { pal.weak.gamma_multiply(0.6) };
-            for k in [4.0, 8.0] {
-                painter.line_segment(
-                    [pos2(corner.right() - k - 1.0, corner.top() + 1.5), pos2(corner.right() - 1.5, corner.top() + k + 1.0)],
-                    Stroke::new(1.2, c),
-                );
-            }
-        }
         if hot {
+            let r = theme::CARD_RADIUS as f32;
+            let c = pos2(rect.right() - r, rect.top() + r);
+            let arc: Vec<egui::Pos2> = (0..=8).map(|k| {
+                let a = -std::f32::consts::FRAC_PI_2 + k as f32 / 8.0 * std::f32::consts::FRAC_PI_2;
+                c + vec2(a.cos(), a.sin()) * (r - 1.0)
+            }).collect();
+            painter.add(egui::Shape::line(arc, Stroke::new(2.0, pal.accent)));
             ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
         }
         if handle.dragged()
@@ -1636,6 +1645,10 @@ impl MassifApp {
                 }
             }
         }
+        // The card's rounded corners over what its editor drew square, and
+        // its hairline over that.
+        round_off(&painter, rect, theme::CARD_RADIUS as f32, pal.app_bg);
+        painter.rect_stroke(rect, theme::CARD_RADIUS, Stroke::new(1.0, pal.border), StrokeKind::Inside);
     }
 
     // ------------------------------------------------------------ dialogs --
@@ -1646,7 +1659,7 @@ impl MassifApp {
             let secs = job.started.elapsed().as_secs_f32();
             let progress = job.progress.as_ref().map(|p| p.fraction());
             let mut cancel = false;
-            egui::Modal::new(Id::unique("busy")).show(ctx, |ui| {
+            modal(ctx, "busy").show(ctx, |ui| {
                 ui.set_width(360.0);
                 ui.horizontal(|ui| {
                     ui.spinner();
@@ -1677,50 +1690,54 @@ impl MassifApp {
         let mut keep = true;
         match dialog {
             Dialog::Preferences => {
-                let response = egui::Modal::new(Id::unique("preferences")).show(ctx, |ui| {
-                    ui.set_width(440.0);
+                let response = modal(ctx, "preferences").show(ctx, |ui| {
+                    ui.set_width(460.0);
                     let pal = Palette::of(ui);
-                    ui.label(RichText::new("Settings").bold().size(16.0));
+                    ui.label(RichText::new("Settings").bold().size(17.0));
+                    ui.label(RichText::new("How Massif looks.").color(pal.weak));
                     ui.add_space(12.0);
-                    ui.label(RichText::new("Appearance").size(11.5).color(pal.weak));
-                    ui.add_space(6.0);
-                    row(ui, "Theme", |ui| {
-                        for (choice, label) in [(ThemeChoice::System, "System"), (ThemeChoice::Light, "Light"), (ThemeChoice::Dark, "Dark")] {
-                            if ui.selectable_label(self.settings.theme == choice, label).clicked() {
-                                self.settings.theme = choice;
+                    crate::widgets::well(ui, |ui| {
+                        crate::widgets::row(ui, "Theme", |ui| {
+                            let choices = [ThemeChoice::System, ThemeChoice::Light, ThemeChoice::Dark];
+                            let on = choices.map(|c| c == self.settings.theme);
+                            if let Some(k) = crate::widgets::button_group(ui, "theme", &["System", "Light", "Dark"], &on) {
+                                self.settings.theme = choices[k];
                             }
-                        }
+                        });
+                        crate::widgets::row(ui, "Accent", |ui| {
+                            // Laid from the right: any colour last, the swatches before it.
+                            let mut chosen = None;
+                            let mut custom = self.settings.accent;
+                            if egui::color_picker::color_edit_button_srgb(ui, &mut custom).on_hover_text("Any colour").changed() {
+                                chosen = Some(custom);
+                            }
+                            ui.add_space(4.0);
+                            ui.spacing_mut().item_spacing.x = 3.0;
+                            for (name, rgb) in theme::ACCENTS.iter().rev() {
+                                let (rect, swatch) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+                                let on = self.settings.accent == *rgb;
+                                ui.painter().circle_filled(rect.center(), 8.0, theme::rgb(*rgb));
+                                if on || swatch.hovered() {
+                                    ui.painter().circle_stroke(rect.center(), 10.5, Stroke::new(1.5, if on { pal.text } else { pal.weak }));
+                                }
+                                swatch.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, *name));
+                                if swatch.on_hover_text(*name).clicked() {
+                                    chosen = Some(*rgb);
+                                }
+                            }
+                            if let Some(rgb) = chosen {
+                                self.settings.accent = rgb;
+                                theme::set_accent(ctx, rgb);
+                            }
+                        });
                     });
                     ui.add_space(6.0);
-                    row(ui, "Accent", |ui| {
-                        let mut chosen = None;
-                        for (name, rgb) in theme::ACCENTS {
-                            let (rect, swatch) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
-                            let on = self.settings.accent == rgb;
-                            ui.painter().circle_filled(rect.center(), 9.0, theme::rgb(rgb));
-                            if on || swatch.hovered() {
-                                ui.painter().circle_stroke(rect.center(), 11.0, Stroke::new(1.5, if on { pal.text } else { pal.weak }));
-                            }
-                            if swatch.on_hover_text(name).clicked() {
-                                chosen = Some(rgb);
-                            }
-                        }
-                        ui.add_space(6.0);
-                        let mut custom = self.settings.accent;
-                        if egui::color_picker::color_edit_button_srgb(ui, &mut custom).on_hover_text("Any colour").changed() {
-                            chosen = Some(custom);
-                        }
-                        if let Some(rgb) = chosen {
-                            self.settings.accent = rgb;
-                            theme::set_accent(ctx, rgb);
-                        }
-                    });
                     ui.label(
-                        RichText::new("The colour of what is chosen, of the main buttons and of the home screen's art.")
+                        RichText::new("The accent is the colour of what is chosen, of the main buttons and of the home screen's art.")
                             .size(11.5)
                             .color(pal.weak),
                     );
-                    ui.add_space(14.0);
+                    ui.add_space(16.0);
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                         if ui.add(theme::primary_button(ui, "Done")).clicked() {
                             keep = false;
@@ -1735,7 +1752,7 @@ impl MassifApp {
                 }
             }
             Dialog::AutoRules(mut paint) => {
-                let response = egui::Modal::new(Id::unique("auto rules")).show(ctx, |ui| {
+                let response = modal(ctx, "auto rules").show(ctx, |ui| {
                     ui.set_width(700.0);
                     ui.label(
                         RichText::new("Automatic biomes and paint")
@@ -1825,7 +1842,7 @@ impl MassifApp {
             }
             Dialog::Unsaved(pending) => {
                 let mut choice = None;
-                let response = egui::Modal::new(Id::unique("unsaved")).show(ctx, |ui| {
+                let response = modal(ctx, "unsaved").show(ctx, |ui| {
                     ui.set_width(380.0);
                     ui.label(RichText::new(format!("Save the changes to “{}”?", self.doc.world.meta.name)).bold().size(15.0));
                     ui.label(RichText::new("Your changes will be lost if you don't save them.").color(Palette::of(ui).weak));
@@ -1870,7 +1887,7 @@ impl MassifApp {
             }
             Dialog::Export(mut form) => {
                 let mut start = None;
-                let response = egui::Modal::new(Id::unique("export")).show(ctx, |ui| {
+                let response = modal(ctx, "export").show(ctx, |ui| {
                     ui.set_width(840.0);
                     let pal = Palette::of(ui);
                     ui.label(RichText::new("Export to Minecraft").bold().size(16.0));
@@ -1924,10 +1941,7 @@ impl MassifApp {
                     if exists {
                         ui.add_space(4.0);
                         ui.colored_label(pal.danger, "This folder already exists.");
-                        ui.checkbox(
-                            &mut form.overwrite,
-                            "Replace its region files (everything else is kept)",
-                        );
+                        crate::widgets::checkbox(ui, &mut form.overwrite, "Replace its region files (everything else is kept)");
                     }
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
@@ -1988,7 +2002,7 @@ impl MassifApp {
             }
             Dialog::ImportReport(report, thumbnail) => {
                 let mut save = false;
-                let response = egui::Modal::new(Id::unique("import report")).show(ctx, |ui| {
+                let response = modal(ctx, "import report").show(ctx, |ui| {
                     ui.set_width(520.0);
                     let pal = Palette::of(ui);
                     ui.label(RichText::new(format!("Imported “{}”", report.name)).bold().size(16.0));
@@ -2075,7 +2089,7 @@ impl MassifApp {
                 }
             }
             Dialog::About => {
-                let response = egui::Modal::new(Id::unique("about")).show(ctx, |ui| {
+                let response = modal(ctx, "about").show(ctx, |ui| {
                     ui.set_width(400.0);
                     ui.label(
                         RichText::new(format!("{}  Massif", theme::glyph(Icon::MountainSnow)))
@@ -2231,24 +2245,32 @@ impl eframe::App for MassifApp {
     }
 }
 
-/// A titled group of settings, as in WorldPainter's dialogs.
+/// A dialog: generous corners and margins, as the references draw them.
+fn modal(ctx: &egui::Context, id: &str) -> egui::Modal {
+    let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::same(22));
+    egui::Modal::new(Id::unique(id)).frame(frame)
+}
+
+/// A titled group of settings: its name, a word on it, its settings in a
+/// well.
 fn card(ui: &mut Ui, title: &str, subtitle: &str, add: impl FnOnce(&mut Ui)) {
     let pal = Palette::of(ui);
     ui.add_space(4.0);
-    ui.label(RichText::new(title).bold());
+    ui.label(RichText::new(title).medium());
     if !subtitle.is_empty() {
         ui.label(RichText::new(subtitle).size(11.5).color(pal.weak));
     }
+    ui.add_space(2.0);
     egui::Frame::new()
-        .fill(pal.panel)
+        .fill(pal.well())
         .stroke(Stroke::new(1.0, pal.border))
-        .corner_radius(8)
-        .inner_margin(egui::Margin::symmetric(12, 8))
+        .corner_radius(theme::GROUP_RADIUS)
+        .inner_margin(egui::Margin::symmetric(14, 10))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             add(ui);
         });
-    ui.add_space(6.0);
+    ui.add_space(8.0);
 }
 
 /// A row of a card: a label on the left, the control on the right.
@@ -2264,7 +2286,7 @@ fn export_general(ui: &mut Ui, form: &mut ExportForm) {
     card(ui, "Where to save it", "Its folder, and its name in Minecraft.", |ui| {
         row(ui, "Saves folder", |ui| {
             ui.add(egui::Label::new(RichText::new(form.parent.display().to_string()).size(11.5)).truncate());
-            if ui.small_button("…").on_hover_text("Choose the folder").clicked()
+            if ui.button(theme::glyph(Icon::FolderOpen).to_string()).on_hover_text("Choose the folder").clicked()
                 && let Some(dir) = rfd::FileDialog::new().set_directory(&form.parent).pick_folder()
             {
                 form.parent = dir;
@@ -2325,13 +2347,13 @@ fn export_general(ui: &mut Ui, form: &mut ExportForm) {
                     });
             });
             row(ui, "", |ui| {
-                ui.checkbox(&mut form.allow_cheats, "Allow cheats");
+                crate::widgets::checkbox(ui, &mut form.allow_cheats, "Allow cheats");
             });
             row(ui, "", |ui| {
-                ui.checkbox(&mut form.hardcore, "Hardcore");
+                crate::widgets::checkbox(ui, &mut form.hardcore, "Hardcore");
             });
             row(ui, "", |ui| {
-                ui.checkbox(&mut form.structures, "Generate structures beyond the map");
+                crate::widgets::checkbox(ui, &mut form.structures, "Structures beyond the map").on_hover_text("Minecraft generates villages, strongholds and the like in the land it makes around the map");
             });
         });
         card(&mut right[0], "World border", "The border Minecraft shows around the world.", |ui| {
@@ -2354,7 +2376,7 @@ fn export_general(ui: &mut Ui, form: &mut ExportForm) {
     });
     card(ui, "Data packs", "Data packs copied into the world.", |ui| {
         ui.horizontal_top(|ui| {
-            egui::Frame::new().stroke(Stroke::new(1.0, pal.border)).corner_radius(4).inner_margin(4).show(ui, |ui| {
+            egui::Frame::new().stroke(Stroke::new(1.0, pal.border)).corner_radius(theme::TILE_RADIUS).inner_margin(6).show(ui, |ui| {
                 ui.set_min_size(vec2(ui.available_width() - 40.0, 90.0));
                 if form.datapacks.is_empty() {
                     ui.label(RichText::new("No data packs").color(pal.weak));
@@ -2469,6 +2491,26 @@ fn zone_of(r: Rect, p: egui::Pos2) -> Zone {
         .min_by(|a, b| a.0.total_cmp(&b.0))
         .map(|e| e.1)
         .unwrap_or(Zone::Center)
+}
+
+/// Paint `outside` over the corners of `rect` past a rounding of `radius`:
+/// what was drawn square there is cut round.
+fn round_off(painter: &egui::Painter, rect: Rect, radius: f32, outside: Color32) {
+    const STEPS: u32 = 10;
+    let mut mesh = egui::Mesh::default();
+    for (corner, sx, sy) in [(rect.left_top(), 1.0, 1.0), (rect.right_top(), -1.0, 1.0), (rect.right_bottom(), -1.0, -1.0), (rect.left_bottom(), 1.0, -1.0)] {
+        let centre = corner + vec2(sx, sy) * radius;
+        let base = mesh.vertices.len() as u32;
+        mesh.colored_vertex(corner, outside);
+        for k in 0..=STEPS {
+            let a = k as f32 / STEPS as f32 * std::f32::consts::FRAC_PI_2;
+            mesh.colored_vertex(centre - vec2(sx * a.sin(), sy * a.cos()) * radius, outside);
+        }
+        for k in 0..STEPS {
+            mesh.add_triangle(base, base + 1 + k, base + 2 + k);
+        }
+    }
+    painter.add(egui::Shape::mesh(mesh));
 }
 
 /// What of the covers and object layers shows on the map and in 3D.
@@ -2950,6 +2992,14 @@ mod tests {
         }
         wait_for_graph(&mut h);
         h.render().unwrap().save(dir.join("graph.png")).unwrap();
+        // The view's settings, over it.
+        h.state_mut().graph.render_open = true;
+        h.state_mut().graph.view.render.clouds = true;
+        h.run_steps(6);
+        h.render().unwrap().save(dir.join("graph-render-popover.png")).unwrap();
+        h.state_mut().graph.render_open = false;
+        h.state_mut().graph.view.render.clouds = false;
+        wait_for_graph(&mut h);
         let (w, hgt, rgba) = h.state().graph.view.read_back().expect("the viewport rendered");
         image::save_buffer(dir.join("graph-viewport.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
         // The relief fills a good part of the viewport.
@@ -5365,6 +5415,24 @@ mod tests {
         assert!(rise > 0.5 && rise < 12.0, "the land rose by {rise} blocks");
         let (w, hgt, rgba) = h.state().sculpt3d.read_back().expect("the 3D view rendered");
         image::save_buffer(dir.join("sculpt-three-clicks.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+    }
+
+    /// Menus as they show: the commands of an area, the list of a combo
+    /// box. Needs a GPU: runs with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn menus_render() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let rect = map_rect(h.state(), &h.ctx);
+        // The "…" of the map's area, flush with its right edge.
+        click_on(&mut h, pos2(rect.right() - 20.0, rect.top() + 17.0), egui::PointerButton::Primary);
+        h.run_steps(5);
+        use egui_kittest::kittest::Queryable;
+        h.get_by_label_contains("Split vertically");
+        h.render().unwrap().save(dir.join("menu-area.png")).unwrap();
     }
 
     /// Dragging the corner of an area into it splits it there.

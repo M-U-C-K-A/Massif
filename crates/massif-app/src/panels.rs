@@ -47,7 +47,7 @@ fn icon_button(ui: &mut Ui, icon: Icon, selected: bool, size: f32) -> egui::Resp
         Color32::TRANSPARENT
     };
     let painter = ui.painter();
-    painter.rect(rect, 6, fill, if selected { Stroke::new(1.0, pal.accent) } else { Stroke::NONE }, StrokeKind::Inside);
+    painter.rect(rect, theme::TILE_RADIUS, fill, if selected { Stroke::new(1.0, pal.accent) } else { Stroke::NONE }, StrokeKind::Inside);
     painter.text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
@@ -65,21 +65,27 @@ pub fn tools_panel(ui: &mut Ui, tools: &mut ToolState) {
     // A row a theme, set apart: its name, then its tools.
     ui.spacing_mut().item_spacing = vec2(0.0, 4.0);
     let fill = theme::mix(pal.panel, pal.text, if pal.dark { 0.035 } else { 0.028 });
+    // In a narrow area the rows keep their tools on one line: their names
+    // give way to their icons (the name shows under the pointer).
+    let most = Tool::GROUPS.iter().map(|(_, _, list)| list.len()).max().unwrap_or(0) as f32;
+    let compact = ui.available_width() - 12.0 < 58.0 + 4.0 + most * 32.0;
+    let label_w = if compact { 20.0 } else { 58.0 };
     for (group, icon, list) in Tool::GROUPS {
         egui::Frame::new()
             .fill(fill)
-            .corner_radius(7)
+            .corner_radius(theme::GROUP_RADIUS)
             .inner_margin(egui::Margin::symmetric(6, 3))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
                     let short = group.split(' ').next().unwrap_or(group);
-                    let (rect, name) = ui.allocate_exact_size(vec2(58.0, 28.0), Sense::hover());
+                    let (rect, name) = ui.allocate_exact_size(vec2(label_w, 28.0), Sense::hover());
+                    let text = if compact { theme::glyph(icon).to_string() } else { format!("{}  {short}", theme::glyph(icon)) };
                     ui.painter().text(
                         rect.left_center() + vec2(2.0, 0.0),
                         egui::Align2::LEFT_CENTER,
-                        format!("{}  {short}", theme::glyph(icon)),
+                        text,
                         egui::FontId::proportional(11.5),
                         pal.weak,
                     );
@@ -231,7 +237,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             slider_row(ui, "Amplitude", |ui| ui.add(crate::widgets::Field::new(&mut tools.roughness, 0.5..=40.0).suffix(" blocks")));
         }
         Tool::PaintTerrain => {
-            ui.checkbox(&mut tools.pattern.on, "a pattern of terrains")
+            crate::widgets::checkbox(ui, &mut tools.pattern.on, "a pattern of terrains")
                 .on_hover_text("Several terrains at once, mixed by a noise");
             if tools.pattern.on {
                 pattern_settings(ui, tools, doc, blocks);
@@ -302,8 +308,8 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             changed |= tip_row(ui, "Erosion", "How much it wears the land beside its bed", |ui| ui.add(percent(&mut r.erosion)));
             changed |= tip_row(ui, "Banks", "How far its banks slope back up to the land", |ui| ui.add(crate::widgets::Field::new(&mut r.banks, 0.0..=120.0).suffix(" blocks").max_decimals(0)));
             changed |= tip_row(ui, "Lakes", "Which hollows on its way fill up as lakes: none, the deep ones, all", |ui| ui.add(percent(&mut r.lakes)));
-            ui.checkbox(&mut r.water, "Fill it with water");
-            ui.checkbox(&mut r.biome, "River biome on its water");
+            crate::widgets::checkbox(ui, &mut r.water, "Fill it with water");
+            crate::widgets::checkbox(ui, &mut r.biome, "River biome on its water");
             ui.horizontal(|ui| {
                 ui.add_sized([72.0, 18.0], egui::Label::new("Bed"));
                 let shown = if r.bed.is_empty() { "As it is".to_owned() } else { r.bed.clone() };
@@ -446,7 +452,7 @@ fn brush_button(ui: &mut Ui, texture: Option<egui::TextureId>, selected: bool, s
         pal.header
     };
     let painter = ui.painter();
-    painter.rect(rect, 6, fill, if selected { Stroke::new(1.5, pal.accent) } else { Stroke::NONE }, StrokeKind::Inside);
+    painter.rect(rect, theme::TILE_RADIUS, fill, if selected { Stroke::new(1.5, pal.accent) } else { Stroke::NONE }, StrokeKind::Inside);
     match texture {
         Some(tex) => {
             painter.image(tex, rect.shrink(4.0), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
@@ -730,7 +736,7 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
     ui.vertical_centered(|ui| hint(ui, &caption));
     ui.horizontal_wrapped(|ui| {
         let mut above = f.above.is_some();
-        if ui.checkbox(&mut above, "at or above").changed() {
+        if crate::widgets::checkbox(ui, &mut above, "at or above").changed() {
             f.above = above.then_some(f.below.map_or(64, |b| b.min(64)));
         }
         let mut v = f.above.unwrap_or(min_y);
@@ -739,7 +745,7 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
         }
         ui.add_space(16.0);
         let mut below = f.below.is_some();
-        if ui.checkbox(&mut below, "at or below").changed() {
+        if crate::widgets::checkbox(ui, &mut below, "at or below").changed() {
             f.below = below.then_some(f.above.map_or(100, |a| a.max(100)));
         }
         let mut v = f.below.unwrap_or(max_y - 1);
@@ -758,8 +764,8 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
 
     section(ui, Icon::TrendingUp, "Slope");
     ui.horizontal(|ui| {
-        ui.checkbox(&mut f.slope_above, "above");
-        ui.checkbox(&mut f.slope_below, "below");
+        crate::widgets::checkbox(ui, &mut f.slope_above, "above");
+        crate::widgets::checkbox(ui, &mut f.slope_below, "below");
         ui.add_enabled(
             f.slope_above || f.slope_below,
             egui::DragValue::new(&mut f.slope).range(0.0..=90.0).speed(0.5).suffix("°"),
@@ -770,7 +776,7 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
     ui.horizontal(|ui| {
         facing_dial(ui, f);
         ui.vertical(|ui| {
-            ui.checkbox(&mut f.facing_on, "only slopes facing")
+            crate::widgets::checkbox(ui, &mut f.facing_on, "only slopes facing")
                 .on_hover_text("Only slopes facing this way.");
             ui.horizontal(|ui| {
                 ui.add_enabled(
@@ -809,8 +815,8 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
 
     section(ui, Icon::Waves, "Curvature");
     ui.horizontal(|ui| {
-        ui.checkbox(&mut f.hollows, "hollows").on_hover_text("Columns lower than the ones around them");
-        ui.checkbox(&mut f.bumps, "bumps").on_hover_text("Columns higher than the ones around them");
+        crate::widgets::checkbox(ui, &mut f.hollows, "hollows").on_hover_text("Columns lower than the ones around them");
+        crate::widgets::checkbox(ui, &mut f.bumps, "bumps").on_hover_text("Columns higher than the ones around them");
     });
     let on = f.hollows || f.bumps;
     ui.horizontal(|ui| {
@@ -991,7 +997,7 @@ fn object_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, block
             Color32::TRANSPARENT
         };
         let painter = ui.painter();
-        painter.rect(rect, 6, fill, if selected { Stroke::new(1.0, pal.accent) } else { Stroke::NONE }, StrokeKind::Inside);
+        painter.rect(rect, theme::TILE_RADIUS, fill, if selected { Stroke::new(1.0, pal.accent) } else { Stroke::NONE }, StrokeKind::Inside);
         let dot = Rect::from_center_size(rect.left_center() + vec2(13.0, 0.0), vec2(11.0, 11.0));
         painter.rect(dot, 3, theme::rgb(layer.color), Stroke::new(1.0, Color32::from_black_alpha(60)), StrokeKind::Inside);
         painter.text(rect.left_center() + vec2(26.0, 0.0), egui::Align2::LEFT_CENTER, &layer.name, egui::FontId::proportional(12.5), pal.text);
@@ -1043,14 +1049,14 @@ fn object_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, block
         ui.add(crate::widgets::Field::new(&mut layer.sink, -16..=32).suffix(" blocks").max_decimals(0))
     });
     ui.horizontal(|ui| {
-        ui.checkbox(&mut layer.rotate, "Turn at random").on_hover_text("A quarter turn picked for each");
-        ui.checkbox(&mut layer.mirror, "Mirror").on_hover_text("Half of them mirrored");
+        crate::widgets::checkbox(ui, &mut layer.rotate, "Turn at random").on_hover_text("A quarter turn picked for each");
+        crate::widgets::checkbox(ui, &mut layer.mirror, "Mirror").on_hover_text("Half of them mirrored");
     });
     ui.horizontal(|ui| {
-        ui.checkbox(&mut layer.soil_only, "Only on soil").on_hover_text("Grass, dirt, podzol, moss, mud…");
-        ui.checkbox(&mut layer.underwater, "Under water").on_hover_text("Coral, wrecks: in the water rather than the air");
+        crate::widgets::checkbox(ui, &mut layer.soil_only, "Only on soil").on_hover_text("Grass, dirt, podzol, moss, mud…");
+        crate::widgets::checkbox(ui, &mut layer.underwater, "Under water").on_hover_text("Coral, wrecks: in the water rather than the air");
     });
-    ui.checkbox(&mut layer.replace, "Replace the ground").on_hover_text("Their blocks take the place of the ground they reach; otherwise only of air, water and plants");
+    crate::widgets::checkbox(ui, &mut layer.replace, "Replace the ground").on_hover_text("Their blocks take the place of the ground they reach; otherwise only of air, water and plants");
 
     section(ui, Icon::Boxes, &format!("Objects · {}", layer.objects.len()));
     let total: f32 = layer.objects.iter().map(|o| o.1 as f32).sum::<f32>().max(1.0);
@@ -1197,7 +1203,7 @@ fn cover_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks
             Color32::TRANSPARENT
         };
         let painter = ui.painter();
-        painter.rect(rect, 6, fill, if selected { Stroke::new(1.0, pal.accent) } else { Stroke::NONE }, StrokeKind::Inside);
+        painter.rect(rect, theme::TILE_RADIUS, fill, if selected { Stroke::new(1.0, pal.accent) } else { Stroke::NONE }, StrokeKind::Inside);
         let dot = Rect::from_center_size(rect.left_center() + vec2(13.0, 0.0), vec2(11.0, 11.0));
         painter.rect(dot, 3, theme::rgb(c.color), Stroke::new(1.0, Color32::from_black_alpha(60)), StrokeKind::Inside);
         painter.text(rect.left_center() + vec2(26.0, 0.0), egui::Align2::LEFT_CENTER, &c.name, egui::FontId::proportional(12.5), pal.text);
@@ -1250,8 +1256,8 @@ fn cover_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks
         ui.label(RichText::new("blocks").color(pal.weak));
         def.height = [lo as u8, hi.max(lo) as u8];
     });
-    ui.checkbox(&mut def.soil_only, "Only on soil").on_hover_text("Grass, dirt, podzol, moss, mud… as plants need in the game");
-    ui.checkbox(&mut def.underwater, "Under water").on_hover_text("Grows in the water (seagrass, coral) rather than in the air");
+    crate::widgets::checkbox(ui, &mut def.soil_only, "Only on soil").on_hover_text("Grass, dirt, podzol, moss, mud… as plants need in the game");
+    crate::widgets::checkbox(ui, &mut def.underwater, "Under water").on_hover_text("Grows in the water (seagrass, coral) rather than in the air");
 
     // What it grows, and how much of each.
     section(ui, Icon::Flower2, "Grows");
@@ -1533,7 +1539,7 @@ pub fn paint_rules(ui: &mut Ui, rules: &mut massif_core::auto::PaintRules, reg: 
         ui.label("Cliffs from").on_hover_text("Slopes at least this steep get the cliffs' terrain");
         ui.add(egui::DragValue::new(&mut rules.steep).range(10.0..=85.0).speed(0.5).max_decimals(0).suffix("°"));
         ui.add_space(12.0);
-        ui.checkbox(&mut rules.read_the_land, "where the biome is automatic, paint as the land is")
+        crate::widgets::checkbox(ui, &mut rules.read_the_land, "where the biome is automatic, paint as the land is")
             .on_hover_text("Unset biomes count as automatic");
     });
     ui.add_space(4.0);
@@ -1740,7 +1746,7 @@ fn match_list(ui: &mut Ui, label: &str, list: &mut Option<Vec<massif_core::filte
     use massif_core::filter::Match;
     let pal = Palette::of(ui);
     let mut on = list.is_some();
-    if ui.checkbox(&mut on, label).changed() {
+    if crate::widgets::checkbox(ui, &mut on, label).changed() {
         *list = on.then(Vec::new);
     }
     let Some(items) = list else { return };
@@ -1926,7 +1932,7 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                 .hint_text(format!("{}  Search {} blocks", theme::glyph(Icon::Search), cat.blocks.len()))
                 .desired_width((ui.available_width() - 110.0).max(80.0)),
         );
-        ui.checkbox(&mut blocks.all, "All shapes")
+        crate::widgets::checkbox(ui, &mut blocks.all, "All shapes")
             .on_hover_text("Also non-cube blocks");
     });
     let needle = blocks.search.to_lowercase();
@@ -1958,7 +1964,7 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                     Color32::TRANSPARENT
                 };
                 let stroke = if selected { Stroke::new(1.5, pal.accent) } else { Stroke::NONE };
-                ui.painter().rect(rect, 6, fill, stroke, StrokeKind::Inside);
+                ui.painter().rect(rect, theme::TILE_RADIUS, fill, stroke, StrokeKind::Inside);
                 if let Some(texture) = blocks.icon(&ctx, block) {
                     let tint = if block.full_cube { Color32::WHITE } else { Color32::from_white_alpha(150) };
                     ui.painter()
@@ -2002,8 +2008,7 @@ fn swatch(ui: &mut Ui, color: Color32) {
 pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &Registry, solo: &mut bool, search: &mut String, blocks: &mut BlockLibrary) -> bool {
     let pal = Palette::of(ui);
     hint(ui, "The block on top of the ground.");
-    let solo_changed = ui
-        .checkbox(solo, "Solo")
+    let solo_changed = crate::widgets::checkbox(ui, solo, "Solo")
         .on_hover_text("Fade every other terrain on the map")
         .changed();
     ui.add(egui::TextEdit::singleline(search).hint_text(format!("{}  Search terrain", theme::glyph(Icon::Search))).desired_width(f32::INFINITY));
@@ -2041,7 +2046,7 @@ pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &Registry, solo: &
                     Color32::TRANSPARENT
                 };
                 let stroke = if selected { Stroke::new(1.5, pal.accent) } else { Stroke::new(1.0, pal.border) };
-                painter.rect(rect, 6, fill, stroke, StrokeKind::Inside);
+                painter.rect(rect, theme::TILE_RADIUS, fill, stroke, StrokeKind::Inside);
                 terrain_icon(ui, rect.shrink(4.0), reg, i as u16, blocks);
                 let tip = describe_terrain(reg, i as u16);
                 if response.on_hover_text(tip).clicked() {

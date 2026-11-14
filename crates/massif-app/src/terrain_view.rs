@@ -13,7 +13,7 @@
 //! the sky by the relief comes from the CPU, with the preview. The sides of
 //! the relief are closed down to a base, like a diorama.
 
-use crate::theme::{self, Icon, Palette};
+use crate::theme::{self, Icon, Palette, RichTextExt};
 use bytemuck::{Pod, Zeroable};
 use egui::{Color32, PointerButton, Rect, RichText, Sense, Ui, pos2};
 use glam::{Mat4, Vec3, Vec4};
@@ -1619,69 +1619,81 @@ impl TerrainView {
 
     /// The render settings, as a panel. Returns whether they changed.
     pub fn settings_ui(&mut self, ui: &mut Ui) -> bool {
+        use crate::widgets::{Field, checkbox, row, well};
         let pal = Palette::of(ui);
         let before = self.render;
         let r = &mut self.render;
-        let row = |ui: &mut Ui, label: &str, add: &mut dyn FnMut(&mut Ui)| {
+        // Each group of settings: its name, then its rows in a well.
+        let section = |ui: &mut Ui, icon: Icon, name: &str, note: &str| {
             ui.horizontal(|ui| {
-                ui.spacing_mut().interact_size.y = 18.0;
-                ui.add_sized([86.0, 18.0], egui::Label::new(RichText::new(label).size(12.0)));
-                add(ui);
+                ui.label(RichText::new(theme::glyph(icon).to_string()).size(13.0).color(pal.weak));
+                ui.label(RichText::new(name).size(13.0).medium());
+                if !note.is_empty() {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(RichText::new(note).size(11.0).color(pal.weak));
+                    });
+                }
             });
+            ui.add_space(2.0);
         };
-        let section = |ui: &mut Ui, icon: Icon, name: &str| {
-            ui.add_space(6.0);
-            ui.label(RichText::new(theme::with_icon(icon, name)).size(11.5).color(pal.weak));
-        };
-        section(ui, Icon::Sun, "Sun");
-        row(ui, "Direction", &mut |ui| {
-            ui.add(crate::widgets::Field::new(&mut r.sun_azimuth, 0.0..=360.0).suffix("°").max_decimals(0));
-        });
-        row(ui, "Height", &mut |ui| {
-            ui.add(crate::widgets::Field::new(&mut r.sun_elevation, 1.0..=89.0).suffix("°").max_decimals(0));
-        });
-        row(ui, "Strength", &mut |ui| {
-            ui.add(crate::widgets::Field::new(&mut r.sun_intensity, 0.0..=3.0).max_decimals(2));
-        });
-        ui.label(RichText::new("Shift + drag in the view turns the sun.").size(11.0).color(pal.weak));
-        section(ui, Icon::Cloud, "Clouds");
-        row(ui, "Show", &mut |ui| {
-            ui.checkbox(&mut r.clouds, "");
-        });
-        if r.clouds {
-            row(ui, "Cover", &mut |ui| {
-                ui.add(crate::widgets::Field::new(&mut r.cloud_cover, 0.0..=1.0).max_decimals(2));
+        ui.spacing_mut().slider_width = (ui.available_width() - 190.0).clamp(70.0, 220.0);
+        section(ui, Icon::Sun, "Sun", "Shift + drag in the view turns it");
+        well(ui, |ui| {
+            row(ui, "Direction", |ui| {
+                ui.add(Field::new(&mut r.sun_azimuth, 0.0..=360.0).suffix("°").max_decimals(0));
             });
-            row(ui, "Base", &mut |ui| {
-                ui.add(crate::widgets::Field::new(&mut r.cloud_base, -64.0..=600.0).suffix(" blocks").max_decimals(0));
+            row(ui, "Height", |ui| {
+                ui.add(Field::new(&mut r.sun_elevation, 1.0..=89.0).suffix("°").max_decimals(0));
             });
-            row(ui, "Thickness", &mut |ui| {
-                ui.add(crate::widgets::Field::new(&mut r.cloud_thickness, 5.0..=400.0).suffix(" blocks").max_decimals(0));
+            row(ui, "Strength", |ui| {
+                ui.add(Field::new(&mut r.sun_intensity, 0.0..=3.0).max_decimals(2));
             });
-            row(ui, "Density", &mut |ui| {
-                ui.add(crate::widgets::Field::new(&mut r.cloud_density, 0.05..=3.0).max_decimals(2));
-            });
-            row(ui, "Size", &mut |ui| {
-                ui.add(crate::widgets::Field::new(&mut r.cloud_size, 20.0..=3000.0).suffix(" blocks").max_decimals(0));
-            });
-            row(ui, "Shape", &mut |ui| {
-                ui.add(egui::DragValue::new(&mut r.cloud_seed).range(0..=999));
-            });
-        }
-        section(ui, Icon::Mountain, "Scene");
-        row(ui, "Height ×", &mut |ui| {
-            ui.add(crate::widgets::Field::new(&mut r.exaggeration, 1.0..=8.0).max_decimals(1));
         });
-        row(ui, "Haze", &mut |ui| {
-            ui.add(crate::widgets::Field::new(&mut r.haze, 0.0..=1.0).max_decimals(2));
+        ui.add_space(10.0);
+        section(ui, Icon::Cloud, "Clouds", "");
+        well(ui, |ui| {
+            row(ui, "Show", |ui| {
+                checkbox(ui, &mut r.clouds, "");
+            });
+            if r.clouds {
+                row(ui, "Cover", |ui| {
+                    ui.add(Field::new(&mut r.cloud_cover, 0.0..=1.0).max_decimals(2));
+                });
+                row(ui, "Base", |ui| {
+                    ui.add(Field::new(&mut r.cloud_base, -64.0..=600.0).suffix(" blocks").max_decimals(0));
+                });
+                row(ui, "Thickness", |ui| {
+                    ui.add(Field::new(&mut r.cloud_thickness, 5.0..=400.0).suffix(" blocks").max_decimals(0));
+                });
+                row(ui, "Density", |ui| {
+                    ui.add(Field::new(&mut r.cloud_density, 0.05..=3.0).max_decimals(2));
+                });
+                row(ui, "Size", |ui| {
+                    ui.add(Field::new(&mut r.cloud_size, 20.0..=3000.0).suffix(" blocks").max_decimals(0));
+                });
+                row(ui, "Shape", |ui| {
+                    ui.add(egui::DragValue::new(&mut r.cloud_seed).range(0..=999));
+                });
+            }
         });
-        row(ui, "Sea", &mut |ui| {
-            ui.checkbox(&mut r.sea, "");
+        ui.add_space(10.0);
+        section(ui, Icon::Mountain, "Scene", "");
+        well(ui, |ui| {
+            row(ui, "Height ×", |ui| {
+                ui.add(Field::new(&mut r.exaggeration, 1.0..=8.0).max_decimals(1));
+            });
+            row(ui, "Haze", |ui| {
+                ui.add(Field::new(&mut r.haze, 0.0..=1.0).max_decimals(2));
+            });
+            row(ui, "Sea", |ui| {
+                checkbox(ui, &mut r.sea, "");
+            });
+            row(ui, "Exposure", |ui| {
+                ui.add(Field::new(&mut r.exposure, 0.2..=3.0).max_decimals(2));
+            });
         });
-        row(ui, "Exposure", &mut |ui| {
-            ui.add(crate::widgets::Field::new(&mut r.exposure, 0.2..=3.0).max_decimals(2));
-        });
-        if ui.small_button("Reset").clicked() {
+        ui.add_space(10.0);
+        if ui.button("Reset").on_hover_text("Back to the usual sun, clouds and scene").clicked() {
             *r = RenderSettings::default();
         }
         self.render != before

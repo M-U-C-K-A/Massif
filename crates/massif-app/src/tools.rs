@@ -56,7 +56,7 @@ impl Tool {
             Icon::Paintbrush,
             &[Tool::PaintTerrain, Tool::PaintBiome, Tool::AutoPaint, Tool::AutoBiome],
         ),
-        ("Decorate the land", Icon::Shrub, &[Tool::Cover, Tool::Objects]),
+        ("Decor", Icon::Shrub, &[Tool::Cover, Tool::Objects]),
         ("Water", Icon::Droplet, &[Tool::River, Tool::Flood, Tool::Drain, Tool::Water]),
         ("Levels", Icon::Layers, &[Tool::StampSlab, Tool::EraseSlab]),
         ("Navigate", Icon::Compass, &[Tool::Pan, Tool::Eyedropper]),
