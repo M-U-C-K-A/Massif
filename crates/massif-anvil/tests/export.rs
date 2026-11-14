@@ -414,6 +414,50 @@ fn export_refuses_to_clobber_and_can_be_cancelled() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// A map taller than the game's limits: its sections go as high as it does,
+/// and a data pack gives the world that height.
+#[test]
+fn tall_maps_get_their_build_limits() {
+    let mut world = generate(&GenParams {
+        tiles_x: 1,
+        tiles_z: 1,
+        landform: Landform::Mountains,
+        relief: 1200.0,
+        min_y: -64,
+        max_y: 1024,
+        seed: 3,
+        ..GenParams::default()
+    });
+    assert_eq!((world.dims[0].min_y, world.dims[0].max_y), (-64, 1024));
+    let tallest = world.dims[0].ground().view(TilePos::new(0, 0)).map(|t| (0..128 * 128).map(|i| t.top.get(i)).fold(0.0f32, f32::max)).unwrap();
+    assert!(tallest > 400.0, "mountains past 320: {tallest}");
+    world.meta.spawn = [0, 200, 0];
+    let dir = temp_dir("tall");
+    let options = ExportOptions {
+        target: Target::release("1.21.11").unwrap(),
+        ..ExportOptions::default()
+    };
+    export(&world.snapshot(), &dir, &options, &Progress::default()).unwrap();
+    let json = std::fs::read_to_string(dir.join("datapacks/massif_build_limits/data/minecraft/dimension_type/overworld.json")).unwrap();
+    assert!(json.contains("\"min_y\": -64") && json.contains("\"height\": 1088"), "{json}");
+    assert!(dir.join("datapacks/massif_build_limits/pack.mcmeta").exists());
+    // The highest column is written up there.
+    let mut reader = Reader::new(&dir);
+    let top = (-64..1024).rev().find(|&y| (0..128).step_by(4).any(|x| (0..128).step_by(4).any(|z| reader.block(x, y, z) != "minecraft:air")));
+    assert!(top.is_some_and(|y| y > 320), "blocks above 320: {top:?}");
+    // The game's own limits need no pack.
+    let mut plain = generate(&GenParams {
+        tiles_x: 1,
+        tiles_z: 1,
+        ..GenParams::default()
+    });
+    let dir2 = temp_dir("plain");
+    export(&plain.snapshot(), &dir2, &options, &Progress::default()).unwrap();
+    assert!(!dir2.join("datapacks/massif_build_limits").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&dir2);
+}
+
 #[test]
 fn unusual_worlds_are_handled() {
     // An empty map has nothing to export.

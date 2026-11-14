@@ -154,13 +154,18 @@ brushes, terrain and biome palettes, levels or world info.
 ### New worlds and export
 
 A new map (the home screen) takes a name, a size (512 to 16k, or any
-multiple of 128 blocks), its land — a topography (flat, plains, hills,
-mountains, islands) with its relief height, feature size and ground level,
-or a template of the terrain generator (alpine range, continents,
+multiple of 128 blocks), its **height** — Minecraft's own (−64 to 320) or
+taller, up to 512, 1024 or 2032, and as deep as −2032 — its land — a
+topography (flat, plains, hills, mountains, islands) with its relief height
+(up to fifteen times the landform's in a tall world; peaks close in on the
+top of the world rather than being cut flat), feature size and ground
+level, or a template of the terrain generator (alpine range, continents,
 archipelago…), whose map then opens on the Terrain side with its nodes —
-the water level, lava instead of water, beaches, automatic terrains (grass,
-sand, rock and snow by height and slope) or a single one, and a seed; a
-preview of the whole map updates as you change them.
+the water level, lava instead of water (opaque and glowing, its shores
+scorched basalt and blackstone, never sand), beaches, automatic terrains
+(grass, sand, rock and snow by height and slope) or a single one, and a
+seed; a preview of the whole map updates as you change them. A map made
+from a height map takes a height too.
 
 **File ▸ Export** writes the world to a Minecraft saves folder for the
 version of the game you choose — the newest one installed on the computer
@@ -573,9 +578,14 @@ it peaks at 236 MB of memory.
 
 Sculpting in 3D has its own editor, **3D Sculpt** (its workspace sits next
 to 3D; the 3D View's **Sculpt** button opens it): a 3D view with its tools
-along the top — **Build**, **Dig**, **Smooth**, their radius and strength.
-The left button applies the tool, the right one its inverse, the middle one
-turns the view (Shift: moves it). The ordinary 3D View only shows the world.
+along the top — **Sculpt** (the left button adds matter, the right one
+digs) and **Smooth** — the brush (any of the library, custom images too),
+its radius and strength. Shift + drag moves the view, Alt + drag (or the
+middle button) turns it, Alt + wheel sizes the brush. The brush is laid on
+the slope under the cursor, read from the matter around smoothed over five
+blocks — not on the face of the block hit — so it glides over the steps of
+the terrain without shaking, and a custom brush keeps its shape on a
+hillside. The ordinary 3D View only shows the world.
 
 Where you sculpt in 3D, the dimension keeps a 16³ chunk of densities (0–255,
 solid from 128) that replaces what the levels compose inside that cube. A new
@@ -625,7 +635,7 @@ that version does:
 | 1.7.10 – 1.12.2 | Numbered blocks (an id and four bits of data), a biome per column, the light of the sky worked out; 256 blocks high |
 | 1.14 – 1.15 | A palette of named block states per section, indices packed end to end; biomes numbered, in 4 × 4 × 4 cells from 1.15 |
 | 1.16 – 1.17 | The same, indices no longer straddling two longs |
-| 1.18 – 26.3 and later | Today's layout: palettes of blocks and of biomes, −64 to 320 |
+| 1.18 – 26.3 and later | Today's layout: palettes of blocks and of biomes, −64 to 320, or the map's own height |
 
 Blocks and biomes a version does not have yet become the closest it has
 (deepslate is stone before 1.17, moss is grass, mud is coarse dirt…).
@@ -635,7 +645,10 @@ keeps the shape of 1.18.2 for every later version, which bring it up to
 date when they open the world; 1.13 is left out (it lights chunks in a way
 of its own). Regions are built in parallel (4,096 chunks in 0.15 s).
 Around the map, Minecraft generates either vanilla terrain from the world
-seed or nothing. The tests read every era's regions back with an
+seed or nothing. A map taller (or deeper) than the game's −64 to 320 gets
+its sections up to its top and a data pack, `massif_build_limits`, enabled
+in `level.dat`, that gives the overworld that height (Minecraft allows −2032
+to 2032, 4,064 blocks at most; the data pack's format follows the version). The tests read every era's regions back with an
 independent Anvil reader and compare the blocks with the model.
 
 ### The 3D view

@@ -3,7 +3,7 @@
 use crate::chunk::{ExportContext, Scratch, build_chunk};
 use crate::level_dat::{Difficulty, GameMode, LevelSettings, Surroundings, WorldBorder, level_dat};
 use crate::region::RegionBuilder;
-use crate::version::Target;
+use crate::version::{Era, Target};
 use massif_core::TilePos;
 use massif_core::compose::TileStack;
 use massif_core::world::World;
@@ -223,6 +223,11 @@ pub fn export(
             packs.push(format!("file/{}", name.to_string_lossy()));
         }
     }
+    // Build limits past the game's own: a data pack gives the world that
+    // height.
+    if let Some(name) = height_pack(dir, &options.target, ctx.min_y, ctx.max_y)? {
+        packs.push(name);
+    }
     let settings = LevelSettings {
         name: options
             .level_name
@@ -248,6 +253,71 @@ pub fn export(
         bytes: bytes.load(Ordering::Relaxed),
         elapsed: started.elapsed(),
     })
+}
+
+/// The data pack that gives the overworld the build limits of a map that
+/// goes past the game's own (below −64 or above 320): the folder it is
+/// written to and enabled as. `None` when the limits are the game's.
+fn height_pack(dir: &Path, target: &Target, min_y: i32, max_y: i32) -> io::Result<Option<String>> {
+    if target.era() != Era::Modern || (min_y >= -64 && max_y <= 320) {
+        return Ok(None);
+    }
+    // The land around the map is generated between −64 and 320: the world
+    // holds that too.
+    let (bottom, top) = (min_y.min(-64), max_y.max(320));
+    let height = top - bottom;
+    let name = "massif_build_limits";
+    let pack = dir.join("datapacks").join(name);
+    let types = pack.join("data").join("minecraft").join("dimension_type");
+    std::fs::create_dir_all(&types)?;
+    let format = target.pack_format();
+    let mcmeta = format!(
+        r#"{{
+  "pack": {{
+    "description": "The build limits of this map: Y {bottom} to {top}. Made by Massif.",
+    "pack_format": {format},
+    "supported_formats": {{ "min_inclusive": 8, "max_inclusive": 1000 }},
+    "min_format": 8,
+    "max_format": 1000
+  }}
+}}
+"#
+    );
+    std::fs::write(pack.join("pack.mcmeta"), mcmeta)?;
+    // What 1.19 added; the way 1.20.5 writes a range.
+    let monsters = match target.data_version {
+        ..3105 => String::new(),
+        3105..3837 => r#",
+  "monster_spawn_light_level": { "type": "minecraft:uniform", "value": { "min_inclusive": 0, "max_inclusive": 7 } },
+  "monster_spawn_block_light_limit": 0"#
+            .to_owned(),
+        _ => r#",
+  "monster_spawn_light_level": { "type": "minecraft:uniform", "min_inclusive": 0, "max_inclusive": 7 },
+  "monster_spawn_block_light_limit": 0"#
+            .to_owned(),
+    };
+    let overworld = format!(
+        r##"{{
+  "ultrawarm": false,
+  "natural": true,
+  "coordinate_scale": 1.0,
+  "has_skylight": true,
+  "has_ceiling": false,
+  "ambient_light": 0.0,
+  "piglin_safe": false,
+  "bed_works": true,
+  "respawn_anchor_works": false,
+  "has_raids": true,
+  "min_y": {bottom},
+  "height": {height},
+  "logical_height": {height},
+  "infiniburn": "#minecraft:infiniburn_overworld",
+  "effects": "minecraft:overworld"{monsters}
+}}
+"##
+    );
+    std::fs::write(types.join("overworld.json"), overworld)?;
+    Ok(Some(format!("file/{name}")))
 }
 
 /// Copy a file, or a folder and everything in it.

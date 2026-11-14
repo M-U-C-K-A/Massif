@@ -169,6 +169,30 @@ impl Target {
         if self.data_version > LEVEL_FORMAT.1 { (LEVEL_FORMAT.1, LEVEL_FORMAT.0) } else { (self.data_version, &self.name) }
     }
 
+    /// The format number of the version's data packs (from 1.18 on).
+    pub fn pack_format(&self) -> i32 {
+        // From the data version on: the format.
+        const FORMATS: &[(i32, i32)] = &[
+            (4671, 94),
+            (4554, 88),
+            (4438, 81),
+            (4435, 80),
+            (4325, 71),
+            (4189, 61),
+            (4080, 57),
+            (3953, 48),
+            (3837, 41),
+            (3698, 26),
+            (3578, 18),
+            (3463, 15),
+            (3337, 12),
+            (3105, 10),
+            (2975, 9),
+            (2860, 8),
+        ];
+        FORMATS.iter().find(|(since, _)| self.data_version >= *since).map_or(8, |f| f.1)
+    }
+
     /// The status of a finished chunk, as the version writes it.
     pub fn full_status(&self) -> &'static str {
         if self.data_version >= 3450 { "minecraft:full" } else { "full" }

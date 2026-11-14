@@ -75,7 +75,7 @@ impl Tool {
             Tool::River => "River",
             Tool::StampSlab => "Stamp slab",
             Tool::EraseSlab => "Erase slab",
-            Tool::Build => "Build",
+            Tool::Build => "Sculpt",
             Tool::Dig => "Dig",
             Tool::Smooth3d => "Smooth",
             Tool::Pan => "Pan",
@@ -100,7 +100,7 @@ impl Tool {
             Tool::River => Icon::Route,
             Tool::StampSlab => Icon::Cuboid,
             Tool::EraseSlab => Icon::Eraser,
-            Tool::Build => Icon::Hammer,
+            Tool::Build => Icon::Pickaxe,
             Tool::Dig => Icon::Shovel,
             Tool::Smooth3d => Icon::Blend,
             Tool::Pan => Icon::Hand,
@@ -168,7 +168,7 @@ impl Tool {
             }
             Tool::EraseSlab => "Erase the active level. Right button: add.",
             Tool::Build => {
-                "Add matter in 3D. Right button: dig."
+                "Left button: add matter. Right button: dig."
             }
             Tool::Dig => {
                 "Dig in 3D: caves, tunnels. Right button: build."
@@ -273,9 +273,11 @@ pub struct ToolState {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SculptSettings {
-    /// Build, Dig or Smooth (3D).
+    /// Sculpt (left adds, right digs) or Smooth.
     pub tool: Tool,
     pub brush: Brush,
+    /// Where the brush comes from: its image is found again from this.
+    pub source: BrushSource,
 }
 
 impl Default for SculptSettings {
@@ -286,13 +288,15 @@ impl Default for SculptSettings {
                 radius: 6.0,
                 ..Brush::default()
             },
+            source: BrushSource::default(),
         }
     }
 }
 
 impl SculptSettings {
-    /// The tools of the 3D Sculpt editor.
-    pub const TOOLS: [Tool; 3] = [Tool::Build, Tool::Dig, Tool::Smooth3d];
+    /// The tools of the 3D Sculpt editor: one to add matter and (with the
+    /// right button) dig, one to smooth.
+    pub const TOOLS: [Tool; 2] = [Tool::Build, Tool::Smooth3d];
 }
 
 /// A pattern of terrains for the Paint tool.
@@ -833,12 +837,13 @@ pub fn begin_sculpt(doc: &mut Document, tools: &ToolState, inverse: bool) -> Opt
     Some(SculptStroke { mode })
 }
 
-/// One dab of a 3D stroke at `center`, lasting `dt` seconds.
-pub fn sculpt_dab(doc: &mut Document, tools: &ToolState, stroke: &SculptStroke, center: [f32; 3], dt: f32) -> usize {
+/// One dab of a 3D stroke on the surface at `frame`, lasting `dt` seconds:
+/// the brush laid along the slope there.
+pub fn sculpt_dab(doc: &mut Document, tools: &ToolState, stroke: &SculptStroke, frame: &massif_core::voxel::Frame, dt: f32) -> usize {
     let brush = &tools.sculpt.brush;
     let strength = sculpt_strength(brush, dt.clamp(0.0, 0.1));
     let mut edit = doc.history.edit(&mut doc.world, 0);
-    massif_core::voxel::sculpt(&mut edit, brush, center, strength, stroke.mode)
+    massif_core::voxel::sculpt_at(&mut edit, brush, frame.center, Some(frame.normal), strength, stroke.mode)
 }
 
 pub fn end_sculpt(doc: &mut Document, _stroke: SculptStroke) {
@@ -1111,7 +1116,11 @@ mod tests {
         tools.sculpt.brush.radius = 6.0;
         tools.sculpt.brush.strength = 1.0;
         let s = begin_sculpt(&mut d, &tools, true).unwrap();
-        let n = sculpt_dab(&mut d, &tools, &s, [5.5, 70.5, 5.5], 0.1);
+        let frame = massif_core::voxel::Frame {
+            center: [5.5, 64.0, 5.5],
+            normal: [0.0, 1.0, 0.0],
+        };
+        let n = sculpt_dab(&mut d, &tools, &s, &frame, 0.1);
         end_sculpt(&mut d, s);
         assert!(n > 0);
         assert!(height(&d, 5, 5) > 64.0);

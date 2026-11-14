@@ -62,39 +62,48 @@ fn icon_button(ui: &mut Ui, icon: Icon, selected: bool, size: f32) -> egui::Resp
 
 pub fn tools_panel(ui: &mut Ui, tools: &mut ToolState) {
     let pal = Palette::of(ui);
-    // A line a group: its sign, then its tools, close together.
-    ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+    // A row a theme, set apart: its name, then its tools.
+    ui.spacing_mut().item_spacing = vec2(0.0, 4.0);
+    let fill = theme::mix(pal.panel, pal.text, if pal.dark { 0.035 } else { 0.028 });
     for (group, icon, list) in Tool::GROUPS {
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-            let (r, sign) = ui.allocate_exact_size(vec2(16.0, 26.0), Sense::hover());
-            ui.painter().text(
-                r.center(),
-                egui::Align2::CENTER_CENTER,
-                theme::glyph(icon),
-                egui::FontId::proportional(11.0),
-                pal.weak,
-            );
-            sign.on_hover_text(group);
-            for &tool in list {
-                let key = tool.shortcut_text().map(|k| format!("  ({k})")).unwrap_or_default();
-                let tip = format!("{}{key}\n{}", tool.label(), tool.help());
-                if icon_button(ui, tool.icon(), tools.tool == tool, 26.0)
-                    .on_hover_text(tip)
-                    .clicked()
-                {
-                    tools.select(tool);
-                }
-            }
-        });
+        egui::Frame::new()
+            .fill(fill)
+            .corner_radius(7)
+            .inner_margin(egui::Margin::symmetric(6, 3))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                    let short = group.split(' ').next().unwrap_or(group);
+                    let (rect, name) = ui.allocate_exact_size(vec2(58.0, 28.0), Sense::hover());
+                    ui.painter().text(
+                        rect.left_center() + vec2(2.0, 0.0),
+                        egui::Align2::LEFT_CENTER,
+                        format!("{}  {short}", theme::glyph(icon)),
+                        egui::FontId::proportional(11.5),
+                        pal.weak,
+                    );
+                    name.on_hover_text(group);
+                    for &tool in list {
+                        let key = tool.shortcut_text().map(|k| format!("  ({k})")).unwrap_or_default();
+                        let tip = format!("{}{key}\n{}", tool.label(), tool.help());
+                        if icon_button(ui, tool.icon(), tools.tool == tool, 28.0)
+                            .on_hover_text(tip)
+                            .clicked()
+                        {
+                            tools.select(tool);
+                        }
+                    }
+                });
+            });
     }
 }
 
 // --------------------------------------------------------- tool settings --
 
-/// The tools of the 3D Sculpt editor, along its top: which one, how big,
-/// how hard.
-pub fn sculpt_toolbar(ui: &mut Ui, s: &mut crate::tools::SculptSettings) {
+/// The tools of the 3D Sculpt editor, along its top: which one, with which
+/// brush (custom ones too), how big, how hard.
+pub fn sculpt_toolbar(ui: &mut Ui, s: &mut crate::tools::SculptSettings, library: &mut BrushLibrary) {
     let pal = Palette::of(ui);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(4.0, 0.0);
@@ -108,20 +117,62 @@ pub fn sculpt_toolbar(ui: &mut Ui, s: &mut crate::tools::SculptSettings) {
                 s.tool = tool;
             }
         }
-        ui.add_space(10.0);
+        ui.add_space(8.0);
         ui.separator();
+        ui.add_space(4.0);
+        // The brush: any of the library's, a custom image too.
+        let name = library.name(&s.source);
+        ui.menu_button(theme::with_icon(Icon::Brush, &name), |ui| {
+            ui.set_max_width(330.0);
+            let dark = ui.visuals().dark_mode;
+            let ctx = ui.ctx().clone();
+            let mut lists: Vec<(String, Vec<BrushSource>)> = vec![
+                ("Basic".into(), BrushSource::BASIC.to_vec()),
+                ("More shapes".into(), BrushSource::MORE.to_vec()),
+                ("Stamps".into(), Stamp::ALL.iter().map(|t| BrushSource::Stamp(*t)).collect()),
+            ];
+            for g in &library.groups {
+                lists.push((g.name.clone(), g.entries.iter().map(|e| e.source.clone()).collect()));
+            }
+            egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
+                for (title, list) in lists {
+                    if list.is_empty() {
+                        continue;
+                    }
+                    ui.label(RichText::new(title).size(11.0).color(pal.weak));
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+                        for source in list {
+                            let texture = library.thumbnail(&ctx, &source, dark);
+                            let tip = library.name(&source);
+                            if brush_button(ui, texture, s.source == source, 40.0).on_hover_text(tip).clicked()
+                                && let Some(brush) = library.brush(&source, &s.brush)
+                            {
+                                s.brush = brush;
+                                s.source = source;
+                                ui.close();
+                            }
+                        }
+                    });
+                    ui.add_space(6.0);
+                }
+            });
+        });
         ui.add_space(6.0);
-        ui.label("Radius");
-        ui.add(crate::widgets::Field::new(&mut s.brush.radius, 1.0..=64.0).suffix(" blocks").max_decimals(0));
-        ui.add_space(10.0);
-        ui.label("Strength");
+        ui.add(crate::widgets::Field::new(&mut s.brush.radius, 1.0..=64.0).text("Radius").suffix(" blocks").max_decimals(0).width(150.0));
         ui.add(
             crate::widgets::Field::new(&mut s.brush.strength, 0.05..=1.0)
+                .text("Strength")
                 .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
-                .custom_parser(|t| t.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
+                .custom_parser(|t| t.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0))
+                .width(150.0),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(RichText::new("Left: apply · right: inverse · middle: orbit · shift+middle: pan").size(11.5).color(pal.weak));
+            ui.label(
+                RichText::new("Left: add · right: dig · Shift+drag: move · Alt+drag: turn · Alt+wheel: size")
+                    .size(11.5)
+                    .color(pal.weak),
+            );
         });
     });
 }
@@ -1626,6 +1677,7 @@ pub fn levels_panel(ui: &mut Ui, doc: &mut Document, rename: &mut Option<(usize,
 pub fn info_panel(ui: &mut Ui, doc: &mut Document, hover: Option<(i32, i32)>, cache: (usize, usize, usize)) -> bool {
     let pal = Palette::of(ui);
     let mut affects_map = false;
+    let (bottom, top) = (doc.dimension().min_y, doc.dimension().max_y);
     section(ui, Icon::Globe, "World");
     egui::Grid::new("world info").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
         let meta = &mut doc.world.meta;
@@ -1637,7 +1689,7 @@ pub fn info_panel(ui: &mut Ui, doc: &mut Document, hover: Option<(i32, i32)>, ca
         changed |= ui.add(egui::DragValue::new(&mut meta.seed)).changed();
         ui.end_row();
         ui.label("Sea level");
-        if ui.add(egui::DragValue::new(&mut meta.sea_level).range(-64..=319)).changed() {
+        if ui.add(egui::DragValue::new(&mut meta.sea_level).range(bottom..=top - 1)).changed() {
             changed = true;
             affects_map = true;
         }

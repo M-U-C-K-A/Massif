@@ -577,7 +577,7 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
     // Water: its surface merged into rectangles, and its sides where the
     // map ends.
     if style.water {
-        let blue = if style.lava { [214, 96, 18, 230] } else { [26, 92, 150, 205] };
+        let blue = if style.lava { [238, 112, 22, 255] } else { [26, 92, 150, 205] };
         greedy(
             n,
             |i, j| {
@@ -855,14 +855,29 @@ fn vs_main(@builtin(vertex_index) vi: u32, f: FaceIn) -> VertexOut {
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let n = normalize(in.normal);
     let d = distance(in.world, g.eye.xyz);
+    if (in.water > 0.5 && in.color.r > in.color.b) {
+        // Lava glows: its own light, not the sun's.
+        var c = to_linear(in.color.rgb) * 1.1;
+        let f = clamp((d - g.fog.x) / max(g.fog.y - g.fog.x, 1.0), 0.0, 1.0);
+        c = mix(c, to_linear(g.mist.rgb), f * f * g.mist.w * 0.6);
+        return vec4<f32>(c, 1.0);
+    }
     if (in.water > 0.5 && in.color.b > in.color.r) {
         // Water: its own colour seen from above, the sky mirrored where it
         // is seen at a grazing angle, a glint of the sun.
         let v = normalize(g.eye.xyz - in.world);
-        let fres = pow(1.0 - max(dot(n, v), 0.0), 3.0);
-        let sky = sky_color(reflect(-v, n));
+        // Small waves on its surface: the sky and the sun break up in them.
+        var nw = n;
+        if (n.y > 0.5) {
+            let p = in.world.xz;
+            let rx = sin(p.x * 0.73 + p.y * 0.31) + 0.6 * sin(p.x * 1.91 - p.y * 1.27) + 0.35 * sin(p.x * 3.7 + p.y * 2.9);
+            let rz = cos(p.y * 0.67 - p.x * 0.29) + 0.6 * cos(p.y * 2.03 + p.x * 1.11) + 0.35 * cos(p.y * 3.3 - p.x * 3.1);
+            nw = normalize(vec3<f32>(rx * 0.045, 1.0, rz * 0.045));
+        }
+        let fres = pow(1.0 - max(dot(nw, v), 0.0), 3.0);
+        let sky = sky_color(reflect(-v, nw));
         let h = normalize(v + g.sun.xyz);
-        let glint = pow(max(dot(n, h), 0.0), 2400.0) * 1.4 * max(n.y, 0.0);
+        let glint = pow(max(dot(nw, h), 0.0), 900.0) * 1.1 * max(n.y, 0.0);
         var c = to_linear(in.color.rgb) * (g.fog.z + 0.3 * g.fog.w);
         c = mix(c, sky, 0.1 + 0.7 * fres) + vec3<f32>(glint);
         let f = clamp((d - g.fog.x) / max(g.fog.y - g.fog.x, 1.0), 0.0, 1.0);
@@ -2169,9 +2184,22 @@ fn framing(doc: &Document) -> Camera {
     let Some((x0, z0, x1, z1)) = map_rect(doc) else { return Camera::default() };
     let (cx, cz) = ((x0 + x1) / 2.0, (z0 + z1) / 2.0);
     let extent = (x1 - x0).max(z1 - z0);
+    // The ground over the map, coarsely: the camera looks at its middle
+    // height, from far enough to stand over its highest peaks.
+    let mut heights = Vec::new();
+    for j in 0..9 {
+        for i in 0..9 {
+            let (x, z) = (x0 + (x1 - x0) * (i as f64 + 0.5) / 9.0, z0 + (z1 - z0) * (j as f64 + 0.5) / 9.0);
+            heights.extend(ground_at(doc, x, z));
+        }
+    }
+    let middle = ground_at(doc, cx, cz).unwrap_or(64.0);
+    let highest = heights.iter().copied().fold(middle, f64::max);
+    let mean = if heights.is_empty() { middle } else { heights.iter().sum::<f64>() / heights.len() as f64 };
+    let target_y = (mean + highest) / 2.0;
     Camera {
-        target: [cx, ground_at(doc, cx, cz).unwrap_or(64.0), cz],
-        distance: (extent * 0.85).max(160.0) as f32,
+        target: [cx, target_y, cz],
+        distance: (extent * 0.85).max((highest - target_y) * 3.2).max(160.0) as f32,
         ..Camera::default()
     }
 }
@@ -2301,6 +2329,8 @@ pub struct View3d {
     sculpt: Option<(SculptStroke, Instant)>,
     /// Where the cursor points in the world.
     hover: Option<massif_core::voxel::Hit>,
+    /// The surface there, smoothed: where the brush lies, which way.
+    frame: Option<massif_core::voxel::Frame>,
     /// Asked from the header: look where the map view is, frame the map.
     goto_map: bool,
     frame_map: bool,
@@ -2326,6 +2356,7 @@ impl Default for View3d {
             error: None,
             sculpt: None,
             hover: None,
+            frame: None,
             goto_map: false,
             frame_map: false,
         }
@@ -2524,7 +2555,7 @@ impl View3d {
 
     /// Show the view; `sculpt`: the 3D Sculpt editor's, where the buttons
     /// sculpt with its tool.
-    pub fn ui(&mut self, ui: &mut Ui, frame: &eframe::Frame, doc: &mut Document, tools: &ToolState, map_center: Option<[f64; 2]>, sculpt: bool) {
+    pub fn ui(&mut self, ui: &mut Ui, frame: &eframe::Frame, doc: &mut Document, tools: &mut ToolState, map_center: Option<[f64; 2]>, sculpt: bool) {
         let pal = Palette::of(ui);
         let rect = ui.available_rect_before_wrap();
         let response = ui.allocate_rect(rect, Sense::click_and_drag());
@@ -2573,14 +2604,14 @@ impl View3d {
 
         // ---- camera control ------------------------------------------------
         // With a sculpting tool the buttons sculpt (the right one inverts);
-        // the middle button turns the view (Alt + drag too), Shift + middle
-        // pans. Otherwise the left button turns, the right one pans.
+        // Shift + drag moves the view, Alt + drag (or the middle button)
+        // turns it. Otherwise the left button turns, the right one moves.
         let sculpting = sculpt && tools.sculpt.tool.is_sculpt();
         let (shift, alt) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt));
         let (orbit, pan) = if sculpting {
             (
-                (response.dragged_by(PointerButton::Middle) && !shift) || (response.dragged_by(PointerButton::Primary) && alt),
-                response.dragged_by(PointerButton::Middle) && shift,
+                (response.dragged_by(PointerButton::Middle) && !shift) || (response.dragged_by(PointerButton::Primary) && alt && !shift),
+                (response.dragged_by(PointerButton::Middle) && shift) || (response.dragged_by(PointerButton::Primary) && shift),
             )
         } else {
             (
@@ -2601,10 +2632,18 @@ impl View3d {
             self.camera.target[2] -= (-d.x as f64 * s + d.y as f64 * c) * k;
         }
         if response.hovered() {
-            let (zoom, scroll) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta.y));
-            let factor = if zoom != 1.0 { 1.0 / zoom } else { (-scroll * 0.003).exp() };
-            if factor != 1.0 {
-                self.camera.distance = (self.camera.distance * factor).clamp(2.0, (extent * 3.0).max(30000.0));
+            let (zoom, scroll) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta.y + i.smooth_scroll_delta.x));
+            if sculpting && alt && zoom == 1.0 {
+                // Alt + wheel: the size of the brush.
+                if scroll != 0.0 {
+                    let r = &mut tools.sculpt.brush.radius;
+                    *r = (*r * (scroll * 0.004).exp()).clamp(1.0, 64.0);
+                }
+            } else {
+                let factor = if zoom != 1.0 { 1.0 / zoom } else { (-scroll * 0.003).exp() };
+                if factor != 1.0 {
+                    self.camera.distance = (self.camera.distance * factor).clamp(2.0, (extent * 3.0).max(30000.0));
+                }
             }
         }
 
@@ -2613,9 +2652,29 @@ impl View3d {
         if sculpting && let Some(p) = response.hover_pos() {
             let (o, d) = self.ray(rect, p);
             self.hover = massif_core::voxel::raycast(doc.dimension(), o, d, (self.camera.distance as f64 + extent as f64) * 1.5);
+            // The slope under the cursor, smoothed over the blocks around;
+            // a little of the last one kept, so that it does not shake.
+            let found = self.hover.map(|hit| massif_core::voxel::surface_frame(doc.dimension(), &hit, o, d));
+            self.frame = match (found, self.frame) {
+                (Some(new), Some(old)) => {
+                    let n = [0.65 * new.normal[0] + 0.35 * old.normal[0], 0.65 * new.normal[1] + 0.35 * old.normal[1], 0.65 * new.normal[2] + 0.35 * old.normal[2]];
+                    let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+                    Some(if l > 0.3 {
+                        massif_core::voxel::Frame {
+                            center: new.center,
+                            normal: [n[0] / l, n[1] / l, n[2] / l],
+                        }
+                    } else {
+                        new
+                    })
+                }
+                (new, _) => new,
+            };
+        } else {
+            self.frame = None;
         }
         let (primary, secondary) = ui.input(|i| (i.pointer.primary_down(), i.pointer.secondary_down()));
-        let pressed = sculpting && response.hovered() && !alt && (primary || secondary);
+        let pressed = sculpting && response.hovered() && !alt && !shift && (primary || secondary);
         match (&mut self.sculpt, pressed) {
             (None, true) if response.is_pointer_button_down_on() => {
                 self.sculpt = crate::tools::begin_sculpt(doc, tools, secondary).map(|s| (s, Instant::now()));
@@ -2627,11 +2686,10 @@ impl View3d {
             }
             _ => {}
         }
-        if let (Some((stroke, last)), Some(hit)) = (&mut self.sculpt, self.hover) {
+        if let (Some((stroke, last)), Some(frame)) = (&mut self.sculpt, self.frame) {
             let dt = last.elapsed().as_secs_f32().max(1.0 / 60.0);
             *last = Instant::now();
-            let center = [hit.point[0] as f32, hit.point[1] as f32, hit.point[2] as f32];
-            crate::tools::sculpt_dab(doc, tools, stroke, center, dt);
+            crate::tools::sculpt_dab(doc, tools, stroke, &frame, dt);
         }
         if self.sculpt.is_some() {
             ui.ctx().request_repaint();
@@ -2757,34 +2815,32 @@ impl View3d {
         if let Some(err) = &self.error {
             painter.text(rect.center(), Align2::CENTER_CENTER, err, FontId::proportional(13.0), pal.danger);
         }
-        // The sculpting brush: a ring where the ball meets the surface.
-        if let Some(hit) = self.hover {
+        // The sculpting brush, laid on the slope under the cursor: its
+        // outline (a custom brush's too), and the way the surface faces.
+        if let Some(f) = self.frame {
             let m = Mat4::from_cols_array_2d(&globals.view_proj);
-            let to_screen = |p: [f64; 3]| -> Option<egui::Pos2> {
-                let v = m * Vec4::new((p[0] - origin.0 as f64) as f32, p[1] as f32, (p[2] - origin.1 as f64) as f32, 1.0);
+            let to_screen = |p: [f32; 3]| -> Option<egui::Pos2> {
+                let v = m * Vec4::new(p[0] - origin.0 as f32, p[1], p[2] - origin.1 as f32, 1.0);
                 (v.w > 0.0).then(|| pos2(rect.center().x + v.x / v.w * rect.width() * 0.5, rect.center().y - v.y / v.w * rect.height() * 0.5))
             };
-            let n = [hit.normal.0 as f64, hit.normal.1 as f64, hit.normal.2 as f64];
-            // Two axes across the face that was hit.
-            let a = if n[1] != 0.0 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
-            let b = [n[1] * a[2] - n[2] * a[1], n[2] * a[0] - n[0] * a[2], n[0] * a[1] - n[1] * a[0]];
-            let r = tools.sculpt.brush.radius as f64;
-            let ring: Vec<egui::Pos2> = (0..64)
-                .filter_map(|i| {
-                    let t = i as f64 / 64.0 * std::f64::consts::TAU;
-                    let (c, s) = (t.cos() * r, t.sin() * r);
-                    to_screen([
-                        hit.point[0] + a[0] * c + b[0] * s,
-                        hit.point[1] + a[1] * c + b[1] * s,
-                        hit.point[2] + a[2] * c + b[2] * s,
-                    ])
-                })
-                .collect();
-            if ring.len() > 2 {
+            let (t1, t2) = massif_core::voxel::tangents(f.normal);
+            let on = |u: f32, v: f32| to_screen([f.center[0] + t1[0] * u + t2[0] * v, f.center[1] + t1[1] * u + t2[1] * v, f.center[2] + t1[2] * u + t2[2] * v]);
+            let brush = &tools.sculpt.brush;
+            let r = brush.radius;
+            let rings: Vec<Vec<egui::Pos2>> = match brush.outline() {
+                Some(outline) => outline.iter().map(|ring| ring.iter().filter_map(|&(u, v)| on(u, v)).collect()).collect(),
+                None if brush.is_square() => vec![brush.square_corners(0.0, 0.0).iter().filter_map(|&(u, v)| on(u, v)).collect()],
+                None => vec![(0..64).filter_map(|i| {
+                    let t = i as f32 / 64.0 * std::f32::consts::TAU;
+                    on(t.cos() * r, t.sin() * r)
+                }).collect()],
+            };
+            for ring in rings.into_iter().filter(|r| r.len() > 2) {
                 painter.add(egui::Shape::closed_line(ring.clone(), egui::Stroke::new(3.0, Color32::from_black_alpha(90))));
                 painter.add(egui::Shape::closed_line(ring, egui::Stroke::new(1.4, Color32::WHITE)));
             }
-            if let Some(c) = to_screen(hit.point) {
+            if let (Some(c), Some(tip)) = (to_screen(f.center), to_screen([f.center[0] + f.normal[0] * r * 0.5, f.center[1] + f.normal[1] * r * 0.5, f.center[2] + f.normal[2] * r * 0.5])) {
+                painter.line_segment([c, tip], egui::Stroke::new(1.4, Color32::from_white_alpha(200)));
                 painter.circle_filled(c, 2.0, Color32::WHITE);
             }
         }

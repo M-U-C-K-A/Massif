@@ -71,6 +71,34 @@ pub struct GenParams {
     /// Lava instead of water.
     #[serde(default)]
     pub lava: bool,
+    /// The build limits: the bottom of the world and the top (exclusive).
+    /// Past Minecraft's own (−64 and 320), the export adds a data pack that
+    /// gives the world that height (up to −2032 and 2032).
+    #[serde(default = "vanilla_bottom")]
+    pub min_y: i32,
+    #[serde(default = "vanilla_top")]
+    pub max_y: i32,
+}
+
+/// Minecraft's own build limits since 1.18.
+pub const VANILLA_LIMITS: (i32, i32) = (-64, 320);
+/// The furthest Minecraft's build limits go, with a data pack.
+pub const MAX_LIMITS: (i32, i32) = (-2032, 2032);
+
+fn vanilla_bottom() -> i32 {
+    VANILLA_LIMITS.0
+}
+
+fn vanilla_top() -> i32 {
+    VANILLA_LIMITS.1
+}
+
+/// Build limits Minecraft takes: multiples of 16, never inside its own
+/// (the land around the map is generated there), never past the most it
+/// allows.
+pub fn build_limits(min_y: i32, max_y: i32) -> (i32, i32) {
+    let snap = |v: i32| v.div_euclid(16) * 16;
+    (snap(min_y).clamp(MAX_LIMITS.0, VANILLA_LIMITS.0), snap(max_y + 15).clamp(VANILLA_LIMITS.1, MAX_LIMITS.1))
 }
 
 fn hundred() -> f32 {
@@ -97,6 +125,8 @@ impl Default for GenParams {
             beaches: true,
             surface: None,
             lava: false,
+            min_y: VANILLA_LIMITS.0,
+            max_y: VANILLA_LIMITS.1,
         }
     }
 }
@@ -201,6 +231,9 @@ pub struct Theme {
     pub sand: TerrainId,
     pub gravel: TerrainId,
     pub snow: TerrainId,
+    /// Scorched rock along a sea of lava, and under it.
+    pub basalt: TerrainId,
+    pub blackstone: TerrainId,
 }
 
 impl Theme {
@@ -213,20 +246,31 @@ impl Theme {
             sand: get("Sand"),
             gravel: get("Gravel"),
             snow: get("Snow"),
+            basalt: get("Basalt"),
+            blackstone: get("Blackstone"),
         }
     }
 
     /// Pick a terrain from elevation and slope (blocks of rise per block).
     /// `jitter` in `-1..1` breaks up the altitude bands.
     pub fn terrain(&self, h: f32, slope: f32, sea: f32, jitter: f32) -> TerrainId {
-        self.terrain_with(h, slope, sea, jitter, true)
+        self.terrain_with(h, slope, sea, jitter, true, false)
     }
 
-    /// [`Theme::terrain`], with or without sandy shores.
-    pub fn terrain_with(&self, h: f32, slope: f32, sea: f32, jitter: f32, beaches: bool) -> TerrainId {
+    /// [`Theme::terrain`], with or without sandy shores; along a sea of
+    /// `lava`, scorched rock rather than sand, blackstone under it.
+    pub fn terrain_with(&self, h: f32, slope: f32, sea: f32, jitter: f32, beaches: bool, lava: bool) -> TerrainId {
+        if lava {
+            if h < sea + 0.5 {
+                return self.blackstone;
+            }
+            if h < sea + 2.2 + 0.9 * jitter && slope < 1.35 {
+                return if jitter > 0.35 { self.blackstone } else { self.basalt };
+            }
+        }
         if h < sea - 14.0 + 3.0 * jitter {
             self.gravel
-        } else if beaches && h < sea + 2.2 + 0.8 * jitter && slope < 0.9 {
+        } else if beaches && !lava && h < sea + 2.2 + 0.8 * jitter && slope < 0.9 {
             self.sand
         } else if slope > 1.35 {
             self.rock
@@ -238,6 +282,19 @@ impl Theme {
             self.grass
         }
     }
+}
+
+/// `h`, kept under `ceiling` without flattening: past four fifths of the
+/// way from the sea, the heights close in on the ceiling and never reach it,
+/// so that peaks stay peaks rather than tables cut at the top of the world.
+pub fn soft_ceiling(h: f32, sea: f32, ceiling: f32) -> f32 {
+    let room = (ceiling - 1.0 - sea).max(8.0);
+    let knee = sea + room * 0.8;
+    if h <= knee {
+        return h;
+    }
+    let margin = ceiling - 1.0 - knee;
+    knee + margin * (1.0 - (-(h - knee) / margin.max(1.0)).exp())
 }
 
 /// Generate one ground tile.
@@ -264,6 +321,7 @@ pub fn generate_tile(pos: TilePos, field: &HeightField, theme: &Theme, params: &
     let mut top = vec![0f32; TILE_AREA];
     let mut terrain = vec![0u16; TILE_AREA];
     let sea = sea_level as f32;
+    let (bottom, ceiling) = build_limits(params.min_y, params.max_y);
     for z in 0..n {
         for x in 0..n {
             let c = (z + 1) * m + (x + 1);
@@ -275,10 +333,10 @@ pub fn generate_tile(pos: TilePos, field: &HeightField, theme: &Theme, params: &
                 .get((ox + x as i32) as f64 / 23.0 + 7.7, (oz + z as i32) as f64 / 23.0 - 3.3)
                 as f32;
             let i = z * n + x;
-            top[i] = snap_height(h[c]);
+            top[i] = snap_height(soft_ceiling(h[c], sea, ceiling as f32).max(bottom as f32 + 1.0));
             terrain[i] = match params.surface {
                 Some(t) => t.0,
-                None => theme.terrain_with(h[c], slope, sea, jitter, params.beaches).0,
+                None => theme.terrain_with(h[c], slope, sea, jitter, params.beaches, params.lava).0,
             };
         }
     }
@@ -301,6 +359,9 @@ pub fn generate(params: &GenParams) -> World {
         lava: params.lava,
         graph: None,
     });
+    let (bottom, top) = build_limits(params.min_y, params.max_y);
+    world.dims[0].min_y = bottom;
+    world.dims[0].max_y = top;
     let field = HeightField::new(params);
     let theme = Theme::new(&world.registry);
     let (min, max) = params.bounds();
@@ -335,6 +396,9 @@ pub struct FromHeightmap {
     pub low: f32,
     pub high: f32,
     pub sea_level: i32,
+    /// The build limits, as [`GenParams::min_y`] and [`GenParams::max_y`].
+    pub min_y: i32,
+    pub max_y: i32,
 }
 
 /// A world whose ground is height map `map`, centred on the origin, its
@@ -349,6 +413,9 @@ pub fn from_heightmap(map: &crate::heightmap::Heightmap, how: &FromHeightmap) ->
         lava: false,
         graph: None,
     });
+    let (bottom, ceiling) = build_limits(how.min_y, how.max_y);
+    world.dims[0].min_y = bottom;
+    world.dims[0].max_y = ceiling;
     let theme = Theme::new(&world.registry);
     let scale = how.scale.max(0.01);
     let (w, d) = (map.width as f32 * scale, map.height as f32 * scale);
@@ -369,7 +436,7 @@ pub fn from_heightmap(map: &crate::heightmap::Heightmap, how: &FromHeightmap) ->
             for z in 0..n {
                 for x in 0..n {
                     let (bx, bz) = ((ox + x as i32) as f32 + 0.5, (oz + z as i32) as f32 + 0.5);
-                    let h = height(bx, bz);
+                    let h = height(bx, bz).clamp(bottom as f32 + 1.0, ceiling as f32 - 1.0);
                     let slope = (height(bx + 1.0, bz) - height(bx - 1.0, bz)).abs().max((height(bx, bz + 1.0) - height(bx, bz - 1.0)).abs()) * 0.5;
                     top[z * n + x] = snap_height(h);
                     terrain[z * n + x] = theme.terrain(h, slope, sea, 0.0).0;
@@ -422,7 +489,7 @@ pub fn preview(params: &GenParams, reg: &Registry, n: usize) -> Preview {
             let at = |x: usize, z: usize| heights[z.min(n - 1) * n + x.min(n - 1)];
             let dx = (at(x + 1, z) - at(x.saturating_sub(1), z)) / (2.0 * spacing as f32);
             let dz = (at(x, z + 1) - at(x, z.saturating_sub(1))) / (2.0 * spacing as f32);
-            theme.terrain_with(heights[i], dx.abs().max(dz.abs()), sea, 0.0, params.beaches)
+            theme.terrain_with(heights[i], dx.abs().max(dz.abs()), sea, 0.0, params.beaches, params.lava)
         })
         .collect();
     Preview {
@@ -632,6 +699,8 @@ mod giant {
             low: 40.0,
             high: 200.0,
             sea_level: 63,
+            min_y: VANILLA_LIMITS.0,
+            max_y: VANILLA_LIMITS.1,
         };
         let world = from_heightmap(&map, &how);
         let (lo, hi) = world.dims[0].bounds().unwrap();

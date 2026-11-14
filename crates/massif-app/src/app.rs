@@ -237,10 +237,14 @@ impl MassifApp {
             .storage
             .and_then(|s| eframe::get_value(s, "massif.tools"))
             .unwrap_or_default();
-        // The 3D tools live in the 3D Sculpt editor now, not on the map.
+        // The 3D tools live in the 3D Sculpt editor now, not on the map;
+        // building and digging are one tool there.
         if tools.tool.is_sculpt() {
             tools.sculpt.tool = tools.tool;
             tools.tool = Tool::Raise;
+        }
+        if tools.sculpt.tool == Tool::Dig {
+            tools.sculpt.tool = Tool::Build;
         }
         theme::set_accent(&cc.egui_ctx, settings.accent);
         let mut app = Self::with_world(default_world(), layout, tools, settings);
@@ -1531,12 +1535,12 @@ impl MassifApp {
                     self.map_center = Some(view.center);
                 }
             }
-            EditorKind::View3d => self.view3d.ui(&mut cui, frame, &mut self.doc, &self.tools, self.map_center, false),
+            EditorKind::View3d => self.view3d.ui(&mut cui, frame, &mut self.doc, &mut self.tools, self.map_center, false),
             EditorKind::Sculpt3d => {
                 egui::Frame::new()
                     .inner_margin(egui::Margin::symmetric(8, 6))
-                    .show(&mut cui, |ui| panels::sculpt_toolbar(ui, &mut self.tools.sculpt));
-                self.sculpt3d.ui(&mut cui, frame, &mut self.doc, &self.tools, self.map_center, true);
+                    .show(&mut cui, |ui| panels::sculpt_toolbar(ui, &mut self.tools.sculpt, &mut self.brushes));
+                self.sculpt3d.ui(&mut cui, frame, &mut self.doc, &mut self.tools, self.map_center, true);
             }
             EditorKind::Tools => scrolled(&mut cui, &mut |ui| panels::tools_panel(ui, &mut self.tools)),
             EditorKind::ToolSettings => {
@@ -2117,6 +2121,17 @@ impl MassifApp {
             if !panels::select_brush(&mut self.tools, &self.brushes, source) {
                 panels::select_brush(&mut self.tools, &self.brushes, BrushSource::default());
             }
+            // The 3D Sculpt editor's too.
+            let sculpt = &mut self.tools.sculpt;
+            match self.brushes.brush(&sculpt.source, &sculpt.brush) {
+                Some(brush) => sculpt.brush = brush,
+                None => {
+                    sculpt.source = BrushSource::default();
+                    if let Some(brush) = self.brushes.brush(&sculpt.source, &sculpt.brush) {
+                        sculpt.brush = brush;
+                    }
+                }
+            }
         }
         // The game's blocks give the world's blocks and terrains their real
         // colours.
@@ -2255,10 +2270,12 @@ fn export_general(ui: &mut Ui, form: &mut ExportForm) {
                         }
                     }
                 });
+            let (bottom, top) = form.heights;
             let note = match form.target.era() {
-                massif_anvil::Era::Modern => "today's chunks, −64 to 320",
-                massif_anvil::Era::Flat16 | massif_anvil::Era::Flat15 | massif_anvil::Era::Flat14 => "named blocks, 0 to 255",
-                massif_anvil::Era::Numbered => "numbered blocks, 0 to 255",
+                massif_anvil::Era::Modern if bottom < -64 || top > 320 => format!("today's chunks, Y {bottom} to {top}: a data pack gives the world that height"),
+                massif_anvil::Era::Modern => format!("today's chunks, Y {bottom} to {top}"),
+                massif_anvil::Era::Flat16 | massif_anvil::Era::Flat15 | massif_anvil::Era::Flat14 => "named blocks, 0 to 255".to_owned(),
+                massif_anvil::Era::Numbered => "numbered blocks, 0 to 255".to_owned(),
             };
             ui.label(RichText::new(note).size(11.5).color(pal.weak));
         });
@@ -2367,7 +2384,7 @@ fn export_world(ui: &mut Ui, form: &mut ExportForm) {
     card(ui, "Spawn point", "Where players appear the first time.", |ui| {
         row(ui, "x, y, z", |ui| {
             ui.add(egui::DragValue::new(&mut form.spawn[0]));
-            ui.add(egui::DragValue::new(&mut form.spawn[1]).range(-64..=319));
+            ui.add(egui::DragValue::new(&mut form.spawn[1]).range(form.heights.0..=form.heights.1 - 1));
             ui.add(egui::DragValue::new(&mut form.spawn[2]));
         });
         ui.label(RichText::new("Spawn point for this export.").size(11.5).color(pal.weak));
@@ -2682,7 +2699,7 @@ mod tests {
         {
             let app = h.state_mut();
             app.layout.active = 4; // 3D Sculpt
-            app.tools.sculpt.tool = Tool::Dig;
+            app.tools.sculpt.tool = Tool::Build;
             app.tools.sculpt.brush.radius = 14.0;
             app.tools.sculpt.brush.strength = 1.0;
             app.sculpt3d.camera.distance = 160.0;
@@ -2704,27 +2721,69 @@ mod tests {
             pressed,
             modifiers: Modifiers::NONE,
         };
-        h.event(press(true, egui::PointerButton::Primary));
-        for _ in 0..20 {
-            h.step();
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        h.event(press(false, egui::PointerButton::Primary));
-        h.run_steps(30);
-        assert_eq!(h.state().doc.history.undo_label(), Some("Dig"));
-        assert!(!h.state().doc.dimension().voxels.is_empty());
-        h.render().unwrap().save(dir.join("sculpt-dig.png")).unwrap();
-        let (w, hgt, rgba) = h.state().sculpt3d.read_back().expect("the 3D view rendered");
-        image::save_buffer(dir.join("sculpt-dig-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
-        // The right button builds.
+        // The right button digs.
         h.event(press(true, egui::PointerButton::Secondary));
-        for _ in 0..30 {
+        for _ in 0..20 {
             h.step();
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         h.event(press(false, egui::PointerButton::Secondary));
         h.run_steps(30);
-        assert_eq!(h.state().doc.history.undo_label(), Some("Dig"));
+        assert_eq!(h.state().doc.history.undo_label(), Some("Sculpt"));
+        assert!(!h.state().doc.dimension().voxels.is_empty());
+        h.render().unwrap().save(dir.join("sculpt-dig.png")).unwrap();
+        let (w, hgt, rgba) = h.state().sculpt3d.read_back().expect("the 3D view rendered");
+        image::save_buffer(dir.join("sculpt-dig-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+        // Shift + drag moves the view, and sculpts nothing.
+        let steps = h.state().doc.history.undo_count();
+        let target = h.state().sculpt3d.camera.target;
+        h.event(egui::Event::ModifiersChanged(Modifiers::SHIFT));
+        h.step();
+        h.event(egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: Modifiers::SHIFT,
+        });
+        for k in 1..=10 {
+            h.event(egui::Event::PointerMoved(at + vec2(k as f32 * 8.0, 0.0)));
+            h.step();
+        }
+        h.event(egui::Event::PointerButton {
+            pos: at + vec2(80.0, 0.0),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::SHIFT,
+        });
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(5);
+        assert_eq!(h.state().doc.history.undo_count(), steps, "nothing sculpted");
+        assert_ne!(h.state().sculpt3d.camera.target, target, "the view moved");
+        // Alt + wheel: the size of the brush.
+        let radius = h.state().tools.sculpt.brush.radius;
+        h.event(egui::Event::PointerMoved(at));
+        h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(0.0, 120.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: Modifiers::ALT,
+        });
+        h.run_steps(10);
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        assert!(h.state().tools.sculpt.brush.radius > radius, "{} after {radius}", h.state().tools.sculpt.brush.radius);
+        // The left button adds matter.
+        h.event(egui::Event::PointerMoved(at));
+        h.step();
+        h.event(press(true, egui::PointerButton::Primary));
+        for _ in 0..30 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.event(press(false, egui::PointerButton::Primary));
+        h.run_steps(30);
+        assert_eq!(h.state().doc.history.undo_label(), Some("Sculpt"));
         assert!(h.state().doc.history.can_undo());
         let (w, hgt, rgba) = h.state().sculpt3d.read_back().expect("the 3D view rendered");
         image::save_buffer(dir.join("sculpt-build-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
@@ -4128,6 +4187,8 @@ mod tests {
                 low: 40.0,
                 high: 200.0,
                 sea_level: 63,
+                min_y: massif_core::generate::VANILLA_LIMITS.0,
+                max_y: massif_core::generate::VANILLA_LIMITS.1,
             };
         }
         h.run_steps(3);
@@ -4199,6 +4260,8 @@ mod tests {
                 low: 40.0,
                 high: 200.0,
                 sea_level: 63,
+                min_y: massif_core::generate::VANILLA_LIMITS.0,
+                max_y: massif_core::generate::VANILLA_LIMITS.1,
             },
         );
         cone_world.meta.graph = None;
@@ -4750,6 +4813,100 @@ mod tests {
         assert!(h.state().home.is_none());
         assert!(h.state().layout.terrain(), "on the Terrain side");
         assert!(h.state().doc.world.meta.graph.is_some(), "with the template's graph");
+    }
+
+    /// A map of lava: its preview, then the map itself, opaque and bright
+    /// with scorched shores, not water tinted orange. Needs a GPU: runs
+    /// with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn lava_maps_look_like_lava() {
+        use egui_kittest::kittest::Queryable;
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.state_mut().open_home(Page::NewMap);
+        {
+            let home = h.state_mut().home.as_mut().unwrap();
+            home.new_map.params.lava = true;
+            home.new_map.params.sea_level = 96;
+            home.new_map.params.landform = Landform::Mountains;
+            home.new_map.width = 1024;
+            home.new_map.depth = 1024;
+        }
+        h.run_steps(5);
+        h.render().unwrap().save(dir.join("home-lava.png")).unwrap();
+        h.get_by_label("Create map").click();
+        h.run_steps(2);
+        while !h.state().jobs.is_empty() {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.run_steps(5);
+        while h.state().view3d.pending() > 0 {
+            h.step();
+        }
+        h.run_steps(3);
+        h.render().unwrap().save(dir.join("lava-map.png")).unwrap();
+        // By name: the game's own blocks, once read, add terrains of the
+        // same names.
+        let reg = &h.state().doc.world.registry;
+        let (mut scorched, mut sandy) = (0, 0);
+        for z in (-500..500).step_by(4) {
+            for x in (-500..500).step_by(4) {
+                if let Some(p) = crate::tools::probe(&h.state().doc, x, z) {
+                    let name = reg.terrain(massif_core::TerrainId(p.terrain)).name.as_str();
+                    scorched += matches!(name, "Blackstone" | "Basalt") as usize;
+                    sandy += (name == "Sand") as usize;
+                }
+            }
+        }
+        assert!(scorched > 100 && sandy == 0, "scorched shores, no sand: {scorched} / {sandy}");
+    }
+
+    /// A map taller than the game's own: made from the home screen up to
+    /// 1024, its mountains past 320, shown in 2D and 3D. Needs a GPU: runs
+    /// with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn tall_maps_are_made_and_shown() {
+        use egui_kittest::kittest::Queryable;
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.state_mut().open_home(Page::NewMap);
+        h.run_steps(3);
+        h.get_by_label("1024").click();
+        {
+            let home = h.state_mut().home.as_mut().unwrap();
+            home.new_map.params.landform = Landform::Mountains;
+            home.new_map.params.relief = 700.0;
+            home.new_map.width = 1024;
+            home.new_map.depth = 1024;
+        }
+        h.run_steps(5);
+        h.render().unwrap().save(dir.join("home-tall.png")).unwrap();
+        h.get_by_label("Create map").click();
+        h.run_steps(2);
+        while !h.state().jobs.is_empty() {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.run_steps(5);
+        let dim = h.state().doc.dimension();
+        assert_eq!((dim.min_y, dim.max_y), (-64, 1024));
+        let tallest = (-500..500).step_by(8).flat_map(|z| (-500..500).step_by(8).map(move |x| (x, z))).filter_map(|(x, z)| crate::tools::probe(&h.state().doc, x, z)).map(|p| p.height).fold(0.0f32, f32::max);
+        assert!(tallest > 400.0, "mountains past 320: {tallest}");
+        h.state_mut().maps.values_mut().for_each(|m| m.mode = crate::map_render::MapMode::Height);
+        h.state_mut().map_cache.invalidate_all();
+        h.run_steps(5);
+        while h.state().view3d.pending() > 0 {
+            h.step();
+        }
+        h.run_steps(3);
+        h.render().unwrap().save(dir.join("tall-map.png")).unwrap();
+        let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+        image::save_buffer(dir.join("tall-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
     }
 
     /// The new-world and export dialogs, rendered.

@@ -403,17 +403,98 @@ pub enum SculptMode {
 /// continuous). `strength` (0..1) is how far one dab goes; the brush profile
 /// fades it toward the rim. Returns the number of voxels changed.
 pub fn sculpt(edit: &mut Edit, brush: &Brush, center: [f32; 3], strength: f32, mode: SculptMode) -> usize {
+    sculpt_at(edit, brush, center, None, strength, mode)
+}
+
+/// Where the surface is under a cursor, and which way it faces: smoothed
+/// over the blocks around, so that it glides over the steps of the terrain
+/// rather than jumping from the top of a block to its side.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Frame {
+    pub center: [f32; 3],
+    /// Outward, unit.
+    pub normal: [f32; 3],
+}
+
+/// The surface where a ray from `origin` along `dir` hit it (`hit`): its
+/// point and its normal, read from the densities around smoothed over five
+/// blocks, the slope of the land rather than the face of a block.
+pub fn surface_frame(dim: &Dimension, hit: &Hit, origin: [f64; 3], dir: [f64; 3]) -> Frame {
+    let (bx, by, bz) = hit.block;
+    let k = 2;
+    let lo = [bx - 4, by - 4, bz - 4];
+    let hi = [bx + 5, by + 5, bz + 5];
+    let field = Field::gather(dim, lo, hi, k).blurred(k);
+    let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-9);
+    let d = [dir[0] / len, dir[1] / len, dir[2] / len];
+    let at = |t: f64| [(origin[0] + d[0] * t) as f32, (origin[1] + d[1] * t) as f32, (origin[2] + d[2] * t) as f32];
+    // Where the smoothed matter becomes solid along the ray, near the hit.
+    let mut center = [hit.point[0] as f32, hit.point[1] as f32, hit.point[2] as f32];
+    let (t0, t1) = (hit.distance - 3.0, hit.distance + 3.0);
+    let mut last: Option<(f64, f32)> = None;
+    let mut t = t0.max(0.0);
+    while t <= t1 {
+        let v = field.sample(at(t));
+        if let Some((tl, vl)) = last
+            && vl < SOLID as f32
+            && v >= SOLID as f32
+        {
+            let f = ((SOLID as f32 - vl) / (v - vl).max(1e-3)) as f64;
+            center = at(tl + (t - tl) * f);
+            break;
+        }
+        last = Some((t, v));
+        t += 0.2;
+    }
+    // Facing away from the matter.
+    let e = 1.0;
+    let g = [
+        field.sample([center[0] + e, center[1], center[2]]) - field.sample([center[0] - e, center[1], center[2]]),
+        field.sample([center[0], center[1] + e, center[2]]) - field.sample([center[0], center[1] - e, center[2]]),
+        field.sample([center[0], center[1], center[2] + e]) - field.sample([center[0], center[1], center[2] - e]),
+    ];
+    let n = (g[0] * g[0] + g[1] * g[1] + g[2] * g[2]).sqrt();
+    let normal = if n > 1e-3 {
+        [-g[0] / n, -g[1] / n, -g[2] / n]
+    } else {
+        let (x, y, z) = hit.normal;
+        [x as f32, y as f32, z as f32]
+    };
+    Frame { center, normal }
+}
+
+/// Two directions along a surface facing `n`: the first as close as can be
+/// to east, the second to south, so that a brush keeps the turn it has on
+/// the map.
+pub fn tangents(n: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let unit = |a: [f32; 3]| {
+        let l = dot(a, a).sqrt().max(1e-6);
+        [a[0] / l, a[1] / l, a[2] / l]
+    };
+    let axis = if n[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 0.0, 1.0] };
+    let k = dot(axis, n);
+    let t1 = unit([axis[0] - n[0] * k, axis[1] - n[1] * k, axis[2] - n[2] * k]);
+    let t2 = [t1[1] * n[2] - t1[2] * n[1], t1[2] * n[0] - t1[0] * n[2], t1[0] * n[1] - t1[1] * n[0]];
+    (t1, t2)
+}
+
+/// [`sculpt`], laid along a surface facing `normal` when there is one: the
+/// brush's shape (a custom image too) on the slope, fading off it.
+pub fn sculpt_at(edit: &mut Edit, brush: &Brush, center: [f32; 3], normal: Option<[f32; 3]>, strength: f32, mode: SculptMode) -> usize {
     let r = brush.radius.max(0.5);
+    let reach = brush.reach().max(r);
+    let frame = normal.map(|n| (n, tangents(n)));
     let (min_y, max_y) = (edit.dim().min_y, edit.dim().max_y);
     let lo = [
-        (center[0] - r).floor() as i32,
-        ((center[1] - r).floor() as i32).max(min_y),
-        (center[2] - r).floor() as i32,
+        (center[0] - reach).floor() as i32,
+        ((center[1] - reach).floor() as i32).max(min_y),
+        (center[2] - reach).floor() as i32,
     ];
     let hi = [
-        (center[0] + r).ceil() as i32,
-        ((center[1] + r).ceil() as i32).min(max_y),
-        (center[2] + r).ceil() as i32,
+        (center[0] + reach).ceil() as i32,
+        ((center[1] + reach).ceil() as i32).min(max_y),
+        (center[2] + reach).ceil() as i32,
     ];
     if hi[1] <= lo[1] {
         return 0;
@@ -453,15 +534,29 @@ pub fn sculpt(edit: &mut Edit, brush: &Brush, center: [f32; 3], strength: f32, m
             for lz in 0..SIZE {
                 for lx in 0..SIZE {
                     let (x, z) = (x0 + lx, z0 + lz);
-                    let d = ((x as f32 + 0.5 - center[0]).powi(2)
-                        + (y as f32 + 0.5 - center[1]).powi(2)
-                        + (z as f32 + 0.5 - center[2]).powi(2))
-                    .sqrt()
-                        / r;
-                    if d > 1.0 {
-                        continue;
-                    }
-                    let w = (profile.apply(d).clamp(0.0, 1.0) * strength).min(1.0);
+                    let p = [x as f32 + 0.5 - center[0], y as f32 + 0.5 - center[1], z as f32 + 0.5 - center[2]];
+                    let shape = match &frame {
+                        // Along the surface: the brush's own shape, fading
+                        // off the slope, as deep as the brush is wide.
+                        Some((n, (t1, t2))) => {
+                            let w = p[0] * n[0] + p[1] * n[1] + p[2] * n[2];
+                            let across = 1.0 - (w / r).powi(2);
+                            if across <= 0.0 {
+                                continue;
+                            }
+                            let u = p[0] * t1[0] + p[1] * t1[1] + p[2] * t1[2];
+                            let v = p[0] * t2[0] + p[1] * t2[1] + p[2] * t2[2];
+                            brush.weight(u, v) * across
+                        }
+                        None => {
+                            let d = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt() / r;
+                            if d > 1.0 {
+                                continue;
+                            }
+                            profile.apply(d).clamp(0.0, 1.0)
+                        }
+                    };
+                    let w = (shape * strength).min(1.0);
                     if w <= 0.0 {
                         continue;
                     }
@@ -580,6 +675,28 @@ impl Field {
     fn at(&self, x: i32, y: i32, z: i32) -> f32 {
         let (i, j, k) = ((x - self.lo[0]) as usize, (y - self.lo[1]) as usize, (z - self.lo[2]) as usize);
         self.values[(j * self.size[2] + k) * self.size[0] + i]
+    }
+
+    /// The density at a point (block coordinates, continuous), between the
+    /// centres of the blocks; the edge of the box beyond it.
+    fn sample(&self, p: [f32; 3]) -> f32 {
+        let mut i = [0usize; 3];
+        let mut f = [0f32; 3];
+        for a in 0..3 {
+            let v = (p[a] - 0.5 - self.lo[a] as f32).clamp(0.0, (self.size[a] - 1) as f32 - 1e-3);
+            i[a] = v.floor() as usize;
+            f[a] = v - i[a] as f32;
+        }
+        let get = |x: usize, y: usize, z: usize| {
+            let (x, y, z) = (x.min(self.size[0] - 1), y.min(self.size[1] - 1), z.min(self.size[2] - 1));
+            self.values[(y * self.size[2] + z) * self.size[0] + x]
+        };
+        let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
+        let c00 = lerp(get(i[0], i[1], i[2]), get(i[0] + 1, i[1], i[2]), f[0]);
+        let c10 = lerp(get(i[0], i[1] + 1, i[2]), get(i[0] + 1, i[1] + 1, i[2]), f[0]);
+        let c01 = lerp(get(i[0], i[1], i[2] + 1), get(i[0] + 1, i[1], i[2] + 1), f[0]);
+        let c11 = lerp(get(i[0], i[1] + 1, i[2] + 1), get(i[0] + 1, i[1] + 1, i[2] + 1), f[0]);
+        lerp(lerp(c00, c10, f[1]), lerp(c01, c11, f[1]), f[2])
     }
 }
 
@@ -738,6 +855,61 @@ mod tests {
         let pos = ChunkPos::containing(5, 60, 5);
         w2.dims[0].voxels.insert(pos, Arc::new(chunk));
         assert_eq!(spans_at(&w2, 5, 5), spans_at(&w, 5, 5));
+    }
+
+    /// On a slope of blocks, the frame under the cursor faces the slope,
+    /// whether the ray hits the top of a step or its side, and glides along
+    /// it.
+    #[test]
+    fn the_surface_frame_follows_the_slope_not_the_block() {
+        let mut w = World::new(WorldMeta::default());
+        let mut tile = Tile::ground(64.0, 1, crate::tile::NO_FLUID);
+        // Rising one block per block eastward: a 45° staircase.
+        for z in 0..128 {
+            for x in 0..128 {
+                tile.top.set(local_index(x, z), 40.0 + x as f32);
+            }
+        }
+        w.dims[0].ground_mut().insert(TilePos::new(0, 0), tile);
+        let dim = &w.dims[0];
+        let mut normals = Vec::new();
+        let mut centers = Vec::new();
+        for k in 0..12 {
+            // Looking down at the slope from the west, the ray landing a
+            // little further east each time: tops and sides of steps alike.
+            let o = [20.0 + k as f64 * 0.37, 120.0, 64.5];
+            let d = [0.6, -1.0, 0.0];
+            let hit = raycast(dim, o, d, 400.0).expect("the slope");
+            let f = surface_frame(dim, &hit, o, d);
+            normals.push(f.normal);
+            centers.push(f.center);
+        }
+        let s = std::f32::consts::FRAC_1_SQRT_2;
+        for n in &normals {
+            assert!((n[0] + s).abs() < 0.12 && (n[1] - s).abs() < 0.12 && n[2].abs() < 0.08, "faces the slope: {n:?}");
+        }
+        // The centre lies on the slope (y - x the same), moving smoothly.
+        for c in &centers {
+            assert!((c[1] - c[0] - 40.0).abs() < 1.2, "on the slope: {c:?}");
+        }
+    }
+
+    /// A square brush laid flat digs a square pit, not a ball.
+    #[test]
+    fn a_brush_keeps_its_shape_on_the_surface() {
+        let mut w = world();
+        let mut h = History::default();
+        h.begin("Dig", 0);
+        let square = Brush {
+            shape: BrushShape::Square,
+            ..brush(6.0)
+        };
+        sculpt_at(&mut h.edit(&mut w, 0), &square, [10.5, 64.0, 10.5], Some([0.0, 1.0, 0.0]), 1.0, SculptMode::Remove);
+        h.commit();
+        let top = |x: i32, z: i32| spans_at(&w, x, z).last().map_or(0, |s| s.y1);
+        // The corners of the square are dug as deep as its middle edges.
+        assert!(top(6, 6) < 64 && top(15, 15) < 64, "corners dug: {} {}", top(6, 6), top(15, 15));
+        assert_eq!(top(18, 18), 64, "outside untouched");
     }
 
     #[test]

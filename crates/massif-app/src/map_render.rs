@@ -239,6 +239,7 @@ impl Default for MapStyle {
             highlight: None,
             light: DEFAULT_LIGHT,
             lava: false,
+            top: 320,
         }
     }
 }
@@ -277,6 +278,8 @@ pub struct MapStyle {
     pub light: u8,
     /// The world's fluid is lava.
     pub lava: bool,
+    /// The top of the world: the height colours spread up to it.
+    pub top: i32,
 }
 
 /// Default light direction: from the north-west, like WorldPainter.
@@ -330,6 +333,15 @@ fn ramp(stops: &[(f32, Rgb)], v: f32) -> Rgb {
 
 /// Colour of an elevation relative to sea level.
 pub fn height_color(height: f32, sea: f32) -> [u8; 3] {
+    height_color_to(height, sea, 320.0)
+}
+
+/// [`height_color`] for a world whose top is `top`: the colours over the
+/// sea spread up to it in worlds taller than the game's own.
+pub fn height_color_to(height: f32, sea: f32, top: f32) -> [u8; 3] {
+    let k = ((top - sea) / (320.0 - 63.0)).max(1.0);
+    let d = height - sea;
+    let height = if d > 0.0 { sea + d / k } else { height };
     const STOPS: [(f32, Rgb); 10] = [
         (-90.0, [10.0, 22.0, 70.0]),
         (-40.0, [22.0, 60.0, 140.0]),
@@ -467,7 +479,7 @@ impl<'a> Colorizer<'a> {
 
         let mut out = match self.style.mode {
             MapMode::Terrain => scale(self.terrain_rgb(c.terrain), shade),
-            MapMode::Height => scale(rgb(height_color(c.height, self.sea)), 0.7 + 0.3 * shade),
+            MapMode::Height => scale(rgb(height_color_to(c.height, self.sea, self.style.top as f32)), 0.7 + 0.3 * shade),
             MapMode::Slope => {
                 // The trend of the hillside when it was measured around the
                 // sample, the step to the neighbours otherwise.
@@ -488,14 +500,15 @@ impl<'a> Colorizer<'a> {
         let depth = c.water_depth();
         if depth > 0.0 && !matches!(self.style.mode, MapMode::Slope | MapMode::Biome) {
             let t = (depth / 18.0).min(1.0);
-            let water = if self.style.lava {
-                [214.0, 96.0, 18.0]
-            } else if self.style.mode == MapMode::Relief {
-                [70.0, 110.0, 170.0]
+            if self.style.lava {
+                // Lava hides what lies under it: bright, with a darker
+                // crust along its shores.
+                let crust = (1.0 - depth / 2.5).clamp(0.0, 1.0);
+                out = mix([238.0, 112.0, 22.0], [150.0, 42.0, 12.0], 0.65 * crust);
             } else {
-                WATER
-            };
-            out = mix(out, water, 0.5 + 0.42 * t);
+                let water = if self.style.mode == MapMode::Relief { [70.0, 110.0, 170.0] } else { WATER };
+                out = mix(out, water, 0.5 + 0.42 * t);
+            }
         }
 
         if let Some(interval) = contour {

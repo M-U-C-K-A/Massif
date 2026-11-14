@@ -2493,6 +2493,9 @@ impl GraphEditor {
     /// The settings of the selected node.
     pub fn properties_ui(&mut self, ui: &mut Ui, doc: &mut Document) {
         self.sync(ui.ctx(), doc);
+        let dim = doc.dimension();
+        let bounds = (dim.min_y as f32, dim.max_y as f32);
+        ui.data_mut(|d| d.insert_temp(limits_id(), bounds));
         if ui.rect_contains_pointer(ui.max_rect()) && ui.input(|i| i.pointer.any_pressed()) {
             self.last_edit = None;
         }
@@ -2871,10 +2874,21 @@ fn blocks(ui: &mut Ui, label: &str, v: &mut f32, max: f32) -> bool {
     })
 }
 
+/// The build limits of the map the graph is for, as the properties set
+/// them for the settings that are heights.
+fn limits_id() -> egui::Id {
+    egui::Id::unique("massif build limits")
+}
+
+fn limits(ui: &Ui) -> (f32, f32) {
+    ui.data(|d| d.get_temp::<(f32, f32)>(limits_id())).unwrap_or((-64.0, 320.0))
+}
+
 fn height(ui: &mut Ui, label: &str, v: &mut f32) -> bool {
+    let (bottom, top) = limits(ui);
     row(ui, label, |ui| {
         ui.add(
-            crate::widgets::Field::new(v, -64.0..=320.0)
+            crate::widgets::Field::new(v, bottom..=top)
                 .clamping(egui::SliderClamping::Never)
                 .max_decimals(0),
         )
@@ -2913,7 +2927,8 @@ fn sea_level(ui: &mut Ui, v: &mut f32, hover: &str) -> bool {
             *v = if on { 63.0 } else { massif_core::graph::NO_WATER };
         }
         if on {
-            ui.add(egui::DragValue::new(v).range(-64.0..=320.0).speed(0.5).max_decimals(0));
+            let (bottom, top) = limits(ui);
+            ui.add(egui::DragValue::new(v).range(bottom..=top).speed(0.5).max_decimals(0));
         }
     });
     *v != before
@@ -3046,7 +3061,7 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             fraction(ui, "Fall starts", inner);
             fraction(ui, "Fall ends", outer);
             amount(ui, "Height", h, -400.0..=400.0);
-            amount(ui, "Base", base, -64.0..=320.0);
+            amount(ui, "Base", base, limits(ui).0..=limits(ui).1);
         }
         NodeKind::Constant { value } => {
             row(ui, "Value", |ui| ui.add(egui::DragValue::new(value).speed(0.5)));
@@ -3054,7 +3069,7 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
         NodeKind::LinearGradient { angle: a, height: h, base } => {
             angle(ui, "Rises toward", a);
             amount(ui, "Height", h, -400.0..=400.0);
-            amount(ui, "Base", base, -64.0..=320.0);
+            amount(ui, "Base", base, limits(ui).0..=limits(ui).1);
         }
         NodeKind::Shape {
             shape,
@@ -3071,7 +3086,7 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             blocks(ui, "Radius", radius, 10000.0);
             fraction(ui, "Soft edge", falloff);
             amount(ui, "Height", h, -400.0..=400.0);
-            amount(ui, "Base", base, -64.0..=320.0);
+            amount(ui, "Base", base, limits(ui).0..=limits(ui).1);
         }
         NodeKind::Mountain {
             style,
@@ -3537,8 +3552,9 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             ui.add_space(4.0);
             flag(ui, "Fit the range", auto_range);
             if !*auto_range {
-                amount(ui, "From", min, -64.0..=320.0);
-                amount(ui, "To", max, -64.0..=320.0);
+                let (bottom, top) = limits(ui);
+                amount(ui, "From", min, bottom..=top);
+                amount(ui, "To", max, bottom..=top);
             }
             flag(ui, "Reverse", reverse);
             fraction(ui, "Variation", variation);

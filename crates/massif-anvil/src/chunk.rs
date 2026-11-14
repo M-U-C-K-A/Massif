@@ -69,8 +69,11 @@ impl<'a> ExportContext<'a> {
                 dim.min_y, dim.max_y
             ));
         }
-        if dim.min_y < -2048 || dim.max_y > 2048 {
-            return Err("build limits exceed what Minecraft supports (-2048..2048)".into());
+        if dim.min_y < -2032 || dim.max_y > 2032 || dim.max_y - dim.min_y > 4064 {
+            return Err(format!(
+                "build limits {}..{} exceed what Minecraft allows (−2032 to 2032, 4064 blocks at most)",
+                dim.min_y, dim.max_y
+            ));
         }
         if reg.blocks.is_empty() || reg.blocks.len() >= UNSET as usize {
             return Err("the block registry is empty or too large".into());

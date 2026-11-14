@@ -115,6 +115,11 @@ impl History {
         !self.redo.is_empty()
     }
 
+    /// How many steps can be undone.
+    pub fn undo_count(&self) -> usize {
+        self.undo.len()
+    }
+
     pub fn undo_label(&self) -> Option<&str> {
         self.undo.last().map(|s| s.label.as_str())
     }

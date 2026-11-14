@@ -112,6 +112,8 @@ impl HeightmapPick {
                 low: 20.0,
                 high: 230.0,
                 sea_level: 63,
+                min_y: massif_core::generate::VANILLA_LIMITS.0,
+                max_y: massif_core::generate::VANILLA_LIMITS.1,
             },
             picture: Some(picture),
         })
@@ -397,6 +399,7 @@ impl Home {
                     nm.width = (nm.width + 127) / 128 * 128;
                     nm.depth = (nm.depth + 127) / 128 * 128;
                 });
+                setting(ui, "Height", |ui| limits(ui, &mut nm.params.min_y, &mut nm.params.max_y));
                 setting(ui, "Land", |ui| {
                     let shown = nm.template.map_or(nm.params.landform.label(), |t| t.label());
                     crate::widgets::combo("home landform").selected_text(shown).width(third * 1.4).height(360.0).show_ui(ui, |ui| {
@@ -440,24 +443,29 @@ impl Home {
                     nm.params.surface = chosen;
                 });
                 let hilly = nm.params.landform != Landform::Flat && nm.template.is_none();
+                let (bottom, top) = massif_core::generate::build_limits(nm.params.min_y, nm.params.max_y);
+                // Taller worlds take taller mountains.
+                let most = if top > 320 { 1500.0 } else { 400.0 };
                 setting(ui, "Relief", |ui| {
-                    ui.add_enabled(hilly, Field::new(&mut nm.params.relief, 0.0..=400.0).text("Height").suffix("%").max_decimals(0).width(third));
+                    ui.add_enabled(hilly, Field::new(&mut nm.params.relief, 0.0..=most).text("Height").suffix("%").max_decimals(0).width(third));
                     ui.add_enabled(hilly, Field::new(&mut nm.params.feature_size, 10.0..=1000.0).text("Features").suffix("%").max_decimals(0).width(third));
                     let mut level = nm.params.level.unwrap_or(if hilly { nm.params.sea_level as f32 } else { nm.params.flat_height });
                     let free = nm.template.is_none();
-                    if ui.add_enabled(free, Field::new(&mut level, -63.0..=318.0).text("Ground").max_decimals(0).width(third)).changed() {
+                    if ui.add_enabled(free, Field::new(&mut level, (bottom + 1) as f32..=(top - 2) as f32).text("Ground").max_decimals(0).width(third)).changed() {
                         nm.params.level = Some(level);
                         nm.params.flat_height = level;
                     }
                 });
                 setting(ui, "Water", |ui| {
-                    ui.add(Field::new(&mut nm.params.sea_level, -63..=318).text("Level").width(third));
-                    if chip(ui, "Lava", nm.params.lava).on_hover_text("Lava instead of water").clicked() {
+                    ui.add(Field::new(&mut nm.params.sea_level, bottom + 1..=top - 2).text("Level").width(third));
+                    if chip(ui, "Lava", nm.params.lava).on_hover_text("Lava instead of water, with scorched shores").clicked() {
                         nm.params.lava = !nm.params.lava;
                     }
-                    let beaches = nm.params.beaches && nm.params.surface.is_none();
-                    if chip(ui, "Beaches", beaches).on_hover_text("Sand along the shores").clicked() {
-                        nm.params.beaches = !nm.params.beaches;
+                    if !nm.params.lava {
+                        let beaches = nm.params.beaches && nm.params.surface.is_none();
+                        if chip(ui, "Beaches", beaches).on_hover_text("Sand along the shores").clicked() {
+                            nm.params.beaches = !nm.params.beaches;
+                        }
                     }
                 });
                 setting(ui, "Seed", |ui| {
@@ -479,10 +487,15 @@ impl Home {
             let tiles = params.tiles_x as i64 * params.tiles_z as i64;
             let minutes = (params.tiles_x.max(params.tiles_z) * 128) as f32 / 4.317 / 60.0;
             let across = if minutes < 1.0 { "under a minute across".to_owned() } else { format!("{minutes:.0} min. across on foot") };
+            let (bottom, top) = massif_core::generate::build_limits(params.min_y, params.max_y);
+            let pack = if (bottom, top) != massif_core::generate::VANILLA_LIMITS { " (with a data pack)" } else { "" };
             ui.label(
-                RichText::new(format!("Minecraft Java 1.18+  ·  Y −64 to 320  ·  {across}  ·  about {}", crate::panels::human((tiles * 12_000) as u64)))
-                    .size(11.5)
-                    .color(pal.weak),
+                RichText::new(format!(
+                    "Minecraft Java 1.18+  ·  Y {bottom} to {top}{pack}  ·  {across}  ·  about {}",
+                    crate::panels::human((tiles * 12_000) as u64)
+                ))
+                .size(11.5)
+                .color(pal.weak),
             );
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                 let create = primary(ui, "Create map", "⏎").on_hover_text("Enter");
@@ -537,15 +550,17 @@ impl Home {
                 ui.label(RichText::new(pick.path.display().to_string()).size(11.0).color(pal.weak));
                 ui.add_space(10.0);
                 let w = ((ui.available_width() - 76.0 - 8.0) / 2.0).floor();
+                setting(ui, "Height", |ui| limits(ui, &mut h.min_y, &mut h.max_y));
+                let (bottom, top) = massif_core::generate::build_limits(h.min_y, h.max_y);
                 setting(ui, "Scale", |ui| {
                     ui.add(Field::new(&mut h.scale, 0.25..=16.0).logarithmic(true).text("Blocks a pixel").max_decimals(2).width(w * 2.0 + 4.0));
                 });
                 setting(ui, "Heights", |ui| {
-                    ui.add(Field::new(&mut h.low, -64.0..=319.0).text("Black is Y").max_decimals(0).width(w));
-                    ui.add(Field::new(&mut h.high, -64.0..=319.0).text("White is Y").max_decimals(0).width(w));
+                    ui.add(Field::new(&mut h.low, bottom as f32..=(top - 1) as f32).text("Black is Y").max_decimals(0).width(w));
+                    ui.add(Field::new(&mut h.high, bottom as f32..=(top - 1) as f32).text("White is Y").max_decimals(0).width(w));
                 });
                 setting(ui, "Water", |ui| {
-                    ui.add(Field::new(&mut h.sea_level, -64..=319).text("Level").width(w));
+                    ui.add(Field::new(&mut h.sea_level, bottom..=top - 1).text("Level").width(w));
                 });
                 ui.add_space(4.0);
                 if ui.link(RichText::new("Choose another…").size(12.0)).clicked() {
@@ -725,6 +740,28 @@ fn setting(ui: &mut Ui, name: &str, add: impl FnOnce(&mut Ui)) {
         add(ui);
     });
     ui.add_space(8.0);
+}
+
+/// The build limits of a new map: the top among Minecraft's own and taller
+/// ones, the bottom as deep as it may go.
+fn limits(ui: &mut Ui, min_y: &mut i32, max_y: &mut i32) {
+    for (top, label, tip) in [
+        (320, "320", "Minecraft's own height: −64 to 320"),
+        (512, "512", "Up to 512, with a data pack"),
+        (1024, "1024", "Up to 1024, with a data pack"),
+        (2032, "2032", "As high as Minecraft goes: 2032, with a data pack"),
+    ] {
+        if chip(ui, label, *max_y == top).on_hover_text(tip).clicked() {
+            *max_y = top;
+        }
+    }
+    ui.add_space(4.0);
+    let mut bottom = *min_y;
+    ui.add(egui::DragValue::new(&mut bottom).range(-2032..=-64).speed(16.0).prefix("from Y "))
+        .on_hover_text("The bottom of the world: −64, or deeper with a data pack (to −2032)");
+    let (b, t) = massif_core::generate::build_limits(bottom, *max_y);
+    *min_y = b;
+    *max_y = t;
 }
 
 /// A small button that is on or off.
@@ -910,7 +947,7 @@ fn template_preview(ui: &mut Ui, nm: &mut NewMap, t: Template) {
 pub fn preview_image(params: &GenParams, reg: &massif_core::Registry, n: usize) -> egui::ColorImage {
     let p = massif_core::generate::preview(params, reg, n);
     let sea = params.sea_level as f32;
-    let fluid = if params.lava { [214.0, 96.0, 18.0] } else { [48.0, 96.0, 200.0] };
+    let fluid = if params.lava { [238.0, 112.0, 22.0] } else { [48.0, 96.0, 200.0] };
     let s = p.spacing as f32;
     let mut pixels = Vec::with_capacity(n * n);
     for z in 0..n {
@@ -926,7 +963,15 @@ pub fn preview_image(params: &GenParams, reg: &massif_core::Registry, n: usize) 
             for v in &mut c {
                 *v *= shade;
             }
-            if h < sea {
+            if h < sea && params.lava {
+                // Lava hides what lies under it: bright, a darker crust
+                // along its shores.
+                let crust = (1.0 - (sea - h) / 2.5).clamp(0.0, 1.0);
+                let dark = [150.0, 42.0, 12.0];
+                for i in 0..3 {
+                    c[i] = fluid[i] + (dark[i] - fluid[i]) * 0.65 * crust;
+                }
+            } else if h < sea {
                 let t = 0.55 + 0.4 * ((sea - h) / 20.0).min(1.0);
                 for i in 0..3 {
                     c[i] = c[i] * (1.0 - t) + fluid[i] * t;
