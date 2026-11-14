@@ -164,6 +164,9 @@ pub struct MassifApp {
     home: Option<home::Home>,
     /// The template the map being made takes its relief from.
     after_create: Option<massif_core::graph::Template>,
+    /// What the covers looked like last frame: when it changes, the map
+    /// and the 3D views redraw.
+    covers_key: Option<u64>,
     next_generation: u64,
     layout: Layout,
     tools: ToolState,
@@ -440,6 +443,7 @@ impl MassifApp {
             has_map: true,
             home: None,
             after_create: None,
+            covers_key: None,
             next_generation: 1,
             layout,
             tools,
@@ -2145,6 +2149,14 @@ impl MassifApp {
             self.view3d.invalidate_all();
             self.sculpt3d.invalidate_all();
         }
+        // A cover changed colour, thickness or plants.
+        let covers = covers_key(&self.doc.world.registry.covers);
+        if self.covers_key.is_some_and(|k| k != covers) {
+            self.map_cache.invalidate_all();
+            self.view3d.invalidate_all();
+            self.sculpt3d.invalidate_all();
+        }
+        self.covers_key = Some(covers);
         self.handle_close(&ctx);
         self.shortcuts(&ctx);
         self.map_cache.sync_generation(self.doc.generation);
@@ -2453,6 +2465,16 @@ fn zone_of(r: Rect, p: egui::Pos2) -> Zone {
         .min_by(|a, b| a.0.total_cmp(&b.0))
         .map(|e| e.1)
         .unwrap_or(Zone::Center)
+}
+
+/// What of the covers shows on the map and in 3D.
+fn covers_key(covers: &[massif_core::registry::CoverDef]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for c in covers {
+        (c.color, c.density.to_bits(), c.removed, c.soil_only, c.underwater, c.height, &c.plants).hash(&mut h);
+    }
+    h.finish()
 }
 
 #[cfg(test)]
@@ -4961,6 +4983,113 @@ mod tests {
         }
         h.run_steps(5);
         h.render().unwrap().save(dir.join("dialog-export-world.png")).unwrap();
+    }
+
+    /// The Ground cover tool: a cover picked in its settings, painted on
+    /// the map, taken off with the right button. A plant of the game makes
+    /// a cover of its own. With MASSIF_SNAPSHOT_DIR, the map is saved.
+    #[test]
+    fn covers_are_painted_and_shown() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        {
+            let app = h.state_mut();
+            let world = generate(&GenParams {
+                tiles_x: 4,
+                tiles_z: 4,
+                landform: Landform::Hills,
+                ..GenParams::default()
+            });
+            app.doc = crate::doc::Document::new(world, None, 9);
+            app.map_cache.invalidate_all();
+            app.view3d.invalidate_all();
+            app.tools.select(Tool::Cover);
+            app.tools.brush.radius = 50.0;
+            app.tools.brush.strength = 1.0;
+            app.tools.brush.profile = massif_core::Profile::Constant;
+        }
+        h.run_steps(5);
+        use egui_kittest::kittest::Queryable;
+        h.get_by_label("Flowers").click();
+        h.run_steps(3);
+        let flowers = h.state().doc.world.registry.cover_by_name("Flowers").unwrap();
+        assert_eq!(h.state().tools.cover, flowers);
+        let rect = map_rect(h.state(), &h.ctx);
+        let c = rect.center();
+        drag_on(&mut h, c, c + vec2(60.0, 0.0));
+        h.run_steps(10);
+        assert_eq!(h.state().doc.history.undo_label(), Some("Ground cover"));
+        let count = |h: &egui_kittest::Harness<'static, MassifApp>, n: u16| {
+            let app = h.state();
+            let at = app.maps.get(&app.active_map.unwrap()).unwrap().center;
+            let (cx, cz) = (at[0].floor() as i32, at[1].floor() as i32);
+            let mut k = 0;
+            for z in cz - 30..cz + 30 {
+                for x in cx - 30..cx + 30 {
+                    let tile = app.doc.dimension().ground().view(TilePos::containing(x, z)).unwrap();
+                    k += (tile.cover.get(massif_core::coords::local_index(x, z)) == n) as usize;
+                }
+            }
+            k
+        };
+        assert!(count(&h, flowers) > 3000, "{}", count(&h, flowers));
+        // What lies under the cursor says so.
+        let probe = crate::tools::probe(&h.state().doc, h.state().maps.get(&h.state().active_map.unwrap()).unwrap().center[0] as i32, h.state().maps.get(&h.state().active_map.unwrap()).unwrap().center[1] as i32).unwrap();
+        assert_eq!(probe.cover, flowers);
+        h.event(egui::Event::PointerMoved(rect.right_bottom() - vec2(40.0, 60.0)));
+        h.run_steps(10);
+        h.render().unwrap().save(dir.join("cover-paint.png")).unwrap();
+        // Close up, each plant where it grows.
+        let id = h.state().active_map.unwrap();
+        let zoom = h.state().maps.get(&id).unwrap().zoom;
+        h.state_mut().maps.get_mut(&id).unwrap().zoom = zoom * 4.0;
+        h.run_steps(20);
+        h.render().unwrap().save(dir.join("cover-close.png")).unwrap();
+        h.state_mut().maps.get_mut(&id).unwrap().zoom = zoom;
+        h.run_steps(5);
+        // The settings of the tool, the whole window for them.
+        let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        let settings = areas.iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::ToolSettings)).unwrap().0;
+        h.state_mut().layout.toggle_maximize(settings);
+        h.run_steps(10);
+        h.render().unwrap().save(dir.join("cover-settings.png")).unwrap();
+        h.state_mut().layout.toggle_maximize(settings);
+        h.run_steps(5);
+        // The right button takes it off.
+        h.event(egui::Event::PointerMoved(c));
+        h.step();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: c,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: Modifiers::NONE,
+            });
+            h.run_steps(4);
+        }
+        h.run_steps(5);
+        assert_eq!(count(&h, flowers), 0);
+        // A plant of the game makes a cover that grows it alone, once.
+        let poppy = massif_assets::Block {
+            id: "minecraft:poppy".into(),
+            name: "Poppy".into(),
+            top: None,
+            side: None,
+            bottom: None,
+            top_tint: massif_assets::Tint::None,
+            side_tint: massif_assets::Tint::None,
+            full_cube: false,
+            color: [200, 40, 30],
+            side_color: [200, 40, 30],
+            category: massif_assets::Category::Plants,
+        };
+        let reg = &mut h.state_mut().doc.world.registry;
+        let n = crate::panels::block_cover(reg, &poppy);
+        assert_eq!(crate::panels::block_cover(reg, &poppy), n);
+        let def = reg.cover(n).unwrap();
+        assert_eq!((def.name.as_str(), def.plants.clone(), def.soil_only), ("Poppy", vec![("minecraft:poppy".to_owned(), 1)], true));
     }
 
     /// Dragging the corner of an area into it splits it there.

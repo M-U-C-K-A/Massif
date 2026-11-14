@@ -68,6 +68,11 @@ over every CPU core.
 - **Maps the size of WorldPainter's.** 60,000 × 50,000 blocks: generated
   in a minute, 1.2 GB compressed, edited at once, shown whole in 3D (a
   column every few blocks when every block would not fit the GPU).
+- **Ground covers.** Grass, flowers, ferns, mushrooms, snow, seagrass — or
+  any blocks of your own, mixed by weight — painted with any brush and its
+  options, grown over the ground at the density you set, only on soil or
+  under water as they need, in two halves for tall plants and 1 to 3 high
+  for cane; each plant shows on the map in its own colour.
 - **Automatic biomes and paint.** Auto biome reads the land (deep water,
   rivers, beaches, plains, hills, deserts, snow, rock) and gives it its
   biomes; Auto paint gives each biome its ground, its cliffs and what lies
@@ -261,6 +266,30 @@ learns its own spread and paints by rank). A picture shows it before the
 first stroke, and the brush, its intensity and its options apply as with
 any paint.
 
+### Ground covers
+
+The **Ground cover** tool (Paint group) paints what grows on the ground:
+grass, tall grass, flowers, ferns, mushrooms, dead bushes, snow and seagrass
+come with every world, and **New cover** makes one of your own. A cover is
+a mix of blocks with their weights — the flowers of a meadow, or any block
+at all, typed or picked from the game's blocks — with a **density** (the
+share of the painted ground where something grows), a **height** (cane and
+cactus 1 to 3 blocks), **only on soil** (grass, dirt, podzol, moss, mud:
+plants pop off sand and stone in the game) and **under water** (seagrass,
+coral). The right button takes a cover off. The brush, its intensity and its
+options (height band, slope, only on a terrain…) apply as with any paint;
+the eyedropper picks the cover under the cursor.
+
+Covers grow on the topmost surface of a column — the ground, a floating
+island's top, the floor a carve opens — never under an overhang. Where each
+plant grows is decided column by column from the world's seed, so the map,
+the 3D view and the export agree: zoomed in, the map shows every plant in
+its own colour (dandelions yellow, poppies red, cornflowers blue…), and the
+3D view the same. Tall plants are written in their two halves; versions of
+the game without a plant get the closest they have (short grass is grass
+before 1.20.3, cornflowers are blue orchids before 1.14, and before 1.13
+plants are numbered, tall ones as double plants).
+
 ### Rivers
 
 The **River** tool (Water group) lays a river out from its source:
@@ -340,7 +369,8 @@ fraction of a second, every time Massif starts.
   End), with a search field and the version to read from. Clicking a whole
   block makes it a terrain of the world (grass, podzol and mycelium over
   dirt, as in the game; other blocks a few deep over the natural rock) and
-  paints it.
+  paints it. Clicking any other block (a flower, grass, a carpet, coral…)
+  makes it a ground cover that grows it, and paints that.
 
 ### Terrain graphs
 
@@ -563,7 +593,7 @@ In the 3D view:
 
 Each level of a dimension is a sparse grid of tiles of 128 × 128 columns.
 Every column stores a top height (1/256 of a block), a bottom height for slab
-levels, a terrain, a fluid level and a biome. Composing the levels of a column
+levels, a terrain, a fluid level, a biome and a ground cover. Composing the levels of a column
 yields a short list of solid spans along Y, which is a run-length encoding of
 the column: the exporter turns spans into blocks, the 3D view into faces, the
 map shows the top one.
@@ -622,7 +652,8 @@ holding a Java `ObjectOutputStream` of a `World2`. Massif reads it with its
 own implementation of the Java serialization protocol and converts tiles in
 parallel as they are read. Heights, terrains (custom terrains are rebuilt
 from their mixed materials), water, painted biomes, the Nether and the End,
-seed, spawn and build limits are imported. Layers (trees, vegetation, frost,
+seed, spawn and build limits (worlds WorldPainter made taller than the
+game, up to 2032 blocks, keep their height) are imported. Layers (trees, vegetation, frost,
 caves…), lava and the ceiling, cave floor and floating dimensions are not
 yet; the import report lists what was left out.
 
@@ -641,6 +672,9 @@ that version does:
 
 Blocks and biomes a version does not have yet become the closest it has
 (deepslate is stone before 1.17, moss is grass, mud is coarse dirt…).
+Ground covers are grown on the top of each column, after its blocks and its
+water: in the air above dry ground, in the water for those that grow there,
+on soil only for those that need it, where the whole plant has room.
 Versions newer than the built-in list are taken from the game itself when
 it is installed (its jar says which data version it writes). `level.dat`
 keeps the shape of 1.18.2 for every later version, which bring it up to
@@ -746,8 +780,10 @@ tools/minecraft_check.py --world my.massif --version 1.21.11 --minecraft "<game 
 
 ## Roadmap
 
-- WorldPainter layers (trees, vegetation, ores, frost, roads…) and their
-  import from `.world` files, and layers as brush filters and graph outputs.
+- Custom objects (`.schem`, `.schematic`, Axiom `.bp`) painted as layers,
+  for trees and rocks; WorldPainter layers (trees, ores, frost, roads…) and
+  their import from `.world` files; layers as brush filters and graph
+  outputs.
 - Terrain graphs: GPU evaluation, groups and portals, graphs applied to a part of the map, tiled builds
   beyond 16,384 samples, more simulations (glaciers, sediment layers), the
   render drawn from the full-resolution build, carved layers (caves and
@@ -755,8 +791,8 @@ tools/minecraft_check.py --world my.massif --version 1.21.11 --minecraft "<game 
   in the graph, the direction of rivers' flow for fluid mods.
 - The real blocks' textures in the 3D view, and custom terrains mixing
   real blocks in layers.
-- Custom build limits in new worlds and export; trees and plants as a sign
-  of forests for the automatic biomes.
+- Trees and plants as a sign of forests for the automatic biomes; covers
+  from the graph and the automatic paint.
 - Selections, copy and paste, height-map import.
 - Nether and End editing from the editor, customisable key bindings.
 

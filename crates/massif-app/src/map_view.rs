@@ -774,6 +774,7 @@ impl MapView {
             light,
             lava: doc.world.meta.lava,
             top: doc.dimension().max_y,
+            seed: doc.world.meta.seed,
         };
         let ppp = ui.ctx().pixels_per_point();
         let blocks_per_px = 1.0 / (self.zoom * ppp);
@@ -1120,7 +1121,8 @@ impl MapView {
                         } else {
                             String::new()
                         };
-                        format!("Location: {x}, {z} · height {:.1} · {terrain}{water}", p.height)
+                        let cover = doc.world.registry.cover(p.cover).map(|c| format!(" · {}", c.name)).unwrap_or_default();
+                        format!("Location: {x}, {z} · height {:.1} · {terrain}{cover}{water}", p.height)
                     }
                     None => format!("Location: {x}, {z}"),
                 }

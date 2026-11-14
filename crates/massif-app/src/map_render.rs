@@ -45,6 +45,8 @@ pub struct Sample {
     pub fluid: i16,
     /// Painted biome of the surface; 0 = automatic.
     pub biome: u16,
+    /// Ground cover painted on the surface; 0 = none.
+    pub cover: u16,
     pub flags: u8,
     /// Bit `i` set when level `i` (`i < 8`) has the column.
     pub levels: u8,
@@ -56,6 +58,7 @@ impl Sample {
         terrain: 0,
         fluid: NO_FLUID,
         biome: 0,
+        cover: 0,
         flags: 0,
         levels: 0,
     };
@@ -77,7 +80,7 @@ impl Sample {
 }
 
 #[inline]
-fn ground_sample(top: f32, terrain: u16, fluid: i16, biome: u16) -> Sample {
+fn ground_sample(top: f32, terrain: u16, fluid: i16, biome: u16, cover: u16) -> Sample {
     let fluid = if fluid != NO_FLUID && fluid as i32 > block_top(top) {
         fluid
     } else {
@@ -88,6 +91,7 @@ fn ground_sample(top: f32, terrain: u16, fluid: i16, biome: u16) -> Sample {
         terrain,
         fluid,
         biome,
+        cover,
         flags: 0,
         levels: 1,
     }
@@ -110,6 +114,7 @@ impl ColumnSampler {
                 g.terrain.get(cell),
                 g.fluid.get(cell),
                 g.biome.get(cell),
+                g.cover.get(cell),
             );
         }
         stack.spans(cell, &mut self.spans);
@@ -173,6 +178,7 @@ impl ColumnSampler {
             terrain: top.terrain.0,
             fluid,
             biome,
+            cover: stack.surface_cover(cell, &top),
             flags,
             levels,
         }
@@ -188,9 +194,9 @@ impl SurfaceGrid {
         let samples = if stack.is_ground_only() {
             let g = stack.ground();
             let (top, terrain) = (g.top.dense(), g.terrain.dense());
-            let (fluid, biome) = (g.fluid.dense(), g.biome.dense());
+            let (fluid, biome, cover) = (g.fluid.dense(), g.biome.dense(), g.cover.dense());
             (0..TILE_AREA)
-                .map(|i| ground_sample(top[i], terrain[i], fluid[i], biome[i]))
+                .map(|i| ground_sample(top[i], terrain[i], fluid[i], biome[i], cover[i]))
                 .collect()
         } else {
             let mut sampler = ColumnSampler::default();
@@ -240,6 +246,7 @@ impl Default for MapStyle {
             light: DEFAULT_LIGHT,
             lava: false,
             top: 320,
+            seed: 0,
         }
     }
 }
@@ -280,6 +287,8 @@ pub struct MapStyle {
     pub lava: bool,
     /// The top of the world: the height colours spread up to it.
     pub top: i32,
+    /// The world's seed: where the plants of covers grow.
+    pub seed: i64,
 }
 
 /// Default light direction: from the north-west, like WorldPainter.
@@ -430,6 +439,10 @@ pub struct Colorizer<'a> {
     sea: f32,
     terrain: Vec<Rgb>,
     biome: Vec<Rgb>,
+    /// The covers (by number − 1); `None` for a removed one.
+    covers: Vec<Option<massif_core::registry::CoverDef>>,
+    /// Whether the top block of each terrain is soil, where plants grow.
+    soil: Vec<bool>,
     auto: AutoBiome,
     light: [f32; 3],
 }
@@ -443,7 +456,40 @@ impl<'a> Colorizer<'a> {
             light: light_vector(style.light),
             terrain: reg.terrains.iter().map(|t| rgb(t.color)).collect(),
             biome: reg.biomes.iter().map(|b| rgb(b.color)).collect(),
+            covers: reg.covers.iter().map(|c| (!c.removed).then(|| c.clone())).collect(),
+            soil: reg
+                .terrains
+                .iter()
+                .map(|t| t.strata.first().is_some_and(|s| s.blocks.iter().any(|(b, _)| massif_core::registry::is_soil(&reg.block(*b).state))))
+                .collect(),
             auto: AutoBiome::new(reg),
+        }
+    }
+
+    /// The ground's colour `ground` with the cover of sample `c` over it:
+    /// at `at`, a hint of the cover and the plant growing in that column
+    /// if one does, in its own colour; from afar (`None`), the cover's
+    /// colour as thick as it grows. Nothing where it does not grow: off
+    /// soil, or in the air for a cover of the water.
+    fn with_cover(&self, ground: Rgb, c: &Sample, at: Option<(i32, i32)>) -> Rgb {
+        let Some(def) = c.cover.checked_sub(1).and_then(|k| self.covers.get(k as usize)).and_then(Option::as_ref) else { return ground };
+        let wet = c.water_depth() > 0.0;
+        if def.underwater != wet || (wet && self.style.lava) || (def.soil_only && !self.soil.get(c.terrain as usize).copied().unwrap_or(false)) {
+            return ground;
+        }
+        let color = rgb(def.color);
+        match at {
+            Some((x, z)) => {
+                let base = mix(ground, color, 0.18);
+                match def.growth(x, z, self.style.seed as u64) {
+                    Some(g) => {
+                        let plant = def.plants.get(g.plant).and_then(|p| massif_core::registry::plant_color(&p.0)).map_or(color, rgb);
+                        mix(base, plant, 0.85)
+                    }
+                    None => base,
+                }
+            }
+            None => mix(ground, color, 0.25 + 0.5 * def.density.clamp(0.0, 1.0)),
         }
     }
 
@@ -455,11 +501,13 @@ impl<'a> Colorizer<'a> {
     }
 
     /// Colour of the centre sample `c` given its four neighbours, `spacing`
-    /// blocks apart.
+    /// blocks apart. `at`: the column of `c`, when a texel is one or two
+    /// blocks (the plants of covers show one by one).
     #[allow(clippy::too_many_arguments)]
     pub fn pixel(
         &self,
         c: &Sample,
+        at: Option<(i32, i32)>,
         l: &Sample,
         r: &Sample,
         u: &Sample,
@@ -478,7 +526,12 @@ impl<'a> Colorizer<'a> {
         let shade = hillshade(dx * exaggeration, dz * exaggeration, self.light);
 
         let mut out = match self.style.mode {
-            MapMode::Terrain => scale(self.terrain_rgb(c.terrain), shade),
+            MapMode::Terrain => {
+                let ground = self.terrain_rgb(c.terrain);
+                // What grows on it shows over it, as thick as it grows.
+                let ground = self.with_cover(ground, c, at);
+                scale(ground, shade)
+            }
             MapMode::Height => scale(rgb(height_color_to(c.height, self.sea, self.style.top as f32)), 0.7 + 0.3 * shade),
             MapMode::Slope => {
                 // The trend of the hillside when it was measured around the
@@ -682,8 +735,10 @@ fn build_chunk(key: ChunkKey, sources: &Sources, colorizer: &Colorizer) -> Color
                 };
                 massif_core::filter::trend_slope(h, ring as i32, spacing)
             });
+            let column = (key.lod <= 1).then(|| key.sample_point(i as isize - ring as isize, j as isize - ring as isize));
             pixels.push(colorizer.pixel(
                 at(0, 0),
+                column,
                 at(-1, 0),
                 at(1, 0),
                 at(0, -1),

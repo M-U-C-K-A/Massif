@@ -11,7 +11,7 @@ use massif_core::generate::{GenParams, Landform, generate};
 use massif_core::history::History;
 use massif_core::level::LevelKind;
 use massif_core::ops::{self, Anchor, Surface};
-use massif_core::registry::{BiomeId, TerrainId};
+use massif_core::registry::{BiomeId, CoverDef, TerrainId};
 use massif_core::{Brush, BrushShape, Profile, TilePos, World};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -135,6 +135,12 @@ impl Reader {
             .unwrap_or_else(|| panic!("no block at ({x}, {y}, {z})"))
             .name()
             .to_owned()
+    }
+
+    /// The block with its properties: `minecraft:tall_grass|half=upper`.
+    fn state(&mut self, x: i32, y: i32, z: i32) -> String {
+        let chunk = self.chunk(x, z);
+        chunk.block((x & 15) as usize, y as isize, (z & 15) as usize).unwrap_or_else(|| panic!("no block at ({x}, {y}, {z})")).encoded_description().to_owned()
     }
 
     fn biome(&mut self, x: i32, y: i32, z: i32) -> Biome {
@@ -416,6 +422,111 @@ fn export_refuses_to_clobber_and_can_be_cancelled() {
 
 /// A map taller than the game's limits: its sections go as high as it does,
 /// and a data pack gives the world that height.
+/// The world of [`build_world`] with covers painted: tall grass all over
+/// the plateau, and under the floating slab where it cannot grow; grass
+/// and seagrass in the basin; sugar cane 1 to 3 high on the slab's sand;
+/// grass over the cave.
+fn covered_world() -> World {
+    let mut w = build_world();
+    let reg = &mut w.registry;
+    let (grass, seagrass) = (reg.cover_by_name("Grass").unwrap(), reg.cover_by_name("Seagrass").unwrap());
+    let tall = reg.add_cover(CoverDef::new("Tall grass only", [0; 3], &[("minecraft:tall_grass", 1)], 1.0));
+    let mut cane = CoverDef::new("Cane", [0; 3], &[("minecraft:sugar_cane", 1)], 1.0);
+    cane.height = [1, 3];
+    cane.soil_only = false;
+    let cane = reg.add_cover(cane);
+    let mut h = History::default();
+    h.begin("covers", 0);
+    {
+        let mut e = h.edit(&mut w, 0);
+        ops::paint_cover(&mut e, &hard(6.0), -40.0, -40.0, tall, 1);
+        ops::paint_cover(&mut e, &hard(6.0), -40.0, 40.0, tall, 2);
+        ops::paint_cover(&mut e, &hard(6.0), 40.0, 40.0, seagrass, 3);
+        ops::paint_cover(&mut e, &hard(2.0), 44.0, 40.0, grass, 4);
+        ops::paint_cover(&mut e, &hard(5.0), 40.0, -40.0, grass, 6);
+    }
+    ops::paint_cover(&mut h.edit(&mut w, 1), &hard(6.0), -40.0, 40.0, cane, 5);
+    h.commit();
+    w
+}
+
+#[test]
+fn covers_grow_where_they_are_painted() {
+    let mut world = covered_world();
+    let dir = temp_dir("covers");
+    let options = ExportOptions {
+        target: Target::release("1.21.11").unwrap(),
+        ..ExportOptions::default()
+    };
+    export(&world.snapshot(), &dir, &options, &Progress::default()).unwrap();
+    let mut r = Reader::new(&dir);
+    // Tall grass on the plateau, in two halves.
+    assert_eq!(r.block(-40, 99, -40), "minecraft:grass_block");
+    assert_eq!(r.state(-40, 100, -40), "minecraft:tall_grass|half=lower");
+    assert_eq!(r.state(-40, 101, -40), "minecraft:tall_grass|half=upper");
+    assert_eq!(r.block(-40, 102, -40), "minecraft:air");
+    // Not under the slab, whose top is the column's: cane grows there, 1
+    // to 3 high, on sand.
+    assert_eq!(r.block(-40, 71, 40), "minecraft:air");
+    let mut heights = std::collections::BTreeSet::new();
+    for x in -43..=-37 {
+        for z in 37..=43 {
+            assert_eq!(r.block(x, 154, z), "minecraft:sand");
+            let h = (155..160).take_while(|&y| r.block(x, y, z) == "minecraft:sugar_cane").count();
+            assert!((1..=3).contains(&h), "cane {h} high at ({x}, {z})");
+            heights.insert(h);
+        }
+    }
+    assert_eq!(heights.len(), 3, "{heights:?}");
+    // Seagrass grows in the basin, under the water; grass does not.
+    let mut seagrass = 0;
+    for x in 36..=44 {
+        for z in 36..=44 {
+            assert_eq!(r.block(x, 49, z), "minecraft:sand");
+            match r.block(x, 50, z).as_str() {
+                "minecraft:seagrass" => seagrass += 1,
+                "minecraft:tall_seagrass" => {
+                    seagrass += 1;
+                    assert_eq!(r.state(x, 51, z), "minecraft:tall_seagrass|half=upper");
+                }
+                other => assert_eq!(other, "minecraft:water", "at ({x}, 50, {z})"),
+            }
+        }
+    }
+    assert!(seagrass > 8, "{seagrass} seagrass");
+    // Grass over the cave: about half the columns, short grass mostly.
+    let over_cave: Vec<String> = (37..=43).flat_map(|x| (-43..=-37).map(move |z| (x, z))).map(|(x, z)| r.block(x, 80, z)).collect();
+    let short = over_cave.iter().filter(|b| *b == "minecraft:short_grass").count();
+    let bare = over_cave.iter().filter(|b| *b == "minecraft:air").count();
+    assert!(short > 10 && bare > 10 && short + bare + 12 > over_cave.len(), "{over_cave:?}");
+    // Nothing else changed: the plateau around and the cave below.
+    assert_eq!(r.block(-48, 100, -40), "minecraft:air");
+    assert_eq!(r.block(40, 55, -40), "minecraft:moss_block");
+    assert_eq!(r.block(40, 56, -40), "minecraft:air");
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    // Versions without some of the plants: short grass of old was grass,
+    // and before 1.13 plants were numbered, tall ones as double plants
+    // (and the reader calls block 31, grass the plant, tall grass).
+    for (name, tall, short) in [("1.19.2", "minecraft:tall_grass", "minecraft:grass"), ("1.12.2", "minecraft:double_plant", "minecraft:tall_grass")] {
+        let target = Target::release(name).unwrap();
+        let dir = temp_dir(&format!("covers-{name}"));
+        let options = ExportOptions {
+            target,
+            ..ExportOptions::default()
+        };
+        export(&world.snapshot(), &dir, &options, &Progress::default()).unwrap();
+        let mut r = Reader::new(&dir);
+        r.any_version = true;
+        assert_eq!(r.block(-40, 100, -40), tall, "{name}");
+        assert_eq!(r.block(-40, 101, -40), tall, "{name}");
+        let over_cave = (37..=43).flat_map(|x| (-43..=-37).map(move |z| (x, z))).filter(|&(x, z)| r.block(x, 80, z) == short).count();
+        assert!(over_cave > 10, "{name}: {over_cave} of {short}");
+        assert_eq!(r.block(-40, 155, 40), if name == "1.12.2" { "minecraft:reeds" } else { "minecraft:sugar_cane" }, "{name}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
 #[test]
 fn tall_maps_get_their_build_limits() {
     let mut world = generate(&GenParams {

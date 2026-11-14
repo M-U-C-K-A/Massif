@@ -232,8 +232,14 @@ impl Target {
         (current, kept)
     }
 
-    /// The number and data of a block before 1.13.
+    /// The number and data of a block before 1.13: those of the closest
+    /// block the version has, or of stone.
     pub fn numbered(&self, name: &str) -> (u8, u8) {
+        self.numbered_known(name).unwrap_or((1, 0))
+    }
+
+    /// [`Self::numbered`], `None` where the version has nothing close.
+    pub fn numbered_known(&self, name: &str) -> Option<(u8, u8)> {
         let (name, _) = self.block(name);
         let short = name.strip_prefix("minecraft:").unwrap_or(name);
         let found = NUMBERED_BLOCKS.iter().find(|b| b.0 == short).map(|b| (b.1, b.2));
@@ -243,18 +249,18 @@ impl Target {
         };
         let (id, data) = found
             .or_else(|| colour("_terracotta").map(|c| (159, c)))
+            .or_else(|| colour("_carpet").map(|c| (171, c)))
             .or_else(|| colour("_wool").map(|c| (35, c)))
             .or_else(|| colour("_concrete").map(|c| if self.data_version >= 1139 { (251, c) } else { (159, c) }))
-            .or_else(|| colour("_concrete_powder").map(|c| if self.data_version >= 1139 { (252, c) } else { (12, 0) }))
-            .unwrap_or((1, 0));
-        match id {
+            .or_else(|| colour("_concrete_powder").map(|c| if self.data_version >= 1139 { (252, c) } else { (12, 0) }))?;
+        Some(match id {
             // 1.7 has neither red sandstone nor the kinds of stone.
             179 if self.is_1_7() => (24, 0),
             1 if self.is_1_7() => (1, 0),
             // Magma and bone came with 1.10.
             213 | 216 if self.data_version < 510 => (87, 0),
             _ => (id, data),
-        }
+        })
     }
 
     /// The number of a biome before 1.18.
@@ -283,8 +289,21 @@ impl Target {
 }
 
 /// Blocks that came after 1.14, the data version that brought them, and
-/// the older block closest to them.
+/// the older block closest to them. (And the plants that came with 1.13
+/// and 1.14, for the versions that number their blocks.)
 const NEWER_BLOCKS: &[(&str, i32, &str)] = &[
+    // 1.13
+    ("seagrass", 1444, "minecraft:air"),
+    ("tall_seagrass", 1444, "minecraft:air"),
+    ("kelp", 1444, "minecraft:air"),
+    ("kelp_plant", 1444, "minecraft:air"),
+    ("sea_pickle", 1444, "minecraft:air"),
+    // 1.14
+    ("cornflower", 1952, "minecraft:blue_orchid"),
+    ("lily_of_the_valley", 1952, "minecraft:oxeye_daisy"),
+    ("wither_rose", 1952, "minecraft:poppy"),
+    ("sweet_berry_bush", 1952, "minecraft:fern"),
+    ("bamboo", 1952, "minecraft:sugar_cane"),
     // 1.16
     ("basalt", 2566, "minecraft:stone"),
     ("polished_basalt", 2566, "minecraft:stone"),
@@ -293,6 +312,11 @@ const NEWER_BLOCKS: &[(&str, i32, &str)] = &[
     ("crying_obsidian", 2566, "minecraft:obsidian"),
     ("netherite_block", 2566, "minecraft:obsidian"),
     ("crimson_nylium", 2566, "minecraft:netherrack"),
+    ("crimson_roots", 2566, "minecraft:dead_bush"),
+    ("warped_roots", 2566, "minecraft:dead_bush"),
+    ("nether_sprouts", 2566, "minecraft:air"),
+    ("crimson_fungus", 2566, "minecraft:red_mushroom"),
+    ("warped_fungus", 2566, "minecraft:brown_mushroom"),
     ("warped_nylium", 2566, "minecraft:netherrack"),
     // 1.17
     ("deepslate", 2724, "minecraft:stone"),
@@ -304,6 +328,12 @@ const NEWER_BLOCKS: &[(&str, i32, &str)] = &[
     ("moss_block", 2724, "minecraft:grass_block"),
     ("rooted_dirt", 2724, "minecraft:dirt"),
     ("powder_snow", 2724, "minecraft:snow_block"),
+    ("moss_carpet", 2724, "minecraft:green_carpet"),
+    ("azalea", 2724, "minecraft:oak_leaves"),
+    ("flowering_azalea", 2724, "minecraft:oak_leaves"),
+    ("small_dripleaf", 2724, "minecraft:fern"),
+    ("glow_lichen", 2724, "minecraft:air"),
+    ("hanging_roots", 2724, "minecraft:air"),
     ("amethyst_block", 2724, "minecraft:purple_concrete"),
     ("raw_iron_block", 2724, "minecraft:iron_ore"),
     ("raw_copper_block", 2724, "minecraft:terracotta"),
@@ -319,9 +349,28 @@ const NEWER_BLOCKS: &[(&str, i32, &str)] = &[
     ("muddy_mangrove_roots", 3105, "minecraft:coarse_dirt"),
     ("sculk", 3105, "minecraft:black_concrete"),
     ("reinforced_deepslate", 3105, "minecraft:deepslate"),
+    ("mangrove_propagule", 3105, "minecraft:oak_sapling"),
+    // 1.19.4 and 1.20
+    ("pink_petals", 3337, "minecraft:pink_tulip"),
+    ("torchflower", 3463, "minecraft:dandelion"),
+    ("pitcher_plant", 3463, "minecraft:rose_bush"),
+    // 1.20.3: grass the plant took a new name.
+    ("short_grass", 3698, "minecraft:grass"),
     // 1.21.4
     ("pale_moss_block", 4189, "minecraft:moss_block"),
     ("resin_block", 4189, "minecraft:orange_terracotta"),
+    ("pale_moss_carpet", 4189, "minecraft:moss_carpet"),
+    ("pale_hanging_moss", 4189, "minecraft:air"),
+    ("open_eyeblossom", 4189, "minecraft:oxeye_daisy"),
+    ("closed_eyeblossom", 4189, "minecraft:oxeye_daisy"),
+    // 1.21.5
+    ("bush", 4325, "minecraft:short_grass"),
+    ("firefly_bush", 4325, "minecraft:dead_bush"),
+    ("short_dry_grass", 4325, "minecraft:dead_bush"),
+    ("tall_dry_grass", 4325, "minecraft:dead_bush"),
+    ("leaf_litter", 4325, "minecraft:air"),
+    ("wildflowers", 4325, "minecraft:pink_petals"),
+    ("cactus_flower", 4325, "minecraft:air"),
 ];
 
 /// The sixteen colours, in the order of their numbers before 1.13.
@@ -351,15 +400,36 @@ const NUMBERED_BLOCKS: &[(&str, u8, u8)] = &[
     ("sand", 12, 0),
     ("red_sand", 12, 1),
     ("gravel", 13, 0),
+    ("oak_sapling", 6, 0),
     ("gold_ore", 14, 0),
     ("iron_ore", 15, 0),
     ("coal_ore", 16, 0),
+    ("oak_leaves", 18, 0),
+    ("spruce_leaves", 18, 1),
+    ("birch_leaves", 18, 2),
+    ("jungle_leaves", 18, 3),
     ("sponge", 19, 0),
     ("lapis_ore", 21, 0),
     ("sandstone", 24, 0),
     ("chiseled_sandstone", 24, 1),
     ("cut_sandstone", 24, 2),
     ("smooth_sandstone", 24, 2),
+    // Grass the plant, so named from 1.13 to 1.20.2.
+    ("grass", 31, 1),
+    ("fern", 31, 2),
+    ("dead_bush", 32, 0),
+    ("dandelion", 37, 0),
+    ("poppy", 38, 0),
+    ("blue_orchid", 38, 1),
+    ("allium", 38, 2),
+    ("azure_bluet", 38, 3),
+    ("red_tulip", 38, 4),
+    ("orange_tulip", 38, 5),
+    ("white_tulip", 38, 6),
+    ("pink_tulip", 38, 7),
+    ("oxeye_daisy", 38, 8),
+    ("brown_mushroom", 39, 0),
+    ("red_mushroom", 40, 0),
     ("gold_block", 41, 0),
     ("iron_block", 42, 0),
     ("bricks", 45, 0),
@@ -367,9 +437,12 @@ const NUMBERED_BLOCKS: &[(&str, u8, u8)] = &[
     ("obsidian", 49, 0),
     ("diamond_ore", 56, 0),
     ("redstone_ore", 73, 0),
+    ("snow", 78, 0),
     ("ice", 79, 0),
     ("snow_block", 80, 0),
+    ("cactus", 81, 0),
     ("clay", 82, 0),
+    ("sugar_cane", 83, 0),
     ("netherrack", 87, 0),
     ("soul_sand", 88, 0),
     ("glowstone", 89, 0),
@@ -377,7 +450,9 @@ const NUMBERED_BLOCKS: &[(&str, u8, u8)] = &[
     ("mossy_stone_bricks", 98, 1),
     ("cracked_stone_bricks", 98, 2),
     ("chiseled_stone_bricks", 98, 3),
+    ("vine", 106, 0),
     ("mycelium", 110, 0),
+    ("lily_pad", 111, 0),
     ("nether_bricks", 112, 0),
     ("end_stone", 121, 0),
     ("emerald_ore", 129, 0),
@@ -391,6 +466,14 @@ const NUMBERED_BLOCKS: &[(&str, u8, u8)] = &[
     ("coal_block", 173, 0),
     ("packed_ice", 174, 0),
     ("blue_ice", 174, 0),
+    ("acacia_leaves", 161, 0),
+    ("dark_oak_leaves", 161, 1),
+    ("sunflower", 175, 0),
+    ("lilac", 175, 1),
+    ("tall_grass", 175, 2),
+    ("large_fern", 175, 3),
+    ("rose_bush", 175, 4),
+    ("peony", 175, 5),
     ("red_sandstone", 179, 0),
     ("chiseled_red_sandstone", 179, 1),
     ("cut_red_sandstone", 179, 2),
@@ -494,6 +577,18 @@ mod tests {
         assert_eq!(v("1.19").block("minecraft:mud").0, "minecraft:mud");
         // Numbers, before 1.13.
         assert_eq!(v("1.12.2").numbered("minecraft:grass_block"), (2, 0));
+        // Plants: grass the plant by both its names, flowers of 1.14 as the
+        // closest of old, tall plants by their kind.
+        assert_eq!(v("1.12.2").numbered("minecraft:short_grass"), (31, 1));
+        assert_eq!(v("1.12.2").numbered("minecraft:cornflower"), (38, 1));
+        assert_eq!(v("1.12.2").numbered("minecraft:large_fern"), (175, 3));
+        assert_eq!(v("1.12.2").numbered("minecraft:moss_carpet"), (171, 13));
+        assert_eq!(v("1.12.2").numbered_known("minecraft:seagrass"), Some((0, 0)));
+        assert_eq!(v("1.12.2").numbered_known("minecraft:spore_blossom"), None);
+        assert_eq!(v("1.20.2").block("minecraft:short_grass"), ("minecraft:grass", false));
+        assert_eq!(v("1.20.4").block("minecraft:short_grass"), ("minecraft:short_grass", true));
+        assert_eq!(v("1.21.4").block("minecraft:bush"), ("minecraft:short_grass", false));
+        assert_eq!(v("1.19.2").block("minecraft:bush"), ("minecraft:grass", false));
         assert_eq!(v("1.12.2").numbered("minecraft:podzol"), (3, 2));
         assert_eq!(v("1.12.2").numbered("minecraft:deepslate"), (1, 0));
         assert_eq!(v("1.12.2").numbered("minecraft:moss_block"), (2, 0));

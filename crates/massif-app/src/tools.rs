@@ -20,6 +20,8 @@ pub enum Tool {
     Roughen,
     PaintTerrain,
     PaintBiome,
+    /// What grows on the ground: grass, flowers, snow… (a cover).
+    Cover,
     /// The biome the land calls for; the terrain the biome calls for.
     AutoBiome,
     AutoPaint,
@@ -50,11 +52,11 @@ impl Tool {
         (
             "Paint",
             Icon::Paintbrush,
-            &[Tool::PaintTerrain, Tool::PaintBiome, Tool::AutoPaint, Tool::AutoBiome, Tool::Eyedropper],
+            &[Tool::PaintTerrain, Tool::PaintBiome, Tool::Cover, Tool::AutoPaint, Tool::AutoBiome],
         ),
         ("Water", Icon::Droplet, &[Tool::River, Tool::Flood, Tool::Drain, Tool::Water]),
         ("Levels", Icon::Layers, &[Tool::StampSlab, Tool::EraseSlab]),
-        ("Navigate", Icon::Compass, &[Tool::Pan]),
+        ("Navigate", Icon::Compass, &[Tool::Pan, Tool::Eyedropper]),
     ];
 
     pub const fn label(self) -> &'static str {
@@ -66,6 +68,7 @@ impl Tool {
             Tool::Roughen => "Roughen",
             Tool::PaintTerrain => "Paint terrain",
             Tool::PaintBiome => "Paint biome",
+            Tool::Cover => "Ground cover",
             Tool::AutoBiome => "Auto biome",
             Tool::AutoPaint => "Auto paint",
             Tool::Eyedropper => "Eyedropper",
@@ -91,6 +94,7 @@ impl Tool {
             Tool::Roughen => Icon::Sparkles,
             Tool::PaintTerrain => Icon::Paintbrush,
             Tool::PaintBiome => Icon::Trees,
+            Tool::Cover => Icon::Sprout,
             Tool::AutoBiome => Icon::Earth,
             Tool::AutoPaint => Icon::WandSparkles,
             Tool::Eyedropper => Icon::Pipette,
@@ -150,6 +154,7 @@ impl Tool {
                 "Paint a terrain. Right button: back to automatic."
             }
             Tool::PaintBiome => "Paint a biome. Right button: back to automatic.",
+            Tool::Cover => "Paint what grows: grass, flowers, snow… Right button: remove it.",
             Tool::AutoBiome => {
                 "Sets the biome the land calls for: beach, forest, peaks…"
             }
@@ -239,6 +244,8 @@ pub struct ToolState {
     pub roughness: f32,
     pub terrain: u16,
     pub biome: u16,
+    /// The cover painted, by its number.
+    pub cover: u16,
     pub water_level: i16,
     pub slab_thickness: f32,
     pub anchor: AnchorMode,
@@ -590,6 +597,7 @@ impl Default for ToolState {
             roughness: 4.0,
             terrain: 1,
             biome: 0,
+            cover: 1,
             water_level: 63,
             slab_thickness: 16.0,
             anchor: AnchorMode::AboveGround,
@@ -759,6 +767,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                 let biome = if invert { 0 } else { tools.biome };
                 ops::paint_biome(&mut edit, brush, x, z, BiomeId(biome), stroke.salt)
             }
+            Tool::Cover => ops::paint_cover(&mut edit, brush, x, z, if invert { 0 } else { tools.cover }, stroke.salt),
             Tool::AutoBiome => match &reader {
                 Some(reader) if !invert => stroke.changed += ops::auto_biome(&mut edit, brush, x, z, stroke.salt, reader),
                 _ => ops::paint_biome(&mut edit, brush, x, z, BiomeId(0), stroke.salt),
@@ -857,6 +866,8 @@ pub struct Probe {
     pub terrain: u16,
     pub biome: u16,
     pub fluid: i16,
+    /// The cover painted on the surface; 0: none.
+    pub cover: u16,
 }
 
 pub fn probe(doc: &Document, x: i32, z: i32) -> Option<Probe> {
@@ -873,6 +884,7 @@ pub fn probe(doc: &Document, x: i32, z: i32) -> Option<Probe> {
         terrain: s.terrain,
         biome: s.biome,
         fluid: s.fluid,
+        cover: s.cover,
     })
 }
 
@@ -890,6 +902,9 @@ pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse:
             }
             if p.fluid != NO_FLUID {
                 tools.water_level = p.fluid;
+            }
+            if p.cover != 0 {
+                tools.cover = p.cover;
             }
             tools.tool = tools.previous;
             Some(format!("Picked {terrain_name} at height {}", block_top(p.height)))

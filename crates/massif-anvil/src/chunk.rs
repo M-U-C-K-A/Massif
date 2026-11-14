@@ -16,7 +16,7 @@ use crate::nbt::{NbtWriter, TagType};
 use crate::version::{Era, Target};
 use massif_core::compose::{Materializer, Span, TileStack, block_top};
 use massif_core::coords::{TilePos, cell_index};
-use massif_core::registry::{BiomeId, Registry, TerrainId};
+use massif_core::registry::{BiomeId, BlockDef, Registry, TerrainId, is_soil, is_tall_plant};
 use massif_core::tile::NO_FLUID;
 use massif_core::world::{Dimension, World};
 
@@ -49,6 +49,14 @@ pub struct ExportContext<'a> {
     biome_numbers: Vec<i32>,
     bedrock: u16,
     water: u16,
+    /// The world's fluid is lava: nothing grows in it.
+    lava: bool,
+    seed: u64,
+    /// The plants of each cover (by number − 1), as written; `None` where
+    /// the version has nothing like them.
+    covers: Vec<Vec<Option<Plant>>>,
+    /// Whether each block of the registry is soil that plants grow on.
+    soil: Vec<bool>,
     plains: u16,
     ocean: u16,
     deep_ocean: u16,
@@ -92,7 +100,7 @@ impl<'a> ExportContext<'a> {
             }
         }
         // Blocks the version does not have yet become the closest it has.
-        let states = reg
+        let mut states: Vec<(String, Vec<(String, String)>)> = reg
             .blocks
             .iter()
             .map(|b| {
@@ -101,10 +109,48 @@ impl<'a> ExportContext<'a> {
                 (name.to_owned(), props)
             })
             .collect();
-        let numbered = match era {
+        let mut numbered = match era {
             Era::Numbered => reg.blocks.iter().map(|b| target.numbered(b.name())).collect(),
             _ => Vec::new(),
         };
+        // The plants of the covers come after the registry's blocks.
+        let mut covers = Vec::with_capacity(reg.covers.len());
+        for def in &reg.covers {
+            let mut plants = Vec::with_capacity(def.plants.len());
+            for (state, _) in &def.plants {
+                let block = BlockDef { state: state.clone(), color: [0; 3] };
+                let (name, kept) = target.block(block.name());
+                let number = match era {
+                    Era::Numbered => target.numbered_known(name),
+                    _ => Some((0, 0)),
+                };
+                if name == "minecraft:air" || !name.contains(':') || number.is_none() {
+                    plants.push(None);
+                    continue;
+                }
+                // A tall plant is written in two halves.
+                let tall = is_tall_plant(name);
+                let props: Vec<(String, String)> = if kept { block.properties().filter(|(k, _)| !tall || *k != "half").map(|(k, v)| (k.to_owned(), v.to_owned())).collect() } else { Vec::new() };
+                let mut add = |half: Option<&str>, number: Option<(u8, u8)>| {
+                    let mut props = props.clone();
+                    props.extend(half.map(|h| ("half".to_owned(), h.to_owned())));
+                    states.push((name.to_owned(), props));
+                    if era == Era::Numbered {
+                        numbered.push(number.unwrap_or((0, 0)));
+                    }
+                    (states.len() - 1) as u16
+                };
+                let lower = add(tall.then_some("lower"), number);
+                // Before 1.13 the top half of every tall plant is 175:8.
+                let upper = tall.then(|| add(Some("upper"), number.map(|(id, _)| (id, 8))));
+                plants.push(Some(Plant { lower, upper }));
+            }
+            covers.push(plants);
+        }
+        if states.len() >= UNSET as usize {
+            return Err("the covers use too many blocks".into());
+        }
+        let soil = reg.blocks.iter().map(|b| is_soil(b.name())).collect();
         let biomes = reg
             .biomes
             .iter()
@@ -135,6 +181,10 @@ impl<'a> ExportContext<'a> {
             biome_numbers,
             bedrock: wk.bedrock.0,
             water: if world.meta.lava { wk.lava.0 } else { wk.water.0 },
+            lava: world.meta.lava,
+            seed: world.meta.seed as u64,
+            covers,
+            soil,
             plains: biome("minecraft:plains"),
             ocean: biome("minecraft:ocean"),
             deep_ocean: biome("minecraft:deep_ocean"),
@@ -180,6 +230,46 @@ impl<'a> ExportContext<'a> {
     /// The number of a biome, for the versions that number them.
     fn biome_number(&self, id: u16) -> i32 {
         self.biome_numbers.get(id as usize).copied().unwrap_or(1)
+    }
+}
+
+/// One plant of a cover, as written: its block and, for a tall plant, the
+/// block of its upper half (indices into the exported states).
+#[derive(Debug, Clone, Copy)]
+struct Plant {
+    lower: u16,
+    upper: Option<u16>,
+}
+
+/// Grow the cover numbered `cover` on the column whose topmost block is at
+/// `y - 1`: in the air above it, or in the water for a cover that grows
+/// under water. Nothing grows where the whole plant has no room.
+fn grow(ctx: &ExportContext, cover: u16, x: i32, y: i32, z: i32, blocks: &mut [u16], column: usize) {
+    let (min_y, max_y) = (ctx.min_y, ctx.max_y);
+    let (Some(def), Some(plants)) = (ctx.reg.cover(cover), ctx.covers.get(cover as usize - 1)) else { return };
+    if y <= min_y || y >= max_y {
+        return;
+    }
+    let Some(growth) = def.growth(x, z, ctx.seed) else { return };
+    let Some(Some(plant)) = plants.get(growth.plant) else { return };
+    let at = |y: i32| (((y - min_y) as usize) << 8) | column;
+    if def.soil_only && !ctx.soil.get(blocks[at(y - 1)] as usize).copied().unwrap_or(false) {
+        return;
+    }
+    let medium = match (def.underwater, ctx.lava) {
+        (false, _) => 0,
+        (true, false) => ctx.water,
+        (true, true) => return,
+    };
+    let height = if plant.upper.is_some() { 2 } else { growth.height as i32 };
+    if y + height > max_y || (0..height).any(|k| blocks[at(y + k)] != medium) {
+        return;
+    }
+    for k in 0..height {
+        blocks[at(y + k)] = match plant.upper {
+            Some(upper) if k == 1 => upper,
+            _ => plant.lower,
+        };
     }
 }
 
@@ -292,6 +382,15 @@ pub fn build_chunk(
             for &(y0, y1) in fluids.iter() {
                 for y in y0.max(min_y)..y1.min(max_y) {
                     blocks[at(y)] = ctx.water;
+                }
+            }
+            // What grows on the top of the column.
+            if !ctx.covers.is_empty()
+                && let Some(top) = spans.last()
+            {
+                let cover = stack.surface_cover(cell, top);
+                if cover != 0 {
+                    grow(ctx, cover, x, top.y1, z, blocks, column);
                 }
             }
             // A world cut at 0 gets its floor of bedrock there.
@@ -571,7 +670,9 @@ fn flat_chunk(
 /// (air), some (water and ice dim it by three), none.
 fn sky_dimming(id: u8) -> u8 {
     match id {
-        0 => 0,
+        // Air, and the plants and snow that let the light through.
+        0 | 6 | 31 | 32 | 37..=40 | 78 | 81 | 83 | 106 | 111 | 171 | 175 => 0,
+        18 | 161 => 1,
         8 | 9 | 79 => 3,
         _ => 15,
     }

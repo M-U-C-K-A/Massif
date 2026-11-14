@@ -241,6 +241,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
                 );
             }
         }
+        Tool::Cover => cover_settings(ui, tools, doc, blocks),
         Tool::PaintBiome => {
             let reg = &doc.world.registry;
             let def = reg.biome(BiomeId(tools.biome));
@@ -807,6 +808,271 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
 
 /// The pattern of the Paint tool: its shape, its terrains and their
 /// weights, and a picture of it.
+/// Plants offered when the game's blocks are not loaded.
+const COMMON_PLANTS: [&str; 24] = [
+    "minecraft:short_grass",
+    "minecraft:tall_grass",
+    "minecraft:fern",
+    "minecraft:large_fern",
+    "minecraft:dandelion",
+    "minecraft:poppy",
+    "minecraft:blue_orchid",
+    "minecraft:allium",
+    "minecraft:azure_bluet",
+    "minecraft:red_tulip",
+    "minecraft:oxeye_daisy",
+    "minecraft:cornflower",
+    "minecraft:lily_of_the_valley",
+    "minecraft:sunflower",
+    "minecraft:lilac",
+    "minecraft:rose_bush",
+    "minecraft:peony",
+    "minecraft:dead_bush",
+    "minecraft:brown_mushroom",
+    "minecraft:red_mushroom",
+    "minecraft:sweet_berry_bush",
+    "minecraft:moss_carpet",
+    "minecraft:snow[layers=1]",
+    "minecraft:seagrass",
+];
+
+/// `minecraft:oxeye_daisy[x=y]` → `Oxeye daisy`.
+fn plant_name(state: &str) -> String {
+    let name = state.split('[').next().unwrap_or(state);
+    let short = name.strip_prefix("minecraft:").unwrap_or(name).replace('_', " ");
+    let mut c = short.chars();
+    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+}
+
+/// What a cover grows, in a line.
+fn describe_cover(def: &massif_core::registry::CoverDef) -> String {
+    let total: u32 = def.plants.iter().map(|p| p.1 as u32).sum::<u32>().max(1);
+    let plants: Vec<String> = def.plants.iter().map(|(b, w)| format!("{} {:.0}%", plant_name(b), *w as f32 * 100.0 / total as f32)).collect();
+    let where_ = match (def.underwater, def.soil_only) {
+        (true, _) => " · under water",
+        (false, true) => " · on soil",
+        _ => "",
+    };
+    format!("{:.0}% of the ground: {}{where_}", def.density * 100.0, plants.join(", "))
+}
+
+/// The cover of a block of the game: one that grows it alone, made if
+/// there is none yet. Returns its number.
+pub fn block_cover(reg: &mut Registry, block: &massif_assets::Block) -> u16 {
+    if let Some(k) = reg.covers.iter().position(|c| !c.removed && c.plants.len() == 1 && c.plants[0].0 == block.id) {
+        return k as u16 + 1;
+    }
+    let plant = block.category == massif_assets::Category::Plants && !block.id.contains("carpet");
+    let mut def = massif_core::registry::CoverDef::new(&block.name, block.color, &[(&block.id, 1)], if plant { 0.35 } else { 1.0 });
+    def.soil_only = plant;
+    def.underwater = ["seagrass", "kelp", "coral", "sea_pickle"].iter().any(|w| block.id.contains(w));
+    if def.underwater {
+        def.soil_only = false;
+    }
+    reg.add_cover(def)
+}
+
+/// The covers of the world, and the one painted: what it grows, how
+/// thick, where.
+fn cover_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary) {
+    use massif_core::registry::CoverDef;
+    let pal = Palette::of(ui);
+    let ctx = ui.ctx().clone();
+    let before = doc.world.registry.covers.clone();
+
+    // The covers to choose from.
+    let mut picked = None;
+    ui.spacing_mut().item_spacing.y = 2.0;
+    for (k, c) in doc.world.registry.covers.iter().enumerate() {
+        if c.removed {
+            continue;
+        }
+        let n = k as u16 + 1;
+        let selected = tools.cover == n;
+        let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
+        let fill = if selected {
+            pal.accent_soft
+        } else if response.hovered() {
+            pal.header
+        } else {
+            Color32::TRANSPARENT
+        };
+        let painter = ui.painter();
+        painter.rect(rect, 6, fill, if selected { Stroke::new(1.0, pal.accent) } else { Stroke::NONE }, StrokeKind::Inside);
+        let dot = Rect::from_center_size(rect.left_center() + vec2(13.0, 0.0), vec2(11.0, 11.0));
+        painter.rect(dot, 3, theme::rgb(c.color), Stroke::new(1.0, Color32::from_black_alpha(60)), StrokeKind::Inside);
+        painter.text(rect.left_center() + vec2(26.0, 0.0), egui::Align2::LEFT_CENTER, &c.name, egui::FontId::proportional(12.5), pal.text);
+        painter.text(rect.right_center() - vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, format!("{:.0}%", c.density * 100.0), egui::FontId::proportional(11.0), pal.weak);
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &c.name));
+        if response.on_hover_text(describe_cover(c)).clicked() {
+            picked = Some(n);
+        }
+    }
+    ui.spacing_mut().item_spacing.y = 4.0;
+    if let Some(n) = picked {
+        tools.cover = n;
+    }
+    if ui.button(theme::with_icon(Icon::Plus, "New cover")).on_hover_text("A cover of your own: any blocks, any mix").clicked() {
+        let count = doc.world.registry.covers.iter().filter(|c| !c.removed).count();
+        let def = CoverDef::new(&format!("Cover {}", count + 1), [120, 170, 90], &[("minecraft:short_grass", 1)], 0.5);
+        tools.cover = doc.world.registry.add_cover(def);
+    }
+    hint(ui, "Non-cube blocks clicked in Blocks become covers too.");
+
+    // The selected cover.
+    let catalogue = blocks.catalogue.clone();
+    let Some(def) = tools.cover.checked_sub(1).and_then(|k| doc.world.registry.covers.get_mut(k as usize)).filter(|d| !d.removed) else {
+        return;
+    };
+    ui.add_space(4.0);
+    section(ui, Icon::Sprout, &def.name.clone());
+    ui.horizontal(|ui| {
+        ui.add_sized([72.0, 18.0], egui::Label::new("Name"));
+        ui.add(egui::TextEdit::singleline(&mut def.name).desired_width((ui.available_width() - 40.0).max(60.0)));
+        let mut c = Color32::from_rgb(def.color[0], def.color[1], def.color[2]);
+        if egui::color_picker::color_edit_button_srgba(ui, &mut c, egui::color_picker::Alpha::Opaque).on_hover_text("Its colour on the map").changed() {
+            def.color = [c.r(), c.g(), c.b()];
+        }
+    });
+    tip_row(ui, "Density", "Share of the painted ground where something grows", |ui| {
+        ui.add(
+            crate::widgets::Field::new(&mut def.density, 0.0..=1.0)
+                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
+        )
+    });
+    ui.horizontal(|ui| {
+        let tip = "How many blocks high it grows (cane, cactus: 1 to 3). Tall plants are always two.";
+        ui.add_sized([72.0, 18.0], egui::Label::new("Height")).on_hover_text(tip);
+        let (mut lo, mut hi) = (def.height[0] as i32, def.height[1] as i32);
+        ui.add(egui::DragValue::new(&mut lo).range(1..=16)).on_hover_text(tip);
+        ui.label(RichText::new("to").color(pal.weak));
+        ui.add(egui::DragValue::new(&mut hi).range(1..=16)).on_hover_text(tip);
+        ui.label(RichText::new("blocks").color(pal.weak));
+        def.height = [lo as u8, hi.max(lo) as u8];
+    });
+    ui.checkbox(&mut def.soil_only, "Only on soil").on_hover_text("Grass, dirt, podzol, moss, mud… as plants need in the game");
+    ui.checkbox(&mut def.underwater, "Under water").on_hover_text("Grows in the water (seagrass, coral) rather than in the air");
+
+    // What it grows, and how much of each.
+    section(ui, Icon::Flower2, "Grows");
+    let total: f32 = def.plants.iter().map(|p| p.1 as f32).sum::<f32>().max(1.0);
+    let mut remove = None;
+    let color = def.color;
+    egui::Grid::new("cover plants").num_columns(5).spacing([6.0, 3.0]).show(ui, |ui| {
+        for (k, (state, weight)) in def.plants.iter_mut().enumerate() {
+            let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
+            let icon = catalogue.as_ref().and_then(|cat| cat.block(state)).and_then(|b| blocks.icon(&ctx, b));
+            match icon {
+                Some(t) => {
+                    ui.painter().image(t, r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                }
+                None => {
+                    let c = massif_core::registry::plant_color(state).unwrap_or(color);
+                    ui.painter().rect(r.shrink(5.0), 3, theme::rgb(c), Stroke::new(1.0, Color32::from_black_alpha(60)), StrokeKind::Inside);
+                }
+            }
+            let known = catalogue.as_ref().is_none_or(|cat| cat.block(state).is_some());
+            let tip = if known { state.clone() } else { format!("{state}\nNot a block of Minecraft {}", catalogue.as_ref().map_or("", |c| c.version.as_str())) };
+            ui.allocate_ui_with_layout(vec2(118.0, 20.0), egui::Layout::left_to_right(Align::Center), |ui| {
+                ui.set_width(118.0);
+                ui.add(egui::Label::new(RichText::new(plant_name(state)).color(if known { pal.text } else { pal.danger })).truncate()).on_hover_text(tip);
+            });
+            ui.add(egui::DragValue::new(weight).range(1..=1000).speed(0.2)).on_hover_text("Weight: how often it grows against the others");
+            ui.label(RichText::new(format!("{:.0}%", *weight as f32 * 100.0 / total)).size(11.0).color(pal.weak));
+            if ui.add(egui::Button::new(theme::glyph(Icon::X).to_string()).frame(false).small()).on_hover_text("Take it out").clicked() {
+                remove = Some(k);
+            }
+            ui.end_row();
+        }
+    });
+    if let Some(k) = remove {
+        def.plants.remove(k);
+    }
+    // Add a plant: one of the game's blocks, or typed.
+    let search_id = egui::Id::unique("cover plant search");
+    let mut added = None;
+    ui.menu_button(theme::with_icon(Icon::Plus, "Add a block"), |ui| {
+        ui.set_max_width(300.0);
+        let mut search: String = ui.ctx().data(|d| d.get_temp(search_id)).unwrap_or_default();
+        let hint_text = format!("{}  Search, or type a block id", theme::glyph(Icon::Search));
+        let edit = ui.add(egui::TextEdit::singleline(&mut search).hint_text(hint_text).desired_width(280.0));
+        edit.request_focus();
+        let needle = search.trim().to_lowercase();
+        egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
+            let mut shown = 0;
+            match &catalogue {
+                Some(cat) => {
+                    // Plants first, then every other block that is not a cube.
+                    let mut list: Vec<&massif_assets::Block> = cat.blocks.iter().filter(|b| !b.full_cube || b.category == massif_assets::Category::Plants).collect();
+                    list.sort_by_key(|b| (b.category != massif_assets::Category::Plants, b.name.clone()));
+                    for b in list {
+                        if !needle.is_empty() && !b.name.to_lowercase().contains(&needle) && !b.id.contains(&needle) {
+                            continue;
+                        }
+                        shown += 1;
+                        if shown > 200 {
+                            break;
+                        }
+                        ui.horizontal(|ui| {
+                            let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
+                            if let Some(t) = blocks.icon(&ctx, b) {
+                                ui.painter().image(t, r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                            }
+                            if ui.selectable_label(false, &b.name).on_hover_text(&b.id).clicked() {
+                                added = Some(b.id.clone());
+                            }
+                        });
+                    }
+                }
+                None => {
+                    for id in COMMON_PLANTS {
+                        if needle.is_empty() || id.contains(&needle) {
+                            shown += 1;
+                            if ui.selectable_label(false, plant_name(id)).on_hover_text(id).clicked() {
+                                added = Some(id.to_owned());
+                            }
+                        }
+                    }
+                }
+            }
+            // Any block by its id.
+            if needle.contains(':') || (shown == 0 && !needle.is_empty()) {
+                let id = if needle.contains(':') { needle.clone() } else { format!("minecraft:{}", needle.replace(' ', "_")) };
+                if ui.button(format!("Add {id}")).clicked() {
+                    added = Some(id);
+                }
+            }
+        });
+        ui.ctx().data_mut(|d| d.insert_temp(search_id, search));
+        if added.is_some() {
+            ui.close();
+        }
+    });
+    if let Some(id) = added {
+        match def.plants.iter_mut().find(|p| p.0 == id) {
+            Some(p) => p.1 = p.1.saturating_add(1),
+            None => def.plants.push((id, 1)),
+        }
+        ui.ctx().data_mut(|d| d.remove::<String>(search_id));
+    }
+    if def.plants.is_empty() {
+        hint(ui, "Nothing grows yet: add a block.");
+    }
+    ui.add_space(6.0);
+    if ui
+        .button(RichText::new(theme::with_icon(Icon::Trash2, "Remove this cover")).color(pal.danger))
+        .on_hover_text("Nothing grows where it was painted any more")
+        .clicked()
+    {
+        def.removed = true;
+        tools.cover = doc.world.registry.covers.iter().position(|c| !c.removed).map_or(0, |k| k as u16 + 1);
+    }
+    if doc.world.registry.covers != before {
+        doc.mark_changed();
+    }
+}
+
 fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &Document, blocks: &mut BlockLibrary) {
     use massif_core::pattern::PatternKind;
     let reg = &doc.world.registry;
@@ -1399,7 +1665,7 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                     ui.painter()
                         .image(texture, rect.shrink(4.0), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
                 }
-                let tip = format!("{}\n{}{}", block.name, block.id, if block.full_cube { "" } else { "\nNot a whole block: it cannot be ground" });
+                let tip = format!("{}\n{}{}", block.name, block.id, if block.full_cube { "" } else { "\nNot a whole block: it grows over the ground, as a cover" });
                 if response.on_hover_text(tip).clicked() {
                     picked = Some(block);
                 }
@@ -1416,7 +1682,13 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
             }
             feedback = Some(format!("Painting {}", block.name));
         } else {
-            feedback = Some(format!("{} is not a whole block: it cannot be the ground", block.name));
+            // Plants and the like grow over the ground: a cover of them.
+            tools.cover = block_cover(&mut doc.world.registry, block);
+            doc.mark_changed();
+            if tools.tool != Tool::Cover {
+                tools.select(Tool::Cover);
+            }
+            feedback = Some(format!("Painting {} as a ground cover", block.name));
         }
     }
     feedback
@@ -1786,6 +2058,9 @@ fn column_info(ui: &mut Ui, doc: &Document, x: i32, z: i32) {
         reg.biome(BiomeId(s.biome)).name.clone()
     };
     ui.label(RichText::new(format!("Biome: {biome}")).color(pal.weak));
+    if let Some(cover) = reg.cover(s.cover) {
+        ui.label(RichText::new(format!("Cover: {}", cover.name)).color(pal.weak));
+    }
     let levels: Vec<String> = stack
         .layers()
         .filter(|(_, _, t)| t.present(cell))

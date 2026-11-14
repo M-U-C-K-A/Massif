@@ -641,6 +641,12 @@ mod tests {
     /// tiles (one "tall", one legacy short), a biome layer, a tree layer and
     /// a custom terrain.
     fn synthetic_world() -> Vec<u8> {
+        synthetic_world_with(320, 99.5)
+    }
+
+    /// [`synthetic_world`] with the world `max` high, and the tall tile's
+    /// column 5 at `column`.
+    fn synthetic_world_with(max: i32, column: f32) -> Vec<u8> {
         let mut w = StreamWriter::new();
         let null = |w: &mut StreamWriter| {
             w.u8(TC_NULL);
@@ -660,7 +666,7 @@ mod tests {
             null,
         );
         w.handle();
-        w.i32(320).i32(-64);
+        w.i32(max).i32(-64);
 
         // dimensionsByAnchor: HashMap with one entry.
         let hashmap_desc = w.next;
@@ -707,7 +713,7 @@ mod tests {
             null,
         );
         w.handle();
-        w.i32(62).i32(320).i32(-64);
+        w.i32(62).i32(max).i32(-64);
         // generator: SeededGenerator {J seed}
         w.u8(TC_OBJECT).class("org.pepsoft.minecraft.SeededGenerator", SC_SERIALIZABLE, &[(b'J', "seed", None)], null);
         w.handle();
@@ -740,7 +746,7 @@ mod tests {
         // layout for it, as an older WorldPainter would have written.
         w.u8(TC_OBJECT).class(TILE_CLASS, SC_SERIALIZABLE, &tile_fields, null);
         w.handle();
-        w.i32(320).i32(-64).u8(1).i32(0).i32(0);
+        w.i32(max).i32(-64).u8(1).i32(0).i32(0);
         w.u8(TC_NULL); // bitLayerData
         w.u8(TC_NULL); // heightMap
         // layerData: HashMap { Biome -> byte[16384] of 4 (jungle), Trees -> byte[8192] }
@@ -775,7 +781,7 @@ mod tests {
         w.handle();
         w.i32(TILE_AREA as i32);
         for i in 0..TILE_AREA {
-            let h = if i == 5 { 99.5f32 } else { 70.0 };
+            let h = if i == 5 { column } else { 70.0 };
             w.i32(((h + 64.0) * 256.0) as i32);
         }
         // tallWaterLevel: 62 everywhere (raw = 62 + 64)
@@ -920,6 +926,19 @@ mod tests {
         // The spawn point stands on the surface.
         assert_eq!(world.meta.spawn, [3, 71, 2]);
         assert!(report.summary().contains("2 tiles"));
+    }
+
+    /// A world WorldPainter made taller than the game (2032 high, as its
+    /// 1.18+ platforms allow): its build limits and heights are kept.
+    #[test]
+    fn a_tall_world_keeps_its_height() {
+        let bytes = synthetic_world_with(2032, 1500.0);
+        let (world, _) = import_stream(&bytes[..], &ImportProgress::default()).unwrap();
+        let dim = &world.dims[0];
+        assert_eq!((dim.min_y, dim.max_y), (-64, 2032));
+        let tall = dim.ground().view(TilePos::new(0, 0)).unwrap();
+        assert_eq!(tall.top.get(5), 1501.0);
+        assert_eq!(tall.top.get(0), 71.0);
     }
 
     #[test]

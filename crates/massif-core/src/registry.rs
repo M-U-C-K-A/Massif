@@ -123,12 +123,198 @@ pub struct WellKnown {
     pub lava: BlockId,
 }
 
+/// What grows over the ground where a cover is painted: grass, flowers,
+/// snow, anything chosen. A tile's cover plane holds `0` for none, or a
+/// cover's number: its index in [`Registry::covers`] plus one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CoverDef {
+    pub name: String,
+    /// Map colour.
+    pub color: [u8; 3],
+    /// What it places, by block state (`minecraft:poppy`), with weights:
+    /// one is picked per column.
+    pub plants: Vec<(String, u16)>,
+    /// Share of the painted columns that get something, `0..=1`.
+    pub density: f32,
+    /// How many blocks high it grows, least and most (cane, cactus: 1 to
+    /// 3). Tall plants are always two blocks.
+    #[serde(default = "one_high")]
+    pub height: [u8; 2],
+    /// Only on soil — grass, dirt, podzol, moss, mud… — as plants need.
+    #[serde(default)]
+    pub soil_only: bool,
+    /// Grows under water rather than in the open air.
+    #[serde(default)]
+    pub underwater: bool,
+    /// Removed: no longer offered, and nothing grows where it was painted.
+    #[serde(default)]
+    pub removed: bool,
+}
+
+fn one_high() -> [u8; 2] {
+    [1, 1]
+}
+
+/// Plants that stand two blocks high, their halves told apart by `half`.
+pub const TALL_PLANTS: [&str; 9] = [
+    "tall_grass",
+    "large_fern",
+    "sunflower",
+    "lilac",
+    "rose_bush",
+    "peony",
+    "tall_seagrass",
+    "pitcher_plant",
+    "small_dripleaf",
+];
+
+/// Whether a block (`minecraft:tall_grass`, or with properties) is a plant
+/// two blocks high.
+pub fn is_tall_plant(state: &str) -> bool {
+    let name = state.split('[').next().unwrap_or(state);
+    TALL_PLANTS.contains(&name.strip_prefix("minecraft:").unwrap_or(name))
+}
+
+/// Soil that plants grow on (by block, with or without properties).
+pub fn is_soil(state: &str) -> bool {
+    let name = state.split('[').next().unwrap_or(state);
+    matches!(
+        name.strip_prefix("minecraft:").unwrap_or(name),
+        "grass_block" | "dirt" | "coarse_dirt" | "podzol" | "rooted_dirt" | "moss_block" | "pale_moss_block" | "mud" | "muddy_mangrove_roots" | "mycelium" | "farmland" | "dirt_path"
+    )
+}
+
+/// The colour a plant shows from above; `None` for a block not known
+/// here (its cover's colour stands for it).
+pub fn plant_color(state: &str) -> Option<[u8; 3]> {
+    let name = state.split('[').next().unwrap_or(state);
+    Some(match name.strip_prefix("minecraft:").unwrap_or(name) {
+        "short_grass" | "grass" | "tall_grass" | "fern" | "large_fern" | "bush" => [88, 146, 54],
+        "dandelion" | "sunflower" | "torchflower" => [236, 206, 52],
+        "poppy" | "red_tulip" | "rose_bush" => [200, 44, 38],
+        "cornflower" | "blue_orchid" => [72, 112, 222],
+        "allium" | "lilac" | "pitcher_plant" => [178, 112, 212],
+        "azure_bluet" | "oxeye_daisy" | "white_tulip" | "lily_of_the_valley" => [238, 238, 230],
+        "orange_tulip" => [234, 130, 42],
+        "pink_tulip" | "peony" | "pink_petals" | "wildflowers" => [238, 158, 198],
+        "wither_rose" => [44, 42, 32],
+        "brown_mushroom" => [152, 114, 84],
+        "red_mushroom" => [202, 48, 42],
+        "dead_bush" | "short_dry_grass" | "tall_dry_grass" => [152, 118, 68],
+        "snow" => [244, 250, 252],
+        "seagrass" | "tall_seagrass" | "kelp" | "kelp_plant" => [42, 112, 62],
+        "moss_carpet" => [89, 109, 45],
+        "sweet_berry_bush" => [62, 102, 52],
+        "sugar_cane" => [132, 172, 92],
+        "cactus" => [62, 122, 52],
+        "leaf_litter" => [160, 110, 60],
+        _ => return None,
+    })
+}
+
+/// What a cover grows at one column: its plant, how high.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Growth {
+    /// Index into [`CoverDef::plants`].
+    pub plant: usize,
+    pub height: u8,
+}
+
+impl CoverDef {
+    /// A cover of one block, or of the blocks given with their weights.
+    pub fn new(name: &str, color: [u8; 3], plants: &[(&str, u16)], density: f32) -> Self {
+        Self {
+            name: name.to_owned(),
+            color,
+            plants: plants.iter().map(|(b, w)| ((*b).to_owned(), *w)).collect(),
+            density,
+            height: one_high(),
+            soil_only: true,
+            underwater: false,
+            removed: false,
+        }
+    }
+
+    /// What grows at column `(x, z)` of a world of seed `seed`, or `None`
+    /// where the cover leaves the ground bare. The same everywhere it is
+    /// asked: the map, the 3D view and the export agree.
+    pub fn growth(&self, x: i32, z: i32, seed: u64) -> Option<Growth> {
+        use crate::compose::hash2;
+        if self.removed {
+            return None;
+        }
+        let density = self.density.clamp(0.0, 1.0);
+        if density < 1.0 && hash2(x, z, seed ^ 0x636f_7665_7231) as f32 >= density * u32::MAX as f32 {
+            return None;
+        }
+        let total: u32 = self.plants.iter().map(|p| p.1 as u32).sum();
+        if total == 0 {
+            return None;
+        }
+        let mut r = hash2(x, z, seed ^ 0x636f_7665_7232) % total;
+        let plant = self.plants.iter().position(|p| {
+            let w = p.1 as u32;
+            if r < w {
+                true
+            } else {
+                r -= w;
+                false
+            }
+        })?;
+        let (lo, hi) = (self.height[0].max(1), self.height[1].max(1));
+        let height = if hi > lo { lo + (hash2(x, z, seed ^ 0x636f_7665_7233) % (hi - lo + 1) as u32) as u8 } else { lo };
+        Some(Growth { plant, height })
+    }
+}
+
+/// The covers of a new world.
+pub fn vanilla_covers() -> Vec<CoverDef> {
+    let mut snow = CoverDef::new("Snow", [242, 248, 252], &[("minecraft:snow[layers=1]", 1)], 1.0);
+    snow.soil_only = false;
+    let mut dead = CoverDef::new("Dead bushes", [158, 124, 76], &[("minecraft:dead_bush", 1)], 0.03);
+    dead.soil_only = false;
+    let mut seagrass = CoverDef::new("Seagrass", [44, 124, 92], &[("minecraft:seagrass", 5), ("minecraft:tall_seagrass", 2)], 0.4);
+    seagrass.soil_only = false;
+    seagrass.underwater = true;
+    vec![
+        CoverDef::new("Grass", [118, 172, 72], &[("minecraft:short_grass", 12), ("minecraft:tall_grass", 2), ("minecraft:fern", 1)], 0.5),
+        CoverDef::new("Tall grass", [92, 152, 54], &[("minecraft:tall_grass", 4), ("minecraft:short_grass", 2), ("minecraft:large_fern", 1)], 0.7),
+        CoverDef::new(
+            "Flowers",
+            [214, 168, 186],
+            &[
+                ("minecraft:short_grass", 10),
+                ("minecraft:dandelion", 2),
+                ("minecraft:poppy", 2),
+                ("minecraft:oxeye_daisy", 1),
+                ("minecraft:azure_bluet", 1),
+                ("minecraft:cornflower", 1),
+                ("minecraft:allium", 1),
+                ("minecraft:red_tulip", 1),
+                ("minecraft:white_tulip", 1),
+                ("minecraft:orange_tulip", 1),
+                ("minecraft:pink_tulip", 1),
+            ],
+            0.45,
+        ),
+        CoverDef::new("Ferns", [72, 130, 64], &[("minecraft:fern", 4), ("minecraft:large_fern", 2), ("minecraft:short_grass", 2)], 0.45),
+        CoverDef::new("Mushrooms", [168, 112, 92], &[("minecraft:brown_mushroom", 1), ("minecraft:red_mushroom", 1)], 0.05),
+        dead,
+        snow,
+        seagrass,
+    ]
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Registry {
     pub blocks: Vec<BlockDef>,
     pub terrains: Vec<TerrainDef>,
     pub biomes: Vec<BiomeDef>,
     pub well_known: WellKnown,
+    /// Ground covers, numbered from 1 (0 in a tile: none). Worlds made
+    /// before covers existed get those of a new world.
+    #[serde(default = "vanilla_covers")]
+    pub covers: Vec<CoverDef>,
 }
 
 impl Registry {
@@ -142,6 +328,24 @@ impl Registry {
 
     pub fn biome(&self, id: BiomeId) -> &BiomeDef {
         self.biomes.get(id.index()).unwrap_or(&self.biomes[0])
+    }
+
+    /// The cover numbered `n` in a tile's cover plane; `None` for 0, for a
+    /// number past the list, and for a removed cover.
+    pub fn cover(&self, n: u16) -> Option<&CoverDef> {
+        let def = self.covers.get((n as usize).checked_sub(1)?)?;
+        (!def.removed).then_some(def)
+    }
+
+    /// The number of the cover of that name (not removed).
+    pub fn cover_by_name(&self, name: &str) -> Option<u16> {
+        self.covers.iter().position(|c| !c.removed && c.name.eq_ignore_ascii_case(name)).map(|i| i as u16 + 1)
+    }
+
+    /// Add a cover and return its number.
+    pub fn add_cover(&mut self, def: CoverDef) -> u16 {
+        self.covers.push(def);
+        self.covers.len() as u16
     }
 
     /// Find a block by its exact state string, registering it if needed.
@@ -179,6 +383,7 @@ impl Registry {
             }],
             terrains: Vec::new(),
             biomes: Vec::new(),
+            covers: vanilla_covers(),
             well_known: WellKnown {
                 stone: BlockId(0),
                 deepslate: BlockId(0),
@@ -507,6 +712,50 @@ mod tests {
         names.sort();
         names.dedup();
         assert_eq!(names.len(), reg.terrains.len());
+    }
+
+    #[test]
+    fn covers_grow_their_plants_at_their_density() {
+        let reg = Registry::vanilla();
+        assert!(reg.cover(0).is_none());
+        let n = reg.cover_by_name("Grass").unwrap();
+        let grass = reg.cover(n).unwrap();
+        assert_eq!(grass.name, "Grass");
+        let mut grown = 0;
+        let mut kinds = [0usize; 3];
+        for x in 0..100 {
+            for z in 0..100 {
+                if let Some(g) = grass.growth(x, z, 7) {
+                    grown += 1;
+                    kinds[g.plant] += 1;
+                    assert_eq!(g.height, 1);
+                    // The same column always grows the same.
+                    assert_eq!(grass.growth(x, z, 7), Some(g));
+                }
+            }
+        }
+        // Half of the columns, mostly short grass.
+        assert!((4500..5500).contains(&grown), "{grown}");
+        assert!(kinds[0] > kinds[1] * 3 && kinds[1] > kinds[2], "{kinds:?}");
+        let snow = reg.cover(reg.cover_by_name("snow").unwrap()).unwrap();
+        assert!((0..50).all(|x| snow.growth(x, 3, 1).is_some()));
+        let mut gone = snow.clone();
+        gone.removed = true;
+        assert!(gone.growth(0, 0, 1).is_none());
+        let mut cane = CoverDef::new("Cane", [0; 3], &[("minecraft:sugar_cane", 1)], 1.0);
+        cane.height = [1, 3];
+        let heights: std::collections::BTreeSet<u8> = (0..200).filter_map(|x| cane.growth(x, 0, 1)).map(|g| g.height).collect();
+        assert_eq!(heights.into_iter().collect::<Vec<_>>(), vec![1, 2, 3]);
+        assert!(is_tall_plant("minecraft:tall_grass") && is_tall_plant("minecraft:peony[half=lower]"));
+        assert!(!is_tall_plant("minecraft:short_grass") && !is_tall_plant("minecraft:tall_dry_grass"));
+    }
+
+    #[test]
+    fn worlds_from_before_covers_get_the_usual_ones() {
+        let mut json = serde_json::to_value(Registry::vanilla()).unwrap();
+        json.as_object_mut().unwrap().remove("covers");
+        let reg: Registry = serde_json::from_value(json).unwrap();
+        assert_eq!(reg.covers, vanilla_covers());
     }
 
     #[test]

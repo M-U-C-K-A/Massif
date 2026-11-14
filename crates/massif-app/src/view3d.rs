@@ -116,6 +116,8 @@ struct Grid {
     spans: Vec<CellSpan>,
     water: Vec<i32>,
     top: Vec<Sample>,
+    /// The cover painted on the top of each column; 0: none.
+    cover: Vec<u16>,
 }
 
 impl Grid {
@@ -149,6 +151,7 @@ fn compose_area(dim: &Dimension, x0: i32, z0: i32, w: usize, d: usize, mode: Map
         spans: Vec::new(),
         water: Vec::with_capacity(w * d),
         top: Vec::with_capacity(w * d),
+        cover: Vec::with_capacity(w * d),
     };
     grid.offsets.push(0);
     let mut stacks: HashMap<TilePos, Option<TileStack>> = HashMap::new();
@@ -164,6 +167,7 @@ fn compose_area(dim: &Dimension, x0: i32, z0: i32, w: usize, d: usize, mode: Map
             let start = grid.spans.len();
             let mut wet = i32::MIN;
             let mut top = Sample::EMPTY;
+            let mut cover = 0;
             if let Some(stack) = stack {
                 let cell = local_index(x, z);
                 stack.spans(cell, &mut sp);
@@ -193,10 +197,14 @@ fn compose_area(dim: &Dimension, x0: i32, z0: i32, w: usize, d: usize, mode: Map
                 if mode == MapMode::Biome {
                     top = sampler.sample(stack, cell);
                 }
+                if let Some(t) = sp.last() {
+                    cover = stack.surface_cover(cell, t);
+                }
             }
             grid.offsets.push(grid.spans.len() as u32);
             grid.water.push(wet);
             grid.top.push(top);
+            grid.cover.push(cover);
         }
     }
     grid
@@ -220,6 +228,9 @@ struct Colors<'a> {
     deepslate: [u8; 3],
     /// Picks the exported blocks, so mixed terrains look speckled as they will in the game.
     mat: Materializer<'a>,
+    seed: u64,
+    /// The world's fluid is lava: nothing grows in it.
+    lava: bool,
 }
 
 impl Colors<'_> {
@@ -228,9 +239,11 @@ impl Colors<'_> {
     }
 
     /// Colour of the top face of a span, and of the soil just under it, for
-    /// the column `(x, z)` whose ground slopes `slope` degrees.
+    /// the column `(x, z)` whose ground slopes `slope` degrees. On the
+    /// column's top, what the cover numbered `cover` grows there shows
+    /// over the ground (`wet`: the top is under water).
     #[allow(clippy::too_many_arguments)]
-    fn top(&self, terrain: u16, y0: i32, y1: i32, x: i32, z: i32, slope: f32, sample: &Sample) -> ([u8; 3], [u8; 3]) {
+    fn top(&self, terrain: u16, y0: i32, y1: i32, x: i32, z: i32, slope: f32, sample: &Sample, cover: u16, wet: bool) -> ([u8; 3], [u8; 3]) {
         match self.mode {
             MapMode::Terrain => {
                 let span = Span {
@@ -239,7 +252,18 @@ impl Colors<'_> {
                     terrain: TerrainId(terrain),
                     top: y1 as f32,
                 };
-                let top = self.block(self.mat.block(&span, x, y1 - 1, z, false));
+                let block = self.mat.block(&span, x, y1 - 1, z, false);
+                let mut top = self.block(block);
+                if let Some(def) = self.reg.cover(cover)
+                    && def.underwater == wet
+                    && !(wet && self.lava)
+                    && (!def.soil_only || massif_core::registry::is_soil(&self.reg.block(block).state))
+                    && let Some(g) = def.growth(x, z, self.seed)
+                {
+                    let plant = def.plants.get(g.plant).and_then(|p| massif_core::registry::plant_color(&p.0)).unwrap_or(def.color);
+                    let k = 0.75;
+                    top = std::array::from_fn(|c| (top[c] as f32 + (plant[c] as f32 - top[c] as f32) * k) as u8);
+                }
                 let soil = if y1 - 2 >= y0 {
                     self.block(self.mat.block(&span, x, y1 - 2, z, false))
                 } else {
@@ -405,6 +429,8 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
         stone: reg.block(wk.stone).color,
         deepslate: reg.block(wk.deepslate).color,
         mat: Materializer::new(reg, seed, dim.min_y),
+        seed: seed as u64,
+        lava: style.lava,
     };
     let (min_y, max_y) = (dim.min_y, dim.max_y);
     let clamp16 = |v: i32| v.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
@@ -426,11 +452,17 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
             } else {
                 0.0
             };
-            let sample = grid.top[grid.cell(x, z)];
+            let c = grid.cell(x, z);
+            let (sample, cover, wet) = (grid.top[c], grid.cover[c], grid.water[c] != i32::MIN);
+            let spans = grid.spans(x, z);
             tops.push(
-                grid.spans(x, z)
+                spans
                     .iter()
-                    .map(|s| colors.top(s.terrain, s.y0, s.y1, x, z, slope, &sample))
+                    .enumerate()
+                    .map(|(k, s)| {
+                        let on_top = k + 1 == spans.len();
+                        colors.top(s.terrain, s.y0, s.y1, x, z, slope, &sample, if on_top { cover } else { 0 }, on_top && wet)
+                    })
                     .collect(),
             );
         }
