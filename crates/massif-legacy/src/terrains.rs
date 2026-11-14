@@ -6,8 +6,78 @@
 //! materials once the whole file has been read.
 
 use crate::tables::{BIOMES, TERRAINS};
+use massif_core::noise::Noise;
 use massif_core::registry::{BiomeDef, BlockId, Registry, Stratum, TerrainDef, TerrainId};
 use std::collections::BTreeMap;
+
+/// Marks a column of WorldPainter's "Beaches" (or "Bare Beaches") until its
+/// own material is picked (see [`Beaches`]).
+pub const BEACH_MARK: u16 = u16::MAX;
+
+/// WorldPainter's noise scales (`Constants.SMALL_BLOBS`, `HUGE_BLOBS`).
+const SMALL_BLOBS: f64 = 16.411;
+const HUGE_BLOBS: f64 = 131.101;
+
+/// WorldPainter's "Beaches": grass with patches of sand, gravel and clay
+/// (big blobs of sand and gravel, small ones of clay), as its
+/// `Terrain.BEACHES` draws them; sand all over would be a desert.
+pub struct Beaches {
+    sand: Noise,
+    clay: Noise,
+    /// Levels of the noise passed 4 % (clay), 40 % (sand) and 20 %
+    /// (gravel) of the time, as WorldPainter's `getLevelForPromillage`.
+    clay_level: f64,
+    sand_level: f64,
+    gravel_level: f64,
+    /// Grass, sand, gravel and clay.
+    ids: [u16; 4],
+}
+
+impl Beaches {
+    pub fn new(reg: &Registry) -> Self {
+        let id = |name: &str| reg.terrain_by_name(name).map_or(0, |t| t.0);
+        let sand = Noise::new(26_796_036);
+        let clay = Noise::new(161_603_308);
+        let mut samples: Vec<f64> = (0..20_000)
+            .map(|i| {
+                let h = massif_core::compose::hash2(i, 0x5eed, 0xbeac);
+                sand.get((h & 0xffff) as f64 * 0.731 + 0.5, (h >> 16) as f64 * 0.619 + 0.5)
+            })
+            .collect();
+        samples.sort_by(f64::total_cmp);
+        let level = |share: f64| samples[((1.0 - share) * (samples.len() - 1) as f64) as usize];
+        Self {
+            sand,
+            clay,
+            clay_level: level(0.04),
+            sand_level: level(0.40) * 1.5,
+            gravel_level: level(0.20) * 1.5,
+            ids: [id("Grass"), id("Sand"), id("Gravel"), id("Clay")],
+        }
+    }
+
+    /// The terrain of the column at `(x, z)`, its ground at `height`.
+    pub fn at(&self, x: i32, z: i32, height: f32) -> u16 {
+        let (x, z) = (x as f64, z as f64);
+        // WorldPainter's noise has a third dimension, the height: its
+        // patches shift as the ground rises.
+        let lift = height as f64 / SMALL_BLOBS;
+        let (lx, lz) = (lift * 0.71, lift * 0.53);
+        let [grass, sand, gravel, clay] = self.ids;
+        if self.clay.get(x / SMALL_BLOBS + lx, z / SMALL_BLOBS + lz) >= self.clay_level {
+            return clay;
+        }
+        let n = self.sand.get(x / HUGE_BLOBS + lx, z / HUGE_BLOBS + lz)
+            + self.sand.get(x / SMALL_BLOBS + lx + 57.3, z / SMALL_BLOBS + lz + 91.7) / 2.0;
+        if n >= self.sand_level {
+            sand
+        } else if -n >= self.gravel_level {
+            gravel
+        } else {
+            grass
+        }
+    }
+}
 
 const DEEP: u16 = u16::MAX;
 
@@ -40,7 +110,7 @@ fn builtin(wp: &str) -> Target {
     match wp {
         "GRASS" | "BARE_GRASS" => Existing("Grass"),
         "DIRT" => Existing("Dirt"),
-        "SAND" | "DESERT" | "BEACHES" | "BARE_BEACHES" => Existing("Sand"),
+        "SAND" | "DESERT" => Existing("Sand"),
         "SANDSTONE" => Existing("Sandstone"),
         "STONE" | "RESOURCES" => Existing("Stone"),
         "ROCK" => Existing("Rocky"),
@@ -359,6 +429,9 @@ impl Mapper {
         let Some(&wp) = TERRAINS.get(ordinal as usize) else {
             return self.registry.terrain_by_name("Stone").map_or(0, |t| t.0);
         };
+        if matches!(wp, "BEACHES" | "BARE_BEACHES") {
+            return BEACH_MARK;
+        }
         if let Some(n) = wp.strip_prefix("CUSTOM_").and_then(|n| n.parse::<usize>().ok()) {
             // A placeholder until the mixed materials are read.
             let id = self.add_terrain(TerrainDef {
@@ -484,6 +557,27 @@ pub fn massif_terrain(reg: &Registry, name: &str) -> Option<TerrainId> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// WorldPainter's beaches are mostly grass, with big patches of sand,
+    /// some gravel, a little clay.
+    #[test]
+    fn beaches_are_grass_with_patches() {
+        let reg = Registry::vanilla();
+        let beaches = Beaches::new(&reg);
+        let name = |id: u16| reg.terrain(TerrainId(id)).name.clone();
+        let mut counts = std::collections::BTreeMap::new();
+        for z in (0..2048).step_by(3) {
+            for x in (0..2048).step_by(3) {
+                *counts.entry(name(beaches.at(x, z, 64.0))).or_insert(0usize) += 1;
+            }
+        }
+        let total: usize = counts.values().sum();
+        let share = |n: &str| counts.get(n).copied().unwrap_or(0) as f32 / total as f32;
+        assert!(share("Grass") > 0.4, "{counts:?}");
+        assert!((0.15..0.45).contains(&share("Sand")), "{counts:?}");
+        assert!((0.03..0.25).contains(&share("Gravel")), "{counts:?}");
+        assert!((0.01..0.08).contains(&share("Clay")), "{counts:?}");
+    }
 
     fn ordinal(name: &str) -> u8 {
         TERRAINS.iter().position(|t| *t == name).unwrap() as u8

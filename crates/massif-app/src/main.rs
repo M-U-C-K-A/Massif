@@ -8,6 +8,7 @@ mod cards;
 mod doc;
 mod finder;
 mod graph_editor;
+mod help;
 mod home;
 mod jobs;
 mod layout;

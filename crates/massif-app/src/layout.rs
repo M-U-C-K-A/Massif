@@ -425,6 +425,21 @@ fn sculpt_workspace(b: &mut Builder) -> Node {
     b.row(0.76, view, side)
 }
 
+/// Give every area of `node` a new id, from `next` on, so that no view
+/// state is shared with the areas it was copied from.
+fn renumber(node: &mut Node, next: &mut AreaId) {
+    match node {
+        Node::Area { id, .. } => {
+            *next += 1;
+            *id = *next;
+        }
+        Node::Split { a, b, .. } => {
+            renumber(a, next);
+            renumber(b, next);
+        }
+    }
+}
+
 impl Default for Layout {
     fn default() -> Self {
         use EditorKind::*;
@@ -678,18 +693,6 @@ impl Layout {
     pub fn duplicate_current(&mut self) {
         let mut copy = self.current().clone();
         // Give the copy its own area ids so view state is not shared.
-        fn renumber(node: &mut Node, next: &mut AreaId) {
-            match node {
-                Node::Area { id, .. } => {
-                    *next += 1;
-                    *id = *next;
-                }
-                Node::Split { a, b, .. } => {
-                    renumber(a, next);
-                    renumber(b, next);
-                }
-            }
-        }
         renumber(&mut copy.root, &mut self.next_id);
         copy.maximized = None;
         let base = copy.name.trim_end_matches(|c: char| c.is_ascii_digit() || c == ' ').to_owned();
@@ -698,6 +701,31 @@ impl Layout {
         copy.name = format!("{base} {n}");
         self.workspaces.push(copy);
         self.activate(self.workspaces.len() - 1);
+    }
+
+    /// The workspace `index` was at first: the default one of its name, or
+    /// of the name it was copied from ("Painting 2" is a Painting).
+    fn default_of(&self, index: usize) -> Option<Workspace> {
+        let w = self.workspaces.get(index)?;
+        let base = w.name.trim_end_matches(|c: char| c.is_ascii_digit() || c == ' ');
+        Layout::default()
+            .workspaces
+            .into_iter()
+            .find(|d| d.terrain == w.terrain && (d.name == w.name || d.name == base))
+    }
+
+    /// Whether workspace `index` has a first state to go back to.
+    pub fn can_reset(&self, index: usize) -> bool {
+        self.default_of(index).is_some()
+    }
+
+    /// Put workspace `index` back as it was at first (its name kept).
+    pub fn reset_workspace(&mut self, index: usize) {
+        let Some(mut fresh) = self.default_of(index) else { return };
+        renumber(&mut fresh.root, &mut self.next_id);
+        let w = &mut self.workspaces[index];
+        w.root = fresh.root;
+        w.maximized = None;
     }
 
     /// How many workspaces the side of workspace `index` has.
@@ -745,6 +773,30 @@ impl Layout {
 
 #[cfg(test)]
 mod tests {
+
+    /// A workspace changed, or a copy of one, goes back to how it was.
+    #[test]
+    fn workspaces_reset_to_their_first_state() {
+        let mut layout = Layout::default();
+        let painting = layout.workspaces.iter().position(|w| w.name == "Painting").unwrap();
+        layout.activate(painting);
+        let first = layout.current().root.count();
+        let area = layout.current().root.first_area();
+        layout.split(area, Dir::Row);
+        assert_eq!(layout.current().root.count(), first + 1);
+        layout.reset_workspace(painting);
+        assert_eq!(layout.current().root.count(), first);
+        assert_eq!(layout.current().name, "Painting");
+        // A copy resets to what it was copied from.
+        layout.duplicate_current();
+        let copy = layout.active;
+        assert_eq!(layout.current().name, "Painting 2");
+        let area = layout.current().root.first_area();
+        layout.split(area, Dir::Column);
+        layout.reset_workspace(copy);
+        assert_eq!(layout.current().root.count(), first);
+        assert!(layout.can_reset(copy));
+    }
     use super::*;
 
     fn ids(node: &Node) -> Vec<AreaId> {

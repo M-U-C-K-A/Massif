@@ -26,6 +26,9 @@ pub struct Document {
     /// Changes whenever a different world is loaded: caches keyed on it must
     /// be dropped.
     pub generation: u64,
+    /// The terrain the map was filled with, as of a revision (see
+    /// [`massif_core::auto::base_terrain`]).
+    auto_base: std::sync::Mutex<Option<(u64, Option<massif_core::TerrainId>)>>,
 }
 
 impl Document {
@@ -39,7 +42,23 @@ impl Document {
             revision: 0,
             saved_revision: 0,
             generation,
+            auto_base: std::sync::Mutex::new(None),
         }
+    }
+
+    /// The terrain the map was filled with, if one covers nearly all of it:
+    /// the automatic tools read the land through it. Worked out again once
+    /// the map has changed.
+    pub fn auto_base(&self) -> Option<massif_core::TerrainId> {
+        let mut cache = self.auto_base.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((revision, base)) = *cache
+            && revision == self.revision
+        {
+            return base;
+        }
+        let base = massif_core::auto::base_terrain(self.dimension(), &self.world.registry);
+        *cache = Some((self.revision, base));
+        base
     }
 
     pub fn dimension(&self) -> &Dimension {
@@ -148,19 +167,24 @@ impl Document {
     }
 
     /// Give the whole map the biomes its land calls for (one undoable
-    /// step). Returns how many columns changed.
+    /// step), here and now; the app runs it in the background
+    /// ([`crate::jobs::Job::auto`]). Returns how many columns changed.
+    #[cfg(test)]
     pub fn auto_biome(&mut self, rules: &massif_core::auto::AutoRules) -> usize {
-        let reader = massif_core::auto::Reader::new(rules, &self.world.registry, self.world.meta.sea_level);
+        let base = self.auto_base();
+        let reader = massif_core::auto::Reader::new(rules, &self.world.registry, self.world.meta.sea_level).with_base(base);
         self.history.begin("Auto biome", self.dim);
         let changed = massif_core::auto::biomes_over_the_map(&mut self.history.edit(&mut self.world, 0), &reader);
         self.commit();
         changed
     }
 
-    /// Paint the whole map as its biomes call for (one undoable step).
-    /// Returns how many columns changed.
+    /// Paint the whole map as its biomes call for (one undoable step), here
+    /// and now. Returns how many columns changed.
+    #[cfg(test)]
     pub fn auto_paint(&mut self, rules: &massif_core::auto::AutoRules) -> usize {
-        let reader = massif_core::auto::Reader::new(rules, &self.world.registry, self.world.meta.sea_level);
+        let base = self.auto_base();
+        let reader = massif_core::auto::Reader::new(rules, &self.world.registry, self.world.meta.sea_level).with_base(base);
         self.history.begin("Auto paint", self.dim);
         let changed = massif_core::auto::paint_over_the_map(&mut self.history.edit(&mut self.world, 0), &reader);
         self.commit();

@@ -233,6 +233,10 @@ fn cmd_import(args: Args) -> Res<()> {
         println!("  skipped      {d}");
     }
     println!("  terrains     {} kinds, {} custom", report.terrains.len(), report.custom_terrains);
+    let columns: u64 = report.terrains.iter().map(|t| t.1).sum::<u64>().max(1);
+    for (name, n) in report.terrains.iter().take(8) {
+        println!("    {name:<20} {:5.1} %", *n as f64 * 100.0 / columns as f64);
+    }
     if !report.layers.is_empty() {
         let names: Vec<String> = report.layers.iter().map(|(n, t)| format!("{n} ({t})")).collect();
         println!("  not imported layers: {}", names.join(", "));

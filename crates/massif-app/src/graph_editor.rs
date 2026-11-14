@@ -837,6 +837,8 @@ pub struct GraphEditor {
     pub over: Option<bool>,
     /// What the conversion under way was started as.
     building_over: bool,
+    /// Asked from the viewport: start the graph from the open map.
+    want_map: bool,
 }
 
 impl Default for GraphEditor {
@@ -884,6 +886,7 @@ impl Default for GraphEditor {
             own: 0,
             over: None,
             building_over: false,
+            want_map: false,
         }
     }
 }
@@ -1175,6 +1178,31 @@ impl GraphEditor {
                 self.revision += 1;
             }
         }
+        // Nothing makes the ground: no relief to show, and a way to one.
+        if self.pinned.is_none() && source_of(&graph, |k| matches!(k, NodeKind::HeightOutput)).is_none() {
+            ui.painter().rect_filled(rect, 0, pal.canvas);
+            let card = Rect::from_center_size(rect.center(), vec2(380.0_f32.min(rect.width() - 24.0), 150.0));
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(card).layout(egui::Layout::top_down(egui::Align::Center)));
+            child.label(RichText::new(theme::glyph(Icon::MountainSnow).to_string()).size(26.0).color(pal.weak));
+            child.add_space(6.0);
+            child.label(RichText::new("No relief to show").size(15.0).medium());
+            child.add_space(2.0);
+            child.add(
+                egui::Label::new(
+                    RichText::new("Nothing in this graph makes the ground: its Height output takes no input. Start from the open map, or add a generator (Tab) and link it to the output.")
+                        .size(12.0)
+                        .color(pal.weak),
+                )
+                .halign(egui::Align::Center)
+                .wrap(),
+            );
+            child.add_space(10.0);
+            if child.add(theme::primary_button(&child, theme::with_icon(Icon::Map, "Start from this map"))).clicked() {
+                self.want_map = true;
+                ui.ctx().request_repaint();
+            }
+            return;
+        }
         if !self.view.has_data() {
             let text = match &self.error {
                 Some(e) => e.clone(),
@@ -1258,7 +1286,26 @@ impl GraphEditor {
 
     /// The node graph, with its toolbar. Returns a message for the status
     /// bar.
+    /// Start the graph from the open map: a Map node into the Height
+    /// output (made if the graph has none).
+    fn start_from_map(&mut self, doc: &mut Document) {
+        let mut graph = graph_of(doc);
+        let out = match graph.nodes.iter().find(|n| matches!(n.kind, NodeKind::HeightOutput)) {
+            Some(n) => n.id,
+            None => graph.add(NodeKind::HeightOutput, [420.0, 0.0]),
+        };
+        let at = graph.node(out).map_or([0.0, 0.0], |n| [n.pos[0] - 260.0, n.pos[1]]);
+        let map = graph.add(NodeKind::MapHeight, at);
+        graph.connect(map, 0, out, 0);
+        self.store(doc, graph);
+        self.pinned = None;
+        self.fit = true;
+    }
+
     pub fn canvas_ui(&mut self, ui: &mut Ui, doc: &mut Document, blocks: &BlockLibrary) -> Option<String> {
+        if std::mem::take(&mut self.want_map) {
+            self.start_from_map(doc);
+        }
         self.sync(ui.ctx(), doc);
         let mut feedback = None;
         let pal = Palette::of(ui);
@@ -1345,6 +1392,11 @@ impl GraphEditor {
                             let map = built.reads_map.then_some(&own[..]);
                             let edit = &mut doc.history.edit(&mut doc.world, 0);
                             massif_core::graph::apply(edit, &built.extent, &built.outputs, seed, &paint, &write(tiles, map));
+                            // New ground: what was sculpted in 3D on the
+                            // old one would stand over it as it was.
+                            if built.outputs.heights.is_some() {
+                                edit.clear_voxels(tiles);
+                            }
                         }
                     }
                     for ((layer, index), layer_palette) in built.outputs.layers.iter().zip(&levels).zip(&layer_palettes) {
@@ -2549,6 +2601,9 @@ impl GraphEditor {
 
     /// The settings of the selected node.
     pub fn properties_ui(&mut self, ui: &mut Ui, doc: &mut Document) {
+        if std::mem::take(&mut self.want_map) {
+            self.start_from_map(doc);
+        }
         self.sync(ui.ctx(), doc);
         let dim = doc.dimension();
         let bounds = (dim.min_y as f32, dim.max_y as f32);
@@ -2985,7 +3040,7 @@ fn sea_level(ui: &mut Ui, v: &mut f32, hover: &str) -> bool {
         }
         if on {
             let (bottom, top) = limits(ui);
-            ui.add(egui::DragValue::new(v).range(bottom..=top).speed(0.5).max_decimals(0));
+            crate::widgets::drag(ui, egui::DragValue::new(v).range(bottom..=top).speed(0.5).max_decimals(0));
         }
     });
     *v != before
@@ -2994,7 +3049,7 @@ fn sea_level(ui: &mut Ui, v: &mut f32, hover: &str) -> bool {
 fn seed(ui: &mut Ui, v: &mut u32) -> bool {
     ui.horizontal(|ui| {
         ui.add_sized([96.0, 18.0], egui::Label::new(RichText::new("Seed").size(12.0)));
-        let mut changed = ui.add(egui::DragValue::new(v)).changed();
+        let mut changed = crate::widgets::drag(ui, egui::DragValue::new(v)).changed();
         if ui.small_button(theme::glyph(Icon::Dices).to_string()).on_hover_text("Another seed").clicked() {
             *v = v.wrapping_mul(1_103_515_245).wrapping_add(12_345) % 100_000;
             changed = true;
@@ -3121,7 +3176,7 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             amount(ui, "Base", base, limits(ui).0..=limits(ui).1);
         }
         NodeKind::Constant { value } => {
-            row(ui, "Value", |ui| ui.add(egui::DragValue::new(value).speed(0.5)));
+            row(ui, "Value", |ui| crate::widgets::drag(ui, egui::DragValue::new(value).speed(0.5)));
         }
         NodeKind::LinearGradient { angle: a, height: h, base } => {
             angle(ui, "Rises toward", a);

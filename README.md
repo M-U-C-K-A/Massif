@@ -99,8 +99,12 @@ left, the ways in — a new map, a map from a height map, a map of your own to
 open (`.massif`), a WorldPainter world to import (`.world`) — and the maps
 opened lately (or, at first, an empty list that says so); in the middle,
 the settings of a new map with its preview, and **Create map**, laid on the
-backdrop itself: ridges drawn in dots, lit by the accent colour, a few of
-them twinkling now and then. A `.massif`, a
+backdrop itself, with nothing to hide it: a massif at dusk, dithered in
+square cells as a photograph would be — stars and the milky way over the
+glow of a sun gone down in the accent colour, ranges of mountains in layers
+lit along their crests, a tall peak to the right, a valley in the middle
+where the settings are written; by day in the light theme. Its stars
+twinkle now and then. A `.massif`, a
 `.world` or a height map dropped on the window opens. **File ▸ New** (⌘N)
 comes back to it, with a way back to the open map (Esc).
 
@@ -113,8 +117,16 @@ card, its commands in its header without frames (its menu behind **…**);
 settings sit in wells, one per row with a hairline between rows; buttons are
 pills, and choices among a few are segmented controls. A slider is a slim
 track with its value after it: click the track to jump there, drag the thumb
-(Shift: finer), drag the value sideways, or click it to type one. A narrow
+(Shift: finer), drag the value sideways, or click it to type one. A number
+clicked to be typed in gets the caret where it was clicked (in any number
+field), so that a digit adds to it rather than replacing it. A narrow
 Tools area keeps each row of tools on one line, its name under the pointer.
+What Massif did and what runs in the background (saving, exporting, the
+automatic tools over a whole map) shows at the bottom right of the window,
+over the areas, with a **Cancel** for long tasks.
+
+**Help ▸ Massif Help** (F1) opens the help: every part of Massif, topic by
+topic, with a search, and the keyboard shortcuts.
 
 ### Download
 
@@ -202,7 +214,8 @@ brushes, terrain and biome palettes, levels or world info.
   **Terrain**, the terrain generator (Graph and Render). Each side
   remembers the workspace it was left on.
 - Workspaces are tabs of arrangements; duplicate one with `+`, right-click
-  it to delete it. The layout is remembered.
+  it to reset it (back to how it was at first; a copy goes back to what it
+  was copied from), duplicate it or delete it. The layout is remembered.
 
 ### New worlds and export
 
@@ -216,7 +229,8 @@ top of the world rather than being cut flat), feature size and ground
 level, or a template of the terrain generator (alpine range, continents,
 archipelago…), whose map then opens on the Terrain side with its nodes —
 the water level, lava instead of water (opaque and glowing, its shores
-scorched basalt and blackstone, never sand), beaches, automatic terrains
+scorched basalt and blackstone, never sand), beaches (sand along the
+water, up to six blocks from it: low ground farther inland stays grass), automatic terrains
 (grass, sand, rock and snow by height and slope) or a single one, and a
 seed; a preview of the whole map updates as you change them. A map made
 from a height map takes a height too.
@@ -283,15 +297,23 @@ brush (and its options) or over the whole map at once:
   bank close on both sides: a river), its height over the sea (lowland,
   hills, mountains, peaks), its slope (cliffs are rock, whatever grows on
   them) and what its ground is made of (grass, sand, red sand, snow, moss,
-  mud, mycelium, podzol, stone); sand at the water's edge is a beach, not
-  a desert. Each kind has a biome.
+  mud, mycelium, podzol, stone); sand at the water's edge is a beach, and
+  sand away from it a desert only where sand is all around (seven tenths of
+  the dry ground within 48 blocks): a patch of sand in a plain is the
+  plain. Each kind has a biome. A map filled with one terrain other than
+  grass (a WorldPainter world all of sand, for instance) is read from the
+  shape of its land there: its fill says nothing about it.
 - **Auto paint** goes the other way: every biome has a terrain for its
   ground, one for its cliffs and one for what lies under its water. Where
   no biome is set, the ground is painted as the land it is.
 
-Hovered over the map, both show what they would change before anything is
-painted: under the brush, the columns that would change in their new colour,
-the others darkened. A stroke changes every column in the core of the brush
+Over the whole map (**Whole map** in Tool Settings, or Edit ▸ Auto biome /
+Auto paint: whole map) they run in the background, a progress bar and a
+Cancel button in front of the map, and their result is one undoable step;
+the map is read by squares of 4 × 4 tiles and never decoded whole (a map
+of 44,544 × 33,536 blocks takes about 15 seconds). Hovered over the map,
+both show what they would change before anything is painted: under the
+brush, the columns that would change, in their new colour. A stroke changes every column in the core of the brush
 (all of it at 100% intensity, with a blended edge below), and says how many
 it changed — or that the land already follows the rules.
 
@@ -627,8 +649,12 @@ ice, or every block), each column taking the block whose colour is closest
 — by hue before lightness, so that a dark green is moss or grass rather
 than mud — two neighbouring blocks mixing where the colour lies between
 them; the terrain outputs painted over it; and the layers as levels over
-the ground. Distances are in blocks, so a graph looks
-the same at every resolution. The graph is saved with the world.
+the ground. Written into the ground, a graph's heights replace what was
+sculpted in 3D on the tiles it rewrites (in the same undoable step):
+the sculpture belonged to the old ground. Distances are in blocks, so a graph looks
+the same at every resolution. The graph is saved with the world. When
+nothing feeds the Height output, the viewport says so, with **Start from
+this map**, which links a Map node to it.
 
 Builds are made for large maps: nodes run on every core, erosion in
 parallel blocks; simulations run at 4,096 samples at most and carry what
@@ -751,7 +777,10 @@ own implementation of the Java serialization protocol and converts tiles in
 parallel as they are read. Heights, terrains (custom terrains are rebuilt
 from their mixed materials), water, painted biomes, the Nether and the End,
 seed, spawn and build limits (worlds WorldPainter made taller than the
-game, up to 2032 blocks, keep their height) are imported. Layers (trees, vegetation, frost,
+game, up to 2032 blocks, keep their height) are imported. WorldPainter's
+Beaches (and Bare Beaches) come in as it draws them — grass with patches of
+sand and gravel, big ones, and of clay, small ones, from noise of its own
+scales — rather than sand all over. Layers (trees, vegetation, frost,
 caves…), lava and the ceiling, cave floor and floating dimensions are not
 yet; the import report lists what was left out.
 
@@ -897,6 +926,12 @@ tools/minecraft_check.py --world my.massif --version 1.21.11 --minecraft "<game 
   from the graph and the automatic paint.
 - Selections, copy and paste, height-map import.
 - Nether and End editing from the editor, customisable key bindings.
+
+## Supporters
+
+A special thank you to **Chonky cow cat**, whose donation helps keep
+Massif growing. Your support means a lot. Thank you for believing in the
+project!
 
 ## License
 

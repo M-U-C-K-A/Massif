@@ -417,14 +417,14 @@ impl MapView {
         tools.brush.strength.to_bits().hash(&mut h);
         let key = (tools.tool, at.0.floor() as i32, at.1.floor() as i32, doc.revision, h.finish());
         if self.auto_preview.as_ref().is_none_or(|a| a.key != key) {
-            let reader = massif_core::auto::Reader::new(&tools.auto, &doc.world.registry, doc.world.meta.sea_level);
+            let reader = massif_core::auto::Reader::new(&tools.auto, &doc.world.registry, doc.world.meta.sea_level).with_base(doc.auto_base());
             let brush = tools.stroke_brush();
             let (rect, cols) = massif_core::ops::auto_preview(doc.dimension(), &brush, at.0 as f32, at.1 as f32, &reader, biomes);
             let reg = &doc.world.registry;
-            // What changes in its new colour; what stays, darkened.
+            // What changes, in its new colour; what is already as the land
+            // calls for, as it is.
             let colour = |p: &massif_core::ops::Preview| match p {
-                massif_core::ops::Preview::Outside => Color32::TRANSPARENT,
-                massif_core::ops::Preview::Same => Color32::from_black_alpha(120),
+                massif_core::ops::Preview::Outside | massif_core::ops::Preview::Same => Color32::TRANSPARENT,
                 massif_core::ops::Preview::Becomes(id) => {
                     let c = if biomes { reg.biomes.get(*id as usize).map(|b| b.color) } else { reg.terrains.get(*id as usize).map(|t| t.color) };
                     let [r, g, b] = c.unwrap_or([255, 0, 255]);

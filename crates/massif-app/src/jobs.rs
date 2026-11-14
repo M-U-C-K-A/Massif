@@ -31,6 +31,16 @@ pub enum Outcome {
         report: Box<ImportReport>,
         source: PathBuf,
     },
+    /// An automatic tool over the whole map, worked out on a copy of it: the
+    /// tiles it changed, to put in place in one undoable step.
+    Auto {
+        biomes: bool,
+        tiles: Vec<(massif_core::TilePos, massif_core::level::Blob)>,
+        columns: usize,
+        /// The document's revision and dimension it was worked out from.
+        revision: u64,
+        dim: usize,
+    },
     Failed(String),
     Cancelled,
 }
@@ -42,12 +52,13 @@ pub enum JobKind {
     Import,
     Save,
     Export,
+    Auto,
 }
 
 impl JobKind {
     /// Jobs that replace the document block editing until they finish.
     pub fn blocks_editing(self) -> bool {
-        matches!(self, JobKind::Generate | JobKind::Open | JobKind::Import)
+        matches!(self, JobKind::Generate | JobKind::Open | JobKind::Import | JobKind::Auto)
     }
 }
 
@@ -60,6 +71,15 @@ pub trait JobProgress: Send + Sync {
 impl JobProgress for Progress {
     fn fraction(&self) -> f32 {
         Progress::fraction(self)
+    }
+    fn cancel(&self) {
+        self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl JobProgress for massif_core::auto::Steps {
+    fn fraction(&self) -> f32 {
+        massif_core::auto::Steps::fraction(self)
     }
     fn cancel(&self) {
         self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -169,6 +189,43 @@ impl Job {
                 bytes: stats.file_len,
             },
             Err(e) => Outcome::Failed(format!("Could not save {}: {e}", display_name(&path))),
+        })
+    }
+
+    /// Automatic biomes (`biomes`) or paint over the whole of dimension
+    /// `dim` of a snapshot of the document at `revision`.
+    pub fn auto(ctx: &egui::Context, mut snapshot: World, dim: usize, rules: massif_core::auto::AutoRules, biomes: bool, revision: u64) -> Job {
+        use massif_core::auto::{Reader, Steps, base_terrain, biomes_over_the_map_with, paint_over_the_map_with};
+        let progress = Arc::new(Steps::default());
+        let label = if biomes { "Automatic biomes over the whole map" } else { "Automatic paint over the whole map" };
+        let p = progress.clone();
+        Job::spawn(JobKind::Auto, label.to_owned(), Some(progress as Arc<dyn JobProgress>), ctx, move || {
+            let base = base_terrain(&snapshot.dims[dim], &snapshot.registry);
+            let reader = Reader::new(&rules, &snapshot.registry, snapshot.meta.sea_level).with_base(base);
+            let mut history = massif_core::history::History::new(1);
+            history.begin("automatic", dim);
+            let changes = {
+                let mut edit = history.edit(&mut snapshot, 0);
+                if biomes {
+                    biomes_over_the_map_with(&mut edit, &reader, &p)
+                } else {
+                    paint_over_the_map_with(&mut edit, &reader, &p)
+                }
+            };
+            drop(history);
+            if changes.cancelled {
+                return Outcome::Cancelled;
+            }
+            let level = &mut snapshot.dims[dim].levels[0];
+            level.encode_blobs(&changes.tiles);
+            let tiles = changes.tiles.iter().filter_map(|&pos| level.blob(pos).map(|b| (pos, b))).collect();
+            Outcome::Auto {
+                biomes,
+                tiles,
+                columns: changes.columns,
+                revision,
+                dim,
+            }
         })
     }
 

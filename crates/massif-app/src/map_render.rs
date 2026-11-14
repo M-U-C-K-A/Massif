@@ -906,6 +906,11 @@ impl MapCache {
         if tiles.is_empty() {
             return;
         }
+        // A pass over a whole big map: everything, at once.
+        if tiles.len() > 4096 {
+            self.invalidate_all();
+            return;
+        }
         let mut affected = HashSet::new();
         for &t in tiles {
             self.grids.remove(&t);

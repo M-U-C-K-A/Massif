@@ -146,12 +146,11 @@ pub enum HomeAction {
 struct Backdrop {
     key: (usize, usize, [u8; 4], bool),
     cells: TextureHandle,
-    grid: TextureHandle,
     pitch: usize,
     twinkles: Vec<Twinkle>,
 }
 
-/// A dot of the ridges that lights up now and then, each at its own pace.
+/// A star that twinkles, each at its own pace.
 #[derive(Debug, Clone, Copy)]
 struct Twinkle {
     col: u16,
@@ -324,9 +323,6 @@ impl Home {
         let column = Rect::from_min_max(pos2(area.center().x - width / 2.0, top), pos2(area.center().x + width / 2.0, area.bottom() - 16.0));
         let mut ui = ui.new_child(UiBuilder::new().id_salt("home column").max_rect(column).layout(egui::Layout::top_down(Align::Center)));
         let ui = &mut ui;
-        // A veil behind what is written, so that it reads over the dots;
-        // laid once the column is known.
-        let veil = ui.painter().add(egui::Shape::Noop);
         if let Some(logo) = &self.logo {
             ui.image((logo.id(), vec2(64.0, 64.0)));
         }
@@ -361,14 +357,6 @@ impl Home {
         }
         ui.add_space(6.0);
         ui.label(RichText::new("or drop a .massif, a .world or a height map on the window").size(11.5).color(pal.weak));
-        let bg = backdrop_fill(&pal);
-        let shade = egui::epaint::Shadow {
-            offset: [0, 0],
-            blur: 150,
-            spread: 24,
-            color: Color32::from_rgba_unmultiplied(bg.r(), bg.g(), bg.b(), if pal.dark { 242 } else { 232 }),
-        };
-        ui.painter().set(veil, shade.as_shape(ui.min_rect().expand2(vec2(40.0, 24.0)), 80));
     }
 
     fn new_map_card(&mut self, ui: &mut Ui, action: &mut Option<HomeAction>) {
@@ -595,57 +583,42 @@ impl Home {
 
     // ----------------------------------------------------------- backdrop --
 
-    /// Ridges in dots behind `rect`, made again when its size or the
-    /// accent colour changes.
+    /// The picture behind `rect` ([`nocturne`]), made again when the
+    /// window grows past it or the accent colour changes; its stars
+    /// twinkle.
     fn paint_backdrop(&mut self, ui: &Ui, rect: Rect) {
         let pal = Palette::of(ui);
         let bg = backdrop_fill(&pal);
         ui.painter().rect_filled(rect, 0, bg);
         let ppp = ui.ctx().pixels_per_point();
         let pitch = ((2.0 * ppp).round() as usize).max(3);
-        let cols = ((rect.width() * ppp) as usize / pitch).max(1);
-        let rows = ((rect.height() * ppp) as usize / pitch).max(1);
+        // Made a little larger than needed, so that resizing the window
+        // does not make it again at every step.
+        let bucket = |n: usize| n.div_ceil(32) * 32;
+        let cols = bucket(((rect.width() * ppp) as usize / pitch).max(1));
+        let rows = bucket(((rect.height() * ppp) as usize / pitch).max(1));
         let key = (cols, rows, pal.accent.to_array(), pal.dark);
         if self.backdrop.as_ref().is_none_or(|b| b.key != key || b.pitch != pitch) {
-            let nearest = egui::TextureOptions::NEAREST;
-            let (image, twinkles) = ridges(cols, rows, pal.accent, pal.dark, bg);
-            let cells = ui.ctx().load_texture("home backdrop", image, nearest);
-            let grid = ui.ctx().load_texture(
-                "home dots",
-                dots(pitch, bg),
-                egui::TextureOptions {
-                    wrap_mode: egui::TextureWrapMode::Repeat,
-                    ..nearest
-                },
-            );
-            self.backdrop = Some(Backdrop {
-                key,
-                cells,
-                grid,
-                pitch,
-                twinkles,
-            });
+            let (image, twinkles) = nocturne(cols, rows, pal.accent, pal.dark, bg);
+            let cells = ui.ctx().load_texture("home backdrop", image, egui::TextureOptions::NEAREST);
+            self.backdrop = Some(Backdrop { key, cells, pitch, twinkles });
         }
         if let Some(b) = &self.backdrop {
-            let shown = Rect::from_min_size(rect.min, vec2(cols as f32, rows as f32) * pitch as f32 / ppp);
+            let cell = pitch as f32 / ppp;
+            // Anchored to the bottom: the mountains stay, the sky gives way.
+            let size = vec2(cols as f32, rows as f32) * cell;
+            let shown = Rect::from_min_size(pos2(rect.left(), rect.bottom() - size.y), size);
             let painter = ui.painter_at(rect);
             painter.image(b.cells.id(), shown, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-            painter.image(b.grid.id(), shown, Rect::from_min_max(pos2(0.0, 0.0), pos2(cols as f32, rows as f32)), Color32::WHITE);
-            // Now and then a dot of the ridges lights up: barely, a few at
-            // a time.
             let t = ui.input(|i| i.time) as f32;
-            let cell = pitch as f32 / ppp;
-            let dot = (pitch - (pitch / 3).max(1)) as f32 / ppp;
             for tw in &b.twinkles {
-                let a = (0.5 + 0.5 * (t * tw.speed + tw.phase).sin()).powi(30);
-                if a < 0.03 {
-                    continue;
-                }
-                let r = Rect::from_min_size(shown.min + vec2(tw.col as f32 * cell, tw.row as f32 * cell), vec2(dot, dot));
-                let c = if pal.dark { theme::mix(tw.color, Color32::WHITE, 0.55) } else { theme::mix(tw.color, pal.accent, 0.6) };
-                painter.rect_filled(r, 0, Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), (a * 170.0) as u8));
+                let a = (0.5 + 0.5 * (t * tw.speed + tw.phase).sin()).powi(6);
+                let r = Rect::from_min_size(shown.min + vec2(tw.col as f32 * cell, tw.row as f32 * cell), vec2(cell, cell));
+                // From dim to bright and back.
+                let c = theme::scale(tw.color, 0.35 + 0.65 * a);
+                painter.rect_filled(r, 0, c);
             }
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(66));
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(80));
         }
     }
 }
@@ -980,83 +953,168 @@ pub fn preview_image(params: &GenParams, reg: &massif_core::Registry, n: usize) 
     egui::ColorImage::new([n, n], pixels)
 }
 
-/// The ridges behind the home screen, one pixel a dot: layers of mountains
-/// from far (high on the screen) to near, their crests bright, their sides
-/// fading into the dark, a sun going down behind them in the accent colour.
-/// Halftoned with an ordered dither, as an ASCII picture would be.
-fn ridges(cols: usize, rows: usize, accent: Color32, dark: bool, bg: Color32) -> (egui::ColorImage, Vec<Twinkle>) {
-    const LAYERS: usize = 8;
+/// The picture behind the home screen: a massif at dusk. Stars and the
+/// milky way over the glow of a sun gone down, in the accent colour; ranges
+/// of mountains in layers, the farthest pale in the haze, the nearest dark,
+/// lit along their crests and on the flanks that face the glow, snow on the
+/// highest; a valley in the middle, where the settings are written, and a
+/// tall peak to the right. Dithered in square cells (a 4×4 ordered dither,
+/// five shades) as a photograph would be.
+fn nocturne(cols: usize, rows: usize, accent: Color32, dark: bool, bg: Color32) -> (egui::ColorImage, Vec<Twinkle>) {
+    use rayon::prelude::*;
     let noise = massif_core::noise::Noise::new(0x6d61_7373);
-    let aspect = cols as f32 / rows.max(1) as f32;
-    let crests: Vec<Vec<f32>> = (0..LAYERS)
-        .map(|k| {
-            let kf = k as f32;
-            let base = 0.53 + 0.06 * kf;
-            let amp = 0.075 + 0.02 * kf;
-            let freq = 1.5 + 0.3 * kf as f64;
+    let a = cols as f64 / rows.max(1) as f64;
+    // Far to near: where the range stands, how tall it rises, how fine
+    // its peaks are, how pale the haze leaves it.
+    const LAYERS: [(f64, f64, f64, f32); 5] = [(0.75, 0.08, 3.4, 0.30), (0.80, 0.11, 2.5, 0.21), (0.86, 0.15, 1.8, 0.13), (0.92, 0.17, 1.25, 0.07), (1.0, 0.20, 0.9, 0.03)];
+    let n = LAYERS.len();
+    let crests: Vec<Vec<f64>> = LAYERS
+        .iter()
+        .enumerate()
+        .map(|(k, &(base, amp, freq, _))| {
+            let kf = k as f64;
             (0..cols)
                 .map(|i| {
-                    let u = (i as f64 + 0.5) / cols as f64 * aspect as f64 / 1.7;
-                    let r = noise.ridged(u * freq + kf as f64 * 7.31, kf as f64 * 3.7, 5, 2.0, 0.5) as f32;
-                    let f = 0.5 + 0.5 * noise.fbm(u * freq * 0.45 + 31.0, kf as f64 * 1.9, 3, 2.0, 0.5) as f32;
-                    base - amp * (0.6 * r + 0.55 * f)
+                    let u = (i as f64 + 0.5) / cols as f64;
+                    let x = u * a;
+                    let ridge = noise.ridged(x * freq + kf * 7.31, kf * 3.7, 6, 2.0, 0.5);
+                    let swell = 0.5 + 0.5 * noise.fbm(x * freq * 0.35 + 31.0, kf * 1.9, 3, 2.0, 0.5);
+                    let mut c = base - amp * (0.72 * ridge + 0.38 * swell);
+                    // A valley in the middle, under what is written; the
+                    // ranges rise on either side.
+                    c += (0.07 + 0.02 * kf) * (-((u - 0.47) / 0.33).powi(2)).exp();
+                    c -= 0.05 * (-((u - 0.0) / 0.1).powi(2)).exp();
+                    // The massif: a tall peak to the right, a lesser one to
+                    // the left, far off.
+                    if k == 2 {
+                        c -= 0.30 * (-((u - 0.88) / 0.07).powi(2)).exp() * (0.8 + 0.2 * ridge);
+                    }
+                    if k == 1 {
+                        c -= 0.07 * (-((u - 0.07) / 0.05).powi(2)).exp();
+                    }
+                    c
                 })
                 .collect()
         })
         .collect();
-    // The sun, right of the middle, just over the far ridges.
-    let (gx, gy, gr) = (0.80f32, 0.52f32, 0.34f32);
+    // The glow of the sun gone down, right of the middle, low.
+    let (gx, gy, gr) = (0.80, 0.76, 0.40);
+    let glow = |u: f64, v: f64| (-(((u - gx) * a).powi(2) + ((v - gy) * 1.5).powi(2)) / (gr * gr)).exp() as f32;
+    // The milky way, across the sky from the left, rising.
+    let band_dir = {
+        let (dx, dy) = (0.96 * a, -0.30);
+        let len = (dx * dx + dy * dy).sqrt();
+        (dx / len, dy / len)
+    };
     const BAYER: [[f32; 4]; 4] = [[0.0, 8.0, 2.0, 10.0], [12.0, 4.0, 14.0, 6.0], [3.0, 11.0, 1.0, 9.0], [15.0, 7.0, 13.0, 5.0]];
-    let ink = if dark { Color32::from_rgb(196, 198, 204) } else { Color32::from_rgb(60, 62, 70) };
-    let mut pixels = vec![bg; cols * rows];
-    let mut twinkles = Vec::new();
-    for (j, row) in pixels.chunks_mut(cols).enumerate() {
-        let v = (j as f32 + 0.5) / rows as f32;
-        for (i, px) in row.iter_mut().enumerate() {
-            let u = (i as f32 + 0.5) / cols as f32;
-            let d2 = ((u - gx) * aspect).powi(2) + (v - gy).powi(2);
-            let glow = (-d2 / (gr * gr)).exp();
-            let b = match (0..LAYERS).rev().find(|&k| crests[k][i] <= v) {
-                // The sky: only the haze of the sun.
-                None => glow * 0.8 * (1.0 - (gy - v).max(0.0) * 1.7).clamp(0.0, 1.0),
-                Some(k) => {
-                    let near = k as f32 / (LAYERS - 1) as f32;
-                    let depth = v - crests[k][i];
-                    let crest = (1.0 - depth / (0.004 + 0.004 * near)).clamp(0.0, 1.0);
-                    let side = 0.3 * (-depth / (0.028 + 0.03 * near)).exp() + 0.035;
-                    crest.max(side) * (0.5 + 0.5 * near) + glow * (0.5 * crest + 0.24)
+    const SHADES: f32 = 4.0;
+    let sky_ink = if dark { Color32::from_rgb(132, 142, 176) } else { Color32::from_rgb(110, 116, 132) };
+    let rock_ink = if dark { Color32::from_rgb(170, 170, 180) } else { Color32::from_rgb(58, 60, 68) };
+    let star_ink = Color32::from_rgb(236, 238, 246);
+    let rows_out: Vec<(Vec<Color32>, Vec<Twinkle>)> = (0..rows)
+        .into_par_iter()
+        .map(|j| {
+            let v = (j as f64 + 0.5) / rows as f64;
+            let mut row = vec![bg; cols];
+            let mut twinkles = Vec::new();
+            for (i, px) in row.iter_mut().enumerate() {
+                let u = (i as f64 + 0.5) / cols as f64;
+                let x = u * a;
+                let g = glow(u, v);
+                let hash = {
+                    let h = (i as u32).wrapping_mul(0x9e37_79b1) ^ (j as u32).wrapping_mul(0x85eb_ca77);
+                    h ^ (h >> 15)
+                };
+                let (light, ink, star) = match (0..n).rev().find(|&k| crests[k][i] <= v) {
+                    None => {
+                        // The sky: darker overhead, the glow low.
+                        // Calm where the settings are written.
+                        let calm = (-(((u - 0.5) / 0.3).powi(2) + ((v - 0.42) / 0.3).powi(2))).exp() as f32;
+                        let mut l = 0.012 + 0.08 * smooth(0.15, 0.74, v as f32) + 0.36 * g;
+                        let (px0, py0) = (x - 0.02 * a, v - 0.36);
+                        let along = px0 * band_dir.0 + py0 * band_dir.1;
+                        let across = (px0 - along * band_dir.0).hypot(py0 - along * band_dir.1);
+                        let band = (-(across / 0.11).powi(2)).exp() as f32;
+                        let clouds = 0.55 + 0.45 * noise.fbm(x * 3.1 + 5.0, v * 3.1, 4, 2.1, 0.55) as f32;
+                        let dust = (noise.ridged(x * 5.2 + 9.0, v * 5.2, 3, 2.0, 0.5) as f32 - 0.58).max(0.0) * 1.6;
+                        l += band * (0.12 * clouds - 0.07 * dust) * (1.0 - g) * (1.0 - 0.75 * calm);
+                        // Stars, thicker in the milky way, none in the glow.
+                        let fade = (1.0 - smooth(0.45, 0.72, v as f32)) * (1.0 - g * 1.4).max(0.0) * (1.0 - 0.8 * calm);
+                        let density = (0.003 + 0.02 * band) * fade;
+                        let star = ((hash & 0xffff) as f32) < density * 65536.0;
+                        let ink = theme::mix(sky_ink, accent, (g * 1.3).min(1.0));
+                        if !dark {
+                            // By day: a clear sky, the glow low over the ranges.
+                            let l = 0.42 * g + 0.06 * smooth(0.58, 0.8, v as f32);
+                            (l, ink, None)
+                        } else {
+                            (l, ink, star.then(|| 0.55 + 0.45 * ((hash >> 16) & 0xff) as f32 / 255.0))
+                        }
+                    }
+                    Some(k) => {
+                        let (base, amp, _, haze) = LAYERS[k];
+                        let near = k as f32 / (n - 1) as f32;
+                        let c = crests[k][i];
+                        let depth = (v - c) as f32;
+                        // Under the crest, the flank faces the glow where the
+                        // crest falls toward it; lower down, the rock of the
+                        // face, ribs and gullies lit from the same side.
+                        let (l0, l1) = (crests[k][i.saturating_sub(1)], crests[k][(i + 1).min(cols - 1)]);
+                        let fall = ((l1 - l0) * cols as f64 / 2.0) as f32;
+                        let crest_facing = (fall * 2.6).clamp(-1.0, 1.0);
+                        let face = |x: f64| noise.ridged(x * 26.0 + k as f64 * 17.0, v * 15.0 + k as f64 * 5.0, 4, 2.0, 0.5);
+                        let e = a / cols as f64;
+                        let rib = ((face(x + e) - face(x - e)) / (2.0 * e) * 0.012).clamp(-1.0, 1.0) as f32;
+                        let blend = (depth / 0.03).clamp(0.0, 1.0);
+                        let facing = crest_facing * (1.0 - blend) + rib * blend;
+                        let flank = (0.5 + 0.5 * facing) * (-depth / (0.06 + 0.08 * near)).exp();
+                        // Snow on the highest: above a line, ragged.
+                        let height = ((base - c) / amp) as f32;
+                        let ragged = 0.08 * noise.fbm(x * 40.0, v * 40.0, 2, 2.0, 0.5) as f32;
+                        let snow = if height > 0.55 && depth < (height - 0.55) * 0.09 + ragged.abs() * 0.3 { 0.28 * (0.6 + 0.4 * facing.max(0.0)) } else { 0.0 };
+                        let rim = if depth < 1.6 / rows as f32 { 0.32 * (0.35 + 0.65 * glow(u, c)) } else { 0.0 };
+                        let tone = haze * (0.5 + 0.4 * glow(u, c) + 0.45 * g);
+                        let l = tone + 0.3 * (1.0 - 0.5 * near) * flank + snow + rim;
+                        let ink = theme::mix(rock_ink, accent, (0.25 + 0.75 * glow(u, c)).min(1.0) * (0.55 + 0.45 * (1.0 - near)));
+                        (l, ink, None)
+                    }
+                };
+                if let Some(bright) = star {
+                    *px = if dark { theme::scale(star_ink, bright) } else { theme::mix(bg, rock_ink, 0.35 * bright) };
+                    if dark && (hash >> 24).is_multiple_of(3) {
+                        twinkles.push(Twinkle {
+                            col: i as u16,
+                            row: j as u16,
+                            color: star_ink,
+                            phase: (hash >> 8) as f32 / (1u32 << 24) as f32 * std::f32::consts::TAU,
+                            speed: 0.4 + 1.1 * ((hash >> 3) & 0xff) as f32 / 255.0,
+                        });
+                    }
+                    continue;
                 }
-            };
-            if b <= BAYER[j % 4][i % 4] / 16.0 * 0.5 + 0.02 {
-                continue;
+                let light = if dark { light } else { light * 0.85 };
+                let threshold = BAYER[j % 4][i % 4] / 16.0;
+                let q = ((light.clamp(0.0, 1.0) * SHADES + threshold).floor() / SHADES).min(1.0);
+                if q <= 0.0 {
+                    continue;
+                }
+                *px = if dark { theme::scale(ink, 0.18 + 0.82 * q) } else { theme::mix(bg, ink, 0.12 + 0.68 * q) };
             }
-            let b = b.min(1.0);
-            let tint = (glow * 2.2).min(1.0);
-            let colour = theme::mix(ink, accent, tint);
-            *px = if dark { theme::scale(colour, b) } else { theme::mix(bg, colour, b * 0.85) };
-            // A few of the brighter dots twinkle.
-            let hash = (i as u32).wrapping_mul(0x9e37_79b1) ^ (j as u32).wrapping_mul(0x85eb_ca77);
-            let hash = hash ^ (hash >> 15);
-            if b > 0.3 && hash.is_multiple_of(7) && twinkles.len() < 1600 {
-                twinkles.push(Twinkle {
-                    col: i as u16,
-                    row: j as u16,
-                    color: colour,
-                    phase: (hash >> 8) as f32 / (1u32 << 24) as f32 * std::f32::consts::TAU,
-                    speed: 0.45 + 0.9 * ((hash >> 3) & 0xff) as f32 / 255.0,
-                });
-            }
-        }
+            (row, twinkles)
+        })
+        .collect();
+    let mut pixels = Vec::with_capacity(cols * rows);
+    let mut twinkles = Vec::new();
+    for (row, t) in rows_out {
+        pixels.extend(row);
+        twinkles.extend(t);
     }
     (egui::ColorImage::new([cols, rows], pixels), twinkles)
 }
 
-/// One dot of the backdrop: the dot clear, the gap around it in the
-/// background colour; tiled over the picture of the ridges.
-fn dots(pitch: usize, bg: Color32) -> egui::ColorImage {
-    let dot = pitch - (pitch / 3).max(1);
-    let pixels = (0..pitch * pitch).map(|k| if k % pitch < dot && k / pitch < dot { Color32::TRANSPARENT } else { bg }).collect();
-    egui::ColorImage::new([pitch, pitch], pixels)
+fn smooth(a: f32, b: f32, x: f32) -> f32 {
+    let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 /// A seed from the clock.

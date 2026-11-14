@@ -415,6 +415,39 @@ impl Level {
         }
     }
 
+    /// Decode the cold tiles among `positions`, in parallel, and keep them
+    /// decoded as they are: reading them again then costs nothing, and so
+    /// does cooling them down again (their compressed form is kept).
+    pub fn warm(&mut self, positions: &[TilePos]) {
+        let kind = self.kind;
+        let cold: Vec<(TilePos, Blob)> = positions
+            .iter()
+            .filter_map(|p| match self.tiles.get(p) {
+                Some(Slot::Cold(blob)) => Some((*p, blob.clone())),
+                _ => None,
+            })
+            .collect();
+        let decoded: Vec<(TilePos, Blob, Box<Tile>)> = cold
+            .into_par_iter()
+            .map(|(pos, blob)| {
+                let tile = Box::new(decode_or_blank(&blob, kind, pos));
+                (pos, blob, tile)
+            })
+            .collect();
+        for (pos, blob, tile) in decoded {
+            self.clock += 1;
+            self.tiles.insert(
+                pos,
+                Slot::Hot {
+                    tile,
+                    blob: Some(blob),
+                    stamp: self.clock,
+                },
+            );
+            self.hot += 1;
+        }
+    }
+
     /// Cool the least recently edited tiles until at most `max_hot` stay hot.
     pub fn trim(&mut self, max_hot: usize) {
         if self.hot <= max_hot {

@@ -314,10 +314,19 @@ impl TileHook<'_> {
     }
 }
 
-fn encode(raw: RawTile) -> (Handle, TilePos, Blob) {
+fn encode(raw: RawTile, beaches: &crate::terrains::Beaches) -> (Handle, TilePos, Blob) {
     let mut tile = Tile::ground(0.0, 0, NO_FLUID);
+    let mut terrain = raw.terrain;
+    if terrain.contains(&crate::terrains::BEACH_MARK) {
+        let (ox, oz) = raw.pos.origin();
+        for (i, t) in terrain.iter_mut().enumerate() {
+            if *t == crate::terrains::BEACH_MARK {
+                *t = beaches.at(ox + (i & 127) as i32, oz + (i >> 7) as i32, raw.top[i]);
+            }
+        }
+    }
     tile.top = Plane::from_vec(raw.top);
-    tile.terrain = Plane::from_vec(raw.terrain);
+    tile.terrain = Plane::from_vec(terrain);
     tile.fluid = Plane::from_vec(raw.fluid);
     if let Some(b) = raw.biome {
         tile.biome = Plane::from_vec(b);
@@ -399,6 +408,7 @@ pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Re
     let converted: Mutex<HashMap<Handle, (TilePos, Blob)>> = Mutex::new(HashMap::new());
     let mut histogram = [0u64; 256];
     let mut damaged_tiles = 0;
+    let beaches = crate::terrains::Beaches::new(&mapper.registry);
 
     // In place: the parse runs on this thread (whose stack the caller
     // chose) while tiles are encoded on the pool.
@@ -411,12 +421,13 @@ pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Re
             damaged: 0,
         };
         let converted = &converted;
+        let beaches = &beaches;
         let result = {
             let hook_ref = &mut hook;
             parser.set_hook(Box::new(move |arena: &mut Arena, h: Handle| {
                 if let Some(raw) = hook_ref.extract(arena, h) {
                     s.spawn(move |_| {
-                        let (handle, pos, blob) = encode(raw);
+                        let (handle, pos, blob) = encode(raw, beaches);
                         converted.lock().expect("no panics while holding the lock").insert(handle, (pos, blob));
                         progress.tiles.fetch_add(1, Ordering::Relaxed);
                     });

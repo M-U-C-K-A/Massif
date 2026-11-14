@@ -1672,7 +1672,7 @@ impl TerrainView {
                     ui.add(Field::new(&mut r.cloud_size, 20.0..=3000.0).suffix(" blocks").max_decimals(0));
                 });
                 row(ui, "Shape", |ui| {
-                    ui.add(egui::DragValue::new(&mut r.cloud_seed).range(0..=999));
+                    crate::widgets::drag(ui, egui::DragValue::new(&mut r.cloud_seed).range(0..=999));
                 });
             }
         });

@@ -229,7 +229,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
         }
         Tool::Flatten | Tool::SetHeight => {
             slider_row(ui, "Height", |ui| {
-                ui.add(egui::DragValue::new(&mut tools.target_height).speed(0.5).range(doc.dimension().min_y..=doc.dimension().max_y))
+                crate::widgets::drag(ui, egui::DragValue::new(&mut tools.target_height).speed(0.5).range(doc.dimension().min_y..=doc.dimension().max_y))
             });
             hint(ui, "Alt-click on the map to pick a height.");
         }
@@ -279,8 +279,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
                     })
                     .clicked()
                 {
-                    let changed = if biomes { doc.auto_biome(&tools.auto) } else { doc.auto_paint(&tools.auto) };
-                    tools.auto_done = Some((biomes, changed));
+                    tools.run_auto = Some(biomes);
                 }
                 if ui
                     .button(theme::with_icon(Icon::Settings2, "Rules…"))
@@ -357,7 +356,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
         }
         Tool::Flood | Tool::Water => {
             slider_row(ui, "Water level", |ui| {
-                ui.add(egui::DragValue::new(&mut tools.water_level).range(doc.dimension().min_y as i16..=doc.dimension().max_y as i16))
+                crate::widgets::drag(ui, egui::DragValue::new(&mut tools.water_level).range(doc.dimension().min_y as i16..=doc.dimension().max_y as i16))
             });
             ui.horizontal(|ui| {
                 ui.add_space(76.0);
@@ -378,8 +377,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             match tools.anchor {
                 AnchorMode::AboveGround => {
                     slider_row(ui, "Offset", |ui| {
-                        ui.add(
-                            egui::DragValue::new(&mut tools.slab_offset)
+                        crate::widgets::drag(ui, egui::DragValue::new(&mut tools.slab_offset)
                                 .speed(0.5)
                                 .suffix(" blocks"),
                         )
@@ -388,7 +386,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
                 }
                 AnchorMode::Absolute => {
                     slider_row(ui, "Height", |ui| {
-                        ui.add(egui::DragValue::new(&mut tools.slab_height).speed(0.5).range(doc.dimension().min_y..=doc.dimension().max_y))
+                        crate::widgets::drag(ui, egui::DragValue::new(&mut tools.slab_height).speed(0.5).range(doc.dimension().min_y..=doc.dimension().max_y))
                     });
                 }
             }
@@ -740,7 +738,7 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
             f.above = above.then_some(f.below.map_or(64, |b| b.min(64)));
         }
         let mut v = f.above.unwrap_or(min_y);
-        if ui.add_enabled(above, egui::DragValue::new(&mut v).range(min_y..=max_y)).changed() {
+        if crate::widgets::drag_enabled(ui, above, egui::DragValue::new(&mut v).range(min_y..=max_y)).changed() {
             f.above = Some(v);
         }
         ui.add_space(16.0);
@@ -749,7 +747,7 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
             f.below = below.then_some(f.above.map_or(100, |a| a.max(100)));
         }
         let mut v = f.below.unwrap_or(max_y - 1);
-        if ui.add_enabled(below, egui::DragValue::new(&mut v).range(min_y..=max_y)).changed() {
+        if crate::widgets::drag_enabled(ui, below, egui::DragValue::new(&mut v).range(min_y..=max_y)).changed() {
             f.below = Some(v);
         }
     });
@@ -766,9 +764,7 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
     ui.horizontal(|ui| {
         crate::widgets::checkbox(ui, &mut f.slope_above, "above");
         crate::widgets::checkbox(ui, &mut f.slope_below, "below");
-        ui.add_enabled(
-            f.slope_above || f.slope_below,
-            egui::DragValue::new(&mut f.slope).range(0.0..=90.0).speed(0.5).suffix("°"),
+        crate::widgets::drag_enabled(ui, f.slope_above || f.slope_below, egui::DragValue::new(&mut f.slope).range(0.0..=90.0).speed(0.5).suffix("°"),
         );
     });
 
@@ -779,9 +775,7 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
             crate::widgets::checkbox(ui, &mut f.facing_on, "only slopes facing")
                 .on_hover_text("Only slopes facing this way.");
             ui.horizontal(|ui| {
-                ui.add_enabled(
-                    f.facing_on,
-                    egui::DragValue::new(&mut f.facing)
+                crate::widgets::drag_enabled(ui, f.facing_on, egui::DragValue::new(&mut f.facing)
                         .range(0.0..=360.0)
                         .speed(1.0)
                         .max_decimals(0)
@@ -789,7 +783,7 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
                         .custom_formatter(|v, _| format!("{} {:.0}", compass(v as f32), v)),
                 );
                 ui.label("±");
-                ui.add_enabled(f.facing_on, egui::DragValue::new(&mut f.facing_spread).range(5.0..=180.0).speed(1.0).max_decimals(0).suffix("°"));
+                crate::widgets::drag_enabled(ui, f.facing_on, egui::DragValue::new(&mut f.facing_spread).range(5.0..=180.0).speed(1.0).max_decimals(0).suffix("°"));
             });
             ui.horizontal(|ui| {
                 if ui
@@ -820,9 +814,9 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
     });
     let on = f.hollows || f.bumps;
     ui.horizontal(|ui| {
-        ui.add_enabled(on, egui::DragValue::new(&mut f.depth).range(0.1..=64.0).speed(0.1).max_decimals(1));
+        crate::widgets::drag_enabled(ui, on, egui::DragValue::new(&mut f.depth).range(0.1..=64.0).speed(0.1).max_decimals(1));
         ui.label("blocks deep");
-        ui.add_enabled(on, egui::DragValue::new(&mut f.radius).range(1..=64));
+        crate::widgets::drag_enabled(ui, on, egui::DragValue::new(&mut f.radius).range(1..=64));
         ui.label("blocks around");
     });
 }
@@ -1074,7 +1068,7 @@ fn object_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, block
                 ui.add(egui::Label::new(RichText::new(&def.name).strong()).truncate()).on_hover_text(&def.source);
                 ui.label(RichText::new(format!("{} × {} × {} · {} blocks", def.size[0], def.size[1], def.size[2], def.count())).size(11.0).color(pal.weak));
                 ui.horizontal(|ui| {
-                    ui.add(egui::DragValue::new(weight).range(1..=1000).speed(0.2)).on_hover_text("Weight: how often it stands against the others");
+                    crate::widgets::drag(ui, egui::DragValue::new(weight).range(1..=1000).speed(0.2)).on_hover_text("Weight: how often it stands against the others");
                     ui.label(RichText::new(format!("{:.0}%", *weight as f32 * 100.0 / total)).size(11.0).color(pal.weak));
                     if ui.add(egui::Button::new(theme::glyph(Icon::X).to_string()).frame(false).small()).on_hover_text("Take it out of the layer").clicked() {
                         remove = Some(row);
@@ -1250,9 +1244,9 @@ fn cover_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks
         let tip = "How many blocks high it grows (cane, cactus: 1 to 3). Tall plants are always two.";
         ui.add_sized([72.0, 18.0], egui::Label::new("Height")).on_hover_text(tip);
         let (mut lo, mut hi) = (def.height[0] as i32, def.height[1] as i32);
-        ui.add(egui::DragValue::new(&mut lo).range(1..=16)).on_hover_text(tip);
+        crate::widgets::drag(ui, egui::DragValue::new(&mut lo).range(1..=16)).on_hover_text(tip);
         ui.label(RichText::new("to").color(pal.weak));
-        ui.add(egui::DragValue::new(&mut hi).range(1..=16)).on_hover_text(tip);
+        crate::widgets::drag(ui, egui::DragValue::new(&mut hi).range(1..=16)).on_hover_text(tip);
         ui.label(RichText::new("blocks").color(pal.weak));
         def.height = [lo as u8, hi.max(lo) as u8];
     });
@@ -1283,7 +1277,7 @@ fn cover_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks
                 ui.set_width(118.0);
                 ui.add(egui::Label::new(RichText::new(plant_name(state)).color(if known { pal.text } else { pal.danger })).truncate()).on_hover_text(tip);
             });
-            ui.add(egui::DragValue::new(weight).range(1..=1000).speed(0.2)).on_hover_text("Weight: how often it grows against the others");
+            crate::widgets::drag(ui, egui::DragValue::new(weight).range(1..=1000).speed(0.2)).on_hover_text("Weight: how often it grows against the others");
             ui.label(RichText::new(format!("{:.0}%", *weight as f32 * 100.0 / total)).size(11.0).color(pal.weak));
             if ui.add(egui::Button::new(theme::glyph(Icon::X).to_string()).frame(false).small()).on_hover_text("Take it out").clicked() {
                 remove = Some(k);
@@ -1404,7 +1398,7 @@ fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &Document, blocks: 
     });
     ui.horizontal(|ui| {
         ui.add_sized([72.0, 18.0], egui::Label::new("Seed"));
-        ui.add(egui::DragValue::new(&mut p.seed));
+        crate::widgets::drag(ui, egui::DragValue::new(&mut p.seed));
         if ui.small_button(theme::glyph(Icon::Dices).to_string()).on_hover_text("Another layout").clicked() {
             p.seed = p.seed.wrapping_mul(1_103_515_245).wrapping_add(12_345) % 100_000;
         }
@@ -1427,7 +1421,7 @@ fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &Document, blocks: 
                     }
                 }
             });
-            ui.add(egui::DragValue::new(weight).range(0.0..=100.0).speed(0.05).max_decimals(1));
+            crate::widgets::drag(ui, egui::DragValue::new(weight).range(0.0..=100.0).speed(0.05).max_decimals(1));
             ui.label(RichText::new(format!("{:.0}%", weight.max(0.0) / total * 100.0)).size(11.0).color(Palette::of(ui).weak));
             if ui.small_button(theme::glyph(Icon::X).to_string()).clicked() {
                 remove = Some(k);
@@ -1486,15 +1480,15 @@ pub fn land_rules(ui: &mut Ui, rules: &mut massif_core::auto::BiomeRules, reg: &
     egui::Grid::new("land thresholds").num_columns(4).spacing([10.0, 4.0]).show(ui, |ui| {
         let blocks = |ui: &mut Ui, label: &str, v: &mut f32, hover: &str| {
             ui.label(label).on_hover_text(hover);
-            ui.add(egui::DragValue::new(v).range(0.0..=384.0).speed(0.5).max_decimals(0).suffix(" blocks"));
+            crate::widgets::drag(ui, egui::DragValue::new(v).range(0.0..=384.0).speed(0.5).max_decimals(0).suffix(" blocks"));
         };
         blocks(ui, "Deep water from", &mut rules.deep_water, "Water at least this deep is deep water");
         ui.label("Rivers up to").on_hover_text("Water with a bank on both sides within this width is a river");
-        ui.add(egui::DragValue::new(&mut rules.river_width).range(4..=64).suffix(" blocks wide"));
+        crate::widgets::drag(ui, egui::DragValue::new(&mut rules.river_width).range(4..=64).suffix(" blocks wide"));
         ui.end_row();
         blocks(ui, "Shores up to", &mut rules.shore_height, "Ground at most this high over the water beside it is its shore");
         ui.label("Cliffs from").on_hover_text("Slopes at least this steep are rock, whatever grows on them");
-        ui.add(egui::DragValue::new(&mut rules.steep).range(10.0..=85.0).speed(0.5).max_decimals(0).suffix("°"));
+        crate::widgets::drag(ui, egui::DragValue::new(&mut rules.steep).range(10.0..=85.0).speed(0.5).max_decimals(0).suffix("°"));
         ui.end_row();
         blocks(ui, "Hills from", &mut rules.hills, "Height over the sea where the hills begin");
         blocks(ui, "Mountains from", &mut rules.mountains, "Height over the sea where the mountains begin");
@@ -1537,7 +1531,7 @@ pub fn paint_rules(ui: &mut Ui, rules: &mut massif_core::auto::PaintRules, reg: 
     let pal = Palette::of(ui);
     ui.horizontal(|ui| {
         ui.label("Cliffs from").on_hover_text("Slopes at least this steep get the cliffs' terrain");
-        ui.add(egui::DragValue::new(&mut rules.steep).range(10.0..=85.0).speed(0.5).max_decimals(0).suffix("°"));
+        crate::widgets::drag(ui, egui::DragValue::new(&mut rules.steep).range(10.0..=85.0).speed(0.5).max_decimals(0).suffix("°"));
         ui.add_space(12.0);
         crate::widgets::checkbox(ui, &mut rules.read_the_land, "where the biome is automatic, paint as the land is")
             .on_hover_text("Unset biomes count as automatic");
@@ -2262,10 +2256,10 @@ pub fn info_panel(ui: &mut Ui, doc: &mut Document, hover: Option<(i32, i32)>, ca
         changed |= ui.text_edit_singleline(&mut meta.name).changed();
         ui.end_row();
         ui.label("Seed");
-        changed |= ui.add(egui::DragValue::new(&mut meta.seed)).changed();
+        changed |= crate::widgets::drag(ui, egui::DragValue::new(&mut meta.seed)).changed();
         ui.end_row();
         ui.label("Sea level");
-        if ui.add(egui::DragValue::new(&mut meta.sea_level).range(bottom..=top - 1)).changed() {
+        if crate::widgets::drag(ui, egui::DragValue::new(&mut meta.sea_level).range(bottom..=top - 1)).changed() {
             changed = true;
             affects_map = true;
         }
@@ -2273,7 +2267,7 @@ pub fn info_panel(ui: &mut Ui, doc: &mut Document, hover: Option<(i32, i32)>, ca
         ui.label("Spawn");
         ui.horizontal(|ui| {
             for v in &mut meta.spawn {
-                changed |= ui.add(egui::DragValue::new(v)).changed();
+                changed |= crate::widgets::drag(ui, egui::DragValue::new(v)).changed();
             }
         });
         ui.end_row();

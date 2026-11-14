@@ -8,8 +8,8 @@
 //! Both tables are settings, to be changed.
 
 use crate::compose::{Span, TileStack};
-use crate::coords::{BlockRect, TilePos, local_index};
-use crate::filter::{SLOPE_REACH, trend_slope};
+use crate::coords::{BlockRect, TILE_SIZE, TilePos, local_index};
+use crate::filter::SLOPE_REACH;
 use crate::history::Edit;
 use crate::registry::{BiomeId, Registry, TerrainId};
 use crate::tile::NO_FLUID;
@@ -17,6 +17,7 @@ use crate::world::Dimension;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// A kind of land the automatic biomes tell apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -376,6 +377,48 @@ pub struct Reader<'a> {
     biome_of: Vec<Option<BiomeId>>,
     /// Ground, cliffs and underwater terrain of each biome of the registry.
     paint_of: Vec<[Option<TerrainId>; 3]>,
+    /// The terrain the map was filled with (see [`base_terrain`]): read as
+    /// grass, from the shape of the land, but at the water's edge.
+    base: Option<u16>,
+}
+
+/// The terrain a map was filled with, when one other than grass covers
+/// nearly all of its dry ground (as far as a sample of its tiles tells): a
+/// ground nobody chose, which says nothing about the land. A map of sand
+/// all over is no desert, nor one of stone all mountains.
+pub fn base_terrain(dim: &Dimension, reg: &Registry) -> Option<TerrainId> {
+    let mut tiles: Vec<TilePos> = dim.ground().positions().collect();
+    if tiles.is_empty() {
+        return None;
+    }
+    tiles.sort_unstable_by_key(|p| (p.z, p.x));
+    let step = (tiles.len() / 256).max(1);
+    let counts: HashMap<u16, usize> = tiles
+        .par_iter()
+        .step_by(step)
+        .map(|&pos| {
+            let mut counts: HashMap<u16, usize> = HashMap::new();
+            if let Some(tile) = dim.ground().view(pos) {
+                for i in (0..crate::coords::TILE_AREA).step_by(61) {
+                    let fluid = tile.fluid.get(i);
+                    if fluid != NO_FLUID && fluid as f32 > tile.top.get(i) {
+                        continue;
+                    }
+                    *counts.entry(tile.terrain.get(i)).or_default() += 1;
+                }
+            }
+            counts
+        })
+        .reduce(HashMap::new, |mut a, b| {
+            for (k, v) in b {
+                *a.entry(k).or_default() += v;
+            }
+            a
+        });
+    let total: usize = counts.values().sum();
+    let (id, n) = counts.into_iter().max_by_key(|c| c.1)?;
+    let grass = Ground::of_terrains(reg).get(id as usize) == Some(&Ground::Grass);
+    (!grass && total >= 100 && n * 100 >= total * 85).then_some(TerrainId(id))
 }
 
 /// One column, as the automatic tools see it.
@@ -400,10 +443,22 @@ pub struct Survey {
     /// For dry ones: the level of the water a few blocks away, if any.
     river: Vec<bool>,
     water_near: Vec<f32>,
+    /// Running sums over the grid (one row and one column more than it) of
+    /// the dry columns and of the sandy ones among them.
+    dry_sum: Vec<u32>,
+    sand_sum: Vec<u32>,
+    /// Running sums of what the slope is fitted from (see
+    /// [`Survey::slope`]): columns, `x`, `z`, height, `x·height`,
+    /// `z·height`, the coordinates from the grid's corner.
+    moments: Vec<[f64; 6]>,
 }
 
 /// Blocks from the water within which ground can be its shore.
 const SHORE_REACH: i32 = 16;
+/// Sand is a desert when this share of the dry ground within this many
+/// blocks is sand too: a patch of sand in a plain is no desert.
+const DESERT_REACH: i32 = 48;
+const DESERT_SHARE: f32 = 0.7;
 /// Sand is a beach up to this many times the shore's height: beaches are
 /// wider, and rise higher, than a rocky shore.
 const BEACH_RISE: f32 = 2.5;
@@ -426,17 +481,24 @@ impl<'a> Reader<'a> {
             grounds: Ground::of_terrains(reg),
             biome_of,
             paint_of,
+            base: None,
         }
+    }
+
+    /// The same, the map filled with `base` (see [`base_terrain`]).
+    pub fn with_base(mut self, base: Option<TerrainId>) -> Self {
+        self.base = base.map(|t| t.0);
+        self
     }
 
     /// The margin a survey needs around what it reads.
     fn margin(&self) -> i32 {
-        self.rules.land.river_width.clamp(4, 64).max(SHORE_REACH).max(SLOPE_REACH)
+        self.rules.land.river_width.clamp(4, 64).max(SHORE_REACH).max(SLOPE_REACH).max(DESERT_REACH)
     }
 
     /// Read the columns of `rect`.
     pub fn survey(&self, dim: &Dimension, rect: BlockRect) -> Survey {
-        Survey::gather(dim, rect, self.margin(), self.rules.land.river_width.clamp(4, 64))
+        Survey::gather(dim, rect, self.margin(), self.rules.land.river_width.clamp(4, 64), &self.grounds)
     }
 
     /// The kind of land of column `(x, z)`; `None` off the map.
@@ -452,13 +514,16 @@ impl<'a> Reader<'a> {
                 Land::Water
             });
         }
-        let ground = self.grounds.get(c.terrain as usize).copied().unwrap_or(Ground::Grass);
-        let slope = trend_slope(|dx, dz| s.col(x + dx, z + dz).map(|n| n.height), SLOPE_REACH, 1.0);
+        let own = self.grounds.get(c.terrain as usize).copied().unwrap_or(Ground::Grass);
+        // The ground the map was filled with is read from the shape of the
+        // land, as grass; at the water's edge it makes its own shore.
+        let ground = if self.base == Some(c.terrain) { Ground::Grass } else { own };
+        let slope = s.slope(x, z);
         let steep = slope >= r.steep;
         let near = s.water_near[s.index(x, z)];
         if !near.is_nan() {
             let rise = c.height - near;
-            match ground {
+            match own {
                 Ground::Sand if rise <= r.shore_height * BEACH_RISE => {
                     return Some(if steep { Land::StonyShore } else { Land::Beach });
                 }
@@ -470,8 +535,22 @@ impl<'a> Reader<'a> {
         }
         let over = c.height - self.sea;
         let rocky = || if over >= r.mountains { Land::StonyPeaks } else { Land::RockyHills };
+        let grassland = || {
+            if steep {
+                rocky()
+            } else if over >= r.mountains {
+                Land::Highlands
+            } else if over >= r.hills {
+                Land::Hills
+            } else {
+                Land::Plains
+            }
+        };
         Some(match ground {
-            Ground::Sand => Land::Desert,
+            // Sand away from the water is a desert where sand is all
+            // around; a patch of it in a plain is the plain.
+            Ground::Sand if s.sandy(x, z) >= DESERT_SHARE => Land::Desert,
+            Ground::Sand => grassland(),
             Ground::RedSand => Land::Badlands,
             Ground::Mycelium => Land::Mushroom,
             Ground::Mud => Land::Swamp,
@@ -487,16 +566,7 @@ impl<'a> Reader<'a> {
                 }
             }
             Ground::Rock => rocky(),
-            Ground::Grass if steep => rocky(),
-            Ground::Grass => {
-                if over >= r.mountains {
-                    Land::Highlands
-                } else if over >= r.hills {
-                    Land::Hills
-                } else {
-                    Land::Plains
-                }
-            }
+            Ground::Grass => grassland(),
         })
     }
 
@@ -518,103 +588,220 @@ impl<'a> Reader<'a> {
         if c.depth > 0.0 {
             return underwater;
         }
-        let slope = trend_slope(|dx, dz| s.col(x + dx, z + dz).map(|n| n.height), SLOPE_REACH, 1.0);
+        let slope = s.slope(x, z);
         if slope >= self.rules.paint.steep { cliffs.or(ground) } else { ground }
     }
 }
 
 impl Survey {
-    fn gather(dim: &Dimension, rect: BlockRect, margin: i32, river_width: i32) -> Self {
+    fn gather(dim: &Dimension, rect: BlockRect, margin: i32, river_width: i32, grounds: &[Ground]) -> Self {
         let outer = rect.expand(margin);
         let (w, d) = (outer.width() as usize, outer.depth() as usize);
-        let tiles: Vec<TilePos> = outer.tiles().collect();
-        let parts: Vec<Vec<(usize, Col)>> = tiles
-            .par_iter()
-            .map(|&pos| {
-                let Some(stack) = TileStack::new(dim, pos, false) else { return Vec::new() };
-                let clip = outer.intersect(&pos.rect());
+        let mut cols: Vec<Option<Col>> = vec![None; w * d];
+        // The grid in bands, one per row of tiles, filled in parallel, each
+        // tile's planes read in one go.
+        {
+            let mut bands: Vec<(i32, &mut [Option<Col>])> = Vec::new();
+            let mut rest: &mut [Option<Col>] = &mut cols;
+            let mut z = outer.z0;
+            while z < outer.z1 {
+                let end = ((z.div_euclid(TILE_SIZE) + 1) * TILE_SIZE).min(outer.z1);
+                let (band, tail) = std::mem::take(&mut rest).split_at_mut((end - z) as usize * w);
+                bands.push((z, band));
+                rest = tail;
+                z = end;
+            }
+            bands.into_par_iter().for_each(|(z0, band)| {
+                let tz = z0.div_euclid(TILE_SIZE);
                 let mut spans: Vec<Span> = Vec::new();
-                let mut out = Vec::with_capacity((clip.width() * clip.depth()).max(0) as usize);
-                let ground = stack.ground();
-                for z in clip.z0..clip.z1 {
-                    for x in clip.x0..clip.x1 {
-                        let cell = local_index(x, z);
-                        let Some((height, terrain)) = stack.surface(cell, &mut spans) else { continue };
-                        let fluid = ground.fluid.get(cell);
-                        let level = if fluid == NO_FLUID { f32::NAN } else { fluid as f32 };
-                        let depth = if level > height { level - height } else { 0.0 };
-                        let col = Col {
-                            height,
-                            terrain: terrain.0,
-                            biome: ground.biome.get(cell),
-                            depth,
-                            level,
-                        };
-                        out.push(((z - outer.z0) as usize * w + (x - outer.x0) as usize, col));
+                for tx in outer.x0.div_euclid(TILE_SIZE)..=(outer.x1 - 1).div_euclid(TILE_SIZE) {
+                    let pos = TilePos::new(tx, tz);
+                    let Some(stack) = TileStack::new(dim, pos, false) else { continue };
+                    let clip = outer.intersect(&pos.rect());
+                    let ground = stack.ground();
+                    // The ground alone (most tiles): its planes as they are.
+                    let flat = stack.is_ground_only().then(|| (ground.top.dense(), ground.terrain.dense()));
+                    let (fluids, biomes) = (ground.fluid.dense(), ground.biome.dense());
+                    for z in clip.z0..clip.z1 {
+                        let row = &mut band[(z - z0) as usize * w..][..w];
+                        for x in clip.x0..clip.x1 {
+                            let cell = local_index(x, z);
+                            let (height, terrain) = match &flat {
+                                Some((tops, terrains)) => (tops[cell], TerrainId(terrains[cell])),
+                                None => match stack.surface(cell, &mut spans) {
+                                    Some(s) => s,
+                                    None => continue,
+                                },
+                            };
+                            let fluid = fluids[cell];
+                            let level = if fluid == NO_FLUID { f32::NAN } else { fluid as f32 };
+                            let depth = if level > height { level - height } else { 0.0 };
+                            row[(x - outer.x0) as usize] = Some(Col {
+                                height,
+                                terrain: terrain.0,
+                                biome: biomes[cell],
+                                depth,
+                                level,
+                            });
+                        }
                     }
                 }
-                out
-            })
-            .collect();
-        let mut cols = vec![None; w * d];
-        for part in parts {
-            for (i, c) in part {
-                cols[i] = Some(c);
-            }
+            });
         }
+
         // Along every row and every column of the grid: how far the nearest
         // bank is each way (for the water), and the level of the nearest
-        // water (for the ground).
-        let wet = |c: &Option<Col>| c.is_some_and(|c| c.depth > 0.0);
-        let dry = |c: &Option<Col>| c.is_some_and(|c| c.depth <= 0.0);
-        let cap = river_width + 1;
-        let mut banks = vec![[cap; 4]; w * d];
-        let mut water_near = vec![f32::NAN; w * d];
-        let mut near_dist = vec![i32::MAX; w * d];
-        let mut sweep = |start: usize, step: isize, len: usize, side: usize| {
-            let (mut to_bank, mut to_water, mut level) = (cap, i32::MAX, f32::NAN);
-            for k in 0..len {
-                let i = (start as isize + step * k as isize) as usize;
-                let c = &cols[i];
-                if dry(c) {
-                    to_bank = 0;
-                } else {
-                    to_bank = (to_bank + 1).min(cap);
-                }
-                banks[i][side] = to_bank;
-                if wet(c) {
-                    to_water = 0;
-                    level = c.map_or(f32::NAN, |c| c.level);
-                } else {
-                    to_water = to_water.saturating_add(1);
-                }
-                if to_water <= SHORE_REACH && to_water < near_dist[i] {
-                    near_dist[i] = to_water;
-                    water_near[i] = level;
-                }
-            }
-        };
-        for j in 0..d {
-            sweep(j * w, 1, w, 0);
-            sweep(j * w + w - 1, -1, w, 1);
-        }
-        for i in 0..w {
-            sweep(i, w as isize, d, 2);
-            sweep((d - 1) * w + i, -(w as isize), d, 3);
-        }
-        let river = (0..w * d)
-            .map(|i| {
-                let b = banks[i];
-                wet(&cols[i]) && (b[0] + b[1] <= river_width || b[2] + b[3] <= river_width)
+        // water (for the ground). Rows one by one; columns all together, a
+        // row at a time, so that the grid is always read in order.
+        const NONE: u8 = 0;
+        const DRY: u8 = 1;
+        const WET: u8 = 2;
+        let state: Vec<u8> = cols
+            .iter()
+            .map(|c| match c {
+                None => NONE,
+                Some(c) if c.depth > 0.0 => WET,
+                Some(_) => DRY,
             })
             .collect();
+        let level_at = |i: usize| cols[i].map_or(f32::NAN, |c| c.level);
+        let cap = river_width + 1;
+        // Banks: the distances each way, summed per axis.
+        let mut across = vec![0i32; w * d];
+        let mut along = vec![0i32; w * d];
+        let mut water_near = vec![f32::NAN; w * d];
+        let mut near_dist = vec![i32::MAX; w * d];
+        #[inline]
+        fn step(s: u8, level: f32, bank: &mut i32, water: &mut i32, lvl: &mut f32, cap: i32) {
+            *bank = if s == DRY { 0 } else { (*bank + 1).min(cap) };
+            if s == WET {
+                *water = 0;
+                *lvl = level;
+            } else {
+                *water = water.saturating_add(1);
+            }
+        }
+        across
+            .par_chunks_mut(w)
+            .zip(water_near.par_chunks_mut(w))
+            .zip(near_dist.par_chunks_mut(w))
+            .enumerate()
+            .for_each(|(z, ((banks, near), dist))| {
+                for backward in [false, true] {
+                    let (mut bank, mut water, mut lvl) = (cap, i32::MAX, f32::NAN);
+                    for k in 0..w {
+                        let x = if backward { w - 1 - k } else { k };
+                        let i = z * w + x;
+                        step(state[i], level_at(i), &mut bank, &mut water, &mut lvl, cap);
+                        banks[x] += bank;
+                        if water <= SHORE_REACH && water < dist[x] {
+                            dist[x] = water;
+                            near[x] = lvl;
+                        }
+                    }
+                }
+            });
+        for upward in [false, true] {
+            let (mut bank, mut water, mut lvl) = (vec![cap; w], vec![i32::MAX; w], vec![f32::NAN; w]);
+            for k in 0..d {
+                let z = if upward { d - 1 - k } else { k };
+                for x in 0..w {
+                    let i = z * w + x;
+                    step(state[i], level_at(i), &mut bank[x], &mut water[x], &mut lvl[x], cap);
+                    along[i] += bank[x];
+                    if water[x] <= SHORE_REACH && water[x] < near_dist[i] {
+                        near_dist[i] = water[x];
+                        water_near[i] = lvl[x];
+                    }
+                }
+            }
+        }
+        let river = (0..w * d)
+            .map(|i| state[i] == WET && (across[i] <= river_width || along[i] <= river_width))
+            .collect();
+
+        // How much of the dry ground around is sand, and what the slope is
+        // fitted from: running sums, read back over any square.
+        let row = w + 1;
+        let mut dry_sum = vec![0u32; row * (d + 1)];
+        let mut sand_sum = vec![0u32; row * (d + 1)];
+        let mut moments = vec![[0f64; 6]; row * (d + 1)];
+        for z in 0..d {
+            let (mut dry_run, mut sand_run) = (0u32, 0u32);
+            let mut run = [0f64; 6];
+            for x in 0..w {
+                if let Some(c) = &cols[z * w + x] {
+                    if c.depth <= 0.0 {
+                        dry_run += 1;
+                        if grounds.get(c.terrain as usize) == Some(&Ground::Sand) {
+                            sand_run += 1;
+                        }
+                    }
+                    let (fx, fz, h) = (x as f64, z as f64, c.height as f64);
+                    run[0] += 1.0;
+                    run[1] += fx;
+                    run[2] += fz;
+                    run[3] += h;
+                    run[4] += fx * h;
+                    run[5] += fz * h;
+                }
+                let (above, at) = (z * row + x + 1, (z + 1) * row + x + 1);
+                dry_sum[at] = dry_sum[above] + dry_run;
+                sand_sum[at] = sand_sum[above] + sand_run;
+                let m = moments[above];
+                moments[at] = std::array::from_fn(|k| m[k] + run[k]);
+            }
+        }
         Self {
             rect,
             outer,
             cols,
             river,
             water_near,
+            dry_sum,
+            sand_sum,
+            moments,
         }
+    }
+
+    /// The slope, in degrees, of the plane that best fits the heights within
+    /// [`SLOPE_REACH`] of `(x, z)`: [`crate::filter::trend_slope`], read from running sums
+    /// rather than added up column by column.
+    fn slope(&self, x: i32, z: i32) -> f32 {
+        let Some(c) = self.col(x, z) else { return 0.0 };
+        let r = &self.outer;
+        let (w, d) = (r.width(), r.depth());
+        let (lx, lz) = (x - r.x0, z - r.z0);
+        let x0 = (lx - SLOPE_REACH).clamp(0, w) as usize;
+        let x1 = (lx + SLOPE_REACH + 1).clamp(0, w) as usize;
+        let z0 = (lz - SLOPE_REACH).clamp(0, d) as usize;
+        let z1 = (lz + SLOPE_REACH + 1).clamp(0, d) as usize;
+        let row = w as usize + 1;
+        let (a, b, e, f) = (self.moments[z1 * row + x1], self.moments[z0 * row + x0], self.moments[z0 * row + x1], self.moments[z1 * row + x0]);
+        let m: [f64; 6] = std::array::from_fn(|k| a[k] + b[k] - e[k] - f[k]);
+        let (cx, cz, ch) = (lx as f64, lz as f64, c.height as f64);
+        // Σ dx (h − centre) over the columns there are; missing ones count
+        // as level with the centre, as trend_slope has it.
+        let sx = (m[4] - cx * m[3]) - ch * (m[1] - cx * m[0]);
+        let sz = (m[5] - cz * m[3]) - ch * (m[2] - cz * m[0]);
+        let side = (2 * SLOPE_REACH + 1) as f64;
+        let weight = side * (1..=SLOPE_REACH).map(|k| 2.0 * (k * k) as f64).sum::<f64>();
+        ((sx / weight).hypot(sz / weight)).atan().to_degrees() as f32
+    }
+
+    /// The share of sand in the dry ground within [`DESERT_REACH`] blocks
+    /// of `(x, z)` (as far as the survey reaches).
+    fn sandy(&self, x: i32, z: i32) -> f32 {
+        let r = &self.outer;
+        let (w, d) = (r.width(), r.depth());
+        let x0 = (x - DESERT_REACH - r.x0).clamp(0, w) as usize;
+        let x1 = (x + DESERT_REACH + 1 - r.x0).clamp(0, w) as usize;
+        let z0 = (z - DESERT_REACH - r.z0).clamp(0, d) as usize;
+        let z1 = (z + DESERT_REACH + 1 - r.z0).clamp(0, d) as usize;
+        let row = w as usize + 1;
+        let sum = |s: &[u32]| s[z1 * row + x1] + s[z0 * row + x0] - s[z0 * row + x1] - s[z1 * row + x0];
+        let dry = sum(&self.dry_sum);
+        if dry == 0 { 0.0 } else { sum(&self.sand_sum) as f32 / dry as f32 }
     }
 
     #[inline]
@@ -632,36 +819,108 @@ impl Survey {
     }
 }
 
-/// Tiles worked on together, so that the map is never held twice.
-const BATCH: usize = 256;
+/// Tiles read together, as squares this many tiles on a side: one survey,
+/// and one margin around it, for all of them.
+const BLOCK: i32 = 4;
+/// Squares worked on together; between two batches the map is cooled down
+/// again, so that a map of any size is never decoded whole.
+const BATCH: usize = 96;
+/// Tiles of the edited level left decoded after each batch.
+const KEEP_HOT: usize = 2048;
+
+/// How far a pass over the whole map is, and how to stop it.
+#[derive(Debug, Default)]
+pub struct Steps {
+    /// Tiles done, and to do.
+    pub done: AtomicUsize,
+    pub total: AtomicUsize,
+    pub cancel: AtomicBool,
+}
+
+impl Steps {
+    pub fn fraction(&self) -> f32 {
+        let total = self.total.load(Ordering::Relaxed);
+        if total == 0 { 0.0 } else { self.done.load(Ordering::Relaxed) as f32 / total as f32 }
+    }
+}
+
+/// What a pass over the whole map changed.
+#[derive(Debug, Default)]
+pub struct Changes {
+    /// Columns changed, and the tiles they are in.
+    pub columns: usize,
+    pub tiles: Vec<TilePos>,
+    /// Stopped before the end.
+    pub cancelled: bool,
+}
 
 /// Run `choose` over every column of the ground and write what it gives to
-/// the plane `plane` picks. Returns how many columns changed.
+/// the plane `plane` picks.
 fn over_the_map(
     edit: &mut Edit,
     reader: &Reader,
+    steps: &Steps,
     choose: impl Fn(&Survey, i32, i32) -> Option<u16> + Sync,
     plane: impl Fn(&mut crate::tile::Tile) -> &mut crate::plane::Plane<u16> + Sync,
-) -> usize {
-    let tiles: Vec<TilePos> = edit.dim().ground().positions().collect();
+) -> Changes {
+    // The tiles by squares, the squares row by row: neighbours are read
+    // together, and each tile is decoded about once.
+    let mut squares: HashMap<(i32, i32), Vec<TilePos>> = HashMap::new();
+    for pos in edit.dim().ground().positions() {
+        squares.entry((pos.x.div_euclid(BLOCK), pos.z.div_euclid(BLOCK))).or_default().push(pos);
+    }
+    let mut squares: Vec<((i32, i32), Vec<TilePos>)> = squares.into_iter().collect();
+    squares.sort_unstable_by_key(|((x, z), _)| (*z, *x));
+    steps.total.store(squares.iter().map(|s| s.1.len()).sum(), Ordering::Relaxed);
+    steps.done.store(0, Ordering::Relaxed);
     let everywhere = BlockRect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX);
-    let changed = std::sync::atomic::AtomicUsize::new(0);
-    for batch in tiles.chunks(BATCH) {
+    let changed = AtomicUsize::new(0);
+    let mut touched = Vec::new();
+    let mut cancelled = false;
+    for batch in squares.chunks(BATCH) {
+        if steps.cancel.load(Ordering::Relaxed) {
+            cancelled = true;
+            break;
+        }
+        // Every tile the batch reads, its margin included, decoded once.
+        let reach = (reader.margin() + TILE_SIZE - 1) / TILE_SIZE;
+        let mut wanted: Vec<TilePos> = Vec::new();
+        for ((sx, sz), _) in batch {
+            for z in sz * BLOCK - reach..(sz + 1) * BLOCK + reach {
+                for x in sx * BLOCK - reach..(sx + 1) * BLOCK + reach {
+                    wanted.push(TilePos::new(x, z));
+                }
+            }
+        }
+        wanted.sort_unstable_by_key(|p| (p.z, p.x));
+        wanted.dedup();
+        edit.warm(&wanted);
         let chosen: HashMap<TilePos, Vec<Option<u16>>> = batch
             .par_iter()
-            .map(|&pos| {
-                let rect = pos.rect();
-                let survey = reader.survey(edit.dim(), rect);
-                let mut out = vec![None; (rect.width() * rect.depth()) as usize];
-                for z in rect.z0..rect.z1 {
-                    for x in rect.x0..rect.x1 {
-                        out[local_index(x, z)] = choose(&survey, x, z);
-                    }
-                }
-                (pos, out)
+            .flat_map_iter(|((sx, sz), tiles)| {
+                let (x0, z0) = (sx * BLOCK * TILE_SIZE, sz * BLOCK * TILE_SIZE);
+                let side = BLOCK * TILE_SIZE;
+                let survey = reader.survey(edit.dim(), BlockRect::new(x0, z0, x0 + side, z0 + side));
+                let out: Vec<(TilePos, Vec<Option<u16>>)> = tiles
+                    .iter()
+                    .map(|&pos| {
+                        let rect = pos.rect();
+                        let mut out = vec![None; crate::coords::TILE_AREA];
+                        for z in rect.z0..rect.z1 {
+                            for x in rect.x0..rect.x1 {
+                                out[local_index(x, z)] = choose(&survey, x, z);
+                            }
+                        }
+                        (pos, out)
+                    })
+                    .collect();
+                steps.done.fetch_add(tiles.len(), Ordering::Relaxed);
+                out
             })
             .collect();
-        edit.par_tiles(batch.iter().copied(), everywhere, false, |pos, _, tile| {
+        let positions: Vec<TilePos> = batch.iter().flat_map(|s| s.1.iter().copied()).collect();
+        let edited = std::sync::Mutex::new(Vec::new());
+        edit.par_tiles(positions, everywhere, false, |pos, _, tile| {
             let Some(values) = chosen.get(&pos) else { return };
             let mut n = 0;
             for (i, v) in values.iter().enumerate() {
@@ -674,28 +933,46 @@ fn over_the_map(
             }
             if n > 0 {
                 tile.compact();
-                changed.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
+                changed.fetch_add(n, Ordering::Relaxed);
+                edited.lock().expect("no panic while held").push(pos);
             }
         });
+        touched.extend(edited.into_inner().expect("no panic while held"));
+        edit.cool(KEEP_HOT);
     }
-    changed.into_inner()
+    Changes {
+        columns: changed.into_inner(),
+        tiles: touched,
+        cancelled,
+    }
 }
 
 /// Give every column of the map the biome its land calls for. Returns how
 /// many columns changed.
 pub fn biomes_over_the_map(edit: &mut Edit, reader: &Reader) -> usize {
-    over_the_map(edit, reader, |s, x, z| reader.biome(s, x, z).map(|b| b.0), |t| &mut t.biome)
+    biomes_over_the_map_with(edit, reader, &Steps::default()).columns
+}
+
+/// [`biomes_over_the_map`], telling how far it is, and stopping when asked.
+pub fn biomes_over_the_map_with(edit: &mut Edit, reader: &Reader, steps: &Steps) -> Changes {
+    over_the_map(edit, reader, steps, |s, x, z| reader.biome(s, x, z).map(|b| b.0), |t| &mut t.biome)
 }
 
 /// Paint every column of the map with the terrain its biome calls for.
 /// Returns how many columns changed.
 pub fn paint_over_the_map(edit: &mut Edit, reader: &Reader) -> usize {
-    over_the_map(edit, reader, |s, x, z| reader.terrain(s, x, z).map(|t| t.0), |t| &mut t.terrain)
+    paint_over_the_map_with(edit, reader, &Steps::default()).columns
+}
+
+/// [`paint_over_the_map`], telling how far it is, and stopping when asked.
+pub fn paint_over_the_map_with(edit: &mut Edit, reader: &Reader, steps: &Steps) -> Changes {
+    over_the_map(edit, reader, steps, |s, x, z| reader.terrain(s, x, z).map(|t| t.0), |t| &mut t.terrain)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::filter::trend_slope;
     use crate::history::History;
     use crate::tile::Tile;
     use crate::world::{DimensionKind, World, WorldMeta};
@@ -755,6 +1032,75 @@ mod tests {
         assert_eq!(grounds[reg.terrain_by_name("Sand").unwrap().0 as usize], Ground::Sand);
         assert_eq!(grounds[reg.terrain_by_name("Snow").unwrap().0 as usize], Ground::Snow);
         assert_eq!(grounds[reg.terrain_by_name("Rock").unwrap().0 as usize], Ground::Rock);
+    }
+
+    /// The slope read from running sums is the slope fitted column by
+    /// column, edges of the map included.
+    #[test]
+    fn slopes_from_sums_are_the_fitted_ones() {
+        let world = sample();
+        let rules = AutoRules::default();
+        let reader = Reader::new(&rules, &world.registry, 62);
+        let survey = reader.survey(&world.dims[0], BlockRect::new(0, 0, 128, 128));
+        for (x, z) in [(0, 0), (3, 64), (40, 10), (85, 127), (95, 20), (100, 60), (127, 127), (64, 65)] {
+            let fitted = trend_slope(|dx, dz| survey.col(x + dx, z + dz).map(|n| n.height), SLOPE_REACH, 1.0);
+            let summed = survey.slope(x, z);
+            assert!((fitted - summed).abs() < 0.01, "at {x},{z}: {fitted} fitted, {summed} summed");
+        }
+    }
+
+    /// A patch of sand in a plain is the plain; sand all around is a desert.
+    #[test]
+    fn a_patch_of_sand_is_no_desert() {
+        let mut world = sample();
+        let reg = world.registry.clone();
+        let sand = reg.terrain_by_name("Sand").unwrap().0;
+        {
+            let tile = world.dims[0].ground_mut().tile_mut(TilePos::new(0, 0)).unwrap();
+            // Twelve blocks of sand on the plain, away from the water.
+            for z in 20..32 {
+                for x in 56..68 {
+                    tile.terrain.set(local_index(x, z), sand);
+                }
+            }
+        }
+        let rules = AutoRules::default();
+        let reader = Reader::new(&rules, &reg, 62);
+        let survey = reader.survey(&world.dims[0], BlockRect::new(0, 0, 128, 128));
+        assert_eq!(reader.land(&survey, 62, 26), Some(Land::Plains));
+        // The whole tile of sand: a desert, away from the water.
+        {
+            let tile = world.dims[0].ground_mut().tile_mut(TilePos::new(0, 0)).unwrap();
+            for z in 0..128 {
+                for x in 48..128 {
+                    tile.terrain.set(local_index(x, z), sand);
+                }
+            }
+        }
+        let survey = reader.survey(&world.dims[0], BlockRect::new(0, 0, 128, 128));
+        assert_eq!(reader.land(&survey, 90, 100), Some(Land::Desert));
+    }
+
+    /// A map filled with sand is read from the shape of its land: plains
+    /// and hills, beaches by the water.
+    #[test]
+    fn a_map_filled_with_sand_is_no_desert() {
+        let mut world = sample();
+        let reg = world.registry.clone();
+        let sand = reg.terrain_by_name("Sand").unwrap();
+        world.dims[0].ground_mut().tile_mut(TilePos::new(0, 0)).unwrap().terrain = crate::plane::Plane::Uniform(sand.0);
+        let base = base_terrain(&world.dims[0], &reg);
+        assert_eq!(base, Some(sand));
+        let mut rules = AutoRules::default();
+        rules.land.hills = 5.0;
+        let reader = Reader::new(&rules, &reg, 62).with_base(base);
+        let survey = reader.survey(&world.dims[0], BlockRect::new(0, 0, 128, 128));
+        let land = |x: i32, z: i32| reader.land(&survey, x, z).unwrap();
+        assert_eq!(land(60, 20), Land::Plains);
+        assert_eq!(land(85, 20), Land::Hills);
+        assert_eq!(land(42, 20), Land::Beach, "its sand by the water is a beach");
+        // A map of grass has no fill to see through.
+        assert_eq!(base_terrain(&sample().dims[0], &reg), None);
     }
 
     #[test]

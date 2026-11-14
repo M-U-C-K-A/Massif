@@ -267,6 +267,10 @@ pub struct ToolState {
     /// Asked from a panel: open the rules of the automatic tools.
     #[serde(skip)]
     pub open_rules: bool,
+    /// Asked from a panel: run an automatic tool over the whole map (biomes
+    /// when `true`, paint otherwise).
+    #[serde(skip)]
+    pub run_auto: Option<bool>,
     /// What the last automatic pass over the whole map changed: whether
     /// it was of biomes, and how many columns.
     #[serde(skip)]
@@ -622,6 +626,7 @@ impl Default for ToolState {
             previous: Tool::PaintTerrain,
             auto: massif_core::auto::AutoRules::default(),
             open_rules: false,
+            run_auto: None,
             auto_done: None,
             river: RiverSettings::default(),
             river_draft: None,
@@ -735,7 +740,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
     let invert = stroke.inverse;
     // The automatic tools read the land with the rules of the settings.
     let reader = matches!(stroke.tool, Tool::AutoBiome | Tool::AutoPaint)
-        .then(|| massif_core::auto::Reader::new(&tools.auto, &doc.world.registry, doc.world.meta.sea_level));
+        .then(|| massif_core::auto::Reader::new(&tools.auto, &doc.world.registry, doc.world.meta.sea_level).with_base(doc.auto_base()));
     let pattern = (stroke.tool == Tool::PaintTerrain && tools.pattern.on && !invert)
         .then(|| tools.pattern.sampler(&doc.world.registry))
         .flatten();

@@ -209,12 +209,27 @@ impl Widget for Field<'_> {
             if first {
                 edit.request_focus();
                 ui.data_mut(|d| d.insert_temp(id.with("focus"), true));
+                // The caret where the number was clicked, as in any text:
+                // a digit typed goes there, nothing is replaced.
+                let at: Option<egui::Pos2> = ui.data(|d| d.get_temp(id.with("click")));
+                // Measured against the number as it was drawn when clicked.
+                let galley = ui.painter().layout_no_wrap(buffer.clone(), FontId::proportional(12.0), pal.text);
+                let drawn: Option<f32> = ui.data(|d| d.get_temp(id.with("number at")));
+                let left = drawn.unwrap_or(edit_rect.center().x - galley.size().x / 2.0);
+                let caret = match at {
+                    Some(p) => galley.cursor_from_pos(vec2(p.x - left, galley.size().y / 2.0)),
+                    None => galley.end(),
+                };
+                let mut state = TextEdit::load_state(ui.ctx(), edit.id).unwrap_or_default();
+                state.cursor.set_char_range(Some(egui::text::CCursorRange::one(caret)));
+                state.store(ui.ctx(), edit.id);
             }
             let (enter, escape) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
             if edit.lost_focus() || enter || escape {
                 ui.data_mut(|d| {
                     d.remove::<String>(id);
                     d.remove::<bool>(id.with("focus"));
+                    d.remove::<egui::Pos2>(id.with("click"));
                 });
                 if !escape && let Some(v) = self.parse(&buffer) {
                     let v = match self.clamping {
@@ -261,10 +276,15 @@ impl Widget for Field<'_> {
                 self.set(v);
                 response.mark_changed();
             }
-        } else if response.clicked() && response.interact_pointer_pos().is_some_and(on_value) {
+        } else if response.clicked()
+            && let Some(at) = response.interact_pointer_pos().filter(|p| on_value(*p))
+        {
             let shown = self.format(value);
             let plain = shown.trim_end_matches(self.suffix.as_str()).trim().to_owned();
-            ui.data_mut(|d| d.insert_temp(id, plain));
+            ui.data_mut(|d| {
+                d.insert_temp(id, plain);
+                d.insert_temp(id.with("click"), at);
+            });
             ui.ctx().request_repaint();
         }
         if !grabbed && !response.dragged() {
@@ -314,6 +334,8 @@ impl Widget for Field<'_> {
             let y = |g: &egui::Galley| rect.center().y - g.size().y / 2.0;
             painter.galley(pos2(left + number.size().x, y(&unit)), unit.clone(), pal.weak);
             painter.galley(pos2(left, y(&number)), number, pal.text);
+            // Where the number starts, for a click that types into it.
+            ui.data_mut(|d| d.insert_temp(id.with("number at"), left));
         }
         response
     }
@@ -483,6 +505,38 @@ pub enum Part<'a> {
     Button(Icon, &'a str),
 }
 
+/// `ui.add(drag)`, but a number clicked to be typed in gets the caret at
+/// its end instead of being selected whole: a digit typed adds to it rather
+/// than replacing it (a double-click, or ⌘A, still selects it all).
+pub fn drag(ui: &mut Ui, drag: egui::DragValue<'_>) -> Response {
+    let response = ui.add(drag);
+    let id = response.id;
+    let key = id.with("caret since");
+    if ui.memory(|m| m.has_focus(id)) {
+        let frame = ui.ctx().cumulative_frame_nr();
+        let since = ui.data_mut(|d| *d.get_temp_mut_or_insert_with(key, || frame));
+        // egui selects everything over the first frames of the focus.
+        if frame <= since + 2
+            && let Some(mut state) = TextEdit::load_state(ui.ctx(), id)
+            && let Some(range) = state.cursor.char_range()
+            && range.primary != range.secondary
+        {
+            let end = if range.primary.index >= range.secondary.index { range.primary } else { range.secondary };
+            state.cursor.set_char_range(Some(egui::text::CCursorRange::one(end)));
+            state.store(ui.ctx(), id);
+            ui.ctx().request_repaint();
+        }
+    } else {
+        ui.data_mut(|d| d.remove::<u64>(key));
+    }
+    response
+}
+
+/// [`drag`], greyed out unless `enabled`.
+pub fn drag_enabled(ui: &mut Ui, enabled: bool, d: egui::DragValue<'_>) -> Response {
+    ui.add_enabled_ui(enabled, |ui| drag(ui, d)).inner
+}
+
 /// Parts joined in one outline, as one control. Returns whether a value
 /// changed, and the index of a button clicked.
 pub fn input_group(ui: &mut Ui, id: &str, parts: &mut [Part]) -> (bool, Option<usize>) {
@@ -512,7 +566,7 @@ pub fn input_group(ui: &mut Ui, id: &str, parts: &mut [Part]) -> (bool, Option<u
             }
             Part::Int(v, range, speed) => {
                 let mut child = bare(ui, seg.shrink2(vec2(4.0, 3.0)));
-                changed |= child.add(egui::DragValue::new(*v).range(range.clone()).speed(*speed)).changed();
+                changed |= drag(&mut child, egui::DragValue::new(*v).range(range.clone()).speed(*speed)).changed();
             }
             Part::Edit(text, _) => {
                 let mut child = bare(ui, seg.shrink2(vec2(2.0, 3.0)));
@@ -584,3 +638,61 @@ pub fn button_group(ui: &mut Ui, id: &str, labels: &[&str], on: &[bool]) -> Opti
     clicked
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    /// A digit typed into a number clicked to be typed in adds to it.
+    #[test]
+    fn typing_into_a_number_adds_to_it() {
+        let mut h = Harness::builder().with_size(vec2(240.0, 80.0)).with_accessibility_check(false).build_ui_state(
+            |ui, value: &mut i32| {
+                drag(ui, egui::DragValue::new(value));
+            },
+            63,
+        );
+        h.run();
+        h.get_by_role(egui::accesskit::Role::SpinButton).click();
+        h.run();
+        h.get_by_role(egui::accesskit::Role::SpinButton).type_text("5");
+        h.run();
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(*h.state(), 635, "the digit went after the number");
+    }
+
+    /// The same in a field: the caret where the number was clicked.
+    #[test]
+    fn typing_into_a_field_goes_where_clicked() {
+        let mut h = Harness::builder().with_size(vec2(90.0, 40.0)).with_accessibility_check(false).build_ui_state(
+            |ui, value: &mut f32| {
+                ui.add(Field::new(value, 0.0..=1000.0).max_decimals(0).width(80.0));
+            },
+            24.0,
+        );
+        h.run();
+        let rect = h.get_by_role(egui::accesskit::Role::Slider).rect();
+        // After the last digit (the value sits at the right end).
+        let p = egui::pos2(rect.right() - 4.0, rect.center().y);
+        h.event(egui::Event::PointerMoved(p));
+        h.step();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton {
+                pos: p,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.step();
+        }
+        h.run();
+        h.get_by_role(egui::accesskit::Role::TextInput).type_text("5");
+        h.run();
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(*h.state(), 245.0);
+    }
+}

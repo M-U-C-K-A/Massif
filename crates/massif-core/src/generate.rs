@@ -297,6 +297,46 @@ pub fn soft_ceiling(h: f32, sea: f32, ceiling: f32) -> f32 {
     knee + margin * (1.0 - (-(h - knee) / margin.max(1.0)).exp())
 }
 
+/// Sandy shores reach this many blocks from the water: low ground farther
+/// away is no beach, however low it lies.
+pub const BEACH_REACH: usize = 6;
+
+/// Whether some cell of a `side`-wide grid within `reach` cells of each one
+/// (a square around it) is `true` in `wet`.
+fn within_reach(wet: &[bool], side: usize, reach: usize) -> Vec<bool> {
+    let rows = wet.len() / side;
+    // Along the rows, then along the columns: counts in a sliding window.
+    let mut across = vec![false; wet.len()];
+    for z in 0..rows {
+        let row = &wet[z * side..(z + 1) * side];
+        let mut count = row[..reach.min(side)].iter().filter(|w| **w).count();
+        for x in 0..side {
+            if x + reach < side && row[x + reach] {
+                count += 1;
+            }
+            across[z * side + x] = count > 0;
+            if x >= reach && row[x - reach] {
+                count -= 1;
+            }
+        }
+    }
+    let mut out = vec![false; wet.len()];
+    for x in 0..side {
+        let at = |z: usize| across[z * side + x];
+        let mut count = (0..reach.min(rows)).filter(|z| at(*z)).count();
+        for z in 0..rows {
+            if z + reach < rows && at(z + reach) {
+                count += 1;
+            }
+            out[z * side + x] = count > 0;
+            if z >= reach && at(z - reach) {
+                count -= 1;
+            }
+        }
+    }
+    out
+}
+
 /// Generate one ground tile.
 pub fn generate_tile(pos: TilePos, field: &HeightField, theme: &Theme, params: &GenParams) -> Tile {
     let n = TILE_SIZE as usize;
@@ -307,13 +347,15 @@ pub fn generate_tile(pos: TilePos, field: &HeightField, theme: &Theme, params: &
         return Tile::ground(snap_height(field.flat as f32), terrain.0, sea_level as i16);
     }
 
-    // One extra column on every side for the slope estimate.
-    let m = n + 2;
+    // Columns around the tile too: for the slope, and for the water a beach
+    // must be near.
+    let pad = BEACH_REACH;
+    let m = n + 2 * pad;
     let mut h = vec![0f32; m * m];
     for z in 0..m {
         for x in 0..m {
-            let bx = (ox + x as i32 - 1) as f64 + 0.5;
-            let bz = (oz + z as i32 - 1) as f64 + 0.5;
+            let bx = (ox + x as i32 - pad as i32) as f64 + 0.5;
+            let bz = (oz + z as i32 - pad as i32) as f64 + 0.5;
             h[z * m + x] = field.height(bx, bz);
         }
     }
@@ -321,10 +363,14 @@ pub fn generate_tile(pos: TilePos, field: &HeightField, theme: &Theme, params: &
     let mut top = vec![0f32; TILE_AREA];
     let mut terrain = vec![0u16; TILE_AREA];
     let sea = sea_level as f32;
+    let near_water = (params.beaches && params.surface.is_none()).then(|| {
+        let wet: Vec<bool> = h.iter().map(|v| snap_height(*v) < sea).collect();
+        within_reach(&wet, m, BEACH_REACH)
+    });
     let (bottom, ceiling) = build_limits(params.min_y, params.max_y);
     for z in 0..n {
         for x in 0..n {
-            let c = (z + 1) * m + (x + 1);
+            let c = (z + pad) * m + (x + pad);
             let dx = (h[c + 1] - h[c - 1]) * 0.5;
             let dz = (h[c + m] - h[c - m]) * 0.5;
             let slope = dx.abs().max(dz.abs());
@@ -336,7 +382,10 @@ pub fn generate_tile(pos: TilePos, field: &HeightField, theme: &Theme, params: &
             top[i] = snap_height(soft_ceiling(h[c], sea, ceiling as f32).max(bottom as f32 + 1.0));
             terrain[i] = match params.surface {
                 Some(t) => t.0,
-                None => theme.terrain_with(h[c], slope, sea, jitter, params.beaches, params.lava).0,
+                None => {
+                    let beach = near_water.as_ref().is_some_and(|near| near[c]);
+                    theme.terrain_with(h[c], slope, sea, jitter, beach, params.lava).0
+                }
             };
         }
     }
@@ -480,6 +529,8 @@ pub fn preview(params: &GenParams, reg: &Registry, n: usize) -> Preview {
         .map(|i| field.height(x0 + ((i % n) as f64 + 0.5) * spacing, z0 + ((i / n) as f64 + 0.5) * spacing))
         .collect();
     let sea = params.sea_level as f32;
+    let wet: Vec<bool> = heights.iter().map(|v| *v < sea).collect();
+    let near_water = within_reach(&wet, n, (BEACH_REACH as f64 / spacing).ceil().max(1.0) as usize);
     let terrains = (0..n * n)
         .map(|i| {
             if let Some(t) = params.surface {
@@ -489,7 +540,7 @@ pub fn preview(params: &GenParams, reg: &Registry, n: usize) -> Preview {
             let at = |x: usize, z: usize| heights[z.min(n - 1) * n + x.min(n - 1)];
             let dx = (at(x + 1, z) - at(x.saturating_sub(1), z)) / (2.0 * spacing as f32);
             let dz = (at(x, z + 1) - at(x, z.saturating_sub(1))) / (2.0 * spacing as f32);
-            theme.terrain_with(heights[i], dx.abs().max(dz.abs()), sea, 0.0, params.beaches, params.lava)
+            theme.terrain_with(heights[i], dx.abs().max(dz.abs()), sea, 0.0, params.beaches && near_water[i], params.lava)
         })
         .collect();
     Preview {
@@ -502,6 +553,63 @@ pub fn preview(params: &GenParams, reg: &Registry, n: usize) -> Preview {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reach_spreads_a_square_around() {
+        let side = 9;
+        let mut wet = vec![false; side * side];
+        wet[4 * side + 4] = true;
+        let near = within_reach(&wet, side, 2);
+        for z in 0..side {
+            for x in 0..side {
+                let inside = x.abs_diff(4) <= 2 && z.abs_diff(4) <= 2;
+                assert_eq!(near[z * side + x], inside, "at {x},{z}");
+            }
+        }
+    }
+
+    /// Low ground far from the sea is grass, not a beach.
+    #[test]
+    fn beaches_keep_to_the_water() {
+        let params = GenParams {
+            tiles_x: 4,
+            tiles_z: 4,
+            landform: Landform::Islands,
+            seed: 11,
+            ..GenParams::default()
+        };
+        let world = generate(&params);
+        let reg = &world.registry;
+        let sand = reg.terrain_by_name("Sand").unwrap().0;
+        let dim = &world.dims[0];
+        let sea = params.sea_level as f32;
+        let mut checked = 0;
+        for pos in dim.ground().positions() {
+            let tile = dim.ground().view(pos).unwrap();
+            for i in (0..TILE_AREA).step_by(7) {
+                if tile.terrain.get(i) != sand || tile.top.get(i) < sea {
+                    continue;
+                }
+                // Sand above the water has water within reach (on the map:
+                // the sea beyond its edge counts when the map is made).
+                let (x, z) = (pos.x * 128 + (i % 128) as i32, pos.z * 128 + (i / 128) as i32);
+                let r = BEACH_REACH as i32 + 1;
+                let (lo, hi) = params.bounds();
+                if x - r < lo.x * 128 || z - r < lo.z * 128 || x + r >= (hi.x + 1) * 128 || z + r >= (hi.z + 1) * 128 {
+                    continue;
+                }
+                let wet = (-r..=r).any(|dz| {
+                    (-r..=r).any(|dx| {
+                        let p = TilePos::containing(x + dx, z + dz);
+                        dim.ground().view(p).is_some_and(|t| t.top.get(crate::coords::local_index(x + dx, z + dz)) < sea)
+                    })
+                });
+                assert!(wet, "sand at {x},{z} with no water near");
+                checked += 1;
+            }
+        }
+        assert!(checked > 100, "{checked} sandy columns");
+    }
+
     use super::*;
 
     /// Build limits are what Minecraft takes: whole sections, at least its

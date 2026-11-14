@@ -138,6 +138,8 @@ enum Dialog {
     AutoRules(bool),
     /// What an import brought in, with the file's thumbnail.
     ImportReport(Box<massif_legacy::ImportReport>, Option<egui::TextureHandle>),
+    /// The help, at a topic.
+    Help(crate::help::HelpState),
 }
 
 struct Status {
@@ -735,6 +737,18 @@ impl MassifApp {
                     });
                     self.dialog = Some(Dialog::ImportReport(report, thumbnail));
                 }
+                Outcome::Auto { biomes, tiles, columns, revision, dim } => {
+                    let label = if biomes { "Auto biome" } else { "Auto paint" };
+                    if revision != self.doc.revision || dim != self.doc.dim {
+                        self.say(ctx, format!("{label}: the map changed meanwhile, nothing was done"), true, None);
+                    } else {
+                        self.doc.history.begin(label, dim);
+                        self.doc.history.edit(&mut self.doc.world, 0).replace_tiles(tiles);
+                        self.doc.commit();
+                        self.tools.auto_done = Some((biomes, columns));
+                        self.say(ctx, format!("{label} over the whole map: {columns} columns changed in {secs:.1} s"), false, None);
+                    }
+                }
                 Outcome::Cancelled => self.say(ctx, "Cancelled", false, None),
             }
         }
@@ -754,6 +768,10 @@ impl MassifApp {
         let pressed = |s: KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(&s));
         if pressed(cmd(Key::Comma)) {
             self.dialog = Some(Dialog::Preferences);
+            return;
+        }
+        if pressed(KeyboardShortcut::new(Modifiers::NONE, Key::F1)) {
+            self.dialog = Some(Dialog::Help(crate::help::HelpState::default()));
             return;
         }
         if self.home.is_some() {
@@ -966,18 +984,14 @@ impl MassifApp {
                     .on_hover_text("Give every column the biome its land calls for")
                     .clicked()
                 {
-                    let changed = self.doc.auto_biome(&self.tools.auto);
-                    self.tools.auto_done = Some((true, changed));
-                    self.feedback = Some(format!("Auto biome over the whole map: {changed} columns changed"));
+                    self.tools.run_auto = Some(true);
                 }
                 if ui
                     .button(theme::with_icon(Icon::WandSparkles, "Auto paint: whole map"))
                     .on_hover_text("Paint every column as its biome calls for")
                     .clicked()
                 {
-                    let changed = self.doc.auto_paint(&self.tools.auto);
-                    self.tools.auto_done = Some((false, changed));
-                    self.feedback = Some(format!("Auto paint over the whole map: {changed} columns changed"));
+                    self.tools.run_auto = Some(false);
                 }
                 if ui.button(theme::with_icon(Icon::Settings2, "Automatic rules…")).clicked() {
                     self.dialog = Some(Dialog::AutoRules(false));
@@ -998,52 +1012,21 @@ impl MassifApp {
                 }
             });
             ui.menu_button("Help", |ui| {
+                if ui.button(theme::with_icon(Icon::BookOpen, "Massif Help  (F1)")).clicked() {
+                    self.dialog = Some(Dialog::Help(crate::help::HelpState::default()));
+                }
+                if ui.button(theme::with_icon(Icon::Keyboard, "Keyboard shortcuts")).clicked() {
+                    self.dialog = Some(Dialog::Help(crate::help::HelpState {
+                        topic: crate::help::topic_index("Shortcuts"),
+                        query: String::new(),
+                    }));
+                }
+                ui.separator();
                 if ui.button(theme::with_icon(Icon::House, "Home screen")).clicked() {
                     self.open_home(Page::NewMap);
                 }
                 if ui.button(theme::with_icon(Icon::Info, "About Massif")).clicked() {
                     self.dialog = Some(Dialog::About);
-                }
-                ui.separator();
-                ui.label(RichText::new("Shortcuts (as in WorldPainter)").bold());
-                for (keys, what) in [
-                    ("Left / right button", "Apply the tool / its inverse (also Alt + left)"),
-                    ("Scroll", "Brush size (Shift: one block at a time)"),
-                    ("⌘, Ctrl or Alt + scroll, pinch", "Zoom"),
-                    ("Middle button, Space + drag", "Move the map"),
-                    ("− / +", "Brush size"),
-                    ("1 … 9, 0", "Brush intensity 10 % … 100 %"),
-                    ("[ / ]", "Turn the brush"),
-                    ("R / L", "Turn the light of the map"),
-                    ("⌥H ⌥A ⌥S ⌥P ⌥R ⌥F ⌥Y", "Height, Flatten, Smooth, Paint, Spray, Flood, Eyedropper"),
-                    ("⌘− / ⌘+ / ⌘0", "Zoom out / in / 100 %"),
-                    ("⌘Z / ⇧⌘Z", "Undo / redo"),
-                    ("⌘S, ⌘O, ⌘N, ⌘E", "Save, open, new, export"),
-                    ("Esc", "Cancel the stroke being drawn"),
-                    ("Ctrl + Space", "Maximise the area under the mouse"),
-                    ("Shift over an area's header", "A button that closes the area"),
-                    ("Drag an area's top-right corner", "Split it where you let go"),
-                ] {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(keys).monospace());
-                        ui.label(RichText::new(what).color(Palette::of(ui).weak));
-                    });
-                }
-                ui.separator();
-                ui.label(RichText::new("3D view").bold());
-                for (keys, what) in [
-                    ("Left drag / right drag", "Turn the view / move it"),
-                    ("Scroll, pinch", "Come closer / go back"),
-                    ("W A S D, arrows · Q / E", "Fly over the map · down / up (Shift: faster)"),
-                    ("Double-click", "Look at the point under the cursor"),
-                    ("With Build, Dig, Smooth (3D)", "Left sculpts where the cursor points, right inverts"),
-                    ("   middle drag, Alt + drag", "Turn the view while sculpting"),
-                    ("   Shift + middle drag", "Move the view while sculpting"),
-                ] {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(keys).monospace());
-                        ui.label(RichText::new(what).color(Palette::of(ui).weak));
-                    });
                 }
             });
 
@@ -1157,18 +1140,25 @@ impl MassifApp {
                             let button = egui::Button::new(if active { text.medium() } else { text })
                                 .fill(if active { pal.accent_soft } else { Color32::TRANSPARENT })
                                 .stroke(Stroke::NONE)
-                                .corner_radius(7)
+                                .corner_radius(theme::PILL)
                                 .min_size(vec2(0.0, 24.0));
-                            let r = ui.add(button);
+                            let r = ui.add(button).on_hover_text("Right-click: reset, duplicate, delete");
                             if r.clicked() {
                                 self.layout.activate(i);
                             }
                             r.context_menu(|ui| {
-                                if ui.button("Duplicate").clicked() {
+                                if ui
+                                    .add_enabled(self.layout.can_reset(i), egui::Button::new(theme::with_icon(Icon::RotateCcw, "Reset")))
+                                    .on_hover_text("Back to how this workspace was at first")
+                                    .clicked()
+                                {
+                                    self.layout.reset_workspace(i);
+                                }
+                                if ui.button(theme::with_icon(Icon::Copy, "Duplicate")).clicked() {
                                     self.layout.activate(i);
                                     self.layout.duplicate_current();
                                 }
-                                if ui.add_enabled(self.layout.side_len(i) > 1, egui::Button::new("Delete")).clicked() {
+                                if ui.add_enabled(self.layout.side_len(i) > 1, egui::Button::new(theme::with_icon(Icon::Trash2, "Delete"))).clicked() {
                                     remove = Some(i);
                                 }
                             });
@@ -1176,7 +1166,7 @@ impl MassifApp {
                         let plus = egui::Button::new(RichText::new(theme::glyph(Icon::Plus).to_string()).color(pal.weak))
                             .fill(Color32::TRANSPARENT)
                             .stroke(Stroke::NONE)
-                            .corner_radius(7)
+                            .corner_radius(theme::PILL)
                             .min_size(vec2(24.0, 24.0));
                         if ui.add(plus).on_hover_text("New workspace (a copy of this one)").clicked() {
                             self.layout.duplicate_current();
@@ -1196,59 +1186,87 @@ impl MassifApp {
         });
     }
 
-    fn status_bar(&mut self, ui: &mut Ui) {
-        let pal = Palette::of(ui);
-        let now = ui.input(|i| i.time);
-        ui.horizontal(|ui| {
-            if let Some(status) = &self.status {
-                let age = now - status.at;
-                if age < 12.0 || status.error {
-                    let (icon, color) = if status.error { (Icon::TriangleAlert, pal.danger) } else { (Icon::CircleCheck, pal.success) };
-                    ui.label(RichText::new(theme::glyph(icon).to_string()).color(color).size(12.0));
-                    ui.label(RichText::new(&status.text).color(if status.error { pal.danger } else { pal.text }).size(12.0));
-                    if let Some(path) = &status.reveal
-                        && ui.small_button("Show in Finder").clicked() {
-                            jobs::reveal(path);
+    /// What happened and what runs, at the bottom right over the areas: the
+    /// last message (a few seconds; an error until it is closed) and the
+    /// jobs running in the background, with how far they are.
+    fn notices(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|i| i.time);
+        let message = self
+            .status
+            .as_ref()
+            .filter(|s| s.error || now - s.at < 8.0)
+            .map(|s| (s.text.clone(), s.error, s.reveal.clone(), now - s.at));
+        let running: Vec<usize> = (0..self.jobs.len()).filter(|&k| !self.jobs[k].kind.blocks_editing()).collect();
+        if message.is_none() && running.is_empty() {
+            return;
+        }
+        let (mut close, mut cancel, mut reveal) = (false, None, None);
+        egui::Area::new(Id::unique("notices"))
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::RIGHT_BOTTOM, vec2(-20.0, -20.0))
+            .show(ctx, |ui| {
+                let pal = Palette::of(ui);
+                let card = |ui: &mut Ui, add: &mut dyn FnMut(&mut Ui)| {
+                    egui::Frame::popup(ui.style())
+                        .inner_margin(egui::Margin::symmetric(14, 10))
+                        .show(ui, |ui| {
+                            ui.set_max_width(400.0);
+                            ui.horizontal(|ui| add(ui));
+                        });
+                };
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 8.0;
+                    for &k in &running {
+                        let job = &self.jobs[k];
+                        card(ui, &mut |ui| {
+                            ui.spinner();
+                            ui.label(RichText::new(&job.label).size(12.5));
+                            match &job.progress {
+                                Some(p) => {
+                                    ui.add(egui::ProgressBar::new(p.fraction()).desired_width(120.0).show_percentage());
+                                    if ui.button("Cancel").clicked() {
+                                        cancel = Some(k);
+                                    }
+                                }
+                                None => {
+                                    let secs = job.started.elapsed().as_secs_f32();
+                                    ui.label(RichText::new(format!("{secs:.0} s")).size(12.0).color(pal.weak));
+                                }
+                            }
+                        });
+                    }
+                    if let Some((text, error, path, age)) = &message {
+                        // Fades away over its last second, unless an error.
+                        if !error {
+                            ui.multiply_opacity(((8.0 - age) as f32).clamp(0.0, 1.0));
                         }
-                    if status.error && ui.small_button(theme::glyph(Icon::X).to_string()).clicked() {
-                        self.status = None;
+                        card(ui, &mut |ui| {
+                            let (icon, color) = if *error { (Icon::TriangleAlert, pal.danger) } else { (Icon::CircleCheck, pal.success) };
+                            ui.label(RichText::new(theme::glyph(icon).to_string()).color(color).size(13.0));
+                            ui.add(egui::Label::new(RichText::new(text).size(12.5).color(if *error { pal.danger } else { pal.text })).wrap());
+                            if let Some(path) = path
+                                && ui.button("Show in Finder").clicked()
+                            {
+                                reveal = Some(path.clone());
+                            }
+                            let x = egui::Button::new(RichText::new(theme::glyph(Icon::X).to_string()).color(pal.weak)).fill(Color32::TRANSPARENT).stroke(Stroke::NONE);
+                            if ui.add(x).on_hover_text("Close").clicked() {
+                                close = true;
+                            }
+                        });
                     }
-                }
-            }
-            for job in &self.jobs {
-                ui.separator();
-                ui.spinner();
-                let elapsed = job.started.elapsed().as_secs_f32();
-                match &job.progress {
-                    Some(p) => {
-                        ui.add(egui::ProgressBar::new(p.fraction()).desired_width(140.0).show_percentage());
-                        ui.label(RichText::new(&job.label).size(12.0));
-                        if ui.small_button("Cancel").clicked() {
-                            job.cancel();
-                        }
-                    }
-                    None => {
-                        ui.label(RichText::new(format!("{} · {elapsed:.0} s", job.label)).size(12.0));
-                    }
-                }
-            }
-            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                let dim = self.doc.dimension();
-                let tiles: usize = dim.levels.iter().map(|l| l.len()).sum();
-                let levels = dim.levels.len();
-                ui.label(
-                    RichText::new(format!(
-                        "{} level{} · {} tiles · {}",
-                        levels,
-                        if levels == 1 { "" } else { "s" },
-                        tiles,
-                        self.doc.history.undo_label().map(|l| format!("last edit: {l}")).unwrap_or_else(|| "no edits".into())
-                    ))
-                    .size(11.5)
-                    .color(pal.weak),
-                );
+                });
             });
-        });
+        if let Some(k) = cancel {
+            self.jobs[k].cancel();
+        }
+        if let Some(path) = reveal {
+            jobs::reveal(&path);
+        }
+        if close {
+            self.status = None;
+        }
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
 
     // --------------------------------------------------------------- dock --
@@ -1683,12 +1701,29 @@ impl MassifApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
             return;
         }
+        if let Some(biomes) = self.tools.run_auto.take() {
+            let snapshot = self.doc.world.snapshot();
+            self.jobs.push(Job::auto(ctx, snapshot, self.doc.dim, self.tools.auto.clone(), biomes, self.doc.revision));
+        }
         if std::mem::take(&mut self.tools.open_rules) && self.dialog.is_none() {
             self.dialog = Some(Dialog::AutoRules(self.tools.tool == Tool::AutoPaint));
         }
         let Some(dialog) = self.dialog.take() else { return };
         let mut keep = true;
         match dialog {
+            Dialog::Help(mut state) => {
+                let response = modal(ctx, "help").show(ctx, |ui| {
+                    if crate::help::ui(ui, &mut state) {
+                        keep = false;
+                    }
+                });
+                if response.should_close() {
+                    keep = false;
+                }
+                if keep {
+                    self.dialog = Some(Dialog::Help(state));
+                }
+            }
             Dialog::Preferences => {
                 let response = modal(ctx, "preferences").show(ctx, |ui| {
                     ui.set_width(460.0);
@@ -1819,16 +1854,8 @@ impl MassifApp {
                                 .on_hover_text("One undoable step")
                                 .clicked()
                             {
-                                let changed = if paint {
-                                    self.doc.auto_paint(&self.tools.auto)
-                                } else {
-                                    self.doc.auto_biome(&self.tools.auto)
-                                };
-                                self.tools.auto_done = Some((!paint, changed));
-                                self.feedback = Some(format!(
-                                    "{} over the whole map: {changed} columns changed",
-                                    if paint { "Auto paint" } else { "Auto biome" }
-                                ));
+                                self.tools.run_auto = Some(!paint);
+                                keep = false;
                             }
                         });
                     });
@@ -2204,12 +2231,10 @@ impl MassifApp {
         egui::Panel::top("workspaces")
             .frame(egui::Frame::new().fill(pal.app_bg).inner_margin(egui::Margin { left: 10, right: 12, top: 0, bottom: 2 }))
             .show(ui, |ui| self.workspace_tabs(ui));
-        egui::Panel::bottom("status bar")
-            .frame(egui::Frame::new().fill(pal.app_bg).inner_margin(egui::Margin::symmetric(14, 5)))
-            .show(ui, |ui| self.status_bar(ui));
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(pal.app_bg).inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 0 }))
+            .frame(egui::Frame::new().fill(pal.app_bg).inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 8 }))
             .show(ui, |ui| self.dock(ui, frame));
+        self.notices(&ctx);
 
         self.dialogs(&ctx);
 
@@ -2358,11 +2383,11 @@ fn export_general(ui: &mut Ui, form: &mut ExportForm) {
         });
         card(&mut right[0], "World border", "The border Minecraft shows around the world.", |ui| {
             row(ui, "Centre", |ui| {
-                ui.add(egui::DragValue::new(&mut form.border.center[0]).speed(16.0));
-                ui.add(egui::DragValue::new(&mut form.border.center[1]).speed(16.0));
+                crate::widgets::drag(ui, egui::DragValue::new(&mut form.border.center[0]).speed(16.0));
+                crate::widgets::drag(ui, egui::DragValue::new(&mut form.border.center[1]).speed(16.0));
             });
             row(ui, "Size", |ui| {
-                ui.add(egui::DragValue::new(&mut form.border.size).range(16.0..=60_000_000.0).speed(64.0).suffix(" blocks"));
+                crate::widgets::drag(ui, egui::DragValue::new(&mut form.border.size).range(16.0..=60_000_000.0).speed(64.0).suffix(" blocks"));
             });
             row(ui, "", |ui| {
                 if ui.small_button("Fit the map").on_hover_text("Centre the border on the map, just large enough for it").clicked()
@@ -2421,9 +2446,9 @@ fn export_world(ui: &mut Ui, form: &mut ExportForm) {
     });
     card(ui, "Spawn point", "Where players appear the first time.", |ui| {
         row(ui, "x, y, z", |ui| {
-            ui.add(egui::DragValue::new(&mut form.spawn[0]));
-            ui.add(egui::DragValue::new(&mut form.spawn[1]).range(form.heights.0..=form.heights.1 - 1));
-            ui.add(egui::DragValue::new(&mut form.spawn[2]));
+            crate::widgets::drag(ui, egui::DragValue::new(&mut form.spawn[0]));
+            crate::widgets::drag(ui, egui::DragValue::new(&mut form.spawn[1]).range(form.heights.0..=form.heights.1 - 1));
+            crate::widgets::drag(ui, egui::DragValue::new(&mut form.spawn[2]));
         });
         ui.label(RichText::new("Spawn point for this export.").size(11.5).color(pal.weak));
     });
@@ -4551,6 +4576,66 @@ mod tests {
         assert!(h.state().graph.zoom() > zoom * 1.2, "the wheel zooms: {zoom} → {}", h.state().graph.zoom());
     }
 
+    /// The automatic biomes over a real map, as big as they come
+    /// (MASSIF_AUTO_WORLD: a .massif), as a user gets them: the whole map at
+    /// once, then the map in biomes. Needs a GPU: runs with
+    /// MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn auto_biome_on_a_real_world() {
+        let (Some(dir), Some(path)) = (
+            std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from),
+            std::env::var_os("MASSIF_AUTO_WORLD").map(PathBuf::from),
+        ) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let ctx = h.ctx.clone();
+        h.state_mut().jobs.push(Job::open(&ctx, path));
+        let started = std::time::Instant::now();
+        while !h.state().jobs.is_empty() {
+            assert!(started.elapsed().as_secs() < 120, "opening timed out");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        h.run_steps(10);
+        h.state_mut().dialog = None;
+        {
+            let app = h.state_mut();
+            let id = app.active_map.or_else(|| app.maps.keys().next().copied()).expect("a map area");
+            app.maps.get_mut(&id).unwrap().mode = crate::map_render::MapMode::Biome;
+            app.tools.select(Tool::AutoBiome);
+        }
+        h.run_steps(10);
+        // In the background: the window keeps drawing, the job reports how
+        // far it is, and its result is one undoable step.
+        let t = std::time::Instant::now();
+        h.state_mut().tools.run_auto = Some(true);
+        h.step();
+        assert_eq!(h.state().jobs.len(), 1, "a job runs");
+        let mut slowest = std::time::Duration::ZERO;
+        let mut shown = false;
+        while !h.state().jobs.is_empty() {
+            assert!(t.elapsed().as_secs() < 300, "the job timed out");
+            let f = std::time::Instant::now();
+            h.step();
+            slowest = slowest.max(f.elapsed());
+            if !shown && h.state().jobs.first().and_then(|j| j.progress.as_ref()).is_some_and(|p| p.fraction() > 0.3) {
+                h.render().unwrap().save(dir.join("auto-biome-progress.png")).unwrap();
+                shown = true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        let (biomes, changed) = h.state().tools.auto_done.expect("it reports");
+        assert!(biomes && changed > 1_000_000, "{changed} columns");
+        eprintln!("auto biome: {changed} columns in {:.1?}, slowest frame {:.0?}", t.elapsed(), slowest);
+        let t = std::time::Instant::now();
+        h.run_steps(30);
+        eprintln!("30 frames after: {:.1?}", t.elapsed());
+        assert_eq!(h.state().doc.history.undo_label(), Some("Auto biome"));
+        h.render().unwrap().save(dir.join("auto-biome-real.png")).unwrap();
+    }
+
     /// Rivers on a real map (MASSIF_RIVER_WORLD: a .massif or .world), as a
     /// user gets them: the template, its preview, the conversion and the
     /// map in 3D. Needs a GPU: runs with MASSIF_SNAPSHOT_DIR.
@@ -5433,6 +5518,78 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         h.get_by_label_contains("Split vertically");
         h.render().unwrap().save(dir.join("menu-area.png")).unwrap();
+    }
+
+    /// A graph whose output takes nothing says so, and starts from the
+    /// map in one click.
+    #[test]
+    fn a_graph_without_relief_says_so() {
+        use egui_kittest::kittest::Queryable;
+        use massif_core::graph::{Graph, NodeKind};
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        {
+            let app = h.state_mut();
+            let mut g = Graph::default();
+            g.add(NodeKind::HeightOutput, [0.0, 0.0]);
+            app.doc.world.meta.graph = Some(g);
+            app.layout.switch_side(true);
+            app.graph.graph_replaced();
+        }
+        h.run_steps(10);
+        h.get_by_label("No relief to show");
+        h.get_by_label_contains("Start from this map").click();
+        h.run_steps(10);
+        assert!(h.query_by_label("No relief to show").is_none(), "the map is shown");
+        let g = h.state().doc.world.meta.graph.as_ref().unwrap();
+        assert!(g.nodes.iter().any(|n| n.kind == NodeKind::MapHeight));
+    }
+
+    /// The help: F1 opens it, a search narrows its topics. Needs a GPU:
+    /// renders with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn the_help_opens_and_searches() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        h.key_press(Key::F1);
+        h.run_steps(4);
+        h.get_by_label("Massif Help");
+        assert!(h.query_all_by_label("Getting started").count() >= 2, "in the list, and as the title");
+        h.get_by_label("Terrain graphs");
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            h.render().unwrap().save(dir.join("help.png")).unwrap();
+        }
+        if let Some(Dialog::Help(state)) = &mut h.state_mut().dialog {
+            state.query = "beaches".into();
+        }
+        h.run_steps(4);
+        assert!(h.query_by_label("Terrain graphs").is_none(), "topics without it are hidden");
+        h.get_by_label("WorldPainter worlds");
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            h.render().unwrap().save(dir.join("help-search.png")).unwrap();
+        }
+    }
+
+    /// Right-click on a workspace: back to how it was.
+    #[test]
+    fn a_workspace_resets_from_its_tab() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let first = h.state().layout.current().root.count();
+        {
+            let app = h.state_mut();
+            let area = app.layout.current().root.first_area();
+            app.layout.split(area, crate::layout::Dir::Row);
+        }
+        h.run_steps(3);
+        assert_eq!(h.state().layout.current().root.count(), first + 1);
+        h.get_by_label("Layout").click_secondary();
+        h.run_steps(3);
+        h.get_by_label_contains("Reset").click();
+        h.run_steps(3);
+        assert_eq!(h.state().layout.current().root.count(), first);
     }
 
     /// Dragging the corner of an area into it splits it there.

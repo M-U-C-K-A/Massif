@@ -254,6 +254,44 @@ impl Edit<'_> {
         self.level().view(pos)
     }
 
+    /// Decode tiles of the edited level about to be read many times (see
+    /// [`Level::warm`]).
+    pub fn warm(&mut self, positions: &[TilePos]) {
+        self.dim.levels[self.level].warm(positions);
+    }
+
+    /// Keep at most `max_hot` tiles of the edited level decoded: long passes
+    /// over a big map cool it down as they go.
+    pub fn cool(&mut self, max_hot: usize) {
+        self.dim.levels[self.level].trim(max_hot);
+    }
+
+    /// Drop what was sculpted in 3D over `tiles`, recorded for undo: the
+    /// ground under it was written anew, and the sculpture belonged to the
+    /// old one. Returns how many chunks went.
+    pub fn clear_voxels(&mut self, tiles: &[TilePos]) -> usize {
+        let chunks: Vec<ChunkPos> = tiles
+            .iter()
+            .flat_map(|t| self.dim.voxels.in_tile(*t).map(|(p, _)| p).collect::<Vec<_>>())
+            .collect();
+        for &pos in &chunks {
+            self.touch_voxel(pos);
+            self.dim.voxels.remove(pos);
+        }
+        chunks.len()
+    }
+
+    /// Put whole tiles in place, in their compressed form (worked out on a
+    /// copy of the map), recorded for undo.
+    pub fn replace_tiles(&mut self, tiles: Vec<(TilePos, crate::level::Blob)>) {
+        let positions: Vec<TilePos> = tiles.iter().map(|t| t.0).collect();
+        self.touch_all(&positions);
+        let level = &mut self.dim.levels[self.level];
+        for (pos, blob) in tiles {
+            level.insert_blob(pos, blob);
+        }
+    }
+
     fn touch(&mut self, pos: TilePos) {
         if self.step.structure.is_some() {
             return; // the snapshot already covers every tile
@@ -447,6 +485,24 @@ mod tests {
         let mut w = World::new(WorldMeta::default());
         w.dims[0].ground_mut().insert(POS, Tile::ground(64.0, 1, 63));
         w
+    }
+
+    /// Sculpture dropped with the ground it stood on comes back on undo.
+    #[test]
+    fn cleared_sculpture_comes_back_on_undo() {
+        let mut w = world();
+        let mut h = History::default();
+        h.begin("sculpt", 0);
+        let pos = crate::voxel::ChunkPos::new(0, 4, 0);
+        h.edit(&mut w, 0).voxel_chunk_mut(pos).set(1, 2, 3, 0);
+        h.commit();
+        assert!(w.dims[0].voxels.has_tile(POS));
+        h.begin("graph", 0);
+        assert_eq!(h.edit(&mut w, 0).clear_voxels(&[POS]), 1);
+        h.commit();
+        assert!(!w.dims[0].voxels.has_tile(POS));
+        h.undo(&mut w);
+        assert!(w.dims[0].voxels.get(pos).is_some(), "the sculpture is back");
     }
 
     fn top(w: &World, cell: usize) -> f32 {
