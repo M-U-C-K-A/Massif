@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged into the Info.plist of Massif.app by finish-app.sh: the .massif file type, which Massif opens and for which
+     the Quick Look extension draws the map as the file's icon; and WorldPainter's .world, which Massif can open too.
+     The document icon is made by macOS from the application icon. -->
+<plist version="1.0">
+<dict>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Massif Map</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>io.github.m-u-c-k-a.massif.map</string>
+            </array>
+            <key>CFBundleTypeIconSystemGenerated</key>
+            <true/>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>WorldPainter World</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>org.pepsoft.worldpainter.world</string>
+            </array>
+        </dict>
+    </array>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>io.github.m-u-c-k-a.massif.map</string>
+            <key>UTTypeDescription</key>
+            <string>Massif Map</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+                <string>public.content</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>massif</string>
+                </array>
+                <key>public.mime-type</key>
+                <array>
+                    <string>application/x-massif</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
+    <key>UTImportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>org.pepsoft.worldpainter.world</string>
+            <key>UTTypeDescription</key>
+            <string>WorldPainter World</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+                <string>public.content</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>world</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
+</dict>
+</plist>

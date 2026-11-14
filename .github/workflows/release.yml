@@ -102,8 +102,10 @@ jobs:
           </dict>
           </plist>
           EOF
-          # Not notarized: signed ad hoc so that Apple silicon runs it.
-          codesign --force --deep --sign - "$app"
+          # The .massif file type and the Quick Look extension that shows
+          # a map as its file's icon. Not notarized: signed ad hoc so that
+          # Apple silicon runs it.
+          tools/macos/finish-app.sh "$app" "${VERSION}"
           codesign --force --sign - dist/massif-cli
           (cd dist && ditto -c -k --keepParent Massif.app "Massif-${VERSION}-macos.zip")
           hdiutil create -volname Massif -srcfolder "$app" -ov -format UDZO "dist/Massif-${VERSION}-macos.dmg"

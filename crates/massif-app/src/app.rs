@@ -2157,6 +2157,13 @@ impl MassifApp {
             self.sculpt3d.invalidate_all();
         }
         self.covers_key = Some(covers);
+        // A map or a world the Finder asks to open (the first of them).
+        if let Some(path) = crate::finder::take().into_iter().find(|p| {
+            let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+            ext == massif_format::EXTENSION || ext == "world"
+        }) {
+            self.request(&ctx, Pending::Open(Some(path)));
+        }
         // Objects dropped on the window: a layer of their own.
         if self.home.is_none() {
             let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| panels::is_object_file(p)).collect());

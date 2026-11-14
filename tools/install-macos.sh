@@ -37,12 +37,18 @@ cat > "$app/Contents/Info.plist" <<EOF
 </dict>
 </plist>
 EOF
-# Signed ad hoc so that Apple silicon runs it.
-codesign --force --deep --sign - "$app"
+# The .massif file type, the Quick Look extension that shows a map's
+# picture as its file's icon, and the signature (ad hoc, so that Apple
+# silicon runs it).
+tools/macos/finish-app.sh "$app" "$version" "$(uname -m)"
 
 mkdir -p "$dest"
 rm -rf "$dest/Massif.app"
 ditto "$app" "$dest/Massif.app"
-# Let Finder and Spotlight see the new copy at once.
+# Let Finder and Spotlight see the new copy at once, its file types and
+# its Quick Look extension too.
 touch "$dest/Massif.app"
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$dest/Massif.app" || true
+qlmanage -r >/dev/null 2>&1 || true
+qlmanage -r cache >/dev/null 2>&1 || true
 echo "Installed $dest/Massif.app (Massif $version)"

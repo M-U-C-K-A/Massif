@@ -4,7 +4,9 @@
 mod app;
 mod blocks;
 mod brushes;
+mod cards;
 mod doc;
+mod finder;
 mod graph_editor;
 mod home;
 mod jobs;
@@ -35,6 +37,8 @@ fn icon() -> egui::IconData {
 
 fn main() -> eframe::Result {
     let open = std::env::args_os().nth(1).map(PathBuf::from);
+    // Files the Finder asks to open.
+    finder::listen();
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Massif")
         .with_app_id("massif")
@@ -72,6 +76,9 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "Massif",
         options,
-        Box::new(|cc| Ok(Box::new(app::MassifApp::new(cc, open)))),
+        Box::new(|cc| {
+            finder::wake(&cc.egui_ctx);
+            Ok(Box::new(app::MassifApp::new(cc, open)))
+        }),
     )
 }

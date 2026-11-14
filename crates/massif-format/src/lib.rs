@@ -25,6 +25,7 @@
 //! │         i32 tile_x · i32 tile_z · u64 offset · u32 length · u32 CRC32C  │
 //! │ VOXL  zstd(sculpted 3D chunks of one dimension), per chunk:             │
 //! │         i32 x · i32 y · i32 z (in chunks) · 4096 densities (y, z, x)    │
+//! │ THMB  a JPEG picture of the map, for file browsers (Finder, home)       │
 //! ├──────────────────────────── directory ──────────────────────────────────┤
 //! │ 32 bytes per section:                                                   │
 //! │   [u8; 4] kind · u32 id · u64 offset · u64 length · u32 CRC32C · u32    │
@@ -62,6 +63,9 @@ const TILE_ENTRY_LEN: usize = 24;
 const KIND_META: [u8; 4] = *b"META";
 const KIND_TILE_INDEX: [u8; 4] = *b"TIDX";
 const KIND_VOXELS: [u8; 4] = *b"VOXL";
+/// A picture of the map: the Finder's Quick Look extension shows it as the
+/// file's icon (see `tools/macos/thumbnails`).
+pub const KIND_THUMBNAIL: [u8; 4] = *b"THMB";
 const FLAG_ZSTD: u32 = 1;
 
 #[derive(Debug, thiserror::Error)]
@@ -223,6 +227,15 @@ pub fn write<W: Write>(world: &World, mut out: W) -> Result<Stats> {
             payload: codec::zstd_compress(&serde_json::to_vec(&meta)?),
         },
     );
+    // A picture of the map, last, for file browsers.
+    if let Some(jpeg) = massif_core::thumbnail::jpeg(world) {
+        sections.push(Section {
+            kind: KIND_THUMBNAIL,
+            id: next_section,
+            flags: 0,
+            payload: jpeg,
+        });
+    }
 
     // Sections follow the frames, the directory follows the sections.
     let mut directory = Vec::with_capacity(sections.len() * SECTION_LEN);
@@ -288,6 +301,41 @@ pub fn save(world: &World, path: &Path) -> Result<Stats> {
 }
 
 // --------------------------------------------------------------- reading --
+
+/// The picture of the map a `.massif` file keeps (a JPEG image), read
+/// without loading the map; `None` for a file without one.
+pub fn read_thumbnail(path: &Path) -> Result<Option<Vec<u8>>> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path)?;
+    let mut header = [0u8; HEADER_LEN];
+    file.read_exact(&mut header)?;
+    if header[..8] != MAGIC {
+        return Err(FormatError::NotMassif);
+    }
+    let (offset, len) = (u64_at(&header, 0x10), u32_at(&header, 0x18) as usize);
+    if len % SECTION_LEN != 0 || len > 1 << 24 {
+        return corrupt("the section directory has a ragged length");
+    }
+    let mut directory = vec![0u8; len];
+    file.seek(SeekFrom::Start(offset))?;
+    file.read_exact(&mut directory)?;
+    for entry in directory.as_chunks::<SECTION_LEN>().0 {
+        if entry[..4] == KIND_THUMBNAIL {
+            let (at, len) = (u64_at(entry, 8), u64_at(entry, 16));
+            if len > 1 << 24 {
+                return corrupt("the picture is too large");
+            }
+            let mut jpeg = vec![0u8; len as usize];
+            file.seek(SeekFrom::Start(at))?;
+            file.read_exact(&mut jpeg)?;
+            if crc32c::crc32c(&jpeg) != u32_at(entry, 24) {
+                return corrupt("the picture fails its checksum");
+            }
+            return Ok(Some(jpeg));
+        }
+    }
+    Ok(None)
+}
 
 fn u16_at(b: &[u8], at: usize) -> u16 {
     u16::from_le_bytes([b[at], b[at + 1]])
@@ -792,6 +840,9 @@ mod tests {
         assert!(!dir.join("world.massif.tmp").exists());
         let mut back = load(&path).unwrap();
         assert_same(&mut world, &mut back);
+        // The file keeps a picture of the map, read without the rest.
+        let jpeg = read_thumbnail(&path).unwrap().expect("a picture of the map");
+        assert!(jpeg.starts_with(&[0xff, 0xd8]));
         // Saving over an existing file replaces it.
         save(&back.snapshot(), &path).unwrap();
         assert!(load(&path).is_ok());

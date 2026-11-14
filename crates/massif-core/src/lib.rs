@@ -37,6 +37,7 @@ pub mod plane;
 pub mod registry;
 pub mod river;
 pub mod stamps;
+pub mod thumbnail;
 pub mod tile;
 pub mod voxel;
 pub mod world;

@@ -86,7 +86,11 @@ over every CPU core.
   can change.
 - **A compact, robust file format.** `.massif` stores each 128 × 128 tile as
   an independent, checksummed zstd frame: saving copies bytes, opening decodes
-  nothing, corruption is detected and contained.
+  nothing, corruption is detected and contained. Each file keeps a picture of
+  its map, which the Finder shows as its icon.
+- **Cards on every tool and brush.** Hovered, a tool shows a little looping
+  animation of what it does, what the mouse and keys do with it; a brush,
+  the land it raises, slowly turning.
 
 ## Getting started
 
@@ -143,6 +147,25 @@ cargo run --release -p massif-cli -- export world.massif ~/Library/Application\ 
 ```
 
 ## Using the editor
+
+### Cards
+
+Hover a tool and its card shows: a little looping animation of the tool at
+work on a patch of land drawn like the map — a hill rising under the brush,
+flowers spreading, trees growing where they are painted, a river laid out
+point by point and dug, water rising in a basin — then what it does, what
+each gesture and key does with it, and a remark. A brush's card shows the
+land it raises, shaded and contoured on a block of ground, turning slowly
+from side to side, so that its shape is easy to make out. (As in the user's
+WorldPainter fork, whose cards these are.)
+
+### In the Finder
+
+A `.massif` file shows its map as its icon, and in Quick Look: Massif keeps
+a small picture of the map in the file, which the Quick Look extension that
+comes with the app (`tools/macos`) reads without opening the map — as
+WorldPainter's fork does for `.world` files. A double-click on a `.massif`
+opens it in Massif; Open With ▸ Massif imports a WorldPainter `.world`.
 
 ### Areas and workspaces
 
@@ -679,6 +702,7 @@ tile frames         one zstd frame per tile, independent of the others
 sections            META  world settings, registry and levels (zstd JSON)
                     TIDX  tile index of a level: x, z, offset, length, CRC32C
                     VOXL  sculpted chunks of a dimension (zstd)
+                    THMB  a JPEG picture of the map, for the Finder
 directory           32 bytes per section: kind, id, offset, length, CRC32C, flags
 ```
 

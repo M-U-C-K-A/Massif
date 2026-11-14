@@ -85,12 +85,7 @@ pub fn tools_panel(ui: &mut Ui, tools: &mut ToolState) {
                     );
                     name.on_hover_text(group);
                     for &tool in list {
-                        let key = tool.shortcut_text().map(|k| format!("  ({k})")).unwrap_or_default();
-                        let tip = format!("{}{key}\n{}", tool.label(), tool.help());
-                        if icon_button(ui, tool.icon(), tools.tool == tool, 28.0)
-                            .on_hover_text(tip)
-                            .clicked()
-                        {
+                        if crate::cards::tool(icon_button(ui, tool.icon(), tools.tool == tool, 28.0), tool).clicked() {
                             tools.select(tool);
                         }
                     }
@@ -109,11 +104,7 @@ pub fn sculpt_toolbar(ui: &mut Ui, s: &mut crate::tools::SculptSettings, library
         ui.spacing_mut().item_spacing = vec2(4.0, 0.0);
         ui.spacing_mut().interact_size.y = 22.0;
         for tool in crate::tools::SculptSettings::TOOLS {
-            if ui
-                .selectable_label(s.tool == tool, theme::with_icon(tool.icon(), tool.label()))
-                .on_hover_text(tool.help())
-                .clicked()
-            {
+            if crate::cards::tool(ui.selectable_label(s.tool == tool, theme::with_icon(tool.icon(), tool.label())), tool).clicked() {
                 s.tool = tool;
             }
         }
@@ -145,7 +136,14 @@ pub fn sculpt_toolbar(ui: &mut Ui, s: &mut crate::tools::SculptSettings, library
                         for source in list {
                             let texture = library.thumbnail(&ctx, &source, dark);
                             let tip = library.name(&source);
-                            if brush_button(ui, texture, s.source == source, 40.0).on_hover_text(tip).clicked()
+                            let response = brush_button(ui, texture, s.source == source, 40.0);
+                            let response = if response.hovered() {
+                                let shape = library.brush(&source, &s.brush);
+                                crate::cards::brush(response, &tip, &format!("{source:?}"), shape.as_ref())
+                            } else {
+                                response
+                            };
+                            if response.clicked()
                                 && let Some(brush) = library.brush(&source, &s.brush)
                             {
                                 s.brush = brush;
@@ -471,7 +469,14 @@ fn brush_grid(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibrary, br
         for (source, name) in brushes {
             let texture = library.thumbnail(&ctx, source, dark);
             let selected = tools.brush_source == *source;
-            if brush_button(ui, texture, selected, 44.0).on_hover_text(name).clicked() {
+            let response = brush_button(ui, texture, selected, 44.0);
+            let response = if response.hovered() {
+                let shape = library.brush(source, &tools.brush);
+                crate::cards::brush(response, name, &format!("{source:?}"), shape.as_ref())
+            } else {
+                response
+            };
+            if response.clicked() {
                 select_brush(tools, library, source.clone());
             }
         }
