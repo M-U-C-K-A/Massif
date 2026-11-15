@@ -54,7 +54,7 @@ fn backdrops() {
     });
     let stem = |f: &std::path::PathBuf| f.file_stem().and_then(|s| s.to_str()).unwrap_or("backdrop").to_owned();
     let is_dawn = |s: &str| DAWN.iter().any(|e| s.to_ascii_lowercase().ends_with(e));
-    let mut code = String::from("/// The pictures of `assets/backdrops`: name, bytes at night, bytes at dawn\n/// (for the light theme) if there is a dawn.\npub const BACKDROPS: &[(&str, &[u8], Option<&[u8]>)] = &[\n");
+    let mut code = String::from("/// A picture of `assets/backdrops`: name, bytes at night, bytes at dawn\n/// (for the light theme) if there is a dawn.\npub type Backdrop = (&'static str, &'static [u8], Option<&'static [u8]>);\n\n/// The pictures of `assets/backdrops`.\npub const BACKDROPS: &[Backdrop] = &[\n");
     for f in files.iter().filter(|f| !is_dawn(&stem(f))) {
         println!("cargo:rerun-if-changed={}", f.display());
         let name = stem(f);

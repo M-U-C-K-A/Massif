@@ -65,12 +65,15 @@ struct Settings {
     backdrops_seen: Vec<String>,
     /// The Developer panel is offered: frames, memory, the processor, live.
     developer: bool,
+    /// The typeface the interface is set in.
+    typeface: theme::Typeface,
 }
 
 /// A section of the settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrefsSection {
     Appearance,
+    Typeface,
     Sounds,
     Notifications,
     Memory,
@@ -93,6 +96,7 @@ impl Default for Settings {
             animate_backdrop: true,
             backdrops_seen: Vec::new(),
             developer: false,
+            typeface: theme::Typeface::System,
         }
     }
 }
@@ -264,6 +268,38 @@ fn default_world() -> World {
     generate(&GenParams::default())
 }
 
+/// A typeface to choose, shown in itself: its name and a line set in it,
+/// a dot on the right for the one chosen, what it is like on hover.
+fn typeface_row(ui: &mut Ui, face: theme::Typeface, on: bool) -> egui::Response {
+    const SAMPLE: &str = "Ridges, rivers and coasts — 2 048 × 2 048 blocks";
+    let pal = Palette::of(ui);
+    let first = ui.cursor().top() <= ui.max_rect().top() + 0.5;
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 54.0), Sense::click());
+    if !first {
+        ui.painter().hline(rect.x_range().expand(12.0), rect.top(), Stroke::new(1.0, pal.border));
+    }
+    let hovered = response.hovered();
+    let family = face.family();
+    let name = egui::WidgetText::from(RichText::new(face.name()).family(family.clone()).size(15.0).variation(theme::WGHT, theme::SEMIBOLD))
+        .into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body);
+    let sample = egui::WidgetText::from(RichText::new(SAMPLE).family(family).size(12.5))
+        .into_galley(ui, Some(egui::TextWrapMode::Truncate), rect.width() - 32.0, egui::TextStyle::Body);
+    let (name_h, gap) = (name.size().y, 2.0);
+    let top = rect.center().y - (name_h + gap + sample.size().y) / 2.0;
+    let strong = if on || hovered { pal.text } else { theme::mix(pal.text, pal.weak, 0.3) };
+    ui.painter().galley(egui::pos2(rect.left(), top), name, strong);
+    ui.painter().galley(egui::pos2(rect.left(), top + name_h + gap), sample, pal.weak);
+    let dot = egui::pos2(rect.right() - 9.0, rect.center().y);
+    if on {
+        ui.painter().circle_stroke(dot, 7.5, Stroke::new(1.5, pal.text));
+        ui.painter().circle_filled(dot, 3.5, pal.text);
+    } else {
+        ui.painter().circle_stroke(dot, 7.5, Stroke::new(1.0, if hovered { pal.text } else { pal.weak }));
+    }
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, on, face.name()));
+    response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(face.about())
+}
+
 impl MassifApp {
     pub fn new(cc: &eframe::CreationContext<'_>, open: Option<PathBuf>) -> Self {
         theme::install(&cc.egui_ctx);
@@ -290,6 +326,7 @@ impl MassifApp {
             tools.sculpt.tool = Tool::Build;
         }
         theme::set_accent(&cc.egui_ctx, settings.accent);
+        theme::set_typeface(&cc.egui_ctx, settings.typeface);
         let mut app = Self::with_world(default_world(), layout, tools, settings);
         if let Some(render) = cc.storage.and_then(|s| eframe::get_value(s, "massif.render")) {
             app.graph.view.render = render;
@@ -636,6 +673,19 @@ impl MassifApp {
             crate::widgets::row(ui, "Animated home screen", |ui| {
                 crate::widgets::switch(ui, &mut self.settings.animate_backdrop).on_hover_text("The dither of its picture moves on about once a second");
             });
+        });
+    }
+
+    fn prefs_typeface(&mut self, ui: &mut Ui, ctx: &egui::Context) {
+        Self::prefs_header(ui, "Typeface", "What the interface is set in: the system's own typeface, or one of those built into Massif. Each shows here in itself.");
+        crate::widgets::well(ui, |ui| {
+            for face in theme::Typeface::ALL {
+                if typeface_row(ui, face, self.settings.typeface == face).clicked() && self.settings.typeface != face {
+                    self.settings.typeface = face;
+                    theme::set_typeface(ctx, face);
+                    crate::sounds::play(Cue::Select);
+                }
+            }
         });
     }
 
@@ -2135,6 +2185,7 @@ impl MassifApp {
                             ui.spacing_mut().item_spacing.y = 2.0;
                             for (s, icon, label) in [
                                 (PrefsSection::Appearance, Icon::Palette, "Appearance"),
+                                (PrefsSection::Typeface, Icon::Type, "Typeface"),
                                 (PrefsSection::Sounds, Icon::Volume2, "Sounds"),
                                 (PrefsSection::Notifications, Icon::Bell, "Notifications"),
                                 (PrefsSection::Memory, Icon::MemoryStick, "Memory"),
@@ -2167,6 +2218,7 @@ impl MassifApp {
                                 ui.set_width(508.0);
                                 match section {
                                     PrefsSection::Appearance => self.prefs_appearance(ui, ctx),
+                                    PrefsSection::Typeface => self.prefs_typeface(ui, ctx),
                                     PrefsSection::Sounds => self.prefs_sounds(ui),
                                     PrefsSection::Notifications => self.prefs_notifications(ui),
                                     PrefsSection::Memory => self.prefs_memory(ui),
@@ -3361,6 +3413,34 @@ mod tests {
         if let Some(dir) = dir {
             h.render().unwrap().save(dir.join("developer-panel.png")).unwrap();
         }
+    }
+
+    /// The typefaces: the settings show each in itself, a click sets the
+    /// interface in it, and each draws the whole interface.
+    #[test]
+    fn choosing_a_typeface() {
+        use egui_kittest::kittest::Queryable;
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let mut h = harness(ThemeChoice::Dark);
+        h.state_mut().dialog = Some(Dialog::Preferences(PrefsSection::Typeface));
+        h.run_steps(4);
+        h.get_by_label("Geist").click();
+        h.run_steps(4);
+        assert_eq!(h.state().settings.typeface, theme::Typeface::Geist);
+        assert_eq!(theme::typeface(), theme::Typeface::Geist);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("dialog-settings-typeface-geist.png")).unwrap();
+        }
+        h.state_mut().dialog = None;
+        for face in theme::Typeface::ALL {
+            theme::set_typeface(&h.ctx, face);
+            h.run_steps(4);
+            if let Some(dir) = &dir {
+                let name = face.name().to_lowercase().replace(' ', "-");
+                h.render().unwrap().save(dir.join(format!("typeface-{name}.png"))).unwrap();
+            }
+        }
+        theme::set_typeface(&h.ctx, theme::Typeface::System);
     }
 
     /// Walking in 3D Sculpt: the player comes down onto the land looked at,
@@ -5967,7 +6047,7 @@ mod tests {
         h.state_mut().dialog = Some(Dialog::Preferences(PrefsSection::Appearance));
         h.run_steps(5);
         h.render().unwrap().save(dir.join("dialog-settings.png")).unwrap();
-        for (section, name) in [(PrefsSection::Sounds, "sounds"), (PrefsSection::Notifications, "notifications"), (PrefsSection::Memory, "memory")] {
+        for (section, name) in [(PrefsSection::Typeface, "typeface"), (PrefsSection::Sounds, "sounds"), (PrefsSection::Notifications, "notifications"), (PrefsSection::Memory, "memory")] {
             h.state_mut().dialog = Some(Dialog::Preferences(section));
             h.run_steps(4);
             h.render().unwrap().save(dir.join(format!("dialog-settings-{name}.png"))).unwrap();

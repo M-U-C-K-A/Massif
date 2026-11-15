@@ -4,15 +4,16 @@
 //! near-white) surfaces, cards with hairline borders and generous corners,
 //! wells a shade darker for what is grouped, pill-shaped buttons, slim
 //! sliders, neutral fills for what is selected, one accent used sparingly,
-//! and the system's own typeface (SF Pro on macOS) with real weights.
+//! and the system's own typeface (SF Pro on macOS) — or one of those built
+//! in, chosen in the settings — with real weights.
 
 use egui::epaint::Shadow;
-use egui::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
 use egui::{
-    Color32, CornerRadius, FontData, FontFamily, FontId, RichText, Stroke, TextStyle, Theme, Visuals, vec2,
+    Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, RichText, Stroke, TextStyle, Theme, Visuals, vec2,
 };
 pub use lucide_icons::Icon;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, OnceLock};
 
 /// The accent colours offered in the settings: the colour of what is
 /// chosen, of the main buttons, of the art of the home screen.
@@ -284,7 +285,8 @@ pub fn primary_button(ui: &egui::Ui, text: impl Into<String>) -> egui::Button<'s
         .min_size(vec2(0.0, 28.0))
 }
 
-/// The system's interface typeface, when it can be read: SF Pro on macOS.
+/// The system's interface typeface and its monospaced one, when they can be
+/// read: SF Pro and SF Mono on macOS, Segoe UI and Consolas on Windows.
 fn system_fonts() -> (Option<Vec<u8>>, Option<Vec<u8>>) {
     let read = |paths: &[&str]| paths.iter().find_map(|p| std::fs::read(p).ok());
     if cfg!(target_os = "macos") {
@@ -302,48 +304,146 @@ fn system_fonts() -> (Option<Vec<u8>>, Option<Vec<u8>>) {
     }
 }
 
-/// Install fonts, text sizes, spacing and both colour themes.
-pub fn install(ctx: &egui::Context) {
-    let (sans, mono) = system_fonts();
-    if let Some(bytes) = sans {
-        ctx.add_font(FontInsert::new(
-            "system",
-            FontData::from_owned(bytes),
-            vec![InsertFontFamily {
-                family: FontFamily::Proportional,
-                priority: FontPriority::Highest,
-            }],
-        ));
+/// The system's interface font and its monospaced one, if read.
+type Faces = (Option<&'static [u8]>, Option<&'static [u8]>);
+
+/// The system's fonts, read once and kept for as long as Massif runs.
+fn system_faces() -> Faces {
+    static FACES: OnceLock<Faces> = OnceLock::new();
+    *FACES.get_or_init(|| {
+        let keep = |bytes: Option<Vec<u8>>| bytes.map(|b| &*Box::leak(b.into_boxed_slice()));
+        let (sans, mono) = system_fonts();
+        (keep(sans), keep(mono))
+    })
+}
+
+/// The typefaces the interface can be set in: the system's own, or one of
+/// those built into Massif — variable fonts under the SIL Open Font
+/// License, each with real weights (assets/fonts).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum Typeface {
+    #[default]
+    System,
+    Inter,
+    Geist,
+    IbmPlexSans,
+    Manrope,
+}
+
+impl Typeface {
+    pub const ALL: [Typeface; 5] = [Typeface::System, Typeface::Inter, Typeface::Geist, Typeface::IbmPlexSans, Typeface::Manrope];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Typeface::System => "System",
+            Typeface::Inter => "Inter",
+            Typeface::Geist => "Geist",
+            Typeface::IbmPlexSans => "IBM Plex Sans",
+            Typeface::Manrope => "Manrope",
+        }
     }
-    if let Some(bytes) = mono {
-        ctx.add_font(FontInsert::new(
-            "system mono",
-            FontData::from_owned(bytes),
-            vec![InsertFontFamily {
-                family: FontFamily::Monospace,
-                priority: FontPriority::Highest,
-            }],
-        ));
+
+    /// What it is like, in a few words.
+    pub fn about(self) -> &'static str {
+        match self {
+            Typeface::System => {
+                if cfg!(target_os = "macos") {
+                    "SF Pro, as the rest of macOS"
+                } else if cfg!(target_os = "windows") {
+                    "Segoe UI, as the rest of Windows"
+                } else {
+                    "The system's own, or Inter"
+                }
+            }
+            Typeface::Inter => "Drawn for screens: neutral, very clear when small",
+            Typeface::Geist => "A crisp, geometric grotesque",
+            Typeface::IbmPlexSans => "Engineered, with a technical character",
+            Typeface::Manrope => "Open and rounded, a little warmer",
+        }
     }
-    // Lucide ships as an icon font: registered as a fallback, its glyphs can
-    // be used inline in any label or button.
+
+    /// The font file: the system's, or Inter where it cannot be read.
+    fn bytes(self) -> &'static [u8] {
+        const INTER: &[u8] = include_bytes!("../assets/fonts/Inter.ttf");
+        match self {
+            Typeface::System => system_faces().0.unwrap_or(INTER),
+            Typeface::Inter => INTER,
+            Typeface::Geist => include_bytes!("../assets/fonts/Geist.ttf"),
+            Typeface::IbmPlexSans => include_bytes!("../assets/fonts/IBMPlexSans.ttf"),
+            Typeface::Manrope => include_bytes!("../assets/fonts/Manrope.ttf"),
+        }
+    }
+
+    /// Its name among the fonts.
+    fn key(self) -> &'static str {
+        match self {
+            Typeface::System => "system",
+            Typeface::Inter => "Inter",
+            Typeface::Geist => "Geist",
+            Typeface::IbmPlexSans => "IBM Plex Sans",
+            Typeface::Manrope => "Manrope",
+        }
+    }
+
+    /// A family of its own, whichever is chosen: to show it in the settings.
+    pub fn family(self) -> FontFamily {
+        FontFamily::Name(format!("typeface {}", self.key()).into())
+    }
+}
+
+static TYPEFACE: AtomicU32 = AtomicU32::new(0);
+
+/// The typeface the interface is set in.
+pub fn typeface() -> Typeface {
+    Typeface::ALL[TYPEFACE.load(Ordering::Relaxed) as usize % Typeface::ALL.len()]
+}
+
+/// Set the interface in `face`: it comes first, the system's typeface and
+/// egui's after it for what it lacks, Lucide's icons last; numbers and code
+/// stay in the system's monospaced font. Every typeface also has a family
+/// of its own, for the settings to show each in itself.
+pub fn set_typeface(ctx: &egui::Context, face: Typeface) {
+    TYPEFACE.store(Typeface::ALL.iter().position(|&f| f == face).unwrap_or(0) as u32, Ordering::Relaxed);
+    let mut fonts = FontDefinitions::default();
+    let fallback = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+    for f in Typeface::ALL {
+        fonts.font_data.insert(f.key().to_owned(), Arc::new(FontData::from_static(f.bytes())));
+    }
+    if let Some(mono) = system_faces().1 {
+        fonts.font_data.insert("system mono".to_owned(), Arc::new(FontData::from_static(mono)));
+    }
+    // Lucide ships as an icon font, its glyphs used inline in any label or
+    // button: after the typefaces, which have none where they are, and
+    // before egui's own fonts, whose few icons sit where some of its are.
     let mut lucide = FontData::from_static(lucide_icons::LUCIDE_FONT_BYTES);
     lucide.tweak.scale = 1.08;
     lucide.tweak.y_offset_factor = 0.07;
-    ctx.add_font(FontInsert::new(
-        "lucide",
-        lucide,
-        vec![
-            InsertFontFamily {
-                family: FontFamily::Proportional,
-                priority: FontPriority::Lowest,
-            },
-            InsertFontFamily {
-                family: FontFamily::Monospace,
-                priority: FontPriority::Lowest,
-            },
-        ],
-    ));
+    fonts.font_data.insert("lucide".to_owned(), Arc::new(lucide));
+
+    let family = |first: Typeface| -> Vec<String> {
+        let mut names = vec![first.key().to_owned()];
+        if first != Typeface::System {
+            names.push(Typeface::System.key().to_owned());
+        }
+        names.push("lucide".to_owned());
+        names.extend(fallback.iter().cloned());
+        names
+    };
+    fonts.families.insert(FontFamily::Proportional, family(face));
+    for f in Typeface::ALL {
+        fonts.families.insert(f.family(), family(f));
+    }
+    let mono = fonts.families.entry(FontFamily::Monospace).or_default();
+    if system_faces().1.is_some() {
+        mono.insert(0, "system mono".to_owned());
+    }
+    mono.insert(1.min(mono.len()), "lucide".to_owned());
+    ctx.set_fonts(fonts);
+}
+
+/// Install fonts, text sizes, spacing and both colour themes.
+pub fn install(ctx: &egui::Context) {
+    set_typeface(ctx, typeface());
 
     ctx.all_styles_mut(|style| {
         style.text_styles = [
@@ -395,4 +495,39 @@ pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
 
 pub fn rgb(c: [u8; 3]) -> Color32 {
     Color32::from_rgb(c[0], c[1], c[2])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every typeface reads, and has the weights the interface asks for.
+    #[test]
+    fn the_typefaces_have_real_weights() {
+        for face in Typeface::ALL {
+            let axes = FontData::from_static(face.bytes()).variation_axes();
+            let weight = axes.iter().find(|a| a.tag == "wght");
+            let Some(weight) = weight else {
+                // The system's typeface may be a static one, off macOS.
+                assert!(face == Typeface::System && !cfg!(target_os = "macos"), "{} has no weight axis", face.name());
+                continue;
+            };
+            assert!(weight.range.min <= 400.0 && weight.range.max >= SEMIBOLD, "{}: weights {:?}", face.name(), weight.range);
+        }
+    }
+
+    /// Lucide's icons show whichever typeface is chosen: none puts glyphs
+    /// of its own where they are (Inter and Manrope had some).
+    #[test]
+    fn icons_show_in_every_typeface() {
+        let ctx = egui::Context::default();
+        set_typeface(&ctx, Typeface::System);
+        ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+        for (face, family) in Typeface::ALL.map(|f| (f, f.family())).into_iter().chain([(Typeface::System, FontFamily::Proportional)]) {
+            let chars = ctx.fonts_mut(|f| f.characters(&family).clone());
+            let icons = chars.iter().filter(|(_, names)| names.iter().any(|n| n == "lucide") && names[0] != "lucide");
+            let hidden: Vec<u32> = icons.map(|(c, _)| *c as u32).filter(|c| (0xE000..=0xF8FF).contains(c)).collect();
+            assert!(hidden.is_empty(), "{} hides {} icons, from U+{:04X}", face.name(), hidden.len(), hidden.first().copied().unwrap_or(0));
+        }
+    }
 }

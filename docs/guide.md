@@ -78,11 +78,18 @@ topic, with a search, and the keyboard shortcuts.
 
 ## Settings
 
-**Settings** (⌘, or the home screen's sidebar) has four sections, in a window of their own:
+**Settings** (⌘, or the home screen's sidebar) has six sections, in a window of their own:
 
 - **Appearance**: the theme, the accent colour (the colour of what is
   chosen, of the main buttons and of the home screen's art: eight colours, or
   any other), the home screen's picture moving or still.
+- **Typeface**: what the interface is set in — the system's own (SF Pro on
+  macOS, Segoe UI on Windows), or one of four built into Massif: **Inter**,
+  drawn for screens, **Geist**, a crisp geometric grotesque, **IBM Plex
+  Sans**, engineered, and **Manrope**, open and rounded. All are variable
+  fonts under the SIL Open Font License, so the medium and semi-bold of
+  titles and values are real weights. Each is shown in itself, and a click
+  sets the whole interface in it, at once.
 - **Sounds**: little sounds, synthesised as they play — soft mallets,
   clicks and air, as [Cuelume](https://cuelume.dev/) makes them, so there
   is no sound file in the app: three notes rising when a long task is done,
@@ -101,6 +108,12 @@ topic, with a search, and the keyboard shortcuts.
   — three fifths for the map's tiles, measured at the size they take, the
   rest for the column data and images of the map view —, beyond which what
   was used least is put away, compressed; and what is in use now.
+- **Developer**: developer mode adds a **Developer** panel to every area's
+  menu, as the brushes or the layers: frames a second and the time each
+  takes (and how much of it is Massif's own work), the memory the system
+  counts for Massif and the processor's time, in charts that run live; then
+  what is kept decoded, the map, the tasks running, the graphics card, and
+  why Massif draws again.
 
 ## New worlds and export
 

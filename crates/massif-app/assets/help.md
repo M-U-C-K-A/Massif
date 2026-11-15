@@ -121,11 +121,13 @@ The viewport shows the graph's output in 3D, with its sun, clouds, haze and sea 
 **Import from WorldPainter…** opens a `.world` file: its dimensions, heights (tall worlds keep their height), terrains, water, biomes and custom terrains. WorldPainter's **Beaches** come in as it draws them: grass with patches of sand, gravel and clay. Layers Massif does not have yet are listed in the import report.
 
 # Settings
-**Massif ▸ Settings** (`⌘,`, or the home screen's sidebar) has four sections.
+**Massif ▸ Settings** (`⌘,`, or the home screen's sidebar) has six sections.
 - **Appearance**: the theme, the accent colour, and whether the home screen's picture moves.
+- **Typeface**: what the interface is set in — the system's own typeface, or Inter, Geist, IBM Plex Sans or Manrope, built into Massif. Each is shown in itself; a click sets the whole interface in it.
 - **Sounds**: little sounds for what happens, made by Massif as it plays them. **Essential**: tasks done, saving, errors. **All**: the interface too (choices, switches, windows, workspaces). Each can be heard from there. The sound output is held only while a sound plays: headphones are free to go to another device.
 - **Notifications**: the system tells when a long task ends (an export, an import, a conversion, a pass over the whole map): never, while Massif is in the background, or always.
 - **Memory**: a limit for what Massif keeps decoded to be quick (the map's tiles, the map view's images), and what is in use now. Past it, what was used least is put away, compressed.
+- **Developer**: developer mode offers a **Developer** panel in every area's menu: frames a second and the time of each, the memory the system counts, the processor's time, in live charts; what is kept decoded, the map, its tasks and the graphics card.
 
 # Shortcuts
 | `⌘N` `⌘O` `⌘S` `⌘E` | New, open, save, export |
