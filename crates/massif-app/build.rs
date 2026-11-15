@@ -17,6 +17,14 @@ fn main() {
 
 /// The endings of the names of a scene's layers.
 const LAYERS: [&str; 4] = ["_ciel", "_sky", "_relief", "_land"];
+/// The endings of a scene's picture at dawn, for the light theme; a scene's
+/// whole picture may end in `_complet`.
+const DAWN: [&str; 3] = ["_aube", "_dawn", "_day"];
+
+/// What pairs a scene's night and its dawn: its name without either ending.
+fn scene_key(stem: &str) -> &str {
+    DAWN.iter().chain(["_complet"].iter()).find_map(|e| stem.strip_suffix(e)).unwrap_or(stem)
+}
 
 /// Write `backdrops.rs` into OUT_DIR: every JPEG and PNG of
 /// `assets/backdrops` but the layers of a scene, by name, its bytes built
@@ -44,11 +52,18 @@ fn backdrops() {
         std::fs::read(f).unwrap_or_default().hash(&mut h);
         seen.insert(h.finish())
     });
-    let mut code = String::from("/// The pictures of `assets/backdrops`: name, bytes.\npub const BACKDROPS: &[(&str, &[u8])] = &[\n");
-    for f in &files {
+    let stem = |f: &std::path::PathBuf| f.file_stem().and_then(|s| s.to_str()).unwrap_or("backdrop").to_owned();
+    let is_dawn = |s: &str| DAWN.iter().any(|e| s.to_ascii_lowercase().ends_with(e));
+    let mut code = String::from("/// The pictures of `assets/backdrops`: name, bytes at night, bytes at dawn\n/// (for the light theme) if there is a dawn.\npub const BACKDROPS: &[(&str, &[u8], Option<&[u8]>)] = &[\n");
+    for f in files.iter().filter(|f| !is_dawn(&stem(f))) {
         println!("cargo:rerun-if-changed={}", f.display());
-        let name = f.file_stem().and_then(|s| s.to_str()).unwrap_or("backdrop");
-        code.push_str(&format!("    ({name:?}, include_bytes!({:?})),\n", f.display().to_string()));
+        let name = stem(f);
+        let dawn = files.iter().find(|d| is_dawn(&stem(d)) && scene_key(&stem(d)) == scene_key(&name));
+        let dawn = match dawn {
+            Some(d) => format!("Some(include_bytes!({:?}))", d.display().to_string()),
+            None => "None".to_owned(),
+        };
+        code.push_str(&format!("    ({name:?}, include_bytes!({:?}), {dawn}),\n", f.display().to_string()));
     }
     code.push_str("];\n");
     let out = std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("backdrops.rs");

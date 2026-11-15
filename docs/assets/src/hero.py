@@ -49,6 +49,15 @@ SCENES = [
     ("04-avatar", 0.60, (214, 236, 242), 2.6, 1.3),
     ("05-dunes", 0.74, (240, 228, 246), 2.6, 1.25),
 ]
+# The home screen's other scenes, for their dawn (the light theme's
+# picture): not in the banner.
+MORE = [
+    ("06-fjord-aurore", 0.5, (212, 238, 236), 2.3, 1.15),
+    ("07-rizieres", 0.6, (255, 214, 228), 2.5, 1.15),
+    ("08-falaises-craie", 0.5, (226, 232, 248), 1.9, 1.05),
+    ("09-foret-lac", 0.5, (255, 226, 202), 2.6, 1.15),
+    ("10-exoplanete", 0.5, (236, 226, 250), 2.4, 1.15),
+]
 
 # Massif's three tones: the tops, the faces turned to the light, the others.
 PEACH, ORANGE, RUST = "#fed7aa", "#f97316", "#9a3412"
@@ -158,6 +167,22 @@ def scene(name, at, horizon, lift, sat, theme):
     pal = palette_of(src, 16)
     sky_mask = land.point(lambda a: 255 if a < 8 else 0)
     return [dither(src, pal, p, veil) for p in range(PHASES)], sky_mask
+
+
+def dawn(name, horizon, lift, sat, size=(1920, 1200)):
+    """The scene at dawn, whole, for the home screen in the light theme:
+    its land lifted into daylight, under a sky drawn for it, what shines in
+    the night sky (a moon, the northern lights, a glow) kept."""
+    relief = Image.open(os.path.join(LAYERS, f"{name}_relief.png")).convert("RGBA").resize(size, Image.LANCZOS)
+    whole = Image.open(os.path.join(BACKDROPS, f"{name}_complet.png")).convert("RGB").resize(size, Image.LANCZOS)
+    land = relief.split()[3]
+    day = ImageEnhance.Color(ImageEnhance.Contrast(ImageEnhance.Brightness(relief.convert("RGB")).enhance(lift)).enhance(0.9)).enhance(sat)
+    # The sky: a column of the gradient, stretched across.
+    column = sky(PAPER, horizon, (1, size[1]))
+    up = column.resize(size, Image.NEAREST)
+    shine = whole.convert("L").point(lambda v: int(255 * smooth((v / 255.0 - 0.22) / 0.3)))
+    glow = ImageEnhance.Color(ImageEnhance.Brightness(whole).enhance(1.3)).enhance(1.1)
+    return Image.composite(day, Image.composite(glow, up, shine), land)
 
 
 def png_uri(im):
@@ -359,6 +384,14 @@ def main():
     args = sys.argv[1:]
     at = float(args[args.index("--at") + 1]) if "--at" in args else None
     out = args[args.index("--out") + 1] if "--out" in args else OUT
+    if "--dawns" in args:
+        # The light theme's pictures of the home screen, beside the night's.
+        where = args[args.index("--dawns") + 1] if len(args) > args.index("--dawns") + 1 else BACKDROPS
+        for (name, _, horizon, lift, sat) in SCENES + MORE:
+            path = os.path.join(where, f"{name}_aube.jpg")
+            dawn(name, horizon, lift, sat).save(path, "JPEG", quality=88, optimize=True, progressive=True)
+            print(f"{path}: {os.path.getsize(path) // 1024} KiB")
+        return
     for theme in ("dark", "light"):
         path = os.path.join(out, f"hero-{theme}.svg")
         with open(path, "w") as f:

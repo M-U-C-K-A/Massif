@@ -5639,6 +5639,16 @@ mod tests {
                 h.run_steps(3);
                 h.render().unwrap().save(dir.join(format!("home-backdrop-{name}.png"))).unwrap();
             }
+            // And in the light theme: each scene at dawn.
+            h.state_mut().settings.theme = ThemeChoice::Light;
+            h.run_steps(3);
+            for k in 0..home::Home::backdrops() {
+                let name = h.state_mut().home.as_mut().unwrap().choose_backdrop(k);
+                h.run_steps(3);
+                h.render().unwrap().save(dir.join(format!("home-backdrop-light-{name}.png"))).unwrap();
+            }
+            h.state_mut().settings.theme = ThemeChoice::Dark;
+            h.run_steps(3);
         }
         // The highest Minecraft allows, and back.
         h.get_by_label("2032").click();

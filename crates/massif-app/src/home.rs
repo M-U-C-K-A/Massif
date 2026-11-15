@@ -164,6 +164,8 @@ struct Backdrop {
 /// A picture of `assets/backdrops`, decoded.
 struct Picture {
     index: usize,
+    /// At dawn (the light theme's), or at night.
+    dawn: bool,
     image: image::RgbImage,
 }
 
@@ -208,7 +210,7 @@ impl Home {
         if all.is_empty() {
             return;
         }
-        seen.retain(|s| all.iter().any(|(n, _)| n == s));
+        seen.retain(|s| all.iter().any(|(n, _, _)| n == s));
         let mut pool: Vec<usize> = (0..all.len()).filter(|&k| !seen.iter().any(|s| s == all[k].0)).collect();
         if pool.is_empty() {
             let last = seen.last().cloned();
@@ -664,8 +666,11 @@ impl Home {
             return;
         }
         let index = self.choice % all.len();
-        if self.picture.as_ref().is_none_or(|p| p.index != index) {
-            self.picture = image::load_from_memory(all[index].1).ok().map(|img| Picture { index, image: img.to_rgb8() });
+        // The light theme shows the scene at dawn, where there is one.
+        let dawn = !pal.dark && all[index].2.is_some();
+        if self.picture.as_ref().is_none_or(|p| p.index != index || p.dawn != dawn) {
+            let bytes = if dawn { all[index].2.unwrap_or(all[index].1) } else { all[index].1 };
+            self.picture = image::load_from_memory(bytes).ok().map(|img| Picture { index, dawn, image: img.to_rgb8() });
             self.backdrop = None;
         }
         let Some(picture) = &self.picture else { return };
@@ -685,7 +690,7 @@ impl Home {
         let calm_cells = [x0, y0, x1, y1].map(|v| v.div_euclid(8) * 8);
         let key = (cols, rows, pal.dark, calm_cells);
         if self.backdrop.as_ref().is_none_or(|b| b.key != key || b.pitch != pitch) {
-            let frames = dither_frames(&picture.image, cols, rows, pal.dark, bg, calm_cells)
+            let frames = dither_frames(&picture.image, cols, rows, if picture.dawn { Light::Dawn } else if pal.dark { Light::Night } else { Light::Faded }, bg, calm_cells)
                 .into_iter()
                 .enumerate()
                 .map(|(k, image)| ui.ctx().load_texture(format!("home backdrop {k}"), image, egui::TextureOptions::NEAREST))
@@ -715,7 +720,19 @@ fn column_rect(area: Rect) -> Rect {
 /// around it, where text is written —, then reduced to a palette of its own
 /// sixteen colours with an ordered dither, a little shifted from frame to
 /// frame.
-fn dither_frames(img: &image::RgbImage, cols: usize, rows: usize, dark: bool, bg: Color32, calm: [i32; 4]) -> Vec<egui::ColorImage> {
+/// How a picture is laid behind the home screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Light {
+    /// A night scene in the dark theme: night falling from the top.
+    Night,
+    /// A scene at dawn in the light theme: as it is, calmer under the words.
+    Dawn,
+    /// A night scene with no dawn, in the light theme: faded into the page.
+    Faded,
+}
+
+fn dither_frames(img: &image::RgbImage, cols: usize, rows: usize, light: Light, bg: Color32, calm: [i32; 4]) -> Vec<egui::ColorImage> {
+    let dark = light == Light::Night;
     use rayon::prelude::*;
     let (iw, ih) = (img.width() as f32, img.height() as f32);
     let scale = (cols as f32 / iw).max(rows as f32 / ih);
@@ -738,13 +755,21 @@ fn dither_frames(img: &image::RgbImage, cols: usize, rows: usize, dark: bool, bg
             let lum = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
             let c = c.map(|v| (lum + (v - lum) * 1.25).clamp(0.0, 1.0));
             let near = (-(((x - ex) / rx).powi(2) + ((y - ey) / ry).powi(2)) * 1.1).exp();
-            if dark {
+            match light {
                 // Night falls from the top: the sky darker than the land.
-                let k = (0.46 + 0.42 * smooth(0.0, 0.8, y / rows as f32)) * (1.0 - 0.72 * near);
-                c.map(|v| v.powf(1.15) * k)
-            } else {
-                let k = 0.42 * (1.0 - 0.7 * near);
-                [0, 1, 2].map(|j| back[j] + (c[j] - back[j]) * k)
+                Light::Night => {
+                    let k = (0.46 + 0.42 * smooth(0.0, 0.8, y / rows as f32)) * (1.0 - 0.72 * near);
+                    c.map(|v| v.powf(1.15) * k)
+                }
+                // Dawn: the picture as it is, quieter where the words are.
+                Light::Dawn => {
+                    let k = 0.94 * (1.0 - 0.62 * near);
+                    [0, 1, 2].map(|j| back[j] + (c[j] - back[j]) * k)
+                }
+                Light::Faded => {
+                    let k = 0.42 * (1.0 - 0.7 * near);
+                    [0, 1, 2].map(|j| back[j] + (c[j] - back[j]) * k)
+                }
             }
         })
         .collect();
@@ -1367,13 +1392,17 @@ mod backdrop_tests {
     #[test]
     fn the_backdrops_dither() {
         assert!(pictures::BACKDROPS.len() >= 4, "{} pictures", pictures::BACKDROPS.len());
-        for (name, bytes) in pictures::BACKDROPS {
-            let img = image::load_from_memory(bytes).unwrap_or_else(|e| panic!("{name}: {e}")).to_rgb8();
-            let frames = dither_frames(&img, 96, 64, true, Color32::from_rgb(8, 8, 9), [20, 10, 70, 50]);
-            assert_eq!(frames.len(), 4);
-            let colours: std::collections::HashSet<[u8; 4]> = frames[0].pixels.iter().map(|c| c.to_array()).collect();
-            assert!((2..=16).contains(&colours.len()), "{name}: {} colours", colours.len());
-            assert_ne!(frames[0].pixels, frames[1].pixels, "{name}: the frames differ");
+        for (name, bytes, dawn) in pictures::BACKDROPS {
+            // Every scene has its dawn, for the light theme.
+            assert!(dawn.is_some(), "{name}: no dawn");
+            for (bytes, light, bg) in [(*bytes, Light::Night, Color32::from_rgb(8, 8, 9)), (dawn.unwrap_or(bytes), Light::Dawn, Color32::from_rgb(250, 250, 250))] {
+                let img = image::load_from_memory(bytes).unwrap_or_else(|e| panic!("{name}: {e}")).to_rgb8();
+                let frames = dither_frames(&img, 96, 64, light, bg, [20, 10, 70, 50]);
+                assert_eq!(frames.len(), 4);
+                let colours: std::collections::HashSet<[u8; 4]> = frames[0].pixels.iter().map(|c| c.to_array()).collect();
+                assert!((2..=16).contains(&colours.len()), "{name}: {} colours", colours.len());
+                assert_ne!(frames[0].pixels, frames[1].pixels, "{name}: the frames differ");
+            }
         }
     }
 }
