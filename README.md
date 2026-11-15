@@ -146,7 +146,9 @@ topic, with a search, and the keyboard shortcuts.
   when something is refused or stopped; with **All**, soft ticks for
   choices, switches, windows opening and closing, workspaces. **Off**,
   **Essential** (what ends and what fails) or **All**, a volume, and each
-  sound to hear.
+  sound to hear. The sound output is open only while a sound plays (and two
+  seconds after): silent, Massif holds neither the speakers nor wireless
+  headphones, which can go to another device.
 - **Notifications**: the system's own (the Notification Centre, a toast on
   Windows, the desktop's on Linux) when a task of more than two seconds ends
   — an export, an import, a conversion, a pass over the whole map —:
@@ -315,6 +317,11 @@ what the map shows:
 - **Curvature**: hollows or bumps, deeper than a number of blocks compared
   with the columns around.
 
+The options are read by squares of 4 × 4 tiles in parallel, each with the
+ring of columns around it its tests need, so that a brush of any size takes
+little memory; slopes are fitted from sums along the rows, then down the
+columns, a few additions a column rather than the 81 of the square.
+
 ### Automatic biomes and paint
 
 Two tools of the Paint group work from what the map already is, with a
@@ -344,6 +351,15 @@ both show what they would change before anything is painted: under the
 brush, the columns that would change, in their new colour. A stroke changes every column in the core of the brush
 (all of it at 100% intensity, with a blended edge below), and says how many
 it changed — or that the land already follows the rules.
+
+What the land calls for is worked out a tile at a time, by squares of
+tiles each read with its margin, and kept: as long as the map does not
+change, the preview following the pointer and the dabs of a stroke read
+each tile once (a stroke of Auto biome hands what it read back to the
+preview), and a brush of any size takes little memory. The preview is
+drawn a column a pixel. With a brush 4,000 blocks across on a 5,888-block
+WorldPainter map, the pointer moves at 30 ms a frame and a stroke at about
+100; at 300 blocks, both under 10 ms.
 
 **Rules…** (in Tool Settings, or Edit ▸ Automatic rules) opens both tables:
 the depths, heights and slopes the land is read with, the biome of each

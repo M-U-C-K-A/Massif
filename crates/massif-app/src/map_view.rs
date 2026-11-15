@@ -130,6 +130,21 @@ struct AutoPreview {
     texture: Option<egui::TextureHandle>,
 }
 
+/// What the automatic tools give the land, kept while the map, its rules
+/// and the tool stay the same: Auto biome (or paint), the map and its
+/// revision, a hash of the rules.
+type AutoClasses = ((bool, u64, usize, u64, u64), massif_core::auto::Classes);
+
+/// A hash of what the automatic tools read the land with: their rules,
+/// and the terrain the map was filled with.
+fn auto_rules_key(doc: &Document, tools: &ToolState) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    format!("{:?}", tools.auto).hash(&mut h);
+    doc.auto_base().map(|t| t.0).hash(&mut h);
+    h.finish()
+}
+
 pub struct MapView {
     /// Block coordinates at the centre of the view.
     pub center: [f64; 2],
@@ -159,6 +174,7 @@ pub struct MapView {
     /// The block the pointer rests on, and since when.
     spring_rest: Option<((i32, i32, u64), f64)>,
     auto_preview: Option<AutoPreview>,
+    auto_classes: Option<AutoClasses>,
 }
 
 impl Default for MapView {
@@ -181,6 +197,7 @@ impl Default for MapView {
             spring: None,
             spring_rest: None,
             auto_preview: None,
+            auto_classes: None,
         }
     }
 }
@@ -410,16 +427,32 @@ impl MapView {
     fn show_auto_preview(&mut self, ctx: &egui::Context, painter: &egui::Painter, canvas: Rect, doc: &Document, tools: &ToolState, at: (f64, f64)) {
         use std::hash::{Hash, Hasher};
         let biomes = tools.tool == Tool::AutoBiome;
+        let base = doc.auto_base();
+        let rules = auto_rules_key(doc, tools);
+        // A column a pixel at most: a preview need not be finer than the
+        // screen, nor wider than 1024 columns.
+        let brush = tools.stroke_brush();
+        let side = 2.0 * brush.radius + 2.0;
+        let per_pixel = 1.0 / (self.zoom * ctx.pixels_per_point()).max(1e-3);
+        let step = (per_pixel.floor() as i32).max((side / 1024.0).ceil() as i32).max(1);
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        format!("{:?}", tools.auto).hash(&mut h);
+        rules.hash(&mut h);
         BrushPreview::key(&tools.brush).hash(&mut h);
         tools.brush.radius.to_bits().hash(&mut h);
         tools.brush.strength.to_bits().hash(&mut h);
+        step.hash(&mut h);
         let key = (tools.tool, at.0.floor() as i32, at.1.floor() as i32, doc.revision, h.finish());
         if self.auto_preview.as_ref().is_none_or(|a| a.key != key) {
-            let reader = massif_core::auto::Reader::new(&tools.auto, &doc.world.registry, doc.world.meta.sea_level).with_base(doc.auto_base());
-            let brush = tools.stroke_brush();
-            let (rect, cols) = massif_core::ops::auto_preview(doc.dimension(), &brush, at.0 as f32, at.1 as f32, &reader, biomes);
+            let reader = massif_core::auto::Reader::new(&tools.auto, &doc.world.registry, doc.world.meta.sea_level).with_base(base);
+            // What the land calls for, read once for the map as it is.
+            let classes_key = (biomes, doc.generation, doc.dim, doc.revision, rules);
+            if self.auto_classes.as_ref().is_none_or(|(k, _)| *k != classes_key) {
+                self.auto_classes = Some((classes_key, massif_core::auto::Classes::new(biomes)));
+            }
+            let classes = &mut self.auto_classes.as_mut().expect("just set").1;
+            let footprint = massif_core::coords::BlockRect::around(at.0 as f32, at.1 as f32, brush.radius);
+            classes.ensure(doc.dimension(), &reader, footprint);
+            let (rect, cols) = massif_core::ops::auto_preview_with(doc.dimension(), &brush, at.0 as f32, at.1 as f32, classes, step);
             let reg = &doc.world.registry;
             // What changes, in its new colour; what is already as the land
             // calls for, as it is.
@@ -431,14 +464,15 @@ impl MapView {
                     Color32::from_rgb(r, g, b)
                 }
             };
-            let texture = cols.iter().any(|p| *p != massif_core::ops::Preview::Outside).then(|| {
+            let texture = cols.iter().any(|p| matches!(p, massif_core::ops::Preview::Becomes(_))).then(|| {
                 let pixels = cols.iter().map(colour).collect();
-                let image = egui::ColorImage::new([rect.width() as usize, rect.depth() as usize], pixels);
+                let size = [((rect.width() + step - 1) / step) as usize, ((rect.depth() + step - 1) / step) as usize];
+                let image = egui::ColorImage::new(size, pixels);
                 ctx.load_texture("auto preview", image, egui::TextureOptions::NEAREST)
             });
             self.auto_preview = Some(AutoPreview {
                 key,
-                rect: [rect.x0, rect.z0, rect.x1, rect.z1],
+                rect: [rect.x0, rect.z0, rect.x0 + ((rect.width() + step - 1) / step) * step, rect.z0 + ((rect.depth() + step - 1) / step) * step],
                 texture,
             });
         }
@@ -687,7 +721,10 @@ impl MapView {
             } else if tools.tool.uses_brush() {
                 let (stroke, msg) = tools::begin_stroke(doc, tools, (x as f32, z as f32), inverse, secondary);
                 *feedback = msg.or(feedback.take());
-                if let Some(mut stroke) = stroke {
+                if let Some(stroke) = stroke {
+                    // What the preview read of the land, the stroke need not
+                    // read again.
+                    let mut stroke = stroke.with_classes(self.auto_classes.take().filter(|(k, _)| k.1 == doc.generation && k.2 == doc.dim && k.3 == doc.revision).map(|(_, c)| c));
                     tools::continue_stroke(doc, tools, &mut stroke, (x as f32, z as f32), 1.0 / 60.0);
                     self.stroke = Some(stroke);
                 }
@@ -740,10 +777,16 @@ impl MapView {
                     tools::continue_stroke(doc, tools, stroke, (x as f32, z as f32), dt);
                 }
                 ui.ctx().request_repaint();
-            } else if let Some(stroke) = self.stroke.take()
-                && let Some(note) = tools::end_stroke(doc, stroke)
-            {
-                *feedback = Some(note);
+            } else if let Some(mut stroke) = self.stroke.take() {
+                // Biomes do not change what the land calls for: what Auto
+                // biome read still holds once it has painted them.
+                let classes = stroke.take_classes().filter(|c| c.biomes());
+                if let Some(note) = tools::end_stroke(doc, stroke) {
+                    *feedback = Some(note);
+                }
+                if let Some(classes) = classes {
+                    self.auto_classes = Some(((true, doc.generation, doc.dim, doc.revision, auto_rules_key(doc, tools)), classes));
+                }
             }
         }
 

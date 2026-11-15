@@ -7,7 +7,7 @@
 //! switched on must pass; the height band can fade out over a few blocks.
 
 use crate::compose::{Span, TileStack};
-use crate::coords::{BlockRect, TilePos, local_index};
+use crate::coords::{BlockRect, TILE_SIZE, TilePos, local_index};
 use crate::tile::NO_FLUID;
 use crate::world::Dimension;
 use rayon::prelude::*;
@@ -200,37 +200,72 @@ impl Filter {
         self.height_weight(c.height) * self.facing_weight(c.slope, c.aspect)
     }
 
-    /// The weights of the columns of `rect` (row-major).
+    /// The weights of the columns of `rect` (row-major), worked out by
+    /// squares of tiles in parallel, each read with the ring around it, so
+    /// that a brush of any size takes little memory at a time.
     pub fn mask(&self, dim: &Dimension, rect: BlockRect) -> Mask {
-        let ring = if self.needs_relief() {
-            self.radius.clamp(1, 64)
-        } else if self.needs_slope() {
-            SLOPE_REACH
-        } else {
-            0
-        };
-        let outer = rect.expand(ring);
-        let surface = Surface::gather(dim, outer);
+        let mut ring = 0;
+        if self.needs_relief() {
+            ring = self.radius.clamp(1, 64);
+        }
+        if self.needs_slope() {
+            ring = ring.max(SLOPE_REACH);
+        }
         let (w, d) = (rect.width() as usize, rect.depth() as usize);
-        let relief = self.needs_relief().then(|| surface.local_means(ring));
-        let weights: Vec<u8> = (0..w * d)
+        let side = 4 * TILE_SIZE;
+        let mut parts = Vec::new();
+        let mut z = rect.z0;
+        while z < rect.z1 {
+            let z1 = ((z.div_euclid(side) + 1) * side).min(rect.z1);
+            let mut x = rect.x0;
+            while x < rect.x1 {
+                let x1 = ((x.div_euclid(side) + 1) * side).min(rect.x1);
+                parts.push(BlockRect::new(x, z, x1, z1));
+                x = x1;
+            }
+            z = z1;
+        }
+        let done: Vec<(BlockRect, Vec<u8>)> = parts
             .into_par_iter()
-            .map(|i| {
-                let (x, z) = (rect.x0 + (i % w) as i32, rect.z0 + (i / w) as i32);
-                let Some(col) = surface.column(x, z) else { return 0 };
-                let mut c = col;
-                if self.needs_slope() {
-                    let (gx, gz) = trend_gradient(|dx, dz| surface.column(x + dx, z + dz).map(|n| n.height), SLOPE_REACH, 1.0);
-                    c.slope = gx.hypot(gz).atan().to_degrees();
-                    c.aspect = aspect_of(gx, gz);
-                }
-                if let Some(means) = &relief {
-                    let j = surface.index(x, z);
-                    c.relief = if means[j].is_nan() { 0.0 } else { c.height - means[j] };
-                }
-                (self.weight(&c) * 255.0).round() as u8
+            .map(|part| {
+                let surface = Surface::gather(dim, part.expand(ring));
+                let relief = self.needs_relief().then(|| surface.local_means(ring));
+                // The slope of every column, from the heights alone.
+                let (sw, sd) = (surface.rect.width() as usize, surface.rect.depth() as usize);
+                let gradients = self.needs_slope().then(|| {
+                    let heights: Vec<f32> = surface.columns.iter().map(|c| c.map_or(f32::NAN, |c| c.height)).collect();
+                    trend_gradients(&heights, sw, sd, SLOPE_REACH)
+                });
+                let pw = part.width() as usize;
+                let mut out = vec![0u8; pw * part.depth() as usize];
+                out.par_chunks_mut(pw).enumerate().for_each(|(j, row)| {
+                    let z = part.z0 + j as i32;
+                    for (i, v) in row.iter_mut().enumerate() {
+                        let x = part.x0 + i as i32;
+                        let Some(mut c) = surface.column(x, z) else { continue };
+                        if let Some(gradients) = &gradients {
+                            let (gx, gz) = gradients[surface.index(x, z)];
+                            c.slope = gx.hypot(gz).atan().to_degrees();
+                            c.aspect = aspect_of(gx, gz);
+                        }
+                        if let Some(means) = &relief {
+                            let m = means[surface.index(x, z)];
+                            c.relief = if m.is_nan() { 0.0 } else { c.height - m };
+                        }
+                        *v = (self.weight(&c) * 255.0).round() as u8;
+                    }
+                });
+                (part, out)
             })
             .collect();
+        let mut weights = vec![0u8; w * d];
+        for (part, out) in done {
+            let pw = part.width() as usize;
+            for (j, row) in out.chunks(pw).enumerate() {
+                let at = ((part.z0 - rect.z0) as usize + j) * w + (part.x0 - rect.x0) as usize;
+                weights[at..at + pw].copy_from_slice(row);
+            }
+        }
         Mask { rect, weights }
     }
 }
@@ -279,6 +314,67 @@ pub fn trend_gradient(h: impl Fn(i32, i32) -> Option<f32>, r: i32, spacing: f32)
     (sx / w / spacing, sz / w / spacing)
 }
 
+/// [`trend_gradient`] at every point of a `w` × `d` grid of heights (row
+/// by row, NaN where there is none), at once: the sums over each square
+/// split into a pass along the rows and one along the columns, each a few
+/// additions a point, rather than the whole square summed point by point.
+pub fn trend_gradients(heights: &[f32], w: usize, d: usize, r: i32) -> Vec<(f32, f32)> {
+    let r = r as isize;
+    // Heights where there are some (0 elsewhere), and where there are.
+    let h: Vec<f32> = heights.iter().map(|v| if v.is_nan() { 0.0 } else { *v }).collect();
+    let p: Vec<f32> = heights.iter().map(|v| if v.is_nan() { 0.0 } else { 1.0 }).collect();
+    // Along the rows: Σ dx·f and Σ f over the row's part of the square.
+    let along = |f: &[f32]| -> (Vec<f32>, Vec<f32>) {
+        let (mut moment, mut sum) = (vec![0f32; w * d], vec![0f32; w * d]);
+        for z in 0..d {
+            let row = &f[z * w..][..w];
+            for x in 0..w as isize {
+                let (mut m, mut s) = (0.0, 0.0);
+                for dx in -r..=r {
+                    let i = x + dx;
+                    if (0..w as isize).contains(&i) {
+                        let v = row[i as usize];
+                        m += dx as f32 * v;
+                        s += v;
+                    }
+                }
+                moment[z * w + x as usize] = m;
+                sum[z * w + x as usize] = s;
+            }
+        }
+        (moment, sum)
+    };
+    let (hm, hs) = along(&h);
+    let (pm, ps) = along(&p);
+    // Then down the columns: Σ over dz of the first, Σ dz·(…) of the second.
+    let weight = (2 * r + 1) as f32 * (-r..=r).map(|k| (k * k) as f32).sum::<f32>();
+    let mut out = vec![(0f32, 0f32); w * d];
+    for z in 0..d as isize {
+        for x in 0..w {
+            let k = z as usize * w + x;
+            if heights[k].is_nan() {
+                continue;
+            }
+            let (mut hx, mut hz, mut px, mut pz) = (0f32, 0f32, 0f32, 0f32);
+            for dz in -r..=r {
+                let j = z + dz;
+                if (0..d as isize).contains(&j) {
+                    let i = j as usize * w + x;
+                    hx += hm[i];
+                    px += pm[i];
+                    hz += dz as f32 * hs[i];
+                    pz += dz as f32 * ps[i];
+                }
+            }
+            // Σ dx (h − centre) over the heights there are: missing ones
+            // count as level with the centre.
+            let c = heights[k];
+            out[k] = ((hx - c * px) / weight, (hz - c * pz) / weight);
+        }
+    }
+    out
+}
+
 /// The weights of a filter over a rectangle.
 #[derive(Debug, Clone)]
 pub struct Mask {
@@ -306,42 +402,55 @@ struct Surface {
 
 impl Surface {
     fn gather(dim: &Dimension, rect: BlockRect) -> Self {
-        let tiles: Vec<TilePos> = rect.tiles().collect();
         let width = rect.width() as usize;
-        let parts: Vec<Vec<(usize, Column)>> = tiles
-            .par_iter()
-            .map(|&pos| {
-                let Some(stack) = TileStack::new(dim, pos, false) else { return Vec::new() };
+        let mut columns: Vec<Option<Column>> = vec![None; width * rect.depth() as usize];
+        // In bands, one per row of tiles, filled in parallel; the ground
+        // alone (most tiles) read from its planes as they are.
+        let mut bands: Vec<(i32, &mut [Option<Column>])> = Vec::new();
+        let mut rest: &mut [Option<Column>] = &mut columns;
+        let mut z = rect.z0;
+        while z < rect.z1 {
+            let end = ((z.div_euclid(TILE_SIZE) + 1) * TILE_SIZE).min(rect.z1);
+            let (band, tail) = std::mem::take(&mut rest).split_at_mut((end - z) as usize * width);
+            bands.push((z, band));
+            rest = tail;
+            z = end;
+        }
+        bands.into_par_iter().for_each(|(z0, band)| {
+            let tz = z0.div_euclid(TILE_SIZE);
+            let mut spans: Vec<Span> = Vec::new();
+            for tx in rect.x0.div_euclid(TILE_SIZE)..=(rect.x1 - 1).div_euclid(TILE_SIZE) {
+                let pos = TilePos::new(tx, tz);
+                let Some(stack) = TileStack::new(dim, pos, false) else { continue };
                 let clip = rect.intersect(&pos.rect());
-                let mut spans: Vec<Span> = Vec::new();
-                let mut out = Vec::with_capacity((clip.width() * clip.depth()).max(0) as usize);
                 let ground = stack.ground();
+                let flat = stack.is_ground_only().then(|| (ground.top.dense(), ground.terrain.dense()));
+                let (fluids, biomes) = (ground.fluid.dense(), ground.biome.dense());
                 for z in clip.z0..clip.z1 {
+                    let row = &mut band[(z - z0) as usize * width..][..width];
                     for x in clip.x0..clip.x1 {
                         let cell = local_index(x, z);
-                        let Some((height, terrain)) = stack.surface(cell, &mut spans) else { continue };
-                        let fluid = ground.fluid.get(cell);
-                        let column = Column {
+                        let (height, terrain) = match &flat {
+                            Some((tops, terrains)) => (tops[cell], terrains[cell]),
+                            None => match stack.surface(cell, &mut spans) {
+                                Some((h, t)) => (h, t.0),
+                                None => continue,
+                            },
+                        };
+                        let fluid = fluids[cell];
+                        row[(x - rect.x0) as usize] = Some(Column {
                             height,
-                            terrain: terrain.0,
-                            biome: ground.biome.get(cell),
+                            terrain,
+                            biome: biomes[cell],
                             wet: fluid != NO_FLUID && fluid as f32 > height,
                             slope: 0.0,
                             relief: 0.0,
                             aspect: None,
-                        };
-                        out.push(((z - rect.z0) as usize * width + (x - rect.x0) as usize, column));
+                        });
                     }
                 }
-                out
-            })
-            .collect();
-        let mut columns = vec![None; width * rect.depth() as usize];
-        for part in parts {
-            for (i, c) in part {
-                columns[i] = Some(c);
             }
-        }
+        });
         Self { rect, columns }
     }
 
@@ -406,6 +515,38 @@ impl Surface {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gradients_at_once_are_those_one_by_one() {
+        let (w, d) = (23usize, 17usize);
+        let mut heights: Vec<f32> = (0..w * d).map(|i| ((i % w) as f32 * 0.7 + (i / w) as f32 * 1.3 + ((i * 7919) % 13) as f32 * 0.4).floor()).collect();
+        // Some columns missing.
+        for k in [0, 5, 40, 41, 200, 390] {
+            heights[k] = f32::NAN;
+        }
+        let all = trend_gradients(&heights, w, d, SLOPE_REACH);
+        for z in 0..d as i32 {
+            for x in 0..w as i32 {
+                let k = z as usize * w + x as usize;
+                if heights[k].is_nan() {
+                    continue;
+                }
+                let one = trend_gradient(
+                    |dx, dz| {
+                        let (sx, sz) = (x + dx, z + dz);
+                        if sx < 0 || sz < 0 || sx >= w as i32 || sz >= d as i32 {
+                            return None;
+                        }
+                        let h = heights[sz as usize * w + sx as usize];
+                        (!h.is_nan()).then_some(h)
+                    },
+                    SLOPE_REACH,
+                    1.0,
+                );
+                assert!((all[k].0 - one.0).abs() < 1e-3 && (all[k].1 - one.1).abs() < 1e-3, "at {x}, {z}: {:?} vs {one:?}", all[k]);
+            }
+        }
+    }
 
     #[test]
     fn slopes_follow_the_hillside_not_the_steps() {

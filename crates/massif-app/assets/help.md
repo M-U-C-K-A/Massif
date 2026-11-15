@@ -119,7 +119,7 @@ The viewport shows the graph's output in 3D, with its sun, clouds, haze and sea 
 # Settings
 **Massif ▸ Settings** (`⌘,`, or the home screen's sidebar) has four sections.
 - **Appearance**: the theme, the accent colour, and whether the home screen's picture moves.
-- **Sounds**: little sounds for what happens, made by Massif as it plays them. **Essential**: tasks done, saving, errors. **All**: the interface too (choices, switches, windows, workspaces). Each can be heard from there.
+- **Sounds**: little sounds for what happens, made by Massif as it plays them. **Essential**: tasks done, saving, errors. **All**: the interface too (choices, switches, windows, workspaces). Each can be heard from there. The sound output is held only while a sound plays: headphones are free to go to another device.
 - **Notifications**: the system tells when a long task ends (an export, an import, a conversion, a pass over the whole map): never, while Massif is in the background, or always.
 - **Memory**: a limit for what Massif keeps decoded to be quick (the map's tiles, the map view's images), and what is in use now. Past it, what was used least is put away, compressed.
 

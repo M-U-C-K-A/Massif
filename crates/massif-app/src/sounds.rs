@@ -7,7 +7,8 @@
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
-use std::sync::mpsc::{Sender, channel};
+use std::sync::mpsc::{RecvTimeoutError, Sender, channel};
+use std::time::{Duration, Instant};
 
 /// Which sounds play.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,34 +106,62 @@ pub fn preview(cue: Cue) {
     let tx = PLAYER.get_or_init(|| {
         let (tx, rx) = channel::<(Cue, f32)>();
         let _ = std::thread::Builder::new().name("massif sounds".into()).spawn(move || {
-            // The device is opened at the first sound, and kept.
+            // The device is open only while sounds play, and a moment
+            // after: an open output, even silent, holds the speakers — and
+            // wireless headphones, which then stay with the Mac.
             let mut sink: Option<rodio::MixerDeviceSink> = None;
-            let mut failed = false;
+            // When what was played ends.
+            let mut ends = Instant::now();
+            let mut failed: Option<Instant> = None;
             let rate = 48_000u32;
             let samples: Vec<(Cue, Vec<f32>)> = Cue::ALL.iter().map(|c| (*c, synth(*c, rate as f32))).collect();
-            while let Ok((cue, volume)) = rx.recv() {
-                if sink.is_none() && !failed {
+            loop {
+                let next = if sink.is_some() {
+                    match rx.recv_timeout(ends.saturating_duration_since(Instant::now()) + LINGER) {
+                        Ok(next) => next,
+                        Err(RecvTimeoutError::Timeout) => {
+                            sink = None;
+                            continue;
+                        }
+                        Err(RecvTimeoutError::Disconnected) => break,
+                    }
+                } else {
+                    match rx.recv() {
+                        Ok(next) => next,
+                        Err(_) => break,
+                    }
+                };
+                let (cue, volume) = next;
+                // A device that would not open is tried again later.
+                if sink.is_none() && failed.is_none_or(|t| t.elapsed() > Duration::from_secs(30)) {
                     match open_output() {
                         Ok(mut s) => {
                             s.log_on_drop(false);
                             sink = Some(s);
+                            failed = None;
                         }
                         Err(e) => {
                             log::warn!("no sound: {e}");
-                            failed = true;
+                            failed = Some(Instant::now());
                         }
                     }
                 }
                 let (Some(sink), Some((_, data))) = (&sink, samples.iter().find(|(c, _)| *c == cue)) else { continue };
                 let data: Vec<f32> = data.iter().map(|s| s * volume).collect();
+                let length = Duration::from_secs_f64(data.len() as f64 / rate as f64);
                 let buffer = rodio::buffer::SamplesBuffer::new(std::num::NonZero::new(1).unwrap(), std::num::NonZero::new(rate).unwrap(), data);
                 sink.mixer().add(buffer);
+                ends = ends.max(Instant::now() + length);
             }
         });
         tx
     });
     let _ = tx.send((cue, volume));
 }
+
+/// How long the output stays open after the last sound ends, for the next
+/// one to come without opening it again.
+const LINGER: Duration = Duration::from_secs(2);
 
 /// The default output, with a short buffer (some devices take no more
 /// than 960 samples, and a cue should not wait), or any setting it takes.

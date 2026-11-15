@@ -969,6 +969,102 @@ pub fn paint_over_the_map_with(edit: &mut Edit, reader: &Reader, steps: &Steps) 
     over_the_map(edit, reader, steps, |s, x, z| reader.terrain(s, x, z).map(|t| t.0), |t| &mut t.terrain)
 }
 
+/// What an automatic tool gives the columns of the map — their biome, or
+/// their terrain —, tile by tile, worked out as asked for and kept: a brush
+/// going back and forth, or a preview following the pointer, reads the land
+/// once. Tiles are read by squares, each with the margin around it, so that
+/// a brush of any size takes little memory at a time.
+#[derive(Debug, Default)]
+pub struct Classes {
+    biomes: bool,
+    tiles: HashMap<TilePos, Box<[u16]>>,
+}
+
+/// A column the rules leave as it is.
+const UNSET: u16 = u16::MAX;
+/// Tiles kept (64 MiB); past them, those away from what is asked are
+/// forgotten.
+const KEPT: usize = 2048;
+
+impl Classes {
+    /// For Auto biome (`biomes`), or Auto paint.
+    pub fn new(biomes: bool) -> Self {
+        Self {
+            biomes,
+            tiles: HashMap::new(),
+        }
+    }
+
+    pub fn biomes(&self) -> bool {
+        self.biomes
+    }
+
+    /// Tiles worked out.
+    pub fn len(&self) -> usize {
+        self.tiles.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tiles.is_empty()
+    }
+
+    /// Work out the tiles of `rect` not known yet.
+    pub fn ensure(&mut self, dim: &Dimension, reader: &Reader, rect: BlockRect) {
+        let missing: Vec<TilePos> = rect.tiles().filter(|p| !self.tiles.contains_key(p) && dim.ground().contains(*p)).collect();
+        if missing.is_empty() {
+            return;
+        }
+        if self.tiles.len() + missing.len() > KEPT {
+            let (lo, hi) = (TilePos::containing(rect.x0, rect.z0), TilePos::containing(rect.x1 - 1, rect.z1 - 1));
+            self.tiles.retain(|p, _| (lo.x..=hi.x).contains(&p.x) && (lo.z..=hi.z).contains(&p.z));
+        }
+        let mut squares: HashMap<(i32, i32), Vec<TilePos>> = HashMap::new();
+        for pos in missing {
+            squares.entry((pos.x.div_euclid(BLOCK), pos.z.div_euclid(BLOCK))).or_default().push(pos);
+        }
+        let biomes = self.biomes;
+        let done: Vec<(TilePos, Box<[u16]>)> = squares
+            .into_par_iter()
+            .flat_map_iter(|(_, tiles)| {
+                // One survey for the square's missing tiles, and the margin
+                // around them.
+                let (x0, z0) = (tiles.iter().map(|p| p.x).min().unwrap(), tiles.iter().map(|p| p.z).min().unwrap());
+                let (x1, z1) = (tiles.iter().map(|p| p.x).max().unwrap() + 1, tiles.iter().map(|p| p.z).max().unwrap() + 1);
+                let survey = reader.survey(dim, BlockRect::new(x0 * TILE_SIZE, z0 * TILE_SIZE, x1 * TILE_SIZE, z1 * TILE_SIZE));
+                tiles
+                    .into_iter()
+                    .map(|pos| {
+                        let r = pos.rect();
+                        let mut out = vec![UNSET; crate::coords::TILE_AREA].into_boxed_slice();
+                        for z in r.z0..r.z1 {
+                            for x in r.x0..r.x1 {
+                                let v = if biomes { reader.biome(&survey, x, z).map(|b| b.0) } else { reader.terrain(&survey, x, z).map(|t| t.0) };
+                                out[local_index(x, z)] = v.unwrap_or(UNSET);
+                            }
+                        }
+                        (pos, out)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        self.tiles.extend(done);
+    }
+
+    /// What column `(x, z)` is to be given, if it was worked out and the
+    /// rules give it something.
+    #[inline]
+    pub fn get(&self, x: i32, z: i32) -> Option<u16> {
+        let v = self.tiles.get(&TilePos::containing(x, z))?[local_index(x, z)];
+        (v != UNSET).then_some(v)
+    }
+
+    /// The values of a tile, [`u16::MAX`] where the rules leave the column
+    /// as it is.
+    pub fn tile(&self, pos: TilePos) -> Option<&[u16]> {
+        self.tiles.get(&pos).map(|t| &t[..])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1032,6 +1128,41 @@ mod tests {
         assert_eq!(grounds[reg.terrain_by_name("Sand").unwrap().0 as usize], Ground::Sand);
         assert_eq!(grounds[reg.terrain_by_name("Snow").unwrap().0 as usize], Ground::Snow);
         assert_eq!(grounds[reg.terrain_by_name("Rock").unwrap().0 as usize], Ground::Rock);
+    }
+
+    /// What the classes keep, tile by tile, is what a survey of the brush
+    /// alone reads; on a larger map, read by squares, too.
+    #[test]
+    fn classes_keep_what_the_land_calls_for() {
+        let world = crate::generate::generate(&crate::generate::GenParams {
+            tiles_x: 10,
+            tiles_z: 6,
+            landform: crate::generate::Landform::Islands,
+            seed: 5,
+            ..Default::default()
+        });
+        let rules = AutoRules::default();
+        let reader = Reader::new(&rules, &world.registry, world.meta.sea_level);
+        let dim = &world.dims[0];
+        for biomes in [true, false] {
+            let mut classes = Classes::new(biomes);
+            // Two rects, one across a square's edge, the second over the
+            // first in part: what was read is not read again.
+            for rect in [BlockRect::new(-200, -90, 140, 70), BlockRect::new(0, -300, 300, 20)] {
+                classes.ensure(dim, &reader, rect);
+                let survey = reader.survey(dim, rect);
+                let mut seen = 0;
+                for z in (rect.z0..rect.z1).step_by(3) {
+                    for x in (rect.x0..rect.x1).step_by(3) {
+                        let direct = if biomes { reader.biome(&survey, x, z).map(|b| b.0) } else { reader.terrain(&survey, x, z).map(|t| t.0) };
+                        assert_eq!(classes.get(x, z), direct, "{} at {x}, {z}", if biomes { "biome" } else { "terrain" });
+                        seen += direct.is_some() as usize;
+                    }
+                }
+                assert!(seen > 100, "the land was read: {seen}");
+            }
+            assert!(!classes.is_empty());
+        }
     }
 
     /// The slope read from running sums is the slope fitted column by

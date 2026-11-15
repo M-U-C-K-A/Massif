@@ -1517,7 +1517,14 @@ impl MassifApp {
         if close {
             self.status = None;
         }
-        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        // Drawn again only for what moves: the progress of tasks, the fade
+        // of a message, and its end (an error stays, still).
+        match &message {
+            _ if !running.is_empty() => ctx.request_repaint_after(std::time::Duration::from_millis(100)),
+            Some((_, false, _, age)) if *age >= 7.0 => ctx.request_repaint(),
+            Some((_, false, _, age)) => ctx.request_repaint_after(std::time::Duration::from_secs_f64(7.0 - age)),
+            _ => {}
+        }
     }
 
     // --------------------------------------------------------------- dock --

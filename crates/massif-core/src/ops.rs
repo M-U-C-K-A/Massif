@@ -15,6 +15,7 @@ use crate::plane::Plane;
 use crate::registry::{BiomeId, TerrainId};
 use crate::tile::{NO_FLUID, Tile};
 use crate::world::Dimension;
+use rayon::prelude::*;
 use std::collections::HashMap;
 
 /// Which surface of a level a height tool edits.
@@ -228,7 +229,6 @@ fn box_pass(src: &[f32], dst: &mut [f32], lines: usize, len: usize, k: usize, ac
 /// The averages are computed tile by tile, in parallel, from the heights
 /// before the dab, so memory stays small whatever the brush size.
 pub fn smooth(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, surface: Surface) {
-    use rayon::prelude::*;
     let surface = if edit.kind().has_bottom() {
         surface
     } else {
@@ -416,48 +416,38 @@ pub fn paint_pattern(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, salt: u64
 }
 
 /// Give the columns under the brush the biome their land calls for (see
-/// [`crate::auto`]). `salt` should change from dab to dab.
-/// Returns how many columns changed.
-pub fn auto_biome(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, salt: u64, reader: &crate::auto::Reader) -> usize {
-    let dab = Dab::new(edit, brush, cx, cz);
-    let footprint = BlockRect::around(cx, cz, brush.radius);
-    let survey = reader.survey(edit.dim(), footprint);
-    let changed = std::sync::atomic::AtomicUsize::new(0);
-    edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
-        let slab = tile.bottom.is_some();
-        let mut n = 0;
-        for z in clip.z0..clip.z1 {
-            for x in clip.x0..clip.x1 {
-                let w = dab.weight(x, z);
-                if !auto_hit(w, brush.strength, x, z, salt) {
-                    continue;
-                }
-                let i = local_index(x, z);
-                if slab && !tile.present(i) {
-                    continue;
-                }
-                if let Some(biome) = reader.biome(&survey, x, z)
-                    && tile.biome.get(i) != biome.0
-                {
-                    tile.biome.set(i, biome.0);
-                    n += 1;
-                }
-            }
-        }
-        changed.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
-    });
-    changed.into_inner()
+/// [`crate::auto`]), as `classes` (for biomes) has it, worked out where it
+/// is not yet. `salt` should change from dab to dab. Returns how many
+/// columns changed.
+pub fn auto_biome(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, salt: u64, reader: &crate::auto::Reader, classes: &mut crate::auto::Classes) -> usize {
+    auto_apply(edit, brush, cx, cz, salt, reader, classes, |t| &mut t.biome)
 }
 
 /// Paint the columns under the brush with the terrain their biome calls
-/// for (see [`crate::auto`]). `salt` should change from dab to dab.
-/// Returns how many columns changed.
-pub fn auto_paint(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, salt: u64, reader: &crate::auto::Reader) -> usize {
-    let dab = Dab::new(edit, brush, cx, cz);
+/// for (see [`crate::auto`]), as `classes` (for terrains) has it. `salt`
+/// should change from dab to dab. Returns how many columns changed.
+pub fn auto_paint(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, salt: u64, reader: &crate::auto::Reader, classes: &mut crate::auto::Classes) -> usize {
+    auto_apply(edit, brush, cx, cz, salt, reader, classes, |t| &mut t.terrain)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn auto_apply(
+    edit: &mut Edit,
+    brush: &Brush,
+    cx: f32,
+    cz: f32,
+    salt: u64,
+    reader: &crate::auto::Reader,
+    classes: &mut crate::auto::Classes,
+    plane: impl Fn(&mut Tile) -> &mut crate::plane::Plane<u16> + Sync,
+) -> usize {
     let footprint = BlockRect::around(cx, cz, brush.radius);
-    let survey = reader.survey(edit.dim(), footprint);
+    classes.ensure(edit.dim(), reader, footprint);
+    let dab = Dab::new(edit, brush, cx, cz);
+    let classes = &*classes;
     let changed = std::sync::atomic::AtomicUsize::new(0);
-    edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
+    edit.par_tiles(footprint.tiles(), footprint, false, |pos, clip, tile| {
+        let Some(values) = classes.tile(pos) else { return };
         let slab = tile.bottom.is_some();
         let mut n = 0;
         for z in clip.z0..clip.z1 {
@@ -467,13 +457,13 @@ pub fn auto_paint(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, salt: u64, r
                     continue;
                 }
                 let i = local_index(x, z);
-                if slab && !tile.present(i) {
+                let v = values[i];
+                if v == u16::MAX || slab && !tile.present(i) {
                     continue;
                 }
-                if let Some(terrain) = reader.terrain(&survey, x, z)
-                    && tile.terrain.get(i) != terrain.0
-                {
-                    tile.terrain.set(i, terrain.0);
+                let plane = plane(tile);
+                if plane.get(i) != v {
+                    plane.set(i, v);
                     n += 1;
                 }
             }
@@ -507,29 +497,56 @@ impl Preview {
 /// the footprint, and for each of its columns (row by row) the terrain
 /// (`biomes` false) or biome it would get.
 pub fn auto_preview(dim: &Dimension, brush: &Brush, cx: f32, cz: f32, reader: &crate::auto::Reader, biomes: bool) -> (BlockRect, Vec<Preview>) {
+    let mut classes = crate::auto::Classes::new(biomes);
+    classes.ensure(dim, reader, BlockRect::around(cx, cz, brush.radius));
+    auto_preview_with(dim, brush, cx, cz, &classes, 1)
+}
+
+/// [`auto_preview`] from what `classes` worked out (see
+/// [`crate::auto::Classes::ensure`]), a column every `step` blocks each way
+/// (a preview need not be finer than the screen: the first column of each
+/// `step` × `step` square): the footprint, and the samples row by row,
+/// ⌈`footprint.width()` / `step`⌉ a row.
+pub fn auto_preview_with(dim: &Dimension, brush: &Brush, cx: f32, cz: f32, classes: &crate::auto::Classes, step: i32) -> (BlockRect, Vec<Preview>) {
+    let step = step.max(1);
     let dab = Dab::on(dim, brush, cx, cz);
     let footprint = BlockRect::around(cx, cz, brush.radius);
-    let survey = reader.survey(dim, footprint);
-    let mut out = vec![Preview::Outside; (footprint.width() * footprint.depth()) as usize];
-    for (pos, clip) in clip_tiles(footprint) {
-        let Some(stack) = crate::compose::TileStack::new(dim, pos, false) else { continue };
-        let ground = stack.ground();
-        for z in clip.z0..clip.z1 {
-            for x in clip.x0..clip.x1 {
-                if dab.weight(x, z) <= 0.0 {
-                    continue;
-                }
-                let k = ((z - footprint.z0) * footprint.width() + (x - footprint.x0)) as usize;
-                out[k] = Preview::Same;
-                let new = if biomes { reader.biome(&survey, x, z).map(|b| b.0) } else { reader.terrain(&survey, x, z).map(|t| t.0) };
-                let Some(new) = new else { continue };
-                let cell = local_index(x, z);
-                let old = if biomes { ground.biome.get(cell) } else { ground.terrain.get(cell) };
-                if old != new {
-                    out[k] = Preview::Becomes(new);
+    let (w, d) = ((footprint.width() + step - 1) / step, (footprint.depth() + step - 1) / step);
+    // The samples whose coordinate, from `lo`, is within a..b.
+    let samples = |lo: i32, n: i32, a: i32, b: i32| ((a - lo + step - 1) / step).min(n)..((b - lo + step - 1) / step).min(n);
+    let biomes = classes.biomes();
+    // Tile by tile, each read once.
+    let parts: Vec<Vec<(usize, Preview)>> = footprint
+        .tiles()
+        .collect::<Vec<_>>()
+        .into_par_iter()
+        .map(|pos| {
+            let clip = footprint.intersect(&pos.rect());
+            let ground = dim.ground().view(pos);
+            let mut out = Vec::new();
+            for j in samples(footprint.z0, d, clip.z0, clip.z1) {
+                let z = footprint.z0 + j * step;
+                for i in samples(footprint.x0, w, clip.x0, clip.x1) {
+                    let x = footprint.x0 + i * step;
+                    if dab.weight(x, z) <= 0.0 {
+                        continue;
+                    }
+                    let k = (j * w + i) as usize;
+                    let (Some(new), Some(ground)) = (classes.get(x, z), &ground) else {
+                        out.push((k, Preview::Same));
+                        continue;
+                    };
+                    let cell = local_index(x, z);
+                    let old = if biomes { ground.biome.get(cell) } else { ground.terrain.get(cell) };
+                    out.push((k, if old != new { Preview::Becomes(new) } else { Preview::Same }));
                 }
             }
-        }
+            out
+        })
+        .collect();
+    let mut out = vec![Preview::Outside; (w * d) as usize];
+    for (k, p) in parts.into_iter().flatten() {
+        out[k] = p;
     }
     (footprint, out)
 }

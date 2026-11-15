@@ -689,11 +689,26 @@ pub struct Stroke {
     flatten_to: Option<f32>,
     /// Columns the automatic tools changed.
     changed: usize,
+    /// What the automatic tools give the land, read once for the stroke.
+    classes: Option<massif_core::auto::Classes>,
 }
 
 impl Stroke {
     pub fn secondary(&self) -> bool {
         self.secondary
+    }
+
+    /// What the stroke read of the land, taken back.
+    pub fn take_classes(&mut self) -> Option<massif_core::auto::Classes> {
+        self.classes.take()
+    }
+
+    /// Start from what a preview already read of the land (if it is for
+    /// this tool).
+    pub fn with_classes(mut self, classes: Option<massif_core::auto::Classes>) -> Self {
+        let biomes = self.tool == Tool::AutoBiome;
+        self.classes = classes.filter(|c| c.biomes() == biomes && matches!(self.tool, Tool::AutoBiome | Tool::AutoPaint));
+        self
     }
 }
 
@@ -728,6 +743,7 @@ pub fn begin_stroke(doc: &mut Document, tools: &ToolState, at: (f32, f32), inver
         secondary,
         flatten_to,
         changed: 0,
+        classes: None,
     };
     (Some(stroke), None)
 }
@@ -800,14 +816,20 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
             Tool::Cover => ops::paint_cover(&mut edit, brush, x, z, if invert { 0 } else { tools.cover }, stroke.salt),
             Tool::Objects => ops::paint_objects(&mut edit, brush, x, z, if invert { 0 } else { tools.object_layer }, stroke.salt),
             Tool::AutoBiome => match &reader {
-                Some(reader) if !invert => stroke.changed += ops::auto_biome(&mut edit, brush, x, z, stroke.salt, reader),
+                Some(reader) if !invert => {
+                    let classes = stroke.classes.get_or_insert_with(|| massif_core::auto::Classes::new(true));
+                    stroke.changed += ops::auto_biome(&mut edit, brush, x, z, stroke.salt, reader, classes)
+                }
                 _ => ops::paint_biome(&mut edit, brush, x, z, BiomeId(0), stroke.salt),
             },
             Tool::AutoPaint => match (&theme, &reader) {
                 (Some((theme, sea)), _) => ops::paint_terrain_with(&mut edit, brush, x, z, stroke.salt, |h| {
                     theme.terrain(h - 1.0, 0.0, *sea, 0.0)
                 }),
-                (None, Some(reader)) => stroke.changed += ops::auto_paint(&mut edit, brush, x, z, stroke.salt, reader),
+                (None, Some(reader)) => {
+                    let classes = stroke.classes.get_or_insert_with(|| massif_core::auto::Classes::new(false));
+                    stroke.changed += ops::auto_paint(&mut edit, brush, x, z, stroke.salt, reader, classes)
+                }
                 (None, None) => {}
             },
             Tool::Water => {

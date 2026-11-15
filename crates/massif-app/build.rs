@@ -15,8 +15,12 @@ fn main() {
     }
 }
 
+/// The endings of the names of a scene's layers.
+const LAYERS: [&str; 4] = ["_ciel", "_sky", "_relief", "_land"];
+
 /// Write `backdrops.rs` into OUT_DIR: every JPEG and PNG of
-/// `assets/backdrops`, by name, its bytes built into the app.
+/// `assets/backdrops` but the layers of a scene, by name, its bytes built
+/// into the app.
 fn backdrops() {
     println!("cargo:rerun-if-changed=assets/backdrops");
     let dir = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("assets/backdrops");
@@ -25,6 +29,9 @@ fn backdrops() {
             entries
                 .filter_map(|e| e.ok().map(|e| e.path()))
                 .filter(|p| p.extension().and_then(|e| e.to_str()).is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "jpg" | "jpeg" | "png")))
+                // The layers of a scene (its sky, its relief cut out) are
+                // not pictures to show alone; the whole scene is.
+                .filter(|p| p.file_stem().and_then(|s| s.to_str()).is_none_or(|s| !LAYERS.iter().any(|l| s.to_ascii_lowercase().ends_with(l))))
                 .collect()
         })
         .unwrap_or_default();
