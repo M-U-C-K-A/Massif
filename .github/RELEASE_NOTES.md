@@ -1,5 +1,7 @@
 Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, with a node-based terrain generator in the spirit of Gaea, written in Rust.
 
+## New in 0.5.1
+
 ## New in 0.5.0
 
 **Ores, as Minecraft lays them.** The export now lays ores in the rock — Minecraft adds none to the map's finished chunks — following the game's own veins and heights since 1.18, or those of older versions. **Edit ▸ Ores** shows the map cut through with the ores exactly where they will be and a candle for each band of each ore: drag its ends, its body or its side to move the heights where veins start, where they are the most common and how large they are; beside it, the ore expected at each height in blocks, on a log scale or as a share of the ground. Saved with the map; the export can leave them out.
