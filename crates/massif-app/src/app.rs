@@ -848,7 +848,6 @@ impl MassifApp {
         crate::devtools::DevInfo { keeps, map, jobs, gpu: None }
     }
 
-    /// Put the Developer panel beside the largest area of the workspace.
     /// The dialog of a filter over the whole map, with a cold copy of the
     /// map for its pictures.
     fn open_reshape(&mut self, what: crate::reshape::WholeOp) {
@@ -856,6 +855,7 @@ impl MassifApp {
         self.dialog = Some(Dialog::Reshape(Box::new(crate::reshape::ReshapeForm::new(what, map, self.doc.world.meta.sea_level))));
     }
 
+    /// Put the Developer panel beside the largest area of the workspace.
     fn show_developer_panel(&mut self) {
         let mut areas = Vec::new();
         self.layout.current().root.areas(&mut areas);
@@ -3468,6 +3468,107 @@ mod tests {
         }
     }
 
+    /// Opening a real map (MASSIF_MOVE_WORLD: a .massif), timed: until the
+    /// map view has drawn what it shows, and until the 3D view has built
+    /// every tile, nothing moving.
+    #[test]
+    fn opening_a_real_world() {
+        let Some(path) = std::env::var_os("MASSIF_MOVE_WORLD").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1440.0, 900.0))
+            .with_pixels_per_point(2.0)
+            .with_step_dt(1.0 / 60.0)
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_eframe(move |cc| {
+                theme::install(&cc.egui_ctx);
+                MassifApp::for_tests(generate(&GenParams {
+                    tiles_x: 2,
+                    tiles_z: 2,
+                    ..GenParams::default()
+                }))
+            });
+        h.run_steps(3);
+        let ctx = h.ctx.clone();
+        let started = std::time::Instant::now();
+        h.state_mut().jobs.push(Job::open(&ctx, path));
+        while !h.state().jobs.is_empty() {
+            h.step();
+        }
+        h.state_mut().dialog = None;
+        eprintln!("opened in {:.2} s", started.elapsed().as_secs_f32());
+        let (mut map_done, mut frames, mut worst) = (None, 0, 0.0f32);
+        let shown = std::time::Instant::now();
+        while h.state().view3d.pending() > 0 || frames < 5 || map_done.is_none() {
+            let t = std::time::Instant::now();
+            h.step();
+            worst = worst.max(t.elapsed().as_secs_f32() * 1000.0);
+            frames += 1;
+            if map_done.is_none() && frames > 3 && !h.ctx.has_requested_repaint_for(&h.ctx.viewport_id()) {
+                map_done = Some(shown.elapsed().as_secs_f32());
+            }
+            if map_done.is_none() && h.state().view3d.pending() == 0 && frames > 3 {
+                map_done = Some(shown.elapsed().as_secs_f32());
+            }
+            if frames > 20000 {
+                break;
+            }
+        }
+        eprintln!(
+            "3D built in {:.2} s ({} tiles, {frames} frames, worst frame {worst:.0} ms); everything still at {:.2} s",
+            shown.elapsed().as_secs_f32(),
+            h.state().view3d.tiles_built(),
+            map_done.unwrap_or(0.0)
+        );
+        // At rest: no frame asked for (nothing moves, nothing to build).
+        h.run_steps(30);
+        let (mut asked, mut causes) = (0, std::collections::BTreeSet::new());
+        for _ in 0..600 {
+            h.step();
+            if h.ctx.requested_repaint_last_pass_for(&h.ctx.viewport_id()) {
+                asked += 1;
+                causes.extend(h.ctx.repaint_causes().iter().map(|c| c.to_string()));
+            }
+        }
+        eprintln!("at rest: {asked} of 600 frames asked for another at once; causes: {causes:?}");
+        eprintln!("memory in use: {} MB", crate::devtools::memory_in_use().unwrap_or(0) >> 20);
+        for (what, size, note) in h.state().dev_info().keeps {
+            eprintln!("  {what}: {size} ({note})");
+        }
+    }
+
+    #[test]
+    fn starting_up() {
+        if std::env::var_os("MASSIF_PERF").is_none() {
+            return;
+        }
+        let started = std::time::Instant::now();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1440.0, 900.0))
+            .with_pixels_per_point(2.0)
+            .with_step_dt(1.0 / 60.0)
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_eframe(|cc| MassifApp::new(cc, None));
+        eprintln!("harness and app: {:.1} ms", started.elapsed().as_secs_f32() * 1000.0);
+        for k in 0..12 {
+            let t = std::time::Instant::now();
+            h.step();
+            let work = t.elapsed().as_secs_f32() * 1000.0;
+            let t = std::time::Instant::now();
+            let _ = h.render();
+            eprintln!("frame {k}: work {work:.1} ms, drawing {:.1} ms", t.elapsed().as_secs_f32() * 1000.0);
+        }
+        // Idle: what a frame with nothing to do costs, and whether one is asked for.
+        let t = std::time::Instant::now();
+        for _ in 0..30 {
+            h.step();
+        }
+        eprintln!("idle frame: {:.2} ms", t.elapsed().as_secs_f32() * 1000.0 / 30.0);
+    }
+
     /// The zoom buttons and keys glide: the zoom gets there over a few
     /// frames, around the middle of the view, and lands exactly; "Fit the
     /// whole map" glides there too.
@@ -3676,6 +3777,67 @@ mod tests {
     /// nothing, the buttons then sculpt at the crosshair, and the orbit
     /// camera comes back from the player's eyes. Needs a GPU: runs with
     /// MASSIF_SNAPSHOT_DIR.
+    /// Strokes in 3D Sculpt, timed frame by frame (MASSIF_PERF): building
+    /// and smoothing with a large brush, the view showing each dab.
+    #[test]
+    fn sculpting_strokes_in_3d() {
+        if std::env::var_os("MASSIF_PERF").is_none() {
+            return;
+        }
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1440.0, 900.0))
+            .with_pixels_per_point(2.0)
+            .with_step_dt(1.0 / 60.0)
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_eframe(|cc| {
+                theme::install(&cc.egui_ctx);
+                MassifApp::for_tests(generate(&GenParams {
+                    tiles_x: 8,
+                    tiles_z: 8,
+                    landform: Landform::Hills,
+                    ..GenParams::default()
+                }))
+            });
+        {
+            let app = h.state_mut();
+            app.layout.active = 4; // 3D Sculpt
+            app.tools.brush.strength = 1.0;
+        }
+        h.run_steps(20);
+        let top = crate::tools::probe(&h.state().doc, 0, 0).map_or(64.0, |p| p.height);
+        h.state_mut().sculpt3d.camera = crate::view3d::Camera { target: [0.5, top as f64, 0.5], yaw: 0.6, pitch: 0.9, distance: 220.0 };
+        while h.state().sculpt3d.pending() > 0 {
+            h.step();
+        }
+        h.run_steps(5);
+        let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        let view = areas
+            .into_iter()
+            .find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::Sculpt3d))
+            .map(|(_, r)| r)
+            .expect("the 3D Sculpt workspace shows its editor");
+        for (tool, radius) in [(Tool::Build, 24.0), (Tool::Build, 48.0), (Tool::Smooth3d, 48.0), (Tool::Smooth3d, 64.0)] {
+            h.state_mut().tools.sculpt.tool = tool;
+            h.state_mut().tools.brush.radius = radius;
+            let from = view.center() - vec2(60.0, 0.0);
+            h.event(egui::Event::PointerMoved(from));
+            h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            let mut times = Vec::new();
+            for k in 0..40 {
+                h.event(egui::Event::PointerMoved(from + vec2(k as f32 * 3.0, 0.0)));
+                let t = std::time::Instant::now();
+                h.step();
+                times.push(t.elapsed().as_secs_f32() * 1000.0);
+            }
+            h.event(egui::Event::PointerButton { pos: from + vec2(120.0, 0.0), button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+            h.run_steps(3);
+            times.sort_by(f32::total_cmp);
+            let mean = times.iter().sum::<f32>() / times.len() as f32;
+            eprintln!("{tool:?} r{radius}: frame mean {mean:.1} ms, p95 {:.1} ms, max {:.1} ms", times[times.len() * 95 / 100], times.last().unwrap());
+        }
+    }
+
     #[test]
     fn walking_in_3d_sculpt() {
         let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {

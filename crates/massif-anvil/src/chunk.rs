@@ -69,6 +69,9 @@ pub struct ExportContext<'a> {
     first_extra: u16,
     /// How far any object reaches from its anchor; 0 without objects.
     pub reach: i32,
+    /// The heights where the substrate is one block in every column, and
+    /// those where it is drawn block by block.
+    bands: [(i32, i32, Option<u16>); 4],
     plains: u16,
     ocean: u16,
     deep_ocean: u16,
@@ -238,9 +241,12 @@ impl<'a> ExportContext<'a> {
             Era::Modern => Vec::new(),
             _ => reg.biomes.iter().map(|b| target.biome_number(if b.id.is_empty() { "minecraft:plains" } else { &b.id })).collect(),
         };
+        let mat = Materializer::new(reg, world.meta.seed, dim.min_y);
+        let bands = mat.substrate_bands().map(|(y0, y1, b)| (y0, y1, b.map(|b| b.0)));
         Ok(Self {
             reg,
-            mat: Materializer::new(reg, world.meta.seed, dim.min_y),
+            mat,
+            bands,
             min_y,
             max_y,
             sea_level: world.meta.sea_level,
@@ -318,32 +324,68 @@ struct Plant {
 /// Grow the cover numbered `cover` on the column whose topmost block is at
 /// `y - 1`: in the air above it, or in the water for a cover that grows
 /// under water. Nothing grows where the whole plant has no room.
-fn grow(ctx: &ExportContext, cover: u16, x: i32, y: i32, z: i32, blocks: &mut [u16], column: usize) {
+/// Grow the plant of `cover` on the top of a column, at `y`. Returns the
+/// height above the last block it put (`y` if none).
+fn grow(ctx: &ExportContext, cover: u16, x: i32, y: i32, z: i32, blocks: &mut [u16], column: usize) -> i32 {
     let (min_y, max_y) = (ctx.min_y, ctx.max_y);
-    let (Some(def), Some(plants)) = (ctx.reg.cover(cover), ctx.covers.get(cover as usize - 1)) else { return };
+    let (Some(def), Some(plants)) = (ctx.reg.cover(cover), ctx.covers.get(cover as usize - 1)) else { return y };
     if y <= min_y || y >= max_y {
-        return;
+        return y;
     }
-    let Some(growth) = def.growth(x, z, ctx.seed) else { return };
-    let Some(Some(plant)) = plants.get(growth.plant) else { return };
+    let Some(growth) = def.growth(x, z, ctx.seed) else { return y };
+    let Some(Some(plant)) = plants.get(growth.plant) else { return y };
     let at = |y: i32| (((y - min_y) as usize) << 8) | column;
     if def.soil_only && !ctx.soil.get(blocks[at(y - 1)] as usize).copied().unwrap_or(false) {
-        return;
+        return y;
     }
     let medium = match (def.underwater, ctx.lava) {
         (false, _) => 0,
         (true, false) => ctx.water,
-        (true, true) => return,
+        (true, true) => return y,
     };
     let height = if plant.upper.is_some() { 2 } else { growth.height as i32 };
     if y + height > max_y || (0..height).any(|k| blocks[at(y + k)] != medium) {
-        return;
+        return y;
     }
     for k in 0..height {
         blocks[at(y + k)] = match plant.upper {
             Some(upper) if k == 1 => upper,
             _ => plant.lower,
         };
+    }
+    y + height
+}
+
+/// Whether every block of a section is the same: compared 64 at a time,
+/// without stopping inside a run (which the compiler turns into wide
+/// comparisons).
+fn uniform(section: &[u16]) -> bool {
+    let first = section[0];
+    let (runs, rest) = section.as_chunks::<64>();
+    runs.iter().all(|run| run.iter().fold(true, |same, &b| same & (b == first))) && rest.iter().all(|&b| b == first)
+}
+
+/// Fill a column of `blocks` with the substrate from `y0` to `y1`: a band
+/// at a time, a constant where it is one block everywhere.
+fn fill_substrate(ctx: &ExportContext, x: i32, z: i32, (y0, y1): (i32, i32), blocks: &mut [u16], column: usize) {
+    let at = |y: i32| (((y - ctx.min_y) as usize) << 8) | column;
+    for &(b0, b1, block) in &ctx.bands {
+        let (lo, hi) = (b0.max(y0), b1.min(y1));
+        if lo >= hi {
+            continue;
+        }
+        match block {
+            Some(b) => {
+                for v in blocks[at(lo)..].iter_mut().step_by(256).take((hi - lo) as usize) {
+                    *v = b;
+                }
+            }
+            None => {
+                for y in lo..hi {
+                    blocks[at(y)] = ctx.mat.substrate(x, y, z).0;
+                }
+            }
+        }
     }
 }
 
@@ -357,6 +399,9 @@ struct BiomeColumn {
 /// Reusable buffers for [`build_chunk`]; keep one per worker thread.
 pub struct Scratch {
     blocks: Vec<u16>,
+    /// How much of `blocks` the last chunk may have written (the rest is
+    /// air): what the next one clears.
+    dirty: usize,
     lookup: Vec<u16>,
     palette: Vec<u16>,
     packed: Vec<i64>,
@@ -369,6 +414,7 @@ impl Scratch {
     pub fn new(ctx: &ExportContext) -> Self {
         Self {
             blocks: vec![0; ctx.sections() * SECTION_VOLUME],
+            dirty: 0,
             lookup: vec![UNSET; ctx.states.len()],
             palette: Vec::with_capacity(64),
             packed: Vec::with_capacity(512),
@@ -474,6 +520,7 @@ pub fn build_chunk(
     let sections = ctx.sections();
     let Scratch {
         blocks,
+        dirty,
         lookup,
         palette,
         packed,
@@ -483,7 +530,10 @@ pub fn build_chunk(
     } = scratch;
 
     // ---- blocks ------------------------------------------------------------
-    blocks.fill(0);
+    // What the last chunk wrote is cleared (above it, all is air already);
+    // `top` follows the highest block this one writes.
+    blocks[..*dirty].fill(0);
+    let mut top = min_y;
     for lz in 0..16usize {
         for lx in 0..16usize {
             let cell = cell_index(cx * 16 + lx, cz * 16 + lz);
@@ -501,25 +551,26 @@ pub fn build_chunk(
                     span.y1 - recipe as i32
                 };
                 // What lies outside the version's heights is left out.
-                for y in span.y0.max(min_y)..split.min(max_y) {
-                    blocks[at(y)] = ctx.mat.substrate(x, y, z).0;
+                fill_substrate(ctx, x, z, (span.y0.max(min_y), split.min(max_y)), blocks, column);
+                let (lo, hi) = (split.max(min_y), span.y1.min(max_y));
+                if lo < hi {
+                    ctx.mat.recipe_column(span, x, z, submerged, (lo, hi), |y, b| blocks[at(y)] = b.0);
                 }
-                for y in split.max(min_y)..span.y1.min(max_y) {
-                    blocks[at(y)] = ctx.mat.block(span, x, y, z, submerged).0;
-                }
+                top = top.max(span.y1);
             }
             for &(y0, y1) in fluids.iter() {
                 for y in y0.max(min_y)..y1.min(max_y) {
                     blocks[at(y)] = ctx.water;
                 }
+                top = top.max(y1);
             }
             // What grows on the top of the column.
             if !ctx.covers.is_empty()
-                && let Some(top) = spans.last()
+                && let Some(surface) = spans.last()
             {
-                let cover = stack.surface_cover(cell, top);
+                let cover = stack.surface_cover(cell, surface);
                 if cover != 0 {
-                    grow(ctx, cover, x, top.y1, z, blocks, column);
+                    top = top.max(grow(ctx, cover, x, surface.y1, z, blocks, column));
                 }
             }
             // A world cut at 0 gets its floor of bedrock there.
@@ -538,7 +589,15 @@ pub fn build_chunk(
             .copied()
             .collect();
         stand_objects(ctx, &near, bx0, bz0, blocks);
+        for p in &near {
+            if let Some(def) = ctx.reg.objects.get(p.object as usize) {
+                top = top.max(p.y - def.anchor[1] as i32 + def.size[1] as i32);
+            }
+        }
     }
+    // The sections that hold something; those above are air.
+    let filled = (((top.min(max_y) - min_y).max(0) as usize).div_ceil(16)).min(sections);
+    *dirty = filled * SECTION_VOLUME;
 
     // ---- biomes: one sample per 4×4 column ---------------------------------
     for bz in 0..4usize {
@@ -596,7 +655,9 @@ pub fn build_chunk(
         // Block states.
         palette.clear();
         let first = section[0];
-        if section.iter().all(|&b| b == first) {
+        if s >= filled {
+            palette.push(0);
+        } else if uniform(section) {
             palette.push(first);
         } else {
             for &b in section {

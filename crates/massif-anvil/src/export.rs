@@ -8,7 +8,7 @@ use massif_core::TilePos;
 use massif_core::compose::TileStack;
 use massif_core::world::World;
 use rayon::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -181,45 +181,61 @@ pub fn export(
     regions
         .par_iter()
         .try_for_each(|((rx, rz), tiles)| -> Result<(), ExportError> {
-            let mut scratch = Scratch::new(&ctx);
-            let mut region = RegionBuilder::new();
             // The objects of the tiles within their reach of each tile:
             // those of the region's edges stand on its neighbours too.
             let ring = (ctx.reach + 127) / 128;
-            let mut placed: HashMap<TilePos, Vec<massif_core::objects::Placement>> = HashMap::new();
-            for &pos in tiles {
-                if progress.cancel.load(Ordering::Relaxed) {
-                    return Err(ExportError::Cancelled);
-                }
-                let Some(stack) = TileStack::new(dim, pos, true) else {
-                    continue;
-                };
-                let mut objects = Vec::new();
-                if ctx.reach > 0 {
-                    let area = pos.rect().expand(ctx.reach);
-                    for tz in pos.z - ring..=pos.z + ring {
-                        for tx in pos.x - ring..=pos.x + ring {
-                            let t = TilePos::new(tx, tz);
-                            let here = placed.entry(t).or_insert_with(|| tile_placements(&ctx, world, dim, t));
-                            objects.extend(here.iter().filter(|p| area.x0 <= p.x && p.x < area.x1 && area.z0 <= p.z && p.z < area.z1).copied());
+            let placed: HashMap<TilePos, Vec<massif_core::objects::Placement>> = if ctx.reach > 0 {
+                let near: HashSet<TilePos> = tiles
+                    .iter()
+                    .flat_map(|p| (p.z - ring..=p.z + ring).flat_map(move |tz| (p.x - ring..=p.x + ring).map(move |tx| TilePos::new(tx, tz))))
+                    .collect();
+                near.into_par_iter().map(|t| (t, tile_placements(&ctx, world, dim, t))).collect()
+            } else {
+                HashMap::new()
+            };
+            // The region's tiles side by side, each its chunks built and
+            // compressed: the threads that ran out of regions help with
+            // those left, whatever their size.
+            let records: Vec<Vec<(usize, usize, Vec<u8>)>> = tiles
+                .par_iter()
+                .map_init(
+                    || Scratch::new(&ctx),
+                    |scratch, &pos| -> Result<Vec<(usize, usize, Vec<u8>)>, ExportError> {
+                        if progress.cancel.load(Ordering::Relaxed) {
+                            return Err(ExportError::Cancelled);
                         }
-                    }
-                    objects.sort_unstable_by_key(|p| (p.layer, p.x, p.z));
-                }
-                for cz in 0..CHUNKS_PER_TILE {
-                    for cx in 0..CHUNKS_PER_TILE {
-                        let nbt = build_chunk(&ctx, &stack, pos, cx, cz, &objects, &mut scratch);
-                        let chunk_x = pos.x * CHUNKS_PER_TILE as i32 + cx as i32;
-                        let chunk_z = pos.z * CHUNKS_PER_TILE as i32 + cz as i32;
-                        region.put(
-                            chunk_x.rem_euclid(32) as usize,
-                            chunk_z.rem_euclid(32) as usize,
-                            &nbt,
-                            level,
-                        )?;
-                    }
-                }
-                progress.done.fetch_add(1, Ordering::Relaxed);
+                        let Some(stack) = TileStack::new(dim, pos, true) else {
+                            return Ok(Vec::new());
+                        };
+                        let mut objects = Vec::new();
+                        if ctx.reach > 0 {
+                            let area = pos.rect().expand(ctx.reach);
+                            for tz in pos.z - ring..=pos.z + ring {
+                                for tx in pos.x - ring..=pos.x + ring {
+                                    if let Some(here) = placed.get(&TilePos::new(tx, tz)) {
+                                        objects.extend(here.iter().filter(|p| area.x0 <= p.x && p.x < area.x1 && area.z0 <= p.z && p.z < area.z1).copied());
+                                    }
+                                }
+                            }
+                            objects.sort_unstable_by_key(|p| (p.layer, p.x, p.z));
+                        }
+                        let mut out = Vec::with_capacity(CHUNKS_PER_TILE * CHUNKS_PER_TILE);
+                        for cz in 0..CHUNKS_PER_TILE {
+                            for cx in 0..CHUNKS_PER_TILE {
+                                let nbt = build_chunk(&ctx, &stack, pos, cx, cz, &objects, scratch);
+                                let chunk_x = pos.x * CHUNKS_PER_TILE as i32 + cx as i32;
+                                let chunk_z = pos.z * CHUNKS_PER_TILE as i32 + cz as i32;
+                                out.push((chunk_x.rem_euclid(32) as usize, chunk_z.rem_euclid(32) as usize, RegionBuilder::compress(&nbt, level)?));
+                            }
+                        }
+                        progress.done.fetch_add(1, Ordering::Relaxed);
+                        Ok(out)
+                    },
+                )
+                .collect::<Result<_, _>>()?;
+            let mut region = RegionBuilder::new();
+            for (x, z, record) in records.into_iter().flatten() {
+                region.put_record(x, z, record);
             }
             let path = region_dir.join(format!("r.{rx}.{rz}.mca"));
             let file = io::BufWriter::with_capacity(1 << 20, std::fs::File::create(path)?);

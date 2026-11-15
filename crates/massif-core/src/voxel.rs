@@ -469,11 +469,46 @@ pub fn densities_at(dim: &Dimension, pos: ChunkPos) -> VoxelChunk {
     if let Some(chunk) = dim.voxels.get(pos) {
         return chunk.clone();
     }
+    match TileStack::new(dim, pos.tile(), false) {
+        Some(stack) => densities_in(&stack, pos),
+        None => VoxelChunk::air(),
+    }
+}
+
+/// [`densities_at`] for many chunks: each tile they lie in read once (not
+/// once a chunk), the chunks worked out side by side.
+pub fn densities_of(dim: &Dimension, positions: &[ChunkPos]) -> Vec<(ChunkPos, VoxelChunk)> {
+    let mut by_tile: HashMap<TilePos, Vec<ChunkPos>> = HashMap::new();
+    for &p in positions {
+        by_tile.entry(p.tile()).or_default().push(p);
+    }
+    let by_tile: Vec<(TilePos, Vec<ChunkPos>)> = by_tile.into_iter().collect();
+    by_tile
+        .par_iter()
+        .flat_map_iter(|(tile, chunks)| {
+            // A tile's stack only for the chunks not sculpted already.
+            let stack = chunks.iter().any(|p| dim.voxels.get(*p).is_none()).then(|| TileStack::new(dim, *tile, false)).flatten();
+            let made: Vec<(ChunkPos, VoxelChunk)> = chunks
+                .par_iter()
+                .map(|&p| {
+                    let chunk = match (dim.voxels.get(p), &stack) {
+                        (Some(c), _) => c.clone(),
+                        (None, Some(stack)) => densities_in(stack, p),
+                        (None, None) => VoxelChunk::air(),
+                    };
+                    (p, chunk)
+                })
+                .collect();
+            made
+        })
+        .collect()
+}
+
+/// The densities of the columns of `stack` (the tile of `pos`) over the
+/// chunk at `pos`.
+fn densities_in(stack: &TileStack, pos: ChunkPos) -> VoxelChunk {
     let mut chunk = VoxelChunk::air();
     let (x0, y0, z0) = pos.origin();
-    let Some(stack) = TileStack::new(dim, pos.tile(), false) else {
-        return chunk;
-    };
     let mut spans = Vec::new();
     for lz in 0..SIZE {
         for lx in 0..SIZE {
@@ -653,14 +688,14 @@ pub fn sculpt_at(edit: &mut Edit, brush: &Brush, center: [f32; 3], normal: Optio
         let field = Field::gather(edit.dim(), lo, hi, 2 * k);
         let step = |f: Field, by: f32| {
             let b = f.clone().blurred(k);
-            let values = f.values.iter().zip(&b.values).map(|(v, b)| v + by * (b - v)).collect();
+            let values = f.values.par_iter().zip(b.values.par_iter()).map(|(v, b)| v + by * (b - v)).collect();
             Field { values, ..f }
         };
         step(step(field, SHRINK), INFLATE)
     });
 
     let strength = strength.clamp(0.0, 1.0);
-    let profile = brush.profile;
+    let weigher = brush.weigher();
     let changed = std::sync::atomic::AtomicUsize::new(0);
     edit.par_voxels(&positions, |pos, chunk| {
         let (x0, y0, z0) = pos.origin();
@@ -684,14 +719,14 @@ pub fn sculpt_at(edit: &mut Edit, brush: &Brush, center: [f32; 3], normal: Optio
                             }
                             let u = p[0] * t1[0] + p[1] * t1[1] + p[2] * t1[2];
                             let v = p[0] * t2[0] + p[1] * t2[1] + p[2] * t2[2];
-                            brush.weight(u, v) * across
+                            weigher.weight(u, v) * across
                         }
                         None => {
                             let d = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt() / r;
                             if d > 1.0 {
                                 continue;
                             }
-                            profile.apply(d).clamp(0.0, 1.0)
+                            weigher.profile(d)
                         }
                     };
                     let w = (shape * strength).min(1.0);
@@ -767,6 +802,7 @@ pub fn displace_at(edit: &mut Edit, brush: &Brush, center: [f32; 3], normal: [f3
     let reach_back = amount.ceil() as i32 + 2;
     let field = Field::gather(edit.dim(), lo, hi, reach_back);
     let terrains = (outward > 0.0).then(|| Terrains::gather(edit.dim(), [lo[0] - reach_back, lo[1] - reach_back, lo[2] - reach_back], [hi[0] + reach_back, hi[1] + reach_back, hi[2] + reach_back]));
+    let weigher = brush.weigher();
     let changed = std::sync::atomic::AtomicUsize::new(0);
     edit.par_voxels(&positions, |pos, chunk| {
         let (x0, y0, z0) = pos.origin();
@@ -787,7 +823,7 @@ pub fn displace_at(edit: &mut Edit, brush: &Brush, center: [f32; 3], normal: [f3
                     }
                     let u = p[0] * t1[0] + p[1] * t1[1] + p[2] * t1[2];
                     let v = p[0] * t2[0] + p[1] * t2[1] + p[2] * t2[2];
-                    let shift = amount * brush.weight(u, v) * across * outward;
+                    let shift = amount * weigher.weight(u, v) * across * outward;
                     if shift.abs() < 0.01 {
                         continue;
                     }
@@ -831,20 +867,30 @@ impl Terrains {
         let size = [(hi[0] - lo[0]).max(0) as usize, (hi[1] - lo[1]).max(0) as usize, (hi[2] - lo[2]).max(0) as usize];
         let mut values = vec![FOLLOW; size[0] * size[1] * size[2]];
         let rect = BlockRect::new(lo[0], lo[2], hi[0], hi[2]);
-        let mut spans = Vec::new();
-        for tile in rect.tiles() {
-            let Some(stack) = TileStack::new(dim, tile, false) else { continue };
-            let clip = rect.intersect(&tile.rect());
-            for z in clip.z0..clip.z1 {
-                for x in clip.x0..clip.x1 {
-                    stack.spans(local_index(x, z), &mut spans);
-                    for s in &spans {
-                        for y in s.y0.max(lo[1])..s.y1.min(hi[1]) {
-                            let i = ((y - lo[1]) as usize * size[2] + (z - lo[2]) as usize) * size[0] + (x - lo[0]) as usize;
-                            values[i] = s.terrain.0;
+        // The columns' spans, a tile at a time side by side (composing
+        // them is the work); then laid into the box.
+        let tiles: Vec<TilePos> = rect.tiles().collect();
+        let columns: Vec<(i32, i32, Span)> = tiles
+            .par_iter()
+            .flat_map_iter(|&tile| {
+                let mut out = Vec::new();
+                if let Some(stack) = TileStack::new(dim, tile, false) {
+                    let clip = rect.intersect(&tile.rect());
+                    let mut spans = Vec::new();
+                    for z in clip.z0..clip.z1 {
+                        for x in clip.x0..clip.x1 {
+                            stack.spans(local_index(x, z), &mut spans);
+                            out.extend(spans.iter().filter(|s| s.y1 > lo[1] && s.y0 < hi[1]).map(|s| (x, z, *s)));
                         }
                     }
                 }
+                out
+            })
+            .collect();
+        for (x, z, s) in columns {
+            for y in s.y0.max(lo[1])..s.y1.min(hi[1]) {
+                let i = ((y - lo[1]) as usize * size[2] + (z - lo[2]) as usize) * size[0] + (x - lo[0]) as usize;
+                values[i] = s.terrain.0;
             }
         }
         Self { lo, size, values }
@@ -919,22 +965,31 @@ impl Field {
                 }
             }
         }
-        let filled: Vec<(ChunkPos, VoxelChunk)> = chunks.par_iter().map(|&p| (p, densities_at(dim, p))).collect();
-        for (pos, chunk) in filled {
-            let (x0, y0, z0) = pos.origin();
-            for ly in 0..SIZE {
-                for lz in 0..SIZE {
-                    for lx in 0..SIZE {
-                        let (x, y, z) = (x0 + lx, y0 + ly, z0 + lz);
-                        if x < lo[0] || y < lo[1] || z < lo[2] || x >= hi[0] || y >= hi[1] || z >= hi[2] {
+        let filled: HashMap<ChunkPos, VoxelChunk> = densities_of(dim, &chunks).into_iter().collect();
+        // A layer of the box at a time, side by side.
+        values.par_chunks_mut(size[0] * size[2]).enumerate().for_each(|(j, layer)| {
+            let y = lo[1] + j as i32;
+            let (cy, ly) = (y.div_euclid(SIZE), y.rem_euclid(SIZE));
+            for cz in c0.z..=c1.z {
+                for cx in c0.x..=c1.x {
+                    let Some(chunk) = filled.get(&ChunkPos::new(cx, cy, cz)) else { continue };
+                    let (x0, _, z0) = ChunkPos::new(cx, cy, cz).origin();
+                    for lz in 0..SIZE {
+                        let z = z0 + lz;
+                        if z < lo[2] || z >= hi[2] {
                             continue;
                         }
-                        let i = ((y - lo[1]) as usize * size[2] + (z - lo[2]) as usize) * size[0] + (x - lo[0]) as usize;
-                        values[i] = chunk.get(lx, ly, lz) as f32;
+                        let row = &mut layer[(z - lo[2]) as usize * size[0]..][..size[0]];
+                        for lx in 0..SIZE {
+                            let x = x0 + lx;
+                            if x >= lo[0] && x < hi[0] {
+                                row[(x - lo[0]) as usize] = chunk.get(lx, ly, lz) as f32;
+                            }
+                        }
                     }
                 }
             }
-        }
+        });
         Self { lo, size, values }
     }
 

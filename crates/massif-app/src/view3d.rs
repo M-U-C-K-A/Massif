@@ -214,89 +214,120 @@ impl Grid {
 #[allow(clippy::too_many_arguments)]
 fn compose_area(dim: &Dimension, x0: i32, z0: i32, w: usize, d: usize, mode: MapMode, water: bool, standing: Option<Standing>) -> Grid {
     let runs = standing.map(|s| object_runs(dim, s, x0, z0, w, d));
+    // The tiles the area lies on, each composed once; then its rows side by
+    // side (a tile rebuilt alone, as while sculpting, uses every core).
+    let (t0, t1) = (TilePos::containing(x0, z0), TilePos::containing(x0 + w as i32 - 1, z0 + d as i32 - 1));
+    let tiles: Vec<TilePos> = (t0.z..=t1.z).flat_map(|tz| (t0.x..=t1.x).map(move |tx| TilePos::new(tx, tz))).collect();
+    let stacks: HashMap<TilePos, TileStack> = tiles.par_iter().filter_map(|&p| TileStack::new(dim, p, false).map(|s| (p, s))).collect();
+    let rows: Vec<GridRow> = (0..d as i32)
+        .into_par_iter()
+        .map(|j| {
+            let z = z0 + j;
+            let mut row = GridRow {
+                spans: Vec::with_capacity(w * 2),
+                ends: Vec::with_capacity(w),
+                water: Vec::with_capacity(w),
+                top: Vec::with_capacity(w),
+                cover: Vec::with_capacity(w),
+            };
+            let mut sp: Vec<Span> = Vec::new();
+            let mut fl: Vec<(i32, i32)> = Vec::new();
+            let mut sampler = ColumnSampler::default();
+            for i in 0..w as i32 {
+                let x = x0 + i;
+                let start = row.spans.len();
+                let mut wet = i32::MIN;
+                let mut top = Sample::EMPTY;
+                let mut cover = 0;
+                if let Some(stack) = stacks.get(&TilePos::containing(x, z)) {
+                    let cell = local_index(x, z);
+                    stack.spans(cell, &mut sp);
+                    stack.fluids(cell, &sp, &mut fl);
+                    for s in &sp {
+                        let contiguous = row.spans.len() > start && row.spans.last().is_some_and(|l: &CellSpan| l.y1 == s.y0);
+                        if contiguous {
+                            let last = row.spans.last_mut().expect("checked above");
+                            last.y1 = s.y1;
+                            last.terrain = s.terrain.0;
+                            last.top = s.top;
+                        } else {
+                            row.spans.push(CellSpan {
+                                y0: s.y0,
+                                y1: s.y1,
+                                terrain: s.terrain.0,
+                                top: s.top,
+                                color: None,
+                            });
+                        }
+                    }
+                    if water
+                        && let (Some(&(f0, f1)), Some(t)) = (fl.last(), sp.last())
+                        && f0 == t.y1
+                    {
+                        wet = f1;
+                    }
+                    if mode == MapMode::Biome {
+                        top = sampler.sample(stack, cell);
+                    }
+                    if let Some(t) = sp.last() {
+                        cover = stack.surface_cover(cell, t);
+                    }
+                }
+                // The objects over the column, where it is air.
+                if let Some(runs) = &runs {
+                    let here = &runs[(j as usize) * w + i as usize];
+                    if !here.is_empty() {
+                        let ground: Vec<(i32, i32)> = row.spans[start..].iter().map(|s| (s.y0, s.y1)).collect();
+                        let mut free = Vec::new();
+                        for &(y0, y1, color) in here {
+                            let solid: Vec<CellSpan> = ground.iter().map(|&(a, b)| CellSpan { y0: a, y1: b, terrain: 0, top: b as f32, color: None }).collect();
+                            uncovered(y0, y1, &solid, &mut free);
+                            for &(a, b) in &free {
+                                row.spans.push(CellSpan { y0: a, y1: b, terrain: 0, top: b as f32, color: Some(color) });
+                            }
+                        }
+                        row.spans[start..].sort_by_key(|s| s.y0);
+                    }
+                }
+                row.ends.push(row.spans.len() as u32);
+                row.water.push(wet);
+                row.top.push(top);
+                row.cover.push(cover);
+            }
+            row
+        })
+        .collect();
     let mut grid = Grid {
         x0,
         z0,
         w,
         d,
         offsets: Vec::with_capacity(w * d + 1),
-        spans: Vec::new(),
+        spans: Vec::with_capacity(rows.iter().map(|r| r.spans.len()).sum()),
         water: Vec::with_capacity(w * d),
         top: Vec::with_capacity(w * d),
         cover: Vec::with_capacity(w * d),
     };
     grid.offsets.push(0);
-    let mut stacks: HashMap<TilePos, Option<TileStack>> = HashMap::new();
-    let mut sp: Vec<Span> = Vec::new();
-    let mut fl: Vec<(i32, i32)> = Vec::new();
-    let mut sampler = ColumnSampler::default();
-    for j in 0..d as i32 {
-        let z = z0 + j;
-        for i in 0..w as i32 {
-            let x = x0 + i;
-            let pos = TilePos::containing(x, z);
-            let stack = stacks.entry(pos).or_insert_with(|| TileStack::new(dim, pos, false));
-            let start = grid.spans.len();
-            let mut wet = i32::MIN;
-            let mut top = Sample::EMPTY;
-            let mut cover = 0;
-            if let Some(stack) = stack {
-                let cell = local_index(x, z);
-                stack.spans(cell, &mut sp);
-                stack.fluids(cell, &sp, &mut fl);
-                for s in &sp {
-                    let contiguous = grid.spans.len() > start && grid.spans.last().is_some_and(|l: &CellSpan| l.y1 == s.y0);
-                    if contiguous {
-                        let last = grid.spans.last_mut().expect("checked above");
-                        last.y1 = s.y1;
-                        last.terrain = s.terrain.0;
-                        last.top = s.top;
-                    } else {
-                        grid.spans.push(CellSpan {
-                            y0: s.y0,
-                            y1: s.y1,
-                            terrain: s.terrain.0,
-                            top: s.top,
-                            color: None,
-                        });
-                    }
-                }
-                if water
-                    && let (Some(&(f0, f1)), Some(t)) = (fl.last(), sp.last())
-                    && f0 == t.y1
-                {
-                    wet = f1;
-                }
-                if mode == MapMode::Biome {
-                    top = sampler.sample(stack, cell);
-                }
-                if let Some(t) = sp.last() {
-                    cover = stack.surface_cover(cell, t);
-                }
-            }
-            // The objects over the column, where it is air.
-            if let Some(runs) = &runs {
-                let here = &runs[(j as usize) * w + i as usize];
-                if !here.is_empty() {
-                    let ground: Vec<(i32, i32)> = grid.spans[start..].iter().map(|s| (s.y0, s.y1)).collect();
-                    let mut free = Vec::new();
-                    for &(y0, y1, color) in here {
-                        let solid: Vec<CellSpan> = ground.iter().map(|&(a, b)| CellSpan { y0: a, y1: b, terrain: 0, top: b as f32, color: None }).collect();
-                        uncovered(y0, y1, &solid, &mut free);
-                        for &(a, b) in &free {
-                            grid.spans.push(CellSpan { y0: a, y1: b, terrain: 0, top: b as f32, color: Some(color) });
-                        }
-                    }
-                    grid.spans[start..].sort_by_key(|s| s.y0);
-                }
-            }
-            grid.offsets.push(grid.spans.len() as u32);
-            grid.water.push(wet);
-            grid.top.push(top);
-            grid.cover.push(cover);
-        }
+    for row in rows {
+        let base = grid.spans.len() as u32;
+        grid.spans.extend(row.spans);
+        grid.offsets.extend(row.ends.iter().map(|e| base + e));
+        grid.water.extend(row.water);
+        grid.top.extend(row.top);
+        grid.cover.extend(row.cover);
     }
     grid
+}
+
+/// A row of a [`Grid`] composed on its own: its columns' spans, where each
+/// column's end (within the row), water, top and cover.
+struct GridRow {
+    spans: Vec<CellSpan>,
+    ends: Vec<u32>,
+    water: Vec<i32>,
+    top: Vec<Sample>,
+    cover: Vec<u16>,
 }
 
 /// What chunks are drawn with.
@@ -4034,5 +4065,52 @@ mod tests {
         assert!(share > 0.3, "terrain covers only {:.0}% of the frame", share * 100.0);
         assert!(colours.len() > 200, "{} colours", colours.len());
         assert!(renderer.bytes() > 0);
+    }
+}
+
+#[cfg(test)]
+mod perf {
+    use super::*;
+    use massif_core::brush::{Brush, BrushShape, Profile};
+    use massif_core::generate::{GenParams, Landform, generate};
+    use massif_core::history::History;
+
+    /// A tile sculpted all over, rebuilt (MASSIF_PERF): its columns
+    /// composed, then all of it.
+    #[test]
+    fn rebuilding_a_sculpted_tile() {
+        if std::env::var_os("MASSIF_PERF").is_none() {
+            return;
+        }
+        let mut world = generate(&GenParams { tiles_x: 4, tiles_z: 4, landform: Landform::Hills, seed: 3, ..GenParams::default() });
+        let mut history = History::default();
+        let brush = Brush::symmetric(BrushShape::Circle, Profile::Sine, 48.0);
+        history.begin("perf", 0);
+        {
+            let mut edit = history.edit(&mut world, 0);
+            for k in 0..8 {
+                let (x, z) = (10.0 + k as f32 * 14.0, 60.0);
+                let y = edit.dim().ground().view(TilePos::containing(x as i32, z as i32)).map_or(64.0, |t| t.top.get(massif_core::coords::local_index(x as i32, z as i32)));
+                massif_core::voxel::displace_at(&mut edit, &brush, [x, y, z], [0.0, 1.0, 0.0], 4.0, massif_core::voxel::SculptMode::Add);
+            }
+        }
+        history.commit();
+        let dim = &world.dims[0];
+        eprintln!("chunks sculpted: {}", dim.voxels.len());
+        let tile = TilePos::new(0, 0);
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+        let reg = &world.registry;
+        let n = TILE_SIZE as usize;
+        let t = Instant::now();
+        for _ in 0..10 {
+            let standing = Standing { reg, seed: world.meta.seed, lava: false };
+            std::hint::black_box(compose_area(dim, -1, -1, n + 2, n + 2, style.mode, style.water, Some(standing)));
+        }
+        eprintln!("compose a tile: {:.1} ms", t.elapsed().as_secs_f32() * 100.0);
+        let t = Instant::now();
+        for _ in 0..10 {
+            std::hint::black_box(build_tile(dim, reg, world.meta.sea_level as f32, world.meta.seed, tile, style));
+        }
+        eprintln!("build a tile: {:.1} ms", t.elapsed().as_secs_f32() * 100.0);
     }
 }

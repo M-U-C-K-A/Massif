@@ -513,9 +513,85 @@ impl Brush {
     }
 }
 
+/// Steps of the profile table of a [`Weigher`].
+const PROFILE_STEPS: usize = 1024;
+
+/// [`Brush::weight`] made quick for the millions of points of a 3D dab: the
+/// profiles a cosine makes (Sine, Plateau) are read from a table, within a
+/// few millionths of them, instead of worked out at every point; the others
+/// cost less than the table and are worked out as they are.
+pub struct Weigher<'a> {
+    brush: &'a Brush,
+    /// The profile at `PROFILE_STEPS + 1` distances from the centre to the
+    /// rim.
+    table: Option<Box<[f32]>>,
+    /// A round brush without an image: weighed by its distance alone.
+    round: bool,
+    inv_radius: f32,
+}
+
+impl Brush {
+    pub fn weigher(&self) -> Weigher<'_> {
+        let table = matches!(self.profile, Profile::Sine | Profile::Plateau)
+            .then(|| (0..=PROFILE_STEPS).map(|k| self.profile.apply(k as f32 / PROFILE_STEPS as f32).clamp(0.0, 1.0)).collect());
+        Weigher {
+            brush: self,
+            table,
+            round: self.mask.is_none() && self.shape == BrushShape::Circle,
+            inv_radius: 1.0 / self.radius.max(0.5),
+        }
+    }
+}
+
+impl Weigher<'_> {
+    /// The brush's profile at `d`, the distance from its centre over its
+    /// radius (`0..=1`).
+    #[inline]
+    pub fn profile(&self, d: f32) -> f32 {
+        match &self.table {
+            Some(table) => {
+                let f = d.clamp(0.0, 1.0) * PROFILE_STEPS as f32;
+                let i = (f as usize).min(PROFILE_STEPS - 1);
+                let a = table[i];
+                a + (table[i + 1] - a) * (f - i as f32)
+            }
+            None => self.brush.profile.apply(d).clamp(0.0, 1.0),
+        }
+    }
+
+    /// As [`Brush::weight`].
+    #[inline]
+    pub fn weight(&self, dx: f32, dz: f32) -> f32 {
+        if !self.round {
+            return self.brush.weight(dx, dz);
+        }
+        let d = (dx * dx + dz * dz).sqrt() * self.inv_radius;
+        if d > 1.0 {
+            return 0.0;
+        }
+        self.profile(d)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The weigher gives the brush's weights.
+    #[test]
+    fn a_weigher_weighs_as_the_brush() {
+        for profile in Profile::ALL {
+            for shape in [BrushShape::Circle, BrushShape::Square] {
+                let brush = Brush::symmetric(shape, profile, 37.0);
+                let w = brush.weigher();
+                for k in 0..4000 {
+                    let (dx, dz) = ((k % 89) as f32 * 0.93 - 40.0, (k / 89) as f32 * 1.71 - 38.0);
+                    let (a, b) = (brush.weight(dx, dz), w.weight(dx, dz));
+                    assert!((a - b).abs() < 1e-5, "{profile:?} {shape:?} at {dx} {dz}: {a} and {b}");
+                }
+            }
+        }
+    }
 
     #[test]
     fn profiles_match_worldpainter() {

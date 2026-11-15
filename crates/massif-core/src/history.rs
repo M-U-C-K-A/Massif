@@ -444,11 +444,7 @@ impl Edit<'_> {
             self.touch_voxel(pos);
         }
         let missing: Vec<ChunkPos> = positions.iter().copied().filter(|p| self.dim.voxels.get(*p).is_none()).collect();
-        let dim = &*self.dim;
-        let made: Vec<(ChunkPos, VoxelChunk)> = missing
-            .par_iter()
-            .map(|&p| (p, crate::voxel::densities_at(dim, p)))
-            .collect();
+        let made: Vec<(ChunkPos, VoxelChunk)> = crate::voxel::densities_of(self.dim, &missing);
         for (pos, chunk) in made {
             self.dim.voxels.insert(pos, Arc::new(chunk));
         }

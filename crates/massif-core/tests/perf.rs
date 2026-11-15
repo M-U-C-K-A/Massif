@@ -147,3 +147,36 @@ fn sculpting_in_3d() {
         eprintln!("  chunks: {}", world.dims[0].voxels.len());
     }
 }
+
+/// Smoothing in 3D, over and over, at the largest brush: for a profiler.
+#[test]
+#[ignore]
+fn smoothing_in_3d_again_and_again() {
+    let mut world = generate(&GenParams {
+        tiles_x: 8,
+        tiles_z: 8,
+        landform: Landform::Hills,
+        seed: 3,
+        ..GenParams::default()
+    });
+    let mut history = History::default();
+    let brush = Brush::symmetric(BrushShape::Circle, Profile::Sine, 64.0);
+    let y = world.dims[0].ground().view(massif_core::TilePos::new(0, 0)).map_or(64.0, |t| t.top.get(0));
+    history.begin("perf", 0);
+    let mut edit = history.edit(&mut world, 0);
+    // Some matter sculpted first, as when smoothing what was built.
+    massif_core::voxel::displace_at(&mut edit, &brush, [0.5, y, 0.5], [0.0, 1.0, 0.0], 4.0, massif_core::voxel::SculptMode::Add);
+    let started = std::time::Instant::now();
+    let rounds = 40;
+    for k in 0..rounds {
+        let c = [0.5 + k as f32 * 2.0, y, 0.5];
+        massif_core::voxel::sculpt_at(&mut edit, &brush, c, Some([0.0, 1.0, 0.0]), 0.5, massif_core::voxel::SculptMode::Smooth);
+    }
+    eprintln!("3D smooth r64: {:.1} ms a dab", started.elapsed().as_secs_f32() * 1000.0 / rounds as f32);
+    let started = std::time::Instant::now();
+    for k in 0..rounds {
+        let c = [0.5 + k as f32 * 2.0, y + 2.0, 0.5];
+        massif_core::voxel::displace_at(&mut edit, &brush, c, [0.0, 1.0, 0.0], 1.0, massif_core::voxel::SculptMode::Add);
+    }
+    eprintln!("3D build r64: {:.1} ms a dab", started.elapsed().as_secs_f32() * 1000.0 / rounds as f32);
+}

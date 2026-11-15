@@ -387,6 +387,21 @@ impl<'a> Materializer<'a> {
         }
     }
 
+    /// The bands of heights `[y0, y1)` where [`Materializer::substrate`]
+    /// gives the same block in every column, with that block; `None` where
+    /// it is drawn by chance (bedrock at the floor of the world, deepslate
+    /// turning into stone). Together they cover every height.
+    pub fn substrate_bands(&self) -> [(i32, i32, Option<BlockId>); 4] {
+        let wk = &self.reg.well_known;
+        let floor = self.min_y + 5;
+        [
+            (i32::MIN, floor, None),
+            (floor, 0, Some(wk.deepslate)),
+            (floor.max(0), 8, None),
+            (floor.max(8), i32::MAX, Some(wk.stone)),
+        ]
+    }
+
     /// Total thickness of the terrain recipe in column `(x, z)`: blocks deeper
     /// than this below the span's top are plain substrate.
     pub fn recipe_depth(&self, terrain: TerrainId, x: i32, z: i32) -> u32 {
@@ -400,6 +415,53 @@ impl<'a> Materializer<'a> {
             }
         }
         total
+    }
+
+    /// [`Materializer::block`] at every height of `span` from `lo` up to
+    /// `hi` (both within the span), handed to `put`: the column's hash and
+    /// strata worked out once rather than for every block.
+    pub fn recipe_column(&self, span: &Span, x: i32, z: i32, submerged: bool, (lo, hi): (i32, i32), mut put: impl FnMut(i32, BlockId)) {
+        let def = self.reg.terrain(span.terrain);
+        let h = hash2(x, z, self.seed);
+        let bedrock = self.reg.well_known.bedrock;
+        let mut strata = def.strata.iter().enumerate();
+        // The stratum the depth is in, and the depth where it ends.
+        let mut current = None;
+        let mut end = 0u32;
+        for y in (lo..hi).rev() {
+            let depth = (span.y1 - 1 - y).max(0) as u32;
+            while depth >= end {
+                match strata.next() {
+                    Some((i, s)) => {
+                        end = end.saturating_add(stratum_thickness(s.depth, h, i));
+                        current = Some((i, s));
+                    }
+                    None => {
+                        current = None;
+                        end = u32::MAX;
+                    }
+                }
+            }
+            let block = match current {
+                Some((i, s)) => {
+                    if i == 0
+                        && depth == 0
+                        && submerged
+                        && let Some(b) = def.submerged_top
+                    {
+                        b
+                    } else if y - self.min_y < 5 && span.y0 == self.min_y && self.substrate(x, y, z) == bedrock {
+                        bedrock
+                    } else if s.blocks.len() == 1 {
+                        s.blocks[0].0
+                    } else {
+                        pick(&s.blocks, hash3(x, y, z, self.seed))
+                    }
+                }
+                None => self.substrate(x, y, z),
+            };
+            put(y, block);
+        }
     }
 
     /// The block at `y` inside `span`. `submerged` tells whether fluid lies
@@ -467,6 +529,27 @@ mod tests {
     use crate::coords::cell_index;
     use crate::level::LevelKind;
     use crate::world::DimensionKind;
+
+    /// A column worked out at once is the same as block by block, for
+    /// every terrain, over the sea or under it, down to the floor.
+    #[test]
+    fn a_recipe_column_is_its_blocks() {
+        let reg = Registry::vanilla();
+        let m = Materializer::new(&reg, 1234, -64);
+        for (t, _) in reg.terrains.iter().enumerate() {
+            for (x, z) in [(0, 0), (17, -40), (-300, 1201)] {
+                for (y0, y1) in [(-64, 70), (40, 64), (-64, -60)] {
+                    for submerged in [false, true] {
+                        let span = Span { y0, y1, top: y1 as f32, terrain: TerrainId(t as u16) };
+                        let mut got = Vec::new();
+                        m.recipe_column(&span, x, z, submerged, (y0, y1), |y, b| got.push((y, b)));
+                        let want: Vec<(i32, BlockId)> = (y0..y1).rev().map(|y| (y, m.block(&span, x, y, z, submerged))).collect();
+                        assert_eq!(got, want, "terrain {t} at {x} {z}, {y0}..{y1}");
+                    }
+                }
+            }
+        }
+    }
 
     const POS: TilePos = TilePos::new(0, 0);
 

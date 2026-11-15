@@ -40,7 +40,14 @@ impl RegionBuilder {
 
     /// Compress and store the chunk at region-local position `(x, z)`.
     pub fn put(&mut self, x: usize, z: usize, nbt: &[u8], level: u32) -> io::Result<()> {
-        assert!(x < REGION_CHUNKS && z < REGION_CHUNKS);
+        let record = Self::compress(nbt, level)?;
+        self.put_record(x, z, record);
+        Ok(())
+    }
+
+    /// The record of a chunk as a region file holds it: length, compression
+    /// type and data, compressed at `level` — on any thread.
+    pub fn compress(nbt: &[u8], level: u32) -> io::Result<Vec<u8>> {
         let mut record = Vec::with_capacity(nbt.len() / 6 + 64);
         record.extend_from_slice(&[0, 0, 0, 0, COMPRESSION_ZLIB]);
         let mut enc = ZlibEncoder::new(record, Compression::new(level));
@@ -48,12 +55,18 @@ impl RegionBuilder {
         let mut record = enc.finish()?;
         let len = (record.len() - 4) as u32; // compression byte + data
         record[..4].copy_from_slice(&len.to_be_bytes());
+        Ok(record)
+    }
+
+    /// Store a record made by [`RegionBuilder::compress`] at region-local
+    /// position `(x, z)`.
+    pub fn put_record(&mut self, x: usize, z: usize, record: Vec<u8>) {
+        assert!(x < REGION_CHUNKS && z < REGION_CHUNKS);
         let slot = &mut self.chunks[x + z * REGION_CHUNKS];
         if slot.is_none() {
             self.count += 1;
         }
         *slot = Some(record);
-        Ok(())
     }
 
     pub fn chunk_count(&self) -> usize {
