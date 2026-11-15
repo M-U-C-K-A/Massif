@@ -19,6 +19,7 @@ mod map_render;
 mod map_view;
 mod notify;
 mod panels;
+mod picker;
 mod player;
 mod reshape;
 mod sounds;

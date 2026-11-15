@@ -1,5 +1,9 @@
 Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, with a node-based terrain generator in the spirit of Gaea, written in Rust.
 
+## New in 0.4.2
+
+**Choosing what an area shows.** The icon before an area's title opens every editor on one page, in columns: the World side's views, tools and paint, then the Terrain side's generator. The line under them says what the one under the pointer is for, and whether another area shows it already. An empty area holds the same page.
+
 ## New in 0.4.1
 
 **The whole map at once.** **Edit ▸ Whole map** runs the terrain graph's filters over the whole map: erosion, thermal erosion, rivers (their beds in gravel), lakes, smoothing, sharpening, terraces, strata, and scaling the relief around the sea. Each opens with its settings and the map before and after, runs in the background with its progress, and is one step to undo; the map's paint, its levels and what was sculpted in 3D stay.

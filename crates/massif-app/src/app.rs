@@ -1947,23 +1947,16 @@ impl MassifApp {
                 state.bg_stroke = Stroke::NONE;
             }
         }
+        // What the area shows: every editor on one page, in columns.
         hui.menu_button(format!("{} {}", theme::glyph(editor.icon()), theme::glyph(Icon::ChevronDown)), |ui| {
-            for (group, kinds) in EditorKind::GROUPS {
-                ui.label(RichText::new(group).size(11.0).color(Palette::of(ui).weak));
-                for &kind in kinds {
-                    if ui.selectable_label(kind == editor, theme::with_icon(kind.icon(), kind.label())).clicked() {
-                        self.layout.current_mut().root.set_editor(id, kind);
-                    }
-                }
+            let columns = crate::picker::columns_for(ui.ctx().content_rect().width() - 32.0);
+            if let Some(kind) = crate::picker::page(ui, Some(editor), shown, self.settings.developer, columns) {
+                self.layout.current_mut().root.set_editor(id, kind);
+                ui.close();
             }
-            if self.settings.developer {
-                ui.label(RichText::new("Developer").size(11.0).color(Palette::of(ui).weak));
-                let kind = EditorKind::Developer;
-                if ui.selectable_label(kind == editor, theme::with_icon(kind.icon(), kind.label())).clicked() {
-                    self.layout.current_mut().root.set_editor(id, kind);
-                }
-            }
-        });
+        })
+        .response
+        .on_hover_text("What this area shows");
         let title = hui
             .add(egui::Label::new(RichText::new(editor.label()).medium()).sense(Sense::drag()).selectable(false))
             .on_hover_cursor(CursorIcon::Grab);
@@ -3597,6 +3590,45 @@ mod tests {
         assert!(crate::devtools::cpu_time().is_some());
         if let Some(dir) = dir {
             h.render().unwrap().save(dir.join("developer-panel.png")).unwrap();
+        }
+    }
+
+    /// The page of editors: an area's header opens it, the editor under the
+    /// pointer says what it is for, a click shows it in the area; an empty
+    /// area holds the same page. Renders both, in both themes, with
+    /// MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn the_editor_page_switches_an_area() {
+        use egui_kittest::kittest::Queryable;
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        for (choice, name) in [(ThemeChoice::Light, "light"), (ThemeChoice::Dark, "dark")] {
+            let mut h = harness(choice);
+            h.state_mut().settings.developer = true;
+            h.run_steps(5);
+            let mut areas = Vec::new();
+            h.state().layout.current().root.areas(&mut areas);
+            let map = areas.iter().find(|a| a.1 == EditorKind::Map).expect("a map area").0;
+            let header = format!("{} {}", theme::glyph(EditorKind::Map.icon()), theme::glyph(Icon::ChevronDown));
+            h.query_all_by_label(&header).next().expect("the map area's header").click();
+            h.run_steps(3);
+            h.get_by_label("Graph Viewport").hover();
+            h.run_steps(3);
+            if let Some(dir) = &dir {
+                h.render().unwrap().save(dir.join(format!("editor-page-{name}.png"))).unwrap();
+            }
+            h.get_by_label("Node Properties").click();
+            h.run_steps(3);
+            assert_eq!(h.state().layout.current().root.editor_of(map), Some(EditorKind::GraphProps));
+            assert!(h.query_by_label("Render Settings").is_none(), "the page closes once an editor is chosen");
+
+            h.state_mut().layout.current_mut().root.set_editor(map, EditorKind::Empty);
+            h.run_steps(3);
+            if let Some(dir) = &dir {
+                h.render().unwrap().save(dir.join(format!("empty-area-{name}.png"))).unwrap();
+            }
+            h.get_by_label("Render Settings").click();
+            h.run_steps(3);
+            assert_eq!(h.state().layout.current().root.editor_of(map), Some(EditorKind::RenderSettings));
         }
     }
 

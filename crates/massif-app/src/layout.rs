@@ -39,30 +39,62 @@ pub enum EditorKind {
     Developer,
 }
 
+/// A section of the editors an area can show: its title and its editors.
+pub type Section = (&'static str, &'static [EditorKind]);
+
 impl EditorKind {
-    /// Editors offered in the area menu, by group.
-    pub const GROUPS: [(&'static str, &'static [EditorKind]); 5] = [
-        ("View", &[EditorKind::Map, EditorKind::View3d, EditorKind::Sculpt3d]),
-        (
+    /// The editors an area can show, column by column, in sections: the
+    /// World side's (views and the world, tools, paint), then the Terrain
+    /// side's. Developer's comes after them, with developer mode.
+    pub const COLUMNS: [&'static [Section]; 4] = [
+        &[
+            ("View", &[EditorKind::Map, EditorKind::View3d, EditorKind::Sculpt3d]),
+            ("World", &[EditorKind::Info]),
+        ],
+        &[(
             "Tools",
             &[
                 EditorKind::Tools,
                 EditorKind::ToolSettings,
-                EditorKind::BrushSettings,
                 EditorKind::Brushes,
                 EditorKind::CustomBrushes,
+                EditorKind::BrushSettings,
             ],
-        ),
-        (
-            "Paint",
-            &[EditorKind::Terrain, EditorKind::Blocks, EditorKind::Biomes, EditorKind::Levels],
-        ),
-        ("World", &[EditorKind::Info]),
-        (
+        )],
+        &[("Paint", &[EditorKind::Terrain, EditorKind::Blocks, EditorKind::Biomes, EditorKind::Levels])],
+        &[(
             "Terrain",
             &[EditorKind::GraphView, EditorKind::Graph, EditorKind::GraphProps, EditorKind::RenderSettings],
-        ),
+        )],
     ];
+
+    /// Developer's section, after the others.
+    pub const DEVELOPER: Section = ("Developer", &[EditorKind::Developer]);
+
+    /// What the editor is for, in a line.
+    pub const fn about(self) -> &'static str {
+        match self {
+            EditorKind::Empty => "Nothing yet: choose what it shows",
+            EditorKind::Map => "The map from above, to paint and shape",
+            EditorKind::View3d => "The whole map in 3D, block by block",
+            EditorKind::Sculpt3d => "Build, dig and smooth in 3D, or walk it as a player",
+            EditorKind::Tools => "Every tool, a row for each theme",
+            EditorKind::ToolSettings => "The options of the tool in hand",
+            EditorKind::BrushSettings => "Size, intensity, rotation and where the brush paints",
+            EditorKind::Brushes => "Shapes for the brush, and stamps of terrain",
+            EditorKind::CustomBrushes => "Brushes from greyscale images, yours and WorldPainter's",
+            EditorKind::Terrain => "The block on top of the ground, to paint",
+            EditorKind::Blocks => "Every block of the game, to paint as a terrain",
+            EditorKind::Biomes => "The game's biomes, to paint over the automatic ones",
+            EditorKind::Levels => "Levels that add rock over the ground or carve it away",
+            EditorKind::Info => "Name, seed, sea level and size; the column under the cursor",
+            EditorKind::Graph => "The nodes the terrain is generated from",
+            EditorKind::GraphView => "The graph's terrain in relief, under its sky",
+            EditorKind::GraphProps => "The settings of the selected node",
+            EditorKind::RenderSettings => "Sun, clouds and haze, and images saved from the viewport",
+            EditorKind::Developer => "Frames, memory and processor, live",
+        }
+    }
 
     pub const fn label(self) -> &'static str {
         match self {
@@ -106,7 +138,7 @@ impl EditorKind {
             EditorKind::Info => Icon::Info,
             EditorKind::Graph => Icon::Workflow,
             EditorKind::GraphView => Icon::MountainSnow,
-            EditorKind::GraphProps => Icon::SlidersHorizontal,
+            EditorKind::GraphProps => Icon::SlidersVertical,
             EditorKind::RenderSettings => Icon::Sun,
             EditorKind::Developer => Icon::Activity,
         }

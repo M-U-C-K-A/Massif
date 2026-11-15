@@ -51,6 +51,11 @@ The window is made of areas, as in Blender. Each area shows any editor: the
 map, the 3D view, tools, tool settings, brush settings, brushes, custom
 brushes, terrain and biome palettes, levels or world info.
 
+- The icon before an area's title opens every editor on one page, in
+  columns: the World side's views, tools and paint, then the Terrain
+  side's generator. The line under them says what the one under the
+  pointer is for, and whether another area shows it already. An empty
+  area holds the same page.
 - The ⋮ menu of an area splits it, joins it with its neighbour, maximises it
   (Ctrl+Space) or closes it. Hold Shift for a one-click close button.
 - Drag the top-right corner of an area into it to split it where you let go.
