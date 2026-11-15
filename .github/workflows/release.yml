@@ -108,7 +108,10 @@ jobs:
           tools/macos/finish-app.sh "$app" "${VERSION}"
           codesign --force --sign - dist/massif-cli
           (cd dist && ditto -c -k --keepParent Massif.app "Massif-${VERSION}-macos.zip")
-          hdiutil create -volname Massif -srcfolder "$app" -ov -format UDZO "dist/Massif-${VERSION}-macos.dmg"
+          # hdiutil sizes the image from the folder and can fall short of
+          # it ("No space left on device"): twice the app, and some.
+          size=$(( $(du -sm "$app" | cut -f1) * 2 + 32 ))
+          hdiutil create -volname Massif -srcfolder "$app" -ov -format UDZO -size "${size}m" "dist/Massif-${VERSION}-macos.dmg"
           (cd dist && zip -q "massif-cli-${VERSION}-macos.zip" massif-cli)
           mkdir -p out && mv dist/*.zip dist/*.dmg out/
 
