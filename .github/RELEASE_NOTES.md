@@ -10,6 +10,12 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 
 **Choosing what an area shows.** The icon before an area's title opens every editor on one page, in columns: the World side's views, tools and paint, then the Terrain side's generator. The line under them says what the one under the pointer is for, and whether another area shows it already. An empty area holds the same page.
 
+**Fixed.** The height limits of the brush options are in whole blocks, as the game has the land: a column at 63.2 is at 63 (maps from WorldPainter keep fractions of blocks), and the height tools stop on a sharp limit — flattening toward 63.8 the land at or below 63 brings it to 63, no longer 63.1. A turned square or image brush acts on all of its shape, its corners too. The strength drawn under the brush is lighter, keeps to the outline block by block close up, no longer draws a diamond inside square brushes, and can be switched off (Brush Settings ▸ Strength on the map). The line under the map gives the height in whole blocks and the biome under the pointer.
+
+**Height limits, redrawn.** Brush Settings shows the heights of the map itself, as bars from its lowest to its highest land with the sea marked, under the band the brush acts in: drag its ends, or set them in the fields below, between or outside them; it says how much of the map the band covers.
+
+**A big map stays smooth.** The 3D view builds a whole map away from the frames, on threads of its own, and puts what it built on the graphics card a little at a time: on a map of 44,544 × 33,536 blocks, a frame went from 29 ms of work to 11 ms while it builds.
+
 ## New in 0.4.1
 
 **The whole map at once.** **Edit ▸ Whole map** runs the terrain graph's filters over the whole map: erosion, thermal erosion, rivers (their beds in gravel), lakes, smoothing, sharpening, terraces, strata, and scaling the relief around the sea. Each opens with its settings and the map before and after, runs in the background with its progress, and is one step to undo; the map's paint, its levels and what was sculpted in 3D stay.
@@ -17,12 +23,6 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 **Smoother.** The map glides on when a drag is let go, the zoom glides, and the views no longer stall while the map's images and the 3D tiles are made: on a map of 5,888 blocks, zooming went from 32 ms of work a frame to 6. The 3D view keeps going a little after a turn, flies softly, and draws itself smaller while it moves, sharp again when it stops.
 
 **Faster.** Exporting a map takes about a fifth less work and writes the same files byte for byte; 3D sculpting with a large brush, and rebuilding the 3D view where it was sculpted, take less time; erosion in the terrain generator and in Edit ▸ Whole map takes about a quarter less work and makes the same terrain to the bit.
-
-**Fixed.** The height limits of the brush options are in whole blocks, as the game has the land: a column at 63.2 is at 63 (maps from WorldPainter keep fractions of blocks), and the height tools stop on a sharp limit — flattening toward 63.8 the land at or below 63 brings it to 63, no longer 63.1. A turned square or image brush acts on all of its shape, its corners too. The strength drawn under the brush is lighter, keeps to the outline block by block close up, no longer draws a diamond inside square brushes, and can be switched off (Brush Settings ▸ Strength on the map). The line under the map gives the height in whole blocks and the biome under the pointer.
-
-**Height limits, redrawn.** Brush Settings shows the heights of the map itself, as bars from its lowest to its highest land with the sea marked, under the band the brush acts in: drag its ends, or set them in the fields below, between or outside them; it says how much of the map the band covers.
-
-**A big map stays smooth.** The 3D view builds a whole map away from the frames, on threads of its own, and puts what it built on the graphics card a little at a time: on a map of 44,544 × 33,536 blocks, a frame went from 29 ms of work to 11 ms while it builds.
 
 **Typefaces.** Settings ▸ Typeface sets the interface in the system's own typeface or in Inter, Geist, IBM Plex Sans or Manrope, built in, each shown in itself.
 
