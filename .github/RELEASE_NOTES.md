@@ -1,5 +1,7 @@
 Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, with a node-based terrain generator in the spirit of Gaea, written in Rust.
 
+## New in 0.5.2
+
 ## New in 0.5.1
 
 **The player's view looks like Minecraft with Axiom.** With **Player** on in 3D Sculpt, the view shows the game's own blocks with their textures (read from the Minecraft installed on the computer), lit as the game lights them, corners shaded as its smooth lighting does, under its blue sky with the square sun, its clouds and its fog, deep water darker toward the floor. The blocks the brush takes are marked in Axiom's lavender and the block under the cursor is outlined. The cursor free, it works as Axiom's editor: left drag looks around, the right button uses the tool under the cursor (Alt: its inverse), the middle one picks the block for Paint, Ctrl turns about a point or moves the view, Ctrl + middle sizes the brush, and the wheel sets the flight speed, also shown in the bar along the bottom with what each button and key does. A click takes the mouse as in the game: the right button builds, the left one breaks. The keys are the game's: Shift sneaks and goes down, Ctrl sprints.
