@@ -180,3 +180,57 @@ fn smoothing_in_3d_again_and_again() {
     }
     eprintln!("3D build r64: {:.1} ms a dab", started.elapsed().as_secs_f32() * 1000.0 / rounds as f32);
 }
+
+/// The terrain graph's erosion with its default settings, at up to 4096
+/// samples a side (the most a simulation runs at), timed; with a checksum
+/// of what it made, to tell a faster version from a different one.
+#[test]
+#[ignore]
+fn graph_erosion() {
+    use massif_core::graph::{Extent, Graph, NodeKind, NoiseStyle};
+    use std::sync::atomic::AtomicBool;
+    // MASSIF_SIZES picks the sizes, as "1024,2048".
+    let sizes: Vec<usize> = std::env::var("MASSIF_SIZES").ok().map_or(vec![1024, 2048, 4096], |s| s.split(',').filter_map(|v| v.trim().parse().ok()).collect());
+    for n in sizes {
+        let mut g = Graph::default();
+        let hills = g.add(NodeKind::Noise { style: NoiseStyle::Ridged, scale: 900.0, octaves: 6, roughness: 0.5, height: 160.0, base: 40.0, seed: 9 }, [0.0; 2]);
+        let eroded = g.add(NodeKind::Erosion { rain: 1.0, erosion: 0.3, deposition: 0.3, capacity: 4.0, evaporation: 0.02, radius: 6.0, seed: 5 }, [0.0; 2]);
+        g.connect(hills, 0, eroded, 0);
+        let extent = Extent { x0: -(n as f64) / 2.0, z0: -(n as f64) / 2.0, size: n as f64, n };
+        let cancel = AtomicBool::new(false);
+        time(&format!("noise {n}"), || g.evaluate(&extent, &[hills], false, &cancel).unwrap());
+        let e = time(&format!("noise and erosion {n}"), || g.evaluate(&extent, &[eroded], false, &cancel).unwrap());
+        let sum = |port: u8| e.field(eroded, port).unwrap().data.iter().fold(0u64, |h, v| (h ^ v.to_bits() as u64).wrapping_mul(0x100_0000_01b3));
+        eprintln!("  checksums {:016x} {:016x} {:016x}", sum(0), sum(1), sum(2));
+    }
+}
+
+/// Each template of the terrain graph built at 2048 samples a side
+/// (MASSIF_SIZES for others), a block a sample: its time and its slowest
+/// nodes.
+#[test]
+#[ignore]
+fn graph_templates() {
+    use massif_core::graph::{Extent, Family, Template};
+    use std::sync::atomic::AtomicBool;
+    let reg = massif_core::Registry::vanilla();
+    let sizes: Vec<usize> = std::env::var("MASSIF_SIZES").ok().map_or(vec![2048], |s| s.split(',').filter_map(|v| v.trim().parse().ok()).collect());
+    for n in sizes {
+        for t in Template::ALL {
+            if matches!(t, Template::PaintMap | Template::MapRivers) {
+                continue;
+            }
+            let side = n as f64;
+            let g = t.graph(&reg, 63.0, side as f32);
+            let targets: Vec<_> = g.nodes.iter().filter(|n| n.kind.family() == Family::Output).map(|n| n.id).collect();
+            let extent = Extent { x0: -side / 2.0, z0: -side / 2.0, size: side, n };
+            let started = Instant::now();
+            let e = g.evaluate(&extent, &targets, false, &AtomicBool::new(false)).unwrap();
+            let total = started.elapsed().as_secs_f32() * 1000.0;
+            let mut slow: Vec<(f32, &str)> = e.timings.iter().map(|(id, ms)| (*ms, g.nodes.iter().find(|n| n.id == *id).map_or("?", |n| n.kind.label()))).collect();
+            slow.sort_by(|a, b| b.0.total_cmp(&a.0));
+            let top: Vec<String> = slow.iter().take(4).map(|(ms, l)| format!("{l} {ms:.0}")).collect();
+            eprintln!("{t:?} {n}: {total:.0} ms ({} nodes): {}", g.nodes.len(), top.join(", "));
+        }
+    }
+}

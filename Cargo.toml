@@ -38,3 +38,6 @@ debug = false
 
 [profile.release]
 lto = "thin"
+# One unit: about 5 % less work everywhere (exporting a map measured), for
+# a longer build.
+codegen-units = 1

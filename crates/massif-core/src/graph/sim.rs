@@ -67,6 +67,7 @@ pub(super) fn erode(f: &Field, spacing: f32, p: &Droplets, cancel: &AtomicBool, 
     for b in &mut brush {
         b.2 /= total;
     }
+    let brush = BrushRows::new(&brush);
     let size = MAX_STEPS + 2 * r as usize + 4;
     let blocks = n.div_ceil(size);
     let shared = Shared {
@@ -79,19 +80,29 @@ pub(super) fn erode(f: &Field, spacing: f32, p: &Droplets, cancel: &AtomicBool, 
         if cancel.load(Ordering::Relaxed) {
             return None;
         }
-        let list: Vec<(usize, usize)> = (0..blocks)
+        let rains: Vec<Rain> = (0..blocks)
             .flat_map(|bz| (0..blocks).map(move |bx| (bx, bz)))
             .filter(|(bx, bz)| bx % 3 + 3 * (bz % 3) == round)
+            .map(|(bx, bz)| {
+                let (x0, z0) = (bx * size, bz * size);
+                let (x1, z1) = ((x0 + size).min(n), (z0 + size).min(n));
+                let drops = (((x1 - x0) * (z1 - z0)) as f64 * per_sample).round() as usize;
+                let seed = (p.seed as u64 ^ ((bz as u64) << 32 | bx as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)) | 1;
+                Rain::new(seed, (x0, z0, x1, z1), drops)
+            })
             .collect();
-        list.par_iter().for_each(|&(bx, bz)| {
-            let (x0, z0) = (bx * size, bz * size);
-            let (x1, z1) = ((x0 + size).min(n), (z0 + size).min(n));
-            let drops = (((x1 - x0) * (z1 - z0)) as f64 * per_sample).round() as usize;
-            let seed = (p.seed as u64 ^ ((bz as u64) << 32 | bx as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)) | 1;
-            // Safety: this block's drops stay within the block and its
-            // neighbours, which no other block of this round reaches.
-            unsafe { drops_in(shared, n, (x0, z0, x1, z1), drops, seed, p, &brush, cancel) };
-        });
+        // Blocks of a round never meet: a thread lets the rain of two or
+        // four fall a step at a time in turn (the same as one after the
+        // other), when that still leaves work for every core.
+        let threads = rayon::current_num_threads();
+        let lanes = if rains.len() >= 8 * threads { 4 } else if rains.len() >= 4 * threads { 2 } else { 1 };
+        // Safety: each block's drops stay within the block and its
+        // neighbours, which no other block of this round reaches.
+        match lanes {
+            4 => rains.par_chunks(4).for_each(|group| unsafe { fall::<4>(shared, n, group, p, &brush, cancel) }),
+            2 => rains.par_chunks(2).for_each(|group| unsafe { fall::<2>(shared, n, group, p, &brush, cancel) }),
+            _ => rains.par_chunks(1).for_each(|group| unsafe { fall::<1>(shared, n, group, p, &brush, cancel) }),
+        }
         progress((round + 1) as f32 / 9.0);
     }
     if cancel.load(Ordering::Relaxed) {
@@ -106,89 +117,251 @@ pub(super) fn erode(f: &Field, spacing: f32, p: &Droplets, cancel: &AtomicBool, 
     Some((heights, normalise(flow), normalise(settled)))
 }
 
-/// Run `drops` raindrops born in the block `x0..x1` × `z0..z1`.
+/// The erosion brush as runs of cells along x: each worn down in one go,
+/// a run cut once at the edges of the map rather than every cell checked.
+struct BrushRows {
+    /// Offset in z, first offset in x and the weights of the run's cells.
+    rows: Vec<(i32, i32, Vec<f32>)>,
+}
+
+impl BrushRows {
+    /// The runs of `cells` (offset in x, offset in z, weight), in their
+    /// order.
+    fn new(cells: &[(i32, i32, f32)]) -> Self {
+        let mut rows: Vec<(i32, i32, Vec<f32>)> = Vec::new();
+        for &(dx, dz, w) in cells {
+            match rows.last_mut() {
+                Some((rz, rx, ws)) if *rz == dz && *rx + ws.len() as i32 == dx => ws.push(w),
+                _ => rows.push((dz, dx, vec![w])),
+            }
+        }
+        Self { rows }
+    }
+
+    /// Wear `amount` off the samples `h` (a map `n` a side) around `(i,
+    /// j)`.
+    ///
+    /// # Safety
+    /// `h` holds `n × n` samples, and no other thread touches those around
+    /// `(i, j)` within the brush.
+    #[inline]
+    unsafe fn wear(&self, h: *mut f32, n: usize, i: usize, j: usize, amount: f32) {
+        for (dz, dx0, weights) in &self.rows {
+            let cj = j as i32 + dz;
+            if cj < 0 || cj >= n as i32 {
+                continue;
+            }
+            let start = i as i32 + dx0;
+            let (a, b) = (start.max(0), (start + weights.len() as i32).min(n as i32));
+            if a >= b {
+                continue;
+            }
+            let weights = &weights[(a - start) as usize..(b - start) as usize];
+            // Safety: within the map (cut above), touched by this thread
+            // alone (the caller's promise).
+            let cells = unsafe { std::slice::from_raw_parts_mut(h.add(cj as usize * n + a as usize), weights.len()) };
+            for (c, &w) in cells.iter_mut().zip(weights) {
+                *c -= amount * w;
+            }
+        }
+    }
+}
+
+/// The rain of a block: the drop falling now, and those still to fall,
+/// drawn from the block's own seed.
+#[derive(Clone, Copy)]
+struct Rain {
+    rng: u64,
+    /// The block's corner and size.
+    x0: f32,
+    z0: f32,
+    w: f32,
+    d: f32,
+    /// Drops still to be born, and born so far.
+    left: usize,
+    born: usize,
+    /// The drop falling now: where, which way, how fast, with how much
+    /// water and soil, for how many steps.
+    x: f32,
+    z: f32,
+    dx: f32,
+    dz: f32,
+    speed: f32,
+    water: f32,
+    sediment: f32,
+    steps: usize,
+    falling: bool,
+}
+
+const INERTIA: f32 = 0.05;
+const GRAVITY: f32 = 4.0;
+const MIN_CAPACITY: f32 = 0.01;
+
+impl Rain {
+    fn new(seed: u64, (x0, z0, x1, z1): (usize, usize, usize, usize), drops: usize) -> Self {
+        Self {
+            rng: seed,
+            x0: x0 as f32,
+            z0: z0 as f32,
+            w: (x1 - x0) as f32,
+            d: (z1 - z0) as f32,
+            left: drops,
+            born: 0,
+            x: 0.0,
+            z: 0.0,
+            dx: 0.0,
+            dz: 0.0,
+            speed: 0.0,
+            water: 0.0,
+            sediment: 0.0,
+            steps: 0,
+            falling: false,
+        }
+    }
+
+    /// No rain: what fills a group of blocks short of one.
+    const NONE: Rain = Rain {
+        rng: 1,
+        x0: 0.0,
+        z0: 0.0,
+        w: 0.0,
+        d: 0.0,
+        left: 0,
+        born: 0,
+        x: 0.0,
+        z: 0.0,
+        dx: 0.0,
+        dz: 0.0,
+        speed: 0.0,
+        water: 0.0,
+        sediment: 0.0,
+        steps: 0,
+        falling: false,
+    };
+
+    #[inline]
+    fn next(&mut self) -> f32 {
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 7;
+        self.rng ^= self.rng << 17;
+        (self.rng >> 40) as f32 / (1u64 << 24) as f32
+    }
+
+    /// Let the next drop fall; false when the block's rain is over.
+    #[inline]
+    fn spawn(&mut self, last: f32) -> bool {
+        if self.left == 0 {
+            return false;
+        }
+        self.left -= 1;
+        self.born += 1;
+        self.x = (self.x0 + self.next() * self.w).min(last - 0.001);
+        self.z = (self.z0 + self.next() * self.d).min(last - 0.001);
+        (self.dx, self.dz) = (0.0, 0.0);
+        (self.speed, self.water, self.sediment) = (1.0, 1.0, 0.0);
+        self.steps = 0;
+        self.falling = true;
+        true
+    }
+
+    /// One step of the falling drop (after Hans Beyer's method): it runs
+    /// downhill, picks up soil where it speeds up and drops it where it
+    /// slows down.
+    ///
+    /// # Safety
+    /// As [`fall`].
+    #[inline(always)]
+    unsafe fn step(&mut self, b: Shared, n: usize, last: f32, p: &Droplets, brush: &BrushRows) {
+        // A drop stays within `0..last` on both axes: its cell and the next
+        // are in the map.
+        let at = |i: usize, j: usize| unsafe { *b.h.add(j * n + i) };
+        let height_grad = |x: f32, z: f32| -> (f32, f32, f32) {
+            let (i, j) = (x as usize, z as usize);
+            let (u, v) = (x - i as f32, z - j as f32);
+            let (a, bb, c, d) = (at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1));
+            let gx = (bb - a) * (1.0 - v) + (d - c) * v;
+            let gz = (c - a) * (1.0 - u) + (d - bb) * u;
+            let height = a * (1.0 - u) * (1.0 - v) + bb * u * (1.0 - v) + c * (1.0 - u) * v + d * u * v;
+            (height, gx, gz)
+        };
+        let (x, z) = (self.x, self.z);
+        let (i, j) = (x as usize, z as usize);
+        let (u, v) = (x - i as f32, z - j as f32);
+        let (height, gx, gz) = height_grad(x, z);
+        let mut dx = self.dx * INERTIA - gx * (1.0 - INERTIA);
+        let mut dz = self.dz * INERTIA - gz * (1.0 - INERTIA);
+        let len = dx.hypot(dz);
+        if len < 1e-6 {
+            self.falling = false;
+            return;
+        }
+        dx /= len;
+        dz /= len;
+        let (nx, nz) = (x + dx, z + dz);
+        if !(0.0..last).contains(&nx) || !(0.0..last).contains(&nz) {
+            self.falling = false;
+            return;
+        }
+        let (new_height, _, _) = height_grad(nx, nz);
+        let dh = new_height - height;
+        let cap = (-dh * self.speed * self.water * p.capacity).max(MIN_CAPACITY);
+        let cell = j * n + i;
+        unsafe {
+            if self.sediment > cap || dh > 0.0 {
+                // Drop soil: all it takes to fill the hole when going up,
+                // part of the excess otherwise.
+                let amount = if dh > 0.0 { dh.min(self.sediment) } else { (self.sediment - cap) * p.deposition };
+                self.sediment -= amount;
+                *b.h.add(cell) += amount * (1.0 - u) * (1.0 - v);
+                *b.h.add(cell + 1) += amount * u * (1.0 - v);
+                *b.h.add(cell + n) += amount * (1.0 - u) * v;
+                *b.h.add(cell + n + 1) += amount * u * v;
+                *b.settled.add(cell) += amount;
+            } else {
+                let amount = ((cap - self.sediment) * p.erosion).min(-dh);
+                brush.wear(b.h, n, i, j, amount);
+                self.sediment += amount;
+            }
+            *b.flow.add(cell) += self.water;
+        }
+        self.speed = (self.speed * self.speed + dh * GRAVITY).max(0.0).sqrt();
+        self.water *= 1.0 - p.evaporation;
+        (self.x, self.z, self.dx, self.dz) = (nx, nz, dx, dz);
+        self.steps += 1;
+        if self.steps == MAX_STEPS {
+            self.falling = false;
+        }
+    }
+}
+
+/// Let the rain of the blocks of `group` (at most `L`) fall, their drops a
+/// step at a time in turn: the processor works on one drop's step while it
+/// waits on another's, and as the blocks never meet, each falls as it would
+/// alone.
 ///
 /// # Safety
 /// No other thread may touch the samples within `MAX_STEPS` plus the brush
-/// radius of the block while this runs.
-#[allow(clippy::too_many_arguments)]
-unsafe fn drops_in(b: Shared, n: usize, (x0, z0, x1, z1): (usize, usize, usize, usize), drops: usize, seed: u64, p: &Droplets, brush: &[(i32, i32, f32)], cancel: &AtomicBool) {
-    let inertia = 0.05f32;
-    let gravity = 4.0f32;
-    let min_capacity = 0.01f32;
-    let mut rng = seed;
-    let mut next = || {
-        rng ^= rng << 13;
-        rng ^= rng >> 7;
-        rng ^= rng << 17;
-        (rng >> 40) as f32 / (1u64 << 24) as f32
-    };
+/// radius of these blocks while this runs.
+unsafe fn fall<const L: usize>(b: Shared, n: usize, group: &[Rain], p: &Droplets, brush: &BrushRows, cancel: &AtomicBool) {
+    let mut rains = [Rain::NONE; L];
+    rains[..group.len()].copy_from_slice(group);
     let last = (n - 1) as f32;
-    let at = |i: usize, j: usize| unsafe { *b.h.add(j.min(n - 1) * n + i.min(n - 1)) };
-    let height_grad = |x: f32, z: f32| -> (f32, f32, f32) {
-        let (i, j) = (x as usize, z as usize);
-        let (u, v) = (x - i as f32, z - j as f32);
-        let (a, bb, c, d) = (at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1));
-        let gx = (bb - a) * (1.0 - v) + (d - c) * v;
-        let gz = (c - a) * (1.0 - u) + (d - bb) * u;
-        let height = a * (1.0 - u) * (1.0 - v) + bb * u * (1.0 - v) + c * (1.0 - u) * v + d * u * v;
-        (height, gx, gz)
-    };
-    let (w, d) = ((x1 - x0) as f32, (z1 - z0) as f32);
-    for drop in 0..drops {
-        if drop % 16384 == 0 && cancel.load(Ordering::Relaxed) {
-            return;
-        }
-        let (mut x, mut z) = ((x0 as f32 + next() * w).min(last - 0.001), (z0 as f32 + next() * d).min(last - 0.001));
-        let (mut dx, mut dz) = (0f32, 0f32);
-        let (mut speed, mut water, mut sediment) = (1f32, 1f32, 0f32);
-        for _ in 0..MAX_STEPS {
-            let (i, j) = (x as usize, z as usize);
-            let (u, v) = (x - i as f32, z - j as f32);
-            let (height, gx, gz) = height_grad(x, z);
-            dx = dx * inertia - gx * (1.0 - inertia);
-            dz = dz * inertia - gz * (1.0 - inertia);
-            let len = dx.hypot(dz);
-            if len < 1e-6 {
-                break;
-            }
-            dx /= len;
-            dz /= len;
-            x += dx;
-            z += dz;
-            if !(0.0..last).contains(&x) || !(0.0..last).contains(&z) {
-                break;
-            }
-            let (new_height, _, _) = height_grad(x, z);
-            let dh = new_height - height;
-            let cap = (-dh * speed * water * p.capacity).max(min_capacity);
-            let cell = j * n + i;
-            unsafe {
-                if sediment > cap || dh > 0.0 {
-                    // Drop soil: all it takes to fill the hole when going
-                    // up, part of the excess otherwise.
-                    let amount = if dh > 0.0 { dh.min(sediment) } else { (sediment - cap) * p.deposition };
-                    sediment -= amount;
-                    *b.h.add(cell) += amount * (1.0 - u) * (1.0 - v);
-                    *b.h.add(cell + 1) += amount * u * (1.0 - v);
-                    *b.h.add(cell + n) += amount * (1.0 - u) * v;
-                    *b.h.add(cell + n + 1) += amount * u * v;
-                    *b.settled.add(cell) += amount;
-                } else {
-                    let amount = ((cap - sediment) * p.erosion).min(-dh);
-                    for &(bx, bz, wt) in brush {
-                        let (ci, cj) = (i as i32 + bx, j as i32 + bz);
-                        if ci < 0 || cj < 0 || ci >= n as i32 || cj >= n as i32 {
-                            continue;
-                        }
-                        *b.h.add(cj as usize * n + ci as usize) -= amount * wt;
-                    }
-                    sediment += amount;
+    loop {
+        let mut any = false;
+        for rain in &mut rains {
+            if !rain.falling {
+                if rain.born % 16384 == 0 && rain.left > 0 && cancel.load(Ordering::Relaxed) {
+                    return;
                 }
-                *b.flow.add(cell) += water;
+                if !rain.spawn(last) {
+                    continue;
+                }
             }
-            speed = (speed * speed + dh * gravity).max(0.0).sqrt();
-            water *= 1.0 - p.evaporation;
+            any = true;
+            unsafe { rain.step(b, n, last, p, brush) };
+        }
+        if !any {
+            return;
         }
     }
 }
