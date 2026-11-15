@@ -10,6 +10,8 @@ The home screen opens with Massif. On the left are the ways in: **New map**, **F
 - **Seed**: the same seed always gives the same land.
 Press **Create map** (or `Enter`). A `.massif`, a `.world` or a height map dropped on the window opens too.
 
+The picture behind the home screen changes each time Massif opens, the ones not shown yet first; the button at the bottom right shows another.
+
 ## Saving and exporting
 - `⌘S` saves the map as a `.massif` file. The Finder and Explorer show the map as the file's picture.
 - `⌘E` exports to Minecraft: the saves folder, the world's name, the version of the game, its rules, its border and data packs.
@@ -93,7 +95,7 @@ Levels lay rock over the ground or dig into it, each in its own layer that can b
 - Double-click looks at the point under the cursor.
 
 ## 3D Sculpt
-**Build**, **Dig**, **Smooth** and **Paint** work on the blocks in 3D, with the brush of every tool: its shape, size, intensity and rotation are set in **Brush Settings**, shown beside the 3D Sculpt view (`⌘` + scroll changes its size there too). Left button sculpts where the cursor points, right button inverts; held down, it keeps adding or digging. Matter pushed out keeps the blocks it came from (a sand wall gives a sand ledge), and the ground under it keeps its own; **Paint** repaints sculpted matter too. Converting a terrain graph into the ground later drops what was sculpted on the tiles it rewrites (one step to undo).
+**Build**, **Dig**, **Smooth** and **Paint** work on the blocks in 3D, with the brush of every tool: its shape, size, intensity and rotation are set in **Brush Settings**, shown beside the 3D Sculpt view (`⌘` + scroll changes its size there too). Left button sculpts where the cursor points, right button inverts; held down, it keeps adding or digging. In 3D a brush sculpts 64 blocks around at most (a larger one works as 64). Matter pushed out keeps the blocks it came from (a sand wall gives a sand ledge), and the ground under it keeps its own; **Paint** repaints sculpted matter too. Converting a terrain graph into the ground later drops what was sculpted on the tiles it rewrites (one step to undo).
 
 ## Player
 **Player**, in the 3D Sculpt toolbar, walks in the view as in Minecraft, coming down where the middle of the view looks. Click the view to lend it the mouse (`Esc` gives it back), then:
@@ -101,7 +103,8 @@ Levels lay rock over the ground or dig into it, each in its own layer that can b
 - `W` `A` `S` `D` walk, `Shift` (or `W` twice) runs.
 - `Space` jumps; twice quickly, flies: `Space` goes up, `Q` down; twice again, or down to the ground, lands.
 - `Q` sneaks: crouched, you do not step off an edge.
-Water slows you and lets you swim; a fall off the map puts you back where you last stood. Turn **Player** off to get the orbit camera back.
+- Walking into a step of one block jumps onto it (Minecraft's Auto-Jump).
+Water slows you and lets you swim, and under it the world turns blue and dim, as in the game; a fall off the map puts you back where you last stood. Turn **Player** off to get the orbit camera back.
 
 # Terrain graphs
 ## Nodes

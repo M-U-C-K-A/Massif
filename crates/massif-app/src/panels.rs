@@ -251,9 +251,12 @@ pub fn sculpt_toolbar(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
         // Its size and intensity are those of Brush Settings, as for every
         // tool: said here, set there.
         ui.add_space(6.0);
-        let b = &tools.brush;
-        ui.label(RichText::new(format!("{:.0} radius · {:.0}%", b.radius, b.strength * 100.0)).size(12.0).color(pal.weak))
-            .on_hover_text("Size, intensity and rotation: in Brush Settings, as for every tool (⌘+wheel: size)");
+        let b = tools.sculpt_brush();
+        let most = massif_core::voxel::MAX_SCULPT_RADIUS;
+        let capped = tools.brush.radius > most;
+        let size = if capped { format!("{most:.0} radius (the most in 3D)") } else { format!("{:.0} radius", b.radius) };
+        ui.label(RichText::new(format!("{size} · {:.0}%", b.strength * 100.0)).size(12.0).color(if capped { pal.accent } else { pal.weak }))
+            .on_hover_text(format!("Size, intensity and rotation: in Brush Settings, as for every tool (⌘+wheel: size). In 3D a brush sculpts {most:.0} blocks around at most."));
         // What Paint paints: the terrain chosen (in Terrain or Blocks).
         if tools.sculpt.tool == Tool::PaintTerrain {
             ui.add_space(6.0);

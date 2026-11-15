@@ -140,6 +140,8 @@ pub enum HomeAction {
     Settings,
     /// A file let go over the window.
     Dropped(PathBuf),
+    /// Another picture behind the home screen.
+    AnotherPicture,
 }
 
 /// The pictures of `assets/backdrops` (listed by the build script).
@@ -172,8 +174,10 @@ pub struct Home {
     /// The name of the map open before, to go back to.
     pub back_to: Option<String>,
     backdrop: Option<Backdrop>,
-    /// The picture of the backdrop, chosen at random when Massif opens.
+    /// The picture of the backdrop, chosen at random when Massif opens
+    /// (among those not shown yet).
     choice: usize,
+    choice_set: bool,
     picture: Option<Picture>,
     /// Whether the picture's dither moves on (the settings).
     pub animate: bool,
@@ -189,10 +193,34 @@ impl Home {
             back_to: None,
             backdrop: None,
             choice: (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos()) as usize) / 7,
+            choice_set: false,
             picture: None,
             animate: true,
             logo: None,
         }
+    }
+
+    /// Show a picture not shown yet (`seen`: the names shown, kept in the
+    /// settings), so that pictures just added come first; once all were,
+    /// any but the last one.
+    pub fn pick_backdrop(&mut self, seen: &mut Vec<String>) {
+        let all = pictures::BACKDROPS;
+        if all.is_empty() {
+            return;
+        }
+        seen.retain(|s| all.iter().any(|(n, _)| n == s));
+        let mut pool: Vec<usize> = (0..all.len()).filter(|&k| !seen.iter().any(|s| s == all[k].0)).collect();
+        if pool.is_empty() {
+            let last = seen.last().cloned();
+            seen.clear();
+            pool = (0..all.len()).filter(|&k| Some(all[k].0) != last.as_deref()).collect();
+        }
+        let k = pool.get(self.choice % pool.len().max(1)).copied().unwrap_or(0);
+        self.choice = k;
+        self.choice_set = true;
+        seen.push(all[k].0.to_owned());
+        // A new draw for the next pick.
+        self.choice = k + (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos()) as usize / 7) * all.len();
     }
 
     /// Show the picture `k` of `assets/backdrops` (by its place in the
@@ -240,6 +268,20 @@ impl Home {
         self.sidebar(&mut side, recent, &mut action);
         let mut centre = ui.new_child(UiBuilder::new().id_salt("home main").max_rect(main));
         self.main(&mut centre, main, &mut action);
+
+        // Another picture, bottom right: quiet, frameless.
+        if !pictures::BACKDROPS.is_empty() {
+            let at = Rect::from_center_size(pos2(main.right() - 26.0, main.bottom() - 26.0), vec2(28.0, 28.0));
+            let response = ui.interact(at, egui::Id::unique("home another picture"), Sense::click()).on_hover_text("Another picture");
+            let color = if response.hovered() { pal.text } else { theme::mix(pal.weak, pal.text, 0.2) };
+            ui.painter().text(at.center(), Align2::CENTER_CENTER, theme::glyph(Icon::Images), FontId::proportional(15.0), color);
+            if response.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if response.clicked() {
+                action = Some(HomeAction::AnotherPicture);
+            }
+        }
 
         // What happened, at the bottom.
         if let Some((text, error)) = note {

@@ -36,6 +36,14 @@ fn backdrops() {
         })
         .unwrap_or_default();
     files.sort();
+    // The same picture under two names is built in once.
+    let mut seen = std::collections::HashSet::new();
+    files.retain(|f| {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        std::fs::read(f).unwrap_or_default().hash(&mut h);
+        seen.insert(h.finish())
+    });
     let mut code = String::from("/// The pictures of `assets/backdrops`: name, bytes.\npub const BACKDROPS: &[(&str, &[u8])] = &[\n");
     for f in &files {
         println!("cargo:rerun-if-changed={}", f.display());

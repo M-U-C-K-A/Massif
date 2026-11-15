@@ -651,6 +651,7 @@ impl ToolState {
     pub fn sculpt_brush(&self) -> Brush {
         Brush {
             filter: None,
+            radius: self.brush.radius.min(massif_core::voxel::MAX_SCULPT_RADIUS),
             ..self.brush.clone()
         }
     }

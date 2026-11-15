@@ -61,6 +61,8 @@ struct Settings {
     memory_mb: u32,
     /// The home screen's picture moves (its dither, about once a second).
     animate_backdrop: bool,
+    /// The home screen's pictures shown, by name: those not yet come first.
+    backdrops_seen: Vec<String>,
 }
 
 /// A section of the settings.
@@ -86,6 +88,7 @@ impl Default for Settings {
             notify: crate::notify::NotifyWhen::Background,
             memory_mb: 0,
             animate_backdrop: true,
+            backdrops_seen: Vec::new(),
         }
     }
 }
@@ -331,7 +334,9 @@ impl MassifApp {
             if let Some(cat) = &self.blocks.catalogue {
                 massif_assets::apply_colors(&mut registry, cat);
             }
-            self.home = Some(home::Home::new(registry));
+            let mut home = home::Home::new(registry);
+            home.pick_backdrop(&mut self.settings.backdrops_seen);
+            self.home = Some(home);
         }
         let back_to = self.has_map.then(|| self.doc.world.meta.name.clone());
         if let Some(home) = &mut self.home {
@@ -349,6 +354,11 @@ impl MassifApp {
             }
             HomeAction::FromHeightmap(map, how) => self.request(ctx, Pending::FromHeightmap(map, how)),
             HomeAction::PickHeightmap => self.pick_heightmap(ctx),
+            HomeAction::AnotherPicture => {
+                if let Some(home) = &mut self.home {
+                    home.pick_backdrop(&mut self.settings.backdrops_seen);
+                }
+            }
             HomeAction::Open => {
                 if let Some(path) = rfd::FileDialog::new()
                     .set_title("Open a map")
@@ -3093,6 +3103,112 @@ mod tests {
             let id = areas.iter().find(|(_, e)| *e == EditorKind::BrushSettings).unwrap().0;
             app.layout.toggle_maximize(id);
         }
+    }
+
+    /// Walking on a real WorldPainter map, where a river comes down a
+    /// slope: the views at a player's eyes, for a look. Needs a GPU and a
+    /// map: MASSIF_SNAPSHOT_DIR, MASSIF_WALK_WORLD.
+    #[test]
+    fn walking_on_a_real_world() {
+        let (Some(dir), Some(path)) = (
+            std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from),
+            std::env::var_os("MASSIF_WALK_WORLD").map(PathBuf::from),
+        ) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let ctx = h.ctx.clone();
+        h.state_mut().jobs.push(Job::open(&ctx, path));
+        while !h.state().jobs.is_empty() {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.state_mut().dialog = None;
+        // Water stepping down: a column whose water is two blocks over its
+        // neighbour's, on land well over the sea.
+        let (x, z, level, down) = {
+            let doc = &h.state().doc;
+            let (lo, hi) = doc.dimension().bounds().unwrap();
+            let t = massif_core::coords::TILE_SIZE;
+            let sea = doc.world.meta.sea_level as i16;
+            let fluid = |x: i32, z: i32| crate::tools::probe(doc, x, z).map(|p| p.fluid).filter(|f| *f != massif_core::tile::NO_FLUID);
+            let mut best = None;
+            'scan: for z in (lo.z * t..(hi.z + 1) * t).step_by(3) {
+                for x in (lo.x * t..(hi.x + 1) * t).step_by(3) {
+                    let Some(f) = fluid(x, z) else { continue };
+                    if f < sea + 6 {
+                        continue;
+                    }
+                    for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                        if let Some(g) = fluid(x + dx, z + dz)
+                            && g <= f - 2
+                        {
+                            best = Some((x, z, f, (dx, dz)));
+                            break 'scan;
+                        }
+                    }
+                }
+            }
+            best.expect("a river stepping down")
+        };
+        eprintln!("water at {x}, {z}: level {level}, lower toward {down:?}");
+        h.state_mut().layout.active = 4; // 3D Sculpt
+        h.state_mut().tools.sculpt.tool = Tool::Build;
+        h.state_mut().tools.brush.radius = 4.0;
+        h.run_steps(5);
+        // Look at it from upstream, then walk.
+        let yaw = (-(down.0 as f32)).atan2(-(down.1 as f32));
+        h.state_mut().sculpt3d.camera = crate::view3d::Camera { target: [x as f64 + 0.5, level as f64, z as f64 + 0.5], yaw: yaw + std::f32::consts::PI, pitch: 0.55, distance: 24.0 };
+        let mut frames = 0;
+        while frames < 3 || h.state().sculpt3d.pending() > 0 {
+            h.step();
+            frames += 1;
+            if frames > 2000 {
+                break;
+            }
+        }
+        let shot = |h: &mut egui_kittest::Harness<'_, MassifApp>, name: &str| {
+            let (w, hgt, rgba) = h.state().sculpt3d.read_back().expect("the 3D view rendered");
+            image::save_buffer(dir.join(format!("{name}.png")), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+        };
+        shot(&mut h, "walk-river-orbit");
+        h.state_mut().tools.sculpt.player = true;
+        h.run_steps(20);
+        let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        let view = areas.into_iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::Sculpt3d)).map(|(_, r)| r).unwrap();
+        h.event(egui::Event::PointerMoved(view.center()));
+        h.event(egui::Event::PointerButton { pos: view.center(), button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        h.event(egui::Event::PointerButton { pos: view.center(), button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(10);
+        eprintln!("landed: {:?}", h.state().sculpt3d.player());
+        shot(&mut h, "walk-river-0");
+        // Look down the river, then up the slope, then fly over it.
+        h.event(egui::Event::MouseMoved(vec2(0.0, 80.0)));
+        h.run_steps(3);
+        shot(&mut h, "walk-river-1");
+        h.event(egui::Event::MouseMoved(vec2(1200.0, -80.0)));
+        h.run_steps(3);
+        shot(&mut h, "walk-river-2");
+        h.key_down(Key::W);
+        h.run_steps(15);
+        h.key_up(Key::W);
+        h.run_steps(5);
+        eprintln!("walked: {:?}", h.state().sculpt3d.player());
+        shot(&mut h, "walk-river-3");
+        h.key_press(Key::Space);
+        h.step();
+        h.key_press(Key::Space);
+        h.step();
+        h.key_down(Key::Space);
+        h.run_steps(10);
+        h.key_up(Key::Space);
+        h.event(egui::Event::MouseMoved(vec2(-1200.0, 200.0)));
+        h.run_steps(5);
+        eprintln!("flying: {:?}", h.state().sculpt3d.player());
+        shot(&mut h, "walk-river-4");
+        h.render().unwrap().save(dir.join("walk-river-ui.png")).unwrap();
     }
 
     /// Walking in 3D Sculpt: the player comes down onto the land looked at,

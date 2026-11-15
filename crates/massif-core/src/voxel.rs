@@ -30,6 +30,23 @@ pub const SIZE: i32 = 16;
 pub const VOLUME: usize = (SIZE * SIZE * SIZE) as usize;
 /// Density from which a voxel is solid.
 pub const SOLID: u8 = 128;
+
+/// The widest a brush sculpts in 3D, in blocks of radius: the work and
+/// the memory of a dab grow with the cube of the brush (a brush of the
+/// map's size would want terabytes), and 64 already moves a hill.
+pub const MAX_SCULPT_RADIUS: f32 = 64.0;
+
+/// `brush`, no wider than [`MAX_SCULPT_RADIUS`].
+fn within_reach(brush: &Brush) -> std::borrow::Cow<'_, Brush> {
+    if brush.radius > MAX_SCULPT_RADIUS {
+        std::borrow::Cow::Owned(Brush {
+            radius: MAX_SCULPT_RADIUS,
+            ..brush.clone()
+        })
+    } else {
+        std::borrow::Cow::Borrowed(brush)
+    }
+}
 /// Chunks per tile side.
 const PER_TILE: i32 = TILE_SIZE / SIZE;
 
@@ -589,6 +606,7 @@ pub fn tangents(n: [f32; 3]) -> ([f32; 3], [f32; 3]) {
 /// [`sculpt`], laid along a surface facing `normal` when there is one: the
 /// brush's shape (a custom image too) on the slope, fading off it.
 pub fn sculpt_at(edit: &mut Edit, brush: &Brush, center: [f32; 3], normal: Option<[f32; 3]>, strength: f32, mode: SculptMode) -> usize {
+    let brush = &*within_reach(brush);
     let r = brush.radius.max(0.5);
     let reach = brush.reach().max(r);
     let frame = normal.map(|n| (n, tangents(n)));
@@ -718,6 +736,7 @@ pub fn displace_at(edit: &mut Edit, brush: &Brush, center: [f32; 3], normal: [f3
     if amount <= 0.0 {
         return 0;
     }
+    let brush = &*within_reach(brush);
     let r = brush.radius.max(0.5);
     let reach = brush.reach().max(r) + amount + 1.0;
     let (t1, t2) = tangents(normal);
@@ -920,50 +939,65 @@ impl Field {
     }
 
     /// Two passes of a separable box blur of radius `k`: close to a
-    /// Gaussian, the same in every direction.
+    /// Gaussian, the same in every direction. Each pass sums the `2k + 1`
+    /// neighbours along x within rows, along z and y within and between
+    /// layers, the layers in parallel; at the edges, over those there are.
     fn blurred(mut self, k: i32) -> Self {
         let [sx, sy, sz] = self.size;
-        let k = k as usize;
+        let k = k.max(0) as usize;
+        let layer = sx * sz;
         let mut tmp = vec![0f32; self.values.len()];
         for _ in 0..2 {
-            for axis in 0..3 {
-                let (len, stride) = match axis {
-                    0 => (sx, 1),
-                    1 => (sy, sx * sz),
-                    _ => (sz, sx),
-                };
-                let lines: Vec<usize> = (0..self.values.len()).filter(|&i| {
-                    let x = i % sx;
-                    let z = (i / sx) % sz;
-                    let y = i / (sx * sz);
-                    match axis {
-                        0 => x == 0,
-                        1 => y == 0,
-                        _ => z == 0,
-                    }
-                }).collect();
-                for start in lines {
-                    let at = |t: usize| start + t * stride;
-                    let mut sum = 0f32;
-                    let mut count = 0f32;
-                    for t in 0..len.min(k + 1) {
-                        sum += self.values[at(t)];
+            // Along x: a running sum over each row.
+            tmp.par_chunks_mut(sx).zip(self.values.par_chunks(sx)).for_each(|(out, row)| {
+                let (mut sum, mut count) = (0f32, 0f32);
+                for v in &row[..sx.min(k + 1)] {
+                    sum += v;
+                    count += 1.0;
+                }
+                for t in 0..sx {
+                    out[t] = sum / count;
+                    if t + k + 1 < sx {
+                        sum += row[t + k + 1];
                         count += 1.0;
                     }
-                    for t in 0..len {
-                        tmp[at(t)] = sum / count;
-                        if t + k + 1 < len {
-                            sum += self.values[at(t + k + 1)];
-                            count += 1.0;
-                        }
-                        if t >= k {
-                            sum -= self.values[at(t - k)];
-                            count -= 1.0;
-                        }
+                    if t >= k {
+                        sum -= row[t - k];
+                        count -= 1.0;
                     }
                 }
-                std::mem::swap(&mut self.values, &mut tmp);
-            }
+            });
+            std::mem::swap(&mut self.values, &mut tmp);
+            // Along z: rows of the same layer.
+            tmp.par_chunks_mut(layer).zip(self.values.par_chunks(layer)).for_each(|(out, src)| {
+                for z in 0..sz {
+                    let (a, b) = (z.saturating_sub(k), (z + k + 1).min(sz));
+                    let row = &mut out[z * sx..][..sx];
+                    row.fill(0.0);
+                    for zz in a..b {
+                        for (o, v) in row.iter_mut().zip(&src[zz * sx..][..sx]) {
+                            *o += v;
+                        }
+                    }
+                    let inv = 1.0 / (b - a) as f32;
+                    row.iter_mut().for_each(|o| *o *= inv);
+                }
+            });
+            std::mem::swap(&mut self.values, &mut tmp);
+            // Along y: the same place in the layers around.
+            let src = &self.values;
+            tmp.par_chunks_mut(layer).enumerate().for_each(|(y, out)| {
+                let (a, b) = (y.saturating_sub(k), (y + k + 1).min(sy));
+                out.fill(0.0);
+                for yy in a..b {
+                    for (o, v) in out.iter_mut().zip(&src[yy * layer..][..layer]) {
+                        *o += v;
+                    }
+                }
+                let inv = 1.0 / (b - a) as f32;
+                out.iter_mut().for_each(|o| *o *= inv);
+            });
+            std::mem::swap(&mut self.values, &mut tmp);
         }
         self
     }

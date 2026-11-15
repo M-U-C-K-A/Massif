@@ -122,3 +122,28 @@ fn filtered_brushes() {
         }
     }
 }
+
+/// Sculpting in 3D: a dab of Build, growing a bump on flat land.
+#[test]
+#[ignore]
+fn sculpting_in_3d() {
+    let mut world = generate(&GenParams {
+        tiles_x: 8,
+        tiles_z: 8,
+        landform: Landform::Plains,
+        seed: 3,
+        ..GenParams::default()
+    });
+    let mut history = History::default();
+    for radius in [8.0, 16.0, 32.0, 48.0, 64.0, 96.0, 128.0] {
+        let brush = Brush::symmetric(BrushShape::Circle, Profile::Sine, radius);
+        let y = world.dims[0].ground().view(massif_core::TilePos::new(0, 0)).map_or(64.0, |t| t.top.get(0));
+        history.begin("perf", 0);
+        let mut edit = history.edit(&mut world, 0);
+        time(&format!("3D build r{radius}"), || massif_core::voxel::displace_at(&mut edit, &brush, [0.5, y, 0.5], [0.0, 1.0, 0.0], 1.0, massif_core::voxel::SculptMode::Add));
+        time(&format!("3D build again r{radius}"), || massif_core::voxel::displace_at(&mut edit, &brush, [0.5, y + 1.0, 0.5], [0.0, 1.0, 0.0], 1.0, massif_core::voxel::SculptMode::Add));
+        time(&format!("3D smooth r{radius}"), || massif_core::voxel::sculpt_at(&mut edit, &brush, [0.5, y, 0.5], Some([0.0, 1.0, 0.0]), 0.5, massif_core::voxel::SculptMode::Smooth));
+        history.commit();
+        eprintln!("  chunks: {}", world.dims[0].voxels.len());
+    }
+}

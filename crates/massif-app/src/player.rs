@@ -131,6 +131,9 @@ pub struct Player {
     pub sneaking: bool,
     pub swimming: bool,
     pub running: bool,
+    /// Walking into a step of one block jumps onto it (Minecraft's
+    /// Auto-Jump).
+    pub auto_jump: bool,
     /// The height of the eyes over the feet, easing as the body crouches.
     eye: f64,
     /// Seconds since Space, and W, last went down.
@@ -150,6 +153,7 @@ impl Player {
             sneaking: false,
             swimming: false,
             running: false,
+            auto_jump: true,
             eye: EYE,
             since_jump: f64::INFINITY,
             since_forward: f64::INFINITY,
@@ -315,6 +319,18 @@ impl Player {
                 }
             }
             if moved != d {
+                // A step of one block, walked into: up onto it, if there
+                // is room.
+                if self.auto_jump && self.on_ground && !self.flying && !self.sneaking && !self.swimming && (keys.forward != 0.0 || keys.right != 0.0) {
+                    let mut up = self.feet;
+                    up[1] += 1.0;
+                    up[axis] += d;
+                    let (lo, hi) = self.body(up, false);
+                    if !overlaps(blocks, lo, hi) {
+                        self.velocity[1] = JUMP;
+                        self.on_ground = false;
+                    }
+                }
                 self.velocity[axis] = 0.0;
             }
             self.feet[axis] += moved;
@@ -474,6 +490,7 @@ mod tests {
             w.blocks.insert((x, 66, -8));
         }
         let mut p = Player::new([0.5, 64.0, 0.5]);
+        p.auto_jump = false;
         // Walking, the step stops the player.
         run(&mut p, &mut w, NORTH, 1.5);
         assert!((p.feet[2] - (-1.7)).abs() < 1e-6, "against the step: {:?}", p.feet);
@@ -485,6 +502,27 @@ mod tests {
         run(&mut p, &mut w, Keys { jump: true, jump_pressed: true, ..NORTH }, 2.0);
         assert!(p.feet[2] > -7.0 + 0.29, "stopped by the wall: {:?}", p.feet);
         assert!(!p.flying, "held, Space jumps again, it does not fly");
+    }
+
+    #[test]
+    fn walking_into_a_step_jumps_onto_it() {
+        let mut w = World::default();
+        // Steps of one block every three, then a wall of two.
+        for x in -3..=3 {
+            for (z, top) in [(-3, 65), (-4, 65), (-5, 65), (-6, 66), (-7, 66), (-8, 66), (-9, 68)] {
+                for y in 64..top {
+                    w.blocks.insert((x, y, z));
+                }
+            }
+        }
+        let mut p = Player::new([0.5, 64.0, 0.5]);
+        run(&mut p, &mut w, NORTH, 4.0);
+        assert!((p.feet[1] - 66.0).abs() < 1e-9 && p.on_ground, "up both steps: {:?}", p.feet);
+        assert!(p.feet[2] > -8.0 + 0.29, "but not up the wall: {:?}", p.feet);
+        // Crouched, it does not.
+        let mut p = Player::new([0.5, 64.0, 0.5]);
+        run(&mut p, &mut w, Keys { sneak: true, ..NORTH }, 4.0);
+        assert!((p.feet[1] - 64.0).abs() < 1e-9, "{:?}", p.feet);
     }
 
     #[test]

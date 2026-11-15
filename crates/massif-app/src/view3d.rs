@@ -709,8 +709,10 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
         }
     }
 
-    // Water: its surface merged into rectangles, and its sides where the
-    // map ends.
+    // Water: its surface merged into rectangles, and its sides wherever
+    // it stands over what is beside it — a lower water (the steps of a
+    // river coming down: falls, as in the game), lower ground, the end of
+    // the map.
     if style.water {
         let blue = if style.lava { [238, 112, 22, 255] } else { [26, 92, 150, 205] };
         greedy(
@@ -742,7 +744,18 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
                 for (dir, (dx, dz)) in [(EAST, (1, 0)), (WEST, (-1, 0)), (SOUTH, (0, 1)), (NORTH, (0, -1))] {
                     let (nx, nz) = (x + dx, z + dz);
                     let inside = nx >= cx - 1 && nz >= cz - 1 && nx <= cx + n as i32 && nz <= cz + n as i32;
-                    if !inside || !grid.spans(nx, nz).is_empty() {
+                    if !inside {
+                        continue;
+                    }
+                    // Up from what is beside: its water, its ground.
+                    let bottom = match grid.spans(nx, nz).last() {
+                        None => floor,
+                        Some(s) => {
+                            let beside = grid.water[grid.cell(nx, nz)];
+                            s.y1.max(beside).max(floor)
+                        }
+                    };
+                    if bottom >= wet {
                         continue;
                     }
                     let (px, pz) = (i as i32 + dx.max(0), j as i32 + dz.max(0));
@@ -751,8 +764,8 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
                         z: pz as u8,
                         dir,
                         len: 1,
-                        y: clamp16(floor),
-                        h: clamp16(wet - floor),
+                        y: clamp16(bottom),
+                        h: clamp16(wet - bottom),
                         color: blue,
                     });
                 }
@@ -826,6 +839,7 @@ impl Pairs {
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct Globals {
     pub view_proj: [[f32; 4]; 4],
+    /// The eye, from the frame's origin; w: the origin's x.
     pub eye: [f32; 4],
     pub sun: [f32; 4],
     /// The sky overhead, and at the horizon.
@@ -839,7 +853,8 @@ pub struct Globals {
     pub cam_f: [f32; 4],
     pub cam_s: [f32; 4],
     pub cam_u: [f32; 4],
-    /// tan(fov / 2) × aspect, tan(fov / 2), radians per pixel, unused.
+    /// tan(fov / 2) × aspect, tan(fov / 2), radians per pixel, the
+    /// frame's origin's z.
     pub cam_k: [f32; 4],
 }
 
@@ -901,6 +916,28 @@ fn shade(base: vec3<f32>, n: vec3<f32>, d: f32) -> vec3<f32> {
     let c = to_linear(base) * (g.fog.z * sky + g.fog.w * sun);
     let f = clamp((d - g.fog.x) / max(g.fog.y - g.fog.x, 1.0), 0.0, 1.0);
     return mix(c, to_linear(g.mist.rgb), f * f * g.mist.w);
+}
+
+/// How light the block at `world` (on a face turned `n`, `d` blocks away)
+/// is: a little lighter or darker than its neighbours, and darker along
+/// its edges up close, so that a wall reads as blocks, as in the game.
+fn block_tint(world: vec3<f32>, n: vec3<f32>, d: f32) -> f32 {
+    let bi = vec3<i32>(floor(world - n * 0.01)) + vec3<i32>(i32(g.eye.w), 0, i32(g.cam_k.w));
+    var h = u32(bi.x) * 73856093u ^ u32(bi.y) * 19349663u ^ u32(bi.z) * 83492791u;
+    h = (h ^ (h >> 13u)) * 1274126177u;
+    let jitter = f32((h >> 8u) & 255u) / 255.0 - 0.5;
+    let near = 1.0 - smoothstep(10.0, 48.0, d);
+    // Where on the face: the two coordinates along it.
+    var q = fract(world.xz);
+    if (abs(n.x) > 0.5) {
+        q = fract(world.zy);
+    } else if (abs(n.z) > 0.5) {
+        q = fract(world.xy);
+    }
+    let e = min(min(q.x, 1.0 - q.x), min(q.y, 1.0 - q.y));
+    let line = max(1.3 * d * g.cam_k.z, 0.012);
+    let edge = 1.0 - smoothstep(line * 0.5, line * 1.5, e);
+    return (1.0 + jitter * 0.09 * (0.4 + 0.6 * near)) * (1.0 - 0.16 * edge * near);
 }
 
 /// The sky in direction `d`: the horizon colour low, the zenith's high.
@@ -972,8 +1009,9 @@ fn vs_main(@builtin(vertex_index) vi: u32, f: FaceIn) -> VertexOut {
             n = vec3<f32>(0.0, 0.0, -1.0);
         }
     }
-    // Water sits a little below the top of its block.
-    if (chunk.origin.w > 0.5 && p.y >= top - 0.01) {
+    // Water sits a little below the top of its block; its sides go down
+    // as much, so that a fall meets the water under it.
+    if (chunk.origin.w > 0.5 && (dir >= 2u || p.y >= top - 0.01)) {
         p.y = p.y - 0.12;
     }
     let world = p + chunk.origin.xyz;
@@ -1019,7 +1057,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         c = mix(c, to_linear(g.mist.rgb), f * f * g.mist.w);
         return vec4<f32>(c, mix(in.color.a, 1.0, 0.55 * fres));
     }
-    let c = shade(in.color.rgb, n, d);
+    let c = shade(in.color.rgb, n, d) * block_tint(in.world, n, d);
     return vec4<f32>(c, in.color.a);
 }
 "#;
@@ -1289,8 +1327,12 @@ fn fs_trace(in: TraceOut) -> TraceFrag {
         let hd = ground_height(mid + vec2<f32>(0.0, size));
         normal = normalize(vec3<f32>(-(hr - hl) / (2.0 * size * stride), 1.0, -(hd - hu) / (2.0 * size * stride)));
     }
-    out.color = vec4<f32>(shade(base, normal, hit.t), 1.0);
     let world = vec3<f32>(p.x * stride + terrain.origin.x, p.y, p.z * stride + terrain.origin.y);
+    var tint = 1.0;
+    if (hit.level == 0 && stride == 1.0) {
+        tint = block_tint(world, normal, hit.t);
+    }
+    out.color = vec4<f32>(shade(base, normal, hit.t) * tint, 1.0);
     let clip = g.view_proj * vec4<f32>(world, 1.0);
     out.depth = clamp(clip.z / clip.w, 0.0, 1.0);
     return out;
@@ -2150,6 +2192,8 @@ pub struct Sky {
     /// The haze far away, and how much of it at most (0..1).
     pub mist: [u8; 3],
     pub haze: f32,
+    /// Under water: everything fades into its colour within so many blocks.
+    pub murk: Option<f32>,
 }
 
 impl Sky {
@@ -2164,6 +2208,7 @@ impl Sky {
                 horizon: [160, 186, 216],
                 mist: [176, 198, 224],
                 haze: 0.4,
+                murk: None,
             }
         } else {
             Sky {
@@ -2171,6 +2216,7 @@ impl Sky {
                 horizon: [200, 218, 238],
                 mist: [206, 222, 240],
                 haze: 0.46,
+                murk: None,
             }
         }
     }
@@ -2183,6 +2229,20 @@ impl Sky {
             horizon: c,
             mist: c,
             haze: 0.0,
+            murk: None,
+        }
+    }
+
+    /// Seen from under water (`c`, its colour), as in the game: the light
+    /// from above, everything blue and gone within a few blocks.
+    pub fn under_water(c: [u8; 3]) -> Sky {
+        let light = |k: f32| [(c[0] as f32 * k).min(255.0) as u8, (c[1] as f32 * k).min(255.0) as u8, (c[2] as f32 * k).min(255.0) as u8];
+        Sky {
+            zenith: light(1.6),
+            horizon: c,
+            mist: c,
+            haze: 1.0,
+            murk: Some(20.0),
         }
     }
 }
@@ -2250,17 +2310,23 @@ impl Camera {
         let unit = |c: [u8; 3], w: f32| [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0, w];
         Globals {
             view_proj: (proj * view).to_cols_array_2d(),
-            eye: [eye.x, eye.y, eye.z, 1.0],
+            // The frame's origin rides along, for what is drawn block by
+            // block to stay put as the origin moves.
+            eye: [eye.x, eye.y, eye.z, origin.0 as f32],
             sun: [sun.x, sun.y, sun.z, 0.0],
             sky: unit(sky.zenith, 1.0),
             horizon: unit(sky.horizon, 1.0),
-            // The haze only veils what is far beyond the map's middle.
-            fog: [self.distance + extent * 0.4, self.distance + extent * 1.6, 0.62, 0.5],
+            // The haze only veils what is far beyond the map's middle;
+            // under water, everything near.
+            fog: match sky.murk {
+                Some(reach) => [0.0, reach, 0.62, 0.5],
+                None => [self.distance + extent * 0.4, self.distance + extent * 1.6, 0.62, 0.5],
+            },
             mist: unit(sky.mist, sky.haze),
             cam_f: [f.x, f.y, f.z, 0.0],
             cam_s: [s.x, s.y, s.z, 0.0],
             cam_u: [u.x, u.y, u.z, 0.0],
-            cam_k: [tan * aspect, tan, 2.0 * tan / height.max(1) as f32, 0.0],
+            cam_k: [tan * aspect, tan, 2.0 * tan / height.max(1) as f32, origin.1 as f32],
         }
     }
 }
@@ -2773,7 +2839,8 @@ impl View3d {
             painter.galley(bg.center() - galley.size() / 2.0, galley, Color32::WHITE);
         };
         if !walk.captured {
-            pill(c, "Click to walk here · the mouse looks around, the buttons sculpt at the crosshair".to_owned(), 12.0);
+            // Low, not over what is looked at.
+            pill(pos2(c.x, rect.bottom() - 46.0), "Click the view to walk · the mouse looks around, the buttons sculpt at the crosshair".to_owned(), 12.0);
             return;
         }
         for (w, color) in [(3.5, Color32::from_black_alpha(120)), (1.5, Color32::WHITE)] {
@@ -2828,7 +2895,9 @@ impl View3d {
             .collect();
         todo.sort_by(|a, b| a.0.total_cmp(&b.0));
         let started = Instant::now();
-        let batch = rayon::current_num_threads().clamp(2, 16) * 2;
+        // One tile a thread at a time: a frame goes past its budget by one
+        // tile's time at most.
+        let batch = rayon::current_num_threads().clamp(2, 16);
         let reg = &doc.world.registry;
         let (sea, seed) = (doc.world.meta.sea_level as f32, doc.world.meta.seed);
         let mut done = 0;
@@ -3046,9 +3115,11 @@ impl View3d {
             let (zoom, scroll) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta.y + i.smooth_scroll_delta.x));
             let far = (extent * 3.0).max(30000.0);
             if sculpting && command && zoom != 1.0 {
-                // The brush of every tool, as in Brush Settings.
+                // The brush of every tool, as in Brush Settings, as wide as
+                // it sculpts in 3D.
+                let most = massif_core::voxel::MAX_SCULPT_RADIUS;
                 let r = &mut tools.brush.radius;
-                *r = (*r * zoom).clamp(1.0, massif_core::MAX_RADIUS);
+                *r = (r.min(most) * zoom).clamp(1.0, most);
             } else if walking {
                 // Walking, the wheel only sizes the brush.
             } else if alt && scroll != 0.0 {
@@ -3216,7 +3287,19 @@ impl View3d {
             self.needs_render = true;
         }
         let origin = (self.camera.target[0].floor() as i32, self.camera.target[2].floor() as i32);
-        let globals = self.camera.globals(origin, rect.width() / rect.height().max(1.0), extent, Sky::of(&pal), px[1].max(1));
+        // The eyes under water (walking, or the camera brought down there):
+        // the water's own light.
+        let eye = self.camera.eye();
+        let under = {
+            use crate::player::Blocks;
+            crate::player::MapBlocks::new(doc.dimension()).fluid(eye[0].floor() as i32, (eye[1] + 0.12).floor() as i32, eye[2].floor() as i32)
+        };
+        let sky = if under && self.water {
+            Sky::under_water(if doc.world.meta.lava { [150, 52, 12] } else { [22, 64, 112] })
+        } else {
+            Sky::of(&pal)
+        };
+        let globals = self.camera.globals(origin, rect.width() / rect.height().max(1.0), extent, sky, px[1].max(1));
         let key: [f32; 56] = bytemuck::cast(globals);
         if self.needs_render || self.last_globals != Some(key) {
             let m = Mat4::from_cols_array_2d(&globals.view_proj);
