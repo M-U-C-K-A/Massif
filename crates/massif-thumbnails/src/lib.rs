@@ -132,8 +132,8 @@ mod com {
                 return Err(E_FAIL.into());
             }
             let out = unsafe { std::slice::from_raw_parts_mut(bits as *mut u8, (tw * th * 4) as usize) };
-            for (o, p) in out.chunks_exact_mut(4).zip(picture.pixels()) {
-                o.copy_from_slice(&[p[2], p[1], p[0], 255]);
+            for (o, p) in out.as_chunks_mut::<4>().0.iter_mut().zip(picture.pixels()) {
+                *o = [p[2], p[1], p[0], 255];
             }
             unsafe {
                 *bitmap = made;
