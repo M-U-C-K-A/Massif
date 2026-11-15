@@ -11,6 +11,8 @@
 set -eu
 export PATH="$HOME/.cargo/bin:$PATH"
 export CARGO_INCREMENTAL=0
+# On a failure, say so plainly: nothing past the failed step was done.
+trap 'code=$?; [ $code -eq 0 ] || echo "tools/task.sh $*: stopped (exit $code). Main moves only once it says \"Landed\"; fix the cause, commit, run it again." >&2' EXIT
 
 here=$(git rev-parse --show-toplevel)
 # The main checkout is the first worktree git lists.
