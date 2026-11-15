@@ -14,7 +14,8 @@ pub const MAX_HOT_TILES: usize = 2048;
 
 /// How much of the map lies at each height: a sample of its columns (32 ×
 /// 32 of each tile, of at most 4096 tiles spread over the map), in whole
-/// blocks, for the brush's height limits.
+/// blocks, for the brush's height limits; and the map cut through its
+/// highest column, to draw them over.
 #[derive(Debug, Clone, Default)]
 pub struct Heights {
     /// The revision and generation of the document it was read at.
@@ -27,6 +28,10 @@ pub struct Heights {
     /// Of those, the columns under water.
     pub wet: Vec<u32>,
     pub total: u64,
+    /// The map cut through its highest column, from west to east: the
+    /// height of the land at even steps across the map (the mean of the
+    /// columns sampled in each), NaN where there is none.
+    pub section: Vec<f32>,
 }
 
 impl Heights {
@@ -55,17 +60,22 @@ struct HeightsJob {
     started: Option<std::time::Instant>,
 }
 
+/// A tile's columns as sampled: their height in whole blocks and whether
+/// they are under water; and the highest of them, its height and its z.
+type TileSample = (Vec<(i32, bool)>, Option<(f32, i32)>);
+
 /// [`Heights`] of `dim`, from a sample of its columns.
 fn sample_heights(dim: &Dimension, revision: u64, generation: u64) -> Heights {
     use massif_core::coords::{TILE_SIZE, local_index};
     use rayon::prelude::*;
     let positions: Vec<TilePos> = dim.ground().positions().collect();
     let step = positions.len().div_ceil(4096).max(1);
-    let picked: Vec<TilePos> = positions.into_iter().step_by(step).collect();
-    let samples: Vec<Vec<(i32, bool)>> = picked
+    let picked: Vec<TilePos> = positions.iter().copied().step_by(step).collect();
+    let samples: Vec<TileSample> = picked
         .par_iter()
         .map(|&t| {
             let mut out = Vec::with_capacity(1024);
+            let mut highest: Option<(f32, i32)> = None;
             if let Some(stack) = massif_core::compose::TileStack::new(dim, t, false) {
                 let mut sampler = crate::map_render::ColumnSampler::default();
                 for j in (2..TILE_SIZE).step_by(4) {
@@ -73,11 +83,14 @@ fn sample_heights(dim: &Dimension, revision: u64, generation: u64) -> Heights {
                         let s = sampler.sample(&stack, local_index(t.x * TILE_SIZE + i, t.z * TILE_SIZE + j));
                         if !s.is_empty() {
                             out.push((massif_core::compose::block_top(s.height), s.fluid != massif_core::NO_FLUID));
+                            if highest.is_none_or(|(h, _)| s.height > h) {
+                                highest = Some((s.height, t.z * TILE_SIZE + j));
+                            }
                         }
                     }
                 }
             }
-            out
+            (out, highest)
         })
         .collect();
     let mut heights = Heights {
@@ -85,18 +98,53 @@ fn sample_heights(dim: &Dimension, revision: u64, generation: u64) -> Heights {
         generation,
         ..Heights::default()
     };
-    let (lo, hi) = samples.iter().flatten().fold((i32::MAX, i32::MIN), |(lo, hi), &(y, _)| (lo.min(y), hi.max(y)));
+    let (lo, hi) = samples.iter().flat_map(|s| &s.0).fold((i32::MAX, i32::MIN), |(lo, hi), &(y, _)| (lo.min(y), hi.max(y)));
     if lo > hi {
         return heights;
     }
     heights.lo = lo;
     heights.counts = vec![0; (hi - lo + 1) as usize];
     heights.wet = vec![0; (hi - lo + 1) as usize];
-    for &(y, wet) in samples.iter().flatten() {
+    for &(y, wet) in samples.iter().flat_map(|s| &s.0) {
         let k = (y - lo) as usize;
         heights.counts[k] += 1;
         heights.wet[k] += wet as u32;
         heights.total += 1;
+    }
+    // The map cut from west to east through its highest column: at most
+    // 1024 steps across it, each the mean of the columns every few blocks
+    // in it.
+    if let Some(z) = samples.iter().filter_map(|s| s.1).max_by(|a, b| a.0.total_cmp(&b.0)).map(|h| h.1) {
+        let (west, east) = positions.iter().fold((i32::MAX, i32::MIN), |(w, e), p| (w.min(p.x), e.max(p.x)));
+        let (x0, width) = (west * TILE_SIZE, (east - west + 1) * TILE_SIZE);
+        let n = (width / 2).clamp(1, 1024) as usize;
+        let stretch = width as f32 / n as f32;
+        let every = ((stretch / 4.0) as usize).max(1);
+        let row: Vec<TilePos> = positions.iter().copied().filter(|p| p.z == z.div_euclid(TILE_SIZE)).collect();
+        let parts: Vec<Vec<(usize, f32)>> = row
+            .par_iter()
+            .map(|&t| {
+                let mut out = Vec::new();
+                if let Some(stack) = massif_core::compose::TileStack::new(dim, t, false) {
+                    let mut sampler = crate::map_render::ColumnSampler::default();
+                    for i in (0..TILE_SIZE).step_by(every) {
+                        let x = t.x * TILE_SIZE + i;
+                        let s = sampler.sample(&stack, local_index(x, z));
+                        if !s.is_empty() {
+                            let k = (((x - x0) as f32 / stretch) as usize).min(n - 1);
+                            out.push((k, s.height));
+                        }
+                    }
+                }
+                out
+            })
+            .collect();
+        let mut sum = vec![(0.0f64, 0u32); n];
+        for &(k, h) in parts.iter().flatten() {
+            sum[k].0 += h as f64;
+            sum[k].1 += 1;
+        }
+        heights.section = sum.into_iter().map(|(h, n)| if n > 0 { (h / n as f64) as f32 } else { f32::NAN }).collect();
     }
     heights
 }

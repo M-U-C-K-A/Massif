@@ -3541,9 +3541,19 @@ mod tests {
         crop.save(dir.join("menu-bar.png")).unwrap();
     }
 
-    /// The app on a small map of islands, tall enough for Brush Settings to
-    /// show all of itself, once the heights of the map are read.
+    /// The app on a small map of islands (or the .massif MASSIF_HEIGHTS_WORLD
+    /// names), tall enough for Brush Settings to show all of itself, once the
+    /// heights of the map are read.
     fn heights_harness(theme: ThemeChoice, ppp: f32) -> egui_kittest::Harness<'static, MassifApp> {
+        let world = match std::env::var_os("MASSIF_HEIGHTS_WORLD") {
+            Some(path) => massif_format::load(std::path::Path::new(&path)).expect("the map opens"),
+            None => generate(&GenParams {
+                tiles_x: 8,
+                tiles_z: 8,
+                landform: Landform::Islands,
+                ..GenParams::default()
+            }),
+        };
         let mut h = egui_kittest::Harness::builder()
             .with_size(vec2(1600.0, 2600.0))
             .with_pixels_per_point(ppp)
@@ -3551,12 +3561,7 @@ mod tests {
             .wgpu()
             .build_eframe(move |cc| {
                 theme::install(&cc.egui_ctx);
-                let mut app = MassifApp::for_tests(generate(&GenParams {
-                    tiles_x: 8,
-                    tiles_z: 8,
-                    landform: Landform::Islands,
-                    ..GenParams::default()
-                }));
+                let mut app = MassifApp::for_tests(world);
                 app.settings.theme = theme;
                 app
             });

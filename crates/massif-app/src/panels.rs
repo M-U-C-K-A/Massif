@@ -2059,22 +2059,87 @@ fn height_limits(ui: &mut Ui, f: &mut massif_core::filter::Filter, heights: Opti
     hint(ui, &format!("{caption}{share}"));
 }
 
-/// A quad of `mesh`, its corners in turn, each with its colour.
-fn quad(mesh: &mut egui::Mesh, corners: [(egui::Pos2, Color32); 4]) {
-    let i = mesh.vertices.len() as u32;
-    for (p, c) in corners {
-        mesh.colored_vertex(p, c);
+/// A convex polygon added to `mesh` as a fan of triangles, each corner
+/// coloured by `colour`.
+fn fan(mesh: &mut egui::Mesh, corners: &[egui::Pos2], colour: impl Fn(egui::Pos2) -> Color32) {
+    if corners.len() < 3 {
+        return;
     }
-    mesh.add_triangle(i, i + 1, i + 2);
-    mesh.add_triangle(i, i + 2, i + 3);
+    let i = mesh.vertices.len() as u32;
+    for &p in corners {
+        mesh.colored_vertex(p, colour(p));
+    }
+    for k in 1..corners.len() as u32 - 1 {
+        mesh.add_triangle(i, i + k, i + k + 1);
+    }
 }
 
-/// The land of the map seen from the side, its columns ranked from the
-/// highest on the left to the lowest on the right: a height meets it once,
-/// as far across as the share of the map at or above it. The land the brush
-/// acts on is in the accent and the sea in blue; each limit is a line
-/// across, dragged up or down (Shift: finely), its height on the scale at
-/// the right. Pressed elsewhere, the nearest limit comes to the pointer.
+/// The part of a convex polygon between the heights `top` and `bottom` of
+/// the screen (`top` above).
+fn clip_between(corners: &[egui::Pos2], top: f32, bottom: f32) -> Vec<egui::Pos2> {
+    // Keeping the side of a level where `keep` holds, one edge at a time.
+    let clip = |points: Vec<egui::Pos2>, level: f32, keep: &dyn Fn(f32) -> bool| {
+        let mut out = Vec::with_capacity(points.len() + 2);
+        for (k, &p) in points.iter().enumerate() {
+            let q = points[(k + 1) % points.len()];
+            if keep(p.y) {
+                out.push(p);
+            }
+            if keep(p.y) != keep(q.y) {
+                let t = (level - p.y) / (q.y - p.y);
+                out.push(pos2(p.x + (q.x - p.x) * t, level));
+            }
+        }
+        out
+    };
+    if corners.len() < 3 || top >= bottom {
+        return Vec::new();
+    }
+    let under = clip(corners.to_vec(), top, &|y| y >= top);
+    if under.len() < 3 {
+        return Vec::new();
+    }
+    clip(under, bottom, &|y| y <= bottom)
+}
+
+/// `values`, spread evenly from one end to the other (NaN where there is
+/// none), at `n` points spread the same way: the mean of the values around
+/// each point when there are more values than points, else read between
+/// the two nearest.
+fn resample(values: &[f32], n: usize) -> Vec<f32> {
+    let m = values.len();
+    if m == 0 {
+        return vec![f32::NAN; n];
+    }
+    (0..n)
+        .map(|i| {
+            let at = if n > 1 { i as f32 / (n - 1) as f32 } else { 0.5 } * m as f32 - 0.5;
+            if m > n {
+                let reach = 0.5 * m as f32 / (n - 1).max(1) as f32;
+                let first = ((at - reach).ceil().max(0.0) as usize).min(m - 1);
+                let last = ((at + reach).floor().max(0.0) as usize).clamp(first, m - 1);
+                let (sum, count) = values[first..=last].iter().filter(|v| !v.is_nan()).fold((0.0, 0), |(s, c), v| (s + v, c + 1));
+                if count > 0 { sum / count as f32 } else { f32::NAN }
+            } else {
+                let k = (at.floor().max(0.0) as usize).min(m - 1);
+                let (p, q) = (values[k], values[(k + 1).min(m - 1)]);
+                let t = (at - k as f32).clamp(0.0, 1.0);
+                match (p.is_nan(), q.is_nan()) {
+                    (false, false) => p + (q - p) * t,
+                    (false, true) => p,
+                    (true, false) => q,
+                    (true, true) => f32::NAN,
+                }
+            }
+        })
+        .collect()
+}
+
+/// The map seen from the side, cut from west to east through its highest
+/// column: the land in grey, the sea in blue, and in the accent the land at
+/// the heights the brush acts on, between the limits' lines. Each limit is a
+/// line across, dragged up or down (Shift: finely), its height on the scale
+/// at the right; pressed elsewhere, the nearest limit comes to the pointer.
 fn land_profile(ui: &mut Ui, f: &mut massif_core::filter::Filter, heights: Option<&crate::doc::Heights>, min_y: i32, max_y: i32, sea: i32) {
     let pal = Palette::of(ui);
     let top = max_y - 1;
@@ -2108,10 +2173,7 @@ fn land_profile(ui: &mut Ui, f: &mut massif_core::filter::Filter, heights: Optio
     let line_y = |l: Limit, v: i32| y_of(level(l, v).clamp(v0, v1));
     // Where the heights are, for the tests.
     ui.data_mut(|d| d.insert_temp(egui::Id::unique("height profile"), (plot, v0, v1)));
-    // The share of the map at or above each height, from the lowest; and the
-    // height of the column a share `t` of the map from the top, the columns
-    // of a height spread evenly over its block (from half a block under it
-    // to half a block over it), so that the land slopes rather than steps.
+    // The share of the map at or above each height, from the lowest.
     let from_top: Vec<f32> = heights.map_or_else(Vec::new, |h| {
         let mut shares = vec![0.0; h.counts.len() + 1];
         let mut sum = 0u64;
@@ -2123,13 +2185,6 @@ fn land_profile(ui: &mut Ui, f: &mut massif_core::filter::Filter, heights: Optio
     });
     let lowest = heights.map_or(0, |h| h.lo);
     let share_from = |y: i32| from_top.get((y - lowest).max(0) as usize).copied().unwrap_or(0.0);
-    let height_at = |t: f32| {
-        let t = t.clamp(0.0, 1.0);
-        let k = from_top.partition_point(|&s| s > t).saturating_sub(1).min(from_top.len().saturating_sub(2));
-        let (over, from) = (from_top.get(k + 1).copied().unwrap_or(0.0), from_top.get(k).copied().unwrap_or(1.0));
-        let down = if from > over { ((t - over) / (from - over)).clamp(0.0, 1.0) } else { 0.0 };
-        (lowest + k as i32) as f32 + 0.5 - down
-    };
 
     // ---- dragging a limit ---------------------------------------------------
     let id = response.id.with("limit");
@@ -2192,47 +2247,81 @@ fn land_profile(ui: &mut Ui, f: &mut massif_core::filter::Filter, heights: Optio
     }
 
     // ---- the land and the sea ---------------------------------------------
-    let limited = f.above.is_some() || f.below.is_some();
-    // The sea over the land under its level, as a limit at it would be.
-    let sea_y = y_of(sea as f32 - 0.5);
-    let coast = plot.left() + share_from(sea) * plot.width();
+    // How much the brush acts at a height (0 to 1), as the filter has it but
+    // over unrounded heights: from the limits' lines, softened over FADE
+    // blocks across them when the edges are soft. Without limits, nothing is
+    // shown in the accent.
+    let half = if f.fade { massif_core::filter::FADE / 2.0 } else { 0.0 };
+    let lines = [f.above.map(|a| level(Limit::Above, a)), f.below.map(|b| level(Limit::Below, b))];
+    let weight = |e: f32| {
+        let inside = |d: f32| if half > 0.0 { (d / (2.0 * half) + 0.5).clamp(0.0, 1.0) } else if d >= 0.0 { 1.0 } else { 0.0 };
+        match (lines[0].map(|l| inside(e - l)), lines[1].map(|l| inside(l - e))) {
+            (None, None) => 0.0,
+            (Some(w), None) | (None, Some(w)) => w,
+            (Some(a), Some(b)) if f.beyond => (1.0 - a).max(1.0 - b),
+            (Some(a), Some(b)) => a.min(b),
+        }
+    };
+    // The slabs of heights between the points where that bends, with the
+    // weight at the bottom and at the top of each (taken just inside it, so
+    // that a sharp limit is a step).
+    let mut bends: Vec<f32> = lines.iter().flatten().flat_map(|&l| [l - half, l + half]).filter(|e| *e > v0 && *e < v1).chain([v0, v1]).collect();
+    bends.sort_by(f32::total_cmp);
+    bends.dedup();
+    let slabs: Vec<(f32, f32, f32, f32)> = bends
+        .windows(2)
+        .map(|p| {
+            let inner = (p[1] - p[0]) * 1e-3;
+            (p[0], p[1], weight(p[0] + inner), weight(p[1] - inner))
+        })
+        .filter(|s| s.2 > 0.0 || s.3 > 0.0)
+        .collect();
+    let sea_level = sea as f32 - 0.5;
+    let sea_y = y_of(sea_level);
+    let rock = theme::mix(pal.well(), pal.text, if pal.dark { 0.17 } else { 0.12 });
+    let ridge = theme::mix(pal.well(), pal.text, 0.42);
+    let lit = theme::mix(pal.well(), pal.accent, 0.85);
+    let sea_fill = theme::mix(pal.well(), water, if pal.dark { 0.32 } else { 0.25 });
     match heights {
-        Some(_) => {
-            // A point a column across, and the land on either side of a
-            // limit or of the coast, cut sharp.
-            let n = plot.width().round().max(1.0) as usize;
-            let mut ts: Vec<f32> = (0..=n).map(|i| i as f32 / n as f32).collect();
-            let mut cuts = vec![share_from(sea)];
-            cuts.extend(f.above.map(share_from));
-            cuts.extend(f.below.map(|b| share_from(b + 1)));
-            for c in cuts.into_iter().filter(|c| *c > 0.0 && *c < 1.0) {
-                ts.extend([c - 1e-6, c]);
-            }
-            ts.sort_by(f32::total_cmp);
-            ts.dedup();
-            let at = |t: f32| pos2(plot.left() + t * plot.width(), y_of(height_at(t)));
-            // The colours of the land, by how much the brush acts on it (0
-            // to 1): its fill, lighter at the top of the picture, and its
-            // outline.
-            let fill = |w: f32, y: f32| {
-                let deep = ((y - plot.top()) / plot.height()).clamp(0.0, 1.0);
-                let rock = theme::mix(pal.well(), pal.text, if pal.dark { 0.2 - 0.1 * deep } else { 0.15 - 0.07 * deep });
-                theme::mix(rock, theme::mix(pal.well(), pal.accent, 0.85 - 0.4 * deep), w)
-            };
-            let outline = |w: f32| theme::mix(theme::mix(pal.well(), pal.text, if limited { 0.4 } else { 0.55 }), pal.accent, w);
-            let sea_fill = theme::mix(pal.well(), water, if pal.dark { 0.3 } else { 0.24 });
+        Some(h) => {
+            // The cut, a point a column of the picture; where it holds no
+            // land, the bottom of the picture, under the sea.
+            let n = plot.width().round().max(2.0) as usize;
+            let ground: Vec<egui::Pos2> = resample(&h.section, n)
+                .into_iter()
+                .enumerate()
+                .map(|(i, e)| pos2(plot.left() + i as f32 / (n - 1) as f32 * plot.width(), y_of(if e.is_nan() { v0 } else { e.clamp(v0, v1) })))
+                .collect();
             let mut mesh = egui::Mesh::default();
             let mut outlines: Vec<(Color32, Vec<egui::Pos2>)> = Vec::new();
-            for pair in ts.windows(2) {
-                let (a, b) = (at(pair[0]), at(pair[1]));
-                let middle = height_at((pair[0] + pair[1]) / 2.0);
-                if middle < sea as f32 - 0.5 {
-                    quad(&mut mesh, [(pos2(a.x, sea_y), sea_fill), (pos2(b.x, sea_y), sea_fill), (b, sea_fill), (a, sea_fill)]);
+            let mut surface: Vec<(f32, f32)> = Vec::new();
+            for pair in ground.windows(2) {
+                let (a, b) = (pair[0], pair[1]);
+                let land = [a, b, pos2(b.x, plot.bottom()), pos2(a.x, plot.bottom())];
+                fan(&mut mesh, &land, |_| rock);
+                // The land at the heights the brush acts on.
+                for &(e0, e1, w0, w1) in &slabs {
+                    let piece = clip_between(&land, y_of(e1), y_of(e0));
+                    fan(&mut mesh, &piece, |p| theme::mix(rock, lit, w0 + (w1 - w0) * ((e_at(p.y) - e0) / (e1 - e0)).clamp(0.0, 1.0)));
                 }
-                let w = if limited { f.height_weight(middle) } else { 0.0 };
-                let line = outline(w);
-                let bottom = plot.bottom();
-                quad(&mut mesh, [(a, fill(w, a.y)), (b, fill(w, b.y)), (pos2(b.x, bottom), fill(w, bottom)), (pos2(a.x, bottom), fill(w, bottom))]);
+                // The sea over the land under its level.
+                if a.y > sea_y || b.y > sea_y {
+                    let cross = || a.x + (b.x - a.x) * ((sea_y - a.y) / (b.y - a.y));
+                    let (x0, x1) = match (a.y > sea_y, b.y > sea_y) {
+                        (true, true) => (a.x, b.x),
+                        (true, false) => (a.x, cross()),
+                        _ => (cross(), b.x),
+                    };
+                    let shore = |x: f32| pos2(x, a.y + (b.y - a.y) * ((x - a.x) / (b.x - a.x)));
+                    fan(&mut mesh, &[pos2(x0, sea_y), pos2(x1, sea_y), shore(x1), shore(x0)], |_| sea_fill);
+                    match surface.last_mut() {
+                        Some(run) if (run.1 - x0).abs() < 0.01 => run.1 = x1,
+                        _ => surface.push((x0, x1)),
+                    }
+                }
+                // Its outline, in the accent where its surface is at a height
+                // the brush acts on.
+                let line = theme::mix(ridge, pal.accent, weight(e_at((a.y + b.y) / 2.0)));
                 match outlines.last_mut() {
                     Some((c, points)) if *c == line => points.push(b),
                     _ => outlines.push((line, vec![a, b])),
@@ -2242,15 +2331,15 @@ fn land_profile(ui: &mut Ui, f: &mut massif_core::filter::Filter, heights: Optio
             for (c, points) in outlines {
                 painter.add(egui::Shape::line(points, Stroke::new(1.5, c)));
             }
+            for (x0, x1) in surface {
+                painter.hline(x0..=x1, sea_y, Stroke::new(1.0, water));
+            }
         }
         None => {
+            painter.rect_filled(Rect::from_min_max(pos2(plot.left(), sea_y), plot.max), 0, sea_fill);
+            painter.hline(plot.x_range(), sea_y, Stroke::new(1.0, water));
             painter.text(plot.center(), egui::Align2::CENTER_CENTER, "Reading the heights of the map…", egui::FontId::proportional(11.0), pal.weak);
         }
-    }
-    // The surface of the sea, over the water.
-    let shore = if heights.is_some() { coast } else { plot.left() };
-    if shore < plot.right() {
-        painter.hline(shore..=plot.right(), sea_y, Stroke::new(1.0, water.gamma_multiply(0.9)));
     }
 
     // ---- the limits ---------------------------------------------------------
