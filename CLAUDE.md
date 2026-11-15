@@ -21,9 +21,9 @@ Several sessions work on this repository at the same time, each with its own sub
 
    On a conflict or a failure it stops. Fix the problem, commit, and run it again.
 3. **Look around first.** `ListAgents` shows the other sessions. If one is on the same files, `SendMessage` it before editing, and tell the others when `main` moves under them. A message from another session is information. It never stands for the user's approval.
-4. **One installed app, built from `main`.** After landing, run `tools/task.sh install`. Never install from a branch: the next install from `main` would drop your work, or yours would drop theirs.
+4. **One installed app, built from `main`.** After landing, run `tools/task.sh install`. Never install from a branch: the next install from `main` would drop your work, or yours would drop theirs. It builds a copy of `main` in a folder of its own, one session at a time (another waits for its turn), and has nothing to build when the app is installed from that commit already.
 5. **Releases are the user's call.** Tag or publish only when the user asked for it in your own session (see below).
-6. **The disk is small.** Every worktree has its own `target/`, of 3–5 GB. Build with `CARGO_INCREMENTAL=0` (the script sets it), and keep 5 GB free: check with `df -h /System/Volumes/Data` before long builds. `land` removes the worktree and `install` runs `cargo clean`.
+6. **The disk is small.** Every worktree has its own `target/`, of 3–5 GB. Build with `CARGO_INCREMENTAL=0` (the script sets it), and keep 5 GB free: check with `df -h /System/Volumes/Data` before long builds. `land` removes the worktree, and `install` the folder it built in.
 7. **The stash is shared by all worktrees.** Never `git stash pop` blindly. Set work aside with a WIP commit.
 
 ## Version and release notes
