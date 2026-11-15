@@ -156,7 +156,7 @@ impl Tool {
             Tool::SetHeight => "Set the ground to the target height.",
             Tool::Roughen => "Roughen the ground. Right button: smoother.",
             Tool::PaintTerrain => {
-                "Paint a terrain. Right button: back to automatic."
+                "Paint a terrain, or several mixed by a noise. Right button: back to automatic."
             }
             Tool::PaintBiome => "Paint a biome. Right button: back to automatic.",
             Tool::Cover => "Paint what grows: grass, flowers, snow… Right button: remove it.",
@@ -317,22 +317,36 @@ impl SculptSettings {
     pub const GROWTH: f32 = 16.0;
 }
 
-/// A pattern of terrains for the Paint tool.
+/// Several terrains mixed by a noise for the Paint tool: Massif's noise
+/// painter.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PatternSettings {
     pub on: bool,
     pub pattern: massif_core::pattern::Pattern,
-    /// Terrains by name, with their weights.
+    /// Terrains by name, in the order the noise lays them out (neighbours
+    /// in the list meet on the ground), each with its share of the ground.
     pub terrains: Vec<(String, f32)>,
+    /// Patterns saved by name, to paint with again.
+    pub saved: Vec<PatternPreset>,
+    /// Asked from a panel: paint the pattern over the whole map.
+    #[serde(skip)]
+    pub paint_map: bool,
+    /// What the last pass over the whole map changed, in columns.
+    #[serde(skip)]
+    pub done: Option<usize>,
 }
 
 impl Default for PatternSettings {
     fn default() -> Self {
+        let meadow = PatternPreset::built_in().swap_remove(0);
         Self {
             on: false,
-            pattern: Default::default(),
-            terrains: vec![("Grass".into(), 3.0), ("Coarse Dirt".into(), 1.0), ("Podzol".into(), 1.0)],
+            pattern: meadow.pattern,
+            terrains: meadow.terrains,
+            saved: Vec::new(),
+            paint_map: false,
+            done: None,
         }
     }
 }
@@ -342,6 +356,168 @@ impl PatternSettings {
     pub fn sampler(&self, reg: &massif_core::Registry) -> Option<massif_core::pattern::PatternSampler> {
         let terrains: Vec<(TerrainId, f32)> = self.terrains.iter().filter_map(|(name, w)| Some((reg.terrain_by_name(name)?, *w))).collect();
         (!terrains.is_empty()).then(|| self.pattern.sampler(&terrains))
+    }
+
+    /// Terrain `k`'s share of the ground, 0 to 1.
+    pub fn share(&self, k: usize) -> f32 {
+        let total: f32 = self.terrains.iter().map(|t| t.1.max(0.0)).sum();
+        match self.terrains.get(k) {
+            Some(t) if total > 0.0 => t.1.max(0.0) / total,
+            Some(_) => 1.0 / self.terrains.len() as f32,
+            None => 0.0,
+        }
+    }
+
+    /// Give terrain `k` this share of the ground; the others share the rest
+    /// as they shared theirs (evenly, if they had none).
+    pub fn set_share(&mut self, k: usize, share: f32) {
+        let n = self.terrains.len();
+        if k >= n {
+            return;
+        }
+        let share = if n == 1 { 1.0 } else { share.clamp(0.0, 1.0) };
+        let others: f32 = (0..n).filter(|&j| j != k).map(|j| self.share(j)).sum();
+        let shares: Vec<f32> = (0..n)
+            .map(|j| match j {
+                _ if j == k => share,
+                _ if others > 1e-6 => self.share(j) / others * (1.0 - share),
+                _ => (1.0 - share) / (n - 1) as f32,
+            })
+            .collect();
+        for (t, s) in self.terrains.iter_mut().zip(shares) {
+            t.1 = s;
+        }
+    }
+
+    /// Add a terrain with an even share (`1 / n` of the ground), the others
+    /// keeping theirs in proportion; a terrain already there is left as is.
+    pub fn add(&mut self, name: &str) {
+        if self.terrains.iter().any(|t| t.0.eq_ignore_ascii_case(name)) {
+            return;
+        }
+        self.normalize();
+        self.terrains.push((name.to_owned(), 0.0));
+        let n = self.terrains.len();
+        self.set_share(n - 1, 1.0 / n as f32);
+    }
+
+    /// Take terrain `k` out; the others share its ground.
+    pub fn remove(&mut self, k: usize) {
+        if k < self.terrains.len() {
+            self.terrains.remove(k);
+            self.normalize();
+        }
+    }
+
+    /// Move terrain `from` to the place of `to`, the others making room.
+    pub fn reorder(&mut self, from: usize, to: usize) {
+        let n = self.terrains.len();
+        if from < n && to < n && from != to {
+            let t = self.terrains.remove(from);
+            self.terrains.insert(to, t);
+        }
+    }
+
+    /// Shares adding up to one.
+    pub fn normalize(&mut self) {
+        let shares: Vec<f32> = (0..self.terrains.len()).map(|k| self.share(k)).collect();
+        for (t, s) in self.terrains.iter_mut().zip(shares) {
+            t.1 = s;
+        }
+    }
+
+    /// The preset, saved or built in, that this pattern is as it stands.
+    pub fn preset_name(&self) -> Option<String> {
+        let same = |p: &PatternPreset| {
+            p.pattern == self.pattern
+                && p.terrains.len() == self.terrains.len()
+                && p.terrains.iter().zip(&self.terrains).all(|(a, b)| a.0 == b.0 && (a.1 - b.1).abs() < 1e-4)
+        };
+        self.saved.iter().chain(PatternPreset::built_in().iter()).find(|p| same(p)).map(|p| p.name.clone())
+    }
+
+    /// Paint with a preset from now on.
+    pub fn load(&mut self, preset: &PatternPreset) {
+        self.pattern = preset.pattern.clone();
+        self.terrains = preset.terrains.clone();
+    }
+
+    /// Save the pattern as it stands under `name`, over a saved one of
+    /// that name.
+    pub fn save(&mut self, name: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        self.normalize();
+        let preset = PatternPreset {
+            name: name.to_owned(),
+            pattern: self.pattern.clone(),
+            terrains: self.terrains.clone(),
+        };
+        match self.saved.iter_mut().find(|p| p.name.eq_ignore_ascii_case(name)) {
+            Some(p) => *p = preset,
+            None => self.saved.push(preset),
+        }
+    }
+}
+
+/// A pattern kept to paint with again: its noise and its terrains.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PatternPreset {
+    pub name: String,
+    pub pattern: massif_core::pattern::Pattern,
+    pub terrains: Vec<(String, f32)>,
+}
+
+impl PatternPreset {
+    /// Grounds to start from, made of the terrains every map has.
+    pub fn built_in() -> Vec<PatternPreset> {
+        use massif_core::noise::Basis;
+        use massif_core::pattern::{Pattern, PatternKind};
+        let preset = |name: &str, pattern: Pattern, terrains: &[(&str, f32)]| PatternPreset {
+            name: name.to_owned(),
+            pattern,
+            terrains: terrains.iter().map(|(n, w)| ((*n).to_owned(), *w)).collect(),
+        };
+        let base = Pattern::default();
+        vec![
+            preset(
+                "Meadow",
+                Pattern { scale: 18.0, ..base.clone() },
+                &[("Grass", 0.64), ("Moss", 0.08), ("Coarse Dirt", 0.16), ("Dirt", 0.12)],
+            ),
+            preset(
+                "Forest floor",
+                Pattern { scale: 9.0, octaves: 5, gain: 0.6, seed: 7, ..base.clone() },
+                &[("Moss", 0.15), ("Grass", 0.3), ("Podzol", 0.35), ("Coarse Dirt", 0.2)],
+            ),
+            preset(
+                "Rocky ground",
+                Pattern { scale: 7.0, lacunarity: 2.5, softness: 0.4, seed: 3, ..base.clone() },
+                &[("Andesite", 0.26), ("Stone", 0.3), ("Cobblestone", 0.1), ("Gravel", 0.14), ("Coarse Dirt", 0.2)],
+            ),
+            preset(
+                "Gravel paths",
+                Pattern { kind: PatternKind::Veins, scale: 48.0, octaves: 3, softness: 0.1, seed: 5, ..base.clone() },
+                &[("Gravel", 0.08), ("Coarse Dirt", 0.06), ("Grass", 0.86)],
+            ),
+            preset(
+                "Snowy rocks",
+                Pattern { kind: PatternKind::Blobs, scale: 22.0, octaves: 5, gain: 0.55, seed: 11, ..base.clone() },
+                &[("Stone", 0.2), ("Powder Snow", 0.15), ("Snow", 0.65)],
+            ),
+            preset(
+                "Dunes",
+                Pattern { kind: PatternKind::Stripes, noise: Basis::Perlin, scale: 10.0, octaves: 3, stretch: 3.0, angle: 20.0, softness: 0.2, seed: 2, ..base.clone() },
+                &[("Sandstone", 0.2), ("Sand", 0.8)],
+            ),
+            preset(
+                "Fields",
+                Pattern { kind: PatternKind::Cells, scale: 40.0, stretch: 2.0, angle: 10.0, softness: 0.0, seed: 9, ..base },
+                &[("Grass", 0.4), ("Moss", 0.2), ("Coarse Dirt", 0.2), ("Podzol", 0.2)],
+            ),
+        ]
     }
 }
 

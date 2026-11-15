@@ -450,6 +450,50 @@ impl MapView {
         }
     }
 
+    /// Draw what the noise of the Paint tool would paint under the brush at
+    /// `at`, in the colours of its terrains.
+    fn show_pattern_preview(&mut self, ctx: &egui::Context, painter: &egui::Painter, canvas: Rect, doc: &Document, tools: &ToolState, at: (f64, f64)) {
+        use std::hash::{Hash, Hasher};
+        /// The most samples a side: a big brush is shown sampled.
+        const SAMPLES: usize = 256;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        format!("{:?}{:?}", tools.pattern.pattern, tools.pattern.terrains).hash(&mut h);
+        format!("{:?}", tools.filter).hash(&mut h);
+        BrushPreview::key(&tools.brush).hash(&mut h);
+        tools.brush.radius.to_bits().hash(&mut h);
+        let key = (Tool::PaintTerrain, at.0.floor() as i32, at.1.floor() as i32, doc.revision, h.finish());
+        if self.auto_preview.as_ref().is_none_or(|a| a.key != key) {
+            let reg = &doc.world.registry;
+            let texture = tools.pattern.sampler(reg).and_then(|sampler| {
+                let preview = massif_core::ops::pattern_preview(doc.dimension(), &tools.stroke_brush(), at.0 as f32, at.1 as f32, &sampler, SAMPLES);
+                let pixels: Vec<Color32> = preview
+                    .cells
+                    .iter()
+                    .map(|c| c.and_then(|t| reg.terrains.get(t.0 as usize)).map_or(Color32::TRANSPARENT, |t| theme::rgb(t.color)))
+                    .collect();
+                let rect = preview.rect;
+                let covered = [rect.x0 + preview.size[0] as i32 * preview.step, rect.z0 + preview.size[1] as i32 * preview.step];
+                pixels.iter().any(|c| c.a() > 0).then(|| {
+                    let image = egui::ColorImage::new(preview.size, pixels);
+                    ([rect.x0, rect.z0, covered[0], covered[1]], ctx.load_texture("noise preview", image, egui::TextureOptions::NEAREST))
+                })
+            });
+            self.auto_preview = Some(AutoPreview {
+                key,
+                rect: texture.as_ref().map_or([0; 4], |t| t.0),
+                texture: texture.map(|t| t.1),
+            });
+        }
+        if let Some(AutoPreview { rect, texture: Some(texture), .. }) = &self.auto_preview {
+            let min = self.to_screen(canvas, rect[0] as f64, rect[1] as f64);
+            let max = self.to_screen(canvas, rect[2] as f64, rect[3] as f64);
+            let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+            // Nearly opaque: what the ground will look like, the map just
+            // showing through.
+            painter.image(texture.id(), Rect::from_min_max(min, max), uv, Color32::from_white_alpha(225));
+        }
+    }
+
     /// Where block coordinates `(x, z)` were on the screen, last frame.
     #[cfg(test)]
     pub fn screen_of(&self, x: f64, z: f64) -> Pos2 {
@@ -939,13 +983,16 @@ impl MapView {
                 let brush = &tools.brush;
                 let shadow = Line::new(3.0, Color32::from_black_alpha(90));
                 let line = Line::new(1.4, Color32::WHITE);
-                // The automatic tools show what they would change.
-                if matches!(tools.tool, Tool::AutoPaint | Tool::AutoBiome)
-                    && !modifiers.alt
-                    && self.stroke.is_none()
-                    && let Some((x, z)) = world_pointer
-                {
-                    self.show_auto_preview(ui.ctx(), &painter, canvas, doc, tools, (x, z));
+                // The automatic tools show what they would change, a noise
+                // what it would paint.
+                let previewing = !modifiers.alt && self.stroke.is_none();
+                let noise = tools.tool == Tool::PaintTerrain && tools.pattern.on;
+                if previewing && let Some((x, z)) = world_pointer {
+                    if matches!(tools.tool, Tool::AutoPaint | Tool::AutoBiome) {
+                        self.show_auto_preview(ui.ctx(), &painter, canvas, doc, tools, (x, z));
+                    } else if noise {
+                        self.show_pattern_preview(ui.ctx(), &painter, canvas, doc, tools, (x, z));
+                    }
                 }
                 // How hard the brush presses: lighter where it presses
                 // more, with a line at a quarter, a half and three quarters
@@ -960,7 +1007,10 @@ impl MapView {
                     if side >= 12.0 {
                         let square = Rect::from_center_size(p, Vec2::splat(side));
                         let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-                        painter.image(preview.texture.id(), square, uv, Color32::WHITE);
+                        // Over the colours of a noise, its lines alone.
+                        if !(noise && previewing) {
+                            painter.image(preview.texture.id(), square, uv, Color32::WHITE);
+                        }
                         for (k, rings) in preview.levels.iter().enumerate() {
                             let ink = Line::new(1.1, Color32::from_white_alpha(105 + 45 * k as u8));
                             let under = Line::new(2.4, Color32::from_black_alpha(55));

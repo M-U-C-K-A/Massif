@@ -351,17 +351,37 @@ kind of land, the three terrains of each biome. They are kept with the
 settings. Forests are told from the ground for now (podzol, coarse dirt);
 trees will count when layers exist.
 
-### Patterns of terrains
+### Noise painting
 
-Paint terrain can lay several terrains at once (Tool Settings ▸ a pattern
-of terrains): grass with patches of coarse dirt and podzol, stone veined
-with gravel, a patchwork of fields. The pattern is a noise — **patches**,
-**veins**, **blobs**, **cells** or wavering **stripes** at an angle — of the
-size you choose, with soft or sharp edges and a seed; every terrain gets
-the share of the ground its weight says, whatever the pattern (the pattern
-learns its own spread and paints by rank). A picture shows it before the
-first stroke, and the brush, its intensity and its options apply as with
-any paint.
+Paint terrain can lay several terrains or blocks at once, mixed by a noise
+(Tool Settings ▸ **Noise**), as the noise painters of Axiom and other
+editors do: grass with patches of coarse dirt and podzol, stone veined with
+gravel, rooted dirt in andesite, a patchwork of fields. The noise has a
+**shape** — **patches**, **veins**, **blobs**, **cells** or wavering
+**stripes** —, a kind (**simplex**, **Perlin** or **value** noise), a
+**size**, **octaves**, **lacunarity** and **gain** for its detail, a
+**stretch** and a **direction** to draw it out into streaks or bands, soft or
+sharp edges and a seed.
+
+The blocks are a list, in order — neighbours in the list meet on the ground,
+as in a gradient —, each with its **share of the ground**: the shares always
+make 100 %, and every block covers its share whatever the noise (the pattern
+learns its own spread and paints by rank). Drag a block's icon to move it in
+the list; click its name to put another block in its place; **Add a block**
+offers the map's terrains and every whole block of the installed game (a
+block becomes a terrain the first time). Pictures show the ground it paints,
+its noise, and how the noise's values spread between the blocks; hovered over
+the map, the brush shows what it would paint before the first stroke.
+Presets (Meadow, Forest floor, Rocky ground, Gravel paths, Snowy rocks,
+Dunes, Fields) are a start, and any pattern can be saved under a name.
+
+It paints with the brush of every tool — its shape, size (up to a radius of
+4,096 blocks: type it in Brush Settings, or scroll), intensity and options —,
+and **Paint the whole map** lays it over every column of the active level in
+the background, where the brush options let it (only on grass, a height
+band, a slope…), as one step to undo. The pattern is laid in world
+coordinates: strokes side by side join without a seam, and painting a place
+again gives the same blocks.
 
 ### Ground covers
 
@@ -748,7 +768,7 @@ Sculpting in 3D has its own editor, **3D Sculpt** (its workspace sits next
 to 3D; the 3D View's **Sculpt** button opens it): a 3D view with its tools
 along the top — **Sculpt** (the left button adds matter, the right one
 digs), **Smooth** and **Paint** (the terrain chosen in Terrain or Blocks, or
-a pattern; the right button puts back what the height calls for) — with the
+a noise of several; the right button puts back what the height calls for) — with the
 brush of every tool: its shape (custom images too, turned as they are),
 size, intensity and rotation are those of **Brush Settings**, which the
 3D Sculpt workspace shows beside its view.

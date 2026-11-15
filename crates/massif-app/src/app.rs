@@ -989,6 +989,21 @@ impl MassifApp {
                         self.say(ctx, msg, false, None);
                     }
                 }
+                Outcome::Pattern { tiles, columns, revision, dim, level } => {
+                    let label = "Noise paint";
+                    if revision != self.doc.revision || dim != self.doc.dim || level >= self.doc.dimension().levels.len() {
+                        crate::sounds::play(Cue::Warning);
+                        self.say(ctx, format!("{label}: the map changed meanwhile, nothing was done"), true, None);
+                    } else {
+                        self.doc.history.begin(label, dim);
+                        self.doc.history.edit(&mut self.doc.world, level).replace_tiles(tiles);
+                        self.doc.commit();
+                        self.tools.pattern.done = Some(columns);
+                        let msg = format!("{label} over the whole map: {columns} columns changed in {secs:.1} s");
+                        self.task_done(ctx, Cue::Ready, &format!("{label} done"), &msg, secs);
+                        self.say(ctx, msg, false, None);
+                    }
+                }
                 Outcome::Cancelled => {
                     crate::sounds::play(Cue::Warning);
                     self.say(ctx, "Cancelled", false, None);
@@ -1963,6 +1978,12 @@ impl MassifApp {
         if let Some(biomes) = self.tools.run_auto.take() {
             let snapshot = self.doc.world.snapshot();
             self.jobs.push(Job::auto(ctx, snapshot, self.doc.dim, self.tools.auto.clone(), biomes, self.doc.revision));
+        }
+        if std::mem::take(&mut self.tools.pattern.paint_map) {
+            let snapshot = self.doc.world.snapshot();
+            let level = self.doc.active_level.min(self.doc.dimension().levels.len() - 1);
+            let (settings, filter) = (self.tools.pattern.clone(), self.tools.filter.clone());
+            self.jobs.push(Job::pattern(ctx, snapshot, self.doc.dim, level, settings, filter, self.doc.revision));
         }
         if std::mem::take(&mut self.tools.open_rules) && self.dialog.is_none() {
             self.dialog = Some(Dialog::AutoRules(self.tools.tool == Tool::AutoPaint));
@@ -3872,6 +3893,26 @@ mod tests {
         h.event(egui::Event::PointerMoved(c + vec2(500.0, 0.0)));
         h.run_steps(10);
         h.render().unwrap().save(dir.join("pattern-paint.png")).unwrap();
+        // Hovering: what the noise would paint under the brush, before it
+        // is painted.
+        h.state_mut().tools.pattern.pattern.seed = 4;
+        h.event(egui::Event::PointerMoved(c + vec2(-150.0, 60.0)));
+        h.run_steps(6);
+        h.render().unwrap().save(dir.join("noise-preview.png")).unwrap();
+        // The whole map, in the background, as one step to undo.
+        h.state_mut().tools.pattern.paint_map = true;
+        for _ in 0..200 {
+            h.run_steps(5);
+            if h.state().jobs.is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(h.state().doc.history.undo_label(), Some("Noise paint"));
+        assert!(h.state().tools.pattern.done.is_some_and(|n| n > 10_000), "{:?}", h.state().tools.pattern.done);
+        h.event(egui::Event::PointerMoved(c + vec2(2000.0, 0.0)));
+        h.run_steps(10);
+        h.render().unwrap().save(dir.join("noise-whole-map.png")).unwrap();
     }
 
     /// The River tool: points clicked on the map, Enter, and a river is dug

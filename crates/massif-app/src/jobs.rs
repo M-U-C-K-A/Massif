@@ -41,6 +41,18 @@ pub enum Outcome {
         revision: u64,
         dim: usize,
     },
+    /// A pattern of terrains painted over the whole of a level, worked out
+    /// on a copy of the map: the tiles it changed, to put in place in one
+    /// undoable step.
+    Pattern {
+        tiles: Vec<(massif_core::TilePos, massif_core::level::Blob)>,
+        columns: usize,
+        /// The document's revision, dimension and level it was worked out
+        /// from.
+        revision: u64,
+        dim: usize,
+        level: usize,
+    },
     Failed(String),
     Cancelled,
 }
@@ -225,6 +237,37 @@ impl Job {
                 columns: changes.columns,
                 revision,
                 dim,
+            }
+        })
+    }
+
+    /// A pattern of terrains over the whole of level `level` of dimension
+    /// `dim` of a snapshot of the document at `revision`, where `filter`
+    /// lets it.
+    pub fn pattern(ctx: &egui::Context, mut snapshot: World, dim: usize, level: usize, settings: crate::tools::PatternSettings, filter: massif_core::filter::Filter, revision: u64) -> Job {
+        use massif_core::auto::Steps;
+        let progress = Arc::new(Steps::default());
+        let p = progress.clone();
+        Job::spawn(JobKind::Auto, "Noise paint over the whole map".to_owned(), Some(progress as Arc<dyn JobProgress>), ctx, move || {
+            let Some(sampler) = settings.sampler(&snapshot.registry) else {
+                return Outcome::Failed("Noise paint: none of its terrains is in this map".to_owned());
+            };
+            let mut history = massif_core::history::History::new(1);
+            history.begin("noise paint", dim);
+            let changes = massif_core::pattern::paint_over_the_map(&mut history.edit(&mut snapshot, level), &sampler, Some(&filter), &p);
+            drop(history);
+            if changes.cancelled {
+                return Outcome::Cancelled;
+            }
+            let edited = &mut snapshot.dims[dim].levels[level];
+            edited.encode_blobs(&changes.tiles);
+            let tiles = changes.tiles.iter().filter_map(|&pos| edited.blob(pos).map(|b| (pos, b))).collect();
+            Outcome::Pattern {
+                tiles,
+                columns: changes.columns,
+                revision,
+                dim,
+                level,
             }
         })
     }
