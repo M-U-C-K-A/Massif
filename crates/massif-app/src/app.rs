@@ -7781,7 +7781,8 @@ mod tests {
         };
         // Corner, where the drag ends (fractions of the area), and on which
         // side of the map the new area should be: (left, above).
-        let cases: [(Corner, [f32; 2], (Option<bool>, Option<bool>)); 6] = [
+        type Case = (Corner, [f32; 2], (Option<bool>, Option<bool>));
+        let cases: [Case; 6] = [
             (Corner::TopLeft, [0.4, 0.05], (Some(true), None)),
             (Corner::TopLeft, [0.02, 0.5], (None, Some(true))),
             (Corner::BottomLeft, [0.4, 0.97], (Some(true), None)),
