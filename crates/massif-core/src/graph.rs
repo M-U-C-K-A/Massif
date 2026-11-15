@@ -32,6 +32,7 @@ mod rivers;
 mod sim;
 mod tectonics;
 mod templates;
+mod whole;
 
 pub use climate::{Climate, ClimateTable};
 pub use color::{AutoPalette, BlockPalette, GradientPreset, decode as decode_srgb, encode as encode_srgb};
@@ -39,6 +40,7 @@ pub use files::{is_world, set_world_reader};
 pub use map::{GroundMap, MapSample, MapSource, SampledMap, reads_level, sample_map, surface_of};
 pub use tectonics::{Plate, scatter as scatter_plates};
 pub use templates::Template;
+pub use whole::{Reshape, WHOLE_MAX, reshape_ground, reshape_preview};
 
 /// The level of water where there is none: far under any ground.
 pub const NO_WATER: f32 = -10_000.0;
@@ -2166,7 +2168,7 @@ impl Graph {
                         })
                         .collect();
                     let started = std::time::Instant::now();
-                    let result = ops::run(&node.kind, extent, &inputs, &wanted, cancel, map);
+                    let result = ops::run(&node.kind, extent, &inputs, &wanted, cancel, map, &|_| {});
                     out.timings.insert(id, started.elapsed().as_secs_f32() * 1000.0);
                     match result {
                         Ok(v) => {

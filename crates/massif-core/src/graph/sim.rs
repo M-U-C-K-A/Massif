@@ -43,8 +43,9 @@ unsafe impl Sync for Shared {}
 /// a block stays within that block and its eight neighbours, so blocks
 /// three apart never meet, and run side by side on every core, in nine
 /// rounds. Each block draws its drops from its own seed: the result does
-/// not depend on the number of cores.
-pub(super) fn erode(f: &Field, spacing: f32, p: &Droplets, cancel: &AtomicBool) -> Option<(Field, Field, Field)> {
+/// not depend on the number of cores. `progress` hears how much of the
+/// rain has fallen (0..1), round by round.
+pub(super) fn erode(f: &Field, spacing: f32, p: &Droplets, cancel: &AtomicBool, progress: &dyn Fn(f32)) -> Option<(Field, Field, Field)> {
     let n = f.n;
     // Work in units of samples so that slopes are true whatever the
     // resolution.
@@ -91,6 +92,7 @@ pub(super) fn erode(f: &Field, spacing: f32, p: &Droplets, cancel: &AtomicBool) 
             // neighbours, which no other block of this round reaches.
             unsafe { drops_in(shared, n, (x0, z0, x1, z1), drops, seed, p, &brush, cancel) };
         });
+        progress((round + 1) as f32 / 9.0);
     }
     if cancel.load(Ordering::Relaxed) {
         return None;

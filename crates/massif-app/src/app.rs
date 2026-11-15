@@ -176,6 +176,8 @@ enum Dialog {
     ImportReport(Box<massif_legacy::ImportReport>, Option<egui::TextureHandle>),
     /// The help, at a topic.
     Help(crate::help::HelpState),
+    /// A filter over the whole map: its settings, the map before and after.
+    Reshape(Box<crate::reshape::ReshapeForm>),
 }
 
 struct Status {
@@ -847,6 +849,13 @@ impl MassifApp {
     }
 
     /// Put the Developer panel beside the largest area of the workspace.
+    /// The dialog of a filter over the whole map, with a cold copy of the
+    /// map for its pictures.
+    fn open_reshape(&mut self, what: crate::reshape::WholeOp) {
+        let map = self.doc.world.dims[self.doc.dim].snapshot();
+        self.dialog = Some(Dialog::Reshape(Box::new(crate::reshape::ReshapeForm::new(what, map, self.doc.world.meta.sea_level))));
+    }
+
     fn show_developer_panel(&mut self) {
         let mut areas = Vec::new();
         self.layout.current().root.areas(&mut areas);
@@ -1139,6 +1148,19 @@ impl MassifApp {
                         self.say(ctx, msg, false, None);
                     }
                 }
+                Outcome::Reshaped { label, tiles, columns, revision, dim } => {
+                    if revision != self.doc.revision || dim != self.doc.dim {
+                        crate::sounds::play(Cue::Warning);
+                        self.say(ctx, format!("{label}: the map changed meanwhile, nothing was done"), true, None);
+                    } else {
+                        self.doc.history.begin(label, dim);
+                        self.doc.history.edit(&mut self.doc.world, 0).replace_tiles(tiles);
+                        self.doc.commit();
+                        let msg = format!("{label} over the whole map: {columns} columns changed in {secs:.1} s");
+                        self.task_done(ctx, Cue::Ready, &format!("{label} done"), &msg, secs);
+                        self.say(ctx, msg, false, None);
+                    }
+                }
                 Outcome::Cancelled => {
                     crate::sounds::play(Cue::Warning);
                     self.say(ctx, "Cancelled", false, None);
@@ -1391,6 +1413,14 @@ impl MassifApp {
                 if ui.button(theme::with_icon(Icon::Settings2, "Automatic rules…")).clicked() {
                     self.dialog = Some(Dialog::AutoRules(false));
                 }
+                ui.separator();
+                ui.menu_button(theme::with_icon(Icon::Map, "Whole map"), |ui| {
+                    for what in crate::reshape::WholeOp::ALL {
+                        if ui.button(theme::with_icon(what.icon(), &format!("{}…", what.label()))).on_hover_text(what.about()).clicked() {
+                            self.open_reshape(what);
+                        }
+                    }
+                });
             });
             ui.menu_button("View", |ui| {
                 for (choice, label) in [(ThemeChoice::System, "Follow the system"), (ThemeChoice::Light, "Light"), (ThemeChoice::Dark, "Dark")] {
@@ -2239,6 +2269,29 @@ impl MassifApp {
                 }
                 if keep {
                     self.dialog = Some(Dialog::Preferences(section));
+                }
+            }
+            Dialog::Reshape(mut form) => {
+                use crate::reshape::Choice;
+                let mut choice = Choice::Keep;
+                let response = modal(ctx, "whole map").show(ctx, |ui| {
+                    choice = form.ui(ui, &self.doc.world.registry);
+                });
+                if response.should_close() {
+                    keep = false;
+                }
+                match choice {
+                    Choice::Keep => {}
+                    Choice::Close => keep = false,
+                    Choice::Apply(op) => {
+                        keep = false;
+                        let snapshot = self.doc.world.snapshot();
+                        let bed = self.doc.world.registry.terrain_by_name("Gravel");
+                        self.jobs.push(Job::reshape(ctx, snapshot, self.doc.dim, op, bed, self.doc.revision));
+                    }
+                }
+                if keep {
+                    self.dialog = Some(Dialog::Reshape(form));
                 }
             }
             Dialog::AutoRules(mut paint) => {
@@ -3413,6 +3466,56 @@ mod tests {
         if let Some(dir) = dir {
             h.render().unwrap().save(dir.join("developer-panel.png")).unwrap();
         }
+    }
+
+    /// Edit ▸ Whole map ▸ Erosion: the dialog shows the map before and
+    /// after, Apply wears the whole map in the background, in one step that
+    /// undo takes back.
+    #[test]
+    fn erosion_over_the_whole_map() {
+        use egui_kittest::kittest::Queryable;
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let heights = |h: &egui_kittest::Harness<'static, MassifApp>| -> Vec<f32> {
+            let doc = &h.state().doc;
+            (0..1024).step_by(9).flat_map(|z| (0..1024).step_by(9).map(move |x| (x, z))).filter_map(|(x, z)| crate::tools::probe(doc, x, z).map(|p| p.height)).collect()
+        };
+        let before = heights(&h);
+        h.state_mut().open_reshape(crate::reshape::WholeOp::Erosion);
+        // The pictures come, made on another thread.
+        let started = std::time::Instant::now();
+        while !h.state().dialog.as_ref().is_some_and(|d| matches!(d, Dialog::Reshape(f) if f.has_pictures())) {
+            assert!(started.elapsed().as_secs() < 60, "the pictures never came");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.run_steps(3);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("dialog-whole-map-erosion.png")).unwrap();
+        }
+        h.get_by_label("Apply to the whole map").click();
+        h.run_steps(2);
+        assert!(h.state().dialog.is_none() && !h.state().jobs.is_empty(), "the job runs");
+        let started = std::time::Instant::now();
+        while !h.state().jobs.is_empty() {
+            assert!(started.elapsed().as_secs() < 120, "the erosion timed out");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        h.run_steps(3);
+        let after = heights(&h);
+        assert_eq!(before.len(), after.len());
+        let moved = before.iter().zip(&after).filter(|(a, b)| (*a - *b).abs() > 0.1).count();
+        assert!(moved > before.len() / 50, "{moved} of {} columns looked at changed", before.len());
+        assert_eq!(h.state().doc.history.undo_label(), Some("Erosion"));
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("whole-map-eroded.png")).unwrap();
+        }
+        let ctx = h.ctx.clone();
+        h.state_mut().undo(&ctx);
+        h.run_steps(2);
+        assert_eq!(heights(&h), before, "one undo takes it all back");
     }
 
     /// The typefaces: the settings show each in itself, a click sets the

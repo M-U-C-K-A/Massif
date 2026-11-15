@@ -3130,6 +3130,15 @@ fn gradient_picker(ui: &mut Ui, preset: &mut GradientPreset) -> bool {
 
 /// The settings of a node. Every control reports changes through the graph
 /// comparison done by the caller.
+/// The settings of a node, as its properties show them, outside the graph:
+/// `limits` are the map's lowest and highest heights. Whether one changed.
+pub(crate) fn node_settings(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry, limits: (f32, f32)) -> bool {
+    ui.data_mut(|d| d.insert_temp(limits_id(), limits));
+    let before = kind.clone();
+    properties(ui, kind, reg);
+    *kind != before
+}
+
 fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
     let pal = Palette::of(ui);
     let tips = tips(kind);

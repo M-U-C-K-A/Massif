@@ -236,6 +236,39 @@ kind of land, the three terrains of each biome. They are kept with the
 settings. Forests are told from the ground for now (podzol, coarse dirt);
 trees will count when layers exist.
 
+## The whole map at once
+
+**Edit ▸ Whole map** runs one of the terrain graph's filters over the whole
+map, without opening the graph:
+
+- **Erosion**: rain runs down the slopes and carries soil from the heights
+  to the valleys — gullies, worn flanks, fans of silt (the Erosion node:
+  rain, erosion, deposition, capacity, evaporation, brush, seed).
+- **Thermal erosion**: loose rock slides wherever a slope is steeper than
+  it can hold — scree at the feet of cliffs, softer ridges.
+- **Rivers**: traced where the water of the whole map runs, dug into the
+  bottoms of the valleys, wider downstream, with their lakes, keeping to
+  the water already on the map; their beds in gravel.
+- **Lakes**: water fills the hollows up to where they spill (with **Fill**,
+  their ground rises instead).
+- **Smooth**, **Sharpen**, **Terraces** (flat steps over the whole height
+  of the map) and **Strata** (ledges of rock along the slopes).
+- **Scale and raise**: the relief scaled around the sea level (twice as
+  high, half as high…), then moved up or down by a number of blocks.
+
+Each opens in a window with its settings — those of its node — and the map
+small, before and after, made again a moment after they change. **Apply
+to the whole map** works on a copy of the map in the background, with its
+progress and a Cancel, and puts the result in place as one step to undo.
+The surface of the map is read as the Map node reads it, the filter changes
+it, and only the change goes back into the ground: its paint stays (but for
+the rivers' beds), and so do the rock of its other levels and what was
+sculpted in 3D over it. Up to 4096 blocks across, every block is read; a
+larger map is read a sample every few blocks and the change is spread over
+the blocks between, so the ground keeps its own detail. On a WorldPainter
+map of 5,888 blocks a side, erosion takes about twenty seconds, the others
+two or three, terraces and smoothing under half a second.
+
 ## Noise painting
 
 Paint terrain can lay several terrains or blocks at once, mixed by a noise

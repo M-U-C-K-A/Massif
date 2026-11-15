@@ -53,6 +53,17 @@ pub enum Outcome {
         dim: usize,
         level: usize,
     },
+    /// A filter of the graph run over the whole of the ground, worked out
+    /// on a copy of the map: the tiles it changed, to put in place in one
+    /// undoable step.
+    Reshaped {
+        label: &'static str,
+        tiles: Vec<(massif_core::TilePos, massif_core::level::Blob)>,
+        columns: usize,
+        /// The document's revision and dimension it was worked out from.
+        revision: u64,
+        dim: usize,
+    },
     Failed(String),
     Cancelled,
 }
@@ -268,6 +279,35 @@ impl Job {
                 revision,
                 dim,
                 level,
+            }
+        })
+    }
+
+    /// `op` over the ground of the whole of dimension `dim` of a snapshot of
+    /// the document at `revision`; `bed`, the terrain of the beds rivers dig.
+    pub fn reshape(ctx: &egui::Context, mut snapshot: World, dim: usize, op: massif_core::graph::Reshape, bed: Option<massif_core::registry::TerrainId>, revision: u64) -> Job {
+        use massif_core::auto::Steps;
+        let progress = Arc::new(Steps::default());
+        let p = progress.clone();
+        let label = op.label();
+        Job::spawn(JobKind::Auto, format!("{label} over the whole map"), Some(progress as Arc<dyn JobProgress>), ctx, move || {
+            let sea = snapshot.meta.sea_level;
+            let mut history = massif_core::history::History::new(1);
+            history.begin(label, dim);
+            let changes = massif_core::graph::reshape_ground(&mut history.edit(&mut snapshot, 0), &op, sea, bed, &p);
+            drop(history);
+            if changes.cancelled {
+                return Outcome::Cancelled;
+            }
+            let level = &mut snapshot.dims[dim].levels[0];
+            level.encode_blobs(&changes.tiles);
+            let tiles = changes.tiles.iter().filter_map(|&pos| level.blob(pos).map(|b| (pos, b))).collect();
+            Outcome::Reshaped {
+                label,
+                tiles,
+                columns: changes.columns,
+                revision,
+                dim,
             }
         })
     }

@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 /// Run one node. `Err(true)`: an input is missing; `Err(false)`: cancelled.
+/// `progress` hears how far the long simulations are (0..1).
 pub(super) fn run(
     kind: &NodeKind,
     e: &Extent,
@@ -15,6 +16,7 @@ pub(super) fn run(
     wanted: &[bool],
     cancel: &AtomicBool,
     source: Option<&dyn super::MapSource>,
+    progress: &dyn Fn(f32),
 ) -> Result<Vec<Value>, bool> {
     let n = e.n;
     // An output nobody wants: an empty field, never looked at.
@@ -259,7 +261,7 @@ pub(super) fn run(
                 radius: (radius / we.spacing()).round().clamp(1.0, 12.0) as i32,
                 seed,
             };
-            let (h, flow, deposits) = sim::erode(&work, we.spacing(), &params, cancel).ok_or(false)?;
+            let (h, flow, deposits) = sim::erode(&work, we.spacing(), &params, cancel, progress).ok_or(false)?;
             let wear = normalized(work.data.par_iter().zip(&h.data).map(|(a, b)| (a - b).max(0.0)).collect(), m);
             let h = carry(&f, &work, &h);
             Ok([h, full(&flow, 1), full(&deposits, 2), full(&wear, 3)]
