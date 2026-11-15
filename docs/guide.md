@@ -697,3 +697,32 @@ The map and the 3D view are made to follow the hand:
 
 **Settings ▸ Developer** shows frames a second, the time of each frame and
 of its work, live.
+
+## If Massif does not start
+
+Massif writes down every step of its start in a log of its own, with the
+time each took, the graphics card it found, and any error, without sending
+anything anywhere:
+
+| System | Log |
+|---|---|
+| Windows | `%LOCALAPPDATA%\Massif\startup.log` |
+| macOS | `~/Library/Logs/Massif/startup.log` |
+| Linux | `~/.local/state/massif/startup.log` |
+
+The log of the start before is kept beside it as `startup.previous.log`, so
+starting again after a start that hung does not lose it. Send both when
+reporting a problem: the last line says where Massif stopped.
+
+- If Massif cannot start (no graphics card it can use, a driver that
+  refuses), or stops on an error, a message says so and where the log is.
+- The window stays hidden until its first picture is drawn, so that it does
+  not flash white. On Windows, if that takes more than 3 seconds, the window
+  is shown anyway. After 20 seconds without a picture, a message says where
+  the log is: the graphics card or its driver is probably stuck.
+- Massif draws with DirectX 12, Vulkan or OpenGL on Windows, Metal on macOS,
+  and Vulkan or OpenGL on Linux. Updating the graphics driver often helps. To
+  try another one, set `WGPU_BACKEND` to `dx12`, `vulkan` or `gl` before
+  starting Massif; `WGPU_POWER_PREF=low` picks the integrated graphics card
+  of a laptop rather than the dedicated one.
+

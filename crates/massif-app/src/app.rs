@@ -3001,6 +3001,7 @@ impl MassifApp {
 
 impl eframe::App for MassifApp {
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
+        crate::startup::first_frame();
         self.dev.begin();
         self.frame_ui(ui, frame);
         let now = ui.input(|i| i.time);

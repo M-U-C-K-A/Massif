@@ -25,6 +25,7 @@ mod picker;
 mod player;
 mod reshape;
 mod sounds;
+mod startup;
 mod terrain_view;
 mod theme;
 mod tools;
@@ -47,10 +48,14 @@ fn icon() -> egui::IconData {
 }
 
 fn main() -> eframe::Result {
+    // Every step of the start written down, panics too (see `startup`).
+    startup::begin();
     let open = std::env::args_os().nth(1).map(PathBuf::from);
     // Files the Finder asks to open; on Windows, `.massif` files made
     // Massif's, with their maps as their icons.
+    startup::step("listening for the files the system asks to open");
     finder::listen();
+    startup::step("making .massif files Massif's");
     finder::register();
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Massif")
@@ -86,12 +91,25 @@ fn main() -> eframe::Result {
         },
         ..Default::default()
     };
-    eframe::run_native(
+    startup::step("opening the window and the graphics card (wgpu)");
+    let result = eframe::run_native(
         "Massif",
         options,
         Box::new(|cc| {
+            if let Some(render) = &cc.wgpu_render_state {
+                let info = render.adapter.get_info();
+                startup::step(&format!("graphics card: {} ({:?}, driver {} {})", info.name, info.backend, info.driver, info.driver_info));
+            }
+            startup::step("making the app");
             finder::wake(&cc.egui_ctx);
-            Ok(Box::new(app::MassifApp::new(cc, open)))
+            let app = app::MassifApp::new(cc, open);
+            startup::step("app made: drawing the first frame");
+            Ok(Box::new(app))
         }),
-    )
+    );
+    match &result {
+        Ok(()) => startup::step("closed"),
+        Err(error) => startup::failed(error),
+    }
+    result
 }

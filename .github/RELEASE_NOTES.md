@@ -16,6 +16,8 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 
 **Split from any corner.** Every corner of an area splits it when dragged into it, not only the top right one: the new area opens on that corner's side, and while dragging, the line of the split and the side it opens on show.
 
+**A start that says what goes wrong.** Massif writes down every step of its start in `startup.log` (in `%LOCALAPPDATA%\Massif` on Windows, `~/Library/Logs/Massif` on macOS), with any error, the one before kept beside it, and nothing sent anywhere. When it cannot start or stops on an error, a message says so instead of the process staying in the background with no window; on Windows the window is shown after 3 seconds even when the graphics card is slow to draw its first picture. See *If Massif does not start* in the guide.
+
 **A big map stays smooth.** The 3D view builds a whole map away from the frames, on threads of its own, and puts what it built on the graphics card a little at a time: on a map of 44,544 × 33,536 blocks, a frame went from 29 ms of work to 11 ms while it builds.
 
 ## New in 0.4.1
