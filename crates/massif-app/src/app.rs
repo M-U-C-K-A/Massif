@@ -1266,7 +1266,7 @@ impl MassifApp {
                         if factor == 0.0 {
                             view.zoom_reset();
                         } else {
-                            view.zoom_by(factor);
+                            view.zoom_smoothly(factor);
                         }
                     }
                 }
@@ -3465,6 +3465,131 @@ mod tests {
         assert!(crate::devtools::cpu_time().is_some());
         if let Some(dir) = dir {
             h.render().unwrap().save(dir.join("developer-panel.png")).unwrap();
+        }
+    }
+
+    /// The zoom buttons and keys glide: the zoom gets there over a few
+    /// frames, around the middle of the view, and lands exactly; "Fit the
+    /// whole map" glides there too.
+    #[test]
+    fn the_map_view_glides() {
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let id = h.state().active_map.or_else(|| h.state().maps.keys().next().copied()).expect("a map view");
+        let (z0, c0) = (h.state().maps[&id].zoom, h.state().maps[&id].center);
+        h.state_mut().maps.get_mut(&id).unwrap().zoom_smoothly(2.0);
+        h.step();
+        let z1 = h.state().maps[&id].zoom;
+        assert!(z1 > z0 * 1.2, "it heads there at once: {z0} → {z1}");
+        h.run_steps(10);
+        let view = &h.state().maps[&id];
+        assert!((view.zoom - 2.0 * z0).abs() < 1e-4, "it lands on twice the zoom: {}", view.zoom);
+        assert!((view.center[0] - c0[0]).abs() < 0.01 && (view.center[1] - c0[1]).abs() < 0.01, "around the middle of the view");
+    }
+
+    /// How smoothly a real map moves (MASSIF_MOVE_WORLD: a .massif): the
+    /// time of each frame while the map view zooms in, pans and zooms out,
+    /// and while the 3D view turns and moves, on a Retina-like screen.
+    #[test]
+    fn moving_around_a_real_world() {
+        let Some(path) = std::env::var_os("MASSIF_MOVE_WORLD").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1440.0, 900.0))
+            .with_pixels_per_point(2.0)
+            .with_step_dt(1.0 / 60.0)
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_eframe(move |cc| {
+                theme::install(&cc.egui_ctx);
+                MassifApp::for_tests(generate(&GenParams {
+                    tiles_x: 2,
+                    tiles_z: 2,
+                    ..GenParams::default()
+                }))
+            });
+        h.run_steps(3);
+        let ctx = h.ctx.clone();
+        h.state_mut().jobs.push(Job::open(&ctx, path));
+        while !h.state().jobs.is_empty() {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.state_mut().dialog = None;
+        h.run_steps(30);
+        type H = egui_kittest::Harness<'static, MassifApp>;
+        // The work of a frame (the interface, what it builds, what it sends
+        // to the graphics card), and the time the card then takes to draw
+        // it, less that of a frame where nothing moved (reading the image
+        // back, which a window does not do).
+        let still = |h: &mut H| {
+            let mut t = Vec::new();
+            for _ in 0..8 {
+                h.step();
+                let started = std::time::Instant::now();
+                let _ = h.render();
+                t.push(started.elapsed().as_secs_f32() * 1000.0);
+            }
+            t.sort_by(f32::total_cmp);
+            t[t.len() / 2]
+        };
+        let run = |h: &mut H, name: &str, frames: usize, change: &dyn Fn(&mut MassifApp)| {
+            let base = still(h);
+            let (mut work, mut draw) = (Vec::new(), Vec::new());
+            for _ in 0..frames {
+                change(h.state_mut());
+                let started = std::time::Instant::now();
+                h.step();
+                work.push(started.elapsed().as_secs_f32() * 1000.0);
+                let started = std::time::Instant::now();
+                let _ = h.render();
+                draw.push((started.elapsed().as_secs_f32() * 1000.0 - base).max(0.0));
+            }
+            let stats = |v: &mut Vec<f32>| {
+                v.sort_by(f32::total_cmp);
+                let mean = v.iter().sum::<f32>() / v.len() as f32;
+                (mean, v[(v.len() * 95 / 100).min(v.len() - 1)], *v.last().unwrap())
+            };
+            let (w, d) = (stats(&mut work), stats(&mut draw));
+            eprintln!(
+                "{name}: work mean {:.1} p95 {:.1} max {:.1} ms · drawing mean {:.1} p95 {:.1} max {:.1} ms (still frame {base:.1} ms)",
+                w.0, w.1, w.2, d.0, d.1, d.2
+            );
+        };
+        let id = h.state().active_map.or_else(|| h.state().maps.keys().next().copied()).expect("a map view");
+        run(&mut h, "map, zooming in", 50, &|app| app.maps.get_mut(&id).unwrap().zoom_by(1.07));
+        run(&mut h, "map, panning", 120, &|app| {
+            let view = app.maps.get_mut(&id).unwrap();
+            view.center[0] += 24.0 / view.zoom as f64;
+            view.center[1] += 10.0 / view.zoom as f64;
+        });
+        run(&mut h, "map, zooming out", 70, &|app| app.maps.get_mut(&id).unwrap().zoom_by(1.0 / 1.07));
+        // The 3D view: everything built, then turning, then moving, drawn
+        // smaller while it moves, as in the app.
+        h.state_mut().layout.active = 3;
+        h.state_mut().view3d.reduce_while_moving = std::env::var_os("MASSIF_FULL_SIZE").is_none();
+        let mut frames = 0;
+        while frames < 3 || h.state().view3d.pending() > 0 {
+            h.step();
+            frames += 1;
+            if frames > 3000 {
+                break;
+            }
+        }
+        run(&mut h, "3D, turning", 90, &|app| app.view3d.camera.yaw += 0.025);
+        run(&mut h, "3D, moving in", 90, &|app| {
+            let c = &mut app.view3d.camera;
+            c.distance *= 0.985;
+            c.target[0] += 6.0;
+        });
+        // Drawn smaller while it moves, sharp once it stops.
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            h.state_mut().view3d.camera.yaw += 0.05;
+            h.step();
+            h.render().unwrap().save(dir.join("view3d-moving.png")).unwrap();
+            h.run_steps(20);
+            h.render().unwrap().save(dir.join("view3d-still.png")).unwrap();
         }
     }
 

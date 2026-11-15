@@ -554,3 +554,28 @@ In the 3D view:
 | Header buttons | Look at the middle of the map view; show the whole map |
 | With Build, Dig, Smooth (3D) | Left sculpts where the cursor points, right inverts; middle drag or Alt + drag turns, Shift + middle drag moves |
 | 3D Sculpt's **Player** | Click the view, then: the mouse looks around, W A S D walk, Space jumps (twice: flies, up), Q sneaks (flying: down), Shift or W twice runs, the buttons sculpt at the crosshair; Esc gives the mouse back |
+
+### Moving smoothly
+
+The map and the 3D view are made to follow the hand:
+
+- A drag of the map let go while moving glides on, slowing down within a
+  quarter of a second (any click stops it); the zoom buttons and keys and
+  **Fit the whole map** glide to where they go in about 150 ms, around the
+  middle of the view, and land exactly there.
+- In 3D, a turn or a move let go while moving goes on for a moment, flying
+  with W A S D starts and stops over a tenth of a second, a double-click and
+  the header's *look at the map view* glide there.
+- While the 3D view moves it is drawn at 60 % of its size on a Retina
+  screen (80 % elsewhere) and stretched, then sharp again 150 ms after it
+  stops: tracing millions of pixels a frame was what made turning heavy.
+- The map's images are made a few tiles at a time, within a budget of each
+  frame — 5 ms while a view moves, 12 ms otherwise, the coarser images
+  standing in meanwhile — and while one view moves, the 3D view puts off
+  building its tiles (a tile can take longer than a frame) until it stops.
+  On a WorldPainter map of 5,888 blocks a side, at 60 frames a second on a
+  Retina screen, zooming the map went from 32 ms of work a frame to 6, and
+  moving it from 12 to 2.
+
+**Settings ▸ Developer** shows frames a second, the time of each frame and
+of its work, live.

@@ -2040,7 +2040,9 @@ impl Renderer3d {
     /// render target. Positions are made relative to `origin` (block
     /// coordinates), the origin of `globals`; `bottom` is the bottom of the
     /// world.
-    pub fn render(&mut self, globals: &Globals, origin: (i32, i32), tiles: &[TilePos], bottom: i32, substrate: Substrate) {
+    /// Draw the frame into the top left `region` of the target (all of it,
+    /// or less while the camera moves).
+    pub fn render(&mut self, globals: &Globals, origin: (i32, i32), tiles: &[TilePos], bottom: i32, substrate: Substrate, region: [u32; 2]) {
         if self.target.is_none() {
             return;
         }
@@ -2124,6 +2126,8 @@ impl Renderer3d {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            let [w, h] = target.size;
+            pass.set_viewport(0.0, 0.0, region[0].clamp(1, w) as f32, region[1].clamp(1, h) as f32, 0.0, 1.0);
             pass.set_bind_group(0, &self.bind_group, &[]);
             // The traced ground first, then the meshed chunks, then the
             // water over everything.
@@ -2546,6 +2550,8 @@ pub struct View3d {
     generation: Option<u64>,
     needs_render: bool,
     last_globals: Option<[f32; 56]>,
+    /// The part of the target the last frame was drawn in.
+    last_region: [u32; 2],
     /// Tiles still to build, and the time the last batch took.
     pending: usize,
     build_ms: f32,
@@ -2561,7 +2567,32 @@ pub struct View3d {
     frame_map: bool,
     /// Walking in the view (3D Sculpt's player mode).
     walk: Option<Walk>,
+    /// The turn (yaw, pitch, radians a second) and the move (blocks a
+    /// second) a drag let go while moving leaves the view, dying away; and
+    /// when the drag last moved.
+    spin: [f32; 2],
+    drift: [f64; 2],
+    dragged_at: f64,
+    /// The speed of flying with the keys, eased toward what they ask.
+    fly: [f64; 3],
+    /// Where the view glides to look (a double-click, the map view's place).
+    look_goal: Option<[f64; 3]>,
+    /// Until when the camera counts as moving, and the camera last drawn.
+    moving_until: f64,
+    last_camera: Option<[f64; 6]>,
+    /// While the camera moves, the image is drawn smaller and stretched:
+    /// sharp again the moment it stops.
+    pub reduce_while_moving: bool,
 }
+
+/// What the drawn image's side is, while the camera moves, of the view's
+/// pixels: on a high-density screen, and on another.
+const MOVING_SCALE_DENSE: f32 = 0.6;
+const MOVING_SCALE: f32 = 0.8;
+/// How long the camera counts as moving after it last moved, in seconds.
+const STILL_AFTER: f64 = 0.15;
+/// How quickly a drag's leftover turn and move die away (seconds for e).
+const COAST: f32 = 0.09;
 
 /// Walking in the view, as in Minecraft.
 struct Walk {
@@ -2622,6 +2653,7 @@ impl Default for View3d {
             generation: None,
             needs_render: true,
             last_globals: None,
+            last_region: [0, 0],
             pending: 0,
             build_ms: 0.0,
             error: None,
@@ -2631,6 +2663,14 @@ impl Default for View3d {
             goto_map: false,
             frame_map: false,
             walk: None,
+            spin: [0.0; 2],
+            drift: [0.0; 2],
+            dragged_at: 0.0,
+            fly: [0.0; 3],
+            look_goal: None,
+            moving_until: 0.0,
+            last_camera: None,
+            reduce_while_moving: !cfg!(test),
         }
     }
 }
@@ -2941,6 +2981,10 @@ impl View3d {
             })
             .collect();
         todo.sort_by(|a, b| a.0.total_cmp(&b.0));
+        if budget.is_zero() {
+            self.pending = todo.len();
+            return self.pending > 0;
+        }
         let started = Instant::now();
         // One tile a thread at a time: a frame goes past its budget by one
         // tile's time at most.
@@ -2996,6 +3040,10 @@ impl View3d {
             .map(|t| (((t.x as f64 + 0.5) * span - tx).hypot((t.z as f64 + 0.5) * span - tz), t))
             .collect();
         todo.sort_by(|a, b| a.0.total_cmp(&b.0));
+        if budget.is_zero() {
+            self.pending = todo.len();
+            return self.pending > 0;
+        }
         let started = Instant::now();
         let batch = rayon::current_num_threads().clamp(2, 16);
         let reg = &doc.world.registry;
@@ -3095,7 +3143,7 @@ impl View3d {
             match &mut self.walk {
                 // The player goes there.
                 Some(walk) => walk.player = crate::player::Player::new([c[0], y, c[1]]),
-                None => self.camera.target = [c[0], y, c[1]],
+                None => self.look_goal = Some([c[0], y, c[1]]),
             }
         }
         let style = Style {
@@ -3142,17 +3190,71 @@ impl View3d {
                 response.dragged_by(PointerButton::Secondary) || response.dragged_by(PointerButton::Middle),
             )
         };
+        let (now, dt) = ui.input(|i| (i.time, i.stable_dt.clamp(1.0 / 240.0, 0.1)));
         if orbit && !walking {
             let d = response.drag_delta();
-            self.camera.yaw -= d.x * 0.008;
-            self.camera.pitch = (self.camera.pitch + d.y * 0.006).clamp(-1.2, 1.55);
+            let turn = [-d.x * 0.008, d.y * 0.006];
+            self.camera.yaw += turn[0];
+            self.camera.pitch = (self.camera.pitch + turn[1]).clamp(-1.2, 1.55);
+            if d != egui::Vec2::ZERO {
+                self.spin = [self.spin[0] * 0.5 + turn[0] / dt * 0.5, self.spin[1] * 0.5 + turn[1] / dt * 0.5];
+                self.dragged_at = now;
+            }
+            self.drift = [0.0; 2];
+            self.look_goal = None;
         }
         if pan && !walking {
             let d = response.drag_delta();
             let k = self.camera.distance as f64 * 0.0018;
             let (s, c) = (self.camera.yaw.sin() as f64, self.camera.yaw.cos() as f64);
-            self.camera.target[0] -= (d.x as f64 * c + d.y as f64 * s) * k;
-            self.camera.target[2] -= (-d.x as f64 * s + d.y as f64 * c) * k;
+            let step = [-(d.x as f64 * c + d.y as f64 * s) * k, -(-d.x as f64 * s + d.y as f64 * c) * k];
+            self.camera.target[0] += step[0];
+            self.camera.target[2] += step[1];
+            if d != egui::Vec2::ZERO {
+                let dt = dt as f64;
+                self.drift = [self.drift[0] * 0.5 + step[0] / dt * 0.5, self.drift[1] * 0.5 + step[1] / dt * 0.5];
+                self.dragged_at = now;
+            }
+            self.spin = [0.0; 2];
+            self.look_goal = None;
+        }
+        // Let go while moving, the view turns or moves on a little, dying
+        // away; a press stops it.
+        if !(orbit || pan) {
+            let pressed = ui.input(|i| i.pointer.any_pressed());
+            if walking || pressed || (response.drag_stopped() && now - self.dragged_at > 0.06) {
+                self.spin = [0.0; 2];
+                self.drift = [0.0; 2];
+            }
+            if self.spin != [0.0; 2] || self.drift != [0.0; 2] {
+                self.camera.yaw += self.spin[0] * dt;
+                self.camera.pitch = (self.camera.pitch + self.spin[1] * dt).clamp(-1.2, 1.55);
+                self.camera.target[0] += self.drift[0] * dt as f64;
+                self.camera.target[2] += self.drift[1] * dt as f64;
+                let k = (-dt / COAST).exp();
+                self.spin = self.spin.map(|v| v * k);
+                self.drift = self.drift.map(|v| v * k as f64);
+                let slow = self.spin[0].abs() + self.spin[1].abs() < 0.02 && self.drift[0].abs() + self.drift[1].abs() < 0.02 * self.camera.distance as f64;
+                if slow {
+                    self.spin = [0.0; 2];
+                    self.drift = [0.0; 2];
+                }
+                ui.ctx().request_repaint();
+            }
+        }
+        // Gliding to look somewhere.
+        if let Some(goal) = self.look_goal {
+            let t = 1.0 - (-dt as f64 * 12.0).exp();
+            for (v, g) in self.camera.target.iter_mut().zip(goal) {
+                *v += (g - *v) * t;
+            }
+            let left = (0..3).map(|k| (goal[k] - self.camera.target[k]).abs()).fold(0.0, f64::max);
+            if left < 0.05 + self.camera.distance as f64 * 0.0005 {
+                self.camera.target = goal;
+                self.look_goal = None;
+            } else {
+                ui.ctx().request_repaint();
+            }
         }
         // The wheel: closer or farther around what the view turns about;
         // with Shift, forward or back over the land; with Alt, toward the
@@ -3271,14 +3373,27 @@ impl View3d {
                 };
                 (i.stable_dt.min(0.1) as f64, keys)
             });
-            if keys != [0.0; 3] {
-                let speed = (self.camera.distance as f64).max(40.0) * if shift { 3.0 } else { 1.0 } * dt;
-                let (s, c) = (self.camera.yaw.sin() as f64, self.camera.yaw.cos() as f64);
-                self.camera.target[0] += (-s * keys[0] + c * keys[1]) * speed;
-                self.camera.target[2] += (-c * keys[0] - s * keys[1]) * speed;
-                self.camera.target[1] += keys[2] * speed * 0.6;
+            // The speed eases toward what the keys ask: starting and
+            // stopping take a tenth of a second.
+            let speed = (self.camera.distance as f64).max(40.0) * if shift { 3.0 } else { 1.0 };
+            let (s, c) = (self.camera.yaw.sin() as f64, self.camera.yaw.cos() as f64);
+            let want = [(-s * keys[0] + c * keys[1]) * speed, keys[2] * speed * 0.6, (-c * keys[0] - s * keys[1]) * speed];
+            let t = 1.0 - (-dt * 14.0).exp();
+            for (v, w) in self.fly.iter_mut().zip(want) {
+                *v += (w - *v) * t;
+            }
+            if keys == [0.0; 3] && self.fly.iter().all(|v| v.abs() < 0.02 * speed) {
+                self.fly = [0.0; 3];
+            }
+            if self.fly != [0.0; 3] {
+                for (v, f) in self.camera.target.iter_mut().zip(self.fly) {
+                    *v += f * dt;
+                }
+                self.look_goal = None;
                 ui.ctx().request_repaint();
             }
+        } else {
+            self.fly = [0.0; 3];
         }
         // Double-click: look at the point under the cursor.
         if !walking
@@ -3287,7 +3402,7 @@ impl View3d {
         {
             let (o, d) = self.ray(rect, p);
             if let Some(hit) = massif_core::voxel::raycast(doc.dimension(), o, d, 100_000.0) {
-                self.camera.target = hit.point;
+                self.look_goal = Some(hit.point);
             }
         }
 
@@ -3314,9 +3429,18 @@ impl View3d {
             self.invalidate_all();
             self.needs_render = true;
         }
-        // Until the map is on screen, build more at once.
+        // Until the map is on screen, build more at once; while a view
+        // moves, nothing (a tile takes longer than a frame should), so
+        // that it keeps up with the hand — the building goes on as soon
+        // as it stops.
         let first = self.tiles.is_empty();
-        let budget = if first { BUILD_BUDGET * 4 } else { BUILD_BUDGET };
+        let budget = if first {
+            BUILD_BUDGET * 4
+        } else if crate::map_render::moved_lately(ui.ctx()) {
+            Duration::ZERO
+        } else {
+            BUILD_BUDGET
+        };
         if self.build_tiles(doc, budget, &mut renderer) {
             ui.ctx().request_repaint();
         }
@@ -3333,6 +3457,21 @@ impl View3d {
             }
             self.needs_render = true;
         }
+        // While the camera moves, a smaller image, stretched; sharp again a
+        // moment after it stops.
+        let cam = &self.camera;
+        let shown = [cam.target[0], cam.target[1], cam.target[2], cam.yaw as f64, cam.pitch as f64, cam.distance as f64];
+        if self.last_camera.is_some_and(|c| c != shown) {
+            self.moving_until = now + STILL_AFTER;
+            crate::map_render::mark_moving(ui.ctx());
+        }
+        self.last_camera = Some(shown);
+        let moving = self.reduce_while_moving && now < self.moving_until;
+        let scale = if !moving { 1.0 } else if ppp >= 1.5 { MOVING_SCALE_DENSE } else { MOVING_SCALE };
+        let region = [((px[0] as f32 * scale).round() as u32).clamp(1, px[0].max(1)), ((px[1] as f32 * scale).round() as u32).clamp(1, px[1].max(1))];
+        if moving {
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((self.moving_until - now).max(0.0) + 0.01));
+        }
         let origin = (self.camera.target[0].floor() as i32, self.camera.target[2].floor() as i32);
         // The eyes under water (walking, or the camera brought down there):
         // the water's own light.
@@ -3346,9 +3485,10 @@ impl View3d {
         } else {
             Sky::of(&pal)
         };
-        let globals = self.camera.globals(origin, rect.width() / rect.height().max(1.0), extent, sky, px[1].max(1));
+        let globals = self.camera.globals(origin, rect.width() / rect.height().max(1.0), extent, sky, region[1].max(1));
         let key: [f32; 56] = bytemuck::cast(globals);
-        if self.needs_render || self.last_globals != Some(key) {
+        if self.needs_render || self.last_globals != Some(key) || self.last_region != region {
+            self.last_region = region;
             let m = Mat4::from_cols_array_2d(&globals.view_proj);
             let dim = doc.dimension();
             let (lo_y, hi_y) = (dim.min_y as f32, dim.max_y as f32);
@@ -3378,14 +3518,15 @@ impl View3d {
                     whole,
                 }
             };
-            renderer.render(&globals, origin, &meshed, dim.min_y, substrate);
+            renderer.render(&globals, origin, &meshed, dim.min_y, substrate, region);
             self.last_globals = Some(key);
             self.needs_render = false;
         }
         let bytes = renderer.bytes();
         self.renderer = Some(renderer);
         if let Some(id) = self.texture {
-            painter.image(id, rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(region[0] as f32 / px[0].max(1) as f32, region[1] as f32 / px[1].max(1) as f32));
+            painter.image(id, rect, uv, Color32::WHITE);
         }
         if let Some(err) = &self.error {
             painter.text(rect.center(), Align2::CENTER_CENTER, err, FontId::proportional(13.0), pal.danger);
@@ -3811,7 +3952,7 @@ mod tests {
             distance: 160.0,
         };
         let globals = above.globals((0, 0), 1.0, 256.0, Sky::flat(sky), 400);
-        renderer.render(&globals, (0, 0), &tiles, w.dims[0].min_y, substrate(&w));
+        renderer.render(&globals, (0, 0), &tiles, w.dims[0].min_y, substrate(&w), [8192, 8192]);
         let (width, height, rgba) = renderer.read_image().unwrap();
         if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR") {
             image::save_buffer(std::path::Path::new(&dir).join("trace-above.png"), &rgba, width, height, image::ColorType::Rgba8).unwrap();
@@ -3836,7 +3977,7 @@ mod tests {
             distance: 90.0,
         };
         let globals = side.globals((0, 0), 1.0, 256.0, Sky::flat(sky), 400);
-        renderer.render(&globals, (0, 0), &tiles, w.dims[0].min_y, substrate(&w));
+        renderer.render(&globals, (0, 0), &tiles, w.dims[0].min_y, substrate(&w), [8192, 8192]);
         let (width, height, rgba) = renderer.read_image().unwrap();
         if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR") {
             image::save_buffer(std::path::Path::new(&dir).join("trace-side.png"), &rgba, width, height, image::ColorType::Rgba8).unwrap();
@@ -3872,7 +4013,7 @@ mod tests {
         };
         let origin = (20, 0);
         let globals = camera.globals(origin, 1.6, 512.0, Sky::flat([255, 0, 255]), 400);
-        renderer.render(&globals, origin, &tiles, w.dims[0].min_y, substrate(&w));
+        renderer.render(&globals, origin, &tiles, w.dims[0].min_y, substrate(&w), [8192, 8192]);
         let (width, height, rgba) = renderer.read_image().unwrap();
         assert_eq!((width, height), (640, 400));
         if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR") {

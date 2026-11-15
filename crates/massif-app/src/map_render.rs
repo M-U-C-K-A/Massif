@@ -673,6 +673,40 @@ impl ChunkKey {
     }
 }
 
+fn moving_id() -> egui::Id {
+    egui::Id::unique("massif a view moves")
+}
+
+/// Say that a view of the map moves (the map view or the 3D view, this
+/// frame): while one does, the views keep the work they do in the frame's
+/// time short, so that it keeps up with the hand.
+pub fn mark_moving(ctx: &egui::Context) {
+    let now = ctx.input(|i| i.time);
+    ctx.data_mut(|d| d.insert_temp(moving_id(), now));
+}
+
+/// Whether a view of the map moved in the last quarter of a second.
+pub fn moved_lately(ctx: &egui::Context) -> bool {
+    let now = ctx.input(|i| i.time);
+    ctx.data(|d| d.get_temp::<f64>(moving_id())).is_some_and(|t| now - t < 0.25)
+}
+
+/// What one batch of [`MapCache::update`] holds at most: chunks to draw,
+/// and tiles to read that are not read yet.
+const BATCH_CHUNKS: usize = 6;
+const BATCH_TILES: usize = 32;
+
+/// Whether a cache of column data holds a tile.
+trait Contains {
+    fn has(&self, t: &TilePos) -> bool;
+}
+
+impl<V> Contains for HashMap<TilePos, V> {
+    fn has(&self, t: &TilePos) -> bool {
+        self.contains_key(t)
+    }
+}
+
 /// Read access to the cached column data while chunks are built.
 struct Sources<'a> {
     grids: &'a HashMap<TilePos, GridEntry>,
@@ -983,44 +1017,45 @@ impl MapCache {
             if started.elapsed() > budget {
                 return true;
             }
-            // Pick a batch whose data stays within the per-batch tile limits.
+            // A batch: the tiles still to read for the next chunks, at most
+            // BATCH_TILES of them, and the chunks whose tiles are then all
+            // read, at most BATCH_CHUNKS — a few milliseconds on every core,
+            // so that the frame keeps to its budget. A chunk that needs more
+            // tiles than a batch holds has them read over several batches,
+            // and is drawn once they all are.
+            self.clock += 1;
+            let clock = self.clock;
+            let (mut fine_reads, mut coarse_reads): (HashSet<TilePos>, HashSet<TilePos>) = (HashSet::new(), HashSet::new());
             let mut batch = Vec::new();
-            let mut tiles = HashSet::new();
-            while cursor < todo.len() && batch.len() < 32 {
+            while cursor < todo.len() && batch.len() < BATCH_CHUNKS {
                 let key = todo[cursor];
+                let fine = key.lod <= GRID_LODS;
                 let mut needed = HashSet::new();
                 key.needed_tiles(&mut needed);
                 needed.retain(|t| ground.contains(*t));
-                let fresh = needed.difference(&tiles).count();
-                if !batch.is_empty() && tiles.len() + fresh > 2048 {
+                let room = BATCH_TILES.saturating_sub(fine_reads.len() + coarse_reads.len());
+                let (cached, reads) = if fine { (&self.grids as &dyn Contains, &mut fine_reads) } else { (&self.summaries as &dyn Contains, &mut coarse_reads) };
+                let fresh: Vec<TilePos> = needed.iter().copied().filter(|t| !cached.has(t) && !reads.contains(t)).collect();
+                if fresh.len() > room {
+                    if batch.is_empty() {
+                        reads.extend(fresh.into_iter().take(room.max(1)));
+                    }
                     break;
                 }
-                tiles.extend(needed);
+                reads.extend(fresh);
+                if fine {
+                    for t in &needed {
+                        if let Some(e) = self.grids.get_mut(t) {
+                            e.used = clock;
+                        }
+                    }
+                }
                 batch.push(key);
                 cursor += 1;
             }
-
-            // Column data first, decoded in parallel.
-            self.clock += 1;
-            let clock = self.clock;
-            let (fine, coarse): (Vec<ChunkKey>, Vec<ChunkKey>) = batch.iter().copied().partition(|k| k.lod <= GRID_LODS);
-            if !fine.is_empty() {
-                let mut need = HashSet::new();
-                for k in &fine {
-                    k.needed_tiles(&mut need);
-                }
-                let missing: Vec<TilePos> = need
-                    .into_iter()
-                    .filter(|t| ground.contains(*t))
-                    .filter(|t| match self.grids.get_mut(t) {
-                        Some(e) => {
-                            e.used = clock;
-                            false
-                        }
-                        None => true,
-                    })
-                    .collect();
-                let built: Vec<(TilePos, Option<Arc<SurfaceGrid>>)> = missing
+            // Column data first, read in parallel.
+            if !fine_reads.is_empty() {
+                let built: Vec<(TilePos, Option<Arc<SurfaceGrid>>)> = fine_reads
                     .par_iter()
                     .map(|&t| (t, SurfaceGrid::build(dim, t).map(Arc::new)))
                     .collect();
@@ -1028,20 +1063,15 @@ impl MapCache {
                     self.grids.insert(t, GridEntry { grid, used: clock });
                 }
             }
-            if !coarse.is_empty() {
-                let mut need = HashSet::new();
-                for k in &coarse {
-                    k.needed_tiles(&mut need);
-                }
-                let missing: Vec<TilePos> = need
-                    .into_iter()
-                    .filter(|t| ground.contains(*t) && !self.summaries.contains_key(t))
-                    .collect();
-                let built: Vec<(TilePos, Option<Arc<Summary>>)> = missing
+            if !coarse_reads.is_empty() {
+                let built: Vec<(TilePos, Option<Arc<Summary>>)> = coarse_reads
                     .par_iter()
                     .map(|&t| (t, Summary::build(dim, t).map(Arc::new)))
                     .collect();
                 self.summaries.extend(built);
+            }
+            if batch.is_empty() {
+                continue;
             }
 
             // Then the images.

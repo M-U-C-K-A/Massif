@@ -30,6 +30,9 @@ The tabs at the top are workspaces: arrangements of areas for a kind of work. Th
 - `+` adds a copy of the workspace shown.
 - Right-click a tab: **Reset** puts it back as it was at first, **Duplicate** copies it, **Delete** removes it.
 
+## Moving around
+The map moves under the hand: let go of a drag while moving and it glides on, slowing down; the zoom buttons, the zoom keys and **Fit the whole map** glide there in a moment. While a view moves, the others put off the work they do in the background, so that it keeps up, and pick it up as soon as it stops. **Settings ▸ Developer** shows the frames a second and the time of each, live.
+
 ## Messages
 What Massif did, and what it does in the background (saving, exporting, automatic tools over the whole map), shows at the bottom right of the window. Long tasks have a **Cancel** button.
 
@@ -96,6 +99,8 @@ Levels lay rock over the ground or dig into it, each in its own layer that can b
 - Scroll comes closer and goes back; `Shift` + scroll moves the view, `Alt` + scroll flies toward the point under the cursor.
 - `W` `A` `S` `D` or the arrows fly over the map, `Q` and `E` go down and up (`Shift`: faster).
 - Double-click looks at the point under the cursor.
+- A turn or a move let go while moving goes on a little and dies away; flying with the keys starts and stops softly; a double-click glides to the point.
+- While the view moves it is drawn at a lower resolution, sharp again the moment it stops.
 
 ## 3D Sculpt
 **Build**, **Dig**, **Smooth** and **Paint** work on the blocks in 3D, with the brush of every tool: its shape, size, intensity and rotation are set in **Brush Settings**, shown beside the 3D Sculpt view (`⌘` + scroll changes its size there too). Left button sculpts where the cursor points, right button inverts; held down, it keeps adding or digging. In 3D a brush sculpts 64 blocks around at most (a larger one works as 64). Matter pushed out keeps the blocks it came from (a sand wall gives a sand ledge), and the ground under it keeps its own; **Paint** repaints sculpted matter too. Converting a terrain graph into the ground later drops what was sculpted on the tiles it rewrites (one step to undo).

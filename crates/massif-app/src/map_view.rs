@@ -175,7 +175,31 @@ pub struct MapView {
     spring_rest: Option<((i32, i32, u64), f64)>,
     auto_preview: Option<AutoPreview>,
     auto_classes: Option<AutoClasses>,
+    /// Where the view is gliding to: a zoom (around a point of the screen)
+    /// or a framing, reached over a few frames.
+    goal: Option<Goal>,
+    /// The speed of the last pan, in points a second, and when the pointer
+    /// last moved it: let go while moving, the map glides on.
+    velocity: Vec2,
+    moved_at: f64,
+    gliding: bool,
+    /// The view of the last frame, to tell when it moves.
+    last_view: ([f64; 2], f32),
 }
+
+/// What the view glides to.
+#[derive(Debug, Clone, Copy)]
+struct Goal {
+    zoom: f32,
+    /// The centre to reach, or the point of the screen that stays put.
+    center: Option<[f64; 2]>,
+    anchor: Pos2,
+}
+
+/// How quickly the view reaches its goal (per second): 90 % in about 150 ms.
+const GLIDE_RATE: f32 = 15.0;
+/// How long a fling lasts: its speed falls by e every this many seconds.
+const FLING_DECAY: f32 = 0.25;
 
 impl Default for MapView {
     fn default() -> Self {
@@ -198,6 +222,11 @@ impl Default for MapView {
             spring_rest: None,
             auto_preview: None,
             auto_classes: None,
+            goal: None,
+            velocity: Vec2::ZERO,
+            moved_at: 0.0,
+            gliding: false,
+            last_view: ([0.0, 0.0], 1.0),
         }
     }
 }
@@ -558,7 +587,8 @@ impl MapView {
         self.center[1] = before.1 - ((p.y - c.y) / self.zoom) as f64;
     }
 
-    /// Zoom around the centre of the view (keyboard zooming).
+    /// Zoom around the centre of the view, at once.
+    #[cfg(test)]
     pub fn zoom_by(&mut self, factor: f32) {
         let canvas = self.canvas;
         if canvas.is_positive() {
@@ -568,9 +598,67 @@ impl MapView {
         }
     }
 
+    /// Glide to `factor` times the zoom (on top of a glide under way),
+    /// around the centre of the view: the zoom buttons and keys.
+    pub fn zoom_smoothly(&mut self, factor: f32) {
+        let from = self.goal.filter(|g| g.center.is_none()).map_or(self.zoom, |g| g.zoom);
+        self.goal = Some(Goal {
+            zoom: (from * factor).clamp(MIN_ZOOM, MAX_ZOOM),
+            center: None,
+            anchor: self.canvas.center(),
+        });
+        self.gliding = false;
+    }
+
     /// One block per point.
     pub fn zoom_reset(&mut self) {
-        self.zoom = 1.0;
+        self.goal = Some(Goal {
+            zoom: 1.0,
+            center: None,
+            anchor: self.canvas.center(),
+        });
+    }
+
+    /// Glide to the whole map.
+    fn fit_smoothly(&mut self, doc: &Document) {
+        let (center, zoom) = (self.center, self.zoom);
+        self.fit(doc, self.canvas);
+        self.goal = Some(Goal {
+            zoom: self.zoom,
+            center: Some(self.center),
+            anchor: self.canvas.center(),
+        });
+        (self.center, self.zoom) = (center, zoom);
+    }
+
+    /// A step toward the goal, `dt` seconds on. Whether it goes on.
+    fn glide(&mut self, canvas: Rect, dt: f32) -> bool {
+        let Some(mut goal) = self.goal else { return false };
+        // Asked before the view was ever drawn: around its middle.
+        if !goal.anchor.is_finite() {
+            goal.anchor = canvas.center();
+        }
+        let t = 1.0 - (-dt * GLIDE_RATE).exp();
+        let factor = (goal.zoom / self.zoom).powf(t);
+        match goal.center {
+            Some(c) => {
+                self.zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
+                for (v, g) in self.center.iter_mut().zip(c) {
+                    *v += (g - *v) * t as f64;
+                }
+            }
+            None => self.zoom_at(canvas, goal.anchor, factor),
+        }
+        let near = (goal.zoom / self.zoom).ln().abs() < 0.002
+            && goal.center.is_none_or(|c| ((c[0] - self.center[0]).hypot(c[1] - self.center[1]) * self.zoom as f64) < 0.3);
+        if near {
+            match goal.center {
+                Some(c) => (self.center, self.zoom) = (c, goal.zoom),
+                None => self.zoom_at(canvas, goal.anchor, goal.zoom / self.zoom),
+            }
+            self.goal = None;
+        }
+        !near
     }
 
     /// Frame the whole map.
@@ -628,12 +716,40 @@ impl MapView {
         self.last_time = time;
         self.canvas = canvas;
         let panning = tools.tool == Tool::Pan || pan_key;
-        if response.dragged_by(PointerButton::Middle)
-            || (panning && response.dragged_by(PointerButton::Primary) && self.stroke.is_none())
-        {
+        let pan_drag = response.dragged_by(PointerButton::Middle) || (panning && response.dragged_by(PointerButton::Primary) && self.stroke.is_none());
+        if pan_drag {
             let d = response.drag_delta();
             self.center[0] -= (d.x / self.zoom) as f64;
             self.center[1] -= (d.y / self.zoom) as f64;
+            // The speed of the hand, smoothed over the last frames.
+            if d != Vec2::ZERO && dt > 0.0 {
+                self.velocity = self.velocity * 0.5 + (d / dt.max(1.0 / 240.0)) * 0.5;
+                self.moved_at = time;
+            }
+            self.goal = None;
+            self.gliding = false;
+        } else if response.drag_stopped() && self.velocity.length() > 150.0 && time - self.moved_at < 0.06 {
+            // Let go while moving: the map goes on, slowing down.
+            self.gliding = true;
+            self.velocity *= (5000.0 / self.velocity.length()).min(1.0);
+        } else if !response.dragged() {
+            self.velocity = Vec2::ZERO;
+        }
+        if pressed.iter().any(|p| *p) || ui.input(|i| i.pointer.button_pressed(PointerButton::Middle)) {
+            self.gliding = false;
+        }
+        if self.gliding {
+            self.center[0] -= (self.velocity.x * dt / self.zoom) as f64;
+            self.center[1] -= (self.velocity.y * dt / self.zoom) as f64;
+            self.velocity *= (-dt / FLING_DECAY).exp();
+            if self.velocity.length() < 20.0 {
+                self.gliding = false;
+                self.velocity = Vec2::ZERO;
+            }
+            ui.ctx().request_repaint();
+        }
+        if self.glide(canvas, dt) {
+            ui.ctx().request_repaint();
         }
         if response.hovered()
             && let Some(p) = response.hover_pos()
@@ -668,11 +784,13 @@ impl MapView {
                 self.turn = 0.0;
                 let (zoom_delta, scroll) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta));
                 if zoom_delta != 1.0 {
+                    self.goal = None;
                     self.zoom_at(canvas, p, zoom_delta);
                 } else if scroll != Vec2::ZERO {
                     // Shift turns vertical scrolling into horizontal on some systems.
                     let amount = if scroll.y != 0.0 { scroll.y } else { scroll.x };
                     if modifiers.ctrl || modifiers.alt || modifiers.command {
+                        self.goal = None;
                         self.zoom_at(canvas, p, (amount * 0.004).exp());
                     } else if tools.tool.uses_brush() {
                         self.wheel += amount;
@@ -896,15 +1014,15 @@ impl MapView {
                 d(a).total_cmp(&d(b))
             });
             if keys.len() <= 4096 {
-                let more = cache.update(
-                    ui.ctx(),
-                    dim,
-                    &doc.world.registry,
-                    doc.world.meta.sea_level as f32,
-                    style,
-                    &keys,
-                    Duration::from_millis(12),
-                );
+                // While the view moves, less of each frame goes to drawing
+                // more of the map (the coarser images stand in): it keeps
+                // up with the hand.
+                if self.last_view != (self.center, self.zoom) || response.dragged() {
+                    crate::map_render::mark_moving(ui.ctx());
+                }
+                self.last_view = (self.center, self.zoom);
+                let budget = Duration::from_millis(if crate::map_render::moved_lately(ui.ctx()) { 5 } else { 12 });
+                let more = cache.update(ui.ctx(), dim, &doc.world.registry, doc.world.meta.sea_level as f32, style, &keys, budget);
                 if more {
                     ui.ctx().request_repaint();
                 }
@@ -1225,23 +1343,22 @@ impl MapView {
         child.label(egui::RichText::new(location).size(11.5).color(pal.weak));
         child.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.small_button(theme::glyph(Icon::Maximize2).to_string()).on_hover_text("Fit the whole map").clicked() {
-                self.fitted = None;
+                self.fit_smoothly(doc);
             }
-            let canvas = Rect::from_min_max(rect.min - vec2(0.0, 600.0), rect.max);
             if ui.small_button("+").clicked() {
-                let c = canvas.center();
-                self.zoom_at(canvas, c, 2.0);
+                self.zoom_smoothly(2.0);
             }
             ui.label(egui::RichText::new(format!("{:.0}%", self.zoom * 100.0)).size(11.5));
             if ui.small_button("−").clicked() {
-                let c = canvas.center();
-                self.zoom_at(canvas, c, 0.5);
+                self.zoom_smoothly(0.5);
             }
             let mut log = self.zoom.log2();
             ui.spacing_mut().interact_size.y = 16.0;
             let slider = egui::Slider::new(&mut log, MIN_ZOOM.log2()..=MAX_ZOOM.log2()).show_value(false);
             if ui.add_sized([90.0, 16.0], slider).changed() {
-                self.zoom = log.exp2();
+                self.goal = None;
+                let canvas = self.canvas;
+                self.zoom_at(canvas, canvas.center(), log.exp2() / self.zoom);
             }
         });
     }
