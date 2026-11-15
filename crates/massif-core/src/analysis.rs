@@ -1196,23 +1196,21 @@ impl<'a> Ctx<'a> {
         // The ores, as the export lays them in the rock: each takes the
         // place of the block counted there.
         if let Some(placer) = &self.ores {
-            let (cx0, cz0) = (ox >> 4, oz >> 4);
-            for cz in cz0..cz0 + (TILE_SIZE >> 4) {
-                for cx in cx0..cx0 + (TILE_SIZE >> 4) {
-                    placer.chunk_over(
-                        cx,
-                        cz,
-                        |x, y, z| {
-                            let (start, len) = cells[crate::coords::local_index(x, z)];
-                            let column = &runs[start as usize..start as usize + len as usize];
-                            crate::ores::rock_at(column, &self.mat, &self.hosts, x, y, z, self.max_y)
-                        },
-                        |b, (rock, host)| {
-                            t.blocks[rock.index()] -= 1;
-                            t.laid[self.ore_names[b.ore as usize][(host == crate::ores::Host::Deepslate) as usize]] += 1;
-                        },
-                    );
-                }
+            let n = TILE_SIZE >> 4;
+            let highest = tops.iter().copied().max().unwrap_or(self.min_y);
+            for chunk in placer.chunks(ox >> 4, oz >> 4, n, n, (self.min_y, highest)) {
+                crate::ores::place_over(
+                    &chunk,
+                    |x, y, z| {
+                        let (start, len) = cells[crate::coords::local_index(x, z)];
+                        let column = &runs[start as usize..start as usize + len as usize];
+                        crate::ores::rock_at(column, &self.mat, &self.hosts, x, y, z, self.max_y)
+                    },
+                    |b, (rock, host)| {
+                        t.blocks[rock.index()] -= 1;
+                        t.laid[self.ore_names[b.ore as usize][(host == crate::ores::Host::Deepslate) as usize]] += 1;
+                    },
+                );
             }
         }
 

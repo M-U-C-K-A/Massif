@@ -455,6 +455,9 @@ pub struct Scratch {
     spans: Vec<Span>,
     fluids: Vec<(i32, i32)>,
     biome_columns: Vec<BiomeColumn>,
+    /// The ore blocks of each chunk of the tile being exported (see
+    /// [`Scratch::lay_ores`]), row by row.
+    ores: Vec<Vec<massif_core::ores::OreBlock>>,
 }
 
 impl Scratch {
@@ -468,7 +471,22 @@ impl Scratch {
             spans: Vec::with_capacity(8),
             fluids: Vec::with_capacity(4),
             biome_columns: vec![BiomeColumn::default(); 16],
+            ores: Vec::new(),
         }
+    }
+
+    /// Draw the veins of the chunks of tile `tile`, whose levels are
+    /// `stack` (each vein once, however many of its chunks it reaches; none
+    /// up in the sky), before its chunks are built.
+    pub fn lay_ores(&mut self, ctx: &ExportContext, stack: &TileStack, tile: TilePos) {
+        self.ores = match &ctx.ores {
+            Some(placer) => {
+                let n = massif_core::TILE_SIZE / 16;
+                let heights = massif_core::ores::stack_heights(stack, ctx.min_y, ctx.max_y);
+                placer.chunks(tile.x * n, tile.z * n, n, n, heights)
+            }
+            None => Vec::new(),
+        };
     }
 }
 
@@ -574,6 +592,7 @@ pub fn build_chunk(
         spans,
         fluids,
         biome_columns,
+        ores,
     } = scratch;
 
     // ---- blocks ------------------------------------------------------------
@@ -630,23 +649,23 @@ pub fn build_chunk(
     // ---- ores --------------------------------------------------------------
     // In the rock, where solid ground lies right above; the first vein to
     // reach a block keeps it (the next finds ore there, not rock).
-    if let Some(placer) = &ctx.ores {
-        placer.chunk(bx0 >> 4, bz0 >> 4, |b| {
+    if let Some(chunk) = ores.get(cz * 8 + cx) {
+        for b in chunk {
             if b.y < min_y || b.y + 1 >= max_y {
-                return;
+                continue;
             }
             let i = (((b.y - min_y) as usize) << 8) | ((((b.z - bz0) << 4) | (b.x - bx0)) as usize);
             let above = blocks[i + 256];
             let solid = above != 0 && above != ctx.water && (above < ctx.first_extra || above >= ctx.first_ore);
             let host = ctx.hosts.get(blocks[i] as usize).copied().unwrap_or(0);
             if !solid || host == 0 {
-                return;
+                continue;
             }
             let state = ctx.ore_states[b.ore as usize][host as usize - 1];
             if state != SKIP {
                 blocks[i] = state;
             }
-        });
+        }
     }
 
     // ---- objects -----------------------------------------------------------

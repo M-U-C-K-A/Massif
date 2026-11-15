@@ -234,3 +234,25 @@ fn graph_templates() {
         }
     }
 }
+
+/// The veins of a tile's chunks, as the export draws them: how long a tile
+/// takes, how many blocks it gets.
+#[test]
+#[ignore]
+fn ores_of_a_tile() {
+    use massif_core::ores::{OreSettings, Placer};
+    let placer = Placer::new(&OreSettings::default(), 5).unwrap();
+    let tiles = 400;
+    let mut blocks = 0;
+    let started = Instant::now();
+    for k in 0..tiles {
+        blocks += placer.chunks(k * 8, 0, 8, 8, (i32::MIN, i32::MAX)).iter().map(Vec::len).sum::<usize>();
+    }
+    eprintln!("ores: {:.3} ms a tile, {} blocks a tile", started.elapsed().as_secs_f64() * 1000.0 / tiles as f64, blocks / tiles as usize);
+    // A tile of land up to y 100, as most of a map is.
+    let (mut blocks, started) = (0, Instant::now());
+    for k in 0..tiles {
+        blocks += placer.chunks(k * 8, 0, 8, 8, (-64, 100)).iter().map(Vec::len).sum::<usize>();
+    }
+    eprintln!("ores under y 100: {:.3} ms a tile, {} blocks a tile", started.elapsed().as_secs_f64() * 1000.0 / tiles as f64, blocks / tiles as usize);
+}

@@ -1003,10 +1003,11 @@ fn ores_image(world: &World, dim: usize, settings: &OreSettings, cut: &Cut) -> C
     let hosts = massif_core::ores::hosts(reg);
     if let Some(placer) = Placer::new(settings, world.meta.seed) {
         let colors: Vec<Color32> = settings.ores.iter().map(|o| theme::rgb(o.mineral.color())).collect();
-        for cx in x0.div_euclid(16)..=(x0 + across as i32 - 1).div_euclid(16) {
-            placer.chunk_over(
-                cx,
-                z.div_euclid(16),
+        let first = x0.div_euclid(16);
+        let count = (x0 + across as i32 - 1).div_euclid(16) - first + 1;
+        for chunk in placer.chunks(first, z.div_euclid(16), count, 1, (y0, y1)) {
+            massif_core::ores::place_over(
+                &chunk,
                 |bx, by, bz| {
                     if bz != z || bx < x0 || bx >= x0 + across as i32 || by < y0 || by >= y1 {
                         return None;

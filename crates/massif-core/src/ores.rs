@@ -345,11 +345,27 @@ impl Placer {
     /// rock is asked, in a fixed order: the veins started in it and in the
     /// eight around it that reach into it, chunk by chunk, band by band.
     pub fn chunk(&self, cx: i32, cz: i32, mut put: impl FnMut(OreBlock)) {
-        let (x0, z0) = (cx * 16, cz * 16);
-        let mut vein: Vec<[i8; 3]> = Vec::with_capacity(MAX_SIZE as usize);
-        for dz in -1..=1 {
-            for dx in -1..=1 {
-                let (sx, sz) = (cx + dx, cz + dz);
+        for b in self.chunks(cx, cz, 1, 1, (i32::MIN, i32::MAX)).swap_remove(0) {
+            put(b);
+        }
+    }
+
+    /// [`Placer::chunk`] for each chunk of the `nx` × `nz` chunks whose first
+    /// is `(cx0, cz0)`, row by row — each vein drawn and grown once, however
+    /// many of the chunks it reaches: the export and the survival check ask
+    /// a tile's chunks at once. Veins that cannot reach a height from
+    /// `heights.0` to `heights.1` are not grown: where nothing solid lies
+    /// outside those heights, the ores laid are the same.
+    pub fn chunks(&self, cx0: i32, cz0: i32, nx: i32, nz: i32, heights: (i32, i32)) -> Vec<Vec<OreBlock>> {
+        let (nx, nz) = (nx.max(1), nz.max(1));
+        let mut out = vec![Vec::new(); (nx * nz) as usize];
+        let (x0, z0, x1, z1) = (cx0 * 16, cz0 * 16, (cx0 + nx) * 16, (cz0 + nz) * 16);
+        let mut vein = Vein::default();
+        // The chunks the veins start in, row by row: for each chunk asked,
+        // its own and its eight neighbours come in the order a chunk asked
+        // alone sees them.
+        for sz in cz0 - 1..cz0 + nz + 1 {
+            for sx in cx0 - 1..cx0 + nx + 1 {
                 let key = ((sx as u32 as u64) << 32) | sz as u32 as u64;
                 for (b, band) in self.bands.iter().enumerate() {
                     let mut rng = Rng(mix(self.seed ^ mix(key ^ (b as u64).wrapping_mul(0x2545_f491_4f6c_dd1d))));
@@ -362,58 +378,119 @@ impl Placer {
                         let y = band.height(rng.next());
                         let own = rng.next();
                         let r = band.reach;
-                        // Too far to reach this chunk: not grown at all.
-                        if x + r < x0 || x - r >= x0 + 16 || z + r < z0 || z - r >= z0 + 16 {
+                        // Too far to reach the chunks asked, or their solid
+                        // ground (up in the sky, under the world): not grown.
+                        if x + r < x0 || x - r >= x1 || z + r < z0 || z - r >= z1 || y + r < heights.0 || y - r > heights.1 {
                             continue;
                         }
-                        grow(&mut vein, band.size, own, r);
-                        for o in &vein {
+                        vein.grow(band.size, own, r);
+                        for o in &vein.blocks {
                             let (bx, by, bz) = (x + o[0] as i32, y + o[1] as i32, z + o[2] as i32);
-                            if (x0..x0 + 16).contains(&bx) && (z0..z0 + 16).contains(&bz) {
-                                put(OreBlock { x: bx, y: by, z: bz, ore: band.ore });
+                            if (x0..x1).contains(&bx) && (z0..z1).contains(&bz) {
+                                let k = (((bz - z0) >> 4) * nx + ((bx - x0) >> 4)) as usize;
+                                out[k].push(OreBlock { x: bx, y: by, z: bz, ore: band.ore });
                             }
                         }
                     }
                 }
             }
         }
+        out
     }
 
     /// [`Placer::chunk`] over rock that does not change as veins are laid:
     /// `rock` says what each block offers an ore (`None` where it takes
     /// nothing, or the block is in the open; see [`rock_at`]), and the first
     /// vein to reach a block keeps it — as the export lays them.
-    pub fn chunk_over<R>(&self, cx: i32, cz: i32, mut rock: impl FnMut(i32, i32, i32) -> Option<R>, mut put: impl FnMut(OreBlock, R)) {
-        let mut taken: HashSet<(i32, i32, i32)> = HashSet::new();
-        self.chunk(cx, cz, |b| {
-            if let Some(r) = rock(b.x, b.y, b.z)
-                && taken.insert((b.x, b.y, b.z))
-            {
-                put(b, r);
-            }
-        });
+    pub fn chunk_over<R>(&self, cx: i32, cz: i32, rock: impl FnMut(i32, i32, i32) -> Option<R>, put: impl FnMut(OreBlock, R)) {
+        place_over(&self.chunks(cx, cz, 1, 1, (i32::MIN, i32::MAX))[0], rock, put);
     }
 }
 
-/// Grow a vein of `size` blocks from where it starts: a block at a time
-/// beside one it already has, within `reach` of the start.
-fn grow(out: &mut Vec<[i8; 3]>, size: u16, seed: u64, reach: i32) {
-    out.clear();
-    out.push([0, 0, 0]);
-    let mut rng = Rng(seed);
-    let want = size.clamp(1, MAX_SIZE) as usize;
-    let mut tries = 0;
-    while out.len() < want && tries < want * 6 {
-        tries += 1;
-        let r = rng.next();
-        let from = out[(r % out.len() as u64) as usize];
-        let d = DIRECTIONS[((r >> 40) % 6) as usize];
-        let next = [from[0] + d[0], from[1] + d[1], from[2] + d[2]];
-        if next.iter().any(|&c| (c as i32).abs() > reach) || out.contains(&next) {
-            continue;
+/// Lay the blocks of a chunk's veins (see [`Placer::chunks`]) over rock
+/// that does not change as they are laid: `rock` says what each block
+/// offers an ore, and the first vein to reach a block keeps it.
+pub fn place_over<R>(blocks: &[OreBlock], mut rock: impl FnMut(i32, i32, i32) -> Option<R>, mut put: impl FnMut(OreBlock, R)) {
+    let mut taken: HashSet<(i32, i32, i32)> = HashSet::with_capacity(blocks.len());
+    for &b in blocks {
+        if let Some(r) = rock(b.x, b.y, b.z)
+            && taken.insert((b.x, b.y, b.z))
+        {
+            put(b, r);
         }
-        out.push(next);
     }
+}
+
+/// A vein as it grows: its blocks from where it starts, and which of the
+/// box around the start it has.
+struct Vein {
+    blocks: Vec<[i8; 3]>,
+    has: [u64; 35],
+}
+
+impl Default for Vein {
+    fn default() -> Self {
+        Self { blocks: Vec::with_capacity(MAX_SIZE as usize), has: [0; 35] }
+    }
+}
+
+/// The side of the box a vein grows in, its reach at most 6 either way.
+const BOX: i32 = 13;
+
+impl Vein {
+    #[inline]
+    fn bit(o: [i8; 3]) -> usize {
+        ((o[0] as i32 + 6) + (o[1] as i32 + 6) * BOX + (o[2] as i32 + 6) * BOX * BOX) as usize
+    }
+
+    /// Grow `size` blocks from where it starts: a block at a time beside one
+    /// it already has, within `reach` of the start.
+    fn grow(&mut self, size: u16, seed: u64, reach: i32) {
+        for &o in &self.blocks {
+            let k = Self::bit(o);
+            self.has[k >> 6] &= !(1 << (k & 63));
+        }
+        self.blocks.clear();
+        self.blocks.push([0, 0, 0]);
+        let k = Self::bit([0, 0, 0]);
+        self.has[k >> 6] |= 1 << (k & 63);
+        let mut rng = Rng(seed);
+        let want = size.clamp(1, MAX_SIZE) as usize;
+        let mut tries = 0;
+        while self.blocks.len() < want && tries < want * 6 {
+            tries += 1;
+            let r = rng.next();
+            let from = self.blocks[(r % self.blocks.len() as u64) as usize];
+            let d = DIRECTIONS[((r >> 40) % 6) as usize];
+            let next = [from[0] + d[0], from[1] + d[1], from[2] + d[2]];
+            if next.iter().any(|&c| (c as i32).abs() > reach) {
+                continue;
+            }
+            let k = Self::bit(next);
+            if self.has[k >> 6] & (1 << (k & 63)) != 0 {
+                continue;
+            }
+            self.has[k >> 6] |= 1 << (k & 63);
+            self.blocks.push(next);
+        }
+    }
+}
+
+/// The lowest and highest heights the solid ground of a tile's stack may
+/// hold, for [`Placer::chunks`]: from the floor of the world up to the
+/// highest top of its levels (to the top of the world where it was sculpted).
+pub fn stack_heights(stack: &crate::compose::TileStack, min_y: i32, max_y: i32) -> (i32, i32) {
+    if stack.is_sculpted() {
+        return (min_y, max_y);
+    }
+    let mut top = f32::MIN;
+    for (_, _, tile) in stack.layers() {
+        top = top.max(match tile.top.uniform_value() {
+            Some(v) => v,
+            None => tile.top.dense().iter().copied().fold(f32::MIN, f32::max),
+        });
+    }
+    (min_y, (crate::compose::block_top(top) + 1).clamp(min_y, max_y))
 }
 
 /// What the blocks of a registry are to an ore, by id.
@@ -586,6 +663,28 @@ mod tests {
         assert!(across > 20, "{across} blocks meet across the edge");
         // Veins grow around their start: never farther than their reach.
         assert!(got.iter().all(|b| (b.1 - 40).abs() <= reach(30)));
+    }
+
+    /// A tile's chunks at once are the chunks one by one, block for block
+    /// and in the same order.
+    #[test]
+    fn chunks_at_once_are_chunks_one_by_one() {
+        let placer = Placer::new(&OreSettings::default(), 99).unwrap();
+        let all = placer.chunks(-2, 5, 3, 2, (i32::MIN, i32::MAX));
+        for (k, got) in all.iter().enumerate() {
+            let (cx, cz) = (-2 + (k % 3) as i32, 5 + (k / 3) as i32);
+            let mut alone = Vec::new();
+            placer.chunk(cx, cz, |b| alone.push(b));
+            assert_eq!(got, &alone, "chunk {cx} {cz}");
+            assert!(!alone.is_empty());
+        }
+        // Bounded to some heights: the blocks there are the same, in order.
+        let low = placer.chunks(-2, 5, 3, 2, (-64, 40));
+        for (got, all) in low.iter().zip(&all) {
+            let within = |b: &&OreBlock| (-64..=40).contains(&b.y);
+            assert_eq!(got.iter().filter(within).collect::<Vec<_>>(), all.iter().filter(within).collect::<Vec<_>>());
+            assert!(got.len() < all.len(), "fewer veins grown");
+        }
     }
 
     /// Heights are drawn as the band says: none outside it, the most over

@@ -219,6 +219,7 @@ pub fn export(
                             }
                             objects.sort_unstable_by_key(|p| (p.layer, p.x, p.z));
                         }
+                        scratch.lay_ores(&ctx, &stack, pos);
                         let mut out = Vec::with_capacity(CHUNKS_PER_TILE * CHUNKS_PER_TILE);
                         for cz in 0..CHUNKS_PER_TILE {
                             for cx in 0..CHUNKS_PER_TILE {
