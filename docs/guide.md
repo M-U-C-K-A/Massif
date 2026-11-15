@@ -10,7 +10,7 @@ The editor, part by part: the home screen, the window, brushes and their options
 - [New worlds and export](#new-worlds-and-export)
 - [Brushes](#brushes)
 - [Automatic biomes and paint](#automatic-biomes-and-paint)
-- [Patterns of terrains](#patterns-of-terrains)
+- [Noise painting](#noise-painting)
 - [Ground covers](#ground-covers)
 - [Custom objects](#custom-objects)
 - [Rivers](#rivers)
@@ -33,10 +33,12 @@ map (Esc).
 
 Behind it is one of the pictures of
 [`crates/massif-app/assets/backdrops`](../crates/massif-app/assets/backdrops) —
-a massif at dusk drawn by Massif, templates of the terrain graph rendered by its
-viewport —, taken at random each time Massif opens, reduced to sixteen colours
-of its own with an ordered dither in square cells that moves on about once a
-second. Every `.jpg` or `.png` dropped in that folder is built in.
+five scenes at night: a canyon, the Alps, volcanic islands, stone pillars in
+the mist, dunes —, a new one each time Massif opens (those not shown yet
+first; the button at the bottom right shows another), reduced to sixteen
+colours of its own with an ordered dither in square cells that moves on about
+once a second. Every `.jpg` or `.png` dropped in that folder is built in, but
+the layers of a scene (`_ciel`, `_relief`).
 
 ## The window
 
@@ -218,17 +220,37 @@ kind of land, the three terrains of each biome. They are kept with the
 settings. Forests are told from the ground for now (podzol, coarse dirt);
 trees will count when layers exist.
 
-## Patterns of terrains
+## Noise painting
 
-Paint terrain can lay several terrains at once (Tool Settings ▸ a pattern
-of terrains): grass with patches of coarse dirt and podzol, stone veined
-with gravel, a patchwork of fields. The pattern is a noise — **patches**,
-**veins**, **blobs**, **cells** or wavering **stripes** at an angle — of the
-size you choose, with soft or sharp edges and a seed; every terrain gets
-the share of the ground its weight says, whatever the pattern (the pattern
-learns its own spread and paints by rank). A picture shows it before the
-first stroke, and the brush, its intensity and its options apply as with
-any paint.
+Paint terrain can lay several terrains or blocks at once, mixed by a noise
+(Tool Settings ▸ **Noise**), as the noise painters of Axiom and other
+editors do: grass with patches of coarse dirt and podzol, stone veined with
+gravel, rooted dirt in andesite, a patchwork of fields. The noise has a
+**shape** — **patches**, **veins**, **blobs**, **cells** or wavering
+**stripes** —, a kind (**simplex**, **Perlin** or **value** noise), a
+**size**, **octaves**, **lacunarity** and **gain** for its detail, a
+**stretch** and a **direction** to draw it out into streaks or bands, soft or
+sharp edges and a seed.
+
+The blocks are a list, in order — neighbours in the list meet on the ground,
+as in a gradient —, each with its **share of the ground**: the shares always
+make 100 %, and every block covers its share whatever the noise (the pattern
+learns its own spread and paints by rank). Drag a block's icon to move it in
+the list; click its name to put another block in its place; **Add a block**
+offers the map's terrains and every whole block of the installed game (a
+block becomes a terrain the first time). Pictures show the ground it paints,
+its noise, and how the noise's values spread between the blocks; hovered over
+the map, the brush shows what it would paint before the first stroke.
+Presets (Meadow, Forest floor, Rocky ground, Gravel paths, Snowy rocks,
+Dunes, Fields) are a start, and any pattern can be saved under a name.
+
+It paints with the brush of every tool — its shape, size (up to a radius of
+4,096 blocks: type it in Brush Settings, or scroll), intensity and options —,
+and **Paint the whole map** lays it over every column of the active level in
+the background, where the brush options let it (only on grass, a height
+band, a slope…), as one step to undo. The pattern is laid in world
+coordinates: strokes side by side join without a seam, and painting a place
+again gives the same blocks.
 
 ## Ground covers
 
@@ -376,7 +398,7 @@ Sculpting in 3D has its own editor, **3D Sculpt** (its workspace sits next
 to 3D; the 3D View's **Sculpt** button opens it): a 3D view with its tools
 along the top — **Sculpt** (the left button adds matter, the right one
 digs), **Smooth** and **Paint** (the terrain chosen in Terrain or Blocks, or
-a pattern; the right button puts back what the height calls for) — with the
+a noise of several; the right button puts back what the height calls for) — with the
 brush of every tool: its shape (custom images too, turned as they are),
 size, intensity and rotation are those of **Brush Settings**, which the
 3D Sculpt workspace shows beside its view.
@@ -391,7 +413,9 @@ size, intensity and rotation are those of **Brush Settings**, which the
 - Shift + drag moves the view, Alt + drag (or the middle button) turns it.
   The wheel brings the view closer around what it turns about; Shift +
   wheel moves forward over the land; Alt + wheel flies toward the point
-  under the cursor; ⌘ (Ctrl) + wheel sizes the brush.
+  under the cursor; ⌘ (Ctrl) + wheel sizes the brush. In 3D a brush
+  sculpts 64 blocks around at most: the work of a dab grows with the cube
+  of its size (a larger brush works as 64, and the toolbar says so).
 - **Player** walks in the view as in Minecraft, to see and sculpt the land
   at a player's height: it comes down where the middle of the view looks,
   with Minecraft's body (0.6 × 1.8 blocks, its eyes at 1.62) and field of
@@ -399,7 +423,9 @@ size, intensity and rotation are those of **Brush Settings**, which the
   gives it back); W A S D walk, Shift (or W twice) runs, Space jumps — held,
   again on landing —, twice quickly flies (Space up, Q down; twice again, or
   flying down to the ground, lands), Q sneaks, and a crouched player does
-  not step off an edge. Water slows and lets swim, matter sculpted over the
+  not step off an edge; walking into a step of one block jumps onto it
+  (Minecraft's Auto-Jump). Water slows and lets swim, and under it the
+  world turns blue and dim, as in the game; matter sculpted over the
   player lifts them, and a fall off the map puts them back where they last
   stood. The buttons sculpt at the crosshair; the click that takes the
   mouse sculpts nothing. Player off, the orbit camera comes back from the
@@ -412,6 +438,10 @@ that smoothed slope and the face pointed at disagree — at the foot of a
 cliff, on an edge, in a hollow — the face wins, so that the brush always
 works toward the eye, never into the matter or along it. The ordinary 3D View only shows the world
 (its wheel works the same).
+
+Up close, every block reads by a shade of its own and a fine line along its
+edges (fading out a few dozen blocks away), and water stepping down — the
+levels of a river coming down a slope — shows its falls.
 
 How sculpted matter is stored is in [internals](internals.md#sculpted-volumes).
 

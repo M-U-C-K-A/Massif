@@ -6,6 +6,8 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 
 **3D Sculpt, grown up.** Sculpt, Smooth and Paint share the brush of every tool (custom images too, as set in Brush Settings); a stroke adds a layer at a time and works toward the eye at cliffs and edges. Matter pushed out keeps the blocks it came from — a sand wall gives a sand ledge, the ground under it keeps its own —, Paint repaints sculpted matter, Smooth rounds the land off without wearing it down. Brushes sculpt up to 64 blocks around in 3D.
 
+**Noise painting.** Paint lays several terrains or blocks at once, mixed by a noise, as Axiom's noise painter does: patches, veins, blobs, cells or stripes of simplex, Perlin or value noise, with their size, detail, stretch and direction; the blocks in order, each with its share of the ground; presets, patterns saved under a name, a preview under the brush, and **Paint the whole map** in the background.
+
 **Ground covers and custom objects.** Grass, flowers, ferns, snow or any blocks of your own, painted and grown over the ground; trees, rocks and ruins from `.schem`, `.schematic`, `.bp`, `.litematic` and `.nbt` files, imported or dropped on the window, painted where they stand.
 
 **Automatic biomes and paint that make sense.** Sand is a desert only where sand is all around, beaches are by the water, a WorldPainter map all of one terrain is read from the shape of its land. Over the whole map they run in the background with their progress; with a brush, the land is read once a tile and kept, so brushes of any size stay quick — and no longer crash.
@@ -15,6 +17,8 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 **A quieter interface.** Neutral greys and one accent, grouped controls, pill buttons, slim sliders, tool icons drawn for what they do to the land, cards with short animations, messages at the bottom right, a help page (F1). The home screen shows night scenes, dithered in a palette of their own.
 
 **The 3D view up close.** Rivers stepping down show their falls, every block reads by its own shade and edges, deep water reflects the sky.
+
+**A new README** with animated figures, and a guide, a page on terrain graphs and one on how Massif works, in `docs/`.
 
 **Files.** The map is a `.massif` file's icon in the Finder and in Windows Explorer; tall WorldPainter worlds keep their height; sculpted matter keeps its blocks in the file (older files still open).
 

@@ -184,7 +184,7 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
         Tool::PaintTerrain => card(
             "Paints a terrain: the blocks on top of the ground.",
             vec![("Drag", "Paint"), ("Right-drag", "Back to what the height calls for")],
-            Some("Pick it in Terrain or Blocks, or Alt-click it on the map. A pattern mixes several."),
+            Some("Pick it in Terrain or Blocks, or Alt-click it on the map. Noise mixes several."),
             Some(Demo::Paint),
         ),
         Tool::PaintBiome => card(

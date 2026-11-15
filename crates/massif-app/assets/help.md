@@ -66,8 +66,8 @@ Both work with the brush, or over the whole map at once: **Whole map** in the to
 
 Hovered over the map, the brush shows in colour what would change.
 
-## Patterns
-A pattern paints with several terrains at once: stripes, patches or noise, at a scale and an angle.
+## Noise painting
+**Noise** (in the Paint tool's settings) paints with several terrains or blocks at once, mixed by a noise, as Axiom's noise painter does: patches, veins, blobs, cells or stripes, of simplex, Perlin or value noise, with its size, detail (octaves, lacunarity, gain), stretch and direction. The blocks are a list in order — neighbours meet on the ground — each with its share of the ground; drag one to move it, click its name to change it, **Add a block** to add one. Presets are a start, and a pattern can be saved under a name. Hovered over the map, the brush shows what it would paint; **Paint the whole map** lays it everywhere the brush options let it, in the background.
 
 # Decor
 ## Ground covers

@@ -415,6 +415,48 @@ pub fn paint_pattern(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, salt: u64
     });
 }
 
+/// What a pattern would paint under a brush, for a picture of it drawn
+/// over the map (see [`pattern_preview`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PatternPreview {
+    /// The brush's footprint.
+    pub rect: BlockRect,
+    /// Columns from one sample to the next, each way.
+    pub step: i32,
+    /// Samples across and down, from the footprint's corner.
+    pub size: [usize; 2],
+    /// The terrain of each sample, row by row; `None` off the brush.
+    pub cells: Vec<Option<TerrainId>>,
+}
+
+/// What `pattern` would paint under the brush at `(cx, cz)`: every
+/// `step`-th column of the footprint each way, the fewest that keeps the
+/// picture within `max` samples a side. When every column is looked at,
+/// the brush's filter counts too.
+pub fn pattern_preview(dim: &Dimension, brush: &Brush, cx: f32, cz: f32, pattern: &crate::pattern::PatternSampler, max: usize) -> PatternPreview {
+    use rayon::prelude::*;
+    let rect = BlockRect::around(cx, cz, brush.radius);
+    let side = rect.width().max(rect.depth()).max(1) as usize;
+    let step = side.div_ceil(max.max(1)).max(1);
+    let size = [(rect.width().max(0) as usize).div_ceil(step), (rect.depth().max(0) as usize).div_ceil(step)];
+    let dab = (step == 1).then(|| Dab::on(dim, brush, cx, cz));
+    let step = step as i32;
+    let cells = (0..size[0] * size[1])
+        .into_par_iter()
+        .map(|k| {
+            // The column in the middle of the sample's square.
+            let x = rect.x0 + (k % size[0]) as i32 * step + step / 2;
+            let z = rect.z0 + (k / size[0]) as i32 * step + step / 2;
+            let w = match &dab {
+                Some(dab) => dab.weight(x, z),
+                None => brush.weight(x as f32 + 0.5 - cx, z as f32 + 0.5 - cz),
+            };
+            if w > 0.0 { pattern.terrain(x, z) } else { None }
+        })
+        .collect();
+    PatternPreview { rect, step, size, cells }
+}
+
 /// Give the columns under the brush the biome their land calls for (see
 /// [`crate::auto`]), as `classes` (for biomes) has it, worked out where it
 /// is not yet. `salt` should change from dab to dab. Returns how many
@@ -898,6 +940,33 @@ mod tests {
             mask: None,
             filter: None,
         }
+    }
+
+    #[test]
+    fn a_pattern_preview_shows_what_the_brush_would_paint() {
+        use crate::pattern::Pattern;
+        let w = world(4);
+        let reg = &w.registry;
+        let sampler = Pattern::default().sampler(&[(reg.terrain_by_name("Grass").unwrap(), 1.0), (reg.terrain_by_name("Gravel").unwrap(), 1.0)]);
+        // A small brush: every column, as painting would give it.
+        let small = pattern_preview(&w.dims[0], &hard_brush(20.0), 10.0, -5.0, &sampler, 256);
+        assert_eq!(small.step, 1);
+        assert_eq!(small.size, [small.rect.width() as usize, small.rect.depth() as usize]);
+        let at = |p: &PatternPreview, i: usize, j: usize| p.cells[j * p.size[0] + i];
+        assert_eq!(at(&small, 0, 0), None, "a corner is off a round brush");
+        let (i, j) = (small.size[0] / 2, small.size[1] / 2);
+        assert_eq!(at(&small, i, j), sampler.terrain(small.rect.x0 + i as i32, small.rect.z0 + j as i32));
+        let mut edit_world = world(4);
+        let mut history = History::new(2);
+        history.begin("paint", 0);
+        paint_pattern(&mut history.edit(&mut edit_world, 0), &hard_brush(20.0), 10.0, -5.0, 1, &sampler);
+        let (x, z) = (small.rect.x0 + i as i32, small.rect.z0 + j as i32);
+        let tile = edit_world.dims[0].ground().view(TilePos::containing(x, z)).unwrap();
+        assert_eq!(Some(TerrainId(tile.terrain.get(local_index(x, z)))), at(&small, i, j));
+        // A big one: sampled, never more than asked.
+        let big = pattern_preview(&w.dims[0], &hard_brush(1000.0), 0.0, 0.0, &sampler, 128);
+        assert!(big.step > 1 && big.size[0] <= 128 && big.size[1] <= 128, "{} {:?}", big.step, big.size);
+        assert!(big.cells.iter().filter(|c| c.is_some()).count() > big.cells.len() / 2);
     }
 
     fn h(w: &World, x: i32, z: i32) -> f32 {

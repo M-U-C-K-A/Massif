@@ -262,7 +262,7 @@ pub fn sculpt_toolbar(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
             ui.add_space(6.0);
             let def = reg.terrain(TerrainId(tools.terrain));
             swatch(ui, theme::rgb(def.color));
-            let what = if tools.pattern.on { "a pattern of terrains".to_owned() } else { def.name.clone() };
+            let what = if tools.pattern.on { format!("a noise of {} blocks", tools.pattern.terrains.len()) } else { def.name.clone() };
             ui.label(RichText::new(what).size(12.0)).on_hover_text("Pick it in Terrain or Blocks");
         }
         let hint = match tools.sculpt.tool {
@@ -324,8 +324,11 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             slider_row(ui, "Amplitude", |ui| ui.add(crate::widgets::Field::new(&mut tools.roughness, 0.5..=40.0).suffix(" blocks")));
         }
         Tool::PaintTerrain => {
-            crate::widgets::checkbox(ui, &mut tools.pattern.on, "a pattern of terrains")
-                .on_hover_text("Several terrains at once, mixed by a noise");
+            let on = tools.pattern.on;
+            if let Some(k) = crate::widgets::button_group(ui, "paint what", &["One terrain", "Noise"], &[!on, on]) {
+                tools.pattern.on = k == 1;
+            }
+            ui.add_space(4.0);
             if tools.pattern.on {
                 pattern_settings(ui, tools, doc, blocks);
             } else {
@@ -1459,24 +1462,195 @@ fn cover_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks
     }
 }
 
-fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &Document, blocks: &mut BlockLibrary) {
-    use massif_core::pattern::PatternKind;
-    let reg = &doc.world.registry;
-    let ps = &mut tools.pattern;
-    let p = &mut ps.pattern;
+/// A terrain of the map, or a whole block of the game to make one of.
+enum Pick {
+    Terrain(String),
+    Block(massif_assets::Block),
+}
+
+/// The name of the terrain picked, made from its block the first time.
+fn picked_terrain(pick: Pick, doc: &mut Document) -> String {
+    match pick {
+        Pick::Terrain(name) => name,
+        Pick::Block(block) => {
+            let id = massif_assets::block_terrain(&mut doc.world.registry, &block);
+            doc.mark_changed();
+            doc.world.registry.terrain(id).name.clone()
+        }
+    }
+}
+
+/// A list to pick from, with a search field: the terrains of the map, then
+/// the game's whole blocks that are not terrains yet.
+fn ground_picker(ui: &mut Ui, id: egui::Id, reg: &Registry, blocks: &mut BlockLibrary, current: Option<&str>) -> Option<Pick> {
+    let pal = Palette::of(ui);
+    let ctx = ui.ctx().clone();
+    ui.set_max_width(300.0);
+    let mut search: String = ctx.data(|d| d.get_temp(id)).unwrap_or_default();
+    let edit = ui.add(
+        egui::TextEdit::singleline(&mut search)
+            .hint_text(format!("{}  Search terrains and blocks", theme::glyph(Icon::Search)))
+            .desired_width(ui.available_width().min(280.0)),
+    );
+    edit.request_focus();
+    let needle = search.trim().to_lowercase();
+    let matches = |name: &str, id: &str| needle.is_empty() || name.to_lowercase().contains(&needle) || id.contains(&needle);
+    let mut picked = None;
+    egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+        let entry = |ui: &mut Ui, selected: bool, name: &str, tip: &str, icon: &mut dyn FnMut(&mut Ui, Rect)| {
+            ui.horizontal(|ui| {
+                let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
+                icon(ui, r);
+                ui.selectable_label(selected, name).on_hover_text(tip).clicked()
+            })
+            .inner
+        };
+        ui.label(RichText::new("IN THIS MAP").size(10.5).bold().color(pal.weak));
+        for (k, t) in reg.terrains.iter().enumerate() {
+            if matches(&t.name, &t.group.to_lowercase()) && entry(ui, current == Some(t.name.as_str()), &t.name, &t.group, &mut |ui, r| terrain_icon(ui, r, reg, k as u16, blocks)) {
+                picked = Some(Pick::Terrain(t.name.clone()));
+            }
+        }
+        if let Some(cat) = blocks.catalogue.clone() {
+            ui.add_space(4.0);
+            ui.label(RichText::new(format!("BLOCKS OF MINECRAFT {}", cat.version)).size(10.5).bold().color(pal.weak));
+            // Searching shows every match; otherwise the first ones.
+            let limit = if needle.is_empty() { 120 } else { usize::MAX };
+            let list = cat.blocks.iter().filter(|b| b.full_cube && matches(&b.name, &b.id) && reg.terrain_by_name(&b.name).is_none());
+            for b in list.take(limit) {
+                let texture = blocks.icon(&ctx, b);
+                let icon = &mut |ui: &mut Ui, r: Rect| {
+                    if let Some(t) = texture {
+                        ui.painter().image(t, r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                    }
+                };
+                if entry(ui, false, &b.name, &b.id, icon) {
+                    picked = Some(Pick::Block(b.clone()));
+                }
+            }
+        } else {
+            hint(ui, "Every block of the game shows here once Blocks has read it.");
+        }
+    });
+    ctx.data_mut(|d| d.insert_temp(id, search));
+    if picked.is_some() {
+        ctx.data_mut(|d| d.remove::<String>(id));
+        ui.close();
+    }
+    picked
+}
+
+/// Patterns to start from, those saved, and saving this one.
+fn pattern_presets(ui: &mut Ui, ps: &mut crate::tools::PatternSettings) {
+    use crate::tools::PatternPreset;
+    let current = ps.preset_name();
+    let (mut load, mut forget) = (None, None);
     ui.horizontal(|ui| {
-        ui.add_sized([72.0, 18.0], egui::Label::new("Shape"));
+        ui.add_sized([72.0, 18.0], egui::Label::new("Preset"));
+        let width = (ui.available_width() - 40.0).clamp(90.0, 190.0);
+        crate::widgets::combo("noise preset").selected_text(current.clone().unwrap_or_else(|| "Custom".to_owned())).width(width).show_ui(ui, |ui| {
+            for p in PatternPreset::built_in() {
+                if ui.selectable_label(current.as_deref() == Some(p.name.as_str()), &p.name).clicked() {
+                    load = Some(p);
+                }
+            }
+            if !ps.saved.is_empty() {
+                ui.separator();
+                for (k, p) in ps.saved.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        if ui.selectable_label(current.as_deref() == Some(p.name.as_str()), &p.name).clicked() {
+                            load = Some(p.clone());
+                        }
+                        if ui.add(egui::Button::new(theme::glyph(Icon::X).to_string()).frame(false).small()).on_hover_text("Forget it").clicked() {
+                            forget = Some(k);
+                        }
+                    });
+                }
+            }
+        });
+        let name_id = egui::Id::unique("noise preset name");
+        ui.menu_button(theme::glyph(Icon::Save).to_string(), |ui| {
+            ui.set_min_width(220.0);
+            ui.label(RichText::new("Save this pattern as").size(12.0));
+            let mut name: String = ui.ctx().data(|d| d.get_temp(name_id)).unwrap_or_else(|| current.clone().unwrap_or_default());
+            let edit = ui.add(egui::TextEdit::singleline(&mut name).hint_text("Its name").desired_width(200.0));
+            let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let taken = ps.saved.iter().any(|p| p.name.eq_ignore_ascii_case(name.trim()));
+            let label = if taken { "Replace it" } else { "Save" };
+            if (ui.add_enabled(!name.trim().is_empty(), egui::Button::new(label)).clicked() || enter) && !name.trim().is_empty() {
+                ps.save(&name);
+                ui.ctx().data_mut(|d| d.remove::<String>(name_id));
+                ui.close();
+            } else {
+                ui.ctx().data_mut(|d| d.insert_temp(name_id, name));
+            }
+        })
+        .response
+        .on_hover_text("Save this pattern, to paint with it again");
+    });
+    if let Some(p) = load {
+        ps.load(&p);
+    }
+    if let Some(k) = forget {
+        ps.saved.remove(k);
+    }
+}
+
+/// Massif's noise painter: the noise, the blocks it lays out and their
+/// shares, pictures of the result, and painting it over the whole map.
+fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary) {
+    use massif_core::noise::Basis;
+    use massif_core::pattern::{MAX_OCTAVES, MAX_STRETCH, PatternKind};
+    let pal = Palette::of(ui);
+    hint(ui, "Blocks mixed by a noise, each over its share of the ground. Neighbours in the list meet on the ground.");
+    ui.add_space(2.0);
+    pattern_presets(ui, &mut tools.pattern);
+
+    // ---- the noise -------------------------------------------------------
+    section(ui, Icon::Waves, "Noise");
+    let p = &mut tools.pattern.pattern;
+    ui.horizontal(|ui| {
+        ui.add_sized([72.0, 18.0], egui::Label::new("Shape")).on_hover_text("Patches, thin veins, blobs with creases, cells, or wavering stripes");
         crate::widgets::combo("pattern kind").selected_text(p.kind.label()).width(120.0).show_ui(ui, |ui| {
             for k in PatternKind::ALL {
                 ui.selectable_value(&mut p.kind, k, k.label());
             }
         });
     });
-    slider_row(ui, "Size", |ui| ui.add(crate::widgets::Field::new(&mut p.scale, 2.0..=600.0).suffix(" blocks").max_decimals(0)));
-    if p.kind == PatternKind::Stripes {
-        slider_row(ui, "Direction", |ui| ui.add(crate::widgets::Field::new(&mut p.angle, 0.0..=180.0).suffix("°").max_decimals(0)));
-    }
-    slider_row(ui, "Soft edges", |ui| {
+    let fractal = p.kind.is_fractal();
+    ui.add_enabled_ui(fractal, |ui| {
+        ui.horizontal(|ui| {
+            ui.add_sized([72.0, 18.0], egui::Label::new("Noise")).on_hover_text("Simplex: round shapes · Perlin: a little squarer · Value: soft, blocky blobs");
+            crate::widgets::combo("pattern noise").selected_text(p.noise.label()).width(120.0).show_ui(ui, |ui| {
+                for b in Basis::ALL {
+                    ui.selectable_value(&mut p.noise, b, b.label());
+                }
+            });
+        });
+    });
+    tip_row(ui, "Size", "The size of the largest shapes", |ui| {
+        ui.add(crate::widgets::Field::new(&mut p.scale, 2.0..=600.0).logarithmic(true).suffix(" blocks").max_decimals(0))
+    });
+    ui.add_enabled_ui(fractal, |ui| {
+        tip_row(ui, "Octaves", "Layers of finer and finer detail over the largest shapes", |ui| {
+            ui.add(crate::widgets::Field::new(&mut p.octaves, 1..=MAX_OCTAVES))
+        });
+        tip_row(ui, "Lacunarity", "How much finer each layer of detail is than the one before", |ui| {
+            ui.add(crate::widgets::Field::new(&mut p.lacunarity, 1.0..=4.0).max_decimals(2))
+        });
+        tip_row(ui, "Gain", "How much each layer of detail counts: low, smooth edges; high, ragged ones", |ui| {
+            ui.add(crate::widgets::Field::new(&mut p.gain, 0.0..=1.0).max_decimals(2))
+        });
+    });
+    tip_row(ui, "Stretch", "Draws the shapes out along the direction: streaks, bands", |ui| {
+        ui.add(crate::widgets::Field::new(&mut p.stretch, 1.0..=MAX_STRETCH).logarithmic(true).suffix("×").max_decimals(1))
+    });
+    ui.add_enabled_ui(p.stretch > 1.01 || p.kind == PatternKind::Stripes, |ui| {
+        tip_row(ui, "Direction", "The way the shapes run: 0° east–west, 90° north–south", |ui| {
+            ui.add(crate::widgets::Field::new(&mut p.angle, 0.0..=180.0).suffix("°").max_decimals(0))
+        });
+    });
+    tip_row(ui, "Soft edges", "Blocks of each side scattered into the other along the edges", |ui| {
         ui.add(
             crate::widgets::Field::new(&mut p.softness, 0.0..=1.0)
                 .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
@@ -1484,78 +1658,221 @@ fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &Document, blocks: 
         )
     });
     ui.horizontal(|ui| {
-        ui.add_sized([72.0, 18.0], egui::Label::new("Seed"));
+        ui.add_sized([72.0, 18.0], egui::Label::new("Seed")).on_hover_text("Another layout of the same pattern");
         crate::widgets::drag(ui, egui::DragValue::new(&mut p.seed));
         if ui.small_button(theme::glyph(Icon::Dices).to_string()).on_hover_text("Another layout").clicked() {
-            p.seed = p.seed.wrapping_mul(1_103_515_245).wrapping_add(12_345) % 100_000;
+            p.seed = p.seed.wrapping_mul(1_103_515_245).wrapping_add(12_345) % 1_000_000_000;
         }
     });
-    ui.add_space(4.0);
-    // The terrains and their shares.
-    let total: f32 = ps.terrains.iter().map(|t| t.1.max(0.0)).sum::<f32>().max(1e-6);
-    let mut remove = None;
-    for (k, (name, weight)) in ps.terrains.iter_mut().enumerate() {
-        ui.horizontal(|ui| {
-            let id = reg.terrain_by_name(name);
-            let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
-            if let Some(t) = id {
-                terrain_icon(ui, r, reg, t.0, blocks);
-            }
-            crate::widgets::combo(("pattern terrain", k)).selected_text(name.as_str()).width(110.0).show_ui(ui, |ui| {
-                for t in &reg.terrains {
-                    if ui.selectable_label(t.name == *name, &t.name).clicked() {
-                        *name = t.name.clone();
+
+    // ---- the blocks, in their order, with their shares -----------------
+    section(ui, Icon::Blocks, "Blocks");
+    let ps = &mut tools.pattern;
+    let (mut moved, mut remove, mut replace) = (None, None, None);
+    {
+        let reg = &doc.world.registry;
+        let name_w = (ui.available_width() * 0.36).clamp(64.0, 120.0);
+        for k in 0..ps.terrains.len() {
+            let name = ps.terrains[k].0.clone();
+            let terrain = reg.terrain_by_name(&name);
+            let row = ui
+                .horizontal(|ui| {
+                    // The icon is the handle to move a block up or down.
+                    let drag_id = egui::Id::unique(("noise block", k));
+                    ui.dnd_drag_source(drag_id, k, |ui| {
+                        let (r, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
+                        match terrain {
+                            Some(t) => terrain_icon(ui, r, reg, t.0, blocks),
+                            None => {
+                                ui.painter().rect_stroke(r.shrink(3.0), 4, Stroke::new(1.2, pal.danger), StrokeKind::Inside);
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text("Drag it up or down the list: neighbours in the list meet on the ground");
+                    // Its name: click to put another block in its place.
+                    let ink = if terrain.is_some() { pal.text } else { pal.danger };
+                    let label = ui
+                        .allocate_ui_with_layout(vec2(name_w, 22.0), egui::Layout::left_to_right(Align::Center), |ui| {
+                            ui.set_width(name_w);
+                            ui.add(egui::Label::new(RichText::new(&name).color(ink)).truncate().sense(Sense::click()))
+                        })
+                        .inner
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text(if terrain.is_some() { "Change it" } else { "Not a terrain of this map: change it" });
+                    egui::Popup::menu(&label).show(|ui| {
+                        if let Some(pick) = ground_picker(ui, egui::Id::unique(("noise block search", k)), reg, blocks, Some(&name)) {
+                            replace = Some((k, pick));
+                        }
+                    });
+                    let mut share = ps.share(k);
+                    let field = ui.add(
+                        crate::widgets::Field::new(&mut share, 0.0..=1.0)
+                            .width((ui.available_width() - 26.0).max(60.0))
+                            .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                            .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
+                    );
+                    if field.on_hover_text("Its share of the ground: the others share the rest").changed() {
+                        ps.set_share(k, share);
                     }
-                }
-            });
-            crate::widgets::drag(ui, egui::DragValue::new(weight).range(0.0..=100.0).speed(0.05).max_decimals(1));
-            ui.label(RichText::new(format!("{:.0}%", weight.max(0.0) / total * 100.0)).size(11.0).color(Palette::of(ui).weak));
-            if ui.small_button(theme::glyph(Icon::X).to_string()).clicked() {
-                remove = Some(k);
+                    if ui.add(egui::Button::new(theme::glyph(Icon::X).to_string()).frame(false).small()).on_hover_text("Take it out").clicked() {
+                        remove = Some(k);
+                    }
+                })
+                .response;
+            // A block dragged over a row goes there: a line shows where.
+            if let Some(from) = row.dnd_hover_payload::<usize>()
+                && *from != k
+            {
+                let y = if *from > k { row.rect.top() - 1.0 } else { row.rect.bottom() + 1.0 };
+                ui.painter().hline(row.rect.x_range(), y, Stroke::new(2.0, pal.accent));
             }
-        });
+            if let Some(from) = row.dnd_release_payload::<usize>() {
+                moved = Some((*from, k));
+            }
+        }
+    }
+    if let Some((from, to)) = moved {
+        ps.reorder(from, to);
     }
     if let Some(k) = remove {
-        ps.terrains.remove(k);
+        ps.remove(k);
     }
+    if let Some((k, pick)) = replace {
+        let name = picked_terrain(pick, doc);
+        let ps = &mut tools.pattern;
+        match ps.terrains.iter().position(|t| t.0.eq_ignore_ascii_case(&name)) {
+            // Already in the list elsewhere: the two swap places.
+            Some(j) if j != k => ps.terrains.swap(j, k),
+            Some(_) => {}
+            None => ps.terrains[k].0 = name,
+        }
+    }
+    let mut added = None;
+    ui.horizontal(|ui| {
+        ui.menu_button(theme::with_icon(Icon::Plus, "Add a block"), |ui| {
+            if let Some(pick) = ground_picker(ui, egui::Id::unique("noise block add"), &doc.world.registry, blocks, None) {
+                added = Some(pick);
+            }
+        });
+        let selected = doc.world.registry.terrain(TerrainId(tools.terrain)).name.clone();
+        if !tools.pattern.terrains.iter().any(|t| t.0 == selected)
+            && ui.button(theme::with_icon(Icon::Pipette, &selected)).on_hover_text("Add the terrain chosen in Terrain or Blocks").clicked()
+        {
+            added = Some(Pick::Terrain(selected));
+        }
+    });
+    if let Some(pick) = added {
+        let name = picked_terrain(pick, doc);
+        tools.pattern.add(&name);
+    }
+    if tools.pattern.terrains.is_empty() {
+        hint(ui, "No block yet: add one.");
+    }
+
+    // ---- what it looks like ----------------------------------------------
+    pattern_pictures(ui, tools, doc);
+
+    // ---- over the whole map ----------------------------------------------
+    ui.add_space(6.0);
+    let ready = tools.pattern.sampler(&doc.world.registry).is_some();
     if ui
-        .button(theme::with_icon(Icon::Plus, "Add the selected terrain"))
-        .on_hover_text("From Terrain or Blocks")
+        .add_enabled(ready, egui::Button::new(theme::with_icon(Icon::Map, "Paint the whole map")))
+        .on_hover_text("This noise over every column of the active level, in the background; one step to undo")
         .clicked()
     {
-        ps.terrains.push((reg.terrain(TerrainId(tools.terrain)).name.clone(), 1.0));
+        tools.pattern.paint_map = true;
     }
-    // A picture of the pattern, eight of its features across.
-    let key = {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        format!("{:?}{:?}", tools.pattern.pattern, tools.pattern.terrains).hash(&mut h);
-        reg.terrains.iter().map(|t| t.color).collect::<Vec<_>>().hash(&mut h);
-        h.finish()
-    };
-    let id = egui::Id::unique("pattern picture");
-    let cached: Option<(u64, egui::TextureHandle)> = ui.ctx().data(|d| d.get_temp(id));
-    let texture = match cached {
-        Some((k, t)) if k == key => Some(t),
-        _ => tools.pattern.sampler(reg).map(|sampler| {
-            let n = 128usize;
-            let span = (tools.pattern.pattern.scale * 8.0).max(32.0) / n as f32;
-            let rgb: Vec<u8> = (0..n * n)
-                .flat_map(|c| {
-                    let (x, z) = (((c % n) as f32 * span) as i32, ((c / n) as f32 * span) as i32);
-                    sampler.terrain(x, z).map_or([60, 60, 60], |t| reg.terrain(t).color)
-                })
-                .collect();
-            let t = ui.ctx().load_texture("pattern picture", egui::ColorImage::from_rgb([n, n], &rgb), egui::TextureOptions::NEAREST);
-            ui.ctx().data_mut(|d| d.insert_temp(id, (key, t.clone())));
-            t
-        }),
-    };
-    if let Some(t) = texture {
-        ui.add_space(4.0);
-        ui.add(egui::Image::new(&t).fit_to_exact_size(vec2(ui.available_width().min(220.0), ui.available_width().min(220.0))).corner_radius(6));
-        hint(ui, &format!("{:.0} blocks across", tools.pattern.pattern.scale * 8.0));
+    hint(
+        ui,
+        if tools.filter.is_active() {
+            "Only where the options of Brush Settings let the brush act."
+        } else {
+            "Every column of the active level: Brush Settings ▸ Options limit it (only on grass, a height band…)."
+        },
+    );
+    if let Some(n) = tools.pattern.done {
+        hint(ui, &format!("{n} columns changed over the whole map."));
     }
+}
+
+/// Pictures of a pattern: the ground it paints and its noise, side by side,
+/// eight of its shapes across, and how its values spread between its
+/// blocks.
+fn pattern_pictures(ui: &mut Ui, tools: &ToolState, doc: &Document) {
+    let pal = Palette::of(ui);
+    let reg = &doc.world.registry;
+    let Some(sampler) = (|| {
+        // Made again only when the pattern or the colours change.
+        let key = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            format!("{:?}{:?}", tools.pattern.pattern, tools.pattern.terrains).hash(&mut h);
+            reg.terrains.iter().map(|t| t.color).collect::<Vec<_>>().hash(&mut h);
+            h.finish()
+        };
+        let id = egui::Id::unique("pattern pictures");
+        type Pictures = (u64, egui::TextureHandle, egui::TextureHandle, massif_core::pattern::Spread, Vec<Color32>);
+        let cached: Option<Pictures> = ui.ctx().data(|d| d.get_temp(id));
+        if let Some(c) = cached.filter(|c| c.0 == key) {
+            return Some(c);
+        }
+        let sampler = tools.pattern.sampler(reg)?;
+        let n = 128usize;
+        let span = (tools.pattern.pattern.scale * 8.0).max(32.0) / n as f32;
+        let at = |c: usize| (((c % n) as f32 * span) as i32, ((c / n) as f32 * span) as i32);
+        let ground: Vec<u8> = (0..n * n)
+            .flat_map(|c| {
+                let (x, z) = at(c);
+                sampler.terrain(x, z).map_or([60, 60, 60], |t| reg.terrain(t).color)
+            })
+            .collect();
+        let noise: Vec<u8> = (0..n * n)
+            .flat_map(|c| {
+                let (x, z) = at(c);
+                let v = (sampler.rank(x, z) * 255.0) as u8;
+                [v, v, v]
+            })
+            .collect();
+        let load = |name: &str, rgb: &[u8]| ui.ctx().load_texture(name, egui::ColorImage::from_rgb([n, n], rgb), egui::TextureOptions::NEAREST);
+        let colours = sampler.cumulative().iter().map(|(t, _)| theme::rgb(reg.terrain(*t).color)).collect();
+        let pictures: Pictures = (key, load("pattern ground", &ground), load("pattern noise", &noise), sampler.spread(64), colours);
+        ui.ctx().data_mut(|d| d.insert_temp(id, pictures.clone()));
+        Some(pictures)
+    })() else {
+        return;
+    };
+    let (_, ground, noise, spread, colours) = sampler;
+    ui.add_space(6.0);
+    let side = ((ui.available_width() - 8.0) / 2.0).clamp(60.0, 150.0);
+    ui.horizontal(|ui| {
+        for (texture, caption, tip) in [(&ground, "Ground", "What it paints"), (&noise, "Noise", "Its noise, dark to light: the blocks follow it in the order of the list")] {
+            ui.vertical(|ui| {
+                ui.add(egui::Image::new(texture).fit_to_exact_size(vec2(side, side)).corner_radius(6)).on_hover_text(tip);
+                ui.label(RichText::new(caption).size(11.0).color(pal.weak));
+            });
+        }
+    });
+    // The spread of its values, each step in the colour of its block.
+    let width = 2.0 * side + ui.spacing().item_spacing.x;
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 34.0), Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 4, pal.header);
+    let bins = spread.density.len();
+    for (k, d) in spread.density.iter().enumerate() {
+        let (x0, x1) = (rect.left() + rect.width() * k as f32 / bins as f32, rect.left() + rect.width() * (k + 1) as f32 / bins as f32);
+        let middle = (k as f32 + 0.5) / bins as f32;
+        let band = spread.limits.iter().position(|l| middle < *l).unwrap_or(spread.limits.len().saturating_sub(1));
+        let colour = colours.get(band).copied().unwrap_or(pal.weak);
+        let top = rect.bottom() - (rect.height() - 3.0) * d;
+        painter.rect_filled(Rect::from_min_max(pos2(x0, top), pos2(x1 + 0.5, rect.bottom())), 0, colour);
+    }
+    for l in &spread.limits[..spread.limits.len().saturating_sub(1)] {
+        let x = rect.left() + rect.width() * l;
+        painter.vline(x, rect.y_range(), Stroke::new(1.0, pal.text.gamma_multiply(0.55)));
+    }
+    response.on_hover_text("How often each value of the noise comes, low to high, in the colour of the block it gives");
+    hint(ui, &format!("{:.0} blocks across", tools.pattern.pattern.scale * 8.0));
 }
 
 /// The rules of the automatic biomes: how the land is read, and the biome
@@ -2510,4 +2827,75 @@ pub fn empty_area(ui: &mut Ui, shown: &HashSet<EditorKind>) -> Option<EditorKind
         }
     });
     picked
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use massif_core::generate::{GenParams, generate};
+
+    /// What a noise settings panel holds while it is drawn.
+    struct Noise {
+        tools: ToolState,
+        doc: Document,
+        blocks: BlockLibrary,
+    }
+
+    /// The noise painter's settings, drawn offscreen in both themes, with
+    /// the game's blocks when a game is installed. Needs a GPU: runs with
+    /// MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn noise_settings_render() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from) else {
+            return;
+        };
+        let mut blocks = BlockLibrary::default();
+        if let Some(jar) = massif_assets::find_jars().first() {
+            blocks.catalogue = massif_assets::load(&jar.path, &jar.version).ok().map(std::sync::Arc::new);
+        }
+        let world = generate(&GenParams { tiles_x: 2, tiles_z: 2, ..GenParams::default() });
+        let mut tools = ToolState::default();
+        tools.select(Tool::PaintTerrain);
+        tools.pattern.on = true;
+        let state = Noise { tools, doc: Document::new(world, None, 1), blocks };
+        for dark in [true, false] {
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(vec2(340.0, 1180.0))
+                .with_pixels_per_point(2.0)
+                .with_accessibility_check(false)
+                .wgpu()
+                .build_ui_state(
+                    move |ui, s: &mut Noise| {
+                        theme::install(ui.ctx());
+                        ui.ctx().set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
+                        let pal = Palette::of(ui);
+                        egui::Frame::new().fill(pal.panel).inner_margin(12).show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            tool_settings(ui, &mut s.tools, &mut s.doc, &mut s.blocks);
+                        });
+                    },
+                    Noise {
+                        tools: state.tools.clone(),
+                        doc: Document::new(state.doc.world.clone(), None, 1),
+                        blocks: {
+                            let mut b = BlockLibrary::default();
+                            b.catalogue = state.blocks.catalogue.clone();
+                            b
+                        },
+                    },
+                );
+            h.run_steps(4);
+            let name = if dark { "noise-settings-dark.png" } else { "noise-settings-light.png" };
+            h.render().unwrap().save(dir.join(name)).unwrap();
+            if dark {
+                // The list to add a block from, searched.
+                use egui_kittest::kittest::Queryable;
+                h.get_by_label_contains("Add a block").click();
+                h.run_steps(3);
+                h.get_by_role(egui::accesskit::Role::TextInput).type_text("dirt");
+                h.run_steps(4);
+                h.render().unwrap().save(dir.join("noise-picker.png")).unwrap();
+            }
+        }
+    }
 }
