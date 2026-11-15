@@ -21,6 +21,7 @@ mod map_view;
 mod notify;
 mod ores;
 mod panels;
+mod picker;
 mod player;
 mod reshape;
 mod sounds;

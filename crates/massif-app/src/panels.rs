@@ -2789,50 +2789,22 @@ pub fn human(bytes: u64) -> String {
 
 // ------------------------------------------------------------ empty area --
 
-/// The chooser of an empty area. `shown` are the editors visible elsewhere.
+/// The page of an empty area: what it can show, as the menu of an area's
+/// header offers it, centred. `shown` are the editors on screen.
 pub fn empty_area(ui: &mut Ui, shown: &HashSet<EditorKind>, developer: bool) -> Option<EditorKind> {
-    let pal = Palette::of(ui);
-    let mut picked = None;
+    let columns = crate::picker::columns_for(ui.available_width() - 24.0);
+    let width = crate::picker::width(columns);
+    ui.add_space((ui.available_height() * 0.16).max(12.0));
     ui.vertical_centered(|ui| {
-        ui.add_space((ui.available_height() * 0.28).max(12.0));
         ui.label(RichText::new("What should this area show?").bold().size(15.0));
-        ui.add_space(4.0);
-        ui.label(
-            RichText::new(
-                "Drag an area's title to move or swap it.",
-            )
-            .size(12.0)
-            .color(pal.weak),
-        );
-        ui.add_space(14.0);
     });
-    let width = ui.available_width();
-    let columns = if width > 560.0 { 4 } else if width > 300.0 { 2 } else { 1 };
-    ui.columns(columns, |cols| {
-        for (n, (group, kinds)) in EditorKind::GROUPS.iter().enumerate() {
-            let ui = &mut cols[n % columns];
-            ui.label(RichText::new(*group).size(11.5).color(pal.weak));
-            for &kind in *kinds {
-                ui.horizontal(|ui| {
-                    let r = ui.selectable_label(false, format!("{}  {}", theme::glyph(kind.icon()), kind.label()));
-                    if shown.contains(&kind) {
-                        ui.label(RichText::new(theme::glyph(Icon::Dot).to_string()).size(12.0).color(pal.accent)).on_hover_text("Already shown in another area");
-                    }
-                    if r.clicked() {
-                        picked = Some(kind);
-                    }
-                });
-            }
-            ui.add_space(8.0);
-        }
-    });
-    if developer {
-        ui.label(RichText::new("Developer").size(11.5).color(pal.weak));
-        if ui.selectable_label(false, format!("{}  {}", theme::glyph(EditorKind::Developer.icon()), EditorKind::Developer.label())).clicked() {
-            picked = Some(EditorKind::Developer);
-        }
-    }
-    picked
+    ui.add_space(14.0);
+    let margin = ((ui.available_width() - width) / 2.0).max(0.0);
+    ui.horizontal_top(|ui| {
+        ui.add_space(margin);
+        ui.vertical(|ui| crate::picker::page(ui, None, shown, developer, columns)).inner
+    })
+    .inner
 }
 
 #[cfg(test)]
