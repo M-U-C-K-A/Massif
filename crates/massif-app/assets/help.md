@@ -35,6 +35,11 @@ The check runs in the background — a few seconds for a map of 5,888 blocks a s
 **Minecraft 1.18+** and **Before 1.18** start from the game's own; **Richness** multiplies every band; **Lay ores** turns them all off. Ores only take the place of stone, granite, diorite and andesite (deepslate and tuff get the deepslate ores), never of a block in the open. The settings are saved with the map; the World tab of the export can leave them out of one export.
 
 # The window
+## Menus
+**File**, **Edit**, **View** and **Help** are at the top left of the window, each item with its shortcut beside it.
+- On a Mac they are in the menu bar at the top of the screen too, as in every Mac app: the same items, greyed out when they cannot be used (what acts on the map while the home screen is shown, everything while a dialog is open). **About Massif**, **Settings…** (`⌘,`) and **Quit Massif** (`⌘Q`) are in its **Massif** menu, and **Help** has the system's search of the menus.
+- `⌘Q` asks first when the map has changes that are not saved, as **File ▸ Quit** does.
+
 ## Areas
 The window is made of areas, as in Blender. Each area shows one editor: the map, the 3D view, tools, settings, brushes, palettes, levels or information.
 - The icon before an area's title opens every editor on one page, in columns: the World side's views, tools and paint, then the Terrain side's generator. The line under them says what the one under the pointer is for, and whether another area shows it already. An empty area holds the same page.
@@ -147,7 +152,7 @@ The viewport shows the graph's output in 3D, with its sun, clouds, haze and sea 
 **Import from WorldPainter…** opens a `.world` file: its dimensions, heights (tall worlds keep their height), terrains, water, biomes and custom terrains. WorldPainter's **Beaches** come in as it draws them: grass with patches of sand, gravel and clay. Layers Massif does not have yet are listed in the import report.
 
 # Settings
-**Massif ▸ Settings** (`⌘,`, or the home screen's sidebar) has six sections.
+**Settings…** (`⌘,`: in the **Massif** menu on a Mac, in **View** in the window, or the home screen's sidebar) has six sections.
 - **Appearance**: the theme, the accent colour, and whether the home screen's picture moves.
 - **Typeface**: what the interface is set in — the system's own typeface, or Inter, Geist, IBM Plex Sans or Manrope, built into Massif. Each is shown in itself; a click sets the whole interface in it.
 - **Sounds**: little sounds for what happens, made by Massif as it plays them. **Essential**: tasks done, saving, errors. **All**: the interface too (choices, switches, windows, workspaces). Each can be heard from there. The sound output is held only while a sound plays: headphones are free to go to another device.

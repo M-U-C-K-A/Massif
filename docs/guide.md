@@ -84,9 +84,29 @@ over the areas, with a **Cancel** for long tasks.
 **Help ▸ Massif Help** (F1) opens the help: every part of Massif, topic by
 topic, with a search, and the keyboard shortcuts.
 
+### Menus
+
+**File**, **Edit**, **View** and **Help** sit at the top left of the window,
+each item with its shortcut beside it (⌘ on a Mac, Ctrl elsewhere).
+
+On a Mac they are in the menu bar at the top of the screen too, as in every
+Mac app. Both are made from one list, so they hold the same items and are
+greyed out at the same times: what acts on the map waits while the home
+screen is shown, and everything but Quit waits while a dialog is open or a
+map is being opened. **About Massif**, **Settings…** (⌘,) and **Quit
+Massif** (⌘Q) are in the **Massif** menu, where Mac apps keep them, and
+**Help** has the system's search of the menus. ⌘Q asks first when the map
+has changes that are not saved, as **File ▸ Quit** does.
+
+The menu bar shows the shortcuts of File, Edit, View and Help without taking
+their keys: these still go to the window, so ⌘Z undoes in the map, in a text
+field or in Edit ▸ Ores as before, and ⌘C, ⌘V and ⌘A work in text fields.
+
 ## Settings
 
-**Settings** (⌘, or the home screen's sidebar) has seven sections, in a window of their own:
+**Settings** (⌘, — in the **Massif** menu on a Mac, in **View** in the
+window — or the home screen's sidebar) has seven sections, in a window of
+their own:
 
 - **Appearance**: the theme, the accent colour (the colour of what is
   chosen, of the main buttons and of the home screen's art: eight colours, or

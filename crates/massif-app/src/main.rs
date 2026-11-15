@@ -18,6 +18,8 @@ mod jobs;
 mod layout;
 mod map_render;
 mod map_view;
+mod menu;
+mod menubar;
 mod notify;
 mod ores;
 mod panels;
@@ -109,6 +111,9 @@ fn main() -> eframe::Result {
             }
             startup::step("making the app");
             finder::wake(&cc.egui_ctx);
+            // On macOS, File, Edit, View and Help in the menu bar at the
+            // top of the screen too.
+            menubar::install(&cc.egui_ctx);
             let app = app::MassifApp::new(cc, open);
             startup::step("app made: drawing the first frame");
             Ok(Box::new(app))

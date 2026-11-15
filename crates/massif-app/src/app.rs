@@ -9,6 +9,7 @@ use crate::jobs::{self, Job, Outcome};
 use crate::layout::{AreaId, Dir, EditorKind, Layout, Node, Zone};
 use crate::map_render::MapCache;
 use crate::map_view::{MapInput, MapView};
+use crate::menu::Command;
 use crate::panels;
 use crate::sounds::Cue;
 use crate::theme::{self, Icon, Palette, RichTextExt};
@@ -31,7 +32,7 @@ const GAP: f32 = 4.0;
 const MIN_AREA: f32 = 90.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-enum ThemeChoice {
+pub(crate) enum ThemeChoice {
     #[default]
     System,
     Light,
@@ -1371,47 +1372,43 @@ impl MassifApp {
         if self.dialog.is_some() || self.blocking_job().is_some() {
             return;
         }
-        let cmd = |key| KeyboardShortcut::new(Modifiers::COMMAND, key);
-        let cmd_shift = |key| KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, key);
-        let pressed = |s: KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(&s));
-        if pressed(cmd(Key::Comma)) {
-            self.dialog = Some(Dialog::Preferences(PrefsSection::Appearance));
-            return;
-        }
-        if pressed(KeyboardShortcut::new(Modifiers::NONE, Key::F1)) {
-            self.dialog = Some(Dialog::Help(crate::help::HelpState::default()));
-            return;
+        // The keys the menus show beside their items.
+        let pressed = |command: &Command| command.shortcut().is_some_and(|s| ctx.input_mut(|i| i.consume_shortcut(&s)));
+        for command in [Command::Settings, Command::Help] {
+            if pressed(&command) {
+                self.command(ctx, command);
+                return;
+            }
         }
         if self.home.is_some() {
             // No map on the home screen: only the ways in.
-            if pressed(cmd(Key::O)) {
-                self.home_action(ctx, HomeAction::Open);
+            for command in [Command::Open, Command::NewWorld] {
+                if pressed(&command) {
+                    self.command(ctx, command);
+                }
             }
             return;
         }
-        if pressed(cmd_shift(Key::Z)) || pressed(cmd(Key::Y)) {
+        // ⇧⌘Z and ⇧⌘S first: ⌘Z and ⌘S would take them too.
+        if pressed(&Command::Redo) || ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::Y))) {
             self.redo(ctx);
-        } else if pressed(cmd(Key::Z)) {
+        } else if pressed(&Command::Undo) {
             self.undo(ctx);
         }
-        if pressed(cmd_shift(Key::S)) {
+        if pressed(&Command::SaveAs) {
             self.save(ctx, true);
-        } else if pressed(cmd(Key::S)) {
+        } else if pressed(&Command::Save) {
             self.save(ctx, false);
         }
-        if pressed(cmd(Key::O)) {
-            self.request(ctx, Pending::Open(None));
-        }
-        if pressed(cmd(Key::N)) {
-            self.open_home(Page::NewMap);
-        }
-        if pressed(cmd(Key::E)) {
-            self.open_export_dialog();
+        for command in [Command::Open, Command::NewWorld, Command::Export] {
+            if pressed(&command) {
+                self.command(ctx, command);
+            }
         }
         if ctx.egui_wants_keyboard_input() {
             return;
         }
-        if pressed(KeyboardShortcut::new(Modifiers::CTRL, Key::Space)) {
+        if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::CTRL, Key::Space))) {
             let pointer = ctx.input(|i| i.pointer.hover_pos());
             if let Some(p) = pointer
                 && let Some(id) = self.area_at(ctx, p)
@@ -1539,137 +1536,17 @@ impl MassifApp {
             style.spacing.button_padding = vec2(10.0, 5.0);
             style.spacing.item_spacing.x = 0.0;
         };
+        // The menus, as the system's menu bar shows them on macOS.
+        let menus = self.menus();
+        let mut picked = None;
         egui::MenuBar::new().style(roomy).ui(ui, |ui| {
-            ui.menu_button("File", |ui| {
-                if ui.button(theme::with_icon(Icon::FilePlus2, "New World…")).clicked() {
-                    self.open_home(Page::NewMap);
-                }
-                if ui.button(theme::with_icon(Icon::FolderOpen, "Open…")).clicked() {
-                    self.request(&ctx, Pending::Open(None));
-                }
-                if ui.button(theme::with_icon(Icon::Import, "Import WorldPainter World…")).clicked()
-                    && let Some(path) = rfd::FileDialog::new()
-                        .set_title("Import a WorldPainter world")
-                        .add_filter("WorldPainter world", &["world"])
-                        .pick_file()
-                {
-                    self.request(&ctx, Pending::Open(Some(path)));
-                }
-                if ui.button(theme::with_icon(Icon::ImageUp, "New World from Height Map…")).clicked() {
-                    self.open_home(Page::FromHeightmap);
-                }
-                let recent = self.settings.recent.clone();
-                ui.add_enabled_ui(!recent.is_empty(), |ui| {
-                    ui.menu_button(theme::with_icon(Icon::FolderInput, "Open Recent"), |ui| {
-                        for path in recent {
-                            if ui.button(jobs::display_name(&path)).on_hover_text(path.display().to_string()).clicked() {
-                                self.request(&ctx, Pending::Open(Some(path)));
-                            }
-                        }
-                    });
-                });
-                ui.separator();
-                if ui.button(theme::with_icon(Icon::Save, "Save")).clicked() {
-                    self.save(&ctx, false);
-                }
-                if ui.button(theme::with_icon(Icon::Save, "Save As…")).clicked() {
-                    self.save(&ctx, true);
-                }
-                ui.separator();
-                if ui.button(theme::with_icon(Icon::ImageDown, "Export Height Map…")).clicked() {
-                    self.export_heightmap(&ctx);
-                }
-                if ui.button(theme::with_icon(Icon::Package, "Export to Minecraft…")).clicked() {
-                    self.open_export_dialog();
-                }
-                ui.separator();
-                if ui.button(theme::with_icon(Icon::X, "Quit")).clicked() {
-                    ctx.send_viewport_cmd(ViewportCommand::Close);
-                }
-            });
-            ui.menu_button("Edit", |ui| {
-                let undo = self.doc.history.undo_label().map(|l| format!("Undo {l}"));
-                if ui.add_enabled(undo.is_some(), egui::Button::new(theme::with_icon(Icon::Undo2, undo.as_deref().unwrap_or("Undo")))).clicked() {
-                    self.undo(&ctx);
-                }
-                let redo = self.doc.history.redo_label().map(|l| format!("Redo {l}"));
-                if ui.add_enabled(redo.is_some(), egui::Button::new(theme::with_icon(Icon::Redo2, redo.as_deref().unwrap_or("Redo")))).clicked() {
-                    self.redo(&ctx);
-                }
-                ui.separator();
-                if ui
-                    .button(theme::with_icon(Icon::Earth, "Auto biome: whole map"))
-                    .on_hover_text("Give every column the biome its land calls for")
-                    .clicked()
-                {
-                    self.tools.run_auto = Some(true);
-                }
-                if ui
-                    .button(theme::with_icon(Icon::WandSparkles, "Auto paint: whole map"))
-                    .on_hover_text("Paint every column as its biome calls for")
-                    .clicked()
-                {
-                    self.tools.run_auto = Some(false);
-                }
-                if ui.button(theme::with_icon(Icon::Settings2, "Automatic rules…")).clicked() {
-                    self.dialog = Some(Dialog::AutoRules(false));
-                }
-                ui.separator();
-                ui.menu_button(theme::with_icon(Icon::Map, "Whole map"), |ui| {
-                    for what in crate::reshape::WholeOp::ALL {
-                        if ui.button(theme::with_icon(what.icon(), &format!("{}…", what.label()))).on_hover_text(what.about()).clicked() {
-                            self.open_reshape(what);
-                        }
+            for menu in &menus {
+                ui.menu_button(menu.title, |ui| {
+                    if let Some(command) = crate::menu::ui(ui, &menu.entries) {
+                        picked = Some(command);
                     }
                 });
-                ui.separator();
-                if ui
-                    .button(theme::with_icon(Icon::Pickaxe, "Ores…"))
-                    .on_hover_text("The ores the export lays in the rock: where, how many, how large")
-                    .clicked()
-                {
-                    self.open_ores(&ctx);
-                }
-                if ui
-                    .button(theme::with_icon(Icon::ScanSearch, "Analyse the map…"))
-                    .on_hover_text("A survival check of the whole map: every block counted, what breaks survival, what is missing")
-                    .clicked()
-                {
-                    self.open_analysis(&ctx);
-                }
-            });
-            ui.menu_button("View", |ui| {
-                for (choice, label) in [(ThemeChoice::System, "Follow the system"), (ThemeChoice::Light, "Light"), (ThemeChoice::Dark, "Dark")] {
-                    if ui.radio(self.settings.theme == choice, label).clicked() {
-                        self.settings.theme = choice;
-                    }
-                }
-                ui.separator();
-                if ui.button(theme::with_icon(Icon::Settings, "Settings… (⌘,)")).clicked() {
-                    self.dialog = Some(Dialog::Preferences(PrefsSection::Appearance));
-                }
-                if ui.button("Reset workspaces").clicked() {
-                    self.layout = Layout::default();
-                }
-            });
-            ui.menu_button("Help", |ui| {
-                if ui.button(theme::with_icon(Icon::BookOpen, "Massif Help  (F1)")).clicked() {
-                    self.dialog = Some(Dialog::Help(crate::help::HelpState::default()));
-                }
-                if ui.button(theme::with_icon(Icon::Keyboard, "Keyboard shortcuts")).clicked() {
-                    self.dialog = Some(Dialog::Help(crate::help::HelpState {
-                        topic: crate::help::topic_index("Shortcuts"),
-                        query: String::new(),
-                    }));
-                }
-                ui.separator();
-                if ui.button(theme::with_icon(Icon::House, "Home screen")).clicked() {
-                    self.open_home(Page::NewMap);
-                }
-                if ui.button(theme::with_icon(Icon::Info, "About Massif")).clicked() {
-                    self.dialog = Some(Dialog::About);
-                }
-            });
+            }
 
             ui.separator();
             let busy = self.blocking_job().is_some();
@@ -1731,6 +1608,87 @@ impl MassifApp {
                 }
             });
         });
+        if let Some(command) = picked {
+            self.command(&ctx, command);
+        }
+    }
+
+    /// What the menus depend on, now.
+    fn menu_state(&self) -> crate::menu::State<'_> {
+        crate::menu::State {
+            editor: self.home.is_none(),
+            // Every dialog is modal, as is the wait for a map being opened
+            // or made: the window's menus cannot be reached then.
+            idle: self.dialog.is_none() && self.blocking_job().is_none(),
+            undo: self.doc.history.undo_label(),
+            redo: self.doc.history.redo_label(),
+            recent: &self.settings.recent,
+            theme: self.settings.theme,
+        }
+    }
+
+    /// The menus of the top bar (and of macOS's menu bar), as they are now.
+    fn menus(&self) -> Vec<crate::menu::Menu> {
+        crate::menu::menus(&self.menu_state())
+    }
+
+    /// Do what an item of the menus does, wherever it was picked: in the
+    /// window's menus, or in macOS's menu bar.
+    fn command(&mut self, ctx: &egui::Context, command: Command) {
+        match command {
+            Command::NewWorld => self.open_home(Page::NewMap),
+            // On the home screen, as its own Open… does.
+            Command::Open if self.home.is_some() => self.home_action(ctx, HomeAction::Open),
+            Command::Open => self.request(ctx, Pending::Open(None)),
+            Command::ImportWorld => self.home_action(ctx, HomeAction::Import),
+            Command::FromHeightMap => self.open_home(Page::FromHeightmap),
+            Command::OpenRecent(path) => self.request(ctx, Pending::Open(Some(path))),
+            Command::Save => {
+                self.save(ctx, false);
+            }
+            Command::SaveAs => {
+                self.save(ctx, true);
+            }
+            Command::ExportHeightMap => self.export_heightmap(ctx),
+            Command::Export => self.open_export_dialog(),
+            // Asked first if the map has changes (see `handle_close`).
+            Command::Quit => ctx.send_viewport_cmd(ViewportCommand::Close),
+            Command::Undo => self.undo(ctx),
+            Command::Redo => self.redo(ctx),
+            Command::AutoBiome => self.tools.run_auto = Some(true),
+            Command::AutoPaint => self.tools.run_auto = Some(false),
+            Command::AutoRules => self.dialog = Some(Dialog::AutoRules(false)),
+            Command::WholeMap(what) => self.open_reshape(what),
+            Command::Ores => self.open_ores(ctx),
+            Command::Analyse => self.open_analysis(ctx),
+            Command::Theme(choice) => self.settings.theme = choice,
+            Command::Settings => self.dialog = Some(Dialog::Preferences(PrefsSection::Appearance)),
+            Command::ResetWorkspaces => self.layout = Layout::default(),
+            Command::Help => self.dialog = Some(Dialog::Help(crate::help::HelpState::default())),
+            Command::Shortcuts => {
+                self.dialog = Some(Dialog::Help(crate::help::HelpState {
+                    topic: crate::help::topic_index("Shortcuts"),
+                    query: String::new(),
+                }));
+            }
+            Command::HomeScreen => self.open_home(Page::NewMap),
+            Command::About => self.dialog = Some(Dialog::About),
+        }
+    }
+
+    /// What was picked in macOS's menu bar since the last frame, if it can
+    /// still be done.
+    fn menu_bar_commands(&mut self, ctx: &egui::Context) {
+        let picked = crate::menubar::take();
+        if picked.is_empty() {
+            return;
+        }
+        for command in picked {
+            if crate::menu::enabled(&self.menus(), &command) {
+                self.command(ctx, command);
+            }
+        }
+        ctx.request_repaint();
     }
 
     fn workspace_tabs(&mut self, ui: &mut Ui) {
@@ -2970,6 +2928,7 @@ impl MassifApp {
         }
         self.handle_close(&ctx);
         self.shortcuts(&ctx);
+        self.menu_bar_commands(&ctx);
         self.map_cache.sync_generation(self.doc.generation);
         if let Some(msg) = self.feedback.take() {
             self.say(&ctx, msg, false, None);
@@ -3025,6 +2984,10 @@ impl eframe::App for MassifApp {
         crate::startup::frame_begins(ui.ctx(), frame);
         self.dev.begin();
         self.frame_ui(ui, frame);
+        // macOS's menu bar shows the menus as this frame left them.
+        if crate::menubar::NATIVE {
+            crate::menubar::sync(&self.menus());
+        }
         let now = ui.input(|i| i.time);
         self.dev.end(now);
         crate::startup::frame_laid_out(ui);
@@ -3539,6 +3502,86 @@ mod tests {
         let image = h.render().expect("rendered");
         let crop = image::imageops::crop_imm(&image, 0, 0, 420, 44).to_image();
         crop.save(dir.join("menu-bar.png")).unwrap();
+        // File and Edit open, their shortcuts beside their items.
+        add_tower(&mut h);
+        for (menu, height) in [("File", 380), ("Edit", 380)] {
+            h.get_by_role_and_label(egui::accesskit::Role::Button, menu).click();
+            h.run_steps(3);
+            let image = h.render().expect("rendered");
+            let crop = image::imageops::crop_imm(&image, 0, 0, 460, height).to_image();
+            crop.save(dir.join(format!("menu-{}.png", menu.to_lowercase()))).unwrap();
+            h.key_press(Key::Escape);
+            h.run_steps(2);
+        }
+    }
+
+    /// One step to undo: a level added, named "Tower".
+    fn add_tower(h: &mut egui_kittest::Harness<'_, MassifApp>) {
+        let doc = &mut h.state_mut().doc;
+        doc.history.begin("Tower", doc.dim);
+        doc.history.edit(&mut doc.world, 0).structure().add_level("Tower", massif_core::level::LevelKind::Solid);
+        doc.commit();
+    }
+
+    /// The window's menus are drawn from the list macOS's menu bar shows,
+    /// and the same commands run whether an item is picked in the window,
+    /// in the menu bar (here as the bar hands it over) or by its keys; what
+    /// cannot be done then is not done.
+    #[test]
+    fn the_menus_do_what_they_say() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(3);
+        // In the window: View ▸ Light, then Edit ▸ Undo, named after the
+        // step it takes back.
+        let menu = |h: &egui_kittest::Harness<'_, MassifApp>, title: &str| h.get_by_role_and_label(egui::accesskit::Role::Button, title).click();
+        menu(&h, "View");
+        h.run_steps(2);
+        h.get_by_label("Light").click();
+        h.run_steps(2);
+        assert_eq!(h.state().settings.theme, ThemeChoice::Light);
+        add_tower(&mut h);
+        let levels = h.state().doc.dimension().levels.len();
+        menu(&h, "Edit");
+        h.run_steps(2);
+        h.get_by_label_contains("Undo Tower").click();
+        h.run_steps(2);
+        assert_eq!(h.state().doc.dimension().levels.len(), levels - 1, "the tower is undone");
+        // Picked in the menu bar: done at the next frame.
+        crate::menubar::pick(Command::About);
+        h.run_steps(2);
+        assert!(matches!(h.state().dialog, Some(Dialog::About)));
+        // A dialog holds the window: Settings is greyed, and not done.
+        crate::menubar::pick(Command::Settings);
+        h.run_steps(2);
+        assert!(matches!(h.state().dialog, Some(Dialog::About)));
+        h.state_mut().dialog = None;
+        h.run_steps(1);
+        // The keys the menus show: ⌘, and F1.
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Comma);
+        h.run_steps(2);
+        assert!(matches!(h.state().dialog, Some(Dialog::Preferences(_))));
+        h.state_mut().dialog = None;
+        h.key_press(Key::F1);
+        h.run_steps(2);
+        assert!(matches!(h.state().dialog, Some(Dialog::Help(_))));
+        h.state_mut().dialog = None;
+        h.run_steps(1);
+        // The home screen: the ways in can be picked, not what acts on the
+        // map.
+        crate::menubar::pick(Command::HomeScreen);
+        h.run_steps(2);
+        assert!(h.state().home.is_some());
+        crate::menubar::pick(Command::Export);
+        h.run_steps(2);
+        assert!(h.state().dialog.is_none(), "no export from the home screen");
+        crate::menubar::pick(Command::FromHeightMap);
+        h.run_steps(2);
+        assert_eq!(h.state().home.as_ref().map(|home| home.page), Some(Page::FromHeightmap));
+        // ⌘N, as New World… does there too.
+        h.key_press_modifiers(Modifiers::COMMAND, Key::N);
+        h.run_steps(2);
+        assert_eq!(h.state().home.as_ref().map(|home| home.page), Some(Page::NewMap));
     }
 
     /// The app on a small map of islands (or the .massif MASSIF_HEIGHTS_WORLD
