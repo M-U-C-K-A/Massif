@@ -36,8 +36,9 @@ The check runs in the background — a few seconds for a map of 5,888 blocks a s
 
 # The window
 ## Menus
-**File**, **Edit**, **View** and **Help** are at the top left of the window, each item with its shortcut beside it.
-- On a Mac they are in the menu bar at the top of the screen too, as in every Mac app: the same items, greyed out when they cannot be used (what acts on the map while the home screen is shown, everything while a dialog is open). **About Massif**, **Settings…** (`⌘,`) and **Quit Massif** (`⌘Q`) are in its **Massif** menu, and **Help** has the system's search of the menus.
+**File**, **Edit**, **View** and **Help** hold every command, each item with its shortcut beside it, greyed out when it cannot be used (what acts on the map while the home screen is shown, everything while a dialog is open).
+- On a Mac they are in the menu bar at the top of the screen, as in every Mac app; the window's top bar keeps its buttons. **About Massif**, **Settings…** (`⌘,`) and **Quit Massif** (`⌘Q`) are in the **Massif** menu, and **Help** has the system's search of the menus.
+- On Windows and Linux they are at the top left of the window.
 - `⌘Q` asks first when the map has changes that are not saved, as **File ▸ Quit** does.
 
 ## Areas
@@ -152,7 +153,7 @@ The viewport shows the graph's output in 3D, with its sun, clouds, haze and sea 
 **Import from WorldPainter…** opens a `.world` file: its dimensions, heights (tall worlds keep their height), terrains, water, biomes and custom terrains. WorldPainter's **Beaches** come in as it draws them: grass with patches of sand, gravel and clay. Layers Massif does not have yet are listed in the import report.
 
 # Settings
-**Settings…** (`⌘,`: in the **Massif** menu on a Mac, in **View** in the window, or the home screen's sidebar) has six sections.
+**Settings…** (`⌘,`: in the **Massif** menu on a Mac, in **View** on Windows and Linux, or the home screen's sidebar) has six sections.
 - **Appearance**: the theme, the accent colour, and whether the home screen's picture moves.
 - **Typeface**: what the interface is set in — the system's own typeface, or Inter, Geist, IBM Plex Sans or Manrope, built into Massif. Each is shown in itself; a click sets the whole interface in it.
 - **Sounds**: little sounds for what happens, made by Massif as it plays them. **Essential**: tasks done, saving, errors. **All**: the interface too (choices, switches, windows, workspaces). Each can be heard from there. The sound output is held only while a sound plays: headphones are free to go to another device.

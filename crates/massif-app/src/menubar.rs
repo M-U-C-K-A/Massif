@@ -1,7 +1,8 @@
 //! The menus in macOS's menu bar, at the top of the screen: Massif's own
 //! (About, Settings…, Services, Hide, Quit), then File, Edit, View and
-//! Help, made from the list the window's top bar draws (`menu`) and kept in
-//! step with it frame after frame. What is picked there waits here until
+//! Help, made from the list the window's top bar draws on other systems
+//! (`menu`) and kept in step with the app frame after frame, while the top
+//! bar keeps only its buttons. What is picked there waits here until
 //! the app takes it, at its next frame, as files the Finder asks to open do
 //! (`finder`).
 //!

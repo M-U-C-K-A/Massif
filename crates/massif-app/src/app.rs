@@ -288,6 +288,9 @@ pub struct MassifApp {
     /// The window has no native title bar: the top bar hosts the traffic
     /// lights and moves the window.
     unified_titlebar: bool,
+    /// File, Edit, View and Help are in the system's menu bar (macOS), not
+    /// in the top bar.
+    menus_in_menu_bar: bool,
 }
 
 /// A world from a file: a Massif world, or a WorldPainter one imported.
@@ -373,6 +376,7 @@ impl MassifApp {
             app.graph.view.render = render;
         }
         app.unified_titlebar = cfg!(target_os = "macos");
+        app.menus_in_menu_bar = crate::menubar::NATIVE;
         app.brushes = BrushLibrary::installed();
         app.brushes.load_in_background(&cc.egui_ctx);
         app.blocks.load(&cc.egui_ctx, app.settings.minecraft_jar.clone());
@@ -604,6 +608,7 @@ impl MassifApp {
             applied_theme: None,
             access: AccessState::default(),
             unified_titlebar: false,
+            menus_in_menu_bar: false,
         }
     }
 
@@ -1536,8 +1541,9 @@ impl MassifApp {
             style.spacing.button_padding = vec2(10.0, 5.0);
             style.spacing.item_spacing.x = 0.0;
         };
-        // The menus, as the system's menu bar shows them on macOS.
-        let menus = self.menus();
+        // The menus, but for the system's menu bar showing them (macOS): its
+        // buttons are all the bar keeps then.
+        let menus = if self.menus_in_menu_bar { Vec::new() } else { self.menus() };
         let mut picked = None;
         egui::MenuBar::new().style(roomy).ui(ui, |ui| {
             for menu in &menus {
@@ -1547,8 +1553,9 @@ impl MassifApp {
                     }
                 });
             }
-
-            ui.separator();
+            if !menus.is_empty() {
+                ui.separator();
+            }
             let busy = self.blocking_job().is_some();
             let icon = |ui: &mut Ui, icon: Icon, tip: &str, enabled: bool| {
                 let clicked = bar_button(ui, tip, enabled, false, |p, r, c| glyph_in(p, r, icon, c)).clicked();
@@ -3513,6 +3520,34 @@ mod tests {
             h.key_press(Key::Escape);
             h.run_steps(2);
         }
+        // As on a Mac: the window's buttons at the left, the menus in the
+        // system's menu bar.
+        h.state_mut().unified_titlebar = true;
+        h.state_mut().menus_in_menu_bar = true;
+        h.run_steps(3);
+        let image = h.render().expect("rendered");
+        let crop = image::imageops::crop_imm(&image, 0, 0, 640, 48).to_image();
+        crop.save(dir.join("menu-bar-mac.png")).unwrap();
+    }
+
+    /// On a Mac the system's menu bar holds File, Edit, View and Help, and
+    /// the top bar no longer does; elsewhere it keeps them.
+    #[test]
+    fn the_mac_menu_bar_takes_the_menus_out_of_the_window() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(3);
+        let menus = |h: &egui_kittest::Harness<'_, MassifApp>| -> Vec<&str> {
+            ["File", "Edit", "View", "Help"].into_iter().filter(|t| h.query_by_role_and_label(egui::accesskit::Role::Button, t).is_some()).collect()
+        };
+        assert_eq!(menus(&h), ["File", "Edit", "View", "Help"]);
+        h.state_mut().menus_in_menu_bar = true;
+        h.run_steps(3);
+        assert!(menus(&h).is_empty(), "in the window too: {:?}", menus(&h));
+        // Their keys still work: ⌘, opens the settings.
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Comma);
+        h.run_steps(2);
+        assert!(matches!(h.state().dialog, Some(Dialog::Preferences(_))));
     }
 
     /// One step to undo: a level added, named "Tower".

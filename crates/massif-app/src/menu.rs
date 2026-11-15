@@ -1,8 +1,8 @@
-//! The menus of the top bar — File, Edit, View and Help — as one list: what
-//! each item does, its name, its shortcut, whether it can be used now. The
-//! window's own bar draws the list on every system, and on macOS the menu
-//! bar at the top of the screen shows it too (`menubar`), so the two never
-//! part.
+//! The menus — File, Edit, View and Help — as one list: what each item
+//! does, its name, its shortcut, whether it can be used now. On macOS the
+//! menu bar at the top of the screen shows the list (`menubar`); elsewhere
+//! the window's top bar draws it. The keys are the same either way
+//! (`MassifApp::shortcuts`).
 
 use crate::app::ThemeChoice;
 use crate::reshape::WholeOp;
