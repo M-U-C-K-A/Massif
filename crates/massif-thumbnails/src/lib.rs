@@ -165,6 +165,8 @@ mod com {
         }
     }
 
+    // The two entry points COM looks up by name, exported PRIVATE (see
+    // build.rs).
     #[unsafe(no_mangle)]
     extern "system" fn DllGetClassObject(class: *const GUID, iid: *const GUID, object: *mut *mut c_void) -> HRESULT {
         if object.is_null() || class.is_null() {
