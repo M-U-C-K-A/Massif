@@ -18,6 +18,7 @@
 //! blob). The cold blob is byte-for-byte what the file format stores, so
 //! saving unchanged tiles is a memcpy and opening a file decodes nothing.
 
+pub mod analysis;
 pub mod auto;
 pub mod brush;
 pub mod codec;
@@ -31,6 +32,7 @@ pub mod history;
 pub mod level;
 pub mod noise;
 pub mod objects;
+pub mod ores;
 pub mod ops;
 pub mod pattern;
 pub mod plane;

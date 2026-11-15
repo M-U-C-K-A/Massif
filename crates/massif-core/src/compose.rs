@@ -496,7 +496,7 @@ impl<'a> Materializer<'a> {
 }
 
 #[inline]
-fn stratum_thickness(depth: (u16, u16), column_hash: u32, index: usize) -> u32 {
+pub(crate) fn stratum_thickness(depth: (u16, u16), column_hash: u32, index: usize) -> u32 {
     let (lo, hi) = (depth.0 as u32, depth.1 as u32);
     if lo == u16::MAX as u32 {
         return u32::MAX;
@@ -508,7 +508,7 @@ fn stratum_thickness(depth: (u16, u16), column_hash: u32, index: usize) -> u32 {
 }
 
 #[inline]
-fn pick(blocks: &[(BlockId, u16)], hash: u32) -> BlockId {
+pub(crate) fn pick(blocks: &[(BlockId, u16)], hash: u32) -> BlockId {
     if blocks.len() == 1 {
         return blocks[0].0;
     }

@@ -185,6 +185,9 @@ pub struct MapView {
     gliding: bool,
     /// The view of the last frame, to tell when it moves.
     last_view: ([f64; 2], f32),
+    /// A spot pointed out from elsewhere (the survival check): where, and
+    /// since when (`None` until it is first drawn).
+    ping: Option<([f64; 2], Option<f64>)>,
 }
 
 /// What the view glides to.
@@ -227,6 +230,7 @@ impl Default for MapView {
             moved_at: 0.0,
             gliding: false,
             last_view: ([0.0, 0.0], 1.0),
+            ping: None,
         }
     }
 }
@@ -608,6 +612,19 @@ impl MapView {
             anchor: self.canvas.center(),
         });
         self.gliding = false;
+    }
+
+    /// Glide to block `(x, z)`, close enough to see the land around it,
+    /// and point it out with rings for a moment.
+    pub fn show_spot(&mut self, x: f64, z: f64) {
+        self.goal = Some(Goal {
+            zoom: self.zoom.clamp(2.0, 6.0),
+            center: Some([x, z]),
+            anchor: self.canvas.center(),
+        });
+        self.velocity = Vec2::ZERO;
+        self.gliding = false;
+        self.ping = Some(([x, z], None));
     }
 
     /// One block per point.
@@ -1079,6 +1096,31 @@ impl MapView {
             let red = Color32::from_rgb(230, 40, 40);
             painter.line_segment([o - vec2(0.0, 7.0), o + vec2(0.0, 7.0)], Line::new(1.5, red));
             painter.line_segment([o - vec2(4.0, 0.0), o + vec2(4.0, 0.0)], Line::new(1.5, red));
+        }
+
+        // A spot pointed out: rings spreading from it for a few seconds.
+        if let Some((at, since)) = self.ping {
+            let now = ui.input(|i| i.time);
+            let since = since.unwrap_or(now);
+            self.ping = Some((at, Some(since)));
+            let t = (now - since) as f32;
+            if t > 3.2 {
+                self.ping = None;
+            } else {
+                let p = self.to_screen(canvas, at[0], at[1]);
+                let still = crate::theme::reduce_motion(ui.ctx());
+                let fade = if still { 1.0 } else { (1.0 - (t - 2.4).max(0.0) / 0.8).clamp(0.0, 1.0) };
+                // Rings spreading out; one ring, still, with less motion.
+                for k in 0..if still { 1 } else { 2 } {
+                    let phase = if still { 0.45 } else { (t / 1.1 + k as f32 * 0.5).fract() };
+                    let r = 7.0 + phase * 34.0;
+                    let alpha = if still { 1.0 } else { (1.0 - phase) * fade };
+                    painter.circle_stroke(p, r, Line::new(3.5, Color32::from_black_alpha((70.0 * alpha) as u8)));
+                    painter.circle_stroke(p, r, Line::new(2.0, pal.accent.gamma_multiply(alpha)));
+                }
+                painter.circle(p, 5.5, pal.accent.gamma_multiply(fade), Line::new(2.0, Color32::WHITE.gamma_multiply(fade)));
+                ui.ctx().request_repaint();
+            }
         }
 
         // The river being laid out, with its handles; before a source is

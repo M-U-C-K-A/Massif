@@ -154,6 +154,8 @@ struct ExportForm {
     hardcore: bool,
     allow_cheats: bool,
     surroundings: Surroundings,
+    /// The export lays ores (see Edit ▸ Ores).
+    ores: bool,
     structures: bool,
     overwrite: bool,
     border: massif_anvil::WorldBorder,
@@ -205,6 +207,10 @@ enum Dialog {
     Help(crate::help::HelpState),
     /// A filter over the whole map: its settings, the map before and after.
     Reshape(Box<crate::reshape::ReshapeForm>),
+    /// The survival check of the whole map.
+    Analysis(Box<crate::analysis::AnalysisView>),
+    /// The ores the export lays.
+    Ores(Box<crate::ores::OresView>),
 }
 
 struct Status {
@@ -251,6 +257,9 @@ pub struct MassifApp {
     dialog: Option<Dialog>,
     /// Whether a dialog was open last frame (for its sound).
     dialog_was_open: bool,
+    /// The survival check last closed: opened again as it was while the
+    /// map has not changed.
+    analysis: Option<Box<crate::analysis::AnalysisView>>,
     /// When the memory limit was last applied (seconds).
     memory_checked: f64,
     /// What the Developer panel shows, measured frame after frame.
@@ -575,6 +584,7 @@ impl MassifApp {
             jobs: Vec::new(),
             dialog: None,
             dialog_was_open: false,
+            analysis: None,
             memory_checked: f64::NEG_INFINITY,
             dev: crate::devtools::DevStats::default(),
             after_save: None,
@@ -994,6 +1004,51 @@ impl MassifApp {
         }
     }
 
+    /// The survival check of the whole map, worked out on a cold copy of it.
+    /// The one last closed comes back as it was while the map is the same.
+    fn open_analysis(&mut self, ctx: &egui::Context) {
+        let view = match self.analysis.take() {
+            Some(view) if view.revision() == self.doc.revision => view,
+            Some(mut view) => {
+                let snapshot = self.doc.world.snapshot();
+                view.again(ctx, snapshot, self.doc.dim, self.doc.revision);
+                view
+            }
+            None => {
+                let snapshot = self.doc.world.snapshot();
+                Box::new(crate::analysis::AnalysisView::start(ctx, snapshot, self.doc.dim, self.doc.revision))
+            }
+        };
+        self.dialog = Some(Dialog::Analysis(view));
+    }
+
+    /// The ores the export lays, over a cold copy of the map.
+    fn open_ores(&mut self, ctx: &egui::Context) {
+        let snapshot = self.doc.world.snapshot();
+        self.dialog = Some(Dialog::Ores(Box::new(crate::ores::OresView::new(ctx, snapshot, self.doc.dim))));
+    }
+
+    /// Show column `(x, z)` on a map view of the World side: it glides
+    /// there and points the column out.
+    fn show_on_map(&mut self, ctx: &egui::Context, x: i32, z: i32) {
+        self.layout.switch_side(false);
+        let mut areas = Vec::new();
+        self.layout.current().root.areas(&mut areas);
+        let map = areas
+            .iter()
+            .filter(|(_, k)| *k == EditorKind::Map)
+            .map(|(id, _)| *id)
+            .find(|id| Some(*id) == self.active_map)
+            .or_else(|| areas.iter().find(|(_, k)| *k == EditorKind::Map).map(|(id, _)| *id));
+        match map {
+            Some(id) => {
+                self.maps.entry(id).or_default().show_spot(x as f64 + 0.5, z as f64 + 0.5);
+                self.active_map = Some(id);
+            }
+            None => self.say(ctx, format!("{x}, {z}: no map is shown in this workspace"), false, None),
+        }
+    }
+
     fn say(&mut self, ctx: &egui::Context, text: impl Into<String>, error: bool, reveal: Option<PathBuf>) {
         let text = text.into();
         if error {
@@ -1118,6 +1173,7 @@ impl MassifApp {
             hardcore: false,
             allow_cheats: true,
             surroundings: Surroundings::Vanilla,
+            ores: self.doc.world.meta.ores.on,
             structures: true,
             overwrite: false,
             border: massif_anvil::WorldBorder::default(),
@@ -1549,6 +1605,21 @@ impl MassifApp {
                         }
                     }
                 });
+                ui.separator();
+                if ui
+                    .button(theme::with_icon(Icon::Pickaxe, "Ores…"))
+                    .on_hover_text("The ores the export lays in the rock: where, how many, how large")
+                    .clicked()
+                {
+                    self.open_ores(&ctx);
+                }
+                if ui
+                    .button(theme::with_icon(Icon::ScanSearch, "Analyse the map…"))
+                    .on_hover_text("A survival check of the whole map: every block counted, what breaks survival, what is missing")
+                    .clicked()
+                {
+                    self.open_analysis(&ctx);
+                }
             });
             ui.menu_button("View", |ui| {
                 for (choice, label) in [(ThemeChoice::System, "Follow the system"), (ThemeChoice::Light, "Light"), (ThemeChoice::Dark, "Dark")] {
@@ -2424,6 +2495,62 @@ impl MassifApp {
                     self.dialog = Some(Dialog::Reshape(form));
                 }
             }
+            Dialog::Analysis(mut view) => {
+                use crate::analysis::Choice;
+                let mut choice = Choice::Keep;
+                let revision = self.doc.revision;
+                let response = modal(ctx, "analysis").show(ctx, |ui| {
+                    choice = view.ui(ui, revision);
+                });
+                if response.should_close() {
+                    keep = false;
+                }
+                match choice {
+                    Choice::Keep => {}
+                    Choice::Close => keep = false,
+                    Choice::Again => {
+                        let snapshot = self.doc.world.snapshot();
+                        view.again(ctx, snapshot, self.doc.dim, revision);
+                    }
+                    Choice::Show(x, z) => {
+                        keep = false;
+                        self.show_on_map(ctx, x, z);
+                    }
+                    Choice::Say(text, error) => self.say(ctx, text, error, None),
+                    Choice::Ores => {
+                        self.analysis = Some(view);
+                        self.open_ores(ctx);
+                        return;
+                    }
+                }
+                if keep {
+                    self.dialog = Some(Dialog::Analysis(view));
+                } else {
+                    self.analysis = Some(view);
+                }
+            }
+            Dialog::Ores(mut view) => {
+                let mut close = None;
+                let response = modal(ctx, "ores").show(ctx, |ui| {
+                    if let crate::ores::Choice::Close(settings) = view.ui(ui) {
+                        close = Some(settings);
+                    }
+                });
+                if response.should_close() && close.is_none() {
+                    close = Some(view.settings.clone());
+                }
+                match close {
+                    Some(mut settings) => {
+                        settings.tidy();
+                        if settings != self.doc.world.meta.ores {
+                            self.doc.world.meta.ores = settings;
+                            self.doc.mark_changed();
+                            self.say(ctx, "Ores set: the next export lays them so", false, None);
+                        }
+                    }
+                    None => self.dialog = Some(Dialog::Ores(view)),
+                }
+            }
             Dialog::AutoRules(mut paint) => {
                 let response = modal(ctx, "auto rules").show(ctx, |ui| {
                     ui.set_width(700.0);
@@ -2658,6 +2785,10 @@ impl MassifApp {
                         dir = massif_anvil::unique_dir(&form.parent, &format!("{} test", form.name.trim()));
                         // Spawn in the middle of what is exported.
                         options.spawn = Some([form.test_centre.0, form.spawn[1].max(self.doc.world.meta.sea_level + 1), form.test_centre.1]);
+                    }
+                    if form.ores != self.doc.world.meta.ores.on {
+                        self.doc.world.meta.ores.on = form.ores;
+                        self.doc.mark_changed();
                     }
                     let snapshot = self.doc.world.snapshot();
                     self.jobs.push(Job::export(ctx, snapshot, dir, options));
@@ -3122,6 +3253,12 @@ fn export_world(ui: &mut Ui, form: &mut ExportForm) {
     card(ui, "Around the map", "What Minecraft generates beyond the edges of the map.", |ui| {
         ui.radio_value(&mut form.surroundings, Surroundings::Vanilla, "Vanilla terrain from the world's seed");
         ui.radio_value(&mut form.surroundings, Surroundings::Void, "Nothing: the map floats in the void");
+    });
+    card(ui, "Ores", "Laid in the rock as Minecraft lays them: Minecraft adds none to the map's finished chunks.", |ui| {
+        row(ui, "Lay ores", |ui| {
+            crate::widgets::switch(ui, &mut form.ores);
+        });
+        ui.label(RichText::new("Where, how many and how large: Edit ▸ Ores…").size(11.5).color(pal.weak));
     });
     card(ui, "Spawn point", "Where players appear the first time.", |ui| {
         row(ui, "x, y, z", |ui| {
@@ -3874,6 +4011,292 @@ mod tests {
         h.state_mut().undo(&ctx);
         h.run_steps(2);
         assert_eq!(heights(&h), before, "one undo takes it all back");
+    }
+
+    /// Edit ▸ Analyse the map: the survival check reads the whole map in
+    /// the background and says what a generated map misses (wood) and has
+    /// (the ores the export lays);
+    /// its tabs draw the numbers; a spot shown glides a map view there.
+    #[test]
+    fn analysing_the_map() {
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        for theme in [ThemeChoice::Dark, ThemeChoice::Light] {
+            let mut h = harness(theme);
+            h.run_steps(5);
+            let ctx = h.ctx.clone();
+            h.state_mut().open_analysis(&ctx);
+            let started = std::time::Instant::now();
+            while !h.state().dialog.as_ref().is_some_and(|d| matches!(d, Dialog::Analysis(v) if v.is_done())) {
+                assert!(started.elapsed().as_secs() < 60, "the analysis never came");
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            h.run_steps(3);
+            let titles: Vec<String> = match &h.state().dialog {
+                Some(Dialog::Analysis(v)) => v.findings().iter().map(|f| f.title.clone()).collect(),
+                _ => unreachable!(),
+            };
+            assert!(titles.iter().any(|t| t == "No wood anywhere"), "{titles:?}");
+            assert!(titles.iter().any(|t| t == "Ores to mine"), "a new map lays ores: {titles:?}");
+            let shade = if theme == ThemeChoice::Dark { "dark" } else { "light" };
+            if let Some(dir) = &dir {
+                h.render().unwrap().save(dir.join(format!("dialog-analysis-survival-{shade}.png"))).unwrap();
+            }
+            for (k, tab) in ["survival", "relief", "blocks", "biomes"].into_iter().enumerate() {
+                if let Some(Dialog::Analysis(v)) = &mut h.state_mut().dialog {
+                    v.set_tab(k);
+                }
+                h.run_steps(3);
+                if let Some(dir) = &dir {
+                    h.render().unwrap().save(dir.join(format!("dialog-analysis-{tab}-{shade}.png"))).unwrap();
+                    // And further down.
+                    h.event(egui::Event::PointerMoved(pos2(620.0, 640.0)));
+                    for _ in 0..2 {
+                        h.event(egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: vec2(0.0, -460.0),
+                            phase: egui::TouchPhase::Move,
+                            source: egui::MouseWheelSource::Wheel,
+                            modifiers: Modifiers::NONE,
+                        });
+                        h.run_steps(4);
+                    }
+                    h.render().unwrap().save(dir.join(format!("dialog-analysis-{tab}-{shade}-below.png"))).unwrap();
+                }
+            }
+            // Closed (Escape) and opened again on the same map: the same
+            // check, at once.
+            h.key_press(egui::Key::Escape);
+            h.run_steps(2);
+            assert!(h.state().dialog.is_none() && h.state().analysis.is_some(), "closed and kept");
+            h.state_mut().open_analysis(&ctx);
+            assert!(matches!(&h.state().dialog, Some(Dialog::Analysis(v)) if v.is_done()), "the same check, at once");
+            h.state_mut().dialog = None;
+        }
+        // A spot shown: the map glides there.
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let ctx = h.ctx.clone();
+        h.state_mut().show_on_map(&ctx, 300, -200);
+        h.run_steps(5);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("analysis-show-on-map.png")).unwrap();
+        }
+        h.run_steps(40);
+        let id = h.state().active_map.expect("a map view");
+        let c = h.state().maps[&id].center;
+        assert!((c[0] - 300.5).abs() < 1.0 && (c[1] + 199.5).abs() < 1.0, "the map is at {c:?}");
+
+    }
+
+    /// The survival check of a real map (MASSIF_RIVER_WORLD: a .massif),
+    /// every tab drawn. Runs with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn analysing_a_real_world() {
+        let (Some(dir), Some(path)) = (std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from), std::env::var_os("MASSIF_RIVER_WORLD")) else {
+            return;
+        };
+        let world = massif_format::load(std::path::Path::new(&path)).expect("the world loads");
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1600.0, 1000.0))
+            .with_pixels_per_point(1.0)
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_eframe(move |cc| {
+                theme::install(&cc.egui_ctx);
+                MassifApp::for_tests(world)
+            });
+        h.run_steps(5);
+        let ctx = h.ctx.clone();
+        h.state_mut().open_analysis(&ctx);
+        let started = std::time::Instant::now();
+        while !h.state().dialog.as_ref().is_some_and(|d| matches!(d, Dialog::Analysis(v) if v.is_done())) {
+            assert!(started.elapsed().as_secs() < 120, "the analysis never came");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        eprintln!("analysed in {:.2} s", started.elapsed().as_secs_f32());
+        for (k, tab) in ["survival", "relief", "blocks", "biomes"].into_iter().enumerate() {
+            if let Some(Dialog::Analysis(v)) = &mut h.state_mut().dialog {
+                v.set_tab(k);
+            }
+            h.run_steps(3);
+            h.render().unwrap().save(dir.join(format!("real-analysis-{tab}.png"))).unwrap();
+        }
+        // The ores of the same map, cut through.
+        h.state_mut().dialog = None;
+        let t = std::time::Instant::now();
+        for _ in 0..10 {
+            h.step();
+        }
+        eprintln!("a frame without a window: {:.1} ms", t.elapsed().as_secs_f32() * 100.0);
+        let started = std::time::Instant::now();
+        h.state_mut().open_ores(&ctx);
+        while !h.state().dialog.as_ref().is_some_and(|d| matches!(d, Dialog::Ores(v) if v.is_ready())) {
+            assert!(started.elapsed().as_secs() < 120, "the ores window never got ready");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        eprintln!("ores window ready in {:.2} s", started.elapsed().as_secs_f32());
+        let t = std::time::Instant::now();
+        for _ in 0..10 {
+            h.step();
+        }
+        eprintln!("a frame of the ores window: {:.1} ms", t.elapsed().as_secs_f32() * 100.0);
+        h.render().unwrap().save(dir.join("real-ores.png")).unwrap();
+    }
+
+    /// Edit ▸ Ores: the window cuts the map through with the ores the
+    /// export lays and a candle for each band; dragging the top of the
+    /// diamonds' candle raises their band; closing keeps it in the map. The
+    /// survival check of a map without ores leads there.
+    #[test]
+    fn setting_the_ores() {
+        use egui_kittest::kittest::Queryable;
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let wait = |h: &mut egui_kittest::Harness<'static, MassifApp>| {
+            let started = std::time::Instant::now();
+            while !h.state().dialog.as_ref().is_some_and(|d| matches!(d, Dialog::Ores(v) if v.is_ready())) {
+                assert!(started.elapsed().as_secs() < 60, "the ores window never got ready");
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            h.run_steps(3);
+        };
+        for theme in [ThemeChoice::Dark, ThemeChoice::Light] {
+            let mut h = harness(theme);
+            h.run_steps(5);
+            let ctx = h.ctx.clone();
+            h.state_mut().open_ores(&ctx);
+            wait(&mut h);
+            let shade = if theme == ThemeChoice::Dark { "dark" } else { "light" };
+            if let Some(dir) = &dir {
+                h.render().unwrap().save(dir.join(format!("dialog-ores-{shade}.png"))).unwrap();
+            }
+            if theme == ThemeChoice::Light {
+                continue;
+            }
+            for scale in ["Log", "Share"] {
+                h.get_by_label(scale).click();
+                h.run_steps(3);
+                if let Some(dir) = &dir {
+                    h.render().unwrap().save(dir.join(format!("dialog-ores-{}.png", scale.to_lowercase()))).unwrap();
+                }
+            }
+            h.get_by_label("Blocks").click();
+            // Drag the top of the diamonds' candle up 60 points.
+            let diamond = h.state().doc.world.meta.ores.ores.iter().position(|o| o.mineral == massif_core::analysis::Mineral::Diamond).unwrap();
+            let (from, before) = match &mut h.state_mut().dialog {
+                Some(Dialog::Ores(v)) => {
+                    v.select(diamond);
+                    (v.grip(diamond, 0, true), v.settings.ores[diamond].bands[0].max)
+                }
+                _ => unreachable!(),
+            };
+            h.run_steps(2);
+            h.event(egui::Event::PointerMoved(from));
+            h.step();
+            h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            h.step();
+            for k in 1..=6 {
+                h.event(egui::Event::PointerMoved(from - vec2(0.0, 10.0 * k as f32)));
+                h.step();
+            }
+            if let Some(dir) = &dir {
+                h.render().unwrap().save(dir.join("dialog-ores-dragging.png")).unwrap();
+            }
+            let to = from - vec2(0.0, 60.0);
+            h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+            h.run_steps(2);
+            let after = match &h.state().dialog {
+                Some(Dialog::Ores(v)) => v.settings.ores[diamond].bands[0].max,
+                _ => unreachable!(),
+            };
+            assert!(after > before + 20, "the band rose: {before} → {after}");
+            let revision = h.state().doc.revision;
+            h.key_press(egui::Key::Escape);
+            h.run_steps(2);
+            assert!(h.state().dialog.is_none());
+            assert_eq!(h.state().doc.world.meta.ores.ores[diamond].bands[0].max, after, "kept in the map");
+            assert!(h.state().doc.revision > revision, "the map changed");
+            // Without ores, the survival check leads to the window.
+            h.state_mut().doc.world.meta.ores.on = false;
+            h.state_mut().open_analysis(&ctx);
+            let started = std::time::Instant::now();
+            while !h.state().dialog.as_ref().is_some_and(|d| matches!(d, Dialog::Analysis(v) if v.is_done())) {
+                assert!(started.elapsed().as_secs() < 60, "the analysis never came");
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            h.run_steps(3);
+            // Down to the card about the ores.
+            h.event(egui::Event::PointerMoved(pos2(620.0, 640.0)));
+            h.event(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: vec2(0.0, -260.0),
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Wheel,
+                modifiers: Modifiers::NONE,
+            });
+            h.run_steps(4);
+            if let Some(dir) = &dir {
+                h.render().unwrap().save(dir.join("dialog-analysis-ores-off.png")).unwrap();
+            }
+            h.get_by_label_contains("Set up the ores").click();
+            h.run_steps(2);
+            assert!(matches!(h.state().dialog, Some(Dialog::Ores(_))), "the ores window opened");
+            wait(&mut h);
+            if let Some(dir) = &dir {
+                h.render().unwrap().save(dir.join("dialog-ores-off.png")).unwrap();
+            }
+        }
+    }
+
+    /// A map with diamond blocks and bedrock painted at its surface: the
+    /// check says it breaks survival, in red. Draws with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn a_map_full_of_diamonds() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else { return };
+        let mut h = harness(ThemeChoice::Dark);
+        {
+            let world = &mut h.state_mut().doc.world;
+            let reg = &mut world.registry;
+            let bedrock = reg.terrain_by_name("Bedrock").unwrap();
+            let diamond = reg.intern_block("minecraft:diamond_block", [98, 237, 228]);
+            let ore = reg.intern_block("minecraft:diamond_ore", [121, 158, 152]);
+            reg.terrains.push(massif_core::registry::TerrainDef {
+                name: "Diamond Block".into(),
+                group: "Blocks".into(),
+                color: [98, 237, 228],
+                strata: vec![massif_core::registry::Stratum { blocks: vec![(diamond, 3), (ore, 1)], depth: (3, 5) }],
+                submerged_top: None,
+                biome_hint: None,
+            });
+            let diamonds = reg.terrains.len() as u16 - 1;
+            let ground = world.dims[0].ground_mut();
+            for (k, pos) in ground.positions().collect::<Vec<_>>().into_iter().enumerate() {
+                let tile = ground.tile_mut(pos).unwrap();
+                for cell in (0..massif_core::TILE_AREA).step_by(3) {
+                    tile.terrain.set(cell, if k % 2 == 0 { diamonds } else { bedrock.0 });
+                }
+            }
+        }
+        h.run_steps(5);
+        let ctx = h.ctx.clone();
+        h.state_mut().open_analysis(&ctx);
+        let started = std::time::Instant::now();
+        while !h.state().dialog.as_ref().is_some_and(|d| matches!(d, Dialog::Analysis(v) if v.is_done())) {
+            assert!(started.elapsed().as_secs() < 60, "the analysis never came");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.run_steps(3);
+        let titles: Vec<String> = match &h.state().dialog {
+            Some(Dialog::Analysis(v)) => v.findings().iter().filter(|f| f.severity == massif_core::analysis::Severity::Critical).map(|f| f.title.clone()).collect(),
+            _ => unreachable!(),
+        };
+        assert!(titles.contains(&"Diamonds lying around".to_owned()) && titles.contains(&"Bedrock where players walk".to_owned()), "{titles:?}");
+        h.render().unwrap().save(dir.join("dialog-analysis-diamonds.png")).unwrap();
     }
 
     /// The typefaces: the settings show each in itself, a click sets the

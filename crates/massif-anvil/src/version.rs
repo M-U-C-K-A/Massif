@@ -343,6 +343,10 @@ const NEWER_BLOCKS: &[(&str, i32, &str)] = &[
     ("deepslate_coal_ore", 2724, "minecraft:coal_ore"),
     ("deepslate_gold_ore", 2724, "minecraft:gold_ore"),
     ("deepslate_diamond_ore", 2724, "minecraft:diamond_ore"),
+    ("deepslate_copper_ore", 2724, "minecraft:iron_ore"),
+    ("deepslate_redstone_ore", 2724, "minecraft:redstone_ore"),
+    ("deepslate_lapis_ore", 2724, "minecraft:lapis_ore"),
+    ("deepslate_emerald_ore", 2724, "minecraft:emerald_ore"),
     // 1.19
     ("mud", 3105, "minecraft:coarse_dirt"),
     ("packed_mud", 3105, "minecraft:coarse_dirt"),

@@ -632,6 +632,7 @@ pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Re
             sea_level,
             lava: false,
             graph: None,
+            ores: Default::default(),
         },
         registry: mapper.registry,
         dims,

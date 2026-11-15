@@ -19,6 +19,10 @@ pub struct WorldMeta {
     /// The terrain graph of the world, if one was made.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graph: Option<crate::graph::Graph>,
+    /// The ores the export lays in the rock (as Minecraft's own, unless
+    /// set otherwise).
+    #[serde(default)]
+    pub ores: crate::ores::OreSettings,
 }
 
 impl Default for WorldMeta {
@@ -30,6 +34,7 @@ impl Default for WorldMeta {
             sea_level: 63,
             lava: false,
             graph: None,
+            ores: crate::ores::OreSettings::default(),
         }
     }
 }

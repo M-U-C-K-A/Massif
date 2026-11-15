@@ -41,6 +41,9 @@ fn build_world() -> World {
         seed: 7,
         ..GenParams::default()
     });
+    // Block for block as the world model says: no ores (see
+    // `ores_are_laid_in_the_rock`).
+    w.meta.ores.on = false;
     let terrain = |w: &World, name: &str| w.registry.terrain_by_name(name).unwrap();
     let (grass, sand, moss) = (terrain(&w, "Grass"), terrain(&w, "Sand"), terrain(&w, "Moss"));
     let lush = w.registry.biome_by_id("minecraft:lush_caves").unwrap();
@@ -259,6 +262,83 @@ fn exported_blocks_match_the_world_model() {
         }
     }
 
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// What column `(x, z)` holds once the ores are laid: the world model's
+/// blocks, and the ores where the survival check counts them (over the
+/// runs of the columns, as [`massif_core::ores::rock_at`] reads them).
+fn expected_with_ores(world: &World, x: i32, z: i32) -> Vec<String> {
+    let mut column = expected_column(world, x, z);
+    let dim = &world.dims[0];
+    let reg = &world.registry;
+    let mat = Materializer::new(reg, world.meta.seed, dim.min_y);
+    let hosts = massif_core::ores::hosts(reg);
+    let placer = massif_core::ores::Placer::new(&world.meta.ores, world.meta.seed).unwrap();
+    let (cx, cz) = (x >> 4, z >> 4);
+    let mut runs: HashMap<(i32, i32), Vec<massif_core::Span>> = HashMap::new();
+    for bz in cz * 16..cz * 16 + 16 {
+        for bx in cx * 16..cx * 16 + 16 {
+            let stack = TileStack::new(dim, TilePos::containing(bx, bz), true).unwrap();
+            let mut spans = Vec::new();
+            stack.spans(local_index(bx, bz), &mut spans);
+            runs.insert((bx, bz), spans);
+        }
+    }
+    placer.chunk_over(
+        cx,
+        cz,
+        |bx, by, bz| massif_core::ores::rock_at(&runs[&(bx, bz)], &mat, &hosts, bx, by, bz, dim.max_y),
+        |b, (_, host)| {
+            if (b.x, b.z) == (x, z) {
+                let (stone, deep) = massif_core::ores::ore_blocks(world.meta.ores.ores[b.ore as usize].mineral);
+                let name = if host == massif_core::ores::Host::Deepslate { deep } else { stone };
+                column[(b.y - dim.min_y) as usize] = name.split('[').next().unwrap().to_owned();
+            }
+        },
+    );
+    column
+}
+
+/// With ores on, as a new map has them: every block of 200 columns is the
+/// world model's or the ore the survival check counts there; ores are
+/// found at their heights, never at the top of a column.
+#[test]
+fn ores_are_laid_in_the_rock() {
+    let mut world = build_world();
+    world.meta.ores = Default::default();
+    let dir = temp_dir("ores");
+    export(&world.snapshot(), &dir, &ExportOptions::default(), &Progress::default()).unwrap();
+    let mut reader = Reader::new(&dir);
+    let mut s = 0x9e37_79b9u64;
+    let (mut ores, mut deep_diamonds) = (0, 0);
+    for _ in 0..200 {
+        s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let (x, z) = (((s >> 33) % 256) as i32 - 128, ((s >> 45) % 256) as i32 - 128);
+        let expected = expected_with_ores(&world, x, z);
+        for (i, want) in expected.iter().enumerate() {
+            let y = -64 + i as i32;
+            let got = reader.block(x, y, z);
+            assert_eq!(&got, want, "block at ({x}, {y}, {z})");
+            if got.ends_with("_ore") {
+                ores += 1;
+                assert_ne!(reader.block(x, y + 1, z), "minecraft:air", "an ore in the open at ({x}, {y}, {z})");
+                deep_diamonds += (got == "minecraft:deepslate_diamond_ore") as u32;
+            }
+        }
+    }
+    assert!(ores > 200 && deep_diamonds > 0, "{ores} ores, {deep_diamonds} diamonds in deepslate");
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    // Before deepslate (1.16): plain ores where deepslate ones would be.
+    let dir = temp_dir("ores-old");
+    let options = ExportOptions { target: Target::release("1.16.5").unwrap(), ..ExportOptions::default() };
+    export(&world.snapshot(), &dir, &options, &Progress::default()).unwrap();
+    let mut reader = Reader::new(&dir);
+    reader.any_version = true;
+    let names: std::collections::HashSet<String> = (-128..128).step_by(7).flat_map(|x| (-128..128).step_by(7).map(move |z| (x, z))).flat_map(|(x, z)| (0..60).map(move |y| (x, y, z))).map(|(x, y, z)| reader.block(x, y, z)).collect();
+    assert!(names.iter().any(|n| n.ends_with("_ore")), "{names:?}");
+    assert!(!names.iter().any(|n| n.contains("deepslate")), "{names:?}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
