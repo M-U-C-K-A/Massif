@@ -729,8 +729,8 @@ of its work, live.
 ## If Massif does not start
 
 Massif writes down every step of its start in a log of its own, with the
-time each took, the graphics card it found, and any error, without sending
-anything anywhere:
+time each took, the graphics card it found, and any error or crash, without
+sending anything anywhere:
 
 | System | Log |
 |---|---|
@@ -742,15 +742,37 @@ The log of the start before is kept beside it as `startup.previous.log`, so
 starting again after a start that hung does not lose it. Send both when
 reporting a problem: the last line says where Massif stopped.
 
+- The first frames are followed step by step until one is on the screen:
+  the interface laid out, its shapes and textures sent to the graphics card,
+  the image the window gives to draw on (`get_current_texture`), the frame
+  drawn and presented. A frame the window gives no image for is written
+  down with the reason.
 - If Massif cannot start (no graphics card it can use, a driver that
-  refuses), or stops on an error, a message says so and where the log is.
+  refuses), or stops on an error, a message says so and where the log is. On
+  Windows a crash, in a graphics driver say, is written down with its
+  exception and the file it came from.
 - The window stays hidden until its first picture is drawn, so that it does
-  not flash white. On Windows, if that takes more than 3 seconds, the window
-  is shown anyway. After 20 seconds without a picture, a message says where
-  the log is: the graphics card or its driver is probably stuck.
-- Massif draws with DirectX 12, Vulkan or OpenGL on Windows, Metal on macOS,
-  and Vulkan or OpenGL on Linux. Updating the graphics driver often helps. To
-  try another one, set `WGPU_BACKEND` to `dx12`, `vulkan` or `gl` before
-  starting Massif; `WGPU_POWER_PREF=low` picks the integrated graphics card
-  of a laptop rather than the dedicated one.
+  not flash white; on Windows it is shown before, as drawing in a window
+  never shown is what some drivers handle worst.
+- When the start stays 12 seconds in one step once its graphics card is
+  chosen, the graphics driver is most likely stuck: the graphics API Massif
+  was drawing with is set aside on this computer, and the next starts draw with another one — on Windows
+  DirectX 12 after Vulkan, then OpenGL. On Windows a message offers to start
+  again with it right away. A start that died without a word is found by
+  the next one, which sets its API aside in the same way. The APIs set aside
+  are listed in `graphics.txt` beside the log: delete the file to let Massif
+  try them again (after a driver update, say).
+- Massif draws with Vulkan, DirectX 12 or OpenGL on Windows, Metal on macOS,
+  and Vulkan or OpenGL on Linux. Updating the graphics driver often helps.
+  To choose one, set `WGPU_BACKEND` to `dx12`, `vulkan` or `gl` where
+  Massif is started; `WGPU_POWER_PREF=low` picks the integrated graphics
+  card of a laptop rather than the dedicated one. On Windows, type `cmd` in
+  the address bar of Massif's folder, then in the window that opens:
 
+  ```
+  set WGPU_BACKEND=dx12
+  Massif.exe
+  ```
+
+  Massif started from Explorer afterwards does not see it. The log says
+  which API it was asked for.

@@ -74,6 +74,9 @@ fn main() -> eframe::Result {
     // The 3D view keeps the map in texture arrays of 1024 × 1024 pages:
     // ask for as many layers as the GPU has (Apple's hold 2048).
     let mut setup = egui_wgpu::WgpuSetupCreateNew::without_display_handle();
+    // What WGPU_BACKEND names, or not a graphics API that failed to draw a
+    // first frame on this computer.
+    setup.instance_descriptor.backends = startup::backends();
     let base = setup.device_descriptor.clone();
     setup.device_descriptor = std::sync::Arc::new(move |adapter| {
         let mut desc = base(adapter);
@@ -83,12 +86,16 @@ fn main() -> eframe::Result {
             .max(adapter.limits().max_texture_array_layers.min(2048));
         desc
     });
+    let wgpu_options = egui_wgpu::WgpuConfiguration::default();
     let options = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Wgpu,
         wgpu_options: egui_wgpu::WgpuConfiguration {
             wgpu_setup: egui_wgpu::WgpuSetup::CreateNew(setup),
-            ..Default::default()
+            // A frame the window gives no image for, written down while
+            // the start lasts.
+            on_surface_status: startup::surface_status(wgpu_options.on_surface_status.clone()),
+            ..wgpu_options
         },
         ..Default::default()
     };
@@ -98,8 +105,7 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| {
             if let Some(render) = &cc.wgpu_render_state {
-                let info = render.adapter.get_info();
-                startup::step(&format!("graphics card: {} ({:?}, driver {} {})", info.name, info.backend, info.driver, info.driver_info));
+                startup::graphics_ready(render, cc);
             }
             startup::step("making the app");
             finder::wake(&cc.egui_ctx);

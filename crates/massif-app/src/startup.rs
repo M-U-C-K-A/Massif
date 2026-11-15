@@ -1,38 +1,67 @@
 //! What Massif does as it starts, written down step by step in a log of its
 //! own (`startup.log`, the one before kept as `startup.previous.log`) with
-//! every panic in it, and a watch on the first frame: a start that hangs or
-//! fails says where, on the user's machine, without any telemetry.
+//! every panic and crash in it, and a watch on the first frame: a start
+//! that hangs or fails says where, on the user's machine, without any
+//! telemetry.
+//!
+//! The first frames are followed through every step, until one is drawn on
+//! the window's image and presented (eframe shows the window after it):
+//! the interface laid out, its shapes and textures sent to the graphics
+//! card, the image the window gives to draw on, the frame presented. A
+//! start that stays too long in one step is stuck, most often in a
+//! graphics driver: the graphics API it draws with (Vulkan, DirectX 12,
+//! OpenGL) is set aside on this computer (`graphics.txt` beside the log),
+//! and the next starts let wgpu choose among the others. On Windows the
+//! user is asked to start again at once. A start that died without a word
+//! (a crash in a driver) is found by the next one, from the mark it left
+//! (`first-frame.pending`), and its API set aside in the same way.
 //!
 //! eframe keeps the window hidden until its first frame is drawn (so that
-//! it does not flash white). When that frame never comes — the graphics
-//! card or its driver stuck, the app stuck before it —, the process runs
-//! with no window to see. On Windows the watch shows the window after a few
-//! seconds anyway, and after longer tells the user where the log is; a
-//! failure to start or a panic is said in a message box, since a Windows
-//! build has no console to print it to.
+//! it does not flash white); on Windows it is shown before, as drawing in a
+//! window never shown is what some drivers handle worst. A failure to start
+//! or a panic is said in a message box, since a Windows build has no
+//! console to print it to; a crash on Windows is written down with its
+//! exception and the module it came from.
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 #[cfg(windows)]
 #[path = "startup_windows.rs"]
 mod windows;
 
-/// After how long without a first frame the window is shown anyway, and
-/// after how long the user is told.
-const SHOW_AFTER: Duration = Duration::from_secs(3);
-const TELL_AFTER: Duration = Duration::from_secs(20);
+/// After how long without a frame shown the watch writes where the start is.
+const NOTE_AFTER: Duration = Duration::from_secs(3);
+/// After how long in one step, before a frame is shown, the start is stuck.
+const STUCK_AFTER: Duration = Duration::from_secs(12);
+/// The frames whose every step is written down.
+const FRAMES_LOGGED: u32 = 3;
 
 struct Log {
     file: Option<std::fs::File>,
     started: Instant,
+    /// The last step of the start, and when it was written.
+    last: (Instant, String),
 }
 
 static LOG: OnceLock<Mutex<Log>> = OnceLock::new();
-static FIRST_FRAME: AtomicBool = AtomicBool::new(false);
+/// A frame was drawn on the window's image and presented: the start is over.
+static SHOWN: AtomicBool = AtomicBool::new(false);
+/// The last frame drawn on an image the window gave.
+static DRAWN: AtomicU32 = AtomicU32::new(0);
+/// The graphics API and card Massif draws with, once wgpu chose them.
+static GRAPHICS: OnceLock<Graphics> = OnceLock::new();
+/// The watch set this start's graphics API aside, the start being stuck.
+static SET_ASIDE: AtomicBool = AtomicBool::new(false);
+
+struct Graphics {
+    api: wgpu::Backend,
+    /// The card and its driver.
+    card: String,
+}
 
 /// The folder of the log: local app data on Windows (`%LOCALAPPDATA%\Massif`),
 /// the logs on macOS (`~/Library/Logs/Massif`), the state folder elsewhere
@@ -52,15 +81,28 @@ pub fn log_path() -> Option<PathBuf> {
     log_dir().map(|d| d.join("startup.log"))
 }
 
-/// Begin: the log (the last one kept aside), the panic hook, the watch on
-/// the first frame.
+/// The graphics APIs set aside on this computer, a line each: its name as
+/// `WGPU_BACKEND` has it (`vulkan`, `dx12`, `gl`, `metal`), then why.
+fn set_aside_path() -> Option<PathBuf> {
+    log_dir().map(|d| d.join("graphics.txt"))
+}
+
+/// The mark of a start that has not shown a frame yet: its graphics API,
+/// its process and its card.
+fn pending_path() -> Option<PathBuf> {
+    log_dir().map(|d| d.join("first-frame.pending"))
+}
+
+/// Begin: the log (the last one kept aside), the panic hook, the crash
+/// filter, the last start looked at, the watch on the first frame.
 pub fn begin() {
     let file = log_path().and_then(|path| {
         std::fs::create_dir_all(path.parent()?).ok()?;
         let _ = std::fs::rename(&path, path.with_file_name("startup.previous.log"));
         std::fs::File::create(&path).ok()
     });
-    let _ = LOG.set(Mutex::new(Log { file, started: Instant::now() }));
+    let now = Instant::now();
+    let _ = LOG.set(Mutex::new(Log { file, started: now, last: (now, String::new()) }));
     step(&format!("Massif {} on {} {}", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH));
     let args: Vec<String> = std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
     if !args.is_empty() {
@@ -72,12 +114,16 @@ pub fn begin() {
     std::panic::set_hook(Box::new(move |info| {
         let thread = std::thread::current();
         let name = thread.name().unwrap_or("unnamed").to_owned();
-        step(&format!("panic in thread {name}: {info}\n{}", std::backtrace::Backtrace::force_capture()));
+        write(&format!("panic in thread {name}: {info}\n{}", std::backtrace::Backtrace::force_capture()));
         printed(info);
         if name == "main" {
             tell(&format!("Massif stopped on an error:\n\n{}{}", message(info), where_logged()));
         }
     }));
+    // A crash (in a driver, say) ends the process with no panic.
+    #[cfg(windows)]
+    windows::catch_crashes();
+    last_start();
     let _ = std::thread::Builder::new().name("massif startup watch".into()).spawn(watch);
 }
 
@@ -100,21 +146,49 @@ fn where_logged() -> String {
     log_path().map(|p| format!("\n\nWhat Massif did as it started is written in:\n{}", p.display())).unwrap_or_default()
 }
 
-/// Write down a step, with the time since the start.
-pub fn step(what: &str) {
-    let Some(log) = LOG.get() else { return };
-    let mut log = log.lock().unwrap_or_else(|e| e.into_inner());
+fn lock(log: &Mutex<Log>) -> MutexGuard<'_, Log> {
+    log.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Write a line, with the time since the start; a step of the start
+/// (`progress`) is what the watch measures the time spent in.
+fn put(log: &mut Log, what: &str, progress: bool) {
     let ms = log.started.elapsed().as_millis();
     if let Some(file) = &mut log.file {
         let _ = writeln!(file, "[{ms:>7} ms] {what}");
         let _ = file.flush();
     }
+    if progress {
+        log.last = (Instant::now(), what.to_owned());
+    }
 }
 
-/// The first frame is being drawn: the start is over.
-pub fn first_frame() {
-    if !FIRST_FRAME.swap(true, Ordering::Relaxed) {
-        step("first frame: started");
+/// Write down a step of the start, with the time since it began.
+pub fn step(what: &str) {
+    if let Some(log) = LOG.get() {
+        put(&mut lock(log), what, true);
+    }
+}
+
+/// Write down what is not a step of the start: what the watch sees, an
+/// error, the graphics card's news.
+fn write(what: &str) {
+    if let Some(log) = LOG.get() {
+        put(&mut lock(log), what, false);
+    }
+}
+
+/// Write down from a crash, never waiting long for the log: the thread that
+/// crashed may hold it.
+#[cfg(windows)]
+fn write_now(what: &str) {
+    let Some(log) = LOG.get() else { return };
+    for _ in 0..50 {
+        match log.try_lock() {
+            Ok(mut log) => return put(&mut log, what, false),
+            Err(std::sync::TryLockError::Poisoned(e)) => return put(&mut e.into_inner(), what, false),
+            Err(std::sync::TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(2)),
+        }
     }
 }
 
@@ -141,41 +215,420 @@ pub fn tell(text: &str) {
         .show();
 }
 
-/// Show Massif's window if it is still hidden; how many were.
-#[cfg(windows)]
-fn show_window() -> usize {
-    windows::show_hidden_windows("Massif")
-}
+// ---------------------------------------------------------------------------
+// The graphics APIs
 
-#[cfg(not(windows))]
-fn show_window() -> usize {
-    0
-}
-
-/// Watch for the first frame, writing down while it does not come. On
-/// Windows, the window is shown after a few seconds anyway, and after
-/// longer the user is told where the log is (elsewhere a message box needs
-/// the main thread, which is the one stuck).
-fn watch() {
-    std::thread::sleep(SHOW_AFTER);
-    if FIRST_FRAME.load(Ordering::Relaxed) {
-        return;
-    }
-    step(&format!("no first frame after {} s", SHOW_AFTER.as_secs()));
-    let shown = show_window();
-    if shown > 0 {
-        step("showed the window, still hidden");
-    }
-    std::thread::sleep(TELL_AFTER - SHOW_AFTER);
-    if FIRST_FRAME.load(Ordering::Relaxed) {
-        return;
-    }
-    step(&format!("no first frame after {} s", TELL_AFTER.as_secs()));
+/// The graphics APIs wgpu may draw with here, as it prefers them.
+fn apis() -> &'static [wgpu::Backend] {
+    use wgpu::Backend::{Dx12, Gl, Metal, Vulkan};
     if cfg!(windows) {
-        tell(&format!(
-            "Massif has not drawn its window after {} seconds: it may be stuck on the graphics card or its driver.{}",
-            TELL_AFTER.as_secs(),
-            where_logged()
-        ));
+        &[Vulkan, Dx12, Gl]
+    } else if cfg!(target_os = "macos") {
+        &[Metal]
+    } else {
+        &[Vulkan, Gl]
+    }
+}
+
+fn api_name(api: wgpu::Backend) -> &'static str {
+    match api {
+        wgpu::Backend::Vulkan => "Vulkan",
+        wgpu::Backend::Dx12 => "DirectX 12",
+        wgpu::Backend::Gl => "OpenGL",
+        wgpu::Backend::Metal => "Metal",
+        other => other.to_str(),
+    }
+}
+
+/// The APIs named in `graphics.txt`.
+fn set_aside_apis() -> Vec<wgpu::Backend> {
+    let text = set_aside_path().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
+    parse_set_aside(&text)
+}
+
+fn parse_set_aside(text: &str) -> Vec<wgpu::Backend> {
+    text.lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter_map(|word| apis().iter().copied().find(|api| api.to_str() == word))
+        .collect()
+}
+
+/// Set `api` aside on this computer, saying why.
+fn set_aside(api: wgpu::Backend, why: &str) {
+    if let Some(path) = set_aside_path() {
+        set_aside_in(&path, api, why);
+    }
+}
+
+fn set_aside_in(path: &std::path::Path, api: wgpu::Backend, why: &str) {
+    let mut text = std::fs::read_to_string(path).unwrap_or_default();
+    if parse_set_aside(&text).contains(&api) {
+        return;
+    }
+    if text.trim().is_empty() {
+        text = "# The graphics APIs Massif does not draw with on this computer: each failed to draw its first frame.\n# Delete a line, or this file, to let Massif try that API again.\n".to_owned();
+    }
+    text.push_str(&format!("{} {why}\n", api.to_str()));
+    let _ = std::fs::write(path, text);
+}
+
+/// Take `api` back among those wgpu may choose.
+fn put_back(api: wgpu::Backend) {
+    if let Some(path) = set_aside_path() {
+        put_back_in(&path, api);
+    }
+}
+
+fn put_back_in(path: &std::path::Path, api: wgpu::Backend) {
+    let Ok(text) = std::fs::read_to_string(path) else { return };
+    let kept: String = text.lines().filter(|line| line.split_whitespace().next() != Some(api.to_str())).map(|line| format!("{line}\n")).collect();
+    if parse_set_aside(&kept).is_empty() {
+        let _ = std::fs::remove_file(path);
+    } else {
+        let _ = std::fs::write(path, kept);
+    }
+}
+
+/// The first API wgpu would try here among those not set aside.
+fn next_api() -> &'static str {
+    let aside = set_aside_apis();
+    apis().iter().find(|api| !aside.contains(api)).map(|api| api_name(*api)).unwrap_or("another graphics API")
+}
+
+/// The graphics APIs wgpu may choose from: those `WGPU_BACKEND` names (in
+/// quotes or not), or else all but those set aside on this computer.
+pub fn backends() -> wgpu::Backends {
+    let all = wgpu::Backends::PRIMARY | wgpu::Backends::GL;
+    if let Some(asked) = std::env::var_os("WGPU_BACKEND") {
+        let asked = asked.to_string_lossy();
+        let named = named_backends(&asked);
+        if !named.is_empty() {
+            step(&format!("graphics API asked for: WGPU_BACKEND={asked}"));
+            return named;
+        }
+        step(&format!("WGPU_BACKEND={asked} names no graphics API (vulkan, dx12, gl or metal): left aside"));
+    }
+    let aside = set_aside_apis();
+    if aside.is_empty() {
+        return all;
+    }
+    let names = aside.iter().map(|api| api_name(*api)).collect::<Vec<_>>().join(", ");
+    let left: Vec<&str> = apis().iter().filter(|api| !aside.contains(api)).map(|api| api_name(*api)).collect();
+    if left.is_empty() {
+        // Nothing else to try: all of them again.
+        step(&format!("{names} set aside on this computer, and no other graphics API to try: trying them again"));
+        if let Some(path) = set_aside_path() {
+            let _ = std::fs::remove_file(path);
+        }
+        return all;
+    }
+    step(&format!("{names} set aside on this computer (in graphics.txt): drawing with {}", left.join(" or ")));
+    let mut allowed = all;
+    for api in aside {
+        allowed.remove(api.into());
+    }
+    allowed
+}
+
+/// The graphics APIs a `WGPU_BACKEND` value names: `dx12`, `"dx12"`,
+/// `vulkan, gl`…
+fn named_backends(value: &str) -> wgpu::Backends {
+    let bare: String = value.chars().filter(|c| !matches!(c, '"' | '\'')).collect();
+    wgpu::Backends::from_comma_list(bare.trim())
+}
+
+/// A start that left its mark without showing a frame (it died, or was
+/// ended while stuck) had its graphics API fail: set it aside.
+fn last_start() {
+    let Some(path) = pending_path() else { return };
+    let Ok(text) = std::fs::read_to_string(&path) else { return };
+    let mut lines = text.lines();
+    let api = lines.next().and_then(|word| apis().iter().copied().find(|api| api.to_str() == word.trim()));
+    let process = lines.next().and_then(|p| p.trim().parse::<u32>().ok());
+    let card = lines.next().unwrap_or_default().to_owned();
+    if let Some(process) = process.filter(|&p| p != std::process::id() && running(p)) {
+        step(&format!("another Massif is starting (process {process}): its start is left to it"));
+        return;
+    }
+    let _ = std::fs::remove_file(&path);
+    if let Some(api) = api {
+        set_aside(api, &format!("{card}: a start did not show its first frame"));
+        step(&format!("the last start did not show its first frame, drawing with {} on {card}: {} set aside", api_name(api), api_name(api)));
+    }
+}
+
+/// Whether Massif runs as process `process`.
+#[cfg(windows)]
+fn running(process: u32) -> bool {
+    windows::running(process)
+}
+
+#[cfg(unix)]
+fn running(process: u32) -> bool {
+    // Safety: signal 0 only asks whether the process is there.
+    unsafe { libc::kill(process as libc::pid_t, 0) == 0 }
+}
+
+#[cfg(not(any(windows, unix)))]
+fn running(_process: u32) -> bool {
+    false
+}
+
+/// wgpu chose its card and API: written down with the others it found,
+/// its loss and errors watched, the mark of a start without a frame left
+/// until one is shown.
+pub fn graphics_ready(render: &egui_wgpu::RenderState, window: &dyn wgpu::rwh::HasWindowHandle) {
+    let info = render.adapter.get_info();
+    let card = format!("{} (driver {} {})", info.name, info.driver, info.driver_info);
+    step(&format!("graphics card: {} ({:?}, driver {} {})", info.name, info.backend, info.driver, info.driver_info));
+    let others: Vec<String> = render
+        .available_adapters
+        .iter()
+        .map(|a| a.get_info())
+        .filter(|i| !(i.name == info.name && i.backend == info.backend))
+        .map(|i| format!("{} ({})", i.name, api_name(i.backend)))
+        .collect();
+    if !others.is_empty() {
+        write(&format!("also found: {}", others.join(", ")));
+    }
+    render.device.set_device_lost_callback(|reason, message| write(&format!("the graphics card was lost ({reason:?}): {message}")));
+    if let Some(path) = pending_path() {
+        let _ = std::fs::write(path, format!("{}\n{}\n{card}\n", info.backend.to_str(), std::process::id()));
+    }
+    let _ = GRAPHICS.set(Graphics { api: info.backend, card });
+    // eframe draws the first frame in a window it keeps hidden until then,
+    // a case some Windows drivers handle badly: there it is shown now.
+    #[cfg(windows)]
+    if let Ok(handle) = window.window_handle()
+        && let wgpu::rwh::RawWindowHandle::Win32(handle) = handle.as_raw()
+        && windows::show_now(handle.hwnd.get())
+    {
+        step("the window shown before its first frame");
+    }
+    #[cfg(not(windows))]
+    let _ = window;
+}
+
+/// egui's answer when the window gives no image to draw on, written down
+/// while the start lasts.
+pub fn surface_status(answer: Arc<dyn Fn(&wgpu::CurrentSurfaceTexture) -> egui_wgpu::SurfaceErrorAction + Send + Sync>) -> Arc<dyn Fn(&wgpu::CurrentSurfaceTexture) -> egui_wgpu::SurfaceErrorAction + Send + Sync> {
+    let times = AtomicU32::new(0);
+    Arc::new(move |status| {
+        let n = times.fetch_add(1, Ordering::Relaxed) + 1;
+        if !SHOWN.load(Ordering::Relaxed) && (n <= 5 || n.is_multiple_of(50)) {
+            write(&format!("the window gave no image to draw on: {status:?} ({n} times)"));
+        }
+        answer(status)
+    })
+}
+
+// ---------------------------------------------------------------------------
+// The first frames
+
+/// The number of the frame being laid out, from 1.
+fn frame_nr(ctx: &egui::Context) -> u32 {
+    (ctx.cumulative_frame_nr() + 1).min(u32::MAX as u64) as u32
+}
+
+/// A frame begins. Until one is shown its steps are written down, and the
+/// frame before told apart: presented, or given no image by the window.
+pub fn frame_begins(ctx: &egui::Context, frame: &eframe::Frame) {
+    if SHOWN.load(Ordering::SeqCst) || LOG.get().is_none() {
+        return;
+    }
+    let n = frame_nr(ctx);
+    if n > 1 && DRAWN.load(Ordering::Relaxed) == n - 1 {
+        SHOWN.store(true, Ordering::SeqCst);
+        step(&format!("frame {}: presented, the window shown: the start is over", n - 1));
+        first_frame_shown(frame);
+        return;
+    }
+    // One frame after the other until one is shown.
+    ctx.request_repaint();
+    if n <= FRAMES_LOGGED && ctx.current_pass_index() == 0 {
+        step(&format!("frame {n}: laying out the interface"));
+    }
+}
+
+/// The frame is laid out: a probe follows it to the graphics card.
+pub fn frame_laid_out(ui: &egui::Ui) {
+    if SHOWN.load(Ordering::SeqCst) || LOG.get().is_none() {
+        return;
+    }
+    let n = frame_nr(ui.ctx());
+    if n <= FRAMES_LOGGED {
+        step(&format!("frame {n}: laid out; its shapes and textures go to the graphics card"));
+    }
+    let corner = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1.0, 1.0));
+    ui.painter().add(egui_wgpu::Callback::new_paint_callback(corner, Probe(n)));
+}
+
+/// A frame of the start on its way: eframe calls it once the frame's
+/// shapes and textures are sent, before asking the window for an image,
+/// and again as it draws on the image the window gave. It draws nothing.
+struct Probe(u32);
+
+impl egui_wgpu::CallbackTrait for Probe {
+    fn prepare(&self, _: &wgpu::Device, _: &wgpu::Queue, _: &egui_wgpu::ScreenDescriptor, _: &mut wgpu::CommandEncoder, _: &mut egui_wgpu::CallbackResources) -> Vec<wgpu::CommandBuffer> {
+        if self.0 <= FRAMES_LOGGED {
+            step(&format!("frame {}: sent; asking the window for an image to draw on (get_current_texture)", self.0));
+        }
+        Vec::new()
+    }
+
+    fn paint(&self, _: egui::PaintCallbackInfo, _: &mut wgpu::RenderPass<'static>, _: &egui_wgpu::CallbackResources) {
+        DRAWN.store(self.0, Ordering::Relaxed);
+        if self.0 <= FRAMES_LOGGED {
+            step(&format!("frame {}: the window gave its image; drawing on it, then submitting and presenting it (submit, present)", self.0));
+        }
+    }
+}
+
+/// The first frame is shown: the start's mark goes, its API comes back if
+/// the watch had set it aside, and the graphics card says when it is done.
+fn first_frame_shown(frame: &eframe::Frame) {
+    if let Some(path) = pending_path() {
+        let _ = std::fs::remove_file(path);
+    }
+    if SET_ASIDE.swap(false, Ordering::SeqCst)
+        && let Some(graphics) = GRAPHICS.get()
+    {
+        put_back(graphics.api);
+        step(&format!("{} drew after all: not set aside", api_name(graphics.api)));
+    }
+    if let Some(render) = frame.wgpu_render_state() {
+        render.queue.on_submitted_work_done(|| write("the graphics card is done with the first frame"));
+    }
+}
+
+/// Watch the start until a frame is shown: write down where it stands
+/// after a few seconds; when it stays too long in one step, it is stuck.
+fn watch() {
+    let mut noted = false;
+    loop {
+        std::thread::sleep(Duration::from_millis(200));
+        if SHOWN.load(Ordering::SeqCst) {
+            return;
+        }
+        let Some(log) = LOG.get() else { return };
+        let (since_start, since_step, last) = {
+            let log = lock(log);
+            (log.started.elapsed(), log.last.0.elapsed(), log.last.1.clone())
+        };
+        if !noted && since_start >= NOTE_AFTER {
+            noted = true;
+            write(&format!("no frame shown after {} s; the start is at: {last}", NOTE_AFTER.as_secs()));
+        }
+        if since_step >= STUCK_AFTER {
+            stuck(&last);
+            return;
+        }
+    }
+}
+
+/// The start stays in one step: its graphics API is set aside for the next
+/// starts, and on Windows the user is asked to start again at once (a
+/// message box needs the main thread elsewhere, and it is the one stuck).
+fn stuck(last: &str) {
+    write(&format!("stuck for {} s at: {last}", STUCK_AFTER.as_secs()));
+    let Some(graphics) = GRAPHICS.get() else {
+        if cfg!(windows) {
+            tell(&format!("Massif has not opened its window after {} seconds: it may be stuck on the graphics card or its driver.{}", STUCK_AFTER.as_secs(), where_logged()));
+        }
+        return;
+    };
+    let api = graphics.api;
+    SET_ASIDE.store(true, Ordering::SeqCst);
+    set_aside(api, &format!("{}: the first frame did not come", graphics.card));
+    if SHOWN.load(Ordering::SeqCst) {
+        // It came meanwhile.
+        if SET_ASIDE.swap(false, Ordering::SeqCst) {
+            put_back(api);
+        }
+        return;
+    }
+    let next = next_api();
+    write(&format!("{} set aside on this computer: the next start draws with {next}", api_name(api)));
+    #[cfg(windows)]
+    {
+        let again = rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Warning)
+            .set_title("Massif")
+            .set_description(format!(
+                "Massif has not drawn its window: the graphics card's driver seems stuck with {}.\n\nClick OK to start Massif again with {next}, which it will keep to on this computer, or Cancel to wait.{}",
+                api_name(api),
+                where_logged()
+            ))
+            .set_buttons(rfd::MessageButtons::OkCancel)
+            .show()
+            == rfd::MessageDialogResult::Ok;
+        if SHOWN.load(Ordering::SeqCst) {
+            return;
+        }
+        if again {
+            write(&format!("starting again with {next}"));
+            if let Some(path) = pending_path() {
+                let _ = std::fs::remove_file(path);
+            }
+            if let Ok(exe) = std::env::current_exe() {
+                // Not with the API WGPU_BACKEND asked for, which is the one stuck.
+                let _ = std::process::Command::new(exe).args(std::env::args_os().skip(1)).env_remove("WGPU_BACKEND").spawn();
+            }
+            windows::end_now();
+        }
+        write("waiting");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_aside_apis_are_read_from_their_lines() {
+        let api = apis()[0];
+        let text = format!("# a comment\n{} AMD Radeon RX 6400 (driver 26.10.1): the first frame did not come\n\nnonsense\n", api.to_str());
+        assert_eq!(parse_set_aside(&text), [api]);
+        assert!(parse_set_aside(&format!("# {}\n", api.to_str())).is_empty());
+    }
+
+    /// An API is set aside once, with a word on the file, and put back.
+    #[test]
+    fn an_api_is_set_aside_and_put_back() {
+        let dir = std::env::temp_dir().join(format!("massif-graphics-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("graphics.txt");
+        let _ = std::fs::remove_file(&path);
+        let api = apis()[0];
+        set_aside_in(&path, api, "AMD Radeon RX 6400: the first frame did not come");
+        set_aside_in(&path, api, "a second time");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(parse_set_aside(&text), [api]);
+        assert!(text.starts_with('#') && !text.contains("a second time"), "{text}");
+        put_back_in(&path, api);
+        assert!(!path.exists(), "nothing set aside: no file");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn wgpu_backend_is_read_in_quotes_or_not() {
+        assert_eq!(named_backends("dx12"), wgpu::Backends::DX12);
+        assert_eq!(named_backends("\"dx12\""), wgpu::Backends::DX12);
+        assert_eq!(named_backends(" 'DX12' "), wgpu::Backends::DX12);
+        assert_eq!(named_backends("vulkan,gl"), wgpu::Backends::VULKAN | wgpu::Backends::GL);
+        assert!(named_backends("directx").is_empty());
+    }
+
+    /// The probe of a frame is drawn: egui_wgpu calls it once the window
+    /// (here an offscreen image) gave an image to draw on.
+    #[test]
+    fn the_probe_follows_a_frame_to_its_image() {
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(64.0, 64.0)).wgpu().build_ui(|ui| {
+            let corner = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1.0, 1.0));
+            ui.painter().add(egui_wgpu::Callback::new_paint_callback(corner, Probe(1000)));
+        });
+        h.run();
+        h.render().expect("rendered");
+        assert_eq!(DRAWN.load(Ordering::Relaxed), 1000);
     }
 }

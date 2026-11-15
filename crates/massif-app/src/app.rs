@@ -3021,11 +3021,13 @@ impl MassifApp {
 
 impl eframe::App for MassifApp {
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
-        crate::startup::first_frame();
+        // Until the first frame is shown, startup.log follows each step.
+        crate::startup::frame_begins(ui.ctx(), frame);
         self.dev.begin();
         self.frame_ui(ui, frame);
         let now = ui.input(|i| i.time);
         self.dev.end(now);
+        crate::startup::frame_laid_out(ui);
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
