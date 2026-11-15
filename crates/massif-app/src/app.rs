@@ -3333,10 +3333,36 @@ mod tests {
         let (w, hgt, rgba) = h.state().sculpt3d.read_back().expect("the 3D view rendered");
         image::save_buffer(dir.join("walk-fly-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
 
-        // Esc gives the mouse back; Player off, the orbit camera returns,
-        // from the eyes.
+        // Esc gives the mouse back; then a drag, and the arrows, turn the
+        // view all the same.
         h.key_press(Key::Escape);
         h.step();
+        let yaw = h.state().sculpt3d.camera.yaw;
+        let from = view.center() + vec2(0.0, 60.0);
+        h.event(egui::Event::PointerMoved(from));
+        h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        for k in 1..=8 {
+            h.event(egui::Event::PointerMoved(from + vec2(k as f32 * 12.0, 0.0)));
+            h.step();
+        }
+        h.event(egui::Event::PointerButton { pos: from + vec2(96.0, 0.0), button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.step();
+        let dragged = h.state().sculpt3d.camera.yaw;
+        assert!(dragged < yaw - 0.2, "a drag turns the view: {yaw} → {dragged}");
+        assert!(h.state().sculpt3d.player().is_some());
+        h.key_down(Key::ArrowLeft);
+        h.run_steps(4);
+        h.key_up(Key::ArrowLeft);
+        h.step();
+        assert!(h.state().sculpt3d.camera.yaw > dragged + 0.2, "the arrows turn it");
+        // Slope: walls in the colour of their column.
+        h.state_mut().sculpt3d.mode = crate::map_render::MapMode::Slope;
+        h.run_steps(30);
+        let (w, hgt, rgba) = h.state().sculpt3d.read_back().expect("the 3D view rendered");
+        image::save_buffer(dir.join("walk-slope-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+        h.state_mut().sculpt3d.mode = crate::map_render::MapMode::Terrain;
+        h.run_steps(5);
+        // Player off, the orbit camera returns, from the eyes.
         let eye = h.state().sculpt3d.camera.eye();
         h.state_mut().tools.sculpt.player = false;
         h.run_steps(2);

@@ -161,7 +161,8 @@ what the map shows:
 - **Only on / except on**: terrains, biomes, water or dry land.
 - **Slope**: above or below an angle. Slopes are the trend of the hillside
   (a plane fitted over 9 × 9 columns), not the steps between single blocks;
-  the map and 3D views' Slope mode use the same measure.
+  the map and 3D views' Slope mode use the same measure (in 3D, a column's
+  walls take its colour too, as do they in Height and Biome).
 - **Facing**: only the slopes turned a given way, give or take an angle —
   the side the sun lights, the side in the shade. A compass sets the
   direction (north up, as on the map); **Sun** and **Shade** take it from
@@ -419,8 +420,9 @@ size, intensity and rotation are those of **Brush Settings**, which the
 - **Player** walks in the view as in Minecraft, to see and sculpt the land
   at a player's height: it comes down where the middle of the view looks,
   with Minecraft's body (0.6 × 1.8 blocks, its eyes at 1.62) and field of
-  view. A click lends the view the mouse, which then looks around (Esc
-  gives it back); W A S D walk, Shift (or W twice) runs, Space jumps — held,
+  view. A drag in the view, or the arrow keys, look around; a click lends
+  the view the mouse, which then looks around as it moves (Esc gives it
+  back); W A S D walk, Shift (or W twice) runs, Space jumps — held,
   again on landing —, twice quickly flies (Space up, Q down; twice again, or
   flying down to the ground, lands), Q sneaks, and a crouched player does
   not step off an edge; walking into a step of one block jumps onto it

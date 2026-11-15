@@ -98,8 +98,9 @@ Levels lay rock over the ground or dig into it, each in its own layer that can b
 **Build**, **Dig**, **Smooth** and **Paint** work on the blocks in 3D, with the brush of every tool: its shape, size, intensity and rotation are set in **Brush Settings**, shown beside the 3D Sculpt view (`⌘` + scroll changes its size there too). Left button sculpts where the cursor points, right button inverts; held down, it keeps adding or digging. In 3D a brush sculpts 64 blocks around at most (a larger one works as 64). Matter pushed out keeps the blocks it came from (a sand wall gives a sand ledge), and the ground under it keeps its own; **Paint** repaints sculpted matter too. Converting a terrain graph into the ground later drops what was sculpted on the tiles it rewrites (one step to undo).
 
 ## Player
-**Player**, in the 3D Sculpt toolbar, walks in the view as in Minecraft, coming down where the middle of the view looks. Click the view to lend it the mouse (`Esc` gives it back), then:
-- The mouse looks around; the buttons sculpt at the crosshair.
+**Player**, in the 3D Sculpt toolbar, walks in the view as in Minecraft, coming down where the middle of the view looks.
+- Drag in the view, or use the arrow keys, to look around.
+- Click the view to lend it the mouse (`Esc` gives it back): it then looks around as it moves, and the buttons sculpt at the crosshair.
 - `W` `A` `S` `D` walk, `Shift` (or `W` twice) runs.
 - `Space` jumps; twice quickly, flies: `Space` goes up, `Q` down; twice again, or down to the ground, lands.
 - `Q` sneaks: crouched, you do not step off an edge.

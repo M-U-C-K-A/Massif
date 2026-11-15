@@ -266,7 +266,7 @@ pub fn sculpt_toolbar(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
             ui.label(RichText::new(what).size(12.0)).on_hover_text("Pick it in Terrain or Blocks");
         }
         let hint = match tools.sculpt.tool {
-            _ if tools.sculpt.player => "Click the view to walk · left: the tool · right: its inverse · ⌘+wheel: size · Esc: free the mouse",
+            _ if tools.sculpt.player => "Drag or the arrows: look · click: take the mouse (Esc: give it back) · W A S D: walk · Space: jump, twice: fly · left: the tool",
             Tool::PaintTerrain => "Left: paint · right: what the height calls for · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point",
             Tool::Smooth3d => "Left: smooth · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point",
             _ => "Left: add · right: dig · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point",

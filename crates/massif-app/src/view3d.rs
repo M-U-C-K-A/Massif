@@ -364,9 +364,10 @@ impl Colors<'_> {
                 let c = height_color(y1 as f32, self.sea);
                 (c, c)
             }
+            // The walls of a column are as steep as its top: its colour.
             MapMode::Slope => {
                 let c = slope_color(slope);
-                (c, [150, 150, 150])
+                (c, c)
             }
             MapMode::Biome => {
                 let id = self.auto.resolve(self.reg, sample, self.sea);
@@ -375,6 +376,13 @@ impl Colors<'_> {
             }
             MapMode::Relief => ([206, 206, 210], [190, 190, 194]),
         }
+    }
+
+    /// Whether a column's walls are its colour all the way down (what the
+    /// view shows is the column's: its height, its slope, its biome), not
+    /// soil over rock.
+    fn whole_walls(&self) -> bool {
+        matches!(self.mode, MapMode::Height | MapMode::Slope | MapMode::Biome)
     }
 
     fn substrate(&self, y: i32) -> [u8; 3] {
@@ -632,6 +640,7 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
                 if s.y0 > min_y {
                     let under = match s.color {
                         Some(c) => c.map(|v| (v as f32 * 0.6) as u8),
+                        None if colors.whole_walls() => theme_dark(tops[j * n + i][k].1),
                         None => theme_dark(colors.substrate(s.y0)),
                     };
                     out.solid.push(Face {
@@ -663,7 +672,7 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
                 pieces.extend(gaps.iter().map(|&(a, b)| (a, b, rgba(c, 255))));
                 continue;
             }
-            let soil_floor = (s.y1 - 3).max(s.y0);
+            let soil_floor = if colors.whole_walls() { s.y0 } else { (s.y1 - 3).max(s.y0) };
             for &(a, b) in &gaps {
                 for (lo, hi, soil) in [(a, b.min(soil_floor), false), (a.max(soil_floor), b, true)] {
                     if hi > lo {
@@ -885,6 +894,9 @@ struct TerrainUniform {
 pub struct Substrate {
     pub stone: [u8; 3],
     pub deepslate: [u8; 3],
+    /// Walls are the colour of their column all the way down (Height,
+    /// Slope and Biome), not soil over rock.
+    pub whole: bool,
 }
 
 const GLOBALS_WGSL: &str = r#"
@@ -1245,7 +1257,7 @@ fn surface_color(col: u32, y: f32, up: bool) -> vec3<f32> {
     if (up) {
         return textureLoad(palette, vec2<i32>(pair, 0), 0).rgb;
     }
-    if (height - y <= 3.0) {
+    if (height - y <= 3.0 || terrain.stone.w > 1.5) {
         return textureLoad(palette, vec2<i32>(pair, 1), 0).rgb;
     }
     if (y < 0.0) {
@@ -2067,7 +2079,12 @@ impl Renderer3d {
                     (bottom + top as i32) as f32,
                 ],
                 size: [tr.pages.0 as i32 * PAGE, tr.pages.1 as i32 * PAGE, tr.top, tr.stride],
-                stone: unit(substrate.stone),
+                // w: 2 when walls are their column's colour all the way down.
+                stone: {
+                    let mut c = unit(substrate.stone);
+                    c[3] = if substrate.whole { 2.0 } else { 1.0 };
+                    c
+                },
                 deepslate: unit(substrate.deepslate),
             };
             self.queue.write_buffer(&self.terrain, 0, bytemuck::bytes_of(&u));
@@ -2569,6 +2586,8 @@ struct Walk {
 const LOOK: f32 = 1.0;
 /// Radians a point of mouse motion turns the eyes (Minecraft's default).
 const MOUSE_LOOK: f32 = 0.0026;
+/// Radians a point of dragging turns them.
+const DRAG_LOOK: f32 = 0.005;
 
 /// Hold the mouse (locked where the system can, else kept in the window),
 /// or let it go.
@@ -2750,17 +2769,27 @@ impl View3d {
         let Some(walk) = &mut self.walk else { return };
         let ctx = ui.ctx().clone();
         walk.pass = ctx.cumulative_pass_nr();
-        let (clicked, escape, focused, motion, pointer, dt) = ui.input(|i| {
+        let (escape, focused, motion, moved, pointer, dt, turn) = ui.input(|i| {
+            let key = |k: egui::Key| i.key_down(k) as i32 as f32;
             (
-                i.pointer.primary_pressed() || i.pointer.secondary_pressed(),
                 i.key_pressed(egui::Key::Escape),
                 i.viewport().focused.unwrap_or(true),
-                i.pointer.motion().unwrap_or_default(),
+                i.pointer.motion(),
+                i.pointer.delta(),
                 i.pointer.latest_pos(),
                 i.stable_dt.min(0.1) as f64,
+                // The arrows turn the eyes: left, right, up, down.
+                [key(egui::Key::ArrowRight) - key(egui::Key::ArrowLeft), key(egui::Key::ArrowDown) - key(egui::Key::ArrowUp)],
             )
         });
-        if !walk.captured && clicked && response.hovered() {
+        // Dragged, the view turns, the mouse held or not; a click (not a
+        // drag) lends the view the mouse, as in the game.
+        if !walk.captured && response.dragged() {
+            let d = response.drag_delta();
+            self.camera.yaw -= d.x * DRAG_LOOK;
+            self.camera.pitch = (self.camera.pitch + d.y * DRAG_LOOK).clamp(-1.55, 1.55);
+        }
+        if !walk.captured && response.clicked() {
             // The click that takes the mouse sculpts nothing.
             walk.captured = true;
             walk.swallow = true;
@@ -2770,6 +2799,14 @@ impl View3d {
             walk.captured = false;
             hold_mouse(&ctx, false);
         }
+        let typing = ctx.egui_wants_keyboard_input();
+        if (walk.captured || response.hovered()) && !typing && turn != [0.0, 0.0] {
+            self.camera.yaw -= turn[0] * 2.4 * dt as f32;
+            self.camera.pitch = (self.camera.pitch + turn[1] * 1.6 * dt as f32).clamp(-1.55, 1.55);
+        }
+        // Held, the mouse turns the eyes as it moves: its own motion where
+        // the system gives it, else where the pointer goes.
+        let motion = motion.unwrap_or(if walk.captured { moved } else { egui::Vec2::ZERO });
         if walk.captured {
             self.camera.yaw -= motion.x * MOUSE_LOOK;
             self.camera.pitch = (self.camera.pitch + motion.y * MOUSE_LOOK).clamp(-1.55, 1.55);
@@ -2791,16 +2828,17 @@ impl View3d {
         use crate::player::Keys;
         let keys = if walk.captured || (response.hovered() && !ctx.egui_wants_keyboard_input()) {
             ui.input(|i| {
-                let down = |a: egui::Key, b: egui::Key| (i.key_down(a) || i.key_down(b)) as i32 as f64;
+                let held = |k: egui::Key| i.key_down(k) as i32 as f64;
                 // Pressed now, not repeated by the system.
                 let first = |key: egui::Key| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: k, pressed: true, repeat: false, .. } if *k == key));
                 if i.modifiers.command || i.modifiers.ctrl || i.modifiers.alt {
                     Keys::default()
                 } else {
+                    // (The arrows turn the eyes.)
                     Keys {
-                        forward: down(egui::Key::W, egui::Key::ArrowUp) - down(egui::Key::S, egui::Key::ArrowDown),
-                        right: down(egui::Key::D, egui::Key::ArrowRight) - down(egui::Key::A, egui::Key::ArrowLeft),
-                        forward_pressed: first(egui::Key::W) || first(egui::Key::ArrowUp),
+                        forward: held(egui::Key::W) - held(egui::Key::S),
+                        right: held(egui::Key::D) - held(egui::Key::A),
+                        forward_pressed: first(egui::Key::W),
                         jump: i.key_down(egui::Key::Space),
                         jump_pressed: first(egui::Key::Space),
                         sneak: i.key_down(egui::Key::Q),
@@ -2823,7 +2861,7 @@ impl View3d {
         let (sp, cp) = self.camera.pitch.sin_cos();
         self.camera.distance = LOOK;
         self.camera.target = [eye[0] - (LOOK * cp * sy) as f64, eye[1] - (LOOK * sp) as f64, eye[2] - (LOOK * cp * cy) as f64];
-        if walk.player.moving() || keys != Keys::default() || (walk.captured && motion != egui::Vec2::ZERO) {
+        if walk.player.moving() || keys != Keys::default() || turn != [0.0, 0.0] || (walk.captured && motion != egui::Vec2::ZERO) {
             ctx.request_repaint();
         }
     }
@@ -2840,7 +2878,7 @@ impl View3d {
         };
         if !walk.captured {
             // Low, not over what is looked at.
-            pill(pos2(c.x, rect.bottom() - 46.0), "Click the view to walk · the mouse looks around, the buttons sculpt at the crosshair".to_owned(), 12.0);
+            pill(pos2(c.x, rect.bottom() - 46.0), "Drag or the arrows to look around · click to take the mouse (Esc gives it back) · W A S D walk".to_owned(), 12.0);
             return;
         }
         for (w, color) in [(3.5, Color32::from_black_alpha(120)), (1.5, Color32::WHITE)] {
@@ -3317,15 +3355,18 @@ impl View3d {
                 })
                 .collect();
             let wk = doc.world.registry.well_known;
+            let whole = matches!(self.mode, MapMode::Height | MapMode::Slope | MapMode::Biome);
             let substrate = if self.mode == MapMode::Relief {
                 Substrate {
                     stone: [176, 176, 180],
                     deepslate: [176, 176, 180],
+                    whole,
                 }
             } else {
                 Substrate {
                     stone: doc.world.registry.block(wk.stone).color,
                     deepslate: doc.world.registry.block(wk.deepslate).color,
+                    whole,
                 }
             };
             renderer.render(&globals, origin, &meshed, dim.min_y, substrate);
@@ -3701,6 +3742,7 @@ mod tests {
         Substrate {
             stone: w.registry.block(w.registry.well_known.stone).color,
             deepslate: w.registry.block(w.registry.well_known.deepslate).color,
+            whole: false,
         }
     }
 
