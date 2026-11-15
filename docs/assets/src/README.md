@@ -1,5 +1,25 @@
 # The README's figures
 
+## The banner
+
+`hero-dark.svg` and `hero-light.svg`, at the top of the README, are a card of
+the home screen's five night scenes, one after another, dithered as Massif's
+home screen dithers them — at night for GitHub's dark theme, at dawn for the
+light one (each scene's `_relief` layer lifted into daylight under a sky drawn
+for it) —, the dither moving in four phases; stars twinkle in the night skies.
+Massif's mark of blocks rises over it, and its name falls into place in
+blocks, a letter after another. CSS animations only, so they play inside an
+`<img>`; the pictures are PNGs inside the SVG.
+
+```bash
+python3 docs/assets/src/hero.py            # both themes, into docs/assets
+python3 docs/assets/src/hero.py --at 1.2   # frozen 1.2 s in, to look at it
+```
+
+It needs Pillow, and reads the scenes from `crates/massif-app/assets/backdrops`.
+
+## The other figures
+
 The animated figures of the README, drawn as isometric line drawings in the
 manner of [Hairline](https://lucasmarkes.com/lab/hairline): rounded solids, a
 silhouette and one crease each, one bright stroke. Every figure comes in two

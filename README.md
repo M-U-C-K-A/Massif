@@ -1,14 +1,11 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/mark-dark.svg">
-  <img alt="Massif" src="docs/assets/mark-light.svg" width="260">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hero-dark.svg">
+  <img alt="Massif — the map editor for Minecraft, written in Rust" src="docs/assets/hero-light.svg" width="100%">
 </picture>
 
-# Massif
-
-**A map editor for Minecraft Java Edition, written in Rust.**<br>
-The successor to WorldPainter, made for maps tens of thousands of blocks wide.
+**The successor to WorldPainter, made for maps tens of thousands of blocks wide.**
 
 [**Download**](https://github.com/M-U-C-K-A/Massif/releases) · [Guide](docs/guide.md) · [Terrain graphs](docs/terrain-graphs.md) · [How it works](docs/internals.md) · [Roadmap](#roadmap)
 
