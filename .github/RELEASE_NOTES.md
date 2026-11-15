@@ -2,15 +2,17 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 
 ## New in 0.4.2
 
+**Ores, as Minecraft lays them.** The export now lays ores in the rock — Minecraft adds none to the map's finished chunks — following the game's own veins and heights since 1.18, or those of older versions. **Edit ▸ Ores** shows the map cut through with the ores exactly where they will be and a candle for each band of each ore: drag its ends, its body or its side to move the heights where veins start, where they are the most common and how large they are; beside it, the ore expected at each height in blocks, on a log scale or as a share of the ground. Saved with the map; the export can leave them out.
+
+**Survival check.** **Edit ▸ Analyse the map** counts every block of the map as the export writes it and reads it as a survival player would: in red what breaks survival (diamond blocks or ores lying around, bedrock above the floor, holes into the void, no wood), in amber what is missing (ores, with a way to Edit ▸ Ores; lava for a Nether portal, grass for animals, trees near the spawn), the way from wood to the Nether, what holds up, and how to fix it. Tabs for the relief (heights, steps a player walks, climbs or falls from, water), the blocks and ores, and the biomes; a spot shown on the map in a click; the report copied as Markdown. A few seconds for a map of 5,888 blocks a side, the ores counted where the export lays them.
+
+**A truer terrain viewport.** Cliffs are rock — lumps, grain and beds drawn in the world's own space — instead of faceted, stretched stripes; each point sees as much of the sky as the relief around it leaves it; haze and a low mist give depth at any map size; forests show their crowns and grass its drier patches. While the view moves it is drawn at half the size, so it moves as smoothly as before. The karst towers (and the floating mountains' towers) have sheer fluted walls, rounded shoulders and broad green tops, where they used to end in a spire.
+
 **Choosing what an area shows.** The icon before an area's title opens every editor on one page, in columns: the World side's views, tools and paint, then the Terrain side's generator. The line under them says what the one under the pointer is for, and whether another area shows it already. An empty area holds the same page.
 
 ## New in 0.4.1
 
 **The whole map at once.** **Edit ▸ Whole map** runs the terrain graph's filters over the whole map: erosion, thermal erosion, rivers (their beds in gravel), lakes, smoothing, sharpening, terraces, strata, and scaling the relief around the sea. Each opens with its settings and the map before and after, runs in the background with its progress, and is one step to undo; the map's paint, its levels and what was sculpted in 3D stay.
-
-**Ores, as Minecraft lays them.** The export now lays ores in the rock — Minecraft adds none to the map's finished chunks — following the game's own veins and heights since 1.18, or those of older versions. **Edit ▸ Ores** shows the map cut through with the ores exactly where they will be and a candle for each band of each ore: drag its ends, its body or its side to move the heights where veins start, where they are the most common and how large they are; beside it, the ore expected at each height in blocks, on a log scale or as a share of the ground. Saved with the map; the export can leave them out.
-
-**Survival check.** **Edit ▸ Analyse the map** counts every block of the map as the export writes it and reads it as a survival player would: in red what breaks survival (diamond blocks or ores lying around, bedrock above the floor, holes into the void, no wood), in amber what is missing (ores, with a way to Edit ▸ Ores; lava for a Nether portal, grass for animals, trees near the spawn), the way from wood to the Nether, what holds up, and how to fix it. Tabs for the relief (heights, steps a player walks, climbs or falls from, water), the blocks and ores, and the biomes; a spot shown on the map in a click; the report copied as Markdown. A few seconds for a map of 5,888 blocks a side, the ores counted where the export lays them.
 
 **Smoother.** The map glides on when a drag is let go, the zoom glides, and the views no longer stall while the map's images and the 3D tiles are made: on a map of 5,888 blocks, zooming went from 32 ms of work a frame to 6. The 3D view keeps going a little after a turn, flies softly, and draws itself smaller while it moves, sharp again when it stops.
 
@@ -21,8 +23,6 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 **Developer mode.** Settings ▸ Developer adds a Developer panel to every area's menu: frames a second, the time of each frame, the memory and the processor, in live charts, with what Massif keeps and why it draws again.
 
 **Ten scenes behind the home screen**, and in the light theme each at dawn. The new map's preview stands beside its settings, as tall as they are, and what is written over the picture reads over any part of it; the links under the settings say what they open.
-
-**A truer terrain viewport.** Cliffs are rock — lumps, grain and beds drawn in the world's own space — instead of faceted, stretched stripes; each point sees as much of the sky as the relief around it leaves it; haze and a low mist give depth at any map size; forests show their crowns and grass its drier patches. While the view moves it is drawn at half the size, so it moves as smoothly as before. The karst towers (and the floating mountains' towers) have sheer fluted walls, rounded shoulders and broad green tops, where they used to end in a spire.
 
 **Accessibility.** Settings ▸ Accessibility: high contrast (black or white text, stronger muted text, lines and edges, links underlined), reduced motion (views stop where they are let go, pictures and cards stay still) and the size of the whole interface, 100 to 150 %. On macOS the first two follow the system's own settings unless set otherwise.
 
