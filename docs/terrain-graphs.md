@@ -41,11 +41,21 @@ Settings** beside it, as when a Gaea terrain is rendered in Blender:
 - a sky that follows it, blue by day, warm at sunset;
 - volumetric clouds — cover, height, thickness, density, size, a seed to
   move them — lit by the sun and casting their shadows on the ground;
-- haze with distance, a sea at the world's sea level, the exposure and the
-  height exaggeration;
+- haze with distance, as a share of the map whatever its size, and a mist
+  over the lowest ground that shows between the mountains, not from above
+  them; a sea at the world's sea level, the exposure and the height
+  exaggeration;
 - **Save image** renders the view at full quality, from 1920 × 1080 to
   7680 × 4320, as a PNG. The view is drawn from the preview: a finer
   preview (up to 2,048 samples) gives a sharper image.
+
+The relief is shaded with smooth normals, and where it is steep with rock
+drawn in the world's own space — lumps, grain, beds across the face — so
+that cliffs are neither faceted nor stretched; elsewhere with the graph's
+colours, mottled, grass in drier and greener patches, and a forest's crowns
+where they are a forest's dark green. Each point sees as much of the sky as
+the relief around it leaves it, worked out on the GPU. While the view moves
+it is drawn at half the size, and sharp once it stops.
 
 In the viewport, left drag turns the view, right or middle drag moves it,
 the wheel or a pinch comes closer, a double-click frames the relief.
@@ -60,7 +70,7 @@ this map:
 |---|---|
 | Alpine range | Eroded peaks over green hills, snow on the summits (the starter graph) |
 | Archipelago | Tropical islands in a shallow sea, sandy beaches, green and rocky peaks |
-| Karst towers | A forest of stone towers, each of its own height, with sheer walls broken by ledges, scree at their feet, green tops and mossy walls, over a jungle crossed by rivers |
+| Karst towers | A forest of stone towers, each of its own height, with sheer walls fluted from top to foot and broken by ledges, rounded shoulders and broad green tops, overgrown scree at their feet and mossy walls, over a jungle crossed by rivers |
 | Floating mountains | Mountains of rock floating over such towers, each of several masses with their undersides hanging to points: a level of rock over the void, above the mist |
 | River valley | A wide valley between snowy ridged mountains, a river along its floor |
 | Desert canyon | A winding, stepped canyon in a red plateau, buttes, a river at the bottom |

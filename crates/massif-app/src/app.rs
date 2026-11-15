@@ -6179,6 +6179,53 @@ mod tests {
         image::save_buffer(dir.join("real-rivers-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
     }
 
+    /// The viewport's look, up close: the stone towers among themselves and
+    /// from above them, the floating mountains, an alpine range, at the
+    /// preview's finest (2048 samples over a map of 1024 blocks), as saved
+    /// images. Needs a GPU and takes a while: runs with MASSIF_VIEWPORT_DIR.
+    #[test]
+    fn viewport_shots() {
+        use massif_core::graph::Template;
+        let Some(dir) = std::env::var_os("MASSIF_VIEWPORT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.state_mut().layout.activate(7);
+        h.run_steps(2);
+        let shots: [(Template, &str, f32, f32, f32, bool); 6] = [
+            (Template::KarstTowers, "karst-among", 0.42, 0.1, 2.4, false),
+            (Template::KarstTowers, "karst-above", 0.8, 0.42, 0.7, false),
+            (Template::KarstTowers, "karst-cliffs", 0.2, 0.16, 1.2, false),
+            (Template::FloatingMountains, "floating", 0.62, 0.3, 2.2, true),
+            (Template::Alpine, "alpine", 0.9, 0.36, 0.6, false),
+            (Template::Alpine, "alpine-low", 0.42, 0.14, 2.0, false),
+        ];
+        let mut current = None;
+        for (t, name, distance, pitch, yaw, clouds) in shots {
+            if current != Some(t) {
+                let app = h.state_mut();
+                app.graph.preview = 2048;
+                app.graph.use_template(&mut app.doc, t);
+                wait_for_graph(&mut h);
+                current = Some(t);
+            }
+            let view = &mut h.state_mut().graph.view;
+            view.camera.distance = distance;
+            view.camera.pitch = pitch;
+            view.camera.yaw = yaw;
+            view.render.clouds = clouds;
+            let (w, hgt, rgba) = view.render_image([1920, 1080]).expect("an image");
+            image::save_buffer(dir.join(format!("viewport-{name}.png")), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+            if name == "karst-among" {
+                // As large as the viewport on a Retina screen.
+                let [_, still, last] = view.time_qualities([2880, 1300]);
+                // While it moves, the view is drawn at half the size.
+                let [moving, _, _] = view.time_qualities([1440, 650]);
+                eprintln!("{name} at 2880 × 1300: moving {moving:.1} ms (at half the size), still {still:.0} ms, final {last:.0} ms");
+            }
+        }
+    }
+
     /// The templates: the picker with their pictures, a card replacing the
     /// graph, and every template in the viewport with its own sky. Needs a
     /// GPU: runs with MASSIF_SNAPSHOT_DIR.

@@ -253,9 +253,10 @@ fn archipelago(b: &mut Builder, sea: f32, f: f32, sand: u16) {
 
 /// A forest of stone towers over a jungle, as water leaves them when it
 /// has worn a plateau away along its joints: every cell of a scatter holds
-/// one tower or none, each of its own height, with sheer walls broken by
-/// ledges, a rounded top and an outline no two share; they stand in
-/// groups, with open jungle between. Returns the ground.
+/// one tower or none, each of its own height, with sheer walls fluted from
+/// top to foot and broken by ledges, rounded shoulders, a broad domed top
+/// and an outline no two share; they stand in groups, with open jungle
+/// between. Returns the ground.
 fn pillar_forest(b: &mut Builder, sea: f32, f: f32, top: f32) -> NodeId {
     // Towers stay towers: they grow less than the map.
     let p = f.clamp(1.0, 2.0);
@@ -268,7 +269,7 @@ fn pillar_forest(b: &mut Builder, sea: f32, f: f32, top: f32) -> NodeId {
         seed: 32,
     };
     let floor = b.add(noise(NoiseStyle::Fbm, 700.0 * f, 6, 26.0, sea - 4.0, 31), 0.0, 0.0);
-    // Around the middle of each cell, an outline pushed about by noise.
+    // Around the middle of each cell, an outline pushed about by noise...
     let cones = b.add(cells(CellStyle::Cones), 0.0, 1.0);
     let outline = b.then(
         NodeKind::Warp {
@@ -280,9 +281,24 @@ fn pillar_forest(b: &mut Builder, sea: f32, f: f32, top: f32) -> NodeId {
         1.0,
         1.0,
     );
-    // Sheer from the foot, rounding off toward the top, with ledges.
-    let shape = b.then(levels(0.55, 0.94, 0.0, 1.0, 0.3), (outline, 0), 2.0, 1.0);
-    let ledges = b.then(NodeKind::Terrace { steps: 5, strength: 0.5 }, (shape, 0), 3.0, 1.0);
+    // ...wavering finely too, so that the walls are fluted from top to
+    // foot, as rain grooves limestone.
+    let fluted = b.then(
+        NodeKind::Warp {
+            amount: 1.4 * p,
+            scale: 6.0 * p,
+            seed: 35,
+        },
+        (outline, 0),
+        2.0,
+        1.0,
+    );
+    // From the wall (1) in to the middle (0), and over it a dome: walls
+    // sheer to the foot, rounded shoulders, a broad top — no spire.
+    let inward = b.then(levels(0.56, 0.97, 1.0, 0.0, 1.0), (fluted, 0), 3.0, 1.0);
+    let shape = b.then(levels(0.0, 1.0, 1.0, 0.0, 6.0), (inward, 0), 3.0, 0.0);
+    // Ledges where beds of harder rock stand out.
+    let ledges = b.then(NodeKind::Terrace { steps: 4, strength: 0.3 }, (shape, 0), 4.0, 1.0);
     // Each cell's own number says whether a tower stands there, and how
     // high.
     let lots = b.add(cells(CellStyle::Plates), 0.0, 2.0);
@@ -294,9 +310,10 @@ fn pillar_forest(b: &mut Builder, sea: f32, f: f32, top: f32) -> NodeId {
     let there = b.combine(CombineOp::Multiply, 1.0, (stands, 0), (groups, 0), 2.0, 3.0);
     let height = b.combine(CombineOp::Multiply, 1.0, (there, 0), (tall, 0), 3.0, 3.0);
     let towers = b.combine(CombineOp::Multiply, 1.0, (ledges, 0), (height, 0), 4.0, 2.0);
-    // Scree at their feet, where the jungle climbs.
-    let fallen = b.then(NodeKind::Blur { radius: 9.0 * p }, (towers, 0), 5.0, 3.0);
-    let scree = b.then(levels(0.0, top, 0.0, top * 0.45, 1.0), (fallen, 0), 6.0, 3.0);
+    // Scree at their feet, a fifth of their height or so, where the jungle
+    // climbs.
+    let fallen = b.then(NodeKind::Blur { radius: 8.0 * p }, (towers, 0), 5.0, 3.0);
+    let scree = b.then(levels(0.0, top, 0.0, top * 0.3, 1.0), (fallen, 0), 6.0, 3.0);
     let standing = b.combine(CombineOp::Max, 1.0, (towers, 0), (scree, 0), 7.0, 2.0);
     let land = b.combine(CombineOp::Add, 1.0, (floor, 0), (standing, 0), 8.0, 1.0);
     let rocks = b.add(
@@ -333,9 +350,12 @@ fn jungle_colours(b: &mut Builder, sea: f32, ground: NodeId, col: f32, row: f32)
     let clumps_noise = b.add(noise(NoiseStyle::Billow, 46.0, 4, 1.0, 0.0, 39), col, row + 6.0);
     let clumps = b.then(levels(0.1, 0.5, 0.0, 1.0, 1.0), (clumps_noise, 0), col + 1.0, row + 6.0);
     let canopy = b.tint([30, 62, 30], 0.55, colour, (clumps, 0), col + 1.0, row + 1.0);
+    // The scree at their feet overgrown, olive and brown.
+    let talus = b.then(slope(26.0, 50.0), (ground, 0), col, row + 7.0);
+    let overgrown = b.tint([66, 72, 42], 0.65, canopy, (talus, 0), col + 1.0, row + 7.0);
     // Walls of warm grey stone, moss and creepers in patches down them.
     let steep = b.then(slope(56.0, 90.0), (ground, 0), col, row + 2.0);
-    let stone = b.tint([146, 134, 116], 0.7, canopy, (steep, 0), col + 2.0, row + 1.0);
+    let stone = b.tint([146, 134, 116], 0.7, overgrown, (steep, 0), col + 2.0, row + 1.0);
     let scatter = b.add(noise(NoiseStyle::Fbm, 24.0, 4, 1.0, 0.0, 38), col, row + 3.0);
     let patches = b.then(levels(0.44, 0.62, 0.0, 1.0, 1.0), (scatter, 0), col + 1.0, row + 3.0);
     let mossy_walls = b.combine(CombineOp::Multiply, 1.0, (steep, 0), (patches, 0), col + 2.0, row + 2.5);
@@ -351,7 +371,7 @@ fn jungle_colours(b: &mut Builder, sea: f32, ground: NodeId, col: f32, row: f32)
         col,
         row + 4.0,
     );
-    let flat = b.then(slope(0.0, 38.0), (ground, 0), col, row + 5.0);
+    let flat = b.then(slope(0.0, 46.0), (ground, 0), col, row + 5.0);
     let tops = b.combine(CombineOp::Multiply, 1.0, (high, 0), (flat, 0), col + 1.0, row + 4.5);
     b.tint([50, 88, 38], 0.6, mossy, (tops, 0), col + 4.0, row + 1.0)
 }
