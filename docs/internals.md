@@ -148,6 +148,29 @@ and the rays are walked in its coarser grid. The header says so. A map of
 24,000 × 24,000 blocks (35,000 tiles) is shown at a column every 2 blocks
 in 672 MB, built in 25 seconds, nearest the camera first.
 
+### On OpenGL
+
+wgpu draws with OpenGL where neither Vulkan nor DirectX 12 can (an Intel HD
+Graphics of 2013, a graphics API set aside after a stuck start), and OpenGL
+does less. The views draw in sRGB, which egui shows as plain bytes: where a
+texture cannot be viewed in another format, a small pass copies the image
+into a texture of its own, the same bytes (`view_image.rs`). The
+multisampled image is kept until it is resolved (wgpu's OpenGL drops it
+first, and the image came out empty), a texture read as an array has two
+layers at least (OpenGL takes one of a single layer for a plain 2D one),
+the fragments' input carries no `@invariant`, which OpenGL ES refuses, and
+an image read back is waited for again when OpenGL gives up waiting.
+
+The tests run on OpenGL on macOS too, through ANGLE: the test build has
+wgpu's `angle`, and ANGLE's `libEGL.dylib` and `libGLESv2.dylib` (Chrome's
+or Firefox's ship them) only need to be found:
+
+```
+WGPU_BACKEND=gl DYLD_LIBRARY_PATH=<their folder> cargo test -p massif-app -- --test-threads=1
+```
+
+One at a time: ANGLE crashes with several OpenGL contexts at once.
+
 ## Very large maps
 
 Tiles are kept compressed (cold) and decoded when they are needed, so a

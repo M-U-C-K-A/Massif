@@ -791,6 +791,16 @@ struct Out {
     @location(3) side: f32,
 };
 
+// What the fragments get of `Out`: its position without the invariance,
+// which OpenGL ES allows only on what a vertex gives.
+struct In {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) world: vec3<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) normal: vec3<f32>,
+    @location(3) side: f32,
+};
+
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> Out {
     let n = i32(u.grid.x);
@@ -865,7 +875,7 @@ fn fs_depth() -> @location(0) vec4<f32> {
 }
 
 @fragment
-fn fs_slab_depth(in: SlabOut) -> @location(0) vec4<f32> {
+fn fs_slab_depth(in: SlabIn) -> @location(0) vec4<f32> {
     if (in.thick < 0.3) {
         discard;
     }
@@ -873,7 +883,7 @@ fn fs_slab_depth(in: SlabOut) -> @location(0) vec4<f32> {
 }
 
 @fragment
-fn fs_main(in: Out) -> @location(0) vec4<f32> {
+fn fs_main(in: In) -> @location(0) vec4<f32> {
     let footprint = length(fwidth(in.world));
     var base = textureSample(colors, smooth_sampler, in.uv).rgb;
     let cpu_open = textureSample(light, smooth_sampler, in.uv).g;
@@ -901,6 +911,17 @@ fn fs_main(in: Out) -> @location(0) vec4<f32> {
 
 struct SlabOut {
     @builtin(position) @invariant clip: vec4<f32>,
+    @location(0) world: vec3<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) normal: vec3<f32>,
+    @location(3) thick: f32,
+    @location(4) under: f32,
+    @location(5) @interpolate(flat) layer: u32,
+};
+
+// What the fragments get of `SlabOut` (see `In`).
+struct SlabIn {
+    @builtin(position) clip: vec4<f32>,
     @location(0) world: vec3<f32>,
     @location(1) uv: vec2<f32>,
     @location(2) normal: vec3<f32>,
@@ -946,7 +967,7 @@ fn vs_slab(@builtin(vertex_index) vi: u32, @builtin(instance_index) k: u32) -> S
 }
 
 @fragment
-fn fs_slab(in: SlabOut) -> @location(0) vec4<f32> {
+fn fs_slab(in: SlabIn) -> @location(0) vec4<f32> {
     let footprint = length(fwidth(in.world));
     let c0 = textureSample(slab0_colors, smooth_sampler, in.uv).rgb;
     let c1 = textureSample(slab1_colors, smooth_sampler, in.uv).rgb;
@@ -1092,7 +1113,7 @@ struct Target {
     resolve: wgpu::Texture,
     resolve_view: wgpu::TextureView,
     /// The same image as plain bytes, for egui.
-    display_view: wgpu::TextureView,
+    shown: crate::view_image::Shown,
     depth: wgpu::TextureView,
 }
 
@@ -1115,6 +1136,9 @@ struct Relief {
 pub struct TerrainRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    /// Where the device cannot view the image as plain bytes (OpenGL):
+    /// the pass that copies it so.
+    copier: Option<crate::view_image::Copier>,
     /// The relief's and the slabs' depth, laid first.
     relief_depth: wgpu::RenderPipeline,
     slab_depth: wgpu::RenderPipeline,
@@ -1260,6 +1284,7 @@ impl TerrainRenderer {
             relief: None,
             target: None,
             small: None,
+            copier: crate::view_image::Copier::new(device),
         }
     }
 
@@ -1422,10 +1447,8 @@ impl TerrainRenderer {
             height: size[1],
             depth_or_array_layers: 1,
         };
-        // The image egui shows is read as plain bytes: egui works with
-        // gamma-encoded colours, and an sRGB view would decode them once
-        // more, darkening everything.
-        let texture = |label: &str, format, samples, usage| {
+        // The image egui shows is read as plain bytes (see `view_image`).
+        let texture = |label: &str, format, samples, usage, view_formats| {
             self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
                 size: extent,
@@ -1434,33 +1457,31 @@ impl TerrainRenderer {
                 dimension: wgpu::TextureDimension::D2,
                 format,
                 usage,
-                view_formats: if format == COLOR_FORMAT { &[wgpu::TextureFormat::Rgba8Unorm] } else { &[] },
+                view_formats,
             })
         };
-        let msaa = texture("massif graph msaa", COLOR_FORMAT, SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT);
+        let msaa = texture("massif graph msaa", COLOR_FORMAT, SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT, &[]);
         let resolve = texture(
             "massif graph image",
             COLOR_FORMAT,
             1,
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            crate::view_image::view_formats(&self.device),
         );
-        let depth = texture("massif graph depth", DEPTH_FORMAT, SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT);
+        let depth = texture("massif graph depth", DEPTH_FORMAT, SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT, &[]);
         let view = |t: &wgpu::Texture| t.create_view(&wgpu::TextureViewDescriptor::default());
         Target {
             size,
             msaa: view(&msaa),
             resolve_view: view(&resolve),
-            display_view: resolve.create_view(&wgpu::TextureViewDescriptor {
-                format: Some(wgpu::TextureFormat::Rgba8Unorm),
-                ..Default::default()
-            }),
+            shown: crate::view_image::Shown::of(&self.device, self.copier.as_ref(), &resolve),
             resolve,
             depth: view(&depth),
         }
     }
 
     pub fn image_view(&self, small: bool) -> Option<&wgpu::TextureView> {
-        if small { self.small.as_ref() } else { self.target.as_ref() }.map(|t| &t.display_view)
+        if small { self.small.as_ref() } else { self.target.as_ref() }.map(|t| &t.shown.view)
     }
 
     fn render_to(&self, target: &Target, u: &Uniforms, sea: bool) {
@@ -1482,7 +1503,7 @@ impl TerrainRenderer {
                             b: u.horizon[2] as f64,
                             a: 1.0,
                         }),
-                        store: wgpu::StoreOp::Discard,
+                        store: crate::view_image::msaa_store(&self.device),
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -1526,6 +1547,7 @@ impl TerrainRenderer {
                 }
             }
         }
+        target.shown.update(self.copier.as_ref(), &mut encoder);
         self.queue.submit([encoder.finish()]);
     }
 
@@ -1572,7 +1594,9 @@ impl TerrainRenderer {
         buffer.map_async(wgpu::MapMode::Read, .., move |r| {
             let _ = tx.send(r);
         });
-        self.device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+        if !crate::view_image::wait(&self.device) {
+            return None;
+        }
         rx.recv().ok()?.ok()?;
         let data = buffer.get_mapped_range(..).ok()?;
         let mut out = Vec::with_capacity((w * h * 4) as usize);

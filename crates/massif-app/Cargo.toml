@@ -49,6 +49,9 @@ objc2-app-kit = { version = "0.3", default-features = false, features = ["std", 
 
 [dev-dependencies]
 egui_kittest = { version = "0.37", features = ["wgpu", "snapshot", "eframe"] }
+# The tests can draw with OpenGL on macOS too, through ANGLE (see
+# docs/internals.md); the app itself does not ship it.
+wgpu = { version = "30", default-features = false, features = ["angle"] }
 fastnbt = "2.6"
 flate2.workspace = true
 

@@ -1667,7 +1667,7 @@ struct Target {
     resolve: wgpu::Texture,
     resolve_view: wgpu::TextureView,
     /// The same image as plain bytes, for egui.
-    display_view: wgpu::TextureView,
+    shown: crate::view_image::Shown,
     depth: wgpu::TextureView,
 }
 
@@ -1727,6 +1727,9 @@ fn halve(level: &[u16], side: usize) -> Vec<u16> {
 pub struct Renderer3d {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    /// Where the device cannot view the image as plain bytes (OpenGL):
+    /// the pass that copies it so.
+    copier: Option<crate::view_image::Copier>,
     opaque_pipeline: wgpu::RenderPipeline,
     water_pipeline: wgpu::RenderPipeline,
     trace_pipeline: wgpu::RenderPipeline,
@@ -2005,6 +2008,7 @@ impl Renderer3d {
             tracer: None,
             target: None,
             chunks: HashMap::new(),
+            copier: crate::view_image::Copier::new(device),
         }
     }
 
@@ -2013,7 +2017,8 @@ impl Renderer3d {
     /// the views and the number of materials.
     fn make_atlas(device: &wgpu::Device, queue: &wgpu::Queue, atlas: &crate::textures::Atlas) -> (wgpu::TextureView, wgpu::TextureView, u32) {
         use crate::textures::{MIPS, SIDE, mip_chain};
-        let layers = atlas.layers.len().max(1) as u32;
+        // Two layers at least, for OpenGL (see `set_grid`).
+        let layers = atlas.layers.len().max(2) as u32;
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("massif 3d block textures"),
             size: wgpu::Extent3d {
@@ -2029,7 +2034,7 @@ impl Renderer3d {
             view_formats: &[],
         });
         let chains: Vec<Vec<Vec<u8>>> = atlas.layers.iter().map(mip_chain).collect();
-        for mip in 0..MIPS {
+        for mip in (0..MIPS).filter(|_| !chains.is_empty()) {
             let side = (SIDE >> mip) as u32;
             let bytes: Vec<u8> = chains.iter().flat_map(|c| c[mip as usize].iter().copied()).collect();
             queue.write_texture(
@@ -2048,7 +2053,7 @@ impl Renderer3d {
                 wgpu::Extent3d {
                     width: side,
                     height: side,
-                    depth_or_array_layers: layers,
+                    depth_or_array_layers: chains.len() as u32,
                 },
             );
         }
@@ -2234,8 +2239,11 @@ impl Renderer3d {
             })
         };
         let page = PAGE as u32;
-        let cols = make("massif 3d columns", page, page, count, 1, wgpu::TextureFormat::R32Uint);
-        let maxes = make("massif 3d maxes", page / 2, page / 2, count, PAGE_SHIFT, wgpu::TextureFormat::R16Uint);
+        // Two layers at least: OpenGL takes a texture of one layer for a
+        // plain 2D one, which a view of an array cannot read.
+        let layers = count.max(2);
+        let cols = make("massif 3d columns", page, page, layers, 1, wgpu::TextureFormat::R32Uint);
+        let maxes = make("massif 3d maxes", page / 2, page / 2, layers, PAGE_SHIFT, wgpu::TextureFormat::R16Uint);
         let table_tex = make("massif 3d pages", pages.0, pages.1, 1, 1, wgpu::TextureFormat::R32Uint);
         let pyramid = make("massif 3d pyramid", side, side, 1, pyramid_levels, wgpu::TextureFormat::R16Uint);
         self.queue.write_texture(
@@ -2290,7 +2298,7 @@ impl Renderer3d {
             maxes,
             pyramid,
             group,
-            bytes: per_layer * count as u64,
+            bytes: per_layer * layers as u64,
         });
         Ok(())
     }
@@ -2525,10 +2533,8 @@ impl Renderer3d {
             height: size[1],
             depth_or_array_layers: 1,
         };
-        // The image egui shows is read as plain bytes: egui works with
-        // gamma-encoded colours, and an sRGB view would decode them once
-        // more, darkening everything.
-        let texture = |label: &str, format, samples, usage| {
+        // The image egui shows is read as plain bytes (see `view_image`).
+        let texture = |label: &str, format, samples, usage, view_formats| {
             self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
                 size: extent,
@@ -2537,26 +2543,24 @@ impl Renderer3d {
                 dimension: wgpu::TextureDimension::D2,
                 format,
                 usage,
-                view_formats: if format == COLOR_FORMAT { &[wgpu::TextureFormat::Rgba8Unorm] } else { &[] },
+                view_formats,
             })
         };
-        let msaa = texture("massif 3d msaa", COLOR_FORMAT, SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT);
+        let msaa = texture("massif 3d msaa", COLOR_FORMAT, SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT, &[]);
         let resolve = texture(
             "massif 3d image",
             COLOR_FORMAT,
             1,
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            crate::view_image::view_formats(&self.device),
         );
-        let depth = texture("massif 3d depth", DEPTH_FORMAT, SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT);
+        let depth = texture("massif 3d depth", DEPTH_FORMAT, SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT, &[]);
         let view = |t: &wgpu::Texture| t.create_view(&wgpu::TextureViewDescriptor::default());
         self.target = Some(Target {
             size,
             msaa: view(&msaa),
             resolve_view: view(&resolve),
-            display_view: resolve.create_view(&wgpu::TextureViewDescriptor {
-                format: Some(wgpu::TextureFormat::Rgba8Unorm),
-                ..Default::default()
-            }),
+            shown: crate::view_image::Shown::of(&self.device, self.copier.as_ref(), &resolve),
             resolve,
             depth: view(&depth),
         });
@@ -2564,7 +2568,7 @@ impl Renderer3d {
     }
 
     pub fn image_view(&self) -> Option<&wgpu::TextureView> {
-        self.target.as_ref().map(|t| &t.display_view)
+        self.target.as_ref().map(|t| &t.shown.view)
     }
 
     /// Draw the traced columns and the meshed chunks of `tiles` into the
@@ -2642,7 +2646,7 @@ impl Renderer3d {
                             b: lin(sky[2]),
                             a: 1.0,
                         }),
-                        store: wgpu::StoreOp::Discard,
+                        store: crate::view_image::msaa_store(&self.device),
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -2682,13 +2686,14 @@ impl Renderer3d {
                 }
             }
         }
+        target.shown.update(self.copier.as_ref(), &mut encoder);
         self.queue.submit([encoder.finish()]);
     }
 
     /// Wait until the graphics card has drawn what it was given.
     #[cfg(test)]
     pub fn wait(&self) {
-        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+        crate::view_image::wait(&self.device);
     }
 
     /// Copy the rendered image back to the CPU (RGBA, row-major). Blocks.
@@ -2732,7 +2737,9 @@ impl Renderer3d {
         buffer.map_async(wgpu::MapMode::Read, .., move |r| {
             let _ = tx.send(r);
         });
-        self.device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+        if !crate::view_image::wait(&self.device) {
+            return None;
+        }
         rx.recv().ok()?.ok()?;
         let data = buffer.get_mapped_range(..).ok()?;
         let mut out = Vec::with_capacity((w * h * 4) as usize);
@@ -4836,10 +4843,12 @@ mod tests {
         );
     }
 
+    /// A device as the app asks for one, on the graphics API WGPU_BACKEND
+    /// names (`gl` tries the views under OpenGL's limits).
     fn gpu() -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor { required_limits: adapter.limits(), ..Default::default() })).ok()
     }
 
     /// Put every tile of a world on the GPU.
