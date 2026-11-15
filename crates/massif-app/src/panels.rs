@@ -58,6 +58,49 @@ fn icon_button(ui: &mut Ui, icon: Icon, selected: bool, size: f32) -> egui::Resp
     response
 }
 
+/// A tool's button: its own icon (see [`crate::icons`]) on a tile.
+fn tool_button(ui: &mut Ui, tool: Tool, selected: bool, size: f32) -> egui::Response {
+    let pal = Palette::of(ui);
+    let (rect, response) = ui.allocate_exact_size(vec2(size, size), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, tool.label()));
+    let visuals = ui.style().interact_selectable(&response, selected);
+    let fill = if selected {
+        pal.accent_soft
+    } else if response.hovered() {
+        visuals.bg_fill
+    } else {
+        Color32::TRANSPARENT
+    };
+    ui.painter().rect(rect, theme::TILE_RADIUS, fill, if selected { Stroke::new(1.0, pal.accent) } else { Stroke::NONE }, StrokeKind::Inside);
+    let icon = Rect::from_center_size(rect.center(), vec2(size * 0.66, size * 0.66));
+    crate::icons::paint(ui.painter(), icon, tool, if selected { pal.accent } else { pal.text });
+    response
+}
+
+/// A tool to choose in a row of them: its icon and its name, in a pill.
+fn tool_chip(ui: &mut Ui, tool: Tool, label: &str, selected: bool) -> egui::Response {
+    let pal = Palette::of(ui);
+    let font = egui::FontId::proportional(12.5);
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), font, if selected { pal.text } else { pal.weak });
+    let (rect, response) = ui.allocate_exact_size(vec2(10.0 + 16.0 + 6.0 + galley.size().x + 12.0, 26.0), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
+    let fill = if selected {
+        pal.accent_soft
+    } else if response.hovered() {
+        theme::mix(pal.panel, pal.text, 0.07)
+    } else {
+        Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, theme::PILL, fill);
+    let icon = Rect::from_center_size(pos2(rect.left() + 18.0, rect.center().y), vec2(16.0, 16.0));
+    crate::icons::paint(ui.painter(), icon, tool, if selected { pal.accent } else { pal.weak });
+    ui.painter().galley(pos2(rect.left() + 32.0, rect.center().y - galley.size().y / 2.0), galley, pal.text);
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
+}
+
 // ------------------------------------------------------------------ tools --
 
 pub fn tools_panel(ui: &mut Ui, tools: &mut ToolState) {
@@ -91,7 +134,7 @@ pub fn tools_panel(ui: &mut Ui, tools: &mut ToolState) {
                     );
                     name.on_hover_text(group);
                     for &tool in list {
-                        if crate::cards::tool(icon_button(ui, tool.icon(), tools.tool == tool, 28.0), tool).clicked() {
+                        if crate::cards::tool(tool_button(ui, tool, tools.tool == tool, 28.0), tool).clicked() {
                             tools.select(tool);
                         }
                     }
@@ -112,7 +155,7 @@ pub fn sculpt_toolbar(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
         ui.spacing_mut().interact_size.y = 22.0;
         for tool in crate::tools::SculptSettings::TOOLS {
             let label = if tool == Tool::PaintTerrain { "Paint" } else { tool.label() };
-            if crate::cards::tool(ui.selectable_label(tools.sculpt.tool == tool, theme::with_icon(tool.icon(), label)), tool).clicked() {
+            if crate::cards::tool(tool_chip(ui, tool, label, tools.sculpt.tool == tool), tool).clicked() {
                 tools.sculpt.tool = tool;
             }
         }
@@ -161,18 +204,14 @@ pub fn sculpt_toolbar(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
                 }
             });
         });
+        // Its size and intensity are those of Brush Settings, as for every
+        // tool: said here, set there.
         ui.add_space(6.0);
-        let s = &mut tools.sculpt;
-        ui.add(crate::widgets::Field::new(&mut s.brush.radius, 1.0..=64.0).text("Radius").suffix(" blocks").max_decimals(0).width(150.0));
-        ui.add(
-            crate::widgets::Field::new(&mut s.brush.strength, 0.05..=1.0)
-                .text("Strength")
-                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
-                .custom_parser(|t| t.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0))
-                .width(150.0),
-        );
+        let b = &tools.brush;
+        ui.label(RichText::new(format!("{:.0} radius · {:.0}%", b.radius, b.strength * 100.0)).size(12.0).color(pal.weak))
+            .on_hover_text("Size, intensity and rotation: in Brush Settings, as for every tool (⌘+wheel: size)");
         // What Paint paints: the terrain chosen (in Terrain or Blocks).
-        if s.tool == Tool::PaintTerrain {
+        if tools.sculpt.tool == Tool::PaintTerrain {
             ui.add_space(6.0);
             let def = reg.terrain(TerrainId(tools.terrain));
             swatch(ui, theme::rgb(def.color));
@@ -215,7 +254,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
     ui.spacing_mut().slider_width = (ui.available_width() - 76.0 - 84.0).clamp(60.0, 220.0);
     let tool = tools.tool;
     ui.horizontal(|ui| {
-        ui.label(RichText::new(theme::glyph(tool.icon()).to_string()).size(18.0).color(pal.accent));
+        crate::icons::show(ui, tool, 20.0, pal.accent);
         ui.label(RichText::new(tool.label()).bold().size(14.0));
     });
     hint(ui, tool.help());

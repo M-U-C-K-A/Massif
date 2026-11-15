@@ -1059,8 +1059,14 @@ impl MassifApp {
             ui.separator();
             for tool in [Tool::Raise, Tool::Smooth, Tool::Flatten, Tool::PaintTerrain, Tool::Flood, Tool::StampSlab] {
                 let selected = self.tools.tool == tool;
-                let text = RichText::new(theme::glyph(tool.icon()).to_string()).color(if selected { pal.accent } else { pal.text });
-                if ui.add(egui::Button::new(text).frame(selected)).on_hover_text(tool.label()).clicked() {
+                let (rect, r) = ui.allocate_exact_size(vec2(24.0, 22.0), Sense::click());
+                if selected || r.hovered() {
+                    ui.painter().rect_filled(rect, theme::TILE_RADIUS, if selected { pal.accent_soft } else { theme::mix(pal.app_bg, pal.text, 0.08) });
+                }
+                let color = if selected { pal.accent } else { pal.text };
+                crate::icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), tool, color);
+                r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, tool.label()));
+                if r.on_hover_text(tool.label()).clicked() {
                     self.tools.select(tool);
                 }
             }
@@ -2799,8 +2805,8 @@ mod tests {
             let app = h.state_mut();
             app.layout.active = 4; // 3D Sculpt
             app.tools.sculpt.tool = Tool::Build;
-            app.tools.sculpt.brush.radius = 14.0;
-            app.tools.sculpt.brush.strength = 1.0;
+            app.tools.brush.radius = 14.0;
+            app.tools.brush.strength = 1.0;
             app.sculpt3d.camera.distance = 160.0;
         }
         h.run_steps(30);
@@ -2873,9 +2879,9 @@ mod tests {
             h.step();
         };
         // ⌘ + wheel: the size of the brush.
-        let radius = h.state().tools.sculpt.brush.radius;
+        let radius = h.state().tools.brush.radius;
         wheel(&mut h, Modifiers::COMMAND);
-        assert!(h.state().tools.sculpt.brush.radius > radius, "{} after {radius}", h.state().tools.sculpt.brush.radius);
+        assert!(h.state().tools.brush.radius > radius, "{} after {radius}", h.state().tools.brush.radius);
         // Alt + wheel: toward the point under the cursor.
         let (target, distance) = (h.state().sculpt3d.camera.target, h.state().sculpt3d.camera.distance);
         let pointed = h.state().sculpt3d.hover().expect("the cursor points at the terrain").point;
@@ -2995,6 +3001,72 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(15));
         }
         h.run_steps(4);
+    }
+
+    /// The pictures behind the home screen (assets/backdrops), rendered from
+    /// templates of the terrain graph at dusk. Writes them, as JPEG, to
+    /// MASSIF_BACKDROP_DIR; MASSIF_BACKDROP_ONLY (a name) renders one,
+    /// MASSIF_BACKDROP_CAM (yaw,pitch,distance,height) and
+    /// MASSIF_BACKDROP_SUN (direction,height) try other framings of it.
+    /// Needs a GPU.
+    #[test]
+    fn render_the_home_backdrops() {
+        use massif_core::graph::Template;
+        let Some(dir) = std::env::var_os("MASSIF_BACKDROP_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let numbers = |name: &str| -> Option<Vec<f32>> { std::env::var(name).ok().map(|v| v.split(',').filter_map(|n| n.trim().parse().ok()).collect()) };
+        let only = std::env::var("MASSIF_BACKDROP_ONLY").ok();
+        // Name, template, camera (yaw, pitch, distance, height looked at),
+        // sun (direction, height), haze.
+        // Name, template, camera (yaw, pitch, distance, height looked at),
+        // sun (direction, height), haze, exaggeration.
+        type Preset = (&'static str, Template, [f32; 4], [f32; 2], f32, f32);
+        let presets: [Preset; 4] = [
+            ("floating-mountains", Template::FloatingMountains, [0.4, 0.18, 0.75, 120.0], [240.0, 8.0], 0.4, 1.0),
+            ("archipelago-sunset", Template::Archipelago, [3.0, 0.16, 0.7, 20.0], [260.0, 5.0], 0.45, 1.0),
+            ("karst-twilight", Template::KarstTowers, [1.7, 0.07, 0.45, 90.0], [200.0, 4.0], 0.5, 1.0),
+            ("canyon-sunset", Template::DesertCanyon, [3.6, 0.16, 0.5, 40.0], [235.0, 7.0], 0.3, 1.3),
+        ];
+        let exaggeration = std::env::var("MASSIF_BACKDROP_EXAGGERATION").ok().and_then(|v| v.parse::<f32>().ok());
+        for (name, template, cam, sun, haze, relief) in presets {
+            if only.as_deref().is_some_and(|o| o != name) {
+                continue;
+            }
+            let cam = numbers("MASSIF_BACKDROP_CAM").filter(|v| v.len() == 4).unwrap_or(cam.to_vec());
+            let sun = numbers("MASSIF_BACKDROP_SUN").filter(|v| v.len() == 2).unwrap_or(sun.to_vec());
+            let mut h = harness(ThemeChoice::Dark);
+            {
+                let app = h.state_mut();
+                app.layout.activate(8); // Render, on the terrain side
+                let sea = app.doc.world.meta.sea_level as f32;
+                let g = template.graph(&app.doc.world.registry, sea, 4096.0);
+                app.doc.world.meta.graph = Some(g);
+                app.graph.graph_replaced();
+            }
+            wait_for_graph(&mut h);
+            {
+                let v = &mut h.state_mut().graph.view;
+                v.render.clouds = false;
+                v.render.sea = true;
+                v.render.haze = haze;
+                v.render.exaggeration = exaggeration.unwrap_or(relief);
+                v.render.sun_azimuth = sun[0];
+                v.render.sun_elevation = sun[1];
+                v.camera.yaw = cam[0];
+                v.camera.pitch = cam[1];
+                v.camera.distance = cam[2];
+                v.camera.target[1] = cam[3];
+            }
+            h.run_steps(8);
+            let (w, hgt, rgba) = h.state_mut().graph.view.render_image([1920, 1080]).expect("rendered");
+            let rgb = image::RgbImage::from_fn(w, hgt, |x, y| {
+                let i = ((y * w + x) * 4) as usize;
+                image::Rgb([rgba[i], rgba[i + 1], rgba[i + 2]])
+            });
+            let mut out = std::fs::File::create(dir.join(format!("{name}.jpg"))).unwrap();
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 86).encode_image(&rgb).unwrap();
+        }
     }
 
     /// The terrain graph: previews of every node and the viewport, then the
@@ -4961,6 +5033,12 @@ mod tests {
         assert!(h.query_by_label_contains("Back to").is_none(), "no map to go back to");
         if let Some(dir) = &dir {
             h.render().unwrap().save(dir.join("home-dark.png")).unwrap();
+            // Every picture of the backdrop, dithered.
+            for k in 0..home::Home::backdrops() {
+                let name = h.state_mut().home.as_mut().unwrap().choose_backdrop(k);
+                h.run_steps(3);
+                h.render().unwrap().save(dir.join(format!("home-backdrop-{name}.png"))).unwrap();
+            }
         }
         // The highest Minecraft allows, and back.
         h.get_by_label("2032").click();
@@ -5445,8 +5523,8 @@ mod tests {
             let source = BrushSource::Stamp(massif_core::stamps::Stamp::ALL[3]);
             assert!(panels::select_brush(&mut app.tools, &app.brushes, source), "the stamp is a brush");
             app.tools.sculpt.tool = Tool::Build;
-            app.tools.sculpt.brush.radius = 40.0;
-            app.tools.sculpt.brush.strength = 0.5;
+            app.tools.brush.radius = 40.0;
+            app.tools.brush.strength = 0.5;
         }
         // Once the view has framed the map: over the highest land near
         // its middle.

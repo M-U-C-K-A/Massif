@@ -93,7 +93,7 @@ Levels lay rock over the ground or dig into it, each in its own layer that can b
 - Double-click looks at the point under the cursor.
 
 ## 3D Sculpt
-**Build**, **Dig**, **Smooth** and **Paint** work on the blocks in 3D, with the brush chosen for every tool. Left button sculpts where the cursor points, right button inverts. Converting a terrain graph into the ground later drops what was sculpted on the tiles it rewrites (one step to undo).
+**Build**, **Dig**, **Smooth** and **Paint** work on the blocks in 3D, with the brush of every tool: its shape, size, intensity and rotation are set in **Brush Settings**, shown beside the 3D Sculpt view (`⌘` + scroll changes its size there too). Left button sculpts where the cursor points, right button inverts; held down, it keeps adding or digging. Converting a terrain graph into the ground later drops what was sculpted on the tiles it rewrites (one step to undo).
 
 # Terrain graphs
 ## Nodes

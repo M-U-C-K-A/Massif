@@ -142,22 +142,27 @@ pub enum HomeAction {
     Dropped(PathBuf),
 }
 
-/// The dots behind the home screen, for one size and colour.
-struct Backdrop {
-    key: (usize, usize, [u8; 4], bool),
-    cells: TextureHandle,
-    pitch: usize,
-    twinkles: Vec<Twinkle>,
+/// The pictures of `assets/backdrops` (listed by the build script).
+mod pictures {
+    include!(concat!(env!("OUT_DIR"), "/backdrops.rs"));
 }
 
-/// A star that twinkles, each at its own pace.
-#[derive(Debug, Clone, Copy)]
-struct Twinkle {
-    col: u16,
-    row: u16,
-    color: Color32,
-    phase: f32,
-    speed: f32,
+/// Seconds each frame of the backdrop stays: its dither moves on, about once
+/// a second, as bast.sh's does.
+const FRAME_SECS: f64 = 0.9;
+
+/// The picture behind the home screen, dithered for one size and theme: a
+/// few frames of it, each dithered a little differently, shown in turn.
+struct Backdrop {
+    key: (usize, usize, bool, [i32; 4]),
+    frames: Vec<TextureHandle>,
+    pitch: usize,
+}
+
+/// A picture of `assets/backdrops`, decoded.
+struct Picture {
+    index: usize,
+    image: image::RgbImage,
 }
 
 pub struct Home {
@@ -167,6 +172,9 @@ pub struct Home {
     /// The name of the map open before, to go back to.
     pub back_to: Option<String>,
     backdrop: Option<Backdrop>,
+    /// The picture of the backdrop, chosen at random when Massif opens.
+    choice: usize,
+    picture: Option<Picture>,
     logo: Option<TextureHandle>,
 }
 
@@ -178,8 +186,24 @@ impl Home {
             heightmap: None,
             back_to: None,
             backdrop: None,
+            choice: (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos()) as usize) / 7,
+            picture: None,
             logo: None,
         }
+    }
+
+    /// Show the picture `k` of `assets/backdrops` (by its place in the
+    /// folder, in name order).
+    #[cfg(test)]
+    pub fn choose_backdrop(&mut self, k: usize) -> &'static str {
+        self.choice = k;
+        pictures::BACKDROPS[k % pictures::BACKDROPS.len()].0
+    }
+
+    /// The number of pictures there are.
+    #[cfg(test)]
+    pub fn backdrops() -> usize {
+        pictures::BACKDROPS.len()
     }
 
     /// Show the home screen over the whole of `ui`. `recent`: the maps
@@ -200,7 +224,7 @@ impl Home {
             });
         }
 
-        self.paint_backdrop(ui, main);
+        self.paint_backdrop(ui, main, column_rect(main));
         ui.painter().rect_filled(sidebar, 0, sidebar_fill(&pal));
         ui.painter().vline(sidebar.max.x - 0.5, sidebar.y_range(), Stroke::new(1.0, pal.border));
 
@@ -318,9 +342,8 @@ impl Home {
 
     fn main(&mut self, ui: &mut Ui, area: Rect, action: &mut Option<HomeAction>) {
         let pal = Palette::of(ui);
-        let width = (area.width() - 96.0).clamp(420.0, 780.0);
-        let top = area.top() + (area.height() * 0.12).max(44.0);
-        let column = Rect::from_min_max(pos2(area.center().x - width / 2.0, top), pos2(area.center().x + width / 2.0, area.bottom() - 16.0));
+        let width = column_rect(area).width();
+        let column = column_rect(area);
         let mut ui = ui.new_child(UiBuilder::new().id_salt("home column").max_rect(column).layout(egui::Layout::top_down(Align::Center)));
         let ui = &mut ui;
         if let Some(logo) = &self.logo {
@@ -583,44 +606,182 @@ impl Home {
 
     // ----------------------------------------------------------- backdrop --
 
-    /// The picture behind `rect` ([`nocturne`]), made again when the
-    /// window grows past it or the accent colour changes; its stars
-    /// twinkle.
-    fn paint_backdrop(&mut self, ui: &Ui, rect: Rect) {
+    /// The picture behind `rect`: one of `assets/backdrops`, dithered in
+    /// its own palette and dimmed where the settings are written (`calm`),
+    /// its dither moving on every [`FRAME_SECS`]. Made again when the window
+    /// grows past it or the theme changes.
+    fn paint_backdrop(&mut self, ui: &Ui, rect: Rect, calm: Rect) {
         let pal = Palette::of(ui);
         let bg = backdrop_fill(&pal);
         ui.painter().rect_filled(rect, 0, bg);
+        let all = pictures::BACKDROPS;
+        if all.is_empty() {
+            return;
+        }
+        let index = self.choice % all.len();
+        if self.picture.as_ref().is_none_or(|p| p.index != index) {
+            self.picture = image::load_from_memory(all[index].1).ok().map(|img| Picture { index, image: img.to_rgb8() });
+            self.backdrop = None;
+        }
+        let Some(picture) = &self.picture else { return };
         let ppp = ui.ctx().pixels_per_point();
         let pitch = ((2.0 * ppp).round() as usize).max(3);
+        let cell = pitch as f32 / ppp;
         // Made a little larger than needed, so that resizing the window
         // does not make it again at every step.
         let bucket = |n: usize| n.div_ceil(32) * 32;
         let cols = bucket(((rect.width() * ppp) as usize / pitch).max(1));
         let rows = bucket(((rect.height() * ppp) as usize / pitch).max(1));
-        let key = (cols, rows, pal.accent.to_array(), pal.dark);
+        // Anchored to the bottom left: the land stays, the sky gives way.
+        let size = vec2(cols as f32, rows as f32) * cell;
+        let shown = Rect::from_min_size(pos2(rect.left(), rect.bottom() - size.y), size);
+        let in_cells = |p: egui::Pos2| [((p.x - shown.left()) / cell) as i32, ((p.y - shown.top()) / cell) as i32];
+        let ([x0, y0], [x1, y1]) = (in_cells(calm.min), in_cells(calm.max));
+        let calm_cells = [x0, y0, x1, y1].map(|v| v.div_euclid(8) * 8);
+        let key = (cols, rows, pal.dark, calm_cells);
         if self.backdrop.as_ref().is_none_or(|b| b.key != key || b.pitch != pitch) {
-            let (image, twinkles) = nocturne(cols, rows, pal.accent, pal.dark, bg);
-            let cells = ui.ctx().load_texture("home backdrop", image, egui::TextureOptions::NEAREST);
-            self.backdrop = Some(Backdrop { key, cells, pitch, twinkles });
+            let frames = dither_frames(&picture.image, cols, rows, pal.dark, bg, calm_cells)
+                .into_iter()
+                .enumerate()
+                .map(|(k, image)| ui.ctx().load_texture(format!("home backdrop {k}"), image, egui::TextureOptions::NEAREST))
+                .collect();
+            self.backdrop = Some(Backdrop { key, frames, pitch });
         }
         if let Some(b) = &self.backdrop {
-            let cell = pitch as f32 / ppp;
-            // Anchored to the bottom: the mountains stay, the sky gives way.
-            let size = vec2(cols as f32, rows as f32) * cell;
-            let shown = Rect::from_min_size(pos2(rect.left(), rect.bottom() - size.y), size);
-            let painter = ui.painter_at(rect);
-            painter.image(b.cells.id(), shown, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-            let t = ui.input(|i| i.time) as f32;
-            for tw in &b.twinkles {
-                let a = (0.5 + 0.5 * (t * tw.speed + tw.phase).sin()).powi(6);
-                let r = Rect::from_min_size(shown.min + vec2(tw.col as f32 * cell, tw.row as f32 * cell), vec2(cell, cell));
-                // From dim to bright and back.
-                let c = theme::scale(tw.color, 0.35 + 0.65 * a);
-                painter.rect_filled(r, 0, c);
-            }
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(80));
+            let t = ui.input(|i| i.time);
+            let k = (t / FRAME_SECS) as usize % b.frames.len();
+            ui.painter_at(rect).image(b.frames[k].id(), shown, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(FRAME_SECS - t % FRAME_SECS + 0.01));
         }
     }
+}
+
+/// Where the settings of a new map are written in `area`.
+fn column_rect(area: Rect) -> Rect {
+    let width = (area.width() - 96.0).clamp(420.0, 780.0);
+    let top = area.top() + (area.height() * 0.12).max(44.0);
+    Rect::from_min_max(pos2(area.center().x - width / 2.0, top), pos2(area.center().x + width / 2.0, area.bottom() - 16.0))
+}
+
+/// `img` over `cols` × `rows` cells, in frames: covered (its lower part
+/// kept), toned for the theme — and darker (or paler) within `calm` and
+/// around it, where text is written —, then reduced to a palette of its own
+/// sixteen colours with an ordered dither, a little shifted from frame to
+/// frame.
+fn dither_frames(img: &image::RgbImage, cols: usize, rows: usize, dark: bool, bg: Color32, calm: [i32; 4]) -> Vec<egui::ColorImage> {
+    use rayon::prelude::*;
+    let (iw, ih) = (img.width() as f32, img.height() as f32);
+    let scale = (cols as f32 / iw).max(rows as f32 / ih);
+    let (cw, ch) = (((cols as f32 / scale).round() as u32).clamp(1, img.width()), ((rows as f32 / scale).round() as u32).clamp(1, img.height()));
+    let (x0, y0) = ((img.width() - cw) / 2, img.height() - ch);
+    let crop = image::imageops::crop_imm(img, x0, y0, cw, ch).to_image();
+    let small = image::imageops::resize(&crop, cols as u32, rows as u32, image::imageops::FilterType::Triangle);
+    let back = [bg.r(), bg.g(), bg.b()].map(|v| v as f32 / 255.0);
+    // Where the text is: a soft oval over the upper part of the column, the
+    // picture dimmed under it and less and less around it — no edge.
+    let [cx0, cy0, cx1, cy1] = calm.map(|v| v as f32);
+    let (ex, ey) = ((cx0 + cx1) / 2.0, cy0 + 0.4 * (cy1 - cy0));
+    let (rx, ry) = (0.78 * (cx1 - cx0).max(1.0), 0.55 * (cy1 - cy0).max(1.0));
+    let pixels: Vec<[f32; 3]> = (0..rows * cols)
+        .into_par_iter()
+        .map(|i| {
+            let (x, y) = ((i % cols) as f32, (i / cols) as f32);
+            let c = small.get_pixel(x as u32, y as u32).0.map(|v| v as f32 / 255.0);
+            // A little more colour, as a dither of few colours loses some.
+            let lum = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+            let c = c.map(|v| (lum + (v - lum) * 1.25).clamp(0.0, 1.0));
+            let near = (-(((x - ex) / rx).powi(2) + ((y - ey) / ry).powi(2)) * 1.1).exp();
+            if dark {
+                // Night falls from the top: the sky darker than the land.
+                let k = (0.46 + 0.42 * smooth(0.0, 0.8, y / rows as f32)) * (1.0 - 0.72 * near);
+                c.map(|v| v.powf(1.15) * k)
+            } else {
+                let k = 0.42 * (1.0 - 0.7 * near);
+                [0, 1, 2].map(|j| back[j] + (c[j] - back[j]) * k)
+            }
+        })
+        .collect();
+    let palette = median_cut(&pixels, 16);
+    const BAYER: [[u8; 8]; 8] = [
+        [0, 32, 8, 40, 2, 34, 10, 42],
+        [48, 16, 56, 24, 50, 18, 58, 26],
+        [12, 44, 4, 36, 14, 46, 6, 38],
+        [60, 28, 52, 20, 62, 30, 54, 22],
+        [3, 35, 11, 43, 1, 33, 9, 41],
+        [51, 19, 59, 27, 49, 17, 57, 25],
+        [15, 47, 7, 39, 13, 45, 5, 37],
+        [63, 31, 55, 23, 61, 29, 53, 21],
+    ];
+    let spread = if dark { 0.13 } else { 0.1 };
+    [(0usize, 0usize), (4, 4), (2, 6), (6, 2)]
+        .par_iter()
+        .map(|&(ox, oy)| {
+            let out = pixels
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    let (x, y) = (i % cols, i / cols);
+                    let t = (BAYER[(y + oy) % 8][(x + ox) % 8] as f32 + 0.5) / 64.0 - 0.5;
+                    let v = c.map(|ch| ch + t * spread);
+                    let best = palette
+                        .iter()
+                        .min_by(|a, b| {
+                            let d = |p: &[f32; 3]| (p[0] - v[0]).powi(2) + (p[1] - v[1]).powi(2) + (p[2] - v[2]).powi(2);
+                            d(a).total_cmp(&d(b))
+                        })
+                        .copied()
+                        .unwrap_or(back);
+                    let [r, g, b] = best.map(|ch| (ch.clamp(0.0, 1.0) * 255.0).round() as u8);
+                    Color32::from_rgb(r, g, b)
+                })
+                .collect();
+            egui::ColorImage::new([cols, rows], out)
+        })
+        .collect()
+}
+
+/// `n` colours that stand for `pixels` (median cut): the set split again
+/// and again where its colours spread the most.
+fn median_cut(pixels: &[[f32; 3]], n: usize) -> Vec<[f32; 3]> {
+    let step = (pixels.len() / 40_000).max(1);
+    let mut boxes: Vec<Vec<[f32; 3]>> = vec![pixels.iter().step_by(step).copied().collect()];
+    let widest = |b: &[[f32; 3]]| -> (usize, f32) {
+        (0..3)
+            .map(|axis| {
+                let (lo, hi) = b.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p[axis]), hi.max(p[axis])));
+                (axis, hi - lo)
+            })
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .unwrap_or((0, 0.0))
+    };
+    while boxes.len() < n {
+        let Some((k, axis)) = boxes
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.len() > 1)
+            .map(|(k, b)| {
+                let (axis, range) = widest(b);
+                (k, axis, range * (b.len() as f32).sqrt())
+            })
+            .max_by(|a, b| a.2.total_cmp(&b.2))
+            .map(|(k, axis, _)| (k, axis))
+        else {
+            break;
+        };
+        let mut b = boxes.swap_remove(k);
+        b.sort_by(|p, q| p[axis].total_cmp(&q[axis]));
+        let upper = b.split_off(b.len() / 2);
+        boxes.push(b);
+        boxes.push(upper);
+    }
+    boxes
+        .iter()
+        .filter(|b| !b.is_empty())
+        .map(|b| {
+            let sum = b.iter().fold([0.0f32; 3], |s, p| [s[0] + p[0], s[1] + p[1], s[2] + p[2]]);
+            sum.map(|v| v / b.len() as f32)
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------- parts --
@@ -729,7 +890,8 @@ fn setting(ui: &mut Ui, name: &str, add: impl FnOnce(&mut Ui)) {
     let pal = Palette::of(ui);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
-        ui.add_sized([70.0, 24.0], egui::Label::new(RichText::new(name).size(12.5).color(pal.weak)));
+        // Over a picture: a little brighter than other labels.
+        ui.add_sized([70.0, 24.0], egui::Label::new(RichText::new(name).size(12.5).color(theme::mix(pal.weak, pal.text, 0.45))));
         add(ui);
     });
     ui.add_space(8.0);
@@ -958,9 +1120,11 @@ pub fn preview_image(params: &GenParams, reg: &massif_core::Registry, n: usize) 
 /// of mountains in layers, the farthest pale in the haze, the nearest dark,
 /// lit along their crests and on the flanks that face the glow, snow on the
 /// highest; a valley in the middle, where the settings are written, and a
-/// tall peak to the right. Dithered in square cells (a 4×4 ordered dither,
-/// five shades) as a photograph would be.
-fn nocturne(cols: usize, rows: usize, accent: Color32, dark: bool, bg: Color32) -> (egui::ColorImage, Vec<Twinkle>) {
+/// tall peak to the right. Drawn as a picture, `assets/backdrops/
+/// massif-dusk.jpg` (see the test below), dithered as the others are.
+#[cfg(test)]
+fn nocturne(cols: usize, rows: usize, accent: Color32, bg: Color32) -> image::RgbImage {
+    let dark = true;
     use rayon::prelude::*;
     let noise = massif_core::noise::Noise::new(0x6d61_7373);
     let a = cols as f64 / rows.max(1) as f64;
@@ -1006,17 +1170,15 @@ fn nocturne(cols: usize, rows: usize, accent: Color32, dark: bool, bg: Color32) 
         let len = (dx * dx + dy * dy).sqrt();
         (dx / len, dy / len)
     };
-    const BAYER: [[f32; 4]; 4] = [[0.0, 8.0, 2.0, 10.0], [12.0, 4.0, 14.0, 6.0], [3.0, 11.0, 1.0, 9.0], [15.0, 7.0, 13.0, 5.0]];
-    const SHADES: f32 = 4.0;
     let sky_ink = if dark { Color32::from_rgb(132, 142, 176) } else { Color32::from_rgb(110, 116, 132) };
     let rock_ink = if dark { Color32::from_rgb(170, 170, 180) } else { Color32::from_rgb(58, 60, 68) };
     let star_ink = Color32::from_rgb(236, 238, 246);
-    let rows_out: Vec<(Vec<Color32>, Vec<Twinkle>)> = (0..rows)
+    let rows_out: Vec<(Vec<Color32>, Vec<usize>)> = (0..rows)
         .into_par_iter()
         .map(|j| {
             let v = (j as f64 + 0.5) / rows as f64;
             let mut row = vec![bg; cols];
-            let mut twinkles = Vec::new();
+            let mut stars = Vec::new();
             for (i, px) in row.iter_mut().enumerate() {
                 let u = (i as f64 + 0.5) / cols as f64;
                 let x = u * a;
@@ -1080,36 +1242,33 @@ fn nocturne(cols: usize, rows: usize, accent: Color32, dark: bool, bg: Color32) 
                     }
                 };
                 if let Some(bright) = star {
-                    *px = if dark { theme::scale(star_ink, bright) } else { theme::mix(bg, rock_ink, 0.35 * bright) };
-                    if dark && (hash >> 24).is_multiple_of(3) {
-                        twinkles.push(Twinkle {
-                            col: i as u16,
-                            row: j as u16,
-                            color: star_ink,
-                            phase: (hash >> 8) as f32 / (1u32 << 24) as f32 * std::f32::consts::TAU,
-                            speed: 0.4 + 1.1 * ((hash >> 3) & 0xff) as f32 / 255.0,
-                        });
-                    }
+                    *px = theme::scale(star_ink, bright);
+                    stars.push(i);
                     continue;
                 }
-                let light = if dark { light } else { light * 0.85 };
-                let threshold = BAYER[j % 4][i % 4] / 16.0;
-                let q = ((light.clamp(0.0, 1.0) * SHADES + threshold).floor() / SHADES).min(1.0);
-                if q <= 0.0 {
-                    continue;
-                }
-                *px = if dark { theme::scale(ink, 0.18 + 0.82 * q) } else { theme::mix(bg, ink, 0.12 + 0.68 * q) };
+                let lit = theme::scale(ink, light.clamp(0.0, 1.0));
+                *px = Color32::from_rgb(bg.r().max(lit.r()), bg.g().max(lit.g()), bg.b().max(lit.b()));
             }
-            (row, twinkles)
+            (row, stars)
         })
         .collect();
-    let mut pixels = Vec::with_capacity(cols * rows);
-    let mut twinkles = Vec::new();
-    for (row, t) in rows_out {
-        pixels.extend(row);
-        twinkles.extend(t);
+    let mut img = image::RgbImage::from_pixel(cols as u32, rows as u32, image::Rgb([bg.r(), bg.g(), bg.b()]));
+    for (j, (row, stars)) in rows_out.into_iter().enumerate() {
+        for (i, px) in row.into_iter().enumerate() {
+            img.put_pixel(i as u32, j as u32, image::Rgb([px.r(), px.g(), px.b()]));
+        }
+        // A star is two pixels wide: still one once the picture is made
+        // smaller for the cells.
+        for i in stars {
+            let px = img.get_pixel(i as u32, j as u32).0;
+            for (dx, dy) in [(1, 0), (0, 1), (1, 1)] {
+                if i + dx < cols && j + dy < rows {
+                    img.put_pixel((i + dx) as u32, (j + dy) as u32, image::Rgb(px));
+                }
+            }
+        }
     }
-    (egui::ColorImage::new([cols, rows], pixels), twinkles)
+    img
 }
 
 fn smooth(a: f32, b: f32, x: f32) -> f32 {
@@ -1138,4 +1297,36 @@ pub fn parse_seed(text: &str) -> i64 {
     }
     // Java's String.hashCode.
     t.encode_utf16().fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(c as i32)) as i64
+}
+
+#[cfg(test)]
+mod backdrop_tests {
+    use super::*;
+
+    /// The massif at dusk, drawn into `assets/backdrops` when
+    /// MASSIF_BACKDROP_DIR says where.
+    #[test]
+    fn draw_the_massif_at_dusk() {
+        let Some(dir) = std::env::var_os("MASSIF_BACKDROP_DIR").map(std::path::PathBuf::from) else {
+            return;
+        };
+        let img = nocturne(1600, 900, Color32::from_rgb(249, 115, 22), Color32::from_rgb(8, 8, 9));
+        let mut out = std::fs::File::create(dir.join("massif-dusk.jpg")).unwrap();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90).encode_image(&img).unwrap();
+    }
+
+    /// Every picture of the folder decodes, and dithers into frames of a
+    /// palette of its own.
+    #[test]
+    fn the_backdrops_dither() {
+        assert!(pictures::BACKDROPS.len() >= 4, "{} pictures", pictures::BACKDROPS.len());
+        for (name, bytes) in pictures::BACKDROPS {
+            let img = image::load_from_memory(bytes).unwrap_or_else(|e| panic!("{name}: {e}")).to_rgb8();
+            let frames = dither_frames(&img, 96, 64, true, Color32::from_rgb(8, 8, 9), [20, 10, 70, 50]);
+            assert_eq!(frames.len(), 4);
+            let colours: std::collections::HashSet<[u8; 4]> = frames[0].pixels.iter().map(|c| c.to_array()).collect();
+            assert!((2..=16).contains(&colours.len()), "{name}: {} colours", colours.len());
+            assert_ne!(frames[0].pixels, frames[1].pixels, "{name}: the frames differ");
+        }
+    }
 }

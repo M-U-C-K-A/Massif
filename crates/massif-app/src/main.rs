@@ -10,6 +10,7 @@ mod finder;
 mod graph_editor;
 mod help;
 mod home;
+mod icons;
 mod jobs;
 mod layout;
 mod map_render;

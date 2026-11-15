@@ -2774,8 +2774,9 @@ impl View3d {
             let (zoom, scroll) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta.y + i.smooth_scroll_delta.x));
             let far = (extent * 3.0).max(30000.0);
             if sculpting && command && zoom != 1.0 {
-                let r = &mut tools.sculpt.brush.radius;
-                *r = (*r * zoom).clamp(1.0, 64.0);
+                // The brush of every tool, as in Brush Settings.
+                let r = &mut tools.brush.radius;
+                *r = (*r * zoom).clamp(1.0, massif_core::MAX_RADIUS);
             } else if alt && scroll != 0.0 {
                 let factor = (-scroll * 0.003).exp();
                 if let Some(p) = response.hover_pos() {

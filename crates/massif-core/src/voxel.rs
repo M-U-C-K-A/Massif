@@ -470,12 +470,20 @@ pub fn surface_frame(dim: &Dimension, hit: &Hit, origin: [f64; 3], dir: [f64; 3]
         field.sample([center[0], center[1], center[2] + e]) - field.sample([center[0], center[1], center[2] - e]),
     ];
     let n = (g[0] * g[0] + g[1] * g[1] + g[2] * g[2]).sqrt();
-    let normal = if n > 1e-3 {
-        [-g[0] / n, -g[1] / n, -g[2] / n]
-    } else {
+    let face = {
         let (x, y, z) = hit.normal;
         [x as f32, y as f32, z as f32]
     };
+    let smooth = if n > 1e-3 { [-g[0] / n, -g[1] / n, -g[2] / n] } else { face };
+    // Where the smoothed slope and the face pointed at disagree — at the
+    // foot of a cliff, on an edge, in a hollow — the face wins: the brush
+    // works on what the pointer is on, toward the eye, never into the
+    // matter nor along it.
+    let agree = smooth[0] * face[0] + smooth[1] * face[1] + smooth[2] * face[2];
+    let t = ((agree - 0.25) / 0.5).clamp(0.0, 1.0);
+    let mixed = [face[0] + (smooth[0] - face[0]) * t, face[1] + (smooth[1] - face[1]) * t, face[2] + (smooth[2] - face[2]) * t];
+    let l = (mixed[0] * mixed[0] + mixed[1] * mixed[1] + mixed[2] * mixed[2]).sqrt();
+    let normal = if l > 1e-3 { [mixed[0] / l, mixed[1] / l, mixed[2] / l] } else { face };
     Frame { center, normal }
 }
 
@@ -1172,6 +1180,72 @@ mod tests {
         // Far from the dab, in the same chunk: the same height as before.
         let top = spans_at(&w, 13, 12).last().unwrap().top;
         assert!((top - 64.4).abs() < 0.01, "{top}");
+    }
+
+    /// At the foot of a cliff, the ground pointed at faces up: building
+    /// there raises it, rather than pushing it sideways off the cliff.
+    #[test]
+    fn building_at_the_foot_of_a_cliff_raises_the_ground() {
+        let mut w = world();
+        let mut h = History::default();
+        h.begin("Cliff", 0);
+        {
+            let mut e = h.edit(&mut w, 0);
+            for x in 0..12 {
+                for z in -6..18 {
+                    for y in 64..84 {
+                        let pos = ChunkPos::containing(x, y, z);
+                        let (x0, y0, z0) = pos.origin();
+                        e.voxel_chunk_mut(pos).set(x - x0, y - y0, z - z0, 255);
+                    }
+                }
+            }
+        }
+        h.commit();
+        // Two blocks from the cliff's foot, from above and from aside.
+        for (origin, dir) in [([14.5, 100.0, 6.5], [0.0, -1.0, 0.0]), ([40.0, 80.0, 6.5], [-0.69, -0.42, 0.0])] {
+            let hit = raycast(&w.dims[0], origin, dir, 200.0).expect("the ground is hit");
+            assert_eq!(hit.normal, (0, 1, 0), "{hit:?}");
+            let frame = surface_frame(&w.dims[0], &hit, origin, dir);
+            assert!(frame.normal[1] > 0.8, "the ground faces up: {:?}", frame.normal);
+        }
+        let hit = raycast(&w.dims[0], [14.5, 100.0, 6.5], [0.0, -1.0, 0.0], 200.0).unwrap();
+        let frame = surface_frame(&w.dims[0], &hit, [14.5, 100.0, 6.5], [0.0, -1.0, 0.0]);
+        h.begin("Build", 0);
+        for _ in 0..4 {
+            displace_at(&mut h.edit(&mut w, 0), &brush(3.0), frame.center, frame.normal, 1.0, SculptMode::Add);
+        }
+        h.commit();
+        let top = spans_at(&w, 14, 6).last().unwrap().y1;
+        assert!(top >= 66, "the ground rose: top {top}");
+        // On the cliff's face, from aside: it grows out toward the eye.
+        let (origin, dir) = ([40.0, 74.5, 2.5], [-1.0, 0.0, 0.0]);
+        let hit = raycast(&w.dims[0], origin, dir, 200.0).unwrap();
+        assert_eq!(hit.normal, (1, 0, 0));
+        let frame = surface_frame(&w.dims[0], &hit, origin, dir);
+        assert!(frame.normal[0] > 0.8, "{:?}", frame.normal);
+        h.begin("Build out", 0);
+        for _ in 0..6 {
+            displace_at(&mut h.edit(&mut w, 0), &brush(3.0), frame.center, frame.normal, 1.0, SculptMode::Add);
+        }
+        h.commit();
+        let out = spans_at(&w, 13, 2);
+        assert!(out.iter().any(|s| s.y0 <= 74 && s.y1 >= 75), "the face grew out to x = 13: {out:?}");
+        // Held still, as long as the button is down: every frame aims again
+        // at the surface as it now is, and it keeps growing.
+        for (name, origin, dir) in [("down", [30.5, 140.0, 30.5], [0.0, -1.0, 0.0]), ("aslant", [40.0, 110.0, 10.5], [-0.6, -0.8, 0.0])] {
+            let first = raycast(&w.dims[0], origin, dir, 400.0).unwrap();
+            h.begin("Hold", 0);
+            for _ in 0..120 {
+                let hit = raycast(&w.dims[0], origin, dir, 400.0).unwrap();
+                let frame = surface_frame(&w.dims[0], &hit, origin, dir);
+                displace_at(&mut h.edit(&mut w, 0), &brush(3.0), frame.center, frame.normal, 16.0 / 60.0, SculptMode::Add);
+            }
+            h.commit();
+            let last = raycast(&w.dims[0], origin, dir, 400.0).unwrap();
+            eprintln!("{name}: grew {:.1} blocks in two seconds", first.distance - last.distance);
+            assert!(first.distance - last.distance >= 8.0, "{name}: grew {:.1} blocks in two seconds", first.distance - last.distance);
+        }
     }
 
     #[test]

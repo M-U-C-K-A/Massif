@@ -99,12 +99,15 @@ left, the ways in — a new map, a map from a height map, a map of your own to
 open (`.massif`), a WorldPainter world to import (`.world`) — and the maps
 opened lately (or, at first, an empty list that says so); in the middle,
 the settings of a new map with its preview, and **Create map**, laid on the
-backdrop itself, with nothing to hide it: a massif at dusk, dithered in
-square cells as a photograph would be — stars and the milky way over the
-glow of a sun gone down in the accent colour, ranges of mountains in layers
-lit along their crests, a tall peak to the right, a valley in the middle
-where the settings are written; by day in the light theme. Its stars
-twinkle now and then. A `.massif`, a
+backdrop itself, with nothing to hide it: one of the pictures of
+`crates/massif-app/assets/backdrops` (a massif at dusk drawn by Massif,
+and templates of the terrain graph rendered by its viewport), taken at
+random each time Massif opens, reduced to a palette of its own sixteen
+colours with an ordered dither in square cells, as bast.sh does — and, as
+there, the dither moves on about once a second. Night falls from the top of
+it; where the settings are written it is dimmed, in a soft oval, never
+hidden; the light theme shows it pale. Every `.jpg` or `.png` dropped in
+that folder is built in (see its README). A `.massif`, a
 `.world` or a height map dropped on the window opens. **File ▸ New** (⌘N)
 comes back to it, with a way back to the open map (Esc).
 
@@ -121,6 +124,10 @@ track with its value after it: click the track to jump there, drag the thumb
 clicked to be typed in gets the caret where it was clicked (in any number
 field), so that a digit adds to it rather than replacing it. A narrow
 Tools area keeps each row of tools on one line, its name under the pointer.
+The tools have icons of their own, drawn for what they do to the land — a
+hill and an arrow up, a rough ridge smoothed, a hill cut level, a block of
+terrain painted, a basin flooding or draining, a slab held over the ground —
+in the strokes of the interface's other icons.
 What Massif did and what runs in the background (saving, exporting, the
 automatic tools over a whole map) shows at the bottom right of the window,
 over the areas, with a **Cancel** for long tasks.
@@ -721,8 +728,9 @@ to 3D; the 3D View's **Sculpt** button opens it): a 3D view with its tools
 along the top — **Sculpt** (the left button adds matter, the right one
 digs), **Smooth** and **Paint** (the terrain chosen in Terrain or Blocks, or
 a pattern; the right button puts back what the height calls for) — with the
-brush chosen for every tool (custom images too, turned as they are), its
-radius and strength in 3D.
+brush of every tool: its shape (custom images too, turned as they are),
+size, intensity and rotation are those of **Brush Settings**, which the
+3D Sculpt workspace shows beside its view.
 
 - Sculpt pushes the surface out or in under the brush, along its slope, a
   layer at a time — 16 blocks a second at full strength —, the brush's
@@ -737,9 +745,11 @@ radius and strength in 3D.
   under the cursor; ⌘ (Ctrl) + wheel sizes the brush.
 
 The brush is laid on the slope under the cursor, read from the matter
-around smoothed over five blocks — not on the face of the block hit — so it
-glides over the steps of the terrain without shaking, and a custom brush
-keeps its shape on a hillside. The ordinary 3D View only shows the world
+around smoothed over five blocks, so it glides over the steps of the terrain
+without shaking, and a custom brush keeps its shape on a hillside. Where
+that smoothed slope and the face pointed at disagree — at the foot of a
+cliff, on an edge, in a hollow — the face wins, so that the brush always
+works toward the eye, never into the matter or along it. The ordinary 3D View only shows the world
 (its wheel works the same).
 
 Where you sculpt in 3D, the dimension keeps a 16³ chunk of densities (0–255,

@@ -382,7 +382,7 @@ pub struct Layout {
 
 /// The workspaces a layout saved by an older version lacks are added to it
 /// once: this is the version they come with.
-const LAYOUT_VERSION: u32 = 1;
+const LAYOUT_VERSION: u32 = 2;
 
 /// Builds trees with fresh area ids.
 struct Builder<'a>(&'a mut AreaId);
@@ -418,8 +418,9 @@ impl Builder<'_> {
 /// The 3D Sculpt workspace: its editor, with the map and the levels beside.
 fn sculpt_workspace(b: &mut Builder) -> Node {
     let side = {
-        let (map, levels) = (b.area(EditorKind::Map), b.area(EditorKind::Levels));
-        b.column(0.62, map, levels)
+        let (brush, map, levels) = (b.area(EditorKind::BrushSettings), b.area(EditorKind::Map), b.area(EditorKind::Levels));
+        let lower = b.column(0.6, map, levels);
+        b.column(0.42, brush, lower)
     };
     let view = b.area(EditorKind::Sculpt3d);
     b.row(0.76, view, side)
@@ -587,6 +588,13 @@ impl Layout {
                     *k += 1;
                 }
             }
+        }
+        // Version 2: the 3D Sculpt workspace shows Brush Settings, whose
+        // brush it sculpts with.
+        if self.version < 2
+            && let Some(k) = self.workspaces.iter().position(|w| w.name == "3D Sculpt" && !w.terrain)
+        {
+            self.reset_workspace(k);
         }
         self.version = LAYOUT_VERSION;
         self

@@ -287,30 +287,23 @@ pub struct ToolState {
     pub objects_note: Option<String>,
     /// Paint a pattern of terrains rather than one.
     pub pattern: PatternSettings,
-    /// The tool and brush of the 3D Sculpt editor.
+    /// The tool of the 3D Sculpt editor.
     pub sculpt: SculptSettings,
 }
 
-/// The tool and brush of the 3D Sculpt editor, apart from the map's.
+/// The tool of the 3D Sculpt editor, apart from the map's; its brush is
+/// the brush of every tool, set in Brush Settings (see
+/// [`ToolState::sculpt_brush`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SculptSettings {
     /// Sculpt (left adds, right digs), Smooth or Paint.
     pub tool: Tool,
-    /// The size and strength of the brush in 3D; its shape is the brush
-    /// chosen for every tool (see [`ToolState::sculpt_brush`]).
-    pub brush: Brush,
 }
 
 impl Default for SculptSettings {
     fn default() -> Self {
-        Self {
-            tool: Tool::Build,
-            brush: Brush {
-                radius: 6.0,
-                ..Brush::default()
-            },
-        }
+        Self { tool: Tool::Build }
     }
 }
 
@@ -651,8 +644,6 @@ impl ToolState {
     /// strength.
     pub fn sculpt_brush(&self) -> Brush {
         Brush {
-            radius: self.sculpt.brush.radius,
-            strength: self.sculpt.brush.strength,
             filter: None,
             ..self.brush.clone()
         }
@@ -1212,8 +1203,8 @@ mod tests {
 
         // In the 3D Sculpt editor, the right button builds with the Dig tool.
         tools.sculpt.tool = Tool::Dig;
-        tools.sculpt.brush.radius = 6.0;
-        tools.sculpt.brush.strength = 1.0;
+        tools.brush.radius = 6.0;
+        tools.brush.strength = 1.0;
         tools.brush = Brush::default();
         let mut s = begin_sculpt(&mut d, &tools, true).unwrap();
         let frame = massif_core::voxel::Frame {
