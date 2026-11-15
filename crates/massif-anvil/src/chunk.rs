@@ -14,11 +14,10 @@
 
 use crate::nbt::{NbtWriter, TagType};
 use crate::version::{Era, Target};
-use massif_core::compose::{Materializer, Span, TileStack, block_top};
+use massif_core::compose::{AutoBiomes, BiomeColumn, Materializer, Span, TileStack};
 use massif_core::coords::{BlockRect, TilePos, cell_index};
 use massif_core::objects::Placement;
-use massif_core::registry::{BiomeId, BlockDef, Registry, TerrainId, is_soil, is_tall_plant};
-use massif_core::tile::NO_FLUID;
+use massif_core::registry::{BlockDef, Registry, is_soil, is_tall_plant};
 use massif_core::world::{Dimension, World};
 
 /// Data version stamped on chunks and `level.dat`: Minecraft 1.18.2, the
@@ -83,11 +82,8 @@ pub struct ExportContext<'a> {
     /// The heights where the substrate is one block in every column, and
     /// those where it is drawn block by block.
     bands: [(i32, i32, Option<u16>); 4],
-    plains: u16,
-    ocean: u16,
-    deep_ocean: u16,
-    beach: u16,
-    desert: u16,
+    /// The biomes of columns left on automatic.
+    auto: AutoBiomes,
 }
 
 impl<'a> ExportContext<'a> {
@@ -279,7 +275,6 @@ impl<'a> ExportContext<'a> {
                 }
             })
             .collect();
-        let biome = |id: &str| reg.biome_by_id(id).unwrap_or(BiomeId::AUTO).0;
         let biome_numbers = match era {
             Era::Modern => Vec::new(),
             _ => reg.biomes.iter().map(|b| target.biome_number(if b.id.is_empty() { "minecraft:plains" } else { &b.id })).collect(),
@@ -312,11 +307,7 @@ impl<'a> ExportContext<'a> {
             ore_states,
             first_ore,
             hosts,
-            plains: biome("minecraft:plains"),
-            ocean: biome("minecraft:ocean"),
-            deep_ocean: biome("minecraft:deep_ocean"),
-            beach: biome("minecraft:beach"),
-            desert: biome("minecraft:desert"),
+            auto: AutoBiomes::new(reg, world.meta.sea_level, min_y),
         })
     }
 
@@ -326,25 +317,6 @@ impl<'a> ExportContext<'a> {
 
     pub fn materializer(&self) -> &Materializer<'a> {
         &self.mat
-    }
-
-    /// The biome of a column whose biome plane says "automatic".
-    fn auto_biome(&self, terrain: TerrainId, surface: i32, fluid: i16) -> u16 {
-        if fluid != NO_FLUID {
-            let depth = fluid as i32 - surface;
-            if depth > 24 {
-                return self.deep_ocean;
-            }
-            if depth >= 2 {
-                return self.ocean;
-            }
-        }
-        match self.reg.terrain(terrain).biome_hint {
-            // Sand along the shore is a beach, not a desert.
-            Some(b) if b.0 == self.desert && surface <= self.sea_level + 4 => self.beach,
-            Some(b) => b.0,
-            None => self.plains,
-        }
     }
 
     fn biome_name(&self, id: u16) -> &str {
@@ -434,13 +406,6 @@ fn fill_substrate(ctx: &ExportContext, x: i32, z: i32, (y0, y1): (i32, i32), blo
             }
         }
     }
-}
-
-#[derive(Default, Clone)]
-struct BiomeColumn {
-    base: u16,
-    /// `(y0, y1, biome)` painted on slab levels, later levels last.
-    overrides: Vec<(i32, i32, u16)>,
 }
 
 /// Reusable buffers for [`build_chunk`]; keep one per worker thread.
@@ -646,9 +611,23 @@ pub fn build_chunk(
         }
     }
 
+    // ---- biomes: one sample per 4×4 column ---------------------------------
+    for bz in 0..4usize {
+        for bx in 0..4usize {
+            let cell = cell_index(cx * 16 + bx * 4 + 2, cz * 16 + bz * 4 + 2);
+            let top = || {
+                stack.spans(cell, spans);
+                spans.last().map(|s| (s.y1, s.terrain))
+            };
+            stack.biome_column(cell, ctx.reg, &ctx.auto, top, &mut biome_columns[bz * 4 + bx]);
+        }
+    }
+
     // ---- ores --------------------------------------------------------------
-    // In the rock, where solid ground lies right above; the first vein to
-    // reach a block keeps it (the next finds ore there, not rock).
+    // In the rock, where solid ground lies right above, and in a biome the
+    // ore keeps to; the first vein to reach a block keeps it (the next finds
+    // ore there, not rock).
+    let keeps = ctx.ores.as_ref().is_some_and(|p| p.keeps_to_biomes());
     if let Some(chunk) = ores.get(cz * 8 + cx) {
         for b in chunk {
             if b.y < min_y || b.y + 1 >= max_y {
@@ -660,6 +639,15 @@ pub fn build_chunk(
             let host = ctx.hosts.get(blocks[i] as usize).copied().unwrap_or(0);
             if !solid || host == 0 {
                 continue;
+            }
+            if keeps && let Some(placer) = &ctx.ores {
+                let column = &biome_columns[(((b.z - bz0) >> 2) * 4 + ((b.x - bx0) >> 2)) as usize];
+                // The biome the version stores for the block: by columns
+                // up to 1.14, by cells of 4 × 4 × 4 after.
+                let biome = if matches!(ctx.era, Era::Numbered | Era::Flat14) { column.at(ctx.sea_level) } else { column.of_block(b.y) };
+                if !placer.allows(b.ore, biome) {
+                    continue;
+                }
             }
             let state = ctx.ore_states[b.ore as usize][host as usize - 1];
             if state != SKIP {
@@ -686,35 +674,6 @@ pub fn build_chunk(
     // The sections that hold something; those above are air.
     let filled = (((top.min(max_y) - min_y).max(0) as usize).div_ceil(16)).min(sections);
     *dirty = filled * SECTION_VOLUME;
-
-    // ---- biomes: one sample per 4×4 column ---------------------------------
-    for bz in 0..4usize {
-        for bx in 0..4usize {
-            let cell = cell_index(cx * 16 + bx * 4 + 2, cz * 16 + bz * 4 + 2);
-            let column = &mut biome_columns[bz * 4 + bx];
-            column.overrides.clear();
-            let ground = stack.ground();
-            column.base = ground.biome.get(cell);
-            if column.base == 0 {
-                stack.spans(cell, spans);
-                let (surface, terrain) = spans
-                    .last()
-                    .map_or((min_y, TerrainId::ROCK), |s| (s.y1, s.terrain));
-                column.base = ctx.auto_biome(terrain, surface, ground.fluid.get(cell));
-            }
-            for (_, _, tile) in stack.layers().skip(1) {
-                let biome = tile.biome.get(cell);
-                if biome == 0 || !tile.present(cell) {
-                    continue;
-                }
-                if let Some(bottom) = &tile.bottom {
-                    let y0 = block_top(bottom.get(cell));
-                    let y1 = block_top(tile.top.get(cell));
-                    column.overrides.push((y0, y1, biome));
-                }
-            }
-        }
-    }
 
     // ---- NBT ---------------------------------------------------------------
     match ctx.era {
@@ -791,12 +750,7 @@ pub fn build_chunk(
         for by in 0..4usize {
             let y = section_y + by as i32 * 4 + 2;
             for (c, column) in biome_columns.iter().enumerate() {
-                let mut id = column.base;
-                for &(y0, y1, biome) in &column.overrides {
-                    if y >= y0 && y < y1 {
-                        id = biome;
-                    }
-                }
+                let id = column.at(y);
                 let index = match biome_palette.iter().position(|&p| p == id) {
                     Some(i) => i,
                     None => {
@@ -852,14 +806,7 @@ fn pack_spanning(values: impl Iterator<Item = u64>, count: usize, bits: usize, o
 
 /// The biome of the 4-block cell `c` (of the chunk's 16) at height `y`.
 fn biome_at(columns: &[BiomeColumn], c: usize, y: i32) -> u16 {
-    let column = &columns[c];
-    let mut id = column.base;
-    for &(y0, y1, biome) in &column.overrides {
-        if y >= y0 && y < y1 {
-            id = biome;
-        }
-    }
-    id
+    columns[c].at(y)
 }
 
 /// A chunk as 1.14 to 1.17 store it: everything under `Level`, sections

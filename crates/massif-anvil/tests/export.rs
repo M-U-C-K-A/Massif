@@ -265,9 +265,24 @@ fn exported_blocks_match_the_world_model() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// The biome the export writes at block `(x, y, z)`, as the Ores window
+/// and the survival check read it.
+fn biome_of_block(world: &World, x: i32, y: i32, z: i32) -> u16 {
+    let dim = &world.dims[0];
+    let auto = massif_core::compose::AutoBiomes::new(&world.registry, world.meta.sea_level, dim.min_y);
+    let (sx, sz) = ((x & !3) + 2, (z & !3) + 2);
+    let stack = TileStack::new(dim, TilePos::containing(sx, sz), true).unwrap();
+    let cell = local_index(sx, sz);
+    let (mut spans, mut column) = (Vec::new(), massif_core::compose::BiomeColumn::default());
+    stack.spans(cell, &mut spans);
+    stack.biome_column(cell, &world.registry, &auto, || spans.last().map(|s| (s.y1, s.terrain)), &mut column);
+    column.of_block(y)
+}
+
 /// What column `(x, z)` holds once the ores are laid: the world model's
 /// blocks, and the ores where the survival check counts them (over the
-/// runs of the columns, as [`massif_core::ores::rock_at`] reads them).
+/// runs of the columns, as [`massif_core::ores::rock_at`] reads them, in
+/// the biomes each ore keeps to).
 fn expected_with_ores(world: &World, x: i32, z: i32) -> Vec<String> {
     let mut column = expected_column(world, x, z);
     let dim = &world.dims[0];
@@ -289,6 +304,7 @@ fn expected_with_ores(world: &World, x: i32, z: i32) -> Vec<String> {
         cx,
         cz,
         |bx, by, bz| massif_core::ores::rock_at(&runs[&(bx, bz)], &mat, &hosts, bx, by, bz, dim.max_y),
+        |bx, by, bz| biome_of_block(world, bx, by, bz),
         |b, (_, host)| {
             if (b.x, b.z) == (x, z) {
                 let (stone, deep) = massif_core::ores::ore_blocks(world.meta.ores.ores[b.ore as usize].mineral);
@@ -339,6 +355,70 @@ fn ores_are_laid_in_the_rock() {
     let names: std::collections::HashSet<String> = (-128..128).step_by(7).flat_map(|x| (-128..128).step_by(7).map(move |z| (x, z))).flat_map(|(x, z)| (0..60).map(move |y| (x, y, z))).map(|(x, y, z)| reader.block(x, y, z)).collect();
     assert!(names.iter().any(|n| n.ends_with("_ore")), "{names:?}");
     assert!(!names.iter().any(|n| n.contains("deepslate")), "{names:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Ores kept to some biomes, or out of some, are laid only where the
+/// biome written there lets them in, and where the Ores window and the
+/// survival check expect them; a choice that lets every biome in writes
+/// the same bytes as none.
+#[test]
+fn ores_keep_to_their_biomes() {
+    let mut world = build_world();
+    world.meta.ores = Default::default();
+    let desert = world.registry.biome_by_id("minecraft:desert").unwrap();
+    // Desert painted over the west of the map, the rest on automatic.
+    let mut h = History::default();
+    h.begin("desert", 0);
+    ops::paint_biome(&mut h.edit(&mut world, 0), &hard(110.0), -128.0, 0.0, desert, 1);
+    h.commit();
+    let ore = |w: &World, m: massif_core::analysis::Mineral| w.meta.ores.ores.iter().position(|o| o.mineral == m).unwrap();
+    let (diamond, coal) = (ore(&world, massif_core::analysis::Mineral::Diamond), ore(&world, massif_core::analysis::Mineral::Coal));
+
+    let plain = temp_dir("ores-biomes-plain");
+    export(&world.snapshot(), &plain, &ExportOptions::default(), &Progress::default()).unwrap();
+    let mut open = world.clone();
+    open.meta.ores.ores[diamond].biomes.except = Some(Vec::new());
+    let open_dir = temp_dir("ores-biomes-open");
+    export(&open.snapshot(), &open_dir, &ExportOptions::default(), &Progress::default()).unwrap();
+    for entry in std::fs::read_dir(plain.join("region")).unwrap() {
+        let name = entry.unwrap().file_name();
+        assert!(std::fs::read(plain.join("region").join(&name)).unwrap() == std::fs::read(open_dir.join("region").join(&name)).unwrap(), "{name:?} differs");
+    }
+    std::fs::remove_dir_all(&open_dir).unwrap();
+    std::fs::remove_dir_all(&plain).unwrap();
+
+    world.meta.ores.ores[diamond].biomes.only = Some(vec![desert.0]);
+    world.meta.ores.ores[coal].biomes.except = Some(vec![desert.0]);
+    let dir = temp_dir("ores-biomes");
+    export(&world.snapshot(), &dir, &ExportOptions::default(), &Progress::default()).unwrap();
+    let mut reader = Reader::new(&dir);
+    let mut s = 0x2545_f491u64;
+    let mut found = HashMap::new();
+    for _ in 0..240 {
+        s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let (x, z) = (((s >> 33) % 256) as i32 - 128, ((s >> 45) % 256) as i32 - 128);
+        let expected = expected_with_ores(&world, x, z);
+        for (i, want) in expected.iter().enumerate() {
+            let y = -64 + i as i32;
+            let got = reader.block(x, y, z);
+            assert_eq!(&got, want, "block at ({x}, {y}, {z})");
+            let in_desert = reader.biome(x, y, z) == Biome::Desert;
+            assert_eq!(in_desert, biome_of_block(&world, x, y, z) == desert.0, "the biome at ({x}, {y}, {z})");
+            if got.ends_with("diamond_ore") {
+                assert!(in_desert, "a diamond out of the desert at ({x}, {y}, {z})");
+            }
+            if got.ends_with("coal_ore") {
+                assert!(!in_desert, "coal in the desert at ({x}, {y}, {z})");
+            }
+            if got.ends_with("_ore") {
+                *found.entry((got, in_desert)).or_insert(0) += 1;
+            }
+        }
+    }
+    let count = |name: &str, desert: bool| found.iter().filter(|((n, d), _)| n.ends_with(name) && *d == desert).map(|(_, c)| *c).sum::<u32>();
+    assert!(count("diamond_ore", true) > 0 && count("coal_ore", false) > 0, "{found:?}");
+    assert!(count("iron_ore", true) > 0 && count("iron_ore", false) > 0, "iron everywhere: {found:?}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

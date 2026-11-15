@@ -18,8 +18,7 @@ use crate::auto::Steps;
 use crate::compose::{Materializer, Span, TileStack, hash2, hash3, pick, stratum_thickness};
 use crate::coords::{TILE_AREA, TILE_SIZE, TilePos, cell_index};
 use crate::objects::{is_nothing, tile_placements};
-use crate::registry::{BiomeId, BlockId, Registry, Stratum, TerrainId, is_soil, is_tall_plant, plant_color};
-use crate::tile::NO_FLUID;
+use crate::registry::{BlockId, Registry, Stratum, TerrainId, is_soil, is_tall_plant, plant_color};
 use crate::world::{Dimension, World};
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -797,15 +796,6 @@ struct Scratch {
     cells: Vec<(u32, u8)>,
 }
 
-/// The biomes the export gives columns left on automatic.
-struct AutoBiomes {
-    plains: u16,
-    ocean: u16,
-    deep_ocean: u16,
-    beach: u16,
-    desert: u16,
-}
-
 /// What every tile of the pass reads.
 struct Ctx<'a> {
     reg: &'a Registry,
@@ -832,7 +822,7 @@ struct Ctx<'a> {
     covers: Vec<Vec<(usize, bool)>>,
     objects: Vec<ObjectTally>,
     has_objects: bool,
-    biomes: AutoBiomes,
+    biomes: crate::compose::AutoBiomes,
     /// The ores the export lays, and what each block is to them.
     ores: Option<crate::ores::Placer>,
     hosts: Vec<Option<crate::ores::Host>>,
@@ -908,7 +898,6 @@ impl<'a> Ctx<'a> {
                 [intern(stone, speck([125, 125, 125])), intern(deep, speck([80, 80, 82]))]
             })
             .collect();
-        let biome = |id: &str| reg.biome_by_id(id).unwrap_or(BiomeId::AUTO).0;
         let wk = reg.well_known;
         Self {
             reg,
@@ -935,13 +924,7 @@ impl<'a> Ctx<'a> {
             ores: crate::ores::Placer::new(&world.meta.ores, world.meta.seed),
             hosts: crate::ores::hosts(reg),
             ore_names,
-            biomes: AutoBiomes {
-                plains: biome("minecraft:plains"),
-                ocean: biome("minecraft:ocean"),
-                deep_ocean: biome("minecraft:deep_ocean"),
-                beach: biome("minecraft:beach"),
-                desert: biome("minecraft:desert"),
-            },
+            biomes: crate::compose::AutoBiomes::new(reg, world.meta.sea_level, dim.min_y),
         }
     }
 
@@ -1198,14 +1181,29 @@ impl<'a> Ctx<'a> {
         if let Some(placer) = &self.ores {
             let n = TILE_SIZE >> 4;
             let highest = tops.iter().copied().max().unwrap_or(self.min_y);
+            let run = |cell: usize| {
+                let (start, len) = cells[cell];
+                &runs[start as usize..start as usize + len as usize]
+            };
+            // The biome of each 4 × 4 as the export writes it, for the ores
+            // that keep to some biomes.
+            let biomes: Vec<crate::compose::BiomeColumn> = if placer.keeps_to_biomes() {
+                (0..TILE_AREA / 16)
+                    .map(|k| {
+                        let cell = cell_index((k % 32) * 4 + 2, (k / 32) * 4 + 2);
+                        let mut out = crate::compose::BiomeColumn::default();
+                        stack.biome_column(cell, self.reg, &self.biomes, || run(cell).last().map(|s| (s.y1, s.terrain)), &mut out);
+                        out
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
             for chunk in placer.chunks(ox >> 4, oz >> 4, n, n, (self.min_y, highest)) {
-                crate::ores::place_over(
+                placer.lay(
                     &chunk,
-                    |x, y, z| {
-                        let (start, len) = cells[crate::coords::local_index(x, z)];
-                        let column = &runs[start as usize..start as usize + len as usize];
-                        crate::ores::rock_at(column, &self.mat, &self.hosts, x, y, z, self.max_y)
-                    },
+                    |x, y, z| crate::ores::rock_at(run(crate::coords::local_index(x, z)), &self.mat, &self.hosts, x, y, z, self.max_y),
+                    |x, y, z| biomes[(((z - oz) >> 2) * 32 + ((x - ox) >> 2)) as usize].of_block(y),
                     |b, (rock, host)| {
                         t.blocks[rock.index()] -= 1;
                         t.laid[self.ore_names[b.ore as usize][(host == crate::ores::Host::Deepslate) as usize]] += 1;
@@ -1358,20 +1356,7 @@ impl<'a> Ctx<'a> {
     /// The biome of a column whose biome is left on automatic, as the
     /// export picks it.
     fn auto_biome(&self, terrain: TerrainId, surface: i32, fluid: i16) -> u16 {
-        if fluid != NO_FLUID {
-            let depth = fluid as i32 - surface;
-            if depth > 24 {
-                return self.biomes.deep_ocean;
-            }
-            if depth >= 2 {
-                return self.biomes.ocean;
-            }
-        }
-        match self.reg.terrain(terrain).biome_hint {
-            Some(b) if b.0 == self.biomes.desert && surface <= self.sea + 4 => self.biomes.beach,
-            Some(b) => b.0,
-            None => self.biomes.plains,
-        }
+        self.biomes.pick(self.reg, terrain, surface, fluid)
     }
 
     /// The plant cover `cover` grows on a column whose surface is at
@@ -2184,7 +2169,7 @@ mod tests {
     use crate::generate::{GenParams, generate};
     use crate::level::LevelKind;
     use crate::objects::{ObjectDef, ObjectLayerDef};
-    use crate::tile::Tile;
+    use crate::tile::{NO_FLUID, Tile};
 
     fn small(p: GenParams) -> World {
         generate(&GenParams {

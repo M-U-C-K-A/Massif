@@ -223,8 +223,9 @@ trapezoid: a triangle when the peak is one height, an even spread when it is
 the whole band), so many veins a chunk, so many blocks a vein.
 
 - **Across the top**, each ore with what the map is expected to hold of it
-  (a click picks it), and the map small: click or drag on it to choose the
-  row the map is cut through.
+  (a click picks it; a funnel marks one kept to some biomes), and the map
+  small: click or drag on it to choose the row the map is cut through. The
+  **+** at the end adds back an ore taken out.
 - **The cut**: the map along that row, its rock, water and sky, with the
   ores exactly where the export will lay them, and over it a **candle** for
   each band — the wick from the lowest height to the highest, the body over
@@ -236,9 +237,30 @@ the whole band), so many veins a chunk, so many blocks a vein.
   **Blocks**, on a **Log** scale, or as a **Share** of the solid ground at
   that height (the map's rock read a column in sixteen); pointed at, every
   ore's amount at that height.
-- **Below**: the picked ore's bands in numbers (from, most from … to, up
-  to, veins a chunk, blocks a vein), **Add a band**, and **Laid** to leave
-  that ore out.
+- **Below**, the details of the picked ore, its colour down their side:
+  the biomes it keeps to (see below), its bands in numbers (from, most
+  from … to, up to, veins a chunk, blocks a vein), **Add a band**, **Laid**
+  to leave that ore out, and **Remove**. The band picked is ringed in the
+  accent, as its candle is in the cut; the band whose candle the pointer is
+  over is lit, and pointing at a band's row lights its candle.
+
+**Delete** (Backspace on a Mac keyboard) takes the picked ore out, as
+**Remove** does, and the one after it is picked; **⌘Z** (Ctrl+Z) puts back
+what was taken out — an ore or a band — where it was, whatever was changed
+since. While a number is typed, the keys edit the number. The **+** adds an
+ore back as it was when taken out, or as the preset for the map's heights
+has it.
+
+**Biomes.** An ore can be laid **Only in** some biomes, or in every biome
+**Except in** some, as a brush keeps to what is on the map: tick the box,
+then **Add** opens the biomes (with a search) to tick on and off, each
+ticked one shown as a chip that a click takes off. Only in with no biome
+ticked lays the ore nowhere. The biome is the one the export writes at
+the block — that of its cell of 4 × 4 × 4 (before 1.15, of its column).
+The veins are drawn as before, their blocks just not laid outside those
+biomes, so the other ores stay where they were (and take the rock left
+over); the cut shows it, and the amounts and the chart count the rock of
+those biomes only. Without a choice, an export is the same as before.
 
 **Minecraft 1.18+** (the default for every map, new or opened) follows the
 game's own veins and heights, the numbers set so that each ore's share of

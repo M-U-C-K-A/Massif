@@ -7,7 +7,7 @@
 
 use crate::coords::TilePos;
 use crate::level::{Level, LevelKind, TileRef};
-use crate::registry::{BlockId, Registry, TerrainId};
+use crate::registry::{BiomeId, BlockId, Registry, TerrainId};
 use crate::tile::{NO_FLUID, Tile};
 use crate::world::Dimension;
 
@@ -289,6 +289,109 @@ impl<'a> TileStack<'a> {
         }
         self.spans(cell, scratch);
         scratch.last().map(|s| (s.top, s.terrain))
+    }
+
+    /// The biomes the export writes over column `cell`: the one painted on
+    /// the ground, or where it is left on automatic the one `auto` picks
+    /// for the column's top (`top`, asked only then: the block over its
+    /// highest run and that run's terrain, `None` for a column without
+    /// ground), and those painted on the levels over it, by height.
+    pub fn biome_column(&self, cell: usize, reg: &Registry, auto: &AutoBiomes, top: impl FnOnce() -> Option<(i32, TerrainId)>, out: &mut BiomeColumn) {
+        out.overrides.clear();
+        let ground = self.ground();
+        out.base = ground.biome.get(cell);
+        if out.base == 0 {
+            let (surface, terrain) = top().unwrap_or((auto.floor, TerrainId::ROCK));
+            out.base = auto.pick(reg, terrain, surface, ground.fluid.get(cell));
+        }
+        for (_, _, tile) in self.layers().skip(1) {
+            let biome = tile.biome.get(cell);
+            if biome == 0 || !tile.present(cell) {
+                continue;
+            }
+            if let Some(bottom) = &tile.bottom {
+                out.overrides.push((block_top(bottom.get(cell)), block_top(tile.top.get(cell)), biome));
+            }
+        }
+    }
+}
+
+/// The biomes the export gives a column left on automatic: an ocean under
+/// two blocks of water or more (a deep one past 24), else the biome its
+/// terrain calls for (a beach for desert sand by the sea), plains without.
+#[derive(Debug, Clone, Copy)]
+pub struct AutoBiomes {
+    plains: u16,
+    ocean: u16,
+    deep_ocean: u16,
+    beach: u16,
+    desert: u16,
+    sea_level: i32,
+    /// The surface of a column without ground: the floor of the world.
+    floor: i32,
+}
+
+impl AutoBiomes {
+    pub fn new(reg: &Registry, sea_level: i32, floor: i32) -> Self {
+        let id = |name: &str| reg.biome_by_id(name).unwrap_or(BiomeId::AUTO).0;
+        Self {
+            plains: id("minecraft:plains"),
+            ocean: id("minecraft:ocean"),
+            deep_ocean: id("minecraft:deep_ocean"),
+            beach: id("minecraft:beach"),
+            desert: id("minecraft:desert"),
+            sea_level,
+            floor,
+        }
+    }
+
+    /// The biome of a column on automatic whose surface (the block over its
+    /// top) is at `surface`, of terrain `terrain`, its fluid up to `fluid`
+    /// ([`NO_FLUID`]: none).
+    pub fn pick(&self, reg: &Registry, terrain: TerrainId, surface: i32, fluid: i16) -> u16 {
+        if fluid != NO_FLUID {
+            let depth = fluid as i32 - surface;
+            if depth > 24 {
+                return self.deep_ocean;
+            }
+            if depth >= 2 {
+                return self.ocean;
+            }
+        }
+        match reg.terrain(terrain).biome_hint {
+            // Sand along the shore is a beach, not a desert.
+            Some(b) if b.0 == self.desert && surface <= self.sea_level + 4 => self.beach,
+            Some(b) => b.0,
+            None => self.plains,
+        }
+    }
+}
+
+/// The biomes the export writes over a column (see
+/// [`TileStack::biome_column`]): `base`, save from `y0` up to `y1` where a
+/// level over it has its own, the later levels last.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BiomeColumn {
+    pub base: u16,
+    pub overrides: Vec<(i32, i32, u16)>,
+}
+
+impl BiomeColumn {
+    /// The biome at height `y`.
+    pub fn at(&self, y: i32) -> u16 {
+        let mut id = self.base;
+        for &(y0, y1, biome) in &self.overrides {
+            if y >= y0 && y < y1 {
+                id = biome;
+            }
+        }
+        id
+    }
+
+    /// The biome of the block at height `y` as the game reads it since
+    /// 1.15: that of its cell of 4 × 4 × 4, taken at the cell's middle.
+    pub fn of_block(&self, y: i32) -> u16 {
+        self.at(y.div_euclid(4) * 4 + 2)
     }
 }
 

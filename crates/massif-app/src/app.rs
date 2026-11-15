@@ -4743,6 +4743,160 @@ mod tests {
         }
     }
 
+    /// The ores window by keys and biomes: Delete (or Backspace) takes the
+    /// ore picked out, ⌘Z puts it back where it was, the + adds one back as
+    /// it was; nothing while a number is typed. The details light the band
+    /// picked and the one whose candle is pointed at, the cut the candle of
+    /// a row pointed at. An ore kept to some biomes is laid only there, in
+    /// the cut and in the amounts, and the map keeps the choice. Draws with
+    /// MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn removing_ores_and_keeping_them_to_biomes() {
+        use egui_kittest::kittest::Queryable;
+        use massif_core::analysis::Mineral;
+        type H = egui_kittest::Harness<'static, MassifApp>;
+        fn view(h: &H) -> &crate::ores::OresView {
+            match &h.state().dialog {
+                Some(Dialog::Ores(v)) => v,
+                _ => panic!("the ores window is closed"),
+            }
+        }
+        fn view_mut(h: &mut H) -> &mut crate::ores::OresView {
+            match &mut h.state_mut().dialog {
+                Some(Dialog::Ores(v)) => v,
+                _ => panic!("the ores window is closed"),
+            }
+        }
+        let has = |h: &H, m: Mineral| view(h).settings.ores.iter().any(|o| o.mineral == m);
+        let click = |h: &mut H, at: egui::Pos2| {
+            h.event(egui::Event::PointerMoved(at));
+            h.step();
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            h.step();
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+            h.run_steps(2);
+        };
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let shot = |h: &mut H, name: &str| {
+            if let Some(dir) = &dir {
+                h.render().unwrap().save(dir.join(format!("dialog-ores-{name}.png"))).unwrap();
+            }
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let ctx = h.ctx.clone();
+        h.state_mut().open_ores(&ctx);
+        let started = std::time::Instant::now();
+        while !view(&h).is_ready() {
+            assert!(started.elapsed().as_secs() < 60, "the ores window never got ready");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.run_steps(3);
+        let all = view(&h).settings.clone();
+        let index = |m: Mineral| all.ores.iter().position(|o| o.mineral == m).unwrap();
+        let (diamond, iron) = (index(Mineral::Diamond), index(Mineral::Iron));
+
+        // Delete takes the diamonds out, and the ore after them is picked.
+        view_mut(&mut h).select(diamond);
+        h.run_steps(2);
+        h.key_press(Key::Delete);
+        h.run_steps(2);
+        assert!(!has(&h, Mineral::Diamond) && view(&h).settings.ores.len() == all.ores.len() - 1, "Delete takes the ore out");
+        assert_eq!(view(&h).settings.ores[diamond].mineral, Mineral::Emerald);
+        assert_eq!(view(&h).picked(), (diamond, 0), "the emeralds after them are picked");
+        shot(&mut h, "removed");
+        // ⌘Z puts them back where they were, picked.
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        h.run_steps(2);
+        assert_eq!(view(&h).settings, all, "⌘Z puts them back");
+        assert_eq!(view(&h).picked(), (diamond, 0));
+        // Backspace too, and the + adds them back as they were.
+        h.key_press(Key::Backspace);
+        h.run_steps(2);
+        assert!(!has(&h, Mineral::Diamond), "Backspace takes the ore out");
+        h.get_by_label("Add an ore").click();
+        h.run_steps(2);
+        shot(&mut h, "add");
+        h.get_by_label("Diamond").click();
+        h.run_steps(2);
+        assert_eq!(view(&h).settings, all, "the + adds them back");
+        assert_eq!(view(&h).picked(), (diamond, 0));
+        // Typing a number, Delete edits it and takes no ore out.
+        let veins = h.get_by_label("Veins a chunk").rect();
+        click(&mut h, pos2(veins.right() - 10.0, veins.center().y));
+        assert!(h.ctx.text_edit_focused(), "the number is being typed");
+        h.key_press(Key::Delete);
+        h.run_steps(2);
+        assert!(has(&h, Mineral::Diamond), "nothing taken out while a number is typed");
+        h.key_press(Key::Enter);
+        h.run_steps(2);
+        assert!(!h.ctx.text_edit_focused());
+
+        // The details light the band picked, and the one whose candle the
+        // pointer is over; the cut, the candle of a row pointed at.
+        view_mut(&mut h).select_band(iron, 0);
+        h.run_steps(2);
+        let candle = view(&h).grip(iron, 2, true);
+        h.event(egui::Event::PointerMoved(candle));
+        h.run_steps(2);
+        assert_eq!(view(&h).lit().0, Some((iron, 2)), "the candle pointed at");
+        shot(&mut h, "lit");
+        let row = h.get_by_label("Band 2").rect();
+        h.event(egui::Event::PointerMoved(row.center()));
+        h.run_steps(3);
+        assert_eq!(view(&h).lit(), (None, Some(1)), "the row pointed at");
+        shot(&mut h, "row");
+
+        // Diamonds only in some biomes: none until one is ticked, then fewer
+        // than everywhere, and only where the biome is in the cut.
+        view_mut(&mut h).select(diamond);
+        h.run_steps(2);
+        let biomes = view(&h).biomes_by_rock();
+        assert!(biomes.len() >= 2, "the map has rock in several biomes: {biomes:?}");
+        let (everywhere, in_cut) = (view(&h).total(diamond), view(&h).in_cut(diamond));
+        assert!(everywhere > 0.0 && in_cut > 0);
+        h.get_by_label("Only in").click();
+        h.run_steps(2);
+        assert_eq!(view(&h).settings.ores[diamond].biomes.only, Some(Vec::new()));
+        assert_eq!((view(&h).total(diamond), view(&h).in_cut(diamond)), (0.0, 0), "only in no biome: nowhere");
+        // Some sixty biomes: the one wanted found by its name.
+        let name = h.state().doc.world.registry.biome(massif_core::registry::BiomeId(biomes[0])).name.clone();
+        h.ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("ore only in", "search")), name.clone()));
+        h.get_by_label(&theme::with_icon(Icon::Plus, "Add")).click();
+        h.run_steps(2);
+        let at = h.get_by_label(&name).rect().center();
+        click(&mut h, at);
+        shot(&mut h, "biomes-menu");
+        assert_eq!(view(&h).settings.ores[diamond].biomes.only, Some(vec![biomes[0]]), "ticked in the menu");
+        assert!(egui::Popup::is_any_open(&h.ctx), "the menu stays open to tick more");
+        // Another ticked, then ticked off again, the menu open all along.
+        let other = h.state().doc.world.registry.biome(massif_core::registry::BiomeId(biomes[1])).name.clone();
+        h.ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("ore only in", "search")), other.clone()));
+        h.run_steps(2);
+        let at = h.get_by_label(&other).rect().center();
+        click(&mut h, at);
+        assert_eq!(view(&h).settings.ores[diamond].biomes.only, Some(vec![biomes[0], biomes[1]]), "a second one ticked");
+        click(&mut h, at);
+        assert_eq!(view(&h).settings.ores[diamond].biomes.only, Some(vec![biomes[0]]), "and ticked off");
+        assert!(egui::Popup::is_any_open(&h.ctx));
+        let some = view(&h).total(diamond);
+        assert!(some > 0.0 && some < everywhere, "fewer diamonds: {some} of {everywhere}");
+        assert!(view(&h).in_cut(diamond) <= in_cut);
+        egui::Popup::close_all(&h.ctx);
+        h.run_steps(2);
+        // And never in another: ticked, then in a chip.
+        view_mut(&mut h).settings.ores[diamond].biomes.except = Some(vec![biomes[1]]);
+        h.run_steps(3);
+        shot(&mut h, "biomes");
+        // Closed, the map keeps the choice.
+        h.key_press(Key::Escape);
+        h.run_steps(2);
+        assert!(h.state().dialog.is_none());
+        let kept = &h.state().doc.world.meta.ores.ores[diamond].biomes;
+        assert_eq!((kept.only.clone(), kept.except.clone()), (Some(vec![biomes[0]]), Some(vec![biomes[1]])), "kept in the map");
+    }
+
     /// A map with diamond blocks and bedrock painted at its surface: the
     /// check says it breaks survival, in red. Draws with MASSIF_SNAPSHOT_DIR.
     #[test]

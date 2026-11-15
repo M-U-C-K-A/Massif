@@ -10,7 +10,10 @@
 //! ground right above it —, and the first vein to reach a block keeps it.
 //! The veins of a chunk come from the seed, the chunk and the band alone:
 //! the export, the survival check and the cut through the map in the Ores
-//! window all ask a [`Placer`], and agree.
+//! window all ask a [`Placer`], and agree. An ore may keep to some biomes
+//! (or out of some): its veins are drawn all the same, and their blocks
+//! laid only where the biome the export writes lets it in, so that the
+//! other ores' veins stay where they were.
 
 use crate::analysis::Mineral;
 use crate::compose::{Materializer, Span};
@@ -96,13 +99,45 @@ fn reach(size: u16) -> i32 {
     ((size.max(1) as f64).cbrt().ceil() as i32 + 1).min(6)
 }
 
-/// One kind of ore: its bands.
+/// One kind of ore: its bands, and the biomes it keeps to.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OreRule {
     pub mineral: Mineral,
     #[serde(default = "yes")]
     pub on: bool,
     pub bands: Vec<Band>,
+    #[serde(default, skip_serializing_if = "BiomeChoice::is_everywhere")]
+    pub biomes: BiomeChoice,
+}
+
+impl OreRule {
+    pub fn new(mineral: Mineral, bands: &[Band]) -> Self {
+        Self { mineral, on: true, bands: bands.to_vec(), biomes: BiomeChoice::default() }
+    }
+}
+
+/// The biomes an ore is laid in (by their ids in the registry): only those
+/// of `only` while it is set, never those of `except` while it is set — as
+/// a brush keeps to what is on the map. Both unset: every biome.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BiomeChoice {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub only: Option<Vec<u16>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub except: Option<Vec<u16>>,
+}
+
+impl BiomeChoice {
+    /// Neither list set: the ore goes in every biome.
+    pub fn is_everywhere(&self) -> bool {
+        self.only.is_none() && self.except.is_none()
+    }
+
+    /// Whether the ore goes in biome `biome`.
+    pub fn allows(&self, biome: u16) -> bool {
+        self.only.as_ref().is_none_or(|l| l.contains(&biome)) && !self.except.as_ref().is_some_and(|l| l.contains(&biome))
+    }
 }
 
 fn yes() -> bool {
@@ -149,9 +184,20 @@ impl Preset {
         }
     }
 
+    /// The preset's ore of `mineral`, if it has one.
+    pub fn rule(self, mineral: Mineral) -> Option<OreRule> {
+        self.settings().ores.into_iter().find(|r| r.mineral == mineral)
+    }
+
+    /// The preset for a world whose floor is at `min_y`: the game's since
+    /// 1.18 where it goes under 0, the older one otherwise.
+    pub fn for_floor(min_y: i32) -> Self {
+        if min_y < 0 { Preset::Modern } else { Preset::Classic }
+    }
+
     pub fn settings(self) -> OreSettings {
         use Mineral::*;
-        let rule = |mineral: Mineral, bands: &[Band]| OreRule { mineral, on: true, bands: bands.to_vec() };
+        let rule = OreRule::new;
         let ores = match self {
             // Close to the game's own: its veins, sizes and heights, the
             // numbers set so that each ore's share of the rock at each
@@ -202,6 +248,22 @@ impl OreSettings {
             return 0.0;
         }
         rule.bands.iter().map(|b| b.veins as f64 * b.size as f64).sum::<f64>() * self.richness.max(0.0) as f64
+    }
+
+    /// The ores of the presets these settings have none of, in the
+    /// presets' order.
+    pub fn missing(&self) -> Vec<Mineral> {
+        Preset::Modern.settings().ores.into_iter().map(|r| r.mineral).filter(|m| !self.ores.iter().any(|r| r.mineral == *m)).collect()
+    }
+
+    /// Put `rule` among the ores, in the presets' order (coal first,
+    /// emeralds last); its index.
+    pub fn insert(&mut self, rule: OreRule) -> usize {
+        let order: Vec<Mineral> = Preset::Modern.settings().ores.into_iter().map(|r| r.mineral).collect();
+        let rank = |m: Mineral| order.iter().position(|&o| o == m).unwrap_or(order.len());
+        let at = self.ores.iter().position(|r| rank(r.mineral) > rank(rule.mineral)).unwrap_or(self.ores.len());
+        self.ores.insert(at, rule);
+        at
     }
 
     /// Keep every band tidy and the richness within reach.
@@ -286,6 +348,10 @@ impl Ready {
 pub struct Placer {
     seed: u64,
     bands: Vec<Ready>,
+    /// Of each ore of the settings, the biomes it is laid in.
+    biomes: Vec<BiomeChoice>,
+    /// Whether some ore keeps to some biomes.
+    keeps: bool,
 }
 
 const DIRECTIONS: [[i8; 3]; 6] = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
@@ -338,7 +404,41 @@ impl Placer {
                 bands.push(Ready { ore: k as u16, min: band.min, sums, veins, size: band.size, reach: band.reach() });
             }
         }
-        (!bands.is_empty()).then_some(Self { seed: seed as u64, bands })
+        let biomes: Vec<BiomeChoice> = settings.ores.iter().map(|r| r.biomes.clone()).collect();
+        let keeps = settings.ores.iter().any(|r| r.on && !r.biomes.is_everywhere());
+        (!bands.is_empty()).then_some(Self { seed: seed as u64, bands, biomes, keeps })
+    }
+
+    /// Whether some ore keeps to some biomes, or out of some: then where
+    /// its blocks go depends on the biome there (see [`Placer::allows`]).
+    pub fn keeps_to_biomes(&self) -> bool {
+        self.keeps
+    }
+
+    /// Whether ore `ore` (its index in [`OreSettings::ores`]) is laid in
+    /// biome `biome`.
+    #[inline]
+    pub fn allows(&self, ore: u16, biome: u16) -> bool {
+        self.biomes.get(ore as usize).is_none_or(|c| c.allows(biome))
+    }
+
+    /// Lay the blocks of a chunk's veins (see [`Placer::chunks`]) over rock
+    /// that does not change as they are laid: `rock` says what each block
+    /// offers an ore (`None` where it takes nothing, or the block is in the
+    /// open; see [`rock_at`]), `biome` the biome of the block (asked only
+    /// for an ore that keeps to some; see
+    /// [`crate::compose::BiomeColumn::of_block`]), and the first vein to
+    /// reach a block it may take keeps it — as the export lays them.
+    pub fn lay<R>(&self, blocks: &[OreBlock], mut rock: impl FnMut(i32, i32, i32) -> Option<R>, mut biome: impl FnMut(i32, i32, i32) -> u16, mut put: impl FnMut(OreBlock, R)) {
+        let mut taken: HashSet<(i32, i32, i32)> = HashSet::with_capacity(blocks.len());
+        for &b in blocks {
+            if let Some(r) = rock(b.x, b.y, b.z)
+                && (!self.keeps || self.biomes[b.ore as usize].is_everywhere() || self.allows(b.ore, biome(b.x, b.y, b.z)))
+                && taken.insert((b.x, b.y, b.z))
+            {
+                put(b, r);
+            }
+        }
     }
 
     /// Every block the veins put in chunk `(cx, cz)` (in chunks), before the
@@ -398,26 +498,9 @@ impl Placer {
         out
     }
 
-    /// [`Placer::chunk`] over rock that does not change as veins are laid:
-    /// `rock` says what each block offers an ore (`None` where it takes
-    /// nothing, or the block is in the open; see [`rock_at`]), and the first
-    /// vein to reach a block keeps it — as the export lays them.
-    pub fn chunk_over<R>(&self, cx: i32, cz: i32, rock: impl FnMut(i32, i32, i32) -> Option<R>, put: impl FnMut(OreBlock, R)) {
-        place_over(&self.chunks(cx, cz, 1, 1, (i32::MIN, i32::MAX))[0], rock, put);
-    }
-}
-
-/// Lay the blocks of a chunk's veins (see [`Placer::chunks`]) over rock
-/// that does not change as they are laid: `rock` says what each block
-/// offers an ore, and the first vein to reach a block keeps it.
-pub fn place_over<R>(blocks: &[OreBlock], mut rock: impl FnMut(i32, i32, i32) -> Option<R>, mut put: impl FnMut(OreBlock, R)) {
-    let mut taken: HashSet<(i32, i32, i32)> = HashSet::with_capacity(blocks.len());
-    for &b in blocks {
-        if let Some(r) = rock(b.x, b.y, b.z)
-            && taken.insert((b.x, b.y, b.z))
-        {
-            put(b, r);
-        }
+    /// [`Placer::lay`] over chunk `(cx, cz)`.
+    pub fn chunk_over<R>(&self, cx: i32, cz: i32, rock: impl FnMut(i32, i32, i32) -> Option<R>, biome: impl FnMut(i32, i32, i32) -> u16, put: impl FnMut(OreBlock, R)) {
+        self.lay(&self.chunks(cx, cz, 1, 1, (i32::MIN, i32::MAX))[0], rock, biome, put);
     }
 }
 
@@ -517,8 +600,9 @@ pub fn rock_at(spans: &[Span], mat: &Materializer, hosts: &[Option<Host>], x: i3
 /// how many columns hold rock an ore may take there — the stone and
 /// deepslate under the terrains' layers, and layers of such rock, but not
 /// the top block of a run nor the bedrock floor —, and how many hold
-/// anything solid. Read a column in sixteen and scaled up: it is for the
-/// amounts the Ores window expects, not a count.
+/// anything solid. Read a column in sixteen (the middle of each 4 × 4,
+/// where the export takes the biome) and scaled up: it is for the amounts
+/// the Ores window expects, not a count.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RockProfile {
     pub min_y: i32,
@@ -526,6 +610,9 @@ pub struct RockProfile {
     pub solid: Vec<f64>,
     /// Columns of the map.
     pub columns: u64,
+    /// The rock of each biome (by id) at each height, as `rock`: empty for
+    /// a biome the map has no rock in.
+    pub by_biome: Vec<Vec<f64>>,
 }
 
 impl RockProfile {
@@ -536,6 +623,15 @@ impl RockProfile {
 
     pub fn solid_at(&self, y: i32) -> f64 {
         self.solid.get((y - self.min_y) as usize).copied().unwrap_or(0.0)
+    }
+
+    /// Rock at height `y` in the biomes `choice` lets an ore into.
+    pub fn rock_in(&self, choice: &BiomeChoice, y: i32) -> f64 {
+        if choice.is_everywhere() {
+            return self.rock_at(y);
+        }
+        let i = (y - self.min_y) as usize;
+        self.by_biome.iter().enumerate().filter(|(b, _)| choice.allows(*b as u16)).map(|(_, rock)| rock.get(i).copied().unwrap_or(0.0)).sum()
     }
 }
 
@@ -553,20 +649,25 @@ pub fn rock_profile(world: &crate::world::World, dim: usize, cancel: &std::sync:
     }
     let mat = Materializer::new(reg, world.meta.seed, d.min_y);
     let hosts = hosts(reg);
+    let auto = crate::compose::AutoBiomes::new(reg, world.meta.sea_level, d.min_y);
     // Terrains whose layers are all rock an ore takes.
     let rocky: Vec<bool> = reg.terrains.iter().map(|t| !t.strata.is_empty() && t.strata.iter().all(|s| s.blocks.iter().all(|b| hosts.get(b.0.index()).copied().flatten().is_some()))).collect();
     let (min_y, max_y) = (d.min_y, d.max_y);
     let h = (max_y - min_y).max(1) as usize;
     let floor = min_y + 5;
-    let (rock, solid) = tiles
+    // Rock, solid ground, the rock of each biome: the changes from one
+    // height to the next.
+    type Counts = (Vec<i64>, Vec<i64>, Vec<Vec<i64>>);
+    let empty = || -> Counts { (vec![0i64; h + 1], vec![0i64; h + 1], Vec::new()) };
+    let ((rock, solid, by_biome), _) = tiles
         .par_iter()
         .fold(
-            || (vec![0i64; h + 1], vec![0i64; h + 1], Vec::new()),
-            |(mut rock, mut solid, mut spans), &pos| {
+            || (empty(), (Vec::new(), crate::compose::BiomeColumn::default())),
+            |((mut rock, mut solid, mut by_biome), (mut spans, mut biomes)), &pos| {
                 if cancel.load(Ordering::Relaxed) {
-                    return (rock, solid, spans);
+                    return ((rock, solid, by_biome), (spans, biomes));
                 }
-                let Some(stack) = crate::compose::TileStack::new(d, pos, true) else { return (rock, solid, spans) };
+                let Some(stack) = crate::compose::TileStack::new(d, pos, true) else { return ((rock, solid, by_biome), (spans, biomes)) };
                 let (ox, oz) = pos.origin();
                 let add = |list: &mut Vec<i64>, y0: i32, y1: i32| {
                     let (a, b) = ((y0.max(min_y) - min_y) as usize, (y1.min(max_y) - min_y).max(0) as usize);
@@ -575,34 +676,66 @@ pub fn rock_profile(world: &crate::world::World, dim: usize, cancel: &std::sync:
                         list[b] -= 1;
                     }
                 };
-                for lz in (0..128).step_by(STEP) {
-                    for lx in (0..128).step_by(STEP) {
+                for lz in (STEP / 2..128).step_by(STEP) {
+                    for lx in (STEP / 2..128).step_by(STEP) {
                         let cell = crate::coords::cell_index(lx, lz);
                         stack.spans(cell, &mut spans);
+                        stack.biome_column(cell, reg, &auto, || spans.last().map(|s| (s.y1, s.terrain)), &mut biomes);
                         for s in &spans {
                             add(&mut solid, s.y0, s.y1);
                             let (x, z) = (ox + lx as i32, oz + lz as i32);
                             let recipe = mat.recipe_depth(s.terrain, x, z);
                             let split = if recipe >= (s.y1 - s.y0) as u32 { s.y0 } else { s.y1 - recipe as i32 };
                             let top = if rocky.get(s.terrain.index()).copied().unwrap_or(false) { s.y1 } else { split };
-                            add(&mut rock, s.y0.max(floor), top.min(s.y1 - 1));
+                            let (y0, y1) = (s.y0.max(floor), top.min(s.y1 - 1));
+                            add(&mut rock, y0, y1);
+                            // The rock of the biome it is in: block by
+                            // block where a level over the ground has its own.
+                            let mut of = |biome: u16, y0: i32, y1: i32| {
+                                let k = biome as usize;
+                                if by_biome.len() <= k {
+                                    by_biome.resize(k + 1, Vec::new());
+                                }
+                                if by_biome[k].is_empty() {
+                                    by_biome[k] = vec![0; h + 1];
+                                }
+                                add(&mut by_biome[k], y0, y1);
+                            };
+                            if biomes.overrides.is_empty() {
+                                of(biomes.base, y0, y1);
+                            } else {
+                                for y in y0..y1 {
+                                    of(biomes.of_block(y), y, y + 1);
+                                }
+                            }
                         }
                     }
                 }
-                (rock, solid, spans)
+                ((rock, solid, by_biome), (spans, biomes))
             },
         )
-        .map(|(r, s, _)| (r, s))
         .reduce(
-            || (vec![0i64; h + 1], vec![0i64; h + 1]),
-            |(mut a, mut b), (c, d)| {
-                for (x, y) in a.iter_mut().zip(c) {
+            || (empty(), (Vec::new(), crate::compose::BiomeColumn::default())),
+            |((mut a, mut b, mut c), scratch), ((d, e, f), _)| {
+                for (x, y) in a.iter_mut().zip(d) {
                     *x += y;
                 }
-                for (x, y) in b.iter_mut().zip(d) {
+                for (x, y) in b.iter_mut().zip(e) {
                     *x += y;
                 }
-                (a, b)
+                if c.len() < f.len() {
+                    c.resize(f.len(), Vec::new());
+                }
+                for (x, y) in c.iter_mut().zip(f) {
+                    if x.is_empty() {
+                        *x = y;
+                    } else {
+                        for (v, w) in x.iter_mut().zip(y) {
+                            *v += w;
+                        }
+                    }
+                }
+                ((a, b, c), scratch)
             },
         );
     if cancel.load(Ordering::Relaxed) {
@@ -616,7 +749,8 @@ pub fn rock_profile(world: &crate::world::World, dim: usize, cancel: &std::sync:
             sum as f64 * scale
         }).collect::<Vec<f64>>()
     };
-    Some(RockProfile { min_y, rock: running(rock), solid: running(solid), columns: (tiles.len() * crate::coords::TILE_AREA) as u64 })
+    let by_biome = by_biome.into_iter().map(|d| if d.is_empty() { Vec::new() } else { running(d) }).collect();
+    Some(RockProfile { min_y, rock: running(rock), solid: running(solid), columns: (tiles.len() * crate::coords::TILE_AREA) as u64, by_biome })
 }
 
 #[cfg(test)]
@@ -647,7 +781,7 @@ mod tests {
         let settings = OreSettings {
             on: true,
             richness: 1.0,
-            ores: vec![OreRule { mineral: Mineral::Coal, on: true, bands: vec![Band::new(40, [40, 40], 40, 40.0, 30)] }],
+            ores: vec![OreRule::new(Mineral::Coal, &[Band::new(40, [40, 40], 40, 40.0, 30)])],
         };
         let placer = Placer::new(&settings, 1).unwrap();
         let mut got = HashSet::new();
@@ -730,6 +864,99 @@ mod tests {
         assert!((p.rock_at(-30) - 16384.0).abs() < 1.0, "all rock deep down: {}", p.rock_at(-30));
         assert!((p.solid_at(-30) - 16384.0).abs() < 1.0);
         assert_eq!(p.rock_at(300), 0.0, "air up high");
+    }
+
+    /// An ore kept to some biomes is laid only where the biome lets it in:
+    /// its veins are drawn as before, the other ores' too, and a choice
+    /// that lets every biome in lays every block as no choice does.
+    #[test]
+    fn ores_keep_to_their_biomes() {
+        let all = OreSettings::default();
+        let diamond = all.ores.iter().position(|o| o.mineral == Mineral::Diamond).unwrap();
+        // West of x = 40 the biome is 5, east of it 9.
+        let biome = |x: i32, _: i32, _: i32| if x < 40 { 5 } else { 9 };
+        let lay = |settings: &OreSettings| {
+            let placer = Placer::new(settings, 3).unwrap();
+            let mut out = Vec::new();
+            for chunk in placer.chunks(0, 0, 6, 2, (i32::MIN, i32::MAX)) {
+                placer.lay(&chunk, |_, _, _| Some(()), biome, |b, _| out.push(b));
+            }
+            (placer.chunks(0, 0, 6, 2, (i32::MIN, i32::MAX)), out)
+        };
+        let (veins, every) = lay(&all);
+        assert!(every.iter().any(|b| b.ore as usize == diamond && b.x < 40) && every.iter().any(|b| b.ore as usize == diamond && b.x >= 40));
+
+        let mut open = all.clone();
+        open.ores[diamond].biomes.except = Some(Vec::new());
+        assert!(Placer::new(&open, 3).unwrap().keeps_to_biomes());
+        assert_eq!(lay(&open), (veins.clone(), every.clone()), "a choice that lets every biome in changes nothing");
+
+        let mut only = all.clone();
+        only.ores[diamond].biomes.only = Some(vec![5]);
+        let (drawn, laid) = lay(&only);
+        assert_eq!(drawn, veins, "the veins are drawn as before");
+        assert!(laid.iter().any(|b| b.ore as usize == diamond), "diamonds in biome 5");
+        assert!(laid.iter().all(|b| b.ore as usize != diamond || b.x < 40), "no diamond in biome 9");
+        let others = |list: &[OreBlock]| list.iter().filter(|b| b.ore as usize != diamond).count();
+        assert!(others(&laid) >= others(&every), "the other ores keep their blocks, and get those diamonds gave up");
+
+        let mut except = all.clone();
+        except.ores[diamond].biomes.except = Some(vec![5]);
+        let (_, laid) = lay(&except);
+        assert!(laid.iter().any(|b| b.ore as usize == diamond) && laid.iter().all(|b| b.ore as usize != diamond || b.x >= 40), "diamonds out of biome 5");
+        except.ores[diamond].biomes.only = Some(vec![5]);
+        assert!(!lay(&except).1.iter().any(|b| b.ore as usize == diamond), "only in 5, but not in 5: nowhere");
+    }
+
+    /// Maps saved before biome choices load unchanged, and a rule without
+    /// one is saved as before.
+    #[test]
+    fn biome_choices_are_saved_only_when_made() {
+        let old = r#"{"mineral":"diamond","on":true,"bands":[{"min":-144,"max":16,"peak":[-64,-64],"veins":8.0,"size":4}]}"#;
+        let rule: OreRule = serde_json::from_str(old).unwrap();
+        assert!(rule.biomes.is_everywhere());
+        assert_eq!(rule, Preset::Modern.rule(Mineral::Diamond).unwrap());
+        assert_eq!(serde_json::to_string(&rule).unwrap(), old);
+        let mut kept = rule.clone();
+        kept.biomes.only = Some(vec![3, 7]);
+        let json = serde_json::to_string(&kept).unwrap();
+        assert!(json.ends_with(r#""biomes":{"only":[3,7]}}"#), "{json}");
+        assert_eq!(serde_json::from_str::<OreRule>(&json).unwrap(), kept);
+        let choice = BiomeChoice { only: Some(vec![3, 7]), except: Some(vec![7]) };
+        assert!(choice.allows(3) && !choice.allows(7) && !choice.allows(4));
+        assert!(BiomeChoice { only: None, except: Some(vec![]) }.allows(4));
+        assert!(!BiomeChoice { only: Some(vec![]), except: None }.allows(4));
+    }
+
+    /// An ore removed comes back in its place among the others.
+    #[test]
+    fn ores_come_back_in_order() {
+        let mut s = OreSettings::default();
+        assert!(s.missing().is_empty());
+        let gold = s.ores.remove(3);
+        let iron = s.ores.remove(1);
+        assert_eq!(s.missing(), vec![Mineral::Iron, Mineral::Gold]);
+        assert_eq!(s.insert(gold), 2);
+        assert_eq!(s.insert(iron), 1);
+        assert_eq!(s, OreSettings::default());
+        assert_eq!(Preset::for_floor(-64), Preset::Modern);
+        assert_eq!(Preset::for_floor(0), Preset::Classic);
+    }
+
+    /// The rock of a map, biome by biome: the biomes' rock sums to the
+    /// rock, and an ore kept to the biomes there has all of it.
+    #[test]
+    fn the_rock_of_each_biome() {
+        let world = crate::generate::generate(&crate::generate::GenParams { tiles_x: 1, tiles_z: 1, ..Default::default() });
+        let p = rock_profile(&world, 0, &std::sync::atomic::AtomicBool::new(false)).unwrap();
+        let present: Vec<u16> = (0..p.by_biome.len()).filter(|&b| !p.by_biome[b].is_empty()).map(|b| b as u16).collect();
+        assert!(!present.is_empty());
+        for y in [-60, -30, 0, 40, 64] {
+            let sum: f64 = p.by_biome.iter().map(|r| r.get((y - p.min_y) as usize).copied().unwrap_or(0.0)).sum();
+            assert!((sum - p.rock_at(y)).abs() < 1e-6, "y {y}: {sum} of {}", p.rock_at(y));
+            assert!((p.rock_in(&BiomeChoice { only: Some(present.clone()), except: None }, y) - p.rock_at(y)).abs() < 1e-6);
+            assert_eq!(p.rock_in(&BiomeChoice { only: None, except: Some(present.clone()) }, y), 0.0);
+        }
     }
 
     #[test]
