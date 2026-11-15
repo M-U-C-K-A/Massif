@@ -2696,6 +2696,15 @@ impl View3d {
         self.pending
     }
 
+    /// Tiles built, and what the graphics card holds of the view.
+    pub fn tiles_built(&self) -> usize {
+        self.tiles.len()
+    }
+
+    pub fn gpu_bytes(&self) -> u64 {
+        self.renderer.as_ref().map_or(0, |r| r.bytes())
+    }
+
     /// The player walking in the view, if any.
     #[cfg(test)]
     pub fn player(&self) -> Option<crate::player::Player> {

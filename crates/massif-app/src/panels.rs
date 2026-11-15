@@ -2790,7 +2790,7 @@ pub fn human(bytes: u64) -> String {
 // ------------------------------------------------------------ empty area --
 
 /// The chooser of an empty area. `shown` are the editors visible elsewhere.
-pub fn empty_area(ui: &mut Ui, shown: &HashSet<EditorKind>) -> Option<EditorKind> {
+pub fn empty_area(ui: &mut Ui, shown: &HashSet<EditorKind>, developer: bool) -> Option<EditorKind> {
     let pal = Palette::of(ui);
     let mut picked = None;
     ui.vertical_centered(|ui| {
@@ -2826,6 +2826,12 @@ pub fn empty_area(ui: &mut Ui, shown: &HashSet<EditorKind>) -> Option<EditorKind
             ui.add_space(8.0);
         }
     });
+    if developer {
+        ui.label(RichText::new("Developer").size(11.5).color(pal.weak));
+        if ui.selectable_label(false, format!("{}  {}", theme::glyph(EditorKind::Developer.icon()), EditorKind::Developer.label())).clicked() {
+            picked = Some(EditorKind::Developer);
+        }
+    }
     picked
 }
 

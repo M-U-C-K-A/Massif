@@ -2040,6 +2040,7 @@ dependencies = [
  "flate2",
  "glam",
  "image",
+ "libc",
  "log",
  "lucide-icons",
  "massif-anvil",

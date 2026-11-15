@@ -35,6 +35,8 @@ pub enum EditorKind {
     GraphProps,
     /// Sun, clouds and the rest of how the graph's viewport renders.
     RenderSettings,
+    /// How Massif runs, live (with Settings ▸ Developer on).
+    Developer,
 }
 
 impl EditorKind {
@@ -82,6 +84,7 @@ impl EditorKind {
             EditorKind::GraphView => "Graph Viewport",
             EditorKind::GraphProps => "Node Properties",
             EditorKind::RenderSettings => "Render Settings",
+            EditorKind::Developer => "Developer",
         }
     }
 
@@ -105,6 +108,7 @@ impl EditorKind {
             EditorKind::GraphView => Icon::MountainSnow,
             EditorKind::GraphProps => Icon::SlidersHorizontal,
             EditorKind::RenderSettings => Icon::Sun,
+            EditorKind::Developer => Icon::Activity,
         }
     }
 }
@@ -146,7 +150,6 @@ pub enum Node {
 }
 
 impl Node {
-    #[cfg(test)]
     pub fn areas(&self, out: &mut Vec<(AreaId, EditorKind)>) {
         match self {
             Node::Area { id, editor } => out.push((*id, *editor)),

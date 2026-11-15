@@ -63,6 +63,8 @@ struct Settings {
     animate_backdrop: bool,
     /// The home screen's pictures shown, by name: those not yet come first.
     backdrops_seen: Vec<String>,
+    /// The Developer panel is offered: frames, memory, the processor, live.
+    developer: bool,
 }
 
 /// A section of the settings.
@@ -72,6 +74,7 @@ enum PrefsSection {
     Sounds,
     Notifications,
     Memory,
+    Developer,
 }
 
 impl Default for Settings {
@@ -89,6 +92,7 @@ impl Default for Settings {
             memory_mb: 0,
             animate_backdrop: true,
             backdrops_seen: Vec::new(),
+            developer: false,
         }
     }
 }
@@ -216,6 +220,8 @@ pub struct MassifApp {
     dialog_was_open: bool,
     /// When the memory limit was last applied (seconds).
     memory_checked: f64,
+    /// What the Developer panel shows, measured frame after frame.
+    dev: crate::devtools::DevStats,
     after_save: Option<Pending>,
     status: Option<Status>,
     feedback: Option<String>,
@@ -502,6 +508,7 @@ impl MassifApp {
             dialog: None,
             dialog_was_open: false,
             memory_checked: f64::NEG_INFINITY,
+            dev: crate::devtools::DevStats::default(),
             after_save: None,
             status: None,
             feedback: None,
@@ -730,6 +737,74 @@ impl MassifApp {
             line(ui, "Map view", mb(grids * (190 << 10) + summaries * 1024), format!("{grids} tiles of columns, {chunks} images (up to {} and {})", self.map_cache.max_grids, self.map_cache.max_chunks));
             line(ui, "Sculpted in 3D", mb(voxels * 4096), format!("{voxels} chunks of 16³"));
         });
+    }
+
+    fn prefs_developer(&mut self, ui: &mut Ui) {
+        Self::prefs_header(ui, "Developer", "A panel of how Massif runs, live: frames a second and the time each takes, the memory the system counts, the processor's time, what Massif keeps decoded, the map, its tasks, the graphics card, and why it draws again. Offered in every area's menu, as Brushes or Info are.");
+        crate::widgets::well(ui, |ui| {
+            crate::widgets::row(ui, "Developer mode", |ui| {
+                crate::widgets::switch(ui, &mut self.settings.developer).on_hover_text("The Developer panel in the areas' menus");
+            });
+            if self.settings.developer {
+                crate::widgets::row(ui, "The panel", |ui| {
+                    let shown = self.layout.current().root.shows(EditorKind::Developer);
+                    if ui.add_enabled(!shown, egui::Button::new(theme::with_icon(Icon::Activity, if shown { "Shown" } else { "Show it here" }))).on_hover_text("Beside the largest area of this workspace").clicked() {
+                        self.show_developer_panel();
+                    }
+                });
+            }
+        });
+    }
+
+    /// What the Developer panel shows of Massif itself.
+    fn dev_info(&self) -> crate::devtools::DevInfo<'static> {
+        let mb = |b: u64| format!("{:.1} MB", b as f64 / (1u64 << 20) as f64);
+        let dim = self.doc.dimension();
+        let stats: Vec<massif_core::level::LevelStats> = dim.levels.iter().map(|l| l.stats()).collect();
+        let (hot, hot_bytes, cold_bytes, tiles) = stats.iter().fold((0, 0, 0, 0), |(h, hb, cb, t), s| (h + s.hot_tiles, hb + s.hot_bytes, cb + s.cold_bytes, t + s.tiles));
+        let (chunks, grids, summaries) = self.map_cache.stats();
+        let voxels = dim.voxels.len();
+        let (t3, g3) = (self.view3d.tiles_built() + self.sculpt3d.tiles_built(), self.view3d.gpu_bytes() + self.sculpt3d.gpu_bytes());
+        let keeps = vec![
+            ("Decoded tiles", mb(hot_bytes as u64), format!("{hot} of {tiles}, at most {} a level", self.doc.max_hot_tiles)),
+            ("Map, compressed", mb(cold_bytes as u64), String::new()),
+            ("Map view", mb((grids * (190 << 10) + summaries * 1024) as u64), format!("{grids} tiles of columns, {chunks} images")),
+            ("3D views", mb(g3), format!("{t3} tiles on the graphics card")),
+            ("Sculpted in 3D", mb(voxels as u64 * 4096), format!("{voxels} chunks of 16³")),
+            ("Undo", format!("{} steps", self.doc.history.undo_count()), String::new()),
+        ];
+        let map = match dim.bounds() {
+            Some((lo, hi)) => {
+                let t = massif_core::coords::TILE_SIZE;
+                vec![
+                    ("Size", format!("{} × {} blocks", (hi.x - lo.x + 1) * t, (hi.z - lo.z + 1) * t)),
+                    ("Height", format!("{} to {}", dim.min_y, dim.max_y)),
+                    ("Levels", format!("{}", dim.levels.len())),
+                    ("Revision", format!("{}", self.doc.revision)),
+                ]
+            }
+            None => vec![("Size", "nothing yet".to_owned())],
+        };
+        let jobs = self
+            .jobs
+            .iter()
+            .map(|j| match &j.progress {
+                Some(p) => format!("{} · {:.0} %", j.label, p.fraction() * 100.0),
+                None => format!("{} · {:.0} s", j.label, j.started.elapsed().as_secs_f32()),
+            })
+            .collect();
+        crate::devtools::DevInfo { keeps, map, jobs, gpu: None }
+    }
+
+    /// Put the Developer panel beside the largest area of the workspace.
+    fn show_developer_panel(&mut self) {
+        let mut areas = Vec::new();
+        self.layout.current().root.areas(&mut areas);
+        let largest = areas.iter().find(|(_, k)| matches!(k, EditorKind::Map | EditorKind::View3d | EditorKind::Sculpt3d | EditorKind::Graph | EditorKind::GraphView)).or(areas.first()).map(|(id, _)| *id);
+        if let Some(id) = largest {
+            let new = self.layout.split_at(id, crate::layout::Dir::Row, false, 0.64);
+            self.layout.current_mut().root.set_editor(new, EditorKind::Developer);
+        }
     }
 
     fn say(&mut self, ctx: &egui::Context, text: impl Into<String>, error: bool, reveal: Option<PathBuf>) {
@@ -1673,6 +1748,13 @@ impl MassifApp {
                     }
                 }
             }
+            if self.settings.developer {
+                ui.label(RichText::new("Developer").size(11.0).color(Palette::of(ui).weak));
+                let kind = EditorKind::Developer;
+                if ui.selectable_label(kind == editor, theme::with_icon(kind.icon(), kind.label())).clicked() {
+                    self.layout.current_mut().root.set_editor(id, kind);
+                }
+            }
         });
         let title = hui
             .add(egui::Label::new(RichText::new(editor.label()).medium()).sense(Sense::drag()).selectable(false))
@@ -1946,9 +2028,26 @@ impl MassifApp {
                     .show(&mut cui, |ui| self.graph.properties_ui(ui, &mut self.doc));
             }
             EditorKind::RenderSettings => scrolled(&mut cui, &mut |ui| self.graph.render_ui(ui, &self.doc)),
+            EditorKind::Developer => {
+                if self.settings.developer {
+                    let info = crate::devtools::DevInfo { gpu: frame.wgpu_render_state(), ..self.dev_info() };
+                    let stats = &self.dev;
+                    scrolled(&mut cui, &mut |ui| crate::devtools::panel(ui, stats, &info));
+                } else {
+                    let mut turn_on = false;
+                    scrolled(&mut cui, &mut |ui| {
+                        ui.label(RichText::new("The Developer panel needs developer mode.").color(Palette::of(ui).weak));
+                        turn_on = ui.button(theme::with_icon(Icon::Activity, "Turn developer mode on")).clicked();
+                    });
+                    if turn_on {
+                        self.settings.developer = true;
+                    }
+                }
+            }
             EditorKind::Empty => {
                 let mut picked = None;
-                scrolled(&mut cui, &mut |ui| picked = panels::empty_area(ui, shown));
+                let developer = self.settings.developer;
+                scrolled(&mut cui, &mut |ui| picked = panels::empty_area(ui, shown, developer));
                 if let Some(kind) = picked {
                     self.layout.current_mut().root.set_editor(id, kind);
                 }
@@ -2039,6 +2138,7 @@ impl MassifApp {
                                 (PrefsSection::Sounds, Icon::Volume2, "Sounds"),
                                 (PrefsSection::Notifications, Icon::Bell, "Notifications"),
                                 (PrefsSection::Memory, Icon::MemoryStick, "Memory"),
+                                (PrefsSection::Developer, Icon::Activity, "Developer"),
                             ] {
                                 let on = section == s;
                                 let text = RichText::new(theme::with_icon(icon, label)).size(13.0).color(if on { pal.text } else { pal.weak });
@@ -2070,6 +2170,7 @@ impl MassifApp {
                                     PrefsSection::Sounds => self.prefs_sounds(ui),
                                     PrefsSection::Notifications => self.prefs_notifications(ui),
                                     PrefsSection::Memory => self.prefs_memory(ui),
+                                    PrefsSection::Developer => self.prefs_developer(ui),
                                 }
                             });
                         });
@@ -2567,7 +2668,10 @@ impl MassifApp {
 
 impl eframe::App for MassifApp {
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
+        self.dev.begin();
         self.frame_ui(ui, frame);
+        let now = ui.input(|i| i.time);
+        self.dev.end(now);
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -3230,6 +3334,33 @@ mod tests {
         eprintln!("flying: {:?}", h.state().sculpt3d.player());
         shot(&mut h, "walk-river-4");
         h.render().unwrap().save(dir.join("walk-river-ui.png")).unwrap();
+    }
+
+    /// Developer mode offers the Developer panel: the frames, the memory
+    /// and the processor, live, and what Massif keeps. Renders it with
+    /// MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn the_developer_panel_shows_the_figures() {
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        assert!(!h.state().layout.current().root.shows(EditorKind::Developer));
+        {
+            let app = h.state_mut();
+            app.settings.developer = true;
+            app.show_developer_panel();
+        }
+        assert!(h.state().layout.current().root.shows(EditorKind::Developer));
+        for _ in 0..40 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(12));
+        }
+        assert!(h.state().dev.fps() > 0.0, "frames counted");
+        assert!(crate::devtools::memory_in_use().is_some_and(|b| b > 10 << 20), "the memory the system counts");
+        assert!(crate::devtools::cpu_time().is_some());
+        if let Some(dir) = dir {
+            h.render().unwrap().save(dir.join("developer-panel.png")).unwrap();
+        }
     }
 
     /// Walking in 3D Sculpt: the player comes down onto the land looked at,

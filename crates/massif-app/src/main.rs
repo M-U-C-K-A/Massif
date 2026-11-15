@@ -5,6 +5,7 @@ mod app;
 mod blocks;
 mod brushes;
 mod cards;
+mod devtools;
 mod doc;
 mod finder;
 mod graph_editor;
