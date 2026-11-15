@@ -1522,7 +1522,15 @@ impl MassifApp {
             // gap after them.
             ui.add_space(80.0);
         }
-        egui::MenuBar::new().ui(ui, |ui| {
+        // egui's menu bar pads its buttons by 2 points and no more: a hit
+        // as narrow as the word. These are as roomy as a system menu bar's,
+        // side by side with no gap between them.
+        let roomy = |style: &mut egui::Style| {
+            egui::containers::menu::menu_style(style);
+            style.spacing.button_padding = vec2(10.0, 5.0);
+            style.spacing.item_spacing.x = 0.0;
+        };
+        egui::MenuBar::new().style(roomy).ui(ui, |ui| {
             ui.menu_button("File", |ui| {
                 if ui.button(theme::with_icon(Icon::FilePlus2, "New World…")).clicked() {
                     self.open_home(Page::NewMap);
@@ -3500,6 +3508,25 @@ mod tests {
         footer.save(dir.join("brush-footer.png")).unwrap();
     }
 
+    /// The menu bar, the pointer over View, for the eye (MASSIF_SNAPSHOT_DIR);
+    /// and its menus hold their hit as wide as their padding.
+    #[test]
+    fn menu_bar_render() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(3);
+        let view = h.get_by_label("View").rect();
+        assert!(view.width() >= 40.0 && view.height() >= 22.0, "View's hit is {view:?}");
+        h.event(egui::Event::PointerMoved(view.center()));
+        h.run_steps(3);
+        let image = h.render().expect("rendered");
+        let crop = image::imageops::crop_imm(&image, 0, 0, 420, 44).to_image();
+        crop.save(dir.join("menu-bar.png")).unwrap();
+    }
+
     /// Brush Settings' height limits, for the eye (MASSIF_SNAPSHOT_DIR):
     /// the heights of the map read, no limit, a band, outside a band; in the
     /// dark and the light themes.
@@ -5021,6 +5048,123 @@ mod tests {
             let mut out = std::fs::File::create(dir.join(format!("{name}.jpg"))).unwrap();
             image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 86).encode_image(&rgb).unwrap();
         }
+    }
+
+    /// The starter graph's viewport over a small terrain and over a huge
+    /// one (a sample every hundred blocks), for the eye (MASSIF_SNAPSHOT_DIR):
+    /// the land keeps its colours whatever the size.
+    #[test]
+    fn graph_viewport_at_every_size() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        for (name, side) in [("starter", 4096u32), ("starter", 46592), ("archipelago", 4096)] {
+            let mut h = harness(ThemeChoice::Dark);
+            {
+                let app = h.state_mut();
+                app.layout.activate(7); // Graph, on the terrain side
+                let get = |name: &str| app.doc.world.registry.terrain_by_name(name).map_or(0, |t| t.0);
+                let mut graph = match name {
+                    "starter" => massif_core::graph::Graph::starter(get("Grass"), massif_core::TerrainId::ROCK.0, get("Snow"), get("Gravel")),
+                    _ => massif_core::graph::Template::Archipelago.graph(&app.doc.world.registry, app.doc.world.meta.sea_level as f32, side as f32),
+                };
+                graph.size = Some(side);
+                app.doc.world.meta.graph = Some(graph);
+                app.graph.graph_replaced();
+            }
+            wait_for_graph(&mut h);
+            let (fw, fh, full) = h.state_mut().graph.view.render_image([960, 540]).expect("rendered");
+            image::save_buffer(dir.join(format!("graph-render-{name}-{side}.png")), &full, fw, fh, image::ColorType::Rgba8).unwrap();
+            let (w, hgt, rgba) = h.state().graph.view.read_back().expect("the viewport rendered");
+            image::save_buffer(dir.join(format!("graph-viewport-{name}-{side}.png")), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+            // How dark the land is: the mean of the middle of the picture.
+            let (mut sum, mut count) = (0u64, 0u64);
+            for y in hgt / 3..2 * hgt / 3 {
+                for x in w / 3..2 * w / 3 {
+                    let i = ((y * w + x) * 4) as usize;
+                    sum += rgba[i] as u64 + rgba[i + 1] as u64 + rgba[i + 2] as u64;
+                    count += 3;
+                }
+            }
+            eprintln!("{name} {side} blocks: mean of the middle {}", sum / count.max(1));
+        }
+    }
+
+    /// Converting the starter graph over a map wider than deep, a sample
+    /// every few blocks (as on a very large map): every column of every tile
+    /// gets the build's height, the first rows and columns too.
+    #[test]
+    fn converting_leaves_no_column_out() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1600.0, 1000.0))
+            .with_pixels_per_point(1.0)
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_eframe(move |cc| {
+                theme::install(&cc.egui_ctx);
+                MassifApp::for_tests(generate(&GenParams {
+                    tiles_x: 8,
+                    tiles_z: 6,
+                    landform: Landform::Flat,
+                    ..GenParams::default()
+                }))
+            });
+        {
+            let app = h.state_mut();
+            app.layout.activate(7); // Graph, on the terrain side
+            let get = |name: &str| app.doc.world.registry.terrain_by_name(name).map_or(0, |t| t.0);
+            let mut starter = massif_core::graph::Graph::starter(get("Grass"), massif_core::TerrainId::ROCK.0, get("Snow"), get("Gravel"));
+            // MASSIF_GRAPH_SIDE: a square of that many blocks rather than the map.
+            starter.size = std::env::var("MASSIF_GRAPH_SIDE").ok().and_then(|v| v.parse().ok());
+            app.doc.world.meta.graph = Some(starter);
+            app.graph.graph_replaced();
+        }
+        wait_for_graph(&mut h);
+        h.state_mut().graph.draft = Some(360);
+        // MASSIF_GRAPH_OVER: over the map (levels), rather than into its ground.
+        if std::env::var_os("MASSIF_GRAPH_OVER").is_some() {
+            h.state_mut().graph.over = Some(true);
+        }
+        {
+            use egui_kittest::kittest::Queryable;
+            h.get_by_label_contains("Convert to voxels").click();
+        }
+        let started = std::time::Instant::now();
+        while h.state().doc.history.undo_label() != Some("Terrain graph") {
+            assert!(started.elapsed().as_secs() < 120, "the conversion did not finish");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        h.run_steps(5);
+        // Columns left without a height, tile by tile.
+        let ground = h.state().doc.dimension().ground();
+        let mut empty: Vec<(TilePos, usize)> = Vec::new();
+        let mut tiles: Vec<TilePos> = ground.positions().collect();
+        tiles.sort_by_key(|t| (t.z, t.x));
+        let dim = h.state().doc.dimension();
+        let mut spans = Vec::new();
+        for t in &tiles {
+            let tile = ground.view(*t).unwrap();
+            let stack = massif_core::TileStack::new(dim, *t, false).unwrap();
+            let n = (0..128 * 128)
+                .filter(|&i| {
+                    stack.spans(i, &mut spans);
+                    !tile.top.get(i).is_finite() || spans.is_empty()
+                })
+                .count();
+            if n > 0 {
+                empty.push((*t, n));
+            }
+        }
+        eprintln!("levels: {:?}", dim.levels.iter().map(|l| (l.name.clone(), l.len())).collect::<Vec<_>>());
+        eprintln!("{} tiles, those with empty columns: {empty:?}", tiles.len());
+        h.state_mut().layout.activate(0);
+        h.run_steps(20);
+        h.render().unwrap().save(dir.join("converted-map.png")).unwrap();
+        assert!(empty.is_empty(), "columns without a height: {empty:?}");
     }
 
     /// The terrain graph: previews of every node and the viewport, then the

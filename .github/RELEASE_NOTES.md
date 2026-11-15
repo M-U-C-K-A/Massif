@@ -2,6 +2,8 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 
 ## New in 0.5.1
 
+**Fixed.** The terrain generator's viewport no longer turns the land black: looked at from high above, the mist over it came out as 0 × ∞, which the graphics card paints black. A number typed in (the size of a new map, a height, an ore band) counts once it is done, with Enter or by leaving it: typing 1024 no longer stopped at 1, jumped to the least value allowed, and grew from there into a map of tens of thousands of blocks. The menus of the top bar (File, Edit, View, Help) take a click over a hit as roomy as a system menu bar's, not just over their word.
+
 ## New in 0.5.0
 
 **Ores, as Minecraft lays them.** The export now lays ores in the rock — Minecraft adds none to the map's finished chunks — following the game's own veins and heights since 1.18, or those of older versions. **Edit ▸ Ores** shows the map cut through with the ores exactly where they will be and a candle for each band of each ore: drag its ends, its body or its side to move the heights where veins start, where they are the most common and how large they are; beside it, the ore expected at each height in blocks, on a log scale or as a share of the ground. Saved with the map; the export can leave them out.

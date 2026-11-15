@@ -535,9 +535,12 @@ pub enum Part<'a> {
 
 /// `ui.add(drag)`, but a number clicked to be typed in gets the caret at
 /// its end instead of being selected whole: a digit typed adds to it rather
-/// than replacing it (a double-click, or ⌘A, still selects it all).
+/// than replacing it (a double-click, or ⌘A, still selects it all). What is
+/// typed counts once it is done (Enter, or the number left): typing 1024
+/// does not stop at 1, below the least the number may be, and become that
+/// least before the rest is typed.
 pub fn drag(ui: &mut Ui, drag: egui::DragValue<'_>) -> Response {
-    let response = ui.add(drag);
+    let response = ui.add(drag.update_while_editing(false));
     let id = response.id;
     let key = id.with("caret since");
     if ui.memory(|m| m.has_focus(id)) {
@@ -691,6 +694,32 @@ mod tests {
         h.key_press(egui::Key::Enter);
         h.run();
         assert_eq!(*h.state(), 635, "the digit went after the number");
+    }
+
+    /// A number with a least value typed in from scratch: nothing changes
+    /// while it is typed, and what was typed is what it becomes (the size
+    /// of a new map once jumped to 128 at the first digit).
+    #[test]
+    fn typing_a_number_waits_for_the_end() {
+        let mut h = Harness::builder().with_size(vec2(240.0, 80.0)).with_accessibility_check(false).build_ui_state(
+            |ui, value: &mut i32| {
+                drag(ui, egui::DragValue::new(value).range(128..=65536));
+            },
+            2048,
+        );
+        h.run();
+        h.get_by_role(egui::accesskit::Role::SpinButton).click();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.run();
+        h.get_by_role(egui::accesskit::Role::SpinButton).type_text("1");
+        h.run();
+        assert_eq!(*h.state(), 2048, "nothing changes while typing");
+        h.get_by_role(egui::accesskit::Role::SpinButton).type_text("024");
+        h.run();
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(*h.state(), 1024);
     }
 
     /// The same in a field: the caret where the number was clicked.

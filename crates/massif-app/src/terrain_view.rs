@@ -752,14 +752,19 @@ fn dither(p: vec2<f32>) -> f32 {
 fn optical_depth(d: vec3<f32>, dist: f32) -> f32 {
     var tau = u.fog.w * dist;
     let h = max(u.fog.y, 1.0);
-    let at_eye = u.fog.z * exp(-(u.eye.y - u.fog.x) / h);
+    // The mist at the eye and at the far end, the integral written as their
+    // difference rather than as the first times its growth along the ray:
+    // looking down from high above, the first is nothing and the growth
+    // overflows, and 0 × ∞ painted the land black.
+    let at_eye = u.fog.z * exp(min(-(u.eye.y - u.fog.x) / h, 60.0));
+    let at_end = u.fog.z * exp(min(-(u.eye.y + d.y * dist - u.fog.x) / h, 60.0));
     let k = d.y / h;
     if (abs(k * dist) < 1e-4) {
         tau += at_eye * dist;
     } else {
-        tau += at_eye * (1.0 - exp(-k * dist)) / k;
+        tau += (at_eye - at_end) / k;
     }
-    return tau;
+    return max(tau, 0.0);
 }
 
 /// The colour of the air toward `d`: the sky low over the horizon that
