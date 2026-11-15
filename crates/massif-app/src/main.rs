@@ -1,6 +1,7 @@
 //! Massif: a map editor for Minecraft worlds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod access;
 mod app;
 mod blocks;
 mod brushes;

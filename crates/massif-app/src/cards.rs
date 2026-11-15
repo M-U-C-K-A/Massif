@@ -111,13 +111,18 @@ pub(crate) fn show(ui: &mut Ui, card: &Card) {
     ui.spacing_mut().item_spacing.y = 4.0;
     if let Some(preview) = &card.preview {
         let (rect, _) = ui.allocate_exact_size(PREVIEW, Sense::hover());
-        let t = loop_time(ui);
+        // Reduce motion (Settings ▸ Accessibility): one still frame, the
+        // tool's work done.
+        let still = crate::theme::reduce_motion(ui.ctx());
+        let t = if still { STILL } else { loop_time(ui) };
         match preview {
             Preview::Demo(demo) => demo.paint(ui, rect, t),
             Preview::Relief { key, brush } => relief::paint(ui, rect, key, brush, t),
         }
         ui.painter().rect_stroke(rect, 3, Stroke::new(1.0, pal.border), StrokeKind::Inside);
-        ui.ctx().request_repaint();
+        if !still {
+            ui.ctx().request_repaint();
+        }
         ui.add_space(6.0);
     }
     ui.horizontal(|ui| {
@@ -277,6 +282,9 @@ const W: usize = 128;
 const H: usize = 64;
 /// Dabs along a stroke.
 const SAMPLES: usize = 48;
+/// The moment of the loop shown still (Reduce motion): the action done, the
+/// cursor gone, before the fade.
+const STILL: f64 = ACTION + 0.08;
 /// The action takes this share of the loop; then its result is held.
 const ACTION: f64 = 0.78;
 

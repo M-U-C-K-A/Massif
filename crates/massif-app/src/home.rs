@@ -17,8 +17,12 @@ use std::sync::Arc;
 
 /// Width of the sidebar.
 const SIDEBAR: f32 = 268.0;
-/// Side of the preview of a new map.
-const PREVIEW: f32 = 184.0;
+/// Between the settings of a new map and its preview.
+const GUTTER: f32 = 20.0;
+/// The least room the settings take beside the preview.
+const MIN_SETTINGS: f32 = 430.0;
+/// The height of a row of settings: their controls (input and button groups).
+const ROW_H: f32 = 30.0;
 
 /// What the middle of the home screen shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +46,9 @@ pub struct NewMap {
     /// The picture of the template, and the one being drawn.
     template_preview: Option<(Template, TextureHandle)>,
     drawing: Option<(Template, std::sync::mpsc::Receiver<egui::ColorImage>)>,
+    /// How tall the settings were last laid out: the preview beside them is
+    /// as tall.
+    rows: f32,
 }
 
 impl NewMap {
@@ -61,6 +68,7 @@ impl NewMap {
             preview: None,
             template_preview: None,
             drawing: None,
+            rows: 6.0 * (ROW_H + 14.0) - 14.0,
         }
     }
 
@@ -90,6 +98,8 @@ pub struct HeightmapPick {
     pub map: Arc<Heightmap>,
     pub how: FromHeightmap,
     pub picture: Option<TextureHandle>,
+    /// How tall its settings were last laid out (see [`NewMap`]).
+    rows: f32,
 }
 
 impl HeightmapPick {
@@ -116,6 +126,7 @@ impl HeightmapPick {
                 max_y: massif_core::generate::VANILLA_LIMITS.1,
             },
             picture: Some(picture),
+            rows: 5.0 * (ROW_H + 14.0) - 14.0,
         })
     }
 }
@@ -156,7 +167,8 @@ const FRAME_SECS: f64 = 0.9;
 /// The picture behind the home screen, dithered for one size and theme: a
 /// few frames of it, each dithered a little differently, shown in turn.
 struct Backdrop {
-    key: (usize, usize, bool, [i32; 4]),
+    /// Columns, rows, dark, high contrast, where the words are.
+    key: (usize, usize, bool, bool, [i32; 4]),
     frames: Vec<TextureHandle>,
     pitch: usize,
 }
@@ -184,6 +196,9 @@ pub struct Home {
     /// Whether the picture's dither moves on (the settings).
     pub animate: bool,
     logo: Option<TextureHandle>,
+    /// How tall what is written in the middle was last laid out: lifted
+    /// when it would not fit under the top margin.
+    content_height: f32,
 }
 
 impl Home {
@@ -199,6 +214,7 @@ impl Home {
             picture: None,
             animate: true,
             logo: None,
+            content_height: 0.0,
         }
     }
 
@@ -257,7 +273,7 @@ impl Home {
             });
         }
 
-        self.paint_backdrop(ui, main, column_rect(main));
+        self.paint_backdrop(ui, main, column_rect(main, self.content_height));
         ui.painter().rect_filled(sidebar, 0, sidebar_fill(&pal));
         ui.painter().vline(sidebar.max.x - 0.5, sidebar.y_range(), Stroke::new(1.0, pal.border));
 
@@ -275,8 +291,10 @@ impl Home {
         if !pictures::BACKDROPS.is_empty() {
             let at = Rect::from_center_size(pos2(main.right() - 26.0, main.bottom() - 26.0), vec2(28.0, 28.0));
             let response = ui.interact(at, egui::Id::unique("home another picture"), Sense::click()).on_hover_text("Another picture");
-            let color = if response.hovered() { pal.text } else { theme::mix(pal.weak, pal.text, 0.2) };
-            ui.painter().text(at.center(), Align2::CENTER_CENTER, theme::glyph(Icon::Images), FontId::proportional(15.0), color);
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Another picture"));
+            let color = if response.hovered() { pal.text } else { art_weak(&pal) };
+            let glyph = ui.painter().layout_no_wrap(theme::glyph(Icon::Images).to_string(), FontId::proportional(15.0), color);
+            paint_on_art(ui.painter(), at.center() - glyph.size() / 2.0, glyph, &pal, None);
             if response.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
@@ -374,7 +392,7 @@ impl Home {
             });
         ui.with_layout(egui::Layout::bottom_up(Align::Min), |ui| {
             ui.add_space(12.0);
-            if nav(ui, Icon::Settings, "Settings", false).on_hover_text("Theme and accent colour (⌘,)").clicked() {
+            if nav(ui, Icon::Settings, "Settings", false).on_hover_text("Appearance, accessibility, typeface, sounds… (⌘,)").clicked() {
                 *action = Some(HomeAction::Settings);
             }
             if let Some(name) = &self.back_to
@@ -389,8 +407,8 @@ impl Home {
 
     fn main(&mut self, ui: &mut Ui, area: Rect, action: &mut Option<HomeAction>) {
         let pal = Palette::of(ui);
-        let width = column_rect(area).width();
-        let column = column_rect(area);
+        let column = column_rect(area, self.content_height);
+        let width = column.width();
         let mut ui = ui.new_child(UiBuilder::new().id_salt("home column").max_rect(column).layout(egui::Layout::top_down(Align::Center)));
         let ui = &mut ui;
         if let Some(logo) = &self.logo {
@@ -401,9 +419,9 @@ impl Home {
             Page::NewMap => ("What will you build?", "A new map: its size and its land, then make it."),
             Page::FromHeightmap => ("A map from a height map", "A greyscale picture from Gaea, World Machine or an image editor."),
         };
-        ui.label(RichText::new(title).size(28.0).medium().color(pal.text));
+        art_label(ui, RichText::new(title).size(28.0).medium().color(pal.text));
         ui.add_space(2.0);
-        ui.label(RichText::new(subtitle).size(13.0).color(pal.weak));
+        art_label(ui, RichText::new(subtitle).size(13.0).color(art_weak(&pal)));
         ui.add_space(22.0);
         // Laid on the backdrop itself, not in a card.
         ui.allocate_ui_with_layout(vec2(width - 34.0, 0.0), egui::Layout::top_down(Align::Min), |ui| {
@@ -414,10 +432,10 @@ impl Home {
             }
         });
         ui.add_space(14.0);
-        let links: [(Icon, &str, HomeAction); 3] = [
-            (Icon::FolderOpen, "Open a map", HomeAction::Open),
-            (Icon::Import, "Import from WorldPainter", HomeAction::Import),
-            (Icon::ImageUp, "From a height map", HomeAction::PickHeightmap),
+        let links: [(Icon, &str, &str, HomeAction); 3] = [
+            (Icon::FolderOpen, "Open a map", "A Massif map (.massif)", HomeAction::Open),
+            (Icon::Import, "Import from WorldPainter", "A WorldPainter world (.world)", HomeAction::Import),
+            (Icon::ImageUp, "From a height map", "A greyscale picture: 16-bit PNG, JPEG, .r16 or .r32", HomeAction::PickHeightmap),
         ];
         if let Some(a) = link_row(ui, &links) {
             if matches!(a, HomeAction::PickHeightmap) {
@@ -426,123 +444,125 @@ impl Home {
             *action = Some(a);
         }
         ui.add_space(6.0);
-        ui.label(RichText::new("or drop a .massif, a .world or a height map on the window").size(11.5).color(pal.weak));
+        art_label(ui, RichText::new("or drop a .massif, a .world or a height map on the window").size(11.5).color(art_weak(&pal)));
+        self.content_height = ui.min_rect().height();
     }
 
     fn new_map_card(&mut self, ui: &mut Ui, action: &mut Option<HomeAction>) {
         let pal = Palette::of(ui);
         let nm = &mut self.new_map;
-        ui.horizontal_top(|ui| {
-            let left = (ui.available_width() - PREVIEW - 18.0).max(260.0);
-            ui.vertical(|ui| {
-                ui.set_width(left);
-                ui.add(
-                    egui::TextEdit::singleline(&mut nm.params.name)
-                        .hint_text("Name your map")
-                        .font(FontId::proportional(17.0))
-                        .frame(egui::Frame::NONE)
-                        .desired_width(f32::INFINITY),
+        name_field(ui, &mut nm.params.name);
+        // The settings on the left; beside them, the preview, as tall as
+        // they are.
+        let side = picture_side(ui.available_width(), nm.rows);
+        let card = ui.available_rect_before_wrap();
+        let left = if side > 0.0 { card.width() - side - GUTTER } else { card.width() };
+        let mut rows: Option<Rect> = None;
+        ui.vertical(|ui| {
+            ui.set_width(left);
+            let third = ((left - 76.0 - 12.0) / 3.0).floor();
+            let mut row = |ui: &mut Ui, name: &str, add: &mut dyn FnMut(&mut Ui)| {
+                let r = setting(ui, name, add);
+                rows = Some(rows.map_or(r, |all| all.union(r)));
+            };
+            row(ui, "Size", &mut |ui| {
+                input_group(
+                    ui,
+                    "home size",
+                    &mut [Part::Int(&mut nm.width, 128..=65536, 64.0), Part::Text("×"), Part::Int(&mut nm.depth, 128..=65536, 64.0), Part::Text("blocks")],
                 );
-                ui.add_space(8.0);
-                let r = ui.available_rect_before_wrap();
-                ui.painter().hline(r.x_range(), r.top(), Stroke::new(1.0, pal.border));
-                ui.add_space(12.0);
-                let third = ((left - 76.0 - 12.0) / 3.0).floor();
-                setting(ui, "Size", |ui| {
-                    input_group(
-                        ui,
-                        "home size",
-                        &mut [Part::Int(&mut nm.width, 128..=65536, 64.0), Part::Text("×"), Part::Int(&mut nm.depth, 128..=65536, 64.0), Part::Text("blocks")],
-                    );
-                    // Whole tiles only.
-                    nm.width = (nm.width + 127) / 128 * 128;
-                    nm.depth = (nm.depth + 127) / 128 * 128;
-                });
-                setting(ui, "Height", |ui| limits(ui, &mut nm.params.min_y, &mut nm.params.max_y));
-                setting(ui, "Land", |ui| {
-                    let shown = nm.template.map_or(nm.params.landform.label(), |t| t.label());
-                    crate::widgets::combo("home landform").selected_text(shown).width(third * 1.4).height(360.0).show_ui(ui, |ui| {
-                        for l in Landform::ALL {
-                            if ui.selectable_label(nm.template.is_none() && nm.params.landform == l, l.label()).clicked() {
-                                nm.params.landform = l;
-                                nm.template = None;
-                            }
-                        }
-                        ui.separator();
-                        ui.label(RichText::new("From the terrain generator").size(11.0).color(pal.weak));
-                        for t in Template::ALL.into_iter().filter(|t| !t.reads_the_map()) {
-                            if ui.selectable_label(nm.template == Some(t), t.label()).on_hover_text(t.description()).clicked() {
-                                nm.template = Some(t);
-                            }
-                        }
-                    });
-                    let mut automatic = nm.params.surface.is_none();
-                    let reg = &nm.registry;
-                    let shown = match nm.params.surface {
-                        None => "Automatic surface".to_owned(),
-                        Some(t) => reg.terrain(t).name.clone(),
-                    };
-                    let mut chosen = nm.params.surface;
-                    crate::widgets::combo("home surface").selected_text(shown).width(third * 1.4).height(320.0).show_ui(ui, |ui| {
-                        if ui
-                            .selectable_label(automatic, "Automatic surface")
-                            .on_hover_text("Grass, sand, rock and snow by height and slope")
-                            .clicked()
-                        {
-                            automatic = true;
-                            chosen = None;
-                        }
-                        for (i, t) in reg.terrains.iter().enumerate() {
-                            let id = massif_core::TerrainId(i as u16);
-                            if ui.selectable_label(chosen == Some(id), &t.name).clicked() {
-                                chosen = Some(id);
-                            }
-                        }
-                    });
-                    nm.params.surface = chosen;
-                });
-                let hilly = nm.params.landform != Landform::Flat && nm.template.is_none();
-                let (bottom, top) = massif_core::generate::build_limits(nm.params.min_y, nm.params.max_y);
-                // Taller worlds take taller mountains.
-                let most = if top > 320 { 1500.0 } else { 400.0 };
-                setting(ui, "Relief", |ui| {
-                    ui.add_enabled(hilly, Field::new(&mut nm.params.relief, 0.0..=most).text("Height").suffix("%").max_decimals(0).width(third));
-                    ui.add_enabled(hilly, Field::new(&mut nm.params.feature_size, 10.0..=1000.0).text("Features").suffix("%").max_decimals(0).width(third));
-                    let mut level = nm.params.level.unwrap_or(if hilly { nm.params.sea_level as f32 } else { nm.params.flat_height });
-                    let free = nm.template.is_none();
-                    if ui.add_enabled(free, Field::new(&mut level, (bottom + 1) as f32..=(top - 2) as f32).text("Ground").max_decimals(0).width(third)).changed() {
-                        nm.params.level = Some(level);
-                        nm.params.flat_height = level;
-                    }
-                });
-                setting(ui, "Water", |ui| {
-                    ui.add(Field::new(&mut nm.params.sea_level, bottom + 1..=top - 2).text("Level").width(third));
-                    let lava = nm.params.lava;
-                    match button_group(ui, "home fluid", &["Water", "Lava"], &[!lava, lava]) {
-                        Some(0) => nm.params.lava = false,
-                        Some(_) => nm.params.lava = true,
-                        None => {}
-                    }
-                    if !nm.params.lava {
-                        let beaches = nm.params.beaches && nm.params.surface.is_none();
-                        if button_group(ui, "home beaches", &["Beaches"], &[beaches]).is_some() {
-                            nm.params.beaches = !nm.params.beaches;
-                        }
-                    }
-                });
-                setting(ui, "Seed", |ui| {
-                    let (_, dice) = input_group(ui, "home seed", &mut [Part::Edit(&mut nm.seed, third * 1.4), Part::Button(Icon::Dices, "Another seed")]);
-                    if dice.is_some() {
-                        nm.seed = random_seed().to_string();
-                    }
-                });
+                // Whole tiles only.
+                nm.width = (nm.width + 127) / 128 * 128;
+                nm.depth = (nm.depth + 127) / 128 * 128;
             });
-            ui.add_space(18.0);
-            ui.vertical(|ui| preview(ui, nm));
+            row(ui, "Height", &mut |ui| limits(ui, &mut nm.params.min_y, &mut nm.params.max_y));
+            row(ui, "Land", &mut |ui| {
+                let shown = nm.template.map_or(nm.params.landform.label(), |t| t.label());
+                crate::widgets::combo("home landform").selected_text(shown).width(third * 1.4).height(360.0).show_ui(ui, |ui| {
+                    for l in Landform::ALL {
+                        if ui.selectable_label(nm.template.is_none() && nm.params.landform == l, l.label()).clicked() {
+                            nm.params.landform = l;
+                            nm.template = None;
+                        }
+                    }
+                    ui.separator();
+                    ui.label(RichText::new("From the terrain generator").size(11.0).color(pal.weak));
+                    for t in Template::ALL.into_iter().filter(|t| !t.reads_the_map()) {
+                        if ui.selectable_label(nm.template == Some(t), t.label()).on_hover_text(t.description()).clicked() {
+                            nm.template = Some(t);
+                        }
+                    }
+                });
+                let mut automatic = nm.params.surface.is_none();
+                let reg = &nm.registry;
+                let shown = match nm.params.surface {
+                    None => "Automatic surface".to_owned(),
+                    Some(t) => reg.terrain(t).name.clone(),
+                };
+                let mut chosen = nm.params.surface;
+                crate::widgets::combo("home surface").selected_text(shown).width(third * 1.4).height(320.0).show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(automatic, "Automatic surface")
+                        .on_hover_text("Grass, sand, rock and snow by height and slope")
+                        .clicked()
+                    {
+                        automatic = true;
+                        chosen = None;
+                    }
+                    for (i, t) in reg.terrains.iter().enumerate() {
+                        let id = massif_core::TerrainId(i as u16);
+                        if ui.selectable_label(chosen == Some(id), &t.name).clicked() {
+                            chosen = Some(id);
+                        }
+                    }
+                });
+                nm.params.surface = chosen;
+            });
+            let hilly = nm.params.landform != Landform::Flat && nm.template.is_none();
+            let (bottom, top) = massif_core::generate::build_limits(nm.params.min_y, nm.params.max_y);
+            // Taller worlds take taller mountains.
+            let most = if top > 320 { 1500.0 } else { 400.0 };
+            row(ui, "Relief", &mut |ui| {
+                ui.add_enabled(hilly, Field::new(&mut nm.params.relief, 0.0..=most).text("Height").suffix("%").max_decimals(0).width(third));
+                ui.add_enabled(hilly, Field::new(&mut nm.params.feature_size, 10.0..=1000.0).text("Features").suffix("%").max_decimals(0).width(third));
+                let mut level = nm.params.level.unwrap_or(if hilly { nm.params.sea_level as f32 } else { nm.params.flat_height });
+                let free = nm.template.is_none();
+                if ui.add_enabled(free, Field::new(&mut level, (bottom + 1) as f32..=(top - 2) as f32).text("Ground").max_decimals(0).width(third)).changed() {
+                    nm.params.level = Some(level);
+                    nm.params.flat_height = level;
+                }
+            });
+            row(ui, "Water", &mut |ui| {
+                ui.add(Field::new(&mut nm.params.sea_level, bottom + 1..=top - 2).text("Level").width(third));
+                let lava = nm.params.lava;
+                match button_group(ui, "home fluid", &["Water", "Lava"], &[!lava, lava]) {
+                    Some(0) => nm.params.lava = false,
+                    Some(_) => nm.params.lava = true,
+                    None => {}
+                }
+                if !nm.params.lava {
+                    let beaches = nm.params.beaches && nm.params.surface.is_none();
+                    if button_group(ui, "home beaches", &["Beaches"], &[beaches]).is_some() {
+                        nm.params.beaches = !nm.params.beaches;
+                    }
+                }
+            });
+            row(ui, "Seed", &mut |ui| {
+                let (_, dice) = input_group(ui, "home seed", &mut [Part::Edit(&mut nm.seed, third * 1.4), Part::Button(Icon::Dices, "Another seed")]);
+                if dice.is_some() {
+                    nm.seed = random_seed().to_string();
+                }
+            });
         });
-        ui.add_space(12.0);
-        let r = ui.available_rect_before_wrap();
-        ui.painter().hline(r.x_range(), r.top(), Stroke::new(1.0, pal.border));
+        if let Some(rows) = rows {
+            nm.rows = rows.height();
+            let side = side.min(rows.height());
+            if side > 0.0 {
+                preview(ui, nm, Rect::from_min_size(pos2(card.right() - side, rows.top()), vec2(side, side)));
+            }
+        }
+        ui.add_space(4.0);
+        hairline(ui);
         ui.add_space(10.0);
         let params = nm.params();
         ui.horizontal(|ui| {
@@ -551,13 +571,14 @@ impl Home {
             let across = if minutes < 1.0 { "under a minute across".to_owned() } else { format!("{minutes:.0} min. across on foot") };
             let (bottom, top) = massif_core::generate::build_limits(params.min_y, params.max_y);
             let pack = if (bottom, top) != massif_core::generate::VANILLA_LIMITS { " (with a data pack)" } else { "" };
-            ui.label(
+            art_label(
+                ui,
                 RichText::new(format!(
                     "Minecraft Java 1.18+  ·  Y {bottom} to {top}{pack}  ·  {across}  ·  about {}",
                     crate::panels::human((tiles * 12_000) as u64)
                 ))
                 .size(11.5)
-                .color(pal.weak),
+                .color(art_weak(&pal)),
             );
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                 let create = primary(ui, "Create map", "⏎").on_hover_text("Enter");
@@ -576,70 +597,83 @@ impl Home {
             let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 190.0), Sense::click());
             response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Choose a height map"));
             let lit = response.hovered();
-            dashed_rect(ui.painter(), rect.shrink(1.0), if lit { pal.accent } else { theme::mix(pal.border, pal.text, 0.15) });
+            dashed_rect(ui.painter(), rect.shrink(1.0), if lit { pal.accent } else { theme::mix(pal.border, pal.text, if pal.high { 0.5 } else { 0.25 }) });
             if lit {
                 ui.painter().rect_filled(rect.shrink(2.0), 12, pal.accent.gamma_multiply(0.06));
                 ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
             }
             let c = rect.center();
-            ui.painter().text(c - vec2(0.0, 28.0), Align2::CENTER_CENTER, theme::glyph(Icon::ImageUp).to_string(), FontId::proportional(28.0), if lit { pal.accent } else { pal.weak });
-            ui.painter().text(c + vec2(0.0, 10.0), Align2::CENTER_CENTER, "Choose a height map", FontId::proportional(15.0), pal.text);
-            ui.painter().text(c + vec2(0.0, 32.0), Align2::CENTER_CENTER, "16-bit PNG, JPEG, .r16 or .r32 — or drop one here", FontId::proportional(12.0), pal.weak);
+            let painter = ui.painter();
+            let line = |text: String, size: f32, ink: Color32, y: f32| {
+                let g = painter.layout_no_wrap(text, FontId::proportional(size), ink);
+                paint_on_art(painter, pos2(c.x - g.size().x / 2.0, c.y + y - g.size().y / 2.0), g, &pal, None);
+            };
+            line(theme::glyph(Icon::ImageUp).to_string(), 28.0, if lit { pal.accent } else { art_weak(&pal) }, -28.0);
+            line("Choose a height map".to_owned(), 15.0, pal.text, 10.0);
+            line("16-bit PNG, JPEG, .r16 or .r32 — or drop one here".to_owned(), 12.0, art_weak(&pal), 32.0);
             if response.clicked() {
                 *action = Some(HomeAction::PickHeightmap);
             }
             return;
         };
-        ui.horizontal_top(|ui| {
-            if let Some(t) = &pick.picture {
-                let size = t.size_vec2();
-                let k = (PREVIEW / size.x).min(PREVIEW / size.y);
-                let (rect, _) = ui.allocate_exact_size(vec2(PREVIEW, PREVIEW), Sense::hover());
-                let shown = Rect::from_center_size(rect.center(), size * k);
-                ui.painter().rect_filled(rect, 10, pal.canvas);
-                ui.painter().image(t.id(), shown, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-            }
-            ui.add_space(18.0);
-            ui.vertical(|ui| {
-                let h = &mut pick.how;
-                ui.add(
-                    egui::TextEdit::singleline(&mut h.name)
-                        .hint_text("Name your map")
-                        .font(FontId::proportional(17.0))
-                        .frame(egui::Frame::NONE)
-                        .desired_width(f32::INFINITY),
-                );
-                ui.label(RichText::new(pick.path.display().to_string()).size(11.0).color(pal.weak));
-                ui.add_space(10.0);
-                let w = ((ui.available_width() - 76.0 - 8.0) / 2.0).floor();
-                setting(ui, "Height", |ui| limits(ui, &mut h.min_y, &mut h.max_y));
-                let (bottom, top) = massif_core::generate::build_limits(h.min_y, h.max_y);
-                setting(ui, "Scale", |ui| {
-                    ui.add(Field::new(&mut h.scale, 0.25..=16.0).logarithmic(true).text("Blocks a pixel").max_decimals(2).width(w * 2.0 + 4.0));
-                });
-                setting(ui, "Heights", |ui| {
-                    ui.add(Field::new(&mut h.low, bottom as f32..=(top - 1) as f32).text("Black is Y").max_decimals(0).width(w));
-                    ui.add(Field::new(&mut h.high, bottom as f32..=(top - 1) as f32).text("White is Y").max_decimals(0).width(w));
-                });
-                setting(ui, "Water", |ui| {
-                    ui.add(Field::new(&mut h.sea_level, bottom..=top - 1).text("Level").width(w));
-                });
-                ui.add_space(4.0);
-                if ui.link(RichText::new("Choose another…").size(12.0)).clicked() {
+        name_field(ui, &mut pick.how.name);
+        let side = picture_side(ui.available_width(), pick.rows);
+        let card = ui.available_rect_before_wrap();
+        let left = if side > 0.0 { card.width() - side - GUTTER } else { card.width() };
+        let mut rows: Option<Rect> = None;
+        ui.vertical(|ui| {
+            ui.set_width(left);
+            let w = ((left - 76.0 - 8.0) / 2.0).floor();
+            let mut row = |ui: &mut Ui, name: &str, add: &mut dyn FnMut(&mut Ui)| {
+                let r = setting(ui, name, add);
+                rows = Some(rows.map_or(r, |all| all.union(r)));
+            };
+            let h = &mut pick.how;
+            let file = pick.path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            let file = shorten(&file, 34);
+            row(ui, "File", &mut |ui| {
+                let (_, another) = input_group(ui, "height map file", &mut [Part::Text(&file), Part::Button(Icon::FolderOpen, "Choose another height map")]);
+                if another.is_some() {
                     *action = Some(HomeAction::PickHeightmap);
                 }
             });
+            row(ui, "Height", &mut |ui| limits(ui, &mut h.min_y, &mut h.max_y));
+            let (bottom, top) = massif_core::generate::build_limits(h.min_y, h.max_y);
+            row(ui, "Scale", &mut |ui| {
+                ui.add(Field::new(&mut h.scale, 0.25..=16.0).logarithmic(true).text("Blocks a pixel").max_decimals(2).width(w * 2.0 + 6.0));
+            });
+            row(ui, "Heights", &mut |ui| {
+                ui.add(Field::new(&mut h.low, bottom as f32..=(top - 1) as f32).text("Black is Y").max_decimals(0).width(w));
+                ui.add(Field::new(&mut h.high, bottom as f32..=(top - 1) as f32).text("White is Y").max_decimals(0).width(w));
+            });
+            row(ui, "Water", &mut |ui| {
+                ui.add(Field::new(&mut h.sea_level, bottom..=top - 1).text("Level").width(w));
+            });
         });
-        ui.add_space(12.0);
-        let r = ui.available_rect_before_wrap();
-        ui.painter().hline(r.x_range(), r.top(), Stroke::new(1.0, pal.border));
+        if let Some(rows) = rows {
+            pick.rows = rows.height();
+            let side = side.min(rows.height());
+            if side > 0.0
+                && let Some(t) = &pick.picture
+            {
+                let rect = Rect::from_min_size(pos2(card.right() - side, rows.top()), vec2(side, side));
+                let size = t.size_vec2();
+                let k = (side / size.x).min(side / size.y);
+                picture_tile(ui, rect, t.id(), size * k, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)));
+                ui.interact(rect, egui::Id::unique("home height map picture"), Sense::hover())
+                    .on_hover_text(format!("{}\n{} × {} pixels", pick.path.display(), pick.map.width, pick.map.height));
+            }
+        }
+        ui.add_space(4.0);
+        hairline(ui);
         ui.add_space(10.0);
         ui.horizontal(|ui| {
             let (w, d) = (pick.map.width as f32 * pick.how.scale, pick.map.height as f32 * pick.how.scale);
-            ui.label(
+            art_label(
+                ui,
                 RichText::new(format!("{} × {} pixels  →  {w:.0} × {d:.0} blocks, Y {:.0} to {:.0}", pick.map.width, pick.map.height, pick.how.low, pick.how.high))
                     .size(11.5)
-                    .color(pal.weak),
+                    .color(art_weak(&pal)),
             );
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                 let create = primary(ui, "Create map", "⏎").on_hover_text("Enter");
@@ -688,9 +722,10 @@ impl Home {
         let in_cells = |p: egui::Pos2| [((p.x - shown.left()) / cell) as i32, ((p.y - shown.top()) / cell) as i32];
         let ([x0, y0], [x1, y1]) = (in_cells(calm.min), in_cells(calm.max));
         let calm_cells = [x0, y0, x1, y1].map(|v| v.div_euclid(8) * 8);
-        let key = (cols, rows, pal.dark, calm_cells);
+        let key = (cols, rows, pal.dark, pal.high, calm_cells);
         if self.backdrop.as_ref().is_none_or(|b| b.key != key || b.pitch != pitch) {
-            let frames = dither_frames(&picture.image, cols, rows, if picture.dawn { Light::Dawn } else if pal.dark { Light::Night } else { Light::Faded }, bg, calm_cells)
+            let light = if picture.dawn { Light::Dawn } else if pal.dark { Light::Night } else { Light::Faded };
+            let frames = dither_frames(&picture.image, cols, rows, light, bg, calm_cells, pal.high)
                 .into_iter()
                 .enumerate()
                 .map(|(k, image)| ui.ctx().load_texture(format!("home backdrop {k}"), image, egui::TextureOptions::NEAREST))
@@ -708,11 +743,107 @@ impl Home {
     }
 }
 
-/// Where the settings of a new map are written in `area`.
-fn column_rect(area: Rect) -> Rect {
+/// Where what is written in the middle of `area` goes: `content` tall (as
+/// last laid out), lifted when it would not fit under the top margin.
+fn column_rect(area: Rect, content: f32) -> Rect {
     let width = (area.width() - 96.0).clamp(420.0, 780.0);
-    let top = area.top() + (area.height() * 0.12).max(44.0);
-    Rect::from_min_max(pos2(area.center().x - width / 2.0, top), pos2(area.center().x + width / 2.0, area.bottom() - 16.0))
+    let mut top = (area.height() * 0.12).max(44.0);
+    if content > 0.0 {
+        top = top.min(area.height() - 16.0 - content).max(16.0);
+    }
+    Rect::from_min_max(pos2(area.center().x - width / 2.0, area.top() + top), pos2(area.center().x + width / 2.0, area.bottom() - 16.0))
+}
+
+/// The ink of muted words written on the picture: stronger than muted text
+/// elsewhere, as the picture shows around them.
+fn art_weak(pal: &Palette) -> Color32 {
+    if pal.high { pal.weak } else { theme::mix(pal.weak, pal.text, 0.4) }
+}
+
+/// `galley` at `at`, written straight on the picture: a halo of the page's
+/// colour around its letters, so that it reads over any part of the picture
+/// — in `ink`, or in its own colours.
+fn paint_on_art(painter: &egui::Painter, at: egui::Pos2, galley: Arc<egui::Galley>, pal: &Palette, ink: Option<Color32>) {
+    let halo = backdrop_fill(pal);
+    let rings: [(f32, f32); 2] = if pal.high { [(2.2, 0.55), (1.2, 0.95)] } else { [(2.0, 0.16), (1.1, 0.5)] };
+    for (r, alpha) in rings {
+        for k in 0..12 {
+            let a = k as f32 * std::f32::consts::TAU / 12.0;
+            painter.galley_with_override_text_color(at + vec2(a.cos(), a.sin()) * r, galley.clone(), halo.gamma_multiply(alpha));
+        }
+    }
+    match ink {
+        Some(ink) => painter.galley_with_override_text_color(at, galley, ink),
+        None => painter.galley(at, galley, pal.text),
+    }
+}
+
+/// Words written straight on the picture (see [`paint_on_art`]).
+fn art_label(ui: &mut Ui, text: RichText) -> Response {
+    let pal = Palette::of(ui);
+    let words = text.text().to_owned();
+    let galley = egui::WidgetText::from(text).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body);
+    let (rect, response) = ui.allocate_exact_size(galley.size(), Sense::hover());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &words));
+    paint_on_art(ui.painter(), rect.min, galley, &pal, None);
+    response
+}
+
+/// The name of the new map: large, frameless, a hairline under it across
+/// the card.
+fn name_field(ui: &mut Ui, name: &mut String) {
+    let pal = Palette::of(ui);
+    ui.add(
+        egui::TextEdit::singleline(name)
+            .hint_text(RichText::new("Name your map").color(art_weak(&pal)))
+            .font(FontId::proportional(17.0))
+            .frame(egui::Frame::NONE)
+            .desired_width(f32::INFINITY),
+    );
+    ui.add_space(8.0);
+    hairline(ui);
+    ui.add_space(14.0);
+}
+
+/// A hairline across `ui`, where its cursor is.
+fn hairline(ui: &mut Ui) {
+    let pal = Palette::of(ui);
+    let r = ui.available_rect_before_wrap();
+    let ink = if pal.high { pal.border } else { theme::mix(pal.border, pal.text, 0.12) };
+    ui.painter().hline(r.x_range(), r.top(), Stroke::new(1.0, ink));
+}
+
+/// The side of the picture beside the settings, in a card `width` wide: as
+/// tall as the settings, less when they would not fit beside it, none on a
+/// narrow window.
+fn picture_side(width: f32, rows: f32) -> f32 {
+    let side = rows.min(width - GUTTER - MIN_SETTINGS).floor();
+    if side < 120.0 { 0.0 } else { side }
+}
+
+/// A picture beside the settings: a tile of the well's colour with a line
+/// inside its edge, the picture in its middle at `shown` size (its
+/// proportions kept), `uv` of its texture.
+fn picture_tile(ui: &Ui, rect: Rect, texture: egui::TextureId, shown: egui::Vec2, uv: Rect) {
+    let pal = Palette::of(ui);
+    let r = theme::CARD_RADIUS;
+    let painter = ui.painter();
+    painter.rect_filled(rect, r, pal.well());
+    let image = Rect::from_center_size(rect.center(), shown);
+    painter.add(egui::epaint::RectShape::filled(image, r, Color32::WHITE).with_texture(texture, uv));
+    let edge = if pal.high { pal.control_border() } else if pal.dark { Color32::from_white_alpha(26) } else { Color32::from_black_alpha(34) };
+    painter.rect_stroke(rect, r, Stroke::new(1.0, edge), StrokeKind::Inside);
+}
+
+/// `s`, cut to `n` characters with an ellipsis in its middle.
+fn shorten(s: &str, n: usize) -> String {
+    let count = s.chars().count();
+    if count <= n {
+        return s.to_owned();
+    }
+    let head: String = s.chars().take(n / 2).collect();
+    let tail: String = s.chars().skip(count - (n - n / 2 - 1)).collect();
+    format!("{head}…{tail}")
 }
 
 /// `img` over `cols` × `rows` cells, in frames: covered (its lower part
@@ -731,8 +862,11 @@ enum Light {
     Faded,
 }
 
-fn dither_frames(img: &image::RgbImage, cols: usize, rows: usize, light: Light, bg: Color32, calm: [i32; 4]) -> Vec<egui::ColorImage> {
+fn dither_frames(img: &image::RgbImage, cols: usize, rows: usize, light: Light, bg: Color32, calm: [i32; 4], high: bool) -> Vec<egui::ColorImage> {
     let dark = light == Light::Night;
+    // How much of the picture is taken away under the words: more in high
+    // contrast.
+    let hush = |standard: f32| if high { 0.9 } else { standard };
     use rayon::prelude::*;
     let (iw, ih) = (img.width() as f32, img.height() as f32);
     let scale = (cols as f32 / iw).max(rows as f32 / ih);
@@ -758,16 +892,16 @@ fn dither_frames(img: &image::RgbImage, cols: usize, rows: usize, light: Light, 
             match light {
                 // Night falls from the top: the sky darker than the land.
                 Light::Night => {
-                    let k = (0.46 + 0.42 * smooth(0.0, 0.8, y / rows as f32)) * (1.0 - 0.72 * near);
+                    let k = (0.46 + 0.42 * smooth(0.0, 0.8, y / rows as f32)) * (1.0 - hush(0.72) * near);
                     c.map(|v| v.powf(1.15) * k)
                 }
                 // Dawn: the picture as it is, quieter where the words are.
                 Light::Dawn => {
-                    let k = 0.94 * (1.0 - 0.62 * near);
+                    let k = 0.94 * (1.0 - hush(0.62) * near);
                     [0, 1, 2].map(|j| back[j] + (c[j] - back[j]) * k)
                 }
                 Light::Faded => {
-                    let k = 0.42 * (1.0 - 0.7 * near);
+                    let k = 0.42 * (1.0 - hush(0.7) * near);
                     [0, 1, 2].map(|j| back[j] + (c[j] - back[j]) * k)
                 }
             }
@@ -957,16 +1091,23 @@ fn ago(t: std::time::SystemTime) -> String {
     }
 }
 
-/// A setting of the new map: its name on the left, its controls after.
-fn setting(ui: &mut Ui, name: &str, add: impl FnOnce(&mut Ui)) {
+/// A setting of the new map: its name on the left (written on the
+/// picture), its controls after. Where the row is.
+fn setting(ui: &mut Ui, name: &str, add: &mut dyn FnMut(&mut Ui)) -> Rect {
     let pal = Palette::of(ui);
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
-        // Over a picture: a little brighter than other labels.
-        ui.add_sized([70.0, 24.0], egui::Label::new(RichText::new(name).size(12.5).color(theme::mix(pal.weak, pal.text, 0.45))));
-        add(ui);
-    });
+    let rect = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing = vec2(6.0, 0.0);
+            let (rect, response) = ui.allocate_exact_size(vec2(70.0, ROW_H), Sense::hover());
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, name));
+            let g = ui.painter().layout_no_wrap(name.to_owned(), FontId::proportional(12.5), theme::mix(art_weak(&pal), pal.text, 0.3));
+            paint_on_art(ui.painter(), pos2(rect.left(), rect.center().y - g.size().y / 2.0), g, &pal, None);
+            add(ui);
+        })
+        .response
+        .rect;
     ui.add_space(8.0);
+    rect
 }
 
 /// The build limits of a new map: the top among Minecraft's own and taller
@@ -1005,32 +1146,50 @@ fn primary(ui: &mut Ui, text: &str, key: &str) -> Response {
     response
 }
 
-/// Links in a row, centred: an icon and a name each.
-fn link_row(ui: &mut Ui, links: &[(Icon, &str, HomeAction)]) -> Option<HomeAction> {
+/// Links in a row, centred: an icon and a name each, written on the
+/// picture; hovered, the name underlined and what it opens said.
+fn link_row(ui: &mut Ui, links: &[(Icon, &str, &str, HomeAction)]) -> Option<HomeAction> {
     let pal = Palette::of(ui);
     let font = FontId::proportional(12.5);
-    let gap = 22.0;
-    let galleys: Vec<_> = links
+    let (gap, icon_gap) = (22.0, 6.0);
+    let parts: Vec<_> = links
         .iter()
-        .map(|(icon, name, _)| ui.painter().layout_no_wrap(format!("{}  {name}", theme::glyph(*icon)), font.clone(), pal.weak))
+        .map(|(icon, name, _, _)| {
+            (
+                ui.painter().layout_no_wrap(theme::glyph(*icon).to_string(), font.clone(), pal.weak),
+                ui.painter().layout_no_wrap((*name).to_owned(), font.clone(), pal.text),
+            )
+        })
         .collect();
-    let total: f32 = galleys.iter().map(|g| g.size().x).sum::<f32>() + gap * (galleys.len() - 1) as f32;
+    let widths: Vec<f32> = parts.iter().map(|(i, n)| i.size().x + icon_gap + n.size().x).collect();
+    let total = widths.iter().sum::<f32>() + gap * (links.len() - 1) as f32;
     let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
     let mut x = row.center().x - total / 2.0;
     let mut chosen = None;
-    for (k, ((_, name, act), galley)) in links.iter().zip(galleys).enumerate() {
-        let rect = Rect::from_min_size(pos2(x, row.center().y - galley.size().y / 2.0), galley.size());
-        let response = ui.interact(rect.expand(3.0), egui::Id::unique(("home link", k)), Sense::click()).on_hover_text(*name);
+    for (k, (((_, name, tip, act), (icon, label)), w)) in links.iter().zip(parts).zip(widths).enumerate() {
+        let h = icon.size().y.max(label.size().y);
+        let rect = Rect::from_min_size(pos2(x, row.center().y - h / 2.0), vec2(w, h));
+        let response = ui.interact(rect.expand(4.0), egui::Id::unique(("home link", k)), Sense::click()).on_hover_text(*tip);
         response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Link, true, *name));
-        let ink = if response.hovered() { pal.accent } else { theme::mix(pal.text, pal.weak, 0.45) };
-        ui.painter().galley_with_override_text_color(rect.min, galley, ink);
-        if response.hovered() {
+        let hovered = response.hovered();
+        let painter = ui.painter();
+        let icon_at = pos2(x, row.center().y - icon.size().y / 2.0);
+        let at = pos2(x + icon.size().x + icon_gap, row.center().y - label.size().y / 2.0);
+        let label_size = label.size();
+        paint_on_art(painter, icon_at, icon, &pal, Some(if hovered { pal.accent } else { art_weak(&pal) }));
+        paint_on_art(painter, at, label, &pal, Some(pal.text));
+        if hovered || pal.high {
+            let y = (at.y + label_size.y - 1.5).round() + 0.5;
+            painter.hline(at.x..=at.x + label_size.x, y, Stroke::new(3.0, backdrop_fill(&pal).gamma_multiply(0.6)));
+            painter.hline(at.x..=at.x + label_size.x, y, Stroke::new(1.0, pal.text));
+        }
+        if hovered {
             ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
         }
         if response.clicked() {
             chosen = Some(act.clone());
         }
-        x += rect.width() + gap;
+        x += w + gap;
     }
     chosen
 }
@@ -1055,47 +1214,39 @@ fn dashed_rect(painter: &egui::Painter, rect: Rect, color: Color32) {
     painter.add(egui::Shape::dashed_line(&points, Stroke::new(1.3, color), 6.0, 5.0));
 }
 
-/// The preview of a new map: its colours and relief from above.
-fn preview(ui: &mut Ui, nm: &mut NewMap) {
+/// The preview of a new map in `rect`: its colours and relief from above,
+/// the whole map (not square ones keep their proportions), a cross at its
+/// centre.
+fn preview(ui: &mut Ui, nm: &mut NewMap, rect: Rect) {
     if let Some(t) = nm.template {
-        template_preview(ui, nm, t);
+        template_preview(ui, nm, t, rect);
         return;
     }
-    let pal = Palette::of(ui);
     let params = nm.params();
     let key = format!("{params:?}");
     if nm.preview.as_ref().is_none_or(|(k, _)| *k != key) {
-        let image = preview_image(&params, &nm.registry, 180);
+        let image = preview_image(&params, &nm.registry, 200);
         let texture = ui.ctx().load_texture("new map preview", image, egui::TextureOptions::LINEAR);
         nm.preview = Some((key, texture));
     }
-    let (rect, _) = ui.allocate_exact_size(vec2(PREVIEW, PREVIEW), Sense::hover());
-    let shadow = egui::epaint::Shadow {
-        offset: [0, 10],
-        blur: 34,
-        spread: 0,
-        color: Color32::from_black_alpha(if pal.dark { 170 } else { 60 }),
-    };
-    ui.painter().add(shadow.as_shape(rect, 10));
-    ui.painter().rect_filled(rect, 10, pal.canvas);
     if let Some((_, texture)) = &nm.preview {
-        // Maps that are not square keep their proportions.
         let (w, d) = (nm.width as f32, nm.depth as f32);
-        let k = PREVIEW / w.max(d);
-        let shown = Rect::from_center_size(rect.center(), vec2(w * k, d * k));
+        let k = rect.width() / w.max(d);
         let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(w / w.max(d), d / w.max(d)));
-        ui.painter().add(egui::epaint::RectShape::filled(shown, 10, Color32::WHITE).with_texture(texture.id(), uv));
-        ui.painter().rect_stroke(shown, 10, Stroke::new(1.0, Color32::from_white_alpha(28)), StrokeKind::Inside);
+        picture_tile(ui, rect, texture.id(), vec2(w * k, d * k), uv);
     }
+    // The centre: a cross, outlined to show on snow as on water.
     let c = rect.center();
-    ui.painter().line_segment([c - vec2(5.0, 0.0), c + vec2(5.0, 0.0)], Stroke::new(1.0, Color32::WHITE));
-    ui.painter().line_segment([c - vec2(0.0, 5.0), c + vec2(0.0, 5.0)], Stroke::new(1.0, Color32::WHITE));
-    ui.add_space(4.0);
-    ui.label(RichText::new("The whole map; the cross is its centre.").size(11.0).color(pal.weak));
+    for (width, color) in [(3.0, Color32::from_black_alpha(70)), (1.2, Color32::WHITE)] {
+        ui.painter().line_segment([c - vec2(6.0, 0.0), c + vec2(6.0, 0.0)], Stroke::new(width, color));
+        ui.painter().line_segment([c - vec2(0.0, 6.0), c + vec2(0.0, 6.0)], Stroke::new(width, color));
+    }
+    ui.interact(rect, egui::Id::unique("home map preview"), Sense::hover()).on_hover_text("The whole map, seen from above. The cross marks its centre.");
 }
 
-/// The picture of what a template makes, drawn on another thread.
-fn template_preview(ui: &mut Ui, nm: &mut NewMap, t: Template) {
+/// The picture of what a template makes, drawn on another thread, in
+/// `rect`.
+fn template_preview(ui: &mut Ui, nm: &mut NewMap, t: Template, rect: Rect) {
     let pal = Palette::of(ui);
     if let Some((drawn, rx)) = &nm.drawing {
         match rx.try_recv() {
@@ -1120,7 +1271,7 @@ fn template_preview(ui: &mut Ui, nm: &mut NewMap, t: Template) {
                 x0: -side / 2.0,
                 z0: -side / 2.0,
                 size: side,
-                n: 112,
+                n: 160,
             };
             if let Some(image) = crate::graph_editor::template_picture(t, &reg, sea, &extent, None) {
                 let _ = tx.send(image);
@@ -1131,19 +1282,14 @@ fn template_preview(ui: &mut Ui, nm: &mut NewMap, t: Template) {
             nm.drawing = Some((t, rx));
         }
     }
-    let (rect, _) = ui.allocate_exact_size(vec2(PREVIEW, PREVIEW), Sense::hover());
-    ui.painter().rect_filled(rect, 10, pal.canvas);
     match shown {
-        Some(id) => {
-            ui.painter().add(egui::epaint::RectShape::filled(rect, 10, Color32::WHITE).with_texture(id, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))));
-            ui.painter().rect_stroke(rect, 10, Stroke::new(1.0, Color32::from_white_alpha(28)), StrokeKind::Inside);
-        }
+        Some(id) => picture_tile(ui, rect, id, rect.size(), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))),
         None => {
+            ui.painter().rect(rect, theme::CARD_RADIUS, pal.well(), Stroke::new(1.0, pal.border), StrokeKind::Inside);
             ui.put(Rect::from_center_size(rect.center(), vec2(24.0, 24.0)), egui::Spinner::new());
         }
     }
-    ui.add_space(4.0);
-    ui.label(RichText::new("Made on the Terrain side, from its nodes.").size(11.0).color(pal.weak));
+    ui.interact(rect, egui::Id::unique("home template preview"), Sense::hover()).on_hover_text("What the template's nodes make: the map is made on the Terrain side, from them.");
 }
 
 /// What a new map will look like from above: terrain colours, water and
@@ -1397,7 +1543,7 @@ mod backdrop_tests {
             assert!(dawn.is_some(), "{name}: no dawn");
             for (bytes, light, bg) in [(*bytes, Light::Night, Color32::from_rgb(8, 8, 9)), (dawn.unwrap_or(bytes), Light::Dawn, Color32::from_rgb(250, 250, 250))] {
                 let img = image::load_from_memory(bytes).unwrap_or_else(|e| panic!("{name}: {e}")).to_rgb8();
-                let frames = dither_frames(&img, 96, 64, light, bg, [20, 10, 70, 50]);
+                let frames = dither_frames(&img, 96, 64, light, bg, [20, 10, 70, 50], false);
                 assert_eq!(frames.len(), 4);
                 let colours: std::collections::HashSet<[u8; 4]> = frames[0].pixels.iter().map(|c| c.to_array()).collect();
                 assert!((2..=16).contains(&colours.len()), "{name}: {} colours", colours.len());

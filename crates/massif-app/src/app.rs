@@ -1,5 +1,6 @@
 //! The application: window chrome, workspaces and areas, dialogs, jobs.
 
+use crate::access::Follow;
 use crate::blocks::BlockLibrary;
 use crate::brushes::{BrushLibrary, BrushSource};
 use crate::doc::Document;
@@ -67,12 +68,24 @@ struct Settings {
     developer: bool,
     /// The typeface the interface is set in.
     typeface: theme::Typeface,
+    /// High contrast: stronger text, lines and edges — as the system says,
+    /// or always off, or always on.
+    high_contrast: Follow,
+    /// Less motion: views stop where they are let go, pictures stay still.
+    reduce_motion: Follow,
+    /// The size of the whole interface, 1 as it is drawn (⌘+ and ⌘−
+    /// change it too).
+    ui_scale: f32,
 }
+
+/// The sizes of the interface offered in the settings.
+const UI_SCALES: [f32; 4] = [1.0, 1.1, 1.25, 1.5];
 
 /// A section of the settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrefsSection {
     Appearance,
+    Accessibility,
     Typeface,
     Sounds,
     Notifications,
@@ -97,8 +110,22 @@ impl Default for Settings {
             backdrops_seen: Vec::new(),
             developer: false,
             typeface: theme::Typeface::System,
+            high_contrast: Follow::System,
+            reduce_motion: Follow::System,
+            ui_scale: 1.0,
         }
     }
+}
+
+/// How the accessibility settings were last applied.
+#[derive(Default)]
+struct AccessState {
+    /// What the system asks for, read every few seconds.
+    system: crate::access::System,
+    checked: Option<f64>,
+    /// The size of the interface last set: when egui's differs, ⌘+ or ⌘−
+    /// changed it.
+    zoom: Option<f32>,
 }
 
 /// An action that replaces or closes the document, run once unsaved changes
@@ -246,6 +273,8 @@ pub struct MassifApp {
     allow_close: bool,
     title: String,
     applied_theme: Option<ThemeChoice>,
+    /// The accessibility settings, as applied.
+    access: AccessState,
     /// The window has no native title bar: the top bar hosts the traffic
     /// lights and moves the window.
     unified_titlebar: bool,
@@ -562,6 +591,7 @@ impl MassifApp {
             allow_close: false,
             title: String::new(),
             applied_theme: None,
+            access: AccessState::default(),
             unified_titlebar: false,
         }
     }
@@ -569,7 +599,13 @@ impl MassifApp {
     /// An app for tests: no persistence, a small world.
     #[cfg(test)]
     pub fn for_tests(world: World) -> Self {
-        Self::with_world(world, Layout::default(), ToolState::default(), Settings::default())
+        // The same whatever the Mac running the tests asks for.
+        let settings = Settings {
+            high_contrast: Follow::Off,
+            reduce_motion: Follow::Off,
+            ..Settings::default()
+        };
+        Self::with_world(world, Layout::default(), ToolState::default(), settings)
     }
 
     fn apply_theme(&self, ctx: &egui::Context) {
@@ -578,6 +614,36 @@ impl MassifApp {
             ThemeChoice::Light => egui::ThemePreference::Light,
             ThemeChoice::Dark => egui::ThemePreference::Dark,
         });
+    }
+
+    /// High contrast, reduced motion and the size of the interface, as the
+    /// settings say — and the system, read every few seconds while one of
+    /// them follows it. ⌘+ and ⌘− (egui's own) change the size: kept.
+    fn apply_access(&mut self, ctx: &egui::Context) {
+        let now = ctx.input(|i| i.time);
+        let follows = self.settings.high_contrast == Follow::System || self.settings.reduce_motion == Follow::System;
+        if crate::access::FOLLOWS_SYSTEM && follows && self.access.checked.is_none_or(|t| now - t >= 2.0) {
+            self.access.system = crate::access::system();
+            self.access.checked = Some(now);
+        }
+        let high = self.settings.high_contrast.on(self.access.system.contrast);
+        let still = self.settings.reduce_motion.on(self.access.system.reduce_motion);
+        if (high, still) != (theme::high_contrast(ctx), theme::reduce_motion(ctx)) {
+            theme::set_access(ctx, high, still);
+        }
+        let zoom = ctx.zoom_factor();
+        if let Some(set) = self.access.zoom
+            && (zoom - set).abs() > 1e-3
+        {
+            // Changed with the keyboard.
+            self.settings.ui_scale = zoom;
+            self.access.zoom = Some(zoom);
+        }
+        let scale = self.settings.ui_scale.clamp(0.5, 3.0);
+        if self.access.zoom != Some(scale) {
+            ctx.set_zoom_factor(scale);
+            self.access.zoom = Some(scale);
+        }
     }
 
     /// A task ended: its sound, and the system's notice when it took a while
@@ -673,9 +739,71 @@ impl MassifApp {
                 }
             });
             crate::widgets::row(ui, "Animated home screen", |ui| {
-                crate::widgets::switch(ui, &mut self.settings.animate_backdrop).on_hover_text("The dither of its picture moves on about once a second");
+                let still = theme::reduce_motion(ui.ctx());
+                let mut on = self.settings.animate_backdrop && !still;
+                let tip = if still { "Still: Reduce motion is on (Accessibility)" } else { "The dither of its picture moves on about once a second" };
+                if ui.add_enabled_ui(!still, |ui| crate::widgets::switch(ui, &mut on)).inner.on_hover_text(tip).changed() {
+                    self.settings.animate_backdrop = on;
+                }
             });
         });
+    }
+
+    fn prefs_accessibility(&mut self, ui: &mut Ui) {
+        let pal = Palette::of(ui);
+        Self::prefs_header(
+            ui,
+            "Accessibility",
+            if crate::access::FOLLOWS_SYSTEM {
+                "Massif easier to see and calmer to use. System follows macOS's own settings, in System Settings ▸ Accessibility ▸ Display."
+            } else {
+                "Massif easier to see and calmer to use."
+            },
+        );
+        let system = self.access.system;
+        // A choice that may follow the system: what the system says beside it.
+        let follow = |ui: &mut Ui, id: &str, value: &mut Follow, system_on: bool| {
+            let choices: &[Follow] = if crate::access::FOLLOWS_SYSTEM { &[Follow::System, Follow::Off, Follow::On] } else { &[Follow::Off, Follow::On] };
+            let labels: &[&str] = if crate::access::FOLLOWS_SYSTEM { &["System", "Off", "On"] } else { &["Off", "On"] };
+            let shown = if crate::access::FOLLOWS_SYSTEM || *value != Follow::System { *value } else { Follow::Off };
+            let on: Vec<bool> = choices.iter().map(|c| *c == shown).collect();
+            if let Some(k) = crate::widgets::button_group(ui, id, labels, &on) {
+                *value = choices[k];
+            }
+            if crate::access::FOLLOWS_SYSTEM && *value == Follow::System {
+                ui.label(RichText::new(if system_on { "on in macOS" } else { "off in macOS" }).size(11.5).color(pal.weak));
+            }
+        };
+        crate::widgets::well(ui, |ui| {
+            crate::widgets::row(ui, "High contrast", |ui| follow(ui, "high contrast", &mut self.settings.high_contrast, system.contrast));
+            crate::widgets::row(ui, "Reduce motion", |ui| follow(ui, "reduce motion", &mut self.settings.reduce_motion, system.reduce_motion));
+            crate::widgets::row(ui, "Interface size", |ui| {
+                let labels = UI_SCALES.map(|s| format!("{:.0}%", s * 100.0));
+                let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+                let on = UI_SCALES.map(|s| (s - self.settings.ui_scale).abs() < 0.01);
+                if let Some(k) = crate::widgets::button_group(ui, "interface size", &labels, &on) {
+                    self.settings.ui_scale = UI_SCALES[k];
+                }
+                if !on.contains(&true) {
+                    ui.label(RichText::new(format!("{:.0}% now", self.settings.ui_scale * 100.0)).size(11.5).color(pal.weak));
+                }
+            });
+        });
+        ui.add_space(12.0);
+        for (name, what) in [
+            ("High contrast", "Text black or white, muted text and lines drawn stronger, the accent darkened or lightened until it reads; the home screen's picture calmer behind its words."),
+            ("Reduce motion", "The map and the 3D views stop where they are let go and go straight where they are sent; the home screen's picture and the tools' cards stay still."),
+            ("Interface size", "Everything larger, text and controls alike. ⌘+ and ⌘− change it too, ⌘0 puts it back."),
+        ] {
+            ui.horizontal_top(|ui| {
+                ui.allocate_ui_with_layout(vec2(104.0, 16.0), egui::Layout::left_to_right(Align::Min), |ui| {
+                    ui.set_width(104.0);
+                    ui.label(RichText::new(name).size(12.0).medium());
+                });
+                ui.add(egui::Label::new(RichText::new(what).size(12.0).color(pal.weak)).wrap());
+            });
+            ui.add_space(6.0);
+        }
     }
 
     fn prefs_typeface(&mut self, ui: &mut Ui, ctx: &egui::Context) {
@@ -2215,6 +2343,7 @@ impl MassifApp {
                             ui.spacing_mut().item_spacing.y = 2.0;
                             for (s, icon, label) in [
                                 (PrefsSection::Appearance, Icon::Palette, "Appearance"),
+                                (PrefsSection::Accessibility, Icon::Accessibility, "Accessibility"),
                                 (PrefsSection::Typeface, Icon::Type, "Typeface"),
                                 (PrefsSection::Sounds, Icon::Volume2, "Sounds"),
                                 (PrefsSection::Notifications, Icon::Bell, "Notifications"),
@@ -2248,6 +2377,7 @@ impl MassifApp {
                                 ui.set_width(508.0);
                                 match section {
                                     PrefsSection::Appearance => self.prefs_appearance(ui, ctx),
+                                    PrefsSection::Accessibility => self.prefs_accessibility(ui),
                                     PrefsSection::Typeface => self.prefs_typeface(ui, ctx),
                                     PrefsSection::Sounds => self.prefs_sounds(ui),
                                     PrefsSection::Notifications => self.prefs_notifications(ui),
@@ -2667,6 +2797,7 @@ impl MassifApp {
             self.apply_theme(&ctx);
             self.applied_theme = Some(self.settings.theme);
         }
+        self.apply_access(&ctx);
         crate::sounds::configure(self.settings.sounds, self.settings.volume);
         self.poll_jobs(&ctx);
         let now = ctx.input(|i| i.time);
@@ -3111,7 +3242,8 @@ mod tests {
     fn harness(theme: ThemeChoice) -> egui_kittest::Harness<'static, MassifApp> {
         egui_kittest::Harness::builder()
             .with_size(vec2(1600.0, 1000.0))
-            .with_pixels_per_point(1.0)
+            // MASSIF_SNAPSHOT_PPP=2: as on a Retina screen.
+            .with_pixels_per_point(std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0))
             .with_accessibility_check(false)
             .wgpu()
             .build_eframe(move |cc| {
@@ -6415,6 +6547,60 @@ mod tests {
         image::save_buffer(dir.join("tall-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
     }
 
+    /// Settings ▸ Accessibility: high contrast and reduced motion as the
+    /// settings say (the tests never follow the Mac running them), the size
+    /// of the interface too, and ⌘+ kept; with motion reduced, the map goes
+    /// straight where it is sent. With MASSIF_SNAPSHOT_DIR, the section and
+    /// the home screen in high contrast are saved.
+    #[test]
+    fn accessibility_settings_apply() {
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let mut h = harness(ThemeChoice::Light);
+        h.run_steps(4);
+        assert!(!theme::high_contrast(&h.ctx) && !theme::reduce_motion(&h.ctx));
+        // Reduced motion: a zoom asked for is there at once.
+        h.state_mut().settings.reduce_motion = Follow::On;
+        h.run_steps(2);
+        assert!(theme::reduce_motion(&h.ctx), "motion reduced");
+        let before = h.state().maps.values().next().expect("a map view").zoom;
+        h.state_mut().maps.values_mut().for_each(|m| m.zoom_smoothly(2.0));
+        h.run_steps(1);
+        let after = h.state().maps.values().next().unwrap().zoom;
+        assert!((after / before - 2.0).abs() < 1e-3, "zoomed at once: {before} to {after}");
+        // High contrast.
+        h.state_mut().settings.high_contrast = Follow::On;
+        h.run_steps(2);
+        assert!(theme::high_contrast(&h.ctx), "high contrast");
+        // The size of the interface; ⌘+ changes it, and the change is kept.
+        h.state_mut().settings.ui_scale = 1.25;
+        h.run_steps(2);
+        assert!((h.ctx.zoom_factor() - 1.25).abs() < 1e-3, "zoom {}", h.ctx.zoom_factor());
+        h.event(egui::Event::Key {
+            key: egui::Key::Plus,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::COMMAND,
+        });
+        h.run_steps(3);
+        assert!(h.state().settings.ui_scale > 1.3, "⌘+ kept: {}", h.state().settings.ui_scale);
+        h.state_mut().settings.ui_scale = 1.0;
+        h.run_steps(2);
+        assert!((h.ctx.zoom_factor() - 1.0).abs() < 1e-3);
+        if let Some(dir) = &dir {
+            h.state_mut().dialog = Some(Dialog::Preferences(PrefsSection::Accessibility));
+            h.run_steps(4);
+            h.render().unwrap().save(dir.join("dialog-settings-accessibility-high.png")).unwrap();
+            h.state_mut().dialog = None;
+            h.state_mut().open_home(Page::NewMap);
+            h.run_steps(5);
+            h.render().unwrap().save(dir.join("home-light-high.png")).unwrap();
+            h.state_mut().settings.theme = ThemeChoice::Dark;
+            h.run_steps(5);
+            h.render().unwrap().save(dir.join("home-dark-high.png")).unwrap();
+        }
+    }
+
     /// The new-world and export dialogs, rendered.
     #[test]
     fn dialogs_render() {
@@ -6437,7 +6623,13 @@ mod tests {
         h.state_mut().dialog = Some(Dialog::Preferences(PrefsSection::Appearance));
         h.run_steps(5);
         h.render().unwrap().save(dir.join("dialog-settings.png")).unwrap();
-        for (section, name) in [(PrefsSection::Typeface, "typeface"), (PrefsSection::Sounds, "sounds"), (PrefsSection::Notifications, "notifications"), (PrefsSection::Memory, "memory")] {
+        for (section, name) in [
+            (PrefsSection::Accessibility, "accessibility"),
+            (PrefsSection::Typeface, "typeface"),
+            (PrefsSection::Sounds, "sounds"),
+            (PrefsSection::Notifications, "notifications"),
+            (PrefsSection::Memory, "memory"),
+        ] {
             h.state_mut().dialog = Some(Dialog::Preferences(section));
             h.run_steps(4);
             h.render().unwrap().save(dir.join(format!("dialog-settings-{name}.png"))).unwrap();

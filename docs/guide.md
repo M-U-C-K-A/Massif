@@ -26,8 +26,11 @@ The editor, part by part: the home screen, the window, brushes and their options
 Massif opens on its home screen. On the left are the ways in — **New map**,
 **From a height map**, **Open a map…** (a `.massif`), **Import from
 WorldPainter…** (a `.world`) — and the maps opened lately. In the middle are
-the settings of a new map with a preview of the whole map, and **Create map**.
-A `.massif`, a `.world` or a height map dropped on the window opens too.
+the settings of a new map beside a preview of the whole map, as tall as they
+are (the cross marks its centre), and **Create map**. What is written over the
+picture has a halo of the page's colour around its letters, so that it reads
+over any part of it. A `.massif`, a `.world` or a height map dropped on the
+window opens too.
 **File ▸ New** (⌘N) comes back to the home screen, with a way back to the open
 map (Esc).
 
@@ -78,11 +81,23 @@ topic, with a search, and the keyboard shortcuts.
 
 ## Settings
 
-**Settings** (⌘, or the home screen's sidebar) has six sections, in a window of their own:
+**Settings** (⌘, or the home screen's sidebar) has seven sections, in a window of their own:
 
 - **Appearance**: the theme, the accent colour (the colour of what is
   chosen, of the main buttons and of the home screen's art: eight colours, or
   any other), the home screen's picture moving or still.
+- **Accessibility**: **High contrast** — text black or white, muted text
+  past 7 to 1 on the cards, lines and the edges of controls past 3 to 1, the
+  accent darkened or lightened until it reads, links underlined, and the
+  home screen's picture calmer behind its words; **Reduce motion** — the map
+  and the 3D views stop where they are let go and go straight where they are
+  sent (no gliding on, no coasting, no easing), the home screen's picture and
+  the cards of tools and brushes stay still, switches flip at once; and
+  **Interface size** — 100, 110, 125 or 150 %, everything larger at once (⌘+
+  and ⌘− change it too, ⌘0 puts it back, and the change is kept). On macOS
+  the first two follow the system by default (System Settings ▸
+  Accessibility ▸ Display: Increase contrast, Reduce motion), and can be set
+  off or on whatever it says.
 - **Typeface**: what the interface is set in — the system's own (SF Pro on
   macOS, Segoe UI on Windows), or one of four built into Massif: **Inter**,
   drawn for screens, **Geist**, a crisp geometric grotesque, **IBM Plex

@@ -3222,6 +3222,9 @@ impl View3d {
             )
         };
         let (now, dt) = ui.input(|i| (i.time, i.stable_dt.clamp(1.0 / 240.0, 0.1)));
+        // Reduce motion (Settings ▸ Accessibility): no coasting, no easing,
+        // looking somewhere goes straight there.
+        let still = crate::theme::reduce_motion(ui.ctx());
         if orbit && !walking {
             let d = response.drag_delta();
             let turn = [-d.x * 0.008, d.y * 0.006];
@@ -3253,7 +3256,7 @@ impl View3d {
         // away; a press stops it.
         if !(orbit || pan) {
             let pressed = ui.input(|i| i.pointer.any_pressed());
-            if walking || pressed || (response.drag_stopped() && now - self.dragged_at > 0.06) {
+            if walking || pressed || still || (response.drag_stopped() && now - self.dragged_at > 0.06) {
                 self.spin = [0.0; 2];
                 self.drift = [0.0; 2];
             }
@@ -3275,7 +3278,7 @@ impl View3d {
         }
         // Gliding to look somewhere.
         if let Some(goal) = self.look_goal {
-            let t = 1.0 - (-dt as f64 * 12.0).exp();
+            let t = if still { 1.0 } else { 1.0 - (-dt as f64 * 12.0).exp() };
             for (v, g) in self.camera.target.iter_mut().zip(goal) {
                 *v += (g - *v) * t;
             }
@@ -3409,7 +3412,7 @@ impl View3d {
             let speed = (self.camera.distance as f64).max(40.0) * if shift { 3.0 } else { 1.0 };
             let (s, c) = (self.camera.yaw.sin() as f64, self.camera.yaw.cos() as f64);
             let want = [(-s * keys[0] + c * keys[1]) * speed, keys[2] * speed * 0.6, (-c * keys[0] - s * keys[1]) * speed];
-            let t = 1.0 - (-dt * 14.0).exp();
+            let t = if still { 1.0 } else { 1.0 - (-dt * 14.0).exp() };
             for (v, w) in self.fly.iter_mut().zip(want) {
                 *v += (w - *v) * t;
             }

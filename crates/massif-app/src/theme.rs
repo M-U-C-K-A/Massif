@@ -15,6 +15,60 @@ pub use lucide_icons::Icon;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock};
 
+// Accessibility (Settings ▸ Accessibility) lives in the context's style,
+// not in globals: high contrast in its visuals (a selection outlined twice
+// as thick), reduced motion in its animations (none).
+
+/// Whether `ctx` is in high contrast: stronger text, lines and edges.
+pub fn high_contrast(ctx: &egui::Context) -> bool {
+    is_high(&ctx.style_of(Theme::Light).visuals)
+}
+
+fn is_high(v: &Visuals) -> bool {
+    v.selection.stroke.width > 1.5
+}
+
+/// Whether movement is kept to what is needed in `ctx`: views stop where
+/// they are let go, pictures stay still.
+pub fn reduce_motion(ctx: &egui::Context) -> bool {
+    ctx.style_of(Theme::Light).animation_time == 0.0
+}
+
+/// Set high contrast and reduced motion: both palettes, and egui's own
+/// animations (none while motion is reduced).
+pub fn set_access(ctx: &egui::Context, high_contrast: bool, reduce_motion: bool) {
+    ctx.set_visuals_of(Theme::Light, Palette::themed(false, high_contrast).visuals());
+    ctx.set_visuals_of(Theme::Dark, Palette::themed(true, high_contrast).visuals());
+    let time = if reduce_motion { 0.0 } else { egui::Style::default().animation_time };
+    ctx.all_styles_mut(|style| style.animation_time = time);
+}
+
+/// The contrast ratio of two colours, as the WCAG has it: 1 (none) to 21.
+pub fn contrast(a: Color32, b: Color32) -> f32 {
+    let lum = |c: Color32| {
+        let lin = |v: u8| {
+            let v = v as f32 / 255.0;
+            if v <= 0.040_45 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * lin(c.r()) + 0.7152 * lin(c.g()) + 0.0722 * lin(c.b())
+    };
+    let (la, lb) = (lum(a), lum(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+/// `c`, darkened (on a light `back`) or lightened (on a dark one) until it
+/// stands out from `back` at least `ratio` to 1.
+pub fn legible(c: Color32, back: Color32, ratio: f32) -> Color32 {
+    let toward = if contrast(back, Color32::WHITE) > contrast(back, Color32::BLACK) { Color32::WHITE } else { Color32::BLACK };
+    let mut t = 0.0;
+    let mut out = c;
+    while contrast(out, back) < ratio && t < 1.0 {
+        t += 0.05;
+        out = mix(c, toward, t);
+    }
+    out
+}
+
 /// The accent colours offered in the settings: the colour of what is
 /// chosen, of the main buttons, of the art of the home screen.
 pub const ACCENTS: [(&str, [u8; 3]); 8] = [
@@ -44,8 +98,9 @@ pub fn accent() -> Color32 {
 /// Use `c` as the accent colour, everywhere.
 pub fn set_accent(ctx: &egui::Context, c: [u8; 3]) {
     ACCENT.store(pack(c), Ordering::Relaxed);
-    ctx.set_visuals_of(Theme::Light, Palette::light().visuals());
-    ctx.set_visuals_of(Theme::Dark, Palette::dark().visuals());
+    let high = high_contrast(ctx);
+    ctx.set_visuals_of(Theme::Light, Palette::themed(false, high).visuals());
+    ctx.set_visuals_of(Theme::Dark, Palette::themed(true, high).visuals());
 }
 
 /// Corner radii, in points: of an area (a card), of a dialog, of a popover
@@ -69,6 +124,8 @@ pub const SEMIBOLD: f32 = 600.0;
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
     pub dark: bool,
+    /// High contrast (Settings ▸ Accessibility).
+    pub high: bool,
     /// Behind the areas.
     pub app_bg: Color32,
     /// Area (card) background.
@@ -91,6 +148,7 @@ pub struct Palette {
 impl Palette {
     pub const LIGHT: Palette = Palette {
         dark: false,
+        high: false,
         app_bg: Color32::from_rgb(228, 228, 231),
         panel: Color32::from_rgb(250, 250, 251),
         header: Color32::from_rgb(240, 240, 242),
@@ -107,6 +165,7 @@ impl Palette {
     // Neutral greys, as the references: no tint.
     pub const DARK: Palette = Palette {
         dark: true,
+        high: false,
         app_bg: Color32::from_rgb(9, 9, 10),
         panel: Color32::from_rgb(20, 20, 21),
         header: Color32::from_rgb(29, 29, 31),
@@ -120,50 +179,97 @@ impl Palette {
         canvas: Color32::from_rgb(14, 14, 15),
     };
 
+    /// High contrast, light: black text, muted text still past 7 to 1 on
+    /// the cards, lines that stand out (3 to 1 at least), white cards on a
+    /// darker ground.
+    pub const LIGHT_HIGH: Palette = Palette {
+        dark: false,
+        high: true,
+        app_bg: Color32::from_rgb(204, 204, 210),
+        panel: Color32::from_rgb(255, 255, 255),
+        header: Color32::from_rgb(236, 236, 240),
+        border: Color32::from_rgb(124, 124, 132),
+        text: Color32::from_rgb(6, 6, 8),
+        weak: Color32::from_rgb(70, 70, 78),
+        accent: Color32::from_rgb(37, 99, 235),
+        accent_soft: Color32::from_rgb(212, 212, 220),
+        danger: Color32::from_rgb(178, 20, 20),
+        success: Color32::from_rgb(10, 118, 50),
+        canvas: Color32::from_rgb(226, 226, 231),
+    };
+
+    /// High contrast, dark: white text on black, the same ratios.
+    pub const DARK_HIGH: Palette = Palette {
+        dark: true,
+        high: true,
+        app_bg: Color32::from_rgb(0, 0, 0),
+        panel: Color32::from_rgb(10, 10, 11),
+        header: Color32::from_rgb(30, 30, 33),
+        border: Color32::from_rgb(122, 122, 130),
+        text: Color32::from_rgb(255, 255, 255),
+        weak: Color32::from_rgb(198, 198, 206),
+        accent: Color32::from_rgb(77, 144, 254),
+        accent_soft: Color32::from_rgb(66, 66, 72),
+        danger: Color32::from_rgb(255, 118, 118),
+        success: Color32::from_rgb(90, 226, 150),
+        canvas: Color32::from_rgb(4, 4, 5),
+    };
+
     pub fn of(ui: &egui::Ui) -> Palette {
-        if ui.visuals().dark_mode { Self::dark() } else { Self::light() }
+        Self::themed(ui.visuals().dark_mode, is_high(ui.visuals()))
+    }
+
+    /// The dark or light palette, in high contrast or not, with the accent
+    /// of the settings (in high contrast, darkened or lightened until it
+    /// reads on the cards).
+    pub fn themed(dark: bool, high: bool) -> Palette {
+        let base = match (dark, high) {
+            (true, false) => Self::DARK,
+            (true, true) => Self::DARK_HIGH,
+            (false, false) => Self::LIGHT,
+            (false, true) => Self::LIGHT_HIGH,
+        };
+        let accent = if high { legible(accent(), base.panel, 4.5) } else { accent() };
+        Palette { accent, ..base }
     }
 
     /// The dark palette, with the accent of the settings.
     pub fn dark() -> Palette {
-        Palette {
-            accent: accent(),
-            ..Self::DARK
-        }
+        Self::themed(true, false)
     }
 
     /// The light palette, with the accent of the settings.
     pub fn light() -> Palette {
-        Palette {
-            accent: accent(),
-            ..Self::LIGHT
-        }
+        Self::themed(false, false)
     }
 
     /// Fill of a control at rest.
     pub fn control(&self) -> Color32 {
-        if self.dark {
-            Color32::from_rgb(33, 33, 35)
-        } else {
-            Color32::from_rgb(255, 255, 255)
+        match (self.dark, self.high) {
+            (true, false) => Color32::from_rgb(33, 33, 35),
+            (true, true) => Color32::from_rgb(22, 22, 24),
+            (false, _) => Color32::from_rgb(255, 255, 255),
         }
     }
 
     /// Fill of a well: what groups settings, a shade under the card.
     pub fn well(&self) -> Color32 {
-        if self.dark {
-            Color32::from_rgb(14, 14, 15)
-        } else {
-            Color32::from_rgb(244, 244, 246)
+        match (self.dark, self.high) {
+            (true, false) => Color32::from_rgb(14, 14, 15),
+            (true, true) => Color32::from_rgb(0, 0, 0),
+            (false, false) => Color32::from_rgb(244, 244, 246),
+            (false, true) => Color32::from_rgb(240, 240, 244),
         }
     }
 
-    /// The hairline around a control: a little lighter than its fill.
+    /// The hairline around a control: a little lighter than its fill (in
+    /// high contrast, a line that stands out).
     pub fn control_border(&self) -> Color32 {
-        if self.dark {
-            Color32::from_rgb(50, 50, 53)
-        } else {
-            Color32::from_rgb(214, 214, 219)
+        match (self.dark, self.high) {
+            (true, false) => Color32::from_rgb(50, 50, 53),
+            (true, true) => Color32::from_rgb(150, 150, 158),
+            (false, false) => Color32::from_rgb(214, 214, 219),
+            (false, true) => Color32::from_rgb(98, 98, 106),
         }
     }
 
@@ -205,7 +311,13 @@ impl Palette {
         // Selected things are lifted, in the text colour, as in the
         // references: the accent is kept for focus, sliders and links.
         v.selection.bg_fill = self.accent_soft;
-        v.selection.stroke = Stroke::new(1.0, self.text);
+        v.selection.stroke = Stroke::new(if self.high { 2.0 } else { 1.0 }, self.text);
+        if self.high {
+            // Muted text in its own colour, not faded; what cannot be used
+            // still legible.
+            v.weak_text_color = Some(self.weak);
+            v.disabled_alpha = v.disabled_alpha.max(0.62);
+        }
         v.slider_trailing_fill = true;
         v.handle_shape = egui::style::HandleShape::Circle;
         v.striped = false;
@@ -500,6 +612,50 @@ pub fn rgb(c: [u8; 3]) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// High contrast is what it says, in both themes and with every accent:
+    /// text past 15 to 1 on the cards, muted text past 7 (WCAG AAA), lines
+    /// and controls' edges past 3, the accent past 4.5 — and more than the
+    /// standard palettes everywhere.
+    #[test]
+    fn high_contrast_reaches_its_ratios() {
+        for dark in [false, true] {
+            let (std, high) = (Palette::themed(dark, false), Palette::themed(dark, true));
+            assert!(high.high && !std.high);
+            let name = if dark { "dark" } else { "light" };
+            assert!(contrast(high.text, high.panel) >= 15.0, "{name}: text {}", contrast(high.text, high.panel));
+            assert!(contrast(high.weak, high.panel) >= 7.0, "{name}: muted text {}", contrast(high.weak, high.panel));
+            assert!(contrast(high.weak, high.well()) >= 7.0, "{name}: muted text in a well {}", contrast(high.weak, high.well()));
+            assert!(contrast(high.border, high.panel) >= 3.0, "{name}: lines {}", contrast(high.border, high.panel));
+            assert!(contrast(high.control_border(), high.control()) >= 3.0, "{name}: controls' edges {}", contrast(high.control_border(), high.control()));
+            assert!(contrast(high.weak, high.panel) > contrast(std.weak, std.panel));
+            assert!(contrast(high.border, high.panel) > contrast(std.border, std.panel));
+            for (accent_name, c) in ACCENTS {
+                let a = legible(rgb(c), high.panel, 4.5);
+                assert!(contrast(a, high.panel) >= 4.5, "{name}: {accent_name} {}", contrast(a, high.panel));
+            }
+        }
+        // WCAG's own examples.
+        assert!((contrast(Color32::BLACK, Color32::WHITE) - 21.0).abs() < 0.01);
+        assert!((contrast(Color32::from_rgb(118, 118, 118), Color32::WHITE) - 4.54).abs() < 0.02);
+    }
+
+    /// High contrast and reduced motion live in a context's style: set in
+    /// one, not in another.
+    #[test]
+    fn access_is_per_context() {
+        let (a, b) = (egui::Context::default(), egui::Context::default());
+        install(&a);
+        install(&b);
+        set_access(&a, true, true);
+        assert!(high_contrast(&a) && reduce_motion(&a));
+        assert!(!high_contrast(&b) && !reduce_motion(&b));
+        // Setting the accent keeps high contrast.
+        set_accent(&a, accent().to_array()[..3].try_into().unwrap());
+        assert!(high_contrast(&a));
+        set_access(&a, false, false);
+        assert!(!high_contrast(&a) && !reduce_motion(&a));
+    }
 
     /// Every typeface reads, and has the weights the interface asks for.
     #[test]

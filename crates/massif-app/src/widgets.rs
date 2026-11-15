@@ -392,7 +392,7 @@ pub fn checkbox(ui: &mut Ui, on: &mut bool, text: impl Into<egui::WidgetText>) -
     let label = galley.as_ref().map(|g| g.text().to_owned()).unwrap_or_default();
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *on, &label));
     if ui.is_rect_visible(rect) {
-        let t = ui.ctx().animate_bool_with_time(response.id.with("on"), *on, 0.1);
+        let t = ui.ctx().animate_bool_with_time(response.id.with("on"), *on, if theme::reduce_motion(ui.ctx()) { 0.0 } else { 0.1 });
         let square = Rect::from_center_size(pos2(rect.left() + BOX / 2.0, rect.center().y), egui::Vec2::splat(BOX));
         let painter = ui.painter();
         let edge = theme::mix(pal.control_border(), pal.text, if response.hovered() { 0.4 } else { 0.2 });
@@ -420,7 +420,7 @@ pub fn switch(ui: &mut Ui, on: &mut bool) -> Response {
     }
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Switch, ui.is_enabled(), *on, ""));
     if ui.is_rect_visible(rect) {
-        let t = ui.ctx().animate_bool_with_time(response.id.with("on"), *on, 0.12);
+        let t = ui.ctx().animate_bool_with_time(response.id.with("on"), *on, if theme::reduce_motion(ui.ctx()) { 0.0 } else { 0.12 });
         let off = if pal.dark { theme::mix(pal.well(), pal.text, 0.18) } else { theme::mix(Color32::WHITE, pal.text, 0.16) };
         let track = theme::mix(off, pal.accent, t);
         ui.painter().rect_filled(rect, theme::PILL, track);

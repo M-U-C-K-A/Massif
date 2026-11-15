@@ -631,14 +631,15 @@ impl MapView {
         (self.center, self.zoom) = (center, zoom);
     }
 
-    /// A step toward the goal, `dt` seconds on. Whether it goes on.
-    fn glide(&mut self, canvas: Rect, dt: f32) -> bool {
+    /// A step toward the goal, `dt` seconds on (all the way when motion is
+    /// reduced). Whether it goes on.
+    fn glide(&mut self, canvas: Rect, dt: f32, still: bool) -> bool {
         let Some(mut goal) = self.goal else { return false };
         // Asked before the view was ever drawn: around its middle.
         if !goal.anchor.is_finite() {
             goal.anchor = canvas.center();
         }
-        let t = 1.0 - (-dt * GLIDE_RATE).exp();
+        let t = if still { 1.0 } else { 1.0 - (-dt * GLIDE_RATE).exp() };
         let factor = (goal.zoom / self.zoom).powf(t);
         match goal.center {
             Some(c) => {
@@ -715,6 +716,9 @@ impl MapView {
         let dt = (time - self.last_time).clamp(0.0, 0.1) as f32;
         self.last_time = time;
         self.canvas = canvas;
+        // Reduce motion (Settings ▸ Accessibility): no gliding on, zooms
+        // straight to where they go.
+        let still = crate::theme::reduce_motion(ui.ctx());
         let panning = tools.tool == Tool::Pan || pan_key;
         let pan_drag = response.dragged_by(PointerButton::Middle) || (panning && response.dragged_by(PointerButton::Primary) && self.stroke.is_none());
         if pan_drag {
@@ -728,7 +732,7 @@ impl MapView {
             }
             self.goal = None;
             self.gliding = false;
-        } else if response.drag_stopped() && self.velocity.length() > 150.0 && time - self.moved_at < 0.06 {
+        } else if response.drag_stopped() && !still && self.velocity.length() > 150.0 && time - self.moved_at < 0.06 {
             // Let go while moving: the map goes on, slowing down.
             self.gliding = true;
             self.velocity *= (5000.0 / self.velocity.length()).min(1.0);
@@ -748,7 +752,7 @@ impl MapView {
             }
             ui.ctx().request_repaint();
         }
-        if self.glide(canvas, dt) {
+        if self.glide(canvas, dt, still) {
             ui.ctx().request_repaint();
         }
         if response.hovered()

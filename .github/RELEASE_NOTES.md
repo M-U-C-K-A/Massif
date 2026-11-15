@@ -12,7 +12,9 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 
 **Developer mode.** Settings ▸ Developer adds a Developer panel to every area's menu: frames a second, the time of each frame, the memory and the processor, in live charts, with what Massif keeps and why it draws again.
 
-**Ten scenes behind the home screen**, and in the light theme each at dawn.
+**Ten scenes behind the home screen**, and in the light theme each at dawn. The new map's preview stands beside its settings, as tall as they are, and what is written over the picture reads over any part of it; the links under the settings say what they open.
+
+**Accessibility.** Settings ▸ Accessibility: high contrast (black or white text, stronger muted text, lines and edges, links underlined), reduced motion (views stop where they are let go, pictures and cards stay still) and the size of the whole interface, 100 to 150 %. On macOS the first two follow the system's own settings unless set otherwise.
 
 ## New in 0.4.0
 
