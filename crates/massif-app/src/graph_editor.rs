@@ -512,6 +512,10 @@ struct Building {
     n: usize,
     /// A height map to save it as, rather than writing it to the map.
     export: Option<std::path::PathBuf>,
+    /// The map it was made for (its generation) and its dimension: it is
+    /// written there or nowhere, as its tiles would land among another's.
+    generation: u64,
+    dim: usize,
 }
 
 /// A change to undo: the graph as it was, or a conversion (undone in the
@@ -842,6 +846,9 @@ pub struct GraphEditor {
     /// A conversion just ended: whether it worked, what it says, how long
     /// it took (seconds) — for the app's sounds and notices.
     pub done: Option<(bool, String, f32)>,
+    /// A word for the status line from a part of the editor that has no
+    /// say of its own, given by the canvas.
+    note: Option<String>,
 }
 
 impl Default for GraphEditor {
@@ -891,6 +898,7 @@ impl Default for GraphEditor {
             building_over: false,
             want_map: false,
             done: None,
+            note: None,
         }
     }
 }
@@ -1026,6 +1034,14 @@ impl GraphEditor {
             self.revision += 1;
             self.fit = true;
             self.view.camera = Default::default();
+        }
+        // A conversion of the map open before: its tiles would land among
+        // this one's, and leave holes between them.
+        if let Some(b) = self.build.take_if(|b| b.generation != doc.generation) {
+            b.cancel.store(true, Ordering::Relaxed);
+            crate::sounds::play(crate::sounds::Cue::Warning);
+            let what = if b.export.is_some() { "Height map not saved" } else { "Conversion stopped" };
+            self.note = Some(format!("{what}: it was for the map open before"));
         }
         let worker = self.worker.get_or_insert_with(|| Worker::new(ctx.clone()));
         while let Ok(p) = worker.rx.try_recv() {
@@ -1311,17 +1327,22 @@ impl GraphEditor {
             self.start_from_map(doc);
         }
         self.sync(ui.ctx(), doc);
-        let mut feedback = None;
+        let mut feedback = self.note.take();
         let pal = Palette::of(ui);
         let mut graph = graph_of(doc);
         let before = graph.clone();
 
-        // A build finished: write it to the map.
+        // A build finished: write it to the map, in the dimension it was
+        // made for (it waits while another one is shown; one made for
+        // another map was dropped by `sync`).
         if let Some(b) = &self.build
+            && b.dim == doc.dim
             && let Ok(result) = b.rx.try_recv()
         {
             let took = b.started.elapsed().as_secs_f32();
             let export = b.export.clone();
+            // Cancelled once it was done (while it waited): cancelled.
+            let result = if b.cancel.load(Ordering::Relaxed) { Err(GraphError::Cancelled) } else { result };
             self.build = None;
             match result {
                 Ok(built) if export.is_some() => {
@@ -1474,7 +1495,10 @@ impl GraphEditor {
                         .desired_height(14.0)
                         .text(RichText::new(format!("{done} / {total}")).size(10.5)),
                 );
-                ui.label(format!("{} × {}: {node}… {:.0} s", b.n, b.n, b.started.elapsed().as_secs_f32()));
+                match doc.world.dims.get(b.dim).filter(|_| b.dim != doc.dim) {
+                    Some(d) => ui.label(format!("{} × {} for the {}: written once it is shown", b.n, b.n, d.kind.label())),
+                    None => ui.label(format!("{} × {}: {node}… {:.0} s", b.n, b.n, b.started.elapsed().as_secs_f32())),
+                };
                 if ui.button("Cancel").clicked() {
                     b.cancel.store(true, Ordering::Relaxed);
                 }
@@ -1883,6 +1907,8 @@ impl GraphEditor {
             started: Instant::now(),
             n: extent.n,
             export,
+            generation: doc.generation,
+            dim: doc.dim,
         });
     }
 

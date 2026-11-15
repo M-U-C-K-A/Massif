@@ -1143,7 +1143,7 @@ impl MassifApp {
             path.set_extension(massif_format::EXTENSION);
         }
         let snapshot = self.doc.world.snapshot();
-        self.jobs.push(Job::save(ctx, snapshot, path, self.doc.revision));
+        self.jobs.push(Job::save(ctx, snapshot, path, self.doc.revision).on(self.doc.generation));
         true
     }
 
@@ -1234,6 +1234,10 @@ impl MassifApp {
             };
             let job = self.jobs.remove(i);
             let secs = job.started.elapsed().as_secs_f32();
+            // Worked out on a map that is no longer open: none of it goes
+            // into this one.
+            let other_map = job.map.is_some_and(|g| g != self.doc.generation);
+            let meanwhile = if other_map { "another map was opened meanwhile" } else { "the map changed meanwhile" };
             match outcome {
                 Outcome::World { world, path } => {
                     self.next_generation += 1;
@@ -1259,7 +1263,12 @@ impl MassifApp {
                     }
                 }
                 Outcome::Saved { path, revision, bytes } => {
-                    self.doc.mark_saved(revision, path.clone());
+                    if other_map {
+                        // Not this map's file, nor what to do after saving it.
+                        self.after_save = None;
+                    } else {
+                        self.doc.mark_saved(revision, path.clone());
+                    }
                     self.remember(path.clone());
                     let msg = format!("Saved {} ({}) in {secs:.1} s", jobs::display_name(&path), panels::human(bytes));
                     self.task_done(ctx, Cue::Saved, "Map saved", &msg, secs);
@@ -1304,9 +1313,9 @@ impl MassifApp {
                 }
                 Outcome::Auto { biomes, tiles, columns, revision, dim } => {
                     let label = if biomes { "Auto biome" } else { "Auto paint" };
-                    if revision != self.doc.revision || dim != self.doc.dim {
+                    if other_map || revision != self.doc.revision || dim != self.doc.dim {
                         crate::sounds::play(Cue::Warning);
-                        self.say(ctx, format!("{label}: the map changed meanwhile, nothing was done"), true, None);
+                        self.say(ctx, format!("{label}: {meanwhile}, nothing was done"), true, None);
                     } else {
                         self.doc.history.begin(label, dim);
                         self.doc.history.edit(&mut self.doc.world, 0).replace_tiles(tiles);
@@ -1319,9 +1328,9 @@ impl MassifApp {
                 }
                 Outcome::Pattern { tiles, columns, revision, dim, level } => {
                     let label = "Noise paint";
-                    if revision != self.doc.revision || dim != self.doc.dim || level >= self.doc.dimension().levels.len() {
+                    if other_map || revision != self.doc.revision || dim != self.doc.dim || level >= self.doc.dimension().levels.len() {
                         crate::sounds::play(Cue::Warning);
-                        self.say(ctx, format!("{label}: the map changed meanwhile, nothing was done"), true, None);
+                        self.say(ctx, format!("{label}: {meanwhile}, nothing was done"), true, None);
                     } else {
                         self.doc.history.begin(label, dim);
                         self.doc.history.edit(&mut self.doc.world, level).replace_tiles(tiles);
@@ -1333,9 +1342,9 @@ impl MassifApp {
                     }
                 }
                 Outcome::Reshaped { label, tiles, columns, revision, dim } => {
-                    if revision != self.doc.revision || dim != self.doc.dim {
+                    if other_map || revision != self.doc.revision || dim != self.doc.dim {
                         crate::sounds::play(Cue::Warning);
-                        self.say(ctx, format!("{label}: the map changed meanwhile, nothing was done"), true, None);
+                        self.say(ctx, format!("{label}: {meanwhile}, nothing was done"), true, None);
                     } else {
                         self.doc.history.begin(label, dim);
                         self.doc.history.edit(&mut self.doc.world, 0).replace_tiles(tiles);
@@ -2346,13 +2355,13 @@ impl MassifApp {
         }
         if let Some(biomes) = self.tools.run_auto.take() {
             let snapshot = self.doc.world.snapshot();
-            self.jobs.push(Job::auto(ctx, snapshot, self.doc.dim, self.tools.auto.clone(), biomes, self.doc.revision));
+            self.jobs.push(Job::auto(ctx, snapshot, self.doc.dim, self.tools.auto.clone(), biomes, self.doc.revision).on(self.doc.generation));
         }
         if std::mem::take(&mut self.tools.pattern.paint_map) {
             let snapshot = self.doc.world.snapshot();
             let level = self.doc.active_level.min(self.doc.dimension().levels.len() - 1);
             let (settings, filter) = (self.tools.pattern.clone(), self.tools.filter.clone());
-            self.jobs.push(Job::pattern(ctx, snapshot, self.doc.dim, level, settings, filter, self.doc.revision));
+            self.jobs.push(Job::pattern(ctx, snapshot, self.doc.dim, level, settings, filter, self.doc.revision).on(self.doc.generation));
         }
         if std::mem::take(&mut self.tools.open_rules) && self.dialog.is_none() {
             self.dialog = Some(Dialog::AutoRules(self.tools.tool == Tool::AutoPaint));
@@ -2462,7 +2471,7 @@ impl MassifApp {
                         keep = false;
                         let snapshot = self.doc.world.snapshot();
                         let bed = self.doc.world.registry.terrain_by_name("Gravel");
-                        self.jobs.push(Job::reshape(ctx, snapshot, self.doc.dim, op, bed, self.doc.revision));
+                        self.jobs.push(Job::reshape(ctx, snapshot, self.doc.dim, op, bed, self.doc.revision).on(self.doc.generation));
                     }
                 }
                 if keep {
@@ -5165,6 +5174,101 @@ mod tests {
         h.run_steps(20);
         h.render().unwrap().save(dir.join("converted-map.png")).unwrap();
         assert!(empty.is_empty(), "columns without a height: {empty:?}");
+    }
+
+    /// The map that replaces the open one while it works: a small one, two
+    /// tiles a side, as a new map of 256 blocks.
+    fn open_another_map(app: &mut MassifApp) {
+        let small = generate(&GenParams {
+            tiles_x: 2,
+            tiles_z: 2,
+            landform: Landform::Flat,
+            ..GenParams::default()
+        });
+        app.next_generation += 1;
+        app.doc = crate::doc::Document::new(small, None, app.next_generation);
+    }
+
+    fn ground_tiles(app: &MassifApp) -> Vec<massif_core::TilePos> {
+        let mut tiles: Vec<_> = app.doc.dimension().ground().positions().collect();
+        tiles.sort_by_key(|p| (p.z, p.x));
+        tiles
+    }
+
+    fn status_text(app: &MassifApp) -> String {
+        app.status.as_ref().map(|s| s.text.clone()).unwrap_or_default()
+    }
+
+    /// A conversion started on one map and done once another is open
+    /// writes nothing into the new one: its tiles landed among the new
+    /// map's, and left rows of holes between them.
+    #[test]
+    fn a_conversion_stays_with_its_map() {
+        use massif_core::graph::Template;
+        let mut h = harness(ThemeChoice::Dark);
+        h.state_mut().layout.activate(7);
+        h.run_steps(2);
+        let ctx = h.ctx.clone();
+        {
+            let app = h.state_mut();
+            app.graph.use_template(&mut app.doc, Template::Alpine);
+            app.graph.draft = Some(128);
+            let graph = app.doc.world.meta.graph.clone().unwrap();
+            app.graph.start_build(&ctx, &mut app.doc, &graph, None);
+            open_another_map(app);
+        }
+        let before = ground_tiles(h.state());
+        let started = std::time::Instant::now();
+        while h.state().graph.converting() {
+            assert!(started.elapsed().as_secs() < 60, "the conversion did not end");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.run_steps(3);
+        assert_eq!(ground_tiles(h.state()), before, "the new map's tiles, and no others");
+        assert_eq!(h.state().doc.history.undo_label(), None, "nothing written");
+        let said = status_text(h.state());
+        assert!(said.contains("Conversion stopped"), "{said}");
+    }
+
+    /// Auto paint worked out on one map and done once another is open, at
+    /// the same revision (both just opened), is not put into the new one;
+    /// nor does saving the first give the new one its file.
+    #[test]
+    fn a_job_stays_with_its_map() {
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(2);
+        let ctx = h.ctx.clone();
+        let wait = |h: &mut egui_kittest::Harness<'static, MassifApp>| {
+            let started = std::time::Instant::now();
+            while !h.state().jobs.is_empty() {
+                assert!(started.elapsed().as_secs() < 60, "the job did not end");
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            h.run_steps(2);
+        };
+        h.state_mut().tools.run_auto = Some(false);
+        h.step();
+        assert_eq!(h.state().jobs.len(), 1, "auto paint started");
+        open_another_map(h.state_mut());
+        let before = ground_tiles(h.state());
+        wait(&mut h);
+        assert_eq!(ground_tiles(h.state()), before, "the new map's tiles, and no others");
+        assert_eq!(h.state().doc.history.undo_label(), None, "nothing painted");
+        let said = status_text(h.state());
+        assert!(said.contains("another map was opened meanwhile"), "{said}");
+        // Saved, as the next map opens.
+        let file = std::env::temp_dir().join(format!("massif-saved-{}.massif", std::process::id()));
+        {
+            let app = h.state_mut();
+            app.doc.path = Some(file.clone());
+            assert!(app.save(&ctx, false));
+            open_another_map(app);
+        }
+        wait(&mut h);
+        let _ = std::fs::remove_file(&file);
+        assert_eq!(h.state().doc.path, None, "the new map keeps no file of the other's");
     }
 
     /// The terrain graph: previews of every node and the viewport, then the

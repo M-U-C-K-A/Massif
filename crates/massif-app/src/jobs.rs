@@ -123,6 +123,9 @@ pub struct Job {
     pub label: String,
     pub started: Instant,
     pub progress: Option<Arc<dyn JobProgress>>,
+    /// The map it works on (its generation), for a job whose outcome is
+    /// for that map alone: see [`Job::on`].
+    pub map: Option<u64>,
     rx: Receiver<Outcome>,
 }
 
@@ -145,8 +148,16 @@ impl Job {
             label,
             started: Instant::now(),
             progress,
+            map: None,
             rx,
         }
+    }
+
+    /// For the map of `generation` alone: its outcome is not put into
+    /// another map opened meanwhile.
+    pub fn on(mut self, generation: u64) -> Job {
+        self.map = Some(generation);
+        self
     }
 
     /// The outcome, once the job is over.
