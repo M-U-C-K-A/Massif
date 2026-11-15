@@ -12,6 +12,100 @@ use std::path::PathBuf;
 /// per level however large the map is.
 pub const MAX_HOT_TILES: usize = 2048;
 
+/// How much of the map lies at each height: a sample of its columns (32 ×
+/// 32 of each tile, of at most 4096 tiles spread over the map), in whole
+/// blocks, for the brush's height limits.
+#[derive(Debug, Clone, Default)]
+pub struct Heights {
+    /// The revision and generation of the document it was read at.
+    pub revision: u64,
+    pub generation: u64,
+    /// The lowest height sampled, and how many columns are at each height
+    /// from there.
+    pub lo: i32,
+    pub counts: Vec<u32>,
+    /// Of those, the columns under water.
+    pub wet: Vec<u32>,
+    pub total: u64,
+}
+
+impl Heights {
+    /// The highest height sampled.
+    pub fn hi(&self) -> i32 {
+        self.lo + self.counts.len() as i32 - 1
+    }
+
+    /// The columns sampled at height `y`.
+    pub fn at(&self, y: i32) -> u32 {
+        usize::try_from(y - self.lo).ok().and_then(|k| self.counts.get(k)).copied().unwrap_or(0)
+    }
+
+    /// The share of the map (0 to 1) where `filter`'s height tests let the
+    /// brush act.
+    pub fn share(&self, filter: &massif_core::filter::Filter) -> f32 {
+        if self.total == 0 {
+            return 0.0;
+        }
+        let sum: f64 = self.counts.iter().enumerate().map(|(k, &n)| n as f64 * filter.height_weight((self.lo + k as i32) as f32) as f64).sum();
+        (sum / self.total as f64) as f32
+    }
+}
+
+/// Reading the map's heights away from the frames (see
+/// [`Document::heights`]).
+#[derive(Default)]
+struct HeightsJob {
+    ready: Option<std::sync::Arc<Heights>>,
+    running: Option<std::sync::mpsc::Receiver<Heights>>,
+    started: Option<std::time::Instant>,
+}
+
+/// [`Heights`] of `dim`, from a sample of its columns.
+fn sample_heights(dim: &Dimension, revision: u64, generation: u64) -> Heights {
+    use massif_core::coords::{TILE_SIZE, local_index};
+    use rayon::prelude::*;
+    let positions: Vec<TilePos> = dim.ground().positions().collect();
+    let step = positions.len().div_ceil(4096).max(1);
+    let picked: Vec<TilePos> = positions.into_iter().step_by(step).collect();
+    let samples: Vec<Vec<(i32, bool)>> = picked
+        .par_iter()
+        .map(|&t| {
+            let mut out = Vec::with_capacity(1024);
+            if let Some(stack) = massif_core::compose::TileStack::new(dim, t, false) {
+                let mut sampler = crate::map_render::ColumnSampler::default();
+                for j in (2..TILE_SIZE).step_by(4) {
+                    for i in (2..TILE_SIZE).step_by(4) {
+                        let s = sampler.sample(&stack, local_index(t.x * TILE_SIZE + i, t.z * TILE_SIZE + j));
+                        if !s.is_empty() {
+                            out.push((massif_core::compose::block_top(s.height), s.fluid != massif_core::NO_FLUID));
+                        }
+                    }
+                }
+            }
+            out
+        })
+        .collect();
+    let mut heights = Heights {
+        revision,
+        generation,
+        ..Heights::default()
+    };
+    let (lo, hi) = samples.iter().flatten().fold((i32::MAX, i32::MIN), |(lo, hi), &(y, _)| (lo.min(y), hi.max(y)));
+    if lo > hi {
+        return heights;
+    }
+    heights.lo = lo;
+    heights.counts = vec![0; (hi - lo + 1) as usize];
+    heights.wet = vec![0; (hi - lo + 1) as usize];
+    for &(y, wet) in samples.iter().flatten() {
+        let k = (y - lo) as usize;
+        heights.counts[k] += 1;
+        heights.wet[k] += wet as u32;
+        heights.total += 1;
+    }
+    heights
+}
+
 pub struct Document {
     pub world: World,
     pub history: History,
@@ -31,6 +125,8 @@ pub struct Document {
     auto_base: std::sync::Mutex<Option<(u64, Option<massif_core::TerrainId>)>>,
     /// Tiles each level keeps decoded (the memory limit of the settings).
     pub max_hot_tiles: usize,
+    /// The heights of the map, read away from the frames.
+    heights: HeightsJob,
 }
 
 impl Document {
@@ -46,7 +142,42 @@ impl Document {
             generation,
             auto_base: std::sync::Mutex::new(None),
             max_hot_tiles: MAX_HOT_TILES,
+            heights: HeightsJob::default(),
         }
+    }
+
+    /// How much of the map lies at each height, from a sample of it read
+    /// away from the frames: read again a moment after the map changes
+    /// (not in the middle of a stroke). `None` until a first reading.
+    pub fn heights(&mut self, ctx: &egui::Context) -> Option<std::sync::Arc<Heights>> {
+        let job = &mut self.heights;
+        if let Some(results) = &job.running {
+            match results.try_recv() {
+                Ok(h) => {
+                    job.ready = Some(std::sync::Arc::new(h));
+                    job.running = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => job.running = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        let current = job.ready.as_ref().is_some_and(|h| h.revision == self.revision && h.generation == self.generation);
+        let due = job.ready.is_none() || job.started.is_none_or(|t| t.elapsed().as_secs_f32() > 1.5);
+        if !current && due && job.running.is_none() && !self.history.is_recording() {
+            let dim = self.world.dims[self.dim].snapshot();
+            let (revision, generation) = (self.revision, self.generation);
+            let (tx, rx) = std::sync::mpsc::channel();
+            let ctx = ctx.clone();
+            let spawned = std::thread::Builder::new().name("massif heights".into()).spawn(move || {
+                let _ = tx.send(sample_heights(&dim, revision, generation));
+                ctx.request_repaint();
+            });
+            if spawned.is_ok() {
+                job.running = Some(rx);
+                job.started = Some(std::time::Instant::now());
+            }
+        }
+        job.ready.clone()
     }
 
     /// The terrain the map was filled with, if one covers nearly all of it:

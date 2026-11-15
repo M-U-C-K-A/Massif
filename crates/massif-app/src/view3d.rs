@@ -43,6 +43,13 @@ const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// Time spent building tiles per frame, once something is on screen.
 const BUILD_BUDGET: Duration = Duration::from_millis(14);
+/// From how many tiles to build the work goes away from the frames (see
+/// [`Builder`]).
+const BUILD_AWAY: usize = 32;
+/// The most time a frame spends putting built tiles on the graphics card;
+/// while a view moves, less.
+const UPLOAD_BUDGET: Duration = Duration::from_millis(6);
+const UPLOAD_BUDGET_MOVING: Duration = Duration::from_millis(2);
 /// Vertical field of view of the camera.
 const FOV_Y: f32 = 50.0 * std::f32::consts::PI / 180.0;
 /// Walking, Minecraft's (wider: the land is all around).
@@ -2566,6 +2573,59 @@ struct TileInfo {
     stale: bool,
 }
 
+/// Tiles built away from the frames, on threads of their own, from a cold
+/// copy of the map: what a whole map takes to build (a first look, another
+/// colouring) no longer holds the frames up. What it brings comes back
+/// through `results`, and the frames put it on the graphics card a little
+/// at a time.
+struct Builder {
+    /// What it builds for: the document's generation, the style and the
+    /// grid's stride.
+    key: (u64, Style, i32),
+    results: std::sync::mpsc::Receiver<(TilePos, TileBuild)>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The tiles it builds, and how many it brought.
+    given: HashSet<TilePos>,
+    delivered: usize,
+    /// Tiles changed since it copied the map: what it brings of them is out
+    /// of date, and they are built again here.
+    edited: HashSet<TilePos>,
+}
+
+impl Drop for Builder {
+    fn drop(&mut self) {
+        self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// The threads that build tiles away from the frames: all the cores but
+/// two, which stay for the interface's own work.
+fn builders() -> &'static rayon::ThreadPool {
+    static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| {
+        let n = std::thread::available_parallelism().map_or(4, |n| n.get()).saturating_sub(2).max(1);
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(n)
+            .thread_name(|i| format!("massif 3d tiles {i}"))
+            .build()
+            .expect("threads for the 3D tiles")
+    })
+}
+
+/// A tile of the view's grid: one of the map's (`stride` 1), or the
+/// columns of `stride` × `stride` of them, a column every `stride` blocks.
+fn build_cell(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, cell: TilePos, stride: i32, style: Style) -> TileBuild {
+    if stride > 1 {
+        build_coarse(dim, reg, sea, seed, cell, stride, style)
+    } else {
+        build_tile(dim, reg, sea, seed, cell, style)
+    }
+}
+
+/// The tiles of the view's grid that the map covers, with what they were
+/// listed for: the generation, the number of the map's tiles, the stride.
+type Cells = ((u64, usize, i32), std::sync::Arc<[TilePos]>);
+
 /// The 3D preview editor (shared by every 3D area).
 pub struct View3d {
     pub mode: MapMode,
@@ -2574,6 +2634,10 @@ pub struct View3d {
     renderer: Option<Renderer3d>,
     texture: Option<egui::TextureId>,
     tiles: HashMap<TilePos, TileInfo>,
+    /// Tiles being built away from the frames.
+    builder: Option<Builder>,
+    /// The tiles of the grid the map covers, and what they were listed for.
+    cells: Option<Cells>,
     /// The pages the GPU holds.
     grid: Option<GridShape>,
     pairs: Pairs,
@@ -2678,6 +2742,8 @@ impl Default for View3d {
             renderer: None,
             texture: None,
             tiles: HashMap::new(),
+            builder: None,
+            cells: None,
             grid: None,
             pairs: Pairs::default(),
             style: None,
@@ -2736,8 +2802,15 @@ impl View3d {
         for t in tiles {
             // Walls look at the neighbours; objects reach over the corners.
             for (dx, dz) in [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
-                if let Some(c) = self.tiles.get_mut(&grid_tile(t.offset(dx, dz), stride)) {
+                let cell = grid_tile(t.offset(dx, dz), stride);
+                if let Some(c) = self.tiles.get_mut(&cell) {
                     c.stale = true;
+                }
+                // What the builder brings of it is out of date.
+                if let Some(b) = &mut self.builder
+                    && b.given.contains(&cell)
+                {
+                    b.edited.insert(cell);
                 }
             }
         }
@@ -2747,6 +2820,7 @@ impl View3d {
         for c in self.tiles.values_mut() {
             c.stale = true;
         }
+        self.builder = None;
     }
 
     /// Where the cursor points, with a sculpting tool.
@@ -2983,126 +3057,207 @@ impl View3d {
 
     /// Build the missing and stale tiles of the map, nearest the camera
     /// first, for about `budget`. Returns whether some remain.
-    fn build_tiles(&mut self, doc: &Document, budget: Duration, renderer: &mut Renderer3d) -> bool {
+    /// The tiles of the view's grid that the map covers: listed again only
+    /// when the map gains or loses tiles.
+    fn cells(&mut self, dim: &Dimension, generation: u64, stride: i32) -> std::sync::Arc<[TilePos]> {
+        let ground = dim.ground();
+        let key = (generation, ground.len(), stride);
+        if let Some((k, cells)) = &self.cells
+            && *k == key
+        {
+            return cells.clone();
+        }
+        let cells: std::sync::Arc<[TilePos]> = if stride > 1 {
+            let set: HashSet<TilePos> = ground.positions().map(|t| grid_tile(t, stride)).collect();
+            set.into_iter().collect()
+        } else {
+            ground.positions().collect()
+        };
+        self.cells = Some((key, cells.clone()));
+        cells
+    }
+
+    /// Build the tiles missing or out of date, the nearest first: many at
+    /// once away from the frames (see [`Builder`]), a few here within
+    /// `budget`. Whether to draw again at once.
+    fn build_tiles(&mut self, doc: &mut Document, budget: Duration, renderer: &mut Renderer3d, ctx: &egui::Context) -> bool {
         let style = Style {
             mode: self.mode,
             water: self.water,
             lava: doc.world.meta.lava,
         };
-        let dim = doc.dimension();
-        let ground = dim.ground();
         let stride = self.grid.as_ref().map_or(1, |g| g.stride);
-        if stride > 1 {
-            return self.build_coarse_tiles(doc, budget, renderer, style, stride);
+        // A builder for another map, colouring or grid stops.
+        if self.builder.as_ref().is_some_and(|b| b.key != (doc.generation, style, stride)) {
+            self.builder = None;
         }
-        // Tiles gone from the map.
-        let gone: Vec<TilePos> = self.tiles.keys().copied().filter(|t| !ground.contains(*t)).collect();
-        for t in gone {
-            renderer.remove(t);
-            self.tiles.remove(&t);
-            self.needs_render = true;
+        if stride == 1 {
+            // Tiles gone from the map.
+            let ground = doc.dimension().ground();
+            let gone: Vec<TilePos> = self.tiles.keys().copied().filter(|t| !ground.contains(*t)).collect();
+            for t in gone {
+                renderer.remove(t);
+                self.tiles.remove(&t);
+                self.needs_render = true;
+            }
         }
+
+        // What the builder brought, a frame's share of it.
+        let (mut more, mut finished, mut uploaded) = (false, false, 0);
+        if let Some(b) = &mut self.builder {
+            let share = if budget.is_zero() { UPLOAD_BUDGET_MOVING } else { UPLOAD_BUDGET };
+            let started = Instant::now();
+            loop {
+                if uploaded > 0 && started.elapsed() > share {
+                    more = true;
+                    break;
+                }
+                match b.results.try_recv() {
+                    Ok((t, built)) => {
+                        b.delivered += 1;
+                        let edited = b.edited.contains(&t);
+                        // Built again here since it changed: newer than this.
+                        if edited && self.tiles.get(&t).is_some_and(|c| !c.stale) {
+                            continue;
+                        }
+                        let packed = self.pairs.pack(&built);
+                        renderer.upload_columns(t, &packed);
+                        if stride == 1 {
+                            renderer.upload(t, &built.faces);
+                        }
+                        self.tiles.insert(
+                            t,
+                            TileInfo {
+                                faces: built.faces.solid.len() + built.faces.water.len(),
+                                stale: edited,
+                            },
+                        );
+                        uploaded += 1;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        finished = true;
+                        break;
+                    }
+                }
+            }
+            if uploaded > 0 {
+                self.build_ms = started.elapsed().as_secs_f32() * 1000.0;
+            }
+        }
+        if finished {
+            self.builder = None;
+        }
+
+        // What is left to build: missing or out of date, but for what the
+        // builder brings.
         let (tx, tz) = (self.camera.target[0], self.camera.target[2]);
-        let mut todo: Vec<(f64, TilePos)> = ground
-            .positions()
+        let span = (TILE_SIZE * stride) as f64;
+        let cells = self.cells(doc.dimension(), doc.generation, stride);
+        let mut todo: Vec<(f64, TilePos)> = cells
+            .iter()
             .filter(|t| self.tiles.get(t).is_none_or(|c| c.stale))
-            .map(|t| {
-                let c = |v: i32| (v * TILE_SIZE + TILE_SIZE / 2) as f64;
-                ((c(t.x) - tx).hypot(c(t.z) - tz), t)
-            })
+            .filter(|t| self.builder.as_ref().is_none_or(|b| !b.given.contains(t) || b.edited.contains(t)))
+            .map(|&t| (((t.x as f64 + 0.5) * span - tx).hypot((t.z as f64 + 0.5) * span - tz), t))
             .collect();
         todo.sort_by(|a, b| a.0.total_cmp(&b.0));
-        if budget.is_zero() {
-            self.pending = todo.len();
-            return self.pending > 0;
+        // Many: away from the frames.
+        if todo.len() > BUILD_AWAY && self.builder.is_none() {
+            let order: Vec<TilePos> = todo.drain(..).map(|(_, t)| t).collect();
+            self.start_builder(doc, order, style, stride, ctx);
         }
-        let started = Instant::now();
-        // One tile a thread at a time: a frame goes past its budget by one
-        // tile's time at most.
-        let batch = rayon::current_num_threads().clamp(2, 16);
-        let reg = &doc.world.registry;
-        let (sea, seed) = (doc.world.meta.sea_level as f32, doc.world.meta.seed);
+        // A few: here, now (while a view moves, nothing: a tile takes
+        // longer than a frame should).
         let mut done = 0;
-        for part in todo.chunks(batch) {
-            if done > 0 && started.elapsed() > budget {
-                break;
+        if !todo.is_empty() && !budget.is_zero() {
+            let started = Instant::now();
+            // One tile a thread at a time: a frame goes past its budget by
+            // one tile's time at most.
+            let batch = rayon::current_num_threads().clamp(2, 16);
+            let dim = doc.dimension();
+            let reg = &doc.world.registry;
+            let (sea, seed) = (doc.world.meta.sea_level as f32, doc.world.meta.seed);
+            for part in todo.chunks(batch) {
+                if done > 0 && started.elapsed() > budget {
+                    break;
+                }
+                let built: Vec<(TilePos, TileBuild)> = part.par_iter().map(|&(_, t)| (t, build_cell(dim, reg, sea, seed, t, stride, style))).collect();
+                for (t, b) in built {
+                    let packed = self.pairs.pack(&b);
+                    renderer.upload_columns(t, &packed);
+                    if stride == 1 {
+                        renderer.upload(t, &b.faces);
+                    }
+                    self.tiles.insert(
+                        t,
+                        TileInfo {
+                            faces: b.faces.solid.len() + b.faces.water.len(),
+                            stale: false,
+                        },
+                    );
+                    done += 1;
+                }
             }
-            let built: Vec<(TilePos, TileBuild)> = part
-                .par_iter()
-                .map(|&(_, t)| (t, build_tile(dim, reg, sea, seed, t, style)))
-                .collect();
-            for (t, b) in built {
-                let packed = self.pairs.pack(&b);
-                renderer.upload_columns(t, &packed);
-                renderer.upload(t, &b.faces);
-                self.tiles.insert(
-                    t,
-                    TileInfo {
-                        faces: b.faces.solid.len() + b.faces.water.len(),
-                        stale: false,
-                    },
-                );
-                done += 1;
+            if done > 0 {
+                self.build_ms = started.elapsed().as_secs_f32() * 1000.0;
             }
-            self.needs_render = true;
         }
-        if done > 0 {
+        if uploaded + done > 0 {
             renderer.flush();
-            self.build_ms = started.elapsed().as_secs_f32() * 1000.0;
+            self.needs_render = true;
         }
         if self.pairs.dirty {
             renderer.set_palette(self.pairs.list());
             self.pairs.dirty = false;
         }
-        self.pending = todo.len() - done;
-        self.pending > 0
+        let away = self.builder.as_ref().map_or(0, |b| b.given.len().saturating_sub(b.delivered));
+        self.pending = todo.len() - done + away;
+        // At once for the work left here, or what the builder brought that
+        // did not fit in this frame; the builder wakes the frames itself as
+        // it brings more.
+        more || todo.len() > done
     }
 
-    /// [`View3d::build_tiles`] on a map drawn with a column every `stride`
-    /// blocks: the grid's tiles, each from `stride` × `stride` of the map's.
-    fn build_coarse_tiles(&mut self, doc: &Document, budget: Duration, renderer: &mut Renderer3d, style: Style, stride: i32) -> bool {
-        let dim = doc.dimension();
-        let (tx, tz) = (self.camera.target[0], self.camera.target[2]);
-        let cells: HashSet<TilePos> = dim.ground().positions().map(|t| grid_tile(t, stride)).collect();
-        let span = (TILE_SIZE * stride) as f64;
-        let mut todo: Vec<(f64, TilePos)> = cells
-            .into_iter()
-            .filter(|t| self.tiles.get(t).is_none_or(|c| c.stale))
-            .map(|t| (((t.x as f64 + 0.5) * span - tx).hypot((t.z as f64 + 0.5) * span - tz), t))
-            .collect();
-        todo.sort_by(|a, b| a.0.total_cmp(&b.0));
-        if budget.is_zero() {
-            self.pending = todo.len();
-            return self.pending > 0;
-        }
-        let started = Instant::now();
-        let batch = rayon::current_num_threads().clamp(2, 16);
-        let reg = &doc.world.registry;
+    /// Build `order`'s tiles away from the frames, from a cold copy of the
+    /// map (see [`Builder`]).
+    fn start_builder(&mut self, doc: &mut Document, order: Vec<TilePos>, style: Style, stride: i32, ctx: &egui::Context) {
+        let dim = doc.world.dims[doc.dim].snapshot();
+        let reg = doc.world.registry.clone();
         let (sea, seed) = (doc.world.meta.sea_level as f32, doc.world.meta.seed);
-        let mut done = 0;
-        for part in todo.chunks(batch) {
-            if done > 0 && started.elapsed() > budget {
-                break;
-            }
-            let built: Vec<(TilePos, TileBuild)> = part.par_iter().map(|&(_, t)| (t, build_coarse(dim, reg, sea, seed, t, stride, style))).collect();
-            for (t, b) in built {
-                let packed = self.pairs.pack(&b);
-                renderer.upload_columns(t, &packed);
-                self.tiles.insert(t, TileInfo { faces: 0, stale: false });
-                done += 1;
-            }
-            self.needs_render = true;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop = cancel.clone();
+        let ctx = ctx.clone();
+        let given: HashSet<TilePos> = order.iter().copied().collect();
+        let spawned = std::thread::Builder::new().name("massif 3d builder".into()).spawn(move || {
+            let pool = builders();
+            pool.install(|| {
+                // The nearest first, as many at a time as there are threads
+                // (twice: they do not all take as long).
+                for part in order.chunks(2 * pool.current_num_threads()) {
+                    if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        return;
+                    }
+                    let built: Vec<(TilePos, TileBuild)> = part.par_iter().map(|&t| (t, build_cell(&dim, &reg, sea, seed, t, stride, style))).collect();
+                    for b in built {
+                        if tx.send(b).is_err() {
+                            return;
+                        }
+                    }
+                    ctx.request_repaint();
+                }
+            });
+        });
+        if spawned.is_ok() {
+            self.builder = Some(Builder {
+                key: (doc.generation, style, stride),
+                results: rx,
+                cancel,
+                given,
+                delivered: 0,
+                edited: HashSet::new(),
+            });
         }
-        if done > 0 {
-            renderer.flush();
-            self.build_ms = started.elapsed().as_secs_f32() * 1000.0;
-        }
-        if self.pairs.dirty {
-            renderer.set_palette(self.pairs.list());
-            self.pairs.dirty = false;
-        }
-        self.pending = todo.len() - done;
-        self.pending > 0
     }
 
     /// The ray through screen point `p` of the view `rect`: origin and
@@ -3475,7 +3630,7 @@ impl View3d {
         } else {
             BUILD_BUDGET
         };
-        if self.build_tiles(doc, budget, &mut renderer) {
+        if self.build_tiles(doc, budget, &mut renderer, ui.ctx()) {
             ui.ctx().request_repaint();
         }
 

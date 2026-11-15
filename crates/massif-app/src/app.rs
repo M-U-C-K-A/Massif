@@ -2225,9 +2225,11 @@ impl MassifApp {
             }
             EditorKind::BrushSettings => {
                 let (min_y, max_y) = (self.doc.dimension().min_y, self.doc.dimension().max_y);
+                let heights = self.doc.heights(&cui.ctx().clone());
+                let sea = self.doc.world.meta.sea_level;
                 scrolled(&mut cui, &mut |ui| {
                     let light = self.settings.light as f32 * 22.5;
-                    panels::brush_settings(ui, &mut self.tools, &mut self.brushes, &self.doc.world.registry, min_y, max_y, light)
+                    panels::brush_settings(ui, &mut self.tools, &mut self.brushes, &self.doc.world.registry, min_y, max_y, light, heights.as_deref(), sea)
                 })
             }
             EditorKind::Brushes => {
@@ -3444,6 +3446,63 @@ mod tests {
         footer.save(dir.join("brush-footer.png")).unwrap();
     }
 
+    /// Brush Settings' height limits, for the eye (MASSIF_SNAPSHOT_DIR):
+    /// the heights of the map read, no limit, a band, outside a band; in the
+    /// dark and the light themes.
+    #[test]
+    fn height_limits_render() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        for (theme, name) in [(ThemeChoice::Dark, "dark"), (ThemeChoice::Light, "light")] {
+            // Tall enough for Brush Settings to show all of itself.
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(vec2(1600.0, 2600.0))
+                .with_pixels_per_point(1.0)
+                .with_accessibility_check(false)
+                .wgpu()
+                .build_eframe(move |cc| {
+                    theme::install(&cc.egui_ctx);
+                    let mut app = MassifApp::for_tests(generate(&GenParams {
+                        tiles_x: 8,
+                        tiles_z: 8,
+                        landform: Landform::Islands,
+                        ..GenParams::default()
+                    }));
+                    app.settings.theme = theme;
+                    app
+                });
+            h.run_steps(3);
+            // Until the heights of the map are read.
+            let ctx = h.ctx.clone();
+            for _ in 0..400 {
+                h.step();
+                if h.state_mut().doc.heights(&ctx).is_some() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert!(h.state_mut().doc.heights(&ctx).is_some(), "the heights were read");
+            for (case, above, below, beyond) in [("none", None, None, false), ("band", Some(60), Some(90), false), ("outside", Some(60), Some(90), true)] {
+                {
+                    let f = &mut h.state_mut().tools.filter;
+                    (f.above, f.below, f.beyond) = (above, below, beyond);
+                }
+                h.run_steps(4);
+                let image = h.render().expect("rendered");
+                // The Brush Settings area, as wide as it is in the layout.
+                let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+                let area = areas
+                    .into_iter()
+                    .find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::BrushSettings))
+                    .map(|(_, r)| r)
+                    .expect("Brush Settings in the layout");
+                let crop = image::imageops::crop_imm(&image, area.left() as u32, area.top() as u32, area.width() as u32, area.height() as u32).to_image();
+                crop.save(dir.join(format!("height-limits-{name}-{case}.png"))).unwrap();
+            }
+        }
+    }
+
     fn harness(theme: ThemeChoice) -> egui_kittest::Harness<'static, MassifApp> {
         egui_kittest::Harness::builder()
             .with_size(vec2(1600.0, 1000.0))
@@ -3875,28 +3934,26 @@ mod tests {
         }
         h.state_mut().dialog = None;
         eprintln!("opened in {:.2} s", started.elapsed().as_secs_f32());
-        let (mut map_done, mut frames, mut worst) = (None, 0, 0.0f32);
+        // Built for at most MASSIF_MOVE_SECONDS (60): each frame's time.
+        let cap = std::env::var("MASSIF_MOVE_SECONDS").ok().and_then(|s| s.parse::<f32>().ok()).unwrap_or(60.0);
         let shown = std::time::Instant::now();
-        while h.state().view3d.pending() > 0 || frames < 5 || map_done.is_none() {
+        let mut times: Vec<f32> = Vec::new();
+        while (h.state().view3d.pending() > 0 || times.len() < 5) && shown.elapsed().as_secs_f32() < cap {
             let t = std::time::Instant::now();
             h.step();
-            worst = worst.max(t.elapsed().as_secs_f32() * 1000.0);
-            frames += 1;
-            if map_done.is_none() && frames > 3 && !h.ctx.has_requested_repaint_for(&h.ctx.viewport_id()) {
-                map_done = Some(shown.elapsed().as_secs_f32());
-            }
-            if map_done.is_none() && h.state().view3d.pending() == 0 && frames > 3 {
-                map_done = Some(shown.elapsed().as_secs_f32());
-            }
-            if frames > 20000 {
-                break;
-            }
+            times.push(t.elapsed().as_secs_f32() * 1000.0);
         }
+        let took = shown.elapsed().as_secs_f32();
+        let mut sorted = times.clone();
+        sorted.sort_by(f32::total_cmp);
+        let mean = times.iter().sum::<f32>() / times.len().max(1) as f32;
         eprintln!(
-            "3D built in {:.2} s ({} tiles, {frames} frames, worst frame {worst:.0} ms); everything still at {:.2} s",
-            shown.elapsed().as_secs_f32(),
+            "3D: {} tiles built, {} still to build after {took:.1} s; {} frames: mean {mean:.1} ms, p95 {:.1} ms, max {:.1} ms",
             h.state().view3d.tiles_built(),
-            map_done.unwrap_or(0.0)
+            h.state().view3d.pending(),
+            times.len(),
+            sorted[sorted.len() * 95 / 100],
+            sorted.last().copied().unwrap_or(0.0)
         );
         // At rest: no frame asked for (nothing moves, nothing to build).
         h.run_steps(30);
