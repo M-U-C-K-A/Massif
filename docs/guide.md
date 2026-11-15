@@ -1,0 +1,476 @@
+# Using Massif
+
+[← Back to the README](../README.md)
+
+The editor, part by part: the home screen, the window, brushes and their options, painting, decorating, water, height maps, 3D sculpting and the controls. The terrain generator has [a page of its own](terrain-graphs.md); how Massif works inside is in [internals](internals.md).
+
+- [The home screen](#the-home-screen)
+- [The window](#the-window)
+- [Settings](#settings)
+- [New worlds and export](#new-worlds-and-export)
+- [Brushes](#brushes)
+- [Automatic biomes and paint](#automatic-biomes-and-paint)
+- [Patterns of terrains](#patterns-of-terrains)
+- [Ground covers](#ground-covers)
+- [Custom objects](#custom-objects)
+- [Rivers](#rivers)
+- [Height maps](#height-maps)
+- [Real blocks](#real-blocks)
+- [3D Sculpt](#3d-sculpt)
+- [Cards](#cards)
+- [In the Finder and Explorer](#in-the-finder-and-explorer)
+- [Controls](#controls)
+
+## The home screen
+
+Massif opens on its home screen. On the left are the ways in — **New map**,
+**From a height map**, **Open a map…** (a `.massif`), **Import from
+WorldPainter…** (a `.world`) — and the maps opened lately. In the middle are
+the settings of a new map with a preview of the whole map, and **Create map**.
+A `.massif`, a `.world` or a height map dropped on the window opens too.
+**File ▸ New** (⌘N) comes back to the home screen, with a way back to the open
+map (Esc).
+
+Behind it is one of the pictures of
+[`crates/massif-app/assets/backdrops`](../crates/massif-app/assets/backdrops) —
+a massif at dusk drawn by Massif, templates of the terrain graph rendered by its
+viewport —, taken at random each time Massif opens, reduced to sixteen colours
+of its own with an ordered dither in square cells that moves on about once a
+second. Every `.jpg` or `.png` dropped in that folder is built in.
+
+## The window
+
+The window is made of areas, as in Blender. Each area shows any editor: the
+map, the 3D view, tools, tool settings, brush settings, brushes, custom
+brushes, terrain and biome palettes, levels or world info.
+
+- The ⋮ menu of an area splits it, joins it with its neighbour, maximises it
+  (Ctrl+Space) or closes it. Hold Shift for a one-click close button.
+- Drag the top-right corner of an area into it to split it where you let go.
+- Drag an area by its title onto another to move it, or onto its centre to
+  swap the two. Drag the gaps between areas to resize them.
+- The app has two sides, switched at the top left: **World**, the map
+  editor (workspaces Layout, Sculpting, Painting, 3D, 3D Sculpt, Maps,
+  Minimal), and
+  **Terrain**, the terrain generator (Graph and Render). Each side
+  remembers the workspace it was left on.
+- Workspaces are tabs of arrangements; duplicate one with `+`, right-click
+  it to reset it (back to how it was at first; a copy goes back to what it
+  was copied from), duplicate it or delete it. The layout is remembered.
+
+A slider is a slim track with its value after it: click the track to jump
+there, drag the thumb (Shift: finer), drag the value sideways, or click it to
+type one. A number clicked to be typed in gets the caret where it was clicked
+(in any number field), so that a digit adds to it rather than replacing it. A
+narrow Tools area keeps each row of tools on one line, its name under the
+pointer; the tools have icons drawn for what they do to the land.
+
+What Massif did and what runs in the background (saving, exporting, the
+automatic tools over a whole map) shows at the bottom right of the window,
+over the areas, with a **Cancel** for long tasks.
+
+**Help ▸ Massif Help** (F1) opens the help: every part of Massif, topic by
+topic, with a search, and the keyboard shortcuts.
+
+## Settings
+
+**Settings** (⌘, or the home screen's sidebar) has four sections, in a window of their own:
+
+- **Appearance**: the theme, the accent colour (the colour of what is
+  chosen, of the main buttons and of the home screen's art: eight colours, or
+  any other), the home screen's picture moving or still.
+- **Sounds**: little sounds, synthesised as they play — soft mallets,
+  clicks and air, as [Cuelume](https://cuelume.dev/) makes them, so there
+  is no sound file in the app: three notes rising when a long task is done,
+  two when the map is saved, a low pair when something fails, one wavering
+  when something is refused or stopped; with **All**, soft ticks for
+  choices, switches, windows opening and closing, workspaces. **Off**,
+  **Essential** (what ends and what fails) or **All**, a volume, and each
+  sound to hear. The sound output is open only while a sound plays (and two
+  seconds after): silent, Massif holds neither the speakers nor wireless
+  headphones, which can go to another device.
+- **Notifications**: the system's own (the Notification Centre, a toast on
+  Windows, the desktop's on Linux) when a task of more than two seconds ends
+  — an export, an import, a conversion, a pass over the whole map —:
+  never, while Massif is not in front, or always; and a button to try it.
+- **Memory**: a limit (automatic, 1, 2, 4 or 8 GB) for what is kept decoded
+  — three fifths for the map's tiles, measured at the size they take, the
+  rest for the column data and images of the map view —, beyond which what
+  was used least is put away, compressed; and what is in use now.
+
+## New worlds and export
+
+A new map (the home screen) takes a name, a size (width × depth, in
+multiples of 128 blocks, up to 65,536), its **height** — Minecraft's own (−64 to 320) or
+taller, up to 512, 1024 or 2032 (the highest Minecraft allows), and as deep
+as −2032 — its land — a
+topography (flat, plains, hills, mountains, islands) with its relief height
+(up to fifteen times the landform's in a tall world; peaks close in on the
+top of the world rather than being cut flat), feature size and ground
+level, or a template of the terrain generator (alpine range, continents,
+archipelago…), whose map then opens on the Terrain side with its nodes —
+the water level, lava instead of water (opaque and glowing, its shores
+scorched basalt and blackstone, never sand), beaches (sand along the
+water, up to six blocks from it: low ground farther inland stays grass), automatic terrains
+(grass, sand, rock and snow by height and slope) or a single one, and a
+seed; a preview of the whole map updates as you change them. A map made
+from a height map takes a height too.
+
+**File ▸ Export** writes the world to a Minecraft saves folder for the
+version of the game you choose — the newest one installed on the computer
+to begin with — with its game mode, difficulty, cheats, hardcore,
+structures beyond the map, world border, spawn point, what surrounds the
+map (vanilla terrain or void) and data packs (copied in and enabled).
+Versions before 1.18 hold 256 blocks of height: the map is cut below 0 and
+above 255, and the dialog says so. **Test Export** writes only the 3 × 3
+tiles around the centre of the map view to a separate folder, to check the
+result in the game quickly.
+
+## Brushes
+
+Brushes work as in WorldPainter. A brush has a shape (one of the twelve
+built-in brushes, a terrain stamp, or an image), a radius, an intensity and
+a rotation:
+
+- **Built-in brushes**: circle or square with a Constant, Linear, Sine,
+  Plateau, Spike or Dome profile.
+- **Terrain stamps**: generated height-map brushes for landforms; use them
+  with Raise to stamp a peak, with Lower to carve a valley.
+- **Custom brushes**: greyscale images (white paints, black does not),
+  stretched over the brush. Massif reads its own `brushes` folder (every
+  sub-folder is a group) and WorldPainter's brushes folders, in place.
+
+Brush operations run tile by tile in parallel, so even a brush 8,000 blocks
+across stays responsive and light on memory.
+
+The outline on the map is exact: zoomed in, it follows the blocks the brush
+will change, block by block; zoomed out, a custom brush is outlined through
+every pixel of its image. Inside it, the brush shows how hard it presses:
+the map is lighter where it presses more, with a line where its strength
+is a quarter, a half and three quarters — the rings of a soft round brush,
+the peaks of a terrain stamp.
+
+**Brush options** (in Brush Settings) limit where every brush acts, from
+what the map shows:
+
+- **Height limits**: at or above, at or below, between or beyond two
+  heights, optionally fading over 4 blocks. A cross-section shows where the
+  brush acts; drag its limits.
+- **Only on / except on**: terrains, biomes, water or dry land.
+- **Slope**: above or below an angle. Slopes are the trend of the hillside
+  (a plane fitted over 9 × 9 columns), not the steps between single blocks;
+  the map and 3D views' Slope mode use the same measure.
+- **Facing**: only the slopes turned a given way, give or take an angle —
+  the side the sun lights, the side in the shade. A compass sets the
+  direction (north up, as on the map); **Sun** and **Shade** take it from
+  the light of the map. Level ground faces nowhere. Snow on the northern
+  slopes, moss in the shade, bleached rock in the sun: one stroke each.
+- **Curvature**: hollows or bumps, deeper than a number of blocks compared
+  with the columns around.
+
+The options are read by squares of 4 × 4 tiles in parallel, each with the
+ring of columns around it its tests need, so that a brush of any size takes
+little memory; slopes are fitted from sums along the rows, then down the
+columns, a few additions a column rather than the 81 of the square.
+
+## Automatic biomes and paint
+
+Two tools of the Paint group work from what the map already is, with a
+brush (and its options) or over the whole map at once:
+
+- **Auto biome** reads the land and gives it biomes. Every column is one
+  of twenty kinds of land, told from its water (deep, shallow, or with a
+  bank close on both sides: a river), its height over the sea (lowland,
+  hills, mountains, peaks), its slope (cliffs are rock, whatever grows on
+  them) and what its ground is made of (grass, sand, red sand, snow, moss,
+  mud, mycelium, podzol, stone); sand at the water's edge is a beach, and
+  sand away from it a desert only where sand is all around (seven tenths of
+  the dry ground within 48 blocks): a patch of sand in a plain is the
+  plain. Each kind has a biome. A map filled with one terrain other than
+  grass (a WorldPainter world all of sand, for instance) is read from the
+  shape of its land there: its fill says nothing about it.
+- **Auto paint** goes the other way: every biome has a terrain for its
+  ground, one for its cliffs and one for what lies under its water. Where
+  no biome is set, the ground is painted as the land it is.
+
+Over the whole map (**Whole map** in Tool Settings, or Edit ▸ Auto biome /
+Auto paint: whole map) they run in the background, a progress bar and a
+Cancel button in front of the map, and their result is one undoable step;
+the map is read by squares of 4 × 4 tiles and never decoded whole (a map
+of 44,544 × 33,536 blocks takes about 15 seconds). Hovered over the map,
+both show what they would change before anything is painted: under the
+brush, the columns that would change, in their new colour. A stroke changes every column in the core of the brush
+(all of it at 100% intensity, with a blended edge below), and says how many
+it changed — or that the land already follows the rules.
+
+What the land calls for is worked out a tile at a time, by squares of
+tiles each read with its margin, and kept: as long as the map does not
+change, the preview following the pointer and the dabs of a stroke read
+each tile once (a stroke of Auto biome hands what it read back to the
+preview), and a brush of any size takes little memory. The preview is
+drawn a column a pixel. With a brush 4,000 blocks across on a 5,888-block
+WorldPainter map, the pointer moves at 30 ms a frame and a stroke at about
+100; at 300 blocks, both under 10 ms.
+
+**Rules…** (in Tool Settings, or Edit ▸ Automatic rules) opens both tables:
+the depths, heights and slopes the land is read with, the biome of each
+kind of land, the three terrains of each biome. They are kept with the
+settings. Forests are told from the ground for now (podzol, coarse dirt);
+trees will count when layers exist.
+
+## Patterns of terrains
+
+Paint terrain can lay several terrains at once (Tool Settings ▸ a pattern
+of terrains): grass with patches of coarse dirt and podzol, stone veined
+with gravel, a patchwork of fields. The pattern is a noise — **patches**,
+**veins**, **blobs**, **cells** or wavering **stripes** at an angle — of the
+size you choose, with soft or sharp edges and a seed; every terrain gets
+the share of the ground its weight says, whatever the pattern (the pattern
+learns its own spread and paints by rank). A picture shows it before the
+first stroke, and the brush, its intensity and its options apply as with
+any paint.
+
+## Ground covers
+
+The **Ground cover** tool (Paint group) paints what grows on the ground:
+grass, tall grass, flowers, ferns, mushrooms, dead bushes, snow and seagrass
+come with every world, and **New cover** makes one of your own. A cover is
+a mix of blocks with their weights — the flowers of a meadow, or any block
+at all, typed or picked from the game's blocks — with a **density** (the
+share of the painted ground where something grows), a **height** (cane and
+cactus 1 to 3 blocks), **only on soil** (grass, dirt, podzol, moss, mud:
+plants pop off sand and stone in the game) and **under water** (seagrass,
+coral). The right button takes a cover off. The brush, its intensity and its
+options (height band, slope, only on a terrain…) apply as with any paint;
+the eyedropper picks the cover under the cursor.
+
+Covers grow on the topmost surface of a column — the ground, a floating
+island's top, the floor a carve opens — never under an overhang. Where each
+plant grows is decided column by column from the world's seed, so the map,
+the 3D view and the export agree: zoomed in, the map shows every plant in
+its own colour (dandelions yellow, poppies red, cornflowers blue…), and the
+3D view the same. Tall plants are written in their two halves; versions of
+the game without a plant get the closest they have (short grass is grass
+before 1.20.3, cornflowers are blue orchids before 1.14, and before 1.13
+plants are numbered, tall ones as double plants).
+
+## Custom objects
+
+The **Objects** tool (in Decorate, beside Ground cover) paints where objects
+stand. **Import objects…** in its settings — or files dropped on the window
+— reads them from:
+
+| File | From |
+|---|---|
+| `.schem` | WorldEdit and FAWE (Sponge schematics, versions 1 to 3) |
+| `.schematic` | MCEdit, Schematica and old WorldEdit (blocks numbered before 1.13, turned into today's: logs and their axis, leaves, flowers, slabs, stairs…) |
+| `.bp` | Axiom blueprints |
+| `.litematic` | Litematica (all its regions in one object) |
+| `.nbt` | Structure blocks |
+
+Air and structure voids are left out; an object stands on its lowest layer
+that is not soil or hanging plants — the foot of a trunk — and the dirt a
+tree was copied with goes into the ground. Files imported together make a
+layer, and every layer has its objects with their weights, a **spacing**
+(the side of the squares of its grid: one object at most in each), a
+**density** (the share of the squares that get one), a random **turn** and
+**mirror** (their blocks follow: logs lie along the new axis, stairs and
+vines face the new way), **only on soil**, **under water**, a **sink** (how
+deep they go into the ground) and **replace the ground** (otherwise their
+blocks only take the place of air, water and plants). The right button takes
+a layer off; Add objects… reads more files into a layer.
+
+Where each object stands is decided from the world's seed, square by
+square, where the layer is painted on the top of the land: the map draws the
+objects from above with their shadows when zoomed in, the 3D view block by
+block in their colours (the game's own when its blocks are loaded), and the
+export writes them whole, across chunks and tiles, for every version the
+blocks exist in. Block entities (chests' contents, signs' text) and entities
+are not kept.
+
+## Rivers
+
+The **River** tool (Water group) lays a river out from its source:
+
+- **Click** on land: the river springs there, and its water finds its own
+  way down — down the slope, a block at a time; a hollow it meets fills up
+  to where it overflows, and it goes on from there — to the sea, into water
+  already there, or off the map. Before the click, hovering shows where the
+  water would go.
+- **Click elsewhere**: that is where it ends. The way there is worked out
+  over the land, as water would take it: along the valleys, climbing as
+  little as it can, into the water it meets.
+- **Drag the river** anywhere along its course to bend it: the point held
+  becomes a point it must pass, and the way on either side follows the land
+  again. Drag the source, those points or the end to move them; right-click
+  one to take it away (the end: back to where the water goes by itself).
+- **Dig river** (or Enter) digs it, one undoable step; **Cancel** (or Esc)
+  drops it. The bar over the map says how long it is and where it goes.
+
+Its settings: **Width** at the source, **Flow** (how much it grows
+downstream: up to five times wider and two and a half times deeper),
+**Depth**, **Erosion** (how much it wears the land beside its bed: a wider
+valley), **Banks**, **Lakes** (which hollows fill: deep ones only, or every
+one, or none — through the others it cuts a gorge), the terrain of its bed
+and a river biome on its water.
+
+- The course is smoothed into a curve through its points.
+- Water runs from the source down. Its level along the river is the lowest
+  the land allows so far, a
+  little under the banks: it never rises downstream, whatever the bumps.
+- The bed is `depth` deep in the middle and rises to the water's edge;
+  banks of the chosen width climb back to the ground, smoothly. Only the
+  ground is lowered: nothing is raised.
+- A course that starts on a river is a branch, leaving it at its level; one
+  that ends on a river or a lake is a tributary, meeting it at its level.
+  Two branches that meet again make a split stream.
+- The bed gets a terrain (gravel, sand…), the water a river biome.
+
+The water's level is a whole block per column, so it stands in steps
+along the river: still water, as Minecraft keeps it; mods that let water
+flow over water (Streams Reflowing) make a current of it.
+
+## Height maps
+
+- **File ▸ New World from Height Map…** makes a world of a greyscale image
+  — a 16-bit PNG from Gaea, World Machine or an image editor (JPEG, and raw
+  square `.r16` / `.r32` are read too): what height black and white stand
+  for, how many blocks a pixel covers, the sea's level; terrains are painted
+  from height and slope. The home screen offers it too.
+- **File ▸ Export Height Map…** saves the map's surface (with its levels and
+  what was sculpted) as a 16-bit PNG, black the bottom of the world, white
+  its top.
+- In a graph, the **File input** node brings in a file as relief: a height
+  map (stretched over the terrain, black and white set to any height), a
+  WorldPainter `.world` or a `.massif` (fitted to the terrain, or read at
+  its own place). Its Height, Water and Colour outputs work like the Map
+  node's, and the file is read again when it changes. **Height map…**
+  beside Convert to voxels builds the terrain at full size and saves its
+  relief as a 16-bit PNG instead of writing it to the map.
+
+## Real blocks
+
+Massif reads the blocks of the game from your own installation: the client
+jar of a released version, found where the official launcher, CurseForge or
+Prism keep them (on any drive), or chosen by hand. Nothing of the game is
+copied into Massif or the repository; the jar is read in place, in a
+fraction of a second, every time Massif starts.
+
+- Every block state file gives a block; its model, followed through its
+  parents, gives the textures of its top, sides and bottom; grass, leaves
+  and water are tinted as in the game (plains colours).
+- The blocks and terrains of the open world take the real colours of their
+  textures, on the map and in the 3D view.
+- The **Terrain** panel draws each terrain with its main block's textures.
+- The **Blocks** panel lists every block of the game by family (soil,
+  stone, ores, wood, plants, building blocks, coloured blocks, Nether,
+  End), with a search field and the version to read from. Clicking a whole
+  block makes it a terrain of the world (grass, podzol and mycelium over
+  dirt, as in the game; other blocks a few deep over the natural rock) and
+  paints it. Clicking any other block (a flower, grass, a carpet, coral…)
+  makes it a ground cover that grows it, and paints that.
+
+## 3D Sculpt
+
+Sculpting in 3D has its own editor, **3D Sculpt** (its workspace sits next
+to 3D; the 3D View's **Sculpt** button opens it): a 3D view with its tools
+along the top — **Sculpt** (the left button adds matter, the right one
+digs), **Smooth** and **Paint** (the terrain chosen in Terrain or Blocks, or
+a pattern; the right button puts back what the height calls for) — with the
+brush of every tool: its shape (custom images too, turned as they are),
+size, intensity and rotation are those of **Brush Settings**, which the
+3D Sculpt workspace shows beside its view.
+
+- Sculpt pushes the surface out or in under the brush, along its slope, a
+  layer at a time — 16 blocks a second at full strength —, the brush's
+  shape setting how far each point goes: a click adds a bump, holding grows
+  it.
+- Smooth melts bumps and steps away without wearing the land down: it blurs
+  the matter, then pushes it back out a little (Taubin's smoothing), so a
+  hill keeps its height and a hollow its depth.
+- Shift + drag moves the view, Alt + drag (or the middle button) turns it.
+  The wheel brings the view closer around what it turns about; Shift +
+  wheel moves forward over the land; Alt + wheel flies toward the point
+  under the cursor; ⌘ (Ctrl) + wheel sizes the brush.
+- **Player** walks in the view as in Minecraft, to see and sculpt the land
+  at a player's height: it comes down where the middle of the view looks,
+  with Minecraft's body (0.6 × 1.8 blocks, its eyes at 1.62) and field of
+  view. A click lends the view the mouse, which then looks around (Esc
+  gives it back); W A S D walk, Shift (or W twice) runs, Space jumps — held,
+  again on landing —, twice quickly flies (Space up, Q down; twice again, or
+  flying down to the ground, lands), Q sneaks, and a crouched player does
+  not step off an edge. Water slows and lets swim, matter sculpted over the
+  player lifts them, and a fall off the map puts them back where they last
+  stood. The buttons sculpt at the crosshair; the click that takes the
+  mouse sculpts nothing. Player off, the orbit camera comes back from the
+  player's eyes.
+
+The brush is laid on the slope under the cursor, read from the matter
+around smoothed over five blocks, so it glides over the steps of the terrain
+without shaking, and a custom brush keeps its shape on a hillside. Where
+that smoothed slope and the face pointed at disagree — at the foot of a
+cliff, on an edge, in a hollow — the face wins, so that the brush always
+works toward the eye, never into the matter or along it. The ordinary 3D View only shows the world
+(its wheel works the same).
+
+How sculpted matter is stored is in [internals](internals.md#sculpted-volumes).
+
+## Cards
+
+Hover a tool and its card shows: a little looping animation of the tool at
+work on a patch of land drawn like the map — a hill rising under the brush,
+flowers spreading, trees growing where they are painted, a river laid out
+point by point and dug, water rising in a basin — then what it does, what
+each gesture and key does with it, and a remark. A brush's card shows the
+land it raises, shaded and contoured on a block of ground, turning slowly
+from side to side, so that its shape is easy to make out. (As in the user's
+WorldPainter fork, whose cards these are.)
+
+## In the Finder and Explorer
+
+A `.massif` file shows its map as its icon: Massif keeps a small picture of
+the map in the file, which the system reads without opening the map — as
+WorldPainter's fork does for `.world` files.
+
+- **macOS**: the Quick Look extension that comes with the app
+  (`tools/macos`) draws it, in the Finder and in Quick Look. A double-click
+  on a `.massif` opens it in Massif; Open With ▸ Massif imports a
+  WorldPainter `.world`.
+- **Windows**: `MassifThumbnails.dll`, next to `Massif.exe`
+  (`crates/massif-thumbnails`), draws it in Explorer. Massif registers it
+  for the current user each time it starts (no installer, no administrator
+  rights), with `.massif` files opening in Massif on a double-click; moving
+  its folder and starting it again moves the registration.
+
+Maps saved before this have no picture until they are saved again.
+
+## Controls
+
+Massif follows WorldPainter's defaults.
+
+| Input | Action |
+|---|---|
+| Left / right button (or Alt + left) | Apply the tool / its inverse (lower, erase, drain…) |
+| Scroll | Brush size (Shift: one block at a time) |
+| ⌘ + scroll (the Windows key on a PC keyboard) | Turn the brush, 5° a notch (Shift: 1°); Ctrl + Shift + scroll on Windows and Linux |
+| Ctrl or Alt + scroll, pinch | Zoom the map |
+| Middle button, Space + drag | Move the map |
+| `−` `+` | Brush size |
+| `1` … `9`, `0` | Intensity 10 % … 100 % |
+| `[` `]` | Turn the brush |
+| `R` `L` | Turn the light of the map |
+| ⌥H ⌥A ⌥S ⌥P ⌥R ⌥F ⌥Y | Height, Flatten, Smooth, Paint, Spray, Flood, Eyedropper |
+| ⌘Z / ⇧⌘Z, ⌘S, ⌘O, ⌘N, ⌘E | Undo / redo, save, open, new, export |
+| Esc | Cancel the stroke being drawn |
+
+In the 3D view:
+
+| Input | Action |
+|---|---|
+| Left drag / right drag | Turn / move the view |
+| Scroll, pinch | Come closer / go back |
+| W A S D or arrows, Q / E | Fly over the map, down / up (Shift: faster) |
+| Double-click | Look at the point under the cursor |
+| Header buttons | Look at the middle of the map view; show the whole map |
+| With Build, Dig, Smooth (3D) | Left sculpts where the cursor points, right inverts; middle drag or Alt + drag turns, Shift + middle drag moves |
+| 3D Sculpt's **Player** | Click the view, then: the mouse looks around, W A S D walk, Space jumps (twice: flies, up), Q sneaks (flying: down), Shift or W twice runs, the buttons sculpt at the crosshair; Esc gives the mouse back |
