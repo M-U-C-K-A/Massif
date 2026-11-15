@@ -1999,8 +1999,6 @@ fn facing_dial(ui: &mut Ui, f: &mut massif_core::filter::Filter) {
         .on_hover_text("Drag to turn (north up)");
 }
 
-/// A stylised cross-section of a landscape, with the height band the filter
-/// lets through. The limits can be dragged.
 /// One of the two height limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Limit {
@@ -2008,14 +2006,12 @@ enum Limit {
     Below,
 }
 
-/// The brush's height limits: the heights of the map, the band the brush
-/// acts in over them (its ends dragged), then the limits turned on and set
-/// in a well.
+/// The brush's height limits, in one well: the land of the map seen from the
+/// side with the limits across it, then the limits turned on and set.
 fn height_limits(ui: &mut Ui, f: &mut massif_core::filter::Filter, heights: Option<&crate::doc::Heights>, min_y: i32, max_y: i32, sea: i32) {
     let top = max_y - 1;
-    height_band(ui, f, heights, min_y, max_y, sea);
-    ui.add_space(6.0);
     crate::widgets::well(ui, |ui| {
+        land_profile(ui, f, heights, min_y, max_y, sea);
         crate::widgets::row(ui, "At or above", |ui| {
             let mut on = f.above.is_some();
             if crate::widgets::switch(ui, &mut on).changed() {
@@ -2063,181 +2059,248 @@ fn height_limits(ui: &mut Ui, f: &mut massif_core::filter::Filter, heights: Opti
     hint(ui, &format!("{caption}{share}"));
 }
 
-/// The heights of the map as bars, lowest to highest, under the band the
-/// brush acts in: its ends are dragged (or a bar clicked) to set the limits.
-fn height_band(ui: &mut Ui, f: &mut massif_core::filter::Filter, heights: Option<&crate::doc::Heights>, min_y: i32, max_y: i32, sea: i32) {
+/// A quad of `mesh`, its corners in turn, each with its colour.
+fn quad(mesh: &mut egui::Mesh, corners: [(egui::Pos2, Color32); 4]) {
+    let i = mesh.vertices.len() as u32;
+    for (p, c) in corners {
+        mesh.colored_vertex(p, c);
+    }
+    mesh.add_triangle(i, i + 1, i + 2);
+    mesh.add_triangle(i, i + 2, i + 3);
+}
+
+/// The land of the map seen from the side, its columns ranked from the
+/// highest on the left to the lowest on the right: a height meets it once,
+/// as far across as the share of the map at or above it. The land the brush
+/// acts on is in the accent and the sea in blue; each limit is a line
+/// across, dragged up or down (Shift: finely), its height on the scale at
+/// the right. Pressed elsewhere, the nearest limit comes to the pointer.
+fn land_profile(ui: &mut Ui, f: &mut massif_core::filter::Filter, heights: Option<&crate::doc::Heights>, min_y: i32, max_y: i32, sea: i32) {
     let pal = Palette::of(ui);
     let top = max_y - 1;
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 104.0), Sense::click_and_drag());
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 150.0), Sense::click_and_drag());
+    let painter = ui.painter_at(rect);
     let heights = heights.filter(|h| h.total > 0);
-    // The heights shown: the map's, its limits and the sea, with a margin.
-    let (mut v0, mut v1) = heights.map_or((sea - 24, sea + 96), |h| (h.lo, h.hi()));
-    for v in [f.above, f.below].into_iter().flatten().chain([sea]) {
-        v0 = v0.min(v);
-        v1 = v1.max(v);
-    }
-    let pad = ((v1 - v0) / 16).max(3);
-    let v0 = (v0 - pad).max(min_y);
-    let v1 = (v1 + pad).min(top).max(v0 + 8);
-    let plot = Rect::from_min_max(pos2(rect.left() + 12.0, rect.top() + 22.0), pos2(rect.right() - 12.0, rect.bottom() - 34.0));
-    let track = plot.bottom() + 13.0;
-    let span = (v1 - v0 + 1) as f32;
-    // The left edge of height `h`'s column, and the height at `x` (a column's
-    // edge, rounded).
-    let x_of = |h: f32| plot.left() + (h - v0 as f32) / span * plot.width();
-    let edge_at = |x: f32| (v0 as f32 + (x - plot.left()) / plot.width() * span).round() as i32;
-    // Where each limit sits: under the column of `above`, over that of
-    // `below`.
-    let edge = |l: Limit, v: i32| match l {
-        Limit::Above => x_of(v as f32),
-        Limit::Below => x_of(v as f32 + 1.0),
+    let water = Color32::from_rgb(86, 132, 204);
+    let small = egui::FontId::proportional(10.0);
+
+    // The heights shown: the land's and the sea's, with a margin. The limits
+    // do not stretch them: one beyond them waits at the edge.
+    let (lo, hi) = heights.map_or((sea - 24, sea + 72), |h| (h.lo.min(sea), h.hi().max(sea)));
+    let pad = ((hi - lo) / 10).max(4);
+    let v0 = (lo - pad).max(min_y) as f32;
+    let v1 = ((hi + pad).min(max_y) as f32).max(v0 + 16.0);
+    // The scale on the right: as wide as its longest label.
+    let sea_label = format!("sea {sea}");
+    let widest = [sea_label.clone(), (v0 as i32).to_string(), (v1 as i32).to_string(), f.above.unwrap_or(0).to_string(), f.below.unwrap_or(0).to_string()]
+        .into_iter()
+        .map(|s| painter.layout_no_wrap(s, small.clone(), pal.text).size().x)
+        .fold(0.0f32, f32::max);
+    let plot = Rect::from_min_max(pos2(rect.left(), rect.top() + 14.0), pos2(rect.right() - widest - 18.0, rect.bottom() - 12.0));
+    let label_x = plot.right() + 9.0;
+    let y_of = |e: f32| plot.bottom() - (e - v0) / (v1 - v0) * plot.height();
+    let e_at = |y: f32| v0 + (plot.bottom() - y) / plot.height() * (v1 - v0);
+    // A limit's line: under the blocks at `above`, over those at `below`.
+    let level = |l: Limit, v: i32| match l {
+        Limit::Above => v as f32 - 0.5,
+        Limit::Below => v as f32 + 0.5,
+    };
+    let line_y = |l: Limit, v: i32| y_of(level(l, v).clamp(v0, v1));
+    // Where the heights are, for the tests.
+    ui.data_mut(|d| d.insert_temp(egui::Id::unique("height profile"), (plot, v0, v1)));
+    // The share of the map at or above each height, from the lowest; and the
+    // height of the column a share `t` of the map from the top, the columns
+    // of a height spread evenly over its block (from half a block under it
+    // to half a block over it), so that the land slopes rather than steps.
+    let from_top: Vec<f32> = heights.map_or_else(Vec::new, |h| {
+        let mut shares = vec![0.0; h.counts.len() + 1];
+        let mut sum = 0u64;
+        for k in (0..h.counts.len()).rev() {
+            sum += h.counts[k] as u64;
+            shares[k] = (sum as f64 / h.total as f64) as f32;
+        }
+        shares
+    });
+    let lowest = heights.map_or(0, |h| h.lo);
+    let share_from = |y: i32| from_top.get((y - lowest).max(0) as usize).copied().unwrap_or(0.0);
+    let height_at = |t: f32| {
+        let t = t.clamp(0.0, 1.0);
+        let k = from_top.partition_point(|&s| s > t).saturating_sub(1).min(from_top.len().saturating_sub(2));
+        let (over, from) = (from_top.get(k + 1).copied().unwrap_or(0.0), from_top.get(k).copied().unwrap_or(1.0));
+        let down = if from > over { ((t - over) / (from - over)).clamp(0.0, 1.0) } else { 0.0 };
+        (lowest + k as i32) as f32 + 0.5 - down
     };
 
-    // ---- dragging the limits ------------------------------------------------
+    // ---- dragging a limit ---------------------------------------------------
     let id = response.id.with("limit");
-    let held: Option<Limit> = ui.data(|d| d.get_temp(id));
-    let nearest = |x: f32, f: &massif_core::filter::Filter| {
+    let pointer = response.interact_pointer_pos().or(response.hover_pos());
+    let nearest = |y: f32, f: &massif_core::filter::Filter| {
         [(Limit::Above, f.above), (Limit::Below, f.below)]
             .into_iter()
-            .filter_map(|(l, v)| v.map(|v| (l, (edge(l, v) - x).abs())))
+            .filter_map(|(l, v)| v.map(|v| (l, (line_y(l, v) - y).abs())))
             .min_by(|a, b| a.1.total_cmp(&b.1))
     };
-    let pointer = response.interact_pointer_pos().or(response.hover_pos());
+    // The limit held, and the height its line is at, not yet rounded: the
+    // one nearest to where the button went down.
+    let mut held: Option<(Limit, f32)> = ui.data(|d| d.get_temp(id));
     if (response.drag_started() || response.clicked())
-        && let Some(p) = pointer
-        && let Some((l, _)) = nearest(p.x, f)
+        && let Some(p) = ui.input(|i| i.pointer.press_origin()).or(pointer)
+        && let Some((l, _)) = nearest(p.y, f)
     {
-        ui.data_mut(|d| d.insert_temp(id, l));
+        let v = match l {
+            Limit::Above => f.above,
+            Limit::Below => f.below,
+        };
+        held = v.map(|v| (l, level(l, v)));
     }
-    let held = ui.data(|d| d.get_temp::<Limit>(id)).or(held);
     if (response.dragged() || response.clicked())
-        && let (Some(p), Some(l)) = (pointer, held)
+        && let (Some(p), Some((l, e))) = (pointer, held)
     {
-        let at = edge_at(p.x);
+        let fine = ui.input(|i| i.modifiers.shift) && !response.clicked();
+        let e = if fine { e - response.drag_delta().y / plot.height() * (v1 - v0) * 0.1 } else { e_at(p.y) }.clamp(v0, v1);
         match l {
-            Limit::Above => f.above = Some(f.below.map_or(at, |b| at.min(b)).clamp(min_y, top)),
-            Limit::Below => f.below = Some(f.above.map_or(at - 1, |a| (at - 1).max(a)).clamp(min_y, top)),
+            Limit::Above => f.above = Some(f.below.map_or((e + 0.5).round() as i32, |b| ((e + 0.5).round() as i32).min(b)).clamp(min_y, top)),
+            Limit::Below => f.below = Some(f.above.map_or((e - 0.5).round() as i32, |a| ((e - 0.5).round() as i32).max(a)).clamp(min_y, top)),
         }
+        held = Some((l, e));
     }
-    if response.drag_stopped() || response.clicked() {
-        ui.data_mut(|d| d.remove::<Limit>(id));
+    if response.drag_stopped() || response.clicked() || !(response.dragged() || response.is_pointer_button_down_on()) {
+        held = None;
     }
-    let hot = held.or_else(|| pointer.filter(|_| response.hovered()).and_then(|p| nearest(p.x, f)).filter(|(_, d)| *d < 8.0).map(|(l, _)| l));
+    ui.data_mut(|d| match held {
+        Some(h) => {
+            d.insert_temp(id, h);
+        }
+        None => d.remove::<(Limit, f32)>(id),
+    });
+    let hot = held.map(|h| h.0).or_else(|| pointer.filter(|_| response.hovered()).and_then(|p| nearest(p.y, f)).filter(|(_, d)| *d < 7.0).map(|(l, _)| l));
     if hot.is_some() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
     }
 
-    // ---- drawing ------------------------------------------------------------
-    let painter = ui.painter_at(rect);
-    painter.rect(rect, theme::GROUP_RADIUS, pal.well(), Stroke::new(1.0, pal.border), StrokeKind::Inside);
-    // The band the brush acts in.
-    let shade = pal.accent.gamma_multiply(0.12);
-    let band = |a: f32, b: f32| {
-        if b > a {
-            painter.rect_filled(Rect::from_min_max(pos2(a.max(plot.left()), plot.top() - 6.0), pos2(b.min(plot.right()), plot.bottom())), 2, shade);
-        }
-    };
-    match (f.above, f.below) {
-        (Some(a), Some(b)) if f.beyond => {
-            band(plot.left(), edge(Limit::Above, a));
-            band(edge(Limit::Below, b), plot.right());
-        }
-        (None, None) => {}
-        (a, b) => band(a.map_or(plot.left(), |a| edge(Limit::Above, a)), b.map_or(plot.right(), |b| edge(Limit::Below, b))),
+    // ---- the scale ----------------------------------------------------------
+    let grid = theme::mix(pal.well(), pal.border, 0.75);
+    let span = v1 - v0;
+    let step = [8, 16, 32, 64, 128].into_iter().find(|&s| span / s as f32 <= 6.0).unwrap_or(256);
+    let ticks: Vec<(i32, f32)> = (((v0 / step as f32).ceil() as i32 * step)..=(v1 as i32))
+        .step_by(step as usize)
+        .map(|e| (e, y_of(e as f32)))
+        .filter(|&(_, y)| y > plot.top() + 4.0 && y < plot.bottom() - 4.0)
+        .collect();
+    for &(_, y) in &ticks {
+        painter.hline(plot.x_range(), y, Stroke::new(1.0, grid));
     }
-    // The heights, a few blocks a bar when they are many; in the accent
-    // where the brush acts, blue under the sea.
-    let water = Color32::from_rgb(86, 132, 204);
+
+    // ---- the land and the sea ---------------------------------------------
+    let limited = f.above.is_some() || f.below.is_some();
+    // The sea over the land under its level, as a limit at it would be.
+    let sea_y = y_of(sea as f32 - 0.5);
+    let coast = plot.left() + share_from(sea) * plot.width();
     match heights {
-        Some(h) => {
-            let bars = ((plot.width() / 3.0) as usize).clamp(8, (v1 - v0 + 1) as usize);
-            let per = ((v1 - v0 + 1) as usize).div_ceil(bars) as i32;
-            let buckets: Vec<(i32, u32)> = (0..)
-                .map(|k| v0 + k * per)
-                .take_while(|&start| start <= v1)
-                .map(|start| (start, (start..start + per).map(|y| h.at(y)).sum()))
-                .collect();
-            let most = buckets.iter().map(|b| b.1).max().unwrap_or(1).max(1) as f32;
-            for (start, n) in buckets {
-                if n == 0 {
-                    continue;
+        Some(_) => {
+            // A point a column across, and the land on either side of a
+            // limit or of the coast, cut sharp.
+            let n = plot.width().round().max(1.0) as usize;
+            let mut ts: Vec<f32> = (0..=n).map(|i| i as f32 / n as f32).collect();
+            let mut cuts = vec![share_from(sea)];
+            cuts.extend(f.above.map(share_from));
+            cuts.extend(f.below.map(|b| share_from(b + 1)));
+            for c in cuts.into_iter().filter(|c| *c > 0.0 && *c < 1.0) {
+                ts.extend([c - 1e-6, c]);
+            }
+            ts.sort_by(f32::total_cmp);
+            ts.dedup();
+            let at = |t: f32| pos2(plot.left() + t * plot.width(), y_of(height_at(t)));
+            // The colours of the land, by how much the brush acts on it (0
+            // to 1): its fill, lighter at the top of the picture, and its
+            // outline.
+            let fill = |w: f32, y: f32| {
+                let deep = ((y - plot.top()) / plot.height()).clamp(0.0, 1.0);
+                let rock = theme::mix(pal.well(), pal.text, if pal.dark { 0.2 - 0.1 * deep } else { 0.15 - 0.07 * deep });
+                theme::mix(rock, theme::mix(pal.well(), pal.accent, 0.85 - 0.4 * deep), w)
+            };
+            let outline = |w: f32| theme::mix(theme::mix(pal.well(), pal.text, if limited { 0.4 } else { 0.55 }), pal.accent, w);
+            let sea_fill = theme::mix(pal.well(), water, if pal.dark { 0.3 } else { 0.24 });
+            let mut mesh = egui::Mesh::default();
+            let mut outlines: Vec<(Color32, Vec<egui::Pos2>)> = Vec::new();
+            for pair in ts.windows(2) {
+                let (a, b) = (at(pair[0]), at(pair[1]));
+                let middle = height_at((pair[0] + pair[1]) / 2.0);
+                if middle < sea as f32 - 0.5 {
+                    quad(&mut mesh, [(pos2(a.x, sea_y), sea_fill), (pos2(b.x, sea_y), sea_fill), (b, sea_fill), (a, sea_fill)]);
                 }
-                let (x0, x1) = (x_of(start as f32), x_of((start + per) as f32));
-                let tall = (n as f32 / most).sqrt() * plot.height();
-                let middle = start + per / 2;
-                let weight = f.height_weight(middle as f32);
-                let ink = if f.above.is_none() && f.below.is_none() {
-                    if middle < sea { water.gamma_multiply(0.55) } else { pal.weak.gamma_multiply(0.55) }
-                } else if weight > 0.0 {
-                    pal.accent.gamma_multiply(0.45 + 0.55 * weight)
-                } else if middle < sea {
-                    water.gamma_multiply(0.35)
-                } else {
-                    pal.weak.gamma_multiply(0.3)
-                };
-                let bar = Rect::from_min_max(pos2(x0 + 0.5, plot.bottom() - tall.max(1.0)), pos2((x1 - 0.5).max(x0 + 1.5), plot.bottom()));
-                painter.rect_filled(bar, 1, ink);
+                let w = if limited { f.height_weight(middle) } else { 0.0 };
+                let line = outline(w);
+                let bottom = plot.bottom();
+                quad(&mut mesh, [(a, fill(w, a.y)), (b, fill(w, b.y)), (pos2(b.x, bottom), fill(w, bottom)), (pos2(a.x, bottom), fill(w, bottom))]);
+                match outlines.last_mut() {
+                    Some((c, points)) if *c == line => points.push(b),
+                    _ => outlines.push((line, vec![a, b])),
+                }
+            }
+            painter.add(egui::Shape::mesh(mesh));
+            for (c, points) in outlines {
+                painter.add(egui::Shape::line(points, Stroke::new(1.5, c)));
             }
         }
         None => {
             painter.text(plot.center(), egui::Align2::CENTER_CENTER, "Reading the heights of the map…", egui::FontId::proportional(11.0), pal.weak);
         }
     }
-    painter.hline(plot.x_range(), plot.bottom(), Stroke::new(1.0, pal.border));
-    // The sea: a line over the bars, its height under the track.
-    let sea_x = (v0..=v1).contains(&sea).then(|| x_of(sea as f32));
-    if let Some(x) = sea_x {
-        painter.add(egui::Shape::dashed_line(&[pos2(x, plot.top() - 6.0), pos2(x, plot.bottom())], Stroke::new(1.0, water.gamma_multiply(0.8)), 3.0, 3.0));
-        painter.text(pos2(x, rect.bottom() - 6.0), egui::Align2::CENTER_BOTTOM, format!("sea {sea}"), egui::FontId::proportional(9.5), water);
+    // The surface of the sea, over the water.
+    let shore = if heights.is_some() { coast } else { plot.left() };
+    if shore < plot.right() {
+        painter.hline(shore..=plot.right(), sea_y, Stroke::new(1.0, water.gamma_multiply(0.9)));
     }
-    // The track under the bars, the band on it in the accent, a knob at
-    // each limit.
-    painter.line_segment([pos2(plot.left(), track), pos2(plot.right(), track)], Stroke::new(3.0, theme::mix(pal.well(), pal.text, 0.12)));
-    let on_track = |a: f32, b: f32| {
-        if b > a {
-            painter.line_segment([pos2(a, track), pos2(b, track)], Stroke::new(3.0, pal.accent));
+
+    // ---- the limits ---------------------------------------------------------
+    // Their lines across, their heights in pills on the scale, kept apart.
+    let tag_h = 16.0;
+    let mut tags: Vec<(Limit, i32, f32)> = [(Limit::Below, f.below), (Limit::Above, f.above)].into_iter().filter_map(|(l, v)| v.map(|v| (l, v, line_y(l, v)))).collect();
+    for t in &mut tags {
+        t.2 = t.2.clamp(rect.top() + tag_h / 2.0, rect.bottom() - tag_h / 2.0);
+    }
+    if let [upper, lower] = &mut tags[..] {
+        let gap = tag_h + 2.0;
+        if lower.2 - upper.2 < gap {
+            let middle = ((upper.2 + lower.2) / 2.0).clamp(rect.top() + (tag_h + gap) / 2.0, rect.bottom() - (tag_h + gap) / 2.0);
+            upper.2 = middle - gap / 2.0;
+            lower.2 = middle + gap / 2.0;
         }
-    };
-    match (f.above, f.below) {
-        (Some(a), Some(b)) if f.beyond => {
-            on_track(plot.left(), edge(Limit::Above, a));
-            on_track(edge(Limit::Below, b), plot.right());
+    }
+    for &(l, v, tag_y) in &tags {
+        let y = line_y(l, v);
+        let lit = hot == Some(l);
+        painter.hline(plot.left()..=plot.right() + 4.0, y, Stroke::new(if lit { 2.0 } else { 1.5 }, pal.accent));
+        let galley = painter.layout_no_wrap(v.to_string(), small.clone(), pal.on_accent());
+        let tag = Rect::from_min_size(pos2(plot.right() + 4.0, tag_y - tag_h / 2.0), vec2(galley.size().x + 10.0, tag_h));
+        if lit {
+            painter.rect_filled(tag.expand(2.5), theme::PILL, pal.accent.gamma_multiply(0.25));
         }
-        (None, None) => {}
-        (a, b) => on_track(a.map_or(plot.left(), |a| edge(Limit::Above, a)), b.map_or(plot.right(), |b| edge(Limit::Below, b))),
+        painter.rect_filled(tag, theme::PILL, pal.accent);
+        painter.galley(pos2(tag.left() + 5.0, tag.center().y - galley.size().y / 2.0), galley, pal.on_accent());
     }
-    let knob = if pal.dark { Color32::from_rgb(244, 244, 246) } else { Color32::WHITE };
-    for (l, v, label) in [(Limit::Above, f.above, "≥"), (Limit::Below, f.below, "≤")] {
-        let Some(v) = v else { continue };
-        let x = edge(l, v);
-        // Its line over the bars, its value over the line.
-        painter.line_segment([pos2(x, plot.top() - 6.0), pos2(x, plot.bottom())], Stroke::new(1.5, pal.accent));
-        let galley = painter.layout_no_wrap(format!("{label} {v}"), egui::FontId::proportional(10.5), pal.on_accent());
-        let tag = Rect::from_center_size(pos2(x, rect.top() + 9.0), galley.size() + vec2(10.0, 3.0));
-        let tag = tag.translate(vec2((rect.left() + 2.0 - tag.left()).max(0.0) + (rect.right() - 2.0 - tag.right()).min(0.0), 0.0));
-        painter.rect_filled(tag, 4, pal.accent);
-        painter.galley(tag.center() - galley.size() / 2.0, galley, pal.on_accent());
-        let r = if hot == Some(l) { 7.5 } else { 6.5 };
-        painter.circle(pos2(x, track) + vec2(0.0, 1.0), r + 0.5, Color32::from_black_alpha(if pal.dark { 90 } else { 40 }), Stroke::NONE);
-        painter.circle(pos2(x, track), r, knob, Stroke::new(1.0, Color32::from_black_alpha(if pal.dark { 60 } else { 55 })));
+    // The heights of the scale and the sea's, where no limit is.
+    let free = |y: f32, room: f32| tags.iter().all(|t| (t.2 - y).abs() >= room);
+    let sea_shown = free(sea_y, 14.0);
+    if sea_shown {
+        painter.text(pos2(label_x, sea_y), egui::Align2::LEFT_CENTER, &sea_label, small.clone(), theme::legible(water, pal.well(), 4.5));
     }
-    // The ends of the scale, unless the sea's height is there.
-    let small = egui::FontId::proportional(9.5);
-    let clear = |x: f32| sea_x.is_none_or(|s| (s - x).abs() > 40.0);
-    if clear(plot.left() + 8.0) {
-        painter.text(pos2(plot.left(), rect.bottom() - 6.0), egui::Align2::LEFT_BOTTOM, v0.to_string(), small.clone(), pal.weak);
+    for &(e, y) in &ticks {
+        if free(y, 13.0) && (!sea_shown || (y - sea_y).abs() >= 13.0) {
+            painter.text(pos2(label_x, y), egui::Align2::LEFT_CENTER, e.to_string(), small.clone(), pal.weak);
+        }
     }
-    if clear(plot.right() - 8.0) {
-        painter.text(pos2(plot.right(), rect.bottom() - 6.0), egui::Align2::RIGHT_BOTTOM, v1.to_string(), small, pal.weak);
-    }
-    // Under the pointer: the height, and how much of the map is there.
-    if response.hovered()
-        && held.is_none()
-        && let Some(p) = response.hover_pos()
-        && plot.expand2(vec2(0.0, 6.0)).contains(p)
+
+    // ---- under the pointer --------------------------------------------------
+    // Its height across the land, and how much of the map is at or above it.
+    if held.is_none()
+        && hot.is_none()
+        && let Some(p) = response.hover_pos().filter(|p| plot.contains(*p))
     {
-        let y = (v0 as f32 + (p.x - plot.left()) / plot.width() * span).floor() as i32;
-        let much = heights.map(|h| format!(" · {:.1} % of the map", h.at(y) as f32 * 100.0 / h.total as f32)).unwrap_or_default();
+        painter.add(egui::Shape::dashed_line(&[pos2(plot.left(), p.y), pos2(plot.right(), p.y)], Stroke::new(1.0, theme::mix(pal.well(), pal.text, 0.4)), 3.0, 3.0));
+        let y = e_at(p.y).round() as i32;
+        let much = heights.map(|_| format!(" · {:.0} % of the map at or above it", share_from(y) * 100.0)).unwrap_or_default();
         response.on_hover_text_at_pointer(format!("Height {y}{much}"));
     }
 }

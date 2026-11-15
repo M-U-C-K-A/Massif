@@ -289,8 +289,12 @@ the peaks of a terrain stamp.
 what the map shows:
 
 - **Height limits**: at or above, at or below, between or beyond two
-  heights, optionally fading over 4 blocks. A cross-section shows where the
-  brush acts; drag its limits.
+  heights, optionally fading over 4 blocks. A picture shows the land of the
+  map from the side, its columns ranked from the highest on the left to the
+  lowest on the right, the sea in blue and the heights on a scale beside
+  it: the land the brush acts on is in the accent, and each limit is a line
+  across, dragged up or down (Shift: finely) or typed in. Under it, the
+  share of the map the brush acts on.
 - **Only on / except on**: terrains, biomes, water or dry land.
 - **Slope**: above or below an angle. Slopes are the trend of the hillside
   (a plane fitted over 9 × 9 columns), not the steps between single blocks;

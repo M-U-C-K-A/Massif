@@ -35,11 +35,6 @@ impl Heights {
         self.lo + self.counts.len() as i32 - 1
     }
 
-    /// The columns sampled at height `y`.
-    pub fn at(&self, y: i32) -> u32 {
-        usize::try_from(y - self.lo).ok().and_then(|k| self.counts.get(k)).copied().unwrap_or(0)
-    }
-
     /// The share of the map (0 to 1) where `filter`'s height tests let the
     /// brush act.
     pub fn share(&self, filter: &massif_core::filter::Filter) -> f32 {

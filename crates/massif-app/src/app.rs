@@ -3539,47 +3539,63 @@ mod tests {
         crop.save(dir.join("menu-bar.png")).unwrap();
     }
 
+    /// The app on a small map of islands, tall enough for Brush Settings to
+    /// show all of itself, once the heights of the map are read.
+    fn heights_harness(theme: ThemeChoice, ppp: f32) -> egui_kittest::Harness<'static, MassifApp> {
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1600.0, 2600.0))
+            .with_pixels_per_point(ppp)
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_eframe(move |cc| {
+                theme::install(&cc.egui_ctx);
+                let mut app = MassifApp::for_tests(generate(&GenParams {
+                    tiles_x: 8,
+                    tiles_z: 8,
+                    landform: Landform::Islands,
+                    ..GenParams::default()
+                }));
+                app.settings.theme = theme;
+                app
+            });
+        h.run_steps(3);
+        let ctx = h.ctx.clone();
+        for _ in 0..400 {
+            h.step();
+            if h.state_mut().doc.heights(&ctx).is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(h.state_mut().doc.heights(&ctx).is_some(), "the heights were read");
+        h.run_steps(2);
+        h
+    }
+
     /// Brush Settings' height limits, for the eye (MASSIF_SNAPSHOT_DIR):
-    /// the heights of the map read, no limit, a band, outside a band; in the
-    /// dark and the light themes.
+    /// the heights of the map read, no limit, a band, outside a band, a
+    /// limit under the whole map, a soft one alone; in the dark and the
+    /// light themes.
     #[test]
     fn height_limits_render() {
         let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
             return;
         };
+        // MASSIF_SNAPSHOT_PPP=2: as on a Retina screen.
+        let ppp: f32 = std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
         for (theme, name) in [(ThemeChoice::Dark, "dark"), (ThemeChoice::Light, "light")] {
-            // Tall enough for Brush Settings to show all of itself.
-            let mut h = egui_kittest::Harness::builder()
-                .with_size(vec2(1600.0, 2600.0))
-                .with_pixels_per_point(1.0)
-                .with_accessibility_check(false)
-                .wgpu()
-                .build_eframe(move |cc| {
-                    theme::install(&cc.egui_ctx);
-                    let mut app = MassifApp::for_tests(generate(&GenParams {
-                        tiles_x: 8,
-                        tiles_z: 8,
-                        landform: Landform::Islands,
-                        ..GenParams::default()
-                    }));
-                    app.settings.theme = theme;
-                    app
-                });
-            h.run_steps(3);
-            // Until the heights of the map are read.
-            let ctx = h.ctx.clone();
-            for _ in 0..400 {
-                h.step();
-                if h.state_mut().doc.heights(&ctx).is_some() {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-            assert!(h.state_mut().doc.heights(&ctx).is_some(), "the heights were read");
-            for (case, above, below, beyond) in [("none", None, None, false), ("band", Some(60), Some(90), false), ("outside", Some(60), Some(90), true)] {
+            let mut h = heights_harness(theme, ppp);
+            let cases = [
+                ("none", None, None, false, false),
+                ("band", Some(60), Some(90), false, false),
+                ("outside", Some(60), Some(90), true, false),
+                ("all", Some(-64), None, false, false),
+                ("soft", None, Some(70), false, true),
+            ];
+            for (case, above, below, beyond, fade) in cases {
                 {
                     let f = &mut h.state_mut().tools.filter;
-                    (f.above, f.below, f.beyond) = (above, below, beyond);
+                    (f.above, f.below, f.beyond, f.fade) = (above, below, beyond, fade);
                 }
                 h.run_steps(4);
                 let image = h.render().expect("rendered");
@@ -3590,10 +3606,75 @@ mod tests {
                     .find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::BrushSettings))
                     .map(|(_, r)| r)
                     .expect("Brush Settings in the layout");
-                let crop = image::imageops::crop_imm(&image, area.left() as u32, area.top() as u32, area.width() as u32, area.height() as u32).to_image();
+                let crop = image::imageops::crop_imm(&image, (area.left() * ppp) as u32, (area.top() * ppp) as u32, (area.width() * ppp) as u32, (area.height() * ppp) as u32).to_image();
                 crop.save(dir.join(format!("height-limits-{name}-{case}.png"))).unwrap();
             }
+            // The pointer over the land: its height across, and the share of
+            // the map at or above it.
+            let (plot, _, _): (Rect, f32, f32) = h.ctx.data(|d| d.get_temp(Id::unique("height profile"))).expect("the picture of the land");
+            h.event(egui::Event::PointerMoved(plot.center()));
+            h.run_steps(30);
+            let image = h.render().expect("rendered");
+            let around = plot.expand(60.0);
+            let crop = image::imageops::crop_imm(&image, (around.left() * ppp) as u32, (around.top() * ppp) as u32, (around.width() * ppp) as u32, (around.height() * ppp) as u32).to_image();
+            crop.save(dir.join(format!("height-limits-{name}-hover.png"))).unwrap();
         }
+    }
+
+    /// The height limits are dragged on Brush Settings' picture of the land:
+    /// a limit's line goes where it is let go, rounded to a block, and stops
+    /// at the other limit; pressed away from the lines, the nearest one comes
+    /// to the pointer; Shift drags finely; the panel does not scroll.
+    #[test]
+    fn dragging_the_height_limits() {
+        let mut h = heights_harness(ThemeChoice::Dark, 1.0);
+        {
+            let f = &mut h.state_mut().tools.filter;
+            (f.above, f.below) = (Some(60), Some(90));
+        }
+        h.run_steps(3);
+        let (plot, v0, v1): (Rect, f32, f32) = h.ctx.data(|d| d.get_temp(Id::unique("height profile"))).expect("the picture of the land");
+        assert!(v0 < 59.5 && v1 > 90.5, "the limits are in the picture: {v0} to {v1}");
+        let y_of = |e: f32| plot.bottom() - (e - v0) / (v1 - v0) * plot.height();
+        let x = plot.center().x;
+        let button = |pressed, pos| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let drag = |h: &mut egui_kittest::Harness<'static, MassifApp>, from: f32, to: f32, shift: bool| {
+            let modifiers = if shift { Modifiers::SHIFT } else { Modifiers::NONE };
+            h.event(egui::Event::PointerMoved(pos2(x, from)));
+            h.step();
+            h.event(button(true, pos2(x, from)));
+            h.step();
+            h.event(egui::Event::ModifiersChanged(modifiers));
+            for i in 1..=10 {
+                h.event(egui::Event::PointerMoved(pos2(x, from + (to - from) * i as f32 / 10.0)));
+                h.step();
+            }
+            h.event(button(false, pos2(x, to)));
+            h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+            h.run_steps(3);
+        };
+        let limits = |h: &egui_kittest::Harness<'static, MassifApp>| (h.state().tools.filter.above, h.state().tools.filter.below);
+        // The line under the blocks at 60, let go over those at 70.
+        drag(&mut h, y_of(59.5), y_of(69.6), false);
+        assert_eq!(limits(&h), (Some(70), Some(90)));
+        // Dragged past the other limit, it stops at it.
+        drag(&mut h, y_of(69.5), y_of(100.0), false);
+        assert_eq!(limits(&h), (Some(90), Some(90)));
+        // Pressed under both lines, the one at the bottom of the band comes.
+        drag(&mut h, y_of(75.0), y_of(64.6), false);
+        assert_eq!(limits(&h), (Some(65), Some(90)));
+        // Shift: a tenth as far (the first points of a drag are a click's).
+        let far = y_of(50.0) - y_of(84.0);
+        drag(&mut h, y_of(90.5), y_of(90.5) + far, true);
+        let (above, below) = limits(&h);
+        assert!(above == Some(65) && below.is_some_and(|b| (85..=89).contains(&b)), "34 blocks down, finely: {below:?}");
+        let (after, _, _): (Rect, f32, f32) = h.ctx.data(|d| d.get_temp(Id::unique("height profile"))).unwrap();
+        assert_eq!(after, plot, "the panel did not scroll under the drags");
     }
 
     fn harness(theme: ThemeChoice) -> egui_kittest::Harness<'static, MassifApp> {
