@@ -289,6 +289,9 @@ pub struct ToolState {
     pub pattern: PatternSettings,
     /// The tool of the 3D Sculpt editor.
     pub sculpt: SculptSettings,
+    /// How hard the brush presses drawn over the map, under the pointer (its
+    /// lines show either way).
+    pub show_strength: bool,
 }
 
 /// The tool of the 3D Sculpt editor, apart from the map's; its brush is
@@ -806,6 +809,7 @@ impl Default for ToolState {
             river_note: None,
             objects_note: None,
             pattern: PatternSettings::default(),
+            show_strength: true,
         }
     }
 }

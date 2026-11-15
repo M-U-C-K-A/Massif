@@ -6,7 +6,7 @@
 //! water, its slope and its curvature (hollows and bumps). Every test that is
 //! switched on must pass; the height band can fade out over a few blocks.
 
-use crate::compose::{Span, TileStack};
+use crate::compose::{Span, TileStack, block_top};
 use crate::coords::{BlockRect, TILE_SIZE, TilePos, local_index};
 use crate::tile::NO_FLUID;
 use crate::world::Dimension;
@@ -61,6 +61,49 @@ pub struct Filter {
     pub facing_on: bool,
     pub facing: f32,
     pub facing_spread: f32,
+}
+
+/// Sharp height limits, as a height tool keeps to them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Band {
+    above: Option<i32>,
+    below: Option<i32>,
+    /// Act outside the band (both limits set).
+    beyond: bool,
+}
+
+impl Band {
+    /// The height `new` that a tool gives a column at `old`, kept on the
+    /// side of the limits `old` is on: land at or below 63 raised or
+    /// flattened toward 63.8 stops at 63.0 (rather than at 63.1, where the
+    /// test lets go of it); land at or above 70 lowered stops at 70.0.
+    /// Outside a band it acts beyond, the land stays outside it. A column
+    /// whose top is not where the test acts (the brush reached it through
+    /// another level) is left as the tool has it.
+    pub fn hold(&self, old: f32, new: f32) -> f32 {
+        let y = block_top(old);
+        if self.beyond {
+            let (a, b) = (self.above.unwrap_or(i32::MIN), self.below.unwrap_or(i32::MAX));
+            return if y < a {
+                new.min((a - 1) as f32)
+            } else if y > b {
+                new.max((b + 1) as f32)
+            } else {
+                new
+            };
+        }
+        if self.above.is_some_and(|a| y < a) || self.below.is_some_and(|b| y > b) {
+            return new;
+        }
+        let mut h = new;
+        if let Some(b) = self.below {
+            h = h.min(b as f32);
+        }
+        if let Some(a) = self.above {
+            h = h.max(a as f32);
+        }
+        h
+    }
 }
 
 /// Degrees over which the facing test softens at its limits.
@@ -142,26 +185,43 @@ impl Filter {
     }
 
     /// Weight of the height tests at height `h`.
+    ///
+    /// The tests are in whole blocks, as the game has the land: a column is
+    /// at the height of its top ([`block_top`]), whatever fraction of a
+    /// block it carries (a map from WorldPainter keeps them) — at 63.2 it is
+    /// at 63, at or below 63 like one at 63.0.
     pub fn height_weight(&self, h: f32) -> f32 {
+        let y = block_top(h);
         let fade = if self.fade { FADE } else { 0.0 };
-        // How far inside a limit `h` is: 1 well inside, 0 outside.
-        let inside = |d: f32| {
+        // How far inside a limit the column is, in blocks: 1 well inside, 0
+        // outside.
+        let inside = |d: i32| {
             if fade > 0.0 {
-                (d / fade + 0.5).clamp(0.0, 1.0)
-            } else if d >= 0.0 {
+                (d as f32 / fade + 0.5).clamp(0.0, 1.0)
+            } else if d >= 0 {
                 1.0
             } else {
                 0.0
             }
         };
-        let lo = self.above.map(|a| inside(h - a as f32));
-        let hi = self.below.map(|b| inside(b as f32 - h));
+        let lo = self.above.map(|a| inside(y - a));
+        let hi = self.below.map(|b| inside(b - y));
         match (lo, hi) {
             (None, None) => 1.0,
             (Some(w), None) | (None, Some(w)) => w,
             (Some(a), Some(b)) if self.beyond => (1.0 - a).max(1.0 - b),
             (Some(a), Some(b)) => a.min(b),
         }
+    }
+
+    /// The limits a height tool keeps to, when they are sharp (no fade):
+    /// see [`Band::hold`].
+    pub fn band(&self) -> Option<Band> {
+        (!self.fade && (self.above.is_some() || self.below.is_some())).then_some(Band {
+            above: self.above,
+            below: self.below,
+            beyond: self.beyond && self.above.is_some() && self.below.is_some(),
+        })
     }
 
     fn matches(c: &Column, m: &Match) -> bool {
@@ -680,7 +740,58 @@ mod tests {
             ..Filter::default()
         };
         assert_eq!(only_above.height_weight(500.0), 1.0);
-        assert_eq!(only_above.height_weight(69.9), 0.0);
+        assert_eq!(only_above.height_weight(69.4), 0.0);
+        // In whole blocks: 69.9 and 63.2 are at 70 and 63.
+        assert_eq!(only_above.height_weight(69.9), 1.0);
+        let at_or_below = Filter {
+            below: Some(63),
+            ..Filter::default()
+        };
+        assert_eq!(at_or_below.height_weight(63.2), 1.0);
+        assert_eq!(at_or_below.height_weight(63.0), 1.0);
+        assert_eq!(at_or_below.height_weight(63.5), 0.0);
+        assert_eq!(at_or_below.height_weight(63.8), 0.0);
+    }
+
+    /// Height tools stop at sharp limits, on whole blocks.
+    #[test]
+    fn height_tools_stop_at_the_limits() {
+        let at_or_below = Filter {
+            below: Some(63),
+            ..Filter::default()
+        }
+        .band()
+        .unwrap();
+        // Flattened toward 63.8: stops at 63, from below or from 63.3.
+        assert_eq!(at_or_below.hold(60.0, 63.1), 63.0);
+        assert_eq!(at_or_below.hold(63.3, 63.5), 63.0);
+        assert_eq!(at_or_below.hold(60.0, 62.4), 62.4);
+        // Above the limit, the test does not act: left alone.
+        assert_eq!(at_or_below.hold(70.0, 75.0), 75.0);
+        let above = Filter {
+            above: Some(70),
+            ..Filter::default()
+        }
+        .band()
+        .unwrap();
+        assert_eq!(above.hold(74.0, 66.0), 70.0);
+        let beyond = Filter {
+            above: Some(60),
+            below: Some(80),
+            beyond: true,
+            ..Filter::default()
+        }
+        .band()
+        .unwrap();
+        assert_eq!(beyond.hold(50.0, 65.0), 59.0);
+        assert_eq!(beyond.hold(90.0, 70.0), 81.0);
+        // Faded limits soften the tests: no sharp limit to keep to.
+        let faded = Filter {
+            below: Some(63),
+            fade: true,
+            ..Filter::default()
+        };
+        assert_eq!(faded.band(), None);
     }
 
     #[test]

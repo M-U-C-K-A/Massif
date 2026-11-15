@@ -52,7 +52,7 @@ impl<'a> Dab<'a> {
             .filter
             .as_ref()
             .filter(|f| f.is_active())
-            .map(|f| f.mask(dim, BlockRect::around(cx, cz, brush.radius)));
+            .map(|f| f.mask(dim, BlockRect::around(cx, cz, brush.reach())));
         Self { brush, cx, cz, mask }
     }
 
@@ -105,8 +105,11 @@ fn edit_heights_by_tile<G>(
     } else {
         Surface::Top
     };
+    // Sharp height limits are kept to: the land stops on them.
+    let band = brush.filter.as_ref().filter(|f| f.is_active()).and_then(|f| f.band());
+    let held = |old: f32, new: f32| band.map_or(new, |b| b.hold(old, new));
     let dab = Dab::new(edit, brush, cx, cz);
-    let footprint = BlockRect::around(cx, cz, brush.radius);
+    let footprint = BlockRect::around(cx, cz, brush.reach());
     edit.par_tiles(footprint.tiles(), footprint, false, |pos, clip, tile| {
         let mut f = per_tile(pos, clip);
         let Tile { top, bottom, .. } = tile;
@@ -121,17 +124,17 @@ fn edit_heights_by_tile<G>(
                 let i = local_index(x, z);
                 match (&mut bottom, surface) {
                     (None, _) => {
-                        top[i] = snap_height(f(top[i], w, x, z).clamp(lo, hi));
+                        top[i] = snap_height(held(top[i], f(top[i], w, x, z)).clamp(lo, hi));
                     }
                     (Some(bottom), Surface::Top) => {
                         if top[i] > bottom[i] {
-                            let h = f(top[i], w, x, z).clamp(lo, hi);
+                            let h = held(top[i], f(top[i], w, x, z)).clamp(lo, hi);
                             top[i] = snap_height(h.max(bottom[i]));
                         }
                     }
                     (Some(bottom), Surface::Bottom) => {
                         if top[i] > bottom[i] {
-                            let h = f(bottom[i], w, x, z).clamp(lo, hi);
+                            let h = held(bottom[i], f(bottom[i], w, x, z)).clamp(lo, hi);
                             bottom[i] = snap_height(h.min(top[i]));
                         }
                     }
@@ -235,7 +238,7 @@ pub fn smooth(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, surface: Surface
         Surface::Top
     };
     let k = ((brush.radius * 0.2).round() as i32).clamp(1, 12);
-    let footprint = BlockRect::around(cx, cz, brush.radius);
+    let footprint = BlockRect::around(cx, cz, brush.reach());
     let level = edit.level();
     let tiles: Vec<TilePos> = footprint.tiles().filter(|p| level.contains(*p)).collect();
     let averages: HashMap<TilePos, Vec<f32>> = tiles
@@ -318,7 +321,7 @@ fn paint_plane(
     plane: impl Fn(&mut Tile) -> &mut Plane<u16> + Sync,
 ) {
     let dab = Dab::new(edit, brush, cx, cz);
-    let footprint = BlockRect::around(cx, cz, brush.radius);
+    let footprint = BlockRect::around(cx, cz, brush.reach());
     edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
         let slab = tile.bottom.is_some();
         for z in clip.z0..clip.z1 {
@@ -348,7 +351,7 @@ pub fn paint_terrain_with(
     choose: impl Fn(f32) -> TerrainId + Sync,
 ) {
     let dab = Dab::new(edit, brush, cx, cz);
-    let footprint = BlockRect::around(cx, cz, brush.radius);
+    let footprint = BlockRect::around(cx, cz, brush.reach());
     edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
         let slab = tile.bottom.is_some();
         for z in clip.z0..clip.z1 {
@@ -394,7 +397,7 @@ pub fn paint_objects(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, layer: u1
 /// [`crate::pattern`]). `salt` should change from dab to dab.
 pub fn paint_pattern(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, salt: u64, pattern: &crate::pattern::PatternSampler) {
     let dab = Dab::new(edit, brush, cx, cz);
-    let footprint = BlockRect::around(cx, cz, brush.radius);
+    let footprint = BlockRect::around(cx, cz, brush.reach());
     edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
         let slab = tile.bottom.is_some();
         for z in clip.z0..clip.z1 {
@@ -435,7 +438,7 @@ pub struct PatternPreview {
 /// the brush's filter counts too.
 pub fn pattern_preview(dim: &Dimension, brush: &Brush, cx: f32, cz: f32, pattern: &crate::pattern::PatternSampler, max: usize) -> PatternPreview {
     use rayon::prelude::*;
-    let rect = BlockRect::around(cx, cz, brush.radius);
+    let rect = BlockRect::around(cx, cz, brush.reach());
     let side = rect.width().max(rect.depth()).max(1) as usize;
     let step = side.div_ceil(max.max(1)).max(1);
     let size = [(rect.width().max(0) as usize).div_ceil(step), (rect.depth().max(0) as usize).div_ceil(step)];
@@ -483,7 +486,7 @@ fn auto_apply(
     classes: &mut crate::auto::Classes,
     plane: impl Fn(&mut Tile) -> &mut crate::plane::Plane<u16> + Sync,
 ) -> usize {
-    let footprint = BlockRect::around(cx, cz, brush.radius);
+    let footprint = BlockRect::around(cx, cz, brush.reach());
     classes.ensure(edit.dim(), reader, footprint);
     let dab = Dab::new(edit, brush, cx, cz);
     let classes = &*classes;
@@ -540,7 +543,7 @@ impl Preview {
 /// (`biomes` false) or biome it would get.
 pub fn auto_preview(dim: &Dimension, brush: &Brush, cx: f32, cz: f32, reader: &crate::auto::Reader, biomes: bool) -> (BlockRect, Vec<Preview>) {
     let mut classes = crate::auto::Classes::new(biomes);
-    classes.ensure(dim, reader, BlockRect::around(cx, cz, brush.radius));
+    classes.ensure(dim, reader, BlockRect::around(cx, cz, brush.reach()));
     auto_preview_with(dim, brush, cx, cz, &classes, 1)
 }
 
@@ -552,7 +555,7 @@ pub fn auto_preview(dim: &Dimension, brush: &Brush, cx: f32, cz: f32, reader: &c
 pub fn auto_preview_with(dim: &Dimension, brush: &Brush, cx: f32, cz: f32, classes: &crate::auto::Classes, step: i32) -> (BlockRect, Vec<Preview>) {
     let step = step.max(1);
     let dab = Dab::on(dim, brush, cx, cz);
-    let footprint = BlockRect::around(cx, cz, brush.radius);
+    let footprint = BlockRect::around(cx, cz, brush.reach());
     let (w, d) = ((footprint.width() + step - 1) / step, (footprint.depth() + step - 1) / step);
     // The samples whose coordinate, from `lo`, is within a..b.
     let samples = |lo: i32, n: i32, a: i32, b: i32| ((a - lo + step - 1) / step).min(n)..((b - lo + step - 1) / step).min(n);
@@ -596,7 +599,7 @@ pub fn auto_preview_with(dim: &Dimension, brush: &Brush, cx: f32, cz: f32, class
 /// Set the fluid surface (or [`NO_FLUID`]) under the whole footprint.
 pub fn set_fluid(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, level: i16) {
     let dab = Dab::new(edit, brush, cx, cz);
-    let footprint = BlockRect::around(cx, cz, brush.radius);
+    let footprint = BlockRect::around(cx, cz, brush.reach());
     edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
         for z in clip.z0..clip.z1 {
             for x in clip.x0..clip.x1 {
@@ -616,7 +619,7 @@ pub fn stamp_slab(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, anchor: Anch
         return;
     }
     let (lo, hi) = (edit.dim().min_y as f32, edit.dim().max_y as f32);
-    let rect = BlockRect::around(cx, cz, brush.radius);
+    let rect = BlockRect::around(cx, cz, brush.reach());
     let dab = Dab::new(edit, brush, cx, cz);
     let inside: Vec<TilePos> = rect.tiles().filter(|p| edit.dim().ground().contains(*p)).collect();
     edit.par_tiles_with(inside, rect, true, |pos, clip, tile, others| {
@@ -662,7 +665,7 @@ pub fn erase_slab(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32) {
         return;
     }
     let dab = Dab::new(edit, brush, cx, cz);
-    let rect = BlockRect::around(cx, cz, brush.radius);
+    let rect = BlockRect::around(cx, cz, brush.reach());
     edit.par_tiles(rect.tiles(), rect, false, |_, clip, tile| {
         let Tile { top, bottom, .. } = tile;
         let Some(bottom) = bottom else { return };
@@ -1039,6 +1042,50 @@ mod tests {
         }
         assert_eq!(h(&w, 10, 10), 70.0);
         hist.commit();
+    }
+
+    /// Flattening toward 63.8 the land at or below 63 brings it to 63
+    /// exactly, from below and from 63.3 (at 63 in blocks), rather than
+    /// leaving it at 63.1, where the test let go of it.
+    #[test]
+    fn flatten_stops_on_a_sharp_limit() {
+        let mut w = world(1);
+        let mut hist = History::default();
+        hist.begin("Flatten", 0);
+        set_height(&mut hist.edit(&mut w, 0), &hard_brush(12.0), 10.0, 10.0, 60.4, Surface::Top);
+        set_height(&mut hist.edit(&mut w, 0), &hard_brush(0.5), 10.5, 10.5, 63.3, Surface::Top);
+        let mut brush = hard_brush(12.0);
+        brush.strength = 0.3;
+        brush.filter = Some(std::sync::Arc::new(crate::filter::Filter {
+            below: Some(63),
+            ..crate::filter::Filter::default()
+        }));
+        for _ in 0..30 {
+            flatten(&mut hist.edit(&mut w, 0), &brush, 10.0, 10.0, 63.8, Surface::Top);
+        }
+        hist.commit();
+        assert_eq!(h(&w, 5, 10), 63.0);
+        assert_eq!(h(&w, 10, 10), 63.0);
+        // Outside the brush, the land is as it was.
+        assert_eq!(h(&w, 40, 10), 64.0);
+    }
+
+    /// A square turned 45° acts on all of its footprint, its corners too,
+    /// not on the square of its radius alone.
+    #[test]
+    fn a_turned_square_reaches_its_corners() {
+        let mut w = world(1);
+        let mut hist = History::default();
+        hist.begin("Raise", 0);
+        let mut brush = hard_brush(10.0);
+        brush.shape = BrushShape::Square;
+        brush.rotation = 45.0;
+        raise(&mut hist.edit(&mut w, 0), &brush, 0.0, 0.0, 5.0, Surface::Top);
+        hist.commit();
+        // 13 blocks east: in the turned square (its corner is 14.1 out), past
+        // its radius.
+        assert_eq!(h(&w, 13, 0), 69.0);
+        assert_eq!(h(&w, 9, 9), 64.0);
     }
 
     #[test]

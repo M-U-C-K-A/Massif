@@ -18,6 +18,8 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 
 **Faster.** Exporting a map takes about a fifth less work and writes the same files byte for byte; 3D sculpting with a large brush, and rebuilding the 3D view where it was sculpted, take less time; erosion in the terrain generator and in Edit ▸ Whole map takes about a quarter less work and makes the same terrain to the bit.
 
+**Fixed.** The height limits of the brush options are in whole blocks, as the game has the land: a column at 63.2 is at 63 (maps from WorldPainter keep fractions of blocks), and the height tools stop on a sharp limit — flattening toward 63.8 the land at or below 63 brings it to 63, no longer 63.1. A turned square or image brush acts on all of its shape, its corners too. The strength drawn under the brush is lighter, keeps to the outline block by block close up, no longer draws a diamond inside square brushes, and can be switched off (Brush Settings ▸ Strength on the map). The line under the map gives the height in whole blocks and the biome under the pointer.
+
 **Typefaces.** Settings ▸ Typeface sets the interface in the system's own typeface or in Inter, Geist, IBM Plex Sans or Manrope, built in, each shown in itself.
 
 **Developer mode.** Settings ▸ Developer adds a Developer panel to every area's menu: frames a second, the time of each frame, the memory and the processor, in live charts, with what Massif keeps and why it draws again.

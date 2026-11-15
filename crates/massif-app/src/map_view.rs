@@ -15,6 +15,11 @@ use std::time::Duration;
 const STRENGTH_PX: usize = 128;
 /// Strengths at which the brush preview draws a line.
 const STRENGTH_LEVELS: [f32; 3] = [0.25, 0.5, 0.75];
+/// How white the strength is drawn where the brush presses hardest, of 255:
+/// light enough for the map to show through.
+const STRENGTH_ALPHA: f32 = 58.0;
+/// Most columns the strength is drawn for one by one, close up.
+const BLOCK_STRENGTH_MAX: usize = 160 * 160;
 
 /// How strongly a brush presses over its footprint: a picture, white where
 /// it presses hardest, and the lines where its strength is a quarter, a
@@ -46,22 +51,19 @@ impl BrushPreview {
                 b.weight(at(c % n), at(c / n)).clamp(0.0, 1.0)
             })
             .collect();
-        let bytes: Vec<u8> = weights.iter().flat_map(|&w| [(w * 125.0) as u8; 4]).collect();
+        let bytes: Vec<u8> = weights.iter().flat_map(|&w| [(w * STRENGTH_ALPHA) as u8; 4]).collect();
         let image = egui::ColorImage::from_rgba_premultiplied([n, n], &bytes);
         let texture = ctx.load_texture("brush strength", image, egui::TextureOptions::LINEAR);
+        // A brush that presses all or nothing (a flat profile, a hard-edged
+        // image) has all its lines on its outline: none drawn.
+        let flat = weights.iter().all(|&w| w <= 0.0 || w >= STRENGTH_LEVELS[2]);
         let levels = STRENGTH_LEVELS.map(|level| {
+            if flat {
+                return Vec::new();
+            }
             massif_core::brush::trace_cells(n, n, |i, j| weights[j * n + i] >= level)
                 .into_iter()
-                .map(|ring| {
-                    // The corners of the cells, eased into a line.
-                    let k = ring.len();
-                    (0..k)
-                        .map(|a| {
-                            let (p, q) = (ring[a], ring[(a + 1) % k]);
-                            ((p.0 + q.0) as f32 / (2 * n) as f32, (p.1 + q.1) as f32 / (2 * n) as f32)
-                        })
-                        .collect()
-                })
+                .map(|ring| ease(&ring, n))
                 .collect()
         });
         Self {
@@ -71,6 +73,31 @@ impl BrushPreview {
         }
     }
 }
+
+/// A ring of cell corners eased into a line, in fractions of `n` cells:
+/// each corner cut by half a cell at most, so that the steps of a curve
+/// round off while long straight sides stay straight (a square's lines stay
+/// a square, not the diamond the middles of its sides would make).
+fn ease(ring: &[(i32, i32)], n: usize) -> Vec<(f32, f32)> {
+    let k = ring.len();
+    let mut out = Vec::with_capacity(2 * k);
+    // The point half a cell (at most halfway) from corner `at` toward `to`.
+    let cut = |at: (i32, i32), to: (i32, i32)| {
+        let (dx, dy) = ((to.0 - at.0) as f32, (to.1 - at.1) as f32);
+        let t = (0.5 / dx.hypot(dy).max(1e-6)).min(0.5);
+        ((at.0 as f32 + dx * t) / n as f32, (at.1 as f32 + dy * t) / n as f32)
+    };
+    for a in 0..k {
+        let (before, at, after) = (ring[(a + k - 1) % k], ring[a], ring[(a + 1) % k]);
+        out.push(cut(at, before));
+        out.push(cut(at, after));
+    }
+    out
+}
+
+/// What the strength by block was drawn for: the brush (shape, profile,
+/// rotation, image), its radius and the pointer.
+type BlockStrengthKey = ((BrushShape, massif_core::Profile, u32, usize), u32, u32, u32);
 
 const MIN_ZOOM: f32 = 1.0 / 2048.0;
 const MAX_ZOOM: f32 = 48.0;
@@ -165,6 +192,9 @@ pub struct MapView {
     canvas: Rect,
     /// The picture of the brush's strength, under the pointer.
     strength: Option<BrushPreview>,
+    /// Close up, the strength column by column over the columns the brush
+    /// changes, and their corners `[x0, z0, x1, z1]`.
+    block_strength: Option<(BlockStrengthKey, egui::TextureHandle, [i32; 4])>,
     /// The anchor of the river being laid out that is being dragged.
     river_grab: Option<usize>,
     /// Where water let go under the pointer would go (River tool, before a
@@ -219,6 +249,7 @@ impl Default for MapView {
             wheel: 0.0,
             turn: 0.0,
             strength: None,
+            block_strength: None,
             canvas: Rect::NOTHING,
             river_grab: None,
             spring: None,
@@ -559,6 +590,40 @@ impl MapView {
             // showing through.
             painter.image(texture.id(), Rect::from_min_max(min, max), uv, Color32::from_white_alpha(225));
         }
+    }
+
+    /// The strength of the brush centred on `(x, z)` column by column, a
+    /// picture over the columns it changes: the texture and its corners.
+    /// `None` for a footprint too large to be worth it.
+    fn block_strength(&mut self, ctx: &egui::Context, brush: &Brush, x: f64, z: f64) -> Option<(egui::TextureId, [i32; 4])> {
+        let (cx, cz) = (x as f32, z as f32);
+        let rect = massif_core::coords::BlockRect::around(cx, cz, brush.reach());
+        let (w, d) = (rect.width().max(0) as usize, rect.depth().max(0) as usize);
+        if w * d == 0 || w * d > BLOCK_STRENGTH_MAX {
+            return None;
+        }
+        let key = (BrushPreview::key(brush), brush.radius.to_bits(), cx.to_bits(), cz.to_bits());
+        let corners = [rect.x0, rect.z0, rect.x1, rect.z1];
+        if self.block_strength.as_ref().is_none_or(|b| b.0 != key) {
+            // As the tools weigh a column: at its centre.
+            let pixels: Vec<Color32> = (0..w * d)
+                .map(|k| {
+                    let (i, j) = ((k % w) as i32, (k / w) as i32);
+                    let weight = brush.weight((rect.x0 + i) as f32 + 0.5 - cx, (rect.z0 + j) as f32 + 0.5 - cz).clamp(0.0, 1.0);
+                    let a = (weight * STRENGTH_ALPHA) as u8;
+                    Color32::from_rgba_premultiplied(a, a, a, a)
+                })
+                .collect();
+            let image = egui::ColorImage::new([w, d], pixels);
+            match &mut self.block_strength {
+                Some((k, texture, c)) => {
+                    texture.set(image, egui::TextureOptions::NEAREST);
+                    (*k, *c) = (key, corners);
+                }
+                None => self.block_strength = Some((key, ctx.load_texture("brush strength by block", image, egui::TextureOptions::NEAREST), corners)),
+            }
+        }
+        self.block_strength.as_ref().map(|(_, texture, c)| (texture.id(), *c))
     }
 
     /// Where block coordinates `(x, z)` were on the screen, last frame.
@@ -1209,14 +1274,30 @@ impl MapView {
                     self.strength = Some(BrushPreview::new(ui.ctx(), brush));
                 }
                 let automatic = matches!(tools.tool, Tool::AutoPaint | Tool::AutoBiome);
+                // Over the colours of a noise, its lines alone; switched off
+                // (Brush Settings), the lines alone too.
+                let fill = tools.show_strength && !automatic && !(noise && previewing);
+                // Close enough to see the blocks, the strength is drawn
+                // column by column, as the outline is: they keep together
+                // as the pointer moves between blocks.
+                let by_block = match world_pointer {
+                    Some((x, z)) if fill && self.zoom * ppp >= EXACT_ZOOM && brush.reach() <= EXACT_REACH => self.block_strength(ui.ctx(), brush, x, z),
+                    _ => None,
+                };
                 if let Some(preview) = self.strength.as_ref().filter(|_| !automatic) {
                     let side = 2.0 * brush.reach() * self.zoom;
                     if side >= 12.0 {
                         let square = Rect::from_center_size(p, Vec2::splat(side));
                         let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-                        // Over the colours of a noise, its lines alone.
-                        if !(noise && previewing) {
-                            painter.image(preview.texture.id(), square, uv, Color32::WHITE);
+                        match by_block {
+                            Some((texture, [x0, z0, x1, z1])) => {
+                                let r = Rect::from_min_max(self.to_screen(canvas, x0 as f64, z0 as f64), self.to_screen(canvas, x1 as f64, z1 as f64));
+                                painter.image(texture, r, uv, Color32::WHITE);
+                            }
+                            None if fill => {
+                                painter.image(preview.texture.id(), square, uv, Color32::WHITE);
+                            }
+                            None => {}
                         }
                         for (k, rings) in preview.levels.iter().enumerate() {
                             let ink = Line::new(1.1, Color32::from_white_alpha(105 + 45 * k as u8));
@@ -1372,14 +1453,30 @@ impl MapView {
                 };
                 match probe {
                     Some(p) => {
-                        let terrain = &doc.world.registry.terrain(TerrainId(p.terrain)).name;
+                        let reg = &doc.world.registry;
+                        let terrain = &reg.terrain(TerrainId(p.terrain)).name;
                         let water = if p.fluid != massif_core::NO_FLUID {
                             format!(" · water {}", p.fluid)
                         } else {
                             String::new()
                         };
-                        let cover = doc.world.registry.cover(p.cover).map(|c| format!(" · {}", c.name)).unwrap_or_default();
-                        format!("Location: {x}, {z} · height {:.1} · {terrain}{cover}{water}", p.height)
+                        let cover = reg.cover(p.cover).map(|c| format!(" · {}", c.name)).unwrap_or_default();
+                        // The biome the map's Biome view shows: painted, or
+                        // the one export picks.
+                        let sample = crate::map_render::Sample {
+                            height: p.height,
+                            terrain: p.terrain,
+                            fluid: p.fluid,
+                            biome: p.biome,
+                            cover: p.cover,
+                            objects: p.objects,
+                            flags: 0,
+                            levels: 0,
+                        };
+                        let biome = crate::map_render::AutoBiome::new(reg).resolve(reg, &sample, doc.world.meta.sea_level as f32);
+                        let biome = format!(" · {}{}", reg.biome(massif_core::registry::BiomeId(biome)).name, if p.biome == 0 { " (automatic)" } else { "" });
+                        // In whole blocks, as the game has the land.
+                        format!("Location: {x}, {z} · height {} · {terrain}{cover}{water}{biome}", massif_core::compose::block_top(p.height))
                     }
                     None => format!("Location: {x}, {z}"),
                 }

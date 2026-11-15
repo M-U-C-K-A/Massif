@@ -3369,6 +3369,81 @@ mod tests {
     use crate::home::parse_seed;
     use massif_core::generate::Landform;
 
+    /// The brush over the map, close up, for the eye (MASSIF_SNAPSHOT_DIR):
+    /// a square turned 45° and one that is not, the pointer between blocks,
+    /// painting, painting a noise and flattening.
+    #[test]
+    fn brush_over_the_map() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        // A coast: where water meets land east of the middle.
+        let (cx, cz) = {
+            let doc = &h.state().doc;
+            let mut last = None;
+            let mut at = (0, 0);
+            for x in 0..512 {
+                if let Some(p) = crate::tools::probe(doc, x, 0) {
+                    let wet = p.fluid != massif_core::NO_FLUID;
+                    if last.is_some_and(|l| l != wet) {
+                        at = (x, 0);
+                        break;
+                    }
+                    last = Some(wet);
+                }
+            }
+            at
+        };
+        let id = h.state().active_map.or_else(|| h.state().maps.keys().next().copied()).expect("a map view");
+        {
+            let view = h.state_mut().maps.get_mut(&id).unwrap();
+            view.center = [cx as f64 + 0.5, cz as f64 + 0.5];
+            view.zoom = 9.0;
+        }
+        h.run_steps(5);
+        use massif_core::{BrushShape, Profile};
+        let cases: [(&str, Tool, BrushShape, Profile, f32, bool, f32); 8] = [
+            ("paint-square45", Tool::PaintTerrain, BrushShape::Square, Profile::Constant, 45.0, false, 9.0),
+            ("paint-square", Tool::PaintTerrain, BrushShape::Square, Profile::Constant, 0.0, false, 9.0),
+            ("paint-square-sine", Tool::PaintTerrain, BrushShape::Square, Profile::Sine, 0.0, false, 9.0),
+            ("paint-square30-sine", Tool::PaintTerrain, BrushShape::Square, Profile::Sine, 30.0, false, 9.0),
+            ("paint-circle-sine", Tool::PaintTerrain, BrushShape::Circle, Profile::Sine, 0.0, false, 9.0),
+            ("paint-square-sine-far", Tool::PaintTerrain, BrushShape::Square, Profile::Sine, 0.0, false, 2.0),
+            ("noise-square45", Tool::PaintTerrain, BrushShape::Square, Profile::Constant, 45.0, true, 9.0),
+            ("flatten-square45", Tool::Flatten, BrushShape::Square, Profile::Constant, 45.0, false, 9.0),
+        ];
+        for (name, tool, shape, profile, rotation, noise, zoom) in cases {
+            {
+                let app = h.state_mut();
+                app.maps.get_mut(&id).unwrap().zoom = zoom;
+                let tools = &mut app.tools;
+                tools.select(tool);
+                tools.brush.shape = shape;
+                tools.brush.profile = profile;
+                tools.brush.radius = 14.0;
+                tools.brush.rotation = rotation;
+                tools.pattern.on = noise;
+            }
+            h.run_steps(2);
+            let p = h.state().maps[&id].screen_of(cx as f64 + 0.37, cz as f64 + 0.61);
+            h.event(egui::Event::PointerMoved(p));
+            h.run_steps(4);
+            let image = h.render().expect("rendered");
+            let half = (14.0 * 1.5 * zoom) as u32 + 24;
+            let (x0, y0) = ((p.x as u32).saturating_sub(half), (p.y as u32).saturating_sub(half));
+            let crop = image::imageops::crop_imm(&image, x0, y0, 2 * half, 2 * half).to_image();
+            crop.save(dir.join(format!("brush-{name}.png"))).unwrap();
+        }
+        // The line under the map: the column under the pointer, in whole
+        // blocks, with its biome.
+        let image = h.render().expect("rendered");
+        let map = map_rect(h.state(), &h.ctx);
+        let footer = image::imageops::crop_imm(&image, map.left() as u32, (map.bottom() - 30.0) as u32, map.width() as u32, 30).to_image();
+        footer.save(dir.join("brush-footer.png")).unwrap();
+    }
+
     fn harness(theme: ThemeChoice) -> egui_kittest::Harness<'static, MassifApp> {
         egui_kittest::Harness::builder()
             .with_size(vec2(1600.0, 1000.0))

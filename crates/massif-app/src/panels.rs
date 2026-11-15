@@ -783,6 +783,8 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
             "Scroll: size · 1…0: intensity · Ctrl+Shift+scroll: turn"
         },
     );
+    crate::widgets::checkbox(ui, &mut tools.show_strength, "Strength on the map")
+        .on_hover_text("Under the pointer, lighter where the brush presses harder. Its lines at a quarter, a half and three quarters of its strength show either way.");
 
     // ---- options ---------------------------------------------------------
     let f = &mut tools.filter;
