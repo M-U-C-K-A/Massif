@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod access;
+mod analysis;
 mod app;
 mod blocks;
 mod brushes;
@@ -18,6 +19,7 @@ mod layout;
 mod map_render;
 mod map_view;
 mod notify;
+mod ores;
 mod panels;
 mod player;
 mod reshape;

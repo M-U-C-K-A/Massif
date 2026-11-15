@@ -69,6 +69,17 @@ pub struct ExportContext<'a> {
     first_extra: u16,
     /// How far any object reaches from its anchor; 0 without objects.
     pub reach: i32,
+    /// The ores laid in the rock, if any.
+    ores: Option<massif_core::ores::Placer>,
+    /// Of each ore of the settings, its states in stone and in deepslate
+    /// ([`SKIP`] where the version has nothing like it).
+    ore_states: Vec<[u16; 2]>,
+    /// The first state of an ore: ores are ground, which objects do not
+    /// take the place of.
+    first_ore: u16,
+    /// What each state is to an ore: 0 nothing, 1 rock of stone, 2 rock of
+    /// deepslate.
+    hosts: Vec<u8>,
     /// The heights where the substrate is one block in every column, and
     /// those where it is drawn block by block.
     bands: [(i32, i32, Option<u16>); 4],
@@ -220,9 +231,41 @@ impl<'a> ExportContext<'a> {
             }
             objects.push(ways);
         }
+        // The ores, after everything else: in stone and in deepslate.
+        let first_ore = states.len().min(SKIP as usize - 1) as u16;
+        let ore_states = world
+            .meta
+            .ores
+            .ores
+            .iter()
+            .map(|rule| {
+                let (stone, deep) = massif_core::ores::ore_blocks(rule.mineral);
+                [stone, deep].map(|state| {
+                    let block = BlockDef { state: state.to_owned(), color: [0; 3] };
+                    let (name, kept) = target.block(block.name());
+                    let number = match era {
+                        Era::Numbered => target.numbered_known(name),
+                        _ => Some((0, 0)),
+                    };
+                    match number {
+                        Some(number) if name != "minecraft:air" && name.contains(':') => {
+                            let props = if kept { block.properties().map(|(k, v)| (k.to_owned(), v.to_owned())).collect() } else { Vec::new() };
+                            states.push((name.to_owned(), props));
+                            if era == Era::Numbered {
+                                numbered.push(number);
+                            }
+                            (states.len() - 1).min(SKIP as usize - 1) as u16
+                        }
+                        _ => SKIP,
+                    }
+                })
+            })
+            .collect();
         if states.len() >= UNSET as usize {
             return Err("the covers and objects use too many blocks".into());
         }
+        let mut hosts: Vec<u8> = reg.blocks.iter().map(|b| massif_core::ores::host_of(&b.state).map_or(0, |h| 1 + (h == massif_core::ores::Host::Deepslate) as u8)).collect();
+        hosts.resize(states.len(), 0);
         let reach = if used.is_empty() { 0 } else { massif_core::objects::max_reach(reg) };
         let soil = reg.blocks.iter().map(|b| is_soil(b.name())).collect();
         let biomes = reg
@@ -265,6 +308,10 @@ impl<'a> ExportContext<'a> {
             objects,
             first_extra: reg.blocks.len() as u16,
             reach,
+            ores: massif_core::ores::Placer::new(&world.meta.ores, world.meta.seed),
+            ore_states,
+            first_ore,
+            hosts,
             plains: biome("minecraft:plains"),
             ocean: biome("minecraft:ocean"),
             deep_ocean: biome("minecraft:deep_ocean"),
@@ -492,7 +539,7 @@ fn stand_objects(ctx: &ExportContext, objects: &[Placement], x0: i32, z0: i32, b
                     let old = blocks[i];
                     // Unless it replaces the ground, an object only takes
                     // the place of air, water, plants and other objects.
-                    if replace || old == 0 || old == ctx.water || old >= ctx.first_extra {
+                    if replace || old == 0 || old == ctx.water || (old >= ctx.first_extra && old < ctx.first_ore) {
                         blocks[i] = state;
                     }
                 }
@@ -578,6 +625,28 @@ pub fn build_chunk(
                 blocks[at(min_y)] = ctx.bedrock;
             }
         }
+    }
+
+    // ---- ores --------------------------------------------------------------
+    // In the rock, where solid ground lies right above; the first vein to
+    // reach a block keeps it (the next finds ore there, not rock).
+    if let Some(placer) = &ctx.ores {
+        placer.chunk(bx0 >> 4, bz0 >> 4, |b| {
+            if b.y < min_y || b.y + 1 >= max_y {
+                return;
+            }
+            let i = (((b.y - min_y) as usize) << 8) | ((((b.z - bz0) << 4) | (b.x - bx0)) as usize);
+            let above = blocks[i + 256];
+            let solid = above != 0 && above != ctx.water && (above < ctx.first_extra || above >= ctx.first_ore);
+            let host = ctx.hosts.get(blocks[i] as usize).copied().unwrap_or(0);
+            if !solid || host == 0 {
+                return;
+            }
+            let state = ctx.ore_states[b.ore as usize][host as usize - 1];
+            if state != SKIP {
+                blocks[i] = state;
+            }
+        });
     }
 
     // ---- objects -----------------------------------------------------------

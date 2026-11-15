@@ -14,19 +14,24 @@ USAGE
   massif-cli new <out.massif> [--size WxD] [--landform NAME] [--seed N] [--name TEXT]
   massif-cli info <world.massif>
   massif-cli verify <world.massif>
-  massif-cli export <world.massif> <folder> [--version V] [--void] [--survival] [--overwrite]
+  massif-cli export <world.massif> <folder> [--version V] [--void] [--survival] [--no-ores] [--overwrite]
   massif-cli import <old.world> <out.massif>
   massif-cli probe <world.massif> [<x> <z>…] [--random N]
+  massif-cli analyse <world.massif>
 
   --size      map size in tiles of 128 blocks (default 8x8 = 1024x1024 blocks)
   --landform  flat | plains | hills | mountains | islands (default hills)
   --version   the Minecraft version to export for, 1.7.10 to 26.3 (default 1.18.2,
               which every later version opens)
   --void      nothing generates around the exported map (default: vanilla terrain)
+  --no-ores   lay no ores in the rock (default: the map's own, see Edit ▸ Ores)
 
   probe prints, for each column, what the export writes there, one JSON object a
   line: its top solid block (y and block state), the water over it, its biome —
   what tools/minecraft_check.py asks the game itself to confirm.
+
+  analyse prints the survival check of Edit ▸ Analyse the map as Markdown: every
+  block counted as the export writes it, what breaks survival, what is missing.
 ";
 
 type Res<T> = Result<T, String>;
@@ -199,9 +204,13 @@ fn cmd_export(mut args: Args) -> Res<()> {
         overwrite: args.flag("--overwrite"),
         ..ExportOptions::default()
     };
+    let no_ores = args.flag("--no-ores");
     let [path, dir] = args.positional(["<world.massif>", "<folder>"])?;
     let t = Instant::now();
-    let world = massif_format::load(&path).map_err(|e| e.to_string())?;
+    let mut world = massif_format::load(&path).map_err(|e| e.to_string())?;
+    if no_ores {
+        world.meta.ores.on = false;
+    }
     let loaded = t.elapsed();
     let stats = massif_anvil::export(&world, &dir, &options, &Progress::default())
         .map_err(|e| e.to_string())?;
@@ -301,6 +310,18 @@ fn cmd_probe(mut args: Args) -> Res<()> {
     Ok(())
 }
 
+fn cmd_analyse(args: Args) -> Res<()> {
+    let [path] = args.positional(["<world.massif>"])?;
+    let started = Instant::now();
+    let world = massif_format::load(&path).map_err(|e| e.to_string())?;
+    let loaded = started.elapsed().as_secs_f32();
+    let steps = massif_core::auto::Steps::default();
+    let analysis = massif_core::analysis::analyse(&world, 0, &steps).ok_or("the map has no ground")?;
+    print!("{}", analysis.report());
+    eprintln!("read in {loaded:.2} s, analysed in {:.2} s", analysis.seconds);
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() || args.iter().any(|a| a == "--help" || a == "-h") {
@@ -316,6 +337,7 @@ fn main() -> ExitCode {
         "export" => cmd_export(args),
         "import" => cmd_import(args),
         "probe" => cmd_probe(args),
+        "analyse" | "analyze" => cmd_analyse(args),
         other => Err(format!("unknown command \"{other}\"\n\n{USAGE}")),
     };
     match result {

@@ -407,6 +407,7 @@ pub fn generate(params: &GenParams) -> World {
         sea_level: params.sea_level,
         lava: params.lava,
         graph: None,
+        ores: Default::default(),
     });
     let (bottom, top) = build_limits(params.min_y, params.max_y);
     world.dims[0].min_y = bottom;
@@ -461,6 +462,7 @@ pub fn from_heightmap(map: &crate::heightmap::Heightmap, how: &FromHeightmap) ->
         sea_level: how.sea_level,
         lava: false,
         graph: None,
+        ores: Default::default(),
     });
     let (bottom, ceiling) = build_limits(how.min_y, how.max_y);
     world.dims[0].min_y = bottom;

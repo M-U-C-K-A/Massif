@@ -158,6 +158,104 @@ above 255, and the dialog says so. **Test Export** writes only the 3 × 3
 tiles around the centre of the map view to a separate folder, to check the
 result in the game quickly.
 
+## Survival check
+
+**Edit ▸ Analyse the map…** checks the whole map for a survival game. Every
+block is counted as the export writes it — the layers of each column's
+terrain, the stone and deepslate under them, the bedrock floor, the water,
+the plants of the covers, the blocks of the objects — and the land
+measured: the height players stand at, the step from each column to its
+neighbours, the water over it, its biome, the land around the spawn point.
+On a WorldPainter map of 5,888 blocks a side (4.3 billion blocks) it takes
+a few seconds, in the background. The ores are counted where the export
+lays them, block for block.
+
+What it finds comes in three tones, as a survival player would read it:
+
+- **Red, breaks survival**: riches lying around (storage blocks of
+  diamonds, emeralds or netherite, ores at the surface, or an ore far more
+  common than Minecraft makes it underground), bedrock above the bottom
+  five layers or at the surface, blocks no player can break (barriers,
+  command blocks), holes into the void, no wood at all, no stone for tools,
+  a spawn point in lava or over the void.
+- **Amber, missing**: ores — the export writes the map's chunks finished,
+  so Minecraft adds no ore, tree, village or stronghold to them; the ores
+  are the ones the export lays (see [Ores](#ores)), and the card leads
+  there —, lava for a Nether portal, water, grass (animals only spawn on
+  it), trees near the spawn, leaves to grow wood back, a spawn point in
+  water or off the map, peaks cut flat by the top of the world, many drops
+  of 23 blocks or more (a fall that kills at full health).
+- **What holds up**: the trees, the ores to mine, the water, the grass, the
+  floor, the spawn point and its surroundings.
+
+Above them, the way through a game: wood, stone, iron, diamonds, the Nether
+(ten obsidian, cast from lava with a bucket of water or mined with a diamond
+pickaxe). Below, **How to fix it** gathers what to do about each.
+**Relief** draws the heights players stand at, the sea marked, and the
+steps between columns: none, one block (walked), two or three (climbed),
+4 to 22 (a fall that hurts), 23 and more (a fall that kills); the water and
+the shape of the land (overhangs, air under the surface, columns at the top
+of the world or open to the void). **Blocks** lists the ores (blocks,
+storage blocks, in the open, a chunk), the blocks at the surface and in the
+ground, the plants and the objects; **Biomes**, the biomes as the export
+gives them. The card beside sums it up: ores, trees, water, lava, grass,
+spawn; the map's chunks, heights and walkable share; its surface.
+
+**Show on map** glides the map to the spot of a finding (the nearest to the
+spawn) and points it out. **Copy report** copies the whole check as
+Markdown, to paste where people talk about the map; the **…** menu saves it
+to a file. Closed and opened again on the same map, the check comes back at
+once. From the command line, `massif-cli analyse <map.massif>` prints the
+same report.
+
+## Ores
+
+The export writes the map's chunks finished, so Minecraft adds no ore to
+them: the export lays its own, in the rock, as the game lays them since
+1.18. **Edit ▸ Ores…** sets them — for each ore, bands of heights where its
+veins start: few at the ends of a band, the most over its peak (a
+trapezoid: a triangle when the peak is one height, an even spread when it is
+the whole band), so many veins a chunk, so many blocks a vein.
+
+- **Across the top**, each ore with what the map is expected to hold of it
+  (a click picks it), and the map small: click or drag on it to choose the
+  row the map is cut through.
+- **The cut**: the map along that row, its rock, water and sky, with the
+  ores exactly where the export will lay them, and over it a **candle** for
+  each band — the wick from the lowest height to the highest, the body over
+  the peak, its width the size of a vein. Drag the wick's ends or the
+  body's edges to move those heights, the body to move the whole band, its
+  side to make veins larger or smaller; the wheel over a body sets the
+  veins a chunk. Dragging elsewhere looks along the cut.
+- **The chart**: the ore expected at each height of the map, ore by ore, in
+  **Blocks**, on a **Log** scale, or as a **Share** of the solid ground at
+  that height (the map's rock read a column in sixteen); pointed at, every
+  ore's amount at that height.
+- **Below**: the picked ore's bands in numbers (from, most from … to, up
+  to, veins a chunk, blocks a vein), **Add a band**, and **Laid** to leave
+  that ore out.
+
+**Minecraft 1.18+** (the default for every map, new or opened) follows the
+game's own veins and heights, the numbers set so that each ore's share of
+the rock at each height comes out close to worlds the game makes — coal
+over the whole height, most of it high up; iron at 16 and in mountains;
+copper around 48; gold, redstone, lapis and diamonds deep down, diamonds
+mostly in deepslate; emeralds high in mountains only. **Before 1.18** lays
+them as older versions did, from 0 to 128. They are approximations of the
+game, not its exact generator. **Richness** multiplies every band's veins;
+**Lay ores** turns them all off.
+
+Ores only take the place of natural rock — stone, granite, diorite and
+andesite; deepslate and tuff get the deepslate ores — and never of a block
+in the open (one without solid ground right above it): none at the
+surface, though cliffs and caves show some, as in the game. A vein starts
+in one chunk and may reach into the next; the first vein to reach a block
+keeps it. The veins come from the seed, the chunk and the band: the
+export, the cut and the survival check agree block for block. Versions
+before 1.17 get plain ores for the deepslate ones (and iron for copper).
+The settings are saved with the map; the export's World tab can leave the
+ores out of one export, and so can `massif-cli export --no-ores`.
+
 ## Brushes
 
 Brushes work as in WorldPainter. A brush has a shape (one of the twelve
