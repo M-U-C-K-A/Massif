@@ -101,6 +101,36 @@ fn tool_chip(ui: &mut Ui, tool: Tool, label: &str, selected: bool) -> egui::Resp
     response
 }
 
+/// A chip like [`tool_chip`] that switches something on and off, with one
+/// of the font's icons.
+fn toggle_chip(ui: &mut Ui, icon: Icon, label: &str, on: bool) -> egui::Response {
+    let pal = Palette::of(ui);
+    let font = egui::FontId::proportional(12.5);
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), font, pal.text);
+    let (rect, response) = ui.allocate_exact_size(vec2(10.0 + 16.0 + 6.0 + galley.size().x + 12.0, 26.0), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, on, label));
+    let fill = if on {
+        pal.accent_soft
+    } else if response.hovered() {
+        theme::mix(pal.panel, pal.text, 0.07)
+    } else {
+        Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, theme::PILL, fill);
+    ui.painter().text(
+        pos2(rect.left() + 18.0, rect.center().y),
+        egui::Align2::CENTER_CENTER,
+        theme::glyph(icon),
+        egui::FontId::proportional(14.0),
+        if on { pal.accent } else { pal.weak },
+    );
+    ui.painter().galley(pos2(rect.left() + 32.0, rect.center().y - galley.size().y / 2.0), galley, pal.text);
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
+}
+
 // ------------------------------------------------------------------ tools --
 
 pub fn tools_panel(ui: &mut Ui, tools: &mut ToolState) {
@@ -162,6 +192,20 @@ pub fn sculpt_toolbar(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
         ui.add_space(8.0);
         ui.separator();
         ui.add_space(4.0);
+        // Walking in the view, as in Minecraft.
+        let player = toggle_chip(ui, Icon::PersonStanding, "Player", tools.sculpt.player).on_hover_text(
+            "Walk in the view as in Minecraft: click it to look around with the mouse (Esc gives it back), \
+             W A S D walk, Space jumps (twice: flies), Q sneaks or goes down, Shift runs; the buttons sculpt at the crosshair",
+        );
+        if player.clicked() {
+            tools.sculpt.player = !tools.sculpt.player;
+            crate::sounds::play(crate::sounds::Cue::Toggle);
+            // Space would press it again.
+            player.surrender_focus();
+        }
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(4.0);
         // The brush: the one chosen for every tool, from any of the
         // library's groups, a custom image too.
         let name = library.name(&tools.brush_source);
@@ -219,6 +263,7 @@ pub fn sculpt_toolbar(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
             ui.label(RichText::new(what).size(12.0)).on_hover_text("Pick it in Terrain or Blocks");
         }
         let hint = match tools.sculpt.tool {
+            _ if tools.sculpt.player => "Click the view to walk · left: the tool · right: its inverse · ⌘+wheel: size · Esc: free the mouse",
             Tool::PaintTerrain => "Left: paint · right: what the height calls for · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point",
             Tool::Smooth3d => "Left: smooth · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point",
             _ => "Left: add · right: dig · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point",

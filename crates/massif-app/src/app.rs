@@ -2427,6 +2427,8 @@ impl MassifApp {
         self.poll_jobs(&ctx);
         let now = ctx.input(|i| i.time);
         self.apply_memory_limit(now);
+        // Walking in 3D Sculpt held the mouse, and its view is gone.
+        self.sculpt3d.release_if_hidden(&ctx);
         let open = self.dialog.is_some();
         if open != self.dialog_was_open {
             crate::sounds::play(if open { Cue::Open } else { Cue::Close });
@@ -3084,6 +3086,121 @@ mod tests {
             let id = areas.iter().find(|(_, e)| *e == EditorKind::BrushSettings).unwrap().0;
             app.layout.toggle_maximize(id);
         }
+    }
+
+    /// Walking in 3D Sculpt: the player comes down onto the land looked at,
+    /// Space twice flies, the click that lends the view the mouse sculpts
+    /// nothing, the buttons then sculpt at the crosshair, and the orbit
+    /// camera comes back from the player's eyes. Needs a GPU: runs with
+    /// MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn walking_in_3d_sculpt() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        // The highest dry land of the map.
+        let (x, z, top) = {
+            let doc = &h.state().doc;
+            let (lo, hi) = doc.dimension().bounds().unwrap();
+            let t = massif_core::coords::TILE_SIZE;
+            let mut best = (0, 0, f32::MIN);
+            for z in (lo.z * t..(hi.z + 1) * t).step_by(8) {
+                for x in (lo.x * t..(hi.x + 1) * t).step_by(8) {
+                    if let Some(p) = crate::tools::probe(doc, x, z)
+                        && p.fluid == massif_core::tile::NO_FLUID
+                        && p.height > best.2
+                    {
+                        best = (x, z, p.height);
+                    }
+                }
+            }
+            best
+        };
+        {
+            let app = h.state_mut();
+            app.layout.active = 4; // 3D Sculpt
+            app.tools.sculpt.tool = Tool::Build;
+            app.tools.brush.radius = 3.0;
+            app.tools.brush.strength = 1.0;
+        }
+        // (A new map frames the whole of it, at the first frame.)
+        h.run_steps(20);
+        h.state_mut().sculpt3d.camera = crate::view3d::Camera { target: [x as f64 + 0.5, top as f64, z as f64 + 0.5], yaw: 0.6, pitch: 1.3, distance: 40.0 };
+        h.run_steps(5);
+        let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        let view = areas
+            .into_iter()
+            .find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::Sculpt3d))
+            .map(|(_, r)| r)
+            .expect("the 3D Sculpt workspace shows its editor");
+        h.state_mut().tools.sculpt.player = true;
+        h.event(egui::Event::PointerMoved(view.center() + vec2(0.0, 60.0)));
+        h.run_steps(20);
+        let p = h.state().sculpt3d.player().expect("walking");
+        assert!(p.on_ground && !p.flying, "{p:?}");
+        assert!((p.feet[1] - top as f64).abs() < 4.0, "on the land looked at: {:?}, top {top}", p.feet);
+        let eye = h.state().sculpt3d.camera.eye();
+        assert!((eye[1] - p.feet[1] - crate::player::EYE).abs() < 0.01, "the camera at the eyes");
+        assert!((eye[0] - p.feet[0]).hypot(eye[2] - p.feet[2]) < 0.01);
+
+        // The click that lends the view the mouse sculpts nothing.
+        let steps = h.state().doc.history.undo_count();
+        let press = |pressed, button| egui::Event::PointerButton {
+            pos: view.center() + vec2(0.0, 60.0),
+            button,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        h.event(press(true, egui::PointerButton::Primary));
+        h.run_steps(3);
+        h.event(press(false, egui::PointerButton::Primary));
+        h.run_steps(3);
+        assert_eq!(h.state().doc.history.undo_count(), steps, "the first click only takes the mouse");
+        // Looking down a little, the crosshair is on the land: the buttons
+        // sculpt there.
+        h.event(egui::Event::MouseMoved(vec2(0.0, 150.0)));
+        h.run_steps(2);
+        assert!(h.state().sculpt3d.hover().is_some(), "the crosshair points at the land");
+        h.event(press(true, egui::PointerButton::Primary));
+        h.run_steps(4);
+        h.event(press(false, egui::PointerButton::Primary));
+        h.run_steps(4);
+        assert_eq!(h.state().doc.history.undo_label(), Some("Sculpt"));
+        h.render().unwrap().save(dir.join("walk.png")).unwrap();
+        let (w, hgt, rgba) = h.state().sculpt3d.read_back().expect("the 3D view rendered");
+        image::save_buffer(dir.join("walk-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+
+        // Space twice: flying; held, up.
+        h.event(egui::Event::MouseMoved(vec2(0.0, -150.0)));
+        // (A frame an event: pressed, then let go.)
+        h.key_press(Key::Space);
+        h.step();
+        h.key_press(Key::Space);
+        h.step();
+        assert!(h.state().sculpt3d.player().unwrap().flying, "Space twice flies");
+        let y = h.state().sculpt3d.player().unwrap().feet[1];
+        h.key_down(Key::Space);
+        h.run_steps(8);
+        h.key_up(Key::Space);
+        h.step();
+        let p = h.state().sculpt3d.player().unwrap();
+        assert!(p.flying && p.feet[1] > y + 3.0, "up: {y} → {:?}", p.feet);
+        let (w, hgt, rgba) = h.state().sculpt3d.read_back().expect("the 3D view rendered");
+        image::save_buffer(dir.join("walk-fly-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+
+        // Esc gives the mouse back; Player off, the orbit camera returns,
+        // from the eyes.
+        h.key_press(Key::Escape);
+        h.step();
+        let eye = h.state().sculpt3d.camera.eye();
+        h.state_mut().tools.sculpt.player = false;
+        h.run_steps(2);
+        assert!(h.state().sculpt3d.player().is_none());
+        let camera = h.state().sculpt3d.camera;
+        assert!(camera.distance >= 8.0, "{camera:?}");
+        let back = camera.eye();
+        assert!((back[0] - eye[0]).hypot(back[2] - eye[2]) < 1.0 && (back[1] - eye[1]).abs() < 1.0, "{eye:?} → {back:?}");
     }
 
     /// Dig into the terrain from the 3D view, then build on it with the

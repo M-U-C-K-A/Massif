@@ -17,6 +17,7 @@ mod map_render;
 mod map_view;
 mod notify;
 mod panels;
+mod player;
 mod sounds;
 mod terrain_view;
 mod theme;

@@ -721,6 +721,7 @@ In the 3D view:
 | Double-click | Look at the point under the cursor |
 | Header buttons | Look at the middle of the map view; show the whole map |
 | With Build, Dig, Smooth (3D) | Left sculpts where the cursor points, right inverts; middle drag or Alt + drag turns, Shift + middle drag moves |
+| 3D Sculpt's **Player** | Click the view, then: the mouse looks around, W A S D walk, Space jumps (twice: flies, up), Q sneaks (flying: down), Shift or W twice runs, the buttons sculpt at the crosshair; Esc gives the mouse back |
 
 ## How it works
 
@@ -764,6 +765,18 @@ size, intensity and rotation are those of **Brush Settings**, which the
   The wheel brings the view closer around what it turns about; Shift +
   wheel moves forward over the land; Alt + wheel flies toward the point
   under the cursor; ⌘ (Ctrl) + wheel sizes the brush.
+- **Player** walks in the view as in Minecraft, to see and sculpt the land
+  at a player's height: it comes down where the middle of the view looks,
+  with Minecraft's body (0.6 × 1.8 blocks, its eyes at 1.62) and field of
+  view. A click lends the view the mouse, which then looks around (Esc
+  gives it back); W A S D walk, Shift (or W twice) runs, Space jumps — held,
+  again on landing —, twice quickly flies (Space up, Q down; twice again, or
+  flying down to the ground, lands), Q sneaks, and a crouched player does
+  not step off an edge. Water slows and lets swim, matter sculpted over the
+  player lifts them, and a fall off the map puts them back where they last
+  stood. The buttons sculpt at the crosshair; the click that takes the
+  mouse sculpts nothing. Player off, the orbit camera comes back from the
+  player's eyes.
 
 The brush is laid on the slope under the cursor, read from the matter
 around smoothed over five blocks, so it glides over the steps of the terrain
@@ -778,8 +791,13 @@ solid from 128) that replaces what the levels compose inside that cube. A new
 chunk starts as an exact copy of the composition, with the fractional surface
 height as the density of the top blocks — and read back from them, to the
 1/255 of a block —, so sculpting never changes anything outside the brush. Chunks are shared copy-on-write, which makes undo cheap.
-Sculpted matter open to the sky takes the terrain of the column's surface;
-under something else it is rock.
+Each sculpted block can keep a terrain of its own: matter pushed out (an
+extruded ledge, an overhang, a bump) takes the terrain of the blocks it was
+pushed from, so a sand wall gives a sand ledge, while the ground left under
+it keeps its own — nothing is stretched from the ground up. 3D **Paint**
+repaints sculpted matter too. Matter that keeps no terrain of its own
+follows the column: the terrain of its surface where it is open to the sky,
+rock under something else.
 
 ### The `.massif` format
 
@@ -791,7 +809,8 @@ header (64 bytes)   magic "MASSIF\x1a\n", format version, oldest reader version,
 tile frames         one zstd frame per tile, independent of the others
 sections            META  world settings, registry and levels (zstd JSON)
                     TIDX  tile index of a level: x, z, offset, length, CRC32C
-                    VOXL  sculpted chunks of a dimension (zstd)
+                    VOXL  sculpted chunks of a dimension (zstd): densities,
+                          and the terrain of each block that keeps one
                     THMB  a JPEG picture of the map, for the Finder
 directory           32 bytes per section: kind, id, offset, length, CRC32C, flags
 ```

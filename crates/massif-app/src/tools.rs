@@ -299,11 +299,14 @@ pub struct ToolState {
 pub struct SculptSettings {
     /// Sculpt (left adds, right digs), Smooth or Paint.
     pub tool: Tool,
+    /// Walking in the view as a player would (for the session only).
+    #[serde(skip)]
+    pub player: bool,
 }
 
 impl Default for SculptSettings {
     fn default() -> Self {
-        Self { tool: Tool::Build }
+        Self { tool: Tool::Build, player: false }
     }
 }
 
@@ -922,6 +925,14 @@ pub fn sculpt_dab(doc: &mut Document, tools: &ToolState, stroke: &mut SculptStro
                 (None, Some(pattern)) => ops::paint_pattern(&mut edit, &brush, x, z, stroke.salt, pattern),
                 (None, None) => ops::paint_terrain(&mut edit, &brush, x, z, TerrainId(tools.terrain), stroke.salt),
             }
+            // The matter sculpting moved keeps its own terrain: it is
+            // painted too (back to the column's with the inverse).
+            let painted = TerrainId(tools.terrain);
+            match (&theme, &pattern) {
+                (Some(_), _) => voxel::paint_sculpted(&mut edit, &brush, x, z, |_, _| None),
+                (None, Some(pattern)) => voxel::paint_sculpted(&mut edit, &brush, x, z, |px, pz| pattern.terrain(px, pz)),
+                (None, None) => voxel::paint_sculpted(&mut edit, &brush, x, z, |_, _| Some(painted)),
+            };
             1
         }
     }

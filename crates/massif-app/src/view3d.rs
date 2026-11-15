@@ -45,6 +45,8 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const BUILD_BUDGET: Duration = Duration::from_millis(14);
 /// Vertical field of view of the camera.
 const FOV_Y: f32 = 50.0 * std::f32::consts::PI / 180.0;
+/// Walking, Minecraft's (wider: the land is all around).
+const FOV_WALK: f32 = 70.0 * std::f32::consts::PI / 180.0;
 /// Size of one chunk's slot in the uniform buffer of chunk origins.
 const SLOT: u64 = 256;
 
@@ -2220,6 +2222,12 @@ impl Camera {
         ]
     }
 
+    /// The vertical field of view: wider at a player's eyes (the orbit
+    /// camera never comes as close to what it looks at).
+    pub fn fov(&self) -> f32 {
+        if self.distance < 2.0 { FOV_WALK } else { FOV_Y }
+    }
+
     /// Uniforms for a frame whose positions are relative to `origin`.
     /// `extent` is the side of the map, `height` that of the image in
     /// pixels.
@@ -2229,15 +2237,16 @@ impl Camera {
         let target = local(self.target);
         let extent = extent.max(256.0);
         let far = self.distance + extent * 1.6 + 600.0;
-        let near = (self.distance * 0.01).clamp(0.2, 8.0);
+        // At a player's eyes, near: their body keeps 0.3 block from walls.
+        let near = if self.distance < 2.0 { 0.1 } else { (self.distance * 0.01).clamp(0.2, 8.0) };
         let aspect = aspect.max(0.01);
-        let proj = perspective(FOV_Y, aspect, near, far);
+        let proj = perspective(self.fov(), aspect, near, far);
         let view = look_at(eye, target, Vec3::Y);
         let sun = Vec3::new(-0.42, 0.82, -0.38).normalize();
         let f = (target - eye).normalize();
         let s = f.cross(Vec3::Y).normalize();
         let u = s.cross(f);
-        let tan = (FOV_Y * 0.5).tan();
+        let tan = (self.fov() * 0.5).tan();
         let unit = |c: [u8; 3], w: f32| [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0, w];
         Globals {
             view_proj: (proj * view).to_cols_array_2d(),
@@ -2467,6 +2476,50 @@ pub struct View3d {
     /// Asked from the header: look where the map view is, frame the map.
     goto_map: bool,
     frame_map: bool,
+    /// Walking in the view (3D Sculpt's player mode).
+    walk: Option<Walk>,
+}
+
+/// Walking in the view, as in Minecraft.
+struct Walk {
+    player: crate::player::Player,
+    /// The view holds the mouse: moving it looks around, its buttons
+    /// sculpt at the crosshair.
+    captured: bool,
+    /// Buttons still down from the click that took the mouse: they do not
+    /// sculpt.
+    swallow: bool,
+    /// Where egui last saw the pointer while the view held it (where the
+    /// system cannot lock it, it is brought back to the middle).
+    anchor: Option<egui::Pos2>,
+    /// The pass the view was last drawn in, and the frame the body last
+    /// moved in (a frame drawn twice moves it once).
+    pass: u64,
+    frame: u64,
+}
+
+/// How far ahead of the eyes the camera looks while walking (the orbit
+/// camera never comes this close).
+const LOOK: f32 = 1.0;
+/// Radians a point of mouse motion turns the eyes (Minecraft's default).
+const MOUSE_LOOK: f32 = 0.0026;
+
+/// Hold the mouse (locked where the system can, else kept in the window),
+/// or let it go.
+fn hold_mouse(ctx: &egui::Context, hold: bool) {
+    use egui::viewport::CursorGrab;
+    let grab = |g| ctx.send_viewport_cmd(egui::ViewportCommand::CursorGrab(g));
+    if !hold {
+        grab(CursorGrab::None);
+    } else if cfg!(target_os = "macos") {
+        grab(CursorGrab::Locked);
+    } else if cfg!(target_os = "windows") {
+        grab(CursorGrab::Confined);
+    } else {
+        // X11 only confines, Wayland locks too.
+        grab(CursorGrab::Confined);
+        grab(CursorGrab::Locked);
+    }
 }
 
 impl Default for View3d {
@@ -2492,6 +2545,7 @@ impl Default for View3d {
             frame: None,
             goto_map: false,
             frame_map: false,
+            walk: None,
         }
     }
 }
@@ -2555,6 +2609,191 @@ impl View3d {
     #[cfg(test)]
     pub fn pending(&self) -> usize {
         self.pending
+    }
+
+    /// The player walking in the view, if any.
+    #[cfg(test)]
+    pub fn player(&self) -> Option<crate::player::Player> {
+        self.walk.as_ref().map(|w| w.player)
+    }
+
+    /// The view held the mouse and was not drawn in the last frame (another
+    /// workspace, its area closed): let the mouse go.
+    pub fn release_if_hidden(&mut self, ctx: &egui::Context) {
+        if let Some(walk) = &mut self.walk
+            && walk.captured
+            && walk.pass + 1 < ctx.cumulative_pass_nr()
+        {
+            walk.captured = false;
+            hold_mouse(ctx, false);
+        }
+    }
+
+    /// Come down into the map where the middle of the view looks, as a
+    /// player: on the ground there, before a wall, under a roof.
+    fn start_walking(&mut self, doc: &Document, rect: Rect) {
+        let (o, d) = self.ray(rect, rect.center());
+        let dim = doc.dimension();
+        let mut blocks = crate::player::MapBlocks::new(dim);
+        let feet = match massif_core::voxel::raycast(dim, o, d, 100_000.0) {
+            Some(hit) => {
+                let (n, p) = (hit.normal, hit.point);
+                let y = if n.1 < 0 { p[1] - crate::player::HEIGHT - 0.05 } else { p[1] + 0.02 };
+                Some([p[0] + n.0 as f64 * 0.35, y, p[2] + n.2 as f64 * 0.35])
+            }
+            None => {
+                let (x, z) = (self.camera.target[0], self.camera.target[2]);
+                blocks.top(x.floor() as i32, z.floor() as i32).map(|y| [x, y as f64, z])
+            }
+        };
+        let mut player = crate::player::Player::new(feet.unwrap_or(self.camera.target));
+        // Over nothing, flying.
+        player.flying = feet.is_none();
+        // Looking ahead, a little down.
+        self.camera.pitch = 0.15;
+        self.walk = Some(Walk {
+            player,
+            captured: false,
+            swallow: false,
+            anchor: None,
+            pass: 0,
+            frame: u64::MAX,
+        });
+    }
+
+    /// Back to the orbit camera: from the player's eyes, around what they
+    /// looked at.
+    fn stop_walking(&mut self, ctx: &egui::Context, doc: &Document) {
+        let Some(walk) = self.walk.take() else { return };
+        if walk.captured {
+            hold_mouse(ctx, false);
+        }
+        let eye = walk.player.eye();
+        let (sy, cy) = self.camera.yaw.sin_cos();
+        let (sp, cp) = self.camera.pitch.sin_cos();
+        let ahead = [-(cp * sy) as f64, -sp as f64, -(cp * cy) as f64];
+        let to = massif_core::voxel::raycast(doc.dimension(), eye, ahead, 256.0).map_or(32.0, |h| h.distance).clamp(8.0, 256.0);
+        self.camera.pitch = self.camera.pitch.clamp(-1.2, 1.55);
+        self.camera.distance = to as f32;
+        self.camera.target = [eye[0] + ahead[0] * to, eye[1] + ahead[1] * to, eye[2] + ahead[2] * to];
+    }
+
+    /// A frame of walking: the mouse taken and given back, looking around,
+    /// the keys, the body's move, the camera at its eyes.
+    fn walk_ui(&mut self, ui: &Ui, response: &egui::Response, doc: &Document, rect: Rect) {
+        let Some(walk) = &mut self.walk else { return };
+        let ctx = ui.ctx().clone();
+        walk.pass = ctx.cumulative_pass_nr();
+        let (clicked, escape, focused, motion, pointer, dt) = ui.input(|i| {
+            (
+                i.pointer.primary_pressed() || i.pointer.secondary_pressed(),
+                i.key_pressed(egui::Key::Escape),
+                i.viewport().focused.unwrap_or(true),
+                i.pointer.motion().unwrap_or_default(),
+                i.pointer.latest_pos(),
+                i.stable_dt.min(0.1) as f64,
+            )
+        });
+        if !walk.captured && clicked && response.hovered() {
+            // The click that takes the mouse sculpts nothing.
+            walk.captured = true;
+            walk.swallow = true;
+            walk.anchor = pointer;
+            hold_mouse(&ctx, true);
+        } else if walk.captured && (escape || !focused) {
+            walk.captured = false;
+            hold_mouse(&ctx, false);
+        }
+        if walk.captured {
+            self.camera.yaw -= motion.x * MOUSE_LOOK;
+            self.camera.pitch = (self.camera.pitch + motion.y * MOUSE_LOOK).clamp(-1.55, 1.55);
+            // No widget keeps the keys (a focused button takes Space).
+            ctx.memory_mut(|m| {
+                if let Some(id) = m.focused() {
+                    m.surrender_focus(id);
+                }
+            });
+            // Where the system cannot lock the pointer, it goes back to the
+            // middle of the view.
+            if let (Some(p), Some(a)) = (pointer, walk.anchor)
+                && p.distance(a) > 2.0
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CursorPosition(rect.center()));
+                walk.anchor = Some(rect.center());
+            }
+        }
+        use crate::player::Keys;
+        let keys = if walk.captured || (response.hovered() && !ctx.egui_wants_keyboard_input()) {
+            ui.input(|i| {
+                let down = |a: egui::Key, b: egui::Key| (i.key_down(a) || i.key_down(b)) as i32 as f64;
+                // Pressed now, not repeated by the system.
+                let first = |key: egui::Key| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: k, pressed: true, repeat: false, .. } if *k == key));
+                if i.modifiers.command || i.modifiers.ctrl || i.modifiers.alt {
+                    Keys::default()
+                } else {
+                    Keys {
+                        forward: down(egui::Key::W, egui::Key::ArrowUp) - down(egui::Key::S, egui::Key::ArrowDown),
+                        right: down(egui::Key::D, egui::Key::ArrowRight) - down(egui::Key::A, egui::Key::ArrowLeft),
+                        forward_pressed: first(egui::Key::W) || first(egui::Key::ArrowUp),
+                        jump: i.key_down(egui::Key::Space),
+                        jump_pressed: first(egui::Key::Space),
+                        sneak: i.key_down(egui::Key::Q),
+                        run: i.modifiers.shift,
+                    }
+                }
+            })
+        } else {
+            Keys::default()
+        };
+        let frame = ctx.cumulative_frame_nr();
+        if walk.frame != frame {
+            walk.frame = frame;
+            let mut blocks = crate::player::MapBlocks::new(doc.dimension());
+            walk.player.step(&mut blocks, keys, self.camera.yaw, dt);
+        }
+        // The camera at the eyes, looking just ahead.
+        let eye = walk.player.eye();
+        let (sy, cy) = self.camera.yaw.sin_cos();
+        let (sp, cp) = self.camera.pitch.sin_cos();
+        self.camera.distance = LOOK;
+        self.camera.target = [eye[0] - (LOOK * cp * sy) as f64, eye[1] - (LOOK * sp) as f64, eye[2] - (LOOK * cp * cy) as f64];
+        if walk.player.moving() || keys != Keys::default() || (walk.captured && motion != egui::Vec2::ZERO) {
+            ctx.request_repaint();
+        }
+    }
+
+    /// The crosshair and what the keys do, over the view.
+    fn walk_overlay(&self, painter: &egui::Painter, rect: Rect) {
+        let Some(walk) = &self.walk else { return };
+        let c = rect.center();
+        let pill = |at: egui::Pos2, text: String, size: f32| {
+            let galley = painter.layout_no_wrap(text, FontId::proportional(size), Color32::WHITE);
+            let bg = Rect::from_center_size(at, galley.size() + vec2(18.0, 10.0));
+            painter.rect_filled(bg, theme::PILL, Color32::from_black_alpha(130));
+            painter.galley(bg.center() - galley.size() / 2.0, galley, Color32::WHITE);
+        };
+        if !walk.captured {
+            pill(c, "Click to walk here · the mouse looks around, the buttons sculpt at the crosshair".to_owned(), 12.0);
+            return;
+        }
+        for (w, color) in [(3.5, Color32::from_black_alpha(120)), (1.5, Color32::WHITE)] {
+            painter.line_segment([c - vec2(8.0, 0.0), c + vec2(8.0, 0.0)], egui::Stroke::new(w, color));
+            painter.line_segment([c - vec2(0.0, 8.0), c + vec2(0.0, 8.0)], egui::Stroke::new(w, color));
+        }
+        let p = &walk.player;
+        let text = if p.flying {
+            "Flying · W A S D: fly · Space: up · Q: down · Space twice: fall · Shift: faster · Esc: free the mouse".to_owned()
+        } else {
+            let state = if p.swimming {
+                "Swimming"
+            } else if p.sneaking {
+                "Sneaking"
+            } else {
+                "Walking"
+            };
+            format!("{state} · W A S D: walk · Space: jump, twice: fly · Q: sneak · Shift: run · Esc: free the mouse")
+        };
+        pill(pos2(c.x, rect.top() + 22.0), text, 11.5);
     }
 
     /// Build the missing and stale tiles of the map, nearest the camera
@@ -2679,7 +2918,7 @@ impl View3d {
         let f = Vec3::new((t[0] - eye[0]) as f32, (t[1] - eye[1]) as f32, (t[2] - eye[2]) as f32).normalize();
         let s = f.cross(Vec3::Y).normalize();
         let u = s.cross(f);
-        let half = (FOV_Y * 0.5).tan();
+        let half = (self.camera.fov() * 0.5).tan();
         let aspect = rect.width() / rect.height().max(1.0);
         let nx = (p.x - rect.center().x) / (rect.width() * 0.5);
         let ny = -(p.y - rect.center().y) / (rect.height() * 0.5);
@@ -2707,6 +2946,12 @@ impl View3d {
         // A new world: show all of it, forget the old tiles.
         if self.generation != Some(doc.generation) {
             self.generation = Some(doc.generation);
+            if let Some(walk) = self.walk.take() {
+                if walk.captured {
+                    hold_mouse(ui.ctx(), false);
+                }
+                tools.sculpt.player = false;
+            }
             self.camera = framing(doc);
             self.tiles.clear();
             self.grid = None;
@@ -2715,6 +2960,13 @@ impl View3d {
             self.needs_render = true;
         }
         if std::mem::take(&mut self.frame_map) {
+            // The whole map is seen from above: no more walking.
+            if let Some(walk) = self.walk.take() {
+                if walk.captured {
+                    hold_mouse(ui.ctx(), false);
+                }
+                tools.sculpt.player = false;
+            }
             self.camera = Camera {
                 yaw: self.camera.yaw,
                 ..framing(doc)
@@ -2723,7 +2975,12 @@ impl View3d {
         if std::mem::take(&mut self.goto_map)
             && let Some(c) = map_center
         {
-            self.camera.target = [c[0], ground_at(doc, c[0], c[1]).unwrap_or(self.camera.target[1]), c[1]];
+            let y = ground_at(doc, c[0], c[1]).unwrap_or(self.camera.target[1]);
+            match &mut self.walk {
+                // The player goes there.
+                Some(walk) => walk.player = crate::player::Player::new([c[0], y, c[1]]),
+                None => self.camera.target = [c[0], y, c[1]],
+            }
         }
         let style = Style {
             mode: self.mode,
@@ -2735,6 +2992,21 @@ impl View3d {
             self.invalidate_all();
         }
         let extent = map_rect(doc).map_or(512.0, |(x0, z0, x1, z1)| (x1 - x0).max(z1 - z0) as f32);
+
+        // ---- walking ---------------------------------------------------------
+        // 3D Sculpt's player mode: a click lends the view the mouse (Esc
+        // takes it back), which looks around; the keys walk, jump, fly; the
+        // buttons sculpt at the crosshair.
+        let walking = sculpt && tools.sculpt.player;
+        if walking != self.walk.is_some() {
+            if walking {
+                self.start_walking(doc, rect);
+            } else {
+                self.stop_walking(ui.ctx(), doc);
+            }
+        }
+        self.walk_ui(ui, &response, doc, rect);
+        let captured = self.walk.as_ref().is_some_and(|w| w.captured);
 
         // ---- camera control ------------------------------------------------
         // With a tool of the Sculpt editor the buttons sculpt or paint (the
@@ -2754,12 +3026,12 @@ impl View3d {
                 response.dragged_by(PointerButton::Secondary) || response.dragged_by(PointerButton::Middle),
             )
         };
-        if orbit {
+        if orbit && !walking {
             let d = response.drag_delta();
             self.camera.yaw -= d.x * 0.008;
             self.camera.pitch = (self.camera.pitch + d.y * 0.006).clamp(-1.2, 1.55);
         }
-        if pan {
+        if pan && !walking {
             let d = response.drag_delta();
             let k = self.camera.distance as f64 * 0.0018;
             let (s, c) = (self.camera.yaw.sin() as f64, self.camera.yaw.cos() as f64);
@@ -2777,6 +3049,8 @@ impl View3d {
                 // The brush of every tool, as in Brush Settings.
                 let r = &mut tools.brush.radius;
                 *r = (*r * zoom).clamp(1.0, massif_core::MAX_RADIUS);
+            } else if walking {
+                // Walking, the wheel only sizes the brush.
             } else if alt && scroll != 0.0 {
                 let factor = (-scroll * 0.003).exp();
                 if let Some(p) = response.hover_pos() {
@@ -2806,7 +3080,9 @@ impl View3d {
 
         // ---- sculpting -------------------------------------------------------
         self.hover = None;
-        if sculpting && let Some(p) = response.hover_pos() {
+        // Walking, the brush is where the crosshair is.
+        let aim = if walking { captured.then(|| rect.center()) } else { response.hover_pos() };
+        if sculpting && let Some(p) = aim {
             let (o, d) = self.ray(rect, p);
             self.hover = massif_core::voxel::raycast(doc.dimension(), o, d, (self.camera.distance as f64 + extent as f64) * 1.5);
             // The slope under the cursor, smoothed over the blocks around;
@@ -2831,9 +3107,17 @@ impl View3d {
             self.frame = None;
         }
         let (primary, secondary) = ui.input(|i| (i.pointer.primary_down(), i.pointer.secondary_down()));
-        let pressed = sculpting && response.hovered() && !alt && !shift && (primary || secondary);
+        let pressed = match &mut self.walk {
+            Some(walk) => {
+                if !(primary || secondary) {
+                    walk.swallow = false;
+                }
+                sculpting && walk.captured && !walk.swallow && (primary || secondary)
+            }
+            None => sculpting && response.hovered() && !alt && !shift && (primary || secondary),
+        };
         match (&mut self.sculpt, pressed) {
-            (None, true) if response.is_pointer_button_down_on() => {
+            (None, true) if captured || response.is_pointer_button_down_on() => {
                 self.sculpt = crate::tools::begin_sculpt(doc, tools, secondary).map(|s| (s, Instant::now()));
             }
             (Some(_), false) => {
@@ -2854,7 +3138,7 @@ impl View3d {
 
         // Fly with the keyboard while the pointer is over the view: W A S D
         // (or the arrows) move, Q and E go down and up, Shift goes faster.
-        if response.hovered() && !ui.ctx().egui_wants_keyboard_input() {
+        if !walking && response.hovered() && !ui.ctx().egui_wants_keyboard_input() {
             let (dt, keys) = ui.input(|i| {
                 let k = |a: egui::Key, b: egui::Key| (i.key_down(a) || i.key_down(b)) as i32 as f64;
                 let mods = i.modifiers.command || i.modifiers.ctrl || i.modifiers.alt;
@@ -2879,7 +3163,8 @@ impl View3d {
             }
         }
         // Double-click: look at the point under the cursor.
-        if response.double_clicked()
+        if !walking
+            && response.double_clicked()
             && let Some(p) = response.interact_pointer_pos()
         {
             let (o, d) = self.ray(rect, p);
@@ -2978,25 +3263,54 @@ impl View3d {
             let m = Mat4::from_cols_array_2d(&globals.view_proj);
             let to_screen = |p: [f32; 3]| -> Option<egui::Pos2> {
                 let v = m * Vec4::new(p[0] - origin.0 as f32, p[1], p[2] - origin.1 as f32, 1.0);
-                (v.w > 0.0).then(|| pos2(rect.center().x + v.x / v.w * rect.width() * 0.5, rect.center().y - v.y / v.w * rect.height() * 0.5))
+                // Before the eyes (past the near plane), or not drawn.
+                (v.w > 0.1).then(|| pos2(rect.center().x + v.x / v.w * rect.width() * 0.5, rect.center().y - v.y / v.w * rect.height() * 0.5))
             };
             let (t1, t2) = massif_core::voxel::tangents(f.normal);
             let on = |u: f32, v: f32| to_screen([f.center[0] + t1[0] * u + t2[0] * v, f.center[1] + t1[1] * u + t2[1] * v, f.center[2] + t1[2] * u + t2[2] * v]);
             let brush = &tools.sculpt_brush();
             let r = brush.radius;
-            let rings: Vec<Vec<egui::Pos2>> = match brush.outline() {
-                Some(outline) => outline.iter().map(|ring| ring.iter().filter_map(|&(u, v)| on(u, v)).collect()).collect(),
-                None if brush.is_square() => vec![brush.square_corners(0.0, 0.0).iter().filter_map(|&(u, v)| on(u, v)).collect()],
-                None => vec![(0..64).filter_map(|i| {
+            // Points behind the eyes (walking, the brush is around the
+            // feet) are None: the rest is drawn in runs, without a chord
+            // across the view.
+            let rings: Vec<Vec<Option<egui::Pos2>>> = match brush.outline() {
+                Some(outline) => outline.iter().map(|ring| ring.iter().map(|&(u, v)| on(u, v)).collect()).collect(),
+                None if brush.is_square() => vec![brush.square_corners(0.0, 0.0).iter().map(|&(u, v)| on(u, v)).collect()],
+                None => vec![(0..64).map(|i| {
                     let t = i as f32 / 64.0 * std::f32::consts::TAU;
                     on(t.cos() * r, t.sin() * r)
                 }).collect()],
             };
+            let draw = |points: Vec<egui::Pos2>, closed: bool| {
+                for (w, color) in [(3.0, Color32::from_black_alpha(90)), (1.4, Color32::WHITE)] {
+                    let stroke = egui::Stroke::new(w, color);
+                    painter.add(if closed { egui::Shape::closed_line(points.clone(), stroke) } else { egui::Shape::line(points.clone(), stroke) });
+                }
+            };
             for ring in rings.into_iter().filter(|r| r.len() > 2) {
-                painter.add(egui::Shape::closed_line(ring.clone(), egui::Stroke::new(3.0, Color32::from_black_alpha(90))));
-                painter.add(egui::Shape::closed_line(ring, egui::Stroke::new(1.4, Color32::WHITE)));
+                let Some(hidden) = ring.iter().position(Option::is_none) else {
+                    draw(ring.into_iter().flatten().collect(), true);
+                    continue;
+                };
+                let mut run = Vec::new();
+                for k in 1..=ring.len() {
+                    match ring[(hidden + k) % ring.len()] {
+                        Some(p) => run.push(p),
+                        None => {
+                            if run.len() > 1 {
+                                draw(std::mem::take(&mut run), false);
+                            }
+                            run.clear();
+                        }
+                    }
+                }
             }
-            if let (Some(c), Some(tip)) = (to_screen(f.center), to_screen([f.center[0] + f.normal[0] * r * 0.5, f.center[1] + f.normal[1] * r * 0.5, f.center[2] + f.normal[2] * r * 0.5])) {
+            // Which way the surface faces (walking, the crosshair says
+            // where the brush is, and the line would rise to the eyes).
+            let walking = self.walk.is_some();
+            if let (Some(c), Some(tip)) = (to_screen(f.center), to_screen([f.center[0] + f.normal[0] * r * 0.5, f.center[1] + f.normal[1] * r * 0.5, f.center[2] + f.normal[2] * r * 0.5]))
+                && !walking
+            {
                 painter.line_segment([c, tip], egui::Stroke::new(1.4, Color32::from_white_alpha(200)));
                 painter.circle_filled(c, 2.0, Color32::WHITE);
             }
@@ -3023,8 +3337,13 @@ impl View3d {
         let bg = Rect::from_min_size(at - vec2(4.0, galley.size().y + 4.0), galley.size() + vec2(8.0, 6.0));
         painter.rect_filled(bg, 4, Color32::from_black_alpha(110));
         painter.galley(at - vec2(0.0, galley.size().y + 1.0), galley, Color32::WHITE);
-        if response.hovered() {
-            ui.ctx().set_cursor_icon(if sculpting {
+        self.walk_overlay(&painter, rect);
+        if captured {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+        } else if response.hovered() {
+            ui.ctx().set_cursor_icon(if walking {
+                egui::CursorIcon::Default
+            } else if sculpting {
                 egui::CursorIcon::Crosshair
             } else if response.dragged() {
                 egui::CursorIcon::Grabbing

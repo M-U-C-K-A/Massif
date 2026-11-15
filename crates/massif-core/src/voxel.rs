@@ -16,7 +16,7 @@
 use crate::brush::Brush;
 use crate::codec;
 use crate::compose::{Span, TileStack, block_top};
-use crate::coords::{TILE_SIZE, TilePos, local_index};
+use crate::coords::{BlockRect, TILE_SIZE, TilePos, local_index};
 use crate::history::Edit;
 use crate::world::Dimension;
 use rayon::prelude::*;
@@ -72,11 +72,19 @@ pub const fn voxel_index(lx: i32, ly: i32, lz: i32) -> usize {
     ((ly * SIZE + lz) * SIZE + lx) as usize
 }
 
-/// The densities of a 16³ block of the world.
+/// The densities of a 16³ block of the world, and the terrain of the matter
+/// sculpting moved there.
 #[derive(Clone, PartialEq, Eq)]
 pub struct VoxelChunk {
     density: Box<[u8; VOLUME]>,
+    /// The terrain of each voxel whose matter was brought by sculpting —
+    /// what it was made of where it came from —, or [`FOLLOW`]: as the
+    /// column composes it. `None` while every voxel follows.
+    terrain: Option<Box<[u16; VOLUME]>>,
 }
+
+/// A voxel whose terrain is the column's (see [`VoxelChunk`]).
+const FOLLOW: u16 = u16::MAX;
 
 impl std::fmt::Debug for VoxelChunk {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -90,7 +98,25 @@ impl VoxelChunk {
     pub fn air() -> Self {
         Self {
             density: Box::new([0; VOLUME]),
+            terrain: None,
         }
+    }
+
+    /// The terrain the matter of a voxel brought with it; `None`: the
+    /// column's.
+    #[inline]
+    pub fn terrain(&self, lx: i32, ly: i32, lz: i32) -> Option<crate::registry::TerrainId> {
+        let t = self.terrain.as_ref()?[voxel_index(lx, ly, lz)];
+        (t != FOLLOW).then_some(crate::registry::TerrainId(t))
+    }
+
+    /// Give a voxel a terrain of its own (`None`: the column's).
+    pub fn set_terrain(&mut self, lx: i32, ly: i32, lz: i32, terrain: Option<crate::registry::TerrainId>) {
+        if terrain.is_none() && self.terrain.is_none() {
+            return;
+        }
+        let plane = self.terrain.get_or_insert_with(|| Box::new([FOLLOW; VOLUME]));
+        plane[voxel_index(lx, ly, lz)] = terrain.map_or(FOLLOW, |t| t.0);
     }
 
     #[inline]
@@ -115,6 +141,7 @@ impl VoxelChunk {
     pub fn from_densities(density: [u8; VOLUME]) -> Self {
         Self {
             density: Box::new(density),
+            terrain: None,
         }
     }
 
@@ -236,33 +263,74 @@ impl VoxelLayer {
         self.dirty.extend(tiles);
     }
 
-    /// Serialize every chunk: `x y z` (i32) then the densities, zstd'd.
+    /// Serialize every chunk, zstd'd: `VOX2`, then for each `x y z` (i32),
+    /// the densities, and a byte saying whether the terrains of its voxels
+    /// follow (16-bit each, [`FOLLOW`] for the column's).
     pub fn encode(&self) -> Vec<u8> {
         let mut positions: Vec<&ChunkPos> = self.chunks.keys().collect();
         positions.sort();
-        let mut raw = Vec::with_capacity(positions.len() * (12 + VOLUME));
+        let mut raw = Vec::with_capacity(4 + positions.len() * (13 + VOLUME));
+        raw.extend_from_slice(VOXELS_2);
         for p in positions {
+            let chunk = &self.chunks[p];
             raw.extend_from_slice(&p.x.to_le_bytes());
             raw.extend_from_slice(&p.y.to_le_bytes());
             raw.extend_from_slice(&p.z.to_le_bytes());
-            raw.extend_from_slice(&self.chunks[p].density[..]);
+            raw.extend_from_slice(&chunk.density[..]);
+            match &chunk.terrain {
+                Some(t) => {
+                    raw.push(1);
+                    for v in t.iter() {
+                        raw.extend_from_slice(&v.to_le_bytes());
+                    }
+                }
+                None => raw.push(0),
+            }
         }
         codec::zstd_compress(&raw)
     }
 
-    /// Read what [`VoxelLayer::encode`] wrote.
+    /// Read what [`VoxelLayer::encode`] wrote (or, before terrains were
+    /// kept, densities alone).
     pub fn decode(bytes: &[u8]) -> Result<Self, String> {
         let raw = codec::zstd_decompress(bytes).map_err(|e| e.to_string())?;
-        let entry = 12 + VOLUME;
-        if raw.len() % entry != 0 {
-            return Err("the sculpted chunks have a ragged length".into());
-        }
         let mut layer = Self::default();
-        for e in raw.chunks(entry) {
+        let position = |e: &[u8]| {
             let at = |i: usize| i32::from_le_bytes(e[i..i + 4].try_into().expect("4 bytes"));
-            let pos = ChunkPos::new(at(0), at(4), at(8));
-            let density: [u8; VOLUME] = e[12..].try_into().expect("a full chunk");
-            layer.insert(pos, Arc::new(VoxelChunk::from_densities(density)));
+            ChunkPos::new(at(0), at(4), at(8))
+        };
+        if let Some(mut rest) = raw.strip_prefix(VOXELS_2) {
+            while !rest.is_empty() {
+                if rest.len() < 13 + VOLUME {
+                    return Err("a sculpted chunk is cut short".into());
+                }
+                let pos = position(rest);
+                let density: [u8; VOLUME] = rest[12..12 + VOLUME].try_into().expect("a full chunk");
+                let mut chunk = VoxelChunk::from_densities(density);
+                let has_terrain = rest[12 + VOLUME] == 1;
+                rest = &rest[13 + VOLUME..];
+                if has_terrain {
+                    if rest.len() < 2 * VOLUME {
+                        return Err("the terrains of a sculpted chunk are cut short".into());
+                    }
+                    let mut plane = Box::new([FOLLOW; VOLUME]);
+                    for (k, v) in plane.iter_mut().enumerate() {
+                        *v = u16::from_le_bytes([rest[2 * k], rest[2 * k + 1]]);
+                    }
+                    chunk.terrain = Some(plane);
+                    rest = &rest[2 * VOLUME..];
+                }
+                layer.insert(pos, Arc::new(chunk));
+            }
+        } else {
+            let entry = 12 + VOLUME;
+            if raw.len() % entry != 0 {
+                return Err("the sculpted chunks have a ragged length".into());
+            }
+            for e in raw.chunks(entry) {
+                let density: [u8; VOLUME] = e[12..].try_into().expect("a full chunk");
+                layer.insert(position(e), Arc::new(VoxelChunk::from_densities(density)));
+            }
         }
         layer.dirty.clear();
         Ok(layer)
@@ -271,6 +339,9 @@ impl VoxelLayer {
 
 // ------------------------------------------------------------ composing --
 
+/// The sculpted chunks of a file since terrains are kept with them.
+const VOXELS_2: &[u8] = b"VOX2";
+
 /// Mark for spans made by sculpting while a column is composed; resolved
 /// before [`apply`] returns.
 const SCULPTED: crate::registry::TerrainId = crate::registry::TerrainId(u16::MAX);
@@ -278,12 +349,14 @@ const SCULPTED: crate::registry::TerrainId = crate::registry::TerrainId(u16::MAX
 /// Replace what `spans` holds inside each chunk of `column` (chunk y, chunk;
 /// bottom up) by the chunk's solid voxels at local column `(lx, lz)`.
 ///
-/// Sculpted rock open to the sky takes the terrain of the column's surface;
-/// rock under something else is plain rock, as under a solid level.
+/// Matter that sculpting brought keeps the terrain it was made of where it
+/// came from. Other sculpted rock open to the sky takes the terrain of the
+/// column's surface; under something else it is plain rock, as under a
+/// solid level.
 pub(crate) fn apply(spans: &mut Vec<Span>, column: &[(i32, &VoxelChunk)], lx: i32, lz: i32, min_y: i32, max_y: i32, surface: crate::registry::TerrainId) {
     // The exact heights of the tops the levels had, for runs that end where
     // one did and whose block above is not sculpted.
-    let before: Vec<(i32, f32)> = spans.iter().map(|s| (s.y1, s.top)).collect();
+    let before: Vec<(i32, f32, crate::registry::TerrainId)> = spans.iter().map(|s| (s.y1, s.top, s.terrain)).collect();
     for (n, &(cy, chunk)) in column.iter().enumerate() {
         let base = cy * SIZE;
         let (ya, yb) = (base.max(min_y), (base + SIZE).min(max_y));
@@ -297,8 +370,10 @@ pub(crate) fn apply(spans: &mut Vec<Span>, column: &[(i32, &VoxelChunk)], lx: i3
                 y += 1;
                 continue;
             }
+            // A run of one terrain: its own, or the column's.
             let start = y;
-            while y < yb && chunk.solid(lx, y - base, lz) {
+            let own = chunk.terrain(lx, y - base, lz);
+            while y < yb && chunk.solid(lx, y - base, lz) && chunk.terrain(lx, y - base, lz) == own {
                 y += 1;
             }
             // Its top at the height its densities give: the matter of its
@@ -320,27 +395,35 @@ pub(crate) fn apply(spans: &mut Vec<Span>, column: &[(i32, &VoxelChunk)], lx: i3
                 Span {
                     y0: start,
                     y1: y,
-                    terrain: SCULPTED,
+                    terrain: own.unwrap_or(SCULPTED),
                     top: top.clamp(y as f32 - 0.5, y as f32 + 0.499),
                 },
             );
         }
     }
-    // Sculpted runs continue the spans they touch.
+    // Sculpted runs continue the spans they touch, and runs of one terrain
+    // make one span: its layers go on down from its top.
     let mut i = 0;
     while i + 1 < spans.len() {
         let (a, b) = (spans[i], spans[i + 1]);
-        if a.y1 == b.y0 && (a.terrain == SCULPTED || b.terrain == SCULPTED) {
+        if a.y1 == b.y0 && (a.terrain == SCULPTED || b.terrain == SCULPTED || a.terrain == b.terrain) {
             spans[i] = Span { y0: a.y0, ..b };
             spans.remove(i + 1);
         } else {
             i += 1;
         }
     }
+    // What follows the column: the terrain of the surface it still is (the
+    // ground under a ledge keeps its own), the column's surface on top,
+    // rock where sculpting opened the inside of the matter.
     let last = spans.len().saturating_sub(1);
     for (i, s) in spans.iter_mut().enumerate() {
         if s.terrain == SCULPTED {
-            s.terrain = if i == last { surface } else { crate::registry::TerrainId::ROCK };
+            s.terrain = match before.iter().find(|b| b.0 == s.y1) {
+                Some(b) if b.2 != SCULPTED => b.2,
+                _ if i == last => surface,
+                _ => crate::registry::TerrainId::ROCK,
+            };
         }
     }
 }
@@ -660,8 +743,11 @@ pub fn displace_at(edit: &mut Edit, brush: &Brush, center: [f32; 3], normal: [f3
     if positions.is_empty() {
         return 0;
     }
-    // The matter as it is, to read it moved from.
-    let field = Field::gather(edit.dim(), lo, hi, amount.ceil() as i32 + 2);
+    // The matter as it is, to read it moved from; when adding, what it is
+    // made of too, so that it brings its terrain along.
+    let reach_back = amount.ceil() as i32 + 2;
+    let field = Field::gather(edit.dim(), lo, hi, reach_back);
+    let terrains = (outward > 0.0).then(|| Terrains::gather(edit.dim(), [lo[0] - reach_back, lo[1] - reach_back, lo[2] - reach_back], [hi[0] + reach_back, hi[1] + reach_back, hi[2] + reach_back]));
     let changed = std::sync::atomic::AtomicUsize::new(0);
     edit.par_voxels(&positions, |pos, chunk| {
         let (x0, y0, z0) = pos.origin();
@@ -687,17 +773,105 @@ pub fn displace_at(edit: &mut Edit, brush: &Brush, center: [f32; 3], normal: [f3
                         continue;
                     }
                     // What lies `shift` blocks back along the normal comes here.
-                    let moved = field.sample([at[0] - normal[0] * shift, at[1] - normal[1] * shift, at[2] - normal[2] * shift]);
+                    let from = [at[0] - normal[0] * shift, at[1] - normal[1] * shift, at[2] - normal[2] * shift];
+                    let moved = field.sample(from);
                     let old = chunk.get(lx, ly, lz);
                     let new = if outward > 0.0 { (old as f32).max(moved) } else { (old as f32).min(moved) };
                     let new = new.round().clamp(0.0, 255.0) as u8;
                     if new != old {
                         chunk.set(lx, ly, lz, new);
+                        if new >= SOLID && old < SOLID {
+                            // New matter: made of what it came from (or of
+                            // what lies a block further back, past the air
+                            // of a partly filled surface block).
+                            let back = |k: f32| [from[0] - normal[0] * k, from[1] - normal[1] * k, from[2] - normal[2] * k];
+                            let source = terrains.as_ref().and_then(|t| t.at(from).or_else(|| t.at(back(1.0))));
+                            chunk.set_terrain(lx, ly, lz, source);
+                        } else if new < SOLID && old >= SOLID {
+                            chunk.set_terrain(lx, ly, lz, None);
+                        }
                         changed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
             }
         }
+    });
+    changed.into_inner()
+}
+
+/// What every block of a box is made of, as the columns compose it (with
+/// the terrains sculpted matter keeps); air has none.
+struct Terrains {
+    lo: [i32; 3],
+    size: [usize; 3],
+    values: Vec<u16>,
+}
+
+impl Terrains {
+    fn gather(dim: &Dimension, lo: [i32; 3], hi: [i32; 3]) -> Self {
+        let size = [(hi[0] - lo[0]).max(0) as usize, (hi[1] - lo[1]).max(0) as usize, (hi[2] - lo[2]).max(0) as usize];
+        let mut values = vec![FOLLOW; size[0] * size[1] * size[2]];
+        let rect = BlockRect::new(lo[0], lo[2], hi[0], hi[2]);
+        let mut spans = Vec::new();
+        for tile in rect.tiles() {
+            let Some(stack) = TileStack::new(dim, tile, false) else { continue };
+            let clip = rect.intersect(&tile.rect());
+            for z in clip.z0..clip.z1 {
+                for x in clip.x0..clip.x1 {
+                    stack.spans(local_index(x, z), &mut spans);
+                    for s in &spans {
+                        for y in s.y0.max(lo[1])..s.y1.min(hi[1]) {
+                            let i = ((y - lo[1]) as usize * size[2] + (z - lo[2]) as usize) * size[0] + (x - lo[0]) as usize;
+                            values[i] = s.terrain.0;
+                        }
+                    }
+                }
+            }
+        }
+        Self { lo, size, values }
+    }
+
+    /// The terrain of the block holding point `p`; `None` for air or
+    /// outside the box.
+    fn at(&self, p: [f32; 3]) -> Option<crate::registry::TerrainId> {
+        let [x, y, z] = [0, 1, 2].map(|k| p[k].floor() as i32 - self.lo[k]);
+        if x < 0 || y < 0 || z < 0 || x as usize >= self.size[0] || y as usize >= self.size[1] || z as usize >= self.size[2] {
+            return None;
+        }
+        let v = self.values[(y as usize * self.size[2] + z as usize) * self.size[0] + x as usize];
+        (v != FOLLOW).then_some(crate::registry::TerrainId(v))
+    }
+}
+
+/// Paint the sculpted matter in the columns under `brush` at `(cx, cz)`:
+/// `terrain(x, z)` gives what each column is painted with (`None`: the
+/// column's own, again). The levels are painted apart; this reaches the
+/// matter sculpting moved, which keeps its own terrain.
+pub fn paint_sculpted(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, terrain: impl Fn(i32, i32) -> Option<crate::registry::TerrainId> + Sync) -> usize {
+    let footprint = BlockRect::around(cx, cz, brush.reach().max(brush.radius));
+    let positions: Vec<ChunkPos> = footprint.tiles().flat_map(|t| edit.dim().voxels.in_tile(t).map(|(p, _)| p).collect::<Vec<_>>()).collect();
+    if positions.is_empty() {
+        return 0;
+    }
+    let changed = std::sync::atomic::AtomicUsize::new(0);
+    edit.par_voxels(&positions, |pos, chunk| {
+        let (x0, y0, z0) = pos.origin();
+        for lz in 0..SIZE {
+            for lx in 0..SIZE {
+                let (x, z) = (x0 + lx, z0 + lz);
+                if brush.weight(x as f32 + 0.5 - cx, z as f32 + 0.5 - cz) < 0.5 {
+                    continue;
+                }
+                let t = terrain(x, z);
+                for ly in 0..SIZE {
+                    if chunk.solid(lx, ly, lz) && chunk.terrain(lx, ly, lz) != t {
+                        chunk.set_terrain(lx, ly, lz, t);
+                        changed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+        let _ = y0;
     });
     changed.into_inner()
 }
@@ -1246,6 +1420,89 @@ mod tests {
             eprintln!("{name}: grew {:.1} blocks in two seconds", first.distance - last.distance);
             assert!(first.distance - last.distance >= 8.0, "{name}: grew {:.1} blocks in two seconds", first.distance - last.distance);
         }
+    }
+
+    /// Matter pushed out of a wall is made of what the wall was made of:
+    /// a sand wall grows a sand ledge, not rock nor the ground's grass; and
+    /// ground raised stays one span, its layers going on from its new top.
+    #[test]
+    fn added_matter_keeps_its_terrain() {
+        let mut w = world();
+        let reg = w.registry.clone();
+        let sand = reg.terrain_by_name("Sand").unwrap();
+        let mut h = History::default();
+        h.begin("Wall", 0);
+        {
+            let mut e = h.edit(&mut w, 0);
+            for x in 0..8 {
+                for z in 0..16 {
+                    for y in 64..84 {
+                        let pos = ChunkPos::containing(x, y, z);
+                        let (x0, y0, z0) = pos.origin();
+                        let c = e.voxel_chunk_mut(pos);
+                        c.set(x - x0, y - y0, z - z0, 255);
+                        c.set_terrain(x - x0, y - y0, z - z0, Some(sand));
+                    }
+                }
+            }
+        }
+        h.commit();
+        // Out of its face, half way up.
+        let (origin, dir) = ([40.0, 76.5, 8.5], [-1.0, 0.0, 0.0]);
+        let hit = raycast(&w.dims[0], origin, dir, 200.0).unwrap();
+        let frame = surface_frame(&w.dims[0], &hit, origin, dir);
+        h.begin("Ledge", 0);
+        for _ in 0..8 {
+            displace_at(&mut h.edit(&mut w, 0), &brush(3.0), frame.center, frame.normal, 1.0, SculptMode::Add);
+        }
+        h.commit();
+        let ledge = spans_at(&w, 9, 8);
+        let up_there: Vec<&Span> = ledge.iter().filter(|s| s.y0 > 64).collect();
+        assert!(!up_there.is_empty(), "a ledge grew: {ledge:?}");
+        for s in up_there {
+            assert_eq!(s.terrain, sand, "the ledge is sand: {ledge:?}");
+        }
+        // The ground under the ledge is still the ground, not rock.
+        let ground = spans_at(&w, 30, 8).last().unwrap().terrain;
+        assert_eq!(ledge[0].terrain, ground, "{ledge:?}");
+        // The ground raised by a few blocks: one span still, of grass.
+        let grass = spans_at(&w, 30, 30).last().unwrap().terrain;
+        let (origin, dir) = ([30.5, 120.0, 30.5], [0.0, -1.0, 0.0]);
+        h.begin("Mound", 0);
+        for _ in 0..6 {
+            let hit = raycast(&w.dims[0], origin, dir, 200.0).unwrap();
+            let frame = surface_frame(&w.dims[0], &hit, origin, dir);
+            displace_at(&mut h.edit(&mut w, 0), &brush(3.0), frame.center, frame.normal, 1.0, SculptMode::Add);
+        }
+        h.commit();
+        let mound = spans_at(&w, 30, 30);
+        assert_eq!(mound.len(), 1, "{mound:?}");
+        assert_eq!(mound[0].terrain, grass);
+        assert!(mound[0].y1 > 66, "{mound:?}");
+        // Kept in the file, as they were.
+        let bytes = w.dims[0].voxels.encode();
+        let back = VoxelLayer::decode(&bytes).unwrap();
+        for (pos, chunk) in w.dims[0].voxels.iter() {
+            assert_eq!(**chunk, *back.get(pos).unwrap(), "{pos:?}");
+        }
+    }
+
+    /// Files from before terrains were kept still read: their sculpted
+    /// matter follows its columns.
+    #[test]
+    fn old_sculpted_chunks_still_read() {
+        let mut raw = Vec::new();
+        for (x, y, z) in [(0i32, 4i32, 0i32), (1, 4, 0)] {
+            raw.extend_from_slice(&x.to_le_bytes());
+            raw.extend_from_slice(&y.to_le_bytes());
+            raw.extend_from_slice(&z.to_le_bytes());
+            raw.extend((0..VOLUME).map(|i| if i % 3 == 0 { 255u8 } else { 0 }));
+        }
+        let layer = VoxelLayer::decode(&codec::zstd_compress(&raw)).unwrap();
+        assert_eq!(layer.len(), 2);
+        let chunk = layer.get(ChunkPos::new(1, 4, 0)).unwrap();
+        assert_eq!(chunk.get(0, 0, 0), 255);
+        assert_eq!(chunk.terrain(0, 0, 0), None);
     }
 
     #[test]

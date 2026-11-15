@@ -11,6 +11,8 @@ script lists them): add one, remove one, rebuild. Landscape pictures about
 - `massif-dusk.jpg`: a massif at dusk, drawn by Massif itself.
 - `floating-mountains.jpg`, `archipelago-sunset.jpg`, `karst-twilight.jpg`,
   `canyon-sunset.jpg`: templates of the terrain graph, rendered by its viewport.
+- `alps_final_full.png`, `canyon_final_full.png`: snowy peaks under the stars,
+  a canyon at dusk.
 
 Render them again with:
 
