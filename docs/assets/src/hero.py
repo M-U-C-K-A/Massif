@@ -27,6 +27,9 @@ from PIL import Image, ImageEnhance
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, "..", "..", ".."))
 BACKDROPS = os.path.join(ROOT, "crates", "massif-app", "assets", "backdrops")
+# Each scene's land cut out (its `_relief` layer), for the dawn of the light
+# theme: kept here, as only the banner needs them.
+LAYERS = os.path.join(HERE, "scenes")
 OUT = os.path.join(ROOT, "docs", "assets")
 
 W, H = 1280, 420
@@ -125,7 +128,7 @@ def sky(top, horizon, size, at=0.7):
 def scene(name, at, horizon, lift, sat, theme):
     """The phases of the dither of a scene, and where its sky is (for
     stars): a mask, a pixel a cell, 255 where there is no land."""
-    relief = band(os.path.join(BACKDROPS, f"{name}_relief.png"), at)
+    relief = band(os.path.join(LAYERS, f"{name}_relief.png"), at)
     land = relief.split()[3]
     if theme == "dark":
         src = band(os.path.join(BACKDROPS, f"{name}_complet.png"), at).convert("RGB")

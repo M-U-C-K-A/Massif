@@ -33,12 +33,14 @@ map (Esc).
 
 Behind it is one of the pictures of
 [`crates/massif-app/assets/backdrops`](../crates/massif-app/assets/backdrops) —
-five scenes at night: a canyon, the Alps, volcanic islands, stone pillars in
-the mist, dunes —, a new one each time Massif opens (those not shown yet
-first; the button at the bottom right shows another), reduced to sixteen
-colours of its own with an ordered dither in square cells that moves on about
-once a second. Every `.jpg` or `.png` dropped in that folder is built in, but
-the layers of a scene (`_ciel`, `_relief`).
+ten scenes at night: a canyon, the Alps, volcanic islands, stone pillars in
+the mist, dunes, a fjord under the northern lights, terraced fields, chalk
+cliffs, a lake in the pines, a desert under a ringed planet —, a new one each
+time Massif opens (those not shown yet first; the button at the bottom right
+shows another), reduced to sixteen colours of its own with an ordered dither
+in square cells that moves on about once a second. Every `.jpg` or `.png`
+dropped in that folder is built in, but the layers of a scene (`_ciel`,
+`_relief`).
 
 ## The window
 
