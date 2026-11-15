@@ -21,7 +21,7 @@
 use crate::doc::Document;
 use crate::map_render::{AutoBiome, ColumnSampler, MapMode, Sample, height_color, slope_color};
 use crate::theme::{self, Icon, Palette};
-use crate::tools::{SculptStroke, ToolState};
+use crate::tools::{SculptStroke, Tool, ToolState};
 use bytemuck::{Pod, Zeroable};
 use egui::{Align2, Color32, FontId, PointerButton, Rect, Sense, Ui, pos2, vec2};
 use glam::{Mat4, Vec3, Vec4};
@@ -56,6 +56,8 @@ const FOV_Y: f32 = 50.0 * std::f32::consts::PI / 180.0;
 const FOV_WALK: f32 = 70.0 * std::f32::consts::PI / 180.0;
 /// Size of one chunk's slot in the uniform buffer of chunk origins.
 const SLOT: u64 = 256;
+/// The height of the game's clouds (since 1.18).
+const CLOUDS_Y: f32 = 192.0;
 
 /// Columns per side of a page of the tracer's textures.
 pub const PAGE: i32 = 1024;
@@ -86,6 +88,9 @@ pub const NORTH: u8 = 5;
 /// * up / down: a `len` × `h` rectangle at height `y`, `len` along x;
 /// * east / west: the plane `x`, `len` blocks along z from `z`, `h` high from `y`;
 /// * south / north: the plane `z`, `len` blocks along x from `x`, `h` high.
+///
+/// `mat` says what it is made of, for the game's textures (see
+/// [`object_bases`], [`ROCK`]); 0: nothing known, its colour.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
 pub struct Face {
@@ -96,6 +101,33 @@ pub struct Face {
     pub y: i16,
     pub h: i16,
     pub color: [u8; 4],
+    pub mat: u16,
+    pub pad: u16,
+}
+
+/// What the top of a column shows and the side of the soil under it: their
+/// colours, the top's own colour before what grows on it (`bare`), and the
+/// blocks they are, for the game's textures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Skin {
+    pub top: [u8; 3],
+    pub soil: [u8; 3],
+    pub bare: [u8; 3],
+    pub top_mat: u16,
+    pub soil_mat: u16,
+}
+
+impl Skin {
+    /// Colours alone, of no block.
+    pub const fn flat(top: [u8; 3], soil: [u8; 3]) -> Self {
+        Self {
+            top,
+            soil,
+            bare: top,
+            top_mat: 0,
+            soil_mat: 0,
+        }
+    }
 }
 
 /// The faces of one chunk.
@@ -112,9 +144,37 @@ struct CellSpan {
     terrain: u16,
     /// The exact height of its top (y1 is the top of its last block).
     top: f32,
-    /// Blocks of an object, all of this colour.
+    /// Blocks of an object, all of this colour, and of this material (see
+    /// [`object_bases`]).
     color: Option<[u8; 3]>,
+    mat: u16,
 }
+
+/// The materials of the objects' blocks: palette entry `k` of object `o` is
+/// material `bases[o] + k`, after the registry's blocks (whose material is
+/// their index). The game's textures are looked up by material (see
+/// `crate::textures`).
+pub fn object_bases(reg: &Registry) -> Vec<u32> {
+    let mut next = reg.blocks.len() as u32;
+    reg.objects
+        .iter()
+        .map(|o| {
+            let base = next;
+            next += o.palette.len() as u32;
+            base
+        })
+        .collect()
+}
+
+/// A material as faces carry it: none past the last that fits (it keeps its
+/// colour).
+fn material(n: u32) -> u16 {
+    if n < ROCK as u32 { n as u16 } else { 0 }
+}
+
+/// The material of the rock under the soil: stone, or deepslate under y 0,
+/// told apart where it is drawn.
+pub const ROCK: u16 = u16::MAX;
 
 /// What stands on the land: the objects of the world's layers.
 #[derive(Clone, Copy)]
@@ -124,15 +184,20 @@ struct Standing<'a> {
     lava: bool,
 }
 
+/// A run of an object's blocks in a column: `[y0, y1)`, its colour and its
+/// material.
+type ObjectRun = (i32, i32, [u8; 3], u16);
+
 /// The blocks of the objects standing over the `w` × `d` rectangle at
-/// `(x0, z0)`, column by column: runs `(y0, y1, colour)`, low to high.
-fn object_runs(dim: &Dimension, s: Standing, x0: i32, z0: i32, w: usize, d: usize) -> Vec<Vec<(i32, i32, [u8; 3])>> {
+/// `(x0, z0)`, column by column: runs, low to high.
+fn object_runs(dim: &Dimension, s: Standing, x0: i32, z0: i32, w: usize, d: usize) -> Vec<Vec<ObjectRun>> {
     use massif_core::objects::{max_reach, tile_placements};
-    let mut runs: Vec<Vec<(i32, i32, [u8; 3])>> = vec![Vec::new(); w * d];
+    let mut runs: Vec<Vec<ObjectRun>> = vec![Vec::new(); w * d];
     let reg = s.reg;
     if !reg.object_layers.iter().any(|l| !l.removed && !l.objects.is_empty()) {
         return runs;
     }
+    let bases = object_bases(reg);
     let area = massif_core::BlockRect::new(x0, z0, x0 + w as i32, z0 + d as i32);
     let mat = Materializer::new(reg, s.seed, dim.min_y);
     let mut placed = Vec::new();
@@ -145,9 +210,10 @@ fn object_runs(dim: &Dimension, s: Standing, x0: i32, z0: i32, w: usize, d: usiz
         }
     }
     placed.sort_unstable_by_key(|p| (p.layer, p.x, p.z));
-    let mut blocks: Vec<Vec<(i32, [u8; 3])>> = vec![Vec::new(); w * d];
+    let mut blocks: Vec<Vec<(i32, [u8; 3], u16)>> = vec![Vec::new(); w * d];
     for p in &placed {
         let def = &reg.objects[p.object as usize];
+        let base = bases.get(p.object as usize).copied().unwrap_or(0);
         let [bw, bh, bl] = def.size.map(|v| v as i32);
         for bz in 0..bl {
             for bx in 0..bw {
@@ -160,7 +226,7 @@ fn object_runs(dim: &Dimension, s: Standing, x0: i32, z0: i32, w: usize, d: usiz
                 for by in 0..bh {
                     let k = def.at(bx as usize, by as usize, bz as usize);
                     if k != 0 {
-                        column.push((y + by, def.color(k)));
+                        column.push((y + by, def.color(k), material(base + k as u32)));
                     }
                 }
             }
@@ -171,10 +237,10 @@ fn object_runs(dim: &Dimension, s: Standing, x0: i32, z0: i32, w: usize, d: usiz
         column.reverse();
         column.sort_by_key(|b| b.0);
         column.dedup_by_key(|b| b.0);
-        for &(y, color) in column.iter() {
+        for &(y, color, mat) in column.iter() {
             match runs[c].last_mut() {
-                Some(r) if r.1 == y && r.2 == color => r.1 = y + 1,
-                _ => runs[c].push((y, y + 1, color)),
+                Some(r) if r.1 == y && r.2 == color && r.3 == mat => r.1 = y + 1,
+                _ => runs[c].push((y, y + 1, color, mat)),
             }
         }
     }
@@ -264,6 +330,7 @@ fn compose_area(dim: &Dimension, x0: i32, z0: i32, w: usize, d: usize, mode: Map
                                 terrain: s.terrain.0,
                                 top: s.top,
                                 color: None,
+                                mat: 0,
                             });
                         }
                     }
@@ -286,11 +353,11 @@ fn compose_area(dim: &Dimension, x0: i32, z0: i32, w: usize, d: usize, mode: Map
                     if !here.is_empty() {
                         let ground: Vec<(i32, i32)> = row.spans[start..].iter().map(|s| (s.y0, s.y1)).collect();
                         let mut free = Vec::new();
-                        for &(y0, y1, color) in here {
-                            let solid: Vec<CellSpan> = ground.iter().map(|&(a, b)| CellSpan { y0: a, y1: b, terrain: 0, top: b as f32, color: None }).collect();
+                        for &(y0, y1, color, mat) in here {
+                            let solid: Vec<CellSpan> = ground.iter().map(|&(a, b)| CellSpan { y0: a, y1: b, terrain: 0, top: b as f32, color: None, mat: 0 }).collect();
                             uncovered(y0, y1, &solid, &mut free);
                             for &(a, b) in &free {
-                                row.spans.push(CellSpan { y0: a, y1: b, terrain: 0, top: b as f32, color: Some(color) });
+                                row.spans.push(CellSpan { y0: a, y1: b, terrain: 0, top: b as f32, color: Some(color), mat });
                             }
                         }
                         row.spans[start..].sort_by_key(|s| s.y0);
@@ -366,11 +433,13 @@ impl Colors<'_> {
     }
 
     /// Colour of the top face of a span, and of the soil just under it, for
-    /// the column `(x, z)` whose ground slopes `slope` degrees. On the
-    /// column's top, what the cover numbered `cover` grows there shows
-    /// over the ground (`wet`: the top is under water).
+    /// the column `(x, z)` whose ground slopes `slope` degrees, with the
+    /// blocks they are. On the column's top, what the cover numbered
+    /// `cover` grows there shows over the ground (`wet`: the top is under
+    /// water).
     #[allow(clippy::too_many_arguments)]
-    fn top(&self, terrain: u16, y0: i32, y1: i32, x: i32, z: i32, slope: f32, sample: &Sample, cover: u16, wet: bool) -> ([u8; 3], [u8; 3]) {
+    fn top(&self, terrain: u16, y0: i32, y1: i32, x: i32, z: i32, slope: f32, sample: &Sample, cover: u16, wet: bool) -> Skin {
+        let flat = |c: [u8; 3]| Skin::flat(c, c);
         match self.mode {
             MapMode::Terrain => {
                 let span = Span {
@@ -380,7 +449,8 @@ impl Colors<'_> {
                     top: y1 as f32,
                 };
                 let block = self.mat.block(&span, x, y1 - 1, z, false);
-                let mut top = self.block(block);
+                let bare = self.block(block);
+                let mut top = bare;
                 if let Some(def) = self.reg.cover(cover)
                     && def.underwater == wet
                     && !(wet && self.lava)
@@ -391,28 +461,23 @@ impl Colors<'_> {
                     let k = 0.75;
                     top = std::array::from_fn(|c| (top[c] as f32 + (plant[c] as f32 - top[c] as f32) * k) as u8);
                 }
-                let soil = if y1 - 2 >= y0 {
-                    self.block(self.mat.block(&span, x, y1 - 2, z, false))
-                } else {
-                    top
-                };
-                (top, soil)
+                let under = if y1 - 2 >= y0 { self.mat.block(&span, x, y1 - 2, z, false) } else { block };
+                Skin {
+                    top,
+                    soil: self.block(under),
+                    bare,
+                    top_mat: block.0,
+                    soil_mat: under.0,
+                }
             }
-            MapMode::Height => {
-                let c = height_color(y1 as f32, self.sea);
-                (c, c)
-            }
+            MapMode::Height => flat(height_color(y1 as f32, self.sea)),
             // The walls of a column are as steep as its top: its colour.
-            MapMode::Slope => {
-                let c = slope_color(slope);
-                (c, c)
-            }
+            MapMode::Slope => flat(slope_color(slope)),
             MapMode::Biome => {
                 let id = self.auto.resolve(self.reg, sample, self.sea);
-                let c = self.reg.biome(massif_core::BiomeId(id)).color;
-                (c, c)
+                flat(self.reg.biome(massif_core::BiomeId(id)).color)
             }
-            MapMode::Relief => ([206, 206, 210], [190, 190, 194]),
+            MapMode::Relief => Skin::flat([206, 206, 210], [190, 190, 194]),
         }
     }
 
@@ -499,10 +564,13 @@ fn greedy<K: PartialEq + Copy>(n: usize, key: impl Fn(usize, usize) -> Option<K>
     }
 }
 
+/// A piece of wall: `[y0, y1)`, its colour and its material.
+type Piece = (i32, i32, [u8; 4], u16);
+
 /// Merges wall pieces of one line of columns: a piece continues the run of
-/// the previous column when its band and colour are the same.
+/// the previous column when its band, colour and material are the same.
 struct WallRuns {
-    open: HashMap<(i32, i32, [u8; 4]), (usize, usize)>,
+    open: HashMap<Piece, (usize, usize)>,
 }
 
 impl WallRuns {
@@ -510,9 +578,9 @@ impl WallRuns {
         Self { open: HashMap::new() }
     }
 
-    /// A piece `[y0, y1)` of colour `c` at position `t` along the line.
-    fn add(&mut self, t: usize, y0: i32, y1: i32, c: [u8; 4]) {
-        let run = self.open.entry((y0, y1, c)).or_insert((t, t));
+    /// A piece at position `t` along the line.
+    fn add(&mut self, t: usize, piece: Piece) {
+        let run = self.open.entry(piece).or_insert((t, t));
         if run.1 + 1 == t {
             run.1 = t;
         } else if run.1 != t {
@@ -521,12 +589,12 @@ impl WallRuns {
     }
 
     /// Close the runs that did not continue to `t`, or all of them.
-    fn flush(&mut self, t: Option<usize>, mut emit: impl FnMut(usize, usize, i32, i32, [u8; 4])) {
-        self.open.retain(|&(y0, y1, c), &mut (a, b)| {
+    fn flush(&mut self, t: Option<usize>, mut emit: impl FnMut(usize, usize, Piece)) {
+        self.open.retain(|&piece, &mut (a, b)| {
             if t.is_some_and(|t| b + 1 >= t) {
                 return true;
             }
-            emit(a, b - a + 1, y0, y1, c);
+            emit(a, b - a + 1, piece);
             false
         });
     }
@@ -540,8 +608,11 @@ pub struct TileBuild {
     pub heights: Vec<u16>,
     /// Per column, its colours: an index into `pairs`.
     pub colors: Vec<u16>,
-    /// The (top, soil) colours of the tile's traced columns.
-    pub pairs: Vec<([u8; 3], [u8; 3])>,
+    /// Per column, how deep under water its top is (empty: dry): the game
+    /// darkens what lies deep.
+    pub depths: Vec<u8>,
+    /// What the tile's traced columns show: colours and blocks.
+    pub pairs: Vec<Skin>,
     /// Faces of the columns the tracer leaves out, and the water.
     pub faces: ChunkFaces,
 }
@@ -579,7 +650,7 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
     let meshed = |x: i32, z: i32| !grid.spans(x, z).is_empty() && !traced(x, z);
 
     // Colours of the tops of every span, and of the soil under them.
-    let mut tops: Vec<Vec<([u8; 3], [u8; 3])>> = Vec::with_capacity(n * n);
+    let mut tops: Vec<Vec<Skin>> = Vec::with_capacity(n * n);
     for j in 0..n as i32 {
         for i in 0..n as i32 {
             let (x, z) = (cx + i, cz + j);
@@ -599,7 +670,11 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
                     .enumerate()
                     .map(|(k, s)| {
                         if let Some(c) = s.color {
-                            return (c, c);
+                            return Skin {
+                                top_mat: s.mat,
+                                soil_mat: s.mat,
+                                ..Skin::flat(c, c)
+                            };
                         }
                         let on_top = Some(k) == land;
                         colors.top(s.terrain, s.y0, s.y1, x, z, slope, &sample, if on_top { cover } else { 0 }, on_top && wet)
@@ -609,11 +684,12 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
         }
     }
 
-    // The traced columns: height and colours.
+    // The traced columns: height, colours and the water over them.
     let mut heights = vec![0u16; n * n];
     let mut column_colors = vec![0u16; n * n];
-    let mut pairs: Vec<([u8; 3], [u8; 3])> = Vec::new();
-    let mut known: HashMap<([u8; 3], [u8; 3]), u16> = HashMap::new();
+    let mut depths = vec![0u8; n * n];
+    let mut pairs: Vec<Skin> = Vec::new();
+    let mut known: HashMap<Skin, u16> = HashMap::new();
     for j in 0..n {
         for i in 0..n {
             let (x, z) = (cx + i as i32, cz + j as i32);
@@ -621,7 +697,12 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
                 continue;
             }
             let c = j * n + i;
-            heights[c] = (grid.spans(x, z)[0].y1 - min_y).clamp(1, HEIGHT_MASK as i32) as u16;
+            let top = grid.spans(x, z)[0].y1;
+            heights[c] = (top - min_y).clamp(1, HEIGHT_MASK as i32) as u16;
+            let wet = grid.water[grid.cell(x, z)];
+            if wet != i32::MIN {
+                depths[c] = (wet - top).clamp(0, 255) as u8;
+            }
             let pair = tops[c][0];
             column_colors[c] = *known.entry(pair).or_insert_with(|| {
                 pairs.push(pair);
@@ -630,6 +711,17 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
         }
     }
 
+    let face = |x: u8, z: u8, dir: u8, len: u8, y: i16, h: i16, color: [u8; 4], mat: u16| Face {
+        x,
+        z,
+        dir,
+        len,
+        y,
+        h,
+        color,
+        mat,
+        pad: 0,
+    };
     let mut out = ChunkFaces::default();
     // Tops of the highest spans of meshed columns, merged into rectangles;
     // other tops and the undersides one by one (overhangs, islands and caves
@@ -642,19 +734,10 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
                 return None;
             }
             let s = grid.spans(x, z).last()?;
-            (s.y1 < max_y).then(|| (s.y1, rgba(tops[j * n + i].last().expect("one colour per span").0, 255)))
+            let skin = tops[j * n + i].last().expect("one colour per span");
+            (s.y1 < max_y).then(|| (s.y1, rgba(skin.top, 255), skin.top_mat))
         },
-        |i, j, w, h, (y, c)| {
-            out.solid.push(Face {
-                x: i as u8,
-                z: j as u8,
-                dir: UP,
-                len: w as u8,
-                y: clamp16(y),
-                h: h as i16,
-                color: c,
-            })
-        },
+        |i, j, w, h, (y, c, mat)| out.solid.push(face(i as u8, j as u8, UP, w as u8, clamp16(y), h as i16, c, mat)),
     );
     for j in 0..n {
         for i in 0..n {
@@ -664,58 +747,55 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
             }
             let spans = grid.spans(x, z);
             for (k, s) in spans.iter().enumerate() {
+                let skin = tops[j * n + i][k];
                 if k + 1 < spans.len() && s.y1 < max_y {
-                    out.solid.push(Face {
-                        x: i as u8,
-                        z: j as u8,
-                        dir: UP,
-                        len: 1,
-                        y: clamp16(s.y1),
-                        h: 1,
-                        color: rgba(tops[j * n + i][k].0, 255),
-                    });
+                    out.solid.push(face(i as u8, j as u8, UP, 1, clamp16(s.y1), 1, rgba(skin.top, 255), skin.top_mat));
                 }
                 if s.y0 > min_y {
-                    let under = match s.color {
-                        Some(c) => c.map(|v| (v as f32 * 0.6) as u8),
-                        None if colors.whole_walls() => theme_dark(tops[j * n + i][k].1),
-                        None => theme_dark(colors.substrate(s.y0)),
+                    let (under, mat) = match s.color {
+                        Some(c) => (c.map(|v| (v as f32 * 0.6) as u8), s.mat),
+                        None if colors.whole_walls() => (theme_dark(skin.soil), 0),
+                        None => (theme_dark(colors.substrate(s.y0)), ROCK),
                     };
-                    out.solid.push(Face {
-                        x: i as u8,
-                        z: j as u8,
-                        dir: DOWN,
-                        len: 1,
-                        y: clamp16(s.y0),
-                        h: 1,
-                        color: rgba(under, 255),
-                    });
+                    out.solid.push(face(i as u8, j as u8, DOWN, 1, clamp16(s.y0), 1, rgba(under, 255), mat));
                 }
             }
         }
     }
 
-    // Walls of the meshed columns, split into a soil band and the rock
-    // below, merged along their length. (The tracer draws the walls of the
-    // other columns, toward everything it does not draw itself.)
+    // Walls of the meshed columns, split into the top block, the soil under
+    // it and the rock below, merged along their length. (The tracer draws
+    // the walls of the other columns, toward everything it does not draw
+    // itself.)
     let mut gaps = Vec::new();
-    let mut pieces: Vec<(i32, i32, [u8; 4])> = Vec::new();
+    let mut pieces: Vec<Piece> = Vec::new();
     // The pieces of wall the column `(x, z)` shows toward `(nx, nz)`.
-    let mut wall = |x: i32, z: i32, nx: i32, nz: i32, pieces: &mut Vec<(i32, i32, [u8; 4])>| {
+    let mut wall = |x: i32, z: i32, nx: i32, nz: i32, pieces: &mut Vec<Piece>| {
         pieces.clear();
         let (i, j) = ((x - cx) as usize, (z - cz) as usize);
         for (k, s) in grid.spans(x, z).iter().enumerate() {
             uncovered(s.y0, s.y1, grid.spans(nx, nz), &mut gaps);
             if let Some(c) = s.color {
-                pieces.extend(gaps.iter().map(|&(a, b)| (a, b, rgba(c, 255))));
+                pieces.extend(gaps.iter().map(|&(a, b)| (a, b, rgba(c, 255), s.mat)));
                 continue;
             }
+            let skin = tops[j * n + i][k];
             let soil_floor = if colors.whole_walls() { s.y0 } else { (s.y1 - 3).max(s.y0) };
+            let top_floor = (s.y1 - 1).max(soil_floor);
             for &(a, b) in &gaps {
-                for (lo, hi, soil) in [(a, b.min(soil_floor), false), (a.max(soil_floor), b, true)] {
-                    if hi > lo {
-                        let c = if soil { tops[j * n + i][k].1 } else { colors.substrate(lo) };
-                        pieces.push((lo, hi, rgba(c, 255)));
+                let soil = rgba(skin.soil, 255);
+                for (lo, hi, c, mat) in [
+                    (a, b.min(soil_floor), rgba(colors.substrate(a), 255), ROCK),
+                    (a.max(soil_floor), b.min(top_floor), soil, skin.soil_mat),
+                    (a.max(top_floor), b, soil, skin.top_mat),
+                ] {
+                    if hi <= lo {
+                        continue;
+                    }
+                    // Pieces alike one on the other make one.
+                    match pieces.last_mut() {
+                        Some(last) if last.1 == lo && last.2 == c && last.3 == mat => last.1 = hi,
+                        _ => pieces.push((lo, hi, c, mat)),
                     }
                 }
             }
@@ -728,17 +808,9 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
             let plane = (line as i32 + (dx + dz).max(0)) as u8;
             let mut runs = WallRuns::new();
             let solid = &mut out.solid;
-            let mut emit = |start: usize, len: usize, y0: i32, y1: i32, c: [u8; 4]| {
+            let mut emit = |start: usize, len: usize, (y0, y1, c, mat): Piece| {
                 let (x, z) = if along_z { (plane, start as u8) } else { (start as u8, plane) };
-                solid.push(Face {
-                    x,
-                    z,
-                    dir,
-                    len: len as u8,
-                    y: clamp16(y0),
-                    h: clamp16(y1 - y0),
-                    color: c,
-                });
+                solid.push(face(x, z, dir, len as u8, clamp16(y0), clamp16(y1 - y0), c, mat));
             };
             for t in 0..n {
                 runs.flush(Some(t), &mut emit);
@@ -748,8 +820,8 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
                     continue;
                 }
                 wall(x, z, x + dx, z + dz, &mut pieces);
-                for &(y0, y1, c) in &pieces {
-                    runs.add(t, y0, y1, c);
+                for &piece in &pieces {
+                    runs.add(t, piece);
                 }
             }
             runs.flush(None, &mut emit);
@@ -768,17 +840,7 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
                 let wet = grid.water[grid.cell(cx + i as i32, cz + j as i32)];
                 (wet != i32::MIN).then_some(wet)
             },
-            |i, j, w, h, wet| {
-                out.water.push(Face {
-                    x: i as u8,
-                    z: j as u8,
-                    dir: UP,
-                    len: w as u8,
-                    y: clamp16(wet),
-                    h: h as i16,
-                    color: blue,
-                })
-            },
+            |i, j, w, h, wet| out.water.push(face(i as u8, j as u8, UP, w as u8, clamp16(wet), h as i16, blue, 0)),
         );
         for j in 0..n {
             for i in 0..n {
@@ -806,15 +868,7 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
                         continue;
                     }
                     let (px, pz) = (i as i32 + dx.max(0), j as i32 + dz.max(0));
-                    out.water.push(Face {
-                        x: px as u8,
-                        z: pz as u8,
-                        dir,
-                        len: 1,
-                        y: clamp16(bottom),
-                        h: clamp16(wet - bottom),
-                        color: blue,
-                    });
+                    out.water.push(face(px as u8, pz as u8, dir, 1, clamp16(bottom), clamp16(wet - bottom), blue, 0));
                 }
             }
         }
@@ -822,6 +876,7 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
     TileBuild {
         heights,
         colors: column_colors,
+        depths,
         pairs,
         faces: out,
     }
@@ -835,21 +890,21 @@ fn theme_dark(c: [u8; 3]) -> [u8; 3] {
 /// point at.
 #[derive(Debug, Default)]
 pub struct Pairs {
-    index: HashMap<([u8; 3], [u8; 3]), u16>,
-    list: Vec<([u8; 3], [u8; 3])>,
+    index: HashMap<Skin, u16>,
+    list: Vec<Skin>,
     /// Pairs were added since the GPU last had them.
     dirty: bool,
 }
 
 impl Pairs {
     /// The index of a pair, added if new; once all are taken, the closest.
-    fn get(&mut self, pair: ([u8; 3], [u8; 3])) -> u16 {
+    fn get(&mut self, pair: Skin) -> u16 {
         if let Some(&k) = self.index.get(&pair) {
             return k;
         }
         if self.list.is_empty() {
             // Index 0: what shows where a far pixel lands between columns.
-            self.list.push(([128, 128, 128], [112, 112, 112]));
+            self.list.push(Skin::flat([128, 128, 128], [112, 112, 112]));
         }
         let k = if self.list.len() < MAX_PAIRS {
             self.list.push(pair);
@@ -857,25 +912,32 @@ impl Pairs {
             (self.list.len() - 1) as u16
         } else {
             let d = |a: [u8; 3], b: [u8; 3]| (0..3).map(|i| (a[i] as i32 - b[i] as i32).pow(2)).sum::<i32>();
+            // The same blocks first, then the closest colours.
             (1..self.list.len())
-                .min_by_key(|&k| d(self.list[k].0, pair.0) + d(self.list[k].1, pair.1))
+                .min_by_key(|&k| {
+                    let o = &self.list[k];
+                    let blocks = (o.top_mat != pair.top_mat) as i32 + (o.soil_mat != pair.soil_mat) as i32;
+                    (blocks, d(o.top, pair.top) + d(o.soil, pair.soil))
+                })
                 .unwrap_or(0) as u16
         };
         self.index.insert(pair, k);
         k
     }
 
-    /// The columns of a tile, packed for the tracer: height, then colours.
+    /// The columns of a tile, packed for the tracer: height, then colours,
+    /// then the depth of water over it.
     pub fn pack(&mut self, b: &TileBuild) -> Vec<u32> {
         let map: Vec<u32> = b.pairs.iter().map(|&p| self.get(p) as u32).collect();
         b.heights
             .iter()
             .zip(&b.colors)
-            .map(|(&h, &c)| if h == 0 { 0 } else { h as u32 | map[c as usize] << HEIGHT_BITS })
+            .enumerate()
+            .map(|(k, (&h, &c))| if h == 0 { 0 } else { h as u32 | map[c as usize] << HEIGHT_BITS | (b.depths.get(k).copied().unwrap_or(0) as u32) << 24 })
             .collect()
     }
 
-    pub fn list(&self) -> &[([u8; 3], [u8; 3])] {
+    pub fn list(&self) -> &[Skin] {
         &self.list
     }
 }
@@ -903,7 +965,26 @@ pub struct Globals {
     /// tan(fov / 2) × aspect, tan(fov / 2), radians per pixel, the
     /// frame's origin's z.
     pub cam_k: [f32; 4],
+    /// The game's look (the player's view): x, its textures; y, its light,
+    /// sky and fog; z, the height of its clouds (0: none); w, the number of
+    /// materials the atlas knows.
+    pub look: [f32; 4],
+    /// The blocks the sculpting brush takes, shown in the player's view:
+    /// its centre (from the frame's origin) and radius (0: none); the
+    /// surface's normal and the brush's shape (1: round, 2: square); the
+    /// direction of a square's side.
+    pub brush: [f32; 4],
+    pub brush_n: [f32; 4],
+    pub brush_t: [f32; 4],
+    /// The block looked at (its corner, from the frame's origin); w: 1 when
+    /// its outline shows.
+    pub pick: [f32; 4],
+    /// The materials of stone and deepslate, the layers of water and lava.
+    pub rock: [f32; 4],
 }
+
+/// Floats in [`Globals`]: what tells a frame from the last.
+const GLOBAL_FLOATS: usize = size_of::<Globals>() / 4;
 
 /// Where a chunk is, relative to the origin of the frame.
 #[repr(C)]
@@ -950,6 +1031,12 @@ struct Globals {
     cam_s: vec4<f32>,
     cam_u: vec4<f32>,
     cam_k: vec4<f32>,
+    look: vec4<f32>,
+    brush: vec4<f32>,
+    brush_n: vec4<f32>,
+    brush_t: vec4<f32>,
+    pick: vec4<f32>,
+    rock: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> g: Globals;
 
@@ -1007,6 +1094,7 @@ struct FaceIn {
     @location(0) xz_dir_len: vec4<u32>,
     @location(1) y_h: vec2<i32>,
     @location(2) color: vec4<f32>,
+    @location(3) mat: vec2<u32>,
 };
 
 struct VertexOut {
@@ -1015,6 +1103,7 @@ struct VertexOut {
     @location(1) normal: vec3<f32>,
     @location(2) world: vec3<f32>,
     @location(3) water: f32,
+    @location(4) @interpolate(flat) mat: u32,
 };
 
 @vertex
@@ -1071,13 +1160,51 @@ fn vs_main(@builtin(vertex_index) vi: u32, f: FaceIn) -> VertexOut {
     out.normal = n;
     out.world = world;
     out.water = chunk.origin.w;
+    out.mat = f.mat.x;
     return out;
+}
+
+/// A face in the game's look: its block's texture, lit and fogged as the
+/// game does, the brush and the block looked at marked, under the clouds.
+fn game_fragment(in: VertexOut, n: vec3<f32>, d: f32) -> vec4<f32> {
+    let view = normalize(in.world - g.eye.xyz);
+    let lod = tex_lod(d, abs(dot(n, view)));
+    let uv = face_uv(in.world, n);
+    if (in.water > 0.5) {
+        let lava = in.color.r > in.color.b;
+        let layer = u32(select(g.rock.z, g.rock.w, lava));
+        var tex = texel(layer, uv, lod);
+        if (layer == 0u) {
+            tex = vec4<f32>(to_linear(in.color.rgb), in.color.a);
+        }
+        if (lava) {
+            // Lava glows: its own light.
+            return vec4<f32>(game_fog(tex.rgb, d), 1.0);
+        }
+        var c = game_fog(tex.rgb * pow(game_face(n), 2.2), d);
+        let cl = game_clouds(g.eye.xyz, view, d);
+        c = mix(c, cl.rgb, cl.a);
+        return vec4<f32>(c, max(tex.a, 0.55));
+    }
+    let layer = face_layer(in.mat, n, in.world.y);
+    // Without the game's textures, its colour, block by block.
+    var base = to_linear(in.color.rgb) * block_tint(in.world, n, d);
+    if (layer != 0u) {
+        base = texel(layer, uv, lod).rgb;
+    }
+    var c = game_light(base, n, 1.0, d);
+    c = game_marks(c, in.world, n, d);
+    let cl = game_clouds(g.eye.xyz, view, d);
+    return vec4<f32>(mix(c, cl.rgb, cl.a), in.color.a);
 }
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let n = normalize(in.normal);
     let d = distance(in.world, g.eye.xyz);
+    if (g.look.y > 0.5) {
+        return game_fragment(in, n, d);
+    }
     if (in.water > 0.5 && in.color.r > in.color.b) {
         // Lava glows: its own light, not the sun's.
         var c = to_linear(in.color.rgb) * 1.1;
@@ -1129,8 +1256,11 @@ struct Terrain {
 @group(1) @binding(3) var pages: texture_2d<u32>;
 // Highest column of every page, and of every 2^k × 2^k pages at mip k.
 @group(1) @binding(4) var pyramid: texture_2d<u32>;
-// Row 0: top colours, row 1: soil colours, of every pair.
+// Row 0: top colours, row 1: soil colours, row 2: the tops' own colours
+// (without what grows on them), of every pair.
 @group(1) @binding(5) var palette: texture_2d<f32>;
+// The blocks of every pair: its top's material, its soil's.
+@group(1) @binding(6) var pair_mats: texture_2d<u32>;
 
 const PAGE_SHIFT: i32 = 10;
 const STEPS: i32 = 768;
@@ -1309,6 +1439,115 @@ struct TraceFrag {
     @builtin(frag_depth) depth: f32,
 };
 
+/// Behind everything: the sky, the game's in the player's view, with its
+/// clouds.
+fn background(d: vec3<f32>) -> vec3<f32> {
+    if (g.look.y > 0.5) {
+        let cl = game_clouds(g.eye.xyz, d, 1.0e9);
+        return mix(game_sky(d), cl.rgb, cl.a);
+    }
+    return sky_color(d);
+}
+
+/// Whether the block at row `y` of column `c` is there: the tracer's
+/// columns fill up from the bottom of the world.
+fn filled(c: vec2<i32>, y: f32) -> f32 {
+    return select(0.0, 1.0, terrain.origin.z + f32(column(c) & 0xfffu) > y + 0.5);
+}
+
+/// The light at a corner of a face, as the game's smooth lighting has it:
+/// 3 in the open, less for each block beside it, none between two.
+fn corner_light(s1: f32, s2: f32, c: f32) -> f32 {
+    if (s1 + s2 > 1.5) {
+        return 0.0;
+    }
+    return 3.0 - (s1 + s2 + c);
+}
+
+/// How much light reaches point `p` of a face of column `cell` turned `n`
+/// (`height`: the column's top): darker in the corners that blocks close.
+fn column_light(cell: vec2<i32>, p: vec3<f32>, n: vec3<f32>, height: f32) -> f32 {
+    var c00: f32;
+    var c10: f32;
+    var c01: f32;
+    var c11: f32;
+    var uv: vec2<f32>;
+    if (n.y > 0.5) {
+        // The blocks of the layer over the top, around.
+        let y = height;
+        let xm = filled(cell + vec2<i32>(-1, 0), y);
+        let xp = filled(cell + vec2<i32>(1, 0), y);
+        let zm = filled(cell + vec2<i32>(0, -1), y);
+        let zp = filled(cell + vec2<i32>(0, 1), y);
+        c00 = corner_light(xm, zm, filled(cell + vec2<i32>(-1, -1), y));
+        c10 = corner_light(xp, zm, filled(cell + vec2<i32>(1, -1), y));
+        c01 = corner_light(xm, zp, filled(cell + vec2<i32>(-1, 1), y));
+        c11 = corner_light(xp, zp, filled(cell + vec2<i32>(1, 1), y));
+        uv = fract(p.xz);
+    } else {
+        // Around the block of air the wall faces.
+        let f = cell + vec2<i32>(i32(n.x), i32(n.z));
+        let a = vec2<i32>(i32(abs(n.z)), i32(abs(n.x)));
+        let y = floor(p.y);
+        let am = filled(f - a, y);
+        let ap = filled(f + a, y);
+        let below = filled(f, y - 1.0);
+        let above = filled(f, y + 1.0);
+        c00 = corner_light(am, below, filled(f - a, y - 1.0));
+        c10 = corner_light(ap, below, filled(f + a, y - 1.0));
+        c01 = corner_light(am, above, filled(f - a, y + 1.0));
+        c11 = corner_light(ap, above, filled(f + a, y + 1.0));
+        uv = vec2<f32>(fract(dot(p.xz, vec2<f32>(a))), fract(p.y));
+    }
+    let light = mix(mix(c00, c10, uv.x), mix(c01, c11, uv.x), uv.y);
+    return 0.55 + 0.15 * light;
+}
+
+/// A traced column's face in the game's look: its block's texture (the top
+/// block's at the top, the soil's under it, then the rock), tinted by what
+/// grows on its top, in the game's light, marked.
+fn game_column(cell: vec2<i32>, p: vec3<f32>, world: vec3<f32>, n: vec3<f32>, t: f32, view_d: vec3<f32>) -> vec3<f32> {
+    let col = column(cell);
+    let pair = i32((col >> 12u) & 0xfffu);
+    let height = terrain.origin.z + f32(col & 0xfffu);
+    let up = n.y > 0.5;
+    let m = textureLoad(pair_mats, vec2<i32>(pair, 0), 0);
+    var mat = ROCK;
+    if (up || height - p.y <= 1.0) {
+        mat = m.x;
+    } else if (height - p.y <= 3.0) {
+        mat = m.y;
+    }
+    let layer = face_layer(mat, n, p.y);
+    // Without the game's textures, its colour, block by block.
+    var base = to_linear(surface_color(col, p.y, up)) * block_tint(world, n, t);
+    if (layer != 0u) {
+        base = texel(layer, face_uv(world, n), tex_lod(t, abs(dot(n, view_d)))).rgb;
+        if (up) {
+            let top = to_linear(textureLoad(palette, vec2<i32>(pair, 0), 0).rgb);
+            let bare = to_linear(textureLoad(palette, vec2<i32>(pair, 2), 0).rgb);
+            base *= clamp(top / max(bare, vec3<f32>(0.004)), vec3<f32>(0.25), vec3<f32>(4.0));
+        }
+    }
+    // Under water the light fades a level a block, as in the game.
+    var light = column_light(cell, p, n, height);
+    let depth = f32(col >> 24u);
+    if (depth > 0.0) {
+        light *= water_light(depth + height - p.y);
+    }
+    let c = game_light(base, n, light, t);
+    return game_marks(c, world, n, t);
+}
+
+/// The game's light `deep` blocks under water (in its gamma, at its default
+/// brightness): the sky's 15 levels, one fewer a block.
+fn water_light(deep: f32) -> f32 {
+    let f = clamp(15.0 - deep, 0.0, 15.0) / 15.0;
+    let g = f / (4.0 - 3.0 * f);
+    let lifted = 1.0 - pow(1.0 - g, 4.0);
+    return max(mix(g, lifted, 0.5), 0.05);
+}
+
 @fragment
 fn fs_trace(in: TraceOut) -> TraceFrag {
     let view_d = normalize(g.cam_f.xyz + g.cam_s.xyz * (in.ndc.x * g.cam_k.x) + g.cam_u.xyz * (in.ndc.y * g.cam_k.y));
@@ -1330,7 +1569,7 @@ fn fs_trace(in: TraceOut) -> TraceFrag {
     let t1 = min(min(far.x, far.z), far.y);
     var out: TraceFrag;
     if (t1 <= t0 || terrain.origin.w <= terrain.origin.z) {
-        out.color = vec4<f32>(sky_color(view_d), 1.0);
+        out.color = vec4<f32>(background(view_d), 1.0);
         out.depth = 1.0;
         return out;
     }
@@ -1344,7 +1583,7 @@ fn fs_trace(in: TraceOut) -> TraceFrag {
     }
     let hit = trace(o, d, t0, t1, axis, g.cam_k.z / stride);
     if (!hit.found) {
-        out.color = vec4<f32>(sky_color(view_d), 1.0);
+        out.color = vec4<f32>(background(view_d), 1.0);
         out.depth = 1.0;
         return out;
     }
@@ -1378,11 +1617,22 @@ fn fs_trace(in: TraceOut) -> TraceFrag {
         normal = normalize(vec3<f32>(-(hr - hl) / (2.0 * size * stride), 1.0, -(hd - hu) / (2.0 * size * stride)));
     }
     let world = vec3<f32>(p.x * stride + terrain.origin.x, p.y, p.z * stride + terrain.origin.y);
-    var tint = 1.0;
-    if (hit.level == 0 && stride == 1.0) {
-        tint = block_tint(world, normal, hit.t);
+    if (g.look.y > 0.5) {
+        var c: vec3<f32>;
+        if (hit.level == 0 && stride == 1.0) {
+            c = game_column(hit.cell, p, world, normal, hit.t, view_d);
+        } else {
+            c = game_light(to_linear(base), normal, 1.0, hit.t);
+        }
+        let cl = game_clouds(g.eye.xyz, view_d, hit.t);
+        out.color = vec4<f32>(mix(c, cl.rgb, cl.a), 1.0);
+    } else {
+        var tint = 1.0;
+        if (hit.level == 0 && stride == 1.0) {
+            tint = block_tint(world, normal, hit.t);
+        }
+        out.color = vec4<f32>(shade(base, normal, hit.t) * tint, 1.0);
     }
-    out.color = vec4<f32>(shade(base, normal, hit.t) * tint, 1.0);
     let clip = g.view_proj * vec4<f32>(world, 1.0);
     out.depth = clamp(clip.z / clip.w, 0.0, 1.0);
     return out;
@@ -1490,6 +1740,18 @@ pub struct Renderer3d {
     slots: u64,
     terrain: wgpu::Buffer,
     palette: wgpu::Texture,
+    /// The blocks of every colour pair (see [`Skin`]).
+    pair_mats: wgpu::Texture,
+    /// The game's look: its textures, the materials' layers, its clouds.
+    look_layout: wgpu::BindGroupLayout,
+    look_group: wgpu::BindGroup,
+    sampler: wgpu::Sampler,
+    atlas: wgpu::TextureView,
+    materials: wgpu::TextureView,
+    clouds: wgpu::TextureView,
+    /// Materials the atlas knows, and the layers of water and lava.
+    material_count: u32,
+    fluid_layers: [u16; 2],
     tracer: Option<Tracer>,
     target: Option<Target>,
     chunks: HashMap<TilePos, GpuChunk>,
@@ -1499,11 +1761,11 @@ impl Renderer3d {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         let mesh_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("massif 3d meshes"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Owned(format!("{GLOBALS_WGSL}{MESH_WGSL}"))),
+            source: wgpu::ShaderSource::Wgsl(Cow::Owned(format!("{GLOBALS_WGSL}{}{MESH_WGSL}", crate::textures::LOOK_WGSL))),
         });
         let trace_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("massif 3d tracer"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Owned(format!("{GLOBALS_WGSL}{TRACE_WGSL}"))),
+            source: wgpu::ShaderSource::Wgsl(Cow::Owned(format!("{GLOBALS_WGSL}{}{TRACE_WGSL}", crate::textures::LOOK_WGSL))),
         });
         let uniform = |binding: u32, dynamic: bool, size: u64| wgpu::BindGroupLayoutEntry {
             binding,
@@ -1543,6 +1805,21 @@ impl Renderer3d {
                 texture(3, uint, wgpu::TextureViewDimension::D2),
                 texture(4, uint, wgpu::TextureViewDimension::D2),
                 texture(5, wgpu::TextureSampleType::Float { filterable: false }, wgpu::TextureViewDimension::D2),
+                texture(6, uint, wgpu::TextureViewDimension::D2),
+            ],
+        });
+        let look_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("massif 3d look"),
+            entries: &[
+                texture(0, wgpu::TextureSampleType::Float { filterable: true }, wgpu::TextureViewDimension::D2Array),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                texture(2, uint, wgpu::TextureViewDimension::D2),
+                texture(3, wgpu::TextureSampleType::Float { filterable: false }, wgpu::TextureViewDimension::D2),
             ],
         });
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1561,7 +1838,7 @@ impl Renderer3d {
             label: Some("massif 3d palette"),
             size: wgpu::Extent3d {
                 width: MAX_PAIRS as u32,
-                height: 2,
+                height: 3,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -1571,6 +1848,33 @@ impl Renderer3d {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
+        let pair_mats = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("massif 3d pair blocks"),
+            size: wgpu::Extent3d {
+                width: MAX_PAIRS as u32,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Uint,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        // Pixels sharp up close, as in the game; their levels blended far off.
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("massif 3d textures"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        });
+        let (atlas, materials, count) = Self::make_atlas(device, queue, &crate::textures::Atlas::plain());
+        let clouds = Self::make_clouds(device, queue, &crate::textures::clouds(None));
+        let look_group = Self::make_look(device, &look_layout, &atlas, &sampler, &materials, &clouds);
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("massif 3d globals"),
             layout: &layout,
@@ -1581,15 +1885,15 @@ impl Renderer3d {
         });
         let mesh_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("massif 3d meshes"),
-            bind_group_layouts: &[Some(&layout), Some(&chunk_layout)],
+            bind_group_layouts: &[Some(&layout), Some(&chunk_layout), Some(&look_layout)],
             immediate_size: 0,
         });
         let trace_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("massif 3d tracer"),
-            bind_group_layouts: &[Some(&layout), Some(&trace_layout)],
+            bind_group_layouts: &[Some(&layout), Some(&trace_layout), Some(&look_layout)],
             immediate_size: 0,
         });
-        let attributes = wgpu::vertex_attr_array![0 => Uint8x4, 1 => Sint16x2, 2 => Unorm8x4];
+        let attributes = wgpu::vertex_attr_array![0 => Uint8x4, 1 => Sint16x2, 2 => Unorm8x4, 3 => Uint16x2];
         let buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: size_of::<Face>() as u64,
             step_mode: wgpu::VertexStepMode::Instance,
@@ -1689,10 +1993,184 @@ impl Renderer3d {
             slots: 64,
             terrain,
             palette,
+            pair_mats,
+            look_layout,
+            look_group,
+            sampler,
+            atlas,
+            materials,
+            clouds,
+            material_count: count,
+            fluid_layers: [0, 0],
             tracer: None,
             target: None,
             chunks: HashMap::new(),
         }
+    }
+
+    /// The game's textures on the graphics card: the layers with their
+    /// levels of detail, and the materials' layers (1,024 a row). Returns
+    /// the views and the number of materials.
+    fn make_atlas(device: &wgpu::Device, queue: &wgpu::Queue, atlas: &crate::textures::Atlas) -> (wgpu::TextureView, wgpu::TextureView, u32) {
+        use crate::textures::{MIPS, SIDE, mip_chain};
+        let layers = atlas.layers.len().max(1) as u32;
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("massif 3d block textures"),
+            size: wgpu::Extent3d {
+                width: SIDE as u32,
+                height: SIDE as u32,
+                depth_or_array_layers: layers,
+            },
+            mip_level_count: MIPS,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let chains: Vec<Vec<Vec<u8>>> = atlas.layers.iter().map(mip_chain).collect();
+        for mip in 0..MIPS {
+            let side = (SIDE >> mip) as u32;
+            let bytes: Vec<u8> = chains.iter().flat_map(|c| c[mip as usize].iter().copied()).collect();
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: mip,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &bytes,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(side * 4),
+                    rows_per_image: Some(side),
+                },
+                wgpu::Extent3d {
+                    width: side,
+                    height: side,
+                    depth_or_array_layers: layers,
+                },
+            );
+        }
+        const ROW: usize = 1024;
+        let count = atlas.materials.len();
+        let (w, h) = (count.clamp(1, ROW), count.div_ceil(ROW).max(1));
+        let mut table = vec![0u16; w * h * 4];
+        for (k, m) in atlas.materials.iter().enumerate() {
+            table[k * 4..k * 4 + 4].copy_from_slice(m);
+        }
+        let materials = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("massif 3d materials"),
+            size: wgpu::Extent3d {
+                width: w as u32,
+                height: h as u32,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Uint,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            materials.as_image_copy(),
+            bytemuck::cast_slice(&table),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w as u32 * 8),
+                rows_per_image: Some(h as u32),
+            },
+            wgpu::Extent3d {
+                width: w as u32,
+                height: h as u32,
+                depth_or_array_layers: 1,
+            },
+        );
+        let array = texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        (array, materials.create_view(&wgpu::TextureViewDescriptor::default()), count as u32)
+    }
+
+    fn make_clouds(device: &wgpu::Device, queue: &wgpu::Queue, map: &[u8]) -> wgpu::TextureView {
+        let side = crate::textures::CLOUDS as u32;
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("massif 3d clouds"),
+            size: wgpu::Extent3d {
+                width: side,
+                height: side,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            texture.as_image_copy(),
+            map,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(side),
+                rows_per_image: Some(side),
+            },
+            wgpu::Extent3d {
+                width: side,
+                height: side,
+                depth_or_array_layers: 1,
+            },
+        );
+        texture.create_view(&wgpu::TextureViewDescriptor::default())
+    }
+
+    fn make_look(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, atlas: &wgpu::TextureView, sampler: &wgpu::Sampler, materials: &wgpu::TextureView, clouds: &wgpu::TextureView) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("massif 3d look"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(atlas),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(materials),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(clouds),
+                },
+            ],
+        })
+    }
+
+    /// The game's textures for the player's view, and its clouds.
+    pub fn set_look(&mut self, atlas: &crate::textures::Atlas, clouds: &[u8]) {
+        let most = self.device.limits().max_texture_array_layers as usize;
+        let (view, materials, count) = if atlas.layers.len() <= most {
+            Self::make_atlas(&self.device, &self.queue, atlas)
+        } else {
+            Self::make_atlas(&self.device, &self.queue, &crate::textures::Atlas::plain())
+        };
+        self.atlas = view;
+        self.materials = materials;
+        self.material_count = count;
+        self.fluid_layers = [atlas.water, atlas.lava];
+        self.clouds = Self::make_clouds(&self.device, &self.queue, clouds);
+        self.look_group = Self::make_look(&self.device, &self.look_layout, &self.atlas, &self.sampler, &self.materials, &self.clouds);
+    }
+
+    /// The materials the atlas knows, and the layers of water and lava.
+    pub fn look_info(&self) -> (u32, [u16; 2]) {
+        (self.material_count, self.fluid_layers)
     }
 
     fn make_origins(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, slots: u64) -> (wgpu::Buffer, wgpu::BindGroup) {
@@ -1781,7 +2259,7 @@ impl Renderer3d {
             })
         };
         let flat = |t: &wgpu::Texture| t.create_view(&wgpu::TextureViewDescriptor::default());
-        let views = [array(&cols), array(&maxes), flat(&table_tex), flat(&pyramid), flat(&self.palette)];
+        let views = [array(&cols), array(&maxes), flat(&table_tex), flat(&pyramid), flat(&self.palette), flat(&self.pair_mats)];
         let mut entries = vec![wgpu::BindGroupEntry {
             binding: 0,
             resource: self.terrain.as_entire_binding(),
@@ -1948,32 +2426,47 @@ impl Renderer3d {
         }
     }
 
-    /// The colours the packed columns point at.
-    pub fn set_palette(&mut self, pairs: &[([u8; 3], [u8; 3])]) {
+    /// The colours and blocks the packed columns point at.
+    pub fn set_palette(&mut self, pairs: &[Skin]) {
         let n = pairs.len().min(MAX_PAIRS);
         if n == 0 {
             return;
         }
-        let mut rows = vec![0u8; n * 4 * 2];
-        for (k, (top, soil)) in pairs.iter().take(n).enumerate() {
-            rows[k * 4..k * 4 + 3].copy_from_slice(top);
-            rows[k * 4 + 3] = 255;
-            rows[(n + k) * 4..(n + k) * 4 + 3].copy_from_slice(soil);
-            rows[(n + k) * 4 + 3] = 255;
+        let mut rows = vec![0u8; n * 4 * 3];
+        let mut mats = vec![0u16; n * 4];
+        for (k, skin) in pairs.iter().take(n).enumerate() {
+            for (row, c) in [skin.top, skin.soil, skin.bare].iter().enumerate() {
+                let i = (row * n + k) * 4;
+                rows[i..i + 3].copy_from_slice(c);
+                rows[i + 3] = 255;
+            }
+            mats[k * 4] = skin.top_mat;
+            mats[k * 4 + 1] = skin.soil_mat;
         }
+        let extent = |h: u32| wgpu::Extent3d {
+            width: n as u32,
+            height: h,
+            depth_or_array_layers: 1,
+        };
         self.queue.write_texture(
             self.palette.as_image_copy(),
             &rows,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(n as u32 * 4),
-                rows_per_image: Some(2),
+                rows_per_image: Some(3),
             },
-            wgpu::Extent3d {
-                width: n as u32,
-                height: 2,
-                depth_or_array_layers: 1,
+            extent(3),
+        );
+        self.queue.write_texture(
+            self.pair_mats.as_image_copy(),
+            bytemuck::cast_slice(&mats),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(n as u32 * 8),
+                rows_per_image: Some(1),
             },
+            extent(1),
         );
     }
 
@@ -2167,6 +2660,7 @@ impl Renderer3d {
             let [w, h] = target.size;
             pass.set_viewport(0.0, 0.0, region[0].clamp(1, w) as f32, region[1].clamp(1, h) as f32, 0.0, 1.0);
             pass.set_bind_group(0, &self.bind_group, &[]);
+            pass.set_bind_group(2, &self.look_group, &[]);
             // The traced ground first, then the meshed chunks, then the
             // water over everything.
             if let Some(tr) = &self.tracer {
@@ -2189,6 +2683,12 @@ impl Renderer3d {
             }
         }
         self.queue.submit([encoder.finish()]);
+    }
+
+    /// Wait until the graphics card has drawn what it was given.
+    #[cfg(test)]
+    pub fn wait(&self) {
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
     }
 
     /// Copy the rendered image back to the CPU (RGBA, row-major). Blocks.
@@ -2279,6 +2779,16 @@ impl Sky {
             }
         }
     }
+
+    /// The game's sky at noon: its blue overhead, its fog's paler blue at the
+    /// horizon, into which far land fades.
+    pub const GAME: Sky = Sky {
+        zenith: [120, 167, 255],
+        horizon: [192, 216, 255],
+        mist: [192, 216, 255],
+        haze: 1.0,
+        murk: None,
+    };
 
     /// One flat colour: tests tell the sky from the ground by it.
     #[cfg(test)]
@@ -2386,6 +2896,14 @@ impl Camera {
             cam_s: [s.x, s.y, s.z, 0.0],
             cam_u: [u.x, u.y, u.z, 0.0],
             cam_k: [tan * aspect, tan, 2.0 * tan / height.max(1) as f32, origin.1 as f32],
+            // The game's look, the brush and the block looked at: set for
+            // the player's view.
+            look: [0.0; 4],
+            brush: [0.0; 4],
+            brush_n: [0.0; 4],
+            brush_t: [0.0; 4],
+            pick: [0.0; 4],
+            rock: [0.0; 4],
         }
     }
 }
@@ -2524,8 +3042,8 @@ fn build_coarse(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, cell: Tile
     let ground = dim.ground();
     let mut heights = vec![0u16; n * n];
     let mut colors = vec![0u16; n * n];
-    let mut pairs: Vec<([u8; 3], [u8; 3])> = Vec::new();
-    let water_pair = if style.lava { ([207, 92, 20], [160, 60, 10]) } else { ([52, 96, 200], [40, 70, 160]) };
+    let mut pairs: Vec<Skin> = Vec::new();
+    let water_pair = if style.lava { Skin::flat([207, 92, 20], [160, 60, 10]) } else { Skin::flat([52, 96, 200], [40, 70, 160]) };
     let mut water_at: Option<u16> = None;
     for rz in 0..stride {
         for rx in 0..stride {
@@ -2562,6 +3080,7 @@ fn build_coarse(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, cell: Tile
     TileBuild {
         heights,
         colors,
+        depths: Vec::new(),
         pairs,
         faces: ChunkFaces::default(),
     }
@@ -2644,7 +3163,7 @@ pub struct View3d {
     style: Option<Style>,
     generation: Option<u64>,
     needs_render: bool,
-    last_globals: Option<[f32; 56]>,
+    last_globals: Option<[f32; GLOBAL_FLOATS]>,
     /// The part of the target the last frame was drawn in.
     last_region: [u32; 2],
     /// Tiles still to build, and the time the last batch took.
@@ -2678,6 +3197,14 @@ pub struct View3d {
     /// While the camera moves, the image is drawn smaller and stretched:
     /// sharp again the moment it stops.
     pub reduce_while_moving: bool,
+    /// The game's blocks, for its textures in the player's view (set by the
+    /// app as they are read).
+    pub catalogue: Option<std::sync::Arc<massif_assets::Catalogue>>,
+    /// What the atlas on the graphics card was made from (the catalogue,
+    /// the registry's materials), and the document and catalogue last
+    /// checked against it.
+    look_key: Option<(usize, u64)>,
+    look_seen: Option<(u64, u64, usize)>,
 }
 
 /// What the drawn image's side is, while the camera moves, of the view's
@@ -2701,10 +3228,29 @@ struct Walk {
     /// Where egui last saw the pointer while the view held it (where the
     /// system cannot lock it, it is brought back to the middle).
     anchor: Option<egui::Pos2>,
+    /// The point a drag with Ctrl turns the view about (or that moving it
+    /// keeps pace with).
+    pivot: Option<[f64; 3]>,
     /// The pass the view was last drawn in, and the frame the body last
     /// moved in (a frame drawn twice moves it once).
     pass: u64,
     frame: u64,
+}
+
+/// The ray through screen point `p` of a view `rect` seen by `camera`:
+/// origin and direction in block coordinates.
+fn camera_ray(camera: &Camera, rect: Rect, p: egui::Pos2) -> ([f64; 3], [f64; 3]) {
+    let eye = camera.eye();
+    let t = camera.target;
+    let f = Vec3::new((t[0] - eye[0]) as f32, (t[1] - eye[1]) as f32, (t[2] - eye[2]) as f32).normalize();
+    let s = f.cross(Vec3::Y).normalize();
+    let u = s.cross(f);
+    let half = (camera.fov() * 0.5).tan();
+    let aspect = rect.width() / rect.height().max(1.0);
+    let nx = (p.x - rect.center().x) / (rect.width() * 0.5);
+    let ny = -(p.y - rect.center().y) / (rect.height() * 0.5);
+    let d = f + s * (nx * half * aspect) + u * (ny * half);
+    (eye, [d.x as f64, d.y as f64, d.z as f64])
 }
 
 /// How far ahead of the eyes the camera looks while walking (the orbit
@@ -2768,6 +3314,9 @@ impl Default for View3d {
             moving_until: 0.0,
             last_camera: None,
             reduce_while_moving: !cfg!(test),
+            catalogue: None,
+            look_key: None,
+            look_seen: None,
         }
     }
 }
@@ -2856,6 +3405,15 @@ impl View3d {
         self.walk.as_ref().map(|w| w.player)
     }
 
+    /// Put the player at `feet`, flying or not.
+    #[cfg(test)]
+    pub fn place_player(&mut self, feet: [f64; 3], flying: bool) {
+        if let Some(walk) = &mut self.walk {
+            walk.player = crate::player::Player::new(feet);
+            walk.player.flying = flying;
+        }
+    }
+
     /// The view held the mouse and was not drawn in the last frame (another
     /// workspace, its area closed): let the mouse go.
     pub fn release_if_hidden(&mut self, ctx: &egui::Context) {
@@ -2895,6 +3453,7 @@ impl View3d {
             captured: false,
             swallow: false,
             anchor: None,
+            pivot: None,
             pass: 0,
             frame: u64::MAX,
         });
@@ -2918,12 +3477,17 @@ impl View3d {
     }
 
     /// A frame of walking: the mouse taken and given back, looking around,
-    /// the keys, the body's move, the camera at its eyes.
-    fn walk_ui(&mut self, ui: &Ui, response: &egui::Response, doc: &Document, rect: Rect) {
+    /// the keys, the body's move, the camera at its eyes. The cursor free,
+    /// the view works as Axiom's editor: the left button turns it, with
+    /// Ctrl (⌘) about the point under the cursor, the right button with
+    /// Ctrl moves it, the middle one with Ctrl sizes the brush, the wheel
+    /// sets the speed of flight; a click lends the view the mouse, as in
+    /// the game.
+    fn walk_ui(&mut self, ui: &Ui, response: &egui::Response, doc: &Document, tools: &mut ToolState, rect: Rect) {
         let Some(walk) = &mut self.walk else { return };
         let ctx = ui.ctx().clone();
         walk.pass = ctx.cumulative_pass_nr();
-        let (escape, focused, motion, moved, pointer, dt, turn) = ui.input(|i| {
+        let (escape, focused, motion, moved, pointer, dt, turn, mods, scroll) = ui.input(|i| {
             let key = |k: egui::Key| i.key_down(k) as i32 as f32;
             (
                 i.key_pressed(egui::Key::Escape),
@@ -2934,16 +3498,75 @@ impl View3d {
                 i.stable_dt.min(0.1) as f64,
                 // The arrows turn the eyes: left, right, up, down.
                 [key(egui::Key::ArrowRight) - key(egui::Key::ArrowLeft), key(egui::Key::ArrowDown) - key(egui::Key::ArrowUp)],
+                i.modifiers,
+                i.smooth_scroll_delta.y + i.smooth_scroll_delta.x,
             )
         });
-        // Dragged, the view turns, the mouse held or not; a click (not a
-        // drag) lends the view the mouse, as in the game.
-        if !walk.captured && response.dragged() {
-            let d = response.drag_delta();
-            self.camera.yaw -= d.x * DRAG_LOOK;
-            self.camera.pitch = (self.camera.pitch + d.y * DRAG_LOOK).clamp(-1.55, 1.55);
+        let ctrl = mods.ctrl || mods.command;
+        let free = !walk.captured;
+        let camera = self.camera;
+        // Where a drag with Ctrl began: the point it turns about, and how
+        // far it is (moving the view goes as fast as the land there).
+        let pressed_at = |button| response.drag_started_by(button).then(|| response.interact_pointer_pos()).flatten();
+        if free
+            && ctrl
+            && let Some(p) = pressed_at(PointerButton::Primary).or_else(|| pressed_at(PointerButton::Secondary))
+        {
+            let (o, d) = camera_ray(&camera, rect, p);
+            walk.pivot = Some(match massif_core::voxel::raycast(doc.dimension(), o, d, 4096.0) {
+                Some(hit) => hit.point,
+                None => [o[0] + d[0] * 32.0, o[1] + d[1] * 32.0, o[2] + d[2] * 32.0],
+            });
         }
-        if !walk.captured && response.clicked() {
+        let basis = |yaw: f32, pitch: f32| {
+            let (sy, cy) = (yaw as f64).sin_cos();
+            let (sp, cp) = (pitch as f64).sin_cos();
+            let f = [-cp * sy, -sp, -cp * cy];
+            let s = [cy, 0.0, -sy];
+            let u = [s[1] * f[2] - s[2] * f[1], s[2] * f[0] - s[0] * f[2], s[0] * f[1] - s[1] * f[0]];
+            [f, s, u]
+        };
+        let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        // The eyes moved by hand: flying there.
+        let put_eyes = |walk: &mut Walk, eye: [f64; 3]| {
+            let height = walk.player.eye()[1] - walk.player.feet[1];
+            walk.player.feet = [eye[0], eye[1] - height, eye[2]];
+            walk.player.velocity = [0.0; 3];
+            walk.player.flying = true;
+        };
+        if free && response.dragged_by(PointerButton::Primary) {
+            let d = response.drag_delta();
+            let (yaw, pitch) = (self.camera.yaw - d.x * DRAG_LOOK, (self.camera.pitch + d.y * DRAG_LOOK).clamp(-1.55, 1.55));
+            if ctrl && let Some(pivot) = walk.pivot {
+                // Axiom's arcball: the eyes go round the point, still
+                // looking at it.
+                let eye = walk.player.eye();
+                let v = [eye[0] - pivot[0], eye[1] - pivot[1], eye[2] - pivot[2]];
+                let (old, new) = (basis(self.camera.yaw, self.camera.pitch), basis(yaw, pitch));
+                let k = [dot(v, old[0]), dot(v, old[1]), dot(v, old[2])];
+                let to = std::array::from_fn(|i| pivot[i] + k[0] * new[0][i] + k[1] * new[1][i] + k[2] * new[2][i]);
+                put_eyes(walk, to);
+            }
+            self.camera.yaw = yaw;
+            self.camera.pitch = pitch;
+        }
+        if free && ctrl && response.dragged_by(PointerButton::Secondary) {
+            // Moved across the view, as fast as the land under the cursor.
+            let d = response.drag_delta();
+            let eye = walk.player.eye();
+            let far = walk.pivot.map_or(32.0, |p| ((p[0] - eye[0]).powi(2) + (p[1] - eye[1]).powi(2) + (p[2] - eye[2]).powi(2)).sqrt()).max(4.0);
+            let k = far * 2.0 * (camera.fov() as f64 * 0.5).tan() / rect.height().max(1.0) as f64;
+            let [_, s, u] = basis(self.camera.yaw, self.camera.pitch);
+            let to = std::array::from_fn(|i| eye[i] - s[i] * d.x as f64 * k + u[i] * d.y as f64 * k);
+            put_eyes(walk, to);
+        }
+        if free && ctrl && response.dragged_by(PointerButton::Middle) {
+            // The brush's size, sideways.
+            let most = massif_core::voxel::MAX_SCULPT_RADIUS;
+            let r = &mut tools.brush.radius;
+            *r = (r.min(most) * (response.drag_delta().x * 0.01).exp()).clamp(1.0, most);
+        }
+        if free && !ctrl && response.clicked() {
             // The click that takes the mouse sculpts nothing.
             walk.captured = true;
             walk.swallow = true;
@@ -2952,6 +3575,25 @@ impl View3d {
         } else if walk.captured && (escape || !focused) {
             walk.captured = false;
             hold_mouse(&ctx, false);
+        }
+        if free && !ctrl && response.clicked_by(PointerButton::Middle) {
+            // Pick block: the terrain under the cursor becomes the one
+            // painted.
+            if let Some(p) = response.interact_pointer_pos() {
+                let (o, d) = camera_ray(&camera, rect, p);
+                if let Some(hit) = massif_core::voxel::raycast(doc.dimension(), o, d, 4096.0)
+                    && let Some(probe) = crate::tools::probe(doc, hit.block.0, hit.block.2)
+                {
+                    tools.terrain = probe.terrain;
+                    tools.pattern.on = false;
+                }
+            }
+        }
+        // The wheel: the speed of flight, as Axiom's slider.
+        if response.hovered() && !ctrl && scroll != 0.0 {
+            let (lo, hi) = crate::tools::SculptSettings::FLY_SPEEDS;
+            let s = &mut tools.sculpt.fly_speed;
+            *s = (*s * (scroll * 0.003).exp()).clamp(lo, hi);
         }
         let typing = ctx.egui_wants_keyboard_input();
         if (walk.captured || response.hovered()) && !typing && turn != [0.0, 0.0] {
@@ -2980,23 +3622,25 @@ impl View3d {
             }
         }
         use crate::player::Keys;
-        let keys = if walk.captured || (response.hovered() && !ctx.egui_wants_keyboard_input()) {
+        let keys = if walk.captured || (response.hovered() && !typing) {
             ui.input(|i| {
                 let held = |k: egui::Key| i.key_down(k) as i32 as f64;
                 // Pressed now, not repeated by the system.
                 let first = |key: egui::Key| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: k, pressed: true, repeat: false, .. } if *k == key));
-                if i.modifiers.command || i.modifiers.ctrl || i.modifiers.alt {
+                // ⌘ and Alt keep their shortcuts.
+                if i.modifiers.mac_cmd || i.modifiers.alt {
                     Keys::default()
                 } else {
-                    // (The arrows turn the eyes.)
+                    // The game's keys: Shift sneaks (flying: goes down), Ctrl
+                    // sprints; Q goes down too. (The arrows turn the eyes.)
                     Keys {
                         forward: held(egui::Key::W) - held(egui::Key::S),
                         right: held(egui::Key::D) - held(egui::Key::A),
                         forward_pressed: first(egui::Key::W),
                         jump: i.key_down(egui::Key::Space),
                         jump_pressed: first(egui::Key::Space),
-                        sneak: i.key_down(egui::Key::Q),
-                        run: i.modifiers.shift,
+                        sneak: i.modifiers.shift || i.key_down(egui::Key::Q),
+                        run: i.modifiers.ctrl,
                     }
                 }
             })
@@ -3006,6 +3650,7 @@ impl View3d {
         let frame = ctx.cumulative_frame_nr();
         if walk.frame != frame {
             walk.frame = frame;
+            walk.player.fly_speed = tools.sculpt.fly_speed as f64;
             let mut blocks = crate::player::MapBlocks::new(doc.dimension());
             walk.player.step(&mut blocks, keys, self.camera.yaw, dt);
         }
@@ -3020,39 +3665,89 @@ impl View3d {
         }
     }
 
-    /// The crosshair and what the keys do, over the view.
-    fn walk_overlay(&self, painter: &egui::Painter, rect: Rect) {
+    /// Over the player's view: the game's crosshair while the view holds
+    /// the mouse, and along the bottom, as in Axiom's editor, what the
+    /// buttons and keys do, how the player moves and the speed of flight.
+    fn player_bar(&self, ui: &mut Ui, rect: Rect, tools: &mut ToolState) {
         let Some(walk) = &self.walk else { return };
+        let pal = Palette::of(ui);
+        let painter = ui.painter_at(rect);
         let c = rect.center();
-        let pill = |at: egui::Pos2, text: String, size: f32| {
-            let galley = painter.layout_no_wrap(text, FontId::proportional(size), Color32::WHITE);
-            let bg = Rect::from_center_size(at, galley.size() + vec2(18.0, 10.0));
-            painter.rect_filled(bg, theme::PILL, Color32::from_black_alpha(130));
-            painter.galley(bg.center() - galley.size() / 2.0, galley, Color32::WHITE);
+        if walk.captured {
+            for (w, color) in [(3.5, Color32::from_black_alpha(120)), (1.5, Color32::WHITE)] {
+                painter.line_segment([c - vec2(8.0, 0.0), c + vec2(8.0, 0.0)], egui::Stroke::new(w, color));
+                painter.line_segment([c - vec2(0.0, 8.0), c + vec2(0.0, 8.0)], egui::Stroke::new(w, color));
+            }
+        }
+        let bar = Rect::from_min_max(pos2(rect.left(), rect.bottom() - 26.0), rect.right_bottom());
+        painter.rect_filled(bar, 0, pal.panel.gamma_multiply(0.94));
+        painter.hline(bar.x_range(), bar.top(), egui::Stroke::new(1.0, pal.border));
+        // What the buttons do with the tool chosen.
+        let (tool, inverse) = match tools.sculpt.tool {
+            Tool::Smooth3d => ("Smooth", None),
+            Tool::PaintTerrain => ("Paint", Some("Paint by height")),
+            _ => ("Add", Some("Dig")),
         };
-        if !walk.captured {
-            // Low, not over what is looked at.
-            pill(pos2(c.x, rect.bottom() - 46.0), "Drag or the arrows to look around · click to take the mouse (Esc gives it back) · W A S D walk".to_owned(), 12.0);
-            return;
-        }
-        for (w, color) in [(3.5, Color32::from_black_alpha(120)), (1.5, Color32::WHITE)] {
-            painter.line_segment([c - vec2(8.0, 0.0), c + vec2(8.0, 0.0)], egui::Stroke::new(w, color));
-            painter.line_segment([c - vec2(0.0, 8.0), c + vec2(0.0, 8.0)], egui::Stroke::new(w, color));
-        }
-        let p = &walk.player;
-        let text = if p.flying {
-            "Flying · W A S D: fly · Space: up · Q: down · Space twice: fall · Shift: faster · Esc: free the mouse".to_owned()
+        let mut hints: Vec<(&str, &str)> = Vec::new();
+        if walk.captured {
+            hints.push(("RMB", tool));
+            if let Some(inv) = inverse {
+                hints.push(("LMB", inv));
+            }
+            hints.extend([("W A S D", "Move"), ("Space", "Jump · twice: fly"), ("Shift", "Sneak · down"), ("Ctrl", "Sprint"), ("Esc", "Free the mouse")]);
         } else {
-            let state = if p.swimming {
-                "Swimming"
-            } else if p.sneaking {
-                "Sneaking"
-            } else {
-                "Walking"
-            };
-            format!("{state} · W A S D: walk · Space: jump, twice: fly · Q: sneak · Shift: run · Esc: free the mouse")
+            hints.push(("LMB", "Look around"));
+            hints.push(("RMB", tool));
+            if let Some(inv) = inverse {
+                hints.push(("Alt+RMB", inv));
+            }
+            hints.extend([
+                ("MMB", "Pick block"),
+                ("Ctrl+LMB", "Orbit"),
+                ("Ctrl+RMB", "Pan"),
+                ("Ctrl+MMB", "Size"),
+                ("Click", "Take the mouse"),
+                ("W A S D", "Move"),
+            ]);
+        }
+        // How the player goes and the speed of flight, on the right.
+        let p = &walk.player;
+        let state = if p.flying {
+            "Flying"
+        } else if p.swimming {
+            "Swimming"
+        } else if p.sneaking {
+            "Sneaking"
+        } else {
+            "Walking"
         };
-        pill(pos2(c.x, rect.top() + 22.0), text, 11.5);
+        let right_w = 260.0;
+        let font = FontId::proportional(11.0);
+        let mut x = bar.left() + 10.0;
+        let limit = bar.right() - right_w - 8.0;
+        for (key, what) in hints {
+            let k = painter.layout_no_wrap(key.to_owned(), FontId::proportional(10.0), pal.text);
+            let t = painter.layout_no_wrap(what.to_owned(), font.clone(), pal.weak);
+            let w = k.size().x + 10.0 + 5.0 + t.size().x + 14.0;
+            if x + w > limit {
+                break;
+            }
+            let chip = Rect::from_min_size(pos2(x, bar.center().y - 8.5), vec2(k.size().x + 10.0, 17.0));
+            painter.rect(chip, theme::TILE_RADIUS, pal.header, egui::Stroke::new(1.0, pal.border), egui::StrokeKind::Inside);
+            painter.galley(chip.center() - k.size() / 2.0, k, pal.text);
+            painter.galley(pos2(chip.right() + 5.0, bar.center().y - t.size().y / 2.0), t, pal.weak);
+            x += w;
+        }
+        let right = Rect::from_min_max(pos2(bar.right() - right_w, bar.top() + 1.0), bar.right_bottom());
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(right.shrink2(vec2(8.0, 3.0))).layout(egui::Layout::right_to_left(egui::Align::Center)));
+        let mut percent = (tools.sculpt.fly_speed * 100.0).round();
+        let (lo, hi) = crate::tools::SculptSettings::FLY_SPEEDS;
+        let field = child.add(crate::widgets::Field::new(&mut percent, (lo * 100.0).round()..=(hi * 100.0).round()).text("Flight speed").suffix("%").width(150.0));
+        if field.changed() {
+            tools.sculpt.fly_speed = percent / 100.0;
+        }
+        child.add_space(8.0);
+        child.label(egui::RichText::new(state).size(11.0).color(pal.text));
     }
 
     /// Build the missing and stale tiles of the map, nearest the camera
@@ -3260,20 +3955,37 @@ impl View3d {
         }
     }
 
+    /// The game's textures for the blocks of the map, made again when the
+    /// game's blocks arrive or the registry gains blocks or objects.
+    fn update_look(&mut self, doc: &Document, renderer: &mut Renderer3d) {
+        let cat = self.catalogue.as_ref().map_or(0, |c| std::sync::Arc::as_ptr(c) as usize);
+        let seen = (doc.generation, doc.revision, cat);
+        if self.look_seen == Some(seen) {
+            return;
+        }
+        self.look_seen = Some(seen);
+        let key = (cat, crate::textures::materials_key(&doc.world.registry));
+        if self.look_key == Some(key) {
+            return;
+        }
+        let most = renderer.device.limits().max_texture_array_layers as usize;
+        let atlas = match &self.catalogue {
+            Some(c) => crate::textures::atlas(&doc.world.registry, c, most),
+            None => crate::textures::Atlas::plain(),
+        };
+        renderer.set_look(&atlas, &crate::textures::clouds(self.catalogue.as_deref()));
+        // Objects added or gone: their materials are numbered anew.
+        if self.look_key.is_some_and(|k| k.1 != key.1) {
+            self.invalidate_all();
+        }
+        self.look_key = Some(key);
+        self.needs_render = true;
+    }
+
     /// The ray through screen point `p` of the view `rect`: origin and
     /// direction in block coordinates.
     fn ray(&self, rect: Rect, p: egui::Pos2) -> ([f64; 3], [f64; 3]) {
-        let eye = self.camera.eye();
-        let t = self.camera.target;
-        let f = Vec3::new((t[0] - eye[0]) as f32, (t[1] - eye[1]) as f32, (t[2] - eye[2]) as f32).normalize();
-        let s = f.cross(Vec3::Y).normalize();
-        let u = s.cross(f);
-        let half = (self.camera.fov() * 0.5).tan();
-        let aspect = rect.width() / rect.height().max(1.0);
-        let nx = (p.x - rect.center().x) / (rect.width() * 0.5);
-        let ny = -(p.y - rect.center().y) / (rect.height() * 0.5);
-        let d = f + s * (nx * half * aspect) + u * (ny * half);
-        (eye, [d.x as f64, d.y as f64, d.z as f64])
+        camera_ray(&self.camera, rect, p)
     }
 
     /// Show the view; `sculpt`: the 3D Sculpt editor's, where the buttons
@@ -3292,6 +4004,7 @@ impl View3d {
             .renderer
             .take()
             .unwrap_or_else(|| Renderer3d::new(&render_state.device, &render_state.queue));
+        self.update_look(doc, &mut renderer);
 
         // A new world: show all of it, forget the old tiles.
         if self.generation != Some(doc.generation) {
@@ -3355,7 +4068,7 @@ impl View3d {
                 self.stop_walking(ui.ctx(), doc);
             }
         }
-        self.walk_ui(ui, &response, doc, rect);
+        self.walk_ui(ui, &response, doc, tools, rect);
         let captured = self.walk.as_ref().is_some_and(|w| w.captured);
 
         // ---- camera control ------------------------------------------------
@@ -3489,8 +4202,9 @@ impl View3d {
 
         // ---- sculpting -------------------------------------------------------
         self.hover = None;
-        // Walking, the brush is where the crosshair is.
-        let aim = if walking { captured.then(|| rect.center()) } else { response.hover_pos() };
+        // Holding the mouse, the brush is where the crosshair is; else under
+        // the cursor.
+        let aim = if captured { Some(rect.center()) } else { response.hover_pos() };
         if sculpting && let Some(p) = aim {
             let (o, d) = self.ray(rect, p);
             self.hover = massif_core::voxel::raycast(doc.dimension(), o, d, (self.camera.distance as f64 + extent as f64) * 1.5);
@@ -3516,18 +4230,27 @@ impl View3d {
             self.frame = None;
         }
         let (primary, secondary) = ui.input(|i| (i.pointer.primary_down(), i.pointer.secondary_down()));
-        let pressed = match &mut self.walk {
+        let (pressed, inverse) = match &mut self.walk {
             Some(walk) => {
                 if !(primary || secondary) {
                     walk.swallow = false;
                 }
-                sculpting && walk.captured && !walk.swallow && (primary || secondary)
+                if walk.captured {
+                    // As in the game: the right button builds (the tool),
+                    // the left one breaks (its inverse).
+                    (sculpting && !walk.swallow && (primary || secondary), primary && !secondary)
+                } else {
+                    // As in Axiom's editor: the right button uses the tool
+                    // under the cursor (Alt: its inverse), the left one
+                    // turns the view.
+                    (sculpting && secondary && !command && !primary, alt)
+                }
             }
-            None => sculpting && response.hovered() && !alt && !shift && (primary || secondary),
+            None => (sculpting && response.hovered() && !alt && !shift && (primary || secondary), secondary),
         };
         match (&mut self.sculpt, pressed) {
             (None, true) if captured || response.is_pointer_button_down_on() => {
-                self.sculpt = crate::tools::begin_sculpt(doc, tools, secondary).map(|s| (s, Instant::now()));
+                self.sculpt = crate::tools::begin_sculpt(doc, tools, inverse).map(|s| (s, Instant::now()));
             }
             (Some(_), false) => {
                 if let Some((stroke, _)) = self.sculpt.take() {
@@ -3669,13 +4392,57 @@ impl View3d {
             use crate::player::Blocks;
             crate::player::MapBlocks::new(doc.dimension()).fluid(eye[0].floor() as i32, (eye[1] + 0.12).floor() as i32, eye[2].floor() as i32)
         };
-        let sky = if under && self.water {
+        // The player's view looks like the game: its blocks, light, sky and
+        // clouds, the brush marking the blocks it takes as Axiom does.
+        let game = walking && self.mode == MapMode::Terrain;
+        let under_water = under && self.water;
+        let sky = if under_water {
             Sky::under_water(if doc.world.meta.lava { [150, 52, 12] } else { [22, 64, 112] })
+        } else if game {
+            Sky::GAME
         } else {
             Sky::of(&pal)
         };
-        let globals = self.camera.globals(origin, rect.width() / rect.height().max(1.0), extent, sky, region[1].max(1));
-        let key: [f32; 56] = bytemuck::cast(globals);
+        let mut globals = self.camera.globals(origin, rect.width() / rect.height().max(1.0), extent, sky, region[1].max(1));
+        if game {
+            let (materials, fluids) = renderer.look_info();
+            let textured = self.catalogue.is_some() && materials > 0;
+            globals.look = [textured as u8 as f32, 1.0, if under_water { 0.0 } else { CLOUDS_Y }, materials as f32];
+            if !under_water {
+                // The game's fog: the land fades into the horizon far off.
+                let reach = (extent * 0.45).max(1536.0);
+                globals.fog = [192.0, reach, globals.fog[2], globals.fog[3]];
+            }
+            let wk = doc.world.registry.well_known;
+            globals.rock = [wk.stone.0 as f32, wk.deepslate.0 as f32, fluids[0] as f32, fluids[1] as f32];
+            let local = |p: [f64; 3]| [(p[0] - origin.0 as f64) as f32, p[1] as f32, (p[2] - origin.1 as f64) as f32];
+            if let Some(hit) = self.hover {
+                let b = [hit.block.0 as f64, hit.block.1 as f64, hit.block.2 as f64];
+                let l = local(b);
+                globals.pick = [l[0], l[1], l[2], 1.0];
+            }
+            if let (Some(f), true) = (self.frame, sculpting) {
+                let brush = tools.sculpt_brush();
+                let c = local([f.center[0] as f64, f.center[1] as f64, f.center[2] as f64]);
+                let square = brush.is_square() && brush.outline().is_none();
+                let (t1, t2) = massif_core::voxel::tangents(f.normal);
+                // A square's side, turned with the brush.
+                let side = if square {
+                    let k = brush.square_corners(0.0, 0.0);
+                    let (du, dv) = (k[1].0 - k[0].0, k[1].1 - k[0].1);
+                    let l = du.hypot(dv).max(1e-6);
+                    let (du, dv) = (du / l, dv / l);
+                    [t1[0] * du + t2[0] * dv, t1[1] * du + t2[1] * dv, t1[2] * du + t2[2] * dv]
+                } else {
+                    t1
+                };
+                // (A square's half side is its radius.)
+                globals.brush = [c[0], c[1], c[2], brush.radius.max(0.5)];
+                globals.brush_n = [f.normal[0], f.normal[1], f.normal[2], if square { 2.0 } else { 1.0 }];
+                globals.brush_t = [side[0], side[1], side[2], 0.0];
+            }
+        }
+        let key: [f32; GLOBAL_FLOATS] = bytemuck::cast(globals);
         if self.needs_render || self.last_globals != Some(key) || self.last_region != region {
             self.last_region = region;
             let m = Mat4::from_cols_array_2d(&globals.view_proj);
@@ -3721,8 +4488,11 @@ impl View3d {
             painter.text(rect.center(), Align2::CENTER_CENTER, err, FontId::proportional(13.0), pal.danger);
         }
         // The sculpting brush, laid on the slope under the cursor: its
-        // outline (a custom brush's too), and the way the surface faces.
-        if let Some(f) = self.frame {
+        // outline (a custom brush's too), and the way the surface faces. In
+        // the game's look the blocks it takes are marked instead (but for a
+        // custom brush's outline).
+        let marked = game && tools.sculpt_brush().outline().is_none();
+        if let Some(f) = self.frame.filter(|_| !marked) {
             let m = Mat4::from_cols_array_2d(&globals.view_proj);
             let to_screen = |p: [f32; 3]| -> Option<egui::Pos2> {
                 let v = m * Vec4::new(p[0] - origin.0 as f32, p[1], p[2] - origin.1 as f32, 1.0);
@@ -3795,12 +4565,14 @@ impl View3d {
         } else if self.build_ms > 0.0 {
             text.push_str(&format!(" · {:.0} ms", self.build_ms));
         }
-        let at = rect.left_bottom() + vec2(10.0, -10.0);
-        let galley = painter.layout_no_wrap(text, FontId::proportional(10.5), Color32::WHITE);
-        let bg = Rect::from_min_size(at - vec2(4.0, galley.size().y + 4.0), galley.size() + vec2(8.0, 6.0));
-        painter.rect_filled(bg, 4, Color32::from_black_alpha(110));
-        painter.galley(at - vec2(0.0, galley.size().y + 1.0), galley, Color32::WHITE);
-        self.walk_overlay(&painter, rect);
+        if self.walk.is_none() {
+            let at = rect.left_bottom() + vec2(10.0, -10.0);
+            let galley = painter.layout_no_wrap(text, FontId::proportional(10.5), Color32::WHITE);
+            let bg = Rect::from_min_size(at - vec2(4.0, galley.size().y + 4.0), galley.size() + vec2(8.0, 6.0));
+            painter.rect_filled(bg, 4, Color32::from_black_alpha(110));
+            painter.galley(at - vec2(0.0, galley.size().y + 1.0), galley, Color32::WHITE);
+        }
+        self.player_bar(ui, rect, tools);
         if captured {
             ui.ctx().set_cursor_icon(egui::CursorIcon::None);
         } else if response.hovered() {
@@ -3865,8 +4637,8 @@ mod tests {
     fn walls_only_where_neighbours_leave_air() {
         let mut out = Vec::new();
         let cover = [
-            CellSpan { y0: -64, y1: 10, terrain: 0, top: 10.0, color: None },
-            CellSpan { y0: 20, y1: 30, terrain: 0, top: 30.0, color: None },
+            CellSpan { y0: -64, y1: 10, terrain: 0, top: 10.0, color: None, mat: 0 },
+            CellSpan { y0: 20, y1: 30, terrain: 0, top: 30.0, color: None, mat: 0 },
         ];
         uncovered(-64, 64, &cover, &mut out);
         assert_eq!(out, vec![(10, 20), (30, 64)]);
@@ -3988,10 +4760,16 @@ mod tests {
     #[test]
     fn colour_pairs_are_shared_and_bounded() {
         let mut pairs = Pairs::default();
+        let grass = Skin {
+            top_mat: 9,
+            soil_mat: 10,
+            ..Skin::flat([1, 2, 3], [4, 5, 6])
+        };
         let b = TileBuild {
             heights: vec![10, 0, 20],
             colors: vec![0, 0, 1],
-            pairs: vec![([1, 2, 3], [4, 5, 6]), ([7, 8, 9], [1, 1, 1])],
+            depths: Vec::new(),
+            pairs: vec![grass, Skin::flat([7, 8, 9], [1, 1, 1])],
             faces: ChunkFaces::default(),
         };
         let packed = pairs.pack(&b);
@@ -3999,15 +4777,19 @@ mod tests {
         assert_eq!(packed[0] & HEIGHT_MASK, 10);
         let (k0, k2) = (packed[0] >> HEIGHT_BITS, packed[2] >> HEIGHT_BITS);
         assert!(k0 >= 1 && k0 != k2, "pair 0 is kept for gaps");
-        assert_eq!(pairs.list()[k0 as usize], ([1, 2, 3], [4, 5, 6]));
+        assert_eq!(pairs.list()[k0 as usize], grass);
         // Packing again finds the same pairs.
         assert_eq!(pairs.pack(&b), packed);
         for i in 0..5000u32 {
-            pairs.get(([i as u8, (i >> 8) as u8, 7], [0, 0, 0]));
+            pairs.get(Skin::flat([i as u8, (i >> 8) as u8, 7], [0, 0, 0]));
         }
         assert_eq!(pairs.list().len(), MAX_PAIRS);
-        // Once full, a new pair takes the closest.
-        let k = pairs.get(([1, 2, 3], [4, 5, 7]));
+        // Once full, a new pair takes the closest of the same blocks.
+        let k = pairs.get(Skin {
+            top_mat: 9,
+            soil_mat: 10,
+            ..Skin::flat([1, 2, 30], [4, 5, 7])
+        });
         assert_eq!(k as u32, k0);
     }
 
@@ -4232,6 +5014,71 @@ mod perf {
     use massif_core::brush::{Brush, BrushShape, Profile};
     use massif_core::generate::{GenParams, Landform, generate};
     use massif_core::history::History;
+
+    /// What the game's look costs the graphics card (MASSIF_PERF): frames
+    /// of a 2,048-block map seen at a player's eyes, 1,600 × 1,000 pixels,
+    /// in the views' own look and in the game's, with the game's textures
+    /// where Minecraft is installed. Prints the best and the middle time.
+    #[test]
+    fn the_players_view_on_the_gpu() {
+        if std::env::var_os("MASSIF_PERF").is_none() {
+            return;
+        }
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("no GPU adapter: skipping");
+            return;
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+        let mut world = generate(&GenParams { tiles_x: 16, tiles_z: 16, landform: Landform::Hills, seed: 5, ..GenParams::default() });
+        let cat = massif_assets::load_newest().and_then(Result::ok);
+        if let Some(cat) = &cat {
+            massif_assets::apply_colors(&mut world.registry, cat);
+        }
+        let mut renderer = Renderer3d::new(&device, &queue);
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+        let dim = &world.dims[0];
+        let shape = GridShape::of(dim).unwrap();
+        renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).unwrap();
+        let mut pairs = Pairs::default();
+        let tiles: Vec<TilePos> = dim.ground().positions().collect();
+        for &t in &tiles {
+            let b = build_tile(dim, &world.registry, world.meta.sea_level as f32, world.meta.seed, t, style);
+            renderer.upload_columns(t, &pairs.pack(&b));
+            renderer.upload(t, &b.faces);
+        }
+        renderer.flush();
+        renderer.set_palette(pairs.list());
+        let most = device.limits().max_texture_array_layers as usize;
+        let atlas = cat.as_ref().map_or_else(crate::textures::Atlas::plain, |c| crate::textures::atlas(&world.registry, c, most));
+        renderer.set_look(&atlas, &crate::textures::clouds(cat.as_ref()));
+        let (materials, fluids) = renderer.look_info();
+        let size = [1600u32, 1000];
+        renderer.ensure_target(size);
+        let ground = dim.ground().view(TilePos::new(0, 0)).map_or(70.0, |v| v.top.get(0));
+        let substrate = Substrate { stone: [128; 3], deepslate: [80; 3], whole: false };
+        for game in [false, true] {
+            let mut times = Vec::new();
+            for k in 0..24 {
+                let camera = Camera { target: [10.0, ground as f64 + 1.62, 10.0], yaw: 0.6 + k as f32 * 0.01, pitch: 0.12, distance: 1.0 };
+                let origin = (10, 10);
+                let mut globals = camera.globals(origin, 1.6, 2048.0, if game { Sky::GAME } else { Sky::of(&crate::theme::Palette::DARK) }, size[1]);
+                if game {
+                    globals.look = [cat.is_some() as u8 as f32, 1.0, CLOUDS_Y, materials as f32];
+                    globals.fog = [192.0, 1536.0, globals.fog[2], globals.fog[3]];
+                    globals.rock = [world.registry.well_known.stone.0 as f32, world.registry.well_known.deepslate.0 as f32, fluids[0] as f32, fluids[1] as f32];
+                }
+                let t = Instant::now();
+                renderer.render(&globals, origin, &tiles, dim.min_y, substrate, size);
+                renderer.wait();
+                if k >= 4 {
+                    times.push(t.elapsed().as_secs_f32() * 1000.0);
+                }
+            }
+            times.sort_by(f32::total_cmp);
+            eprintln!("{} look: best {:.1} ms, middle {:.1} ms a frame", if game { "the game's" } else { "the views' own" }, times[0], times[times.len() / 2]);
+        }
+    }
 
     /// A tile sculpted all over, rebuilt (MASSIF_PERF): its columns
     /// composed, then all of it.

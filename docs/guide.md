@@ -583,21 +583,43 @@ size, intensity and rotation are those of **Brush Settings**, which the
   under the cursor; ⌘ (Ctrl) + wheel sizes the brush. In 3D a brush
   sculpts 64 blocks around at most: the work of a dab grows with the cube
   of its size (a larger brush works as 64, and the toolbar says so).
-- **Player** walks in the view as in Minecraft, to see and sculpt the land
-  at a player's height: it comes down where the middle of the view looks,
-  with Minecraft's body (0.6 × 1.8 blocks, its eyes at 1.62) and field of
-  view. A drag in the view, or the arrow keys, look around; a click lends
-  the view the mouse, which then looks around as it moves (Esc gives it
-  back); W A S D walk, Shift (or W twice) runs, Space jumps — held,
-  again on landing —, twice quickly flies (Space up, Q down; twice again, or
-  flying down to the ground, lands), Q sneaks, and a crouched player does
-  not step off an edge; walking into a step of one block jumps onto it
-  (Minecraft's Auto-Jump). Water slows and lets swim, and under it the
-  world turns blue and dim, as in the game; matter sculpted over the
-  player lifts them, and a fall off the map puts them back where they last
-  stood. The buttons sculpt at the crosshair; the click that takes the
-  mouse sculpts nothing. Player off, the orbit camera comes back from the
-  player's eyes.
+- **Player** walks in the view as in Minecraft with Axiom, to see and
+  sculpt the land at a player's height: it comes down where the middle of
+  the view looks, with Minecraft's body (0.6 × 1.8 blocks, its eyes at
+  1.62) and field of view.
+  - It looks like the game: the textures of the game's own blocks (read
+    from the Minecraft installed on the computer, as the Blocks panel
+    does), the game's light — tops full, the sides along z and x darker,
+    the corners blocks close in shaded as its smooth lighting does —, its
+    blue sky with the square sun, its clouds at 192 and its fog, into which
+    far land fades. Deep water darkens its floor a light level a block.
+    The blocks the brush takes are marked in Axiom's lavender, brighter
+    along the edge of what it takes, and the block under the cursor (or the
+    crosshair) is outlined as the game does. Without Minecraft installed,
+    the blocks keep their colours. In Height, Slope, Biome and Relief, the
+    view keeps its own look.
+  - The cursor free, it works as Axiom's editor: the left button looks
+    around (as do the arrow keys), the right one uses the tool under the
+    cursor (Alt + right: its inverse, Dig for Sculpt), the middle one picks
+    the block under the cursor for Paint; Ctrl (⌘) + left turns about the
+    point under the cursor, Ctrl + right moves the view, Ctrl + middle
+    sizes the brush, and the wheel sets the flight speed (10 to 800 %,
+    also in the bar along the bottom, which lists what the buttons and keys
+    do).
+  - A click lends the view the mouse, as in the game: it then looks around
+    as it moves, the crosshair aims, the right button uses the tool
+    (builds) and the left one its inverse (breaks); Esc gives the mouse
+    back. The click that takes the mouse sculpts nothing.
+  - The game's keys: W A S D walk, Ctrl (or W twice) sprints, Space jumps
+    — held, again on landing —, twice quickly flies (Space up, Shift or Q
+    down; twice again, or flying down to the ground, lands), Shift (or Q)
+    sneaks, and a crouched player does not step off an edge; walking into a
+    step of one block jumps onto it (Minecraft's Auto-Jump). Turning or
+    moving the view with Ctrl flies.
+  - Water slows and lets swim, and under it the world turns blue and dim,
+    as in the game; matter sculpted over the player lifts them, and a fall
+    off the map puts them back where they last stood. Player off, the
+    orbit camera comes back from the player's eyes.
 
 The brush is laid on the slope under the cursor, read from the matter
 around smoothed over five blocks, so it glides over the steps of the terrain
@@ -671,7 +693,9 @@ In the 3D view:
 | Double-click | Look at the point under the cursor |
 | Header buttons | Look at the middle of the map view; show the whole map |
 | With Build, Dig, Smooth (3D) | Left sculpts where the cursor points, right inverts; middle drag or Alt + drag turns, Shift + middle drag moves |
-| 3D Sculpt's **Player** | Click the view, then: the mouse looks around, W A S D walk, Space jumps (twice: flies, up), Q sneaks (flying: down), Shift or W twice runs, the buttons sculpt at the crosshair; Esc gives the mouse back |
+| 3D Sculpt's **Player**, cursor free (Axiom's editor) | Left drag looks around; right uses the tool under the cursor (Alt: inverts); middle picks the block; Ctrl (⌘) + left turns about the point, Ctrl + right moves, Ctrl + middle sizes the brush; the wheel sets the flight speed |
+| 3D Sculpt's **Player**, mouse taken (a click) | The mouse looks around; right uses the tool at the crosshair, left inverts; Esc gives the mouse back |
+| 3D Sculpt's **Player**, keys | W A S D walk, Ctrl or W twice sprints, Space jumps (twice: flies, up), Shift or Q sneaks (flying: down) |
 
 ### Moving smoothly
 

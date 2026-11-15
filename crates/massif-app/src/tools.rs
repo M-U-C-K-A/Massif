@@ -305,11 +305,18 @@ pub struct SculptSettings {
     /// Walking in the view as a player would (for the session only).
     #[serde(skip)]
     pub player: bool,
+    /// How fast the player flies, as a share of the game's speed (Axiom's
+    /// flight speed).
+    pub fly_speed: f32,
 }
 
 impl Default for SculptSettings {
     fn default() -> Self {
-        Self { tool: Tool::Build, player: false }
+        Self {
+            tool: Tool::Build,
+            player: false,
+            fly_speed: 1.0,
+        }
     }
 }
 
@@ -321,6 +328,9 @@ impl SculptSettings {
     /// How many blocks a dab of the Sculpt tool pushes the surface by in a
     /// second, at full strength.
     pub const GROWTH: f32 = 16.0;
+
+    /// The slowest and the fastest flight, as shares of the game's.
+    pub const FLY_SPEEDS: (f32, f32) = (0.1, 8.0);
 }
 
 /// Several terrains mixed by a noise for the Paint tool: Massif's noise

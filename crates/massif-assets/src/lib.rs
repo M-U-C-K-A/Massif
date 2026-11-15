@@ -445,10 +445,12 @@ pub fn load(path: &Path, version: &str) -> Result<Catalogue, AssetError> {
     if states.is_empty() {
         return Err(AssetError::NoBlocks);
     }
-    // Textures: the first frame of every block texture, decoded in parallel.
+    // Textures: the first frame of every block texture, decoded in parallel,
+    // and the sky's clouds and sun (`environment/clouds`, `environment/sun`).
+    let sky = |n: &str| n.ends_with("/environment/clouds.png") || n.ends_with("/environment/sun.png");
     let png: Vec<(String, Vec<u8>)> = names
         .iter()
-        .filter(|n| n.starts_with(TEXTURES) && n.contains("/block/") && n.ends_with(".png"))
+        .filter(|n| n.starts_with(TEXTURES) && (n.contains("/block/") || sky(n)) && n.ends_with(".png"))
         .filter_map(|n| Some((n[TEXTURES.len()..n.len() - 4].to_owned(), archive.read(n)?.ok()?)))
         .collect();
     let textures: HashMap<String, Arc<Texture>> = png

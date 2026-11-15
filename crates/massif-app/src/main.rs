@@ -25,6 +25,7 @@ mod picker;
 mod player;
 mod reshape;
 mod sounds;
+mod textures;
 mod startup;
 mod terrain_view;
 mod theme;

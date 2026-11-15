@@ -194,8 +194,11 @@ pub fn sculpt_toolbar(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
         ui.add_space(4.0);
         // Walking in the view, as in Minecraft.
         let player = toggle_chip(ui, Icon::PersonStanding, "Player", tools.sculpt.player).on_hover_text(
-            "Walk in the view as in Minecraft: click it to look around with the mouse (Esc gives it back), \
-             W A S D walk, Space jumps (twice: flies), Q sneaks or goes down, Shift runs; the buttons sculpt at the crosshair",
+            "See and walk the map as in Minecraft with Axiom: the game's blocks, light and sky. The cursor free, \
+             the left button looks around, the right one uses the tool (Alt: its inverse), the middle one picks a block, \
+             Ctrl turns about a point or moves the view, the wheel sets the flight speed. A click takes the mouse \
+             as in the game (Esc gives it back): the right button builds, the left one breaks. W A S D walk, \
+             Space jumps (twice: flies), Shift sneaks or goes down, Ctrl sprints",
         );
         if player.clicked() {
             tools.sculpt.player = !tools.sculpt.player;
@@ -266,7 +269,7 @@ pub fn sculpt_toolbar(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
             ui.label(RichText::new(what).size(12.0)).on_hover_text("Pick it in Terrain or Blocks");
         }
         let hint = match tools.sculpt.tool {
-            _ if tools.sculpt.player => "Drag or the arrows: look · click: take the mouse (Esc: give it back) · W A S D: walk · Space: jump, twice: fly · left: the tool",
+            _ if tools.sculpt.player => "The keys and buttons: along the bottom of the view",
             Tool::PaintTerrain => "Left: paint · right: what the height calls for · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point",
             Tool::Smooth3d => "Left: smooth · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point",
             _ => "Left: add · right: dig · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point",

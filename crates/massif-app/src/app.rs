@@ -2933,6 +2933,9 @@ impl MassifApp {
         // The game's blocks give the world's blocks and terrains their real
         // colours.
         self.blocks.poll();
+        // The player's view draws the game's own textures.
+        self.view3d.catalogue.clone_from(&self.blocks.catalogue);
+        self.sculpt3d.catalogue.clone_from(&self.blocks.catalogue);
         if let Some(cat) = self.blocks.catalogue.clone()
             && self.blocks.applied != Some(self.doc.generation)
         {
@@ -3925,6 +3928,157 @@ mod tests {
         eprintln!("flying: {:?}", h.state().sculpt3d.player());
         shot(&mut h, "walk-river-4");
         h.render().unwrap().save(dir.join("walk-river-ui.png")).unwrap();
+    }
+
+    /// The player's view looks like the game, as Axiom shows it: the game's
+    /// textures, its light, sky and clouds, the blocks the brush takes
+    /// marked, the block looked at outlined. Renders it (MASSIF_SNAPSHOT_DIR)
+    /// on a real map (MASSIF_WALK_WORLD) or a made one, with the game's
+    /// blocks where Minecraft is installed.
+    #[test]
+    fn the_players_view_looks_like_the_game() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let ctx = h.ctx.clone();
+        if let Some(path) = std::env::var_os("MASSIF_WALK_WORLD").map(PathBuf::from) {
+            h.state_mut().jobs.push(Job::open(&ctx, path));
+            while !h.state().jobs.is_empty() {
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            h.state_mut().dialog = None;
+        }
+        if !massif_assets::find_jars().is_empty() {
+            h.state_mut().blocks.load(&ctx, None);
+            let started = std::time::Instant::now();
+            while h.state().blocks.catalogue.is_none() {
+                assert!(started.elapsed().as_secs() < 60, "the blocks did not load: {:?}", h.state().blocks.error);
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        }
+        // A shore near the middle of the map: dry land over the sea, more
+        // land ahead, then the water.
+        let (x, z, top, toward) = {
+            let doc = &h.state().doc;
+            let sea = doc.world.meta.sea_level as f32;
+            let (lo, hi) = doc.dimension().bounds().unwrap();
+            let t = massif_core::coords::TILE_SIZE;
+            let (mx, mz) = ((lo.x + hi.x + 1) * t / 2, (lo.z + hi.z + 1) * t / 2);
+            let dry = |x: i32, z: i32| crate::tools::probe(doc, x, z).filter(|p| p.fluid == massif_core::tile::NO_FLUID);
+            let wet = |x: i32, z: i32| crate::tools::probe(doc, x, z).is_some_and(|p| p.fluid != massif_core::tile::NO_FLUID);
+            let mut spots: Vec<(i32, i32)> = (lo.z * t + 64..(hi.z + 1) * t - 64)
+                .step_by(16)
+                .flat_map(|z| (lo.x * t + 64..(hi.x + 1) * t - 64).step_by(16).map(move |x| (x, z)))
+                .collect();
+            spots.sort_by_key(|&(x, z)| (x - mx).abs() + (z - mz).abs());
+            spots
+                .into_iter()
+                .find_map(|(x, z)| {
+                    let p = dry(x, z).filter(|p| p.height >= sea + 4.0 && p.height <= sea + 24.0)?;
+                    [(1, 0), (-1, 0), (0, 1), (0, -1)]
+                        .into_iter()
+                        .find(|&(dx, dz)| dry(x + dx * 10, z + dz * 10).is_some() && wet(x + dx * 48, z + dz * 48))
+                        .map(|d| (x, z, p.height, d))
+                })
+                .expect("a shore")
+        };
+        eprintln!("shore at {x}, {z}, {top}, looking {toward:?}");
+        {
+            let app = h.state_mut();
+            app.layout.active = 4; // 3D Sculpt
+            app.tools.sculpt.tool = Tool::Build;
+            app.tools.brush.radius = 3.0;
+        }
+        h.run_steps(5);
+        let yaw = (-(toward.0 as f32)).atan2(-(toward.1 as f32));
+        h.state_mut().sculpt3d.camera = crate::view3d::Camera { target: [x as f64 + 0.5, top as f64, z as f64 + 0.5], yaw, pitch: 0.35, distance: 20.0 };
+        h.state_mut().tools.sculpt.player = true;
+        h.run_steps(3);
+        let wait = |h: &mut egui_kittest::Harness<'_, MassifApp>| {
+            let mut frames = 0;
+            while frames < 3 || h.state().sculpt3d.pending() > 0 {
+                h.step();
+                frames += 1;
+                if frames > 3000 {
+                    break;
+                }
+            }
+        };
+        wait(&mut h);
+        let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        let view = areas.into_iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::Sculpt3d)).map(|(_, r)| r).unwrap();
+        let shot = |h: &mut egui_kittest::Harness<'_, MassifApp>, name: &str| {
+            let (w, hgt, rgba) = h.state().sculpt3d.read_back().expect("the 3D view rendered");
+            image::save_buffer(dir.join(format!("{name}.png")), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+        };
+        // The cursor on the land ahead: the brush marks it, the block under
+        // it is outlined.
+        h.state_mut().sculpt3d.camera.pitch = 0.32;
+        h.event(egui::Event::PointerMoved(view.center() + vec2(-60.0, 150.0)));
+        h.run_steps(4);
+        assert!(h.state().sculpt3d.hover().is_some(), "the cursor points at the land");
+        shot(&mut h, "game-shore");
+        h.render().unwrap().save(dir.join("game-shore-ui.png")).unwrap();
+        // The right button uses the tool under the cursor, as in Axiom's
+        // editor.
+        let steps = h.state().doc.history.undo_count();
+        let at = view.center() + vec2(-60.0, 150.0);
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(4);
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+        assert_eq!(h.state().doc.history.undo_count(), steps + 1, "the right button sculpts");
+        assert_eq!(h.state().doc.history.undo_label(), Some("Sculpt"));
+        assert!(h.state().sculpt3d.player().is_some_and(|p| !p.flying), "and the player still walks");
+        // A click takes the mouse, as in the game: the crosshair, the block
+        // it points at outlined.
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+        h.state_mut().sculpt3d.camera.pitch = 0.55;
+        h.run_steps(3);
+        assert!(h.state().sculpt3d.hover().is_some(), "the crosshair points at the land");
+        h.render().unwrap().save(dir.join("game-crosshair-ui.png")).unwrap();
+        h.key_press(Key::Escape);
+        h.step();
+        // Up in the air, toward the horizon: the land fading into the fog,
+        // the clouds.
+        let p = h.state().sculpt3d.player().unwrap();
+        h.state_mut().sculpt3d.place_player([p.feet[0], p.feet[1] + 70.0, p.feet[2]], true);
+        h.state_mut().sculpt3d.camera.pitch = 0.12;
+        h.event(egui::Event::PointerMoved(view.left_top() + vec2(20.0, 20.0)));
+        h.run_steps(4);
+        wait(&mut h);
+        shot(&mut h, "game-high");
+        h.state_mut().sculpt3d.camera.pitch = -0.35;
+        h.run_steps(4);
+        shot(&mut h, "game-sky");
+        // Over the sea: deep water darker, as the game's light fades down
+        // in it.
+        let sea = {
+            let doc = &h.state().doc;
+            let (lo, hi) = doc.dimension().bounds().unwrap();
+            let t = massif_core::coords::TILE_SIZE;
+            let (mx, mz) = ((lo.x + hi.x + 1) * t / 2, (lo.z + hi.z + 1) * t / 2);
+            let mut spots: Vec<(i32, i32)> = (lo.z * t..(hi.z + 1) * t).step_by(32).flat_map(|z| (lo.x * t..(hi.x + 1) * t).step_by(32).map(move |x| (x, z))).collect();
+            spots.sort_by_key(|&(x, z)| (x - mx).abs() + (z - mz).abs());
+            spots.into_iter().find_map(|(x, z)| {
+                let p = crate::tools::probe(doc, x, z)?;
+                (p.fluid != massif_core::tile::NO_FLUID && p.fluid as f32 - p.height > 12.0).then_some((x, z, p.fluid))
+            })
+        };
+        if let Some((x, z, level)) = sea {
+            h.state_mut().sculpt3d.place_player([x as f64 + 0.5, level as f64 + 14.0, z as f64 + 0.5], true);
+            h.state_mut().sculpt3d.camera.pitch = 0.45;
+            h.run_steps(4);
+            wait(&mut h);
+            shot(&mut h, "game-sea");
+        }
     }
 
     /// Developer mode offers the Developer panel: the frames, the memory

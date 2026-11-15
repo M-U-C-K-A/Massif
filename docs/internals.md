@@ -124,6 +124,22 @@ On a mountainous 100 MB WorldPainter world of 6,144 × 6,144 blocks, the whole
 map is built in about a second and takes 176 MB of GPU memory; meshing it
 instead would have taken some 58 million faces.
 
+The player's view in 3D Sculpt draws the game's look (`textures.rs`). Every
+face and every traced column also says what it is made of: a *material*,
+the registry's block index, or after them an entry of an object's palette;
+a column's colour pair names its top block and its soil, and the free top
+byte of a packed column holds the depth of water over it. From the client
+jar the Blocks panel reads, an atlas gathers the textures of every material
+(top, side and bottom, a log's axis) in one 16 × 16 array with its levels
+of detail, and the shaders sample it by the face's direction and height
+(the rock under the soil turns to deepslate under y 0). They light it as
+the game does — its shade per face in its gamma, the smooth lighting's
+corners from the eight columns around, a light level a block under water —
+and draw its sky, square sun, clouds (the jar's `clouds.png`, four blocks
+thick at y 192, crossed cell by cell) and fog. The brush's blocks and the
+block looked at are marked in the shaders too, block by block. The game's
+look costs about 0.4 ms a frame at 1,600 × 1,000 on an M4 (2.3 ms → 2.7).
+
 Every block of a 60,000 × 50,000 map would take some 13 GB of textures.
 Past 400 pages (about 1.9 GB), the view keeps a column every 2, 4, 8 or 16
 blocks — the coarsest that fits — and still draws the whole map: each of

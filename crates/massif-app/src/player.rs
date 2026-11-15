@@ -134,6 +134,9 @@ pub struct Player {
     /// Walking into a step of one block jumps onto it (Minecraft's
     /// Auto-Jump).
     pub auto_jump: bool,
+    /// How fast flying goes, as a share of the game's (Axiom's flight
+    /// speed).
+    pub fly_speed: f64,
     /// The height of the eyes over the feet, easing as the body crouches.
     eye: f64,
     /// Seconds since Space, and W, last went down.
@@ -154,6 +157,7 @@ impl Player {
             swimming: false,
             running: false,
             auto_jump: true,
+            fly_speed: 1.0,
             eye: EYE,
             since_jump: f64::INFINITY,
             since_forward: f64::INFINITY,
@@ -251,7 +255,7 @@ impl Player {
             wish = [wish[0] / len, wish[1] / len];
         }
         let speed = if self.flying {
-            if running { FLY_RUN } else { FLY }
+            self.fly_speed * if running { FLY_RUN } else { FLY }
         } else if self.sneaking {
             SNEAK
         } else if self.swimming {
@@ -276,7 +280,7 @@ impl Player {
 
         // Up and down.
         if self.flying {
-            let want = (keys.jump as i32 - keys.sneak as i32) as f64 * FLY_UP;
+            let want = (keys.jump as i32 - keys.sneak as i32) as f64 * FLY_UP * self.fly_speed.max(1.0);
             self.velocity[1] += (want - self.velocity[1]) * (1.0 - (-10.0 * dt).exp());
         } else if self.swimming {
             let want = if keys.jump { 3.4 } else { -2.0 };
@@ -553,6 +557,32 @@ mod tests {
         let z = p.feet[2];
         run(&mut p, &mut w, Keys { run: true, ..NORTH }, 1.0);
         assert!(z - p.feet[2] > 15.0, "{:?}", p.feet);
+    }
+
+    #[test]
+    fn flight_speed_scales_flying_only() {
+        let mut w = World::default();
+        let tap = Keys { jump: true, jump_pressed: true, ..Keys::default() };
+        let mut flown = Vec::new();
+        for speed in [1.0, 2.0] {
+            let mut p = Player::new([0.5, 64.0, 0.5]);
+            p.fly_speed = speed;
+            run(&mut p, &mut w, Keys::default(), 0.1);
+            run(&mut p, &mut w, tap, 0.1);
+            run(&mut p, &mut w, Keys::default(), 0.1);
+            run(&mut p, &mut w, tap, 0.05);
+            assert!(p.flying);
+            let z = p.feet[2];
+            run(&mut p, &mut w, NORTH, 1.0);
+            flown.push(z - p.feet[2]);
+        }
+        assert!((flown[1] / flown[0] - 2.0).abs() < 0.1, "{flown:?}");
+        // Walking goes as fast whatever the flight speed.
+        let mut p = Player::new([0.5, 64.0, 0.5]);
+        p.fly_speed = 4.0;
+        run(&mut p, &mut w, Keys::default(), 0.5);
+        run(&mut p, &mut w, NORTH, 1.0);
+        assert!((3.6..4.4).contains(&(0.5 - p.feet[2])), "{:?}", p.feet);
     }
 
     #[test]
