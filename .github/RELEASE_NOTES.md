@@ -2,7 +2,7 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 
 ## New in 0.4.0
 
-**Walk your map as a player.** **Player**, in 3D Sculpt, comes down into the map where the view looks, with Minecraft's body, eyes and field of view: the mouse looks around (Esc gives it back), W A S D walk, Space jumps — twice quickly, flies —, Q sneaks or goes down, Shift runs, and walking into a step of one block jumps onto it. Water slows you and lets you swim; under it the world turns blue and dim. The buttons sculpt at the crosshair.
+**Walk your map as a player.** **Player**, in 3D Sculpt, comes down into the map where the view looks, with Minecraft's body, eyes and field of view: a drag or the arrow keys look around, a click lends it the mouse as in the game (Esc gives it back), W A S D walk, Space jumps — twice quickly, flies —, Q sneaks or goes down, Shift runs, and walking into a step of one block jumps onto it. Water slows you and lets you swim; under it the world turns blue and dim. The buttons sculpt at the crosshair.
 
 **3D Sculpt, grown up.** Sculpt, Smooth and Paint share the brush of every tool (custom images too, as set in Brush Settings); a stroke adds a layer at a time and works toward the eye at cliffs and edges. Matter pushed out keeps the blocks it came from — a sand wall gives a sand ledge, the ground under it keeps its own —, Paint repaints sculpted matter, Smooth rounds the land off without wearing it down. Brushes sculpt up to 64 blocks around in 3D.
 
@@ -16,9 +16,9 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 
 **A quieter interface.** Neutral greys and one accent, grouped controls, pill buttons, slim sliders, tool icons drawn for what they do to the land, cards with short animations, messages at the bottom right, a help page (F1). The home screen shows night scenes, dithered in a palette of their own.
 
-**The 3D view up close.** Rivers stepping down show their falls, every block reads by its own shade and edges, deep water reflects the sky.
+**The 3D view up close.** Rivers stepping down show their falls, every block reads by its own shade and edges, deep water reflects the sky; in Slope, Height and Biome, a column's walls take its colour.
 
-**A new README** with animated figures, and a guide, a page on terrain graphs and one on how Massif works, in `docs/`.
+**A new README**: a banner of the home screen's night scenes, animated figures, and a guide, a page on terrain graphs and one on how Massif works, in `docs/`.
 
 **Files.** The map is a `.massif` file's icon in the Finder and in Windows Explorer; tall WorldPainter worlds keep their height; sculpted matter keeps its blocks in the file (older files still open).
 
