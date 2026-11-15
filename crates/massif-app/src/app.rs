@@ -2112,51 +2112,15 @@ impl MassifApp {
                 }
             })
             .response
-            .on_hover_text("Area commands · Shift: close button · drag the corner to split");
+            .on_hover_text("Area commands · Shift: close button · drag a corner into the area to split it");
         });
 
-        // ---- corner: drag it into the area to split ----------------------------
-        // Nothing shows there until the pointer is on it: then the corner
-        // lights up, with a cross for a cursor.
-        let corner = Rect::from_min_size(pos2(rect.right() - 10.0, rect.top()), vec2(10.0, 10.0));
-        let handle = ui.interact(corner, Id::unique(("area corner", id)), Sense::drag());
-        let hot = handle.hovered() || handle.dragged();
-        if hot {
-            let r = theme::CARD_RADIUS as f32;
-            let c = pos2(rect.right() - r, rect.top() + r);
-            let arc: Vec<egui::Pos2> = (0..=8).map(|k| {
-                let a = -std::f32::consts::FRAC_PI_2 + k as f32 / 8.0 * std::f32::consts::FRAC_PI_2;
-                c + vec2(a.cos(), a.sin()) * (r - 1.0)
-            }).collect();
-            painter.add(egui::Shape::line(arc, Stroke::new(2.0, pal.accent)));
-            ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
-        }
-        if handle.dragged()
-            && let (Some(origin), Some(p)) = (handle.interact_pointer_pos().map(|_| corner.center()), ui.input(|i| i.pointer.interact_pos()))
-        {
-            let d = p - origin;
-            let fg = ui.ctx().layer_painter(LayerId::new(Order::Foreground, Id::unique(("corner preview", id))));
-            if d.length() > 12.0 && rect.contains(p) {
-                let line = if d.x.abs() > d.y.abs() {
-                    [pos2(p.x, rect.top()), pos2(p.x, rect.bottom())]
-                } else {
-                    [pos2(rect.left(), p.y), pos2(rect.right(), p.y)]
-                };
-                fg.line_segment(line, Stroke::new(2.0, pal.accent));
-            }
-        }
-        if handle.drag_stopped()
-            && let Some(p) = ui.input(|i| i.pointer.interact_pos())
-        {
-            let d = p - corner.center();
-            if d.length() > 12.0 && rect.contains(p) {
-                if d.x.abs() > d.y.abs() {
-                    // Leftward: the new area on the right, where the corner was.
-                    self.layout.split_at(id, Dir::Row, false, (p.x - rect.left()) / rect.width());
-                } else {
-                    // Downward: the new area on top.
-                    self.layout.split_at(id, Dir::Column, true, (p.y - rect.top()) / rect.height());
-                }
+        // ---- corners: drag one into the area to split it ----------------------
+        // The top ones over the header; the bottom ones go over the content,
+        // after it.
+        for corner in [Corner::TopLeft, Corner::TopRight] {
+            if let Some((dir, first, at)) = corner_split(ui, &painter, rect, id, corner) {
+                self.layout.split_at(id, dir, first, at);
             }
         }
 
@@ -2331,6 +2295,13 @@ impl MassifApp {
         // its hairline over that.
         round_off(&painter, rect, theme::CARD_RADIUS as f32, pal.app_bg);
         painter.rect_stroke(rect, theme::CARD_RADIUS, Stroke::new(1.0, pal.border), StrokeKind::Inside);
+        // The bottom corners, over what the editor drew (a map or a 3D view
+        // takes every drag there otherwise).
+        for corner in [Corner::BottomLeft, Corner::BottomRight] {
+            if let Some((dir, first, at)) = corner_split(ui, &painter, rect, id, corner) {
+                self.layout.split_at(id, dir, first, at);
+            }
+        }
     }
 
     // ------------------------------------------------------------ dialogs --
@@ -3327,6 +3298,88 @@ fn zone_of(r: Rect, p: egui::Pos2) -> Zone {
         .min_by(|a, b| a.0.total_cmp(&b.0))
         .map(|e| e.1)
         .unwrap_or(Zone::Center)
+}
+
+/// A corner of an area.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Corner {
+    TopLeft,
+    TopRight,
+    BottomRight,
+    BottomLeft,
+}
+
+impl Corner {
+    fn left(self) -> bool {
+        matches!(self, Corner::TopLeft | Corner::BottomLeft)
+    }
+
+    fn top(self) -> bool {
+        matches!(self, Corner::TopLeft | Corner::TopRight)
+    }
+}
+
+/// A corner of the area `rect`, as in Blender: dragged into the area, it
+/// splits it where it is let go, the new area on the corner's side (across:
+/// left or right; up or down: above or below). Nothing shows there until
+/// the pointer is on it: then the corner lights up, with a cross for a
+/// cursor, and while dragging, the line of the split and the new area's side.
+/// Returns the split asked for: its direction, whether the new area comes
+/// first, where (from 0 to 1).
+fn corner_split(ui: &Ui, painter: &egui::Painter, rect: Rect, id: AreaId, corner: Corner) -> Option<(Dir, bool, f32)> {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    const SIDE: f32 = 10.0;
+    let pal = Palette::of(ui);
+    let zone = Rect::from_min_size(
+        pos2(if corner.left() { rect.left() } else { rect.right() - SIDE }, if corner.top() { rect.top() } else { rect.bottom() - SIDE }),
+        vec2(SIDE, SIDE),
+    );
+    let handle = ui.interact(zone, Id::unique(("area corner", id, corner as u8)), Sense::drag());
+    if handle.hovered() || handle.dragged() {
+        // The quarter of the card's rounded corner.
+        let r = theme::CARD_RADIUS as f32;
+        let c = pos2(if corner.left() { rect.left() + r } else { rect.right() - r }, if corner.top() { rect.top() + r } else { rect.bottom() - r });
+        let start = match corner {
+            Corner::TopRight => -FRAC_PI_2,
+            Corner::BottomRight => 0.0,
+            Corner::BottomLeft => FRAC_PI_2,
+            Corner::TopLeft => PI,
+        };
+        let arc: Vec<egui::Pos2> = (0..=8).map(|k| c + egui::Vec2::angled(start + k as f32 / 8.0 * FRAC_PI_2) * (r - 1.0)).collect();
+        painter.add(egui::Shape::line(arc, Stroke::new(2.0, pal.accent)));
+        ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+    }
+    let split = |p: egui::Pos2| -> Option<(Dir, bool, f32)> {
+        let d = p - zone.center();
+        if d.length() <= 12.0 || !rect.contains(p) {
+            return None;
+        }
+        Some(if d.x.abs() > d.y.abs() {
+            (Dir::Row, corner.left(), (p.x - rect.left()) / rect.width())
+        } else {
+            (Dir::Column, corner.top(), (p.y - rect.top()) / rect.height())
+        })
+    };
+    let pointer = ui.input(|i| i.pointer.interact_pos());
+    if handle.dragged()
+        && let Some(p) = pointer
+        && let Some((dir, first, _)) = split(p)
+    {
+        let fg = ui.ctx().layer_painter(LayerId::new(Order::Foreground, Id::unique(("corner preview", id))));
+        let (line, side) = match dir {
+            Dir::Row => (
+                [pos2(p.x, rect.top()), pos2(p.x, rect.bottom())],
+                if first { Rect::from_min_max(rect.min, pos2(p.x, rect.bottom())) } else { Rect::from_min_max(pos2(p.x, rect.top()), rect.max) },
+            ),
+            Dir::Column => (
+                [pos2(rect.left(), p.y), pos2(rect.right(), p.y)],
+                if first { Rect::from_min_max(rect.min, pos2(rect.right(), p.y)) } else { Rect::from_min_max(pos2(rect.left(), p.y), rect.max) },
+            ),
+        };
+        fg.rect_filled(side, 0, pal.accent.gamma_multiply(0.08));
+        fg.line_segment(line, Stroke::new(2.0, pal.accent));
+    }
+    if handle.drag_stopped() { pointer.and_then(split) } else { None }
 }
 
 /// Paint `outside` over the corners of `rect` past a rounding of `radius`:
@@ -7710,6 +7763,92 @@ mod tests {
         h.get_by_label_contains("Reset").click();
         h.run_steps(3);
         assert_eq!(h.state().layout.current().root.count(), first);
+    }
+
+    /// Every corner of an area splits it, the new area on the corner's
+    /// side: across from a left corner, on the left; up from a bottom
+    /// corner, below; and so on.
+    #[test]
+    fn every_corner_splits_the_area() {
+        if std::env::var_os("MASSIF_SNAPSHOT_DIR").is_none() {
+            return;
+        }
+        let button = |pressed, pos| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        // Corner, where the drag ends (fractions of the area), and on which
+        // side of the map the new area should be: (left, above).
+        let cases: [(Corner, [f32; 2], (Option<bool>, Option<bool>)); 6] = [
+            (Corner::TopLeft, [0.4, 0.05], (Some(true), None)),
+            (Corner::TopLeft, [0.02, 0.5], (None, Some(true))),
+            (Corner::BottomLeft, [0.4, 0.97], (Some(true), None)),
+            (Corner::BottomLeft, [0.03, 0.4], (None, Some(false))),
+            (Corner::BottomRight, [0.6, 0.95], (Some(false), None)),
+            (Corner::BottomRight, [0.97, 0.6], (None, Some(false))),
+        ];
+        for (corner, to, (left, above)) in cases {
+            let mut h = harness(ThemeChoice::Dark);
+            h.state_mut().layout.active = 6; // Minimal: tools | map
+            h.run_steps(5);
+            let rect = map_rect(h.state(), &h.ctx);
+            let before = h.state().layout.current().root.count();
+            let from = pos2(if corner.left() { rect.left() + 4.0 } else { rect.right() - 4.0 }, if corner.top() { rect.top() + 4.0 } else { rect.bottom() - 4.0 });
+            let to = rect.min + vec2(to[0] * rect.width(), to[1] * rect.height());
+            h.event(egui::Event::PointerMoved(from));
+            h.step();
+            h.event(button(true, from));
+            h.step();
+            for i in 1..=10 {
+                h.event(egui::Event::PointerMoved(from + (to - from) * (i as f32 / 10.0)));
+                h.step();
+            }
+            h.event(button(false, to));
+            h.run_steps(5);
+            assert_eq!(h.state().layout.current().root.count(), before + 1, "{corner:?} to {to:?}");
+            let new = h.state().layout.current().root.max_id_pub().unwrap();
+            assert_eq!(h.state().layout.current().root.editor_of(new), Some(EditorKind::Empty));
+            let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+            let new_rect = areas.iter().find(|(id, _)| *id == new).map(|(_, r)| *r).unwrap();
+            let map = map_rect(h.state(), &h.ctx);
+            if let Some(left) = left {
+                assert_eq!(new_rect.center().x < map.center().x, left, "{corner:?}: the new area on the {} side", if left { "left" } else { "right" });
+            }
+            if let Some(above) = above {
+                assert_eq!(new_rect.center().y < map.center().y, above, "{corner:?}: the new area {}", if above { "above" } else { "below" });
+            }
+        }
+    }
+
+    /// A corner dragged, half way, for the eye (MASSIF_SNAPSHOT_DIR): the
+    /// bottom-left corner of the map lit, the split's line and the side the
+    /// new area opens on.
+    #[test]
+    fn a_corner_dragged_render() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.state_mut().layout.active = 6; // Minimal: tools | map
+        h.run_steps(5);
+        let rect = map_rect(h.state(), &h.ctx);
+        let from = pos2(rect.left() + 4.0, rect.bottom() - 4.0);
+        let to = rect.min + vec2(0.35 * rect.width(), 0.9 * rect.height());
+        h.event(egui::Event::PointerMoved(from));
+        h.step();
+        h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        for i in 1..=10 {
+            h.event(egui::Event::PointerMoved(from + (to - from) * (i as f32 / 10.0)));
+            h.step();
+        }
+        let image = h.render().expect("rendered");
+        let crop = image::imageops::crop_imm(&image, rect.left() as u32, (rect.bottom() - 260.0) as u32, 640, 260).to_image();
+        crop.save(dir.join("corner-drag.png")).unwrap();
+        h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
     }
 
     /// Dragging the corner of an area into it splits it there.

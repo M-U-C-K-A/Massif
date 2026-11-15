@@ -58,7 +58,7 @@ brushes, terrain and biome palettes, levels or world info.
   area holds the same page.
 - The ⋮ menu of an area splits it, joins it with its neighbour, maximises it
   (Ctrl+Space) or closes it. Hold Shift for a one-click close button.
-- Drag the top-right corner of an area into it to split it where you let go.
+- Drag any corner of an area into it to split it where you let go: the new area opens on that corner's side (across: left or right; up or down: above or below).
 - Drag an area by its title onto another to move it, or onto its centre to
   swap the two. Drag the gaps between areas to resize them.
 - The app has two sides, switched at the top left: **World**, the map
