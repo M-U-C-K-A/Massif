@@ -1,6 +1,6 @@
 Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, with a node-based terrain generator in the spirit of Gaea, written in Rust.
 
-## New in 0.4.2
+## New in 0.5.0
 
 **Ores, as Minecraft lays them.** The export now lays ores in the rock — Minecraft adds none to the map's finished chunks — following the game's own veins and heights since 1.18, or those of older versions. **Edit ▸ Ores** shows the map cut through with the ores exactly where they will be and a candle for each band of each ore: drag its ends, its body or its side to move the heights where veins start, where they are the most common and how large they are; beside it, the ore expected at each height in blocks, on a log scale or as a share of the ground. Saved with the map; the export can leave them out.
 
@@ -13,6 +13,8 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 **Fixed.** The height limits of the brush options are in whole blocks, as the game has the land: a column at 63.2 is at 63 (maps from WorldPainter keep fractions of blocks), and the height tools stop on a sharp limit — flattening toward 63.8 the land at or below 63 brings it to 63, no longer 63.1. A turned square or image brush acts on all of its shape, its corners too. The strength drawn under the brush is lighter, keeps to the outline block by block close up, no longer draws a diamond inside square brushes, and can be switched off (Brush Settings ▸ Strength on the map). The line under the map gives the height in whole blocks and the biome under the pointer.
 
 **Height limits, redrawn.** Brush Settings shows the heights of the map itself, as bars from its lowest to its highest land with the sea marked, under the band the brush acts in: drag its ends, or set them in the fields below, between or outside them; it says how much of the map the band covers.
+
+**Split from any corner.** Every corner of an area splits it when dragged into it, not only the top right one: the new area opens on that corner's side, and while dragging, the line of the split and the side it opens on show.
 
 **A big map stays smooth.** The 3D view builds a whole map away from the frames, on threads of its own, and puts what it built on the graphics card a little at a time: on a map of 44,544 × 33,536 blocks, a frame went from 29 ms of work to 11 ms while it builds.
 
