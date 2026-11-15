@@ -175,6 +175,8 @@ pub struct Home {
     /// The picture of the backdrop, chosen at random when Massif opens.
     choice: usize,
     picture: Option<Picture>,
+    /// Whether the picture's dither moves on (the settings).
+    pub animate: bool,
     logo: Option<TextureHandle>,
 }
 
@@ -188,6 +190,7 @@ impl Home {
             backdrop: None,
             choice: (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos()) as usize) / 7,
             picture: None,
+            animate: true,
             logo: None,
         }
     }
@@ -649,9 +652,11 @@ impl Home {
         }
         if let Some(b) = &self.backdrop {
             let t = ui.input(|i| i.time);
-            let k = (t / FRAME_SECS) as usize % b.frames.len();
+            let k = if self.animate { (t / FRAME_SECS) as usize % b.frames.len() } else { 0 };
             ui.painter_at(rect).image(b.frames[k].id(), shown, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(FRAME_SECS - t % FRAME_SECS + 0.01));
+            if self.animate {
+                ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(FRAME_SECS - t % FRAME_SECS + 0.01));
+            }
         }
     }
 }

@@ -387,6 +387,7 @@ pub fn checkbox(ui: &mut Ui, on: &mut bool, text: impl Into<egui::WidgetText>) -
     if response.clicked() {
         *on = !*on;
         response.mark_changed();
+        crate::sounds::play(crate::sounds::Cue::Toggle);
     }
     let label = galley.as_ref().map(|g| g.text().to_owned()).unwrap_or_default();
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *on, &label));
@@ -403,6 +404,33 @@ pub fn checkbox(ui: &mut Ui, on: &mut bool, text: impl Into<egui::WidgetText>) -
         }
         if let Some(galley) = galley {
             painter.galley(pos2(square.right() + gap, rect.center().y - galley.size().y / 2.0), galley, ui.visuals().text_color());
+        }
+    }
+    response
+}
+
+/// A switch: on or off, its knob sliding over, the accent when on.
+pub fn switch(ui: &mut Ui, on: &mut bool) -> Response {
+    let pal = Palette::of(ui);
+    let (rect, mut response) = ui.allocate_exact_size(vec2(34.0, 20.0), Sense::click());
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+        crate::sounds::play(crate::sounds::Cue::Toggle);
+    }
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Switch, ui.is_enabled(), *on, ""));
+    if ui.is_rect_visible(rect) {
+        let t = ui.ctx().animate_bool_with_time(response.id.with("on"), *on, 0.12);
+        let off = if pal.dark { theme::mix(pal.well(), pal.text, 0.18) } else { theme::mix(Color32::WHITE, pal.text, 0.16) };
+        let track = theme::mix(off, pal.accent, t);
+        ui.painter().rect_filled(rect, theme::PILL, track);
+        let r = rect.height() / 2.0 - 2.5;
+        let x = egui::lerp(rect.left() + 2.5 + r..=rect.right() - 2.5 - r, t);
+        let knob = pos2(x, rect.center().y);
+        ui.painter().circle_filled(knob + vec2(0.0, 0.8), r, Color32::from_black_alpha(50));
+        ui.painter().circle_filled(knob, r, Color32::WHITE);
+        if response.hovered() {
+            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
         }
     }
     response
@@ -632,6 +660,7 @@ pub fn button_group(ui: &mut Ui, id: &str, labels: &[&str], on: &[bool]) -> Opti
         painter.galley_with_override_text_color(seg.center() - galley.size() / 2.0, galley, ink);
         if r.clicked() {
             clicked = Some(k);
+            crate::sounds::play(crate::sounds::Cue::Select);
         }
         x += w;
     }

@@ -135,6 +135,27 @@ over the areas, with a **Cancel** for long tasks.
 **Help ▸ Massif Help** (F1) opens the help: every part of Massif, topic by
 topic, with a search, and the keyboard shortcuts.
 
+**Settings** (⌘,) has four sections, in a window of their own:
+
+- **Appearance**: the theme, the accent colour, the home screen's picture
+  moving or still.
+- **Sounds**: little sounds, synthesised as they play — soft mallets,
+  clicks and air, as [Cuelume](https://cuelume.dev/) makes them, so there
+  is no sound file in the app: three notes rising when a long task is done,
+  two when the map is saved, a low pair when something fails, one wavering
+  when something is refused or stopped; with **All**, soft ticks for
+  choices, switches, windows opening and closing, workspaces. **Off**,
+  **Essential** (what ends and what fails) or **All**, a volume, and each
+  sound to hear.
+- **Notifications**: the system's own (the Notification Centre, a toast on
+  Windows, the desktop's on Linux) when a task of more than two seconds ends
+  — an export, an import, a conversion, a pass over the whole map —:
+  never, while Massif is not in front, or always; and a button to try it.
+- **Memory**: a limit (automatic, 1, 2, 4 or 8 GB) for what is kept decoded
+  — three fifths for the map's tiles, measured at the size they take, the
+  rest for the column data and images of the map view —, beyond which what
+  was used least is put away, compressed; and what is in use now.
+
 ### Download
 
 Builds for Windows, macOS (Apple silicon and Intel) and Linux are on the

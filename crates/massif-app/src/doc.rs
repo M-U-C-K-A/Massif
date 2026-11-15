@@ -10,7 +10,7 @@ use std::path::PathBuf;
 /// Decoded tiles kept per level before the least recently edited ones are
 /// compressed again. About 100 KiB each, so this bounds memory near 200 MiB
 /// per level however large the map is.
-const MAX_HOT_TILES: usize = 2048;
+pub const MAX_HOT_TILES: usize = 2048;
 
 pub struct Document {
     pub world: World,
@@ -29,6 +29,8 @@ pub struct Document {
     /// The terrain the map was filled with, as of a revision (see
     /// [`massif_core::auto::base_terrain`]).
     auto_base: std::sync::Mutex<Option<(u64, Option<massif_core::TerrainId>)>>,
+    /// Tiles each level keeps decoded (the memory limit of the settings).
+    pub max_hot_tiles: usize,
 }
 
 impl Document {
@@ -43,6 +45,7 @@ impl Document {
             saved_revision: 0,
             generation,
             auto_base: std::sync::Mutex::new(None),
+            max_hot_tiles: MAX_HOT_TILES,
         }
     }
 
@@ -148,7 +151,7 @@ impl Document {
             self.mark_changed();
         }
         let dim = self.dim;
-        self.world.dims[dim].trim(MAX_HOT_TILES);
+        self.world.dims[dim].trim(self.max_hot_tiles);
     }
 
     /// Add a slab level above the stack and make it active.

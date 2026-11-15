@@ -839,6 +839,9 @@ pub struct GraphEditor {
     building_over: bool,
     /// Asked from the viewport: start the graph from the open map.
     want_map: bool,
+    /// A conversion just ended: whether it worked, what it says, how long
+    /// it took (seconds) — for the app's sounds and notices.
+    pub done: Option<(bool, String, f32)>,
 }
 
 impl Default for GraphEditor {
@@ -887,6 +890,7 @@ impl Default for GraphEditor {
             over: None,
             building_over: false,
             want_map: false,
+            done: None,
         }
     }
 }
@@ -1442,13 +1446,16 @@ impl GraphEditor {
                     if overlay.is_some() {
                         layers_note.push_str(" · map ground kept");
                     }
-                    feedback = Some(format!(
-                        "Converted at {} × {} in {took:.1} s{blocks_note}{layers_note}",
-                        built.extent.n, built.extent.n
-                    ));
+                    let message = format!("Converted at {} × {} in {took:.1} s{blocks_note}{layers_note}", built.extent.n, built.extent.n);
+                    self.done = Some((true, message.clone(), took));
+                    feedback = Some(message);
                 }
                 Err(GraphError::Cancelled) => feedback = Some("Conversion cancelled".to_owned()),
-                Err(e) => feedback = Some(format!("The graph cannot be built: {e}")),
+                Err(e) => {
+                    let message = format!("The graph cannot be built: {e}");
+                    self.done = Some((false, message.clone(), 0.0));
+                    feedback = Some(message);
+                }
             }
         }
 

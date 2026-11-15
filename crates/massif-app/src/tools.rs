@@ -636,6 +636,9 @@ impl ToolState {
         if tool == Tool::Eyedropper && self.tool != Tool::Eyedropper {
             self.previous = self.tool;
         }
+        if tool != self.tool {
+            crate::sounds::play(crate::sounds::Cue::Select);
+        }
         self.tool = tool;
     }
 

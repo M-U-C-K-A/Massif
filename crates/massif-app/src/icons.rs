@@ -120,7 +120,7 @@ pub fn paint(painter: &Painter, rect: Rect, tool: Tool, color: Color32) {
         painter,
         origin: rect.center() - egui::vec2(12.0 * scale, 12.0 * scale),
         scale,
-        stroke: Stroke::new((1.7 * scale).max(1.0), color),
+        stroke: Stroke::new((2.0 * scale).max(1.25), color),
         color,
     };
     let bump = |x: f32, at: f32, width: f32, height: f32, base: f32| base - height * (-((x - at) / width).powi(2)).exp();

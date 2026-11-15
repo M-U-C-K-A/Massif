@@ -9,6 +9,7 @@ use crate::layout::{AreaId, Dir, EditorKind, Layout, Node, Zone};
 use crate::map_render::MapCache;
 use crate::map_view::{MapInput, MapView};
 use crate::panels;
+use crate::sounds::Cue;
 use crate::theme::{self, Icon, Palette, RichTextExt};
 use crate::tools::{Tool, ToolState};
 use crate::view3d::View3d;
@@ -50,6 +51,25 @@ struct Settings {
     /// The accent colour: what is chosen, the main buttons, the art of the
     /// home screen.
     accent: [u8; 3],
+    /// Which sounds play, and how loud (0–1).
+    sounds: crate::sounds::SoundLevel,
+    volume: f32,
+    /// When the system tells that a long task ended.
+    notify: crate::notify::NotifyWhen,
+    /// Memory for what is kept decoded (the map's tiles and its images),
+    /// in megabytes; 0: as much as it takes.
+    memory_mb: u32,
+    /// The home screen's picture moves (its dither, about once a second).
+    animate_backdrop: bool,
+}
+
+/// A section of the settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrefsSection {
+    Appearance,
+    Sounds,
+    Notifications,
+    Memory,
 }
 
 impl Default for Settings {
@@ -61,6 +81,11 @@ impl Default for Settings {
             light: crate::map_render::DEFAULT_LIGHT,
             minecraft_jar: None,
             accent: theme::DEFAULT_ACCENT,
+            sounds: crate::sounds::SoundLevel::Essential,
+            volume: 0.6,
+            notify: crate::notify::NotifyWhen::Background,
+            memory_mb: 0,
+            animate_backdrop: true,
         }
     }
 }
@@ -132,8 +157,8 @@ enum Dialog {
     Export(ExportForm),
     Unsaved(Pending),
     About,
-    /// The theme and the accent colour.
-    Preferences,
+    /// The settings, at a section.
+    Preferences(PrefsSection),
     /// The rules of the automatic biomes (false) or paint (true).
     AutoRules(bool),
     /// What an import brought in, with the file's thumbnail.
@@ -184,6 +209,10 @@ pub struct MassifApp {
     active_map: Option<AreaId>,
     jobs: Vec<Job>,
     dialog: Option<Dialog>,
+    /// Whether a dialog was open last frame (for its sound).
+    dialog_was_open: bool,
+    /// When the memory limit was last applied (seconds).
+    memory_checked: f64,
     after_save: Option<Pending>,
     status: Option<Status>,
     feedback: Option<String>,
@@ -351,7 +380,7 @@ impl MassifApp {
                 self.home = None;
                 self.after_create = None;
             }
-            HomeAction::Settings => self.dialog = Some(Dialog::Preferences),
+            HomeAction::Settings => self.dialog = Some(Dialog::Preferences(PrefsSection::Appearance)),
             HomeAction::Dropped(path) => {
                 let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
                 match ext.as_str() {
@@ -373,8 +402,10 @@ impl MassifApp {
         let note = self.status.as_ref().filter(|s| now - s.at < 8.0).map(|s| (s.text.clone(), s.error));
         let recent = self.settings.recent.clone();
         let mut action = None;
+        let animate = self.settings.animate_backdrop;
         egui::CentralPanel::default().frame(egui::Frame::new()).show(ui, |ui| {
             if let Some(home) = &mut self.home {
+                home.animate = animate;
                 action = home.ui(ui, &recent, note.as_ref().map(|(t, e)| (t.as_str(), *e)));
             }
         });
@@ -459,6 +490,8 @@ impl MassifApp {
             active_map: None,
             jobs: Vec::new(),
             dialog: None,
+            dialog_was_open: false,
+            memory_checked: f64::NEG_INFINITY,
             after_save: None,
             status: None,
             feedback: None,
@@ -488,6 +521,204 @@ impl MassifApp {
             ThemeChoice::System => egui::ThemePreference::System,
             ThemeChoice::Light => egui::ThemePreference::Light,
             ThemeChoice::Dark => egui::ThemePreference::Dark,
+        });
+    }
+
+    /// A task ended: its sound, and the system's notice when it took a while
+    /// and the settings ask for one (while Massif is behind, or always).
+    fn task_done(&mut self, ctx: &egui::Context, cue: Cue, title: &str, body: &str, secs: f32) {
+        crate::sounds::play(cue);
+        let focused = ctx.input(|i| i.viewport().focused).unwrap_or(true);
+        let tell = match self.settings.notify {
+            crate::notify::NotifyWhen::Never => false,
+            crate::notify::NotifyWhen::Background => !focused,
+            crate::notify::NotifyWhen::Always => true,
+        };
+        if tell && secs >= 2.0 {
+            crate::notify::send(&format!("Massif — {title}"), body);
+        }
+    }
+
+    /// Keep within the memory the settings give: three fifths for decoded
+    /// tiles (at the size they take now), a quarter for the column data of
+    /// the map's images, the rest for their textures. Once a second.
+    fn apply_memory_limit(&mut self, now: f64) {
+        if now - self.memory_checked < 1.0 {
+            return;
+        }
+        self.memory_checked = now;
+        let mb = self.settings.memory_mb as usize;
+        if mb == 0 {
+            self.doc.max_hot_tiles = crate::doc::MAX_HOT_TILES;
+            self.map_cache.max_grids = 384;
+            self.map_cache.max_chunks = 1400;
+            return;
+        }
+        let budget = mb << 20;
+        let dim = self.doc.dimension();
+        let (hot, bytes) = dim.levels.iter().map(|l| l.stats()).fold((0usize, 0usize), |(t, b), s| (t + s.hot_tiles, b + s.hot_bytes));
+        let per_tile = bytes.checked_div(hot).map_or(64 << 10, |b| b.max(8 << 10));
+        let levels = dim.levels.len().max(1);
+        self.doc.max_hot_tiles = (budget * 3 / 5 / per_tile / levels).clamp(64, 1 << 20);
+        self.map_cache.max_grids = (budget / 4 / (190 << 10)).clamp(64, 8192);
+        self.map_cache.max_chunks = (budget * 3 / 20 / (64 << 10)).clamp(256, 32768);
+        if bytes > budget * 3 / 5 {
+            let d = self.doc.dim;
+            let max = self.doc.max_hot_tiles;
+            self.doc.world.dims[d].trim(max);
+        }
+    }
+
+    // --------------------------------------------------------- settings --
+
+    fn prefs_header(ui: &mut Ui, title: &str, about: &str) {
+        let pal = Palette::of(ui);
+        ui.label(RichText::new(title).size(15.0).medium());
+        ui.add(egui::Label::new(RichText::new(about).size(12.0).color(pal.weak)).wrap());
+        ui.add_space(12.0);
+    }
+
+    fn prefs_appearance(&mut self, ui: &mut Ui, ctx: &egui::Context) {
+        let pal = Palette::of(ui);
+        Self::prefs_header(ui, "Appearance", "How Massif looks: its theme, and the colour of what is chosen, of the main buttons and of the home screen's art.");
+        crate::widgets::well(ui, |ui| {
+            crate::widgets::row(ui, "Theme", |ui| {
+                let choices = [ThemeChoice::System, ThemeChoice::Light, ThemeChoice::Dark];
+                let on = choices.map(|c| c == self.settings.theme);
+                if let Some(k) = crate::widgets::button_group(ui, "theme", &["System", "Light", "Dark"], &on) {
+                    self.settings.theme = choices[k];
+                }
+            });
+            crate::widgets::row(ui, "Accent", |ui| {
+                // Laid from the right: any colour last, the swatches before it.
+                let mut chosen = None;
+                let mut custom = self.settings.accent;
+                if egui::color_picker::color_edit_button_srgb(ui, &mut custom).on_hover_text("Any colour").changed() {
+                    chosen = Some(custom);
+                }
+                ui.add_space(4.0);
+                ui.spacing_mut().item_spacing.x = 3.0;
+                for (name, rgb) in theme::ACCENTS.iter().rev() {
+                    let (rect, swatch) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
+                    let on = self.settings.accent == *rgb;
+                    ui.painter().circle_filled(rect.center(), 8.0, theme::rgb(*rgb));
+                    if on || swatch.hovered() {
+                        ui.painter().circle_stroke(rect.center(), 10.5, Stroke::new(1.5, if on { pal.text } else { pal.weak }));
+                    }
+                    swatch.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, *name));
+                    if swatch.on_hover_text(*name).clicked() {
+                        chosen = Some(*rgb);
+                    }
+                }
+                if let Some(rgb) = chosen {
+                    self.settings.accent = rgb;
+                    theme::set_accent(ctx, rgb);
+                    crate::sounds::play(Cue::Select);
+                }
+            });
+            crate::widgets::row(ui, "Animated home screen", |ui| {
+                crate::widgets::switch(ui, &mut self.settings.animate_backdrop).on_hover_text("The dither of its picture moves on about once a second");
+            });
+        });
+    }
+
+    fn prefs_sounds(&mut self, ui: &mut Ui) {
+        use crate::sounds::SoundLevel;
+        let pal = Palette::of(ui);
+        Self::prefs_header(ui, "Sounds", "Little sounds for what happens, made by Massif as it plays them. Essential: what ends and what fails. All: the interface too — choices, switches, windows, workspaces.");
+        crate::widgets::well(ui, |ui| {
+            crate::widgets::row(ui, "Play", |ui| {
+                let choices = [SoundLevel::Off, SoundLevel::Essential, SoundLevel::All];
+                let on = choices.map(|c| c == self.settings.sounds);
+                if let Some(k) = crate::widgets::button_group(ui, "sounds", &["Off", "Essential", "All"], &on) {
+                    self.settings.sounds = choices[k];
+                    crate::sounds::configure(self.settings.sounds, self.settings.volume);
+                    crate::sounds::play(Cue::Toggle);
+                }
+            });
+            crate::widgets::row(ui, "Volume", |ui| {
+                let before = self.settings.volume;
+                ui.add_enabled(
+                    self.settings.sounds != SoundLevel::Off,
+                    crate::widgets::Field::new(&mut self.settings.volume, 0.0..=1.0)
+                        .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                        .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0))
+                        .width(220.0),
+                );
+                if self.settings.volume != before {
+                    crate::sounds::configure(self.settings.sounds, self.settings.volume);
+                }
+            });
+        });
+        ui.add_space(14.0);
+        ui.label(RichText::new("Hear them").size(13.0).medium());
+        ui.add_space(4.0);
+        crate::widgets::well(ui, |ui| {
+            for cue in crate::sounds::Cue::ALL {
+                crate::widgets::row(ui, cue.label(), |ui| {
+                    if ui.button(theme::with_icon(Icon::Play, "Play")).clicked() {
+                        crate::sounds::preview(cue);
+                    }
+                    let (tag, color) = if cue.essential() { ("Essential", pal.text) } else { ("All", pal.weak) };
+                    ui.label(RichText::new(tag).size(11.5).color(color));
+                });
+            }
+        });
+    }
+
+    fn prefs_notifications(&mut self, ui: &mut Ui) {
+        use crate::notify::NotifyWhen;
+        Self::prefs_header(ui, "Notifications", "The system tells when a long task ends — an export, an import, a conversion, a pass over the whole map — so that you know while Massif is behind other windows. What Massif does shows at the bottom right of its window either way.");
+        crate::widgets::well(ui, |ui| {
+            crate::widgets::row(ui, "Tell me", |ui| {
+                let choices = [NotifyWhen::Never, NotifyWhen::Background, NotifyWhen::Always];
+                let on = choices.map(|c| c == self.settings.notify);
+                if let Some(k) = crate::widgets::button_group(ui, "notify", &["Never", "When in the background", "Always"], &on) {
+                    self.settings.notify = choices[k];
+                }
+            });
+            crate::widgets::row(ui, "Try it", |ui| {
+                if ui.button(theme::with_icon(Icon::Bell, "Send a notification")).clicked() {
+                    crate::notify::send("Massif", "Notifications work: you will hear from Massif when a long task ends.");
+                    crate::sounds::preview(Cue::Ready);
+                }
+            });
+        });
+    }
+
+    fn prefs_memory(&mut self, ui: &mut Ui) {
+        let pal = Palette::of(ui);
+        Self::prefs_header(ui, "Memory", "What Massif keeps decoded to be quick: the tiles of the map, the images of the map view. Past the limit, what was used least is put away again, compressed, and decoded when it is needed. The map itself stays in memory compressed.");
+        crate::widgets::well(ui, |ui| {
+            crate::widgets::row(ui, "Limit", |ui| {
+                let choices = [0u32, 1024, 2048, 4096, 8192];
+                let on = choices.map(|c| c == self.settings.memory_mb);
+                if let Some(k) = crate::widgets::button_group(ui, "memory", &["Automatic", "1 GB", "2 GB", "4 GB", "8 GB"], &on) {
+                    self.settings.memory_mb = choices[k];
+                    self.memory_checked = f64::NEG_INFINITY;
+                }
+            });
+        });
+        ui.add_space(14.0);
+        ui.label(RichText::new("In use").size(13.0).medium());
+        ui.add_space(4.0);
+        let dim = self.doc.dimension();
+        let stats: Vec<massif_core::level::LevelStats> = dim.levels.iter().map(|l| l.stats()).collect();
+        let (hot, hot_bytes, cold_bytes, tiles) = stats.iter().fold((0, 0, 0, 0), |(h, hb, cb, t), s| (h + s.hot_tiles, hb + s.hot_bytes, cb + s.cold_bytes, t + s.tiles));
+        let (chunks, grids, summaries) = self.map_cache.stats();
+        let voxels = dim.voxels.len();
+        let mb = |b: usize| format!("{:.0} MB", b as f64 / (1u64 << 20) as f64);
+        crate::widgets::well(ui, |ui| {
+            let line = |ui: &mut Ui, name: &str, value: String, note: String| {
+                crate::widgets::row(ui, name, |ui| {
+                    ui.label(RichText::new(note).size(11.5).color(pal.weak));
+                    ui.label(RichText::new(value).size(12.5));
+                });
+            };
+            line(ui, "Decoded tiles", mb(hot_bytes), format!("{hot} of {tiles} tiles, at most {} a level", self.doc.max_hot_tiles));
+            line(ui, "The map, compressed", mb(cold_bytes), String::new());
+            line(ui, "Map view", mb(grids * (190 << 10) + summaries * 1024), format!("{grids} tiles of columns, {chunks} images (up to {} and {})", self.map_cache.max_grids, self.map_cache.max_chunks));
+            line(ui, "Sculpted in 3D", mb(voxels * 4096), format!("{voxels} chunks of 16³"));
         });
     }
 
@@ -687,9 +918,11 @@ impl MassifApp {
                         Some(p) => {
                             self.remember(p);
                             self.say(ctx, format!("Opened “{name}” in {secs:.1} s"), false, None);
+                            self.task_done(ctx, Cue::Ready, "Map opened", &name, secs);
                         }
                         None => {
                             self.say(ctx, format!("Created “{name}” in {secs:.1} s"), false, None);
+                            self.task_done(ctx, Cue::Ready, "Map created", &name, secs);
                             // Its relief from a template: on the Terrain side.
                             if let Some(t) = self.after_create.take() {
                                 self.start_terrain(t);
@@ -701,6 +934,7 @@ impl MassifApp {
                     self.doc.mark_saved(revision, path.clone());
                     self.remember(path.clone());
                     let msg = format!("Saved {} ({}) in {secs:.1} s", jobs::display_name(&path), panels::human(bytes));
+                    self.task_done(ctx, Cue::Saved, "Map saved", &msg, secs);
                     self.say(ctx, msg, false, Some(path));
                     if let Some(pending) = self.after_save.take() {
                         self.run(ctx, pending);
@@ -714,10 +948,12 @@ impl MassifApp {
                         panels::human(stats.bytes),
                         stats.elapsed.as_secs_f32()
                     );
+                    self.task_done(ctx, Cue::Ready, "Export done", &msg, secs);
                     self.say(ctx, msg, false, Some(dir));
                 }
                 Outcome::Failed(message) => {
                     self.after_save = None;
+                    self.task_done(ctx, Cue::Error, "Something failed", &message, secs);
                     self.say(ctx, message, true, None);
                 }
                 Outcome::Imported { world, report, source } => {
@@ -728,6 +964,7 @@ impl MassifApp {
                     self.has_map = true;
                     self.remember(source.clone());
                     let msg = format!("Imported {} in {secs:.1} s: {}", jobs::display_name(&source), report.summary());
+                    self.task_done(ctx, Cue::Ready, "Import done", &msg, secs);
                     self.say(ctx, msg, false, None);
                     let thumbnail = report.thumbnail.as_deref().and_then(|jpeg| {
                         let img = image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg).ok()?.to_rgba8();
@@ -740,16 +977,22 @@ impl MassifApp {
                 Outcome::Auto { biomes, tiles, columns, revision, dim } => {
                     let label = if biomes { "Auto biome" } else { "Auto paint" };
                     if revision != self.doc.revision || dim != self.doc.dim {
+                        crate::sounds::play(Cue::Warning);
                         self.say(ctx, format!("{label}: the map changed meanwhile, nothing was done"), true, None);
                     } else {
                         self.doc.history.begin(label, dim);
                         self.doc.history.edit(&mut self.doc.world, 0).replace_tiles(tiles);
                         self.doc.commit();
                         self.tools.auto_done = Some((biomes, columns));
-                        self.say(ctx, format!("{label} over the whole map: {columns} columns changed in {secs:.1} s"), false, None);
+                        let msg = format!("{label} over the whole map: {columns} columns changed in {secs:.1} s");
+                        self.task_done(ctx, Cue::Ready, &format!("{label} done"), &msg, secs);
+                        self.say(ctx, msg, false, None);
                     }
                 }
-                Outcome::Cancelled => self.say(ctx, "Cancelled", false, None),
+                Outcome::Cancelled => {
+                    crate::sounds::play(Cue::Warning);
+                    self.say(ctx, "Cancelled", false, None);
+                }
             }
         }
         if !self.jobs.is_empty() {
@@ -767,7 +1010,7 @@ impl MassifApp {
         let cmd_shift = |key| KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, key);
         let pressed = |s: KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(&s));
         if pressed(cmd(Key::Comma)) {
-            self.dialog = Some(Dialog::Preferences);
+            self.dialog = Some(Dialog::Preferences(PrefsSection::Appearance));
             return;
         }
         if pressed(KeyboardShortcut::new(Modifiers::NONE, Key::F1)) {
@@ -919,7 +1162,9 @@ impl MassifApp {
                 let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
                 ctx.send_viewport_cmd(ViewportCommand::Maximized(!maximized));
             }
-            ui.add_space(70.0);
+            // Room for the window's buttons (close, minimise, zoom), and a
+            // gap after them.
+            ui.add_space(80.0);
         }
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
@@ -1005,7 +1250,7 @@ impl MassifApp {
                 }
                 ui.separator();
                 if ui.button(theme::with_icon(Icon::Settings, "Settings… (⌘,)")).clicked() {
-                    self.dialog = Some(Dialog::Preferences);
+                    self.dialog = Some(Dialog::Preferences(PrefsSection::Appearance));
                 }
                 if ui.button("Reset workspaces").clicked() {
                     self.layout = Layout::default();
@@ -1033,9 +1278,11 @@ impl MassifApp {
             ui.separator();
             let busy = self.blocking_job().is_some();
             let icon = |ui: &mut Ui, icon: Icon, tip: &str, enabled: bool| {
-                ui.add_enabled(enabled, egui::Button::new(theme::glyph(icon).to_string()).frame(false))
-                    .on_hover_text(tip)
-                    .clicked()
+                let clicked = bar_button(ui, tip, enabled, false, |p, r, c| glyph_in(p, r, icon, c)).clicked();
+                if clicked {
+                    crate::sounds::play(Cue::Tap);
+                }
+                clicked
             };
             if icon(ui, Icon::FilePlus2, "New world (⌘N)", !busy) {
                 self.open_home(Page::NewMap);
@@ -1059,14 +1306,9 @@ impl MassifApp {
             ui.separator();
             for tool in [Tool::Raise, Tool::Smooth, Tool::Flatten, Tool::PaintTerrain, Tool::Flood, Tool::StampSlab] {
                 let selected = self.tools.tool == tool;
-                let (rect, r) = ui.allocate_exact_size(vec2(24.0, 22.0), Sense::click());
-                if selected || r.hovered() {
-                    ui.painter().rect_filled(rect, theme::TILE_RADIUS, if selected { pal.accent_soft } else { theme::mix(pal.app_bg, pal.text, 0.08) });
-                }
-                let color = if selected { pal.accent } else { pal.text };
-                crate::icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), tool, color);
+                let r = bar_button(ui, tool.label(), true, selected, |p, rect, c| crate::icons::paint(p, rect, tool, c));
                 r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, tool.label()));
-                if r.on_hover_text(tool.label()).clicked() {
+                if r.clicked() {
                     self.tools.select(tool);
                 }
             }
@@ -1087,8 +1329,9 @@ impl MassifApp {
                     ThemeChoice::Light => (Icon::Sun, ThemeChoice::Dark),
                     ThemeChoice::Dark => (Icon::Moon, ThemeChoice::System),
                 };
-                if ui.add(egui::Button::new(theme::glyph(icon).to_string()).frame(false)).on_hover_text("Theme").clicked() {
+                if bar_button(ui, "Theme", true, false, |p, r, c| glyph_in(p, r, icon, c)).clicked() {
                     self.settings.theme = next;
+                    crate::sounds::play(Cue::Toggle);
                 }
             });
         });
@@ -1119,8 +1362,9 @@ impl MassifApp {
                                 .stroke(Stroke::NONE)
                                 .corner_radius(theme::PILL)
                                 .min_size(vec2(0.0, 24.0));
-                            if ui.add(button).on_hover_text(hint).clicked() {
+                            if ui.add(button).on_hover_text(hint).clicked() && terrain != side {
                                 self.layout.switch_side(side);
+                                crate::sounds::play(Cue::Navigate);
                             }
                         }
                     });
@@ -1149,8 +1393,9 @@ impl MassifApp {
                                 .corner_radius(theme::PILL)
                                 .min_size(vec2(0.0, 24.0));
                             let r = ui.add(button).on_hover_text("Right-click: reset, duplicate, delete");
-                            if r.clicked() {
+                            if r.clicked() && !active {
                                 self.layout.activate(i);
+                                crate::sounds::play(Cue::Navigate);
                             }
                             r.context_menu(|ui| {
                                 if ui
@@ -1653,6 +1898,14 @@ impl MassifApp {
                 if let Some(msg) = self.graph.canvas_ui(&mut cui, &mut self.doc, &self.blocks) {
                     self.feedback = Some(msg);
                 }
+                if let Some((ok, msg, secs)) = self.graph.done.take() {
+                    let ctx = cui.ctx().clone();
+                    if ok {
+                        self.task_done(&ctx, Cue::Ready, "Conversion done", &msg, secs);
+                    } else {
+                        self.task_done(&ctx, Cue::Error, "Conversion failed", &msg, secs);
+                    }
+                }
             }
             EditorKind::GraphView => self.graph.viewport_ui(&mut cui, frame, &self.doc),
             EditorKind::GraphProps => {
@@ -1730,55 +1983,60 @@ impl MassifApp {
                     self.dialog = Some(Dialog::Help(state));
                 }
             }
-            Dialog::Preferences => {
+            Dialog::Preferences(mut section) => {
                 let response = modal(ctx, "preferences").show(ctx, |ui| {
-                    ui.set_width(460.0);
+                    ui.set_width(760.0);
                     let pal = Palette::of(ui);
-                    ui.label(RichText::new("Settings").bold().size(17.0));
-                    ui.label(RichText::new("How Massif looks.").color(pal.weak));
-                    ui.add_space(12.0);
-                    crate::widgets::well(ui, |ui| {
-                        crate::widgets::row(ui, "Theme", |ui| {
-                            let choices = [ThemeChoice::System, ThemeChoice::Light, ThemeChoice::Dark];
-                            let on = choices.map(|c| c == self.settings.theme);
-                            if let Some(k) = crate::widgets::button_group(ui, "theme", &["System", "Light", "Dark"], &on) {
-                                self.settings.theme = choices[k];
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(theme::glyph(Icon::Settings).to_string()).size(17.0).color(pal.accent));
+                        ui.label(RichText::new("Settings").size(17.0).medium());
+                    });
+                    ui.add_space(14.0);
+                    ui.horizontal_top(|ui| {
+                        ui.vertical(|ui| {
+                            ui.set_width(176.0);
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            for (s, icon, label) in [
+                                (PrefsSection::Appearance, Icon::Palette, "Appearance"),
+                                (PrefsSection::Sounds, Icon::Volume2, "Sounds"),
+                                (PrefsSection::Notifications, Icon::Bell, "Notifications"),
+                                (PrefsSection::Memory, Icon::MemoryStick, "Memory"),
+                            ] {
+                                let on = section == s;
+                                let text = RichText::new(theme::with_icon(icon, label)).size(13.0).color(if on { pal.text } else { pal.weak });
+                                let button = egui::Button::new(if on { text.medium() } else { text })
+                                    .fill(if on { pal.accent_soft } else { Color32::TRANSPARENT })
+                                    .stroke(Stroke::NONE)
+                                    .corner_radius(theme::PILL)
+                                    .min_size(vec2(176.0, 30.0));
+                                if ui.add(button).clicked() && !on {
+                                    section = s;
+                                    crate::sounds::play(Cue::Navigate);
+                                }
                             }
                         });
-                        crate::widgets::row(ui, "Accent", |ui| {
-                            // Laid from the right: any colour last, the swatches before it.
-                            let mut chosen = None;
-                            let mut custom = self.settings.accent;
-                            if egui::color_picker::color_edit_button_srgb(ui, &mut custom).on_hover_text("Any colour").changed() {
-                                chosen = Some(custom);
-                            }
-                            ui.add_space(4.0);
-                            ui.spacing_mut().item_spacing.x = 3.0;
-                            for (name, rgb) in theme::ACCENTS.iter().rev() {
-                                let (rect, swatch) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
-                                let on = self.settings.accent == *rgb;
-                                ui.painter().circle_filled(rect.center(), 8.0, theme::rgb(*rgb));
-                                if on || swatch.hovered() {
-                                    ui.painter().circle_stroke(rect.center(), 10.5, Stroke::new(1.5, if on { pal.text } else { pal.weak }));
+                        ui.add_space(10.0);
+                        let x = ui.cursor().min.x;
+                        let top = ui.cursor().min.y;
+                        ui.painter().vline(x, top..=top + 360.0, Stroke::new(1.0, pal.border));
+                        ui.add_space(22.0);
+                        // Every section in the same room: the window keeps its
+                        // size, a long section scrolls.
+                        ui.vertical(|ui| {
+                            ui.set_width(520.0);
+                            ui.set_min_height(360.0);
+                            egui::ScrollArea::vertical().id_salt(("settings", section as u8)).max_height(360.0).show(ui, |ui| {
+                                ui.set_width(508.0);
+                                match section {
+                                    PrefsSection::Appearance => self.prefs_appearance(ui, ctx),
+                                    PrefsSection::Sounds => self.prefs_sounds(ui),
+                                    PrefsSection::Notifications => self.prefs_notifications(ui),
+                                    PrefsSection::Memory => self.prefs_memory(ui),
                                 }
-                                swatch.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, *name));
-                                if swatch.on_hover_text(*name).clicked() {
-                                    chosen = Some(*rgb);
-                                }
-                            }
-                            if let Some(rgb) = chosen {
-                                self.settings.accent = rgb;
-                                theme::set_accent(ctx, rgb);
-                            }
+                            });
                         });
                     });
-                    ui.add_space(6.0);
-                    ui.label(
-                        RichText::new("The accent is the colour of what is chosen, of the main buttons and of the home screen's art.")
-                            .size(11.5)
-                            .color(pal.weak),
-                    );
-                    ui.add_space(16.0);
+                    ui.add_space(14.0);
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                         if ui.add(theme::primary_button(ui, "Done")).clicked() {
                             keep = false;
@@ -1789,7 +2047,7 @@ impl MassifApp {
                     keep = false;
                 }
                 if keep {
-                    self.dialog = Some(Dialog::Preferences);
+                    self.dialog = Some(Dialog::Preferences(section));
                 }
             }
             Dialog::AutoRules(mut paint) => {
@@ -2165,7 +2423,15 @@ impl MassifApp {
             self.apply_theme(&ctx);
             self.applied_theme = Some(self.settings.theme);
         }
+        crate::sounds::configure(self.settings.sounds, self.settings.volume);
         self.poll_jobs(&ctx);
+        let now = ctx.input(|i| i.time);
+        self.apply_memory_limit(now);
+        let open = self.dialog.is_some();
+        if open != self.dialog_was_open {
+            crate::sounds::play(if open { Cue::Open } else { Cue::Close });
+            self.dialog_was_open = open;
+        }
         if self.brushes.poll() {
             // The brush picked last time is an image: find it again.
             let source = self.tools.brush_source.clone();
@@ -2227,7 +2493,7 @@ impl MassifApp {
         let pal = Palette::of(ui);
         let margin = if self.unified_titlebar { 9 } else { 6 };
         let bar = egui::Panel::top("menu bar")
-            .frame(egui::Frame::new().fill(pal.app_bg).inner_margin(egui::Margin::symmetric(10, margin)))
+            .frame(egui::Frame::new().fill(pal.app_bg).inner_margin(egui::Margin::symmetric(14, margin)))
             .show(ui, |ui| {
                 ui.horizontal(|ui| self.top_bar(ui));
             });
@@ -2235,7 +2501,7 @@ impl MassifApp {
             frame.set_traffic_lights_position(&ctx, bar.response.rect.y_range(), 14.0);
         }
         egui::Panel::top("workspaces")
-            .frame(egui::Frame::new().fill(pal.app_bg).inner_margin(egui::Margin { left: 10, right: 12, top: 0, bottom: 2 }))
+            .frame(egui::Frame::new().fill(pal.app_bg).inner_margin(egui::Margin { left: 12, right: 16, top: 0, bottom: 2 }))
             .show(ui, |ui| self.workspace_tabs(ui));
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(pal.app_bg).inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 8 }))
@@ -2274,6 +2540,33 @@ impl eframe::App for MassifApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         [0.0, 0.0, 0.0, 1.0]
     }
+}
+
+/// A command of the bar at the top: an icon in a square, all of them the
+/// same size, on one line, whatever draws them (a glyph or a tool's icon).
+fn bar_button(ui: &mut Ui, tip: &str, enabled: bool, selected: bool, paint: impl FnOnce(&egui::Painter, Rect, Color32)) -> egui::Response {
+    let pal = Palette::of(ui);
+    let (rect, response) = ui.allocate_exact_size(vec2(28.0, 26.0), if enabled { Sense::click() } else { Sense::hover() });
+    if selected || (enabled && response.hovered()) {
+        let fill = if selected { pal.accent_soft } else { theme::mix(pal.app_bg, pal.text, 0.08) };
+        ui.painter().rect_filled(rect.shrink(1.0), theme::TILE_RADIUS, fill);
+    }
+    let color = if !enabled {
+        pal.weak.gamma_multiply(0.55)
+    } else if selected {
+        pal.accent
+    } else {
+        pal.text
+    };
+    paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), color);
+    response.on_hover_text(tip)
+}
+
+/// A glyph of the icon font, centred on `rect`.
+fn glyph_in(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
+    let galley = painter.layout_no_wrap(theme::glyph(icon).to_string(), FontId::proportional(rect.height()), color);
+    // The icons sit in the middle of the line the font gives them.
+    painter.galley(rect.center() - galley.size() / 2.0, galley, color);
 }
 
 /// A dialog: generous corners and margins, as the references draw them.
@@ -5223,9 +5516,14 @@ mod tests {
         h.render().unwrap().save(dir.join("home-light.png")).unwrap();
         h.state_mut().home = None;
         // The settings: theme and accent colour.
-        h.state_mut().dialog = Some(Dialog::Preferences);
+        h.state_mut().dialog = Some(Dialog::Preferences(PrefsSection::Appearance));
         h.run_steps(5);
         h.render().unwrap().save(dir.join("dialog-settings.png")).unwrap();
+        for (section, name) in [(PrefsSection::Sounds, "sounds"), (PrefsSection::Notifications, "notifications"), (PrefsSection::Memory, "memory")] {
+            h.state_mut().dialog = Some(Dialog::Preferences(section));
+            h.run_steps(4);
+            h.render().unwrap().save(dir.join(format!("dialog-settings-{name}.png"))).unwrap();
+        }
         h.state_mut().dialog = None;
         h.state_mut().open_export_dialog();
         h.run_steps(5);
