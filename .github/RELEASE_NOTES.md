@@ -1,27 +1,26 @@
 Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, with a node-based terrain generator in the spirit of Gaea, written in Rust.
 
-## New in 0.3.1
+## New in 0.4.0
 
-**A home screen.** Massif opens on it, not on a map made up for it: on the left, a new map, a map from a height map, a map of your own to open, a WorldPainter world to import, and the maps opened lately; in the middle, the settings of a new map with its preview, laid on ridges drawn in dots that twinkle now and then. A file dropped on the window opens. **File ▸ New** (⌘N) comes back to it.
+**Walk your map as a player.** **Player**, in 3D Sculpt, comes down into the map where the view looks, with Minecraft's body, eyes and field of view: the mouse looks around (Esc gives it back), W A S D walk, Space jumps — twice quickly, flies —, Q sneaks or goes down, Shift runs, and walking into a step of one block jumps onto it. Water slows you and lets you swim; under it the world turns blue and dim. The buttons sculpt at the crosshair.
 
-**Maps taller than the game.** A new map can rise to 512, 1024 or 2032 — the highest Minecraft allows — and go as deep as −2032. The export adds a data pack that gives the world that height.
+**3D Sculpt, grown up.** Sculpt, Smooth and Paint share the brush of every tool (custom images too, as set in Brush Settings); a stroke adds a layer at a time and works toward the eye at cliffs and edges. Matter pushed out keeps the blocks it came from — a sand wall gives a sand ledge, the ground under it keeps its own —, Paint repaints sculpted matter, Smooth rounds the land off without wearing it down. Brushes sculpt up to 64 blocks around in 3D.
 
-**Rivers laid out, not drawn.** Click the source: the water finds its own way down, eroding a bed and filling the hollows it meets into lakes (the map shows where before the click). Click elsewhere to give it an end, reached along the valleys; drag the river to bend it; **Dig river** or Enter digs it. On real WorldPainter maps, the rivers and lakes already there are kept and joined.
+**Ground covers and custom objects.** Grass, flowers, ferns, snow or any blocks of your own, painted and grown over the ground; trees, rocks and ruins from `.schem`, `.schematic`, `.bp`, `.litematic` and `.nbt` files, imported or dropped on the window, painted where they stand.
 
-**3D Sculpt.** Sculpting in 3D has its own editor and workspace: one **Sculpt** tool (the left button adds matter, the right one digs) and **Smooth**, any brush — custom images too — laid on the slope under the cursor without shaking. Shift + drag moves the view, Alt + wheel sizes the brush. The 3D View only shows the world.
+**Automatic biomes and paint that make sense.** Sand is a desert only where sand is all around, beaches are by the water, a WorldPainter map all of one terrain is read from the shape of its land. Over the whole map they run in the background with their progress; with a brush, the land is read once a tile and kept, so brushes of any size stay quick — and no longer crash.
 
-**Height maps in and out.** A new map from a 16-bit PNG (Gaea, World Machine…), the map's relief exported as one, a **File input** node that brings a height map, a `.world` or a `.massif` into a graph, and a graph's terrain saved as a height map.
+**Settings in four sections**: the theme and the accent colour; sounds made by Massif as they play (off, essential, or all), which leave the speakers and headphones free when silent; the system's notifications when a long task ends; a memory limit, with what is in use.
 
-**The node graph handled as in Gaea or Blender.** Several nodes selected (Shift, ⌘ or a box), moved, duplicated, copied and pasted with their wires, deleted at once; wires cut with a right-click; the wheel zooms, right- or middle-drag moves; ⌘Z undoes changes to the graph and conversions.
+**A quieter interface.** Neutral greys and one accent, grouped controls, pill buttons, slim sliders, tool icons drawn for what they do to the land, cards with short animations, messages at the bottom right, a help page (F1). The home screen shows night scenes, dithered in a palette of their own.
 
-**A new look.** Panels close together with a header strip each, number fields filled up to their value (drag them, or click to type), controls grouped as one, an accent colour to choose in **Settings** (⌘,), the tools grouped by theme, one-line explanations. In 3D, a daylight sky and deep water that reflects it; lava worlds with opaque, glowing lava and scorched shores.
+**The 3D view up close.** Rivers stepping down show their falls, every block reads by its own shade and edges, deep water reflects the sky.
 
-**Auto paint and Auto biome** show what they would change under the brush before painting, cover the whole core of the brush and say what they did.
-
-On a Mac, `tools/install-macos.sh` builds Massif from the sources and installs it in Applications.
+**Files.** The map is a `.massif` file's icon in the Finder and in Windows Explorer; tall WorldPainter worlds keep their height; sculpted matter keeps its blocks in the file (older files still open).
 
 ## Earlier
 
+- **0.3.1**: a home screen; maps up to 2032 blocks tall; rivers laid out from their source, finding their own way down; a 3D Sculpt editor; height maps in and out; the node graph handled as in Gaea or Blender; a new look.
 - **0.3**: rivers by hand and a Rivers node that traces them in their valleys; a Map node that reads the map you have, with the **Paint this map** and **Rivers on this map** templates; climate (temperature, humidity, biomes) and tectonic plates in the generator; terrains of any size; conversion over the map; patterns of terrains; maps of 60,000 × 50,000 blocks.
 - **0.2**: export for every version from 1.7.10 to 26.3; Auto biome and Auto paint; a brush option for the way slopes face; floating islands and overhangs from the generator.
 - **0.1**: the map editor — levels of rock and pits, 3D sculpting, WorldPainter's brushes and controls, the game's real blocks, the whole map in 3D, `.world` import — and the node-based terrain generator.

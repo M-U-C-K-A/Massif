@@ -10,14 +10,11 @@ script lists them): add one, remove one, rebuild. Landscape pictures about
 The layers of a scene — names ending in `_ciel` or `_sky` (its sky),
 `_relief` or `_land` (its land cut out) — are not shown alone.
 
-- `massif-dusk.jpg`: a massif at dusk, drawn by Massif itself.
-- `floating-mountains.jpg`, `archipelago-sunset.jpg`, `karst-twilight.jpg`,
-  `canyon-sunset.jpg`: templates of the terrain graph, rendered by its viewport.
-- `alps_final_full.png`, `canyon_final_full.png`: snowy peaks under the stars,
-  a canyon at dusk.
+- `01-canyon_complet.png`: a canyon at dusk, its river far below.
+- `02-alpes_complet.png`: snowy peaks under the stars.
+- `03-iles-volcaniques_complet.png`: a volcano over a calm sea at night.
+- `04-avatar_complet.png`: stone pillars standing in the mist.
+- `05-dunes_complet.png`: dunes under a night sky.
 
-Render them again with:
-
-```sh
-MASSIF_BACKDROP_DIR="$PWD/crates/massif-app/assets/backdrops" cargo test -p massif-app -- render_the_home_backdrops draw_the_massif_at_dusk
-```
+Each scene also has its layers (`_ciel`, `_relief`), kept beside it for
+whoever works on the pictures; they are not built in.
