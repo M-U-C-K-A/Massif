@@ -2,6 +2,8 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 
 ## New in 0.6.0
 
+**Autosave: a crash no longer loses your work.** While the map has changes not saved, Massif now keeps a copy of it every few minutes, in a folder of its own (never over your file). Should Massif close without saving them, from a crash, a forced quit or a power cut, it offers the next time it starts to restore the copy: the map's name and when the copy was taken, then **Restore** or **Discard**. Saving the map, or closing it, removes its copy, and at most five are kept. The copy is written in the background and the map stays smooth while it is, even a map of 44,544 × 33,536 blocks. **Settings ▸ Autosave** turns it off or sets how often: every 1, 2, 5 (the default), 10 or 15 minutes.
+
 ## New in 0.5.2
 
 **Massif starts on slow computers.** On some Windows computers (an AMD Radeon RX 6400, for one) Massif 0.5.1 never showed its window, whatever graphics API it tried: it waited, before drawing its first picture, for the WorldPainter brushes and the game's textures to finish loading, which can take minutes on a slow computer with many brushes. It then blamed the graphics driver and set Vulkan, DirectX 12 and OpenGL aside one after the other. The home screen now comes at once: its picture, the new map's preview and the dates of the recent maps follow a moment later, and the loads no longer hold up the window. Massif sets a graphics API aside only when the graphics driver itself is stuck, and says so; the APIs 0.5.1 set aside by mistake are tried again on the next start. `startup.log` names the part of the window being laid out, should a start still be slow.

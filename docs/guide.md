@@ -116,7 +116,7 @@ field or in Edit ▸ Ores as before, and ⌘C, ⌘V and ⌘A work in text fields
 ## Settings
 
 **Settings** (⌘, — in the **Massif** menu on a Mac, in **View** on Windows
-and Linux — or the home screen's sidebar) has seven sections, in a window of
+and Linux — or the home screen's sidebar) has eight sections, in a window of
 their own:
 
 - **Appearance**: the theme, the accent colour (the colour of what is
@@ -159,12 +159,40 @@ their own:
   — three fifths for the map's tiles, measured at the size they take, the
   rest for the column data and images of the map view —, beyond which what
   was used least is put away, compressed; and what is in use now.
+- **Autosave**: on or off, and how often: every 1, 2, 5 (the default), 10
+  or 15 minutes of changes not saved (see [Autosave](#autosave)).
 - **Developer**: developer mode adds a **Developer** panel to every area's
   menu, as the brushes or the layers: frames a second and the time each
   takes (and how much of it is Massif's own work), the memory the system
   counts for Massif and the processor's time, in charts that run live; then
   what is kept decoded, the map, the tasks running, the graphics card, and
   why Massif draws again.
+
+## Autosave
+
+While the map has changes not saved, Massif keeps a copy of it: once it has
+had changes for the time set in **Settings ▸ Autosave** (5 minutes by
+default), then again after each as long. The copy goes to a folder of
+Massif's own, never over your file: `Autosave`, next to `startup.log`
+(`~/Library/Logs/Massif/Autosave` on a Mac, `%LOCALAPPDATA%\Massif\Autosave`
+on Windows, `~/.local/state/massif/Autosave` on Linux). It is taken between
+two strokes and written in the background, on threads that give way to the
+rest of Massif: on a map of 44,544 × 33,536 blocks (91,176 tiles, a 1 GB
+file), the editor stops for 3 to 8 milliseconds to take it, and the frames
+keep their pace while it is written (5 to 12 seconds).
+
+Should Massif close without saving — a crash, a forced quit, a power cut —
+it shows, the next time it starts, **Restore unsaved changes?**: each map
+left so, by name, when its copy was taken, its file and its size.
+**Restore** opens the copy as that map, with changes to save (⌘S saves it to
+its own file; a map never saved asks where); **Discard** deletes the copy;
+**Later** keeps it to be offered at the next start.
+
+Saving the map removes its copy, and so does closing it: quitting, or
+opening or making another map, whether its changes were saved or let go.
+At most 5 copies are kept, of at most 4 GB together, the oldest removed
+first; a copy that Massif running in another window is keeping is never
+removed.
 
 ## New worlds and export
 

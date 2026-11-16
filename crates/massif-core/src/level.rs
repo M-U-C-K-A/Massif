@@ -415,6 +415,39 @@ impl Level {
         }
     }
 
+    /// A copy of the level that encodes nothing, for a copy to take
+    /// without holding up the editor: the tiles compressed already share
+    /// their compressed form (an `Arc`), those changed since are copied as
+    /// they are. [`Level::snapshot`] of the copy, away from the editor,
+    /// encodes them; the level itself is left as it was.
+    pub fn copy_unfrozen(&self) -> Level {
+        let mut hot = 0;
+        let tiles = self
+            .tiles
+            .iter()
+            .map(|(pos, slot)| {
+                let slot = match slot {
+                    Slot::Cold(b) | Slot::Hot { blob: Some(b), .. } => Slot::Cold(b.clone()),
+                    Slot::Hot { tile, blob: None, stamp } => {
+                        hot += 1;
+                        Slot::Hot { tile: tile.clone(), blob: None, stamp: *stamp }
+                    }
+                };
+                (*pos, slot)
+            })
+            .collect();
+        Level {
+            id: self.id,
+            name: self.name.clone(),
+            kind: self.kind,
+            visible: self.visible,
+            tiles,
+            hot,
+            clock: self.clock,
+            dirty: HashSet::new(),
+        }
+    }
+
     /// Decode the cold tiles among `positions`, in parallel, and keep them
     /// decoded as they are: reading them again then costs nothing, and so
     /// does cooling them down again (their compressed form is kept).
@@ -599,6 +632,21 @@ mod tests {
         l.tile_mut(TilePos::new(0, 0)).unwrap().top.fill(-10.0);
         assert_eq!(snap.view(TilePos::new(0, 0)).unwrap().top.get(0), 60.0);
         assert_eq!(l.view(TilePos::new(0, 0)).unwrap().top.get(0), -10.0);
+    }
+
+    #[test]
+    fn an_unfrozen_copy_encodes_what_a_snapshot_does() {
+        let mut l = level_with(3);
+        l.freeze();
+        l.tile_mut(TilePos::new(1, -1)).unwrap().top.fill(-10.0);
+        let mut copy = l.copy_unfrozen();
+        assert_eq!(copy.stats().hot_tiles, 1, "only the tile changed since it was encoded is copied whole");
+        // The level is left as it was: its edited tile is still not encoded.
+        assert!(l.blobs().is_none());
+        l.tile_mut(TilePos::new(0, 0)).unwrap().top.fill(5.0);
+        let copied = copy.snapshot().blobs().unwrap();
+        l.tile_mut(TilePos::new(0, 0)).unwrap().top.fill(60.0);
+        assert_eq!(copied, l.snapshot().blobs().unwrap(), "the copy holds the level as it was when copied");
     }
 
     #[test]

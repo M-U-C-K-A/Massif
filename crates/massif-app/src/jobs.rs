@@ -25,6 +25,12 @@ pub enum Outcome {
         dir: PathBuf,
         stats: ExportStats,
     },
+    /// A backup left by a run that closed without saving, read back (see
+    /// `autosave`).
+    Recovered {
+        world: World,
+        backup: crate::autosave::Backup,
+    },
     /// A WorldPainter world converted to Massif.
     Imported {
         world: World,
@@ -210,6 +216,15 @@ impl Job {
         Job::spawn(JobKind::Open, label, None, ctx, move || match massif_format::load(&path) {
             Ok(world) => Outcome::World { world, path: Some(path) },
             Err(e) => Outcome::Failed(format!("Could not open {}: {e}", display_name(&path))),
+        })
+    }
+
+    /// Read back a backup left by a run that closed without saving.
+    pub fn recover(ctx: &egui::Context, backup: crate::autosave::Backup) -> Job {
+        let label = format!("Restoring “{}”", backup.info.name);
+        Job::spawn(JobKind::Open, label, None, ctx, move || match massif_format::load(&backup.file) {
+            Ok(world) => Outcome::Recovered { world, backup },
+            Err(e) => Outcome::Failed(format!("Could not restore “{}”: {e}", backup.info.name)),
         })
     }
 

@@ -77,7 +77,14 @@ struct Settings {
     /// The size of the whole interface, 1 as it is drawn (⌘+ and ⌘−
     /// change it too).
     ui_scale: f32,
+    /// A backup of the map while it has changes not saved (see `autosave`),
+    /// every `autosave_minutes`.
+    autosave: bool,
+    autosave_minutes: u32,
 }
+
+/// The intervals of the backups offered in the settings, in minutes.
+const AUTOSAVE_MINUTES: [u32; 5] = [1, 2, 5, 10, 15];
 
 /// The sizes of the interface offered in the settings.
 const UI_SCALES: [f32; 4] = [1.0, 1.1, 1.25, 1.5];
@@ -91,6 +98,7 @@ enum PrefsSection {
     Sounds,
     Notifications,
     Memory,
+    Autosave,
     Developer,
 }
 
@@ -114,6 +122,8 @@ impl Default for Settings {
             high_contrast: Follow::System,
             reduce_motion: Follow::System,
             ui_scale: 1.0,
+            autosave: true,
+            autosave_minutes: 5,
         }
     }
 }
@@ -137,6 +147,9 @@ enum Pending {
     Open(Option<PathBuf>),
     /// A new world from a height map.
     FromHeightmap(std::sync::Arc<massif_core::heightmap::Heightmap>, massif_core::generate::FromHeightmap),
+    /// The newest backup left by a run that closed without saving (see
+    /// `autosave`), restored.
+    Recover,
     Quit,
 }
 
@@ -212,6 +225,9 @@ enum Dialog {
     Analysis(Box<crate::analysis::AnalysisView>),
     /// The ores the export lays.
     Ores(Box<crate::ores::OresView>),
+    /// Backups left by a run of Massif that closed without saving, to
+    /// restore or discard.
+    Recover,
 }
 
 struct Status {
@@ -256,6 +272,8 @@ pub struct MassifApp {
     active_map: Option<AreaId>,
     jobs: Vec<Job>,
     dialog: Option<Dialog>,
+    /// Backups of the map while it has changes not saved.
+    autosave: crate::autosave::Autosave,
     /// Whether a dialog was open last frame (for its sound).
     dialog_was_open: bool,
     /// The survival check last closed: opened again as it was while the
@@ -382,6 +400,13 @@ impl MassifApp {
         app.brushes = BrushLibrary::installed();
         app.brushes.load_in_background(&cc.egui_ctx);
         app.blocks.load(&cc.egui_ctx, app.settings.minecraft_jar.clone());
+        // What a run before left unsaved, offered first.
+        if let Some(dir) = crate::autosave::default_dir() {
+            app.autosave = crate::autosave::Autosave::open(dir);
+            if !app.autosave.found.is_empty() {
+                app.dialog = Some(Dialog::Recover);
+            }
+        }
         if let Some(path) = open {
             app.jobs.push(Job::open(&cc.egui_ctx, path));
         } else {
@@ -590,6 +615,7 @@ impl MassifApp {
             active_map: None,
             jobs: Vec::new(),
             dialog: None,
+            autosave: crate::autosave::Autosave::off(),
             dialog_was_open: false,
             analysis: None,
             memory_checked: f64::NEG_INFINITY,
@@ -938,6 +964,34 @@ impl MassifApp {
         });
     }
 
+    fn prefs_autosave(&mut self, ui: &mut Ui) {
+        Self::prefs_header(
+            ui,
+            "Autosave",
+            "While the map has changes not saved, Massif keeps a copy of it, in a folder of its own: never over your file. Should Massif close without saving (a crash, a forced quit, a power cut), it offers to restore the copy the next time it starts. Saving the map, or closing it, removes its copy.",
+        );
+        crate::widgets::well(ui, |ui| {
+            crate::widgets::row(ui, "Autosave", |ui| {
+                crate::widgets::switch(ui, &mut self.settings.autosave);
+            });
+            if self.settings.autosave {
+                crate::widgets::row(ui, "Every", |ui| {
+                    let labels = AUTOSAVE_MINUTES.map(|m| format!("{m} min"));
+                    let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+                    let on = AUTOSAVE_MINUTES.map(|m| m == self.settings.autosave_minutes);
+                    if let Some(k) = crate::widgets::button_group(ui, "autosave every", &labels, &on) {
+                        self.settings.autosave_minutes = AUTOSAVE_MINUTES[k];
+                    }
+                });
+            }
+        });
+        if let Some(dir) = crate::autosave::default_dir() {
+            ui.add_space(10.0);
+            let pal = Palette::of(ui);
+            ui.add(egui::Label::new(RichText::new(format!("Kept in {}, {} copies at most.", dir.display(), crate::autosave::MAX_BACKUPS)).size(11.5).color(pal.weak)).wrap());
+        }
+    }
+
     fn prefs_developer(&mut self, ui: &mut Ui) {
         Self::prefs_header(ui, "Developer", "A panel of how Massif runs, live: frames a second and the time each takes, the memory the system counts, the processor's time, what Massif keeps decoded, the map, its tasks, the graphics card, and why it draws again. Offered in every area's menu, as Brushes or Info are.");
         crate::widgets::well(ui, |ui| {
@@ -1125,10 +1179,17 @@ impl MassifApp {
                     None,
                 );
             }
+            Pending::Recover => {
+                if !self.autosave.found.is_empty() {
+                    let b = self.autosave.found.remove(0);
+                    self.jobs.push(Job::recover(ctx, b));
+                }
+            }
             Pending::Quit => {
                 if crate::quit::waiting() {
                     // At a logout, a restart or a shut-down, the system waits
                     // to end Massif itself: told yes, it does (see `quit`).
+                    self.autosave.close();
                     crate::quit::reply(true);
                 } else {
                     self.allow_close = true;
@@ -1277,12 +1338,26 @@ impl MassifApp {
                         }
                     }
                 }
+                Outcome::Recovered { world, backup } => {
+                    self.next_generation += 1;
+                    let name = world.meta.name.clone();
+                    self.doc = Document::new(world, backup.info.path.clone(), self.next_generation);
+                    // Not what its file holds: changes to save.
+                    self.doc.mark_changed();
+                    self.rename = None;
+                    self.home = None;
+                    self.has_map = true;
+                    self.autosave.adopt(backup, self.doc.generation, self.doc.revision);
+                    self.say(ctx, format!("Restored “{name}”: save it to keep it"), false, None);
+                    self.task_done(ctx, Cue::Ready, "Map restored", &name, secs);
+                }
                 Outcome::Saved { path, revision, bytes } => {
                     if other_map {
                         // Not this map's file, nor what to do after saving it.
                         self.after_save = None;
                     } else {
                         self.doc.mark_saved(revision, path.clone());
+                        self.autosave.saved(self.doc.generation, revision);
                     }
                     self.remember(path.clone());
                     let msg = format!("Saved {} ({}) in {secs:.1} s", jobs::display_name(&path), panels::human(bytes));
@@ -2391,6 +2466,7 @@ impl MassifApp {
                                 (PrefsSection::Sounds, Icon::Volume2, "Sounds"),
                                 (PrefsSection::Notifications, Icon::Bell, "Notifications"),
                                 (PrefsSection::Memory, Icon::MemoryStick, "Memory"),
+                                (PrefsSection::Autosave, Icon::History, "Autosave"),
                                 (PrefsSection::Developer, Icon::Activity, "Developer"),
                             ] {
                                 let on = section == s;
@@ -2425,6 +2501,7 @@ impl MassifApp {
                                     PrefsSection::Sounds => self.prefs_sounds(ui),
                                     PrefsSection::Notifications => self.prefs_notifications(ui),
                                     PrefsSection::Memory => self.prefs_memory(ui),
+                                    PrefsSection::Autosave => self.prefs_autosave(ui),
                                     PrefsSection::Developer => self.prefs_developer(ui),
                                 }
                             });
@@ -2602,6 +2679,84 @@ impl MassifApp {
                 }
                 if keep {
                     self.dialog = Some(Dialog::AutoRules(paint));
+                }
+            }
+            Dialog::Recover => {
+                // A choice per backup: restore one (the map open now, if it
+                // has changes, asked about first), discard it, or decide later.
+                let mut restore = None;
+                let mut discard = None;
+                let response = modal(ctx, "recover").show(ctx, |ui| {
+                    ui.set_width(460.0);
+                    let pal = Palette::of(ui);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(theme::glyph(Icon::History).to_string()).size(17.0).color(pal.accent));
+                        ui.label(RichText::new("Restore unsaved changes?").bold().size(15.0));
+                    });
+                    ui.add_space(2.0);
+                    let found = &self.autosave.found;
+                    let about = if found.len() == 1 {
+                        "Massif closed without saving this map. A copy of it was kept: restore it, then save it to keep it."
+                    } else {
+                        "Massif closed without saving these maps. A copy of each was kept: restore one, then save it to keep it."
+                    };
+                    ui.add(egui::Label::new(RichText::new(about).color(pal.weak)).wrap());
+                    ui.add_space(10.0);
+                    crate::widgets::well(ui, |ui| {
+                        for (k, b) in found.iter().enumerate() {
+                            if k > 0 {
+                                let r = ui.available_rect_before_wrap();
+                                ui.painter().hline(r.x_range().expand(12.0), r.top() + 2.0, Stroke::new(1.0, pal.border));
+                                ui.add_space(5.0);
+                            }
+                            let file = b.info.path.as_ref().map_or_else(|| "Never saved".to_owned(), |p| jobs::display_name(p));
+                            ui.horizontal(|ui| {
+                                ui.vertical(|ui| {
+                                    ui.spacing_mut().item_spacing.y = 1.0;
+                                    ui.label(RichText::new(&b.info.name).size(13.5).medium());
+                                    ui.label(RichText::new(format!("Taken {} · {} · {}", b.age(), file, panels::human(b.bytes))).size(11.5).color(pal.weak));
+                                });
+                                ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                                    if ui.add(theme::primary_button(ui, "Restore")).clicked() {
+                                        restore = Some(k);
+                                    }
+                                    if ui.button("Discard").clicked() {
+                                        discard = Some(k);
+                                    }
+                                });
+                            });
+                        }
+                    });
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Kept until you choose.").size(11.5).color(pal.weak));
+                        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                            if ui.button("Later").clicked() {
+                                keep = false;
+                            }
+                        });
+                    });
+                });
+                if let Some(k) = discard {
+                    let b = self.autosave.found[k].clone();
+                    self.autosave.discard(&b);
+                    self.say(ctx, format!("Discarded the copy of “{}”", b.info.name), false, None);
+                }
+                if let Some(k) = restore {
+                    let b = self.autosave.found.remove(k);
+                    keep = false;
+                    if self.has_map && self.doc.is_modified() {
+                        // The map open now first: its changes are asked about.
+                        self.autosave.found.insert(0, b);
+                        self.dialog = Some(Dialog::Unsaved(Pending::Recover));
+                    } else {
+                        self.jobs.push(Job::recover(ctx, b));
+                    }
+                } else if response.should_close() {
+                    keep = false;
+                }
+                if keep && !self.autosave.found.is_empty() {
+                    self.dialog = Some(Dialog::Recover);
                 }
             }
             Dialog::Unsaved(pending) => {
@@ -2886,6 +3041,20 @@ impl MassifApp {
         }
     }
 
+    /// Back the map up while it has changes not saved (see `autosave`).
+    fn autosave_tick(&mut self, ctx: &egui::Context) {
+        let busy = self.doc.history.is_recording() || self.jobs.iter().any(|j| j.kind.blocks_editing() || j.kind == jobs::JobKind::Save);
+        let every = std::time::Duration::from_secs(60 * self.settings.autosave_minutes.max(1) as u64);
+        let on = self.settings.autosave && self.has_map;
+        if let Some(after) = self.autosave.tick(&self.doc, on, every, busy) {
+            ctx.request_repaint_after(after);
+        }
+        if self.autosave.writing() {
+            // Its end looked at a moment after it.
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        }
+    }
+
     fn handle_close(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.viewport().close_requested()) && self.doc.is_modified() && !self.allow_close {
             ctx.send_viewport_cmd(ViewportCommand::CancelClose);
@@ -3023,6 +3192,7 @@ impl MassifApp {
 
         step("the dialogs");
         self.dialogs(&ctx);
+        self.autosave_tick(&ctx);
 
         let dirty = self.doc.take_dirty();
         if !dirty.is_empty() {
@@ -3057,6 +3227,11 @@ impl eframe::App for MassifApp {
         // Until the next frame, the system's Quit is answered from what this
         // one leaves: now, or not before the app asks.
         crate::quit::frame_ends(self.doc.is_modified() && !self.allow_close);
+    }
+
+    fn on_exit(&mut self) {
+        // Closed cleanly: the map was saved, or its changes let go.
+        self.autosave.close();
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -3549,6 +3724,60 @@ mod tests {
         let map = map_rect(h.state(), &h.ctx);
         let footer = image::imageops::crop_imm(&image, map.left() as u32, (map.bottom() - 30.0) as u32, map.width() as u32, 30).to_image();
         footer.save(dir.join("brush-footer.png")).unwrap();
+    }
+
+    /// A backup left by a run that crashed: offered at the start, restored
+    /// as the map it was (its name, its file, changes to save), then
+    /// removed once the map is saved (a render of the dialog with
+    /// MASSIF_SNAPSHOT_DIR).
+    #[test]
+    fn restoring_a_backup_left_by_a_crash() {
+        use crate::autosave::{Autosave, Info};
+        use egui_kittest::kittest::Queryable;
+        let dir = std::env::temp_dir().join(format!("massif-recover-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut world = generate(&GenParams { tiles_x: 4, tiles_z: 3, landform: Landform::Mountains, ..GenParams::default() });
+        world.meta.name = "Northern Isles".into();
+        let file = dir.join("Northern Isles.massif");
+        let taken = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() - 7 * 60;
+        let info = Info { session: "1-1".into(), generation: 4, name: world.meta.name.clone(), path: Some(file.clone()), taken, revision: 12 };
+        let backup = crate::autosave::write(&dir, world.copy_unfrozen(), info).unwrap();
+        let mut h = harness(ThemeChoice::Light);
+        h.run_steps(3);
+        h.state_mut().autosave = Autosave::open(dir.clone());
+        assert_eq!(h.state().autosave.found, std::slice::from_ref(&backup), "a backup whose run is over is offered");
+        h.state_mut().dialog = Some(Dialog::Recover);
+        h.run_steps(4);
+        if let Some(out) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            h.render().unwrap().save(out.join("dialog-recover.png")).unwrap();
+        }
+        h.get_by_label("Restore").click();
+        h.run_steps(2);
+        while !h.state().jobs.is_empty() {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.run_steps(2);
+        assert!(h.state().dialog.is_none());
+        {
+            let doc = &h.state().doc;
+            assert_eq!(doc.world.meta.name, "Northern Isles");
+            assert_eq!(doc.path.as_deref(), Some(file.as_path()));
+            assert!(doc.is_modified(), "restored, not saved");
+        }
+        assert!(backup.file.exists(), "kept until the map is saved");
+        // Saved to its file: the backup goes.
+        let ctx = h.ctx.clone();
+        assert!(h.state_mut().save(&ctx, false));
+        while !h.state().jobs.is_empty() {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(!h.state().doc.is_modified() && file.exists());
+        assert!(!backup.file.exists(), "a save removes the backup");
+        h.state_mut().autosave.close();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Flatten's options in Tool Settings: the way it moves the land, picked
@@ -8217,6 +8446,7 @@ mod tests {
             (PrefsSection::Sounds, "sounds"),
             (PrefsSection::Notifications, "notifications"),
             (PrefsSection::Memory, "memory"),
+            (PrefsSection::Autosave, "autosave"),
         ] {
             h.state_mut().dialog = Some(Dialog::Preferences(section));
             h.run_steps(4);

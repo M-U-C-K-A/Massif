@@ -162,6 +162,18 @@ impl Dimension {
         }
     }
 
+    /// A copy that encodes nothing (see [`Level::copy_unfrozen`]).
+    pub fn copy_unfrozen(&self) -> Dimension {
+        Dimension {
+            kind: self.kind,
+            min_y: self.min_y,
+            max_y: self.max_y,
+            levels: self.levels.iter().map(Level::copy_unfrozen).collect(),
+            voxels: self.voxels.clone(),
+            next_level_id: self.next_level_id,
+        }
+    }
+
     /// Inclusive tile bounds of the ground level: the extent of the map.
     pub fn bounds(&self) -> Option<(TilePos, TilePos)> {
         self.ground().bounds()
@@ -198,6 +210,18 @@ impl World {
             meta: self.meta.clone(),
             registry: self.registry.clone(),
             dims: self.dims.iter_mut().map(Dimension::snapshot).collect(),
+        }
+    }
+
+    /// A copy taken without encoding anything, so without holding up the
+    /// editor (see [`Level::copy_unfrozen`]): [`World::snapshot`] of it,
+    /// on another thread, gives what [`World::snapshot`] of this world
+    /// would.
+    pub fn copy_unfrozen(&self) -> World {
+        World {
+            meta: self.meta.clone(),
+            registry: self.registry.clone(),
+            dims: self.dims.iter().map(Dimension::copy_unfrozen).collect(),
         }
     }
 }
