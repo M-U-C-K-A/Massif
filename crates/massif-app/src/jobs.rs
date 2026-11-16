@@ -363,6 +363,26 @@ pub fn reveal(path: &std::path::Path) {
     }
 }
 
+/// Run `load` in the threads kept for what the app loads as it starts (the
+/// brushes, the game's textures), rather than in rayon's global pool. The
+/// interface waits on that pool whenever it draws with rayon (the picture
+/// behind the home screen, the map), and a thread that is not one of the
+/// pool's waits for the pool's threads to finish what they are doing before
+/// they take its work: a slow load there (a large folder of WorldPainter
+/// brushes, on a slow computer) held up the first frame for minutes.
+pub fn in_loading_pool<R: Send>(load: impl FnOnce() -> R + Send) -> R {
+    static POOL: std::sync::OnceLock<Option<rayon::ThreadPool>> = std::sync::OnceLock::new();
+    let pool = POOL.get_or_init(|| {
+        // One core left to the interface.
+        let threads = std::thread::available_parallelism().map_or(2, |n| n.get()).saturating_sub(1).max(1);
+        rayon::ThreadPoolBuilder::new().num_threads(threads).thread_name(|k| format!("massif loads {k}")).build().ok()
+    });
+    match pool {
+        Some(pool) => pool.install(load),
+        None => load(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

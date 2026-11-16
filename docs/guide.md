@@ -848,7 +848,8 @@ starting again after a start that hung does not lose it. Send both when
 reporting a problem: the last line says where Massif stopped.
 
 - The first frames are followed step by step until one is on the screen:
-  the interface laid out, its shapes and textures sent to the graphics card,
+  the interface laid out, part by part (the home screen's picture, its side
+  bar, the new map's settings), its shapes and textures sent to the graphics card,
   the image the window gives to draw on (`get_current_texture`), the frame
   drawn and presented. A frame the window gives no image for is written
   down with the reason.
@@ -859,14 +860,24 @@ reporting a problem: the last line says where Massif stopped.
 - The window stays hidden until its first picture is drawn, so that it does
   not flash white; on Windows it is shown before, as drawing in a window
   never shown is what some drivers handle worst.
-- When the start stays 12 seconds in one step once its graphics card is
-  chosen, the graphics driver is most likely stuck: the graphics API Massif
-  was drawing with is set aside on this computer, and the next starts draw with another one — on Windows
-  DirectX 12 after Vulkan, then OpenGL. On Windows a message offers to start
-  again with it right away. A start that died without a word is found by
-  the next one, which sets its API aside in the same way. The APIs set aside
-  are listed in `graphics.txt` beside the log: delete the file to let Massif
-  try them again (after a driver update, say).
+- When the start stays 12 seconds in a step of the graphics card (opening
+  it, taking the frame's shapes and textures, giving the window's image,
+  presenting it), the graphics driver is stuck: the graphics API Massif was
+  drawing with is set aside on this computer, and the next starts draw with
+  another one — on Windows DirectX 12 after Vulkan, then OpenGL. On Windows a
+  message offers to start again with it right away. A start that died
+  without a word in such a step is found by the next one, which sets its API
+  aside in the same way. The APIs set aside are listed in `graphics.txt`
+  beside the log: delete the file to let Massif try them again (after a
+  driver update, say).
+- A start that is slow in its own work (laying out the interface, say) is
+  only written down in the log, with the part it is in: another graphics API
+  would not help it. The pictures of the home screen, the new map's preview
+  and the dates of the recent maps are made on threads of their own, and the
+  brushes and the game's textures load on threads kept for them, so that the
+  first frame waits on none of it. Massif 0.5.1 set every API aside when its
+  first frame was held up by them; those lines of `graphics.txt` (they end
+  with "the first frame did not come") are taken out, and the APIs tried again.
 - Massif draws with Vulkan, DirectX 12 or OpenGL on Windows, Metal on macOS,
   and Vulkan or OpenGL on Linux. Updating the graphics driver often helps.
   To choose one, set `WGPU_BACKEND` to `dx12`, `vulkan` or `gl` where

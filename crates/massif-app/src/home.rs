@@ -12,8 +12,11 @@ use egui::{Align, Align2, Color32, CursorIcon, FontId, Rect, Response, RichText,
 use massif_core::generate::{FromHeightmap, GenParams, Landform};
 use massif_core::graph::Template;
 use massif_core::heightmap::Heightmap;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::time::SystemTime;
 
 /// Width of the sidebar.
 const SIDEBAR: f32 = 268.0;
@@ -43,9 +46,11 @@ pub struct NewMap {
     /// than the landform.
     pub template: Option<Template>,
     preview: Option<(String, TextureHandle)>,
+    /// The preview being drawn on a thread of its own, for these settings.
+    previewing: Option<(String, Receiver<egui::ColorImage>)>,
     /// The picture of the template, and the one being drawn.
     template_preview: Option<(Template, TextureHandle)>,
-    drawing: Option<(Template, std::sync::mpsc::Receiver<egui::ColorImage>)>,
+    drawing: Option<(Template, Receiver<egui::ColorImage>)>,
     /// How tall the settings were last laid out: the preview beside them is
     /// as tall.
     rows: f32,
@@ -66,6 +71,7 @@ impl NewMap {
             registry,
             template: None,
             preview: None,
+            previewing: None,
             template_preview: None,
             drawing: None,
             rows: 6.0 * (ROW_H + 14.0) - 14.0,
@@ -167,9 +173,24 @@ const FRAME_SECS: f64 = 0.9;
 /// The picture behind the home screen, dithered for one size and theme: a
 /// few frames of it, each dithered a little differently, shown in turn.
 struct Backdrop {
-    /// Columns, rows, dark, high contrast, where the words are.
-    key: (usize, usize, bool, bool, [i32; 4]),
+    key: BackdropKey,
+    /// None when the picture would not decode.
     frames: Vec<TextureHandle>,
+}
+
+/// What a backdrop is made for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct BackdropKey {
+    /// The picture, and whether at dawn (the light theme's) or at night.
+    index: usize,
+    dawn: bool,
+    cols: usize,
+    rows: usize,
+    dark: bool,
+    high: bool,
+    /// Where the words are, in cells.
+    calm: [i32; 4],
+    /// Pixels a cell.
     pitch: usize,
 }
 
@@ -178,8 +199,15 @@ struct Picture {
     index: usize,
     /// At dawn (the light theme's), or at night.
     dawn: bool,
-    image: image::RgbImage,
+    image: Arc<image::RgbImage>,
 }
+
+/// A backdrop made on a thread of its own: its picture (once decoded) and
+/// its frames, none when the picture would not decode.
+type MadeBackdrop = (Option<Picture>, Vec<egui::ColorImage>);
+
+/// When maps were last changed, `None` for those that are not there.
+type Ages = Vec<(PathBuf, Option<SystemTime>)>;
 
 pub struct Home {
     pub page: Page,
@@ -193,6 +221,18 @@ pub struct Home {
     choice: usize,
     choice_set: bool,
     picture: Option<Picture>,
+    /// The backdrop being made on a thread of its own.
+    making: Option<(BackdropKey, Receiver<MadeBackdrop>)>,
+    /// When each recent map was last changed (`None`: it is not there),
+    /// read on a thread of its own: a map on a drive that is gone, or on a
+    /// network share that does not answer, would hold up the window.
+    ages: HashMap<PathBuf, Option<SystemTime>>,
+    ages_asked: Option<Receiver<Ages>>,
+    ages_at: f64,
+    /// Make the pictures (the backdrop, the preview) and read the recent
+    /// maps in the frame itself, as tests want; the app makes them on other
+    /// threads, so that its first frame waits on none of it.
+    pub in_frame: bool,
     /// Whether the picture's dither moves on (the settings).
     pub animate: bool,
     logo: Option<TextureHandle>,
@@ -212,6 +252,11 @@ impl Home {
             choice: (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos()) as usize) / 7,
             choice_set: false,
             picture: None,
+            making: None,
+            ages: HashMap::new(),
+            ages_asked: None,
+            ages_at: f64::NEG_INFINITY,
+            in_frame: cfg!(test),
             animate: true,
             logo: None,
             content_height: 0.0,
@@ -273,6 +318,7 @@ impl Home {
             });
         }
 
+        crate::startup::frame_step(ui.ctx(), "the home screen: the picture behind it");
         self.paint_backdrop(ui, main, column_rect(main, self.content_height));
         ui.painter().rect_filled(sidebar, 0, sidebar_fill(&pal));
         ui.painter().vline(sidebar.max.x - 0.5, sidebar.y_range(), Stroke::new(1.0, pal.border));
@@ -283,7 +329,9 @@ impl Home {
                 .max_rect(sidebar.shrink2(vec2(12.0, 0.0)))
                 .layout(egui::Layout::top_down(Align::Min)),
         );
+        crate::startup::frame_step(ui.ctx(), "the home screen: the side bar and the recent maps");
         self.sidebar(&mut side, recent, &mut action);
+        crate::startup::frame_step(ui.ctx(), "the home screen: the new map's settings and preview");
         let mut centre = ui.new_child(UiBuilder::new().id_salt("home main").max_rect(main));
         self.main(&mut centre, main, &mut action);
 
@@ -337,6 +385,7 @@ impl Home {
 
     fn sidebar(&mut self, ui: &mut Ui, recent: &[PathBuf], action: &mut Option<HomeAction>) {
         let pal = Palette::of(ui);
+        self.read_ages(ui.ctx(), recent);
         // Room for the window's buttons, on macOS.
         ui.add_space(if cfg!(target_os = "macos") { 44.0 } else { 16.0 });
         ui.horizontal(|ui| {
@@ -376,7 +425,7 @@ impl Home {
                     empty_state(ui);
                 }
                 for path in recent {
-                    let row = recent_row(ui, path);
+                    let row = recent_row(ui, path, self.ages.get(path).copied());
                     if row.clicked() {
                         *action = Some(HomeAction::OpenRecent(path.clone()));
                     }
@@ -558,7 +607,7 @@ impl Home {
             nm.rows = rows.height();
             let side = side.min(rows.height());
             if side > 0.0 {
-                preview(ui, nm, Rect::from_min_size(pos2(card.right() - side, rows.top()), vec2(side, side)));
+                preview(ui, nm, Rect::from_min_size(pos2(card.right() - side, rows.top()), vec2(side, side)), self.in_frame);
             }
         }
         ui.add_space(4.0);
@@ -689,8 +738,9 @@ impl Home {
 
     /// The picture behind `rect`: one of `assets/backdrops`, dithered in
     /// its own palette and dimmed where the settings are written (`calm`),
-    /// its dither moving on every [`FRAME_SECS`]. Made again when the window
-    /// grows past it or the theme changes.
+    /// its dither moving on every [`FRAME_SECS`]. Made again, on a thread of
+    /// its own, when the window grows past it or the theme changes; the one
+    /// before stays until then (none at first: the page's colour).
     fn paint_backdrop(&mut self, ui: &Ui, rect: Rect, calm: Rect) {
         let pal = Palette::of(ui);
         let bg = backdrop_fill(&pal);
@@ -702,12 +752,6 @@ impl Home {
         let index = self.choice % all.len();
         // The light theme shows the scene at dawn, where there is one.
         let dawn = !pal.dark && all[index].2.is_some();
-        if self.picture.as_ref().is_none_or(|p| p.index != index || p.dawn != dawn) {
-            let bytes = if dawn { all[index].2.unwrap_or(all[index].1) } else { all[index].1 };
-            self.picture = image::load_from_memory(bytes).ok().map(|img| Picture { index, dawn, image: img.to_rgb8() });
-            self.backdrop = None;
-        }
-        let Some(picture) = &self.picture else { return };
         let ppp = ui.ctx().pixels_per_point();
         let pitch = ((2.0 * ppp).round() as usize).max(3);
         let cell = pitch as f32 / ppp;
@@ -717,28 +761,113 @@ impl Home {
         let cols = bucket(((rect.width() * ppp) as usize / pitch).max(1));
         let rows = bucket(((rect.height() * ppp) as usize / pitch).max(1));
         // Anchored to the bottom left: the land stays, the sky gives way.
-        let size = vec2(cols as f32, rows as f32) * cell;
-        let shown = Rect::from_min_size(pos2(rect.left(), rect.bottom() - size.y), size);
+        let placed = |cols: usize, rows: usize| {
+            let size = vec2(cols as f32, rows as f32) * cell;
+            Rect::from_min_size(pos2(rect.left(), rect.bottom() - size.y), size)
+        };
+        let shown = placed(cols, rows);
         let in_cells = |p: egui::Pos2| [((p.x - shown.left()) / cell) as i32, ((p.y - shown.top()) / cell) as i32];
         let ([x0, y0], [x1, y1]) = (in_cells(calm.min), in_cells(calm.max));
-        let calm_cells = [x0, y0, x1, y1].map(|v| v.div_euclid(8) * 8);
-        let key = (cols, rows, pal.dark, pal.high, calm_cells);
-        if self.backdrop.as_ref().is_none_or(|b| b.key != key || b.pitch != pitch) {
-            let light = if picture.dawn { Light::Dawn } else if pal.dark { Light::Night } else { Light::Faded };
-            let frames = dither_frames(&picture.image, cols, rows, light, bg, calm_cells, pal.high)
-                .into_iter()
-                .enumerate()
-                .map(|(k, image)| ui.ctx().load_texture(format!("home backdrop {k}"), image, egui::TextureOptions::NEAREST))
-                .collect();
-            self.backdrop = Some(Backdrop { key, frames, pitch });
+        let calm = [x0, y0, x1, y1].map(|v| v.div_euclid(8) * 8);
+        let key = BackdropKey { index, dawn, cols, rows, dark: pal.dark, high: pal.high, calm, pitch };
+        // What a thread made.
+        if let Some((made_for, rx)) = &self.making {
+            match rx.try_recv() {
+                Ok(made) => {
+                    let made_for = *made_for;
+                    self.making = None;
+                    self.take_backdrop(ui.ctx(), made_for, made);
+                }
+                Err(TryRecvError::Disconnected) => self.making = None,
+                Err(TryRecvError::Empty) => {}
+            }
         }
-        if let Some(b) = &self.backdrop {
+        // One at a time: while the window is resized, the next is made for
+        // its size once the one on its way is done.
+        if self.backdrop.as_ref().is_none_or(|b| b.key != key) && self.making.is_none() {
+            let decoded = self.picture.as_ref().filter(|p| p.index == index && p.dawn == dawn).map(|p| p.image.clone());
+            let bytes = if dawn { all[index].2.unwrap_or(all[index].1) } else { all[index].1 };
+            let light = if dawn { Light::Dawn } else if pal.dark { Light::Night } else { Light::Faded };
+            let high = pal.high;
+            let make = move || -> MadeBackdrop {
+                let image = decoded.or_else(|| image::load_from_memory(bytes).ok().map(|img| Arc::new(img.to_rgb8())));
+                let Some(image) = image else { return (None, Vec::new()) };
+                let frames = dither_frames(&image, cols, rows, light, bg, calm, high);
+                (Some(Picture { index, dawn, image }), frames)
+            };
+            if self.in_frame {
+                self.take_backdrop(ui.ctx(), key, make());
+            } else {
+                let (tx, rx) = channel();
+                let ctx = ui.ctx().clone();
+                let spawned = std::thread::Builder::new().name("massif home picture".into()).spawn(move || {
+                    let _ = tx.send(make());
+                    ctx.request_repaint();
+                });
+                if spawned.is_ok() {
+                    self.making = Some((key, rx));
+                }
+            }
+        }
+        if let Some(b) = &self.backdrop
+            && !b.frames.is_empty()
+        {
             let t = ui.input(|i| i.time);
             let k = if self.animate { (t / FRAME_SECS) as usize % b.frames.len() } else { 0 };
-            ui.painter_at(rect).image(b.frames[k].id(), shown, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            // Where it was made for, until the one for this size comes.
+            let at = if b.key.pitch == pitch { placed(b.key.cols, b.key.rows) } else { shown };
+            ui.painter_at(rect).image(b.frames[k].id(), at, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             if self.animate {
                 ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(FRAME_SECS - t % FRAME_SECS + 0.01));
             }
+        }
+    }
+
+    /// A backdrop made for `key`: its frames sent to the graphics card.
+    fn take_backdrop(&mut self, ctx: &egui::Context, key: BackdropKey, (picture, frames): MadeBackdrop) {
+        if picture.is_some() {
+            self.picture = picture;
+        }
+        let frames = frames.into_iter().enumerate().map(|(k, image)| ctx.load_texture(format!("home backdrop {k}"), image, egui::TextureOptions::NEAREST)).collect();
+        self.backdrop = Some(Backdrop { key, frames });
+    }
+
+    /// When the recent maps were last changed, read again every few
+    /// seconds on a thread of its own.
+    fn read_ages(&mut self, ctx: &egui::Context, recent: &[PathBuf]) {
+        let now = ctx.input(|i| i.time);
+        if let Some(rx) = &self.ages_asked {
+            match rx.try_recv() {
+                Ok(ages) => {
+                    self.ages_asked = None;
+                    self.ages = ages.into_iter().collect();
+                }
+                Err(TryRecvError::Disconnected) => self.ages_asked = None,
+                Err(TryRecvError::Empty) => {}
+            }
+        }
+        let unknown = recent.iter().any(|p| !self.ages.contains_key(p));
+        if self.ages_asked.is_some() || recent.is_empty() || !(unknown || now - self.ages_at >= 10.0) {
+            return;
+        }
+        self.ages_at = now;
+        let paths = recent.to_vec();
+        let read = move || paths.into_iter().map(|p| {
+            let modified = std::fs::metadata(&p).and_then(|m| m.modified()).ok();
+            (p, modified)
+        });
+        if self.in_frame {
+            self.ages = read().collect();
+            return;
+        }
+        let (tx, rx) = channel();
+        let ctx = ctx.clone();
+        let spawned = std::thread::Builder::new().name("massif recent maps".into()).spawn(move || {
+            let _ = tx.send(read().collect());
+            ctx.request_repaint();
+        });
+        if spawned.is_ok() {
+            self.ages_asked = Some(rx);
         }
     }
 }
@@ -1025,7 +1154,9 @@ fn nav(ui: &mut Ui, icon: Icon, label: &str, selected: bool) -> Response {
 }
 
 /// A map of the list of recent ones: its name, and how long ago it changed.
-fn recent_row(ui: &mut Ui, path: &Path) -> Response {
+/// A recent map, `modified` when it was last changed as read so far
+/// (`Some(None)`: it is not there).
+fn recent_row(ui: &mut Ui, path: &Path, modified: Option<Option<SystemTime>>) -> Response {
     let pal = Palette::of(ui);
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
     let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
@@ -1034,10 +1165,10 @@ fn recent_row(ui: &mut Ui, path: &Path) -> Response {
         ui.painter().rect_filled(rect, 8, theme::mix(sidebar_fill(&pal), pal.text, 0.05));
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }
-    let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
     let (age, ink) = match modified {
-        Some(t) => (ago(t), theme::mix(pal.text, pal.weak, 0.2)),
-        None => ("missing".to_owned(), pal.weak),
+        Some(Some(t)) => (ago(t), theme::mix(pal.text, pal.weak, 0.2)),
+        Some(None) => ("missing".to_owned(), pal.weak),
+        None => (String::new(), theme::mix(pal.text, pal.weak, 0.2)),
     };
     let world = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("world"));
     ui.painter().text(
@@ -1216,24 +1347,57 @@ fn dashed_rect(painter: &egui::Painter, rect: Rect, color: Color32) {
 
 /// The preview of a new map in `rect`: its colours and relief from above,
 /// the whole map (not square ones keep their proportions), a cross at its
-/// centre.
-fn preview(ui: &mut Ui, nm: &mut NewMap, rect: Rect) {
+/// centre. Drawn on a thread of its own (in the frame when `in_frame`): the
+/// one before stays until it comes.
+fn preview(ui: &mut Ui, nm: &mut NewMap, rect: Rect, in_frame: bool) {
     if let Some(t) = nm.template {
         template_preview(ui, nm, t, rect);
         return;
     }
     let params = nm.params();
     let key = format!("{params:?}");
-    if nm.preview.as_ref().is_none_or(|(k, _)| *k != key) {
-        let image = preview_image(&params, &nm.registry, 200);
-        let texture = ui.ctx().load_texture("new map preview", image, egui::TextureOptions::LINEAR);
-        nm.preview = Some((key, texture));
+    if let Some((drawn, rx)) = &nm.previewing {
+        match rx.try_recv() {
+            Ok(image) => {
+                let texture = ui.ctx().load_texture("new map preview", image, egui::TextureOptions::LINEAR);
+                nm.preview = Some((drawn.clone(), texture));
+                nm.previewing = None;
+            }
+            Err(TryRecvError::Disconnected) => nm.previewing = None,
+            Err(TryRecvError::Empty) => {}
+        }
     }
-    if let Some((_, texture)) = &nm.preview {
-        let (w, d) = (nm.width as f32, nm.depth as f32);
-        let k = rect.width() / w.max(d);
-        let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(w / w.max(d), d / w.max(d)));
-        picture_tile(ui, rect, texture.id(), vec2(w * k, d * k), uv);
+    // One at a time: while a setting is dragged, the next is drawn for it
+    // once the one on its way is done.
+    if nm.preview.as_ref().is_none_or(|(k, _)| *k != key) && nm.previewing.is_none() {
+        if in_frame {
+            let image = preview_image(&params, &nm.registry, 200);
+            nm.preview = Some((key, ui.ctx().load_texture("new map preview", image, egui::TextureOptions::LINEAR)));
+        } else {
+            let (tx, rx) = channel();
+            let reg = nm.registry.clone();
+            let ctx = ui.ctx().clone();
+            let spawned = std::thread::Builder::new().name("massif home preview".into()).spawn(move || {
+                let _ = tx.send(preview_image(&params, &reg, 200));
+                ctx.request_repaint();
+            });
+            if spawned.is_ok() {
+                nm.previewing = Some((key, rx));
+            }
+        }
+    }
+    match &nm.preview {
+        Some((_, texture)) => {
+            let (w, d) = (nm.width as f32, nm.depth as f32);
+            let k = rect.width() / w.max(d);
+            let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(w / w.max(d), d / w.max(d)));
+            picture_tile(ui, rect, texture.id(), vec2(w * k, d * k), uv);
+        }
+        None => {
+            let pal = Palette::of(ui);
+            ui.painter().rect(rect, theme::CARD_RADIUS, pal.well(), Stroke::new(1.0, pal.border), StrokeKind::Inside);
+            ui.put(Rect::from_center_size(rect.center(), vec2(24.0, 24.0)), egui::Spinner::new());
+        }
     }
     // The centre: a cross, outlined to show on snow as on water.
     let c = rect.center();
@@ -1255,13 +1419,13 @@ fn template_preview(ui: &mut Ui, nm: &mut NewMap, t: Template, rect: Rect) {
                 nm.template_preview = Some((*drawn, texture));
                 nm.drawing = None;
             }
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => nm.drawing = None,
-            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => nm.drawing = None,
+            Err(TryRecvError::Empty) => {}
         }
     }
     let shown = nm.template_preview.as_ref().filter(|p| p.0 == t).map(|p| p.1.id());
     if shown.is_none() && nm.drawing.as_ref().is_none_or(|d| d.0 != t) {
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = channel();
         let reg = nm.registry.clone();
         let sea = nm.params.sea_level as f32;
         let side = nm.width.max(nm.depth) as f64;
@@ -1520,6 +1684,111 @@ pub fn parse_seed(text: &str) -> i64 {
 #[cfg(test)]
 mod backdrop_tests {
     use super::*;
+
+    /// Every thread of rayon's global pool held until the guard is dropped
+    /// (or, at the latest, after `most`), as a slow load in it would.
+    pub(crate) struct BusyPool(Arc<std::sync::atomic::AtomicBool>);
+
+    impl BusyPool {
+        pub(crate) fn hold(most: std::time::Duration) -> Self {
+            use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+            let free = Arc::new(AtomicBool::new(false));
+            let held = Arc::new(AtomicUsize::new(0));
+            let threads = rayon::current_num_threads();
+            for _ in 0..threads {
+                let (free, held) = (free.clone(), held.clone());
+                rayon::spawn(move || {
+                    held.fetch_add(1, Ordering::SeqCst);
+                    let until = std::time::Instant::now() + most;
+                    while !free.load(Ordering::SeqCst) && std::time::Instant::now() < until {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                });
+            }
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while held.load(Ordering::SeqCst) < threads && std::time::Instant::now() < until {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            Self(free)
+        }
+    }
+
+    impl Drop for BusyPool {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// The home screen's first frame waits on no work of rayon's global
+    /// pool, which slow loads may hold (0.5.1 waited there for minutes on a
+    /// slow computer with many WorldPainter brushes): its picture and the
+    /// new map's preview come later, from threads of their own, as do the
+    /// ages of the recent maps.
+    #[test]
+    fn the_first_frame_waits_on_nothing() {
+        let mut home = Home::new(massif_core::Registry::vanilla());
+        home.in_frame = false;
+        let recent = vec![std::env::temp_dir().join("massif-no-such-map.massif")];
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1280.0, 800.0))
+            .with_accessibility_check(false)
+            .build_ui_state(move |ui, (shown, home): &mut (bool, Home)| {
+                // The app's fonts first, as the app has them when it starts.
+                if !*shown {
+                    crate::theme::install(ui.ctx());
+                    crate::theme::set_typeface(ui.ctx(), Default::default());
+                    return;
+                }
+                home.ui(ui, &recent, None);
+            }, (false, home));
+        h.step();
+        h.state_mut().0 = true;
+        let busy = BusyPool::hold(std::time::Duration::from_secs(20));
+        let start = std::time::Instant::now();
+        h.step();
+        let first = start.elapsed();
+        drop(busy);
+        assert!(first < std::time::Duration::from_secs(3), "the first frame took {first:?} while the pool was busy");
+        // What was left to the threads comes.
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            h.step();
+            let home = &h.state().1;
+            let done = home.backdrop.as_ref().is_some_and(|b| !b.frames.is_empty()) && home.new_map.preview.is_some() && home.ages.len() == 1;
+            if done {
+                assert_eq!(home.ages.values().next(), Some(&None), "the map is missing");
+                break;
+            }
+            assert!(std::time::Instant::now() < until, "the picture, the preview and the ages never came");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// What loads in the pool kept for loads leaves rayon's global pool to
+    /// the interface.
+    #[test]
+    fn loads_leave_the_global_pool_free() {
+        use rayon::prelude::*;
+        let free = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let held = free.clone();
+        let load = std::thread::spawn(move || {
+            crate::jobs::in_loading_pool(|| {
+                (0..64).into_par_iter().for_each(|_| {
+                    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+                    while !held.load(std::sync::atomic::Ordering::SeqCst) && std::time::Instant::now() < until {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                })
+            })
+        });
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let start = std::time::Instant::now();
+        let sum: u64 = (0..10_000u64).into_par_iter().sum();
+        assert_eq!(sum, 49_995_000);
+        assert!(start.elapsed() < std::time::Duration::from_secs(3), "the global pool waited {:?}", start.elapsed());
+        free.store(true, std::sync::atomic::Ordering::SeqCst);
+        load.join().unwrap();
+    }
 
     /// The massif at dusk, drawn into `assets/backdrops` when
     /// MASSIF_BACKDROP_DIR says where.

@@ -2915,12 +2915,16 @@ impl MassifApp {
     /// One frame of the whole UI.
     pub fn frame_ui(&mut self, ui: &mut Ui, frame: &eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // Until the first frame is shown, startup.log names each part.
+        let step = |what: &str| crate::startup::frame_step(&ctx, what);
+        step("the theme and the accessibility settings");
         if self.applied_theme != Some(self.settings.theme) {
             self.apply_theme(&ctx);
             self.applied_theme = Some(self.settings.theme);
         }
         self.apply_access(&ctx);
         crate::sounds::configure(self.settings.sounds, self.settings.volume);
+        step("the work done in the background (opening, saving, exporting)");
         self.poll_jobs(&ctx);
         let now = ctx.input(|i| i.time);
         self.apply_memory_limit(now);
@@ -2931,6 +2935,7 @@ impl MassifApp {
             crate::sounds::play(if open { Cue::Open } else { Cue::Close });
             self.dialog_was_open = open;
         }
+        step("the brushes and the game's blocks, if loaded");
         if self.brushes.poll() {
             // The brush picked last time is an image: find it again.
             let source = self.tools.brush_source.clone();
@@ -2961,6 +2966,7 @@ impl MassifApp {
             self.sculpt3d.invalidate_all();
         }
         self.covers_key = Some(covers);
+        step("the files the system asks to open, and the shortcuts");
         // A map or a world the Finder asks to open (the first of them).
         if let Some(path) = crate::finder::take().into_iter().find(|p| {
             let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
@@ -2985,7 +2991,9 @@ impl MassifApp {
             self.say(&ctx, msg, false, None);
         }
         if self.home.is_some() {
+            step("the home screen");
             self.home_ui(ui, frame, &ctx);
+            step("the dialogs");
             self.dialogs(&ctx);
             if self.title != "Massif" {
                 ctx.send_viewport_cmd(ViewportCommand::Title("Massif".to_owned()));
@@ -2994,6 +3002,7 @@ impl MassifApp {
             return;
         }
 
+        step("the editor: its bars and panels");
         let pal = Palette::of(ui);
         let margin = if self.unified_titlebar { 9 } else { 6 };
         let bar = egui::Panel::top("menu bar")
@@ -3012,6 +3021,7 @@ impl MassifApp {
             .show(ui, |ui| self.dock(ui, frame));
         self.notices(&ctx);
 
+        step("the dialogs");
         self.dialogs(&ctx);
 
         let dirty = self.doc.take_dirty();

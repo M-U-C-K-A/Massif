@@ -6,15 +6,20 @@
 //!
 //! The first frames are followed through every step, until one is drawn on
 //! the window's image and presented (eframe shows the window after it):
-//! the interface laid out, its shapes and textures sent to the graphics
-//! card, the image the window gives to draw on, the frame presented. A
-//! start that stays too long in one step is stuck, most often in a
-//! graphics driver: the graphics API it draws with (Vulkan, DirectX 12,
-//! OpenGL) is set aside on this computer (`graphics.txt` beside the log),
-//! and the next starts let wgpu choose among the others. On Windows the
-//! user is asked to start again at once. A start that died without a word
-//! (a crash in a driver) is found by the next one, from the mark it left
-//! (`first-frame.pending`), and its API set aside in the same way.
+//! the interface laid out (each part of it), its shapes and textures sent
+//! to the graphics card, the image the window gives to draw on, the frame
+//! presented. Each step is Massif's own work or the graphics card's
+//! ([`Stage`]). A start that stays too long in a step of the graphics card
+//! is stuck in its driver: the graphics API it draws with (Vulkan, DirectX
+//! 12, OpenGL) is set aside on this computer (`graphics.txt` beside the
+//! log), and the next starts let wgpu choose among the others. On Windows
+//! the user is asked to start again at once. A start that stays long in its
+//! own work is only written down: another graphics API would not help it
+//! (0.5.1 set every API aside for a first frame held up in its own work,
+//! and those lines are left aside). A start that died without a word in a
+//! step of the graphics card (a crash in a driver) is found by the next
+//! one, from the mark it left (`first-frame.pending`), and its API set
+//! aside in the same way.
 //!
 //! eframe keeps the window hidden until its first frame is drawn (so that
 //! it does not flash white); on Windows it is shown before, as drawing in a
@@ -25,7 +30,7 @@
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -43,8 +48,54 @@ const FRAMES_LOGGED: u32 = 3;
 struct Log {
     file: Option<std::fs::File>,
     started: Instant,
-    /// The last step of the start, and when it was written.
-    last: (Instant, String),
+    /// The last step of the start, when it was written, and whose work it is.
+    last: (Instant, String, Stage),
+}
+
+/// Whose work a step of the start is: what it means when the start stays
+/// in it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Stage {
+    /// Massif's own work, on the processor: reading its settings, making
+    /// the app, laying out the interface. Another graphics API would not
+    /// make it go faster.
+    App,
+    /// The graphics card's driver: opening the device, taking the frame's
+    /// shapes and textures, giving the window's image, presenting it.
+    Graphics,
+}
+
+impl Stage {
+    fn word(self) -> &'static str {
+        match self {
+            Stage::App => "app",
+            Stage::Graphics => "graphics",
+        }
+    }
+
+    fn from_word(word: &str) -> Option<Stage> {
+        [Stage::App, Stage::Graphics].into_iter().find(|s| s.word() == word.trim())
+    }
+}
+
+/// What the watch does about a start that has not shown a frame.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Verdict {
+    /// Not long enough to say.
+    Wait,
+    /// Long in Massif's own work: written down, and watched on.
+    SlowWork,
+    /// Stuck in the graphics card's driver: its API set aside.
+    StuckInDriver,
+}
+
+/// What the watch makes of a start in a step of `stage` for `waited`.
+fn verdict(stage: Stage, waited: Duration) -> Verdict {
+    match stage {
+        _ if waited < STUCK_AFTER => Verdict::Wait,
+        Stage::App => Verdict::SlowWork,
+        Stage::Graphics => Verdict::StuckInDriver,
+    }
 }
 
 static LOG: OnceLock<Mutex<Log>> = OnceLock::new();
@@ -102,7 +153,7 @@ pub fn begin() {
         std::fs::File::create(&path).ok()
     });
     let now = Instant::now();
-    let _ = LOG.set(Mutex::new(Log { file, started: now, last: (now, String::new()) }));
+    let _ = LOG.set(Mutex::new(Log { file, started: now, last: (now, String::new(), Stage::App) }));
     step(&format!("Massif {} on {} {}", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH));
     let args: Vec<String> = std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
     if !args.is_empty() {
@@ -151,22 +202,50 @@ fn lock(log: &Mutex<Log>) -> MutexGuard<'_, Log> {
 }
 
 /// Write a line, with the time since the start; a step of the start
-/// (`progress`) is what the watch measures the time spent in.
-fn put(log: &mut Log, what: &str, progress: bool) {
+/// (`progress`, with whose work it is) is what the watch measures the time
+/// spent in.
+fn put(log: &mut Log, what: &str, progress: Option<Stage>) {
     let ms = log.started.elapsed().as_millis();
     if let Some(file) = &mut log.file {
         let _ = writeln!(file, "[{ms:>7} ms] {what}");
         let _ = file.flush();
     }
-    if progress {
-        log.last = (Instant::now(), what.to_owned());
+    if let Some(stage) = progress {
+        log.last = (Instant::now(), what.to_owned(), stage);
     }
 }
 
-/// Write down a step of the start, with the time since it began.
+/// The stage the mark of the start (`first-frame.pending`) says it is in.
+static MARKED: AtomicU8 = AtomicU8::new(u8::MAX);
+
+/// Write down a step of the start that is Massif's own work, with the time
+/// since it began.
 pub fn step(what: &str) {
+    step_in(what, Stage::App);
+}
+
+/// Write down a step of the start, and whose work it is.
+pub fn step_in(what: &str, stage: Stage) {
     if let Some(log) = LOG.get() {
-        put(&mut lock(log), what, true);
+        put(&mut lock(log), what, Some(stage));
+    }
+    // The mark of the start says where it is, for the next start to know
+    // whether the graphics card is to blame if this one dies.
+    if GRAPHICS.get().is_some() && !SHOWN.load(Ordering::SeqCst) && MARKED.swap(stage as u8, Ordering::SeqCst) != stage as u8 {
+        mark(stage);
+    }
+}
+
+/// A step of a frame of the start that is Massif's own work: a part of the
+/// interface laid out. Written down only for the first frames, until one
+/// is shown, so that a start held up names the part.
+pub fn frame_step(ctx: &egui::Context, what: &str) {
+    if SHOWN.load(Ordering::Relaxed) || LOG.get().is_none() {
+        return;
+    }
+    let n = frame_nr(ctx);
+    if n <= FRAMES_LOGGED && ctx.current_pass_index() == 0 {
+        step(&format!("frame {n}: {what}"));
     }
 }
 
@@ -174,7 +253,7 @@ pub fn step(what: &str) {
 /// error, the graphics card's news.
 fn write(what: &str) {
     if let Some(log) = LOG.get() {
-        put(&mut lock(log), what, false);
+        put(&mut lock(log), what, None);
     }
 }
 
@@ -185,8 +264,8 @@ fn write_now(what: &str) {
     let Some(log) = LOG.get() else { return };
     for _ in 0..50 {
         match log.try_lock() {
-            Ok(mut log) => return put(&mut log, what, false),
-            Err(std::sync::TryLockError::Poisoned(e)) => return put(&mut e.into_inner(), what, false),
+            Ok(mut log) => return put(&mut log, what, None),
+            Err(std::sync::TryLockError::Poisoned(e)) => return put(&mut e.into_inner(), what, None),
             Err(std::sync::TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(2)),
         }
     }
@@ -240,6 +319,28 @@ fn api_name(api: wgpu::Backend) -> &'static str {
     }
 }
 
+/// What Massif 0.5.1 wrote in `graphics.txt` when its first frame did not
+/// come in time, wherever the start was held up: its interface (Massif's
+/// own work) as much as the driver. Those lines are left aside.
+const OLD_WATCH: &str = ": the first frame did not come";
+
+/// Take out of `graphics.txt` the APIs Massif 0.5.1 set aside for a first
+/// frame that did not come in time (see [`OLD_WATCH`]): they are tried
+/// again. Returns those taken out.
+fn forget_old_watch(path: &std::path::Path) -> Vec<wgpu::Backend> {
+    let Ok(text) = std::fs::read_to_string(path) else { return Vec::new() };
+    let (old, kept): (Vec<&str>, Vec<&str>) = text.lines().partition(|line| line.trim_end().ends_with(OLD_WATCH) && !parse_set_aside(line).is_empty());
+    if old.is_empty() {
+        return Vec::new();
+    }
+    if parse_set_aside(&kept.join("\n")).is_empty() {
+        let _ = std::fs::remove_file(path);
+    } else {
+        let _ = std::fs::write(path, kept.iter().map(|line| format!("{line}\n")).collect::<String>());
+    }
+    parse_set_aside(&old.join("\n"))
+}
+
 /// The APIs named in `graphics.txt`.
 fn set_aside_apis() -> Vec<wgpu::Backend> {
     let text = set_aside_path().and_then(|p| std::fs::read_to_string(p).ok()).unwrap_or_default();
@@ -266,7 +367,7 @@ fn set_aside_in(path: &std::path::Path, api: wgpu::Backend, why: &str) {
         return;
     }
     if text.trim().is_empty() {
-        text = "# The graphics APIs Massif does not draw with on this computer: each failed to draw its first frame.\n# Delete a line, or this file, to let Massif try that API again.\n".to_owned();
+        text = "# The graphics APIs Massif does not draw with on this computer: the driver of each got stuck, or crashed, before the first frame was shown.\n# Delete a line, or this file, to let Massif try that API again.\n".to_owned();
     }
     text.push_str(&format!("{} {why}\n", api.to_str()));
     let _ = std::fs::write(path, text);
@@ -308,6 +409,13 @@ pub fn backends() -> wgpu::Backends {
         }
         step(&format!("WGPU_BACKEND={asked} names no graphics API (vulkan, dx12, gl or metal): left aside"));
     }
+    if let Some(path) = set_aside_path() {
+        let back = forget_old_watch(&path);
+        if !back.is_empty() {
+            let names = back.iter().map(|api| api_name(*api)).collect::<Vec<_>>().join(", ");
+            step(&format!("{names} tried again: Massif 0.5.1 set them aside for a first frame that was slow in its own work, not in the graphics driver"));
+        }
+    }
     let aside = set_aside_apis();
     if aside.is_empty() {
         return all;
@@ -346,15 +454,27 @@ fn last_start() {
     let api = lines.next().and_then(|word| apis().iter().copied().find(|api| api.to_str() == word.trim()));
     let process = lines.next().and_then(|p| p.trim().parse::<u32>().ok());
     let card = lines.next().unwrap_or_default().to_owned();
+    // Where it was: a mark without (0.5.1's) cannot tell.
+    let stage = lines.next().and_then(Stage::from_word);
     if let Some(process) = process.filter(|&p| p != std::process::id() && running(p)) {
         step(&format!("another Massif is starting (process {process}): its start is left to it"));
         return;
     }
     let _ = std::fs::remove_file(&path);
-    if let Some(api) = api {
-        set_aside(api, &format!("{card}: a start did not show its first frame"));
-        step(&format!("the last start did not show its first frame, drawing with {} on {card}: {} set aside", api_name(api), api_name(api)));
+    let Some(api) = api else { return };
+    if stage == Some(Stage::Graphics) {
+        set_aside(api, &format!("{card}: a start ended in the graphics driver before its first frame"));
+        step(&format!("the last start ended in the graphics driver before its first frame, drawing with {} on {card}: {} set aside", api_name(api), api_name(api)));
+    } else {
+        step(&format!("the last start ended before its first frame, drawing with {} on {card}, but not in the graphics driver: no graphics API set aside", api_name(api)));
     }
+}
+
+/// Leave the mark of a start without a frame: its API, process, card and
+/// stage.
+fn mark(stage: Stage) {
+    let (Some(path), Some(graphics)) = (pending_path(), GRAPHICS.get()) else { return };
+    let _ = std::fs::write(path, format!("{}\n{}\n{}\n{}\n", graphics.api.to_str(), std::process::id(), graphics.card, stage.word()));
 }
 
 /// Whether Massif runs as process `process`.
@@ -380,7 +500,7 @@ fn running(_process: u32) -> bool {
 pub fn graphics_ready(render: &egui_wgpu::RenderState, window: &dyn wgpu::rwh::HasWindowHandle) {
     let info = render.adapter.get_info();
     let card = format!("{} (driver {} {})", info.name, info.driver, info.driver_info);
-    step(&format!("graphics card: {} ({:?}, driver {} {})", info.name, info.backend, info.driver, info.driver_info));
+    step_in(&format!("graphics card: {} ({:?}, driver {} {})", info.name, info.backend, info.driver, info.driver_info), Stage::Graphics);
     let others: Vec<String> = render
         .available_adapters
         .iter()
@@ -392,10 +512,9 @@ pub fn graphics_ready(render: &egui_wgpu::RenderState, window: &dyn wgpu::rwh::H
         write(&format!("also found: {}", others.join(", ")));
     }
     render.device.set_device_lost_callback(|reason, message| write(&format!("the graphics card was lost ({reason:?}): {message}")));
-    if let Some(path) = pending_path() {
-        let _ = std::fs::write(path, format!("{}\n{}\n{card}\n", info.backend.to_str(), std::process::id()));
-    }
     let _ = GRAPHICS.set(Graphics { api: info.backend, card });
+    MARKED.store(Stage::Graphics as u8, Ordering::SeqCst);
+    mark(Stage::Graphics);
     // eframe draws the first frame in a window it keeps hidden until then,
     // a case some Windows drivers handle badly: there it is shown now.
     #[cfg(windows)]
@@ -403,7 +522,7 @@ pub fn graphics_ready(render: &egui_wgpu::RenderState, window: &dyn wgpu::rwh::H
         && let wgpu::rwh::RawWindowHandle::Win32(handle) = handle.as_raw()
         && windows::show_now(handle.hwnd.get())
     {
-        step("the window shown before its first frame");
+        step_in("the window shown before its first frame", Stage::Graphics);
     }
     #[cfg(not(windows))]
     let _ = window;
@@ -457,7 +576,7 @@ pub fn frame_laid_out(ui: &egui::Ui) {
     }
     let n = frame_nr(ui.ctx());
     if n <= FRAMES_LOGGED {
-        step(&format!("frame {n}: laid out; its shapes and textures go to the graphics card"));
+        step_in(&format!("frame {n}: laid out; its shapes and textures go to the graphics card"), Stage::Graphics);
     }
     let corner = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1.0, 1.0));
     ui.painter().add(egui_wgpu::Callback::new_paint_callback(corner, Probe(n)));
@@ -471,7 +590,7 @@ struct Probe(u32);
 impl egui_wgpu::CallbackTrait for Probe {
     fn prepare(&self, _: &wgpu::Device, _: &wgpu::Queue, _: &egui_wgpu::ScreenDescriptor, _: &mut wgpu::CommandEncoder, _: &mut egui_wgpu::CallbackResources) -> Vec<wgpu::CommandBuffer> {
         if self.0 <= FRAMES_LOGGED {
-            step(&format!("frame {}: sent; asking the window for an image to draw on (get_current_texture)", self.0));
+            step_in(&format!("frame {}: sent; asking the window for an image to draw on (get_current_texture)", self.0), Stage::Graphics);
         }
         Vec::new()
     }
@@ -479,7 +598,7 @@ impl egui_wgpu::CallbackTrait for Probe {
     fn paint(&self, _: egui::PaintCallbackInfo, _: &mut wgpu::RenderPass<'static>, _: &egui_wgpu::CallbackResources) {
         DRAWN.store(self.0, Ordering::Relaxed);
         if self.0 <= FRAMES_LOGGED {
-            step(&format!("frame {}: the window gave its image; drawing on it, then submitting and presenting it (submit, present)", self.0));
+            step_in(&format!("frame {}: the window gave its image; drawing on it, then submitting and presenting it (submit, present)", self.0), Stage::Graphics);
         }
     }
 }
@@ -505,32 +624,44 @@ fn first_frame_shown(frame: &eframe::Frame) {
 /// after a few seconds; when it stays too long in one step, it is stuck.
 fn watch() {
     let mut noted = false;
+    // The step of Massif's own work found slow, written down once.
+    let mut slow: Option<Instant> = None;
     loop {
         std::thread::sleep(Duration::from_millis(200));
         if SHOWN.load(Ordering::SeqCst) {
             return;
         }
         let Some(log) = LOG.get() else { return };
-        let (since_start, since_step, last) = {
+        let (since_start, (at, last, stage)) = {
             let log = lock(log);
-            (log.started.elapsed(), log.last.0.elapsed(), log.last.1.clone())
+            (log.started.elapsed(), log.last.clone())
         };
         if !noted && since_start >= NOTE_AFTER {
             noted = true;
             write(&format!("no frame shown after {} s; the start is at: {last}", NOTE_AFTER.as_secs()));
         }
-        if since_step >= STUCK_AFTER {
-            stuck(&last);
-            return;
+        match verdict(stage, at.elapsed()) {
+            Verdict::Wait => {}
+            Verdict::SlowWork => {
+                if slow != Some(at) {
+                    slow = Some(at);
+                    write(&format!("slow for {} s at: {last} (Massif's own work, not the graphics driver: no graphics API set aside; still waiting)", STUCK_AFTER.as_secs()));
+                }
+            }
+            Verdict::StuckInDriver => {
+                stuck(&last);
+                return;
+            }
         }
     }
 }
 
-/// The start stays in one step: its graphics API is set aside for the next
-/// starts, and on Windows the user is asked to start again at once (a
-/// message box needs the main thread elsewhere, and it is the one stuck).
+/// The start stays in a step of the graphics card: its graphics API is set
+/// aside for the next starts, and on Windows the user is asked to start
+/// again at once (a message box needs the main thread elsewhere, and it is
+/// the one stuck).
 fn stuck(last: &str) {
-    write(&format!("stuck for {} s at: {last}", STUCK_AFTER.as_secs()));
+    write(&format!("stuck for {} s in the graphics driver at: {last}", STUCK_AFTER.as_secs()));
     let Some(graphics) = GRAPHICS.get() else {
         if cfg!(windows) {
             tell(&format!("Massif has not opened its window after {} seconds: it may be stuck on the graphics card or its driver.{}", STUCK_AFTER.as_secs(), where_logged()));
@@ -539,7 +670,7 @@ fn stuck(last: &str) {
     };
     let api = graphics.api;
     SET_ASIDE.store(true, Ordering::SeqCst);
-    set_aside(api, &format!("{}: the first frame did not come", graphics.card));
+    set_aside(api, &format!("{}: stuck in the graphics driver at: {last}", graphics.card));
     if SHOWN.load(Ordering::SeqCst) {
         // It came meanwhile.
         if SET_ASIDE.swap(false, Ordering::SeqCst) {
@@ -555,7 +686,8 @@ fn stuck(last: &str) {
             .set_level(rfd::MessageLevel::Warning)
             .set_title("Massif")
             .set_description(format!(
-                "Massif has not drawn its window: the graphics card's driver seems stuck with {}.\n\nClick OK to start Massif again with {next}, which it will keep to on this computer, or Cancel to wait.{}",
+                "Massif has not drawn its window: the graphics card's driver has not answered for {} seconds with {}.\n\nClick OK to start Massif again with {next}, which it will keep to on this computer, or Cancel to wait.{}",
+                STUCK_AFTER.as_secs(),
                 api_name(api),
                 where_logged()
             ))
@@ -607,6 +739,42 @@ mod tests {
         assert!(text.starts_with('#') && !text.contains("a second time"), "{text}");
         put_back_in(&path, api);
         assert!(!path.exists(), "nothing set aside: no file");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Only a step of the graphics card's sets its API aside: a start long
+    /// in its own work (laying out the interface) is only written down.
+    #[test]
+    fn only_a_stuck_driver_sets_an_api_aside() {
+        let long = STUCK_AFTER + Duration::from_secs(1);
+        assert_eq!(verdict(Stage::App, Duration::from_secs(1)), Verdict::Wait);
+        assert_eq!(verdict(Stage::Graphics, Duration::from_secs(1)), Verdict::Wait);
+        assert_eq!(verdict(Stage::App, long), Verdict::SlowWork);
+        assert_eq!(verdict(Stage::Graphics, long), Verdict::StuckInDriver);
+        for stage in [Stage::App, Stage::Graphics] {
+            assert_eq!(Stage::from_word(&format!("{}\r", stage.word())), Some(stage));
+        }
+        assert_eq!(Stage::from_word(""), None);
+    }
+
+    /// The lines 0.5.1 wrote for a first frame that did not come in time
+    /// (Zumonym's three, on an RX 6400) are taken out, and the APIs tried
+    /// again; a line of a stuck driver stays.
+    #[test]
+    fn old_watch_lines_are_left_aside() {
+        let dir = std::env::temp_dir().join(format!("massif-graphics-old-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("graphics.txt");
+        let card = "AMD Radeon RX 6400 (driver 4.6.0 Compatibility Profile Context 26.10.1.261008)";
+        let old: String = apis().iter().map(|api| format!("{} {card}: the first frame did not come\r\n", api.to_str())).collect();
+        std::fs::write(&path, format!("# The graphics APIs Massif does not draw with on this computer: each failed to draw its first frame.\n# Delete a line, or this file, to let Massif try that API again.\n{old}")).unwrap();
+        assert_eq!(forget_old_watch(&path), apis());
+        assert!(!path.exists(), "nothing left set aside: no file");
+        set_aside_in(&path, apis()[0], &format!("{card}: stuck in the graphics driver at: frame 1: sent; asking the window for an image to draw on (get_current_texture)"));
+        std::fs::write(&path, format!("{}{}", std::fs::read_to_string(&path).unwrap(), old)).unwrap();
+        assert_eq!(forget_old_watch(&path), apis());
+        assert_eq!(parse_set_aside(&std::fs::read_to_string(&path).unwrap()), [apis()[0]]);
+        assert!(forget_old_watch(&path).is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 

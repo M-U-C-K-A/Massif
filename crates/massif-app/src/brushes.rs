@@ -141,7 +141,8 @@ impl BrushLibrary {
         let (own, foreign) = (self.own_dir.clone(), self.foreign_dirs.clone());
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(load(own.as_deref(), &foreign));
+            // Not in the pool the interface draws with (see `in_loading_pool`).
+            let _ = tx.send(crate::jobs::in_loading_pool(|| load(own.as_deref(), &foreign)));
             ctx.request_repaint();
         });
         self.pending = Some(rx);

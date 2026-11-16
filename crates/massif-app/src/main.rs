@@ -107,7 +107,7 @@ fn main() -> eframe::Result {
         },
         ..Default::default()
     };
-    startup::step("opening the window and the graphics card (wgpu)");
+    startup::step_in("opening the window and the graphics card (wgpu)", startup::Stage::Graphics);
     let result = eframe::run_native(
         "Massif",
         options,
