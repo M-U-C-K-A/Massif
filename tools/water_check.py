@@ -7,8 +7,10 @@ water blocks of a few boxes of it, starts that version's own server on the
 export (as tools/minecraft_check.py does), and makes every block of each box
 change and change back: glass in all of its air, then air again, so that the
 game updates each water block the way a player passing by would. It lets the
-game run, saves, and reads the boxes again: every block that is not as the
-export wrote it is counted, and the first few are listed.
+game run, saves, and reads the boxes again: every water block that is not
+as the export wrote it is counted, and the first few are listed (the game
+writes default properties back as it saves, and leaves decay: those are
+counted apart).
 
 Running a Minecraft server means accepting Mojang's EULA
 (https://aka.ms/MinecraftEULA): the script does not start the server
@@ -158,7 +160,24 @@ def blocks_of(region_dir: Path, box):
 
 
 def is_water(state: str) -> bool:
-    return state.startswith("minecraft:water")
+    return state is not None and state.startswith("minecraft:water")
+
+
+def water_key(state):
+    """What a block is, as far as water goes: water of a level, or any other
+    block by its name (the game writes default properties back on save, and
+    leaves decay, but neither is the water's doing)."""
+    if state is None:
+        return None
+    if is_water(state):
+        level = "0"
+        if "[" in state:
+            for prop in state[state.index("[") + 1:-1].split(","):
+                k, _, v = prop.partition("=")
+                if k == "level":
+                    level = v
+        return f"water level={level}"
+    return state.split("[", 1)[0]
 
 
 # --------------------------------------------------------------- main ----
@@ -172,6 +191,7 @@ def main() -> int:
     ap.add_argument("--java")
     ap.add_argument("--wait", type=float, default=30, help="seconds the game runs after the updates")
     ap.add_argument("--env", action="append", default=[], help="NAME=VALUE for the export")
+    ap.add_argument("--show-other", action="store_true", help="list the first few other blocks that changed too")
     ap.add_argument("--accept-eula", action="store_true", help="you accept Mojang's EULA for this local server")
     args = ap.parse_args()
 
@@ -261,11 +281,20 @@ def main() -> int:
     total = 0
     for b, was in zip(boxes, before):
         now = blocks_of(region, b)
-        changed = [(p, was.get(p), now.get(p)) for p in was if was.get(p) != now.get(p)]
-        total += len(changed)
-        print(f"box {b[:3]}: {len(changed)} blocks changed once updated")
-        for p, a, c in changed[:8]:
+        changed = [(p, was.get(p), now.get(p)) for p in was if water_key(was.get(p)) != water_key(now.get(p))]
+        wet = [c for c in changed if is_water(c[1]) or is_water(c[2])]
+        new_sources = sum(1 for _, a, c in wet if water_key(c) == "water level=0" and water_key(a) != "water level=0")
+        total += len(wet)
+        print(f"box {b[:3]}: {len(wet)} water blocks changed once updated ({new_sources} new sources), {len(changed) - len(wet)} other blocks")
+        for p, a, c in wet[:8]:
             print(f"   {p}: {a} -> {c}")
+        if args.show_other:
+            others = {}
+            for _, a, c in changed:
+                if not (is_water(a) or is_water(c)):
+                    others[(a, c)] = others.get((a, c), 0) + 1
+            for (a, c), n in sorted(others.items(), key=lambda kv: -kv[1])[:6]:
+                print(f"   other: {n} × {a} -> {c}")
     problems = [l for l in log if any(w in l for w in ("ERROR", "Exception", "Couldn't load", "Failed to load", "Recreating"))]
     for l in problems[:10]:
         print("  game:", l)
