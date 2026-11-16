@@ -319,6 +319,22 @@ impl Document {
         self.mark_changed();
     }
 
+    /// The selection of the dimension shown: the part of it the tools
+    /// change (`None`: all of it).
+    pub fn selection(&self) -> Option<&std::sync::Arc<massif_core::selection::Selection>> {
+        self.dimension().selection.as_ref()
+    }
+
+    /// Make `selection` the selection, as one step to undo named `label`.
+    /// Returns whether it changed.
+    pub fn select(&mut self, label: &str, selection: Option<massif_core::selection::Selection>) -> bool {
+        let changed = self.history.select(&mut self.world, self.dim, label, selection);
+        if changed {
+            self.mark_changed();
+        }
+        changed
+    }
+
     /// Close the current undo step and bound memory use.
     pub fn commit(&mut self) {
         if self.history.commit() {

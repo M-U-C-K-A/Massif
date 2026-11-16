@@ -26,6 +26,9 @@ pub enum Command {
     Quit,
     Undo,
     Redo,
+    SelectAll,
+    Deselect,
+    InvertSelection,
     AutoBiome,
     AutoPaint,
     AutoRules,
@@ -66,6 +69,9 @@ impl Command {
             Command::Export => command(Key::E),
             Command::Undo => command(Key::Z),
             Command::Redo => shifted(Key::Z),
+            Command::SelectAll => command(Key::A),
+            Command::Deselect => command(Key::D),
+            Command::InvertSelection => shifted(Key::I),
             Command::Settings => command(Key::Comma),
             Command::Help => KeyboardShortcut::new(Modifiers::NONE, Key::F1),
             _ => return None,
@@ -97,6 +103,8 @@ pub struct State<'a> {
     /// The maps opened lately.
     pub recent: &'a [PathBuf],
     pub theme: ThemeChoice,
+    /// The map has a selection: it can be inverted or dropped.
+    pub selected: bool,
 }
 
 /// An item: a command under a name.
@@ -191,6 +199,10 @@ pub fn menus(state: &State) -> Vec<Menu> {
     let edit = vec![
         item(Command::Undo, Icon::Undo2, &undo, map && state.undo.is_some()),
         item(Command::Redo, Icon::Redo2, &redo, map && state.redo.is_some()),
+        Entry::Separator,
+        tipped(Command::SelectAll, Icon::SquareDashedMousePointer, "Select All", map, "Select the whole map"),
+        tipped(Command::Deselect, Icon::SquareX, "Deselect", map && state.selected, "The tools act on the whole map again"),
+        tipped(Command::InvertSelection, Icon::SquaresExclude, "Invert Selection", map && state.selected, "Select what is not selected"),
         Entry::Separator,
         tipped(Command::AutoBiome, Icon::Earth, "Auto biome: whole map", map, "Give every column the biome its land calls for"),
         tipped(Command::AutoPaint, Icon::WandSparkles, "Auto paint: whole map", map, "Paint every column as its biome calls for"),
@@ -384,6 +396,7 @@ mod tests {
             redo: None,
             recent,
             theme: ThemeChoice::Dark,
+            selected: true,
         }
     }
 
@@ -485,6 +498,9 @@ mod tests {
                 ("Export to Minecraft…", Some(("e".to_owned(), command))),
                 ("Undo Raise", Some(("z".to_owned(), command))),
                 ("Redo", Some(("z".to_owned(), shifted))),
+                ("Select All", Some(("a".to_owned(), command))),
+                ("Deselect", Some(("d".to_owned(), command))),
+                ("Invert Selection", Some(("i".to_owned(), shifted))),
                 ("Settings…", Some((",".to_owned(), command))),
                 ("Massif Help", Some(("\u{F704}".to_owned(), Modifiers::NONE))),
             ]

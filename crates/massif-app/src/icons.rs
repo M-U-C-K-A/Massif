@@ -257,7 +257,7 @@ pub fn paint(painter: &Painter, rect: Rect, tool: Tool, color: Color32) {
             pen.line(&pen.graph(2.0, 22.0, |x| bump(x, 13.0, 6.0, 13.5, 19.5)));
             pen.line(&[(2.0, 19.5), (22.0, 19.5)]);
         }
-        Tool::Eyedropper | Tool::Pan => {
+        Tool::Eyedropper | Tool::Pan | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush => {
             painter.text(rect.center(), egui::Align2::CENTER_CENTER, crate::theme::glyph(tool.icon()), egui::FontId::proportional(side), color);
         }
     }

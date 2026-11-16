@@ -18,7 +18,7 @@ use massif_core::tile::NO_FLUID;
 use massif_core::{MAX_RADIUS, TilePos};
 use std::collections::HashSet;
 
-fn section(ui: &mut Ui, icon: Icon, title: &str) {
+pub(crate) fn section(ui: &mut Ui, icon: Icon, title: &str) {
     let pal = Palette::of(ui);
     ui.add_space(2.0);
     ui.label(
@@ -29,7 +29,7 @@ fn section(ui: &mut Ui, icon: Icon, title: &str) {
     );
 }
 
-fn hint(ui: &mut Ui, text: &str) {
+pub(crate) fn hint(ui: &mut Ui, text: &str) {
     let pal = Palette::of(ui);
     ui.label(RichText::new(text).size(11.5).color(pal.weak));
 }
@@ -503,11 +503,12 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
                 hint(ui, &format!("{sculpted} sculpted chunks of 16³ blocks in this dimension."));
             }
         }
+        Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush => crate::select::settings(ui, tools, doc, blocks),
         Tool::Eyedropper | Tool::Smooth | Tool::Drain | Tool::EraseSlab | Tool::Pan => {}
     }
 
     // Which level the tool edits.
-    if !matches!(tool, Tool::Pan | Tool::Flood | Tool::Drain | Tool::Eyedropper) && !tool.is_sculpt() {
+    if !matches!(tool, Tool::Pan | Tool::Flood | Tool::Drain | Tool::Eyedropper) && !tool.is_sculpt() && !tool.is_select() {
         section(ui, Icon::Layers, "Level");
         let levels: Vec<(String, LevelKind)> = doc.dimension().levels.iter().map(|l| (l.name.clone(), l.kind)).collect();
         ui.horizontal(|ui| {

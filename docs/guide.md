@@ -408,6 +408,53 @@ ring of columns around it its tests need, so that a brush of any size takes
 little memory; slopes are fitted from sums along the rows, then down the
 columns, a few additions a column rather than the 81 of the square.
 
+## Selections
+
+As in WorldPainter and image editors, a selection marks the part of the map
+the tools change. The **Select** row of the Tools panel holds four tools:
+
+- **Rectangle selection** and **Ellipse selection**: drag across the map.
+- **Lasso selection**: draw around an area; letting go closes it.
+- **Selection brush**: paint the selection with the current brush; the right
+  button (or Alt) takes out of it. The brush's soft edge feathers what it
+  paints.
+
+Shift while dragging adds the shape to the selection, Alt takes it out, both
+keep only what the two hold. With no key, the shape does what the **New · Add
+· Subtract · Intersect** buttons of Tool Settings say (New by default). A click
+on the map without dragging deselects. Esc drops the shape being drawn.
+
+Once something is selected, everything that edits the map keeps to it:
+every brush (sculpting, painting, covers, objects, water, levels, the 3D tools
+used on the map), the Flood fill (it stops at the selection's edge), **Auto
+biome** and **Auto paint** over the whole map, noise painting over the whole
+map, and **Edit ▸ Whole map** (erosion, rivers, terraces…). Nothing changes
+outside it; a stroke wholly outside does nothing at all.
+
+**Feathering.** A selection weighs every column from fully in to fully out.
+**Feather** in Tool Settings fades new shapes over that many blocks on either
+side of their edge (up to 64), and **Feather it** softens the selection there
+is. A brush acts on a feathered edge as much as its weight says: raising by 10
+blocks raises the middle of the edge by about 5. Paint that sets a value (a
+terrain, a biome) sets it on that share of the columns, scattered.
+
+**Select by** picks columns over the whole map, as the brush filters read
+them: a terrain (the one picked in Terrain or Blocks), a band of heights, or
+slopes steeper or gentler than an angle. It combines with the selection as the
+mode buttons say, so "the grass between 70 and 90" is a Terrain selection,
+then a Height one with Intersect.
+
+**All**, **Invert** and **Deselect** are in Tool Settings and in the Edit menu
+(⌘A, ⇧⌘I, ⌘D; Ctrl on Windows and Linux). Every change of the selection is a
+step to undo.
+
+The map shows the selection as a dashed outline whose dashes march; with
+Settings ▸ Accessibility ▸ Reduce motion they stand still. The selection is
+saved in the `.massif` file, in a section older versions skip. **Export**
+offers **Only the selection** when there is one: only the tiles of
+128 × 128 blocks the selection reaches are written, and players appear inside
+it, a quick way to try a part of a large map in the game.
+
 ## Automatic biomes and paint
 
 Two tools of the Paint group work from what the map already is, with a
@@ -832,7 +879,9 @@ Massif follows WorldPainter's defaults.
 | `R` `L` | Turn the light of the map |
 | ⌥H ⌥A ⌥S ⌥P ⌥R ⌥F ⌥Y | Height, Flatten, Smooth, Paint, Spray, Flood, Eyedropper |
 | ⌘Z / ⇧⌘Z, ⌘S, ⌘O, ⌘N, ⌘E | Undo / redo, save, open, new, export |
-| Esc | Cancel the stroke being drawn |
+| ⌘A, ⌘D, ⇧⌘I | Select the whole map, deselect, invert the selection |
+| Shift / Alt + drag (Select tools) | Add to the selection / take out of it (both: intersect) |
+| Esc | Cancel the stroke or the selection being drawn |
 
 In the 3D view:
 

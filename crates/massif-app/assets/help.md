@@ -85,6 +85,17 @@ The options under the brush settings limit where a brush acts, as in WorldPainte
 - **What is on the map**: only on, or except on, some terrains, biomes, water or dry land.
 - **Slope** and **Facing**: only on slopes steeper or gentler than an angle, or facing one way.
 
+# Selections
+## Selecting an area
+The **Select** tools mark the part of the map the other tools change: once something is selected, every brush, a fill, the 3D tools on the map, **Auto biome**, **Auto paint**, noise painting and **Edit ▸ Whole map** act only inside it, and fade along its edge where it is feathered. A dashed outline, its dashes marching (still with **Reduce motion**), shows it on the map.
+- **Rectangle** and **Ellipse**: drag across the map. **Lasso**: draw around an area; let go and it closes. **Selection brush**: paint it with the brush (right button: take it out); its soft edge feathers it.
+- Shift adds to the selection, Alt takes out of it, both together keep only what both hold; the **New · Add · Subtract · Intersect** buttons set what a shape does with no key held. A click without dragging deselects.
+- **Feather** fades new shapes over that many blocks on either side of their edge (up to 64); **Feather it** softens the selection there is.
+- **Select by** picks the columns of the whole map with a terrain (the one picked in Terrain or Blocks), between two heights, or on slopes steeper or gentler than an angle, as the brush filters read them.
+- **All**, **Invert** and **Deselect** are in the tool settings and in the Edit menu (⌘A, ⇧⌘I, ⌘D).
+
+Each change of the selection is a step to undo. The selection is saved in the map's file (versions before 0.6 open the file without it). **Export** can keep to it: **Only the selection** writes only the tiles of 128 × 128 blocks it reaches, to try a part of the map in the game.
+
 # Painting
 ## Terrains and biomes
 **Paint** gives the ground a terrain: pick it in the Terrain palette. **Biome** paints biomes the same way: pick one in the Biomes palette. The right button paints back what the height calls for (terrains) or the automatic biome (biomes).
@@ -186,7 +197,9 @@ The viewport shows the graph's output in 3D, with its sun, clouds, haze and sea 
 | `[` `]` | Turn the brush |
 | `R` `L` | Turn the light of the map |
 | `⌥H` `⌥A` `⌥S` `⌥P` `⌥R` `⌥F` `⌥Y` | Height, Flatten, Smooth, Paint, Spray, Flood, Eyedropper |
-| `Esc` | Cancel the stroke being drawn; walking, give the mouse back |
+| `⌘A` `⌘D` `⇧⌘I` | Select the whole map, deselect, invert the selection |
+| `Shift` / `Alt` + drag | Add to the selection / take out of it (both: intersect) |
+| `Esc` | Cancel the stroke or the selection being drawn; walking, give the mouse back |
 | `W` `A` `S` `D`, `Space`, `Shift`, `Ctrl` | Walk, jump (twice: fly), sneak (flying: down), sprint, with **Player** in 3D Sculpt |
 | `Ctrl Space` | Maximise the area under the pointer |
 | `Tab` | Add a node (terrain graph) |

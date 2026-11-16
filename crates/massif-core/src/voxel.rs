@@ -809,6 +809,7 @@ pub fn displace_at(edit: &mut Edit, brush: &Brush, center: [f32; 3], normal: [f3
     let terrains = (outward > 0.0).then(|| Terrains::gather(edit.dim(), [lo[0] - reach_back, lo[1] - reach_back, lo[2] - reach_back], [hi[0] + reach_back, hi[1] + reach_back, hi[2] + reach_back]));
     let weigher = brush.weigher();
     let changed = std::sync::atomic::AtomicUsize::new(0);
+    let selection = edit.dim().selection.clone();
     edit.par_voxels(&positions, |pos, chunk| {
         let (x0, y0, z0) = pos.origin();
         for ly in 0..SIZE {
@@ -828,7 +829,7 @@ pub fn displace_at(edit: &mut Edit, brush: &Brush, center: [f32; 3], normal: [f3
                     }
                     let u = p[0] * t1[0] + p[1] * t1[1] + p[2] * t1[2];
                     let v = p[0] * t2[0] + p[1] * t2[1] + p[2] * t2[2];
-                    let shift = amount * weigher.weight(u, v) * across * outward;
+                    let shift = amount * weigher.weight(u, v) * across * outward * selection.as_ref().map_or(1.0, |s| s.weight(x, z));
                     if shift.abs() < 0.01 {
                         continue;
                     }
@@ -924,12 +925,13 @@ pub fn paint_sculpted(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, terrain:
         return 0;
     }
     let changed = std::sync::atomic::AtomicUsize::new(0);
+    let selection = edit.dim().selection.clone();
     edit.par_voxels(&positions, |pos, chunk| {
         let (x0, y0, z0) = pos.origin();
         for lz in 0..SIZE {
             for lx in 0..SIZE {
                 let (x, z) = (x0 + lx, z0 + lz);
-                if brush.weight(x as f32 + 0.5 - cx, z as f32 + 0.5 - cz) < 0.5 {
+                if brush.weight(x as f32 + 0.5 - cx, z as f32 + 0.5 - cz) < 0.5 || selection.as_ref().is_some_and(|s| s.get(x, z) < crate::selection::HALF) {
                     continue;
                 }
                 let t = terrain(x, z);

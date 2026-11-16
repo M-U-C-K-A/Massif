@@ -41,11 +41,17 @@ pub enum Tool {
     Build,
     Dig,
     Smooth3d,
+    /// Selections: the part of the map the other tools change.
+    SelectRect,
+    SelectEllipse,
+    SelectLasso,
+    /// A selection painted with the brush, as WorldPainter's.
+    SelectBrush,
     Pan,
 }
 
 impl Tool {
-    pub const GROUPS: [(&'static str, Icon, &'static [Tool]); 6] = [
+    pub const GROUPS: [(&'static str, Icon, &'static [Tool]); 7] = [
         (
             "Sculpt terrain",
             Icon::Mountain,
@@ -56,6 +62,7 @@ impl Tool {
             Icon::Paintbrush,
             &[Tool::PaintTerrain, Tool::PaintBiome, Tool::AutoPaint, Tool::AutoBiome],
         ),
+        ("Select", Icon::SquareDashed, &[Tool::SelectRect, Tool::SelectEllipse, Tool::SelectLasso, Tool::SelectBrush]),
         ("Decor", Icon::Shrub, &[Tool::Cover, Tool::Objects]),
         ("Water", Icon::Droplet, &[Tool::River, Tool::Flood, Tool::Drain, Tool::Water]),
         ("Levels", Icon::Layers, &[Tool::StampSlab, Tool::EraseSlab]),
@@ -85,6 +92,10 @@ impl Tool {
             Tool::Build => "Sculpt",
             Tool::Dig => "Dig",
             Tool::Smooth3d => "Smooth",
+            Tool::SelectRect => "Rectangle selection",
+            Tool::SelectEllipse => "Ellipse selection",
+            Tool::SelectLasso => "Lasso selection",
+            Tool::SelectBrush => "Selection brush",
             Tool::Pan => "Pan",
         }
     }
@@ -112,6 +123,10 @@ impl Tool {
             Tool::Build => Icon::Pickaxe,
             Tool::Dig => Icon::Shovel,
             Tool::Smooth3d => Icon::Blend,
+            Tool::SelectRect => Icon::SquareDashed,
+            Tool::SelectEllipse => Icon::CircleDashed,
+            Tool::SelectLasso => Icon::Lasso,
+            Tool::SelectBrush => Icon::Highlighter,
             Tool::Pan => Icon::Hand,
         }
     }
@@ -187,12 +202,21 @@ impl Tool {
             Tool::Smooth3d => {
                 "Round off in 3D."
             }
+            Tool::SelectRect => "Drag a rectangle: the other tools then act only inside it.",
+            Tool::SelectEllipse => "Drag an ellipse: the other tools then act only inside it.",
+            Tool::SelectLasso => "Draw around an area: the other tools then act only inside it.",
+            Tool::SelectBrush => "Paint the selection with the brush. Right button: take it out.",
             Tool::Pan => "Move the map (also: middle button, Space).",
         }
     }
 
     pub const fn uses_brush(self) -> bool {
-        !matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Drain | Tool::Pan | Tool::River)
+        !matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Drain | Tool::Pan | Tool::River | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso)
+    }
+
+    /// The tools that draw the selection.
+    pub const fn is_select(self) -> bool {
+        matches!(self, Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush)
     }
 
     /// Tools that apply once per click rather than continuously.
@@ -296,6 +320,12 @@ pub struct ToolState {
     /// How hard the brush presses drawn over the map, under the pointer (its
     /// lines show either way).
     pub show_strength: bool,
+    /// What a new shape does to the selection when no key says otherwise.
+    pub select_mode: massif_core::selection::Combine,
+    /// Blocks over which a new shape's edge fades, on either side.
+    pub select_feather: i32,
+    /// "Select by": what, and its limits.
+    pub select_by: crate::select::SelectBy,
 }
 
 /// The tool of the 3D Sculpt editor, apart from the map's; its brush is
@@ -826,6 +856,9 @@ impl Default for ToolState {
             objects_note: None,
             pattern: PatternSettings::default(),
             show_strength: true,
+            select_mode: Default::default(),
+            select_feather: 0,
+            select_by: Default::default(),
         }
     }
 }
@@ -1054,7 +1087,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                     massif_core::voxel::sculpt(&mut edit, brush, [x, y, z], strength, mode);
                 }
             }
-            Tool::Eyedropper | Tool::Flood | Tool::Drain | Tool::Pan | Tool::River => {}
+            Tool::Eyedropper | Tool::Flood | Tool::Drain | Tool::Pan | Tool::River | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush => {}
         }
     }
     stroke.last = to;

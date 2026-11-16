@@ -218,6 +218,8 @@ pub struct MapView {
     /// A spot pointed out from elsewhere (the survival check): where, and
     /// since when (`None` until it is first drawn).
     ping: Option<([f64; 2], Option<f64>)>,
+    /// The selection: the shape being drawn, its outline.
+    select: crate::select::SelectView,
 }
 
 /// What the view glides to.
@@ -262,6 +264,7 @@ impl Default for MapView {
             gliding: false,
             last_view: ([0.0, 0.0], 1.0),
             ping: None,
+            select: Default::default(),
         }
     }
 }
@@ -964,6 +967,9 @@ impl MapView {
                     }
                     _ => {}
                 }
+            } else if tools.tool.is_select() {
+                let op = crate::select::combine_of(modifiers, secondary, tools.select_mode);
+                self.select.begin(tools.tool, (x, z), op, &tools.brush);
             } else if tools.tool.is_click() {
                 *feedback = tools::click(doc, tools, bx, bz, inverse);
             } else if tools.tool.uses_brush() {
@@ -1035,6 +1041,21 @@ impl MapView {
                 if let Some(classes) = classes {
                     self.auto_classes = Some(((true, doc.generation, doc.dim, doc.revision, auto_rules_key(doc, tools)), classes));
                 }
+            }
+        }
+
+        // A selection being drawn follows the pointer; let go, it is made.
+        if self.select.is_drawing() {
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.select.cancel();
+                *feedback = Some("Selection cancelled".into());
+            } else if down[0] || down[1] {
+                if let Some(at) = world_pointer {
+                    self.select.update(at, self.zoom, &tools.brush);
+                }
+                ui.ctx().request_repaint();
+            } else if let Some(note) = self.select.finish(doc, tools.select_feather) {
+                *feedback = Some(note);
             }
         }
 
@@ -1153,6 +1174,16 @@ impl MapView {
 
         if self.grid {
             self.draw_grid(&painter, canvas, pal);
+        }
+
+        // The selection, its ants marching round it.
+        {
+            let (x0, z0) = self.to_world(canvas, canvas.min);
+            let (x1, z1) = self.to_world(canvas, canvas.max);
+            let view = massif_core::BlockRect::new(x0.floor() as i32, z0.floor() as i32, x1.ceil() as i32, z1.ceil() as i32);
+            let mut select = std::mem::take(&mut self.select);
+            select.draw(ui, &painter, canvas, &|x, z| self.to_screen(canvas, x, z), view, self.zoom, doc.dimension().selection.as_ref());
+            self.select = select;
         }
 
         // Origin marker.

@@ -271,6 +271,18 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
             Some(Demo::Raise),
         ),
         Tool::Smooth3d => card("Rounds off in 3D: edges, hollows, overhangs.", vec![("Drag", "Smooth")], None, Some(Demo::Smooth)),
+        Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso => card(
+            "Marks the part of the map the other tools change: brushes, fills and the whole-map filters act only inside it, fading along a feathered edge.",
+            vec![("Drag", "A new selection"), ("Shift+drag", "Add to it"), ("Alt+drag", "Take out of it"), ("Shift+Alt+drag", "Keep what both hold"), ("Click", "Deselect")],
+            Some("⌘D deselects, ⌘A selects the whole map, ⇧⌘I inverts."),
+            Some(Demo::Select),
+        ),
+        Tool::SelectBrush => card(
+            "Paints the part of the map the other tools change, with the brush: its soft edge feathers the selection.",
+            vec![("Drag", "Add to the selection"), ("Right-drag", "Take out of it"), ("Alt+drag", "Take out of it")],
+            Some("⌘D deselects, ⌘A selects the whole map, ⇧⌘I inverts."),
+            Some(Demo::Select),
+        ),
         Tool::Pan => card("Moves the map.", vec![("Drag", "Move the map"), ("Middle-drag", "Move it with any tool"), ("Space+drag", "The same")], None, Some(Demo::Pan)),
     }
 }
@@ -309,6 +321,7 @@ pub enum Demo {
     River,
     Slab,
     EraseSlab,
+    Select,
     Pan,
 }
 
@@ -684,6 +697,32 @@ impl Demo {
                 }
                 s.slab = Some(slab);
                 stroke(9.0)
+            }
+            Demo::Select => {
+                // A rectangle drawn, its dashed outline; a raise across its
+                // edge lifts only what is inside.
+                s.add_hills(6.0);
+                let grow = smooth_step(0.0, 0.45, progress);
+                let (x0, y0) = (26.0, 14.0);
+                let (x1, y1) = (x0 + (92.0 - x0) * grow, y0 + (48.0 - y0) * grow);
+                let inside = |x: f64, y: f64| x >= x0 && x < x1 && y >= y0 && y < y1;
+                let lift = smooth_step(0.55, 1.0, progress);
+                for y in 0..H {
+                    for x in 0..W {
+                        let (fx, fy) = (x as f64, y as f64);
+                        let i = y * W + x;
+                        if !inside(fx, fy) {
+                            continue;
+                        }
+                        let d = (fx - 92.0).hypot(fy - 31.0);
+                        s.heights[i] += (lift * 9.0 * (-d * d / 200.0).exp()) as f32;
+                        let edge = !(inside(fx - 1.0, fy) && inside(fx + 1.0, fy) && inside(fx, fy - 1.0) && inside(fx, fy + 1.0));
+                        if edge && (x + y) % 4 < 2 {
+                            s.tint[i] = Some([250, 250, 250]);
+                        }
+                    }
+                }
+                if progress < 0.5 { Some((x1, y1, 2.0, true)) } else { Some((92.0, 31.0, 14.0, progress < 0.95)) }
             }
             Demo::Pan => {
                 // The land slides under the hand.

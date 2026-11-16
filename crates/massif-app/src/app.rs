@@ -171,6 +171,9 @@ struct ExportForm {
     /// The export lays ores (see Edit ▸ Ores).
     ores: bool,
     structures: bool,
+    /// The map has a selection, and only its tiles are to be exported.
+    has_selection: bool,
+    selection_only: bool,
     overwrite: bool,
     border: massif_anvil::WorldBorder,
     datapacks: Vec<PathBuf>,
@@ -1251,6 +1254,8 @@ impl MassifApp {
             surroundings: Surroundings::Vanilla,
             ores: self.doc.world.meta.ores.on,
             structures: true,
+            has_selection: self.doc.selection().is_some(),
+            selection_only: false,
             overwrite: false,
             border: massif_anvil::WorldBorder::default(),
             datapacks: Vec::new(),
@@ -1497,6 +1502,16 @@ impl MassifApp {
         if ctx.egui_wants_keyboard_input() {
             return;
         }
+        // ⌘A, ⌘D and ⇧⌘I select, but in the graph, which picks its nodes
+        // with them.
+        let over_graph = ctx.input(|i| i.pointer.hover_pos()).and_then(|p| self.area_at(ctx, p)).and_then(|id| self.layout.current().root.editor_of(id)).is_some_and(|k| matches!(k, EditorKind::Graph | EditorKind::GraphView | EditorKind::GraphProps));
+        if !over_graph {
+            for command in [Command::InvertSelection, Command::SelectAll, Command::Deselect] {
+                if pressed(&command) {
+                    self.command(ctx, command);
+                }
+            }
+        }
         if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::CTRL, Key::Space))) {
             let pointer = ctx.input(|i| i.pointer.hover_pos());
             if let Some(p) = pointer
@@ -1715,6 +1730,7 @@ impl MassifApp {
             redo: self.doc.history.redo_label(),
             recent: &self.settings.recent,
             theme: self.settings.theme,
+            selected: self.doc.selection().is_some(),
         }
     }
 
@@ -1746,6 +1762,15 @@ impl MassifApp {
             Command::Quit => ctx.send_viewport_cmd(ViewportCommand::Close),
             Command::Undo => self.undo(ctx),
             Command::Redo => self.redo(ctx),
+            Command::SelectAll => {
+                crate::select::select_all(&mut self.doc);
+            }
+            Command::Deselect => {
+                crate::select::deselect(&mut self.doc);
+            }
+            Command::InvertSelection => {
+                crate::select::invert(&mut self.doc);
+            }
             Command::AutoBiome => self.tools.run_auto = Some(true),
             Command::AutoPaint => self.tools.run_auto = Some(false),
             Command::AutoRules => self.dialog = Some(Dialog::AutoRules(false)),
@@ -2901,8 +2926,21 @@ impl MassifApp {
                         datapacks: form.datapacks.clone(),
                         spawn: Some(form.spawn),
                         target: form.target.clone(),
+                        selection_only: form.has_selection && form.selection_only,
                         ..ExportOptions::default()
                     };
+                    // Keeping to the selection, players appear in it.
+                    if options.selection_only
+                        && let Some(sel) = self.doc.selection()
+                        && sel.tile(TilePos::containing(form.spawn[0], form.spawn[2])).is_none()
+                        && let Some(b) = sel.bounds()
+                    {
+                        let centre = ((b.x0 + b.x1) / 2, (b.z0 + b.z1) / 2);
+                        let at = (0..64 * 64).map(|k| (centre.0 + (k % 64 - 32) * 16, centre.1 + (k / 64 - 32) * 16)).filter(|&(x, z)| sel.get(x, z) == massif_core::selection::IN).min_by_key(|&(x, z)| (x - centre.0).pow(2) + (z - centre.1).pow(2));
+                        if let Some((x, z)) = at {
+                            options.spawn = Some([x, form.spawn[1], z]);
+                        }
+                    }
                     let mut dir = form.parent.join(form.name.trim());
                     if test {
                         let c = TilePos::containing(form.test_centre.0, form.test_centre.1);
@@ -3383,6 +3421,11 @@ fn export_general(ui: &mut Ui, form: &mut ExportForm) {
             row(ui, "", |ui| {
                 crate::widgets::checkbox(ui, &mut form.structures, "Structures beyond the map").on_hover_text("Minecraft generates villages, strongholds and the like in the land it makes around the map");
             });
+            if form.has_selection {
+                row(ui, "", |ui| {
+                    crate::widgets::checkbox(ui, &mut form.selection_only, "Only the selection").on_hover_text("Export only the tiles of 128 × 128 blocks the selection reaches, to try a part of the map in the game");
+                });
+            }
         });
         card(&mut right[0], "World border", "The border Minecraft shows around the world.", |ui| {
             row(ui, "Centre", |ui| {
@@ -3783,6 +3826,76 @@ mod tests {
     /// Flatten's options in Tool Settings: the way it moves the land, picked
     /// in a segmented control, and Apply theme ticked (a render of the panel
     /// with MASSIF_SNAPSHOT_DIR).
+    /// Drag a rectangle on the map, add an ellipse with Shift, and see the
+    /// outline and the options; a raise stroke across its edge changes only
+    /// what is inside. Renders with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn selections_drawn_on_the_map() {
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(30);
+        h.state_mut().tools.select(Tool::SelectRect);
+        h.run_steps(3);
+        let rect = map_rect(h.state(), &h.ctx);
+        let drag = |h: &mut egui_kittest::Harness<'static, MassifApp>, from: egui::Pos2, to: egui::Pos2, modifiers: Modifiers| {
+            let button = |pressed, pos| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers,
+            };
+            h.event(egui::Event::ModifiersChanged(modifiers));
+            h.event(egui::Event::PointerMoved(from));
+            h.step();
+            h.event(button(true, from));
+            h.step();
+            for i in 1..=8 {
+                h.event(egui::Event::PointerMoved(from + (to - from) * (i as f32 / 8.0)));
+                h.step();
+            }
+            h.event(button(false, to));
+            h.step();
+            h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+            h.run_steps(4);
+        };
+        let c = rect.center();
+        drag(&mut h, c - vec2(150.0, 90.0), c + vec2(20.0, 60.0), Modifiers::NONE);
+        assert_eq!(h.state().doc.history.undo_label(), Some("Select"));
+        let first = h.state().doc.selection().unwrap().area();
+        h.state_mut().tools.select(Tool::SelectEllipse);
+        h.run_steps(2);
+        drag(&mut h, c - vec2(10.0, 40.0), c + vec2(140.0, 110.0), Modifiers::SHIFT);
+        assert_eq!(h.state().doc.history.undo_label(), Some("Add to selection"));
+        assert!(h.state().doc.selection().unwrap().area() > first);
+        h.run_steps(4);
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            h.render().unwrap().save(dir.join("selection-map.png")).unwrap();
+            // Tool Settings, maximised: every option of the tool.
+            let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+            let id = areas.iter().map(|(id, _)| *id).find(|id| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::ToolSettings)).unwrap();
+            h.state_mut().layout.toggle_maximize(id);
+            h.run_steps(4);
+            let image = h.render().unwrap();
+            let ppp = h.ctx.pixels_per_point();
+            let crop = image::imageops::crop_imm(&image, 0, 0, image.width(), (640.0 * ppp) as u32).to_image();
+            crop.save(dir.join("tool-settings-selection.png")).unwrap();
+            h.state_mut().layout.toggle_maximize(id);
+            h.run_steps(4);
+        }
+        // A raise across its edge: the land outside stays as it was.
+        let sel = h.state().doc.selection().cloned().unwrap();
+        let outside = (-300..300).step_by(7).flat_map(|x| (-300..300).step_by(7).map(move |z| (x, z))).find(|&(x, z)| sel.get(x, z) == 0 && sel.get(x + 40, z) == 255).expect("an edge");
+        let before = massif_core::ops::height_at(h.state().doc.dimension(), 0, outside.0, outside.1, massif_core::ops::Surface::Top);
+        h.state_mut().tools.select(Tool::Raise);
+        h.run_steps(2);
+        let at = h.state().maps.values().next().unwrap().screen_of(outside.0 as f64 + 20.0, outside.1 as f64);
+        drag(&mut h, at, at + vec2(2.0, 0.0), Modifiers::NONE);
+        assert_eq!(massif_core::ops::height_at(h.state().doc.dimension(), 0, outside.0, outside.1, massif_core::ops::Surface::Top), before);
+        // ⌘D deselects; ⌘Z brings it back.
+        h.key_press_modifiers(Modifiers::COMMAND, egui::Key::D);
+        h.run_steps(2);
+        assert!(h.state().doc.selection().is_none());
+    }
+
     #[test]
     fn flatten_options_in_tool_settings() {
         use egui_kittest::kittest::Queryable;
