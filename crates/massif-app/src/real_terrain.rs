@@ -368,7 +368,7 @@ impl RealForm {
             let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let busy = self.searching.is_some();
             if busy {
-                ui.add(egui::Spinner::new().size(14.0));
+                crate::loader::loader(ui, 16.0);
             } else if (ui.small_button(theme::glyph(Icon::Search).to_string()).on_hover_text("Search").clicked() || enter) && !self.query.trim().is_empty() {
                 self.search();
             }
@@ -653,14 +653,14 @@ impl RealForm {
             (Some(p), _) => {
                 painter.image(p.texture.id(), at, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
                 if !p.complete {
-                    ui.put(Rect::from_center_size(rect.right_top() + vec2(-14.0, 14.0), vec2(14.0, 14.0)), egui::Spinner::new().size(14.0));
+                    crate::loader::paint(ui, Rect::from_center_size(rect.right_top() + vec2(-15.0, 15.0), vec2(16.0, 16.0)), crate::loader::pattern(ui.ctx()));
                 }
             }
             (None, Some(why)) => {
                 painter.text(rect.center(), egui::Align2::CENTER_CENTER, why, egui::FontId::proportional(11.5), pal.weak);
             }
             (None, None) => {
-                ui.put(Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), egui::Spinner::new().size(16.0));
+                crate::loader::paint(ui, Rect::from_center_size(rect.center(), vec2(24.0, 24.0)), crate::loader::pattern(ui.ctx()));
             }
         }
         painter.rect_stroke(rect, theme::TILE_RADIUS, egui::Stroke::new(1.0, pal.border), egui::StrokeKind::Inside);
