@@ -94,6 +94,11 @@ const FEATURE_FLAGS: i32 = 3218;
 const COMPOUNDS: i32 = 4544;
 /// From 1.21.11, the border in a file of its own, its warning time in ticks.
 const BORDER_FILE: i32 = 4657;
+/// From 1.20 (the game's `LegacyDragonFightFix`, data version 3459) the
+/// game reads the dragon fight of level.dat with a codec, and logs an error
+/// on every start when it is missing (`key missing: DragonFight`), until
+/// 26.1 moves it to a file of the End's own.
+const DRAGON_FIGHT: i32 = 3459;
 
 fn noise_dimension(w: &mut NbtWriter, id: &str, settings: &str, seed: Option<i64>, biome_source: impl FnOnce(&mut NbtWriter)) {
     w.compound(id);
@@ -249,6 +254,15 @@ pub fn level_nbt(s: &LevelSettings, target: &Target) -> Vec<u8> {
             w.compound("WorldGenSettings");
             world_gen_settings(&mut w, s, target);
             w.end(); // WorldGenSettings
+            if dv >= DRAGON_FIGHT {
+                // As the game writes a new world's, the End not visited
+                // yet: the fight starts when a player gets there.
+                w.compound("DragonFight");
+                w.bool("NeedsStateScanning", true);
+                w.bool("DragonKilled", false);
+                w.bool("PreviouslyKilled", false);
+                w.end();
+            }
         }
     }
 
@@ -574,7 +588,7 @@ mod digests {
     /// version writes itself, as its data fixers make them of 1.18.2's.
     #[test]
     fn each_version_gets_its_own_level_dat() {
-        for name in ["1.19.2", "1.20.4", "1.21.5", "1.21.8", "1.21.9", "1.21.10", "1.21.11", "26.1", "26.1.2", "26.2", "26.3"] {
+        for name in ["1.19.2", "1.19.4", "1.20", "1.20.1", "1.20.4", "1.21.5", "1.21.8", "1.21.9", "1.21.10", "1.21.11", "26.1", "26.1.2", "26.2", "26.3"] {
             let target = crate::Target::release(name).unwrap();
             let dv = target.data_version;
             let files = files(name, Surroundings::Vanilla);
@@ -585,6 +599,13 @@ mod digests {
             // The seed is the world's alone from 1.19.
             let has = |key: &str| data.contains_key(key);
             assert_eq!(has("enabled_features"), dv >= 3218, "{name}");
+            // The dragon fight from 1.20 to 1.21.11, as a new world has it.
+            assert_eq!(has("DragonFight"), (3459..4772).contains(&dv), "{name}");
+            if has("DragonFight") {
+                let fight = compound(&data["DragonFight"]);
+                assert_eq!(fight.len(), 3, "{name}");
+                assert_eq!((&fight["NeedsStateScanning"], &fight["DragonKilled"], &fight["PreviouslyKilled"]), (&Value::Byte(1), &Value::Byte(0), &Value::Byte(0)), "{name}");
+            }
             // The spawn point and the border as compounds from 1.21.9.
             assert_eq!(has("SpawnX"), dv < 4544, "{name}");
             assert_eq!(has("BorderSize"), dv < 4544, "{name}");
