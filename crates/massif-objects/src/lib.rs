@@ -66,12 +66,11 @@ pub fn read_bytes(name: &str, bytes: &[u8]) -> Result<Imported, ObjectError> {
         return axiom(name, bytes);
     }
     let raw = if bytes.starts_with(&[0x1f, 0x8b]) {
-        let mut out = Vec::new();
-        flate2::read::MultiGzDecoder::new(bytes).read_to_end(&mut out)?;
-        out
+        inflate(bytes)?
     } else {
         bytes.to_vec()
     };
+    check_nbt(&raw).map_err(ObjectError::Unknown)?;
     let root: Value = fastnbt::from_bytes(&raw).map_err(|e| ObjectError::Unknown(e.to_string()))?;
     let Value::Compound(root) = root else { return Err(ObjectError::Unknown("no compound at the root".into())) };
     // Sponge's third version keeps everything in a compound of its own.
@@ -94,6 +93,105 @@ pub fn read_bytes(name: &str, bytes: &[u8]) -> Result<Imported, ObjectError> {
 }
 
 // ------------------------------------------------------------------ NBT --
+
+/// The most a schematic may inflate to: a full 256³ Sponge schematic takes
+/// about 32 MB.
+const MAX_INFLATED: u64 = 256 << 20;
+
+/// Gunzip `bytes`, refusing more than [`MAX_INFLATED`].
+fn inflate(bytes: &[u8]) -> Result<Vec<u8>, ObjectError> {
+    let mut out = Vec::new();
+    flate2::read::MultiGzDecoder::new(bytes).take(MAX_INFLATED + 1).read_to_end(&mut out)?;
+    if out.len() as u64 > MAX_INFLATED {
+        return Err(ObjectError::Corrupt(format!("it unpacks to more than {} MB", MAX_INFLATED >> 20)));
+    }
+    Ok(out)
+}
+
+/// How deep tags may nest, as in the game.
+const MAX_NBT_DEPTH: usize = 512;
+
+/// Walk an NBT tree without recursing, before fastnbt (which recurses)
+/// reads it: tags nested deeper than [`MAX_NBT_DEPTH`] would overflow the
+/// stack and abort the app, and a list may not claim more elements than
+/// the bytes left could hold.
+fn check_nbt(raw: &[u8]) -> Result<(), String> {
+    let mut at = 0usize;
+    let take = |at: &mut usize, n: usize| -> Result<&[u8], String> {
+        let part = at.checked_add(n).and_then(|end| raw.get(*at..end)).ok_or("the tags are cut short")?;
+        *at += n;
+        Ok(part)
+    };
+    let len = |b: &[u8]| -> i64 { i32::from_be_bytes([b[0], b[1], b[2], b[3]]) as i64 };
+    /// What is left to read in an open compound or list.
+    enum Open {
+        Compound,
+        List { tag: u8, left: i64 },
+    }
+    let root = take(&mut at, 1)?[0];
+    if root != 10 {
+        return Err("no compound at the root".into());
+    }
+    let n = u16::from_be_bytes(take(&mut at, 2)?.try_into().unwrap()) as usize;
+    take(&mut at, n)?;
+    let mut stack = vec![Open::Compound];
+    while let Some(top) = stack.last_mut() {
+        let tag = match top {
+            Open::Compound => {
+                let tag = take(&mut at, 1)?[0];
+                if tag == 0 {
+                    stack.pop();
+                    continue;
+                }
+                let n = u16::from_be_bytes(take(&mut at, 2)?.try_into().unwrap()) as usize;
+                take(&mut at, n)?;
+                tag
+            }
+            Open::List { left, .. } if *left == 0 => {
+                stack.pop();
+                continue;
+            }
+            Open::List { tag, left } => {
+                *left -= 1;
+                *tag
+            }
+        };
+        match tag {
+            1 => drop(take(&mut at, 1)?),
+            2 => drop(take(&mut at, 2)?),
+            3 | 5 => drop(take(&mut at, 4)?),
+            4 | 6 => drop(take(&mut at, 8)?),
+            7 | 11 | 12 => {
+                let n = len(take(&mut at, 4)?);
+                let width = [1, 4, 8][[7, 11, 12].iter().position(|&t| t == tag).unwrap()];
+                if n < 0 {
+                    return Err("an array of negative length".into());
+                }
+                take(&mut at, (n as usize).saturating_mul(width))?;
+            }
+            8 => {
+                let n = u16::from_be_bytes(take(&mut at, 2)?.try_into().unwrap()) as usize;
+                take(&mut at, n)?;
+            }
+            9 => {
+                let inner = take(&mut at, 1)?[0];
+                let n = len(take(&mut at, 4)?);
+                // Each element takes a byte at least; a list of nothing
+                // (tag 0) holds no element.
+                if n < 0 || inner > 12 || (inner == 0 && n > 0) || n as usize > raw.len() - at {
+                    return Err("a list longer than the file".into());
+                }
+                stack.push(Open::List { tag: inner, left: n });
+            }
+            10 => stack.push(Open::Compound),
+            _ => return Err(format!("an unknown tag {tag}")),
+        }
+        if stack.len() > MAX_NBT_DEPTH {
+            return Err(format!("tags nested more than {MAX_NBT_DEPTH} deep"));
+        }
+    }
+    Ok(())
+}
 
 type Compound = HashMap<String, Value>;
 
@@ -242,7 +340,7 @@ fn check_size(size: [i64; 3]) -> Result<[u16; 3], ObjectError> {
     if size.iter().any(|&s| s <= 0) {
         return Err(ObjectError::Empty);
     }
-    let volume = size.iter().map(|&s| s as usize).product::<usize>();
+    let volume = size.iter().fold(1usize, |v, &s| v.saturating_mul(usize::try_from(s).unwrap_or(usize::MAX)));
     if volume > MAX_VOLUME || size.iter().any(|&s| s > u16::MAX as i64) {
         return Err(ObjectError::TooLarge(volume));
     }
@@ -363,20 +461,20 @@ fn axiom(name: &str, bytes: &[u8]) -> Result<Imported, ObjectError> {
     let header = chunk("its header")?;
     let _thumbnail = chunk("its picture")?;
     let data = chunk("its blocks")?;
-    let header: Option<Compound> = fastnbt::from_bytes::<Value>(header).ok().and_then(|v| match v {
+    let header: Option<Compound> = check_nbt(header).ok().and_then(|()| fastnbt::from_bytes::<Value>(header).ok()).and_then(|v| match v {
         Value::Compound(c) => Some(c),
         _ => None,
     });
     let own = header.as_ref().and_then(|h| string(h, "Name")).filter(|n| !n.trim().is_empty()).map(str::to_owned);
-    let mut raw = Vec::new();
-    flate2::read::MultiGzDecoder::new(data).read_to_end(&mut raw)?;
+    let raw = inflate(data)?;
+    check_nbt(&raw).map_err(|e| corrupt(&e))?;
     let root: Value = fastnbt::from_bytes(&raw).map_err(|e| corrupt(&e.to_string()))?;
     let Value::Compound(root) = root else { return Err(corrupt("no compound")) };
     // Sections of 16³ blocks, each with its palette.
-    let mut placed: Vec<([i64; 3], String)> = Vec::new();
+    let mut placed = Placed::default();
     for region in list(&root, "BlockRegion") {
         let Value::Compound(region) = region else { continue };
-        let origin = [int(region.get("X")), int(region.get("Y")), int(region.get("Z"))].map(|v| v.unwrap_or(0) * 16);
+        let origin = [int(region.get("X")), int(region.get("Y")), int(region.get("Z"))].map(|v| v.unwrap_or(0).saturating_mul(16));
         let Some(states) = compound(region, "BlockStates").or_else(|| compound(region, "data")) else { continue };
         let palette: Vec<String> = list(states, "palette").iter().map(state_of).collect();
         if palette.is_empty() {
@@ -392,49 +490,72 @@ fn axiom(name: &str, bytes: &[u8]) -> Result<Imported, ObjectError> {
                 continue;
             }
             let (x, y, z) = ((i & 15) as i64, (i >> 8) as i64, ((i >> 4) & 15) as i64);
-            placed.push(([origin[0] + x, origin[1] + y, origin[2] + z], state.clone()));
+            placed.put([origin[0].saturating_add(x), origin[1].saturating_add(y), origin[2].saturating_add(z)], state)?;
         }
     }
-    let (size, palette, blocks) = boxed(&placed)?;
+    let (size, palette, blocks) = placed.boxed()?;
     finish(own.as_deref().unwrap_or(name), "Axiom blueprint", size, palette, blocks, 0)
 }
 
 /// An object's box: its size, its palette and its blocks.
 type Boxed = ([u16; 3], Vec<String>, Vec<u16>);
 
-/// Blocks given by their place, in the smallest box holding them all.
-fn boxed(placed: &[([i64; 3], String)]) -> Result<Boxed, ObjectError> {
-    if placed.is_empty() {
-        return Err(ObjectError::Empty);
-    }
-    let mut lo = [i64::MAX; 3];
-    let mut hi = [i64::MIN; 3];
-    for (p, _) in placed {
-        for a in 0..3 {
-            lo[a] = lo[a].min(p[a]);
-            hi[a] = hi[a].max(p[a]);
+/// Blocks given by their place, each state kept once.
+#[derive(Default)]
+struct Placed {
+    states: Vec<String>,
+    known: HashMap<String, u32>,
+    blocks: Vec<([i64; 3], u32)>,
+}
+
+impl Placed {
+    /// Place `state` at `p`. A file placing more blocks than the largest
+    /// object holds is refused there, before its blocks fill the memory.
+    fn put(&mut self, p: [i64; 3], state: &str) -> Result<(), ObjectError> {
+        if self.blocks.len() >= MAX_VOLUME {
+            return Err(ObjectError::TooLarge(self.blocks.len() + 1));
         }
+        let k = match self.known.get(state) {
+            Some(&k) => k,
+            None => {
+                self.states.push(state.to_owned());
+                self.known.insert(state.to_owned(), self.states.len() as u32 - 1);
+                self.states.len() as u32 - 1
+            }
+        };
+        self.blocks.push((p, k));
+        Ok(())
     }
-    let size = check_size([hi[0] - lo[0] + 1, hi[1] - lo[1] + 1, hi[2] - lo[2] + 1])?;
-    let [w, h, l] = size.map(|s| s as usize);
-    let mut palette = vec!["minecraft:air".to_owned()];
-    let mut index: HashMap<&str, u16> = HashMap::new();
-    let mut blocks = vec![0u16; w * h * l];
-    for (p, state) in placed {
-        let k = *index.entry(state.as_str()).or_insert_with(|| {
-            palette.push(state.clone());
-            (palette.len() - 1) as u16
-        });
-        let (x, y, z) = ((p[0] - lo[0]) as usize, (p[1] - lo[1]) as usize, (p[2] - lo[2]) as usize);
-        blocks[x + z * w + y * w * l] = k;
+
+    /// The smallest box holding them all.
+    fn boxed(self) -> Result<Boxed, ObjectError> {
+        if self.blocks.is_empty() {
+            return Err(ObjectError::Empty);
+        }
+        let mut lo = [i64::MAX; 3];
+        let mut hi = [i64::MIN; 3];
+        for (p, _) in &self.blocks {
+            for a in 0..3 {
+                lo[a] = lo[a].min(p[a]);
+                hi[a] = hi[a].max(p[a]);
+            }
+        }
+        let size = check_size([0, 1, 2].map(|a| hi[a].saturating_sub(lo[a]).saturating_add(1)))?;
+        let [w, h, l] = size.map(|s| s as usize);
+        let palette: Vec<String> = std::iter::once("minecraft:air".to_owned()).chain(self.states).collect();
+        let mut blocks = vec![0u16; w * h * l];
+        for (p, k) in self.blocks {
+            let (x, y, z) = ((p[0] - lo[0]) as usize, (p[1] - lo[1]) as usize, (p[2] - lo[2]) as usize);
+            blocks[x + z * w + y * w * l] = (k + 1).min(u16::MAX as u32) as u16;
+        }
+        Ok((size, palette, blocks))
     }
-    Ok((size, palette, blocks))
 }
 
 // ----------------------------------------------------------- Litematica --
 
 fn litematic(name: &str, root: &Compound) -> Result<Imported, ObjectError> {
-    let mut placed: Vec<([i64; 3], String)> = Vec::new();
+    let mut placed = Placed::default();
     let Some(regions) = compound(root, "Regions") else { return Err(ObjectError::Corrupt("no regions".into())) };
     let mut names: Vec<&String> = regions.keys().collect();
     names.sort();
@@ -442,8 +563,8 @@ fn litematic(name: &str, root: &Compound) -> Result<Imported, ObjectError> {
         let Some(Value::Compound(region)) = regions.get(region_name) else { continue };
         let (Some(pos), Some(size)) = (triple(region.get("Position")), triple(region.get("Size"))) else { continue };
         // A negative size runs from the position back.
-        let origin = [0, 1, 2].map(|a| if size[a] >= 0 { pos[a] } else { pos[a] + size[a] + 1 });
-        let dims = check_size(size.map(i64::abs))?.map(|s| s as usize);
+        let origin = [0, 1, 2].map(|a| if size[a] >= 0 { pos[a] } else { pos[a].saturating_add(size[a]).saturating_add(1) });
+        let dims = check_size(size.map(i64::saturating_abs))?.map(|s| s as usize);
         let palette: Vec<String> = list(region, "BlockStatePalette").iter().map(state_of).collect();
         let Some(data) = longs(region, "BlockStates") else { continue };
         let volume = dims[0] * dims[1] * dims[2];
@@ -454,10 +575,10 @@ fn litematic(name: &str, root: &Compound) -> Result<Imported, ObjectError> {
                 continue;
             }
             let (x, z, y) = (i % dims[0], (i / dims[0]) % dims[2], i / (dims[0] * dims[2]));
-            placed.push(([origin[0] + x as i64, origin[1] + y as i64, origin[2] + z as i64], state.clone()));
+            placed.put([origin[0].saturating_add(x as i64), origin[1].saturating_add(y as i64), origin[2].saturating_add(z as i64)], state)?;
         }
     }
-    let (size, palette, blocks) = boxed(&placed)?;
+    let (size, palette, blocks) = placed.boxed()?;
     finish(own_name(root, name), "Litematica schematic", size, palette, blocks, 0)
 }
 
@@ -468,18 +589,26 @@ fn structure(name: &str, root: &Compound) -> Result<Imported, ObjectError> {
         Some(Value::List(p)) => p.iter().map(state_of).collect(),
         _ => Vec::new(),
     };
-    let mut placed = Vec::new();
+    let mut placed = Placed::default();
     for block in list(root, "blocks") {
         let Value::Compound(b) = block else { continue };
         let (Some(pos), Some(k)) = (triple(b.get("pos")), int(b.get("state"))) else { continue };
         let Some(state) = palette.get(k as usize) else { continue };
         if !massif_core::objects::is_nothing(state) {
-            placed.push((pos, state.clone()));
+            placed.put(pos, state)?;
         }
     }
-    let (size, palette, blocks) = boxed(&placed)?;
+    let (size, palette, blocks) = placed.boxed()?;
     finish(name, "structure", size, palette, blocks, 0)
 }
+
+#[cfg(test)]
+#[path = "../../massif-core/tests/fuzz_support/mod.rs"]
+mod fuzz_support;
+
+#[cfg(test)]
+#[global_allocator]
+static ALLOC: fuzz_support::Capped = fuzz_support::Capped;
 
 #[cfg(test)]
 mod tests {
@@ -749,5 +878,115 @@ mod tests {
             ("BlockData", Value::ByteArray(fastnbt::ByteArray::new(vec![0]))),
         ]);
         assert!(matches!(read_bytes("x", &nbt(&short)), Err(ObjectError::Corrupt(_))));
+    }
+
+    /// One file of each kind, uncompressed so that mutations reach the
+    /// readers rather than gzip's checksum, and a compressed one.
+    fn seeds() -> Vec<Vec<u8>> {
+        let raw = |v: &Value| fastnbt::to_bytes(v).unwrap();
+        let mut seeds = vec![raw(&c(sponge_body(2))), raw(&c(vec![("Schematic", c(sponge_body(3)))])), nbt(&c(sponge_body(2)))];
+        let ids: Vec<i8> = (0..45).map(|i| [0u8, 3, 17, 18, 106, 175, 255][i % 7] as i8).collect();
+        let data: Vec<i8> = (0..45).map(|i| (i % 2) as i8).collect();
+        seeds.push(raw(&c(vec![
+            ("Width", Value::Short(3)),
+            ("Height", Value::Short(5)),
+            ("Length", Value::Short(3)),
+            ("Blocks", Value::ByteArray(fastnbt::ByteArray::new(ids))),
+            ("Data", Value::ByteArray(fastnbt::ByteArray::new(data))),
+            ("AddBlocks", Value::ByteArray(fastnbt::ByteArray::new([vec![0x10], vec![0; 22]].concat()))),
+        ])));
+        let xyz = |x, y, z| c(vec![("x", Value::Int(x)), ("y", Value::Int(y)), ("z", Value::Int(z))]);
+        let entry = |n: &str| c(vec![("Name", Value::String(n.into())), ("Properties", c(vec![("axis", Value::String("y".into()))]))]);
+        let region = c(vec![
+            ("Position", xyz(10, 64, 10)),
+            ("Size", xyz(-3, 5, -3)),
+            ("BlockStatePalette", Value::List(vec![entry("minecraft:air"), entry("minecraft:oak_log"), entry("minecraft:dirt")])),
+            ("BlockStates", Value::LongArray(fastnbt::LongArray::new(vec![0x1234_5678_9abc_def0, 0x0fed_cba9_8765_4321]))),
+        ]);
+        seeds.push(raw(&c(vec![("Version", Value::Int(6)), ("Regions", c(vec![("Main", region)]))])));
+        let blocks: Vec<Value> = (0..6).map(|i| c(vec![("pos", Value::List(vec![Value::Int(i % 3), Value::Int(i / 3), Value::Int(0)])), ("state", Value::Int(i % 2))])).collect();
+        seeds.push(raw(&c(vec![
+            ("size", Value::List(vec![Value::Int(3), Value::Int(2), Value::Int(1)])),
+            ("palette", Value::List(vec![entry("minecraft:stone"), entry("minecraft:oak_log")])),
+            ("blocks", Value::List(blocks)),
+        ])));
+        let region = c(vec![
+            ("X", Value::Int(1)),
+            ("Y", Value::Int(0)),
+            ("Z", Value::Int(-1)),
+            ("BlockStates", c(vec![("palette", Value::List(vec![entry("minecraft:air"), entry("minecraft:stone")])), ("data", Value::LongArray(fastnbt::LongArray::new(vec![0x1111_0000_1111_0000; 256])))])),
+        ]);
+        let blocks = nbt(&c(vec![("BlockRegion", Value::List(vec![region]))]));
+        let header = raw(&c(vec![("Name", Value::String("bp".into()))]));
+        let mut axiom = AXIOM_MAGIC.to_vec();
+        for part in [&header[..], b"\x89PNG", &blocks[..]] {
+            axiom.extend_from_slice(&(part.len() as u32).to_be_bytes());
+            axiom.extend_from_slice(part);
+        }
+        seeds.push(axiom);
+        seeds
+    }
+
+    #[test]
+    fn damaged_schematics_are_refused_without_panicking() {
+        let seeds = seeds();
+        for (i, s) in seeds.iter().enumerate() {
+            assert!(read_bytes("seed", s).is_ok(), "seed {i}: {:?}", read_bytes("seed", s).err());
+        }
+        let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/corpus/objects");
+        fuzz_support::fuzz("objects", &seeds, &corpus, |bytes| {
+            let _ = read_bytes("fuzz", bytes);
+        });
+    }
+
+    #[test]
+    fn deeply_nested_nbt_is_refused() {
+        // A compound in a compound, a hundred thousand deep; then lists.
+        let mut deep = vec![10u8, 0, 0];
+        for _ in 0..100_000 {
+            deep.extend_from_slice(&[10, 0, 1, b'a']);
+        }
+        assert!(read_bytes("deep", &deep).is_err());
+        let mut lists = vec![10u8, 0, 0, 9, 0, 1, b'a'];
+        for _ in 0..100_000 {
+            lists.extend_from_slice(&[9, 0, 0, 0, 1]);
+        }
+        assert!(read_bytes("deep", &lists).is_err());
+    }
+
+    #[test]
+    fn schematics_that_unfold_without_end_are_refused() {
+        // A list said to hold two billion compounds, in a few bytes.
+        let mut long_list = vec![10u8, 0, 0, 9, 0, 6, b'b', b'l', b'o', b'c', b'k', b's', 10, 0x7f, 0xff, 0xff, 0xff];
+        long_list.extend_from_slice(&[0; 16]);
+        assert!(read_bytes("long", &long_list).is_err());
+        // Sixty-four regions of 256³ stone each, with no block data: the
+        // missing indices count as the palette's first state.
+        let xyz = |x, y, z| c(vec![("x", Value::Int(x)), ("y", Value::Int(y)), ("z", Value::Int(z))]);
+        let regions: Vec<(String, Value)> = (0..64)
+            .map(|i| {
+                (
+                    format!("r{i}"),
+                    c(vec![
+                        ("Position", xyz(0, 0, 0)),
+                        ("Size", xyz(256, 256, 256)),
+                        ("BlockStatePalette", Value::List(vec![c(vec![("Name", Value::String("minecraft:stone".into()))])])),
+                        ("BlockStates", Value::LongArray(fastnbt::LongArray::new(vec![]))),
+                    ]),
+                )
+            })
+            .collect();
+        let file = Value::Compound(std::iter::once(("Regions".to_owned(), Value::Compound(regions.into_iter().collect()))).collect());
+        let t = std::time::Instant::now();
+        assert!(read_bytes("bomb", &fastnbt::to_bytes(&file).unwrap()).is_err());
+        assert!(t.elapsed().as_secs_f64() < 20.0, "{:?}", t.elapsed());
+        // Half a gigabyte of zeros in half a megabyte of gzip.
+        let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        let zeros = vec![0u8; 1 << 24];
+        for _ in 0..32 {
+            e.write_all(&zeros).unwrap();
+        }
+        let bomb = e.finish().unwrap();
+        assert!(read_bytes("bomb", &bomb).is_err());
     }
 }

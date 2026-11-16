@@ -5,7 +5,7 @@
 //! to huge or negative values, spans repeated or deleted, then every file of
 //! its regression corpus. A reader passes when it returns, whatever it
 //! returns: a panic fails the test and the input is written under
-//! `target/fuzz-crashes/` to be added to the corpus, and an allocation over
+//! `target/tmp/fuzz-crashes/` to be added to the corpus, and an allocation over
 //! [`ALLOC_CAP`] stops the test binary after writing the input the same way.
 //!
 //! `MASSIF_FUZZ_ITERS` sets the mutations per seed (default 300), and
@@ -168,8 +168,9 @@ fn env(name: &str, default: u64) -> u64 {
 }
 
 fn crash_dir() -> PathBuf {
-    // CARGO_TARGET_TMPDIR lies under the target folder of whoever builds.
-    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("fuzz-crashes")
+    // CARGO_TARGET_TMPDIR lies under the target folder of whoever builds;
+    // unit tests do not have it.
+    option_env!("CARGO_TARGET_TMPDIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join("fuzz-crashes")
 }
 
 fn fnv(bytes: &[u8]) -> u64 {
