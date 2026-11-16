@@ -831,6 +831,71 @@ with the **Deck** they are made of.
   beside Convert to voxels builds the terrain at full size and saves its
   relief as a 16-bit PNG instead of writing it to the map.
 
+## Real places
+
+A world, or a part of one, from the relief of a real place on the Earth.
+
+- **File ▸ New World from a Real Place…** (also **From a real place** on the
+  home screen) makes a new world of it; **Edit ▸ Relief of a Real Place…**
+  writes it into the map open, into the selection (by its weight, fading
+  along a feathered edge) or over the whole map. Either writes the
+  heights, puts the sea under the sea level (and takes it off the land
+  above it) and paints the ground with the automatic paint; in the map it
+  is one step to undo.
+- **Source.** **Terrain Tiles** are the heights of the whole Earth, about
+  30 m apart (finer where better data exists), ocean floors included,
+  downloaded as needed. **A file** reads one you downloaded: a GeoTIFF
+  (16-bit or 32-bit, its pixel size read from its tags), a 16-bit PNG or
+  a raw `.r16` / `.r32`, for which you say how many metres a pixel covers
+  and the heights black and white stand for. A file is centred on the map.
+- **Place.** Type a place's name and press Enter to search it (with
+  OpenStreetMap's Nominatim; only when you search), or type its latitude
+  and longitude (`45.83, 6.86`, `33.9S 18.4E`), or its north, south,
+  west and east bounds. The small map beside shows the Earth's relief,
+  the area the map covers outlined in orange: drag it to move, scroll to
+  zoom.
+- **Scale.** **Blocks a metre** is the horizontal scale: 1 makes a block
+  a metre, 0.1 ten metres. A new world has the **Width** and **Depth**
+  you give it, the area following; in a map, the area is the map's (or
+  the selection's) and the scale sets how much of the Earth it covers.
+- **Heights.** At an **Exaggeration** of 1 the relief keeps the same scale
+  upward as across. **Sea level** is the map's, and **Real height there**
+  the real height standing at it (0, the sea's; for a place inland, its
+  valley floor, the land under it then flooded). The ground keeps between
+  **Lowest** and **Highest** (Minecraft's −64 to 320, a taller world's, or
+  the map's own); **Squeeze into the range** brings what would go past it
+  into it, above and under the sea apart, so the summit stands at the top
+  and the sea where it is, rather than cutting it off.
+- **Preview.** The picture under the small map shows the ground it makes,
+  and the line under the heights the real heights it reads and the
+  heights of blocks they become.
+- **Downloads.** Tiles come from Amazon's open data, a few at a time, in
+  the background with their progress and a Cancel, and are kept on disk
+  (`~/Library/Caches/Massif`, `%LOCALAPPDATA%\Massif\cache`,
+  `~/.cache/massif`; up to 2 GB, the oldest dropped first): a place seen
+  once works offline. Massif sends nothing about you, only its name and
+  version. Offline, a place not seen before cannot be had, and Massif says
+  so rather than writing a hole.
+- **Credits.** Elevation: Terrain Tiles by Mapzen (Tilezen), on AWS Open
+  Data. ArcticDEM terrain data DEM(s) were created from DigitalGlobe, Inc.,
+  imagery and funded under National Science Foundation awards 1043681,
+  1559691, and 1542736; Australia terrain data © Commonwealth of Australia
+  (Geoscience Australia) 2017; Austria terrain data © offene Daten
+  Österreichs – Digitales Geländemodell (DGM) Österreich; Canada terrain
+  data contains information licensed under the Open Government Licence –
+  Canada; Europe terrain data produced using Copernicus data and
+  information funded by the European Union - EU-DEM layers; Global ETOPO1
+  terrain data U.S. National Oceanic and Atmospheric Administration;
+  Mexico terrain data source: INEGI, Continental relief, 2016; New Zealand
+  terrain data Copyright 2011 Crown copyright (c) Land Information New
+  Zealand and the New Zealand Government (All rights reserved); Norway
+  terrain data © Kartverket; United Kingdom terrain data © Environment
+  Agency copyright and/or database right 2015. All rights reserved; United
+  States 3DEP (formerly NED) and global GMTED2010 and SRTM terrain data
+  courtesy of the U.S. Geological Survey. Place search: Nominatim, ©
+  OpenStreetMap contributors (ODbL). When you share a map made from them,
+  credit them too.
+
 ## Real blocks
 
 Massif reads the blocks of the game from your own installation: the client

@@ -144,6 +144,8 @@ pub enum HomeAction {
     Create(GenParams, Option<Template>),
     FromHeightmap(Arc<Heightmap>, FromHeightmap),
     PickHeightmap,
+    /// A new world from the relief of a real place.
+    RealPlace,
     /// Open a map of one's own (`.massif`).
     Open,
     /// Import a WorldPainter world.
@@ -491,10 +493,11 @@ impl Home {
             }
         });
         ui.add_space(14.0);
-        let links: [(Icon, &str, &str, HomeAction); 3] = [
+        let links: [(Icon, &str, &str, HomeAction); 4] = [
             (Icon::FolderOpen, "Open a map", "A Massif map (.massif)", HomeAction::Open),
             (Icon::Import, "Import from WorldPainter", "A WorldPainter world (.world)", HomeAction::Import),
             (Icon::ImageUp, "From a height map", "A greyscale picture: 16-bit PNG, JPEG, .r16 or .r32", HomeAction::PickHeightmap),
+            (Icon::Earth, "From a real place", "The relief of a place on the Earth, at the scale you choose", HomeAction::RealPlace),
         ];
         if let Some(a) = link_row(ui, &links) {
             if matches!(a, HomeAction::PickHeightmap) {

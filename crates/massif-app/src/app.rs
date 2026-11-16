@@ -158,6 +158,8 @@ enum Pending {
     /// The newest backup left by a run that closed without saving (see
     /// `autosave`), restored.
     Recover,
+    /// A new world from the relief of a real place.
+    Real(Box<crate::real_terrain::RealJob>),
     Quit,
 }
 
@@ -243,6 +245,8 @@ enum Dialog {
     Update,
     /// Caves to carve: their settings.
     Caves(Box<crate::caves::CaveForm>),
+    /// The relief of a real place: where, at what scale, how high.
+    Real(Box<crate::real_terrain::RealForm>),
 }
 
 struct Status {
@@ -275,6 +279,9 @@ pub struct MassifApp {
     next_generation: u64,
     /// The settings caves were last carved with (per run of the app).
     caves: Option<massif_core::caves::CaveSettings>,
+    /// The place, scale and heights the relief of a real place was last
+    /// made with (per run of the app).
+    real: Option<crate::real_terrain::Remembered>,
     layout: Layout,
     tools: ToolState,
     settings: Settings,
@@ -490,6 +497,7 @@ impl MassifApp {
             }
             HomeAction::FromHeightmap(map, how) => self.request(ctx, Pending::FromHeightmap(map, how)),
             HomeAction::PickHeightmap => self.pick_heightmap(ctx),
+            HomeAction::RealPlace => self.open_real(true),
             HomeAction::AnotherPicture => {
                 if let Some(home) = &mut self.home {
                     home.pick_backdrop(&mut self.settings.backdrops_seen);
@@ -628,6 +636,7 @@ impl MassifApp {
             covers_key: None,
             next_generation: 1,
             caves: None,
+            real: None,
             layout,
             tools,
             settings,
@@ -1186,6 +1195,23 @@ impl MassifApp {
         self.dialog = Some(Dialog::Caves(Box::new(form)));
     }
 
+    /// The dialog of the relief of a real place: for a new world, or into
+    /// the map (its selection, else all of it).
+    fn open_real(&mut self, new_world: bool) {
+        use crate::real_terrain::{RealForm, Target};
+        let (target, sea) = if new_world || !self.has_map {
+            (Target::NewWorld, massif_core::generate::GenParams::default().sea_level)
+        } else {
+            let dim = &self.doc.world.dims[self.doc.dim];
+            let tiles = |(lo, hi): (massif_core::TilePos, massif_core::TilePos)| massif_core::coords::BlockRect::new(lo.x * massif_core::TILE_SIZE, lo.z * massif_core::TILE_SIZE, (hi.x + 1) * massif_core::TILE_SIZE, (hi.z + 1) * massif_core::TILE_SIZE);
+            let rect = dim.selection.as_ref().and_then(|s| s.bounds()).or_else(|| dim.bounds().map(tiles));
+            let Some(rect) = rect else { return };
+            (Target::Map { rect, selected: dim.selection.is_some(), min_y: dim.min_y, max_y: dim.max_y }, self.doc.world.meta.sea_level)
+        };
+        let form = RealForm::new(target, sea, self.real, crate::tiles::TileStore::global());
+        self.dialog = Some(Dialog::Real(Box::new(form)));
+    }
+
     fn open_ores(&mut self, ctx: &egui::Context) {
         let snapshot = self.doc.world.snapshot();
         self.dialog = Some(Dialog::Ores(Box::new(crate::ores::OresView::new(ctx, snapshot, self.doc.dim))));
@@ -1278,6 +1304,10 @@ impl MassifApp {
                     false,
                     None,
                 );
+            }
+            Pending::Real(job) => {
+                let rules = self.tools.auto.clone();
+                self.jobs.push(Job::real(ctx, crate::tiles::TileStore::global(), *job, None, 0, rules, 0));
             }
             Pending::Recover => {
                 if !self.autosave.found.is_empty() {
@@ -1543,6 +1573,20 @@ impl MassifApp {
                         self.doc.commit();
                         let msg = format!("{label} over the whole map: {columns} columns changed in {secs:.1} s");
                         self.task_done(ctx, Cue::Ready, &format!("{label} done"), &msg, secs);
+                        self.say(ctx, msg, false, None);
+                    }
+                }
+                Outcome::RealTerrain { tiles, columns, revision, dim } => {
+                    let label = "Real terrain";
+                    if other_map || revision != self.doc.revision || dim != self.doc.dim {
+                        crate::sounds::play(Cue::Warning);
+                        self.say(ctx, format!("Relief of a real place: {meanwhile}, nothing was done"), true, None);
+                    } else {
+                        self.doc.history.begin(label, dim);
+                        self.doc.history.edit(&mut self.doc.world, 0).replace_tiles(tiles);
+                        self.doc.commit();
+                        let msg = format!("Relief of a real place: {columns} columns changed in {secs:.1} s");
+                        self.task_done(ctx, Cue::Ready, "Relief of a real place done", &msg, secs);
                         self.say(ctx, msg, false, None);
                     }
                 }
@@ -1896,6 +1940,8 @@ impl MassifApp {
             Command::AutoRules => self.dialog = Some(Dialog::AutoRules(false)),
             Command::WholeMap(what) => self.open_reshape(what),
             Command::Caves => self.open_caves(),
+            Command::RealTerrain => self.open_real(false),
+            Command::FromRealPlace => self.open_real(true),
             Command::Ores => self.open_ores(ctx),
             Command::Analyse => self.open_analysis(ctx),
             Command::Theme(choice) => self.settings.theme = choice,
@@ -2748,6 +2794,34 @@ impl MassifApp {
                 }
                 if keep {
                     self.dialog = Some(Dialog::Caves(form));
+                }
+            }
+            Dialog::Real(mut form) => {
+                use crate::real_terrain::Choice;
+                let mut choice = Choice::Keep;
+                let response = modal(ctx, "real terrain").show(ctx, |ui| {
+                    choice = form.ui(ui);
+                });
+                if response.should_close() {
+                    keep = false;
+                }
+                self.real = Some(form.remembered());
+                match choice {
+                    Choice::Keep => {}
+                    Choice::Close => keep = false,
+                    Choice::Make(job) => {
+                        keep = false;
+                        if job.target == crate::real_terrain::Target::NewWorld {
+                            self.request(ctx, Pending::Real(job));
+                        } else {
+                            let snapshot = self.doc.world.snapshot();
+                            let rules = self.tools.auto.clone();
+                            self.jobs.push(Job::real(ctx, crate::tiles::TileStore::global(), *job, Some(snapshot), self.doc.dim, rules, self.doc.revision).on(self.doc.generation));
+                        }
+                    }
+                }
+                if keep {
+                    self.dialog = Some(Dialog::Real(form));
                 }
             }
             Dialog::Ores(mut view) => {
@@ -5559,6 +5633,115 @@ mod tests {
             h.state_mut().undo(&ctx);
             h.run_steps(2);
             assert!(h.state().doc.dimension().voxels.is_empty(), "one undo takes the caves back");
+        }
+    }
+
+    /// Edit ▸ Relief of a Real Place and File ▸ New World from a Real
+    /// Place, from tiles put in memory (no network): the dialog shows the
+    /// place and the ground it makes (renders with MASSIF_SNAPSHOT_DIR);
+    /// applying writes heights, sea and paint as one step to undo, and a
+    /// new world is made of it.
+    #[test]
+    fn relief_of_a_real_place() {
+        use egui_kittest::kittest::Queryable;
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let store = crate::tiles::TileStore::global();
+        let wait_for_picture = |h: &mut egui_kittest::Harness<'static, MassifApp>| {
+            let started = std::time::Instant::now();
+            loop {
+                h.step();
+                if let Some(Dialog::Real(form)) = &h.state().dialog
+                    && form.has_picture()
+                {
+                    break;
+                }
+                assert!(started.elapsed().as_secs() < 30, "no preview");
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            h.run_steps(3);
+        };
+        let wait_for_jobs = |h: &mut egui_kittest::Harness<'static, MassifApp>| {
+            let started = std::time::Instant::now();
+            while !h.state().jobs.is_empty() {
+                assert!(started.elapsed().as_secs() < 120, "the job timed out");
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            h.run_steps(3);
+        };
+        for theme in [ThemeChoice::Light, ThemeChoice::Dark] {
+            let mut h = harness(theme);
+            h.run_steps(5);
+            h.state_mut().open_real(false);
+            let area = {
+                let Some(Dialog::Real(form)) = &mut h.state_mut().dialog else { panic!("the dialog opens") };
+                form.area.blocks_per_metre = 0.02;
+                form.area
+            };
+            crate::real_terrain::tests::seed_store(&store, &area);
+            wait_for_picture(&mut h);
+            if let Some(dir) = &dir {
+                h.render().unwrap().save(dir.join(format!("dialog-real-terrain-{theme:?}.png").to_lowercase())).unwrap();
+            }
+            if theme == ThemeChoice::Light {
+                continue;
+            }
+            let before = h.state().doc.revision;
+            h.get_by_label("Apply").click();
+            h.run_steps(2);
+            assert!(h.state().dialog.is_none() && !h.state().jobs.is_empty(), "the job runs");
+            wait_for_jobs(&mut h);
+            assert_eq!(h.state().doc.history.undo_label(), Some("Real terrain"), "{:?}", h.state().status.as_ref().map(|s| s.text.clone()));
+            assert_ne!(h.state().doc.revision, before);
+            // The sea to the west, a peak to the east, squeezed into the world.
+            let (west, east, wet) = {
+                let dim = h.state().doc.dimension();
+                let (lo, hi) = dim.bounds().unwrap();
+                let (x0, x1) = (lo.x * massif_core::TILE_SIZE, (hi.x + 1) * massif_core::TILE_SIZE);
+                let z = (lo.z + hi.z + 1) * massif_core::TILE_SIZE / 2;
+                let column = |x: i32| {
+                    let stack = massif_core::TileStack::new(dim, massif_core::TilePos::containing(x, z), false).unwrap();
+                    let i = massif_core::coords::local_index(x, z);
+                    (stack.ground().top.get(i), stack.ground().fluid.get(i))
+                };
+                let peak = (x0..x1).step_by(4).map(|x| column(x).0).fold(f32::MIN, f32::max);
+                (column(x0 + 2), peak, column(x0 + 2).1 != massif_core::tile::NO_FLUID)
+            };
+            assert!(west.0 < 62.0 && wet, "the sea in the west: {west:?}");
+            // About 3100 m at 50 m a block: 62 blocks over the sea.
+            assert!((east - 124.0).abs() < 6.0, "a peak in the east: {east}");
+            let ctx = h.ctx.clone();
+            h.state_mut().undo(&ctx);
+            h.run_steps(2);
+            assert_eq!(h.state().doc.history.undo_label(), None, "one undo takes it back");
+        }
+        // A new world.
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        h.state_mut().open_real(true);
+        let area = {
+            let Some(Dialog::Real(form)) = &mut h.state_mut().dialog else { panic!("the dialog opens") };
+            form.area.blocks_per_metre = 0.02;
+            form.area.width = 512;
+            form.area.depth = 384;
+            form.name = "Test place".into();
+            form.area
+        };
+        crate::real_terrain::tests::seed_store(&store, &area);
+        wait_for_picture(&mut h);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("dialog-real-place-new-world.png")).unwrap();
+        }
+        h.get_by_label("Make the world").click();
+        h.run_steps(2);
+        wait_for_jobs(&mut h);
+        let world = &h.state().doc.world;
+        assert_eq!(world.meta.name, "Test place");
+        let (lo, hi) = world.dims[0].bounds().unwrap();
+        assert_eq!(((hi.x - lo.x + 1) * massif_core::TILE_SIZE, (hi.z - lo.z + 1) * massif_core::TILE_SIZE), (512, 384));
+        if let Some(dir) = &dir {
+            h.run_steps(20);
+            h.render().unwrap().save(dir.join("real-place-new-world.png")).unwrap();
         }
     }
 

@@ -80,6 +80,15 @@ pub enum Outcome {
         revision: u64,
         dim: usize,
     },
+    /// The relief of a real place written into a copy of the map: the
+    /// tiles it changed, to put in place in one undoable step.
+    RealTerrain {
+        tiles: Vec<(massif_core::TilePos, massif_core::level::Blob)>,
+        columns: usize,
+        /// The document's revision and dimension it was worked out from.
+        revision: u64,
+        dim: usize,
+    },
     Failed(String),
     Cancelled,
 }
@@ -131,6 +140,33 @@ impl JobProgress for ImportProgress {
     }
     fn cancel(&self) {
         self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// How far a job of several steps is: tiles fetched, then a pass or two
+/// over the map.
+#[derive(Default)]
+pub struct Phased {
+    /// The step under way, of `steps`.
+    pub step: std::sync::atomic::AtomicUsize,
+    pub steps: std::sync::atomic::AtomicUsize,
+    pub fetched: std::sync::atomic::AtomicUsize,
+    pub tiles: std::sync::atomic::AtomicUsize,
+    pub pass: massif_core::auto::Steps,
+}
+
+impl JobProgress for Phased {
+    fn fraction(&self) -> f32 {
+        use std::sync::atomic::Ordering::Relaxed;
+        let steps = self.steps.load(Relaxed).max(1) as f32;
+        let step = self.step.load(Relaxed);
+        // Fetching weighs as much as the rest together.
+        let within = if step == 0 { self.fetched.load(Relaxed) as f32 / self.tiles.load(Relaxed).max(1) as f32 } else { self.pass.fraction() };
+        let (start, width) = if step == 0 { (0.0, 0.5) } else { (0.5 + 0.5 * (step - 1) as f32 / (steps - 1.0).max(1.0), 0.5 / (steps - 1.0).max(1.0)) };
+        (start + width * within).clamp(0.0, 1.0)
+    }
+    fn cancel(&self) {
+        self.pass.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -366,6 +402,107 @@ impl Job {
                 flooded: carved.flooded,
                 revision,
                 dim,
+            }
+        })
+    }
+
+    /// The relief of a real place: a new world (`snapshot` `None`), or
+    /// written into dimension `dim` of a snapshot of the document at
+    /// `revision`, painted with `rules`.
+    pub fn real(ctx: &egui::Context, store: Arc<crate::tiles::TileStore>, job: crate::real_terrain::RealJob, snapshot: Option<World>, dim: usize, rules: massif_core::auto::AutoRules, revision: u64) -> Job {
+        use massif_core::real::{Elevation, Samples, Tiles, metres_per_px, spacing};
+        use std::sync::atomic::Ordering::Relaxed;
+        let progress = Arc::new(Phased::default());
+        let p = progress.clone();
+        let online = matches!(job.source, crate::real_terrain::Source::Online);
+        let label = match (&snapshot, online) {
+            (None, true) => format!("Downloading the relief of “{}”", job.name),
+            (None, false) => format!("Making “{}” from the file", job.name),
+            (Some(_), _) => "Relief of a real place".to_owned(),
+        };
+        let kind = if snapshot.is_some() { JobKind::Auto } else { JobKind::Generate };
+        Job::spawn(kind, label, Some(progress as Arc<dyn JobProgress>), ctx, move || {
+            let area = job.area;
+            p.steps.store(if snapshot.is_some() { 3 } else { 2 }, Relaxed);
+            let (source, data_metres): (Box<dyn Elevation>, f64) = match &job.source {
+                crate::real_terrain::Source::Online => {
+                    let z = area.zoom(massif_core::real::MAX_TILES);
+                    let keys = area.tiles(z);
+                    p.tiles.store(keys.len(), Relaxed);
+                    match store.load_all(&keys, &p.fetched, &p.pass.cancel) {
+                        Ok(tiles) => (Box::new(Tiles { z, tiles }), metres_per_px(area.lat, z)),
+                        Err(e) => return Outcome::Failed(format!("Relief of a real place: {e}")),
+                    }
+                }
+                crate::real_terrain::Source::File(f) => {
+                    p.tiles.store(1, Relaxed);
+                    p.fetched.store(1, Relaxed);
+                    (Box::new(f.grid()), f.metres_per_px)
+                }
+            };
+            if p.pass.cancel.load(Relaxed) {
+                return Outcome::Cancelled;
+            }
+            p.step.store(1, Relaxed);
+            let samples = Samples::read(&area, source.as_ref(), spacing(&area, data_metres));
+            drop(source);
+            let Some(span) = samples.span() else {
+                return Outcome::Failed("Relief of a real place: no heights over this area".to_owned());
+            };
+            let fit = job.vertical.fit(span, area.blocks_per_metre);
+            let sea = job.vertical.sea_level;
+            let paint = |world: &mut World, history: &mut massif_core::history::History| {
+                let base = massif_core::auto::base_terrain(&world.dims[dim], &world.registry);
+                let reader = massif_core::auto::Reader::new(&rules, &world.registry, sea).with_base(base);
+                massif_core::auto::paint_over_the_map_with(&mut history.edit(world, 0), &reader, &p.pass)
+            };
+            match snapshot {
+                None => {
+                    let (lo, hi) = (job.vertical.low, job.vertical.high);
+                    let mut world = massif_core::real::new_world(&job.name, &samples, &fit, sea, lo, hi);
+                    drop(samples);
+                    p.step.store(1, Relaxed);
+                    let mut history = massif_core::history::History::new(1);
+                    history.begin("automatic", 0);
+                    let painted = paint(&mut world, &mut history);
+                    drop(history);
+                    if painted.cancelled {
+                        return Outcome::Cancelled;
+                    }
+                    Outcome::World { world, path: None }
+                }
+                Some(mut snapshot) => {
+                    let rect = match job.target {
+                        crate::real_terrain::Target::Map { rect, .. } => rect,
+                        crate::real_terrain::Target::NewWorld => unreachable!("a snapshot is of a map"),
+                    };
+                    let mut history = massif_core::history::History::new(1);
+                    history.begin("real terrain", dim);
+                    let written = massif_core::real::write_ground(&mut history.edit(&mut snapshot, 0), &samples, &fit, rect, &p.pass);
+                    drop(samples);
+                    if written.cancelled {
+                        return Outcome::Cancelled;
+                    }
+                    p.step.store(2, Relaxed);
+                    let painted = paint(&mut snapshot, &mut history);
+                    drop(history);
+                    if painted.cancelled {
+                        return Outcome::Cancelled;
+                    }
+                    let mut changed = written.tiles;
+                    changed.extend(painted.tiles);
+                    changed.sort_unstable_by_key(|p| (p.z, p.x));
+                    changed.dedup();
+                    let level = &mut snapshot.dims[dim].levels[0];
+                    level.encode_blobs(&changed);
+                    let tiles = changed.iter().filter_map(|&pos| level.blob(pos).map(|b| (pos, b))).collect();
+                    Outcome::RealTerrain {
+                        tiles,
+                        columns: written.columns,
+                        revision,
+                        dim,
+                    }
+                }
             }
         })
     }

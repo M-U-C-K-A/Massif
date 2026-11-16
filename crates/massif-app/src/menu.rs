@@ -17,6 +17,8 @@ pub enum Command {
     Open,
     ImportWorld,
     FromHeightMap,
+    /// A new world from the relief of a real place.
+    FromRealPlace,
     /// A map opened lately.
     OpenRecent(PathBuf),
     Save,
@@ -34,6 +36,8 @@ pub enum Command {
     AutoRules,
     WholeMap(WholeOp),
     Caves,
+    /// The relief of a real place, into the map.
+    RealTerrain,
     Ores,
     Analyse,
     Theme(ThemeChoice),
@@ -180,6 +184,7 @@ pub fn menus(state: &State) -> Vec<Menu> {
         item(Command::Open, Icon::FolderOpen, "Open…", free),
         item(Command::ImportWorld, Icon::Import, "Import WorldPainter World…", free),
         item(Command::FromHeightMap, Icon::ImageUp, "New World from Height Map…", free),
+        item(Command::FromRealPlace, Icon::Earth, "New World from a Real Place…", free),
         Entry::Submenu {
             label: "Open Recent".to_owned(),
             icon: theme::glyph(Icon::FolderInput),
@@ -218,6 +223,7 @@ pub fn menus(state: &State) -> Vec<Menu> {
                 .map(|&op| tipped(Command::WholeMap(op), op.icon(), &format!("{}…", op.label()), map, op.about()))
                 .collect(),
         },
+        tipped(Command::RealTerrain, Icon::Earth, "Relief of a Real Place…", map, "The heights of a place on the Earth, into the selection or the whole map"),
         tipped(Command::Caves, Icon::Shovel, "Caves…", map, "Tunnels, ravines and caverns carved into the rock, over the whole map or the selection"),
         Entry::Separator,
         tipped(Command::Ores, Icon::Pickaxe, "Ores…", map, "The ores the export lays in the rock: where, how many, how large"),
@@ -437,6 +443,7 @@ mod tests {
                 "Open…",
                 "Import WorldPainter World…",
                 "New World from Height Map…",
+                "New World from a Real Place…",
                 "Alps.massif",
                 "Coast.massif",
                 "Save",
@@ -463,10 +470,10 @@ mod tests {
     fn what_can_be_used_when() {
         let recent = [PathBuf::from("/maps/Alps.massif")];
         let home = menus(&State { editor: false, ..state(&recent) });
-        for command in [Command::Save, Command::SaveAs, Command::Export, Command::ExportHeightMap, Command::Undo, Command::Ores, Command::Analyse, Command::HomeScreen, Command::WholeMap(WholeOp::Rivers), Command::Caves] {
+        for command in [Command::Save, Command::SaveAs, Command::Export, Command::ExportHeightMap, Command::Undo, Command::Ores, Command::Analyse, Command::HomeScreen, Command::WholeMap(WholeOp::Rivers), Command::Caves, Command::RealTerrain] {
             assert!(!enabled(&home, &command), "{command:?} needs a map");
         }
-        for command in [Command::NewWorld, Command::Open, Command::ImportWorld, Command::OpenRecent(recent[0].clone()), Command::Settings, Command::Help, Command::About, Command::Quit, Command::Theme(ThemeChoice::Light)] {
+        for command in [Command::NewWorld, Command::Open, Command::ImportWorld, Command::FromRealPlace, Command::OpenRecent(recent[0].clone()), Command::Settings, Command::Help, Command::About, Command::Quit, Command::Theme(ThemeChoice::Light)] {
             assert!(enabled(&home, &command), "{command:?} works on the home screen");
         }
         let busy = menus(&State { idle: false, ..state(&recent) });
@@ -476,7 +483,7 @@ mod tests {
         assert!(!enabled(&menus(&state(&recent)), &Command::OpenRecent(PathBuf::from("/elsewhere.massif"))));
         // No recent map: Open Recent is greyed.
         let none = menus(&state(&[]));
-        assert!(matches!(&none[0].entries[4], Entry::Submenu { label, enabled: false, .. } if label == "Open Recent"));
+        assert!(matches!(&none[0].entries[5], Entry::Submenu { label, enabled: false, .. } if label == "Open Recent"));
     }
 
     /// The shortcuts shown are the ones `MassifApp::shortcuts` handles, as

@@ -36,6 +36,7 @@ pub mod objects;
 pub mod ores;
 pub mod ops;
 pub mod pattern;
+pub mod real;
 pub mod packs;
 pub mod plane;
 pub mod registry;

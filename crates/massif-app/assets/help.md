@@ -2,13 +2,21 @@
 Massif makes Minecraft maps. Shape the land, paint it, decorate it, then write it to a Minecraft world.
 
 ## The home screen
-The home screen opens with Massif. On the left are the ways in: **New map**, **From a height map**, **Open a map…** (a `.massif` file), **Import from WorldPainter…** (a `.world` file), and the maps opened lately. In the middle are the settings of a new map, with a preview of the whole map.
+The home screen opens with Massif. On the left are the ways in: **New map**, **From a height map**, **From a real place**, **Open a map…** (a `.massif` file), **Import from WorldPainter…** (a `.world` file), and the maps opened lately. In the middle are the settings of a new map, with a preview of the whole map.
 - **Size**: width × depth in blocks, in steps of 128.
 - **Height**: Minecraft's own (−64 to 320) or taller, up to 2032 blocks.
 - **Land**: a landform (flat, plains, hills, mountains, islands) or a template of the terrain generator, and how the ground is painted.
 - **Water**: its level, water or lava, and beaches along the shores.
 - **Seed**: the same seed always gives the same land.
 Press **Create map** (or `Enter`). A `.massif`, a `.world` or a height map dropped on the window opens too.
+
+## A real place
+**From a real place** on the home screen, or **File ▸ New World from a Real Place…**, makes a world of the relief of a place on the Earth; **Edit ▸ Relief of a Real Place…** puts one into the map open, into the selection by its weight or over the whole map.
+- **Source**: **Terrain Tiles**, the heights of the whole Earth, about 30 m apart, ocean floors included, downloaded as needed; or **A file** you downloaded: a GeoTIFF (its metres a pixel read from it), a 16-bit PNG or a raw `.r16` / `.r32` (say how many metres a pixel covers and what black and white stand for).
+- **Place**: search a place by name (press `Enter`), or type its latitude and longitude ("45.83, 6.86"), or its bounds. Drag the small map to move, scroll to zoom; the orange outline is the map.
+- **Size and scale**: the new world's width and depth, and **Blocks a metre** (1: a block is a metre; 0.1: ten metres).
+- **Heights**: **Exaggeration** makes the relief taller; **Sea level** is where the sea stands, and **Real height there** the real height that stands at it (0: the sea's; higher for a place inland, its valleys then filled). **Range** and **Lowest**, **Highest**: the heights the ground keeps to; **Squeeze into the range** brings mountains too tall (and seas too deep) into it rather than cutting them off.
+The picture under the map shows the ground it makes and the heights it reaches. Tiles are kept on disk: a place seen once works offline. The ground is painted by the automatic paint; in the map it is one step to undo. Elevation: Terrain Tiles by Mapzen on AWS Open Data (SRTM, GMTED2010, ETOPO1, 3DEP, EU-DEM and others; **All the sources** in the dialog lists them); search: Nominatim, © OpenStreetMap contributors.
 
 The picture behind the home screen changes each time Massif opens, the ones not shown yet first; the button at the bottom right shows another.
 
