@@ -1096,7 +1096,9 @@ fn block_tint(world: vec3<f32>, n: vec3<f32>, d: f32) -> f32 {
     let bi = vec3<i32>(floor(world - n * 0.01)) + vec3<i32>(i32(g.eye.w), 0, i32(g.cam_k.w));
     var h = u32(bi.x) * 73856093u ^ u32(bi.y) * 19349663u ^ u32(bi.z) * 83492791u;
     h = (h ^ (h >> 13u)) * 1274126177u;
-    let jitter = f32((h >> 8u) & 255u) / 255.0 - 0.5;
+    // Blocks under a pixel: no block-to-block jitter, it would sparkle.
+    let fine = 1.0 - smoothstep(0.3, 1.0, d * g.cam_k.z);
+    let jitter = (f32((h >> 8u) & 255u) / 255.0 - 0.5) * fine;
     let near = 1.0 - smoothstep(10.0, 48.0, d);
     // Where on the face: the two coordinates along it.
     var q = fract(world.xz);
@@ -1236,6 +1238,9 @@ fn game_fragment(in: VertexOut, n: vec3<f32>, d: f32) -> vec4<f32> {
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let n = normalize(in.normal);
     let d = distance(in.world, g.eye.xyz);
+    // Blocks across a pixel, here (before any branch: derivatives need
+    // every pixel of the quad).
+    let fw = max(length(dpdx(in.world.xz)), length(dpdy(in.world.xz)));
     if (GAME_LOOK) {
         return game_fragment(in, n, d);
     }
@@ -1251,12 +1256,19 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         // is seen at a grazing angle, a glint of the sun.
         let v = normalize(g.eye.xyz - in.world);
         // Small waves on its surface: the sky and the sun break up in them.
+        // Each wave fades out where a pixel spans more than half of it:
+        // finer than the screen, waves only make moiré (rings far off).
         var nw = n;
+        var calm = 1.0;
+        let p = in.world.xz;
         if (n.y > 0.5) {
-            let p = in.world.xz;
-            let rx = sin(p.x * 0.73 + p.y * 0.31) + 0.6 * sin(p.x * 1.91 - p.y * 1.27) + 0.35 * sin(p.x * 3.7 + p.y * 2.9);
-            let rz = cos(p.y * 0.67 - p.x * 0.29) + 0.6 * cos(p.y * 2.03 + p.x * 1.11) + 0.35 * cos(p.y * 3.3 - p.x * 3.1);
+            let w0 = 1.0 - smoothstep(0.6, 1.6, 0.8 * fw);
+            let w1 = 0.6 * (1.0 - smoothstep(0.6, 1.6, 2.3 * fw));
+            let w2 = 0.35 * (1.0 - smoothstep(0.6, 1.6, 4.6 * fw));
+            let rx = w0 * sin(p.x * 0.73 + p.y * 0.31) + w1 * sin(p.x * 1.91 - p.y * 1.27) + w2 * sin(p.x * 3.7 + p.y * 2.9);
+            let rz = w0 * cos(p.y * 0.67 - p.x * 0.29) + w1 * cos(p.y * 2.03 + p.x * 1.11) + w2 * cos(p.y * 3.3 - p.x * 3.1);
             nw = normalize(vec3<f32>(rx * 0.045, 1.0, rz * 0.045));
+            calm = w0;
         }
         var fres = pow(1.0 - max(dot(nw, v), 0.0), 3.0);
         var c = to_linear(in.color.rgb) * (g.fog.z + 0.3 * g.fog.w);
@@ -1264,7 +1276,10 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         if (g.sun.w > 0.5) {
             let sky = sky_color(reflect(-v, nw));
             let h = normalize(v + g.sun.xyz);
-            let glint = pow(max(dot(nw, h), 0.0), 900.0) * 1.1 * max(n.y, 0.0);
+            // The sun's glint, as sharp as a pixel allows: far off, a
+            // broad sheen rather than sparks that come and go.
+            let sharp = mix(60.0, 900.0, calm);
+            let glint = pow(max(dot(nw, h), 0.0), sharp) * mix(0.25, 1.1, calm) * max(n.y, 0.0);
             c = mix(c, sky, 0.1 + 0.7 * fres) + vec3<f32>(glint);
         } else {
             fres = 0.0;
@@ -1505,7 +1520,7 @@ fn corner_light(s1: f32, s2: f32, c: f32) -> f32 {
 
 /// How much light reaches point `p` of a face of column `cell` turned `n`
 /// (`height`: the column's top): darker in the corners that blocks close.
-fn column_light(cell: vec2<i32>, p: vec3<f32>, n: vec3<f32>, height: f32) -> f32 {
+fn column_light(cell: vec2<i32>, p: vec3<f32>, n: vec3<f32>, height: f32, t: f32) -> f32 {
     var c00: f32;
     var c10: f32;
     var c01: f32;
@@ -1538,7 +1553,10 @@ fn column_light(cell: vec2<i32>, p: vec3<f32>, n: vec3<f32>, height: f32) -> f32
         c11 = corner_light(ap, above, filled(f + a, y + 1.0));
         uv = vec2<f32>(fract(dot(p.xz, vec2<f32>(a))), fract(p.y));
     }
-    let light = mix(mix(c00, c10, uv.x), mix(c01, c11, uv.x), uv.y);
+    // A block about a pixel wide: the mean of its corners, rather than
+    // shadows finer than a pixel that ripple into moiré.
+    let q = mix(uv, vec2<f32>(0.5), smoothstep(0.3, 1.0, t * g.cam_k.z));
+    let light = mix(mix(c00, c10, q.x), mix(c01, c11, q.x), q.y);
     return 0.55 + 0.15 * light;
 }
 
@@ -1569,7 +1587,7 @@ fn game_column(cell: vec2<i32>, p: vec3<f32>, world: vec3<f32>, n: vec3<f32>, t:
         }
     }
     // Under water the light fades a level a block, as in the game.
-    var light = column_light(cell, p, n, height);
+    var light = column_light(cell, p, n, height, t);
     let depth = f32(col >> 24u);
     if (depth > 0.0) {
         light *= water_light(depth + height - p.y);
@@ -1629,8 +1647,26 @@ fn fs_trace(in: TraceOut) -> TraceFrag {
     let p = o + d * hit.t;
     var base: vec3<f32>;
     var normal = hit.normal;
+    // A block about a pixel wide: its side is a sliver of the pixel, the
+    // rest the tops around it. Faded into the top and the hillside as it
+    // narrows, the steps of a slope do not break into stair-stepped
+    // stripes, and meet the smooth ground seen from further away without a
+    // seam.
+    var sliver = 0.0;
+    var hill = normal;
     if (hit.level == 0) {
         base = surface_color(column(hit.cell), p.y, hit.normal.y > 0.5);
+        if (hit.normal.y < 0.5) {
+            sliver = smoothstep(0.35, 1.0, hit.t * g.cam_k.z / stride);
+        }
+        if (sliver > 0.0) {
+            let mid = vec2<f32>(hit.cell) + vec2<f32>(0.5);
+            let hl = ground_height(mid - vec2<f32>(1.0, 0.0));
+            let hr = ground_height(mid + vec2<f32>(1.0, 0.0));
+            let hu = ground_height(mid - vec2<f32>(0.0, 1.0));
+            let hd = ground_height(mid + vec2<f32>(0.0, 1.0));
+            hill = normalize(vec3<f32>(-(hr - hl) / (2.0 * stride), 1.0, -(hd - hu) / (2.0 * stride)));
+        }
     } else {
         // A square smaller than a pixel: the ground seen from afar, smooth.
         // Its colour is the mean of the tops of four of its columns (mixed
@@ -1660,6 +1696,13 @@ fn fs_trace(in: TraceOut) -> TraceFrag {
         var c: vec3<f32>;
         if (hit.level == 0 && stride == 1.0) {
             c = game_column(hit.cell, p, world, normal, hit.t, view_d);
+            if (sliver > 0.0) {
+                let top = terrain.origin.z + f32(column(hit.cell) & 0xfffu);
+                let up = vec3<f32>(0.0, 1.0, 0.0);
+                c = mix(c, game_column(hit.cell, vec3<f32>(p.x, top, p.z), vec3<f32>(world.x, top, world.z), up, hit.t, view_d), sliver);
+            }
+        } else if (hit.level == 0) {
+            c = game_light(to_linear(mix(base, surface_color(column(hit.cell), p.y, true), sliver)), normalize(mix(normal, hill, sliver)), 1.0, hit.t);
         } else {
             c = game_light(to_linear(base), normal, 1.0, hit.t);
         }
@@ -1669,6 +1712,10 @@ fn fs_trace(in: TraceOut) -> TraceFrag {
         var tint = 1.0;
         if (hit.level == 0 && stride == 1.0) {
             tint = block_tint(world, normal, hit.t);
+        }
+        if (sliver > 0.0) {
+            base = mix(base, surface_color(column(hit.cell), p.y, true), sliver);
+            normal = normalize(mix(normal, hill, sliver));
         }
         out.color = vec4<f32>(shade(base, normal, hit.t) * tint, 1.0);
     }
@@ -1777,6 +1824,13 @@ pub struct Renderer3d {
     opaque_pipeline: [wgpu::RenderPipeline; 2],
     water_pipeline: [wgpu::RenderPipeline; 2],
     trace_pipeline: [wgpu::RenderPipeline; 2],
+    /// The tracer once a sample: a ray through each of a pixel's samples
+    /// rather than one through its middle, which smooths the edges of the
+    /// traced ground as the samples do the meshes'. Built with 4 samples.
+    trace_fine_pipeline: Option<[wgpu::RenderPipeline; 2]>,
+    /// The next frames trace a ray a sample (when it was built): a still
+    /// view. Moving, one a pixel is enough, and four times cheaper.
+    pub fine: bool,
     globals: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     chunk_layout: wgpu::BindGroupLayout,
@@ -1824,6 +1878,10 @@ impl Renderer3d {
         };
         let mesh_shaders = [false, true].map(|game| shader("massif 3d meshes", MESH_WGSL, game));
         let trace_shaders = [false, true].map(|game| shader("massif 3d tracer", TRACE_WGSL, game));
+        // The same, its direction read at each sample: the pixel shaded
+        // once a sample.
+        let fine_wgsl = TRACE_WGSL.replace("@location(0) ndc: vec2<f32>,", "@location(0) @interpolate(perspective, sample) ndc: vec2<f32>,");
+        let fine_shaders = (samples > 1).then(|| [false, true].map(|game| shader("massif 3d tracer, a ray a sample", &fine_wgsl, game)));
         let uniform = |binding: u32, dynamic: bool, size: u64| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -2006,7 +2064,7 @@ impl Renderer3d {
         };
         let opaque_pipeline = mesh_shaders.each_ref().map(|m| pipeline("massif 3d opaque", wgpu::BlendState::REPLACE, true, Some(wgpu::Face::Back), m));
         let water_pipeline = mesh_shaders.each_ref().map(|m| pipeline("massif 3d water", wgpu::BlendState::ALPHA_BLENDING, false, None, m));
-        let trace_pipeline = trace_shaders.each_ref().map(|trace_shader| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let trace = |trace_shader: &wgpu::ShaderModule| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("massif 3d tracer"),
             layout: Some(&trace_pipeline_layout),
             vertex: wgpu::VertexState {
@@ -2033,7 +2091,9 @@ impl Renderer3d {
             }),
             multiview_mask: None,
             cache: None,
-        }));
+        });
+        let trace_pipeline = trace_shaders.each_ref().map(trace);
+        let trace_fine_pipeline = fine_shaders.as_ref().map(|f| f.each_ref().map(trace));
         let (origins, origins_group) = Self::make_origins(device, &chunk_layout, 64);
         Self {
             device: device.clone(),
@@ -2042,6 +2102,8 @@ impl Renderer3d {
             opaque_pipeline,
             water_pipeline,
             trace_pipeline,
+            trace_fine_pipeline,
+            fine: false,
             globals,
             bind_group,
             chunk_layout,
@@ -2724,7 +2786,8 @@ impl Renderer3d {
             // The traced ground first, then the meshed chunks, then the
             // water over everything.
             if let Some(tr) = &self.tracer {
-                pass.set_pipeline(&self.trace_pipeline[game]);
+                let pipelines = self.trace_fine_pipeline.as_ref().filter(|_| self.fine).unwrap_or(&self.trace_pipeline);
+                pass.set_pipeline(&pipelines[game]);
                 pass.set_bind_group(1, &tr.group, &[]);
                 pass.draw(0..3, 0..1);
             }
@@ -3225,6 +3288,11 @@ pub struct View3d {
     style: Option<Style>,
     generation: Option<u64>,
     needs_render: bool,
+    /// When the frame last changed (the camera, the brush, the map), and
+    /// whether the last one drawn traced a ray a sample: once nothing has
+    /// changed for a moment, the frame is drawn again so.
+    changed_at: f64,
+    last_fine: bool,
     last_globals: Option<[f32; GLOBAL_FLOATS]>,
     /// The part of the target the last frame was drawn in.
     last_region: [u32; 2],
@@ -3374,6 +3442,8 @@ impl Default for View3d {
             fly: [0.0; 3],
             look_goal: None,
             moving_until: 0.0,
+            changed_at: 0.0,
+            last_fine: false,
             last_camera: None,
             reduce_while_moving: !cfg!(test),
             catalogue: None,
@@ -4540,7 +4610,17 @@ impl View3d {
             }
         }
         let key: [f32; GLOBAL_FLOATS] = bytemuck::cast(globals);
-        if self.needs_render || self.last_globals != Some(key) || self.last_region != region {
+        let changed = self.needs_render || self.last_globals != Some(key) || self.last_region != region;
+        if changed {
+            self.changed_at = now;
+        }
+        // Still for a moment, the frame is drawn once more, a ray through
+        // each sample of a pixel: the traced ground's edges smoothed (Smooth
+        // edges, in Settings ▸ Graphics). Moving, or the brush moving over
+        // it, a ray a pixel: four times cheaper.
+        let fine = now >= self.changed_at + STILL_AFTER && now >= self.moving_until;
+        let multi = renderer.samples > 1;
+        if changed || (fine && !self.last_fine && multi) {
             self.last_region = region;
             let m = Mat4::from_cols_array_2d(&globals.view_proj);
             let dim = doc.dimension();
@@ -4571,10 +4651,16 @@ impl View3d {
                     whole,
                 }
             };
+            renderer.fine = fine;
+            self.last_fine = fine;
             renderer.render(&globals, origin, &meshed, dim.min_y, substrate, region);
             crate::graphics::drew_3d();
             self.last_globals = Some(key);
             self.needs_render = false;
+        }
+        if multi && !self.last_fine {
+            let still_at = (self.changed_at + STILL_AFTER).max(self.moving_until);
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((still_at - now).max(0.0) + 0.01));
         }
         let bytes = renderer.bytes();
         self.renderer = Some(renderer);
@@ -5630,3 +5716,13 @@ mod gradient_shots {
         }
     }
 }
+
+/// Trace a ray through each sample of a pixel, or one through its middle.
+#[cfg(test)]
+fn set_fine(renderer: &mut Renderer3d, on: bool) {
+    renderer.fine = on;
+}
+
+#[cfg(test)]
+#[path = "view3d_aa.rs"]
+mod aa;

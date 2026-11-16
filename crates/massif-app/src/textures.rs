@@ -297,9 +297,11 @@ fn face_uv(p: vec3<f32>, n: vec3<f32>) -> vec2<f32> {
 }
 
 /// The level of detail of a texture seen `t` blocks away on a face at
-/// `cosv` to the eye: a texel a pixel at most.
+/// `cosv` to the eye: a texel a pixel at most, along the face as it
+/// recedes too (up to 8 times as long: a grazing face is then a little
+/// soft rather than in moiré, as water and grass far off were).
 fn tex_lod(t: f32, cosv: f32) -> f32 {
-    let texels = 16.0 * t * g.cam_k.z / max(cosv, 0.35);
+    let texels = 16.0 * t * g.cam_k.z / max(cosv, 0.12);
     return clamp(log2(max(texels, 1.0e-4)), 0.0, 4.0);
 }
 

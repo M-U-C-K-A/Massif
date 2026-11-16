@@ -204,7 +204,10 @@ their own:
   makes it **Custom**, and every change applies at once, without a restart.
   The 3D views: their **Render scale** (drawn at 50, 67, 85 or 100 % of
   their pixels and stretched to fit: what saves the most, close to half the
-  time at 67 %), **Smooth edges** (four samples a pixel), **Fog**, **Water
+  time at 67 %), **Smooth edges** (four samples a pixel; once the view has
+  been still for a moment, the traced ground is drawn again with a ray
+  through each sample, its steps' edges smoothed too, for about three times
+  the time of that one frame), **Fog**, **Water
   reflections**, the game's textures in the player's view, and how much of
   the map the 3D view keeps on the graphics card (about 320 MB, 800 MB or
   2 GB): a larger map is drawn with a column every 2, 4 or 8 blocks, all of
