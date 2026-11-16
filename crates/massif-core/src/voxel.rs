@@ -97,7 +97,7 @@ pub struct VoxelChunk {
     /// The terrain of each voxel whose matter was brought by sculpting —
     /// what it was made of where it came from —, or [`FOLLOW`]: as the
     /// column composes it. `None` while every voxel follows.
-    terrain: Option<Box<[u16; VOLUME]>>,
+    pub(crate) terrain: Option<Box<[u16; VOLUME]>>,
 }
 
 /// A voxel whose terrain is the column's (see [`VoxelChunk`]).

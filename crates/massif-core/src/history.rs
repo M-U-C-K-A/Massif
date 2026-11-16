@@ -32,6 +32,8 @@ struct Step {
     /// Pre-image of the whole map, for a save point put back: its settings,
     /// blocks and dimensions (not its save points).
     whole: Option<Box<Whole>>,
+    /// The bytes its pre-images hold, once measured (see [`Step::measure`]).
+    size: usize,
 }
 
 /// The map but its save points, as a step to undo keeps it.
@@ -71,7 +73,18 @@ impl Step {
             voxel_seen: HashSet::new(),
             selection: None,
             whole: None,
+            size: 0,
         }
+    }
+
+    /// Count the bytes its tiles' and sculpted chunks' pre-images hold.
+    /// What is shared with the map still counts: a step's tiles are the
+    /// map's no more once it is edited again.
+    fn measure(mut self) -> Self {
+        let tiles: usize = self.tiles.iter().map(|(_, _, b)| b.as_ref().map_or(0, |b| b.len())).sum();
+        let voxels: usize = self.voxels.iter().map(|(_, c)| c.as_ref().map_or(0, |c| crate::voxel::VOLUME * if c.terrain.is_some() { 3 } else { 1 })).sum();
+        self.size = tiles + voxels;
+        self
     }
 
     fn is_empty(&self) -> bool {
@@ -86,7 +99,14 @@ pub struct History {
     redo: Vec<Step>,
     open: Option<Step>,
     limit: usize,
+    /// The bytes the steps may hold together; past it the oldest go, the
+    /// last one always kept.
+    budget: usize,
 }
+
+/// What the steps to undo and redo may hold by default: on a map of 44,544
+/// × 33,536 blocks, one step over the whole map holds about 1 GB.
+pub const HISTORY_BYTES: usize = 1 << 30;
 
 impl Default for History {
     fn default() -> Self {
@@ -101,6 +121,31 @@ impl History {
             redo: Vec::new(),
             open: None,
             limit: limit.max(1),
+            budget: HISTORY_BYTES,
+        }
+    }
+
+    /// Hold at most `bytes` in the steps to undo and redo.
+    pub fn set_budget(&mut self, bytes: usize) {
+        self.budget = bytes;
+        self.trim();
+    }
+
+    /// The bytes the steps hold.
+    pub fn bytes(&self) -> usize {
+        self.undo.iter().chain(&self.redo).map(|s| s.size).sum()
+    }
+
+    /// Let the oldest steps go past the limit of steps or of bytes, keeping
+    /// the last one; then steps to redo, the farthest first.
+    fn trim(&mut self) {
+        while self.undo.len() > self.limit {
+            self.undo.remove(0);
+        }
+        let mut held = self.bytes();
+        while held > self.budget && self.undo.len() + self.redo.len() > 1 {
+            let gone = if self.undo.len() > 1 || self.redo.is_empty() { self.undo.remove(0) } else { self.redo.remove(0) };
+            held -= gone.size;
         }
     }
 
@@ -133,10 +178,8 @@ impl History {
             return false;
         }
         self.redo.clear();
-        self.undo.push(step);
-        if self.undo.len() > self.limit {
-            self.undo.remove(0);
-        }
+        self.undo.push(step.measure());
+        self.trim();
         true
     }
 
@@ -166,7 +209,7 @@ impl History {
         self.commit();
         let step = self.undo.pop()?;
         let label = step.label.clone();
-        self.redo.push(swap(step, world));
+        self.redo.push(swap(step, world).measure());
         Some(label)
     }
 
@@ -175,7 +218,7 @@ impl History {
         self.commit();
         let step = self.redo.pop()?;
         let label = step.label.clone();
-        self.undo.push(swap(step, world));
+        self.undo.push(swap(step, world).measure());
         Some(label)
     }
 
@@ -587,6 +630,36 @@ mod tests {
 
     fn top(w: &World, cell: usize) -> f32 {
         w.dims[0].ground().view(POS).unwrap().top.get(cell)
+    }
+
+    #[test]
+    fn the_history_keeps_within_its_bytes() {
+        let mut w = crate::generate::generate(&crate::generate::GenParams { tiles_x: 4, tiles_z: 4, ..Default::default() });
+        let mut h = History::default();
+        let tiles: Vec<TilePos> = w.dims[0].levels[0].positions().collect();
+        let step = |h: &mut History, w: &mut World, k: f32| {
+            h.begin("raise", 0);
+            for &p in &tiles {
+                h.edit(w, 0).tile_mut(p).unwrap().top.set(0, 70.0 + k);
+            }
+            h.commit();
+            w.dims[0].levels[0].encode_blobs(&tiles);
+        };
+        for k in 0..6 {
+            step(&mut h, &mut w, k as f32);
+        }
+        assert_eq!(h.undo_count(), 6);
+        let one = h.bytes() / 6;
+        assert!(one > 0);
+        // Room for two and a half steps: the oldest three go.
+        h.set_budget(one * 5 / 2);
+        assert_eq!(h.undo_count(), 2);
+        assert!(h.bytes() <= one * 5 / 2);
+        // Room for none: the last is kept, and undoes.
+        h.set_budget(0);
+        assert_eq!(h.undo_count(), 1);
+        assert!(h.undo(&mut w).is_some());
+        assert_eq!(w.dims[0].levels[0].view(tiles[0]).unwrap().top.get(0), 74.0);
     }
 
     #[test]

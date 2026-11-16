@@ -521,6 +521,90 @@ fn i32_at(b: &[u8], at: usize) -> i32 {
     i32::from_le_bytes(b[at..at + 4].try_into().unwrap())
 }
 
+/// Where a file's bytes are read from: all of them in memory, or the file
+/// itself, read a part at a time.
+trait Source: Sync {
+    fn size(&self) -> u64;
+    /// The bytes `offset .. offset + len`, or an error naming `what`.
+    fn bytes(&self, offset: u64, len: u64, what: &str) -> Result<std::borrow::Cow<'_, [u8]>>;
+    /// The same, as a tile's blob of its own.
+    fn blob(&self, offset: u64, len: u64, what: &str) -> Result<Blob>;
+}
+
+impl Source for &[u8] {
+    fn size(&self) -> u64 {
+        self.len() as u64
+    }
+    fn bytes(&self, offset: u64, len: u64, what: &str) -> Result<std::borrow::Cow<'_, [u8]>> {
+        slice(self, offset, len, what).map(std::borrow::Cow::Borrowed)
+    }
+    fn blob(&self, offset: u64, len: u64, what: &str) -> Result<Blob> {
+        slice(self, offset, len, what).map(Blob::from)
+    }
+}
+
+/// A `.massif` file read where needed: a huge map's tiles go straight from
+/// the disk into their blobs, without the whole file in memory beside them
+/// (which doubled the memory a map took while it opened).
+struct FileSource {
+    file: std::fs::File,
+    len: u64,
+}
+
+impl FileSource {
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::FileExt::read_exact_at(&self.file, buf, offset)
+        }
+        #[cfg(windows)]
+        {
+            let (mut done, mut at) = (0, offset);
+            while done < buf.len() {
+                match std::os::windows::fs::FileExt::seek_read(&self.file, &mut buf[done..], at)? {
+                    0 => return Err(io::ErrorKind::UnexpectedEof.into()),
+                    n => {
+                        done += n;
+                        at += n as u64;
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+
+    fn check(&self, offset: u64, len: u64, what: &str) -> Result<usize> {
+        match offset.checked_add(len) {
+            Some(end) if end <= self.len => usize::try_from(len).map_err(|_| FormatError::Corrupt(format!("{what} is too large"))),
+            _ => corrupt(format!("{what} lies outside the file")),
+        }
+    }
+}
+
+impl Source for FileSource {
+    fn size(&self) -> u64 {
+        self.len
+    }
+    fn bytes(&self, offset: u64, len: u64, what: &str) -> Result<std::borrow::Cow<'_, [u8]>> {
+        let n = self.check(offset, len, what)?;
+        let mut buf = Vec::new();
+        buf.try_reserve_exact(n).map_err(|_| FormatError::Corrupt(format!("{what} is too large")))?;
+        buf.resize(n, 0);
+        self.read_at(&mut buf, offset)?;
+        Ok(std::borrow::Cow::Owned(buf))
+    }
+    fn blob(&self, offset: u64, len: u64, what: &str) -> Result<Blob> {
+        let n = self.check(offset, len, what)?;
+        let mut blob = std::sync::Arc::<[u8]>::new_zeroed_slice(n);
+        let buf = std::sync::Arc::get_mut(&mut blob).expect("just made");
+        // SAFETY: zeroed bytes are initialised u8s.
+        let buf = unsafe { &mut *(buf as *mut [std::mem::MaybeUninit<u8>] as *mut [u8]) };
+        self.read_at(buf, offset)?;
+        // SAFETY: as above, every byte is initialised.
+        Ok(unsafe { blob.assume_init() })
+    }
+}
+
 /// `bytes[offset .. offset + len]`, or an error naming `what`.
 fn slice<'a>(bytes: &'a [u8], offset: u64, len: u64, what: &str) -> Result<&'a [u8]> {
     let end = offset.checked_add(len);
@@ -538,7 +622,7 @@ struct TileEntry {
 }
 
 struct Parsed<'a> {
-    bytes: &'a [u8],
+    src: &'a dyn Source,
     version: u16,
     meta: MetaDoc,
     /// Tile index per `TIDX` section id.
@@ -562,48 +646,46 @@ impl Parsed<'_> {
     }
 }
 
-fn section_payload(bytes: &[u8], entry: &[u8], what: &str) -> Result<Vec<u8>> {
-    let payload = slice(bytes, u64_at(entry, 8), u64_at(entry, 16), what)?;
-    if crc32c::crc32c(payload) != u32_at(entry, 24) {
+fn section_payload(src: &dyn Source, entry: &[u8], what: &str) -> Result<Vec<u8>> {
+    let payload = src.bytes(u64_at(entry, 8), u64_at(entry, 16), what)?;
+    if crc32c::crc32c(&payload) != u32_at(entry, 24) {
         return corrupt(format!("{what} fails its checksum"));
     }
     if u32_at(entry, 28) & FLAG_ZSTD != 0 {
-        Ok(codec::zstd_decompress_section(payload)?)
+        Ok(codec::zstd_decompress_section(&payload)?)
     } else {
-        Ok(payload.to_vec())
+        Ok(payload.into_owned())
     }
 }
 
-fn parse(bytes: &[u8]) -> Result<Parsed<'_>> {
-    if bytes.len() < HEADER_LEN || bytes[..8] != MAGIC {
+fn parse(src: &dyn Source) -> Result<Parsed<'_>> {
+    if src.size() < HEADER_LEN as u64 {
         return Err(FormatError::NotMassif);
     }
-    let header = &bytes[..HEADER_LEN];
-    if crc32c::crc32c(&header[..0x3C]) != u32_at(header, 0x3C) {
+    let header = src.bytes(0, HEADER_LEN as u64, "the header")?;
+    if header[..8] != MAGIC {
+        return Err(FormatError::NotMassif);
+    }
+    if crc32c::crc32c(&header[..0x3C]) != u32_at(&header, 0x3C) {
         return corrupt("the header fails its checksum");
     }
-    let version = u16_at(header, 0x08);
-    let needs = u16_at(header, 0x0A);
+    let version = u16_at(&header, 0x08);
+    let needs = u16_at(&header, 0x0A);
     if needs > VERSION {
         return Err(FormatError::TooNew {
             found: needs,
             supported: VERSION,
         });
     }
-    if u64_at(header, 0x20) != bytes.len() as u64 {
+    if u64_at(&header, 0x20) != src.size() {
         return corrupt(format!(
             "it should be {} bytes long but is {}",
-            u64_at(header, 0x20),
-            bytes.len()
+            u64_at(&header, 0x20),
+            src.size()
         ));
     }
-    let directory = slice(
-        bytes,
-        u64_at(header, 0x10),
-        u32_at(header, 0x18) as u64,
-        "the section directory",
-    )?;
-    if crc32c::crc32c(directory) != u32_at(header, 0x1C) {
+    let directory = src.bytes(u64_at(&header, 0x10), u32_at(&header, 0x18) as u64, "the section directory")?;
+    if crc32c::crc32c(&directory) != u32_at(&header, 0x1C) {
         return corrupt("the section directory fails its checksum");
     }
     if directory.len() % SECTION_LEN != 0 {
@@ -621,11 +703,11 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>> {
         let id = u32_at(entry, 4);
         match kind {
             KIND_META => {
-                let json = section_payload(bytes, entry, "the metadata")?;
+                let json = section_payload(src, entry, "the metadata")?;
                 meta = Some(serde_json::from_slice::<MetaDoc>(&json)?);
             }
             KIND_TILE_INDEX | KIND_POINT_INDEX => {
-                let raw = section_payload(bytes, entry, "a tile index")?;
+                let raw = section_payload(src, entry, "a tile index")?;
                 if raw.len() % TILE_ENTRY_LEN != 0 {
                     return corrupt("a tile index has a ragged length");
                 }
@@ -637,18 +719,20 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>> {
                         len: u32_at(e, 16),
                         crc: u32_at(e, 20),
                     };
-                    slice(bytes, entry.offset, entry.len as u64, "a tile")?;
+                    if entry.offset.checked_add(entry.len as u64).is_none_or(|end| end > src.size()) {
+                        return corrupt("a tile lies outside the file");
+                    }
                     entries.push(entry);
                 }
                 indices.push((id, entries));
             }
-            KIND_VOXELS | KIND_POINT_VOXELS => voxels.push((id, section_payload(bytes, entry, "the sculpted chunks")?)),
-            KIND_SELECTION | KIND_POINT_SELECTION => selections.push((id, section_payload(bytes, entry, "the selection")?)),
+            KIND_VOXELS | KIND_POINT_VOXELS => voxels.push((id, section_payload(src, entry, "the sculpted chunks")?)),
+            KIND_SELECTION | KIND_POINT_SELECTION => selections.push((id, section_payload(src, entry, "the selection")?)),
             KIND_POINTS => {
-                let json = section_payload(bytes, entry, "the save points")?;
+                let json = section_payload(src, entry, "the save points")?;
                 points = serde_json::from_slice::<Vec<PointDoc>>(&json)?;
             }
-            KIND_POINT_THUMBNAIL => point_thumbnails.push((id, section_payload(bytes, entry, "a save point's picture")?)),
+            KIND_POINT_THUMBNAIL => point_thumbnails.push((id, section_payload(src, entry, "a save point's picture")?)),
             _ => {} // a section from a newer version: ignore it
         }
     }
@@ -657,7 +741,7 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>> {
         None => return corrupt("the metadata section is missing"),
     };
     Ok(Parsed {
-        bytes,
+        src,
         version,
         meta,
         indices,
@@ -675,7 +759,7 @@ type Frames = HashMap<u64, Blob>;
 /// The dimensions described by `docs`, their tiles read from `parsed`;
 /// with `keep`, the tiles are kept in `frames` for the save points to share.
 fn read_dims(parsed: &Parsed, docs: &[DimDoc], frames: &mut Frames, keep: bool) -> Result<Vec<Dimension>> {
-    let bytes = parsed.bytes;
+    let src = parsed.src;
     let mut dims = Vec::with_capacity(docs.len());
     for dim in docs {
         if dim.min_y >= dim.max_y {
@@ -698,14 +782,14 @@ fn read_dims(parsed: &Parsed, docs: &[DimDoc], frames: &mut Frames, keep: bool) 
                     {
                         return Ok((e.pos, e.offset, blob.clone(), false));
                     }
-                    let frame = &bytes[e.offset as usize..e.offset as usize + e.len as usize];
-                    if crc32c::crc32c(frame) != e.crc {
+                    let blob = src.blob(e.offset, e.len as u64, "a tile")?;
+                    if crc32c::crc32c(&blob) != e.crc {
                         return corrupt(format!(
                             "tile ({}, {}) of level \"{}\" fails its checksum",
                             e.pos.x, e.pos.z, doc.name
                         ));
                     }
-                    Ok((e.pos, e.offset, Blob::from(frame), true))
+                    Ok((e.pos, e.offset, blob, true))
                 })
                 .collect();
             let mut level = Level::new(LevelId(doc.id), doc.name.clone(), doc.kind);
@@ -747,7 +831,11 @@ fn read_dims(parsed: &Parsed, docs: &[DimDoc], frames: &mut Frames, keep: bool) 
 ///
 /// Every tile's checksum is verified; tiles stay compressed until used.
 pub fn read(bytes: &[u8]) -> Result<World> {
-    let mut parsed = parse(bytes)?;
+    read_from(&bytes)
+}
+
+fn read_from(src: &dyn Source) -> Result<World> {
+    let mut parsed = parse(src)?;
     let mut frames = Frames::new();
     let dims = read_dims(&parsed, &parsed.meta.dimensions, &mut frames, !parsed.points.is_empty())?;
     let mut points = Vec::with_capacity(parsed.points.len());
@@ -777,23 +865,26 @@ pub fn read(bytes: &[u8]) -> Result<World> {
     })
 }
 
-/// Read a world from a `.massif` file.
+/// Read a world from a `.massif` file, its tiles read from the disk into
+/// their own memory, the file never held whole.
 pub fn load(path: &Path) -> Result<World> {
-    read(&std::fs::read(path)?)
+    let file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    read_from(&FileSource { file, len })
 }
 
 /// Decode every tile of a file, to prove it is fully readable. Returns the
 /// number of tiles checked.
 pub fn verify(bytes: &[u8]) -> Result<usize> {
-    let parsed = parse(bytes)?;
+    let parsed = parse(&bytes)?;
     let mut total = 0;
     for (_, entries) in &parsed.indices {
         entries.par_iter().try_for_each(|e| -> Result<()> {
-            let frame = &parsed.bytes[e.offset as usize..e.offset as usize + e.len as usize];
-            if crc32c::crc32c(frame) != e.crc {
+            let frame = parsed.src.bytes(e.offset, e.len as u64, "a tile")?;
+            if crc32c::crc32c(&frame) != e.crc {
                 return corrupt(format!("tile ({}, {}) fails its checksum", e.pos.x, e.pos.z));
             }
-            Tile::decode(frame)?;
+            Tile::decode(&frame)?;
             Ok(())
         })?;
         total += entries.len();
@@ -841,7 +932,7 @@ pub struct FileInfo {
 
 /// Describe a file without decoding any tile.
 pub fn inspect(bytes: &[u8]) -> Result<FileInfo> {
-    let parsed = parse(bytes)?;
+    let parsed = parse(&bytes)?;
     let mut dimensions = Vec::new();
     for dim in &parsed.meta.dimensions {
         let mut levels = Vec::new();

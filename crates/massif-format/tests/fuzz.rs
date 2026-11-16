@@ -163,15 +163,19 @@ fn damaged_massif_files_are_refused_without_panicking() {
 }
 
 #[test]
-fn damaged_pictures_of_massif_files_are_refused_without_panicking() {
+fn damaged_massif_files_on_disk_are_refused_without_panicking() {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("fuzz-thumbnail");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("map.massif");
     let seed = seed();
-    fuzz_support::fuzz("massif-thumbnail", &[seed], &corpus("massif-thumbnail"), |bytes| {
+    let mut seeds = vec![seed.clone()];
+    seeds.extend(sealed_mutations(&seed).into_iter().take(200));
+    fuzz_support::fuzz("massif-thumbnail", &seeds, &corpus("massif-thumbnail"), |bytes| {
         let path = path.with_extension(format!("{}.massif", std::thread::current().name().unwrap_or("t").replace(':', "_")));
         std::fs::write(&path, bytes).unwrap();
         let _ = massif_format::read_thumbnail(&path);
+        // Opening reads the file a part at a time: the same checks.
+        let _ = massif_format::load(&path);
     });
 }
 

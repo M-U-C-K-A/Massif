@@ -11,31 +11,36 @@ use massif_core::{TILE_SIZE, TilePos};
 use std::path::PathBuf;
 use std::time::Instant;
 
-/// The memory resident now, and the most it has been, in MB.
+/// The memory the process takes now, and the most it took, in MB: its
+/// physical footprint, as the Activity Monitor shows it (what is
+/// compressed counts; the resident size does not count it).
 pub fn resident() -> (f64, f64) {
     #[cfg(target_os = "macos")]
     {
+        // task_vm_info, up to ledger_phys_footprint_peak (revision 2).
         #[repr(C)]
-        #[derive(Default)]
-        struct BasicInfo {
+        struct VmInfo {
             virtual_size: u64,
-            resident_size: u64,
-            resident_size_max: u64,
-            user_time: [i32; 2],
-            system_time: [i32; 2],
-            policy: i32,
-            suspend_count: i32,
+            region_count: i32,
+            page_size: i32,
+            before: [u64; 16],
+            phys_footprint: u64,
+            min_address: u64,
+            max_address: u64,
+            footprint_peak: i64,
+            rest: [u64; 32],
         }
         unsafe extern "C" {
             fn mach_task_self() -> u32;
-            fn task_info(task: u32, flavor: i32, info: *mut BasicInfo, count: *mut u32) -> i32;
+            fn task_info(task: u32, flavor: i32, info: *mut VmInfo, count: *mut u32) -> i32;
         }
-        let mut info = BasicInfo::default();
-        let mut count = (std::mem::size_of::<BasicInfo>() / 4) as u32;
-        // SAFETY: MACH_TASK_BASIC_INFO (20) fills the struct it is given.
-        let ok = unsafe { task_info(mach_task_self(), 20, &mut info, &mut count) } == 0;
+        let mut info = VmInfo { virtual_size: 0, region_count: 0, page_size: 0, before: [0; 16], phys_footprint: 0, min_address: 0, max_address: 0, footprint_peak: 0, rest: [0; 32] };
+        let mut count = (std::mem::size_of::<VmInfo>() / 4) as u32;
+        // SAFETY: TASK_VM_INFO (22) fills the struct it is given, up to
+        // `count` words.
+        let ok = unsafe { task_info(mach_task_self(), 22, &mut info, &mut count) } == 0;
         if ok {
-            return (info.resident_size as f64 / 1048576.0, info.resident_size_max as f64 / 1048576.0);
+            return (info.phys_footprint as f64 / 1048576.0, info.footprint_peak as f64 / 1048576.0);
         }
     }
     (0.0, 0.0)
@@ -48,7 +53,7 @@ fn a_huge_map_within_its_memory() {
     };
     let report = |what: &str, t: Instant| {
         let (now, most) = resident();
-        println!("{what:<44} {now:>7.0} MB resident, {most:>7.0} MB at most  ({:.1} s)", t.elapsed().as_secs_f64());
+        println!("{what:<44} {now:>7.0} MB now, {most:>7.0} MB at most  ({:.1} s)", t.elapsed().as_secs_f64());
     };
     let t = Instant::now();
     report("start", t);
