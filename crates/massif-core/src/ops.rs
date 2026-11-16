@@ -34,12 +34,15 @@ pub enum Anchor {
     Ground(f32),
 }
 
-/// The brush at one dab: its shape around `(cx, cz)`, times its filter.
+/// The brush at one dab: its shape around `(cx, cz)`, times its filter and
+/// the map's selection.
 struct Dab<'a> {
     brush: &'a Brush,
     cx: f32,
     cz: f32,
     mask: Option<crate::filter::Mask>,
+    /// Wholly outside the selection: the dab changes nothing.
+    idle: bool,
 }
 
 impl<'a> Dab<'a> {
@@ -47,20 +50,35 @@ impl<'a> Dab<'a> {
     /// filter reads them: the filter then reads them as they are, and the
     /// edit after it finds them decoded.
     fn new(edit: &mut Edit, brush: &'a Brush, cx: f32, cz: f32) -> Self {
-        if brush.filter.as_ref().is_some_and(|f| f.is_active()) {
-            let tiles: Vec<TilePos> = BlockRect::around(cx, cz, brush.reach()).tiles().collect();
+        let rect = BlockRect::around(cx, cz, brush.reach());
+        let off = edit.dim().selection.as_ref().is_some_and(|s| !rect.tiles().any(|p| s.tile(p).is_some()));
+        if !off && brush.filter.as_ref().is_some_and(|f| f.is_active()) {
+            let tiles: Vec<TilePos> = rect.tiles().collect();
             edit.warm(&tiles);
         }
         Self::on(edit.dim(), brush, cx, cz)
     }
 
     fn on(dim: &Dimension, brush: &'a Brush, cx: f32, cz: f32) -> Self {
-        let mask = brush
+        let rect = BlockRect::around(cx, cz, brush.reach());
+        // Outside the selection, nothing to weigh: every weight is 0.
+        let selected = dim.selection.as_ref().map(|s| s.weights(rect).unwrap_or_else(|| vec![0; rect.width().max(0) as usize * rect.depth().max(0) as usize]));
+        if selected.as_ref().is_some_and(|w| w.iter().all(|&v| v == 0)) {
+            let mask = Some(crate::filter::Mask::from_weights(rect, selected.unwrap_or_default()));
+            return Self { brush, cx, cz, mask, idle: true };
+        }
+        let mut mask = brush
             .filter
             .as_ref()
             .filter(|f| f.is_active())
-            .map(|f| f.mask_rows(dim, BlockRect::around(cx, cz, brush.reach()), &|z, x0, x1| brush.row_span(cx, cz, z, x0, x1)));
-        Self { brush, cx, cz, mask }
+            .map(|f| f.mask_rows(dim, rect, &|z, x0, x1| brush.row_span(cx, cz, z, x0, x1)));
+        if let Some(selected) = selected {
+            match &mut mask {
+                Some(m) => m.times(&selected),
+                None => mask = Some(crate::filter::Mask::from_weights(rect, selected)),
+            }
+        }
+        Self { brush, cx, cz, mask, idle: false }
     }
 
     /// The columns of row `z` of `clip` the brush may change: the others
@@ -123,6 +141,9 @@ fn edit_heights_by_tile<G>(
     let band = brush.filter.as_ref().filter(|f| f.is_active()).and_then(|f| f.band());
     let held = |old: f32, new: f32| band.map_or(new, |b| b.hold(old, new));
     let dab = Dab::new(edit, brush, cx, cz);
+    if dab.idle {
+        return;
+    }
     let footprint = BlockRect::around(cx, cz, brush.reach());
     edit.par_tiles(footprint.tiles(), footprint, false, |pos, clip, tile| {
         let mut f = per_tile(pos, clip);
@@ -205,6 +226,9 @@ pub fn flatten_with(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, target: f3
         return;
     }
     let dab = Dab::new(edit, brush, cx, cz);
+    if dab.idle {
+        return;
+    }
     let footprint = BlockRect::around(cx, cz, brush.reach());
     edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
         let slab = tile.bottom.is_some();
@@ -420,6 +444,9 @@ fn paint_plane(
     plane: impl Fn(&mut Tile) -> &mut Plane<u16> + Sync,
 ) {
     let dab = Dab::new(edit, brush, cx, cz);
+    if dab.idle {
+        return;
+    }
     let footprint = BlockRect::around(cx, cz, brush.reach());
     edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
         let slab = tile.bottom.is_some();
@@ -450,6 +477,9 @@ pub fn paint_terrain_with(
     choose: impl Fn(f32) -> TerrainId + Sync,
 ) {
     let dab = Dab::new(edit, brush, cx, cz);
+    if dab.idle {
+        return;
+    }
     let footprint = BlockRect::around(cx, cz, brush.reach());
     edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
         let slab = tile.bottom.is_some();
@@ -496,6 +526,9 @@ pub fn paint_objects(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, layer: u1
 /// [`crate::pattern`]). `salt` should change from dab to dab.
 pub fn paint_pattern(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, salt: u64, pattern: &crate::pattern::PatternSampler) {
     let dab = Dab::new(edit, brush, cx, cz);
+    if dab.idle {
+        return;
+    }
     let footprint = BlockRect::around(cx, cz, brush.reach());
     edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
         let slab = tile.bottom.is_some();
@@ -588,6 +621,9 @@ fn auto_apply(
     let footprint = BlockRect::around(cx, cz, brush.reach());
     classes.ensure(edit.dim(), reader, footprint);
     let dab = Dab::new(edit, brush, cx, cz);
+    if dab.idle {
+        return 0;
+    }
     let classes = &*classes;
     let changed = std::sync::atomic::AtomicUsize::new(0);
     edit.par_tiles(footprint.tiles(), footprint, false, |pos, clip, tile| {
@@ -698,6 +734,9 @@ pub fn auto_preview_with(dim: &Dimension, brush: &Brush, cx: f32, cz: f32, class
 /// Set the fluid surface (or [`NO_FLUID`]) under the whole footprint.
 pub fn set_fluid(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, level: i16) {
     let dab = Dab::new(edit, brush, cx, cz);
+    if dab.idle {
+        return;
+    }
     let footprint = BlockRect::around(cx, cz, brush.reach());
     edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
         for z in clip.z0..clip.z1 {
@@ -720,6 +759,9 @@ pub fn stamp_slab(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, anchor: Anch
     let (lo, hi) = (edit.dim().min_y as f32, edit.dim().max_y as f32);
     let rect = BlockRect::around(cx, cz, brush.reach());
     let dab = Dab::new(edit, brush, cx, cz);
+    if dab.idle {
+        return;
+    }
     let inside: Vec<TilePos> = rect.tiles().filter(|p| edit.dim().ground().contains(*p)).collect();
     edit.par_tiles_with(inside, rect, true, |pos, clip, tile, others| {
         let Tile { top, bottom, .. } = tile;
@@ -764,6 +806,9 @@ pub fn erase_slab(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32) {
         return;
     }
     let dab = Dab::new(edit, brush, cx, cz);
+    if dab.idle {
+        return;
+    }
     let rect = BlockRect::around(cx, cz, brush.reach());
     edit.par_tiles(rect.tiles(), rect, false, |_, clip, tile| {
         let Tile { top, bottom, .. } = tile;
@@ -813,6 +858,9 @@ struct FloodTile {
 
 struct FloodGrid<'a> {
     dim: &'a Dimension,
+    /// The selection the fill keeps to: columns under half its weight are
+    /// walls.
+    selection: Option<&'a crate::selection::Selection>,
     tiles: Vec<FloodTile>,
     lookup: HashMap<TilePos, Option<usize>>,
     last: Option<(TilePos, usize)>,
@@ -846,6 +894,9 @@ impl FloodGrid<'_> {
     /// Flood the cell if `mode` applies to it. Returns whether it did.
     #[inline]
     fn visit(&mut self, x: i32, z: i32, mode: Flood) -> bool {
+        if self.selection.is_some_and(|s| s.get(x, z) < crate::selection::HALF) {
+            return false;
+        }
         let Some(t) = self.tile(TilePos::containing(x, z)) else {
             return false;
         };
@@ -885,6 +936,7 @@ pub fn flood_fill(edit: &mut Edit, x: i32, z: i32, mode: Flood, max_cells: usize
     let changed: Vec<(TilePos, Vec<i16>)> = {
         let mut grid = FloodGrid {
             dim: edit.dim(),
+            selection: edit.dim().selection.as_deref(),
             tiles: Vec::new(),
             lookup: HashMap::new(),
             last: None,
@@ -1042,6 +1094,89 @@ mod tests {
             mask: None,
             filter: None,
         }
+    }
+
+    fn select(w: &mut World, hist: &mut History, s: crate::selection::Selection) {
+        assert!(hist.select(w, 0, "Select", Some(s)));
+    }
+
+    fn heights(w: &mut World) -> Vec<(TilePos, Vec<f32>)> {
+        let ground = w.dims[0].ground_mut();
+        let positions: Vec<TilePos> = ground.positions().collect();
+        positions.into_iter().map(|p| (p, ground.tile_mut(p).unwrap().top.dense().to_vec())).collect()
+    }
+
+    #[test]
+    fn a_brush_changes_nothing_outside_the_selection() {
+        use crate::selection::{Selection, Shape};
+        let mut w = world(2);
+        let mut hist = History::default();
+        select(&mut w, &mut hist, Selection::shape(&Shape::Rect(BlockRect::new(0, 0, 40, 40))));
+        let before = heights(&mut w);
+        let terrain = w.registry.terrain_by_name("Gravel").unwrap();
+        // Strokes wholly outside: nothing at all, not even a step to undo.
+        hist.begin("outside", 0);
+        let mut e = hist.edit(&mut w, 0);
+        raise(&mut e, &hard_brush(10.0), -60.0, -60.0, 5.0, Surface::Top);
+        smooth(&mut e, &hard_brush(10.0), 100.0, 100.0, Surface::Top);
+        paint_terrain(&mut e, &hard_brush(10.0), -60.0, 100.0, terrain, 1);
+        assert!(!hist.commit());
+        assert_eq!(heights(&mut w), before);
+        // Across its edge: raised inside, as it was outside.
+        hist.begin("across", 0);
+        raise(&mut hist.edit(&mut w, 0), &hard_brush(30.0), 0.0, 20.0, 5.0, Surface::Top);
+        paint_terrain(&mut hist.edit(&mut w, 0), &hard_brush(30.0), 0.0, 20.0, terrain, 1);
+        hist.commit();
+        let h = |w: &World, x, z| height_at(&w.dims[0], 0, x, z, Surface::Top).unwrap();
+        let t = |w: &World, x, z| w.dims[0].ground().view(TilePos::containing(x, z)).unwrap().terrain.get(local_index(x, z));
+        assert_eq!(h(&w, 5, 20), 69.0);
+        assert_eq!(h(&w, -5, 20), 64.0);
+        assert_eq!(t(&w, 5, 20), terrain.0);
+        assert_eq!(t(&w, -5, 20), 1);
+        // Undone, the map is as it was; and the selection goes too.
+        hist.undo(&mut w);
+        assert_eq!(heights(&mut w), before);
+        hist.undo(&mut w);
+        assert!(w.dims[0].selection.is_none());
+        hist.redo(&mut w);
+        assert!(w.dims[0].selection.is_some());
+    }
+
+    #[test]
+    fn a_feathered_selection_weighs_the_brush() {
+        use crate::selection::{Selection, Shape};
+        let mut w = world(2);
+        let mut hist = History::default();
+        select(&mut w, &mut hist, Selection::shape(&Shape::Rect(BlockRect::new(-100, -100, 0, 100))).feather(20));
+        hist.begin("raise", 0);
+        raise(&mut hist.edit(&mut w, 0), &hard_brush(60.0), 0.0, 0.0, 20.0, Surface::Top);
+        hist.commit();
+        let sel = w.dims[0].selection.clone().unwrap();
+        let mut last = f32::MAX;
+        for x in -30..30 {
+            let got = height_at(&w.dims[0], 0, x, 0, Surface::Top).unwrap() - 64.0;
+            let want = 20.0 * sel.weight(x, 0);
+            assert!((got - want).abs() <= 0.06, "{x}: {got} for {want}");
+            assert!(got <= last);
+            last = got;
+        }
+        assert_eq!(height_at(&w.dims[0], 0, -30, 0, Surface::Top), Some(84.0));
+        assert_eq!(height_at(&w.dims[0], 0, 30, 0, Surface::Top), Some(64.0));
+        let mid = height_at(&w.dims[0], 0, 0, 0, Surface::Top).unwrap();
+        assert!(mid > 66.0 && mid < 82.0, "{mid}");
+    }
+
+    #[test]
+    fn a_fill_keeps_to_the_selection() {
+        use crate::selection::{Selection, Shape};
+        let mut w = world(1);
+        let mut hist = History::default();
+        select(&mut w, &mut hist, Selection::shape(&Shape::Ellipse(BlockRect::new(-20, -20, 20, 20))));
+        hist.begin("fill", 0);
+        let n = flood_fill(&mut hist.edit(&mut w, 0), 0, 0, Flood::Fill(70), 1_000_000);
+        hist.commit();
+        let area = w.dims[0].selection.as_ref().unwrap().area() as usize;
+        assert_eq!(n, area);
     }
 
     #[test]

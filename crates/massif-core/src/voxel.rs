@@ -697,6 +697,8 @@ pub fn sculpt_at(edit: &mut Edit, brush: &Brush, center: [f32; 3], normal: Optio
     let strength = strength.clamp(0.0, 1.0);
     let weigher = brush.weigher();
     let changed = std::sync::atomic::AtomicUsize::new(0);
+    // Only the columns of the map's selection, by their weight.
+    let selection = edit.dim().selection.clone();
     edit.par_voxels(&positions, |pos, chunk| {
         let (x0, y0, z0) = pos.origin();
         for ly in 0..SIZE {
@@ -729,7 +731,10 @@ pub fn sculpt_at(edit: &mut Edit, brush: &Brush, center: [f32; 3], normal: Optio
                             weigher.profile(d)
                         }
                     };
-                    let w = (shape * strength).min(1.0);
+                    let mut w = (shape * strength).min(1.0);
+                    if let Some(s) = &selection {
+                        w *= s.weight(x, z);
+                    }
                     if w <= 0.0 {
                         continue;
                     }

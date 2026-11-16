@@ -459,6 +459,19 @@ pub struct Mask {
 }
 
 impl Mask {
+    /// A mask of the given weights (row-major over `rect`).
+    pub(crate) fn from_weights(rect: BlockRect, weights: Vec<u8>) -> Self {
+        debug_assert_eq!(weights.len(), rect.width() as usize * rect.depth() as usize);
+        Self { rect, weights }
+    }
+
+    /// Multiply every weight by the matching one of `other` (the same rect).
+    pub(crate) fn times(&mut self, other: &[u8]) {
+        for (w, &o) in self.weights.iter_mut().zip(other) {
+            *w = ((*w as u32 * o as u32 + 127) / 255) as u8;
+        }
+    }
+
     /// Weight of column `(x, z)`, 0 outside the rectangle.
     #[inline]
     pub fn get(&self, x: i32, z: i32) -> f32 {

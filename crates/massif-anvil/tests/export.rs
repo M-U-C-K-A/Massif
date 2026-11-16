@@ -984,3 +984,36 @@ fn packs_are_exported() {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
+
+/// A selection changes nothing in an export unless it is asked to keep to
+/// it; asked, only the tiles the selection holds are written.
+#[test]
+fn an_export_can_keep_to_the_selection() {
+    use massif_core::selection::{Selection, Shape};
+    let mut world = build_world();
+    let plain = temp_dir("sel-plain");
+    export(&world.snapshot(), &plain, &ExportOptions::default(), &Progress::default()).unwrap();
+    let mut h = History::default();
+    let shape = Selection::shape(&Shape::Rect(massif_core::BlockRect::new(-60, 10, 60, 60))).feather(6);
+    assert!(h.select(&mut world, 0, "Select", Some(shape)));
+    let ignored = temp_dir("sel-ignored");
+    export(&world.snapshot(), &ignored, &ExportOptions::default(), &Progress::default()).unwrap();
+    let mut names: Vec<_> = std::fs::read_dir(plain.join("region")).unwrap().map(|e| e.unwrap().file_name()).collect();
+    names.sort();
+    assert!(!names.is_empty());
+    for name in &names {
+        assert!(region_bytes(&plain.join("region").join(name)) == region_bytes(&ignored.join("region").join(name)), "{name:?}");
+    }
+    let only = temp_dir("sel-only");
+    let options = ExportOptions {
+        selection_only: true,
+        ..ExportOptions::default()
+    };
+    let stats = export(&world.snapshot(), &only, &options, &Progress::default()).unwrap();
+    // The rectangle lies across tiles (-1, 0) and (0, 0): two tiles of
+    // 8 × 8 chunks, of the map's four.
+    assert_eq!(stats.chunks, 2 * 64);
+    for dir in [plain, ignored, only] {
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}

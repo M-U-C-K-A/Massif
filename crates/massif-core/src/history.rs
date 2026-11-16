@@ -8,6 +8,7 @@
 
 use crate::coords::{BlockRect, TilePos};
 use crate::level::{Blob, Level, LevelId, LevelKind, TileRef};
+use crate::selection::Selection;
 use crate::tile::Tile;
 use crate::voxel::{ChunkPos, VoxelChunk};
 use crate::world::{Dimension, World};
@@ -26,6 +27,8 @@ struct Step {
     /// Pre-images of the sculpted chunks touched (`None`: there was none).
     voxels: Vec<(ChunkPos, Option<Arc<VoxelChunk>>)>,
     voxel_seen: HashSet<ChunkPos>,
+    /// Pre-image of the selection, when the step changed it.
+    selection: Option<Option<Arc<Selection>>>,
 }
 
 impl Step {
@@ -38,11 +41,12 @@ impl Step {
             structure: None,
             voxels: Vec::new(),
             voxel_seen: HashSet::new(),
+            selection: None,
         }
     }
 
     fn is_empty(&self) -> bool {
-        self.tiles.is_empty() && self.structure.is_none() && self.voxels.is_empty()
+        self.tiles.is_empty() && self.structure.is_none() && self.voxels.is_empty() && self.selection.is_none()
     }
 }
 
@@ -146,6 +150,21 @@ impl History {
         Some(label)
     }
 
+    /// Make `selection` the selection of dimension `dim`, as one step to
+    /// undo labelled `label`. An empty selection is none. Returns whether
+    /// it changed.
+    pub fn select(&mut self, world: &mut World, dim: usize, label: impl Into<String>, selection: Option<Selection>) -> bool {
+        let selection = selection.filter(|s| !s.is_empty()).map(Arc::new);
+        let Some(d) = world.dims.get_mut(dim) else { return false };
+        if d.selection.as_deref() == selection.as_deref() {
+            return false;
+        }
+        self.begin(label, dim);
+        let step = self.open.as_mut().expect("just begun");
+        step.selection = Some(std::mem::replace(&mut d.selection, selection));
+        self.commit()
+    }
+
     pub fn clear(&mut self) {
         self.undo.clear();
         self.redo.clear();
@@ -159,6 +178,9 @@ fn swap(step: Step, world: &mut World) -> Step {
     let Some(dim) = world.dims.get_mut(step.dim) else {
         return inverse;
     };
+    if let Some(selection) = step.selection {
+        inverse.selection = Some(std::mem::replace(&mut dim.selection, selection));
+    }
     for (pos, state) in step.voxels.into_iter().rev() {
         inverse.voxels.push((pos, dim.voxels.get_shared(pos)));
         dim.voxels.restore(pos, state);

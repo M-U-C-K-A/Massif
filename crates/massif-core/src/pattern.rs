@@ -303,8 +303,9 @@ fn lets(w: f32, x: i32, z: i32) -> bool {
 /// the pattern gives them are not counted as changed.
 pub fn paint_over_the_map(edit: &mut Edit, sampler: &PatternSampler, filter: Option<&Filter>, steps: &Steps) -> Changes {
     let filter = filter.filter(|f| f.is_active());
+    let selection = edit.dim().selection.clone();
     let mut squares: HashMap<(i32, i32), Vec<TilePos>> = HashMap::new();
-    for pos in edit.level().positions() {
+    for pos in edit.level().positions().filter(|p| selection.as_ref().is_none_or(|s| s.tile(*p).is_some())) {
         squares.entry((pos.x.div_euclid(SQUARE), pos.z.div_euclid(SQUARE))).or_default().push(pos);
     }
     let mut squares: Vec<((i32, i32), Vec<TilePos>)> = squares.into_iter().collect();
@@ -341,13 +342,14 @@ pub fn paint_over_the_map(edit: &mut Edit, sampler: &PatternSampler, filter: Opt
         let edited = Mutex::new(Vec::new());
         edit.par_tiles(positions, everywhere, false, |pos, _, tile| {
             let mask = masks.get(&(pos.x.div_euclid(SQUARE), pos.z.div_euclid(SQUARE)));
+            let cells = selection.as_ref().and_then(|s| s.tile(pos));
             let slab = tile.bottom.is_some();
             let rect = pos.rect();
             let mut n = 0;
             for z in rect.z0..rect.z1 {
                 for x in rect.x0..rect.x1 {
                     let i = local_index(x, z);
-                    if (slab && !tile.present(i)) || mask.is_some_and(|m| !lets(m.get(x, z), x, z)) {
+                    if (slab && !tile.present(i)) || mask.is_some_and(|m| !lets(m.get(x, z), x, z)) || cells.is_some_and(|c| !crate::selection::lets(c.get(i), x, z)) {
                         continue;
                     }
                     if let Some(t) = sampler.terrain(x, z)

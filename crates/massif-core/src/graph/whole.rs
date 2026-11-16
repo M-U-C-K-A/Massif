@@ -9,6 +9,7 @@
 //! 3D — is left as it is, and so is the ground's paint, but for the beds
 //! the rivers dig.
 
+use crate::selection::IN;
 use super::map::{reads_level, sample_map};
 use super::{Extent, Field, NO_WATER, NodeKind, Value, ops};
 use crate::auto::{Changes, Steps};
@@ -209,7 +210,9 @@ fn ground_on_top(pos: TilePos, tile: &Tile, others: &Others<'_>) -> Option<Vec<b
 /// beds rivers dig. Writes the heights, water and terrains of the columns
 /// it changes; stops between tiles if `steps` is cancelled.
 pub fn reshape_ground(edit: &mut Edit, op: &Reshape, sea: i32, bed: Option<TerrainId>, steps: &Steps) -> Changes {
-    let positions: Vec<TilePos> = edit.level().positions().collect();
+    // Only the tiles of the selection, when there is one.
+    let selection = edit.dim().selection.clone();
+    let positions: Vec<TilePos> = edit.level().positions().filter(|p| selection.as_ref().is_none_or(|s| s.tile(*p).is_some())).collect();
     // Steps: three a tile for working out the change, one a tile for
     // writing it.
     let count = positions.len().max(1);
@@ -238,6 +241,7 @@ pub fn reshape_ground(edit: &mut Edit, op: &Reshape, sea: i32, bed: Option<Terra
         let edited = Mutex::new(Vec::new());
         edit.par_tiles_with(batch.iter().copied(), everywhere, false, |pos, _, tile, others| {
             let on_top = ground_on_top(pos, tile, others);
+            let cells = selection.as_ref().and_then(|s| s.tile(pos));
             let (ox, oz) = pos.origin();
             let mut n = 0;
             for lz in 0..TILE_SIZE {
@@ -247,6 +251,12 @@ pub fn reshape_ground(edit: &mut Edit, op: &Reshape, sea: i32, bed: Option<Terra
                     if on_top.as_ref().is_some_and(|t| !t[i]) {
                         continue;
                     }
+                    // Weighed by the selection: the change fades with it.
+                    let weight = cells.map_or(IN, |c| c.get(i));
+                    if weight == 0 {
+                        continue;
+                    }
+                    let lets = |x, z| crate::selection::lets(weight, x, z);
                     let old = tile.top.get(i);
                     let mut moved = false;
                     let new = match &change {
@@ -262,7 +272,7 @@ pub fn reshape_ground(edit: &mut Edit, op: &Reshape, sea: i32, bed: Option<Terra
                             let new = snap_height((old + after.sample(u, v) - before.sample(u, v)).clamp(min_y, max_y));
                             if let Some(w) = water {
                                 let level = w.at(u.round().max(0.0) as usize, v.round().max(0.0) as usize);
-                                if level != NO_WATER && level > new + 0.3 {
+                                if level != NO_WATER && level > new + 0.3 && lets(x, z) {
                                     let level = level.round().clamp(min_y, max_y) as i16;
                                     if tile.fluid.get(i) != level {
                                         tile.fluid.set(i, level);
@@ -272,7 +282,7 @@ pub fn reshape_ground(edit: &mut Edit, op: &Reshape, sea: i32, bed: Option<Terra
                             }
                             if let (Some(beds), Some(bed)) = (beds, bed) {
                                 let dither = hash2(x, z, 0xbed5) as f32 / u32::MAX as f32;
-                                if beds.sample(u, v) > dither.max(0.05) && tile.terrain.get(i) != bed.0 {
+                                if beds.sample(u, v) > dither.max(0.05) && tile.terrain.get(i) != bed.0 && lets(x, z) {
                                     tile.terrain.set(i, bed.0);
                                     moved = true;
                                 }
@@ -280,6 +290,7 @@ pub fn reshape_ground(edit: &mut Edit, op: &Reshape, sea: i32, bed: Option<Terra
                             new
                         }
                     };
+                    let new = if weight == IN { new } else { old + (new - old) * weight as f32 / IN as f32 };
                     let new = snap_height(new.clamp(min_y, max_y));
                     if (new - old).abs() > 1e-3 {
                         tile.top.set(i, new);
@@ -367,6 +378,25 @@ mod tests {
         let tile = world.dims[0].ground().view(TilePos::containing(x, z)).unwrap();
         let i = local_index(x, z);
         (tile.top.get(i), tile.fluid.get(i), tile.terrain.get(i))
+    }
+
+    #[test]
+    fn a_whole_map_filter_keeps_to_the_selection() {
+        use crate::selection::{Selection, Shape};
+        let mut w = world();
+        let mut h = History::default();
+        let sel = Selection::shape(&Shape::Rect(BlockRect::new(0, 0, 60, 256))).feather(10);
+        assert!(h.select(&mut w, 0, "Select", Some(sel.clone())));
+        let changes = run(&mut w, &Reshape::Relief { scale: 1.0, shift: 10.0 }, &Steps::default());
+        // Only the two tiles the selection holds were read and written.
+        assert_eq!(changes.tiles.len(), 2);
+        for x in 0..128 {
+            let want = 80.0 + 10.0 * sel.weight(x, 240);
+            assert!((column(&w, x, 240).0 - want).abs() <= 0.06, "{x}");
+        }
+        assert_eq!(column(&w, 20, 240).0, 90.0);
+        assert_eq!(column(&w, 100, 240).0, 80.0);
+        assert_eq!(column(&w, 200, 10).0, 80.0);
     }
 
     #[test]

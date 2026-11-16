@@ -63,6 +63,8 @@ const TILE_ENTRY_LEN: usize = 24;
 const KIND_META: [u8; 4] = *b"META";
 const KIND_TILE_INDEX: [u8; 4] = *b"TIDX";
 const KIND_VOXELS: [u8; 4] = *b"VOXL";
+/// A dimension's selection (0.6.0 on; older versions skip it).
+const KIND_SELECTION: [u8; 4] = *b"SELN";
 /// A picture of the map: the Finder's Quick Look extension shows it as the
 /// file's icon (see `tools/macos/thumbnails`).
 pub const KIND_THUMBNAIL: [u8; 4] = *b"THMB";
@@ -112,6 +114,9 @@ struct DimDoc {
     /// Id of the `VOXL` section holding the sculpted chunks, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     voxels: Option<u32>,
+    /// Id of the `SELN` section holding the selection, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    selection: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -201,12 +206,24 @@ pub fn write<W: Write>(world: &World, mut out: W) -> Result<Stats> {
             });
             id
         });
+        let selection = dim.selection.as_ref().filter(|s| !s.is_empty()).map(|s| {
+            let id = next_section;
+            next_section += 1;
+            sections.push(Section {
+                kind: KIND_SELECTION,
+                id,
+                flags: 0,
+                payload: s.encode(),
+            });
+            id
+        });
         dims.push(DimDoc {
             kind: dim.kind,
             min_y: dim.min_y,
             max_y: dim.max_y,
             levels,
             voxels,
+            selection,
         });
     }
     let tile_bytes = offset - HEADER_LEN as u64;
@@ -377,6 +394,8 @@ struct Parsed<'a> {
     indices: Vec<(u32, Vec<TileEntry>)>,
     /// Sculpted chunks per `VOXL` section id, still encoded.
     voxels: Vec<(u32, Vec<u8>)>,
+    /// Selections per `SELN` section id, still encoded.
+    selections: Vec<(u32, Vec<u8>)>,
 }
 
 impl Parsed<'_> {
@@ -440,6 +459,7 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>> {
     let mut meta = None;
     let mut indices = Vec::new();
     let mut voxels = Vec::new();
+    let mut selections = Vec::new();
     for entry in directory.as_chunks::<SECTION_LEN>().0 {
         let kind: [u8; 4] = entry[..4].try_into().unwrap();
         let id = u32_at(entry, 4);
@@ -467,6 +487,7 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>> {
                 indices.push((id, entries));
             }
             KIND_VOXELS => voxels.push((id, section_payload(bytes, entry, "the sculpted chunks")?)),
+            KIND_SELECTION => selections.push((id, section_payload(bytes, entry, "the selection")?)),
             _ => {} // a section from a newer version: ignore it
         }
     }
@@ -480,6 +501,7 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>> {
         meta,
         indices,
         voxels,
+        selections,
     })
 }
 
@@ -529,6 +551,13 @@ pub fn read(bytes: &[u8]) -> Result<World> {
                 return corrupt(format!("the sculpted chunks {id} are missing"));
             };
             dimension.voxels = massif_core::voxel::VoxelLayer::decode(raw).map_err(FormatError::Corrupt)?;
+        }
+        if let Some(id) = dim.selection {
+            let Some((_, raw)) = parsed.selections.iter().find(|(i, _)| *i == id) else {
+                return corrupt(format!("the selection {id} is missing"));
+            };
+            let selection = massif_core::selection::Selection::decode(raw).map_err(FormatError::Corrupt)?;
+            dimension.selection = (!selection.is_empty()).then(|| std::sync::Arc::new(selection));
         }
         dims.push(dimension);
     }
@@ -712,6 +741,7 @@ mod tests {
                 lb.freeze();
                 assert_eq!(la.blobs().unwrap(), lb.blobs().unwrap(), "level {}", la.name);
             }
+            assert_eq!(da.selection, db.selection);
             assert_eq!(da.voxels.len(), db.voxels.len());
             for (pos, chunk) in da.voxels.iter() {
                 assert_eq!(db.voxels.get(pos), Some(&**chunk), "sculpted chunk {pos:?}");
@@ -796,6 +826,26 @@ mod tests {
             }
             other => panic!("expected TooNew, got {:?}", other.map(|_| ())),
         }
+    }
+
+    #[test]
+    fn a_selection_is_saved_with_the_map() {
+        use massif_core::selection::{Combine, Selection, Shape};
+        let mut world = sample_world();
+        let without = to_bytes(&mut world);
+        assert!(read(&without).unwrap().dims[0].selection.is_none());
+        let shape = Selection::shape(&Shape::Rect(massif_core::BlockRect::new(-20, -20, 140, 60))).feather(10);
+        let lasso = Selection::shape(&Shape::Polygon(vec![(0.0, 0.0), (300.0, 10.0), (50.0, 200.0)]));
+        let mut hist = massif_core::History::default();
+        assert!(hist.select(&mut world, 0, "Select", Some(shape.combine(&lasso, Combine::Add))));
+        let bytes = to_bytes(&mut world);
+        let mut back = read(&bytes).unwrap();
+        assert!(back.dims[0].selection.is_some());
+        assert_same(&mut world, &mut back);
+        // Undone, the map has none again, and saves as it did.
+        hist.undo(&mut world);
+        assert!(world.dims[0].selection.is_none());
+        assert!(to_bytes(&mut world) == without);
     }
 
     #[test]

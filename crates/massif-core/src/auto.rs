@@ -865,8 +865,9 @@ fn over_the_map(
 ) -> Changes {
     // The tiles by squares, the squares row by row: neighbours are read
     // together, and each tile is decoded about once.
+    let selection = edit.dim().selection.clone();
     let mut squares: HashMap<(i32, i32), Vec<TilePos>> = HashMap::new();
-    for pos in edit.dim().ground().positions() {
+    for pos in edit.dim().ground().positions().filter(|p| selection.as_ref().is_none_or(|s| s.tile(*p).is_some())) {
         squares.entry((pos.x.div_euclid(BLOCK), pos.z.div_euclid(BLOCK))).or_default().push(pos);
     }
     let mut squares: Vec<((i32, i32), Vec<TilePos>)> = squares.into_iter().collect();
@@ -923,7 +924,14 @@ fn over_the_map(
         edit.par_tiles(positions, everywhere, false, |pos, _, tile| {
             let Some(values) = chosen.get(&pos) else { return };
             let mut n = 0;
+            let cells = selection.as_ref().and_then(|s| s.tile(pos));
+            let (ox, oz) = pos.origin();
             for (i, v) in values.iter().enumerate() {
+                if let Some(c) = cells
+                    && !crate::selection::lets(c.get(i), ox + (i % TILE_SIZE as usize) as i32, oz + (i / TILE_SIZE as usize) as i32)
+                {
+                    continue;
+                }
                 if let Some(v) = v
                     && plane(tile).get(i) != *v
                 {

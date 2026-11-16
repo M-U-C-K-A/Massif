@@ -71,6 +71,8 @@ pub struct Dimension {
     pub levels: Vec<Level>,
     /// Sculpted 3D chunks, over the levels.
     pub voxels: crate::voxel::VoxelLayer,
+    /// The part of the map the tools may change; `None`: all of it.
+    pub selection: Option<std::sync::Arc<crate::selection::Selection>>,
     next_level_id: u32,
 }
 
@@ -83,6 +85,7 @@ impl Dimension {
             max_y,
             levels: vec![Level::new(LevelId(0), "Ground", LevelKind::Ground)],
             voxels: Default::default(),
+            selection: None,
             next_level_id: 1,
         }
     }
@@ -100,6 +103,7 @@ impl Dimension {
             max_y,
             levels,
             voxels: Default::default(),
+            selection: None,
             next_level_id,
         }
     }
@@ -158,6 +162,7 @@ impl Dimension {
             max_y: self.max_y,
             levels: self.snapshot_levels(),
             voxels: self.voxels.clone(),
+            selection: self.selection.clone(),
             next_level_id: self.next_level_id,
         }
     }
@@ -170,6 +175,7 @@ impl Dimension {
             max_y: self.max_y,
             levels: self.levels.iter().map(Level::copy_unfrozen).collect(),
             voxels: self.voxels.clone(),
+            selection: self.selection.clone(),
             next_level_id: self.next_level_id,
         }
     }

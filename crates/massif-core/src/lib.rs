@@ -39,6 +39,7 @@ pub mod packs;
 pub mod plane;
 pub mod registry;
 pub mod river;
+pub mod selection;
 pub mod stamps;
 pub mod thumbnail;
 pub mod treepack;

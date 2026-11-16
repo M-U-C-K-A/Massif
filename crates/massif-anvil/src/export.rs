@@ -57,6 +57,9 @@ pub struct ExportOptions {
     pub spawn: Option<[i32; 3]>,
     /// Only export the tiles in this rectangle (inclusive), for a quick test.
     pub area: Option<(TilePos, TilePos)>,
+    /// Only export the tiles the dimension's selection holds (all of the
+    /// map when it has none), for testing a part of it.
+    pub selection_only: bool,
     /// The version of Minecraft the world is written for.
     pub target: Target,
 }
@@ -78,6 +81,7 @@ impl Default for ExportOptions {
             datapacks: Vec::new(),
             spawn: None,
             area: None,
+            selection_only: false,
             target: Target::default(),
         }
     }
@@ -141,7 +145,9 @@ pub fn export(
     // Group the map's tiles by region file.
     let mut regions: HashMap<(i32, i32), Vec<TilePos>> = HashMap::new();
     let in_area = |p: TilePos| options.area.is_none_or(|(lo, hi)| p.x >= lo.x && p.x <= hi.x && p.z >= lo.z && p.z <= hi.z);
-    for pos in dim.ground().positions().filter(|p| in_area(*p)) {
+    let selected = options.selection_only.then_some(dim.selection.as_deref()).flatten();
+    let in_selection = |p: TilePos| selected.is_none_or(|s| s.tile(p).is_some());
+    for pos in dim.ground().positions().filter(|p| in_area(*p) && in_selection(*p)) {
         let key = (
             pos.x.div_euclid(TILES_PER_REGION),
             pos.z.div_euclid(TILES_PER_REGION),
