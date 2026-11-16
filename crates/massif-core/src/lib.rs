@@ -27,6 +27,7 @@ pub mod codec;
 pub mod compose;
 pub mod coords;
 pub mod filter;
+pub mod flow;
 pub mod generate;
 pub mod graph;
 pub mod heightmap;
@@ -51,6 +52,7 @@ pub mod treepack;
 pub mod tile;
 pub mod versions;
 pub mod voxel;
+pub mod water;
 pub mod world;
 
 pub use brush::{Brush, BrushMask, BrushShape, MAX_RADIUS, Profile};

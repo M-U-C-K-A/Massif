@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+"""Check in Minecraft itself that the water of a Massif export stays still.
+
+Minecraft keeps the water of a world still until a block beside it changes:
+then it runs wherever it can. This script exports a .massif world, reads the
+water blocks of a few boxes of it, starts that version's own server on the
+export (as tools/minecraft_check.py does), and makes every block of each box
+change and change back: glass in all of its air, then air again, so that the
+game updates each water block the way a player passing by would. It lets the
+game run, saves, and reads the boxes again: every block that is not as the
+export wrote it is counted, and the first few are listed.
+
+Running a Minecraft server means accepting Mojang's EULA
+(https://aka.ms/MinecraftEULA): the script does not start the server
+unless --accept-eula is given.
+
+  tools/water_check.py --world my.massif --box -1300,60,-960 --version 1.21.11 \\
+      --minecraft "/Volumes/T7 Shield/minecraft/Install" --accept-eula
+"""
+
+import argparse
+import io
+import os
+import queue
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import zlib
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from minecraft_check import classpath, find_java, free_port  # noqa: E402
+
+ROOT = Path(__file__).resolve().parent.parent
+SIDE = 32
+
+
+# ---------------------------------------------------------------- NBT ----
+
+def read_nbt(data: bytes):
+    f = io.BytesIO(data)
+
+    def payload(tag):
+        if tag == 1:
+            return struct.unpack(">b", f.read(1))[0]
+        if tag == 2:
+            return struct.unpack(">h", f.read(2))[0]
+        if tag == 3:
+            return struct.unpack(">i", f.read(4))[0]
+        if tag == 4:
+            return struct.unpack(">q", f.read(8))[0]
+        if tag == 5:
+            return struct.unpack(">f", f.read(4))[0]
+        if tag == 6:
+            return struct.unpack(">d", f.read(8))[0]
+        if tag == 7:
+            n = struct.unpack(">i", f.read(4))[0]
+            return f.read(n)
+        if tag == 8:
+            n = struct.unpack(">H", f.read(2))[0]
+            return f.read(n).decode("utf-8", "replace")
+        if tag == 9:
+            t = f.read(1)[0]
+            n = struct.unpack(">i", f.read(4))[0]
+            return [payload(t) for _ in range(n)]
+        if tag == 10:
+            out = {}
+            while True:
+                t = f.read(1)[0]
+                if t == 0:
+                    return out
+                n = struct.unpack(">H", f.read(2))[0]
+                name = f.read(n).decode("utf-8", "replace")
+                out[name] = payload(t)
+        if tag == 11:
+            n = struct.unpack(">i", f.read(4))[0]
+            return list(struct.unpack(f">{n}i", f.read(4 * n)))
+        if tag == 12:
+            n = struct.unpack(">i", f.read(4))[0]
+            return list(struct.unpack(f">{n}q", f.read(8 * n)))
+        raise ValueError(f"tag {tag}")
+
+    t = f.read(1)[0]
+    n = struct.unpack(">H", f.read(2))[0]
+    f.read(n)
+    return payload(t)
+
+
+def chunk(region_dir: Path, cx: int, cz: int):
+    path = region_dir / f"r.{cx >> 5}.{cz >> 5}.mca"
+    if not path.exists():
+        return None
+    with open(path, "rb") as f:
+        head = f.read(4096)
+        i = 4 * ((cx & 31) + (cz & 31) * 32)
+        off = int.from_bytes(head[i:i + 3], "big")
+        if off == 0:
+            return None
+        f.seek(off * 4096)
+        length = struct.unpack(">i", f.read(4))[0]
+        kind = f.read(1)[0]
+        data = f.read(length - 1)
+    return read_nbt(zlib.decompress(data) if kind == 2 else data)
+
+
+def state_name(entry) -> str:
+    props = entry.get("Properties") or {}
+    name = entry["Name"]
+    if props:
+        name += "[" + ",".join(f"{k}={v}" for k, v in sorted(props.items())) + "]"
+    return name
+
+
+def blocks_of(region_dir: Path, box):
+    """The block states of `box` (x0, y0, z0, x1, y1, z1, exclusive), by
+    position."""
+    x0, y0, z0, x1, y1, z1 = box
+    out = {}
+    for cz in range(z0 >> 4, ((z1 - 1) >> 4) + 1):
+        for cx in range(x0 >> 4, ((x1 - 1) >> 4) + 1):
+            c = chunk(region_dir, cx, cz)
+            if c is None:
+                continue
+            for s in c.get("sections", []):
+                sy = s["Y"]
+                if (sy + 1) * 16 <= y0 or sy * 16 >= y1:
+                    continue
+                bs = s.get("block_states")
+                if not bs:
+                    continue
+                palette = [state_name(p) for p in bs["palette"]]
+                data = bs.get("data")
+                bits = max(4, (len(palette) - 1).bit_length())
+                per = 64 // bits
+                for ly in range(16):
+                    y = sy * 16 + ly
+                    if not y0 <= y < y1:
+                        continue
+                    for lz in range(16):
+                        z = cz * 16 + lz
+                        if not z0 <= z < z1:
+                            continue
+                        for lx in range(16):
+                            x = cx * 16 + lx
+                            if not x0 <= x < x1:
+                                continue
+                            if data is None:
+                                out[(x, y, z)] = palette[0]
+                                continue
+                            i = (ly * 16 + lz) * 16 + lx
+                            v = (data[i // per] & ((1 << 64) - 1)) >> ((i % per) * bits) & ((1 << bits) - 1)
+                            out[(x, y, z)] = palette[v]
+    return out
+
+
+def is_water(state: str) -> bool:
+    return state.startswith("minecraft:water")
+
+
+# --------------------------------------------------------------- main ----
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--world", required=True, type=Path)
+    ap.add_argument("--box", action="append", required=True, help="a box of 32 blocks a side from its lowest corner, as x,y,z")
+    ap.add_argument("--version", default="1.21.11")
+    ap.add_argument("--minecraft", type=Path, default=Path.home() / "Library/Application Support/minecraft")
+    ap.add_argument("--java")
+    ap.add_argument("--wait", type=float, default=30, help="seconds the game runs after the updates")
+    ap.add_argument("--env", action="append", default=[], help="NAME=VALUE for the export")
+    ap.add_argument("--accept-eula", action="store_true", help="you accept Mojang's EULA for this local server")
+    args = ap.parse_args()
+
+    boxes = []
+    for b in args.box:
+        x, y, z = (int(v) for v in b.split(","))
+        boxes.append((x, y, z, x + SIDE, y + SIDE, z + SIDE))
+    cli = ROOT / "target/release/massif-cli"
+    work = Path(tempfile.mkdtemp(prefix="massif-water-check-"))
+    world_dir = work / "massif-check"
+    env = dict(os.environ)
+    for e in args.env:
+        k, v = e.split("=", 1)
+        env[k] = v
+    subprocess.run([str(cli), "export", str(args.world), str(world_dir), "--version", args.version, "--void", "--overwrite"], check=True, env=env)
+    region = world_dir / "region"
+    before = [blocks_of(region, b) for b in boxes]
+    for b, blocks in zip(boxes, before):
+        water = sum(1 for s in blocks.values() if is_water(s))
+        flowing = sum(1 for s in blocks.values() if is_water(s) and "level=0" not in s and s != "minecraft:water")
+        print(f"box {b[:3]}: {water} water blocks as exported, {flowing} of them flowing")
+
+    if not args.accept_eula:
+        print("\nNot starting the server: running one means accepting Mojang's EULA (https://aka.ms/MinecraftEULA).")
+        return 2
+    (work / "eula.txt").write_text("eula=true\n")
+    port = free_port()
+    (work / "server.properties").write_text(
+        f"level-name=massif-check\nonline-mode=false\nserver-port={port}\nspawn-protection=0\nmax-players=1\n"
+        "enable-rcon=false\nenable-query=false\nview-distance=4\nsimulation-distance=4\nsync-chunk-writes=true\n"
+    )
+    java = args.java or find_java(args.minecraft)
+    cp = os.pathsep.join(classpath(args.minecraft, args.version))
+    cmd = [java, "-Xmx3G", "-cp", cp, "net.minecraft.server.Main", "--nogui", "--universe", str(work), "--world", "massif-check"]
+    server = subprocess.Popen(cmd, cwd=work, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    lines: queue.Queue = queue.Queue()
+    log = []
+
+    def read():
+        for line in server.stdout:
+            log.append(line.rstrip())
+            lines.put(line.rstrip())
+
+    threading.Thread(target=read, daemon=True).start()
+
+    def wait_for(text, timeout):
+        end = time.time() + timeout
+        while time.time() < end:
+            try:
+                line = lines.get(timeout=0.5)
+            except queue.Empty:
+                if server.poll() is not None:
+                    return None
+                continue
+            if text in line:
+                return line
+        return None
+
+    def send(command):
+        server.stdin.write(command + "\n")
+        server.stdin.flush()
+
+    if not wait_for("Done (", 300):
+        print("the server did not start:\n" + "\n".join(log[-40:]))
+        server.kill()
+        return 1
+    for b in boxes:
+        send(f"forceload add {b[0] - 16} {b[2] - 16} {b[3] + 16} {b[5] + 16}")
+    time.sleep(6)
+    # Every block of each box changes, and changes back.
+    for b in boxes:
+        x0, y0, z0, x1, y1, z1 = b
+        send(f"fill {x0} {y0} {z0} {x1 - 1} {y1 - 1} {z1 - 1} minecraft:glass replace minecraft:air")
+    time.sleep(2)
+    for b in boxes:
+        x0, y0, z0, x1, y1, z1 = b
+        send(f"fill {x0} {y0} {z0} {x1 - 1} {y1 - 1} {z1 - 1} minecraft:air replace minecraft:glass")
+    time.sleep(args.wait)
+    send("save-all flush")
+    wait_for("Saved the game", 120)
+    send("stop")
+    try:
+        server.wait(timeout=120)
+    except subprocess.TimeoutExpired:
+        server.kill()
+
+    total = 0
+    for b, was in zip(boxes, before):
+        now = blocks_of(region, b)
+        changed = [(p, was.get(p), now.get(p)) for p in was if was.get(p) != now.get(p)]
+        total += len(changed)
+        print(f"box {b[:3]}: {len(changed)} blocks changed once updated")
+        for p, a, c in changed[:8]:
+            print(f"   {p}: {a} -> {c}")
+    problems = [l for l in log if any(w in l for w in ("ERROR", "Exception", "Couldn't load", "Failed to load", "Recreating"))]
+    for l in problems[:10]:
+        print("  game:", l)
+    shutil.rmtree(work, ignore_errors=True)
+    return 0 if total == 0 and not problems else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

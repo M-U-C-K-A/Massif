@@ -230,6 +230,11 @@ pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> 
         (z1 + reach).ceil() as i32 + 1,
     );
     let counts = std::sync::Mutex::new((0usize, 0usize));
+    // The ground of the columns dug, as it was: the banks may rise back
+    // to it to hold the water.
+    let dug = std::sync::Mutex::new(HashMap::new());
+    // The columns whose water is the river's.
+    let poured = std::sync::Mutex::new(std::collections::HashSet::new());
     edit.par_tiles(rect.tiles(), rect, false, |_, clip, tile| {
         let (mut changed, mut wet) = (0, 0);
         for z in clip.z0..clip.z1 {
@@ -252,13 +257,17 @@ pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> 
                     // The bank: from just over the water up to the ground.
                     let u = ((d - hw) / spec.banks.max(0.01)).clamp(0.0, 1.0);
                     let u = u * u * (3.0 - 2.0 * u);
-                    let edge = water + 0.6;
+                    // As high as the highest water beside it: upstream
+                    // of its nearest point, the water may stand a step
+                    // higher.
+                    let edge = level[k.saturating_sub(((hw + 2.0) / STEP) as usize)] + 0.6;
                     edge + (ground - edge).max(0.0) * u
                 };
                 let new = snap_height(target.min(ground).clamp(lo, hi));
                 if new < ground {
                     tile.top.set(i, new);
                     changed += 1;
+                    dug.lock().expect("not poisoned").insert((x, z), ground);
                 }
                 if d <= hw && spec.water && water > new + 0.3 {
                     let level = water.round().clamp(lo, hi) as i16;
@@ -266,6 +275,11 @@ pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> 
                     // Where two rivers meet, the higher water stays.
                     let keep = if before != NO_FLUID && before as f32 > ground { before.max(level) } else { level };
                     tile.fluid.set(i, keep);
+                    // Where there was no water, the river's own, which
+                    // it may lower to hold it in its bed.
+                    if before == NO_FLUID || before as f32 <= ground {
+                        poured.lock().expect("not poisoned").insert((x, z));
+                    }
                     wet += 1;
                     if let Some(bed) = spec.bed {
                         tile.terrain.set(i, bed.0);
@@ -284,6 +298,9 @@ pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> 
         }
     });
     let (columns, wet) = counts.into_inner().expect("not poisoned");
+    let dug = dug.into_inner().expect("not poisoned");
+    let poured = poured.into_inner().expect("not poisoned");
+    crate::water::seal(edit, rect, &|x, z| dug.get(&(x, z)).copied().unwrap_or(f32::MIN), &|x, z| poured.contains(&(x, z)));
     RiverReport {
         length,
         columns,
@@ -886,6 +903,31 @@ mod tests {
         h.commit();
         assert!(report.wet > 1000 && report.length > 200.0, "{report:?}");
         assert!(report.source > report.mouth && report.mouth >= 75.0 - 0.01, "{report:?}");
+    }
+
+    /// The water of a river down a slope stays in its bed: no water beside
+    /// open land lower than it, and once the export settles its steps, the
+    /// game's rules leave all of it as it is.
+    #[test]
+    fn a_river_down_a_slope_holds_its_water() {
+        let mut world = slope();
+        let d = descend(world.dims[0].ground(), (20, 64), 0.0, 10_000, 100_000, 1.0);
+        let mut h = History::default();
+        h.begin("spring", 0);
+        dig_descent(&mut h.edit(&mut world, 0), &d, &RiverSpec::default());
+        h.commit();
+        let dim = &world.dims[0];
+        let check = crate::water::check(dim);
+        assert_eq!(check.spills, 0, "{check:?}");
+        assert!(check.steps > 50, "it steps down the slope: {check:?}");
+        // As exported, the game changes none of it.
+        for pos in [TilePos::new(0, 0), TilePos::new(1, 0)] {
+            let s = crate::water::settle_tile(dim, pos, true);
+            assert_eq!((s.unsettled, s.over_land, s.sources), (0, 0, 0), "{pos:?}: {s:?}");
+        }
+        // As still water only, the steps would run once a block changes.
+        let s = crate::water::settle_tile(dim, TilePos::new(0, 0), false);
+        assert!(s.added > 0, "{s:?}");
     }
 
     /// A hollow on the way fills into a lake up to where it overflows, and

@@ -231,6 +231,10 @@ pub fn reshape_ground(edit: &mut Edit, op: &Reshape, sea: i32, bed: Option<Terra
     let everywhere = BlockRect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX);
     let changed = AtomicUsize::new(0);
     let mut touched = Vec::new();
+    // The water this pass poured, and the ground it dug as it was: the
+    // banks rise back to hold the water, or the water goes down.
+    let poured = Mutex::new(std::collections::HashSet::new());
+    let dug = Mutex::new(std::collections::HashMap::new());
     let mut cancelled = false;
     for batch in positions.chunks(BATCH) {
         if steps.cancel.load(Ordering::Relaxed) {
@@ -274,9 +278,15 @@ pub fn reshape_ground(edit: &mut Edit, op: &Reshape, sea: i32, bed: Option<Terra
                                 let level = w.at(u.round().max(0.0) as usize, v.round().max(0.0) as usize);
                                 if level != NO_WATER && level > new + 0.3 && lets(x, z) {
                                     let level = level.round().clamp(min_y, max_y) as i16;
-                                    if tile.fluid.get(i) != level {
+                                    let was = tile.fluid.get(i);
+                                    if was != level {
                                         tile.fluid.set(i, level);
                                         moved = true;
+                                        // Water where there was none: the
+                                        // pass's own, which it may lower.
+                                        if was == crate::tile::NO_FLUID || was as f32 <= old + 0.3 {
+                                            poured.lock().expect("no panic while held").insert((x, z));
+                                        }
                                     }
                                 }
                             }
@@ -295,6 +305,9 @@ pub fn reshape_ground(edit: &mut Edit, op: &Reshape, sea: i32, bed: Option<Terra
                     if (new - old).abs() > 1e-3 {
                         tile.top.set(i, new);
                         moved = true;
+                        if new < old {
+                            dug.lock().expect("no panic while held").insert((x, z), old);
+                        }
                     }
                     n += moved as usize;
                 }
@@ -308,6 +321,17 @@ pub fn reshape_ground(edit: &mut Edit, op: &Reshape, sea: i32, bed: Option<Terra
         });
         touched.extend(edited.into_inner().expect("no panic while held"));
         edit.cool(KEEP_HOT);
+    }
+    let (poured, dug) = (poured.into_inner().expect("no panic while held"), dug.into_inner().expect("no panic while held"));
+    if !cancelled && !poured.is_empty() {
+        // Tile by tile, and again across their edges.
+        for shift in [0, TILE_SIZE / 2] {
+            for &pos in &touched {
+                let r = pos.rect();
+                let r = BlockRect::new(r.x0 + shift, r.z0 + shift, r.x1 + shift, r.z1 + shift);
+                crate::water::seal(edit, r, &|x, z| dug.get(&(x, z)).copied().unwrap_or(f32::MIN), &|x, z| poured.contains(&(x, z)));
+            }
+        }
     }
     Changes {
         columns: changed.into_inner(),

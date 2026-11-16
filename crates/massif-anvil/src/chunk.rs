@@ -63,6 +63,13 @@ pub struct ExportContext<'a> {
     lava: bool,
     /// Water and lava, for the lakes of caves, whatever the world's fluid.
     cave_fluids: [u16; 2],
+    /// Flowing water of each `level` (1 to 8), where the export settles
+    /// the water so that the game leaves it as it is; empty for a world of
+    /// lava.
+    flowing: Vec<u16>,
+    /// The blocks of objects that can stand in water, and the same in
+    /// water (`waterlogged=true`), by the first.
+    waterlogged: Vec<(u16, u16)>,
     seed: u64,
     /// The plants of each cover (by number − 1), as written; `None` where
     /// the version has nothing like them.
@@ -184,6 +191,7 @@ impl<'a> ExportContext<'a> {
         // The objects of the layers, each way they may stand.
         let used: std::collections::HashSet<u32> = reg.object_layers.iter().filter(|l| !l.removed).flat_map(|l| l.objects.iter().map(|o| o.0)).collect();
         let mut known: std::collections::HashMap<String, u16> = std::collections::HashMap::new();
+        let mut waterlogged: Vec<(u16, u16)> = Vec::new();
         let mut objects = Vec::with_capacity(reg.objects.len());
         for (k, def) in reg.objects.iter().enumerate() {
             if !used.contains(&(k as u32)) {
@@ -222,12 +230,21 @@ impl<'a> ExportContext<'a> {
                         };
                         let id = match number {
                             Some(number) if name != "minecraft:air" && name.contains(':') => {
-                                let props = if kept { block.properties().map(|(k, v)| (k.to_owned(), v.to_owned())).collect() } else { Vec::new() };
-                                states.push((name.to_owned(), props));
+                                let props: Vec<(String, String)> = if kept { block.properties().map(|(k, v)| (k.to_owned(), v.to_owned())).collect() } else { Vec::new() };
+                                let dry = props.iter().any(|(k, v)| k == "waterlogged" && v == "false");
+                                states.push((name.to_owned(), props.clone()));
                                 if era == Era::Numbered {
                                     numbered.push(number);
                                 }
-                                (states.len() - 1).min(SKIP as usize - 1) as u16
+                                let id = (states.len() - 1).min(SKIP as usize - 1) as u16;
+                                // The same in water, for where it stands in it.
+                                if dry && era != Era::Numbered {
+                                    let wet = props.into_iter().map(|(k, v)| if k == "waterlogged" { (k, "true".to_owned()) } else { (k, v) }).collect();
+                                    states.push((name.to_owned(), wet));
+                                    let wet = (states.len() - 1).min(SKIP as usize - 1) as u16;
+                                    waterlogged.push((id, wet));
+                                }
+                                id
                             }
                             _ => SKIP,
                         };
@@ -239,6 +256,20 @@ impl<'a> ExportContext<'a> {
             }
             objects.push(ways);
         }
+        // Flowing water, of each level.
+        let flowing: Vec<u16> = if world.meta.lava {
+            Vec::new()
+        } else {
+            (1..=8u8)
+                .map(|level| {
+                    states.push(("minecraft:water".to_owned(), vec![("level".to_owned(), level.to_string())]));
+                    if era == Era::Numbered {
+                        numbered.push((8, level));
+                    }
+                    (states.len() - 1).min(SKIP as usize - 1) as u16
+                })
+                .collect()
+        };
         // The ores, after everything else: in stone and in deepslate.
         let first_ore = states.len().min(SKIP as usize - 1) as u16;
         let ore_states = world
@@ -333,6 +364,11 @@ impl<'a> ExportContext<'a> {
             water: if world.meta.lava { wk.lava.0 } else { wk.water.0 },
             lava: world.meta.lava,
             cave_fluids: [wk.water.0, wk.lava.0],
+            flowing,
+            waterlogged: {
+                waterlogged.sort_unstable();
+                waterlogged
+            },
             seed: world.meta.seed as u64,
             covers,
             soil,
@@ -615,7 +651,9 @@ fn stand_objects(ctx: &ExportContext, objects: &[Placement], x0: i32, z0: i32, b
                     // Unless it replaces the ground, an object only takes
                     // the place of air, water, plants and other objects.
                     if replace || old == 0 || old == ctx.water || (old >= ctx.first_extra && old < ctx.first_ore) {
-                        blocks[i] = state;
+                        // In still water, a block that can hold water does.
+                        let wet = if old == ctx.water && !ctx.lava { ctx.waterlogged.binary_search_by_key(&state, |w| w.0).ok().map(|k| ctx.waterlogged[k].1) } else { None };
+                        blocks[i] = wet.unwrap_or(state);
                     }
                 }
             }
@@ -627,6 +665,7 @@ fn stand_objects(ctx: &ExportContext, objects: &[Placement], x0: i32, z0: i32, b
 /// (both in `0..8`), with the objects of `objects` that reach into it (in
 /// the same order for every chunk, so that where two meet, the same one
 /// wins).
+#[allow(clippy::too_many_arguments)]
 pub fn build_chunk(
     ctx: &ExportContext,
     stack: &TileStack,
@@ -634,6 +673,7 @@ pub fn build_chunk(
     cx: usize,
     cz: usize,
     objects: &[Placement],
+    steady: &[massif_core::water::Steady],
     scratch: &mut Scratch,
 ) -> Vec<u8> {
     let (ox, oz) = tile.origin();
@@ -733,6 +773,22 @@ pub fn build_chunk(
                 let cover = stack.surface_cover(cell, surface);
                 if cover != 0 {
                     top = top.max(grow(ctx, cover, x, surface.y1, z, blocks, column));
+                }
+            }
+            // The water as the game leaves it: flowing at the edges of its
+            // steps and falls.
+            if !ctx.flowing.is_empty() && !steady.is_empty() {
+                let at_cell = steady.partition_point(|s| (s.cell as usize) < cell);
+                for s in steady[at_cell..].iter().take_while(|s| s.cell as usize == cell) {
+                    if s.y < min_y || s.y >= max_y {
+                        continue;
+                    }
+                    blocks[at(s.y)] = match s.block.level() {
+                        _ if !s.block.is_water() => 0,
+                        0 => ctx.water,
+                        level => ctx.flowing[level as usize - 1],
+                    };
+                    top = top.max(s.y + 1);
                 }
             }
             // A world cut at 0 gets its floor of bedrock there.

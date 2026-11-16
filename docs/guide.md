@@ -340,7 +340,8 @@ to begin with — with its game mode, difficulty, cheats, hardcore,
 structures beyond the map, world border, spawn point, what surrounds the
 map (vanilla terrain or void) and data packs (copied in and enabled).
 Versions before 1.18 hold 256 blocks of height: the map is cut below 0 and
-above 255, and the dialog says so. **Test Export** writes only the 3 × 3
+above 255, and the dialog says so. The water is written so that the game
+leaves it as it is (see [Water in the game](#water-in-the-game)). **Test Export** writes only the 3 × 3
 tiles around the centre of the map view to a separate folder, to check the
 result in the game quickly.
 
@@ -945,8 +946,34 @@ and a river biome on its water.
 - The bed gets a terrain (gravel, sand…), the water a river biome.
 
 The water's level is a whole block per column, so it stands in steps
-along the river: still water, as Minecraft keeps it; mods that let water
-flow over water (Streams Reflowing) make a current of it.
+along the river. The water stays in its bed: where a bank was dug lower
+than the water beside it, the bank rises back towards the ground it had
+to hold it, and where it cannot, the river's own water goes down to the
+bank's height. Water that was on the map before the river (painted by
+hand, or brought in from WorldPainter) is never lowered. Edit ▸ Whole map ▸
+Rivers holds its water the same way.
+
+### Water in the game
+
+Minecraft leaves the water of an exported world still until a block next
+to it changes: then every water block with open air beside it runs into
+it. Two sources beside the same block make a new source, so a pool one
+step under another rises to the upper level, then the next, until the
+water overflows its banks. On a WorldPainter map with rivers and lakes of
+5,888 blocks a side, nearly 400,000 blocks of water would appear that way,
+157,000 of them over dry land.
+
+The export writes the water as the game leaves it once every block of it
+is updated, worked out with the game's own rules: a row of flowing water
+at the edge of each step, falling water where it drops. Only where two
+sources would make a new one, and a pool rise, are the sources beside it
+written as flowing water instead, which over other water never spreads.
+The game then finds nothing left to change: no pool rises, nothing
+overflows. Water painted over land lower than itself (on a slope, say)
+runs down that land in the export as it would in the game. Blocks of
+custom objects that stand in still water and can hold it (fences, slabs,
+stairs, leaves…) are written waterlogged, with no pocket of air. A world
+of lava is written as before.
 
 ## Roads
 

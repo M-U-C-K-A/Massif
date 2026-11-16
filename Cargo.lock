@@ -2116,10 +2116,12 @@ dependencies = [
 name = "massif-cli"
 version = "1.0.0"
 dependencies = [
+ "image",
  "massif-anvil",
  "massif-core",
  "massif-format",
  "massif-legacy",
+ "rayon",
 ]
 
 [[package]]

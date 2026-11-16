@@ -10,3 +10,5 @@ massif-core.workspace = true
 massif-format.workspace = true
 massif-anvil.workspace = true
 massif-legacy.workspace = true
+rayon.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"] }
