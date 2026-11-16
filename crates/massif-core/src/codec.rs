@@ -446,6 +446,35 @@ pub fn zstd_compress(raw: &[u8]) -> Vec<u8> {
     })
 }
 
+/// Upper bound accepted for a decompressed section of a file: the sculpted
+/// chunks of a dimension, a selection, the metadata (with every object of
+/// the map's layers) or the save points' list. Each grew past
+/// [`MAX_RAW_TILE`] on real maps; this bound only stops a hostile frame.
+pub const MAX_RAW_SECTION: usize = 1 << 30;
+
+/// Decompress a section of a file, up to [`MAX_RAW_SECTION`] bytes. Memory
+/// grows with what the frame really holds, whatever size it declares.
+pub fn zstd_decompress_section(frame: &[u8]) -> Result<Vec<u8>> {
+    if let Some(size) = zstd::bulk::Decompressor::upper_bound(frame)
+        && size <= MAX_RAW_TILE
+    {
+        return zstd_decompress(frame);
+    }
+    use std::io::Read;
+    let decoder = zstd::stream::read::Decoder::with_buffer(frame).map_err(CodecError::Zstd)?;
+    let mut out = Vec::new();
+    decoder.take(MAX_RAW_SECTION as u64 + 1).read_to_end(&mut out).map_err(CodecError::Zstd)?;
+    if out.len() > MAX_RAW_SECTION {
+        return Err(CodecError::Corrupt("zstd frame is implausibly large"));
+    }
+    Ok(out)
+}
+
+/// The size a frame says it decompresses to, if it says.
+pub fn zstd_content_size(frame: &[u8]) -> Option<usize> {
+    zstd::bulk::Decompressor::upper_bound(frame)
+}
+
 /// Decompress one frame, reusing a per-thread decompression context.
 pub fn zstd_decompress(frame: &[u8]) -> Result<Vec<u8>> {
     let size = zstd::bulk::Decompressor::upper_bound(frame)

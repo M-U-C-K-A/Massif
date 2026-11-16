@@ -384,6 +384,16 @@ pub fn write<W: Write>(world: &World, mut out: W) -> Result<Stats> {
         });
     }
 
+    // A section this version could not read back is refused before anything
+    // is written: the file saved before stays as it was.
+    for s in &sections {
+        if (s.flags & FLAG_ZSTD != 0 || [KIND_VOXELS, KIND_POINT_VOXELS, KIND_SELECTION, KIND_POINT_SELECTION].contains(&s.kind))
+            && codec::zstd_content_size(&s.payload).is_none_or(|n| n > codec::MAX_RAW_SECTION)
+        {
+            return Err(FormatError::Corrupt(format!("the {} section is too large to be read again", String::from_utf8_lossy(&s.kind))));
+        }
+    }
+
     // Sections follow the frames, the directory follows the sections.
     let mut directory = Vec::with_capacity(sections.len() * SECTION_LEN);
     for s in &sections {
@@ -548,7 +558,7 @@ fn section_payload(bytes: &[u8], entry: &[u8], what: &str) -> Result<Vec<u8>> {
         return corrupt(format!("{what} fails its checksum"));
     }
     if u32_at(entry, 28) & FLAG_ZSTD != 0 {
-        Ok(codec::zstd_decompress(payload)?)
+        Ok(codec::zstd_decompress_section(payload)?)
     } else {
         Ok(payload.to_vec())
     }
@@ -837,7 +847,7 @@ pub fn inspect(bytes: &[u8]) -> Result<FileInfo> {
         }
         let (sculpted_chunks, sculpted_bytes) = match dim.voxels.and_then(|id| parsed.voxels.iter().find(|(i, _)| *i == id)) {
             Some((_, raw)) => {
-                let chunks = codec::zstd_decompress(raw)?.len() / (12 + massif_core::voxel::VOLUME);
+                let chunks = codec::zstd_decompress_section(raw)?.len() / (12 + massif_core::voxel::VOLUME);
                 (chunks, raw.len() as u64)
             }
             None => (0, 0),

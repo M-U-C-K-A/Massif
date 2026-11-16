@@ -356,7 +356,7 @@ impl VoxelLayer {
     /// Read what [`VoxelLayer::encode`] wrote (or, before terrains were
     /// kept, densities alone).
     pub fn decode(bytes: &[u8]) -> Result<Self, String> {
-        let raw = codec::zstd_decompress(bytes).map_err(|e| e.to_string())?;
+        let raw = codec::zstd_decompress_section(bytes).map_err(|e| e.to_string())?;
         let mut layer = Self::default();
         let position = |e: &[u8]| {
             let at = |i: usize| i32::from_le_bytes(e[i..i + 4].try_into().expect("4 bytes"));

@@ -283,7 +283,7 @@ mod packed {
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u16>, D::Error> {
         let text = String::deserialize(d)?;
         let packed = super::base64::decode(&text).ok_or_else(|| serde::de::Error::custom("the blocks of an object are not in base 64"))?;
-        let bytes = zstd::stream::decode_all(&packed[..]).map_err(serde::de::Error::custom)?;
+        let bytes = crate::codec::zstd_decompress_section(&packed).map_err(serde::de::Error::custom)?;
         Ok(bytes.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect())
     }
 }

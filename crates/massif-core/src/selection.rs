@@ -515,7 +515,7 @@ impl Selection {
 
     /// A selection from [`Selection::encode`]'s bytes.
     pub fn decode(bytes: &[u8]) -> Result<Self, String> {
-        let raw = crate::codec::zstd_decompress(bytes).map_err(|e| format!("the selection: {e}"))?;
+        let raw = crate::codec::zstd_decompress_section(bytes).map_err(|e| format!("the selection: {e}"))?;
         let bad = || "the selection is damaged".to_owned();
         if raw.len() < 8 || &raw[..4] != b"SEL1" {
             return Err(bad());
