@@ -116,7 +116,7 @@ field or in Edit ▸ Ores as before, and ⌘C, ⌘V and ⌘A work in text fields
 ## Settings
 
 **Settings** (⌘, — in the **Massif** menu on a Mac, in **View** on Windows
-and Linux — or the home screen's sidebar) has eight sections, in a window of
+and Linux — or the home screen's sidebar) has nine sections, in a window of
 their own:
 
 - **Appearance**: the theme, the accent colour (the colour of what is
@@ -161,12 +161,33 @@ their own:
   was used least is put away, compressed; and what is in use now.
 - **Autosave**: on or off, and how often: every 1, 2, 5 (the default), 10
   or 15 minutes of changes not saved (see [Autosave](#autosave)).
+- **Updates**: **Check for new versions**, on by default (see
+  [New versions](#new-versions)), and the version skipped, to be told of
+  again.
 - **Developer**: developer mode adds a **Developer** panel to every area's
   menu, as the brushes or the layers: frames a second and the time each
   takes (and how much of it is Massif's own work), the memory the system
   counts for Massif and the processor's time, in charts that run live; then
   what is kept decoded, the map, the tasks running, the graphics card, and
   why Massif draws again.
+
+## New versions
+
+Once a day at most, a moment after it starts and without holding it up,
+Massif asks GitHub which release of Massif is the latest. The request
+carries Massif's version and nothing else: nothing about you, your computer
+or your maps. The answer is kept a day in `update.json`, next to
+`startup.log`; offline, or if GitHub does not answer, Massif says nothing.
+
+When the latest release is newer than the version running, a small pill,
+**0.6.1 is out**, shows at the right of the top bar, and a line, **Massif
+0.6.1 is out**, above **Settings** on the home screen. Either opens the
+release's notes: what is new in every version since yours. **Open the
+release page** opens it in your browser, to download the new version and
+install it as you did this one; Massif never downloads or installs anything
+itself. **Skip this version** stops telling of that one (a newer one is
+told of again), and **Later** keeps the pill. **Settings ▸ Updates** turns
+the check off, or tells of a skipped version again.
 
 ## Autosave
 

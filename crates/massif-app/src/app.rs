@@ -81,6 +81,11 @@ struct Settings {
     /// every `autosave_minutes`.
     autosave: bool,
     autosave_minutes: u32,
+    /// Ask GitHub, once a day at most, whether a newer version is out
+    /// (see `update`).
+    check_updates: bool,
+    /// The version the user chose not to hear about again.
+    skipped_version: Option<String>,
 }
 
 /// The intervals of the backups offered in the settings, in minutes.
@@ -99,6 +104,7 @@ enum PrefsSection {
     Notifications,
     Memory,
     Autosave,
+    Updates,
     Developer,
 }
 
@@ -124,6 +130,8 @@ impl Default for Settings {
             ui_scale: 1.0,
             autosave: true,
             autosave_minutes: 5,
+            check_updates: true,
+            skipped_version: None,
         }
     }
 }
@@ -231,6 +239,8 @@ enum Dialog {
     /// Backups left by a run of Massif that closed without saving, to
     /// restore or discard.
     Recover,
+    /// A newer version is out: its notes, and its page to open.
+    Update,
 }
 
 struct Status {
@@ -277,6 +287,8 @@ pub struct MassifApp {
     dialog: Option<Dialog>,
     /// Backups of the map while it has changes not saved.
     autosave: crate::autosave::Autosave,
+    /// The latest version published, as GitHub last said.
+    updates: crate::update::Updates,
     /// Whether a dialog was open last frame (for its sound).
     dialog_was_open: bool,
     /// The survival check last closed: opened again as it was while the
@@ -410,6 +422,8 @@ impl MassifApp {
                 app.dialog = Some(Dialog::Recover);
             }
         }
+        // Whether a newer version is out, asked off the main thread.
+        app.check_updates(&cc.egui_ctx);
         if let Some(path) = open {
             app.jobs.push(Job::open(&cc.egui_ctx, path));
         } else {
@@ -509,6 +523,7 @@ impl MassifApp {
                 self.after_create = None;
             }
             HomeAction::Settings => self.dialog = Some(Dialog::Preferences(PrefsSection::Appearance)),
+            HomeAction::Update => self.dialog = Some(Dialog::Update),
             HomeAction::Dropped(path) => {
                 let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
                 match ext.as_str() {
@@ -531,9 +546,11 @@ impl MassifApp {
         let recent = self.settings.recent.clone();
         let mut action = None;
         let animate = self.settings.animate_backdrop;
+        let update = self.update_offer().map(|r| r.tag_name.trim_start_matches('v').to_owned());
         egui::CentralPanel::default().frame(egui::Frame::new()).show(ui, |ui| {
             if let Some(home) = &mut self.home {
                 home.animate = animate;
+                home.update = update;
                 action = home.ui(ui, &recent, note.as_ref().map(|(t, e)| (t.as_str(), *e)));
             }
         });
@@ -619,6 +636,7 @@ impl MassifApp {
             jobs: Vec::new(),
             dialog: None,
             autosave: crate::autosave::Autosave::off(),
+            updates: crate::update::Updates::default(),
             dialog_was_open: false,
             analysis: None,
             memory_checked: f64::NEG_INFINITY,
@@ -993,6 +1011,61 @@ impl MassifApp {
             let pal = Palette::of(ui);
             ui.add(egui::Label::new(RichText::new(format!("Kept in {}, {} copies at most.", dir.display(), crate::autosave::MAX_BACKUPS)).size(11.5).color(pal.weak)).wrap());
         }
+    }
+
+    fn prefs_updates(&mut self, ui: &mut Ui) {
+        let pal = Palette::of(ui);
+        Self::prefs_header(
+            ui,
+            "Updates",
+            "Once a day at most, Massif asks GitHub which version of Massif is the latest, and tells you when it is newer than yours. It sends nothing about you or your maps, and never downloads or installs anything itself: the release's page opens in your browser.",
+        );
+        let ctx = ui.ctx().clone();
+        crate::widgets::well(ui, |ui| {
+            crate::widgets::row(ui, "Check for new versions", |ui| {
+                if crate::widgets::switch(ui, &mut self.settings.check_updates).changed() && self.settings.check_updates {
+                    self.check_updates(&ctx);
+                }
+            });
+            if let Some(skipped) = self.settings.skipped_version.clone() {
+                crate::widgets::row(ui, &format!("Skipped {skipped}"), |ui| {
+                    if ui.button("Tell me again").clicked() {
+                        self.settings.skipped_version = None;
+                    }
+                });
+            }
+        });
+        ui.add_space(10.0);
+        let state = match (self.update_offer(), &self.updates.latest) {
+            (Some(r), _) => format!("Massif {} is out. You have {}.", r.tag_name.trim_start_matches('v'), crate::update::RUNNING),
+            _ if self.updates.waiting() => "Asking GitHub…".to_owned(),
+            (None, Some(_)) => format!("You have the latest version, {}.", crate::update::RUNNING),
+            (None, None) => format!("You have version {}.", crate::update::RUNNING),
+        };
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(state).size(11.5).color(pal.weak));
+            if self.update_offer().is_some() && ui.small_button("See what is new").clicked() {
+                self.dialog = Some(Dialog::Update);
+            }
+        });
+    }
+
+    /// Start asking whether a newer version is out, if that is on (once a
+    /// run; the answer is kept a day).
+    fn check_updates(&mut self, ctx: &egui::Context) {
+        if self.settings.check_updates
+            && let Some(cache) = crate::update::default_cache()
+        {
+            self.updates.start(ctx, cache, crate::update::fetch_github);
+        }
+    }
+
+    /// The newer version to tell of, if any.
+    fn update_offer(&self) -> Option<&crate::update::Release> {
+        if !self.settings.check_updates {
+            return None;
+        }
+        self.updates.offer(crate::update::RUNNING, self.settings.skipped_version.as_deref())
     }
 
     fn prefs_developer(&mut self, ui: &mut Ui) {
@@ -1711,6 +1784,11 @@ impl MassifApp {
                 if bar_button(ui, "Theme", true, false, |p, r, c| glyph_in(p, r, icon, c)).clicked() {
                     self.settings.theme = next;
                     crate::sounds::play(Cue::Toggle);
+                }
+                if let Some(version) = self.update_offer().map(|r| r.tag_name.trim_start_matches('v').to_owned())
+                    && update_pill(ui, &version).clicked()
+                {
+                    self.dialog = Some(Dialog::Update);
                 }
             });
         });
@@ -2492,6 +2570,7 @@ impl MassifApp {
                                 (PrefsSection::Notifications, Icon::Bell, "Notifications"),
                                 (PrefsSection::Memory, Icon::MemoryStick, "Memory"),
                                 (PrefsSection::Autosave, Icon::History, "Autosave"),
+                                (PrefsSection::Updates, Icon::CircleArrowUp, "Updates"),
                                 (PrefsSection::Developer, Icon::Activity, "Developer"),
                             ] {
                                 let on = section == s;
@@ -2527,6 +2606,7 @@ impl MassifApp {
                                     PrefsSection::Notifications => self.prefs_notifications(ui),
                                     PrefsSection::Memory => self.prefs_memory(ui),
                                     PrefsSection::Autosave => self.prefs_autosave(ui),
+                                    PrefsSection::Updates => self.prefs_updates(ui),
                                     PrefsSection::Developer => self.prefs_developer(ui),
                                 }
                             });
@@ -2542,7 +2622,8 @@ impl MassifApp {
                 if response.should_close() {
                     keep = false;
                 }
-                if keep {
+                // A section may open another dialog (an update's notes).
+                if keep && self.dialog.is_none() {
                     self.dialog = Some(Dialog::Preferences(section));
                 }
             }
@@ -3049,6 +3130,60 @@ impl MassifApp {
                     self.dialog = Some(Dialog::ImportReport(report, thumbnail));
                 }
             }
+            Dialog::Update => {
+                let Some(release) = self.update_offer().cloned() else { return };
+                let version = release.tag_name.trim_start_matches('v').to_owned();
+                let (mut open, mut skip) = (false, false);
+                let response = modal(ctx, "update").show(ctx, |ui| {
+                    ui.set_width(520.0);
+                    let pal = Palette::of(ui);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(theme::glyph(Icon::CircleArrowUp).to_string()).size(17.0).color(pal.accent));
+                        ui.label(RichText::new(format!("Massif {version} is out")).bold().size(15.0));
+                    });
+                    ui.add_space(2.0);
+                    ui.label(RichText::new(format!("You have {}. Download the new version from its page, then install it as you did this one; your maps and settings stay.", crate::update::RUNNING)).color(pal.weak));
+                    ui.add_space(10.0);
+                    let notes = crate::help::blocks(&release.notes_since(crate::update::RUNNING));
+                    if !notes.is_empty() {
+                        let height = (ctx.content_rect().height() - 260.0).clamp(120.0, 420.0);
+                        crate::widgets::well(ui, |ui| {
+                            egui::ScrollArea::vertical().id_salt("update notes").max_height(height).auto_shrink([false, true]).show(ui, |ui| {
+                                ui.set_width(ui.available_width() - 10.0);
+                                crate::help::blocks_ui(ui, &notes);
+                            });
+                        });
+                        ui.add_space(12.0);
+                    }
+                    ui.horizontal(|ui| {
+                        if ui.button("Skip this version").clicked() {
+                            skip = true;
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                            if ui.add(theme::primary_button(ui, format!("{}  Open the release page", theme::glyph(Icon::ExternalLink)))).clicked() {
+                                open = true;
+                            }
+                            if ui.button("Later").clicked() {
+                                keep = false;
+                            }
+                        });
+                    });
+                });
+                if open {
+                    ctx.open_url(egui::OpenUrl::new_tab(release.page()));
+                    keep = false;
+                }
+                if skip {
+                    self.settings.skipped_version = Some(version);
+                    keep = false;
+                }
+                if response.should_close() {
+                    keep = false;
+                }
+                if keep {
+                    self.dialog = Some(Dialog::Update);
+                }
+            }
             Dialog::About => {
                 let response = modal(ctx, "about").show(ctx, |ui| {
                     ui.set_width(400.0);
@@ -3254,6 +3389,8 @@ impl eframe::App for MassifApp {
         // Until the first frame is shown, startup.log follows each step.
         crate::startup::frame_begins(ui.ctx(), frame);
         self.dev.begin();
+        // GitHub's answer about new versions, once it came.
+        self.updates.poll();
         self.frame_ui(ui, frame);
         // macOS's menu bar shows the menus as this frame left them.
         if crate::menubar::NATIVE {
@@ -3302,6 +3439,19 @@ fn bar_button(ui: &mut Ui, tip: &str, enabled: bool, selected: bool, paint: impl
     };
     paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), color);
     response.on_hover_text(tip)
+}
+
+/// The top bar's word that a newer version is out: a small pill in the
+/// accent's soft tint.
+fn update_pill(ui: &mut Ui, version: &str) -> egui::Response {
+    let pal = Palette::of(ui);
+    let text = RichText::new(format!("{}  {version} is out", theme::glyph(Icon::CircleArrowUp))).size(12.0).color(pal.accent);
+    let pill = egui::Button::new(text).fill(pal.accent_soft).stroke(Stroke::NONE).corner_radius(theme::PILL).min_size(vec2(0.0, 22.0));
+    let response = ui.add(pill).on_hover_text("See what is new");
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
 }
 
 /// A glyph of the icon font, centred on `rect`.
@@ -3821,6 +3971,72 @@ mod tests {
         assert!(!backup.file.exists(), "a save removes the backup");
         h.state_mut().autosave.close();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A newer version out (GitHub replaced by a fixture): a pill in the top
+    /// bar and a line on the home screen open its notes; Skip this version
+    /// hides it, the Settings switch too. Renders the pill, the line and
+    /// the dialog with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn a_newer_version_is_told_of() {
+        use crate::update::{Updates, tests::fixture};
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(3);
+        assert!(h.query_by_label_contains("is out").is_none(), "nothing known, nothing said");
+        h.state_mut().updates = Updates::known(fixture());
+        h.run_steps(3);
+        let out = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let ppp = h.ctx.pixels_per_point();
+        if let Some(dir) = &out {
+            let image = h.render().unwrap();
+            let crop = image::imageops::crop_imm(&image, image.width() - (520.0 * ppp) as u32, 0, (520.0 * ppp) as u32, (44.0 * ppp) as u32).to_image();
+            crop.save(dir.join("update-pill.png")).unwrap();
+        }
+        h.get_by_label_contains("9.1.0 is out").click();
+        h.run_steps(4);
+        assert!(matches!(h.state().dialog, Some(Dialog::Update)));
+        assert!(h.query_by_label_contains("Rivers that find their way").is_some(), "the notes since this version");
+        assert!(h.query_by_label_contains("Old news").is_none(), "not those of versions one has");
+        if let Some(dir) = &out {
+            h.render().unwrap().save(dir.join("update-dialog.png")).unwrap();
+        }
+        h.get_by_label("Later").click();
+        h.run_steps(2);
+        assert!(h.state().dialog.is_none());
+        assert!(h.query_by_label_contains("9.1.0 is out").is_some(), "Later keeps the pill");
+        // On the home screen, above Settings.
+        h.state_mut().open_home(Page::NewMap);
+        h.run_steps(4);
+        if let Some(dir) = &out {
+            let image = h.render().unwrap();
+            let crop = image::imageops::crop_imm(&image, 0, image.height() - (180.0 * ppp) as u32, (300.0 * ppp) as u32, (180.0 * ppp) as u32).to_image();
+            crop.save(dir.join("update-home.png")).unwrap();
+        }
+        h.get_by_label("Massif 9.1.0 is out").click();
+        h.run_steps(3);
+        assert!(matches!(h.state().dialog, Some(Dialog::Update)));
+        h.get_by_label("Skip this version").click();
+        h.run_steps(3);
+        assert_eq!(h.state().settings.skipped_version.as_deref(), Some("9.1.0"));
+        assert!(h.state().dialog.is_none() && h.query_by_label_contains("is out").is_none(), "skipped, not told of again");
+        // Told again from Settings; the switch off says nothing.
+        h.state_mut().settings.skipped_version = None;
+        h.state_mut().settings.check_updates = false;
+        h.run_steps(3);
+        assert!(h.query_by_label_contains("is out").is_none());
+        h.state_mut().settings.check_updates = true;
+        h.run_steps(3);
+        assert!(h.query_by_label_contains("is out").is_some());
+        h.state_mut().dialog = Some(Dialog::Preferences(PrefsSection::Updates));
+        h.run_steps(4);
+        assert!(h.query_by_label_contains("Massif 9.1.0 is out. You have").is_some());
+        if let Some(dir) = &out {
+            h.render().unwrap().save(dir.join("update-settings.png")).unwrap();
+        }
+        h.get_by_label("See what is new").click();
+        h.run_steps(3);
+        assert!(matches!(h.state().dialog, Some(Dialog::Update)), "the notes, from Settings");
     }
 
     /// Flatten's options in Tool Settings: the way it moves the land, picked

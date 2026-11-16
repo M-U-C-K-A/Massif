@@ -53,20 +53,29 @@ fn parse(text: &str) -> Vec<Topic> {
             continue;
         }
         let Some(topic) = topics.last_mut() else { continue };
-        let block = if let Some(h) = line.strip_prefix("## ") {
-            Block::Heading(h.to_owned())
-        } else if let Some(b) = line.strip_prefix("- ") {
-            Block::Bullet(b.to_owned())
-        } else if line.starts_with('|') {
-            Block::Row(line.trim_matches('|').split('|').map(|c| c.trim().to_owned()).collect())
-        } else if line.trim().is_empty() {
-            continue;
-        } else {
-            Block::Para(line.to_owned())
-        };
-        topic.blocks.push(block);
+        topic.blocks.extend(block(line));
     }
     topics
+}
+
+/// What one line of the help's Markdown is (`None`: an empty line).
+fn block(line: &str) -> Option<Block> {
+    Some(if let Some(h) = line.strip_prefix("## ").or_else(|| line.strip_prefix("### ")) {
+        Block::Heading(h.to_owned())
+    } else if let Some(b) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
+        Block::Bullet(b.to_owned())
+    } else if line.starts_with('|') {
+        Block::Row(line.trim_matches('|').split('|').map(|c| c.trim().to_owned()).collect())
+    } else if line.trim().is_empty() {
+        return None;
+    } else {
+        Block::Para(line.to_owned())
+    })
+}
+
+/// Text in the help's Markdown, as blocks: release notes, say.
+pub fn blocks(text: &str) -> Vec<Block> {
+    text.lines().filter_map(|l| block(l.trim_end())).collect()
 }
 
 /// The index of the topic titled `title`.
@@ -195,14 +204,20 @@ pub fn ui(ui: &mut Ui, state: &mut HelpState) -> bool {
 
 /// One topic: its title, then what it says.
 fn topic_ui(ui: &mut Ui, topic: &Topic) {
+    ui.set_width(ui.available_width() - 12.0);
+    ui.label(RichText::new(&topic.title).size(22.0).medium());
+    ui.add_space(6.0);
+    blocks_ui(ui, &topic.blocks);
+    ui.add_space(12.0);
+}
+
+/// Blocks of the help's Markdown, one under the other.
+pub fn blocks_ui(ui: &mut Ui, blocks: &[Block]) {
     let pal = Palette::of(ui);
     {
         {
-            ui.set_width(ui.available_width() - 12.0);
-            ui.label(RichText::new(&topic.title).size(22.0).medium());
-            ui.add_space(6.0);
             let body_color = theme::mix(pal.weak, pal.text, 0.55);
-            for block in &topic.blocks {
+            for block in blocks {
                 match block {
                     Block::Heading(t) => {
                         ui.add_space(12.0);
@@ -233,7 +248,6 @@ fn topic_ui(ui: &mut Ui, topic: &Topic) {
                     }
                 }
             }
-            ui.add_space(12.0);
         }
     }
 }

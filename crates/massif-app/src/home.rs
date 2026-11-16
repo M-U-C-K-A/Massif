@@ -159,6 +159,8 @@ pub enum HomeAction {
     Dropped(PathBuf),
     /// Another picture behind the home screen.
     AnotherPicture,
+    /// What is new in the newer version out.
+    Update,
 }
 
 /// The pictures of `assets/backdrops` (listed by the build script).
@@ -235,6 +237,8 @@ pub struct Home {
     pub in_frame: bool,
     /// Whether the picture's dither moves on (the settings).
     pub animate: bool,
+    /// A newer version out, by its number: a line above Settings says so.
+    pub update: Option<String>,
     logo: Option<TextureHandle>,
     /// How tall what is written in the middle was last laid out: lifted
     /// when it would not fit under the top margin.
@@ -258,6 +262,7 @@ impl Home {
             ages_at: f64::NEG_INFINITY,
             in_frame: cfg!(test),
             animate: true,
+            update: None,
             logo: None,
             content_height: 0.0,
         }
@@ -443,6 +448,11 @@ impl Home {
             ui.add_space(12.0);
             if nav(ui, Icon::Settings, "Settings", false).on_hover_text("Appearance, accessibility, typeface, sounds… (⌘,)").clicked() {
                 *action = Some(HomeAction::Settings);
+            }
+            if let Some(version) = &self.update
+                && update_nav(ui, version).clicked()
+            {
+                *action = Some(HomeAction::Update);
             }
             if let Some(name) = &self.back_to
                 && nav(ui, Icon::ArrowLeft, &format!("Back to {name}"), false).on_hover_text("Esc").clicked()
@@ -1147,6 +1157,23 @@ fn nav(ui: &mut Ui, icon: Icon, label: &str, selected: bool) -> Response {
         if selected { pal.accent } else { pal.weak },
     );
     ui.painter().text(rect.left_center() + vec2(36.0, 0.0), Align2::LEFT_CENTER, label, FontId::proportional(13.0), ink);
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    response
+}
+
+/// The sidebar's word that a newer version is out: an entry as the others,
+/// its icon and words in the accent.
+fn update_nav(ui: &mut Ui, version: &str) -> Response {
+    let pal = Palette::of(ui);
+    let label = format!("Massif {version} is out");
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
+    let fill = if response.hovered() { theme::mix(sidebar_fill(&pal), pal.accent, 0.16) } else { theme::mix(sidebar_fill(&pal), pal.accent, 0.10) };
+    ui.painter().rect_filled(rect, 8, fill);
+    ui.painter().text(rect.left_center() + vec2(12.0, 0.0), Align2::LEFT_CENTER, theme::glyph(Icon::CircleArrowUp).to_string(), FontId::proportional(14.0), pal.accent);
+    ui.painter().text(rect.left_center() + vec2(36.0, 0.0), Align2::LEFT_CENTER, label, FontId::proportional(13.0), pal.text);
     if response.hovered() {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }

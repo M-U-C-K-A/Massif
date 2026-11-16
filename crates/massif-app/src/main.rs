@@ -37,6 +37,7 @@ mod startup;
 mod terrain_view;
 mod theme;
 mod tools;
+mod update;
 mod view3d;
 mod view_image;
 mod widgets;
