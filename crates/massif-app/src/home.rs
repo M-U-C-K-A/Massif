@@ -1248,17 +1248,36 @@ fn recent_row(ui: &mut Ui, path: &Path, modified: Option<Option<SystemTime>>) ->
     );
     let font = FontId::proportional(13.0);
     let room = rect.width() - 36.0 - 44.0;
-    let mut name = stem;
-    while name.chars().count() > 4 && ui.painter().layout_no_wrap(name.clone(), font.clone(), ink).size().x > room {
-        name.pop();
-        while name.ends_with('…') || name.ends_with(' ') {
-            name.pop();
-        }
-        name.push('…');
-    }
+    let name = fit_with_ellipsis(&stem, room, |s| ui.painter().layout_no_wrap(s.to_owned(), font.clone(), ink).size().x);
     ui.painter().text(rect.left_center() + vec2(34.0, 0.0), Align2::LEFT_CENTER, name, font, ink);
     ui.painter().text(rect.right_center() - vec2(10.0, 0.0), Align2::RIGHT_CENTER, age, FontId::proportional(11.5), pal.weak);
     response.on_hover_text(path.display().to_string())
+}
+
+/// `text` cut to fit in `room` as `width` measures it, with an ellipsis:
+/// as many of its letters as fit, never fewer than three. A few
+/// measures, whatever the text and the room: the loop it replaces took
+/// the ellipsis it had just added off again, and never ended on a name too
+/// long for the side bar (Massif 0.3.1 to 0.6.0, a window that did not
+/// answer at its first frame).
+fn fit_with_ellipsis(text: &str, room: f32, width: impl Fn(&str) -> f32) -> String {
+    if width(text) <= room {
+        return text.to_owned();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let cut = |k: usize| format!("{}…", chars[..k].iter().collect::<String>().trim_end());
+    // The longest cut that fits, by halves: `lo` fits (or is the least
+    // allowed), `hi` does not.
+    let (mut lo, mut hi) = (3.min(chars.len()), chars.len());
+    while lo + 1 < hi {
+        let mid = (lo + hi) / 2;
+        if width(&cut(mid)) <= room {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    cut(lo)
 }
 
 impl Home {
@@ -1878,7 +1897,74 @@ mod backdrop_tests {
     /// pool, which slow loads may hold (0.5.1 waited there for minutes on a
     /// slow computer with many WorldPainter brushes): its picture and the
     /// new map's preview come later, from threads of their own, as do the
-    /// ages of the recent maps.
+    /// A name cut to fit takes letters off, and ends whatever the room: the
+    /// loop before took off the ellipsis it had just added, and never ended.
+    #[test]
+    fn a_long_name_is_cut_and_the_cut_ends() {
+        let width = |s: &str| s.chars().count() as f32 * 7.0;
+        assert_eq!(fit_with_ellipsis("Alps", 100.0, width), "Alps");
+        let cut = fit_with_ellipsis("Mein riesiges Königreich mit Bergen und Flüssen", 140.0, width);
+        assert!(cut.ends_with('…') && width(&cut) <= 140.0 && cut.chars().count() == 20, "{cut}");
+        assert!(cut.starts_with("Mein riesiges"), "{cut}");
+        // No room at all: the least, at once.
+        assert_eq!(fit_with_ellipsis("Northern Isles", 0.0, width), "Nor…");
+        assert_eq!(fit_with_ellipsis("ab", -5.0, width), "ab…");
+        let long: String = "x".repeat(100_000);
+        assert!(fit_with_ellipsis(&long, 300.0, width).chars().count() <= 43);
+    }
+
+    /// The home screen's side bar draws its recent maps whatever they are:
+    /// names too long for it (Zumonym's start stayed for ever at "the side
+    /// bar and the recent maps" in 0.6.0), Windows paths with drive letters,
+    /// backslashes and shares, letters beyond ASCII, a folder, a file not
+    /// there, no list at all; in a window from the smallest to a large one,
+    /// at the scales Windows offers, in German. A frame that does not end is
+    /// a failure here, not a test that hangs.
+    #[test]
+    fn the_side_bar_draws_any_recent_maps() {
+        let dir = std::env::temp_dir().join(format!("massif-recent-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("a folder.massif")).unwrap();
+        let lists: Vec<Vec<PathBuf>> = vec![
+            Vec::new(),
+            vec![
+                dir.join("Mein riesiges Königreich mit Bergen, Flüssen und einer Küste im Norden.massif"),
+                PathBuf::from(r"C:\Users\Jürgen Müller\Documents\Minecraft Karten\Überlebensinsel Version 2 (final).massif"),
+                PathBuf::from(r"\\NAS\maps\server spawn.world"),
+                dir.join("a folder.massif"),
+                dir.join("not there.massif"),
+                PathBuf::from("x.massif"),
+                PathBuf::from(format!("{}.massif", "Ä".repeat(300))),
+            ],
+        ];
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            crate::i18n::set_language(crate::i18n::Language::German);
+            for recent in lists {
+                for (size, ppp) in [(vec2(960.0, 640.0), 1.5), (vec2(1280.0, 720.0), 1.25), (vec2(1366.0, 768.0), 1.0), (vec2(1920.0, 1080.0), 1.0)] {
+                    let mut home = Home::new(massif_core::Registry::vanilla());
+                    home.in_frame = false;
+                    let recent = recent.clone();
+                    let mut h = egui_kittest::Harness::builder()
+                        .with_size(size)
+                        .with_pixels_per_point(ppp)
+                        .with_accessibility_check(false)
+                        .build_ui_state(move |ui, home: &mut Home| {
+                            crate::theme::install(ui.ctx());
+                            home.ui(ui, &recent, None);
+                        }, home);
+                    h.run_steps(3);
+                }
+            }
+            let _ = done.send(());
+        });
+        let drawn = finished.recv_timeout(std::time::Duration::from_secs(60));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(drawn.is_ok(), "a frame of the home screen did not end");
+    }
+
+    /// The home screen's first frame waits on no work of rayon's global
+    /// pool, which slow loads may hold: see the notes above `BusyPool`; the
+    /// ages of the recent maps come later too.
     #[test]
     fn the_first_frame_waits_on_nothing() {
         let mut home = Home::new(massif_core::Registry::vanilla());
