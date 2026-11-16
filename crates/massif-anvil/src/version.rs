@@ -784,6 +784,11 @@ mod tests {
         assert_eq!(v("1.20.4").block("minecraft:short_grass"), ("minecraft:short_grass", true));
         assert_eq!(v("1.21.4").block("minecraft:bush"), ("minecraft:short_grass", false));
         assert_eq!(v("1.19.2").block("minecraft:bush"), ("minecraft:grass", false));
+        // A mod's blocks are written by their own names; before 1.13,
+        // where blocks are numbered, they are stone.
+        assert_eq!(v("1.21.4").block("conquest:old_red_bricks"), ("conquest:old_red_bricks", true));
+        assert_eq!(v("1.12.2").numbered_known("conquest:old_red_bricks"), None);
+        assert_eq!(v("1.12.2").numbered("conquest:old_red_bricks"), (1, 0));
         assert_eq!(v("1.12.2").numbered("minecraft:podzol"), (3, 2));
         assert_eq!(v("1.12.2").numbered("minecraft:deepslate"), (1, 0));
         assert_eq!(v("1.12.2").numbered("minecraft:moss_block"), (2, 0));

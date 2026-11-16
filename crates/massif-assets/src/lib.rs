@@ -175,7 +175,8 @@ impl Category {
     }
 
     fn of(id: &str) -> Self {
-        let n = id.trim_start_matches("minecraft:");
+        // A mod's blocks are sorted by their names as the game's are.
+        let n = id.rsplit(':').next().unwrap_or(id);
         let has = |s: &str| n.contains(s);
         const COLORS: [&str; 16] = [
             "white", "orange", "magenta", "light_blue", "yellow", "lime", "pink", "gray", "light_gray", "cyan", "purple", "blue", "brown",
@@ -275,6 +276,28 @@ pub struct Catalogue {
     /// Sorted by id.
     pub blocks: Vec<Block>,
     pub textures: HashMap<String, Arc<Texture>>,
+    /// The mods whose blocks were read beside the game's.
+    pub mods: Vec<ModInfo>,
+    /// Mod jars that could not be read, and why: their blocks are left out.
+    pub skipped: Vec<(PathBuf, String)>,
+}
+
+/// A mod read beside the game: Conquest Reforged, Chipped, Macaw's…
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModInfo {
+    /// Its name, as its jar gives it (`mods.toml`, `fabric.mod.json`), or
+    /// the jar's file name.
+    pub name: String,
+    pub path: PathBuf,
+    /// The namespaces of its blocks (`conquest`), sorted.
+    pub namespaces: Vec<String>,
+    /// How many blocks it adds.
+    pub blocks: usize,
+}
+
+/// The namespace of a block id: `conquest` of `conquest:old_bricks`.
+pub fn namespace(id: &str) -> &str {
+    id.split_once(':').map_or("minecraft", |(ns, _)| ns)
 }
 
 impl Catalogue {
@@ -288,9 +311,15 @@ impl Catalogue {
     }
 }
 
-/// `grass_block` → `Grass Block`.
+/// `grass_block` → `Grass Block`, `conquest:old_red_bricks` → `Old Red
+/// Bricks`.
 fn display_name(id: &str) -> String {
-    id.trim_start_matches("minecraft:")
+    id.rsplit(':')
+        .next()
+        .unwrap_or(id)
+        .rsplit('/')
+        .next()
+        .unwrap_or(id)
         .split('_')
         .map(|w| {
             let mut c = w.chars();
@@ -303,10 +332,46 @@ fn display_name(id: &str) -> String {
         .join(" ")
 }
 
-/// The texture key of a model reference (`minecraft:block/stone` →
-/// `block/stone`).
+/// The key of a model or texture reference: the game's without their
+/// namespace (`minecraft:block/stone` → `block/stone`, as `block/stone`),
+/// a mod's with it (`conquest:block/old_bricks`).
 fn key(path: &str) -> String {
     path.trim_start_matches("minecraft:").to_owned()
+}
+
+/// The key of a file of a jar under `assets/<namespace>/<kind>/`, without
+/// its extension: `assets/conquest/models/block/x.json` → `conquest:block/x`,
+/// the game's without its namespace. `None` for another file.
+fn asset_key(name: &str, kind: &str, ext: &str) -> Option<String> {
+    let rest = name.strip_prefix("assets/")?;
+    let (ns, rest) = rest.split_once('/')?;
+    let path = rest.strip_prefix(kind)?.strip_prefix('/')?.strip_suffix(ext)?;
+    if ns.is_empty() || path.is_empty() {
+        return None;
+    }
+    Some(if ns == "minecraft" { path.to_owned() } else { format!("{ns}:{path}") })
+}
+
+/// A mod's name as its jar gives it: `displayName` of `mods.toml` (Forge,
+/// NeoForge) or `name` of `fabric.mod.json` (Fabric, Quilt).
+fn mod_name(archive: &zip::Archive) -> Option<String> {
+    for toml in ["META-INF/neoforge.mods.toml", "META-INF/mods.toml"] {
+        if let Some(Ok(bytes)) = archive.read(toml) {
+            let text = String::from_utf8_lossy(&bytes);
+            for line in text.lines() {
+                let line = line.trim();
+                if let Some(v) = line.strip_prefix("displayName").map(str::trim).and_then(|v| v.strip_prefix('=')) {
+                    let v = v.trim().trim_matches('"').trim();
+                    if !v.is_empty() && !v.contains("${") {
+                        return Some(v.to_owned());
+                    }
+                }
+            }
+        }
+    }
+    let bytes = archive.read("fabric.mod.json")?.ok()?;
+    let v: Value = serde_json::from_slice(&bytes).ok()?;
+    v.get("name").and_then(Value::as_str).filter(|n| !n.is_empty()).map(str::to_owned)
 }
 
 struct Models {
@@ -409,7 +474,7 @@ fn first_model(state: &Value) -> Option<String> {
 
 /// How the game tints a block's tinted faces.
 fn tint_of(id: &str) -> Tint {
-    let n = id.trim_start_matches("minecraft:");
+    let n = id.rsplit(':').next().unwrap_or(id);
     match n {
         "spruce_leaves" => Tint::Fixed([0x61, 0x99, 0x61]),
         "birch_leaves" => Tint::Fixed([0x80, 0xa7, 0x55]),
@@ -424,35 +489,75 @@ fn tint_of(id: &str) -> Tint {
 
 /// Read every block of a client jar.
 pub fn load(path: &Path, version: &str) -> Result<Catalogue, AssetError> {
+    load_with_mods(path, version, &[])
+}
+
+/// Read every block of a client jar, and of the mods' jars beside it
+/// (Forge, NeoForge, Fabric or Quilt alike: their `assets/<namespace>/`).
+/// A mod's models may build on the game's, and its blocks keep their own
+/// ids (`conquest:old_bricks`), which the export writes as they are. A mod
+/// jar that does not read is left out and named in `skipped`.
+pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Catalogue, AssetError> {
     let archive = zip::Archive::open(path)?;
-    const STATES: &str = "assets/minecraft/blockstates/";
-    const MODELS: &str = "assets/minecraft/models/";
-    const TEXTURES: &str = "assets/minecraft/textures/";
-    let names: Vec<String> = archive.names().map(str::to_owned).collect();
-    let json = |name: &str| -> Option<Value> { serde_json::from_slice(&archive.read(name)?.ok()?).ok() };
-    let models = Models {
-        raw: names
-            .iter()
-            .filter(|n| n.starts_with(MODELS) && n.ends_with(".json"))
-            .filter_map(|n| Some((n[MODELS.len()..n.len() - 5].to_owned(), json(n)?)))
-            .collect(),
+    let mut archives = vec![(archive, None)];
+    let mut skipped = Vec::new();
+    for m in mods {
+        match zip::Archive::open(m) {
+            Ok(a) => archives.push((a, Some(m.clone()))),
+            Err(e) => skipped.push((m.clone(), e.to_string())),
+        }
+    }
+    let json = |a: &zip::Archive, name: &str| -> Option<Value> { serde_json::from_slice(&a.read(name)?.ok()?).ok() };
+    let mut raw_models = HashMap::new();
+    // The block ids and their states, and which archive gave them.
+    let mut state_map: HashMap<String, (Value, usize)> = HashMap::new();
+    let mut png: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut mod_infos = Vec::new();
+    for (k, (a, mod_path)) in archives.iter().enumerate() {
+        let names: Vec<String> = a.names().map(str::to_owned).collect();
+        let mut added = 0;
+        let mut namespaces = std::collections::BTreeSet::new();
+        for n in &names {
+            if let Some(key) = asset_key(n, "models", ".json") {
+                if let Some(v) = json(a, n) {
+                    raw_models.insert(key, v);
+                }
+            } else if let Some(key) = asset_key(n, "blockstates", ".json") {
+                let id = if key.contains(':') { key } else { format!("minecraft:{key}") };
+                if let Some(v) = json(a, n) {
+                    if k > 0 {
+                        namespaces.insert(namespace(&id).to_owned());
+                        added += 1;
+                    }
+                    state_map.insert(id, (v, k));
+                }
+            } else if let Some(key) = asset_key(n, "textures", ".png") {
+                // Block textures (`block/`, `blocks/` in older mods), and the
+                // sky's clouds and sun (`environment/clouds`, `environment/sun`).
+                let path = key.rsplit(':').next().unwrap_or(&key);
+                let sky = key == "environment/clouds" || key == "environment/sun";
+                if (path.starts_with("block/") || path.starts_with("blocks/") || path.contains("/block/") || sky)
+                    && let Some(Ok(bytes)) = a.read(n)
+                {
+                    png.push((key, bytes));
+                }
+            }
+        }
+        if let Some(p) = mod_path {
+            let name = mod_name(a).unwrap_or_else(|| p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
+            mod_infos.push(ModInfo { name, path: p.clone(), namespaces: namespaces.into_iter().collect(), blocks: added });
+        }
+    }
+    let models = Models { raw: raw_models };
+    let states: Vec<(String, Value)> = {
+        let mut v: Vec<(String, Value)> = state_map.into_iter().map(|(id, (state, _))| (id, state)).collect();
+        v.sort_by(|a, b| a.0.cmp(&b.0));
+        v
     };
-    let states: Vec<(String, Value)> = names
-        .iter()
-        .filter(|n| n.starts_with(STATES) && n.ends_with(".json"))
-        .filter_map(|n| Some((format!("minecraft:{}", &n[STATES.len()..n.len() - 5]), json(n)?)))
-        .collect();
     if states.is_empty() {
         return Err(AssetError::NoBlocks);
     }
-    // Textures: the first frame of every block texture, decoded in parallel,
-    // and the sky's clouds and sun (`environment/clouds`, `environment/sun`).
-    let sky = |n: &str| n.ends_with("/environment/clouds.png") || n.ends_with("/environment/sun.png");
-    let png: Vec<(String, Vec<u8>)> = names
-        .iter()
-        .filter(|n| n.starts_with(TEXTURES) && (n.contains("/block/") || sky(n)) && n.ends_with(".png"))
-        .filter_map(|n| Some((n[TEXTURES.len()..n.len() - 4].to_owned(), archive.read(n)?.ok()?)))
-        .collect();
+    // Textures: the first frame of every block texture, decoded in parallel.
     let textures: HashMap<String, Arc<Texture>> = png
         .into_par_iter()
         .filter_map(|(k, bytes)| {
@@ -519,6 +624,8 @@ pub fn load(path: &Path, version: &str) -> Result<Catalogue, AssetError> {
         source: path.to_owned(),
         blocks,
         textures,
+        mods: mod_infos,
+        skipped,
     })
 }
 
@@ -767,6 +874,68 @@ mod tests {
         assert_eq!(grass.top_tint, Tint::Grass);
         // Grey tinted by the plains grass colour.
         assert_eq!(grass.color, [0x91 * 200 / 255, 0xbd * 200 / 255, 0x59 * 200 / 255].map(|v| v as u8));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A mod beside the game, as Conquest Reforged is made: its block states
+    /// and models under its own namespace, a model built on the game's
+    /// `cube_all`, its textures, its name in `mods.toml`. Its blocks keep
+    /// their ids and are drawn with their textures; a jar that is not one is
+    /// left out, the game's blocks still read.
+    #[test]
+    fn mods_add_their_blocks() {
+        let png = |rgb: [u8; 3]| {
+            let mut out = Vec::new();
+            let img = image::RgbaImage::from_pixel(16, 16, image::Rgba([rgb[0], rgb[1], rgb[2], 255]));
+            img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
+            out
+        };
+        let (grey, red) = (png([120, 120, 120]), png([180, 40, 40]));
+        let game: Vec<(&str, &[u8], bool)> = vec![
+            ("assets/minecraft/blockstates/stone.json", br#"{"variants":{"":{"model":"minecraft:block/stone"}}}"#, true),
+            ("assets/minecraft/models/block/cube.json", br##"{"elements":[{"from":[0,0,0],"to":[16,16,16],"faces":{"up":{"texture":"#up"},"north":{"texture":"#north"},"down":{"texture":"#down"}}}]}"##, true),
+            ("assets/minecraft/models/block/cube_all.json", br##"{"parent":"block/cube","textures":{"particle":"#all","up":"#all","north":"#all","down":"#all"}}"##, true),
+            ("assets/minecraft/models/block/stone.json", br#"{"parent":"minecraft:block/cube_all","textures":{"all":"minecraft:block/stone"}}"#, true),
+            ("assets/minecraft/textures/block/stone.png", &grey, false),
+        ];
+        let conquest: Vec<(&str, &[u8], bool)> = vec![
+            ("META-INF/mods.toml", b"modLoader=\"javafml\"\n[[mods]]\nmodId=\"conquest\"\ndisplayName=\"Conquest Reforged\"\n", true),
+            ("assets/conquest/blockstates/old_red_bricks.json", br#"{"variants":{"":{"model":"conquest:block/old_red_bricks"}}}"#, true),
+            ("assets/conquest/models/block/old_red_bricks.json", br#"{"parent":"minecraft:block/cube_all","textures":{"all":"conquest:block/old_red_bricks"}}"#, true),
+            ("assets/conquest/textures/block/old_red_bricks.png", &red, false),
+            // A block of its own namespace whose model is missing still lists.
+            ("assets/conquest/blockstates/thatch_slab.json", br#"{"variants":{"type=bottom":{"model":"conquest:block/thatch_slab"}}}"#, true),
+        ];
+        let dir = std::env::temp_dir().join(format!("massif-assets-mods-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (game_jar, mod_jar, broken) = (dir.join("1.21.jar"), dir.join("conquest-reforged.jar"), dir.join("broken.jar"));
+        std::fs::write(&game_jar, zip::tests_support::tiny_zip(&game)).unwrap();
+        std::fs::write(&mod_jar, zip::tests_support::tiny_zip(&conquest)).unwrap();
+        std::fs::write(&broken, b"not a jar").unwrap();
+        let cat = load_with_mods(&game_jar, "1.21", &[mod_jar.clone(), broken.clone()]).unwrap();
+        let bricks = cat.block("conquest:old_red_bricks").unwrap();
+        assert_eq!(bricks.name, "Old Red Bricks");
+        assert!(bricks.full_cube, "built on the game's cube_all");
+        assert_eq!(bricks.top.as_deref(), Some("conquest:block/old_red_bricks"));
+        assert_eq!(bricks.color, [180, 40, 40]);
+        assert_eq!(bricks.category, Category::Building);
+        assert!(cat.block("conquest:thatch_slab").is_some());
+        assert_eq!(cat.block("minecraft:stone").unwrap().color, [120, 120, 120]);
+        assert_eq!(cat.mods.len(), 1);
+        assert_eq!(cat.mods[0].name, "Conquest Reforged");
+        assert_eq!(cat.mods[0].namespaces, ["conquest"]);
+        assert_eq!(cat.mods[0].blocks, 2);
+        assert_eq!(cat.skipped.len(), 1);
+        assert_eq!(cat.skipped[0].0, broken);
+        assert_eq!(namespace("conquest:old_red_bricks"), "conquest");
+        assert_eq!(namespace("stone"), "minecraft");
+        // The game alone has none of them.
+        assert!(load(&game_jar, "1.21").unwrap().block("conquest:old_red_bricks").is_none());
+        // A terrain of a mod's block keeps its id, for the export.
+        let mut reg = Registry::vanilla();
+        let t = block_terrain(&mut reg, bricks);
+        let top = reg.terrain(t).strata[0].blocks[0].0;
+        assert_eq!(reg.block(top).state, "conquest:old_red_bricks");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -2545,7 +2545,7 @@ pub fn terrain_icon(ui: &mut Ui, rect: Rect, reg: &Registry, terrain: u16, block
 }
 
 /// Every block of the game, with its real textures: click one to paint it.
-pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary, jar: &mut Option<std::path::PathBuf>) -> Option<String> {
+pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary, jar: &mut Option<std::path::PathBuf>, mods: &mut Vec<std::path::PathBuf>) -> Option<String> {
     use massif_assets::Category;
     let pal = Palette::of(ui);
     let ctx = ui.ctx().clone();
@@ -2566,7 +2566,7 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                     let selected = current.as_ref().is_some_and(|(_, p)| *p == j.path);
                     if ui.selectable_label(selected, tr!("Minecraft {version}", version = j.version)).on_hover_text(j.path.display().to_string()).clicked() {
                         *jar = Some(j.path.clone());
-                        blocks.load(&ctx, jar.clone());
+                        blocks.load(&ctx, jar.clone(), mods.clone());
                     }
                 }
                 if blocks.jars.is_empty() {
@@ -2580,12 +2580,49 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
             && let Some(path) = rfd::FileDialog::new().set_title(tr!("Choose the Minecraft jar")).add_filter(tr!("Minecraft"), &["jar"]).pick_file()
         {
             *jar = Some(path);
-            blocks.load(&ctx, jar.clone());
+            blocks.load(&ctx, jar.clone(), mods.clone());
         }
         if blocks.is_loading() {
             crate::loader::loader(ui, 16.0);
         }
     });
+    // The mods whose blocks are painted with too, each a chip that takes it
+    // out; their jars, chosen from the mods folder of an instance.
+    let mut reload = false;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
+        ui.label(RichText::new(tr!("Mods")).color(pal.weak));
+        let read = blocks.catalogue.as_ref().map(|c| c.mods.clone()).unwrap_or_default();
+        for path in mods.clone() {
+            let info = read.iter().find(|m| m.path == path);
+            let name = info.map_or_else(|| path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(), |m| m.name.clone());
+            let tip = match info {
+                Some(m) => trn!("{n} block · {path}", "{n} blocks · {path}", n = m.blocks, path = path.display()),
+                None => path.display().to_string(),
+            };
+            let chip = egui::Button::new(RichText::new(format!("{name}  {}", theme::glyph(Icon::X))).size(11.5)).corner_radius(theme::PILL);
+            if ui.add(chip).on_hover_text(tip).clicked() {
+                mods.retain(|p| *p != path);
+                reload = true;
+            }
+        }
+        if ui
+            .small_button(theme::with_icon(Icon::Plus, tr!("Add mods…")))
+            .on_hover_text(tr!("The jars of mods with blocks (Conquest Reforged, Chipped, Macaw's…), from the mods folder of your instance: their blocks are painted and exported like the game's"))
+            .clicked()
+            && let Some(files) = rfd::FileDialog::new().set_title(tr!("Choose mod jars")).add_filter(tr!("Mods"), &["jar"]).pick_files()
+        {
+            for f in files {
+                if !mods.contains(&f) {
+                    mods.push(f);
+                    reload = true;
+                }
+            }
+        }
+    });
+    if reload {
+        blocks.load(&ctx, jar.clone(), mods.clone());
+    }
     hint(
         ui,
         tr!("Your game's real blocks. Click one to paint with it."),
@@ -2594,6 +2631,10 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
         ui.label(RichText::new(e).color(pal.danger).size(11.5));
     }
     let Some(cat) = blocks.catalogue.clone() else { return feedback };
+    for (path, why) in &cat.skipped {
+        let file = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        ui.label(RichText::new(tr!("{file} could not be read: {why}", file, why)).color(pal.danger).size(11.5));
+    }
 
     ui.add_space(4.0);
     ui.horizontal(|ui| {
@@ -2609,18 +2650,37 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     let reg = &doc.world.registry;
     let current = massif_assets::terrain_block(reg, &cat, TerrainId(tools.terrain)).map(|b| b.id.clone());
     let mut picked: Option<&massif_assets::Block> = None;
-    for category in Category::ALL {
-        let list: Vec<&massif_assets::Block> = cat
-            .blocks
-            .iter()
-            .filter(|b| b.category == category && (blocks.all || b.full_cube))
-            .filter(|b| needle.is_empty() || b.name.to_lowercase().contains(&needle) || b.id.contains(&needle))
-            .collect();
-        if list.is_empty() {
-            continue;
+    // The game's blocks first, then each mod's, by category.
+    let of_mods: Vec<&str> = cat.mods.iter().flat_map(|m| m.namespaces.iter().map(String::as_str)).filter(|ns| *ns != "minecraft").collect();
+    let mut sources: Vec<(Option<&str>, Vec<&str>)> = vec![(None, Vec::new())];
+    sources.extend(cat.mods.iter().filter(|m| m.blocks > 0).map(|m| (Some(m.name.as_str()), m.namespaces.iter().map(String::as_str).filter(|ns| *ns != "minecraft").collect())));
+    let mut sections: Vec<(String, Vec<&massif_assets::Block>)> = Vec::new();
+    for (source, spaces) in &sources {
+        for category in Category::ALL {
+            let list: Vec<&massif_assets::Block> = cat
+                .blocks
+                .iter()
+                .filter(|b| {
+                    let ns = massif_assets::namespace(&b.id);
+                    if source.is_none() { !of_mods.contains(&ns) } else { spaces.contains(&ns) }
+                })
+                .filter(|b| b.category == category && (blocks.all || b.full_cube))
+                .filter(|b| needle.is_empty() || b.name.to_lowercase().contains(&needle) || b.id.contains(&needle) || source.is_some_and(|s| s.to_lowercase().contains(&needle)))
+                .collect();
+            if list.is_empty() {
+                continue;
+            }
+            let category = crate::i18n::tr_name(category.label()).to_uppercase();
+            let title = match source {
+                Some(name) => format!("{}  ·  {category}  ·  {}", name.to_uppercase(), list.len()),
+                None => format!("{category}  ·  {}", list.len()),
+            };
+            sections.push((title, list));
         }
+    }
+    for (title, list) in sections {
         ui.add_space(6.0);
-        ui.label(RichText::new(format!("{}  ·  {}", crate::i18n::tr_name(category.label()).to_uppercase(), list.len())).size(10.5).bold().color(pal.weak));
+        ui.label(RichText::new(title).size(10.5).bold().color(pal.weak));
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
             for block in list {

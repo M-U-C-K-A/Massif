@@ -50,6 +50,9 @@ struct Settings {
     /// The Minecraft client jar the real blocks are read from; the newest
     /// one found when unset.
     minecraft_jar: Option<PathBuf>,
+    /// The jars of the mods whose blocks are painted with too (Conquest
+    /// Reforged and the like).
+    mod_jars: Vec<PathBuf>,
     /// The accent colour: what is chosen, the main buttons, the art of the
     /// home screen.
     accent: [u8; 3],
@@ -138,6 +141,7 @@ impl Default for Settings {
             solo: false,
             light: crate::map_render::DEFAULT_LIGHT,
             minecraft_jar: None,
+            mod_jars: Vec::new(),
             accent: theme::DEFAULT_ACCENT,
             sounds: crate::sounds::SoundLevel::Essential,
             volume: 0.6,
@@ -511,7 +515,7 @@ impl MassifApp {
         app.menus_in_menu_bar = crate::menubar::NATIVE;
         app.brushes = BrushLibrary::installed();
         app.brushes.load_in_background(&cc.egui_ctx);
-        app.blocks.load(&cc.egui_ctx, app.settings.minecraft_jar.clone());
+        app.blocks.load(&cc.egui_ctx, app.settings.minecraft_jar.clone(), app.settings.mod_jars.clone());
         // What a run before left unsaved, offered first.
         if let Some(dir) = crate::autosave::default_dir() {
             app.autosave = crate::autosave::Autosave::open(dir);
@@ -3065,7 +3069,7 @@ impl MassifApp {
             EditorKind::Blocks => {
                 let mut feedback = None;
                 scrolled(&mut cui, &mut |ui| {
-                    feedback = panels::blocks_panel(ui, &mut self.tools, &mut self.doc, &mut self.blocks, &mut self.settings.minecraft_jar);
+                    feedback = panels::blocks_panel(ui, &mut self.tools, &mut self.doc, &mut self.blocks, &mut self.settings.minecraft_jar, &mut self.settings.mod_jars);
                 });
                 if feedback.is_some() {
                     self.feedback = feedback;
@@ -5895,7 +5899,7 @@ mod tests {
             h.state_mut().dialog = None;
         }
         if !massif_assets::find_jars().is_empty() {
-            h.state_mut().blocks.load(&ctx, None);
+            h.state_mut().blocks.load(&ctx, None, Vec::new());
             let started = std::time::Instant::now();
             while h.state().blocks.catalogue.is_none() {
                 assert!(started.elapsed().as_secs() < 60, "the blocks did not load: {:?}", h.state().blocks.error);
@@ -9937,6 +9941,51 @@ mod tests {
         assert_eq!(h.state().doc.dimension().levels.len(), levels, "the same levels");
     }
 
+    /// A mod's blocks in the Blocks panel: in sections of their own named
+    /// after the mod, beside the game's, a chip for the mod; painted, the
+    /// terrain keeps the mod's block id for the export. Renders with
+    /// MASSIF_SNAPSHOT_DIR, when a Minecraft jar is installed.
+    #[test]
+    fn mod_blocks_show_and_paint() {
+        use egui_kittest::kittest::Queryable;
+        if massif_assets::find_jars().is_empty() {
+            eprintln!("no Minecraft installation: skipping");
+            return;
+        }
+        let mut h = harness(ThemeChoice::Light);
+        let ctx = h.ctx.clone();
+        let jar = PathBuf::from("/mods/conquest-reforged.jar");
+        h.state_mut().settings.mod_jars = vec![jar.clone()];
+        h.state_mut().blocks.load(&ctx, None, Vec::new());
+        h.state_mut().layout.active = 2;
+        let started = std::time::Instant::now();
+        while h.state().blocks.catalogue.is_none() {
+            assert!(started.elapsed().as_secs() < 60, "the blocks did not load: {:?}", h.state().blocks.error);
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        // The game's catalogue with a mod's blocks, as a mod jar gives them.
+        let mut cat = (*h.state().blocks.catalogue.clone().unwrap()).clone();
+        let stone = cat.block("minecraft:stone_bricks").unwrap().clone();
+        for (id, name, color) in [("conquest:old_red_bricks", "Old Red Bricks", [170, 60, 50]), ("conquest:mossy_flagstones", "Mossy Flagstones", [110, 120, 90])] {
+            cat.blocks.push(massif_assets::Block { id: id.to_owned(), name: name.to_owned(), color, side_color: color, ..stone.clone() });
+        }
+        cat.blocks.sort_by(|a, b| a.id.cmp(&b.id));
+        cat.mods = vec![massif_assets::ModInfo { name: "Conquest Reforged".to_owned(), path: jar, namespaces: vec!["conquest".to_owned()], blocks: 2 }];
+        h.state_mut().blocks.catalogue = Some(std::sync::Arc::new(cat.clone()));
+        h.run_steps(5);
+        h.get_by_label_contains("CONQUEST REFORGED");
+        h.get_by_label_contains("Conquest Reforged");
+        let bricks = cat.block("conquest:old_red_bricks").unwrap().clone();
+        let app = h.state_mut();
+        let terrain = massif_assets::block_terrain(&mut app.doc.world.registry, &bricks);
+        let reg = &app.doc.world.registry;
+        assert_eq!(reg.block(reg.terrain(terrain).strata[0].blocks[0].0).state, "conquest:old_red_bricks");
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            h.render().unwrap().save(dir.join("blocks-mods.png")).unwrap();
+        }
+    }
+
     /// The game's real blocks: loaded from this computer's installation,
     /// shown with their textures, painted on the map. Runs with
     /// MASSIF_SNAPSHOT_DIR, when a Minecraft jar is installed.
@@ -9952,7 +10001,7 @@ mod tests {
         for (theme, name) in [(ThemeChoice::Dark, "blocks-dark.png"), (ThemeChoice::Light, "blocks-light.png")] {
             let mut h = harness(theme);
             let ctx = h.ctx.clone();
-            h.state_mut().blocks.load(&ctx, None);
+            h.state_mut().blocks.load(&ctx, None, Vec::new());
             h.state_mut().layout.active = 2; // Painting: terrain, blocks, biomes
             let started = std::time::Instant::now();
             while h.state().blocks.catalogue.is_none() {

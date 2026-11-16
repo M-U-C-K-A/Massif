@@ -123,6 +123,7 @@
  "Add greyscale images as brushes": "Añadir imágenes en escala de grises como pinceles",
  "Add level": "Añadir nivel",
  "Add matter": "Añadir materia",
+ "Add mods…": "Añadir mods…",
  "Add objects": "Añadir objetos",
  "Add objects…": "Añadir objetos…",
  "Add rock": "Añadir roca",
@@ -322,6 +323,7 @@
  "Choose a name your packs do not have.": "Elige un nombre que tus packs no tengan.",
  "Choose another height map": "Elegir otro mapa de alturas",
  "Choose its thickness and how high it floats in the settings.": "Su grosor y a qué altura flota se eligen en sus ajustes.",
+ "Choose mod jars": "Elegir los jar de los mods",
  "Choose the Minecraft jar": "Elegir el jar de Minecraft",
  "Choose the folder": "Elegir la carpeta",
  "Choose…": "Elegir…",
@@ -971,6 +973,7 @@
  "Mix colours": "Mezclar colores",
  "Mixes saved from Paint terrain ▸ Noise show here.": "Las mezclas guardadas desde Pintar terreno ▸ Ruido aparecen aquí.",
  "Mode": "Modo",
+ "Mods": "Mods",
  "Moisture far from any sea": "Humedad lejos de cualquier mar",
  "More shapes": "Más formas",
  "More than one floor": "Más de un piso",
@@ -1702,6 +1705,7 @@
  "The heights of a place on the Earth, ocean floors included, at the scale chosen: the ground, the sea and the automatic paint.": "Las alturas de un lugar de la Tierra, fondos marinos incluidos, a la escala elegida: el suelo, el mar y la pintura automática.",
  "The heights scaled around the sea level, then moved up or down.": "Las alturas escaladas alrededor del nivel del mar, y luego subidas o bajadas.",
  "The image could not be saved: {e}": "No se pudo guardar la imagen: {e}",
+ "The jars of mods with blocks (Conquest Reforged, Chipped, Macaw's…), from the mods folder of your instance: their blocks are painted and exported like the game's": "Los jar de mods con bloques (Conquest Reforged, Chipped, Macaw's…), de la carpeta mods de tu instancia: sus bloques se pintan y exportan como los del juego",
  "The keys and buttons: along the bottom of the view": "Las teclas y botones: a lo largo de la parte inferior de la vista",
  "The map and the 3D views stop where they are let go and go straight where they are sent; the home screen's picture and the tools' cards stay still.": "El mapa y las vistas 3D se detienen donde se sueltan y van directos adonde se envían; la imagen de la pantalla de inicio y las tarjetas de herramientas quedan quietas.",
  "The map as it is now, kept in its file under this name: to restore, open or compare later.": "El mapa tal como está, guardado en su archivo con este nombre: para restaurarlo, abrirlo o compararlo después.",
@@ -2034,6 +2038,7 @@
  "{e9:.2} billion": "{e9:.2} mil millones",
  "{f64:.0} MB": "{f64:.0} MB",
  "{f64:.1} MB": "{f64:.1} MB",
+ "{file} could not be read: {why}": "No se pudo leer {file}: {why}",
  "{glyph}  Convert to voxels": "{glyph}  Convertir en vóxeles",
  "{glyph}  Delete…": "{glyph}  Eliminar…",
  "{glyph}  Open as a copy": "{glyph}  Abrir como copia",
@@ -2102,6 +2107,10 @@
  "{n} blocks": {
   "one": "{n} bloque",
   "other": "{n} bloques"
+ },
+ "{n} blocks · {path}": {
+  "one": "{n} bloque · {path}",
+  "other": "{n} bloques · {path}"
  },
  "{n} columns changed over the whole map.": "{n} columnas cambiadas en todo el mapa.",
  "{n} columns higher now (up to {blocks})": "{n} columnas más altas ahora (hasta {blocks})",

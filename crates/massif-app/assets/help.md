@@ -123,6 +123,12 @@ Each change of the selection is a step to undo. The selection is saved in the ma
 ## Terrains and biomes
 **Paint** gives the ground a terrain: pick it in the Terrain palette. **Biome** paints biomes the same way: pick one in the Biomes palette. The right button paints back what the height calls for (terrains) or the automatic biome (biomes).
 
+## Blocks from mods
+
+- **Blocks ▸ Mods ▸ Add mods…** reads the jars of mods with blocks (Conquest Reforged, Chipped, Macaw's…) from the `mods` folder of your instance.
+- Their blocks show in sections named after each mod and paint like the game's; the export writes them by their own ids, for the game with the same mods.
+- Click a mod's chip to take it out.
+
 ## Automatic biomes and paint
 - **Auto biome** reads the land and gives it biomes: water, rivers and beaches, lowland, hills, mountains, peaks, cliffs, from its water, height, slope and ground. Sand at the water's edge is a beach; sand far from the water is a desert only where sand is all around, not a patch in a plain.
 - **Auto paint** paints the ground as its biome calls for: a terrain for its ground, one for its cliffs, one under its water.

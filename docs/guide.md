@@ -1081,6 +1081,15 @@ fraction of a second, every time Massif starts.
   dirt, as in the game; other blocks a few deep over the natural rock) and
   paints it. Clicking any other block (a flower, grass, a carpet, coral…)
   makes it a ground cover that grows it, and paints that.
+- **Mods** in the Blocks panel adds the blocks of mods: **Add mods…** reads
+  the jars chosen in the `mods` folder of an instance (Conquest Reforged,
+  Chipped, Macaw's and the like; Forge, NeoForge, Fabric or Quilt alike).
+  Each mod's blocks show in sections of their own, under its name, and
+  paint like the game's; the export writes them by their own ids
+  (`conquest:old_red_bricks`), so open the world with the same mods in the
+  game. A chip per mod takes it out again; the mods are remembered. Before
+  Minecraft 1.13, where blocks are numbered, a mod's block is written as
+  stone.
 
 ## 3D Sculpt
 

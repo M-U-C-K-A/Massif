@@ -123,6 +123,7 @@
  "Add greyscale images as brushes": "Graustufenbilder als Pinsel hinzufügen",
  "Add level": "Stufe hinzufügen",
  "Add matter": "Material auftragen",
+ "Add mods…": "Mods hinzufügen…",
  "Add objects": "Objekte hinzufügen",
  "Add objects…": "Objekte hinzufügen…",
  "Add rock": "Fels auftragen",
@@ -322,6 +323,7 @@
  "Choose a name your packs do not have.": "Wähle einen Namen, den deine Pakete nicht haben.",
  "Choose another height map": "Andere Höhenkarte wählen",
  "Choose its thickness and how high it floats in the settings.": "Dicke und Schwebehöhe stellst du in den Einstellungen ein.",
+ "Choose mod jars": "Mod-JARs wählen",
  "Choose the Minecraft jar": "Minecraft-JAR wählen",
  "Choose the folder": "Ordner wählen",
  "Choose…": "Wählen…",
@@ -971,6 +973,7 @@
  "Mix colours": "Farben mischen",
  "Mixes saved from Paint terrain ▸ Noise show here.": "Aus Gelände malen ▸ Rauschen gespeicherte Mischungen erscheinen hier.",
  "Mode": "Modus",
+ "Mods": "Mods",
  "Moisture far from any sea": "Feuchte fern von jedem Meer",
  "More shapes": "Weitere Formen",
  "More than one floor": "Mehr als eine Etage",
@@ -1702,6 +1705,7 @@
  "The heights of a place on the Earth, ocean floors included, at the scale chosen: the ground, the sea and the automatic paint.": "Die Höhen eines Orts auf der Erde, Meeresböden inklusive, im gewählten Maßstab: der Boden, das Meer und die automatische Bemalung.",
  "The heights scaled around the sea level, then moved up or down.": "Die Höhen um den Meeresspiegel skaliert, dann nach oben oder unten verschoben.",
  "The image could not be saved: {e}": "Das Bild konnte nicht gesichert werden: {e}",
+ "The jars of mods with blocks (Conquest Reforged, Chipped, Macaw's…), from the mods folder of your instance: their blocks are painted and exported like the game's": "Die JARs von Mods mit Blöcken (Conquest Reforged, Chipped, Macaw's…), aus dem mods-Ordner deiner Instanz: Ihre Blöcke werden wie die des Spiels gemalt und exportiert",
  "The keys and buttons: along the bottom of the view": "Die Tasten und Knöpfe: unten in der Ansicht",
  "The map and the 3D views stop where they are let go and go straight where they are sent; the home screen's picture and the tools' cards stay still.": "Die Karte und die 3D-Ansichten halten an, wo man sie loslässt, und springen direkt dorthin, wohin man sie schickt; das Bild des Startbildschirms und die Werkzeugkarten bleiben still.",
  "The map as it is now, kept in its file under this name: to restore, open or compare later.": "Die Karte, wie sie jetzt ist, unter diesem Namen in ihrer Datei gesichert: um sie später wiederherzustellen, zu öffnen oder zu vergleichen.",
@@ -2034,6 +2038,7 @@
  "{e9:.2} billion": "{e9:.2} Milliarden",
  "{f64:.0} MB": "{f64:.0} MB",
  "{f64:.1} MB": "{f64:.1} MB",
+ "{file} could not be read: {why}": "{file} konnte nicht gelesen werden: {why}",
  "{glyph}  Convert to voxels": "{glyph}  In Voxel umwandeln",
  "{glyph}  Delete…": "{glyph}  Löschen…",
  "{glyph}  Open as a copy": "{glyph}  Als Kopie öffnen",
@@ -2102,6 +2107,10 @@
  "{n} blocks": {
   "one": "{n} Block",
   "other": "{n} Blöcke"
+ },
+ "{n} blocks · {path}": {
+  "one": "{n} Block · {path}",
+  "other": "{n} Blöcke · {path}"
  },
  "{n} columns changed over the whole map.": "{n} Spalten auf der ganzen Karte geändert.",
  "{n} columns higher now (up to {blocks})": "{n} Spalten jetzt höher (bis zu {blocks})",

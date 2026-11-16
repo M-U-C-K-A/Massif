@@ -34,8 +34,9 @@ impl BlockLibrary {
         self.pending.is_some()
     }
 
-    /// Find the game's jars and read `jar` (or the newest) on another thread.
-    pub fn load(&mut self, ctx: &egui::Context, jar: Option<PathBuf>) {
+    /// Find the game's jars and read `jar` (or the newest) on another thread,
+    /// with the blocks of the mods' jars `mods` beside its own.
+    pub fn load(&mut self, ctx: &egui::Context, jar: Option<PathBuf>, mods: Vec<PathBuf>) {
         let (tx, rx) = channel();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
@@ -54,7 +55,7 @@ impl BlockLibrary {
             let result = match chosen {
                 // Its textures decoded in the threads kept for loads, not in
                 // the pool the interface draws with (see `in_loading_pool`).
-                Some(j) => crate::jobs::in_loading_pool(|| massif_assets::load(&j.path, &j.version)).map_err(|e| format!("{}: {e}", j.path.display())),
+                Some(j) => crate::jobs::in_loading_pool(|| massif_assets::load_with_mods(&j.path, &j.version, &mods)).map_err(|e| format!("{}: {e}", j.path.display())),
                 None => Err(tr!("No Minecraft installation was found. Choose the game's jar (versions/<version>/<version>.jar).").to_owned()),
             };
             let _ = tx.send((jars, result));
