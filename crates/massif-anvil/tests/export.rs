@@ -1166,3 +1166,40 @@ fn a_shared_pack_exports_as_the_original() {
     std::fs::remove_dir_all(&a).unwrap();
     std::fs::remove_dir_all(&b).unwrap();
 }
+
+/// Save points are not exported: the map with points of earlier states of
+/// it, one of them restored and undone, exports the same bytes as without.
+#[test]
+fn save_points_leave_the_export_unchanged() {
+    use massif_core::versions::SavePoint;
+    let mut world = build_world();
+    let plain = temp_dir("points-plain");
+    export(&world.snapshot(), &plain, &ExportOptions::default(), &Progress::default()).unwrap();
+
+    let mut with = world.clone();
+    let mut h = History::default();
+    let point = SavePoint::new(&mut with, "before", 1);
+    with.points.push(point);
+    h.begin("raise", 0);
+    ops::raise(&mut h.edit(&mut with, 0), &hard(20.0), 0.0, 0.0, 9.0, Surface::Top);
+    h.commit();
+    let point = SavePoint::new(&mut with, "after", 2);
+    with.points.push(point);
+    h.undo(&mut with);
+    let then = with.points[1].world.clone();
+    h.restore_point(&mut with, &then, "Restore");
+    h.undo(&mut with);
+    assert_eq!(with.points.len(), 2);
+    let dir = temp_dir("points-with");
+    export(&with.snapshot(), &dir, &ExportOptions::default(), &Progress::default()).unwrap();
+    let mut regions = 0;
+    for entry in std::fs::read_dir(plain.join("region")).unwrap() {
+        let name = entry.unwrap().file_name();
+        assert!(region_bytes(&plain.join("region").join(&name)) == region_bytes(&dir.join("region").join(&name)), "{name:?} differs");
+        regions += 1;
+    }
+    assert!(regions > 0);
+    assert_eq!(std::fs::read_dir(dir.join("region")).unwrap().count(), regions);
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&plain).unwrap();
+}

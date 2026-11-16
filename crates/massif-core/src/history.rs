@@ -29,6 +29,34 @@ struct Step {
     voxel_seen: HashSet<ChunkPos>,
     /// Pre-image of the selection, when the step changed it.
     selection: Option<Option<Arc<Selection>>>,
+    /// Pre-image of the whole map, for a save point put back: its settings,
+    /// blocks and dimensions (not its save points).
+    whole: Option<Box<Whole>>,
+}
+
+/// The map but its save points, as a step to undo keeps it.
+#[derive(Debug)]
+struct Whole {
+    meta: crate::world::WorldMeta,
+    registry: crate::registry::Registry,
+    dims: Vec<Dimension>,
+}
+
+impl Whole {
+    /// Put `self` in place in `world` and return what was there.
+    fn swap(self, world: &mut World) -> Whole {
+        let mut dims = self.dims;
+        for dim in &mut dims {
+            for level in &mut dim.levels {
+                level.mark_all_dirty();
+            }
+        }
+        Whole {
+            meta: std::mem::replace(&mut world.meta, self.meta),
+            registry: std::mem::replace(&mut world.registry, self.registry),
+            dims: std::mem::replace(&mut world.dims, dims),
+        }
+    }
 }
 
 impl Step {
@@ -42,11 +70,12 @@ impl Step {
             voxels: Vec::new(),
             voxel_seen: HashSet::new(),
             selection: None,
+            whole: None,
         }
     }
 
     fn is_empty(&self) -> bool {
-        self.tiles.is_empty() && self.structure.is_none() && self.voxels.is_empty() && self.selection.is_none()
+        self.tiles.is_empty() && self.structure.is_none() && self.voxels.is_empty() && self.selection.is_none() && self.whole.is_none()
     }
 }
 
@@ -165,6 +194,26 @@ impl History {
         self.commit()
     }
 
+    /// Put the map back as `point` holds it (its settings, blocks and
+    /// dimensions; the map keeps its name and its save points), as one step
+    /// to undo labelled `label`.
+    pub fn restore_point(&mut self, world: &mut World, point: &World, label: impl Into<String>) {
+        self.begin(label, 0);
+        let mut meta = point.meta.clone();
+        meta.name = world.meta.name.clone();
+        let whole = Whole {
+            meta,
+            registry: point.registry.clone(),
+            dims: point.dims.clone(),
+        };
+        // The map as it is, cold, to undo it.
+        let before = world.snapshot();
+        world.dims = before.dims;
+        let step = self.open.as_mut().expect("just begun");
+        step.whole = Some(Box::new(whole.swap(world)));
+        self.commit();
+    }
+
     pub fn clear(&mut self) {
         self.undo.clear();
         self.redo.clear();
@@ -175,6 +224,10 @@ impl History {
 /// Apply a step's pre-images and return the step that reverses it.
 fn swap(step: Step, world: &mut World) -> Step {
     let mut inverse = Step::new(step.label, step.dim);
+    if let Some(whole) = step.whole {
+        inverse.whole = Some(Box::new(whole.swap(world)));
+        return inverse;
+    }
     let Some(dim) = world.dims.get_mut(step.dim) else {
         return inverse;
     };

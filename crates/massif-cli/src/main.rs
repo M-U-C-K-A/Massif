@@ -169,6 +169,9 @@ fn cmd_info(args: Args) -> Res<()> {
             );
         }
     }
+    if !info.points.is_empty() {
+        println!("  save points {} ({} of tiles of their own): {}", info.points.len(), human(info.point_bytes), info.points.join(", "));
+    }
     Ok(())
 }
 

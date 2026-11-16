@@ -24,7 +24,7 @@ pub fn high_contrast(ctx: &egui::Context) -> bool {
     is_high(&ctx.style_of(Theme::Light).visuals)
 }
 
-fn is_high(v: &Visuals) -> bool {
+pub fn is_high(v: &Visuals) -> bool {
     v.selection.stroke.width > 1.5
 }
 

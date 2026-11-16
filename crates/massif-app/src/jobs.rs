@@ -16,6 +16,8 @@ use std::time::Instant;
 pub enum Outcome {
     /// A world to open in place of the current one.
     World { world: World, path: Option<PathBuf> },
+    /// A save point of the map, made on a copy of it (its picture drawn).
+    SavePoint(massif_core::versions::SavePoint),
     Saved {
         path: PathBuf,
         revision: u64,
@@ -101,6 +103,7 @@ pub enum JobKind {
     Save,
     Export,
     Auto,
+    SavePoint,
 }
 
 impl JobKind {
@@ -271,6 +274,15 @@ impl Job {
         Job::spawn(JobKind::Open, label, None, ctx, move || match massif_format::load(&backup.file) {
             Ok(world) => Outcome::Recovered { world, backup },
             Err(e) => Outcome::Failed(format!("Could not restore “{}”: {e}", backup.info.name)),
+        })
+    }
+
+    /// A save point named `name` of a cold copy of the map, its picture
+    /// drawn away from the frames.
+    pub fn save_point(ctx: &egui::Context, snapshot: World, name: String) -> Job {
+        let label = format!("Saving the point “{name}”");
+        Job::spawn(JobKind::SavePoint, label, None, ctx, move || {
+            Outcome::SavePoint(massif_core::versions::SavePoint::of(snapshot, name, massif_core::versions::now()))
         })
     }
 

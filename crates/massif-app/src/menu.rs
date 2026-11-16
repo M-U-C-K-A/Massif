@@ -25,6 +25,8 @@ pub enum Command {
     OpenRecent(PathBuf),
     Save,
     SaveAs,
+    /// Keep the map as it is now under a name (see `versions`).
+    SavePoint,
     ExportHeightMap,
     Export,
     Quit,
@@ -196,6 +198,7 @@ pub fn menus(state: &State) -> Vec<Menu> {
         Entry::Separator,
         item(Command::Save, Icon::Save, "Save", map),
         item(Command::SaveAs, Icon::Save, "Save As…", map),
+        tipped(Command::SavePoint, Icon::BookmarkPlus, "Save Point…", map, "Keep the map as it is now under a name, to come back to it or compare"),
         Entry::Separator,
         item(Command::ExportHeightMap, Icon::ImageDown, "Export Height Map…", map),
         item(Command::Export, Icon::Package, "Export to Minecraft…", map),
@@ -453,6 +456,7 @@ mod tests {
                 "Coast.massif",
                 "Save",
                 "Save As…",
+                "Save Point…",
                 "Export Height Map…",
                 "Export to Minecraft…",
                 "Import Pack…",
@@ -477,7 +481,7 @@ mod tests {
     fn what_can_be_used_when() {
         let recent = [PathBuf::from("/maps/Alps.massif")];
         let home = menus(&State { editor: false, ..state(&recent) });
-        for command in [Command::Save, Command::SaveAs, Command::Export, Command::ExportPack, Command::ExportHeightMap, Command::Undo, Command::Ores, Command::Analyse, Command::HomeScreen, Command::WholeMap(WholeOp::Rivers), Command::Caves, Command::RealTerrain] {
+        for command in [Command::Save, Command::SaveAs, Command::Export, Command::ExportPack, Command::ExportHeightMap, Command::Undo, Command::Ores, Command::Analyse, Command::HomeScreen, Command::WholeMap(WholeOp::Rivers), Command::Caves, Command::RealTerrain, Command::SavePoint] {
             assert!(!enabled(&home, &command), "{command:?} needs a map");
         }
         for command in [Command::NewWorld, Command::Open, Command::ImportWorld, Command::ImportPack, Command::FromRealPlace, Command::OpenRecent(recent[0].clone()), Command::Settings, Command::Help, Command::About, Command::Quit, Command::Theme(ThemeChoice::Light)] {

@@ -48,6 +48,7 @@ pub mod stamps;
 pub mod thumbnail;
 pub mod treepack;
 pub mod tile;
+pub mod versions;
 pub mod voxel;
 pub mod world;
 

@@ -42,6 +42,8 @@ pub enum EditorKind {
     RenderSettings,
     /// How Massif runs, live (with Settings ▸ Developer on).
     Developer,
+    /// The map's save points: to restore, open, compare.
+    Versions,
 }
 
 /// A section of the editors an area can show: its title and its editors.
@@ -54,7 +56,7 @@ impl EditorKind {
     pub const COLUMNS: [&'static [Section]; 4] = [
         &[
             ("View", &[EditorKind::Map, EditorKind::View3d, EditorKind::Sculpt3d]),
-            ("World", &[EditorKind::Info]),
+            ("World", &[EditorKind::Info, EditorKind::Versions]),
         ],
         &[(
             "Tools",
@@ -100,6 +102,7 @@ impl EditorKind {
             EditorKind::GraphProps => "The settings of the selected node",
             EditorKind::RenderSettings => "Sun, clouds and haze, and images saved from the viewport",
             EditorKind::Developer => "Frames, memory and processor, live",
+            EditorKind::Versions => "Save points of the map: restore, open or compare them",
         }
     }
 
@@ -126,6 +129,7 @@ impl EditorKind {
             EditorKind::GraphProps => "Node Properties",
             EditorKind::RenderSettings => "Render Settings",
             EditorKind::Developer => "Developer",
+            EditorKind::Versions => "Versions",
         }
     }
 
@@ -152,6 +156,7 @@ impl EditorKind {
             EditorKind::GraphProps => Icon::SlidersVertical,
             EditorKind::RenderSettings => Icon::Sun,
             EditorKind::Developer => Icon::Activity,
+            EditorKind::Versions => Icon::History,
         }
     }
 }

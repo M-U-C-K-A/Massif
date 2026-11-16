@@ -25,6 +25,10 @@
 //! │         i32 tile_x · i32 tile_z · u64 offset · u32 length · u32 CRC32C  │
 //! │ VOXL  zstd(sculpted 3D chunks of one dimension), per chunk:             │
 //! │         i32 x · i32 y · i32 z (in chunks) · 4096 densities (y, z, x)    │
+//! │ SELN  a dimension's selection                                           │
+//! │ VERS  zstd(JSON): the save points, oldest first (0.6.0 on)              │
+//! │ VIDX · VVOX · VSEL · VTHM: a save point's tile index of one level,      │
+//! │       sculpted chunks, selection and picture, as TIDX · VOXL · SELN     │
 //! │ THMB  a JPEG picture of the map, for file browsers (Finder, home)       │
 //! ├──────────────────────────── directory ──────────────────────────────────┤
 //! │ 32 bytes per section:                                                   │
@@ -40,14 +44,24 @@
 //!
 //! A tile frame is exactly the "cold" blob the editor keeps in memory, so
 //! saving copies bytes and opening a file decodes nothing.
+//!
+//! Save points live in the file, not beside it, so that they travel with a
+//! map copied, sent or backed up as one file. The map's own tiles and
+//! sections are written exactly as before them; a point's tile index points
+//! at the map's frame where the tile is the same (the same blob in memory,
+//! or the same bytes: same CRC32C, length and content), and only its other
+//! tiles add frames. Older versions read the map and skip the points'
+//! sections; saving from them drops the points.
 
 use massif_core::codec::{self, CodecError};
 use massif_core::level::{Blob, Level, LevelId, LevelKind};
 use massif_core::registry::Registry;
 use massif_core::world::{Dimension, DimensionKind, World, WorldMeta};
+use massif_core::versions::SavePoint;
 use massif_core::{Tile, TilePos};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::Path;
 
@@ -68,6 +82,14 @@ const KIND_SELECTION: [u8; 4] = *b"SELN";
 /// A picture of the map: the Finder's Quick Look extension shows it as the
 /// file's icon (see `tools/macos/thumbnails`).
 pub const KIND_THUMBNAIL: [u8; 4] = *b"THMB";
+/// Save points (0.6.0 on; older versions skip them): their list, and for
+/// each the tile index of a level, its sculpted chunks, its selection and
+/// its picture. Their tiles lie with the map's, each distinct one once.
+const KIND_POINTS: [u8; 4] = *b"VERS";
+const KIND_POINT_INDEX: [u8; 4] = *b"VIDX";
+const KIND_POINT_VOXELS: [u8; 4] = *b"VVOX";
+const KIND_POINT_SELECTION: [u8; 4] = *b"VSEL";
+const KIND_POINT_THUMBNAIL: [u8; 4] = *b"VTHM";
 const FLAG_ZSTD: u32 = 1;
 
 #[derive(Debug, thiserror::Error)]
@@ -130,6 +152,23 @@ struct LevelDoc {
     index: u32,
 }
 
+/// A save point (see [`massif_core::versions`]), in the `VERS` section.
+#[derive(Debug, Serialize, Deserialize)]
+struct PointDoc {
+    name: String,
+    created: u64,
+    world: WorldMeta,
+    /// `None`: the map's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    registry: Option<Registry>,
+    /// Its levels' tile indices are `VIDX` sections, its sculpted chunks
+    /// `VVOX` and its selection `VSEL`.
+    dimensions: Vec<DimDoc>,
+    /// Id of the `VTHM` section holding its picture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thumbnail: Option<u32>,
+}
+
 fn yes() -> bool {
     true
 }
@@ -142,6 +181,8 @@ pub struct Stats {
     pub tiles: usize,
     /// Bytes taken by the tile frames.
     pub tile_bytes: u64,
+    /// Of those, the frames only save points use.
+    pub point_bytes: u64,
 }
 
 struct Section {
@@ -151,82 +192,171 @@ struct Section {
     payload: Vec<u8>,
 }
 
-/// Serialize a world. Every level must be frozen (see
-/// [`massif_core::World::snapshot`]); nothing is encoded here.
-pub fn write<W: Write>(world: &World, mut out: W) -> Result<Stats> {
-    // Lay the tile frames out right after the header.
-    let mut offset = HEADER_LEN as u64;
-    let mut frames: Vec<Blob> = Vec::new();
-    let mut sections: Vec<Section> = Vec::new();
-    let mut dims = Vec::new();
-    let mut next_section = 1u32;
+/// Lays out the tile frames and sections of a file.
+struct Layout {
+    /// Where the next frame goes.
+    offset: u64,
+    frames: Vec<Blob>,
+    sections: Vec<Section>,
+    next_section: u32,
+    /// The frames written, by allocation and by content (CRC32C and
+    /// length, the bytes compared on a match): a save point's tile already
+    /// written is not written again.
+    by_ptr: HashMap<usize, (u64, u32)>,
+    by_content: HashMap<(u32, u32), Vec<(u64, usize)>>,
+}
 
-    for dim in &world.dims {
-        let mut levels = Vec::new();
-        for level in &dim.levels {
-            let blobs = level.blobs().ok_or(FormatError::NotFrozen)?;
-            let crcs: Vec<u32> = blobs.par_iter().map(|(_, b)| crc32c::crc32c(b)).collect();
-            let mut index = Vec::with_capacity(blobs.len() * TILE_ENTRY_LEN);
-            for ((pos, blob), crc) in blobs.into_iter().zip(crcs) {
-                let len = u32::try_from(blob.len())
-                    .map_err(|_| FormatError::Corrupt("tile frame over 4 GiB".into()))?;
-                index.extend_from_slice(&pos.x.to_le_bytes());
-                index.extend_from_slice(&pos.z.to_le_bytes());
-                index.extend_from_slice(&offset.to_le_bytes());
-                index.extend_from_slice(&len.to_le_bytes());
-                index.extend_from_slice(&crc.to_le_bytes());
-                offset += len as u64;
-                frames.push(blob);
+/// The address of a blob's bytes, to know a shared tile without reading it.
+fn ptr(blob: &Blob) -> usize {
+    blob.as_ptr() as usize
+}
+
+impl Layout {
+    fn section(&mut self, kind: [u8; 4], flags: u32, payload: Vec<u8>) -> u32 {
+        let id = self.next_section;
+        self.next_section += 1;
+        self.sections.push(Section { kind, id, flags, payload });
+        id
+    }
+
+    /// The dimensions of `world`, their frames and sections. With `share`,
+    /// a tile already written is pointed at instead of written again, and
+    /// the sections are of the kinds older versions skip (a save point's).
+    fn dims(&mut self, world: &World, share: bool) -> Result<Vec<DimDoc>> {
+        let (index_kind, voxel_kind, selection_kind) = if share {
+            (KIND_POINT_INDEX, KIND_POINT_VOXELS, KIND_POINT_SELECTION)
+        } else {
+            (KIND_TILE_INDEX, KIND_VOXELS, KIND_SELECTION)
+        };
+        let mut dims = Vec::new();
+        for dim in &world.dims {
+            let mut levels = Vec::new();
+            for level in &dim.levels {
+                let blobs = level.blobs().ok_or(FormatError::NotFrozen)?;
+                // A save point's tiles are mostly the map's own: only those
+                // not met yet need their checksum.
+                let crcs: Vec<Option<(u64, u32)>> = if share {
+                    blobs.par_iter().map(|(_, b)| self.by_ptr.get(&ptr(b)).copied()).collect()
+                } else {
+                    vec![None; blobs.len()]
+                };
+                let fresh: Vec<u32> = blobs
+                    .par_iter()
+                    .zip(&crcs)
+                    .map(|((_, b), known)| if known.is_some() { 0 } else { crc32c::crc32c(b) })
+                    .collect();
+                let mut index = Vec::with_capacity(blobs.len() * TILE_ENTRY_LEN);
+                for (((pos, blob), known), crc) in blobs.into_iter().zip(crcs).zip(fresh) {
+                    let len = u32::try_from(blob.len()).map_err(|_| FormatError::Corrupt("tile frame over 4 GiB".into()))?;
+                    let (at, crc) = match known {
+                        Some(found) => found,
+                        None => {
+                            let same = if share {
+                                self.by_content
+                                    .get(&(crc, len))
+                                    .and_then(|found| found.iter().find(|&&(_, k)| self.frames[k][..] == blob[..]))
+                                    .map(|&(at, _)| at)
+                            } else {
+                                None
+                            };
+                            match same {
+                                Some(at) => (at, crc),
+                                None => {
+                                    let at = self.offset;
+                                    self.offset += len as u64;
+                                    self.by_ptr.insert(ptr(&blob), (at, crc));
+                                    self.by_content.entry((crc, len)).or_default().push((at, self.frames.len()));
+                                    self.frames.push(blob);
+                                    (at, crc)
+                                }
+                            }
+                        }
+                    };
+                    index.extend_from_slice(&pos.x.to_le_bytes());
+                    index.extend_from_slice(&pos.z.to_le_bytes());
+                    index.extend_from_slice(&at.to_le_bytes());
+                    index.extend_from_slice(&len.to_le_bytes());
+                    index.extend_from_slice(&crc.to_le_bytes());
+                }
+                let id = self.section(index_kind, FLAG_ZSTD, codec::zstd_compress(&index));
+                levels.push(LevelDoc {
+                    id: level.id.0,
+                    name: level.name.clone(),
+                    kind: level.kind,
+                    visible: level.visible,
+                    index: id,
+                });
             }
-            let id = next_section;
-            next_section += 1;
-            sections.push(Section {
-                kind: KIND_TILE_INDEX,
-                id,
-                flags: FLAG_ZSTD,
-                payload: codec::zstd_compress(&index),
-            });
-            levels.push(LevelDoc {
-                id: level.id.0,
-                name: level.name.clone(),
-                kind: level.kind,
-                visible: level.visible,
-                index: id,
+            // The layer is zstd'd already: stored as is.
+            let voxels = (!dim.voxels.is_empty()).then(|| self.section(voxel_kind, 0, dim.voxels.encode()));
+            let selection = dim
+                .selection
+                .as_ref()
+                .filter(|s| !s.is_empty())
+                .map(|s| self.section(selection_kind, 0, s.encode()));
+            dims.push(DimDoc {
+                kind: dim.kind,
+                min_y: dim.min_y,
+                max_y: dim.max_y,
+                levels,
+                voxels,
+                selection,
             });
         }
-        let voxels = (!dim.voxels.is_empty()).then(|| {
-            let id = next_section;
-            next_section += 1;
-            // The layer is zstd'd already: stored as is.
-            sections.push(Section {
-                kind: KIND_VOXELS,
-                id,
-                flags: 0,
-                payload: dim.voxels.encode(),
-            });
-            id
-        });
-        let selection = dim.selection.as_ref().filter(|s| !s.is_empty()).map(|s| {
-            let id = next_section;
-            next_section += 1;
-            sections.push(Section {
-                kind: KIND_SELECTION,
-                id,
-                flags: 0,
-                payload: s.encode(),
-            });
-            id
-        });
-        dims.push(DimDoc {
-            kind: dim.kind,
-            min_y: dim.min_y,
-            max_y: dim.max_y,
-            levels,
-            voxels,
-            selection,
+        Ok(dims)
+    }
+}
+
+/// Serialize a world, with its save points. Every level must be frozen
+/// (see [`massif_core::World::snapshot`]); nothing is encoded here.
+///
+/// The map is written as before save points were: older versions read it
+/// and skip them. Each save point's tiles follow the map's, but only those
+/// not written already (by allocation or by content), so a point costs the
+/// tiles changed since it was made.
+pub fn write<W: Write>(world: &World, mut out: W) -> Result<Stats> {
+    // Lay the tile frames out right after the header.
+    let mut layout = Layout {
+        offset: HEADER_LEN as u64,
+        frames: Vec::new(),
+        sections: Vec::new(),
+        next_section: 1,
+        by_ptr: HashMap::new(),
+        by_content: HashMap::new(),
+    };
+    let dims = layout.dims(world, false)?;
+    let map_bytes = layout.offset - HEADER_LEN as u64;
+    let mut points = Vec::with_capacity(world.points.len());
+    for point in &world.points {
+        let dimensions = layout.dims(&point.world, true)?;
+        let thumbnail = point.thumbnail.as_ref().map(|jpeg| layout.section(KIND_POINT_THUMBNAIL, 0, jpeg.to_vec()));
+        points.push(PointDoc {
+            name: point.name.clone(),
+            created: point.created,
+            world: point.world.meta.clone(),
+            registry: (point.world.registry != world.registry).then(|| point.world.registry.clone()),
+            dimensions,
+            thumbnail,
         });
     }
-    let tile_bytes = offset - HEADER_LEN as u64;
+    let tile_bytes = layout.offset - HEADER_LEN as u64;
+    let Layout {
+        mut offset,
+        frames,
+        mut sections,
+        next_section,
+        ..
+    } = layout;
+    let mut next_section = next_section;
+    if !points.is_empty() {
+        sections.push(Section {
+            kind: KIND_POINTS,
+            id: next_section,
+            flags: FLAG_ZSTD,
+            payload: codec::zstd_compress(&serde_json::to_vec(&points)?),
+        });
+        next_section += 1;
+    }
 
     let meta = MetaDoc {
         format: "massif".into(),
@@ -292,6 +422,7 @@ pub fn write<W: Write>(world: &World, mut out: W) -> Result<Stats> {
         file_len,
         tiles: frames.len(),
         tile_bytes,
+        point_bytes: tile_bytes - map_bytes,
     })
 }
 
@@ -396,6 +527,9 @@ struct Parsed<'a> {
     voxels: Vec<(u32, Vec<u8>)>,
     /// Selections per `SELN` section id, still encoded.
     selections: Vec<(u32, Vec<u8>)>,
+    /// The save points, and their pictures per `VTHM` section id.
+    points: Vec<PointDoc>,
+    point_thumbnails: Vec<(u32, Vec<u8>)>,
 }
 
 impl Parsed<'_> {
@@ -460,6 +594,8 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>> {
     let mut indices = Vec::new();
     let mut voxels = Vec::new();
     let mut selections = Vec::new();
+    let mut points = Vec::new();
+    let mut point_thumbnails = Vec::new();
     for entry in directory.as_chunks::<SECTION_LEN>().0 {
         let kind: [u8; 4] = entry[..4].try_into().unwrap();
         let id = u32_at(entry, 4);
@@ -468,7 +604,7 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>> {
                 let json = section_payload(bytes, entry, "the metadata")?;
                 meta = Some(serde_json::from_slice::<MetaDoc>(&json)?);
             }
-            KIND_TILE_INDEX => {
+            KIND_TILE_INDEX | KIND_POINT_INDEX => {
                 let raw = section_payload(bytes, entry, "a tile index")?;
                 if raw.len() % TILE_ENTRY_LEN != 0 {
                     return corrupt("a tile index has a ragged length");
@@ -486,8 +622,13 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>> {
                 }
                 indices.push((id, entries));
             }
-            KIND_VOXELS => voxels.push((id, section_payload(bytes, entry, "the sculpted chunks")?)),
-            KIND_SELECTION => selections.push((id, section_payload(bytes, entry, "the selection")?)),
+            KIND_VOXELS | KIND_POINT_VOXELS => voxels.push((id, section_payload(bytes, entry, "the sculpted chunks")?)),
+            KIND_SELECTION | KIND_POINT_SELECTION => selections.push((id, section_payload(bytes, entry, "the selection")?)),
+            KIND_POINTS => {
+                let json = section_payload(bytes, entry, "the save points")?;
+                points = serde_json::from_slice::<Vec<PointDoc>>(&json)?;
+            }
+            KIND_POINT_THUMBNAIL => point_thumbnails.push((id, section_payload(bytes, entry, "a save point's picture")?)),
             _ => {} // a section from a newer version: ignore it
         }
     }
@@ -502,16 +643,21 @@ fn parse(bytes: &[u8]) -> Result<Parsed<'_>> {
         indices,
         voxels,
         selections,
+        points,
+        point_thumbnails,
     })
 }
 
-/// Deserialize a world from the bytes of a `.massif` file.
-///
-/// Every tile's checksum is verified; tiles stay compressed until used.
-pub fn read(bytes: &[u8]) -> Result<World> {
-    let parsed = parse(bytes)?;
-    let mut dims = Vec::with_capacity(parsed.meta.dimensions.len());
-    for dim in &parsed.meta.dimensions {
+/// The tiles read so far, by where they lie in the file: a tile a save
+/// point shares with the map, or with another point, is one blob in memory.
+type Frames = HashMap<u64, Blob>;
+
+/// The dimensions described by `docs`, their tiles read from `parsed`;
+/// with `keep`, the tiles are kept in `frames` for the save points to share.
+fn read_dims(parsed: &Parsed, docs: &[DimDoc], frames: &mut Frames, keep: bool) -> Result<Vec<Dimension>> {
+    let bytes = parsed.bytes;
+    let mut dims = Vec::with_capacity(docs.len());
+    for dim in docs {
         if dim.min_y >= dim.max_y {
             return corrupt("a dimension has no height");
         }
@@ -523,9 +669,15 @@ pub fn read(bytes: &[u8]) -> Result<World> {
         let mut levels = Vec::with_capacity(dim.levels.len());
         for doc in &dim.levels {
             let entries = parsed.index(doc.index)?;
-            let blobs: Vec<Result<(TilePos, Blob)>> = entries
+            let known: &Frames = frames;
+            let blobs: Vec<Result<(TilePos, u64, Blob, bool)>> = entries
                 .par_iter()
                 .map(|e| {
+                    if let Some(blob) = known.get(&e.offset)
+                        && blob.len() == e.len as usize
+                    {
+                        return Ok((e.pos, e.offset, blob.clone(), false));
+                    }
                     let frame = &bytes[e.offset as usize..e.offset as usize + e.len as usize];
                     if crc32c::crc32c(frame) != e.crc {
                         return corrupt(format!(
@@ -533,13 +685,16 @@ pub fn read(bytes: &[u8]) -> Result<World> {
                             e.pos.x, e.pos.z, doc.name
                         ));
                     }
-                    Ok((e.pos, Blob::from(frame)))
+                    Ok((e.pos, e.offset, Blob::from(frame), true))
                 })
                 .collect();
             let mut level = Level::new(LevelId(doc.id), doc.name.clone(), doc.kind);
             level.visible = doc.visible;
             for blob in blobs {
-                let (pos, blob) = blob?;
+                let (pos, at, blob, fresh) = blob?;
+                if fresh && keep {
+                    frames.entry(at).or_insert_with(|| blob.clone());
+                }
                 level.insert_blob(pos, blob);
             }
             level.take_dirty();
@@ -564,10 +719,41 @@ pub fn read(bytes: &[u8]) -> Result<World> {
     if dims.is_empty() {
         return corrupt("the world has no dimension");
     }
+    Ok(dims)
+}
+
+/// Deserialize a world from the bytes of a `.massif` file, with its save
+/// points.
+///
+/// Every tile's checksum is verified; tiles stay compressed until used.
+pub fn read(bytes: &[u8]) -> Result<World> {
+    let mut parsed = parse(bytes)?;
+    let mut frames = Frames::new();
+    let dims = read_dims(&parsed, &parsed.meta.dimensions, &mut frames, !parsed.points.is_empty())?;
+    let mut points = Vec::with_capacity(parsed.points.len());
+    for doc in std::mem::take(&mut parsed.points) {
+        let world = World {
+            meta: doc.world,
+            registry: doc.registry.unwrap_or_else(|| parsed.meta.registry.clone()),
+            dims: read_dims(&parsed, &doc.dimensions, &mut frames, true)?,
+            points: Vec::new(),
+        };
+        let thumbnail = doc
+            .thumbnail
+            .and_then(|id| parsed.point_thumbnails.iter().find(|(i, _)| *i == id))
+            .map(|(_, jpeg)| std::sync::Arc::<[u8]>::from(jpeg.as_slice()));
+        points.push(SavePoint {
+            name: doc.name,
+            created: doc.created,
+            world: std::sync::Arc::new(world),
+            thumbnail,
+        });
+    }
     Ok(World {
         meta: parsed.meta.world,
         registry: parsed.meta.registry,
         dims,
+        points,
     })
 }
 
@@ -627,6 +813,10 @@ pub struct FileInfo {
     pub terrains: usize,
     pub biomes: usize,
     pub dimensions: Vec<DimensionInfo>,
+    /// The save points' names, oldest first, and the bytes of the tiles
+    /// only they use.
+    pub points: Vec<String>,
+    pub point_bytes: u64,
 }
 
 /// Describe a file without decoding any tile.
@@ -661,8 +851,24 @@ pub fn inspect(bytes: &[u8]) -> Result<FileInfo> {
             sculpted_bytes,
         });
     }
+    let map: std::collections::HashSet<u64> = parsed
+        .meta
+        .dimensions
+        .iter()
+        .flat_map(|d| &d.levels)
+        .filter_map(|l| parsed.index(l.index).ok())
+        .flat_map(|entries| entries.iter().map(|e| e.offset))
+        .collect();
+    let mut only_points = HashMap::new();
+    for entries in parsed.points.iter().flat_map(|p| &p.dimensions).flat_map(|d| &d.levels).filter_map(|l| parsed.index(l.index).ok()) {
+        for e in entries.iter().filter(|e| !map.contains(&e.offset)) {
+            only_points.insert(e.offset, e.len as u64);
+        }
+    }
     Ok(FileInfo {
         version: parsed.version,
+        points: parsed.points.iter().map(|p| p.name.clone()).collect(),
+        point_bytes: only_points.values().sum(),
         generator: parsed.meta.generator.clone(),
         file_len: bytes.len() as u64,
         world: parsed.meta.world.clone(),
@@ -897,6 +1103,160 @@ mod tests {
         save(&back.snapshot(), &path).unwrap();
         assert!(load(&path).is_ok());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The file without the sections of the given kinds, as a reader that
+    /// does not know them sees it.
+    fn without_sections(bytes: &[u8], drop: &[[u8; 4]]) -> Vec<u8> {
+        let dir_off = u64_at(bytes, 0x10) as usize;
+        let dir_len = u32_at(bytes, 0x18) as usize;
+        let mut out = bytes[..dir_off].to_vec();
+        let mut dir = Vec::new();
+        for entry in bytes[dir_off..dir_off + dir_len].as_chunks::<SECTION_LEN>().0 {
+            if !drop.iter().any(|k| entry[..4] == k[..]) {
+                dir.extend_from_slice(entry);
+            }
+        }
+        let new_dir_off = out.len() as u64;
+        out.extend_from_slice(&dir);
+        let file_len = out.len() as u64;
+        out[0x10..0x18].copy_from_slice(&new_dir_off.to_le_bytes());
+        out[0x18..0x1C].copy_from_slice(&(dir.len() as u32).to_le_bytes());
+        out[0x1C..0x20].copy_from_slice(&crc32c::crc32c(&dir).to_le_bytes());
+        out[0x20..0x28].copy_from_slice(&file_len.to_le_bytes());
+        let crc = crc32c::crc32c(&out[..0x3C]);
+        out[0x3C..0x40].copy_from_slice(&crc.to_le_bytes());
+        out
+    }
+
+    /// Raise the land in a circle at (`x`, `z`), as one step.
+    fn raise_at(world: &mut World, hist: &mut History, x: f32, z: f32) {
+        let brush = Brush {
+            shape: BrushShape::Circle,
+            radius: 12.0,
+            profile: Profile::Dome,
+            strength: 1.0,
+            rotation: 0.0,
+            mask: None,
+            filter: None,
+        };
+        hist.begin("raise", 0);
+        ops::raise(&mut hist.edit(world, 0), &brush, x, z, 6.0, ops::Surface::Top);
+        hist.commit();
+    }
+
+    #[test]
+    fn save_points_round_trip_and_share_their_tiles() {
+        let mut world = sample_world();
+        let mut hist = History::default();
+        let plain = to_bytes(&mut world);
+
+        // A point of the map as it is costs no tile.
+        let first = SavePoint::new(&mut world, "before the rivers", 1_700_000_000);
+        assert!(first.thumbnail.as_ref().is_some_and(|j| j.starts_with(&[0xff, 0xd8])));
+        world.points.push(first);
+        let mut one = Vec::new();
+        let stats = write(&world.snapshot(), &mut one).unwrap();
+        assert_eq!(stats.point_bytes, 0);
+        assert_eq!(stats.tile_bytes, write(&{ let mut w = world.snapshot(); w.points.clear(); w }, Vec::new()).unwrap().tile_bytes);
+        assert!(one.len() - plain.len() < 20_000, "a point of an unchanged map takes {} bytes", one.len() - plain.len());
+
+        // The map changes in one corner: the point keeps the tiles it had
+        // there, and only those are added.
+        let (lo, hi) = world.dims[0].bounds().unwrap();
+        raise_at(&mut world, &mut hist, (hi.x * 128 + 64) as f32, (hi.z * 128 + 64) as f32);
+        let changed = SavePoint::changed_tiles(&world.snapshot(), &world.points[0].world, 0);
+        assert!(!changed.is_empty() && changed.len() < 6, "{changed:?}");
+        let old: u64 = changed.iter().map(|&p| world.points[0].world.dims[0].levels[0].blob_len(p) as u64).sum();
+        let point = SavePoint::new(&mut world, "version 2", 1_700_000_100);
+        world.points.push(point);
+        let mut two = Vec::new();
+        let stats = write(&world.snapshot(), &mut two).unwrap();
+        assert_eq!(stats.point_bytes, old, "only the tiles changed since the first point are added");
+        let info = inspect(&two).unwrap();
+        assert_eq!(info.points, ["before the rivers", "version 2"]);
+        assert_eq!(info.point_bytes, old);
+
+        // Read back: the map and both points, the shared tiles one blob.
+        let mut back = read(&two).unwrap();
+        assert_same(&mut world, &mut back);
+        assert_eq!(back.points.len(), 2);
+        for (a, b) in world.points.iter().zip(&back.points) {
+            assert_eq!((&a.name, a.created, &a.thumbnail), (&b.name, b.created, &b.thumbnail));
+            let (mut wa, mut wb) = ((*a.world).clone(), (*b.world).clone());
+            assert_same(&mut wa, &mut wb);
+        }
+        let far = lo;
+        assert!(!changed.contains(&far));
+        let map_tile = back.dims[0].levels[0].blob(far).unwrap();
+        for p in &back.points {
+            assert!(std::sync::Arc::ptr_eq(&p.world.dims[0].levels[0].blobs().unwrap().into_iter().find(|t| t.0 == far).unwrap().1, &map_tile));
+        }
+        assert_eq!(verify(&two).unwrap(), 2 * (6 + 4 + 2) + 6 + 4 + 2);
+        // Saving what was loaded gives the same file.
+        assert_eq!(to_bytes(&mut back), two);
+    }
+
+    #[test]
+    fn older_versions_read_the_map_and_skip_its_save_points() {
+        let mut world = sample_world();
+        let mut hist = History::default();
+        let plain = to_bytes(&mut world);
+        let point = SavePoint::new(&mut world, "first", 1);
+        world.points.push(point);
+        raise_at(&mut world, &mut hist, 40.0, 40.0);
+        let mut map_alone = world.snapshot();
+        map_alone.points.clear();
+        let alone = to_bytes(&mut map_alone);
+        let with_points = to_bytes(&mut world);
+        // Every section older versions know is the same, at the same place
+        // but for the frames the points add before them.
+        let old = [KIND_META, KIND_TILE_INDEX, KIND_VOXELS, KIND_SELECTION, KIND_THUMBNAIL];
+        let kinds = |bytes: &[u8]| -> Vec<[u8; 4]> {
+            let (at, len) = (u64_at(bytes, 0x10) as usize, u32_at(bytes, 0x18) as usize);
+            bytes[at..at + len].as_chunks::<SECTION_LEN>().0.iter().map(|e| e[..4].try_into().unwrap()).collect()
+        };
+        assert!(kinds(&alone).iter().all(|k| old.contains(k)));
+        assert!(kinds(&with_points).iter().any(|k| !old.contains(k)));
+        // A reader that knows none of the new sections reads the map as it is.
+        let seen_by_old = without_sections(&with_points, &[KIND_POINTS, KIND_POINT_INDEX, KIND_POINT_VOXELS, KIND_POINT_SELECTION, KIND_POINT_THUMBNAIL]);
+        let mut back = read(&seen_by_old).unwrap();
+        assert!(back.points.is_empty());
+        assert_same(&mut map_alone, &mut back);
+        // ... and this one too, the points' kinds unknown to it.
+        let mut back = read(&with_points).unwrap();
+        back.points.clear();
+        assert_same(&mut map_alone, &mut back);
+        // A file without points is written as before them.
+        assert!(kinds(&plain).iter().all(|k| old.contains(k)));
+    }
+
+    #[test]
+    fn a_save_point_put_back_is_one_step_to_undo() {
+        let mut world = sample_world();
+        let mut hist = History::default();
+        world.dims[0].levels.iter_mut().for_each(Level::freeze);
+        let mut before = world.snapshot();
+        let point = SavePoint::new(&mut world, "first", 1);
+        world.points.push(point);
+        raise_at(&mut world, &mut hist, 40.0, 40.0);
+        hist.begin("levels", 0);
+        hist.edit(&mut world, 0).structure().add_level("Late", LevelKind::Solid);
+        hist.commit();
+        world.meta.name = "Renamed".into();
+        let mut after = world.snapshot();
+        let point = world.points[0].world.clone();
+        hist.restore_point(&mut world, &point, "Restore “first”");
+        // The map is the point's, but keeps its name and its points.
+        before.meta.name = "Renamed".into();
+        before.points = world.points.clone();
+        assert_same(&mut before, &mut world);
+        assert_eq!(world.points.len(), 1);
+        assert_eq!(hist.undo_label(), Some("Restore “first”"));
+        assert_eq!(hist.undo(&mut world).as_deref(), Some("Restore “first”"));
+        assert_same(&mut after, &mut world);
+        hist.redo(&mut world);
+        assert_same(&mut before, &mut world);
     }
 
     #[test]

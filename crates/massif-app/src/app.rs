@@ -166,6 +166,9 @@ enum Pending {
     Recover,
     /// A new world from the relief of a real place.
     Real(Box<crate::real_terrain::RealJob>),
+    /// A save point of the map, opened as a map of its own: read-only, or
+    /// as a copy.
+    OpenPoint { world: std::sync::Arc<massif_core::World>, name: String, read_only: bool },
     Quit,
 }
 
@@ -253,6 +256,10 @@ enum Dialog {
     Caves(Box<crate::caves::CaveForm>),
     /// The relief of a real place: where, at what scale, how high.
     Real(Box<crate::real_terrain::RealForm>),
+    /// A save point to make (`None`) or rename (its index): its name.
+    PointName(Option<usize>, String),
+    /// A save point to delete, once sure.
+    DeletePoint(usize),
 }
 
 struct Status {
@@ -288,6 +295,8 @@ pub struct MassifApp {
     /// The place, scale and heights the relief of a real place was last
     /// made with (per run of the app).
     real: Option<crate::real_terrain::Remembered>,
+    /// The Versions panel: the save points' pictures and the comparison.
+    versions: crate::versions::VersionsUi,
     layout: Layout,
     tools: ToolState,
     settings: Settings,
@@ -660,6 +669,7 @@ impl MassifApp {
             next_generation: 1,
             caves: None,
             real: None,
+            versions: Default::default(),
             layout,
             tools,
             settings,
@@ -1226,6 +1236,53 @@ impl MassifApp {
     /// The ores the export lays, over a cold copy of the map.
     /// The dialog of the caves, with the settings they were last carved
     /// with (their range kept inside this map's heights).
+    /// What the Versions panel (or File ▸ Save Point…) asks for.
+    fn versions_action(&mut self, ctx: &egui::Context, action: crate::versions::Action) {
+        use crate::versions::Action;
+        match action {
+            Action::Make => {
+                if self.doc.read_only.is_some() {
+                    self.say(ctx, "This save point is open read-only: Save As… makes it a map of its own", true, None);
+                    return;
+                }
+                let n = self.doc.world.points.len() + 1;
+                self.dialog = Some(Dialog::PointName(None, format!("Version {n}")));
+            }
+            Action::Restore(index) => {
+                if self.doc.read_only.is_some() {
+                    return;
+                }
+                if let Some(name) = self.doc.restore_point(index) {
+                    self.map_cache.invalidate_all();
+                    self.view3d.invalidate_all();
+                    self.sculpt3d.invalidate_all();
+                    self.say(ctx, format!("Restored “{name}”: undo to take it back"), false, None);
+                }
+            }
+            Action::Open { index, read_only } => {
+                if let Some(p) = self.doc.world.points.get(index) {
+                    let pending = Pending::OpenPoint {
+                        world: p.world.clone(),
+                        name: p.name.clone(),
+                        read_only,
+                    };
+                    self.request(ctx, pending);
+                }
+            }
+            Action::Rename(index) => {
+                if let Some(p) = self.doc.world.points.get(index) {
+                    self.dialog = Some(Dialog::PointName(Some(index), p.name.clone()));
+                }
+            }
+            Action::Delete(index) => {
+                if index < self.doc.world.points.len() {
+                    self.dialog = Some(Dialog::DeletePoint(index));
+                }
+            }
+            Action::Compare(index) => self.versions.compare_with(&self.doc.world.points, index),
+        }
+    }
+
     fn open_caves(&mut self) {
         let dim = &self.doc.world.dims[self.doc.dim];
         let start = massif_core::caves::CaveSettings::for_dimension(dim, self.doc.world.meta.sea_level);
@@ -1353,6 +1410,20 @@ impl MassifApp {
                 let rules = self.tools.auto.clone();
                 self.jobs.push(Job::real(ctx, crate::tiles::TileStore::global(), *job, None, 0, rules, 0));
             }
+            Pending::OpenPoint { world, name, read_only } => {
+                let mut world = (*world).clone();
+                world.points.clear();
+                world.meta.name = format!("{} — {name}", self.doc.world.meta.name);
+                self.next_generation += 1;
+                self.doc = Document::new(world, None, self.next_generation);
+                if read_only {
+                    self.doc.read_only = Some(name.clone());
+                }
+                self.rename = None;
+                self.versions.compare = None;
+                let how = if read_only { "read-only" } else { "as a copy: save it to keep it" };
+                self.say(ctx, format!("Opened the save point “{name}” {how}"), false, None);
+            }
             Pending::Recover => {
                 if !self.autosave.found.is_empty() {
                     let b = self.autosave.found.remove(0);
@@ -1378,6 +1449,7 @@ impl MassifApp {
         if self.jobs.iter().any(|j| j.kind == jobs::JobKind::Save) {
             return true;
         }
+        let save_as = save_as || self.doc.read_only.is_some();
         let path = match (&self.doc.path, save_as) {
             (Some(p), false) => Some(p.clone()),
             _ => rfd::FileDialog::new()
@@ -1580,6 +1652,20 @@ impl MassifApp {
                         }
                     }
                 }
+                Outcome::SavePoint(point) => {
+                    if other_map {
+                        self.say(ctx, format!("The save point “{}” was dropped: {meanwhile}", point.name), true, None);
+                    } else {
+                        let name = point.name.clone();
+                        self.doc.world.points.push(point);
+                        self.doc.mark_changed();
+                        let msg = match &self.doc.path {
+                            Some(_) => format!("Saved the point “{name}”: it is kept in the file at the next save"),
+                            None => format!("Saved the point “{name}”: save the map to keep it"),
+                        };
+                        self.say(ctx, msg, false, None);
+                    }
+                }
                 Outcome::Recovered { world, backup } => {
                     self.next_generation += 1;
                     let name = world.meta.name.clone();
@@ -1599,6 +1685,7 @@ impl MassifApp {
                         self.after_save = None;
                     } else {
                         self.doc.mark_saved(revision, path.clone());
+                        self.doc.read_only = None;
                         self.autosave.saved(self.doc.generation, revision);
                     }
                     self.remember(path.clone());
@@ -2057,6 +2144,7 @@ impl MassifApp {
             Command::Caves => self.open_caves(),
             Command::RealTerrain => self.open_real(false),
             Command::FromRealPlace => self.open_real(true),
+            Command::SavePoint => self.versions_action(ctx, crate::versions::Action::Make),
             Command::Ores => self.open_ores(ctx),
             Command::Analyse => self.open_analysis(ctx),
             Command::Theme(choice) => self.settings.theme = choice,
@@ -2522,6 +2610,7 @@ impl MassifApp {
                 if cui.input(|i| i.pointer.hover_pos()).is_some_and(|p| content.contains(p)) {
                     self.active_map = Some(id);
                 }
+                let overlay = self.versions.overlay(cui.ctx(), &self.doc);
                 let view = self.maps.entry(id).or_default();
                 view.ui(
                     &mut cui,
@@ -2534,6 +2623,7 @@ impl MassifApp {
                         feedback: &mut self.feedback,
                         pan_key,
                         light: self.settings.light,
+                        overlay,
                     },
                 );
                 if self.map_center.is_none() {
@@ -2622,6 +2712,15 @@ impl MassifApp {
                     self.map_cache.invalidate_all();
                     self.view3d.invalidate_all();
                     self.sculpt3d.invalidate_all();
+                }
+            }
+            EditorKind::Versions => {
+                let busy = self.jobs.iter().any(|j| j.kind == jobs::JobKind::SavePoint);
+                let mut action = None;
+                scrolled(&mut cui, &mut |ui| action = self.versions.panel(ui, &self.doc, busy));
+                if let Some(action) = action {
+                    let ctx = cui.ctx().clone();
+                    self.versions_action(&ctx, action);
                 }
             }
             EditorKind::Info => {
@@ -2891,6 +2990,103 @@ impl MassifApp {
                     self.dialog = Some(Dialog::Analysis(view));
                 } else {
                     self.analysis = Some(view);
+                }
+            }
+            Dialog::PointName(index, mut name) => {
+                let mut done = None;
+                let response = modal(ctx, "save point").show(ctx, |ui| {
+                    ui.set_width(380.0);
+                    let pal = Palette::of(ui);
+                    let title = if index.is_some() { "Rename the save point" } else { "Save a point" };
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(theme::glyph(Icon::BookmarkPlus).to_string()).size(17.0).color(pal.accent));
+                        ui.label(RichText::new(title).bold().size(15.0));
+                    });
+                    if index.is_none() {
+                        ui.add(egui::Label::new(RichText::new("The map as it is now, kept in its file under this name: to restore, open or compare later.").color(pal.weak)).wrap());
+                    }
+                    ui.add_space(10.0);
+                    let edit = ui.add(egui::TextEdit::singleline(&mut name).hint_text("Before the rivers").desired_width(f32::INFINITY));
+                    if !edit.has_focus() && !ui.memory(|m| m.focused().is_some()) {
+                        edit.request_focus();
+                    }
+                    let ok = !name.trim().is_empty();
+                    if ok && edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        done = Some(true);
+                    }
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                            let label = if index.is_some() { "Rename" } else { "Save Point" };
+                            if ui.add_enabled(ok, theme::primary_button(ui, label)).clicked() {
+                                done = Some(true);
+                            }
+                            if ui.button("Cancel").clicked() {
+                                done = Some(false);
+                            }
+                        });
+                    });
+                });
+                let trimmed = name.trim().to_owned();
+                match done {
+                    Some(true) => {
+                        let name = trimmed;
+                        match index {
+                            Some(i) => {
+                                if let Some(p) = self.doc.world.points.get_mut(i)
+                                    && p.name != name
+                                {
+                                    p.name = name;
+                                    self.doc.mark_changed();
+                                }
+                            }
+                            None => {
+                                let snapshot = massif_core::versions::SavePoint::copy_of(&mut self.doc.world);
+                                self.jobs.push(Job::save_point(ctx, snapshot, name).on(self.doc.generation));
+                            }
+                        }
+                    }
+                    Some(false) => {}
+                    None => {
+                        if !response.should_close() {
+                            self.dialog = Some(Dialog::PointName(index, name));
+                        }
+                    }
+                }
+            }
+            Dialog::DeletePoint(index) => {
+                let mut choice = None;
+                let name = self.doc.world.points.get(index).map(|p| p.name.clone()).unwrap_or_default();
+                let response = modal(ctx, "delete point").show(ctx, |ui| {
+                    ui.set_width(380.0);
+                    ui.label(RichText::new(format!("Delete the save point “{name}”?")).bold().size(15.0));
+                    ui.add(egui::Label::new(RichText::new("It goes from the file at the next save, and cannot be brought back then.").color(Palette::of(ui).weak)).wrap());
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                            if ui.add(theme::primary_button(ui, "Delete")).clicked() {
+                                choice = Some(true);
+                            }
+                            if ui.button("Cancel").clicked() {
+                                choice = Some(false);
+                            }
+                        });
+                    });
+                });
+                match choice {
+                    Some(true) => {
+                        if index < self.doc.world.points.len() {
+                            self.doc.world.points.remove(index);
+                            self.doc.mark_changed();
+                            self.say(ctx, format!("Deleted the save point “{name}”"), false, None);
+                        }
+                    }
+                    Some(false) => {}
+                    None => {
+                        if !response.should_close() {
+                            self.dialog = Some(Dialog::DeletePoint(index));
+                        }
+                    }
                 }
             }
             Dialog::Caves(mut form) => {
@@ -3528,6 +3724,13 @@ impl MassifApp {
         crate::sounds::configure(self.settings.sounds, self.settings.volume);
         step("the work done in the background (opening, saving, exporting)");
         self.poll_jobs(&ctx);
+        // A save point open read-only keeps as it is.
+        if self.doc.take_back() {
+            self.map_cache.invalidate_all();
+            self.view3d.invalidate_all();
+            self.sculpt3d.invalidate_all();
+            self.say(&ctx, "This save point is open read-only: Save As… makes it a map of its own to change", true, None);
+        }
         let now = ctx.input(|i| i.time);
         self.apply_memory_limit(now);
         // Walking in 3D Sculpt held the mouse, and its view is gone.
@@ -9441,6 +9644,181 @@ mod tests {
         }
         h.run_steps(5);
         h.render().unwrap().save(dir.join("dialog-export-world.png")).unwrap();
+    }
+
+    /// Save points through the app: made from File ▸ Save Point…, listed
+    /// in the Versions panel, compared on the map, restored as one step to
+    /// undo, saved in the file, opened as a copy and read-only. With
+    /// MASSIF_SNAPSHOT_DIR, the panel and the dialog are saved.
+    #[test]
+    fn save_points_in_the_app() {
+        use crate::versions::Action;
+        use egui_kittest::kittest::Queryable;
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let mut h = harness(ThemeChoice::Dark);
+        let ctx = h.ctx.clone();
+        h.run_steps(5);
+        // The Versions panel where the tools' settings were.
+        let mut areas = Vec::new();
+        h.state().layout.current().root.areas(&mut areas);
+        let area = areas.iter().find(|a| a.1 != EditorKind::Map).expect("an area beside the map").0;
+        h.state_mut().layout.current_mut().root.set_editor(area, EditorKind::Versions);
+        h.run_steps(3);
+        let wait = |h: &mut egui_kittest::Harness<'static, MassifApp>| {
+            while !h.state().jobs.is_empty() {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                h.run_steps(1);
+            }
+            h.run_steps(2);
+        };
+        // A point made through its dialog.
+        h.state_mut().command(&ctx, crate::menu::Command::SavePoint);
+        h.run_steps(3);
+        if let Some(Dialog::PointName(None, name)) = &mut h.state_mut().dialog {
+            *name = "Before the rivers".into();
+        } else {
+            panic!("File ▸ Save Point… asks for a name");
+        }
+        h.run_steps(3);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("versions-dialog.png")).unwrap();
+        }
+        h.get_by_label("Save Point").click();
+        h.run_steps(2);
+        wait(&mut h);
+        assert_eq!(h.state().doc.world.points.len(), 1);
+        assert_eq!(h.state().doc.world.points[0].name, "Before the rivers");
+        assert!(h.state().doc.is_modified(), "a point is a change to save");
+
+        // The map changes, and a second point is made of it.
+        let brush = massif_core::Brush {
+            shape: massif_core::BrushShape::Circle,
+            radius: 60.0,
+            profile: massif_core::Profile::Dome,
+            strength: 1.0,
+            rotation: 0.0,
+            mask: None,
+            filter: None,
+        };
+        let raise = |app: &mut MassifApp| {
+            let doc = &mut app.doc;
+            doc.history.begin("Raise", 0);
+            massif_core::ops::raise(&mut doc.history.edit(&mut doc.world, 0), &brush, 300.0, 300.0, 30.0, massif_core::ops::Surface::Top);
+            doc.commit();
+            app.map_cache.invalidate_all();
+        };
+        raise(h.state_mut());
+        h.state_mut().versions_action(&ctx, Action::Make);
+        if let Some(Dialog::PointName(None, name)) = &mut h.state_mut().dialog {
+            *name = "Version 2".into();
+        }
+        h.run_steps(2);
+        h.get_by_label("Save Point").click();
+        h.run_steps(2);
+        wait(&mut h);
+        assert_eq!(h.state().doc.world.points.len(), 2);
+
+        // Compared with the first point: the raised land shows.
+        h.state_mut().versions_action(&ctx, Action::Compare(Some(0)));
+        for _ in 0..400 {
+            h.run_steps(1);
+            if h.state().versions.compare.as_ref().is_some_and(|c| c.diff.is_some()) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        h.run_steps(3);
+        let diff = h.state().versions.compare.as_ref().and_then(|c| c.diff.clone()).expect("the comparison is worked out");
+        assert!(diff.raised > 1000 && diff.lowered == 0, "{} raised, {} lowered", diff.raised, diff.lowered);
+        assert!(diff.most_up > 20.0, "{}", diff.most_up);
+        assert!(diff.tiles <= 9, "only the tiles under the brush: {}", diff.tiles);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("versions-panel-dark.png")).unwrap();
+            // The panel alone, tall enough for what the comparison found.
+            h.state_mut().layout.toggle_maximize(area);
+            h.run_steps(3);
+            h.render().unwrap().save(dir.join("versions-compare.png")).unwrap();
+            h.state_mut().layout.toggle_maximize(area);
+            h.run_steps(2);
+        }
+        // ... and with the second, the same as the map.
+        h.state_mut().versions_action(&ctx, Action::Compare(Some(1)));
+        for _ in 0..400 {
+            h.run_steps(1);
+            if h.state().versions.compare.as_ref().is_some_and(|c| c.diff.is_some()) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(h.state().versions.compare.as_ref().unwrap().diff.as_ref().unwrap().is_empty());
+        h.state_mut().versions_action(&ctx, Action::Compare(None));
+
+        // Restored: the map is the first point's; undone, it is back.
+        let tiles = |app: &mut MassifApp| -> Vec<(TilePos, massif_core::level::Blob)> { app.doc.world.snapshot().dims[0].levels[0].blobs().unwrap() };
+        let raised = tiles(h.state_mut());
+        h.state_mut().versions_action(&ctx, Action::Restore(0));
+        h.run_steps(2);
+        let first = h.state().doc.world.points[0].world.dims[0].levels[0].blobs().unwrap();
+        assert!(tiles(h.state_mut()) == first);
+        assert_eq!(h.state().doc.history.undo_label(), Some("Restore “Before the rivers”"));
+        h.state_mut().undo(&ctx);
+        assert!(tiles(h.state_mut()) == raised);
+        assert_eq!(h.state().doc.world.points.len(), 2, "restoring keeps the points");
+
+        // Renamed and saved: the file holds both points.
+        h.state_mut().versions_action(&ctx, Action::Rename(1));
+        if let Some(Dialog::PointName(Some(1), name)) = &mut h.state_mut().dialog {
+            *name = "After the hill".into();
+        }
+        h.run_steps(2);
+        h.get_by_label("Rename").click();
+        h.run_steps(2);
+        assert_eq!(h.state().doc.world.points[1].name, "After the hill");
+        let folder = std::env::temp_dir().join(format!("massif-points-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let file = folder.join("points.massif");
+        h.state_mut().doc.path = Some(file.clone());
+        h.state_mut().command(&ctx, crate::menu::Command::Save);
+        wait(&mut h);
+        assert!(!h.state().doc.is_modified());
+        let back = massif_format::load(&file).unwrap();
+        assert_eq!(back.points.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["Before the rivers", "After the hill"]);
+
+        // Opened as a copy: a map of its own, never saved, without points.
+        h.state_mut().versions_action(&ctx, Action::Open { index: 0, read_only: false });
+        h.run_steps(2);
+        assert!(h.state().doc.path.is_none() && h.state().doc.read_only.is_none());
+        assert!(h.state().doc.world.points.is_empty());
+        assert!(h.state().doc.world.meta.name.ends_with("— Before the rivers"));
+        assert!(tiles(h.state_mut()) == first);
+
+        // Read-only: what is changed is taken back.
+        h.state_mut().run(&ctx, Pending::Open(Some(file.clone())));
+        wait(&mut h);
+        assert_eq!(h.state().doc.world.points.len(), 2);
+        h.state_mut().layout.current_mut().root.set_editor(area, EditorKind::Versions);
+        h.state_mut().versions_action(&ctx, Action::Open { index: 1, read_only: true });
+        h.run_steps(3);
+        assert_eq!(h.state().doc.read_only.as_deref(), Some("After the hill"));
+        let before = tiles(h.state_mut());
+        raise(h.state_mut());
+        assert!(tiles(h.state_mut()) != before);
+        h.run_steps(2);
+        assert!(tiles(h.state_mut()) == before, "a map open read-only keeps as it is");
+        assert!(!h.state().doc.is_modified());
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("versions-read-only.png")).unwrap();
+        }
+        // Deleting a point (of the map reopened) asks first.
+        h.state_mut().run(&ctx, Pending::Open(Some(file.clone())));
+        wait(&mut h);
+        h.state_mut().versions_action(&ctx, Action::Delete(0));
+        h.run_steps(2);
+        h.get_by_label("Delete").click();
+        h.run_steps(2);
+        assert_eq!(h.state().doc.world.points.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["After the hill"]);
+        assert!(h.state().doc.is_modified());
+        std::fs::remove_dir_all(&folder).unwrap();
     }
 
     /// The Ground cover tool: a cover picked in its settings, painted on

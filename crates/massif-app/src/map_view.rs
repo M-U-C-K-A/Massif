@@ -281,6 +281,9 @@ pub struct MapInput<'a> {
     pub pan_key: bool,
     /// Direction of the light of the shading (see [`MapStyle::light`]).
     pub light: u8,
+    /// A picture over the map and its block coordinates (west, north, east,
+    /// south): where a save point compared differs (see `versions`).
+    pub overlay: Option<(egui::TextureHandle, [i32; 4])>,
 }
 
 impl MapView {
@@ -778,6 +781,7 @@ impl MapView {
             feedback,
             pan_key,
             light,
+            overlay,
         } = input;
 
         if self.fitted != Some(doc.generation) && canvas.width() > 10.0 {
@@ -1171,6 +1175,11 @@ impl MapView {
                         break;
                     }
                 }
+            }
+
+            if let Some((tex, r)) = &overlay {
+                let rect = Rect::from_min_max(self.to_screen(canvas, r[0] as f64, r[1] as f64), self.to_screen(canvas, r[2] as f64, r[3] as f64));
+                painter.image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             }
 
             // Map outline.

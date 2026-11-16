@@ -759,6 +759,7 @@ pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Re
         },
         registry: mapper.registry,
         dims,
+        points: Vec::new(),
     };
     debug_assert!(world.dims[0].levels[0].kind == LevelKind::Ground);
     Ok((world, report))

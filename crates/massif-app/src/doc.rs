@@ -170,6 +170,9 @@ pub struct Document {
     pub max_hot_tiles: usize,
     /// The heights of the map, read away from the frames.
     heights: HeightsJob,
+    /// The name of the save point this map is, opened read-only: changes
+    /// are taken back, and saving asks for a new file.
+    pub read_only: Option<String>,
 }
 
 impl Document {
@@ -186,6 +189,7 @@ impl Document {
             auto_base: std::sync::Mutex::new(None),
             max_hot_tiles: MAX_HOT_TILES,
             heights: HeightsJob::default(),
+            read_only: None,
         }
     }
 
@@ -262,7 +266,10 @@ impl Document {
 
     /// "World name · Surface", as shown in the title bar.
     pub fn title(&self) -> String {
-        format!("{} · {}", self.world.meta.name, self.dimension().kind.label())
+        match &self.read_only {
+            Some(point) => format!("{} · {point} (read-only)", self.world.meta.name),
+            None => format!("{} · {}", self.world.meta.name, self.dimension().kind.label()),
+        }
     }
 
     #[cfg(test)]
@@ -315,8 +322,32 @@ impl Document {
     }
 
     fn after_history(&mut self) {
+        self.dim = self.dim.min(self.world.dims.len() - 1);
         self.clamp_active_level();
         self.mark_changed();
+    }
+
+    /// Put the map back as save point `index` holds it, as one step to undo.
+    /// Returns its name.
+    pub fn restore_point(&mut self, index: usize) -> Option<String> {
+        let point = self.world.points.get(index)?;
+        let (name, then) = (point.name.clone(), point.world.clone());
+        self.history.restore_point(&mut self.world, &then, format!("Restore “{name}”"));
+        self.after_history();
+        Some(name)
+    }
+
+    /// Take back every change made to a map open read-only. Returns whether
+    /// there was one.
+    pub fn take_back(&mut self) -> bool {
+        if self.read_only.is_none() || self.history.is_recording() || !self.history.can_undo() {
+            return false;
+        }
+        while self.history.undo(&mut self.world).is_some() {}
+        self.history.clear();
+        self.after_history();
+        self.saved_revision = self.revision;
+        true
     }
 
     /// The selection of the dimension shown: the part of it the tools

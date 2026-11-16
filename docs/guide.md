@@ -219,6 +219,44 @@ At most 5 copies are kept, of at most 4 GB together, the oldest removed
 first; a copy that Massif running in another window is keeping is never
 removed.
 
+## Save points
+
+A save point keeps the map as it is now under a name — "before the rivers",
+"version 2" — to come back to it, open it or compare the map with it later.
+**File ▸ Save Point…**, or **Save point…** at the top of the **Versions**
+panel (under World in an area's list of editors), asks for its name.
+
+The Versions panel lists the map's points, the newest first, each with a
+small picture of it from above, its name and when it was made:
+
+- **Restore** puts the map back as it was then: its land, levels, sculpted
+  chunks, selection, blocks and settings (it keeps its name and its points).
+  It is one step to undo: ⌘Z brings back the map as it was before.
+- **Compare** draws over the 2D map where the map and the point differ: in
+  the accent colour where the land is higher or lower, the stronger the more
+  blocks; in grey where only its paint differs (terrain, biome, ground
+  cover, objects or water). Under the point, the panel counts the columns
+  higher, lower and painted differently, and the most the land rose and
+  sank. The comparison follows the map as you change it. **Stop comparing**
+  takes it off.
+- In a point's **…** menu, **Open as a copy** opens the point as a map of its own,
+  never saved, to change and save under another name; **Open read-only**
+  opens it to look at: any change is taken back at once, and **Save As…**
+  makes it a map of its own. Either closes the map open now, asking first
+  if it has changes to save. **Rename…** and **Delete…** do what they say.
+
+Save points are kept in the map's `.massif` file, so they go with it when
+the file is copied, sent or backed up, and autosave keeps them too. They
+take little room: a point shares every tile it has in common with the map
+and with the other points, so it costs only the tiles changed since it was
+made (128 × 128 blocks each, compressed): on a map of 8,192 blocks a side
+(a 50 MB file), thirty points with a change of a few hundred blocks between
+each added 4 MB, and saving took as long as without them. Making a point, renaming or
+deleting one is a change to save; deleting one takes its tiles out of the
+file at the next save. Versions of Massif before 0.6 open a file with save
+points as the map alone, and saving it from them drops the points. Save
+points are not exported.
+
 ## New worlds and export
 
 A new map (the home screen) takes a name, a size (width × depth, in

@@ -198,6 +198,9 @@ pub struct World {
     pub meta: WorldMeta,
     pub registry: Registry,
     pub dims: Vec<Dimension>,
+    /// Named copies of the map to go back to (see [`crate::versions`]),
+    /// oldest first.
+    pub points: Vec<crate::versions::SavePoint>,
 }
 
 impl World {
@@ -207,6 +210,7 @@ impl World {
             meta,
             registry: Registry::vanilla(),
             dims: vec![Dimension::new(DimensionKind::Overworld, -64, 320)],
+            points: Vec::new(),
         }
     }
 
@@ -216,6 +220,7 @@ impl World {
             meta: self.meta.clone(),
             registry: self.registry.clone(),
             dims: self.dims.iter_mut().map(Dimension::snapshot).collect(),
+            points: self.points.clone(),
         }
     }
 
@@ -228,6 +233,7 @@ impl World {
             meta: self.meta.clone(),
             registry: self.registry.clone(),
             dims: self.dims.iter().map(Dimension::copy_unfrozen).collect(),
+            points: self.points.clone(),
         }
     }
 }

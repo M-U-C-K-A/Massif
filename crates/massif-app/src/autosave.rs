@@ -527,6 +527,32 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A backup keeps the map's save points, and restoring it brings them
+    /// back with the map.
+    #[test]
+    fn a_backup_keeps_the_save_points() {
+        let dir = temp_dir("points");
+        let mut a = Autosave::open(dir.clone());
+        let mut doc = Document::new(small_world(), None, 1);
+        let point = massif_core::versions::SavePoint::new(&mut doc.world, "before", 5);
+        doc.world.points.push(point);
+        edit(&mut doc);
+        assert!(a.tick(&doc, true, Duration::ZERO, false).is_none());
+        a.finish();
+        let b = a.current().expect("a backup").clone();
+        let read = massif_format::load(&b.file).unwrap();
+        assert_eq!(read.points.len(), 1);
+        assert_eq!((read.points[0].name.as_str(), read.points[0].created), ("before", 5));
+        // The point is the map before the edit, the map the map after it.
+        let pos = doc.world.dims[0].levels[0].positions().next().unwrap();
+        let mut now = read.dims[0].levels[0].clone();
+        let mut then = read.points[0].world.dims[0].levels[0].clone();
+        assert_eq!(now.tile_mut(pos).unwrap().top.get(0), 77.0 + (doc.revision - 1) as f32);
+        assert_ne!(then.tile_mut(pos).unwrap().top.get(0), now.tile_mut(pos).unwrap().top.get(0));
+        a.close();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_crash_leaves_a_backup_the_next_start_finds() {
         let dir = temp_dir("crash");

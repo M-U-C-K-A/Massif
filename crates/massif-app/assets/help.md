@@ -30,6 +30,12 @@ The picture behind the home screen changes each time Massif opens, the ones not 
 - Should Massif close without saving (a crash, a forced quit, a power cut), the next start offers **Restore unsaved changes?**: the map's name and when its copy was taken. **Restore** opens it with changes to save; **Discard** deletes the copy; **Later** keeps it for the next start.
 - Saving the map, or closing it, removes its copy. At most 5 copies are kept.
 
+## Save points
+- **File ▸ Save Point…** keeps the map as it is now under a name, to come back to it. The **Versions** panel lists the points with a picture and their date.
+- **Restore** puts the map back as it was then, as one step to undo. **Compare** shows on the 2D map where the land is higher or lower (accent) or painted differently (grey).
+- In a point's **…** menu, **Open as a copy** opens it as a new map; **Open read-only** only shows it. **Rename…** and **Delete…** too.
+- The points are kept in the `.massif` file and share its unchanged tiles: a point costs only what changed since. Older versions open the file as the map alone.
+
 ## Survival check
 **Edit ▸ Analyse the map…** checks the whole map for a survival game, every block counted as the export writes it: the layers of the terrains, the rock and the bedrock under them, the water, what the covers grow and the objects. In red, what breaks survival: riches lying around (diamond blocks, ores at the surface, far more ore than Minecraft makes), bedrock above the floor, blocks no player can break, holes into the void, no wood. In amber, what is missing: ores (turned off, or no rock at their heights: **Set up the ores** opens Edit ▸ Ores), lava for a Nether portal, water, grass for animals, trees near the spawn. Then the way through a game, from wood to the Nether, what holds up, and **How to fix it**.
 - **Relief**: the heights players stand at, the steps between columns (walked, climbed, falls that hurt, falls that kill), the water, overhangs and caves.
