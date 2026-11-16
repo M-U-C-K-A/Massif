@@ -270,7 +270,11 @@ impl Autosave {
             return me;
         }
         let millis = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis());
-        me.session = format!("{millis}-{}", std::process::id());
+        // Two opened in the same millisecond by one process (the tests) are
+        // two sessions all the same.
+        static OPENED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = OPENED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        me.session = if n == 0 { format!("{millis}-{}", std::process::id()) } else { format!("{millis}-{}-{n}", std::process::id()) };
         let lock = File::create(dir.join(format!("{}.lock", me.session))).and_then(|f| f.try_lock().map(|_| f).map_err(std::io::Error::other));
         match lock {
             Ok(f) => me.lock = Some(f),
