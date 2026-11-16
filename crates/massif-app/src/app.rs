@@ -1106,7 +1106,7 @@ impl MassifApp {
         let keeps = vec![
             ("Decoded tiles", mb(hot_bytes as u64), format!("{hot} of {tiles}, at most {} a level", self.doc.max_hot_tiles)),
             ("Map, compressed", mb(cold_bytes as u64), String::new()),
-            ("Map view", mb(columns as u64), format!("{grids} tiles of columns, {chunks} images ({} on the graphics card)", mb(textures as u64))),
+            ("Map view", mb(columns as u64), format!("{grids} tiles of columns, {chunks} images ({} on the graphics card){}", mb(textures as u64), if self.map_cache.busy() { ", drawing" } else { "" })),
             ("3D views", mb(g3), format!("{t3} tiles on the graphics card")),
             ("Sculpted in 3D", mb(voxels as u64 * 4096), format!("{voxels} chunks of 16³")),
             ("Undo", format!("{} steps", self.doc.history.undo_count()), String::new()),
