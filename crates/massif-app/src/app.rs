@@ -2218,6 +2218,14 @@ impl MassifApp {
                 let _ = solo_changed; // the solo style is part of the cache key
             }
             EditorKind::Biomes => scrolled(&mut cui, &mut |ui| panels::biome_panel(ui, &mut self.tools, &self.doc.world.registry, &mut self.biome_search)),
+            EditorKind::Packs => {
+                let mut said = None;
+                let catalogue = self.blocks.catalogue.clone();
+                scrolled(&mut cui, &mut |ui| said = crate::packs::packs_panel(ui, &mut self.tools, &mut self.doc, catalogue.as_deref(), &mut self.layers_ui.search));
+                if said.is_some() {
+                    self.feedback = said;
+                }
+            }
             EditorKind::Layers => {
                 let mut said = None;
                 scrolled(&mut cui, &mut |ui| said = crate::layers::layers_panel(ui, &mut self.tools, &mut self.doc, &mut self.blocks, &mut self.layers_ui));
@@ -5121,7 +5129,7 @@ mod tests {
                 name: "Diamond Block".into(),
                 group: "Blocks".into(),
                 color: [98, 237, 228],
-                strata: vec![massif_core::registry::Stratum { blocks: vec![(diamond, 3), (ore, 1)], depth: (3, 5) }],
+                strata: vec![massif_core::registry::Stratum { blocks: vec![(diamond, 3), (ore, 1)], depth: (3, 5), mix: Default::default() }],
                 submerged_top: None,
                 biome_hint: None,
             });

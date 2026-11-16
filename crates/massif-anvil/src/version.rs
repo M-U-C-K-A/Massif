@@ -223,8 +223,11 @@ impl Target {
             let short = current.strip_prefix("minecraft:").unwrap_or(current);
             match NEWER_BLOCKS.iter().find(|b| b.0 == short) {
                 Some(&(_, since, older)) if self.data_version < since => {
+                    // Wood for wood and leaves for leaves keep their axis
+                    // and their persistence.
+                    let same = ["_log", "_leaves"].iter().any(|k| short.ends_with(k) && older.ends_with(k));
                     current = older;
-                    kept = false;
+                    kept &= same;
                 }
                 _ => break,
             }
@@ -327,6 +330,8 @@ const NEWER_BLOCKS: &[(&str, i32, &str)] = &[
     ("smooth_basalt", 2724, "minecraft:basalt"),
     ("moss_block", 2724, "minecraft:grass_block"),
     ("rooted_dirt", 2724, "minecraft:dirt"),
+    ("azalea_leaves", 2724, "minecraft:oak_leaves"),
+    ("flowering_azalea_leaves", 2724, "minecraft:oak_leaves"),
     ("powder_snow", 2724, "minecraft:snow_block"),
     ("moss_carpet", 2724, "minecraft:green_carpet"),
     ("azalea", 2724, "minecraft:oak_leaves"),
@@ -354,14 +359,20 @@ const NEWER_BLOCKS: &[(&str, i32, &str)] = &[
     ("sculk", 3105, "minecraft:black_concrete"),
     ("reinforced_deepslate", 3105, "minecraft:deepslate"),
     ("mangrove_propagule", 3105, "minecraft:oak_sapling"),
+    ("mangrove_log", 3105, "minecraft:oak_log"),
+    ("mangrove_leaves", 3105, "minecraft:oak_leaves"),
     // 1.19.4 and 1.20
     ("pink_petals", 3337, "minecraft:pink_tulip"),
+    ("cherry_log", 3337, "minecraft:birch_log"),
+    ("cherry_leaves", 3337, "minecraft:birch_leaves"),
     ("torchflower", 3463, "minecraft:dandelion"),
     ("pitcher_plant", 3463, "minecraft:rose_bush"),
     // 1.20.3: grass the plant took a new name.
     ("short_grass", 3698, "minecraft:grass"),
     // 1.21.4
     ("pale_moss_block", 4189, "minecraft:moss_block"),
+    ("pale_oak_log", 4189, "minecraft:dark_oak_log"),
+    ("pale_oak_leaves", 4189, "minecraft:dark_oak_leaves"),
     ("resin_block", 4189, "minecraft:orange_terracotta"),
     ("pale_moss_carpet", 4189, "minecraft:moss_carpet"),
     ("pale_hanging_moss", 4189, "minecraft:air"),
@@ -597,6 +608,13 @@ mod tests {
     fn later_blocks_fall_back_to_older_ones() {
         let v = |name: &str| Target::release(name).unwrap();
         assert_eq!(v("1.21.4").block("minecraft:deepslate"), ("minecraft:deepslate", true));
+        // The tree pack's woods: wood for wood, leaves for leaves, their
+        // axis and persistence kept.
+        assert_eq!(v("1.19.2").block("minecraft:cherry_leaves"), ("minecraft:birch_leaves", true));
+        assert_eq!(v("1.16.5").block("minecraft:mangrove_log"), ("minecraft:oak_log", true));
+        assert_eq!(v("1.21.1").block("minecraft:pale_oak_leaves"), ("minecraft:dark_oak_leaves", true));
+        assert_eq!(v("1.16.5").block("minecraft:flowering_azalea_leaves"), ("minecraft:oak_leaves", true));
+        assert_eq!(v("1.16.5").block("minecraft:azalea"), ("minecraft:oak_leaves", false));
         assert_eq!(v("1.16.5").block("minecraft:deepslate"), ("minecraft:stone", false));
         assert_eq!(v("1.16.5").block("minecraft:grass_block"), ("minecraft:grass_block", true));
         // Smooth basalt is basalt in 1.16, stone before.

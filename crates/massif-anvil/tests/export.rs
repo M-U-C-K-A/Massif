@@ -905,3 +905,82 @@ fn unusual_worlds_are_handled() {
     assert_eq!(reader.biome(0, top, 0), Biome::Plains);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A map dressed from the packs: cherry trees of the tree pack, a mix of
+/// rock in beds and a preset of flowers, exported for today's game and for
+/// 1.19.2, which has no cherry trees: there they are birches, their axis
+/// and their leaves' persistence kept.
+#[test]
+fn packs_are_exported() {
+    use massif_core::packs::{MATERIAL_MIXES, PLANT_PRESETS};
+    use massif_core::treepack::TreeKind;
+    let mut w = generate(&GenParams {
+        tiles_x: 4,
+        tiles_z: 2,
+        landform: Landform::Hills,
+        seed: 7,
+        ..GenParams::default()
+    });
+    let trees = TreeKind::Cherry.install(&mut w.registry);
+    let beds = MATERIAL_MIXES.iter().find(|m| m.name == "Grey cliff strata").unwrap().install(&mut w.registry);
+    let flowers = PLANT_PRESETS.iter().find(|p| p.name == "Tulip field").unwrap().install(&mut w.registry);
+    let mut h = History::default();
+    h.begin("packs", 0);
+    {
+        let mut e = h.edit(&mut w, 0);
+        ops::set_height(&mut e, &hard(60.0), 128.0, -40.0, 90.0, Surface::Top);
+        ops::paint_objects(&mut e, &hard(30.0), 128.0, -40.0, trees, 1);
+        ops::paint_cover(&mut e, &hard(30.0), 128.0, -40.0, flowers, 2);
+        ops::paint_terrain(&mut e, &hard(12.0), 180.0, -40.0, beds, 3);
+    }
+    h.commit();
+    let snapshot = w.snapshot();
+    let dim = &w.dims[0];
+    let mat = Materializer::new(&w.registry, w.meta.seed, dim.min_y);
+    let mut placements = Vec::new();
+    for pos in [TilePos::new(0, -1), TilePos::new(1, -1)] {
+        let stack = TileStack::new(dim, pos, true).unwrap();
+        placements.extend(massif_core::objects::tile_placements(&w.registry, &mat, w.meta.seed as u64, false, &stack, pos));
+    }
+    assert!(placements.len() >= 4, "{} trees", placements.len());
+    let rock: Vec<String> = MATERIAL_MIXES.iter().find(|m| m.name == "Grey cliff strata").unwrap().blocks.iter().map(|b| format!("minecraft:{}", b.0)).collect();
+    for (version, log, leaves) in [("1.21.11", "minecraft:cherry_log", "minecraft:cherry_leaves"), ("1.19.2", "minecraft:birch_log", "minecraft:birch_leaves")] {
+        let dir = temp_dir(&format!("packs-{version}"));
+        let options = ExportOptions {
+            target: Target::release(version).unwrap(),
+            ..ExportOptions::default()
+        };
+        export(&snapshot, &dir, &options, &Progress::default()).unwrap();
+        let mut r = Reader::new(&dir);
+        let mut leaves_seen = 0;
+        for p in &placements {
+            let def = &w.registry.objects[p.object as usize];
+            let [ax, _, az] = def.anchor.map(|a| a as i32);
+            let (x, y, z) = p.world(def, ax, 0, az);
+            let foot = r.state(x, y, z);
+            assert!(foot.starts_with(log) && foot.contains("axis=y"), "{version}: {foot}");
+            for by in 0..def.size[1] as usize {
+                for bz in 0..def.size[2] as usize {
+                    for bx in 0..def.size[0] as usize {
+                        let k = def.at(bx, by, bz);
+                        if k != 0 && def.palette[k as usize].contains("_leaves") {
+                            let (x, y, z) = p.world(def, bx as i32, by as i32, bz as i32);
+                            let got = r.state(x, y, z);
+                            if got.starts_with(leaves) {
+                                assert!(got.contains("persistent=true"), "{version}: {got}");
+                                leaves_seen += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(leaves_seen > 100, "{version}: {leaves_seen} leaves");
+        // The beds: every block down the column is of the mix.
+        for y in 70..90 {
+            let b = r.block(180, y, -40);
+            assert!(rock.contains(&b), "{version}: {b} at {y}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}

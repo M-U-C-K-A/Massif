@@ -83,6 +83,31 @@ pub struct Stratum {
     pub blocks: Vec<(BlockId, u16)>,
     /// Thickness range in blocks (inclusive); varies from column to column.
     pub depth: (u16, u16),
+    /// How its blocks are laid out: each on its own, in patches, or in
+    /// beds.
+    #[serde(default, skip_serializing_if = "Mix::is_grain")]
+    pub mix: Mix,
+}
+
+/// How the blocks of a [`Stratum`] are laid out.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub enum Mix {
+    /// Each block drawn on its own, by its weight.
+    #[default]
+    Grain,
+    /// Patches of about `size` blocks across, each of one block drawn by
+    /// its weight, their edges wavering.
+    Patches { size: f32 },
+    /// Horizontal beds, as in a cliff of sedimentary rock: the blocks in
+    /// their order upwards, each as many blocks thick as its weight,
+    /// repeating, dipping a little and wavering.
+    Beds,
+}
+
+impl Mix {
+    pub fn is_grain(&self) -> bool {
+        *self == Mix::Grain
+    }
 }
 
 /// How a painted terrain turns into blocks.
@@ -539,10 +564,12 @@ impl Registry {
         let one = |block: BlockId, lo: u16, hi: u16| Stratum {
             blocks: vec![(block, 1)],
             depth: (lo, hi),
+            mix: Mix::Grain,
         };
         let mix = |blocks: &[(BlockId, u16)], lo: u16, hi: u16| Stratum {
             blocks: blocks.to_vec(),
             depth: (lo, hi),
+            mix: Mix::Grain,
         };
         const DEEP: u16 = u16::MAX;
 

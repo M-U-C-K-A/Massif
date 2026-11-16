@@ -497,6 +497,7 @@ impl Mapper {
                     .map(|(blocks, lo, hi)| Stratum {
                         blocks: blocks.into_iter().map(|(b, w)| (self.intern(b), w)).collect(),
                         depth: (lo, hi),
+                        mix: Default::default(),
                     })
                     .collect();
                 self.add_terrain(TerrainDef {
@@ -546,7 +547,7 @@ impl Mapper {
             let def = &mut self.registry.terrains[id as usize];
             def.name = name;
             def.color = color;
-            def.strata = vec![Stratum { blocks, depth: (3, 7) }];
+            def.strata = vec![Stratum { blocks, depth: (3, 7), mix: Default::default() }];
             defined += 1;
         }
         defined

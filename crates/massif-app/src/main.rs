@@ -23,6 +23,7 @@ mod menu;
 mod menubar;
 mod notify;
 mod ores;
+mod packs;
 mod panels;
 mod picker;
 mod player;

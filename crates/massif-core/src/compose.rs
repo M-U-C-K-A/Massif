@@ -605,8 +605,10 @@ impl<'a> Materializer<'a> {
                         bedrock
                     } else if s.blocks.len() == 1 {
                         s.blocks[0].0
-                    } else {
+                    } else if s.mix.is_grain() {
                         pick(&s.blocks, hash3_at(column, y))
+                    } else {
+                        stratum_block(s, x, y, z, self.seed)
                     }
                 }
                 None => self.substrate(x, y, z),
@@ -639,7 +641,7 @@ impl<'a> Materializer<'a> {
                         return b;
                     }
                 }
-                return pick(&s.blocks, hash3(x, y, z, self.seed));
+                return stratum_block(s, x, y, z, self.seed);
             }
         }
         self.substrate(x, y, z)
@@ -656,6 +658,54 @@ pub(crate) fn stratum_thickness(depth: (u16, u16), column_hash: u32, index: usiz
         return lo;
     }
     lo + column_hash.rotate_right(index as u32 * 7) % (hi - lo + 1)
+}
+
+/// The block of stratum `s` at `(x, y, z)` in a world of seed `seed`,
+/// laid out as its [`Mix`] says.
+#[inline]
+pub fn stratum_block(s: &crate::registry::Stratum, x: i32, y: i32, z: i32, seed: u64) -> BlockId {
+    use crate::registry::Mix;
+    match s.mix {
+        Mix::Grain => pick(&s.blocks, hash3(x, y, z, seed)),
+        Mix::Patches { size } => {
+            let size = size.max(1.0);
+            // Cells of `size` blocks, their edges warped by a noise as large.
+            let (fx, fy, fz) = (x as f32 / size, y as f32 / size, z as f32 / size);
+            let warp = |salt: u64| value3(fx, fy, fz, seed ^ salt) - 0.5;
+            let (wx, wy, wz) = (fx + warp(0x0077_6172_7031), fy + 0.5 * warp(0x0077_6172_7032), fz + warp(0x0077_6172_7033));
+            pick(&s.blocks, hash3(wx.floor() as i32, wy.floor() as i32, wz.floor() as i32, seed ^ 0x7061_7463_6865))
+        }
+        Mix::Beds => {
+            let total: i32 = s.blocks.iter().map(|b| b.1 as i32).sum::<i32>().max(1);
+            // The beds dip a little to the east and waver.
+            let wave = (value3(x as f32 / 48.0, 0.0, z as f32 / 48.0, seed ^ 0x6265_6473) - 0.5) * 6.0;
+            let level = (y as f32 + x as f32 * 0.03 + wave).floor() as i32;
+            let mut r = level.rem_euclid(total);
+            for &(b, w) in &s.blocks {
+                if r < w as i32 {
+                    return b;
+                }
+                r -= w as i32;
+            }
+            s.blocks[0].0
+        }
+    }
+}
+
+/// A smooth value noise in `0..1`, trilinear between random values at the
+/// whole coordinates.
+fn value3(x: f32, y: f32, z: f32, seed: u64) -> f32 {
+    let (x0, y0, z0) = (x.floor(), y.floor(), z.floor());
+    let s = |t: f32| t * t * (3.0 - 2.0 * t);
+    let (tx, ty, tz) = (s(x - x0), s(y - y0), s(z - z0));
+    let (ix, iy, iz) = (x0 as i32, y0 as i32, z0 as i32);
+    let v = |dx: i32, dy: i32, dz: i32| hash3(ix + dx, iy + dy, iz + dz, seed) as f32 / u32::MAX as f32;
+    let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
+    let x00 = lerp(v(0, 0, 0), v(1, 0, 0), tx);
+    let x10 = lerp(v(0, 1, 0), v(1, 1, 0), tx);
+    let x01 = lerp(v(0, 0, 1), v(1, 0, 1), tx);
+    let x11 = lerp(v(0, 1, 1), v(1, 1, 1), tx);
+    lerp(lerp(x00, x10, ty), lerp(x01, x11, ty), tz)
 }
 
 #[inline]

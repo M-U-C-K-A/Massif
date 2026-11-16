@@ -25,6 +25,10 @@ pub enum Kind {
 #[derive(Debug, Default)]
 pub struct LayersUi {
     pub rename: Option<(Kind, usize, String)>,
+    /// The Packs shown rather than the map's layers.
+    pub packs: bool,
+    /// What the Packs are searched for.
+    pub search: String,
 }
 
 /// What a row was asked to do.
@@ -54,6 +58,13 @@ const ROW_H: f32 = 26.0;
 
 /// The Layers panel. Returns what to say (objects read, or why not).
 pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary, state: &mut LayersUi) -> Option<String> {
+    if let Some(k) = crate::widgets::button_group(ui, "layers or packs", &["This map", "Packs"], &[!state.packs, state.packs]) {
+        state.packs = k == 1;
+    }
+    ui.add_space(6.0);
+    if state.packs {
+        return crate::packs::packs_panel(ui, tools, doc, blocks.catalogue.as_deref(), &mut state.search);
+    }
     let before = (doc.world.registry.covers.clone(), doc.world.registry.object_layers.clone());
     let mut said = None;
     let mut actions = Vec::new();
@@ -151,7 +162,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     list(ui, &mixes, state, &mut actions);
 
     ui.add_space(8.0);
-    hint(ui, "Click one to paint it: its settings are in Tool Settings.");
+    hint(ui, "Click one to paint it: its settings are in Tool Settings. Ready-made trees, plants and mixes: Packs, above.");
 
     for action in actions {
         apply(action, tools, doc, state);

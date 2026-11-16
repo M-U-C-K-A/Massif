@@ -578,16 +578,19 @@ pub fn block_terrain(reg: &mut Registry, block: &Block) -> TerrainId {
             Stratum {
                 blocks: vec![(id, 1)],
                 depth: (1, 1),
+                mix: Default::default(),
             },
             Stratum {
                 blocks: vec![(dirt, 1)],
                 depth: (3, 4),
+                mix: Default::default(),
             },
         ]
     } else {
         vec![Stratum {
             blocks: vec![(id, 1)],
             depth: (3, 5),
+            mix: Default::default(),
         }]
     };
     reg.terrains.push(TerrainDef {

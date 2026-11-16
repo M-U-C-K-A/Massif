@@ -28,6 +28,8 @@ pub enum EditorKind {
     /// Ground covers, object layers and terrain mixes, as WorldPainter's
     /// layers: to paint, show, hide, rename and remove.
     Layers,
+    /// Ready-made trees, plants and mixes of blocks, to add and paint.
+    Packs,
     Levels,
     Info,
     /// The terrain graph (procedural generation and erosion).
@@ -64,7 +66,7 @@ impl EditorKind {
                 EditorKind::BrushSettings,
             ],
         )],
-        &[("Paint", &[EditorKind::Terrain, EditorKind::Layers, EditorKind::Blocks, EditorKind::Biomes, EditorKind::Levels])],
+        &[("Paint", &[EditorKind::Terrain, EditorKind::Layers, EditorKind::Packs, EditorKind::Blocks, EditorKind::Biomes, EditorKind::Levels])],
         &[(
             "Terrain",
             &[EditorKind::GraphView, EditorKind::Graph, EditorKind::GraphProps, EditorKind::RenderSettings],
@@ -90,6 +92,7 @@ impl EditorKind {
             EditorKind::Blocks => "Every block of the game, to paint as a terrain",
             EditorKind::Biomes => "The game's biomes, to paint over the automatic ones",
             EditorKind::Layers => "Ground covers, objects and terrain mixes: paint, show or hide them",
+            EditorKind::Packs => "Ready-made trees, plants and mixes of blocks to paint",
             EditorKind::Levels => "Levels that add rock over the ground or carve it away",
             EditorKind::Info => "Name, seed, sea level and size; the column under the cursor",
             EditorKind::Graph => "The nodes the terrain is generated from",
@@ -115,6 +118,7 @@ impl EditorKind {
             EditorKind::Blocks => "Blocks",
             EditorKind::Biomes => "Biomes",
             EditorKind::Layers => "Layers",
+            EditorKind::Packs => "Packs",
             EditorKind::Levels => "Levels",
             EditorKind::Info => "Info",
             EditorKind::Graph => "Terrain Graph",
@@ -140,6 +144,7 @@ impl EditorKind {
             EditorKind::Blocks => Icon::Blocks,
             EditorKind::Biomes => Icon::Trees,
             EditorKind::Layers => Icon::Layers2,
+            EditorKind::Packs => Icon::Package,
             EditorKind::Levels => Icon::Layers,
             EditorKind::Info => Icon::Info,
             EditorKind::Graph => Icon::Workflow,

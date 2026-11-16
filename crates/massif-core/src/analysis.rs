@@ -15,7 +15,7 @@
 //! player will find in it.
 
 use crate::auto::Steps;
-use crate::compose::{Materializer, Span, TileStack, hash2, hash3, pick, stratum_thickness};
+use crate::compose::{Materializer, Span, TileStack, hash2, stratum_thickness};
 use crate::coords::{TILE_AREA, TILE_SIZE, TilePos, cell_index};
 use crate::objects::{is_nothing, tile_placements};
 use crate::registry::{BlockId, Registry, Stratum, TerrainId, is_soil, is_tall_plant, plant_color};
@@ -1317,7 +1317,7 @@ impl<'a> Ctx<'a> {
             {
                 let top = y1.min(floor);
                 for y in y0..top {
-                    let b = if self.mat.substrate(x, y, z) == self.bedrock { self.bedrock } else { pick(&s.blocks, hash3(x, y, z, self.seed)) };
+                    let b = if self.mat.substrate(x, y, z) == self.bedrock { self.bedrock } else { crate::compose::stratum_block(s, x, y, z, self.seed) };
                     self.add(t, b, y, y + 1);
                 }
                 y0 = top;
@@ -1333,9 +1333,9 @@ impl<'a> Ctx<'a> {
         }
         if let [(b, _)] = s.blocks[..] {
             self.add(t, b, y0, y1);
-        } else if y1 - y0 <= 64 {
+        } else if y1 - y0 <= 64 || !s.mix.is_grain() {
             for y in y0..y1 {
-                self.add(t, pick(&s.blocks, hash3(x, y, z, self.seed)), y, y + 1);
+                self.add(t, crate::compose::stratum_block(s, x, y, z, self.seed), y, y + 1);
             }
         } else {
             // A deep mix: its blocks by their weights, the leftover to the last.
@@ -2320,7 +2320,7 @@ mod tests {
             name: "Diamond Block".into(),
             group: "Blocks".into(),
             color: [98, 237, 228],
-            strata: vec![Stratum { blocks: vec![(diamond, 1)], depth: (3, 5) }],
+            strata: vec![Stratum { blocks: vec![(diamond, 1)], depth: (3, 5), mix: Default::default() }],
             submerged_top: None,
             biome_hint: None,
         });

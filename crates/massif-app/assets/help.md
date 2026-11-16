@@ -106,6 +106,9 @@ Hovered over the map, the brush shows in colour what would change.
 ## Layers
 The **Layers** panel (under Terrain; or any area's chooser, in Paint) lists everything painted over the ground, as WorldPainter's layers: the map's ground covers, its object layers and the terrain mixes saved for noise painting. Click one to paint with it (its settings open in Tool Settings), double-click to rename it, click its eye to hide it on the map and in the 3D view (the export writes it all the same), and right-click for Duplicate and Remove. **New cover**, **Import objects…** and **New mix** make new ones.
 
+## Packs
+**Packs** (the second tab of the Layers panel, or an area of its own) holds ready-made things to paint, as WorldPainter Modernised's Packs panel did: sixteen kinds of trees of the tree pack (tall and slender spruces, firs, larches, giant redwoods, big and pale oaks, birches, cherries, acacias, willows, rainforest giants, palms, dead trees, bushes, azaleas), each in eight shapes; presets of flowers, plants and water plants; and mixes of blocks for grass, soil, stone, sand, cliffs in beds, snow and volcanic rock. A click adds one to the map — an object layer, a ground cover or a terrain — and picks it to paint; a dot marks those the map has already. A search field filters them.
+
 ## Custom objects
 **Objects** places trees, rocks or ruins from `.schem`, `.schematic`, `.bp`, `.litematic` and `.nbt` files: import them, or drop them on the window, then paint where they stand, how far apart and how many.
 

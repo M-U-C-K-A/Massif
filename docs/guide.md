@@ -12,6 +12,7 @@ The editor, part by part: the home screen, the window, brushes and their options
 - [Automatic biomes and paint](#automatic-biomes-and-paint)
 - [Noise painting](#noise-painting)
 - [Layers](#layers)
+- [Packs](#packs)
 - [Ground covers](#ground-covers)
 - [Custom objects](#custom-objects)
 - [Rivers](#rivers)
@@ -496,6 +497,36 @@ show it, from Paint in the area's chooser):
 
 A column has at most one cover and one object layer; painting another
 over it takes the place of the first.
+
+## Packs
+
+**Packs** is the library of ready-made things to paint, so that a new map
+can be dressed without setting anything up, as in WorldPainter Modernised.
+It is the second tab of the Layers panel (**This map** · **Packs**), and an
+editor of its own in the area chooser. A click on an item adds it to the
+map and picks it to paint, with its tool; a click on one the map has
+already (marked with a dot) picks it again. A search field filters them.
+
+| Section | Holds | Becomes |
+|---|---|---|
+| Trees | Tall spruces, slender spruces, firs, larches, giant redwoods, big oaks, pale oaks, birches, cherry trees, acacias, willows, rainforest giants, palm trees, dead trees, bushes, azalea bushes — eight of each, in different sizes and shapes | An object layer |
+| Flowers | Wildflower meadow, flower mix, tulip field, sunflower field, roses and lilacs, spring flowers, pink petals, swamp flowers | A ground cover |
+| Plants & ground cover | Grass and flowers, dense grass, forest ferns, forest floor, berry bushes, dry grass, desert plants, jungle undergrowth, pale garden, mushroom patches, pumpkins and melons | A ground cover |
+| Water plants | Seagrass and kelp, coral garden, sugar cane | A ground cover |
+| Mixes | Grass, dirt and soil, stone, sand and shore, cliff strata, snow, ice and volcanic rock, built surfaces | A terrain |
+
+The trees are made by Massif, always the same way, as the tree pack of
+WorldPainter Modernised makes them; their leaves never decay. The mixes lay
+their blocks one by one, in **patches** a few blocks across, or, for the
+cliff strata, in **beds**: horizontal bands that repeat upwards, each block
+as thick as its share, dipping a little and wavering, down through the land
+so that cliffs show them. Once added, each is a layer like any other: its
+settings in Tool Settings, to change as you like.
+
+An export for an older version of the game turns what it does not have into
+the closest it has: cherry trees become birches, pale oaks dark oaks,
+willows' mangrove leaves oak leaves, keeping the way their logs lie and
+their leaves' persistence.
 
 ## Ground covers
 
