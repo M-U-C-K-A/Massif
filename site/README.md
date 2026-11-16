@@ -14,7 +14,10 @@ node build.mjs --serve     # http://localhost:4321
 
 - `site.config.mjs`: the Discord and Ko-fi links, the site's address, the
   gallery's renders and their captions.
-- `src/home.mjs`: the home page's text and features; `src/faq.mjs`: the FAQ.
+- `src/home.mjs`: the home page's text and features, and `launch`, the next
+  release announced under the hero (its version, name and lines; once that
+  version is out, the banner says so by itself); `src/faq.mjs`: the FAQ.
+- `src/img`: the site's own pictures, the banner's island and its mark.
 - `src/style.css`, `src/main.js`: the look and the little the browser does.
 - `build.mjs`: the Markdown to pages, the links between them, the releases.
 

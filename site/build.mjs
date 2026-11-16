@@ -469,14 +469,17 @@ function copyAssets() {
   fs.mkdirSync(path.join(a, 'renders'), { recursive: true });
   fs.mkdirSync(path.join(a, 'fonts'), { recursive: true });
   for (const f of fs.readdirSync(path.join(root, 'docs/assets'))) {
-    if (!f.endsWith('.svg')) continue;
-    let svg = read(`docs/assets/${f}`);
+    // The README's pixel banner is not on the site: the home page has the next release's.
+    if (!f.endsWith('.svg') || f.startsWith('hero')) continue;
     // The figures hide what is behind their solids with the page's colour.
-    if (!f.startsWith('hero')) svg = svg.replaceAll('#0d1117', '#0f0f11');
+    const svg = read(`docs/assets/${f}`).replaceAll('#0d1117', '#0f0f11');
     fs.writeFileSync(path.join(a, 'fig', f), svg);
   }
   for (const f of fs.readdirSync(path.join(root, 'docs/assets/renders'))) fs.copyFileSync(path.join(root, 'docs/assets/renders', f), path.join(a, 'renders', f));
   for (const f of fs.readdirSync(path.join(here, 'src/fonts'))) fs.copyFileSync(path.join(here, 'src/fonts', f), path.join(a, 'fonts', f));
+  // The site's own pictures: the next release's banner.
+  fs.mkdirSync(path.join(a, 'img'), { recursive: true });
+  for (const f of fs.readdirSync(path.join(here, 'src/img'))) fs.copyFileSync(path.join(here, 'src/img', f), path.join(a, 'img', f));
   fs.copyFileSync(path.join(root, 'crates/massif-app/assets/icon.png'), path.join(a, 'icon.png'));
   fs.writeFileSync(path.join(a, 'style.css'), fs.readFileSync(path.join(here, 'src/style.css'), 'utf8').replaceAll('url(/assets/', `url(${BASE}/assets/`));
   fs.copyFileSync(path.join(here, 'src/main.js'), path.join(a, 'main.js'));
@@ -508,7 +511,7 @@ async function build() {
 await build();
 
 if (process.argv.includes('--serve')) {
-  const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.js': 'text/javascript', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.json': 'application/json', '.woff2': 'font/woff2', '.txt': 'text/plain' };
+  const types = { '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.js': 'text/javascript', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp', '.json': 'application/json', '.woff2': 'font/woff2', '.txt': 'text/plain' };
   const port = Number(process.env.PORT || 4321);
   http.createServer((req, res) => {
     let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);

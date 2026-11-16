@@ -25,9 +25,10 @@ export const HL = loadHL();
 
 /* The palette: Hairline's four greys, its ground the page's own colour on GitHub, and Massif's accent for the one bright stroke. */
 export const THEMES = {
-  light: { plate: "#ffffff", hi: "#f0601a", ink: "#232327", edge: "#9b9ba4", mid: "#c3c3c9", lo: "#e2e2e6", none: "none" },
-  dark: { plate: "#0d1117", hi: "#ff7028", ink: "#d0d6e0", edge: "#6a6d75", mid: "#43464d", lo: "#2b2e34", none: "none" },
+  light: { plate: "#ffffff", hi: "#f0601a", aqua: "#0a8fb0", ink: "#232327", edge: "#9b9ba4", mid: "#c3c3c9", lo: "#e2e2e6", none: "none" },
+  dark: { plate: "#0d1117", hi: "#ff7028", aqua: "#3ccbe6", ink: "#d0d6e0", edge: "#6a6d75", mid: "#43464d", lo: "#2b2e34", none: "none" },
 };
+/* The figures of the Aquatic Update (1.0) draw their one bright stroke in `aqua`, the colour of its banner, rather than `hi`. */
 
 /* Easing curves, as SMIL key splines. */
 export const EASE = {
@@ -187,6 +188,23 @@ export function simplify(samples, tol) {
   const out = [];
   for (let i = 0; i < n; i++) if (keep[i]) out.push(i);
   return out;
+}
+
+/**
+ * A projection that remembers the box of every point it projects, so a
+ * figure can frame itself: `view(margin, aspect)` gives the viewBox of all it
+ * drew, widened or heightened to `aspect` around its middle.
+ */
+export function boxed(P0) {
+  let a = 1e9, b = -1e9, c = 1e9, d = -1e9;
+  const P = (x, y, z) => { const q = P0(x, y, z); a = Math.min(a, q[0]); b = Math.max(b, q[0]); c = Math.min(c, q[1]); d = Math.max(d, q[1]); return q; };
+  P.view = (margin = 6, aspect = 1.48) => {
+    let w = b - a + 2 * margin, h = d - c + 2 * margin;
+    const cx = (a + b) / 2, cy = (c + d) / 2;
+    if (w / h < aspect) w = h * aspect; else h = w / aspect;
+    return [cx - w / 2, cy - h / 2, w, h].map((v) => Math.round(v));
+  };
+  return P;
 }
 
 /* ---- the document ---- */

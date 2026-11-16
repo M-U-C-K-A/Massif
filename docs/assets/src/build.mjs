@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const [outArg, ...only] = process.argv.slice(2);
 const out = outArg ? path.resolve(outArg) : path.resolve(here, "..");
-const names = ["mark", "brush", "islands", "graph", "rivers", "blocks", "roads", "select", "relief"];
+const names = ["mark", "brush", "islands", "graph", "rivers", "blocks", "roads", "select", "relief", "water", "flood", "mods"];
 for (const n of names) {
   if (only.length && !only.includes(n)) continue;
   (await import(`./figures/${n}.mjs`)).default(out);

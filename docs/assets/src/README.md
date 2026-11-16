@@ -42,6 +42,13 @@ They move with SMIL animations alone, so they play inside an `<img>`.
 | `roads` | A road graded through hills, humps cut and hollows filled |
 | `select` | A selection drawn on a field: only the columns inside rise |
 | `relief` | A flat field rising into the relief of a real range |
+| `water` | A river coming down a valley in steps: the pools fill, the water falls over each step, and holds |
+| `flood` | A click in a hollow: the water rises to the lowest point of its rim, which lights |
+| `mods` | A mod's jar opens and its blocks come out, one after another, to their places |
+
+`water`, `flood` and `mods` show what Massif 1.0, the Aquatic Update, brings:
+their one bright stroke is `aqua`, the colour of its banner on the website,
+rather than Massif's orange.
 
 ## Drawing them again
 
