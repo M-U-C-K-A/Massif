@@ -1123,8 +1123,14 @@ impl MassifApp {
                 );
             }
             Pending::Quit => {
-                self.allow_close = true;
-                ctx.send_viewport_cmd(ViewportCommand::Close);
+                if crate::quit::waiting() {
+                    // At a logout, a restart or a shut-down, the system waits
+                    // to end Massif itself: told yes, it does (see `quit`).
+                    crate::quit::reply(true);
+                } else {
+                    self.allow_close = true;
+                    ctx.send_viewport_cmd(ViewportCommand::Close);
+                }
             }
         }
     }
@@ -2869,6 +2875,25 @@ impl MassifApp {
         }
     }
 
+    /// Whether quitting is under way: asked about (Unsaved), or waiting for
+    /// the map to be saved.
+    fn quitting(&self) -> bool {
+        matches!(self.dialog, Some(Dialog::Unsaved(Pending::Quit))) || matches!(self.after_save, Some(Pending::Quit))
+    }
+
+    /// The system's Quit, on macOS (the Dock's, the app switcher's, a
+    /// logout's): as the app's own, asked first when the map has changes. A
+    /// quit the system waits for is told no once it is given up: the dialog
+    /// cancelled, its save cancelled or failed.
+    fn system_quit(&mut self, ctx: &egui::Context) {
+        if crate::quit::take() && !self.quitting() {
+            self.request(ctx, Pending::Quit);
+        }
+        if crate::quit::waiting() && !self.quitting() {
+            crate::quit::reply(false);
+        }
+    }
+
     /// One frame of the whole UI.
     pub fn frame_ui(&mut self, ui: &mut Ui, frame: &eframe::Frame) {
         let ctx = ui.ctx().clone();
@@ -2936,6 +2961,7 @@ impl MassifApp {
         self.handle_close(&ctx);
         self.shortcuts(&ctx);
         self.menu_bar_commands(&ctx);
+        self.system_quit(&ctx);
         self.map_cache.sync_generation(self.doc.generation);
         if let Some(msg) = self.feedback.take() {
             self.say(&ctx, msg, false, None);
@@ -2987,6 +3013,8 @@ impl MassifApp {
 
 impl eframe::App for MassifApp {
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
+        // The system's Quit is not answered now during a frame (see `quit`).
+        crate::quit::frame_begins();
         // Until the first frame is shown, startup.log follows each step.
         crate::startup::frame_begins(ui.ctx(), frame);
         self.dev.begin();
@@ -2998,6 +3026,9 @@ impl eframe::App for MassifApp {
         let now = ui.input(|i| i.time);
         self.dev.end(now);
         crate::startup::frame_laid_out(ui);
+        // Until the next frame, the system's Quit is answered from what this
+        // one leaves: now, or not before the app asks.
+        crate::quit::frame_ends(self.doc.is_modified() && !self.allow_close);
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -3617,6 +3648,90 @@ mod tests {
         h.key_press_modifiers(Modifiers::COMMAND, Key::N);
         h.run_steps(2);
         assert_eq!(h.state().home.as_ref().map(|home| home.page), Some(Page::NewMap));
+    }
+
+    /// The system's Quit (on macOS: the Dock's, the app switcher's, a
+    /// logout's), here as AppKit asks it, goes the way of the app's own: at
+    /// once with nothing to lose; with changes, not now, and the app asks at
+    /// its next frame and closes if told to. At a logout the system waits for
+    /// the answer: no when the dialog is cancelled or its save fails, yes
+    /// once the map is saved or its changes dropped — the system then ends
+    /// Massif, which closes nothing itself.
+    #[test]
+    fn the_systems_quit_asks_first() {
+        use crate::quit::{self, Reply};
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(2);
+        assert_eq!(quit::ask(false), Reply::Now);
+        assert_eq!(quit::ask(true), Reply::Now);
+        h.run_steps(2);
+        assert!(h.state().dialog.is_none(), "nothing to ask");
+        // A change: not now, and asked as Quit asks.
+        add_tower(&mut h);
+        h.run_steps(1);
+        assert_eq!(quit::ask(false), Reply::Cancel);
+        h.run_steps(2);
+        assert!(matches!(h.state().dialog, Some(Dialog::Unsaved(Pending::Quit))));
+        h.get_by_label("Cancel").click();
+        h.run_steps(2);
+        assert!(h.state().dialog.is_none() && h.state().doc.is_modified() && !h.state().allow_close);
+        assert_eq!(quit::ask(false), Reply::Cancel, "still not now");
+        h.run_steps(2);
+        h.get_by_label("Don't Save").click();
+        h.run_steps(2);
+        assert!(h.state().allow_close, "closed as by File ▸ Quit");
+        assert_eq!(quit::ask(false), Reply::Now, "and nothing left to ask");
+        assert_eq!(quit::replied(), None, "nothing waited");
+
+        // At a logout: later.
+        h.state_mut().allow_close = false;
+        h.run_steps(1);
+        assert_eq!(quit::ask(true), Reply::Later);
+        h.run_steps(2);
+        assert!(quit::waiting() && matches!(h.state().dialog, Some(Dialog::Unsaved(Pending::Quit))));
+        // Asked again meanwhile: the question is up already.
+        assert_eq!(quit::ask(true), Reply::Cancel);
+        h.run_steps(1);
+        assert!(quit::waiting() && matches!(h.state().dialog, Some(Dialog::Unsaved(Pending::Quit))));
+        h.get_by_label("Cancel").click();
+        h.run_steps(2);
+        assert_eq!(quit::replied(), Some(false), "cancelled: told no");
+        assert!(!quit::waiting() && h.state().dialog.is_none() && h.state().doc.is_modified());
+        // The save runs aside: told once it ends.
+        let answered = |h: &mut egui_kittest::Harness<'static, MassifApp>| {
+            for _ in 0..1000 {
+                h.step();
+                if let Some(yes) = quit::replied() {
+                    return Some(yes);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            None
+        };
+        h.state_mut().doc.path = Some(PathBuf::from("/no-such-folder-for-massif/map.massif"));
+        assert_eq!(quit::ask(true), Reply::Later);
+        h.run_steps(2);
+        h.get_by_label("Save").click();
+        assert_eq!(answered(&mut h), Some(false), "the save failed: told no");
+        assert!(h.state().doc.is_modified());
+        let file = std::env::temp_dir().join(format!("massif-quit-{}.massif", std::process::id()));
+        h.state_mut().doc.path = Some(file.clone());
+        assert_eq!(quit::ask(true), Reply::Later);
+        h.run_steps(2);
+        h.get_by_label("Save").click();
+        let saved = answered(&mut h);
+        let _ = std::fs::remove_file(&file);
+        assert_eq!(saved, Some(true), "saved: told yes");
+        assert!(!h.state().doc.is_modified() && !h.state().allow_close, "ended by the system");
+        add_tower(&mut h);
+        h.run_steps(1);
+        assert_eq!(quit::ask(true), Reply::Later);
+        h.run_steps(2);
+        h.get_by_label("Don't Save").click();
+        h.run_steps(2);
+        assert_eq!(quit::replied(), Some(true), "changes dropped: told yes");
+        assert!(!h.state().allow_close && !quit::waiting());
     }
 
     /// The app on a small map of islands (or the .massif MASSIF_HEIGHTS_WORLD

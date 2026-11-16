@@ -43,7 +43,9 @@ libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSURL", "NSString"] }
+# The system's Quit read and answered (`quit`): its Apple Event, and the
+# answer given from the run loop.
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSURL", "NSString", "NSAppleEventDescriptor", "NSAppleEventManager", "NSRunLoop", "NSDate", "NSObjCRuntime"] }
 # The menus in the system's menu bar (`menubar`).
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSMenu", "NSMenuItem", "NSEvent", "NSCell"] }
 

@@ -99,6 +99,14 @@ where Mac apps keep them, and **Help** has the system's search of the menus.
 Quit** does. On Windows and Linux the menus sit at the top left of the
 window, with Ctrl for ⌘.
 
+On a Mac, quitting from the Dock (**Quit** in Massif's menu there) or from
+the app switcher (⌘Tab, then Q) asks as ⌘Q does, Massif coming to the front
+for it. So does a logout, a restart or a shut-down, which waits for the
+answer: **Save** or **Don't Save**, and it goes on once Massif has quit;
+**Cancel**, and it stops, Massif and its map as they were. The Mac waits two
+minutes at most before it gives up the logout. With no changes to save,
+Massif quits at once.
+
 The menu bar shows the shortcuts of File, Edit, View and Help without taking
 their keys: these still go to the window, so ⌘Z undoes in the map, in a text
 field or in Edit ▸ Ores as before, and ⌘C, ⌘V and ⌘A work in text fields.

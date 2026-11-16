@@ -25,6 +25,7 @@ mod ores;
 mod panels;
 mod picker;
 mod player;
+mod quit;
 mod reshape;
 mod sounds;
 mod textures;
@@ -55,10 +56,12 @@ fn main() -> eframe::Result {
     // Every step of the start written down, panics too (see `startup`).
     startup::begin();
     let open = std::env::args_os().nth(1).map(PathBuf::from);
-    // Files the Finder asks to open; on Windows, `.massif` files made
-    // Massif's, with their maps as their icons.
-    startup::step("listening for the files the system asks to open");
+    // Files the Finder asks to open, and the system's Quit (the Dock's, a
+    // logout's), asked first when the map has changes; on Windows, `.massif`
+    // files made Massif's, with their maps as their icons.
+    startup::step("listening for the files the system asks to open, and its Quit");
     finder::listen();
+    quit::listen();
     startup::step("making .massif files Massif's");
     finder::register();
     let mut viewport = egui::ViewportBuilder::default()
@@ -112,6 +115,7 @@ fn main() -> eframe::Result {
             }
             startup::step("making the app");
             finder::wake(&cc.egui_ctx);
+            quit::install(&cc.egui_ctx);
             // On macOS, File, Edit, View and Help in the menu bar at the
             // top of the screen too.
             menubar::install(&cc.egui_ctx);

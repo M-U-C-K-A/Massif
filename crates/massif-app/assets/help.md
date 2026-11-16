@@ -39,7 +39,7 @@ The check runs in the background — a few seconds for a map of 5,888 blocks a s
 **File**, **Edit**, **View** and **Help** hold every command, each item with its shortcut beside it, greyed out when it cannot be used (what acts on the map while the home screen is shown, everything while a dialog is open).
 - On a Mac they are in the menu bar at the top of the screen, as in every Mac app; the window's top bar keeps its buttons. **About Massif**, **Settings…** (`⌘,`) and **Quit Massif** (`⌘Q`) are in the **Massif** menu, and **Help** has the system's search of the menus.
 - On Windows and Linux they are at the top left of the window.
-- `⌘Q` asks first when the map has changes that are not saved, as **File ▸ Quit** does.
+- `⌘Q` asks first when the map has changes that are not saved, as **File ▸ Quit** does, and so does quitting from the Dock or the app switcher (`⌘Tab`, then `Q`): Massif comes to the front to ask. A logout, a restart or a shut-down waits for the answer: **Save** or **Don't Save**, and it goes on once Massif has quit; **Cancel**, and it stops.
 
 ## Areas
 The window is made of areas, as in Blender. Each area shows one editor: the map, the 3D view, tools, settings, brushes, palettes, levels or information.
