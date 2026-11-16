@@ -3824,10 +3824,7 @@ impl View3d {
         let painter = ui.painter_at(rect);
         let c = rect.center();
         if walk.captured {
-            for (w, color) in [(3.5, Color32::from_black_alpha(120)), (1.5, Color32::WHITE)] {
-                painter.line_segment([c - vec2(8.0, 0.0), c + vec2(8.0, 0.0)], egui::Stroke::new(w, color));
-                painter.line_segment([c - vec2(0.0, 8.0), c + vec2(0.0, 8.0)], egui::Stroke::new(w, color));
-            }
+            crate::reticle::paint(&painter, c, &crate::reticle::get(ui.ctx()));
         }
         let bar = Rect::from_min_max(pos2(rect.left(), rect.bottom() - 26.0), rect.right_bottom());
         painter.rect_filled(bar, 0, pal.panel.gamma_multiply(0.94));

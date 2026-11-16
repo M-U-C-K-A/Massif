@@ -70,6 +70,8 @@ struct Settings {
     tool_icons: crate::icons::IconStyle,
     /// The home screen's picture moves (its dither, about once a second).
     animate_backdrop: bool,
+    /// The crosshair of the player's view.
+    reticle: crate::reticle::Reticle,
     /// The home screen's pictures shown, by name: those not yet come first.
     backdrops_seen: Vec<String>,
     /// The Developer panel is offered: frames, memory, the processor, live.
@@ -155,6 +157,7 @@ impl Default for Settings {
             loader: crate::loader::Pattern::Orbit,
             tool_icons: crate::icons::IconStyle::Line,
             animate_backdrop: true,
+            reticle: crate::reticle::Reticle::default(),
             backdrops_seen: Vec::new(),
             developer: false,
             typeface: theme::Typeface::System,
@@ -590,6 +593,7 @@ impl MassifApp {
         theme::set_accent(&cc.egui_ctx, settings.accent);
         crate::loader::set_pattern(&cc.egui_ctx, settings.loader);
         crate::icons::set_style(&cc.egui_ctx, settings.tool_icons);
+        crate::reticle::set(&cc.egui_ctx, settings.reticle);
         timed("the typeface chosen", || theme::set_typeface(&cc.egui_ctx, settings.typeface));
         let world = timed("the map made up before one is opened", default_world);
         let mut app = timed("the app's state", || Self::with_world(world, layout, tools, settings));
@@ -1186,9 +1190,66 @@ impl MassifApp {
                 }
             });
         });
+        ui.add_space(14.0);
+        ui.label(RichText::new(tr!("Crosshair")).size(13.0).medium());
+        ui.add_space(4.0);
+        self.prefs_reticle(ui, ctx);
         if crate::i18n::current() != crate::i18n::Language::English {
             ui.add_space(8.0);
             ui.add(egui::Label::new(RichText::new(tr!("Massif Help and the guide on the website are in English for now.")).size(11.5).color(pal.weak)).wrap());
+        }
+    }
+
+    /// The crosshair of the player's view: its shape, size and opacity,
+    /// and beside them how it looks on light ground and on dark.
+    fn prefs_reticle(&mut self, ui: &mut Ui, ctx: &egui::Context) {
+        use crate::reticle::{SIZES, Shape};
+        let pal = Palette::of(ui);
+        let mut r = self.settings.reticle;
+        // The preview's side.
+        let side = 96.0;
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| {
+                ui.set_width(ui.available_width() - side - 2.0 * ui.spacing().item_spacing.x - 8.0);
+                crate::widgets::well(ui, |ui| {
+                    crate::widgets::row(ui, tr!("Shape"), |ui| {
+                        let labels: Vec<&str> = Shape::ALL.iter().map(|s| crate::i18n::tr_name(s.label())).collect();
+                        let on: Vec<bool> = Shape::ALL.iter().map(|s| *s == r.shape).collect();
+                        if let Some(k) = crate::widgets::button_group(ui, "reticle shape", &labels, &on) {
+                            r.shape = Shape::ALL[k];
+                            crate::sounds::play(Cue::Select);
+                        }
+                    });
+                    let shown = r.shape != Shape::None;
+                    crate::widgets::row(ui, tr!("Size"), |ui| {
+                        ui.add_enabled(shown, crate::widgets::Field::new(&mut r.size, SIZES).suffix(" pt").max_decimals(0).width(150.0));
+                    });
+                    crate::widgets::row(ui, tr!("Opacity"), |ui| {
+                        ui.add_enabled(
+                            shown,
+                            crate::widgets::Field::new(&mut r.opacity, 0.2..=1.0)
+                                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                                .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0))
+                                .width(150.0),
+                        );
+                    });
+                });
+            });
+            ui.add_space(8.0);
+            // The preview: a light half (snow) and a dark one (deep water),
+            // the crosshair across both.
+            let (rect, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
+            let painter = ui.painter_at(rect);
+            let k = theme::TILE_RADIUS;
+            let (left, right) = (Rect::from_min_max(rect.min, pos2(rect.center().x, rect.max.y)), Rect::from_min_max(pos2(rect.center().x, rect.min.y), rect.max));
+            painter.rect_filled(left, egui::CornerRadius { nw: k, sw: k, ne: 0, se: 0 }, theme::rgb([0xe4, 0xec, 0xf2]));
+            painter.rect_filled(right, egui::CornerRadius { nw: 0, sw: 0, ne: k, se: k }, theme::rgb([0x1d, 0x3c, 0x6a]));
+            painter.rect_stroke(rect, k, Stroke::new(1.0, pal.border), egui::StrokeKind::Inside);
+            crate::reticle::paint(&painter, rect.center(), &r);
+        });
+        if r != self.settings.reticle {
+            self.settings.reticle = r;
+            crate::reticle::set(ctx, r);
         }
     }
 
@@ -6540,6 +6601,20 @@ mod tests {
         h.run_steps(3);
         assert!(h.state().sculpt3d.hover().is_some(), "the crosshair points at the land");
         h.render().unwrap().save(dir.join("game-crosshair-ui.png")).unwrap();
+        // The crosshair close up: as it is by default, then each shape of
+        // Settings ▸ Appearance.
+        let ppp = h.ctx.pixels_per_point();
+        let crop = |img: &image::RgbaImage, name: &str| {
+            let (x, y) = (((view.center().x - 80.0) * ppp) as u32, ((view.center().y - 20.0) * ppp) as u32);
+            image::imageops::crop_imm(img, x, y, (160.0 * ppp) as u32, (110.0 * ppp) as u32).to_image().save(dir.join(format!("{name}.png"))).unwrap();
+        };
+        crop(&h.render().unwrap(), "crosshair-default");
+        for shape in crate::reticle::Shape::ALL {
+            crate::reticle::set(&h.ctx, crate::reticle::Reticle { shape, ..Default::default() });
+            h.run_steps(2);
+            crop(&h.render().unwrap(), &format!("crosshair-{shape:?}").to_lowercase());
+        }
+        crate::reticle::set(&h.ctx, crate::reticle::Reticle::default());
         h.key_press(Key::Escape);
         h.step();
         // Up in the air, toward the horizon: the land fading into the fog,
@@ -12052,6 +12127,19 @@ mod tests {
         h.state_mut().dialog = Some(Dialog::Preferences(PrefsSection::Appearance));
         h.run_steps(5);
         h.render().unwrap().save(dir.join("dialog-settings.png")).unwrap();
+        // Further down, the crosshair, its preview on light ground and dark.
+        h.event(egui::Event::PointerMoved(pos2(880.0, 560.0)));
+        for _ in 0..6 {
+            h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, -120.0), modifiers: egui::Modifiers::NONE, phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel });
+            h.run_steps(2);
+        }
+        h.run_steps(20);
+        h.render().unwrap().save(dir.join("dialog-settings-crosshair.png")).unwrap();
+        h.state_mut().settings.reticle.shape = crate::reticle::Shape::Circle;
+        h.state_mut().settings.reticle.size = 24.0;
+        h.run_steps(3);
+        h.render().unwrap().save(dir.join("dialog-settings-crosshair-circle.png")).unwrap();
+        h.state_mut().settings.reticle = crate::reticle::Reticle::default();
         for (section, name) in [
             (PrefsSection::Accessibility, "accessibility"),
             (PrefsSection::Typeface, "typeface"),

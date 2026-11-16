@@ -43,6 +43,7 @@ mod real_terrain;
 mod report;
 mod report_view;
 mod reshape;
+mod reticle;
 mod road_draft;
 mod select;
 mod settings_backup;
