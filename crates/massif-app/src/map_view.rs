@@ -179,6 +179,8 @@ pub struct MapView {
     pub zoom: f32,
     pub mode: MapMode,
     pub contours: bool,
+    /// Shading from the smooth heights rather than whole blocks.
+    pub smooth: bool,
     pub grid: bool,
     fitted: Option<u64>,
     stroke: Option<Stroke>,
@@ -243,6 +245,7 @@ impl Default for MapView {
             zoom: 1.0,
             mode: MapMode::Terrain,
             contours: true,
+            smooth: false,
             grid: false,
             fitted: None,
             stroke: None,
@@ -294,6 +297,14 @@ impl MapView {
         ui.separator();
         ui.toggle_value(&mut self.contours, theme::glyph(Icon::Spline).to_string())
             .on_hover_text(tr!("Contour lines"));
+        let mut steps = !self.smooth;
+        if ui
+            .toggle_value(&mut steps, theme::glyph(Icon::Blocks).to_string())
+            .on_hover_text(tr!("Block steps: each block shaded at its own height, as in the game. Off: a smooth shading of the ground's shape"))
+            .changed()
+        {
+            self.smooth = !steps;
+        }
         ui.toggle_value(&mut self.grid, theme::glyph(Icon::Grid3x3).to_string())
             .on_hover_text(tr!("Tile and chunk grid"));
     }
@@ -1095,6 +1106,7 @@ impl MapView {
         let style = MapStyle {
             mode: self.mode,
             contours: self.contours,
+            smooth: self.smooth,
             solo: solo.then_some(tools.terrain),
             highlight: (doc.active_level > 0).then_some(doc.active_level.min(7) as u8),
             light,

@@ -279,6 +279,7 @@ impl Default for MapStyle {
         Self {
             mode: MapMode::Terrain,
             contours: false,
+            smooth: false,
             solo: None,
             highlight: None,
             light: DEFAULT_LIGHT,
@@ -314,6 +315,9 @@ impl MapMode {
 pub struct MapStyle {
     pub mode: MapMode,
     pub contours: bool,
+    /// Shading and contours follow the smooth heights of the ground rather
+    /// than its whole blocks: softer, without the steps the game will have.
+    pub smooth: bool,
     /// Terrain shown normally while all others are faded.
     pub solo: Option<u16>,
     /// Level whose footprint is tinted.
@@ -558,9 +562,26 @@ impl<'a> Colorizer<'a> {
         if c.is_empty() {
             return Color32::TRANSPARENT;
         }
-        let h = |s: &Sample| if s.is_empty() { c.height } else { s.height };
-        let dx = (h(r) - h(l)) / (2.0 * spacing);
-        let dz = (h(d) - h(u)) / (2.0 * spacing);
+        // The height of the top block, as the game will have it (and as
+        // WorldPainter draws it), so that each step of a block reads; or,
+        // smooth or when a texel spans more than one block (the steps would
+        // only flicker in patterns), the height the ground was shaped to.
+        let blocks = !self.style.smooth && spacing <= 1.0;
+        let level = |v: f32| if blocks { block_top(v) as f32 } else { v };
+        let h = |s: &Sample| level(if s.is_empty() { c.height } else { s.height });
+        let (dx, dz) = if blocks {
+            // Each column against its neighbour on the side the light comes
+            // from, as the game's own maps are shaded: a step is one block
+            // wide, lit on the block at its top where it faces the light, in
+            // shadow on the block at its foot where it faces away, and a
+            // block alone above its neighbours shows too.
+            let c = h(c);
+            let dx = if self.light[0] <= 0.0 { c - h(l) } else { h(r) - c };
+            let dz = if self.light[2] <= 0.0 { c - h(u) } else { h(d) - c };
+            (dx / spacing, dz / spacing)
+        } else {
+            ((h(r) - h(l)) / (2.0 * spacing), (h(d) - h(u)) / (2.0 * spacing))
+        };
         let shade = hillshade(dx * exaggeration, dz * exaggeration, self.light);
 
         let mut out = match self.style.mode {
@@ -570,7 +591,7 @@ impl<'a> Colorizer<'a> {
                 let ground = self.with_cover(ground, c, at);
                 scale(ground, shade)
             }
-            MapMode::Height => scale(rgb(height_color_to(c.height, self.sea, self.style.top as f32)), 0.7 + 0.3 * shade),
+            MapMode::Height => scale(rgb(height_color_to(level(c.height), self.sea, self.style.top as f32)), 0.7 + 0.3 * shade),
             MapMode::Slope => {
                 // The trend of the hillside when it was measured around the
                 // sample, the step to the neighbours otherwise.
@@ -603,7 +624,7 @@ impl<'a> Colorizer<'a> {
         }
 
         if let Some(interval) = contour {
-            let band = |v: f32| (v / interval).floor();
+            let band = |v: f32| (level(v) / interval).floor();
             let b = band(c.height);
             if (!r.is_empty() && band(r.height) != b) || (!d.is_empty() && band(d.height) != b) {
                 out = scale(out, 0.74);
@@ -1412,6 +1433,38 @@ mod tests {
             .unwrap();
     }
 
+    /// Close up, each block is shaded against its neighbour on the side
+    /// the light comes from: a step is one block wide, ground a fraction of
+    /// a block higher looks the same, and a block alone above the others
+    /// shows. Smooth, a step spreads over both blocks and the fraction shows.
+    #[test]
+    fn close_up_each_block_shows_its_own_step() {
+        let w = world();
+        let at = |height: f32| Sample { height, levels: 1, ..Sample::EMPTY };
+        for smooth in [false, true] {
+            // The light from the north-west, the default.
+            let colorizer = Colorizer::new(&w.registry, MapStyle { smooth, ..MapStyle::default() }, 63.0);
+            // Block `k` of a row from west to east, its west neighbour `lift` blocks higher.
+            let pixel = |row: &[f32], k: usize, lift: f32| {
+                colorizer.pixel(&at(row[k]), None, &at(row[k - 1] + lift), &at(row[k + 1]), &at(row[k]), &at(row[k]), 1.0, 1.0, None, None)
+            };
+            let flat = pixel(&[70.0; 3], 1, 0.0);
+            let step = [70.0, 70.0, 71.0, 71.0];
+            let (below, top) = (pixel(&step, 1, 0.0), pixel(&step, 2, 0.0));
+            if smooth {
+                assert!(below != flat && top != flat, "smooth: both sides of the step shaded");
+                assert_ne!(pixel(&step, 1, 0.3), below, "smooth: a fraction of a block shows");
+            } else {
+                assert_eq!(below, flat, "the block at the foot of the step, before it, stays flat");
+                assert!(top.r() > flat.r(), "the block at the top of the step, facing the light, is lit");
+                assert_eq!(pixel(&step, 1, 0.3), below, "a fraction of a block does not show");
+                let bump = [70.0, 71.0, 70.0, 70.0];
+                assert!(pixel(&bump, 1, 0.0).r() > flat.r(), "a block alone above the others is lit");
+                assert!(pixel(&bump, 2, 0.0).r() < flat.r(), "the block east of it is in its shadow");
+            }
+        }
+    }
+
     #[test]
     fn samples_see_the_level_stack() {
         let w = world();
@@ -1563,8 +1616,9 @@ mod tests {
         eprintln!("grid {:.3} ms a tile", time(&|p| drop(SurfaceGrid::build(dim, p))));
         eprintln!("decode only {:.3} ms a tile", time(&|p| drop(TileStack::new(dim, p, false))));
         // A chunk's image, from column data already read.
-        let colorizer = Colorizer::new(&world.registry, MapStyle::default(), world.meta.sea_level as f32);
-        for lod in [0u8, 2, 4] {
+        for (smooth, lod) in [false, true].into_iter().flat_map(|s| [0u8, 1, 2, 4].map(|l| (s, l))) {
+            let style = MapStyle { contours: true, smooth, ..MapStyle::default() };
+            let colorizer = Colorizer::new(&world.registry, style, world.meta.sea_level as f32);
             let key = ChunkKey::of_tile(tiles[tiles.len() / 2], lod);
             let mut needed = HashSet::new();
             key.needed_tiles(&mut needed);
@@ -1578,7 +1632,7 @@ mod tests {
                     t.elapsed().as_secs_f64() * 1000.0
                 })
                 .fold(f64::MAX, f64::min);
-            eprintln!("chunk at lod {lod}: {best:.3} ms");
+            eprintln!("chunk at lod {lod}{}: {best:.3} ms", if smooth { ", smooth" } else { "" });
         }
     }
 
@@ -1659,5 +1713,37 @@ mod tests {
         hist.commit();
         let late: Vec<_> = under.iter().filter(|k| drawn.get(k).is_none_or(|&f| f + 3 * under.len().div_ceil(BATCH_CHUNKS) < frames)).collect();
         assert!(late.is_empty(), "{} of {} parts under the brush not redrawn lately: {late:?}", late.len(), under.len());
+    }
+
+    /// A map (MASSIF_CLOSE_WORLD) close up, at the block MASSIF_CLOSE_AT
+    /// (`x,z`, its middle by default), at the four finest levels of detail,
+    /// with block steps and smooth, saved to MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn a_map_close_up() {
+        let Some(path) = std::env::var_os("MASSIF_CLOSE_WORLD") else { return };
+        let world = massif_format::load(std::path::Path::new(&path)).unwrap();
+        let dim = &world.dims[0];
+        let (lo, hi) = dim.bounds().unwrap();
+        let at = std::env::var("MASSIF_CLOSE_AT").ok().and_then(|v| v.split_once(',').map(|(x, z)| (x.trim().parse().unwrap(), z.trim().parse().unwrap())));
+        let (x, z) = at.unwrap_or(((lo.x + hi.x) / 2 * 128, (lo.z + hi.z) / 2 * 128));
+        // The whole map, a texel per 32 blocks, to find a place.
+        let (x0, z0) = (lo.x * 128, lo.z * 128);
+        let n = |a: i32, b: i32| ((b - a + 1) as usize * 128).div_ceil(CHUNK_PX << 5) as i32;
+        eprintln!("map from {x0},{z0}, 32 blocks a pixel");
+        save("close-whole.png", &render_region(dim, &world.registry, world.meta.sea_level as f32, MapStyle::default(), 5, x0, z0, n(lo.x, hi.x), n(lo.z, hi.z)));
+        for smooth in [false, true] {
+            for lod in 0..=3u8 {
+                let style = MapStyle { contours: true, smooth, ..MapStyle::default() };
+                let span = (CHUNK_PX << lod) as i32;
+                let image = render_region(dim, &world.registry, world.meta.sea_level as f32, style, lod, x - span, z - span, 2, 2);
+                save(&format!("close-{}-lod{lod}.png", if smooth { "smooth" } else { "steps" }), &image);
+                if lod == 0 {
+                    // The middle, 8 pixels a block, as the map close up.
+                    let (n, k) = (64, 8);
+                    let pixels = (0..n * k * n * k).map(|p| image.pixels[(96 + p / (n * k) / k) * 256 + 96 + p % (n * k) / k]).collect();
+                    save(&format!("close-{}-zoomed.png", if smooth { "smooth" } else { "steps" }), &ColorImage::new([n * k, n * k], pixels));
+                }
+            }
+        }
     }
 }

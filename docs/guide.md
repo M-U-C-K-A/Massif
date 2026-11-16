@@ -102,6 +102,17 @@ What Massif did and what runs in the background (saving, exporting, the
 automatic tools over a whole map) shows at the bottom right of the window,
 over the areas, with a **Cancel** for long tasks.
 
+The 2D map's header picks what it shows (Terrain, Height, Slope, Biome,
+Relief) and what goes over it: contour lines, **Block steps** and the tile and
+chunk grid. With **Block steps** on, the default, the map close up (a pixel
+or more for each block) is shaded from the height of each column's top block,
+as the game's own maps are: each block is compared with its neighbour on the
+side the light comes from, so a step of one block is a sharp line one block
+wide, lit where it faces the light and in shadow at its foot, and the contour
+lines follow the blocks. Off, the shading follows the smooth height the ground
+was shaped to, softer and without the steps. Zoomed out, where a pixel spans
+several blocks, both are the smooth shading.
+
 **Help ▸ Massif Help** (F1) opens the help: every part of Massif, topic by
 topic, with a search, and the keyboard shortcuts.
 

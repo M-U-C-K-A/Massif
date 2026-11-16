@@ -6681,6 +6681,10 @@ mod tests {
             let id = h.state().active_map.or_else(|| h.state().maps.keys().next().copied()).expect("a map view");
             h.state_mut().layout.current_mut().maximized = Some(id);
         }
+        // MASSIF_MAP_SMOOTH: the map's smooth shading rather than its steps.
+        if std::env::var_os("MASSIF_MAP_SMOOTH").is_some() {
+            h.state_mut().maps.values_mut().for_each(|view| view.smooth = true);
+        }
         eprintln!("opened: memory in use {} MB", crate::devtools::memory_in_use().unwrap_or(0) >> 20);
         // The whole map drawn: frames, time and the processor's time.
         let (started, cpu) = (std::time::Instant::now(), crate::devtools::cpu_time().unwrap_or_default());

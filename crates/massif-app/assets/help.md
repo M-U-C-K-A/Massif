@@ -85,6 +85,9 @@ The tabs at the top are workspaces: arrangements of areas for a kind of work. Th
 ## Moving around
 The map moves under the hand: let go of a drag while moving and it glides on, slowing down; the zoom buttons, the zoom keys and **Fit the whole map** glide there in a moment. While a view moves, the others put off the work they do in the background, so that it keeps up, and pick it up as soon as it stops. **Settings ▸ Developer** shows the frames a second and the time of each, live.
 
+## The 2D map
+The buttons in the map's header pick what it shows (**Terrain**, **Height**, **Slope**, **Biome**, **Relief**) and what goes over it: contour lines, **Block steps**, the tile and chunk grid. With **Block steps** on (the default), close up the map is shaded block by block, each at the height the game will give it and compared with its neighbour on the side the light comes from, as the game's own maps are: every step of a block shows as a sharp line, lit where it faces the light and in shadow at its foot, and the contour lines follow the blocks. Off, the shading follows the smooth shape of the ground. Zoomed out, where a pixel spans several blocks, the shading is the smooth one either way.
+
 ## Messages
 What Massif did, and what it does in the background (saving, exporting, automatic tools over the whole map), shows at the bottom right of the window. Long tasks have a **Cancel** button.
 
