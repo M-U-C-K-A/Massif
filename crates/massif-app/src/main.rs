@@ -13,6 +13,7 @@ mod cards;
 mod caves;
 mod devtools;
 mod doc;
+mod graphics;
 mod finder;
 mod graph_editor;
 mod help;

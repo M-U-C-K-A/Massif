@@ -135,7 +135,7 @@ field or in Edit ▸ Ores as before, and ⌘C, ⌘V and ⌘A work in text fields
 ## Settings
 
 **Settings** (⌘, — in the **Massif** menu on a Mac, in **View** on Windows
-and Linux — or the home screen's sidebar) has nine sections, in a window of
+and Linux — or the home screen's sidebar) has ten sections, in a window of
 their own:
 
 - **Appearance**: the theme, the accent colour (the colour of what is
@@ -186,6 +186,28 @@ their own:
 - **Updates**: **Check for new versions**, on by default (see
   [New versions](#new-versions)), and the version skipped, to be told of
   again.
+- **Graphics**: how much the graphics card is asked to do. **Low**,
+  **Medium** and **High** set everything at once; a change to any setting
+  makes it **Custom**, and every change applies at once, without a restart.
+  The 3D views: their **Render scale** (drawn at 50, 67, 85 or 100 % of
+  their pixels and stretched to fit: what saves the most, close to half the
+  time at 67 %), **Smooth edges** (four samples a pixel), **Fog**, **Water
+  reflections**, the game's textures in the player's view, and how much of
+  the map the 3D view keeps on the graphics card (about 320 MB, 800 MB or
+  2 GB): a larger map is drawn with a column every 2, 4 or 8 blocks, all of
+  it, coarser — on a huge map with much water, far faster than every block.
+  The Terrain viewport: its **Light and shadows** (the steps of its
+  shadows, clouds and sky light; saved images always take the most) and its
+  **Clouds**, what costs the most there. Then the map view's images kept on
+  the graphics card (128 MB, 512 MB or 2 GB) and how many frames a second
+  the window draws while nothing is touched but something moves (20, 30, 60
+  or no limit). On its very first start, Massif picks the preset for the
+  graphics card it finds (Low on OpenGL, older integrated graphics or a
+  software renderer; Medium on recent integrated graphics; High on a
+  graphics card of its own) after drawing a few frames of the 3D view as a
+  trial, and writes the choice in `startup.log`; a preset you choose is
+  never changed. When the 3D views stay slow for a while as you move them,
+  a quiet note offers the preset one step lower, once a run.
 - **Developer**: developer mode adds a **Developer** panel to every area's
   menu, as the brushes or the layers: frames a second and the time each
   takes (and how much of it is Massif's own work), the memory the system

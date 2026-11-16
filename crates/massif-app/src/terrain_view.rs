@@ -26,7 +26,6 @@ use std::time::{Duration, Instant};
 
 const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-const SAMPLES: u32 = 4;
 const FOV_Y: f32 = 40.0 * std::f32::consts::PI / 180.0;
 /// Views narrower than this (width over height) see as wide as it.
 const WIDE: f32 = 1.9;
@@ -1109,7 +1108,8 @@ fn fs_sea(in: SeaOut) -> @location(0) vec4<f32> {
 
 struct Target {
     size: [u32; 2],
-    msaa: wgpu::TextureView,
+    /// None at one sample a pixel: drawn straight into the image.
+    msaa: Option<wgpu::TextureView>,
     resolve: wgpu::Texture,
     resolve_view: wgpu::TextureView,
     /// The same image as plain bytes, for egui.
@@ -1136,6 +1136,8 @@ struct Relief {
 pub struct TerrainRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    /// Samples a pixel: 4 with edges smoothed, else 1.
+    samples: u32,
     /// Where the device cannot view the image as plain bytes (OpenGL):
     /// the pass that copies it so.
     copier: Option<crate::view_image::Copier>,
@@ -1157,7 +1159,8 @@ pub struct TerrainRenderer {
 }
 
 impl TerrainRenderer {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+    /// The same, `samples` a pixel (1 or 4).
+    pub fn with_samples(device: &wgpu::Device, queue: &wgpu::Queue, samples: u32) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("massif graph view"),
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(SHADER)),
@@ -1225,7 +1228,7 @@ impl TerrainRenderer {
                     bias: Default::default(),
                 }),
                 multisample: wgpu::MultisampleState {
-                    count: SAMPLES,
+                    count: samples,
                     ..Default::default()
                 },
                 fragment: Some(wgpu::FragmentState {
@@ -1271,6 +1274,7 @@ impl TerrainRenderer {
         Self {
             device: device.clone(),
             queue: queue.clone(),
+            samples,
             relief_depth,
             slab_depth,
             relief_pipeline,
@@ -1460,7 +1464,7 @@ impl TerrainRenderer {
                 view_formats,
             })
         };
-        let msaa = texture("massif graph msaa", COLOR_FORMAT, SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT, &[]);
+        let msaa = (self.samples > 1).then(|| texture("massif graph msaa", COLOR_FORMAT, self.samples, wgpu::TextureUsages::RENDER_ATTACHMENT, &[]));
         let resolve = texture(
             "massif graph image",
             COLOR_FORMAT,
@@ -1468,11 +1472,11 @@ impl TerrainRenderer {
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
             crate::view_image::view_formats(&self.device),
         );
-        let depth = texture("massif graph depth", DEPTH_FORMAT, SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT, &[]);
+        let depth = texture("massif graph depth", DEPTH_FORMAT, self.samples, wgpu::TextureUsages::RENDER_ATTACHMENT, &[]);
         let view = |t: &wgpu::Texture| t.create_view(&wgpu::TextureViewDescriptor::default());
         Target {
             size,
-            msaa: view(&msaa),
+            msaa: msaa.as_ref().map(view),
             resolve_view: view(&resolve),
             shown: crate::view_image::Shown::of(&self.device, self.copier.as_ref(), &resolve),
             resolve,
@@ -1493,9 +1497,9 @@ impl TerrainRenderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("massif graph view"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &target.msaa,
+                    view: target.msaa.as_ref().unwrap_or(&target.resolve_view),
                     depth_slice: None,
-                    resolve_target: Some(&target.resolve_view),
+                    resolve_target: target.msaa.as_ref().map(|_| &target.resolve_view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: u.horizon[0] as f64,
@@ -1503,7 +1507,7 @@ impl TerrainRenderer {
                             b: u.horizon[2] as f64,
                             a: 1.0,
                         }),
-                        store: crate::view_image::msaa_store(&self.device),
+                        store: if target.msaa.is_some() { crate::view_image::msaa_store(&self.device) } else { wgpu::StoreOp::Store },
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -1789,10 +1793,14 @@ impl TerrainView {
         let (zenith, horizon, sun_color) = r.sky();
         // Clouds and shadows marched, and the directions and steps the sky's
         // occlusion is looked for in.
-        let (cloud_steps, shadow_steps, sky_dirs, sky_steps) = match quality {
-            Quality::Moving => (14.0, 24.0, 4.0, 4.0),
-            Quality::Still => (40.0, 48.0, 8.0, 7.0),
-            Quality::Final => (110.0, 96.0, 12.0, 8.0),
+        // Settings ▸ Graphics: Low takes the steps of a moving view still
+        // too, High more than Medium's; saved images always the most.
+        let light = crate::graphics::get().light;
+        let (cloud_steps, shadow_steps, sky_dirs, sky_steps) = match (quality, light) {
+            (Quality::Final, _) => (110.0, 96.0, 12.0, 8.0),
+            (Quality::Moving, _) | (Quality::Still, crate::graphics::Light::Low) => (14.0, 24.0, 4.0, 4.0),
+            (Quality::Still, crate::graphics::Light::Medium) => (40.0, 48.0, 8.0, 7.0),
+            (Quality::Still, crate::graphics::Light::High) => (64.0, 72.0, 10.0, 8.0),
         };
         // Haze as a share of the map, whatever its size: at the usual 0.3,
         // an eighth of the light lost across it, so that the far side
@@ -1812,7 +1820,8 @@ impl TerrainView {
             horizon: [horizon[0], horizon[1], horizon[2], r.exposure.max(0.05)],
             sea: [self.sea_level * ex, r.sea as u8 as f32, data.slabs.len().min(MAX_SLABS) as f32, 0.0],
             clouds: [r.cloud_base * ex, (r.cloud_base + r.cloud_thickness.max(1.0)) * ex, r.cloud_cover.clamp(0.0, 1.0), r.cloud_density.max(0.0)],
-            clouds2: [r.cloud_size.max(10.0), (r.cloud_seed % 1000) as f32 * 7.31, r.clouds as u8 as f32, 0.0],
+            // Clouds left out by Settings ▸ Graphics, except in saved images.
+            clouds2: [r.cloud_size.max(10.0), (r.cloud_seed % 1000) as f32 * 7.31, (r.clouds && (quality == Quality::Final || crate::graphics::get().clouds)) as u8 as f32, 0.0],
             cam: [tan * aspect, tan, 0.0, 0.0],
             cam_f: [fwd.x, fwd.y, fwd.z, 0.0],
             cam_s: [s.x, s.y, s.z, 0.0],
@@ -1834,7 +1843,14 @@ impl TerrainView {
             painter.rect_filled(rect, 0, pal.canvas);
             return false;
         };
-        let mut renderer = self.renderer.take().unwrap_or_else(|| TerrainRenderer::new(&state.device, &state.queue));
+        let graphics = crate::graphics::get();
+        // Edges smoothed or not (Settings ▸ Graphics): another renderer.
+        if self.renderer.as_ref().is_some_and(|r| r.samples != graphics.samples()) {
+            self.renderer = None;
+            self.uploaded = None;
+            self.last = None;
+        }
+        let mut renderer = self.renderer.take().unwrap_or_else(|| TerrainRenderer::with_samples(&state.device, &state.queue, graphics.samples()));
         // Left drag turns the view, Shift + left drag turns the sun, right
         // or middle drag moves, the wheel or a pinch comes closer.
         let mut moving = false;
@@ -1885,7 +1901,8 @@ impl TerrainView {
         } else if settled {
             self.moved = None;
         }
-        let ppp = ui.ctx().pixels_per_point();
+        // Drawn smaller and stretched by Settings ▸ Graphics' render scale.
+        let ppp = ui.ctx().pixels_per_point() * graphics.render_scale;
         let px = [(rect.width() * ppp).round() as u32, (rect.height() * ppp).round() as u32];
         // While it moves the view is drawn at half the size and shown
         // stretched (four times fewer pixels to light), sharp once it stops.
@@ -1918,6 +1935,7 @@ impl TerrainView {
         let key = (bytemuck::bytes_of(&u).to_vec(), self.render.sea);
         if fresh || self.last.as_ref() != Some(&key) {
             renderer.render(&u, self.render.sea, small);
+            crate::graphics::drew_3d();
             self.last = Some(key);
         }
         self.renderer = Some(renderer);
@@ -1958,6 +1976,38 @@ impl TerrainView {
             renderer.read(&target);
             started.elapsed().as_secs_f32() * 1000.0 / 10.0
         })
+    }
+
+    /// How long a still frame takes at `size` with the graphics settings
+    /// now (their samples a pixel, light and clouds; the render scale
+    /// applied to `size`), in milliseconds: the best of ten.
+    #[cfg(test)]
+    pub fn time_still(&mut self, size: [u32; 2]) -> f32 {
+        let g = crate::graphics::get();
+        let size = [(size[0] as f32 * g.render_scale) as u32, (size[1] as f32 * g.render_scale) as u32];
+        let data = self.data.clone().expect("a relief");
+        if self.renderer.as_ref().is_some_and(|r| r.samples != g.samples()) {
+            let r = self.renderer.take().expect("a renderer");
+            self.renderer = Some(TerrainRenderer::with_samples(&r.device, &r.queue, g.samples()));
+        }
+        let renderer = self.renderer.as_mut().expect("a renderer");
+        renderer.upload(&data);
+        self.uploaded = Some(Arc::as_ptr(&data) as usize);
+        let u = self.uniforms(&data, size[0] as f32 / size[1] as f32, Quality::Still);
+        let sea = self.render.sea;
+        let renderer = self.renderer.as_mut().expect("a renderer");
+        let target = renderer.make_target(size);
+        renderer.render_to(&target, &u, sea);
+        renderer.read(&target);
+        let mut best = f32::MAX;
+        for _ in 0..10 {
+            let started = Instant::now();
+            renderer.render_to(&target, &u, sea);
+            renderer.read(&target);
+            best = best.min(started.elapsed().as_secs_f32() * 1000.0);
+        }
+        self.last = None;
+        best
     }
 
     fn render_at(&mut self, size: [u32; 2], quality: Quality) -> Option<(u32, u32, Vec<u8>)> {

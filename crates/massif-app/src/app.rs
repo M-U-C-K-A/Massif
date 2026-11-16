@@ -97,6 +97,12 @@ struct Settings {
     /// it existed are of someone who knows Massif already.
     #[serde(default = "yes")]
     tour_done: bool,
+    /// What the graphics card is asked to do (Settings ▸ Graphics); None
+    /// until the first start picks a preset for the card.
+    graphics: Option<crate::graphics::Graphics>,
+    /// The card the first start picked the preset for, and how long its
+    /// trial frame took: what Settings ▸ Graphics says of the choice.
+    graphics_chosen_for: Option<(String, f32)>,
 }
 
 fn yes() -> bool {
@@ -120,6 +126,7 @@ enum PrefsSection {
     Memory,
     Autosave,
     Updates,
+    Graphics,
     Developer,
 }
 
@@ -151,6 +158,8 @@ impl Default for Settings {
             pack_author: String::new(),
             language: crate::i18n::Language::System,
             tour_done: false,
+            graphics: None,
+            graphics_chosen_for: None,
         }
     }
 }
@@ -342,6 +351,17 @@ pub struct MassifApp {
     analysis: Option<Box<crate::analysis::AnalysisView>>,
     /// When the memory limit was last applied (seconds).
     memory_checked: f64,
+    /// The first start's trial of the graphics card, running (see
+    /// `graphics::suggest`): the card, and its frame time to come.
+    graphics_probe: Option<(crate::graphics::Card, std::sync::mpsc::Receiver<f32>)>,
+    /// Frames of the 3D views watched for slowness, and the lighter preset
+    /// a quiet note suggests.
+    slow_frames: crate::graphics::SlowWatch,
+    slow_note: Option<crate::graphics::Preset>,
+    /// When the user last touched anything, and when the last frame began:
+    /// an idle window draws at most `idle_fps` frames a second.
+    last_input: f64,
+    frame_began: Option<std::time::Instant>,
     /// What the Developer panel shows, measured frame after frame.
     dev: crate::devtools::DevStats,
     after_save: Option<Pending>,
@@ -482,6 +502,7 @@ impl MassifApp {
         crate::loader::set_pattern(&cc.egui_ctx, settings.loader);
         theme::set_typeface(&cc.egui_ctx, settings.typeface);
         let mut app = Self::with_world(default_world(), layout, tools, settings);
+        app.start_graphics(cc);
         if let Some(render) = cc.storage.and_then(|s| eframe::get_value(s, "massif.render")).or_else(|| backup.get("massif.render")) {
             app.graph.view.render = render;
         }
@@ -804,6 +825,11 @@ impl MassifApp {
             dialog_was_open: false,
             analysis: None,
             memory_checked: f64::NEG_INFINITY,
+            graphics_probe: None,
+            slow_frames: Default::default(),
+            slow_note: None,
+            last_input: 0.0,
+            frame_began: None,
             dev: crate::devtools::DevStats::default(),
             after_save: None,
             status: None,
@@ -933,7 +959,7 @@ impl MassifApp {
         self.doc.max_hot_tiles = (budget * 3 / 5 / per_tile / levels).clamp(64, 1 << 20);
         self.map_cache.max_grids = (budget / 4 / crate::map_render::GRID_BYTES).clamp(64, 8192);
         self.map_cache.max_summary_bytes = (budget / 10).clamp(16 << 20, 1 << 30);
-        self.map_cache.max_chunks = (budget * 3 / 20 / (64 << 10)).clamp(256, 32768);
+        self.map_cache.max_chunks = (budget * 3 / 20 / (64 << 10)).clamp(256, 32768).min(crate::graphics::get().map_images as usize);
         if bytes > budget * 3 / 5 {
             let d = self.doc.dim;
             let max = self.doc.max_hot_tiles;
@@ -1287,6 +1313,215 @@ impl MassifApp {
             return None;
         }
         self.updates.offer(crate::update::RUNNING, self.settings.skipped_version.as_deref())
+    }
+
+    fn prefs_graphics(&mut self, ui: &mut Ui) {
+        use crate::graphics::{Graphics, Light, Preset};
+        let pal = Palette::of(ui);
+        Self::prefs_header(
+            ui,
+            tr!("Graphics"),
+            tr!("How much the graphics card is asked to do in the 3D views and the map. Low suits integrated graphics and older cards, High a recent graphics card. Every change applies at once."),
+        );
+        let mut g = self.settings.graphics.unwrap_or_else(crate::graphics::get);
+        let before = g;
+        crate::widgets::well(ui, |ui| {
+            crate::widgets::row(ui, tr!("Preset"), |ui| {
+                let now = g.preset();
+                let all = [Preset::Low, Preset::Medium, Preset::High, Preset::Custom];
+                let on = all.map(|p| p == now);
+                if let Some(k) = crate::widgets::button_group(ui, "graphics preset", &[tr!("Low"), tr!("Medium"), tr!("High"), tr!("Custom")], &on)
+                    && all[k] != Preset::Custom
+                {
+                    g = Graphics::of(all[k]);
+                }
+            });
+        });
+        if let Some((card, ms)) = &self.settings.graphics_chosen_for {
+            ui.add_space(4.0);
+            ui.add(egui::Label::new(RichText::new(tr!("Chosen at the first start for {card}, from a trial frame of {ms:.1} ms.", card, ms)).size(11.5).color(pal.weak)).wrap());
+        }
+        ui.add_space(12.0);
+        ui.label(RichText::new(tr!("3D views")).size(13.0).medium());
+        ui.add_space(4.0);
+        crate::widgets::well(ui, |ui| {
+            crate::widgets::row(ui, tr!("Render scale"), |ui| {
+                let scales = [0.5f32, 0.67, 0.85, 1.0];
+                let on = scales.map(|s| (s - g.render_scale).abs() < 0.01);
+                if let Some(k) = crate::widgets::button_group(ui, "render scale", &["50%", "67%", "85%", "100%"], &on) {
+                    g.render_scale = scales[k];
+                }
+            });
+            crate::widgets::row(ui, tr!("Smooth edges"), |ui| {
+                crate::widgets::switch(ui, &mut g.msaa);
+            });
+            crate::widgets::row(ui, tr!("Fog"), |ui| {
+                crate::widgets::switch(ui, &mut g.fog);
+            });
+            crate::widgets::row(ui, tr!("Water reflections"), |ui| {
+                crate::widgets::switch(ui, &mut g.reflections);
+            });
+            crate::widgets::row(ui, tr!("Game textures in the player's view"), |ui| {
+                crate::widgets::switch(ui, &mut g.textures);
+            });
+            crate::widgets::row(ui, tr!("Map kept on the graphics card"), |ui| {
+                let pages = [64u32, 160, 400];
+                let labels = pages.map(|p| tr!("{size} MB", size = (p as u64 * crate::graphics::PAGE_BYTES / 1_000_000)));
+                let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+                let on = pages.map(|p| p == g.gpu_pages);
+                if let Some(k) = crate::widgets::button_group(ui, "gpu pages", &labels, &on) {
+                    g.gpu_pages = pages[k];
+                }
+            });
+        });
+        ui.add_space(12.0);
+        ui.label(RichText::new(tr!("Terrain viewport")).size(13.0).medium());
+        ui.add_space(4.0);
+        crate::widgets::well(ui, |ui| {
+            crate::widgets::row(ui, tr!("Light and shadows"), |ui| {
+                let all = [Light::Low, Light::Medium, Light::High];
+                let on = all.map(|l| l == g.light);
+                if let Some(k) = crate::widgets::button_group(ui, "light", &[tr!("Low"), tr!("Medium"), tr!("High")], &on) {
+                    g.light = all[k];
+                }
+            });
+            crate::widgets::row(ui, tr!("Clouds"), |ui| {
+                crate::widgets::switch(ui, &mut g.clouds);
+            });
+        });
+        ui.add_space(12.0);
+        ui.label(RichText::new(tr!("Map and window")).size(13.0).medium());
+        ui.add_space(4.0);
+        crate::widgets::well(ui, |ui| {
+            crate::widgets::row(ui, tr!("Map images on the graphics card"), |ui| {
+                let counts = [2048u32, 8192, 32768];
+                let labels = counts.map(|c| tr!("{size} MB", size = (c as u64 * crate::graphics::MAP_IMAGE_BYTES) >> 20));
+                let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+                let on = counts.map(|c| c == g.map_images);
+                if let Some(k) = crate::widgets::button_group(ui, "map images", &labels, &on) {
+                    g.map_images = counts[k];
+                }
+            });
+            crate::widgets::row(ui, tr!("Frames a second when idle"), |ui| {
+                let rates = [20u32, 30, 60, 0];
+                let on = rates.map(|r| r == g.idle_fps);
+                if let Some(k) = crate::widgets::button_group(ui, "idle fps", &["20", "30", "60", tr!("No limit")], &on) {
+                    g.idle_fps = rates[k];
+                }
+            });
+        });
+        ui.add_space(12.0);
+        for (name, what) in [
+            (tr!("Render scale"), tr!("The 3D views drawn smaller and stretched to fit: what saves the most time in them. While a view moves it is drawn smaller still.")),
+            (tr!("Map kept on the graphics card"), tr!("A map larger than this is drawn in 3D with a column every 2, 4 or 8 blocks: all of it, coarser, and much faster on a huge map.")),
+            (tr!("Clouds"), tr!("What costs the most in the Terrain viewport. Saved images keep them.")),
+            (tr!("Frames a second when idle"), tr!("While nothing is touched but something moves on screen (a loader, the 3D view building), the window draws at most this often.")),
+        ] {
+            ui.horizontal_top(|ui| {
+                ui.allocate_ui_with_layout(vec2(150.0, 16.0), egui::Layout::left_to_right(Align::Min), |ui| {
+                    ui.set_width(150.0);
+                    ui.add(egui::Label::new(RichText::new(name).size(12.0).medium()).wrap());
+                });
+                ui.add(egui::Label::new(RichText::new(what).size(12.0).color(pal.weak)).wrap());
+            });
+            ui.add_space(6.0);
+        }
+        if g != before {
+            self.use_graphics(g);
+        }
+    }
+
+    /// Draw with `g` from now on, and keep it as the user's choice.
+    fn use_graphics(&mut self, g: crate::graphics::Graphics) {
+        self.settings.graphics = Some(g);
+        crate::graphics::set(g);
+        // The map view's images: kept within the new limit.
+        self.memory_checked = f64::NEG_INFINITY;
+        self.slow_note = None;
+        // A preset chosen by hand is the user's: no trial changes it.
+        self.graphics_probe = None;
+    }
+
+    /// At the start: draw with the settings kept, or, the very first time,
+    /// try the graphics card and pick a preset for it (see
+    /// `graphics::suggest`).
+    fn start_graphics(&mut self, cc: &eframe::CreationContext<'_>) {
+        if let Some(g) = self.settings.graphics {
+            crate::graphics::set(g.sane());
+            return;
+        }
+        crate::graphics::set(crate::graphics::Graphics::default());
+        // Tests draw with the default, the same in every run.
+        if cfg!(test) {
+            return;
+        }
+        let Some(render) = &cc.wgpu_render_state else { return };
+        let card = crate::graphics::Card::of(&render.adapter.get_info());
+        crate::startup::step(&format!("graphics card: {} ({:?}, {:?}): trying it to pick a graphics preset", card.name, card.device_type, card.backend));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (device, queue, ctx) = (render.device.clone(), render.queue.clone(), cc.egui_ctx.clone());
+        let started = std::thread::Builder::new().name("graphics trial".into()).spawn(move || {
+            let ms = crate::view3d::probe_ms(&device, &queue);
+            let _ = tx.send(ms);
+            ctx.request_repaint();
+        });
+        if started.is_ok() {
+            self.graphics_probe = Some((card, rx));
+        }
+    }
+
+    /// Each frame: the first start's trial, once it is done; frames of the
+    /// 3D views watched; an idle window kept to its frames a second.
+    fn watch_graphics(&mut self, ctx: &egui::Context) {
+        if let Some((card, rx)) = &self.graphics_probe {
+            match rx.try_recv() {
+                Ok(ms) => {
+                    let ms = (ms.is_finite() && ms > 0.0).then_some(ms);
+                    let preset = crate::graphics::suggest(card, ms);
+                    crate::startup::step(&format!("graphics trial: a frame in {:.1} ms on {}: the {preset:?} graphics preset", ms.unwrap_or(f32::NAN), card.name));
+                    // Unless the user chose meanwhile.
+                    if self.settings.graphics.is_none() {
+                        let g = crate::graphics::Graphics::of(preset);
+                        self.settings.graphics = Some(g);
+                        self.settings.graphics_chosen_for = Some((card.name.clone(), ms.unwrap_or(0.0)));
+                        crate::graphics::set(g);
+                        self.memory_checked = f64::NEG_INFINITY;
+                    }
+                    self.graphics_probe = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.graphics_probe = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        let (now, touched, dt) = ctx.input(|i| (i.time, !i.events.is_empty() || i.pointer.any_down() || !i.keys_down.is_empty(), i.unstable_dt as f64));
+        if touched {
+            self.last_input = now;
+        }
+        // Slow frames of a 3D view being moved: a lighter preset suggested,
+        // once a run, never past Low.
+        if crate::graphics::take_drew_3d() && now - self.last_input < 0.5 {
+            let preset = crate::graphics::get().preset();
+            if preset != crate::graphics::Preset::Low && self.slow_frames.frame(dt) {
+                self.slow_note = preset.lower();
+                if let Some(lower) = self.slow_note {
+                    log::info!("3D frames slow for a while: the {lower:?} graphics preset suggested");
+                }
+            }
+        }
+        // An idle window that keeps drawing (a loader, tiles being built)
+        // draws at most `idle_fps` frames a second.
+        let fps = crate::graphics::get().idle_fps;
+        let began = self.frame_began.replace(std::time::Instant::now());
+        if !cfg!(test) && fps > 0 && now - self.last_input > 1.0 && ctx.has_requested_repaint() {
+            if let Some(began) = began {
+                let least = std::time::Duration::from_secs_f64(1.0 / fps as f64);
+                let spent = began.elapsed();
+                if spent < least {
+                    std::thread::sleep(least - spent);
+                }
+            }
+            self.frame_began = Some(std::time::Instant::now());
+        }
     }
 
     fn prefs_developer(&mut self, ui: &mut Ui) {
@@ -2447,10 +2682,12 @@ impl MassifApp {
             .filter(|s| s.error || now - s.at < 8.0)
             .map(|s| (s.text.clone(), s.error, s.reveal.clone(), now - s.at));
         let running: Vec<usize> = (0..self.jobs.len()).filter(|&k| !self.jobs[k].kind.blocks_editing()).collect();
-        if message.is_none() && running.is_empty() {
+        let slow = self.slow_note;
+        if message.is_none() && running.is_empty() && slow.is_none() {
             return;
         }
         let (mut close, mut cancel, mut reveal) = (false, None, None);
+        let (mut lighter, mut not_now) = (false, false);
         egui::Area::new(Id::unique("notices"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::RIGHT_BOTTOM, vec2(-20.0, -20.0))
@@ -2485,6 +2722,22 @@ impl MassifApp {
                             }
                         });
                     }
+                    if let Some(lower) = slow {
+                        // Frames stayed slow: a lighter preset, offered
+                        // once, quietly; nothing changes unless asked.
+                        card(ui, &mut |ui| {
+                            ui.label(RichText::new(theme::glyph(Icon::Gauge).to_string()).color(pal.weak).size(13.0));
+                            let name = if lower == crate::graphics::Preset::Medium { tr!("Medium") } else { tr!("Low") };
+                            ui.add(egui::Label::new(RichText::new(tr!("The 3D views are slow here. The {preset} graphics preset would be lighter.", preset = name)).size(12.5)).wrap());
+                            if ui.button(tr!("Use {preset}", preset = name)).clicked() {
+                                lighter = true;
+                            }
+                            let x = egui::Button::new(RichText::new(theme::glyph(Icon::X).to_string()).color(pal.weak)).fill(Color32::TRANSPARENT).stroke(Stroke::NONE);
+                            if ui.add(x).on_hover_text(tr!("Not now")).clicked() {
+                                not_now = true;
+                            }
+                        });
+                    }
                     if let Some((text, error, path, age)) = &message {
                         // Fades away over its last second, unless an error.
                         if !error {
@@ -2515,6 +2768,14 @@ impl MassifApp {
         }
         if close {
             self.status = None;
+        }
+        if lighter && let Some(lower) = slow {
+            self.use_graphics(crate::graphics::Graphics::of(lower));
+            let name = if lower == crate::graphics::Preset::Medium { tr!("Medium") } else { tr!("Low") };
+            self.say(ctx, tr!("Graphics: the {preset} preset, in Settings ▸ Graphics.", preset = name), false, None);
+        }
+        if not_now {
+            self.slow_note = None;
         }
         // Drawn again only for what moves: the progress of tasks, the fade
         // of a message, and its end (an error stays, still).
@@ -3039,6 +3300,7 @@ impl MassifApp {
                                 (PrefsSection::Memory, Icon::MemoryStick, tr!("Memory")),
                                 (PrefsSection::Autosave, Icon::History, tr!("Autosave")),
                                 (PrefsSection::Updates, Icon::CircleArrowUp, tr!("Updates")),
+                                (PrefsSection::Graphics, Icon::Gauge, tr!("Graphics")),
                                 (PrefsSection::Developer, Icon::Activity, tr!("Developer")),
                             ] {
                                 let on = section == s;
@@ -3075,6 +3337,7 @@ impl MassifApp {
                                     PrefsSection::Memory => self.prefs_memory(ui),
                                     PrefsSection::Autosave => self.prefs_autosave(ui),
                                     PrefsSection::Updates => self.prefs_updates(ui),
+                                    PrefsSection::Graphics => self.prefs_graphics(ui),
                                     PrefsSection::Developer => self.prefs_developer(ui),
                                 }
                             });
@@ -4113,6 +4376,7 @@ impl eframe::App for MassifApp {
         if let Err(said) = drawn {
             self.after_panic(ui.ctx(), said);
         }
+        self.watch_graphics(ui.ctx());
         let now = ui.input(|i| i.time);
         self.dev.end(now);
         crate::startup::frame_laid_out(ui);
@@ -9480,6 +9744,89 @@ mod tests {
         }
     }
 
+    /// A preset chosen in Settings ▸ Graphics applies at once: Low draws
+    /// the 3D view at one sample a pixel and two thirds of its size, keeps
+    /// fewer of the map view's images on the card; High puts back four
+    /// samples and the whole size. Needs a GPU (skipped without one).
+    #[test]
+    fn graphics_presets_apply_at_once() {
+        use crate::graphics::{Graphics, Preset};
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(8);
+        if h.state().view3d.samples().is_none() {
+            eprintln!("no 3D view drawn (no GPU?): skipping");
+            return;
+        }
+        assert_eq!(h.state().view3d.samples(), Some(4));
+        let full = h.state().view3d.last_region();
+        h.state_mut().dialog = Some(Dialog::Preferences(PrefsSection::Graphics));
+        h.run_steps(3);
+        h.get_all_by_label("Low").next().expect("the Low preset").click();
+        h.run_steps(3);
+        assert_eq!(h.state().settings.graphics.map(|g| g.preset()), Some(Preset::Low));
+        assert_eq!(crate::graphics::get(), Graphics::of(Preset::Low));
+        h.state_mut().dialog = None;
+        h.run_steps(8);
+        assert_eq!(h.state().view3d.samples(), Some(1));
+        let low = h.state().view3d.last_region();
+        assert!(low[0] < full[0] * 3 / 4 && low[1] < full[1] * 3 / 4, "Low draws {low:?} of {full:?}");
+        assert!(h.state().map_cache.max_chunks <= 2048);
+        // One setting changed by hand: Custom.
+        h.state_mut().dialog = Some(Dialog::Preferences(PrefsSection::Graphics));
+        h.run_steps(3);
+        h.get_by_label("100%").click();
+        h.run_steps(3);
+        assert_eq!(h.state().settings.graphics.map(|g| g.preset()), Some(Preset::Custom));
+        h.get_all_by_label("High").next().expect("the High preset").click();
+        h.run_steps(3);
+        assert_eq!(h.state().settings.graphics.map(|g| g.preset()), Some(Preset::High));
+        h.state_mut().dialog = None;
+        h.run_steps(8);
+        assert_eq!(h.state().view3d.samples(), Some(4));
+        assert_eq!(h.state().view3d.last_region(), full);
+    }
+
+    /// What Settings ▸ Graphics costs the Terrain viewport: a still frame
+    /// of the stone towers among themselves, under clouds, at 2,880 × 1,300
+    /// (the viewport on a Retina screen), each setting changed alone from
+    /// High, then each preset. Needs a GPU: runs with MASSIF_PERF.
+    #[test]
+    fn graphics_settings_in_the_viewport() {
+        use crate::graphics::{Graphics, Light, Preset};
+        use massif_core::graph::Template;
+        if std::env::var_os("MASSIF_PERF").is_none() {
+            return;
+        }
+        let mut h = harness(ThemeChoice::Dark);
+        h.state_mut().layout.activate(7);
+        h.run_steps(2);
+        let app = h.state_mut();
+        app.graph.preview = 2048;
+        app.graph.use_template(&mut app.doc, Template::KarstTowers);
+        wait_for_graph(&mut h);
+        let view = &mut h.state_mut().graph.view;
+        view.camera.distance = 0.42;
+        view.camera.pitch = 0.1;
+        view.camera.yaw = 2.4;
+        view.render.clouds = true;
+        let high = Graphics::of(Preset::High);
+        let mut runs: Vec<(String, Graphics)> = vec![("High".into(), high)];
+        runs.push(("High, no MSAA".into(), Graphics { msaa: false, ..high }));
+        runs.push(("High, scale 0.67".into(), Graphics { render_scale: 0.67, ..high }));
+        runs.push(("High, light Medium".into(), Graphics { light: Light::Medium, ..high }));
+        runs.push(("High, light Low".into(), Graphics { light: Light::Low, ..high }));
+        runs.push(("High, no clouds".into(), Graphics { clouds: false, ..high }));
+        runs.push(("Medium".into(), Graphics::of(Preset::Medium)));
+        runs.push(("Low".into(), Graphics::of(Preset::Low)));
+        for (name, g) in runs {
+            crate::graphics::set(g);
+            let ms = view.time_still([2880, 1300]);
+            eprintln!("viewport, {name}: {ms:.1} ms a still frame");
+        }
+        crate::graphics::set(Graphics::default());
+    }
+
     /// The templates: the picker with their pictures, a card replacing the
     /// graph, and every template in the viewport with its own sky. Needs a
     /// GPU: runs with MASSIF_SNAPSHOT_DIR.
@@ -9931,11 +10278,22 @@ mod tests {
             (PrefsSection::Notifications, "notifications"),
             (PrefsSection::Memory, "memory"),
             (PrefsSection::Autosave, "autosave"),
+            (PrefsSection::Graphics, "graphics"),
         ] {
             h.state_mut().dialog = Some(Dialog::Preferences(section));
             h.run_steps(4);
             h.render().unwrap().save(dir.join(format!("dialog-settings-{name}.png"))).unwrap();
         }
+        // The rest of the graphics page, scrolled.
+        h.state_mut().dialog = Some(Dialog::Preferences(PrefsSection::Graphics));
+        h.run_steps(3);
+        h.event(egui::Event::PointerMoved(pos2(880.0, 560.0)));
+        for _ in 0..6 {
+            h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, -120.0), modifiers: egui::Modifiers::NONE, phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel });
+            h.run_steps(2);
+        }
+        h.run_steps(20);
+        h.render().unwrap().save(dir.join("dialog-settings-graphics-more.png")).unwrap();
         h.state_mut().dialog = None;
         h.state_mut().open_export_dialog();
         h.run_steps(5);

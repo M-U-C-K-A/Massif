@@ -204,7 +204,7 @@ The viewport shows the graph's output in 3D, with its sun, clouds, haze and sea 
 **Import from WorldPainter…** opens a `.world` file: its dimensions, heights (tall worlds keep their height), terrains, water, biomes and custom terrains. WorldPainter's **Beaches** come in as it draws them: grass with patches of sand, gravel and clay. Layers Massif does not have yet are listed in the import report.
 
 # Settings
-**Settings…** (`⌘,`: in the **Massif** menu on a Mac, in **View** on Windows and Linux, or the home screen's sidebar) has nine sections.
+**Settings…** (`⌘,`: in the **Massif** menu on a Mac, in **View** on Windows and Linux, or the home screen's sidebar) has ten sections.
 - **Appearance**: the theme, the accent colour, the loader shown while Massif works (a grid of dots in one of eight patterns), and whether the home screen's picture moves.
 - **Typeface**: what the interface is set in — the system's own typeface, or Inter, Geist, IBM Plex Sans or Manrope, built into Massif. Each is shown in itself; a click sets the whole interface in it.
 - **Sounds**: little sounds for what happens, made by Massif as it plays them. **Essential**: tasks done, saving, errors. **All**: the interface too (choices, switches, windows, workspaces). Each can be heard from there. The sound output is held only while a sound plays: headphones are free to go to another device.
@@ -212,6 +212,7 @@ The viewport shows the graph's output in 3D, with its sun, clouds, haze and sea 
 - **Memory**: a limit for what Massif keeps decoded to be quick (the map's tiles, the map view's images), and what is in use now. Past it, what was used least is put away, compressed.
 - **Autosave**: a copy of the map while it has changes not saved, every 1, 2, 5, 10 or 15 minutes; or none.
 - **Updates**: **Check for new versions** (on by default): once a day at most, Massif asks GitHub whether a newer version is out, sending nothing about you or your maps. If one is, a pill in the top bar (and a line above Settings on the home screen) opens its notes and a button to its page, in your browser; Massif never downloads or installs anything itself. **Skip this version** stops telling of that one.
+- **Graphics**: **Low**, **Medium** or **High** (or **Custom**, any mix): the 3D views' render scale and smoothing, fog, water reflections, the game's textures in the player's view, how much of the map the 3D view keeps on the graphics card (a larger map is drawn coarser, and much faster), the Terrain viewport's light and clouds, the map view's images on the graphics card, and the frames a second of an idle window. Changes apply at once. The first start picks a preset for the graphics card; when the 3D views stay slow, a note offers one step lower.
 - **Developer**: developer mode offers a **Developer** panel in every area's menu: frames a second and the time of each, the memory the system counts, the processor's time, in live charts; what is kept decoded, the map, its tasks and the graphics card.
 
 # Shortcuts

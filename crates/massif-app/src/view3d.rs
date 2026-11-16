@@ -66,8 +66,10 @@ const PAGE_SHIFT: u32 = 10;
 const PAGE_TILES: i32 = PAGE / TILE_SIZE;
 /// Colour pairs (top, soil) the tracer tells apart.
 pub const MAX_PAIRS: usize = 4096;
-/// Pages the tracer may hold (about 1.9 GB). A larger map is drawn with a
-/// column every 2, 4, 8… blocks: still all of it, coarser.
+/// Pages the tracer may hold at most (about 1.9 GB; Settings ▸ Graphics
+/// sets fewer). A larger map is drawn with a column every 2, 4, 8… blocks:
+/// still all of it, coarser.
+#[cfg(test)]
 const PAGE_BUDGET: usize = 400;
 /// Bits of a packed column holding its height above the bottom of the world
 /// (0: nothing for the tracer); the colour pair takes the next 12.
@@ -972,6 +974,7 @@ pub struct Globals {
     pub view_proj: [[f32; 4]; 4],
     /// The eye, from the frame's origin; w: the origin's x.
     pub eye: [f32; 4],
+    /// Toward the sun; w: 1 when water reflects (Settings ▸ Graphics).
     pub sun: [f32; 4],
     /// The sky overhead, and at the horizon.
     pub sky: [f32; 4],
@@ -1246,12 +1249,17 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             let rz = cos(p.y * 0.67 - p.x * 0.29) + 0.6 * cos(p.y * 2.03 + p.x * 1.11) + 0.35 * cos(p.y * 3.3 - p.x * 3.1);
             nw = normalize(vec3<f32>(rx * 0.045, 1.0, rz * 0.045));
         }
-        let fres = pow(1.0 - max(dot(nw, v), 0.0), 3.0);
-        let sky = sky_color(reflect(-v, nw));
-        let h = normalize(v + g.sun.xyz);
-        let glint = pow(max(dot(nw, h), 0.0), 900.0) * 1.1 * max(n.y, 0.0);
+        var fres = pow(1.0 - max(dot(nw, v), 0.0), 3.0);
         var c = to_linear(in.color.rgb) * (g.fog.z + 0.3 * g.fog.w);
-        c = mix(c, sky, 0.1 + 0.7 * fres) + vec3<f32>(glint);
+        // sun.w: reflections (Settings ▸ Graphics).
+        if (g.sun.w > 0.5) {
+            let sky = sky_color(reflect(-v, nw));
+            let h = normalize(v + g.sun.xyz);
+            let glint = pow(max(dot(nw, h), 0.0), 900.0) * 1.1 * max(n.y, 0.0);
+            c = mix(c, sky, 0.1 + 0.7 * fres) + vec3<f32>(glint);
+        } else {
+            fres = 0.0;
+        }
         let f = clamp((d - g.fog.x) / max(g.fog.y - g.fog.x, 1.0), 0.0, 1.0);
         c = mix(c, to_linear(g.mist.rgb), f * f * g.mist.w);
         return vec4<f32>(c, mix(in.color.a, 1.0, 0.55 * fres));
@@ -1684,7 +1692,9 @@ impl GpuChunk {
 
 struct Target {
     size: [u32; 2],
-    msaa: wgpu::TextureView,
+    /// Where the samples are drawn before they are resolved (none at one
+    /// sample a pixel: drawn straight into the image).
+    msaa: Option<wgpu::TextureView>,
     #[cfg_attr(not(test), allow(dead_code))]
     resolve: wgpu::Texture,
     resolve_view: wgpu::TextureView,
@@ -1749,6 +1759,8 @@ fn halve(level: &[u16], side: usize) -> Vec<u16> {
 pub struct Renderer3d {
     device: wgpu::Device,
     queue: wgpu::Queue,
+    /// Samples a pixel: 4 with edges smoothed, else 1.
+    samples: u32,
     /// Where the device cannot view the image as plain bytes (OpenGL):
     /// the pass that copies it so.
     copier: Option<crate::view_image::Copier>,
@@ -1784,7 +1796,13 @@ pub struct Renderer3d {
 }
 
 impl Renderer3d {
+    #[cfg(test)]
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+        Self::with_samples(device, queue, SAMPLES)
+    }
+
+    /// The same, `samples` a pixel (1 or 4).
+    pub fn with_samples(device: &wgpu::Device, queue: &wgpu::Queue, samples: u32) -> Self {
         // Each shader twice: in the views' own look, and in the game's. One
         // shader for both, choosing at each pixel, made the views' own look
         // pay for the game's (registers held for its textures and light
@@ -1946,7 +1964,7 @@ impl Renderer3d {
             })]
         };
         let multisample = wgpu::MultisampleState {
-            count: SAMPLES,
+            count: samples,
             ..Default::default()
         };
         let pipeline = |label: &str, blend: wgpu::BlendState, depth_write: bool, cull: Option<wgpu::Face>, mesh_shader: &wgpu::ShaderModule| {
@@ -2011,6 +2029,7 @@ impl Renderer3d {
         Self {
             device: device.clone(),
             queue: queue.clone(),
+            samples,
             opaque_pipeline,
             water_pipeline,
             trace_pipeline,
@@ -2573,7 +2592,7 @@ impl Renderer3d {
                 view_formats,
             })
         };
-        let msaa = texture("massif 3d msaa", COLOR_FORMAT, SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT, &[]);
+        let msaa = (self.samples > 1).then(|| texture("massif 3d msaa", COLOR_FORMAT, self.samples, wgpu::TextureUsages::RENDER_ATTACHMENT, &[]));
         let resolve = texture(
             "massif 3d image",
             COLOR_FORMAT,
@@ -2581,11 +2600,11 @@ impl Renderer3d {
             wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
             crate::view_image::view_formats(&self.device),
         );
-        let depth = texture("massif 3d depth", DEPTH_FORMAT, SAMPLES, wgpu::TextureUsages::RENDER_ATTACHMENT, &[]);
+        let depth = texture("massif 3d depth", DEPTH_FORMAT, self.samples, wgpu::TextureUsages::RENDER_ATTACHMENT, &[]);
         let view = |t: &wgpu::Texture| t.create_view(&wgpu::TextureViewDescriptor::default());
         self.target = Some(Target {
             size,
-            msaa: view(&msaa),
+            msaa: msaa.as_ref().map(view),
             resolve_view: view(&resolve),
             shown: crate::view_image::Shown::of(&self.device, self.copier.as_ref(), &resolve),
             resolve,
@@ -2663,9 +2682,9 @@ impl Renderer3d {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("massif 3d"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &target.msaa,
+                    view: target.msaa.as_ref().unwrap_or(&target.resolve_view),
                     depth_slice: None,
-                    resolve_target: Some(&target.resolve_view),
+                    resolve_target: target.msaa.as_ref().map(|_| &target.resolve_view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: lin(sky[0]),
@@ -2673,7 +2692,7 @@ impl Renderer3d {
                             b: lin(sky[2]),
                             a: 1.0,
                         }),
-                        store: crate::view_image::msaa_store(&self.device),
+                        store: if target.msaa.is_some() { crate::view_image::msaa_store(&self.device) } else { wgpu::StoreOp::Store },
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -2719,7 +2738,6 @@ impl Renderer3d {
     }
 
     /// Wait until the graphics card has drawn what it was given.
-    #[cfg(test)]
     pub fn wait(&self) {
         crate::view_image::wait(&self.device);
     }
@@ -2826,7 +2844,6 @@ impl Sky {
     };
 
     /// One flat colour: tests tell the sky from the ground by it.
-    #[cfg(test)]
     pub fn flat(c: [u8; 3]) -> Sky {
         Sky {
             zenith: c,
@@ -2917,7 +2934,7 @@ impl Camera {
             // The frame's origin rides along, for what is drawn block by
             // block to stay put as the origin moves.
             eye: [eye.x, eye.y, eye.z, origin.0 as f32],
-            sun: [sun.x, sun.y, sun.z, 0.0],
+            sun: [sun.x, sun.y, sun.z, 1.0],
             sky: unit(sky.zenith, 1.0),
             horizon: unit(sky.horizon, 1.0),
             // The haze only veils what is far beyond the map's middle;
@@ -3043,10 +3060,11 @@ fn grid_tile(t: TilePos, stride: i32) -> TilePos {
 }
 
 impl GridShape {
-    /// The pages a map needs, at the finest stride that fits the budget.
-    fn of(dim: &Dimension) -> Option<Self> {
+    /// The pages a map needs, at the finest stride that fits `budget`
+    /// pages.
+    fn of(dim: &Dimension, budget: usize) -> Option<Self> {
         let mut shape = Self::at(dim, 1)?;
-        while shape.present.iter().filter(|p| **p).count() > PAGE_BUDGET && shape.stride < 16 {
+        while shape.present.iter().filter(|p| **p).count() > budget && shape.stride < 16 {
             shape = Self::at(dim, shape.stride * 2)?;
         }
         Some(shape)
@@ -3417,6 +3435,18 @@ impl View3d {
     #[cfg(test)]
     pub fn read_back(&self) -> Option<(u32, u32, Vec<u8>)> {
         self.renderer.as_ref()?.read_image()
+    }
+
+    /// Samples a pixel of the renderer, once there is one.
+    #[cfg(test)]
+    pub fn samples(&self) -> Option<u32> {
+        self.renderer.as_ref().map(|r| r.samples)
+    }
+
+    /// The pixels of the image last drawn, and those of the view.
+    #[cfg(test)]
+    pub fn last_region(&self) -> [u32; 2] {
+        self.last_region
     }
 
     /// Tiles still to build.
@@ -4035,10 +4065,20 @@ impl View3d {
             painter.text(rect.center(), Align2::CENTER_CENTER, tr!("The 3D view needs the wgpu renderer"), FontId::proportional(13.0), pal.weak);
             return;
         };
+        let graphics = crate::graphics::get();
+        // Edges smoothed or not (Settings ▸ Graphics): another renderer,
+        // everything sent to the graphics card again.
+        if self.renderer.as_ref().is_some_and(|r| r.samples != graphics.samples()) {
+            self.renderer = None;
+            self.tiles.clear();
+            self.grid = None;
+            self.look_key = None;
+            self.needs_render = true;
+        }
         let mut renderer = self
             .renderer
             .take()
-            .unwrap_or_else(|| Renderer3d::new(&render_state.device, &render_state.queue));
+            .unwrap_or_else(|| Renderer3d::with_samples(&render_state.device, &render_state.queue, graphics.samples()));
         self.update_look(doc, &mut renderer);
 
         // A new world: show all of it, forget the old tiles.
@@ -4355,7 +4395,7 @@ impl View3d {
 
         // ---- tiles -----------------------------------------------------------
         let dim = doc.dimension();
-        let shape = GridShape::of(dim);
+        let shape = GridShape::of(dim, graphics.gpu_pages as usize);
         if self.grid != shape {
             // Another stride: the tiles of the grid are not the same ones.
             if self.grid.as_ref().map(|g| g.stride) != shape.as_ref().map(|g| g.stride) {
@@ -4414,7 +4454,7 @@ impl View3d {
         }
         self.last_camera = Some(shown);
         let moving = self.reduce_while_moving && now < self.moving_until;
-        let scale = if !moving { 1.0 } else if ppp >= 1.5 { MOVING_SCALE_DENSE } else { MOVING_SCALE };
+        let scale = graphics.render_scale * if !moving { 1.0 } else if ppp >= 1.5 { MOVING_SCALE_DENSE } else { MOVING_SCALE };
         let region = [((px[0] as f32 * scale).round() as u32).clamp(1, px[0].max(1)), ((px[1] as f32 * scale).round() as u32).clamp(1, px[1].max(1))];
         if moving {
             ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((self.moving_until - now).max(0.0) + 0.01));
@@ -4439,11 +4479,17 @@ impl View3d {
             Sky::of(&pal)
         };
         let mut globals = self.camera.globals(origin, rect.width() / rect.height().max(1.0), extent, sky, region[1].max(1));
+        // No fog (Settings ▸ Graphics): nothing veiled far off. Under water
+        // the water's own murk stays.
+        globals.sun[3] = graphics.reflections as u8 as f32;
+        if !graphics.fog && !under_water {
+            globals.mist[3] = 0.0;
+        }
         if game {
             let (materials, fluids) = renderer.look_info();
-            let textured = self.catalogue.is_some() && materials > 0;
-            globals.look = [textured as u8 as f32, 1.0, if under_water { 0.0 } else { CLOUDS_Y }, materials as f32];
-            if !under_water {
+            let textured = graphics.textures && self.catalogue.is_some() && materials > 0;
+            globals.look = [textured as u8 as f32, 1.0, if under_water || !graphics.clouds { 0.0 } else { CLOUDS_Y }, materials as f32];
+            if !under_water && graphics.fog {
                 // The game's fog: the land fades into the horizon far off.
                 let reach = (extent * 0.45).max(1536.0);
                 globals.fog = [192.0, reach, globals.fog[2], globals.fog[3]];
@@ -4510,6 +4556,7 @@ impl View3d {
                 }
             };
             renderer.render(&globals, origin, &meshed, dim.min_y, substrate, region);
+            crate::graphics::drew_3d();
             self.last_globals = Some(key);
             self.needs_render = false;
         }
@@ -4880,7 +4927,7 @@ mod tests {
             .collect();
         let ms = started.elapsed().as_secs_f64() * 1000.0;
         let faces: usize = built.iter().map(|b| b.faces.solid.len() + b.faces.water.len()).sum();
-        let shape = GridShape::of(dim).unwrap();
+        let shape = GridShape::of(dim, PAGE_BUDGET).unwrap();
         let pages = shape.present.iter().filter(|p| **p).count();
         let per_page = (PAGE * PAGE) as f64 * (4.0 + 0.5 * 4.0 / 3.0);
         let mut pairs = Pairs::default();
@@ -4908,7 +4955,7 @@ mod tests {
     /// Put every tile of a world on the GPU.
     fn load(renderer: &mut Renderer3d, w: &World, style: Style) -> Vec<TilePos> {
         let dim = &w.dims[0];
-        let shape = GridShape::of(dim).unwrap();
+        let shape = GridShape::of(dim, PAGE_BUDGET).unwrap();
         renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).unwrap();
         let mut pairs = Pairs::default();
         let tiles: Vec<TilePos> = dim.ground().positions().collect();
@@ -5093,7 +5140,7 @@ mod perf {
         let dim = &world.dims[0];
         let mut renderer = Renderer3d::new(&device, &queue);
         let style = Style { mode: MapMode::Terrain, water: true, lava: false };
-        let shape = GridShape::of(dim).unwrap();
+        let shape = GridShape::of(dim, PAGE_BUDGET).unwrap();
         renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).unwrap();
         let stride = shape.stride;
         let mut cells: Vec<TilePos> = dim.ground().positions().map(|t| grid_tile(t, stride)).collect();
@@ -5179,7 +5226,7 @@ mod perf {
         let mut renderer = Renderer3d::new(&device, &queue);
         let style = Style { mode: MapMode::Terrain, water: true, lava: false };
         let dim = &world.dims[0];
-        let shape = GridShape::of(dim).unwrap();
+        let shape = GridShape::of(dim, PAGE_BUDGET).unwrap();
         renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).unwrap();
         let mut pairs = Pairs::default();
         let tiles: Vec<TilePos> = dim.ground().positions().collect();
@@ -5259,4 +5306,189 @@ mod perf {
         }
         eprintln!("build a tile: {:.1} ms", t.elapsed().as_secs_f32() * 100.0);
     }
+}
+
+/// How long the graphics card takes to draw the 3D view, in milliseconds:
+/// a small map of hills (1,024 blocks a side) seen from above at 1,280 × 720
+/// pixels, four samples a pixel, the best of six frames after two. Run once,
+/// off the main thread, on the very first start to pick the graphics preset
+/// (see `graphics::suggest`).
+pub fn probe_ms(device: &wgpu::Device, queue: &wgpu::Queue) -> f32 {
+    use massif_core::generate::{GenParams, Landform, generate};
+    let world = generate(&GenParams { tiles_x: 8, tiles_z: 8, landform: Landform::Hills, seed: 3, ..GenParams::default() });
+    let dim = &world.dims[0];
+    let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+    let mut renderer = Renderer3d::with_samples(device, queue, SAMPLES);
+    let Some(shape) = GridShape::of(dim, 64) else { return 0.0 };
+    if renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).is_err() {
+        return 0.0;
+    }
+    let tiles: Vec<TilePos> = dim.ground().positions().collect();
+    let built: Vec<(TilePos, TileBuild)> = tiles.par_iter().map(|&t| (t, build_tile(dim, &world.registry, world.meta.sea_level as f32, world.meta.seed, t, style))).collect();
+    let mut pairs = Pairs::default();
+    for (t, b) in &built {
+        renderer.upload_columns(*t, &pairs.pack(b));
+        renderer.upload(*t, &b.faces);
+    }
+    renderer.flush();
+    renderer.set_palette(pairs.list());
+    let size = [1280u32, 720];
+    renderer.ensure_target(size);
+    let substrate = Substrate { stone: [128; 3], deepslate: [80; 3], whole: false };
+    let mut camera = Camera { target: [512.0, 80.0, 512.0], distance: 700.0, pitch: 0.5, ..Camera::default() };
+    let mut best = f32::MAX;
+    for k in 0..8 {
+        camera.yaw += 0.05;
+        let origin = (512, 512);
+        let globals = camera.globals(origin, 1280.0 / 720.0, 1024.0, Sky::flat([120, 160, 220]), size[1]);
+        let started = Instant::now();
+        renderer.render(&globals, origin, &tiles, dim.min_y, substrate, size);
+        renderer.wait();
+        if k >= 2 {
+            best = best.min(started.elapsed().as_secs_f32() * 1000.0);
+        }
+    }
+    best
+}
+
+/// What each setting of Settings ▸ Graphics costs the 3D view
+/// (MASSIF_GRAPHICS_WORLD, a large .massif): the map built at each preset's
+/// budget of pages, then frames at 2,560 × 1,440 over it, each setting
+/// changed alone from High, and the player's view with and without the
+/// game's textures and clouds. Prints the best and middle times and the
+/// graphics card's memory.
+#[cfg(test)]
+mod graphics_perf {
+    use super::*;
+    use crate::graphics::{Graphics, Preset};
+
+    fn frames(renderer: &mut Renderer3d, camera: &Camera, extent: f32, tiles: &[TilePos], bottom: i32, region: [u32; 2], tweak: &dyn Fn(&mut Globals)) -> (f32, f32) {
+        let substrate = Substrate { stone: [128; 3], deepslate: [80; 3], whole: false };
+        let mut times = Vec::new();
+        let mut camera = *camera;
+        for k in 0..16 {
+            camera.yaw += 0.01;
+            let origin = (camera.target[0].floor() as i32, camera.target[2].floor() as i32);
+            let mut globals = camera.globals(origin, 2560.0 / 1440.0, extent, Sky::flat([120, 160, 220]), region[1]);
+            tweak(&mut globals);
+            let started = Instant::now();
+            // As the app does: only the chunks with faces, in view.
+            let m = Mat4::from_cols_array_2d(&globals.view_proj);
+            let shown: Vec<TilePos> = tiles
+                .iter()
+                .copied()
+                .filter(|t| renderer.chunks.contains_key(t))
+                .filter(|t| {
+                    let (x, z) = ((t.x * TILE_SIZE - origin.0) as f32, (t.z * TILE_SIZE - origin.1) as f32);
+                    in_view(&m, Vec3::new(x, bottom as f32, z), Vec3::new(x + TILE_SIZE as f32, 320.0, z + TILE_SIZE as f32))
+                })
+                .collect();
+            if k == 0 {
+                eprint!("[{} chunks] ", shown.len());
+            }
+            renderer.render(&globals, origin, &shown, bottom, substrate, region);
+            renderer.wait();
+            if k >= 4 {
+                times.push(started.elapsed().as_secs_f32() * 1000.0);
+            }
+        }
+        times.sort_by(f32::total_cmp);
+        (times[0], times[times.len() / 2])
+    }
+
+    #[test]
+    fn graphics_settings_on_the_gpu() {
+        use rayon::prelude::*;
+        let Some(path) = std::env::var_os("MASSIF_GRAPHICS_WORLD") else { return };
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
+        eprintln!("{:?}", adapter.get_info());
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor { required_limits: adapter.limits(), ..Default::default() })).unwrap();
+        let mut world = massif_format::load(std::path::Path::new(&path)).unwrap();
+        let cat = massif_assets::load_newest().and_then(Result::ok);
+        if let Some(cat) = &cat {
+            massif_assets::apply_colors(&mut world.registry, cat);
+        }
+        let dim = &world.dims[0];
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+        let (lo, hi) = dim.bounds().unwrap();
+        let (x0, z0, x1, z1) = ((lo.x * 128) as f64, (lo.z * 128) as f64, ((hi.x + 1) * 128) as f64, ((hi.z + 1) * 128) as f64);
+        let extent = (x1 - x0).max(z1 - z0);
+        let (cx, cz) = ((x0 + x1) / 2.0, (z0 + z1) / 2.0);
+        let full = [2560u32, 1440];
+        let only = std::env::var("MASSIF_GRAPHICS_PRESETS").unwrap_or_else(|_| "low,medium,high".into());
+        for preset in Preset::NAMED {
+            if !only.contains(&format!("{preset:?}").to_lowercase()) {
+                continue;
+            }
+            let g = Graphics::of(preset);
+            let shape = GridShape::of(dim, g.gpu_pages as usize).unwrap();
+            let stride = shape.stride;
+            let mut cells: Vec<TilePos> = dim.ground().positions().map(|t| grid_tile(t, stride)).collect();
+            cells.sort_by_key(|t| (t.z, t.x));
+            cells.dedup();
+            let t = Instant::now();
+            let built: Vec<(TilePos, TileBuild)> = cells.par_iter().map(|&c| (c, build_cell(dim, &world.registry, world.meta.sea_level as f32, world.meta.seed, c, stride, style))).collect();
+            eprintln!("\n== {preset:?}: {} pages budget, stride {stride}, {} cells built in {:.1} s", g.gpu_pages, cells.len(), t.elapsed().as_secs_f32());
+            let tiles: Vec<TilePos> = if stride == 1 { cells.clone() } else { Vec::new() };
+            for samples in [4, 1] {
+                let mut renderer = Renderer3d::with_samples(&device, &queue, samples);
+                renderer.set_grid(stride, shape.page0, shape.pages, &shape.present).unwrap();
+                let mut pairs = Pairs::default();
+                for (c, b) in &built {
+                    renderer.upload_columns(*c, &pairs.pack(b));
+                    if stride == 1 {
+                        renderer.upload(*c, &b.faces);
+                    }
+                }
+                renderer.flush();
+                renderer.set_palette(pairs.list());
+                if let Some(cat) = &cat {
+                    let atlas = crate::textures::atlas(&world.registry, cat, device.limits().max_texture_array_layers as usize);
+                    renderer.set_look(&atlas, &crate::textures::clouds(Some(cat)));
+                }
+                renderer.ensure_target(full);
+                eprintln!("-- {samples} samples a pixel: terrain {:.0} MB on the card, target {:.0} MB", renderer.bytes() as f64 / 1048576.0, (2560.0 * 1440.0 * (4.0 * samples as f64 + 4.0 * samples as f64 + 8.0)) / 1048576.0);
+                let scales: &[f32] = if samples == 4 { &[1.0, 0.67, 0.5] } else { &[1.0, 0.67] };
+                for (name, distance, pitch) in [("whole map", extent * 0.85, None), ("halfway", extent * 0.2, Some(0.35f32)), ("near the ground", 400.0, Some(0.12f32))] {
+                    let mut camera = Camera { target: [cx, 300.0, cz], distance: distance as f32, ..Camera::default() };
+                    if let Some(p) = pitch {
+                        camera.pitch = p;
+                    }
+                    for &scale in scales {
+                        let region = [(2560.0 * scale) as u32, (1440.0 * scale) as u32];
+                        let (b, m) = frames(&mut renderer, &camera, extent as f32, &tiles, dim.min_y, region, &|_| {});
+                        eprintln!("{name}, scale {scale}: best {b:.1} ms, middle {m:.1} ms");
+                    }
+                    if samples == 4 && name != "whole map" {
+                        let (b, m) = frames(&mut renderer, &camera, extent as f32, &tiles, dim.min_y, full, &|g| g.sun[3] = 0.0);
+                        eprintln!("{name}, no reflections: best {b:.1} ms, middle {m:.1} ms");
+                        let (b, m) = frames(&mut renderer, &camera, extent as f32, &tiles, dim.min_y, full, &|g| g.mist[3] = 0.0);
+                        eprintln!("{name}, no fog: best {b:.1} ms, middle {m:.1} ms");
+                    }
+                }
+                // The player's view at a player's eyes in the middle.
+                if stride == 1 {
+                    let ground = dim.ground().view(TilePos::new((cx as i32).div_euclid(128), (cz as i32).div_euclid(128))).map_or(70.0, |v| v.top.get(local_index(cx as i32, cz as i32)));
+                    let camera = Camera { target: [cx, ground as f64 + 1.62, cz], yaw: 0.6, pitch: 0.12, distance: 1.0 };
+                    let (materials, fluids) = renderer.look_info();
+                    let wk = world.registry.well_known;
+                    for (label, textured, clouds, fog) in [("game, textures, clouds, fog", true, true, true), ("game, no textures", false, true, true), ("game, no clouds", true, false, true), ("game, no fog", true, true, false)] {
+                        let look = move |g: &mut Globals| {
+                            g.look = [(textured && materials > 0) as u8 as f32, 1.0, if clouds { CLOUDS_Y } else { 0.0 }, materials as f32];
+                            if fog {
+                                g.fog = [192.0, (extent as f32 * 0.45).max(1536.0), g.fog[2], g.fog[3]];
+                            } else {
+                                g.mist[3] = 0.0;
+                            }
+                            g.rock = [wk.stone.0 as f32, wk.deepslate.0 as f32, fluids[0] as f32, fluids[1] as f32];
+                        };
+                        let (b, m) = frames(&mut renderer, &camera, extent as f32, &tiles, dim.min_y, full, &look);
+                        eprintln!("{label}: best {b:.1} ms, middle {m:.1} ms");
+                    }
+                }
+            }
+        }
+    }
+
 }
