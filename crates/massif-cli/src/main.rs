@@ -21,6 +21,7 @@ USAGE
   massif-cli water <world.massif>
   massif-cli rivers <world.massif> <out.massif> [--threshold T]
   massif-cli spring <world.massif> <out.massif> <x> <z>…
+  massif-cli crop <world.massif> <out.massif> <x0> <z0> <x1> <z1>
 
   --size      map size in tiles of 128 blocks (default 8x8 = 1024x1024 blocks)
   --landform  flat | plains | hills | mountains | islands (default hills)
@@ -462,6 +463,31 @@ fn cmd_rivers(mut args: Args) -> Res<()> {
     Ok(())
 }
 
+/// The tiles of a map over a rectangle of blocks, as a map of their own.
+fn cmd_crop(args: Args) -> Res<()> {
+    let mut rest = args.0.into_iter();
+    let path = PathBuf::from(rest.next().ok_or("crop needs <world.massif>")?);
+    let out = PathBuf::from(rest.next().ok_or("crop needs <out.massif>")?);
+    let c: Vec<i32> = rest.map(|a| a.parse::<i32>().map_err(|_| format!("not a block coordinate: {a}"))).collect::<Res<_>>()?;
+    let [x0, z0, x1, z1] = c[..] else { return Err("crop needs <x0> <z0> <x1> <z1>".into()) };
+    let (a, b) = (massif_core::TilePos::containing(x0.min(x1), z0.min(z1)), massif_core::TilePos::containing(x0.max(x1), z0.max(z1)));
+    let mut world = massif_format::load(&path).map_err(|e| e.to_string())?;
+    let mut kept = 0;
+    for level in &mut world.dims[0].levels {
+        let all: Vec<massif_core::TilePos> = level.positions().collect();
+        for p in all {
+            if p.x < a.x || p.x > b.x || p.z < a.z || p.z > b.z {
+                level.remove(p);
+            } else {
+                kept += 1;
+            }
+        }
+    }
+    massif_format::save(&world.snapshot(), &out).map_err(|e| e.to_string())?;
+    eprintln!("{kept} tiles kept");
+    Ok(())
+}
+
 /// The River tool let go at each spring, with its default settings.
 fn cmd_spring(args: Args) -> Res<()> {
     let mut rest = args.0.into_iter();
@@ -491,6 +517,8 @@ fn cmd_spring(args: Args) -> Res<()> {
         history.begin("River", 0);
         let r = massif_core::river::dig_descent(&mut history.edit(&mut world, 0), &d, &spec);
         eprintln!("river from {} {}: {:.0} blocks to {:?}, {} lakes, {} columns, {:.2} s", pair[0], pair[1], r.length, d.mouth, d.lakes.len(), r.columns, started.elapsed().as_secs_f32());
+        let every = (d.course.len() / 8).max(1);
+        eprintln!("  by way of {}", d.course.iter().step_by(every).map(|p| format!("{:.0},{:.0}", p.0, p.1)).collect::<Vec<_>>().join("  "));
     }
     massif_format::save(&world.snapshot(), &out).map_err(|e| e.to_string())?;
     Ok(())
@@ -514,6 +542,7 @@ fn main() -> ExitCode {
         "water" => cmd_water(args),
         "rivers" => cmd_rivers(args),
         "spring" => cmd_spring(args),
+        "crop" => cmd_crop(args),
         "analyse" | "analyze" => cmd_analyse(args),
         other => Err(format!("unknown command \"{other}\"\n\n{USAGE}")),
     };
