@@ -1,4 +1,4 @@
-target/
+/target
 .DS_Store
 *.massif.tmp
 # The logo's sources: the app's icons are made from them (crates/massif-app/assets).

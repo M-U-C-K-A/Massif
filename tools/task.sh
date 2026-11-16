@@ -37,6 +37,27 @@ trap finish EXIT
 trap 'exit 130' INT TERM HUP
 
 clean() { [ -z "$(git -C "$1" status --porcelain --untracked-files=no)" ]; }
+
+# Build caches on an external disk when it is plugged in: each worktree's
+# target/ is then a link to a folder of its own there, and the Mac's small
+# disk keeps only the sources. MASSIF_BUILD_DISK names the disk (default the
+# user's SSD); without it, or with under 10 GB free on it, target/ stays in
+# the worktree. Installs always build on the Mac: signing an app bundle on
+# exFAT fails on the "._" files macOS writes there.
+build_disk=${MASSIF_BUILD_DISK:-"/Volumes/T7 Shield"}
+builds="$build_disk/massif-build"
+place_target() {
+    [ -d "$build_disk" ] && [ -w "$build_disk" ] || return 0
+    [ "$(df -g "$build_disk" 2>/dev/null | awk 'NR == 2 { print $4 }')" -ge 10 ] || return 0
+    mkdir -p "$builds/$2" && ln -sfn "$builds/$2" "$1/target" && echo "Builds of $2 go to $builds/$2."
+}
+# The build folder a worktree's target/ links to, removed with it.
+drop_target() {
+    if [ -L "$1/target" ]; then
+        dest=$(readlink "$1/target")
+        case "$dest" in "$builds"/*) rm -rf "$dest" ;; esac
+    fi
+}
 free_gb() { df -g /System/Volumes/Data 2>/dev/null | awk 'NR == 2 { print $4 }'; }
 
 # One install at a time: two would build side by side, and the one that
@@ -70,6 +91,7 @@ case "${1:-status}" in
 start)
     name=${2:?"a name for the task: tools/task.sh start <name>"}
     git -C "$main" worktree add "$main/.worktrees/$name" -b "$name" main
+    place_target "$main/.worktrees/$name" "$name"
     echo "Work in $main/.worktrees/$name, then land it with tools/task.sh land."
     ;;
 land)
@@ -97,6 +119,7 @@ land)
     clean "$main" || { echo "The main checkout has changes that are not committed: find whose they are (ListAgents) before landing." >&2; exit 1; }
     git -C "$main" merge --ff-only "$branch"
     git -C "$main" push -q origin main
+    drop_target "$here"
     git -C "$main" worktree remove --force "$here"
     git -C "$main" branch -q -d "$branch"
     echo "Landed $branch on main ($(git -C "$main" log --oneline -1 | cut -c1-72)). Tell the other sessions if it touches their files."
@@ -132,6 +155,7 @@ status)
     if clean "$main"; then echo "The main checkout is clean."; else echo "The main checkout has changes that are not committed:"; git -C "$main" status --short --untracked-files=no; fi
     if [ -d "$lock" ]; then echo "An install is running (process $(cat "$lock/pid" 2>/dev/null || echo ?))."; fi
     echo "$(free_gb) GB free."
+    if [ -d "$build_disk" ]; then echo "Build caches on $build_disk: $(du -sh "$builds" 2>/dev/null | cut -f1) in $builds, $(df -h "$build_disk" | awk 'NR == 2 { print $4 }') free there."; else echo "$build_disk is not plugged in: builds stay on the Mac."; fi
     ;;
 *)
     sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
