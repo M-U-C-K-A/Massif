@@ -667,7 +667,8 @@ map, without opening the graph:
   it can hold — scree at the feet of cliffs, softer ridges.
 - **Rivers**: traced where the water of the whole map runs, dug into the
   bottoms of the valleys, wider downstream, with their lakes, keeping to
-  the water already on the map; their beds in gravel.
+  the water already on the map; their beds in gravel. Down steep valleys
+  they fall from pool to pool, as the River tool's do.
 - **Lakes**: water fills the hollows up to where they spill (with **Fill**,
   their ground rises instead).
 - **Smooth**, **Sharpen**, **Terraces** (flat steps over the whole height
@@ -961,6 +962,13 @@ and a river biome on its water.
 - Water runs from the source down. Its level along the river is the lowest
   the land allows so far, a
   little under the banks: it never rises downstream, whatever the bumps.
+- Where the land is steep (the river would drop four blocks or more over
+  the next 24), it falls from pool to pool instead of stepping down a
+  block every few blocks: its water stays level in a pool dug into the
+  slope, then falls two to five blocks into the next one, the steeper the
+  higher, with a plunge pool dug under each fall. On gentler ground it
+  steps down a block at a time, rapids. Through a lake or a river on its
+  way, it keeps their level, and never falls below the water it ends in.
 - The bed is `depth` deep in the middle and rises to the water's edge;
   banks of the chosen width climb back to the ground, smoothly. Only the
   ground is lowered: nothing is raised.

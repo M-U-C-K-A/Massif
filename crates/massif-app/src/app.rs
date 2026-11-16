@@ -9895,6 +9895,110 @@ mod tests {
         image::save_buffer(dir.join("real-river-tool-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
     }
 
+    /// A river from a source high on a steep slope of a real map
+    /// (MASSIF_RIVER_WORLD), down to the sea: the 2D map and two 3D views
+    /// of it, and its water level along its course, for the eye. Needs a
+    /// GPU: runs with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn steep_river_on_a_real_world() {
+        let (Some(dir), Some(path)) = (
+            std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from),
+            std::env::var_os("MASSIF_RIVER_WORLD").map(PathBuf::from),
+        ) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let ctx = h.ctx.clone();
+        h.state_mut().jobs.push(Job::open(&ctx, path));
+        while !h.state().jobs.is_empty() {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        h.run_steps(10);
+        let source = (-102, -1607);
+        let course = {
+            let app = h.state();
+            let sea = app.doc.world.meta.sea_level as f32;
+            massif_core::river::descend(app.doc.dimension().ground(), source, sea, 60_000, 2_000_000, app.tools.river.lake_depth()).course
+        };
+        assert!(course.len() > 100, "{} points", course.len());
+        let mid = course[course.len() / 2];
+        {
+            let app = h.state_mut();
+            app.dialog = None;
+            app.tools.select(Tool::River);
+            app.tools.river = crate::tools::RiverSettings::default();
+        }
+        h.run_steps(5);
+        for m in h.state_mut().maps.values_mut() {
+            m.center = [mid.0 as f64, mid.1 as f64];
+            m.zoom = 1.4;
+        }
+        h.run_steps(5);
+        let p = h.state().maps.values().next().unwrap().screen_of(source.0 as f64 + 0.5, source.1 as f64 + 0.5);
+        click_on(&mut h, p, egui::PointerButton::Primary);
+        h.run_steps(10);
+        h.event(egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(20);
+        let note = h.state().tools.river_note.clone().unwrap_or_default();
+        eprintln!("{note}");
+        assert!(note.starts_with("Dug a river"), "{note}");
+        // The water's level along the course, and its drops.
+        {
+            let app = h.state();
+            let mut levels: Vec<i16> = Vec::new();
+            for p in course.iter().step_by(2) {
+                if let Some(probe) = crate::tools::probe(&app.doc, p.0.floor() as i32, p.1.floor() as i32)
+                    && probe.fluid != massif_core::tile::NO_FLUID
+                    && levels.last() != Some(&probe.fluid)
+                {
+                    levels.push(probe.fluid);
+                }
+            }
+            let drops: Vec<i16> = levels.windows(2).map(|w| w[0] - w[1]).filter(|d| *d > 0).collect();
+            eprintln!("levels along the course: {levels:?}");
+            eprintln!("drops: {} of 1, {} of 2-3, {} of 4+", drops.iter().filter(|d| **d == 1).count(), drops.iter().filter(|d| (2..=3).contains(*d)).count(), drops.iter().filter(|d| **d >= 4).count());
+        }
+        h.render().unwrap().save(dir.join("steep-river-map.png")).unwrap();
+        let ground = |app: &MassifApp, p: (f32, f32)| crate::tools::probe(&app.doc, p.0 as i32, p.1 as i32).map_or(80.0, |p| p.height);
+        // From downstream, a little to the side, looking up the river.
+        for (name, at, distance, pitch, turn) in [("steep-river-3d", course.len() / 4, 240.0, 0.75, 0.5f32), ("steep-river-3d-2", course.len() / 2, 200.0, 0.6, -0.6)] {
+            let target = course[at];
+            let ahead = course[(at + 40).min(course.len() - 1)];
+            let yaw = (ahead.0 - target.0).atan2(ahead.1 - target.1) + turn;
+            {
+                let app = h.state_mut();
+                let y = ground(app, target);
+                app.layout.activate(3);
+                app.view3d.camera.target = [target.0 as f64, y as f64, target.1 as f64];
+                app.view3d.camera.distance = distance;
+                app.view3d.camera.pitch = pitch;
+                app.view3d.camera.yaw = yaw;
+            }
+            // Until the tiles around are built, the builder's included, for
+            // a few frames in a row.
+            let mut quiet = 0;
+            for _ in 0..1500 {
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(15));
+                quiet = if h.state().view3d.pending() == 0 { quiet + 1 } else { 0 };
+                if quiet >= 40 {
+                    break;
+                }
+            }
+            let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+            image::save_buffer(dir.join(format!("{name}.png")), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+            h.render().unwrap().save(dir.join(format!("{name}-window.png"))).unwrap();
+        }
+    }
+
     /// A river from a source on a real map (MASSIF_RIVER_WORLD): hovering
     /// shows where its water would go, a click lets it spring there and dig
     /// its way down. Needs a GPU: runs with MASSIF_SNAPSHOT_DIR.

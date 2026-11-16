@@ -565,6 +565,21 @@ pub(super) fn rivers(f: &Field, existing: Option<&Field>, spacing: f32, p: River
             }
             q.level = level;
         }
+        // Pools and falls down the steep stretches, a plunge pool under
+        // each fall; the water it holds and its lakes keep their level.
+        let mut levels: Vec<f32> = line.iter().map(|q| q.level).collect();
+        let kept: Vec<bool> = line
+            .iter()
+            .map(|q| {
+                let (u, v) = coarse_at(q.x, q.y);
+                q.held || lake[(v.round().clamp(0.0, (m - 1) as f32) as usize) * m + u.round().clamp(0.0, (m - 1) as f32) as usize] != NO_WATER
+            })
+            .collect();
+        let plunge = crate::river::pools_and_falls(&mut levels, step * spacing, &|k| line[k].hw * spacing, &|k| kept[k]);
+        for ((q, l), d) in line.iter_mut().zip(levels).zip(plunge) {
+            q.level = l;
+            q.depth += d;
+        }
         lines[id] = line;
     }
 
@@ -637,10 +652,11 @@ pub(super) fn rivers(f: &Field, existing: Option<&Field>, spacing: f32, p: River
                                 wl = level;
                             }
                         } else {
+                            // The nearest bank's slope, up from the highest
+                            // water beside it: at the foot of a fall, the
+                            // pool above it.
                             let s = (dist - hw) / seg.bank;
-                            if bank.is_none_or(|b| s < b.0) {
-                                bank = Some((s, level));
-                            }
+                            bank = Some(bank.map_or((s, level), |(b, l)| (b.min(s), l.max(level))));
                             mk = mk.max(1.0 - smoothstep(0.0, 1.0, 2.0 * s));
                         }
                     }
