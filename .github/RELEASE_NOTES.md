@@ -1,5 +1,7 @@
 Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, with a node-based terrain generator in the spirit of Gaea, written in Rust.
 
+## New in 1.0.0
+
 ## New in 0.6.0
 
 **Massif in French and German.** The whole interface (menus, panels, tools and their cards, tooltips, dialogs, the home screen, Settings and the macOS menu bar) is now also in French and in German, in the words Minecraft and WorldPainter players use. Massif follows the system's language by default; **Settings ▸ Appearance ▸ Language** picks another, and the change applies at once, without a restart. A text not yet translated shows in English rather than in pieces, and the help and the online guide stay in English for now. Names that belong to your map (layers, levels, workspaces you renamed) stay as you wrote them.
