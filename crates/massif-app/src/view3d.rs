@@ -3552,11 +3552,15 @@ impl View3d {
         let Some(walk) = &mut self.walk else { return };
         let ctx = ui.ctx().clone();
         walk.pass = ctx.cumulative_pass_nr();
+        // Read before the input is locked: `peek` locks the context itself,
+        // and a lock taken inside another freezes the app as soon as a
+        // thread asks for a repaint in between.
+        let escape = crate::keymap::peek(&ctx, crate::keymap::Action::ReleaseMouse);
         let (escape, focused, motion, moved, pointer, dt, turn, mods, scroll) = ui.input(|i| {
             use crate::keymap::{Action, held};
             let key = |a: Action| held(i, a) as i32 as f32;
             (
-                crate::keymap::peek(&ctx, Action::ReleaseMouse),
+                escape,
                 i.viewport().focused.unwrap_or(true),
                 i.pointer.motion(),
                 i.pointer.delta(),
