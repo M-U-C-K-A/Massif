@@ -73,4 +73,53 @@
     }, { rootMargin: '-70px 0px -60% 0px' });
     heads.forEach((h) => io.observe(h));
   }
+  // The guide's search: titles first, then headings, then the text.
+  const boxes = document.querySelectorAll('[data-search]');
+  if (boxes.length) {
+    let index = null;
+    const load = () => index || (index = fetch(`${base}/assets/search.json`).then((r) => r.json()).catch(() => []));
+    const escH = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+    const mark = (s, q) => escH(s).replace(new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'ig'), '<mark>$1</mark>');
+    const find = (pages, q) => {
+      const lq = q.toLowerCase(), out = [];
+      for (const p of pages) {
+        if (p.t.toLowerCase().includes(lq)) out.push({ score: 100 - p.t.length / 10, u: p.u, g: p.g, t: p.t, s: p.s });
+        for (const [h, id] of p.h) if (h.toLowerCase().includes(lq)) out.push({ score: 50, u: `${p.u}#${id}`, g: `${p.g} · ${p.t}`, t: h, s: '' });
+        const i = p.x.toLowerCase().indexOf(lq);
+        if (i >= 0 && !p.t.toLowerCase().includes(lq)) out.push({ score: 10, u: p.u, g: p.g, t: p.t, s: (i > 40 ? '…' : '') + p.x.slice(Math.max(0, i - 40), i + 80) + '…' });
+      }
+      const seen = new Set();
+      return out.sort((a, b) => b.score - a.score).filter((r) => !seen.has(r.u) && seen.add(r.u)).slice(0, 8);
+    };
+    boxes.forEach((input) => {
+      const list = input.parentElement.querySelector('.results');
+      let on = -1;
+      const show = async () => {
+        const q = input.value.trim();
+        if (q.length < 2) { list.hidden = true; return; }
+        const hits = find(await load(), q);
+        on = -1;
+        list.innerHTML = hits.length ? hits.map((r) => `<a href="${r.u}"><small>${escH(r.g)}</small>${mark(r.t, q)}${r.s ? `<span>${mark(r.s, q)}</span>` : ''}</a>`).join('') : '<p>Nothing found.</p>';
+        list.hidden = false;
+      };
+      input.addEventListener('input', show);
+      input.addEventListener('focus', () => { load(); if (input.value.trim().length > 1) show(); });
+      input.addEventListener('blur', () => setTimeout(() => { list.hidden = true; }, 150));
+      input.addEventListener('keydown', (e) => {
+        const links = [...list.querySelectorAll('a')];
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          on = (on + (e.key === 'ArrowDown' ? 1 : -1) + links.length) % links.length;
+          links.forEach((a, k) => a.classList.toggle('on', k === on));
+        } else if (e.key === 'Enter' && links.length) {
+          location.href = (links[on] || links[0]).href;
+        } else if (e.key === 'Escape') { input.value = ''; list.hidden = true; input.blur(); }
+      });
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== '/' || /input|textarea/i.test(document.activeElement?.tagName)) return;
+      const visible = [...boxes].find((b) => b.offsetParent);
+      if (visible) { e.preventDefault(); visible.focus(); }
+    });
+  }
 })();

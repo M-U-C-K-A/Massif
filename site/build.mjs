@@ -17,6 +17,7 @@ import { Marked } from 'marked';
 import config from './site.config.mjs';
 import { home } from './src/home.mjs';
 import { faq } from './src/faq.mjs';
+import { groups } from './src/guide.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..');
@@ -92,7 +93,21 @@ function splitDoc(file, base, title) {
 
 const guide = splitDoc('docs/guide.md', '/guide/', 'Using Massif');
 const graphs = splitDoc('docs/terrain-graphs.md', '/guide/terrain-graphs/', 'Terrain graphs');
-const docPages = [...guide, ...graphs];
+// In the order and the groups of src/guide.mjs; a section not listed there
+// still gets its page, under "More".
+const docPages = [];
+{
+  const all = [...guide, ...graphs], listed = new Set();
+  for (const [group, items] of groups) for (const [d, s, title, summary] of items) {
+    const p = all.find((q) => q.file.endsWith(d === 'g' ? '/guide.md' : '/terrain-graphs.md') && q.slug === s);
+    if (!p) { console.warn(`src/guide.mjs names ${d}:${s}, which the docs no longer have.`); continue; }
+    Object.assign(p, { group, summary }, title ? { title } : {});
+    docPages.push(p);
+    listed.add(p);
+  }
+  for (const p of all) if (!listed.has(p)) docPages.push(Object.assign(p, { group: 'More', summary: '' }));
+}
+const hasGallery = config.gallery.length > 0;
 
 // Where every heading of the docs ended up: "guide.md#rivers" → its page.
 const anchors = new Map();
@@ -176,7 +191,7 @@ const icon = {
 
 const nav = [
   ['Features', '/#features'],
-  ['Gallery', '/gallery/'],
+  ...(config.gallery.length ? [['Gallery', '/gallery/']] : []),
   ['Guide', '/guide/'],
   ["What's new", '/whats-new/'],
   ['FAQ', '/faq/'],
@@ -241,7 +256,7 @@ function footer() {
       <p>A map editor for Minecraft Java worlds, written in Rust. Free and open source under the GPL-3.0.</p>
     </div>
     <div class="foot-cols">
-      <div><h2>Product</h2><a href="${url('/#features')}">Features</a><a href="${url('/gallery/')}">Gallery</a><a href="${url('/whats-new/')}">What's new</a><a href="${url('/download/')}">Download</a></div>
+      <div><h2>Product</h2><a href="${url('/#features')}">Features</a>${hasGallery ? `<a href="${url('/gallery/')}">Gallery</a>` : ''}<a href="${url('/whats-new/')}">What's new</a><a href="${url('/download/')}">Download</a></div>
       <div><h2>Learn</h2><a href="${url('/guide/')}">Guide</a><a href="${url('/guide/terrain-graphs/')}">Terrain graphs</a><a href="${url('/faq/')}">FAQ</a><a href="${REPO}/blob/main/docs/internals.md" rel="noopener">How it works</a></div>
       <div><h2>Community</h2>${community}<a href="${REPO}/issues" rel="noopener">Report a bug</a></div>
     </div>
@@ -253,36 +268,52 @@ function footer() {
 // A Hairline figure of docs/assets, in both themes: the solids are filled
 // with the colour of GitHub's page, here with the colour of the card.
 function figure(name, alt) {
-  return `<span class="fig"><img class="on-light" src="${url(`/assets/fig/${name}-light.svg`)}" alt="${esc(alt)}" loading="lazy" width="400" height="270"><img class="on-dark" src="${url(`/assets/fig/${name}-dark.svg`)}" alt="${esc(alt)}" loading="lazy" width="400" height="270"></span>`;
+  return `<span class="fig"><img class="on-light" src="${url(`/assets/fig/${name}-light.svg`)}" alt="${esc(alt)}" decoding="async" width="400" height="270"><img class="on-dark" src="${url(`/assets/fig/${name}-dark.svg`)}" alt="${esc(alt)}" decoding="async" width="400" height="270"></span>`;
 }
 
 // ── Pages ───────────────────────────────────────────────────────────────
 
 function sidebar(current) {
-  const group = (title, pages) => `<div class="side-group"><h2>${title}</h2>${pages.map((p) => `<a href="${url(p.path)}"${p === current ? ' aria-current="page"' : ''}>${esc(p.slug ? p.title : 'Overview')}</a>`).join('')}</div>`;
-  return `<nav class="side" aria-label="Guide">${group('Using Massif', guide)}${group('Terrain graphs', graphs)}</nav>`;
+  const names = [...new Set(docPages.map((p) => p.group))];
+  const group = (g) => {
+    const ps = docPages.filter((p) => p.group === g);
+    return `<details class="side-group"${ps.includes(current) ? ' open' : ''}><summary>${esc(g)}</summary><div>${ps.map((p) => `<a href="${url(p.path)}"${p === current ? ' aria-current="page"' : ''}>${esc(p.title)}</a>`).join('')}</div></details>`;
+  };
+  return `<nav class="side" aria-label="Guide">
+    <div class="search"><input type="search" placeholder="Search the guide" aria-label="Search the guide" autocomplete="off" spellcheck="false" data-search><kbd>/</kbd><div class="results" hidden></div></div>
+    ${names.map(group).join('')}
+  </nav>`;
 }
 
 function guidePage(p, i) {
   const prev = docPages[i - 1], next = docPages[i + 1];
   const toc = [...p.md.matchAll(/^### (.*)/gm)].map((m) => `<a href="#${slug(m[1])}">${esc(plain(m[1]))}</a>`).join('');
-  const crumbs = p.file.endsWith('terrain-graphs.md') ? 'Terrain graphs' : 'Using Massif';
   const body = `<div class="docs">
-  <details class="side-mobile"><summary>${esc(p.slug ? p.title : crumbs)}<span>Guide</span></summary>${sidebar(p)}</details>
+  <details class="side-mobile"><summary><span class="crumb">${esc(p.group)}</span>${esc(p.title)}</summary>${sidebar(p)}</details>
   ${sidebar(p)}
   <article class="prose">
-    <p class="eyebrow">${crumbs}</p>
-    <h1>${esc(p.slug ? p.title : crumbs)}</h1>
+    <p class="eyebrow">${esc(p.group)}</p>
+    <h1>${esc(p.title)}</h1>
+    ${p.summary ? `<p class="summary">${esc(p.summary)}</p>` : ''}
     ${markdown(p.md, p.file)}
     <nav class="pager" aria-label="Pages">
       ${prev ? `<a class="prev" href="${url(prev.path)}"><span>Previous</span>${esc(prev.title)}</a>` : '<span></span>'}
-      ${next ? `<a class="next" href="${url(next.path)}"><span>Next</span>${esc(next.title)}</a>` : '<span></span>'}
+      ${next ? `<a class="next" href="${url(next.path)}"><span>Next${next.group !== p.group ? ` · ${esc(next.group)}` : ''}</span>${esc(next.title)}</a>` : '<span></span>'}
     </nav>
     <p class="edit"><a href="${REPO}/blob/main/${p.file}" rel="noopener">Edit this page on GitHub</a></p>
   </article>
   ${toc ? `<aside class="toc"><h2>On this page</h2>${toc}</aside>` : '<aside class="toc"></aside>'}
 </div>`;
-  return shell({ title: p.slug ? p.title : crumbs, active: 'Guide', body, wide: true, description: plain(p.md.split('\n\n')[0]).slice(0, 180) });
+  return shell({ title: p.title, active: 'Guide', body, wide: true, description: p.summary || plain(p.md.split('\n\n')[0]).slice(0, 180) });
+}
+
+// What the guide's search box looks through.
+function searchIndex() {
+  return docPages.map((p) => ({
+    t: p.title, g: p.group, u: url(p.path), s: p.summary,
+    h: [...p.md.matchAll(/^#{3,4} (.*)/gm)].map((m) => [plain(m[1]), slug(m[1])]),
+    x: plain(p.md).replace(/^#+ .*$/gm, '').replace(/\|/g, ' ').replace(/\s+/g, ' ').trim(),
+  }));
 }
 
 function whatsNew(notes, rels) {
@@ -399,7 +430,8 @@ async function build() {
   copyAssets();
   const ctx = { url, esc, REPO, icon, figure, dl, latest, cmp, config, markdown, guideLink: (s) => (pageFor(s) ? url(pageFor(s).path) : '') };
   write('/', shell({ body: home(ctx) }));
-  write('/gallery/', gallery());
+  if (hasGallery) write('/gallery/', gallery());
+  fs.writeFileSync(path.join(out, 'assets/search.json'), JSON.stringify(searchIndex()));
   write('/whats-new/', whatsNew(notes, rels));
   write('/download/', downloadPage(dl));
   write('/faq/', faqPage());

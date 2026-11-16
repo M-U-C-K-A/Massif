@@ -14,10 +14,8 @@ export default {
   url: '',
   // ──────────────────────────────────────────────────────────────────────
 
-  // The gallery, in order: files of docs/assets/renders and what they show.
-  gallery: [
-    { file: 'canyon.jpg', title: 'Canyon', alt: 'A winding canyon in a red plateau at sunset' },
-    { file: 'floating-mountains.jpg', title: 'Floating mountains', alt: 'Mountains of rock floating over stone towers' },
-    { file: 'alps-night.jpg', title: 'Alps at night', alt: 'A snowy peak under the stars' },
-  ],
+  // The gallery, in order: files of docs/assets/renders and what they show,
+  // e.g. { file: 'canyon.jpg', title: 'Canyon', alt: 'A winding canyon at sunset' }.
+  // Empty, the site has no gallery page. Only pictures that do Massif credit.
+  gallery: [],
 };

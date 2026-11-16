@@ -39,6 +39,9 @@ They move with SMIL animations alone, so they play inside an `<img>`.
 | `graph` | Pulses running through a terrain graph to its output |
 | `rivers` | A river found from its source down a valley to the sea |
 | `blocks` | Six of the game's blocks, picked one after another |
+| `roads` | A road graded through hills, humps cut and hollows filled |
+| `select` | A selection drawn on a field: only the columns inside rise |
+| `relief` | A flat field rising into the relief of a real range |
 
 ## Drawing them again
 
