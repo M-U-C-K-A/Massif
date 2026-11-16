@@ -745,6 +745,7 @@ impl MassifApp {
             self.doc.max_hot_tiles = crate::doc::MAX_HOT_TILES;
             self.map_cache.max_grids = 384;
             self.map_cache.max_chunks = 1400;
+            self.map_cache.max_summary_bytes = crate::map_render::DEFAULT_SUMMARY_BYTES;
             return;
         }
         let budget = mb << 20;
@@ -753,7 +754,8 @@ impl MassifApp {
         let per_tile = bytes.checked_div(hot).map_or(64 << 10, |b| b.max(8 << 10));
         let levels = dim.levels.len().max(1);
         self.doc.max_hot_tiles = (budget * 3 / 5 / per_tile / levels).clamp(64, 1 << 20);
-        self.map_cache.max_grids = (budget / 4 / (190 << 10)).clamp(64, 8192);
+        self.map_cache.max_grids = (budget / 4 / crate::map_render::GRID_BYTES).clamp(64, 8192);
+        self.map_cache.max_summary_bytes = (budget / 10).clamp(16 << 20, 1 << 30);
         self.map_cache.max_chunks = (budget * 3 / 20 / (64 << 10)).clamp(256, 32768);
         if bytes > budget * 3 / 5 {
             let d = self.doc.dim;
@@ -973,7 +975,8 @@ impl MassifApp {
         let dim = self.doc.dimension();
         let stats: Vec<massif_core::level::LevelStats> = dim.levels.iter().map(|l| l.stats()).collect();
         let (hot, hot_bytes, cold_bytes, tiles) = stats.iter().fold((0, 0, 0, 0), |(h, hb, cb, t), s| (h + s.hot_tiles, hb + s.hot_bytes, cb + s.cold_bytes, t + s.tiles));
-        let (chunks, grids, summaries) = self.map_cache.stats();
+        let (chunks, grids, _) = self.map_cache.stats();
+        let (columns, textures) = self.map_cache.bytes();
         let voxels = dim.voxels.len();
         let mb = |b: usize| format!("{:.0} MB", b as f64 / (1u64 << 20) as f64);
         crate::widgets::well(ui, |ui| {
@@ -985,7 +988,7 @@ impl MassifApp {
             };
             line(ui, "Decoded tiles", mb(hot_bytes), format!("{hot} of {tiles} tiles, at most {} a level", self.doc.max_hot_tiles));
             line(ui, "The map, compressed", mb(cold_bytes), String::new());
-            line(ui, "Map view", mb(grids * (190 << 10) + summaries * 1024), format!("{grids} tiles of columns, {chunks} images (up to {} and {})", self.map_cache.max_grids, self.map_cache.max_chunks));
+            line(ui, "Map view", mb(columns), format!("{grids} tiles of columns, {chunks} images of {} on the graphics card (up to {} and {})", mb(textures), self.map_cache.max_grids, self.map_cache.max_chunks));
             line(ui, "Sculpted in 3D", mb(voxels * 4096), format!("{voxels} chunks of 16³"));
         });
     }
@@ -1096,13 +1099,14 @@ impl MassifApp {
         let dim = self.doc.dimension();
         let stats: Vec<massif_core::level::LevelStats> = dim.levels.iter().map(|l| l.stats()).collect();
         let (hot, hot_bytes, cold_bytes, tiles) = stats.iter().fold((0, 0, 0, 0), |(h, hb, cb, t), s| (h + s.hot_tiles, hb + s.hot_bytes, cb + s.cold_bytes, t + s.tiles));
-        let (chunks, grids, summaries) = self.map_cache.stats();
+        let (chunks, grids, _) = self.map_cache.stats();
+        let (columns, textures) = self.map_cache.bytes();
         let voxels = dim.voxels.len();
         let (t3, g3) = (self.view3d.tiles_built() + self.sculpt3d.tiles_built(), self.view3d.gpu_bytes() + self.sculpt3d.gpu_bytes());
         let keeps = vec![
             ("Decoded tiles", mb(hot_bytes as u64), format!("{hot} of {tiles}, at most {} a level", self.doc.max_hot_tiles)),
             ("Map, compressed", mb(cold_bytes as u64), String::new()),
-            ("Map view", mb((grids * (190 << 10) + summaries * 1024) as u64), format!("{grids} tiles of columns, {chunks} images")),
+            ("Map view", mb(columns as u64), format!("{grids} tiles of columns, {chunks} images ({} on the graphics card)", mb(textures as u64))),
             ("3D views", mb(g3), format!("{t3} tiles on the graphics card")),
             ("Sculpted in 3D", mb(voxels as u64 * 4096), format!("{voxels} chunks of 16³")),
             ("Undo", format!("{} steps", self.doc.history.undo_count()), String::new()),
@@ -5265,6 +5269,7 @@ mod tests {
             let id = h.state().active_map.or_else(|| h.state().maps.keys().next().copied()).expect("a map view");
             h.state_mut().layout.current_mut().maximized = Some(id);
         }
+        eprintln!("opened: memory in use {} MB", crate::devtools::memory_in_use().unwrap_or(0) >> 20);
         // The whole map drawn: frames, time and the processor's time.
         let (started, cpu) = (std::time::Instant::now(), crate::devtools::cpu_time().unwrap_or_default());
         let mut frames = 0;
@@ -5336,6 +5341,50 @@ mod tests {
             view.center[1] += 10.0 / view.zoom as f64;
         });
         run(&mut h, "map, zooming out", 70, &|app| app.maps.get_mut(&id).unwrap().zoom_by(1.0 / 1.07));
+        // A Raise stroke across the middle, the whole map in view, then
+        // closer: each frame's work while the map follows the brush.
+        let stroke = |h: &mut H, name: &str| {
+            let rect = map_rect(h.state(), &h.ctx);
+            let start = rect.center() - vec2(90.0, 0.0);
+            let button = |pressed, pos| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+            h.event(egui::Event::PointerMoved(start));
+            h.run_steps(20);
+            h.event(button(true, start));
+            let (mut work, mut cpu) = (Vec::new(), std::time::Duration::ZERO);
+            let frames = std::env::var("MASSIF_STROKE_FRAMES").ok().and_then(|n| n.parse::<usize>().ok()).unwrap_or(60);
+            for i in 1..=frames {
+                h.event(egui::Event::PointerMoved(start + vec2((i % 120) as f32 * 3.0, (i / 120) as f32 * 3.0)));
+                let started = std::time::Instant::now();
+                let before = crate::devtools::cpu_time().unwrap_or_default();
+                h.step();
+                cpu += crate::devtools::cpu_time().unwrap_or_default().saturating_sub(before);
+                work.push(started.elapsed().as_secs_f32() * 1000.0);
+            }
+            h.event(button(false, start));
+            let mut settle = 0;
+            h.step();
+            while h.state().map_cache.busy() && settle < 600 {
+                h.step();
+                settle += 1;
+            }
+            work.sort_by(f32::total_cmp);
+            eprintln!(
+                "{name}: work mean {:.1} p95 {:.1} max {:.1} ms · CPU {:.1} ms a frame; drawn {settle} frames after",
+                work.iter().sum::<f32>() / work.len() as f32,
+                work[work.len() * 95 / 100],
+                work[work.len() - 1],
+                cpu.as_secs_f32() * 1000.0 / frames as f32
+            );
+        };
+        h.state_mut().tools.brush.radius = 60.0;
+        stroke(&mut h, "map, a stroke, whole map");
+        h.state_mut().maps.get_mut(&id).unwrap().zoom_by(1.07f32.powi(40));
+        h.run_steps(5);
+        while h.state().map_cache.busy() {
+            h.step();
+        }
+        stroke(&mut h, "map, a stroke, close");
+        h.state_mut().maps.get_mut(&id).unwrap().zoom_by(1.07f32.powi(-40));
         // At rest on the whole map: whether frames are still asked for.
         h.run_steps(60);
         let mut asked = 0;

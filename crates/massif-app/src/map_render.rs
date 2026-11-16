@@ -4,8 +4,9 @@
 //!
 //! A chunk at level of detail `lod` is 128×128 texels, one texel per `2^lod`
 //! blocks, so it covers `2^lod × 2^lod` tiles. Chunks at `lod <= 2` read
-//! full-resolution [`SurfaceGrid`]s; coarser chunks read 16×16 summaries, so a
-//! fully zoomed-out 16k map only ever touches a few kilobytes per tile.
+//! full-resolution [`SurfaceGrid`]s; coarser chunks read [`Summary`]s of a
+//! tile's columns, 16×16 of them at `lod` 3, 8×8 at 4, down to one from 7 on,
+//! so that a fully zoomed-out map keeps a few hundred bytes a tile.
 
 use egui::{Color32, ColorImage, TextureFilter, TextureHandle, TextureOptions, TextureWrapMode};
 use massif_core::compose::{Span, TileStack, block_top};
@@ -26,8 +27,14 @@ pub const CHUNK_PX: usize = 128;
 pub const MAX_LOD: u8 = 10;
 /// Levels of detail up to this one read full-resolution grids.
 const GRID_LODS: u8 = 2;
+/// Columns of a tile along each axis in its finest summary (`lod` 3).
 const SUMMARY_SIZE: usize = 16;
-const SUMMARY_STEP: usize = 128 / SUMMARY_SIZE;
+/// Where a summary's first column is in its tile, along each axis: the
+/// columns of a summary of size `n` are every `128 / n` blocks from there,
+/// so that a summary holds those of every coarser one.
+const SUMMARY_OFFSET: i64 = 4;
+/// What summaries shrink to when there are too many: those of `lod` 5.
+const SHRUNK_SIZE: usize = 4;
 
 /// Column flag: the column has solid matter separated by air (overhang,
 /// floating island or cave).
@@ -212,21 +219,46 @@ impl SurfaceGrid {
     }
 }
 
-/// Every 8th column of a tile in each direction.
-pub struct Summary(pub [Sample; SUMMARY_SIZE * SUMMARY_SIZE]);
+/// The columns of a tile a coarse chunk reads: `size × size` of them, every
+/// `128 / size` blocks from [`SUMMARY_OFFSET`] in each direction.
+pub struct Summary {
+    size: usize,
+    samples: Box<[Sample]>,
+}
+
+/// The size of the summaries chunks at `lod` (over [`GRID_LODS`]) read: a
+/// column for each of their texels, one a tile from `lod` 7 on.
+fn summary_size(lod: u8) -> usize {
+    (SUMMARY_SIZE >> lod.saturating_sub(3)).max(1)
+}
 
 impl Summary {
-    pub fn build(dim: &Dimension, pos: TilePos) -> Option<Summary> {
+    pub fn build(dim: &Dimension, pos: TilePos, size: usize) -> Option<Summary> {
         let stack = TileStack::new(dim, pos, false)?;
         let mut sampler = ColumnSampler::default();
-        let mut out = [Sample::EMPTY; SUMMARY_SIZE * SUMMARY_SIZE];
-        for j in 0..SUMMARY_SIZE {
-            for i in 0..SUMMARY_SIZE {
-                let cell = cell_index(i * SUMMARY_STEP + SUMMARY_STEP / 2, j * SUMMARY_STEP + SUMMARY_STEP / 2);
-                out[j * SUMMARY_SIZE + i] = sampler.sample(&stack, cell);
-            }
-        }
-        Some(Summary(out))
+        let step = 128 / size;
+        let at = |i: usize| i * step + SUMMARY_OFFSET as usize;
+        let samples = (0..size * size).map(|k| sampler.sample(&stack, cell_index(at(k % size), at(k / size)))).collect();
+        Some(Summary { size, samples })
+    }
+
+    /// The same summary with fewer columns: every `self.size / size`th.
+    fn shrunk(&self, size: usize) -> Summary {
+        let k = self.size / size;
+        let samples = (0..size * size).map(|n| self.samples[(n / size * k) * self.size + n % size * k]).collect();
+        Summary { size, samples }
+    }
+
+    /// The column at `(lx, lz)` in the tile, or the summary's nearest one
+    /// before it.
+    fn at(&self, lx: i64, lz: i64) -> Sample {
+        let step = 128 / self.size as i64;
+        let index = |l: i64| (((l - SUMMARY_OFFSET).max(0) / step) as usize).min(self.size - 1);
+        self.samples[index(lz) * self.size + index(lx)]
+    }
+
+    fn bytes(&self) -> usize {
+        self.samples.len() * std::mem::size_of::<Sample>()
     }
 }
 
@@ -643,8 +675,11 @@ impl ChunkKey {
     fn sample_point(&self, i: isize, j: isize) -> (i32, i32) {
         let step = 1i64 << self.lod;
         let (x0, z0) = self.origin();
-        let x = x0 + i as i64 * step + step / 2;
-        let z = z0 + j as i64 * step + step / 2;
+        // The middle of the texel, or, over GRID_LODS, the column of the
+        // summaries there (the same at lod 3).
+        let mid = (step / 2).min(SUMMARY_OFFSET);
+        let x = x0 + i as i64 * step + mid;
+        let z = z0 + j as i64 * step + mid;
         (x.clamp(i32::MIN as i64, i32::MAX as i64) as i32, z.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
     }
 
@@ -696,21 +731,10 @@ pub fn moved_lately(ctx: &egui::Context) -> bool {
 const BATCH_CHUNKS: usize = 6;
 const BATCH_TILES_PER_THREAD: usize = 8;
 
-/// Whether a cache of column data holds a tile.
-trait Contains {
-    fn has(&self, t: &TilePos) -> bool;
-}
-
-impl<V> Contains for HashMap<TilePos, V> {
-    fn has(&self, t: &TilePos) -> bool {
-        self.contains_key(t)
-    }
-}
-
 /// Read access to the cached column data while chunks are built.
 struct Sources<'a> {
     grids: &'a HashMap<TilePos, GridEntry>,
-    summaries: &'a HashMap<TilePos, Option<Arc<Summary>>>,
+    summaries: &'a HashMap<TilePos, SummaryEntry>,
 }
 
 impl Sources<'_> {
@@ -722,12 +746,8 @@ impl Sources<'_> {
                 None => Sample::EMPTY,
             }
         } else {
-            match self.summaries.get(&pos).and_then(Option::as_ref) {
-                Some(s) => {
-                    let i = x.rem_euclid(128) as usize / SUMMARY_STEP;
-                    let j = z.rem_euclid(128) as usize / SUMMARY_STEP;
-                    s.0[j * SUMMARY_SIZE + i]
-                }
+            match self.summaries.get(&pos).and_then(|e| e.summary.as_ref()) {
+                Some(s) => s.at(x.rem_euclid(128) as i64, z.rem_euclid(128) as i64),
                 None => Sample::EMPTY,
             }
         }
@@ -882,6 +902,28 @@ struct GridEntry {
     used: u64,
 }
 
+/// Bytes a tile's grid of columns takes.
+pub const GRID_BYTES: usize = TILE_AREA * std::mem::size_of::<Sample>();
+/// Bytes a chunk's texture takes on the graphics card.
+pub const CHUNK_BYTES: usize = CHUNK_PX * CHUNK_PX * 4;
+
+struct SummaryEntry {
+    summary: Option<Arc<Summary>>,
+    used: u64,
+}
+
+impl SummaryEntry {
+    fn bytes(&self) -> usize {
+        self.summary.as_ref().map_or(0, |s| s.bytes())
+    }
+
+    /// Whether it holds the columns of a summary of `size` (or the tile is
+    /// empty).
+    fn holds(&self, size: usize) -> bool {
+        self.summary.as_ref().is_none_or(|s| s.size >= size)
+    }
+}
+
 pub struct ChunkEntry {
     pub texture: TextureHandle,
     pub stale: bool,
@@ -893,10 +935,15 @@ pub struct MapCache {
     generation: u64,
     clock: u64,
     grids: HashMap<TilePos, GridEntry>,
-    summaries: HashMap<TilePos, Option<Arc<Summary>>>,
+    summaries: HashMap<TilePos, SummaryEntry>,
+    /// Bytes the summaries take.
+    summary_bytes: usize,
     chunks: HashMap<(MapStyle, ChunkKey), ChunkEntry>,
-    /// Grids kept around (≈ 190 KiB each).
+    /// Grids kept around ([`GRID_BYTES`] each).
     pub max_grids: usize,
+    /// Bytes of summaries kept around at full size: beyond, those not used
+    /// lately shrink to the size of `lod` 5.
+    pub max_summary_bytes: usize,
     /// Chunk textures kept around (64 KiB each).
     pub max_chunks: usize,
     busy: bool,
@@ -909,13 +956,18 @@ impl Default for MapCache {
             clock: 0,
             grids: HashMap::new(),
             summaries: HashMap::new(),
+            summary_bytes: 0,
             chunks: HashMap::new(),
             max_grids: 384,
+            max_summary_bytes: DEFAULT_SUMMARY_BYTES,
             max_chunks: 1400,
             busy: false,
         }
     }
 }
+
+/// Summaries kept at full size by default.
+pub const DEFAULT_SUMMARY_BYTES: usize = 128 << 20;
 
 pub const TEXTURE_OPTIONS: TextureOptions = TextureOptions {
     magnification: TextureFilter::Nearest,
@@ -930,6 +982,7 @@ impl MapCache {
         if self.generation != generation {
             self.grids.clear();
             self.summaries.clear();
+            self.summary_bytes = 0;
             self.chunks.clear();
             self.generation = generation;
         }
@@ -950,7 +1003,9 @@ impl MapCache {
         let mut affected = HashSet::new();
         for &t in tiles {
             self.grids.remove(&t);
-            self.summaries.remove(&t);
+            if let Some(e) = self.summaries.remove(&t) {
+                self.summary_bytes -= e.bytes();
+            }
             for dz in -1..=1 {
                 for dx in -1..=1 {
                     let n = t.offset(dx, dz);
@@ -971,6 +1026,7 @@ impl MapCache {
     pub fn invalidate_all(&mut self) {
         self.grids.clear();
         self.summaries.clear();
+        self.summary_bytes = 0;
         for entry in self.chunks.values_mut() {
             entry.stale = true;
         }
@@ -1003,7 +1059,10 @@ impl MapCache {
         wanted: &[ChunkKey],
         budget: Duration,
     ) -> bool {
+        // What was used before this update may shrink.
+        let first = self.clock + 1;
         self.busy = self.build(ctx, dim, reg, sea, style, wanted, budget);
+        self.trim_summaries(first);
         self.busy
     }
 
@@ -1046,39 +1105,44 @@ impl MapCache {
             // (worked out once), and is drawn once they all are.
             self.clock += 1;
             let clock = self.clock;
-            let (mut fine_reads, mut coarse_reads): (HashSet<TilePos>, HashSet<TilePos>) = (HashSet::new(), HashSet::new());
+            // The tiles to read, with the size of the summaries wanted.
+            let (mut fine_reads, mut coarse_reads): (HashMap<TilePos, usize>, HashMap<TilePos, usize>) = (HashMap::new(), HashMap::new());
             let mut batch = Vec::new();
             let mut room = capacity;
             while cursor < todo.len() && batch.len() < BATCH_CHUNKS && room > 0 {
                 let key = todo[cursor];
                 let fine = key.lod <= GRID_LODS;
+                let size = if fine { 0 } else { summary_size(key.lod) };
                 let (needed, fresh) = match &mut current {
                     Some((at, needed, fresh)) if *at == cursor => (needed, fresh),
                     _ => {
                         let mut needed = HashSet::new();
                         key.needed_tiles(&mut needed);
                         let needed: Vec<TilePos> = needed.into_iter().filter(|t| ground.contains(*t)).collect();
-                        let cached = if fine { &self.grids as &dyn Contains } else { &self.summaries as &dyn Contains };
-                        let fresh = needed.iter().copied().filter(|t| !cached.has(t)).collect();
+                        let fresh = needed
+                            .iter()
+                            .copied()
+                            .filter(|t| if fine { !self.grids.contains_key(t) } else { !self.summaries.get(t).is_some_and(|e| e.holds(size)) })
+                            .collect();
                         let (_, needed, fresh) = current.insert((cursor, needed, fresh));
                         (needed, fresh)
                     }
                 };
                 let reads = if fine { &mut fine_reads } else { &mut coarse_reads };
-                fresh.retain(|t| !reads.contains(t));
+                fresh.retain(|t| reads.get(t).is_none_or(|&s| s < size));
                 // A grid takes about twice the time of a summary.
                 let cost = if fine { 2 } else { 1 };
                 let take = fresh.len().min(room / cost);
-                reads.extend(fresh.drain(fresh.len() - take..));
+                reads.extend(fresh.drain(fresh.len() - take..).map(|t| (t, size)));
                 room -= take * cost;
                 if !fresh.is_empty() {
                     break;
                 }
-                if fine {
-                    for t in needed.iter() {
-                        if let Some(e) = self.grids.get_mut(t) {
-                            e.used = clock;
-                        }
+                for t in needed.iter() {
+                    if let Some(e) = self.grids.get_mut(t).filter(|_| fine) {
+                        e.used = clock;
+                    } else if let Some(e) = self.summaries.get_mut(t).filter(|_| !fine) {
+                        e.used = clock;
                     }
                 }
                 batch.push(key);
@@ -1089,7 +1153,7 @@ impl MapCache {
             if !fine_reads.is_empty() {
                 let built: Vec<(TilePos, Option<Arc<SurfaceGrid>>)> = fine_reads
                     .par_iter()
-                    .map(|&t| (t, SurfaceGrid::build(dim, t).map(Arc::new)))
+                    .map(|(&t, _)| (t, SurfaceGrid::build(dim, t).map(Arc::new)))
                     .collect();
                 for (t, grid) in built {
                     self.grids.insert(t, GridEntry { grid, used: clock });
@@ -1098,9 +1162,15 @@ impl MapCache {
             if !coarse_reads.is_empty() {
                 let built: Vec<(TilePos, Option<Arc<Summary>>)> = coarse_reads
                     .par_iter()
-                    .map(|&t| (t, Summary::build(dim, t).map(Arc::new)))
+                    .map(|(&t, &size)| (t, Summary::build(dim, t, size).map(Arc::new)))
                     .collect();
-                self.summaries.extend(built);
+                for (t, summary) in built {
+                    let entry = SummaryEntry { summary, used: clock };
+                    self.summary_bytes += entry.bytes();
+                    if let Some(old) = self.summaries.insert(t, entry) {
+                        self.summary_bytes -= old.bytes();
+                    }
+                }
             }
             if batch.is_empty() {
                 continue;
@@ -1153,6 +1223,32 @@ impl MapCache {
         }
     }
 
+    /// Shrink the summaries not used since `first` (the start of this
+    /// update), least lately used first, while they take more than
+    /// `max_summary_bytes`.
+    fn trim_summaries(&mut self, first: u64) {
+        if self.summary_bytes <= self.max_summary_bytes {
+            return;
+        }
+        let mut by_age: Vec<(u64, TilePos)> = self
+            .summaries
+            .iter()
+            .filter(|(_, e)| e.used < first && e.summary.as_ref().is_some_and(|s| s.size > SHRUNK_SIZE))
+            .map(|(t, e)| (e.used, *t))
+            .collect();
+        by_age.sort_unstable();
+        for (_, t) in by_age {
+            if self.summary_bytes <= self.max_summary_bytes * 3 / 4 {
+                break;
+            }
+            let e = self.summaries.get_mut(&t).expect("listed above");
+            let s = e.summary.as_ref().expect("listed above");
+            let small = s.shrunk(SHRUNK_SIZE);
+            self.summary_bytes -= s.bytes() - small.bytes();
+            e.summary = Some(Arc::new(small));
+        }
+    }
+
     fn trim_chunks(&mut self) {
         if self.chunks.len() <= self.max_chunks {
             return;
@@ -1168,6 +1264,12 @@ impl MapCache {
     /// Whether the last update left chunks to build.
     pub fn busy(&self) -> bool {
         self.busy
+    }
+
+    /// Bytes the column data takes, and the chunks' textures on the
+    /// graphics card.
+    pub fn bytes(&self) -> (usize, usize) {
+        (self.grids.len() * GRID_BYTES + self.summary_bytes, self.chunks.len() * CHUNK_BYTES)
     }
 
     pub fn stats(&self) -> (usize, usize, usize) {
@@ -1223,7 +1325,7 @@ pub fn render_region(
     } else {
         summaries = tiles
             .par_iter()
-            .map(|&t| (t, Summary::build(dim, t).map(Arc::new)))
+            .map(|&t| (t, SummaryEntry { summary: Summary::build(dim, t, summary_size(lod)).map(Arc::new), used: 0 }))
             .collect();
     }
     let sources = Sources {
@@ -1302,10 +1404,21 @@ mod tests {
         assert_eq!(plain.levels, 0b01);
         assert_eq!(plain.flags, 0);
         assert!(SurfaceGrid::build(dim, TilePos::new(10, 10)).is_none());
-        let summary = Summary::build(dim, TilePos::new(0, -1)).unwrap();
+        let summary = Summary::build(dim, TilePos::new(0, -1), SUMMARY_SIZE).unwrap();
         // Summary sample (7, 7) is column (60, -68 + 128 = 60 within the tile).
-        let s = summary.0[7 * SUMMARY_SIZE + 7];
+        let s = summary.samples[7 * SUMMARY_SIZE + 7];
         assert!(s.flags & FLAG_FLOATING != 0, "{s:?}");
+        assert_eq!(summary.at(60, 60), s);
+        // A smaller summary holds some of the same columns, read the same.
+        for size in [8, 4, 2, 1] {
+            let small = Summary::build(dim, TilePos::new(0, -1), size).unwrap();
+            let shrunk = summary.shrunk(size);
+            assert_eq!(small.samples, shrunk.samples, "size {size}");
+            let step = 128 / size as i64;
+            for l in [4, 4 + step * (size as i64 - 1)] {
+                assert_eq!(small.at(l, 4), summary.at(l, 4), "size {size}, column {l}");
+            }
+        }
     }
 
     #[test]
@@ -1424,8 +1537,47 @@ mod tests {
                 })
                 .fold(f64::MAX, f64::min)
         };
-        eprintln!("{} tiles: summary {:.3} ms a tile", tiles.len(), time(&|p| drop(Summary::build(dim, p))));
+        eprintln!("{} tiles: summary {:.3} ms a tile", tiles.len(), time(&|p| drop(Summary::build(dim, p, SUMMARY_SIZE))));
         eprintln!("grid {:.3} ms a tile", time(&|p| drop(SurfaceGrid::build(dim, p))));
         eprintln!("decode only {:.3} ms a tile", time(&|p| drop(TileStack::new(dim, p, false))));
+        // A chunk's image, from column data already read.
+        let colorizer = Colorizer::new(&world.registry, MapStyle::default(), world.meta.sea_level as f32);
+        for lod in [0u8, 2, 4] {
+            let key = ChunkKey::of_tile(tiles[tiles.len() / 2], lod);
+            let mut needed = HashSet::new();
+            key.needed_tiles(&mut needed);
+            let grids = needed.iter().map(|&t| (t, GridEntry { grid: SurfaceGrid::build(dim, t).map(Arc::new), used: 0 })).collect();
+            let summaries = needed.iter().map(|&t| (t, SummaryEntry { summary: Summary::build(dim, t, summary_size(lod)).map(Arc::new), used: 0 })).collect();
+            let sources = Sources { grids: &grids, summaries: &summaries };
+            let best = (0..5)
+                .map(|_| {
+                    let t = Instant::now();
+                    drop(build_chunk(key, &sources, &colorizer));
+                    t.elapsed().as_secs_f64() * 1000.0
+                })
+                .fold(f64::MAX, f64::min);
+            eprintln!("chunk at lod {lod}: {best:.3} ms");
+        }
+    }
+
+    /// The huge map (MASSIF_HUGE_WORLD) at every coarse level of detail,
+    /// around its middle, in every mode, saved to MASSIF_SNAPSHOT_DIR to
+    /// compare renders before and after a change.
+    #[test]
+    fn a_huge_map_at_every_level() {
+        let Some(path) = std::env::var_os("MASSIF_HUGE_WORLD") else { return };
+        let world = massif_format::load(std::path::Path::new(&path)).unwrap();
+        let dim = &world.dims[0];
+        let (lo, hi) = dim.bounds().unwrap();
+        let mid = ((lo.x + hi.x) / 2 * 128, (lo.z + hi.z) / 2 * 128);
+        for mode in MapMode::ALL {
+            for lod in 0..=8u8 {
+                let style = MapStyle { mode, ..MapStyle::default() };
+                let n = 2;
+                let span = (CHUNK_PX << lod) as i32;
+                let image = render_region(dim, &world.registry, world.meta.sea_level as f32, style, lod, mid.0 - span, mid.1 - span, n, n);
+                save(&format!("huge-{mode:?}-lod{lod}.png"), &image);
+            }
+        }
     }
 }
