@@ -203,7 +203,11 @@ const icon = {
   github: '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38v-1.33c-2.23.48-2.7-1.07-2.7-1.07-.36-.92-.89-1.17-.89-1.17-.73-.5.05-.49.05-.49.8.06 1.23.83 1.23.83.72 1.22 1.88.87 2.33.66.07-.52.28-.87.5-1.07-1.78-.2-3.65-.89-3.65-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.22 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.2c0 .21.15.46.55.38A8 8 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>',
   sun: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
   moon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/></svg>',
-  menu: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 8h16M4 16h16"/></svg>',
+  menu: '<svg class="i-menu" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>',
+  close: '<svg class="i-close" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>',
+  list: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"/></svg>',
+  search: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>',
+  chevron: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>',
   arrow: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg>',
   heart: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20s-7.5-4.6-7.5-10A4.3 4.3 0 0 1 12 7.3 4.3 4.3 0 0 1 19.5 10c0 5.4-7.5 10-7.5 10Z"/></svg>',
   down: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2v9M4 7.5 8 11.5l4-4M3 14h10"/></svg>',
@@ -220,6 +224,8 @@ const nav = [
 function shell({ title, description, active = '', body, wide = false }) {
   const full = title ? `${title} · Massif` : 'Massif · The map editor for Minecraft';
   const desc = description || 'A map editor for Minecraft Java worlds in the spirit of WorldPainter, with a node-based terrain generator in the spirit of Gaea, written in Rust.';
+  // The menu of narrow screens opens the guide at each group's first page.
+  const guideGroups = docPages.filter((p, i) => i === 0 || docPages[i - 1].group !== p.group);
   const navLinks = nav.map(([t, h]) => `<a href="${url(h)}"${active === t ? ' aria-current="page"' : ''}>${t}</a>`).join('');
   return `<!doctype html>
 <html lang="en">
@@ -249,10 +255,15 @@ ${config.url ? `<meta property="og:image" content="${config.url}/assets/renders/
       <a class="icon-btn" href="${REPO}" aria-label="Massif on GitHub" rel="noopener">${icon.github}</a>
       <button class="icon-btn theme-btn" type="button" aria-label="Switch between light and dark">${icon.sun}${icon.moon}</button>
       <a class="pill pill-solid small hide-sm" href="${url('/download/')}">Download</a>
-      <button class="icon-btn menu-btn" type="button" aria-label="Menu" aria-expanded="false" aria-controls="sheet">${icon.menu}</button>
+      <button class="pill pill-ghost small menu-btn" type="button" aria-expanded="false" aria-controls="sheet">${icon.menu}${icon.close}Menu</button>
     </div>
   </div>
-  <nav class="sheet" id="sheet" aria-label="Main" hidden>${navLinks}<a href="${url('/download/')}">Download</a></nav>
+  <nav class="sheet" id="sheet" aria-label="Main menu" hidden>
+    <div class="sheet-links">${navLinks}</div>
+    ${guideGroups.length ? `<div class="sheet-guide"><h2>In the guide</h2><div>${guideGroups.map((g) => `<a href="${url(g.path)}">${esc(g.group)}</a>`).join('')}</div></div>` : ''}
+    <a class="pill pill-solid big" href="${url('/download/')}">${icon.down}Download Massif</a>
+    <div class="sheet-more"><a href="${REPO}" rel="noopener">${icon.github}GitHub</a>${config.kofi ? `<a href="${esc(config.kofi)}" rel="noopener">${icon.heart}Ko-fi</a>` : ''}${config.discord ? `<a href="${esc(config.discord)}" rel="noopener">Discord</a>` : ''}</div>
+  </nav>
 </header>
 <main id="main">
 ${body}
@@ -293,7 +304,9 @@ function figure(name, alt) {
 
 // ── Pages ───────────────────────────────────────────────────────────────
 
-function sidebar(current) {
+// The guide's pages by group, with the search; in the phone's drawer, the
+// current page's headings ("On this page") come first.
+function sidebar(current, toc = '') {
   const names = [...new Set(docPages.map((p) => p.group))];
   const group = (g) => {
     const ps = docPages.filter((p) => p.group === g);
@@ -301,6 +314,7 @@ function sidebar(current) {
   };
   return `<nav class="side" aria-label="Guide">
     <div class="search"><input type="search" placeholder="Search the guide" aria-label="Search the guide" autocomplete="off" spellcheck="false" data-search><kbd>/</kbd><div class="results" hidden></div></div>
+    ${toc ? `<details class="side-group side-toc"><summary>On this page</summary><div>${toc}</div></details>` : ''}
     ${names.map(group).join('')}
   </nav>`;
 }
@@ -309,7 +323,16 @@ function guidePage(p, i) {
   const prev = docPages[i - 1], next = docPages[i + 1];
   const toc = [...p.md.matchAll(/^### (.*)/gm)].map((m) => `<a href="#${slug(m[1])}">${esc(plain(m[1]))}</a>`).join('');
   const body = `<div class="docs">
-  <details class="side-mobile"><summary><span class="crumb">${esc(p.group)}</span>${esc(p.title)}</summary>${sidebar(p)}</details>
+  <div class="guide-bar">
+    <button class="guide-open" type="button" aria-expanded="false" aria-controls="guide-drawer">${icon.list}<span class="guide-where"><span class="crumb">${esc(p.group)}</span><span class="here">${esc(p.title)}</span></span><span class="guide-all">All pages${icon.chevron}</span></button>
+    <button class="icon-btn guide-find" type="button" aria-label="Search the guide" aria-controls="guide-drawer">${icon.search}</button>
+  </div>
+  <div class="drawer" id="guide-drawer" hidden>
+    <div class="drawer-panel" role="dialog" aria-modal="true" aria-label="Guide">
+      <div class="drawer-head"><strong>Guide</strong><button class="icon-btn drawer-close" type="button" aria-label="Close">${icon.close}</button></div>
+      ${sidebar(p, toc)}
+    </div>
+  </div>
   ${sidebar(p)}
   <article class="prose">
     <p class="eyebrow">${esc(p.group)}</p>

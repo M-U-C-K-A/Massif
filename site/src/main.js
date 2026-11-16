@@ -13,13 +13,33 @@
     try { localStorage.setItem('massif-theme', t); } catch (e) {}
   });
 
-  // Menu on narrow screens.
-  const btn = document.querySelector('.menu-btn'), sheet = document.getElementById('sheet');
-  btn?.addEventListener('click', () => {
-    const open = sheet.hidden;
-    sheet.hidden = !open;
-    btn.setAttribute('aria-expanded', String(open));
+  // On narrow screens, the menu and the guide's drawer: one open at a time,
+  // the page under it still, closed by Escape, a link or the backdrop.
+  const panels = [];
+  const panel = (el, buttons, focus) => {
+    if (!el) return;
+    const set = (open) => {
+      if (open) panels.forEach((p) => p !== self && p.set(false));
+      el.hidden = !open;
+      buttons.forEach((b) => b.setAttribute('aria-expanded', String(open)));
+      root.classList.toggle('locked', panels.some((p) => !p.el.hidden));
+    };
+    const self = { el, set };
+    panels.push(self);
+    buttons.forEach((b) => b.addEventListener('click', () => { set(el.hidden); if (!el.hidden && focus) focus(b); }));
+    el.addEventListener('click', (e) => { if (e.target === el || e.target.closest('a[href]')) set(false); });
+    return self;
+  };
+  panel(document.getElementById('sheet'), [...document.querySelectorAll('.menu-btn')]);
+  const drawer = document.getElementById('guide-drawer');
+  panel(drawer, [...document.querySelectorAll('.guide-open, .guide-find')], (b) => {
+    if (b.classList.contains('guide-find')) drawer.querySelector('[data-search]')?.focus();
+    else drawer.querySelector('.side [aria-current]')?.scrollIntoView({ block: 'center' });
   });
+  drawer?.querySelector('.drawer-close')?.addEventListener('click', () => panels.find((p) => p.el === drawer).set(false));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') panels.forEach((p) => !p.el.hidden && p.set(false)); });
+  // Back to a wide window: nothing stays open behind the layout.
+  matchMedia('(min-width: 901px)').addEventListener?.('change', (m) => m.matches && panels.forEach((p) => p.set(false)));
 
   // The visitor's system, when it is one Massif runs on.
   const ua = navigator.userAgent;
@@ -113,7 +133,8 @@
       };
       input.addEventListener('input', show);
       input.addEventListener('focus', () => { load(); if (input.value.trim().length > 1) show(); });
-      input.addEventListener('blur', () => setTimeout(() => { list.hidden = true; }, 150));
+      // In the phone's drawer the results stay while the keyboard goes away.
+      if (!input.closest('.drawer')) input.addEventListener('blur', () => setTimeout(() => { list.hidden = true; }, 150));
       input.addEventListener('keydown', (e) => {
         const links = [...list.querySelectorAll('a')];
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
