@@ -410,6 +410,42 @@ impl Mapper {
         (self.registry.terrains.len() - 1) as u16
     }
 
+    /// The terrain of every ordinal in `raw` (whose values `counts` counts),
+    /// resolved as [`Mapper::terrain`] would one column after the other.
+    pub fn terrain_table(&mut self, raw: &[u8], counts: &[u64; 256]) -> [u16; 256] {
+        self.table(raw, counts, |m, o| m.terrains[o as usize], Self::terrain)
+    }
+
+    /// The biome of every WorldPainter biome in `raw`, as [`Mapper::biome`].
+    pub fn biome_table(&mut self, raw: &[u8], counts: &[u64; 256]) -> [u16; 256] {
+        self.table(raw, counts, |m, b| m.biomes[b as usize], Self::biome)
+    }
+
+    /// New values join the registry in the order they first appear, so a
+    /// tile with values not met before is walked in order; any other is
+    /// looked up at once.
+    fn table(&mut self, raw: &[u8], counts: &[u64; 256], known: fn(&Self, u8) -> Option<u16>, resolve: fn(&mut Self, u8) -> u16) -> [u16; 256] {
+        let mut table = [0u16; 256];
+        let mut all_known = true;
+        for (v, &c) in counts.iter().enumerate() {
+            if c > 0 {
+                match known(self, v as u8) {
+                    Some(id) => table[v] = id,
+                    None => all_known = false,
+                }
+            }
+        }
+        if !all_known {
+            let mut seen = [false; 256];
+            for &v in raw {
+                if !std::mem::replace(&mut seen[v as usize], true) {
+                    table[v as usize] = resolve(self, v);
+                }
+            }
+        }
+        table
+    }
+
     /// The Massif terrain for a WorldPainter terrain ordinal.
     pub fn terrain(&mut self, ordinal: u8) -> u16 {
         if let Some(id) = self.terrains[ordinal as usize] {

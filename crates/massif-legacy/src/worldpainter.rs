@@ -168,7 +168,19 @@ pub fn import_world(path: &Path, progress: Option<&ImportProgress>) -> Result<(W
     let file = File::open(path)?;
     let counting = Counting { inner: file, progress };
     let gz = GzDecoder::new(BufReader::with_capacity(1 << 20, counting));
-    let mut result = import_stream(BufReader::with_capacity(1 << 20, gz), progress);
+    // Inflating takes about as long as parsing what comes out: one thread
+    // inflates ahead while this one parses.
+    let mut result = std::thread::scope(|s| {
+        let (send, receive) = std::sync::mpsc::sync_channel(INFLATED_AHEAD);
+        let inflater = std::thread::Builder::new()
+            .name("massif-inflate".into())
+            .spawn_scoped(s, move || inflate(gz, &send))?;
+        let result = import_stream(Inflated { chunks: receive, chunk: Vec::new(), at: 0 }, progress);
+        // The parser stops early on a damaged stream: the inflater then
+        // finds the channel closed and stops too.
+        inflater.join().expect("the inflater does not panic");
+        result
+    });
     if let Ok((world, report)) = &mut result {
         report.thumbnail = thumbnail;
         if world.meta.name.is_empty() {
@@ -181,14 +193,127 @@ pub fn import_world(path: &Path, progress: Option<&ImportProgress>) -> Result<(W
     result
 }
 
-/// A tile's data, taken out of the arena, waiting to be encoded.
+/// Inflated chunks waiting for the parser, 1 MiB each.
+const INFLATED_AHEAD: usize = 8;
+const INFLATED_CHUNK: usize = 1 << 20;
+
+/// Inflate `gz` into chunks until it ends, fails or nobody listens.
+fn inflate(mut gz: impl Read, send: &std::sync::mpsc::SyncSender<io::Result<Vec<u8>>>) {
+    loop {
+        let mut chunk = vec![0u8; INFLATED_CHUNK];
+        let mut n = 0;
+        let outcome = loop {
+            match gz.read(&mut chunk[n..]) {
+                Ok(0) => break Ok(true),
+                Ok(k) => {
+                    n += k;
+                    if n == chunk.len() {
+                        break Ok(false);
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) => break Err(e),
+            }
+        };
+        chunk.truncate(n);
+        let done = match outcome {
+            Ok(end) => {
+                let sent = n == 0 || send.send(Ok(chunk)).is_ok();
+                end || !sent
+            }
+            Err(e) => {
+                let _ = send.send(Err(e));
+                true
+            }
+        };
+        if done {
+            return;
+        }
+    }
+}
+
+/// The inflated stream, read from the chunks the inflater sends.
+struct Inflated {
+    chunks: std::sync::mpsc::Receiver<io::Result<Vec<u8>>>,
+    chunk: Vec<u8>,
+    at: usize,
+}
+
+impl Read for Inflated {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        while self.at == self.chunk.len() {
+            match self.chunks.recv() {
+                Ok(chunk) => {
+                    self.chunk = chunk?;
+                    self.at = 0;
+                }
+                // The inflater is done: the end of the stream.
+                Err(_) => return Ok(0),
+            }
+        }
+        let n = buf.len().min(self.chunk.len() - self.at);
+        buf[..n].copy_from_slice(&self.chunk[self.at..self.at + n]);
+        self.at += n;
+        Ok(n)
+    }
+}
+
+/// A tile's data, taken out of the arena, waiting to be converted and
+/// encoded on a worker thread.
 struct RawTile {
     handle: Handle,
     pos: TilePos,
-    top: Vec<f32>,
-    terrain: Vec<u16>,
-    fluid: Vec<i16>,
-    biome: Option<Vec<u16>>,
+    /// `minHeight` of the tile, as an offset.
+    min: f32,
+    heights: Heights,
+    /// Terrain ordinals, and the terrain each ordinal maps to.
+    terrain: Option<(Vec<u8>, [u16; 256])>,
+    /// The terrain of a tile without terrain data.
+    default_terrain: u16,
+    water: Water,
+    /// WorldPainter biome numbers, and the biome each maps to.
+    biome: Option<(Vec<u8>, [u16; 256])>,
+}
+
+enum Heights {
+    Int(Vec<i32>),
+    Short(Vec<i16>),
+}
+
+enum Water {
+    Short(Vec<i16>),
+    Byte(Vec<u8>),
+    None,
+}
+
+impl RawTile {
+    fn top(&self) -> Vec<f32> {
+        let (min, mut top) = (self.min, Vec::with_capacity(TILE_AREA));
+        match &self.heights {
+            Heights::Int(raw) => top.extend(raw.iter().map(|&r| snap_height(r as f32 / 256.0 + min + 1.0))),
+            Heights::Short(raw) => top.extend(raw.iter().map(|&r| snap_height((r as u16) as f32 / 256.0 + min + 1.0))),
+        }
+        top
+    }
+
+    fn fluid(&self) -> Vec<i16> {
+        let min = self.min as i32;
+        let level = |w: i32| (w + min + 1).clamp(i16::MIN as i32 + 1, i16::MAX as i32) as i16;
+        match &self.water {
+            Water::Short(raw) => raw.iter().map(|&w| level((w as u16) as i32)).collect(),
+            Water::Byte(raw) => raw.iter().map(|&w| level(w as i32)).collect(),
+            Water::None => vec![NO_FLUID; TILE_AREA],
+        }
+    }
+}
+
+/// How many times each value appears in `raw`.
+fn counts(raw: &[u8]) -> [u64; 256] {
+    let mut counts = [0u64; 256];
+    for &v in raw {
+        counts[v as usize] += 1;
+    }
+    counts
 }
 
 fn take_array(arena: &mut Arena, v: Option<Value>) -> Option<Array> {
@@ -264,51 +389,45 @@ impl TileHook<'_> {
         let field = arena.field(v, if tall { "tallWaterLevel" } else { "waterLevel" });
         let water = take_array(arena, field);
 
-        let top: Vec<f32> = match heights {
-            Some(Array::Int(raw)) if raw.len() == TILE_AREA => {
-                raw.iter().map(|&r| snap_height(r as f32 / 256.0 + min + 1.0)).collect()
-            }
-            Some(Array::Short(raw)) if raw.len() == TILE_AREA => {
-                raw.iter().map(|&r| snap_height((r as u16) as f32 / 256.0 + min + 1.0)).collect()
-            }
+        let heights = match heights {
+            Some(Array::Int(raw)) if raw.len() == TILE_AREA => Heights::Int(raw),
+            Some(Array::Short(raw)) if raw.len() == TILE_AREA => Heights::Short(raw),
             _ => {
                 self.damaged += 1;
                 return None;
             }
         };
-        let terrain: Vec<u16> = match terrain {
+        let terrain = match terrain {
             Some(Array::Byte(raw)) if raw.len() == TILE_AREA => {
-                let mut counts = [0u64; 256];
-                for &o in &raw {
-                    counts[o as usize] += 1;
+                let counts = counts(&raw);
+                for (total, c) in self.histogram.iter_mut().zip(counts) {
+                    *total += c;
                 }
-                for (o, &c) in counts.iter().enumerate() {
-                    self.histogram[o] += c;
-                }
-                raw.iter().map(|&o| self.mapper.terrain(o)).collect()
+                let table = self.mapper.terrain_table(&raw, &counts);
+                Some((raw, table))
             }
-            _ => vec![self.mapper.terrain(0); TILE_AREA],
+            _ => None,
         };
-        let fluid: Vec<i16> = match water {
-            Some(Array::Short(raw)) if raw.len() == TILE_AREA => raw
-                .iter()
-                .map(|&w| ((w as u16) as i32 + min as i32 + 1).clamp(i16::MIN as i32 + 1, i16::MAX as i32) as i16)
-                .collect(),
-            Some(Array::Byte(raw)) if raw.len() == TILE_AREA => raw
-                .iter()
-                .map(|&w| (w as i32 + min as i32 + 1).clamp(i16::MIN as i32 + 1, i16::MAX as i32) as i16)
-                .collect(),
-            _ => vec![NO_FLUID; TILE_AREA],
+        let default_terrain = if terrain.is_none() { self.mapper.terrain(0) } else { 0 };
+        let water = match water {
+            Some(Array::Short(raw)) if raw.len() == TILE_AREA => Water::Short(raw),
+            Some(Array::Byte(raw)) if raw.len() == TILE_AREA => Water::Byte(raw),
+            _ => Water::None,
         };
         let biome = biome_bytes
             .filter(|b| b.len() == TILE_AREA)
-            .map(|b| b.iter().map(|&wp| self.mapper.biome(wp)).collect());
+            .map(|b| {
+                let table = self.mapper.biome_table(&b, &counts(&b));
+                (b, table)
+            });
         Some(RawTile {
             handle: h,
             pos: TilePos::new(x, z),
-            top,
+            min,
+            heights,
             terrain,
-            fluid,
+            default_terrain,
+            water,
             biome,
         })
     }
@@ -316,20 +435,24 @@ impl TileHook<'_> {
 
 fn encode(raw: RawTile, beaches: &crate::terrains::Beaches) -> (Handle, TilePos, Blob) {
     let mut tile = Tile::ground(0.0, 0, NO_FLUID);
-    let mut terrain = raw.terrain;
+    let top = raw.top();
+    let mut terrain: Vec<u16> = match &raw.terrain {
+        Some((ordinals, table)) => ordinals.iter().map(|&o| table[o as usize]).collect(),
+        None => vec![raw.default_terrain; TILE_AREA],
+    };
     if terrain.contains(&crate::terrains::BEACH_MARK) {
         let (ox, oz) = raw.pos.origin();
         for (i, t) in terrain.iter_mut().enumerate() {
             if *t == crate::terrains::BEACH_MARK {
-                *t = beaches.at(ox + (i & 127) as i32, oz + (i >> 7) as i32, raw.top[i]);
+                *t = beaches.at(ox + (i & 127) as i32, oz + (i >> 7) as i32, top[i]);
             }
         }
     }
-    tile.top = Plane::from_vec(raw.top);
+    tile.fluid = Plane::from_vec(raw.fluid());
+    tile.top = Plane::from_vec(top);
     tile.terrain = Plane::from_vec(terrain);
-    tile.fluid = Plane::from_vec(raw.fluid);
-    if let Some(b) = raw.biome {
-        tile.biome = Plane::from_vec(b);
+    if let Some((numbers, table)) = &raw.biome {
+        tile.biome = Plane::from_vec(numbers.iter().map(|&b| table[b as usize]).collect());
     }
     tile.compact();
     (raw.handle, raw.pos, Blob::from(tile.encode()))

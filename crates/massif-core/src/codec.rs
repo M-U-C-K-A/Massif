@@ -111,6 +111,42 @@ impl<'a> Reader<'a> {
         Ok(((u >> 1) as i64) ^ -((u & 1) as i64))
     }
 
+    /// [`Reader::vari`] truncated to 32 bits, quick for the one byte
+    /// varints that make up most planes.
+    #[inline(always)]
+    pub fn vari32(&mut self) -> Result<i32> {
+        match self.data.get(self.pos) {
+            Some(&b) if b < 0x80 => {
+                self.pos += 1;
+                let u = b as i32;
+                Ok((u >> 1) ^ -(u & 1))
+            }
+            _ => Ok(self.vari()? as i32),
+        }
+    }
+
+    /// Fill `out` with [`Reader::vari32`]s, eight at a time where eight
+    /// one byte varints follow each other, as they mostly do.
+    pub fn vari32s(&mut self, out: &mut [i32]) -> Result<()> {
+        let zigzag = |u: u8| ((u >> 1) as i32) ^ -((u & 1) as i32);
+        for chunk in out.chunks_mut(8) {
+            if let Some(bytes) = self.data.get(self.pos..self.pos + 8)
+                && chunk.len() == 8
+                && u64::from_le_bytes(bytes.try_into().unwrap()) & 0x8080_8080_8080_8080 == 0
+            {
+                for (v, &b) in chunk.iter_mut().zip(bytes) {
+                    *v = zigzag(b);
+                }
+                self.pos += 8;
+            } else {
+                for v in chunk {
+                    *v = self.vari32()?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// A varint that must fit `0..=max`.
     pub fn varu_max(&mut self, max: u64) -> Result<u64> {
         let v = self.varu()?;
@@ -175,27 +211,26 @@ pub fn decode_heights(r: &mut Reader) -> Result<Plane<f32>> {
             Ok(Plane::Uniform(q as f32 / HEIGHT_SCALE))
         }
         H_PREDICTED => {
+            // Undoing the predictor `left + up - up_left` of `encode_heights`
+            // is a 2D running sum of the residuals: along each row, then
+            // down the columns (wrapping, as the encoder computed them).
             let n = TILE_SIZE as usize;
-            let mut out = vec![0f32; TILE_AREA];
-            let mut up = vec![0i32; n];
-            for z in 0..n {
-                let mut left = 0i32;
-                let mut up_left = 0i32;
-                for x in 0..n {
-                    let pred = match (x, z) {
-                        (0, 0) => 0,
-                        (_, 0) => left,
-                        (0, _) => up[0],
-                        _ => left.wrapping_add(up[x]).wrapping_sub(up_left),
-                    };
-                    let q = pred.wrapping_add(r.vari()? as i32);
-                    out[z * n + x] = q as f32 / HEIGHT_SCALE;
-                    up_left = up[x];
-                    up[x] = q;
-                    left = q;
+            let mut q = vec![0i32; TILE_AREA];
+            r.vari32s(&mut q)?;
+            for row in q.chunks_exact_mut(n) {
+                let mut sum = 0i32;
+                for v in row {
+                    sum = sum.wrapping_add(*v);
+                    *v = sum;
                 }
             }
-            Ok(Plane::from_vec(out))
+            for z in 1..n {
+                let (done, rest) = q.split_at_mut(z * n);
+                for (v, up) in rest[..n].iter_mut().zip(&done[(z - 1) * n..]) {
+                    *v = v.wrapping_add(*up);
+                }
+            }
+            Ok(Plane::from_vec(q.into_iter().map(|q| q as f32 / HEIGHT_SCALE).collect()))
         }
         _ => Err(CodecError::Corrupt("unknown height plane mode")),
     }
@@ -354,6 +389,21 @@ pub fn decode_categorical(r: &mut Reader) -> Result<Plane<u16>> {
         C_DENSE => {
             let pal = read_palette(r)?;
             let wide = pal.len() > 256;
+            let width = if wide { 2 } else { 1 };
+            // Read at once when the whole plane is there (a short one fails
+            // index by index, as it always has).
+            if r.remaining() >= TILE_AREA * width {
+                let raw = r.bytes(TILE_AREA * width)?;
+                let out: Vec<u16> = if wide {
+                    raw.as_chunks::<2>().0.iter().map(|b| u16::from_le_bytes(*b)).collect()
+                } else {
+                    raw.iter().map(|&b| b as u16).collect()
+                };
+                if out.iter().any(|&i| i as usize >= pal.len()) {
+                    return Err(CodecError::Corrupt("palette index out of range"));
+                }
+                return Ok(Plane::from_vec(out.into_iter().map(|i| pal[i as usize]).collect()));
+            }
             let mut out = Vec::with_capacity(TILE_AREA);
             for _ in 0..TILE_AREA {
                 out.push(read_index(r, wide, &pal)?);
@@ -468,6 +518,73 @@ mod tests {
         assert!(buf.len() < TILE_AREA * 2, "{} bytes", buf.len());
         let back = decode_heights(&mut Reader::new(&buf)).unwrap();
         assert_eq!(&back.dense()[..], &v[..]);
+    }
+
+    /// The height decoder as first written: one column after the other,
+    /// predicting each from its three decoded neighbours.
+    fn walk_heights(r: &mut Reader) -> Result<Vec<f32>> {
+        assert_eq!(r.u8()?, H_PREDICTED);
+        let n = TILE_SIZE as usize;
+        let mut out = vec![0f32; TILE_AREA];
+        let mut up = vec![0i32; n];
+        for z in 0..n {
+            let (mut left, mut up_left) = (0i32, 0i32);
+            for x in 0..n {
+                let pred = match (x, z) {
+                    (0, 0) => 0,
+                    (_, 0) => left,
+                    (0, _) => up[0],
+                    _ => left.wrapping_add(up[x]).wrapping_sub(up_left),
+                };
+                let q = pred.wrapping_add(r.vari()? as i32);
+                out[z * n + x] = q as f32 / HEIGHT_SCALE;
+                up_left = up[x];
+                up[x] = q;
+                left = q;
+            }
+        }
+        Ok(out)
+    }
+
+    #[test]
+    fn heights_decode_as_the_column_walk_does() {
+        let mut s = 11u64;
+        // Residuals of every length, small ones mostly, extreme ones that
+        // wrap, varints longer than 32 bits; then streams cut short and
+        // plain noise, which both must refuse or read alike.
+        let mut streams = Vec::new();
+        for spread in [3u32, 200, 40_000, u32::MAX] {
+            let mut buf = vec![H_PREDICTED];
+            for _ in 0..TILE_AREA {
+                let v = match lcg(&mut s) % 100 {
+                    0 => i64::MIN + lcg(&mut s) as i64,
+                    1 => i32::MAX as i64 + lcg(&mut s) as i64,
+                    _ => (lcg(&mut s) % spread.max(1)) as i64 - (spread / 2) as i64,
+                };
+                put_vari(&mut buf, v);
+            }
+            streams.push(buf.clone());
+            for cut in [1, 2, 9, buf.len() / 2] {
+                streams.push(buf[..buf.len() - cut].to_vec());
+            }
+        }
+        for _ in 0..4 {
+            let mut noise = vec![H_PREDICTED];
+            noise.extend((0..TILE_AREA * 2).map(|_| lcg(&mut s) as u8));
+            streams.push(noise);
+        }
+        for buf in &streams {
+            let (mut a, mut b) = (Reader::new(buf), Reader::new(buf));
+            match (decode_heights(&mut a), walk_heights(&mut b)) {
+                (Ok(p), Ok(v)) => {
+                    let bits = |h: &[f32]| h.iter().map(|h| h.to_bits()).collect::<Vec<u32>>();
+                    assert_eq!(bits(&p.dense()[..]), bits(&v));
+                    assert_eq!(a.remaining(), b.remaining());
+                }
+                (Err(_), Err(_)) => {}
+                (p, v) => panic!("the decoders disagree: {:?} against {:?}", p.map(|_| ()), v.map(|_| ())),
+            }
+        }
     }
 
     #[test]

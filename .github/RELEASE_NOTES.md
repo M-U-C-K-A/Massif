@@ -8,6 +8,8 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 
 **A faster export.** Exporting a map to a Minecraft world takes about a quarter less work: a map of 2,116 tiles that took 35 seconds of processor time now takes 25, and a little over 3 seconds instead of nearly 5 on a ten-core Mac. The world written is the same, byte for byte.
 
+**Faster WorldPainter imports and map tiles.** Importing a `.world` takes less than half as long as before (a map of 5,888 blocks a side: 0.33 s instead of 0.88 s), and unpacking the map's tiles, which painting, drawing the map, the picture saved in the file and the export all do, a quarter less. Imported maps and saved files are exactly the same as before.
+
 ## New in 0.5.1
 
 **The player's view looks like Minecraft with Axiom.** With **Player** on in 3D Sculpt, the view shows the game's own blocks with their textures (read from the Minecraft installed on the computer), lit as the game lights them, corners shaded as its smooth lighting does, under its blue sky with the square sun, its clouds and its fog, deep water darker toward the floor. The blocks the brush takes are marked in Axiom's lavender and the block under the cursor is outlined. The cursor free, it works as Axiom's editor: left drag looks around, the right button uses the tool under the cursor (Alt: its inverse), the middle one picks the block for Paint, Ctrl turns about a point or moves the view, Ctrl + middle sizes the brush, and the wheel sets the flight speed, also shown in the bar along the bottom with what each button and key does. A click takes the mouse as in the game: the right button builds, the left one breaks. The keys are the game's: Shift sneaks and goes down, Ctrl sprints.
