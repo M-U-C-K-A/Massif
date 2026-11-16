@@ -247,6 +247,10 @@ pub struct ToolState {
     /// Blocks per second at the brush centre, full strength.
     pub raise_speed: f32,
     pub target_height: f32,
+    /// Which way Flatten moves the land, and whether it paints the land it
+    /// flattens with the terrain its new height calls for.
+    pub flatten_mode: ops::FlattenMode,
+    pub flatten_theme: bool,
     pub roughness: f32,
     pub terrain: u16,
     pub biome: u16,
@@ -797,6 +801,8 @@ impl Default for ToolState {
             filter: massif_core::filter::Filter::default(),
             raise_speed: 24.0,
             target_height: 64.0,
+            flatten_mode: ops::FlattenMode::Both,
+            flatten_theme: false,
             roughness: 4.0,
             terrain: 1,
             biome: 0,
@@ -948,7 +954,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
     let pattern = (stroke.tool == Tool::PaintTerrain && tools.pattern.on && !invert)
         .then(|| tools.pattern.sampler(&doc.world.registry))
         .flatten();
-    let theme = (matches!(stroke.tool, Tool::PaintTerrain | Tool::AutoPaint) && invert).then(|| {
+    let theme = ((matches!(stroke.tool, Tool::PaintTerrain | Tool::AutoPaint) && invert) || (stroke.tool == Tool::Flatten && tools.flatten_theme)).then(|| {
         (
             massif_core::generate::Theme::new(&doc.world.registry),
             doc.world.meta.sea_level as f32,
@@ -985,7 +991,11 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                     strength: (brush.strength * dt * 8.0 * share).min(1.0),
                     ..brush.clone()
                 };
-                ops::flatten(&mut edit, &b, x, z, stroke.flatten_to.unwrap_or(tools.target_height), surface);
+                let target = stroke.flatten_to.unwrap_or(tools.target_height);
+                // The theme: the terrain the new height calls for, as the
+                // inverse of Paint Terrain puts back.
+                let paint = theme.as_ref().map(|(theme, sea)| move |h: f32| theme.terrain(h - 1.0, 0.0, *sea, 0.0));
+                ops::flatten_with(&mut edit, &b, x, z, target, surface, tools.flatten_mode, paint.as_ref().map(|p| p as &(dyn Fn(f32) -> TerrainId + Sync)));
             }
             Tool::SetHeight => ops::set_height(&mut edit, brush, x, z, tools.target_height, surface),
             Tool::Roughen => {
@@ -1374,6 +1384,59 @@ mod tests {
         let msg = click(&mut d, &mut tools, 50, 50, true).unwrap();
         assert!(msg.starts_with("Drained"), "{msg}");
         assert_eq!(probe(&d, 60, 60).unwrap().fluid, NO_FLUID);
+    }
+
+    /// Flatten's options, from a stroke as on the map: both ways levels a
+    /// hill and a pit, Only raise fills the pit and leaves the hill, Only
+    /// lower the other way round; Apply theme paints what it flattened with
+    /// the terrain the height calls for, and only that.
+    #[test]
+    fn flatten_one_way_or_both_and_its_theme() {
+        use massif_core::ops::FlattenMode;
+        for (mode, theme) in [(FlattenMode::Both, false), (FlattenMode::RaiseOnly, false), (FlattenMode::LowerOnly, false), (FlattenMode::RaiseOnly, true)] {
+            let mut d = doc();
+            let mut tools = ToolState::default();
+            // Flat ground at 64, a hill at 90 around (40, 40), a pit at 40
+            // around (20, 40), all under the brush; the hill sand.
+            d.history.begin("shape", 0);
+            let small = Brush { radius: 4.0, profile: massif_core::Profile::Constant, ..Brush::default() };
+            ops::set_height(&mut d.history.edit(&mut d.world, 0), &small, 40.0, 40.0, 90.0, Surface::Top);
+            ops::set_height(&mut d.history.edit(&mut d.world, 0), &small, 20.0, 40.0, 40.0, Surface::Top);
+            let ground = probe(&d, 30, 30).unwrap().terrain;
+            let want = massif_core::generate::Theme::new(&d.world.registry).terrain(64.0, 0.0, d.world.meta.sea_level as f32, 0.0).0;
+            let sand = TerrainId((1..).find(|t| *t != ground && *t != want).unwrap());
+            ops::paint_terrain(&mut d.history.edit(&mut d.world, 0), &Brush { strength: 1.0, ..small.clone() }, 40.0, 40.0, sand, 1);
+            d.commit();
+            let (flat, hill0, pit0) = (height(&d, 30, 30), height(&d, 40, 40), height(&d, 20, 40));
+            assert!(pit0 < flat && flat < hill0);
+            tools.select(Tool::Flatten);
+            tools.flatten_mode = mode;
+            tools.flatten_theme = theme;
+            tools.brush.strength = 1.0;
+            tools.brush.radius = 40.0;
+            tools.brush.profile = massif_core::Profile::Constant;
+            let (stroke, _) = begin_stroke(&mut d, &tools, (30.5, 30.5), false, false);
+            let mut stroke = stroke.unwrap();
+            for _ in 0..60 {
+                continue_stroke(&mut d, &tools, &mut stroke, (30.5, 30.5), 0.1);
+            }
+            end_stroke(&mut d, stroke);
+            let (hill, pit) = (height(&d, 40, 40), height(&d, 20, 40));
+            let expect = match mode {
+                FlattenMode::Both => (flat, flat),
+                FlattenMode::RaiseOnly => (hill0, flat),
+                FlattenMode::LowerOnly => (flat, pit0),
+            };
+            assert_eq!((hill, pit), expect, "{mode:?}");
+            let terrain = |x, z| probe(&d, x, z).unwrap().terrain;
+            if theme {
+                assert_eq!(terrain(20, 40), want, "the pit, raised, painted");
+                assert_eq!(terrain(30, 30), want, "the ground at the height, painted");
+                assert_eq!(terrain(40, 40), sand.0, "the hill, left, keeps its sand");
+            } else {
+                assert_eq!((terrain(20, 40), terrain(40, 40)), (ground, sand.0), "{mode:?}: no paint without the theme");
+            }
+        }
     }
 
     #[test]

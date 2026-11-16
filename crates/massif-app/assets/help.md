@@ -64,7 +64,7 @@ What Massif did, and what it does in the background (saving, exporting, automati
 ## The tools
 - **Raise / Lower**: left button raises, right button lowers.
 - **Smooth**: rounds the land off.
-- **Flatten**: levels the land to the height where the stroke starts.
+- **Flatten**: levels the land to the height where the stroke starts. In Tool Settings, **Both ways** (the default), **Only raise** (fills what is under the height, leaves what is over it) or **Only lower** (the other way round); **Apply theme** repaints the land it flattens with the terrain its new height calls for.
 - **Set height**: sets the land to a height. `Alt`-click on the map picks it.
 - **Roughen**: adds or removes roughness.
 

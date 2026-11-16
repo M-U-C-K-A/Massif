@@ -3551,6 +3551,41 @@ mod tests {
         footer.save(dir.join("brush-footer.png")).unwrap();
     }
 
+    /// Flatten's options in Tool Settings: the way it moves the land, picked
+    /// in a segmented control, and Apply theme ticked (a render of the panel
+    /// with MASSIF_SNAPSHOT_DIR).
+    #[test]
+    fn flatten_options_in_tool_settings() {
+        use egui_kittest::kittest::Queryable;
+        use massif_core::ops::FlattenMode;
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(3);
+        h.state_mut().tools.select(Tool::Flatten);
+        h.run_steps(3);
+        assert_eq!(h.state().tools.flatten_mode, FlattenMode::Both);
+        assert!(!h.state().tools.flatten_theme);
+        h.get_by_label("Only raise").click();
+        h.run_steps(2);
+        assert_eq!(h.state().tools.flatten_mode, FlattenMode::RaiseOnly);
+        h.get_by_label("Only lower").click();
+        h.run_steps(2);
+        assert_eq!(h.state().tools.flatten_mode, FlattenMode::LowerOnly);
+        h.get_by_label("Apply theme").click();
+        h.run_steps(2);
+        assert!(h.state().tools.flatten_theme);
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            let image = h.render().unwrap();
+            let rect = h.get_by_label("Apply theme").rect();
+            let ppp = h.ctx.pixels_per_point();
+            let (x0, y0) = (((rect.left() - 40.0).max(0.0) * ppp) as u32, ((rect.top() - 220.0).max(0.0) * ppp) as u32);
+            let crop = image::imageops::crop_imm(&image, x0, y0, (360.0 * ppp) as u32, (300.0 * ppp) as u32).to_image();
+            crop.save(dir.join("tool-settings-flatten.png")).unwrap();
+        }
+        h.get_by_label("Both ways").click();
+        h.run_steps(2);
+        assert_eq!(h.state().tools.flatten_mode, FlattenMode::Both);
+    }
+
     /// The menu bar, the pointer over View, for the eye (MASSIF_SNAPSHOT_DIR);
     /// and its menus hold their hit as wide as their padding.
     #[test]

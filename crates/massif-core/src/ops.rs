@@ -165,9 +165,64 @@ pub fn raise(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, amount: f32, surf
 
 /// Pull the surface toward `target`.
 pub fn flatten(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, target: f32, surface: Surface) {
+    flatten_with(edit, brush, cx, cz, target, surface, FlattenMode::Both, None);
+}
+
+/// Which way Flatten moves the land, as WorldPainter's flatten options.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum FlattenMode {
+    /// Up to the height and down to it.
+    #[default]
+    Both,
+    /// Only the land under the height, up to it.
+    RaiseOnly,
+    /// Only the land over the height, down to it.
+    LowerOnly,
+}
+
+impl FlattenMode {
+    /// Whether land at `h` is moved toward `target`, or (once moved) was.
+    fn takes(self, h: f32, target: f32) -> bool {
+        match self {
+            FlattenMode::Both => true,
+            FlattenMode::RaiseOnly => h <= target,
+            FlattenMode::LowerOnly => h >= target,
+        }
+    }
+}
+
+/// [`flatten`] one way or both (`mode`), and with `theme` the terrain of
+/// the columns it takes painted again with what their new height calls for
+/// (the top of the land only).
+#[allow(clippy::too_many_arguments)]
+pub fn flatten_with(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, target: f32, surface: Surface, mode: FlattenMode, theme: Option<&(dyn Fn(f32) -> TerrainId + Sync)>) {
     let k = brush.strength.clamp(0.0, 1.0);
     edit_heights(edit, brush, cx, cz, surface, |h, w, _, _| {
-        h + (target - h) * (w * k).min(1.0)
+        if mode.takes(h, target) { h + (target - h) * (w * k).min(1.0) } else { h }
+    });
+    let Some(choose) = theme else { return };
+    if surface == Surface::Bottom && edit.kind().has_bottom() {
+        return;
+    }
+    let dab = Dab::new(edit, brush, cx, cz);
+    let footprint = BlockRect::around(cx, cz, brush.reach());
+    edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
+        let slab = tile.bottom.is_some();
+        for z in clip.z0..clip.z1 {
+            for x in dab.row(z, &clip) {
+                if dab.weight(x, z) <= 0.0 {
+                    continue;
+                }
+                let i = local_index(x, z);
+                if slab && !tile.present(i) {
+                    continue;
+                }
+                let h = tile.top.get(i);
+                if mode.takes(h, target) {
+                    tile.terrain.set(i, choose(h).0);
+                }
+            }
+        }
     });
 }
 
@@ -1086,6 +1141,57 @@ mod tests {
         }
         assert_eq!(h(&w, 10, 10), 70.0);
         hist.commit();
+    }
+
+    /// Flatten one way leaves the land on the other side of the height as
+    /// it was; both ways, it levels both.
+    #[test]
+    fn flatten_modes_move_the_land_one_way_or_both() {
+        let shaped = || {
+            let mut w = world(1);
+            let mut hist = History::default();
+            hist.begin("Shape", 0);
+            // A pit at 50 west of x 10, a hill at 80 east of it, on land at 64.
+            set_height(&mut hist.edit(&mut w, 0), &hard_brush(3.0), 4.0, 10.0, 50.0, Surface::Top);
+            set_height(&mut hist.edit(&mut w, 0), &hard_brush(3.0), 16.0, 10.0, 80.0, Surface::Top);
+            hist.commit();
+            (w, hist)
+        };
+        for (mode, pit, hill) in [(FlattenMode::Both, 64.0, 64.0), (FlattenMode::RaiseOnly, 64.0, 80.0), (FlattenMode::LowerOnly, 50.0, 64.0)] {
+            let (mut w, mut hist) = shaped();
+            hist.begin("Flatten", 0);
+            for _ in 0..20 {
+                flatten_with(&mut hist.edit(&mut w, 0), &hard_brush(12.0), 10.0, 10.0, 64.0, Surface::Top, mode, None);
+            }
+            hist.commit();
+            assert_eq!((h(&w, 4, 10), h(&w, 16, 10)), (pit, hill), "{mode:?}");
+            assert_eq!(h(&w, 10, 10), 64.0, "{mode:?}: the land at the height stays");
+        }
+    }
+
+    /// With the theme, the columns flattened get the terrain their new
+    /// height calls for, and those the mode leaves keep theirs.
+    #[test]
+    fn flatten_applies_the_theme_to_what_it_flattens() {
+        let mut w = world(1);
+        let mut hist = History::default();
+        hist.begin("Shape", 0);
+        set_height(&mut hist.edit(&mut w, 0), &hard_brush(3.0), 4.0, 10.0, 50.0, Surface::Top);
+        set_height(&mut hist.edit(&mut w, 0), &hard_brush(3.0), 16.0, 10.0, 80.0, Surface::Top);
+        hist.commit();
+        let terrain = |w: &World, x: i32, z: i32| w.dims[0].ground().view(TilePos::containing(x, z)).unwrap().terrain.get(local_index(x, z));
+        let before = terrain(&w, 16, 10);
+        // Each height its own terrain, to see which columns were painted.
+        let theme = |h: f32| TerrainId(100 + h as u16);
+        hist.begin("Flatten", 0);
+        for _ in 0..20 {
+            flatten_with(&mut hist.edit(&mut w, 0), &hard_brush(12.0), 10.0, 10.0, 64.0, Surface::Top, FlattenMode::RaiseOnly, Some(&theme));
+        }
+        hist.commit();
+        assert_eq!(terrain(&w, 4, 10), 164, "the pit, raised to 64");
+        assert_eq!(terrain(&w, 10, 10), 164, "the land at the height");
+        assert_eq!(terrain(&w, 16, 10), before, "the hill, left as it was");
+        assert_eq!(terrain(&w, 40, 10), before, "outside the brush");
     }
 
     /// Flattening toward 63.8 the land at or below 63 brings it to 63

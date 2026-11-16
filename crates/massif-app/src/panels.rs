@@ -322,6 +322,18 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
                 crate::widgets::drag(ui, egui::DragValue::new(&mut tools.target_height).speed(0.5).range(doc.dimension().min_y..=doc.dimension().max_y))
             });
             hint(ui, "Alt-click on the map to pick a height.");
+            if tool == Tool::Flatten {
+                use massif_core::ops::FlattenMode;
+                ui.add_space(4.0);
+                let modes = [FlattenMode::Both, FlattenMode::RaiseOnly, FlattenMode::LowerOnly];
+                let on = modes.map(|m| tools.flatten_mode == m);
+                if let Some(k) = crate::widgets::button_group(ui, "flatten mode", &["Both ways", "Only raise", "Only lower"], &on) {
+                    tools.flatten_mode = modes[k];
+                }
+                ui.add_space(4.0);
+                crate::widgets::checkbox(ui, &mut tools.flatten_theme, "Apply theme");
+                hint(ui, "Repaints the land it flattens with the terrain its new height calls for.");
+            }
         }
         Tool::Roughen => {
             slider_row(ui, "Amplitude", |ui| ui.add(crate::widgets::Field::new(&mut tools.roughness, 0.5..=40.0).suffix(" blocks")));

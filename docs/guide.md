@@ -314,6 +314,20 @@ before 1.17 get plain ores for the deepslate ones (and iron for copper).
 The settings are saved with the map; the export's World tab can leave the
 ores out of one export, and so can `massif-cli export --no-ores`.
 
+### Flatten
+
+Flatten levels the land to the height where the stroke starts, as in
+WorldPainter. Its options in Tool Settings:
+
+- **Both ways** (the default) raises what is under the height and lowers
+  what is over it.
+- **Only raise** fills the hollows up to the height and leaves the land
+  over it as it is; **Only lower** cuts the land over the height down and
+  leaves the hollows.
+- **Apply theme** repaints the land it flattens with the terrain its new
+  height calls for (sand by the sea, grass, rock and snow higher up), as
+  Paint Terrain with Alt does.
+
 ## Brushes
 
 Brushes work as in WorldPainter. A brush has a shape (one of the twelve
