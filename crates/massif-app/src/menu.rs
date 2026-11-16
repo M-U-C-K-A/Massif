@@ -33,6 +33,7 @@ pub enum Command {
     AutoPaint,
     AutoRules,
     WholeMap(WholeOp),
+    Caves,
     Ores,
     Analyse,
     Theme(ThemeChoice),
@@ -217,6 +218,7 @@ pub fn menus(state: &State) -> Vec<Menu> {
                 .map(|&op| tipped(Command::WholeMap(op), op.icon(), &format!("{}…", op.label()), map, op.about()))
                 .collect(),
         },
+        tipped(Command::Caves, Icon::Shovel, "Caves…", map, "Tunnels, ravines and caverns carved into the rock, over the whole map or the selection"),
         Entry::Separator,
         tipped(Command::Ores, Icon::Pickaxe, "Ores…", map, "The ores the export lays in the rock: where, how many, how large"),
         tipped(
@@ -461,7 +463,7 @@ mod tests {
     fn what_can_be_used_when() {
         let recent = [PathBuf::from("/maps/Alps.massif")];
         let home = menus(&State { editor: false, ..state(&recent) });
-        for command in [Command::Save, Command::SaveAs, Command::Export, Command::ExportHeightMap, Command::Undo, Command::Ores, Command::Analyse, Command::HomeScreen, Command::WholeMap(WholeOp::Rivers)] {
+        for command in [Command::Save, Command::SaveAs, Command::Export, Command::ExportHeightMap, Command::Undo, Command::Ores, Command::Analyse, Command::HomeScreen, Command::WholeMap(WholeOp::Rivers), Command::Caves] {
             assert!(!enabled(&home, &command), "{command:?} needs a map");
         }
         for command in [Command::NewWorld, Command::Open, Command::ImportWorld, Command::OpenRecent(recent[0].clone()), Command::Settings, Command::Help, Command::About, Command::Quit, Command::Theme(ThemeChoice::Light)] {

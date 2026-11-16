@@ -102,6 +102,18 @@ pub struct VoxelChunk {
 
 /// A voxel whose terrain is the column's (see [`VoxelChunk`]).
 const FOLLOW: u16 = u16::MAX;
+/// Air voxels holding water or lava keep it in the plane of terrains (which
+/// solid voxels alone read): an underground lake. Older versions read them
+/// as air.
+const WATER_MARK: u16 = u16::MAX - 1;
+const LAVA_MARK: u16 = u16::MAX - 2;
+
+/// What fills an air voxel of a sculpted chunk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Fluid {
+    Water,
+    Lava,
+}
 
 impl std::fmt::Debug for VoxelChunk {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -124,7 +136,41 @@ impl VoxelChunk {
     #[inline]
     pub fn terrain(&self, lx: i32, ly: i32, lz: i32) -> Option<crate::registry::TerrainId> {
         let t = self.terrain.as_ref()?[voxel_index(lx, ly, lz)];
-        (t != FOLLOW).then_some(crate::registry::TerrainId(t))
+        (t < LAVA_MARK).then_some(crate::registry::TerrainId(t))
+    }
+
+    /// The fluid an air voxel holds (none in a solid one).
+    #[inline]
+    pub fn fluid(&self, lx: i32, ly: i32, lz: i32) -> Option<Fluid> {
+        let plane = self.terrain.as_ref()?;
+        let i = voxel_index(lx, ly, lz);
+        if self.density[i] >= SOLID {
+            return None;
+        }
+        match plane[i] {
+            WATER_MARK => Some(Fluid::Water),
+            LAVA_MARK => Some(Fluid::Lava),
+            _ => None,
+        }
+    }
+
+    /// Fill a voxel with a fluid (`None`: with nothing), shown while it is
+    /// air.
+    pub fn set_fluid(&mut self, lx: i32, ly: i32, lz: i32, fluid: Option<Fluid>) {
+        if fluid.is_none() && self.terrain.is_none() {
+            return;
+        }
+        let plane = self.terrain.get_or_insert_with(|| Box::new([FOLLOW; VOLUME]));
+        plane[voxel_index(lx, ly, lz)] = match fluid {
+            Some(Fluid::Water) => WATER_MARK,
+            Some(Fluid::Lava) => LAVA_MARK,
+            None => FOLLOW,
+        };
+    }
+
+    /// Whether some voxel holds a fluid.
+    pub fn has_fluid(&self) -> bool {
+        self.terrain.as_ref().is_some_and(|p| p.iter().zip(self.density.iter()).any(|(&t, &d)| d < SOLID && (t == WATER_MARK || t == LAVA_MARK)))
     }
 
     /// Give a voxel a terrain of its own (`None`: the column's).
@@ -441,6 +487,29 @@ pub(crate) fn apply(spans: &mut Vec<Span>, column: &[(i32, &VoxelChunk)], lx: i3
                 _ if i == last => surface,
                 _ => crate::registry::TerrainId::ROCK,
             };
+        }
+    }
+}
+
+/// The runs of fluid the chunks of `column` (chunk y, chunk; bottom up)
+/// hold at local column `(lx, lz)`, as `(y0, y1, fluid)`, bottom up.
+pub(crate) fn fluid_runs(column: &[(i32, &VoxelChunk)], lx: i32, lz: i32, min_y: i32, max_y: i32, out: &mut Vec<(i32, i32, Fluid)>) {
+    out.clear();
+    for &(cy, chunk) in column {
+        if chunk.terrain.is_none() {
+            continue;
+        }
+        let base = cy * SIZE;
+        for ly in 0..SIZE {
+            let y = base + ly;
+            if y < min_y || y >= max_y {
+                continue;
+            }
+            let Some(f) = chunk.fluid(lx, ly, lz) else { continue };
+            match out.last_mut() {
+                Some(last) if last.1 == y && last.2 == f => last.1 = y + 1,
+                _ => out.push((y, y + 1, f)),
+            }
         }
     }
 }

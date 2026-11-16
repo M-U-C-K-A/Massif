@@ -241,6 +241,8 @@ enum Dialog {
     Recover,
     /// A newer version is out: its notes, and its page to open.
     Update,
+    /// Caves to carve: their settings.
+    Caves(Box<crate::caves::CaveForm>),
 }
 
 struct Status {
@@ -271,6 +273,8 @@ pub struct MassifApp {
     /// and the 3D views redraw.
     covers_key: Option<u64>,
     next_generation: u64,
+    /// The settings caves were last carved with (per run of the app).
+    caves: Option<massif_core::caves::CaveSettings>,
     layout: Layout,
     tools: ToolState,
     settings: Settings,
@@ -623,6 +627,7 @@ impl MassifApp {
             after_create: None,
             covers_key: None,
             next_generation: 1,
+            caves: None,
             layout,
             tools,
             settings,
@@ -1162,6 +1167,21 @@ impl MassifApp {
     }
 
     /// The ores the export lays, over a cold copy of the map.
+    /// The dialog of the caves, with the settings they were last carved
+    /// with (their range kept inside this map's heights).
+    fn open_caves(&mut self) {
+        let dim = &self.doc.world.dims[self.doc.dim];
+        let start = massif_core::caves::CaveSettings::for_dimension(dim, self.doc.world.meta.sea_level);
+        let mut settings = self.caves.clone().unwrap_or_else(|| massif_core::caves::CaveSettings { seed: self.doc.world.meta.seed as u32 % 1_000_000, ..start.clone() });
+        let (lo, hi) = (dim.min_y + 1, dim.max_y - 1);
+        for y in [&mut settings.low, &mut settings.high, &mut settings.lake_level] {
+            *y = (*y).clamp(lo, hi);
+        }
+        let side = dim.bounds().map_or(0, |(a, b)| (b.x - a.x + 1).max(b.z - a.z + 1) * massif_core::TILE_SIZE);
+        let form = crate::caves::CaveForm::new(settings, (dim.min_y, dim.max_y), dim.selection.is_some(), side, dim.ground().len());
+        self.dialog = Some(Dialog::Caves(Box::new(form)));
+    }
+
     fn open_ores(&mut self, ctx: &egui::Context) {
         let snapshot = self.doc.world.snapshot();
         self.dialog = Some(Dialog::Ores(Box::new(crate::ores::OresView::new(ctx, snapshot, self.doc.dim))));
@@ -1522,6 +1542,24 @@ impl MassifApp {
                         self.say(ctx, msg, false, None);
                     }
                 }
+                Outcome::Caves { chunks, blocks, flooded, revision, dim } => {
+                    let label = "Caves";
+                    if other_map || revision != self.doc.revision || dim != self.doc.dim {
+                        crate::sounds::play(Cue::Warning);
+                        self.say(ctx, format!("{label}: {meanwhile}, nothing was done"), true, None);
+                    } else if chunks.is_empty() {
+                        crate::sounds::play(Cue::Warning);
+                        self.say(ctx, "Caves: nothing to carve there (the range lies above the ground, or the selection is empty)", true, None);
+                    } else {
+                        self.doc.history.begin(label, dim);
+                        self.doc.history.edit(&mut self.doc.world, 0).set_voxels(chunks);
+                        self.doc.commit();
+                        let lakes = if flooded > 0 { format!(", {flooded} of fluid") } else { String::new() };
+                        let msg = format!("Caves carved: {blocks} blocks{lakes}, in {secs:.1} s");
+                        self.task_done(ctx, Cue::Ready, "Caves carved", &msg, secs);
+                        self.say(ctx, msg, false, None);
+                    }
+                }
                 Outcome::Cancelled => {
                     crate::sounds::play(Cue::Warning);
                     self.say(ctx, "Cancelled", false, None);
@@ -1853,6 +1891,7 @@ impl MassifApp {
             Command::AutoPaint => self.tools.run_auto = Some(false),
             Command::AutoRules => self.dialog = Some(Dialog::AutoRules(false)),
             Command::WholeMap(what) => self.open_reshape(what),
+            Command::Caves => self.open_caves(),
             Command::Ores => self.open_ores(ctx),
             Command::Analyse => self.open_analysis(ctx),
             Command::Theme(choice) => self.settings.theme = choice,
@@ -2682,6 +2721,29 @@ impl MassifApp {
                     self.dialog = Some(Dialog::Analysis(view));
                 } else {
                     self.analysis = Some(view);
+                }
+            }
+            Dialog::Caves(mut form) => {
+                use crate::caves::Choice;
+                let mut choice = Choice::Keep;
+                let response = modal(ctx, "caves").show(ctx, |ui| {
+                    choice = form.ui(ui);
+                });
+                if response.should_close() {
+                    keep = false;
+                }
+                match choice {
+                    Choice::Keep => {}
+                    Choice::Close => keep = false,
+                    Choice::Carve(settings) => {
+                        keep = false;
+                        self.caves = Some(settings.clone());
+                        let snapshot = self.doc.world.snapshot();
+                        self.jobs.push(Job::caves(ctx, snapshot, self.doc.dim, settings, self.doc.revision).on(self.doc.generation));
+                    }
+                }
+                if keep {
+                    self.dialog = Some(Dialog::Caves(form));
                 }
             }
             Dialog::Ores(mut view) => {
@@ -5321,6 +5383,90 @@ mod tests {
         h.state_mut().undo(&ctx);
         h.run_steps(2);
         assert_eq!(heights(&h), before, "one undo takes it all back");
+    }
+
+    /// Edit ▸ Caves: the dialog carves tunnels, ravines and caverns in the
+    /// background, in one step that undo takes back; they show in the 3D
+    /// view and in 3D Sculpt (renders with MASSIF_SNAPSHOT_DIR).
+    #[test]
+    fn carving_caves() {
+        use egui_kittest::kittest::Queryable;
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        for theme in [ThemeChoice::Light, ThemeChoice::Dark] {
+            let mut h = harness(theme);
+            h.run_steps(5);
+            h.state_mut().open_caves();
+            h.run_steps(3);
+            if let Some(dir) = &dir {
+                h.render().unwrap().save(dir.join(format!("dialog-caves-{theme:?}.png").to_lowercase())).unwrap();
+            }
+            if theme == ThemeChoice::Light {
+                continue;
+            }
+            // Many, and open: the ravines show from above.
+            if let Some(Dialog::Caves(form)) = &mut h.state_mut().dialog {
+                form.settings.density = 1.0;
+                form.settings.openings = 1.0;
+                form.settings.lake = Some(massif_core::voxel::Fluid::Lava);
+            }
+            h.get_by_label("Carve").click();
+            h.run_steps(2);
+            assert!(h.state().dialog.is_none() && !h.state().jobs.is_empty(), "the job runs");
+            let started = std::time::Instant::now();
+            while !h.state().jobs.is_empty() {
+                assert!(started.elapsed().as_secs() < 120, "carving timed out");
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            h.run_steps(3);
+            assert_eq!(h.state().doc.history.undo_label(), Some("Caves"));
+            let chunks = h.state().doc.dimension().voxels.len();
+            assert!(chunks > 100, "{chunks} chunks carved");
+            if let Some(dir) = &dir {
+                h.state_mut().layout.active = 3;
+                let mut frames = 0;
+                while frames < 5 || h.state().view3d.pending() > 0 {
+                    h.step();
+                    frames += 1;
+                    assert!(frames < 3000, "the 3D view never finished");
+                }
+                h.run_steps(10);
+                h.render().unwrap().save(dir.join("caves-3d-view.png")).unwrap();
+                // The deepest cut open to the sky on land: a ravine.
+                let (x, top, z) = {
+                    let dim = h.state().doc.dimension();
+                    let mut best = (0, 0.0f32, 0, 0.0f32);
+                    let mut spans = Vec::new();
+                    for (pos, _) in dim.voxels.iter() {
+                        let (x0, _, z0) = pos.origin();
+                        let (x, z) = (x0 + 8, z0 + 8);
+                        let Some(stack) = massif_core::TileStack::new(dim, massif_core::TilePos::containing(x, z), false) else { continue };
+                        let cell = massif_core::coords::local_index(x, z);
+                        let ground = stack.ground().top.get(cell);
+                        stack.spans(cell, &mut spans);
+                        let Some(surface) = spans.last() else { continue };
+                        let cut = ground - surface.top;
+                        if ground > 68.0 && cut > best.3 {
+                            best = (x, ground, z, cut);
+                        }
+                    }
+                    assert!(best.3 > 4.0, "a ravine open to the sky on land");
+                    (best.0, best.1, best.2)
+                };
+                h.state_mut().layout.active = 4;
+                h.run_steps(10);
+                h.state_mut().sculpt3d.camera = crate::view3d::Camera { target: [x as f64 + 0.5, top as f64 - 8.0, z as f64 + 0.5], yaw: 0.65, pitch: 0.7, distance: 70.0 };
+                h.run_steps(40);
+                h.render().unwrap().save(dir.join("caves-sculpt.png")).unwrap();
+                if let Some((w, hgt, rgba)) = h.state().sculpt3d.read_back() {
+                    image::save_buffer(dir.join("caves-sculpt-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+                }
+            }
+            let ctx = h.ctx.clone();
+            h.state_mut().undo(&ctx);
+            h.run_steps(2);
+            assert!(h.state().doc.dimension().voxels.is_empty(), "one undo takes the caves back");
+        }
     }
 
     /// Edit ▸ Analyse the map: the survival check reads the whole map in

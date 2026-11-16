@@ -1017,3 +1017,69 @@ fn an_export_can_keep_to_the_selection() {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
+
+/// Caves carved by the generator are exported as air, their lakes as lava
+/// in a world of water: every block of every chunk they changed.
+#[test]
+fn generated_caves_are_exported() {
+    use massif_core::caves::{CaveSettings, carve};
+    use massif_core::voxel::Fluid;
+    let mut world = build_world();
+    // A seed whose four tiles hold a cavern (they are rarer than tunnels).
+    let carved = (1..200)
+        .map(|seed| {
+            let settings = CaveSettings { seed, density: 1.0, openings: 0.3, low: -50, high: 60, lake: Some(Fluid::Lava), lake_level: -10, ..CaveSettings::for_dimension(&world.dims[0], world.meta.sea_level) };
+            carve(&world.dims[0], &settings, &massif_core::auto::Steps::default())
+        })
+        .find(|c| c.flooded > 0)
+        .expect("a seed with a cavern");
+    assert!(carved.blocks > 1000 && carved.flooded > 0, "{} carved, {} flooded", carved.blocks, carved.flooded);
+    let mut h = History::default();
+    h.begin("caves", 0);
+    h.edit(&mut world, 0).set_voxels(carved.chunks.clone());
+    h.commit();
+    let dir = temp_dir("caves");
+    export(&world.snapshot(), &dir, &ExportOptions::default(), &Progress::default()).unwrap();
+    let mut reader = Reader::new(&dir);
+    let (mut air, mut lava) = (0, 0);
+    for (pos, chunk) in &carved.chunks {
+        let (ox, oy, oz) = pos.origin();
+        for ly in 0..16 {
+            for lz in 0..16 {
+                for lx in 0..16 {
+                    let (x, y, z) = (ox + lx, oy + ly, oz + lz);
+                    if chunk.solid(lx, ly, lz) {
+                        continue;
+                    }
+                    let got = reader.block(x, y, z);
+                    match chunk.fluid(lx, ly, lz) {
+                        Some(Fluid::Lava) => {
+                            assert_eq!(got, "minecraft:lava", "({x}, {y}, {z})");
+                            lava += 1;
+                        }
+                        _ => {
+                            assert!(got == "minecraft:air" || got == "minecraft:water" || got == "minecraft:cave_air", "({x}, {y}, {z}): {got}");
+                            air += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(lava, carved.flooded);
+    assert!(air > 0);
+    // And the whole of a few carved columns, block by block, as the model
+    // composes them (lakes aside).
+    for (pos, _) in carved.chunks.iter().step_by(7).take(20) {
+        let (x, _, z) = pos.origin();
+        let expected = expected_column(&world, x + 5, z + 9);
+        for (i, want) in expected.iter().enumerate() {
+            let y = -64 + i as i32;
+            let got = reader.block(x + 5, y, z + 9);
+            if got != "minecraft:lava" {
+                assert_eq!(&got, want, "block at ({}, {y}, {})", x + 5, z + 9);
+            }
+        }
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}

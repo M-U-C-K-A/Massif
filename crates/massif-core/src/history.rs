@@ -475,6 +475,15 @@ impl Edit<'_> {
         self.dim.voxels.put_back(taken);
     }
 
+    /// Put sculpted chunks in place, made elsewhere (from what
+    /// [`crate::voxel::densities_of`] read here).
+    pub fn set_voxels(&mut self, chunks: Vec<(ChunkPos, Arc<VoxelChunk>)>) {
+        for (pos, chunk) in chunks {
+            self.touch_voxel(pos);
+            self.dim.voxels.insert(pos, chunk);
+        }
+    }
+
     /// Drop slab tiles of the level that no longer hold any column.
     pub fn prune_empty(&mut self, candidates: impl IntoIterator<Item = TilePos>) {
         self.dim.levels[self.level].prune_empty(candidates);

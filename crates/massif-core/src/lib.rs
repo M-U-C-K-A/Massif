@@ -21,6 +21,7 @@
 pub mod analysis;
 pub mod auto;
 pub mod brush;
+pub mod caves;
 pub mod codec;
 pub mod compose;
 pub mod coords;

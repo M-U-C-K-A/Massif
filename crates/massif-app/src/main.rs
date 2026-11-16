@@ -8,6 +8,7 @@ mod autosave;
 mod blocks;
 mod brushes;
 mod cards;
+mod caves;
 mod devtools;
 mod doc;
 mod finder;

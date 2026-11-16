@@ -265,6 +265,12 @@ impl<'a> TileStack<'a> {
                 out.push((y, hi));
             }
         }
+        // The lakes of caves carved in the sculpted matter.
+        if let Some(column) = self.sculpt_column(cell) {
+            let mut runs = Vec::new();
+            crate::voxel::fluid_runs(column, (cell % 128) as i32 % 16, (cell / 128) as i32 % 16, self.min_y, self.max_y, &mut runs);
+            out.extend(runs.iter().map(|r| (r.0, r.1)));
+        }
         if out.len() > 1 {
             out.sort_unstable();
             let mut merged = 0;
@@ -277,6 +283,25 @@ impl<'a> TileStack<'a> {
                 }
             }
             out.truncate(merged + 1);
+        }
+    }
+
+    /// The chunks sculpted over column `cell`, bottom up; `None` where
+    /// there are none.
+    fn sculpt_column(&self, cell: usize) -> Option<&[(i32, &'a crate::voxel::VoxelChunk)]> {
+        let sculpt = self.sculpt.as_ref()?;
+        let (lx, lz) = ((cell % 128) as i32, (cell / 128) as i32);
+        let column = &sculpt[((lz / 16) * 8 + lx / 16) as usize];
+        (!column.is_empty()).then_some(column.as_slice())
+    }
+
+    /// The fluids sculpted chunks hold in column `cell` — the lakes of
+    /// caves, of water or lava whatever the world's fluid —, as `(y0, y1,
+    /// fluid)`, bottom up. [`TileStack::fluids`] counts them in already.
+    pub fn sculpted_fluids(&self, cell: usize, out: &mut Vec<(i32, i32, crate::voxel::Fluid)>) {
+        out.clear();
+        if let Some(column) = self.sculpt_column(cell) {
+            crate::voxel::fluid_runs(column, (cell % 128) as i32 % 16, (cell / 128) as i32 % 16, self.min_y, self.max_y, out);
         }
     }
 

@@ -59,6 +59,8 @@ pub struct ExportContext<'a> {
     water: u16,
     /// The world's fluid is lava: nothing grows in it.
     lava: bool,
+    /// Water and lava, for the lakes of caves, whatever the world's fluid.
+    cave_fluids: [u16; 2],
     seed: u64,
     /// The plants of each cover (by number − 1), as written; `None` where
     /// the version has nothing like them.
@@ -323,6 +325,7 @@ impl<'a> ExportContext<'a> {
             bedrock: wk.bedrock.0,
             water: if world.meta.lava { wk.lava.0 } else { wk.water.0 },
             lava: world.meta.lava,
+            cave_fluids: [wk.water.0, wk.lava.0],
             seed: world.meta.seed as u64,
             covers,
             soil,
@@ -493,6 +496,7 @@ pub struct Scratch {
     /// The recipe depth of each column's lowest span.
     recipes: [u32; 256],
     fluids: Vec<(i32, i32)>,
+    cave_fluids: Vec<(i32, i32, massif_core::voxel::Fluid)>,
     biome_columns: Vec<BiomeColumn>,
     /// The ore blocks of each chunk of the tile being exported (see
     /// [`Scratch::lay_ores`]), row by row.
@@ -513,6 +517,7 @@ impl Scratch {
             span_starts: vec![0; 257],
             recipes: [0; 256],
             fluids: Vec::with_capacity(4),
+            cave_fluids: Vec::new(),
             biome_columns: vec![BiomeColumn::default(); 16],
             ores: Vec::new(),
         }
@@ -640,6 +645,7 @@ pub fn build_chunk(
         span_starts,
         recipes,
         fluids,
+        cave_fluids,
         biome_columns,
         ores,
     } = scratch;
@@ -703,6 +709,16 @@ pub fn build_chunk(
                 }
                 top = top.max(y1);
             }
+            // The lakes of caves hold their own fluid.
+            if stack.is_sculpted() {
+                stack.sculpted_fluids(cell, cave_fluids);
+                for &(y0, y1, fluid) in cave_fluids.iter() {
+                    let block = ctx.cave_fluids[fluid as usize];
+                    for y in y0.max(min_y)..y1.min(max_y) {
+                        blocks[at(y)] = block;
+                    }
+                }
+            }
             // What grows on the top of the column.
             if !ctx.covers.is_empty()
                 && let Some(surface) = spans.last()
@@ -743,7 +759,7 @@ pub fn build_chunk(
             }
             let i = (((b.y - min_y) as usize) << 8) | ((((b.z - bz0) << 4) | (b.x - bx0)) as usize);
             let above = blocks[i + 256];
-            let solid = above != 0 && above != ctx.water && (above < ctx.first_extra || above >= ctx.first_ore);
+            let solid = above != 0 && above != ctx.water && !ctx.cave_fluids.contains(&above) && (above < ctx.first_extra || above >= ctx.first_ore);
             let host = ctx.hosts.get(blocks[i] as usize).copied().unwrap_or(0);
             if !solid || host == 0 {
                 continue;

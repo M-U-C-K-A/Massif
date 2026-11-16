@@ -327,3 +327,29 @@ fn one_brush_again_and_again() {
     let cpu = cpu_seconds() - cpu;
     eprintln!("{which} r{radius}: {:.2} ms a dab, {:.2} ms of CPU", started.elapsed().as_secs_f64() * 1000.0 / dabs as f64, cpu * 1000.0 / dabs as f64);
 }
+
+/// Caves over a large generated map (MASSIF_TILES a side, 64 by default):
+/// the time, the chunks made and the memory they take, the voxel file
+/// section's size.
+#[test]
+#[ignore]
+fn caves_over_a_large_map() {
+    use massif_core::caves::{CaveSettings, carve};
+    let n: i32 = std::env::var("MASSIF_TILES").ok().and_then(|v| v.parse().ok()).unwrap_or(64);
+    let mut world = time(&format!("generate {n} × {n} tiles"), || generate(&GenParams { tiles_x: n, tiles_z: n, landform: Landform::Mountains, seed: 3, ..GenParams::default() }));
+    let sea = world.meta.sea_level;
+    let settings = CaveSettings::for_dimension(&world.dims[0], sea);
+    let steps = massif_core::auto::Steps::default();
+    let cpu = cpu_seconds();
+    let carved = time("carve caves (default settings)", || carve(&world.dims[0], &settings, &steps));
+    eprintln!("CPU {:.1} s", cpu_seconds() - cpu);
+    let chunks = carved.chunks.len();
+    let bytes: usize = carved.chunks.iter().map(|(_, c)| 4096 + if c.has_fluid() { 8192 } else { 0 }).sum();
+    eprintln!("{} blocks carved, {chunks} chunks ({:.1} a tile), {:.0} MB of densities", carved.blocks, chunks as f64 / (n * n) as f64, bytes as f64 / 1e6);
+    let mut history = History::new(1);
+    history.begin("caves", 0);
+    time("put the chunks in place", || history.edit(&mut world, 0).set_voxels(carved.chunks));
+    history.commit();
+    let encoded = time("encode the sculpted chunks", || world.dims[0].voxels.encode());
+    eprintln!("saved: {:.1} MB", encoded.len() as f64 / 1e6);
+}

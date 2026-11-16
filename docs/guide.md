@@ -555,6 +555,41 @@ the blocks between, so the ground keeps its own detail. On a WorldPainter
 map of 5,888 blocks a side, erosion takes about twenty seconds, the others
 two or three, terraces and smoothing under half a second.
 
+## Caves
+
+**Edit ▸ Caves…** carves caves into the rock of the whole map, or of the
+selection when there is one:
+
+- **Tunnels and chambers**: winding tunnels that branch, as Minecraft's
+  "spaghetti" caves, and now and then a wide chamber with thin pillars of
+  rock left standing in it (its "cheese" caves).
+- **Ravines**: long, deep, narrow cuts with steep walls, narrower toward
+  their floor.
+- **Caverns**: large open halls with a flatter floor and a rough outline,
+  tunnels leading out of them.
+
+**Density** sets how many, **Size** how wide and long (1×: about as
+Minecraft carves them). **Highest** and **Lowest** are the heights the caves
+keep to; closed caves also keep a roof of 5 blocks under the ground, so
+they never break through by chance. **Open to the surface** is the share
+of tunnels that start from the ground and of ravines cut open to the sky;
+those reach up from the range to the surface. **Fill with** puts a lake of
+water or lava in the caverns, up to the height **Up to**, whatever the
+world's own fluid. The **seed** sets the layout: the same seed carves the
+same caves, and a part of the map carved alone gets the caves the whole
+map would have there.
+
+**Carve** works on a copy of the map in the background, with its progress
+and a Cancel, and puts the caves in place as one step to undo. They are
+carved into the 3D matter, as **3D Sculpt**'s Dig would: they show in the 3D
+view and in 3D Sculpt, where they can be dug further or filled, and the
+export writes them as air (their lakes as water or lava). Only the 16-block
+cubes the caves reach into are kept, about 23 a tile with the default
+settings: on a map of 8,192 blocks a side, carving takes half a second on a
+ten-core Mac and the caves about 400 MB of memory (26 MB in the file).
+Within a selection, the caves keep to it, fading out along a feathered
+edge.
+
 ## Noise painting
 
 Paint terrain can lay several terrains or blocks at once, mixed by a noise
