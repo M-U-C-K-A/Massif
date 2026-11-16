@@ -197,7 +197,7 @@ impl Job {
             .spawn(move || {
                 // A panic in the work fails the job, its message said; the
                 // map open is not touched by a job until it is done.
-                let outcome = crate::startup::catch(work).unwrap_or_else(|e| Outcome::Failed(format!("The task stopped on an error: {e}. The map is as it was.")));
+                let outcome = crate::startup::catch(work).unwrap_or_else(|e| Outcome::Failed(tr!("The task stopped on an error: {e}. The map is as it was.", e)));
                 let _ = tx.send(outcome);
                 ctx.request_repaint();
             });

@@ -3101,27 +3101,27 @@ impl MassifApp {
                 let response = modal(ctx, "crashed").show(ctx, |ui| {
                     ui.set_width(460.0);
                     let pal = Palette::of(ui);
-                    ui.label(RichText::new("Massif ran into an error").bold().size(15.0));
+                    ui.label(RichText::new(tr!("Massif ran into an error")).bold().size(15.0));
                     let about = if copy.is_some() {
-                        "Your map was not lost: a copy of it with every change was written. Save it under a name of your own now, then carry on or quit. If you quit, Massif offers the copy back when it starts again."
+                        tr!("Your map was not lost: a copy of it with every change was written. Save it under a name of your own now, then carry on or quit. If you quit, Massif offers the copy back when it starts again.")
                     } else if self.doc.is_modified() {
-                        "Massif could not write a copy of your map. Save it under a new name now, then quit and start Massif again."
+                        tr!("Massif could not write a copy of your map. Save it under a new name now, then quit and start Massif again.")
                     } else {
-                        "Your map has no unsaved changes. You can carry on, or quit and start Massif again."
+                        tr!("Your map has no unsaved changes. You can carry on, or quit and start Massif again.")
                     };
                     ui.add(egui::Label::new(RichText::new(about).color(pal.weak)).wrap());
                     ui.add_space(6.0);
                     ui.add(egui::Label::new(RichText::new(&said).size(11.0).monospace().color(pal.weak)).wrap());
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Quit").clicked() {
+                        if ui.button(tr!("Quit")).clicked() {
                             choice = Some(2);
                         }
                         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                            if self.doc.is_modified() && ui.add(theme::primary_button(ui, "Save As…")).clicked() {
+                            if self.doc.is_modified() && ui.add(theme::primary_button(ui, tr!("Save As…"))).clicked() {
                                 choice = Some(0);
                             }
-                            if ui.button("Carry On").clicked() {
+                            if ui.button(tr!("Carry On")).clicked() {
                                 choice = Some(1);
                             }
                         });
@@ -3958,7 +3958,7 @@ impl MassifApp {
             // The same error every frame: nothing to carry on with. The
             // copy stays for the next start.
             self.autosave.keep();
-            crate::startup::tell(&format!("Massif stopped on an error:\n\n{said}\n\nA copy of your map was kept: Massif offers it back when it starts again."));
+            crate::startup::tell(&tr!("Massif stopped on an error:\n\n{said}\n\nA copy of your map was kept: Massif offers it back when it starts again.", said));
             std::process::exit(1);
         }
         self.dialog = Some(Dialog::Crashed(said, copy));
