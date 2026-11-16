@@ -151,7 +151,7 @@ install)
     rm -rf "$build"
     mkdir -p "$build"
     git -C "$main" archive --format=tar "$head" | tar -x -C "$build"
-    (cd "$build" && sh tools/install-macos.sh)
+    (cd "$build" && MASSIF_COMMIT="$head" sh tools/install-macos.sh)
     echo "$head $(stat -f %m "$app")" > "$record"
     echo "Installed from main ($what)."
     ;;

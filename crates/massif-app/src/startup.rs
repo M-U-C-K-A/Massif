@@ -264,6 +264,8 @@ pub fn step_in(what: &str, stage: Stage) {
 /// interface laid out. Written down only for the first frames, until one
 /// is shown, so that a start held up names the part.
 pub fn frame_step(ctx: &egui::Context, what: &str) {
+    // A performance recording times each part (see `report`).
+    crate::report::mark(what);
     if SHOWN.load(Ordering::Relaxed) || LOG.get().is_none() {
         return;
     }

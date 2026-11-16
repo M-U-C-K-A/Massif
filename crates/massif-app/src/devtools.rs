@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 
 /// Seconds of history the charts show.
 const SPAN: f64 = 15.0;
+/// Seconds of history kept: a problem report takes the last minute.
+const KEEP: f64 = 60.0;
 /// Seconds between two readings of the memory and the processor.
 const EVERY: f64 = 0.25;
 
@@ -43,7 +45,7 @@ impl DevStats {
         if gap > 0.0 {
             self.frames.push_back((time, gap, work));
         }
-        while self.frames.front().is_some_and(|f| f.0 < time - SPAN) {
+        while self.frames.front().is_some_and(|f| f.0 < time - KEEP) {
             self.frames.pop_front();
         }
         if time - self.sampled >= EVERY {
@@ -64,10 +66,33 @@ impl DevStats {
                 self.cpu_before = Some((now, used));
             }
             for q in [&mut self.memory, &mut self.cpu] {
-                while q.front().is_some_and(|v| v.0 < time - SPAN) {
+                while q.front().is_some_and(|v| v.0 < time - KEEP) {
                     q.pop_front();
                 }
             }
+        }
+    }
+
+    /// The frame that ended last: when its work began, the milliseconds
+    /// since the frame before, and those of its work.
+    pub fn last_frame(&self) -> Option<(Instant, f32, f32)> {
+        let (_, gap, work) = *self.frames.back()?;
+        Some((self.last_start?, gap, work))
+    }
+
+    /// The latest reading of the memory (MB) and the processor (% of a core).
+    pub fn latest(&self) -> (Option<f32>, Option<f32>) {
+        (self.memory.back().map(|m| m.1), self.cpu.back().map(|c| c.1))
+    }
+
+    /// What was measured over the last minute, for a problem report.
+    pub fn last_minute(&self, keeps: Vec<(String, String, String)>) -> crate::report::LastMinute {
+        crate::report::LastMinute {
+            frames: self.frames.iter().copied().collect(),
+            memory: self.memory.iter().copied().collect(),
+            cpu: self.cpu.iter().copied().collect(),
+            peak_memory: self.peak_memory,
+            keeps,
         }
     }
 
@@ -153,8 +178,11 @@ pub fn panel(ui: &mut Ui, stats: &DevStats, info: &DevInfo<'_>) {
     // Live: drawn again every frame while shown.
     ui.ctx().request_repaint();
     let fps = stats.fps();
-    let frame_ms: Vec<f32> = stats.frames.iter().map(|f| f.1).collect();
-    let work_ms: Vec<f32> = stats.frames.iter().map(|f| f.2).collect();
+    // The charts show the last seconds of the minute kept.
+    let now = stats.frames.back().map_or(0.0, |f| f.0);
+    let recent = |t: f64| t >= now - SPAN;
+    let frame_ms: Vec<f32> = stats.frames.iter().filter(|f| recent(f.0)).map(|f| f.1).collect();
+    let work_ms: Vec<f32> = stats.frames.iter().filter(|f| recent(f.0)).map(|f| f.2).collect();
     let last = |v: &VecDeque<(f64, f32)>| v.back().map_or(0.0, |x| x.1);
     let mean = |v: &[f32]| if v.is_empty() { 0.0 } else { v.iter().sum::<f32>() / v.len() as f32 };
     let worst = |v: &[f32]| v.iter().copied().fold(0.0f32, f32::max);
@@ -187,9 +215,9 @@ pub fn panel(ui: &mut Ui, stats: &DevStats, info: &DevInfo<'_>) {
     let fps_series: Vec<f32> = frame_ms.iter().map(|ms| if *ms > 0.0 { 1000.0 / ms } else { 0.0 }).collect();
     chart(ui, "Frames a second", &[(&fps_series, pal.success)], Some(60.0), "");
     chart(ui, "Frame time and the work in it (ms)", &[(&frame_ms, pal.weak), (&work_ms, pal.accent)], Some(16.7), " ms");
-    let mem: Vec<f32> = stats.memory.iter().map(|m| m.1).collect();
+    let mem: Vec<f32> = stats.memory.iter().filter(|m| recent(m.0)).map(|m| m.1).collect();
     chart(ui, "Memory (MB)", &[(&mem, pal.accent)], None, " MB");
-    let cpu: Vec<f32> = stats.cpu.iter().map(|c| c.1).collect();
+    let cpu: Vec<f32> = stats.cpu.iter().filter(|c| recent(c.0)).map(|c| c.1).collect();
     chart(ui, "Processor (% of one core)", &[(&cpu, Color32::from_rgb(96, 165, 250))], Some(100.0), " %");
 
     ui.add_space(6.0);

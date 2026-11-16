@@ -23,6 +23,9 @@ log.workspace = true
 rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# The problem report's zip (`report`).
+flate2.workspace = true
+crc32fast = "1.5"
 eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "persistence", "clipboard", "links", "x11", "wayland"] }
 egui = "0.37"
 egui-wgpu = "0.37"
@@ -39,7 +42,7 @@ rodio = { version = "0.23", default-features = false, features = ["playback"] }
 ureq = { version = "3.5", default-features = false, features = ["rustls"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Registry", "Win32_UI_Shell", "Win32_System_ProcessStatus", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_LibraryLoader", "Win32_Globalization"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Registry", "Win32_UI_Shell", "Win32_System_ProcessStatus", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Win32_System_Diagnostics_Debug", "Win32_System_Kernel", "Win32_System_LibraryLoader", "Win32_Globalization", "Win32_System_SystemInformation"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -58,7 +61,6 @@ egui_kittest = { version = "0.37", features = ["wgpu", "snapshot", "eframe"] }
 # docs/internals.md); the app itself does not ship it.
 wgpu = { version = "30", default-features = false, features = ["angle"] }
 fastnbt = "2.6"
-flate2.workspace = true
 
 [build-dependencies]
 # The icon of massif.exe in Windows' Explorer.

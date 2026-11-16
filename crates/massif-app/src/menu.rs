@@ -53,6 +53,8 @@ pub enum Command {
     Tour,
     HomeScreen,
     About,
+    /// A report of a problem to save and send (see `report`).
+    ReportProblem,
 }
 
 /// Where macOS keeps an item: in its menu, or in the app menu (named after
@@ -271,6 +273,7 @@ pub fn menus(state: &State) -> Vec<Menu> {
         item(Command::Help, Icon::BookOpen, tr!("Massif Help"), free),
         item(Command::Shortcuts, Icon::Keyboard, tr!("Keyboard shortcuts"), free),
         item(Command::Tour, Icon::Compass, tr!("Take the tour"), free),
+        item(Command::ReportProblem, Icon::Bug, tr!("Report a Problem…"), free),
         Entry::Separator,
         item(Command::HomeScreen, Icon::House, tr!("Home screen"), map),
         item(Command::About, Icon::Info, tr!("About Massif"), free),

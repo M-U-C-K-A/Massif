@@ -4,6 +4,7 @@
 fn main() {
     println!("cargo:rerun-if-changed=assets/icon.ico");
     backdrops();
+    commit();
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut res = winresource::WindowsResource::new();
         res.set_icon("assets/icon.ico");
@@ -68,4 +69,24 @@ fn backdrops() {
     code.push_str("];\n");
     let out = std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("backdrops.rs");
     std::fs::write(out, code).expect("writing backdrops.rs");
+}
+
+/// `MASSIF_COMMIT`: the commit the app is built from, for a problem report.
+/// Given by the install script (`MASSIF_COMMIT`) or GitHub's build
+/// (`GITHUB_SHA`), else asked of git; empty when none says.
+fn commit() {
+    println!("cargo:rerun-if-env-changed=MASSIF_COMMIT");
+    println!("cargo:rerun-if-env-changed=GITHUB_SHA");
+    let git = |args: &[&str]| {
+        std::process::Command::new("git").args(args).output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned()).filter(|s| !s.is_empty())
+    };
+    let sha = std::env::var("MASSIF_COMMIT").ok().filter(|s| !s.is_empty()).or_else(|| std::env::var("GITHUB_SHA").ok().filter(|s| !s.is_empty())).or_else(|| git(&["rev-parse", "HEAD"]));
+    // Built again when the checkout moves to another commit.
+    for path in ["HEAD", "logs/HEAD"] {
+        if let Some(p) = git(&["rev-parse", "--path-format=absolute", "--git-path", path]) {
+            println!("cargo:rerun-if-changed={p}");
+        }
+    }
+    let short: String = sha.unwrap_or_default().chars().take(9).collect();
+    println!("cargo:rustc-env=MASSIF_COMMIT={short}");
 }

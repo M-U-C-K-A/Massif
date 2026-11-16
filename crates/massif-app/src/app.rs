@@ -296,6 +296,8 @@ enum Dialog {
     /// Massif stopped on an error during a frame: what it said, and the
     /// copy of the map written then.
     Crashed(String, Option<PathBuf>),
+    /// A problem report to save (see `report`).
+    Report(Box<crate::report_view::ReportForm>),
 }
 
 struct Status {
@@ -375,6 +377,18 @@ pub struct MassifApp {
     frame_began: Option<std::time::Instant>,
     /// What the Developer panel shows, measured frame after frame.
     dev: crate::devtools::DevStats,
+    /// A performance recording, on or done, for the problem report.
+    recording: Option<crate::report::Recording>,
+    /// The problem report's dialog while a recording is on, to open again
+    /// as it was once it stops.
+    report_aside: Option<Box<crate::report_view::ReportForm>>,
+    /// The dialog the report was opened from (after a crash, after an
+    /// error), shown again once it closes.
+    report_return: Option<Dialog>,
+    /// A problem report being written: where, or why it could not be.
+    report_saving: Option<std::sync::mpsc::Receiver<Result<PathBuf, String>>>,
+    /// The graphics card, as wgpu says it, for the problem report.
+    gpu: Option<crate::report::Gpu>,
     after_save: Option<Pending>,
     status: Option<Status>,
     feedback: Option<String>,
@@ -843,6 +857,11 @@ impl MassifApp {
             last_input: 0.0,
             frame_began: None,
             dev: crate::devtools::DevStats::default(),
+            recording: None,
+            report_aside: None,
+            report_return: None,
+            report_saving: None,
+            gpu: None,
             after_save: None,
             status: None,
             feedback: None,
@@ -1598,15 +1617,133 @@ impl MassifApp {
             }
             None => vec![(tr!("Size"), tr!("nothing yet").to_owned())],
         };
-        let jobs = self
-            .jobs
+        crate::devtools::DevInfo { keeps, map, jobs: self.job_lines(), gpu: None }
+    }
+
+    /// The tasks running, a line each: name, then how far or how long.
+    fn job_lines(&self) -> Vec<String> {
+        self.jobs
             .iter()
             .map(|j| match &j.progress {
                 Some(p) => format!("{} · {:.0} %", j.label, p.fraction() * 100.0),
                 None => format!("{} · {:.0} s", j.label, j.started.elapsed().as_secs_f32()),
             })
-            .collect();
-        crate::devtools::DevInfo { keeps, map, jobs, gpu: None }
+            .collect()
+    }
+
+    /// The settings that change how Massif draws, for the problem report.
+    fn report_settings(&self) -> Vec<(String, String)> {
+        let s = &self.settings;
+        let follow = |f: Follow| format!("{f:?}").to_lowercase();
+        let mut v = vec![
+            ("Theme".to_owned(), format!("{:?}", s.theme)),
+            ("Typeface".to_owned(), s.typeface.name().to_owned()),
+            ("Interface scale".to_owned(), format!("{}", s.ui_scale)),
+            ("High contrast".to_owned(), format!("{} (now {})", follow(s.high_contrast), if s.high_contrast.on(self.access.system.contrast) { "on" } else { "off" })),
+            ("Reduce motion".to_owned(), format!("{} (now {})", follow(s.reduce_motion), if s.reduce_motion.on(self.access.system.reduce_motion) { "on" } else { "off" })),
+            ("Moving home picture".to_owned(), if s.animate_backdrop { "on" } else { "off" }.to_owned()),
+            ("Memory for decoded tiles".to_owned(), if s.memory_mb == 0 { "as much as it takes".to_owned() } else { format!("{} MB", s.memory_mb) }),
+            ("Autosave".to_owned(), if s.autosave { format!("every {} min", s.autosave_minutes) } else { "off".to_owned() }),
+            ("Developer mode".to_owned(), if s.developer { "on" } else { "off" }.to_owned()),
+        ];
+        let g = crate::graphics::get();
+        v.push(("Graphics".to_owned(), format!("{:?}{} {g:?}", g.preset(), if s.graphics.is_none() { " (not chosen yet)" } else { "" })));
+        if let Some((card, ms)) = &s.graphics_chosen_for {
+            v.push(("Graphics chosen for".to_owned(), format!("{card}, trial {ms:.1} ms a frame")));
+        }
+        if let Some(asked) = std::env::var_os("WGPU_BACKEND") {
+            v.push(("WGPU_BACKEND".to_owned(), asked.to_string_lossy().into_owned()));
+        }
+        v
+    }
+
+    /// Open the problem report's dialog: what it takes is read now (the
+    /// last minute is the one before). `after_crash`: from the dialog of a
+    /// start after a crash, gone back to after.
+    fn open_report(&mut self, ctx: &egui::Context, after_crash: bool) {
+        let window = ctx.input(|i| i.viewport().inner_rect.map(|r| ([r.width(), r.height()], i.pixels_per_point)));
+        let info = self.dev_info();
+        let keeps = info.keeps.iter().map(|(a, b, c)| ((*a).to_owned(), b.clone(), c.clone())).collect();
+        let map = if self.has_map { info.map.iter().filter(|(k, _)| *k != "Revision").map(|(a, b)| ((*a).to_owned(), b.clone())).collect() } else { Vec::new() };
+        let inputs = crate::report::Inputs {
+            system: crate::report::System::read(self.gpu.clone(), window),
+            settings: self.report_settings(),
+            last_minute: self.dev.last_minute(keeps),
+            map,
+            log_dir: crate::startup::log_dir(),
+            home: std::env::home_dir(),
+            what_happened: String::new(),
+        };
+        let mut form = crate::report_view::ReportForm::new(inputs, self.has_map);
+        form.after_crash = after_crash;
+        self.dialog = Some(Dialog::Report(Box::new(form)));
+    }
+
+    /// Each frame: a recording's frame noted, its pill shown (Stop opens
+    /// the report again), a report written in the background answered.
+    fn report_frame(&mut self, ctx: &egui::Context) {
+        let mut stopped = false;
+        if self.recording.as_ref().is_some_and(|r| r.is_on()) {
+            let jobs = self.job_lines();
+            let last = self.dev.last_frame();
+            let (memory, cpu) = self.dev.latest();
+            if let Some(r) = &mut self.recording {
+                if let Some((begun, gap, work)) = last {
+                    r.frame(begun, gap, work, memory, cpu, jobs);
+                }
+                if crate::report_view::recording_pill(ctx, r) || !r.is_on() {
+                    r.stop();
+                    stopped = true;
+                }
+            }
+        }
+        if stopped {
+            if let Some(form) = self.report_aside.take() {
+                if self.dialog.is_none() {
+                    self.dialog = Some(Dialog::Report(form));
+                }
+            } else if self.dialog.is_none() {
+                self.open_report(ctx, false);
+            }
+        }
+        if let Some(rx) = &self.report_saving {
+            match rx.try_recv() {
+                Ok(Ok(path)) => {
+                    self.report_saving = None;
+                    let name = jobs::display_name(&path);
+                    self.say(ctx, tr!("Saved the report “{name}”: send it to us on Discord", name), false, Some(path));
+                }
+                Ok(Err(e)) => {
+                    self.report_saving = None;
+                    self.say(ctx, tr!("Could not save the report: {e}", e), true, None);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.report_saving = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+    }
+
+    /// Write the report to `path` in the background, with the map if
+    /// `form` asks for it; `report_frame` says when it is done.
+    fn save_report(&mut self, ctx: &egui::Context, form: &crate::report_view::ReportForm, path: PathBuf) {
+        let mut parts = crate::report::parts(&form.inputs, self.recording.as_ref(), None);
+        let map = (form.include_map && self.has_map).then(|| self.doc.world.snapshot());
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.report_saving = Some(rx);
+        let ctx = ctx.clone();
+        let _ = std::thread::Builder::new().name("massif report".into()).spawn(move || {
+            let result = (|| {
+                if let Some(world) = map {
+                    let mut bytes = Vec::new();
+                    massif_format::write(&world, &mut bytes).map_err(|e| e.to_string())?;
+                    parts.push(crate::report::map_part(crate::report::MapFile { bytes }));
+                }
+                crate::report::save(&path, &parts).map_err(|e| e.to_string())?;
+                Ok(path)
+            })();
+            let _ = tx.send(result);
+            ctx.request_repaint();
+        });
     }
 
     /// The dialog of a filter over the whole map, with a cold copy of the
@@ -2559,6 +2696,7 @@ impl MassifApp {
             }
             Command::HomeScreen => self.open_home(Page::NewMap),
             Command::About => self.dialog = Some(Dialog::About),
+            Command::ReportProblem => self.open_report(ctx, false),
         }
     }
 
@@ -3512,6 +3650,9 @@ impl MassifApp {
                         if ui.button(tr!("Quit")).clicked() {
                             choice = Some(2);
                         }
+                        if ui.button(theme::with_icon(Icon::Bug, tr!("Report the Problem…"))).on_hover_text(tr!("A file to send us, saying what Massif was doing when the error came")).clicked() {
+                            choice = Some(3);
+                        }
                         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                             if self.doc.is_modified() && ui.add(theme::primary_button(ui, tr!("Save As…"))).clicked() {
                                 choice = Some(0);
@@ -3527,6 +3668,10 @@ impl MassifApp {
                         self.save(ctx, true);
                     }
                     Some(1) => {}
+                    Some(3) => {
+                        self.open_report(ctx, false);
+                        self.report_return = Some(Dialog::Crashed(said, copy));
+                    }
                     Some(2) => {
                         // Not a clean close: the copy stays for the next start.
                         self.autosave.keep();
@@ -3732,6 +3877,8 @@ impl MassifApp {
             Dialog::Recover => {
                 // A choice per backup: restore one (the map open now, if it
                 // has changes, asked about first), discard it, or decide later.
+                // Or first a report of the crash, back here after.
+                let mut report = false;
                 let mut restore = None;
                 let mut discard = None;
                 let response = modal(ctx, "recover").show(ctx, |ui| {
@@ -3782,6 +3929,9 @@ impl MassifApp {
                             if ui.button(tr!("Later")).clicked() {
                                 keep = false;
                             }
+                            if ui.button(theme::with_icon(Icon::Bug, tr!("Report the Problem…"))).on_hover_text(tr!("A file to send us, saying what Massif was doing when it closed")).clicked() {
+                                report = true;
+                            }
                         });
                     });
                 });
@@ -3805,6 +3955,53 @@ impl MassifApp {
                 }
                 if keep && !self.autosave.found.is_empty() {
                     self.dialog = Some(Dialog::Recover);
+                }
+                if report {
+                    self.open_report(ctx, true);
+                    self.report_return = Some(Dialog::Recover);
+                }
+            }
+            Dialog::Report(mut form) => {
+                use crate::report_view::Choice;
+                let map_note = match self.doc.path.as_ref().and_then(|p| std::fs::metadata(p).ok()) {
+                    Some(m) => tr!("The map as it is now, about {size} (its file on disk). Only when the problem needs it: it may be large, and it is yours to share.", size = panels::human(m.len())),
+                    None => tr!("The map as it is now. Only when the problem needs it: it may be large, and it is yours to share.").to_owned(),
+                };
+                match crate::report_view::ui(ctx, &mut form, self.recording.as_ref(), &map_note) {
+                    Choice::Stay => {}
+                    Choice::Close => {
+                        keep = false;
+                        self.recording = None;
+                    }
+                    Choice::Record => {
+                        self.recording = Some(crate::report::Recording::start());
+                        self.report_aside = Some(form.clone());
+                        keep = false;
+                    }
+                    Choice::DropRecording => self.recording = None,
+                    Choice::Copy => {
+                        ctx.copy_text(crate::report::short_summary(&form.inputs, self.recording.as_ref()));
+                        self.say(ctx, tr!("Copied a summary of the problem: paste it in your message"), false, None);
+                    }
+                    Choice::Save => {
+                        let path = rfd::FileDialog::new().set_title(tr!("Save the report")).add_filter(tr!("Zip archive"), &["zip"]).set_file_name(crate::report::file_name()).save_file();
+                        if let Some(mut path) = path {
+                            if path.extension().is_none() {
+                                path.set_extension("zip");
+                            }
+                            self.save_report(ctx, &form, path);
+                            self.recording = None;
+                            keep = false;
+                        }
+                    }
+                }
+                if keep {
+                    self.dialog = Some(Dialog::Report(form));
+                } else if self.report_aside.is_none()
+                    && let Some(back) = self.report_return.take()
+                    && !(matches!(back, Dialog::Recover) && self.autosave.found.is_empty())
+                {
+                    self.dialog = Some(back);
                 }
             }
             Dialog::Unsaved(pending) => {
@@ -4394,6 +4591,10 @@ impl eframe::App for MassifApp {
         self.watch_graphics(ui.ctx());
         let now = ui.input(|i| i.time);
         self.dev.end(now);
+        if self.gpu.is_none() {
+            self.gpu = frame.wgpu_render_state().map(|rs| crate::report::Gpu::of(&rs.adapter.get_info()));
+        }
+        self.report_frame(ui.ctx());
         crate::startup::frame_laid_out(ui);
         // Until the next frame, the system's Quit is answered from what this
         // one leaves: now, or not before the app asks.
@@ -4980,6 +5181,124 @@ mod tests {
     /// as the map it was (its name, its file, changes to save), then
     /// removed once the map is saved (a render of the dialog with
     /// MASSIF_SNAPSHOT_DIR).
+    /// A problem report: from the Help menu, its files shown, saved with
+    /// paths made relative to the home folder and the map only when ticked;
+    /// a performance recording times each frame's parts; from the dialog of
+    /// a start after a crash and back to it.
+    #[test]
+    fn a_problem_report() {
+        use crate::report::{Recording, unzip};
+        use egui_kittest::kittest::Queryable;
+        let dir = std::env::temp_dir().join(format!("massif-report-app-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let home = dir.join("home").join("tester");
+        let logs = home.join("Library").join("Logs").join("Massif");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::write(logs.join("startup.log"), format!("[      0 ms] Massif\n[     12 ms] asked to open {}/Maps/Isles.massif\n[   2210 ms] frame 1 shown\n", home.display())).unwrap();
+        std::fs::write(logs.join("startup.previous.log"), "[      0 ms] Massif\n[   1500 ms] panic in thread main: index out of bounds\n").unwrap();
+        let mut h = harness(ThemeChoice::Light);
+        h.run_steps(30);
+        let ctx = h.ctx.clone();
+        h.state_mut().command(&ctx, crate::menu::Command::ReportProblem);
+        let Some(Dialog::Report(form)) = &mut h.state_mut().dialog else { panic!("the report's dialog opens") };
+        // This computer's own logs stay out of the test.
+        form.inputs.log_dir = Some(logs.clone());
+        form.inputs.home = Some(home.clone());
+        form.inputs.what_happened = "The 3D view stutters when I sculpt".into();
+        assert!(!form.inputs.last_minute.frames.is_empty(), "the frames before it opened are taken");
+        assert!(form.inputs.map.iter().any(|(k, v)| k == "Size" && v == "1024 × 1024 blocks"), "{:?}", form.inputs.map);
+        form.shown = Some("startup.log".into());
+        h.run_steps(4);
+        h.get_by_label("startup.previous.log");
+        h.get_by_label_contains("asked to open ~/Maps/Isles.massif");
+        if let Some(out) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            h.render().unwrap().save(out.join("dialog-report.png")).unwrap();
+        }
+        let saved = |h: &mut egui_kittest::Harness<'static, MassifApp>, map: bool, name: &str| {
+            let Some(Dialog::Report(form)) = &h.state().dialog else { panic!("the report's dialog is open") };
+            let mut form = form.clone();
+            form.include_map = map;
+            let path = dir.join(name);
+            let ctx = h.ctx.clone();
+            h.state_mut().save_report(&ctx, &form, path.clone());
+            let started = std::time::Instant::now();
+            while h.state().report_saving.is_some() {
+                assert!(started.elapsed().as_secs() < 30, "the report is written");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                h.state_mut().report_frame(&ctx);
+            }
+            unzip(&std::fs::read(&path).unwrap())
+        };
+        let files = saved(&mut h, false, "without.zip");
+        let names: Vec<&str> = files.iter().map(|f| f.0.as_str()).collect();
+        assert_eq!(names, ["report.txt", "startup.log", "startup.previous.log", "last-minute.csv"]);
+        for (name, bytes) in &files {
+            let text = String::from_utf8_lossy(bytes);
+            assert!(!text.contains(&*home.to_string_lossy()) && !text.contains("tester"), "{name} keeps the user's folder: {text}");
+        }
+        let report = String::from_utf8_lossy(&files[0].1);
+        assert!(report.contains("The 3D view stutters when I sculpt") && report.contains("Reduce motion:") && report.contains("Graphics: ") && report.contains("Levels: "), "{report}");
+        let files = saved(&mut h, true, "with.zip");
+        let (name, bytes) = files.last().unwrap();
+        assert_eq!(name, crate::report::MAP_NAME, "the map goes in once ticked");
+        assert_eq!(massif_format::read(bytes).unwrap().meta.name, h.state().doc.world.meta.name);
+
+        // A recording: each frame and its parts.
+        h.state_mut().recording = Some(Recording::start());
+        h.run_steps(12);
+        let r = h.state_mut().recording.as_mut().unwrap();
+        r.stop();
+        assert!(r.frames() >= 10, "{} frames", r.frames());
+        let summary = r.summary();
+        assert!(summary.contains("the theme and the accessibility settings"), "{summary}");
+        let Some(Dialog::Report(form)) = &h.state().dialog else { panic!() };
+        let form = form.clone();
+        let parts = crate::report::parts(&form.inputs, h.state().recording.as_ref(), None);
+        assert!(parts.iter().any(|p| p.name == "recording/trace.json"));
+        h.state_mut().dialog = None;
+        // Its pill, over the map.
+        h.state_mut().recording = Some(Recording::start());
+        h.run_steps(5);
+        h.get_by_label_contains("Recording 0:");
+        if let Some(out) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            h.render().unwrap().save(out.join("report-recording.png")).unwrap();
+        }
+        h.get_by_label_contains("Stop").click();
+        h.run_steps(3);
+        assert!(matches!(h.state().dialog, Some(Dialog::Report(_))), "Stop opens the report");
+        assert!(h.state().recording.as_ref().is_some_and(|r| !r.is_on()));
+        h.state_mut().dialog = None;
+        h.state_mut().recording = None;
+
+        // After a crash: from the dialog that offers the backup, and back.
+        let mut world = generate(&GenParams { tiles_x: 2, tiles_z: 2, ..GenParams::default() });
+        world.meta.name = "Lost".into();
+        let info = crate::autosave::Info { session: "1-1".into(), generation: 1, name: "Lost".into(), path: None, taken: 0, revision: 3 };
+        let backups = dir.join("backups");
+        std::fs::create_dir_all(&backups).unwrap();
+        crate::autosave::write(&backups, world.copy_unfrozen(), info).unwrap();
+        h.state_mut().autosave = crate::autosave::Autosave::open(backups);
+        h.state_mut().dialog = Some(Dialog::Recover);
+        h.run_steps(3);
+        h.get_by_label_contains("Report the Problem").click();
+        h.run_steps(3);
+        assert!(matches!(&h.state().dialog, Some(Dialog::Report(f)) if f.after_crash));
+        h.get_by_label_contains("closed without warning");
+        h.get_by_label("Cancel").click();
+        h.run_steps(3);
+        assert!(matches!(h.state().dialog, Some(Dialog::Recover)), "back to the backup");
+        // After an error in a frame: from its dialog, and back.
+        h.state_mut().dialog = Some(Dialog::Crashed("boom".into(), None));
+        h.run_steps(3);
+        h.get_by_label_contains("Report the Problem").click();
+        h.run_steps(3);
+        assert!(matches!(h.state().dialog, Some(Dialog::Report(_))));
+        h.get_by_label("Cancel").click();
+        h.run_steps(3);
+        assert!(matches!(&h.state().dialog, Some(Dialog::Crashed(said, None)) if said == "boom"), "back to the error");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn restoring_a_backup_left_by_a_crash() {
         use crate::autosave::{Autosave, Info};

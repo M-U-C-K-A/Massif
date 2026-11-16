@@ -221,6 +221,17 @@ The viewport shows the graph's output in 3D, with its sun, clouds, haze and sea 
 - **Graphics**: **Low**, **Medium** or **High** (or **Custom**, any mix): the 3D views' render scale and smoothing, fog, water reflections, the game's textures in the player's view, how much of the map the 3D view keeps on the graphics card (a larger map is drawn coarser, and much faster), the Terrain viewport's light and clouds, the map view's images on the graphics card, and the frames a second of an idle window. Changes apply at once. The first start picks a preset for the graphics card; when the 3D views stay slow, a note offers one step lower.
 - **Developer**: developer mode offers a **Developer** panel in every area's menu: frames a second and the time of each, the memory the system counts, the processor's time, in live charts; what is kept decoded, the map, its tasks and the graphics card.
 
+# Reporting a problem
+**Help ▸ Report a Problem…** makes one `.zip` file to send us on Discord when Massif crashes or is slow. Nothing is sent from Massif: you save it and send it yourself.
+- It holds what happened in your words, Massif's version, the computer and its graphics card, the settings that change how Massif draws, the map's size, the last minute of the **Developer** panel's figures, and the logs of the last two starts. The map itself goes in only if **Include the map** is on.
+- Every file is listed, and **Show** opens it as it will be written. Your home folder is written `~`, and other accounts' names are left out.
+- **Copy Summary** puts a few lines on the clipboard for your message.
+- For slowness, **Start Recording**, do the slow thing, then **Stop** at the top of the window: each frame and what took its time go in the report.
+- After Massif closed without saving, the dialog that offers your map back has **Report the Problem…** too.
+
+## If Massif does not start
+Massif writes every step of its start in `startup.log` (on Windows in `%LOCALAPPDATA%\Massif`, on macOS in `~/Library/Logs/Massif`, on Linux in `~/.local/state/massif`), the start before in `startup.previous.log`. Once Massif starts again, **Help ▸ Report a Problem…** puts them in the report; if it never starts, send those two files. A graphics API whose driver got stuck is set aside in `graphics.txt` beside them: delete it to try them all again.
+
 # Shortcuts
 Massif's own keys, as they are out of the box. **Settings ▸ Keyboard** changes any of them: click a shortcut, press the new keys (another action's keys are asked about first: Replace or Cancel), right-click one to remove it. It starts from **Massif** or **WorldPainter**'s keys (`⌘Y` redo, `⌘` `+` `−` `0` zoom the map), resets one action or all, and exports or imports a keymap file. Shortcuts wait while a text field is typed in, but those with `⌘` typing has no use for, as Save. The mouse keeps its own.
 

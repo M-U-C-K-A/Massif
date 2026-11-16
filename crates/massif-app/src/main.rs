@@ -39,6 +39,8 @@ mod picker;
 mod player;
 mod quit;
 mod real_terrain;
+mod report;
+mod report_view;
 mod reshape;
 mod road_draft;
 mod select;

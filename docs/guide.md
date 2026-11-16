@@ -1290,6 +1290,43 @@ The map and the 3D view are made to follow the hand:
 **Settings ▸ Developer** shows frames a second, the time of each frame and
 of its work, live.
 
+## Reporting a problem
+
+**Help ▸ Report a Problem…** makes one `.zip` file to send us (on Discord,
+say) when Massif crashes or is slow. Nothing is sent from Massif: you save
+the file where you like and send it yourself. It holds:
+
+- `report.txt`: what happened, in your words if you write them; Massif's
+  version and the commit it was built from; the system, the processor and
+  its threads, the memory, the graphics card, its graphics API and driver,
+  the window's size and scale; the settings that change how Massif draws
+  (theme, typeface, interface scale, accessibility, memory, a
+  `WGPU_BACKEND` if set); the map's size, heights and levels; and the
+  Developer panel's figures over the last minute (frames a second, frame
+  times, memory, processor, what Massif keeps);
+- `startup.log`, `startup.previous.log` and `graphics.txt` (see below);
+- `last-minute.csv`: every frame of the last minute, with the memory and
+  the processor;
+- `map.massif`, the map as it is now, only if **Include the map** is on.
+
+The dialog lists every file with its size, and **Show** opens each one as it
+will be written. Your home folder is written `~` in all of them, and the
+names in any other account's folder are left out. **Copy Summary** puts a
+few lines on the clipboard for a message: the version, the computer, the
+graphics card, how the last minute ran and the last error of the log.
+
+**Performance recording** is for what is slow: **Start Recording**, do the
+slow thing, then **Stop** in the pill at the top of the window (it stops by
+itself after ten minutes). The report then also holds `recording/`: a
+summary of the slowest frames and of where the work went, every frame in
+`frames.csv` (its time, its work, the memory, the processor, its slowest
+part, the tasks running), and `trace.json`, a timeline of the frames, their
+parts and the tasks to open in `chrome://tracing` or
+[ui.perfetto.dev](https://ui.perfetto.dev).
+
+After Massif closed without saving, the dialog that offers to restore your
+map has **Report the Problem…** too.
+
 ## If Massif does not start
 
 Massif writes down every step of its start in a log of its own, with the
@@ -1303,8 +1340,10 @@ sending anything anywhere:
 | Linux | `~/.local/state/massif/startup.log` |
 
 The log of the start before is kept beside it as `startup.previous.log`, so
-starting again after a start that hung does not lose it. Send both when
-reporting a problem: the last line says where Massif stopped.
+starting again after a start that hung does not lose it. If Massif starts
+again, **Help ▸ Report a Problem…** puts both in one file to send, with the
+computer and the graphics card (see above); otherwise send the two logs:
+the last line says where Massif stopped.
 
 - The first frames are followed step by step until one is on the screen:
   the interface laid out, part by part (the home screen's picture, its side

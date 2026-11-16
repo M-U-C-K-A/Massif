@@ -2066,6 +2066,7 @@ name = "massif-app"
 version = "1.0.0"
 dependencies = [
  "bytemuck",
+ "crc32fast",
  "eframe",
  "egui",
  "egui-wgpu",
