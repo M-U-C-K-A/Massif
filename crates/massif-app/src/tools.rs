@@ -1731,3 +1731,81 @@ mod tests {
         assert!(height(&d, 5, 5) > 64.0);
     }
 }
+
+
+#[cfg(test)]
+mod auto_biome_tests {
+    use super::*;
+    use massif_core::auto::{Classes, Reader};
+    use massif_core::brush::BrushMask;
+    use massif_core::generate::{GenParams, generate};
+    use massif_core::ops::Preview;
+
+    fn image_brush(radius: f32, rotation: f32) -> Brush {
+        let mut brush = ToolState::default().brush;
+        brush.mask = Some(std::sync::Arc::new(BrushMask::new("Square", 8, 8, vec![255; 64])));
+        brush.radius = radius;
+        brush.rotation = rotation;
+        brush.strength = 1.0;
+        brush
+    }
+
+    /// An image brush turned 45° reaches past its radius, into its corners:
+    /// the preview the map shows works them out too, as the stroke does.
+    /// It used to work out only the tiles within the radius, and showed the
+    /// corners beyond as if they had what the land calls for already (728
+    /// of 40,044 columns at the middle of the map).
+    #[test]
+    fn the_preview_of_auto_biome_reaches_the_corners_of_a_turned_image_brush() {
+        let world = generate(&GenParams { tiles_x: 8, tiles_z: 8, ..GenParams::default() });
+        let d = Document::new(world, None, 1);
+        let tools = ToolState { tool: Tool::AutoBiome, ..ToolState::default() };
+        let reader = Reader::new(&tools.auto, &d.world.registry, d.world.meta.sea_level);
+        let brush = image_brush(100.0, 45.0);
+        for (cx, cz) in [(0.0, 0.0), (-400.0, 350.0), (-64.0, 10.0)] {
+            let mut classes = Classes::new(true);
+            let (_, cols) = ops::auto_preview_ensured(d.dimension(), &brush, cx, cz, &reader, &mut classes, 1);
+            let (_, whole) = ops::auto_preview(d.dimension(), &brush, cx, cz, &reader, true);
+            assert_eq!(cols, whole, "at {cx}, {cz}");
+            assert!(cols.iter().filter(|c| c.becomes().is_some()).count() > 39_000, "at {cx}, {cz}");
+        }
+    }
+
+    /// Where a dab of Auto biome has painted, the land has what it calls
+    /// for: the preview of the next dab beside it leaves that part as it
+    /// is, and changes only the rest. That is the brush "painting half of
+    /// its outline": the half it leaves was done already.
+    #[test]
+    fn auto_biome_leaves_what_it_painted_already() {
+        let world = generate(&GenParams { tiles_x: 8, tiles_z: 8, ..GenParams::default() });
+        let mut d = Document::new(world, None, 1);
+        let mut tools = ToolState { tool: Tool::AutoBiome, ..ToolState::default() };
+        tools.brush = image_brush(40.0, 30.0);
+        let reader = Reader::new(&tools.auto, &d.world.registry, d.world.meta.sea_level);
+        let (a, b) = ((0.0f32, 0.0f32), (45.0f32, 0.0f32));
+        let before = ops::auto_preview(d.dimension(), &tools.brush, b.0, b.1, &reader, true).1;
+        assert!(before.iter().all(|c| *c != Preview::Same), "a new map: every column under the brush changes");
+        let (stroke, _) = begin_stroke(&mut d, &tools, a, false, false);
+        let mut stroke = stroke.unwrap();
+        continue_stroke(&mut d, &tools, &mut stroke, a, 0.05);
+        assert!(end_stroke(&mut d, stroke).is_some());
+        let (rect, after) = ops::auto_preview(d.dimension(), &tools.brush, b.0, b.1, &reader, true);
+        let dab = |x: i32, z: i32| tools.brush.covers(x as f32 + 0.5 - a.0, z as f32 + 0.5 - a.1);
+        let (mut kept, mut changed) = (0, 0);
+        for (k, c) in after.iter().enumerate() {
+            let (x, z) = (rect.x0 + k as i32 % rect.width(), rect.z0 + k as i32 / rect.width());
+            match c {
+                Preview::Same => {
+                    assert!(dab(x, z), "{x}, {z} is left as it is, though the first dab did not reach it");
+                    kept += 1;
+                }
+                Preview::Becomes(_) => {
+                    assert!(!dab(x, z), "{x}, {z} was painted already");
+                    changed += 1;
+                }
+                Preview::Outside => {}
+            }
+        }
+        assert!(kept > 500 && changed > 500, "kept {kept}, changed {changed}");
+    }
+}

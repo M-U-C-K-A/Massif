@@ -636,7 +636,12 @@ Cancel button in front of the map, and their result is one undoable step;
 the map is read by squares of 4 × 4 tiles and never decoded whole (a map
 of 44,544 × 33,536 blocks takes about 15 seconds). Hovered over the map,
 both show what they would change before anything is painted: under the
-brush, the columns that would change, in their new colour. A stroke changes every column in the core of the brush
+brush, the columns that would change, in their new colour, and those that
+already have what the land calls for (painted by an earlier stroke, or so
+from the start) hatched, so that the whole brush shows; a bar under the map
+names what the columns become, with their colours, and how much of the
+brush stays as it is. Biomes do not show on the map in its Terrain mode:
+its Biome mode shows them. A stroke changes every column in the core of the brush
 (all of it at 100% intensity, with a blended edge below), and says how many
 it changed — or that the land already follows the rules.
 

@@ -749,6 +749,14 @@ pub fn auto_preview(dim: &Dimension, brush: &Brush, cx: f32, cz: f32, reader: &c
     auto_preview_with(dim, brush, cx, cz, &classes, 1)
 }
 
+/// [`auto_preview_with`], `classes` first worked out wherever the brush
+/// reaches (a turned square or image brush reaches past its radius, into
+/// its corners).
+pub fn auto_preview_ensured(dim: &Dimension, brush: &Brush, cx: f32, cz: f32, reader: &crate::auto::Reader, classes: &mut crate::auto::Classes, step: i32) -> (BlockRect, Vec<Preview>) {
+    classes.ensure(dim, reader, BlockRect::around(cx, cz, brush.reach()));
+    auto_preview_with(dim, brush, cx, cz, classes, step)
+}
+
 /// [`auto_preview`] from what `classes` worked out (see
 /// [`crate::auto::Classes::ensure`]), a column every `step` blocks each way
 /// (a preview need not be finer than the screen: the first column of each

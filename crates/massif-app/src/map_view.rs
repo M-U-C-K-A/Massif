@@ -155,6 +155,42 @@ struct AutoPreview {
     /// The footprint, in blocks: x0, z0, x1, z1.
     rect: [i32; 4],
     texture: Option<egui::TextureHandle>,
+    /// What it says under the map: what the columns become, and how much
+    /// of the brush stays as it is (Auto biome and Auto paint only).
+    summary: Option<AutoSummary>,
+}
+
+/// The columns under the brush of an automatic tool, counted: what they
+/// would become, and those it leaves as they are.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct AutoSummary {
+    /// Each biome (or terrain) given, with its columns, most first.
+    becomes: Vec<(u16, usize)>,
+    /// Columns under the brush that already have what the land calls for.
+    same: usize,
+}
+
+impl AutoSummary {
+    fn of(cols: &[massif_core::ops::Preview]) -> Self {
+        let mut counts: std::collections::HashMap<u16, usize> = std::collections::HashMap::new();
+        let mut same = 0;
+        for c in cols {
+            match c {
+                massif_core::ops::Preview::Becomes(id) => *counts.entry(*id).or_default() += 1,
+                massif_core::ops::Preview::Same => same += 1,
+                massif_core::ops::Preview::Outside => {}
+            }
+        }
+        let mut becomes: Vec<(u16, usize)> = counts.into_iter().collect();
+        becomes.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        Self { becomes, same }
+    }
+
+    /// The share of the brush left as it is, 0 to 1.
+    fn same_share(&self) -> f32 {
+        let all = self.same + self.becomes.iter().map(|b| b.1).sum::<usize>();
+        if all == 0 { 0.0 } else { self.same as f32 / all as f32 }
+    }
 }
 
 /// What the automatic tools give the land, kept while the map, its rules
@@ -536,30 +572,35 @@ impl MapView {
                 self.auto_classes = Some((classes_key, massif_core::auto::Classes::new(biomes)));
             }
             let classes = &mut self.auto_classes.as_mut().expect("just set").1;
-            let footprint = massif_core::coords::BlockRect::around(at.0 as f32, at.1 as f32, brush.radius);
-            classes.ensure(doc.dimension(), &reader, footprint);
-            let (rect, cols) = massif_core::ops::auto_preview_with(doc.dimension(), &brush, at.0 as f32, at.1 as f32, classes, step);
+            let (rect, cols) = massif_core::ops::auto_preview_ensured(doc.dimension(), &brush, at.0 as f32, at.1 as f32, &reader, classes, step);
             let reg = &doc.world.registry;
-            // What changes, in its new colour; what is already as the land
-            // calls for, as it is.
-            let colour = |p: &massif_core::ops::Preview| match p {
-                massif_core::ops::Preview::Outside | massif_core::ops::Preview::Same => Color32::TRANSPARENT,
+            let size = [((rect.width() + step - 1) / step) as usize, ((rect.depth() + step - 1) / step) as usize];
+            // What changes, in its new colour; what already is as the land
+            // calls for, hatched, so that the whole brush shows and it is
+            // plain that the part left grey is not forgotten.
+            let colour = |k: usize, p: &massif_core::ops::Preview| match p {
+                massif_core::ops::Preview::Outside => Color32::TRANSPARENT,
+                massif_core::ops::Preview::Same => {
+                    let (i, j) = (k % size[0].max(1), k / size[0].max(1));
+                    Color32::from_white_alpha(if (i + j) % 4 == 0 { 120 } else { 34 })
+                }
                 massif_core::ops::Preview::Becomes(id) => {
                     let c = if biomes { reg.biomes.get(*id as usize).map(|b| b.color) } else { reg.terrains.get(*id as usize).map(|t| t.color) };
                     let [r, g, b] = c.unwrap_or([255, 0, 255]);
                     Color32::from_rgb(r, g, b)
                 }
             };
-            let texture = cols.iter().any(|p| matches!(p, massif_core::ops::Preview::Becomes(_))).then(|| {
-                let pixels = cols.iter().map(colour).collect();
-                let size = [((rect.width() + step - 1) / step) as usize, ((rect.depth() + step - 1) / step) as usize];
+            let summary = AutoSummary::of(&cols);
+            let texture = (!summary.becomes.is_empty() || summary.same > 0).then(|| {
+                let pixels = cols.iter().enumerate().map(|(k, p)| colour(k, p)).collect();
                 let image = egui::ColorImage::new(size, pixels);
                 ctx.load_texture("auto preview", image, egui::TextureOptions::NEAREST)
             });
             self.auto_preview = Some(AutoPreview {
                 key,
-                rect: [rect.x0, rect.z0, rect.x0 + ((rect.width() + step - 1) / step) * step, rect.z0 + ((rect.depth() + step - 1) / step) * step],
+                rect: [rect.x0, rect.z0, rect.x0 + size[0] as i32 * step, rect.z0 + size[1] as i32 * step],
                 texture,
+                summary: Some(summary),
             });
         }
         if let Some(AutoPreview { rect, texture: Some(texture), .. }) = &self.auto_preview {
@@ -567,6 +608,67 @@ impl MapView {
             let max = self.to_screen(canvas, rect[2] as f64, rect[3] as f64);
             let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
             painter.image(texture.id(), Rect::from_min_max(min, max), uv, Color32::WHITE);
+        }
+        if let Some(summary) = self.auto_preview.as_ref().and_then(|a| a.summary.as_ref()) {
+            Self::auto_legend(painter, canvas, doc, biomes, summary);
+        }
+    }
+
+    /// Under the map, what the brush of Auto biome (or Auto paint) would
+    /// do where it is: the biomes it gives, each with its colour, and how
+    /// much it leaves as it is because the land has what it calls for.
+    fn auto_legend(painter: &egui::Painter, canvas: Rect, doc: &Document, biomes: bool, summary: &AutoSummary) {
+        let reg = &doc.world.registry;
+        let text = Color32::from_gray(235);
+        let weak = Color32::from_gray(165);
+        let font = FontId::proportional(12.5);
+        // Swatch and name of the (up to) three given most.
+        let mut parts: Vec<(Option<Color32>, std::sync::Arc<egui::Galley>)> = Vec::new();
+        let named = |id: u16| {
+            if biomes {
+                reg.biomes.get(id as usize).map(|b| (b.color, b.name.clone()))
+            } else {
+                reg.terrains.get(id as usize).map(|t| (t.color, t.name.clone()))
+            }
+        };
+        if summary.becomes.is_empty() {
+            let note = if biomes { tr!("Nothing to change here: the land already has the biomes it calls for") } else { tr!("Nothing to change here: the land already has the terrains it calls for") };
+            parts.push((None, painter.layout_no_wrap(note.to_owned(), font.clone(), text)));
+        } else {
+            parts.push((None, painter.layout_no_wrap(tr!("Becomes").to_owned(), font.clone(), weak)));
+            for &(id, _) in summary.becomes.iter().take(3) {
+                if let Some((rgb, name)) = named(id) {
+                    parts.push((Some(theme::rgb(rgb)), painter.layout_no_wrap(name, font.clone(), text)));
+                }
+            }
+            if summary.becomes.len() > 3 {
+                parts.push((None, painter.layout_no_wrap(tr!("+{n} more", n = summary.becomes.len() - 3), font.clone(), weak)));
+            }
+            let share = summary.same_share();
+            if share >= 0.005 {
+                let note = tr!("· hatched, {percent:.0}%: already as the land calls for", percent = share * 100.0);
+                parts.push((None, painter.layout_no_wrap(note, font.clone(), weak)));
+            }
+        }
+        let gap = 8.0;
+        let swatch = 10.0;
+        let width: f32 = parts.iter().map(|(c, g)| g.size().x + if c.is_some() { swatch + 5.0 } else { 0.0 }).sum::<f32>() + gap * (parts.len() as f32 - 1.0);
+        let height = parts.iter().map(|(_, g)| g.size().y).fold(0.0, f32::max);
+        let at = canvas.center_bottom() - vec2(0.0, 22.0);
+        let back = Rect::from_center_size(at, vec2(width, height) + vec2(24.0, 12.0));
+        painter.rect_filled(back.translate(vec2(0.0, 2.0)), 9, Color32::from_black_alpha(60));
+        painter.rect(back, 9, Color32::from_rgba_unmultiplied(20, 22, 27, 235), Line::new(1.0, Color32::from_white_alpha(18)), StrokeKind::Inside);
+        let mut x = back.min.x + 12.0;
+        let mid = back.center().y;
+        for (c, g) in parts {
+            if let Some(c) = c {
+                let r = Rect::from_center_size(pos2(x + swatch / 2.0, mid), Vec2::splat(swatch));
+                painter.rect(r, 3, c, Line::new(1.0, Color32::from_white_alpha(60)), StrokeKind::Inside);
+                x += swatch + 5.0;
+            }
+            let w = g.size().x;
+            painter.galley(pos2(x, mid - g.size().y / 2.0), g, text);
+            x += w + gap;
         }
     }
 
@@ -602,6 +704,7 @@ impl MapView {
                 key,
                 rect: texture.as_ref().map_or([0; 4], |t| t.0),
                 texture: texture.map(|t| t.1),
+                summary: None,
             });
         }
         if let Some(AutoPreview { rect, texture: Some(texture), .. }) = &self.auto_preview {

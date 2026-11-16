@@ -9902,6 +9902,60 @@ mod tests {
         (best.0, low.0)
     }
 
+    /// Auto biome with an image brush, hovered beside a dab it painted:
+    /// the columns it would change in their new colour, those it painted
+    /// already hatched, and under the map what they become and how much
+    /// stays. Needs a GPU: runs with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn auto_biome_shows_what_stays_as_it_is() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        let n = 64usize;
+        let mut blob = vec![0u8; n * n];
+        for j in 0..n {
+            for i in 0..n {
+                let (x, y) = (i as f32 / n as f32 - 0.5, j as f32 / n as f32 - 0.5);
+                let r = 0.42 + 0.06 * (5.0 * y.atan2(x)).sin() + 0.03 * (11.0 * y.atan2(x)).cos();
+                if (x * x + y * y).sqrt() < r {
+                    blob[j * n + i] = 255;
+                }
+            }
+        }
+        {
+            let app = h.state_mut();
+            app.doc = crate::doc::Document::new(generate(&GenParams { tiles_x: 8, tiles_z: 8, ..GenParams::default() }), None, 13);
+            app.map_cache.invalidate_all();
+            app.view3d.invalidate_all();
+            app.tools.select(Tool::AutoBiome);
+            app.tools.brush.mask = Some(std::sync::Arc::new(massif_core::brush::BrushMask::new("Blob", n, n, blob)));
+            app.tools.brush.radius = 70.0;
+            app.tools.brush.rotation = 20.0;
+            app.tools.brush.strength = 1.0;
+        }
+        h.run_steps(5);
+        let (center, zoom) = {
+            let m = h.state().maps.values().next().unwrap();
+            (m.center, m.zoom)
+        };
+        let screen = |h: &egui_kittest::Harness<'_, MassifApp>, x: f64, z: f64| h.state().maps.values().next().unwrap().screen_of(x, z);
+        let a = screen(&h, center[0], center[1]);
+        drag_on(&mut h, a, a + vec2(1.0, 0.0));
+        let note = h.state().status.as_ref().map(|s| s.text.clone()).unwrap_or_default();
+        assert!(!note.starts_with("Nothing"), "{note}");
+        // Beside it, half over what it painted.
+        let b = screen(&h, center[0] + 60.0, center[1] + 15.0);
+        h.event(egui::Event::PointerMoved(b));
+        h.run_steps(5);
+        eprintln!("zoom {zoom}");
+        h.render().unwrap().save(dir.join("auto-biome-preview.png")).unwrap();
+        // Over it again: nothing left to change, and it says so.
+        h.event(egui::Event::PointerMoved(a + vec2(1.0, 0.0)));
+        h.run_steps(5);
+        h.render().unwrap().save(dir.join("auto-biome-preview-done.png")).unwrap();
+    }
+
     /// Auto paint, hovered over the map: the columns it would repaint
     /// shown in their new colour before anything is painted. Needs a GPU:
     /// runs with MASSIF_SNAPSHOT_DIR.

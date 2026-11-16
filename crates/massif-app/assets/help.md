@@ -139,6 +139,8 @@ Each change of the selection is a step to undo. The selection is saved in the ma
 - **Auto paint** paints the ground as its biome calls for: a terrain for its ground, one for its cliffs, one under its water.
 A map filled with one terrain other than grass (a WorldPainter map all of sand, for instance) is read from the shape of its land: its fill says nothing about it.
 
+Hovered over the map, they show what the brush would change, in its new colour; what already has what the land calls for (painted by an earlier stroke, say) is hatched, and a bar under the map names what the columns become and how much stays as it is. Biomes show on the map in its **Biome** mode.
+
 Both work with the brush, or over the whole map at once: **Whole map** in the tool settings, or **Edit ▸ Auto biome: whole map** and **Auto paint: whole map**. Over the whole map they run in the background, with their progress, and are one step to undo. **Rules…** sets the heights and slopes the land is read with, the biome of each kind of land and the terrains of each biome.
 
 Hovered over the map, the brush shows in colour what would change.

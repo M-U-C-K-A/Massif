@@ -375,7 +375,10 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
         }
         Tool::AutoBiome | Tool::AutoPaint => {
             let biomes = tool == Tool::AutoBiome;
-            hint(ui, tr!("Hover: see what changes, in colour · drag: paint it."));
+            hint(ui, tr!("Hover: what changes shows in its new colour, what already is as the land calls for is hatched · drag: paint it."));
+            if biomes {
+                hint(ui, tr!("Biomes show on the map in its Biome mode."));
+            }
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 if ui
