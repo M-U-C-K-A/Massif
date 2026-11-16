@@ -513,9 +513,10 @@ impl Job {
                         let ground = fit.sea.floor();
                         snapshot.dims[dim].resize(rect, || massif_core::tile::Tile::ground(ground, 0, massif_core::tile::NO_FLUID));
                     }
+                    let repaint = job.repaint.then(|| massif_core::generate::Theme::new(&snapshot.registry));
                     let mut history = massif_core::history::History::new(1);
                     history.begin(tr!("real terrain"), dim);
-                    let written = massif_core::real::write_ground(&mut history.edit(&mut snapshot, 0), &samples, &fit, rect, &p.pass);
+                    let written = massif_core::real::write_ground(&mut history.edit(&mut snapshot, 0), &samples, &fit, rect, repaint.as_ref().map(|t| (&area, *t)), &p.pass);
                     drop(samples);
                     if written.cancelled {
                         return Outcome::Cancelled;

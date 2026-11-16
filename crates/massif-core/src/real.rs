@@ -632,6 +632,67 @@ pub fn snow_line(lat: f64) -> f32 {
     (5200.0 - 85.0 * (lat.abs() - 20.0).max(0.0)).max(0.0) as f32
 }
 
+/// The ground a real place gives its land, from its real heights: gravel
+/// deep under the water, sand only along the water (as far as a beach goes
+/// on the Earth, about 60 m), rock on steep slopes, snow above the
+/// [`snow_line`] of its latitude and stony ground under it, grass
+/// elsewhere. The samples' north-west corner lies at block `origin`.
+struct Ground<'a> {
+    samples: &'a Samples,
+    fit: &'a Fit,
+    theme: crate::generate::Theme,
+    sea: f32,
+    snow: f32,
+    origin: (i32, i32),
+    /// The heights a column may take, in blocks.
+    limits: (f32, f32),
+    /// Whether water is near each sample.
+    shore: Vec<bool>,
+}
+
+impl<'a> Ground<'a> {
+    fn new(samples: &'a Samples, fit: &'a Fit, area: &Area, theme: crate::generate::Theme, sea: f32, origin: (i32, i32), limits: (f32, f32)) -> Self {
+        use crate::generate::{BEACH_REACH, within_reach};
+        let wet: Vec<bool> = samples.metres.iter().map(|&m| m.is_finite() && fit.height(m) < sea).collect();
+        let blocks = (BEACH_METRES * area.blocks_per_metre).clamp(BEACH_REACH as f64, 4.0 * BEACH_REACH as f64);
+        let reach = (blocks / samples.spacing).ceil().max(1.0) as usize;
+        let shore = within_reach(&wet, samples.nx, reach);
+        Self { samples, fit, theme, sea, snow: snow_line(area.lat), origin, limits, shore }
+    }
+
+    /// The real height of column `(bx, bz)` (`f32::MIN` where there is no
+    /// data), and its height in blocks.
+    fn column(&self, bx: i32, bz: i32) -> (f32, f32) {
+        let metres = self.samples.at((bx - self.origin.0) as f64 + 0.5, (bz - self.origin.1) as f64 + 0.5);
+        (metres.unwrap_or(f32::MIN), metres.map_or(self.fit.sea - 1.0, |m| self.fit.height(m)).clamp(self.limits.0, self.limits.1))
+    }
+
+    fn near_water(&self, bx: i32, bz: i32) -> bool {
+        let s = self.samples;
+        let (i, j) = ((((bx - self.origin.0) as f64 + 0.5) / s.spacing) as usize, (((bz - self.origin.1) as f64 + 0.5) / s.spacing) as usize);
+        self.shore[j.min(s.nz - 1) * s.nx + i.min(s.nx - 1)]
+    }
+
+    /// The terrain of column `(bx, bz)`, `metres` high on the Earth and `h`
+    /// in blocks, its slope `slope` blocks a block.
+    fn terrain(&self, bx: i32, bz: i32, metres: f32, h: f32, slope: f32) -> crate::registry::TerrainId {
+        let t = &self.theme;
+        if h < self.sea - 14.0 {
+            t.gravel
+        } else if h < self.sea + 2.2 && slope < 0.9 && self.near_water(bx, bz) {
+            t.sand
+        } else if slope > 1.35 {
+            t.rock
+        } else if metres > self.snow {
+            t.snow
+        } else if metres > self.snow - 300.0 || slope > 1.05 {
+            t.rocky
+        } else {
+            t.grass
+        }
+    }
+}
+
 /// A new world of the area: its ground at the heights `fit` gives, the sea
 /// at its level, the world's build limits `min_y..max_y`. The map is whole
 /// tiles, its north-west corner on the area's (read the area grown with
@@ -642,7 +703,7 @@ pub fn snow_line(lat: f64) -> f32 {
 /// scale and the exaggeration move); the caller paints them again with the
 /// automatic paint.
 pub fn new_world(name: &str, samples: &Samples, fit: &Fit, area: &Area, sea_level: i32, min_y: i32, max_y: i32) -> World {
-    use crate::generate::{BEACH_REACH, Theme, build_limits, within_reach};
+    use crate::generate::{Theme, build_limits};
     use crate::world::WorldMeta;
     let mut world = World::new(WorldMeta {
         name: name.to_owned(),
@@ -656,29 +717,12 @@ pub fn new_world(name: &str, samples: &Samples, fit: &Fit, area: &Area, sea_leve
     let (bottom, ceiling) = build_limits(min_y, max_y);
     world.dims[0].min_y = bottom;
     world.dims[0].max_y = ceiling;
-    let theme = Theme::new(&world.registry);
     let ts = TILE_SIZE as f64;
     let (w, d) = (samples.nx as f64 * samples.spacing, samples.nz as f64 * samples.spacing);
     let (tx, tz) = (((w / ts).floor() as i32).max(1), ((d / ts).floor() as i32).max(1));
     let (x0, z0) = (-(tx / 2) * TILE_SIZE, -(tz / 2) * TILE_SIZE);
-    let sea = sea_level as f32;
-    let (lo, hi) = (bottom as f32 + 1.0, ceiling as f32 - 1.0);
-    // The real height of a column, and its height in blocks.
-    let column = |bx: i32, bz: i32| {
-        let metres = samples.at((bx - x0) as f64 + 0.5, (bz - z0) as f64 + 0.5);
-        (metres.unwrap_or(f32::MIN), metres.map_or(fit.sea - 1.0, |m| fit.height(m)).clamp(lo, hi))
-    };
-    let snow = snow_line(area.lat);
-    // Sand where the water is near, on the samples' grid: as far as a
-    // beach goes on the Earth (about 60 m), a few blocks at least.
-    let wet: Vec<bool> = samples.metres.iter().map(|&m| m.is_finite() && fit.height(m) < sea).collect();
-    let blocks = (BEACH_METRES * area.blocks_per_metre).clamp(BEACH_REACH as f64, 4.0 * BEACH_REACH as f64);
-    let reach = (blocks / samples.spacing).ceil().max(1.0) as usize;
-    let shore = within_reach(&wet, samples.nx, reach);
-    let near_water = |bx: i32, bz: i32| {
-        let (i, j) = ((((bx - x0) as f64 + 0.5) / samples.spacing) as usize, (((bz - z0) as f64 + 0.5) / samples.spacing) as usize);
-        shore[j.min(samples.nz - 1) * samples.nx + i.min(samples.nx - 1)]
-    };
+    let ground = Ground::new(samples, fit, area, Theme::new(&world.registry), sea_level as f32, (x0, z0), (bottom as f32 + 1.0, ceiling as f32 - 1.0));
+    let column = |bx: i32, bz: i32| ground.column(bx, bz);
     let positions: Vec<TilePos> = (0..tz).flat_map(|z| (0..tx).map(move |x| TilePos::new(x0.div_euclid(TILE_SIZE) + x, z0.div_euclid(TILE_SIZE) + z))).collect();
     let blobs: Vec<(TilePos, Blob)> = positions
         .par_iter()
@@ -696,21 +740,7 @@ pub fn new_world(name: &str, samples: &Samples, fit: &Fit, area: &Area, sea_leve
                     let (metres, h) = columns[(z + 1) * m + x + 1];
                     let slope = (at(2, 1) - at(0, 1)).abs().max((at(1, 2) - at(1, 0)).abs()) * 0.5;
                     top[z * n + x] = snap_height(h);
-                    let beach = near_water(ox + x as i32, oz + z as i32);
-                    terrain[z * n + x] = if h < sea - 14.0 {
-                        theme.gravel
-                    } else if beach && h < sea + 2.2 && slope < 0.9 {
-                        theme.sand
-                    } else if slope > 1.35 {
-                        theme.rock
-                    } else if metres > snow {
-                        theme.snow
-                    } else if metres > snow - 300.0 || slope > 1.05 {
-                        theme.rocky
-                    } else {
-                        theme.grass
-                    }
-                    .0;
+                    terrain[z * n + x] = ground.terrain(ox + x as i32, oz + z as i32, metres, h, slope).0;
                 }
             }
             let mut tile = Tile::ground(0.0, 0, sea_level as i16);
@@ -724,7 +754,7 @@ pub fn new_world(name: &str, samples: &Samples, fit: &Fit, area: &Area, sea_leve
     for (pos, blob) in blobs {
         ground.insert_blob(pos, blob);
     }
-    let surface = column(0, 0).1.max(sea);
+    let surface = column(0, 0).1.max(sea_level as f32);
     world.meta.spawn = [0, crate::compose::block_top(surface) + 1, 0];
     world
 }
@@ -733,9 +763,13 @@ pub fn new_world(name: &str, samples: &Samples, fit: &Fit, area: &Area, sea_leve
 /// area's north-west corner on its own): the tiles of the selection when
 /// there is one, weighed by it, else those of the map in `rect`. Columns
 /// under the sea level get the sea, those over it lose their water; where
-/// there is no data the map stays as it is. Stops between batches when
-/// `steps` is cancelled.
-pub fn write_ground(edit: &mut Edit, samples: &Samples, fit: &Fit, rect: BlockRect, steps: &Steps) -> Changes {
+/// there is no data the map stays as it is. With `repaint` (the area, and
+/// the terrains of the map), the land is painted again from the real
+/// place as a new world's is (see [`Ground`]), its painted biomes, ground
+/// covers and object layers taken off, so that the automatic paint reads
+/// the new land rather than what the map had: where the selection lets
+/// it. Stops between batches when `steps` is cancelled.
+pub fn write_ground(edit: &mut Edit, samples: &Samples, fit: &Fit, rect: BlockRect, repaint: Option<(&Area, crate::generate::Theme)>, steps: &Steps) -> Changes {
     const BATCH: usize = 256;
     const KEEP_HOT: usize = 2048;
     let selection = edit.dim().selection.clone();
@@ -749,6 +783,7 @@ pub fn write_ground(edit: &mut Edit, samples: &Samples, fit: &Fit, rect: BlockRe
     steps.done.store(0, Ordering::Relaxed);
     let (min_y, max_y) = (edit.dim().min_y as f32 + 1.0, (edit.dim().max_y - 1) as f32);
     let sea = fit.sea.round() as i16;
+    let ground = repaint.map(|(area, theme)| Ground::new(samples, fit, area, theme, fit.sea, (rect.x0, rect.z0), (min_y, max_y)));
     let changed = AtomicUsize::new(0);
     let mut touched = Vec::new();
     let mut cancelled = false;
@@ -761,6 +796,16 @@ pub fn write_ground(edit: &mut Edit, samples: &Samples, fit: &Fit, rect: BlockRe
         let edited = Mutex::new(Vec::new());
         edit.par_tiles(batch.iter().copied(), rect, false, |pos, clip, tile| {
             let cells = selection.as_ref().and_then(|s| s.tile(pos));
+            // The new heights of the clip with a column's margin, for the
+            // slopes the paint reads.
+            let (m, heights) = match &ground {
+                Some(g) => {
+                    let m = (clip.width() + 2) as usize;
+                    let rows = (clip.depth() + 2) as usize;
+                    (m, (0..m * rows).map(|k| g.column(clip.x0 - 1 + (k % m) as i32, clip.z0 - 1 + (k / m) as i32)).collect())
+                }
+                None => (0, Vec::new()),
+            };
             let mut n = 0;
             for z in clip.z0..clip.z1 {
                 for x in clip.x0..clip.x1 {
@@ -784,6 +829,18 @@ pub fn write_ground(edit: &mut Edit, samples: &Samples, fit: &Fit, rect: BlockRe
                         if tile.fluid.get(i) != fluid {
                             tile.fluid.set(i, fluid);
                             moved = true;
+                        }
+                        if let Some(g) = &ground {
+                            let (cx, cz) = ((x - clip.x0 + 1) as usize, (z - clip.z0 + 1) as usize);
+                            let at = |dx: usize, dz: usize| heights[(cz + dz - 1) * m + cx + dx - 1].1;
+                            let slope = (at(2, 1) - at(0, 1)).abs().max((at(1, 2) - at(1, 0)).abs()) * 0.5;
+                            let terrain = g.terrain(x, z, metres, new, slope).0;
+                            for (plane, value) in [(&mut tile.terrain, terrain), (&mut tile.biome, 0), (&mut tile.cover, 0), (&mut tile.objects, 0)] {
+                                if plane.get(i) != value {
+                                    plane.set(i, value);
+                                    moved = true;
+                                }
+                            }
                         }
                     }
                     n += moved as usize;
@@ -1205,7 +1262,7 @@ mod tests {
         let fit = Vertical { datum: 0.0, sea_level: 62, exaggeration: 1.0, low: -64, high: 320, fit: true }.fit(samples.span().unwrap(), 1.0);
         let mut history = crate::history::History::new(4);
         history.begin("real", 0);
-        let changes = write_ground(&mut history.edit(&mut world, 0), &samples, &fit, rect, &Steps::default());
+        let changes = write_ground(&mut history.edit(&mut world, 0), &samples, &fit, rect, None, &Steps::default());
         history.commit();
         assert!(changes.columns > 0 && !changes.cancelled);
         let column = |w: &World, x: i32, z: i32| {
@@ -1219,5 +1276,70 @@ mod tests {
         assert_eq!(column(&world, east.0, east.1), column(&before, east.0, east.1), "outside the selection, as it was");
         history.undo(&mut world);
         assert_eq!(column(&world, x, z), column(&before, x, z));
+    }
+
+    /// A map of waste ground with pits of sand, its biomes and covers
+    /// painted, gets a real place over it: repainted, its land is painted
+    /// from the new relief alone (sand only along the new sea, grass inland,
+    /// snow over the snow line), its painted biomes, covers and objects
+    /// taken off; kept, the sand of the old map lies where it was, on the
+    /// new land.
+    #[test]
+    fn written_over_the_map_repainted_or_kept() {
+        use crate::generate::{GenParams, Theme, generate};
+        let mut map = generate(&GenParams { tiles_x: 2, tiles_z: 2, ..GenParams::default() });
+        let theme = Theme::new(&map.registry);
+        let (lo, hi) = map.dims[0].bounds().unwrap();
+        let rect = BlockRect::new(lo.x * TILE_SIZE, lo.z * TILE_SIZE, (hi.x + 1) * TILE_SIZE, (hi.z + 1) * TILE_SIZE);
+        // Sand everywhere but for a pit of grass in each tile, painted
+        // biomes, covers and object layers.
+        for pos in rect.tiles() {
+            let ground = map.dims[0].ground_mut();
+            let tile = ground.tile_mut(pos).unwrap();
+            for i in 0..crate::coords::TILE_AREA {
+                tile.terrain.set(i, if i % 97 == 0 { theme.grass.0 } else { theme.sand.0 });
+                tile.biome.set(i, 3);
+                tile.cover.set(i, 1);
+                tile.objects.set(i, 1);
+            }
+        }
+        // The sea in the west, the land rising to 4,000 m in the east, at
+        // a block every 50 m.
+        let area = Area { lat: 45.0, lon: 7.0, blocks_per_metre: 0.02, width: rect.width(), depth: rect.depth() };
+        struct Slope;
+        impl Elevation for Slope {
+            fn metres(&self, area: &Area, east: f64, _: f64) -> Option<f32> {
+                let (w, _) = area.metres();
+                Some(((east / w + 0.5) * 4300.0 - 300.0 ) as f32)
+            }
+        }
+        let samples = Samples::read(&area, &Slope, 2.0);
+        let fit = Vertical { datum: 0.0, sea_level: 62, exaggeration: 1.0, low: -64, high: 320, fit: true }.fit(samples.span().unwrap(), 0.02);
+        let terrain_at = |w: &World, x: i32| {
+            let z = rect.z0 + 70;
+            let tile = w.dims[0].ground().view(TilePos::containing(x, z)).unwrap();
+            let i = local_index(x, z);
+            (tile.terrain.get(i), tile.biome.get(i), tile.cover.get(i), tile.objects.get(i))
+        };
+        let inland = rect.x0 + rect.width() / 2;
+        let summit = rect.x1 - 3;
+        for repaint in [true, false] {
+            let mut world = map.clone();
+            let mut history = crate::history::History::new(4);
+            history.begin("real", 0);
+            let changes = write_ground(&mut history.edit(&mut world, 0), &samples, &fit, rect, repaint.then_some((&area, theme)), &Steps::default());
+            history.commit();
+            assert!(changes.columns > 0);
+            if repaint {
+                assert_eq!(terrain_at(&world, inland), (theme.grass.0, 0, 0, 0), "inland: grass, nothing painted left");
+                assert_eq!(terrain_at(&world, summit).0, theme.snow.0, "over the snow line");
+                let sand = (rect.x0..rect.x1).filter(|&x| terrain_at(&world, x).0 == theme.sand.0).count();
+                assert!(sand > 0 && sand < rect.width() as usize / 8, "sand along the water only: {sand} columns");
+            } else {
+                assert_eq!(terrain_at(&world, inland), (theme.sand.0, 3, 1, 1), "the old paint kept");
+            }
+            history.undo(&mut world);
+            assert_eq!(terrain_at(&world, inland), terrain_at(&map, inland), "one undo");
+        }
     }
 }

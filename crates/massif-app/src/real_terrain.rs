@@ -95,6 +95,9 @@ pub struct RealJob {
     /// The whole map made these whole tiles first (see
     /// [`massif_core::world::Dimension::resize`]); `None`: kept as it is.
     pub resize: Option<BlockRect>,
+    /// Into the map: paint the land again from the new relief (see
+    /// [`massif_core::real::write_ground`]).
+    pub repaint: bool,
 }
 
 impl std::fmt::Debug for RealJob {
@@ -159,6 +162,10 @@ pub struct RealForm {
     /// made, in blocks.
     pub keep_size: bool,
     pub new_size: (i32, i32),
+    /// Into the map: whether its land is painted again from the new relief
+    /// (its painted biomes, covers and objects taken off), else its painted
+    /// terrains kept.
+    pub repaint: bool,
     query: String,
     places: Vec<Place>,
     searching: Option<Receiver<Result<Vec<Place>, String>>>,
@@ -192,6 +199,7 @@ impl RealForm {
             online: true,
             keep_size: true,
             new_size: (area.width, area.depth),
+            repaint: true,
             query: String::new(),
             places: Vec::new(),
             searching: None,
@@ -312,6 +320,7 @@ impl RealForm {
             },
             target: self.target,
             resize: self.resize(),
+            repaint: self.repaint,
         }
     }
 
@@ -339,7 +348,7 @@ impl RealForm {
             well(ui, |ui| self.place_rows(ui));
             ui.add_space(10.0);
         }
-        if self.whole_map().is_some() {
+        if !self.new_world() {
             head(ui, tr!("Map"));
             well(ui, |ui| self.map_rows(ui));
             ui.add_space(10.0);
@@ -520,9 +529,22 @@ impl RealForm {
     /// made, with what that takes.
     fn map_rows(&mut self, ui: &mut Ui) {
         let pal = Palette::of(ui);
-        let Some(map) = self.whole_map() else { return };
         let note = |ui: &mut Ui, text: &str, colour: Color32| {
             ui.add(egui::Label::new(RichText::new(text).size(11.0).color(colour)).wrap());
+        };
+        row(ui, tr!("Terrains"), |ui| {
+            if let Some(k) = button_group(ui, "real repaint", &[tr!("Repaint"), tr!("Keep")], &[self.repaint, !self.repaint]) {
+                self.repaint = k == 0;
+            }
+        });
+        let Some(map) = self.whole_map() else {
+            if self.repaint {
+                note(ui, tr!("The selection's land is replaced: its heights, its water and its terrains."), pal.danger);
+                note(ui, tr!("Painted from the new relief, as a new world is: sand along the water, rock on cliffs, snow above the snow line. The biomes, covers and objects painted there are taken off."), pal.weak);
+            } else {
+                note(ui, tr!("The selection's heights and water are replaced; the terrains, biomes, covers and objects painted there stay."), pal.danger);
+            }
+            return;
         };
         row(ui, tr!("Size"), |ui| {
             if let Some(k) = button_group(ui, "real map size", &[tr!("Keep it"), tr!("Change it")], &[self.keep_size, !self.keep_size]) {
@@ -549,7 +571,12 @@ impl RealForm {
         (self.area.width, self.area.depth) = (rect.width(), rect.depth());
         let (w, d) = (rect.width(), rect.depth());
         let tiles = (w / massif_core::TILE_SIZE) as u64 * (d / massif_core::TILE_SIZE) as u64;
-        note(ui, tr!("The map's land is replaced: its heights, its water and its terrains, all over it."), pal.danger);
+        if self.repaint {
+            note(ui, tr!("The map's land is replaced: its heights, its water and its terrains, all over it."), pal.danger);
+            note(ui, tr!("Painted from the new relief, as a new world is: sand along the water, rock on cliffs, snow above the snow line. The biomes, covers and objects painted on the map are taken off."), pal.weak);
+        } else {
+            note(ui, tr!("The map's heights and water are replaced all over it; the terrains, biomes, covers and objects painted on it stay."), pal.danger);
+        }
         if self.keep_size {
             note(ui, &tr!("{w} × {d} blocks, as it is.", w, d), pal.weak);
             return;
@@ -557,11 +584,17 @@ impl RealForm {
         let was = (map.width() / massif_core::TILE_SIZE) as u64 * (map.depth() / massif_core::TILE_SIZE) as u64;
         let (x, z) = (rect.x0, rect.z0);
         note(ui, &tr!("{w} × {d} blocks from {x}, {z}, around the map's middle: about {size} in memory.", w, d, x, z, size = crate::panels::human(tiles * TILE_BYTES)), pal.weak);
-        if w < map.width() || d < map.depth() {
-            note(ui, tr!("Painted biomes, covers and objects, the other levels and the sculpted ground stay where the new size covers the map; outside it they go."), pal.weak);
-        } else {
-            note(ui, tr!("Painted biomes, covers and objects, the other levels and the sculpted ground stay where they are."), pal.weak);
-        }
+        let smaller = w < map.width() || d < map.depth();
+        note(
+            ui,
+            match (self.repaint, smaller) {
+                (true, true) => tr!("The other levels and the sculpted ground stay where the new size covers the map; outside it they go."),
+                (true, false) => tr!("The other levels and the sculpted ground stay where they are."),
+                (false, true) => tr!("Painted biomes, covers and objects, the other levels and the sculpted ground stay where the new size covers the map; outside it they go."),
+                (false, false) => tr!("Painted biomes, covers and objects, the other levels and the sculpted ground stay where they are."),
+            },
+            pal.weak,
+        );
         let needs = (tiles + was) * TILE_BYTES + WORK_BYTES;
         match crate::report::ram_bytes() {
             Some(ram) if needs > ram / 2 => note(ui, &tr!("This computer has {ram} of memory: a map this large may not fit, and Massif may slow down or close.", ram = crate::panels::human(ram)), pal.danger),

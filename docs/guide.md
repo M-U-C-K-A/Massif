@@ -1043,14 +1043,21 @@ A world, or a part of one, from the relief of a real place on the Earth.
   heights, puts the sea under the sea level (and takes it off the land
   above it) and paints the ground with the automatic paint; in the map it
   is one step to undo.
+- **Terrains.** Into the map, the **Map** section's **Terrains** says
+  what becomes of the paint. **Repaint** (the default) paints the new land
+  from the real place, as a new world is (sand along the water only, rock
+  on cliffs, snow above the snow line), and takes off the biomes, ground
+  covers and object layers painted there, so the old map's sand pits and
+  biomes do not lie at random over the new relief. **Keep** writes only
+  the heights and the water, the terrains and everything painted staying.
 - **Map size.** Over the whole map (no selection), the dialog's **Map**
   section says plainly that the map's land is replaced, and its **Size**
   can be kept or changed: **Change it** takes a new width and depth in
   blocks, made whole tiles of 128 once typed, up to 32,768 a side. The
   map is cut or grown around its middle, and the place's heights fill all
-  of it, new ground included. Painted biomes, covers and objects, the
-  other levels and the sculpted ground stay where the new size covers the
-  map, and go outside it. A note gives the size, where it starts and
+  of it, new ground included. The other levels and the sculpted ground
+  (and, with **Keep**, the painted biomes, covers and objects) stay where
+  the new size covers the map, and go outside it. A note gives the size, where it starts and
   about how much memory it takes, and warns of a map that will be slow
   (over 16,384 blocks a side) or that may not fit in the computer's
   memory. Size and relief are one step: undo puts the map back as it was,

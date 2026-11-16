@@ -7002,6 +7002,21 @@ mod tests {
             if theme == ThemeChoice::Light {
                 continue;
             }
+            // Covers painted all over the old map: the import paints the
+            // land again from the new relief by default, and takes them off.
+            if let Some(Dialog::Real(form)) = &h.state().dialog {
+                assert!(form.repaint, "repainted by default");
+            }
+            {
+                let doc = &mut h.state_mut().doc;
+                let positions: Vec<massif_core::TilePos> = doc.dimension().ground().positions().collect();
+                let ground = doc.world.dims[doc.dim].ground_mut();
+                for pos in positions {
+                    ground.tile_mut(pos).unwrap().cover = massif_core::plane::Plane::Uniform(1);
+                }
+                doc.mark_changed();
+            }
+            h.run_steps(1);
             let before = h.state().doc.revision;
             h.get_by_label("Apply").click();
             h.run_steps(2);
@@ -7026,6 +7041,11 @@ mod tests {
             assert!(west.0 < 62.0 && wet, "the sea in the west: {west:?}");
             // About 3100 m at 50 m a block: 62 blocks over the sea.
             assert!((east - 124.0).abs() < 6.0, "a peak in the east: {east}");
+            {
+                let dim = h.state().doc.dimension();
+                let covered = dim.ground().positions().filter(|&p| dim.ground().view(p).unwrap().cover.uniform_value() != Some(0)).count();
+                assert_eq!(covered, 0, "the old covers taken off");
+            }
             let ctx = h.ctx.clone();
             h.state_mut().undo(&ctx);
             h.run_steps(2);
