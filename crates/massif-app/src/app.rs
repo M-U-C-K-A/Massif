@@ -841,7 +841,7 @@ impl MassifApp {
             crate::widgets::row(ui, tr!("Theme"), |ui| {
                 let choices = [ThemeChoice::System, ThemeChoice::Light, ThemeChoice::Dark];
                 let on = choices.map(|c| c == self.settings.theme);
-                if let Some(k) = crate::widgets::button_group(ui, "theme", &["System", tr!("Light"), tr!("Dark")], &on) {
+                if let Some(k) = crate::widgets::button_group(ui, "theme", &[tr!("System"), tr!("Light"), tr!("Dark")], &on) {
                     self.settings.theme = choices[k];
                 }
             });
@@ -984,7 +984,7 @@ impl MassifApp {
             crate::widgets::row(ui, tr!("Play"), |ui| {
                 let choices = [SoundLevel::Off, SoundLevel::Essential, SoundLevel::All];
                 let on = choices.map(|c| c == self.settings.sounds);
-                if let Some(k) = crate::widgets::button_group(ui, "sounds", &["Off", tr!("Essential"), tr!("All")], &on) {
+                if let Some(k) = crate::widgets::button_group(ui, "sounds", &[tr!("Off"), tr!("Essential"), tr!("All")], &on) {
                     self.settings.sounds = choices[k];
                     crate::sounds::configure(self.settings.sounds, self.settings.volume);
                     crate::sounds::play(Cue::Toggle);
@@ -1027,7 +1027,7 @@ impl MassifApp {
             crate::widgets::row(ui, tr!("Tell me"), |ui| {
                 let choices = [NotifyWhen::Never, NotifyWhen::Background, NotifyWhen::Always];
                 let on = choices.map(|c| c == self.settings.notify);
-                if let Some(k) = crate::widgets::button_group(ui, "notify", &["Never", tr!("When in the background"), tr!("Always")], &on) {
+                if let Some(k) = crate::widgets::button_group(ui, "notify", &[tr!("Never"), tr!("When in the background"), tr!("Always")], &on) {
                     self.settings.notify = choices[k];
                 }
             });
@@ -1047,7 +1047,7 @@ impl MassifApp {
             crate::widgets::row(ui, tr!("Limit"), |ui| {
                 let choices = [0u32, 1024, 2048, 4096, 8192];
                 let on = choices.map(|c| c == self.settings.memory_mb);
-                if let Some(k) = crate::widgets::button_group(ui, "memory", &["Automatic", tr!("1 GB"), tr!("2 GB"), tr!("4 GB"), tr!("8 GB")], &on) {
+                if let Some(k) = crate::widgets::button_group(ui, "memory", &[tr!("Automatic"), tr!("1 GB"), tr!("2 GB"), tr!("4 GB"), tr!("8 GB")], &on) {
                     self.settings.memory_mb = choices[k];
                     self.memory_checked = f64::NEG_INFINITY;
                 }

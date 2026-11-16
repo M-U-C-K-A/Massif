@@ -186,9 +186,13 @@ fn header(ui: &mut Ui, icon: Icon, title: &str, add: &str, tip: &str) -> bool {
     let pal = Palette::of(ui);
     let mut clicked = false;
     ui.horizontal(|ui| {
-        ui.label(RichText::new(format!("{}  {}", theme::glyph(icon), title.to_uppercase())).size(10.5).strong().color(pal.weak));
+        // The button first, from the right; the title takes what is left,
+        // cut short with … in a narrow panel or a long language.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             clicked = ui.add(egui::Button::new(RichText::new(theme::with_icon(Icon::Plus, add)).size(11.5)).frame(false)).on_hover_text(tip).clicked();
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add(egui::Label::new(RichText::new(format!("{}  {}", theme::glyph(icon), title.to_uppercase())).size(10.5).strong().color(pal.weak)).truncate());
+            });
         });
     });
     clicked
