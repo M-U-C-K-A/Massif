@@ -152,6 +152,15 @@ jobs:
           name: massif-${{ matrix.name }}
           path: out/*
 
+      # The symbols of the Windows build, not published: they turn the
+      # places startup.log gives (massif.exe+0x…) into function names.
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: symbols-windows
+          path: target/release/massif.pdb
+          if-no-files-found: warn
+
   release:
     name: Publish the release
     needs: build
@@ -162,6 +171,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: out
+          pattern: massif-*
           merge-multiple: true
       - name: Publish
         env:

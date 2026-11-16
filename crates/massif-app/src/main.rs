@@ -86,8 +86,14 @@ fn main() -> eframe::Result {
     startup::step("listening for the files the system asks to open, and its Quit");
     finder::listen();
     quit::listen();
-    startup::step("making .massif and .massifpack files Massif's");
-    finder::register();
+    // In the registry, and Explorer told (which waits on Explorer): on a
+    // thread of its own, the start never held up by it.
+    startup::step("making .massif and .massifpack files Massif's (on a thread of its own)");
+    let _ = std::thread::Builder::new().name("massif file types".into()).spawn(|| {
+        let started = std::time::Instant::now();
+        finder::register();
+        startup::note(&format!(".massif and .massifpack files made Massif's, in {} ms", started.elapsed().as_millis()));
+    });
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Massif")
         .with_app_id("massif")
@@ -152,5 +158,6 @@ fn main() -> eframe::Result {
         Ok(()) => startup::step("closed"),
         Err(error) => startup::failed(error),
     }
+    startup::flush();
     result
 }

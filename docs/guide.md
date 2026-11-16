@@ -1398,6 +1398,20 @@ the last line says where Massif stopped.
   first frame waits on none of it. Massif 0.5.1 set every API aside when its
   first frame was held up by them; those lines of `graphics.txt` (they end
   with "the first frame did not come") are taken out, and the APIs tried again.
+- Massif's window keeps answering while it starts: nothing it does on its
+  way waits on the disk, the network or Explorer. The log is written by a
+  thread of its own, the folder of the copies kept while you work is read in
+  the background (the offer to restore one comes as soon as it is read), the
+  `.massif` file types are registered beside the start, and the work of the
+  home screen and of the loads runs below the window's priority, so that a
+  computer with few cores still draws it. The making of the app is written
+  down part by part, with the time each took.
+- For as long as Massif runs, a frame that keeps it busy more than five
+  seconds (when Windows would call the window "not responding") is written
+  in the log, with where Massif is; on Windows, the code it is in, by file
+  and place (`massif.exe+0x…`, or a driver's file). It is written again
+  after 15 seconds, a minute and three, and once the window answers again,
+  how long it took.
 - Massif draws with Vulkan, DirectX 12 or OpenGL on Windows, Metal on macOS,
   and Vulkan or OpenGL on Linux. Updating the graphics driver often helps.
   To choose one, set `WGPU_BACKEND` to `dx12`, `vulkan` or `gl` where

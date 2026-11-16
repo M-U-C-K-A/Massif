@@ -30,6 +30,10 @@ pub const MAX_BACKUPS: usize = 5;
 pub const MAX_BYTES: u64 = 4 << 30;
 
 /// The folder of the backups, next to `startup.log`.
+/// How long reading the backups' folder takes in the tests: a slow disk.
+#[cfg(test)]
+pub static TEST_SLOW_DISK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 pub fn default_dir() -> Option<PathBuf> {
     crate::startup::log_dir().map(|d| d.join("Autosave"))
 }
@@ -259,6 +263,28 @@ impl Autosave {
             last: None,
             keep: false,
         }
+    }
+
+    /// [`Autosave::open`] on a thread of its own, the window woken when
+    /// done: reading the folder (and a file being scanned, on a slow disk)
+    /// never holds up the start. Written down in startup.log.
+    pub fn open_in_background(ctx: &egui::Context, dir: PathBuf) -> std::sync::mpsc::Receiver<Self> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ctx = ctx.clone();
+        let spawned = std::thread::Builder::new().name("massif autosave folder".into()).spawn(move || {
+            let started = Instant::now();
+            // A disk that takes its time, for the tests.
+            #[cfg(test)]
+            std::thread::sleep(Duration::from_millis(TEST_SLOW_DISK.load(std::sync::atomic::Ordering::SeqCst)));
+            let opened = Self::open(dir);
+            crate::startup::note(&format!("the backups' folder read in {} ms: {} left by runs before", started.elapsed().as_millis(), opened.found.len()));
+            let _ = tx.send(opened);
+            ctx.request_repaint();
+        });
+        if let Err(e) = spawned {
+            log::warn!("autosave: no thread to open the backups' folder: {e}");
+        }
+        rx
     }
 
     /// The backups in `dir`, for a new run: what runs before left there is

@@ -160,12 +160,26 @@ impl Cache {
     }
 }
 
+/// How long [`fetch_github`] waits before failing, in the tests: a network
+/// that does not answer.
+#[cfg(test)]
+pub static TEST_BLOCKED_NETWORK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// How GitHub is reached: the URL asked, the body answered, or why not.
 pub type Fetch = fn(&str) -> Result<String, String>;
 
 /// Ask GitHub, over HTTPS, with Massif's version as the user agent and
 /// nothing else about who asks.
 pub fn fetch_github(url: &str) -> Result<String, String> {
+    // A network that does not answer, for the tests (see `startup_tests`).
+    #[cfg(test)]
+    {
+        let ms = TEST_BLOCKED_NETWORK.load(std::sync::atomic::Ordering::SeqCst);
+        if ms > 0 {
+            std::thread::sleep(Duration::from_millis(ms));
+            return Err("the network did not answer (a test)".to_owned());
+        }
+    }
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(15)))
         .user_agent(format!("Massif/{RUNNING}"))

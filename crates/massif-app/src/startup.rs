@@ -21,6 +21,14 @@
 //! one, from the mark it left (`first-frame.pending`), and its API set
 //! aside in the same way.
 //!
+//! The main thread never waits on the disk for any of this: the lines go
+//! to a thread of their own that writes them (a panic or a crash writes
+//! what is left at once). The watch goes on after the start, for as long
+//! as Massif runs: a frame that keeps the main thread longer than a few
+//! seconds is written down with where it is (on Windows, the main thread's
+//! stack, by module and offset), so that a window Windows calls "not
+//! responding" says why in the log.
+//!
 //! eframe keeps the window hidden until its first frame is drawn (so that
 //! it does not flash white); on Windows it is shown before, as drawing in a
 //! window never shown is what some drivers handle worst. A failure to start
@@ -30,8 +38,8 @@
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 #[cfg(windows)]
@@ -44,9 +52,11 @@ const NOTE_AFTER: Duration = Duration::from_secs(3);
 const STUCK_AFTER: Duration = Duration::from_secs(12);
 /// The frames whose every step is written down.
 const FRAMES_LOGGED: u32 = 3;
+/// After how long the main thread, held in one step of the start or in one
+/// frame, is written down again with where it is.
+const HELD_NOTES: [Duration; 4] = [Duration::from_secs(5), Duration::from_secs(15), Duration::from_secs(60), Duration::from_secs(180)];
 
 struct Log {
-    file: Option<std::fs::File>,
     started: Instant,
     /// The last step of the start, when it was written, and whose work it is.
     last: (Instant, String, Stage),
@@ -99,6 +109,101 @@ fn verdict(stage: Stage, waited: Duration) -> Verdict {
 }
 
 static LOG: OnceLock<Mutex<Log>> = OnceLock::new();
+
+/// What goes to the disk: a line of the log, or the mark of the start
+/// (`None`: taken away).
+enum Out {
+    Line(String),
+    Mark(Option<String>),
+}
+
+/// The lines on their way to the disk, and the log they go to: written by
+/// a thread of their own, so that a slow disk (or a file being scanned)
+/// never holds up the thread that writes a line down.
+struct Disk {
+    /// The log, and the mark of the start.
+    log: Option<PathBuf>,
+    pending: Option<PathBuf>,
+    queue: Mutex<Vec<Out>>,
+    ready: Condvar,
+    /// The log, once opened (the one before kept aside first): `None`
+    /// until then, `Some(None)` when it could not be.
+    file: Mutex<Option<Option<std::fs::File>>>,
+}
+
+static DISK: OnceLock<Disk> = OnceLock::new();
+
+impl Disk {
+    fn at(log: Option<PathBuf>, pending: Option<PathBuf>) -> Disk {
+        Disk { log, pending, queue: Mutex::default(), ready: Condvar::new(), file: Mutex::default() }
+    }
+
+    fn send(&self, out: Out) {
+        lock(&self.queue).push(out);
+        self.ready.notify_one();
+    }
+
+    /// Write what waits, on this thread (`file`: the log, held).
+    fn write_out(&self, file: &mut Option<Option<std::fs::File>>, queue: Vec<Out>) {
+        let file = file.get_or_insert_with(|| self.log.as_deref().and_then(open_log));
+        for out in queue {
+            match out {
+                Out::Line(line) => {
+                    if let Some(file) = file {
+                        let _ = file.write_all(line.as_bytes());
+                    }
+                }
+                Out::Mark(Some(text)) => {
+                    if let Some(path) = &self.pending {
+                        let _ = std::fs::write(path, text);
+                    }
+                }
+                Out::Mark(None) => {
+                    if let Some(path) = &self.pending {
+                        let _ = std::fs::remove_file(path);
+                    }
+                }
+            }
+        }
+    }
+
+    /// The thread that writes: what is sent, as it comes.
+    fn run(&self) {
+        loop {
+            let queue = {
+                let mut queue = lock(&self.queue);
+                while queue.is_empty() {
+                    queue = self.ready.wait(queue).unwrap_or_else(|e| e.into_inner());
+                }
+                std::mem::take(&mut *queue)
+            };
+            self.write_out(&mut lock(&self.file), queue);
+        }
+    }
+
+    /// Write what waits now, on this thread: before a message box, the end
+    /// of the process, a crash.
+    fn flush(&self) {
+        let mut file = lock(&self.file);
+        let queue = std::mem::take(&mut *lock(&self.queue));
+        self.write_out(&mut file, queue);
+    }
+}
+
+/// Open the log, the one before kept as `startup.previous.log`.
+fn open_log(path: &std::path::Path) -> Option<std::fs::File> {
+    std::fs::create_dir_all(path.parent()?).ok()?;
+    let _ = std::fs::rename(path, path.with_file_name("startup.previous.log"));
+    std::fs::File::create(path).ok()
+}
+
+/// Write down at once what waits to be written: before a message box, or
+/// the end of the process.
+pub fn flush() {
+    if let Some(disk) = DISK.get() {
+        disk.flush();
+    }
+}
 /// A frame was drawn on the window's image and presented: the start is over.
 static SHOWN: AtomicBool = AtomicBool::new(false);
 /// The last frame drawn on an image the window gave.
@@ -147,13 +252,15 @@ fn pending_path() -> Option<PathBuf> {
 /// Begin: the log (the last one kept aside), the panic hook, the crash
 /// filter, the last start looked at, the watch on the first frame.
 pub fn begin() {
-    let file = log_path().and_then(|path| {
-        std::fs::create_dir_all(path.parent()?).ok()?;
-        let _ = std::fs::rename(&path, path.with_file_name("startup.previous.log"));
-        std::fs::File::create(&path).ok()
-    });
     let now = Instant::now();
-    let _ = LOG.set(Mutex::new(Log { file, started: now, last: (now, String::new(), Stage::App) }));
+    let _ = LOG.set(Mutex::new(Log { started: now, last: (now, String::new(), Stage::App) }));
+    let disk = DISK.get_or_init(|| Disk::at(log_path(), pending_path()));
+    if std::thread::Builder::new().name("massif startup log".into()).spawn(|| disk.run()).is_err() {
+        // No thread: written on the way.
+        disk.flush();
+    }
+    #[cfg(windows)]
+    windows::remember_main_thread();
     step(&format!("Massif {} on {} {}", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH));
     let args: Vec<String> = std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
     if !args.is_empty() {
@@ -166,6 +273,7 @@ pub fn begin() {
         let thread = std::thread::current();
         let name = thread.name().unwrap_or("unnamed").to_owned();
         write(&format!("panic in thread {name}: {info}\n{}", std::backtrace::Backtrace::force_capture()));
+        flush();
         printed(info);
         LAST_PANIC.set(Some(message(info)));
         // A panic `catch` stops is told by the app, the map still open.
@@ -221,8 +329,8 @@ fn where_logged() -> String {
     log_path().map(|p| tr!("\n\nWhat Massif did as it started is written in:\n{p}", p = p.display())).unwrap_or_default()
 }
 
-fn lock(log: &Mutex<Log>) -> MutexGuard<'_, Log> {
-    log.lock().unwrap_or_else(|e| e.into_inner())
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Write a line, with the time since the start; a step of the start
@@ -230,9 +338,8 @@ fn lock(log: &Mutex<Log>) -> MutexGuard<'_, Log> {
 /// spent in.
 fn put(log: &mut Log, what: &str, progress: Option<Stage>) {
     let ms = log.started.elapsed().as_millis();
-    if let Some(file) = &mut log.file {
-        let _ = writeln!(file, "[{ms:>7} ms] {what}");
-        let _ = file.flush();
+    if let Some(disk) = DISK.get() {
+        disk.send(Out::Line(format!("[{ms:>7} ms] {what}\n")));
     }
     if let Some(stage) = progress {
         log.last = (Instant::now(), what.to_owned(), stage);
@@ -275,6 +382,25 @@ pub fn frame_step(ctx: &egui::Context, what: &str) {
     }
 }
 
+/// Write down what a thread of the start's did, and how long it took: not
+/// a step the main thread is in.
+pub fn note(what: &str) {
+    write(what);
+}
+
+/// Run `f`, a step of the start that is Massif's own work, and write down
+/// how long it took.
+pub fn timed<R>(what: &str, f: impl FnOnce() -> R) -> R {
+    step(what);
+    let started = Instant::now();
+    let r = f();
+    let ms = started.elapsed().as_secs_f64() * 1000.0;
+    if LOG.get().is_some() {
+        write(&format!("  {what}: done in {ms:.1} ms"));
+    }
+    r
+}
+
 /// Write down what is not a step of the start: what the watch sees, an
 /// error, the graphics card's news.
 fn write(what: &str) {
@@ -287,14 +413,24 @@ fn write(what: &str) {
 /// crashed may hold it.
 #[cfg(windows)]
 fn write_now(what: &str) {
-    let Some(log) = LOG.get() else { return };
-    for _ in 0..50 {
-        match log.try_lock() {
-            Ok(mut log) => return put(&mut log, what, None),
-            Err(std::sync::TryLockError::Poisoned(e)) => return put(&mut e.into_inner(), what, None),
-            Err(std::sync::TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(2)),
+    fn try_lock<T>(mutex: &Mutex<T>) -> Option<MutexGuard<'_, T>> {
+        for _ in 0..50 {
+            match mutex.try_lock() {
+                Ok(guard) => return Some(guard),
+                Err(std::sync::TryLockError::Poisoned(e)) => return Some(e.into_inner()),
+                Err(std::sync::TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(2)),
+            }
         }
+        None
     }
+    let (Some(log), Some(disk)) = (LOG.get(), DISK.get()) else { return };
+    let Some(mut log) = try_lock(log) else { return };
+    put(&mut log, what, None);
+    drop(log);
+    let Some(mut file) = try_lock(&disk.file) else { return };
+    let Some(mut queue) = try_lock(&disk.queue) else { return };
+    let queue = std::mem::take(&mut *queue);
+    disk.write_out(&mut file, queue);
 }
 
 /// The start failed: written down, and said in a message box.
@@ -312,6 +448,7 @@ pub fn failed(error: &dyn std::fmt::Display) {
 
 /// A message box of the system, waited on.
 pub fn tell(text: &str) {
+    flush();
     let _ = rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Error)
         .set_title("Massif")
@@ -499,8 +636,8 @@ fn last_start() {
 /// Leave the mark of a start without a frame: its API, process, card and
 /// stage.
 fn mark(stage: Stage) {
-    let (Some(path), Some(graphics)) = (pending_path(), GRAPHICS.get()) else { return };
-    let _ = std::fs::write(path, format!("{}\n{}\n{}\n{}\n", graphics.api.to_str(), std::process::id(), graphics.card, stage.word()));
+    let (Some(disk), Some(graphics)) = (DISK.get(), GRAPHICS.get()) else { return };
+    disk.send(Out::Mark(Some(format!("{}\n{}\n{}\n{}\n", graphics.api.to_str(), std::process::id(), graphics.card, stage.word()))));
 }
 
 /// Whether Massif runs as process `process`.
@@ -560,6 +697,8 @@ pub fn surface_status(answer: Arc<dyn Fn(&wgpu::CurrentSurfaceTexture) -> egui_w
     let times = AtomicU32::new(0);
     Arc::new(move |status| {
         let n = times.fetch_add(1, Ordering::Relaxed) + 1;
+        // No image, no wait for it: the frame is over.
+        set_busy(0, Busy::Idle);
         if !SHOWN.load(Ordering::Relaxed) && (n <= 5 || n.is_multiple_of(50)) {
             write(&format!("the window gave no image to draw on: {status:?} ({n} times)"));
         }
@@ -570,6 +709,42 @@ pub fn surface_status(answer: Arc<dyn Fn(&wgpu::CurrentSurfaceTexture) -> egui_w
 // ---------------------------------------------------------------------------
 // The first frames
 
+/// What the main thread is in, for the watch, once the start is over: a
+/// frame's layout or the window's image it waits for, or neither (waiting
+/// for the system, as between frames).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Busy {
+    Idle,
+    LayingOut,
+    WaitingForImage,
+}
+
+/// Since when the main thread is busy (milliseconds since the start, plus
+/// one; 0: not busy), and with what (frame << 2 | phase).
+static BUSY_SINCE: AtomicU64 = AtomicU64::new(0);
+static BUSY_WHAT: AtomicU64 = AtomicU64::new(0);
+
+fn set_busy(frame: u32, busy: Busy) {
+    let since = match (busy, LOG.get()) {
+        (Busy::Idle, _) | (_, None) => 0,
+        (_, Some(log)) => lock(log).started.elapsed().as_millis() as u64 + 1,
+    };
+    BUSY_WHAT.store((frame as u64) << 2 | busy as u64, Ordering::SeqCst);
+    BUSY_SINCE.store(since, Ordering::SeqCst);
+}
+
+/// What the main thread is busy with, the frame, and since when (ms).
+fn busy() -> Option<(Busy, u32, u64)> {
+    let since = BUSY_SINCE.load(Ordering::SeqCst);
+    let what = BUSY_WHAT.load(Ordering::SeqCst);
+    let busy = match what & 3 {
+        1 => Busy::LayingOut,
+        2 => Busy::WaitingForImage,
+        _ => Busy::Idle,
+    };
+    (since != 0 && busy != Busy::Idle).then(|| (busy, (what >> 2) as u32, since - 1))
+}
+
 /// The number of the frame being laid out, from 1.
 fn frame_nr(ctx: &egui::Context) -> u32 {
     (ctx.cumulative_frame_nr() + 1).min(u32::MAX as u64) as u32
@@ -578,10 +753,14 @@ fn frame_nr(ctx: &egui::Context) -> u32 {
 /// A frame begins. Until one is shown its steps are written down, and the
 /// frame before told apart: presented, or given no image by the window.
 pub fn frame_begins(ctx: &egui::Context, frame: &eframe::Frame) {
-    if SHOWN.load(Ordering::SeqCst) || LOG.get().is_none() {
+    if LOG.get().is_none() {
         return;
     }
     let n = frame_nr(ctx);
+    set_busy(n, Busy::LayingOut);
+    if SHOWN.load(Ordering::SeqCst) {
+        return;
+    }
     if n > 1 && DRAWN.load(Ordering::Relaxed) == n - 1 {
         SHOWN.store(true, Ordering::SeqCst);
         step(&format!("frame {}: presented, the window shown: the start is over", n - 1));
@@ -597,11 +776,12 @@ pub fn frame_begins(ctx: &egui::Context, frame: &eframe::Frame) {
 
 /// The frame is laid out: a probe follows it to the graphics card.
 pub fn frame_laid_out(ui: &egui::Ui) {
-    if SHOWN.load(Ordering::SeqCst) || LOG.get().is_none() {
+    if LOG.get().is_none() {
         return;
     }
     let n = frame_nr(ui.ctx());
-    if n <= FRAMES_LOGGED {
+    set_busy(n, Busy::Idle);
+    if !SHOWN.load(Ordering::SeqCst) && n <= FRAMES_LOGGED {
         step_in(&format!("frame {n}: laid out; its shapes and textures go to the graphics card"), Stage::Graphics);
     }
     let corner = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1.0, 1.0));
@@ -615,7 +795,8 @@ struct Probe(u32);
 
 impl egui_wgpu::CallbackTrait for Probe {
     fn prepare(&self, _: &wgpu::Device, _: &wgpu::Queue, _: &egui_wgpu::ScreenDescriptor, _: &mut wgpu::CommandEncoder, _: &mut egui_wgpu::CallbackResources) -> Vec<wgpu::CommandBuffer> {
-        if self.0 <= FRAMES_LOGGED {
+        set_busy(self.0, Busy::WaitingForImage);
+        if self.0 <= FRAMES_LOGGED && !SHOWN.load(Ordering::SeqCst) {
             step_in(&format!("frame {}: sent; asking the window for an image to draw on (get_current_texture)", self.0), Stage::Graphics);
         }
         Vec::new()
@@ -623,7 +804,8 @@ impl egui_wgpu::CallbackTrait for Probe {
 
     fn paint(&self, _: egui::PaintCallbackInfo, _: &mut wgpu::RenderPass<'static>, _: &egui_wgpu::CallbackResources) {
         DRAWN.store(self.0, Ordering::Relaxed);
-        if self.0 <= FRAMES_LOGGED {
+        set_busy(self.0, Busy::Idle);
+        if self.0 <= FRAMES_LOGGED && !SHOWN.load(Ordering::SeqCst) {
             step_in(&format!("frame {}: the window gave its image; drawing on it, then submitting and presenting it (submit, present)", self.0), Stage::Graphics);
         }
     }
@@ -632,8 +814,8 @@ impl egui_wgpu::CallbackTrait for Probe {
 /// The first frame is shown: the start's mark goes, its API comes back if
 /// the watch had set it aside, and the graphics card says when it is done.
 fn first_frame_shown(frame: &eframe::Frame) {
-    if let Some(path) = pending_path() {
-        let _ = std::fs::remove_file(path);
+    if let Some(disk) = DISK.get() {
+        disk.send(Out::Mark(None));
     }
     if SET_ASIDE.swap(false, Ordering::SeqCst)
         && let Some(graphics) = GRAPHICS.get()
@@ -650,12 +832,13 @@ fn first_frame_shown(frame: &eframe::Frame) {
 /// after a few seconds; when it stays too long in one step, it is stuck.
 fn watch() {
     let mut noted = false;
-    // The step of Massif's own work found slow, written down once.
-    let mut slow: Option<Instant> = None;
+    // The step of Massif's own work found slow, and how many times the
+    // main thread was written down held in it.
+    let mut slow: Option<(Instant, usize)> = None;
     loop {
         std::thread::sleep(Duration::from_millis(200));
         if SHOWN.load(Ordering::SeqCst) {
-            return;
+            return watch_frames();
         }
         let Some(log) = LOG.get() else { return };
         let (since_start, (at, last, stage)) = {
@@ -669,9 +852,18 @@ fn watch() {
         match verdict(stage, at.elapsed()) {
             Verdict::Wait => {}
             Verdict::SlowWork => {
-                if slow != Some(at) {
-                    slow = Some(at);
-                    write(&format!("slow for {} s at: {last} (Massif's own work, not the graphics driver: no graphics API set aside; still waiting)", STUCK_AFTER.as_secs()));
+                let notes = match slow {
+                    Some((when, notes)) if when == at => notes,
+                    _ => 0,
+                };
+                if notes == 0 {
+                    write(&format!("slow for {} s at: {last} (Massif's own work, not the graphics driver: no graphics API set aside; still waiting){}", STUCK_AFTER.as_secs(), main_stack()));
+                    slow = Some((at, 1));
+                } else if let Some(&after) = HELD_NOTES.iter().filter(|d| **d > STUCK_AFTER).nth(notes - 1)
+                    && at.elapsed() >= after
+                {
+                    write(&format!("still at it after {} s: {last}{}", after.as_secs(), main_stack()));
+                    slow = Some((at, notes + 1));
                 }
             }
             Verdict::StuckInDriver => {
@@ -682,12 +874,62 @@ fn watch() {
     }
 }
 
+/// Watch the frames, once the start is over, for as long as Massif runs: a
+/// frame that keeps the main thread more than a few seconds (Windows calls
+/// the window "not responding" after five) is written down, with where the
+/// main thread is, and again while it lasts; then how long it took.
+fn watch_frames() {
+    // The frame written down as held: since when, and how many notes.
+    let mut held: Option<(u64, usize)> = None;
+    loop {
+        std::thread::sleep(Duration::from_millis(500));
+        let Some(log) = LOG.get() else { return };
+        let now = lock(log).started.elapsed().as_millis() as u64;
+        let current = busy();
+        if let Some((since, _)) = held
+            && current.is_none_or(|(_, _, s)| s != since)
+        {
+            write(&format!("the main thread went on, after about {:.1} s", now.saturating_sub(since) as f64 / 1000.0));
+            held = None;
+        }
+        let Some((what, frame, since)) = current else { continue };
+        let notes = held.map_or(0, |(_, n)| n);
+        if let Some(after) = HELD_NOTES.get(notes)
+            && now.saturating_sub(since) >= after.as_millis() as u64
+        {
+            let doing = match what {
+                Busy::LayingOut => "laying out",
+                _ => "waiting for the window's image (get_current_texture) for",
+            };
+            write(&format!("the main thread has been {doing} frame {frame} for {} s{}", after.as_secs(), main_stack()));
+            held = Some((since, notes + 1));
+        }
+    }
+}
+
+/// Run the calling thread below the interface's priority (on Windows; as
+/// it is elsewhere).
+pub fn below_normal_priority() {
+    #[cfg(windows)]
+    windows::below_normal_priority();
+}
+
+/// Where the main thread is, to end a line of the log: on Windows its
+/// stack, by module and offset (see `windows::main_stack`).
+fn main_stack() -> String {
+    #[cfg(windows)]
+    if let Some(stack) = windows::main_stack() {
+        return format!("\n    the main thread is in: {stack}");
+    }
+    String::new()
+}
+
 /// The start stays in a step of the graphics card: its graphics API is set
 /// aside for the next starts, and on Windows the user is asked to start
 /// again at once (a message box needs the main thread elsewhere, and it is
 /// the one stuck).
 fn stuck(last: &str) {
-    write(&format!("stuck for {} s in the graphics driver at: {last}", STUCK_AFTER.as_secs()));
+    write(&format!("stuck for {} s in the graphics driver at: {last}{}", STUCK_AFTER.as_secs(), main_stack()));
     let Some(graphics) = GRAPHICS.get() else {
         if cfg!(windows) {
             tell(&tr!("Massif has not opened its window after {as_secs} seconds: it may be stuck on the graphics card or its driver.{where_logged}", as_secs = STUCK_AFTER.as_secs(), where_logged = where_logged()));
@@ -720,6 +962,7 @@ fn stuck(last: &str) {
         }
         if again {
             write(&format!("starting again with {next}"));
+            flush();
             if let Some(path) = pending_path() {
                 let _ = std::fs::remove_file(path);
             }
@@ -736,6 +979,62 @@ fn stuck(last: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A disk that takes its time (here the log held by a write that does
+    /// not end) never holds up the thread that writes lines down: they wait
+    /// for it, in order, and the mark of the start with them.
+    #[test]
+    fn a_slow_disk_never_holds_up_the_log() {
+        let dir = std::env::temp_dir().join(format!("massif-startup-log-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("startup.log"), "the last start\n").unwrap();
+        let disk: &'static Disk = Box::leak(Box::new(Disk::at(Some(dir.join("startup.log")), Some(dir.join("first-frame.pending")))));
+        // A write stuck on the disk for two seconds.
+        let (held, is_held) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let file = lock(&disk.file);
+            held.send(()).unwrap();
+            std::thread::sleep(Duration::from_secs(2));
+            drop(file);
+        });
+        is_held.recv().unwrap();
+        std::thread::spawn(|| disk.run());
+        let started = Instant::now();
+        for k in 0..1000 {
+            disk.send(Out::Line(format!("line {k}\n")));
+        }
+        disk.send(Out::Mark(Some("vulkan\n1\ncard\ngraphics\n".to_owned())));
+        let sent = started.elapsed();
+        assert!(sent < Duration::from_millis(500), "the lines waited on the disk: {sent:?}");
+        // Once the disk answers, every line is there, in order.
+        let log = dir.join("startup.log");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !std::fs::read_to_string(&log).is_ok_and(|t| t.ends_with("line 999\n")) || !dir.join("first-frame.pending").exists() {
+            assert!(Instant::now() < deadline, "the lines were never written");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let text = std::fs::read_to_string(&log).unwrap();
+        assert!(text.starts_with("line 0\nline 1\n") && text.lines().count() == 1000, "{}", &text[..text.len().min(200)]);
+        assert_eq!(std::fs::read_to_string(dir.join("startup.previous.log")).unwrap(), "the last start\n");
+        disk.send(Out::Mark(None));
+        disk.flush();
+        assert!(!dir.join("first-frame.pending").exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A frame that keeps the main thread is written down after 5 s, then
+    /// after 15 s, a minute and three; not before.
+    #[test]
+    fn a_held_frame_is_written_down_as_it_lasts() {
+        assert_eq!(HELD_NOTES[0], Duration::from_secs(5));
+        assert!(HELD_NOTES.windows(2).all(|w| w[0] < w[1]));
+        BUSY_WHAT.store(7 << 2 | Busy::WaitingForImage as u64, Ordering::SeqCst);
+        BUSY_SINCE.store(1235, Ordering::SeqCst);
+        assert_eq!(busy(), Some((Busy::WaitingForImage, 7, 1234)));
+        BUSY_SINCE.store(0, Ordering::SeqCst);
+        assert_eq!(busy(), None, "between frames the main thread waits for the system");
+    }
 
     #[test]
     fn set_aside_apis_are_read_from_their_lines() {

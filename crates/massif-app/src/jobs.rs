@@ -582,7 +582,14 @@ pub fn in_loading_pool<R: Send>(load: impl FnOnce() -> R + Send) -> R {
     let pool = POOL.get_or_init(|| {
         // One core left to the interface.
         let threads = std::thread::available_parallelism().map_or(2, |n| n.get()).saturating_sub(1).max(1);
-        rayon::ThreadPoolBuilder::new().num_threads(threads).thread_name(|k| format!("massif loads {k}")).build().ok()
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .thread_name(|k| format!("massif loads {k}"))
+            // Below the interface's priority: on a computer with few cores
+            // the loads never keep the main thread from drawing.
+            .start_handler(|_| crate::startup::below_normal_priority())
+            .build()
+            .ok()
     });
     match pool {
         Some(pool) => pool.install(load),

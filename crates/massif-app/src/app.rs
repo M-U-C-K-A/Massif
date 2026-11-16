@@ -355,6 +355,11 @@ pub struct MassifApp {
     dialog: Option<Dialog>,
     /// Backups of the map while it has changes not saved.
     autosave: crate::autosave::Autosave,
+    /// The backups' folder, being opened on a thread of its own at the
+    /// start (see [`crate::autosave::Autosave::open_in_background`]).
+    autosave_opening: Option<std::sync::mpsc::Receiver<crate::autosave::Autosave>>,
+    /// Backups were found: the Recover dialog is shown once no other is.
+    offer_recovery: bool,
     /// The latest version published, as GitHub last said.
     updates: crate::update::Updates,
     /// Whether a dialog was open last frame (for its sound).
@@ -494,9 +499,12 @@ fn typeface_row(ui: &mut Ui, face: theme::Typeface, on: bool) -> egui::Response 
 
 impl MassifApp {
     pub fn new(cc: &eframe::CreationContext<'_>, open: Option<PathBuf>) -> Self {
-        theme::install(&cc.egui_ctx);
+        // Each part written down in startup.log with the time it took, so
+        // that a start held up on a slow computer names it.
+        use crate::startup::timed;
+        timed("the fonts and the theme", || theme::install(&cc.egui_ctx));
         // eframe's copy first; the backup when a broken write lost it.
-        let backup = crate::settings_backup::SettingsBackup::installed();
+        let backup = timed("the settings' backup copy", crate::settings_backup::SettingsBackup::installed);
         let layout = cc
             .storage
             .and_then(|s| eframe::get_value::<Layout>(s, LAYOUT_KEY))
@@ -526,33 +534,35 @@ impl MassifApp {
         theme::set_accent(&cc.egui_ctx, settings.accent);
         crate::loader::set_pattern(&cc.egui_ctx, settings.loader);
         crate::icons::set_style(&cc.egui_ctx, settings.tool_icons);
-        theme::set_typeface(&cc.egui_ctx, settings.typeface);
-        let mut app = Self::with_world(default_world(), layout, tools, settings);
-        app.start_graphics(cc);
+        timed("the typeface chosen", || theme::set_typeface(&cc.egui_ctx, settings.typeface));
+        let world = timed("the map made up before one is opened", default_world);
+        let mut app = timed("the app's state", || Self::with_world(world, layout, tools, settings));
+        timed("the graphics card's share of the app", || app.start_graphics(cc));
         if let Some(render) = cc.storage.and_then(|s| eframe::get_value(s, "massif.render")).or_else(|| backup.get("massif.render")) {
             app.graph.view.render = render;
         }
         app.settings_backup = backup;
         app.unified_titlebar = cfg!(target_os = "macos");
         app.menus_in_menu_bar = crate::menubar::NATIVE;
-        app.brushes = BrushLibrary::installed();
-        app.brushes.load_in_background(&cc.egui_ctx);
-        app.blocks.load(&cc.egui_ctx, app.settings.minecraft_jar.clone(), app.settings.mod_jars.clone());
-        // What a run before left unsaved, offered first.
+        timed("the brushes, loading in the background", || {
+            app.brushes = BrushLibrary::installed();
+            app.brushes.load_in_background(&cc.egui_ctx);
+        });
+        timed("the game's blocks, loading in the background", || app.blocks.load(&cc.egui_ctx, app.settings.minecraft_jar.clone(), app.settings.mod_jars.clone()));
+        // What a run before left unsaved, offered first, once the folder
+        // is read (on a thread of its own).
         if let Some(dir) = crate::autosave::default_dir() {
-            app.autosave = crate::autosave::Autosave::open(dir);
-            if !app.autosave.found.is_empty() {
-                app.dialog = Some(Dialog::Recover);
-            }
+            app.autosave_opening = Some(crate::autosave::Autosave::open_in_background(&cc.egui_ctx, dir));
         }
         // Whether a newer version is out, asked off the main thread.
-        app.check_updates(&cc.egui_ctx);
+        timed("whether a newer version is out (asked in the background)", || app.check_updates(&cc.egui_ctx));
         // The first time Massif opens: the tour, once a map is open.
         app.tour_wanted = !app.settings.tour_done;
         // Tests keep away from the packs of this computer.
         if !cfg!(test) {
             app.layers_ui.library = crate::pack_share::PackLibrary::installed();
         }
+        crate::startup::step("the home screen");
         if let Some(path) = open.as_ref().filter(|p| crate::pack_share::is_pack_file(p)) {
             // A pack opened from the Finder or Explorer: into the packs,
             // from the home screen.
@@ -591,6 +601,28 @@ impl MassifApp {
                 }
             }
             Err(e) => self.say(ctx, tr!("That height map cannot be read: {e}", e), true, None),
+        }
+    }
+
+    /// The backups' folder, once read: what a run before left unsaved is
+    /// offered (unless a dialog is up: then once it closes).
+    fn poll_autosave_opening(&mut self) {
+        if let Some(rx) = &self.autosave_opening {
+            match rx.try_recv() {
+                Ok(opened) => {
+                    self.autosave_opening = None;
+                    // Until now the backups went nowhere (`Autosave::off`):
+                    // nothing of the one being replaced is lost.
+                    self.autosave = opened;
+                    self.offer_recovery = !self.autosave.found.is_empty();
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.autosave_opening = None,
+            }
+        }
+        if self.offer_recovery && self.dialog.is_none() {
+            self.offer_recovery = false;
+            self.dialog = Some(Dialog::Recover);
         }
     }
 
@@ -847,6 +879,8 @@ impl MassifApp {
             jobs: Vec::new(),
             dialog: None,
             autosave: crate::autosave::Autosave::off(),
+            autosave_opening: None,
+            offer_recovery: false,
             updates: crate::update::Updates::default(),
             dialog_was_open: false,
             analysis: None,
@@ -4401,6 +4435,7 @@ impl MassifApp {
         self.apply_access(&ctx);
         crate::sounds::configure(self.settings.sounds, self.settings.volume);
         step("the work done in the background (opening, saving, exporting)");
+        self.poll_autosave_opening();
         self.poll_jobs(&ctx);
         // A save point open read-only keeps as it is.
         if self.doc.take_back() {
@@ -6522,6 +6557,33 @@ mod tests {
             h.step();
         }
         eprintln!("idle frame: {:.2} ms", t.elapsed().as_secs_f32() * 1000.0 / 30.0);
+    }
+
+    /// A disk that takes seconds to read the backups' folder, and a network
+    /// that never answers about new versions, do not hold up the start:
+    /// the app is made and its first frames laid out at once (on a slow
+    /// Windows PC, a main thread held for 5 s is a window "not responding").
+    #[test]
+    fn a_slow_disk_or_network_does_not_hold_up_the_start() {
+        crate::autosave::TEST_SLOW_DISK.store(10_000, std::sync::atomic::Ordering::SeqCst);
+        crate::update::TEST_BLOCKED_NETWORK.store(30_000, std::sync::atomic::Ordering::SeqCst);
+        let started = std::time::Instant::now();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1280.0, 800.0))
+            .with_accessibility_check(false)
+            .build_eframe(|cc| {
+                let mut app = MassifApp::new(cc, None);
+                // Not the backups this computer has.
+                app.offer_recovery = false;
+                app
+            });
+        let made = started.elapsed();
+        h.run_steps(3);
+        let frames = started.elapsed();
+        assert!(h.state().autosave_opening.is_some(), "the backups' folder is still being read");
+        assert!(h.state().updates.waiting() || h.state().updates.latest.is_some() || !h.state().settings.check_updates, "GitHub is still being asked");
+        eprintln!("made in {:.0} ms, three frames in {:.0} ms", made.as_secs_f64() * 1000.0, frames.as_secs_f64() * 1000.0);
+        assert!(frames < std::time::Duration::from_secs(5), "the start waited on the disk or the network: {frames:?}");
     }
 
     /// The zoom buttons and keys glide: the zoom gets there over a few

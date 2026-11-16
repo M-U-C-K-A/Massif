@@ -849,8 +849,10 @@ impl Home {
             } else {
                 let (tx, rx) = channel();
                 let ctx = ui.ctx().clone();
+                // In the pool kept for loads, not the one the main thread
+                // draws with (see `in_loading_pool`).
                 let spawned = std::thread::Builder::new().name("massif home picture".into()).spawn(move || {
-                    let _ = tx.send(make());
+                    let _ = tx.send(crate::jobs::in_loading_pool(make));
                     ctx.request_repaint();
                 });
                 if spawned.is_ok() {
@@ -1300,7 +1302,7 @@ impl Home {
                 self.sample_drawing = Some(rx);
                 return self.sample_rows(ui, action);
             }
-            if std::thread::Builder::new().name("massif home samples".into()).spawn(draw).is_ok() {
+            if std::thread::Builder::new().name("massif home samples".into()).spawn(|| crate::jobs::in_loading_pool(draw)).is_ok() {
                 self.sample_drawing = Some(rx);
             }
         }
@@ -1531,7 +1533,7 @@ fn preview(ui: &mut Ui, nm: &mut NewMap, rect: Rect, in_frame: bool) {
             let reg = nm.registry.clone();
             let ctx = ui.ctx().clone();
             let spawned = std::thread::Builder::new().name("massif home preview".into()).spawn(move || {
-                let _ = tx.send(preview_image(&params, &reg, 200));
+                let _ = tx.send(crate::jobs::in_loading_pool(|| preview_image(&params, &reg, 200)));
                 ctx.request_repaint();
             });
             if spawned.is_ok() {
@@ -1590,7 +1592,7 @@ fn template_preview(ui: &mut Ui, nm: &mut NewMap, t: Template, rect: Rect) {
                 size: side,
                 n: 160,
             };
-            if let Some(image) = crate::graph_editor::template_picture(t, &reg, sea, &extent, None) {
+            if let Some(image) = crate::jobs::in_loading_pool(|| crate::graph_editor::template_picture(t, &reg, sea, &extent, None)) {
                 let _ = tx.send(image);
                 ctx.request_repaint();
             }
