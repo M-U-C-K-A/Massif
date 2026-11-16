@@ -257,6 +257,26 @@ impl History {
         self.commit();
     }
 
+    /// Put `dimension` in place of the map's dimension `dim` (the map made
+    /// another size, say), as one step to undo labelled `label`: undone, the
+    /// whole map is back as it was.
+    pub fn replace_dimension(&mut self, world: &mut World, dim: usize, dimension: Dimension, label: impl Into<String>) {
+        self.begin(label, dim);
+        // The map as it is, cold, to undo it.
+        let before = world.snapshot();
+        world.dims = before.dims;
+        let mut dims = world.dims.clone();
+        dims[dim] = dimension;
+        let whole = Whole {
+            meta: world.meta.clone(),
+            registry: world.registry.clone(),
+            dims,
+        };
+        let step = self.open.as_mut().expect("just begun");
+        step.whole = Some(Box::new(whole.swap(world)));
+        self.commit();
+    }
+
     pub fn clear(&mut self) {
         self.undo.clear();
         self.redo.clear();
@@ -608,6 +628,23 @@ mod tests {
         let mut w = World::new(WorldMeta::default());
         w.dims[0].ground_mut().insert(POS, Tile::ground(64.0, 1, 63));
         w
+    }
+
+    /// A dimension replaced by one of another size is one step: undone, the
+    /// map has its tiles and size back; redone, the new size again.
+    #[test]
+    fn a_dimension_replaced_comes_back_on_undo() {
+        let mut w = world();
+        let mut h = History::default();
+        let mut bigger = w.dims[0].snapshot();
+        bigger.resize(BlockRect::new(-128, -128, 256, 256), || Tile::ground(10.0, 0, -1));
+        h.replace_dimension(&mut w, 0, bigger, "resize");
+        assert_eq!(w.dims[0].ground().len(), 9);
+        assert_eq!(h.undo(&mut w).as_deref(), Some("resize"));
+        assert_eq!(w.dims[0].ground().len(), 1);
+        assert_eq!(w.dims[0].ground().view(POS).unwrap().top.get(0), 64.0);
+        h.redo(&mut w);
+        assert_eq!(w.dims[0].bounds(), Some((TilePos::new(-1, -1), TilePos::new(1, 1))));
     }
 
     /// Sculpture dropped with the ground it stood on comes back on undo.

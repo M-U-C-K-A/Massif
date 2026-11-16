@@ -5,7 +5,7 @@
 
 use crate::theme::{self, Icon, Palette, RichTextExt};
 use crate::tiles::{Place, TileStore, parse_coords};
-use crate::widgets::{Field, button_group, row, switch, well};
+use crate::widgets::{Field, Part, button_group, input_group, row, switch, well};
 use egui::{Color32, ColorImage, Rect, RichText, Sense, TextureHandle, TextureOptions, Ui, pos2, vec2};
 use massif_core::coords::BlockRect;
 use massif_core::heightmap::Heightmap;
@@ -92,6 +92,9 @@ pub struct RealJob {
     pub vertical: Vertical,
     pub source: Source,
     pub target: Target,
+    /// The whole map made these whole tiles first (see
+    /// [`massif_core::world::Dimension::resize`]); `None`: kept as it is.
+    pub resize: Option<BlockRect>,
 }
 
 impl std::fmt::Debug for RealJob {
@@ -112,6 +115,21 @@ pub enum Choice {
     Keep,
     Close,
     Make(Box<RealJob>),
+}
+
+/// What a tile of the map takes in memory, compressed (as the home screen
+/// reckons a new map's size).
+const TILE_BYTES: u64 = 12_000;
+/// The memory an import over the whole map works in besides the map: tiles
+/// decoded a batch at a time, and the heights read.
+const WORK_BYTES: u64 = 800 << 20;
+/// A side past which a map is large (and slower to make and to edit).
+const LARGE_SIDE: i32 = 16_384;
+
+/// A side typed made whole tiles of 128 blocks, within the sizes a real
+/// place may be.
+pub(crate) fn whole_tiles(v: i32) -> i32 {
+    ((v as f64 / 128.0).round() as i32 * 128).clamp(128, MAX_SIZE)
 }
 
 /// Samples a side of the preview.
@@ -137,6 +155,10 @@ pub struct RealForm {
     pub vertical: Vertical,
     pub file: Option<FileSource>,
     pub online: bool,
+    /// Over the whole map: whether it keeps its size, else the size it is
+    /// made, in blocks.
+    pub keep_size: bool,
+    pub new_size: (i32, i32),
     query: String,
     places: Vec<Place>,
     searching: Option<Receiver<Result<Vec<Place>, String>>>,
@@ -168,6 +190,8 @@ impl RealForm {
             vertical,
             file: None,
             online: true,
+            keep_size: true,
+            new_size: (area.width, area.depth),
             query: String::new(),
             places: Vec::new(),
             searching: None,
@@ -187,6 +211,22 @@ impl RealForm {
 
     fn new_world(&self) -> bool {
         self.target == Target::NewWorld
+    }
+
+    /// The map's bounds, when the relief goes over the whole of it (not
+    /// into a selection), the only case it may be made another size.
+    fn whole_map(&self) -> Option<BlockRect> {
+        match self.target {
+            Target::Map { rect, selected: false, .. } => Some(rect),
+            _ => None,
+        }
+    }
+
+    /// The map's new bounds, when it is made another size.
+    pub fn resize(&self) -> Option<BlockRect> {
+        let map = self.whole_map().filter(|_| !self.keep_size)?;
+        let rect = massif_core::world::resized_rect(map, self.new_size.0, self.new_size.1);
+        (rect != map).then_some(rect)
     }
 
     /// The heights the ground may take, `low..high`.
@@ -239,6 +279,7 @@ impl RealForm {
         let over = match self.target {
             Target::NewWorld => tr!("A world of {w} × {d} blocks, centred on the origin, its terrains painted by the automatic paint.", w, d),
             Target::Map { selected: true, .. } => tr!("Into the selection, by its weight ({w} × {d} blocks): its heights, its sea and the automatic paint; one step to undo.", w, d),
+            Target::Map { .. } if self.resize().is_some() => tr!("Over the whole map, made {w} × {d} blocks: its size, its heights, its sea and the automatic paint; one step to undo.", w, d),
             Target::Map { .. } => tr!("Over the whole map ({w} × {d} blocks): its heights, its sea and the automatic paint; one step to undo.", w, d),
         };
         ui.label(RichText::new(over).size(11.5).color(pal.weak));
@@ -270,6 +311,7 @@ impl RealForm {
                 _ => Source::Online,
             },
             target: self.target,
+            resize: self.resize(),
         }
     }
 
@@ -295,6 +337,11 @@ impl RealForm {
         if self.online {
             head(ui, tr!("Place"));
             well(ui, |ui| self.place_rows(ui));
+            ui.add_space(10.0);
+        }
+        if self.whole_map().is_some() {
+            head(ui, tr!("Map"));
+            well(ui, |ui| self.map_rows(ui));
             ui.add_space(10.0);
         }
         head(ui, tr!("Size and scale"));
@@ -466,6 +513,60 @@ impl RealForm {
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
             Err(_) => self.searching = None,
+        }
+    }
+
+    /// Over the whole map: what it loses, and the size it keeps or is
+    /// made, with what that takes.
+    fn map_rows(&mut self, ui: &mut Ui) {
+        let pal = Palette::of(ui);
+        let Some(map) = self.whole_map() else { return };
+        let note = |ui: &mut Ui, text: &str, colour: Color32| {
+            ui.add(egui::Label::new(RichText::new(text).size(11.0).color(colour)).wrap());
+        };
+        row(ui, tr!("Size"), |ui| {
+            if let Some(k) = button_group(ui, "real map size", &[tr!("Keep it"), tr!("Change it")], &[self.keep_size, !self.keep_size]) {
+                self.keep_size = k == 0;
+            }
+        });
+        if !self.keep_size {
+            let (mut w, mut d) = self.new_size;
+            row(ui, tr!("New size"), |ui| {
+                input_group(
+                    ui,
+                    "real map new size",
+                    &mut [
+                        Part::Snapped(&mut w, 128..=MAX_SIZE, 64.0, whole_tiles, tr!("whole tiles of 128 blocks")),
+                        Part::Text("×"),
+                        Part::Snapped(&mut d, 128..=MAX_SIZE, 64.0, whole_tiles, tr!("whole tiles of 128 blocks")),
+                        Part::Text(tr!("blocks")),
+                    ],
+                );
+            });
+            self.new_size = (w, d);
+        }
+        let rect = self.resize().unwrap_or(map);
+        (self.area.width, self.area.depth) = (rect.width(), rect.depth());
+        let (w, d) = (rect.width(), rect.depth());
+        let tiles = (w / massif_core::TILE_SIZE) as u64 * (d / massif_core::TILE_SIZE) as u64;
+        note(ui, tr!("The map's land is replaced: its heights, its water and its terrains, all over it."), pal.danger);
+        if self.keep_size {
+            note(ui, &tr!("{w} × {d} blocks, as it is.", w, d), pal.weak);
+            return;
+        }
+        let was = (map.width() / massif_core::TILE_SIZE) as u64 * (map.depth() / massif_core::TILE_SIZE) as u64;
+        let (x, z) = (rect.x0, rect.z0);
+        note(ui, &tr!("{w} × {d} blocks from {x}, {z}, around the map's middle: about {size} in memory.", w, d, x, z, size = crate::panels::human(tiles * TILE_BYTES)), pal.weak);
+        if w < map.width() || d < map.depth() {
+            note(ui, tr!("Painted biomes, covers and objects, the other levels and the sculpted ground stay where the new size covers the map; outside it they go."), pal.weak);
+        } else {
+            note(ui, tr!("Painted biomes, covers and objects, the other levels and the sculpted ground stay where they are."), pal.weak);
+        }
+        let needs = (tiles + was) * TILE_BYTES + WORK_BYTES;
+        match crate::report::ram_bytes() {
+            Some(ram) if needs > ram / 2 => note(ui, &tr!("This computer has {ram} of memory: a map this large may not fit, and Massif may slow down or close.", ram = crate::panels::human(ram)), pal.danger),
+            _ if w.max(d) > LARGE_SIDE => note(ui, tr!("A map this large takes a few minutes to make, and the editor is slower over it."), pal.weak),
+            _ => {}
         }
     }
 
@@ -798,6 +899,10 @@ fn ground_picture(s: &Samples, fit: &Fit, water: Color32) -> ColorImage {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+
+    /// Held by the tests that put tiles in the global store, one at a time:
+    /// the store keeps so many and forgets the oldest.
+    pub static STORE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// Tiles of a mountain by the sea around `area`, put in `store`: the
     /// sea to the west, a peak of 3000 m to the east.

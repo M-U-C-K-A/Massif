@@ -209,7 +209,7 @@ fn cpu_name() -> Option<String> {
     }
 }
 
-fn ram_bytes() -> Option<u64> {
+pub(crate) fn ram_bytes() -> Option<u64> {
     #[cfg(target_os = "macos")]
     {
         let mut v: u64 = 0;

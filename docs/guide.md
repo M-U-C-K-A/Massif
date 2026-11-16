@@ -1043,6 +1043,20 @@ A world, or a part of one, from the relief of a real place on the Earth.
   heights, puts the sea under the sea level (and takes it off the land
   above it) and paints the ground with the automatic paint; in the map it
   is one step to undo.
+- **Map size.** Over the whole map (no selection), the dialog's **Map**
+  section says plainly that the map's land is replaced, and its **Size**
+  can be kept or changed: **Change it** takes a new width and depth in
+  blocks, made whole tiles of 128 once typed, up to 32,768 a side. The
+  map is cut or grown around its middle, and the place's heights fill all
+  of it, new ground included. Painted biomes, covers and objects, the
+  other levels and the sculpted ground stay where the new size covers the
+  map, and go outside it. A note gives the size, where it starts and
+  about how much memory it takes, and warns of a map that will be slow
+  (over 16,384 blocks a side) or that may not fit in the computer's
+  memory. Size and relief are one step: undo puts the map back as it was,
+  size and all. (In the Terrain graph, **Size** beside Convert to voxels
+  sets how much of the world the terrain covers, the world growing to
+  it.)
 - **Source.** **Terrain Tiles** are the heights of the whole Earth, about
   30 m apart (finer where better data exists), ocean floors included,
   downloaded as needed. **A file** reads one you downloaded: a GeoTIFF

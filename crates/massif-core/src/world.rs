@@ -1,6 +1,9 @@
 //! Worlds and dimensions.
 
-use crate::coords::TilePos;
+use crate::coords::{BlockRect, TilePos, TILE_SIZE};
+use crate::tile::Tile;
+use crate::voxel::ChunkPos;
+use std::collections::HashSet;
 use crate::level::{Level, LevelId, LevelKind};
 use crate::registry::Registry;
 use serde::{Deserialize, Serialize};
@@ -191,6 +194,44 @@ impl Dimension {
             level.trim(max_hot);
         }
     }
+
+    /// Make the map the whole tiles of `rect`: the tiles of every level and
+    /// the sculpted chunks outside it dropped, the ground filled with
+    /// `blank` tiles where it has none inside it, the selection dropped.
+    /// Returns the ground tiles added.
+    pub fn resize(&mut self, rect: BlockRect, blank: impl Fn() -> Tile) -> Vec<TilePos> {
+        let inside: HashSet<TilePos> = rect.tiles().collect();
+        for level in &mut self.levels {
+            let out: Vec<TilePos> = level.positions().filter(|p| !inside.contains(p)).collect();
+            for pos in out {
+                level.remove(pos);
+            }
+        }
+        let out: Vec<ChunkPos> = self.voxels.iter().map(|(p, _)| p).filter(|p| !inside.contains(&p.tile())).collect();
+        for pos in out {
+            self.voxels.remove(pos);
+        }
+        self.selection = None;
+        let ground = self.ground_mut();
+        let added: Vec<TilePos> = rect.tiles().filter(|p| !ground.contains(*p)).collect();
+        for &pos in &added {
+            ground.insert(pos, blank());
+        }
+        added
+    }
+}
+
+/// `width × depth` blocks, made whole tiles, around the middle of `map`
+/// (itself on the bounds of tiles): what [`Dimension::resize`] takes to give
+/// a map that size while keeping its middle in place.
+pub fn resized_rect(map: BlockRect, width: i32, depth: i32) -> BlockRect {
+    let tiles = |blocks: i32| (blocks as f64 / TILE_SIZE as f64).round().max(1.0) as i32;
+    let (tx, tz) = (tiles(width), tiles(depth));
+    let (ox, oz) = (map.x0.div_euclid(TILE_SIZE), map.z0.div_euclid(TILE_SIZE));
+    let (ow, od) = (tiles(map.width()), tiles(map.depth()));
+    let x0 = ox + (ow - tx).div_euclid(2);
+    let z0 = oz + (od - tz).div_euclid(2);
+    BlockRect::new(x0 * TILE_SIZE, z0 * TILE_SIZE, (x0 + tx) * TILE_SIZE, (z0 + tz) * TILE_SIZE)
 }
 
 #[derive(Debug, Clone)]
@@ -255,5 +296,48 @@ mod tests {
         let ids: Vec<_> = d.levels.iter().map(|l| l.id.0).collect();
         assert_eq!(ids, vec![0, 2, 3]);
         assert_eq!(d.level_index(d.levels[c].id), Some(c));
+    }
+
+    /// A map of 4 × 2 tiles made 2 × 4 keeps its middle: the tiles out of
+    /// the new size go from every level, with the sculpture over them, and
+    /// the ground is filled where it grows.
+    #[test]
+    fn a_map_resized_keeps_its_middle() {
+        let mut d = Dimension::new(DimensionKind::Overworld, -64, 320);
+        let slab = d.add_level("Island", LevelKind::Solid);
+        for x in 0..4 {
+            for z in 0..2 {
+                d.ground_mut().insert(TilePos::new(x, z), Tile::ground(70.0, 1, -1));
+            }
+        }
+        d.levels[slab].insert(TilePos::new(0, 0), Tile::ground(90.0, 1, -1));
+        d.levels[slab].insert(TilePos::new(1, 1), Tile::ground(90.0, 1, -1));
+        let chunk = |x, z| ChunkPos::new(x * 8, 4, z * 8);
+        d.voxels.insert(chunk(0, 0), std::sync::Arc::new(crate::voxel::VoxelChunk::air()));
+        d.voxels.insert(chunk(2, 1), std::sync::Arc::new(crate::voxel::VoxelChunk::air()));
+        let map = BlockRect::new(0, 0, 4 * TILE_SIZE, 2 * TILE_SIZE);
+        let rect = resized_rect(map, 2 * TILE_SIZE, 4 * TILE_SIZE);
+        assert_eq!(rect, BlockRect::new(TILE_SIZE, -TILE_SIZE, 3 * TILE_SIZE, 3 * TILE_SIZE));
+        let added = d.resize(rect, || Tile::ground(10.0, 0, -1));
+        assert_eq!(added.len(), 4);
+        assert_eq!(d.bounds(), Some((TilePos::new(1, -1), TilePos::new(2, 2))));
+        assert_eq!(d.ground().len(), 8);
+        let slab_tiles: Vec<TilePos> = d.levels[slab].positions().collect();
+        assert_eq!(slab_tiles, vec![TilePos::new(1, 1)]);
+        let chunks: Vec<ChunkPos> = d.voxels.iter().map(|(p, _)| p).collect();
+        assert_eq!(chunks, vec![chunk(2, 1)]);
+    }
+
+    /// Sizes are made whole tiles, at least one; the same size keeps the
+    /// map where it is, an odd number of tiles more takes it to the west
+    /// and the north.
+    #[test]
+    fn resized_rects_are_whole_tiles() {
+        let map = BlockRect::new(-512, -256, 512, 256);
+        assert_eq!(resized_rect(map, 1024, 512), map);
+        assert_eq!(resized_rect(map, 1000, 530), map);
+        assert_eq!(resized_rect(map, 10, 10), BlockRect::new(-128, -128, 0, 0));
+        assert_eq!(resized_rect(map, 1152, 640), BlockRect::new(-640, -384, 512, 256));
+        assert_eq!(resized_rect(map, 32_768, 32_768).width(), 32_768);
     }
 }

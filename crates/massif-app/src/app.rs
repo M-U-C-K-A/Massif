@@ -2374,6 +2374,22 @@ impl MassifApp {
                         self.say(ctx, msg, false, None);
                     }
                 }
+                Outcome::RealMap { dimension, columns, revision, dim } => {
+                    if other_map || revision != self.doc.revision || dim != self.doc.dim {
+                        crate::sounds::play(Cue::Warning);
+                        self.say(ctx, tr!("Relief of a real place: {meanwhile}, nothing was done", meanwhile), true, None);
+                    } else {
+                        let rect = dimension.bounds().map(|(lo, hi)| ((hi.x - lo.x + 1) * massif_core::TILE_SIZE, (hi.z - lo.z + 1) * massif_core::TILE_SIZE));
+                        self.doc.replace_dimension(dim, *dimension, tr!("Real terrain"));
+                        self.map_cache.invalidate_all();
+                        self.view3d.invalidate_all();
+                        self.sculpt3d.invalidate_all();
+                        let (w, d) = rect.unwrap_or_default();
+                        let msg = tr!("Relief of a real place: the map is now {w} × {d} blocks, {columns} columns written in {secs:.1} s", w, d, columns, secs);
+                        self.task_done(ctx, Cue::Ready, tr!("Relief of a real place done"), &msg, secs);
+                        self.say(ctx, msg, false, None);
+                    }
+                }
                 Outcome::Caves { chunks, blocks, flooded, revision, dim } => {
                     let label = tr!("Caves");
                     if other_map || revision != self.doc.revision || dim != self.doc.dim {
@@ -6943,6 +6959,7 @@ mod tests {
     #[test]
     fn relief_of_a_real_place() {
         use egui_kittest::kittest::Queryable;
+        let _store = crate::real_terrain::tests::STORE.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
         let store = crate::tiles::TileStore::global();
         let wait_for_picture = |h: &mut egui_kittest::Harness<'static, MassifApp>| {
@@ -7042,6 +7059,150 @@ mod tests {
             h.run_steps(20);
             h.render().unwrap().save(dir.join("real-place-new-world.png")).unwrap();
         }
+    }
+
+    /// Edit ▸ Relief of a Real Place over the whole map, made another size
+    /// in the same dialog: narrower and deeper, around its middle. The map
+    /// takes the new size, its land replaced, a slab level's tile outside
+    /// the new size dropped and one inside it kept; one undo puts the map
+    /// back as it was, size and all, and redo makes it again. The dialog is
+    /// drawn keeping the size, changing it, and at the largest size (renders
+    /// with MASSIF_SNAPSHOT_DIR).
+    #[test]
+    fn relief_of_a_real_place_resizes_the_map() {
+        use egui_kittest::kittest::Queryable;
+        let _store = crate::real_terrain::tests::STORE.lock().unwrap_or_else(|e| e.into_inner());
+        use massif_core::{TILE_SIZE, TilePos};
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let store = crate::tiles::TileStore::global();
+        let size = |dim: &massif_core::world::Dimension| {
+            let (lo, hi) = dim.bounds().unwrap();
+            (lo, hi, (hi.x - lo.x + 1) * TILE_SIZE, (hi.z - lo.z + 1) * TILE_SIZE)
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let (lo, hi, w, d) = size(h.state().doc.dimension());
+        assert!(w >= 512, "a map to narrow: {w}");
+        // A slab level with a tile at the west edge (dropped) and one in
+        // the middle (kept).
+        let (west, middle) = (TilePos::new(lo.x, (lo.z + hi.z) / 2), TilePos::new((lo.x + hi.x) / 2, (lo.z + hi.z) / 2));
+        {
+            let doc = &mut h.state_mut().doc;
+            let slab = doc.world.dims[doc.dim].add_level("Island", massif_core::level::LevelKind::Solid);
+            for pos in [west, middle] {
+                doc.world.dims[doc.dim].levels[slab].insert(pos, massif_core::tile::Tile::ground(200.0, 1, massif_core::tile::NO_FLUID));
+            }
+            doc.mark_changed();
+        }
+        h.run_steps(2);
+        let before = h.state_mut().doc.world.snapshot();
+        h.state_mut().open_real(false);
+        let (new_w, new_d) = (w - 2 * TILE_SIZE, d + 2 * TILE_SIZE);
+        let area = {
+            let Some(Dialog::Real(form)) = &mut h.state_mut().dialog else { panic!("the dialog opens") };
+            assert!(form.keep_size && form.resize().is_none(), "the size is kept by default");
+            form.area.blocks_per_metre = 0.02;
+            form.area
+        };
+        crate::real_terrain::tests::seed_store(&store, &area);
+        let started = std::time::Instant::now();
+        while !matches!(&h.state().dialog, Some(Dialog::Real(form)) if form.has_picture()) {
+            assert!(started.elapsed().as_secs() < 30, "no preview");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.run_steps(3);
+        let shot = |h: &mut egui_kittest::Harness<'static, MassifApp>, name: &str| {
+            if let Some(dir) = &dir {
+                h.run_steps(3);
+                h.render().unwrap().save(dir.join(format!("dialog-real-terrain-{name}.png"))).unwrap();
+            }
+        };
+        shot(&mut h, "keep-size");
+        // At the largest size a real place may be.
+        if let Some(Dialog::Real(form)) = &mut h.state_mut().dialog {
+            form.keep_size = false;
+            form.new_size = (massif_core::real::MAX_SIZE, massif_core::real::MAX_SIZE);
+        }
+        h.run_steps(2);
+        if let Some(Dialog::Real(form)) = &h.state().dialog {
+            let rect = form.resize().expect("a new size");
+            assert_eq!((rect.width(), rect.depth()), (32_768, 32_768));
+            assert_eq!((form.area.width, form.area.depth), (32_768, 32_768), "the area follows the size");
+        }
+        shot(&mut h, "largest");
+        if let Some(Dialog::Real(form)) = &mut h.state_mut().dialog {
+            form.new_size = (new_w, new_d);
+        }
+        h.run_steps(2);
+        if let Some(Dialog::Real(form)) = &h.state().dialog {
+            crate::real_terrain::tests::seed_store(&store, &form.area);
+        }
+        shot(&mut h, "new-size");
+        h.get_by_label("Apply").click();
+        h.run_steps(2);
+        let started = std::time::Instant::now();
+        while !h.state().jobs.is_empty() {
+            assert!(started.elapsed().as_secs() < 120, "the job timed out");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        h.run_steps(3);
+        assert_eq!(h.state().doc.history.undo_label(), Some("Real terrain"), "{:?}", h.state().status.as_ref().map(|s| s.text.clone()));
+        let expected = massif_core::world::resized_rect(massif_core::coords::BlockRect::new(lo.x * TILE_SIZE, lo.z * TILE_SIZE, (hi.x + 1) * TILE_SIZE, (hi.z + 1) * TILE_SIZE), new_w, new_d);
+        let check_resized = |h: &egui_kittest::Harness<'static, MassifApp>| {
+            let dim = h.state().doc.dimension();
+            let (nlo, _, nw, nd) = size(dim);
+            assert_eq!((nw, nd), (new_w, new_d));
+            assert_eq!((nlo.x * TILE_SIZE, nlo.z * TILE_SIZE), (expected.x0, expected.z0), "around the middle");
+            assert_eq!(dim.ground().len() as i32, (new_w / TILE_SIZE) * (new_d / TILE_SIZE), "every tile of the new size");
+            assert!(!dim.levels[1].contains(west) && dim.levels[1].contains(middle), "the slab cropped to the new size");
+            assert!(dim.selection.is_none());
+        };
+        check_resized(&h);
+        // The new ground has the place's heights, not the blank it began as.
+        {
+            let dim = h.state().doc.dimension();
+            let (nlo, nhi, ..) = size(dim);
+            let corner = massif_core::TileStack::new(dim, nhi, false).unwrap();
+            let far = massif_core::TileStack::new(dim, nlo, false).unwrap();
+            let (a, b) = (corner.ground().top.get(0), far.ground().top.get(massif_core::TILE_AREA - 1));
+            assert!(a != b, "the new tiles are written: {a} {b}");
+        }
+        if let Some(dir) = &dir {
+            h.run_steps(20);
+            h.render().unwrap().save(dir.join("real-terrain-resized-map.png")).unwrap();
+        }
+        let ctx = h.ctx.clone();
+        h.state_mut().undo(&ctx);
+        h.run_steps(2);
+        assert_eq!(h.state().doc.history.undo_label(), None, "one undo takes it back");
+        {
+            let dim = h.state().doc.dimension();
+            assert_eq!((size(dim).2, size(dim).3), (w, d), "the old size back");
+            assert_eq!(dim.ground().len(), before.dims[0].ground().len());
+            assert!(dim.levels[1].contains(west) && dim.levels[1].contains(middle));
+            let pos = before.dims[0].ground().positions().next().unwrap();
+            let stack = massif_core::TileStack::new(dim, pos, false).unwrap();
+            let old = massif_core::TileStack::new(&before.dims[0], pos, false).unwrap();
+            assert_eq!(stack.ground().top.get(77), old.ground().top.get(77), "the old heights back");
+        }
+        h.state_mut().redo(&ctx);
+        h.run_steps(2);
+        check_resized(&h);
+    }
+
+    /// The sizes typed for the map are whole tiles of 128 blocks, from one
+    /// tile to the largest real place.
+    #[test]
+    fn a_map_size_typed_is_whole_tiles_within_the_limits() {
+        use crate::real_terrain::whole_tiles;
+        assert_eq!(whole_tiles(1000), 1024);
+        assert_eq!(whole_tiles(1100), 1152);
+        assert_eq!(whole_tiles(5), 128);
+        assert_eq!(whole_tiles(-40), 128);
+        assert_eq!(whole_tiles(40_000), massif_core::real::MAX_SIZE);
+        assert_eq!(massif_core::real::MAX_SIZE, 32_768);
     }
 
     /// Edit ▸ Analyse the map: the survival check reads the whole map in

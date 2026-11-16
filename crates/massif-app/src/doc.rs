@@ -343,6 +343,13 @@ impl Document {
         Some(name)
     }
 
+    /// Put `dimension` in place of dimension `dim` (the map made another
+    /// size), as one step to undo named `label`.
+    pub fn replace_dimension(&mut self, dim: usize, dimension: massif_core::world::Dimension, label: &str) {
+        self.history.replace_dimension(&mut self.world, dim, dimension, label);
+        self.after_history();
+    }
+
     /// Take back every change made to a map open read-only. Returns whether
     /// there was one.
     pub fn take_back(&mut self) -> bool {

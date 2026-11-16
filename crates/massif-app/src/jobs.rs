@@ -91,6 +91,14 @@ pub enum Outcome {
         revision: u64,
         dim: usize,
     },
+    /// The same, the map made another size first: the whole dimension, to
+    /// put in place of the map's in one undoable step.
+    RealMap {
+        dimension: Box<massif_core::world::Dimension>,
+        columns: usize,
+        revision: u64,
+        dim: usize,
+    },
     Failed(String),
     Cancelled,
 }
@@ -465,7 +473,9 @@ impl Job {
             p.step.store(1, Relaxed);
             let mut samples = Samples::read(&area, source.as_ref(), spacing(&area, data_metres));
             drop(source);
-            if snapshot.is_none() {
+            // A map made another size has new ground with nothing on it:
+            // the heights fill it all, data or not.
+            if snapshot.is_none() || job.resize.is_some() {
                 samples.fill_gaps();
             }
             let Some(span) = samples.span() else {
@@ -494,10 +504,15 @@ impl Job {
                     Outcome::World { world, path: None }
                 }
                 Some(mut snapshot) => {
-                    let rect = match job.target {
-                        crate::real_terrain::Target::Map { rect, .. } => rect,
-                        crate::real_terrain::Target::NewWorld => unreachable!("a snapshot is of a map"),
+                    let rect = match (job.target, job.resize) {
+                        (crate::real_terrain::Target::Map { .. }, Some(rect)) => rect,
+                        (crate::real_terrain::Target::Map { rect, .. }, None) => rect,
+                        (crate::real_terrain::Target::NewWorld, _) => unreachable!("a snapshot is of a map"),
                     };
+                    if job.resize.is_some() {
+                        let ground = fit.sea.floor();
+                        snapshot.dims[dim].resize(rect, || massif_core::tile::Tile::ground(ground, 0, massif_core::tile::NO_FLUID));
+                    }
                     let mut history = massif_core::history::History::new(1);
                     history.begin(tr!("real terrain"), dim);
                     let written = massif_core::real::write_ground(&mut history.edit(&mut snapshot, 0), &samples, &fit, rect, &p.pass);
@@ -510,6 +525,14 @@ impl Job {
                     drop(history);
                     if painted.cancelled {
                         return Outcome::Cancelled;
+                    }
+                    if job.resize.is_some() {
+                        return Outcome::RealMap {
+                            dimension: Box::new(snapshot.dims[dim].snapshot()),
+                            columns: written.columns,
+                            revision,
+                            dim,
+                        };
                     }
                     let mut changed = written.tiles;
                     changed.extend(painted.tiles);
