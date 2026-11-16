@@ -60,3 +60,37 @@ Mojang's EULA: it only starts one with `--accept-eula`.
 ```bash
 tools/minecraft_check.py --world my.massif --version 1.21.11 --minecraft "<game folder>" --accept-eula
 ```
+
+### Chunks in each version's own format
+
+From 1.18.2 on, every chunk carries the data version of the version
+exported for, and holds only blocks and biomes that version has, under its
+names (`massif_anvil::version`: `blocks.txt` dates every block from 1.18.2
+to 26.3, read from the client jars' `assets/minecraft/blockstates` and the
+wiki's version pages; renames come from the game's data fixers). The game
+then loads the chunks without upgrading them. To list the blocks or biomes
+of an installed version:
+
+```bash
+unzip -Z1 "<versions folder>/1.21.11/1.21.11.jar" 'assets/minecraft/blockstates/*' | sed 's#.*/##;s#\.json##'
+```
+
+`chunks_are_each_versions_own` (in `crates/massif-anvil/tests/export.rs`)
+exports a map of blocks and biomes added or renamed since 1.18.2 for every
+release from 1.18.2 to 26.3, reads each chunk back with `fastnbt` and
+`fastanvil`, and checks its data version, status, keys, and that each block
+and biome is one the version has, as it names it.
+
+To check one in the game by hand:
+
+1. Export a map for the version (a small one, or **Test Export**), with
+   cherry or pale oak trees, short grass and a cherry grove in it.
+2. Open the world in that version of Minecraft. A world converted from an
+   older version asks to make a backup first: an export from 1.18.2 on
+   still does, as its `level.dat` is written in 1.18.2's shape (the
+   chunks are not converted).
+3. In the game, F3 shows the biome under the player; the blocks should be
+   those the version has.
+4. Quit, and look in `logs/latest.log` of the game folder for lines with
+   `Recoverable errors when loading section`, `Unknown registry key`,
+   `Failed to read` or `Couldn't load chunk`: there should be none.

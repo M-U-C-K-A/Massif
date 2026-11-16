@@ -2055,6 +2055,7 @@ dependencies = [
  "fastanvil",
  "fastnbt",
  "flate2",
+ "libc",
  "massif-core",
  "rayon",
  "thiserror 2.0.21",

@@ -12,7 +12,6 @@ pub mod nbt;
 pub mod region;
 pub mod version;
 
-pub use chunk::{DATA_VERSION, DATA_VERSION_NAME};
 pub use export::{
     ExportError, ExportOptions, ExportStats, Progress, default_saves_dir, export, unique_dir,
 };

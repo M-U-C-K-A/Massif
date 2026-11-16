@@ -11,6 +11,14 @@
 //! - up to 1.12: numbered blocks, with the light of the sky worked out.
 //!
 //! From 1.14 on, light is left for the game to compute (`isLightOn: 0`).
+//!
+//! Every chunk carries the data version of the version written for, so the
+//! game loads it as its own, without upgrading it. From 1.18 on it holds
+//! what the game itself writes for a finished chunk but for what the game
+//! works out exactly when it is missing: the heightmaps (made on load, as
+//! `primeHeightmaps` does for any a chunk lacks), the light and the lists of
+//! blocks to update after loading. Blending data and the `UpgradeData` are
+//! only for chunks of older versions, and are left out as the game does.
 
 use crate::nbt::{NbtWriter, TagType};
 use crate::version::{Era, Target};
@@ -19,12 +27,6 @@ use massif_core::coords::{BlockRect, TilePos, cell_index};
 use massif_core::objects::Placement;
 use massif_core::registry::{BlockDef, Registry, is_soil, is_tall_plant};
 use massif_core::world::{Dimension, World};
-
-/// Data version stamped on chunks and `level.dat`: Minecraft 1.18.2, the
-/// oldest release with this chunk layout. Newer versions upgrade the data
-/// automatically when they load it.
-pub const DATA_VERSION: i32 = 2975;
-pub const DATA_VERSION_NAME: &str = "1.18.2";
 
 const SECTION_VOLUME: usize = 4096;
 const UNSET: u16 = u16::MAX;
@@ -134,7 +136,9 @@ impl<'a> ExportContext<'a> {
             .blocks
             .iter()
             .map(|b| {
-                let (name, kept) = target.block(b.name());
+                // The ground cannot have holes: stone for a block the
+                // version has nothing like.
+                let (name, kept) = target.block_or(b.name(), "minecraft:stone");
                 let props = if kept { b.properties().map(|(k, v)| (k.to_owned(), v.to_owned())).collect() } else { Vec::new() };
                 (name.to_owned(), props)
             })
@@ -270,7 +274,9 @@ impl<'a> ExportContext<'a> {
         }
         let mut hosts: Vec<u8> = reg.blocks.iter().map(|b| massif_core::ores::host_of(&b.state).map_or(0, |h| 1 + (h == massif_core::ores::Host::Deepslate) as u8)).collect();
         hosts.resize(states.len(), 0);
-        let reach = if used.is_empty() { 0 } else { massif_core::objects::max_reach(reg) };
+        // At least 1 with objects: 0 means none, and an object one block wide
+        // reaches no further than its anchor.
+        let reach = if used.is_empty() { 0 } else { massif_core::objects::max_reach(reg).max(1) };
         let soil = reg.blocks.iter().map(|b| is_soil(b.name())).collect();
         let biomes: Vec<String> = reg
             .biomes
@@ -279,7 +285,7 @@ impl<'a> ExportContext<'a> {
                 if b.id.is_empty() {
                     "minecraft:plains".to_owned()
                 } else {
-                    b.id.clone()
+                    target.biome(&b.id).to_owned()
                 }
             })
             .collect();

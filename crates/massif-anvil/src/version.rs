@@ -13,6 +13,16 @@
 //! A world written for a version only uses what that version knows: blocks
 //! and biomes that came later are replaced by the closest older ones.
 //! (1.13 is left out: it lights chunks in a way later versions dropped.)
+//!
+//! From 1.18 on, a chunk is written as the version itself writes it, its
+//! data version its own, so that the game loads it without upgrading it:
+//! the shape of chunks has not changed since (the keys of 26.3's
+//! `SerializableChunkData` are 1.18's), only the names of blocks and
+//! biomes have. Every block of every release from 1.18.2 to 26.3 is listed
+//! with the release that brought it (`blocks.txt`, from the client jars and
+//! the wiki), and so is every biome: a block or a biome the version does not
+//! have becomes the closest it has, and blocks renamed since (grass, chain)
+//! take the name the version knows.
 
 /// How a version stores its chunks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,8 +52,10 @@ pub struct Target {
 /// these are read from the game itself when it is installed.
 pub const RELEASES: &[(&str, i32)] = &[
     ("26.3", 5023),
+    ("26.2", 4903),
     ("26.1.2", 4790),
     ("26.1.1", 4788),
+    ("26.1", 4786),
     ("1.21.11", 4671),
     ("1.21.10", 4556),
     ("1.21.9", 4554),
@@ -173,6 +185,8 @@ impl Target {
     pub fn pack_format(&self) -> i32 {
         // From the data version on: the format.
         const FORMATS: &[(i32, i32)] = &[
+            (5023, 121),
+            (4786, 101),
             (4671, 94),
             (4554, 88),
             (4438, 81),
@@ -216,23 +230,97 @@ impl Target {
     /// block the version has. The second value is whether its properties
     /// still apply.
     pub fn block<'a>(&self, name: &'a str) -> (&'a str, bool) {
+        self.block_or(name, "minecraft:air")
+    }
+
+    /// [`Self::block`], with `unknown` for a block the version has nothing
+    /// like (from 1.18 on, where every block of every release is known).
+    pub fn block_or<'a>(&self, name: &'a str, unknown: &'a str) -> (&'a str, bool) {
         let mut current = name;
         let mut kept = true;
+        // A block renamed since goes by its new name in the versions after.
+        if let Some(short) = name.strip_prefix("minecraft:")
+            && let Some(&(_, new, since)) = RENAMED_BLOCKS.iter().find(|r| r.0 == short)
+            && self.data_version >= since
+        {
+            current = new;
+        }
         // Follow the replacements until one exists in this version.
         for _ in 0..6 {
             let short = current.strip_prefix("minecraft:").unwrap_or(current);
             match NEWER_BLOCKS.iter().find(|b| b.0 == short) {
                 Some(&(_, since, older)) if self.data_version < since => {
                     // Wood for wood and leaves for leaves keep their axis
-                    // and their persistence.
-                    let same = ["_log", "_leaves"].iter().any(|k| short.ends_with(k) && older.ends_with(k));
+                    // and their persistence, and a block its properties
+                    // under its old name.
+                    let renamed = RENAMED_BLOCKS.iter().any(|r| older.strip_prefix("minecraft:") == Some(r.0) && r.1.strip_prefix("minecraft:") == Some(short));
+                    let same = renamed || ["_log", "_leaves"].iter().any(|k| short.ends_with(k) && older.ends_with(k));
                     current = older;
                     kept &= same;
                 }
                 _ => break,
             }
         }
-        (current, kept)
+        if !self.lists_blocks() {
+            return (current, kept);
+        }
+        let Some(short) = current.strip_prefix("minecraft:") else {
+            // Blocks of mods are the mod's business.
+            return (current, kept);
+        };
+        if self.has_block(short) {
+            return (current, kept);
+        }
+        // A wood the version lacks: the same thing of the closest wood.
+        for (wood, older) in OLDER_WOODS {
+            if short.contains(wood) {
+                let alike = short.replacen(wood, older, 1);
+                if let Some((&name, _)) = blocks().get_key_value(alike.as_str())
+                    && self.has_block(name)
+                {
+                    return (qualified(name), kept);
+                }
+            }
+        }
+        (unknown, false)
+    }
+
+    /// Whether every block and biome of the version is known: from 1.18 to
+    /// the newest release listed.
+    fn lists_blocks(&self) -> bool {
+        self.era() == Era::Modern && self.data_version <= NEWEST_LISTED
+    }
+
+    /// Whether the version has a block, by its id without `minecraft:`
+    /// (from 1.18 on).
+    pub fn has_block(&self, short: &str) -> bool {
+        if let Some(r) = RENAMED_BLOCKS.iter().find(|r| r.0 == short) {
+            return self.data_version < r.2;
+        }
+        blocks().get(short).is_some_and(|&since| since <= self.data_version)
+    }
+
+    /// The biome a version writes for `id`: itself, or from 1.18 on the
+    /// closest biome the version has (plains for one it has nothing like).
+    pub fn biome<'a>(&self, id: &'a str) -> &'a str {
+        if !self.lists_blocks() {
+            return id;
+        }
+        let mut current = id;
+        for _ in 0..4 {
+            let Some(short) = current.strip_prefix("minecraft:") else {
+                return current;
+            };
+            if BIOMES_1_18_2.contains(&short) {
+                return current;
+            }
+            match NEWER_BIOMES.iter().find(|b| b.0 == short) {
+                Some(&(_, since, _)) if self.data_version >= since => return current,
+                Some(&(_, _, older)) => current = older,
+                None => break,
+            }
+        }
+        "minecraft:plains"
     }
 
     /// The number and data of a block before 1.13: those of the closest
@@ -290,6 +378,58 @@ impl Target {
         }
     }
 }
+
+/// The newest release whose blocks and biomes are all listed.
+const NEWEST_LISTED: i32 = 5023;
+
+/// Every block from 1.18.2 on, by its id without `minecraft:`, with the
+/// data version that brought it (0 for those of 1.18.2).
+fn blocks() -> &'static std::collections::HashMap<&'static str, i32> {
+    static BLOCKS: std::sync::OnceLock<std::collections::HashMap<&'static str, i32>> = std::sync::OnceLock::new();
+    BLOCKS.get_or_init(|| {
+        include_str!("blocks.txt")
+            .lines()
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .map(|l| match l.split_once(' ') {
+                Some((name, since)) => (name, since.parse().expect("a data version")),
+                None => (l, 0),
+            })
+            .collect()
+    })
+}
+
+/// `minecraft:` and a block of the list.
+fn qualified(short: &'static str) -> &'static str {
+    static NAMES: std::sync::OnceLock<std::collections::HashMap<&'static str, &'static str>> = std::sync::OnceLock::new();
+    NAMES.get_or_init(|| blocks().keys().map(|&k| (k, &*format!("minecraft:{k}").leak())).collect())[short]
+}
+
+/// Blocks renamed since 1.18.2: the old name, the new one and the data
+/// version of the release that renamed them (from the game's own data
+/// fixers: "Rename grass block to short_grass", "Rename chain to
+/// iron_chain").
+const RENAMED_BLOCKS: &[(&str, &str, i32)] = &[("grass", "minecraft:short_grass", 3698), ("chain", "minecraft:iron_chain", 4554)];
+
+/// Woods a version may not have yet, and the closest older wood: its logs,
+/// planks, stairs and the rest stand for theirs.
+const OLDER_WOODS: [(&str, &str); 5] = [("pale_oak_", "dark_oak_"), ("cherry_", "birch_"), ("mangrove_", "oak_"), ("bamboo_", "oak_"), ("poplar_", "birch_")];
+
+/// The biomes of 1.18.2.
+const BIOMES_1_18_2: [&str; 61] = [
+    "badlands", "bamboo_jungle", "basalt_deltas", "beach", "birch_forest", "cold_ocean", "crimson_forest", "dark_forest", "deep_cold_ocean", "deep_frozen_ocean", "deep_lukewarm_ocean", "deep_ocean", "desert", "dripstone_caves", "end_barrens", "end_highlands", "end_midlands", "eroded_badlands", "flower_forest", "forest", "frozen_ocean", "frozen_peaks", "frozen_river", "grove", "ice_spikes", "jagged_peaks", "jungle", "lukewarm_ocean", "lush_caves", "meadow", "mushroom_fields", "nether_wastes", "ocean", "old_growth_birch_forest", "old_growth_pine_taiga", "old_growth_spruce_taiga", "plains", "river", "savanna", "savanna_plateau", "small_end_islands", "snowy_beach", "snowy_plains", "snowy_slopes", "snowy_taiga", "soul_sand_valley", "sparse_jungle", "stony_peaks", "stony_shore", "sunflower_plains", "swamp", "taiga", "the_end", "the_void", "warm_ocean", "warped_forest", "windswept_forest", "windswept_gravelly_hills", "windswept_hills", "windswept_savanna", "wooded_badlands",
+];
+
+/// Biomes that came after 1.18.2 (from the client jars' worldgen data and
+/// the wiki), the data version that brought them and the closest older
+/// biome.
+const NEWER_BIOMES: &[(&str, i32, &str)] = &[
+    ("mangrove_swamp", 3105, "minecraft:swamp"),
+    ("deep_dark", 3105, "minecraft:dripstone_caves"),
+    ("cherry_grove", 3463, "minecraft:meadow"),
+    ("pale_garden", 4189, "minecraft:dark_forest"),
+    ("sulfur_caves", 4903, "minecraft:dripstone_caves"),
+    ("dappled_forest", 5023, "minecraft:forest"),
+];
 
 /// Blocks that came after 1.14, the data version that brought them, and
 /// the older block closest to them. (And the plants that came with 1.13
@@ -361,10 +501,10 @@ const NEWER_BLOCKS: &[(&str, i32, &str)] = &[
     ("mangrove_propagule", 3105, "minecraft:oak_sapling"),
     ("mangrove_log", 3105, "minecraft:oak_log"),
     ("mangrove_leaves", 3105, "minecraft:oak_leaves"),
-    // 1.19.4 and 1.20
-    ("pink_petals", 3337, "minecraft:pink_tulip"),
-    ("cherry_log", 3337, "minecraft:birch_log"),
-    ("cherry_leaves", 3337, "minecraft:birch_leaves"),
+    // 1.20 (1.19.4 had them only as an experiment)
+    ("pink_petals", 3463, "minecraft:pink_tulip"),
+    ("cherry_log", 3463, "minecraft:birch_log"),
+    ("cherry_leaves", 3463, "minecraft:birch_leaves"),
     ("torchflower", 3463, "minecraft:dandelion"),
     ("pitcher_plant", 3463, "minecraft:rose_bush"),
     // 1.20.3: grass the plant took a new name.
@@ -386,6 +526,14 @@ const NEWER_BLOCKS: &[(&str, i32, &str)] = &[
     ("leaf_litter", 4325, "minecraft:air"),
     ("wildflowers", 4325, "minecraft:pink_petals"),
     ("cactus_flower", 4325, "minecraft:air"),
+    // 1.21.9: chain took a new name.
+    ("iron_chain", 4554, "minecraft:chain"),
+    // 26.1, 26.3
+    ("golden_dandelion", 4786, "minecraft:dandelion"),
+    ("orange_poplar_leaves", 5023, "minecraft:birch_leaves"),
+    ("red_poplar_leaves", 5023, "minecraft:birch_leaves"),
+    ("yellow_poplar_leaves", 5023, "minecraft:birch_leaves"),
+    ("red_shrub", 5023, "minecraft:dead_bush"),
 ];
 
 /// The sixteen colours, in the order of their numbers before 1.13.
@@ -632,7 +780,7 @@ mod tests {
         assert_eq!(v("1.12.2").numbered("minecraft:moss_carpet"), (171, 13));
         assert_eq!(v("1.12.2").numbered_known("minecraft:seagrass"), Some((0, 0)));
         assert_eq!(v("1.12.2").numbered_known("minecraft:spore_blossom"), None);
-        assert_eq!(v("1.20.2").block("minecraft:short_grass"), ("minecraft:grass", false));
+        assert_eq!(v("1.20.2").block("minecraft:short_grass"), ("minecraft:grass", true));
         assert_eq!(v("1.20.4").block("minecraft:short_grass"), ("minecraft:short_grass", true));
         assert_eq!(v("1.21.4").block("minecraft:bush"), ("minecraft:short_grass", false));
         assert_eq!(v("1.19.2").block("minecraft:bush"), ("minecraft:grass", false));
@@ -645,6 +793,71 @@ mod tests {
         assert_eq!(v("1.12.2").numbered("minecraft:red_sandstone"), (179, 0));
         assert_eq!(v("1.7.10").numbered("minecraft:red_sandstone"), (24, 0));
         assert_eq!(v("1.12.2").numbered("minecraft:some_block_of_the_future"), (1, 0));
+    }
+
+    #[test]
+    fn modern_versions_know_their_blocks_and_biomes() {
+        let v = |name: &str| Target::release(name).unwrap();
+        assert!(!v("1.18.2").has_block("mud") && v("1.19").has_block("mud"));
+        assert!(v("1.21.8").has_block("chain") && !v("1.21.8").has_block("iron_chain"));
+        assert!(!v("1.21.9").has_block("chain") && v("1.21.9").has_block("iron_chain"));
+        assert!(!v("1.20.2").has_block("short_grass") && v("1.20.2").has_block("grass") && !v("1.20.3").has_block("grass"));
+        assert!(!v("1.20.6").has_block("crafter") && v("1.21").has_block("crafter"));
+        assert!(!v("26.1.2").has_block("sulfur") && v("26.2").has_block("sulfur") && !v("26.2").has_block("poplar_log"));
+        // Renamed blocks go by the version's name, their properties kept.
+        assert_eq!(v("1.21.11").block("minecraft:grass"), ("minecraft:short_grass", true));
+        assert_eq!(v("1.21.11").block("minecraft:chain"), ("minecraft:iron_chain", true));
+        assert_eq!(v("1.21.8").block("minecraft:iron_chain"), ("minecraft:chain", true));
+        assert_eq!(v("1.21.8").block("minecraft:chain"), ("minecraft:chain", true));
+        // A wood the version lacks is the closest wood it has.
+        assert_eq!(v("1.21.1").block("minecraft:pale_oak_planks"), ("minecraft:dark_oak_planks", true));
+        assert_eq!(v("1.19.4").block("minecraft:stripped_cherry_log"), ("minecraft:stripped_birch_log", true));
+        assert_eq!(v("1.21.11").block("minecraft:poplar_fence"), ("minecraft:birch_fence", true));
+        assert_eq!(v("1.18.2").block("minecraft:mangrove_planks"), ("minecraft:oak_planks", true));
+        // Nothing alike: left out, or stone in the ground.
+        assert_eq!(v("1.21.11").block("minecraft:sulfur"), ("minecraft:air", false));
+        assert_eq!(v("1.21.11").block_or("minecraft:sulfur", "minecraft:stone"), ("minecraft:stone", false));
+        assert_eq!(v("1.21.11").block("minecraft:bamboo_mosaic"), ("minecraft:bamboo_mosaic", true));
+        assert_eq!(v("1.19.4").block("minecraft:bamboo_mosaic"), ("minecraft:air", false));
+        assert_eq!(v("26.3").block("minecraft:sulfur"), ("minecraft:sulfur", true));
+        // Blocks of mods, and versions newer than the lists, as they are.
+        assert_eq!(v("1.18.2").block("create:andesite_casing"), ("create:andesite_casing", true));
+        assert_eq!(Target::installed("26.4", 5200).block("minecraft:something_new"), ("minecraft:something_new", true));
+        // Biomes.
+        assert_eq!(v("1.18.2").biome("minecraft:mangrove_swamp"), "minecraft:swamp");
+        assert_eq!(v("1.19").biome("minecraft:mangrove_swamp"), "minecraft:mangrove_swamp");
+        assert_eq!(v("1.19.4").biome("minecraft:cherry_grove"), "minecraft:meadow");
+        assert_eq!(v("1.20").biome("minecraft:cherry_grove"), "minecraft:cherry_grove");
+        assert_eq!(v("1.21.1").biome("minecraft:pale_garden"), "minecraft:dark_forest");
+        assert_eq!(v("1.21.11").biome("minecraft:sulfur_caves"), "minecraft:dripstone_caves");
+        assert_eq!(v("26.2").biome("minecraft:dappled_forest"), "minecraft:forest");
+        assert_eq!(v("1.21.11").biome("minecraft:no_such_biome"), "minecraft:plains");
+        assert_eq!(v("1.16.5").biome("minecraft:cherry_grove"), "minecraft:cherry_grove");
+    }
+
+    /// For every release from 1.18.2 on, every block of every release is
+    /// written as one the version has (or left out), and so is every biome.
+    #[test]
+    fn every_block_becomes_one_the_version_has() {
+        for target in Target::releases().into_iter().filter(|t| t.lists_blocks()) {
+            for (&short, &since) in blocks() {
+                assert!(since <= NEWEST_LISTED && since == 0 || since > LEVEL_FORMAT.1, "{short} {since}");
+                let name = format!("minecraft:{short}");
+                let (got, _) = target.block(&name);
+                let got = got.strip_prefix("minecraft:").unwrap();
+                assert!(got == "air" || target.has_block(got), "{}: {short} became {got}", target.name);
+            }
+            for &(old, ..) in RENAMED_BLOCKS {
+                let old = format!("minecraft:{old}");
+                let (got, kept) = target.block(&old);
+                assert!(kept && target.has_block(got.strip_prefix("minecraft:").unwrap()), "{}: {old} became {got}", target.name);
+            }
+            for id in BIOMES_1_18_2.iter().chain(NEWER_BIOMES.iter().map(|b| &b.0)) {
+                let got = target.biome(&format!("minecraft:{id}")).strip_prefix("minecraft:").unwrap().to_owned();
+                let since = NEWER_BIOMES.iter().find(|b| b.0 == got).map_or(0, |b| b.1);
+                assert!(BIOMES_1_18_2.contains(&got.as_str()) || since <= target.data_version, "{}: {id} became {got}", target.name);
+            }
+        }
     }
 
     #[test]

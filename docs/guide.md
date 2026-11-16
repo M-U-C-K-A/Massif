@@ -320,6 +320,19 @@ above 255, and the dialog says so. **Test Export** writes only the 3 × 3
 tiles around the centre of the map view to a separate folder, to check the
 result in the game quickly.
 
+The versions offered go from 1.7.10 to 26.3, and every newer game
+installed on the computer. From 1.18.2 on (1.19, 1.20, 1.21 up to 1.21.11,
+26.1, 26.2, 26.3), the chunks are written as that version writes them
+itself, with its own data version: the game opens them as they are,
+without converting them first, so the first load is quicker and nothing is
+lost in a conversion. A block or a biome the version does not have yet
+becomes the closest one it has — a cherry or pale oak log a birch or dark
+oak log, a cherry grove a meadow, a pale garden a dark forest; a block
+with nothing alike is left out of trees and plants, and is stone in the
+ground — and a block renamed since takes the version's name (short grass
+is grass before 1.20.3, an iron chain a chain before 1.21.9). Blocks of
+mods are written as they are.
+
 ## Survival check
 
 **Edit ▸ Analyse the map…** checks the whole map for a survival game. Every

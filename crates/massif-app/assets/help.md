@@ -28,6 +28,7 @@ The picture behind the home screen changes each time Massif opens, the ones not 
 ## Saving and exporting
 - `⌘S` saves the map as a `.massif` file. The Finder and Explorer show the map as the file's picture.
 - `⌘E` exports to Minecraft: the saves folder, the world's name, the version of the game, its rules, its border and data packs.
+- From 1.18.2 to 26.3, the chunks are written as that version writes them itself: it opens the world without converting it. Blocks and biomes the version does not have yet become the closest ones it has (a cherry log a birch log, a pale garden a dark forest); renamed blocks take the version's name (short grass is grass before 1.20.3).
 - **Test Export…** writes only the 3 × 3 tiles around the middle of the map view to a separate world, to check the result in the game quickly.
 
 ## Autosave

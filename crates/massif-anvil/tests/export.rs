@@ -1203,3 +1203,166 @@ fn save_points_leave_the_export_unchanged() {
     std::fs::remove_dir_all(&dir).unwrap();
     std::fs::remove_dir_all(&plain).unwrap();
 }
+
+/// A map of things later versions added or renamed: ground of mud (1.19),
+/// tuff bricks (1.21), pale moss (1.21.4) and sulfur (26.2); plants under
+/// grass's old name, pink petals (1.20), leaf litter (1.21.5) and golden
+/// dandelions (26.1); posts of chain (renamed iron chain in 1.21.9), cherry
+/// planks and poplar logs (26.3); cherry groves and pale gardens.
+fn newer_world() -> World {
+    let mut w = generate(&GenParams {
+        tiles_x: 2,
+        tiles_z: 2,
+        landform: Landform::Hills,
+        seed: 7,
+        ..GenParams::default()
+    });
+    w.meta.ores.on = false;
+    let reg = &mut w.registry;
+    let ground: Vec<_> = ["minecraft:mud", "minecraft:tuff_bricks", "minecraft:pale_moss_block", "minecraft:sulfur"].iter().map(|b| (reg.intern_block(b, [90; 3]), 1)).collect();
+    let mut terrain = reg.terrains[reg.terrain_by_name("Grass").unwrap().index()].clone();
+    terrain.name = "Newer ground".into();
+    terrain.strata = vec![massif_core::registry::Stratum { blocks: ground, depth: (3, 3), mix: Default::default() }];
+    terrain.submerged_top = None;
+    reg.terrains.push(terrain);
+    let terrain = TerrainId((reg.terrains.len() - 1) as _);
+    let mut plants = CoverDef::new(
+        "Newer plants",
+        [0; 3],
+        &[("minecraft:grass", 1), ("minecraft:pink_petals[facing=north,flower_amount=2]", 1), ("minecraft:leaf_litter[facing=east,segment_amount=1]", 1), ("minecraft:golden_dandelion", 1)],
+        1.0,
+    );
+    plants.soil_only = false;
+    let plants = reg.add_cover(plants);
+    let k = reg.objects.len() as u32;
+    let palette = ["minecraft:air", "minecraft:chain[axis=y,waterlogged=false]", "minecraft:cherry_planks", "minecraft:poplar_log[axis=y]"].map(str::to_owned).to_vec();
+    reg.objects.push(ObjectDef::new("Posts", [1, 3, 1], palette, vec![2, 1, 3]));
+    let mut layer = ObjectLayerDef::new("Posts", &[k], reg);
+    layer.spacing = 6;
+    layer.density = 1.0;
+    layer.soil_only = false;
+    let posts = reg.add_object_layer(layer);
+    let (cherry, pale) = (reg.biome_by_id("minecraft:cherry_grove").unwrap(), reg.biome_by_id("minecraft:pale_garden").unwrap());
+    let mut h = History::default();
+    h.begin("newer", 0);
+    {
+        let mut e = h.edit(&mut w, 0);
+        ops::set_height(&mut e, &hard(200.0), 0.0, 0.0, 90.0, Surface::Top);
+        ops::paint_terrain(&mut e, &hard(200.0), 0.0, 0.0, terrain, 1);
+        ops::paint_cover(&mut e, &hard(200.0), 0.0, 0.0, plants, 2);
+        ops::paint_objects(&mut e, &hard(40.0), 0.0, 0.0, posts, 3);
+        ops::paint_biome(&mut e, &hard(40.0), -64.0, -64.0, cherry, 4);
+        ops::paint_biome(&mut e, &hard(40.0), 64.0, 64.0, pale, 5);
+    }
+    h.commit();
+    w
+}
+
+/// Every chunk's NBT as fastnbt reads it, every region read whole.
+fn chunk_values(dir: &Path) -> Vec<HashMap<String, fastnbt::Value>> {
+    let mut chunks = Vec::new();
+    for entry in std::fs::read_dir(dir.join("region")).unwrap() {
+        let mut region = Region::from_stream(std::fs::File::open(entry.unwrap().path()).unwrap()).unwrap();
+        for c in region.iter() {
+            let c = c.unwrap();
+            // An independent reader takes it as a chunk of today's shape.
+            assert!(matches!(JavaChunk::from_bytes(&c.data).unwrap(), JavaChunk::Post18(_)));
+            let fastnbt::Value::Compound(root) = fastnbt::from_bytes(&c.data).unwrap() else { panic!("a chunk is a compound") };
+            chunks.push(root);
+        }
+    }
+    chunks
+}
+
+/// From 1.18.2 to 26.3, each version gets chunks as it writes them itself:
+/// its own data version and status, the keys it reads, and only blocks and
+/// biomes it has, under the names it gives them, so the game loads them
+/// without upgrading anything.
+#[test]
+fn chunks_are_each_versions_own() {
+    let mut world = newer_world();
+    let snapshot = world.snapshot();
+    let versions = ["1.18.2", "1.19.2", "1.19.4", "1.20.1", "1.20.4", "1.20.6", "1.21.1", "1.21.4", "1.21.5", "1.21.8", "1.21.11", "26.1.2", "26.2", "26.3"];
+    for name in versions {
+        let target = Target::release(name).unwrap();
+        let dir = temp_dir(&format!("native-{name}"));
+        let options = ExportOptions { target: target.clone(), ..ExportOptions::default() };
+        export(&snapshot, &dir, &options, &Progress::default()).unwrap();
+        let chunks = chunk_values(&dir);
+        assert_eq!(chunks.len(), 256, "{name}");
+        let mut blocks: HashMap<String, String> = HashMap::new();
+        let mut biomes = std::collections::BTreeSet::new();
+        for chunk in &chunks {
+            let mut keys: Vec<&str> = chunk.keys().map(String::as_str).collect();
+            keys.sort();
+            assert_eq!(
+                keys,
+                ["DataVersion", "Heightmaps", "InhabitedTime", "LastUpdate", "Status", "block_entities", "block_ticks", "fluid_ticks", "isLightOn", "sections", "structures", "xPos", "yPos", "zPos"],
+                "{name}"
+            );
+            assert_eq!(chunk["DataVersion"], fastnbt::Value::Int(target.data_version), "{name}");
+            assert_eq!(chunk["Status"], fastnbt::Value::String(target.full_status().into()), "{name}");
+            let fastnbt::Value::List(sections) = &chunk["sections"] else { panic!("{name}: sections") };
+            for section in sections {
+                let fastnbt::Value::Compound(section) = section else { panic!() };
+                let (fastnbt::Value::Compound(states), fastnbt::Value::Compound(biome)) = (&section["block_states"], &section["biomes"]) else { panic!() };
+                let fastnbt::Value::List(palette) = &states["palette"] else { panic!() };
+                for entry in palette {
+                    let fastnbt::Value::Compound(entry) = entry else { panic!() };
+                    let fastnbt::Value::String(id) = &entry["Name"] else { panic!() };
+                    let props = match entry.get("Properties") {
+                        Some(fastnbt::Value::Compound(p)) => {
+                            let mut p: Vec<String> = p.iter().map(|(k, v)| format!("{k}={}", match v { fastnbt::Value::String(s) => s.as_str(), _ => panic!() })).collect();
+                            p.sort();
+                            p.join(",")
+                        }
+                        _ => String::new(),
+                    };
+                    blocks.insert(id.clone(), props);
+                }
+                let fastnbt::Value::List(palette) = &biome["palette"] else { panic!() };
+                for id in palette {
+                    let fastnbt::Value::String(id) = id else { panic!() };
+                    biomes.insert(id.clone());
+                }
+            }
+        }
+        // Nothing the version lacks.
+        for id in blocks.keys() {
+            let short = id.strip_prefix("minecraft:").unwrap_or_else(|| panic!("{name}: {id}"));
+            assert!(target.has_block(short), "{name} has no {id}");
+        }
+        for id in &biomes {
+            assert_eq!(target.biome(id), id, "{name} has no {id}");
+        }
+        // Each thing as the version knows it.
+        let has = |id: &str| blocks.contains_key(&format!("minecraft:{id}"));
+        let at_least = |since: &str| target.data_version >= Target::release(since).unwrap().data_version;
+        assert_eq!(has("mud"), at_least("1.19"), "{name}");
+        assert_eq!(has("coarse_dirt"), !at_least("1.19"), "{name}: mud before 1.19");
+        assert_eq!(has("tuff_bricks"), at_least("1.21"), "{name}");
+        assert_eq!(has("pale_moss_block"), at_least("1.21.4"), "{name}");
+        assert_eq!(has("moss_block"), !at_least("1.21.4"), "{name}: pale moss before 1.21.4");
+        assert_eq!(has("sulfur"), at_least("26.2"), "{name}");
+        assert!(has("stone"), "{name}");
+        assert_eq!(has("short_grass"), at_least("1.20.3"), "{name}");
+        assert_eq!(has("grass"), !at_least("1.20.3"), "{name}");
+        assert_eq!(has("pink_petals"), at_least("1.20"), "{name}");
+        assert_eq!(has("leaf_litter"), at_least("1.21.5"), "{name}");
+        assert_eq!(has("golden_dandelion"), at_least("26.1"), "{name}");
+        assert_eq!(has("dandelion"), !at_least("26.1"), "{name}");
+        let chain = if at_least("1.21.9") { "iron_chain" } else { "chain" };
+        assert_eq!(blocks.get(&format!("minecraft:{chain}")).map(String::as_str), Some("axis=y,waterlogged=false"), "{name}: {chain}");
+        assert_eq!(has("cherry_planks"), at_least("1.20"), "{name}");
+        assert_eq!(has("birch_planks"), !at_least("1.20"), "{name}: cherry before 1.20");
+        assert_eq!(has("poplar_log"), at_least("26.3"), "{name}");
+        if !at_least("26.3") {
+            assert_eq!(blocks.get("minecraft:birch_log").map(String::as_str), Some("axis=y"), "{name}: poplar before 26.3");
+        }
+        assert_eq!(biomes.contains("minecraft:cherry_grove"), at_least("1.20"), "{name}");
+        assert_eq!(biomes.contains("minecraft:meadow"), !at_least("1.20"), "{name}");
+        assert_eq!(biomes.contains("minecraft:pale_garden"), at_least("1.21.4"), "{name}");
+        assert_eq!(biomes.contains("minecraft:dark_forest"), !at_least("1.21.4"), "{name}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}

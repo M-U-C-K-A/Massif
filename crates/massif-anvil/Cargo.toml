@@ -15,3 +15,4 @@ thiserror.workspace = true
 [dev-dependencies]
 fastanvil = { version = "0.32", default-features = false }
 fastnbt = "2.6"
+libc = "0.2"
