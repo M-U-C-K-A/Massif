@@ -694,7 +694,7 @@ pub fn moved_lately(ctx: &egui::Context) -> bool {
 /// What one batch of [`MapCache::update`] holds at most: chunks to draw,
 /// and tiles to read that are not read yet.
 const BATCH_CHUNKS: usize = 6;
-const BATCH_TILES: usize = 32;
+const BATCH_TILES_PER_THREAD: usize = 8;
 
 /// Whether a cache of column data holds a tile.
 trait Contains {
@@ -899,6 +899,7 @@ pub struct MapCache {
     pub max_grids: usize,
     /// Chunk textures kept around (64 KiB each).
     pub max_chunks: usize,
+    busy: bool,
 }
 
 impl Default for MapCache {
@@ -911,6 +912,7 @@ impl Default for MapCache {
             chunks: HashMap::new(),
             max_grids: 384,
             max_chunks: 1400,
+            busy: false,
         }
     }
 }
@@ -1001,6 +1003,21 @@ impl MapCache {
         wanted: &[ChunkKey],
         budget: Duration,
     ) -> bool {
+        self.busy = self.build(ctx, dim, reg, sea, style, wanted, budget);
+        self.busy
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        &mut self,
+        ctx: &egui::Context,
+        dim: &Dimension,
+        reg: &Registry,
+        sea: f32,
+        style: MapStyle,
+        wanted: &[ChunkKey],
+        budget: Duration,
+    ) -> bool {
         let started = Instant::now();
         let todo: Vec<ChunkKey> = wanted
             .iter()
@@ -1013,38 +1030,52 @@ impl MapCache {
         let colorizer = Colorizer::new(reg, style, sea);
         let ground = dim.ground();
         let mut cursor = 0;
+        // The chunk whose tiles are being read: the tiles it needs, and those
+        // still to read.
+        let mut current: Option<(usize, Vec<TilePos>, Vec<TilePos>)> = None;
+        let capacity = BATCH_TILES_PER_THREAD * rayon::current_num_threads().max(1);
         while cursor < todo.len() {
             if started.elapsed() > budget {
                 return true;
             }
-            // A batch: the tiles still to read for the next chunks, at most
-            // BATCH_TILES of them, and the chunks whose tiles are then all
-            // read, at most BATCH_CHUNKS — a few milliseconds on every core,
-            // so that the frame keeps to its budget. A chunk that needs more
-            // tiles than a batch holds has them read over several batches,
-            // and is drawn once they all are.
+            // A batch: the tiles still to read for the next chunks, about a
+            // third of a millisecond of reading for each thread, and the
+            // chunks whose tiles are then all read, at most BATCH_CHUNKS, so
+            // that the frame keeps to its budget. A chunk that needs more
+            // tiles than a batch holds has them read over several batches
+            // (worked out once), and is drawn once they all are.
             self.clock += 1;
             let clock = self.clock;
             let (mut fine_reads, mut coarse_reads): (HashSet<TilePos>, HashSet<TilePos>) = (HashSet::new(), HashSet::new());
             let mut batch = Vec::new();
-            while cursor < todo.len() && batch.len() < BATCH_CHUNKS {
+            let mut room = capacity;
+            while cursor < todo.len() && batch.len() < BATCH_CHUNKS && room > 0 {
                 let key = todo[cursor];
                 let fine = key.lod <= GRID_LODS;
-                let mut needed = HashSet::new();
-                key.needed_tiles(&mut needed);
-                needed.retain(|t| ground.contains(*t));
-                let room = BATCH_TILES.saturating_sub(fine_reads.len() + coarse_reads.len());
-                let (cached, reads) = if fine { (&self.grids as &dyn Contains, &mut fine_reads) } else { (&self.summaries as &dyn Contains, &mut coarse_reads) };
-                let fresh: Vec<TilePos> = needed.iter().copied().filter(|t| !cached.has(t) && !reads.contains(t)).collect();
-                if fresh.len() > room {
-                    if batch.is_empty() {
-                        reads.extend(fresh.into_iter().take(room.max(1)));
+                let (needed, fresh) = match &mut current {
+                    Some((at, needed, fresh)) if *at == cursor => (needed, fresh),
+                    _ => {
+                        let mut needed = HashSet::new();
+                        key.needed_tiles(&mut needed);
+                        let needed: Vec<TilePos> = needed.into_iter().filter(|t| ground.contains(*t)).collect();
+                        let cached = if fine { &self.grids as &dyn Contains } else { &self.summaries as &dyn Contains };
+                        let fresh = needed.iter().copied().filter(|t| !cached.has(t)).collect();
+                        let (_, needed, fresh) = current.insert((cursor, needed, fresh));
+                        (needed, fresh)
                     }
+                };
+                let reads = if fine { &mut fine_reads } else { &mut coarse_reads };
+                fresh.retain(|t| !reads.contains(t));
+                // A grid takes about twice the time of a summary.
+                let cost = if fine { 2 } else { 1 };
+                let take = fresh.len().min(room / cost);
+                reads.extend(fresh.drain(fresh.len() - take..));
+                room -= take * cost;
+                if !fresh.is_empty() {
                     break;
                 }
-                reads.extend(fresh);
                 if fine {
-                    for t in &needed {
+                    for t in needed.iter() {
                         if let Some(e) = self.grids.get_mut(t) {
                             e.used = clock;
                         }
@@ -1052,6 +1083,7 @@ impl MapCache {
                 }
                 batch.push(key);
                 cursor += 1;
+                current = None;
             }
             // Column data first, read in parallel.
             if !fine_reads.is_empty() {
@@ -1131,6 +1163,11 @@ impl MapCache {
         for (_, k) in by_age.iter().take(self.chunks.len() - self.max_chunks) {
             self.chunks.remove(k);
         }
+    }
+
+    /// Whether the last update left chunks to build.
+    pub fn busy(&self) -> bool {
+        self.busy
     }
 
     pub fn stats(&self) -> (usize, usize, usize) {
@@ -1365,5 +1402,30 @@ mod tests {
         assert_eq!(k.blocks(), 1024);
         assert_eq!(k.origin(), (-2048, 1024));
         assert_eq!(k.parent(), ChunkKey { lod: 4, x: -1, z: 0 });
+    }
+
+    /// What reading a huge map's tiles for the map view costs, one thread
+    /// (MASSIF_HUGE_WORLD: a .massif): a summary and a grid of columns a
+    /// tile, best of three over tiles spread over the map.
+    #[test]
+    fn reading_a_huge_map() {
+        let Some(path) = std::env::var_os("MASSIF_HUGE_WORLD") else { return };
+        let world = massif_format::load(std::path::Path::new(&path)).unwrap();
+        let dim = &world.dims[0];
+        let tiles: Vec<TilePos> = dim.ground().positions().step_by(97).take(500).collect();
+        let time = |f: &dyn Fn(TilePos)| {
+            (0..3)
+                .map(|_| {
+                    let t = Instant::now();
+                    for &p in &tiles {
+                        f(p);
+                    }
+                    t.elapsed().as_secs_f64() * 1000.0 / tiles.len() as f64
+                })
+                .fold(f64::MAX, f64::min)
+        };
+        eprintln!("{} tiles: summary {:.3} ms a tile", tiles.len(), time(&|p| drop(Summary::build(dim, p))));
+        eprintln!("grid {:.3} ms a tile", time(&|p| drop(SurfaceGrid::build(dim, p))));
+        eprintln!("decode only {:.3} ms a tile", time(&|p| drop(TileStack::new(dim, p, false))));
     }
 }

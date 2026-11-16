@@ -5259,6 +5259,26 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         h.state_mut().dialog = None;
+        // MASSIF_MAP_ONLY: the map view alone, without the 3D view beside it
+        // building the map at the same time.
+        if std::env::var_os("MASSIF_MAP_ONLY").is_some() {
+            let id = h.state().active_map.or_else(|| h.state().maps.keys().next().copied()).expect("a map view");
+            h.state_mut().layout.current_mut().maximized = Some(id);
+        }
+        // The whole map drawn: frames, time and the processor's time.
+        let (started, cpu) = (std::time::Instant::now(), crate::devtools::cpu_time().unwrap_or_default());
+        let mut frames = 0;
+        h.step();
+        while h.state().map_cache.busy() && frames < 5000 {
+            h.step();
+            frames += 1;
+        }
+        eprintln!(
+            "whole map drawn in {frames} frames, {:.2} s, CPU {:.2} s; {:?} (images, grids, summaries)",
+            started.elapsed().as_secs_f32(),
+            (crate::devtools::cpu_time().unwrap_or_default() - cpu).as_secs_f32(),
+            h.state().map_cache.stats()
+        );
         h.run_steps(30);
         type H = egui_kittest::Harness<'static, MassifApp>;
         // The work of a frame (the interface, what it builds, what it sends
@@ -5279,10 +5299,13 @@ mod tests {
         let run = |h: &mut H, name: &str, frames: usize, change: &dyn Fn(&mut MassifApp)| {
             let base = still(h);
             let (mut work, mut draw) = (Vec::new(), Vec::new());
+            let mut cpu = std::time::Duration::ZERO;
             for _ in 0..frames {
                 change(h.state_mut());
                 let started = std::time::Instant::now();
+                let before = crate::devtools::cpu_time().unwrap_or_default();
                 h.step();
+                cpu += crate::devtools::cpu_time().unwrap_or_default().saturating_sub(before);
                 work.push(started.elapsed().as_secs_f32() * 1000.0);
                 let started = std::time::Instant::now();
                 let _ = h.render();
@@ -5293,13 +5316,19 @@ mod tests {
                 let mean = v.iter().sum::<f32>() / v.len() as f32;
                 (mean, v[(v.len() * 95 / 100).min(v.len() - 1)], *v.last().unwrap())
             };
+            // The processor's time of a frame's work, every thread.
+            let cpu = cpu.as_secs_f32() * 1000.0 / frames as f32;
             let (w, d) = (stats(&mut work), stats(&mut draw));
             eprintln!(
-                "{name}: work mean {:.1} p95 {:.1} max {:.1} ms · drawing mean {:.1} p95 {:.1} max {:.1} ms (still frame {base:.1} ms)",
+                "{name}: work mean {:.1} p95 {:.1} max {:.1} ms · drawing mean {:.1} p95 {:.1} max {:.1} ms (still frame {base:.1} ms) · CPU {cpu:.1} ms a frame",
                 w.0, w.1, w.2, d.0, d.1, d.2
             );
         };
         let id = h.state().active_map.or_else(|| h.state().maps.keys().next().copied()).expect("a map view");
+        run(&mut h, "map, whole, panning", 60, &|app| {
+            let view = app.maps.get_mut(&id).unwrap();
+            view.center[0] += 6.0 / view.zoom as f64;
+        });
         run(&mut h, "map, zooming in", 50, &|app| app.maps.get_mut(&id).unwrap().zoom_by(1.07));
         run(&mut h, "map, panning", 120, &|app| {
             let view = app.maps.get_mut(&id).unwrap();
@@ -5307,6 +5336,21 @@ mod tests {
             view.center[1] += 10.0 / view.zoom as f64;
         });
         run(&mut h, "map, zooming out", 70, &|app| app.maps.get_mut(&id).unwrap().zoom_by(1.0 / 1.07));
+        // At rest on the whole map: whether frames are still asked for.
+        h.run_steps(60);
+        let mut asked = 0;
+        for _ in 0..120 {
+            h.step();
+            asked += h.ctx.requested_repaint_last_pass_for(&h.ctx.viewport_id()) as usize;
+        }
+        eprintln!("map at rest: {asked} of 120 frames asked for another; repaint causes {:?}", h.ctx.repaint_causes());
+        eprintln!("memory in use: {} MB", crate::devtools::memory_in_use().unwrap_or(0) >> 20);
+        for (what, size, note) in h.state().dev_info().keeps {
+            eprintln!("  {what}: {size} ({note})");
+        }
+        if std::env::var_os("MASSIF_MOVE_2D").is_some() {
+            return;
+        }
         // The 3D view: everything built, then turning, then moving, drawn
         // smaller while it moves, as in the app.
         h.state_mut().layout.active = 3;
