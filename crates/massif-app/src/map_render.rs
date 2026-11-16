@@ -462,7 +462,7 @@ impl<'a> Colorizer<'a> {
             light: light_vector(style.light),
             terrain: reg.terrains.iter().map(|t| rgb(t.color)).collect(),
             biome: reg.biomes.iter().map(|b| rgb(b.color)).collect(),
-            covers: reg.covers.iter().map(|c| (!c.removed).then(|| c.clone())).collect(),
+            covers: reg.covers.iter().map(|c| (!c.removed && !c.hidden).then(|| c.clone())).collect(),
             soil: reg
                 .terrains
                 .iter()
@@ -799,7 +799,7 @@ fn build_chunk(key: ChunkKey, sources: &Sources, colorizer: &Colorizer) -> Color
 /// asked of the same grid as the export, from the columns the map knows.
 fn draw_objects(key: ChunkKey, sources: &Sources, colorizer: &Colorizer, pixels: &mut [Color32]) {
     let reg = colorizer.reg;
-    if key.lod > 2 || colorizer.style.mode == MapMode::Slope || !reg.object_layers.iter().any(|l| !l.removed && !l.objects.is_empty()) {
+    if key.lod > 2 || colorizer.style.mode == MapMode::Slope || !reg.object_layers.iter().any(|l| !l.removed && !l.hidden && !l.objects.is_empty()) {
         return;
     }
     let lod = key.lod as i64;
@@ -809,7 +809,7 @@ fn draw_objects(key: ChunkKey, sources: &Sources, colorizer: &Colorizer, pixels:
     let seed = colorizer.style.seed as u64;
     let mut placed = Vec::new();
     for (k, layer) in reg.object_layers.iter().enumerate() {
-        if layer.removed || layer.objects.is_empty() {
+        if layer.removed || layer.hidden || layer.objects.is_empty() {
             continue;
         }
         let n = k as u16 + 1;

@@ -194,7 +194,7 @@ fn object_runs(dim: &Dimension, s: Standing, x0: i32, z0: i32, w: usize, d: usiz
     use massif_core::objects::{max_reach, tile_placements};
     let mut runs: Vec<Vec<ObjectRun>> = vec![Vec::new(); w * d];
     let reg = s.reg;
-    if !reg.object_layers.iter().any(|l| !l.removed && !l.objects.is_empty()) {
+    if !reg.object_layers.iter().any(|l| !l.removed && !l.hidden && !l.objects.is_empty()) {
         return runs;
     }
     let bases = object_bases(reg);
@@ -204,7 +204,7 @@ fn object_runs(dim: &Dimension, s: Standing, x0: i32, z0: i32, w: usize, d: usiz
     for t in area.expand(max_reach(reg)).tiles() {
         let Some(stack) = TileStack::new(dim, t, false) else { continue };
         for p in tile_placements(reg, &mat, s.seed as u64, s.lava, &stack, t) {
-            if reg.objects.get(p.object as usize).is_some_and(|def| !p.bounds(def).intersect(&area).is_empty()) {
+            if reg.object_layer(p.layer).is_some_and(|l| !l.hidden) && reg.objects.get(p.object as usize).is_some_and(|def| !p.bounds(def).intersect(&area).is_empty()) {
                 placed.push(p);
             }
         }
@@ -452,6 +452,7 @@ impl Colors<'_> {
                 let bare = self.block(block);
                 let mut top = bare;
                 if let Some(def) = self.reg.cover(cover)
+                    && !def.hidden
                     && def.underwater == wet
                     && !(wet && self.lava)
                     && (!def.soil_only || massif_core::registry::is_soil(&self.reg.block(block).state))

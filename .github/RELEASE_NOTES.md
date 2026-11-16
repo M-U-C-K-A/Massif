@@ -2,6 +2,8 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 
 ## New in 0.5.2
 
+**A Layers panel.** WorldPainter's custom layers have been in Massif as ground covers (plants, flowers, any blocks), object layers (trees and rocks from schematics) and terrain mixes (noise painting), but their lists were tucked inside the settings of their tools. The new **Layers** panel, under Terrain, lists them all: click one to paint with it, double-click to rename it, click its eye to hide it on the map and in the 3D view (the export still writes it), right-click to duplicate or remove it, and add new ones from its sections. Layouts saved by earlier versions get the panel under their Terrain panel.
+
 **The menus only in the Mac's menu bar.** On a Mac, File, Edit, View and Help are now only in the menu bar at the top of the screen, where 0.5.1 put them: the window's top bar no longer shows them a second time, and keeps its buttons (new, open, save, export, undo, redo and the tools). On Windows and Linux the menus stay in the window.
 
 **Quitting from the Dock asks first.** On a Mac, **Quit** in Massif's menu in the Dock, Q in the app switcher (⌘Tab), and a logout, a restart or a shut-down no longer drop the changes to the map that are not saved: Massif comes to the front and asks first, as **Quit Massif** (⌘Q) does. A logout, a restart or a shut-down waits for the answer: Save or Don't Save, and it goes on once Massif has quit; Cancel, and it stops there. With nothing to save, Massif quits at once, as before.

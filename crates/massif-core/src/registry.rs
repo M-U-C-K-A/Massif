@@ -149,6 +149,15 @@ pub struct CoverDef {
     /// Removed: no longer offered, and nothing grows where it was painted.
     #[serde(default)]
     pub removed: bool,
+    /// Left off the map and the 3D view, to see the ground under it; the
+    /// export writes it all the same.
+    #[serde(default, skip_serializing_if = "crate::registry::is_false")]
+    pub hidden: bool,
+}
+
+/// For `skip_serializing_if`: a flag left off is not written.
+pub fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 fn one_high() -> [u8; 2] {
@@ -232,6 +241,7 @@ impl CoverDef {
             soil_only: true,
             underwater: false,
             removed: false,
+            hidden: false,
         }
     }
 

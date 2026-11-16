@@ -25,6 +25,9 @@ pub enum EditorKind {
     /// Every real block of the game, to paint.
     Blocks,
     Biomes,
+    /// Ground covers, object layers and terrain mixes, as WorldPainter's
+    /// layers: to paint, show, hide, rename and remove.
+    Layers,
     Levels,
     Info,
     /// The terrain graph (procedural generation and erosion).
@@ -61,7 +64,7 @@ impl EditorKind {
                 EditorKind::BrushSettings,
             ],
         )],
-        &[("Paint", &[EditorKind::Terrain, EditorKind::Blocks, EditorKind::Biomes, EditorKind::Levels])],
+        &[("Paint", &[EditorKind::Terrain, EditorKind::Layers, EditorKind::Blocks, EditorKind::Biomes, EditorKind::Levels])],
         &[(
             "Terrain",
             &[EditorKind::GraphView, EditorKind::Graph, EditorKind::GraphProps, EditorKind::RenderSettings],
@@ -86,6 +89,7 @@ impl EditorKind {
             EditorKind::Terrain => "The block on top of the ground, to paint",
             EditorKind::Blocks => "Every block of the game, to paint as a terrain",
             EditorKind::Biomes => "The game's biomes, to paint over the automatic ones",
+            EditorKind::Layers => "Ground covers, objects and terrain mixes: paint, show or hide them",
             EditorKind::Levels => "Levels that add rock over the ground or carve it away",
             EditorKind::Info => "Name, seed, sea level and size; the column under the cursor",
             EditorKind::Graph => "The nodes the terrain is generated from",
@@ -110,6 +114,7 @@ impl EditorKind {
             EditorKind::Terrain => "Terrain",
             EditorKind::Blocks => "Blocks",
             EditorKind::Biomes => "Biomes",
+            EditorKind::Layers => "Layers",
             EditorKind::Levels => "Levels",
             EditorKind::Info => "Info",
             EditorKind::Graph => "Terrain Graph",
@@ -134,6 +139,7 @@ impl EditorKind {
             EditorKind::Terrain => Icon::Mountain,
             EditorKind::Blocks => Icon::Blocks,
             EditorKind::Biomes => Icon::Trees,
+            EditorKind::Layers => Icon::Layers2,
             EditorKind::Levels => Icon::Layers,
             EditorKind::Info => Icon::Info,
             EditorKind::Graph => Icon::Workflow,
@@ -213,6 +219,26 @@ impl Node {
         match self {
             Node::Area { editor, .. } => *editor == kind,
             Node::Split { a, b, .. } => a.shows(kind) || b.shows(kind),
+        }
+    }
+
+    /// Split the first area showing `above` in two, `below` under it, the
+    /// first keeping `ratio` of the height. Whether there was one.
+    fn add_below(&mut self, above: EditorKind, below: EditorKind, ratio: f32, next: &mut AreaId) -> bool {
+        match self {
+            Node::Area { editor, .. } if *editor == above => {
+                *next += 1;
+                let old = std::mem::replace(self, Node::Area { id: 0, editor: EditorKind::Empty });
+                *self = Node::Split {
+                    dir: Dir::Column,
+                    ratio,
+                    a: Box::new(old),
+                    b: Box::new(Node::Area { id: *next, editor: below }),
+                };
+                true
+            }
+            Node::Area { .. } => false,
+            Node::Split { a, b, .. } => a.add_below(above, below, ratio, next) || b.add_below(above, below, ratio, next),
         }
     }
 
@@ -417,7 +443,7 @@ pub struct Layout {
 
 /// The workspaces a layout saved by an older version lacks are added to it
 /// once: this is the version they come with.
-const LAYOUT_VERSION: u32 = 2;
+const LAYOUT_VERSION: u32 = 3;
 
 /// Builds trees with fresh area ids.
 struct Builder<'a>(&'a mut AreaId);
@@ -500,8 +526,9 @@ impl Default for Layout {
         };
         let right = {
             let view = b.area(View3d);
-            let (brushes, terrain) = (b.area(Brushes), b.area(Terrain));
-            let palettes = b.row(0.5, brushes, terrain);
+            let (brushes, terrain, layers) = (b.area(Brushes), b.area(Terrain), b.area(Layers));
+            let paint = b.column(0.55, terrain, layers);
+            let palettes = b.row(0.5, brushes, paint);
             let (levels, info) = (b.area(Levels), b.area(Info));
             let world = b.row(0.5, levels, info);
             let lower = b.column(0.58, palettes, world);
@@ -534,9 +561,10 @@ impl Default for Layout {
             b.column(0.3, tools, lower)
         };
         let right = {
-            let (terrain, blocks, biomes) = (b.area(Terrain), b.area(Blocks), b.area(Biomes));
+            let (terrain, layers, blocks, biomes) = (b.area(Terrain), b.area(Layers), b.area(Blocks), b.area(Biomes));
+            let upper = b.column(0.55, terrain, layers);
             let lower = b.column(0.62, blocks, biomes);
-            b.column(0.4, terrain, lower)
+            b.column(0.5, upper, lower)
         };
         let map = b.area(Map);
         let centre = b.row(0.72, map, right);
@@ -630,6 +658,15 @@ impl Layout {
             && let Some(k) = self.workspaces.iter().position(|w| w.name == "3D Sculpt" && !w.terrain)
         {
             self.reset_workspace(k);
+        }
+        // Version 3: the Layers panel, under the Terrain panel of every
+        // workspace of the map editor that shows one.
+        if self.version < 3 {
+            for w in self.workspaces.iter_mut().filter(|w| !w.terrain) {
+                if !w.root.shows(EditorKind::Layers) {
+                    w.root.add_below(EditorKind::Terrain, EditorKind::Layers, 0.55, &mut self.next_id);
+                }
+            }
         }
         self.version = LAYOUT_VERSION;
         self
@@ -881,7 +918,7 @@ mod tests {
         }
         assert_eq!(seen.len() as u64, layout.next_id);
         let first = &layout.workspaces[0].root;
-        assert_eq!(first.count(), 9);
+        assert_eq!(first.count(), 10);
         // Layouts survive serialisation (they are persisted between runs).
         let json = serde_json::to_string(&layout).unwrap();
         let back: Layout = serde_json::from_str(&json).unwrap();
@@ -1043,5 +1080,38 @@ mod tests {
         layout.remove_workspace(n);
         assert_eq!(layout.workspaces.len(), n);
         assert_eq!(layout.current().name, "Minimal", "the tab before it, on the same side");
+    }
+
+    /// A layout saved before the Layers panel gets it under the Terrain
+    /// panel of each map workspace that shows one, once; new layouts have it.
+    #[test]
+    fn layers_panel_is_added_once() {
+        assert!(Layout::default().workspaces.iter().filter(|w| w.root.shows(EditorKind::Terrain)).all(|w| w.root.shows(EditorKind::Layers)));
+        let mut old = Layout::default();
+        for w in &mut old.workspaces {
+            let mut areas = Vec::new();
+            w.root.areas(&mut areas);
+            for (id, kind) in areas {
+                if kind == EditorKind::Layers {
+                    w.root.set_editor(id, EditorKind::Info);
+                }
+            }
+        }
+        old.version = 2;
+        let json = serde_json::to_string(&old).unwrap();
+        let layout: Layout = serde_json::from_str::<Layout>(&json).unwrap().sanitize();
+        let painting = layout.workspaces.iter().find(|w| w.name == "Painting").unwrap();
+        assert!(painting.root.shows(EditorKind::Layers));
+        assert!(!layout.workspaces.iter().find(|w| w.name == "Minimal").unwrap().root.shows(EditorKind::Layers));
+        let count = |l: &Layout| l.workspaces.iter().map(|w| { let mut a = Vec::new(); w.root.areas(&mut a); a.iter().filter(|(_, k)| *k == EditorKind::Layers).count() }).sum::<usize>();
+        let n = count(&layout);
+        let again = layout.clone().sanitize();
+        assert_eq!(count(&again), n);
+        let mut ids = Vec::new();
+        for w in &layout.workspaces { let mut a = Vec::new(); w.root.areas(&mut a); ids.extend(a.into_iter().map(|(id, _)| id)); }
+        let before = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), before, "every area has an id of its own");
     }
 }

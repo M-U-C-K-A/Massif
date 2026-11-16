@@ -358,6 +358,9 @@ pub struct ObjectLayerDef {
     /// Removed: no longer offered, and nothing stands where it was painted.
     #[serde(default)]
     pub removed: bool,
+    /// Left off the map and the 3D view; the export writes it all the same.
+    #[serde(default, skip_serializing_if = "crate::registry::is_false")]
+    pub hidden: bool,
 }
 
 impl ObjectLayerDef {
@@ -377,6 +380,7 @@ impl ObjectLayerDef {
             sink: 0,
             replace: false,
             removed: false,
+            hidden: false,
         }
     }
 

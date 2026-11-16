@@ -11,6 +11,7 @@ The editor, part by part: the home screen, the window, brushes and their options
 - [Brushes](#brushes)
 - [Automatic biomes and paint](#automatic-biomes-and-paint)
 - [Noise painting](#noise-painting)
+- [Layers](#layers)
 - [Ground covers](#ground-covers)
 - [Custom objects](#custom-objects)
 - [Rivers](#rivers)
@@ -473,6 +474,28 @@ the background, where the brush options let it (only on grass, a height
 band, a slope…), as one step to undo. The pattern is laid in world
 coordinates: strokes side by side join without a seam, and painting a place
 again gives the same blocks.
+
+## Layers
+
+What WorldPainter calls layers — its custom plant layers, custom object
+layers and custom terrain mixes — are in Massif the **ground covers**, the
+**object layers** and the **terrain mixes**. The **Layers** panel lists all
+of the map's in one place (it sits under the Terrain panel; any area can
+show it, from Paint in the area's chooser):
+
+- a **click** picks one to paint with, with its tool — Ground cover,
+  Objects, or Paint terrain with its noise — and Tool Settings shows its
+  settings, to edit;
+- a **double-click** renames it;
+- its **eye** hides it on the map and in the 3D view, to see the ground
+  under it; the export writes it all the same, and the map remembers it;
+- its menu (right button) paints with it, renames, **duplicates** or
+  **removes** it;
+- **New cover**, **Import objects…** and **New mix** add one. A mix is
+  set up in Paint terrain ▸ Noise and saved there under a name.
+
+A column has at most one cover and one object layer; painting another
+over it takes the place of the first.
 
 ## Ground covers
 

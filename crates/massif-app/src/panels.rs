@@ -1021,7 +1021,7 @@ fn object_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, block
             import_objects(doc, tools, &files, None, blocks.catalogue.as_deref());
         }
     }
-    hint(ui, "Trees, rocks, ruins from .schem, .schematic, .bp, .litematic or .nbt files — or drop them on the window.");
+    hint(ui, "Trees, rocks, ruins from .schem, .schematic, .bp, .litematic or .nbt files — or drop them on the window. Every layer of the map: the Layers panel.");
     if let Some(note) = &tools.objects_note {
         ui.label(RichText::new(note).size(11.5).color(if note.contains("Could not") { pal.danger } else { pal.weak }));
     }
@@ -1197,7 +1197,7 @@ fn plant_name(state: &str) -> String {
 }
 
 /// What a cover grows, in a line.
-fn describe_cover(def: &massif_core::registry::CoverDef) -> String {
+pub fn describe_cover(def: &massif_core::registry::CoverDef) -> String {
     let total: u32 = def.plants.iter().map(|p| p.1 as u32).sum::<u32>().max(1);
     let plants: Vec<String> = def.plants.iter().map(|(b, w)| format!("{} {:.0}%", plant_name(b), *w as f32 * 100.0 / total as f32)).collect();
     let where_ = match (def.underwater, def.soil_only) {
@@ -1224,10 +1224,17 @@ pub fn block_cover(reg: &mut Registry, block: &massif_assets::Block) -> u16 {
     reg.add_cover(def)
 }
 
+/// A new cover of short grass, named after how many there are. Returns
+/// its number.
+pub fn new_cover(reg: &mut Registry) -> u16 {
+    let count = reg.covers.iter().filter(|c| !c.removed).count();
+    let name = crate::layers::unique_name(&format!("Cover {}", count + 1), reg.covers.iter().filter(|c| !c.removed).map(|c| c.name.as_str()));
+    reg.add_cover(massif_core::registry::CoverDef::new(&name, [120, 170, 90], &[("minecraft:short_grass", 1)], 0.5))
+}
+
 /// The covers of the world, and the one painted: what it grows, how
 /// thick, where.
 fn cover_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary) {
-    use massif_core::registry::CoverDef;
     let pal = Palette::of(ui);
     let ctx = ui.ctx().clone();
     let before = doc.world.registry.covers.clone();
@@ -1265,11 +1272,9 @@ fn cover_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks
         tools.cover = n;
     }
     if ui.button(theme::with_icon(Icon::Plus, "New cover")).on_hover_text("A cover of your own: any blocks, any mix").clicked() {
-        let count = doc.world.registry.covers.iter().filter(|c| !c.removed).count();
-        let def = CoverDef::new(&format!("Cover {}", count + 1), [120, 170, 90], &[("minecraft:short_grass", 1)], 0.5);
-        tools.cover = doc.world.registry.add_cover(def);
+        tools.cover = new_cover(&mut doc.world.registry);
     }
-    hint(ui, "Non-cube blocks clicked in Blocks become covers too.");
+    hint(ui, "Non-cube blocks clicked in Blocks become covers too. Every cover and object layer of the map: the Layers panel.");
 
     // The selected cover.
     let catalogue = blocks.catalogue.clone();

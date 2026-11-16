@@ -270,6 +270,8 @@ pub struct MassifApp {
     feedback: Option<String>,
     dragging_area: Option<AreaId>,
     rename: Option<(usize, String)>,
+    /// The Layers panel's layer being renamed.
+    layers_ui: crate::layers::LayersUi,
     terrain_search: String,
     biome_search: String,
     /// The built-in, generated and custom brushes.
@@ -597,6 +599,7 @@ impl MassifApp {
             feedback: None,
             dragging_area: None,
             rename: None,
+            layers_ui: Default::default(),
             terrain_search: String::new(),
             biome_search: String::new(),
             brushes: BrushLibrary::default(),
@@ -2215,6 +2218,13 @@ impl MassifApp {
                 let _ = solo_changed; // the solo style is part of the cache key
             }
             EditorKind::Biomes => scrolled(&mut cui, &mut |ui| panels::biome_panel(ui, &mut self.tools, &self.doc.world.registry, &mut self.biome_search)),
+            EditorKind::Layers => {
+                let mut said = None;
+                scrolled(&mut cui, &mut |ui| said = crate::layers::layers_panel(ui, &mut self.tools, &mut self.doc, &mut self.blocks, &mut self.layers_ui));
+                if said.is_some() {
+                    self.feedback = said;
+                }
+            }
             EditorKind::Levels => {
                 let mut change = panels::LevelsChange::default();
                 scrolled(&mut cui, &mut |ui| change = panels::levels_panel(ui, &mut self.doc, &mut self.rename));
@@ -3431,10 +3441,10 @@ fn covers_key(reg: &massif_core::Registry) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     for c in &reg.covers {
-        (c.color, c.density.to_bits(), c.removed, c.soil_only, c.underwater, c.height, &c.plants).hash(&mut h);
+        (c.color, c.density.to_bits(), c.removed, c.hidden, c.soil_only, c.underwater, c.height, &c.plants).hash(&mut h);
     }
     for l in &reg.object_layers {
-        (l.spacing, l.density.to_bits(), l.rotate, l.mirror, l.soil_only, l.underwater, l.sink, l.replace, l.removed, &l.objects).hash(&mut h);
+        (l.spacing, l.density.to_bits(), l.rotate, l.mirror, l.soil_only, l.underwater, l.sink, l.replace, l.removed, l.hidden, &l.objects).hash(&mut h);
     }
     for o in &reg.objects {
         (o.size, o.anchor, &o.colors).hash(&mut h);
@@ -8205,7 +8215,9 @@ mod tests {
         }
         h.run_steps(5);
         use egui_kittest::kittest::Queryable;
-        h.get_by_label("Flowers").click();
+        // In Tool Settings, and in the Layers panel.
+        assert_eq!(h.get_all_by_label("Flowers").count(), 2);
+        h.get_all_by_label("Flowers").next().unwrap().click();
         h.run_steps(3);
         let flowers = h.state().doc.world.registry.cover_by_name("Flowers").unwrap();
         assert_eq!(h.state().tools.cover, flowers);
@@ -8746,8 +8758,8 @@ mod tests {
         let mut seps = Vec::new();
         let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(1600.0, 900.0));
         compute(&layout.workspaces[0].root, rect, &mut Vec::new(), &mut areas, &mut seps);
-        assert_eq!(areas.len(), 9);
-        assert_eq!(seps.len(), 8);
+        assert_eq!(areas.len(), 10);
+        assert_eq!(seps.len(), 9);
         // Areas tile the rectangle without overlapping.
         for (i, a) in areas.iter().enumerate() {
             for b in &areas[i + 1..] {

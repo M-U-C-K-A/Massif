@@ -15,6 +15,7 @@ mod help;
 mod home;
 mod icons;
 mod jobs;
+mod layers;
 mod layout;
 mod map_render;
 mod map_view;

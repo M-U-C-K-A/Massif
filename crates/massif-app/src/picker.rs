@@ -196,7 +196,7 @@ mod tests {
             let before = offered.len();
             offered.dedup();
             assert_eq!(offered.len(), before, "an editor offered twice");
-            assert_eq!(offered.len(), 18, "every editor but the empty area");
+            assert_eq!(offered.len(), 19, "every editor but the empty area");
             assert!(!offered.contains(&EditorKind::Empty));
         }
         assert!(!arrange(4, false).iter().flatten().any(|(_, kinds)| kinds.contains(&EditorKind::Developer)));
