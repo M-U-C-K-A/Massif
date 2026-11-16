@@ -981,6 +981,8 @@ pub struct GraphEditor {
     recent_read: bool,
     /// Where the library was drawn last (for the tests).
     library_rect: Rect,
+    /// The library's height but its list's, as drawn.
+    library_chrome: f32,
     /// The pass the canvas was last drawn in.
     canvas_pass: u64,
     pub view: TerrainView,
@@ -1054,6 +1056,7 @@ impl Default for GraphEditor {
             recent_read: false,
             library_rect: Rect::NOTHING,
             canvas_pass: 0,
+            library_chrome: 0.0,
             view: TerrainView::default(),
             render_open: false,
             image_size: [3840, 2160],
@@ -2774,8 +2777,10 @@ impl GraphEditor {
         let screen = ctx.content_rect();
         let margin = 8.0;
         let width = LIBRARY_WIDTH.min(screen.width() - 2.0 * margin).max(200.0);
-        let list_h = LIBRARY_LIST.min(screen.height() - 2.0 * margin - LIBRARY_CHROME).max(90.0);
-        let size = vec2(width, list_h + LIBRARY_CHROME);
+        // All but the list, as measured last frame (fonts and spacing vary).
+        let chrome = self.library_chrome.max(LIBRARY_CHROME);
+        let list_h = LIBRARY_LIST.min(screen.height() - 2.0 * margin - chrome).max(90.0);
+        let size = vec2(width, list_h + chrome);
         let pos = pos2(
             lib.screen.x.min(screen.right() - margin - size.x).max(screen.left() + margin),
             lib.screen.y.min(screen.bottom() - margin - size.y).max(screen.top() + margin),
@@ -2886,6 +2891,7 @@ impl GraphEditor {
             }
         }
         self.library_rect = area.response.rect;
+        self.library_chrome = area.response.rect.height() - list_h;
         if let Some(kind) = add {
             let lib = self.library.take().expect("open");
             self.recent.retain(|l| *l != kind.label());
