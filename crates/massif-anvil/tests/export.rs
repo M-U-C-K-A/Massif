@@ -362,6 +362,14 @@ fn ores_are_laid_in_the_rock() {
 /// biome written there lets them in, and where the Ores window and the
 /// survival check expect them; a choice that lets every biome in writes
 /// the same bytes as none.
+/// A region file's bytes but for its table of the times its chunks were
+/// written: two exports a second apart differ there.
+fn region_bytes(path: &std::path::Path) -> Vec<u8> {
+    let mut bytes = std::fs::read(path).unwrap();
+    bytes[4096..8192].fill(0);
+    bytes
+}
+
 #[test]
 fn ores_keep_to_their_biomes() {
     let mut world = build_world();
@@ -383,7 +391,7 @@ fn ores_keep_to_their_biomes() {
     export(&open.snapshot(), &open_dir, &ExportOptions::default(), &Progress::default()).unwrap();
     for entry in std::fs::read_dir(plain.join("region")).unwrap() {
         let name = entry.unwrap().file_name();
-        assert!(std::fs::read(plain.join("region").join(&name)).unwrap() == std::fs::read(open_dir.join("region").join(&name)).unwrap(), "{name:?} differs");
+        assert!(region_bytes(&plain.join("region").join(&name)) == region_bytes(&open_dir.join("region").join(&name)), "{name:?} differs");
     }
     std::fs::remove_dir_all(&open_dir).unwrap();
     std::fs::remove_dir_all(&plain).unwrap();
