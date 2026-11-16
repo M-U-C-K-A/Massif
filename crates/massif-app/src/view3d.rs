@@ -3553,16 +3553,17 @@ impl View3d {
         let ctx = ui.ctx().clone();
         walk.pass = ctx.cumulative_pass_nr();
         let (escape, focused, motion, moved, pointer, dt, turn, mods, scroll) = ui.input(|i| {
-            let key = |k: egui::Key| i.key_down(k) as i32 as f32;
+            use crate::keymap::{Action, held};
+            let key = |a: Action| held(i, a) as i32 as f32;
             (
-                i.key_pressed(egui::Key::Escape),
+                crate::keymap::peek(&ctx, Action::ReleaseMouse),
                 i.viewport().focused.unwrap_or(true),
                 i.pointer.motion(),
                 i.pointer.delta(),
                 i.pointer.latest_pos(),
                 i.stable_dt.min(0.1) as f64,
                 // The arrows turn the eyes: left, right, up, down.
-                [key(egui::Key::ArrowRight) - key(egui::Key::ArrowLeft), key(egui::Key::ArrowDown) - key(egui::Key::ArrowUp)],
+                [key(Action::LookRight) - key(Action::LookLeft), key(Action::LookDown) - key(Action::LookUp)],
                 i.modifiers,
                 i.smooth_scroll_delta.y + i.smooth_scroll_delta.x,
             )
@@ -3689,23 +3690,24 @@ impl View3d {
         use crate::player::Keys;
         let keys = if walk.captured || (response.hovered() && !typing) {
             ui.input(|i| {
-                let held = |k: egui::Key| i.key_down(k) as i32 as f64;
-                // Pressed now, not repeated by the system.
-                let first = |key: egui::Key| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: k, pressed: true, repeat: false, .. } if *k == key));
+                use crate::keymap::{Action, first_press};
+                let down = |a: Action| crate::keymap::held(i, a);
+                let held = |a: Action| down(a) as i32 as f64;
                 // ⌘ and Alt keep their shortcuts.
                 if i.modifiers.mac_cmd || i.modifiers.alt {
                     Keys::default()
                 } else {
-                    // The game's keys: Shift sneaks (flying: goes down), Ctrl
-                    // sprints; Q goes down too. (The arrows turn the eyes.)
+                    // The game's keys, as the keymap has them: Shift sneaks
+                    // (flying: goes down), Ctrl sprints; Q goes down too.
+                    // (The arrows turn the eyes.)
                     Keys {
-                        forward: held(egui::Key::W) - held(egui::Key::S),
-                        right: held(egui::Key::D) - held(egui::Key::A),
-                        forward_pressed: first(egui::Key::W),
-                        jump: i.key_down(egui::Key::Space),
-                        jump_pressed: first(egui::Key::Space),
-                        sneak: i.modifiers.shift || i.key_down(egui::Key::Q),
-                        run: i.modifiers.ctrl,
+                        forward: held(Action::WalkForward) - held(Action::WalkBack),
+                        right: held(Action::WalkRight) - held(Action::WalkLeft),
+                        forward_pressed: first_press(i, Action::WalkForward),
+                        jump: down(Action::Jump),
+                        jump_pressed: first_press(i, Action::Jump),
+                        sneak: down(Action::Sneak),
+                        run: down(Action::Sprint),
                     }
                 }
             })
@@ -4346,23 +4348,20 @@ impl View3d {
         // Fly with the keyboard while the pointer is over the view: W A S D
         // (or the arrows) move, Q and E go down and up, Shift goes faster.
         if !walking && response.hovered() && !ui.ctx().egui_wants_keyboard_input() {
-            let (dt, keys) = ui.input(|i| {
-                let k = |a: egui::Key, b: egui::Key| (i.key_down(a) || i.key_down(b)) as i32 as f64;
+            let (dt, keys, faster) = ui.input(|i| {
+                use crate::keymap::{Action, held};
+                let k = |a: Action| held(i, a) as i32 as f64;
                 let mods = i.modifiers.command || i.modifiers.ctrl || i.modifiers.alt;
                 let keys = if mods {
                     [0.0; 3]
                 } else {
-                    [
-                        k(egui::Key::W, egui::Key::ArrowUp) - k(egui::Key::S, egui::Key::ArrowDown),
-                        k(egui::Key::D, egui::Key::ArrowRight) - k(egui::Key::A, egui::Key::ArrowLeft),
-                        k(egui::Key::E, egui::Key::PageUp) - k(egui::Key::Q, egui::Key::PageDown),
-                    ]
+                    [k(Action::FlyForward) - k(Action::FlyBack), k(Action::FlyRight) - k(Action::FlyLeft), k(Action::FlyUp) - k(Action::FlyDown)]
                 };
-                (i.stable_dt.min(0.1) as f64, keys)
+                (i.stable_dt.min(0.1) as f64, keys, held(i, Action::FlyFaster))
             });
             // The speed eases toward what the keys ask: starting and
             // stopping take a tenth of a second.
-            let speed = (self.camera.distance as f64).max(40.0) * if shift { 3.0 } else { 1.0 };
+            let speed = (self.camera.distance as f64).max(40.0) * if faster { 3.0 } else { 1.0 };
             let (s, c) = (self.camera.yaw.sin() as f64, self.camera.yaw.cos() as f64);
             let want = [(-s * keys[0] + c * keys[1]) * speed, keys[2] * speed * 0.6, (-c * keys[0] - s * keys[1]) * speed];
             let t = if still { 1.0 } else { 1.0 - (-dt * 14.0).exp() };

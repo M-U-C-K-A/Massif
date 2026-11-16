@@ -20,6 +20,8 @@ mod help;
 mod home;
 mod icons;
 mod jobs;
+mod keymap;
+mod keys_page;
 mod layers;
 mod layout;
 mod loader;

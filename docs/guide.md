@@ -1198,7 +1198,37 @@ Maps saved before this have no picture until they are saved again.
 
 ## Controls
 
-Massif follows WorldPainter's defaults.
+Massif follows WorldPainter's defaults. These are the keys out of the box;
+**Settings ▸ Keyboard** changes any of them.
+
+### Your own shortcuts
+
+Settings ▸ Keyboard lists every shortcut in columns — General, Tools,
+Brushes, Map, 3D view, Player — with a search over names and keys.
+
+- Click a shortcut, then press the new keys. An action can have two; the
+  `+` beside its keys adds one, a right-click removes one. For what is held
+  (Move the map, flying, walking, adding to a selection), modifiers alone
+  count: press Shift and let it go.
+- Keys another action already has, where both are listened to, are asked
+  about first: **Replace** takes them from it, **Cancel** leaves both as
+  they were. W is Forward both in the 3D view and in Player, which never
+  listen at once.
+- **Start from** Massif's keys or WorldPainter's: there ⌘Y redoes first,
+  and ⌘ with +, − and 0 zoom the map rather than the interface. Your changes
+  stay over the preset chosen; ↺ beside an action, or **Reset all**, takes
+  them back.
+- **Export…** writes every shortcut to a keymap file (JSON, the same on
+  macOS, Windows and Linux: `Cmd` is ⌘ on a Mac and Ctrl elsewhere);
+  **Import…** reads one. An action the file does not name keeps the
+  preset's keys; a name Massif does not know is left aside.
+- The menus, macOS's menu bar too, show the keys as they are now.
+- While a text field is typed in, shortcuts wait, but those with ⌘ (Ctrl)
+  that typing has no use for: New, Open, Save, Save As, Export, Settings,
+  Help and the interface's size.
+- The mouse keeps its own: the wheel and its modifiers, the buttons.
+
+### Out of the box
 
 | Input | Action |
 |---|---|
@@ -1214,6 +1244,8 @@ Massif follows WorldPainter's defaults.
 | ⌥H ⌥A ⌥S ⌥P ⌥R ⌥F ⌥Y | Height, Flatten, Smooth, Paint, Spray, Flood, Eyedropper |
 | ⌘Z / ⇧⌘Z, ⌘S, ⌘O, ⌘N, ⌘E | Undo / redo, save, open, new, export |
 | ⌘A, ⌘D, ⇧⌘I | Select the whole map, deselect, invert the selection |
+| ⌘+, ⌘−, ⌘0 | A larger, smaller interface; back to its size |
+| Ctrl + Space | Fill the window with the area under the pointer |
 | Shift / Alt + drag (Select tools) | Add to the selection / take out of it (both: intersect) |
 | Esc | Cancel the stroke or the selection being drawn |
 

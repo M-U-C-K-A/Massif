@@ -67,26 +67,30 @@ pub enum Role {
 }
 
 impl Command {
-    /// The keys that do it, handled by the app (`MassifApp::shortcuts`) and
-    /// shown beside the item: ⌘ on a Mac, Ctrl elsewhere.
-    pub fn shortcut(&self) -> Option<KeyboardShortcut> {
-        let command = |key| KeyboardShortcut::new(Modifiers::COMMAND, key);
-        let shifted = |key| KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, key);
+    /// The action of the keymap that does it, if any (`MassifApp::shortcuts`).
+    pub fn action(&self) -> Option<crate::keymap::Action> {
+        use crate::keymap::Action;
         Some(match self {
-            Command::NewWorld => command(Key::N),
-            Command::Open => command(Key::O),
-            Command::Save => command(Key::S),
-            Command::SaveAs => shifted(Key::S),
-            Command::Export => command(Key::E),
-            Command::Undo => command(Key::Z),
-            Command::Redo => shifted(Key::Z),
-            Command::SelectAll => command(Key::A),
-            Command::Deselect => command(Key::D),
-            Command::InvertSelection => shifted(Key::I),
-            Command::Settings => command(Key::Comma),
-            Command::Help => KeyboardShortcut::new(Modifiers::NONE, Key::F1),
+            Command::NewWorld => Action::NewWorld,
+            Command::Open => Action::Open,
+            Command::Save => Action::Save,
+            Command::SaveAs => Action::SaveAs,
+            Command::Export => Action::Export,
+            Command::Undo => Action::Undo,
+            Command::Redo => Action::Redo,
+            Command::SelectAll => Action::SelectAll,
+            Command::Deselect => Action::Deselect,
+            Command::InvertSelection => Action::InvertSelection,
+            Command::Settings => Action::Settings,
+            Command::Help => Action::Help,
             _ => return None,
         })
+    }
+
+    /// The keys that do it, as the keymap has them now, shown beside the
+    /// item: ⌘ on a Mac, Ctrl elsewhere.
+    pub fn shortcut(&self) -> Option<KeyboardShortcut> {
+        crate::keymap::get().shortcut(self.action()?)
     }
 
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -130,17 +134,21 @@ pub struct Item {
     pub checked: Option<bool>,
     /// What it does, when its name does not say it all.
     pub tip: Option<String>,
+    /// Its keys, as the keymap has them when the menus were made: the menu
+    /// bar is made again when they change.
+    pub shortcut: Option<KeyboardShortcut>,
 }
 
 impl Item {
     fn new(command: Command, icon: Option<Icon>, label: &str, enabled: bool) -> Self {
         Item {
-            command,
+            command: command.clone(),
             label: label.to_owned(),
             icon: icon.map(theme::glyph),
             enabled,
             checked: None,
             tip: None,
+            shortcut: command.shortcut(),
         }
     }
 
@@ -301,8 +309,8 @@ pub fn ui(ui: &mut Ui, entries: &[Entry]) -> Option<Command> {
                     ui.add_enabled(item.enabled, egui::RadioButton::new(checked, item.text()))
                 } else {
                     let mut button = egui::Button::new(item.text());
-                    if let Some(shortcut) = item.command.shortcut() {
-                        button = button.shortcut_text(ui.ctx().format_shortcut(&shortcut));
+                    if let Some(shortcut) = &item.shortcut {
+                        button = button.shortcut_text(ui.ctx().format_shortcut(shortcut));
                     }
                     ui.add_enabled(item.enabled, button)
                 };

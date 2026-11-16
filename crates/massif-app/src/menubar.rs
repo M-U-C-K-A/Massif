@@ -314,7 +314,7 @@ mod mac {
             native.setEnabled(item.enabled);
             native.setState(if item.checked == Some(true) { NSControlStateValueOn } else { NSControlStateValueOff });
             native.setToolTip(item.tip.as_deref().map(NSString::from_str).as_deref());
-            let (key, modifiers) = item.command.shortcut().and_then(|s| menu::key_equivalent(&s)).unwrap_or_default();
+            let (key, modifiers) = item.shortcut.as_ref().and_then(menu::key_equivalent).unwrap_or_default();
             native.setKeyEquivalent(&NSString::from_str(&key));
             native.setKeyEquivalentModifierMask(flags(modifiers));
             let target: &AnyObject = &self.target;

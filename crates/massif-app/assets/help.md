@@ -222,6 +222,8 @@ The viewport shows the graph's output in 3D, with its sun, clouds, haze and sea 
 - **Developer**: developer mode offers a **Developer** panel in every area's menu: frames a second and the time of each, the memory the system counts, the processor's time, in live charts; what is kept decoded, the map, its tasks and the graphics card.
 
 # Shortcuts
+Massif's own keys, as they are out of the box. **Settings ▸ Keyboard** changes any of them: click a shortcut, press the new keys (another action's keys are asked about first: Replace or Cancel), right-click one to remove it. It starts from **Massif** or **WorldPainter**'s keys (`⌘Y` redo, `⌘` `+` `−` `0` zoom the map), resets one action or all, and exports or imports a keymap file. Shortcuts wait while a text field is typed in, but those with `⌘` typing has no use for, as Save. The mouse keeps its own.
+
 | `⌘N` `⌘O` `⌘S` `⌘E` | New, open, save, export |
 | `⌘Z` / `⇧⌘Z` | Undo / redo |
 | Left / right button | The tool / its inverse (also `Alt` + left) |
@@ -241,4 +243,5 @@ The viewport shows the graph's output in 3D, with its sun, clouds, haze and sea 
 | `Ctrl Space` | Maximise the area under the pointer |
 | `Tab` | Add a node (terrain graph) |
 | `V` | View the selected node (terrain graph) |
+| `⌘+` `⌘−` `⌘0` | Larger, smaller interface; back to its size |
 | `F1` | This help |

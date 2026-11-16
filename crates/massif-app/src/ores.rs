@@ -17,7 +17,7 @@
 
 use crate::theme::{self, Icon, Palette, RichTextExt};
 use crate::widgets::{self, Part};
-use egui::{Align, Align2, Color32, ColorImage, FontId, Key, KeyboardShortcut, Layout, Modifiers, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, pos2, vec2};
+use egui::{Align, Align2, Color32, ColorImage, FontId, Layout, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, pos2, vec2};
 use massif_core::World;
 use massif_core::analysis::{Mineral, thousands};
 use massif_core::compose::{AutoBiomes, BiomeColumn, Materializer, Span, TileStack, hash3};
@@ -381,10 +381,8 @@ impl OresView {
         // puts back what was removed; neither while a number is typed (the
         // field has its own) or a menu is open.
         if !ctx.text_edit_focused() && !egui::Popup::is_any_open(&ctx) {
-            let (delete, undo) = ui.input_mut(|i| {
-                let delete = i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace);
-                (delete, i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::Z)))
-            });
+            use crate::keymap::{Action, take};
+            let (delete, undo) = (take(&ctx, Action::Delete).is_some(), take(&ctx, Action::Undo).is_some());
             if delete && self.drag.is_none() {
                 self.remove_ore(self.selected);
             }

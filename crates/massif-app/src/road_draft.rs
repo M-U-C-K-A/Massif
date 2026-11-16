@@ -254,7 +254,8 @@ pub fn follow(doc: &mut Document, tools: &mut ToolState, at: Option<(f32, f32)>,
     if ui.ctx().egui_wants_keyboard_input() {
         return None;
     }
-    let (enter, escape, delete) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)));
+    use crate::keymap::{Action, peek};
+    let (enter, escape, delete) = (ui.input(|i| i.key_pressed(egui::Key::Enter)), peek(ui.ctx(), Action::Cancel), peek(ui.ctx(), Action::Delete));
     if enter {
         build(doc, tools)
     } else if escape {

@@ -75,9 +75,11 @@ impl SelectBy {
 }
 
 /// What a shape does with the keys held: Shift adds, Alt takes out, both
-/// keep what both hold; with neither, the mode chosen in Tool Settings.
+/// keep what both hold (as the keymap has them); with neither, the mode
+/// chosen in Tool Settings.
 pub fn combine_of(m: egui::Modifiers, secondary: bool, chosen: Combine) -> Combine {
-    match (m.shift, m.alt || secondary) {
+    use crate::keymap::{Action, mods_hold};
+    match (mods_hold(m, Action::SelectAdd), mods_hold(m, Action::SelectSubtract) || secondary) {
         (true, true) => Combine::Intersect,
         (true, false) => Combine::Add,
         (false, true) => Combine::Subtract,

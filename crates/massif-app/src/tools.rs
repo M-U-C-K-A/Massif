@@ -136,36 +136,9 @@ impl Tool {
         }
     }
 
-    /// Default shortcuts, WorldPainter's: Alt and the tool's letter.
-    pub fn shortcuts(self) -> &'static [(egui::Modifiers, egui::Key)] {
-        use egui::{Key, Modifiers};
-        const ALT: Modifiers = Modifiers::ALT;
-        match self {
-            Tool::Raise => &[(ALT, Key::H)],
-            Tool::Flatten => &[(ALT, Key::A)],
-            Tool::Smooth => &[(ALT, Key::S)],
-            Tool::PaintTerrain => &[(ALT, Key::P), (ALT, Key::R)],
-            Tool::Eyedropper => &[(ALT, Key::Y)],
-            Tool::Flood => &[(ALT, Key::F)],
-            _ => &[],
-        }
-    }
-
-    /// The first shortcut as text (⌥H).
+    /// Its first shortcut as text (⌥H), as the keymap has it now.
     pub fn shortcut_text(self) -> Option<String> {
-        let (mods, key) = self.shortcuts().first()?;
-        let mut s = String::new();
-        if mods.alt {
-            s.push('⌥');
-        }
-        if mods.shift {
-            s.push('⇧');
-        }
-        if mods.command {
-            s.push('⌘');
-        }
-        s.push_str(key.name());
-        Some(s)
+        crate::keymap::get().label(crate::keymap::Action::Tool(self))
     }
 
     pub fn help(self) -> &'static str {
@@ -1553,23 +1526,5 @@ mod tests {
         end_sculpt(&mut d, s);
         assert!(n > 0);
         assert!(height(&d, 5, 5) > 64.0);
-    }
-
-    #[test]
-    fn shortcuts_follow_worldpainter() {
-        use egui::{Key, Modifiers};
-        assert_eq!(Tool::Raise.shortcut_text().as_deref(), Some("⌥H"));
-        assert_eq!(Tool::Flatten.shortcuts(), &[(Modifiers::ALT, Key::A)]);
-        assert!(Tool::Roughen.shortcuts().is_empty());
-        let mut all = Vec::new();
-        for (_, _, list) in Tool::GROUPS {
-            for tool in list {
-                all.extend(tool.shortcuts().iter().map(|(m, k)| (m.alt, *k)));
-            }
-        }
-        let n = all.len();
-        all.sort_by_key(|(_, k)| k.name());
-        all.dedup();
-        assert_eq!(all.len(), n, "two tools share a shortcut");
     }
 }

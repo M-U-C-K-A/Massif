@@ -1021,7 +1021,7 @@ impl MapView {
             && tools.river_draft.is_some()
             && !ui.ctx().egui_wants_keyboard_input()
         {
-            let (enter, escape) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
+            let (enter, escape) = (ui.input(|i| i.key_pressed(egui::Key::Enter)), crate::keymap::peek(ui.ctx(), crate::keymap::Action::Cancel));
             if enter {
                 *feedback = tools::dig_draft(doc, tools);
             } else if escape {
@@ -1030,7 +1030,7 @@ impl MapView {
                 *feedback = Some(tr!("River dropped").into());
             }
         }
-        if ui.input(|i| i.key_pressed(egui::Key::Escape))
+        if crate::keymap::peek(ui.ctx(), crate::keymap::Action::Cancel)
             && let Some(stroke) = self.stroke.take()
         {
             // Escape abandons the stroke being drawn.
@@ -1060,7 +1060,7 @@ impl MapView {
 
         // A selection being drawn follows the pointer; let go, it is made.
         if self.select.is_drawing() {
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if crate::keymap::peek(ui.ctx(), crate::keymap::Action::Cancel) {
                 self.select.cancel();
                 *feedback = Some(tr!("Selection cancelled").into());
             } else if down[0] || down[1] {

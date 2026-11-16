@@ -16,8 +16,8 @@ use crate::theme::{self, Icon, Palette, RichTextExt};
 use crate::tools::{Tool, ToolState};
 use crate::view3d::View3d;
 use egui::{
-    Align, Align2, Color32, CursorIcon, FontId, Id, Key, KeyboardShortcut, LayerId,
-    Modifiers, Order, Rect, RichText, Sense, Stroke, StrokeKind, Ui, UiBuilder, ViewportCommand,
+    Align, Align2, Color32, CursorIcon, FontId, Id, LayerId,
+    Order, Rect, RichText, Sense, Stroke, StrokeKind, Ui, UiBuilder, ViewportCommand,
     pos2, vec2,
 };
 use massif_anvil::{ExportOptions, GameMode, Surroundings};
@@ -95,6 +95,8 @@ struct Settings {
     pack_author: String,
     /// The language of the interface: the system's, or one chosen.
     language: crate::i18n::Language,
+    /// The keyboard shortcuts: a preset and what was changed in it.
+    keys: crate::keymap::Saved,
     /// The guided tour was taken or skipped: it does not show on its own
     /// again (Help ▸ Take the tour still shows it). Settings saved before
     /// it existed are of someone who knows Massif already.
@@ -128,6 +130,7 @@ enum PrefsSection {
     Notifications,
     Memory,
     Autosave,
+    Keyboard,
     Updates,
     Graphics,
     Developer,
@@ -164,6 +167,7 @@ impl Default for Settings {
             tour_done: false,
             graphics: None,
             graphics_chosen_for: None,
+            keys: crate::keymap::Saved::default(),
         }
     }
 }
@@ -1236,6 +1240,11 @@ impl MassifApp {
         });
     }
 
+    fn prefs_keyboard(&mut self, ui: &mut Ui) {
+        Self::prefs_header(ui, tr!("Keyboard"), tr!("Every shortcut of Massif. Click one, then press the new keys; right-click it to remove it. Changes apply at once and are kept through updates."));
+        crate::keys_page::page(ui, &mut self.settings.keys);
+    }
+
     fn prefs_autosave(&mut self, ui: &mut Ui) {
         Self::prefs_header(
             ui,
@@ -2212,56 +2221,71 @@ impl MassifApp {
     // ---------------------------------------------------------- shortcuts --
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
+        use crate::keymap::{self, Action};
+        let take = |action| keymap::take(ctx, action);
+        let pressed = |action| take(action).is_some();
+        // The size of the interface, as a browser's, whatever is open: the
+        // keymap's keys rather than egui's own.
+        if ctx.options(|o| o.zoom_with_keyboard) {
+            ctx.options_mut(|o| o.zoom_with_keyboard = false);
+        }
+        if pressed(Action::UiZoomReset) {
+            ctx.set_zoom_factor(1.0);
+        }
+        if pressed(Action::UiZoomIn) {
+            egui::gui_zoom::zoom_in(ctx);
+        }
+        if pressed(Action::UiZoomOut) {
+            egui::gui_zoom::zoom_out(ctx);
+        }
         if self.dialog.is_some() || self.blocking_job().is_some() {
             return;
         }
         // The keys the menus show beside their items.
-        let pressed = |command: &Command| command.shortcut().is_some_and(|s| ctx.input_mut(|i| i.consume_shortcut(&s)));
-        for command in [Command::Settings, Command::Help] {
-            if pressed(&command) {
+        for (action, command) in [(Action::Settings, Command::Settings), (Action::Help, Command::Help)] {
+            if pressed(action) {
                 self.command(ctx, command);
                 return;
             }
         }
         if self.home.is_some() {
             // No map on the home screen: only the ways in.
-            for command in [Command::Open, Command::NewWorld] {
-                if pressed(&command) {
+            for (action, command) in [(Action::Open, Command::Open), (Action::NewWorld, Command::NewWorld)] {
+                if pressed(action) {
                     self.command(ctx, command);
                 }
             }
             return;
         }
-        // ⇧⌘Z and ⇧⌘S first: ⌘Z and ⌘S would take them too.
-        if pressed(&Command::Redo) || ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::Y))) {
+        if pressed(Action::Redo) {
             self.redo(ctx);
-        } else if pressed(&Command::Undo) {
+        } else if pressed(Action::Undo) {
             self.undo(ctx);
         }
-        if pressed(&Command::SaveAs) {
+        if pressed(Action::SaveAs) {
             self.save(ctx, true);
-        } else if pressed(&Command::Save) {
+        } else if pressed(Action::Save) {
             self.save(ctx, false);
         }
-        for command in [Command::Open, Command::NewWorld, Command::Export] {
-            if pressed(&command) {
+        for (action, command) in [(Action::Open, Command::Open), (Action::NewWorld, Command::NewWorld), (Action::Export, Command::Export)] {
+            if pressed(action) {
                 self.command(ctx, command);
             }
         }
         if ctx.egui_wants_keyboard_input() {
             return;
         }
-        // ⌘A, ⌘D and ⇧⌘I select, but in the graph, which picks its nodes
-        // with them.
+        // Select all, deselect and invert, but in the graph, which picks
+        // its nodes with ⌘A and ⌘D.
         let over_graph = ctx.input(|i| i.pointer.hover_pos()).and_then(|p| self.area_at(ctx, p)).and_then(|id| self.layout.current().root.editor_of(id)).is_some_and(|k| matches!(k, EditorKind::Graph | EditorKind::GraphView | EditorKind::GraphProps));
         if !over_graph {
-            for command in [Command::InvertSelection, Command::SelectAll, Command::Deselect] {
-                if pressed(&command) {
+            for (action, command) in [(Action::InvertSelection, Command::InvertSelection), (Action::SelectAll, Command::SelectAll), (Action::Deselect, Command::Deselect)] {
+                if pressed(action) {
                     self.command(ctx, command);
                 }
             }
         }
-        if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::CTRL, Key::Space))) {
+        if pressed(Action::MaximizeArea) {
             let pointer = ctx.input(|i| i.pointer.hover_pos());
             if let Some(p) = pointer
                 && let Some(id) = self.area_at(ctx, p)
@@ -2269,89 +2293,54 @@ impl MassifApp {
                 self.layout.toggle_maximize(id);
             }
         }
-        // WorldPainter's keys: 1…0 brush intensity, − and + brush size,
-        // [ and ] (or Alt with − and +) brush rotation, R and L the light of
-        // the map, Alt and a letter the tools, ⌘ with −, + and 0 the zoom.
-        let presses: Vec<(Key, Option<Key>, Modifiers)> = ctx.input(|i| {
-            i.events
-                .iter()
-                .filter_map(|e| match e {
-                    egui::Event::Key {
-                        key,
-                        physical_key,
-                        pressed: true,
-                        modifiers,
-                        ..
-                    } => Some((*key, *physical_key, *modifiers)),
-                    _ => None,
-                })
-                .collect()
-        });
-        for (key, physical, mods) in presses {
-            let is = |k: Key| key == k || physical == Some(k);
-            let digit = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9, Key::Num0]
-                .iter()
-                .position(|d| is(*d));
-            let brush = &mut self.tools.brush;
-            if mods.command {
-                let zoom = if key == Key::Minus {
-                    Some(0.5)
-                } else if key == Key::Plus || key == Key::Equals {
-                    Some(2.0)
-                } else if is(Key::Num0) {
-                    Some(0.0)
-                } else {
-                    None
-                };
-                if let Some(factor) = zoom {
-                    let id = self.active_map.or_else(|| self.maps.keys().next().copied());
-                    if let Some(view) = id.and_then(|id| self.maps.get_mut(&id)) {
-                        if factor == 0.0 {
-                            view.zoom_reset();
-                        } else {
-                            view.zoom_smoothly(factor);
-                        }
+        // The map's zoom (WorldPainter's ⌘ with +, − and 0).
+        for (action, factor) in [(Action::MapZoomIn, 2.0), (Action::MapZoomOut, 0.5), (Action::MapZoomReset, 0.0)] {
+            if pressed(action) {
+                let id = self.active_map.or_else(|| self.maps.keys().next().copied());
+                if let Some(view) = id.and_then(|id| self.maps.get_mut(&id)) {
+                    if factor == 0.0 {
+                        view.zoom_reset();
+                    } else {
+                        view.zoom_smoothly(factor);
                     }
                 }
-                continue;
             }
-            if mods.alt {
-                match digit {
-                    Some(9) => brush.rotation = 0.0,
-                    Some(2) => brush.rotate(30.0),
-                    Some(3) => brush.rotate(45.0),
-                    Some(8) => brush.rotate(90.0),
-                    _ if key == Key::Minus => brush.rotate(-15.0),
-                    _ if key == Key::Plus || key == Key::Equals => brush.rotate(15.0),
-                    _ => {
-                        for (_, _, list) in Tool::GROUPS {
-                            for &tool in list {
-                                if tool.shortcuts().iter().any(|(m, k)| m.alt && is(*k)) {
-                                    self.tools.select(tool);
-                                }
-                            }
-                        }
-                    }
-                }
-                continue;
+        }
+        // WorldPainter's keys: Alt and a letter the tools, 1…0 the brush's
+        // intensity, − and + its size, [ and ] (or Alt with − and +) its
+        // rotation, R and L the light of the map.
+        for tool in keymap::tools() {
+            if pressed(Action::Tool(tool)) {
+                self.tools.select(tool);
             }
-            if let Some(d) = digit {
-                brush.strength = (d + 1) as f32 / 10.0;
-            } else if key == Key::Minus {
-                let r = brush.radius;
-                brush.radius = if mods.shift { r - 1.0 } else { (r / 1.1).min(r - 1.0) }.round().max(1.0);
-            } else if key == Key::Plus || key == Key::Equals {
-                let r = brush.radius;
-                brush.radius = (r * 1.1).max(r + 1.0).round().min(massif_core::MAX_RADIUS);
-            } else if is(Key::OpenBracket) {
-                brush.rotate(-15.0);
-            } else if is(Key::CloseBracket) {
-                brush.rotate(15.0);
-            } else if is(Key::R) && mods.is_none() {
-                self.settings.light = (self.settings.light + 1) % 16;
-            } else if is(Key::L) && mods.is_none() {
-                self.settings.light = (self.settings.light + 15) % 16;
+        }
+        let brush = &mut self.tools.brush;
+        for n in 1..=10u8 {
+            if pressed(Action::Intensity(n)) {
+                brush.strength = n as f32 / 10.0;
             }
+        }
+        if let Some(press) = take(Action::BrushSmaller) {
+            let r = brush.radius;
+            brush.radius = if press.shift { r - 1.0 } else { (r / 1.1).min(r - 1.0) }.round().max(1.0);
+        }
+        if pressed(Action::BrushLarger) {
+            let r = brush.radius;
+            brush.radius = (r * 1.1).max(r + 1.0).round().min(massif_core::MAX_RADIUS);
+        }
+        for (action, degrees) in [(Action::TurnLeft, -15.0), (Action::TurnRight, 15.0), (Action::Turn30, 30.0), (Action::Turn45, 45.0), (Action::Turn90, 90.0)] {
+            if pressed(action) {
+                brush.rotate(degrees);
+            }
+        }
+        if pressed(Action::TurnReset) {
+            brush.rotation = 0.0;
+        }
+        if pressed(Action::LightRight) {
+            self.settings.light = (self.settings.light + 1) % 16;
+        }
+        if pressed(Action::LightLeft) {
+            self.settings.light = (self.settings.light + 15) % 16;
         }
     }
 
@@ -2666,8 +2655,9 @@ impl MassifApp {
                 self.layout.remove_workspace(i);
             }
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                let keys = crate::keymap::get().label(crate::keymap::Action::MaximizeArea).unwrap_or_default();
                 ui.label(
-                    RichText::new(tr!("Ctrl+Space: maximise · drag a title: move"))
+                    RichText::new(tr!("{keys}: maximise · drag a title: move", keys))
                         .size(11.5)
                         .color(pal.weak),
                 );
@@ -2985,7 +2975,7 @@ impl MassifApp {
                 let label = if maximized { tr!("Restore the layout") } else { tr!("Maximise area") };
                 let icon = if maximized { Icon::Minimize2 } else { Icon::Maximize2 };
                 if ui
-                    .add_enabled(!single || maximized, egui::Button::new(theme::with_icon(icon, label)).shortcut_text("Ctrl+Space"))
+                    .add_enabled(!single || maximized, egui::Button::new(theme::with_icon(icon, label)).shortcut_text(crate::keymap::get().label(crate::keymap::Action::MaximizeArea).unwrap_or_default()))
                     .clicked()
                 {
                     self.layout.toggle_maximize(id);
@@ -3031,7 +3021,7 @@ impl MassifApp {
         };
         match editor {
             EditorKind::Map => {
-                let pan_key = !cui.ctx().egui_wants_keyboard_input() && cui.input(|i| i.key_down(Key::Space));
+                let pan_key = !cui.ctx().egui_wants_keyboard_input() && cui.input(|i| crate::keymap::held(i, crate::keymap::Action::Pan));
                 if cui.input(|i| i.pointer.hover_pos()).is_some_and(|p| content.contains(p)) {
                     self.active_map = Some(id);
                 }
@@ -3284,7 +3274,10 @@ impl MassifApp {
             }
             Dialog::Preferences(mut section) => {
                 let response = modal(ctx, "preferences").show(ctx, |ui| {
-                    ui.set_width(760.0);
+                    // The keyboard's shortcuts take three columns.
+                    let keys = section == PrefsSection::Keyboard;
+                    let (content, height) = if keys { (crate::keys_page::WIDTH, 560.0) } else { (520.0, 360.0) };
+                    ui.set_width(content + 240.0);
                     let pal = Palette::of(ui);
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(theme::glyph(Icon::Settings).to_string()).size(17.0).color(pal.accent));
@@ -3303,6 +3296,7 @@ impl MassifApp {
                                 (PrefsSection::Notifications, Icon::Bell, tr!("Notifications")),
                                 (PrefsSection::Memory, Icon::MemoryStick, tr!("Memory")),
                                 (PrefsSection::Autosave, Icon::History, tr!("Autosave")),
+                                (PrefsSection::Keyboard, Icon::Keyboard, tr!("Keyboard")),
                                 (PrefsSection::Updates, Icon::CircleArrowUp, tr!("Updates")),
                                 (PrefsSection::Graphics, Icon::Gauge, tr!("Graphics")),
                                 (PrefsSection::Developer, Icon::Activity, tr!("Developer")),
@@ -3323,15 +3317,15 @@ impl MassifApp {
                         ui.add_space(10.0);
                         let x = ui.cursor().min.x;
                         let top = ui.cursor().min.y;
-                        ui.painter().vline(x, top..=top + 360.0, Stroke::new(1.0, pal.border));
+                        ui.painter().vline(x, top..=top + height, Stroke::new(1.0, pal.border));
                         ui.add_space(22.0);
                         // Every section in the same room: the window keeps its
                         // size, a long section scrolls.
                         ui.vertical(|ui| {
-                            ui.set_width(520.0);
-                            ui.set_min_height(360.0);
-                            egui::ScrollArea::vertical().id_salt(("settings", section as u8)).max_height(360.0).show(ui, |ui| {
-                                ui.set_width(508.0);
+                            ui.set_width(content);
+                            ui.set_min_height(height);
+                            egui::ScrollArea::vertical().id_salt(("settings", section as u8)).max_height(height).show(ui, |ui| {
+                                ui.set_width(content - 12.0);
                                 match section {
                                     PrefsSection::Appearance => self.prefs_appearance(ui, ctx),
                                     PrefsSection::Accessibility => self.prefs_accessibility(ui),
@@ -3340,6 +3334,7 @@ impl MassifApp {
                                     PrefsSection::Notifications => self.prefs_notifications(ui),
                                     PrefsSection::Memory => self.prefs_memory(ui),
                                     PrefsSection::Autosave => self.prefs_autosave(ui),
+                                    PrefsSection::Keyboard => self.prefs_keyboard(ui),
                                     PrefsSection::Updates => self.prefs_updates(ui),
                                     PrefsSection::Graphics => self.prefs_graphics(ui),
                                     PrefsSection::Developer => self.prefs_developer(ui),
@@ -3354,7 +3349,8 @@ impl MassifApp {
                         }
                     });
                 });
-                if response.should_close() {
+                // Escape is a key like any other while one is recorded.
+                if response.should_close() && !crate::keymap::recording() {
                     keep = false;
                 }
                 // A section may open another dialog (an update's notes).
@@ -4264,6 +4260,7 @@ impl MassifApp {
         }
         self.packs(&ctx);
         self.handle_close(&ctx);
+        crate::keymap::apply(&ctx, &self.settings.keys);
         // The tour takes the keys while it is shown.
         if self.tour.is_none() {
             self.shortcuts(&ctx);
@@ -4886,6 +4883,7 @@ mod tests {
     }
 
     use super::*;
+    use egui::{Key, Modifiers};
     use crate::home::parse_seed;
     use massif_core::generate::Landform;
 
@@ -10242,6 +10240,102 @@ mod tests {
         h.render().unwrap().save(dir.join("tall-map.png")).unwrap();
         let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
         image::save_buffer(dir.join("tall-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+    }
+
+    /// Shortcuts as the keymap has them: a key rebound does its new action
+    /// and no longer its old one, the menus show the new keys, keys typed
+    /// in a text field stay there, and Settings ▸ Keyboard records keys,
+    /// asks before taking another action's and renders in light and dark.
+    #[test]
+    fn keyboard_shortcuts_rebind() {
+        use crate::keymap::{Action, Chord, Mods};
+        use egui_kittest::kittest::Queryable;
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let mut h = harness(ThemeChoice::Light);
+        h.run_steps(5);
+        // The defaults: 3 is 30 %.
+        h.key_press(Key::Num3);
+        h.run_steps(2);
+        assert_eq!(h.state().tools.brush.strength, 0.3);
+        // 30 % on K: K does it, 3 no longer.
+        h.state_mut().settings.keys.set(Action::Intensity(3), &[Chord::key(Key::K)]);
+        h.state_mut().tools.brush.strength = 1.0;
+        h.run_steps(1);
+        h.key_press(Key::Num3);
+        h.run_steps(2);
+        assert_eq!(h.state().tools.brush.strength, 1.0);
+        h.key_press(Key::K);
+        h.run_steps(2);
+        assert_eq!(h.state().tools.brush.strength, 0.3);
+        // Save on ⌘K: the menus show it.
+        h.state_mut().settings.keys.set(Action::Save, &[Chord::with(Mods::COMMAND, Key::K)]);
+        h.run_steps(1);
+        let menus = h.state().menus();
+        let save = menus.iter().flat_map(|m| &m.entries).find_map(|e| match e {
+            crate::menu::Entry::Item(i) if i.command == Command::Save => Some(i.shortcut),
+            _ => None,
+        });
+        assert_eq!(save, Some(Some(egui::KeyboardShortcut::new(Modifiers::COMMAND, Key::K))));
+        // A text field typed in keeps its keys: 5 is typed, not 50 %.
+        h.state_mut().settings.keys = crate::keymap::Saved::default();
+        h.state_mut().tools.brush.strength = 1.0;
+        h.run_steps(2);
+        let field = h.query_all_by_role(egui::accesskit::Role::TextInput).next().map(|n| n.focus()).is_some();
+        assert!(field, "a text field in the window");
+        {
+            h.run_steps(2);
+            assert!(h.ctx.egui_wants_keyboard_input(), "the field has the keys");
+            h.key_press(Key::Num5);
+            let tool = h.state().tools.tool;
+            h.key_press_modifiers(Modifiers::ALT, Key::Y);
+            h.run_steps(2);
+            assert_eq!(h.state().tools.brush.strength, 1.0, "5 typed in a field sets no intensity");
+            assert_eq!(h.state().tools.tool, tool, "⌥Y typed in a field picks no tool");
+            h.key_press(Key::Escape);
+            h.ctx.memory_mut(|m| m.stop_text_input());
+            h.run_steps(2);
+        }
+        // Settings ▸ Keyboard: Raise / Lower's key clicked, ⌥R pressed, which
+        // Paint terrain has: asked, then replaced.
+        h.state_mut().dialog = Some(Dialog::Preferences(PrefsSection::Keyboard));
+        h.run_steps(4);
+        let raise = if crate::keymap::MAC { "⌥H" } else { "Alt+H" };
+        h.get_by_label(raise).click();
+        h.run_steps(2);
+        assert!(crate::keymap::recording(), "listening for keys");
+        h.key_press_modifiers(Modifiers::ALT, Key::R);
+        h.run_steps(3);
+        assert!(matches!(h.state().dialog, Some(Dialog::Preferences(PrefsSection::Keyboard))), "still open");
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("dialog-settings-keyboard-clash.png")).unwrap();
+        }
+        h.get_by_label("Replace").click();
+        h.run_steps(3);
+        let map = h.state().settings.keys.keymap();
+        assert_eq!(map.keys(Action::Tool(Tool::Raise)), [Chord::with(Mods::ALT, Key::R)]);
+        assert_eq!(map.keys(Action::Tool(Tool::PaintTerrain)), [Chord::with(Mods::ALT, Key::P)]);
+        // Escape while listening is a key and leaves the dialog open; it
+        // cancels on the map, so that is asked first: Cancel keeps ⌥P.
+        h.get_by_label(if crate::keymap::MAC { "⌥P" } else { "Alt+P" }).click();
+        h.run_steps(2);
+        h.key_press(Key::Escape);
+        h.run_steps(3);
+        assert!(h.state().dialog.is_some(), "Escape recorded, not closing");
+        h.get_by_label("Cancel").click();
+        h.run_steps(2);
+        assert_eq!(h.state().settings.keys.keymap().keys(Action::Tool(Tool::PaintTerrain)), [Chord::with(Mods::ALT, Key::P)]);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("dialog-settings-keyboard.png")).unwrap();
+            h.state_mut().settings.theme = ThemeChoice::Dark;
+            h.run_steps(5);
+            h.render().unwrap().save(dir.join("dialog-settings-keyboard-dark.png")).unwrap();
+            for (language, name) in [(crate::i18n::Language::French, "fr"), (crate::i18n::Language::German, "de")] {
+                crate::i18n::set_language(language);
+                h.run_steps(4);
+                h.render().unwrap().save(dir.join(format!("dialog-settings-keyboard-{name}.png"))).unwrap();
+            }
+            crate::i18n::set_language(crate::i18n::Language::English);
+        }
     }
 
     /// Settings ▸ Accessibility: high contrast and reduced motion as the
