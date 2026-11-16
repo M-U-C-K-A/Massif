@@ -188,16 +188,22 @@ impl Job {
     fn spawn(kind: JobKind, label: String, progress: Option<Arc<dyn JobProgress>>, ctx: &egui::Context, work: impl FnOnce() -> Outcome + Send + 'static) -> Job {
         let (tx, rx) = channel();
         let ctx = ctx.clone();
-        std::thread::Builder::new()
+        // A system that refuses the thread (memory short, too many of them)
+        // drops the work and its sender: the job fails when polled.
+        let spawned = std::thread::Builder::new()
             .name(format!("massif {kind:?}"))
             // Reading Java object graphs recurses; give it room.
             .stack_size(64 << 20)
             .spawn(move || {
-                let outcome = work();
+                // A panic in the work fails the job, its message said; the
+                // map open is not touched by a job until it is done.
+                let outcome = crate::startup::catch(work).unwrap_or_else(|e| Outcome::Failed(format!("The task stopped on an error: {e}. The map is as it was.")));
                 let _ = tx.send(outcome);
                 ctx.request_repaint();
-            })
-            .expect("spawning a worker thread");
+            });
+        if let Err(e) = spawned {
+            log::warn!("no thread for “{label}”: {e}");
+        }
         Job {
             kind,
             label,
@@ -295,7 +301,7 @@ impl Job {
                 revision,
                 bytes: stats.file_len,
             },
-            Err(e) => Outcome::Failed(tr!("Could not save {file}: {e}", file = display_name(&path), e)),
+            Err(e) => Outcome::Failed(tr!("Could not save {file}. {why}", file = display_name(&path), why = massif_format::describe(&e, &path))),
         })
     }
 
@@ -527,6 +533,7 @@ impl Job {
             match massif_anvil::export(&snapshot, &dir, &options, &p) {
                 Ok(stats) => Outcome::Exported { dir, stats },
                 Err(massif_anvil::ExportError::Cancelled) => Outcome::Cancelled,
+                Err(massif_anvil::ExportError::Io(e)) => Outcome::Failed(tr!("Export failed. {why}.", why = massif_core::atomic::cause(&e, &dir))),
                 Err(e) => Outcome::Failed(tr!("Export failed: {e}", e)),
             }
         })

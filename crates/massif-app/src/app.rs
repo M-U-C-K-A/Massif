@@ -263,6 +263,9 @@ enum Dialog {
     PointName(Option<usize>, String),
     /// A save point to delete, once sure.
     DeletePoint(usize),
+    /// Massif stopped on an error during a frame: what it said, and the
+    /// copy of the map written then.
+    Crashed(String, Option<PathBuf>),
 }
 
 struct Status {
@@ -282,6 +285,10 @@ struct Sep {
 
 pub struct MassifApp {
     doc: Document,
+    /// A copy of the settings eframe keeps, written whole or not at all.
+    settings_backup: crate::settings_backup::SettingsBackup,
+    /// When frames stopped on an error lately.
+    panics: Vec<std::time::Instant>,
     /// Whether the document is a map the user made or opened (not the one
     /// held while the home screen is shown at startup).
     has_map: bool,
@@ -416,18 +423,23 @@ fn typeface_row(ui: &mut Ui, face: theme::Typeface, on: bool) -> egui::Response 
 impl MassifApp {
     pub fn new(cc: &eframe::CreationContext<'_>, open: Option<PathBuf>) -> Self {
         theme::install(&cc.egui_ctx);
+        // eframe's copy first; the backup when a broken write lost it.
+        let backup = crate::settings_backup::SettingsBackup::installed();
         let layout = cc
             .storage
             .and_then(|s| eframe::get_value::<Layout>(s, LAYOUT_KEY))
+            .or_else(|| backup.get(LAYOUT_KEY))
             .map(Layout::sanitize)
             .unwrap_or_default();
         let settings: Settings = cc
             .storage
             .and_then(|s| eframe::get_value(s, "massif.settings"))
+            .or_else(|| backup.get("massif.settings"))
             .unwrap_or_default();
         let mut tools: ToolState = cc
             .storage
             .and_then(|s| eframe::get_value(s, "massif.tools"))
+            .or_else(|| backup.get("massif.tools"))
             .unwrap_or_default();
         // The 3D tools live in the 3D Sculpt editor now, not on the map;
         // building and digging are one tool there.
@@ -443,9 +455,10 @@ impl MassifApp {
         crate::loader::set_pattern(&cc.egui_ctx, settings.loader);
         theme::set_typeface(&cc.egui_ctx, settings.typeface);
         let mut app = Self::with_world(default_world(), layout, tools, settings);
-        if let Some(render) = cc.storage.and_then(|s| eframe::get_value(s, "massif.render")) {
+        if let Some(render) = cc.storage.and_then(|s| eframe::get_value(s, "massif.render")).or_else(|| backup.get("massif.render")) {
             app.graph.view.render = render;
         }
+        app.settings_backup = backup;
         app.unified_titlebar = cfg!(target_os = "macos");
         app.menus_in_menu_bar = crate::menubar::NATIVE;
         app.brushes = BrushLibrary::installed();
@@ -666,6 +679,8 @@ impl MassifApp {
         massif_core::graph::set_world_reader(read_any_world);
         Self {
             doc: Document::new(world, None, 1),
+            settings_backup: Default::default(),
+            panics: Vec::new(),
             has_map: true,
             home: None,
             after_create: None,
@@ -713,6 +728,18 @@ impl MassifApp {
             unified_titlebar: false,
             menus_in_menu_bar: false,
         }
+    }
+
+    /// The open map, for tests outside this module.
+    #[cfg(test)]
+    pub fn doc_for_tests(&mut self) -> &mut Document {
+        &mut self.doc
+    }
+
+    /// The tools, for tests outside this module.
+    #[cfg(test)]
+    pub fn tools_for_tests(&self) -> &ToolState {
+        &self.tools
     }
 
     /// An app for tests: no persistence, a small world.
@@ -1513,9 +1540,9 @@ impl MassifApp {
                         .save_file()
                 {
                     let name = s.pack.name.clone();
-                    match std::fs::write(&path, s.pack.to_bytes()) {
+                    match massif_core::atomic::write(&path, &s.pack.to_bytes(), true) {
                         Ok(()) => self.say(ctx, tr!("Exported a copy of the pack “{name}”", name), false, Some(path)),
-                        Err(e) => self.say(ctx, tr!("Could not export the pack: {path}: {e}", path = path.display(), e), true, None),
+                        Err(e) => self.say(ctx, tr!("Could not export the pack. {why}", why = massif_core::atomic::describe(&e, &path)), true, None),
                     }
                 }
             }
@@ -3069,6 +3096,55 @@ impl MassifApp {
                     }
                 }
             }
+            Dialog::Crashed(said, copy) => {
+                let mut choice = None;
+                let response = modal(ctx, "crashed").show(ctx, |ui| {
+                    ui.set_width(460.0);
+                    let pal = Palette::of(ui);
+                    ui.label(RichText::new("Massif ran into an error").bold().size(15.0));
+                    let about = if copy.is_some() {
+                        "Your map was not lost: a copy of it with every change was written. Save it under a name of your own now, then carry on or quit. If you quit, Massif offers the copy back when it starts again."
+                    } else if self.doc.is_modified() {
+                        "Massif could not write a copy of your map. Save it under a new name now, then quit and start Massif again."
+                    } else {
+                        "Your map has no unsaved changes. You can carry on, or quit and start Massif again."
+                    };
+                    ui.add(egui::Label::new(RichText::new(about).color(pal.weak)).wrap());
+                    ui.add_space(6.0);
+                    ui.add(egui::Label::new(RichText::new(&said).size(11.0).monospace().color(pal.weak)).wrap());
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Quit").clicked() {
+                            choice = Some(2);
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                            if self.doc.is_modified() && ui.add(theme::primary_button(ui, "Save As…")).clicked() {
+                                choice = Some(0);
+                            }
+                            if ui.button("Carry On").clicked() {
+                                choice = Some(1);
+                            }
+                        });
+                    });
+                });
+                match choice {
+                    Some(0) => {
+                        self.save(ctx, true);
+                    }
+                    Some(1) => {}
+                    Some(2) => {
+                        // Not a clean close: the copy stays for the next start.
+                        self.autosave.keep();
+                        self.allow_close = true;
+                        ctx.send_viewport_cmd(ViewportCommand::Close);
+                    }
+                    _ => {
+                        if !response.should_close() {
+                            self.dialog = Some(Dialog::Crashed(said, copy));
+                        }
+                    }
+                }
+            }
             Dialog::DeletePoint(index) => {
                 let mut choice = None;
                 let name = self.doc.world.points.get(index).map(|p| p.name.clone()).unwrap_or_default();
@@ -3860,6 +3936,36 @@ impl MassifApp {
     }
 }
 
+impl MassifApp {
+    /// A frame stopped on an error: back the map up at once and say so,
+    /// with a way to save it elsewhere. Errors that keep coming give up:
+    /// the process ends as before, the map's copy offered at the next
+    /// start.
+    fn after_panic(&mut self, ctx: &egui::Context, said: String) {
+        let now = std::time::Instant::now();
+        self.panics.retain(|t| now.duration_since(*t) < std::time::Duration::from_secs(10));
+        self.panics.push(now);
+        let rescued = crate::startup::catch(|| self.autosave.rescue(&self.doc));
+        let copy = match rescued {
+            Ok(Ok(b)) => b.map(|b| b.file),
+            Ok(Err(e)) | Err(e) => {
+                crate::startup::step(&format!("the map could not be backed up after the error: {e}"));
+                None
+            }
+        };
+        crate::startup::step(&format!("a frame stopped on an error ({}): {said}", if copy.is_some() { "the map backed up" } else { "no backup" }));
+        if self.panics.len() > 3 {
+            // The same error every frame: nothing to carry on with. The
+            // copy stays for the next start.
+            self.autosave.keep();
+            crate::startup::tell(&format!("Massif stopped on an error:\n\n{said}\n\nA copy of your map was kept: Massif offers it back when it starts again."));
+            std::process::exit(1);
+        }
+        self.dialog = Some(Dialog::Crashed(said, copy));
+        ctx.request_repaint();
+    }
+}
+
 impl eframe::App for MassifApp {
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         // The system's Quit is not answered now during a frame (see `quit`).
@@ -3869,10 +3975,21 @@ impl eframe::App for MassifApp {
         self.dev.begin();
         // GitHub's answer about new versions, once it came.
         self.updates.poll();
-        self.frame_ui(ui, frame);
-        // macOS's menu bar shows the menus as this frame left them.
-        if crate::menubar::NATIVE {
-            crate::menubar::sync(&self.menus());
+        // A panic in the frame is stopped here, the map kept (see
+        // `after_panic`); the next frame goes on.
+        let drawn = crate::startup::catch(|| {
+            #[cfg(test)]
+            if tests::PANIC_NEXT_FRAME.take() {
+                panic!("an error made by a test");
+            }
+            self.frame_ui(ui, frame);
+            // macOS's menu bar shows the menus as this frame left them.
+            if crate::menubar::NATIVE {
+                crate::menubar::sync(&self.menus());
+            }
+        });
+        if let Err(said) = drawn {
+            self.after_panic(ui.ctx(), said);
         }
         let now = ui.input(|i| i.time);
         self.dev.end(now);
@@ -3892,6 +4009,12 @@ impl eframe::App for MassifApp {
         eframe::set_value(storage, "massif.settings", &self.settings);
         eframe::set_value(storage, "massif.render", &self.graph.view.render);
         eframe::set_value(storage, "massif.tools", &self.tools);
+        let b = &mut self.settings_backup;
+        b.set(LAYOUT_KEY, &self.layout);
+        b.set("massif.settings", &self.settings);
+        b.set("massif.render", &self.graph.view.render);
+        b.set("massif.tools", &self.tools);
+        b.write();
     }
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
@@ -4330,6 +4453,48 @@ fn covers_key(reg: &massif_core::Registry) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    thread_local! {
+        /// Make the next frame panic, as a bug would.
+        pub static PANIC_NEXT_FRAME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// A panic in a frame: the map is backed up at once, the error said in
+    /// a dialog, and frames go on. Quitting from it keeps the copy, which
+    /// the next start offers back.
+    #[test]
+    fn a_panic_in_a_frame_keeps_the_map() {
+        let dir = std::env::temp_dir().join(format!("massif-panic-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut h = harness(ThemeChoice::Light);
+        h.run_steps(3);
+        h.state_mut().autosave = crate::autosave::Autosave::open(dir.clone());
+        h.state_mut().doc.world.meta.name = "Before the error".into();
+        h.state_mut().doc.mark_changed();
+        PANIC_NEXT_FRAME.set(true);
+        h.run_steps(3);
+        let copy = match &h.state().dialog {
+            Some(Dialog::Crashed(said, Some(copy))) => {
+                assert!(said.contains("an error made by a test"), "{said}");
+                copy.clone()
+            }
+            _ => panic!("no dialog with a copy after the error"),
+        };
+        assert_eq!(massif_format::load(&copy).unwrap().meta.name, "Before the error");
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            h.render().unwrap().save(dir.join("dialog-crashed.png")).unwrap();
+        }
+        // Frames go on; quitting is not a clean close, the copy stays.
+        h.run_steps(5);
+        h.state_mut().autosave.keep();
+        h.state_mut().autosave.close();
+        assert!(copy.exists());
+        let next = crate::autosave::Autosave::open(dir.clone());
+        assert_eq!(next.found.len(), 1);
+        assert_eq!(next.found[0].file, copy);
+        drop(next);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use super::*;
     use crate::home::parse_seed;
     use massif_core::generate::Landform;

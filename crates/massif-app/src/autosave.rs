@@ -90,9 +90,7 @@ fn now_secs() -> u64 {
 /// Write `bytes` to `path` through a file beside it, renamed over it once
 /// complete.
 fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, path)
+    massif_core::atomic::write(path, bytes, true)
 }
 
 /// Every backup in `dir` whose description reads, newest first.
@@ -240,6 +238,8 @@ pub struct Autosave {
     /// How long the last backup took to write, and the copy before it on
     /// the editor's thread.
     pub last: Option<(Duration, Duration)>,
+    /// Keep the open map's backup when this run closes (after an error).
+    keep: bool,
 }
 
 impl Autosave {
@@ -257,6 +257,7 @@ impl Autosave {
             running: None,
             found: Vec::new(),
             last: None,
+            keep: false,
         }
     }
 
@@ -285,7 +286,10 @@ impl Autosave {
             for e in entries.flatten() {
                 let path = e.path();
                 let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                if name.ends_with(".tmp") {
+                // A file half written by a run that is over: another
+                // running one may be writing its own right now.
+                let stale = || e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > Duration::from_secs(3600));
+                if name.ends_with(".tmp") || massif_core::atomic::is_temp(&path) && stale() {
                     let _ = std::fs::remove_file(&path);
                 } else if let Some(session) = name.strip_suffix(".lock")
                     && session != me.session
@@ -404,6 +408,52 @@ impl Autosave {
         }
     }
 
+    /// Back up `doc` now, on this thread, whatever the timer: after an
+    /// error, before anything else goes wrong. `None` when it has no
+    /// changes to keep.
+    pub fn rescue(&mut self, doc: &crate::doc::Document) -> Result<Option<Backup>, String> {
+        let Some(dir) = self.dir.clone() else { return Err("backups are off".into()) };
+        if let Some(run) = self.running.take() {
+            // The one being written is older: let it finish, then replace it.
+            if let Ok(Ok(b)) = run.rx.recv_timeout(Duration::from_secs(30)) {
+                b.remove();
+            }
+        }
+        if !doc.is_modified() {
+            return Ok(None);
+        }
+        if let Some(b) = &self.current
+            && b.info.generation == doc.generation
+            && b.info.revision == doc.revision
+        {
+            return Ok(Some(b.clone()));
+        }
+        let info = Info {
+            session: self.session.clone(),
+            generation: doc.generation,
+            name: doc.world.meta.name.clone(),
+            path: doc.path.clone(),
+            taken: now_secs(),
+            revision: doc.revision,
+        };
+        let backup = write(&dir, doc.world.copy_unfrozen(), info)?;
+        if let Some(old) = self.current.replace(backup.clone())
+            && old.file != backup.file
+        {
+            old.remove();
+        }
+        self.generation = doc.generation;
+        self.covered = doc.revision;
+        self.since = None;
+        Ok(Some(backup))
+    }
+
+    /// Keep the open map's backup when this run closes, for the next start
+    /// to offer back.
+    pub fn keep(&mut self) {
+        self.keep = true;
+    }
+
     /// The map `generation` was saved at `revision`: its backup goes.
     pub fn saved(&mut self, generation: u64, revision: u64) {
         if generation != self.generation {
@@ -431,9 +481,15 @@ impl Autosave {
         if let Some(run) = self.running.take()
             && let Ok(Ok(b)) = run.rx.recv_timeout(Duration::from_secs(10))
         {
-            b.remove();
+            if self.keep {
+                self.current = Some(b);
+            } else {
+                b.remove();
+            }
         }
-        self.drop_current();
+        if !self.keep {
+            self.drop_current();
+        }
         if let (Some(dir), Some(lock)) = (&self.dir, self.lock.take()) {
             drop(lock);
             let _ = std::fs::remove_file(dir.join(format!("{}.lock", self.session)));

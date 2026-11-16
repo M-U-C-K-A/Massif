@@ -167,7 +167,9 @@ pub fn begin() {
         let name = thread.name().unwrap_or("unnamed").to_owned();
         write(&format!("panic in thread {name}: {info}\n{}", std::backtrace::Backtrace::force_capture()));
         printed(info);
-        if name == "main" {
+        LAST_PANIC.set(Some(message(info)));
+        // A panic `catch` stops is told by the app, the map still open.
+        if name == "main" && !CATCHING.get() {
             tell(&tr!("Massif stopped on an error:\n\n{message}{where_logged}", message = message(info), where_logged = where_logged()));
         }
     }));
@@ -176,6 +178,28 @@ pub fn begin() {
     windows::catch_crashes();
     last_start();
     let _ = std::thread::Builder::new().name("massif startup watch".into()).spawn(watch);
+}
+
+thread_local! {
+    /// Whether this thread runs inside [`catch`].
+    static CATCHING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// What the last panic on this thread said, and where.
+    static LAST_PANIC: std::cell::Cell<Option<String>> = const { std::cell::Cell::new(None) };
+}
+
+/// Run `f`, stopping a panic in it: `Err` holds what the panic said and
+/// where. The panic is written to the log as any other, but not told in a
+/// message box: the caller tells it, with the map still open.
+pub fn catch<R>(f: impl FnOnce() -> R) -> Result<R, String> {
+    let was = CATCHING.replace(true);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+    CATCHING.set(was);
+    result.map_err(|payload| {
+        let said = LAST_PANIC.take();
+        said.or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "an error with no message".to_owned())
+    })
 }
 
 /// What a panic said, and where.

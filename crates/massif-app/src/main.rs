@@ -38,6 +38,9 @@ mod real_terrain;
 mod reshape;
 mod road_draft;
 mod select;
+mod settings_backup;
+#[cfg(test)]
+mod memory_tests;
 mod sounds;
 mod textures;
 mod tiles;

@@ -1038,9 +1038,9 @@ fn save_report(name: &str, a: &Analysis) -> Choice {
     let Some(path) = rfd::FileDialog::new().set_file_name(tr!("{trim} — survival check.md", trim = file.trim())).add_filter(tr!("Markdown"), &["md"]).save_file() else {
         return Choice::Keep;
     };
-    match std::fs::write(&path, a.report()) {
+    match massif_core::atomic::write(&path, a.report().as_bytes(), true) {
         Ok(()) => Choice::Say(tr!("Report saved: {path}", path = path.display()), false),
-        Err(e) => Choice::Say(tr!("Could not save the report: {e}", e), true),
+        Err(e) => Choice::Say(tr!("Could not save the report. {why}", why = massif_core::atomic::describe(&e, &path)), true),
     }
 }
 

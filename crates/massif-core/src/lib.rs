@@ -19,6 +19,7 @@
 //! saving unchanged tiles is a memcpy and opening a file decodes nothing.
 
 pub mod analysis;
+pub mod atomic;
 pub mod auto;
 pub mod brush;
 pub mod caves;

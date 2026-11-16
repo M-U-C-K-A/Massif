@@ -106,11 +106,7 @@ impl PackLibrary {
             .chain((2..).map(|k| dir.join(format!("{stem} {k}.{}", pack_file::EXTENSION))))
             .find(|p| !taken(p))
             .expect("a free name");
-        let tmp = file.with_extension("part");
-        std::fs::write(&tmp, pack.to_bytes()).and_then(|_| std::fs::rename(&tmp, &file)).map_err(|e| {
-            let _ = std::fs::remove_file(&tmp);
-            format!("{}: {e}", file.display())
-        })?;
+        massif_core::atomic::write(&file, &pack.to_bytes(), true).map_err(|e| massif_core::atomic::describe(&e, &file))?;
         if let Some(i) = replace.filter(|&i| i < self.packs.len()) {
             if self.packs[i].file != file {
                 let _ = std::fs::remove_file(&self.packs[i].file);
@@ -430,12 +426,12 @@ fn export_ui(ui: &mut Ui, form: &mut ExportForm, reg: &massif_core::Registry, cl
             {
                 let path = if is_pack_file(&path) { path } else { path.with_extension(pack_file::EXTENSION) };
                 let bytes = pack.to_bytes();
-                match std::fs::write(&path, &bytes) {
+                match massif_core::atomic::write(&path, &bytes, true) {
                     Ok(()) => {
                         *out = Some(Outcome::Say(tr!("Exported the pack “{name}” ({things}, {human})", name = pack.name, things = things(pack.len()), human = crate::panels::human(bytes.len() as u64)), false, Some(path)));
                         *close = true;
                     }
-                    Err(e) => form.error = Some(format!("{}: {e}", path.display())),
+                    Err(e) => form.error = Some(massif_core::atomic::describe(&e, &path)),
                 }
             }
             if ui.button(tr!("Cancel")).clicked() {

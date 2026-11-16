@@ -92,7 +92,9 @@ pub fn cached(path: &Path) -> Result<Arc<Heightmap>, String> {
 pub fn write_png16(path: &Path, width: usize, height: usize, samples: &[f32]) -> Result<(), String> {
     let pixels: Vec<u16> = samples.iter().map(|v| (v.clamp(0.0, 1.0) * 65535.0).round() as u16).collect();
     let img = image::ImageBuffer::<image::Luma<u16>, Vec<u16>>::from_raw(width as u32, height as u32, pixels).ok_or("the image does not have its size")?;
-    img.save_with_format(path, image::ImageFormat::Png).map_err(|e| e.to_string())
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).map_err(|e| e.to_string())?;
+    crate::atomic::write(path, &png, true).map_err(|e| crate::atomic::describe(&e, path))
 }
 
 #[cfg(test)]

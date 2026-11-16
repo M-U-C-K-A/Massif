@@ -1243,7 +1243,9 @@ impl GraphEditor {
             return;
         };
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        self.saved = Some(match image::save_buffer(&path, &rgba, w, h, image::ColorType::Rgba8) {
+        let mut png = Vec::new();
+        let encoded = image::write_buffer_with_format(&mut std::io::Cursor::new(&mut png), &rgba, w, h, image::ColorType::Rgba8, image::ImageFormat::Png);
+        self.saved = Some(match encoded.map_err(|e| e.to_string()).and_then(|()| massif_core::atomic::write(&path, &png, true).map_err(|e| massif_core::atomic::describe(&e, &path))) {
             Ok(()) => Ok(name),
             Err(e) => Err(tr!("The image could not be saved: {e}", e)),
         });

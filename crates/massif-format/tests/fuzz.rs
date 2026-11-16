@@ -61,7 +61,7 @@ fn entries(b: &[u8]) -> Vec<(usize, [u8; 4])> {
 
 /// Make every checksum and the length agree again, so that a mutation gets
 /// past them to the decoders.
-fn reseal(b: &mut Vec<u8>) {
+fn reseal(b: &mut [u8]) {
     if b.len() < 64 || b[..8] != massif_format::MAGIC {
         return;
     }

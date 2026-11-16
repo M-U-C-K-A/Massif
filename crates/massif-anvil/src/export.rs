@@ -245,8 +245,11 @@ pub fn export(
                 region.put_record(x, z, record);
             }
             let path = region_dir.join(format!("r.{rx}.{rz}.mca"));
-            let file = io::BufWriter::with_capacity(1 << 20, std::fs::File::create(path)?);
-            bytes.fetch_add(region.write(file, timestamp)?, Ordering::Relaxed);
+            // Whole or not at all: a full disk leaves a region file of the
+            // export before, never half of one. Not synced, as the
+            // export can be made again.
+            let written = massif_core::atomic::write_with(&path, false, |out| region.write(out, timestamp))?;
+            bytes.fetch_add(written, Ordering::Relaxed);
             chunks.fetch_add(region.chunk_count(), Ordering::Relaxed);
             Ok(())
         })?;
@@ -284,7 +287,7 @@ pub fn export(
         border: options.border,
         datapacks: packs,
     };
-    std::fs::write(dir.join("level.dat"), level_dat(&settings, &options.target)?)?;
+    massif_core::atomic::write(&dir.join("level.dat"), &level_dat(&settings, &options.target)?, true)?;
 
     Ok(ExportStats {
         regions: regions.len(),

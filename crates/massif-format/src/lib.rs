@@ -437,25 +437,35 @@ pub fn write<W: Write>(world: &World, mut out: W) -> Result<Stats> {
 }
 
 /// Write a frozen world to `path` atomically: the data goes to a temporary
-/// file next to it, is synced, then renamed over the target.
+/// file next to it, is synced, then renamed over the target. On any
+/// failure the file already at `path` is left as it was (see
+/// [`massif_core::atomic`]; [`describe`] words the error).
 pub fn save(world: &World, path: &Path) -> Result<Stats> {
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = std::path::PathBuf::from(tmp);
-    let result = (|| {
-        let file = std::fs::File::create(&tmp)?;
-        let mut out = io::BufWriter::with_capacity(1 << 20, file);
-        let stats = write(world, &mut out)?;
-        let file = out.into_inner().map_err(|e| e.into_error())?;
-        file.sync_all()?;
-        drop(file);
-        std::fs::rename(&tmp, path)?;
-        Ok(stats)
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
+    let mut stats = None;
+    let written = massif_core::atomic::write_with(path, true, |out| match write(world, out) {
+        Ok(s) => {
+            stats = Some(s);
+            Ok(())
+        }
+        Err(FormatError::Io(e)) => Err(e),
+        Err(other) => Err(io::Error::other(other)),
+    });
+    match (written, stats) {
+        (Ok(()), Some(stats)) => Ok(stats),
+        (Err(e), _) => Err(match e.get_ref().is_some_and(|inner| inner.is::<FormatError>()) {
+            true => *e.into_inner().expect("checked").downcast::<FormatError>().expect("checked"),
+            false => FormatError::Io(e),
+        }),
+        (Ok(()), None) => corrupt("nothing was written"),
     }
-    result
+}
+
+/// Why saving to `path` failed, in words a map maker can act on.
+pub fn describe(e: &FormatError, path: &Path) -> String {
+    match e {
+        FormatError::Io(io) => massif_core::atomic::describe(io, path),
+        other => format!("{other}. The file already there was not changed."),
+    }
 }
 
 // --------------------------------------------------------------- reading --
