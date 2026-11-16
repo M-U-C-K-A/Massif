@@ -621,7 +621,15 @@ pub struct TileBuild {
 /// Build tile `tile`: heights and colours of its columns of plain ground,
 /// faces of the others and of its water.
 pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: TilePos, style: Style) -> TileBuild {
+    build_tile_part(dim, reg, sea, seed, tile, style, None)
+}
+
+/// [`build_tile`], or with `every` only the traced columns at the middle of
+/// each `every` × `every` square of the tile, without faces: what a coarse
+/// cell of the grid keeps of it (see [`build_coarse`]).
+fn build_tile_part(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: TilePos, style: Style, every: Option<usize>) -> TileBuild {
     let n = TILE_SIZE as usize;
+    let wanted = |i: usize, j: usize| every.is_none_or(|e| i % e == e / 2 && j % e == e / 2);
     let (cx, cz) = (tile.x * TILE_SIZE, tile.z * TILE_SIZE);
     // The tile and a ring of neighbour columns, for walls, and for slopes,
     // measured as the trend of the ground around each column.
@@ -660,6 +668,10 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
             } else {
                 0.0
             };
+            if !wanted(i as usize, j as usize) {
+                tops.push(Vec::new());
+                continue;
+            }
             let c = grid.cell(x, z);
             let (sample, cover, wet) = (grid.top[c], grid.cover[c], grid.water[c] != i32::MIN);
             let spans = grid.spans(x, z);
@@ -694,7 +706,7 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
     for j in 0..n {
         for i in 0..n {
             let (x, z) = (cx + i as i32, cz + j as i32);
-            if !traced(x, z) {
+            if !wanted(i, j) || !traced(x, z) {
                 continue;
             }
             let c = j * n + i;
@@ -712,6 +724,15 @@ pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: Ti
         }
     }
 
+    if every.is_some() {
+        return TileBuild {
+            heights,
+            colors: column_colors,
+            depths,
+            pairs,
+            faces: ChunkFaces::default(),
+        };
+    }
     let face = |x: u8, z: u8, dir: u8, len: u8, y: i16, h: i16, color: [u8; 4], mat: u16| Face {
         x,
         z,
@@ -1203,7 +1224,7 @@ fn game_fragment(in: VertexOut, n: vec3<f32>, d: f32) -> vec4<f32> {
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let n = normalize(in.normal);
     let d = distance(in.world, g.eye.xyz);
-    if (g.look.y > 0.5) {
+    if (GAME_LOOK) {
         return game_fragment(in, n, d);
     }
     if (in.water > 0.5 && in.color.r > in.color.b) {
@@ -1443,7 +1464,7 @@ struct TraceFrag {
 /// Behind everything: the sky, the game's in the player's view, with its
 /// clouds.
 fn background(d: vec3<f32>) -> vec3<f32> {
-    if (g.look.y > 0.5) {
+    if (GAME_LOOK) {
         let cl = game_clouds(g.eye.xyz, d, 1.0e9);
         return mix(game_sky(d), cl.rgb, cl.a);
     }
@@ -1618,7 +1639,7 @@ fn fs_trace(in: TraceOut) -> TraceFrag {
         normal = normalize(vec3<f32>(-(hr - hl) / (2.0 * size * stride), 1.0, -(hd - hu) / (2.0 * size * stride)));
     }
     let world = vec3<f32>(p.x * stride + terrain.origin.x, p.y, p.z * stride + terrain.origin.y);
-    if (g.look.y > 0.5) {
+    if (GAME_LOOK) {
         var c: vec3<f32>;
         if (hit.level == 0 && stride == 1.0) {
             c = game_column(hit.cell, p, world, normal, hit.t, view_d);
@@ -1731,9 +1752,10 @@ pub struct Renderer3d {
     /// Where the device cannot view the image as plain bytes (OpenGL):
     /// the pass that copies it so.
     copier: Option<crate::view_image::Copier>,
-    opaque_pipeline: wgpu::RenderPipeline,
-    water_pipeline: wgpu::RenderPipeline,
-    trace_pipeline: wgpu::RenderPipeline,
+    /// In the views' own look, then in the game's.
+    opaque_pipeline: [wgpu::RenderPipeline; 2],
+    water_pipeline: [wgpu::RenderPipeline; 2],
+    trace_pipeline: [wgpu::RenderPipeline; 2],
     globals: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     chunk_layout: wgpu::BindGroupLayout,
@@ -1763,14 +1785,18 @@ pub struct Renderer3d {
 
 impl Renderer3d {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
-        let mesh_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("massif 3d meshes"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Owned(format!("{GLOBALS_WGSL}{}{MESH_WGSL}", crate::textures::LOOK_WGSL))),
-        });
-        let trace_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("massif 3d tracer"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Owned(format!("{GLOBALS_WGSL}{}{TRACE_WGSL}", crate::textures::LOOK_WGSL))),
-        });
+        // Each shader twice: in the views' own look, and in the game's. One
+        // shader for both, choosing at each pixel, made the views' own look
+        // pay for the game's (registers held for its textures and light
+        // whether used or not, which leaves fewer pixels in flight).
+        let shader = |label: &str, body: &str, game: bool| {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(label),
+                source: wgpu::ShaderSource::Wgsl(Cow::Owned(format!("const GAME_LOOK: bool = {game};\n{GLOBALS_WGSL}{}{body}", crate::textures::LOOK_WGSL))),
+            })
+        };
+        let mesh_shaders = [false, true].map(|game| shader("massif 3d meshes", MESH_WGSL, game));
+        let trace_shaders = [false, true].map(|game| shader("massif 3d tracer", TRACE_WGSL, game));
         let uniform = |binding: u32, dynamic: bool, size: u64| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -1923,12 +1949,12 @@ impl Renderer3d {
             count: SAMPLES,
             ..Default::default()
         };
-        let pipeline = |label: &str, blend: wgpu::BlendState, depth_write: bool, cull: Option<wgpu::Face>| {
+        let pipeline = |label: &str, blend: wgpu::BlendState, depth_write: bool, cull: Option<wgpu::Face>, mesh_shader: &wgpu::ShaderModule| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&mesh_layout),
                 vertex: wgpu::VertexState {
-                    module: &mesh_shader,
+                    module: mesh_shader,
                     entry_point: Some("vs_main"),
                     compilation_options: Default::default(),
                     buffers: &buffers,
@@ -1942,7 +1968,7 @@ impl Renderer3d {
                 depth_stencil: depth(depth_write),
                 multisample,
                 fragment: Some(wgpu::FragmentState {
-                    module: &mesh_shader,
+                    module: mesh_shader,
                     entry_point: Some("fs_main"),
                     compilation_options: Default::default(),
                     targets: &target(blend),
@@ -1951,13 +1977,13 @@ impl Renderer3d {
                 cache: None,
             })
         };
-        let opaque_pipeline = pipeline("massif 3d opaque", wgpu::BlendState::REPLACE, true, Some(wgpu::Face::Back));
-        let water_pipeline = pipeline("massif 3d water", wgpu::BlendState::ALPHA_BLENDING, false, None);
-        let trace_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let opaque_pipeline = mesh_shaders.each_ref().map(|m| pipeline("massif 3d opaque", wgpu::BlendState::REPLACE, true, Some(wgpu::Face::Back), m));
+        let water_pipeline = mesh_shaders.each_ref().map(|m| pipeline("massif 3d water", wgpu::BlendState::ALPHA_BLENDING, false, None, m));
+        let trace_pipeline = trace_shaders.each_ref().map(|trace_shader| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("massif 3d tracer"),
             layout: Some(&trace_pipeline_layout),
             vertex: wgpu::VertexState {
-                module: &trace_shader,
+                module: trace_shader,
                 entry_point: Some("vs_trace"),
                 compilation_options: Default::default(),
                 buffers: &[],
@@ -1973,14 +1999,14 @@ impl Renderer3d {
             }),
             multisample,
             fragment: Some(wgpu::FragmentState {
-                module: &trace_shader,
+                module: trace_shader,
                 entry_point: Some("fs_trace"),
                 compilation_options: Default::default(),
                 targets: &target(wgpu::BlendState::REPLACE),
             }),
             multiview_mask: None,
             cache: None,
-        });
+        }));
         let (origins, origins_group) = Self::make_origins(device, &chunk_layout, 64);
         Self {
             device: device.clone(),
@@ -2666,15 +2692,16 @@ impl Renderer3d {
             pass.set_viewport(0.0, 0.0, region[0].clamp(1, w) as f32, region[1].clamp(1, h) as f32, 0.0, 1.0);
             pass.set_bind_group(0, &self.bind_group, &[]);
             pass.set_bind_group(2, &self.look_group, &[]);
+            let game = (globals.look[1] > 0.5) as usize;
             // The traced ground first, then the meshed chunks, then the
             // water over everything.
             if let Some(tr) = &self.tracer {
-                pass.set_pipeline(&self.trace_pipeline);
+                pass.set_pipeline(&self.trace_pipeline[game]);
                 pass.set_bind_group(1, &tr.group, &[]);
                 pass.draw(0..3, 0..1);
             }
             for water in [false, true] {
-                pass.set_pipeline(if water { &self.water_pipeline } else { &self.opaque_pipeline });
+                pass.set_pipeline(if water { &self.water_pipeline[game] } else { &self.opaque_pipeline[game] });
                 for (k, (t, ..)) in drawn.iter().enumerate() {
                     let chunk = &self.chunks[t];
                     let Some(faces) = (if water { &chunk.water } else { &chunk.solid }) else {
@@ -3057,7 +3084,7 @@ fn build_coarse(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, cell: Tile
         for rx in 0..stride {
             let real = TilePos::new(cell.x * stride + rx, cell.z * stride + rz);
             let Some(view) = ground.view(real) else { continue };
-            let b = build_tile(dim, reg, sea, seed, real, style);
+            let b = build_tile_part(dim, reg, sea, seed, real, style, Some(stride as usize));
             let base = pairs.len() as u16;
             pairs.extend(&b.pairs);
             for j in 0..per {
@@ -4641,6 +4668,36 @@ mod tests {
         lava: false,
     };
 
+    /// A coarse cell of the grid keeps, of each tile, the columns at the
+    /// middle of its squares: built alone, without the faces, they are what
+    /// the whole tile has there, height, water and colours.
+    #[test]
+    fn coarse_columns_are_those_of_the_whole_tile() {
+        let w = world();
+        let dim = &w.dims[0];
+        for stride in [2usize, 4] {
+            for tile in [TilePos::new(0, -1), TilePos::new(-1, 0), TilePos::new(1, 1)] {
+                let whole = build_tile(dim, &w.registry, 63.0, w.meta.seed, tile, STYLE);
+                let part = build_tile_part(dim, &w.registry, 63.0, w.meta.seed, tile, STYLE, Some(stride));
+                assert!(part.faces.solid.is_empty() && part.faces.water.is_empty());
+                let mut kept = 0;
+                for j in (stride / 2..128).step_by(stride) {
+                    for i in (stride / 2..128).step_by(stride) {
+                        let c = j * 128 + i;
+                        assert_eq!(part.heights[c], whole.heights[c], "{tile:?} ({i}, {j})");
+                        assert_eq!(part.depths[c], whole.depths[c]);
+                        if whole.heights[c] != 0 {
+                            assert_eq!(part.pairs[part.colors[c] as usize], whole.pairs[whole.colors[c] as usize]);
+                            kept += 1;
+                        }
+                    }
+                }
+                assert!(kept > 0);
+                assert!(part.pairs.len() <= whole.pairs.len());
+            }
+        }
+    }
+
     #[test]
     fn walls_only_where_neighbours_leave_air() {
         let mut out = Vec::new();
@@ -5024,6 +5081,84 @@ mod perf {
     use massif_core::brush::{Brush, BrushShape, Profile};
     use massif_core::generate::{GenParams, Landform, generate};
     use massif_core::history::History;
+
+    /// The tracer and the meshes on a huge map (MASSIF_HUGE_WORLD: a
+    /// .massif), as the 3D view shows it: its grid built, then frames at
+    /// 2,560 × 1,440 from above the whole map, from halfway and near the
+    /// ground, the graphics card waited for. Best and middle of 16.
+    #[test]
+    fn a_huge_map_on_the_gpu() {
+        use rayon::prelude::*;
+        let Some(path) = std::env::var_os("MASSIF_HUGE_WORLD") else { return };
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor { required_limits: adapter.limits(), ..Default::default() })).unwrap();
+        let world = massif_format::load(std::path::Path::new(&path)).unwrap();
+        let dim = &world.dims[0];
+        let mut renderer = Renderer3d::new(&device, &queue);
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+        let shape = GridShape::of(dim).unwrap();
+        renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).unwrap();
+        let stride = shape.stride;
+        let mut cells: Vec<TilePos> = dim.ground().positions().map(|t| grid_tile(t, stride)).collect();
+        cells.sort_by_key(|t| (t.z, t.x));
+        cells.dedup();
+        if let Some(n) = std::env::var("MASSIF_HUGE_CELLS").ok().and_then(|n| n.parse::<usize>().ok()) {
+            // Only building: n cells spread over the map, one after another.
+            let step = (cells.len() / n).max(1);
+            let some: Vec<TilePos> = cells.iter().copied().step_by(step).take(n).collect();
+            let mut best = f32::MAX;
+            for _ in 0..3 {
+                let t = Instant::now();
+                let faces: usize = some.iter().map(|&c| build_cell(dim, &world.registry, world.meta.sea_level as f32, world.meta.seed, c, stride, style).pairs.len()).sum();
+                best = best.min(t.elapsed().as_secs_f32());
+                eprintln!("{} cells: {:.2} ms a cell ({faces} pairs)", some.len(), t.elapsed().as_secs_f32() * 1000.0 / some.len() as f32);
+            }
+            eprintln!("best {:.2} ms a cell", best * 1000.0 / some.len() as f32);
+            return;
+        }
+        let t = Instant::now();
+        let built: Vec<(TilePos, TileBuild)> = cells.par_iter().map(|&c| (c, build_cell(dim, &world.registry, world.meta.sea_level as f32, world.meta.seed, c, stride, style))).collect();
+        eprintln!("{} cells at stride {stride} built in {:.1} s", cells.len(), t.elapsed().as_secs_f32());
+        let mut pairs = Pairs::default();
+        for (c, b) in &built {
+            renderer.upload_columns(*c, &pairs.pack(b));
+            if stride == 1 {
+                renderer.upload(*c, &b.faces);
+            }
+        }
+        drop(built);
+        renderer.flush();
+        renderer.set_palette(pairs.list());
+        let size = [2560u32, 1440];
+        renderer.ensure_target(size);
+        let (lo, hi) = dim.bounds().unwrap();
+        let (x0, z0, x1, z1) = ((lo.x * 128) as f64, (lo.z * 128) as f64, ((hi.x + 1) * 128) as f64, ((hi.z + 1) * 128) as f64);
+        let extent = (x1 - x0).max(z1 - z0);
+        let (cx, cz) = ((x0 + x1) / 2.0, (z0 + z1) / 2.0);
+        let substrate = Substrate { stone: [128; 3], deepslate: [80; 3], whole: false };
+        let tiles: Vec<TilePos> = if stride == 1 { cells.clone() } else { Vec::new() };
+        for (name, distance, pitch) in [("whole map", extent * 0.85, None), ("halfway", extent * 0.2, Some(0.35f32)), ("near the ground", 400.0, Some(0.12f32))] {
+            let mut camera = Camera { target: [cx, 300.0, cz], distance: distance as f32, ..Camera::default() };
+            if let Some(p) = pitch {
+                camera.pitch = p;
+            }
+            let mut times = Vec::new();
+            for k in 0..20 {
+                camera.yaw += 0.01;
+                let origin = (camera.target[0].floor() as i32, camera.target[2].floor() as i32);
+                let globals = camera.globals(origin, size[0] as f32 / size[1] as f32, extent as f32, Sky::flat([120, 160, 220]), size[1]);
+                let started = Instant::now();
+                renderer.render(&globals, origin, &tiles, dim.min_y, substrate, size);
+                let _ = renderer.device.poll(wgpu::PollType::wait_indefinitely());
+                if k >= 4 {
+                    times.push(started.elapsed().as_secs_f32() * 1000.0);
+                }
+            }
+            times.sort_by(f32::total_cmp);
+            eprintln!("{name}: best {:.1} ms, middle {:.1} ms a frame", times[0], times[times.len() / 2]);
+        }
+    }
 
     /// What the game's look costs the graphics card (MASSIF_PERF): frames
     /// of a 2,048-block map seen at a player's eyes, 1,600 × 1,000 pixels,
