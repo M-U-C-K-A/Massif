@@ -240,6 +240,10 @@ pub struct Content {
     pub object_layers: Vec<PackLayer>,
     #[serde(default)]
     pub objects: Vec<PackObject>,
+    /// Gradients of the Gradient brush, their terrains by name (those of
+    /// the pack, or those every map has).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gradients: Vec<crate::gradient::Gradient>,
 }
 
 /// A pack, read from a file or made from a map.
@@ -261,12 +265,13 @@ pub enum ItemKind {
     Cover,
     Terrain,
     Layer,
+    Gradient,
 }
 
 impl Pack {
     /// How many things it holds.
     pub fn len(&self) -> usize {
-        self.content.covers.len() + self.content.terrains.len() + self.content.object_layers.len()
+        self.content.covers.len() + self.content.terrains.len() + self.content.object_layers.len() + self.content.gradients.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -274,7 +279,7 @@ impl Pack {
     }
 
     /// Its items, by kind and number, in the order shown: object layers,
-    /// covers, terrains.
+    /// covers, terrains, gradients.
     pub fn items(&self) -> impl Iterator<Item = (ItemKind, usize, &str)> {
         let c = &self.content;
         c.object_layers
@@ -283,6 +288,25 @@ impl Pack {
             .map(|(i, l)| (ItemKind::Layer, i, l.name.as_str()))
             .chain(c.covers.iter().enumerate().map(|(i, l)| (ItemKind::Cover, i, l.name.as_str())))
             .chain(c.terrains.iter().enumerate().map(|(i, l)| (ItemKind::Terrain, i, l.name.as_str())))
+            .chain(c.gradients.iter().enumerate().map(|(i, g)| (ItemKind::Gradient, i, g.name.as_str())))
+    }
+
+    /// Add these gradients to `content`, with the terrains of `reg` they
+    /// paint that not every map has (and `content` has not already).
+    pub fn gather_gradients(content: &mut Content, reg: &Registry, gradients: &[crate::gradient::Gradient]) {
+        let vanilla = Registry::vanilla();
+        for g in gradients {
+            for name in g.terrains() {
+                let standard = vanilla.terrain_by_name(name).is_some_and(|v| reg.terrain_by_name(name).is_some_and(|t| same_terrain(&terrain_of(&vanilla, vanilla.terrain(v)), &terrain_of(reg, reg.terrain(t)))));
+                if standard || content.terrains.iter().any(|t| t.name == name) {
+                    continue;
+                }
+                if let Some(t) = reg.terrain_by_name(name) {
+                    content.terrains.push(terrain_of(reg, reg.terrain(t)));
+                }
+            }
+            content.gradients.push(g.clone());
+        }
     }
 
     /// A pack of the given covers, terrains and object layers of `reg`
@@ -409,10 +433,10 @@ impl Pack {
             return Err(invalid("it has no name"));
         }
         let c = &mut self.content;
-        if c.covers.len() > MAX_ITEMS || c.terrains.len() > MAX_ITEMS || c.object_layers.len() > MAX_ITEMS {
+        if c.covers.len() > MAX_ITEMS || c.terrains.len() > MAX_ITEMS || c.object_layers.len() > MAX_ITEMS || c.gradients.len() > MAX_ITEMS {
             return Err(invalid(format!("more than {MAX_ITEMS} things of a kind")));
         }
-        if c.covers.is_empty() && c.terrains.is_empty() && c.object_layers.is_empty() {
+        if c.covers.is_empty() && c.terrains.is_empty() && c.object_layers.is_empty() && c.gradients.is_empty() {
             return Err(invalid("it holds nothing"));
         }
         for cover in &mut c.covers {
@@ -455,6 +479,16 @@ impl Pack {
             if let Some(b) = &t.biome {
                 check_state(b)?;
             }
+        }
+        for g in &mut c.gradients {
+            g.name = item_name(&g.name, "gradient")?;
+            if g.bands.is_empty() || g.bands.len() > crate::gradient::MAX_BANDS {
+                return Err(invalid(format!("gradient {:?} has {} bands", g.name, g.bands.len())));
+            }
+            for b in &mut g.bands {
+                b.terrain = clean_text(&b.terrain, MAX_NAME * 2, false);
+            }
+            g.normalize();
         }
         let objects = c.objects.len();
         for l in &mut c.object_layers {
@@ -537,6 +571,17 @@ impl Pack {
             ItemKind::Cover => self.cover_slot(i, reg).1,
             ItemKind::Terrain => self.terrain_slot(i, reg).1,
             ItemKind::Layer => self.layer_slot(i, reg).1,
+            // A gradient is in the map when the terrains it paints are.
+            ItemKind::Gradient => {
+                let g = &self.content.gradients[i];
+                g.bands
+                    .iter()
+                    .all(|b| match self.content.terrains.iter().position(|t| t.name == b.terrain) {
+                        Some(j) => self.terrain_slot(j, reg).1.is_some(),
+                        None => reg.terrain_by_name(&b.terrain).is_some(),
+                    })
+                    .then_some(i as u16)
+            }
         }
     }
 
@@ -597,6 +642,19 @@ impl Pack {
         TerrainId(reg.terrains.len() as u16 - 1)
     }
 
+    /// Gradient `i`, with the terrains of the pack it paints added to `reg`
+    /// (or found there), its bands naming them as `reg` does.
+    pub fn install_gradient(&self, i: usize, reg: &mut Registry) -> crate::gradient::Gradient {
+        let mut g = self.content.gradients[i].clone();
+        for b in &mut g.bands {
+            if let Some(j) = self.content.terrains.iter().position(|t| t.name == b.terrain) {
+                let id = self.install_terrain(j, reg);
+                b.terrain = reg.terrain(id).name.clone();
+            }
+        }
+        g
+    }
+
     /// Add object layer `i` and its objects to `reg`, or find it there;
     /// returns its number.
     pub fn install_layer(&self, i: usize, reg: &mut Registry) -> u16 {
@@ -652,6 +710,10 @@ impl Pack {
             ItemKind::Cover => self.install_cover(i, reg),
             ItemKind::Terrain => self.install_terrain(i, reg).0,
             ItemKind::Layer => self.install_layer(i, reg),
+            ItemKind::Gradient => {
+                self.install_gradient(i, reg);
+                i as u16
+            }
         }
     }
 
@@ -715,6 +777,26 @@ impl Pack {
                     r < 0
                 });
                 b.map_or(t.color, |b| b.color)
+            }));
+        }
+        let vanilla = Registry::vanilla();
+        for g in &c.gradients {
+            let colours: Vec<[u8; 3]> = g
+                .bands
+                .iter()
+                .map(|b| c.terrains.iter().find(|t| t.name == b.terrain).map(|t| t.color).or_else(|| vanilla.terrain_by_name(&b.terrain).map(|t| vanilla.terrain(t).color)).unwrap_or([128, 128, 128]))
+                .collect();
+            let total = g.total().max(1.0);
+            let sampler = g.clone();
+            cells.push(Box::new(move |x, y| {
+                // The bands across, a ragged edge between them.
+                let jitter = (crate::compose::hash2(x as i32 / 3, y as i32 / 3, 0x6772_6164) % 7) as f32 - 3.0;
+                let p = (x as f32 + if y % 2 == 0 { jitter } else { -jitter } * 0.3) / CELL as f32 * total;
+                let k = match sampler.place(p) {
+                    crate::gradient::Place::Band(k) => k,
+                    crate::gradient::Place::Transition(k, t) => k + ((t * 2.0 - 1.0) * 6.0 + jitter > 0.0) as usize,
+                };
+                colours[k.min(colours.len() - 1)]
             }));
         }
         let shown = cells.len().clamp(1, 8) as u32;
@@ -1134,6 +1216,48 @@ mod tests {
         let mut pack = Pack { name: "Northern woods".into(), author: "Nedgar".into(), description: "Firs, tulips\nand grey cliffs.".into(), made_with: "0.6.0".into(), preview: None, content };
         pack.preview = Some(pack.draw_preview());
         (reg, pack)
+    }
+
+    #[test]
+    fn a_gradient_travels_in_a_pack_with_its_terrains() {
+        use crate::gradient::{Gradient, Transition};
+        let mut reg = Registry::vanilla();
+        let cliff = MATERIAL_MIXES.iter().find(|m| m.name == "Grey cliff strata").unwrap().install(&mut reg);
+        let cliff_name = reg.terrain(cliff).name.clone();
+        let g = Gradient::new("Cliff to grass", &[(cliff_name.as_str(), 4.0), ("Gravel", 3.0), ("Grass", 4.0)], &[Transition::blobs(5.0, 0.6, 4.0), Transition::noise(4.0, 0.7, 3.0)]);
+        let mut content = Content::default();
+        Pack::gather_gradients(&mut content, &reg, std::slice::from_ref(&g));
+        // The mix goes with it; gravel and grass every map has.
+        assert_eq!(content.terrains.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), [cliff_name.as_str()]);
+        let mut pack = Pack { name: "Gradients".into(), author: "Fornad".into(), description: String::new(), made_with: "1.0.0".into(), preview: None, content };
+        pack.preview = Some(pack.draw_preview());
+        let back = Pack::from_bytes(&pack.to_bytes()).unwrap();
+        assert_eq!(back, pack);
+        assert_eq!(back.items().last().map(|i| (i.0, i.2)), Some((ItemKind::Gradient, "Cliff to grass")));
+        // In another map: not there until its terrain is, then painted
+        // with that map's terrains.
+        let mut other = Registry::vanilla();
+        assert!(!back.installed(ItemKind::Gradient, 0, &other));
+        let installed = back.install_gradient(0, &mut other);
+        assert!(back.installed(ItemKind::Gradient, 0, &other));
+        assert_eq!(installed, g);
+        let sampler = installed.sampler(&other, 1).unwrap();
+        assert_eq!(other.terrain(sampler.terrains()[0]).name, cliff_name);
+    }
+
+    #[test]
+    fn a_broken_gradient_in_a_pack_is_mended_or_refused() {
+        let mut pack = Pack { name: "G".into(), author: String::new(), description: String::new(), made_with: String::new(), preview: None, content: Content::default() };
+        let mut g = crate::gradient::Gradient::default();
+        g.transitions.clear();
+        g.bands[0].width = f32::NAN;
+        pack.content.gradients.push(g);
+        pack.validate().unwrap();
+        let g = &pack.content.gradients[0];
+        assert_eq!(g.transitions.len(), g.bands.len() - 1);
+        assert!(g.bands[0].width.is_finite());
+        pack.content.gradients[0].bands.clear();
+        assert!(pack.validate().is_err());
     }
 
     #[test]

@@ -360,6 +360,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
                 );
             }
         }
+        Tool::Gradient => crate::gradient_ui::tool_settings(ui, tools, doc),
         Tool::Cover => cover_settings(ui, tools, doc, blocks),
         Tool::Objects => object_settings(ui, tools, doc, blocks),
         Tool::Annotate => annotation_settings(ui, tools),
@@ -1527,13 +1528,13 @@ fn cover_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks
 }
 
 /// A terrain of the map, or a whole block of the game to make one of.
-enum Pick {
+pub(crate) enum Pick {
     Terrain(String),
     Block(massif_assets::Block),
 }
 
 /// The name of the terrain picked, made from its block the first time.
-fn picked_terrain(pick: Pick, doc: &mut Document) -> String {
+pub(crate) fn picked_terrain(pick: Pick, doc: &mut Document) -> String {
     match pick {
         Pick::Terrain(name) => name,
         Pick::Block(block) => {
@@ -1546,7 +1547,7 @@ fn picked_terrain(pick: Pick, doc: &mut Document) -> String {
 
 /// A list to pick from, with a search field: the terrains of the map, then
 /// the game's whole blocks that are not terrains yet.
-fn ground_picker(ui: &mut Ui, id: egui::Id, reg: &Registry, blocks: &mut BlockLibrary, current: Option<&str>) -> Option<Pick> {
+pub(crate) fn ground_picker(ui: &mut Ui, id: egui::Id, reg: &Registry, blocks: &mut BlockLibrary, current: Option<&str>) -> Option<Pick> {
     let pal = Palette::of(ui);
     let ctx = ui.ctx().clone();
     ui.set_max_width(300.0);

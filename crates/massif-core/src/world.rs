@@ -26,6 +26,9 @@ pub struct WorldMeta {
     /// set otherwise).
     #[serde(default)]
     pub ores: crate::ores::OreSettings,
+    /// The gradients of the Gradient brush kept with the map.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gradients: Vec<crate::gradient::Gradient>,
 }
 
 impl Default for WorldMeta {
@@ -38,6 +41,7 @@ impl Default for WorldMeta {
             lava: false,
             graph: None,
             ores: crate::ores::OreSettings::default(),
+            gradients: Vec::new(),
         }
     }
 }

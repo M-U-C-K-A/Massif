@@ -165,6 +165,17 @@ pub fn paint(painter: &Painter, rect: Rect, tool: Tool, color: Color32) {
         Tool::PaintTerrain => {
             pen.block(12.0, 8.0, 16.0, 9.0, 0.55);
         }
+        // Ground in bands: one terrain giving way to the next.
+        Tool::Gradient => {
+            pen.line(&[(2.0, 20.5), (22.0, 20.5)]);
+            pen.line(&[(2.0, 13.0), (22.0, 13.0)]);
+            pen.dashed(&[(8.0, 13.0), (9.5, 16.5), (8.0, 20.5)]);
+            pen.dashed(&[(15.5, 13.0), (14.0, 16.5), (15.5, 20.5)]);
+            pen.dot(5.0, 16.8, 1.0);
+            pen.dot(12.0, 15.0, 0.9);
+            pen.dot(11.5, 18.5, 0.9);
+            pen.dot(19.0, 16.8, 1.0);
+        }
         // Trees of a climate on the ground.
         Tool::PaintBiome => {
             pen.line(&[(2.0, 20.5), (22.0, 20.5)]);

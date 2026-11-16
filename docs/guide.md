@@ -756,6 +756,75 @@ band, a slope…), as one step to undo. The pattern is laid in world
 coordinates: strokes side by side join without a seam, and painting a place
 again gives the same blocks.
 
+## Gradient brush
+
+![The Gradient brush's editor on the gradient of the terraformers' sketch: moss, coarse dirt, podzol and grass on a bar with their textures, the stops and midpoints under it, the edge's marker over it, a blobby transition chosen, a patch and a strip showing the result](assets/renders/gradient-editor.jpg)
+
+The **Gradient brush** (in the Paint tools, beside Paint terrain) blends two
+terrains over their edge instead of leaving a hard line. Paint the base
+terrains first — patches of rock in grass, a dark pit — then drag the
+Gradient brush over the boundary: rock, then a rim of other blocks, then
+grass.
+
+A gradient is a list of terrains in **bands** of so many blocks, A → B → C →
+D, and between each two a **transition**:
+
+- **Hard cut**: a clean line.
+- **Noise**: a ragged edge, each terrain reaching into the other.
+  **Intensity** sets how far, **Scale** the size of its fingers.
+- **Blobs**: blobs of the next terrain, of every size, denser and denser until
+  they join, with blobs of the first left in it. **Density** sets how many,
+  **Blob size** the size of the largest.
+
+Each transition also has a **midpoint**, as between two stops of a picture
+editor's gradient: where the two terrains are half and half. Moved towards
+the first terrain, the next one goes further into it; towards the next, the
+first goes further out. A band can be any terrain of the map, a terrain mix,
+or any block of the game or of the mods read in Blocks (Conquest Reforged's,
+say): a block becomes a terrain the first time it is picked.
+
+**Across an edge**, the brush's main way, every column takes the band its
+distance to the boundary says. The bands before the **edge** lie on the side
+of the gradient's first terrain, those after it on the side of its last; out
+of the box the edge falls in the first transition, so the first terrain
+keeps its ground and the others ring it. The boundary is found within the
+brush's reach, between the gradient's first terrain (and any terrain it does
+not paint, on that side) and its last, as it was when the stroke began:
+going over the same place again paints the same thing, and what the stroke
+paints never moves the edge under it. Past the gradient's ends the ground is
+left as it is. **Wander** widens and narrows the bands along the edge, so
+that a rim is wide here and thin there as on real ground; the edge itself
+stays where it is. With a selection, the gradient runs in from the
+selection's edge instead. **From the centre** lays it from the brush's centre
+(its start) to its rim (its end): a patch with a core and rings. The right
+button paints the gradient the other way round.
+
+![A dark pit in grass, then ringed by andesite and gravel fading into the grass after one click of the Gradient brush](assets/renders/gradient-patch.jpg)
+
+It keeps to the selection, the brush's filters, its intensity and soft edges,
+and a stroke is one step to undo. The gradient is laid in world coordinates
+from the map's seed and its own: the same stroke paints the same ground, and
+strokes side by side join without a seam. A brush thousands of blocks wide
+is worked out a square of 1,024 blocks at a time.
+
+**Edit…** opens the gradient's editor. **Presets** along its top are the
+built-in gradients, yours and the map's: a click starts from one. The bar
+shows the bands and transitions with the blocks' real textures and their
+widths in blocks. Drag a stop under the bar to move blocks from one segment
+to its neighbour; click under the bar between two stops to add one there,
+splitting the band; drag a transition's diamond to move its midpoint, and
+the marker over the bar to move the edge. Click a segment to choose its
+terrain, type its width or pick its transition and settings. A patch and a
+strip along an edge show the result as it changes. **Save** keeps the
+gradient among yours (in every map) and in the map, which keeps every
+gradient it is painted with. **Export…** writes it as a `.massifpack` with the
+terrains it needs; **Import…** reads one. Built-in gradients are a start:
+Rock to grass (a gold-green rim of moss around rock), Pit to grass (two
+greys around a dark pit), Deciduous forest to grass (a hard cut, a noise and
+blobs over 30 blocks) and Shore. Gradients travel in packs too: **File ▸
+Export Pack…** offers the map's gradients, and one picked in the Packs panel
+adds its terrains to the map and paints with it.
+
 ## Layers
 
 What WorldPainter calls layers — its custom plant layers, custom object

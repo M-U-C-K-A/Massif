@@ -556,6 +556,67 @@ pub fn paint_pattern(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, salt: u64
     });
 }
 
+/// Paint a gradient of terrains under the brush (see [`crate::gradient`]):
+/// each column takes the band its distance to the boundary (or to the
+/// brush's centre) says. `sides` is the stroke's: what side of the
+/// boundary each column was on when the stroke began. `salt` should change
+/// from dab to dab.
+#[allow(clippy::too_many_arguments)]
+pub fn paint_gradient(
+    edit: &mut Edit,
+    brush: &Brush,
+    cx: f32,
+    cz: f32,
+    salt: u64,
+    gradient: &crate::gradient::GradientSampler,
+    layout: crate::gradient::Layout,
+    sides: &mut crate::gradient::Sides,
+) {
+    let dab = Dab::new(edit, brush, cx, cz);
+    if dab.idle {
+        return;
+    }
+    let footprint = BlockRect::around(cx, cz, brush.reach());
+    let level = edit.level_index();
+    // Square by square, each whole tiles: a giant brush never holds more
+    // than one square's distances at once.
+    const SQUARE: i32 = 1024;
+    let squares = |lo: i32, hi: i32| lo.div_euclid(SQUARE)..=(hi - 1).div_euclid(SQUARE);
+    for sz in squares(footprint.z0, footprint.z1) {
+        for sx in squares(footprint.x0, footprint.x1) {
+            let square = footprint.intersect(&BlockRect::new(sx * SQUARE, sz * SQUARE, (sx + 1) * SQUARE, (sz + 1) * SQUARE));
+            if square.is_empty() {
+                continue;
+            }
+            let at = crate::gradient::positions(edit.dim(), level, gradient, layout, sides, square, cx, cz, brush.reach());
+            if at.iter().all(|p| p.is_nan()) {
+                continue;
+            }
+            let sw = square.width() as usize;
+            edit.par_tiles(square.tiles(), square, false, |_, clip, tile| {
+                let slab = tile.bottom.is_some();
+                for z in clip.z0..clip.z1 {
+                    for x in dab.row(z, &clip) {
+                        let p = at[(z - square.z0) as usize * sw + (x - square.x0) as usize];
+                        if p.is_nan() {
+                            continue;
+                        }
+                        let w = dab.weight(x, z);
+                        if w <= 0.0 || !paint_hit(w, brush.strength, x, z, salt) {
+                            continue;
+                        }
+                        let i = local_index(x, z);
+                        if slab && !tile.present(i) {
+                            continue;
+                        }
+                        tile.terrain.set(i, gradient.terrain(p, x, z).0);
+                    }
+                }
+            });
+        }
+    }
+}
+
 /// What a pattern would paint under a brush, for a picture of it drawn
 /// over the map (see [`pattern_preview`]).
 #[derive(Debug, Clone, PartialEq)]

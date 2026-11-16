@@ -203,6 +203,12 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
             Some(tr!("Pick it in Terrain or Blocks, or Alt-click it on the map. Noise mixes several.")),
             Some(Demo::Paint),
         ),
+        Tool::Gradient => card(
+            tr!("Blends two terrains over their edge: rock, then a rim, then grass, instead of a hard line."),
+            vec![(tr!("Drag over an edge"), tr!("Lay the gradient across it")), (tr!("Right-drag"), tr!("The gradient the other way round"))],
+            Some(tr!("Build gradients in its editor: terrains in bands, a hard cut, noise or blobs between them.")),
+            Some(Demo::Paint),
+        ),
         Tool::PaintBiome => card(
             tr!("Paints a biome: the colours of grass and water, the weather, what lives there."),
             vec![(tr!("Drag"), tr!("Paint")), (tr!("Right-drag"), tr!("Back to automatic"))],

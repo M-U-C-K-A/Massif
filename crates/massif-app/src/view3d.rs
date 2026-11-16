@@ -5508,3 +5508,125 @@ mod graphics_perf {
     }
 
 }
+
+/// The Gradient brush seen in the 3D view, with the game's look and
+/// textures: Conquest Reforged's blocks on hills, before and after. Runs
+/// with MASSIF_SNAPSHOT_DIR and MASSIF_CONQUEST_JAR (the mod's jar), on a
+/// graphics card, where Minecraft is installed.
+#[cfg(test)]
+mod gradient_shots {
+    use super::*;
+    use crate::gradient_ui::shots;
+    use massif_core::generate::{GenParams, Landform, generate};
+    use massif_core::history::History;
+    use massif_core::ops::{self, Surface};
+    use massif_core::{Brush, BrushShape, Profile, World};
+
+    /// The world drawn as the game's look draws it, from `camera`.
+    fn game_look(device: &wgpu::Device, queue: &wgpu::Queue, world: &World, cat: &massif_assets::Catalogue, camera: Camera, size: [u32; 2]) -> image::RgbImage {
+        let mut renderer = Renderer3d::new(device, queue);
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+        let dim = &world.dims[0];
+        let shape = GridShape::of(dim, PAGE_BUDGET).unwrap();
+        renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).unwrap();
+        let mut pairs = Pairs::default();
+        let tiles: Vec<TilePos> = dim.ground().positions().collect();
+        for &t in &tiles {
+            let b = build_tile(dim, &world.registry, world.meta.sea_level as f32, world.meta.seed, t, style);
+            renderer.upload_columns(t, &pairs.pack(&b));
+            renderer.upload(t, &b.faces);
+        }
+        renderer.flush();
+        renderer.set_palette(pairs.list());
+        let most = device.limits().max_texture_array_layers as usize;
+        let atlas = crate::textures::atlas(&world.registry, cat, most);
+        renderer.set_look(&atlas, &crate::textures::clouds(Some(cat)));
+        let (materials, fluids) = renderer.look_info();
+        renderer.ensure_target(size);
+        let substrate = Substrate { stone: [128; 3], deepslate: [80; 3], whole: false };
+        let origin = (camera.target[0].floor() as i32, camera.target[2].floor() as i32);
+        let mut globals = camera.globals(origin, size[0] as f32 / size[1] as f32, 512.0, Sky::GAME, size[1]);
+        globals.look = [1.0, 1.0, CLOUDS_Y, materials as f32];
+        globals.fog = [192.0, 1536.0, globals.fog[2], globals.fog[3]];
+        globals.rock = [world.registry.well_known.stone.0 as f32, world.registry.well_known.deepslate.0 as f32, fluids[0] as f32, fluids[1] as f32];
+        renderer.render(&globals, origin, &tiles, dim.min_y, substrate, size);
+        renderer.wait();
+        let (w, h, rgba) = renderer.read_image().expect("the image");
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_raw(w, h, rgba).unwrap()).to_rgb8()
+    }
+
+    fn edit(world: &mut World, f: impl FnOnce(&mut massif_core::Edit)) {
+        let mut h = History::default();
+        h.begin("shot", 0);
+        f(&mut h.edit(world, 0));
+        h.commit();
+    }
+
+    #[test]
+    fn the_gradient_brush_on_hills_in_3d() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from) else {
+            return;
+        };
+        let Some((_, Some(cat))) = shots::catalogues() else {
+            eprintln!("needs Minecraft and MASSIF_CONQUEST_JAR: skipping");
+            return;
+        };
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("no GPU adapter: skipping");
+            return;
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+        let size = [1600, 1000];
+        for (file, g, around, patch) in shots::conquest() {
+            let pit = file == "conquest-dark-pit-two-greys";
+            // Rock on the hills: the rim's example and each transition alone.
+            let rocks = matches!(file, "conquest-rock-gold-green-rim" | "conquest-hard-cut" | "conquest-noise" | "conquest-blobs");
+            let mut world = generate(&GenParams { tiles_x: 4, tiles_z: 4, landform: Landform::Hills, seed: 21, ..GenParams::default() });
+            massif_assets::apply_colors(&mut world.registry, &cat);
+            for name in g.terrains() {
+                shots::terrain(&mut world.registry, &cat, name);
+            }
+            let (around, patch) = (shots::terrain(&mut world.registry, &cat, around), shots::terrain(&mut world.registry, &cat, patch));
+            let ground = Brush { strength: 1.0, ..Brush::symmetric(BrushShape::Square, Profile::Constant, 300.0) };
+            edit(&mut world, |e| ops::paint_terrain(e, &ground, 0.0, 0.0, around, 1));
+            if pit {
+                // A pit dug in the hills, its floor dark.
+                edit(&mut world, |e| {
+                    ops::raise(e, &Brush { strength: 1.0, ..Brush::symmetric(BrushShape::Circle, Profile::Sine, 34.0) }, 0.0, 0.0, -12.0, Surface::Top);
+                    ops::paint_terrain(e, &shots::patch_brush(22.0, 5), 0.0, 0.0, patch, 1);
+                });
+            } else if rocks {
+                // Rock where the hills are steep, and a few patches by hand.
+                let steep = massif_core::filter::Filter { slope_above: true, slope: 24.0, ..Default::default() };
+                edit(&mut world, |e| {
+                    ops::paint_terrain(e, &Brush { filter: Some(std::sync::Arc::new(steep)), strength: 1.0, ..Brush::symmetric(BrushShape::Circle, Profile::Constant, 110.0) }, 0.0, 0.0, patch, 1);
+                    for (k, (x, z)) in [(-30.0, 20.0), (35.0, -25.0), (10.0, 40.0)].into_iter().enumerate() {
+                        ops::paint_terrain(e, &shots::patch_brush(16.0, 30 + k as u64), x, z, patch, 1);
+                    }
+                });
+            } else {
+                edit(&mut world, |e| ops::paint_terrain(e, &shots::patch_brush(36.0, 9), 0.0, 0.0, patch, 1));
+            }
+            // The whole scene, or close on one patch for the transitions.
+            let close = matches!(file, "conquest-hard-cut" | "conquest-noise" | "conquest-blobs");
+            let at = if close { (35.0, -25.0) } else { (0.0, 0.0) };
+            let h = ops::height_at(&world.dims[0], 0, at.0 as i32, at.1 as i32, Surface::Top).unwrap_or(70.0) as f64;
+            let camera = match (pit, close) {
+                (true, _) => Camera { target: [0.0, h, 0.0], yaw: 0.75, pitch: 0.72, distance: 95.0 },
+                (_, true) => Camera { target: [at.0, h, at.1], yaw: 0.75, pitch: 0.62, distance: 62.0 },
+                _ => Camera { target: [0.0, h, 0.0], yaw: 0.75, pitch: 0.6, distance: 150.0 },
+            };
+            let before = game_look(&device, &queue, &world, &cat, camera, size);
+            shots::paint_over(&mut world, &g, (0.0, 0.0), 130.0);
+            let after = game_look(&device, &queue, &world, &cat, camera, size);
+            before.save(dir.join(format!("3d-{file}-before.png"))).unwrap();
+            after.save(dir.join(format!("3d-{file}-after.png"))).unwrap();
+            // Before over after, to compare at a glance.
+            let mut both = image::RgbImage::from_pixel(size[0], size[1] * 2 + 16, image::Rgb([250, 250, 250]));
+            image::imageops::replace(&mut both, &before, 0, 0);
+            image::imageops::replace(&mut both, &after, 0, (size[1] + 16) as i64);
+            both.save(dir.join(format!("3d-{file}.png"))).unwrap();
+        }
+    }
+}

@@ -713,6 +713,7 @@ pub fn new_world(name: &str, samples: &Samples, fit: &Fit, area: &Area, sea_leve
         lava: false,
         graph: None,
         ores: Default::default(),
+        gradients: Vec::new(),
     });
     let (bottom, ceiling) = build_limits(min_y, max_y);
     world.dims[0].min_y = bottom;

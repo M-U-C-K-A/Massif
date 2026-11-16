@@ -29,6 +29,7 @@ pub mod coords;
 pub mod filter;
 pub mod flow;
 pub mod generate;
+pub mod gradient;
 pub mod graph;
 pub mod heightmap;
 pub mod history;

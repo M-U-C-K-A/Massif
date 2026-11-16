@@ -68,6 +68,7 @@ fn art(tool: Tool) -> Art {
         Tool::StampSlab => Art::Paths(SLAB),
         Tool::AutoBiome => Art::Paths(AUTO_BIOME),
         Tool::PaintTerrain => Art::Glyph(Icon::Paintbrush),
+        Tool::Gradient => Art::Glyph(Icon::Blend),
         Tool::PaintBiome => Art::Glyph(Icon::TreeDeciduous),
         Tool::AutoPaint => Art::Glyph(Icon::WandSparkles),
         Tool::Cover => Art::Glyph(Icon::Sprout),
@@ -401,7 +402,7 @@ mod tests {
     use super::*;
 
     /// Every tool, in the order of the Tools panel.
-    pub(super) const ALL: [Tool; 27] = [
+    pub(super) const ALL: [Tool; 28] = [
         Tool::Raise,
         Tool::Smooth,
         Tool::Flatten,
@@ -409,6 +410,7 @@ mod tests {
         Tool::Roughen,
         Tool::Road,
         Tool::PaintTerrain,
+        Tool::Gradient,
         Tool::PaintBiome,
         Tool::AutoPaint,
         Tool::AutoBiome,

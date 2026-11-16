@@ -40,6 +40,13 @@ fn brushes_on_a_large_map() {
         time(&format!("raise r{radius}"), || ops::raise(&mut edit, &brush, 0.0, 0.0, 1.0, Surface::Top));
         time(&format!("smooth r{radius}"), || ops::smooth(&mut edit, &brush, 0.0, 0.0, Surface::Top));
         time(&format!("paint r{radius}"), || ops::paint_terrain(&mut edit, &brush, 0.0, 0.0, TerrainId(1), 7));
+        world_stone(&mut edit, radius, reg.terrain_by_name("Stone").unwrap());
+        // Across the edge of the patch just painted.
+        let gradient = massif_core::gradient::Gradient::default().sampler(&reg, 3).unwrap();
+        let mut sides = massif_core::gradient::Sides::new();
+        let across = massif_core::gradient::Layout::Across;
+        time(&format!("gradient r{radius}"), || ops::paint_gradient(&mut edit, &brush, radius * 0.6, 0.0, 7, &gradient, across, &mut sides));
+        time(&format!("gradient again r{radius}"), || ops::paint_gradient(&mut edit, &brush, radius * 0.6 + 4.0, 0.0, 8, &gradient, across, &mut sides));
         time(&format!("survey r{radius}"), || reader.survey(edit.dim(), massif_core::coords::BlockRect::around(0.0, 0.0, radius)));
         let mut biomes = Classes::new(true);
         time(&format!("auto biome r{radius}"), || ops::auto_biome(&mut edit, &brush, 0.0, 0.0, 7, &reader, &mut biomes));
@@ -290,7 +297,7 @@ fn cpu_seconds() -> f64 {
 
 /// One brush, dab after dab for a while (MASSIF_SECONDS, 12 by default),
 /// for a profiler and for timings: MASSIF_BRUSH is raise, smooth, paint,
-/// height, slope or hollows, MASSIF_RADIUS its radius. Run with
+/// gradient (across the edge of a patch of stone), height, slope or hollows, MASSIF_RADIUS its radius. Run with
 /// RAYON_NUM_THREADS=1, its CPU time a dab is the work a dab takes, little
 /// changed by what else the machine runs. MASSIF_SELECT=1 selects a
 /// feathered ellipse over half the brush first.
@@ -314,8 +321,14 @@ fn one_brush_again_and_again() {
         let shape = Selection::shape(&Shape::Ellipse(massif_core::BlockRect::new(0, -r, 2 * r, r))).feather(32);
         history.select(&mut world, 0, "Select", Some(shape));
     }
+    let gradient = massif_core::gradient::Gradient::default().sampler(&world.registry, 3).unwrap();
+    let stone = world.registry.terrain_by_name("Stone").unwrap();
     history.begin("perf", 0);
     let mut edit = history.edit(&mut world, 0);
+    if which == "gradient" {
+        world_stone(&mut edit, radius, stone);
+    }
+    let mut sides = massif_core::gradient::Sides::new();
     let seconds: f32 = std::env::var("MASSIF_SECONDS").ok().and_then(|r| r.parse().ok()).unwrap_or(12.0);
     let (started, cpu) = (Instant::now(), cpu_seconds());
     let mut dabs = 0;
@@ -324,12 +337,18 @@ fn one_brush_again_and_again() {
         match which.as_str() {
             "raise" => ops::raise(&mut edit, &brush, c, 0.0, 0.5, Surface::Top),
             "smooth" => ops::smooth(&mut edit, &brush, c, 0.0, Surface::Top),
+            "gradient" => ops::paint_gradient(&mut edit, &brush, c + radius * 0.6, 0.0, dabs as u64, &gradient, massif_core::gradient::Layout::Across, &mut sides),
             _ => ops::paint_terrain(&mut edit, &brush, c, 0.0, TerrainId(1), dabs as u64),
         }
         dabs += 1;
     }
     let cpu = cpu_seconds() - cpu;
     eprintln!("{which} r{radius}: {:.2} ms a dab, {:.2} ms of CPU", started.elapsed().as_secs_f64() * 1000.0 / dabs as f64, cpu * 1000.0 / dabs as f64);
+}
+
+/// A patch of stone half the brush wide, for the gradient to blend.
+fn world_stone(edit: &mut massif_core::Edit, radius: f32, stone: TerrainId) {
+    ops::paint_terrain(edit, &Brush::symmetric(BrushShape::Circle, Profile::Constant, radius * 0.6), 0.0, 0.0, stone, 1);
 }
 
 /// Caves over a large generated map (MASSIF_TILES a side, 64 by default):

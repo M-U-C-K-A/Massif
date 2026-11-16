@@ -6,7 +6,7 @@
 use crate::doc::Document;
 use crate::theme::{self, Icon, Palette, RichTextExt};
 use crate::tools::{Tool, ToolState};
-use egui::{Align, Color32, Rect, RichText, Ui, vec2};
+use egui::{Align, Color32, Rect, RichText, Ui, pos2, vec2};
 use massif_core::pack_file::{self, ItemKind, Pack};
 use std::path::{Path, PathBuf};
 
@@ -157,6 +157,8 @@ pub struct ExportForm {
     pub picture: Option<Vec<u8>>,
     /// What the map has to put in it: kind, number, name, whether it goes.
     pub choices: Vec<(ItemKind, u16, String, bool)>,
+    /// The map's gradients, a choice each.
+    gradients: Vec<massif_core::gradient::Gradient>,
     preview: Option<(Vec<u8>, egui::TextureHandle)>,
     pub error: Option<String>,
 }
@@ -182,13 +184,24 @@ impl ExportForm {
                 choices.push((ItemKind::Terrain, k as u16, t.name.clone(), true));
             }
         }
-        Self { name: name.to_owned(), author: author.to_owned(), description: String::new(), picture: None, choices, preview: None, error: None }
+        Self { name: name.to_owned(), author: author.to_owned(), description: String::new(), picture: None, choices, gradients: Vec::new(), preview: None, error: None }
+    }
+
+    /// The form with the map's gradients to choose from as well.
+    pub fn with_gradients(mut self, gradients: &[massif_core::gradient::Gradient]) -> Self {
+        for (k, g) in gradients.iter().enumerate() {
+            self.choices.push((ItemKind::Gradient, k as u16, g.name.clone(), true));
+        }
+        self.gradients = gradients.to_vec();
+        self
     }
 
     /// The pack it makes.
     pub fn pack(&self, reg: &massif_core::Registry) -> Pack {
         let pick = |kind| self.choices.iter().filter(|c| c.0 == kind && c.3).map(|c| c.1).collect::<Vec<u16>>();
-        let content = Pack::gather(reg, &pick(ItemKind::Cover), &pick(ItemKind::Terrain), &pick(ItemKind::Layer));
+        let mut content = Pack::gather(reg, &pick(ItemKind::Cover), &pick(ItemKind::Terrain), &pick(ItemKind::Layer));
+        let gradients: Vec<_> = pick(ItemKind::Gradient).into_iter().filter_map(|k| self.gradients.get(k as usize).cloned()).collect();
+        Pack::gather_gradients(&mut content, reg, &gradients);
         let mut pack = Pack {
             name: pack_file::clean_text(&self.name, pack_file::MAX_NAME, false),
             author: pack_file::clean_text(&self.author, pack_file::MAX_NAME, false),
@@ -364,6 +377,7 @@ fn export_ui(ui: &mut Ui, form: &mut ExportForm, reg: &massif_core::Registry, cl
                         ItemKind::Layer => tr!("Object layer"),
                         ItemKind::Cover => tr!("Ground cover"),
                         ItemKind::Terrain => tr!("Terrain"),
+                        ItemKind::Gradient => tr!("Gradient"),
                     };
                     ui.horizontal(|ui| {
                         crate::widgets::checkbox(ui, on, name.as_str());
@@ -514,11 +528,13 @@ pub fn library_ui(ui: &mut Ui, library: &mut PackLibrary, needle: &str, tools: &
                         ItemKind::Layer => tools.tool == Tool::Objects && tools.object_layer == n,
                         ItemKind::Cover => tools.tool == Tool::Cover && tools.cover == n,
                         ItemKind::Terrain => tools.tool == Tool::PaintTerrain && !tools.pattern.on && tools.terrain == n,
+                        ItemKind::Gradient => tools.tool == Tool::Gradient && tools.gradient.gradient.name == *name,
                     });
                     let what = match kind {
                         ItemKind::Layer => tr!("An object layer."),
                         ItemKind::Cover => tr!("A ground cover."),
                         ItemKind::Terrain => tr!("A terrain."),
+                        ItemKind::Gradient => tr!("A gradient for the Gradient brush."),
                     };
                     let tip = tr!("{what} From “{name}”.{value}", name = pack.name, value = if found.is_some() { tr!("\nOn the map already: a click picks it.") } else { "" }, what);
                     let clicked = crate::packs::tile_ui(ui, tile_w, name, painted, found.is_some(), &tip, |painter, rect| picture(painter, rect, pack, *kind, *i, catalogue));
@@ -557,11 +573,28 @@ pub fn apply(pack: &Pack, kind: ItemKind, i: usize, tools: &mut ToolState, doc: 
             tools.pattern.on = false;
             tools.select(Tool::PaintTerrain);
         }
+        ItemKind::Gradient => {
+            tools.gradient.gradient = pack.install_gradient(i, reg);
+            if let Some(cat) = catalogue {
+                massif_assets::apply_colors(reg, cat);
+            }
+            let kept = doc.world.meta.gradients.contains(&tools.gradient.gradient);
+            tools.gradient.keep_in(doc);
+            tools.select(Tool::Gradient);
+            let name = tools.gradient.gradient.name.clone();
+            return if had && kept {
+                tr!("Painting with {name}", name)
+            } else {
+                doc.mark_changed();
+                tr!("Added the gradient {name} to the map: paint with it", name)
+            };
+        }
     }
     let name = match kind {
         ItemKind::Layer => reg.object_layer(n).map(|l| l.name.clone()),
         ItemKind::Cover => reg.cover(n).map(|c| c.name.clone()),
         ItemKind::Terrain => reg.terrains.get(n as usize).map(|t| t.name.clone()),
+        ItemKind::Gradient => None,
     }
     .unwrap_or_default();
     if had {
@@ -603,6 +636,20 @@ fn picture(painter: &egui::Painter, rect: Rect, pack: &Pack, kind: ItemKind, i: 
         ItemKind::Layer => {
             let l = &pack.content.object_layers[i];
             crate::packs::swatch(painter, rect, l.color, Icon::TreeDeciduous);
+        }
+        ItemKind::Gradient => {
+            // Its bands across, each its width.
+            let g = &pack.content.gradients[i];
+            let vanilla = massif_core::Registry::vanilla();
+            let total = g.total().max(1.0);
+            let mut x = rect.min.x;
+            for (k, b) in g.bands.iter().enumerate() {
+                let c = pack.content.terrains.iter().find(|t| t.name == b.terrain).map(|t| t.color).or_else(|| vanilla.terrain_by_name(&b.terrain).map(|t| vanilla.terrain(t).color)).unwrap_or([128; 3]);
+                let w = (b.width + g.transitions.get(k).map_or(0.0, |t| t.width)) / total * rect.width();
+                painter.rect_filled(Rect::from_min_max(pos2(x, rect.min.y), pos2((x + w).min(rect.max.x), rect.max.y)), 0.0, theme::rgb(c));
+                x += w;
+            }
+            painter.rect_stroke(rect, theme::TILE_RADIUS, egui::Stroke::new(1.0, Color32::from_black_alpha(70)), egui::StrokeKind::Inside);
         }
     }
 }

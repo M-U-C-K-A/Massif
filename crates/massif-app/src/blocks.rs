@@ -151,6 +151,27 @@ impl BlockLibrary {
         sections
     }
 
+    /// The texture of a block's top, flat and tinted, made the first time:
+    /// to draw ground seen from above.
+    pub fn top(&mut self, ctx: &egui::Context, block: &Block) -> Option<egui::TextureId> {
+        let cat = self.catalogue.as_ref()?;
+        let key = format!("top {}", block.id);
+        if let Some(t) = self.icons.get(&key) {
+            return Some(t.id());
+        }
+        let tex = block.top.as_ref().or(block.side.as_ref()).and_then(|k| cat.texture(k))?.tinted(block.top_tint);
+        // An animated texture is its frames one under the other: the first.
+        let (w, h) = (tex.width as usize, (tex.height.min(tex.width)) as usize);
+        if w == 0 || h == 0 || tex.rgba.len() < w * h * 4 {
+            return None;
+        }
+        let image = ColorImage::from_rgba_unmultiplied([w, h], &tex.rgba[..w * h * 4]);
+        let texture = ctx.load_texture(format!("block {key}"), image, TextureOptions::NEAREST);
+        let id = texture.id();
+        self.icons.insert(key, texture);
+        Some(id)
+    }
+
     /// The icon of a block, made the first time.
     pub fn icon(&mut self, ctx: &egui::Context, block: &Block) -> Option<egui::TextureId> {
         let cat = self.catalogue.as_ref()?;

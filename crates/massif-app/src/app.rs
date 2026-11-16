@@ -2768,7 +2768,7 @@ impl MassifApp {
             Command::ImportPack => self.pick_pack(),
             Command::ExportPack => {
                 let name = self.doc.world.meta.name.clone();
-                self.pack_dialog = Some(crate::pack_share::PackDialog::Export(Box::new(crate::pack_share::ExportForm::new(&self.doc.world.registry, &self.settings.pack_author, &name))));
+                self.pack_dialog = Some(crate::pack_share::PackDialog::Export(Box::new(crate::pack_share::ExportForm::new(&self.doc.world.registry, &self.settings.pack_author, &name).with_gradients(&self.doc.world.meta.gradients))));
             }
             Command::FromHeightMap => self.open_home(Page::FromHeightmap),
             Command::OpenRecent(path) => self.request(ctx, Pending::Open(Some(path))),
@@ -3509,6 +3509,9 @@ impl MassifApp {
             }
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
             return;
+        }
+        if self.tools.gradient.editor.is_some() {
+            crate::gradient_ui::dialog(ctx, &mut self.tools, &mut self.doc, &mut self.blocks, &self.settings.pack_author);
         }
         if self.pack_dialog.is_some()
             && let Some(outcome) = crate::pack_share::dialog(ctx, &mut self.pack_dialog, &mut self.layers_ui.library, &self.doc.world.registry, &mut self.settings.pack_author)
@@ -9691,6 +9694,173 @@ mod tests {
             modifiers: Modifiers::NONE,
         });
         h.run_steps(3);
+    }
+
+    /// The Gradient brush: a dark pit painted in grass, the gradient laid
+    /// around its edge with the mouse, one undo; then its editor. Renders
+    /// with MASSIF_SNAPSHOT_DIR (with the game's textures when a Minecraft
+    /// jar is installed).
+    #[test]
+    fn gradient_brush_blends_an_edge_and_its_editor_renders() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        for (theme, suffix) in [(ThemeChoice::Light, "light"), (ThemeChoice::Dark, "dark")] {
+            let mut h = harness(theme);
+            let ctx = h.ctx.clone();
+            if !massif_assets::find_jars().is_empty() {
+                h.state_mut().blocks.load(&ctx, None, Vec::new());
+                let started = std::time::Instant::now();
+                while h.state().blocks.catalogue.is_none() && started.elapsed().as_secs() < 60 {
+                    h.step();
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+            }
+            h.run_steps(5);
+            // Dry land well away from the water.
+            let (cx, cz) = {
+                let doc = &h.state().doc;
+                let dry = |x: i32, z: i32| crate::tools::probe(doc, x, z).is_some_and(|p| p.fluid == massif_core::NO_FLUID);
+                (-400..400)
+                    .step_by(8)
+                    .flat_map(|x| (-400..400).step_by(8).map(move |z| (x, z)))
+                    .find(|&(x, z)| (-60..=60).step_by(10).all(|d| dry(x + d, z) && dry(x, z + d) && dry(x + d, z + d) && dry(x + d, z - d)))
+                    .expect("dry land")
+            };
+            let id = h.state().active_map.or_else(|| h.state().maps.keys().next().copied()).expect("a map view");
+            {
+                let app = h.state_mut();
+                let view = app.maps.get_mut(&id).unwrap();
+                view.center = [cx as f64, cz as f64];
+                view.zoom = 7.0;
+                // A square of grass, a patch of stone in it.
+                let reg = &app.doc.world.registry;
+                let grass = reg.terrain_by_name("Grass").unwrap();
+                app.tools.select(Tool::PaintTerrain);
+                app.tools.pattern.on = false;
+                app.tools.terrain = grass.0;
+                app.tools.brush = massif_core::Brush::symmetric(massif_core::BrushShape::Square, massif_core::Profile::Constant, 56.0);
+            }
+            h.run_steps(3);
+            let at = |h: &egui_kittest::Harness<'_, MassifApp>, x: f32, z: f32| h.state().maps[&id].screen_of(x as f64, z as f64);
+            let p = at(&h, cx as f32, cz as f32);
+            drag_on(&mut h, p, p + vec2(1.0, 0.0));
+            {
+                let app = h.state_mut();
+                app.tools.terrain = app.doc.world.registry.terrain_by_name("Deepslate").unwrap().0;
+                app.tools.brush = massif_core::Brush::symmetric(massif_core::BrushShape::Circle, massif_core::Profile::Constant, 20.0);
+            }
+            h.run_steps(2);
+            let p = at(&h, cx as f32, cz as f32);
+            drag_on(&mut h, p - vec2(40.0, 0.0), p + vec2(40.0, 0.0));
+            // The gradient around the patch's edge, in one stroke.
+            {
+                let app = h.state_mut();
+                app.tools.select(Tool::Gradient);
+                app.tools.gradient.gradient = massif_core::gradient::built_in().into_iter().find(|g| g.name == "Pit to grass").unwrap();
+                app.tools.brush = massif_core::Brush::symmetric(massif_core::BrushShape::Circle, massif_core::Profile::Constant, 14.0);
+            }
+            h.run_steps(2);
+            let ring: Vec<egui::Pos2> = (0..=16).map(|k| {
+                let a = k as f32 / 16.0 * std::f32::consts::TAU;
+                at(&h, cx as f32 + 26.0 * a.cos(), cz as f32 + 22.0 * a.sin())
+            }).collect();
+            h.event(egui::Event::PointerMoved(ring[0]));
+            h.step();
+            h.event(egui::Event::PointerButton { pos: ring[0], button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            h.step();
+            for p in &ring[1..] {
+                for k in 1..=3 {
+                    h.event(egui::Event::PointerMoved(*p + vec2(0.0, k as f32 * 0.01)));
+                    h.step();
+                }
+            }
+            h.event(egui::Event::PointerButton { pos: *ring.last().unwrap(), button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+            h.event(egui::Event::PointerMoved(at(&h, cx as f32 + 200.0, cz as f32 + 200.0)));
+            h.run_steps(20);
+            let app = h.state();
+            assert_eq!(app.doc.history.undo_label(), Some("Gradient brush"));
+            assert_eq!(app.doc.world.meta.gradients.len(), 1, "the map keeps the gradient");
+            // Two greys now ring the pit, where its edge was.
+            let reg = &app.doc.world.registry;
+            let rim = ["Andesite", "Gravel"].map(|n| reg.terrain_by_name(n).unwrap().0);
+            let ringed = (0..64)
+                .filter(|k| {
+                    let a = *k as f32 / 64.0 * std::f32::consts::TAU;
+                    let (x, z) = ((cx as f32 + 16.0 * a.cos()) as i32, (cz as f32 + 16.0 * a.sin()) as i32);
+                    (0..16).any(|d| crate::tools::probe(&app.doc, x + (d as f32 * a.cos()) as i32, z + (d as f32 * a.sin()) as i32).is_some_and(|p| rim.contains(&p.terrain)))
+                })
+                .count();
+            h.render().unwrap().save(dir.join(format!("gradient-map-{suffix}.png"))).unwrap();
+            assert!(ringed > 32, "a rim around the patch: {ringed} of 64");
+            // The editor on the gradient of the terraformers' sketch, its
+            // blobs chosen.
+            h.state_mut().tools.gradient.gradient = massif_core::gradient::built_in().into_iter().find(|g| g.name == "Deciduous forest to grass").unwrap();
+            h.state_mut().tools.gradient.edit(false);
+            h.state_mut().tools.gradient.editor.as_mut().unwrap().selected = 3;
+            h.run_steps(24);
+            h.render().unwrap().save(dir.join(format!("gradient-editor-{suffix}.png"))).unwrap();
+            h.state_mut().tools.gradient.editor.as_mut().unwrap().selected = 2;
+            h.run_steps(24);
+            h.render().unwrap().save(dir.join(format!("gradient-editor-band-{suffix}.png"))).unwrap();
+        }
+    }
+
+    /// The Gradient brush's editor on a gradient of Conquest Reforged's
+    /// blocks, as the terraformers who asked for it would build one: the
+    /// bands with the mod's textures, a transition chosen, then a band's
+    /// block picked straight from the mod's blocks. Renders with
+    /// MASSIF_SNAPSHOT_DIR and MASSIF_CONQUEST_JAR (the mod's jar).
+    #[test]
+    fn gradient_editor_with_conquest_blocks() {
+        use egui_kittest::kittest::Queryable;
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let Some((_, Some(cat))) = crate::gradient_ui::shots::catalogues() else {
+            eprintln!("needs Minecraft and MASSIF_CONQUEST_JAR: skipping");
+            return;
+        };
+        for (theme, suffix) in [(ThemeChoice::Light, "light"), (ThemeChoice::Dark, "dark")] {
+            let mut h = harness(theme);
+            {
+                let app = h.state_mut();
+                app.blocks.catalogue = Some(std::sync::Arc::new(cat.clone()));
+                massif_assets::apply_colors(&mut app.doc.world.registry, &cat);
+                let shots = crate::gradient_ui::shots::conquest();
+                for (_, g, _, _) in &shots {
+                    for name in g.terrains() {
+                        crate::gradient_ui::shots::terrain(&mut app.doc.world.registry, &cat, name);
+                    }
+                    app.doc.world.meta.gradients.push(g.clone());
+                }
+                app.tools.select(Tool::Gradient);
+                app.tools.gradient.gradient = shots.iter().find(|s| s.0 == "conquest-sketch-30-blocks").unwrap().1.clone();
+                app.tools.gradient.edit(false);
+                app.tools.gradient.editor.as_mut().unwrap().selected = 3;
+            }
+            h.run_steps(24);
+            h.render().unwrap().save(dir.join(format!("conquest-editor-{suffix}.png"))).unwrap();
+            // The rock example, its gold-green rim chosen.
+            {
+                let app = h.state_mut();
+                let g = crate::gradient_ui::shots::conquest().into_iter().find(|s| s.0 == "conquest-rock-gold-green-rim").unwrap().1;
+                let ed = app.tools.gradient.editor.as_mut().unwrap();
+                ed.draft = g;
+                ed.selected = 4;
+            }
+            h.run_steps(24);
+            h.render().unwrap().save(dir.join(format!("conquest-editor-rim-{suffix}.png"))).unwrap();
+            if theme == ThemeChoice::Light {
+                // A band's block, searched among the mod's.
+                h.state_mut().tools.gradient.editor.as_mut().unwrap().selected = 0;
+                h.run_steps(4);
+                h.ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("gradient band pick", 0usize)), "limestone".to_owned()));
+                h.get_by_label_contains("Gray Limestone  ").click();
+                h.run_steps(12);
+                h.render().unwrap().save(dir.join("conquest-editor-block-picker.png")).unwrap();
+            }
+        }
     }
 
     /// Where a river may spring on the map in view (its highest dry land,

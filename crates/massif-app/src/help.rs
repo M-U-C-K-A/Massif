@@ -3,8 +3,8 @@
 //!
 //! The text is a small part of Markdown: `# ` starts a topic, `## ` a
 //! heading in it, `- ` a point of a list, `| … | … |` a row of a table (a
-//! shortcut and what it does); any other line is a paragraph. In a line,
-//! `**…**` is bold and `` `…` `` a key.
+//! shortcut and what it does), `![name]` a picture Massif draws; any other
+//! line is a paragraph. In a line, `**…**` is bold and `` `…` `` a key.
 
 use crate::theme::{self, Icon, Palette, RichTextExt};
 use egui::text::{LayoutJob, TextFormat};
@@ -16,11 +16,14 @@ pub struct Topic {
     pub blocks: Vec<Block>,
 }
 
+#[derive(Debug, Clone)]
 pub enum Block {
     Heading(String),
     Para(String),
     Bullet(String),
     Row(Vec<String>),
+    /// A picture Massif draws, by its name.
+    Picture(String),
 }
 
 impl Topic {
@@ -31,6 +34,7 @@ impl Topic {
             || self.blocks.iter().any(|b| match b {
                 Block::Heading(t) | Block::Para(t) | Block::Bullet(t) => has(t),
                 Block::Row(cells) => cells.iter().any(|c| has(c)),
+                Block::Picture(_) => false,
             })
     }
 }
@@ -64,6 +68,8 @@ fn block(line: &str) -> Option<Block> {
         Block::Heading(h.to_owned())
     } else if let Some(b) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
         Block::Bullet(b.to_owned())
+    } else if let Some(name) = line.strip_prefix("![").and_then(|l| l.strip_suffix(']')) {
+        Block::Picture(name.to_owned())
     } else if line.starts_with('|') {
         Block::Row(line.trim_matches('|').split('|').map(|c| c.trim().to_owned()).collect())
     } else if line.trim().is_empty() {
@@ -234,6 +240,13 @@ pub fn blocks_ui(ui: &mut Ui, blocks: &[Block]) {
                             ui.label(RichText::new("•").size(13.0).color(pal.accent));
                             ui.add(egui::Label::new(rich(ui, t, 13.0, body_color)).wrap());
                         });
+                    }
+                    Block::Picture(name) => {
+                        ui.add_space(4.0);
+                        if name == "gradient" {
+                            crate::gradient_ui::help_picture(ui);
+                        }
+                        ui.add_space(6.0);
                     }
                     Block::Row(cells) => {
                         ui.horizontal_top(|ui| {

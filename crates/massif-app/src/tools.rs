@@ -22,6 +22,8 @@ pub enum Tool {
     /// bridged over water.
     Road,
     PaintTerrain,
+    /// Terrains blended across a boundary, A → B → C, by a gradient.
+    Gradient,
     PaintBiome,
     /// What grows on the ground: grass, flowers, snow… (a cover).
     Cover,
@@ -66,7 +68,7 @@ impl Tool {
         (
             tn!("Paint"),
             Icon::Paintbrush,
-            &[Tool::PaintTerrain, Tool::PaintBiome, Tool::AutoPaint, Tool::AutoBiome, Tool::Annotate],
+            &[Tool::PaintTerrain, Tool::Gradient, Tool::PaintBiome, Tool::AutoPaint, Tool::AutoBiome, Tool::Annotate],
         ),
         (tn!("Select"), Icon::SquareDashed, &[Tool::SelectRect, Tool::SelectEllipse, Tool::SelectLasso, Tool::SelectBrush]),
         (tn!("Decor"), Icon::Shrub, &[Tool::Cover, Tool::Objects]),
@@ -84,6 +86,7 @@ impl Tool {
             Tool::Roughen => tr!("Roughen"),
             Tool::Road => tr!("Road"),
             Tool::PaintTerrain => tr!("Paint terrain"),
+            Tool::Gradient => tr!("Gradient brush"),
             Tool::PaintBiome => tr!("Paint biome"),
             Tool::Cover => tr!("Ground cover"),
             Tool::Objects => tr!("Objects"),
@@ -117,6 +120,7 @@ impl Tool {
             Tool::Roughen => Icon::Sparkles,
             Tool::Road => Icon::Signpost,
             Tool::PaintTerrain => Icon::Paintbrush,
+            Tool::Gradient => Icon::Blend,
             Tool::PaintBiome => Icon::Trees,
             Tool::Cover => Icon::Sprout,
             Tool::Objects => Icon::TreePine,
@@ -157,6 +161,7 @@ impl Tool {
             Tool::PaintTerrain => {
                 tr!("Paint a terrain, or several mixed by a noise. Right button: back to automatic.")
             }
+            Tool::Gradient => tr!("Paint over the edge between two terrains: they blend through the gradient's bands. Right button: the other way round."),
             Tool::PaintBiome => tr!("Paint a biome. Right button: back to automatic."),
             Tool::Cover => tr!("Paint what grows: grass, flowers, snow… Right button: remove it."),
             Tool::Objects => tr!("Paint where objects stand: trees, rocks… Right button: remove them."),
@@ -313,6 +318,8 @@ pub struct ToolState {
     pub objects_note: Option<String>,
     /// Paint a pattern of terrains rather than one.
     pub pattern: PatternSettings,
+    /// The Gradient brush: its gradient, how it lays it out, the library.
+    pub gradient: crate::gradient_ui::GradientSettings,
     /// The tool of the 3D Sculpt editor.
     pub sculpt: SculptSettings,
     /// How hard the brush presses drawn over the map, under the pointer (its
@@ -857,6 +864,7 @@ impl Default for ToolState {
             road_note: None,
             objects_note: None,
             pattern: PatternSettings::default(),
+            gradient: Default::default(),
             show_strength: true,
             select_mode: Default::default(),
             select_feather: 0,
@@ -923,6 +931,9 @@ pub struct Stroke {
     changed: usize,
     /// What the automatic tools give the land, read once for the stroke.
     classes: Option<massif_core::auto::Classes>,
+    /// The Gradient brush: which side of the boundary each column was on
+    /// as the stroke began.
+    sides: massif_core::gradient::Sides,
 }
 
 impl Stroke {
@@ -976,7 +987,12 @@ pub fn begin_stroke(doc: &mut Document, tools: &ToolState, at: (f32, f32), inver
         flatten_to,
         changed: 0,
         classes: None,
+        sides: massif_core::gradient::Sides::new(),
     };
+    if tool == Tool::Gradient {
+        // The map keeps the gradients it is painted with.
+        tools.gradient.keep_in(doc);
+    }
     (Some(stroke), None)
 }
 
@@ -988,6 +1004,12 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
         .then(|| massif_core::auto::Reader::new(&tools.auto, &doc.world.registry, doc.world.meta.sea_level).with_base(doc.auto_base()));
     let pattern = (stroke.tool == Tool::PaintTerrain && tools.pattern.on && !invert)
         .then(|| tools.pattern.sampler(&doc.world.registry))
+        .flatten();
+    let gradient = (stroke.tool == Tool::Gradient)
+        .then(|| {
+            let g = if invert { tools.gradient.gradient.reversed() } else { tools.gradient.gradient.clone() };
+            g.sampler(&doc.world.registry, doc.world.meta.seed)
+        })
         .flatten();
     let theme = ((matches!(stroke.tool, Tool::PaintTerrain | Tool::AutoPaint) && invert) || (stroke.tool == Tool::Flatten && tools.flatten_theme)).then(|| {
         (
@@ -1046,6 +1068,11 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                 (None, Some(pattern)) => ops::paint_pattern(&mut edit, brush, x, z, stroke.salt, pattern),
                 (None, None) => ops::paint_terrain(&mut edit, brush, x, z, TerrainId(tools.terrain), stroke.salt),
             },
+            Tool::Gradient => {
+                if let Some(g) = &gradient {
+                    ops::paint_gradient(&mut edit, brush, x, z, stroke.salt, g, tools.gradient.layout, &mut stroke.sides);
+                }
+            }
             Tool::PaintBiome => {
                 let biome = if invert { 0 } else { tools.biome };
                 ops::paint_biome(&mut edit, brush, x, z, BiomeId(biome), stroke.salt)
@@ -1301,6 +1328,47 @@ mod tests {
 
     fn height(doc: &Document, x: i32, z: i32) -> f32 {
         probe(doc, x, z).unwrap().height
+    }
+
+    /// The Gradient brush dragged over the edge of a patch: the rim
+    /// terrains around it, one undo, the map keeping the gradient.
+    #[test]
+    fn a_gradient_stroke_blends_the_edge_of_a_patch() {
+        let mut doc = doc();
+        let mut tools = ToolState::default();
+        let reg = doc.world.registry.clone();
+        let name = |doc: &Document, x: i32, z: i32| reg.terrains[probe(doc, x, z).unwrap().terrain as usize].name.clone();
+        tools.select(Tool::PaintTerrain);
+        tools.terrain = reg.terrain_by_name("Grass").unwrap().0;
+        tools.brush = Brush::symmetric(massif_core::BrushShape::Square, massif_core::Profile::Constant, 60.0);
+        let paint = |doc: &mut Document, tools: &ToolState, from: (f32, f32), to: (f32, f32)| {
+            let (stroke, _) = begin_stroke(doc, tools, from, false, false);
+            let mut stroke = stroke.unwrap();
+            continue_stroke(doc, tools, &mut stroke, from, 0.02);
+            continue_stroke(doc, tools, &mut stroke, to, 0.02);
+            end_stroke(doc, stroke);
+        };
+        paint(&mut doc, &tools, (0.0, 0.0), (0.0, 0.0));
+        tools.terrain = reg.terrain_by_name("Stone").unwrap().0;
+        tools.brush = Brush::symmetric(massif_core::BrushShape::Circle, massif_core::Profile::Constant, 12.0);
+        paint(&mut doc, &tools, (0.0, 0.0), (0.0, 0.0));
+        assert_eq!(name(&doc, 0, 0), "Stone");
+        assert_eq!(name(&doc, 20, 0), "Grass");
+        tools.select(Tool::Gradient);
+        tools.gradient.gradient = massif_core::gradient::Gradient::new("rings", &[("Stone", 2.0), ("Andesite", 4.0), ("Moss", 4.0), ("Grass", 4.0)], &[massif_core::gradient::Transition::hard(); 3]);
+        tools.gradient.gradient.edge = 2.0;
+        tools.gradient.gradient.wander = 0.0;
+        tools.brush = Brush::symmetric(massif_core::BrushShape::Circle, massif_core::Profile::Constant, 14.0);
+        let undo = doc.history.undo_count();
+        paint(&mut doc, &tools, (14.0, -8.0), (14.0, 8.0));
+        assert_eq!(doc.history.undo_count(), undo + 1);
+        assert_eq!(doc.history.undo_label(), Some("Gradient brush"));
+        let row: Vec<String> = (0..26).map(|x| name(&doc, x, 0)).collect();
+        assert_eq!(&row[..12], vec!["Stone"; 12].as_slice(), "{row:?}");
+        assert_eq!(&row[12..16], vec!["Andesite"; 4].as_slice(), "{row:?}");
+        assert_eq!(&row[16..20], vec!["Moss"; 4].as_slice(), "{row:?}");
+        assert_eq!(row[20], "Grass");
+        assert_eq!(doc.world.meta.gradients, [tools.gradient.gradient.clone()]);
     }
 
     #[test]

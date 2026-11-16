@@ -830,6 +830,7 @@ pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Re
             lava: false,
             graph: None,
             ores: Default::default(),
+            gradients: Vec::new(),
         },
         registry: mapper.registry,
         dims,

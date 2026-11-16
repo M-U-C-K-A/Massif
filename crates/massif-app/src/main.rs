@@ -13,6 +13,7 @@ mod cards;
 mod caves;
 mod devtools;
 mod doc;
+mod gradient_ui;
 mod graphics;
 mod finder;
 mod graph_editor;
