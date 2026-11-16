@@ -924,6 +924,46 @@ impl FloodGrid<'_> {
     }
 }
 
+/// The level water poured at `(x, z)` rises to before it spills: the
+/// hollow around it filled lowest first, up to the lowest point of its rim
+/// (the water of a lake in it counts as ground at its surface). A fluid
+/// level, as [`Flood::Fill`] takes it; `None` where the column is not in a
+/// hollow and water poured there runs away. A hollow of more than `cap`
+/// columns is filled to the level reached by then.
+pub fn spill_level(dim: &Dimension, x: i32, z: i32, cap: usize) -> Option<i16> {
+    use std::cmp::Reverse;
+    use std::collections::{BinaryHeap, HashSet};
+    let mut ground = crate::river::Ground::new(dim.ground());
+    let mut height = |x: i32, z: i32| ground.at(x, z).map(|(h, w)| w.map_or(block_top(h), |w| (w as i32).max(block_top(h))));
+    let start = height(x, z)?;
+    let mut level = start;
+    let mut seen: HashSet<(i32, i32)> = HashSet::from([(x, z)]);
+    let mut heap = BinaryHeap::from([Reverse((start, x, z))]);
+    let mut inside = 0usize;
+    while let Some(Reverse((h, cx, cz))) = heap.pop() {
+        if h < level {
+            // Lower than the water: it runs out here.
+            break;
+        }
+        level = level.max(h);
+        inside += 1;
+        if inside > cap {
+            break;
+        }
+        for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let n = (cx + dx, cz + dz);
+            if seen.insert(n) {
+                match height(n.0, n.1) {
+                    Some(nh) => heap.push(Reverse((nh, n.0, n.1))),
+                    // Off the map: the water runs off at this level.
+                    None => heap.push(Reverse((i32::MIN, n.0, n.1))),
+                }
+            }
+        }
+    }
+    (level > start).then(|| level.clamp(i16::MIN as i32, i16::MAX as i32) as i16)
+}
+
 /// Flood-fill fluid on the ground level starting from column `(x, z)`.
 ///
 /// Returns the number of columns changed. The fill stops at the edge of the
@@ -1082,6 +1122,36 @@ mod tests {
             }
         }
         w
+    }
+
+    /// A pit in a plateau at 80, a notch at 75 out to the edge: water poured in it
+    /// rises to the notch, where it would spill; poured on the plateau, it
+    /// runs away.
+    #[test]
+    fn spill_level_fills_the_hollow_clicked() {
+        let mut w = world(1);
+        let positions: Vec<TilePos> = w.dims[0].ground().positions().collect();
+        for pos in positions {
+            let tile = w.dims[0].ground_mut().tile_mut(pos).unwrap();
+            let (ox, oz) = pos.origin();
+            for c in 0..TILE_AREA {
+                let (x, z) = (ox + (c % 128) as i32, oz + (c / 128) as i32);
+                let d = (x as f32).hypot(z as f32);
+                let mut h = if d < 20.0 { 70.0 } else { 80.0 };
+                if x >= 19 && z.abs() <= 1 {
+                    h = 75.0;
+                }
+                tile.top.set(c, h);
+            }
+        }
+        assert_eq!(spill_level(&w.dims[0], 0, 0, 1 << 20), Some(75));
+        assert_eq!(spill_level(&w.dims[0], 60, 60, 1 << 20), None);
+        let mut hist = History::default();
+        hist.begin("flood", 0);
+        let n = flood_fill(&mut hist.edit(&mut w, 0), 0, 0, Flood::Fill(75), usize::MAX);
+        hist.commit();
+        // The pit fills; the plateau and the notch stay dry.
+        assert!(n > 1000 && n < 1400, "{n}");
     }
 
     fn hard_brush(radius: f32) -> Brush {

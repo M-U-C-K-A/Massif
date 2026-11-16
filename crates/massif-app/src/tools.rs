@@ -262,6 +262,9 @@ pub struct ToolState {
     /// The object layer painted, by its number (0: none yet).
     pub object_layer: u16,
     pub water_level: i16,
+    /// Flood fills the hollow clicked up to where it spills, rather than up
+    /// to `water_level`.
+    pub flood_from_click: bool,
     pub slab_thickness: f32,
     pub anchor: AnchorMode,
     pub slab_offset: f32,
@@ -824,6 +827,7 @@ impl Default for ToolState {
             cover: 1,
             object_layer: 0,
             water_level: 63,
+            flood_from_click: true,
             slab_thickness: 16.0,
             anchor: AnchorMode::AboveGround,
             slab_offset: 40.0,
@@ -1244,11 +1248,21 @@ pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse:
         }
         Tool::Flood | Tool::Drain => {
             let flood = (tools.tool == Tool::Flood) != inverse;
+            // From the click: the hollow clicked, up to where it spills.
+            if flood && tools.flood_from_click {
+                match ops::spill_level(doc.dimension(), x, z, 16 << 20) {
+                    Some(level) => tools.water_level = level,
+                    None => return Some(tr!("This spot is not in a hollow: water poured here runs away. Untick From the click in Tool Settings to flood up to a level of your own.").to_owned()),
+                }
+            }
             let mode = if flood { Flood::Fill(tools.water_level) } else { Flood::Drain };
             doc.history.begin(if flood { tr!("Flood") } else { tr!("Drain") }, doc.dim);
             let n = ops::flood_fill(&mut doc.history.edit(&mut doc.world, 0), x, z, mode, 64 << 20);
             doc.commit();
             Some(match (flood, n) {
+                (true, 0) if !tools.flood_from_click && probe(doc, x, z).is_some_and(|p| block_top(p.height) >= tools.water_level as i32) => {
+                    tr!("The water level {water_level} is under this spot: raise it in Tool Settings, or tick From the click.", water_level = tools.water_level)
+                }
                 (_, 0) => tr!("Nothing to fill or drain here").to_owned(),
                 (true, n) => tr!("Flooded {n} columns up to {water_level}", water_level = tools.water_level, n),
                 (false, n) => tr!("Drained {n} columns", n),
@@ -1378,12 +1392,29 @@ mod tests {
         assert_eq!(tools.terrain, d.world.registry.terrain_by_name("Grass").unwrap().0);
 
         tools.select(Tool::Flood);
+        tools.flood_from_click = false;
         tools.water_level = 70;
         let msg = click(&mut d, &mut tools, 0, 0, false).unwrap();
         assert!(msg.starts_with("Flooded 65536 columns"), "{msg}");
         assert_eq!(probe(&d, 100, 100).unwrap().fluid, 70);
         d.undo();
         assert_eq!(probe(&d, 100, 100).unwrap().fluid, NO_FLUID);
+    }
+
+    /// Flood from the click: on flat ground there is no hollow, and it says
+    /// so; with a level of its own under the ground it says how to raise it.
+    #[test]
+    fn flood_says_why_nothing_fills() {
+        let mut d = doc();
+        let mut tools = ToolState::default();
+        tools.select(Tool::Flood);
+        assert!(tools.flood_from_click);
+        let msg = click(&mut d, &mut tools, 50, 50, false).unwrap();
+        assert!(msg.starts_with("This spot is not in a hollow"), "{msg}");
+        tools.flood_from_click = false;
+        tools.water_level = 40;
+        let msg = click(&mut d, &mut tools, 50, 50, false).unwrap();
+        assert!(msg.starts_with("The water level 40 is under this spot"), "{msg}");
     }
 
     #[test]
@@ -1399,6 +1430,7 @@ mod tests {
         assert!(height(&d, 0, 0) < 64.0);
 
         tools.select(Tool::Flood);
+        tools.flood_from_click = false;
         tools.water_level = 70;
         click(&mut d, &mut tools, 50, 50, false);
         assert_eq!(probe(&d, 60, 60).unwrap().fluid, 70);

@@ -166,7 +166,7 @@ The **Layers** panel (under Terrain; or any area's chooser, in Paint) lists ever
 
 # Water
 - **River** lays a river from a click to another: its bed, its banks and its water.
-- **Flood** fills a basin with water from where you click up to a level; **Drain** empties it.
+- **Flood** fills the hollow you click with water up to where it would spill over its rim (**From the click**, in Tool Settings), or, with that off, up to the **Water level** you set; when nothing fills, its message says why. **Drain** empties a body of water.
 - **Water brush** paints water at a level.
 
 # Levels

@@ -458,6 +458,13 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             }
         }
         Tool::Flood | Tool::Water => {
+            if tool == Tool::Flood {
+                crate::widgets::checkbox(ui, &mut tools.flood_from_click, tr!("From the click"));
+                if tools.flood_from_click {
+                    hint(ui, tr!("Fills the hollow you click up to where it spills, and sets the level below to it."));
+                }
+                ui.add_space(4.0);
+            }
             slider_row(ui, tr!("Water level"), |ui| {
                 crate::widgets::drag(ui, egui::DragValue::new(&mut tools.water_level).range(doc.dimension().min_y as i16..=doc.dimension().max_y as i16))
             });

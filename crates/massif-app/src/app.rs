@@ -5572,6 +5572,29 @@ mod tests {
         assert_eq!(h.state().tools.flatten_mode, FlattenMode::Both);
     }
 
+    /// Flood's From the click, on by default, turned off in Tool Settings
+    /// (rendered for the eye with MASSIF_SNAPSHOT_DIR).
+    #[test]
+    fn flood_from_the_click_in_tool_settings() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(3);
+        h.state_mut().tools.select(Tool::Flood);
+        h.run_steps(3);
+        assert!(h.state().tools.flood_from_click);
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            let image = h.render().unwrap();
+            let rect = h.get_by_label("From the click").rect();
+            let ppp = h.ctx.pixels_per_point();
+            let (x0, y0) = (((rect.left() - 40.0).max(0.0) * ppp) as u32, ((rect.top() - 60.0).max(0.0) * ppp) as u32);
+            let crop = image::imageops::crop_imm(&image, x0, y0, (360.0 * ppp) as u32, (200.0 * ppp) as u32).to_image();
+            crop.save(dir.join("tool-settings-flood.png")).unwrap();
+        }
+        h.get_by_label("From the click").click();
+        h.run_steps(2);
+        assert!(!h.state().tools.flood_from_click);
+    }
+
     /// The menu bar, the pointer over View, for the eye (MASSIF_SNAPSHOT_DIR);
     /// and its menus hold their hit as wide as their padding.
     #[test]

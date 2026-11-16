@@ -907,6 +907,19 @@ export writes them whole, across chunks and tiles, for every version the
 blocks exist in. Block entities (chests' contents, signs' text) and entities
 are not kept.
 
+## Flood and drain
+
+The **Flood** tool (Water group) fills with water the hollow you click.
+With **From the click** on (in Tool Settings, the default), the water rises
+in that hollow up to the lowest point of its rim, where it would spill, and
+the **Water level** below takes that height; a lake already in the hollow
+counts as its floor. Clicked where water would only run away (on a slope,
+a hilltop, flat ground), it fills nothing and says so. With From the click
+off, it fills up to the Water level you set (**Sea level** puts the sea's),
+and if that level is under the spot clicked, its message says to raise it.
+**Drain** (or the right button) empties the body of water clicked. Both
+keep to the selection and are one step to undo.
+
 ## Rivers
 
 The **River** tool (Water group) lays a river out from its source:
