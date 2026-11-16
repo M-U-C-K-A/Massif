@@ -2,7 +2,7 @@
 
 use crate::chunk::{ExportContext, Scratch, build_chunk, tile_placements};
 use crate::level_dat::{Difficulty, GameMode, LevelSettings, Surroundings, WorldBorder, level_dat};
-use crate::region::RegionBuilder;
+use crate::region::{Compressor, RegionBuilder};
 use crate::version::{Era, Target};
 use massif_core::TilePos;
 use massif_core::compose::TileStack;
@@ -199,8 +199,8 @@ pub fn export(
             let records: Vec<Vec<(usize, usize, Vec<u8>)>> = tiles
                 .par_iter()
                 .map_init(
-                    || Scratch::new(&ctx),
-                    |scratch, &pos| -> Result<Vec<(usize, usize, Vec<u8>)>, ExportError> {
+                    || (Scratch::new(&ctx), Compressor::new(level)),
+                    |(scratch, compressor), &pos| -> Result<Vec<(usize, usize, Vec<u8>)>, ExportError> {
                         if progress.cancel.load(Ordering::Relaxed) {
                             return Err(ExportError::Cancelled);
                         }
@@ -226,7 +226,7 @@ pub fn export(
                                 let nbt = build_chunk(&ctx, &stack, pos, cx, cz, &objects, scratch);
                                 let chunk_x = pos.x * CHUNKS_PER_TILE as i32 + cx as i32;
                                 let chunk_z = pos.z * CHUNKS_PER_TILE as i32 + cz as i32;
-                                out.push((chunk_x.rem_euclid(32) as usize, chunk_z.rem_euclid(32) as usize, RegionBuilder::compress(&nbt, level)?));
+                                out.push((chunk_x.rem_euclid(32) as usize, chunk_z.rem_euclid(32) as usize, compressor.record(&nbt)?));
                             }
                         }
                         progress.done.fetch_add(1, Ordering::Relaxed);

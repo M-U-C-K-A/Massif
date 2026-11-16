@@ -450,9 +450,44 @@ pub fn hash2(x: i32, z: i32, seed: u64) -> u32 {
 /// Positional hash of a block.
 #[inline]
 pub fn hash3(x: i32, y: i32, z: i32, seed: u64) -> u32 {
+    hash3_at(hash3_column(x, z, seed), y)
+}
+
+/// The part of [`hash3`] that depends on the column alone, for the blocks
+/// of a column one after the other: [`hash3_at`] finishes it.
+#[inline]
+pub fn hash3_column(x: i32, z: i32, seed: u64) -> u64 {
     let k = ((x as u32 as u64) << 32) | (z as u32 as u64);
-    let k = mix64(k ^ seed.wrapping_mul(0x9e37_79b9_7f4a_7c15));
-    (mix64(k ^ (y as u32 as u64)) >> 32) as u32
+    mix64(k ^ seed.wrapping_mul(0x9e37_79b9_7f4a_7c15))
+}
+
+/// [`hash3`] at height `y` of the column of [`hash3_column`].
+#[inline]
+pub fn hash3_at(column: u64, y: i32) -> u32 {
+    (mix64(column ^ (y as u32 as u64)) >> 32) as u32
+}
+
+/// [`Materializer::substrate`] down one column (see
+/// [`Materializer::substrate_column`]).
+pub struct SubstrateColumn {
+    min_y: i32,
+    /// The column's hashes for bedrock at the floor of the world and for
+    /// deepslate turning into stone.
+    floor: u64,
+    deep: u64,
+    /// Bedrock, deepslate, stone.
+    blocks: [BlockId; 3],
+}
+
+impl SubstrateColumn {
+    #[inline]
+    pub fn at(&self, y: i32) -> BlockId {
+        let above_floor = y - self.min_y;
+        if above_floor < 5 && (above_floor <= 0 || (hash3_at(self.floor, y) % 5) as i32 >= above_floor) {
+            return self.blocks[0];
+        }
+        if y < 0 || (y < 8 && (hash3_at(self.deep, y) % 8) as i32 >= y) { self.blocks[1] } else { self.blocks[2] }
+    }
 }
 
 /// Turns spans into concrete blocks using the terrain recipes.
@@ -474,6 +509,18 @@ impl<'a> Materializer<'a> {
     /// Natural rock at a position: bedrock floor, deepslate below zero with a
     /// dithered transition up to Y = 8, stone above.
     #[inline]
+    /// [`Materializer::substrate`] all along the column at `(x, z)`, its
+    /// hashes begun once.
+    pub fn substrate_column(&self, x: i32, z: i32) -> SubstrateColumn {
+        let wk = &self.reg.well_known;
+        SubstrateColumn {
+            min_y: self.min_y,
+            floor: hash3_column(x, z, self.seed ^ 0xbed),
+            deep: hash3_column(x, z, self.seed ^ 0xdee9),
+            blocks: [wk.bedrock, wk.deepslate, wk.stone],
+        }
+    }
+
     pub fn substrate(&self, x: i32, y: i32, z: i32) -> BlockId {
         let wk = &self.reg.well_known;
         let above_floor = y - self.min_y;
@@ -526,6 +573,7 @@ impl<'a> Materializer<'a> {
     pub fn recipe_column(&self, span: &Span, x: i32, z: i32, submerged: bool, (lo, hi): (i32, i32), mut put: impl FnMut(i32, BlockId)) {
         let def = self.reg.terrain(span.terrain);
         let h = hash2(x, z, self.seed);
+        let column = hash3_column(x, z, self.seed);
         let bedrock = self.reg.well_known.bedrock;
         let mut strata = def.strata.iter().enumerate();
         // The stratum the depth is in, and the depth where it ends.
@@ -558,7 +606,7 @@ impl<'a> Materializer<'a> {
                     } else if s.blocks.len() == 1 {
                         s.blocks[0].0
                     } else {
-                        pick(&s.blocks, hash3(x, y, z, self.seed))
+                        pick(&s.blocks, hash3_at(column, y))
                     }
                 }
                 None => self.substrate(x, y, z),

@@ -40,8 +40,14 @@ pub struct ExportContext<'a> {
     sea_level: i32,
     /// Block states split into name and properties, by `BlockId`.
     states: Vec<(String, Vec<(String, String)>)>,
+    /// Each state as an entry of a section's palette, encoded once: the
+    /// inside of its compound and the end of it.
+    palette_entries: Encoded,
     /// Biome identifiers by `BiomeId`.
     biomes: Vec<String>,
+    /// The same, encoded as the strings of a list, then the one written
+    /// for an unknown biome.
+    biome_entries: Encoded,
     /// The version written for, and how it stores chunks.
     target: Target,
     era: Era,
@@ -264,7 +270,7 @@ impl<'a> ExportContext<'a> {
         hosts.resize(states.len(), 0);
         let reach = if used.is_empty() { 0 } else { massif_core::objects::max_reach(reg) };
         let soil = reg.blocks.iter().map(|b| is_soil(b.name())).collect();
-        let biomes = reg
+        let biomes: Vec<String> = reg
             .biomes
             .iter()
             .map(|b| {
@@ -279,6 +285,24 @@ impl<'a> ExportContext<'a> {
             Era::Modern => Vec::new(),
             _ => reg.biomes.iter().map(|b| target.biome_number(if b.id.is_empty() { "minecraft:plains" } else { &b.id })).collect(),
         };
+        let palette_entries = Encoded::of(states.iter().map(|(name, props)| {
+            let mut w = NbtWriter::fragment();
+            w.string("Name", name);
+            if !props.is_empty() {
+                w.compound("Properties");
+                for (k, v) in props {
+                    w.string(k, v);
+                }
+                w.end();
+            }
+            w.end();
+            w.into_bytes()
+        }));
+        let biome_entries = Encoded::of(biomes.iter().map(String::as_str).chain(["minecraft:plains"]).map(|name| {
+            let mut w = NbtWriter::fragment();
+            w.item_string(name);
+            w.into_bytes()
+        }));
         let mat = Materializer::new(reg, world.meta.seed, dim.min_y);
         let bands = mat.substrate_bands().map(|(y0, y1, b)| (y0, y1, b.map(|b| b.0)));
         Ok(Self {
@@ -289,7 +313,9 @@ impl<'a> ExportContext<'a> {
             max_y,
             sea_level: world.meta.sea_level,
             states,
+            palette_entries,
             biomes,
+            biome_entries,
             target: target.clone(),
             era,
             numbered,
@@ -319,16 +345,36 @@ impl<'a> ExportContext<'a> {
         &self.mat
     }
 
-    fn biome_name(&self, id: u16) -> &str {
-        self.biomes
-            .get(id as usize)
-            .map(String::as_str)
-            .unwrap_or("minecraft:plains")
+    /// The biome `id` encoded as an item of a list of strings.
+    fn biome_entry(&self, id: u16) -> &[u8] {
+        self.biome_entries.get((id as usize).min(self.biomes.len()))
     }
 
     /// The number of a biome, for the versions that number them.
     fn biome_number(&self, id: u16) -> i32 {
         self.biome_numbers.get(id as usize).copied().unwrap_or(1)
+    }
+}
+
+/// Pieces of NBT encoded once, one after the other, by number.
+struct Encoded {
+    bytes: Vec<u8>,
+    ends: Vec<usize>,
+}
+
+impl Encoded {
+    fn of(pieces: impl Iterator<Item = Vec<u8>>) -> Self {
+        let (mut bytes, mut ends) = (Vec::new(), Vec::new());
+        for piece in pieces {
+            bytes.extend_from_slice(&piece);
+            ends.push(bytes.len());
+        }
+        Self { bytes, ends }
+    }
+
+    fn get(&self, i: usize) -> &[u8] {
+        let start = if i == 0 { 0 } else { self.ends[i - 1] };
+        &self.bytes[start..self.ends[i]]
     }
 }
 
@@ -385,8 +431,9 @@ fn uniform(section: &[u16]) -> bool {
 }
 
 /// Fill a column of `blocks` with the substrate from `y0` to `y1`: a band
-/// at a time, a constant where it is one block everywhere.
-fn fill_substrate(ctx: &ExportContext, x: i32, z: i32, (y0, y1): (i32, i32), blocks: &mut [u16], column: usize) {
+/// at a time, a constant where it is one block everywhere. Below `laid`, the
+/// constant bands are in already (see [`lay_substrate`]).
+fn fill_substrate(ctx: &ExportContext, x: i32, z: i32, (y0, y1): (i32, i32), laid: i32, blocks: &mut [u16], column: usize) {
     let at = |y: i32| (((y - ctx.min_y) as usize) << 8) | column;
     for &(b0, b1, block) in &ctx.bands {
         let (lo, hi) = (b0.max(y0), b1.min(y1));
@@ -395,15 +442,34 @@ fn fill_substrate(ctx: &ExportContext, x: i32, z: i32, (y0, y1): (i32, i32), blo
         }
         match block {
             Some(b) => {
+                let lo = lo.max(laid);
+                if lo >= hi {
+                    continue;
+                }
                 for v in blocks[at(lo)..].iter_mut().step_by(256).take((hi - lo) as usize) {
                     *v = b;
                 }
             }
             None => {
+                let substrate = ctx.mat.substrate_column(x, z);
                 for y in lo..hi {
-                    blocks[at(y)] = ctx.mat.substrate(x, y, z).0;
+                    blocks[at(y)] = substrate.at(y).0;
                 }
             }
+        }
+    }
+}
+
+/// Lay the constant bands of the substrate from the floor of the world up
+/// to `laid`, where every column of the chunk has it: whole layers of the
+/// chunk at a time, rather than a column at a time across them.
+fn lay_substrate(ctx: &ExportContext, laid: i32, blocks: &mut [u16]) {
+    for &(b0, b1, block) in &ctx.bands {
+        let (lo, hi) = (b0.max(ctx.min_y), b1.min(laid));
+        if let Some(b) = block
+            && lo < hi
+        {
+            blocks[((lo - ctx.min_y) as usize) << 8..((hi - ctx.min_y) as usize) << 8].fill(b);
         }
     }
 }
@@ -415,9 +481,17 @@ pub struct Scratch {
     /// air): what the next one clears.
     dirty: usize,
     lookup: Vec<u16>,
+    /// The place in the palette of each block of a section.
+    indices: Vec<u16>,
     palette: Vec<u16>,
     packed: Vec<i64>,
     spans: Vec<Span>,
+    /// The spans of every column of the chunk, one after the other, and
+    /// where each column's begin (and the last ends).
+    column_spans: Vec<Span>,
+    span_starts: Vec<usize>,
+    /// The recipe depth of each column's lowest span.
+    recipes: [u32; 256],
     fluids: Vec<(i32, i32)>,
     biome_columns: Vec<BiomeColumn>,
     /// The ore blocks of each chunk of the tile being exported (see
@@ -431,9 +505,13 @@ impl Scratch {
             blocks: vec![0; ctx.sections() * SECTION_VOLUME],
             dirty: 0,
             lookup: vec![UNSET; ctx.states.len()],
+            indices: vec![0; SECTION_VOLUME],
             palette: Vec::with_capacity(64),
             packed: Vec::with_capacity(512),
             spans: Vec::with_capacity(8),
+            column_spans: Vec::with_capacity(512),
+            span_starts: vec![0; 257],
+            recipes: [0; 256],
             fluids: Vec::with_capacity(4),
             biome_columns: vec![BiomeColumn::default(); 16],
             ores: Vec::new(),
@@ -460,23 +538,25 @@ fn bits_for(palette_len: usize) -> usize {
     (usize::BITS - (palette_len - 1).leading_zeros()) as usize
 }
 
-/// Pack `values` into longs, `bits` per entry, never crossing a long.
-fn pack(values: impl Iterator<Item = u64>, count: usize, bits: usize, out: &mut Vec<i64>) {
-    let per_long = 64 / bits;
-    out.clear();
-    out.resize(count.div_ceil(per_long), 0);
-    let (mut word, mut shift, mut filled) = (0usize, 0usize, 0usize);
-    for v in values {
-        out[word] |= (v << shift) as i64;
-        filled += 1;
-        if filled == per_long {
-            filled = 0;
-            shift = 0;
-            word += 1;
-        } else {
-            shift += bits;
-        }
+/// Pack `map` of each of `values` into longs, `bits` per entry, never
+/// crossing a long. The width is a constant inside the loop (one copy per
+/// width), so that each long is put together in a register.
+fn pack(values: &[u16], map: impl Fn(u16) -> u64 + Copy, bits: usize, out: &mut Vec<i64>) {
+    macro_rules! widths {
+        ($($n:literal)*) => {
+            match bits {
+                $($n => pack_as::<$n>(values, map, out),)*
+                _ => panic!("{bits} bits an entry"),
+            }
+        };
     }
+    widths!(1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16)
+}
+
+#[inline(always)]
+fn pack_as<const BITS: usize>(values: &[u16], map: impl Fn(u16) -> u64, out: &mut Vec<i64>) {
+    out.clear();
+    out.extend(values.chunks(64 / BITS).map(|run| run.iter().enumerate().fold(0u64, |word, (k, &v)| word | (map(v) << (k * BITS))) as i64));
 }
 
 /// The objects standing with their anchor in tile `pos` (see
@@ -552,9 +632,13 @@ pub fn build_chunk(
         blocks,
         dirty,
         lookup,
+        indices,
         palette,
         packed,
         spans,
+        column_spans,
+        span_starts,
+        recipes,
         fluids,
         biome_columns,
         ores,
@@ -564,6 +648,30 @@ pub fn build_chunk(
     // What the last chunk wrote is cleared (above it, all is air already);
     // `top` follows the highest block this one writes.
     blocks[..*dirty].fill(0);
+    // The spans of every column first: up to the lowest height where a
+    // column's substrate ends (when every column has its ground from the
+    // floor of the world), the substrate's constant bands are laid for the
+    // whole chunk at once.
+    column_spans.clear();
+    let mut laid = max_y;
+    for column in 0..256usize {
+        let (lx, lz) = (column & 15, column >> 4);
+        span_starts[column] = column_spans.len();
+        stack.spans(cell_index(cx * 16 + lx, cz * 16 + lz), spans);
+        column_spans.extend_from_slice(spans);
+        laid = match spans.first() {
+            Some(span) => {
+                let recipe = ctx.mat.recipe_depth(span.terrain, bx0 + lx as i32, bz0 + lz as i32);
+                recipes[column] = recipe;
+                let split = if recipe >= (span.y1 - span.y0) as u32 { span.y0 } else { span.y1 - recipe as i32 };
+                if span.y0 <= min_y { laid.min(split) } else { min_y }
+            }
+            None => min_y,
+        };
+    }
+    span_starts[256] = column_spans.len();
+    let laid = laid.clamp(min_y, max_y);
+    lay_substrate(ctx, laid, blocks);
     let mut top = min_y;
     for lz in 0..16usize {
         for lx in 0..16usize {
@@ -571,18 +679,18 @@ pub fn build_chunk(
             let (x, z) = (bx0 + lx as i32, bz0 + lz as i32);
             let column = (lz << 4) | lx;
             let at = |y: i32| (((y - min_y) as usize) << 8) | column;
-            stack.spans(cell, spans);
+            let spans = &column_spans[span_starts[column]..span_starts[column + 1]];
             stack.fluids(cell, spans, fluids);
-            for span in spans.iter() {
+            for (k, span) in spans.iter().enumerate() {
                 let submerged = fluids.iter().any(|f| f.0 == span.y1);
-                let recipe = ctx.mat.recipe_depth(span.terrain, x, z);
+                let recipe = if k == 0 { recipes[column] } else { ctx.mat.recipe_depth(span.terrain, x, z) };
                 let split = if recipe >= (span.y1 - span.y0) as u32 {
                     span.y0
                 } else {
                     span.y1 - recipe as i32
                 };
                 // What lies outside the version's heights is left out.
-                fill_substrate(ctx, x, z, (span.y0.max(min_y), split.min(max_y)), blocks, column);
+                fill_substrate(ctx, x, z, (span.y0.max(min_y), split.min(max_y)), laid, blocks, column);
                 let (lo, hi) = (split.max(min_y), span.y1.min(max_y));
                 if lo < hi {
                     ctx.mat.recipe_column(span, x, z, submerged, (lo, hi), |y, b| blocks[at(y)] = b.0);
@@ -707,36 +815,30 @@ pub fn build_chunk(
         } else if uniform(section) {
             palette.push(first);
         } else {
-            for &b in section {
-                if lookup[b as usize] == UNSET {
-                    lookup[b as usize] = palette.len() as u16;
+            // In the order they first appear; a block like the one before
+            // it (most of them, in runs along x) is in already.
+            // Each block's place in the palette as it goes, for packing: read
+            // for every block, which beats guessing whether it is the one
+            // before (the guess fails too often on mixed ground).
+            for (&b, slot) in section.iter().zip(indices.iter_mut()) {
+                let mut index = lookup[b as usize];
+                if index == UNSET {
+                    index = palette.len() as u16;
+                    lookup[b as usize] = index;
                     palette.push(b);
                 }
+                *slot = index;
             }
         }
         w.compound("block_states");
         w.list("palette", TagType::Compound, palette.len());
         for &b in palette.iter() {
-            let (name, props) = &ctx.states[b as usize];
             w.item_compound();
-            w.string("Name", name);
-            if !props.is_empty() {
-                w.compound("Properties");
-                for (k, v) in props {
-                    w.string(k, v);
-                }
-                w.end();
-            }
-            w.end();
+            w.raw(ctx.palette_entries.get(b as usize));
         }
         if palette.len() > 1 {
             let bits = bits_for(palette.len()).max(4);
-            pack(
-                section.iter().map(|&b| lookup[b as usize] as u64),
-                SECTION_VOLUME,
-                bits,
-                packed,
-            );
+            pack(indices, |i| i as u64, bits, packed);
             w.long_array("data", packed);
             for &b in palette.iter() {
                 lookup[b as usize] = UNSET;
@@ -764,11 +866,11 @@ pub fn build_chunk(
         w.compound("biomes");
         w.list("palette", TagType::String, biome_palette.len());
         for &id in &biome_palette {
-            w.item_string(ctx.biome_name(id));
+            w.raw(ctx.biome_entry(id));
         }
         if biome_palette.len() > 1 {
             let bits = bits_for(biome_palette.len());
-            pack(biome_ids.iter().map(|&i| i as u64), 64, bits, packed);
+            pack(&biome_ids, |i| i as u64, bits, packed);
             w.long_array("data", packed);
         }
         w.end();
@@ -860,24 +962,14 @@ fn flat_chunk(
         }
         w.list("Palette", TagType::Compound, palette.len());
         for &b in palette.iter() {
-            let (name, props) = &ctx.states[b as usize];
             w.item_compound();
-            w.string("Name", name);
-            if !props.is_empty() {
-                w.compound("Properties");
-                for (k, v) in props {
-                    w.string(k, v);
-                }
-                w.end();
-            }
-            w.end();
+            w.raw(ctx.palette_entries.get(b as usize));
         }
         let bits = bits_for(palette.len().max(2)).max(4);
-        let indices = section.iter().map(|&b| lookup[b as usize] as u64);
         if ctx.era == Era::Flat16 {
-            pack(indices, SECTION_VOLUME, bits, packed);
+            pack(section, |b| lookup[b as usize] as u64, bits, packed);
         } else {
-            pack_spanning(indices, SECTION_VOLUME, bits, packed);
+            pack_spanning(section.iter().map(|&b| lookup[b as usize] as u64), SECTION_VOLUME, bits, packed);
         }
         w.long_array("BlockStates", packed);
         for &b in palette.iter() {
@@ -1031,18 +1123,19 @@ mod tests {
         for bits in [1usize, 2, 3, 4, 5, 6, 7, 9, 13] {
             let mask = (1u64 << bits) - 1;
             let values: Vec<u64> = (0..4096u64).map(|i| (i * 2_654_435_761) & mask).collect();
+            let small: Vec<u16> = values.iter().map(|&v| v as u16).collect();
             let mut out = Vec::new();
-            pack(values.iter().copied(), 4096, bits, &mut out);
+            pack(&small, |v| v as u64, bits, &mut out);
             assert_eq!(out.len(), 4096usize.div_ceil(64 / bits), "{bits} bits");
             assert_eq!(unpack(&out, 4096, bits), values, "{bits} bits");
         }
         // Minecraft's own sizes: 4 bits -> 256 longs, 5 bits -> 342 longs.
         let mut out = Vec::new();
-        pack(std::iter::repeat_n(1, 4096), 4096, 4, &mut out);
+        pack(&[1; 4096], |v| v as u64, 4, &mut out);
         assert_eq!(out.len(), 256);
-        pack(std::iter::repeat_n(1, 4096), 4096, 5, &mut out);
+        pack(&[1; 4096], |v| v as u64, 5, &mut out);
         assert_eq!(out.len(), 342);
-        pack(std::iter::repeat_n(1, 64), 64, 3, &mut out);
+        pack(&[1; 64], |v| v as u64, 3, &mut out);
         assert_eq!(out.len(), 4);
     }
 }

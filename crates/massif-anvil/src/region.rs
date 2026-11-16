@@ -7,8 +7,7 @@
 //!            padded to a whole number of sectors
 //! ```
 
-use flate2::Compression;
-use flate2::write::ZlibEncoder;
+use flate2::{Compress, Compression, FlushCompress, Status};
 use std::io::{self, Write};
 
 const SECTOR: usize = 4096;
@@ -48,14 +47,7 @@ impl RegionBuilder {
     /// The record of a chunk as a region file holds it: length, compression
     /// type and data, compressed at `level` — on any thread.
     pub fn compress(nbt: &[u8], level: u32) -> io::Result<Vec<u8>> {
-        let mut record = Vec::with_capacity(nbt.len() / 6 + 64);
-        record.extend_from_slice(&[0, 0, 0, 0, COMPRESSION_ZLIB]);
-        let mut enc = ZlibEncoder::new(record, Compression::new(level));
-        enc.write_all(nbt)?;
-        let mut record = enc.finish()?;
-        let len = (record.len() - 4) as u32; // compression byte + data
-        record[..4].copy_from_slice(&len.to_be_bytes());
-        Ok(record)
+        Compressor::new(level).record(nbt)
     }
 
     /// Store a record made by [`RegionBuilder::compress`] at region-local
@@ -103,6 +95,38 @@ impl RegionBuilder {
         }
         out.flush()?;
         Ok(sector as u64 * SECTOR as u64)
+    }
+}
+
+/// Compresses chunk after chunk with the same zlib state, reset between
+/// them rather than made anew (with its tables and window) for each: the
+/// same bytes as [`RegionBuilder::compress`]. Keep one per thread.
+pub struct Compressor(Compress);
+
+impl Compressor {
+    pub fn new(level: u32) -> Self {
+        Self(Compress::new(Compression::new(level), true))
+    }
+
+    /// See [`RegionBuilder::compress`].
+    pub fn record(&mut self, nbt: &[u8]) -> io::Result<Vec<u8>> {
+        let mut record = Vec::with_capacity(nbt.len() / 6 + 64);
+        record.extend_from_slice(&[0, 0, 0, 0, COMPRESSION_ZLIB]);
+        self.0.reset();
+        loop {
+            let read = self.0.total_in() as usize;
+            if record.capacity() - record.len() < 64 {
+                record.reserve(record.len());
+            }
+            match self.0.compress_vec(&nbt[read..], &mut record, FlushCompress::Finish) {
+                Ok(Status::StreamEnd) => break,
+                Ok(_) => {}
+                Err(e) => return Err(io::Error::other(e)),
+            }
+        }
+        let len = (record.len() - 4) as u32; // compression byte + data
+        record[..4].copy_from_slice(&len.to_be_bytes());
+        Ok(record)
     }
 }
 

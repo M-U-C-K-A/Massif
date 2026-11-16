@@ -50,6 +50,23 @@ impl NbtWriter {
         Self { buf }
     }
 
+    /// A writer for a piece of a document, without the root compound: its
+    /// bytes, from [`NbtWriter::into_bytes`], go into documents with
+    /// [`NbtWriter::raw`].
+    pub fn fragment() -> Self {
+        Self { buf: Vec::new() }
+    }
+
+    /// The bytes of a [`NbtWriter::fragment`].
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.buf
+    }
+
+    /// Append bytes encoded already, such as those of a fragment.
+    pub fn raw(&mut self, bytes: &[u8]) {
+        self.buf.extend_from_slice(bytes);
+    }
+
     /// Close the root compound and return the encoded document.
     pub fn finish(mut self) -> Vec<u8> {
         self.buf.push(TagType::End as u8);
@@ -59,6 +76,12 @@ impl NbtWriter {
     /// Java's "modified UTF-8": NUL is two bytes and characters outside the
     /// BMP are a surrogate pair of two three-byte sequences.
     fn put_str(&mut self, s: &str) {
+        // ASCII without NUL is the same in modified UTF-8.
+        if s.len() <= u16::MAX as usize - 6 && s.is_ascii() && !s.as_bytes().contains(&0) {
+            self.buf.extend_from_slice(&(s.len() as u16).to_be_bytes());
+            self.buf.extend_from_slice(s.as_bytes());
+            return;
+        }
         let at = self.buf.len();
         self.buf.extend_from_slice(&[0, 0]);
         for c in s.chars() {

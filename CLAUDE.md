@@ -40,7 +40,7 @@ Several sessions work on this repository at the same time, each with its own sub
   - `cargo test --workspace`;
   - GPU renders of the app: `MASSIF_SNAPSHOT_DIR=<dir> cargo test -p massif-app` (add `MASSIF_SNAPSHOT_PPP=2` to render as on a Retina screen);
   - timings: `MASSIF_PERF=1`, `MASSIF_MOVE_WORLD=<a large .massif>`;
-  - benchmarks: `cargo test --release -p massif-core --test perf -- --ignored --nocapture`.
+  - benchmarks: `cargo test --release -p massif-core --test perf -- --ignored --nocapture`, and the export's with `-p massif-anvil`.
 - Check the interface with these offscreen renders. Never take desktop screenshots: they show the user's own windows.
 - Measure before claiming speed. Other sessions and apps share the machine, so compare CPU time and the best of several runs. An export stays byte for byte the same unless the change is meant to alter it.
 - `cargo clippy --workspace --all-targets` stays clean.
