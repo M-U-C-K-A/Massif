@@ -493,7 +493,9 @@ pub fn load(path: &Path, version: &str) -> Result<Catalogue, AssetError> {
 }
 
 /// Read every block of a client jar, and of the mods' jars beside it
-/// (Forge, NeoForge, Fabric or Quilt alike: their `assets/<namespace>/`).
+/// (Forge, NeoForge, Fabric or Quilt alike: their `assets/<namespace>/`)
+/// and of resource packs (`.zip`), in that order: a later archive's
+/// models, states and textures replace an earlier one's.
 /// A mod's models may build on the game's, and its blocks keep their own
 /// ids (`conquest:old_bricks`), which the export writes as they are. A mod
 /// jar that does not read is left out and named in `skipped`.
@@ -548,6 +550,8 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
             mod_infos.push(ModInfo { name, path: p.clone(), namespaces: namespaces.into_iter().collect(), blocks: added });
         }
     }
+    // A texture given twice (a resource pack over its mod) is the last one's.
+    let png: Vec<(String, Vec<u8>)> = png.into_iter().collect::<HashMap<_, _>>().into_iter().collect();
     let models = Models { raw: raw_models };
     let states: Vec<(String, Value)> = {
         let mut v: Vec<(String, Value)> = state_map.into_iter().map(|(id, (state, _))| (id, state)).collect();
@@ -931,6 +935,17 @@ mod tests {
         assert_eq!(namespace("stone"), "minecraft");
         // The game alone has none of them.
         assert!(load(&game_jar, "1.21").unwrap().block("conquest:old_red_bricks").is_none());
+        // A resource pack after the mod gives its blocks their textures.
+        let blue = png([40, 60, 200]);
+        let pack: Vec<(&str, &[u8], bool)> = vec![
+            ("pack.mcmeta", br#"{"pack":{"pack_format":15,"description":"Conquest textures"}}"#, true),
+            ("assets/conquest/textures/block/old_red_bricks.png", &blue, false),
+        ];
+        let pack_zip = dir.join("conquest-textures.zip");
+        std::fs::write(&pack_zip, zip::tests_support::tiny_zip(&pack)).unwrap();
+        let packed = load_with_mods(&game_jar, "1.21", &[mod_jar.clone(), pack_zip.clone()]).unwrap();
+        assert_eq!(packed.block("conquest:old_red_bricks").unwrap().color, [40, 60, 200]);
+        assert_eq!(packed.mods[1].blocks, 0, "a resource pack adds textures, not blocks");
         // A terrain of a mod's block keeps its id, for the export.
         let mut reg = Registry::vanilla();
         let t = block_terrain(&mut reg, bricks);

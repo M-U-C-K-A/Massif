@@ -101,8 +101,8 @@ impl IconStyle {
 
     pub fn label(self) -> &'static str {
         match self {
-            IconStyle::Line => "Line",
-            IconStyle::Classic => "Classic",
+            IconStyle::Line => tn!("Line"),
+            IconStyle::Classic => tn!("Classic"),
         }
     }
 }

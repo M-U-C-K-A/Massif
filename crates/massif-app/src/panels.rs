@@ -2608,9 +2608,9 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
         }
         if ui
             .small_button(theme::with_icon(Icon::Plus, tr!("Add mods…")))
-            .on_hover_text(tr!("The jars of mods with blocks (Conquest Reforged, Chipped, Macaw's…), from the mods folder of your instance: their blocks are painted and exported like the game's"))
+            .on_hover_text(tr!("The jars of mods with blocks (Conquest Reforged, Chipped, Macaw's…), from the mods folder of your instance, and the resource packs (.zip) that give them their textures: their blocks are painted and exported like the game's"))
             .clicked()
-            && let Some(files) = rfd::FileDialog::new().set_title(tr!("Choose mod jars")).add_filter(tr!("Mods"), &["jar"]).pick_files()
+            && let Some(files) = rfd::FileDialog::new().set_title(tr!("Choose mods and resource packs")).add_filter(tr!("Mods and resource packs"), &["jar", "zip"]).pick_files()
         {
             for f in files {
                 if !mods.contains(&f) {
