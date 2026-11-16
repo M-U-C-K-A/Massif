@@ -440,7 +440,8 @@ impl Job {
         };
         let kind = if snapshot.is_some() { JobKind::Auto } else { JobKind::Generate };
         Job::spawn(kind, label, Some(progress as Arc<dyn JobProgress>), ctx, move || {
-            let area = job.area;
+            // A new world is whole tiles, each read from data of its own.
+            let area = if snapshot.is_none() { job.area.whole_tiles() } else { job.area };
             p.steps.store(if snapshot.is_some() { 3 } else { 2 }, Relaxed);
             let (source, data_metres): (Box<dyn Elevation>, f64) = match &job.source {
                 crate::real_terrain::Source::Online => {
@@ -448,7 +449,7 @@ impl Job {
                     let keys = area.tiles(z);
                     p.tiles.store(keys.len(), Relaxed);
                     match store.load_all(&keys, &p.fetched, &p.pass.cancel) {
-                        Ok(tiles) => (Box::new(Tiles { z, tiles }), metres_per_px(area.lat, z)),
+                        Ok(tiles) => (Box::new(Tiles::new(z, tiles)), metres_per_px(area.lat, z)),
                         Err(e) => return Outcome::Failed(tr!("Relief of a real place: {e}", e)),
                     }
                 }
@@ -462,8 +463,11 @@ impl Job {
                 return Outcome::Cancelled;
             }
             p.step.store(1, Relaxed);
-            let samples = Samples::read(&area, source.as_ref(), spacing(&area, data_metres));
+            let mut samples = Samples::read(&area, source.as_ref(), spacing(&area, data_metres));
             drop(source);
+            if snapshot.is_none() {
+                samples.fill_gaps();
+            }
             let Some(span) = samples.span() else {
                 return Outcome::Failed(tr!("Relief of a real place: no heights over this area").to_owned());
             };
@@ -477,7 +481,7 @@ impl Job {
             match snapshot {
                 None => {
                     let (lo, hi) = (job.vertical.low, job.vertical.high);
-                    let mut world = massif_core::real::new_world(&job.name, &samples, &fit, sea, lo, hi);
+                    let mut world = massif_core::real::new_world(&job.name, &samples, &fit, &area, sea, lo, hi);
                     drop(samples);
                     p.step.store(1, Relaxed);
                     let mut history = massif_core::history::History::new(1);

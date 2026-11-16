@@ -303,7 +303,7 @@ pub const BEACH_REACH: usize = 6;
 
 /// Whether some cell of a `side`-wide grid within `reach` cells of each one
 /// (a square around it) is `true` in `wet`.
-fn within_reach(wet: &[bool], side: usize, reach: usize) -> Vec<bool> {
+pub(crate) fn within_reach(wet: &[bool], side: usize, reach: usize) -> Vec<bool> {
     let rows = wet.len() / side;
     // Along the rows, then along the columns: counts in a sliding window.
     let mut across = vec![false; wet.len()];

@@ -16,11 +16,12 @@
 use crate::auto::{Changes, Steps};
 use crate::codec::snap_height;
 use crate::coords::{BlockRect, TILE_SIZE, TilePos, local_index};
-use crate::generate::FromHeightmap;
 use crate::heightmap::Heightmap;
 use crate::history::Edit;
+use crate::level::Blob;
+use crate::plane::Plane;
 use crate::selection::IN;
-use crate::tile::NO_FLUID;
+use crate::tile::{NO_FLUID, Tile};
 use crate::world::World;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -35,8 +36,10 @@ pub const MAX_ZOOM: u8 = 15;
 /// of heights).
 pub const MAX_TILES: usize = 1024;
 /// The most samples a side of the grid of heights an area is read into
-/// (bilinear between them).
-pub const MAX_GRID: usize = 4096;
+/// (bilinear between them): as many as the most tiles have pixels.
+pub const MAX_GRID: usize = 8192;
+/// The widest and deepest map made from a real place, in blocks.
+pub const MAX_SIZE: i32 = 32_768;
 /// The Earth's radius, in metres (the sphere of Web Mercator).
 pub const EARTH_RADIUS: f64 = 6_378_137.0;
 /// Where the tiles are, by `{z}`, `{x}` and `{y}`.
@@ -187,6 +190,14 @@ impl Area {
         (east, south)
     }
 
+    /// The area grown to whole tiles of the map (128 blocks), about the
+    /// same centre: what a new world reads, so that its edge tiles have
+    /// data of their own rather than their last column stretched.
+    pub fn whole_tiles(&self) -> Area {
+        let up = |n: i32| (n.max(1) + TILE_SIZE - 1) / TILE_SIZE * TILE_SIZE;
+        Area { width: up(self.width), depth: up(self.depth), ..*self }
+    }
+
     pub fn bounds(&self) -> Bounds {
         let (w, d) = self.metres();
         let (north, west) = self.lat_lon(-w / 2.0, -d / 2.0);
@@ -277,7 +288,69 @@ pub struct Tiles {
     pub tiles: HashMap<TileKey, Arc<DemTile>>,
 }
 
+/// Heights no place on the Earth has, in metres: below the deepest trench
+/// or above the highest summit, a Terrarium pixel there is no data.
+pub const LOWEST: f32 = -11_500.0;
+pub const HIGHEST: f32 = 9_000.0;
+/// A pixel standing out of all eight around it by more than this, and more
+/// than they differ among themselves, is a spike or a pit of the data.
+pub const SPIKE: f32 = 25.0;
+
 impl Tiles {
+    /// The tiles, cleaned: see [`clean_tile`].
+    pub fn new(z: u8, tiles: HashMap<TileKey, Arc<DemTile>>) -> Tiles {
+        let raw = Tiles { z, tiles };
+        let cleaned = raw.tiles.par_iter().map(|(k, t)| (*k, Arc::new(raw.cleaned(*k, t)))).collect();
+        Tiles { z, tiles: cleaned }
+    }
+
+    /// Tile `key` with its pixels out of reach of the Earth made no data,
+    /// and its lone spikes and pits made the middle of the pixels around
+    /// them (across the edges of the tiles, where the next ones are read).
+    fn cleaned(&self, key: TileKey, tile: &DemTile) -> DemTile {
+        let n = TILE_PX;
+        let m = n + 2;
+        let ok = |v: f32| (v.is_finite() && (LOWEST..=HIGHEST).contains(&v)).then_some(v);
+        // The tile and a pixel's ring of its neighbours.
+        let (bx, by) = (key.x as i64 * n as i64 - 1, key.y as i64 * n as i64 - 1);
+        let padded: Vec<f32> = (0..m * m)
+            .map(|k| {
+                let (x, y) = (k % m, k / m);
+                let v = if (1..=n).contains(&x) && (1..=n).contains(&y) { Some(tile.at(x - 1, y - 1)) } else { self.px(bx + x as i64, by + y as i64) };
+                v.and_then(ok).unwrap_or(f32::NAN)
+            })
+            .collect();
+        let mut metres = Vec::with_capacity(n * n);
+        for y in 1..=n {
+            for x in 1..=n {
+                let v = padded[y * m + x];
+                if !v.is_finite() {
+                    metres.push(f32::NAN);
+                    continue;
+                }
+                let mut around = [0f32; 8];
+                let mut k = 0;
+                for (dx, dy) in [(-1i32, -1i32), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
+                    let a = padded[(y as i32 + dy) as usize * m + (x as i32 + dx) as usize];
+                    if a.is_finite() {
+                        around[k] = a;
+                        k += 1;
+                    }
+                }
+                if k < 5 {
+                    metres.push(v);
+                    continue;
+                }
+                let around = &mut around[..k];
+                around.sort_unstable_by(f32::total_cmp);
+                let (lo, hi) = (around[0], around[k - 1]);
+                let reach = SPIKE.max(hi - lo);
+                metres.push(if v > hi + reach || v < lo - reach { around[k / 2] } else { v });
+            }
+        }
+        DemTile { metres }
+    }
+
     /// The height at pixel `(x, y)` of the world at the tiles' zoom.
     fn px(&self, x: i64, y: i64) -> Option<f32> {
         let side = 1i64 << self.z;
@@ -285,7 +358,7 @@ impl Tiles {
         let (x, y) = (x.rem_euclid(n), y.clamp(0, n - 1));
         let p = TILE_PX as i64;
         let key = TileKey { z: self.z, x: (x / p) as u32, y: (y / p) as u32 };
-        self.tiles.get(&key).map(|t| t.at((x % p) as usize, (y % p) as usize))
+        self.tiles.get(&key).map(|t| t.at((x % p) as usize, (y % p) as usize)).filter(|v| v.is_finite())
     }
 
     /// The height at a latitude and longitude, bilinear between pixels.
@@ -408,10 +481,16 @@ impl Vertical {
 }
 
 impl Fit {
-    /// The height of the ground for a real height.
+    /// The height of the ground for a real height. The real sea (0 m or
+    /// under) is a block under the water at least, where it would stand at
+    /// the sea level: the data often gives the sea as 0 m flat, which would
+    /// be dry ground level with the water.
     pub fn height(&self, metres: f32) -> f32 {
         let d = metres - self.datum;
-        let y = self.sea + if d >= 0.0 { d * self.up } else { d * self.down };
+        let mut y = self.sea + if d >= 0.0 { d * self.up } else { d * self.down };
+        if metres <= 0.0 {
+            y = y.min(self.sea - 1.0);
+        }
         y.clamp(self.low, self.high.max(self.low))
     }
 }
@@ -450,6 +529,17 @@ impl Samples {
         (lo <= hi).then_some(Span { low: lo, high: hi })
     }
 
+    /// Give the samples without data the heights around them (coarser
+    /// and coarser averages of the samples that have some, pulled back
+    /// over the gaps), rather than a hole: nothing changes when every
+    /// sample has data, and nothing when none has.
+    pub fn fill_gaps(&mut self) {
+        if self.missing() == 0 || self.missing() == self.metres.len() {
+            return;
+        }
+        fill(&mut self.metres, self.nx, self.nz);
+    }
+
     /// Samples without data.
     pub fn missing(&self) -> usize {
         self.metres.iter().filter(|m| !m.is_finite()).count()
@@ -477,6 +567,53 @@ impl Samples {
     }
 }
 
+/// Fill the `NaN`s of a `w` × `h` grid by push-pull: the grid halved
+/// (each cell the mean of the finite cells under it), filled the same way,
+/// and its cells read back, bilinear, where this one has none.
+fn fill(grid: &mut [f32], w: usize, h: usize) {
+    if w <= 1 && h <= 1 {
+        if !grid[0].is_finite() {
+            grid[0] = 0.0;
+        }
+        return;
+    }
+    let (hw, hh) = (w.div_ceil(2), h.div_ceil(2));
+    let mut half = vec![f32::NAN; hw * hh];
+    for j in 0..hh {
+        for i in 0..hw {
+            let (mut sum, mut n) = (0.0, 0);
+            for (x, z) in [(2 * i, 2 * j), (2 * i + 1, 2 * j), (2 * i, 2 * j + 1), (2 * i + 1, 2 * j + 1)] {
+                if x < w && z < h && grid[z * w + x].is_finite() {
+                    sum += grid[z * w + x];
+                    n += 1;
+                }
+            }
+            if n > 0 {
+                half[j * hw + i] = sum / n as f32;
+            }
+        }
+    }
+    if half.iter().any(|m| !m.is_finite()) {
+        fill(&mut half, hw, hh);
+    }
+    for z in 0..h {
+        for x in 0..w {
+            if grid[z * w + x].is_finite() {
+                continue;
+            }
+            // The cell's centre on the half grid.
+            let (u, v) = (((x as f32 + 0.5) / 2.0 - 0.5).clamp(0.0, (hw - 1) as f32), ((z as f32 + 0.5) / 2.0 - 0.5).clamp(0.0, (hh - 1) as f32));
+            let (i, j) = (u.floor() as usize, v.floor() as usize);
+            let (i1, j1) = ((i + 1).min(hw - 1), (j + 1).min(hh - 1));
+            let (fu, fv) = (u - i as f32, v - j as f32);
+            let at = |i: usize, j: usize| half[j * hw + i];
+            let top = at(i, j) + (at(i1, j) - at(i, j)) * fu;
+            let bottom = at(i, j1) + (at(i1, j1) - at(i, j1)) * fu;
+            grid[z * w + x] = top + (bottom - top) * fv;
+        }
+    }
+}
+
 /// How far apart to read an area for a map: a sample a block, or as far
 /// apart as the data's pixels are, and no more than [`MAX_GRID`] a side.
 pub fn spacing(area: &Area, data_metres: f64) -> f64 {
@@ -485,30 +622,111 @@ pub fn spacing(area: &Area, data_metres: f64) -> f64 {
     data.max(most)
 }
 
+/// How far from the water a beach goes, in metres.
+pub const BEACH_METRES: f64 = 60.0;
+
+/// About where the snow stays all year at latitude `lat`, in metres: some
+/// 5200 m in the tropics, lower toward the poles (some 3000 m in the Alps,
+/// 1800 m at 60°, the sea's level past 80°).
+pub fn snow_line(lat: f64) -> f32 {
+    (5200.0 - 85.0 * (lat.abs() - 20.0).max(0.0)).max(0.0) as f32
+}
+
 /// A new world of the area: its ground at the heights `fit` gives, the sea
-/// at its level, the world's build limits `min_y..max_y`, centred on the
-/// origin. Its terrains are painted from height and slope; the caller
-/// paints them again with the automatic paint.
-pub fn new_world(name: &str, samples: &Samples, fit: &Fit, sea_level: i32, min_y: i32, max_y: i32) -> World {
-    let (low, high) = (fit.low, fit.high.max(fit.low + 1.0));
-    let data = samples.metres.iter().map(|&m| if m.is_finite() { (fit.height(m) - low) / (high - low) } else { (fit.sea - 1.0 - low) / (high - low) }).collect();
-    let map = Heightmap {
-        width: samples.nx,
-        height: samples.nz,
-        data,
+/// at its level, the world's build limits `min_y..max_y`. The map is whole
+/// tiles, its north-west corner on the area's (read the area grown with
+/// [`Area::whole_tiles`], so that every column has data of its own), and
+/// centred on the origin. Its terrains are painted from the real place:
+/// sand only along the water, rock on steep slopes, snow above the
+/// [`snow_line`] of its latitude (not by the heights of blocks, which the
+/// scale and the exaggeration move); the caller paints them again with the
+/// automatic paint.
+pub fn new_world(name: &str, samples: &Samples, fit: &Fit, area: &Area, sea_level: i32, min_y: i32, max_y: i32) -> World {
+    use crate::generate::{BEACH_REACH, Theme, build_limits, within_reach};
+    use crate::world::WorldMeta;
+    let mut world = World::new(WorldMeta {
+        name: name.to_owned(),
+        seed: 0,
+        spawn: [0, 0, 0],
+        sea_level,
+        lava: false,
+        graph: None,
+        ores: Default::default(),
+    });
+    let (bottom, ceiling) = build_limits(min_y, max_y);
+    world.dims[0].min_y = bottom;
+    world.dims[0].max_y = ceiling;
+    let theme = Theme::new(&world.registry);
+    let ts = TILE_SIZE as f64;
+    let (w, d) = (samples.nx as f64 * samples.spacing, samples.nz as f64 * samples.spacing);
+    let (tx, tz) = (((w / ts).floor() as i32).max(1), ((d / ts).floor() as i32).max(1));
+    let (x0, z0) = (-(tx / 2) * TILE_SIZE, -(tz / 2) * TILE_SIZE);
+    let sea = sea_level as f32;
+    let (lo, hi) = (bottom as f32 + 1.0, ceiling as f32 - 1.0);
+    // The real height of a column, and its height in blocks.
+    let column = |bx: i32, bz: i32| {
+        let metres = samples.at((bx - x0) as f64 + 0.5, (bz - z0) as f64 + 0.5);
+        (metres.unwrap_or(f32::MIN), metres.map_or(fit.sea - 1.0, |m| fit.height(m)).clamp(lo, hi))
     };
-    crate::generate::from_heightmap(
-        &map,
-        &FromHeightmap {
-            name: name.to_owned(),
-            scale: samples.spacing as f32,
-            low,
-            high,
-            sea_level,
-            min_y,
-            max_y,
-        },
-    )
+    let snow = snow_line(area.lat);
+    // Sand where the water is near, on the samples' grid: as far as a
+    // beach goes on the Earth (about 60 m), a few blocks at least.
+    let wet: Vec<bool> = samples.metres.iter().map(|&m| m.is_finite() && fit.height(m) < sea).collect();
+    let blocks = (BEACH_METRES * area.blocks_per_metre).clamp(BEACH_REACH as f64, 4.0 * BEACH_REACH as f64);
+    let reach = (blocks / samples.spacing).ceil().max(1.0) as usize;
+    let shore = within_reach(&wet, samples.nx, reach);
+    let near_water = |bx: i32, bz: i32| {
+        let (i, j) = ((((bx - x0) as f64 + 0.5) / samples.spacing) as usize, (((bz - z0) as f64 + 0.5) / samples.spacing) as usize);
+        shore[j.min(samples.nz - 1) * samples.nx + i.min(samples.nx - 1)]
+    };
+    let positions: Vec<TilePos> = (0..tz).flat_map(|z| (0..tx).map(move |x| TilePos::new(x0.div_euclid(TILE_SIZE) + x, z0.div_euclid(TILE_SIZE) + z))).collect();
+    let blobs: Vec<(TilePos, Blob)> = positions
+        .par_iter()
+        .map(|&pos| {
+            let (ox, oz) = pos.origin();
+            let n = TILE_SIZE as usize;
+            // The tile's heights with a column's margin, for the slopes.
+            let m = n + 2;
+            let columns: Vec<(f32, f32)> = (0..m * m).map(|k| column(ox - 1 + (k % m) as i32, oz - 1 + (k / m) as i32)).collect();
+            let mut top = vec![0f32; n * n];
+            let mut terrain = vec![0u16; n * n];
+            for z in 0..n {
+                for x in 0..n {
+                    let at = |dx: usize, dz: usize| columns[(z + dz) * m + x + dx].1;
+                    let (metres, h) = columns[(z + 1) * m + x + 1];
+                    let slope = (at(2, 1) - at(0, 1)).abs().max((at(1, 2) - at(1, 0)).abs()) * 0.5;
+                    top[z * n + x] = snap_height(h);
+                    let beach = near_water(ox + x as i32, oz + z as i32);
+                    terrain[z * n + x] = if h < sea - 14.0 {
+                        theme.gravel
+                    } else if beach && h < sea + 2.2 && slope < 0.9 {
+                        theme.sand
+                    } else if slope > 1.35 {
+                        theme.rock
+                    } else if metres > snow {
+                        theme.snow
+                    } else if metres > snow - 300.0 || slope > 1.05 {
+                        theme.rocky
+                    } else {
+                        theme.grass
+                    }
+                    .0;
+                }
+            }
+            let mut tile = Tile::ground(0.0, 0, sea_level as i16);
+            tile.top = Plane::from_vec(top);
+            tile.terrain = Plane::from_vec(terrain);
+            tile.compact();
+            (pos, Blob::from(tile.encode()))
+        })
+        .collect();
+    let ground = world.dims[0].ground_mut();
+    for (pos, blob) in blobs {
+        ground.insert_blob(pos, blob);
+    }
+    let surface = column(0, 0).1.max(sea);
+    world.meta.spawn = [0, crate::compose::block_top(surface) + 1, 0];
+    world
 }
 
 /// Write the area's heights into the ground of the map over `rect` (the
@@ -770,6 +988,117 @@ mod tests {
     }
 
     #[test]
+    fn spikes_pits_and_holes_are_cleaned() {
+        // Two tiles side by side of gentle ground, 1 m a pixel eastward.
+        let z = 10;
+        let (a, b) = (TileKey { z, x: 500, y: 300 }, TileKey { z, x: 501, y: 300 });
+        let ground = |k: TileKey| (0..TILE_PX * TILE_PX).map(|i| ((k.x as usize - 500) * TILE_PX + i % TILE_PX) as f32 * 0.5).collect::<Vec<f32>>();
+        let (mut ma, mut mb) = (ground(a), ground(b));
+        let base = |k: TileKey, x: usize| ((k.x as usize - 500) * TILE_PX + x) as f32 * 0.5;
+        ma[40 * TILE_PX + 40] += 900.0; // A spike,
+        ma[80 * TILE_PX + 90] -= 300.0; // a pit,
+        ma[10 * TILE_PX + 255] += 500.0; // a spike on the edge of the tile,
+        mb[20 * TILE_PX + 20] = -32768.0; // no data,
+        mb[100 * TILE_PX + 100] = f32::NAN;
+        // and a real ridge one pixel wide, 40 m over the ground (8 m over
+        // its neighbours' spread), kept.
+        for y in 120..140 {
+            mb[y * TILE_PX + 60] += 40.0;
+        }
+        let tiles = Tiles::new(z, [(a, Arc::new(DemTile { metres: ma })), (b, Arc::new(DemTile { metres: mb }))].into_iter().collect());
+        let t = |k: TileKey| tiles.tiles[&k].clone();
+        assert_eq!(t(a).at(40, 40), base(a, 40));
+        assert_eq!(t(a).at(90, 80), base(a, 90));
+        assert_eq!(t(a).at(255, 10), base(a, 255), "across the tiles' edge");
+        assert!(t(b).at(20, 20).is_nan() && t(b).at(100, 100).is_nan(), "no data is no data");
+        assert_eq!(t(b).at(60, 130), base(b, 60) + 40.0, "a ridge stays");
+        assert_eq!(t(b).at(61, 130), base(b, 61));
+        // No data read between pixels: none; on samples, filled from around.
+        let (x, y) = ((501 * 256 + 20) as f64 + 0.5, (300 * 256 + 20) as f64 + 0.5);
+        let (lat, lon) = from_px(x, y, z);
+        assert_eq!(tiles.at(lat, lon), None);
+        let mut s = Samples { spacing: 1.0, nx: 4, nz: 3, metres: vec![1.0, 2.0, 3.0, 4.0, 1.0, f32::NAN, f32::NAN, 4.0, 1.0, 2.0, 3.0, 4.0] };
+        s.fill_gaps();
+        assert_eq!(s.missing(), 0);
+        assert!(s.metres[5] > 1.0 && s.metres[5] < 3.5 && s.metres[6] > 2.0 && s.metres[6] < 4.0, "{:?}", s.metres);
+        // A grid without any data is left as it is.
+        let mut none = Samples { spacing: 1.0, nx: 2, nz: 2, metres: vec![f32::NAN; 4] };
+        none.fill_gaps();
+        assert_eq!(none.missing(), 4);
+    }
+
+    /// A new world of a slope rising eastward from a sea at 0 m to hills,
+    /// `size` blocks a side.
+    fn coast(size: i32) -> (Area, Samples, Fit, World) {
+        let area = Area { lat: 46.0, lon: 7.0, blocks_per_metre: 1.0, width: size, depth: size }.whole_tiles();
+        struct Coast;
+        impl Elevation for Coast {
+            fn metres(&self, _: &Area, east: f64, _: f64) -> Option<f32> {
+                Some((east as f32 * 0.25).max(0.0))
+            }
+        }
+        let samples = Samples::read(&area, &Coast, 2.0);
+        let fit = Vertical { datum: 0.0, sea_level: 62, exaggeration: 1.0, low: -64, high: 320, fit: true }.fit(samples.span().unwrap(), 1.0);
+        let world = new_world("coast", &samples, &fit, &area, 62, -64, 320);
+        (area, samples, fit, world)
+    }
+
+    #[test]
+    fn a_new_world_has_data_to_its_edges() {
+        let (area, _, fit, world) = coast(300);
+        // Grown to whole tiles: 384 blocks, three tiles a side.
+        assert_eq!((area.width, area.depth), (384, 384));
+        let dim = &world.dims[0];
+        let (lo, hi) = dim.bounds().unwrap();
+        assert_eq!((hi.x - lo.x + 1, hi.z - lo.z + 1), (3, 3));
+        let top = |x: i32, z: i32| {
+            let t = dim.ground().view(TilePos::containing(x, z)).unwrap();
+            t.top.get(local_index(x, z))
+        };
+        let (x0, x1, z1) = (lo.x * TILE_SIZE, (hi.x + 1) * TILE_SIZE, (hi.z + 1) * TILE_SIZE);
+        // Every column of the last ones rises as the slope does: none
+        // repeats the one before it (the stretched edge of 0.6).
+        for x in x1 - 40..x1 {
+            assert!(top(x, z1 - 1) > top(x - 2, z1 - 1) + 0.3, "column {x}: {} after {}", top(x, z1 - 1), top(x - 2, z1 - 1));
+        }
+        // The east edge as high as its real height says.
+        let east = (x1 - x0) as f32 - 0.5 - area.width as f32 / 2.0;
+        assert!((top(x1 - 1, 0) - fit.height(east * 0.25)).abs() < 1.0, "{} {}", top(x1 - 1, 0), fit.height(east * 0.25));
+    }
+
+    #[test]
+    fn the_sea_is_wet_and_sand_keeps_to_it() {
+        let (_, _, _, world) = coast(1024);
+        let dim = &world.dims[0];
+        let (lo, hi) = dim.bounds().unwrap();
+        let x0 = lo.x * TILE_SIZE;
+        let sand = world.registry.terrain_by_name("Sand").unwrap().0;
+        let col = |x: i32| {
+            let t = dim.ground().view(TilePos::containing(x, 0)).unwrap();
+            let i = local_index(x, 0);
+            (t.top.get(i), t.fluid.get(i), t.terrain.get(i))
+        };
+        // The sea at 0 m: a block under the water, not level with it.
+        let (top, fluid, _) = col(x0 + 10);
+        assert!(top <= 61.0 && fluid == 62, "{top} {fluid}");
+        // Where the land rises out of it, sand; low ground farther from
+        // the water, none (it was sand as far as it lay low, a desert).
+        let shore = (x0..(hi.x + 1) * TILE_SIZE).find(|&x| col(x).0 >= 62.0).unwrap();
+        assert_eq!(col(shore + 2).2, sand);
+        let far = (BEACH_METRES as i32) + 10;
+        assert_ne!(col(shore + far).2, sand);
+        assert!(col(shore + far).0 < 62.0 + 2.2 + 30.0);
+    }
+
+    #[test]
+    fn snow_lies_by_latitude() {
+        assert_eq!(snow_line(0.0), 5200.0);
+        assert!((2900.0..3100.0).contains(&snow_line(46.0)));
+        assert!(snow_line(-60.0) < 2000.0);
+        assert_eq!(snow_line(85.0), 0.0);
+    }
+
+    #[test]
     fn heights_fit_the_range() {
         let v = Vertical { datum: 0.0, sea_level: 62, exaggeration: 1.0, low: -64, high: 320, fit: false };
         // A block a metre: 100 m is 100 blocks over the sea.
@@ -787,7 +1116,7 @@ mod tests {
         // ...squeezed into it with: the summit at the top, the sea where it is.
         let f = Vertical { fit: true, ..v }.fit(alps, 0.1);
         assert!((f.height(4808.0) - 319.0).abs() < 1e-3);
-        assert_eq!(f.height(0.0), 62.0);
+        assert_eq!(f.height(0.0), 61.0, "the sea at 0 m under the water");
         assert!((f.height(2404.0) - (62.0 + 257.0 / 2.0)).abs() < 1e-2);
         // Deep sea squeezed above the bottom of the world, apart from land.
         let f = Vertical { fit: true, ..v }.fit(Span { low: -4000.0, high: 50.0 }, 0.5);
@@ -820,7 +1149,7 @@ mod tests {
         let area = Area { lat: 0.0, lon: 0.0, blocks_per_metre: 1.0, width: 2048, depth: 2048 };
         assert_eq!(spacing(&area, 3.0), 3.0);
         assert_eq!(spacing(&Area { blocks_per_metre: 0.1, ..area }, 3.0), 1.0);
-        assert_eq!(spacing(&Area { width: 16384, ..area }, 1.0), 4.0);
+        assert_eq!(spacing(&Area { width: 32768, ..area }, 1.0), 4.0);
     }
 
     #[test]

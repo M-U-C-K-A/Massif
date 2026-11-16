@@ -1022,8 +1022,22 @@ A world, or a part of one, from the relief of a real place on the Earth.
   zoom.
 - **Scale.** **Blocks a metre** is the horizontal scale: 1 makes a block
   a metre, 0.1 ten metres. A new world has the **Width** and **Depth**
-  you give it, the area following; in a map, the area is the map's (or
-  the selection's) and the scale sets how much of the Earth it covers.
+  you give it, up to 32,768 blocks a side, the area following (rounded up
+  to whole tiles of 128 blocks, each read from the data); in a map, the
+  area is the map's (or the selection's) and the scale sets how much of
+  the Earth it covers. A world of 16,384 blocks a side takes about half a
+  minute and 650 MB of memory to make, one of 32,768 about two minutes
+  and 600 MB; past some 30 km the data is read a little coarser (at most
+  1,024 tiles), its pixels then larger than a block.
+- **Clean data.** Heights no place on the Earth has (the gaps of the data)
+  and lone spikes and pits a pixel wide are dropped, filled from the
+  heights around them; a ridge or a gully as narrow stays. The sea, which
+  the data often gives as 0 m flat, lies a block under the water at
+  least. The ground is painted from the real place: sand along the water
+  only (about 60 m from it), rock on steep slopes, snow above the snow
+  line of the latitude (about 3,000 m in the Alps, 5,000 m in the
+  tropics), not by the heights of blocks that the scale and the
+  exaggeration move.
 - **Heights.** At an **Exaggeration** of 1 the relief keeps the same scale
   upward as across. **Sea level** is the map's, and **Real height there**
   the real height standing at it (0, the sea's; for a place inland, its

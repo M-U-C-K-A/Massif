@@ -257,28 +257,32 @@ fn ores_of_a_tile() {
     eprintln!("ores under y 100: {:.3} ms a tile, {} blocks a tile", started.elapsed().as_secs_f64() * 1000.0 / tiles as f64, blocks / tiles as usize);
 }
 
-/// The CPU time this process has used, user and system, in seconds.
-fn cpu_seconds() -> f64 {
-    // getrusage's struct rusage: two timevals first, then longs.
-    #[repr(C)]
-    struct Timeval {
-        sec: i64,
-        usec: i64,
-    }
-    #[repr(C)]
-    struct Rusage {
-        user: Timeval,
-        system: Timeval,
-        rest: [i64; 14],
-    }
-    unsafe extern "C" {
-        fn getrusage(who: i32, usage: *mut Rusage) -> i32;
-    }
+// getrusage's struct rusage: two timevals first, then longs (ru_maxrss
+// the first of them).
+#[repr(C)]
+struct Timeval {
+    sec: i64,
+    usec: i64,
+}
+#[repr(C)]
+struct Rusage {
+    user: Timeval,
+    system: Timeval,
+    rest: [i64; 14],
+}
+unsafe extern "C" {
+    fn getrusage(who: i32, usage: *mut Rusage) -> i32;
+}
+
+fn rusage() -> Option<Rusage> {
     let mut u = Rusage { user: Timeval { sec: 0, usec: 0 }, system: Timeval { sec: 0, usec: 0 }, rest: [0; 14] };
     // SAFETY: getrusage fills the struct it is given.
-    if unsafe { getrusage(0, &mut u) } != 0 {
-        return 0.0;
-    }
+    (unsafe { getrusage(0, &mut u) } == 0).then_some(u)
+}
+
+/// The CPU time this process has used, user and system, in seconds.
+fn cpu_seconds() -> f64 {
+    let Some(u) = rusage() else { return 0.0 };
     // tv_usec is 32 bits on macOS, in a 64-bit slot.
     let t = |t: &Timeval| t.sec as f64 + (t.usec & 0xffff_ffff) as f64 / 1e6;
     t(&u.user) + t(&u.system)
@@ -352,4 +356,63 @@ fn caves_over_a_large_map() {
     history.commit();
     let encoded = time("encode the sculpted chunks", || world.dims[0].voxels.encode());
     eprintln!("saved: {:.1} MB", encoded.len() as f64 / 1e6);
+}
+
+/// The most memory this process has held, in megabytes.
+fn peak_mb() -> f64 {
+    // Bytes on macOS, kilobytes on Linux.
+    rusage().map_or(0.0, |u| u.rest[0] as f64 / if cfg!(target_os = "macos") { 1048576.0 } else { 1024.0 })
+}
+
+/// A new world from a real place MASSIF_REAL_SIZE blocks a side (16384 by
+/// default), at a block a metre, from made-up tiles of hills by a sea: the
+/// time and the memory each step of the job takes.
+#[test]
+#[ignore]
+fn a_real_place_of_every_size() {
+    use massif_core::real::{Area, DemTile, MAX_TILES, Samples, TILE_PX, Tiles, Vertical, from_px, metres_per_px, spacing};
+    use std::sync::Arc;
+    let size: i32 = std::env::var("MASSIF_REAL_SIZE").ok().and_then(|s| s.parse().ok()).unwrap_or(16384);
+    let started = Instant::now();
+    let area = Area { lat: 45.0, lon: 6.0, blocks_per_metre: 1.0, width: size, depth: size }.whole_tiles();
+    let z = area.zoom(MAX_TILES);
+    let keys = area.tiles(z);
+    let tiles = time(&format!("{} tiles of zoom {z} made up", keys.len()), || {
+        keys.iter()
+            .map(|&k| {
+                let metres = (0..TILE_PX * TILE_PX)
+                    .map(|i| {
+                        let (lat, lon) = from_px(k.x as f64 * 256.0 + (i % TILE_PX) as f64, k.y as f64 * 256.0 + (i / TILE_PX) as f64, z);
+                        let (e, s) = area.offset(lat, lon);
+                        (e / 30.0 + 200.0 * (e / 900.0).sin() * (s / 1300.0).cos() + 80.0 * (s / 211.0).sin()) as f32
+                    })
+                    .collect();
+                (k, Arc::new(DemTile { metres }))
+            })
+            .collect()
+    });
+    let peak = peak_mb();
+    let tiles = time("tiles cleaned", || Tiles::new(z, tiles));
+    let mut samples = time("samples read", || Samples::read(&area, &tiles, spacing(&area, metres_per_px(area.lat, z))));
+    drop(tiles);
+    time("gaps filled", || samples.fill_gaps());
+    let fit = Vertical { datum: 0.0, sea_level: 62, exaggeration: 1.0, low: -64, high: 320, fit: true }.fit(samples.span().unwrap(), 1.0);
+    let mut world = time("world made", || massif_core::real::new_world("real", &samples, &fit, &area, 62, -64, 320));
+    eprintln!("samples {} × {} every {} blocks", samples.nx, samples.nz, samples.spacing);
+    drop(samples);
+    let rules = AutoRules::default();
+    let mut history = History::new(1);
+    history.begin("automatic", 0);
+    let base = massif_core::auto::base_terrain(&world.dims[0], &world.registry);
+    let reader = Reader::new(&rules, &world.registry, 62).with_base(base);
+    time("painted", || massif_core::auto::paint_over_the_map(&mut history.edit(&mut world, 0), &reader));
+    drop(history);
+    eprintln!(
+        "{size} blocks: {:.1} s, {:.1} s of CPU, peak {:.0} MB ({:.0} MB before the work), {} tiles of the map",
+        started.elapsed().as_secs_f64(),
+        cpu_seconds(),
+        peak_mb(),
+        peak,
+        world.dims[0].ground().positions().count()
+    );
 }

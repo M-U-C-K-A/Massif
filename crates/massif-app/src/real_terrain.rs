@@ -9,7 +9,7 @@ use crate::widgets::{Field, button_group, row, switch, well};
 use egui::{Color32, ColorImage, Rect, RichText, Sense, TextureHandle, TextureOptions, Ui, pos2, vec2};
 use massif_core::coords::BlockRect;
 use massif_core::heightmap::Heightmap;
-use massif_core::real::{Area, Bounds, DemTile, Elevation, Fit, Grid, MAX_SCALE, MAX_ZOOM, MIN_SCALE, Samples, Span, TILE_PX, TileKey, Tiles, Vertical, metres_per_px, to_px, from_px};
+use massif_core::real::{Area, Bounds, DemTile, Elevation, Fit, Grid, MAX_SCALE, MAX_SIZE, MAX_ZOOM, MIN_SCALE, Samples, Span, TILE_PX, TileKey, Tiles, Vertical, metres_per_px, to_px, from_px};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -356,8 +356,8 @@ impl RealForm {
     fn fit_file(&mut self) {
         if let Some(f) = &self.file {
             let (e, s) = (f.map.width as f64 * f.metres_per_px, f.map.height as f64 * f.metres_per_px);
-            self.area.width = (e * self.area.blocks_per_metre).round().clamp(128.0, 16_384.0) as i32;
-            self.area.depth = (s * self.area.blocks_per_metre).round().clamp(128.0, 16_384.0) as i32;
+            self.area.width = (e * self.area.blocks_per_metre).round().clamp(128.0, MAX_SIZE as f64) as i32;
+            self.area.depth = (s * self.area.blocks_per_metre).round().clamp(128.0, MAX_SIZE as f64) as i32;
         }
     }
 
@@ -418,8 +418,8 @@ impl RealForm {
     fn set_bounds(&mut self, b: Bounds) {
         let keep_size = !self.new_world();
         let mut area = self.area.fit_bounds(b, keep_size);
-        area.width = area.width.clamp(128, 16_384);
-        area.depth = area.depth.clamp(128, 16_384);
+        area.width = area.width.clamp(128, MAX_SIZE);
+        area.depth = area.depth.clamp(128, MAX_SIZE);
         self.area = area;
     }
 
@@ -477,10 +477,10 @@ impl RealForm {
                 ui.add(egui::TextEdit::singleline(&mut self.name).hint_text(tr!("Real place")).desired_width(f32::INFINITY));
             });
             row(ui, tr!("Width"), |ui| {
-                ui.add(Field::new(&mut self.area.width, 128..=16_384).suffix(tr!(" blocks")));
+                ui.add(Field::new(&mut self.area.width, 128..=MAX_SIZE).suffix(tr!(" blocks")));
             });
             row(ui, tr!("Depth"), |ui| {
-                ui.add(Field::new(&mut self.area.depth, 128..=16_384).suffix(tr!(" blocks")));
+                ui.add(Field::new(&mut self.area.depth, 128..=MAX_SIZE).suffix(tr!(" blocks")));
             });
         }
         row(ui, tr!("Blocks a metre"), |ui| {
@@ -819,6 +819,55 @@ pub mod tests {
                     .collect();
                 store.insert(key, Arc::new(DemTile { metres }));
             }
+        }
+    }
+
+    /// A real place from tiles downloaded before (MASSIF_REAL_TILES, a
+    /// cache folder; MASSIF_REAL_AREA "lat,lon,blocks a metre,size"), made
+    /// a world as the job makes it and drawn on the 2D map to
+    /// MASSIF_SNAPSHOT_DIR: Terrain and Biome views, and the east corners
+    /// close up (where the edge of the data was stretched before 1.0).
+    #[test]
+    fn a_real_place_drawn() {
+        use crate::map_render::{MapMode, MapStyle, render_region};
+        use massif_core::real::{Tiles, metres_per_px, spacing};
+        let (Some(dir), Some(spec), Some(out)) = (std::env::var_os("MASSIF_REAL_TILES"), std::env::var("MASSIF_REAL_AREA").ok(), std::env::var_os("MASSIF_SNAPSHOT_DIR")) else { return };
+        let v: Vec<f64> = spec.split(',').map(|x| x.trim().parse().unwrap()).collect();
+        let area = Area { lat: v[0], lon: v[1], blocks_per_metre: v[2], width: v[3] as i32, depth: v[3] as i32 };
+        let store = TileStore::new(Some(dir.into()), false);
+        let started = std::time::Instant::now();
+        let read = area.whole_tiles();
+        let z = read.zoom(massif_core::real::MAX_TILES);
+        let tiles = store.load_all(&read.tiles(z), &Default::default(), &Default::default()).unwrap();
+        let vertical = Vertical { datum: 0.0, sea_level: 62, exaggeration: 1.0, low: -64, high: 320, fit: true };
+        let source = Tiles::new(z, tiles);
+        let mut samples = Samples::read(&read, &source, spacing(&read, metres_per_px(read.lat, z)));
+        drop(source);
+        samples.fill_gaps();
+        let fit = vertical.fit(samples.span().unwrap(), area.blocks_per_metre);
+        let mut world = massif_core::real::new_world("real", &samples, &fit, &read, 62, -64, 320);
+        let rules = massif_core::auto::AutoRules::default();
+        let mut history = massif_core::history::History::new(1);
+        history.begin("automatic", 0);
+        let base = massif_core::auto::base_terrain(&world.dims[0], &world.registry);
+        let reader = massif_core::auto::Reader::new(&rules, &world.registry, 62).with_base(base);
+        massif_core::auto::paint_over_the_map(&mut history.edit(&mut world, 0), &reader);
+        drop(history);
+        eprintln!("{} × {} blocks in {:.2} s", read.width, read.depth, started.elapsed().as_secs_f32());
+        let dim = &world.dims[0];
+        let (lo, hi) = dim.bounds().unwrap();
+        let (x0, z0, x1, z1) = (lo.x * 128, lo.z * 128, (hi.x + 1) * 128, (hi.z + 1) * 128);
+        let save = |name: &str, image: &ColorImage| {
+            let rgba: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
+            image::save_buffer(std::path::Path::new(&out).join(name), &rgba, image.width() as u32, image.height() as u32, image::ColorType::Rgba8).unwrap();
+        };
+        let lod = (0..8u8).find(|l| ((x1 - x0) >> l) <= 1024).unwrap_or(8);
+        let chunks = |n: i32| ((n >> lod) + 127) / 128;
+        for mode in [MapMode::Terrain, MapMode::Biome] {
+            let style = MapStyle { mode, ..MapStyle::default() };
+            save(&format!("real-{mode:?}.png"), &render_region(dim, &world.registry, 62.0, style, lod, x0, z0, chunks(x1 - x0), chunks(z1 - z0)));
+            save(&format!("real-{mode:?}-ne.png"), &render_region(dim, &world.registry, 62.0, style, 0, x1 - 512, z0, 4, 3));
+            save(&format!("real-{mode:?}-se.png"), &render_region(dim, &world.registry, 62.0, style, 0, x1 - 512, z1 - 384, 4, 3));
         }
     }
 
