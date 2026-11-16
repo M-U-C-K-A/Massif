@@ -1102,7 +1102,10 @@ mod tests {
 
     fn heights(w: &mut World) -> Vec<(TilePos, Vec<f32>)> {
         let ground = w.dims[0].ground_mut();
-        let positions: Vec<TilePos> = ground.positions().collect();
+        // In the order of the tiles, not of the map's table, which an undo
+        // may change.
+        let mut positions: Vec<TilePos> = ground.positions().collect();
+        positions.sort_by_key(|p| (p.z, p.x));
         positions.into_iter().map(|p| (p, ground.tile_mut(p).unwrap().top.dense().to_vec())).collect()
     }
 
