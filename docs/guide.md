@@ -213,6 +213,21 @@ left so, by name, when its copy was taken, its file and its size.
 its own file; a map never saved asks where); **Discard** deletes the copy;
 **Later** keeps it to be offered at the next start.
 
+Should Massif run into an error while you work, it keeps the map there
+and then: it writes a copy at once, whatever the time set, and says
+**Massif ran into an error**, with the error. **Save As…** saves the map
+under a name of your own; **Carry On** goes back to work; **Quit** closes
+Massif and keeps the copy, offered back at the next start as after a crash.
+An error in a task in the background (opening, saving, exporting, carving
+caves…) only stops that task, the map as it was.
+
+Saving never harms the file already there: Massif writes to a new file
+beside it and puts it in place only once it is whole and on the disk. A
+full disk, a folder that cannot be written, or a file held by OneDrive, an
+antivirus or a backup tool leaves the old file as it was, and the message
+says which it was and what to do. Exports, packs, height maps, images and
+Massif's own settings are written the same way.
+
 Saving the map removes its copy, and so does closing it: quitting, or
 opening or making another map, whether its changes were saved or let go.
 At most 5 copies are kept, of at most 4 GB together, the oldest removed

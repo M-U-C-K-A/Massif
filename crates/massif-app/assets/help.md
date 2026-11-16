@@ -28,6 +28,8 @@ The picture behind the home screen changes each time Massif opens, the ones not 
 ## Autosave
 - While the map has changes not saved, Massif keeps a copy of it every few minutes (**Settings ▸ Autosave**: on or off, every 1 to 15 minutes), in a folder of its own, never over your file. It is written in the background: the map stays smooth, even a huge one.
 - Should Massif close without saving (a crash, a forced quit, a power cut), the next start offers **Restore unsaved changes?**: the map's name and when its copy was taken. **Restore** opens it with changes to save; **Discard** deletes the copy; **Later** keeps it for the next start.
+- Should Massif run into an error while you work, it writes a copy of the map at once and says so: **Save As…** keeps the map under a name of your own, **Carry On** goes back to work, **Quit** keeps the copy for the next start.
+- Saving never harms the file already there: a full disk, a folder that cannot be written or a file held by OneDrive or an antivirus leaves it as it was, and the message says what to do.
 - Saving the map, or closing it, removes its copy. At most 5 copies are kept.
 
 ## Save points
