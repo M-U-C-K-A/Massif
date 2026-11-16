@@ -193,6 +193,12 @@ pub fn paint(painter: &Painter, rect: Rect, tool: Tool, color: Color32) {
             }
             pen.ring(19.5, 7.0, 1.8);
         }
+        // A pen and the mark it draws over the map.
+        Tool::Annotate => {
+            pen.line(&[(2.0, 21.0), (5.0, 17.5), (8.0, 19.5), (11.5, 16.0)]);
+            pen.closed(&[(11.5, 16.0), (19.0, 3.5), (22.0, 5.5), (14.5, 18.0)]);
+            pen.line(&[(17.5, 6.0), (20.5, 8.0)]);
+        }
         // A tree and a rock standing on the ground: objects placed.
         Tool::Objects => {
             pen.line(&[(2.0, 20.5), (22.0, 20.5)]);

@@ -8,6 +8,7 @@ description = "Import of WorldPainter .world files into Massif worlds"
 
 [dependencies]
 massif-core.workspace = true
+massif-objects.workspace = true
 flate2.workspace = true
 rayon.workspace = true
 thiserror.workspace = true

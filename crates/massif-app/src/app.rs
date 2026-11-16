@@ -4347,10 +4347,19 @@ impl MassifApp {
                                 }
                             });
                             ui.end_row();
+                            if !report.converted.is_empty() {
+                                ui.label(RichText::new(tr!("Layers")).color(pal.weak));
+                                ui.vertical(|ui| {
+                                    ui.label(tr!("Forests and trees as object layers, plants, Frost and Lava as ground covers, Void as empty columns:"));
+                                    let names: Vec<String> = report.converted.iter().map(|(n, t)| tr!("{n} ({t} tiles)", n, t)).collect();
+                                    ui.label(RichText::new(names.join(", ")).size(11.5).color(pal.weak));
+                                });
+                                ui.end_row();
+                            }
                             if !report.layers.is_empty() {
                                 ui.label(RichText::new(tr!("Not imported yet")).color(pal.weak));
                                 ui.vertical(|ui| {
-                                    ui.label(tr!("Layers (Massif has no trees, plants or frost layers yet):"));
+                                    ui.label(tr!("Layers Massif does not have yet:"));
                                     let names: Vec<String> = report.layers.iter().map(|(n, t)| tr!("{n} ({t} tiles)", n, t)).collect();
                                     ui.label(RichText::new(names.join(", ")).size(11.5).color(pal.weak));
                                 });

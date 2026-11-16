@@ -12,6 +12,7 @@
 //! surfaces sit one block higher (solid below `round(top)`), hence the `+ 1`.
 
 use crate::javaser::{Arena, Array, Content, Handle, JavaError, Parser, Value};
+use crate::layers::{Conv, Curve, Painted};
 use crate::terrains::{CustomMaterial, Mapper};
 use flate2::read::GzDecoder;
 use massif_core::codec::snap_height;
@@ -86,6 +87,9 @@ pub struct ImportReport {
     pub tiles: usize,
     /// Layers not imported, with the number of tiles using each.
     pub layers: Vec<(String, usize)>,
+    /// Layers imported as Massif's (forests and trees as object layers,
+    /// plants as ground covers, Frost), with the number of tiles using each.
+    pub converted: Vec<(String, usize)>,
     /// WorldPainter terrains in the world, with their column counts.
     pub terrains: Vec<(String, u64)>,
     pub custom_terrains: usize,
@@ -99,6 +103,10 @@ impl ImportReport {
         let mut s = format!("{} tiles", self.tiles);
         if !self.dimensions.is_empty() {
             s += &format!(" in {}", self.dimensions.join(", "));
+        }
+        if !self.converted.is_empty() {
+            let names: Vec<&str> = self.converted.iter().map(|l| l.0.as_str()).collect();
+            s += &format!("; layers: {}", names.join(", "));
         }
         if !self.layers.is_empty() {
             let names: Vec<&str> = self.layers.iter().map(|l| l.0.as_str()).collect();
@@ -273,6 +281,8 @@ struct RawTile {
     water: Water,
     /// WorldPainter biome numbers, and the biome each maps to.
     biome: Option<(Vec<u8>, [u16; 256])>,
+    /// Its layers that Massif has, Frost and Lava first.
+    painted: Vec<Painted>,
 }
 
 enum Heights {
@@ -338,6 +348,10 @@ fn short_class(class: &str) -> String {
 struct TileHook<'m> {
     mapper: &'m mut Mapper,
     layers: &'m mut BTreeMap<String, usize>,
+    /// Layers converted, with the tiles using each.
+    converted: &'m mut BTreeMap<String, usize>,
+    /// What each layer (by its handle) becomes, once asked.
+    convs: &'m mut HashMap<Handle, Option<(Conv, u8)>>,
     histogram: [u64; 256],
     damaged: usize,
 }
@@ -355,6 +369,7 @@ impl TileHook<'_> {
         let tall = arena.field(v, "tall").and_then(|f| arena.bool(f)).unwrap_or(false);
 
         let mut biome_bytes = None;
+        let mut painted = Vec::new();
         for map_field in ["layerData", "bitLayerData"] {
             let Some(entries) = arena.field(v, map_field).and_then(|m| arena.map_entries(m)) else {
                 continue;
@@ -372,7 +387,20 @@ impl TileHook<'_> {
                     .and_then(|n| arena.string(n))
                     .map(str::to_owned)
                     .unwrap_or_else(|| short_class(&class));
-                *self.layers.entry(name).or_default() += 1;
+                let conv = match key {
+                    Value::Ref(hk) => *self.convs.entry(hk).or_insert_with(|| {
+                        let frost = class.ends_with(".Frost") || class.ends_with(".FloodWithLava");
+                        crate::layers::convert(arena, key, &class, &mut self.mapper.registry).map(|c| (c, if frost { 0 } else { 1 }))
+                    }),
+                    _ => None,
+                };
+                match conv.and_then(|(conv, priority)| crate::layers::strengths(arena, value).map(|strength| Painted { conv, strength, priority })) {
+                    Some(p) => {
+                        painted.push(p);
+                        *self.converted.entry(name).or_default() += 1;
+                    }
+                    None => *self.layers.entry(name).or_default() += 1,
+                }
                 // Free the layer's data (a byte array, or a BitSet and its words).
                 let bits = arena.field(value, "bits");
                 take_array(arena, bits);
@@ -429,13 +457,25 @@ impl TileHook<'_> {
             default_terrain,
             water,
             biome,
+            painted: {
+                painted.sort_by_key(|p| p.priority);
+                painted
+            },
         })
     }
 }
 
 fn encode(raw: RawTile, beaches: &crate::terrains::Beaches) -> (Handle, TilePos, Blob) {
     let mut tile = Tile::ground(0.0, 0, NO_FLUID);
-    let top = raw.top();
+    let mut top = raw.top();
+    let mut fluid = raw.fluid();
+    // Void: nothing at all, down to the floor of the world.
+    for p in raw.painted.iter().filter(|p| p.conv == Conv::Void) {
+        for (i, _) in p.strength.iter().enumerate().filter(|s| *s.1 > 0) {
+            top[i] = raw.min;
+            fluid[i] = NO_FLUID;
+        }
+    }
     let mut terrain: Vec<u16> = match &raw.terrain {
         Some((ordinals, table)) => ordinals.iter().map(|&o| table[o as usize]).collect(),
         None => vec![raw.default_terrain; TILE_AREA],
@@ -448,11 +488,39 @@ fn encode(raw: RawTile, beaches: &crate::terrains::Beaches) -> (Handle, TilePos,
             }
         }
     }
-    tile.fluid = Plane::from_vec(raw.fluid());
+    tile.fluid = Plane::from_vec(fluid);
     tile.top = Plane::from_vec(top);
     tile.terrain = Plane::from_vec(terrain);
     if let Some((numbers, table)) = &raw.biome {
         tile.biome = Plane::from_vec(numbers.iter().map(|&b| table[b as usize]).collect());
+    }
+    if !raw.painted.is_empty() {
+        let (ox, oz) = raw.pos.origin();
+        let (mut covers, mut objects) = (vec![0u16; TILE_AREA], vec![0u16; TILE_AREA]);
+        let mut best = vec![0u8; TILE_AREA];
+        for p in &raw.painted {
+            for (i, &strength) in p.strength.iter().enumerate() {
+                if strength == 0 {
+                    continue;
+                }
+                let (x, z) = (ox + (i & 127) as i32, oz + (i >> 7) as i32);
+                match p.conv {
+                    Conv::Cover(n) if covers[i] == 0 && crate::layers::kept(strength, Curve::Linear, x, z, n as u64) => covers[i] = n,
+                    // The strongest object layer of the column.
+                    Conv::Objects(n, curve) if strength > best[i] && crate::layers::kept(strength, curve, x, z, 0x10000 | n as u64) => {
+                        objects[i] = n;
+                        best[i] = strength;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        tile.cover = Plane::from_vec(covers);
+        tile.objects = Plane::from_vec(objects);
+        if let Some(p) = raw.painted.iter().find(|p| p.conv == Conv::Annotations) {
+            // Strengths are nibbles × 17: back to the colour.
+            tile.annotations = Plane::from_vec(p.strength.iter().map(|&s| (s / 17) as u16).collect());
+        }
     }
     tile.compact();
     (raw.handle, raw.pos, Blob::from(tile.encode()))
@@ -490,7 +558,7 @@ fn read_mixed(a: &Arena, v: Value) -> Option<CustomMaterial> {
 }
 
 /// `namespace:name[key=value,...]` of a serialized `org.pepsoft.minecraft.Material`.
-fn material_state(a: &Arena, material: Value) -> String {
+pub(crate) fn material_state(a: &Arena, material: Value) -> String {
     let identity = a.field(material, "identity").filter(|i| *i != Value::Null);
     let Some(identity) = identity else {
         // A pre-1.13 material known only by its numeric id.
@@ -528,6 +596,8 @@ struct Found {
 pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Result<(World, ImportReport), ImportError> {
     let mut mapper = Mapper::new(Registry::vanilla());
     let mut layers = BTreeMap::new();
+    let mut converted_layers = BTreeMap::new();
+    let mut convs = HashMap::new();
     let converted: Mutex<HashMap<Handle, (TilePos, Blob)>> = Mutex::new(HashMap::new());
     let mut histogram = [0u64; 256];
     let mut damaged_tiles = 0;
@@ -540,6 +610,8 @@ pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Re
         let mut hook = TileHook {
             mapper: &mut mapper,
             layers: &mut layers,
+            converted: &mut converted_layers,
+            convs: &mut convs,
             histogram: [0; 256],
             damaged: 0,
         };
@@ -726,6 +798,8 @@ pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Re
 
     report.layers = layers.into_iter().collect();
     report.layers.sort_by_key(|l| std::cmp::Reverse(l.1));
+    report.converted = converted_layers.into_iter().collect();
+    report.converted.sort_by_key(|l| std::cmp::Reverse(l.1));
     report.terrains = histogram
         .iter()
         .enumerate()
@@ -883,12 +957,100 @@ mod tests {
         w.u8(TC_OBJECT).class(TILE_CLASS, SC_SERIALIZABLE, &tile_fields, null);
         w.handle();
         w.i32(max).i32(-64).u8(1).i32(0).i32(0);
-        w.u8(TC_NULL); // bitLayerData
-        w.u8(TC_NULL); // heightMap
-        // layerData: HashMap { Biome -> byte[16384] of 4 (jungle), Trees -> byte[8192] }
+        // bitLayerData: HashMap { Frost -> row 1, PlantLayer "Flowers" -> row
+        // 2, FloodWithLava -> row 5, Void -> row 6 }
         w.u8(TC_OBJECT).reference(hashmap_desc);
         w.handle();
-        w.i32(0x3F40_0000).i32(12).u8(TC_BLOCKDATA).u8(8).i32(16).i32(2);
+        w.i32(0x3F40_0000).i32(12).u8(TC_BLOCKDATA).u8(8).i32(16).i32(4);
+        w.u8(TC_OBJECT).class("org.pepsoft.worldpainter.layers.Frost", SC_SERIALIZABLE, &[(b'L', "name", Some("Ljava/lang/String;"))], null);
+        w.handle();
+        w.string("Frost");
+        let bitset = |w: &mut StreamWriter, row: usize, desc: &mut Option<(i32, i32)>| {
+            match *desc {
+                None => {
+                    let set = w.next;
+                    w.u8(TC_OBJECT).class("java.util.BitSet", SC_SERIALIZABLE | SC_WRITE_METHOD, &[(b'[', "bits", Some("[J"))], null);
+                    w.handle();
+                    let longs = w.next;
+                    w.u8(TC_ARRAY).class("[J", SC_SERIALIZABLE, &[], null);
+                    *desc = Some((set, longs));
+                }
+                Some((set, longs)) => {
+                    w.u8(TC_OBJECT).reference(set);
+                    w.handle();
+                    w.u8(TC_ARRAY).reference(longs);
+                }
+            }
+            w.handle();
+            w.i32(256);
+            for k in 0..256 {
+                w.i64(if k / 2 == row { -1 } else { 0 });
+            }
+            w.u8(TC_ENDBLOCKDATA);
+        };
+        let mut bitset_desc = None;
+        bitset(&mut w, 1, &mut bitset_desc);
+        w.u8(TC_OBJECT).class(
+            "org.pepsoft.worldpainter.layers.plants.PlantLayer",
+            SC_SERIALIZABLE,
+            &[
+                (b'I', "colour", None),
+                (b'Z', "onlyOnValidBlocks", None),
+                (b'L', "name", Some("Ljava/lang/String;")),
+                (b'[', "settings", Some("[Lorg/pepsoft/worldpainter/layers/plants/PlantLayer$PlantSettings;")),
+            ],
+            null,
+        );
+        w.handle();
+        w.i32(0xd6a8ba).u8(1);
+        w.string("Flowers");
+        w.u8(TC_ARRAY).class("[Lorg.pepsoft.worldpainter.layers.plants.PlantLayer$PlantSettings;", SC_SERIALIZABLE, &[], null);
+        w.handle();
+        w.i32(95);
+        let mut settings_desc = None;
+        for k in 0..95 {
+            // Short grass ×30 and dandelions ×10; kelp, a water plant, ×5.
+            let occurrence = match k {
+                0 => 30,
+                5 => 10,
+                48 => 5,
+                _ => {
+                    w.u8(TC_NULL);
+                    continue;
+                }
+            };
+            match settings_desc {
+                None => {
+                    settings_desc = Some(w.next);
+                    w.u8(TC_OBJECT).class(
+                        "org.pepsoft.worldpainter.layers.plants.PlantLayer$PlantSettings",
+                        SC_SERIALIZABLE,
+                        &[(b'I', "growthFrom", None), (b'I', "growthTo", None), (b'S', "occurrence", None)],
+                        null,
+                    );
+                }
+                Some(d) => {
+                    w.u8(TC_OBJECT).reference(d);
+                }
+            }
+            w.handle();
+            w.i32(1).i32(1).u16(occurrence);
+        }
+        bitset(&mut w, 2, &mut bitset_desc);
+        for (class, name, row) in [("FloodWithLava", "Lava", 5), ("Void", "Void", 6)] {
+            w.u8(TC_OBJECT).class(&format!("org.pepsoft.worldpainter.layers.{class}"), SC_SERIALIZABLE, &[(b'L', "name", Some("Ljava/lang/String;"))], null);
+            w.handle();
+            w.string(name);
+            bitset(&mut w, row, &mut bitset_desc);
+        }
+        w.u8(TC_ENDBLOCKDATA);
+        w.u8(TC_NULL); // heightMap
+        // layerData: HashMap { Biome -> byte[16384] of 4 (jungle), Tall
+        // spruces -> nibbles, 15 on row 0, Deciduous -> 8 from row 3,
+        // Annotations -> 14 (red) on row 4 }
+        w.u8(TC_OBJECT).reference(hashmap_desc);
+        w.handle();
+        w.i32(0x3F40_0000).i32(12).u8(TC_BLOCKDATA).u8(8).i32(16).i32(4);
         w.u8(TC_OBJECT).class(BIOME_LAYER, SC_SERIALIZABLE, &[(b'L', "name", Some("Ljava/lang/String;"))], null);
         w.handle();
         w.string("Biome");
@@ -910,7 +1072,21 @@ mod tests {
         w.u8(TC_ARRAY).reference(byte_array_desc);
         w.handle();
         w.i32(8192);
-        w.out.extend(std::iter::repeat_n(0u8, 8192));
+        w.out.extend((0..8192).map(|i| if i < 64 { 0xff } else { 0 }));
+        w.u8(TC_OBJECT).class("org.pepsoft.worldpainter.layers.DeciduousForest", SC_SERIALIZABLE, &[(b'L', "name", Some("Ljava/lang/String;"))], null);
+        w.handle();
+        w.string("Deciduous");
+        w.u8(TC_ARRAY).reference(byte_array_desc);
+        w.handle();
+        w.i32(8192);
+        w.out.extend((0..8192).map(|i| if i >= 192 { 0x88 } else { 0 }));
+        w.u8(TC_OBJECT).class("org.pepsoft.worldpainter.layers.Annotations", SC_SERIALIZABLE, &[(b'L', "name", Some("Ljava/lang/String;"))], null);
+        w.handle();
+        w.string("Annotations");
+        w.u8(TC_ARRAY).reference(byte_array_desc);
+        w.handle();
+        w.i32(8192);
+        w.out.extend((0..8192).map(|i| if (256..320).contains(&i) { 0xee } else { 0 }));
         w.u8(TC_ENDBLOCKDATA);
         // tallHeightMap: 70.0 everywhere except column 5 at 99.5 (raw = (h + 64) * 256)
         w.u8(TC_ARRAY).class("[I", SC_SERIALIZABLE, &[], null);
@@ -1032,7 +1208,10 @@ mod tests {
         assert_eq!(report.tiles, 2);
         assert_eq!(progress.tiles.load(Ordering::Relaxed), 2);
         assert_eq!(report.custom_terrains, 1);
-        assert_eq!(report.layers, vec![("Tall spruces".to_owned(), 1)]);
+        assert!(report.layers.is_empty(), "{:?}", report.layers);
+        let mut converted: Vec<&str> = report.converted.iter().map(|l| l.0.as_str()).collect();
+        converted.sort_unstable();
+        assert_eq!(converted, ["Annotations", "Deciduous", "Flowers", "Frost", "Lava", "Tall spruces", "Void"]);
         assert!(report.skipped_dimensions.is_empty());
 
         let dim = &world.dims[0];
@@ -1058,6 +1237,42 @@ mod tests {
         assert_eq!(reg.terrain(TerrainId(short.terrain.get(0))).name, "Grass");
         // Legacy tiles without water data are dry.
         assert_eq!(short.fluid.get(0), NO_FLUID);
+
+        // The layers: the tree pack's spruces on row 0 at full strength, Frost
+        // on row 1, the plant layer on row 2, the deciduous forest at half
+        // strength from row 3 (a quarter of its columns, as WorldPainter's
+        // forests thin out by the square of their strength).
+        let frost = reg.cover(tall.cover.get(128)).unwrap();
+        assert!(frost.frost && frost.name == "Frost");
+        assert!((128..256).all(|i| tall.cover.get(i) == tall.cover.get(128)));
+        let flowers = reg.cover(tall.cover.get(256)).unwrap();
+        assert_eq!(flowers.name, "Flowers");
+        assert_eq!(flowers.plants, [("minecraft:short_grass".to_owned(), 30), ("minecraft:dandelion".to_owned(), 10)]);
+        assert_eq!((flowers.color, flowers.density, flowers.soil_only, flowers.underwater), ([0xd6, 0xa8, 0xba], 1.0, true, false));
+        assert_eq!(tall.cover.get(0), 0);
+        assert_eq!(tall.cover.get(400), 0);
+        let spruces = reg.object_layer(tall.objects.get(0)).unwrap();
+        assert_eq!(spruces.name, "Tall spruces");
+        assert!((0..128).all(|i| tall.objects.get(i) == tall.objects.get(0)));
+        assert!((128..384).all(|i| tall.objects.get(i) == 0));
+        let forest: Vec<u16> = (384..TILE_AREA).map(|i| tall.objects.get(i)).filter(|&n| n != 0).collect();
+        let deciduous = reg.object_layer(forest[0]).unwrap();
+        assert_eq!(deciduous.name, "Deciduous");
+        assert!(forest.iter().all(|&n| n == forest[0]));
+        let share = forest.len() as f32 / (TILE_AREA - 384) as f32;
+        assert!((0.2..0.3).contains(&share), "{share}");
+        assert_eq!(deciduous.objects.len(), 16, "big oaks and birches, eight of each");
+        assert_eq!(short.cover.get(0), 0);
+        assert_eq!(short.objects.get(0), 0);
+        // Lava on row 5, as a cover; Void on row 6, nothing down to the
+        // floor and no water; annotations in red on row 4.
+        let lava = reg.cover(tall.cover.get(5 * 128)).unwrap();
+        assert!(lava.lava && lava.name == "Lava");
+        assert_eq!((tall.top.get(6 * 128 + 9), tall.fluid.get(6 * 128 + 9)), (-64.0, NO_FLUID));
+        assert_eq!(tall.top.get(7 * 128 + 9), 71.0);
+        assert!((4 * 128..5 * 128).all(|i| tall.annotations.get(i) == 14));
+        assert_eq!(tall.annotations.get(3 * 128), 0);
+        assert_eq!(short.annotations.get(4 * 128), 0);
 
         // The spawn point stands on the surface.
         assert_eq!(world.meta.spawn, [3, 71, 2]);
@@ -1116,6 +1331,19 @@ mod tests {
                 for t in world.registry.terrains.iter().filter(|t| t.group == "Imported") {
                     let blocks: Vec<String> = t.strata.iter().flat_map(|s| s.blocks.iter().map(|(b, w)| format!("{}×{w}", world.registry.block(*b).state))).collect();
                     eprintln!("  {:<24} {:?} {}", t.name, t.color, blocks.join(" "));
+                }
+            }
+            if std::env::var_os("MASSIF_PRINT_LAYERS").is_some() {
+                let reg = &world.registry;
+                for l in reg.object_layers.iter() {
+                    let objects: Vec<String> = l.objects.iter().take(4).map(|&(k, w)| {
+                        let o = &reg.objects[k as usize];
+                        format!("{} {:?} anchor {:?} ×{w}", o.name, o.size, o.anchor)
+                    }).collect();
+                    eprintln!("  objects {:<22} spacing {} density {:.2} rotate {} under water {} soil {}: {}", l.name, l.spacing, l.density, l.rotate, l.underwater, l.soil_only, objects.join("; "));
+                }
+                for c in reg.covers.iter() {
+                    eprintln!("  cover {:<24} {:?} density {} soil {} under water {} frost {} lava {}", c.name, c.plants, c.density, c.soil_only, c.underwater, c.frost, c.lava);
                 }
             }
             assert!(report.tiles > 0);

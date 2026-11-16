@@ -659,6 +659,106 @@ fn covered_world() -> World {
     w
 }
 
+/// Frost and Lava come with every new map: unpainted, they change nothing,
+/// and the map exports the same bytes as one made before them, which has
+/// neither. Annotations are never exported.
+#[test]
+fn unpainted_frost_and_annotations_leave_the_export_unchanged() {
+    let mut world = build_world();
+    let (grass, seagrass) = (world.registry.cover_by_name("Grass").unwrap(), world.registry.cover_by_name("Seagrass").unwrap());
+    let mut h = History::default();
+    h.begin("covers", 0);
+    {
+        let mut e = h.edit(&mut world, 0);
+        ops::paint_cover(&mut e, &hard(6.0), -40.0, -40.0, grass, 1);
+        ops::paint_cover(&mut e, &hard(6.0), 40.0, 40.0, seagrass, 2);
+    }
+    h.commit();
+    let mut before = world.clone();
+    before.registry.covers.retain(|c| !c.frost && !c.lava);
+    assert_eq!(before.registry.covers.len() + 2, world.registry.covers.len());
+    let plain = temp_dir("frost-unpainted-before");
+    export(&before.snapshot(), &plain, &ExportOptions::default(), &Progress::default()).unwrap();
+    h.begin("marks", 0);
+    ops::paint_annotation(&mut h.edit(&mut world, 0), &hard(30.0), -40.0, -40.0, 14, 3);
+    ops::paint_annotation(&mut h.edit(&mut world, 0), &hard(30.0), 40.0, 40.0, 4, 4);
+    h.commit();
+    let dir = temp_dir("frost-unpainted-marked");
+    export(&world.snapshot(), &dir, &ExportOptions::default(), &Progress::default()).unwrap();
+    let mut regions = 0;
+    for entry in std::fs::read_dir(plain.join("region")).unwrap() {
+        let name = entry.unwrap().file_name();
+        assert!(region_bytes(&plain.join("region").join(&name)) == region_bytes(&dir.join("region").join(&name)), "{name:?} differs");
+        regions += 1;
+    }
+    assert!(regions > 0);
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::remove_dir_all(&plain).unwrap();
+}
+
+/// Frost, as WorldPainter's: snow on the ground, and the top of the water
+/// frozen, in the game as on the map; and Lava, the water turned to lava.
+#[test]
+fn frost_lays_snow_and_freezes_the_water() {
+    let mut world = build_world();
+    let frost = world.registry.cover_by_name("Frost").unwrap();
+    assert!(world.registry.cover(frost).unwrap().frost);
+    let lava = world.registry.cover_by_name("Lava").unwrap();
+    assert!(world.registry.cover(lava).unwrap().lava);
+    let mut h = History::default();
+    h.begin("frost", 0);
+    {
+        let mut e = h.edit(&mut world, 0);
+        ops::paint_cover(&mut e, &hard(6.0), -40.0, -40.0, frost, 1);
+        ops::paint_cover(&mut e, &hard(6.0), 40.0, 40.0, frost, 2);
+        ops::paint_cover(&mut e, &hard(1.5), 31.0, 40.0, lava, 3);
+    }
+    h.commit();
+    let dir = temp_dir("frost");
+    let options = ExportOptions {
+        target: Target::release("1.21.11").unwrap(),
+        ..ExportOptions::default()
+    };
+    export(&world.snapshot(), &dir, &options, &Progress::default()).unwrap();
+    let mut r = Reader::new(&dir);
+    // Snow on the plateau.
+    assert_eq!(r.block(-40, 99, -40), "minecraft:grass_block");
+    assert_eq!(r.state(-40, 100, -40), "minecraft:snow|layers=1");
+    // The basin's water frozen at its top only, the sand under it bare.
+    for x in 37..=43 {
+        for z in 37..=43 {
+            assert_eq!(r.block(x, 49, z), "minecraft:sand");
+            assert_eq!(r.block(x, 50, z), "minecraft:water", "at ({x}, 50, {z})");
+            assert_eq!(r.block(x, 61, z), "minecraft:water");
+            assert_eq!(r.block(x, 62, z), "minecraft:ice", "at ({x}, 62, {z})");
+            assert_eq!(r.block(x, 63, z), "minecraft:air");
+        }
+    }
+    // Beyond the brush, the water is open.
+    assert_eq!(r.block(40, 62, 50), "minecraft:water");
+    // Under the lava, the whole of the water is lava, the sand under it.
+    assert_eq!(r.block(31, 49, 40), "minecraft:sand");
+    for y in 50..63 {
+        assert_eq!(r.block(31, y, 40), "minecraft:lava", "at (31, {y}, 40)");
+    }
+    assert_eq!(r.block(31, 63, 40), "minecraft:air");
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    // Before 1.13, ice is block 79.
+    let dir = temp_dir("frost-old");
+    let old = ExportOptions {
+        target: Target::release("1.12.2").unwrap(),
+        ..ExportOptions::default()
+    };
+    export(&world.snapshot(), &dir, &old, &Progress::default()).unwrap();
+    let mut r = Reader::new(&dir);
+    r.any_version = true;
+    assert_eq!(r.block(40, 62, 40), "minecraft:ice");
+    assert_eq!(r.block(40, 61, 40), "minecraft:water");
+    assert_eq!(r.block(-40, 100, -40), "minecraft:snow");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 fn covers_grow_where_they_are_painted() {
     let mut world = covered_world();

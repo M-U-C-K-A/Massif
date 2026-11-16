@@ -163,6 +163,16 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     }
     list(ui, &mixes, state, &mut actions);
 
+    // Annotations: a click on a colour paints with it.
+    ui.add_space(8.0);
+    let pal = Palette::of(ui);
+    ui.label(RichText::new(format!("{}  {}", theme::glyph(Icon::PenLine), tr!("Annotations").to_uppercase())).size(10.5).strong().color(pal.weak));
+    if let Some(n) = crate::panels::annotation_swatches(ui, 20.0, (tools.tool == Tool::Annotate).then_some(tools.annotation)) {
+        tools.annotation = n;
+        tools.select(Tool::Annotate);
+    }
+    hint(ui, tr!("Marks on the map, to plan it, as in WorldPainter: never exported."));
+
     ui.add_space(8.0);
     hint(ui, tr!("Click one to paint it: its settings are in Tool Settings. Ready-made trees, plants and mixes: Packs, above."));
 
@@ -467,6 +477,13 @@ mod tests {
         h.run_steps(2);
         assert_eq!(h.state().tools.tool, Tool::PaintTerrain);
         assert!(h.state().tools.pattern.on);
+        // WorldPainter's Frost and Lava are covers of every new map; a
+        // colour of the annotations paints with it.
+        h.get_by_label("Frost");
+        h.get_by_label("Lava");
+        h.get_by_label("Light blue").click();
+        h.run_steps(2);
+        assert_eq!((h.state().tools.tool, h.state().tools.annotation), (Tool::Annotate, 4));
 
         // Hidden: left off the map, written in the file, nothing else.
         let s = h.state_mut();
@@ -514,7 +531,7 @@ mod tests {
             s.tools.cover = 3;
             s.tools.select(Tool::Cover);
             let mut h = egui_kittest::Harness::builder()
-                .with_size(vec2(320.0, 560.0))
+                .with_size(vec2(320.0, 900.0))
                 .with_pixels_per_point(ppp)
                 .with_accessibility_check(false)
                 .wgpu()

@@ -362,6 +362,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
         }
         Tool::Cover => cover_settings(ui, tools, doc, blocks),
         Tool::Objects => object_settings(ui, tools, doc, blocks),
+        Tool::Annotate => annotation_settings(ui, tools),
         Tool::PaintBiome => {
             let reg = &doc.world.registry;
             let def = reg.biome(BiomeId(tools.biome));
@@ -1214,8 +1215,70 @@ fn plant_name(state: &str) -> String {
     c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
 }
 
+/// The name of annotation colour `n` (1 to 15).
+pub fn annotation_name(n: u16) -> &'static str {
+    match n {
+        1 => tr!("White"),
+        2 => tr!("Orange"),
+        3 => tr!("Magenta"),
+        4 => tr!("Light blue"),
+        5 => tr!("Yellow"),
+        6 => tr!("Lime"),
+        7 => tr!("Pink"),
+        8 => tr!("Light grey"),
+        9 => tr!("Cyan"),
+        10 => tr!("Purple"),
+        11 => tr!("Blue"),
+        12 => tr!("Brown"),
+        13 => tr!("Green"),
+        14 => tr!("Red"),
+        _ => tr!("Black"),
+    }
+}
+
+/// The fifteen colours of annotations as swatches `size` points wide, the
+/// one of `picked` ringed; returns the one clicked.
+pub fn annotation_swatches(ui: &mut Ui, size: f32, picked: Option<u16>) -> Option<u16> {
+    let pal = Palette::of(ui);
+    let mut clicked = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(size / 6.0, size / 6.0);
+        for (k, color) in massif_core::tile::ANNOTATION_COLORS.iter().enumerate() {
+            let n = k as u16 + 1;
+            let name = annotation_name(n);
+            let (rect, response) = ui.allocate_exact_size(vec2(size, size), Sense::click());
+            response.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, picked == Some(n), name));
+            let painter = ui.painter();
+            let radius = theme::TILE_RADIUS / 2;
+            // A hairline around each, so that black shows on a dark panel
+            // and white on a light one.
+            painter.rect(rect.shrink(size / 8.0), radius, theme::rgb(*color), Stroke::new(1.0, pal.border), StrokeKind::Inside);
+            if picked == Some(n) {
+                painter.rect_stroke(rect, radius, Stroke::new(2.0, pal.accent), StrokeKind::Inside);
+            } else if response.hovered() {
+                painter.rect_stroke(rect, radius, Stroke::new(1.0, pal.text), StrokeKind::Inside);
+            }
+            if response.on_hover_text(name).clicked() {
+                clicked = Some(n);
+            }
+        }
+    });
+    clicked
+}
+
+/// The colours to annotate with: a click picks one.
+fn annotation_settings(ui: &mut Ui, tools: &mut ToolState) {
+    if let Some(n) = annotation_swatches(ui, 24.0, Some(tools.annotation)) {
+        tools.annotation = n;
+    }
+    hint(ui, tr!("Shown on the map, as in WorldPainter, and never exported. The pen button in the map's header hides them."));
+}
+
 /// What a cover grows, in a line.
 pub fn describe_cover(def: &massif_core::registry::CoverDef) -> String {
+    if def.lava && def.plants.is_empty() {
+        return tr!("The water where it is painted is lava").to_owned();
+    }
     let total: u32 = def.plants.iter().map(|p| p.1 as u32).sum::<u32>().max(1);
     let plants: Vec<String> = def.plants.iter().map(|(b, w)| format!("{} {:.0}%", plant_name(b), *w as f32 * 100.0 / total as f32)).collect();
     let where_ = match (def.underwater, def.soil_only) {
@@ -1334,6 +1397,15 @@ fn cover_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks
     });
     crate::widgets::checkbox(ui, &mut def.soil_only, tr!("Only on soil")).on_hover_text(tr!("Grass, dirt, podzol, moss, mud… as plants need in the game"));
     crate::widgets::checkbox(ui, &mut def.underwater, tr!("Under water")).on_hover_text(tr!("Grows in the water (seagrass, coral) rather than in the air"));
+    ui.horizontal(|ui| {
+        ui.add_sized([72.0, 18.0], egui::Label::new(tr!("The water")));
+        let chosen = [!def.frost && !def.lava, def.frost, def.lava];
+        if let Some(k) = crate::widgets::button_group(ui, "cover water", &[tr!("As it is"), tr!("Frozen"), tr!("Lava")], &chosen) {
+            (def.frost, def.lava) = (k == 1, k == 2);
+        }
+    })
+    .response
+    .on_hover_text(tr!("Where the cover is painted, the top of the water turns to ice (WorldPainter's Frost), or all of it to lava (its Lava layer)"));
 
     // What it grows, and how much of each.
     section(ui, Icon::Flower2, tr!("Grows"));

@@ -12,7 +12,7 @@
 //! that is not soil. Block entities (chests' contents, signs' text) and
 //! entities are not kept.
 
-mod legacy;
+pub mod legacy;
 
 use fastnbt::Value;
 use massif_core::objects::ObjectDef;

@@ -221,6 +221,12 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
             Some(tr!("Import .schem, .schematic, .bp, .litematic or .nbt files in its settings.")),
             Some(Demo::Objects),
         ),
+        Tool::Annotate => card(
+            tr!("Marks the map in colour, as WorldPainter's annotations: where a town goes, a road, a river to dig."),
+            vec![(tr!("Drag"), tr!("Mark")), (tr!("Right-drag"), tr!("Rub out"))],
+            Some(tr!("Annotations show on the map only: the export leaves them out.")),
+            Some(Demo::Annotate),
+        ),
         Tool::AutoPaint => card(
             tr!("Paints what the land calls for: rock on cliffs, sand on shores, grass elsewhere."),
             vec![(tr!("Hover"), tr!("See what would change")), (tr!("Drag"), tr!("Paint it"))],
@@ -323,6 +329,7 @@ pub enum Demo {
     Biome,
     Cover,
     Objects,
+    Annotate,
     AutoPaint,
     AutoBiome,
     Eyedropper,
@@ -579,6 +586,15 @@ impl Demo {
                     Scene::near(x, y, 9.0, |i, _| t[i] = Some([214, 190, 96]));
                 }
                 stroke(9.0)
+            }
+            Demo::Annotate => {
+                // A red line drawn over the land, as a pen would.
+                for k in 0..steps {
+                    let (x, y) = sweep(k as f64 / SAMPLES as f64);
+                    let t = &mut s.tint;
+                    Scene::near(x, y, 3.5, |i, _| t[i] = Some([214, 52, 44]));
+                }
+                stroke(3.5)
             }
             Demo::Cover => {
                 const FLOWERS: [[u8; 3]; 5] = [[236, 206, 52], [200, 44, 38], [238, 238, 230], [72, 112, 222], [178, 112, 212]];

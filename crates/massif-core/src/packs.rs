@@ -23,6 +23,10 @@ pub struct PlantPreset {
     pub height: [u8; 2],
     pub underwater: bool,
     pub soil_only: bool,
+    /// Frost: the water where it is painted turns to ice.
+    pub frost: bool,
+    /// Lava: the water where it is painted is lava.
+    pub lava: bool,
 }
 
 const fn plants(name: &'static str, about: &'static str, family: &'static str, color: u32, plants: &'static [(&'static str, u16)], density: f32) -> PlantPreset {
@@ -36,6 +40,8 @@ const fn plants(name: &'static str, about: &'static str, family: &'static str, c
         height: [1, 1],
         underwater: false,
         soil_only: true,
+        frost: false,
+        lava: false,
     }
 }
 
@@ -62,10 +68,12 @@ pub const PLANT_PRESETS: &[PlantPreset] = &[
     PlantPreset { soil_only: false, ..plants("Desert plants", "Dead bushes, cacti and dry grass, on sand", PLANTS, 0xa8a060, &[("minecraft:dead_bush", 20), ("minecraft:cactus", 6), ("minecraft:short_dry_grass", 10)], 0.06) },
     PlantPreset { height: [1, 4], ..plants("Jungle undergrowth", "Ferns, bamboo and melons", PLANTS, 0x2e8b2e, &[("minecraft:fern", 15), ("minecraft:large_fern", 8), ("minecraft:bamboo", 4), ("minecraft:melon", 1), ("minecraft:short_grass", 15)], 0.55) },
     plants("Pale garden", "Pale moss carpets and eyeblossoms", PLANTS, 0xb8bcb0, &[("minecraft:pale_moss_carpet", 20), ("minecraft:closed_eyeblossom", 5)], 0.5),
+    PlantPreset { soil_only: false, frost: true, ..plants("Frost", "Snow on the ground and ice on the water, as WorldPainter's Frost", PLANTS, 0xe2eefa, &[("minecraft:snow[layers=1]", 1)], 1.0) },
     plants("Mushroom patches", "Red and brown mushrooms", PLANTS, 0xb05040, &[("minecraft:red_mushroom", 5), ("minecraft:brown_mushroom", 5)], 0.08),
     plants("Pumpkins and melons", "Pumpkin and melon patches among grass", PLANTS, 0xe08a2a, &[("minecraft:pumpkin", 6), ("minecraft:melon", 6), ("minecraft:short_grass", 20)], 0.3),
     PlantPreset { underwater: true, soil_only: false, ..plants("Seagrass and kelp", "Seagrass meadows and kelp under water", WATER, 0x2f7f5f, &[("minecraft:seagrass", 20), ("minecraft:tall_seagrass", 10), ("minecraft:kelp", 8)], 0.5) },
     PlantPreset { underwater: true, soil_only: false, ..plants("Coral garden", "Coral, coral fans and sea pickles in warm shallow water", WATER, 0xe07a8f, &[("minecraft:tube_coral", 6), ("minecraft:brain_coral", 6), ("minecraft:bubble_coral", 6), ("minecraft:fire_coral", 6), ("minecraft:horn_coral", 6), ("minecraft:tube_coral_fan", 4), ("minecraft:brain_coral_fan", 4), ("minecraft:bubble_coral_fan", 4), ("minecraft:fire_coral_fan", 4), ("minecraft:horn_coral_fan", 4), ("minecraft:sea_pickle", 3)], 0.4) },
+    PlantPreset { soil_only: false, lava: true, ..plants("Lava", "The water where it is painted is lava, as WorldPainter's Lava layer", WATER, 0xe26018, &[], 1.0) },
     PlantPreset { height: [1, 3], soil_only: false, ..plants("Sugar cane", "Sugar cane for river and lake shores", WATER, 0x8ac86a, &[("minecraft:sugar_cane", 15)], 0.25) },
 ];
 
@@ -84,6 +92,8 @@ impl PlantPreset {
         def.height = self.height;
         def.underwater = self.underwater;
         def.soil_only = self.soil_only;
+        def.frost = self.frost;
+        def.lava = self.lava;
         reg.add_cover(def)
     }
 }
@@ -264,10 +274,17 @@ mod tests {
         }
         assert!(PLANT_PRESETS.iter().all(|p| PLANT_FAMILIES.contains(&p.family)));
         assert!(MATERIAL_MIXES.iter().all(|m| MIX_FAMILIES.contains(&m.family)));
-        // The covers a new map has keep their names.
+        // The covers a new map has keep their names: a preset of one of
+        // them is that cover (Frost and Lava, for the maps made before
+        // them).
         let reg = Registry::vanilla();
         for p in PLANT_PRESETS {
-            assert!(reg.cover_by_name(p.name).is_none(), "{} is a cover already", p.name);
+            if let Some(n) = reg.cover_by_name(p.name) {
+                let mut fresh = Registry::vanilla();
+                fresh.covers.retain(|c| c.name != p.name);
+                let added = p.install(&mut fresh);
+                assert_eq!(fresh.cover(added), reg.cover(n), "{} is a cover already, and another", p.name);
+            }
         }
         for m in MATERIAL_MIXES {
             assert!(reg.terrain_by_name(m.name).is_none(), "{} is a terrain already", m.name);

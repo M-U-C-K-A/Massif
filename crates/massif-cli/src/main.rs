@@ -253,6 +253,10 @@ fn cmd_import(args: Args) -> Res<()> {
     for (name, n) in report.terrains.iter().take(8) {
         println!("    {name:<20} {:5.1} %", *n as f64 * 100.0 / columns as f64);
     }
+    if !report.converted.is_empty() {
+        let names: Vec<String> = report.converted.iter().map(|(n, t)| format!("{n} ({t})")).collect();
+        println!("  layers       {}", names.join(", "));
+    }
     if !report.layers.is_empty() {
         let names: Vec<String> = report.layers.iter().map(|(n, t)| format!("{n} ({t})")).collect();
         println!("  not imported layers: {}", names.join(", "));

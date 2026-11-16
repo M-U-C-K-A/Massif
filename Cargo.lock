@@ -2160,6 +2160,7 @@ dependencies = [
  "flate2",
  "log",
  "massif-core",
+ "massif-objects",
  "rayon",
  "thiserror 2.0.21",
 ]

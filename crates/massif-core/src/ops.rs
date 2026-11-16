@@ -516,6 +516,12 @@ pub fn paint_cover(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, cover: u16,
     paint_plane(edit, brush, cx, cz, salt, cover, |t| &mut t.cover);
 }
 
+/// Paint an annotation, one of [`crate::tile::ANNOTATION_COLORS`] by its
+/// number (1 to 15; 0 removes it). `salt` should change from dab to dab.
+pub fn paint_annotation(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, color: u16, salt: u64) {
+    paint_plane(edit, brush, cx, cz, salt, color.min(15), |t| &mut t.annotations);
+}
+
 /// Paint an object layer by its number (0 removes it). `salt` should
 /// change from dab to dab.
 pub fn paint_objects(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, layer: u16, salt: u64) {
@@ -1164,6 +1170,30 @@ mod tests {
             mask: None,
             filter: None,
         }
+    }
+
+    /// Annotations are painted in their colour, rubbed out with 0, and
+    /// undone as any paint.
+    #[test]
+    fn annotations_are_painted_rubbed_out_and_undone() {
+        let mut w = world(1);
+        let mut hist = History::default();
+        let at = |w: &World, x: i32, z: i32| w.dims[0].ground().view(TilePos::containing(x, z)).unwrap().annotations.get(local_index(x, z));
+        hist.begin("mark", 0);
+        paint_annotation(&mut hist.edit(&mut w, 0), &hard_brush(6.0), 10.0, 10.0, 14, 1);
+        hist.commit();
+        assert_eq!((at(&w, 10, 10), at(&w, 15, 10), at(&w, 30, 10)), (14, 14, 0));
+        // A colour past the fifteen is the last.
+        hist.begin("mark", 0);
+        paint_annotation(&mut hist.edit(&mut w, 0), &hard_brush(1.0), 40.0, 40.0, 99, 2);
+        hist.commit();
+        assert_eq!(at(&w, 40, 40), 15);
+        hist.begin("rub out", 0);
+        paint_annotation(&mut hist.edit(&mut w, 0), &hard_brush(2.0), 10.0, 10.0, 0, 3);
+        hist.commit();
+        assert_eq!((at(&w, 10, 10), at(&w, 15, 10)), (0, 14));
+        hist.undo(&mut w);
+        assert_eq!(at(&w, 10, 10), 14);
     }
 
     fn select(w: &mut World, hist: &mut History, s: crate::selection::Selection) {

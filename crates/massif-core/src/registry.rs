@@ -171,6 +171,14 @@ pub struct CoverDef {
     /// Grows under water rather than in the open air.
     #[serde(default)]
     pub underwater: bool,
+    /// Frost, as WorldPainter's: where it is painted, the top of the water
+    /// turns to ice; on dry ground its plants grow as any cover's (snow).
+    #[serde(default, skip_serializing_if = "crate::registry::is_false")]
+    pub frost: bool,
+    /// Lava, as WorldPainter's layer of that name: the water where it is
+    /// painted is lava.
+    #[serde(default, skip_serializing_if = "crate::registry::is_false")]
+    pub lava: bool,
     /// Removed: no longer offered, and nothing grows where it was painted.
     #[serde(default)]
     pub removed: bool,
@@ -280,9 +288,35 @@ impl CoverDef {
             height: one_high(),
             soil_only: true,
             underwater: false,
+            frost: false,
+            lava: false,
             removed: false,
             hidden: false,
         }
+    }
+
+    /// Frost, as WorldPainter's layer of that name: snow on the ground, ice
+    /// on the water.
+    pub fn frost() -> Self {
+        let mut frost = CoverDef::new("Frost", [226, 238, 250], &[("minecraft:snow[layers=1]", 1)], 1.0);
+        frost.soil_only = false;
+        frost.frost = true;
+        frost
+    }
+
+    /// Lava, as WorldPainter's layer of that name: the water where it is
+    /// painted is lava. It grows nothing.
+    pub fn lava() -> Self {
+        let mut lava = CoverDef::new("Lava", [226, 96, 24], &[], 1.0);
+        lava.soil_only = false;
+        lava.lava = true;
+        lava
+    }
+
+    /// Whether it turns the water under it into something else (ice,
+    /// lava).
+    pub fn changes_water(&self) -> bool {
+        self.frost || self.lava
     }
 
     /// What grows at column `(x, z)` of a world of seed `seed`, or `None`
@@ -352,6 +386,8 @@ pub fn vanilla_covers() -> Vec<CoverDef> {
         dead,
         snow,
         seagrass,
+        CoverDef::frost(),
+        CoverDef::lava(),
     ]
 }
 

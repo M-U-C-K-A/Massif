@@ -182,6 +182,8 @@ pub struct MapView {
     /// Shading from the smooth heights rather than whole blocks.
     pub smooth: bool,
     pub grid: bool,
+    /// Annotations drawn over the map.
+    pub annotations: bool,
     fitted: Option<u64>,
     stroke: Option<Stroke>,
     last_time: f64,
@@ -247,6 +249,7 @@ impl Default for MapView {
             contours: true,
             smooth: false,
             grid: false,
+            annotations: true,
             fitted: None,
             stroke: None,
             last_time: 0.0,
@@ -307,6 +310,8 @@ impl MapView {
         }
         ui.toggle_value(&mut self.grid, theme::glyph(Icon::Grid3x3).to_string())
             .on_hover_text(tr!("Tile and chunk grid"));
+        ui.toggle_value(&mut self.annotations, theme::glyph(Icon::PenLine).to_string())
+            .on_hover_text(tr!("Annotations: the marks painted with the Annotations tool. They are never exported"));
     }
 
     /// What the pointer at `p` is over, on the river being laid out.
@@ -1113,6 +1118,7 @@ impl MapView {
             lava: doc.world.meta.lava,
             top: doc.dimension().max_y,
             seed: doc.world.meta.seed,
+            annotations: self.annotations,
         };
         let ppp = ui.ctx().pixels_per_point();
         let blocks_per_px = 1.0 / (self.zoom * ppp);
@@ -1537,6 +1543,7 @@ impl MapView {
                             biome: p.biome,
                             cover: p.cover,
                             objects: p.objects,
+                            annotation: 0,
                             flags: 0,
                             levels: 0,
                         };

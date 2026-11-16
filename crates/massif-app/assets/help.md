@@ -154,10 +154,13 @@ Hovered over the map, the brush shows in colour what would change.
 
 # Decor
 ## Ground covers
-**Ground cover** paints what grows over the ground: grass, tall grass, flowers, ferns, mushrooms, snow, seagrass, or any blocks of your own, with their density and how high they grow.
+**Ground cover** paints what grows over the ground: grass, tall grass, flowers, ferns, mushrooms, snow, seagrass, or any blocks of your own, with their density and how high they grow. **Frost** and **Lava** come with every new map, as in WorldPainter: Frost lays snow and turns the top of the water to ice, Lava turns the water into lava. Any cover can do either: **The water** in its settings (As it is, Frozen, Lava). Older maps find them in Packs.
 
 ## Layers
-The **Layers** panel (under Terrain; or any area's chooser, in Paint) lists everything painted over the ground, as WorldPainter's layers: the map's ground covers, its object layers and the terrain mixes saved for noise painting. Click one to paint with it (its settings open in Tool Settings), double-click to rename it, click its eye to hide it on the map and in the 3D view (the export writes it all the same), and right-click for Duplicate and Remove. **New cover**, **Import objects…** and **New mix** make new ones.
+The **Layers** panel (under Terrain; or any area's chooser, in Paint) lists everything painted over the ground, as WorldPainter's layers: the map's ground covers, its object layers and the terrain mixes saved for noise painting. Click one to paint with it (its settings open in Tool Settings), double-click to rename it, click its eye to hide it on the map and in the 3D view (the export writes it all the same), and right-click for Duplicate and Remove. **New cover**, **Import objects…** and **New mix** make new ones. At the bottom, the fifteen colours of the annotations: a click paints with one.
+
+## Annotations
+**Annotations** (Paint group) marks the map in colour to plan it, as WorldPainter's annotations: where a town goes, a road, a river to dig. They show on the map in every mode, whatever the level, and are never exported. The right button rubs them out; the pen button in the map's header hides them.
 
 ## Packs
 **Packs** (the second tab of the Layers panel, or an area of its own) holds ready-made things to paint, as WorldPainter Modernised's Packs panel did: sixteen kinds of trees of the tree pack (tall and slender spruces, firs, larches, giant redwoods, big and pale oaks, birches, cherries, acacias, willows, rainforest giants, palms, dead trees, bushes, azaleas), each in eight shapes; presets of flowers, plants and water plants; and mixes of blocks for grass, soil, stone, sand, cliffs in beds, snow and volcanic rock. A click adds one to the map — an object layer, a ground cover or a terrain — and picks it to paint; a dot marks those the map has already. A search field filters them.
@@ -212,7 +215,9 @@ The viewport shows the graph's output in 3D, with its sun, clouds, haze and sea 
 **Convert to voxels** writes the graph to the map: into its ground, or over it (**over the map**: what the graph digs and raises goes into levels of their own, and the map stays as it was). Templates give a whole graph at once.
 
 # WorldPainter worlds
-**Import from WorldPainter…** opens a `.world` file: its dimensions, heights (tall worlds keep their height), terrains, water, biomes and custom terrains. WorldPainter's **Beaches** come in as it draws them: grass with patches of sand, gravel and clay. Layers Massif does not have yet are listed in the import report.
+**Import from WorldPainter…** opens a `.world` file: its dimensions, heights (tall worlds keep their height), terrains, water, biomes and custom terrains. WorldPainter's **Beaches** come in as it draws them: grass with patches of sand, gravel and clay.
+
+Its layers come too. Forests (Deciduous, Pine, Jungle, Swamp) and the trees of WorldPainter Modernised's tree pack become object layers of the same trees, as dense as painted. Custom object layers become object layers, their objects read from the world itself (Sponge and MCEdit schematics, structures, Bo2) with their offset, frequency and random turn. Plant layers become ground covers with the same plants in the same shares. **Frost**, **Lava**, **Void** (columns of nothing) and **Annotations** come in as Massif's. The import report says what became what. Caverns, chasms, tunnels, custom ground cover, underground pockets, combined layers and rivers are not imported yet: the report lists them with the tiles they covered.
 
 # Settings
 **Settings…** (`⌘,`: in the **Massif** menu on a Mac, in **View** on Windows and Linux, or the home screen's sidebar) has ten sections.

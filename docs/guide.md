@@ -774,9 +774,48 @@ show it, from Paint in the area's chooser):
   **removes** it;
 - **New cover**, **Import objects…** and **New mix** add one. A mix is
   set up in Paint terrain ▸ Noise and saved there under a name.
+- under them, the fifteen colours of the **annotations**: a click paints
+  with that colour.
 
 A column has at most one cover and one object layer; painting another
 over it takes the place of the first.
+
+**Frost and Lava** are covers that come with every new map, as WorldPainter
+has them. **Frost** lays snow on the ground and turns the top of the water
+where it is painted to ice; **Lava** turns the water where it is painted
+into lava (a lava lake in a world of water). Any cover can do either: **The
+water** in its settings is **As it is**, **Frozen** or **Lava**. A map made
+before has them in Packs ▸ Plants & ground cover and Water plants. The map
+shows the ice white and the lava orange, and the 3D view the same.
+
+**Annotations** (the **Annotations** tool, in the Paint group) mark the map
+in one of fifteen colours, as WorldPainter's do — where a town goes, a road
+to build, a river to dig — to plan a map. They are drawn over the map in
+every view mode, whatever the level being edited, and never exported. The
+right button rubs them out; the pen button in the map's header hides them.
+
+### WorldPainter's layers in Massif
+
+| WorldPainter | In Massif | From a `.world` |
+|---|---|---|
+| Deciduous, Pine, Jungle, Swamp | Object layers of the pack's trees: big oaks and birches; tall spruces, slender spruces and firs; rainforest giants and bushes; willows | Converted, as dense as painted (WorldPainter thins its forests by the square of their strength, and so does the import) |
+| The tree pack of WorldPainter Modernised (Big oaks, Firs, Tall spruces…) | The same trees, in Packs ▸ Trees | Converted to the same object layer |
+| Custom object layers | Object layers | Converted: their objects (Sponge `.schem`, MCEdit `.schematic`, structures, Bo2) are read from the world itself, with their offset, frequency, random turn and density |
+| Custom plant layers | Ground covers | Converted: the same plants in the same shares, on every column painted, on valid blocks only if the layer said so |
+| Frost | The Frost cover | Converted |
+| Lava (flood with lava) | The Lava cover | Converted |
+| Void | Columns of nothing: lower the land to the floor of the world | Converted: nothing in those columns |
+| Annotations | Annotations | Converted, colour for colour |
+| Biomes, custom terrains | Biomes, terrains | Converted |
+| Caverns, Chasms, Caves | Edit ▸ Caves (over the map or a selection) | Not yet: listed in the import report |
+| Resources | Edit ▸ Ores | Massif lays its own ores |
+| Tunnels, floating layers | Levels: Carve and Solid | Not yet |
+| Custom ground cover layers, underground pockets, combined layers | Terrains with strata | Not yet |
+| River | Rivers | Not yet |
+| Populate, Read Only | — (Massif writes finished chunks, and merges none) | Left out |
+
+The import's report says which layers became what, and lists those it
+left out with the number of tiles each covered.
 
 ## Packs
 
@@ -864,8 +903,8 @@ pack.
 ## Ground covers
 
 The **Ground cover** tool (Paint group) paints what grows on the ground:
-grass, tall grass, flowers, ferns, mushrooms, dead bushes, snow and seagrass
-come with every world, and **New cover** makes one of your own. A cover is
+grass, tall grass, flowers, ferns, mushrooms, dead bushes, snow, seagrass,
+frost and lava come with every world, and **New cover** makes one of your own. A cover is
 a mix of blocks with their weights — the flowers of a meadow, or any block
 at all, typed or picked from the game's blocks — with a **density** (the
 share of the painted ground where something grows), a **height** (cane and

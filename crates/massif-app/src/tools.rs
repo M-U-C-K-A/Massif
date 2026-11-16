@@ -27,6 +27,9 @@ pub enum Tool {
     Cover,
     /// Objects of a layer — trees, rocks — standing where it is painted.
     Objects,
+    /// Marks in colour on the map, as WorldPainter's annotations: never
+    /// exported.
+    Annotate,
     /// The biome the land calls for; the terrain the biome calls for.
     AutoBiome,
     AutoPaint,
@@ -63,7 +66,7 @@ impl Tool {
         (
             tn!("Paint"),
             Icon::Paintbrush,
-            &[Tool::PaintTerrain, Tool::PaintBiome, Tool::AutoPaint, Tool::AutoBiome],
+            &[Tool::PaintTerrain, Tool::PaintBiome, Tool::AutoPaint, Tool::AutoBiome, Tool::Annotate],
         ),
         (tn!("Select"), Icon::SquareDashed, &[Tool::SelectRect, Tool::SelectEllipse, Tool::SelectLasso, Tool::SelectBrush]),
         (tn!("Decor"), Icon::Shrub, &[Tool::Cover, Tool::Objects]),
@@ -84,6 +87,7 @@ impl Tool {
             Tool::PaintBiome => tr!("Paint biome"),
             Tool::Cover => tr!("Ground cover"),
             Tool::Objects => tr!("Objects"),
+            Tool::Annotate => tr!("Annotations"),
             Tool::AutoBiome => tr!("Auto biome"),
             Tool::AutoPaint => tr!("Auto paint"),
             Tool::Eyedropper => tr!("Eyedropper"),
@@ -116,6 +120,7 @@ impl Tool {
             Tool::PaintBiome => Icon::Trees,
             Tool::Cover => Icon::Sprout,
             Tool::Objects => Icon::TreePine,
+            Tool::Annotate => Icon::PenLine,
             Tool::AutoBiome => Icon::Earth,
             Tool::AutoPaint => Icon::WandSparkles,
             Tool::Eyedropper => Icon::Pipette,
@@ -155,6 +160,7 @@ impl Tool {
             Tool::PaintBiome => tr!("Paint a biome. Right button: back to automatic."),
             Tool::Cover => tr!("Paint what grows: grass, flowers, snow… Right button: remove it."),
             Tool::Objects => tr!("Paint where objects stand: trees, rocks… Right button: remove them."),
+            Tool::Annotate => tr!("Mark the map in colour, to plan it: never exported. Right button: rub out."),
             Tool::AutoBiome => {
                 tr!("Sets the biome the land calls for: beach, forest, peaks…")
             }
@@ -261,6 +267,9 @@ pub struct ToolState {
     pub cover: u16,
     /// The object layer painted, by its number (0: none yet).
     pub object_layer: u16,
+    /// The colour annotations are painted in, 1 to 15 (see
+    /// [`massif_core::tile::ANNOTATION_COLORS`]).
+    pub annotation: u16,
     pub water_level: i16,
     /// Flood fills the hollow clicked up to where it spills, rather than up
     /// to `water_level`.
@@ -826,6 +835,7 @@ impl Default for ToolState {
             biome: 0,
             cover: 1,
             object_layer: 0,
+            annotation: 14,
             water_level: 63,
             flood_from_click: true,
             slab_thickness: 16.0,
@@ -991,7 +1001,8 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
     let spacing = (brush.radius * 0.25).max(1.0);
     let n = ((len / spacing).ceil() as usize).clamp(1, 512);
     let dt = dt.clamp(0.0, 0.1);
-    let level = stroke.level.min(doc.dimension().levels.len() - 1);
+    // Annotations are marks on the map, whatever the level: on the ground's.
+    let level = if stroke.tool == Tool::Annotate { 0 } else { stroke.level.min(doc.dimension().levels.len() - 1) };
     let surface = tools.surface();
     let mut edit = doc.history.edit(&mut doc.world, level);
     for k in 1..=n {
@@ -1041,6 +1052,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
             }
             Tool::Cover => ops::paint_cover(&mut edit, brush, x, z, if invert { 0 } else { tools.cover }, stroke.salt),
             Tool::Objects => ops::paint_objects(&mut edit, brush, x, z, if invert { 0 } else { tools.object_layer }, stroke.salt),
+            Tool::Annotate => ops::paint_annotation(&mut edit, brush, x, z, if invert { 0 } else { tools.annotation.clamp(1, 15) }, stroke.salt),
             Tool::AutoBiome => match &reader {
                 Some(reader) if !invert => {
                     let classes = stroke.classes.get_or_insert_with(|| massif_core::auto::Classes::new(true));

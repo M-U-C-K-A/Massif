@@ -63,6 +63,9 @@ pub struct ExportContext<'a> {
     lava: bool,
     /// Water and lava, for the lakes of caves, whatever the world's fluid.
     cave_fluids: [u16; 2],
+    /// Ice, for the water under a frost cover; `None` without one (or in a
+    /// world of lava).
+    ice: Option<u16>,
     /// Flowing water of each `level` (1 to 8), where the export settles
     /// the water so that the game leaves it as it is; empty for a world of
     /// lava.
@@ -271,6 +274,14 @@ impl<'a> ExportContext<'a> {
                 })
                 .collect()
         };
+        // Ice, for the water a frost cover freezes.
+        let ice = (!world.meta.lava && reg.covers.iter().any(|c| c.frost && !c.removed)).then(|| {
+            states.push(("minecraft:ice".to_owned(), Vec::new()));
+            if era == Era::Numbered {
+                numbered.push((79, 0));
+            }
+            (states.len() - 1).min(SKIP as usize - 1) as u16
+        });
         // The ores, after everything else: in stone and in deepslate.
         let first_ore = states.len().min(SKIP as usize - 1) as u16;
         let ore_states = world
@@ -365,6 +376,7 @@ impl<'a> ExportContext<'a> {
             water: if world.meta.lava { wk.lava.0 } else { wk.water.0 },
             lava: world.meta.lava,
             cave_fluids: [wk.water.0, wk.lava.0],
+            ice,
             flowing,
             waterlogged: {
                 waterlogged.sort_unstable();
@@ -444,9 +456,25 @@ fn grow(ctx: &ExportContext, cover: u16, x: i32, y: i32, z: i32, blocks: &mut [u
     if y <= min_y || y >= max_y {
         return y;
     }
+    let at = |y: i32| (((y - min_y) as usize) << 8) | column;
+    // Frost freezes the top of the water; under lava, the water is lava.
+    if def.changes_water() && !ctx.lava && blocks[at(y)] == ctx.water {
+        let mut t = y;
+        while t + 1 < max_y && blocks[at(t + 1)] == ctx.water {
+            t += 1;
+        }
+        if def.lava {
+            let lava = ctx.cave_fluids[1];
+            for k in y..=t {
+                blocks[at(k)] = lava;
+            }
+        } else if let Some(ice) = ctx.ice {
+            blocks[at(t)] = ice;
+        }
+        return t + 1;
+    }
     let Some(growth) = def.growth(x, z, ctx.seed) else { return y };
     let Some(Some(plant)) = plants.get(growth.plant) else { return y };
-    let at = |y: i32| (((y - min_y) as usize) << 8) | column;
     if def.soil_only && !ctx.soil.get(blocks[at(y - 1)] as usize).copied().unwrap_or(false) {
         return y;
     }
@@ -781,7 +809,8 @@ pub fn build_chunk(
             if !ctx.flowing.is_empty() && !steady.is_empty() {
                 let at_cell = steady.partition_point(|s| (s.cell as usize) < cell);
                 for s in steady[at_cell..].iter().take_while(|s| s.cell as usize == cell) {
-                    if s.y < min_y || s.y >= max_y {
+                    // Ice and lava under a cover stay as they are.
+                    if s.y < min_y || s.y >= max_y || ctx.ice.is_some_and(|ice| blocks[at(s.y)] == ice) || blocks[at(s.y)] == ctx.cave_fluids[1] {
                         continue;
                     }
                     blocks[at(s.y)] = match s.block.level() {

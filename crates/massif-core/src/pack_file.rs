@@ -177,6 +177,12 @@ pub struct PackCover {
     pub soil_only: bool,
     #[serde(default)]
     pub underwater: bool,
+    /// Frost: ice on the water where it is painted.
+    #[serde(default, skip_serializing_if = "crate::registry::is_false")]
+    pub frost: bool,
+    /// Lava: the water where it is painted is lava.
+    #[serde(default, skip_serializing_if = "crate::registry::is_false")]
+    pub lava: bool,
 }
 
 /// One of an object layer's objects, by its number in the pack.
@@ -551,6 +557,8 @@ impl Pack {
         def.height = cover.height;
         def.soil_only = cover.soil_only;
         def.underwater = cover.underwater;
+        def.frost = cover.frost;
+        def.lava = cover.lava;
         reg.add_cover(def)
     }
 
@@ -755,6 +763,8 @@ fn cover_of(c: &CoverDef) -> PackCover {
         height: c.height,
         soil_only: c.soil_only,
         underwater: c.underwater,
+        frost: c.frost,
+        lava: c.lava,
     }
 }
 
@@ -798,7 +808,7 @@ fn object_of(o: &ObjectDef) -> PackObject {
 
 /// The same plants, the same way, whatever their name and colour.
 fn same_cover(a: &PackCover, b: &PackCover) -> bool {
-    a.plants == b.plants && a.density == b.density && a.height == b.height && a.soil_only == b.soil_only && a.underwater == b.underwater
+    a.plants == b.plants && a.density == b.density && a.height == b.height && a.soil_only == b.soil_only && a.underwater == b.underwater && a.frost == b.frost && a.lava == b.lava
 }
 
 /// The same blocks, the same way, whatever their colours.

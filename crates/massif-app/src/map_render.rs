@@ -56,6 +56,8 @@ pub struct Sample {
     pub cover: u16,
     /// Object layer painted on the surface; 0 = none.
     pub objects: u16,
+    /// Annotation of the column (on the ground level); 0 = none.
+    pub annotation: u8,
     pub flags: u8,
     /// Bit `i` set when level `i` (`i < 8`) has the column.
     pub levels: u8,
@@ -69,6 +71,7 @@ impl Sample {
         biome: 0,
         cover: 0,
         objects: 0,
+        annotation: 0,
         flags: 0,
         levels: 0,
     };
@@ -90,7 +93,7 @@ impl Sample {
 }
 
 #[inline]
-fn ground_sample(top: f32, terrain: u16, fluid: i16, biome: u16, cover: u16, objects: u16) -> Sample {
+fn ground_sample(top: f32, terrain: u16, fluid: i16, biome: u16, cover: u16, objects: u16, annotation: u16) -> Sample {
     let fluid = if fluid != NO_FLUID && fluid as i32 > block_top(top) {
         fluid
     } else {
@@ -103,6 +106,7 @@ fn ground_sample(top: f32, terrain: u16, fluid: i16, biome: u16, cover: u16, obj
         biome,
         cover,
         objects,
+        annotation: annotation as u8,
         flags: 0,
         levels: 1,
     }
@@ -127,6 +131,7 @@ impl ColumnSampler {
                 g.biome.get(cell),
                 g.cover.get(cell),
                 g.objects.get(cell),
+                g.annotations.get(cell),
             );
         }
         stack.spans(cell, &mut self.spans);
@@ -192,6 +197,7 @@ impl ColumnSampler {
             biome,
             cover: stack.surface_cover(cell, &top),
             objects: stack.surface_objects(cell, &top),
+            annotation: stack.ground().annotations.get(cell) as u8,
             flags,
             levels,
         }
@@ -208,8 +214,9 @@ impl SurfaceGrid {
             let g = stack.ground();
             let (top, terrain) = (g.top.dense(), g.terrain.dense());
             let (fluid, biome, cover, objects) = (g.fluid.dense(), g.biome.dense(), g.cover.dense(), g.objects.dense());
+            let annotations = g.annotations.dense();
             (0..TILE_AREA)
-                .map(|i| ground_sample(top[i], terrain[i], fluid[i], biome[i], cover[i], objects[i]))
+                .map(|i| ground_sample(top[i], terrain[i], fluid[i], biome[i], cover[i], objects[i], annotations[i]))
                 .collect()
         } else {
             let mut sampler = ColumnSampler::default();
@@ -286,6 +293,7 @@ impl Default for MapStyle {
             lava: false,
             top: 320,
             seed: 0,
+            annotations: true,
         }
     }
 }
@@ -331,6 +339,8 @@ pub struct MapStyle {
     pub top: i32,
     /// The world's seed: where the plants of covers grow.
     pub seed: i64,
+    /// Annotations are drawn over the map.
+    pub annotations: bool,
 }
 
 /// Default light direction: from the north-west, like WorldPainter.
@@ -612,7 +622,13 @@ impl<'a> Colorizer<'a> {
         let depth = c.water_depth();
         if depth > 0.0 && !matches!(self.style.mode, MapMode::Slope | MapMode::Biome) {
             let t = (depth / 18.0).min(1.0);
-            if self.style.lava {
+            let cover = c.cover.checked_sub(1).and_then(|k| self.covers.get(k as usize)).and_then(Option::as_ref);
+            let (frozen, lava) = cover.map_or((false, false), |d| (d.frost && !self.style.lava, d.lava));
+            if frozen {
+                // Frost: the water is ice, white-blue, the relief under
+                // it lost.
+                out = scale([206.0, 224.0, 246.0], 0.9 + 0.1 * shade);
+            } else if self.style.lava || lava {
                 // Lava hides what lies under it: bright, with a darker
                 // crust along its shores.
                 let crust = (1.0 - depth / 2.5).clamp(0.0, 1.0);
@@ -621,6 +637,13 @@ impl<'a> Colorizer<'a> {
                 let water = if self.style.mode == MapMode::Relief { [70.0, 110.0, 170.0] } else { WATER };
                 out = mix(out, water, 0.5 + 0.42 * t);
             }
+        }
+
+        // Annotations: marks of colour over everything else.
+        if self.style.annotations
+            && let Some(&color) = c.annotation.checked_sub(1).and_then(|k| massif_core::tile::ANNOTATION_COLORS.get(k as usize))
+        {
+            out = mix(out, color.map(|v| v as f32), 0.75);
         }
 
         if let Some(interval) = contour {
@@ -1550,6 +1573,43 @@ mod tests {
         // Outside the map nothing is drawn.
         let img = render_region(dim, &w.registry, 63.0, MapStyle::default(), 0, 4096, 4096, 1, 1);
         assert!(img.pixels.iter().all(|c| c.a() == 0));
+    }
+
+    /// WorldPainter's Frost, Lava and annotations as the map shows them:
+    /// ice over the water painted with Frost, lava where Lava is painted,
+    /// open water around; the colour of an annotation over the land, gone
+    /// when annotations are hidden.
+    #[test]
+    fn frost_lava_and_annotations_show_on_the_map() {
+        let mut w = generate(&GenParams { tiles_x: 2, tiles_z: 2, landform: Landform::Hills, seed: 7, ..GenParams::default() });
+        let hard = |radius: f32| Brush { shape: BrushShape::Circle, radius, profile: Profile::Constant, strength: 1.0, rotation: 0.0, mask: None, filter: None };
+        let reg = &w.registry;
+        let (frost, lava) = (reg.cover_by_name("Frost").unwrap(), reg.cover_by_name("Lava").unwrap());
+        let mut h = History::default();
+        h.begin("paint", 0);
+        {
+            let mut e = h.edit(&mut w, 0);
+            ops::set_height(&mut e, &hard(30.0), -60.0, -60.0, 50.0, Surface::Top);
+            ops::set_height(&mut e, &hard(20.0), 60.0, 60.0, 90.0, Surface::Top);
+            ops::paint_cover(&mut e, &hard(10.0), -70.0, -60.0, frost, 1);
+            ops::paint_cover(&mut e, &hard(8.0), -45.0, -60.0, lava, 2);
+            ops::paint_annotation(&mut e, &hard(8.0), 60.0, 60.0, 14, 3);
+        }
+        h.commit();
+        let dim = &w.dims[0];
+        let at = |img: &ColorImage, x: i32, z: i32| img.pixels[(z + 128) as usize * img.width() + (x + 128) as usize];
+        let img = render_region(dim, &w.registry, 63.0, MapStyle::default(), 0, -128, -128, 2, 2);
+        save("map-frost-lava-annotations.png", &img);
+        let (ice, lava, water, mark) = (at(&img, -70, -60), at(&img, -45, -60), at(&img, -60, -40), at(&img, 60, 60));
+        assert!(ice.r() > 170 && ice.b() > 200 && ice.b() >= ice.r(), "ice {ice:?}");
+        assert!(lava.r() > 180 && lava.b() < 90, "lava {lava:?}");
+        assert!(water.b() > water.r() + 40 && water.r() < 120, "water {water:?}");
+        // Red over the land.
+        assert!(mark.r() > mark.g() + 30 && mark.r() > mark.b() + 30, "annotation {mark:?}");
+        let hidden = render_region(dim, &w.registry, 63.0, MapStyle { annotations: false, ..MapStyle::default() }, 0, -128, -128, 2, 2);
+        let land = at(&hidden, 60, 60);
+        assert!(land.g() >= land.r(), "the land without its annotation {land:?}");
+        assert_eq!(at(&hidden, -70, -60), ice, "only the annotations go");
     }
 
     #[test]

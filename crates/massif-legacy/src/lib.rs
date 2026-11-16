@@ -4,6 +4,7 @@
 //! [`worldpainter`] turns the `World2` object graph into a Massif world.
 
 pub mod javaser;
+pub mod layers;
 mod tables;
 pub mod terrains;
 pub mod worldpainter;

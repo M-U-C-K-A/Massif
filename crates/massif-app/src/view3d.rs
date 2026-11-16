@@ -858,13 +858,22 @@ fn build_tile_part(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: T
     // the map.
     if style.water {
         let blue = if style.lava { [238, 112, 22, 255] } else { [26, 92, 150, 205] };
+        // Under a frost cover, the top of the water is ice; under a lava
+        // cover, the water is lava.
+        let (ice, lava) = ([168, 200, 240, 255], [238, 112, 22, 255]);
+        let frozen = |c: usize| match reg.cover(grid.cover[c]) {
+            Some(d) if !style.lava && !d.hidden && d.frost => 1u8,
+            Some(d) if !style.lava && !d.hidden && d.lava => 2,
+            _ => 0,
+        };
         greedy(
             n,
             |i, j| {
-                let wet = grid.water[grid.cell(cx + i as i32, cz + j as i32)];
-                (wet != i32::MIN).then_some(wet)
+                let c = grid.cell(cx + i as i32, cz + j as i32);
+                let wet = grid.water[c];
+                (wet != i32::MIN).then_some((wet, frozen(c)))
             },
-            |i, j, w, h, wet| out.water.push(face(i as u8, j as u8, UP, w as u8, clamp16(wet), h as i16, blue, 0)),
+            |i, j, w, h, (wet, frozen)| out.water.push(face(i as u8, j as u8, UP, w as u8, clamp16(wet), h as i16, [blue, ice, lava][frozen as usize], 0)),
         );
         for j in 0..n {
             for i in 0..n {

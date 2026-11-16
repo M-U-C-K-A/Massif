@@ -19,6 +19,27 @@ use crate::plane::Plane;
 /// Fluid plane value meaning "no fluid in this column".
 pub const NO_FLUID: i16 = i16::MIN;
 
+/// The colours of annotations 1 to 15, as WorldPainter's: the colours of
+/// wool but grey — white, orange, magenta, light blue, yellow, lime, pink,
+/// light grey, cyan, purple, blue, brown, green, red, black.
+pub const ANNOTATION_COLORS: [[u8; 3]; 15] = [
+    [233, 236, 236],
+    [240, 118, 19],
+    [189, 68, 179],
+    [58, 175, 217],
+    [248, 198, 39],
+    [112, 185, 25],
+    [237, 141, 172],
+    [142, 142, 134],
+    [21, 137, 145],
+    [121, 42, 172],
+    [53, 57, 157],
+    [114, 71, 40],
+    [84, 109, 27],
+    [161, 39, 34],
+    [20, 21, 25],
+];
+
 const VERSION: u8 = 1;
 const TAG_END: u8 = 0;
 const TAG_TOP: u8 = 1;
@@ -28,6 +49,7 @@ const TAG_FLUID: u8 = 4;
 const TAG_BIOME: u8 = 5;
 const TAG_COVER: u8 = 6;
 const TAG_OBJECTS: u8 = 7;
+const TAG_ANNOTATIONS: u8 = 8;
 
 /// One tile of one level.
 ///
@@ -53,6 +75,9 @@ pub struct Tile {
     /// Painted object layer: 0 for none, else the layer's number (see
     /// [`crate::registry::Registry::object_layer`]).
     pub objects: Plane<u16>,
+    /// Annotations, as WorldPainter's: 0 for none, else one of the
+    /// [`ANNOTATION_COLORS`] (1 to 15). Shown on the map, never exported.
+    pub annotations: Plane<u16>,
     /// Planes written by a newer version, preserved verbatim.
     pub unknown: Vec<(u8, Vec<u8>)>,
 }
@@ -68,6 +93,7 @@ impl Tile {
             biome: Plane::Uniform(0),
             cover: Plane::Uniform(0),
             objects: Plane::Uniform(0),
+            annotations: Plane::Uniform(0),
             unknown: Vec::new(),
         }
     }
@@ -82,6 +108,7 @@ impl Tile {
             biome: Plane::Uniform(0),
             cover: Plane::Uniform(0),
             objects: Plane::Uniform(0),
+            annotations: Plane::Uniform(0),
             unknown: Vec::new(),
         }
     }
@@ -121,6 +148,7 @@ impl Tile {
         self.biome.compact();
         self.cover.compact();
         self.objects.compact();
+        self.annotations.compact();
     }
 
     pub fn heap_bytes(&self) -> usize {
@@ -131,6 +159,7 @@ impl Tile {
             + self.biome.heap_bytes()
             + self.cover.heap_bytes()
             + self.objects.heap_bytes()
+            + self.annotations.heap_bytes()
     }
 
     /// Encode to the compressed cold form (a zstd frame).
@@ -171,6 +200,9 @@ impl Tile {
         if self.objects.uniform_value() != Some(0) {
             plane(TAG_OBJECTS, &mut |o| codec::encode_categorical(&self.objects, o));
         }
+        if self.annotations.uniform_value() != Some(0) {
+            plane(TAG_ANNOTATIONS, &mut |o| codec::encode_categorical(&self.annotations, o));
+        }
         for (tag, payload) in &self.unknown {
             plane(*tag, &mut |o| o.extend_from_slice(payload));
         }
@@ -194,6 +226,7 @@ impl Tile {
             biome: Plane::Uniform(0),
             cover: Plane::Uniform(0),
             objects: Plane::Uniform(0),
+            annotations: Plane::Uniform(0),
             unknown: Vec::new(),
         };
         loop {
@@ -214,6 +247,7 @@ impl Tile {
                 TAG_BIOME => tile.biome = codec::decode_categorical(&mut p)?,
                 TAG_COVER => tile.cover = codec::decode_categorical(&mut p)?,
                 TAG_OBJECTS => tile.objects = codec::decode_categorical(&mut p)?,
+                TAG_ANNOTATIONS => tile.annotations = codec::decode_categorical(&mut p)?,
                 _ => tile.unknown.push((tag, payload.to_vec())),
             }
         }
@@ -262,6 +296,9 @@ mod tests {
         for i in 700..1200 {
             t.objects.set(i, 1);
         }
+        for i in 1000..1100 {
+            t.annotations.set(i, 14);
+        }
         t
     }
 
@@ -277,8 +314,37 @@ mod tests {
         assert_eq!(back.biome.dense(), t.biome.dense());
         assert_eq!(back.cover.dense(), t.cover.dense());
         assert_eq!(back.objects.dense(), t.objects.dense());
+        assert_eq!(back.annotations.dense(), t.annotations.dense());
         // Encoding is canonical: re-encoding the decoded tile is identical.
         assert_eq!(back.encode(), blob);
+    }
+
+    /// Annotations are a plane of their own, written only where there are
+    /// some: a tile without them is written as before they existed (and a
+    /// version that knows nothing of them keeps them, as it keeps every
+    /// plane it does not know).
+    #[test]
+    fn annotations_are_a_plane_of_their_own() {
+        let mut t = sample_tile();
+        t.annotations = Plane::Uniform(0);
+        let plain = t.encode();
+        let back = Tile::decode(&plain).unwrap();
+        assert_eq!(back.annotations, Plane::Uniform(0));
+        assert!(back.unknown.is_empty());
+        t.annotations.set(3, 7);
+        let marked = Tile::decode(&t.encode()).unwrap();
+        assert_eq!((marked.annotations.get(3), marked.annotations.get(4)), (7, 0));
+        // An older Massif reads the plane as one it does not know, and
+        // writes it back as it was.
+        let mut old = marked.clone();
+        let payload = {
+            let mut o = Vec::new();
+            codec::encode_categorical(&marked.annotations, &mut o);
+            o
+        };
+        old.annotations = Plane::Uniform(0);
+        old.unknown.push((TAG_ANNOTATIONS, payload));
+        assert_eq!(Tile::decode(&old.encode()).unwrap().annotations.get(3), 7);
     }
 
     #[test]

@@ -197,6 +197,33 @@ impl TreeKind {
     }
 }
 
+/// An object layer named `name` of the trees of several kinds, each kind
+/// with its weight (shared among its variants): WorldPainter's own forests
+/// (Deciduous: big oaks and birches) as the pack has them. The one made
+/// before, by its name and its trees from the pack, or a new one. Returns
+/// its number.
+pub fn install_mix(name: &str, kinds: &[(TreeKind, u16)], reg: &mut Registry) -> u16 {
+    if let Some(k) = reg.object_layers.iter().position(|l| !l.removed && l.name == name && l.objects.iter().all(|o| reg.objects.get(o.0 as usize).is_some_and(|d| d.source == SOURCE))) {
+        return k as u16 + 1;
+    }
+    let mut objects = Vec::new();
+    for &(kind, weight) in kinds {
+        let first = reg.objects.len() as u32;
+        let trees = kind.trees();
+        let n = trees.len() as u32;
+        reg.objects.extend(trees);
+        objects.extend((first..first + n).map(|k| (k, weight.max(1))));
+    }
+    let indices: Vec<u32> = objects.iter().map(|o| o.0).collect();
+    let mut layer = ObjectLayerDef::new(name, &indices, reg);
+    layer.objects = objects;
+    let reach = indices.iter().map(|&k| reg.objects[k as usize].reach()).max().unwrap_or(2);
+    layer.spacing = ((reach as f32 * 1.3) as u16 + 2).clamp(3, 64);
+    layer.density = 0.75;
+    layer.color = kinds.first().map_or([58, 112, 52], |k| k.0.color());
+    reg.add_object_layer(layer)
+}
+
 /// What the pack's trees say they were read from.
 pub const SOURCE: &str = "Massif tree pack";
 
