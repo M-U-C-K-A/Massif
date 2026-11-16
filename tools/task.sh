@@ -3,7 +3,8 @@
 # on main only as a fast-forward of a clean main checkout (see CLAUDE.md).
 #
 #   tools/task.sh start <name>   a worktree .worktrees/<name> on a new branch from main
-#   tools/task.sh land           from a task's worktree: rebase on main, lint and test,
+#   tools/task.sh land           from a task's worktree, one session at a time (others
+#                                wait their turn): rebase on main, lint and test,
 #                                check the version and the notes, fast-forward main,
 #                                push it, remove the worktree
 #   tools/task.sh install        build the app from a copy of main and install it, one
@@ -21,6 +22,7 @@ main=$(git -C "$here" worktree list --porcelain | sed -n '1s/^worktree //p')
 # installed.
 common=$(git -C "$main" rev-parse --path-format=absolute --git-common-dir)
 lock="$common/massif-install.lock"
+land_lock="$common/massif-land.lock"
 held=""
 build=""
 
@@ -30,7 +32,7 @@ args="$*"
 finish() {
     code=$?
     [ -z "$build" ] || rm -rf "$build"
-    [ -z "$held" ] || rm -rf "$lock"
+    [ -z "$held" ] || rm -rf "$held"
     [ "$code" -eq 0 ] || echo "tools/task.sh $args: stopped (exit $code). Main moves only once it says \"Landed\"; fix the cause, commit, run it again." >&2
 }
 trap finish EXIT
@@ -60,31 +62,33 @@ drop_target() {
 }
 free_gb() { df -g /System/Volumes/Data 2>/dev/null | awk 'NR == 2 { print $4 }'; }
 
-# One install at a time: two would build side by side, and the one that
-# finished first would clean away what the other was building. A turn left
-# by an install that is no longer running (stopped, crashed) is taken over.
+# One install at a time, and one land at a time: two installs would build
+# side by side and the first done would clean away the other's build; lands
+# side by side each run every test and choke the machine, and all but one
+# fail to fast-forward anyway. A turn left by a run that is no longer going
+# (stopped, crashed) is taken over. take_turn <lock> <what is happening>.
 take_turn() {
     said=""
-    while ! mkdir "$lock" 2>/dev/null; do
-        owner=$(cat "$lock/pid" 2>/dev/null || true)
+    while ! mkdir "$1" 2>/dev/null; do
+        owner=$(cat "$1/pid" 2>/dev/null || true)
         if [ -n "$owner" ] && ! ps -p "$owner" -o command= 2>/dev/null | grep -q "task.sh"; then
-            rm -rf "$lock"
+            rm -rf "$1"
             continue
         fi
         # Taken a moment ago and not yet signed, or never signed: left over
         # after a minute.
-        if [ -z "$owner" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
-            rm -rf "$lock"
+        if [ -z "$owner" ] && [ -n "$(find "$1" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+            rm -rf "$1"
             continue
         fi
         if [ -z "$said" ]; then
-            echo "Another session is installing Massif (process ${owner:-?}): waiting for it to finish."
+            echo "Another session is $2 (process ${owner:-?}): waiting for it to finish."
             said=1
         fi
         sleep 5
     done
-    held=1
-    echo $$ > "$lock/pid"
+    held="$1"
+    echo $$ > "$1/pid"
 }
 
 case "${1:-status}" in
@@ -101,6 +105,7 @@ land)
     fi
     branch=$(git -C "$here" symbolic-ref --short HEAD)
     clean "$here" || { echo "Commit the changes first." >&2; exit 1; }
+    take_turn "$land_lock" "landing on main"
     git -C "$here" rebase main
     # The version is the next release: not one already tagged, and the same
     # as the top of the release notes.
@@ -125,7 +130,7 @@ land)
     echo "Landed $branch on main ($(git -C "$main" log --oneline -1 | cut -c1-72)). Tell the other sessions if it touches their files."
     ;;
 install)
-    take_turn
+    take_turn "$lock" "installing Massif"
     # Main as it is once this install's turn has come.
     clean "$main" || { echo "The main checkout has changes that are not committed: install once they are landed." >&2; exit 1; }
     head=$(git -C "$main" rev-parse HEAD)
@@ -153,6 +158,7 @@ install)
 status)
     git -C "$main" worktree list
     if clean "$main"; then echo "The main checkout is clean."; else echo "The main checkout has changes that are not committed:"; git -C "$main" status --short --untracked-files=no; fi
+    if [ -d "$land_lock" ]; then echo "A land is running (process $(cat "$land_lock/pid" 2>/dev/null || echo ?))."; fi
     if [ -d "$lock" ]; then echo "An install is running (process $(cat "$lock/pid" 2>/dev/null || echo ?))."; fi
     echo "$(free_gb) GB free."
     if [ -d "$build_disk" ]; then echo "Build caches on $build_disk: $(du -sh "$builds" 2>/dev/null | cut -f1) in $builds, $(df -h "$build_disk" | awk 'NR == 2 { print $4 }') free there."; else echo "$build_disk is not plugged in: builds stay on the Mac."; fi
