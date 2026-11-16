@@ -203,19 +203,34 @@ pub const TALL_PLANTS: [&str; 9] = [
 ];
 
 /// Whether a block (`minecraft:tall_grass`, or with properties) is a plant
-/// two blocks high.
+/// two blocks high: one of the game's, or any block given as its lower
+/// half (`conquest:dead_bush_tall[half=lower]`, as a mod's tall plants are
+/// kept), written as its two halves.
 pub fn is_tall_plant(state: &str) -> bool {
     let name = state.split('[').next().unwrap_or(state);
-    TALL_PLANTS.contains(&name.strip_prefix("minecraft:").unwrap_or(name))
+    TALL_PLANTS.contains(&name.strip_prefix("minecraft:").unwrap_or(name)) || state.split_once('[').is_some_and(|(_, props)| props.trim_end_matches(']').split(',').any(|kv| kv.trim() == "half=lower"))
 }
 
 /// Soil that plants grow on (by block, with or without properties).
 pub fn is_soil(state: &str) -> bool {
     let name = state.split('[').next().unwrap_or(state);
-    matches!(
-        name.strip_prefix("minecraft:").unwrap_or(name),
-        "grass_block" | "dirt" | "coarse_dirt" | "podzol" | "rooted_dirt" | "moss_block" | "pale_moss_block" | "mud" | "muddy_mangrove_roots" | "mycelium" | "farmland" | "dirt_path"
-    )
+    match name.strip_prefix("minecraft:") {
+        Some(short) => matches!(
+            short,
+            "grass_block" | "dirt" | "coarse_dirt" | "podzol" | "rooted_dirt" | "moss_block" | "pale_moss_block" | "mud" | "muddy_mangrove_roots" | "mycelium" | "farmland" | "dirt_path"
+        ),
+        // A mod's ground, by its name: Conquest Reforged's grass, moss,
+        // forest floors, dirts, soils, earths, silts, muds and peat — not
+        // the bricks, slabs or walls made of them.
+        None if name.contains(':') => {
+            let short = name.rsplit(':').next().unwrap_or(name);
+            const GROUND: [&str; 17] = ["grass", "grassy", "dirt", "soil", "moss", "earth", "silt", "silty", "loam", "loamy", "peat", "mud", "podzol", "mycelium", "farmland", "humus", "turf"];
+            const MADE: [&str; 17] = ["brick", "bricks", "slab", "stairs", "wall", "tile", "tiles", "plaster", "pillar", "fence", "pane", "layer", "layers", "carpet", "path", "arch", "beam"];
+            let words = || short.split('_');
+            (words().any(|w| GROUND.contains(&w)) || short.contains("forest_floor") || short.contains("shredded_leaves")) && !words().any(|w| MADE.contains(&w))
+        }
+        None => false,
+    }
 }
 
 /// The colour a plant shows from above; `None` for a block not known
@@ -806,6 +821,16 @@ mod tests {
         assert_eq!(heights.into_iter().collect::<Vec<_>>(), vec![1, 2, 3]);
         assert!(is_tall_plant("minecraft:tall_grass") && is_tall_plant("minecraft:peony[half=lower]"));
         assert!(!is_tall_plant("minecraft:short_grass") && !is_tall_plant("minecraft:tall_dry_grass"));
+        // A mod's tall plant, kept as its lower half.
+        assert!(is_tall_plant("conquest:dead_bush_tall[half=lower]") && !is_tall_plant("conquest:dead_bush_tall") && !is_tall_plant("conquest:oak_stairs[half=bottom]"));
+        // A mod's ground is soil by its name; what is made of it is not.
+        for ground in ["conquest:grass_covered_limestone", "conquest:clover_covered_grass", "conquest:green_sphagnum_moss_block", "conquest:autumnal_forest_floor", "conquest:loamy_dirt_with_bones", "conquest:dark_fertile_soil", "conquest:red_earth", "conquest:light_silt", "conquest:thick_mud", "conquest:peat", "conquest:shredded_leaves"] {
+            assert!(is_soil(ground), "{ground}");
+        }
+        for made in ["conquest:mud_brick", "conquest:dirt_path_slab", "conquest:mossy_cobblestone_wall", "conquest:mossy_cobblestone", "conquest:limestone", "conquest:old_red_bricks", "conquest:oak_parquet_floor", "conquest:earthenware_pot"] {
+            assert!(!is_soil(made), "{made}");
+        }
+        assert!(is_soil("minecraft:grass_block[snowy=false]") && !is_soil("minecraft:stone") && !is_soil("minecraft:clay"));
     }
 
     #[test]

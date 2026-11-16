@@ -1229,11 +1229,17 @@ pub fn describe_cover(def: &massif_core::registry::CoverDef) -> String {
 /// The cover of a block of the game: one that grows it alone, made if
 /// there is none yet. Returns its number.
 pub fn block_cover(reg: &mut Registry, block: &massif_assets::Block) -> u16 {
-    if let Some(k) = reg.covers.iter().position(|c| !c.removed && c.plants.len() == 1 && c.plants[0].0 == block.id) {
+    // A block two high (a mod's tall plant) is kept as its lower half: the
+    // export writes both.
+    let state = if block.tall { format!("{}[half=lower]", block.id) } else { block.id.clone() };
+    if let Some(k) = reg.covers.iter().position(|c| !c.removed && c.plants.len() == 1 && c.plants[0].0 == state) {
         return k as u16 + 1;
     }
     let plant = block.category == massif_assets::Category::Plants && !block.id.contains("carpet");
-    let mut def = massif_core::registry::CoverDef::new(&block.name, block.color, &[(&block.id, 1)], if plant { 0.35 } else { 1.0 });
+    // A plant shows its sides (a cross of them), tinted as the game tints
+    // it, rather than what stands for its top.
+    let color = if block.full_cube { block.color } else { block.side_color };
+    let mut def = massif_core::registry::CoverDef::new(&block.name, color, &[(&state, 1)], if plant { 0.35 } else { 1.0 });
     def.soil_only = plant;
     def.underwater = ["seagrass", "kelp", "coral", "sea_pickle"].iter().any(|w| block.id.contains(w));
     if def.underwater {
@@ -2553,7 +2559,6 @@ pub fn terrain_icon(ui: &mut Ui, rect: Rect, reg: &Registry, terrain: u16, block
 
 /// Every block of the game, with its real textures: click one to paint it.
 pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary, jar: &mut Option<std::path::PathBuf>, mods: &mut Vec<std::path::PathBuf>) -> Option<String> {
-    use massif_assets::Category;
     let pal = Palette::of(ui);
     let ctx = ui.ctx().clone();
     let mut feedback = None;
@@ -2594,8 +2599,10 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
         }
     });
     // The mods whose blocks are painted with too, each a chip that takes it
-    // out; their jars, chosen from the mods folder of an instance.
+    // out: their jars, the resource packs and the lists of blocks read with
+    // them, chosen one by one or as a modpack's instance.
     let mut reload = false;
+    let mut instance: Option<massif_assets::instance::Instance> = None;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
         ui.label(RichText::new(tr!("Mods")).color(pal.weak));
@@ -2604,7 +2611,12 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
             let info = read.iter().find(|m| m.path == path);
             let name = info.map_or_else(|| path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(), |m| m.name.clone());
             let tip = match info {
-                Some(m) => trn!("{n} block · {path}", "{n} blocks · {path}", n = m.blocks, path = path.display()),
+                Some(m) if m.kind == massif_assets::SourceKind::List => trn!("A list of blocks made for WorldPainter: the states of {n} block · {path}", "A list of blocks made for WorldPainter: the states of {n} blocks · {path}", n = m.blocks, path = path.display()),
+                Some(m) if m.kind == massif_assets::SourceKind::Pack => tr!("A resource pack: its textures over the mods' · {path}", path = path.display()),
+                Some(m) => match &m.minecraft {
+                    Some(v) => trn!("{n} block · made for Minecraft {v} · {path}", "{n} blocks · made for Minecraft {v} · {path}", n = m.blocks, v, path = path.display()),
+                    None => trn!("{n} block · {path}", "{n} blocks · {path}", n = m.blocks, path = path.display()),
+                },
                 None => path.display().to_string(),
             };
             let chip = egui::Button::new(RichText::new(format!("{name}  {}", theme::glyph(Icon::X))).size(11.5)).corner_radius(theme::PILL);
@@ -2615,9 +2627,9 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
         }
         if ui
             .small_button(theme::with_icon(Icon::Plus, tr!("Add mods…")))
-            .on_hover_text(tr!("The jars of mods with blocks (Conquest Reforged, Chipped, Macaw's…), from the mods folder of your instance, and the resource packs (.zip) that give them their textures: their blocks are painted and exported like the game's"))
+            .on_hover_text(tr!("The jars of mods with blocks (Conquest Reforged, Chipped, Macaw's…), from the mods folder of your instance, the resource packs (.zip) that give them their textures, and the lists of blocks made for WorldPainter (.csv) that give their states: their blocks are painted and exported like the game's"))
             .clicked()
-            && let Some(files) = rfd::FileDialog::new().set_title(tr!("Choose mods and resource packs")).add_filter(tr!("Mods and resource packs"), &["jar", "zip"]).pick_files()
+            && let Some(files) = rfd::FileDialog::new().set_title(tr!("Choose mods and resource packs")).add_filter(tr!("Mods, resource packs and block lists"), &["jar", "zip", "csv"]).pick_files()
         {
             for f in files {
                 if !mods.contains(&f) {
@@ -2626,9 +2638,53 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                 }
             }
         }
+        if ui
+            .small_button(theme::with_icon(Icon::FolderOpen, tr!("Instance…")))
+            .on_hover_text(tr!("A modpack's instance (CurseForge, Prism, Modrinth…): its mods with blocks, its resource packs and its lists of blocks at once, over the version of the game it plays"))
+            .clicked()
+            && let Some(dir) = rfd::FileDialog::new().set_title(tr!("Choose a modpack's instance")).pick_folder()
+        {
+            match massif_assets::instance::Instance::read(&dir) {
+                Some(found) => instance = Some(found),
+                None => blocks.notice = Some(tr!("{folder} is not an instance: it has no mods folder.", folder = dir.display()).to_owned()),
+            }
+        }
     });
-    if reload {
+    // Conquest Reforged installed here: its blocks in one click, while they
+    // are not read.
+    let read_conquest = blocks.catalogue.as_ref().is_some_and(|c| c.mods.iter().any(|m| m.kind == massif_assets::SourceKind::Mod && m.namespaces.iter().any(|n| n == "conquest")));
+    if let Some(found) = blocks.conquest.clone().filter(|_| !read_conquest) {
+        ui.add_space(4.0);
+        egui::Frame::new()
+            .fill(pal.well())
+            .stroke(Stroke::new(1.0, pal.border))
+            .corner_radius(theme::GROUP_RADIUS)
+            .inner_margin(egui::Margin::symmetric(10, 8))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.add(theme::primary_button(ui, tr!("Use"))).on_hover_text(tr!("Read its mods, lists of blocks and resource packs from this instance, over the version of the game it plays")).clicked() {
+                        instance = Some(found.clone());
+                    }
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                        ui.label(RichText::new(tr!("Conquest Reforged is installed")).medium().size(12.5));
+                        let detail = match &found.minecraft {
+                            Some(v) => tr!("{name} · Minecraft {v}", name = found.name, v),
+                            None => found.name.clone(),
+                        };
+                        ui.add(egui::Label::new(RichText::new(detail).size(11.5).color(pal.weak)).wrap());
+                    });
+                });
+            });
+    }
+    if let Some(found) = instance {
+        blocks.use_instance(&ctx, &found, jar, mods);
+    } else if reload {
+        blocks.notice = None;
         blocks.load(&ctx, jar.clone(), mods.clone());
+    }
+    if let Some(notice) = &blocks.notice {
+        ui.label(RichText::new(notice).color(pal.weak).size(11.5));
     }
     hint(
         ui,
@@ -2651,47 +2707,36 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                 .desired_width((ui.available_width() - 110.0).max(80.0)),
         );
         crate::widgets::checkbox(ui, &mut blocks.all, tr!("All shapes"))
-            .on_hover_text(tr!("Also non-cube blocks"));
+            .on_hover_text(tr!("Also non-cube blocks, and every shape of a mod's blocks (slabs, stairs, arches…)"));
     });
     let needle = blocks.search.to_lowercase();
     let reg = &doc.world.registry;
     let current = massif_assets::terrain_block(reg, &cat, TerrainId(tools.terrain)).map(|b| b.id.clone());
     let mut picked: Option<&massif_assets::Block> = None;
-    // The game's blocks first, then each mod's, by category.
-    let of_mods: Vec<&str> = cat.mods.iter().flat_map(|m| m.namespaces.iter().map(String::as_str)).filter(|ns| *ns != "minecraft").collect();
-    let mut sources: Vec<(Option<&str>, Vec<&str>)> = vec![(None, Vec::new())];
-    sources.extend(cat.mods.iter().filter(|m| m.blocks > 0).map(|m| (Some(m.name.as_str()), m.namespaces.iter().map(String::as_str).filter(|ns| *ns != "minecraft").collect())));
-    let mut sections: Vec<(String, Vec<&massif_assets::Block>)> = Vec::new();
-    for (source, spaces) in &sources {
-        for category in Category::ALL {
-            let list: Vec<&massif_assets::Block> = cat
-                .blocks
-                .iter()
-                .filter(|b| {
-                    let ns = massif_assets::namespace(&b.id);
-                    if source.is_none() { !of_mods.contains(&ns) } else { spaces.contains(&ns) }
-                })
-                .filter(|b| b.category == category && (blocks.all || b.full_cube))
-                .filter(|b| needle.is_empty() || b.name.to_lowercase().contains(&needle) || b.id.contains(&needle) || source.is_some_and(|s| s.to_lowercase().contains(&needle)))
-                .collect();
-            if list.is_empty() {
-                continue;
-            }
-            let category = crate::i18n::tr_name(category.label()).to_uppercase();
-            let title = match source {
-                Some(name) => format!("{}  ·  {category}  ·  {}", name.to_uppercase(), list.len()),
-                None => format!("{category}  ·  {}", list.len()),
-            };
-            sections.push((title, list));
-        }
-    }
-    for (title, list) in sections {
+    let sections = blocks.sections(&needle);
+    // A grid per section, only its cells in view drawn: a mod's tabs hold
+    // thousands of blocks.
+    const CELL: f32 = 36.0;
+    const GAP: f32 = 4.0;
+    let clip = ui.clip_rect();
+    for (k, section) in sections.iter().enumerate() {
         ui.add_space(6.0);
-        ui.label(RichText::new(title).size(10.5).bold().color(pal.weak));
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-            for block in list {
-                let (rect, response) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::click());
+        ui.label(RichText::new(&section.title).size(10.5).bold().color(pal.weak));
+        let width = ui.available_width();
+        let cols = (((width + GAP) / (CELL + GAP)).floor() as usize).max(1);
+        let rows = section.blocks.len().div_ceil(cols);
+        let (grid, _) = ui.allocate_exact_size(vec2(width, rows as f32 * (CELL + GAP) - GAP), Sense::hover());
+        if !grid.intersects(clip) {
+            continue;
+        }
+        let first_row = (((clip.top() - grid.top()) / (CELL + GAP)).floor().max(0.0)) as usize;
+        let last_row = ((((clip.bottom() - grid.top()) / (CELL + GAP)).ceil()) as usize).min(rows);
+        for row in first_row..last_row {
+            for col in 0..cols {
+                let Some(&i) = section.blocks.get(row * cols + col) else { break };
+                let block = &cat.blocks[i as usize];
+                let rect = Rect::from_min_size(grid.min + vec2(col as f32 * (CELL + GAP), row as f32 * (CELL + GAP)), vec2(CELL, CELL));
+                let response = ui.interact(rect, ui.scope_id().with(("block", k, i)), Sense::click());
                 let selected = current.as_deref() == Some(block.id.as_str());
                 let fill = if selected {
                     pal.accent_soft
@@ -2712,7 +2757,7 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                     picked = Some(block);
                 }
             }
-        });
+        }
     }
     if let Some(block) = picked {
         if block.full_cube {

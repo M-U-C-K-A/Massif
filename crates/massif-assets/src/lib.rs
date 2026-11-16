@@ -7,6 +7,8 @@
 //! the textures of its top, sides and bottom, and those give its real
 //! colour, with grass and leaves tinted the way the game tints them.
 
+pub mod instance;
+pub mod materials;
 pub mod zip;
 
 use rayon::prelude::*;
@@ -262,6 +264,9 @@ pub struct Block {
     pub side_tint: Tint,
     /// A whole cube: usable as ground.
     pub full_cube: bool,
+    /// Two blocks high, in a lower and an upper half (`half=lower`,
+    /// `half=upper`): tall plants, doors.
+    pub tall: bool,
     /// Real colours of the top and the sides.
     pub color: [u8; 3],
     pub side_color: [u8; 3],
@@ -276,23 +281,76 @@ pub struct Catalogue {
     /// Sorted by id.
     pub blocks: Vec<Block>,
     pub textures: HashMap<String, Arc<Texture>>,
-    /// The mods whose blocks were read beside the game's.
+    /// The mods whose blocks were read beside the game's, and the resource
+    /// packs and lists of blocks read with them, in their order.
     pub mods: Vec<ModInfo>,
     /// Mod jars that could not be read, and why: their blocks are left out.
     pub skipped: Vec<(PathBuf, String)>,
+    /// What lists of blocks made for WorldPainter say of a mod's blocks
+    /// (`conquest_wp.csv`): their properties, and what kind of block each
+    /// is.
+    pub definitions: HashMap<String, materials::Definition>,
+    /// The blocks the game registers, by namespace, of the namespaces whose
+    /// registry's list was read (Conquest Reforged writes `blocks-pls.txt`).
+    pub registered: HashMap<String, std::collections::HashSet<String>>,
+}
+
+/// What a file read beside the game is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceKind {
+    /// A mod's jar: blocks, their models and textures.
+    Mod,
+    /// A resource pack: textures and models over the mods'.
+    Pack,
+    /// A list of blocks made for WorldPainter.
+    List,
+}
+
+/// A group of blocks as a mod shows them in the game's creative inventory
+/// (Conquest Reforged's tabs: Cobble and Brick, Advanced Masonry…).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Group {
+    pub name: String,
+    /// Its blocks, in the mod's order.
+    pub blocks: Vec<String>,
 }
 
 /// A mod read beside the game: Conquest Reforged, Chipped, Macaw's…
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModInfo {
     /// Its name, as its jar gives it (`mods.toml`, `fabric.mod.json`), or
-    /// the jar's file name.
+    /// the file's name.
     pub name: String,
     pub path: PathBuf,
+    pub kind: SourceKind,
     /// The namespaces of its blocks (`conquest`), sorted.
     pub namespaces: Vec<String>,
-    /// How many blocks it adds.
+    /// How many blocks it adds: a mod's blocks the game does not have, a
+    /// list's blocks.
     pub blocks: usize,
+    /// The version of the game it is made for (`1.20.1`), from what it
+    /// depends on or its file's name.
+    pub minecraft: Option<String>,
+    /// Its creative tabs, in its order, when it gives them.
+    pub groups: Vec<Group>,
+    /// Block files of its jar that the game does not register (models left
+    /// in it), by the registry's list beside a list of blocks: left out.
+    pub unregistered: usize,
+}
+
+impl Default for ModInfo {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            path: PathBuf::new(),
+            kind: SourceKind::Mod,
+            namespaces: Vec::new(),
+            blocks: 0,
+            minecraft: None,
+            groups: Vec::new(),
+            unregistered: 0,
+        }
+    }
 }
 
 /// The namespace of a block id: `conquest` of `conquest:old_bricks`.
@@ -308,6 +366,28 @@ impl Catalogue {
 
     pub fn texture(&self, key: &str) -> Option<&Arc<Texture>> {
         self.textures.get(key)
+    }
+
+    /// The mod a block comes from, when it is a mod's.
+    pub fn mod_of(&self, id: &str) -> Option<&ModInfo> {
+        let ns = namespace(id);
+        (ns != "minecraft").then(|| self.mods.iter().find(|m| m.kind == SourceKind::Mod && m.namespaces.iter().any(|n| n == ns))).flatten()
+    }
+
+    /// Whether a state is one of the game's, by what lists of blocks say of
+    /// its block: `Ok` too when no list speaks of it.
+    pub fn check_state(&self, state: &str) -> Result<(), materials::StateProblem> {
+        let name = state.split('[').next().unwrap_or(state);
+        if self.definitions.contains_key(name) {
+            return materials::check(state, &self.definitions);
+        }
+        let ns = namespace(name);
+        // The registry's own list is the last word on which blocks exist.
+        if let Some(ids) = self.registered.get(ns) {
+            return if ids.contains(name) { Ok(()) } else { Err(materials::StateProblem::UnknownBlock(name.to_owned())) };
+        }
+        let listed = self.mods.iter().any(|m| m.kind == SourceKind::List && m.namespaces.iter().any(|n| n == ns));
+        if listed { Err(materials::StateProblem::UnknownBlock(name.to_owned())) } else { Ok(()) }
     }
 }
 
@@ -336,7 +416,10 @@ fn display_name(id: &str) -> String {
 /// namespace (`minecraft:block/stone` → `block/stone`, as `block/stone`),
 /// a mod's with it (`conquest:block/old_bricks`).
 fn key(path: &str) -> String {
-    path.trim_start_matches("minecraft:").to_owned()
+    // `:block/x`, with an empty namespace, is the game's (as the game reads
+    // it: Conquest Reforged's models name the game's textures so).
+    let path = path.trim();
+    path.strip_prefix("minecraft:").or_else(|| path.strip_prefix(':')).unwrap_or(path).to_owned()
 }
 
 /// The key of a file of a jar under `assets/<namespace>/<kind>/`, without
@@ -352,9 +435,34 @@ fn asset_key(name: &str, kind: &str, ext: &str) -> Option<String> {
     Some(if ns == "minecraft" { path.to_owned() } else { format!("{ns}:{path}") })
 }
 
+/// A mod's name as a player knows it: without the loader its jar is built
+/// for, its words apart (`ConquestReforged Fabric` → `Conquest Reforged`).
+fn plain_mod_name(name: &str) -> String {
+    let mut name = name.trim();
+    for loader in [" Fabric", " Forge", " NeoForge", " Quilt", " (Fabric)", " (Forge)", " (NeoForge)", " (Quilt)"] {
+        if name.len() > loader.len() && name[name.len() - loader.len()..].eq_ignore_ascii_case(loader) {
+            name = name[..name.len() - loader.len()].trim_end();
+        }
+    }
+    let mut out = String::with_capacity(name.len() + 4);
+    let chars: Vec<char> = name.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
+        // A capital after a small letter starts a word: `ConquestReforged`.
+        if i > 0 && c.is_uppercase() && chars[i - 1].is_lowercase() {
+            out.push(' ');
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// A mod's name as its jar gives it: `displayName` of `mods.toml` (Forge,
 /// NeoForge) or `name` of `fabric.mod.json` (Fabric, Quilt).
 fn mod_name(archive: &zip::Archive) -> Option<String> {
+    mod_given_name(archive).map(|n| plain_mod_name(&n))
+}
+
+fn mod_given_name(archive: &zip::Archive) -> Option<String> {
     for toml in ["META-INF/neoforge.mods.toml", "META-INF/mods.toml"] {
         if let Some(Ok(bytes)) = archive.read(toml) {
             let text = String::from_utf8_lossy(&bytes);
@@ -472,6 +580,19 @@ fn first_model(state: &Value) -> Option<String> {
         .find_map(|part| part.get("apply").and_then(pick))
 }
 
+/// Whether a block's states have a lower and an upper half (tall plants,
+/// doors): `half=lower` and `half=upper` among its variants or the
+/// conditions of its parts.
+fn two_halves(state: &Value) -> bool {
+    let text = |v: &Value| v.to_string();
+    let has = |half: &str| match (state.get("variants").and_then(Value::as_object), state.get("multipart")) {
+        (Some(variants), _) => variants.keys().any(|k| k.split(',').any(|kv| kv.trim() == format!("half={half}"))),
+        (None, Some(parts)) => text(parts).contains(&format!("\"half\":\"{half}\"")),
+        _ => false,
+    };
+    has("lower") && has("upper")
+}
+
 /// How the game tints a block's tinted faces.
 fn tint_of(id: &str) -> Tint {
     let n = id.rsplit(':').next().unwrap_or(id);
@@ -492,99 +613,258 @@ pub fn load(path: &Path, version: &str) -> Result<Catalogue, AssetError> {
     load_with_mods(path, version, &[])
 }
 
+/// The version of the game a mod is made for: the first version in what
+/// its `fabric.mod.json` or `mods.toml` says it depends on (`>=1.20.1`,
+/// `[1.20.1,1.21)`), else in its file's name (`…-1.20.1-1.4.1.4.jar`).
+fn mod_minecraft(archive: &zip::Archive, path: &Path) -> Option<String> {
+    let first_version = |text: &str| -> Option<String> {
+        let bytes = text.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i].is_ascii_digit() && (i == 0 || !bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'c') {
+                let end = (i..bytes.len()).find(|&j| !(bytes[j].is_ascii_digit() || bytes[j] == b'.')).unwrap_or(bytes.len());
+                let candidate = text[i..end].trim_end_matches('.');
+                // 1.7 to 1.21, or 26.1 and the years after.
+                if release_numbers(candidate).is_some_and(|n| n.len() <= 3 && (n[0] == 1 && (7..=21).contains(&n[1]) || (24..=60).contains(&n[0]))) {
+                    return Some(candidate.to_owned());
+                }
+                i = end;
+            }
+            i += 1;
+        }
+        None
+    };
+    if let Some(Ok(bytes)) = archive.read("fabric.mod.json")
+        && let Ok(v) = serde_json::from_slice::<Value>(&bytes)
+        && let Some(dep) = v.pointer("/depends/minecraft")
+    {
+        let text = match dep {
+            Value::Array(a) => a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" "),
+            other => other.as_str().unwrap_or_default().to_owned(),
+        };
+        if let Some(v) = first_version(&text) {
+            return Some(v);
+        }
+    }
+    for toml in ["META-INF/neoforge.mods.toml", "META-INF/mods.toml"] {
+        if let Some(Ok(bytes)) = archive.read(toml) {
+            let text = String::from_utf8_lossy(&bytes);
+            let mut in_minecraft = false;
+            for line in text.lines() {
+                let line = line.trim();
+                if line.starts_with('[') {
+                    in_minecraft = false;
+                } else if line.replace(' ', "") == "modId=\"minecraft\"" {
+                    in_minecraft = true;
+                } else if in_minecraft && line.starts_with("versionRange") && let Some(v) = first_version(line) {
+                    return Some(v);
+                }
+            }
+        }
+    }
+    first_version(&path.file_stem()?.to_string_lossy())
+}
+
+/// The creative tabs a mod gives as lists of blocks
+/// (`assets/<ns>/groups/<tab>.txt`, as Conquest Reforged does), named by
+/// its language file (`itemGroup.<ns>.<tab>`), in the order of their files.
+fn mod_groups(archive: &zip::Archive, names: &[String], lang: &HashMap<String, String>) -> Vec<Group> {
+    let mut files: Vec<(&str, &str, &str)> = names
+        .iter()
+        .filter_map(|n| {
+            let rest = n.strip_prefix("assets/")?;
+            let (ns, rest) = rest.split_once('/')?;
+            let stem = rest.strip_prefix("groups/")?.strip_suffix(".txt")?;
+            (!stem.contains('/') && !stem.is_empty()).then_some((ns, stem, n.as_str()))
+        })
+        .collect();
+    files.sort();
+    files
+        .into_iter()
+        .filter_map(|(ns, stem, file)| {
+            let text = String::from_utf8(archive.read(file)?.ok()?).ok()?;
+            let blocks: Vec<String> = text
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .map(|l| if l.contains(':') { l.to_owned() } else { format!("{ns}:{l}") })
+                .collect();
+            // Without a name, the file's, less the letters that sort it
+            // (`aa_advanced_masonry`).
+            let bare = stem.split_once('_').filter(|(p, _)| p.len() <= 2 && p.chars().all(|c| c.is_ascii_lowercase())).map_or(stem, |(_, rest)| rest);
+            let name = lang.get(&format!("itemGroup.{ns}.{stem}")).cloned().unwrap_or_else(|| display_name(bare));
+            (!blocks.is_empty()).then_some(Group { name, blocks })
+        })
+        .collect()
+}
+
 /// Read every block of a client jar, and of the mods' jars beside it
-/// (Forge, NeoForge, Fabric or Quilt alike: their `assets/<namespace>/`)
-/// and of resource packs (`.zip`), in that order: a later archive's
-/// models, states and textures replace an earlier one's.
+/// (Forge, NeoForge, Fabric or Quilt alike: their `assets/<namespace>/`),
+/// of resource packs (`.zip`) and of lists of blocks made for WorldPainter
+/// (`.csv`), in that order: a later archive's models, states and textures
+/// replace an earlier one's.
 /// A mod's models may build on the game's, and its blocks keep their own
 /// ids (`conquest:old_bricks`), which the export writes as they are. A mod
 /// jar that does not read is left out and named in `skipped`.
+///
+/// Only the models and textures the blocks show are read: Conquest
+/// Reforged's jar has 94,000 models and 7,600 textures for its 17,000
+/// blocks.
 pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Catalogue, AssetError> {
     let archive = zip::Archive::open(path)?;
-    let mut archives = vec![(archive, None)];
+    let mut archives: Vec<(zip::Archive, Option<PathBuf>)> = vec![(archive, None)];
     let mut skipped = Vec::new();
+    let mut lists: Vec<(PathBuf, materials::List)> = Vec::new();
     for m in mods {
+        if materials::is_list(m) {
+            match materials::read(m) {
+                Ok(list) => lists.push((m.clone(), list)),
+                Err(e) => skipped.push((m.clone(), e)),
+            }
+            continue;
+        }
         match zip::Archive::open(m) {
             Ok(a) => archives.push((a, Some(m.clone()))),
             Err(e) => skipped.push((m.clone(), e.to_string())),
         }
     }
     let json = |a: &zip::Archive, name: &str| -> Option<Value> { serde_json::from_slice(&a.read(name)?.ok()?).ok() };
-    let mut raw_models = HashMap::new();
-    // The block ids and their states, and which archive gave them.
-    let mut state_map: HashMap<String, (Value, usize)> = HashMap::new();
-    let mut png: Vec<(String, Vec<u8>)> = Vec::new();
+    // Where every model, state and texture is: the last archive's wins.
+    let mut model_files: HashMap<String, (usize, String)> = HashMap::new();
+    let mut state_files: HashMap<String, (usize, String)> = HashMap::new();
+    let mut texture_files: HashMap<String, (usize, String)> = HashMap::new();
+    let mut names_en: HashMap<String, String> = HashMap::new();
     let mut mod_infos = Vec::new();
     for (k, (a, mod_path)) in archives.iter().enumerate() {
         let names: Vec<String> = a.names().map(str::to_owned).collect();
         let mut added = 0;
         let mut namespaces = std::collections::BTreeSet::new();
+        let mut lang = HashMap::new();
         for n in &names {
             if let Some(key) = asset_key(n, "models", ".json") {
-                if let Some(v) = json(a, n) {
-                    raw_models.insert(key, v);
-                }
+                model_files.insert(key, (k, n.clone()));
             } else if let Some(key) = asset_key(n, "blockstates", ".json") {
                 let id = if key.contains(':') { key } else { format!("minecraft:{key}") };
-                if let Some(v) = json(a, n) {
-                    if k > 0 {
-                        namespaces.insert(namespace(&id).to_owned());
+                // The game's blocks are the game's: a mod may change how one
+                // looks, not add one to them (Conquest Reforged leaves the
+                // templates of its models among them, `parent_cube`…).
+                if k > 0 && namespace(&id) == "minecraft" && !state_files.contains_key(&id) {
+                    continue;
+                }
+                if k > 0 {
+                    namespaces.insert(namespace(&id).to_owned());
+                    if !state_files.contains_key(&id) {
                         added += 1;
                     }
-                    state_map.insert(id, (v, k));
                 }
+                state_files.insert(id, (k, n.clone()));
             } else if let Some(key) = asset_key(n, "textures", ".png") {
-                // Block textures (`block/`, `blocks/` in older mods), and the
-                // sky's clouds and sun (`environment/clouds`, `environment/sun`).
-                let path = key.rsplit(':').next().unwrap_or(&key);
-                let sky = key == "environment/clouds" || key == "environment/sun";
-                if (path.starts_with("block/") || path.starts_with("blocks/") || path.contains("/block/") || sky)
-                    && let Some(Ok(bytes)) = a.read(n)
-                {
-                    png.push((key, bytes));
+                texture_files.insert(key, (k, n.clone()));
+            } else if k > 0 && n.starts_with("assets/") && n.ends_with("/lang/en_us.json") && n.matches('/').count() == 3 {
+                // A mod's names for its blocks and its creative tabs.
+                if let Some(Value::Object(map)) = json(a, n) {
+                    for (key, v) in map {
+                        if let Some(v) = v.as_str() {
+                            if let Some(id) = key.strip_prefix("block.").and_then(|r| r.split_once('.')).map(|(ns, p)| format!("{ns}:{p}")) {
+                                names_en.insert(id, v.to_owned());
+                            } else if key.starts_with("itemGroup.") {
+                                lang.insert(key, v.to_owned());
+                            }
+                        }
+                    }
                 }
             }
         }
         if let Some(p) = mod_path {
+            // A jar is a mod; a zip is a resource pack, unless it says it is
+            // a mod.
+            let says_mod = ["fabric.mod.json", "quilt.mod.json", "META-INF/mods.toml", "META-INF/neoforge.mods.toml", "mcmod.info"].iter().any(|f| a.contains(f));
+            let jar = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("jar"));
+            let kind = if says_mod || jar { SourceKind::Mod } else { SourceKind::Pack };
             let name = mod_name(a).unwrap_or_else(|| p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
-            mod_infos.push(ModInfo { name, path: p.clone(), namespaces: namespaces.into_iter().collect(), blocks: added });
+            mod_infos.push(ModInfo {
+                name,
+                path: p.clone(),
+                kind,
+                namespaces: namespaces.into_iter().collect(),
+                blocks: added,
+                minecraft: if kind == SourceKind::Mod { mod_minecraft(a, p) } else { None },
+                groups: mod_groups(a, &names, &lang),
+                unregistered: 0,
+            });
         }
     }
-    // A texture given twice (a resource pack over its mod) is the last one's.
-    let png: Vec<(String, Vec<u8>)> = png.into_iter().collect::<HashMap<_, _>>().into_iter().collect();
-    let models = Models { raw: raw_models };
-    let states: Vec<(String, Value)> = {
-        let mut v: Vec<(String, Value)> = state_map.into_iter().map(|(id, (state, _))| (id, state)).collect();
-        v.sort_by(|a, b| a.0.cmp(&b.0));
-        v
-    };
-    if states.is_empty() {
+    // What lists of blocks say, the last list's word on a block kept.
+    let mut definitions: HashMap<String, materials::Definition> = HashMap::new();
+    let mut registered: HashMap<String, std::collections::HashSet<String>> = HashMap::new();
+    for (p, list) in &lists {
+        let namespaces = list.namespaces();
+        mod_infos.push(ModInfo {
+            name: p.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(),
+            path: p.clone(),
+            kind: SourceKind::List,
+            namespaces: namespaces.clone(),
+            blocks: list.blocks.len(),
+            ..Default::default()
+        });
+        if let Some(ids) = &list.registered {
+            for id in ids {
+                registered.entry(namespace(id).to_owned()).or_default().insert(id.clone());
+            }
+        }
+        definitions.extend(list.blocks.iter().cloned());
+    }
+    // The block files the game never registers are no blocks.
+    if !registered.is_empty() {
+        state_files.retain(|id, (k, _)| {
+            let keep = registered.get(namespace(id)).is_none_or(|ids| ids.contains(id));
+            if !keep && let Some(info) = k.checked_sub(1).and_then(|i| mod_infos.get_mut(i)) {
+                info.unregistered += 1;
+                info.blocks = info.blocks.saturating_sub(1);
+            }
+            keep
+        });
+    }
+    if state_files.is_empty() {
         return Err(AssetError::NoBlocks);
     }
-    // Textures: the first frame of every block texture, decoded in parallel.
-    let textures: HashMap<String, Arc<Texture>> = png
+    // Each block, the first model its states point to, and whether it is
+    // two blocks high.
+    let mut states: Vec<(String, Option<String>, bool)> = state_files
         .into_par_iter()
-        .filter_map(|(k, bytes)| {
-            let img = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).ok()?.to_rgba8();
-            let (w, h) = img.dimensions();
-            // Animated textures are a strip of square frames.
-            let side = w.min(h);
-            let frame = image::imageops::crop_imm(&img, 0, 0, w, side).to_image();
-            Some((
-                k,
-                Arc::new(Texture {
-                    width: w,
-                    height: side,
-                    rgba: frame.into_raw(),
-                }),
-            ))
+        .filter_map(|(id, (k, n))| {
+            let state = json(&archives[k].0, &n)?;
+            Some((id, first_model(&state), two_halves(&state)))
         })
         .collect();
+    states.sort_by(|a, b| a.0.cmp(&b.0));
+    // Those models and their parents, a generation at a time, read in
+    // parallel.
+    let firsts: Vec<Option<String>> = states.iter().map(|(_, first, _)| first.clone()).collect();
+    let mut raw: HashMap<String, Value> = HashMap::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut wanted: Vec<String> = firsts.iter().flatten().map(|m| key(m)).collect();
+    while !wanted.is_empty() {
+        wanted.sort();
+        wanted.dedup();
+        wanted.retain(|w| seen.insert(w.clone()));
+        let parsed: Vec<(String, Value)> = wanted
+            .par_iter()
+            .filter_map(|w| {
+                let (k, n) = model_files.get(w)?;
+                Some((w.clone(), json(&archives[*k].0, n)?))
+            })
+            .collect();
+        wanted = parsed.iter().filter_map(|(_, v)| v.get("parent").and_then(Value::as_str).map(key)).filter(|p| !seen.contains(p)).collect();
+        raw.extend(parsed);
+    }
+    let models = Models { raw };
 
     let mut blocks: Vec<Block> = states
         .iter()
-        .map(|(id, state)| {
-            let model = first_model(state).map(|m| models.resolve(&m)).unwrap_or_default();
+        .zip(&firsts)
+        .map(|((id, _, tall), first)| {
+            let model = first.as_ref().map(|m| models.resolve(m)).unwrap_or_default();
             let particle = model.textures.get("particle").and_then(|_| model.texture("#particle"));
             let tint = tint_of(id);
             let pick = |dirs: &[&str]| -> (Option<String>, Tint) {
@@ -596,11 +876,6 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
             let (top, top_tint) = pick(&["up"]);
             let (side, side_tint) = pick(&["north", "south", "east", "west"]);
             let (bottom, _) = pick(&["down"]);
-            let color_of = |t: &Option<String>, tint: Tint| {
-                t.as_ref()
-                    .and_then(|k| textures.get(k))
-                    .map_or([128, 128, 128], |tex| tex.mean(tint))
-            };
             // Water and lava have no model: their colour is their texture's.
             let (top, top_tint) = match id.as_str() {
                 "minecraft:water" => (Some("block/water_still".to_owned()), Tint::Water),
@@ -609,20 +884,75 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
             };
             Block {
                 id: id.clone(),
-                name: display_name(id),
-                color: color_of(&top, top_tint),
-                side_color: color_of(&side, side_tint),
+                name: names_en.get(id).cloned().unwrap_or_else(|| display_name(id)),
+                color: [128, 128, 128],
+                side_color: [128, 128, 128],
                 top,
                 side,
                 bottom,
                 top_tint,
                 side_tint,
                 full_cube: model.full_cube,
+                tall: *tall,
                 category: Category::of(id),
             }
         })
         .collect();
+    // The blocks a list gives that no jar has: with the map's colour of
+    // the list, without textures.
+    let known: std::collections::HashSet<&str> = blocks.iter().map(|b| b.id.as_str()).collect();
+    let listed: Vec<Block> = lists
+        .iter()
+        .flat_map(|(_, l)| &l.blocks)
+        .filter(|(id, _)| !known.contains(id.as_str()))
+        .map(|(id, def)| {
+            let c = def.map_color.unwrap_or([128, 128, 128]);
+            let tall = def.property("half").is_some_and(|p| p.values.iter().any(|v| v == "lower") && p.values.iter().any(|v| v == "upper"));
+            Block { id: id.clone(), name: names_en.get(id).cloned().unwrap_or_else(|| display_name(id)), top: None, side: None, bottom: None, top_tint: Tint::None, side_tint: Tint::None, full_cube: def.plain_cube(), tall, color: c, side_color: c, category: Category::of(id) }
+        })
+        .collect();
+    blocks.extend(listed);
     blocks.sort_by(|a, b| a.id.cmp(&b.id));
+    blocks.dedup_by(|a, b| a.id == b.id);
+
+    // The textures the blocks show (block textures, and the items a few
+    // blocks are drawn with), with water, lava and the sky's, decoded in
+    // parallel.
+    let mut needed: Vec<&str> = blocks.iter().flat_map(|b| [&b.top, &b.side, &b.bottom]).flatten().map(String::as_str).collect();
+    needed.extend(["block/water_still", "block/lava_still", "environment/clouds", "environment/sun"]);
+    needed.sort_unstable();
+    needed.dedup();
+    let textures: HashMap<String, Arc<Texture>> = needed
+        .into_par_iter()
+        .filter_map(|key| {
+            let (k, n) = texture_files.get(key)?;
+            let bytes = archives[*k].0.read(n)?.ok()?;
+            let img = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).ok()?.to_rgba8();
+            let (w, h) = img.dimensions();
+            // Animated textures are a strip of square frames.
+            let side = w.min(h);
+            let frame = image::imageops::crop_imm(&img, 0, 0, w, side).to_image();
+            Some((key.to_owned(), Arc::new(Texture { width: w, height: side, rgba: frame.into_raw() })))
+        })
+        .collect();
+    for b in &mut blocks {
+        // A list knows a mod's plants better than their names do, and its
+        // blocks' halves.
+        if let Some(def) = definitions.get(&b.id) {
+            if def.vegetation {
+                b.category = Category::Plants;
+            }
+            if def.property("half").is_some_and(|p| p.values.iter().any(|v| v == "lower") && p.values.iter().any(|v| v == "upper")) {
+                b.tall = true;
+            }
+        }
+        let color_of = |t: &Option<String>, tint: Tint| t.as_ref().and_then(|k| textures.get(k)).map(|tex| tex.mean(tint));
+        // A block without texture takes its colour on the game's maps, when
+        // a list gives it.
+        let fallback = definitions.get(&b.id).and_then(|d| d.map_color).unwrap_or(b.color);
+        b.color = color_of(&b.top, b.top_tint).unwrap_or(fallback);
+        b.side_color = color_of(&b.side, b.side_tint).unwrap_or(fallback);
+    }
     Ok(Catalogue {
         version: version.to_owned(),
         source: path.to_owned(),
@@ -630,6 +960,8 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
         textures,
         mods: mod_infos,
         skipped,
+        definitions,
+        registered,
     })
 }
 
@@ -704,8 +1036,15 @@ pub fn block_terrain(reg: &mut Registry, block: &Block) -> TerrainId {
             mix: Default::default(),
         }]
     };
+    // A mod's block named as a terrain already is (`Granite`) takes its
+    // mod's name after its own, so that a terrain is found by its name.
+    let mut name = block.name.clone();
+    let ns = namespace(&block.id);
+    if ns != "minecraft" && reg.terrains.iter().any(|t| t.name.eq_ignore_ascii_case(&name)) {
+        name = format!("{name} ({})", display_name(ns));
+    }
     reg.terrains.push(TerrainDef {
-        name: block.name.clone(),
+        name,
         group: BLOCK_GROUP.to_owned(),
         color: block.color,
         strata,
@@ -952,6 +1291,161 @@ mod tests {
         let top = reg.terrain(t).strata[0].blocks[0].0;
         assert_eq!(reg.block(top).state, "conquest:old_red_bricks");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Conquest Reforged as its jar is made, in small: a block whose states
+    /// name a model per layer, models built on `block/block` naming the
+    /// game's textures with an empty namespace (`:block/basalt_side`), a
+    /// template of its models among the game's block states, a block file
+    /// the game never registers, its creative tabs and their names, its
+    /// `fabric.mod.json`; beside it its list for WorldPainter and the
+    /// registry's list. Every real block reads with its textures, its
+    /// name and its tab; the template and the stray file are no blocks.
+    #[test]
+    fn conquest_fixture_loads() {
+        let png = |rgb: [u8; 3]| {
+            let mut out = Vec::new();
+            let img = image::RgbaImage::from_pixel(16, 16, image::Rgba([rgb[0], rgb[1], rgb[2], 255]));
+            img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
+            out
+        };
+        let (basalt_side, basalt_top, masonry) = (png([80, 80, 84]), png([60, 60, 64]), png([150, 140, 120]));
+        let game: Vec<(&str, &[u8], bool)> = vec![
+            ("assets/minecraft/blockstates/basalt.json", br#"{"variants":{"axis=y":{"model":"minecraft:block/basalt"}}}"#, true),
+            ("assets/minecraft/models/block/block.json", br#"{"display":{}}"#, true),
+            ("assets/minecraft/models/block/cube.json", br##"{"parent":"block/block","elements":[{"from":[0,0,0],"to":[16,16,16],"faces":{"up":{"texture":"#up"},"north":{"texture":"#north"},"down":{"texture":"#down"}}}]}"##, true),
+            ("assets/minecraft/models/block/cube_all.json", br##"{"parent":"block/cube","textures":{"particle":"#all","up":"#all","north":"#all","down":"#all"}}"##, true),
+            ("assets/minecraft/models/block/basalt.json", br#"{"parent":"block/cube_all","textures":{"all":"block/basalt_side"}}"#, true),
+            ("assets/minecraft/textures/block/basalt_side.png", &basalt_side, false),
+            ("assets/minecraft/textures/block/basalt_top.png", &basalt_top, false),
+        ];
+        let conquest: Vec<(&str, &[u8], bool)> = vec![
+            ("fabric.mod.json", br#"{"schemaVersion":1,"id":"conquest","name":"ConquestReforged Fabric","depends":{"fabricloader":">=0.14.10","minecraft":">=1.20.1"}}"#, true),
+            ("assets/conquest/blockstates/basalt_pillar.json", br#"{"variants":{"layer=1":{"model":"conquest:block/basalt_pillar_2","uvlock":true},"layer=2":{"model":"conquest:block/basalt_pillar_4"}}}"#, true),
+            ("assets/conquest/models/block/basalt_pillar_2.json", br##"{"parent":"block/block","textures":{"texture":":block/basalt_side","top":":block/basalt_top","particle":":block/basalt_side"},"elements":[{"from":[6,0,6],"to":[10,16,10],"faces":{"north":{"texture":"#texture"},"up":{"texture":"#top"}}}]}"##, true),
+            ("assets/conquest/blockstates/worn_dark_lime_mortar_masonry.json", br#"{"variants":{"":{"model":"conquest:block/worn_dark_lime_mortar_masonry"}}}"#, true),
+            ("assets/conquest/models/block/worn_dark_lime_mortar_masonry.json", br#"{"parent":"minecraft:block/cube_all","textures":{"all":"conquest:block/worn_dark_lime_mortar_masonry"}}"#, true),
+            ("assets/conquest/textures/block/worn_dark_lime_mortar_masonry.png", &masonry, false),
+            ("assets/conquest/blockstates/worn_dark_lime_mortar_masonry_slab.json", br#"{"variants":{"layers=1,type=bottom":{"model":"conquest:block/worn_dark_lime_mortar_masonry"}}}"#, true),
+            // Never registered by the game: left in the jar.
+            ("assets/conquest/blockstates/cheese_cut.json", br#"{"variants":{"":{"model":"conquest:block/cheese_cut"}}}"#, true),
+            // A template of its models, among the game's states.
+            ("assets/minecraft/blockstates/parent_cube.json", br#"{"variants":{"":{"model":"minecraft:block/cube_all"}}}"#, true),
+            ("assets/conquest/blockstates/dead_bush_tall.json", br#"{"variants":{"half=lower":{"model":"conquest:block/dead_bush_tall_bottom"},"half=upper":{"model":"conquest:block/dead_bush_tall_top"}}}"#, true),
+            ("assets/conquest/groups/k_stone.txt", b"conquest:worn_dark_lime_mortar_masonry\nminecraft:basalt\n\n", true),
+            ("assets/conquest/groups/aa_advanced_masonry.txt", b"conquest:basalt_pillar\n", true),
+            ("assets/conquest/lang/en_us.json", br#"{"block.conquest.worn_dark_lime_mortar_masonry":"Worn Dark Lime Mortar Masonry","block.conquest.basalt_pillar":"Basalt Pillar","itemGroup.conquest.k_stone":"Stone"}"#, true),
+        ];
+        let dir = std::env::temp_dir().join(format!("massif-assets-conquest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (game_jar, mod_jar) = (dir.join("1.20.1.jar"), dir.join("ConquestReforged-fabric-1.20.1-1.4.1.4.jar"));
+        std::fs::write(&game_jar, zip::tests_support::tiny_zip(&game)).unwrap();
+        std::fs::write(&mod_jar, zip::tests_support::tiny_zip(&conquest)).unwrap();
+        let list = dir.join("conquest_wp.csv");
+        std::fs::write(&list, materials::tests::CONQUEST).unwrap();
+        std::fs::write(dir.join(materials::REGISTRY_LIST), "conquest:basalt_pillar\nconquest:worn_dark_lime_mortar_masonry\nconquest:worn_dark_lime_mortar_masonry_slab\nconquest:worn_dark_lime_mortar_masonry_small_arch\nconquest:dead_bush_tall\nconquest:candle_lantern\n").unwrap();
+        let cat = load_with_mods(&game_jar, "1.20.1", &[mod_jar.clone(), list.clone()]).unwrap();
+
+        let pillar = cat.block("conquest:basalt_pillar").unwrap();
+        assert_eq!(pillar.top.as_deref(), Some("block/basalt_top"), "`:block/…` is the game's");
+        assert_eq!(pillar.side.as_deref(), Some("block/basalt_side"));
+        assert_eq!(pillar.color, [60, 60, 64]);
+        assert!(!pillar.full_cube);
+        let masonry_block = cat.block("conquest:worn_dark_lime_mortar_masonry").unwrap();
+        assert!(masonry_block.full_cube);
+        assert_eq!(masonry_block.name, "Worn Dark Lime Mortar Masonry");
+        assert_eq!(masonry_block.color, [150, 140, 120]);
+        assert!(cat.block("conquest:cheese_cut").is_none(), "not a block of the game");
+        assert!(cat.block("minecraft:parent_cube").is_none(), "a template, not a block");
+        // Blocks of the list without a file in the jar: with their map colour.
+        let lantern = cat.block("conquest:candle_lantern").unwrap();
+        assert_eq!(lantern.color, [128, 128, 128], "no texture, no map colour: grey");
+        assert_eq!(cat.block("conquest:dead_bush_tall").unwrap().category, Category::Plants, "the list says it is a plant");
+        assert!(cat.block("conquest:dead_bush_tall").unwrap().tall, "two halves");
+        assert!(!pillar.tall && !masonry_block.tall);
+        assert_eq!(cat.block("conquest:dead_bush_tall").unwrap().color, [0, 0x7c, 0]);
+        // Only the textures the blocks show are read.
+        assert!(cat.texture("conquest:block/worn_dark_lime_mortar_masonry").is_some());
+        assert_eq!(cat.textures.len(), 3);
+
+        let m = &cat.mods[0];
+        assert_eq!((m.name.as_str(), m.kind, m.minecraft.as_deref()), ("Conquest Reforged", SourceKind::Mod, Some("1.20.1")), "its name without its loader, its words apart");
+        assert_eq!(m.namespaces, ["conquest"]);
+        assert_eq!((m.blocks, m.unregistered), (4, 1));
+        assert_eq!(m.groups.iter().map(|g| g.name.as_str()).collect::<Vec<_>>(), ["Advanced Masonry", "Stone"], "in the order of their files, named by the language file or the file");
+        assert_eq!(m.groups[1].blocks, ["conquest:worn_dark_lime_mortar_masonry", "minecraft:basalt"]);
+        assert_eq!(cat.mods[1].kind, SourceKind::List);
+        assert_eq!(cat.mods[1].blocks, 5);
+        assert_eq!(cat.mod_of("conquest:basalt_pillar").unwrap().name, "Conquest Reforged");
+        assert_eq!(plain_mod_name("Macaw's Bridges"), "Macaw's Bridges");
+        assert_eq!(plain_mod_name("Chipped (Forge)"), "Chipped");
+        assert!(cat.mod_of("minecraft:basalt").is_none());
+
+        // States, by the list and the registry's list.
+        assert_eq!(cat.check_state("conquest:worn_dark_lime_mortar_masonry_slab[layers=3,type=top,waterlogged=false]"), Ok(()));
+        assert!(cat.check_state("conquest:worn_dark_lime_mortar_masonry_slab[layers=0]").is_err());
+        assert_eq!(cat.check_state("conquest:basalt_pillar[layer=2]"), Ok(()), "registered, not in the list: not judged");
+        assert!(matches!(cat.check_state("conquest:cheese_cut"), Err(materials::StateProblem::UnknownBlock(_))));
+        assert_eq!(cat.check_state("minecraft:basalt[axis=x]"), Ok(()));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Conquest Reforged's own instance, where it is installed here
+    /// (`MASSIF_CONQUEST_INSTANCE`, or found among the launchers' folders):
+    /// read with the game it plays, its 17,000 blocks are the registry's,
+    /// each drawn with its textures, sorted in its 36 tabs, their states
+    /// those its list for WorldPainter gives.
+    #[test]
+    fn conquest_reforged_loads() {
+        let found = std::env::var_os("MASSIF_CONQUEST_INSTANCE").map(PathBuf::from).and_then(|d| instance::Instance::read(&d)).or_else(|| instance::find_with_mod("conquest"));
+        let Some(inst) = found else {
+            eprintln!("Conquest Reforged is not installed here: skipping");
+            return;
+        };
+        let version = inst.minecraft.clone().unwrap_or_else(|| "1.20.1".to_owned());
+        let Some(jar) = find_jars().into_iter().find(|j| j.version == version) else {
+            eprintln!("Minecraft {version} is not installed here: skipping");
+            return;
+        };
+        let started = std::time::Instant::now();
+        let cat = load_with_mods(&jar.path, &jar.version, &inst.files()).unwrap();
+        let took = started.elapsed();
+        let conquest: Vec<&Block> = cat.blocks.iter().filter(|b| namespace(&b.id) == "conquest").collect();
+        eprintln!("{} blocks ({} of Conquest Reforged), {} textures, read in {took:?}", cat.blocks.len(), conquest.len(), cat.textures.len());
+        assert!(conquest.len() > 17_000, "{}", conquest.len());
+        let m = cat.mods.iter().find(|m| m.namespaces.iter().any(|n| n == "conquest") && m.kind == SourceKind::Mod).unwrap();
+        assert_eq!(m.minecraft.as_deref(), Some("1.20.1"));
+        assert!(m.groups.len() >= 30, "{} tabs", m.groups.len());
+        // Every block drawn with its own textures.
+        let bare: Vec<&str> = conquest.iter().filter(|b| [&b.top, &b.side].iter().any(|t| t.as_ref().is_none_or(|k| cat.texture(k).is_none()))).map(|b| b.id.as_str()).collect();
+        assert!(bare.is_empty(), "{} blocks without their textures: {:?}", bare.len(), &bare[..bare.len().min(20)]);
+        assert!(conquest.iter().filter(|b| b.full_cube).count() > 1_000);
+        // With its lists: exactly the blocks the game registers.
+        if let Some(ids) = cat.registered.get("conquest") {
+            let ours: std::collections::HashSet<&str> = conquest.iter().map(|b| b.id.as_str()).collect();
+            let missing: Vec<&String> = ids.iter().filter(|id| !ours.contains(id.as_str())).collect();
+            assert!(missing.is_empty(), "{missing:?}");
+            assert_eq!(ours.len(), ids.len(), "none the game does not register");
+            // Every value of every property stays one of the block's when
+            // an object made of it turns or is mirrored.
+            let mut turned = 0;
+            for (id, def) in &cat.definitions {
+                for p in &def.properties {
+                    for v in &p.values {
+                        let state = format!("{id}[{}={v}]", p.name);
+                        assert_eq!(cat.check_state(&state), Ok(()));
+                        for (turn, mirror) in [(1, false), (2, false), (3, false), (0, true), (1, true)] {
+                            let t = massif_core::objects::transform_state(&state, turn, mirror);
+                            assert_eq!(cat.check_state(&t), Ok(()), "{state} turned {turn}, mirrored {mirror}: {t}");
+                            turned += 1;
+                        }
+                    }
+                }
+            }
+            eprintln!("{turned} turned states checked");
+        }
+        assert!(cat.blocks.iter().all(|b| !b.id.starts_with("minecraft:parent_")));
     }
 
     /// The jars of this computer, when there are any (not in CI).

@@ -154,6 +154,9 @@ structure files, painted as layers.
 
 - **WorldPainter import.** `.world` files are read directly, without Java: a
   100 MB world in about a second.
+- **Conquest Reforged and other mods.** Conquest Reforged's 17,000 blocks,
+  in its own creative tabs, read from its instance in one click and exported
+  for 1.20.1, every block state the game's.
 - **Export for the version you play.** From 1.7.10 to 26.3 and whatever is
   installed, each version in the chunk format it reads, worlds up to 2,032
   blocks high.

@@ -518,6 +518,11 @@ fn turn_rail(shape: &str, turn: u8, mirror: bool) -> String {
         return format!("ascending_{}", turn_side(side, turn, mirror));
     }
     let Some((a, b)) = shape.split_once('_') else { return shape.to_owned() };
+    // Only a rail's shape names two sides: a mod's shapes keep theirs
+    // (Conquest Reforged's `three_middle`).
+    if !SIDES.contains(&a) || !SIDES.contains(&b) {
+        return shape.to_owned();
+    }
     let (a, b) = (turn_side(a, turn, mirror), turn_side(b, turn, mirror));
     // Rails are named north or south first, then east or west.
     let first = |s: &str| s == "north" || s == "south";
@@ -568,12 +573,24 @@ pub fn transform_state(state: &str, turn: u8, mirror: bool) -> String {
                     v.into()
                 }
             }
+            // Conquest Reforged's left and right shapes (`two_l`, `edge_r`).
+            "shape" if v.ends_with("_l") || v.ends_with("_r") => {
+                if mirror {
+                    let (stem, side) = v.split_at(v.len() - 1);
+                    format!("{stem}{}", if side == "l" { "r" } else { "l" })
+                } else {
+                    v.into()
+                }
+            }
             "shape" => turn_rail(v, turn, mirror),
             "hinge" | "type" if mirror => match v {
                 "left" => "right".into(),
                 "right" => "left".into(),
                 _ => v.into(),
             },
+            // Conquest Reforged's arches and beams lie north–south or
+            // east–west.
+            "direction" if turn % 2 == 1 && (v == "northsouth" || v == "eastwest") => (if v == "northsouth" { "eastwest" } else { "northsouth" }).into(),
             "orientation" => match v.split_once('_') {
                 Some((a, b)) => format!("{}_{}", turn_side(a, turn, mirror), turn_side(b, turn, mirror)),
                 None => v.into(),
@@ -734,6 +751,15 @@ mod tests {
         assert_eq!(transform_state("minecraft:rail[shape=north_south]", 1, false), "minecraft:rail[shape=east_west]");
         assert_eq!(transform_state("minecraft:rail[shape=ascending_north]", 2, false), "minecraft:rail[shape=ascending_south]");
         assert_eq!(transform_state("minecraft:stone", 3, true), "minecraft:stone");
+        // Conquest Reforged's own properties.
+        assert_eq!(transform_state("conquest:limestone_small_arch[direction=northsouth,waterlogged=false]", 1, false), "conquest:limestone_small_arch[direction=eastwest,waterlogged=false]");
+        assert_eq!(transform_state("conquest:limestone_small_arch[direction=northsouth,waterlogged=false]", 2, false), "conquest:limestone_small_arch[direction=northsouth,waterlogged=false]");
+        assert_eq!(transform_state("conquest:limestone_capital[facing=flat,type=top]", 1, false), "conquest:limestone_capital[facing=flat,type=top]");
+        assert_eq!(transform_state("conquest:limestone_capital[facing=north,type=top]", 1, false), "conquest:limestone_capital[facing=east,type=top]");
+        assert_eq!(transform_state("conquest:oak_beam[shape=three_middle]", 1, false), "conquest:oak_beam[shape=three_middle]");
+        assert_eq!(transform_state("conquest:oak_beam[shape=two_l]", 1, false), "conquest:oak_beam[shape=two_l]");
+        assert_eq!(transform_state("conquest:oak_beam[shape=two_l]", 0, true), "conquest:oak_beam[shape=two_r]");
+        assert_eq!(transform_state("conquest:wall[north=low,east=true,south=false,west=false]", 1, false), "conquest:wall[north=false,east=low,south=true,west=false]");
         // Four turns, or two mirrors, give the block back.
         let s = "minecraft:vine[east=true,north=false,south=true,up=false,west=false]";
         let mut t = s.to_owned();

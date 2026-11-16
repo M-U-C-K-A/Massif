@@ -170,7 +170,8 @@ impl<'a> ExportContext<'a> {
                     continue;
                 }
                 // A tall plant is written in two halves.
-                let tall = is_tall_plant(name);
+                // (A mod's tall plant is given as its lower half.)
+                let tall = is_tall_plant(name) || kept && is_tall_plant(state);
                 let props: Vec<(String, String)> = if kept { block.properties().filter(|(k, _)| !tall || *k != "half").map(|(k, v)| (k.to_owned(), v.to_owned())).collect() } else { Vec::new() };
                 let mut add = |half: Option<&str>, number: Option<(u8, u8)>| {
                     let mut props = props.clone();

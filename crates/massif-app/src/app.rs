@@ -241,6 +241,62 @@ struct ExportForm {
     versions: Vec<(massif_anvil::Target, bool)>,
     /// The heights of the map, to say what a version cuts.
     heights: (i32, i32),
+    /// The mods whose blocks the map uses, to warn of a version or a mod
+    /// that does not match.
+    mods: Vec<ModUse>,
+}
+
+/// The blocks of a mod a map uses.
+#[derive(Debug, Clone, PartialEq)]
+struct ModUse {
+    /// The mod's name, or its namespace when it is not read.
+    name: String,
+    namespace: String,
+    /// How many of the map's blocks are its.
+    blocks: usize,
+    /// The version of the game it is made for, when it is read.
+    minecraft: Option<String>,
+    /// Whether the Blocks panel reads it.
+    loaded: bool,
+    /// Its states the game does not have, by its list of blocks.
+    unknown: Vec<String>,
+}
+
+/// The mods whose blocks a map's terrains, covers and objects use, by
+/// namespace, with what the catalogue knows of them.
+fn mod_uses(reg: &massif_core::registry::Registry, cat: Option<&massif_assets::Catalogue>) -> Vec<ModUse> {
+    let mut states: Vec<&str> = reg.blocks.iter().map(|b| b.state.as_str()).collect();
+    states.extend(reg.covers.iter().filter(|c| !c.removed).flat_map(|c| c.plants.iter().map(|p| p.0.as_str())));
+    states.extend(reg.objects.iter().flat_map(|o| o.palette.iter().map(String::as_str)));
+    states.sort_unstable();
+    states.dedup();
+    let mut out: Vec<ModUse> = Vec::new();
+    for state in states {
+        let ns = massif_assets::namespace(state);
+        if ns == "minecraft" || !state.contains(':') {
+            continue;
+        }
+        let k = match out.iter().position(|u| u.namespace == ns) {
+            Some(k) => k,
+            None => {
+                let info = cat.and_then(|c| c.mod_of(state));
+                out.push(ModUse {
+                    name: info.map_or_else(|| ns.to_owned(), |m| m.name.clone()),
+                    namespace: ns.to_owned(),
+                    blocks: 0,
+                    minecraft: info.and_then(|m| m.minecraft.clone()),
+                    loaded: info.is_some(),
+                    unknown: Vec::new(),
+                });
+                out.len() - 1
+            }
+        };
+        out[k].blocks += 1;
+        if let Some(Err(problem)) = cat.map(|c| c.check_state(state)) {
+            out[k].unknown.push(problem.to_string());
+        }
+    }
+    out
 }
 
 /// The versions the export offers, newest first: every release known, and
@@ -2122,20 +2178,34 @@ impl MassifApp {
         let parent = massif_anvil::default_saves_dir()
             .or_else(|| self.doc.path.as_ref().and_then(|p| p.parent().map(PathBuf::from)))
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-        let unique = massif_anvil::unique_dir(&parent, &self.doc.world.meta.name);
-        let name = unique
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| self.doc.world.meta.name.clone());
         let centre = self.map_center.map_or((0, 0), |c| (c[0].floor() as i32, c[1].floor() as i32));
-        // For the game installed here, the newest; without one, 1.18.2,
-        // which every later version opens.
+        // For the version the map's mods are made for (Conquest Reforged's
+        // 1.20.1), else for the game installed here, the newest; without
+        // one, 1.18.2, which every later version opens.
         let versions = export_versions();
-        let target = versions.iter().find(|(_, installed)| *installed).map_or_else(massif_anvil::Target::default, |(t, _)| t.clone());
+        let mods = mod_uses(&self.doc.world.registry, self.blocks.catalogue.as_deref());
+        let target = mods
+            .iter()
+            .filter_map(|m| m.minecraft.as_deref())
+            .find_map(|v| versions.iter().find(|(t, _)| t.name == v))
+            .or_else(|| versions.iter().find(|(_, installed)| *installed))
+            .map_or_else(massif_anvil::Target::default, |(t, _)| t.clone());
+        // Into the saves of the modpack the map's mods come from.
+        let parent = self
+            .blocks
+            .catalogue
+            .as_ref()
+            .and_then(|c| mods.iter().filter(|m| m.loaded).find_map(|m| c.mods.iter().find(|i| i.name == m.name && i.kind == massif_assets::SourceKind::Mod)))
+            .and_then(|m| m.path.parent().filter(|d| d.file_name().is_some_and(|n| n == "mods")).and_then(|d| d.parent()).map(|d| d.join("saves")))
+            .filter(|d| d.is_dir())
+            .unwrap_or(parent);
+        let unique = massif_anvil::unique_dir(&parent, &self.doc.world.meta.name);
+        let name = unique.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| self.doc.world.meta.name.clone());
         self.dialog = Some(Dialog::Export(ExportForm {
             target,
             versions,
             heights: (self.doc.dimension().min_y, self.doc.dimension().max_y),
+            mods,
             tab: ExportTab::General,
             parent,
             name,
@@ -4752,6 +4822,51 @@ fn row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
     });
 }
 
+/// The mods whose blocks the map uses: the version each is made for, and
+/// what does not match.
+fn export_mods(ui: &mut Ui, form: &mut ExportForm) {
+    let pal = Palette::of(ui);
+    let mut pick: Option<massif_anvil::Target> = None;
+    card(ui, tr!("Mods"), tr!("The map uses blocks of mods: the game needs them, in the version they are made for."), |ui| {
+        for m in &form.mods {
+            // The mod's whole name: longer than the labels of the rows.
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(&m.name).medium());
+                let (text, ok) = match (&m.minecraft, m.loaded) {
+                    (_, false) => (trn!("{n} block · not read in Blocks", "{n} blocks · not read in Blocks", n = m.blocks), false),
+                    (Some(v), true) if *v != form.target.name => (trn!("{n} block · made for Minecraft {v}", "{n} blocks · made for Minecraft {v}", n = m.blocks, v), false),
+                    (Some(v), true) => (trn!("{n} block · made for Minecraft {v}", "{n} blocks · made for Minecraft {v}", n = m.blocks, v), true),
+                    (None, true) => (trn!("{n} block", "{n} blocks", n = m.blocks), true),
+                };
+                ui.label(RichText::new(text).size(11.5).color(if ok { pal.weak } else { pal.danger }));
+            });
+            let say = |ui: &mut Ui, text: String| {
+                ui.add(egui::Label::new(RichText::new(text).size(11.5).color(pal.danger)).wrap());
+            };
+            if form.target.era() == massif_anvil::Era::Numbered {
+                say(ui, tr!("Java {name} numbers its blocks: {mod_name}'s are written as stone.", name = form.target.name, mod_name = m.name));
+            } else if let Some(v) = m.minecraft.as_ref().filter(|v| **v != form.target.name) {
+                say(ui, tr!("{mod_name} is made for Minecraft {v}: in Java {name}, the game may not load its blocks.", mod_name = m.name, v, name = form.target.name));
+                if let Some((t, _)) = form.versions.iter().find(|(t, _)| t.name == *v)
+                    && ui.button(tr!("Export for {v}", v)).clicked()
+                {
+                    pick = Some(t.clone());
+                }
+            }
+            if !m.loaded {
+                say(ui, tr!("Massif has not read the mod of “{namespace}”: its blocks are written by their ids, and only a game with that mod will have them. Add it in Blocks ▸ Mods to check them.", namespace = m.namespace));
+            }
+            if !m.unknown.is_empty() {
+                let first: Vec<&str> = m.unknown.iter().take(3).map(String::as_str).collect();
+                say(ui, trn!("{n} state is none of the game's, by the mod's list: {first}", "{n} states are none of the game's, by the mod's list: {first}", n = m.unknown.len(), first = first.join("; ")));
+            }
+        }
+    });
+    if let Some(t) = pick {
+        form.target = t;
+    }
+}
+
 fn export_general(ui: &mut Ui, form: &mut ExportForm) {
     let pal = Palette::of(ui);
     card(ui, tr!("Where to save it"), tr!("Its folder, and its name in Minecraft."), |ui| {
@@ -4795,6 +4910,9 @@ fn export_general(ui: &mut Ui, form: &mut ExportForm) {
             });
         }
     });
+    if !form.mods.is_empty() {
+        export_mods(ui, form);
+    }
     ui.columns(2, |cols| {
         let (left, right) = cols.split_at_mut(1);
         card(&mut left[0], tr!("Game"), tr!("The rules of the world when it is first played."), |ui| {
@@ -10730,7 +10848,7 @@ mod tests {
             cat.blocks.push(massif_assets::Block { id: id.to_owned(), name: name.to_owned(), color, side_color: color, ..stone.clone() });
         }
         cat.blocks.sort_by(|a, b| a.id.cmp(&b.id));
-        cat.mods = vec![massif_assets::ModInfo { name: "Conquest Reforged".to_owned(), path: jar, namespaces: vec!["conquest".to_owned()], blocks: 2 }];
+        cat.mods = vec![massif_assets::ModInfo { name: "Conquest Reforged".to_owned(), path: jar, namespaces: vec!["conquest".to_owned()], blocks: 2, ..Default::default() }];
         h.state_mut().blocks.catalogue = Some(std::sync::Arc::new(cat.clone()));
         h.run_steps(5);
         h.get_by_label_contains("CONQUEST REFORGED");
@@ -10742,6 +10860,415 @@ mod tests {
         assert_eq!(reg.block(reg.terrain(terrain).strata[0].blocks[0].0).state, "conquest:old_red_bricks");
         if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
             h.render().unwrap().save(dir.join("blocks-mods.png")).unwrap();
+        }
+    }
+
+    /// Conquest Reforged from end to end, where its instance is installed
+    /// here (`MASSIF_CONQUEST_INSTANCE`, or found among the launchers'
+    /// folders) with the version of the game it plays: offered in the
+    /// Blocks panel and read in one click, its tabs shown; a map of hills
+    /// painted with its ground by the automatic paint (its cliffs in beds
+    /// of three limestones), a meadow of a mix and a forest floor of a
+    /// pattern, a plaza paved with a hundred of its blocks, its plants
+    /// grown over its own ground, temples of its shaped blocks around the
+    /// plaza; the export offered for 1.20.1 into its instance's saves,
+    /// without a warning. Renders the panel, the map and the 3D views
+    /// (MASSIF_SNAPSHOT_DIR); keeps the map and its export in
+    /// MASSIF_CONQUEST_WORLD=<dir>, to play.
+    #[test]
+    fn conquest_reforged_from_end_to_end() {
+        use egui_kittest::kittest::Queryable;
+        use massif_core::registry::{Mix, Stratum, TerrainDef, TerrainId};
+        use massif_core::Brush;
+        let found = std::env::var_os("MASSIF_CONQUEST_INSTANCE").map(PathBuf::from).and_then(|d| massif_assets::instance::Instance::read(&d)).or_else(|| massif_assets::instance::find_with_mod("conquest"));
+        let Some(instance) = found else {
+            eprintln!("Conquest Reforged is not installed here: skipping");
+            return;
+        };
+        let jars = massif_assets::find_jars();
+        let Some(game) = jars.iter().find(|j| Some(&j.version) == instance.minecraft.as_ref()).cloned() else {
+            eprintln!("Minecraft {:?} is not installed here: skipping", instance.minecraft);
+            return;
+        };
+        let shots = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let keep = std::env::var_os("MASSIF_CONQUEST_WORLD").map(PathBuf::from);
+        let world = generate(&GenParams { tiles_x: 3, tiles_z: 3, landform: Landform::Mountains, relief: 90.0, seed: 2027, name: "Massif Conquest Test".into(), ..GenParams::default() });
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1600.0, 1000.0))
+            .with_pixels_per_point(std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0))
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_eframe(move |cc| {
+                theme::install(&cc.egui_ctx);
+                let mut app = MassifApp::for_tests(world.clone());
+                app.settings.theme = ThemeChoice::Dark;
+                app
+            });
+        let ctx = h.ctx.clone();
+        let wait_for = |h: &mut egui_kittest::Harness<'_, MassifApp>, what: &str, done: &dyn Fn(&MassifApp) -> bool| {
+            let started = std::time::Instant::now();
+            while !done(h.state()) {
+                assert!(started.elapsed().as_secs() < 120, "{what}: {:?}", h.state().blocks.error);
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        };
+        let has_conquest = |app: &MassifApp| app.blocks.catalogue.as_ref().is_some_and(|c| c.mods.iter().any(|m| m.kind == massif_assets::SourceKind::Mod && m.namespaces.iter().any(|n| n == "conquest")));
+
+        // The game alone: Conquest Reforged, installed here, is offered.
+        h.state_mut().layout.active = 2; // Painting: terrain, blocks, biomes
+        h.state_mut().settings.minecraft_jar = None;
+        h.state_mut().settings.mod_jars.clear();
+        h.state_mut().blocks.load(&ctx, None, Vec::new());
+        wait_for(&mut h, "the game's blocks", &|app| app.blocks.catalogue.is_some() && !app.blocks.is_loading());
+        assert_eq!(h.state().blocks.conquest.as_ref().map(|i| i.dir.clone()), Some(instance.dir.clone()), "the instance is found");
+        h.run_steps(4);
+        if let Some(dir) = &shots {
+            h.render().unwrap().save(dir.join("conquest-offered.png")).unwrap();
+        }
+        // One click: its jar, its list and its packs, over 1.20.1.
+        let before = crate::memory_tests::resident();
+        let started = std::time::Instant::now();
+        h.get_by_label("Use").click();
+        h.run_steps(2);
+        wait_for(&mut h, "Conquest Reforged's blocks", &|app| has_conquest(app) && !app.blocks.is_loading());
+        let took = started.elapsed();
+        let after = crate::memory_tests::resident();
+        let cat = h.state().blocks.catalogue.clone().unwrap();
+        eprintln!("Conquest Reforged read in {took:?}: {} blocks, {} textures; memory {:.0} MB → {:.0} MB (most {:.0} MB)", cat.blocks.len(), cat.textures.len(), before.0, after.0, after.1);
+        assert_eq!(h.state().settings.minecraft_jar.as_ref(), Some(&game.path), "over the version it plays");
+        assert_eq!(h.state().settings.mod_jars, instance.files(), "remembered");
+        assert_eq!(cat.version, game.version);
+        assert!(h.state().blocks.conquest.is_none(), "no longer offered");
+        let conquest = cat.mods.iter().find(|m| m.kind == massif_assets::SourceKind::Mod && m.namespaces.iter().any(|n| n == "conquest")).unwrap().clone();
+        assert_eq!(conquest.name, "Conquest Reforged");
+        // Its tabs, in its order, after the game's blocks; made again as
+        // fast as one types.
+        h.state_mut().blocks.all = true;
+        let started = std::time::Instant::now();
+        let every = h.state_mut().blocks.sections("");
+        eprintln!("{} sections of every shape made in {:?}", every.len(), started.elapsed());
+        assert!(started.elapsed().as_millis() < 250);
+        h.state_mut().blocks.all = false;
+        h.state_mut().blocks.search = "conquest".into();
+        let sections = h.state_mut().blocks.sections("conquest");
+        let titles: Vec<&str> = sections.iter().map(|s| s.title.as_str()).collect();
+        assert!(titles.first().is_some_and(|t| t.starts_with("CONQUEST REFORGED  ·  COBBLE AND BRICK")), "{titles:?}");
+        assert!(titles.len() >= 30, "{} tabs: {titles:?}", titles.len());
+        h.get_by_label_contains("CONQUEST REFORGED  ·  COBBLE AND BRICK");
+        // The Blocks area made as large as the window, to see the tabs.
+        let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        let blocks_area = areas.iter().map(|a| a.0).find(|&id| h.state().layout.current().root.editor_of(id) == Some(EditorKind::Blocks)).unwrap();
+        h.state_mut().layout.toggle_maximize(blocks_area);
+        h.run_steps(6);
+        if let Some(dir) = &shots {
+            h.render().unwrap().save(dir.join("conquest-blocks.png")).unwrap();
+        }
+        // Every shape of a block follows it.
+        h.state_mut().blocks.search = "travertine brick".into();
+        h.state_mut().blocks.all = true;
+        let shapes = h.state_mut().blocks.sections("travertine brick");
+        let shown: Vec<&str> = shapes.iter().flat_map(|s| s.blocks.iter().map(|&i| cat.blocks[i as usize].id.as_str())).collect();
+        assert!(shown.contains(&"conquest:travertine_brick_small_arch") && shown.contains(&"conquest:travertine_brick_capital"), "{shown:?}");
+        h.run_steps(6);
+        if let Some(dir) = &shots {
+            h.render().unwrap().save(dir.join("conquest-shapes.png")).unwrap();
+        }
+        h.state_mut().blocks.search.clear();
+        h.state_mut().blocks.all = false;
+        h.state_mut().layout.toggle_maximize(blocks_area);
+
+        // The map painted with Conquest Reforged's blocks.
+        let block = |id: &str| cat.block(id).unwrap_or_else(|| panic!("{id}")).clone();
+        let (centre, plaza_y) = {
+            let app = h.state_mut();
+            let reg = &mut app.doc.world.registry;
+            let terrain = |reg: &mut massif_core::registry::Registry, id: &str| {
+                let b = block(id);
+                assert!(b.full_cube, "{id} is a whole block");
+                let t = massif_assets::block_terrain(reg, &b);
+                reg.terrain(t).name.clone()
+            };
+            // The automatic paint with Conquest's ground: its grass, forest
+            // floor, sand, silt and gravel, and cliffs in beds of three
+            // limestones.
+            let grass = terrain(reg, "conquest:clover_covered_grass");
+            let forest = terrain(reg, "conquest:taiga_forest_floor");
+            let sand = terrain(reg, "conquest:tan_sand");
+            let silt = terrain(reg, "conquest:dark_silt");
+            let gravel = terrain(reg, "conquest:brown_gravel");
+            let limestones: Vec<massif_core::registry::BlockId> = ["conquest:gray_limestone", "conquest:tan_limestone", "conquest:dark_limestone", "conquest:tan_limestone"]
+                .iter()
+                .map(|id| reg.intern_block(id, block(id).color))
+                .collect();
+            let cliffs = "Limestone Beds".to_owned();
+            reg.terrains.push(TerrainDef {
+                name: cliffs.clone(),
+                group: massif_assets::BLOCK_GROUP.to_owned(),
+                color: block("conquest:gray_limestone").color,
+                strata: vec![Stratum { blocks: limestones.iter().zip([3, 2, 1, 2]).map(|(&b, w)| (b, w)).collect(), depth: (6, 8), mix: Mix::Beds }],
+                submerged_top: None,
+                biome_hint: None,
+            });
+            let mut rules = app.tools.auto.clone();
+            rules.paint.steep = 24.0;
+            for b in &mut rules.paint.biomes {
+                let swap = |name: &str| match name {
+                    "Grass" => grass.clone(),
+                    "Podzol" => forest.clone(),
+                    "Sand" | "Red Sand" => sand.clone(),
+                    "Dirt" | "Mud" | "Clay" => silt.clone(),
+                    "Gravel" => gravel.clone(),
+                    "Stone" | "Calcite" | "Andesite" | "Granite" => cliffs.clone(),
+                    other => other.to_owned(),
+                };
+                b.ground = swap(&b.ground);
+                b.cliffs = swap(&b.cliffs);
+                b.underwater = swap(&b.underwater);
+            }
+            app.doc.auto_biome(&rules);
+            let painted = app.doc.auto_paint(&rules);
+            assert!(painted > 50_000, "{painted} columns painted");
+            let reg = &mut app.doc.world.registry;
+            // A meadow of a mix: grass with patches of stones.
+            let meadow_blocks: Vec<(massif_core::registry::BlockId, u16)> = [("conquest:clover_covered_grass", 6), ("conquest:small_stones", 2), ("conquest:brown_moss", 1)].iter().map(|&(id, w)| (reg.intern_block(id, block(id).color), w)).collect();
+            reg.terrains.push(TerrainDef { name: "Stony Meadow".into(), group: massif_assets::BLOCK_GROUP.into(), color: block("conquest:clover_covered_grass").color, strata: vec![Stratum { blocks: meadow_blocks, depth: (3, 4), mix: Mix::Patches { size: 3.0 } }], submerged_top: None, biome_hint: None });
+            let meadow = TerrainId((reg.terrains.len() - 1) as u16);
+            let floors: Vec<TerrainId> = ["conquest:taiga_forest_floor", "conquest:autumnal_forest_floor", "conquest:mossy_forest_floor_with_roots"].iter().map(|id| massif_assets::block_terrain(reg, &block(id))).collect();
+            // The plaza: a hundred of its whole blocks from its tabs.
+            let mut paving: Vec<String> = Vec::new();
+            for tab in ["Cobble And Brick", "Mosaics Tiles And Floors", "Plaster Stucco And Paint", "Roofing", "Planks And Beams", "Stone", "Sand And Gravel", "Advanced Masonry", "Metal", "Cloth And Fibers"] {
+                let Some(g) = conquest.groups.iter().find(|g| g.name.eq_ignore_ascii_case(tab)) else { continue };
+                let cubes: Vec<&String> = g.blocks.iter().filter(|id| id.starts_with("conquest:") && cat.block(id).is_some_and(|b| b.full_cube)).collect();
+                let step = (cubes.len() / 12).max(1);
+                paving.extend(cubes.into_iter().step_by(step).take(12).cloned());
+            }
+            paving.truncate(120);
+            assert!(paving.len() >= 100, "{} paving blocks", paving.len());
+            let paving: Vec<TerrainId> = paving.iter().map(|id| massif_assets::block_terrain(reg, &block(id))).collect();
+            // Its plants: covers of grasses and flowers, two of them tall.
+            let plants: Vec<u16> = ["conquest:timothy_grass", "conquest:kentucky_bluegrass", "conquest:meadow_fescue", "conquest:common_meadow_grass", "conquest:poppy", "conquest:oxeye_daisy", "conquest:buttercups", "conquest:cornflower", "conquest:tall_lilac", "conquest:peony"]
+                .iter()
+                .filter_map(|id| cat.block(id).cloned())
+                .map(|b| crate::panels::block_cover(reg, &b))
+                .collect();
+            assert!(plants.len() >= 8);
+            let tall: Vec<&str> = reg.covers.iter().flat_map(|c| c.plants.iter().map(|p| p.0.as_str())).filter(|s| s.ends_with("[half=lower]")).collect();
+            assert!(!tall.is_empty(), "a tall plant of the mod, kept as its lower half");
+            // Temples of its shaped blocks, three stones.
+            let temple = |m: &str| {
+                let (w, hgt, l) = (7usize, 7usize, 7usize);
+                let mut palette = vec!["minecraft:air".to_owned()];
+                let mut add = |s: String| {
+                    palette.push(s);
+                    (palette.len() - 1) as u16
+                };
+                let floor = add(format!("conquest:{m}"));
+                let pillar = add(format!("conquest:{m}_pillar[layer=3,waterlogged=false]"));
+                let capital = add(format!("conquest:{m}_capital[facing=flat,type=bottom,waterlogged=false]"));
+                let arch_x = add(format!("conquest:{m}_small_arch[direction=eastwest,waterlogged=false]"));
+                let arch_z = add(format!("conquest:{m}_small_arch[direction=northsouth,waterlogged=false]"));
+                let roof = add(format!("conquest:{m}_slab[layers=4,type=bottom,waterlogged=false]"));
+                let stairs = add(format!("conquest:{m}_stairs[facing=north,half=bottom,shape=straight,waterlogged=false]"));
+                // Not every stone has a sphere.
+                let sphere = cat.block(&format!("conquest:{m}_sphere")).is_some().then(|| add(format!("conquest:{m}_sphere[type=large,waterlogged=false]")));
+                let mut blocks = vec![0u16; w * hgt * l];
+                let at = |x: usize, y: usize, z: usize| x + z * w + y * w * l;
+                for x in 0..w {
+                    for z in 0..l {
+                        blocks[at(x, 0, z)] = floor;
+                        blocks[at(x, 6, z)] = roof;
+                    }
+                }
+                for (x, z) in [(0, 0), (6, 0), (0, 6), (6, 6), (3, 0), (3, 6), (0, 3), (6, 3)] {
+                    for y in 1..4 {
+                        blocks[at(x, y, z)] = pillar;
+                    }
+                    blocks[at(x, 4, z)] = capital;
+                }
+                for x in 1..6 {
+                    for z in [0, 6] {
+                        if blocks[at(x, 4, z)] == 0 {
+                            blocks[at(x, 5, z)] = arch_x;
+                        }
+                    }
+                }
+                for z in 1..6 {
+                    for x in [0, 6] {
+                        if blocks[at(x, 4, z)] == 0 {
+                            blocks[at(x, 5, z)] = arch_z;
+                        }
+                    }
+                }
+                for (x, z) in [(0, 0), (6, 0), (0, 6), (6, 6)] {
+                    blocks[at(x, 5, z)] = capital;
+                }
+                blocks[at(3, 0, 0)] = stairs;
+                if let Some(sphere) = sphere {
+                    blocks[at(3, 1, 3)] = sphere;
+                }
+                for state in &palette[1..] {
+                    assert_eq!(cat.check_state(state), Ok(()), "{state}");
+                }
+                massif_core::objects::ObjectDef::new(&format!("{} temple", block(&format!("conquest:{m}")).name), [w as u16, hgt as u16, l as u16], palette, blocks)
+            };
+            let first = reg.objects.len() as u32;
+            for m in ["travertine_brick", "carved_limestone", "large_limestone_block"] {
+                reg.objects.push(temple(m));
+            }
+            let mut layer = massif_core::objects::ObjectLayerDef::new("Conquest temples", &[first, first + 1, first + 2], reg);
+            layer.spacing = 30;
+            layer.density = 1.0;
+            layer.soil_only = false;
+            let temples = reg.add_object_layer(layer);
+
+            let doc = &mut app.doc;
+            let (lo, hi) = doc.dimension().bounds().unwrap();
+            let t = massif_core::coords::TILE_SIZE;
+            let centre = ((lo.x + hi.x + 1) * t / 2, (lo.z + hi.z + 1) * t / 2);
+            let ground = crate::tools::probe(doc, centre.0, centre.1).map_or(doc.world.meta.sea_level + 8, |p| p.height.round() as i32).max(doc.world.meta.sea_level + 4);
+            let square = |radius: f32| Brush { shape: massif_core::BrushShape::Square, radius, profile: massif_core::Profile::Constant, strength: 1.0, rotation: 0.0, mask: None, filter: None };
+            let disc = |radius: f32| Brush { shape: massif_core::BrushShape::Circle, radius, profile: massif_core::Profile::Constant, strength: 1.0, rotation: 0.0, mask: None, filter: None };
+            doc.history.begin("Conquest", 0);
+            {
+                let mut e = doc.history.edit(&mut doc.world, 0);
+                let (cx, cz) = (centre.0 as f32, centre.1 as f32);
+                // The plaza, level, 12 by 10 squares of 5 blocks.
+                massif_core::ops::set_height(&mut e, &square(40.0), cx, cz, ground as f32, massif_core::ops::Surface::Top);
+                for (k, t) in paving.iter().enumerate() {
+                    let (x, z) = (cx - 33.0 + (k % 12) as f32 * 6.0, cz - 27.0 + (k / 12) as f32 * 6.0);
+                    massif_core::ops::paint_terrain(&mut e, &square(2.5), x, z, *t, 100 + k as u64);
+                }
+                // Temples around it.
+                massif_core::ops::paint_objects(&mut e, &disc(12.0), cx - 70.0, cz, temples, 1);
+                massif_core::ops::paint_objects(&mut e, &disc(12.0), cx + 70.0, cz, temples, 2);
+                massif_core::ops::paint_objects(&mut e, &disc(12.0), cx, cz + 64.0, temples, 3);
+                // A stony meadow to the north, a forest floor of three to the
+                // south-west, the plants over the grass all round.
+                massif_core::ops::paint_terrain(&mut e, &disc(36.0), cx, cz - 110.0, meadow, 7);
+                let sampler = massif_core::pattern::Pattern { scale: 10.0, ..Default::default() }.sampler(&floors.iter().map(|&f| (f, 1.0)).collect::<Vec<_>>());
+                massif_core::ops::paint_pattern(&mut e, &disc(40.0), cx - 110.0, cz + 110.0, 8, &sampler);
+                for (k, c) in plants.iter().enumerate() {
+                    let a = k as f32 / plants.len() as f32 * std::f32::consts::TAU;
+                    massif_core::ops::paint_cover(&mut e, &disc(30.0), cx + a.cos() * 120.0, cz + a.sin() * 120.0, *c, 200 + k as u64);
+                }
+            }
+            doc.commit();
+            app.map_cache.invalidate_all();
+            (centre, ground)
+        };
+
+        // The map, and the land seen in 3D.
+        {
+            let app = h.state_mut();
+            app.layout.active = 0;
+            app.dialog = None;
+        }
+        h.run_steps(4);
+        for view in h.state_mut().maps.values_mut() {
+            view.center = [centre.0 as f64, centre.1 as f64];
+            view.zoom = 2.0;
+        }
+        h.state_mut().view3d.camera = crate::view3d::Camera { target: [centre.0 as f64, plaza_y as f64, centre.1 as f64], yaw: 0.6, pitch: 0.5, distance: 190.0 };
+        let mut frames = 0;
+        while frames < 20 || h.state().view3d.pending() > 0 {
+            h.step();
+            frames += 1;
+            if frames > 3000 {
+                break;
+            }
+        }
+        if let Some(dir) = &shots {
+            h.render().unwrap().save(dir.join("conquest-map.png")).unwrap();
+            // The 3D view as large as the window.
+            let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+            let view = areas.iter().map(|a| a.0).find(|&id| h.state().layout.current().root.editor_of(id) == Some(EditorKind::View3d)).unwrap();
+            h.state_mut().layout.toggle_maximize(view);
+            let mut frames = 0;
+            while frames < 20 || h.state().view3d.pending() > 0 {
+                h.step();
+                frames += 1;
+                if frames > 3000 {
+                    break;
+                }
+            }
+            let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+            image::save_buffer(dir.join("conquest-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+            h.state_mut().layout.toggle_maximize(view);
+        }
+        // The player's view of the plaza, with the game's textures.
+        h.state_mut().layout.active = 4; // 3D Sculpt
+        h.run_steps(4);
+        // The player standing at the north edge of the plaza, looking
+        // across it to the temples south of it (the camera set before the
+        // player's view starts from it).
+        h.state_mut().sculpt3d.camera = crate::view3d::Camera { target: [centre.0 as f64 - 9.5, plaza_y as f64 + 1.0, centre.1 as f64 - 25.5], yaw: (-21.0f32).atan2(-90.0), pitch: 0.12, distance: 20.0 };
+        h.state_mut().tools.sculpt.player = true;
+        h.run_steps(3);
+        let mut frames = 0;
+        while frames < 20 || h.state().sculpt3d.pending() > 0 {
+            h.step();
+            frames += 1;
+            if frames > 3000 {
+                break;
+            }
+        }
+        if let Some(dir) = &shots {
+            let (w, hgt, rgba) = h.state().sculpt3d.read_back().expect("the 3D view rendered");
+            image::save_buffer(dir.join("conquest-player.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+        }
+        h.state_mut().tools.sculpt.player = false;
+
+        // The export: for 1.20.1, into the instance's saves, no warning.
+        h.state_mut().layout.active = 0;
+        h.state_mut().open_export_dialog();
+        h.run_steps(4);
+        let Some(Dialog::Export(form)) = &h.state().dialog else { panic!("the export dialog") };
+        assert_eq!(form.target.name, "1.20.1", "the version Conquest Reforged plays");
+        assert_eq!(form.parent, instance.dir.join("saves"), "its instance's saves");
+        assert_eq!(form.mods.len(), 1, "{:?}", form.mods);
+        let m = &form.mods[0];
+        assert!(m.loaded && m.minecraft.as_deref() == Some("1.20.1") && m.unknown.is_empty(), "{m:?}");
+        assert!(m.blocks >= 150, "{} blocks", m.blocks);
+        let target = form.target.clone();
+        if let Some(dir) = &shots {
+            h.render().unwrap().save(dir.join("conquest-export.png")).unwrap();
+        }
+        // Another version: warned in red, with the way back (the dialog
+        // grows with the warning and settles in a few frames).
+        if let Some(Dialog::Export(form)) = &mut h.state_mut().dialog {
+            form.target = massif_anvil::Target::release("1.21.11").unwrap();
+        }
+        h.run_steps(12);
+        h.get_by_label_contains("is made for Minecraft 1.20.1: in Java 1.21.11");
+        if let Some(dir) = &shots {
+            h.render().unwrap().save(dir.join("conquest-export-warning.png")).unwrap();
+        }
+        h.get_by_label("Export for 1.20.1").click();
+        h.run_steps(2);
+        let Some(Dialog::Export(form)) = &h.state().dialog else { panic!("the export dialog") };
+        assert_eq!(form.target.name, "1.20.1", "put back in one click");
+        h.state_mut().dialog = None;
+        let out = keep.clone().unwrap_or_else(|| std::env::temp_dir().join(format!("massif-conquest-{}", std::process::id())));
+        std::fs::create_dir_all(&out).unwrap();
+        let world_dir = out.join("Massif Conquest Test");
+        let _ = std::fs::remove_dir_all(&world_dir);
+        let options = ExportOptions {
+            level_name: Some("Massif Conquest Test".into()),
+            game_mode: GameMode::Creative,
+            spawn: Some([centre.0, plaza_y + 1, centre.1 + 34]),
+            target,
+            ..ExportOptions::default()
+        };
+        let snapshot = h.state_mut().doc.world.snapshot();
+        let job = Job::export(&ctx, snapshot, world_dir.clone(), options);
+        h.state_mut().jobs.push(job);
+        wait_for(&mut h, "the export", &|app| app.jobs.is_empty());
+        assert!(world_dir.join("level.dat").is_file() && world_dir.join("region").is_dir(), "exported");
+        massif_format::save(&h.state().doc.world, &out.join("Massif Conquest Test.massif")).unwrap();
+        eprintln!("exported to {}", world_dir.display());
+        if keep.is_none() {
+            let _ = std::fs::remove_dir_all(&out);
         }
     }
 
@@ -11490,6 +12017,7 @@ mod tests {
             top_tint: massif_assets::Tint::None,
             side_tint: massif_assets::Tint::None,
             full_cube: false,
+            tall: false,
             color: [200, 40, 30],
             side_color: [200, 40, 30],
             category: massif_assets::Category::Plants,

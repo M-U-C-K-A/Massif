@@ -127,11 +127,12 @@ Each change of the selection is a step to undo. The selection is saved in the ma
 ## Terrains and biomes
 **Paint** gives the ground a terrain: pick it in the Terrain palette. **Biome** paints biomes the same way: pick one in the Biomes palette. The right button paints back what the height calls for (terrains) or the automatic biome (biomes).
 
-## Blocks from mods
+## Conquest Reforged and other mods
 
-- **Blocks ▸ Mods ▸ Add mods…** reads the jars of mods with blocks (Conquest Reforged, Chipped, Macaw's…) from the `mods` folder of your instance.
-- Their blocks show in sections named after each mod and paint like the game's; the export writes them by their own ids, for the game with the same mods.
-- Click a mod's chip to take it out.
+- Where Conquest Reforged is installed, the Blocks panel offers it: **Use** reads its instance in one step, its mod, its list of blocks for WorldPainter (`conquest_wp.csv`) and its resource packs, over Minecraft 1.20.1, the version it plays.
+- **Blocks ▸ Mods ▸ Instance…** reads any modpack's instance the same way; **Add mods…** takes jars of mods with blocks (Conquest Reforged, Chipped, Macaw's…), resource packs (`.zip`) and lists of blocks made for WorldPainter (`.csv`) one by one. Click a chip to take it out.
+- A mod's blocks show in its own creative tabs (Conquest Reforged's 36), with their textures; **All shapes** adds each block's slabs, stairs, arches and other shapes after it. A whole block paints as a terrain, any other as a ground cover; tall plants grow in two halves, and plants grow on the mod's own grass, moss and soils.
+- **Export** picks the version the mod is made for (1.20.1 for Conquest Reforged) and its instance's saves, and warns in red when the version or the mod does not match. Blocks are written by their own ids and states: open the world with the same mods in the game.
 
 ## Automatic biomes and paint
 - **Auto biome** reads the land and gives it biomes: water, rivers and beaches, lowland, hills, mountains, peaks, cliffs, from its water, height, slope and ground. Sand at the water's edge is a beach; sand far from the water is a desert only where sand is all around, not a patch in a plain.

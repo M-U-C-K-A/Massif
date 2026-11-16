@@ -1177,15 +1177,76 @@ fraction of a second, every time Massif starts.
   dirt, as in the game; other blocks a few deep over the natural rock) and
   paints it. Clicking any other block (a flower, grass, a carpet, coral…)
   makes it a ground cover that grows it, and paints that.
-- **Mods** in the Blocks panel adds the blocks of mods: **Add mods…** reads
-  the jars chosen in the `mods` folder of an instance (Conquest Reforged,
-  Chipped, Macaw's and the like; Forge, NeoForge, Fabric or Quilt alike).
-  Each mod's blocks show in sections of their own, under its name, and
-  paint like the game's; the export writes them by their own ids
-  (`conquest:old_red_bricks`), so open the world with the same mods in the
-  game. A chip per mod takes it out again; the mods are remembered. Before
-  Minecraft 1.13, where blocks are numbered, a mod's block is written as
-  stone.
+- **Mods** in the Blocks panel adds the blocks of mods, Conquest Reforged's
+  among them: see [Conquest Reforged and other mods](#conquest-reforged-and-other-mods).
+
+## Conquest Reforged and other mods
+
+Massif paints with the blocks of mods as with the game's: Conquest
+Reforged's 17,000 blocks, Chipped, Macaw's and the like, made for Forge,
+NeoForge, Fabric or Quilt.
+
+**In one step, from the modpack's instance.** Where Conquest Reforged is
+installed (CurseForge, Prism, MultiMC, Modrinth or the official launcher, on
+any drive), the Blocks panel says so, and **Use** reads its instance.
+**Instance…** reads any other modpack: choose its folder (the one with
+`mods` in it, or the instance's own). Reading an instance:
+
+- reads its mods that have blocks (the others, Sodium, Iris and the like,
+  are left out), its list of blocks made for WorldPainter (see below), and
+  the resource packs it has turned on in the game;
+- reads them over the version of the game the instance plays (Minecraft
+  1.20.1 for Conquest Reforged's), when that version is installed here;
+  otherwise over the version read now, and the panel says so.
+
+**One file at a time.** **Add mods…** takes the jars of mods (from the
+`mods` folder of an instance), resource packs (`.zip`, read after the mods:
+a pack's textures replace its mod's) and lists of blocks for WorldPainter
+(`.csv`). Each shows as a chip; clicking it takes it out. They are
+remembered, and read again each time Massif starts.
+
+**The blocks.** A mod's blocks come after the game's, in its own creative
+tabs when it gives them (Conquest Reforged's 36: Cobble and Brick, Advanced
+Masonry, Columns, Roofing…), with their real textures and names, else by
+family. The tabs list each block once; **All shapes** adds every shape of a
+block after it: its slabs, stairs, arches, capitals, vertical slabs… A whole
+block becomes a terrain and any other (a plant, a shape) a ground cover, as
+the game's do. The terrains of a mod mix, lay in patterns and beds, and
+serve the automatic paint like any other. A mod's tall plants (Conquest
+Reforged's lilacs, peonies…) grow in their two halves, and its plants grow
+on its own ground: its grass, moss, forest floors, dirts, soils, silts,
+muds and peat count as soil.
+
+**Conquest Reforged's list for WorldPainter.** Conquest Reforged writes
+`conquest_wp.csv` for WorldPainter (which reads it from the `materials`
+folder of its settings) and, beside it, the list of every block the game
+registers (`blocks-pls.txt`). Massif reads both, from the instance or from
+WorldPainter's folder, so a WorldPainter user finds the same palette: the
+list gives every property of every block and the values it takes; the
+registry's list tells the real blocks from the 79 block files of the jar
+the game never registers, which Massif leaves out. Objects (schematics)
+made of Conquest's shaped blocks keep their states valid when they are
+turned or mirrored: an arch lying north–south turns east–west, left and
+right shapes swap in a mirror.
+
+**Exporting for the mod.** A mod is made for one version of the game:
+Conquest Reforged's jar for Minecraft 1.20.1. When the map uses a mod's
+blocks, **Export** picks that version and the instance's `saves` folder,
+and lists each mod under **Mods** with how many of its blocks the map
+uses. It warns, in red, when another version is chosen (the game may not
+load the mod's blocks; **Export for 1.20.1** puts it back), when a block
+comes from a mod Massif has not read, and when a state is none of the
+game's by the mod's list. Blocks are written by their own ids and states
+(`conquest:travertine_brick_small_arch[direction=eastwest,waterlogged=false]`),
+so open the world with the same mods in the game. Before Minecraft 1.13,
+where blocks are numbered, a mod's blocks are written as stone.
+
+**Checked against the game.** A map painted with 150 of Conquest
+Reforged's blocks (terrains, mixes, patterns, plants, and objects turned
+every way) is exported for 1.20.1 and read back with an independent reader:
+every block state written is one of the 726,881 the game registers.
+Conquest Reforged's 222 MB jar is read with Minecraft 1.20.1 in about half
+a second, and its blocks take about 70 MB of memory.
 
 ## 3D Sculpt
 

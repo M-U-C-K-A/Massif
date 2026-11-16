@@ -3,7 +3,8 @@
 //! textures, and paintable on the map.
 
 use egui::{ColorImage, TextureHandle, TextureOptions};
-use massif_assets::{Block, Catalogue, Jar};
+use massif_assets::instance::Instance;
+use massif_assets::{Block, Catalogue, Jar, SourceKind};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -12,7 +13,7 @@ use std::sync::mpsc::{Receiver, channel};
 /// Pixels of the icons (drawn at half that in points, for sharp edges).
 const ICON: usize = 48;
 
-type Loaded = (Vec<Jar>, Result<Catalogue, String>);
+type Loaded = (Vec<Jar>, Result<Catalogue, String>, Option<Instance>);
 
 #[derive(Default)]
 pub struct BlockLibrary {
@@ -27,6 +28,22 @@ pub struct BlockLibrary {
     pub search: String,
     /// Show the blocks that are not whole cubes (flowers, torches…).
     pub all: bool,
+    /// Conquest Reforged's instance, when one is installed here and its
+    /// blocks are not read yet: offered in one click.
+    pub conquest: Option<Instance>,
+    /// What reading an instance left to say (the version of the game it
+    /// plays is not installed…).
+    pub notice: Option<String>,
+    /// The sections the panel shows, for the catalogue, search and shapes
+    /// they were made for.
+    sections: Option<(usize, String, bool, Arc<Vec<Section>>)>,
+}
+
+/// A section of the Blocks panel: a title and its blocks, by their index in
+/// the catalogue.
+pub struct Section {
+    pub title: String,
+    pub blocks: Vec<u32>,
 }
 
 impl BlockLibrary {
@@ -58,7 +75,11 @@ impl BlockLibrary {
                 Some(j) => crate::jobs::in_loading_pool(|| massif_assets::load_with_mods(&j.path, &j.version, &mods)).map_err(|e| format!("{}: {e}", j.path.display())),
                 None => Err(tr!("No Minecraft installation was found. Choose the game's jar (versions/<version>/<version>.jar).").to_owned()),
             };
-            let _ = tx.send((jars, result));
+            // Conquest Reforged installed here, to offer while its blocks
+            // are not read.
+            let has_conquest = result.as_ref().is_ok_and(|c| c.mods.iter().any(|m| m.kind == SourceKind::Mod && m.namespaces.iter().any(|n| n == "conquest")));
+            let conquest = if has_conquest { None } else { massif_assets::instance::find_with_mod("conquest") };
+            let _ = tx.send((jars, result, conquest));
             ctx.request_repaint();
         });
         self.pending = Some(rx);
@@ -67,14 +88,16 @@ impl BlockLibrary {
     /// Take the result of a load. Returns whether a catalogue arrived.
     pub fn poll(&mut self) -> bool {
         let Some(rx) = &self.pending else { return false };
-        let Ok((jars, result)) = rx.try_recv() else { return false };
+        let Ok((jars, result, conquest)) = rx.try_recv() else { return false };
         self.pending = None;
         self.jars = jars;
+        self.conquest = conquest;
         match result {
             Ok(cat) => {
                 self.catalogue = Some(Arc::new(cat));
                 self.error = None;
                 self.icons.clear();
+                self.sections = None;
                 self.applied = None;
                 true
             }
@@ -83,6 +106,49 @@ impl BlockLibrary {
                 false
             }
         }
+    }
+
+    /// Read a modpack's instance: its mods with blocks, their lists of
+    /// blocks and its resource packs, over the version of the game it plays
+    /// when that is installed here (else over the game read now, said in
+    /// `notice`). `jar` and `mods` are the settings that remember them.
+    pub fn use_instance(&mut self, ctx: &egui::Context, instance: &Instance, jar: &mut Option<PathBuf>, mods: &mut Vec<PathBuf>) {
+        let jars = if self.jars.is_empty() { massif_assets::find_jars() } else { self.jars.clone() };
+        self.notice = None;
+        if let Some(version) = &instance.minecraft {
+            match jars.iter().find(|j| j.version == *version) {
+                Some(j) => *jar = Some(j.path.clone()),
+                None => {
+                    let current = self.catalogue.as_ref().map(|c| c.version.clone()).or_else(|| jars.first().map(|j| j.version.clone())).unwrap_or_default();
+                    self.notice = Some(tr!("{instance} plays Minecraft {version}, which is not installed here: its blocks are read with Minecraft {current}'s. Install {version} with the launcher to read the game's blocks of that version.", instance = instance.name, version, current));
+                }
+            }
+        }
+        *mods = instance.files();
+        if instance.mods.is_empty() {
+            self.notice = Some(tr!("{instance} has no mod with blocks.", instance = instance.name));
+        }
+        self.conquest = None;
+        self.load(ctx, jar.clone(), mods.clone());
+    }
+
+    /// The panel's sections, made again only when the catalogue, the search
+    /// or the shapes shown change: the game's blocks by category, then each
+    /// mod's, by its creative tabs when it gives them (Conquest Reforged's
+    /// 36), else by category.
+    pub fn sections(&mut self, needle: &str) -> Arc<Vec<Section>> {
+        let Some(cat) = self.catalogue.clone() else { return Arc::default() };
+        let key = Arc::as_ptr(&cat) as usize;
+        if let Some((k, n, all, sections)) = &self.sections
+            && *k == key
+            && n == needle
+            && *all == self.all
+        {
+            return sections.clone();
+        }
+        let sections = Arc::new(make_sections(&cat, needle, self.all));
+        self.sections = Some((key, needle.to_owned(), self.all, sections.clone()));
+        sections
     }
 
     /// The icon of a block, made the first time.
@@ -103,4 +169,89 @@ impl BlockLibrary {
         self.icons.insert(block.id.clone(), texture);
         Some(id)
     }
+}
+
+/// The sections of the Blocks panel (see [`BlockLibrary::sections`]).
+/// `needle` is the search, lowercase; `all` shows every shape.
+fn make_sections(cat: &Catalogue, needle: &str, all: bool) -> Vec<Section> {
+    use massif_assets::{Category, namespace};
+    let matches = |b: &Block, source: Option<&str>| needle.is_empty() || b.name.to_lowercase().contains(needle) || b.id.contains(needle) || source.is_some_and(|s| s.to_lowercase().contains(needle));
+    let index: HashMap<&str, u32> = cat.blocks.iter().enumerate().map(|(i, b)| (b.id.as_str(), i as u32)).collect();
+    let mods: Vec<&massif_assets::ModInfo> = cat.mods.iter().filter(|m| m.kind == SourceKind::Mod && m.blocks > 0).collect();
+    let of_mods: Vec<&str> = mods.iter().flat_map(|m| m.namespaces.iter().map(String::as_str)).filter(|ns| *ns != "minecraft").collect();
+    let mut out = Vec::new();
+    let by_category = |out: &mut Vec<Section>, source: Option<&str>, filter: &dyn Fn(&Block) -> bool| {
+        for category in Category::ALL {
+            let blocks: Vec<u32> = cat
+                .blocks
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| b.category == category && (all || b.full_cube) && filter(b) && matches(b, source))
+                .map(|(i, _)| i as u32)
+                .collect();
+            if blocks.is_empty() {
+                continue;
+            }
+            let category = crate::i18n::tr_name(category.label()).to_uppercase();
+            let title = match source {
+                Some(name) => format!("{}  ·  {category}  ·  {}", name.to_uppercase(), blocks.len()),
+                None => format!("{category}  ·  {}", blocks.len()),
+            };
+            out.push(Section { title, blocks });
+        }
+    };
+    by_category(&mut out, None, &|b| !of_mods.contains(&namespace(&b.id)));
+    for m in mods {
+        let spaces: Vec<&str> = m.namespaces.iter().map(String::as_str).filter(|ns| *ns != "minecraft").collect();
+        let of_mod = |b: &Block| spaces.contains(&namespace(&b.id));
+        if m.groups.is_empty() {
+            by_category(&mut out, Some(&m.name), &of_mod);
+            continue;
+        }
+        // The mod's tabs show its blocks (and a few of the game's) as the
+        // game does; the shapes of a block (its slabs, stairs, arches…),
+        // which the tabs leave out, follow it when every shape is shown.
+        let members: HashMap<&str, &str> = m.groups.iter().flat_map(|g| g.blocks.iter()).map(|id| (id.rsplit(':').next().unwrap_or(id), id.as_str())).collect();
+        let listed: std::collections::HashSet<&str> = m.groups.iter().flat_map(|g| g.blocks.iter().map(String::as_str)).collect();
+        let mut shapes: HashMap<&str, Vec<u32>> = HashMap::new();
+        let mut loose: Vec<u32> = Vec::new();
+        for (i, b) in cat.blocks.iter().enumerate() {
+            if !of_mod(b) || listed.contains(b.id.as_str()) {
+                continue;
+            }
+            let path = b.id.rsplit(':').next().unwrap_or(&b.id);
+            // The longest block of the tabs whose name starts its own.
+            let base = path.char_indices().rev().filter(|&(_, c)| c == '_').find_map(|(at, _)| members.get(&path[..at]).copied());
+            match base {
+                Some(base) => shapes.entry(base).or_default().push(i as u32),
+                None => loose.push(i as u32),
+            }
+        }
+        let name = m.name.to_uppercase();
+        let mut shown = std::collections::HashSet::new();
+        for g in &m.groups {
+            let mut blocks = Vec::new();
+            for id in &g.blocks {
+                let Some(&i) = index.get(id.as_str()) else { continue };
+                let b = &cat.blocks[i as usize];
+                let listed = shown.insert((i, true));
+                if matches(b, Some(&m.name)) || all && shapes.get(id.as_str()).is_some_and(|s| s.iter().any(|&k| matches(&cat.blocks[k as usize], Some(&m.name)))) {
+                    blocks.push(i);
+                }
+                if all && listed && let Some(s) = shapes.get(id.as_str()) {
+                    blocks.extend(s.iter().copied().filter(|&k| matches(&cat.blocks[k as usize], Some(&m.name))));
+                }
+            }
+            if !blocks.is_empty() {
+                out.push(Section { title: format!("{name}  ·  {}  ·  {}", g.name.to_uppercase(), blocks.len()), blocks });
+            }
+        }
+        if all {
+            let blocks: Vec<u32> = loose.into_iter().filter(|&i| matches(&cat.blocks[i as usize], Some(&m.name))).collect();
+            if !blocks.is_empty() {
+                out.push(Section { title: format!("{name}  ·  {}  ·  {}", crate::i18n::tr_name(Category::Other.label()).to_uppercase(), blocks.len()), blocks });
+            }
+        }
+    }
+    out
 }
