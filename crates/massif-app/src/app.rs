@@ -4605,6 +4605,7 @@ impl eframe::App for MassifApp {
         // Until the first frame is shown, startup.log follows each step.
         crate::startup::frame_begins(ui.ctx(), frame);
         self.dev.begin();
+        self.graph.keep_tab(ui.ctx());
         // GitHub's answer about new versions, once it came.
         self.updates.poll();
         // A panic in the frame is stopped here, the map kept (see
@@ -9857,6 +9858,76 @@ mod tests {
     /// selects several nodes, dragging one moves them all, ⌘D duplicates
     /// them, Delete removes them, ⌘Z takes it all back step by step; the
     /// wheel zooms; copied nodes paste with their wires.
+    /// The node library: Tab opens it at the pointer, typing finds nodes,
+    /// ↓ and Enter add the second one found; it stays in the window by an
+    /// edge, and lists the node added last first. Renders it with
+    /// MASSIF_SNAPSHOT_DIR, in both themes, at a normal and a small size.
+    #[test]
+    fn graph_library_searches_and_takes_keys() {
+        use massif_core::graph::Template;
+        crate::i18n::set_language(crate::i18n::Language::English);
+        for theme in [ThemeChoice::Dark, ThemeChoice::Light] {
+            let mut h = harness(theme);
+            let name = if theme == ThemeChoice::Dark { "dark" } else { "light" };
+            h.state_mut().layout.activate(7);
+            h.run_steps(2);
+            {
+                let app = h.state_mut();
+                app.graph.use_template(&mut app.doc, Template::Alpine);
+            }
+            h.run_steps(8);
+            let nodes = |h: &egui_kittest::Harness<'_, MassifApp>| h.state().doc.world.meta.graph.clone().unwrap().nodes;
+            let count = nodes(&h).len();
+            let canvas = h.state().graph.canvas_rect();
+            h.event(egui::Event::PointerMoved(canvas.center()));
+            h.step();
+            h.key_press(Key::Tab);
+            h.run_steps(3);
+            let (rect, pick) = h.state().graph.library_state().expect("Tab opens the library");
+            assert!(rect.width() >= 420.0 && rect.height() >= 380.0, "a roomy picker: {rect:?}");
+            assert!(pick.is_some(), "a row is chosen");
+            if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+                h.render().unwrap().save(dir.join(format!("graph-library-{name}.png"))).unwrap();
+            }
+            h.event(egui::Event::Text("erosion".into()));
+            h.run_steps(3);
+            assert_eq!(h.state().graph.library_state().unwrap().1, Some("Erosion"), "the best match first");
+            h.key_press(Key::ArrowDown);
+            h.run_steps(2);
+            assert_eq!(h.state().graph.library_state().unwrap().1, Some("Thermal erosion"), "↓ chooses the next");
+            if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+                h.render().unwrap().save(dir.join(format!("graph-library-search-{name}.png"))).unwrap();
+            }
+            h.key_press(Key::ArrowUp);
+            h.key_press(Key::ArrowDown);
+            h.key_press(Key::Enter);
+            h.run_steps(3);
+            assert!(h.state().graph.library_state().is_none(), "Enter closes it");
+            let all = nodes(&h);
+            assert_eq!(all.len(), count + 1, "Enter adds a node");
+            assert_eq!(all.last().unwrap().kind.label(), "Thermal erosion");
+            // A small window, opened near its bottom: inside it, the node added last first.
+            h.set_size(vec2(760.0, 520.0));
+            h.run_steps(4);
+            let window = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(760.0, 520.0));
+            let canvas = h.state().graph.canvas_rect().intersect(window);
+            // (The panel's right part is cut by the small window: by its bottom.)
+            h.event(egui::Event::PointerMoved(canvas.left_bottom() + vec2(120.0, -50.0)));
+            h.step();
+            h.key_press(Key::Tab);
+            h.run_steps(3);
+            let (rect, pick) = h.state().graph.library_state().expect("open again");
+            assert!(window.contains_rect(rect), "inside the window: {rect:?}");
+            assert_eq!(pick, Some("Thermal erosion"), "the node added last comes first");
+            if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+                h.render().unwrap().save(dir.join(format!("graph-library-small-{name}.png"))).unwrap();
+            }
+            h.key_press(Key::Escape);
+            h.run_steps(2);
+            assert!(h.state().graph.library_state().is_none(), "Esc closes it");
+        }
+    }
+
     #[test]
     fn graph_canvas_selects_moves_and_undoes() {
         use massif_core::graph::Template;

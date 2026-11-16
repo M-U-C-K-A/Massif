@@ -361,6 +361,14 @@ pub fn tr_name(name: &str) -> &str {
     }
 }
 
+/// A name as one language has it, whatever the language shown: for searches
+/// that find a name in any of them. `None` when that language lacks it.
+pub fn tr_name_in(language: Language, name: &str) -> Option<&'static str> {
+    match catalog(language.resolve())?.get(name)? {
+        Entry::One(s) | Entry::Plural { other: s, .. } => Some(s),
+    }
+}
+
 /// Whether a count takes the singular in the language shown.
 fn is_one(language: Language, n: f64) -> bool {
     match language {

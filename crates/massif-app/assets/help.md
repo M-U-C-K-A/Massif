@@ -198,7 +198,7 @@ Water slows you and lets you swim, and under it the world turns blue and dim, as
 
 # Terrain graphs
 ## Nodes
-The **Terrain** side builds land from nodes, as in Gaea: generators (mountains, dunes, noise…), filters (erosion, rivers, lakes, terraces…), masks and outputs. Press `Tab` to add a node, drag from an output to an input to link them. `V` views the selected node in the viewport, `V` again goes back to the graph's output.
+The **Terrain** side builds land from nodes, as in Gaea: generators (mountains, dunes, noise…), filters (erosion, rivers, lakes, terraces…), masks and outputs. Press `Tab` to add a node: type part of its name (in any language, or its letters in order), choose with ↑ ↓ and add it with Enter; the nodes added last come first. Drag from an output to an input to link them. `V` views the selected node in the viewport, `V` again goes back to the graph's output.
 
 ## The viewport
 The viewport shows the graph's output in 3D, with its sun, clouds, haze and sea (**Render**). When nothing feeds the Height output, it says so: **Start from this map** adds a Map node, to work from the map that is open.

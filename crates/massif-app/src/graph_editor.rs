@@ -25,7 +25,7 @@ use crate::blocks::BlockLibrary;
 use crate::doc::Document;
 use crate::terrain_view::{MAX_SLABS, RenderSettings, Slab, TerrainView, ViewData, occlusion};
 use crate::theme::{self, Icon, Palette, RichTextExt};
-use egui::{Color32, ColorImage, Key, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, Vec2, pos2, vec2};
+use egui::{Color32, ColorImage, Key, Modifiers, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, Vec2, pos2, vec2};
 use massif_core::graph::{
     AutoPalette, Bend, BlockPalette, CellStyle, Climate, ClimateTable, ColorField, CombineOp,
     EvalCache, Evaluation, Extent, Family, Field, GradientPreset, Graph, GraphError, GroundMap,
@@ -589,6 +589,167 @@ struct Library {
     /// A wire dropped on empty space: the new node gets it.
     from: Option<(NodeId, u8)>,
     focus: bool,
+    /// The row the keys move and Enter adds, in the order shown.
+    selected: usize,
+    /// Scroll the selected row into view (the keys moved it).
+    scroll: bool,
+}
+
+/// The library's width, and its list's height: a dozen rows, then a scroll.
+const LIBRARY_WIDTH: f32 = 460.0;
+const LIBRARY_LIST: f32 = 340.0;
+const LIBRARY_ROW: f32 = 26.0;
+const LIBRARY_PAD: f32 = 10.0;
+/// The lines of the description under the list.
+const LIBRARY_ABOUT: f32 = 32.0;
+/// All but the list: the margins, the field, the description and the keys.
+const LIBRARY_CHROME: f32 = 2.0 * LIBRARY_PAD + 30.0 + 6.0 + 13.0 + LIBRARY_ABOUT + 16.0 + 14.0;
+/// How many nodes added last the library remembers.
+const LIBRARY_RECENT: usize = 5;
+
+/// A heading of the library and its nodes, in the order shown.
+#[derive(Debug)]
+struct LibrarySection {
+    title: String,
+    family: Option<Family>,
+    kinds: Vec<NodeKind>,
+}
+
+/// The library's sections for a query. With nothing typed, the nodes added
+/// last, then every node by family; with a query, the nodes it finds by
+/// family, the family of the best first and the best first in each. With a
+/// wire in hand, only nodes that take it.
+fn library_sections(query: &str, wanted: Option<PortType>, recent: &[&'static str]) -> Vec<LibrarySection> {
+    let takes = |k: &NodeKind| match wanted {
+        None => true,
+        Some(PortType::Color) => k.inputs().iter().any(|i| i.1 == PortType::Color),
+        Some(_) => k.inputs().iter().any(|i| i.1 != PortType::Color),
+    };
+    let kinds: Vec<NodeKind> = NodeKind::catalogue().into_iter().filter(|k| takes(k)).collect();
+    let mut sections: Vec<LibrarySection> = Vec::new();
+    let put = |family: Family, k: NodeKind, sections: &mut Vec<LibrarySection>| match sections.iter_mut().find(|s| s.family == Some(family)) {
+        Some(s) => s.kinds.push(k),
+        None => sections.push(LibrarySection {
+            title: crate::i18n::tr_name(family.label()).to_owned(),
+            family: Some(family),
+            kinds: vec![k],
+        }),
+    };
+    if query.trim().is_empty() {
+        let last: Vec<NodeKind> = recent.iter().filter_map(|l| kinds.iter().find(|k| k.label() == *l).cloned()).collect();
+        if !last.is_empty() {
+            sections.push(LibrarySection {
+                title: tr!("Recent").to_owned(),
+                family: None,
+                kinds: last,
+            });
+        }
+        for family in Family::ALL {
+            for k in kinds.iter().filter(|k| k.family() == family) {
+                put(family, k.clone(), &mut sections);
+            }
+        }
+    } else {
+        for (k, _) in search_nodes(query, &kinds) {
+            put(k.family(), k, &mut sections);
+        }
+    }
+    sections
+}
+
+/// The nodes a query finds, best first: by their name in the language shown,
+/// in English or in another language Massif speaks, by the letters of the
+/// name in order (`htmp` finds Heightmap), then by family or description.
+fn search_nodes(query: &str, kinds: &[NodeKind]) -> Vec<(NodeKind, i32)> {
+    use crate::i18n::{Language, tr_name, tr_name_in};
+    let q = fold(query.trim());
+    let mut found: Vec<(NodeKind, i32)> = kinds
+        .iter()
+        .filter_map(|k| {
+            let label = k.label();
+            let shown = fold(tr_name(label));
+            let mut best = [shown.as_str(), &fold(label)].iter().filter_map(|name| match_score(&q, name)).max();
+            for language in Language::ALL.into_iter().skip(1) {
+                if let Some(s) = tr_name_in(language, label).and_then(|name| match_score(&q, &fold(name))) {
+                    best = best.max(Some(s - 50));
+                }
+            }
+            let family = k.family().label();
+            if fold(tr_name(family)).contains(&q) || fold(family).contains(&q) {
+                best = best.max(Some(250));
+            }
+            if q.chars().count() >= 3 && (fold(tr_name(k.description())).contains(&q) || fold(k.description()).contains(&q)) {
+                best = best.max(Some(150));
+            }
+            best.map(|s| (k.clone(), s))
+        })
+        .collect();
+    // Stable: equal scores keep the catalogue's order.
+    found.sort_by_key(|(_, s)| -s);
+    found
+}
+
+/// A text folded for searching: lower case, without accents.
+fn fold(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars().flat_map(char::to_lowercase) {
+        match c {
+            'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' => out.push('a'),
+            'ç' => out.push('c'),
+            'è' | 'é' | 'ê' | 'ë' => out.push('e'),
+            'ì' | 'í' | 'î' | 'ï' => out.push('i'),
+            'ñ' => out.push('n'),
+            'ò' | 'ó' | 'ô' | 'õ' | 'ö' => out.push('o'),
+            'ù' | 'ú' | 'û' | 'ü' => out.push('u'),
+            'œ' => out.push_str("oe"),
+            'æ' => out.push_str("ae"),
+            'ß' => out.push_str("ss"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// How well a folded query matches a folded name, higher better: at the
+/// name's start, at a word's start, anywhere, then by its letters in order
+/// (each word of the query on its own when it has several).
+fn match_score(query: &str, name: &str) -> Option<i32> {
+    if query.is_empty() {
+        return Some(0);
+    }
+    if let Some(at) = name.find(query) {
+        let word = at == 0 || name[..at].chars().next_back().is_some_and(|c| !c.is_alphanumeric());
+        let base = if at == 0 {
+            1000
+        } else if word {
+            800
+        } else {
+            600
+        };
+        return Some(base - (at as i32).min(100) - (name.len() as i32 - query.len() as i32).min(50));
+    }
+    let words: Vec<&str> = query.split_whitespace().collect();
+    if words.len() > 1 {
+        let scores: Option<Vec<i32>> = words.iter().map(|w| match_score(w, name)).collect();
+        return scores.map(|s| s.iter().sum::<i32>() / s.len() as i32 - 100);
+    }
+    // Its letters in order: fewer gaps and more of them at words' starts, better.
+    let name: Vec<char> = name.chars().collect();
+    let mut at = 0;
+    let mut score = 400;
+    let mut last: Option<usize> = None;
+    for q in query.chars() {
+        let i = at + name[at..].iter().position(|c| *c == q)?;
+        if i == 0 || !name[i - 1].is_alphanumeric() {
+            score += 15;
+        }
+        if let Some(l) = last {
+            score -= 8 * (i - l - 1).min(6) as i32;
+        }
+        last = Some(i);
+        at = i + 1;
+    }
+    (score > 200).then_some(score)
 }
 
 // ------------------------------------------------------------- templates --
@@ -814,6 +975,14 @@ pub struct GraphEditor {
     /// Frame the whole graph at the next opportunity.
     fit: bool,
     library: Option<Library>,
+    /// The nodes added last, newest first, by their English name: the
+    /// library lists them first. Kept in egui's memory between runs.
+    recent: Vec<&'static str>,
+    recent_read: bool,
+    /// Where the library was drawn last (for the tests).
+    library_rect: Rect,
+    /// The pass the canvas was last drawn in.
+    canvas_pass: u64,
     pub view: TerrainView,
     /// The render settings are open over the viewport.
     pub(crate) render_open: bool,
@@ -881,6 +1050,10 @@ impl Default for GraphEditor {
             preview_ms: 0.0,
             fit: true,
             library: None,
+            recent: Vec::new(),
+            recent_read: false,
+            library_rect: Rect::NOTHING,
+            canvas_pass: 0,
             view: TerrainView::default(),
             render_open: false,
             image_size: [3840, 2160],
@@ -1793,6 +1966,16 @@ impl GraphEditor {
         self.canvas
     }
 
+    /// The node library, when open: where it was drawn, and the node its
+    /// selected row would add (for tests).
+    #[cfg(test)]
+    pub fn library_state(&self) -> Option<(Rect, Option<&'static str>)> {
+        let lib = self.library.as_ref()?;
+        let sections = library_sections(&lib.query, None, &self.recent);
+        let pick = sections.iter().flat_map(|s| &s.kinds).nth(lib.selected).map(|k| k.label());
+        Some((self.library_rect, pick))
+    }
+
     #[cfg(test)]
     pub fn zoom(&self) -> f32 {
         self.zoom
@@ -2045,6 +2228,16 @@ impl GraphEditor {
         self.last_edit = None;
     }
 
+    /// Tab over the graph adds a node: called before anything is drawn, so
+    /// that egui does not first give the keyboard to the window's first field.
+    pub fn keep_tab(&self, ctx: &egui::Context) {
+        let shown = self.canvas_pass + 1 >= ctx.cumulative_pass_nr();
+        let over = ctx.input(|i| i.key_pressed(Key::Tab) && !i.modifiers.any() && i.pointer.hover_pos().is_some_and(|p| self.canvas.contains(p)));
+        if shown && over && self.library.is_none() && ctx.memory(|m| m.focused().is_none()) {
+            ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+        }
+    }
+
     fn open_library(&mut self, screen: Pos2, from: Option<(NodeId, u8)>) {
         self.library = Some(Library {
             at: self.to_graph(screen),
@@ -2052,11 +2245,14 @@ impl GraphEditor {
             query: String::new(),
             from,
             focus: true,
+            selected: 0,
+            scroll: false,
         });
     }
 
     fn canvas(&mut self, ui: &mut Ui, canvas: Rect, graph: &mut Graph, reg: &Registry) {
         let pal = Palette::of(ui);
+        self.canvas_pass = ui.ctx().cumulative_pass_nr();
         if self.fit && canvas.width() > 50.0 {
             self.frame(graph);
             self.fit = false;
@@ -2531,71 +2727,155 @@ impl GraphEditor {
         self.library_ui(ui, graph);
     }
 
-    /// The library of nodes: type to search, Enter adds the first match.
+    /// The library of nodes, a picker in the manner of a command palette:
+    /// type to search (by name in any language Massif speaks), ↑/↓ to choose,
+    /// Enter to add, Esc to close. With nothing typed, the nodes added last
+    /// come first, then every node by family.
     fn library_ui(&mut self, ui: &mut Ui, graph: &mut Graph) {
+        if self.library.is_none() {
+            return;
+        }
+        let ctx = ui.ctx().clone();
+        let recent_id = egui::Id::unique("graph library recent");
+        if !std::mem::replace(&mut self.recent_read, true) {
+            let saved: Vec<String> = ctx.data_mut(|d| d.get_persisted(recent_id)).unwrap_or_default();
+            let catalogue = NodeKind::catalogue();
+            self.recent = saved.iter().filter_map(|l| catalogue.iter().find(|k| k.label() == l).map(|k| k.label())).collect();
+        }
         let Some(lib) = &mut self.library else { return };
         let pal = Palette::of(ui);
-        let mut close = ui.input(|i| i.key_pressed(Key::Escape));
-        let mut add: Option<NodeKind> = None;
-        let screen = lib.screen;
+        // The keys of the list, taken before the search field sees them.
+        let (up, down, enter, escape) = ctx.input_mut(|i| {
+            (
+                i.consume_key(Modifiers::NONE, Key::ArrowUp),
+                i.consume_key(Modifiers::NONE, Key::ArrowDown),
+                i.consume_key(Modifiers::NONE, Key::Enter),
+                i.consume_key(Modifiers::NONE, Key::Escape),
+            )
+        });
+        let mut close = escape;
         let wanted = lib.from.map(|(id, out)| graph.output_type(id, out));
+        let sections = library_sections(&lib.query, wanted, &self.recent);
+        let order: Vec<&NodeKind> = sections.iter().flat_map(|s| &s.kinds).collect();
+        let n = order.len();
+        if n > 0 {
+            if down {
+                lib.selected = (lib.selected + 1) % n;
+            }
+            if up {
+                lib.selected = (lib.selected + n - 1) % n;
+            }
+            lib.selected = lib.selected.min(n - 1);
+            lib.scroll |= up || down;
+        }
+        let mut add: Option<NodeKind> = if enter { order.get(lib.selected).map(|k| (*k).clone()) } else { None };
+        // Its size, and its place: inside the window, however near an edge
+        // it opened.
+        let screen = ctx.content_rect();
+        let margin = 8.0;
+        let width = LIBRARY_WIDTH.min(screen.width() - 2.0 * margin).max(200.0);
+        let list_h = LIBRARY_LIST.min(screen.height() - 2.0 * margin - LIBRARY_CHROME).max(90.0);
+        let size = vec2(width, list_h + LIBRARY_CHROME);
+        let pos = pos2(
+            lib.screen.x.min(screen.right() - margin - size.x).max(screen.left() + margin),
+            lib.screen.y.min(screen.bottom() - margin - size.y).max(screen.top() + margin),
+        );
+        let english = crate::i18n::current() == crate::i18n::Language::English;
         let area = egui::Area::new(ui.scope_id().with("graph library"))
             .order(egui::Order::Foreground)
-            .fixed_pos(screen)
+            .fixed_pos(pos)
             .constrain(true)
-            .show(ui.ctx(), |ui| {
-                egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
-                    ui.set_width(280.0);
+            .show(&ctx, |ui| {
+                egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(LIBRARY_PAD as i8)).show(ui, |ui| {
+                    let inner = width - 2.0 * LIBRARY_PAD;
+                    ui.set_width(inner);
                     let edit = ui.add(
                         egui::TextEdit::singleline(&mut lib.query)
                             .hint_text(tr!("{glyph}  Search nodes", glyph = theme::glyph(Icon::Search)))
-                            .desired_width(f32::INFINITY),
+                            .desired_width(f32::INFINITY)
+                            .margin(vec2(8.0, 6.0))
+                            // ↑ and ↓ choose a row, rather than move the keyboard to another field.
+                            .event_filter(egui::EventFilter {
+                                horizontal_arrows: true,
+                                vertical_arrows: true,
+                                tab: false,
+                                escape: false,
+                            }),
                     );
                     if lib.focus {
                         edit.request_focus();
                         lib.focus = false;
                     }
-                    let q = lib.query.to_lowercase();
-                    let matches: Vec<NodeKind> = NodeKind::catalogue()
-                        .into_iter()
-                        .filter(|k| {
-                            q.is_empty() || crate::i18n::tr_name(k.label()).to_lowercase().contains(&q) || crate::i18n::tr_name(k.description()).to_lowercase().contains(&q) || crate::i18n::tr_name(k.family().label()).to_lowercase().contains(&q)
-                        })
-                        // With a wire in hand, only nodes that take it.
-                        .filter(|k| match wanted {
-                            None => true,
-                            Some(PortType::Color) => k.inputs().iter().any(|i| i.1 == PortType::Color),
-                            Some(_) => k.inputs().iter().any(|i| i.1 != PortType::Color),
-                        })
-                        .collect();
-                    if edit.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
-                        add = matches.first().cloned();
+                    if edit.changed() {
+                        lib.selected = 0;
+                        lib.scroll = true;
                     }
-                    ui.add_space(4.0);
-                    egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-                        for family in Family::ALL {
-                            let in_family: Vec<&NodeKind> = matches.iter().filter(|k| k.family() == family).collect();
-                            if in_family.is_empty() {
-                                continue;
-                            }
-                            ui.horizontal(|ui| {
-                                let (dot, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
-                                ui.painter().circle_filled(dot.center(), 3.5, family_color(family));
-                                ui.label(RichText::new(crate::i18n::tr_name(family.label())).size(11.0).color(pal.weak).medium());
-                            });
-                            for k in in_family {
-                                let r = ui.add(egui::Button::new(crate::i18n::tr_name(k.label())).frame(false).min_size(vec2(260.0, 20.0)));
-                                if r.clicked() {
-                                    add = Some(k.clone());
+                    ui.add_space(6.0);
+                    let moved = ui.input(|i| i.pointer.delta() != Vec2::ZERO);
+                    egui::ScrollArea::vertical()
+                        .id_salt("graph library list")
+                        .max_height(list_h)
+                        .min_scrolled_height(list_h)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            let mut row = 0;
+                            for (s, section) in sections.iter().enumerate() {
+                                let (head, _) = ui.allocate_exact_size(vec2(ui.available_width(), if s == 0 { 20.0 } else { 28.0 }), Sense::hover());
+                                let base = pos2(head.left() + 8.0, head.bottom() - 6.0);
+                                let text_x = match section.family {
+                                    Some(f) => {
+                                        ui.painter().circle_filled(pos2(base.x + 3.0, base.y - 5.0), 3.0, family_color(f));
+                                        base.x + 12.0
+                                    }
+                                    None => base.x,
+                                };
+                                ui.painter().text(pos2(text_x, base.y), egui::Align2::LEFT_BOTTOM, &section.title, egui::FontId::proportional(11.0), pal.weak);
+                                for k in &section.kinds {
+                                    let (rect, r) = ui.allocate_exact_size(vec2(ui.available_width(), LIBRARY_ROW), Sense::click());
+                                    if r.hovered() && moved {
+                                        lib.selected = row;
+                                    }
+                                    let on = row == lib.selected;
+                                    if on {
+                                        ui.painter().rect_filled(rect, theme::TILE_RADIUS, pal.accent_soft);
+                                        if lib.scroll {
+                                            r.scroll_to_me(None);
+                                        }
+                                    }
+                                    let name = crate::i18n::tr_name(k.label());
+                                    let font = egui::FontId::proportional(13.0);
+                                    ui.painter().text(rect.left_center() + vec2(20.0, 0.0), egui::Align2::LEFT_CENTER, name, font, if on { pal.text } else { pal.text.gamma_multiply(0.92) });
+                                    ui.painter().circle_filled(rect.left_center() + vec2(11.0, 0.0), 2.5, family_color(k.family()).gamma_multiply(if on { 1.0 } else { 0.7 }));
+                                    // The English name too, for those who learnt the nodes by it.
+                                    if !english && name != k.label() {
+                                        ui.painter().text(rect.right_center() - vec2(10.0, 0.0), egui::Align2::RIGHT_CENTER, k.label(), egui::FontId::proportional(11.0), pal.weak);
+                                    }
+                                    if r.clicked() {
+                                        add = Some(k.clone());
+                                    }
+                                    row += 1;
                                 }
-                                r.on_hover_text(crate::i18n::tr_name(k.description()));
                             }
-                            ui.add_space(2.0);
-                        }
-                        if matches.is_empty() {
-                            ui.label(RichText::new(tr!("No node by that name")).color(pal.weak));
-                        }
-                    });
+                            if n == 0 {
+                                ui.add_space(12.0);
+                                ui.vertical_centered(|ui| ui.label(RichText::new(tr!("No node by that name")).color(pal.weak)));
+                            }
+                        });
+                    lib.scroll = false;
+                    // What the chosen node does, under the list.
+                    ui.add_space(6.0);
+                    let (line, _) = ui.allocate_exact_size(vec2(inner, 1.0), Sense::hover());
+                    ui.painter().hline(line.x_range(), line.center().y, Stroke::new(1.0, pal.border));
+                    ui.add_space(6.0);
+                    let (about, _) = ui.allocate_exact_size(vec2(inner, LIBRARY_ABOUT), Sense::hover());
+                    if let Some(k) = order.get(lib.selected) {
+                        let text = crate::i18n::tr_name(k.description());
+                        let galley = ui.painter().layout(text.to_owned(), egui::FontId::proportional(11.5), pal.weak, about.width() - 8.0);
+                        ui.painter().galley(about.left_top() + vec2(4.0, 0.0), galley, pal.weak);
+                    }
+                    let (keys, _) = ui.allocate_exact_size(vec2(inner, 16.0), Sense::hover());
+                    ui.painter().text(keys.left_center() + vec2(4.0, 0.0), egui::Align2::LEFT_CENTER, tr!("↑↓ choose · Enter add · Esc close"), egui::FontId::proportional(10.5), pal.weak.gamma_multiply(0.8));
                 });
             });
         // A click elsewhere closes it.
@@ -2605,8 +2885,14 @@ impl GraphEditor {
                 close = true;
             }
         }
+        self.library_rect = area.response.rect;
         if let Some(kind) = add {
             let lib = self.library.take().expect("open");
+            self.recent.retain(|l| *l != kind.label());
+            self.recent.insert(0, kind.label());
+            self.recent.truncate(LIBRARY_RECENT);
+            let saved: Vec<String> = self.recent.iter().map(|l| l.to_string()).collect();
+            ctx.data_mut(|d| d.insert_persisted(recent_id, saved));
             let id = graph.add(kind, lib.at);
             if let Some((from, output)) = lib.from {
                 // Wire the first input of a matching type.
@@ -3912,5 +4198,37 @@ mod tests {
             let img = thumbnail(value, g.output_type(key.0, key.1), extent.spacing());
             assert_eq!(img.size, [THUMB_PX, THUMB_PX]);
         }
+    }
+
+    #[test]
+    fn the_library_finds_nodes_in_any_language_and_lists_recent_ones_first() {
+        use crate::i18n::{Language, set_language};
+        let first = |q: &str| library_sections(q, None, &[]).into_iter().flat_map(|s| s.kinds).next().map(|k| k.label());
+        set_language(Language::French);
+        // By the French name, accents or not, and by the English one.
+        assert_eq!(first("montagne"), Some("Mountain"));
+        assert_eq!(first("massif mont"), Some("Mountain range"));
+        assert_eq!(first("erosion therm"), Some("Thermal erosion"));
+        assert_eq!(first("érosion"), Some("Erosion"));
+        assert_eq!(first("mountain"), Some("Mountain"));
+        // By another language Massif speaks (German), and by letters in order.
+        assert_eq!(first("gebirge"), Some("Mountain range"));
+        assert_eq!(first("thrml"), Some("Thermal erosion"));
+        assert_eq!(first("zzzq"), None);
+        // Sections are the families, in French, best family first.
+        let sections = library_sections("mont", None, &[]);
+        assert_eq!(sections[0].title, crate::i18n::tr_name(Family::Landform.label()));
+        // Nothing typed: the nodes added last, then every node by family.
+        let all = library_sections("", None, &["Erosion", "Mountain"]);
+        assert_eq!(all[0].family, None);
+        assert_eq!(all[0].kinds.iter().map(|k| k.label()).collect::<Vec<_>>(), ["Erosion", "Mountain"]);
+        assert_eq!(all.len(), 1 + Family::ALL.len());
+        let every: usize = all[1..].iter().map(|s| s.kinds.len()).sum();
+        assert_eq!(every, NodeKind::catalogue().len());
+        // With a colour wire in hand, only nodes that take colours.
+        let colours = library_sections("", Some(PortType::Color), &["Erosion"]);
+        assert!(colours.iter().flat_map(|s| &s.kinds).all(|k| k.inputs().iter().any(|i| i.1 == PortType::Color)));
+        set_language(Language::English);
+        assert_eq!(first("mountain r"), Some("Mountain range"));
     }
 }

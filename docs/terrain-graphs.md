@@ -88,7 +88,12 @@ of the viewport to suit it. "Back to the previous graph" undoes the choice.
 ## Editing a graph
 
 Right-click the graph or press Tab to open the node library and type to
-search; drop a wire on empty space to add a node already wired. Ports and
+search: a node is found by its name in your language, in English or in any
+language Massif speaks, by its first letters or by its letters in order
+(`thrml` finds Thermal erosion). Results are grouped by family; ↑ and ↓
+choose one, whose description shows under the list, Enter adds it and Esc
+closes. With nothing typed, the nodes you added last come first. Drop a
+wire on empty space to add a node already wired. Ports and
 wires are coloured by what they carry: heights, masks or colours.
 
 - Click a node to select it; Shift or ⌘ adds nodes to the selection, and a
