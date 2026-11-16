@@ -7182,6 +7182,93 @@ mod tests {
         }
     }
 
+    /// A brush of radius 506 held in place on the map (MASSIF_PERF), as a
+    /// user holds one: the time of the frames early on and after a while,
+    /// the processor's time, and how many frames the map takes to catch
+    /// up once it is let go. MASSIF_MAP_ONLY: without the 3D view beside it.
+    #[test]
+    fn holding_a_big_brush() {
+        if std::env::var_os("MASSIF_PERF").is_none() {
+            return;
+        }
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1440.0, 900.0))
+            .with_pixels_per_point(2.0)
+            .with_step_dt(1.0 / 60.0)
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_eframe(|cc| {
+                theme::install(&cc.egui_ctx);
+                MassifApp::for_tests(generate(&GenParams {
+                    tiles_x: 32,
+                    tiles_z: 32,
+                    landform: Landform::Mountains,
+                    ..GenParams::default()
+                }))
+            });
+        h.run_steps(5);
+        let id = h.state().active_map.or_else(|| h.state().maps.keys().next().copied()).expect("a map view");
+        // MASSIF_MAP_ONLY: the map view alone, without the 3D view beside it.
+        if std::env::var_os("MASSIF_MAP_ONLY").is_some() {
+            h.state_mut().layout.current_mut().maximized = Some(id);
+        }
+        {
+            let view = h.state_mut().maps.get_mut(&id).unwrap();
+            view.center = [300.0, 200.0];
+            view.zoom = 0.6;
+        }
+        h.run_steps(5);
+        while h.state().map_cache.busy() {
+            h.step();
+        }
+        let rect = map_rect(h.state(), &h.ctx);
+        for tool in [Tool::Raise, Tool::Smooth] {
+            {
+                let app = h.state_mut();
+                app.tools.tool = tool;
+                app.tools.brush.radius = 506.0;
+                app.tools.brush.strength = 1.0;
+            }
+            // Everything drawn first, the 3D view too.
+            let mut waited = 0;
+            while (h.state().map_cache.busy() || h.state().view3d.pending() > 0) && waited < 3000 {
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(2));
+                waited += 1;
+            }
+            let at = rect.center() + vec2(-150.0, 80.0);
+            h.event(egui::Event::PointerMoved(at));
+            h.step();
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            let (mut times, mut cpus) = (Vec::new(), Vec::new());
+            let frames = 240;
+            for _ in 0..frames {
+                let (t, cpu) = (std::time::Instant::now(), crate::devtools::cpu_time().unwrap_or_default());
+                h.step();
+                times.push(t.elapsed().as_secs_f32() * 1000.0);
+                cpus.push((crate::devtools::cpu_time().unwrap_or_default() - cpu).as_secs_f32() * 1000.0);
+            }
+            let busy = h.state().map_cache.busy();
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+            let mut after = 0;
+            while h.state().map_cache.busy() && after < 2000 {
+                h.step();
+                after += 1;
+            }
+            let mean = |v: &[f32]| v.iter().sum::<f32>() / v.len() as f32;
+            eprintln!(
+                "{tool:?} r506 held {frames} frames: first 30 {:.1} ms ({:.1} CPU), frames 105-135 {:.1} ms ({:.1} CPU), last 30 {:.1} ms ({:.1} CPU); map still drawing at release: {busy}, done {after} frames after",
+                mean(&times[..30]),
+                mean(&cpus[..30]),
+                mean(&times[105..135]),
+                mean(&cpus[105..135]),
+                mean(&times[frames - 30..]),
+                mean(&cpus[frames - 30..]),
+            );
+            h.run_steps(3);
+        }
+    }
+
     #[test]
     fn walking_in_3d_sculpt() {
         let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {

@@ -927,6 +927,8 @@ impl SummaryEntry {
 pub struct ChunkEntry {
     pub texture: TextureHandle,
     pub stale: bool,
+    /// When it went stale: those waiting longest are redrawn first.
+    stale_since: u64,
     used: u64,
 }
 
@@ -1015,9 +1017,12 @@ impl MapCache {
                 }
             }
         }
+        self.clock += 1;
+        let clock = self.clock;
         for ((_, key), entry) in self.chunks.iter_mut() {
-            if affected.contains(key) {
+            if affected.contains(key) && !entry.stale {
                 entry.stale = true;
+                entry.stale_since = clock;
             }
         }
     }
@@ -1027,8 +1032,13 @@ impl MapCache {
         self.grids.clear();
         self.summaries.clear();
         self.summary_bytes = 0;
+        self.clock += 1;
+        let clock = self.clock;
         for entry in self.chunks.values_mut() {
-            entry.stale = true;
+            if !entry.stale {
+                entry.stale = true;
+                entry.stale_since = clock;
+            }
         }
     }
 
@@ -1078,11 +1088,16 @@ impl MapCache {
         budget: Duration,
     ) -> bool {
         let started = Instant::now();
-        let todo: Vec<ChunkKey> = wanted
+        let mut todo: Vec<ChunkKey> = wanted
             .iter()
             .copied()
             .filter(|k| !self.is_ready(style, *k))
             .collect();
+        // Those never drawn first, in the order wanted, then the stale ones,
+        // those waiting longest first: a brush held over the map marks the
+        // same chunks stale every frame, and in the order wanted alone those
+        // a frame has no time for would never be redrawn while it is held.
+        todo.sort_by_key(|k| self.chunks.get(&(style, *k)).map_or(0, |e| e.stale_since));
         if todo.is_empty() {
             return false;
         }
@@ -1093,10 +1108,14 @@ impl MapCache {
         // still to read.
         let mut current: Option<(usize, Vec<TilePos>, Vec<TilePos>)> = None;
         let capacity = BATCH_TILES_PER_THREAD * rayon::current_num_threads().max(1);
+        let mut first = true;
         while cursor < todo.len() {
-            if started.elapsed() > budget {
+            // One batch at least, however slow the frame: what is drawn
+            // keeps up, a little at a time.
+            if !first && started.elapsed() > budget {
                 return true;
             }
+            first = false;
             // A batch: the tiles still to read for the next chunks, about a
             // third of a millisecond of reading for each thread, and the
             // chunks whose tiles are then all read, at most BATCH_CHUNKS, so
@@ -1190,6 +1209,7 @@ impl MapCache {
                     Some(entry) => {
                         entry.texture.set(image, TEXTURE_OPTIONS);
                         entry.stale = false;
+                        entry.stale_since = 0;
                         entry.used = clock;
                     }
                     None => {
@@ -1200,6 +1220,7 @@ impl MapCache {
                             ChunkEntry {
                                 texture,
                                 stale: false,
+                                stale_since: 0,
                                 used: clock,
                             },
                         );
@@ -1350,7 +1371,8 @@ mod tests {
     use super::*;
     use massif_core::generate::{GenParams, Landform, generate};
     use massif_core::history::History;
-    use massif_core::ops::{self, Anchor};
+    use massif_core::coords::BlockRect;
+    use massif_core::ops::{self, Anchor, Surface};
     use massif_core::{Brush, BrushShape, Profile, World};
 
     fn world() -> World {
@@ -1579,5 +1601,63 @@ mod tests {
                 save(&format!("huge-{mode:?}-lod{lod}.png"), &image);
             }
         }
+    }
+
+    /// A brush held in place redraws every part of the map under it, not
+    /// only those nearest the middle of the view: each frame marks them all
+    /// out of date again, and a frame's time draws only some, so those
+    /// waiting longest go first. Before, the ones farthest from the middle
+    /// of the view stayed as they were for as long as the brush was held,
+    /// squares of the land of before inside the brush.
+    #[test]
+    fn a_held_brush_redraws_everything_under_it() {
+        let mut w = generate(&GenParams {
+            tiles_x: 16,
+            tiles_z: 16,
+            landform: Landform::Mountains,
+            seed: 5,
+            ..GenParams::default()
+        });
+        let ctx = egui::Context::default();
+        let style = MapStyle::default();
+        // The whole map at lod 1, nearest the middle of the view first.
+        let lod = 1;
+        let (lo, hi) = w.dims[0].bounds().expect("a map");
+        let mut keys: Vec<ChunkKey> = (lo.z >> lod..=hi.z >> lod).flat_map(|z| (lo.x >> lod..=hi.x >> lod).map(move |x| ChunkKey { lod, x, z })).collect();
+        keys.sort_by_key(|k| (k.x * 2 + 1).pow(2) + (k.z * 2 + 1).pow(2));
+        let mut cache = MapCache::default();
+        while cache.update(&ctx, &w.dims[0], &w.registry, 63.0, style, &keys, Duration::from_secs(1)) {}
+        w.dims[0].levels[0].take_dirty();
+        let brush = Brush {
+            shape: BrushShape::Circle,
+            radius: 506.0,
+            profile: Profile::Sine,
+            strength: 1.0,
+            rotation: 0.0,
+            mask: None,
+            filter: None,
+        };
+        // Held off the middle, a frame's time drawing one batch at most.
+        let (cx, cz) = (380.0, 250.0);
+        let under: Vec<ChunkKey> = keys.iter().copied().filter(|k| BlockRect::around(cx, cz, 506.0).tiles().any(|t| ChunkKey::of_tile(t, lod) == *k)).collect();
+        assert!(under.len() > BATCH_CHUNKS * 2, "more than a frame draws: {}", under.len());
+        let mut hist = History::default();
+        hist.begin("raise", 0);
+        let frames = 40;
+        let mut drawn = HashMap::new();
+        for frame in 0..frames {
+            ops::raise(&mut hist.edit(&mut w, 0), &brush, cx, cz, 0.2, Surface::Top);
+            let dirty = w.dims[0].levels[0].take_dirty();
+            cache.invalidate(&dirty);
+            cache.update(&ctx, &w.dims[0], &w.registry, 63.0, style, &keys, Duration::from_nanos(1));
+            for k in &under {
+                if cache.is_ready(style, *k) {
+                    drawn.insert(*k, frame);
+                }
+            }
+        }
+        hist.commit();
+        let late: Vec<_> = under.iter().filter(|k| drawn.get(k).is_none_or(|&f| f + 3 * under.len().div_ceil(BATCH_CHUNKS) < frames)).collect();
+        assert!(late.is_empty(), "{} of {} parts under the brush not redrawn lately: {late:?}", late.len(), under.len());
     }
 }

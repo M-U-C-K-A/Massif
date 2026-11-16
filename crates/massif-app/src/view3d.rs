@@ -3923,8 +3923,12 @@ impl View3d {
             .map(|&t| (((t.x as f64 + 0.5) * span - tx).hypot((t.z as f64 + 0.5) * span - tz), t))
             .collect();
         todo.sort_by(|a, b| a.0.total_cmp(&b.0));
-        // Many: away from the frames.
-        if todo.len() > BUILD_AWAY && self.builder.is_none() {
+        // Many: away from the frames, once a stroke is over. A brush held
+        // over the map changes the same tiles every frame: a builder for
+        // them would copy the map and take every core but two again and
+        // again, under the brush's feet, for tiles changed again before it
+        // brings them. Until it lets go, they are shown as they were.
+        if todo.len() > BUILD_AWAY && self.builder.is_none() && !doc.history.is_recording() {
             let order: Vec<TilePos> = todo.drain(..).map(|(_, t)| t).collect();
             self.start_builder(doc, order, style, stride, ctx);
         }
