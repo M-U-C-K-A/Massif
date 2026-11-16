@@ -10084,6 +10084,53 @@ mod tests {
         assert!(note.starts_with("Repainted"), "{note}");
     }
 
+    /// A speckled custom brush over the map, at three sizes: its outline
+    /// drawn round its specks, merged where they are too small to see, and
+    /// no line straying across the map. The brush is "brushes 3" of
+    /// MASSIF_BRUSH_DIRS (folders, separated by `:`) when there, else specks
+    /// made here. Needs a GPU: runs with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn a_speckled_brush_is_outlined_cleanly() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let found = std::env::var_os("MASSIF_BRUSH_DIRS")
+            .map(|v| std::env::split_paths(&v).map(|d| d.join("brush3.png")).filter(|p| p.is_file()).collect::<Vec<_>>())
+            .and_then(|p| p.into_iter().next())
+            .and_then(|p| crate::brushes::load_image(&p).ok());
+        let mask = found.unwrap_or_else(|| {
+            let n = 300;
+            let mut h = 7u32;
+            let specks = (0..n * n)
+                .map(|_| {
+                    h ^= h << 13;
+                    h ^= h >> 17;
+                    h ^= h << 5;
+                    [0, 0, 0, 0, 0, 0, 90, 255][(h >> 29) as usize]
+                })
+                .collect();
+            massif_core::brush::BrushMask::new("Specks", n, n, specks)
+        });
+        let mut h = harness(ThemeChoice::Dark);
+        {
+            let app = h.state_mut();
+            app.tools.select(Tool::Raise);
+            app.tools.brush.mask = Some(std::sync::Arc::new(mask));
+            app.tools.brush.rotation = 15.0;
+        }
+        h.run_steps(5);
+        let at = {
+            let m = h.state().maps.values().next().unwrap();
+            m.screen_of(m.center[0], m.center[1])
+        };
+        for radius in [40.0f32, 150.0, 400.0] {
+            h.state_mut().tools.brush.radius = radius;
+            h.event(egui::Event::PointerMoved(at + vec2(radius * 0.01, 0.0)));
+            h.run_steps(4);
+            h.render().unwrap().save(dir.join(format!("speckled-brush-{radius:.0}.png"))).unwrap();
+        }
+    }
+
     /// The River tool: a click and the water finds its way down from the
     /// source; the course dragged bends it, a click elsewhere gives it an
     /// end, a right-click takes a point back, Enter digs it. No GPU needed.

@@ -4687,8 +4687,18 @@ impl View3d {
             // Points behind the eyes (walking, the brush is around the
             // feet) are None: the rest is drawn in runs, without a chord
             // across the view.
-            let rings: Vec<Vec<Option<egui::Pos2>>> = match brush.outline() {
-                Some(outline) => outline.iter().map(|ring| ring.iter().map(|&(u, v)| on(u, v)).collect()).collect(),
+            let rings: Vec<Vec<Option<egui::Pos2>>> = match &brush.mask {
+                Some(mask) => {
+                    // As wide as it shows across the surface (by squares of
+                    // the image's pixels where they are smaller than the
+                    // screen's).
+                    let side = match (on(-r, 0.0), on(r, 0.0), on(0.0, -r), on(0.0, r)) {
+                        (Some(a), Some(b), Some(c), Some(d)) => a.distance(b).max(c.distance(d)),
+                        _ => 4096.0,
+                    };
+                    let traced = crate::brushes::outline_for(mask, side);
+                    brush.place_outline(&traced).iter().map(|ring| ring.iter().map(|&(u, v)| on(u, v)).collect()).collect()
+                }
                 None if brush.is_square() => vec![brush.square_corners(0.0, 0.0).iter().map(|&(u, v)| on(u, v)).collect()],
                 None => vec![(0..64).map(|i| {
                     let t = i as f32 / 64.0 * std::f32::consts::TAU;
@@ -4696,6 +4706,7 @@ impl View3d {
                 }).collect()],
             };
             let draw = |points: Vec<egui::Pos2>, closed: bool| {
+                let Some(points) = crate::brushes::drawable(points, 0.75, closed) else { return };
                 for (w, color) in [(3.0, Color32::from_black_alpha(90)), (1.4, Color32::WHITE)] {
                     let stroke = egui::Stroke::new(w, color);
                     painter.add(if closed { egui::Shape::closed_line(points.clone(), stroke) } else { egui::Shape::line(points.clone(), stroke) });

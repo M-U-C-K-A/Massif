@@ -152,7 +152,6 @@ impl BrushMask {
         }
         let (nx, ny) = (self.width.clamp(2, OUTLINE_MAX), self.height.clamp(2, OUTLINE_MAX));
         let exact = nx == self.width && ny == self.height;
-        let t = OUTLINE_THRESHOLD;
         let values: Vec<f32> = (0..nx * ny)
             .map(|c| {
                 let (i, j) = (c % nx, c / nx);
@@ -163,101 +162,135 @@ impl BrushMask {
                 }
             })
             .collect();
-        // Corners outside the image are a ring of zeros, so that shapes
-        // touching its sides close; the outline then runs along the side.
-        let at = |i: isize, j: isize| -> Option<f32> {
-            (i >= 0 && j >= 0 && (i as usize) < nx && (j as usize) < ny).then(|| values[j as usize * nx + i as usize])
-        };
-        let pos = |i: isize, j: isize| (i as f32 / (nx - 1) as f32, j as f32 / (ny - 1) as f32);
-        // Where the outline crosses the edge from corner a to corner b.
-        let crossing = |a: (isize, isize), b: (isize, isize)| -> (f32, f32) {
-            let (pa, pb) = (pos(a.0, a.1), pos(b.0, b.1));
-            let k = match (at(a.0, a.1), at(b.0, b.1)) {
-                (Some(va), Some(vb)) => ((t - va) / (vb - va)).clamp(0.0, 1.0),
-                (None, _) => 1.0,
-                (_, None) => 0.0,
-            };
-            (pa.0 + (pb.0 - pa.0) * k, pa.1 + (pb.1 - pa.1) * k)
-        };
-        // Segments between edges, an edge being its first corner and whether
-        // it runs along x.
-        type EdgeKey = (isize, isize, bool);
-        let mut points: std::collections::HashMap<EdgeKey, (f32, f32)> = std::collections::HashMap::new();
-        let mut segments: Vec<(EdgeKey, EdgeKey)> = Vec::new();
-        for j in -1..ny as isize {
-            for i in -1..nx as isize {
-                let inside = |i: isize, j: isize| at(i, j).is_some_and(|v| v > t);
-                let case = (inside(i, j) as u8)
-                    | (inside(i + 1, j) as u8) << 1
-                    | (inside(i + 1, j + 1) as u8) << 2
-                    | (inside(i, j + 1) as u8) << 3;
-                if case == 0 || case == 15 {
-                    continue;
-                }
-                let top = (i, j, true);
-                let right = (i + 1, j, false);
-                let bottom = (i, j + 1, true);
-                let left = (i, j, false);
-                // Saddles: the middle of the cell (the mean of its corners,
-                // as bilinear sampling has it) says whether the two inside
-                // corners join.
-                let joined = || {
-                    let v = |i, j| at(i, j).unwrap_or(0.0);
-                    (v(i, j) + v(i + 1, j) + v(i + 1, j + 1) + v(i, j + 1)) / 4.0 > t
-                };
-                let pairs: &[(EdgeKey, EdgeKey)] = match case {
-                    1 | 14 => &[(left, top)],
-                    2 | 13 => &[(top, right)],
-                    3 | 12 => &[(left, right)],
-                    4 | 11 => &[(right, bottom)],
-                    5 if joined() => &[(top, right), (bottom, left)],
-                    5 => &[(left, top), (right, bottom)],
-                    6 | 9 => &[(top, bottom)],
-                    7 | 8 => &[(left, bottom)],
-                    10 if joined() => &[(left, top), (right, bottom)],
-                    10 => &[(top, right), (bottom, left)],
-                    _ => &[],
-                };
-                for &(a, b) in pairs {
-                    for e in [a, b] {
-                        points.entry(e).or_insert_with(|| {
-                            let (ci, cj, along_x) = e;
-                            crossing((ci, cj), if along_x { (ci + 1, cj) } else { (ci, cj + 1) })
-                        });
-                    }
-                    segments.push((a, b));
-                }
-            }
+        trace_grid(nx, ny, &values, |i, j| (i / (nx - 1) as f32, j / (ny - 1) as f32))
+    }
+
+    /// The outline traced on squares of `step` × `step` pixels, for drawing
+    /// the brush where a pixel of its image is smaller than one of the
+    /// screen: a square paints if any of its pixels does, so the outline
+    /// holds all the image paints, and specks closer than a square merge
+    /// into one shape rather than hundreds of loops too small to see.
+    /// `step` 1 is [`BrushMask::outline`].
+    pub fn outline_coarse(&self, step: usize) -> Vec<Vec<(f32, f32)>> {
+        if step <= 1 || self.width == 0 || self.height == 0 {
+            return self.outline.clone();
         }
-        // Every edge the outline crosses joins exactly two segments: walk
-        // them into loops.
-        let mut ends: std::collections::HashMap<EdgeKey, Vec<usize>> = std::collections::HashMap::new();
-        for (k, &(a, b)) in segments.iter().enumerate() {
-            ends.entry(a).or_default().push(k);
-            ends.entry(b).or_default().push(k);
-        }
-        let mut used = vec![false; segments.len()];
-        let mut loops = Vec::new();
-        for start in 0..segments.len() {
-            if used[start] {
+        let (nx, ny) = (self.width.div_ceil(step).max(2), self.height.div_ceil(step).max(2));
+        let values: Vec<f32> = (0..nx * ny)
+            .map(|c| {
+                let (i, j) = (c % nx, c / nx);
+                let (x0, y0) = ((i * step).min(self.width), (j * step).min(self.height));
+                let (x1, y1) = ((x0 + step).min(self.width), (y0 + step).min(self.height));
+                (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).map(|(x, y)| self.data[y * self.width + x]).max().unwrap_or(0) as f32 / 255.0
+            })
+            .collect();
+        // A square's middle, in the image's units (its pixels' centres run
+        // from 0 to 1).
+        let (w, h) = ((self.width - 1).max(1) as f32, (self.height - 1).max(1) as f32);
+        let s = step as f32;
+        trace_grid(nx, ny, &values, |i, j| (((i + 0.5) * s - 0.5) / w, ((j + 0.5) * s - 0.5) / h))
+    }
+}
+
+/// Marching squares around the values of an `nx` × `ny` grid over
+/// [`OUTLINE_THRESHOLD`], joined into closed loops; `pos` places a corner
+/// of the grid (its column and row) in the image's units.
+fn trace_grid(nx: usize, ny: usize, values: &[f32], pos: impl Fn(f32, f32) -> (f32, f32)) -> Vec<Vec<(f32, f32)>> {
+    let t = OUTLINE_THRESHOLD;
+    // Corners outside the image are a ring of zeros, so that shapes
+    // touching its sides close; the outline then runs along the side.
+    let at = |i: isize, j: isize| -> Option<f32> {
+        (i >= 0 && j >= 0 && (i as usize) < nx && (j as usize) < ny).then(|| values[j as usize * nx + i as usize])
+    };
+    let pos = |i: isize, j: isize| pos(i as f32, j as f32);
+    // Where the outline crosses the edge from corner a to corner b.
+    let crossing = |a: (isize, isize), b: (isize, isize)| -> (f32, f32) {
+        let (pa, pb) = (pos(a.0, a.1), pos(b.0, b.1));
+        let k = match (at(a.0, a.1), at(b.0, b.1)) {
+            (Some(va), Some(vb)) => ((t - va) / (vb - va)).clamp(0.0, 1.0),
+            (None, _) => 1.0,
+            (_, None) => 0.0,
+        };
+        (pa.0 + (pb.0 - pa.0) * k, pa.1 + (pb.1 - pa.1) * k)
+    };
+    // Segments between edges, an edge being its first corner and whether
+    // it runs along x.
+    type EdgeKey = (isize, isize, bool);
+    let mut points: std::collections::HashMap<EdgeKey, (f32, f32)> = std::collections::HashMap::new();
+    let mut segments: Vec<(EdgeKey, EdgeKey)> = Vec::new();
+    for j in -1..ny as isize {
+        for i in -1..nx as isize {
+            let inside = |i: isize, j: isize| at(i, j).is_some_and(|v| v > t);
+            let case = (inside(i, j) as u8)
+                | (inside(i + 1, j) as u8) << 1
+                | (inside(i + 1, j + 1) as u8) << 2
+                | (inside(i, j + 1) as u8) << 3;
+            if case == 0 || case == 15 {
                 continue;
             }
-            used[start] = true;
-            let (first, mut at_edge) = segments[start];
-            let mut ring = vec![points[&first]];
-            while at_edge != first {
-                ring.push(points[&at_edge]);
-                let Some(&next) = ends[&at_edge].iter().find(|&&k| !used[k]) else { break };
-                used[next] = true;
-                let (a, b) = segments[next];
-                at_edge = if a == at_edge { b } else { a };
-            }
-            if ring.len() > 2 {
-                loops.push(ring);
+            let top = (i, j, true);
+            let right = (i + 1, j, false);
+            let bottom = (i, j + 1, true);
+            let left = (i, j, false);
+            // Saddles: the middle of the cell (the mean of its corners,
+            // as bilinear sampling has it) says whether the two inside
+            // corners join.
+            let joined = || {
+                let v = |i, j| at(i, j).unwrap_or(0.0);
+                (v(i, j) + v(i + 1, j) + v(i + 1, j + 1) + v(i, j + 1)) / 4.0 > t
+            };
+            let pairs: &[(EdgeKey, EdgeKey)] = match case {
+                1 | 14 => &[(left, top)],
+                2 | 13 => &[(top, right)],
+                3 | 12 => &[(left, right)],
+                4 | 11 => &[(right, bottom)],
+                5 if joined() => &[(top, right), (bottom, left)],
+                5 => &[(left, top), (right, bottom)],
+                6 | 9 => &[(top, bottom)],
+                7 | 8 => &[(left, bottom)],
+                10 if joined() => &[(left, top), (right, bottom)],
+                10 => &[(top, right), (bottom, left)],
+                _ => &[],
+            };
+            for &(a, b) in pairs {
+                for e in [a, b] {
+                    points.entry(e).or_insert_with(|| {
+                        let (ci, cj, along_x) = e;
+                        crossing((ci, cj), if along_x { (ci + 1, cj) } else { (ci, cj + 1) })
+                    });
+                }
+                segments.push((a, b));
             }
         }
-        loops
     }
+    // Every edge the outline crosses joins exactly two segments: walk
+    // them into loops.
+    let mut ends: std::collections::HashMap<EdgeKey, Vec<usize>> = std::collections::HashMap::new();
+    for (k, &(a, b)) in segments.iter().enumerate() {
+        ends.entry(a).or_default().push(k);
+        ends.entry(b).or_default().push(k);
+    }
+    let mut used = vec![false; segments.len()];
+    let mut loops = Vec::new();
+    for start in 0..segments.len() {
+        if used[start] {
+            continue;
+        }
+        used[start] = true;
+        let (first, mut at_edge) = segments[start];
+        let mut ring = vec![points[&first]];
+        while at_edge != first {
+            ring.push(points[&at_edge]);
+            let Some(&next) = ends[&at_edge].iter().find(|&&k| !used[k]) else { break };
+            used[next] = true;
+            let (a, b) = segments[next];
+            at_edge = if a == at_edge { b } else { a };
+        }
+        if ring.len() > 2 {
+            loops.push(ring);
+        }
+    }
+    loops
 }
 
 /// Closed loops around the cells of a `w` × `h` grid for which `inside` is
@@ -425,13 +458,20 @@ impl Brush {
     /// whose outline is their circle or square.
     pub fn outline(&self) -> Option<Vec<Vec<(f32, f32)>>> {
         let mask = self.mask.as_ref()?;
+        Some(self.place_outline(&mask.outline))
+    }
+
+    /// Loops in the image's units (as [`BrushMask::outline`] or
+    /// [`BrushMask::outline_coarse`] has them) placed as the brush lies:
+    /// offsets in blocks from its centre, turned by its rotation.
+    pub fn place_outline(&self, rings: &[Vec<(f32, f32)>]) -> Vec<Vec<(f32, f32)>> {
         let d = 2.0 * self.radius.max(0.5);
         let (s, c) = self.rotation.to_radians().sin_cos();
         let place = |&(u, v): &(f32, f32)| {
             let (x, z) = ((u - 0.5) * d, (v - 0.5) * d);
             (x * c - z * s, x * s + z * c)
         };
-        Some(mask.outline.iter().map(|ring| ring.iter().map(place).collect()).collect())
+        rings.iter().map(|ring| ring.iter().map(place).collect()).collect()
     }
 
     /// Whether the brush changes the column at offset `(dx, dz)` from its
@@ -720,6 +760,73 @@ mod tests {
         b.rotate(90.0);
         assert!(b.weight(0.0, -100.0) > 0.99);
         assert!(b.weight(-100.0, 0.0) < 0.01);
+    }
+
+    #[test]
+    fn a_speckled_image_is_outlined_in_closed_loops() {
+        // Specks of one to three pixels, soft-edged, over a 256 × 256 image.
+        let n = 256;
+        let mut data = vec![0u8; n * n];
+        let mut h = 12345u32;
+        for _ in 0..1500 {
+            h ^= h << 13;
+            h ^= h >> 17;
+            h ^= h << 5;
+            let (x, y, r) = ((h % n as u32) as usize, ((h >> 8) % n as u32) as usize, (h >> 24) % 3);
+            for dy in 0..=r as usize {
+                for dx in 0..=r as usize {
+                    if x + dx < n && y + dy < n {
+                        data[(y + dy) * n + x + dx] = if dx == r as usize || dy == r as usize { 140 } else { 255 };
+                    }
+                }
+            }
+        }
+        let mask = BrushMask::new("Specks", n, n, data);
+        // Every loop closes on itself in steps of a pixel at most: no long
+        // segment joins pieces apart.
+        let check = |rings: &[Vec<(f32, f32)>], cell: f32| {
+            for ring in rings {
+                for k in 0..ring.len() {
+                    let (a, b) = (ring[k], ring[(k + 1) % ring.len()]);
+                    let d = (a.0 - b.0).hypot(a.1 - b.1);
+                    assert!(d <= 1.5 * cell, "a step of {d} in a loop of {} points", ring.len());
+                }
+            }
+        };
+        check(&mask.outline, 1.0 / (n - 1) as f32);
+        // On squares of 8 pixels, the specks close together merge: far
+        // fewer loops, still closed, and every pixel that paints inside one.
+        let coarse = mask.outline_coarse(8);
+        check(&coarse, 8.0 / (n - 1) as f32);
+        assert!(coarse.len() * 4 < mask.outline.len(), "{} loops for {}", coarse.len(), mask.outline.len());
+        let inside = |p: (f32, f32)| {
+            coarse
+                .iter()
+                .filter(|ring| {
+                    let mut hit = false;
+                    for k in 0..ring.len() {
+                        let (a, b) = (ring[k], ring[(k + 1) % ring.len()]);
+                        if (a.1 > p.1) != (b.1 > p.1) && p.0 < a.0 + (p.1 - a.1) / (b.1 - a.1) * (b.0 - a.0) {
+                            hit = !hit;
+                        }
+                    }
+                    hit
+                })
+                .count()
+                % 2
+                == 1
+        };
+        // (Along the image's sides the outline runs through the middles of
+        // the outermost squares, as the full one runs through the outermost
+        // pixels' centres: the half square outside them is left out.)
+        for (k, &v) in mask.data.iter().enumerate() {
+            let (i, j) = (k % n, k / n);
+            if v > 200 && (4..n - 4).contains(&i) && (4..n - 4).contains(&j) {
+                let p = ((k % n) as f32 / (n - 1) as f32, (k / n) as f32 / (n - 1) as f32);
+                assert!(inside(p), "the pixel at {p:?} paints outside the coarse outline");
+            }
+        }
+        assert_eq!(mask.outline_coarse(1), mask.outline);
     }
 
     #[test]

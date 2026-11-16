@@ -357,6 +357,94 @@ fn free_name(dir: &Path, name: &Path) -> PathBuf {
         .expect("some name is free")
 }
 
+/// Screen points a pixel of a brush's image takes at least in the outline
+/// drawn over the map: smaller, the image is traced on squares of pixels.
+const OUTLINE_POINTS: f32 = 1.5;
+/// The most loops an outline is drawn with: more (a speckled image), it is
+/// traced on larger squares, its specks merging.
+const OUTLINE_LOOPS: usize = 400;
+
+/// The outline of a brush's image drawn `side` points across: traced
+/// through every pixel while a pixel takes [`OUTLINE_POINTS`] or more and it
+/// makes at most [`OUTLINE_LOOPS`] loops, else on squares of 2, 4, 8…
+/// pixels (see [`BrushMask::outline_coarse`]), so that the specks of a
+/// speckled image merge into shapes that can be drawn rather than hundreds
+/// of loops smaller than a pixel. The last few kept.
+pub fn outline_for(mask: &Arc<BrushMask>, side: f32) -> Arc<Vec<Vec<(f32, f32)>>> {
+    use std::sync::{Mutex, Weak};
+    type Kept = Vec<(Weak<BrushMask>, usize, Arc<Vec<Vec<(f32, f32)>>>)>;
+    static KEPT: Mutex<Kept> = Mutex::new(Vec::new());
+    let longest = mask.width.max(mask.height).max(1);
+    let need = (OUTLINE_POINTS * longest as f32 / side.max(1.0)).ceil().max(1.0) as usize;
+    let mut step = need.next_power_of_two().min(longest);
+    let me = Arc::downgrade(mask);
+    let mut kept = KEPT.lock().unwrap_or_else(|e| e.into_inner());
+    kept.retain(|(w, ..)| w.strong_count() > 0);
+    loop {
+        let rings = match kept.iter().find(|(w, s, _)| *s == step && Weak::ptr_eq(w, &me)) {
+            Some((.., rings)) => rings.clone(),
+            None => {
+                let rings = Arc::new(mask.outline_coarse(step));
+                if kept.len() >= 16 {
+                    kept.remove(0);
+                }
+                kept.push((me.clone(), step, rings.clone()));
+                rings
+            }
+        };
+        if rings.len() <= OUTLINE_LOOPS || step >= longest {
+            return rings;
+        }
+        step *= 2;
+    }
+}
+
+/// A loop of the outline of a brush as it can be drawn as a line, or None
+/// when it is too small to draw: points closer than `min` to the last one
+/// left out, and every point where the line turns back sharper than 120°
+/// taken out (egui joins a thick line's segments by extending their edges
+/// until they meet, which, where a line turns back on itself, shoots
+/// hundreds of points away: the long straight lines that crossed the map
+/// from a speckled brush). `closed`: a loop, else a run of it.
+pub fn drawable(points: impl IntoIterator<Item = egui::Pos2>, min: f32, closed: bool) -> Option<Vec<egui::Pos2>> {
+    let sharp = |a: egui::Pos2, b: egui::Pos2, c: egui::Pos2| {
+        let (u, v) = (b - a, c - b);
+        let (lu, lv) = (u.length(), v.length());
+        lu < 1e-4 || lv < 1e-4 || u.dot(v) < -0.5 * lu * lv
+    };
+    let mut out: Vec<egui::Pos2> = Vec::new();
+    for p in points {
+        if !p.is_finite() || out.last().is_some_and(|q| q.distance(p) < min) {
+            continue;
+        }
+        out.push(p);
+        while out.len() >= 3 && sharp(out[out.len() - 3], out[out.len() - 2], out[out.len() - 1]) {
+            out.remove(out.len() - 2);
+        }
+    }
+    if closed {
+        // Where the loop comes round to its start.
+        loop {
+            let n = out.len();
+            if n < 3 {
+                break;
+            }
+            if out[n - 1].distance(out[0]) < min || sharp(out[n - 2], out[n - 1], out[0]) {
+                out.pop();
+            } else if sharp(out[n - 1], out[0], out[1]) {
+                out.remove(0);
+            } else {
+                break;
+            }
+        }
+    }
+    let small = {
+        let r = egui::Rect::from_points(&out);
+        r.width().max(r.height()) < 2.0 * min
+    };
+    (out.len() >= if closed { 3 } else { 2 } && !small).then_some(out)
+}
+
 /// Read one image as a brush.
 pub fn load_image(path: &Path) -> Result<BrushMask, String> {
     let image = image::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -517,6 +605,88 @@ pub fn relief(brush: &Brush, size: usize, dark: bool) -> ColorImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// How far from the brush's middle a closed line of its outline is
+    /// drawn, in points, once egui has made it into triangles: a line 3
+    /// points wide, as the map draws it.
+    fn reach_drawn(rings: &[Vec<egui::Pos2>]) -> f32 {
+        let mut t = egui::epaint::Tessellator::new(1.0, Default::default(), [1, 1], Vec::new());
+        let mut mesh = egui::Mesh::default();
+        for ring in rings {
+            t.tessellate_shape(egui::Shape::closed_line(ring.clone(), egui::Stroke::new(3.0, egui::Color32::WHITE)), &mut mesh);
+        }
+        mesh.vertices.iter().map(|v| if v.pos.is_finite() { v.pos.to_vec2().length() } else { f32::INFINITY }).fold(0.0, f32::max)
+    }
+
+    /// Speckled brushes (THIJS BRUSHES' "brushes 3", WorldPainter's noise)
+    /// drew long straight lines across the map from the brush, and a tangle
+    /// around it: their specks smaller than a pixel became loops of two or
+    /// three points turning back on themselves, which egui's joints shoot
+    /// far away. Every brush image of MASSIF_BRUSH_DIRS (folders, separated
+    /// by `:`) and of WorldPainter's brushes folders, at sizes from 24 to
+    /// 1,000 points across and three rotations, is drawn within its square.
+    #[test]
+    fn speckled_brushes_draw_without_stray_lines() {
+        let mut dirs: Vec<PathBuf> = std::env::var_os("MASSIF_BRUSH_DIRS").map(|v| std::env::split_paths(&v).collect()).unwrap_or_default();
+        dirs.extend(worldpainter_dirs().into_iter().map(|(_, d)| d));
+        let mut masks: Vec<BrushMask> = dirs
+            .iter()
+            .flat_map(|d| std::fs::read_dir(d).into_iter().flatten().flatten().map(|e| e.path()))
+            .filter(|p| is_image(p))
+            .filter_map(|p| load_image(&p).ok())
+            .collect();
+        // Made here, whatever is installed: specks of a pixel or two.
+        let n = 300;
+        let mut h = 7u32;
+        let specks: Vec<u8> = (0..n * n)
+            .map(|_| {
+                h ^= h << 13;
+                h ^= h >> 17;
+                h ^= h << 5;
+                [0, 0, 0, 0, 0, 0, 90, 255][(h >> 29) as usize]
+            })
+            .collect();
+        masks.push(BrushMask::new("Specks", n, n, specks));
+        let (mut strays_before, mut cases) = (Vec::new(), 0);
+        for mask in masks {
+            let mask = Arc::new(mask);
+            for side in [24.0f32, 60.0, 150.0, 400.0, 1000.0] {
+                for rotation in [0.0f32, 33.0, 90.0] {
+                    let brush = Brush { radius: side / 2.0, rotation, mask: Some(mask.clone()), ..Brush::default() };
+                    let traced = outline_for(&mask, side);
+                    let rings: Vec<Vec<egui::Pos2>> = brush.place_outline(&traced).iter().filter_map(|ring| drawable(ring.iter().map(|&(x, z)| egui::pos2(x, z)), 0.75, true)).collect();
+                    let reach = reach_drawn(&rings);
+                    // The square the image turns in, and the width of the line.
+                    let bound = side / 2.0 * std::f32::consts::SQRT_2 + 8.0;
+                    assert!(reach <= bound, "{} at {side} points, turned {rotation}°: drawn {reach:.0} points from its middle (at most {bound:.0})", mask.name);
+                    assert!(rings.len() <= OUTLINE_LOOPS, "{}: {} loops", mask.name, rings.len());
+                    // As it was drawn: every pixel's loop, thinned.
+                    let before: Vec<Vec<egui::Pos2>> = brush
+                        .outline()
+                        .unwrap()
+                        .iter()
+                        .map(|ring| {
+                            let mut out: Vec<egui::Pos2> = Vec::new();
+                            for &(x, z) in ring {
+                                let p = egui::pos2(x, z);
+                                if out.last().is_none_or(|q| q.distance(p) >= 0.75) {
+                                    out.push(p);
+                                }
+                            }
+                            out
+                        })
+                        .filter(|r| r.len() > 2)
+                        .collect();
+                    cases += 1;
+                    if reach_drawn(&before) > bound && !strays_before.contains(&mask.name) {
+                        strays_before.push(mask.name.clone());
+                    }
+                }
+            }
+            eprintln!("{}: {} × {}, {} loops in all", mask.name, mask.width, mask.height, mask.outline.len());
+        }
+        eprintln!("{cases} sizes and turns; as the outline was drawn before, stray lines for {}: {strays_before:?}", strays_before.len());
+    }
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("massif-brushes-{name}-{}", std::process::id()));

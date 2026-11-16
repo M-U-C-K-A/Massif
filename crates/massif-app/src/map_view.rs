@@ -15,6 +15,9 @@ use std::time::Duration;
 const STRENGTH_PX: usize = 128;
 /// Strengths at which the brush preview draws a line.
 const STRENGTH_LEVELS: [f32; 3] = [0.25, 0.5, 0.75];
+/// The most loops of strength drawn at a level: a speckled image has its
+/// strength shown by its shading alone.
+const STRENGTH_RINGS: usize = 12;
 /// How white the strength is drawn where the brush presses hardest, of 255:
 /// light enough for the map to show through.
 const STRENGTH_ALPHA: f32 = 58.0;
@@ -57,14 +60,17 @@ impl BrushPreview {
         // A brush that presses all or nothing (a flat profile, a hard-edged
         // image) has all its lines on its outline: none drawn.
         let flat = weights.iter().all(|&w| w <= 0.0 || w >= STRENGTH_LEVELS[2]);
+        // Nor one of many specks: the lines would be a tangle around each
+        // (its shading still shows how hard it presses).
         let levels = STRENGTH_LEVELS.map(|level| {
             if flat {
                 return Vec::new();
             }
-            massif_core::brush::trace_cells(n, n, |i, j| weights[j * n + i] >= level)
-                .into_iter()
-                .map(|ring| ease(&ring, n))
-                .collect()
+            let rings = massif_core::brush::trace_cells(n, n, |i, j| weights[j * n + i] >= level);
+            if rings.len() > STRENGTH_RINGS {
+                return Vec::new();
+            }
+            rings.into_iter().map(|ring| ease(&ring, n)).collect()
         });
         Self {
             key: Self::key(brush),
@@ -1479,8 +1485,7 @@ impl MapView {
                             let ink = Line::new(1.1, Color32::from_white_alpha(105 + 45 * k as u8));
                             let under = Line::new(2.4, Color32::from_black_alpha(55));
                             for ring in rings {
-                                let points = thin(ring.iter().map(|&(u, v)| square.min + vec2(u, v) * side), 1.5);
-                                if points.len() > 2 {
+                                if let Some(points) = crate::brushes::drawable(ring.iter().map(|&(u, v)| square.min + vec2(u, v) * side), 1.5, true) {
                                     painter.add(egui::Shape::closed_line(points.clone(), under));
                                     painter.add(egui::Shape::closed_line(points, ink));
                                 }
@@ -1498,10 +1503,13 @@ impl MapView {
                     for ring in brush.footprint_outline(x as f32, z as f32) {
                         rings.push(ring.iter().map(|&(bx, bz)| self.to_screen(canvas, bx as f64, bz as f64)).collect());
                     }
-                } else if let Some(outline) = brush.outline() {
-                    // A custom brush: where its image paints, pixel by pixel.
-                    for ring in outline {
-                        rings.push(thin(ring.iter().map(|&(dx, dz)| p + vec2(dx * self.zoom, dz * self.zoom)), 0.75));
+                } else if let Some(mask) = &brush.mask {
+                    // A custom brush: where its image paints, pixel by pixel
+                    // (by squares of pixels where a pixel is smaller than one
+                    // of the screen).
+                    let traced = crate::brushes::outline_for(mask, 2.0 * brush.radius.max(0.5) * self.zoom);
+                    for ring in brush.place_outline(&traced) {
+                        rings.extend(crate::brushes::drawable(ring.iter().map(|&(dx, dz)| p + vec2(dx * self.zoom, dz * self.zoom)), 0.75, true));
                     }
                 } else {
                     match brush.shape {
@@ -1689,15 +1697,4 @@ impl MapView {
 /// reach applications.
 fn turns_brush(m: egui::Modifiers) -> bool {
     m.mac_cmd || (!cfg!(target_os = "macos") && m.ctrl && m.shift)
-}
-
-/// The points of a path, without those closer than `min` to the last kept.
-fn thin(points: impl Iterator<Item = Pos2>, min: f32) -> Vec<Pos2> {
-    let mut out: Vec<Pos2> = Vec::new();
-    for p in points {
-        if out.last().is_none_or(|q| q.distance(p) >= min) {
-            out.push(p);
-        }
-    }
-    out
 }
