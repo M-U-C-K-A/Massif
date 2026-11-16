@@ -490,6 +490,31 @@ impl Brush {
         self.mask.is_some() || self.shape == BrushShape::Square
     }
 
+    /// The columns `x0..x1` of row `z` that [`Brush::weight`] may give some
+    /// strength, the brush centred on `(cx, cz)`: all of them but, for a
+    /// circle, those well outside it, which weigh nothing.
+    ///
+    /// The span is wide enough for the weight of every column left out to
+    /// be exactly 0 as [`Brush::weight`] works it out: worked out in f64
+    /// from the very `dz` the weight is given, with a block and a ten
+    /// thousandth of the radius to spare, beyond any rounding of `f32`.
+    #[inline]
+    pub fn row_span(&self, cx: f32, cz: f32, z: i32, x0: i32, x1: i32) -> std::ops::Range<i32> {
+        if self.mask.is_some() || self.shape != BrushShape::Circle {
+            return x0..x1;
+        }
+        let r = self.radius.max(0.5) as f64;
+        let dz = (z as f32 + 0.5 - cz) as f64;
+        let rem = r * r * 1.0001 - dz * dz;
+        if rem < 0.0 {
+            return x0..x0;
+        }
+        // Column x is `x + 0.5 - cx` from the centre.
+        let (c, half) = (cx as f64 - 0.5, rem.sqrt() + 1.0);
+        let (lo, hi) = ((c - half).floor().max(x0 as f64) as i32, ((c + half).ceil() + 1.0).min(x1 as f64) as i32);
+        lo..hi.max(lo)
+    }
+
     /// Strength in `0..=1` at offset `(dx, dz)` from the brush centre,
     /// without the intensity. Zero outside the footprint.
     #[inline]
@@ -576,6 +601,37 @@ impl Weigher<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every column a row's span leaves out weighs exactly nothing, from
+    /// the smallest brush to the largest, near the origin and far out.
+    #[test]
+    fn row_spans_leave_out_only_what_weighs_nothing() {
+        let mut seed = 7u64;
+        let mut next = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) as f32 / (1u64 << 31) as f32
+        };
+        let mut kept = 0usize;
+        for case in 0..400 {
+            let radius = [0.3, 0.5, 1.0, 2.5, 7.3, 40.0, 333.3, MAX_RADIUS][case % 8] * (0.5 + next());
+            let far = [0.0, 1000.0, 120_000.0, -3_000_000.0][case % 4];
+            let (cx, cz) = (far + (next() - 0.5) * 50.0, -far + (next() - 0.5) * 50.0);
+            let brush = Brush::symmetric(BrushShape::Circle, Profile::ALL[case % 6], radius);
+            let reach = brush.reach().ceil() as i32 + 3;
+            let (x0, x1) = (cx.floor() as i32 - reach, cx.floor() as i32 + reach);
+            // Rows near the rim, where rounding matters, and some others.
+            let rows: Vec<i32> = (0..40).map(|_| cz.floor() as i32 + ((next() * 2.0 - 1.0) * reach as f32) as i32).chain([cz.floor() as i32 - reach + 3, cz.floor() as i32 + reach - 3]).collect();
+            for z in rows {
+                let span = brush.row_span(cx, cz, z, x0, x1);
+                kept += span.len();
+                for x in (x0..x1).filter(|x| !span.contains(x)) {
+                    let w = brush.weight(x as f32 + 0.5 - cx, z as f32 + 0.5 - cz);
+                    assert_eq!(w, 0.0, "r {radius} at ({cx}, {cz}): ({x}, {z}) left out with weight {w}");
+                }
+            }
+        }
+        assert!(kept > 0);
+    }
 
     /// The weigher gives the brush's weights.
     #[test]

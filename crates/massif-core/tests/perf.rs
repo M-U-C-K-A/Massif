@@ -256,3 +256,67 @@ fn ores_of_a_tile() {
     }
     eprintln!("ores under y 100: {:.3} ms a tile, {} blocks a tile", started.elapsed().as_secs_f64() * 1000.0 / tiles as f64, blocks / tiles as usize);
 }
+
+/// The CPU time this process has used, user and system, in seconds.
+fn cpu_seconds() -> f64 {
+    // getrusage's struct rusage: two timevals first, then longs.
+    #[repr(C)]
+    struct Timeval {
+        sec: i64,
+        usec: i64,
+    }
+    #[repr(C)]
+    struct Rusage {
+        user: Timeval,
+        system: Timeval,
+        rest: [i64; 14],
+    }
+    unsafe extern "C" {
+        fn getrusage(who: i32, usage: *mut Rusage) -> i32;
+    }
+    let mut u = Rusage { user: Timeval { sec: 0, usec: 0 }, system: Timeval { sec: 0, usec: 0 }, rest: [0; 14] };
+    // SAFETY: getrusage fills the struct it is given.
+    if unsafe { getrusage(0, &mut u) } != 0 {
+        return 0.0;
+    }
+    // tv_usec is 32 bits on macOS, in a 64-bit slot.
+    let t = |t: &Timeval| t.sec as f64 + (t.usec & 0xffff_ffff) as f64 / 1e6;
+    t(&u.user) + t(&u.system)
+}
+
+/// One brush, dab after dab for a while (MASSIF_SECONDS, 12 by default),
+/// for a profiler and for timings: MASSIF_BRUSH is raise, smooth, paint,
+/// height, slope or hollows, MASSIF_RADIUS its radius. Run with
+/// RAYON_NUM_THREADS=1, its CPU time a dab is the work a dab takes, little
+/// changed by what else the machine runs.
+#[test]
+#[ignore]
+fn one_brush_again_and_again() {
+    let mut world = generate(&GenParams { tiles_x: 32, tiles_z: 32, landform: Landform::Mountains, seed: 3, ..GenParams::default() });
+    let which = std::env::var("MASSIF_BRUSH").unwrap_or_else(|_| "paint".into());
+    let radius: f32 = std::env::var("MASSIF_RADIUS").ok().and_then(|r| r.parse().ok()).unwrap_or(800.0);
+    let filter = match which.as_str() {
+        "height" => Some(massif_core::filter::Filter { above: Some(80), ..Default::default() }),
+        "slope" => Some(massif_core::filter::Filter { slope_above: true, slope: 30.0, ..Default::default() }),
+        "hollows" => Some(massif_core::filter::Filter { hollows: true, depth: 2.0, radius: 16, ..Default::default() }),
+        _ => None,
+    };
+    let brush = Brush { filter: filter.map(std::sync::Arc::new), ..Brush::symmetric(BrushShape::Circle, Profile::Sine, radius) };
+    let mut history = History::default();
+    history.begin("perf", 0);
+    let mut edit = history.edit(&mut world, 0);
+    let seconds: f32 = std::env::var("MASSIF_SECONDS").ok().and_then(|r| r.parse().ok()).unwrap_or(12.0);
+    let (started, cpu) = (Instant::now(), cpu_seconds());
+    let mut dabs = 0;
+    while started.elapsed().as_secs_f32() < seconds {
+        let c = (dabs % 16) as f32 * 4.0;
+        match which.as_str() {
+            "raise" => ops::raise(&mut edit, &brush, c, 0.0, 0.5, Surface::Top),
+            "smooth" => ops::smooth(&mut edit, &brush, c, 0.0, Surface::Top),
+            _ => ops::paint_terrain(&mut edit, &brush, c, 0.0, TerrainId(1), dabs as u64),
+        }
+        dabs += 1;
+    }
+    let cpu = cpu_seconds() - cpu;
+    eprintln!("{which} r{radius}: {:.2} ms a dab, {:.2} ms of CPU", started.elapsed().as_secs_f64() * 1000.0 / dabs as f64, cpu * 1000.0 / dabs as f64);
+}

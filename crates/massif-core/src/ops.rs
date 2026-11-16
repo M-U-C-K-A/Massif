@@ -43,7 +43,14 @@ struct Dab<'a> {
 }
 
 impl<'a> Dab<'a> {
-    fn new(edit: &Edit, brush: &'a Brush, cx: f32, cz: f32) -> Self {
+    /// The dab on the edited level. Its tiles are decoded first when the
+    /// filter reads them: the filter then reads them as they are, and the
+    /// edit after it finds them decoded.
+    fn new(edit: &mut Edit, brush: &'a Brush, cx: f32, cz: f32) -> Self {
+        if brush.filter.as_ref().is_some_and(|f| f.is_active()) {
+            let tiles: Vec<TilePos> = BlockRect::around(cx, cz, brush.reach()).tiles().collect();
+            edit.warm(&tiles);
+        }
         Self::on(edit.dim(), brush, cx, cz)
     }
 
@@ -52,8 +59,15 @@ impl<'a> Dab<'a> {
             .filter
             .as_ref()
             .filter(|f| f.is_active())
-            .map(|f| f.mask(dim, BlockRect::around(cx, cz, brush.reach())));
+            .map(|f| f.mask_rows(dim, BlockRect::around(cx, cz, brush.reach()), &|z, x0, x1| brush.row_span(cx, cz, z, x0, x1)));
         Self { brush, cx, cz, mask }
+    }
+
+    /// The columns of row `z` of `clip` the brush may change: the others
+    /// weigh nothing.
+    #[inline]
+    fn row(&self, z: i32, clip: &BlockRect) -> std::ops::Range<i32> {
+        self.brush.row_span(self.cx, self.cz, z, clip.x0, clip.x1)
     }
 
     /// Strength at column `(x, z)`, filter included, without the intensity.
@@ -116,7 +130,7 @@ fn edit_heights_by_tile<G>(
         let top = top.dense_mut();
         let mut bottom = bottom.as_mut().map(Plane::dense_mut);
         for z in clip.z0..clip.z1 {
-            for x in clip.x0..clip.x1 {
+            for x in dab.row(z, &clip) {
                 let w = dab.weight(x, z);
                 if w <= 0.0 {
                     continue;
@@ -208,20 +222,47 @@ fn gather(level: &Level, rect: BlockRect, surface: Surface) -> Vec<f32> {
 /// One pass of a box filter of radius `k` over a row-major buffer of the
 /// given `width`: along each of the `lines` rows, or — with `across` — along
 /// each of the `lines` columns. `len` is the length of one line.
-fn box_pass(src: &[f32], dst: &mut [f32], lines: usize, len: usize, k: usize, across: bool, width: usize) {
-    for line in 0..lines {
-        let at = |i: usize| if across { i * width + line } else { line * width + i };
-        let mut sum = 0.0f32;
+///
+/// Across, the columns are run through all at once, row after row, which
+/// reads the buffer in order; every column's running sum still takes the
+/// same additions in the same order as one column at a time would.
+pub(crate) fn box_pass(src: &[f32], dst: &mut [f32], lines: usize, len: usize, k: usize, across: bool, width: usize) {
+    if across {
+        let mut sum = vec![0.0f32; lines];
+        let row = |i: usize| &src[i * width..][..lines];
         for i in 0..len.min(k + 1) {
-            sum += src[at(i)];
+            for (s, v) in sum.iter_mut().zip(row(i)) {
+                *s += v;
+            }
         }
         for i in 0..len {
-            dst[at(i)] = sum;
+            dst[i * width..][..lines].copy_from_slice(&sum);
             if i + k + 1 < len {
-                sum += src[at(i + k + 1)];
+                for (s, v) in sum.iter_mut().zip(row(i + k + 1)) {
+                    *s += v;
+                }
             }
             if i >= k {
-                sum -= src[at(i - k)];
+                for (s, v) in sum.iter_mut().zip(row(i - k)) {
+                    *s -= v;
+                }
+            }
+        }
+        return;
+    }
+    for line in 0..lines {
+        let (src, dst) = (&src[line * width..][..len], &mut dst[line * width..][..len]);
+        let mut sum = 0.0f32;
+        for v in &src[..len.min(k + 1)] {
+            sum += v;
+        }
+        for i in 0..len {
+            dst[i] = sum;
+            if i + k + 1 < len {
+                sum += src[i + k + 1];
+            }
+            if i >= k {
+                sum -= src[i - k];
             }
         }
     }
@@ -239,6 +280,9 @@ pub fn smooth(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, surface: Surface
     };
     let k = ((brush.radius * 0.2).round() as i32).clamp(1, 12);
     let footprint = BlockRect::around(cx, cz, brush.reach());
+    // Each tile's averages read the tiles around it: decoded once, here,
+    // rather than by every tile next to them.
+    edit.warm(&footprint.expand(k).tiles().collect::<Vec<_>>());
     let level = edit.level();
     let tiles: Vec<TilePos> = footprint.tiles().filter(|p| level.contains(*p)).collect();
     let averages: HashMap<TilePos, Vec<f32>> = tiles
@@ -325,7 +369,7 @@ fn paint_plane(
     edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
         let slab = tile.bottom.is_some();
         for z in clip.z0..clip.z1 {
-            for x in clip.x0..clip.x1 {
+            for x in dab.row(z, &clip) {
                 let w = dab.weight(x, z);
                 if w <= 0.0 || !paint_hit(w, brush.strength, x, z, salt) {
                     continue;
@@ -355,7 +399,7 @@ pub fn paint_terrain_with(
     edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
         let slab = tile.bottom.is_some();
         for z in clip.z0..clip.z1 {
-            for x in clip.x0..clip.x1 {
+            for x in dab.row(z, &clip) {
                 let w = dab.weight(x, z);
                 if w <= 0.0 || !paint_hit(w, brush.strength, x, z, salt) {
                     continue;
@@ -401,7 +445,7 @@ pub fn paint_pattern(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, salt: u64
     edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
         let slab = tile.bottom.is_some();
         for z in clip.z0..clip.z1 {
-            for x in clip.x0..clip.x1 {
+            for x in dab.row(z, &clip) {
                 let w = dab.weight(x, z);
                 if w <= 0.0 || !paint_hit(w, brush.strength, x, z, salt) {
                     continue;
@@ -496,7 +540,7 @@ fn auto_apply(
         let slab = tile.bottom.is_some();
         let mut n = 0;
         for z in clip.z0..clip.z1 {
-            for x in clip.x0..clip.x1 {
+            for x in dab.row(z, &clip) {
                 let w = dab.weight(x, z);
                 if !auto_hit(w, brush.strength, x, z, salt) {
                     continue;
@@ -602,7 +646,7 @@ pub fn set_fluid(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, level: i16) {
     let footprint = BlockRect::around(cx, cz, brush.reach());
     edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
         for z in clip.z0..clip.z1 {
-            for x in clip.x0..clip.x1 {
+            for x in dab.row(z, &clip) {
                 if dab.weight(x, z) > 0.0 {
                     tile.fluid.set(local_index(x, z), level);
                 }
@@ -629,7 +673,7 @@ pub fn stamp_slab(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, anchor: Anch
         let ground = others.get(0).and_then(|g| g.view(pos));
         let ground = ground.as_ref().map(|g| g.top.dense());
         for z in clip.z0..clip.z1 {
-            for x in clip.x0..clip.x1 {
+            for x in dab.row(z, &clip) {
                 let w = dab.weight(x, z);
                 let half = thickness * 0.5 * w;
                 if half < 0.5 {
@@ -671,7 +715,7 @@ pub fn erase_slab(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32) {
         let Some(bottom) = bottom else { return };
         let (top, bottom) = (top.dense_mut(), bottom.dense_mut());
         for z in clip.z0..clip.z1 {
-            for x in clip.x0..clip.x1 {
+            for x in dab.row(z, &clip) {
                 if dab.weight(x, z) > 0.0 {
                     let i = local_index(x, z);
                     top[i] = 0.0;

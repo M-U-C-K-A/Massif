@@ -264,6 +264,12 @@ impl Filter {
     /// squares of tiles in parallel, each read with the ring around it, so
     /// that a brush of any size takes little memory at a time.
     pub fn mask(&self, dim: &Dimension, rect: BlockRect) -> Mask {
+        self.mask_rows(dim, rect, &|_, x0, x1| x0..x1)
+    }
+
+    /// [`Filter::mask`], weighed only where it is wanted: on row `z`, at
+    /// the columns `rows(z, x0, x1)` of `x0..x1` (0 elsewhere).
+    pub fn mask_rows(&self, dim: &Dimension, rect: BlockRect, rows: &(dyn Fn(i32, i32, i32) -> std::ops::Range<i32> + Sync)) -> Mask {
         let mut ring = 0;
         if self.needs_relief() {
             ring = self.radius.clamp(1, 64);
@@ -300,13 +306,15 @@ impl Filter {
                 let mut out = vec![0u8; pw * part.depth() as usize];
                 out.par_chunks_mut(pw).enumerate().for_each(|(j, row)| {
                     let z = part.z0 + j as i32;
-                    for (i, v) in row.iter_mut().enumerate() {
-                        let x = part.x0 + i as i32;
+                    for x in rows(z, part.x0, part.x1) {
+                        let v = &mut row[(x - part.x0) as usize];
                         let Some(mut c) = surface.column(x, z) else { continue };
                         if let Some(gradients) = &gradients {
                             let (gx, gz) = gradients[surface.index(x, z)];
                             c.slope = gx.hypot(gz).atan().to_degrees();
-                            c.aspect = aspect_of(gx, gz);
+                            if self.facing_on {
+                                c.aspect = aspect_of(gx, gz);
+                            }
                         }
                         if let Some(means) = &relief {
                             let m = means[surface.index(x, z)];
@@ -378,60 +386,68 @@ pub fn trend_gradient(h: impl Fn(i32, i32) -> Option<f32>, r: i32, spacing: f32)
 /// by row, NaN where there is none), at once: the sums over each square
 /// split into a pass along the rows and one along the columns, each a few
 /// additions a point, rather than the whole square summed point by point.
+/// Each pass runs over whole rows at a time, in parallel, the sums at
+/// every point made in the same order as one point at a time would.
 pub fn trend_gradients(heights: &[f32], w: usize, d: usize, r: i32) -> Vec<(f32, f32)> {
     let r = r as isize;
-    // Heights where there are some (0 elsewhere), and where there are.
-    let h: Vec<f32> = heights.iter().map(|v| if v.is_nan() { 0.0 } else { *v }).collect();
-    let p: Vec<f32> = heights.iter().map(|v| if v.is_nan() { 0.0 } else { 1.0 }).collect();
-    // Along the rows: Σ dx·f and Σ f over the row's part of the square.
-    let along = |f: &[f32]| -> (Vec<f32>, Vec<f32>) {
-        let (mut moment, mut sum) = (vec![0f32; w * d], vec![0f32; w * d]);
-        for z in 0..d {
-            let row = &f[z * w..][..w];
-            for x in 0..w as isize {
-                let (mut m, mut s) = (0.0, 0.0);
-                for dx in -r..=r {
-                    let i = x + dx;
-                    if (0..w as isize).contains(&i) {
-                        let v = row[i as usize];
-                        m += dx as f32 * v;
-                        s += v;
-                    }
+    // Along the rows: Σ dx·f and Σ f over the row's part of the square, for
+    // the heights where there are some (0 elsewhere) and for where there
+    // are (1 or 0).
+    let (mut hm, mut hs, mut pm, mut ps) = (vec![0f32; w * d], vec![0f32; w * d], vec![0f32; w * d], vec![0f32; w * d]);
+    hm.par_chunks_mut(w.max(1))
+        .zip(hs.par_chunks_mut(w.max(1)))
+        .zip(pm.par_chunks_mut(w.max(1)).zip(ps.par_chunks_mut(w.max(1))))
+        .enumerate()
+        .for_each(|(z, ((hm, hs), (pm, ps)))| {
+            let row = &heights[z * w..][..w];
+            let h: Vec<f32> = row.iter().map(|v| if v.is_nan() { 0.0 } else { *v }).collect();
+            let p: Vec<f32> = row.iter().map(|v| if v.is_nan() { 0.0 } else { 1.0 }).collect();
+            for dx in -r..=r {
+                // The points x whose x + dx is on the row.
+                let (x0, x1) = ((-dx).max(0) as usize, (w as isize - dx.max(0)).max(0) as usize);
+                if x0 >= x1 {
+                    continue;
                 }
-                moment[z * w + x as usize] = m;
-                sum[z * w + x as usize] = s;
+                let k = dx as f32;
+                let at = (x0 as isize + dx) as usize;
+                let (h, p) = (&h[at..at + (x1 - x0)], &p[at..at + (x1 - x0)]);
+                for (((((hm, hs), pm), ps), &h), &p) in hm[x0..x1].iter_mut().zip(&mut hs[x0..x1]).zip(&mut pm[x0..x1]).zip(&mut ps[x0..x1]).zip(h).zip(p) {
+                    *hm += k * h;
+                    *hs += h;
+                    *pm += k * p;
+                    *ps += p;
+                }
             }
-        }
-        (moment, sum)
-    };
-    let (hm, hs) = along(&h);
-    let (pm, ps) = along(&p);
+        });
     // Then down the columns: Σ over dz of the first, Σ dz·(…) of the second.
     let weight = (2 * r + 1) as f32 * (-r..=r).map(|k| (k * k) as f32).sum::<f32>();
     let mut out = vec![(0f32, 0f32); w * d];
-    for z in 0..d as isize {
-        for x in 0..w {
-            let k = z as usize * w + x;
-            if heights[k].is_nan() {
+    out.par_chunks_mut(w.max(1)).enumerate().for_each(|(z, out)| {
+        let (mut hx, mut hz, mut px, mut pz) = (vec![0f32; w], vec![0f32; w], vec![0f32; w], vec![0f32; w]);
+        for dz in -r..=r {
+            let j = z as isize + dz;
+            if !(0..d as isize).contains(&j) {
                 continue;
             }
-            let (mut hx, mut hz, mut px, mut pz) = (0f32, 0f32, 0f32, 0f32);
-            for dz in -r..=r {
-                let j = z + dz;
-                if (0..d as isize).contains(&j) {
-                    let i = j as usize * w + x;
-                    hx += hm[i];
-                    px += pm[i];
-                    hz += dz as f32 * hs[i];
-                    pz += dz as f32 * ps[i];
-                }
+            let k = dz as f32;
+            let at = j as usize * w;
+            let (hm, hs, pm, ps) = (&hm[at..at + w], &hs[at..at + w], &pm[at..at + w], &ps[at..at + w]);
+            for x in 0..w {
+                hx[x] += hm[x];
+                px[x] += pm[x];
+                hz[x] += k * hs[x];
+                pz[x] += k * ps[x];
             }
-            // Σ dx (h − centre) over the heights there are: missing ones
-            // count as level with the centre.
-            let c = heights[k];
-            out[k] = ((hx - c * px) / weight, (hz - c * pz) / weight);
         }
-    }
+        // Σ dx (h − centre) over the heights there are: missing ones count
+        // as level with the centre.
+        for (x, o) in out.iter_mut().enumerate() {
+            let c = heights[z * w + x];
+            if !c.is_nan() {
+                *o = ((hx[x] - c * px[x]) / weight, (hz[x] - c * pz[x]) / weight);
+            }
+        }
+    });
     out
 }
 
@@ -537,36 +553,8 @@ impl Surface {
         for buf in [&mut sum, &mut count] {
             let mut tmp = vec![0f32; w * d];
             // Rows, then columns: a box filter in two passes.
-            for z in 0..d {
-                let mut acc = 0.0;
-                for x in 0..w.min(k + 1) {
-                    acc += buf[z * w + x];
-                }
-                for x in 0..w {
-                    tmp[z * w + x] = acc;
-                    if x + k + 1 < w {
-                        acc += buf[z * w + x + k + 1];
-                    }
-                    if x >= k {
-                        acc -= buf[z * w + x - k];
-                    }
-                }
-            }
-            for x in 0..w {
-                let mut acc = 0.0;
-                for z in 0..d.min(k + 1) {
-                    acc += tmp[z * w + x];
-                }
-                for z in 0..d {
-                    buf[z * w + x] = acc;
-                    if z + k + 1 < d {
-                        acc += tmp[(z + k + 1) * w + x];
-                    }
-                    if z >= k {
-                        acc -= tmp[(z - k) * w + x];
-                    }
-                }
-            }
+            crate::ops::box_pass(buf, &mut tmp, d, w, k, false, w);
+            crate::ops::box_pass(&tmp, buf, w, d, k, true, w);
         }
         sum.iter().zip(&count).map(|(s, c)| if *c > 0.0 { s / c } else { f32::NAN }).collect()
     }
@@ -575,6 +563,78 @@ impl Surface {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The gradients as they were first worked out, point by point down the
+    /// columns: what [`trend_gradients`] must still give, bit for bit.
+    fn trend_gradients_one_by_one(heights: &[f32], w: usize, d: usize, r: i32) -> Vec<(f32, f32)> {
+        let r = r as isize;
+        // Heights where there are some (0 elsewhere), and where there are.
+        let h: Vec<f32> = heights.iter().map(|v| if v.is_nan() { 0.0 } else { *v }).collect();
+        let p: Vec<f32> = heights.iter().map(|v| if v.is_nan() { 0.0 } else { 1.0 }).collect();
+        // Along the rows: Σ dx·f and Σ f over the row's part of the square.
+        let along = |f: &[f32]| -> (Vec<f32>, Vec<f32>) {
+            let (mut moment, mut sum) = (vec![0f32; w * d], vec![0f32; w * d]);
+            for z in 0..d {
+                let row = &f[z * w..][..w];
+                for x in 0..w as isize {
+                    let (mut m, mut s) = (0.0, 0.0);
+                    for dx in -r..=r {
+                        let i = x + dx;
+                        if (0..w as isize).contains(&i) {
+                            let v = row[i as usize];
+                            m += dx as f32 * v;
+                            s += v;
+                        }
+                    }
+                    moment[z * w + x as usize] = m;
+                    sum[z * w + x as usize] = s;
+                }
+            }
+            (moment, sum)
+        };
+        let (hm, hs) = along(&h);
+        let (pm, ps) = along(&p);
+        // Then down the columns: Σ over dz of the first, Σ dz·(…) of the second.
+        let weight = (2 * r + 1) as f32 * (-r..=r).map(|k| (k * k) as f32).sum::<f32>();
+        let mut out = vec![(0f32, 0f32); w * d];
+        for z in 0..d as isize {
+            for x in 0..w {
+                let k = z as usize * w + x;
+                if heights[k].is_nan() {
+                    continue;
+                }
+                let (mut hx, mut hz, mut px, mut pz) = (0f32, 0f32, 0f32, 0f32);
+                for dz in -r..=r {
+                    let j = z + dz;
+                    if (0..d as isize).contains(&j) {
+                        let i = j as usize * w + x;
+                        hx += hm[i];
+                        px += pm[i];
+                        hz += dz as f32 * hs[i];
+                        pz += dz as f32 * ps[i];
+                    }
+                }
+                // Σ dx (h − centre) over the heights there are: missing ones
+                // count as level with the centre.
+                let c = heights[k];
+                out[k] = ((hx - c * px) / weight, (hz - c * pz) / weight);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn gradients_by_rows_are_bit_for_bit_those_point_by_point() {
+        for (w, d, r) in [(1usize, 1usize, 4), (3, 40, 4), (61, 47, 4), (130, 9, 2), (9, 9, 6)] {
+            let mut heights: Vec<f32> = (0..w * d).map(|i| (i as f32 * 0.37).sin() * 40.0 + 64.0 + (i % 7) as f32 * 0.125).collect();
+            for k in (0..w * d).filter(|k| (k * 7919) % 11 == 3) {
+                heights[k] = f32::NAN;
+            }
+            let (new, old) = (trend_gradients(&heights, w, d, r), trend_gradients_one_by_one(&heights, w, d, r));
+            let bits = |g: &[(f32, f32)]| g.iter().map(|(a, b)| (a.to_bits(), b.to_bits())).collect::<Vec<_>>();
+            assert_eq!(bits(&new), bits(&old), "{w} × {d}, r {r}");
+        }
+    }
 
     #[test]
     fn gradients_at_once_are_those_one_by_one() {
