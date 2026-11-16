@@ -288,7 +288,8 @@ fn cpu_seconds() -> f64 {
 /// for a profiler and for timings: MASSIF_BRUSH is raise, smooth, paint,
 /// height, slope or hollows, MASSIF_RADIUS its radius. Run with
 /// RAYON_NUM_THREADS=1, its CPU time a dab is the work a dab takes, little
-/// changed by what else the machine runs.
+/// changed by what else the machine runs. MASSIF_SELECT=1 selects a
+/// feathered ellipse over half the brush first.
 #[test]
 #[ignore]
 fn one_brush_again_and_again() {
@@ -303,6 +304,12 @@ fn one_brush_again_and_again() {
     };
     let brush = Brush { filter: filter.map(std::sync::Arc::new), ..Brush::symmetric(BrushShape::Circle, Profile::Sine, radius) };
     let mut history = History::default();
+    if std::env::var_os("MASSIF_SELECT").is_some() {
+        use massif_core::selection::{Selection, Shape};
+        let r = radius as i32;
+        let shape = Selection::shape(&Shape::Ellipse(massif_core::BlockRect::new(0, -r, 2 * r, r))).feather(32);
+        history.select(&mut world, 0, "Select", Some(shape));
+    }
     history.begin("perf", 0);
     let mut edit = history.edit(&mut world, 0);
     let seconds: f32 = std::env::var("MASSIF_SECONDS").ok().and_then(|r| r.parse().ok()).unwrap_or(12.0);
