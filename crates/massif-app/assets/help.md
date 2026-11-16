@@ -72,6 +72,7 @@ What Massif did, and what it does in the background (saving, exporting, automati
 - **Flatten**: levels the land to the height where the stroke starts. In Tool Settings, **Both ways** (the default), **Only raise** (fills what is under the height, leaves what is over it) or **Only lower** (the other way round); **Apply theme** repaints the land it flattens with the terrain its new height calls for.
 - **Set height**: sets the land to a height. `Alt`-click on the map picks it.
 - **Roughen**: adds or removes roughness.
+- **Road**: click points on the map: a smooth road runs through them. Drag a point to move it, drag the road to add one, right-click or `Delete` to take one off; `Enter` builds it, `Esc` drops it. In Tool Settings: its **Width**, **Banks**, **Steepest slope** (it cuts and fills to climb no steeper), **Surface** (a path, gravel, cobblestone, stone bricks, a terrain or the Paint tool's noise) and **Bridges over water** (a deck a block over the water, on a level named Bridges; without them the road is built up out of the water). It keeps to the selection; the brush filters choose where its surface is painted. One step to undo.
 
 ## Brushes
 A brush has a shape, a size, an intensity and a rotation. The shapes are the built-in brushes, terrain stamps (whole mountains, dunes, craters) and your own images.

@@ -7081,6 +7081,102 @@ mod tests {
         image::save_buffer(dir.join("river-dug-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
     }
 
+    /// The Road tool: points clicked on the map, the road edited (a point
+    /// added by dragging the road, one taken off with a right-click, one
+    /// with Delete), Enter, and the road is graded and painted in one step
+    /// to undo. Needs a GPU: runs with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn roads_are_drawn_on_the_map() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        {
+            let app = h.state_mut();
+            let world = generate(&GenParams {
+                tiles_x: 8,
+                tiles_z: 8,
+                landform: Landform::Hills,
+                ..GenParams::default()
+            });
+            app.doc = crate::doc::Document::new(world, None, 7);
+            app.map_cache.invalidate_all();
+            app.view3d.invalidate_all();
+            app.tools.select(Tool::Road);
+            app.tools.road.width = 7.0;
+        }
+        h.run_steps(5);
+        h.render().unwrap().save(dir.join("road-start.png")).unwrap();
+        let (high, low) = river_ends(h.state());
+        let at = |h: &egui_kittest::Harness<'_, MassifApp>, p: (f32, f32)| h.state().maps.values().next().unwrap().screen_of(p.0 as f64, p.1 as f64);
+        let (a, b) = (at(&h, high), at(&h, low));
+        let side = vec2(-(b - a).y, (b - a).x).normalized() * 70.0;
+        for p in [a - (b - a) * 0.3, a + side, b, b + (b - a) * 0.3 - side] {
+            click_on(&mut h, p, egui::PointerButton::Primary);
+        }
+        assert_eq!(h.state().tools.road_draft.as_ref().unwrap().points.len(), 4);
+        // A point added by dragging the road.
+        let course = h.state().tools.road_draft.as_ref().unwrap().plan.course.clone();
+        let mid = at(&h, course[course.len() / 3]);
+        drag_on(&mut h, mid, mid + vec2(-50.0, 40.0));
+        assert_eq!(h.state().tools.road_draft.as_ref().unwrap().points.len(), 5);
+        // One taken off with a right-click, another with Delete.
+        click_on(&mut h, a + side, egui::PointerButton::Secondary);
+        assert_eq!(h.state().tools.road_draft.as_ref().unwrap().points.len(), 4);
+        click_on(&mut h, b, egui::PointerButton::Primary);
+        h.event(egui::Event::Key {
+            key: egui::Key::Delete,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(3);
+        let draft = h.state().tools.road_draft.clone().unwrap();
+        assert_eq!(draft.points.len(), 3);
+        assert!(draft.plan.within, "{}", draft.summary());
+        h.event(egui::Event::PointerMoved(mid + vec2(200.0, 200.0)));
+        h.run_steps(3);
+        h.render().unwrap().save(dir.join("road-draft.png")).unwrap();
+        let revision = h.state().doc.revision;
+        h.event(egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(10);
+        assert_eq!(h.state().doc.history.undo_label(), Some("Road"));
+        assert!(h.state().tools.road_draft.is_none());
+        let note = h.state().tools.road_note.clone().unwrap_or_default();
+        assert!(note.starts_with("Built a road"), "{note}");
+        // Painted with its surface along its middle.
+        let path = h.state().doc.world.registry.terrain_by_name("Trodden path").expect("the mix was added");
+        let mid = draft.plan.course[draft.plan.course.len() / 2];
+        let probe = crate::tools::probe(&h.state().doc, mid.0.floor() as i32, mid.1.floor() as i32).unwrap();
+        assert!(probe.terrain == path.0 || draft.plan.bridge[draft.plan.course.len() / 2], "{probe:?}");
+        h.render().unwrap().save(dir.join("road-built.png")).unwrap();
+        {
+            let app = h.state_mut();
+            app.layout.activate(3);
+            app.view3d.camera.distance = 420.0;
+            app.view3d.camera.pitch = 0.55;
+        }
+        h.run_steps(5);
+        while h.state().view3d.pending() > 0 {
+            h.step();
+        }
+        h.run_steps(3);
+        let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+        image::save_buffer(dir.join("road-built-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+        // Undone in one step.
+        h.state_mut().doc.undo();
+        assert!(h.state().doc.revision != revision);
+        let probe = crate::tools::probe(&h.state().doc, mid.0.floor() as i32, mid.1.floor() as i32).unwrap();
+        assert_ne!(probe.terrain, path.0);
+    }
+
     /// Rivers on the map, converted over it: the ground is left as it is,
     /// the beds and their water are in levels of the graph's own, written
     /// again by the next conversion. Needs a GPU: runs with

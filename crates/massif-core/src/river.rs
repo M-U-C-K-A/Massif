@@ -73,7 +73,7 @@ pub struct RiverReport {
 }
 
 /// Blocks between the points of the smoothed course.
-const STEP: f32 = 0.5;
+pub const STEP: f32 = 0.5;
 
 /// The curve through `points` (Catmull-Rom), a point every [`STEP`] blocks.
 pub fn smooth_course(points: &[(f32, f32)]) -> Vec<(f32, f32)> {
@@ -107,15 +107,19 @@ pub fn smooth_course(points: &[(f32, f32)]) -> Vec<(f32, f32)> {
 }
 
 /// Reads the ground of a level at single columns, decoding each tile once.
-struct Ground<'a> {
+pub(crate) struct Ground<'a> {
     level: &'a crate::level::Level,
     tiles: HashMap<TilePos, Option<TileRef<'a>>>,
 }
 
 impl<'a> Ground<'a> {
+    pub(crate) fn new(level: &'a crate::level::Level) -> Self {
+        Self { level, tiles: HashMap::new() }
+    }
+
     /// The height of the ground at `(x, z)`, and the level of its water if
     /// it is under water.
-    fn at(&mut self, x: i32, z: i32) -> Option<(f32, Option<f32>)> {
+    pub(crate) fn at(&mut self, x: i32, z: i32) -> Option<(f32, Option<f32>)> {
         let pos = TilePos::containing(x, z);
         let level = self.level;
         let tile = self.tiles.entry(pos).or_insert_with(|| level.view(pos)).as_ref()?;

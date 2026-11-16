@@ -18,6 +18,9 @@ pub enum Tool {
     Flatten,
     SetHeight,
     Roughen,
+    /// A road laid out through points: graded into the land, painted,
+    /// bridged over water.
+    Road,
     PaintTerrain,
     PaintBiome,
     /// What grows on the ground: grass, flowers, snow… (a cover).
@@ -55,7 +58,7 @@ impl Tool {
         (
             "Sculpt terrain",
             Icon::Mountain,
-            &[Tool::Raise, Tool::Smooth, Tool::Flatten, Tool::SetHeight, Tool::Roughen],
+            &[Tool::Raise, Tool::Smooth, Tool::Flatten, Tool::SetHeight, Tool::Roughen, Tool::Road],
         ),
         (
             "Paint",
@@ -76,6 +79,7 @@ impl Tool {
             Tool::Flatten => "Flatten",
             Tool::SetHeight => "Set height",
             Tool::Roughen => "Roughen",
+            Tool::Road => "Road",
             Tool::PaintTerrain => "Paint terrain",
             Tool::PaintBiome => "Paint biome",
             Tool::Cover => "Ground cover",
@@ -107,6 +111,7 @@ impl Tool {
             Tool::Flatten => Icon::Equal,
             Tool::SetHeight => Icon::Ruler,
             Tool::Roughen => Icon::Sparkles,
+            Tool::Road => Icon::Signpost,
             Tool::PaintTerrain => Icon::Paintbrush,
             Tool::PaintBiome => Icon::Trees,
             Tool::Cover => Icon::Sprout,
@@ -170,6 +175,7 @@ impl Tool {
             Tool::Flatten => "Flatten to the height where the stroke starts.",
             Tool::SetHeight => "Set the ground to the target height.",
             Tool::Roughen => "Roughen the ground. Right button: smoother.",
+            Tool::Road => "Click points: a road runs through them. Enter builds it.",
             Tool::PaintTerrain => {
                 "Paint a terrain, or several mixed by a noise. Right button: back to automatic."
             }
@@ -211,7 +217,7 @@ impl Tool {
     }
 
     pub const fn uses_brush(self) -> bool {
-        !matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Drain | Tool::Pan | Tool::River | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso)
+        !matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Drain | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso)
     }
 
     /// The tools that draw the selection.
@@ -310,6 +316,13 @@ pub struct ToolState {
     /// What the last river dug.
     #[serde(skip)]
     pub river_note: Option<String>,
+    /// How roads are built, and the road being laid out.
+    pub road: crate::road_draft::RoadSettings,
+    #[serde(skip)]
+    pub road_draft: Option<crate::road_draft::RoadDraft>,
+    /// What the last road built.
+    #[serde(skip)]
+    pub road_note: Option<String>,
     /// What the last import of objects read.
     #[serde(skip)]
     pub objects_note: Option<String>,
@@ -853,6 +866,9 @@ impl Default for ToolState {
             river_draft: None,
             sculpt: SculptSettings::default(),
             river_note: None,
+            road: Default::default(),
+            road_draft: None,
+            road_note: None,
             objects_note: None,
             pattern: PatternSettings::default(),
             show_strength: true,
@@ -1087,7 +1103,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                     massif_core::voxel::sculpt(&mut edit, brush, [x, y, z], strength, mode);
                 }
             }
-            Tool::Eyedropper | Tool::Flood | Tool::Drain | Tool::Pan | Tool::River | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush => {}
+            Tool::Eyedropper | Tool::Flood | Tool::Drain | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush => {}
         }
     }
     stroke.last = to;

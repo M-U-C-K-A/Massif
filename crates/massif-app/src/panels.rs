@@ -335,6 +335,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
                 hint(ui, "Repaints the land it flattens with the terrain its new height calls for.");
             }
         }
+        Tool::Road => crate::road_draft::settings(ui, tools, doc),
         Tool::Roughen => {
             slider_row(ui, "Amplitude", |ui| ui.add(crate::widgets::Field::new(&mut tools.roughness, 0.5..=40.0).suffix(" blocks")));
         }

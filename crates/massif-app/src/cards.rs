@@ -186,6 +186,17 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
             None,
             Some(Demo::Roughen),
         ),
+        Tool::Road => card(
+            "Lays out a road: graded into the land, its sides eased, its surface painted, bridged over water.",
+            vec![
+                ("Click", "Add a point"),
+                ("Drag", "Move a point, or the road to add one"),
+                ("Right-click", "Take a point off"),
+                ("Enter", "Build it"),
+            ],
+            Some("Its width, banks, steepest slope and surface are in its settings."),
+            Some(Demo::Road),
+        ),
         Tool::PaintTerrain => card(
             "Paints a terrain: the blocks on top of the ground.",
             vec![("Drag", "Paint"), ("Right-drag", "Back to what the height calls for")],
@@ -319,6 +330,7 @@ pub enum Demo {
     Drain,
     Water,
     River,
+    Road,
     Slab,
     EraseSlab,
     Select,
@@ -676,6 +688,43 @@ impl Demo {
                         left -= len;
                     }
                     s.water = 63.0;
+                }
+                let last = points[clicked - 1];
+                (progress < 0.5).then_some((last.0, last.1, 2.0, (progress / 0.12) % 1.0 < 0.3))
+            }
+            Demo::Road => {
+                s.add_hills(9.0);
+                let points = [(8.0, 40.0), (46.0, 18.0), (84.0, 44.0), (120.0, 22.0)];
+                let clicked = ((progress / 0.12).floor() as usize + 1).min(points.len());
+                s.markers = points[..clicked].to_vec();
+                let build = smooth_step(0.5, 0.95, progress);
+                if build > 0.0 {
+                    // Graded: level across, climbing gently from one end to
+                    // the other; paved; its banks eased into the land.
+                    let total: f64 = points.windows(2).map(|p| (p[1].0 - p[0].0).hypot(p[1].1 - p[0].1)).sum();
+                    let (start, end) = (s.heights[40 * W + 8] as f64, s.heights[22 * W + 120] as f64);
+                    let (mut left, mut walked) = (total * build, 0.0);
+                    let before = s.heights.clone();
+                    for p in points.windows(2) {
+                        let len = (p[1].0 - p[0].0).hypot(p[1].1 - p[0].1);
+                        let part = (left / len).min(1.0);
+                        let mut t = 0.0;
+                        while t <= part && left > 0.0 {
+                            let (x, y) = (p[0].0 + (p[1].0 - p[0].0) * t, p[0].1 + (p[1].1 - p[0].1) * t);
+                            let road = (start + (end - start) * (walked + t * len) / total) as f32;
+                            let (h, terrain) = (&mut s.heights, &mut s.terrain);
+                            Scene::near(x, y, 7.0, |i, d| {
+                                let u = smooth_step(3.0, 7.0, d) as f32;
+                                h[i] = road + (before[i] - road) * u;
+                                if d <= 3.0 {
+                                    terrain[i] = SAND;
+                                }
+                            });
+                            t += 0.5 / len;
+                        }
+                        walked += len;
+                        left -= len;
+                    }
                 }
                 let last = points[clicked - 1];
                 (progress < 0.5).then_some((last.0, last.1, 2.0, (progress / 0.12) % 1.0 < 0.3))

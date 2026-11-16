@@ -30,6 +30,7 @@ mod picker;
 mod player;
 mod quit;
 mod reshape;
+mod road_draft;
 mod select;
 mod sounds;
 mod textures;

@@ -16,6 +16,7 @@ The editor, part by part: the home screen, the window, brushes and their options
 - [Ground covers](#ground-covers)
 - [Custom objects](#custom-objects)
 - [Rivers](#rivers)
+- [Roads](#roads)
 - [Height maps](#height-maps)
 - [Real blocks](#real-blocks)
 - [3D Sculpt](#3d-sculpt)
@@ -737,6 +738,45 @@ and a river biome on its water.
 The water's level is a whole block per column, so it stands in steps
 along the river: still water, as Minecraft keeps it; mods that let water
 flow over water (Streams Reflowing) make a current of it.
+
+## Roads
+
+The **Road** tool (Sculpt terrain group) lays a road through points
+clicked on the 2D map and builds it into the land:
+
+- **Click** on the map: where the road starts; each click after adds a
+  point at its end. A smooth curve runs through all of them.
+- **Drag a point** to move it; **drag the road** anywhere between two points
+  to add one there and move it. **Right-click** a point, or press
+  **Delete** (the point last taken hold of), to take it off.
+- **Build road** (or Enter) builds it, one undoable step; **Cancel** (or
+  Esc) drops it. The bar over the map says how long it is, the steepest it
+  climbs and how much of it is on bridges.
+
+Its settings, in Tool Settings: **Width** of the level way, **Banks** (how
+far its sides ease back into the land), **Steepest slope** (in percent:
+12 % climbs a block every eight), **Surface** and **Bridges over water**
+with the **Deck** they are made of.
+
+- The road follows the land where the land is gentle. Where it is steeper
+  than the limit, the road cuts through the humps and fills the hollows,
+  halfway between, so that it never climbs steeper than the limit. Its two
+  ends meet the land as it is.
+- Across its width the road is level; past it, the banks blend back into
+  the land.
+- **Surface**: a trodden path, a gravel mix, a cobblestone mix, stone
+  bricks or a wooden deck (added to the map's terrains when a road is built
+  with them), any terrain of the map, the noise of the Paint tool, or the
+  ground left as it is. Nothing grows on the road (its ground cover goes),
+  and no object stands on it or along its edges.
+- **Over water**, with bridges, the road crosses on a deck one block thick,
+  a block above the water's surface, laid on a level of its own named
+  **Bridges** (added with the first bridge); the water and the bed stay under
+  it, and the road climbs down to the deck's height on either shore.
+  Without bridges, the road is built up a block over the water.
+- A **selection** holds the road: only what is selected changes, faded along
+  a feathered edge. The **brush filters** choose where its surface is
+  painted (only on grass, not above a height…); the grading ignores them.
 
 ## Height maps
 

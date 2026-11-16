@@ -150,6 +150,12 @@ pub fn paint(painter: &Painter, rect: Rect, tool: Tool, color: Color32) {
             pen.arrow((12.0, 15.0), (12.0, 8.5));
         }
         // Ground broken into crags, a few stones thrown up.
+        // A road winding away between its edges, dashes down its middle.
+        Tool::Road => {
+            pen.line(&[(3.0, 21.5), (7.5, 13.0), (10.0, 6.5), (10.5, 2.5)]);
+            pen.line(&[(21.0, 21.5), (16.5, 13.0), (14.0, 6.5), (13.5, 2.5)]);
+            pen.dashed(&[(12.0, 20.5), (12.0, 13.0), (12.0, 4.5)]);
+        }
         Tool::Roughen => {
             pen.line(&[(2.0, 19.0), (4.5, 14.0), (6.5, 16.5), (9.0, 9.5), (11.0, 14.0), (13.0, 7.0), (15.5, 13.5), (17.5, 11.0), (19.5, 15.5), (22.0, 13.0)]);
             pen.dot(5.0, 7.0, 1.1);
@@ -281,12 +287,13 @@ mod tests {
         let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from) else {
             return;
         };
-        const ALL: [Tool; 22] = [
+        const ALL: [Tool; 23] = [
             Tool::Raise,
             Tool::Smooth,
             Tool::Flatten,
             Tool::SetHeight,
             Tool::Roughen,
+            Tool::Road,
             Tool::PaintTerrain,
             Tool::PaintBiome,
             Tool::AutoPaint,

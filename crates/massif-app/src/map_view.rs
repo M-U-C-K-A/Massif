@@ -924,7 +924,12 @@ impl MapView {
             let secondary = button == PointerButton::Secondary;
             let inverse = secondary || modifiers.alt;
             let (bx, bz) = (x.floor() as i32, z.floor() as i32);
-            if tools.tool == Tool::River {
+            if tools.tool == Tool::Road {
+                if let Some(p) = pointer {
+                    let screen = |q: (f32, f32)| self.to_screen(canvas, q.0 as f64, q.1 as f64);
+                    *feedback = crate::road_draft::press(doc, tools, (x as f32, z as f32), p, secondary, &screen, self.zoom).or(feedback.take());
+                }
+            } else if tools.tool == Tool::River {
                 let at = (x as f32, z as f32);
                 let hit = match (&tools.river_draft, pointer) {
                     (Some(draft), Some(p)) => self.river_hit(canvas, draft, &tools.river, p),
@@ -1002,6 +1007,11 @@ impl MapView {
                 }
                 _ => self.river_grab = None,
             }
+        }
+        if tools.tool == Tool::Road
+            && let Some(msg) = crate::road_draft::follow(doc, tools, world_pointer.map(|(x, z)| (x as f32, z as f32)), down[0], ui)
+        {
+            *feedback = Some(msg);
         }
         if tools.tool == Tool::River
             && tools.river_draft.is_some()
@@ -1272,6 +1282,11 @@ impl MapView {
         } else {
             self.spring = None;
         }
+        if tools.tool == Tool::Road {
+            let screen = |q: (f32, f32)| self.to_screen(canvas, q.0 as f64, q.1 as f64);
+            let hover = pointer.filter(|_| response.hovered());
+            crate::road_draft::draw(ui, &painter, canvas, response.id, &screen, self.zoom, hover, doc, tools, feedback);
+        }
         if tools.tool == Tool::River && tools.river_draft.is_some() {
             self.river_bar(ui, &painter, canvas, response.id, doc, tools, feedback);
         }
@@ -1383,7 +1398,7 @@ impl MapView {
                 }
                 painter.circle_filled(p, 1.5, Color32::WHITE);
                 ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
-            } else if tools.tool != Tool::River || tools.river_draft.is_none() {
+            } else if (tools.tool != Tool::River || tools.river_draft.is_none()) && (tools.tool != Tool::Road || tools.road_draft.is_none()) {
                 ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
             }
         }
