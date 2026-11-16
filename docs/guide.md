@@ -1029,16 +1029,28 @@ are not kept.
 
 ## Flood and drain
 
-The **Flood** tool (Water group) fills with water the hollow you click.
-With **From the click** on (in Tool Settings, the default), the water rises
-in that hollow up to the lowest point of its rim, where it would spill, and
-the **Water level** below takes that height; a lake already in the hollow
-counts as its floor. Clicked where water would only run away (on a slope,
-a hilltop, flat ground), it fills nothing and says so. With From the click
-off, it fills up to the Water level you set (**Sea level** puts the sea's),
-and if that level is under the spot clicked, its message says to raise it.
-**Drain** (or the right button) empties the body of water clicked. Both
-keep to the selection and are one step to undo.
+The water tools (Water group) work at any height, wherever you use them;
+the sea's level is not a limit.
+
+- **Flood** fills with water the hollow you click. With **From the click**
+  on (in Tool Settings, the default), the water rises in that hollow up to
+  the lowest point of its rim, where it would spill, and the **Water
+  level** below takes that height; a lake already in the hollow counts as
+  its floor. Clicked where water would only run away (on a slope, a
+  hilltop, flat ground), it fills nothing and says so.
+- The **Water brush** lays water under the brush. With From the click on,
+  each stroke lays it as high as where it starts: the surface of the water
+  there, or a block over the ground. The right button takes water off.
+- With From the click off, both use the **Water level** you set (**Sea
+  level** puts the sea's); Flood says so when that level is under the spot
+  clicked.
+- **Limit the water's height** (off by default) keeps both under a height
+  of your choice (**Sea level** puts the sea's): the water never rises
+  above it, and when the limit is under the spot used, the tool says so.
+- **Drain** (or Flood's right button) empties the body of water clicked.
+
+All of them keep to the selection, and each click or stroke is one step to
+undo.
 
 ## Rivers
 

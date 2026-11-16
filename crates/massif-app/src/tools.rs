@@ -276,9 +276,15 @@ pub struct ToolState {
     /// [`massif_core::tile::ANNOTATION_COLORS`]).
     pub annotation: u16,
     pub water_level: i16,
-    /// Flood fills the hollow clicked up to where it spills, rather than up
-    /// to `water_level`.
-    pub flood_from_click: bool,
+    /// The water tools take their level from where they are used: Flood
+    /// fills the hollow clicked up to where it spills, the Water brush lays
+    /// water as high as where its stroke starts; otherwise both use
+    /// `water_level`.
+    #[serde(alias = "flood_from_click")]
+    pub water_from_click: bool,
+    /// The water tools never lay water higher than `water_limit`.
+    pub water_limit_on: bool,
+    pub water_limit: i16,
     pub slab_thickness: f32,
     pub anchor: AnchorMode,
     pub slab_offset: f32,
@@ -844,7 +850,9 @@ impl Default for ToolState {
             object_layer: 0,
             annotation: 14,
             water_level: 63,
-            flood_from_click: true,
+            water_from_click: true,
+            water_limit_on: false,
+            water_limit: 63,
             slab_thickness: 16.0,
             anchor: AnchorMode::AboveGround,
             slab_offset: 40.0,
@@ -927,6 +935,8 @@ pub struct Stroke {
     secondary: bool,
     /// Height to flatten toward: where the stroke started.
     flatten_to: Option<f32>,
+    /// The level the Water brush lays its water at.
+    water_to: Option<i16>,
     /// Columns the automatic tools changed.
     changed: usize,
     /// What the automatic tools give the land, read once for the stroke.
@@ -955,6 +965,19 @@ impl Stroke {
     }
 }
 
+impl ToolState {
+    /// `level` under the water tools' limit, if it is on.
+    pub fn limit_water(&self, level: i16) -> i16 {
+        if self.water_limit_on { level.min(self.water_limit) } else { level }
+    }
+}
+
+/// What the water tools say when their limit keeps the water under the
+/// spot used.
+fn under_the_limit(tools: &ToolState) -> String {
+    tr!("The height limit {water_limit} is under this spot: raise it or turn it off in Tool Settings.", water_limit = tools.water_limit)
+}
+
 /// Begin a stroke at block position `at`. Returns `None` when the tool
 /// cannot act here (the reason is in the feedback).
 pub fn begin_stroke(doc: &mut Document, tools: &ToolState, at: (f32, f32), inverse: bool, secondary: bool) -> (Option<Stroke>, Feedback) {
@@ -975,6 +998,24 @@ pub fn begin_stroke(doc: &mut Document, tools: &ToolState, at: (f32, f32), inver
     let flatten_to = (tool == Tool::Flatten)
         .then(|| ops::height_at(doc.dimension(), level, at.0.floor() as i32, at.1.floor() as i32, tools.surface()))
         .flatten();
+    // The Water brush's level: from where the stroke starts (its water's
+    // surface, or a block over its ground), or the one set; under the limit.
+    let water_to = if tool == Tool::Water && !inverse {
+        let here = probe(doc, at.0.floor() as i32, at.1.floor() as i32);
+        let level = match &here {
+            Some(p) if tools.water_from_click => {
+                if p.fluid != NO_FLUID && p.fluid as i32 > block_top(p.height) { p.fluid } else { (block_top(p.height) + 1).clamp(i16::MIN as i32, i16::MAX as i32) as i16 }
+            }
+            _ => tools.water_level,
+        };
+        let level = tools.limit_water(level);
+        if tools.water_limit_on && here.is_some_and(|p| block_top(p.height) >= level as i32) {
+            return (None, Some(under_the_limit(tools)));
+        }
+        Some(level)
+    } else {
+        None
+    };
     doc.history.begin(crate::i18n::tr_name(tool.label()), doc.dim);
     let salt = doc.revision.wrapping_mul(0x9e37_79b9) ^ 0x5bd1_e995;
     let stroke = Stroke {
@@ -985,6 +1026,7 @@ pub fn begin_stroke(doc: &mut Document, tools: &ToolState, at: (f32, f32), inver
         inverse,
         secondary,
         flatten_to,
+        water_to,
         changed: 0,
         classes: None,
         sides: massif_core::gradient::Sides::new(),
@@ -1098,7 +1140,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                 (None, None) => {}
             },
             Tool::Water => {
-                let level = if invert { NO_FLUID } else { tools.water_level };
+                let level = if invert { NO_FLUID } else { stroke.water_to.unwrap_or(tools.water_level) };
                 ops::set_fluid(&mut edit, brush, x, z, level);
             }
             Tool::StampSlab | Tool::EraseSlab if (stroke.tool == Tool::StampSlab) != invert => {
@@ -1288,22 +1330,26 @@ pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse:
         Tool::Flood | Tool::Drain => {
             let flood = (tools.tool == Tool::Flood) != inverse;
             // From the click: the hollow clicked, up to where it spills.
-            if flood && tools.flood_from_click {
+            if flood && tools.water_from_click {
                 match ops::spill_level(doc.dimension(), x, z, 16 << 20) {
                     Some(level) => tools.water_level = level,
                     None => return Some(tr!("This spot is not in a hollow: water poured here runs away. Untick From the click in Tool Settings to flood up to a level of your own.").to_owned()),
                 }
             }
-            let mode = if flood { Flood::Fill(tools.water_level) } else { Flood::Drain };
+            let level = tools.limit_water(tools.water_level);
+            if flood && tools.water_limit_on && probe(doc, x, z).is_some_and(|p| block_top(p.height) >= level as i32) {
+                return Some(under_the_limit(tools));
+            }
+            let mode = if flood { Flood::Fill(level) } else { Flood::Drain };
             doc.history.begin(if flood { tr!("Flood") } else { tr!("Drain") }, doc.dim);
             let n = ops::flood_fill(&mut doc.history.edit(&mut doc.world, 0), x, z, mode, 64 << 20);
             doc.commit();
             Some(match (flood, n) {
-                (true, 0) if !tools.flood_from_click && probe(doc, x, z).is_some_and(|p| block_top(p.height) >= tools.water_level as i32) => {
+                (true, 0) if !tools.water_from_click && probe(doc, x, z).is_some_and(|p| block_top(p.height) >= tools.water_level as i32) => {
                     tr!("The water level {water_level} is under this spot: raise it in Tool Settings, or tick From the click.", water_level = tools.water_level)
                 }
                 (_, 0) => tr!("Nothing to fill or drain here").to_owned(),
-                (true, n) => tr!("Flooded {n} columns up to {water_level}", water_level = tools.water_level, n),
+                (true, n) => tr!("Flooded {n} columns up to {water_level}", water_level = level, n),
                 (false, n) => tr!("Drained {n} columns", n),
             })
         }
@@ -1472,7 +1518,7 @@ mod tests {
         assert_eq!(tools.terrain, d.world.registry.terrain_by_name("Grass").unwrap().0);
 
         tools.select(Tool::Flood);
-        tools.flood_from_click = false;
+        tools.water_from_click = false;
         tools.water_level = 70;
         let msg = click(&mut d, &mut tools, 0, 0, false).unwrap();
         assert!(msg.starts_with("Flooded 65536 columns"), "{msg}");
@@ -1488,13 +1534,58 @@ mod tests {
         let mut d = doc();
         let mut tools = ToolState::default();
         tools.select(Tool::Flood);
-        assert!(tools.flood_from_click);
+        assert!(tools.water_from_click);
         let msg = click(&mut d, &mut tools, 50, 50, false).unwrap();
         assert!(msg.starts_with("This spot is not in a hollow"), "{msg}");
-        tools.flood_from_click = false;
+        tools.water_from_click = false;
         tools.water_level = 40;
         let msg = click(&mut d, &mut tools, 50, 50, false).unwrap();
         assert!(msg.starts_with("The water level 40 is under this spot"), "{msg}");
+        // With a limit, never higher than it; under the spot, it says so.
+        tools.water_level = 70;
+        tools.water_limit_on = true;
+        tools.water_limit = 66;
+        let msg = click(&mut d, &mut tools, 50, 50, false).unwrap();
+        assert!(msg.ends_with("up to 66"), "{msg}");
+        assert_eq!(probe(&d, 60, 60).unwrap().fluid, 66);
+        tools.water_limit = 60;
+        let msg = click(&mut d, &mut tools, 120, 120, false).unwrap();
+        assert!(msg.starts_with("The height limit 60 is under this spot"), "{msg}");
+    }
+
+    /// The Water brush lays its water as high as where its stroke starts,
+    /// at any height: a block over the ground there, or the surface of the
+    /// water there; at the level set with From the click off; and never
+    /// over the limit when there is one, saying so when the limit is under
+    /// the spot.
+    #[test]
+    fn the_water_brush_lays_water_where_it_starts() {
+        let mut d = doc();
+        let mut tools = ToolState::default();
+        tools.select(Tool::Water);
+        let paint = |d: &mut Document, tools: &ToolState, at: (f32, f32)| {
+            let (stroke, msg) = begin_stroke(d, tools, at, false, false);
+            let Some(mut stroke) = stroke else { return msg };
+            continue_stroke(d, tools, &mut stroke, at, 0.1);
+            end_stroke(d, stroke);
+            None
+        };
+        let ground = block_top(probe(&d, 50, 50).unwrap().height);
+        assert!(paint(&mut d, &tools, (50.5, 50.5)).is_none());
+        assert_eq!(probe(&d, 50, 50).unwrap().fluid as i32, ground + 1);
+        // Started in that water: its surface.
+        assert!(paint(&mut d, &tools, (52.5, 50.5)).is_none());
+        assert_eq!(probe(&d, 53, 50).unwrap().fluid as i32, ground + 1);
+        tools.water_from_click = false;
+        tools.water_level = 90;
+        assert!(paint(&mut d, &tools, (100.5, 100.5)).is_none());
+        assert_eq!(probe(&d, 100, 100).unwrap().fluid, 90);
+        tools.water_from_click = true;
+        tools.water_limit_on = true;
+        tools.water_limit = 60;
+        let msg = paint(&mut d, &tools, (-60.5, -60.5)).expect("it says why");
+        assert!(msg.starts_with("The height limit 60 is under this spot"), "{msg}");
+        assert_eq!(probe(&d, -61, -61).unwrap().fluid, NO_FLUID);
     }
 
     #[test]
@@ -1510,7 +1601,7 @@ mod tests {
         assert!(height(&d, 0, 0) < 64.0);
 
         tools.select(Tool::Flood);
-        tools.flood_from_click = false;
+        tools.water_from_click = false;
         tools.water_level = 70;
         click(&mut d, &mut tools, 50, 50, false);
         assert_eq!(probe(&d, 60, 60).unwrap().fluid, 70);

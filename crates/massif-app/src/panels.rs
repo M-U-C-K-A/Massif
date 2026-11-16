@@ -460,22 +460,42 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             }
         }
         Tool::Flood | Tool::Water => {
-            if tool == Tool::Flood {
-                crate::widgets::checkbox(ui, &mut tools.flood_from_click, tr!("From the click"));
-                if tools.flood_from_click {
-                    hint(ui, tr!("Fills the hollow you click up to where it spills, and sets the level below to it."));
-                }
-                ui.add_space(4.0);
+            let (lo, hi) = (doc.dimension().min_y as i16, doc.dimension().max_y as i16);
+            let sea = doc.world.meta.sea_level as i16;
+            crate::widgets::checkbox(ui, &mut tools.water_from_click, tr!("From the click"));
+            if tools.water_from_click {
+                hint(
+                    ui,
+                    if tool == Tool::Flood {
+                        tr!("Fills the hollow you click up to where it spills, and sets the level below to it.")
+                    } else {
+                        tr!("Lays water as high as where each stroke starts: the water's surface there, or a block over the ground.")
+                    },
+                );
             }
-            slider_row(ui, tr!("Water level"), |ui| {
-                crate::widgets::drag(ui, egui::DragValue::new(&mut tools.water_level).range(doc.dimension().min_y as i16..=doc.dimension().max_y as i16))
+            ui.add_space(4.0);
+            // The level set, for when the click does not give it.
+            ui.add_enabled_ui(!tools.water_from_click, |ui| {
+                slider_row(ui, tr!("Water level"), |ui| crate::widgets::drag(ui, egui::DragValue::new(&mut tools.water_level).range(lo..=hi)));
+                ui.horizontal(|ui| {
+                    ui.add_space(76.0);
+                    if ui.small_button(tr!("Sea level ({sea_level})", sea_level = sea)).clicked() {
+                        tools.water_level = sea;
+                    }
+                });
             });
-            ui.horizontal(|ui| {
-                ui.add_space(76.0);
-                if ui.small_button(tr!("Sea level ({sea_level})", sea_level = doc.world.meta.sea_level)).clicked() {
-                    tools.water_level = doc.world.meta.sea_level as i16;
-                }
-            });
+            ui.add_space(4.0);
+            crate::widgets::checkbox(ui, &mut tools.water_limit_on, tr!("Limit the water's height"));
+            if tools.water_limit_on {
+                slider_row(ui, tr!("Highest"), |ui| crate::widgets::drag(ui, egui::DragValue::new(&mut tools.water_limit).range(lo..=hi)));
+                ui.horizontal(|ui| {
+                    ui.add_space(76.0);
+                    if ui.small_button(tr!("Sea level ({sea_level})", sea_level = sea)).clicked() {
+                        tools.water_limit = sea;
+                    }
+                });
+                hint(ui, tr!("The water tools never lay water above this height."));
+            }
         }
         Tool::StampSlab => {
             slider_row(ui, tr!("Thickness"), |ui| {

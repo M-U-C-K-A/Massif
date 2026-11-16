@@ -253,7 +253,7 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
         ),
         Tool::Flood => card(
             tr!("Fills low ground with water as far as it is enclosed: lakes and seas."),
-            vec![(tr!("Click"), tr!("Flood up to the water level")), (tr!("Right-click"), tr!("Drain it"))],
+            vec![(tr!("Click"), tr!("Fill the hollow clicked")), (tr!("Right-click"), tr!("Drain it"))],
             None,
             Some(Demo::Flood),
         ),
@@ -264,7 +264,7 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
             Some(Demo::Drain),
         ),
         Tool::Water => card(
-            tr!("Sets the water under the brush to the water level."),
+            tr!("Lays water under the brush, as high as where the stroke starts."),
             vec![(tr!("Drag"), tr!("Lay water")), (tr!("Right-drag"), tr!("Take it off"))],
             None,
             Some(Demo::Water),

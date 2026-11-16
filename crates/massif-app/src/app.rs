@@ -5711,7 +5711,7 @@ mod tests {
         h.run_steps(3);
         h.state_mut().tools.select(Tool::Flood);
         h.run_steps(3);
-        assert!(h.state().tools.flood_from_click);
+        assert!(h.state().tools.water_from_click);
         if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
             let image = h.render().unwrap();
             let rect = h.get_by_label("From the click").rect();
@@ -5722,7 +5722,20 @@ mod tests {
         }
         h.get_by_label("From the click").click();
         h.run_steps(2);
-        assert!(!h.state().tools.flood_from_click);
+        assert!(!h.state().tools.water_from_click);
+        // The limit, off by default, turned on.
+        assert!(!h.state().tools.water_limit_on);
+        h.get_by_label("Limit the water's height").click();
+        h.run_steps(3);
+        assert!(h.state().tools.water_limit_on);
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            let image = h.render().unwrap();
+            let rect = h.get_by_label("From the click").rect();
+            let ppp = h.ctx.pixels_per_point();
+            let (x0, y0) = (((rect.left() - 40.0).max(0.0) * ppp) as u32, ((rect.top() - 60.0).max(0.0) * ppp) as u32);
+            let crop = image::imageops::crop_imm(&image, x0, y0, (360.0 * ppp) as u32, (260.0 * ppp) as u32).to_image();
+            crop.save(dir.join("tool-settings-flood-limit.png")).unwrap();
+        }
     }
 
     /// The menu bar, the pointer over View, for the eye (MASSIF_SNAPSHOT_DIR);

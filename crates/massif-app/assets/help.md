@@ -179,7 +179,7 @@ The **Layers** panel (under Terrain; or any area's chooser, in Paint) lists ever
 
 # Water
 - **River** lays a river from a click to another: its bed, its banks and its water. Down steep slopes it falls from pool to pool, a plunge pool under each fall.
-- **Flood** fills the hollow you click with water up to where it would spill over its rim (**From the click**, in Tool Settings), or, with that off, up to the **Water level** you set; when nothing fills, its message says why. **Drain** empties a body of water.
+- **Flood** fills the hollow you click with water up to where it would spill over its rim, at any height; the **Water brush** lays water as high as where each stroke starts (the water's surface there, or a block over the ground). With **From the click** off (Tool Settings), both use the **Water level** you set; **Limit the water's height** (off by default) keeps them under a height of your choice. When nothing fills, the message says why. **Drain** empties a body of water.
 - **Water brush** paints water at a level.
 
 # Levels
