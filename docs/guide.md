@@ -674,6 +674,59 @@ the closest it has: cherry trees become birches, pale oaks dark oaks,
 willows' mangrove leaves oak leaves, keeping the way their logs lie and
 their leaves' persistence.
 
+### Sharing packs
+
+Packs can be made from a map and shared, so that the community can trade
+the trees, plants and mixes they have set up.
+
+**File ▸ Export Pack…** makes a pack of the map's layers. Its dialog lists
+the map's object layers, and its ground covers and terrain mixes that are
+not those every new map has; tick those the pack holds. Give it a **name**,
+an **author** (remembered for the next time) and a **description**. Its
+**picture** is drawn from what it holds, side by side, or **Choose…** one
+(a PNG or a JPEG, fitted into 512 × 512). **Export…** writes the
+`.massifpack` file.
+
+A pack is added to **Your packs** by any of:
+
+- **File ▸ Import Pack…**, or the **Import…** button of the Packs panel;
+- dropping the file on Massif's window, on the home screen or over a map;
+- opening it from the Finder or Explorer (a double-click: Massif owns the
+  `.massifpack` type, as it owns `.massif`).
+
+Your packs come first in the Packs panel, each under its picture, its name
+and its author ("by Nedgar · 3 things"; its description shows over it).
+Their things are tiles like Massif's own: a click adds one to the map and
+picks it to paint. If the map has a layer of that name that is not the
+same, the pack's comes in as "Name (Pack)", the map's left as it was. The
+search finds a pack by its name or its author. Each pack's **⋯** menu has
+**Export a copy…**, to pass it on, and **Remove…**; maps keep the layers
+they took from a pack removed.
+
+Importing a pack whose name one of yours has asks whether to **Replace**
+it or **Keep both**, the new one under another name.
+
+**What a pack file holds.** A `.massifpack` is a zip archive:
+`manifest.json` (its format, `massif-pack`, and the version of that
+format, then its name, author, description and the version of Massif that
+wrote it); `content.json` (its covers, terrains, object layers and
+objects, each block by its state such as `minecraft:oak_log[axis=y]`);
+`objects/<n>.bin` (the blocks of each object); and `preview.png`. A newer
+Massif reads every older version of the format; an older one says when a
+pack needs a newer Massif.
+
+**Safety.** A pack comes from someone else, so Massif checks all of it
+before adding it, and refuses it whole when anything is wrong: a file over
+64 MB, more than 2048 entries, an entry that inflates past 32 MB (160 MB in
+all) or to anything but the size it says, a failed checksum, an encrypted
+or unknown kind of entry, an entry named with `..`, a root, a drive or a
+backslash, a block state that is not one, an object larger than 16 million
+blocks or naming blocks it does not have, a picture over 1024 × 1024. A
+pack holds blocks and settings only: nothing in it is ever run, and no
+name in it ever becomes a path. Massif writes its own copy of each pack it
+adds into its folder (Application Support, or AppData), named after the
+pack.
+
 ## Ground covers
 
 The **Ground cover** tool (Paint group) paints what grows on the ground:

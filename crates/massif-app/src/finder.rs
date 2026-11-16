@@ -1,5 +1,6 @@
-//! Files the Finder asks Massif to open: a double-click on a `.massif` map,
-//! Open With on a WorldPainter `.world`, a file dropped on the Dock icon.
+//! Files the Finder asks Massif to open: a double-click on a `.massif` map
+//! or a `.massifpack` pack, Open With on a WorldPainter `.world`, a file
+//! dropped on the Dock icon.
 //!
 //! AppKit hands them to the application's delegate, as
 //! `application:openURLs:`, which winit's delegate does not answer. So every
@@ -42,8 +43,9 @@ pub fn listen() {
 #[cfg(not(target_os = "macos"))]
 pub fn listen() {}
 
-/// On Windows: make `.massif` files Massif's for the current user — a
-/// double-click opens them, and Explorer shows their map as their icon
+/// On Windows: make `.massif` maps and `.massifpack` packs Massif's for the
+/// current user — a double-click opens a map, or adds a pack to the packs —
+/// and Explorer shows a map's picture as its icon
 /// through the thumbnail library next to `Massif.exe` (see
 /// `massif-thumbnails`). Done each time Massif starts, so that moving its
 /// folder moves the registration too; nothing is written when it is
@@ -79,6 +81,11 @@ pub fn register() {
     set(r"Software\Classes\Massif.Map", None, "Massif map");
     set(r"Software\Classes\Massif.Map\DefaultIcon", None, &format!("\"{exe}\",0"));
     set(r"Software\Classes\Massif.Map\shell\open\command", None, &format!("\"{exe}\" \"%1\""));
+    set(r"Software\Classes\.massifpack", None, "Massif.Pack");
+    set(r"Software\Classes\.massifpack", Some("Content Type"), "application/x-massif-pack");
+    set(r"Software\Classes\Massif.Pack", None, "Massif pack");
+    set(r"Software\Classes\Massif.Pack\DefaultIcon", None, &format!("\"{exe}\",0"));
+    set(r"Software\Classes\Massif.Pack\shell\open\command", None, &format!("\"{exe}\" \"%1\""));
     if let Some(library) = [massif_thumbnails::FILE_NAME, "massif_thumbnails.dll"].iter().map(|n| folder.join(n)).find(|p| p.is_file()) {
         let class = massif_thumbnails::CLSID;
         set(&format!(r"Software\Classes\CLSID\{class}"), None, "Massif map thumbnails");

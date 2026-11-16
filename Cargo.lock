@@ -2124,6 +2124,7 @@ dependencies = [
 name = "massif-core"
 version = "0.6.0"
 dependencies = [
+ "flate2",
  "image",
  "log",
  "rayon",

@@ -137,6 +137,9 @@ The **Layers** panel (under Terrain; or any area's chooser, in Paint) lists ever
 ## Packs
 **Packs** (the second tab of the Layers panel, or an area of its own) holds ready-made things to paint, as WorldPainter Modernised's Packs panel did: sixteen kinds of trees of the tree pack (tall and slender spruces, firs, larches, giant redwoods, big and pale oaks, birches, cherries, acacias, willows, rainforest giants, palms, dead trees, bushes, azaleas), each in eight shapes; presets of flowers, plants and water plants; and mixes of blocks for grass, soil, stone, sand, cliffs in beds, snow and volcanic rock. A click adds one to the map — an object layer, a ground cover or a terrain — and picks it to paint; a dot marks those the map has already. A search field filters them.
 
+### Sharing packs
+**File ▸ Export Pack…** makes a `.massifpack` file of the map's layers, to share: tick the object layers, ground covers and terrain mixes it holds, and give it a name, an author, a description and a picture (drawn from what it holds unless you choose one). **File ▸ Import Pack…**, the **Import…** button of the Packs panel, a file dropped on the window, or a double-click on it in the Finder or Explorer adds a pack to **Your packs**, at the top of the Packs panel, with its picture and author; its things paint like Massif's own. A name you have already asks to replace that pack or keep both under another name. The **⋯** menu of a pack saves a copy of it, or removes it from your packs (maps keep the layers they took from it). A pack holds blocks and settings only, never anything that runs; Massif checks every part of it and refuses a damaged, oversized or foreign file.
+
 ## Custom objects
 **Objects** places trees, rocks or ruins from `.schem`, `.schematic`, `.bp`, `.litematic` and `.nbt` files: import them, or drop them on the window, then paint where they stand, how far apart and how many.
 

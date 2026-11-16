@@ -29,6 +29,8 @@ pub struct LayersUi {
     pub packs: bool,
     /// What the Packs are searched for.
     pub search: String,
+    /// The packs imported.
+    pub library: crate::pack_share::PackLibrary,
 }
 
 /// What a row was asked to do.
@@ -63,7 +65,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     }
     ui.add_space(6.0);
     if state.packs {
-        return crate::packs::packs_panel(ui, tools, doc, blocks.catalogue.as_deref(), &mut state.search);
+        return crate::packs::packs_panel(ui, tools, doc, blocks.catalogue.as_deref(), &mut state.search, &mut state.library);
     }
     let before = (doc.world.registry.covers.clone(), doc.world.registry.object_layers.clone());
     let mut said = None;

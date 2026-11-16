@@ -37,7 +37,7 @@ cat > "$app/Contents/Info.plist" <<EOF
 </dict>
 </plist>
 EOF
-# The .massif file type, the Quick Look extension that shows a map's
+# The .massif and .massifpack file types, the Quick Look extension that shows a map's
 # picture as its file's icon, and the signature (ad hoc, so that Apple
 # silicon runs it).
 tools/macos/finish-app.sh "$app" "$version" "$(uname -m)"

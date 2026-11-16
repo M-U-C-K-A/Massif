@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Merged into the Info.plist of Massif.app by finish-app.sh: the .massif file type, which Massif opens and for which
-     the Quick Look extension draws the map as the file's icon; and WorldPainter's .world, which Massif can open too.
+     the Quick Look extension draws the map as the file's icon; the .massifpack file type, a pack Massif adds to its
+     packs; and WorldPainter's .world, which Massif can open too.
      The document icon is made by macOS from the application icon. -->
 <plist version="1.0">
 <dict>
@@ -17,6 +18,20 @@
             <key>LSItemContentTypes</key>
             <array>
                 <string>io.github.m-u-c-k-a.massif.map</string>
+            </array>
+            <key>CFBundleTypeIconSystemGenerated</key>
+            <true/>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Massif Pack</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>io.github.m-u-c-k-a.massif.pack</string>
             </array>
             <key>CFBundleTypeIconSystemGenerated</key>
             <true/>
@@ -55,6 +70,28 @@
                 <key>public.mime-type</key>
                 <array>
                     <string>application/x-massif</string>
+                </array>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>io.github.m-u-c-k-a.massif.pack</string>
+            <key>UTTypeDescription</key>
+            <string>Massif Pack</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+                <string>public.content</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>massifpack</string>
+                </array>
+                <key>public.mime-type</key>
+                <array>
+                    <string>application/x-massif-pack</string>
                 </array>
             </dict>
         </dict>

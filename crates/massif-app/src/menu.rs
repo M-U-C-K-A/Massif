@@ -16,6 +16,8 @@ pub enum Command {
     NewWorld,
     Open,
     ImportWorld,
+    ImportPack,
+    ExportPack,
     FromHeightMap,
     /// A new world from the relief of a real place.
     FromRealPlace,
@@ -197,6 +199,9 @@ pub fn menus(state: &State) -> Vec<Menu> {
         Entry::Separator,
         item(Command::ExportHeightMap, Icon::ImageDown, "Export Height Map…", map),
         item(Command::Export, Icon::Package, "Export to Minecraft…", map),
+        Entry::Separator,
+        tipped(Command::ImportPack, Icon::Import, "Import Pack…", free, "Add a .massifpack file someone shared to your packs"),
+        tipped(Command::ExportPack, Icon::FileDown, "Export Pack…", map, "Make a .massifpack file of the map's layers, to share"),
         Entry::Separator,
         item(Command::Quit, Icon::X, "Quit", true),
     ];
@@ -450,6 +455,8 @@ mod tests {
                 "Save As…",
                 "Export Height Map…",
                 "Export to Minecraft…",
+                "Import Pack…",
+                "Export Pack…",
                 "Quit"
             ]
         );
@@ -470,10 +477,10 @@ mod tests {
     fn what_can_be_used_when() {
         let recent = [PathBuf::from("/maps/Alps.massif")];
         let home = menus(&State { editor: false, ..state(&recent) });
-        for command in [Command::Save, Command::SaveAs, Command::Export, Command::ExportHeightMap, Command::Undo, Command::Ores, Command::Analyse, Command::HomeScreen, Command::WholeMap(WholeOp::Rivers), Command::Caves, Command::RealTerrain] {
+        for command in [Command::Save, Command::SaveAs, Command::Export, Command::ExportPack, Command::ExportHeightMap, Command::Undo, Command::Ores, Command::Analyse, Command::HomeScreen, Command::WholeMap(WholeOp::Rivers), Command::Caves, Command::RealTerrain] {
             assert!(!enabled(&home, &command), "{command:?} needs a map");
         }
-        for command in [Command::NewWorld, Command::Open, Command::ImportWorld, Command::FromRealPlace, Command::OpenRecent(recent[0].clone()), Command::Settings, Command::Help, Command::About, Command::Quit, Command::Theme(ThemeChoice::Light)] {
+        for command in [Command::NewWorld, Command::Open, Command::ImportWorld, Command::ImportPack, Command::FromRealPlace, Command::OpenRecent(recent[0].clone()), Command::Settings, Command::Help, Command::About, Command::Quit, Command::Theme(ThemeChoice::Light)] {
             assert!(enabled(&home, &command), "{command:?} works on the home screen");
         }
         let busy = menus(&State { idle: false, ..state(&recent) });
@@ -538,7 +545,7 @@ mod tests {
         // Everything else is where the window's menus have it.
         let kept = |m: &[Menu]| -> Vec<Command> { all(m).into_iter().filter(|i| i.command.role() == Role::Menu).map(|i| i.command.clone()).collect() };
         assert_eq!(kept(&mac.menus), kept(&menus));
-        assert!(matches!(mac.menus[0].entries.last(), Some(Entry::Item(Item { command: Command::Export, .. }))));
+        assert!(matches!(mac.menus[0].entries.last(), Some(Entry::Item(Item { command: Command::ExportPack, .. }))));
         assert!(matches!(mac.menus[3].entries.last(), Some(Entry::Item(Item { command: Command::HomeScreen, .. }))));
     }
 }

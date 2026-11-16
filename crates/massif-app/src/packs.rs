@@ -121,11 +121,12 @@ pub fn apply(item: Item, tools: &mut ToolState, doc: &mut Document, catalogue: O
 }
 
 /// The Packs panel, with its search field. Returns what to say.
-pub fn packs_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, catalogue: Option<&massif_assets::Catalogue>, search: &mut String) -> Option<String> {
+pub fn packs_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, catalogue: Option<&massif_assets::Catalogue>, search: &mut String, library: &mut crate::pack_share::PackLibrary) -> Option<String> {
     let pal = Palette::of(ui);
     ui.label(RichText::new("Ready-made trees, plants and mixes of blocks. Click one to add it to the map and paint it.").size(11.5).color(pal.weak));
     ui.add(egui::TextEdit::singleline(search).hint_text(format!("{}  Search packs", theme::glyph(Icon::Search))).desired_width(f32::INFINITY));
     let needle = search.trim().to_lowercase();
+    let said = crate::pack_share::library_ui(ui, library, &needle, tools, doc, catalogue);
     let mut picked = None;
     for (title, items) in sections() {
         let shown: Vec<Item> = if needle.is_empty() || title.to_lowercase().contains(&needle) { items } else { items.into_iter().filter(|i| i.name().to_lowercase().contains(&needle)).collect() };
@@ -152,9 +153,9 @@ pub fn packs_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, catal
         }
     }
     if !needle.is_empty() && sections().iter().all(|(t, items)| !t.to_lowercase().contains(&needle) && items.iter().all(|i| !i.name().to_lowercase().contains(&needle))) {
-        ui.label(RichText::new("Nothing of that name.").size(11.5).color(pal.weak));
+        ui.label(RichText::new("Nothing of that name among Massif's packs.").size(11.5).color(pal.weak));
     }
-    picked.map(|item| apply(item, tools, doc, catalogue))
+    picked.map(|item| apply(item, tools, doc, catalogue)).or(said)
 }
 
 fn section_icon(title: &str) -> Icon {
@@ -170,11 +171,18 @@ fn section_icon(title: &str) -> Icon {
 /// An item's tile: its picture and its name; ringed when it is painted,
 /// a dot when the map has it. Returns whether it was clicked.
 fn tile(ui: &mut Ui, item: &Item, width: f32, tools: &ToolState, doc: &Document, catalogue: Option<&massif_assets::Catalogue>) -> bool {
-    let pal = Palette::of(ui);
     let reg = &doc.world.registry;
+    let installed = item.installed(reg);
+    let tip = format!("{}{}", item.tip(), if installed { "\nOn the map already: a click picks it." } else { "" });
+    tile_ui(ui, width, item.name(), item.painted(tools, reg), installed, &tip, |painter, rect| picture(painter, rect, item, catalogue))
+}
+
+/// A tile of the Packs panel, its picture drawn by `draw`. Returns
+/// whether it was clicked.
+pub fn tile_ui(ui: &mut Ui, width: f32, name: &str, painted: bool, installed: bool, tip: &str, draw: impl FnOnce(&egui::Painter, Rect)) -> bool {
+    let pal = Palette::of(ui);
     let (rect, response) = ui.allocate_exact_size(vec2(width, 32.0), Sense::click());
-    let painted = item.painted(tools, reg);
-    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, painted, item.name()));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, painted, name));
     let fill = if painted {
         pal.accent_soft
     } else if response.hovered() {
@@ -185,18 +193,23 @@ fn tile(ui: &mut Ui, item: &Item, width: f32, tools: &ToolState, doc: &Document,
     let painter = ui.painter().clone();
     painter.rect(rect, theme::TILE_RADIUS, fill, Stroke::new(1.0, if painted { pal.accent } else { pal.border }), StrokeKind::Inside);
     let pic = Rect::from_min_size(rect.left_top() + vec2(5.0, 5.0), vec2(22.0, 22.0));
-    picture(&painter, pic, item, catalogue);
-    let installed = item.installed(reg);
+    draw(&painter, pic);
     let text_w = rect.width() - 38.0 - if installed { 12.0 } else { 0.0 };
-    let mut job = egui::text::LayoutJob::simple_singleline(item.name().to_owned(), egui::FontId::proportional(12.0), pal.text);
+    let mut job = egui::text::LayoutJob::simple_singleline(name.to_owned(), egui::FontId::proportional(12.0), pal.text);
     job.wrap = egui::text::TextWrapping::truncate_at_width(text_w.max(10.0));
     let galley = painter.fonts_mut(|f| f.layout_job(job));
     painter.galley(egui::pos2(pic.right() + 7.0, rect.center().y - galley.size().y / 2.0), galley, pal.text);
     if installed {
         painter.circle_filled(egui::pos2(rect.right() - 9.0, rect.center().y), 2.5, pal.weak);
     }
-    let tip = format!("{}{}", item.tip(), if installed { "\nOn the map already: a click picks it." } else { "" });
     response.on_hover_text(tip).clicked()
+}
+
+/// A swatch of colour `c` with `icon` on it, light or dark as it reads.
+pub fn swatch(painter: &egui::Painter, rect: Rect, c: [u8; 3], icon: Icon) {
+    painter.rect(rect, theme::TILE_RADIUS, theme::rgb(c), Stroke::new(1.0, Color32::from_black_alpha(60)), StrokeKind::Inside);
+    let light = (c[0] as u32 * 299 + c[1] as u32 * 587 + c[2] as u32 * 114) / 1000 > 150;
+    painter.text(rect.center(), egui::Align2::CENTER_CENTER, theme::glyph(icon), egui::FontId::proportional(14.0), if light { Color32::from_rgb(24, 24, 27) } else { Color32::WHITE });
 }
 
 /// A tree or a plant on a swatch of its colour; a mix as a few of its
@@ -227,9 +240,6 @@ fn picture(painter: &egui::Painter, rect: Rect, item: &Item, catalogue: Option<&
             painter.rect_stroke(rect, theme::TILE_RADIUS, Stroke::new(1.0, Color32::from_black_alpha(70)), StrokeKind::Inside);
         }
         _ => {
-            let c = item.color();
-            painter.rect(rect, theme::TILE_RADIUS, theme::rgb(c), Stroke::new(1.0, Color32::from_black_alpha(60)), StrokeKind::Inside);
-            let light = (c[0] as u32 * 299 + c[1] as u32 * 587 + c[2] as u32 * 114) / 1000 > 150;
             let icon = match item {
                 Item::Tree(k) if k.conifer() => Icon::TreePine,
                 Item::Tree(TreeKind::Palm) => Icon::TreePalm,
@@ -239,7 +249,7 @@ fn picture(painter: &egui::Painter, rect: Rect, item: &Item, catalogue: Option<&
                 Item::Plants(p) if p.family == massif_core::packs::FLOWERS => Icon::Flower2,
                 _ => Icon::Sprout,
             };
-            painter.text(rect.center(), egui::Align2::CENTER_CENTER, theme::glyph(icon), egui::FontId::proportional(14.0), if light { Color32::from_rgb(24, 24, 27) } else { Color32::WHITE });
+            swatch(painter, rect, item.color(), icon);
         }
     }
 }
@@ -255,6 +265,7 @@ mod tests {
         doc: Document,
         search: String,
         catalogue: Option<std::sync::Arc<massif_assets::Catalogue>>,
+        library: crate::pack_share::PackLibrary,
     }
 
     fn draw(ui: &mut Ui, s: &mut State) {
@@ -262,13 +273,13 @@ mod tests {
         let pal = Palette::of(ui);
         egui::Frame::new().fill(pal.panel).inner_margin(12).show(ui, |ui| {
             ui.set_width(ui.available_width());
-            packs_panel(ui, &mut s.tools, &mut s.doc, s.catalogue.as_deref(), &mut s.search);
+            packs_panel(ui, &mut s.tools, &mut s.doc, s.catalogue.as_deref(), &mut s.search, &mut s.library);
         });
     }
 
     fn state() -> State {
         let world = generate(&GenParams { tiles_x: 2, tiles_z: 2, ..GenParams::default() });
-        State { tools: ToolState::default(), doc: Document::new(world, None, 1), search: String::new(), catalogue: None }
+        State { tools: ToolState::default(), doc: Document::new(world, None, 1), search: String::new(), catalogue: None, library: Default::default() }
     }
 
     /// A click adds a tree, a plant or a mix to the map once and picks it

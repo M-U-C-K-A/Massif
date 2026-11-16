@@ -1083,3 +1083,86 @@ fn generated_caves_are_exported() {
     }
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// A map painted with a pack someone shared exports the very same blocks
+/// as one painted with the layers the pack was made of: cherry trees, a mix
+/// of rock in beds and a preset of flowers, written to a .massifpack,
+/// read back, installed into a new map and painted the same way.
+#[test]
+fn a_shared_pack_exports_as_the_original() {
+    use massif_core::pack_file::Pack;
+    use massif_core::packs::{MATERIAL_MIXES, PLANT_PRESETS};
+    use massif_core::treepack::TreeKind;
+    let params = GenParams {
+        tiles_x: 4,
+        tiles_z: 2,
+        landform: Landform::Hills,
+        seed: 11,
+        ..GenParams::default()
+    };
+    let paint = |w: &mut World, trees: u16, beds: TerrainId, flowers: u16| {
+        let mut h = History::default();
+        h.begin("pack", 0);
+        {
+            let mut e = h.edit(w, 0);
+            ops::paint_objects(&mut e, &hard(40.0), 128.0, -40.0, trees, 1);
+            ops::paint_cover(&mut e, &hard(40.0), 200.0, -40.0, flowers, 2);
+            ops::paint_terrain(&mut e, &hard(30.0), 330.0, -40.0, beds, 3);
+        }
+        h.commit();
+    };
+    let mut original = generate(&params);
+    let trees = TreeKind::Cherry.install(&mut original.registry);
+    let beds = MATERIAL_MIXES.iter().find(|m| m.name == "Grey cliff strata").unwrap().install(&mut original.registry);
+    let flowers = PLANT_PRESETS.iter().find(|p| p.name == "Tulip field").unwrap().install(&mut original.registry);
+    paint(&mut original, trees, beds, flowers);
+
+    let content = Pack::gather(&original.registry, &[flowers], &[beds.0], &[trees]);
+    let pack = Pack { name: "Shared".into(), author: "Tester".into(), description: String::new(), made_with: "0.6.0".into(), preview: None, content };
+    let pack = Pack::from_bytes(&pack.to_bytes()).unwrap();
+    let mut shared = generate(&params);
+    let trees = pack.install_layer(0, &mut shared.registry);
+    let beds = pack.install_terrain(0, &mut shared.registry);
+    let flowers = pack.install_cover(0, &mut shared.registry);
+    paint(&mut shared, trees, beds, flowers);
+
+    let options = ExportOptions {
+        target: Target::release("1.21.11").unwrap(),
+        ..ExportOptions::default()
+    };
+    let (a, b) = (temp_dir("pack-original"), temp_dir("pack-shared"));
+    export(&original.snapshot(), &a, &options, &Progress::default()).unwrap();
+    export(&shared.snapshot(), &b, &options, &Progress::default()).unwrap();
+    let regions = |dir: &Path| {
+        let mut files: Vec<PathBuf> = std::fs::read_dir(dir.join("region")).unwrap().map(|e| e.unwrap().path()).collect();
+        files.sort();
+        files
+    };
+    let (ra, rb) = (regions(&a), regions(&b));
+    assert!(!ra.is_empty());
+    assert_eq!(ra.iter().map(|p| p.file_name()).collect::<Vec<_>>(), rb.iter().map(|p| p.file_name()).collect::<Vec<_>>());
+    for (x, y) in ra.iter().zip(&rb) {
+        assert!(region_bytes(x) == region_bytes(y), "{} differs", x.display());
+    }
+    // And the pack's things are in it: cherry logs where the trees stand.
+    let mut r = Reader::new(&b);
+    let dim = &shared.dims[0];
+    let mat = Materializer::new(&shared.registry, shared.meta.seed, dim.min_y);
+    let mut placements = Vec::new();
+    for pos in [TilePos::new(0, -1), TilePos::new(1, -1)] {
+        let stack = TileStack::new(dim, pos, true).unwrap();
+        placements.extend(massif_core::objects::tile_placements(&shared.registry, &mat, shared.meta.seed as u64, false, &stack, pos));
+    }
+    let logs = placements
+        .iter()
+        .filter(|p| {
+            let def = &shared.registry.objects[p.object as usize];
+            let [ax, _, az] = def.anchor.map(|v| v as i32);
+            let (x, y, z) = p.world(def, ax, 0, az);
+            r.state(x, y, z).starts_with("minecraft:cherry_log")
+        })
+        .count();
+    assert!(logs >= 3, "{logs} of {} trees", placements.len());
+    std::fs::remove_dir_all(&a).unwrap();
+    std::fs::remove_dir_all(&b).unwrap();
+}

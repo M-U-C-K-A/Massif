@@ -25,6 +25,7 @@ mod menu;
 mod menubar;
 mod notify;
 mod ores;
+mod pack_share;
 mod packs;
 mod panels;
 mod picker;
@@ -71,7 +72,7 @@ fn main() -> eframe::Result {
     startup::step("listening for the files the system asks to open, and its Quit");
     finder::listen();
     quit::listen();
-    startup::step("making .massif files Massif's");
+    startup::step("making .massif and .massifpack files Massif's");
     finder::register();
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Massif")

@@ -102,7 +102,7 @@ jobs:
           </dict>
           </plist>
           EOF
-          # The .massif file type and the Quick Look extension that shows
+          # The .massif and .massifpack file types and the Quick Look extension that shows
           # a map as its file's icon. Not notarized: signed ad hoc so that
           # Apple silicon runs it.
           tools/macos/finish-app.sh "$app" "${VERSION}"

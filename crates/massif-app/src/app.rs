@@ -86,6 +86,8 @@ struct Settings {
     check_updates: bool,
     /// The version the user chose not to hear about again.
     skipped_version: Option<String>,
+    /// The author written in the packs exported.
+    pack_author: String,
 }
 
 /// The intervals of the backups offered in the settings, in minutes.
@@ -132,6 +134,7 @@ impl Default for Settings {
             autosave_minutes: 5,
             check_updates: true,
             skipped_version: None,
+            pack_author: String::new(),
         }
     }
 }
@@ -316,6 +319,11 @@ pub struct MassifApp {
     rename: Option<(usize, String)>,
     /// The Layers panel's layer being renamed.
     layers_ui: crate::layers::LayersUi,
+    /// A dialog about packs: export one, import one whose name is taken,
+    /// remove one.
+    pack_dialog: Option<crate::pack_share::PackDialog>,
+    /// Pack files to import (dropped, opened from the Finder or Explorer).
+    pack_inbox: Vec<PathBuf>,
     terrain_search: String,
     biome_search: String,
     /// The built-in, generated and custom brushes.
@@ -435,7 +443,17 @@ impl MassifApp {
         }
         // Whether a newer version is out, asked off the main thread.
         app.check_updates(&cc.egui_ctx);
-        if let Some(path) = open {
+        // Tests keep away from the packs of this computer.
+        if !cfg!(test) {
+            app.layers_ui.library = crate::pack_share::PackLibrary::installed();
+        }
+        if let Some(path) = open.as_ref().filter(|p| crate::pack_share::is_pack_file(p)) {
+            // A pack opened from the Finder or Explorer: into the packs,
+            // from the home screen.
+            app.pack_inbox.push(path.clone());
+            app.has_map = false;
+            app.open_home(Page::NewMap);
+        } else if let Some(path) = open {
             app.jobs.push(Job::open(&cc.egui_ctx, path));
         } else {
             // No map yet: the home screen, not a map made up for it.
@@ -542,7 +560,8 @@ impl MassifApp {
                     "png" | "jpg" | "jpeg" | "r16" | "r32" | "raw" => self.take_heightmap(ctx, path),
                     "world" => self.request(ctx, Pending::Open(Some(path))),
                     e if e == massif_format::EXTENSION => self.request(ctx, Pending::Open(Some(path))),
-                    _ => self.say(ctx, "Massif opens .massif maps, WorldPainter .world worlds and height maps", true, None),
+                    e if e == massif_core::pack_file::EXTENSION => self.pack_inbox.push(path),
+                    _ => self.say(ctx, "Massif opens .massif maps, WorldPainter .world worlds, height maps and .massifpack packs", true, None),
                 }
             }
         }
@@ -661,6 +680,8 @@ impl MassifApp {
             dragging_area: None,
             rename: None,
             layers_ui: Default::default(),
+            pack_dialog: None,
+            pack_inbox: Vec::new(),
             terrain_search: String::new(),
             biome_search: String::new(),
             brushes: BrushLibrary::default(),
@@ -1353,6 +1374,72 @@ impl MassifApp {
         true
     }
 
+    /// File ▸ Import Pack…: pack files to add to the packs.
+    fn pick_pack(&mut self) {
+        let files = rfd::FileDialog::new().set_title("Import packs").add_filter("Massif pack", &[massif_core::pack_file::EXTENSION]).pick_files().unwrap_or_default();
+        self.pack_inbox.extend(files);
+    }
+
+    /// Import the pack files that came (one at a time while a dialog about
+    /// a name taken is open), and do what the Packs panel asked.
+    fn packs(&mut self, ctx: &egui::Context) {
+        use crate::pack_share::{PackDialog, Request};
+        let library = &mut self.layers_ui.library;
+        match library.request.take() {
+            Some(Request::Import) => self.pick_pack(),
+            Some(Request::Remove(i)) => self.pack_dialog = Some(PackDialog::Remove(i)),
+            Some(Request::Share(i)) => {
+                if let Some(s) = library.packs.get(i)
+                    && let Some(path) = rfd::FileDialog::new()
+                        .set_title("Export a copy of the pack")
+                        .add_filter("Massif pack", &[massif_core::pack_file::EXTENSION])
+                        .set_file_name(format!("{}.{}", massif_core::pack_file::file_stem(&s.pack.name), massif_core::pack_file::EXTENSION))
+                        .save_file()
+                {
+                    let name = s.pack.name.clone();
+                    match std::fs::write(&path, s.pack.to_bytes()) {
+                        Ok(()) => self.say(ctx, format!("Exported a copy of the pack “{name}”"), false, Some(path)),
+                        Err(e) => self.say(ctx, format!("Could not export the pack: {}: {e}", path.display()), true, None),
+                    }
+                }
+            }
+            None => {}
+        }
+        while self.pack_dialog.is_none() && !self.pack_inbox.is_empty() {
+            let path = self.pack_inbox.remove(0);
+            self.import_pack(ctx, &path);
+        }
+    }
+
+    /// Read a pack file and add it to the packs, or ask about its name.
+    fn import_pack(&mut self, ctx: &egui::Context, path: &std::path::Path) {
+        let library = &mut self.layers_ui.library;
+        library.ensure_loaded();
+        match crate::pack_share::read_file(path) {
+            Err(e) => self.say(ctx, format!("Could not import {}: {e}", jobs::display_name(path)), true, None),
+            Ok(pack) => match library.find(&pack.name) {
+                Some(existing) => {
+                    let rename = (2..).map(|k| format!("{} {k}", pack.name)).find(|n| library.find(n).is_none()).expect("a free name");
+                    self.pack_dialog = Some(crate::pack_share::PackDialog::Clash { pack: Box::new(pack), existing, rename });
+                }
+                None => {
+                    let outcome = crate::pack_share::added(library.add(pack.clone(), None), &pack);
+                    self.pack_outcome(ctx, outcome);
+                }
+            },
+        }
+    }
+
+    fn pack_outcome(&mut self, ctx: &egui::Context, outcome: crate::pack_share::Outcome) {
+        match outcome {
+            crate::pack_share::Outcome::Say(text, error, reveal) => self.say(ctx, text, error, reveal),
+            crate::pack_share::Outcome::ShowPacks(text) => {
+                self.layers_ui.packs = true;
+                self.say(ctx, text, false, None);
+            }
+        }
+    }
+
     fn open_export_dialog(&mut self) {
         let parent = massif_anvil::default_saves_dir()
             .or_else(|| self.doc.path.as_ref().and_then(|p| p.parent().map(PathBuf::from)))
@@ -1912,6 +1999,11 @@ impl MassifApp {
             Command::Open if self.home.is_some() => self.home_action(ctx, HomeAction::Open),
             Command::Open => self.request(ctx, Pending::Open(None)),
             Command::ImportWorld => self.home_action(ctx, HomeAction::Import),
+            Command::ImportPack => self.pick_pack(),
+            Command::ExportPack => {
+                let name = self.doc.world.meta.name.clone();
+                self.pack_dialog = Some(crate::pack_share::PackDialog::Export(Box::new(crate::pack_share::ExportForm::new(&self.doc.world.registry, &self.settings.pack_author, &name))));
+            }
             Command::FromHeightMap => self.open_home(Page::FromHeightmap),
             Command::OpenRecent(path) => self.request(ctx, Pending::Open(Some(path))),
             Command::Save => {
@@ -2488,7 +2580,7 @@ impl MassifApp {
             EditorKind::Packs => {
                 let mut said = None;
                 let catalogue = self.blocks.catalogue.clone();
-                scrolled(&mut cui, &mut |ui| said = crate::packs::packs_panel(ui, &mut self.tools, &mut self.doc, catalogue.as_deref(), &mut self.layers_ui.search));
+                scrolled(&mut cui, &mut |ui| said = crate::packs::packs_panel(ui, &mut self.tools, &mut self.doc, catalogue.as_deref(), &mut self.layers_ui.search, &mut self.layers_ui.library));
                 if said.is_some() {
                     self.feedback = said;
                 }
@@ -2608,6 +2700,11 @@ impl MassifApp {
             }
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
             return;
+        }
+        if self.pack_dialog.is_some()
+            && let Some(outcome) = crate::pack_share::dialog(ctx, &mut self.pack_dialog, &mut self.layers_ui.library, &self.doc.world.registry, &mut self.settings.pack_author)
+        {
+            self.pack_outcome(ctx, outcome);
         }
         if let Some(biomes) = self.tools.run_auto.take() {
             let snapshot = self.doc.world.snapshot();
@@ -3450,7 +3547,9 @@ impl MassifApp {
         self.covers_key = Some(covers);
         step("the files the system asks to open, and the shortcuts");
         // A map or a world the Finder asks to open (the first of them).
-        if let Some(path) = crate::finder::take().into_iter().find(|p| {
+        let (packs, maps): (Vec<PathBuf>, Vec<PathBuf>) = crate::finder::take().into_iter().partition(|p| crate::pack_share::is_pack_file(p));
+        self.pack_inbox.extend(packs);
+        if let Some(path) = maps.into_iter().find(|p| {
             let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
             ext == massif_format::EXTENSION || ext == "world"
         }) {
@@ -3458,12 +3557,15 @@ impl MassifApp {
         }
         // Objects dropped on the window: a layer of their own.
         if self.home.is_none() {
+            let packs: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| crate::pack_share::is_pack_file(p)).collect());
+            self.pack_inbox.extend(packs);
             let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| panels::is_object_file(p)).collect());
             if !dropped.is_empty() {
                 let note = panels::import_objects(&mut self.doc, &mut self.tools, &dropped, None, self.blocks.catalogue.as_deref());
                 self.feedback = Some(note);
             }
         }
+        self.packs(&ctx);
         self.handle_close(&ctx);
         self.shortcuts(&ctx);
         self.menu_bar_commands(&ctx);
@@ -3602,7 +3704,7 @@ fn glyph_in(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
 }
 
 /// A dialog: generous corners and margins, as the references draw them.
-fn modal(ctx: &egui::Context, id: &str) -> egui::Modal {
+pub(crate) fn modal(ctx: &egui::Context, id: &str) -> egui::Modal {
     let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::same(22));
     egui::Modal::new(Id::unique(id)).frame(frame)
 }

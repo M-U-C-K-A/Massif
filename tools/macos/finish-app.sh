@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # Finishes Massif.app once its executable and Info.plist are in place:
-# declares the .massif file type (and .world, which Massif opens too), adds
+# declares the .massif and .massifpack file types (and .world, which Massif
+# opens too), adds
 # the Quick Look extension that shows the map of a .massif file as its icon
 # in the Finder, as WorldPainter's fork does for .world files, and signs the
 # application ad hoc, the extension in its sandbox.
