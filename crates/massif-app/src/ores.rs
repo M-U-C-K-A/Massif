@@ -425,21 +425,21 @@ impl OresView {
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(theme::glyph(Icon::Pickaxe).to_string()).size(18.0).color(pal.accent));
-                    ui.label(RichText::new("Ores").size(19.0).bold());
+                    ui.label(RichText::new(tr!("Ores")).size(19.0).bold());
                 });
                 ui.add_space(3.0);
-                let preset = self.settings.preset().map_or("Custom", |p| p.label());
+                let preset = self.settings.preset().map_or(tr!("Custom"), |p| crate::i18n::tr_name(p.label()));
                 let per_chunk: f64 = self.settings.ores.iter().map(|o| self.settings.per_chunk(o)).sum();
                 let words = if self.settings.on {
-                    format!("Laid in the rock by the export · {preset} · about {} ore blocks a chunk of rock", thousands(per_chunk.round() as u64))
+                    tr!("Laid in the rock by the export · {preset} · about {thousands} ore blocks a chunk of rock", thousands = thousands(per_chunk.round() as u64), preset)
                 } else {
-                    "Off: the export lays no ore, and Minecraft adds none to the map's finished chunks".to_owned()
+                    tr!("Off: the export lays no ore, and Minecraft adds none to the map's finished chunks").to_owned()
                 };
                 ui.label(RichText::new(words).size(12.5).color(pal.weak));
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 10.0;
-                let done = egui::Button::new(RichText::new(theme::with_icon(Icon::Check, "Done")).size(13.0).medium())
+                let done = egui::Button::new(RichText::new(theme::with_icon(Icon::Check, tr!("Done"))).size(13.0).medium())
                     .fill(if pal.dark { theme::mix(pal.panel, pal.text, 0.04) } else { Color32::WHITE })
                     .stroke(Stroke::new(1.0, pal.control_border()))
                     .corner_radius(theme::PILL)
@@ -448,18 +448,18 @@ impl OresView {
                     *choice = Choice::Close(OreSettings::default());
                 }
                 ui.add_space(4.0);
-                widgets::switch(ui, &mut self.settings.on).on_hover_text("Whether the export lays ores in the rock");
-                ui.label(RichText::new("Lay ores").size(12.5));
+                widgets::switch(ui, &mut self.settings.on).on_hover_text(tr!("Whether the export lays ores in the rock"));
+                ui.label(RichText::new(tr!("Lay ores")).size(12.5));
                 ui.add_space(8.0);
                 ui.add_enabled(
                     self.settings.on,
-                    widgets::Field::new(&mut self.settings.richness, 0.0..=4.0).max_decimals(2).suffix("×").text("Richness").width(150.0),
+                    widgets::Field::new(&mut self.settings.richness, 0.0..=4.0).max_decimals(2).suffix("×").text(tr!("Richness")).width(150.0),
                 )
-                .on_hover_text("Every band's veins, times this");
-                let label = self.settings.preset().map_or("Custom", |p| p.label());
+                .on_hover_text(tr!("Every band's veins, times this"));
+                let label = self.settings.preset().map_or(tr!("Custom"), |p| crate::i18n::tr_name(p.label()));
                 widgets::combo("ore preset").selected_text(label).width(150.0).show_ui(ui, |ui| {
                     for p in Preset::ALL {
-                        if ui.selectable_label(self.settings.preset() == Some(p), p.label()).clicked() {
+                        if ui.selectable_label(self.settings.preset() == Some(p), crate::i18n::tr_name(p.label())).clicked() {
                             let (on, richness) = (self.settings.on, self.settings.richness);
                             self.settings = p.settings();
                             self.settings.on = on;
@@ -491,7 +491,7 @@ impl OresView {
                 p.rect_filled(inner, 6, pal.well());
             }
         }
-        let r = ui.interact(map, egui::Id::unique("ores cut picker"), Sense::click_and_drag()).on_hover_text("Where to cut the map: click or drag");
+        let r = ui.interact(map, egui::Id::unique("ores cut picker"), Sense::click_and_drag()).on_hover_text(tr!("Where to cut the map: click or drag"));
         if (r.clicked() || r.dragged())
             && let Some(at) = r.interact_pointer_pos()
         {
@@ -528,7 +528,7 @@ impl OresView {
         let cells = Rect::from_min_max(pos2(map.right() + 14.0, rect.top()), pos2(rect.right() - add_w, rect.bottom()));
         let cw = cells.width() / n as f32;
         if self.settings.ores.is_empty() {
-            p.text(pos2(cells.left() + 12.0, cells.center().y), Align2::LEFT_CENTER, "No ore: the export lays none. Add one with +", FontId::proportional(12.5), pal.weak);
+            p.text(pos2(cells.left() + 12.0, cells.center().y), Align2::LEFT_CENTER, tr!("No ore: the export lays none. Add one with +"), FontId::proportional(12.5), pal.weak);
         }
         let reg = &self.world.registry;
         for k in 0..self.settings.ores.len() {
@@ -548,13 +548,13 @@ impl OresView {
             }
             let sq = Rect::from_min_size(pos2(cell.left() + 12.0, cell.top() + 15.0), vec2(8.0, 8.0));
             p.rect_filled(sq, 2, if on { color } else { color.gamma_multiply(0.35) });
-            let name = p.text(pos2(sq.right() + 6.0, sq.center().y), Align2::LEFT_CENTER, rule.mineral.name(), FontId::proportional(11.5), pal.weak);
+            let name = p.text(pos2(sq.right() + 6.0, sq.center().y), Align2::LEFT_CENTER, crate::i18n::tr_name(rule.mineral.name()), FontId::proportional(11.5), pal.weak);
             // Kept to some biomes: a funnel, as a brush's filter shows.
             if !rule.biomes.is_everywhere() {
                 p.text(pos2(name.right() + 5.0, sq.center().y), Align2::LEFT_CENTER, theme::glyph(Icon::Funnel).to_string(), FontId::proportional(10.5), pal.accent);
             }
             let total = totals.get(k).copied().unwrap_or(0.0);
-            let (value, unit) = if on { short(total) } else { ("off".to_owned(), "") };
+            let (value, unit) = if on { short(total) } else { (tr!("off").to_owned(), "") };
             let g = p.layout_no_wrap(value, FontId::proportional(17.0), if on { pal.text } else { pal.weak });
             let at = pos2(cell.left() + 12.0, cell.top() + 30.0);
             let gw = g.size().x;
@@ -570,11 +570,11 @@ impl OresView {
             if r.hovered() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
-            let mut tip = format!("{}: for {}. About {} blocks a chunk of rock.", rule.mineral.name(), rule.mineral.use_for(), thousands(self.settings.per_chunk(rule).round() as u64));
+            let mut tip = tr!("{name}: for {use_for}. About {thousands} blocks a chunk of rock.", name = crate::i18n::tr_name(rule.mineral.name()), use_for = crate::i18n::tr_name(rule.mineral.use_for()), thousands = thousands(self.settings.per_chunk(rule).round() as u64));
             if let Some(words) = biome_words(&rule.biomes, reg) {
-                tip = format!("{tip} {words}.");
+                tip = tr!("{tip} {words}.", tip, words);
             }
-            r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, k == self.selected, rule.mineral.name()));
+            r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, k == self.selected, crate::i18n::tr_name(rule.mineral.name())));
             r.on_hover_text(tip);
         }
 
@@ -590,8 +590,8 @@ impl OresView {
                 p.vline(cell.left(), cell.y_range().shrink(14.0), Stroke::new(1.0, pal.border));
             }
             p.text(cell.center(), Align2::CENTER_CENTER, theme::glyph(Icon::Plus).to_string(), FontId::proportional(16.0), pal.text);
-            r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Add an ore"));
-            let r = r.on_hover_text("Add an ore taken out");
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr!("Add an ore")));
+            let r = r.on_hover_text(tr!("Add an ore taken out"));
             let mut add = None;
             egui::Popup::menu(&r).show(|ui| {
                 // Each ore with its colour, in the room left of its name.
@@ -639,9 +639,9 @@ impl OresView {
         }
         self.view_x = self.view_x.clamp(ax0 as f64, (ax1 as f64 - across as f64).max(ax0 as f64));
         let x0 = self.view_x.floor() as i32;
-        title(&p, pal, strip, Icon::Layers, &format!("cut at z {} · x {} to {}", self.cut_z, x0, x0 + across as i32));
+        title(&p, pal, strip, Icon::Layers, &tr!("cut at z {cut_z} · x {x0} to {i32}", cut_z = self.cut_z, x0, i32 = x0 + across as i32));
         p.hline(strip.x_range(), strip.bottom(), Stroke::new(1.0, pal.border));
-        p.text(pos2(strip.right() - 14.0, strip.center().y), Align2::RIGHT_CENTER, "drag the candles · wheel on a body: veins", FontId::proportional(11.0), pal.weak);
+        p.text(pos2(strip.right() - 14.0, strip.center().y), Align2::RIGHT_CENTER, tr!("drag the candles · wheel on a body: veins"), FontId::proportional(11.0), pal.weak);
 
         // The images, made again when the cut or the settings change.
         // Made twice as wide as shown and kept while the view stays in it:
@@ -691,7 +691,7 @@ impl OresView {
         let sea = self.world.meta.sea_level;
         if (y0..y1).contains(&sea) {
             dashed_h(&painter, plot.x_range(), to_y(sea as f32), Stroke::new(1.0, Color32::from_rgb(96, 160, 250).gamma_multiply(0.8)));
-            painter.text(pos2(plot.left() + 6.0, to_y(sea as f32) - 2.0), Align2::LEFT_BOTTOM, format!("sea {sea}"), FontId::monospace(10.0), Color32::from_rgb(140, 190, 255));
+            painter.text(pos2(plot.left() + 6.0, to_y(sea as f32) - 2.0), Align2::LEFT_BOTTOM, tr!("sea {sea}", sea), FontId::monospace(10.0), Color32::from_rgb(140, 190, 255));
         }
 
         // Panning, unless a candle is held.
@@ -783,16 +783,16 @@ impl OresView {
                 (false, true) => Color32::from_white_alpha(170),
                 (false, false) => pal.weak,
             };
-            painter.text(pos2(x, plot.top() + 6.0), Align2::CENTER_TOP, rule.mineral.name().to_uppercase(), FontId::monospace(9.5), ink);
+            painter.text(pos2(x, plot.top() + 6.0), Align2::CENTER_TOP, crate::i18n::tr_name(rule.mineral.name()).to_uppercase(), FontId::monospace(9.5), ink);
         }
         if let Some(d) = &self.drag {
             let b = self.settings.ores[d.ore].bands[d.band];
             let words = match d.grip {
-                Grip::Min => format!("from y {}", b.min),
-                Grip::Max => format!("up to y {}", b.max),
-                Grip::PeakLo | Grip::PeakHi => format!("most from y {} to {}", b.peak[0], b.peak[1]),
-                Grip::Body => format!("y {} to {}", b.min, b.max),
-                Grip::Size => format!("{} blocks a vein", b.size),
+                Grip::Min => tr!("from y {min}", min = b.min),
+                Grip::Max => tr!("up to y {max}", max = b.max),
+                Grip::PeakLo | Grip::PeakHi => tr!("most from y {value} to {value2}", value = b.peak[0], value2 = b.peak[1]),
+                Grip::Body => tr!("y {min} to {max}", min = b.min, max = b.max),
+                Grip::Size => tr!("{size} blocks a vein", size = b.size),
             };
             if let Some(at) = pointer {
                 bubble(&p, pal, at + vec2(14.0, -18.0), &words);
@@ -801,20 +801,12 @@ impl OresView {
             && let Some(at) = pointer
         {
             let b = self.settings.ores[ore].bands[band];
-            let words = format!(
-                "{} · y {} to {}, most at {} · {} veins a chunk · {} blocks a vein",
-                self.settings.ores[ore].mineral.name(),
-                b.min,
-                b.max,
-                if b.peak[0] == b.peak[1] { b.peak[0].to_string() } else { format!("{} to {}", b.peak[0], b.peak[1]) },
-                trim(b.veins as f64),
-                b.size
-            );
+            let words = tr!("{name} · y {min} to {max}, most at {peak} · {veins} veins a chunk · {size} blocks a vein", name = crate::i18n::tr_name(self.settings.ores[ore].mineral.name()), min = b.min, max = b.max, peak = if b.peak[0] == b.peak[1] { b.peak[0].to_string() } else { tr!("{low} to {high}", low = b.peak[0], high = b.peak[1]) }, veins = trim(b.veins as f64), size = b.size);
             bubble(&p, pal, at + vec2(14.0, -18.0), &words);
         }
         if !self.settings.on {
             painter.rect_filled(plot, 0, Color32::from_black_alpha(90));
-            painter.text(plot.center(), Align2::CENTER_CENTER, "Ores are off: the export lays none", FontId::proportional(14.0), Color32::WHITE);
+            painter.text(plot.center(), Align2::CENTER_CENTER, tr!("Ores are off: the export lays none"), FontId::proportional(14.0), Color32::WHITE);
         }
         p.rect_stroke(plot, 0, Stroke::new(1.0, pal.border), StrokeKind::Outside);
         // Across: blocks from the left of the cut.
@@ -1005,11 +997,11 @@ impl OresView {
         let p = ui.painter().clone();
         p.rect(rect, theme::CARD_RADIUS, card_fill(pal), Stroke::new(1.0, pal.border), StrokeKind::Inside);
         let strip = Rect::from_min_size(rect.min, vec2(rect.width(), STRIP));
-        title(&p, pal, strip, Icon::ChartLine, "ore at each height");
+        title(&p, pal, strip, Icon::ChartLine, tr!("ore at each height"));
         p.hline(strip.x_range(), strip.bottom(), Stroke::new(1.0, pal.border));
         // Blocks | Log | Share, the one shown underlined.
         let mut x = strip.right() - 12.0;
-        for (scale, word) in [(Scale::Share, "Share"), (Scale::Log, "Log"), (Scale::Blocks, "Blocks")] {
+        for (scale, word) in [(Scale::Share, tr!("Share")), (Scale::Log, tr!("Log")), (Scale::Blocks, tr!("Blocks"))] {
             let g = p.layout_no_wrap(word.to_owned(), FontId::proportional(12.0), pal.text);
             let r = Rect::from_min_max(pos2(x - g.size().x - 8.0, strip.top()), pos2(x + 2.0, strip.bottom()));
             let resp = ui.interact(r, egui::Id::unique(("ores scale", word)), Sense::click());
@@ -1142,18 +1134,18 @@ impl OresView {
             .show(ui, |ui| {
                 ui.set_width(WIDTH - 34.0);
                 let Some(rule) = self.settings.ores.get_mut(selected) else {
-                    ui.label(RichText::new("No ore: the export lays none. Add one with the + at the end of the ores.").size(12.5).color(pal.weak));
+                    ui.label(RichText::new(tr!("No ore: the export lays none. Add one with the + at the end of the ores.")).size(12.5).color(pal.weak));
                     return None;
                 };
                 let mineral = rule.mineral;
                 ui.horizontal(|ui| {
                     let (sq, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
                     ui.painter().rect_filled(sq, 2, theme::rgb(mineral.color()));
-                    ui.label(RichText::new(mineral.name()).size(14.0).medium());
-                    ui.label(RichText::new(format!("for {}", mineral.use_for())).size(12.0).color(pal.weak));
+                    ui.label(RichText::new(crate::i18n::tr_name(mineral.name())).size(14.0).medium());
+                    ui.label(RichText::new(tr!("for {use_for}", use_for = crate::i18n::tr_name(mineral.use_for()))).size(12.0).color(pal.weak));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 8.0;
-                        let add = egui::Button::new(RichText::new(theme::with_icon(Icon::Plus, "Add a band")).size(12.5))
+                        let add = egui::Button::new(RichText::new(theme::with_icon(Icon::Plus, tr!("Add a band"))).size(12.5))
                             .fill(pal.control())
                             .stroke(Stroke::new(1.0, pal.control_border()))
                             .corner_radius(theme::PILL)
@@ -1162,12 +1154,12 @@ impl OresView {
                             let next = rule.bands.last().copied().unwrap_or(Band::new(0, [32, 32], 64, 4.0, 8));
                             rule.bands.push(next);
                         }
-                        widgets::switch(ui, &mut rule.on).on_hover_text("Whether the export lays this ore");
-                        ui.label(RichText::new("Laid").size(12.5));
+                        widgets::switch(ui, &mut rule.on).on_hover_text(tr!("Whether the export lays this ore"));
+                        ui.label(RichText::new(tr!("Laid")).size(12.5));
                         ui.add_space(6.0);
                         let (key, undo) = if cfg!(target_os = "macos") { ("⌫", "⌘Z") } else { ("Delete", "Ctrl+Z") };
-                        let remove = egui::Button::new(RichText::new(theme::with_icon(Icon::Trash2, "Remove")).size(12.5).color(pal.weak)).frame(false);
-                        if ui.add(remove).on_hover_text(format!("Take {} out of the ores ({key}); {undo} or the + brings it back", mineral.name())).clicked() {
+                        let remove = egui::Button::new(RichText::new(theme::with_icon(Icon::Trash2, tr!("Remove"))).size(12.5).color(pal.weak)).frame(false);
+                        if ui.add(remove).on_hover_text(tr!("Take {name} out of the ores ({key}); {undo} or the + brings it back", name = mineral.name(), key, undo)).clicked() {
                             remove_ore = true;
                         }
                     });
@@ -1176,10 +1168,10 @@ impl OresView {
                 // The biomes it keeps to: only in some, never in others.
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 10.0;
-                    ui.add_sized(vec2(TAG, 30.0), egui::Label::new(RichText::new("Biomes").size(12.0).color(pal.weak)));
+                    ui.add_sized(vec2(TAG, 30.0), egui::Label::new(RichText::new(tr!("Biomes")).size(12.0).color(pal.weak)));
                     let half = ((ui.available_width() - 10.0) / 2.0).floor();
-                    biome_list(ui, pal, half, ("Only in", "none yet: laid nowhere"), &mut rule.biomes.only, reg, "ore only in");
-                    biome_list(ui, pal, half, ("Except in", "none yet"), &mut rule.biomes.except, reg, "ore except in");
+                    biome_list(ui, pal, half, (tr!("Only in"), tr!("none yet: laid nowhere")), &mut rule.biomes.only, reg, "ore only in");
+                    biome_list(ui, pal, half, (tr!("Except in"), tr!("none yet")), &mut rule.biomes.except, reg, "ore except in");
                 });
                 ui.add_space(4.0);
                 for (j, band) in rule.bands.iter_mut().enumerate() {
@@ -1188,7 +1180,7 @@ impl OresView {
                     let behind = ui.painter().add(egui::Shape::Noop);
                     let row = ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 10.0;
-                        let words = RichText::new(format!("Band {}", j + 1)).size(12.0).color(if picked { pal.text } else { pal.weak });
+                        let words = RichText::new(tr!("Band {value}", value = j + 1)).size(12.0).color(if picked { pal.text } else { pal.weak });
                         if tag(ui, if picked { words.medium() } else { words }).clicked() {
                             self.band = j;
                         }
@@ -1197,13 +1189,13 @@ impl OresView {
                             ui,
                             &format!("ore band {j}"),
                             &mut [
-                                Part::Text("From y"),
+                                Part::Text(tr!("From y")),
                                 Part::Int(&mut lo, -2048..=2048, 0.5),
-                                Part::Text("most from"),
+                                Part::Text(tr!("most from")),
                                 Part::Int(&mut p0, -2048..=2048, 0.5),
-                                Part::Text("to"),
+                                Part::Text(tr!("to")),
                                 Part::Int(&mut p1, -2048..=2048, 0.5),
-                                Part::Text("up to"),
+                                Part::Text(tr!("up to")),
                                 Part::Int(&mut hi, -2048..=2048, 0.5),
                             ],
                         );
@@ -1212,9 +1204,9 @@ impl OresView {
                             band.tidy();
                             self.band = j;
                         }
-                        ui.add(widgets::Field::new(&mut band.veins, 0.0..=60.0).max_decimals(2).text("Veins a chunk").width(170.0));
-                        ui.add(widgets::Field::new(&mut band.size, 1..=massif_core::ores::MAX_SIZE).text("Blocks a vein").width(150.0));
-                        let x = ui.add(egui::Button::new(RichText::new(theme::glyph(Icon::X).to_string()).size(13.0).color(pal.weak)).frame(false)).on_hover_text("Remove this band");
+                        ui.add(widgets::Field::new(&mut band.veins, 0.0..=60.0).max_decimals(2).text(tr!("Veins a chunk")).width(170.0));
+                        ui.add(widgets::Field::new(&mut band.size, 1..=massif_core::ores::MAX_SIZE).text(tr!("Blocks a vein")).width(150.0));
+                        let x = ui.add(egui::Button::new(RichText::new(theme::glyph(Icon::X).to_string()).size(13.0).color(pal.weak)).frame(false)).on_hover_text(tr!("Remove this band"));
                         if x.clicked() {
                             remove_band = Some(j);
                         }
@@ -1237,7 +1229,7 @@ impl OresView {
                     }
                 }
                 if rule.bands.is_empty() {
-                    ui.label(RichText::new("No band: this ore is laid nowhere.").size(12.0).color(pal.weak));
+                    ui.label(RichText::new(tr!("No band: this ore is laid nowhere.")).size(12.0).color(pal.weak));
                 }
                 Some(theme::rgb(mineral.color()))
             });
@@ -1426,16 +1418,16 @@ fn biome_words(choice: &BiomeChoice, reg: &Registry) -> Option<String> {
     let names = |list: &[u16]| {
         let mut names: Vec<String> = list.iter().take(3).map(|&b| reg.biome(BiomeId(b)).name.clone()).collect();
         if list.len() > 3 {
-            names.push(format!("{} more", list.len() - 3));
+            names.push(tr!("{value} more", value = list.len() - 3));
         }
         names.join(", ")
     };
-    let only = choice.only.as_ref().map(|l| if l.is_empty() { "In no biome".to_owned() } else { format!("Only in {}", names(l)) });
+    let only = choice.only.as_ref().map(|l| if l.is_empty() { tr!("In no biome").to_owned() } else { tr!("Only in {names}", names = names(l)) });
     let except = choice.except.as_ref().filter(|l| !l.is_empty()).map(|l| names(l));
     match (only, except) {
-        (Some(only), Some(except)) => Some(format!("{only}; not in {except}")),
+        (Some(only), Some(except)) => Some(tr!("{only}; not in {except}", only, except)),
         (Some(only), None) => Some(only),
-        (None, Some(except)) => Some(format!("Not in {except}")),
+        (None, Some(except)) => Some(tr!("Not in {except}", except)),
         (None, None) => None,
     }
 }
@@ -1461,12 +1453,12 @@ fn biome_list(ui: &mut Ui, pal: &Palette, width: f32, (label, empty): (&str, &st
         // The menu before the chips and with an id of its own, so that it
         // stays where it is, and open, as biomes are ticked.
         let config = MenuConfig::new().close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
-        ui.scope_builder(egui::UiBuilder::new().scope_id(egui::Id::unique((id, "add menu"))), |ui| MenuButton::new(RichText::new(theme::with_icon(Icon::Plus, "Add")).size(12.0)).config(config).ui(ui, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().scope_id(egui::Id::unique((id, "add menu"))), |ui| MenuButton::new(RichText::new(theme::with_icon(Icon::Plus, tr!("Add"))).size(12.0)).config(config).ui(ui, |ui| {
             ui.set_width(230.0);
             // A search over the names: the game has some sixty biomes.
             let key = egui::Id::unique((id, "search"));
             let mut search = ui.data_mut(|d| d.get_temp::<String>(key)).unwrap_or_default();
-            ui.add(egui::TextEdit::singleline(&mut search).hint_text("Search").desired_width(f32::INFINITY));
+            ui.add(egui::TextEdit::singleline(&mut search).hint_text(tr!("Search")).desired_width(f32::INFINITY));
             ui.data_mut(|d| d.insert_temp(key, search.clone()));
             let search = search.to_lowercase();
             ui.add_space(4.0);
@@ -1553,7 +1545,7 @@ fn tooltip(p: &egui::Painter, pal: &Palette, (plot, at): (Rect, Pos2), y: i32, r
     p.rect(r, 9, if pal.dark { Color32::from_rgb(22, 22, 24) } else { Color32::WHITE }, Stroke::new(1.0, pal.border), StrokeKind::Inside);
     p.text(r.min + vec2(12.0, 10.0), Align2::LEFT_TOP, format!("y {y}"), FontId::monospace(11.0), pal.weak);
     if shown.is_empty() {
-        p.text(r.min + vec2(12.0, 30.0), Align2::LEFT_TOP, "no ore here", FontId::proportional(11.5), pal.weak);
+        p.text(r.min + vec2(12.0, 30.0), Align2::LEFT_TOP, tr!("no ore here"), FontId::proportional(11.5), pal.weak);
     }
     for (i, &&(k, v)) in shown.iter().enumerate() {
         let row_y = r.top() + 37.0 + i as f32 * 19.0;
@@ -1562,7 +1554,7 @@ fn tooltip(p: &egui::Painter, pal: &Palette, (plot, at): (Rect, Pos2), y: i32, r
         }
         let c = theme::rgb(settings.ores[k].mineral.color());
         p.rect_filled(Rect::from_center_size(pos2(r.left() + 16.0, row_y), vec2(7.0, 7.0)), 2, c);
-        p.text(pos2(r.left() + 26.0, row_y), Align2::LEFT_CENTER, settings.ores[k].mineral.name(), FontId::proportional(11.5), pal.text);
+        p.text(pos2(r.left() + 26.0, row_y), Align2::LEFT_CENTER, crate::i18n::tr_name(settings.ores[k].mineral.name()), FontId::proportional(11.5), pal.text);
         let value = match scale {
             Scale::Blocks => {
                 let (n, u) = short(v);

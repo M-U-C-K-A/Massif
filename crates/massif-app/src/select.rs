@@ -95,19 +95,19 @@ fn map_tiles(doc: &Document) -> Vec<TilePos> {
 /// Select the whole map.
 pub fn select_all(doc: &mut Document) -> bool {
     let all = Selection::default().invert(map_tiles(doc));
-    doc.select("Select all", Some(all))
+    doc.select(tr!("Select all"), Some(all))
 }
 
 /// Select what is not selected.
 pub fn invert(doc: &mut Document) -> bool {
     let now = doc.selection().map(|s| (**s).clone()).unwrap_or_default();
     let inverted = now.invert(map_tiles(doc));
-    doc.select("Invert selection", Some(inverted))
+    doc.select(tr!("Invert selection"), Some(inverted))
 }
 
 /// Select nothing: the tools act everywhere again.
 pub fn deselect(doc: &mut Document) -> bool {
-    doc.select("Deselect", None)
+    doc.select(tr!("Deselect"), None)
 }
 
 /// `shape` worked into the selection there is, as `op` says.
@@ -222,21 +222,21 @@ impl SelectView {
             // A click without a shape: a new selection of nothing.
             if drag.op == Combine::Replace && doc.selection().is_some() {
                 deselect(doc);
-                return Some("Deselected".into());
+                return Some(tr!("Deselected").into());
             }
             return None;
         }
         let shape = if drag.tool == Tool::SelectBrush { shape } else { shape.feather(feather) };
         let label = match drag.op {
-            Combine::Replace => "Select",
-            Combine::Add => "Add to selection",
-            Combine::Subtract => "Subtract from selection",
-            Combine::Intersect => "Intersect selection",
+            Combine::Replace => tr!("Select"),
+            Combine::Add => tr!("Add to selection"),
+            Combine::Subtract => tr!("Subtract from selection"),
+            Combine::Intersect => tr!("Intersect selection"),
         };
         apply(doc, label, shape, drag.op);
         Some(match doc.selection() {
-            Some(s) => format!("{} blocks selected", thousands(s.area().round() as u64)),
-            None => "Nothing selected".into(),
+            Some(s) => tr!("{thousands} blocks selected", thousands = thousands(s.area().round() as u64)),
+            None => tr!("Nothing selected").into(),
         })
     }
 
@@ -404,54 +404,54 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: 
     if let Some(k) = button_group(ui, "selection mode", &labels, &on) {
         tools.select_mode = modes[k];
     }
-    hint(ui, "Shift adds to the selection, Alt takes out of it, both keep what both hold.");
+    hint(ui, tr!("Shift adds to the selection, Alt takes out of it, both keep what both hold."));
     ui.add_space(4.0);
     if tools.tool != Tool::SelectBrush {
         well(ui, |ui| {
-            row(ui, "Feather", |ui| {
-                ui.add(Field::new(&mut tools.select_feather, 0..=massif_core::selection::MAX_FEATHER).suffix(" blocks").width(120.0));
+            row(ui, tr!("Feather"), |ui| {
+                ui.add(Field::new(&mut tools.select_feather, 0..=massif_core::selection::MAX_FEATHER).suffix(tr!(" blocks")).width(120.0));
             });
         });
-        hint(ui, "New shapes fade over this many blocks on either side of their edge.");
+        hint(ui, tr!("New shapes fade over this many blocks on either side of their edge."));
     } else {
-        hint(ui, "The brush's soft edge feathers what it paints.");
+        hint(ui, tr!("The brush's soft edge feathers what it paints."));
     }
 
-    section(ui, Icon::SquareDashed, "Selection");
+    section(ui, Icon::SquareDashed, tr!("Selection"));
     match doc.selection() {
         Some(s) => {
             let area = s.area();
-            hint(ui, &format!("{} blocks selected. The tools act only inside, fading along a feathered edge.", thousands(area.round() as u64)));
+            hint(ui, &tr!("{thousands} blocks selected. The tools act only inside, fading along a feathered edge.", thousands = thousands(area.round() as u64)));
         }
-        None => hint(ui, "Nothing selected: the tools act on the whole map."),
+        None => hint(ui, tr!("Nothing selected: the tools act on the whole map.")),
     }
     let any = doc.selection().is_some();
     ui.horizontal_wrapped(|ui| {
-        if ui.button(theme::with_icon(Icon::SquareDashedMousePointer, "All")).clicked() {
+        if ui.button(theme::with_icon(Icon::SquareDashedMousePointer, tr!("All"))).clicked() {
             select_all(doc);
         }
-        if ui.add_enabled(any, egui::Button::new(theme::with_icon(Icon::SquaresExclude, "Invert"))).clicked() {
+        if ui.add_enabled(any, egui::Button::new(theme::with_icon(Icon::SquaresExclude, tr!("Invert")))).clicked() {
             invert(doc);
         }
-        if ui.add_enabled(any, egui::Button::new(theme::with_icon(Icon::SquareX, "Deselect"))).clicked() {
+        if ui.add_enabled(any, egui::Button::new(theme::with_icon(Icon::SquareX, tr!("Deselect")))).clicked() {
             deselect(doc);
         }
     });
     if any && tools.tool != Tool::SelectBrush {
         let n = tools.select_feather;
-        let label = if n > 0 { format!("Feather it by {n}") } else { "Feather it".to_owned() };
-        let feather = ui.add_enabled(n > 0, egui::Button::new(theme::with_icon(Icon::Feather, &label))).on_disabled_hover_text("Set Feather above first");
+        let label = if n > 0 { tr!("Feather it by {n}", n) } else { tr!("Feather it").to_owned() };
+        let feather = ui.add_enabled(n > 0, egui::Button::new(theme::with_icon(Icon::Feather, &label))).on_disabled_hover_text(tr!("Set Feather above first"));
         if feather.clicked()
             && let Some(s) = doc.selection().cloned()
         {
-            doc.select("Feather selection", Some(s.feather(n)));
+            doc.select(tr!("Feather selection"), Some(s.feather(n)));
         }
     }
 
-    section(ui, Icon::ScanLine, "Select by");
+    section(ui, Icon::ScanLine, tr!("Select by"));
     let by = &mut tools.select_by;
     let whats = [ByWhat::Terrain, ByWhat::Height, ByWhat::Slope];
-    if let Some(k) = button_group(ui, "select by", &["Terrain", "Height", "Slope"], &whats.map(|w| by.what == w)) {
+    if let Some(k) = button_group(ui, "select by", &[tr!("Terrain"), tr!("Height"), tr!("Slope")], &whats.map(|w| by.what == w)) {
         by.what = whats[k];
     }
     ui.add_space(4.0);
@@ -459,40 +459,40 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: 
     well(ui, |ui| match by.what {
         ByWhat::Terrain => {
             let name = doc.world.registry.terrain(massif_core::TerrainId(tools.terrain)).name.clone();
-            row(ui, "Terrain", |ui| {
+            row(ui, tr!("Terrain"), |ui| {
                 ui.label(egui::RichText::new(name).strong());
                 let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::hover());
                 crate::panels::terrain_icon(ui, r, &doc.world.registry, tools.terrain, blocks);
             });
         }
         ByWhat::Height => {
-            row(ui, "From", |ui| {
+            row(ui, tr!("From"), |ui| {
                 ui.add(Field::new(&mut by.from, lo..=hi).width(120.0));
             });
-            row(ui, "To", |ui| {
+            row(ui, tr!("To"), |ui| {
                 ui.add(Field::new(&mut by.to, lo..=hi).width(120.0));
             });
         }
         ByWhat::Slope => {
-            row(ui, "Slopes", |ui| {
+            row(ui, tr!("Slopes"), |ui| {
                 let on = [by.steeper, !by.steeper];
-                if let Some(k) = button_group(ui, "steeper or gentler", &["Steeper", "Gentler"], &on) {
+                if let Some(k) = button_group(ui, "steeper or gentler", &[tr!("Steeper"), tr!("Gentler")], &on) {
                     by.steeper = k == 0;
                 }
             });
-            row(ui, "Than", |ui| {
+            row(ui, tr!("Than"), |ui| {
                 ui.add(Field::new(&mut by.slope, 0.0..=89.0).suffix("°").max_decimals(0).width(120.0));
             });
         }
     });
     if by.what == ByWhat::Terrain {
-        hint(ui, "The terrain picked in Terrain or Blocks.");
+        hint(ui, tr!("The terrain picked in Terrain or Blocks."));
     }
     ui.add_space(4.0);
-    if ui.button(theme::with_icon(Icon::ScanLine, "Select")).on_hover_text("Select the columns of the whole map that match, as the mode above says").clicked() {
+    if ui.button(theme::with_icon(Icon::ScanLine, tr!("Select"))).on_hover_text(tr!("Select the columns of the whole map that match, as the mode above says")).clicked() {
         let filter = by.filter(tools.terrain);
         let shape = Selection::by_filter(doc.dimension(), &filter);
-        apply(doc, "Select by", shape, tools.select_mode);
+        apply(doc, tr!("Select by"), shape, tools.select_mode);
     }
 }
 

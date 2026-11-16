@@ -56,51 +56,51 @@ pub enum Tool {
 impl Tool {
     pub const GROUPS: [(&'static str, Icon, &'static [Tool]); 7] = [
         (
-            "Sculpt terrain",
+            tn!("Sculpt terrain"),
             Icon::Mountain,
             &[Tool::Raise, Tool::Smooth, Tool::Flatten, Tool::SetHeight, Tool::Roughen, Tool::Road],
         ),
         (
-            "Paint",
+            tn!("Paint"),
             Icon::Paintbrush,
             &[Tool::PaintTerrain, Tool::PaintBiome, Tool::AutoPaint, Tool::AutoBiome],
         ),
-        ("Select", Icon::SquareDashed, &[Tool::SelectRect, Tool::SelectEllipse, Tool::SelectLasso, Tool::SelectBrush]),
-        ("Decor", Icon::Shrub, &[Tool::Cover, Tool::Objects]),
-        ("Water", Icon::Droplet, &[Tool::River, Tool::Flood, Tool::Drain, Tool::Water]),
-        ("Levels", Icon::Layers, &[Tool::StampSlab, Tool::EraseSlab]),
-        ("Navigate", Icon::Compass, &[Tool::Pan, Tool::Eyedropper]),
+        (tn!("Select"), Icon::SquareDashed, &[Tool::SelectRect, Tool::SelectEllipse, Tool::SelectLasso, Tool::SelectBrush]),
+        (tn!("Decor"), Icon::Shrub, &[Tool::Cover, Tool::Objects]),
+        (tn!("Water"), Icon::Droplet, &[Tool::River, Tool::Flood, Tool::Drain, Tool::Water]),
+        (tn!("Levels"), Icon::Layers, &[Tool::StampSlab, Tool::EraseSlab]),
+        (tn!("Navigate"), Icon::Compass, &[Tool::Pan, Tool::Eyedropper]),
     ];
 
-    pub const fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            Tool::Raise => "Raise / Lower",
-            Tool::Smooth => "Smooth",
-            Tool::Flatten => "Flatten",
-            Tool::SetHeight => "Set height",
-            Tool::Roughen => "Roughen",
-            Tool::Road => "Road",
-            Tool::PaintTerrain => "Paint terrain",
-            Tool::PaintBiome => "Paint biome",
-            Tool::Cover => "Ground cover",
-            Tool::Objects => "Objects",
-            Tool::AutoBiome => "Auto biome",
-            Tool::AutoPaint => "Auto paint",
-            Tool::Eyedropper => "Eyedropper",
-            Tool::Flood => "Flood",
-            Tool::Drain => "Drain",
-            Tool::Water => "Water brush",
-            Tool::River => "River",
-            Tool::StampSlab => "Stamp slab",
-            Tool::EraseSlab => "Erase slab",
-            Tool::Build => "Sculpt",
-            Tool::Dig => "Dig",
-            Tool::Smooth3d => "Smooth",
-            Tool::SelectRect => "Rectangle selection",
-            Tool::SelectEllipse => "Ellipse selection",
-            Tool::SelectLasso => "Lasso selection",
-            Tool::SelectBrush => "Selection brush",
-            Tool::Pan => "Pan",
+            Tool::Raise => tr!("Raise / Lower"),
+            Tool::Smooth => tr!("Smooth"),
+            Tool::Flatten => tr!("Flatten"),
+            Tool::SetHeight => tr!("Set height"),
+            Tool::Roughen => tr!("Roughen"),
+            Tool::Road => tr!("Road"),
+            Tool::PaintTerrain => tr!("Paint terrain"),
+            Tool::PaintBiome => tr!("Paint biome"),
+            Tool::Cover => tr!("Ground cover"),
+            Tool::Objects => tr!("Objects"),
+            Tool::AutoBiome => tr!("Auto biome"),
+            Tool::AutoPaint => tr!("Auto paint"),
+            Tool::Eyedropper => tr!("Eyedropper"),
+            Tool::Flood => tr!("Flood"),
+            Tool::Drain => tr!("Drain"),
+            Tool::Water => tr!("Water brush"),
+            Tool::River => tr!("River"),
+            Tool::StampSlab => tr!("Stamp slab"),
+            Tool::EraseSlab => tr!("Erase slab"),
+            Tool::Build => tr!("Sculpt"),
+            Tool::Dig => tr!("Dig"),
+            Tool::Smooth3d => tr!("Smooth"),
+            Tool::SelectRect => tr!("Rectangle selection"),
+            Tool::SelectEllipse => tr!("Ellipse selection"),
+            Tool::SelectLasso => tr!("Lasso selection"),
+            Tool::SelectBrush => tr!("Selection brush"),
+            Tool::Pan => tr!("Pan"),
         }
     }
 
@@ -168,51 +168,51 @@ impl Tool {
         Some(s)
     }
 
-    pub const fn help(self) -> &'static str {
+    pub fn help(self) -> &'static str {
         match self {
-            Tool::Raise => "Raise the ground. Right button: lower.",
-            Tool::Smooth => "Smooth the ground.",
-            Tool::Flatten => "Flatten to the height where the stroke starts.",
-            Tool::SetHeight => "Set the ground to the target height.",
-            Tool::Roughen => "Roughen the ground. Right button: smoother.",
-            Tool::Road => "Click points: a road runs through them. Enter builds it.",
+            Tool::Raise => tr!("Raise the ground. Right button: lower."),
+            Tool::Smooth => tr!("Smooth the ground."),
+            Tool::Flatten => tr!("Flatten to the height where the stroke starts."),
+            Tool::SetHeight => tr!("Set the ground to the target height."),
+            Tool::Roughen => tr!("Roughen the ground. Right button: smoother."),
+            Tool::Road => tr!("Click points: a road runs through them. Enter builds it."),
             Tool::PaintTerrain => {
-                "Paint a terrain, or several mixed by a noise. Right button: back to automatic."
+                tr!("Paint a terrain, or several mixed by a noise. Right button: back to automatic.")
             }
-            Tool::PaintBiome => "Paint a biome. Right button: back to automatic.",
-            Tool::Cover => "Paint what grows: grass, flowers, snow… Right button: remove it.",
-            Tool::Objects => "Paint where objects stand: trees, rocks… Right button: remove them.",
+            Tool::PaintBiome => tr!("Paint a biome. Right button: back to automatic."),
+            Tool::Cover => tr!("Paint what grows: grass, flowers, snow… Right button: remove it."),
+            Tool::Objects => tr!("Paint where objects stand: trees, rocks… Right button: remove them."),
             Tool::AutoBiome => {
-                "Sets the biome the land calls for: beach, forest, peaks…"
+                tr!("Sets the biome the land calls for: beach, forest, peaks…")
             }
             Tool::AutoPaint => {
-                "Paints what the land calls for: rock on cliffs, sand on shores…"
+                tr!("Paints what the land calls for: rock on cliffs, sand on shores…")
             }
-            Tool::Eyedropper => "Pick the terrain, biome, height and water under the cursor.",
-            Tool::Flood => "Fill a basin with water. Right button: drain.",
-            Tool::Drain => "Drain a body of water. Right button: fill.",
-            Tool::Water => "Set the water level. Right button: remove water.",
+            Tool::Eyedropper => tr!("Pick the terrain, biome, height and water under the cursor."),
+            Tool::Flood => tr!("Fill a basin with water. Right button: drain."),
+            Tool::Drain => tr!("Drain a body of water. Right button: fill."),
+            Tool::Water => tr!("Set the water level. Right button: remove water."),
             Tool::River => {
-                "Click a source: the water finds its way down. Drag it to guide it."
+                tr!("Click a source: the water finds its way down. Drag it to guide it.")
             }
             Tool::StampSlab => {
-                "Add rock to the active level. Right button: erase."
+                tr!("Add rock to the active level. Right button: erase.")
             }
-            Tool::EraseSlab => "Erase the active level. Right button: add.",
+            Tool::EraseSlab => tr!("Erase the active level. Right button: add."),
             Tool::Build => {
-                "Left button: add matter. Right button: dig."
+                tr!("Left button: add matter. Right button: dig.")
             }
             Tool::Dig => {
-                "Dig in 3D: caves, tunnels. Right button: build."
+                tr!("Dig in 3D: caves, tunnels. Right button: build.")
             }
             Tool::Smooth3d => {
-                "Round off in 3D."
+                tr!("Round off in 3D.")
             }
-            Tool::SelectRect => "Drag a rectangle: the other tools then act only inside it.",
-            Tool::SelectEllipse => "Drag an ellipse: the other tools then act only inside it.",
-            Tool::SelectLasso => "Draw around an area: the other tools then act only inside it.",
-            Tool::SelectBrush => "Paint the selection with the brush. Right button: take it out.",
-            Tool::Pan => "Move the map (also: middle button, Space).",
+            Tool::SelectRect => tr!("Drag a rectangle: the other tools then act only inside it."),
+            Tool::SelectEllipse => tr!("Drag an ellipse: the other tools then act only inside it."),
+            Tool::SelectLasso => tr!("Draw around an area: the other tools then act only inside it."),
+            Tool::SelectBrush => tr!("Paint the selection with the brush. Right button: take it out."),
+            Tool::Pan => tr!("Move the map (also: middle button, Space)."),
         }
     }
 
@@ -546,37 +546,37 @@ impl PatternPreset {
         let base = Pattern::default();
         vec![
             preset(
-                "Meadow",
+                tr!("Meadow"),
                 Pattern { scale: 18.0, ..base.clone() },
                 &[("Grass", 0.64), ("Moss", 0.08), ("Coarse Dirt", 0.16), ("Dirt", 0.12)],
             ),
             preset(
-                "Forest floor",
+                tr!("Forest floor"),
                 Pattern { scale: 9.0, octaves: 5, gain: 0.6, seed: 7, ..base.clone() },
                 &[("Moss", 0.15), ("Grass", 0.3), ("Podzol", 0.35), ("Coarse Dirt", 0.2)],
             ),
             preset(
-                "Rocky ground",
+                tr!("Rocky ground"),
                 Pattern { scale: 7.0, lacunarity: 2.5, softness: 0.4, seed: 3, ..base.clone() },
                 &[("Andesite", 0.26), ("Stone", 0.3), ("Cobblestone", 0.1), ("Gravel", 0.14), ("Coarse Dirt", 0.2)],
             ),
             preset(
-                "Gravel paths",
+                tr!("Gravel paths"),
                 Pattern { kind: PatternKind::Veins, scale: 48.0, octaves: 3, softness: 0.1, seed: 5, ..base.clone() },
                 &[("Gravel", 0.08), ("Coarse Dirt", 0.06), ("Grass", 0.86)],
             ),
             preset(
-                "Snowy rocks",
+                tr!("Snowy rocks"),
                 Pattern { kind: PatternKind::Blobs, scale: 22.0, octaves: 5, gain: 0.55, seed: 11, ..base.clone() },
                 &[("Stone", 0.2), ("Powder Snow", 0.15), ("Snow", 0.65)],
             ),
             preset(
-                "Dunes",
+                tr!("Dunes"),
                 Pattern { kind: PatternKind::Stripes, noise: Basis::Perlin, scale: 10.0, octaves: 3, stretch: 3.0, angle: 20.0, softness: 0.2, seed: 2, ..base.clone() },
                 &[("Sandstone", 0.2), ("Sand", 0.8)],
             ),
             preset(
-                "Fields",
+                tr!("Fields"),
                 Pattern { kind: PatternKind::Cells, scale: 40.0, stretch: 2.0, angle: 10.0, softness: 0.0, seed: 9, ..base },
                 &[("Grass", 0.4), ("Moss", 0.2), ("Coarse Dirt", 0.2), ("Podzol", 0.2)],
             ),
@@ -793,11 +793,10 @@ impl RiverDraft {
         let length: f32 = self.plan.course.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum();
         let lakes = match self.plan.lakes.len() {
             0 => String::new(),
-            1 => " · 1 lake".to_owned(),
-            n => format!(" · {n} lakes"),
+            n => trn!(" · {n} lake", " · {n} lakes", n = n),
         };
-        let into = self.plan.mouth.map_or("", |m| m.label());
-        format!("{length:.0} blocks to {into}{lakes}")
+        let into = self.plan.mouth.map_or("", |m| crate::i18n::tr_name(m.label()));
+        tr!("{length:.0} blocks to {into}{lakes}", length, into, lakes)
     }
 }
 
@@ -805,9 +804,9 @@ impl RiverDraft {
 pub fn start_river(doc: &Document, tools: &mut ToolState, x: f32, z: f32) -> Feedback {
     let sea = doc.world.meta.sea_level as f32;
     match probe(doc, x.floor() as i32, z.floor() as i32) {
-        None => return Some("That is off the map: click on land".into()),
+        None => return Some(tr!("That is off the map: click on land").into()),
         Some(p) if p.height < sea || (p.fluid != NO_FLUID && p.fluid as f32 > p.height) => {
-            return Some("Already water: click on dry land, where it springs".into());
+            return Some(tr!("Already water: click on dry land, where it springs").into());
         }
         _ => {}
     }
@@ -822,15 +821,15 @@ pub fn dig_draft(doc: &mut Document, tools: &mut ToolState) -> Feedback {
     let mut draft = tools.river_draft.take()?;
     draft.plan(doc, &tools.river, None);
     if draft.plan.course.len() < 3 {
-        let note = "Too short to dig: drag its end further".to_owned();
+        let note = tr!("Too short to dig: drag its end further").to_owned();
         tools.river_note = Some(note.clone());
         return Some(note);
     }
     let spec = tools.river.spring_spec(&doc.world.registry);
-    doc.history.begin("River", doc.dim);
+    doc.history.begin(tr!("River"), doc.dim);
     let report = massif_core::river::dig_descent(&mut doc.history.edit(&mut doc.world, 0), &draft.plan, &spec);
     doc.commit();
-    let note = format!("Dug a river {} · from Y {:.0}", draft.summary(), report.source);
+    let note = tr!("Dug a river {summary} · from Y {source:.0}", summary = draft.summary(), source = report.source);
     tools.river_note = Some(note.clone());
     Some(note)
 }
@@ -972,13 +971,13 @@ pub fn begin_stroke(doc: &mut Document, tools: &ToolState, at: (f32, f32), inver
     if tool.needs_slab_level() && doc.active_kind() == LevelKind::Ground {
         return (
             None,
-            Some("Stamps need a Solid or Carve level (Levels panel).".into()),
+            Some(tr!("Stamps need a Solid or Carve level (Levels panel).").into()),
         );
     }
     let flatten_to = (tool == Tool::Flatten)
         .then(|| ops::height_at(doc.dimension(), level, at.0.floor() as i32, at.1.floor() as i32, tools.surface()))
         .flatten();
-    doc.history.begin(tool.label(), doc.dim);
+    doc.history.begin(crate::i18n::tr_name(tool.label()), doc.dim);
     let salt = doc.revision.wrapping_mul(0x9e37_79b9) ^ 0x5bd1_e995;
     let stroke = Stroke {
         last: at,
@@ -1114,9 +1113,9 @@ pub fn end_stroke(doc: &mut Document, stroke: Stroke) -> Feedback {
     doc.commit();
     match stroke.tool {
         Tool::AutoPaint | Tool::AutoBiome if !stroke.inverse => Some(match (stroke.changed, stroke.tool) {
-            (0, _) => "Nothing to change here: the land already follows the rules".to_owned(),
-            (n, Tool::AutoPaint) => format!("Repainted {n} columns"),
-            (n, _) => format!("Changed the biome of {n} columns"),
+            (0, _) => tr!("Nothing to change here: the land already follows the rules").to_owned(),
+            (n, Tool::AutoPaint) => tr!("Repainted {n} columns", n),
+            (n, _) => tr!("Changed the biome of {n} columns", n),
         }),
         _ => None,
     }
@@ -1157,7 +1156,7 @@ pub fn begin_sculpt(doc: &mut Document, tools: &ToolState, inverse: bool) -> Opt
         Tool::PaintTerrain => Stroke3d::Paint { inverse },
         _ => Stroke3d::Sculpt(tool.sculpt_mode(inverse)?),
     };
-    doc.history.begin(tool.label(), doc.dim);
+    doc.history.begin(crate::i18n::tr_name(tool.label()), doc.dim);
     let salt = doc.revision.wrapping_mul(0x9e37_79b9) ^ 0x3d5c_ab71;
     Some(SculptStroke { what, salt })
 }
@@ -1268,18 +1267,18 @@ pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse:
                 tools.object_layer = p.objects;
             }
             tools.tool = tools.previous;
-            Some(format!("Picked {terrain_name} at height {}", block_top(p.height)))
+            Some(tr!("Picked {terrain_name} at height {block_top}", block_top = block_top(p.height), terrain_name))
         }
         Tool::Flood | Tool::Drain => {
             let flood = (tools.tool == Tool::Flood) != inverse;
             let mode = if flood { Flood::Fill(tools.water_level) } else { Flood::Drain };
-            doc.history.begin(if flood { "Flood" } else { "Drain" }, doc.dim);
+            doc.history.begin(if flood { tr!("Flood") } else { tr!("Drain") }, doc.dim);
             let n = ops::flood_fill(&mut doc.history.edit(&mut doc.world, 0), x, z, mode, 64 << 20);
             doc.commit();
             Some(match (flood, n) {
-                (_, 0) => "Nothing to fill or drain here".to_owned(),
-                (true, n) => format!("Flooded {n} columns up to {}", tools.water_level),
-                (false, n) => format!("Drained {n} columns"),
+                (_, 0) => tr!("Nothing to fill or drain here").to_owned(),
+                (true, n) => tr!("Flooded {n} columns up to {water_level}", water_level = tools.water_level, n),
+                (false, n) => tr!("Drained {n} columns", n),
             })
         }
         _ => None,

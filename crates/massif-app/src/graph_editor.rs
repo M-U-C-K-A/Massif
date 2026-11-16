@@ -52,7 +52,7 @@ pub const IMAGE_SIZES: [(&str, [u32; 2]); 5] = [
     ("HD", [1920, 1080]),
     ("QHD", [2560, 1440]),
     ("4K", [3840, 2160]),
-    ("Square", [4096, 4096]),
+    (tn!("Square"), [4096, 4096]),
     ("8K", [7680, 4320]),
 ];
 const NODE_WIDTH: f32 = 168.0;
@@ -764,8 +764,8 @@ fn template_card(ui: &mut Ui, t: Template, picture: Option<&TextureHandle>, pal:
     let text = Rect::from_min_max(pos2(pic.right() + 10.0, rect.top() + 9.0), rect.max - vec2(8.0, 6.0));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text).layout(egui::Layout::top_down(egui::Align::Min)));
     child.spacing_mut().item_spacing.y = 2.0;
-    child.add(egui::Label::new(RichText::new(t.label()).size(13.5).color(pal.text).medium()).selectable(false));
-    child.add(egui::Label::new(RichText::new(t.description()).size(11.5).color(pal.weak)).selectable(false));
+    child.add(egui::Label::new(RichText::new(crate::i18n::tr_name(t.label())).size(13.5).color(pal.text).medium()).selectable(false));
+    child.add(egui::Label::new(RichText::new(crate::i18n::tr_name(t.description())).size(11.5).color(pal.weak)).selectable(false));
     response.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -1040,8 +1040,8 @@ impl GraphEditor {
         if let Some(b) = self.build.take_if(|b| b.generation != doc.generation) {
             b.cancel.store(true, Ordering::Relaxed);
             crate::sounds::play(crate::sounds::Cue::Warning);
-            let what = if b.export.is_some() { "Height map not saved" } else { "Conversion stopped" };
-            self.note = Some(format!("{what}: it was for the map open before"));
+            let what = if b.export.is_some() { tr!("Height map not saved") } else { tr!("Conversion stopped") };
+            self.note = Some(tr!("{what}: it was for the map open before", what));
         }
         let worker = self.worker.get_or_insert_with(|| Worker::new(ctx.clone()));
         while let Ok(p) = worker.rx.try_recv() {
@@ -1111,11 +1111,11 @@ impl GraphEditor {
             Some((n, out)) => {
                 let outs = n.kind.outputs();
                 match outs.get(out as usize) {
-                    Some((name, _)) if outs.len() > 1 => format!("{} · {}", n.kind.label(), name),
-                    _ => n.kind.label().to_owned(),
+                    Some((name, _)) if outs.len() > 1 => format!("{} · {}", crate::i18n::tr_name(n.kind.label()), name),
+                    _ => crate::i18n::tr_name(n.kind.label()).to_owned(),
                 }
             }
-            None => "The graph's output".to_owned(),
+            None => tr!("The graph's output").to_owned(),
         };
         egui::Frame::new()
             .fill(Color32::from_black_alpha(130))
@@ -1126,8 +1126,8 @@ impl GraphEditor {
                     ui.label(RichText::new(theme::glyph(Icon::Eye).to_string()).color(Color32::WHITE));
                     ui.label(RichText::new(label).color(Color32::WHITE).medium());
                     let side = terrain_extent(doc, graph.size, 2).size;
-                    ui.label(RichText::new(format!("{side:.0} × {side:.0} blocks")).size(11.0).color(Color32::from_white_alpha(190)));
-                    let hint = if self.pinned.is_some() { "V: back to the output" } else { "V: view the selected node" };
+                    ui.label(RichText::new(tr!("{side:.0} × {side:.0} blocks", side)).size(11.0).color(Color32::from_white_alpha(190)));
+                    let hint = if self.pinned.is_some() { tr!("V: back to the output") } else { tr!("V: view the selected node") };
                     ui.label(RichText::new(hint).size(11.0).color(Color32::from_white_alpha(150)));
                     if self.received != self.revision || self.build.is_some() {
                         crate::loader::loader(ui, 16.0);
@@ -1154,25 +1154,25 @@ impl GraphEditor {
                             state.bg_stroke = Stroke::NONE;
                         }
                     }
-                    ui.toggle_value(&mut self.render_open, theme::with_icon(Icon::Sun, "Render"))
-                        .on_hover_text("Sun, clouds, haze, sea and exposure of the view");
-                    ui.toggle_value(&mut self.view.render.clouds, theme::with_icon(Icon::Cloud, "Clouds"));
-                    ui.toggle_value(&mut self.view.render.sea, theme::with_icon(Icon::Waves, "Sea"))
-                        .on_hover_text(format!("Water at the world's sea level ({})", doc.world.meta.sea_level));
-                    if ui.button(theme::glyph(Icon::Focus).to_string()).on_hover_text("Frame the relief").clicked() {
+                    ui.toggle_value(&mut self.render_open, theme::with_icon(Icon::Sun, tr!("Render")))
+                        .on_hover_text(tr!("Sun, clouds, haze, sea and exposure of the view"));
+                    ui.toggle_value(&mut self.view.render.clouds, theme::with_icon(Icon::Cloud, tr!("Clouds")));
+                    ui.toggle_value(&mut self.view.render.sea, theme::with_icon(Icon::Waves, tr!("Sea")))
+                        .on_hover_text(tr!("Water at the world's sea level ({sea_level})", sea_level = doc.world.meta.sea_level));
+                    if ui.button(theme::glyph(Icon::Focus).to_string()).on_hover_text(tr!("Frame the relief")).clicked() {
                         self.view.camera = Default::default();
                     }
                     let [w, h] = self.image_size;
                     if ui
                         .button(theme::glyph(Icon::Camera).to_string())
-                        .on_hover_text(format!("Save the view as an image, at full quality ({w} × {h})"))
+                        .on_hover_text(tr!("Save the view as an image, at full quality ({w} × {h})", w, h))
                         .clicked()
                     {
                         self.save_image(doc);
                     }
                     match &self.saved {
                         Some(Ok(name)) => {
-                            ui.label(RichText::new(format!("Saved {name}")).size(11.5).color(pal.weak));
+                            ui.label(RichText::new(tr!("Saved {name}", name)).size(11.5).color(pal.weak));
                         }
                         Some(Err(e)) => {
                             ui.label(RichText::new(e).size(11.5).color(pal.danger));
@@ -1205,11 +1205,11 @@ impl GraphEditor {
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(card).layout(egui::Layout::top_down(egui::Align::Center)));
             child.label(RichText::new(theme::glyph(Icon::MountainSnow).to_string()).size(26.0).color(pal.weak));
             child.add_space(6.0);
-            child.label(RichText::new("No relief to show").size(15.0).medium());
+            child.label(RichText::new(tr!("No relief to show")).size(15.0).medium());
             child.add_space(2.0);
             child.add(
                 egui::Label::new(
-                    RichText::new("Nothing in this graph makes the ground: its Height output takes no input. Start from the open map, or add a generator (Tab) and link it to the output.")
+                    RichText::new(tr!("Nothing in this graph makes the ground: its Height output takes no input. Start from the open map, or add a generator (Tab) and link it to the output."))
                         .size(12.0)
                         .color(pal.weak),
                 )
@@ -1217,7 +1217,7 @@ impl GraphEditor {
                 .wrap(),
             );
             child.add_space(10.0);
-            if child.add(theme::primary_button(&child, theme::with_icon(Icon::Map, "Start from this map"))).clicked() {
+            if child.add(theme::primary_button(&child, theme::with_icon(Icon::Map, tr!("Start from this map")))).clicked() {
                 self.want_map = true;
                 ui.ctx().request_repaint();
             }
@@ -1226,7 +1226,7 @@ impl GraphEditor {
         if !self.view.has_data() {
             let text = match &self.error {
                 Some(e) => e.clone(),
-                None => "Building the preview…".to_owned(),
+                None => tr!("Building the preview…").to_owned(),
             };
             ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(13.0), pal.weak);
         }
@@ -1235,17 +1235,17 @@ impl GraphEditor {
     /// Render the view at full quality and save it where the user says.
     fn save_image(&mut self, doc: &Document) {
         let name = format!("{}.png", doc.title());
-        let Some(path) = rfd::FileDialog::new().set_file_name(name).add_filter("PNG image", &["png"]).save_file() else {
+        let Some(path) = rfd::FileDialog::new().set_file_name(name).add_filter(tr!("PNG image"), &["png"]).save_file() else {
             return;
         };
         let Some((w, h, rgba)) = self.view.render_image(self.image_size) else {
-            self.saved = Some(Err("Nothing to render yet".to_owned()));
+            self.saved = Some(Err(tr!("Nothing to render yet").to_owned()));
             return;
         };
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         self.saved = Some(match image::save_buffer(&path, &rgba, w, h, image::ColorType::Rgba8) {
             Ok(()) => Ok(name),
-            Err(e) => Err(format!("The image could not be saved: {e}")),
+            Err(e) => Err(tr!("The image could not be saved: {e}", e)),
         });
     }
 
@@ -1264,36 +1264,36 @@ impl GraphEditor {
         let detail = self.preview;
         ui.horizontal(|ui| {
             ui.label(RichText::new(theme::glyph(Icon::Camera).to_string()).size(13.0).color(pal.weak));
-            ui.label(RichText::new("Image").size(13.0).medium());
+            ui.label(RichText::new(tr!("Image")).size(13.0).medium());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(RichText::new(format!("from the preview, {detail} × {detail} samples")).size(11.0).color(pal.weak));
+                ui.label(RichText::new(tr!("from the preview, {detail} × {detail} samples", detail)).size(11.0).color(pal.weak));
             });
         });
         ui.add_space(2.0);
         crate::widgets::well(ui, |ui| {
-            crate::widgets::row(ui, "Size", |ui| {
+            crate::widgets::row(ui, tr!("Size"), |ui| {
                 let [w, h] = self.image_size;
                 crate::widgets::combo("render image size")
                     .selected_text(format!("{w} × {h}"))
                     .width(130.0)
                     .show_ui(ui, |ui| {
                         for (name, size) in IMAGE_SIZES {
-                            ui.selectable_value(&mut self.image_size, size, format!("{name} · {} × {}", size[0], size[1]));
+                            ui.selectable_value(&mut self.image_size, size, format!("{} · {} × {}", crate::i18n::tr_name(name), size[0], size[1]));
                         }
                     });
             });
         });
         ui.add_space(10.0);
         if ui
-            .add_enabled(self.view.has_data(), theme::primary_button(ui, theme::with_icon(Icon::Camera, "Save image…")))
-            .on_hover_text("Render the view at full quality and save it as a PNG")
+            .add_enabled(self.view.has_data(), theme::primary_button(ui, theme::with_icon(Icon::Camera, tr!("Save image…"))))
+            .on_hover_text(tr!("Render the view at full quality and save it as a PNG"))
             .clicked()
         {
             self.save_image(doc);
         }
         match &self.saved {
             Some(Ok(name)) => {
-                ui.label(RichText::new(format!("Saved {name}")).size(11.5).color(pal.weak));
+                ui.label(RichText::new(tr!("Saved {name}", name)).size(11.5).color(pal.weak));
             }
             Some(Err(e)) => {
                 ui.colored_label(pal.danger, e);
@@ -1353,14 +1353,11 @@ impl GraphEditor {
                         Some(h) => {
                             let samples: Vec<f32> = h.data.iter().map(|v| (v - lo) / (hi - lo)).collect();
                             match massif_core::heightmap::write_png16(&path, h.n, h.n, &samples) {
-                                Ok(()) => format!(
-                                    "Saved the terrain as a height map of {0} × {0} in {took:.1} s: black is Y {lo:.0}, white Y {hi:.0}",
-                                    h.n
-                                ),
-                                Err(e) => format!("The height map could not be saved: {e}"),
+                                Ok(()) => tr!("Saved the terrain as a height map of {n} × {n} in {took:.1} s: black is Y {lo:.0}, white Y {hi:.0}", n = h.n, took, lo, hi),
+                                Err(e) => tr!("The height map could not be saved: {e}", e),
                             }
                         }
-                        None => "The graph has no Height output to save".to_owned(),
+                        None => tr!("The graph has no Height output to save").to_owned(),
                     });
                 }
                 Ok(built) => {
@@ -1377,7 +1374,7 @@ impl GraphEditor {
                             None => Vec::new(),
                         })
                         .collect();
-                    doc.history.begin("Terrain graph", doc.dim);
+                    doc.history.begin(tr!("Terrain graph"), doc.dim);
                     // Over the map (left as it is) or into its ground.
                     let over = self.building_over && built.outputs.heights.is_some();
                     let overlay = overlay_levels(doc, over);
@@ -1455,25 +1452,25 @@ impl GraphEditor {
                     // ⌘Z on the Terrain side undoes it in turn.
                     self.undo.push(Step::Converted);
                     self.redo.clear();
-                    let blocks_note = if palette.is_empty() { String::new() } else { format!(", {} kinds of blocks", palette.len()) };
+                    let blocks_note = if palette.is_empty() { String::new() } else { tr!(", {n} kinds of blocks", n = palette.len()) };
                     let mut layers_note = match built.outputs.layers.len() {
                         0 => String::new(),
-                        1 => ", 1 rock level".to_owned(),
-                        k => format!(", {k} rock levels"),
+                        1 => tr!(", 1 rock level").to_owned(),
+                        k => tr!(", {k} rock levels", k),
                     };
                     if built.outputs.water.is_some() {
-                        layers_note.push_str(", water");
+                        layers_note.push_str(tr!(", water"));
                     }
                     if overlay.is_some() {
-                        layers_note.push_str(" · map ground kept");
+                        layers_note.push_str(tr!(" · map ground kept"));
                     }
-                    let message = format!("Converted at {} × {} in {took:.1} s{blocks_note}{layers_note}", built.extent.n, built.extent.n);
+                    let message = tr!("Converted at {n} × {n2} in {took:.1} s{blocks_note}{layers_note}", n = built.extent.n, n2 = built.extent.n, took, blocks_note, layers_note);
                     self.done = Some((true, message.clone(), took));
                     feedback = Some(message);
                 }
-                Err(GraphError::Cancelled) => feedback = Some("Conversion cancelled".to_owned()),
+                Err(GraphError::Cancelled) => feedback = Some(tr!("Conversion cancelled").to_owned()),
                 Err(e) => {
-                    let message = format!("The graph cannot be built: {e}");
+                    let message = tr!("The graph cannot be built: {e}", e);
                     self.done = Some((false, message.clone(), 0.0));
                     feedback = Some(message);
                 }
@@ -1487,26 +1484,26 @@ impl GraphEditor {
             if let Some(b) = &self.build {
                 crate::loader::loader(ui, 16.0);
                 let (done, total) = (b.progress.done.load(Ordering::Relaxed), b.progress.total.load(Ordering::Relaxed));
-                let node = graph.node(b.progress.node.load(Ordering::Relaxed)).map(|n| n.kind.label()).unwrap_or("");
+                let node = graph.node(b.progress.node.load(Ordering::Relaxed)).map(|n| crate::i18n::tr_name(n.kind.label())).unwrap_or("");
                 let fraction = if total == 0 { 0.0 } else { done as f32 / total as f32 };
                 ui.add(
                     egui::ProgressBar::new(fraction)
                         .desired_width(120.0)
                         .desired_height(14.0)
-                        .text(RichText::new(format!("{done} / {total}")).size(10.5)),
+                        .text(RichText::new(tr!("{done} / {total}", done, total)).size(10.5)),
                 );
                 match doc.world.dims.get(b.dim).filter(|_| b.dim != doc.dim) {
-                    Some(d) => ui.label(format!("{} × {} for the {}: written once it is shown", b.n, b.n, d.kind.label())),
-                    None => ui.label(format!("{} × {}: {node}… {:.0} s", b.n, b.n, b.started.elapsed().as_secs_f32())),
+                    Some(d) => ui.label(tr!("{n} × {n2} for the {label}: written once it is shown", n = b.n, n2 = b.n, label = crate::i18n::tr_name(d.kind.label()))),
+                    None => ui.label(tr!("{n} × {n2}: {node}… {as_secs_f32:.0} s", n = b.n, n2 = b.n, as_secs_f32 = b.started.elapsed().as_secs_f32(), node)),
                 };
-                if ui.button("Cancel").clicked() {
+                if ui.button(tr!("Cancel")).clicked() {
                     b.cancel.store(true, Ordering::Relaxed);
                 }
                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
             } else if ui
-                .add(theme::primary_button(ui, format!("{}  Convert to voxels", theme::glyph(Icon::Boxes))))
+                .add(theme::primary_button(ui, tr!("{glyph}  Convert to voxels", glyph = theme::glyph(Icon::Boxes))))
                 .on_hover_text(
-                    "Write the terrain to the map (undoable).",
+                    tr!("Write the terrain to the map (undoable)."),
                 )
                 .clicked()
             {
@@ -1514,13 +1511,13 @@ impl GraphEditor {
             }
             if self.build.is_none()
                 && ui
-                    .small_button(theme::with_icon(Icon::ImageDown, "Height map…"))
-                    .on_hover_text("Save the terrain as a 16-bit PNG height map.")
+                    .small_button(theme::with_icon(Icon::ImageDown, tr!("Height map…")))
+                    .on_hover_text(tr!("Save the terrain as a 16-bit PNG height map."))
                     .clicked()
                 && let Some(path) = rfd::FileDialog::new()
-                    .set_title("Save the terrain as a height map")
-                    .add_filter("16-bit PNG", &["png"])
-                    .set_file_name("terrain height map.png")
+                    .set_title(tr!("Save the terrain as a height map"))
+                    .add_filter(tr!("16-bit PNG"), &["png"])
+                    .set_file_name(tr!("terrain height map.png"))
                     .save_file()
             {
                 self.start_build(ui.ctx(), doc, &graph, Some(path));
@@ -1529,9 +1526,9 @@ impl GraphEditor {
                 // Over the map, or into it: by default over it for a graph
                 // that starts from the map.
                 let mut over = self.over.unwrap_or_else(|| graph.reads_the_map());
-                if crate::widgets::checkbox(ui, &mut over, "over the map")
+                if crate::widgets::checkbox(ui, &mut over, tr!("over the map"))
                     .on_hover_text(
-                        "On: the changes go to levels you can delete. Off: the graph replaces the ground.",
+                        tr!("On: the changes go to levels you can delete. Off: the graph replaces the ground."),
                     )
                     .changed()
                 {
@@ -1540,9 +1537,9 @@ impl GraphEditor {
             }
             ui.separator();
             // How much of the world the terrain covers.
-            ui.label(RichText::new("Size").color(pal.weak));
+            ui.label(RichText::new(tr!("Size")).color(pal.weak));
             let map = map_rect(doc);
-            let map_label = format!("The map · {} × {}", map.x1 - map.x0, map.z1 - map.z0);
+            let map_label = tr!("The map · {x0} × {z0}", x0 = map.x1 - map.x0, z0 = map.z1 - map.z0);
             crate::widgets::combo("graph size")
                 .selected_text(match graph.size {
                     None => map_label.clone(),
@@ -1551,31 +1548,31 @@ impl GraphEditor {
                 .width(150.0)
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut graph.size, None, map_label.clone())
-                        .on_hover_text("Write only to the map's tiles");
+                        .on_hover_text(tr!("Write only to the map's tiles"));
                     let widest = (map.x1 - map.x0).max(map.z1 - map.z0) as u32;
                     for side in SIZES {
-                        let choice = ui.selectable_value(&mut graph.size, Some(side), format!("{} blocks", size_label(side)));
+                        let choice = ui.selectable_value(&mut graph.size, Some(side), tr!("{size_label} blocks", size_label = size_label(side)));
                         if side > widest {
-                            choice.on_hover_text("Larger than the map: the world grows to this size");
+                            choice.on_hover_text(tr!("Larger than the map: the world grows to this size"));
                         } else if side < widest {
-                            choice.on_hover_text("Smaller than the map: covers a square in its middle");
+                            choice.on_hover_text(tr!("Smaller than the map: covers a square in its middle"));
                         }
                     }
                 })
                 .response
                 .on_hover_text(
-                    "How much of the world the terrain covers, in blocks.",
+                    tr!("How much of the world the terrain covers, in blocks."),
                 );
             let side = terrain_extent(doc, graph.size, 2).size;
             let spacing = side / build_samples(side) as f64;
-            let detail = if spacing <= 1.001 { "every block".to_owned() } else { format!("a sample every {spacing:.1} blocks") };
+            let detail = if spacing <= 1.001 { tr!("every block").to_owned() } else { tr!("a sample every {spacing:.1} blocks", spacing) };
             ui.label(RichText::new(detail).size(11.5).color(pal.weak)).on_hover_text(if spacing <= 1.001 {
-                "Full detail: one sample per block"
+                tr!("Full detail: one sample per block")
             } else {
-                "Over 16k blocks, a little coarser than a block."
+                tr!("Over 16k blocks, a little coarser than a block.")
             });
             ui.separator();
-            ui.label(RichText::new("Preview").color(pal.weak));
+            ui.label(RichText::new(tr!("Preview")).color(pal.weak));
             let before_preview = self.preview;
             crate::widgets::combo("graph preview")
                 .selected_text(format!("{0}", self.preview))
@@ -1591,12 +1588,12 @@ impl GraphEditor {
             if self.received != self.revision {
                 crate::loader::loader(ui, 16.0);
             } else if self.preview_ms > 0.0 {
-                ui.label(RichText::new(format!("{:.0} ms", self.preview_ms)).size(11.5).color(pal.weak));
+                ui.label(RichText::new(tr!("{preview_ms:.0} ms", preview_ms = self.preview_ms)).size(11.5).color(pal.weak));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let button = ui
-                    .add(egui::Button::new(theme::with_icon(Icon::LayoutTemplate, "Templates")).selected(self.templates_open))
-                    .on_hover_text("Ready-made landscapes");
+                    .add(egui::Button::new(theme::with_icon(Icon::LayoutTemplate, tr!("Templates"))).selected(self.templates_open))
+                    .on_hover_text(tr!("Ready-made landscapes"));
                 if button.clicked() {
                     self.templates_open = !self.templates_open;
                     toggled = true;
@@ -1610,12 +1607,12 @@ impl GraphEditor {
                 } else {
                     button.rect.right_bottom() + vec2(0.0, 6.0)
                 };
-                if ui.small_button(theme::with_icon(Icon::Maximize, "Fit")).on_hover_text("Show the whole graph (F)").clicked() {
+                if ui.small_button(theme::with_icon(Icon::Maximize, tr!("Fit"))).on_hover_text(tr!("Show the whole graph (F)")).clicked() {
                     self.fit = true;
                 }
                 if ui
-                    .small_button(theme::with_icon(Icon::Plus, "Add"))
-                    .on_hover_text("Add a node (Tab)")
+                    .small_button(theme::with_icon(Icon::Plus, tr!("Add")))
+                    .on_hover_text(tr!("Add a node (Tab)"))
                     .clicked()
                 {
                     let c = self.canvas.center();
@@ -1654,9 +1651,9 @@ impl GraphEditor {
             .fixed_pos(self.templates_at)
             .show(ui.ctx(), |ui| {
                 egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(12)).show(ui, |ui| {
-                    ui.label(RichText::new("Start from a landscape").size(14.0).medium());
+                    ui.label(RichText::new(tr!("Start from a landscape")).size(14.0).medium());
                     ui.label(
-                        RichText::new("Replaces the graph and sets the sky and sea of the view.")
+                        RichText::new(tr!("Replaces the graph and sets the sky and sea of the view."))
                             .size(11.5)
                             .color(pal.weak),
                     );
@@ -1674,8 +1671,8 @@ impl GraphEditor {
                     if self.replaced.is_some() {
                         ui.add_space(4.0);
                         if ui
-                            .button(theme::with_icon(Icon::Undo2, "Back to the previous graph"))
-                            .on_hover_text("The graph the last template replaced")
+                            .button(theme::with_icon(Icon::Undo2, tr!("Back to the previous graph")))
+                            .on_hover_text(tr!("The graph the last template replaced"))
                             .clicked()
                         {
                             back = true;
@@ -1689,7 +1686,7 @@ impl GraphEditor {
         }
         if let Some(t) = chosen {
             self.start_from(doc, t, graph);
-            *feedback = Some(format!("Started from the {} template", t.label()));
+            *feedback = Some(tr!("Started from the {label} template", label = crate::i18n::tr_name(t.label())));
         }
         if back && let Some(previous) = self.replaced.take() {
             self.replaced = Some(std::mem::replace(graph, previous));
@@ -2241,7 +2238,7 @@ impl GraphEditor {
             if cut {
                 graph.disconnect(l.to, l.input);
             } else {
-                background.clone().on_hover_text("Right-click (or Alt-click) to cut this wire");
+                background.clone().on_hover_text(tr!("Right-click (or Alt-click) to cut this wire"));
             }
         } else if background.secondary_clicked()
             && let Some(p) = background.interact_pointer_pos()
@@ -2334,11 +2331,11 @@ impl GraphEditor {
             painter.with_clip_rect(band.intersect(painter.clip_rect())).rect_filled(rect, round, family);
             let header = Rect::from_min_size(rect.min, vec2(rect.width(), HEADER * self.zoom));
             let title = match &node.kind {
-                NodeKind::TerrainOutput { terrain } => format!("Terrain · {}", reg.terrain(TerrainId(*terrain)).name),
-                NodeKind::Combine { op, .. } => format!("Combine · {}", op.label()),
-                NodeKind::Gradient { preset, .. } => format!("Gradient · {}", preset.label()),
-                NodeKind::Mountain { style, .. } => format!("Mountain · {}", style.label()),
-                _ => node.kind.label().to_owned(),
+                NodeKind::TerrainOutput { terrain } => tr!("Terrain · {name}", name = reg.terrain(TerrainId(*terrain)).name),
+                NodeKind::Combine { op, .. } => tr!("Combine · {label}", label = crate::i18n::tr_name(op.label())),
+                NodeKind::Gradient { preset, .. } => tr!("Gradient · {label}", label = crate::i18n::tr_name(preset.label())),
+                NodeKind::Mountain { style, .. } => tr!("Mountain · {label}", label = crate::i18n::tr_name(style.label())),
+                _ => crate::i18n::tr_name(node.kind.label()).to_owned(),
             };
             painter.text(
                 header.left_center() + vec2(10.0 * self.zoom, 1.5 * self.zoom),
@@ -2388,19 +2385,19 @@ impl GraphEditor {
             if failed {
                 handle.clone().on_hover_text(self.failed[&id].clone());
             } else {
-                handle.clone().on_hover_text(node.kind.description());
+                handle.clone().on_hover_text(crate::i18n::tr_name(node.kind.description()));
             }
             handle.context_menu(|ui| {
-                let view = if self.pinned == Some(id) { "Back to the output (V)" } else { "View this node (V)" };
+                let view = if self.pinned == Some(id) { tr!("Back to the output (V)") } else { tr!("View this node (V)") };
                 if ui.button(theme::with_icon(Icon::Eye, view)).clicked() {
                     self.toggle_view(id);
                     ui.close();
                 }
-                if ui.button(theme::with_icon(Icon::Copy, "Duplicate (⌘D)")).clicked() {
+                if ui.button(theme::with_icon(Icon::Copy, tr!("Duplicate (⌘D)"))).clicked() {
                     duplicate = Some(id);
                     ui.close();
                 }
-                if ui.button(theme::with_icon(Icon::Trash2, "Delete (⌫)")).clicked() {
+                if ui.button(theme::with_icon(Icon::Trash2, tr!("Delete (⌫)"))).clicked() {
                     remove = Some(id);
                     ui.close();
                 }
@@ -2507,7 +2504,7 @@ impl GraphEditor {
                 match drop_on {
                     Some((to, input)) => {
                         if !graph.connect(from, output, to, input) {
-                            ui.ctx().debug_text("That would make a loop");
+                            ui.ctx().debug_text(tr!("That would make a loop"));
                         }
                     }
                     // Dropped on empty space: add a node there, wired.
@@ -2521,13 +2518,13 @@ impl GraphEditor {
             }
         }
         if graph.nodes.is_empty() {
-            painter.text(canvas.center(), egui::Align2::CENTER_CENTER, "Right-click or press Tab to add a node — or pick a template", egui::FontId::proportional(14.0), pal.weak);
+            painter.text(canvas.center(), egui::Align2::CENTER_CENTER, tr!("Right-click or press Tab to add a node — or pick a template"), egui::FontId::proportional(14.0), pal.weak);
         }
         // How to work it, along the bottom.
         let hint = match self.picked.len() {
-            0 => "Tab: add · drag: select · right-drag: pan · wheel: zoom · F: frame".to_owned(),
-            1 => "Drag: move · ⇧-click: add · ⌘D: duplicate · ⌫: delete · V: view".to_owned(),
-            k => format!("{k} selected · drag: move · ⌘D · ⌘C/⌘V · ⌫ · F · Esc"),
+            0 => tr!("Tab: add · drag: select · right-drag: pan · wheel: zoom · F: frame").to_owned(),
+            1 => tr!("Drag: move · ⇧-click: add · ⌘D: duplicate · ⌫: delete · V: view").to_owned(),
+            k => tr!("{k} selected · drag: move · ⌘D · ⌘C/⌘V · ⌫ · F · Esc", k),
         };
         painter.text(canvas.left_bottom() + vec2(10.0, -8.0), egui::Align2::LEFT_BOTTOM, hint, egui::FontId::proportional(11.0), pal.weak.gamma_multiply(0.85));
         self.library_ui(ui, graph);
@@ -2550,7 +2547,7 @@ impl GraphEditor {
                     ui.set_width(280.0);
                     let edit = ui.add(
                         egui::TextEdit::singleline(&mut lib.query)
-                            .hint_text(format!("{}  Search nodes", theme::glyph(Icon::Search)))
+                            .hint_text(tr!("{glyph}  Search nodes", glyph = theme::glyph(Icon::Search)))
                             .desired_width(f32::INFINITY),
                     );
                     if lib.focus {
@@ -2561,7 +2558,7 @@ impl GraphEditor {
                     let matches: Vec<NodeKind> = NodeKind::catalogue()
                         .into_iter()
                         .filter(|k| {
-                            q.is_empty() || k.label().to_lowercase().contains(&q) || k.description().to_lowercase().contains(&q) || k.family().label().to_lowercase().contains(&q)
+                            q.is_empty() || crate::i18n::tr_name(k.label()).to_lowercase().contains(&q) || crate::i18n::tr_name(k.description()).to_lowercase().contains(&q) || crate::i18n::tr_name(k.family().label()).to_lowercase().contains(&q)
                         })
                         // With a wire in hand, only nodes that take it.
                         .filter(|k| match wanted {
@@ -2583,19 +2580,19 @@ impl GraphEditor {
                             ui.horizontal(|ui| {
                                 let (dot, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
                                 ui.painter().circle_filled(dot.center(), 3.5, family_color(family));
-                                ui.label(RichText::new(family.label()).size(11.0).color(pal.weak).medium());
+                                ui.label(RichText::new(crate::i18n::tr_name(family.label())).size(11.0).color(pal.weak).medium());
                             });
                             for k in in_family {
-                                let r = ui.add(egui::Button::new(k.label()).frame(false).min_size(vec2(260.0, 20.0)));
+                                let r = ui.add(egui::Button::new(crate::i18n::tr_name(k.label())).frame(false).min_size(vec2(260.0, 20.0)));
                                 if r.clicked() {
                                     add = Some(k.clone());
                                 }
-                                r.on_hover_text(k.description());
+                                r.on_hover_text(crate::i18n::tr_name(k.description()));
                             }
                             ui.add_space(2.0);
                         }
                         if matches.is_empty() {
-                            ui.label(RichText::new("No node by that name").color(pal.weak));
+                            ui.label(RichText::new(tr!("No node by that name")).color(pal.weak));
                         }
                     });
                 });
@@ -2649,20 +2646,16 @@ impl GraphEditor {
         let before = graph.clone();
         ui.spacing_mut().slider_width = (ui.available_width() - 120.0).clamp(80.0, 240.0);
         let Some(id) = self.selected.filter(|id| graph.node(*id).is_some()) else {
-            ui.label(RichText::new("Terrain graph").bold().size(14.0));
+            ui.label(RichText::new(tr!("Terrain graph")).bold().size(14.0));
             ui.add_space(2.0);
             ui.label(
-                RichText::new("Click a node to edit it · Tab: add one")
+                RichText::new(tr!("Click a node to edit it · Tab: add one"))
                     .size(11.5)
                     .color(pal.weak),
             );
             ui.add_space(8.0);
             ui.label(
-                RichText::new(format!(
-                    "{} nodes, {} links",
-                    graph.nodes.len(),
-                    graph.links.len()
-                ))
+                RichText::new(tr!("{n} nodes, {n2} links", n = graph.nodes.len(), n2 = graph.links.len()))
                 .size(11.5)
                 .color(pal.weak),
             );
@@ -2673,16 +2666,13 @@ impl GraphEditor {
         ui.horizontal(|ui| {
             let (dot, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
             ui.painter().circle_filled(dot.center(), 4.0, family_color(family));
-            ui.label(RichText::new(node.kind.label()).bold().size(15.0));
-            ui.label(RichText::new(family.label()).size(11.0).color(pal.weak));
+            ui.label(RichText::new(crate::i18n::tr_name(node.kind.label())).bold().size(15.0));
+            ui.label(RichText::new(crate::i18n::tr_name(family.label())).size(11.0).color(pal.weak));
         });
-        ui.label(RichText::new(node.kind.description()).size(11.5).color(pal.weak));
+        ui.label(RichText::new(crate::i18n::tr_name(node.kind.description())).size(11.5).color(pal.weak));
         if self.picked.len() > 1 {
             ui.label(
-                RichText::new(format!(
-                    "{} nodes selected: settings of the last one.",
-                    self.picked.len()
-                ))
+                RichText::new(tr!("{n} nodes selected: settings of the last one.", n = self.picked.len()))
                 .size(11.0)
                 .color(pal.accent),
             );
@@ -2693,9 +2683,9 @@ impl GraphEditor {
             if ui
                 .selectable_label(
                     viewed,
-                    theme::with_icon(Icon::Eye, if viewed { "Viewing (V)" } else { "View (V)" }),
+                    theme::with_icon(Icon::Eye, if viewed { tr!("Viewing (V)") } else { tr!("View (V)") }),
                 )
-                .on_hover_text("Show this node in the viewport (V)")
+                .on_hover_text(tr!("Show this node in the viewport (V)"))
                 .clicked()
             {
                 self.toggle_view(id);
@@ -2723,7 +2713,7 @@ impl GraphEditor {
         egui::ScrollArea::vertical().id_salt("node properties").show(ui, |ui| {
             properties(ui, &mut node.kind, &doc.world.registry);
             ui.add_space(10.0);
-            let label = if self.picked.len() > 1 { format!("Delete the {} nodes selected", self.picked.len()) } else { "Delete node".to_owned() };
+            let label = if self.picked.len() > 1 { tr!("Delete the {n} nodes selected", n = self.picked.len()) } else { tr!("Delete node").to_owned() };
             delete = ui.button(theme::with_icon(Icon::Trash2, &label)).clicked();
         });
         if delete {
@@ -2813,11 +2803,11 @@ fn climate_legend(ui: &mut Ui, written: bool) {
             ui.horizontal(|ui| {
                 let (rect, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
                 ui.painter().rect_filled(rect, 2, Color32::from_rgb(r, g, b));
-                ui.label(RichText::new(c.label()).size(11.0));
+                ui.label(RichText::new(crate::i18n::tr_name(c.label())).size(11.0));
             });
             if written {
                 let biome = c.biome().trim_start_matches("minecraft:");
-                ui.label(RichText::new(format!("{biome} · {}", c.terrain())).size(10.5).color(pal.weak));
+                ui.label(RichText::new(tr!("{biome} · {terrain}", terrain = c.terrain(), biome)).size(10.5).color(pal.weak));
             } else {
                 ui.label("");
             }
@@ -2894,12 +2884,12 @@ fn plate_editor(ui: &mut Ui, plates: &mut Vec<Plate>, seed: &mut u32) -> bool {
             changed = true;
         }
         moved.context_menu(|ui| {
-            if ui.button(if p.continental { "Make it an ocean" } else { "Make it a continent" }).clicked() {
+            if ui.button(if p.continental { tr!("Make it an ocean") } else { tr!("Make it a continent") }).clicked() {
                 p.continental = !p.continental;
                 changed = true;
                 ui.close();
             }
-            if ui.button("Remove the plate").clicked() {
+            if ui.button(tr!("Remove the plate")).clicked() {
                 removed = Some(k);
                 ui.close();
             }
@@ -2915,15 +2905,15 @@ fn plate_editor(ui: &mut Ui, plates: &mut Vec<Plate>, seed: &mut u32) -> bool {
         let fill = if p.continental { land } else { sea };
         painter.circle(centre, if moved.hovered() || moved.dragged() { 7.5 } else { 6.0 }, fill, Stroke::new(2.0, Color32::WHITE));
         painter.circle_filled(tip, if aimed.hovered() || aimed.dragged() { 4.5 } else { 3.0 }, Color32::WHITE);
-        moved.on_hover_text("Drag: move · right-click: land or ocean");
-        aimed.on_hover_text("Drag: how the plate moves");
+        moved.on_hover_text(tr!("Drag: move · right-click: land or ocean"));
+        aimed.on_hover_text(tr!("Drag: how the plate moves"));
     }
     if let Some(k) = removed {
         plates.remove(k);
         changed = true;
     }
     ui.horizontal(|ui| {
-        if ui.small_button(theme::with_icon(Icon::Plus, "Add a plate")).clicked() {
+        if ui.small_button(theme::with_icon(Icon::Plus, tr!("Add a plate"))).clicked() {
             plates.push(Plate {
                 x: 0.5,
                 z: 0.5,
@@ -2933,13 +2923,13 @@ fn plate_editor(ui: &mut Ui, plates: &mut Vec<Plate>, seed: &mut u32) -> bool {
             });
             changed = true;
         }
-        if ui.small_button(theme::with_icon(Icon::Dices, "Scatter")).on_hover_text("New plates, as many, scattered anew").clicked() {
+        if ui.small_button(theme::with_icon(Icon::Dices, tr!("Scatter"))).on_hover_text(tr!("New plates, as many, scattered anew")).clicked() {
             *seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345) % 100_000;
             *plates = massif_core::graph::scatter_plates(plates.len().max(2), *seed);
             changed = true;
         }
         let continents = plates.iter().filter(|p| p.continental).count();
-        ui.label(RichText::new(format!("{} plates, {continents} continents", plates.len())).size(11.0).color(pal.weak));
+        ui.label(RichText::new(tr!("{n} plates, {continents} continents", n = plates.len(), continents)).size(11.0).color(pal.weak));
     });
     changed
 }
@@ -2957,30 +2947,30 @@ fn tips_id() -> egui::Id {
 fn tips(kind: &NodeKind) -> Tips {
     match kind {
         NodeKind::Rivers { .. } => &[
-            ("Fewer", "Higher: fewer, bigger rivers"),
-            ("Depth", "Depth of the largest rivers"),
-            ("Width", "Width of the largest rivers"),
-            ("Banks", "How gently the banks slope to the water"),
-            ("Lakes", "How many hollows fill up as lakes"),
+            (tn!("Fewer"), tn!("Higher: fewer, bigger rivers")),
+            (tn!("Depth"), tn!("Depth of the largest rivers")),
+            (tn!("Width"), tn!("Width of the largest rivers")),
+            (tn!("Banks"), tn!("How gently the banks slope to the water")),
+            (tn!("Lakes"), tn!("How many hollows fill up as lakes")),
         ],
         NodeKind::Humidity { .. } => &[
             (
-                "Wind from",
-                "Where the wet wind comes from: 0° north, 90° east",
+                tn!("Wind from"),
+                tn!("Where the wet wind comes from: 0° north, 90° east"),
             ),
-            ("Inland air", "Moisture far from any sea"),
-            ("Reach", "How far inland the sea's moisture goes"),
-            ("Rain shadow", "How dry it is behind mountains"),
-            ("Variation", "Patches of wetter and drier land"),
+            (tn!("Inland air"), tn!("Moisture far from any sea")),
+            (tn!("Reach"), tn!("How far inland the sea's moisture goes")),
+            (tn!("Rain shadow"), tn!("How dry it is behind mountains")),
+            (tn!("Variation"), tn!("Patches of wetter and drier land")),
         ],
         NodeKind::Temperature { .. } => &[
-            ("Warm side", "Temperature on the warm side of the map"),
-            ("Cold side", "Temperature on the cold side"),
-            ("Warm toward", "Where it is warm: 0° north, 90° east"),
-            ("Height cools", "How much colder it gets going up"),
-            ("Variation", "Patches of warmer and colder land"),
+            (tn!("Warm side"), tn!("Temperature on the warm side of the map")),
+            (tn!("Cold side"), tn!("Temperature on the cold side")),
+            (tn!("Warm toward"), tn!("Where it is warm: 0° north, 90° east")),
+            (tn!("Height cools"), tn!("How much colder it gets going up")),
+            (tn!("Variation"), tn!("Patches of warmer and colder land")),
         ],
-        NodeKind::Lakes { .. } => &[("Fill", "How much the hollows' ground is raised")],
+        NodeKind::Lakes { .. } => &[(tn!("Fill"), tn!("How much the hollows' ground is raised"))],
         _ => &[],
     }
 }
@@ -2989,8 +2979,8 @@ fn tips(kind: &NodeKind) -> Tips {
 fn row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> egui::Response) -> bool {
     let tip = ui.data(|d| d.get_temp::<Tips>(tips_id())).and_then(|t| {
         t.iter()
-            .find(|(name, _)| *name == label)
-            .map(|(_, tip)| *tip)
+            .find(|(name, _)| crate::i18n::tr_name(name) == label)
+            .map(|(_, tip)| crate::i18n::tr_name(tip))
     });
     ui.horizontal(|ui| {
         ui.spacing_mut().interact_size.y = 18.0;
@@ -3013,7 +3003,7 @@ fn blocks(ui: &mut Ui, label: &str, v: &mut f32, max: f32) -> bool {
         ui.add(
             crate::widgets::Field::new(v, 1.0..=max.min(6000.0))
                 .clamping(egui::SliderClamping::Never)
-                .suffix(" blocks")
+                .suffix(tr!(" blocks"))
                 .max_decimals(0),
         )
     })
@@ -3067,7 +3057,7 @@ fn sea_level(ui: &mut Ui, v: &mut f32, hover: &str) -> bool {
     let mut on = *v > massif_core::graph::NO_WATER + 1.0;
     let before = *v;
     ui.horizontal(|ui| {
-        ui.add_sized([96.0, 18.0], egui::Label::new(RichText::new("Sea level").size(12.0)));
+        ui.add_sized([96.0, 18.0], egui::Label::new(RichText::new(tr!("Sea level")).size(12.0)));
         if crate::widgets::checkbox(ui, &mut on, "").on_hover_text(hover).changed() {
             *v = if on { 63.0 } else { massif_core::graph::NO_WATER };
         }
@@ -3081,9 +3071,9 @@ fn sea_level(ui: &mut Ui, v: &mut f32, hover: &str) -> bool {
 
 fn seed(ui: &mut Ui, v: &mut u32) -> bool {
     ui.horizontal(|ui| {
-        ui.add_sized([96.0, 18.0], egui::Label::new(RichText::new("Seed").size(12.0)));
+        ui.add_sized([96.0, 18.0], egui::Label::new(RichText::new(tr!("Seed")).size(12.0)));
         let mut changed = crate::widgets::drag(ui, egui::DragValue::new(v)).changed();
-        if ui.small_button(theme::glyph(Icon::Dices).to_string()).on_hover_text("Another seed").clicked() {
+        if ui.small_button(theme::glyph(Icon::Dices).to_string()).on_hover_text(tr!("Another seed")).clicked() {
             *v = v.wrapping_mul(1_103_515_245).wrapping_add(12_345) % 100_000;
             changed = true;
         }
@@ -3141,7 +3131,7 @@ fn gradient_picker(ui: &mut Ui, preset: &mut GradientPreset) -> bool {
             }
             let selected = *preset == *p;
             painter.rect_stroke(rect, 3, Stroke::new(if selected { 2.0 } else { 1.0 }, if selected { pal.accent } else { pal.border }), StrokeKind::Inside);
-            painter.text(rect.left_center() + vec2(6.0, 0.0), egui::Align2::LEFT_CENTER, p.label(), egui::FontId::proportional(10.5), Color32::WHITE);
+            painter.text(rect.left_center() + vec2(6.0, 0.0), egui::Align2::LEFT_CENTER, crate::i18n::tr_name(p.label()), egui::FontId::proportional(10.5), Color32::WHITE);
             if r.clicked() {
                 *preset = *p;
                 changed = true;
@@ -3183,12 +3173,12 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             base,
             seed: s,
         } => {
-            choice(ui, "Style", style, &[(NoiseStyle::Fbm, "Rolling"), (NoiseStyle::Ridged, "Ridged"), (NoiseStyle::Billow, "Billow")]);
-            blocks(ui, "Feature size", scale, 20000.0);
-            count(ui, "Detail", octaves, 1..=12);
-            amount(ui, "Roughness", roughness, 0.05..=0.95);
-            height(ui, "Height", h);
-            height(ui, "Base", base);
+            choice(ui, tr!("Style"), style, &[(NoiseStyle::Fbm, tr!("Rolling")), (NoiseStyle::Ridged, tr!("Ridged")), (NoiseStyle::Billow, tr!("Billow"))]);
+            blocks(ui, tr!("Feature size"), scale, 20000.0);
+            count(ui, tr!("Detail"), octaves, 1..=12);
+            amount(ui, tr!("Roughness"), roughness, 0.05..=0.95);
+            height(ui, tr!("Height"), h);
+            height(ui, tr!("Base"), base);
             seed(ui, s);
         }
         NodeKind::Cells {
@@ -3199,11 +3189,11 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             base,
             seed: s,
         } => {
-            choice(ui, "Style", style, &[(CellStyle::Cones, "Cones"), (CellStyle::Ridges, "Ridges"), (CellStyle::Plates, "Plates")]);
-            blocks(ui, "Cell size", scale, 20000.0);
-            fraction(ui, "Jitter", jitter);
-            height(ui, "Height", h);
-            height(ui, "Base", base);
+            choice(ui, tr!("Style"), style, &[(CellStyle::Cones, tr!("Cones")), (CellStyle::Ridges, tr!("Ridges")), (CellStyle::Plates, tr!("Plates"))]);
+            blocks(ui, tr!("Cell size"), scale, 20000.0);
+            fraction(ui, tr!("Jitter"), jitter);
+            height(ui, tr!("Height"), h);
+            height(ui, tr!("Base"), base);
             seed(ui, s);
         }
         NodeKind::Radial {
@@ -3212,18 +3202,18 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             height: h,
             base,
         } => {
-            fraction(ui, "Fall starts", inner);
-            fraction(ui, "Fall ends", outer);
-            amount(ui, "Height", h, -400.0..=400.0);
-            amount(ui, "Base", base, limits(ui).0..=limits(ui).1);
+            fraction(ui, tr!("Fall starts"), inner);
+            fraction(ui, tr!("Fall ends"), outer);
+            amount(ui, tr!("Height"), h, -400.0..=400.0);
+            amount(ui, tr!("Base"), base, limits(ui).0..=limits(ui).1);
         }
         NodeKind::Constant { value } => {
-            row(ui, "Value", |ui| crate::widgets::drag(ui, egui::DragValue::new(value).speed(0.5)));
+            row(ui, tr!("Value"), |ui| crate::widgets::drag(ui, egui::DragValue::new(value).speed(0.5)));
         }
         NodeKind::LinearGradient { angle: a, height: h, base } => {
-            angle(ui, "Rises toward", a);
-            amount(ui, "Height", h, -400.0..=400.0);
-            amount(ui, "Base", base, limits(ui).0..=limits(ui).1);
+            angle(ui, tr!("Rises toward"), a);
+            amount(ui, tr!("Height"), h, -400.0..=400.0);
+            amount(ui, tr!("Base"), base, limits(ui).0..=limits(ui).1);
         }
         NodeKind::Shape {
             shape,
@@ -3234,13 +3224,13 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             height: h,
             base,
         } => {
-            choice(ui, "Shape", shape, &ShapeKind::ALL.map(|s| (s, s.label())));
-            fraction(ui, "Across (x)", x);
-            fraction(ui, "Down (z)", z);
-            blocks(ui, "Radius", radius, 10000.0);
-            fraction(ui, "Soft edge", falloff);
-            amount(ui, "Height", h, -400.0..=400.0);
-            amount(ui, "Base", base, limits(ui).0..=limits(ui).1);
+            choice(ui, tr!("Shape"), shape, &ShapeKind::ALL.map(|s| (s, crate::i18n::tr_name(s.label()))));
+            fraction(ui, tr!("Across (x)"), x);
+            fraction(ui, tr!("Down (z)"), z);
+            blocks(ui, tr!("Radius"), radius, 10000.0);
+            fraction(ui, tr!("Soft edge"), falloff);
+            amount(ui, tr!("Height"), h, -400.0..=400.0);
+            amount(ui, tr!("Base"), base, limits(ui).0..=limits(ui).1);
         }
         NodeKind::Mountain {
             style,
@@ -3252,14 +3242,14 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             detail,
             seed: s,
         } => {
-            choice(ui, "Style", style, &MountainStyle::ALL.map(|s| (s, s.label())));
-            blocks(ui, "Radius", radius, 10000.0);
-            height(ui, "Height", h);
-            height(ui, "Base", base);
-            fraction(ui, "Detail", detail);
-            section(ui, "Where");
-            fraction(ui, "Across (x)", x);
-            fraction(ui, "Down (z)", z);
+            choice(ui, tr!("Style"), style, &MountainStyle::ALL.map(|s| (s, crate::i18n::tr_name(s.label()))));
+            blocks(ui, tr!("Radius"), radius, 10000.0);
+            height(ui, tr!("Height"), h);
+            height(ui, tr!("Base"), base);
+            fraction(ui, tr!("Detail"), detail);
+            section(ui, tr!("Where"));
+            fraction(ui, tr!("Across (x)"), x);
+            fraction(ui, tr!("Down (z)"), z);
             seed(ui, s);
         }
         NodeKind::MountainRange {
@@ -3270,11 +3260,11 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             base,
             seed: s,
         } => {
-            angle(ui, "Runs toward", a);
-            blocks(ui, "Width", width, 10000.0);
-            blocks(ui, "Peak size", scale, 5000.0);
-            height(ui, "Height", h);
-            height(ui, "Base", base);
+            angle(ui, tr!("Runs toward"), a);
+            blocks(ui, tr!("Width"), width, 10000.0);
+            blocks(ui, tr!("Peak size"), scale, 5000.0);
+            height(ui, tr!("Height"), h);
+            height(ui, tr!("Base"), base);
             seed(ui, s);
         }
         NodeKind::Volcano {
@@ -3287,14 +3277,14 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             depth,
             seed: s,
         } => {
-            blocks(ui, "Radius", radius, 10000.0);
-            height(ui, "Height", h);
-            height(ui, "Base", base);
-            fraction(ui, "Crater width", crater);
-            amount(ui, "Crater depth", depth, 0.0..=200.0);
-            section(ui, "Where");
-            fraction(ui, "Across (x)", x);
-            fraction(ui, "Down (z)", z);
+            blocks(ui, tr!("Radius"), radius, 10000.0);
+            height(ui, tr!("Height"), h);
+            height(ui, tr!("Base"), base);
+            fraction(ui, tr!("Crater width"), crater);
+            amount(ui, tr!("Crater depth"), depth, 0.0..=200.0);
+            section(ui, tr!("Where"));
+            fraction(ui, tr!("Across (x)"), x);
+            fraction(ui, tr!("Down (z)"), z);
             seed(ui, s);
         }
         NodeKind::Crater {
@@ -3307,14 +3297,14 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             base,
             seed: s,
         } => {
-            blocks(ui, "Radius", radius, 5000.0);
-            amount(ui, "Depth", depth, 0.0..=200.0);
-            amount(ui, "Rim", rim, 0.0..=100.0);
-            amount(ui, "Central peak", peak, 0.0..=100.0);
-            height(ui, "Plain", base);
-            section(ui, "Where");
-            fraction(ui, "Across (x)", x);
-            fraction(ui, "Down (z)", z);
+            blocks(ui, tr!("Radius"), radius, 5000.0);
+            amount(ui, tr!("Depth"), depth, 0.0..=200.0);
+            amount(ui, tr!("Rim"), rim, 0.0..=100.0);
+            amount(ui, tr!("Central peak"), peak, 0.0..=100.0);
+            height(ui, tr!("Plain"), base);
+            section(ui, tr!("Where"));
+            fraction(ui, tr!("Across (x)"), x);
+            fraction(ui, tr!("Down (z)"), z);
             seed(ui, s);
         }
         NodeKind::CraterField {
@@ -3325,11 +3315,11 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             base,
             seed: s,
         } => {
-            count(ui, "Craters", c, 1..=2000);
-            blocks(ui, "Smallest", min_radius, 2000.0);
-            blocks(ui, "Largest", max_radius, 5000.0);
-            fraction(ui, "Depth", depth);
-            height(ui, "Plain", base);
+            count(ui, tr!("Craters"), c, 1..=2000);
+            blocks(ui, tr!("Smallest"), min_radius, 2000.0);
+            blocks(ui, tr!("Largest"), max_radius, 5000.0);
+            fraction(ui, tr!("Depth"), depth);
+            height(ui, tr!("Plain"), base);
             seed(ui, s);
         }
         NodeKind::Dunes {
@@ -3340,11 +3330,11 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             sharpness,
             seed: s,
         } => {
-            angle(ui, "Wind toward", a);
-            blocks(ui, "Spacing", wavelength, 2000.0);
-            amount(ui, "Height", h, 0.0..=120.0);
-            height(ui, "Base", base);
-            fraction(ui, "Steep lee side", sharpness);
+            angle(ui, tr!("Wind toward"), a);
+            blocks(ui, tr!("Spacing"), wavelength, 2000.0);
+            amount(ui, tr!("Height"), h, 0.0..=120.0);
+            height(ui, tr!("Base"), base);
+            fraction(ui, tr!("Steep lee side"), sharpness);
             seed(ui, s);
         }
         NodeKind::Canyon {
@@ -3356,12 +3346,12 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             base,
             seed: s,
         } => {
-            angle(ui, "Runs toward", a);
-            blocks(ui, "Width", width, 5000.0);
-            amount(ui, "Depth", depth, 0.0..=300.0);
-            blocks(ui, "Winding", meander, 3000.0);
-            count(ui, "Steps", steps, 0..=20);
-            height(ui, "Plateau", base);
+            angle(ui, tr!("Runs toward"), a);
+            blocks(ui, tr!("Width"), width, 5000.0);
+            amount(ui, tr!("Depth"), depth, 0.0..=300.0);
+            blocks(ui, tr!("Winding"), meander, 3000.0);
+            count(ui, tr!("Steps"), steps, 0..=20);
+            height(ui, tr!("Plateau"), base);
             seed(ui, s);
         }
         NodeKind::Mesas {
@@ -3372,11 +3362,11 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             steps,
             seed: s,
         } => {
-            blocks(ui, "Size", scale, 5000.0);
-            fraction(ui, "Coverage", coverage);
-            amount(ui, "Height", h, 0.0..=300.0);
-            height(ui, "Base", base);
-            count(ui, "Steps", steps, 1..=12);
+            blocks(ui, tr!("Size"), scale, 5000.0);
+            fraction(ui, tr!("Coverage"), coverage);
+            amount(ui, tr!("Height"), h, 0.0..=300.0);
+            height(ui, tr!("Base"), base);
+            count(ui, tr!("Steps"), steps, 1..=12);
             seed(ui, s);
         }
         NodeKind::Island {
@@ -3386,10 +3376,10 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             coast,
             seed: s,
         } => {
-            fraction(ui, "Size", size);
-            amount(ui, "Height", h, 0.0..=380.0);
-            height(ui, "Sea floor", base);
-            fraction(ui, "Ragged coast", coast);
+            fraction(ui, tr!("Size"), size);
+            amount(ui, tr!("Height"), h, 0.0..=380.0);
+            height(ui, tr!("Sea floor"), base);
+            fraction(ui, tr!("Ragged coast"), coast);
             seed(ui, s);
         }
         NodeKind::Rocks {
@@ -3398,9 +3388,9 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             sharpness,
             seed: s,
         } => {
-            blocks(ui, "Size", scale, 2000.0);
-            amount(ui, "Height", h, 0.0..=100.0);
-            fraction(ui, "Sharpness", sharpness);
+            blocks(ui, tr!("Size"), scale, 2000.0);
+            amount(ui, tr!("Height"), h, 0.0..=100.0);
+            fraction(ui, tr!("Sharpness"), sharpness);
             seed(ui, s);
         }
         NodeKind::Levels {
@@ -3410,37 +3400,37 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             out_max,
             gamma,
         } => {
-            section(ui, "From");
-            height(ui, "Low", in_min);
-            height(ui, "High", in_max);
-            section(ui, "To");
-            height(ui, "Low", out_min);
-            height(ui, "High", out_max);
-            amount(ui, "Gamma", gamma, 0.1..=5.0);
+            section(ui, tr!("From"));
+            height(ui, tr!("Low"), in_min);
+            height(ui, tr!("High"), in_max);
+            section(ui, tr!("To"));
+            height(ui, tr!("Low"), out_min);
+            height(ui, tr!("High"), out_max);
+            amount(ui, tr!("Gamma"), gamma, 0.1..=5.0);
         }
         NodeKind::Terrace { steps, strength } => {
-            count(ui, "Steps", steps, 1..=64);
-            fraction(ui, "Strength", strength);
+            count(ui, tr!("Steps"), steps, 1..=64);
+            fraction(ui, tr!("Strength"), strength);
         }
         NodeKind::Clamp { min, max } => {
-            height(ui, "Lowest", min);
-            height(ui, "Highest", max);
+            height(ui, tr!("Lowest"), min);
+            height(ui, tr!("Highest"), max);
         }
         NodeKind::Blur { radius } => {
-            blocks(ui, "Radius", radius, 500.0);
+            blocks(ui, tr!("Radius"), radius, 500.0);
         }
         NodeKind::Warp { amount: a, scale, seed: s } => {
-            blocks(ui, "Distance", a, 2000.0);
-            blocks(ui, "Size", scale, 10000.0);
+            blocks(ui, tr!("Distance"), a, 2000.0);
+            blocks(ui, tr!("Size"), scale, 10000.0);
             seed(ui, s);
         }
         NodeKind::Normalize { min, max } => {
-            height(ui, "Lowest", min);
-            height(ui, "Highest", max);
+            height(ui, tr!("Lowest"), min);
+            height(ui, tr!("Highest"), max);
         }
         NodeKind::Curve { gamma, contrast } => {
-            amount(ui, "Gamma", gamma, 0.1..=6.0);
-            amount(ui, "Contrast", contrast, -1.0..=1.0);
+            amount(ui, tr!("Gamma"), gamma, 0.1..=6.0);
+            amount(ui, tr!("Contrast"), contrast, -1.0..=1.0);
         }
         NodeKind::Transform {
             scale,
@@ -3448,18 +3438,18 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             offset_x,
             offset_z,
         } => {
-            amount(ui, "Scale", scale, 0.1..=8.0);
-            row(ui, "Turn", |ui| ui.add(crate::widgets::Field::new(rotate, -180.0..=180.0).suffix("°").max_decimals(0)));
-            amount(ui, "Move across", offset_x, -1.0..=1.0);
-            amount(ui, "Move down", offset_z, -1.0..=1.0);
+            amount(ui, tr!("Scale"), scale, 0.1..=8.0);
+            row(ui, tr!("Turn"), |ui| ui.add(crate::widgets::Field::new(rotate, -180.0..=180.0).suffix("°").max_decimals(0)));
+            amount(ui, tr!("Move across"), offset_x, -1.0..=1.0);
+            amount(ui, tr!("Move down"), offset_z, -1.0..=1.0);
         }
         NodeKind::Swirl { angle: a, radius } => {
-            row(ui, "Turn", |ui| ui.add(crate::widgets::Field::new(a, -720.0..=720.0).suffix("°").max_decimals(0)));
-            fraction(ui, "Reach", radius);
+            row(ui, tr!("Turn"), |ui| ui.add(crate::widgets::Field::new(a, -720.0..=720.0).suffix("°").max_decimals(0)));
+            fraction(ui, tr!("Reach"), radius);
         }
         NodeKind::Fold { level, strength } => {
-            height(ui, "Level", level);
-            fraction(ui, "Strength", strength);
+            height(ui, tr!("Level"), level);
+            fraction(ui, tr!("Strength"), strength);
         }
         NodeKind::Stratify {
             layers,
@@ -3467,21 +3457,21 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             tilt,
             seed: s,
         } => {
-            count(ui, "Layers", layers, 1..=80);
-            fraction(ui, "Strength", strength);
-            row(ui, "Tilt", |ui| ui.add(crate::widgets::Field::new(tilt, -45.0..=45.0).suffix("°").max_decimals(0)));
+            count(ui, tr!("Layers"), layers, 1..=80);
+            fraction(ui, tr!("Strength"), strength);
+            row(ui, tr!("Tilt"), |ui| ui.add(crate::widgets::Field::new(tilt, -45.0..=45.0).suffix("°").max_decimals(0)));
             seed(ui, s);
         }
         NodeKind::Sharpen { radius, amount: a } => {
-            blocks(ui, "Radius", radius, 500.0);
-            amount(ui, "Amount", a, 0.0..=4.0);
+            blocks(ui, tr!("Radius"), radius, 500.0);
+            amount(ui, tr!("Amount"), a, 0.0..=4.0);
         }
         NodeKind::InvertHeight | NodeKind::Blend | NodeKind::Invert | NodeKind::MixColors | NodeKind::HeightOutput => {
-            ui.label(RichText::new("No settings.").size(11.5).color(pal.weak));
+            ui.label(RichText::new(tr!("No settings.")).size(11.5).color(pal.weak));
         }
         NodeKind::MapHeight => {
             ui.label(
-                RichText::new("The open map's surface, water and colours.")
+                RichText::new(tr!("The open map's surface, water and colours."))
                     .size(11.5)
                     .color(pal.weak),
             );
@@ -3496,18 +3486,18 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
                 let shown = std::path::Path::new(path.as_str())
                     .file_name()
                     .and_then(|n| n.to_str())
-                    .unwrap_or("— none");
+                    .unwrap_or(tr!("— none"));
                 ui.add_sized(
                     [96.0, 18.0],
-                    egui::Label::new(RichText::new("File").size(12.0)),
+                    egui::Label::new(RichText::new(tr!("File")).size(12.0)),
                 );
                 ui.label(RichText::new(shown).size(12.0))
                     .on_hover_text(path.as_str());
-                if ui.button("Choose…").clicked()
+                if ui.button(tr!("Choose…")).clicked()
                     && let Some(p) = rfd::FileDialog::new()
-                        .set_title("A height map or a world")
+                        .set_title(tr!("A height map or a world"))
                         .add_filter(
-                            "Height maps and worlds",
+                            tr!("Height maps and worlds"),
                             &["png", "jpg", "jpeg", "r16", "r32", "raw", "world", "massif"],
                         )
                         .pick_file()
@@ -3517,19 +3507,16 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             });
             let file = std::path::Path::new(path.as_str());
             let state = if path.is_empty() {
-                "PNG, JPEG, .r16, .r32, .world or .massif".to_owned()
+                tr!("PNG, JPEG, .r16, .r32, .world or .massif").to_owned()
             } else if massif_core::graph::is_world(file) {
-                row(ui, "Fit to terrain", |ui| crate::widgets::checkbox(ui, fit, ""));
-                "A world: its surface, water and terrain colours.".to_owned()
+                row(ui, tr!("Fit to terrain"), |ui| crate::widgets::checkbox(ui, fit, ""));
+                tr!("A world: its surface, water and terrain colours.").to_owned()
             } else {
-                height(ui, "Black is", low);
-                height(ui, "White is", high);
+                height(ui, tr!("Black is"), low);
+                height(ui, tr!("White is"), high);
                 match massif_core::heightmap::cached(file) {
-                    Ok(m) => format!(
-                        "{} × {} pixels, stretched over the terrain.",
-                        m.width, m.height
-                    ),
-                    Err(e) => format!("Cannot be read: {e}"),
+                    Ok(m) => tr!("{width} × {height} pixels, stretched over the terrain.", width = m.width, height = m.height),
+                    Err(e) => tr!("Cannot be read: {e}", e),
                 }
             };
             ui.label(RichText::new(state).size(11.0).color(pal.weak));
@@ -3543,12 +3530,12 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             variation,
             seed: s,
         } => {
-            row(ui, "Warm side", |ui| ui.add(crate::widgets::Field::new(warm, -30.0..=45.0).suffix(" °C").max_decimals(0)));
-            row(ui, "Cold side", |ui| ui.add(crate::widgets::Field::new(cold, -30.0..=45.0).suffix(" °C").max_decimals(0)));
-            angle(ui, "Warm toward", toward);
-            row(ui, "Height cools", |ui| ui.add(crate::widgets::Field::new(lapse, 0.0..=30.0).suffix(" °C / 100 blocks").max_decimals(1)));
-            height(ui, "Sea level", sea);
-            row(ui, "Variation", |ui| ui.add(crate::widgets::Field::new(variation, 0.0..=15.0).suffix(" °C").max_decimals(1)));
+            row(ui, tr!("Warm side"), |ui| ui.add(crate::widgets::Field::new(warm, -30.0..=45.0).suffix(" °C").max_decimals(0)));
+            row(ui, tr!("Cold side"), |ui| ui.add(crate::widgets::Field::new(cold, -30.0..=45.0).suffix(" °C").max_decimals(0)));
+            angle(ui, tr!("Warm toward"), toward);
+            row(ui, tr!("Height cools"), |ui| ui.add(crate::widgets::Field::new(lapse, 0.0..=30.0).suffix(tr!(" °C / 100 blocks")).max_decimals(1)));
+            height(ui, tr!("Sea level"), sea);
+            row(ui, tr!("Variation"), |ui| ui.add(crate::widgets::Field::new(variation, 0.0..=15.0).suffix(" °C").max_decimals(1)));
             seed(ui, s);
         }
         NodeKind::Humidity {
@@ -3560,23 +3547,23 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             variation,
             seed: s,
         } => {
-            angle(ui, "Wind from", from);
-            fraction(ui, "Inland air", base);
-            blocks(ui, "Reach", reach, 6000.0);
-            fraction(ui, "Rain shadow", shadow);
-            height(ui, "Sea level", sea);
-            fraction(ui, "Variation", variation);
+            angle(ui, tr!("Wind from"), from);
+            fraction(ui, tr!("Inland air"), base);
+            blocks(ui, tr!("Reach"), reach, 6000.0);
+            fraction(ui, tr!("Rain shadow"), shadow);
+            height(ui, tr!("Sea level"), sea);
+            fraction(ui, tr!("Variation"), variation);
             seed(ui, s);
         }
         NodeKind::Biomes { sea } => {
-            height(ui, "Sea level", sea);
+            height(ui, tr!("Sea level"), sea);
             climate_legend(ui, false);
         }
         NodeKind::BiomeOutput { sea, paint } => {
-            height(ui, "Sea level", sea);
-            row(ui, "Paint the ground", |ui| crate::widgets::checkbox(ui, paint, ""));
+            height(ui, tr!("Sea level"), sea);
+            row(ui, tr!("Paint the ground"), |ui| crate::widgets::checkbox(ui, paint, ""));
             ui.label(
-                RichText::new("Writes each climate's biome and terrain:")
+                RichText::new(tr!("Writes each climate's biome and terrain:"))
                     .size(11.0)
                     .color(pal.weak),
             );
@@ -3591,15 +3578,15 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             seed: s,
         } => {
             plate_editor(ui, plates, s);
-            blocks(ui, "Relief", relief, 320.0);
-            blocks(ui, "Belt width", width, 2000.0);
-            fraction(ui, "Winding", roughness);
-            height(ui, "Sea level", sea);
+            blocks(ui, tr!("Relief"), relief, 320.0);
+            blocks(ui, tr!("Belt width"), width, 2000.0);
+            fraction(ui, tr!("Winding"), roughness);
+            height(ui, tr!("Sea level"), sea);
             seed(ui, s);
         }
         NodeKind::WaterOutput => {
             ui.label(
-                RichText::new("Water up to this level, where it is over the ground.")
+                RichText::new(tr!("Water up to this level, where it is over the ground."))
                     .size(11.5)
                     .color(pal.weak),
             );
@@ -3613,12 +3600,12 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             radius,
             seed: s,
         } => {
-            amount(ui, "Rain", rain, 0.05..=8.0);
-            fraction(ui, "Erosion", erosion);
-            fraction(ui, "Deposition", deposition);
-            amount(ui, "Capacity", capacity, 0.1..=20.0);
-            amount(ui, "Evaporation", evaporation, 0.0..=0.5);
-            blocks(ui, "Brush", radius, 100.0);
+            amount(ui, tr!("Rain"), rain, 0.05..=8.0);
+            fraction(ui, tr!("Erosion"), erosion);
+            fraction(ui, tr!("Deposition"), deposition);
+            amount(ui, tr!("Capacity"), capacity, 0.1..=20.0);
+            amount(ui, tr!("Evaporation"), evaporation, 0.0..=0.5);
+            blocks(ui, tr!("Brush"), radius, 100.0);
             seed(ui, s);
         }
         NodeKind::Thermal {
@@ -3626,9 +3613,9 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             iterations,
             strength,
         } => {
-            row(ui, "Steepest", |ui| ui.add(crate::widgets::Field::new(talus, 5.0..=85.0).suffix("°").max_decimals(0)));
-            count(ui, "Passes", iterations, 1..=500);
-            fraction(ui, "Strength", strength);
+            row(ui, tr!("Steepest"), |ui| ui.add(crate::widgets::Field::new(talus, 5.0..=85.0).suffix("°").max_decimals(0)));
+            count(ui, tr!("Passes"), iterations, 1..=500);
+            fraction(ui, tr!("Strength"), strength);
         }
         NodeKind::Snow {
             line,
@@ -3636,10 +3623,10 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             depth,
             softness,
         } => {
-            height(ui, "Snow line", line);
-            row(ui, "Steepest", |ui| ui.add(crate::widgets::Field::new(slope, 5.0..=85.0).suffix("°").max_decimals(0)));
-            amount(ui, "Depth", depth, 0.0..=20.0);
-            amount(ui, "Fade", softness, 0.5..=100.0);
+            height(ui, tr!("Snow line"), line);
+            row(ui, tr!("Steepest"), |ui| ui.add(crate::widgets::Field::new(slope, 5.0..=85.0).suffix("°").max_decimals(0)));
+            amount(ui, tr!("Depth"), depth, 0.0..=20.0);
+            amount(ui, tr!("Fade"), softness, 0.5..=100.0);
         }
         NodeKind::Rivers {
             threshold,
@@ -3649,49 +3636,49 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             banks,
             lakes,
         } => {
-            fraction(ui, "Fewer", threshold);
-            amount(ui, "Depth", depth, 0.5..=40.0);
-            blocks(ui, "Width", width, 200.0);
-            amount(ui, "Banks", banks, 0.0..=4.0);
-            fraction(ui, "Lakes", lakes);
-            sea_level(ui, sea, "Rivers run to the sea and end there");
+            fraction(ui, tr!("Fewer"), threshold);
+            amount(ui, tr!("Depth"), depth, 0.5..=40.0);
+            blocks(ui, tr!("Width"), width, 200.0);
+            amount(ui, tr!("Banks"), banks, 0.0..=4.0);
+            fraction(ui, tr!("Lakes"), lakes);
+            sea_level(ui, sea, tr!("Rivers run to the sea and end there"));
         }
         NodeKind::Lakes { amount: a, sea } => {
-            fraction(ui, "Fill", a);
-            sea_level(ui, sea, "What lies under the sea is the sea's, not a lake");
+            fraction(ui, tr!("Fill"), a);
+            sea_level(ui, sea, tr!("What lies under the sea is the sea's, not a lake"));
         }
         NodeKind::Sea { level, shore } => {
-            height(ui, "Level", level);
-            amount(ui, "Shore", shore, 0.5..=40.0);
+            height(ui, tr!("Level"), level);
+            amount(ui, tr!("Shore"), shore, 0.5..=40.0);
         }
         NodeKind::Combine { op, weight } => {
-            choice(ui, "Operation", op, &CombineOp::ALL.map(|o| (o, o.label())));
-            amount(ui, "Weight of B", weight, -4.0..=4.0);
+            choice(ui, tr!("Operation"), op, &CombineOp::ALL.map(|o| (o, crate::i18n::tr_name(o.label()))));
+            amount(ui, tr!("Weight of B"), weight, -4.0..=4.0);
         }
         NodeKind::SelectHeight { min, max, falloff } => {
-            height(ui, "From", min);
-            height(ui, "To", max);
-            amount(ui, "Fade", falloff, 0.1..=100.0);
+            height(ui, tr!("From"), min);
+            height(ui, tr!("To"), max);
+            amount(ui, tr!("Fade"), falloff, 0.1..=100.0);
         }
         NodeKind::SelectSlope { min, max, falloff } => {
-            row(ui, "From", |ui| ui.add(crate::widgets::Field::new(min, 0.0..=90.0).suffix("°").max_decimals(0)));
-            row(ui, "To", |ui| ui.add(crate::widgets::Field::new(max, 0.0..=90.0).suffix("°").max_decimals(0)));
-            amount(ui, "Fade", falloff, 0.1..=30.0);
+            row(ui, tr!("From"), |ui| ui.add(crate::widgets::Field::new(min, 0.0..=90.0).suffix("°").max_decimals(0)));
+            row(ui, tr!("To"), |ui| ui.add(crate::widgets::Field::new(max, 0.0..=90.0).suffix("°").max_decimals(0)));
+            amount(ui, tr!("Fade"), falloff, 0.1..=30.0);
         }
         NodeKind::Curvature { bend, radius, strength } => {
-            choice(ui, "Pick", bend, &[(Bend::Convex, "Ridges"), (Bend::Concave, "Hollows")]);
-            blocks(ui, "Size", radius, 1000.0);
-            amount(ui, "Strength", strength, 0.1..=5.0);
+            choice(ui, tr!("Pick"), bend, &[(Bend::Convex, tr!("Ridges")), (Bend::Concave, tr!("Hollows"))]);
+            blocks(ui, tr!("Size"), radius, 1000.0);
+            amount(ui, tr!("Strength"), strength, 0.1..=5.0);
         }
         NodeKind::Facing { angle: a, spread } => {
-            angle(ui, "Facing", a);
-            row(ui, "Spread", |ui| ui.add(crate::widgets::Field::new(spread, 5.0..=180.0).suffix("°").max_decimals(0)));
+            angle(ui, tr!("Facing"), a);
+            row(ui, tr!("Spread"), |ui| ui.add(crate::widgets::Field::new(spread, 5.0..=180.0).suffix("°").max_decimals(0)));
         }
         NodeKind::Occlusion { radius } => {
-            blocks(ui, "Radius", radius, 1000.0);
+            blocks(ui, tr!("Radius"), radius, 1000.0);
         }
         NodeKind::Flow { spread } => {
-            fraction(ui, "Small rills", spread);
+            fraction(ui, tr!("Small rills"), spread);
         }
         NodeKind::Gradient {
             preset,
@@ -3704,18 +3691,18 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
         } => {
             gradient_picker(ui, preset);
             ui.add_space(4.0);
-            flag(ui, "Fit the range", auto_range);
+            flag(ui, tr!("Fit the range"), auto_range);
             if !*auto_range {
                 let (bottom, top) = limits(ui);
-                amount(ui, "From", min, bottom..=top);
-                amount(ui, "To", max, bottom..=top);
+                amount(ui, tr!("From"), min, bottom..=top);
+                amount(ui, tr!("To"), max, bottom..=top);
             }
-            flag(ui, "Reverse", reverse);
-            fraction(ui, "Variation", variation);
+            flag(ui, tr!("Reverse"), reverse);
+            fraction(ui, tr!("Variation"), variation);
             seed(ui, s);
         }
         NodeKind::SolidColor { color: c } => {
-            color(ui, "Colour", c);
+            color(ui, tr!("Colour"), c);
         }
         NodeKind::AdjustColor {
             hue,
@@ -3723,15 +3710,15 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             brightness,
             contrast,
         } => {
-            row(ui, "Hue", |ui| ui.add(crate::widgets::Field::new(hue, -180.0..=180.0).suffix("°").max_decimals(0)));
-            amount(ui, "Saturation", saturation, 0.0..=3.0);
-            amount(ui, "Brightness", brightness, 0.0..=3.0);
-            amount(ui, "Contrast", contrast, 0.0..=3.0);
+            row(ui, tr!("Hue"), |ui| ui.add(crate::widgets::Field::new(hue, -180.0..=180.0).suffix("°").max_decimals(0)));
+            amount(ui, tr!("Saturation"), saturation, 0.0..=3.0);
+            amount(ui, tr!("Brightness"), brightness, 0.0..=3.0);
+            amount(ui, tr!("Contrast"), contrast, 0.0..=3.0);
         }
         NodeKind::Tint { color: c, mode, strength } => {
-            color(ui, "Colour", c);
-            choice(ui, "Mode", mode, &TintMode::ALL.map(|m| (m, m.label())));
-            fraction(ui, "Strength", strength);
+            color(ui, tr!("Colour"), c);
+            choice(ui, tr!("Mode"), mode, &TintMode::ALL.map(|m| (m, crate::i18n::tr_name(m.label()))));
+            fraction(ui, tr!("Strength"), strength);
         }
         NodeKind::AutoColor {
             palette,
@@ -3739,13 +3726,13 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             rock_slope,
             seed: s,
         } => {
-            choice(ui, "Land", palette, &AutoPalette::ALL.map(|p| (p, p.label())));
-            height(ui, "Snow line", snow_line);
-            row(ui, "Rock from", |ui| ui.add(crate::widgets::Field::new(rock_slope, 5.0..=80.0).suffix("°").max_decimals(0)));
+            choice(ui, tr!("Land"), palette, &AutoPalette::ALL.map(|p| (p, crate::i18n::tr_name(p.label()))));
+            height(ui, tr!("Snow line"), snow_line);
+            row(ui, tr!("Rock from"), |ui| ui.add(crate::widgets::Field::new(rock_slope, 5.0..=80.0).suffix("°").max_decimals(0)));
             seed(ui, s);
         }
         NodeKind::TerrainOutput { terrain } => {
-            row(ui, "Terrain", |ui| {
+            row(ui, tr!("Terrain"), |ui| {
                 let mut changed = false;
                 let mut r = crate::widgets::combo("output terrain")
                     .selected_text(reg.terrain(TerrainId(*terrain)).name.clone())
@@ -3773,14 +3760,14 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             depth,
             seed: s,
         } => {
-            height(ui, "Altitude", altitude);
-            blocks(ui, "Altitude spread", spread, 150.0);
-            blocks(ui, "Largest radius", size, 600.0);
-            fraction(ui, "Coverage", coverage);
-            amount(ui, "Underside", depth, 0.2..=3.0);
+            height(ui, tr!("Altitude"), altitude);
+            blocks(ui, tr!("Altitude spread"), spread, 150.0);
+            blocks(ui, tr!("Largest radius"), size, 600.0);
+            fraction(ui, tr!("Coverage"), coverage);
+            amount(ui, tr!("Underside"), depth, 0.2..=3.0);
             seed(ui, s);
             ui.label(
-                RichText::new("Top + Bottom → Layer output.")
+                RichText::new(tr!("Top + Bottom → Layer output."))
                     .size(11.0)
                     .color(pal.weak),
             );
@@ -3792,33 +3779,33 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
             variation,
             seed: s,
         } => {
-            blocks(ui, "Reach", reach, 64.0);
-            blocks(ui, "Thickness", thickness, 48.0);
-            blocks(ui, "Cliff drop", drop, 160.0);
-            fraction(ui, "Variation", variation);
+            blocks(ui, tr!("Reach"), reach, 64.0);
+            blocks(ui, tr!("Thickness"), thickness, 48.0);
+            blocks(ui, tr!("Cliff drop"), drop, 160.0);
+            fraction(ui, tr!("Variation"), variation);
             seed(ui, s);
             ui.label(
-                RichText::new("Top + Bottom → Layer output.")
+                RichText::new(tr!("Top + Bottom → Layer output."))
                     .size(11.0)
                     .color(pal.weak),
             );
         }
         NodeKind::LayerOutput { slot, palette } => {
-            count(ui, "Layer", slot, 1..=8);
-            choice(ui, "Blocks from", palette, &BlockPalette::ALL.map(|p| (p, p.label())));
+            count(ui, tr!("Layer"), slot, 1..=8);
+            choice(ui, tr!("Blocks from"), palette, &BlockPalette::ALL.map(|p| (p, crate::i18n::tr_name(p.label()))));
             ui.label(
-                RichText::new("Rock between Top and Bottom, as a level of the map.")
+                RichText::new(tr!("Rock between Top and Bottom, as a level of the map."))
                     .size(11.0)
                     .color(pal.weak),
             );
         }
         NodeKind::ColorOutput { blocks: b, palette } => {
-            flag(ui, "Real blocks", b);
+            flag(ui, tr!("Real blocks"), b);
             if *b {
-                choice(ui, "From", palette, &BlockPalette::ALL.map(|p| (p, p.label())));
+                choice(ui, tr!("From"), palette, &BlockPalette::ALL.map(|p| (p, crate::i18n::tr_name(p.label()))));
             }
             ui.label(
-                RichText::new("Each column takes the closest real block.")
+                RichText::new(tr!("Each column takes the closest real block."))
                     .size(11.0)
                     .color(pal.weak),
             );

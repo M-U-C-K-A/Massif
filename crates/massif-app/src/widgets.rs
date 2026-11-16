@@ -629,9 +629,9 @@ fn number(ui: &mut Ui, rect: Rect, id: egui::Id, value: &mut i32, range: RangeIn
                 let v = fit(typed);
                 if v as i64 != typed {
                     let why = if typed > *range.end() as i64 && v == *range.end() {
-                        "the most it may be".to_owned()
+                        tr!("the most it may be").to_owned()
                     } else if typed < *range.start() as i64 && v == *range.start() {
-                        "the least it may be".to_owned()
+                        tr!("the least it may be").to_owned()
                     } else {
                         snap.map_or(String::new(), |(_, why)| why.to_owned())
                     };

@@ -55,7 +55,7 @@ impl BlockLibrary {
                 // Its textures decoded in the threads kept for loads, not in
                 // the pool the interface draws with (see `in_loading_pool`).
                 Some(j) => crate::jobs::in_loading_pool(|| massif_assets::load(&j.path, &j.version)).map_err(|e| format!("{}: {e}", j.path.display())),
-                None => Err("No Minecraft installation was found. Choose the game's jar (versions/<version>/<version>.jar).".to_owned()),
+                None => Err(tr!("No Minecraft installation was found. Choose the game's jar (versions/<version>/<version>.jar).").to_owned()),
             };
             let _ = tx.send((jars, result));
             ctx.request_repaint();

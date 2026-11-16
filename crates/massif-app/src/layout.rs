@@ -55,11 +55,11 @@ impl EditorKind {
     /// side's. Developer's comes after them, with developer mode.
     pub const COLUMNS: [&'static [Section]; 4] = [
         &[
-            ("View", &[EditorKind::Map, EditorKind::View3d, EditorKind::Sculpt3d]),
-            ("World", &[EditorKind::Info, EditorKind::Versions]),
+            (tn!("View"), &[EditorKind::Map, EditorKind::View3d, EditorKind::Sculpt3d]),
+            (tn!("World"), &[EditorKind::Info, EditorKind::Versions]),
         ],
         &[(
-            "Tools",
+            tn!("Tools"),
             &[
                 EditorKind::Tools,
                 EditorKind::ToolSettings,
@@ -68,68 +68,68 @@ impl EditorKind {
                 EditorKind::BrushSettings,
             ],
         )],
-        &[("Paint", &[EditorKind::Terrain, EditorKind::Layers, EditorKind::Packs, EditorKind::Blocks, EditorKind::Biomes, EditorKind::Levels])],
+        &[(tn!("Paint"), &[EditorKind::Terrain, EditorKind::Layers, EditorKind::Packs, EditorKind::Blocks, EditorKind::Biomes, EditorKind::Levels])],
         &[(
-            "Terrain",
+            tn!("Terrain"),
             &[EditorKind::GraphView, EditorKind::Graph, EditorKind::GraphProps, EditorKind::RenderSettings],
         )],
     ];
 
     /// Developer's section, after the others.
-    pub const DEVELOPER: Section = ("Developer", &[EditorKind::Developer]);
+    pub const DEVELOPER: Section = (tn!("Developer"), &[EditorKind::Developer]);
 
     /// What the editor is for, in a line.
-    pub const fn about(self) -> &'static str {
+    pub fn about(self) -> &'static str {
         match self {
-            EditorKind::Empty => "Nothing yet: choose what it shows",
-            EditorKind::Map => "The map from above, to paint and shape",
-            EditorKind::View3d => "The whole map in 3D, block by block",
-            EditorKind::Sculpt3d => "Build, dig and smooth in 3D, or walk it as a player",
-            EditorKind::Tools => "Every tool, a row for each theme",
-            EditorKind::ToolSettings => "The options of the tool in hand",
-            EditorKind::BrushSettings => "Size, intensity, rotation and where the brush paints",
-            EditorKind::Brushes => "Shapes for the brush, and stamps of terrain",
-            EditorKind::CustomBrushes => "Brushes from greyscale images, yours and WorldPainter's",
-            EditorKind::Terrain => "The block on top of the ground, to paint",
-            EditorKind::Blocks => "Every block of the game, to paint as a terrain",
-            EditorKind::Biomes => "The game's biomes, to paint over the automatic ones",
-            EditorKind::Layers => "Ground covers, objects and terrain mixes: paint, show or hide them",
-            EditorKind::Packs => "Ready-made trees, plants and mixes of blocks to paint",
-            EditorKind::Levels => "Levels that add rock over the ground or carve it away",
-            EditorKind::Info => "Name, seed, sea level and size; the column under the cursor",
-            EditorKind::Graph => "The nodes the terrain is generated from",
-            EditorKind::GraphView => "The graph's terrain in relief, under its sky",
-            EditorKind::GraphProps => "The settings of the selected node",
-            EditorKind::RenderSettings => "Sun, clouds and haze, and images saved from the viewport",
-            EditorKind::Developer => "Frames, memory and processor, live",
-            EditorKind::Versions => "Save points of the map: restore, open or compare them",
+            EditorKind::Empty => tr!("Nothing yet: choose what it shows"),
+            EditorKind::Map => tr!("The map from above, to paint and shape"),
+            EditorKind::View3d => tr!("The whole map in 3D, block by block"),
+            EditorKind::Sculpt3d => tr!("Build, dig and smooth in 3D, or walk it as a player"),
+            EditorKind::Tools => tr!("Every tool, a row for each theme"),
+            EditorKind::ToolSettings => tr!("The options of the tool in hand"),
+            EditorKind::BrushSettings => tr!("Size, intensity, rotation and where the brush paints"),
+            EditorKind::Brushes => tr!("Shapes for the brush, and stamps of terrain"),
+            EditorKind::CustomBrushes => tr!("Brushes from greyscale images, yours and WorldPainter's"),
+            EditorKind::Terrain => tr!("The block on top of the ground, to paint"),
+            EditorKind::Blocks => tr!("Every block of the game, to paint as a terrain"),
+            EditorKind::Biomes => tr!("The game's biomes, to paint over the automatic ones"),
+            EditorKind::Layers => tr!("Ground covers, objects and terrain mixes: paint, show or hide them"),
+            EditorKind::Packs => tr!("Ready-made trees, plants and mixes of blocks to paint"),
+            EditorKind::Levels => tr!("Levels that add rock over the ground or carve it away"),
+            EditorKind::Info => tr!("Name, seed, sea level and size; the column under the cursor"),
+            EditorKind::Graph => tr!("The nodes the terrain is generated from"),
+            EditorKind::GraphView => tr!("The graph's terrain in relief, under its sky"),
+            EditorKind::GraphProps => tr!("The settings of the selected node"),
+            EditorKind::RenderSettings => tr!("Sun, clouds and haze, and images saved from the viewport"),
+            EditorKind::Developer => tr!("Frames, memory and processor, live"),
+            EditorKind::Versions => tr!("Save points of the map: restore, open or compare them"),
         }
     }
 
-    pub const fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            EditorKind::Empty => "Empty area",
-            EditorKind::Map => "Map",
-            EditorKind::View3d => "3D View",
-            EditorKind::Sculpt3d => "3D Sculpt",
-            EditorKind::Tools => "Tools",
-            EditorKind::ToolSettings => "Tool Settings",
-            EditorKind::BrushSettings => "Brush Settings",
-            EditorKind::Brushes => "Brushes",
-            EditorKind::CustomBrushes => "Custom Brushes",
-            EditorKind::Terrain => "Terrain",
-            EditorKind::Blocks => "Blocks",
-            EditorKind::Biomes => "Biomes",
-            EditorKind::Layers => "Layers",
-            EditorKind::Packs => "Packs",
-            EditorKind::Levels => "Levels",
-            EditorKind::Info => "Info",
-            EditorKind::Graph => "Terrain Graph",
-            EditorKind::GraphView => "Graph Viewport",
-            EditorKind::GraphProps => "Node Properties",
-            EditorKind::RenderSettings => "Render Settings",
-            EditorKind::Developer => "Developer",
-            EditorKind::Versions => "Versions",
+            EditorKind::Empty => tr!("Empty area"),
+            EditorKind::Map => tr!("Map"),
+            EditorKind::View3d => tr!("3D View"),
+            EditorKind::Sculpt3d => tr!("3D Sculpt"),
+            EditorKind::Tools => tr!("Tools"),
+            EditorKind::ToolSettings => tr!("Tool Settings"),
+            EditorKind::BrushSettings => tr!("Brush Settings"),
+            EditorKind::Brushes => tr!("Brushes"),
+            EditorKind::CustomBrushes => tr!("Custom Brushes"),
+            EditorKind::Terrain => tr!("Terrain"),
+            EditorKind::Blocks => tr!("Blocks"),
+            EditorKind::Biomes => tr!("Biomes"),
+            EditorKind::Layers => tr!("Layers"),
+            EditorKind::Packs => tr!("Packs"),
+            EditorKind::Levels => tr!("Levels"),
+            EditorKind::Info => tr!("Info"),
+            EditorKind::Graph => tr!("Terrain Graph"),
+            EditorKind::GraphView => tr!("Graph Viewport"),
+            EditorKind::GraphProps => tr!("Node Properties"),
+            EditorKind::RenderSettings => tr!("Render Settings"),
+            EditorKind::Developer => tr!("Developer"),
+            EditorKind::Versions => tr!("Versions"),
         }
     }
 
@@ -546,7 +546,7 @@ impl Default for Layout {
         };
         let map = b.area(Map);
         let centre = b.row(0.64, map, right);
-        add("Layout", b.row(0.17, left, centre));
+        add(tn!("Layout"), b.row(0.17, left, centre));
 
         // Sculpting: a big map, the brushes and the 3D view beside it.
         let left = {
@@ -562,7 +562,7 @@ impl Default for Layout {
         };
         let map = b.area(Map);
         let views = b.row(0.7, map, right);
-        add("Sculpting", b.row(0.16, left, views));
+        add(tn!("Sculpting"), b.row(0.16, left, views));
 
         // Painting: palettes on both sides of the map.
         let left = {
@@ -578,7 +578,7 @@ impl Default for Layout {
         };
         let map = b.area(Map);
         let centre = b.row(0.72, map, right);
-        add("Painting", b.row(0.16, left, centre));
+        add(tn!("Painting"), b.row(0.16, left, centre));
 
         // 3D: the preview takes the stage.
         let side = {
@@ -589,27 +589,27 @@ impl Default for Layout {
         add("3D", b.row(0.72, view, side));
 
         // 3D Sculpt: the world in 3D to build and dig in, with its tools.
-        add("3D Sculpt", sculpt_workspace(&mut b));
+        add(tn!("3D Sculpt"), sculpt_workspace(&mut b));
 
         // Maps: two map views side by side, to compare display modes.
         let (m1, m2) = (b.area(Map), b.area(Map));
-        add("Maps", b.row(0.5, m1, m2));
+        add(tn!("Maps"), b.row(0.5, m1, m2));
 
         // Minimal: just tools and the map.
         let (tools, map) = (b.area(Tools), b.area(Map));
-        add("Minimal", b.row(0.12, tools, map));
+        add(tn!("Minimal"), b.row(0.12, tools, map));
 
         // The terrain generator. Graph: as in Gaea, the viewport above the
         // graph, the selected node's settings on the right.
         let (view, graph) = (b.area(GraphView), b.area(Graph));
         let left = b.column(0.58, view, graph);
         let props = b.area(GraphProps);
-        add("Graph", b.row(0.79, left, props));
+        add(tn!("Graph"), b.row(0.79, left, props));
         // Render: the view takes the stage, with how it is rendered.
         let view = b.area(GraphView);
         let (settings, props) = (b.area(RenderSettings), b.area(GraphProps));
         let side = b.column(0.7, settings, props);
-        add("Render", b.row(0.79, view, side));
+        add(tn!("Render"), b.row(0.79, view, side));
         for w in workspaces.iter_mut().rev().take(2) {
             w.terrain = true;
         }
@@ -650,7 +650,7 @@ impl Layout {
             self.workspaces.insert(
                 at,
                 Workspace {
-                    name: "3D Sculpt".into(),
+                    name: tn!("3D Sculpt").into(),
                     root,
                     maximized: None,
                     terrain: false,

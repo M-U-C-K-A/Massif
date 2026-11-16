@@ -220,7 +220,7 @@ impl BrushLibrary {
     pub fn name(&self, source: &BrushSource) -> String {
         match source {
             BrushSource::Symmetric(shape, profile) => Brush::symmetric(*shape, *profile, 1.0).name(),
-            BrushSource::Stamp(stamp) => stamp.label().to_owned(),
+            BrushSource::Stamp(stamp) => crate::i18n::tr_name(stamp.label()).to_owned(),
             BrushSource::Image(path) => image_name(path),
         }
     }
@@ -279,12 +279,12 @@ impl BrushLibrary {
     pub fn new_group(&self, name: &str) -> std::io::Result<PathBuf> {
         let name = name.trim();
         if name.is_empty() || name.contains(['/', '\\', ':']) || name.starts_with('.') {
-            return Err(std::io::Error::other("a group name cannot be empty or contain / \\ :"));
+            return Err(std::io::Error::other(tr!("a group name cannot be empty or contain / \\ :")));
         }
         let own = self.own_dir.clone().ok_or_else(|| std::io::Error::other("no folder for brushes"))?;
         let dir = own.join(name);
         if dir.exists() {
-            return Err(std::io::Error::other(format!("there is already a group called “{name}”")));
+            return Err(std::io::Error::other(tr!("there is already a group called “{name}”", name)));
         }
         std::fs::create_dir_all(&dir)?;
         Ok(dir)

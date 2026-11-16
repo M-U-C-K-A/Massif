@@ -97,7 +97,7 @@ impl PackLibrary {
     /// again from what was read, under a file name made from its name: no
     /// name of the file it came from reaches the disk. Returns its place.
     pub fn add(&mut self, pack: Pack, replace: Option<usize>) -> Result<usize, String> {
-        let dir = self.dir.clone().ok_or("Massif has no folder to keep packs in")?;
+        let dir = self.dir.clone().ok_or(tr!("Massif has no folder to keep packs in"))?;
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         let old = replace.and_then(|i| self.packs.get(i)).map(|s| s.file.clone());
         let stem = pack_file::file_stem(&pack.name);
@@ -234,28 +234,28 @@ pub fn dialog(ctx: &egui::Context, dialog: &mut Option<PackDialog>, library: &mu
                 ui.set_width(420.0);
                 let pal = Palette::of(ui);
                 let theirs = library.packs.get(*existing).map(|s| s.pack.author.clone()).unwrap_or_default();
-                title(ui, Icon::Package, &format!("“{}” is in your packs already", pack.name));
-                let by = |a: &str| if a.is_empty() { String::new() } else { format!(" by {a}") };
-                ui.add(egui::Label::new(RichText::new(format!("Your packs have one of that name{}. The one you import is{}. Replace it, or keep both under another name.", by(&theirs), by(&pack.author))).color(pal.weak)).wrap());
+                title(ui, Icon::Package, &tr!("“{name}” is in your packs already", name = pack.name));
+                let by = |a: &str| if a.is_empty() { String::new() } else { tr!(" by {a}", a) };
+                ui.add(egui::Label::new(RichText::new(tr!("Your packs have one of that name{by}. The one you import is{by2}. Replace it, or keep both under another name.", by = by(&theirs), by2 = by(&pack.author))).color(pal.weak)).wrap());
                 ui.add_space(10.0);
                 let free = !rename.trim().is_empty() && library.find(rename.trim()).is_none();
                 crate::widgets::well(ui, |ui| {
-                    crate::widgets::row(ui, "Name", |ui| {
-                        ui.add(egui::TextEdit::singleline(rename).hint_text("Another name").desired_width(f32::INFINITY).char_limit(pack_file::MAX_NAME));
+                    crate::widgets::row(ui, tr!("Name"), |ui| {
+                        ui.add(egui::TextEdit::singleline(rename).hint_text(tr!("Another name")).desired_width(f32::INFINITY).char_limit(pack_file::MAX_NAME));
                     });
                     if !free {
-                        ui.label(RichText::new("Choose a name your packs do not have.").size(11.5).color(pal.weak));
+                        ui.label(RichText::new(tr!("Choose a name your packs do not have.")).size(11.5).color(pal.weak));
                     }
                 });
                 ui.add_space(12.0);
                 ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                    if ui.add_enabled(free, theme::primary_button(ui, "Keep both")).clicked() {
+                    if ui.add_enabled(free, theme::primary_button(ui, tr!("Keep both"))).clicked() {
                         action = Some(true);
                     }
-                    if ui.button("Replace").clicked() {
+                    if ui.button(tr!("Replace")).clicked() {
                         action = Some(false);
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(tr!("Cancel")).clicked() {
                         close = true;
                     }
                 });
@@ -285,14 +285,14 @@ pub fn dialog(ctx: &egui::Context, dialog: &mut Option<PackDialog>, library: &mu
             let response = crate::app::modal(ctx, "remove pack").show(ctx, |ui| {
                 ui.set_width(400.0);
                 let pal = Palette::of(ui);
-                title(ui, Icon::Trash2, &format!("Remove “{name}” from your packs?"));
-                ui.add(egui::Label::new(RichText::new("Its file is deleted from your packs. Maps keep the layers they took from it.").color(pal.weak)).wrap());
+                title(ui, Icon::Trash2, &tr!("Remove “{name}” from your packs?", name));
+                ui.add(egui::Label::new(RichText::new(tr!("Its file is deleted from your packs. Maps keep the layers they took from it.")).color(pal.weak)).wrap());
                 ui.add_space(12.0);
                 ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                    if ui.add(egui::Button::new(RichText::new("Remove").color(Color32::WHITE)).fill(pal.danger)).clicked() {
+                    if ui.add(egui::Button::new(RichText::new(tr!("Remove")).color(Color32::WHITE)).fill(pal.danger)).clicked() {
                         remove = true;
                     }
-                    if ui.button("Cancel").clicked() {
+                    if ui.button(tr!("Cancel")).clicked() {
                         close = true;
                     }
                 });
@@ -302,8 +302,8 @@ pub fn dialog(ctx: &egui::Context, dialog: &mut Option<PackDialog>, library: &mu
             }
             if remove {
                 out = Some(match library.remove(i) {
-                    Ok(p) => Outcome::Say(format!("Removed the pack “{}”", p.name), false, None),
-                    Err(e) => Outcome::Say(format!("Could not remove the pack: {e}"), true, None),
+                    Ok(p) => Outcome::Say(tr!("Removed the pack “{name}”", name = p.name), false, None),
+                    Err(e) => Outcome::Say(tr!("Could not remove the pack: {e}", e), true, None),
                 });
                 close = true;
             }
@@ -319,15 +319,15 @@ pub fn dialog(ctx: &egui::Context, dialog: &mut Option<PackDialog>, library: &mu
 pub fn added(result: Result<usize, String>, pack: &Pack) -> Outcome {
     match result {
         Ok(_) => {
-            let by = if pack.author.is_empty() { String::new() } else { format!(" by {}", pack.author) };
-            Outcome::ShowPacks(format!("Added the pack “{}”{by} to your packs: {}", pack.name, things(pack.len())))
+            let by = if pack.author.is_empty() { String::new() } else { tr!(" by {author}", author = pack.author) };
+            Outcome::ShowPacks(tr!("Added the pack “{name}”{by} to your packs: {things}", name = pack.name, things = things(pack.len()), by))
         }
-        Err(e) => Outcome::Say(format!("Could not add the pack: {e}"), true, None),
+        Err(e) => Outcome::Say(tr!("Could not add the pack: {e}", e), true, None),
     }
 }
 
 fn things(n: usize) -> String {
-    if n == 1 { "1 thing".to_owned() } else { format!("{n} things") }
+    trn!("{n} thing", "{n} things", n = n)
 }
 
 fn title(ui: &mut Ui, icon: Icon, text: &str) {
@@ -342,32 +342,32 @@ fn title(ui: &mut Ui, icon: Icon, text: &str) {
 fn export_ui(ui: &mut Ui, form: &mut ExportForm, reg: &massif_core::Registry, close: &mut bool, out: &mut Option<Outcome>) {
     ui.set_width(460.0);
     let pal = Palette::of(ui);
-    title(ui, Icon::Package, "Export a pack");
-    ui.add(egui::Label::new(RichText::new("A .massifpack file of the map's layers, to share: others import it into their packs.").color(pal.weak)).wrap());
+    title(ui, Icon::Package, tr!("Export a pack"));
+    ui.add(egui::Label::new(RichText::new(tr!("A .massifpack file of the map's layers, to share: others import it into their packs.")).color(pal.weak)).wrap());
     ui.add_space(10.0);
     crate::widgets::well(ui, |ui| {
-        crate::widgets::row(ui, "Name", |ui| {
-            ui.add(egui::TextEdit::singleline(&mut form.name).hint_text("The pack's name").desired_width(f32::INFINITY).char_limit(pack_file::MAX_NAME));
+        crate::widgets::row(ui, tr!("Name"), |ui| {
+            ui.add(egui::TextEdit::singleline(&mut form.name).hint_text(tr!("The pack's name")).desired_width(f32::INFINITY).char_limit(pack_file::MAX_NAME));
         });
-        crate::widgets::row(ui, "Author", |ui| {
-            ui.add(egui::TextEdit::singleline(&mut form.author).hint_text("Your name").desired_width(f32::INFINITY).char_limit(pack_file::MAX_NAME));
+        crate::widgets::row(ui, tr!("Author"), |ui| {
+            ui.add(egui::TextEdit::singleline(&mut form.author).hint_text(tr!("Your name")).desired_width(f32::INFINITY).char_limit(pack_file::MAX_NAME));
         });
     });
     ui.add_space(6.0);
-    ui.add(egui::TextEdit::multiline(&mut form.description).hint_text("A description: what it holds, what it is for").desired_rows(2).desired_width(f32::INFINITY).char_limit(pack_file::MAX_DESCRIPTION));
+    ui.add(egui::TextEdit::multiline(&mut form.description).hint_text(tr!("A description: what it holds, what it is for")).desired_rows(2).desired_width(f32::INFINITY).char_limit(pack_file::MAX_DESCRIPTION));
     ui.add_space(8.0);
-    ui.label(RichText::new("What it holds").medium());
+    ui.label(RichText::new(tr!("What it holds")).medium());
     ui.add_space(2.0);
     if form.choices.is_empty() {
-        ui.add(egui::Label::new(RichText::new("The map has no layers of its own yet: add some from the Packs or the Layers panel first.").color(pal.weak)).wrap());
+        ui.add(egui::Label::new(RichText::new(tr!("The map has no layers of its own yet: add some from the Packs or the Layers panel first.")).color(pal.weak)).wrap());
     } else {
         egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
             crate::widgets::well(ui, |ui| {
                 for (kind, _, name, on) in &mut form.choices {
                     let what = match kind {
-                        ItemKind::Layer => "Object layer",
-                        ItemKind::Cover => "Ground cover",
-                        ItemKind::Terrain => "Terrain",
+                        ItemKind::Layer => tr!("Object layer"),
+                        ItemKind::Cover => tr!("Ground cover"),
+                        ItemKind::Terrain => tr!("Terrain"),
                     };
                     ui.horizontal(|ui| {
                         crate::widgets::checkbox(ui, on, name.as_str());
@@ -396,18 +396,18 @@ fn export_ui(ui: &mut Ui, form: &mut ExportForm, reg: &massif_core::Registry, cl
             ui.add(egui::Image::new(tex).fit_to_exact_size(size * scale).corner_radius(theme::TILE_RADIUS));
         }
         ui.vertical(|ui| {
-            ui.label(RichText::new("Picture").medium());
-            ui.label(RichText::new(if form.picture.is_some() { "Chosen" } else { "Made from what it holds" }).size(11.5).color(pal.weak));
+            ui.label(RichText::new(tr!("Picture")).medium());
+            ui.label(RichText::new(if form.picture.is_some() { tr!("Chosen") } else { tr!("Made from what it holds") }).size(11.5).color(pal.weak));
             ui.horizontal(|ui| {
-                if ui.button("Choose…").clicked()
-                    && let Some(path) = rfd::FileDialog::new().set_title("A picture for the pack").add_filter("Pictures", &["png", "jpg", "jpeg"]).pick_file()
+                if ui.button(tr!("Choose…")).clicked()
+                    && let Some(path) = rfd::FileDialog::new().set_title(tr!("A picture for the pack")).add_filter(tr!("Pictures"), &["png", "jpg", "jpeg"]).pick_file()
                 {
                     match std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| pack_file::picture_from_file(&b).map_err(|e| e.to_string())) {
                         Ok(png) => form.picture = Some(png),
                         Err(e) => form.error = Some(e),
                     }
                 }
-                if form.picture.is_some() && ui.button("Reset").clicked() {
+                if form.picture.is_some() && ui.button(tr!("Reset")).clicked() {
                     form.picture = None;
                 }
             });
@@ -421,10 +421,10 @@ fn export_ui(ui: &mut Ui, form: &mut ExportForm, reg: &massif_core::Registry, cl
     ui.horizontal(|ui| {
         ui.label(RichText::new(things(pack.len())).size(11.5).color(pal.weak));
         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-            if ui.add_enabled(ready, theme::primary_button(ui, "Export…")).clicked()
+            if ui.add_enabled(ready, theme::primary_button(ui, tr!("Export…"))).clicked()
                 && let Some(path) = rfd::FileDialog::new()
-                    .set_title("Export a pack")
-                    .add_filter("Massif pack", &[pack_file::EXTENSION])
+                    .set_title(tr!("Export a pack"))
+                    .add_filter(tr!("Massif pack"), &[pack_file::EXTENSION])
                     .set_file_name(format!("{}.{}", pack_file::file_stem(&pack.name), pack_file::EXTENSION))
                     .save_file()
             {
@@ -432,13 +432,13 @@ fn export_ui(ui: &mut Ui, form: &mut ExportForm, reg: &massif_core::Registry, cl
                 let bytes = pack.to_bytes();
                 match std::fs::write(&path, &bytes) {
                     Ok(()) => {
-                        *out = Some(Outcome::Say(format!("Exported the pack “{}” ({}, {})", pack.name, things(pack.len()), crate::panels::human(bytes.len() as u64)), false, Some(path)));
+                        *out = Some(Outcome::Say(tr!("Exported the pack “{name}” ({things}, {human})", name = pack.name, things = things(pack.len()), human = crate::panels::human(bytes.len() as u64)), false, Some(path)));
                         *close = true;
                     }
                     Err(e) => form.error = Some(format!("{}: {e}", path.display())),
                 }
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button(tr!("Cancel")).clicked() {
                 *close = true;
             }
         });
@@ -452,15 +452,15 @@ pub fn library_ui(ui: &mut Ui, library: &mut PackLibrary, needle: &str, tools: &
     let pal = Palette::of(ui);
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        ui.label(RichText::new(format!("{}  YOUR PACKS", theme::glyph(Icon::Package))).size(10.5).strong().color(pal.weak));
+        ui.label(RichText::new(tr!("{glyph}  YOUR PACKS", glyph = theme::glyph(Icon::Package))).size(10.5).strong().color(pal.weak));
         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-            if ui.small_button(theme::with_icon(Icon::Import, "Import…")).on_hover_text("Add a .massifpack file someone shared").clicked() {
+            if ui.small_button(theme::with_icon(Icon::Import, tr!("Import…"))).on_hover_text(tr!("Add a .massifpack file someone shared")).clicked() {
                 library.request = Some(Request::Import);
             }
         });
     });
     if library.packs.is_empty() {
-        ui.add(egui::Label::new(RichText::new("Packs others share are .massifpack files: import one here, from File ▸ Import Pack…, or drop it on the window. File ▸ Export Pack… makes one of the map's layers.").size(11.5).color(pal.weak)).wrap());
+        ui.add(egui::Label::new(RichText::new(tr!("Packs others share are .massifpack files: import one here, from File ▸ Import Pack…, or drop it on the window. File ▸ Export Pack… makes one of the map's layers.")).size(11.5).color(pal.weak)).wrap());
         return None;
     }
     let mut picked = None;
@@ -483,16 +483,16 @@ pub fn library_ui(ui: &mut Ui, library: &mut PackLibrary, needle: &str, tools: &
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 ui.add(egui::Label::new(RichText::new(&pack.name).size(12.5).medium()).truncate());
-                let by = if pack.author.is_empty() { "Unknown author".to_owned() } else { format!("by {}", pack.author) };
-                ui.add(egui::Label::new(RichText::new(format!("{by} · {}", things(pack.len()))).size(11.0).color(pal.weak)).truncate());
+                let by = if pack.author.is_empty() { tr!("Unknown author").to_owned() } else { tr!("by {author}", author = pack.author) };
+                ui.add(egui::Label::new(RichText::new(tr!("{by} · {things}", things = things(pack.len()), by)).size(11.0).color(pal.weak)).truncate());
             });
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                 ui.menu_button(theme::glyph(Icon::Ellipsis).to_string(), |ui| {
-                    if ui.button(theme::with_icon(Icon::FileDown, "Export a copy…")).clicked() {
+                    if ui.button(theme::with_icon(Icon::FileDown, tr!("Export a copy…"))).clicked() {
                         library.request = Some(Request::Share(p));
                         ui.close();
                     }
-                    if ui.button(theme::with_icon(Icon::Trash2, "Remove…")).clicked() {
+                    if ui.button(theme::with_icon(Icon::Trash2, tr!("Remove…"))).clicked() {
                         library.request = Some(Request::Remove(p));
                         ui.close();
                     }
@@ -520,11 +520,11 @@ pub fn library_ui(ui: &mut Ui, library: &mut PackLibrary, needle: &str, tools: &
                         ItemKind::Terrain => tools.tool == Tool::PaintTerrain && !tools.pattern.on && tools.terrain == n,
                     });
                     let what = match kind {
-                        ItemKind::Layer => "An object layer.",
-                        ItemKind::Cover => "A ground cover.",
-                        ItemKind::Terrain => "A terrain.",
+                        ItemKind::Layer => tr!("An object layer."),
+                        ItemKind::Cover => tr!("A ground cover."),
+                        ItemKind::Terrain => tr!("A terrain."),
                     };
-                    let tip = format!("{what} From “{}”.{}", pack.name, if found.is_some() { "\nOn the map already: a click picks it." } else { "" });
+                    let tip = tr!("{what} From “{name}”.{value}", name = pack.name, value = if found.is_some() { tr!("\nOn the map already: a click picks it.") } else { "" }, what);
                     let clicked = crate::packs::tile_ui(ui, tile_w, name, painted, found.is_some(), &tip, |painter, rect| picture(painter, rect, pack, *kind, *i, catalogue));
                     if clicked {
                         picked = Some((p, *kind, *i));
@@ -569,10 +569,10 @@ pub fn apply(pack: &Pack, kind: ItemKind, i: usize, tools: &mut ToolState, doc: 
     }
     .unwrap_or_default();
     if had {
-        format!("Painting with {name}")
+        tr!("Painting with {name}", name)
     } else {
         doc.mark_changed();
-        format!("Added {name} to the map's layers: paint it")
+        tr!("Added {name} to the map's layers: paint it", name)
     }
 }
 

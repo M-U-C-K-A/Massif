@@ -147,15 +147,15 @@ pub fn ui(ui: &mut Ui, state: &mut HelpState) -> bool {
     // The title, the search and a way out.
     ui.horizontal(|ui| {
         ui.label(RichText::new(theme::glyph(Icon::BookOpen).to_string()).size(17.0).color(pal.accent));
-        ui.label(RichText::new("Massif Help").size(17.0).medium());
+        ui.label(RichText::new(tr!("Massif Help")).size(17.0).medium());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let x = egui::Button::new(RichText::new(theme::glyph(Icon::X).to_string()).color(pal.weak)).fill(Color32::TRANSPARENT).stroke(egui::Stroke::NONE);
-            if ui.add(x).on_hover_text("Close (Esc)").clicked() {
+            if ui.add(x).on_hover_text(tr!("Close (Esc)")).clicked() {
                 close = true;
             }
             ui.add(
                 egui::TextEdit::singleline(&mut state.query)
-                    .hint_text(format!("{}  Search the help", theme::glyph(Icon::Search)))
+                    .hint_text(tr!("{glyph}  Search the help", glyph = theme::glyph(Icon::Search)))
                     .desired_width(240.0),
             );
         });
@@ -186,7 +186,7 @@ pub fn ui(ui: &mut Ui, state: &mut HelpState) -> bool {
                 }
             }
             if shown.is_empty() {
-                ui.label(RichText::new("Nothing about that.").size(12.0).color(pal.weak));
+                ui.label(RichText::new(tr!("Nothing about that.")).size(12.0).color(pal.weak));
             }
         });
         ui.add_space(8.0);

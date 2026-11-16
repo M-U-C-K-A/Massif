@@ -108,7 +108,7 @@ fn heading(ui: &mut Ui, title: &str) {
 fn entry(ui: &mut Ui, kind: EditorKind, here: bool) -> Response {
     let pal = Palette::of(ui);
     let (rect, response) = ui.allocate_exact_size(vec2(COLUMN_W, ROW_H), Sense::click());
-    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, here, kind.label()));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, here, crate::i18n::tr_name(kind.label())));
     let hot = response.hovered() || response.has_focus();
     let painter = ui.painter();
     if here || hot {
@@ -132,7 +132,7 @@ fn entry(ui: &mut Ui, kind: EditorKind, here: bool) -> Response {
         FontId::proportional(14.0),
         icon,
     );
-    let name = RichText::new(kind.label()).size(13.0);
+    let name = RichText::new(crate::i18n::tr_name(kind.label())).size(13.0);
     let name = if here { name.medium() } else { name };
     let room = rect.width() - TEXT_X - 8.0;
     let galley = WidgetText::from(name).into_galley(ui, Some(TextWrapMode::Truncate), room, TextStyle::Body);
@@ -151,7 +151,7 @@ fn about(ui: &mut Ui, kind: Option<EditorKind>, current: Option<EditorKind>, sho
     let y = rect.top() + 1.0 + (ABOUT_H - 1.0) / 2.0;
     let line = |ui: &Ui, text: RichText, room: f32| WidgetText::from(text.size(12.0)).into_galley(ui, Some(TextWrapMode::Truncate), room.max(0.0), TextStyle::Body);
     let Some(kind) = kind else {
-        let galley = line(ui, RichText::new("Drag an area by its title to move it, or onto another to swap them"), rect.width() - 20.0);
+        let galley = line(ui, RichText::new(tr!("Drag an area by its title to move it, or onto another to swap them")), rect.width() - 20.0);
         painter.galley(pos2(rect.left() + 10.0, y - galley.size().y / 2.0), galley, pal.weak);
         return;
     };
@@ -159,9 +159,9 @@ fn about(ui: &mut Ui, kind: Option<EditorKind>, current: Option<EditorKind>, sho
     // Where it shows, on the right.
     let mut right = rect.right() - 10.0;
     let status = if Some(kind) == current {
-        Some("This area")
+        Some(tr!("This area"))
     } else if shown.contains(&kind) {
-        Some("Shown in another area")
+        Some(tr!("Shown in another area"))
     } else {
         None
     };
@@ -173,10 +173,10 @@ fn about(ui: &mut Ui, kind: Option<EditorKind>, current: Option<EditorKind>, sho
     }
     // Its name, then what it is for.
     let left = rect.left() + TEXT_X;
-    let name = line(ui, RichText::new(kind.label()).medium(), right - left);
+    let name = line(ui, RichText::new(crate::i18n::tr_name(kind.label())).medium(), right - left);
     let after = left + name.size().x + 8.0;
     painter.galley(pos2(left, y - name.size().y / 2.0), name, pal.text);
-    let what = line(ui, RichText::new(kind.about()), right - after);
+    let what = line(ui, RichText::new(crate::i18n::tr_name(kind.about())), right - after);
     painter.galley(pos2(after, y - what.size().y / 2.0), what, pal.weak);
 }
 

@@ -267,8 +267,8 @@ impl Document {
     /// "World name · Surface", as shown in the title bar.
     pub fn title(&self) -> String {
         match &self.read_only {
-            Some(point) => format!("{} · {point} (read-only)", self.world.meta.name),
-            None => format!("{} · {}", self.world.meta.name, self.dimension().kind.label()),
+            Some(point) => tr!("{name} · {point} (read-only)", name = self.world.meta.name, point),
+            None => format!("{} · {}", self.world.meta.name, crate::i18n::tr_name(self.dimension().kind.label())),
         }
     }
 
@@ -278,7 +278,7 @@ impl Document {
             .as_ref()
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "unsaved".into())
+            .unwrap_or_else(|| tr!("unsaved").into())
     }
 
     pub fn active_kind(&self) -> LevelKind {
@@ -332,7 +332,7 @@ impl Document {
     pub fn restore_point(&mut self, index: usize) -> Option<String> {
         let point = self.world.points.get(index)?;
         let (name, then) = (point.name.clone(), point.world.clone());
-        self.history.restore_point(&mut self.world, &then, format!("Restore “{name}”"));
+        self.history.restore_point(&mut self.world, &then, tr!("Restore “{name}”", name));
         self.after_history();
         Some(name)
     }
@@ -379,12 +379,12 @@ impl Document {
     pub fn add_level(&mut self, kind: LevelKind) {
         let existing = self.dimension().levels.iter().filter(|l| l.kind == kind).count();
         let base = match kind {
-            LevelKind::Solid => "Overhang",
-            LevelKind::Carve => "Cave",
+            LevelKind::Solid => tr!("Overhang"),
+            LevelKind::Carve => tr!("Cave"),
             LevelKind::Ground => return,
         };
         let name = format!("{base} {}", existing + 1);
-        self.history.begin("Add level", self.dim);
+        self.history.begin(tr!("Add level"), self.dim);
         let index = self.history.edit(&mut self.world, 0).structure().add_level(name, kind);
         self.commit();
         self.active_level = index;
@@ -397,7 +397,7 @@ impl Document {
     pub fn auto_biome(&mut self, rules: &massif_core::auto::AutoRules) -> usize {
         let base = self.auto_base();
         let reader = massif_core::auto::Reader::new(rules, &self.world.registry, self.world.meta.sea_level).with_base(base);
-        self.history.begin("Auto biome", self.dim);
+        self.history.begin(tr!("Auto biome"), self.dim);
         let changed = massif_core::auto::biomes_over_the_map(&mut self.history.edit(&mut self.world, 0), &reader);
         self.commit();
         changed
@@ -409,7 +409,7 @@ impl Document {
     pub fn auto_paint(&mut self, rules: &massif_core::auto::AutoRules) -> usize {
         let base = self.auto_base();
         let reader = massif_core::auto::Reader::new(rules, &self.world.registry, self.world.meta.sea_level).with_base(base);
-        self.history.begin("Auto paint", self.dim);
+        self.history.begin(tr!("Auto paint"), self.dim);
         let changed = massif_core::auto::paint_over_the_map(&mut self.history.edit(&mut self.world, 0), &reader);
         self.commit();
         changed
@@ -419,7 +419,7 @@ impl Document {
         if index == 0 || index >= self.dimension().levels.len() {
             return;
         }
-        self.history.begin("Delete level", self.dim);
+        self.history.begin(tr!("Delete level"), self.dim);
         self.history.edit(&mut self.world, 0).structure().remove_level(index);
         self.commit();
         if self.active_level >= index {
@@ -437,7 +437,7 @@ impl Document {
             return;
         }
         let target = target as usize;
-        self.history.begin("Reorder levels", self.dim);
+        self.history.begin(tr!("Reorder levels"), self.dim);
         self.history.edit(&mut self.world, 0).structure().levels.swap(index, target);
         self.commit();
         if self.active_level == index {
@@ -451,7 +451,7 @@ impl Document {
         if self.dimension().levels[index].name == name {
             return;
         }
-        self.history.begin("Rename level", self.dim);
+        self.history.begin(tr!("Rename level"), self.dim);
         self.history.edit(&mut self.world, 0).structure().levels[index].name = name;
         self.commit();
     }

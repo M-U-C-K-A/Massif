@@ -201,14 +201,13 @@ pub struct VersionsUi {
 /// then its day.
 pub fn when(created: u64, now: u64) -> String {
     let secs = now.saturating_sub(created);
-    let (n, unit) = match secs {
-        0..60 => return "Just now".into(),
-        60..3600 => (secs / 60, "minute"),
-        3600..86400 => (secs / 3600, "hour"),
-        86400..604800 => (secs / 86400, "day"),
-        _ => return day(created),
-    };
-    format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
+    match secs {
+        0..60 => tr!("Just now").into(),
+        60..3600 => trn!("{n} minute ago", "{n} minutes ago", n = secs / 60),
+        3600..86400 => trn!("{n} hour ago", "{n} hours ago", n = secs / 3600),
+        86400..604800 => trn!("{n} day ago", "{n} days ago", n = secs / 86400),
+        _ => day(created),
+    }
 }
 
 /// "12 Nov 2026" (UTC).
@@ -332,21 +331,21 @@ impl VersionsUi {
             self.thumbs.retain(|k, _| alive.contains(k));
         }
         ui.horizontal(|ui| {
-            let label = if busy { "Saving a point…" } else { "Save point…" };
+            let label = if busy { tr!("Saving a point…") } else { tr!("Save point…") };
             if ui.add_enabled(!busy && doc.read_only.is_none(), theme::primary_button(ui, format!("{}  {label}", theme::glyph(Icon::BookmarkPlus)))).clicked() {
                 action = Some(Action::Make);
             }
         });
         ui.add_space(4.0);
         if let Some(name) = &doc.read_only {
-            crate::panels::hint(ui, &format!("This is “{name}”, open read-only: Save As… makes it a map of its own to change."));
+            crate::panels::hint(ui, &tr!("This is “{name}”, open read-only: Save As… makes it a map of its own to change.", name));
             return action;
         }
         if points.is_empty() {
-            crate::panels::hint(ui, "No save point yet. Save one before a big change, to come back to it or compare.");
+            crate::panels::hint(ui, tr!("No save point yet. Save one before a big change, to come back to it or compare."));
             return action;
         }
-        crate::panels::hint(ui, "Kept in the map's file. A point takes only the tiles changed since.");
+        crate::panels::hint(ui, tr!("Kept in the map's file. A point takes only the tiles changed since."));
         ui.add_space(2.0);
         let now = massif_core::versions::now();
         let comparing = self.compare.as_ref().map(|c| c.index);
@@ -379,17 +378,17 @@ impl VersionsUi {
                         ui.horizontal(|ui| {
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 ui.menu_button(theme::glyph(Icon::Ellipsis).to_string(), |ui| {
-                                    if ui.button(format!("{}  Open as a copy", theme::glyph(Icon::Copy))).clicked() {
+                                    if ui.button(tr!("{glyph}  Open as a copy", glyph = theme::glyph(Icon::Copy))).clicked() {
                                         action = Some(Action::Open { index, read_only: false });
                                     }
-                                    if ui.button(format!("{}  Open read-only", theme::glyph(Icon::Lock))).clicked() {
+                                    if ui.button(tr!("{glyph}  Open read-only", glyph = theme::glyph(Icon::Lock))).clicked() {
                                         action = Some(Action::Open { index, read_only: true });
                                     }
                                     ui.separator();
-                                    if ui.button(format!("{}  Rename…", theme::glyph(Icon::Pencil))).clicked() {
+                                    if ui.button(tr!("{glyph}  Rename…", glyph = theme::glyph(Icon::Pencil))).clicked() {
                                         action = Some(Action::Rename(index));
                                     }
-                                    if ui.button(format!("{}  Delete…", theme::glyph(Icon::Trash2))).clicked() {
+                                    if ui.button(tr!("{glyph}  Delete…", glyph = theme::glyph(Icon::Trash2))).clicked() {
                                         action = Some(Action::Delete(index));
                                     }
                                 });
@@ -401,12 +400,12 @@ impl VersionsUi {
                         ui.label(RichText::new(when(point.created, now)).size(11.0).color(pal.weak));
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 4.0;
-                            if ui.small_button("Restore").on_hover_text("Put the map back as it was then, as one step to undo").clicked() {
+                            if ui.small_button(tr!("Restore")).on_hover_text(tr!("Put the map back as it was then, as one step to undo")).clicked() {
                                 action = Some(Action::Restore(index));
                             }
-                            let label = if active { "Stop" } else { "Compare" };
+                            let label = if active { tr!("Stop") } else { tr!("Compare") };
                             let r = ui.small_button(label);
-                            let r = if active { r.on_hover_text("Stop comparing") } else { r.on_hover_text("Show on the 2D map where the map differs from this point") };
+                            let r = if active { r.on_hover_text(tr!("Stop comparing")) } else { r.on_hover_text(tr!("Show on the 2D map where the map differs from this point")) };
                             if r.clicked() {
                                 action = Some(Action::Compare((!active).then_some(index)));
                             }
@@ -428,11 +427,11 @@ fn compare_legend(ui: &mut Ui, diff: Option<&Diff>) {
     let pal = Palette::of(ui);
     ui.add_space(4.0);
     let Some(diff) = diff else {
-        ui.label(RichText::new("Comparing…").size(11.0).color(pal.weak));
+        ui.label(RichText::new(tr!("Comparing…")).size(11.0).color(pal.weak));
         return;
     };
     if diff.is_empty() {
-        ui.label(RichText::new("The map is the same as this point.").size(11.0).color(pal.weak));
+        ui.label(RichText::new(tr!("The map is the same as this point.")).size(11.0).color(pal.weak));
         return;
     }
     let swatch = |ui: &mut Ui, color: Color32, text: String| {
@@ -442,22 +441,22 @@ fn compare_legend(ui: &mut Ui, diff: Option<&Diff>) {
             ui.label(RichText::new(text).size(11.0).color(pal.weak));
         });
     };
-    let blocks = |n: f32| if n.round() as i32 == 1 { "1 block".to_owned() } else { format!("{:.0} blocks", n.round()) };
+    let blocks = |n: f32| trn!("{n} block", "{n} blocks", n = n.round() as i64);
     if diff.raised + diff.lowered > 0 {
         let mut parts = Vec::new();
         if diff.raised > 0 {
-            parts.push(format!("{} columns higher now (up to {})", count(diff.raised), blocks(diff.most_up)));
+            parts.push(tr!("{n} columns higher now (up to {blocks})", n = count(diff.raised), blocks = blocks(diff.most_up)));
         }
         if diff.lowered > 0 {
-            parts.push(format!("{} lower (up to {})", count(diff.lowered), blocks(diff.most_down)));
+            parts.push(tr!("{n} lower (up to {blocks})", n = count(diff.lowered), blocks = blocks(diff.most_down)));
         }
         swatch(ui, pal.accent, parts.join(", "));
     }
     if diff.painted > 0 {
         let grey = if pal.dark { Color32::from_gray(200) } else { Color32::from_gray(60) };
-        swatch(ui, grey.gamma_multiply(0.45), format!("{} columns painted differently", count(diff.painted)));
+        swatch(ui, grey.gamma_multiply(0.45), tr!("{n} columns painted differently", n = count(diff.painted)));
     }
-    ui.label(RichText::new(format!("Over {} tiles, drawn on the 2D map.", count(diff.tiles as u64))).size(11.0).color(pal.weak));
+    ui.label(RichText::new(tr!("Over {n} tiles, drawn on the 2D map.", n = count(diff.tiles as u64))).size(11.0).color(pal.weak));
 }
 
 /// 12,345.

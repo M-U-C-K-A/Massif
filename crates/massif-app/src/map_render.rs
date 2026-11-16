@@ -298,13 +298,13 @@ impl MapMode {
         MapMode::Relief,
     ];
 
-    pub const fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            MapMode::Terrain => "Terrain",
-            MapMode::Height => "Height",
-            MapMode::Slope => "Slope",
-            MapMode::Biome => "Biome",
-            MapMode::Relief => "Relief",
+            MapMode::Terrain => tr!("Terrain"),
+            MapMode::Height => tr!("Height"),
+            MapMode::Slope => tr!("Slope"),
+            MapMode::Biome => tr!("Biome"),
+            MapMode::Relief => tr!("Relief"),
         }
     }
 }

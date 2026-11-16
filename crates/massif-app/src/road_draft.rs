@@ -16,9 +16,9 @@ const HANDLE_REACH: f32 = 11.0;
 
 /// The surfaces offered first, from the material mixes: added to the map
 /// when a road is built with one.
-pub const SURFACES: [&str; 5] = ["Trodden path", "Gravel mix", "Cobblestone mix", "Stone bricks", "Wooden deck"];
+pub const SURFACES: [&str; 5] = [tn!("Trodden path"), tn!("Gravel mix"), tn!("Cobblestone mix"), tn!("Stone bricks"), tn!("Wooden deck")];
 /// The decks of bridges.
-pub const DECKS: [&str; 2] = ["Wooden deck", "Stone bricks"];
+pub const DECKS: [&str; 2] = [tn!("Wooden deck"), tn!("Stone bricks")];
 
 /// What a road is paved with.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -54,7 +54,7 @@ impl Default for RoadSettings {
             width: 5.0,
             banks: 6.0,
             slope: 12.0,
-            surface: RoadSurface::Terrain("Trodden path".into()),
+            surface: RoadSurface::Terrain(tn!("Trodden path").into()),
             bridges: true,
             deck: DECKS[0].into(),
         }
@@ -159,15 +159,15 @@ impl RoadDraft {
     /// Its length, steepest climb and bridges, in words.
     pub fn summary(&self) -> String {
         if self.points.len() < 2 {
-            return "Click where the road goes next".to_owned();
+            return tr!("Click where the road goes next").to_owned();
         }
-        let mut s = format!("{:.0} blocks · steepest {:.0}%", self.plan.length(), self.plan.steepest * 100.0);
+        let mut s = tr!("{length:.0} blocks · steepest {value:.0}%", length = self.plan.length(), value = self.plan.steepest * 100.0);
         let bridged = self.plan.bridged();
         if bridged >= 1.0 {
-            s += &format!(" · {bridged:.0} on bridges");
+            s += &tr!(" · {bridged:.0} on bridges", bridged);
         }
         if !self.plan.within {
-            s += " · too steep between bridges";
+            s += tr!(" · too steep between bridges");
         }
         s
     }
@@ -259,7 +259,7 @@ pub fn follow(doc: &mut Document, tools: &mut ToolState, at: Option<(f32, f32)>,
         build(doc, tools)
     } else if escape {
         tools.road_draft = None;
-        Some("Road dropped".into())
+        Some(tr!("Road dropped").into())
     } else if delete {
         let k = draft.picked.unwrap_or(draft.points.len().saturating_sub(1));
         draft.remove(k);
@@ -280,7 +280,7 @@ pub fn build(doc: &mut Document, tools: &mut ToolState) -> Feedback {
     draft.plan(doc, &tools.road);
     if draft.points.len() < 2 || draft.plan.course.len() < 3 {
         tools.road_draft = Some(draft);
-        let note = "A road needs two points at least".to_owned();
+        let note = tr!("A road needs two points at least").to_owned();
         tools.road_note = Some(note.clone());
         return Some(note);
     }
@@ -291,12 +291,12 @@ pub fn build(doc: &mut Document, tools: &mut ToolState) -> Feedback {
         None => surface,
     };
     let filter = tools.filter.clone();
-    doc.history.begin("Road", doc.dim);
+    doc.history.begin(tr!("Road"), doc.dim);
     let report = massif_core::road::build_road(&mut doc.history, &mut doc.world, doc.dim, &draft.plan, &spec, &paint, Some(&filter));
     doc.commit();
-    let mut note = format!("Built a road of {:.0} blocks · {:.0} blocks cut, {:.0} filled", draft.plan.length(), report.cut, report.fill);
+    let mut note = tr!("Built a road of {length:.0} blocks · {cut:.0} blocks cut, {fill:.0} filled", length = draft.plan.length(), cut = report.cut, fill = report.fill);
     if report.deck > 0 {
-        note += &format!(" · {:.0} on bridges", draft.plan.bridged());
+        note += &tr!(" · {bridged:.0} on bridges", bridged = draft.plan.bridged());
     }
     tools.road_note = Some(note.clone());
     Some(note)
@@ -307,7 +307,7 @@ pub fn build(doc: &mut Document, tools: &mut ToolState) -> Feedback {
 #[allow(clippy::too_many_arguments)]
 pub fn draw(ui: &mut Ui, painter: &egui::Painter, canvas: Rect, id: egui::Id, screen: &dyn Fn((f32, f32)) -> Pos2, zoom: f32, hover: Option<Pos2>, doc: &mut Document, tools: &mut ToolState, feedback: &mut Option<String>) {
     let Some(draft) = &tools.road_draft else {
-        hint(painter, canvas, "Click on the map: where the road starts");
+        hint(painter, canvas, tr!("Click on the map: where the road starts"));
         return;
     };
     let settings = &tools.road;
@@ -372,7 +372,7 @@ pub fn draw(ui: &mut Ui, painter: &egui::Painter, canvas: Rect, id: egui::Id, sc
         Some(true) => *feedback = build(doc, tools),
         Some(false) => {
             tools.road_draft = None;
-            *feedback = Some("Road dropped".into());
+            *feedback = Some(tr!("Road dropped").into());
         }
         None => {}
     }
@@ -393,9 +393,9 @@ fn hint(painter: &egui::Painter, canvas: Rect, text: &str) {
 fn bar(ui: &mut Ui, painter: &egui::Painter, canvas: Rect, id: egui::Id, summary: &str, ready: bool) -> Option<bool> {
     let font = FontId::proportional(12.5);
     let text = painter.layout_no_wrap(summary.to_owned(), font.clone(), Color32::from_gray(225));
-    let go = painter.layout_no_wrap("Build road".to_owned(), font.clone(), Color32::WHITE);
+    let go = painter.layout_no_wrap(tr!("Build road").to_owned(), font.clone(), Color32::WHITE);
     let enter = painter.layout_no_wrap("⏎".to_owned(), FontId::proportional(11.0), Color32::from_white_alpha(170));
-    let cancel = painter.layout_no_wrap("Cancel".to_owned(), font, Color32::from_gray(210));
+    let cancel = painter.layout_no_wrap(tr!("Cancel").to_owned(), font, Color32::from_gray(210));
     let esc = painter.layout_no_wrap("esc".to_owned(), FontId::proportional(10.5), Color32::from_gray(130));
     let (pad, gap, h) = (12.0, 8.0, 28.0);
     let go_w = go.size().x + enter.size().x + 26.0;
@@ -443,19 +443,19 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
     let pal = Palette::of(ui);
     let r = &mut tools.road;
     well(ui, |ui| {
-        row(ui, "Width", |ui| {
-            ui.add(Field::new(&mut r.width, 1.0..=64.0).suffix(" blocks").max_decimals(0).width(120.0));
+        row(ui, tr!("Width"), |ui| {
+            ui.add(Field::new(&mut r.width, 1.0..=64.0).suffix(tr!(" blocks")).max_decimals(0).width(120.0));
         });
-        row(ui, "Banks", |ui| {
-            ui.add(Field::new(&mut r.banks, 0.0..=64.0).suffix(" blocks").max_decimals(0).width(120.0));
+        row(ui, tr!("Banks"), |ui| {
+            ui.add(Field::new(&mut r.banks, 0.0..=64.0).suffix(tr!(" blocks")).max_decimals(0).width(120.0));
         });
-        row(ui, "Steepest slope", |ui| {
+        row(ui, tr!("Steepest slope"), |ui| {
             ui.add(Field::new(&mut r.slope, 1.0..=100.0).suffix("%").max_decimals(0).width(120.0));
         });
-        row(ui, "Surface", |ui| {
+        row(ui, tr!("Surface"), |ui| {
             let shown = match &r.surface {
-                RoadSurface::Keep => "As it is".to_owned(),
-                RoadSurface::Noise => "Paint tool's noise".to_owned(),
+                RoadSurface::Keep => tr!("As it is").to_owned(),
+                RoadSurface::Noise => tr!("Paint tool's noise").to_owned(),
                 RoadSurface::Terrain(name) => name.clone(),
             };
             combo("road surface").selected_text(shown).width(150.0).show_ui(ui, |ui| {
@@ -467,8 +467,8 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
                 for name in SURFACES {
                     pick(ui, RoadSurface::Terrain(name.into()), name);
                 }
-                pick(ui, RoadSurface::Noise, "Paint tool's noise");
-                pick(ui, RoadSurface::Keep, "As it is");
+                pick(ui, RoadSurface::Noise, tr!("Paint tool's noise"));
+                pick(ui, RoadSurface::Keep, tr!("As it is"));
                 ui.separator();
                 for t in &doc.world.registry.terrains {
                     if !SURFACES.contains(&t.name.as_str()) {
@@ -479,11 +479,11 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
         });
     });
     ui.add_space(6.0);
-    checkbox(ui, &mut r.bridges, "Bridges over water");
+    checkbox(ui, &mut r.bridges, tr!("Bridges over water"));
     if r.bridges {
         ui.add_space(4.0);
         well(ui, |ui| {
-            row(ui, "Deck", |ui| {
+            row(ui, tr!("Deck"), |ui| {
                 combo("bridge deck").selected_text(r.deck.clone()).width(150.0).show_ui(ui, |ui| {
                     for d in DECKS {
                         if ui.selectable_label(r.deck == d, d).clicked() {
@@ -493,32 +493,32 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
                 });
             });
         });
-        hint(ui, "A deck a block over the water, on a level of its own (Bridges); the water stays under it.");
+        hint(ui, tr!("A deck a block over the water, on a level of its own (Bridges); the water stays under it."));
     } else {
-        hint(ui, "Over water, the road is built up a block over it.");
+        hint(ui, tr!("Over water, the road is built up a block over it."));
     }
     if tools.filter.is_active() {
-        hint(ui, "The brush filters choose where its surface is painted.");
+        hint(ui, tr!("The brush filters choose where its surface is painted."));
     }
     if doc.selection().is_some() {
-        hint(ui, "It changes only what is selected.");
+        hint(ui, tr!("It changes only what is selected."));
     }
 
-    section(ui, Icon::Signpost, "Road");
+    section(ui, Icon::Signpost, tr!("Road"));
     if let Some(draft) = &mut tools.road_draft {
         draft.plan(doc, &tools.road);
     }
     match &tools.road_draft {
-        None => hint(ui, "Click on the map where the road starts, then where it goes."),
+        None => hint(ui, tr!("Click on the map where the road starts, then where it goes.")),
         Some(draft) => {
             ui.label(egui::RichText::new(draft.summary()).strong().color(pal.text));
-            hint(ui, "Drag a point to move it · drag the road to add one · right-click or Delete: take one off.");
+            hint(ui, tr!("Drag a point to move it · drag the road to add one · right-click or Delete: take one off."));
             let ready = draft.points.len() >= 2;
             ui.horizontal(|ui| {
-                if ui.add_enabled(ready, egui::Button::new(theme::with_icon(Icon::Signpost, "Build road"))).on_hover_text("Enter").clicked() {
+                if ui.add_enabled(ready, egui::Button::new(theme::with_icon(Icon::Signpost, tr!("Build road")))).on_hover_text(tr!("Enter")).clicked() {
                     crate::road_draft::build(doc, tools);
                 }
-                if ui.button("Cancel").on_hover_text("Esc").clicked() {
+                if ui.button(tr!("Cancel")).on_hover_text(tr!("Esc")).clicked() {
                     tools.road_draft = None;
                 }
             });

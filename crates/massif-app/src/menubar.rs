@@ -137,6 +137,11 @@ mod mac {
         about: Retained<NSMenuItem>,
         settings: Retained<NSMenuItem>,
         quit: Retained<NSMenuItem>,
+        /// The system's items of the app menu, named in the language shown.
+        services: Retained<NSMenuItem>,
+        hide: Retained<NSMenuItem>,
+        hide_others: Retained<NSMenuItem>,
+        show_all: Retained<NSMenuItem>,
         /// File, Edit, View and Help.
         menus: Vec<Retained<ShowOnly>>,
         /// What each item picks, at its tag.
@@ -197,16 +202,19 @@ mod mac {
             let app_menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), ns_string!("Massif"));
             app_menu.setAutoenablesItems(false);
             let separator = || NSMenuItem::separatorItem(mtm);
+            let hide = system(ns_string!("Hide Massif"), sel!(hide:), ns_string!("h"), NSEventModifierFlags::Command);
+            let hide_others = system(ns_string!("Hide Others"), sel!(hideOtherApplications:), ns_string!("h"), NSEventModifierFlags::Command | NSEventModifierFlags::Option);
+            let show_all = system(ns_string!("Show All"), sel!(unhideAllApplications:), ns_string!(""), NSEventModifierFlags::empty());
             for item in [
                 about.clone(),
                 separator(),
                 settings.clone(),
                 separator(),
-                services_item,
+                services_item.clone(),
                 separator(),
-                system(ns_string!("Hide Massif"), sel!(hide:), ns_string!("h"), NSEventModifierFlags::Command),
-                system(ns_string!("Hide Others"), sel!(hideOtherApplications:), ns_string!("h"), NSEventModifierFlags::Command | NSEventModifierFlags::Option),
-                system(ns_string!("Show All"), sel!(unhideAllApplications:), ns_string!(""), NSEventModifierFlags::empty()),
+                hide.clone(),
+                hide_others.clone(),
+                show_all.clone(),
                 separator(),
                 quit.clone(),
             ] {
@@ -224,6 +232,10 @@ mod mac {
                 about,
                 settings,
                 quit,
+                services: services_item,
+                hide,
+                hide_others,
+                show_all,
                 menus: Vec::new(),
                 commands: Vec::new(),
                 shown: Vec::new(),
@@ -242,7 +254,10 @@ mod mac {
                 }
             }
             // As Mac apps name it, with its key.
-            self.quit.setTitle(ns_string!("Quit Massif"));
+            self.quit.setTitle(&NSString::from_str(tr!("Quit Massif")));
+            for (item, title) in [(&self.services, tr!("Services")), (&self.hide, tr!("Hide Massif")), (&self.hide_others, tr!("Hide Others")), (&self.show_all, tr!("Show All"))] {
+                item.setTitle(&NSString::from_str(title));
+            }
             self.quit.setKeyEquivalent(ns_string!("q"));
             self.quit.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
             let titles: Vec<String> = self.menus.iter().map(|m| m.title().to_string()).collect();
@@ -260,7 +275,7 @@ mod mac {
                     self.menus.push(native);
                 }
                 // The Help menu gets the system's search of the menus.
-                let help: Option<&NSMenu> = self.menus.iter().find(|m| m.title().to_string() == "Help").map(|m| -> &NSMenu { m });
+                let help: Option<&NSMenu> = self.menus.iter().find(|m| m.title().to_string() == tr!("Help")).map(|m| -> &NSMenu { m });
                 NSApplication::sharedApplication(mtm).setHelpMenu(help);
             }
             for (native, menu) in self.menus.clone().iter().zip(&mac.menus) {

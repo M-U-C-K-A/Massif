@@ -204,10 +204,10 @@ impl RealForm {
         self.take_search();
         ui.horizontal(|ui| {
             ui.label(RichText::new(theme::glyph(Icon::Earth).to_string()).size(17.0).color(pal.accent));
-            let title = if self.new_world() { "A new world from a real place" } else { "Relief of a real place" };
+            let title = if self.new_world() { tr!("A new world from a real place") } else { tr!("Relief of a real place") };
             ui.label(RichText::new(title).size(16.0).bold());
         });
-        ui.add(egui::Label::new(RichText::new("The heights of a place on the Earth, ocean floors included, at the scale chosen: the ground, the sea and the automatic paint.").size(12.0).color(pal.weak)).wrap());
+        ui.add(egui::Label::new(RichText::new(tr!("The heights of a place on the Earth, ocean floors included, at the scale chosen: the ground, the sea and the automatic paint.")).size(12.0).color(pal.weak)).wrap());
         ui.add_space(10.0);
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
@@ -220,14 +220,14 @@ impl RealForm {
             ui.vertical(|ui| {
                 ui.set_width(PICKER.x);
                 if self.online {
-                    ui.label(RichText::new("Where").size(11.5).color(pal.weak).medium());
+                    ui.label(RichText::new(tr!("Where")).size(11.5).color(pal.weak).medium());
                     ui.add_space(2.0);
                     self.picker(ui);
-                    let hint = if self.store.offline() { "Offline: only the places downloaded before show." } else { "Drag to move, scroll to zoom." };
+                    let hint = if self.store.offline() { tr!("Offline: only the places downloaded before show.") } else { tr!("Drag to move, scroll to zoom.") };
                     ui.label(RichText::new(hint).size(11.0).color(pal.weak));
                     ui.add_space(6.0);
                 }
-                ui.label(RichText::new("The ground it makes").size(11.5).color(pal.weak).medium());
+                ui.label(RichText::new(tr!("The ground it makes")).size(11.5).color(pal.weak).medium());
                 ui.add_space(2.0);
                 self.preview(ui);
             });
@@ -237,19 +237,19 @@ impl RealForm {
         ui.add_space(6.0);
         let (w, d) = (self.area.width, self.area.depth);
         let over = match self.target {
-            Target::NewWorld => format!("A world of {w} × {d} blocks, centred on the origin, its terrains painted by the automatic paint."),
-            Target::Map { selected: true, .. } => format!("Into the selection, by its weight ({w} × {d} blocks): its heights, its sea and the automatic paint; one step to undo."),
-            Target::Map { .. } => format!("Over the whole map ({w} × {d} blocks): its heights, its sea and the automatic paint; one step to undo."),
+            Target::NewWorld => tr!("A world of {w} × {d} blocks, centred on the origin, its terrains painted by the automatic paint.", w, d),
+            Target::Map { selected: true, .. } => tr!("Into the selection, by its weight ({w} × {d} blocks): its heights, its sea and the automatic paint; one step to undo.", w, d),
+            Target::Map { .. } => tr!("Over the whole map ({w} × {d} blocks): its heights, its sea and the automatic paint; one step to undo.", w, d),
         };
         ui.label(RichText::new(over).size(11.5).color(pal.weak));
         ui.add_space(10.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let ready = self.online || self.file.is_some();
-            let label = if self.new_world() { "Make the world" } else { "Apply" };
+            let label = if self.new_world() { tr!("Make the world") } else { tr!("Apply") };
             if ui.add_enabled(ready, theme::primary_button(ui, label)).clicked() {
                 choice = Choice::Make(Box::new(self.job()));
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button(tr!("Cancel")).clicked() {
                 choice = Choice::Close;
             }
         });
@@ -260,7 +260,7 @@ impl RealForm {
     }
 
     pub fn job(&self) -> RealJob {
-        let name = if self.name.trim().is_empty() { "Real place".to_owned() } else { self.name.trim().to_owned() };
+        let name = if self.name.trim().is_empty() { tr!("Real place").to_owned() } else { self.name.trim().to_owned() };
         RealJob {
             name,
             area: self.area,
@@ -279,10 +279,10 @@ impl RealForm {
             ui.label(RichText::new(text).size(11.5).color(pal.weak).medium());
             ui.add_space(4.0);
         };
-        head(ui, "Heights from");
+        head(ui, tr!("Heights from"));
         well(ui, |ui| {
-            row(ui, "Source", |ui| {
-                if let Some(k) = button_group(ui, "real source", &["Terrain Tiles", "A file"], &[self.online, !self.online]) {
+            row(ui, tr!("Source"), |ui| {
+                if let Some(k) = button_group(ui, "real source", &[tr!("Terrain Tiles"), tr!("A file")], &[self.online, !self.online]) {
                     self.online = k == 0;
                     self.picture = None;
                 }
@@ -293,25 +293,25 @@ impl RealForm {
         });
         ui.add_space(10.0);
         if self.online {
-            head(ui, "Place");
+            head(ui, tr!("Place"));
             well(ui, |ui| self.place_rows(ui));
             ui.add_space(10.0);
         }
-        head(ui, "Size and scale");
+        head(ui, tr!("Size and scale"));
         well(ui, |ui| self.scale_rows(ui));
         ui.add_space(10.0);
-        head(ui, "Heights");
+        head(ui, tr!("Heights"));
         well(ui, |ui| self.height_rows(ui));
     }
 
     fn file_rows(&mut self, ui: &mut Ui) {
         let pal = Palette::of(ui);
-        row(ui, "File", |ui| {
-            let name = self.file.as_ref().map_or("None".to_owned(), |f| crate::jobs::display_name(&f.path));
-            if ui.button(theme::with_icon(Icon::FolderOpen, "Choose…")).clicked()
+        row(ui, tr!("File"), |ui| {
+            let name = self.file.as_ref().map_or(tr!("None").to_owned(), |f| crate::jobs::display_name(&f.path));
+            if ui.button(theme::with_icon(Icon::FolderOpen, tr!("Choose…"))).clicked()
                 && let Some(path) = rfd::FileDialog::new()
-                    .set_title("A file of heights")
-                    .add_filter("Heights", &["tif", "tiff", "png", "r16", "r32", "raw"])
+                    .set_title(tr!("A file of heights"))
+                    .add_filter(tr!("Heights"), &["tif", "tiff", "png", "r16", "r32", "raw"])
                     .pick_file()
             {
                 match FileSource::read(path) {
@@ -323,27 +323,27 @@ impl RealForm {
                             self.fit_file();
                         }
                     }
-                    Err(e) => self.note = Some(format!("Could not read the file: {e}")),
+                    Err(e) => self.note = Some(tr!("Could not read the file: {e}", e)),
                 }
             }
             ui.label(RichText::new(name).size(12.0).color(pal.weak));
         });
         let new_world = self.new_world();
         if let Some(f) = &mut self.file {
-            row(ui, "Metres a pixel", |ui| {
+            row(ui, tr!("Metres a pixel"), |ui| {
                 ui.add(Field::new(&mut f.metres_per_px, 0.1..=10_000.0).logarithmic(true).max_decimals(2).suffix(" m"));
             });
             if !f.tiff {
-                row(ui, "Black is", |ui| {
+                row(ui, tr!("Black is"), |ui| {
                     ui.add(Field::new(&mut f.low, -11_000.0..=9_000.0).max_decimals(0).suffix(" m"));
                 });
-                row(ui, "White is", |ui| {
+                row(ui, tr!("White is"), |ui| {
                     ui.add(Field::new(&mut f.high, -11_000.0..=9_000.0).max_decimals(0).suffix(" m"));
                 });
             }
             let (e, s) = (f.map.width as f64 * f.metres_per_px, f.map.height as f64 * f.metres_per_px);
-            ui.label(RichText::new(format!("{} × {} pixels, {} × {}", f.map.width, f.map.height, distance(e), distance(s))).size(11.0).color(pal.weak));
-            if new_world && ui.small_button("Size the world to the file").clicked() {
+            ui.label(RichText::new(tr!("{width} × {height} pixels, {distance} × {distance2}", width = f.map.width, height = f.map.height, distance = distance(e), distance2 = distance(s))).size(11.0).color(pal.weak));
+            if new_world && ui.small_button(tr!("Size the world to the file")).clicked() {
                 self.fit_file();
             }
         }
@@ -364,12 +364,12 @@ impl RealForm {
     fn place_rows(&mut self, ui: &mut Ui) {
         let pal = Palette::of(ui);
         ui.horizontal(|ui| {
-            let edit = ui.add(egui::TextEdit::singleline(&mut self.query).hint_text("A place, or latitude, longitude").desired_width(ui.available_width() - 34.0));
+            let edit = ui.add(egui::TextEdit::singleline(&mut self.query).hint_text(tr!("A place, or latitude, longitude")).desired_width(ui.available_width() - 34.0));
             let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let busy = self.searching.is_some();
             if busy {
                 crate::loader::loader(ui, 16.0);
-            } else if (ui.small_button(theme::glyph(Icon::Search).to_string()).on_hover_text("Search").clicked() || enter) && !self.query.trim().is_empty() {
+            } else if (ui.small_button(theme::glyph(Icon::Search).to_string()).on_hover_text(tr!("Search")).clicked() || enter) && !self.query.trim().is_empty() {
                 self.search();
             }
         });
@@ -393,20 +393,20 @@ impl RealForm {
         if let Some(note) = &self.note {
             ui.label(RichText::new(note).size(11.5).color(pal.weak));
         }
-        row(ui, "Latitude", |ui| {
+        row(ui, tr!("Latitude"), |ui| {
             ui.add(Field::new(&mut self.area.lat, -85.0..=85.0).max_decimals(5).suffix("°"));
         });
-        row(ui, "Longitude", |ui| {
+        row(ui, tr!("Longitude"), |ui| {
             ui.add(Field::new(&mut self.area.lon, -180.0..=180.0).max_decimals(5).suffix("°"));
         });
         // The bounds, to read or to type: the area follows them.
         let b = self.area.bounds();
         let mut nb = b;
-        row(ui, "North, south", |ui| {
+        row(ui, tr!("North, south"), |ui| {
             ui.add(Field::new(&mut nb.south, -85.0..=85.0).max_decimals(4).width(76.0).suffix("°"));
             ui.add(Field::new(&mut nb.north, -85.0..=85.0).max_decimals(4).width(76.0).suffix("°"));
         });
-        row(ui, "West, east", |ui| {
+        row(ui, tr!("West, east"), |ui| {
             ui.add(Field::new(&mut nb.east, -180.0..=180.0).max_decimals(4).width(76.0).suffix("°"));
             ui.add(Field::new(&mut nb.west, -180.0..=180.0).max_decimals(4).width(76.0).suffix("°"));
         });
@@ -449,7 +449,7 @@ impl RealForm {
         match rx.try_recv() {
             Ok(Ok(places)) => {
                 self.searching = None;
-                self.note = places.is_empty().then(|| "No place of that name.".to_owned());
+                self.note = places.is_empty().then(|| tr!("No place of that name.").to_owned());
                 if places.len() == 1 {
                     let p = &places[0];
                     self.go_to(p.lat, p.lon);
@@ -462,7 +462,7 @@ impl RealForm {
             }
             Ok(Err(e)) => {
                 self.searching = None;
-                self.note = Some(format!("The search did not answer ({e}): type the latitude and longitude instead."));
+                self.note = Some(tr!("The search did not answer ({e}): type the latitude and longitude instead.", e));
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
             Err(_) => self.searching = None,
@@ -473,56 +473,56 @@ impl RealForm {
         let pal = Palette::of(ui);
         if self.new_world() {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Name").size(12.5));
-                ui.add(egui::TextEdit::singleline(&mut self.name).hint_text("Real place").desired_width(f32::INFINITY));
+                ui.label(RichText::new(tr!("Name")).size(12.5));
+                ui.add(egui::TextEdit::singleline(&mut self.name).hint_text(tr!("Real place")).desired_width(f32::INFINITY));
             });
-            row(ui, "Width", |ui| {
-                ui.add(Field::new(&mut self.area.width, 128..=16_384).suffix(" blocks"));
+            row(ui, tr!("Width"), |ui| {
+                ui.add(Field::new(&mut self.area.width, 128..=16_384).suffix(tr!(" blocks")));
             });
-            row(ui, "Depth", |ui| {
-                ui.add(Field::new(&mut self.area.depth, 128..=16_384).suffix(" blocks"));
+            row(ui, tr!("Depth"), |ui| {
+                ui.add(Field::new(&mut self.area.depth, 128..=16_384).suffix(tr!(" blocks")));
             });
         }
-        row(ui, "Blocks a metre", |ui| {
+        row(ui, tr!("Blocks a metre"), |ui| {
             ui.add(Field::new(&mut self.area.blocks_per_metre, MIN_SCALE..=MAX_SCALE).logarithmic(true).max_decimals(3));
         });
         let block = 1.0 / self.area.blocks_per_metre;
         let (e, s) = self.area.metres();
-        ui.label(RichText::new(format!("A block is {}; the map covers {} × {}.", distance(block), distance(e), distance(s))).size(11.0).color(pal.weak));
+        ui.label(RichText::new(tr!("A block is {distance}; the map covers {distance2} × {distance3}.", distance = distance(block), distance2 = distance(e), distance3 = distance(s))).size(11.0).color(pal.weak));
     }
 
     fn height_rows(&mut self, ui: &mut Ui) {
         let pal = Palette::of(ui);
         let (lo, hi) = self.limits();
         let v = &mut self.vertical;
-        row(ui, "Exaggeration", |ui| {
-            ui.add(Field::new(&mut v.exaggeration, 0.1..=10.0).max_decimals(2).suffix("×")).on_hover_text("How many times as high the relief stands as at the scale across");
+        row(ui, tr!("Exaggeration"), |ui| {
+            ui.add(Field::new(&mut v.exaggeration, 0.1..=10.0).max_decimals(2).suffix("×")).on_hover_text(tr!("How many times as high the relief stands as at the scale across"));
         });
-        row(ui, "Sea level", |ui| {
+        row(ui, tr!("Sea level"), |ui| {
             ui.add(Field::new(&mut v.sea_level, v.low + 1..=v.high - 1).suffix(" y"));
         });
-        row(ui, "Real height there", |ui| {
-            ui.add(Field::new(&mut v.datum, -500.0..=6_000.0).max_decimals(0).suffix(" m")).on_hover_text("The real height that stands at the sea level: 0 for the sea's; higher for a place inland, its valleys then under water below it");
+        row(ui, tr!("Real height there"), |ui| {
+            ui.add(Field::new(&mut v.datum, -500.0..=6_000.0).max_decimals(0).suffix(" m")).on_hover_text(tr!("The real height that stands at the sea level: 0 for the sea's; higher for a place inland, its valleys then under water below it"));
         });
-        row(ui, "Range", |ui| {
+        row(ui, tr!("Range"), |ui| {
             let mc = massif_core::generate::VANILLA_LIMITS;
             let (a, b) = match self.target {
-                Target::NewWorld => (("Minecraft", mc), ("Tall", (-64, 1024))),
-                Target::Map { .. } => (("Minecraft", (mc.0.max(lo), mc.1.min(hi))), ("The map's", (lo, hi))),
+                Target::NewWorld => ((tr!("Minecraft"), mc), (tr!("Tall"), (-64, 1024))),
+                Target::Map { .. } => ((tr!("Minecraft"), (mc.0.max(lo), mc.1.min(hi))), (tr!("The map's"), (lo, hi))),
             };
             let on = [(v.low, v.high) == a.1, (v.low, v.high) == b.1];
             if let Some(k) = button_group(ui, "real range", &[a.0, b.0], &on) {
                 (v.low, v.high) = if k == 0 { a.1 } else { b.1 };
             }
         });
-        row(ui, "Lowest", |ui| {
+        row(ui, tr!("Lowest"), |ui| {
             ui.add(Field::new(&mut v.low, lo..=hi - 2).suffix(" y"));
         });
-        row(ui, "Highest", |ui| {
+        row(ui, tr!("Highest"), |ui| {
             ui.add(Field::new(&mut v.high, lo + 2..=hi).suffix(" y"));
         });
-        row(ui, "Squeeze into the range", |ui| {
-            switch(ui, &mut v.fit).on_hover_text("Heights past the range brought into it, above and under the sea apart, rather than cut off");
+        row(ui, tr!("Squeeze into the range"), |ui| {
+            switch(ui, &mut v.fit).on_hover_text(tr!("Heights past the range brought into it, above and under the sea apart, rather than cut off"));
         });
         if v.high < v.low + 2 {
             v.high = v.low + 2;
@@ -533,8 +533,8 @@ impl RealForm {
         {
             let (a, b) = (p.fit.height(span.low), p.fit.height(span.high));
             let cut = !v.fit && (span.high - v.datum) * self.area.blocks_per_metre as f32 * v.exaggeration > (v.high - 1 - v.sea_level) as f32;
-            let tail = if cut { ", cut at the top" } else { "" };
-            ui.label(RichText::new(format!("From {:.0} m to {:.0} m: y {:.0} to {:.0}{tail}.", span.low, span.high, a, b)).size(11.0).color(pal.weak));
+            let tail = if cut { tr!(", cut at the top") } else { "" };
+            ui.label(RichText::new(tr!("From {low:.0} m to {high:.0} m: y {a:.0} to {b:.0}{tail}.", low = span.low, high = span.high, a, b, tail)).size(11.0).color(pal.weak));
         }
     }
 
@@ -542,16 +542,16 @@ impl RealForm {
         let pal = Palette::of(ui);
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            let lead = if self.online { "Elevation: Terrain Tiles by Mapzen on AWS Open Data, from SRTM, GMTED2010, ETOPO1, 3DEP, EU-DEM and others; place search: Nominatim, © OpenStreetMap contributors." } else { "Heights from your file." };
+            let lead = if self.online { tr!("Elevation: Terrain Tiles by Mapzen on AWS Open Data, from SRTM, GMTED2010, ETOPO1, 3DEP, EU-DEM and others; place search: Nominatim, © OpenStreetMap contributors.") } else { tr!("Heights from your file.") };
             ui.label(RichText::new(lead).size(11.0).color(pal.weak));
-            if self.online && ui.add(egui::Button::new(RichText::new(if self.sources { "Hide the sources" } else { "All the sources" }).size(11.0).color(pal.accent)).frame(false)).clicked() {
+            if self.online && ui.add(egui::Button::new(RichText::new(if self.sources { tr!("Hide the sources") } else { tr!("All the sources") }).size(11.0).color(pal.accent)).frame(false)).clicked() {
                 self.sources = !self.sources;
             }
         });
         if self.sources && self.online {
             egui::ScrollArea::vertical().id_salt("real credits").max_height(90.0).show(ui, |ui| {
                 for line in massif_core::real::ATTRIBUTION {
-                    ui.add(egui::Label::new(RichText::new(format!("• {line}")).size(10.5).color(pal.weak)).wrap());
+                    ui.add(egui::Label::new(RichText::new(tr!("• {line}", line)).size(10.5).color(pal.weak)).wrap());
                 }
             });
         }
@@ -689,14 +689,14 @@ impl RealForm {
                 }
             }
             if tiles.is_empty() {
-                return (failed > 0).then(|| if self.store.offline() { "Offline, and this place\nwas not downloaded before".to_owned() } else { "The elevation could not be had".to_owned() });
+                return (failed > 0).then(|| if self.store.offline() { tr!("Offline, and this place\nwas not downloaded before").to_owned() } else { tr!("The elevation could not be had").to_owned() });
             }
             let complete = tiles.len() == keys.len();
             (Box::new(Tiles { z, tiles }) as Box<dyn Elevation>, complete)
         } else {
             match &self.file {
                 Some(f) => (Box::new(f.grid()) as Box<dyn Elevation>, true),
-                None => return Some("Choose a file of heights".to_owned()),
+                None => return Some(tr!("Choose a file of heights").to_owned()),
             }
         };
         let file_key = self.file.as_ref().map(|f| (f.path.clone(), f.metres_per_px, f.low, f.high));
@@ -723,9 +723,9 @@ impl RealForm {
 /// A distance, in metres or kilometres.
 fn distance(m: f64) -> String {
     if m >= 10_000.0 {
-        format!("{:.0} km", m / 1000.0)
+        tr!("{value:.0} km", value = m / 1000.0)
     } else if m >= 1000.0 {
-        format!("{:.1} km", m / 1000.0)
+        tr!("{value:.1} km", value = m / 1000.0)
     } else if m >= 10.0 {
         format!("{m:.0} m")
     } else {

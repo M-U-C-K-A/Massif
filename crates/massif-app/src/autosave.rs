@@ -74,13 +74,12 @@ impl Backup {
     /// How long ago it was taken, in words: "3 minutes ago".
     pub fn age(&self) -> String {
         let secs = now_secs().saturating_sub(self.info.taken);
-        let (n, unit) = match secs {
-            0..60 => return "less than a minute ago".into(),
-            60..3600 => (secs / 60, "minute"),
-            3600..86400 => (secs / 3600, "hour"),
-            _ => (secs / 86400, "day"),
-        };
-        format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
+        match secs {
+            0..60 => tr!("less than a minute ago").into(),
+            60..3600 => trn!("{n} minute ago", "{n} minutes ago", n = secs / 60),
+            3600..86400 => trn!("{n} hour ago", "{n} hours ago", n = secs / 3600),
+            _ => trn!("{n} day ago", "{n} days ago", n = secs / 86400),
+        }
     }
 }
 

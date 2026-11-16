@@ -39,9 +39,9 @@ impl Item {
 
     fn tip(&self) -> String {
         match self {
-            Item::Tree(k) => format!("{}. Eight trees, an object layer.", k.about()),
-            Item::Plants(p) => format!("{}. A ground cover.", p.about),
-            Item::Mix(m) => format!("{}. A terrain.", m.describe()),
+            Item::Tree(k) => tr!("{about}. Eight trees, an object layer.", about = crate::i18n::tr_name(k.about())),
+            Item::Plants(p) => tr!("{about}. A ground cover.", about = p.about),
+            Item::Mix(m) => tr!("{describe}. A terrain.", describe = m.describe()),
         }
     }
 
@@ -66,7 +66,7 @@ impl Item {
 
 /// Every item, by section.
 pub fn sections() -> Vec<(&'static str, Vec<Item>)> {
-    let mut out = vec![("Trees", TreeKind::ALL.iter().map(|&k| Item::Tree(k)).collect())];
+    let mut out = vec![(tr!("Trees"), TreeKind::ALL.iter().map(|&k| Item::Tree(k)).collect())];
     for family in PLANT_FAMILIES {
         out.push((family, PLANT_PRESETS.iter().filter(|p| p.family == family).map(Item::Plants).collect()));
     }
@@ -113,23 +113,23 @@ pub fn apply(item: Item, tools: &mut ToolState, doc: &mut Document, catalogue: O
         }
     }
     if had {
-        format!("Painting with {}", item.name())
+        tr!("Painting with {name}", name = crate::i18n::tr_name(item.name()))
     } else {
         doc.mark_changed();
-        format!("Added {} to the map's layers: paint it", item.name())
+        tr!("Added {name} to the map's layers: paint it", name = crate::i18n::tr_name(item.name()))
     }
 }
 
 /// The Packs panel, with its search field. Returns what to say.
 pub fn packs_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, catalogue: Option<&massif_assets::Catalogue>, search: &mut String, library: &mut crate::pack_share::PackLibrary) -> Option<String> {
     let pal = Palette::of(ui);
-    ui.label(RichText::new("Ready-made trees, plants and mixes of blocks. Click one to add it to the map and paint it.").size(11.5).color(pal.weak));
-    ui.add(egui::TextEdit::singleline(search).hint_text(format!("{}  Search packs", theme::glyph(Icon::Search))).desired_width(f32::INFINITY));
+    ui.label(RichText::new(tr!("Ready-made trees, plants and mixes of blocks. Click one to add it to the map and paint it.")).size(11.5).color(pal.weak));
+    ui.add(egui::TextEdit::singleline(search).hint_text(tr!("{glyph}  Search packs", glyph = theme::glyph(Icon::Search))).desired_width(f32::INFINITY));
     let needle = search.trim().to_lowercase();
     let said = crate::pack_share::library_ui(ui, library, &needle, tools, doc, catalogue);
     let mut picked = None;
     for (title, items) in sections() {
-        let shown: Vec<Item> = if needle.is_empty() || title.to_lowercase().contains(&needle) { items } else { items.into_iter().filter(|i| i.name().to_lowercase().contains(&needle)).collect() };
+        let shown: Vec<Item> = if needle.is_empty() || title.to_lowercase().contains(&needle) { items } else { items.into_iter().filter(|i| i.name().to_lowercase().contains(&needle) || crate::i18n::tr_name(i.name()).to_lowercase().contains(&needle)).collect() };
         if shown.is_empty() {
             continue;
         }
@@ -152,8 +152,8 @@ pub fn packs_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, catal
             ui.add_space(gap - ui.spacing().item_spacing.y);
         }
     }
-    if !needle.is_empty() && sections().iter().all(|(t, items)| !t.to_lowercase().contains(&needle) && items.iter().all(|i| !i.name().to_lowercase().contains(&needle))) {
-        ui.label(RichText::new("Nothing of that name among Massif's packs.").size(11.5).color(pal.weak));
+    if !needle.is_empty() && sections().iter().all(|(t, items)| !t.to_lowercase().contains(&needle) && items.iter().all(|i| !(i.name().to_lowercase().contains(&needle) || crate::i18n::tr_name(i.name()).to_lowercase().contains(&needle)))) {
+        ui.label(RichText::new(tr!("Nothing of that name among Massif's packs.")).size(11.5).color(pal.weak));
     }
     picked.map(|item| apply(item, tools, doc, catalogue)).or(said)
 }
@@ -173,8 +173,8 @@ fn section_icon(title: &str) -> Icon {
 fn tile(ui: &mut Ui, item: &Item, width: f32, tools: &ToolState, doc: &Document, catalogue: Option<&massif_assets::Catalogue>) -> bool {
     let reg = &doc.world.registry;
     let installed = item.installed(reg);
-    let tip = format!("{}{}", item.tip(), if installed { "\nOn the map already: a click picks it." } else { "" });
-    tile_ui(ui, width, item.name(), item.painted(tools, reg), installed, &tip, |painter, rect| picture(painter, rect, item, catalogue))
+    let tip = format!("{}{}", item.tip(), if installed { tr!("\nOn the map already: a click picks it.") } else { "" });
+    tile_ui(ui, width, crate::i18n::tr_name(item.name()), item.painted(tools, reg), installed, &tip, |painter, rect| picture(painter, rect, item, catalogue))
 }
 
 /// A tile of the Packs panel, its picture drawn by `draw`. Returns

@@ -184,66 +184,66 @@ pub fn menus(state: &State) -> Vec<Menu> {
         .map(|path| Entry::Item(Item::new(Command::OpenRecent(path.clone()), None, &crate::jobs::display_name(path), free).tip(path.display().to_string())))
         .collect();
     let file = vec![
-        item(Command::NewWorld, Icon::FilePlus2, "New World…", free),
-        item(Command::Open, Icon::FolderOpen, "Open…", free),
-        item(Command::ImportWorld, Icon::Import, "Import WorldPainter World…", free),
-        item(Command::FromHeightMap, Icon::ImageUp, "New World from Height Map…", free),
-        item(Command::FromRealPlace, Icon::Earth, "New World from a Real Place…", free),
+        item(Command::NewWorld, Icon::FilePlus2, tr!("New World…"), free),
+        item(Command::Open, Icon::FolderOpen, tr!("Open…"), free),
+        item(Command::ImportWorld, Icon::Import, tr!("Import WorldPainter World…"), free),
+        item(Command::FromHeightMap, Icon::ImageUp, tr!("New World from Height Map…"), free),
+        item(Command::FromRealPlace, Icon::Earth, tr!("New World from a Real Place…"), free),
         Entry::Submenu {
-            label: "Open Recent".to_owned(),
+            label: tr!("Open Recent").to_owned(),
             icon: theme::glyph(Icon::FolderInput),
             enabled: free && !state.recent.is_empty(),
             entries: recent,
         },
         Entry::Separator,
-        item(Command::Save, Icon::Save, "Save", map),
-        item(Command::SaveAs, Icon::Save, "Save As…", map),
-        tipped(Command::SavePoint, Icon::BookmarkPlus, "Save Point…", map, "Keep the map as it is now under a name, to come back to it or compare"),
+        item(Command::Save, Icon::Save, tr!("Save"), map),
+        item(Command::SaveAs, Icon::Save, tr!("Save As…"), map),
+        tipped(Command::SavePoint, Icon::BookmarkPlus, tr!("Save Point…"), map, tr!("Keep the map as it is now under a name, to come back to it or compare")),
         Entry::Separator,
-        item(Command::ExportHeightMap, Icon::ImageDown, "Export Height Map…", map),
-        item(Command::Export, Icon::Package, "Export to Minecraft…", map),
+        item(Command::ExportHeightMap, Icon::ImageDown, tr!("Export Height Map…"), map),
+        item(Command::Export, Icon::Package, tr!("Export to Minecraft…"), map),
         Entry::Separator,
-        tipped(Command::ImportPack, Icon::Import, "Import Pack…", free, "Add a .massifpack file someone shared to your packs"),
-        tipped(Command::ExportPack, Icon::FileDown, "Export Pack…", map, "Make a .massifpack file of the map's layers, to share"),
+        tipped(Command::ImportPack, Icon::Import, tr!("Import Pack…"), free, tr!("Add a .massifpack file someone shared to your packs")),
+        tipped(Command::ExportPack, Icon::FileDown, tr!("Export Pack…"), map, tr!("Make a .massifpack file of the map's layers, to share")),
         Entry::Separator,
-        item(Command::Quit, Icon::X, "Quit", true),
+        item(Command::Quit, Icon::X, tr!("Quit"), true),
     ];
-    let undo = state.undo.map_or_else(|| "Undo".to_owned(), |l| format!("Undo {l}"));
-    let redo = state.redo.map_or_else(|| "Redo".to_owned(), |l| format!("Redo {l}"));
+    let undo = state.undo.map_or_else(|| tr!("Undo").to_owned(), |l| tr!("Undo {l}", l));
+    let redo = state.redo.map_or_else(|| tr!("Redo").to_owned(), |l| tr!("Redo {l}", l));
     let edit = vec![
         item(Command::Undo, Icon::Undo2, &undo, map && state.undo.is_some()),
         item(Command::Redo, Icon::Redo2, &redo, map && state.redo.is_some()),
         Entry::Separator,
-        tipped(Command::SelectAll, Icon::SquareDashedMousePointer, "Select All", map, "Select the whole map"),
-        tipped(Command::Deselect, Icon::SquareX, "Deselect", map && state.selected, "The tools act on the whole map again"),
-        tipped(Command::InvertSelection, Icon::SquaresExclude, "Invert Selection", map && state.selected, "Select what is not selected"),
+        tipped(Command::SelectAll, Icon::SquareDashedMousePointer, tr!("Select All"), map, tr!("Select the whole map")),
+        tipped(Command::Deselect, Icon::SquareX, tr!("Deselect"), map && state.selected, tr!("The tools act on the whole map again")),
+        tipped(Command::InvertSelection, Icon::SquaresExclude, tr!("Invert Selection"), map && state.selected, tr!("Select what is not selected")),
         Entry::Separator,
-        tipped(Command::AutoBiome, Icon::Earth, "Auto biome: whole map", map, "Give every column the biome its land calls for"),
-        tipped(Command::AutoPaint, Icon::WandSparkles, "Auto paint: whole map", map, "Paint every column as its biome calls for"),
-        item(Command::AutoRules, Icon::Settings2, "Automatic rules…", map),
+        tipped(Command::AutoBiome, Icon::Earth, tr!("Auto biome: whole map"), map, tr!("Give every column the biome its land calls for")),
+        tipped(Command::AutoPaint, Icon::WandSparkles, tr!("Auto paint: whole map"), map, tr!("Paint every column as its biome calls for")),
+        item(Command::AutoRules, Icon::Settings2, tr!("Automatic rules…"), map),
         Entry::Separator,
         Entry::Submenu {
-            label: "Whole map".to_owned(),
+            label: tr!("Whole map").to_owned(),
             icon: theme::glyph(Icon::Map),
             enabled: map,
             entries: WholeOp::ALL
                 .iter()
-                .map(|&op| tipped(Command::WholeMap(op), op.icon(), &format!("{}…", op.label()), map, op.about()))
+                .map(|&op| tipped(Command::WholeMap(op), op.icon(), &format!("{}…", crate::i18n::tr_name(op.label())), map, crate::i18n::tr_name(op.about())))
                 .collect(),
         },
-        tipped(Command::RealTerrain, Icon::Earth, "Relief of a Real Place…", map, "The heights of a place on the Earth, into the selection or the whole map"),
-        tipped(Command::Caves, Icon::Shovel, "Caves…", map, "Tunnels, ravines and caverns carved into the rock, over the whole map or the selection"),
+        tipped(Command::RealTerrain, Icon::Earth, tr!("Relief of a Real Place…"), map, tr!("The heights of a place on the Earth, into the selection or the whole map")),
+        tipped(Command::Caves, Icon::Shovel, tr!("Caves…"), map, tr!("Tunnels, ravines and caverns carved into the rock, over the whole map or the selection")),
         Entry::Separator,
-        tipped(Command::Ores, Icon::Pickaxe, "Ores…", map, "The ores the export lays in the rock: where, how many, how large"),
+        tipped(Command::Ores, Icon::Pickaxe, tr!("Ores…"), map, tr!("The ores the export lays in the rock: where, how many, how large")),
         tipped(
             Command::Analyse,
             Icon::ScanSearch,
-            "Analyse the map…",
+            tr!("Analyse the map…"),
             map,
-            "A survival check of the whole map: every block counted, what breaks survival, what is missing",
+            tr!("A survival check of the whole map: every block counted, what breaks survival, what is missing"),
         ),
     ];
-    let mut view: Vec<Entry> = [(ThemeChoice::System, "Follow the system"), (ThemeChoice::Light, "Light"), (ThemeChoice::Dark, "Dark")]
+    let mut view: Vec<Entry> = [(ThemeChoice::System, tr!("Follow the system")), (ThemeChoice::Light, tr!("Light")), (ThemeChoice::Dark, tr!("Dark"))]
         .into_iter()
         .map(|(choice, label)| {
             Entry::Item(Item {
@@ -254,21 +254,21 @@ pub fn menus(state: &State) -> Vec<Menu> {
         .collect();
     view.extend([
         Entry::Separator,
-        item(Command::Settings, Icon::Settings, "Settings…", free),
-        Entry::Item(Item::new(Command::ResetWorkspaces, None, "Reset workspaces", free)),
+        item(Command::Settings, Icon::Settings, tr!("Settings…"), free),
+        Entry::Item(Item::new(Command::ResetWorkspaces, None, tr!("Reset workspaces"), free)),
     ]);
     let help = vec![
-        item(Command::Help, Icon::BookOpen, "Massif Help", free),
-        item(Command::Shortcuts, Icon::Keyboard, "Keyboard shortcuts", free),
+        item(Command::Help, Icon::BookOpen, tr!("Massif Help"), free),
+        item(Command::Shortcuts, Icon::Keyboard, tr!("Keyboard shortcuts"), free),
         Entry::Separator,
-        item(Command::HomeScreen, Icon::House, "Home screen", map),
-        item(Command::About, Icon::Info, "About Massif", free),
+        item(Command::HomeScreen, Icon::House, tr!("Home screen"), map),
+        item(Command::About, Icon::Info, tr!("About Massif"), free),
     ];
     vec![
-        Menu { title: "File", entries: file },
-        Menu { title: "Edit", entries: edit },
-        Menu { title: "View", entries: view },
-        Menu { title: "Help", entries: help },
+        Menu { title: tr!("File"), entries: file },
+        Menu { title: tr!("Edit"), entries: edit },
+        Menu { title: tr!("View"), entries: view },
+        Menu { title: tr!("Help"), entries: help },
     ]
 }
 

@@ -12,7 +12,7 @@ use crate::theme::{self, Icon, Palette, RichTextExt};
 use crate::widgets;
 use egui::{Align, Align2, Color32, FontId, Layout, Rect, Response, RichText, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, pos2, vec2};
 use massif_core::World;
-use massif_core::analysis::{self, Analysis, Finding, Mineral, Severity, Stage, Topic, Verdict, percent, plural, pretty, thousands};
+use massif_core::analysis::{self, Analysis, Finding, Mineral, Severity, Stage, Topic, Verdict, percent, pretty, thousands};
 use massif_core::auto::Steps;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -41,10 +41,10 @@ impl Tab {
 
     fn label(self) -> &'static str {
         match self {
-            Tab::Survival => "Survival",
-            Tab::Relief => "Relief",
-            Tab::Blocks => "Blocks",
-            Tab::Biomes => "Biomes",
+            Tab::Survival => tr!("Survival"),
+            Tab::Relief => tr!("Relief"),
+            Tab::Blocks => tr!("Blocks"),
+            Tab::Biomes => tr!("Biomes"),
         }
     }
 }
@@ -229,12 +229,12 @@ impl AnalysisView {
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
                 ui.set_max_width(MAIN - 190.0);
-                ui.label(RichText::new("Survival check").size(19.0).bold());
+                ui.label(RichText::new(tr!("Survival check")).size(19.0).bold());
                 ui.add_space(6.0);
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
                     let (w, d) = self.size;
-                    ui.label(RichText::new(format!("{} × {} blocks", thousands(w as u64), thousands(d as u64))).size(12.5).color(pal.weak));
+                    ui.label(RichText::new(tr!("{thousands} × {thousands2} blocks", thousands = thousands(w as u64), thousands2 = thousands(d as u64))).size(12.5).color(pal.weak));
                     ui.label(RichText::new("·").size(12.5).color(pal.weak));
                     match &self.done {
                         Some(done) => {
@@ -242,26 +242,26 @@ impl AnalysisView {
                             for s in [Severity::Critical, Severity::Warning] {
                                 let n = done.findings.iter().filter(|f| f.severity == s).count() as u64;
                                 if n > 0 {
-                                    pill(ui, pal, &plural(n, if s == Severity::Critical { "problem" } else { "warning" }), tone(pal, s), false);
+                                    pill(ui, pal, &if s == Severity::Critical { trn!("{n} problem", "{n} problems", n = n) } else { trn!("{n} warning", "{n} warnings", n = n) }, tone(pal, s), false);
                                 }
                             }
                         }
                         None => {
-                            pill(ui, pal, "Reading", pal.weak, true);
+                            pill(ui, pal, tr!("Reading"), pal.weak, true);
                         }
                     }
                 });
             });
             ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
-                if ui.add(outline_button(pal, &theme::with_icon(Icon::Check, "Done"))).clicked() {
+                if ui.add(outline_button(pal, &theme::with_icon(Icon::Check, tr!("Done")))).clicked() {
                     *choice = Choice::Close;
                 }
                 let busy = self.running.is_some();
                 if busy {
                     ui.add_space(6.0);
                     crate::loader::loader(ui, 16.0);
-                } else if icon_button(ui, pal, Icon::RotateCw, "Check the map again").clicked() {
+                } else if icon_button(ui, pal, Icon::RotateCw, tr!("Check the map again")).clicked() {
                     *choice = Choice::Again;
                 }
             });
@@ -272,8 +272,8 @@ impl AnalysisView {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 let amber = tone(pal, Severity::Warning);
                 ui.label(RichText::new(theme::glyph(Icon::Clock).to_string()).size(12.5).color(amber));
-                ui.label(RichText::new("The map has changed since this check.").size(12.0).color(pal.weak));
-                if link(ui, pal, None, "Check again").clicked() {
+                ui.label(RichText::new(tr!("The map has changed since this check.")).size(12.0).color(pal.weak));
+                if link(ui, pal, None, tr!("Check again")).clicked() {
                     *choice = Choice::Again;
                 }
             });
@@ -307,8 +307,8 @@ impl AnalysisView {
                     (None, None) => {
                         ui.add_space(140.0);
                         ui.vertical_centered(|ui| {
-                            ui.label(RichText::new("Nothing to check").size(14.5).medium());
-                            ui.label(RichText::new("This map has no ground yet.").size(12.5).color(pal.weak));
+                            ui.label(RichText::new(tr!("Nothing to check")).size(14.5).medium());
+                            ui.label(RichText::new(tr!("This map has no ground yet.")).size(12.5).color(pal.weak));
                         });
                     }
                 }
@@ -345,15 +345,15 @@ impl AnalysisView {
             ui.add_space(2.0);
             let (w, d) = self.size;
             let tiles = (w / massif_core::TILE_SIZE) as u64 * (d / massif_core::TILE_SIZE) as u64;
-            ui.label(RichText::new(format!("{} × {} blocks, {}", thousands(w as u64), thousands(d as u64), plural(tiles, "tile"))).size(12.5).color(pal.weak));
+            ui.label(RichText::new(tr!("{thousands} × {thousands2} blocks, {value}", thousands = thousands(w as u64), thousands2 = thousands(d as u64), value = trn!("{n} tile", "{n} tiles", n = tiles))).size(12.5).color(pal.weak));
             ui.add_space(14.0);
             let now = ui.input(|i| i.time);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 let done = self.done.as_ref();
                 let copied = self.copied.filter(|c| now - c.0 < 1.6 && c.1 == "report").is_some();
-                let label = theme::with_icon(if copied { Icon::Check } else { Icon::Copy }, if copied { "Copied" } else { "Copy report" });
-                if ui.add_enabled(done.is_some(), outline_button(pal, &label)).on_hover_text("The whole check as Markdown, to paste where people talk about the map").clicked()
+                let label = theme::with_icon(if copied { Icon::Check } else { Icon::Copy }, if copied { tr!("Copied") } else { tr!("Copy report") });
+                if ui.add_enabled(done.is_some(), outline_button(pal, &label)).on_hover_text(tr!("The whole check as Markdown, to paste where people talk about the map")).clicked()
                     && let Some(done) = done
                 {
                     ui.ctx().copy_text(done.analysis.report());
@@ -361,11 +361,11 @@ impl AnalysisView {
                 }
                 if let Some(done) = done {
                     ui.menu_button(RichText::new(theme::glyph(Icon::Ellipsis).to_string()).size(15.0).color(pal.weak), |ui| {
-                        if ui.button(theme::with_icon(Icon::FileDown, "Save the report…")).clicked() {
+                        if ui.button(theme::with_icon(Icon::FileDown, tr!("Save the report…"))).clicked() {
                             ui.close();
                             *choice = save_report(&self.name, &done.analysis);
                         }
-                        if done.analysis.spawn_column.is_some() && ui.button(theme::with_icon(Icon::MapPin, "Show the spawn point")).clicked() {
+                        if done.analysis.spawn_column.is_some() && ui.button(theme::with_icon(Icon::MapPin, tr!("Show the spawn point"))).clicked() {
                             ui.close();
                             *choice = Choice::Show(done.analysis.spawn[0], done.analysis.spawn[2]);
                         }
@@ -376,49 +376,49 @@ impl AnalysisView {
             hairline(ui, pal);
             ui.add_space(16.0);
             let Some(done) = &self.done else {
-                section_label(ui, pal, "Survival");
-                for name in ["Ores", "Trees", "Water", "Lava", "Grass", "Spawn"] {
+                section_label(ui, pal, tr!("Survival"));
+                for name in [tr!("Ores"), tr!("Trees"), tr!("Water"), tr!("Lava"), tr!("Grass"), tr!("Spawn")] {
                     side_row(ui, pal, name, None, "—");
                 }
                 return;
             };
             let a = &done.analysis;
             let worst = |topics: &[Topic]| done.findings.iter().filter(|f| topics.contains(&f.topic)).map(|f| f.severity).min();
-            section_label(ui, pal, "Survival");
+            section_label(ui, pal, tr!("Survival"));
             // The ores: kinds found of the eight, red when riches lie around.
             let kinds = Mineral::OVERWORLD.iter().filter(|&&m| a.mineral(m).ore + a.mineral(m).riches > 0).count();
             let (ores, ores_tone) = match worst(&[Topic::Riches, Topic::Ores]) {
-                Some(Severity::Critical) => ("Too rich".to_owned(), Severity::Critical),
-                _ if kinds == 0 => ("None".to_owned(), Severity::Warning),
-                _ if kinds == 8 => ("All eight kinds".to_owned(), Severity::Good),
-                _ => (format!("{kinds} kinds of 8"), Severity::Warning),
+                Some(Severity::Critical) => (tr!("Too rich").to_owned(), Severity::Critical),
+                _ if kinds == 0 => (tr!("None").to_owned(), Severity::Warning),
+                _ if kinds == 8 => (tr!("All eight kinds").to_owned(), Severity::Good),
+                _ => (tr!("{kinds} kinds of 8", kinds), Severity::Warning),
             };
-            side_row(ui, pal, "Ores", Some(tone(pal, ores_tone)), &ores);
+            side_row(ui, pal, tr!("Ores"), Some(tone(pal, ores_tone)), &ores);
             let wood = a.wood();
-            let trees = if a.trees == 0 && wood > 0 { "Wood, no trees".to_owned() } else { thousands(a.trees) };
-            side_row(ui, pal, "Trees", worst(&[Topic::Wood]).map(|s| tone(pal, s)), &trees);
-            let water = if a.lava_world { "Lava".to_owned() } else { percent(a.wet, a.columns) };
-            side_row(ui, pal, "Water", worst(&[Topic::Water, Topic::Lava]).map(|s| tone(pal, s)), &water);
+            let trees = if a.trees == 0 && wood > 0 { tr!("Wood, no trees").to_owned() } else { thousands(a.trees) };
+            side_row(ui, pal, tr!("Trees"), worst(&[Topic::Wood]).map(|s| tone(pal, s)), &trees);
+            let water = if a.lava_world { tr!("Lava").to_owned() } else { percent(a.wet, a.columns) };
+            side_row(ui, pal, tr!("Water"), worst(&[Topic::Water, Topic::Lava]).map(|s| tone(pal, s)), &water);
             let lava = a.lava();
-            let lava_word = if lava == 0 { "None".to_owned() } else { format!("{} blocks", human(lava)) };
-            side_row(ui, pal, "Lava", worst(&[Topic::Nether]).map(|s| tone(pal, s)), &lava_word);
+            let lava_word = if lava == 0 { tr!("None").to_owned() } else { tr!("{human} blocks", human = human(lava)) };
+            side_row(ui, pal, tr!("Lava"), worst(&[Topic::Nether]).map(|s| tone(pal, s)), &lava_word);
             let grass = a.surface_of(|k| k == analysis::Kind::Grass);
-            side_row(ui, pal, "Grass", worst(&[Topic::Food]).map(|s| tone(pal, s)), &percent(grass, a.grounded()));
+            side_row(ui, pal, tr!("Grass"), worst(&[Topic::Food]).map(|s| tone(pal, s)), &percent(grass, a.grounded()));
             let spawn = match &a.spawn_column {
-                None => "Off the map",
-                Some(c) if c.void => "Over the void",
-                Some(c) if a.lava_world && c.depth > 0 => "In lava",
-                Some(c) if c.depth >= 2 => "In water",
-                Some(_) => "Safe",
+                None => tr!("Off the map"),
+                Some(c) if c.void => tr!("Over the void"),
+                Some(c) if a.lava_world && c.depth > 0 => tr!("In lava"),
+                Some(c) if c.depth >= 2 => tr!("In water"),
+                Some(_) => tr!("Safe"),
             };
-            side_row(ui, pal, "Spawn", worst(&[Topic::Spawn]).map(|s| tone(pal, s)), spawn);
+            side_row(ui, pal, tr!("Spawn"), worst(&[Topic::Spawn]).map(|s| tone(pal, s)), spawn);
             ui.add_space(8.0);
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 ui.label(RichText::new(theme::glyph(Icon::Database).to_string()).size(12.0).color(pal.weak));
                 ui.add(
                     egui::Label::new(
-                        RichText::new(format!("{} blocks counted as the export writes them, in {:.1} s", human(a.solid()), a.seconds)).size(11.5).color(pal.weak),
+                        RichText::new(tr!("{human} blocks counted as the export writes them, in {seconds:.1} s", human = human(a.solid()), seconds = a.seconds)).size(11.5).color(pal.weak),
                     )
                     .wrap(),
                 );
@@ -426,18 +426,18 @@ impl AnalysisView {
             ui.add_space(18.0);
             hairline(ui, pal);
             ui.add_space(16.0);
-            section_label(ui, pal, "Map");
-            side_row(ui, pal, "Chunks", None, &thousands(a.chunks().round() as u64));
-            let r = side_row(ui, pal, "Surface", None, &format!("{} → {}", a.lowest[1], a.highest[1]));
+            section_label(ui, pal, tr!("Map"));
+            side_row(ui, pal, tr!("Chunks"), None, &thousands(a.chunks().round() as u64));
+            let r = side_row(ui, pal, tr!("Surface"), None, &format!("{} → {}", a.lowest[1], a.highest[1]));
             sparkline(ui, pal, r, &a.heights);
-            side_row(ui, pal, "Mean", None, &format!("{:.0}, sea at {}", a.mean_height(), a.sea_level));
-            side_row(ui, pal, "Limits", None, &format!("{} → {}", a.min_y, a.max_y));
-            side_row(ui, pal, "Walkable", None, &percent(a.steps[0] + a.steps[1], a.columns));
+            side_row(ui, pal, tr!("Mean"), None, &tr!("{mean_height:.0}, sea at {sea_level}", mean_height = a.mean_height(), sea_level = a.sea_level));
+            side_row(ui, pal, tr!("Limits"), None, &format!("{} → {}", a.min_y, a.max_y));
+            side_row(ui, pal, tr!("Walkable"), None, &percent(a.steps[0] + a.steps[1], a.columns));
             ui.add_space(18.0);
             hairline(ui, pal);
             ui.add_space(16.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Surface").size(12.5).medium().color(pal.weak));
+                ui.label(RichText::new(tr!("Surface")).size(12.5).medium().color(pal.weak));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.label(RichText::new(a.surface.len().to_string()).size(12.5).color(pal.weak));
                 });
@@ -451,7 +451,7 @@ impl AnalysisView {
                 p.circle_stroke(pos2(rect.left() + 4.0, rect.center().y), 4.0, Stroke::new(1.0, pal.border));
                 p.text(pos2(rect.left() + 18.0, rect.center().y), Align2::LEFT_CENTER, pretty(&c.id), FontId::proportional(12.5), pal.text);
                 p.text(rect.right_center(), Align2::RIGHT_CENTER, percent(c.count, ground), FontId::proportional(12.5), pal.weak);
-                response.on_hover_text(format!("{} · {} columns", c.id, thousands(c.count)));
+                response.on_hover_text(tr!("{id} · {thousands} columns", id = c.id, thousands = thousands(c.count)));
             }
         });
     }
@@ -471,7 +471,7 @@ fn survival(ui: &mut Ui, pal: &Palette, done: &Done, choice: &mut Choice, copied
         glyph(ui.painter(), r.center(), verdict_icon(v), 16.0, tone_v);
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(v.label()).size(14.0).medium());
+                ui.label(RichText::new(crate::i18n::tr_name(v.label())).size(14.0).medium());
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.label(RichText::new(format!("{:.1} s", done.analysis.seconds)).size(11.5).color(pal.weak));
                 });
@@ -481,7 +481,7 @@ fn survival(ui: &mut Ui, pal: &Palette, done: &Done, choice: &mut Choice, copied
         });
     });
     ui.add_space(18.0);
-    section_label(ui, pal, "From wood to the Nether");
+    section_label(ui, pal, tr!("From wood to the Nether"));
     stepper(ui, pal, &done.stages);
     ui.add_space(18.0);
     for f in done.findings.iter().filter(|f| f.severity <= Severity::Warning) {
@@ -492,98 +492,98 @@ fn survival(ui: &mut Ui, pal: &Palette, done: &Done, choice: &mut Choice, copied
     let fine: Vec<&Finding> = done.findings.iter().filter(|f| f.severity == Severity::Good).collect();
     if !fine.is_empty() {
         ui.add_space(8.0);
-        section_label(ui, pal, "Holding up");
+        section_label(ui, pal, tr!("Holding up"));
         checklist(ui, pal, &fine, choice);
     }
     let info: Vec<&Finding> = done.findings.iter().filter(|f| f.severity == Severity::Info).collect();
     if !info.is_empty() {
         ui.add_space(16.0);
-        section_label(ui, pal, "Worth knowing");
+        section_label(ui, pal, tr!("Worth knowing"));
         checklist(ui, pal, &info, choice);
     }
 }
 
 fn relief(ui: &mut Ui, pal: &Palette, a: &Analysis, choice: &mut Choice) {
-    section_label(ui, pal, "Heights players stand at");
+    section_label(ui, pal, tr!("Heights players stand at"));
     panel(ui, pal, |ui| heights_chart(ui, pal, a));
     ui.add_space(10.0);
     widgets::well(ui, |ui| {
-        stat(ui, pal, "Lowest", format!("y {}", a.lowest[1]), Some((a.lowest[0], a.lowest[2])), choice);
-        stat(ui, pal, "Highest", format!("y {}", a.highest[1]), Some((a.highest[0], a.highest[2])), choice);
-        stat(ui, pal, "Mean, median", format!("{:.1}, {}", a.mean_height(), a.median_height()), None, choice);
-        stat(ui, pal, "Spread", format!("{:.1} blocks either way", a.height_spread()), None, choice);
-        stat(ui, pal, "Above the sea", percent(a.heights.iter().skip((a.sea_level - a.min_y + 1).max(0) as usize).sum(), a.grounded()), None, choice);
-        stat(ui, pal, "Build limits", format!("{} to {}", a.min_y, a.max_y), None, choice);
+        stat(ui, pal, tr!("Lowest"), format!("y {}", a.lowest[1]), Some((a.lowest[0], a.lowest[2])), choice);
+        stat(ui, pal, tr!("Highest"), format!("y {}", a.highest[1]), Some((a.highest[0], a.highest[2])), choice);
+        stat(ui, pal, tr!("Mean, median"), format!("{:.1}, {}", a.mean_height(), a.median_height()), None, choice);
+        stat(ui, pal, tr!("Spread"), tr!("{height_spread:.1} blocks either way", height_spread = a.height_spread()), None, choice);
+        stat(ui, pal, tr!("Above the sea"), percent(a.heights.iter().skip((a.sea_level - a.min_y + 1).max(0) as usize).sum(), a.grounded()), None, choice);
+        stat(ui, pal, tr!("Build limits"), tr!("{min_y} to {max_y}", min_y = a.min_y, max_y = a.max_y), None, choice);
     });
 
     ui.add_space(18.0);
-    section_label(ui, pal, "Steps between columns");
+    section_label(ui, pal, tr!("Steps between columns"));
     panel(ui, pal, |ui| steps_chart(ui, pal, a));
     ui.add_space(10.0);
     widgets::well(ui, |ui| {
-        stat(ui, pal, "Walkable", format!("{} of the columns", percent(a.steps[0] + a.steps[1], a.columns)), None, choice);
-        stat(ui, pal, "Falls that hurt", format!("{} edges", thousands(a.hurting)), None, choice);
-        stat(ui, pal, "Falls that kill", format!("{} edges", thousands(a.lethal)), None, choice);
-        let worst = a.worst_drop.map_or("None".to_owned(), |w| format!("{} blocks", w.0));
-        stat(ui, pal, "Highest drop", worst, a.worst_drop.map(|w| (w.1, w.2)), choice);
+        stat(ui, pal, tr!("Walkable"), tr!("{percent} of the columns", percent = percent(a.steps[0] + a.steps[1], a.columns)), None, choice);
+        stat(ui, pal, tr!("Falls that hurt"), tr!("{thousands} edges", thousands = thousands(a.hurting)), None, choice);
+        stat(ui, pal, tr!("Falls that kill"), tr!("{thousands} edges", thousands = thousands(a.lethal)), None, choice);
+        let worst = a.worst_drop.map_or(tr!("None").to_owned(), |w| tr!("{value} blocks", value = w.0));
+        stat(ui, pal, tr!("Highest drop"), worst, a.worst_drop.map(|w| (w.1, w.2)), choice);
     });
 
     ui.add_space(18.0);
-    section_label(ui, pal, if a.lava_world { "Lava" } else { "Water" });
+    section_label(ui, pal, if a.lava_world { tr!("Lava") } else { tr!("Water") });
     widgets::well(ui, |ui| {
-        stat(ui, pal, "Covered", format!("{} of the map", percent(a.wet, a.columns)), None, choice);
-        stat(ui, pal, "Blocks", thousands(a.fluid), None, choice);
-        stat(ui, pal, "Deepest", format!("{} blocks", a.deepest), None, choice);
+        stat(ui, pal, tr!("Covered"), tr!("{percent} of the map", percent = percent(a.wet, a.columns)), None, choice);
+        stat(ui, pal, tr!("Blocks"), thousands(a.fluid), None, choice);
+        stat(ui, pal, tr!("Deepest"), tr!("{deepest} blocks", deepest = a.deepest), None, choice);
         let mean = if a.wet == 0 { 0.0 } else { a.depth_sum as f64 / a.wet as f64 };
-        stat(ui, pal, "Mean depth", format!("{mean:.1} blocks"), None, choice);
-        stat(ui, pal, "Above the sea", format!("{} columns: lakes, rivers", thousands(a.above_sea)), None, choice);
-        stat(ui, pal, "Under the surface", format!("{} blocks", thousands(a.buried_fluid)), None, choice);
+        stat(ui, pal, tr!("Mean depth"), tr!("{mean:.1} blocks", mean), None, choice);
+        stat(ui, pal, tr!("Above the sea"), tr!("{thousands} columns: lakes, rivers", thousands = thousands(a.above_sea)), None, choice);
+        stat(ui, pal, tr!("Under the surface"), tr!("{thousands} blocks", thousands = thousands(a.buried_fluid)), None, choice);
     });
 
     ui.add_space(18.0);
-    section_label(ui, pal, "Shape");
+    section_label(ui, pal, tr!("Shape"));
     widgets::well(ui, |ui| {
-        stat(ui, pal, "More than one floor", format!("{} columns", thousands(a.layered)), None, choice);
-        stat(ui, pal, "Air under the surface", format!("{} blocks", thousands(a.hollow)), None, choice);
-        stat(ui, pal, "At the top of the world", format!("{} columns", thousands(a.at_ceiling)), a.spots.ceiling, choice);
-        stat(ui, pal, "Open to the void", format!("{} columns", thousands(a.void)), a.spots.void, choice);
+        stat(ui, pal, tr!("More than one floor"), tr!("{thousands} columns", thousands = thousands(a.layered)), None, choice);
+        stat(ui, pal, tr!("Air under the surface"), tr!("{thousands} blocks", thousands = thousands(a.hollow)), None, choice);
+        stat(ui, pal, tr!("At the top of the world"), tr!("{thousands} columns", thousands = thousands(a.at_ceiling)), a.spots.ceiling, choice);
+        stat(ui, pal, tr!("Open to the void"), tr!("{thousands} columns", thousands = thousands(a.void)), a.spots.void, choice);
     });
 }
 
 fn blocks(ui: &mut Ui, pal: &Palette, a: &Analysis) {
-    section_label(ui, pal, "Ores");
+    section_label(ui, pal, tr!("Ores"));
     if a.minerals.iter().all(|c| c.ore + c.riches == 0) {
-        ui.label(RichText::new("Not one ore on the map: Minecraft adds none to the chunks the export writes finished.").size(12.0).color(pal.weak));
+        ui.label(RichText::new(tr!("Not one ore on the map: Minecraft adds none to the chunks the export writes finished.")).size(12.0).color(pal.weak));
         ui.add_space(8.0);
     }
     ores_table(ui, pal, a);
     ui.add_space(18.0);
-    section_label(ui, pal, "At the surface");
-    shares(ui, pal, &a.surface, a.grounded(), 12, "columns");
+    section_label(ui, pal, tr!("At the surface"));
+    shares(ui, pal, &a.surface, a.grounded(), 12, tr!("columns"));
     ui.add_space(18.0);
-    section_label(ui, pal, "In the ground");
-    shares(ui, pal, &a.volume, a.solid(), 12, "blocks");
+    section_label(ui, pal, tr!("In the ground"));
+    shares(ui, pal, &a.volume, a.solid(), 12, tr!("blocks"));
     ui.add_space(18.0);
-    section_label(ui, pal, "Plants");
+    section_label(ui, pal, tr!("Plants"));
     if a.plants.is_empty() {
-        muted(ui, pal, "No ground cover grows on the map.");
+        muted(ui, pal, tr!("No ground cover grows on the map."));
     } else {
         let total = a.plants.iter().map(|c| c.count).sum();
-        shares(ui, pal, &a.plants, total, 10, "plants");
+        shares(ui, pal, &a.plants, total, 10, tr!("plants"));
     }
     ui.add_space(18.0);
-    section_label(ui, pal, "Objects");
+    section_label(ui, pal, tr!("Objects"));
     if a.objects.is_empty() {
-        muted(ui, pal, "No object stands on the map: no trees, rocks or buildings.");
+        muted(ui, pal, tr!("No object stands on the map: no trees, rocks or buildings."));
     } else {
         let total = a.objects.iter().map(|c| c.count).sum();
-        shares(ui, pal, &a.objects, total, 10, "times");
+        shares(ui, pal, &a.objects, total, 10, tr!("times"));
     }
 }
 
 fn biomes(ui: &mut Ui, pal: &Palette, a: &Analysis) {
-    section_label(ui, pal, "Biomes at the surface, as the export gives them");
-    shares(ui, pal, &a.biomes, a.columns, usize::MAX, "columns");
+    section_label(ui, pal, tr!("Biomes at the surface, as the export gives them"));
+    shares(ui, pal, &a.biomes, a.columns, usize::MAX, tr!("columns"));
 }
 
 // ---------------------------------------------------------- pieces --
@@ -606,7 +606,7 @@ fn note(ui: &mut Ui, pal: &Palette, f: &Finding, choice: &mut Choice) {
                 ui.label(RichText::new(&f.title).size(13.5).medium());
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| match f.spot {
                     Some((x, z)) => {
-                        if link(ui, pal, Some(Icon::MapPin), "Show on map").on_hover_text(format!("x {x}, z {z}")).clicked() {
+                        if link(ui, pal, Some(Icon::MapPin), tr!("Show on map")).on_hover_text(format!("x {x}, z {z}")).clicked() {
                             *choice = Choice::Show(x, z);
                         }
                     }
@@ -633,7 +633,7 @@ fn note(ui: &mut Ui, pal: &Palette, f: &Finding, choice: &mut Choice) {
                 }
                 if f.action == Some(analysis::Action::Ores) {
                     ui.add_space(10.0);
-                    if ui.add(control_button(pal, &theme::with_icon(Icon::Pickaxe, "Set up the ores"))).on_hover_text("Edit ▸ Ores: where, how many, how large").clicked() {
+                    if ui.add(control_button(pal, &theme::with_icon(Icon::Pickaxe, tr!("Set up the ores")))).on_hover_text(tr!("Edit ▸ Ores: where, how many, how large")).clicked() {
                         *choice = Choice::Ores;
                     }
                 }
@@ -657,9 +657,9 @@ fn fixes(ui: &mut Ui, pal: &Palette, done: &Done, copied: &mut Option<(f64, &'st
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 10.0;
                 ui.label(RichText::new(theme::glyph(Icon::Sparkles).to_string()).size(16.0).color(pal.accent));
-                ui.label(RichText::new("How to fix it").size(13.5).medium());
+                ui.label(RichText::new(tr!("How to fix it")).size(13.5).medium());
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(RichText::new(format!("From {}", plural(list.len() as u64, "finding"))).size(11.5).color(pal.weak));
+                    ui.label(RichText::new(trn!("From {n} finding", "From {n} findings", n = list.len())).size(11.5).color(pal.weak));
                 });
             });
             ui.add_space(6.0);
@@ -676,14 +676,14 @@ fn fixes(ui: &mut Ui, pal: &Palette, done: &Done, copied: &mut Option<(f64, &'st
                 ui.horizontal(|ui| {
                     let now = ui.input(|i| i.time);
                     let done_copy = copied.filter(|c| now - c.0 < 1.6 && c.1 == "fixes").is_some();
-                    let label = theme::with_icon(if done_copy { Icon::Check } else { Icon::Copy }, if done_copy { "Copied" } else { "Copy the fixes" });
+                    let label = theme::with_icon(if done_copy { Icon::Check } else { Icon::Copy }, if done_copy { tr!("Copied") } else { tr!("Copy the fixes") });
                     if ui.add(control_button(pal, &label)).clicked() {
                         let text: String = list.iter().map(|f| format!("- {}: {}\n", f.title, f.fix.as_deref().unwrap_or_default())).collect();
                         ui.ctx().copy_text(text);
                         *copied = Some((now, "fixes"));
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.label(RichText::new(format!("{} to fix", list.len())).monospace().size(11.5).color(pal.weak));
+                        ui.label(RichText::new(tr!("{n} to fix", n = list.len())).monospace().size(11.5).color(pal.weak));
                     });
                 });
             });
@@ -718,13 +718,13 @@ fn checklist(ui: &mut Ui, pal: &Palette, items: &[&Finding], choice: &mut Choice
                             ui.label(RichText::new(&f.title).size(12.5).medium());
                             if let Some((x, z)) = f.spot {
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    if link(ui, pal, Some(Icon::MapPin), "Show").on_hover_text(format!("x {x}, z {z}")).clicked() {
+                                    if link(ui, pal, Some(Icon::MapPin), tr!("Show")).on_hover_text(format!("x {x}, z {z}")).clicked() {
                                         *choice = Choice::Show(x, z);
                                     }
                                 });
                             } else if f.action == Some(analysis::Action::Ores) {
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    if link(ui, pal, Some(Icon::Pickaxe), "Ores…").on_hover_text("Edit ▸ Ores: where, how many, how large").clicked() {
+                                    if link(ui, pal, Some(Icon::Pickaxe), tr!("Ores…")).on_hover_text(tr!("Edit ▸ Ores: where, how many, how large")).clicked() {
                                         *choice = Choice::Ores;
                                     }
                                 });
@@ -771,7 +771,7 @@ fn stepper(ui: &mut Ui, pal: &Palette, stages: &[Stage]) {
             _ => Icon::Minus,
         };
         glyph(&p, c, icon, 14.0, color);
-        p.text(c + vec2(0.0, 25.0), Align2::CENTER_CENTER, s.name, FontId::proportional(12.0), if s.state == Severity::Good { pal.text } else { color });
+        p.text(c + vec2(0.0, 25.0), Align2::CENTER_CENTER, crate::i18n::tr_name(s.name), FontId::proportional(12.0), if s.state == Severity::Good { pal.text } else { color });
         let hit = Rect::from_center_size(c + vec2(0.0, 10.0), vec2(step, 48.0));
         ui.interact(hit, egui::Id::unique(("analysis stage", k)), Sense::hover()).on_hover_text(&s.why);
     }
@@ -780,7 +780,7 @@ fn stepper(ui: &mut Ui, pal: &Palette, stages: &[Stage]) {
 /// The columns by the height of their surface, the sea marked.
 fn heights_chart(ui: &mut Ui, pal: &Palette, a: &Analysis) {
     let (Some(first), Some(last)) = (a.heights.iter().position(|&c| c > 0), a.heights.iter().rposition(|&c| c > 0)) else {
-        muted(ui, pal, "No surface.");
+        muted(ui, pal, tr!("No surface."));
         return;
     };
     let span = last - first + 1;
@@ -824,14 +824,14 @@ fn heights_chart(ui: &mut Ui, pal: &Palette, a: &Analysis) {
             p.line_segment([pos2(x, y), pos2(x, (y + 3.0).min(plot.bottom()))], Stroke::new(1.0, water));
             y += 6.0;
         }
-        p.text(pos2(x + 4.0, plot.top()), Align2::LEFT_TOP, format!("Sea {}", a.sea_level), FontId::proportional(11.0), water);
+        p.text(pos2(x + 4.0, plot.top()), Align2::LEFT_TOP, tr!("Sea {sea_level}", sea_level = a.sea_level), FontId::proportional(11.0), water);
     }
     let label_y = rect.bottom() - 7.0;
     p.text(pos2(plot.left(), label_y), Align2::LEFT_CENTER, format!("y {}", a.min_y + first as i32), FontId::proportional(11.0), pal.weak);
     p.text(pos2(plot.right(), label_y), Align2::RIGHT_CENTER, format!("y {}", a.min_y + last as i32), FontId::proportional(11.0), pal.weak);
     if let Some((y, count)) = tip {
-        let range = if per > 1 { format!("y {} to {}", y, y + per as i32 - 1) } else { format!("y {y}") };
-        response.on_hover_text(format!("{range}: {} columns, {}", thousands(count), percent(count, a.grounded())));
+        let range = if per > 1 { tr!("y {y} to {value}", y, value = y + per as i32 - 1) } else { format!("y {y}") };
+        response.on_hover_text(tr!("{range}: {thousands} columns, {percent}", thousands = thousands(count), percent = percent(count, a.grounded()), range));
     }
 }
 
@@ -847,11 +847,11 @@ fn steps_chart(ui: &mut Ui, pal: &Palette, a: &Analysis) {
         pal.danger,
     ];
     let names = [
-        ("Flat", "no step to a neighbour"),
-        ("One block", "walked, jumped"),
-        ("Two or three", "a climb"),
-        ("4 to 22", "a fall that hurts"),
-        ("23 or more", "a fall that kills"),
+        (tr!("Flat"), tr!("no step to a neighbour")),
+        (tr!("One block"), tr!("walked, jumped")),
+        (tr!("Two or three"), tr!("a climb")),
+        (tr!("4 to 22"), tr!("a fall that hurts")),
+        (tr!("23 or more"), tr!("a fall that kills")),
     ];
     let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 10.0), Sense::hover());
     let p = ui.painter();
@@ -886,7 +886,7 @@ fn steps_chart(ui: &mut Ui, pal: &Palette, a: &Analysis) {
 /// The ores and riches of every mineral, in a table.
 fn ores_table(ui: &mut Ui, pal: &Palette, a: &Analysis) {
     widgets::well(ui, |ui| {
-        let columns = ["Ore", "Blocks", "In the open", "A chunk"];
+        let columns = [tr!("Ore"), tr!("Blocks"), tr!("In the open"), tr!("A chunk")];
         let right_edges = |rect: Rect| [rect.right() - 246.0, rect.right() - 164.0, rect.right() - 74.0, rect.right()];
         let (head, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
         for (text, x) in columns.iter().zip(right_edges(head)) {
@@ -898,19 +898,19 @@ fn ores_table(ui: &mut Ui, pal: &Palette, a: &Analysis) {
             p.hline(rect.x_range().expand(12.0), rect.top(), Stroke::new(1.0, pal.border));
             let found = c.ore + c.riches > 0;
             p.circle_filled(pos2(rect.left() + 4.0, rect.center().y), 4.5, theme::rgb(c.mineral.color()));
-            p.text(pos2(rect.left() + 18.0, rect.center().y), Align2::LEFT_CENTER, c.mineral.name(), FontId::proportional(12.5), if found { pal.text } else { pal.weak });
+            p.text(pos2(rect.left() + 18.0, rect.center().y), Align2::LEFT_CENTER, crate::i18n::tr_name(c.mineral.name()), FontId::proportional(12.5), if found { pal.text } else { pal.weak });
             let per_chunk = c.ore as f64 / a.chunks().max(1.0 / 256.0);
             let values = [
                 c.ore.to_string(),
                 c.riches.to_string(),
                 c.exposed.to_string(),
-                if c.ore == 0 { "0".to_owned() } else if per_chunk < 0.1 { "< 0.1".to_owned() } else { format!("{per_chunk:.1}") },
+                if c.ore == 0 { "0".to_owned() } else if per_chunk < 0.1 { "< 0.1".to_owned() } else { tr!("{per_chunk:.1}", per_chunk) },
             ];
             for ((value, x), raw) in values.iter().zip(right_edges(rect)).zip([c.ore, c.riches, c.exposed, c.ore]) {
                 let shown = if raw == 0 { "—".to_owned() } else if value.contains('.') || value.contains('<') { value.clone() } else { thousands(raw) };
                 p.text(pos2(x, rect.center().y), Align2::RIGHT_CENTER, shown, FontId::proportional(12.5), if raw == 0 { pal.weak } else { pal.text });
             }
-            response.on_hover_text(format!("{} — for {}", c.mineral.name(), c.mineral.use_for()));
+            response.on_hover_text(tr!("{name} — for {use_for}", name = crate::i18n::tr_name(c.mineral.name()), use_for = crate::i18n::tr_name(c.mineral.use_for())));
         }
     });
 }
@@ -936,14 +936,14 @@ fn shares(ui: &mut Ui, pal: &Palette, list: &[analysis::Count], whole: u64, most
                 p.rect_filled(fill, 2.5, theme::mix(theme::rgb(c.color), pal.text, 0.12));
             }
             p.text(rect.right_center(), Align2::RIGHT_CENTER, percent(c.count, whole), FontId::proportional(12.5), pal.text);
-            response.on_hover_text(format!("{} · {} {unit}", c.id, thousands(c.count)));
+            response.on_hover_text(tr!("{id} · {thousands} {unit}", id = c.id, thousands = thousands(c.count), unit));
         }
         if list.len() > most {
             let rest: u64 = list[most..].iter().map(|c| c.count).sum();
             let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
             let p = ui.painter();
             p.hline(rect.x_range().expand(12.0), rect.top(), Stroke::new(1.0, pal.border));
-            p.text(pos2(rect.left() + 22.0, rect.center().y), Align2::LEFT_CENTER, format!("{} more", list.len() - most), FontId::proportional(12.0), pal.weak);
+            p.text(pos2(rect.left() + 22.0, rect.center().y), Align2::LEFT_CENTER, tr!("{most} more", most = list.len() - most), FontId::proportional(12.0), pal.weak);
             p.text(rect.right_center(), Align2::RIGHT_CENTER, percent(rest, whole), FontId::proportional(12.0), pal.weak);
         }
     });
@@ -962,7 +962,7 @@ fn stat(ui: &mut Ui, pal: &Palette, label: &str, value: String, spot: Option<(i3
     row.with_layout(Layout::right_to_left(Align::Center), |ui| {
         ui.spacing_mut().item_spacing.x = 10.0;
         if let Some((x, z)) = spot
-            && link(ui, pal, Some(Icon::MapPin), &format!("{x}, {z}")).on_hover_text("Show on the map").clicked()
+            && link(ui, pal, Some(Icon::MapPin), &format!("{x}, {z}")).on_hover_text(tr!("Show on the map")).clicked()
         {
             *choice = Choice::Show(x, z);
         }
@@ -1017,9 +1017,9 @@ fn progress(ui: &mut Ui, pal: &Palette, steps: &Steps) {
     ui.vertical_centered(|ui| {
         crate::loader::loader(ui, 24.0);
         ui.add_space(16.0);
-        ui.label(RichText::new("Reading every block of the map").size(14.5).medium());
+        ui.label(RichText::new(tr!("Reading every block of the map")).size(14.5).medium());
         ui.add_space(4.0);
-        ui.label(RichText::new("As the export will write them: terrains, rock, water, plants and objects.").size(12.0).color(pal.weak));
+        ui.label(RichText::new(tr!("As the export will write them: terrains, rock, water, plants and objects.")).size(12.0).color(pal.weak));
         ui.add_space(18.0);
         let (bar, _) = ui.allocate_exact_size(vec2(300.0, 4.0), Sense::hover());
         ui.painter().rect_filled(bar, 2, pal.border);
@@ -1028,19 +1028,19 @@ fn progress(ui: &mut Ui, pal: &Palette, steps: &Steps) {
             ui.painter().rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * f, bar.height())), 2, pal.accent);
         }
         ui.add_space(10.0);
-        ui.label(RichText::new(format!("{} of {} tiles", thousands(done as u64), thousands(total as u64))).size(11.5).color(pal.weak));
+        ui.label(RichText::new(tr!("{thousands} of {thousands2} tiles", thousands = thousands(done as u64), thousands2 = thousands(total as u64))).size(11.5).color(pal.weak));
     });
     ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
 }
 
 fn save_report(name: &str, a: &Analysis) -> Choice {
     let file: String = name.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
-    let Some(path) = rfd::FileDialog::new().set_file_name(format!("{} — survival check.md", file.trim())).add_filter("Markdown", &["md"]).save_file() else {
+    let Some(path) = rfd::FileDialog::new().set_file_name(tr!("{trim} — survival check.md", trim = file.trim())).add_filter(tr!("Markdown"), &["md"]).save_file() else {
         return Choice::Keep;
     };
     match std::fs::write(&path, a.report()) {
-        Ok(()) => Choice::Say(format!("Report saved: {}", path.display()), false),
-        Err(e) => Choice::Say(format!("Could not save the report: {e}"), true),
+        Ok(()) => Choice::Say(tr!("Report saved: {path}", path = path.display()), false),
+        Err(e) => Choice::Say(tr!("Could not save the report: {e}", e), true),
     }
 }
 
@@ -1075,9 +1075,9 @@ fn verdict_tone(pal: &Palette, v: Verdict) -> Color32 {
 
 fn verdict_word(v: Verdict) -> &'static str {
     match v {
-        Verdict::Ready => "Ready",
-        Verdict::Gaps => "Gaps",
-        Verdict::NotReady => "Not ready",
+        Verdict::Ready => tr!("Ready"),
+        Verdict::Gaps => tr!("Gaps"),
+        Verdict::NotReady => tr!("Not ready"),
     }
 }
 
@@ -1091,10 +1091,10 @@ fn verdict_icon(v: Verdict) -> Icon {
 
 fn severity_word(s: Severity) -> &'static str {
     match s {
-        Severity::Critical => "Breaks survival",
-        Severity::Warning => "Missing",
-        Severity::Good => "Fine",
-        Severity::Info => "Worth knowing",
+        Severity::Critical => tr!("Breaks survival"),
+        Severity::Warning => tr!("Missing"),
+        Severity::Good => tr!("Fine"),
+        Severity::Info => tr!("Worth knowing"),
     }
 }
 
@@ -1257,8 +1257,8 @@ fn indented(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
 fn human(n: u64) -> String {
     match n {
         0..1_000_000 => thousands(n),
-        1_000_000..1_000_000_000 => format!("{:.0} million", n as f64 / 1e6),
-        _ => format!("{:.2} billion", n as f64 / 1e9),
+        1_000_000..1_000_000_000 => tr!("{e6:.0} million", e6 = n as f64 / 1e6),
+        _ => tr!("{e9:.2} billion", e9 = n as f64 / 1e9),
     }
 }
 

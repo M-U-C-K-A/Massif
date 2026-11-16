@@ -214,7 +214,7 @@ impl TileStore {
             return Err("offline".into());
         }
         if self.offline() {
-            return Err("the network did not answer a moment ago".into());
+            return Err(tr!("the network did not answer a moment ago").into());
         }
         let bytes = self.download(key)?;
         let tile = decode_terrarium(&bytes)?;
@@ -251,14 +251,14 @@ impl TileStore {
                     std::thread::sleep(wait);
                     wait *= 2;
                 }
-                Err(ureq::Error::StatusCode(code)) => return Err(format!("the server answered {code}")),
+                Err(ureq::Error::StatusCode(code)) => return Err(tr!("the server answered {code}", code)),
                 Err(e) => {
                     *self.offline_since.lock().expect("not poisoned") = Some(Instant::now());
                     return Err(e.to_string());
                 }
             }
         }
-        Err("the server stayed busy".into())
+        Err(tr!("the server stayed busy").into())
     }
 
     /// Every tile of `keys`, waiting for them: `progress` hears how many are
@@ -291,8 +291,8 @@ impl TileStore {
         let errors = errors.into_inner().expect("not poisoned");
         if let Some(first) = errors.first() {
             let offline = !self.online || self.offline();
-            let why = if offline { format!("offline, and not downloaded before ({first})") } else { first.clone() };
-            return Err(format!("{} of {} tiles of elevation could not be had: {why}", errors.len(), keys.len()));
+            let why = if offline { tr!("offline, and not downloaded before ({first})", first) } else { first.clone() };
+            return Err(tr!("{n} of {n2} tiles of elevation could not be had: {why}", n = errors.len(), n2 = keys.len(), why));
         }
         Ok(out.into_inner().expect("not poisoned"))
     }

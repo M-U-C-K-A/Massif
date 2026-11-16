@@ -1997,63 +1997,63 @@ impl TerrainView {
             ui.add_space(2.0);
         };
         ui.spacing_mut().slider_width = (ui.available_width() - 190.0).clamp(70.0, 220.0);
-        section(ui, Icon::Sun, "Sun", "Shift + drag in the view turns it");
+        section(ui, Icon::Sun, tr!("Sun"), tr!("Shift + drag in the view turns it"));
         well(ui, |ui| {
-            row(ui, "Direction", |ui| {
+            row(ui, tr!("Direction"), |ui| {
                 ui.add(Field::new(&mut r.sun_azimuth, 0.0..=360.0).suffix("°").max_decimals(0));
             });
-            row(ui, "Height", |ui| {
+            row(ui, tr!("Height"), |ui| {
                 ui.add(Field::new(&mut r.sun_elevation, 1.0..=89.0).suffix("°").max_decimals(0));
             });
-            row(ui, "Strength", |ui| {
+            row(ui, tr!("Strength"), |ui| {
                 ui.add(Field::new(&mut r.sun_intensity, 0.0..=3.0).max_decimals(2));
             });
         });
         ui.add_space(10.0);
-        section(ui, Icon::Cloud, "Clouds", "");
+        section(ui, Icon::Cloud, tr!("Clouds"), "");
         well(ui, |ui| {
-            row(ui, "Show", |ui| {
+            row(ui, tr!("Show"), |ui| {
                 checkbox(ui, &mut r.clouds, "");
             });
             if r.clouds {
-                row(ui, "Cover", |ui| {
+                row(ui, tr!("Cover"), |ui| {
                     ui.add(Field::new(&mut r.cloud_cover, 0.0..=1.0).max_decimals(2));
                 });
-                row(ui, "Base", |ui| {
-                    ui.add(Field::new(&mut r.cloud_base, -64.0..=600.0).suffix(" blocks").max_decimals(0));
+                row(ui, tr!("Base"), |ui| {
+                    ui.add(Field::new(&mut r.cloud_base, -64.0..=600.0).suffix(tr!(" blocks")).max_decimals(0));
                 });
-                row(ui, "Thickness", |ui| {
-                    ui.add(Field::new(&mut r.cloud_thickness, 5.0..=400.0).suffix(" blocks").max_decimals(0));
+                row(ui, tr!("Thickness"), |ui| {
+                    ui.add(Field::new(&mut r.cloud_thickness, 5.0..=400.0).suffix(tr!(" blocks")).max_decimals(0));
                 });
-                row(ui, "Density", |ui| {
+                row(ui, tr!("Density"), |ui| {
                     ui.add(Field::new(&mut r.cloud_density, 0.05..=3.0).max_decimals(2));
                 });
-                row(ui, "Size", |ui| {
-                    ui.add(Field::new(&mut r.cloud_size, 20.0..=3000.0).suffix(" blocks").max_decimals(0));
+                row(ui, tr!("Size"), |ui| {
+                    ui.add(Field::new(&mut r.cloud_size, 20.0..=3000.0).suffix(tr!(" blocks")).max_decimals(0));
                 });
-                row(ui, "Shape", |ui| {
+                row(ui, tr!("Shape"), |ui| {
                     crate::widgets::drag(ui, egui::DragValue::new(&mut r.cloud_seed).range(0..=999));
                 });
             }
         });
         ui.add_space(10.0);
-        section(ui, Icon::Mountain, "Scene", "");
+        section(ui, Icon::Mountain, tr!("Scene"), "");
         well(ui, |ui| {
-            row(ui, "Height ×", |ui| {
+            row(ui, tr!("Height ×"), |ui| {
                 ui.add(Field::new(&mut r.exaggeration, 1.0..=8.0).max_decimals(1));
             });
-            row(ui, "Haze", |ui| {
+            row(ui, tr!("Haze"), |ui| {
                 ui.add(Field::new(&mut r.haze, 0.0..=1.0).max_decimals(2));
             });
-            row(ui, "Sea", |ui| {
+            row(ui, tr!("Sea"), |ui| {
                 checkbox(ui, &mut r.sea, "");
             });
-            row(ui, "Exposure", |ui| {
+            row(ui, tr!("Exposure"), |ui| {
                 ui.add(Field::new(&mut r.exposure, 0.2..=3.0).max_decimals(2));
             });
         });
         ui.add_space(10.0);
-        if ui.button("Reset").on_hover_text("Back to the usual sun, clouds and scene").clicked() {
+        if ui.button(tr!("Reset")).on_hover_text(tr!("Back to the usual sun, clouds and scene")).clicked() {
             *r = RenderSettings::default();
         }
         self.render != before

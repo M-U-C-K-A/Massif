@@ -231,7 +231,7 @@ impl Job {
     }
 
     pub fn generate(ctx: &egui::Context, params: GenParams) -> Job {
-        let label = format!("Generating “{}”", params.name);
+        let label = tr!("Generating “{name}”", name = params.name);
         Job::spawn(JobKind::Generate, label, None, ctx, move || Outcome::World {
             world: generate(&params),
             path: None,
@@ -241,7 +241,7 @@ impl Job {
     /// Convert a WorldPainter `.world` file.
     pub fn import(ctx: &egui::Context, path: PathBuf) -> Job {
         let progress = Arc::new(ImportProgress::default());
-        let label = format!("Importing {}", display_name(&path));
+        let label = tr!("Importing {file}", file = display_name(&path));
         let p = progress.clone();
         Job::spawn(JobKind::Import, label, Some(progress as Arc<dyn JobProgress>), ctx, move || {
             match massif_legacy::import_world(&path, Some(&p)) {
@@ -251,7 +251,7 @@ impl Job {
                     source: path,
                 },
                 Err(massif_legacy::ImportError::Cancelled) => Outcome::Cancelled,
-                Err(e) => Outcome::Failed(format!("Could not import {}: {e}", display_name(&path))),
+                Err(e) => Outcome::Failed(tr!("Could not import {file}: {e}", file = display_name(&path), e)),
             }
         })
     }
@@ -261,26 +261,26 @@ impl Job {
         if is_worldpainter(&path) {
             return Job::import(ctx, path);
         }
-        let label = format!("Opening {}", display_name(&path));
+        let label = tr!("Opening {file}", file = display_name(&path));
         Job::spawn(JobKind::Open, label, None, ctx, move || match massif_format::load(&path) {
             Ok(world) => Outcome::World { world, path: Some(path) },
-            Err(e) => Outcome::Failed(format!("Could not open {}: {e}", display_name(&path))),
+            Err(e) => Outcome::Failed(tr!("Could not open {file}: {e}", file = display_name(&path), e)),
         })
     }
 
     /// Read back a backup left by a run that closed without saving.
     pub fn recover(ctx: &egui::Context, backup: crate::autosave::Backup) -> Job {
-        let label = format!("Restoring “{}”", backup.info.name);
+        let label = tr!("Restoring “{name}”", name = backup.info.name);
         Job::spawn(JobKind::Open, label, None, ctx, move || match massif_format::load(&backup.file) {
             Ok(world) => Outcome::Recovered { world, backup },
-            Err(e) => Outcome::Failed(format!("Could not restore “{}”: {e}", backup.info.name)),
+            Err(e) => Outcome::Failed(tr!("Could not restore “{name}”: {e}", name = backup.info.name, e)),
         })
     }
 
     /// A save point named `name` of a cold copy of the map, its picture
     /// drawn away from the frames.
     pub fn save_point(ctx: &egui::Context, snapshot: World, name: String) -> Job {
-        let label = format!("Saving the point “{name}”");
+        let label = tr!("Saving the point “{name}”", name);
         Job::spawn(JobKind::SavePoint, label, None, ctx, move || {
             Outcome::SavePoint(massif_core::versions::SavePoint::of(snapshot, name, massif_core::versions::now()))
         })
@@ -288,14 +288,14 @@ impl Job {
 
     /// Save a cold snapshot taken at `revision`.
     pub fn save(ctx: &egui::Context, snapshot: World, path: PathBuf, revision: u64) -> Job {
-        let label = format!("Saving {}", display_name(&path));
+        let label = tr!("Saving {file}", file = display_name(&path));
         Job::spawn(JobKind::Save, label, None, ctx, move || match massif_format::save(&snapshot, &path) {
             Ok(stats) => Outcome::Saved {
                 path,
                 revision,
                 bytes: stats.file_len,
             },
-            Err(e) => Outcome::Failed(format!("Could not save {}: {e}", display_name(&path))),
+            Err(e) => Outcome::Failed(tr!("Could not save {file}: {e}", file = display_name(&path), e)),
         })
     }
 
@@ -304,13 +304,13 @@ impl Job {
     pub fn auto(ctx: &egui::Context, mut snapshot: World, dim: usize, rules: massif_core::auto::AutoRules, biomes: bool, revision: u64) -> Job {
         use massif_core::auto::{Reader, Steps, base_terrain, biomes_over_the_map_with, paint_over_the_map_with};
         let progress = Arc::new(Steps::default());
-        let label = if biomes { "Automatic biomes over the whole map" } else { "Automatic paint over the whole map" };
+        let label = if biomes { tr!("Automatic biomes over the whole map") } else { tr!("Automatic paint over the whole map") };
         let p = progress.clone();
         Job::spawn(JobKind::Auto, label.to_owned(), Some(progress as Arc<dyn JobProgress>), ctx, move || {
             let base = base_terrain(&snapshot.dims[dim], &snapshot.registry);
             let reader = Reader::new(&rules, &snapshot.registry, snapshot.meta.sea_level).with_base(base);
             let mut history = massif_core::history::History::new(1);
-            history.begin("automatic", dim);
+            history.begin(tr!("automatic"), dim);
             let changes = {
                 let mut edit = history.edit(&mut snapshot, 0);
                 if biomes {
@@ -343,12 +343,12 @@ impl Job {
         use massif_core::auto::Steps;
         let progress = Arc::new(Steps::default());
         let p = progress.clone();
-        Job::spawn(JobKind::Auto, "Noise paint over the whole map".to_owned(), Some(progress as Arc<dyn JobProgress>), ctx, move || {
+        Job::spawn(JobKind::Auto, tr!("Noise paint over the whole map").to_owned(), Some(progress as Arc<dyn JobProgress>), ctx, move || {
             let Some(sampler) = settings.sampler(&snapshot.registry) else {
-                return Outcome::Failed("Noise paint: none of its terrains is in this map".to_owned());
+                return Outcome::Failed(tr!("Noise paint: none of its terrains is in this map").to_owned());
             };
             let mut history = massif_core::history::History::new(1);
-            history.begin("noise paint", dim);
+            history.begin(tr!("noise paint"), dim);
             let changes = massif_core::pattern::paint_over_the_map(&mut history.edit(&mut snapshot, level), &sampler, Some(&filter), &p);
             drop(history);
             if changes.cancelled {
@@ -373,8 +373,8 @@ impl Job {
         use massif_core::auto::Steps;
         let progress = Arc::new(Steps::default());
         let p = progress.clone();
-        let label = op.label();
-        Job::spawn(JobKind::Auto, format!("{label} over the whole map"), Some(progress as Arc<dyn JobProgress>), ctx, move || {
+        let label = crate::i18n::tr_name(op.label());
+        Job::spawn(JobKind::Auto, tr!("{label} over the whole map", label), Some(progress as Arc<dyn JobProgress>), ctx, move || {
             let sea = snapshot.meta.sea_level;
             let mut history = massif_core::history::History::new(1);
             history.begin(label, dim);
@@ -402,7 +402,7 @@ impl Job {
         use massif_core::auto::Steps;
         let progress = Arc::new(Steps::default());
         let p = progress.clone();
-        let label = if snapshot.dims[dim].selection.is_some() { "Carving caves in the selection" } else { "Carving caves over the whole map" };
+        let label = if snapshot.dims[dim].selection.is_some() { tr!("Carving caves in the selection") } else { tr!("Carving caves over the whole map") };
         Job::spawn(JobKind::Auto, label.to_owned(), Some(progress as Arc<dyn JobProgress>), ctx, move || {
             let carved = massif_core::caves::carve(&snapshot.dims[dim], &settings, &p);
             if carved.cancelled {
@@ -428,9 +428,9 @@ impl Job {
         let p = progress.clone();
         let online = matches!(job.source, crate::real_terrain::Source::Online);
         let label = match (&snapshot, online) {
-            (None, true) => format!("Downloading the relief of “{}”", job.name),
-            (None, false) => format!("Making “{}” from the file", job.name),
-            (Some(_), _) => "Relief of a real place".to_owned(),
+            (None, true) => tr!("Downloading the relief of “{name}”", name = job.name),
+            (None, false) => tr!("Making “{name}” from the file", name = job.name),
+            (Some(_), _) => tr!("Relief of a real place").to_owned(),
         };
         let kind = if snapshot.is_some() { JobKind::Auto } else { JobKind::Generate };
         Job::spawn(kind, label, Some(progress as Arc<dyn JobProgress>), ctx, move || {
@@ -443,7 +443,7 @@ impl Job {
                     p.tiles.store(keys.len(), Relaxed);
                     match store.load_all(&keys, &p.fetched, &p.pass.cancel) {
                         Ok(tiles) => (Box::new(Tiles { z, tiles }), metres_per_px(area.lat, z)),
-                        Err(e) => return Outcome::Failed(format!("Relief of a real place: {e}")),
+                        Err(e) => return Outcome::Failed(tr!("Relief of a real place: {e}", e)),
                     }
                 }
                 crate::real_terrain::Source::File(f) => {
@@ -459,7 +459,7 @@ impl Job {
             let samples = Samples::read(&area, source.as_ref(), spacing(&area, data_metres));
             drop(source);
             let Some(span) = samples.span() else {
-                return Outcome::Failed("Relief of a real place: no heights over this area".to_owned());
+                return Outcome::Failed(tr!("Relief of a real place: no heights over this area").to_owned());
             };
             let fit = job.vertical.fit(span, area.blocks_per_metre);
             let sea = job.vertical.sea_level;
@@ -475,7 +475,7 @@ impl Job {
                     drop(samples);
                     p.step.store(1, Relaxed);
                     let mut history = massif_core::history::History::new(1);
-                    history.begin("automatic", 0);
+                    history.begin(tr!("automatic"), 0);
                     let painted = paint(&mut world, &mut history);
                     drop(history);
                     if painted.cancelled {
@@ -489,7 +489,7 @@ impl Job {
                         crate::real_terrain::Target::NewWorld => unreachable!("a snapshot is of a map"),
                     };
                     let mut history = massif_core::history::History::new(1);
-                    history.begin("real terrain", dim);
+                    history.begin(tr!("real terrain"), dim);
                     let written = massif_core::real::write_ground(&mut history.edit(&mut snapshot, 0), &samples, &fit, rect, &p.pass);
                     drop(samples);
                     if written.cancelled {
@@ -521,13 +521,13 @@ impl Job {
 
     pub fn export(ctx: &egui::Context, snapshot: World, dir: PathBuf, options: ExportOptions) -> Job {
         let progress = Arc::new(Progress::default());
-        let label = format!("Exporting to {}", display_name(&dir));
+        let label = tr!("Exporting to {file}", file = display_name(&dir));
         let p = progress.clone();
         Job::spawn(JobKind::Export, label, Some(progress as Arc<dyn JobProgress>), ctx, move || {
             match massif_anvil::export(&snapshot, &dir, &options, &p) {
                 Ok(stats) => Outcome::Exported { dir, stats },
                 Err(massif_anvil::ExportError::Cancelled) => Outcome::Cancelled,
-                Err(e) => Outcome::Failed(format!("Export failed: {e}")),
+                Err(e) => Outcome::Failed(tr!("Export failed: {e}", e)),
             }
         })
     }

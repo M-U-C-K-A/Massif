@@ -118,15 +118,15 @@ pub fn mode_selector(ui: &mut Ui, mode: &mut MapMode, narrow: bool, id: &str) {
     if narrow {
         crate::widgets::combo(id)
             .width(84.0)
-            .selected_text(mode.label())
+            .selected_text(crate::i18n::tr_name(mode.label()))
             .show_ui(ui, |ui| {
                 for m in MapMode::ALL {
-                    ui.selectable_value(mode, m, m.label());
+                    ui.selectable_value(mode, m, crate::i18n::tr_name(m.label()));
                 }
             });
     } else {
         for m in MapMode::ALL {
-            if ui.selectable_label(*mode == m, m.label()).clicked() {
+            if ui.selectable_label(*mode == m, crate::i18n::tr_name(m.label())).clicked() {
                 *mode = m;
             }
         }
@@ -293,9 +293,9 @@ impl MapView {
         mode_selector(ui, &mut self.mode, narrow, "map mode");
         ui.separator();
         ui.toggle_value(&mut self.contours, theme::glyph(Icon::Spline).to_string())
-            .on_hover_text("Contour lines");
+            .on_hover_text(tr!("Contour lines"));
         ui.toggle_value(&mut self.grid, theme::glyph(Icon::Grid3x3).to_string())
-            .on_hover_text("Tile and chunk grid");
+            .on_hover_text(tr!("Tile and chunk grid"));
     }
 
     /// What the pointer at `p` is over, on the river being laid out.
@@ -453,9 +453,9 @@ impl MapView {
         let Some(draft) = &tools.river_draft else { return };
         let font = FontId::proportional(12.5);
         let text = painter.layout_no_wrap(draft.summary(), font.clone(), Color32::from_gray(225));
-        let dig = painter.layout_no_wrap("Dig river".to_owned(), FontId::proportional(12.5), Color32::WHITE);
+        let dig = painter.layout_no_wrap(tr!("Dig river").to_owned(), FontId::proportional(12.5), Color32::WHITE);
         let enter = painter.layout_no_wrap("⏎".to_owned(), FontId::proportional(11.0), Color32::from_white_alpha(170));
-        let cancel = painter.layout_no_wrap("Cancel".to_owned(), font, Color32::from_gray(210));
+        let cancel = painter.layout_no_wrap(tr!("Cancel").to_owned(), font, Color32::from_gray(210));
         let esc = painter.layout_no_wrap("esc".to_owned(), FontId::proportional(10.5), Color32::from_gray(130));
         let (pad, gap, h) = (12.0, 8.0, 28.0);
         let dig_w = dig.size().x + enter.size().x + 26.0;
@@ -468,8 +468,8 @@ impl MapView {
         painter.galley(pos2(bar.min.x + pad, mid - text.size().y / 2.0), text.clone(), Color32::from_gray(225));
         let dig_rect = Rect::from_min_size(pos2(bar.min.x + pad + text.size().x + 16.0, mid - h / 2.0), vec2(dig_w, h));
         let cancel_rect = Rect::from_min_size(pos2(dig_rect.max.x + gap, mid - h / 2.0), vec2(cancel_w, h));
-        let dig_hit = ui.interact(dig_rect, id.with("dig river"), Sense::click()).on_hover_text("Dig it into the map (Enter)");
-        let cancel_hit = ui.interact(cancel_rect, id.with("drop river"), Sense::click()).on_hover_text("Drop this river (Esc)");
+        let dig_hit = ui.interact(dig_rect, id.with("dig river"), Sense::click()).on_hover_text(tr!("Dig it into the map (Enter)"));
+        let cancel_hit = ui.interact(cancel_rect, id.with("drop river"), Sense::click()).on_hover_text(tr!("Drop this river (Esc)"));
         let accent = theme::accent();
         painter.rect_filled(dig_rect, 8, if dig_hit.hovered() { theme::mix(accent, Color32::WHITE, 0.15) } else { accent });
         painter.galley(pos2(dig_rect.min.x + 12.0, mid - dig.size().y / 2.0), dig, Color32::WHITE);
@@ -488,7 +488,7 @@ impl MapView {
         } else if cancel_hit.clicked() {
             tools.river_draft = None;
             self.river_grab = None;
-            *feedback = Some("River dropped".into());
+            *feedback = Some(tr!("River dropped").into());
         }
     }
 
@@ -1027,7 +1027,7 @@ impl MapView {
             } else if escape {
                 tools.river_draft = None;
                 self.river_grab = None;
-                *feedback = Some("River dropped".into());
+                *feedback = Some(tr!("River dropped").into());
             }
         }
         if ui.input(|i| i.key_pressed(egui::Key::Escape))
@@ -1036,7 +1036,7 @@ impl MapView {
             // Escape abandons the stroke being drawn.
             let _ = tools::end_stroke(doc, stroke);
             doc.undo();
-            *feedback = Some("Stroke cancelled".into());
+            *feedback = Some(tr!("Stroke cancelled").into());
         }
         if let Some(stroke) = &mut self.stroke {
             let held = if stroke.secondary() { down[1] } else { down[0] };
@@ -1062,7 +1062,7 @@ impl MapView {
         if self.select.is_drawing() {
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 self.select.cancel();
-                *feedback = Some("Selection cancelled".into());
+                *feedback = Some(tr!("Selection cancelled").into());
             } else if down[0] || down[1] {
                 if let Some(at) = world_pointer {
                     self.select.update(at, self.zoom, &tools.brush);
@@ -1278,8 +1278,8 @@ impl MapView {
                     self.draw_river(&painter, canvas, d, &spec, None);
                 }
                 let hint = match self.spring.as_ref().map(|s| &s.1) {
-                    Some(d) if d.course.len() >= 3 => format!("Click: a river springs here and runs to {}", d.mouth.map_or("", |m| m.label())),
-                    _ => "Click on land: where the river springs".to_owned(),
+                    Some(d) if d.course.len() >= 3 => tr!("Click: a river springs here and runs to {map_or}", map_or = d.mouth.map_or("", |m| crate::i18n::tr_name(m.label()))),
+                    _ => tr!("Click on land: where the river springs").to_owned(),
                 };
                 let at = canvas.center_bottom() - vec2(0.0, 22.0);
                 let galley = painter.layout_no_wrap(hint, FontId::proportional(12.5), Color32::from_gray(235));
@@ -1416,7 +1416,7 @@ impl MapView {
             painter.text(
                 canvas.center(),
                 Align2::CENTER_CENTER,
-                "This world has no map yet: create one with File ▸ New World",
+                tr!("This world has no map yet: create one with File ▸ New World"),
                 FontId::proportional(14.0),
                 pal.weak,
             );
@@ -1479,9 +1479,9 @@ impl MapView {
         painter.vline(x0, (y - 5.0)..=y, line);
         painter.vline(x0 + px, (y - 5.0)..=y, line);
         let label = if len >= 1000.0 {
-            format!("{} km", len / 1000.0)
+            tr!("{value} km", value = len / 1000.0)
         } else {
-            format!("{len} blocks")
+            tr!("{len} blocks", len)
         };
         painter.text(pos2(x0 + 4.0, y - 4.0), Align2::LEFT_BOTTOM, label, FontId::proportional(10.5), pal.text);
     }
@@ -1511,7 +1511,7 @@ impl MapView {
                         let reg = &doc.world.registry;
                         let terrain = &reg.terrain(TerrainId(p.terrain)).name;
                         let water = if p.fluid != massif_core::NO_FLUID {
-                            format!(" · water {}", p.fluid)
+                            tr!(" · water {fluid}", fluid = p.fluid)
                         } else {
                             String::new()
                         };
@@ -1529,18 +1529,18 @@ impl MapView {
                             levels: 0,
                         };
                         let biome = crate::map_render::AutoBiome::new(reg).resolve(reg, &sample, doc.world.meta.sea_level as f32);
-                        let biome = format!(" · {}{}", reg.biome(massif_core::registry::BiomeId(biome)).name, if p.biome == 0 { " (automatic)" } else { "" });
+                        let biome = format!(" · {}{}", reg.biome(massif_core::registry::BiomeId(biome)).name, if p.biome == 0 { tr!(" (automatic)") } else { "" });
                         // In whole blocks, as the game has the land.
-                        format!("Location: {x}, {z} · height {} · {terrain}{cover}{water}{biome}", massif_core::compose::block_top(p.height))
+                        tr!("Location: {x}, {z} · height {block_top} · {terrain}{cover}{water}{biome}", block_top = massif_core::compose::block_top(p.height), x, z, terrain, cover, water, biome)
                     }
-                    None => format!("Location: {x}, {z}"),
+                    None => tr!("Location: {x}, {z}", x, z),
                 }
             }
-            None => "Location: –".to_owned(),
+            None => tr!("Location: –").to_owned(),
         };
         child.label(egui::RichText::new(location).size(11.5).color(pal.weak));
         child.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.small_button(theme::glyph(Icon::Maximize2).to_string()).on_hover_text("Fit the whole map").clicked() {
+            if ui.small_button(theme::glyph(Icon::Maximize2).to_string()).on_hover_text(tr!("Fit the whole map")).clicked() {
                 self.fit_smoothly(doc);
             }
             if ui.small_button("+").clicked() {

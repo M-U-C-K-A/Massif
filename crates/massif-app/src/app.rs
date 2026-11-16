@@ -90,6 +90,8 @@ struct Settings {
     skipped_version: Option<String>,
     /// The author written in the packs exported.
     pack_author: String,
+    /// The language of the interface: the system's, or one chosen.
+    language: crate::i18n::Language,
 }
 
 /// The intervals of the backups offered in the settings, in minutes.
@@ -138,6 +140,7 @@ impl Default for Settings {
             check_updates: true,
             skipped_version: None,
             pack_author: String::new(),
+            language: crate::i18n::Language::System,
         }
     }
 }
@@ -381,7 +384,7 @@ fn default_world() -> World {
 /// A typeface to choose, shown in itself: its name and a line set in it,
 /// a dot on the right for the one chosen, what it is like on hover.
 fn typeface_row(ui: &mut Ui, face: theme::Typeface, on: bool) -> egui::Response {
-    const SAMPLE: &str = "Ridges, rivers and coasts — 2 048 × 2 048 blocks";
+    const SAMPLE: &str = tn!("Ridges, rivers and coasts — 2 048 × 2 048 blocks");
     let pal = Palette::of(ui);
     let first = ui.cursor().top() <= ui.max_rect().top() + 0.5;
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 54.0), Sense::click());
@@ -407,7 +410,7 @@ fn typeface_row(ui: &mut Ui, face: theme::Typeface, on: bool) -> egui::Response 
         ui.painter().circle_stroke(dot, 7.5, Stroke::new(1.0, if hovered { pal.text } else { pal.weak }));
     }
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, on, face.name()));
-    response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(face.about())
+    response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(crate::i18n::tr_name(face.about()))
 }
 
 impl MassifApp {
@@ -435,6 +438,7 @@ impl MassifApp {
         if tools.sculpt.tool == Tool::Dig {
             tools.sculpt.tool = Tool::Build;
         }
+        crate::i18n::set_language(settings.language);
         theme::set_accent(&cc.egui_ctx, settings.accent);
         crate::loader::set_pattern(&cc.egui_ctx, settings.loader);
         theme::set_typeface(&cc.egui_ctx, settings.typeface);
@@ -480,8 +484,8 @@ impl MassifApp {
     /// a map.
     fn pick_heightmap(&mut self, ctx: &egui::Context) {
         if let Some(path) = rfd::FileDialog::new()
-            .set_title("A height map to make a map of")
-            .add_filter("Height maps", &["png", "jpg", "jpeg", "r16", "r32", "raw"])
+            .set_title(tr!("A height map to make a map of"))
+            .add_filter(tr!("Height maps"), &["png", "jpg", "jpeg", "r16", "r32", "raw"])
             .pick_file()
         {
             self.take_heightmap(ctx, path);
@@ -497,7 +501,7 @@ impl MassifApp {
                     home.heightmap = Some(pick);
                 }
             }
-            Err(e) => self.say(ctx, format!("That height map cannot be read: {e}"), true, None),
+            Err(e) => self.say(ctx, tr!("That height map cannot be read: {e}", e), true, None),
         }
     }
 
@@ -536,8 +540,8 @@ impl MassifApp {
             }
             HomeAction::Open => {
                 if let Some(path) = rfd::FileDialog::new()
-                    .set_title("Open a map")
-                    .add_filter("Massif map", &[massif_format::EXTENSION])
+                    .set_title(tr!("Open a map"))
+                    .add_filter(tr!("Massif map"), &[massif_format::EXTENSION])
                     .pick_file()
                 {
                     self.request(ctx, Pending::Open(Some(path)));
@@ -545,8 +549,8 @@ impl MassifApp {
             }
             HomeAction::Import => {
                 if let Some(path) = rfd::FileDialog::new()
-                    .set_title("Import a WorldPainter world")
-                    .add_filter("WorldPainter world", &["world"])
+                    .set_title(tr!("Import a WorldPainter world"))
+                    .add_filter(tr!("WorldPainter world"), &["world"])
                     .pick_file()
                 {
                     self.request(ctx, Pending::Open(Some(path)));
@@ -556,7 +560,7 @@ impl MassifApp {
                 if path.exists() {
                     self.request(ctx, Pending::Open(Some(path)));
                 } else {
-                    self.say(ctx, format!("{} is no longer there", path.display()), true, None);
+                    self.say(ctx, tr!("{path} is no longer there", path = path.display()), true, None);
                 }
             }
             HomeAction::Forget(path) => self.settings.recent.retain(|p| *p != path),
@@ -574,7 +578,7 @@ impl MassifApp {
                     "world" => self.request(ctx, Pending::Open(Some(path))),
                     e if e == massif_format::EXTENSION => self.request(ctx, Pending::Open(Some(path))),
                     e if e == massif_core::pack_file::EXTENSION => self.pack_inbox.push(path),
-                    _ => self.say(ctx, "Massif opens .massif maps, WorldPainter .world worlds, height maps and .massifpack packs", true, None),
+                    _ => self.say(ctx, tr!("Massif opens .massif maps, WorldPainter .world worlds, height maps and .massifpack packs"), true, None),
                 }
             }
         }
@@ -610,13 +614,13 @@ impl MassifApp {
     /// the world, white its top.
     fn export_heightmap(&mut self, ctx: &egui::Context) {
         if self.doc.dimension().bounds().is_none() {
-            self.say(ctx, "The map is empty", true, None);
+            self.say(ctx, tr!("The map is empty"), true, None);
             return;
         }
         let Some(path) = rfd::FileDialog::new()
-            .set_title("Save the height map")
-            .add_filter("16-bit PNG", &["png"])
-            .set_file_name(format!("{} height map.png", self.doc.world.meta.name))
+            .set_title(tr!("Save the height map"))
+            .add_filter(tr!("16-bit PNG"), &["png"])
+            .set_file_name(tr!("{name} height map.png", name = self.doc.world.meta.name))
             .save_file()
         else {
             return;
@@ -642,11 +646,11 @@ impl MassifApp {
         match massif_core::heightmap::write_png16(path, pw, pd, &samples) {
             Ok(()) => self.say(
                 ctx,
-                format!("Saved a height map of {pw} × {pd}: black is Y {min_y:.0}, white Y {max_y:.0}{}", if k < 1.0 { format!(", {:.1} blocks a pixel", 1.0 / k) } else { String::new() }),
+                tr!("Saved a height map of {pw} × {pd}: black is Y {min_y:.0}, white Y {max_y:.0}{value}", value = if k < 1.0 { tr!(", {k:.1} blocks a pixel", k = 1.0 / k) } else { String::new() }, pw, pd, min_y, max_y),
                 false,
                 path.parent().map(|p| p.to_path_buf()),
             ),
-            Err(e) => self.say(ctx, format!("The height map could not be saved: {e}"), true, None),
+            Err(e) => self.say(ctx, tr!("The height map could not be saved: {e}", e), true, None),
         }
     }
 
@@ -819,20 +823,33 @@ impl MassifApp {
 
     fn prefs_appearance(&mut self, ui: &mut Ui, ctx: &egui::Context) {
         let pal = Palette::of(ui);
-        Self::prefs_header(ui, "Appearance", "How Massif looks: its theme, and the colour of what is chosen, of the main buttons and of the home screen's art.");
+        Self::prefs_header(ui, tr!("Appearance"), tr!("How Massif looks: its language, its theme, and the colour of what is chosen, of the main buttons and of the home screen's art."));
         crate::widgets::well(ui, |ui| {
-            crate::widgets::row(ui, "Theme", |ui| {
+            crate::widgets::row(ui, tr!("Language"), |ui| {
+                use crate::i18n::Language;
+                let name = |l: Language| if l == Language::System { tr!("System ({language})", language = l.resolve().native_name()) } else { l.native_name().to_owned() };
+                crate::widgets::combo("language").selected_text(name(self.settings.language)).width(170.0).show_ui(ui, |ui| {
+                    for l in std::iter::once(Language::System).chain(Language::ALL).filter(|l| l.offered()) {
+                        if ui.selectable_label(self.settings.language == l, name(l)).clicked() && self.settings.language != l {
+                            self.settings.language = l;
+                            crate::i18n::set_language(l);
+                            crate::sounds::play(Cue::Select);
+                        }
+                    }
+                });
+            });
+            crate::widgets::row(ui, tr!("Theme"), |ui| {
                 let choices = [ThemeChoice::System, ThemeChoice::Light, ThemeChoice::Dark];
                 let on = choices.map(|c| c == self.settings.theme);
-                if let Some(k) = crate::widgets::button_group(ui, "theme", &["System", "Light", "Dark"], &on) {
+                if let Some(k) = crate::widgets::button_group(ui, "theme", &["System", tr!("Light"), tr!("Dark")], &on) {
                     self.settings.theme = choices[k];
                 }
             });
-            crate::widgets::row(ui, "Accent", |ui| {
+            crate::widgets::row(ui, tr!("Accent"), |ui| {
                 // Laid from the right: any colour last, the swatches before it.
                 let mut chosen = None;
                 let mut custom = self.settings.accent;
-                if egui::color_picker::color_edit_button_srgb(ui, &mut custom).on_hover_text("Any colour").changed() {
+                if egui::color_picker::color_edit_button_srgb(ui, &mut custom).on_hover_text(tr!("Any colour")).changed() {
                     chosen = Some(custom);
                 }
                 ui.add_space(4.0);
@@ -855,7 +872,7 @@ impl MassifApp {
                     crate::sounds::play(Cue::Select);
                 }
             });
-            crate::widgets::row(ui, "Loader", |ui| {
+            crate::widgets::row(ui, tr!("Loader"), |ui| {
                 // Each pattern alive in its tile, laid from the right.
                 ui.spacing_mut().item_spacing.x = 3.0;
                 for p in crate::loader::Pattern::ALL.iter().rev() {
@@ -866,54 +883,58 @@ impl MassifApp {
                         ui.painter().rect(rect, theme::TILE_RADIUS, fill, Stroke::new(1.0, if on { pal.accent } else { pal.border }), egui::StrokeKind::Inside);
                     }
                     crate::loader::paint(ui, rect.shrink(5.0), *p);
-                    tile.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, p.label()));
-                    if tile.on_hover_text(p.label()).clicked() {
+                    tile.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, crate::i18n::tr_name(p.label())));
+                    if tile.on_hover_text(crate::i18n::tr_name(p.label())).clicked() {
                         self.settings.loader = *p;
                         crate::loader::set_pattern(ctx, *p);
                         crate::sounds::play(Cue::Select);
                     }
                 }
             });
-            crate::widgets::row(ui, "Animated home screen", |ui| {
+            crate::widgets::row(ui, tr!("Animated home screen"), |ui| {
                 let still = theme::reduce_motion(ui.ctx());
                 let mut on = self.settings.animate_backdrop && !still;
-                let tip = if still { "Still: Reduce motion is on (Accessibility)" } else { "The dither of its picture moves on about once a second" };
+                let tip = if still { tr!("Still: Reduce motion is on (Accessibility)") } else { tr!("The dither of its picture moves on about once a second") };
                 if ui.add_enabled_ui(!still, |ui| crate::widgets::switch(ui, &mut on)).inner.on_hover_text(tip).changed() {
                     self.settings.animate_backdrop = on;
                 }
             });
         });
+        if crate::i18n::current() != crate::i18n::Language::English {
+            ui.add_space(8.0);
+            ui.add(egui::Label::new(RichText::new(tr!("Massif Help and the guide on the website are in English for now.")).size(11.5).color(pal.weak)).wrap());
+        }
     }
 
     fn prefs_accessibility(&mut self, ui: &mut Ui) {
         let pal = Palette::of(ui);
         Self::prefs_header(
             ui,
-            "Accessibility",
+            tr!("Accessibility"),
             if crate::access::FOLLOWS_SYSTEM {
-                "Massif easier to see and calmer to use. System follows macOS's own settings, in System Settings ▸ Accessibility ▸ Display."
+                tr!("Massif easier to see and calmer to use. System follows macOS's own settings, in System Settings ▸ Accessibility ▸ Display.")
             } else {
-                "Massif easier to see and calmer to use."
+                tr!("Massif easier to see and calmer to use.")
             },
         );
         let system = self.access.system;
         // A choice that may follow the system: what the system says beside it.
         let follow = |ui: &mut Ui, id: &str, value: &mut Follow, system_on: bool| {
             let choices: &[Follow] = if crate::access::FOLLOWS_SYSTEM { &[Follow::System, Follow::Off, Follow::On] } else { &[Follow::Off, Follow::On] };
-            let labels: &[&str] = if crate::access::FOLLOWS_SYSTEM { &["System", "Off", "On"] } else { &["Off", "On"] };
+            let labels: &[&str] = if crate::access::FOLLOWS_SYSTEM { &[tr!("System"), tr!("Off"), tr!("On")] } else { &[tr!("Off"), tr!("On")] };
             let shown = if crate::access::FOLLOWS_SYSTEM || *value != Follow::System { *value } else { Follow::Off };
             let on: Vec<bool> = choices.iter().map(|c| *c == shown).collect();
             if let Some(k) = crate::widgets::button_group(ui, id, labels, &on) {
                 *value = choices[k];
             }
             if crate::access::FOLLOWS_SYSTEM && *value == Follow::System {
-                ui.label(RichText::new(if system_on { "on in macOS" } else { "off in macOS" }).size(11.5).color(pal.weak));
+                ui.label(RichText::new(if system_on { tr!("on in macOS") } else { tr!("off in macOS") }).size(11.5).color(pal.weak));
             }
         };
         crate::widgets::well(ui, |ui| {
-            crate::widgets::row(ui, "High contrast", |ui| follow(ui, "high contrast", &mut self.settings.high_contrast, system.contrast));
-            crate::widgets::row(ui, "Reduce motion", |ui| follow(ui, "reduce motion", &mut self.settings.reduce_motion, system.reduce_motion));
-            crate::widgets::row(ui, "Interface size", |ui| {
+            crate::widgets::row(ui, tr!("High contrast"), |ui| follow(ui, "high contrast", &mut self.settings.high_contrast, system.contrast));
+            crate::widgets::row(ui, tr!("Reduce motion"), |ui| follow(ui, "reduce motion", &mut self.settings.reduce_motion, system.reduce_motion));
+            crate::widgets::row(ui, tr!("Interface size"), |ui| {
                 let labels = UI_SCALES.map(|s| format!("{:.0}%", s * 100.0));
                 let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
                 let on = UI_SCALES.map(|s| (s - self.settings.ui_scale).abs() < 0.01);
@@ -921,15 +942,15 @@ impl MassifApp {
                     self.settings.ui_scale = UI_SCALES[k];
                 }
                 if !on.contains(&true) {
-                    ui.label(RichText::new(format!("{:.0}% now", self.settings.ui_scale * 100.0)).size(11.5).color(pal.weak));
+                    ui.label(RichText::new(tr!("{value:.0}% now", value = self.settings.ui_scale * 100.0)).size(11.5).color(pal.weak));
                 }
             });
         });
         ui.add_space(12.0);
         for (name, what) in [
-            ("High contrast", "Text black or white, muted text and lines drawn stronger, the accent darkened or lightened until it reads; the home screen's picture calmer behind its words."),
-            ("Reduce motion", "The map and the 3D views stop where they are let go and go straight where they are sent; the home screen's picture and the tools' cards stay still."),
-            ("Interface size", "Everything larger, text and controls alike. ⌘+ and ⌘− change it too, ⌘0 puts it back."),
+            (tr!("High contrast"), tr!("Text black or white, muted text and lines drawn stronger, the accent darkened or lightened until it reads; the home screen's picture calmer behind its words.")),
+            (tr!("Reduce motion"), tr!("The map and the 3D views stop where they are let go and go straight where they are sent; the home screen's picture and the tools' cards stay still.")),
+            (tr!("Interface size"), tr!("Everything larger, text and controls alike. ⌘+ and ⌘− change it too, ⌘0 puts it back.")),
         ] {
             ui.horizontal_top(|ui| {
                 ui.allocate_ui_with_layout(vec2(104.0, 16.0), egui::Layout::left_to_right(Align::Min), |ui| {
@@ -943,7 +964,7 @@ impl MassifApp {
     }
 
     fn prefs_typeface(&mut self, ui: &mut Ui, ctx: &egui::Context) {
-        Self::prefs_header(ui, "Typeface", "What the interface is set in: the system's own typeface, or one of those built into Massif. Each shows here in itself.");
+        Self::prefs_header(ui, tr!("Typeface"), tr!("What the interface is set in: the system's own typeface, or one of those built into Massif. Each shows here in itself."));
         crate::widgets::well(ui, |ui| {
             for face in theme::Typeface::ALL {
                 if typeface_row(ui, face, self.settings.typeface == face).clicked() && self.settings.typeface != face {
@@ -958,18 +979,18 @@ impl MassifApp {
     fn prefs_sounds(&mut self, ui: &mut Ui) {
         use crate::sounds::SoundLevel;
         let pal = Palette::of(ui);
-        Self::prefs_header(ui, "Sounds", "Little sounds for what happens, made by Massif as it plays them. Essential: what ends and what fails. All: the interface too — choices, switches, windows, workspaces.");
+        Self::prefs_header(ui, tr!("Sounds"), tr!("Little sounds for what happens, made by Massif as it plays them. Essential: what ends and what fails. All: the interface too — choices, switches, windows, workspaces."));
         crate::widgets::well(ui, |ui| {
-            crate::widgets::row(ui, "Play", |ui| {
+            crate::widgets::row(ui, tr!("Play"), |ui| {
                 let choices = [SoundLevel::Off, SoundLevel::Essential, SoundLevel::All];
                 let on = choices.map(|c| c == self.settings.sounds);
-                if let Some(k) = crate::widgets::button_group(ui, "sounds", &["Off", "Essential", "All"], &on) {
+                if let Some(k) = crate::widgets::button_group(ui, "sounds", &["Off", tr!("Essential"), tr!("All")], &on) {
                     self.settings.sounds = choices[k];
                     crate::sounds::configure(self.settings.sounds, self.settings.volume);
                     crate::sounds::play(Cue::Toggle);
                 }
             });
-            crate::widgets::row(ui, "Volume", |ui| {
+            crate::widgets::row(ui, tr!("Volume"), |ui| {
                 let before = self.settings.volume;
                 ui.add_enabled(
                     self.settings.sounds != SoundLevel::Off,
@@ -984,15 +1005,15 @@ impl MassifApp {
             });
         });
         ui.add_space(14.0);
-        ui.label(RichText::new("Hear them").size(13.0).medium());
+        ui.label(RichText::new(tr!("Hear them")).size(13.0).medium());
         ui.add_space(4.0);
         crate::widgets::well(ui, |ui| {
             for cue in crate::sounds::Cue::ALL {
-                crate::widgets::row(ui, cue.label(), |ui| {
-                    if ui.button(theme::with_icon(Icon::Play, "Play")).clicked() {
+                crate::widgets::row(ui, crate::i18n::tr_name(cue.label()), |ui| {
+                    if ui.button(theme::with_icon(Icon::Play, tr!("Play"))).clicked() {
                         crate::sounds::preview(cue);
                     }
-                    let (tag, color) = if cue.essential() { ("Essential", pal.text) } else { ("All", pal.weak) };
+                    let (tag, color) = if cue.essential() { (tr!("Essential"), pal.text) } else { (tr!("All"), pal.weak) };
                     ui.label(RichText::new(tag).size(11.5).color(color));
                 });
             }
@@ -1001,18 +1022,18 @@ impl MassifApp {
 
     fn prefs_notifications(&mut self, ui: &mut Ui) {
         use crate::notify::NotifyWhen;
-        Self::prefs_header(ui, "Notifications", "The system tells when a long task ends — an export, an import, a conversion, a pass over the whole map — so that you know while Massif is behind other windows. What Massif does shows at the bottom right of its window either way.");
+        Self::prefs_header(ui, tr!("Notifications"), tr!("The system tells when a long task ends — an export, an import, a conversion, a pass over the whole map — so that you know while Massif is behind other windows. What Massif does shows at the bottom right of its window either way."));
         crate::widgets::well(ui, |ui| {
-            crate::widgets::row(ui, "Tell me", |ui| {
+            crate::widgets::row(ui, tr!("Tell me"), |ui| {
                 let choices = [NotifyWhen::Never, NotifyWhen::Background, NotifyWhen::Always];
                 let on = choices.map(|c| c == self.settings.notify);
-                if let Some(k) = crate::widgets::button_group(ui, "notify", &["Never", "When in the background", "Always"], &on) {
+                if let Some(k) = crate::widgets::button_group(ui, "notify", &["Never", tr!("When in the background"), tr!("Always")], &on) {
                     self.settings.notify = choices[k];
                 }
             });
-            crate::widgets::row(ui, "Try it", |ui| {
-                if ui.button(theme::with_icon(Icon::Bell, "Send a notification")).clicked() {
-                    crate::notify::send("Massif", "Notifications work: you will hear from Massif when a long task ends.");
+            crate::widgets::row(ui, tr!("Try it"), |ui| {
+                if ui.button(theme::with_icon(Icon::Bell, tr!("Send a notification"))).clicked() {
+                    crate::notify::send("Massif", tr!("Notifications work: you will hear from Massif when a long task ends."));
                     crate::sounds::preview(Cue::Ready);
                 }
             });
@@ -1021,19 +1042,19 @@ impl MassifApp {
 
     fn prefs_memory(&mut self, ui: &mut Ui) {
         let pal = Palette::of(ui);
-        Self::prefs_header(ui, "Memory", "What Massif keeps decoded to be quick: the tiles of the map, the images of the map view. Past the limit, what was used least is put away again, compressed, and decoded when it is needed. The map itself stays in memory compressed.");
+        Self::prefs_header(ui, tr!("Memory"), tr!("What Massif keeps decoded to be quick: the tiles of the map, the images of the map view. Past the limit, what was used least is put away again, compressed, and decoded when it is needed. The map itself stays in memory compressed."));
         crate::widgets::well(ui, |ui| {
-            crate::widgets::row(ui, "Limit", |ui| {
+            crate::widgets::row(ui, tr!("Limit"), |ui| {
                 let choices = [0u32, 1024, 2048, 4096, 8192];
                 let on = choices.map(|c| c == self.settings.memory_mb);
-                if let Some(k) = crate::widgets::button_group(ui, "memory", &["Automatic", "1 GB", "2 GB", "4 GB", "8 GB"], &on) {
+                if let Some(k) = crate::widgets::button_group(ui, "memory", &["Automatic", tr!("1 GB"), tr!("2 GB"), tr!("4 GB"), tr!("8 GB")], &on) {
                     self.settings.memory_mb = choices[k];
                     self.memory_checked = f64::NEG_INFINITY;
                 }
             });
         });
         ui.add_space(14.0);
-        ui.label(RichText::new("In use").size(13.0).medium());
+        ui.label(RichText::new(tr!("In use")).size(13.0).medium());
         ui.add_space(4.0);
         let dim = self.doc.dimension();
         let stats: Vec<massif_core::level::LevelStats> = dim.levels.iter().map(|l| l.stats()).collect();
@@ -1041,7 +1062,7 @@ impl MassifApp {
         let (chunks, grids, _) = self.map_cache.stats();
         let (columns, textures) = self.map_cache.bytes();
         let voxels = dim.voxels.len();
-        let mb = |b: usize| format!("{:.0} MB", b as f64 / (1u64 << 20) as f64);
+        let mb = |b: usize| tr!("{f64:.0} MB", f64 = b as f64 / (1u64 << 20) as f64);
         crate::widgets::well(ui, |ui| {
             let line = |ui: &mut Ui, name: &str, value: String, note: String| {
                 crate::widgets::row(ui, name, |ui| {
@@ -1049,26 +1070,26 @@ impl MassifApp {
                     ui.label(RichText::new(value).size(12.5));
                 });
             };
-            line(ui, "Decoded tiles", mb(hot_bytes), format!("{hot} of {tiles} tiles, at most {} a level", self.doc.max_hot_tiles));
-            line(ui, "The map, compressed", mb(cold_bytes), String::new());
-            line(ui, "Map view", mb(columns), format!("{grids} tiles of columns, {chunks} images of {} on the graphics card (up to {} and {})", mb(textures), self.map_cache.max_grids, self.map_cache.max_chunks));
-            line(ui, "Sculpted in 3D", mb(voxels * 4096), format!("{voxels} chunks of 16³"));
+            line(ui, tr!("Decoded tiles"), mb(hot_bytes), tr!("{hot} of {tiles} tiles, at most {max_hot_tiles} a level", max_hot_tiles = self.doc.max_hot_tiles, hot, tiles));
+            line(ui, tr!("The map, compressed"), mb(cold_bytes), String::new());
+            line(ui, tr!("Map view"), mb(columns), tr!("{grids} tiles of columns, {chunks} images of {mb} on the graphics card (up to {max_grids} and {max_chunks})", mb = mb(textures), max_grids = self.map_cache.max_grids, max_chunks = self.map_cache.max_chunks, grids, chunks));
+            line(ui, tr!("Sculpted in 3D"), mb(voxels * 4096), tr!("{voxels} chunks of 16³", voxels));
         });
     }
 
     fn prefs_autosave(&mut self, ui: &mut Ui) {
         Self::prefs_header(
             ui,
-            "Autosave",
-            "While the map has changes not saved, Massif keeps a copy of it, in a folder of its own: never over your file. Should Massif close without saving (a crash, a forced quit, a power cut), it offers to restore the copy the next time it starts. Saving the map, or closing it, removes its copy.",
+            tr!("Autosave"),
+            tr!("While the map has changes not saved, Massif keeps a copy of it, in a folder of its own: never over your file. Should Massif close without saving (a crash, a forced quit, a power cut), it offers to restore the copy the next time it starts. Saving the map, or closing it, removes its copy."),
         );
         crate::widgets::well(ui, |ui| {
-            crate::widgets::row(ui, "Autosave", |ui| {
+            crate::widgets::row(ui, tr!("Autosave"), |ui| {
                 crate::widgets::switch(ui, &mut self.settings.autosave);
             });
             if self.settings.autosave {
-                crate::widgets::row(ui, "Every", |ui| {
-                    let labels = AUTOSAVE_MINUTES.map(|m| format!("{m} min"));
+                crate::widgets::row(ui, tr!("Every"), |ui| {
+                    let labels = AUTOSAVE_MINUTES.map(|m| tr!("{m} min", m));
                     let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
                     let on = AUTOSAVE_MINUTES.map(|m| m == self.settings.autosave_minutes);
                     if let Some(k) = crate::widgets::button_group(ui, "autosave every", &labels, &on) {
@@ -1080,7 +1101,7 @@ impl MassifApp {
         if let Some(dir) = crate::autosave::default_dir() {
             ui.add_space(10.0);
             let pal = Palette::of(ui);
-            ui.add(egui::Label::new(RichText::new(format!("Kept in {}, {} copies at most.", dir.display(), crate::autosave::MAX_BACKUPS)).size(11.5).color(pal.weak)).wrap());
+            ui.add(egui::Label::new(RichText::new(tr!("Kept in {dir}, {max_backups} copies at most.", dir = dir.display(), max_backups = crate::autosave::MAX_BACKUPS)).size(11.5).color(pal.weak)).wrap());
         }
     }
 
@@ -1088,19 +1109,19 @@ impl MassifApp {
         let pal = Palette::of(ui);
         Self::prefs_header(
             ui,
-            "Updates",
-            "Once a day at most, Massif asks GitHub which version of Massif is the latest, and tells you when it is newer than yours. It sends nothing about you or your maps, and never downloads or installs anything itself: the release's page opens in your browser.",
+            tr!("Updates"),
+            tr!("Once a day at most, Massif asks GitHub which version of Massif is the latest, and tells you when it is newer than yours. It sends nothing about you or your maps, and never downloads or installs anything itself: the release's page opens in your browser."),
         );
         let ctx = ui.ctx().clone();
         crate::widgets::well(ui, |ui| {
-            crate::widgets::row(ui, "Check for new versions", |ui| {
+            crate::widgets::row(ui, tr!("Check for new versions"), |ui| {
                 if crate::widgets::switch(ui, &mut self.settings.check_updates).changed() && self.settings.check_updates {
                     self.check_updates(&ctx);
                 }
             });
             if let Some(skipped) = self.settings.skipped_version.clone() {
-                crate::widgets::row(ui, &format!("Skipped {skipped}"), |ui| {
-                    if ui.button("Tell me again").clicked() {
+                crate::widgets::row(ui, &tr!("Skipped {skipped}", skipped), |ui| {
+                    if ui.button(tr!("Tell me again")).clicked() {
                         self.settings.skipped_version = None;
                     }
                 });
@@ -1108,14 +1129,14 @@ impl MassifApp {
         });
         ui.add_space(10.0);
         let state = match (self.update_offer(), &self.updates.latest) {
-            (Some(r), _) => format!("Massif {} is out. You have {}.", r.tag_name.trim_start_matches('v'), crate::update::RUNNING),
-            _ if self.updates.waiting() => "Asking GitHub…".to_owned(),
-            (None, Some(_)) => format!("You have the latest version, {}.", crate::update::RUNNING),
-            (None, None) => format!("You have version {}.", crate::update::RUNNING),
+            (Some(r), _) => tr!("Massif {trim_start_matches} is out. You have {running}.", trim_start_matches = r.tag_name.trim_start_matches('v'), running = crate::update::RUNNING),
+            _ if self.updates.waiting() => tr!("Asking GitHub…").to_owned(),
+            (None, Some(_)) => tr!("You have the latest version, {running}.", running = crate::update::RUNNING),
+            (None, None) => tr!("You have version {running}.", running = crate::update::RUNNING),
         };
         ui.horizontal(|ui| {
             ui.label(RichText::new(state).size(11.5).color(pal.weak));
-            if self.update_offer().is_some() && ui.small_button("See what is new").clicked() {
+            if self.update_offer().is_some() && ui.small_button(tr!("See what is new")).clicked() {
                 self.dialog = Some(Dialog::Update);
             }
         });
@@ -1140,15 +1161,15 @@ impl MassifApp {
     }
 
     fn prefs_developer(&mut self, ui: &mut Ui) {
-        Self::prefs_header(ui, "Developer", "A panel of how Massif runs, live: frames a second and the time each takes, the memory the system counts, the processor's time, what Massif keeps decoded, the map, its tasks, the graphics card, and why it draws again. Offered in every area's menu, as Brushes or Info are.");
+        Self::prefs_header(ui, tr!("Developer"), tr!("A panel of how Massif runs, live: frames a second and the time each takes, the memory the system counts, the processor's time, what Massif keeps decoded, the map, its tasks, the graphics card, and why it draws again. Offered in every area's menu, as Brushes or Info are."));
         crate::widgets::well(ui, |ui| {
-            crate::widgets::row(ui, "Developer mode", |ui| {
-                crate::widgets::switch(ui, &mut self.settings.developer).on_hover_text("The Developer panel in the areas' menus");
+            crate::widgets::row(ui, tr!("Developer mode"), |ui| {
+                crate::widgets::switch(ui, &mut self.settings.developer).on_hover_text(tr!("The Developer panel in the areas' menus"));
             });
             if self.settings.developer {
-                crate::widgets::row(ui, "The panel", |ui| {
+                crate::widgets::row(ui, tr!("The panel"), |ui| {
                     let shown = self.layout.current().root.shows(EditorKind::Developer);
-                    if ui.add_enabled(!shown, egui::Button::new(theme::with_icon(Icon::Activity, if shown { "Shown" } else { "Show it here" }))).on_hover_text("Beside the largest area of this workspace").clicked() {
+                    if ui.add_enabled(!shown, egui::Button::new(theme::with_icon(Icon::Activity, if shown { tr!("Shown") } else { tr!("Show it here") }))).on_hover_text(tr!("Beside the largest area of this workspace")).clicked() {
                         self.show_developer_panel();
                     }
                 });
@@ -1158,7 +1179,7 @@ impl MassifApp {
 
     /// What the Developer panel shows of Massif itself.
     fn dev_info(&self) -> crate::devtools::DevInfo<'static> {
-        let mb = |b: u64| format!("{:.1} MB", b as f64 / (1u64 << 20) as f64);
+        let mb = |b: u64| tr!("{f64:.1} MB", f64 = b as f64 / (1u64 << 20) as f64);
         let dim = self.doc.dimension();
         let stats: Vec<massif_core::level::LevelStats> = dim.levels.iter().map(|l| l.stats()).collect();
         let (hot, hot_bytes, cold_bytes, tiles) = stats.iter().fold((0, 0, 0, 0), |(h, hb, cb, t), s| (h + s.hot_tiles, hb + s.hot_bytes, cb + s.cold_bytes, t + s.tiles));
@@ -1167,24 +1188,24 @@ impl MassifApp {
         let voxels = dim.voxels.len();
         let (t3, g3) = (self.view3d.tiles_built() + self.sculpt3d.tiles_built(), self.view3d.gpu_bytes() + self.sculpt3d.gpu_bytes());
         let keeps = vec![
-            ("Decoded tiles", mb(hot_bytes as u64), format!("{hot} of {tiles}, at most {} a level", self.doc.max_hot_tiles)),
-            ("Map, compressed", mb(cold_bytes as u64), String::new()),
-            ("Map view", mb(columns as u64), format!("{grids} tiles of columns, {chunks} images ({} on the graphics card){}", mb(textures as u64), if self.map_cache.busy() { ", drawing" } else { "" })),
-            ("3D views", mb(g3), format!("{t3} tiles on the graphics card")),
-            ("Sculpted in 3D", mb(voxels as u64 * 4096), format!("{voxels} chunks of 16³")),
-            ("Undo", format!("{} steps", self.doc.history.undo_count()), String::new()),
+            (tr!("Decoded tiles"), mb(hot_bytes as u64), tr!("{hot} of {tiles}, at most {max_hot_tiles} a level", max_hot_tiles = self.doc.max_hot_tiles, hot, tiles)),
+            (tr!("Map, compressed"), mb(cold_bytes as u64), String::new()),
+            (tr!("Map view"), mb(columns as u64), tr!("{grids} tiles of columns, {chunks} images ({mb} on the graphics card){value}", mb = mb(textures as u64), value = if self.map_cache.busy() { tr!(", drawing") } else { "" }, grids, chunks)),
+            (tr!("3D views"), mb(g3), tr!("{t3} tiles on the graphics card", t3)),
+            (tr!("Sculpted in 3D"), mb(voxels as u64 * 4096), tr!("{voxels} chunks of 16³", voxels)),
+            (tr!("Undo"), tr!("{undo_count} steps", undo_count = self.doc.history.undo_count()), String::new()),
         ];
         let map = match dim.bounds() {
             Some((lo, hi)) => {
                 let t = massif_core::coords::TILE_SIZE;
                 vec![
-                    ("Size", format!("{} × {} blocks", (hi.x - lo.x + 1) * t, (hi.z - lo.z + 1) * t)),
-                    ("Height", format!("{} to {}", dim.min_y, dim.max_y)),
-                    ("Levels", format!("{}", dim.levels.len())),
-                    ("Revision", format!("{}", self.doc.revision)),
+                    (tr!("Size"), tr!("{t} × {t2} blocks", t = (hi.x - lo.x + 1) * t, t2 = (hi.z - lo.z + 1) * t)),
+                    (tr!("Height"), tr!("{min_y} to {max_y}", min_y = dim.min_y, max_y = dim.max_y)),
+                    (tr!("Levels"), format!("{}", dim.levels.len())),
+                    (tr!("Revision"), format!("{}", self.doc.revision)),
                 ]
             }
-            None => vec![("Size", "nothing yet".to_owned())],
+            None => vec![(tr!("Size"), tr!("nothing yet").to_owned())],
         };
         let jobs = self
             .jobs
@@ -1242,11 +1263,11 @@ impl MassifApp {
         match action {
             Action::Make => {
                 if self.doc.read_only.is_some() {
-                    self.say(ctx, "This save point is open read-only: Save As… makes it a map of its own", true, None);
+                    self.say(ctx, tr!("This save point is open read-only: Save As… makes it a map of its own"), true, None);
                     return;
                 }
                 let n = self.doc.world.points.len() + 1;
-                self.dialog = Some(Dialog::PointName(None, format!("Version {n}")));
+                self.dialog = Some(Dialog::PointName(None, tr!("Version {n}", n)));
             }
             Action::Restore(index) => {
                 if self.doc.read_only.is_some() {
@@ -1256,7 +1277,7 @@ impl MassifApp {
                     self.map_cache.invalidate_all();
                     self.view3d.invalidate_all();
                     self.sculpt3d.invalidate_all();
-                    self.say(ctx, format!("Restored “{name}”: undo to take it back"), false, None);
+                    self.say(ctx, tr!("Restored “{name}”: undo to take it back", name), false, None);
                 }
             }
             Action::Open { index, read_only } => {
@@ -1335,7 +1356,7 @@ impl MassifApp {
                 self.maps.entry(id).or_default().show_spot(x as f64 + 0.5, z as f64 + 0.5);
                 self.active_map = Some(id);
             }
-            None => self.say(ctx, format!("{x}, {z}: no map is shown in this workspace"), false, None),
+            None => self.say(ctx, tr!("{x}, {z}: no map is shown in this workspace", x, z), false, None),
         }
     }
 
@@ -1380,10 +1401,10 @@ impl MassifApp {
             Pending::Open(path) => {
                 let path = path.or_else(|| {
                     rfd::FileDialog::new()
-                        .set_title("Open a world")
-                        .add_filter("Worlds", &[massif_format::EXTENSION, "world"])
-                        .add_filter("Massif world", &[massif_format::EXTENSION])
-                        .add_filter("WorldPainter world", &["world"])
+                        .set_title(tr!("Open a world"))
+                        .add_filter(tr!("Worlds"), &[massif_format::EXTENSION, "world"])
+                        .add_filter(tr!("Massif world"), &[massif_format::EXTENSION])
+                        .add_filter(tr!("WorldPainter world"), &["world"])
                         .pick_file()
                 });
                 if let Some(path) = path {
@@ -1401,7 +1422,7 @@ impl MassifApp {
                 let (w, d) = (map.width as f32 * how.scale, map.height as f32 * how.scale);
                 self.say(
                     ctx,
-                    format!("Made a world of {w:.0} × {d:.0} blocks from the height map in {:.1} s", started.elapsed().as_secs_f32()),
+                    tr!("Made a world of {w:.0} × {d:.0} blocks from the height map in {as_secs_f32:.1} s", as_secs_f32 = started.elapsed().as_secs_f32(), w, d),
                     false,
                     None,
                 );
@@ -1413,7 +1434,7 @@ impl MassifApp {
             Pending::OpenPoint { world, name, read_only } => {
                 let mut world = (*world).clone();
                 world.points.clear();
-                world.meta.name = format!("{} — {name}", self.doc.world.meta.name);
+                world.meta.name = tr!("{name2} — {name}", name2 = self.doc.world.meta.name, name);
                 self.next_generation += 1;
                 self.doc = Document::new(world, None, self.next_generation);
                 if read_only {
@@ -1421,8 +1442,8 @@ impl MassifApp {
                 }
                 self.rename = None;
                 self.versions.compare = None;
-                let how = if read_only { "read-only" } else { "as a copy: save it to keep it" };
-                self.say(ctx, format!("Opened the save point “{name}” {how}"), false, None);
+                let how = if read_only { "read-only" } else { tr!("as a copy: save it to keep it") };
+                self.say(ctx, tr!("Opened the save point “{name}” {how}", name, how), false, None);
             }
             Pending::Recover => {
                 if !self.autosave.found.is_empty() {
@@ -1453,8 +1474,8 @@ impl MassifApp {
         let path = match (&self.doc.path, save_as) {
             (Some(p), false) => Some(p.clone()),
             _ => rfd::FileDialog::new()
-                .set_title("Save the world")
-                .add_filter("Massif world", &[massif_format::EXTENSION])
+                .set_title(tr!("Save the world"))
+                .add_filter(tr!("Massif world"), &[massif_format::EXTENSION])
                 .set_file_name(format!("{}.{}", self.doc.world.meta.name, massif_format::EXTENSION))
                 .save_file(),
         };
@@ -1471,7 +1492,7 @@ impl MassifApp {
 
     /// File ▸ Import Pack…: pack files to add to the packs.
     fn pick_pack(&mut self) {
-        let files = rfd::FileDialog::new().set_title("Import packs").add_filter("Massif pack", &[massif_core::pack_file::EXTENSION]).pick_files().unwrap_or_default();
+        let files = rfd::FileDialog::new().set_title(tr!("Import packs")).add_filter(tr!("Massif pack"), &[massif_core::pack_file::EXTENSION]).pick_files().unwrap_or_default();
         self.pack_inbox.extend(files);
     }
 
@@ -1486,15 +1507,15 @@ impl MassifApp {
             Some(Request::Share(i)) => {
                 if let Some(s) = library.packs.get(i)
                     && let Some(path) = rfd::FileDialog::new()
-                        .set_title("Export a copy of the pack")
-                        .add_filter("Massif pack", &[massif_core::pack_file::EXTENSION])
+                        .set_title(tr!("Export a copy of the pack"))
+                        .add_filter(tr!("Massif pack"), &[massif_core::pack_file::EXTENSION])
                         .set_file_name(format!("{}.{}", massif_core::pack_file::file_stem(&s.pack.name), massif_core::pack_file::EXTENSION))
                         .save_file()
                 {
                     let name = s.pack.name.clone();
                     match std::fs::write(&path, s.pack.to_bytes()) {
-                        Ok(()) => self.say(ctx, format!("Exported a copy of the pack “{name}”"), false, Some(path)),
-                        Err(e) => self.say(ctx, format!("Could not export the pack: {}: {e}", path.display()), true, None),
+                        Ok(()) => self.say(ctx, tr!("Exported a copy of the pack “{name}”", name), false, Some(path)),
+                        Err(e) => self.say(ctx, tr!("Could not export the pack: {path}: {e}", path = path.display(), e), true, None),
                     }
                 }
             }
@@ -1511,7 +1532,7 @@ impl MassifApp {
         let library = &mut self.layers_ui.library;
         library.ensure_loaded();
         match crate::pack_share::read_file(path) {
-            Err(e) => self.say(ctx, format!("Could not import {}: {e}", jobs::display_name(path)), true, None),
+            Err(e) => self.say(ctx, tr!("Could not import {display_name}: {e}", display_name = jobs::display_name(path), e), true, None),
             Ok(pack) => match library.find(&pack.name) {
                 Some(existing) => {
                     let rename = (2..).map(|k| format!("{} {k}", pack.name)).find(|n| library.find(n).is_none()).expect("a free name");
@@ -1586,11 +1607,11 @@ impl MassifApp {
             && let Some(done) = self.graph.undo(&mut self.doc)
             && matches!(done, crate::graph_editor::Undone::Graph)
         {
-            self.say(ctx, "Undid a change to the graph", false, None);
+            self.say(ctx, tr!("Undid a change to the graph"), false, None);
             return;
         }
         if let Some(label) = self.doc.undo() {
-            self.say(ctx, format!("Undid {label}"), false, None);
+            self.say(ctx, tr!("Undid {label}", label), false, None);
             self.map_cache.invalidate_all();
             self.view3d.invalidate_all();
             self.sculpt3d.invalidate_all();
@@ -1602,11 +1623,11 @@ impl MassifApp {
             && let Some(done) = self.graph.redo(&mut self.doc)
             && matches!(done, crate::graph_editor::Undone::Graph)
         {
-            self.say(ctx, "Redid a change to the graph", false, None);
+            self.say(ctx, tr!("Redid a change to the graph"), false, None);
             return;
         }
         if let Some(label) = self.doc.redo() {
-            self.say(ctx, format!("Redid {label}"), false, None);
+            self.say(ctx, tr!("Redid {label}", label), false, None);
             self.map_cache.invalidate_all();
             self.view3d.invalidate_all();
             self.sculpt3d.invalidate_all();
@@ -1627,7 +1648,7 @@ impl MassifApp {
             // Worked out on a map that is no longer open: none of it goes
             // into this one.
             let other_map = job.map.is_some_and(|g| g != self.doc.generation);
-            let meanwhile = if other_map { "another map was opened meanwhile" } else { "the map changed meanwhile" };
+            let meanwhile = if other_map { tr!("another map was opened meanwhile") } else { tr!("the map changed meanwhile") };
             match outcome {
                 Outcome::World { world, path } => {
                     self.next_generation += 1;
@@ -1639,12 +1660,12 @@ impl MassifApp {
                     match path {
                         Some(p) => {
                             self.remember(p);
-                            self.say(ctx, format!("Opened “{name}” in {secs:.1} s"), false, None);
-                            self.task_done(ctx, Cue::Ready, "Map opened", &name, secs);
+                            self.say(ctx, tr!("Opened “{name}” in {secs:.1} s", name, secs), false, None);
+                            self.task_done(ctx, Cue::Ready, tr!("Map opened"), &name, secs);
                         }
                         None => {
-                            self.say(ctx, format!("Created “{name}” in {secs:.1} s"), false, None);
-                            self.task_done(ctx, Cue::Ready, "Map created", &name, secs);
+                            self.say(ctx, tr!("Created “{name}” in {secs:.1} s", name, secs), false, None);
+                            self.task_done(ctx, Cue::Ready, tr!("Map created"), &name, secs);
                             // Its relief from a template: on the Terrain side.
                             if let Some(t) = self.after_create.take() {
                                 self.start_terrain(t);
@@ -1654,14 +1675,14 @@ impl MassifApp {
                 }
                 Outcome::SavePoint(point) => {
                     if other_map {
-                        self.say(ctx, format!("The save point “{}” was dropped: {meanwhile}", point.name), true, None);
+                        self.say(ctx, tr!("The save point “{name}” was dropped: {meanwhile}", name = point.name, meanwhile), true, None);
                     } else {
                         let name = point.name.clone();
                         self.doc.world.points.push(point);
                         self.doc.mark_changed();
                         let msg = match &self.doc.path {
-                            Some(_) => format!("Saved the point “{name}”: it is kept in the file at the next save"),
-                            None => format!("Saved the point “{name}”: save the map to keep it"),
+                            Some(_) => tr!("Saved the point “{name}”: it is kept in the file at the next save", name),
+                            None => tr!("Saved the point “{name}”: save the map to keep it", name),
                         };
                         self.say(ctx, msg, false, None);
                     }
@@ -1676,8 +1697,8 @@ impl MassifApp {
                     self.home = None;
                     self.has_map = true;
                     self.autosave.adopt(backup, self.doc.generation, self.doc.revision);
-                    self.say(ctx, format!("Restored “{name}”: save it to keep it"), false, None);
-                    self.task_done(ctx, Cue::Ready, "Map restored", &name, secs);
+                    self.say(ctx, tr!("Restored “{name}”: save it to keep it", name), false, None);
+                    self.task_done(ctx, Cue::Ready, tr!("Map restored"), &name, secs);
                 }
                 Outcome::Saved { path, revision, bytes } => {
                     if other_map {
@@ -1689,27 +1710,21 @@ impl MassifApp {
                         self.autosave.saved(self.doc.generation, revision);
                     }
                     self.remember(path.clone());
-                    let msg = format!("Saved {} ({}) in {secs:.1} s", jobs::display_name(&path), panels::human(bytes));
-                    self.task_done(ctx, Cue::Saved, "Map saved", &msg, secs);
+                    let msg = tr!("Saved {display_name} ({human}) in {secs:.1} s", display_name = jobs::display_name(&path), human = panels::human(bytes), secs);
+                    self.task_done(ctx, Cue::Saved, tr!("Map saved"), &msg, secs);
                     self.say(ctx, msg, false, Some(path));
                     if let Some(pending) = self.after_save.take() {
                         self.run(ctx, pending);
                     }
                 }
                 Outcome::Exported { dir, stats } => {
-                    let msg = format!(
-                        "Exported {} chunks in {} region files ({}) in {:.1} s",
-                        stats.chunks,
-                        stats.regions,
-                        panels::human(stats.bytes),
-                        stats.elapsed.as_secs_f32()
-                    );
-                    self.task_done(ctx, Cue::Ready, "Export done", &msg, secs);
+                    let msg = tr!("Exported {chunks} chunks in {regions} region files ({human}) in {as_secs_f32:.1} s", chunks = stats.chunks, regions = stats.regions, human = panels::human(stats.bytes), as_secs_f32 = stats.elapsed.as_secs_f32());
+                    self.task_done(ctx, Cue::Ready, tr!("Export done"), &msg, secs);
                     self.say(ctx, msg, false, Some(dir));
                 }
                 Outcome::Failed(message) => {
                     self.after_save = None;
-                    self.task_done(ctx, Cue::Error, "Something failed", &message, secs);
+                    self.task_done(ctx, Cue::Error, tr!("Something failed"), &message, secs);
                     self.say(ctx, message, true, None);
                 }
                 Outcome::Imported { world, report, source } => {
@@ -1719,8 +1734,8 @@ impl MassifApp {
                     self.home = None;
                     self.has_map = true;
                     self.remember(source.clone());
-                    let msg = format!("Imported {} in {secs:.1} s: {}", jobs::display_name(&source), report.summary());
-                    self.task_done(ctx, Cue::Ready, "Import done", &msg, secs);
+                    let msg = tr!("Imported {display_name} in {secs:.1} s: {summary}", display_name = jobs::display_name(&source), summary = report.summary(), secs);
+                    self.task_done(ctx, Cue::Ready, tr!("Import done"), &msg, secs);
                     self.say(ctx, msg, false, None);
                     let thumbnail = report.thumbnail.as_deref().and_then(|jpeg| {
                         let img = image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg).ok()?.to_rgba8();
@@ -1731,83 +1746,83 @@ impl MassifApp {
                     self.dialog = Some(Dialog::ImportReport(report, thumbnail));
                 }
                 Outcome::Auto { biomes, tiles, columns, revision, dim } => {
-                    let label = if biomes { "Auto biome" } else { "Auto paint" };
+                    let label = if biomes { tr!("Auto biome") } else { tr!("Auto paint") };
                     if other_map || revision != self.doc.revision || dim != self.doc.dim {
                         crate::sounds::play(Cue::Warning);
-                        self.say(ctx, format!("{label}: {meanwhile}, nothing was done"), true, None);
+                        self.say(ctx, tr!("{label}: {meanwhile}, nothing was done", label, meanwhile), true, None);
                     } else {
                         self.doc.history.begin(label, dim);
                         self.doc.history.edit(&mut self.doc.world, 0).replace_tiles(tiles);
                         self.doc.commit();
                         self.tools.auto_done = Some((biomes, columns));
-                        let msg = format!("{label} over the whole map: {columns} columns changed in {secs:.1} s");
-                        self.task_done(ctx, Cue::Ready, &format!("{label} done"), &msg, secs);
+                        let msg = tr!("{label} over the whole map: {columns} columns changed in {secs:.1} s", label, columns, secs);
+                        self.task_done(ctx, Cue::Ready, &tr!("{label} done", label), &msg, secs);
                         self.say(ctx, msg, false, None);
                     }
                 }
                 Outcome::Pattern { tiles, columns, revision, dim, level } => {
-                    let label = "Noise paint";
+                    let label = tr!("Noise paint");
                     if other_map || revision != self.doc.revision || dim != self.doc.dim || level >= self.doc.dimension().levels.len() {
                         crate::sounds::play(Cue::Warning);
-                        self.say(ctx, format!("{label}: {meanwhile}, nothing was done"), true, None);
+                        self.say(ctx, tr!("{label}: {meanwhile}, nothing was done", label, meanwhile), true, None);
                     } else {
                         self.doc.history.begin(label, dim);
                         self.doc.history.edit(&mut self.doc.world, level).replace_tiles(tiles);
                         self.doc.commit();
                         self.tools.pattern.done = Some(columns);
-                        let msg = format!("{label} over the whole map: {columns} columns changed in {secs:.1} s");
-                        self.task_done(ctx, Cue::Ready, &format!("{label} done"), &msg, secs);
+                        let msg = tr!("{label} over the whole map: {columns} columns changed in {secs:.1} s", label, columns, secs);
+                        self.task_done(ctx, Cue::Ready, &tr!("{label} done", label), &msg, secs);
                         self.say(ctx, msg, false, None);
                     }
                 }
                 Outcome::Reshaped { label, tiles, columns, revision, dim } => {
                     if other_map || revision != self.doc.revision || dim != self.doc.dim {
                         crate::sounds::play(Cue::Warning);
-                        self.say(ctx, format!("{label}: {meanwhile}, nothing was done"), true, None);
+                        self.say(ctx, tr!("{label}: {meanwhile}, nothing was done", label, meanwhile), true, None);
                     } else {
                         self.doc.history.begin(label, dim);
                         self.doc.history.edit(&mut self.doc.world, 0).replace_tiles(tiles);
                         self.doc.commit();
-                        let msg = format!("{label} over the whole map: {columns} columns changed in {secs:.1} s");
-                        self.task_done(ctx, Cue::Ready, &format!("{label} done"), &msg, secs);
+                        let msg = tr!("{label} over the whole map: {columns} columns changed in {secs:.1} s", label, columns, secs);
+                        self.task_done(ctx, Cue::Ready, &tr!("{label} done", label), &msg, secs);
                         self.say(ctx, msg, false, None);
                     }
                 }
                 Outcome::RealTerrain { tiles, columns, revision, dim } => {
-                    let label = "Real terrain";
+                    let label = tr!("Real terrain");
                     if other_map || revision != self.doc.revision || dim != self.doc.dim {
                         crate::sounds::play(Cue::Warning);
-                        self.say(ctx, format!("Relief of a real place: {meanwhile}, nothing was done"), true, None);
+                        self.say(ctx, tr!("Relief of a real place: {meanwhile}, nothing was done", meanwhile), true, None);
                     } else {
                         self.doc.history.begin(label, dim);
                         self.doc.history.edit(&mut self.doc.world, 0).replace_tiles(tiles);
                         self.doc.commit();
-                        let msg = format!("Relief of a real place: {columns} columns changed in {secs:.1} s");
-                        self.task_done(ctx, Cue::Ready, "Relief of a real place done", &msg, secs);
+                        let msg = tr!("Relief of a real place: {columns} columns changed in {secs:.1} s", columns, secs);
+                        self.task_done(ctx, Cue::Ready, tr!("Relief of a real place done"), &msg, secs);
                         self.say(ctx, msg, false, None);
                     }
                 }
                 Outcome::Caves { chunks, blocks, flooded, revision, dim } => {
-                    let label = "Caves";
+                    let label = tr!("Caves");
                     if other_map || revision != self.doc.revision || dim != self.doc.dim {
                         crate::sounds::play(Cue::Warning);
-                        self.say(ctx, format!("{label}: {meanwhile}, nothing was done"), true, None);
+                        self.say(ctx, tr!("{label}: {meanwhile}, nothing was done", label, meanwhile), true, None);
                     } else if chunks.is_empty() {
                         crate::sounds::play(Cue::Warning);
-                        self.say(ctx, "Caves: nothing to carve there (the range lies above the ground, or the selection is empty)", true, None);
+                        self.say(ctx, tr!("Caves: nothing to carve there (the range lies above the ground, or the selection is empty)"), true, None);
                     } else {
                         self.doc.history.begin(label, dim);
                         self.doc.history.edit(&mut self.doc.world, 0).set_voxels(chunks);
                         self.doc.commit();
-                        let lakes = if flooded > 0 { format!(", {flooded} of fluid") } else { String::new() };
-                        let msg = format!("Caves carved: {blocks} blocks{lakes}, in {secs:.1} s");
-                        self.task_done(ctx, Cue::Ready, "Caves carved", &msg, secs);
+                        let lakes = if flooded > 0 { tr!(", {flooded} of fluid", flooded) } else { String::new() };
+                        let msg = tr!("Caves carved: {blocks} blocks{lakes}, in {secs:.1} s", blocks, lakes, secs);
+                        self.task_done(ctx, Cue::Ready, tr!("Caves carved"), &msg, secs);
                         self.say(ctx, msg, false, None);
                     }
                 }
                 Outcome::Cancelled => {
                     crate::sounds::play(Cue::Warning);
-                    self.say(ctx, "Cancelled", false, None);
+                    self.say(ctx, tr!("Cancelled"), false, None);
                 }
             }
         }
@@ -2019,30 +2034,30 @@ impl MassifApp {
                 }
                 clicked
             };
-            if icon(ui, Icon::FilePlus2, "New world (⌘N)", !busy) {
+            if icon(ui, Icon::FilePlus2, tr!("New world (⌘N)"), !busy) {
                 self.open_home(Page::NewMap);
             }
-            if icon(ui, Icon::FolderOpen, "Open (⌘O)", !busy) {
+            if icon(ui, Icon::FolderOpen, tr!("Open (⌘O)"), !busy) {
                 self.request(&ctx, Pending::Open(None));
             }
-            if icon(ui, Icon::Save, "Save (⌘S)", !busy) {
+            if icon(ui, Icon::Save, tr!("Save (⌘S)"), !busy) {
                 self.save(&ctx, false);
             }
-            if icon(ui, Icon::Package, "Export to Minecraft (⌘E)", !busy) {
+            if icon(ui, Icon::Package, tr!("Export to Minecraft (⌘E)"), !busy) {
                 self.open_export_dialog();
             }
             ui.separator();
-            if icon(ui, Icon::Undo2, "Undo (⌘Z)", self.doc.history.can_undo()) {
+            if icon(ui, Icon::Undo2, tr!("Undo (⌘Z)"), self.doc.history.can_undo()) {
                 self.undo(&ctx);
             }
-            if icon(ui, Icon::Redo2, "Redo (⇧⌘Z)", self.doc.history.can_redo()) {
+            if icon(ui, Icon::Redo2, tr!("Redo (⇧⌘Z)"), self.doc.history.can_redo()) {
                 self.redo(&ctx);
             }
             ui.separator();
             for tool in [Tool::Raise, Tool::Smooth, Tool::Flatten, Tool::PaintTerrain, Tool::Flood, Tool::StampSlab] {
                 let selected = self.tools.tool == tool;
-                let r = bar_button(ui, tool.label(), true, selected, |p, rect, c| crate::icons::paint(p, rect, tool, c));
-                r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, tool.label()));
+                let r = bar_button(ui, crate::i18n::tr_name(tool.label()), true, selected, |p, rect, c| crate::icons::paint(p, rect, tool, c));
+                r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, crate::i18n::tr_name(tool.label())));
                 if r.clicked() {
                     self.tools.select(tool);
                 }
@@ -2064,7 +2079,7 @@ impl MassifApp {
                     ThemeChoice::Light => (Icon::Sun, ThemeChoice::Dark),
                     ThemeChoice::Dark => (Icon::Moon, ThemeChoice::System),
                 };
-                if bar_button(ui, "Theme", true, false, |p, r, c| glyph_in(p, r, icon, c)).clicked() {
+                if bar_button(ui, tr!("Theme"), true, false, |p, r, c| glyph_in(p, r, icon, c)).clicked() {
                     self.settings.theme = next;
                     crate::sounds::play(Cue::Toggle);
                 }
@@ -2192,8 +2207,8 @@ impl MassifApp {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
                         for (side, icon, label, hint) in [
-                            (false, Icon::Map, "World", "Edit the map: sculpt, paint, levels, 3D, export"),
-                            (true, Icon::MountainSnow, "Terrain", "Generate terrain from nodes, render it, convert it to the map"),
+                            (false, Icon::Map, tr!("World"), tr!("Edit the map: sculpt, paint, levels, 3D, export")),
+                            (true, Icon::MountainSnow, tr!("Terrain"), tr!("Generate terrain from nodes, render it, convert it to the map")),
                         ] {
                             let active = terrain == side;
                             let text = RichText::new(theme::with_icon(icon, label)).color(if active { pal.text } else { pal.weak });
@@ -2225,31 +2240,31 @@ impl MassifApp {
                                 continue;
                             }
                             let active = self.layout.active == i;
-                            let name = self.layout.workspaces[i].name.clone();
+                            let name = crate::i18n::tr_name(&self.layout.workspaces[i].name).to_owned();
                             let text = RichText::new(name).color(if active { pal.text } else { pal.weak });
                             let button = egui::Button::new(if active { text.medium() } else { text })
                                 .fill(if active { pal.accent_soft } else { Color32::TRANSPARENT })
                                 .stroke(Stroke::NONE)
                                 .corner_radius(theme::PILL)
                                 .min_size(vec2(0.0, 24.0));
-                            let r = ui.add(button).on_hover_text("Right-click: reset, duplicate, delete");
+                            let r = ui.add(button).on_hover_text(tr!("Right-click: reset, duplicate, delete"));
                             if r.clicked() && !active {
                                 self.layout.activate(i);
                                 crate::sounds::play(Cue::Navigate);
                             }
                             r.context_menu(|ui| {
                                 if ui
-                                    .add_enabled(self.layout.can_reset(i), egui::Button::new(theme::with_icon(Icon::RotateCcw, "Reset")))
-                                    .on_hover_text("Back to how this workspace was at first")
+                                    .add_enabled(self.layout.can_reset(i), egui::Button::new(theme::with_icon(Icon::RotateCcw, tr!("Reset"))))
+                                    .on_hover_text(tr!("Back to how this workspace was at first"))
                                     .clicked()
                                 {
                                     self.layout.reset_workspace(i);
                                 }
-                                if ui.button(theme::with_icon(Icon::Copy, "Duplicate")).clicked() {
+                                if ui.button(theme::with_icon(Icon::Copy, tr!("Duplicate"))).clicked() {
                                     self.layout.activate(i);
                                     self.layout.duplicate_current();
                                 }
-                                if ui.add_enabled(self.layout.side_len(i) > 1, egui::Button::new(theme::with_icon(Icon::Trash2, "Delete"))).clicked() {
+                                if ui.add_enabled(self.layout.side_len(i) > 1, egui::Button::new(theme::with_icon(Icon::Trash2, tr!("Delete")))).clicked() {
                                     remove = Some(i);
                                 }
                             });
@@ -2259,7 +2274,7 @@ impl MassifApp {
                             .stroke(Stroke::NONE)
                             .corner_radius(theme::PILL)
                             .min_size(vec2(24.0, 24.0));
-                        if ui.add(plus).on_hover_text("New workspace (a copy of this one)").clicked() {
+                        if ui.add(plus).on_hover_text(tr!("New workspace (a copy of this one)")).clicked() {
                             self.layout.duplicate_current();
                         }
                     });
@@ -2269,7 +2284,7 @@ impl MassifApp {
             }
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                 ui.label(
-                    RichText::new("Ctrl+Space: maximise · drag a title: move")
+                    RichText::new(tr!("Ctrl+Space: maximise · drag a title: move"))
                         .size(11.5)
                         .color(pal.weak),
                 );
@@ -2315,13 +2330,13 @@ impl MassifApp {
                             match &job.progress {
                                 Some(p) => {
                                     ui.add(egui::ProgressBar::new(p.fraction()).desired_width(120.0).show_percentage());
-                                    if ui.button("Cancel").clicked() {
+                                    if ui.button(tr!("Cancel")).clicked() {
                                         cancel = Some(k);
                                     }
                                 }
                                 None => {
                                     let secs = job.started.elapsed().as_secs_f32();
-                                    ui.label(RichText::new(format!("{secs:.0} s")).size(12.0).color(pal.weak));
+                                    ui.label(RichText::new(tr!("{secs:.0} s", secs)).size(12.0).color(pal.weak));
                                 }
                             }
                         });
@@ -2336,12 +2351,12 @@ impl MassifApp {
                             ui.label(RichText::new(theme::glyph(icon).to_string()).color(color).size(13.0));
                             ui.add(egui::Label::new(RichText::new(text).size(12.5).color(if *error { pal.danger } else { pal.text })).wrap());
                             if let Some(path) = path
-                                && ui.button("Show in Finder").clicked()
+                                && ui.button(tr!("Show in Finder")).clicked()
                             {
                                 reveal = Some(path.clone());
                             }
                             let x = egui::Button::new(RichText::new(theme::glyph(Icon::X).to_string()).color(pal.weak)).fill(Color32::TRANSPARENT).stroke(Stroke::NONE);
-                            if ui.add(x).on_hover_text("Close").clicked() {
+                            if ui.add(x).on_hover_text(tr!("Close")).clicked() {
                                 close = true;
                             }
                         });
@@ -2435,7 +2450,7 @@ impl MassifApp {
                 };
                 let zone_rect = half(r, zone).shrink(4.0);
                 painter.rect(zone_rect, 8, pal.accent.gamma_multiply(0.22), Stroke::new(2.0, pal.accent), StrokeKind::Inside);
-                let label = if zone == Zone::Center { "Swap" } else { "Split" };
+                let label = if zone == Zone::Center { tr!("Swap") } else { tr!("Split") };
                 painter.text(zone_rect.center(), Align2::CENTER_CENTER, label, FontId::proportional(14.0), pal.accent);
             }
             ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
@@ -2488,9 +2503,9 @@ impl MassifApp {
             }
         })
         .response
-        .on_hover_text("What this area shows");
+        .on_hover_text(tr!("What this area shows"));
         let title = hui
-            .add(egui::Label::new(RichText::new(editor.label()).medium()).sense(Sense::drag()).selectable(false))
+            .add(egui::Label::new(RichText::new(crate::i18n::tr_name(editor.label())).medium()).sense(Sense::drag()).selectable(false))
             .on_hover_cursor(CursorIcon::Grab);
         if title.drag_started() && !single {
             self.dragging_area = Some(id);
@@ -2505,8 +2520,8 @@ impl MassifApp {
                 self.view3d.header(&mut hui);
                 hui.separator();
                 if hui
-                    .button(theme::with_icon(Icon::Pickaxe, "Sculpt"))
-                    .on_hover_text("Build and dig in 3D: the 3D Sculpt workspace")
+                    .button(theme::with_icon(Icon::Pickaxe, tr!("Sculpt")))
+                    .on_hover_text(tr!("Build and dig in 3D: the 3D Sculpt workspace"))
                     .clicked()
                     && let Some(k) = self.layout.workspaces.iter().position(|w| w.root.shows(EditorKind::Sculpt3d))
                 {
@@ -2526,7 +2541,7 @@ impl MassifApp {
             if shift && !single && !maximized {
                 if ui
                     .add(egui::Button::new(RichText::new(theme::glyph(Icon::Trash2).to_string()).size(12.5)).frame(false))
-                    .on_hover_text("Close this area")
+                    .on_hover_text(tr!("Close this area"))
                     .clicked()
                 {
                     self.layout.close(id);
@@ -2535,29 +2550,29 @@ impl MassifApp {
             }
             let sibling = self.layout.current().root.sibling(id);
             ui.menu_button(RichText::new(theme::glyph(Icon::Ellipsis).to_string()).size(14.0).color(pal.weak), |ui| {
-                if ui.button(theme::with_icon(Icon::Columns2, "Split vertically")).clicked() {
+                if ui.button(theme::with_icon(Icon::Columns2, tr!("Split vertically"))).clicked() {
                     self.layout.split(id, Dir::Row);
                 }
-                if ui.button(theme::with_icon(Icon::Rows2, "Split horizontally")).clicked() {
+                if ui.button(theme::with_icon(Icon::Rows2, tr!("Split horizontally"))).clicked() {
                     self.layout.split(id, Dir::Column);
                 }
                 ui.add_enabled_ui(sibling.is_some() && !maximized, |ui| {
-                    ui.menu_button(theme::with_icon(Icon::Combine, "Join with"), |ui| {
+                    ui.menu_button(theme::with_icon(Icon::Combine, tr!("Join with")), |ui| {
                         if let Some((_, editor, dir, first)) = sibling {
                             let side = match (dir, first) {
-                                (Dir::Row, true) => "on the right",
-                                (Dir::Row, false) => "on the left",
+                                (Dir::Row, true) => tr!("on the right"),
+                                (Dir::Row, false) => tr!("on the left"),
                                 (Dir::Column, true) => "below",
                                 (Dir::Column, false) => "above",
                             };
-                            if ui.button(theme::with_icon(editor.icon(), &format!("{} {side}", editor.label()))).clicked() {
+                            if ui.button(theme::with_icon(editor.icon(), &tr!("{label} {side}", label = crate::i18n::tr_name(editor.label()), side))).clicked() {
                                 self.layout.join(id);
                             }
                         }
                     });
                 });
                 ui.separator();
-                let label = if maximized { "Restore the layout" } else { "Maximise area" };
+                let label = if maximized { tr!("Restore the layout") } else { tr!("Maximise area") };
                 let icon = if maximized { Icon::Minimize2 } else { Icon::Maximize2 };
                 if ui
                     .add_enabled(!single || maximized, egui::Button::new(theme::with_icon(icon, label)).shortcut_text("Ctrl+Space"))
@@ -2566,14 +2581,14 @@ impl MassifApp {
                     self.layout.toggle_maximize(id);
                 }
                 if ui
-                    .add_enabled(!single && !maximized, egui::Button::new(theme::with_icon(Icon::X, "Close area")))
+                    .add_enabled(!single && !maximized, egui::Button::new(theme::with_icon(Icon::X, tr!("Close area"))))
                     .clicked()
                 {
                     self.layout.close(id);
                 }
             })
             .response
-            .on_hover_text("Area commands · Shift: close button · drag a corner into the area to split it");
+            .on_hover_text(tr!("Area commands · Shift: close button · drag a corner into the area to split it"));
         });
 
         // ---- corners: drag one into the area to split it ----------------------
@@ -2740,9 +2755,9 @@ impl MassifApp {
                 if let Some((ok, msg, secs)) = self.graph.done.take() {
                     let ctx = cui.ctx().clone();
                     if ok {
-                        self.task_done(&ctx, Cue::Ready, "Conversion done", &msg, secs);
+                        self.task_done(&ctx, Cue::Ready, tr!("Conversion done"), &msg, secs);
                     } else {
-                        self.task_done(&ctx, Cue::Error, "Conversion failed", &msg, secs);
+                        self.task_done(&ctx, Cue::Error, tr!("Conversion failed"), &msg, secs);
                     }
                 }
             }
@@ -2761,8 +2776,8 @@ impl MassifApp {
                 } else {
                     let mut turn_on = false;
                     scrolled(&mut cui, &mut |ui| {
-                        ui.label(RichText::new("The Developer panel needs developer mode.").color(Palette::of(ui).weak));
-                        turn_on = ui.button(theme::with_icon(Icon::Activity, "Turn developer mode on")).clicked();
+                        ui.label(RichText::new(tr!("The Developer panel needs developer mode.")).color(Palette::of(ui).weak));
+                        turn_on = ui.button(theme::with_icon(Icon::Activity, tr!("Turn developer mode on"))).clicked();
                     });
                     if turn_on {
                         self.settings.developer = true;
@@ -2809,10 +2824,10 @@ impl MassifApp {
                     ui.add(egui::ProgressBar::new(f).show_percentage());
                 }
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(format!("{secs:.0} s")).color(Palette::of(ui).weak));
+                    ui.label(RichText::new(tr!("{secs:.0} s", secs)).color(Palette::of(ui).weak));
                     if progress.is_some() {
                         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                            cancel = ui.button("Cancel").clicked();
+                            cancel = ui.button(tr!("Cancel")).clicked();
                         });
                     }
                 });
@@ -2863,7 +2878,7 @@ impl MassifApp {
                     let pal = Palette::of(ui);
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(theme::glyph(Icon::Settings).to_string()).size(17.0).color(pal.accent));
-                        ui.label(RichText::new("Settings").size(17.0).medium());
+                        ui.label(RichText::new(tr!("Settings")).size(17.0).medium());
                     });
                     ui.add_space(14.0);
                     ui.horizontal_top(|ui| {
@@ -2871,15 +2886,15 @@ impl MassifApp {
                             ui.set_width(176.0);
                             ui.spacing_mut().item_spacing.y = 2.0;
                             for (s, icon, label) in [
-                                (PrefsSection::Appearance, Icon::Palette, "Appearance"),
-                                (PrefsSection::Accessibility, Icon::Accessibility, "Accessibility"),
-                                (PrefsSection::Typeface, Icon::Type, "Typeface"),
-                                (PrefsSection::Sounds, Icon::Volume2, "Sounds"),
-                                (PrefsSection::Notifications, Icon::Bell, "Notifications"),
-                                (PrefsSection::Memory, Icon::MemoryStick, "Memory"),
-                                (PrefsSection::Autosave, Icon::History, "Autosave"),
-                                (PrefsSection::Updates, Icon::CircleArrowUp, "Updates"),
-                                (PrefsSection::Developer, Icon::Activity, "Developer"),
+                                (PrefsSection::Appearance, Icon::Palette, tr!("Appearance")),
+                                (PrefsSection::Accessibility, Icon::Accessibility, tr!("Accessibility")),
+                                (PrefsSection::Typeface, Icon::Type, tr!("Typeface")),
+                                (PrefsSection::Sounds, Icon::Volume2, tr!("Sounds")),
+                                (PrefsSection::Notifications, Icon::Bell, tr!("Notifications")),
+                                (PrefsSection::Memory, Icon::MemoryStick, tr!("Memory")),
+                                (PrefsSection::Autosave, Icon::History, tr!("Autosave")),
+                                (PrefsSection::Updates, Icon::CircleArrowUp, tr!("Updates")),
+                                (PrefsSection::Developer, Icon::Activity, tr!("Developer")),
                             ] {
                                 let on = section == s;
                                 let text = RichText::new(theme::with_icon(icon, label)).size(13.0).color(if on { pal.text } else { pal.weak });
@@ -2922,7 +2937,7 @@ impl MassifApp {
                     });
                     ui.add_space(14.0);
                     ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                        if ui.add(theme::primary_button(ui, "Done")).clicked() {
+                        if ui.add(theme::primary_button(ui, tr!("Done"))).clicked() {
                             keep = false;
                         }
                     });
@@ -2997,16 +3012,16 @@ impl MassifApp {
                 let response = modal(ctx, "save point").show(ctx, |ui| {
                     ui.set_width(380.0);
                     let pal = Palette::of(ui);
-                    let title = if index.is_some() { "Rename the save point" } else { "Save a point" };
+                    let title = if index.is_some() { tr!("Rename the save point") } else { tr!("Save a point") };
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(theme::glyph(Icon::BookmarkPlus).to_string()).size(17.0).color(pal.accent));
                         ui.label(RichText::new(title).bold().size(15.0));
                     });
                     if index.is_none() {
-                        ui.add(egui::Label::new(RichText::new("The map as it is now, kept in its file under this name: to restore, open or compare later.").color(pal.weak)).wrap());
+                        ui.add(egui::Label::new(RichText::new(tr!("The map as it is now, kept in its file under this name: to restore, open or compare later.")).color(pal.weak)).wrap());
                     }
                     ui.add_space(10.0);
-                    let edit = ui.add(egui::TextEdit::singleline(&mut name).hint_text("Before the rivers").desired_width(f32::INFINITY));
+                    let edit = ui.add(egui::TextEdit::singleline(&mut name).hint_text(tr!("Before the rivers")).desired_width(f32::INFINITY));
                     if !edit.has_focus() && !ui.memory(|m| m.focused().is_some()) {
                         edit.request_focus();
                     }
@@ -3017,11 +3032,11 @@ impl MassifApp {
                     ui.add_space(12.0);
                     ui.horizontal(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                            let label = if index.is_some() { "Rename" } else { "Save Point" };
+                            let label = if index.is_some() { tr!("Rename") } else { tr!("Save Point") };
                             if ui.add_enabled(ok, theme::primary_button(ui, label)).clicked() {
                                 done = Some(true);
                             }
-                            if ui.button("Cancel").clicked() {
+                            if ui.button(tr!("Cancel")).clicked() {
                                 done = Some(false);
                             }
                         });
@@ -3059,15 +3074,15 @@ impl MassifApp {
                 let name = self.doc.world.points.get(index).map(|p| p.name.clone()).unwrap_or_default();
                 let response = modal(ctx, "delete point").show(ctx, |ui| {
                     ui.set_width(380.0);
-                    ui.label(RichText::new(format!("Delete the save point “{name}”?")).bold().size(15.0));
-                    ui.add(egui::Label::new(RichText::new("It goes from the file at the next save, and cannot be brought back then.").color(Palette::of(ui).weak)).wrap());
+                    ui.label(RichText::new(tr!("Delete the save point “{name}”?", name)).bold().size(15.0));
+                    ui.add(egui::Label::new(RichText::new(tr!("It goes from the file at the next save, and cannot be brought back then.")).color(Palette::of(ui).weak)).wrap());
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                            if ui.add(theme::primary_button(ui, "Delete")).clicked() {
+                            if ui.add(theme::primary_button(ui, tr!("Delete"))).clicked() {
                                 choice = Some(true);
                             }
-                            if ui.button("Cancel").clicked() {
+                            if ui.button(tr!("Cancel")).clicked() {
                                 choice = Some(false);
                             }
                         });
@@ -3078,7 +3093,7 @@ impl MassifApp {
                         if index < self.doc.world.points.len() {
                             self.doc.world.points.remove(index);
                             self.doc.mark_changed();
-                            self.say(ctx, format!("Deleted the save point “{name}”"), false, None);
+                            self.say(ctx, tr!("Deleted the save point “{name}”", name), false, None);
                         }
                     }
                     Some(false) => {}
@@ -3156,7 +3171,7 @@ impl MassifApp {
                         if settings != self.doc.world.meta.ores {
                             self.doc.world.meta.ores = settings;
                             self.doc.mark_changed();
-                            self.say(ctx, "Ores set: the next export lays them so", false, None);
+                            self.say(ctx, tr!("Ores set: the next export lays them so"), false, None);
                         }
                     }
                     None => self.dialog = Some(Dialog::Ores(view)),
@@ -3166,12 +3181,12 @@ impl MassifApp {
                 let response = modal(ctx, "auto rules").show(ctx, |ui| {
                     ui.set_width(700.0);
                     ui.label(
-                        RichText::new("Automatic biomes and paint")
+                        RichText::new(tr!("Automatic biomes and paint"))
                             .bold()
                             .size(15.0),
                     );
                     ui.label(
-                        RichText::new("Biomes from the land, ground from the biomes.")
+                        RichText::new(tr!("Biomes from the land, ground from the biomes."))
                             .size(11.5)
                             .color(Palette::of(ui).weak),
                     );
@@ -3180,12 +3195,12 @@ impl MassifApp {
                         ui.selectable_value(
                             &mut paint,
                             false,
-                            theme::with_icon(Icon::Earth, "Biomes from the land"),
+                            theme::with_icon(Icon::Earth, tr!("Biomes from the land")),
                         );
                         ui.selectable_value(
                             &mut paint,
                             true,
-                            theme::with_icon(Icon::WandSparkles, "Paint from the biomes"),
+                            theme::with_icon(Icon::WandSparkles, tr!("Paint from the biomes")),
                         );
                     });
                     ui.separator();
@@ -3209,7 +3224,7 @@ impl MassifApp {
                         });
                     ui.separator();
                     ui.horizontal(|ui| {
-                        if ui.button("Reset to defaults").clicked() {
+                        if ui.button(tr!("Reset to defaults")).clicked() {
                             if paint {
                                 self.tools.auto.paint = Default::default();
                             } else {
@@ -3217,17 +3232,17 @@ impl MassifApp {
                             }
                         }
                         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                            if ui.add(theme::primary_button(ui, "Done")).clicked() {
+                            if ui.add(theme::primary_button(ui, tr!("Done"))).clicked() {
                                 keep = false;
                             }
                             let label = if paint {
-                                "Paint the whole map"
+                                tr!("Paint the whole map")
                             } else {
-                                "Give the whole map its biomes"
+                                tr!("Give the whole map its biomes")
                             };
                             if ui
                                 .button(label)
-                                .on_hover_text("One undoable step")
+                                .on_hover_text(tr!("One undoable step"))
                                 .clicked()
                             {
                                 self.tools.run_auto = Some(!paint);
@@ -3253,14 +3268,14 @@ impl MassifApp {
                     let pal = Palette::of(ui);
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(theme::glyph(Icon::History).to_string()).size(17.0).color(pal.accent));
-                        ui.label(RichText::new("Restore unsaved changes?").bold().size(15.0));
+                        ui.label(RichText::new(tr!("Restore unsaved changes?")).bold().size(15.0));
                     });
                     ui.add_space(2.0);
                     let found = &self.autosave.found;
                     let about = if found.len() == 1 {
-                        "Massif closed without saving this map. A copy of it was kept: restore it, then save it to keep it."
+                        tr!("Massif closed without saving this map. A copy of it was kept: restore it, then save it to keep it.")
                     } else {
-                        "Massif closed without saving these maps. A copy of each was kept: restore one, then save it to keep it."
+                        tr!("Massif closed without saving these maps. A copy of each was kept: restore one, then save it to keep it.")
                     };
                     ui.add(egui::Label::new(RichText::new(about).color(pal.weak)).wrap());
                     ui.add_space(10.0);
@@ -3271,18 +3286,18 @@ impl MassifApp {
                                 ui.painter().hline(r.x_range().expand(12.0), r.top() + 2.0, Stroke::new(1.0, pal.border));
                                 ui.add_space(5.0);
                             }
-                            let file = b.info.path.as_ref().map_or_else(|| "Never saved".to_owned(), |p| jobs::display_name(p));
+                            let file = b.info.path.as_ref().map_or_else(|| tr!("Never saved").to_owned(), |p| jobs::display_name(p));
                             ui.horizontal(|ui| {
                                 ui.vertical(|ui| {
                                     ui.spacing_mut().item_spacing.y = 1.0;
                                     ui.label(RichText::new(&b.info.name).size(13.5).medium());
-                                    ui.label(RichText::new(format!("Taken {} · {} · {}", b.age(), file, panels::human(b.bytes))).size(11.5).color(pal.weak));
+                                    ui.label(RichText::new(tr!("Taken {age} · {file} · {human}", age = b.age(), file, human = panels::human(b.bytes))).size(11.5).color(pal.weak));
                                 });
                                 ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                                    if ui.add(theme::primary_button(ui, "Restore")).clicked() {
+                                    if ui.add(theme::primary_button(ui, tr!("Restore"))).clicked() {
                                         restore = Some(k);
                                     }
-                                    if ui.button("Discard").clicked() {
+                                    if ui.button(tr!("Discard")).clicked() {
                                         discard = Some(k);
                                     }
                                 });
@@ -3291,9 +3306,9 @@ impl MassifApp {
                     });
                     ui.add_space(12.0);
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new("Kept until you choose.").size(11.5).color(pal.weak));
+                        ui.label(RichText::new(tr!("Kept until you choose.")).size(11.5).color(pal.weak));
                         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                            if ui.button("Later").clicked() {
+                            if ui.button(tr!("Later")).clicked() {
                                 keep = false;
                             }
                         });
@@ -3302,7 +3317,7 @@ impl MassifApp {
                 if let Some(k) = discard {
                     let b = self.autosave.found[k].clone();
                     self.autosave.discard(&b);
-                    self.say(ctx, format!("Discarded the copy of “{}”", b.info.name), false, None);
+                    self.say(ctx, tr!("Discarded the copy of “{name}”", name = b.info.name), false, None);
                 }
                 if let Some(k) = restore {
                     let b = self.autosave.found.remove(k);
@@ -3325,18 +3340,18 @@ impl MassifApp {
                 let mut choice = None;
                 let response = modal(ctx, "unsaved").show(ctx, |ui| {
                     ui.set_width(380.0);
-                    ui.label(RichText::new(format!("Save the changes to “{}”?", self.doc.world.meta.name)).bold().size(15.0));
-                    ui.label(RichText::new("Your changes will be lost if you don't save them.").color(Palette::of(ui).weak));
+                    ui.label(RichText::new(tr!("Save the changes to “{name}”?", name = self.doc.world.meta.name)).bold().size(15.0));
+                    ui.label(RichText::new(tr!("Your changes will be lost if you don't save them.")).color(Palette::of(ui).weak));
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Don't Save").clicked() {
+                        if ui.button(tr!("Don't Save")).clicked() {
                             choice = Some(1);
                         }
                         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                            if ui.add(theme::primary_button(ui, "Save")).clicked() {
+                            if ui.add(theme::primary_button(ui, tr!("Save"))).clicked() {
                                 choice = Some(2);
                             }
-                            if ui.button("Cancel").clicked() {
+                            if ui.button(tr!("Cancel")).clicked() {
                                 choice = Some(0);
                             }
                         });
@@ -3371,7 +3386,7 @@ impl MassifApp {
                 let response = modal(ctx, "export").show(ctx, |ui| {
                     ui.set_width(840.0);
                     let pal = Palette::of(ui);
-                    ui.label(RichText::new("Export to Minecraft").bold().size(16.0));
+                    ui.label(RichText::new(tr!("Export to Minecraft")).bold().size(16.0));
                     ui.add_space(6.0);
                     // The form scrolls when the screen is short; the tabs
                     // sit beside it behind a hairline as tall as the form
@@ -3403,7 +3418,7 @@ impl MassifApp {
                         ui.vertical(|ui| {
                             ui.set_min_width(110.0);
                             for (tab, label) in
-                                [(ExportTab::General, "General"), (ExportTab::World, "World")]
+                                [(ExportTab::General, tr!("General")), (ExportTab::World, tr!("World"))]
                             {
                                 if ui
                                     .add_sized(
@@ -3421,24 +3436,24 @@ impl MassifApp {
                     let exists = target.exists();
                     if exists {
                         ui.add_space(4.0);
-                        ui.colored_label(pal.danger, "This folder already exists.");
-                        crate::widgets::checkbox(ui, &mut form.overwrite, "Replace its region files (everything else is kept)");
+                        ui.colored_label(pal.danger, tr!("This folder already exists."));
+                        crate::widgets::checkbox(ui, &mut form.overwrite, tr!("Replace its region files (everything else is kept)"));
                     }
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
                         let test = ui
-                            .button("Test Export…")
-                            .on_hover_text("Export 384 × 384 blocks around the view, to test it");
+                            .button(tr!("Test Export…"))
+                            .on_hover_text(tr!("Export 384 × 384 blocks around the view, to test it"));
                         if test.clicked() {
                             start = Some(true);
                         }
                         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                            if ui.button("Cancel").clicked() {
+                            if ui.button(tr!("Cancel")).clicked() {
                                 keep = false;
                             }
                             let ok = !form.name.trim().is_empty() && (!exists || form.overwrite);
                             if ui
-                                .add_enabled(ok, theme::primary_button(ui, "Export"))
+                                .add_enabled(ok, theme::primary_button(ui, tr!("Export")))
                                 .clicked()
                             {
                                 start = Some(false);
@@ -3483,7 +3498,7 @@ impl MassifApp {
                         let c = TilePos::containing(form.test_centre.0, form.test_centre.1);
                         options.area = Some((c.offset(-1, -1), c.offset(1, 1)));
                         options.overwrite = false;
-                        options.level_name = Some(format!("{} (test)", form.name.trim()));
+                        options.level_name = Some(tr!("{trim} (test)", trim = form.name.trim()));
                         dir = massif_anvil::unique_dir(&form.parent, &format!("{} test", form.name.trim()));
                         // Spawn in the middle of what is exported.
                         options.spawn = Some([form.test_centre.0, form.spawn[1].max(self.doc.world.meta.sea_level + 1), form.test_centre.1]);
@@ -3503,7 +3518,7 @@ impl MassifApp {
                 let response = modal(ctx, "import report").show(ctx, |ui| {
                     ui.set_width(520.0);
                     let pal = Palette::of(ui);
-                    ui.label(RichText::new(format!("Imported “{}”", report.name)).bold().size(16.0));
+                    ui.label(RichText::new(tr!("Imported “{name}”", name = report.name)).bold().size(16.0));
                     let origin: Vec<&str> = [report.saved_by.as_deref(), report.platform.as_deref()].into_iter().flatten().collect();
                     if !origin.is_empty() {
                         ui.label(RichText::new(origin.join(" · ")).size(11.5).color(pal.weak));
@@ -3517,22 +3532,17 @@ impl MassifApp {
                     }
                     egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
                         egui::Grid::new("import grid").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
-                            ui.label(RichText::new("Imported").color(pal.weak));
+                            ui.label(RichText::new(tr!("Imported")).color(pal.weak));
                             ui.vertical(|ui| {
                                 for d in &report.dimensions {
                                     ui.label(d);
                                 }
                             });
                             ui.end_row();
-                            ui.label(RichText::new("Terrains").color(pal.weak));
+                            ui.label(RichText::new(tr!("Terrains")).color(pal.weak));
                             let total: u64 = report.terrains.iter().map(|t| t.1).sum::<u64>().max(1);
                             ui.vertical(|ui| {
-                                ui.label(format!(
-                                    "{} kinds, {} custom terrain{} rebuilt from their materials",
-                                    report.terrains.len(),
-                                    report.custom_terrains,
-                                    if report.custom_terrains == 1 { "" } else { "s" }
-                                ));
+                                ui.label(trn!("{kinds} kinds, {n} custom terrain rebuilt from their materials", "{kinds} kinds, {n} custom terrains rebuilt from their materials", n = report.custom_terrains, kinds = report.terrains.len()));
                                 for (name, columns) in report.terrains.iter().take(10) {
                                     let pretty = if name.chars().all(|c| c.is_ascii_uppercase() || c == '_') {
                                         let lower = name.replace('_', " ").to_lowercase();
@@ -3542,7 +3552,7 @@ impl MassifApp {
                                         name.clone()
                                     };
                                     ui.label(
-                                        RichText::new(format!("{pretty} — {:.1}%", *columns as f64 * 100.0 / total as f64))
+                                        RichText::new(tr!("{pretty} — {f64:.1}%", f64 = *columns as f64 * 100.0 / total as f64, pretty))
                                             .size(11.5)
                                             .color(pal.weak),
                                     );
@@ -3550,16 +3560,16 @@ impl MassifApp {
                             });
                             ui.end_row();
                             if !report.layers.is_empty() {
-                                ui.label(RichText::new("Not imported yet").color(pal.weak));
+                                ui.label(RichText::new(tr!("Not imported yet")).color(pal.weak));
                                 ui.vertical(|ui| {
-                                    ui.label("Layers (Massif has no trees, plants or frost layers yet):");
-                                    let names: Vec<String> = report.layers.iter().map(|(n, t)| format!("{n} ({t} tiles)")).collect();
+                                    ui.label(tr!("Layers (Massif has no trees, plants or frost layers yet):"));
+                                    let names: Vec<String> = report.layers.iter().map(|(n, t)| tr!("{n} ({t} tiles)", n, t)).collect();
                                     ui.label(RichText::new(names.join(", ")).size(11.5).color(pal.weak));
                                 });
                                 ui.end_row();
                             }
                             if !report.skipped_dimensions.is_empty() {
-                                ui.label(RichText::new("Skipped").color(pal.weak));
+                                ui.label(RichText::new(tr!("Skipped")).color(pal.weak));
                                 ui.label(report.skipped_dimensions.join(", "));
                                 ui.end_row();
                             }
@@ -3568,10 +3578,10 @@ impl MassifApp {
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
                         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                            if ui.add(theme::primary_button(ui, "Save as .massif…")).clicked() {
+                            if ui.add(theme::primary_button(ui, tr!("Save as .massif…"))).clicked() {
                                 save = true;
                             }
-                            if ui.button("Close").clicked() {
+                            if ui.button(tr!("Close")).clicked() {
                                 keep = false;
                             }
                         });
@@ -3595,10 +3605,10 @@ impl MassifApp {
                     let pal = Palette::of(ui);
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(theme::glyph(Icon::CircleArrowUp).to_string()).size(17.0).color(pal.accent));
-                        ui.label(RichText::new(format!("Massif {version} is out")).bold().size(15.0));
+                        ui.label(RichText::new(tr!("Massif {version} is out", version)).bold().size(15.0));
                     });
                     ui.add_space(2.0);
-                    ui.label(RichText::new(format!("You have {}. Download the new version from its page, then install it as you did this one; your maps and settings stay.", crate::update::RUNNING)).color(pal.weak));
+                    ui.label(RichText::new(tr!("You have {running}. Download the new version from its page, then install it as you did this one; your maps and settings stay.", running = crate::update::RUNNING)).color(pal.weak));
                     ui.add_space(10.0);
                     let notes = crate::help::blocks(&release.notes_since(crate::update::RUNNING));
                     if !notes.is_empty() {
@@ -3612,14 +3622,14 @@ impl MassifApp {
                         ui.add_space(12.0);
                     }
                     ui.horizontal(|ui| {
-                        if ui.button("Skip this version").clicked() {
+                        if ui.button(tr!("Skip this version")).clicked() {
                             skip = true;
                         }
                         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                            if ui.add(theme::primary_button(ui, format!("{}  Open the release page", theme::glyph(Icon::ExternalLink)))).clicked() {
+                            if ui.add(theme::primary_button(ui, tr!("{glyph}  Open the release page", glyph = theme::glyph(Icon::ExternalLink)))).clicked() {
                                 open = true;
                             }
-                            if ui.button("Later").clicked() {
+                            if ui.button(tr!("Later")).clicked() {
                                 keep = false;
                             }
                         });
@@ -3649,14 +3659,14 @@ impl MassifApp {
                             .size(18.0),
                     );
                     ui.label(
-                        RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
+                        RichText::new(tr!("Version {value}", value = env!("CARGO_PKG_VERSION")))
                             .color(Palette::of(ui).weak),
                     );
                     ui.add_space(6.0);
-                    ui.label("A map editor for Minecraft worlds of any size.");
+                    ui.label(tr!("A map editor for Minecraft worlds of any size."));
                     ui.add_space(6.0);
                     ui.add_space(8.0);
-                    if ui.button("Close").clicked() {
+                    if ui.button(tr!("Close")).clicked() {
                         keep = false;
                     }
                 });
@@ -3729,7 +3739,7 @@ impl MassifApp {
             self.map_cache.invalidate_all();
             self.view3d.invalidate_all();
             self.sculpt3d.invalidate_all();
-            self.say(&ctx, "This save point is open read-only: Save As… makes it a map of its own to change", true, None);
+            self.say(&ctx, tr!("This save point is open read-only: Save As… makes it a map of its own to change"), true, None);
         }
         let now = ctx.input(|i| i.time);
         self.apply_memory_limit(now);
@@ -3913,9 +3923,9 @@ fn bar_button(ui: &mut Ui, tip: &str, enabled: bool, selected: bool, paint: impl
 /// accent's soft tint.
 fn update_pill(ui: &mut Ui, version: &str) -> egui::Response {
     let pal = Palette::of(ui);
-    let text = RichText::new(format!("{}  {version} is out", theme::glyph(Icon::CircleArrowUp))).size(12.0).color(pal.accent);
+    let text = RichText::new(tr!("{glyph}  {version} is out", glyph = theme::glyph(Icon::CircleArrowUp), version)).size(12.0).color(pal.accent);
     let pill = egui::Button::new(text).fill(pal.accent_soft).stroke(Stroke::NONE).corner_radius(theme::PILL).min_size(vec2(0.0, 22.0));
-    let response = ui.add(pill).on_hover_text("See what is new");
+    let response = ui.add(pill).on_hover_text(tr!("See what is new"));
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -3967,26 +3977,26 @@ fn row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
 
 fn export_general(ui: &mut Ui, form: &mut ExportForm) {
     let pal = Palette::of(ui);
-    card(ui, "Where to save it", "Its folder, and its name in Minecraft.", |ui| {
-        row(ui, "Saves folder", |ui| {
+    card(ui, tr!("Where to save it"), tr!("Its folder, and its name in Minecraft."), |ui| {
+        row(ui, tr!("Saves folder"), |ui| {
             ui.add(egui::Label::new(RichText::new(form.parent.display().to_string()).size(11.5)).truncate());
-            if ui.button(theme::glyph(Icon::FolderOpen).to_string()).on_hover_text("Choose the folder").clicked()
+            if ui.button(theme::glyph(Icon::FolderOpen).to_string()).on_hover_text(tr!("Choose the folder")).clicked()
                 && let Some(dir) = rfd::FileDialog::new().set_directory(&form.parent).pick_folder()
             {
                 form.parent = dir;
             }
         });
-        row(ui, "Name", |ui| {
+        row(ui, tr!("Name"), |ui| {
             ui.add(egui::TextEdit::singleline(&mut form.name).desired_width(f32::INFINITY));
         });
-        row(ui, "Minecraft", |ui| {
+        row(ui, tr!("Minecraft"), |ui| {
             crate::widgets::combo("export version")
-                .selected_text(format!("Java {}", form.target.name))
+                .selected_text(tr!("Java {name}", name = form.target.name))
                 .width(170.0)
                 .height(320.0)
                 .show_ui(ui, |ui| {
                     for (version, installed) in &form.versions {
-                        let label = if *installed { format!("{}  ·  installed", version.name) } else { version.name.clone() };
+                        let label = if *installed { tr!("{name}  ·  installed", name = version.name) } else { version.name.clone() };
                         if ui.selectable_label(form.target == *version, label).clicked() {
                             form.target = version.clone();
                         }
@@ -3994,67 +4004,79 @@ fn export_general(ui: &mut Ui, form: &mut ExportForm) {
                 });
             let (bottom, top) = form.heights;
             let note = match form.target.era() {
-                massif_anvil::Era::Modern if bottom < -64 || top > 320 => format!("today's chunks, Y {bottom} to {top}: a data pack gives the world that height"),
-                massif_anvil::Era::Modern => format!("today's chunks, Y {bottom} to {top}"),
-                massif_anvil::Era::Flat16 | massif_anvil::Era::Flat15 | massif_anvil::Era::Flat14 => "named blocks, 0 to 255".to_owned(),
-                massif_anvil::Era::Numbered => "numbered blocks, 0 to 255".to_owned(),
+                massif_anvil::Era::Modern if bottom < -64 || top > 320 => tr!("today's chunks, Y {bottom} to {top}: a data pack gives the world that height", bottom, top),
+                massif_anvil::Era::Modern => tr!("today's chunks, Y {bottom} to {top}", bottom, top),
+                massif_anvil::Era::Flat16 | massif_anvil::Era::Flat15 | massif_anvil::Era::Flat14 => tr!("named blocks, 0 to 255").to_owned(),
+                massif_anvil::Era::Numbered => tr!("numbered blocks, 0 to 255").to_owned(),
             };
             ui.label(RichText::new(note).size(11.5).color(pal.weak));
         });
         let caveat = form.target.caveat(form.heights.0, form.heights.1);
         if !caveat.is_empty() {
             row(ui, "", |ui| {
-                ui.add(egui::Label::new(RichText::new(format!("For {}, {caveat}.", form.target.name)).size(11.5).color(pal.weak)).wrap());
+                ui.add(egui::Label::new(RichText::new(tr!("For {name}, {caveat}.", name = form.target.name, caveat)).size(11.5).color(pal.weak)).wrap());
             });
         }
     });
     ui.columns(2, |cols| {
         let (left, right) = cols.split_at_mut(1);
-        card(&mut left[0], "Game", "The rules of the world when it is first played.", |ui| {
-            row(ui, "Game mode", |ui| {
+        card(&mut left[0], tr!("Game"), tr!("The rules of the world when it is first played."), |ui| {
+            row(ui, tr!("Game mode"), |ui| {
+                let mode = |m: GameMode| match m {
+                    GameMode::Survival => tr!("Survival"),
+                    GameMode::Creative => tr!("Creative"),
+                    GameMode::Adventure => tr!("Adventure"),
+                    GameMode::Spectator => tr!("Spectator"),
+                };
                 crate::widgets::combo("game mode")
-                    .selected_text(format!("{:?}", form.game_mode))
+                    .selected_text(mode(form.game_mode))
                     .show_ui(ui, |ui| {
                         for m in [GameMode::Survival, GameMode::Creative, GameMode::Adventure, GameMode::Spectator] {
-                            ui.selectable_value(&mut form.game_mode, m, format!("{m:?}"));
+                            ui.selectable_value(&mut form.game_mode, m, mode(m));
                         }
                     });
             });
-            row(ui, "Difficulty", |ui| {
+            row(ui, tr!("Difficulty"), |ui| {
                 use massif_anvil::Difficulty;
+                let name = |d: Difficulty| match d {
+                    Difficulty::Peaceful => tr!("Peaceful"),
+                    Difficulty::Easy => tr!("Easy"),
+                    Difficulty::Normal => tr!("Normal"),
+                    Difficulty::Hard => tr!("Hard"),
+                };
                 crate::widgets::combo("difficulty")
-                    .selected_text(format!("{:?}", form.difficulty))
+                    .selected_text(name(form.difficulty))
                     .show_ui(ui, |ui| {
                         for d in [Difficulty::Peaceful, Difficulty::Easy, Difficulty::Normal, Difficulty::Hard] {
-                            ui.selectable_value(&mut form.difficulty, d, format!("{d:?}"));
+                            ui.selectable_value(&mut form.difficulty, d, name(d));
                         }
                     });
             });
             row(ui, "", |ui| {
-                crate::widgets::checkbox(ui, &mut form.allow_cheats, "Allow cheats");
+                crate::widgets::checkbox(ui, &mut form.allow_cheats, tr!("Allow cheats"));
             });
             row(ui, "", |ui| {
-                crate::widgets::checkbox(ui, &mut form.hardcore, "Hardcore");
+                crate::widgets::checkbox(ui, &mut form.hardcore, tr!("Hardcore"));
             });
             row(ui, "", |ui| {
-                crate::widgets::checkbox(ui, &mut form.structures, "Structures beyond the map").on_hover_text("Minecraft generates villages, strongholds and the like in the land it makes around the map");
+                crate::widgets::checkbox(ui, &mut form.structures, tr!("Structures beyond the map")).on_hover_text(tr!("Minecraft generates villages, strongholds and the like in the land it makes around the map"));
             });
             if form.has_selection {
                 row(ui, "", |ui| {
-                    crate::widgets::checkbox(ui, &mut form.selection_only, "Only the selection").on_hover_text("Export only the tiles of 128 × 128 blocks the selection reaches, to try a part of the map in the game");
+                    crate::widgets::checkbox(ui, &mut form.selection_only, tr!("Only the selection")).on_hover_text(tr!("Export only the tiles of 128 × 128 blocks the selection reaches, to try a part of the map in the game"));
                 });
             }
         });
-        card(&mut right[0], "World border", "The border Minecraft shows around the world.", |ui| {
-            row(ui, "Centre", |ui| {
+        card(&mut right[0], tr!("World border"), tr!("The border Minecraft shows around the world."), |ui| {
+            row(ui, tr!("Centre"), |ui| {
                 crate::widgets::drag(ui, egui::DragValue::new(&mut form.border.center[0]).speed(16.0));
                 crate::widgets::drag(ui, egui::DragValue::new(&mut form.border.center[1]).speed(16.0));
             });
-            row(ui, "Size", |ui| {
-                crate::widgets::drag(ui, egui::DragValue::new(&mut form.border.size).range(16.0..=60_000_000.0).speed(64.0).suffix(" blocks"));
+            row(ui, tr!("Size"), |ui| {
+                crate::widgets::drag(ui, egui::DragValue::new(&mut form.border.size).range(16.0..=60_000_000.0).speed(64.0).suffix(tr!(" blocks")));
             });
             row(ui, "", |ui| {
-                if ui.small_button("Fit the map").on_hover_text("Centre the border on the map, just large enough for it").clicked()
+                if ui.small_button(tr!("Fit the map")).on_hover_text(tr!("Centre the border on the map, just large enough for it")).clicked()
                     && let Some((c, size)) = form.fit
                 {
                     form.border.center = c;
@@ -4063,12 +4085,12 @@ fn export_general(ui: &mut Ui, form: &mut ExportForm) {
             });
         });
     });
-    card(ui, "Data packs", "Data packs copied into the world.", |ui| {
+    card(ui, tr!("Data packs"), tr!("Data packs copied into the world."), |ui| {
         ui.horizontal_top(|ui| {
             egui::Frame::new().stroke(Stroke::new(1.0, pal.border)).corner_radius(theme::TILE_RADIUS).inner_margin(6).show(ui, |ui| {
                 ui.set_min_size(vec2(ui.available_width() - 40.0, 90.0));
                 if form.datapacks.is_empty() {
-                    ui.label(RichText::new("No data packs").color(pal.weak));
+                    ui.label(RichText::new(tr!("No data packs")).color(pal.weak));
                 }
                 for (i, p) in form.datapacks.iter().enumerate() {
                     let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -4078,19 +4100,19 @@ fn export_general(ui: &mut Ui, form: &mut ExportForm) {
                 }
             });
             ui.vertical(|ui| {
-                if ui.button(theme::glyph(Icon::Plus).to_string()).on_hover_text("Add data packs (zip files)").clicked()
-                    && let Some(files) = rfd::FileDialog::new().add_filter("Data packs", &["zip"]).pick_files()
+                if ui.button(theme::glyph(Icon::Plus).to_string()).on_hover_text(tr!("Add data packs (zip files)")).clicked()
+                    && let Some(files) = rfd::FileDialog::new().add_filter(tr!("Data packs"), &["zip"]).pick_files()
                 {
                     form.datapacks.extend(files);
                 }
-                if ui.button(theme::glyph(Icon::FolderOpen).to_string()).on_hover_text("Add a data pack folder").clicked()
+                if ui.button(theme::glyph(Icon::FolderOpen).to_string()).on_hover_text(tr!("Add a data pack folder")).clicked()
                     && let Some(dir) = rfd::FileDialog::new().pick_folder()
                 {
                     form.datapacks.push(dir);
                 }
                 if ui
                     .add_enabled(form.selected_pack.is_some(), egui::Button::new(theme::glyph(Icon::Trash2).to_string()))
-                    .on_hover_text("Remove")
+                    .on_hover_text(tr!("Remove"))
                     .clicked()
                     && let Some(i) = form.selected_pack.take()
                     && i < form.datapacks.len()
@@ -4104,23 +4126,23 @@ fn export_general(ui: &mut Ui, form: &mut ExportForm) {
 
 fn export_world(ui: &mut Ui, form: &mut ExportForm) {
     let pal = Palette::of(ui);
-    card(ui, "Around the map", "What Minecraft generates beyond the edges of the map.", |ui| {
-        ui.radio_value(&mut form.surroundings, Surroundings::Vanilla, "Vanilla terrain from the world's seed");
-        ui.radio_value(&mut form.surroundings, Surroundings::Void, "Nothing: the map floats in the void");
+    card(ui, tr!("Around the map"), tr!("What Minecraft generates beyond the edges of the map."), |ui| {
+        ui.radio_value(&mut form.surroundings, Surroundings::Vanilla, tr!("Vanilla terrain from the world's seed"));
+        ui.radio_value(&mut form.surroundings, Surroundings::Void, tr!("Nothing: the map floats in the void"));
     });
-    card(ui, "Ores", "Laid in the rock as Minecraft lays them: Minecraft adds none to the map's finished chunks.", |ui| {
-        row(ui, "Lay ores", |ui| {
+    card(ui, tr!("Ores"), tr!("Laid in the rock as Minecraft lays them: Minecraft adds none to the map's finished chunks."), |ui| {
+        row(ui, tr!("Lay ores"), |ui| {
             crate::widgets::switch(ui, &mut form.ores);
         });
-        ui.label(RichText::new("Where, how many and how large: Edit ▸ Ores…").size(11.5).color(pal.weak));
+        ui.label(RichText::new(tr!("Where, how many and how large: Edit ▸ Ores…")).size(11.5).color(pal.weak));
     });
-    card(ui, "Spawn point", "Where players appear the first time.", |ui| {
+    card(ui, tr!("Spawn point"), tr!("Where players appear the first time."), |ui| {
         row(ui, "x, y, z", |ui| {
             crate::widgets::drag(ui, egui::DragValue::new(&mut form.spawn[0]));
             crate::widgets::drag(ui, egui::DragValue::new(&mut form.spawn[1]).range(form.heights.0..=form.heights.1 - 1));
             crate::widgets::drag(ui, egui::DragValue::new(&mut form.spawn[2]));
         });
-        ui.label(RichText::new("Spawn point for this export.").size(11.5).color(pal.weak));
+        ui.label(RichText::new(tr!("Spawn point for this export.")).size(11.5).color(pal.weak));
     });
 }
 

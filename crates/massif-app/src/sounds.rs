@@ -54,18 +54,18 @@ impl Cue {
         matches!(self, Cue::Ready | Cue::Saved | Cue::Error | Cue::Warning)
     }
 
-    pub const fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
-            Cue::Ready => "Task done",
-            Cue::Saved => "Saved",
-            Cue::Error => "Error",
-            Cue::Warning => "Refused or stopped",
-            Cue::Select => "Choice",
-            Cue::Toggle => "Switch",
-            Cue::Open => "Window opens",
-            Cue::Close => "Window closes",
-            Cue::Navigate => "Workspace",
-            Cue::Tap => "Button",
+            Cue::Ready => tr!("Task done"),
+            Cue::Saved => tr!("Saved"),
+            Cue::Error => tr!("Error"),
+            Cue::Warning => tr!("Refused or stopped"),
+            Cue::Select => tr!("Choice"),
+            Cue::Toggle => tr!("Switch"),
+            Cue::Open => tr!("Window opens"),
+            Cue::Close => tr!("Window closes"),
+            Cue::Navigate => tr!("Workspace"),
+            Cue::Tap => tr!("Button"),
         }
     }
 }

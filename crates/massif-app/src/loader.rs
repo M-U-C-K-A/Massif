@@ -38,14 +38,14 @@ impl Pattern {
 
     pub fn label(self) -> &'static str {
         match self {
-            Pattern::Orbit => "Orbit",
-            Pattern::Ripple => "Ripple",
-            Pattern::Scan => "Scan",
-            Pattern::Rain => "Rain",
-            Pattern::Bars => "Bars",
-            Pattern::Spiral => "Spiral",
-            Pattern::Sweep => "Sweep",
-            Pattern::Twinkle => "Twinkle",
+            Pattern::Orbit => tr!("Orbit"),
+            Pattern::Ripple => tr!("Ripple"),
+            Pattern::Scan => tr!("Scan"),
+            Pattern::Rain => tr!("Rain"),
+            Pattern::Bars => tr!("Bars"),
+            Pattern::Spiral => tr!("Spiral"),
+            Pattern::Sweep => tr!("Sweep"),
+            Pattern::Twinkle => tr!("Twinkle"),
         }
     }
 
@@ -207,7 +207,7 @@ pub fn loader(ui: &mut Ui, size: f32) -> Response {
 /// A loader `size` points square, in pattern `p`.
 pub fn loader_of(ui: &mut Ui, size: f32, p: Pattern) -> Response {
     let (rect, response) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ProgressIndicator, true, "Working"));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ProgressIndicator, true, tr!("Working")));
     paint(ui, rect, p);
     response
 }

@@ -62,7 +62,7 @@ fn icon_button(ui: &mut Ui, icon: Icon, selected: bool, size: f32) -> egui::Resp
 fn tool_button(ui: &mut Ui, tool: Tool, selected: bool, size: f32) -> egui::Response {
     let pal = Palette::of(ui);
     let (rect, response) = ui.allocate_exact_size(vec2(size, size), Sense::click());
-    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, tool.label()));
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, crate::i18n::tr_name(tool.label())));
     let visuals = ui.style().interact_selectable(&response, selected);
     let fill = if selected {
         pal.accent_soft
@@ -184,7 +184,7 @@ pub fn sculpt_toolbar(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
         ui.spacing_mut().item_spacing = vec2(4.0, 0.0);
         ui.spacing_mut().interact_size.y = 22.0;
         for tool in crate::tools::SculptSettings::TOOLS {
-            let label = if tool == Tool::PaintTerrain { "Paint" } else { tool.label() };
+            let label = if tool == Tool::PaintTerrain { tr!("Paint") } else { crate::i18n::tr_name(tool.label()) };
             if crate::cards::tool(tool_chip(ui, tool, label, tools.sculpt.tool == tool), tool).clicked() {
                 tools.sculpt.tool = tool;
             }
@@ -193,7 +193,7 @@ pub fn sculpt_toolbar(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
         ui.separator();
         ui.add_space(4.0);
         // Walking in the view, as in Minecraft.
-        let player = toggle_chip(ui, Icon::PersonStanding, "Player", tools.sculpt.player).on_hover_text(
+        let player = toggle_chip(ui, Icon::PersonStanding, tr!("Player"), tools.sculpt.player).on_hover_text(
             "See and walk the map as in Minecraft with Axiom: the game's blocks, light and sky. The cursor free, \
              the left button looks around, the right one uses the tool (Alt: its inverse), the middle one picks a block, \
              Ctrl turns about a point or moves the view, the wheel sets the flight speed. A click takes the mouse \
@@ -217,9 +217,9 @@ pub fn sculpt_toolbar(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
             let dark = ui.visuals().dark_mode;
             let ctx = ui.ctx().clone();
             let mut lists: Vec<(String, Vec<BrushSource>)> = vec![
-                ("Basic".into(), BrushSource::BASIC.to_vec()),
-                ("More shapes".into(), BrushSource::MORE.to_vec()),
-                ("Stamps".into(), Stamp::ALL.iter().map(|t| BrushSource::Stamp(*t)).collect()),
+                (tr!("Basic").into(), BrushSource::BASIC.to_vec()),
+                (tr!("More shapes").into(), BrushSource::MORE.to_vec()),
+                (tr!("Stamps").into(), Stamp::ALL.iter().map(|t| BrushSource::Stamp(*t)).collect()),
             ];
             for g in &library.groups {
                 lists.push((g.name.clone(), g.entries.iter().map(|e| e.source.clone()).collect()));
@@ -257,22 +257,22 @@ pub fn sculpt_toolbar(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
         let b = tools.sculpt_brush();
         let most = massif_core::voxel::MAX_SCULPT_RADIUS;
         let capped = tools.brush.radius > most;
-        let size = if capped { format!("{most:.0} radius (the most in 3D)") } else { format!("{:.0} radius", b.radius) };
-        ui.label(RichText::new(format!("{size} · {:.0}%", b.strength * 100.0)).size(12.0).color(if capped { pal.accent } else { pal.weak }))
-            .on_hover_text(format!("Size, intensity and rotation: in Brush Settings, as for every tool (⌘+wheel: size). In 3D a brush sculpts {most:.0} blocks around at most."));
+        let size = if capped { tr!("{most:.0} radius (the most in 3D)", most) } else { tr!("{radius:.0} radius", radius = b.radius) };
+        ui.label(RichText::new(tr!("{size} · {value:.0}%", value = b.strength * 100.0, size)).size(12.0).color(if capped { pal.accent } else { pal.weak }))
+            .on_hover_text(tr!("Size, intensity and rotation: in Brush Settings, as for every tool (⌘+wheel: size). In 3D a brush sculpts {most:.0} blocks around at most.", most));
         // What Paint paints: the terrain chosen (in Terrain or Blocks).
         if tools.sculpt.tool == Tool::PaintTerrain {
             ui.add_space(6.0);
             let def = reg.terrain(TerrainId(tools.terrain));
             swatch(ui, theme::rgb(def.color));
-            let what = if tools.pattern.on { format!("a noise of {} blocks", tools.pattern.terrains.len()) } else { def.name.clone() };
-            ui.label(RichText::new(what).size(12.0)).on_hover_text("Pick it in Terrain or Blocks");
+            let what = if tools.pattern.on { tr!("a noise of {n} blocks", n = tools.pattern.terrains.len()) } else { def.name.clone() };
+            ui.label(RichText::new(what).size(12.0)).on_hover_text(tr!("Pick it in Terrain or Blocks"));
         }
         let hint = match tools.sculpt.tool {
-            _ if tools.sculpt.player => "The keys and buttons: along the bottom of the view",
-            Tool::PaintTerrain => "Left: paint · right: what the height calls for · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point",
-            Tool::Smooth3d => "Left: smooth · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point",
-            _ => "Left: add · right: dig · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point",
+            _ if tools.sculpt.player => tr!("The keys and buttons: along the bottom of the view"),
+            Tool::PaintTerrain => tr!("Left: paint · right: what the height calls for · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point"),
+            Tool::Smooth3d => tr!("Left: smooth · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point"),
+            _ => tr!("Left: add · right: dig · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point"),
         };
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add(egui::Label::new(RichText::new(hint).size(11.5).color(pal.weak)).truncate());
@@ -306,42 +306,42 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
     let tool = tools.tool;
     ui.horizontal(|ui| {
         crate::icons::show(ui, tool, 20.0, pal.accent);
-        ui.label(RichText::new(tool.label()).bold().size(14.0));
+        ui.label(RichText::new(crate::i18n::tr_name(tool.label())).bold().size(14.0));
     });
     hint(ui, tool.help());
 
-    section(ui, Icon::SlidersHorizontal, "Options");
+    section(ui, Icon::SlidersHorizontal, tr!("Options"));
     match tool {
         Tool::Raise => {
-            slider_row(ui, "Speed", |ui| {
+            slider_row(ui, tr!("Speed"), |ui| {
                 ui.add(crate::widgets::Field::new(&mut tools.raise_speed, 1.0..=120.0).logarithmic(true).suffix(" b/s"))
             });
         }
         Tool::Flatten | Tool::SetHeight => {
-            slider_row(ui, "Height", |ui| {
+            slider_row(ui, tr!("Height"), |ui| {
                 crate::widgets::drag(ui, egui::DragValue::new(&mut tools.target_height).speed(0.5).range(doc.dimension().min_y..=doc.dimension().max_y))
             });
-            hint(ui, "Alt-click on the map to pick a height.");
+            hint(ui, tr!("Alt-click on the map to pick a height."));
             if tool == Tool::Flatten {
                 use massif_core::ops::FlattenMode;
                 ui.add_space(4.0);
                 let modes = [FlattenMode::Both, FlattenMode::RaiseOnly, FlattenMode::LowerOnly];
                 let on = modes.map(|m| tools.flatten_mode == m);
-                if let Some(k) = crate::widgets::button_group(ui, "flatten mode", &["Both ways", "Only raise", "Only lower"], &on) {
+                if let Some(k) = crate::widgets::button_group(ui, "flatten mode", &[tr!("Both ways"), tr!("Only raise"), tr!("Only lower")], &on) {
                     tools.flatten_mode = modes[k];
                 }
                 ui.add_space(4.0);
-                crate::widgets::checkbox(ui, &mut tools.flatten_theme, "Apply theme");
-                hint(ui, "Repaints the land it flattens with the terrain its new height calls for.");
+                crate::widgets::checkbox(ui, &mut tools.flatten_theme, tr!("Apply theme"));
+                hint(ui, tr!("Repaints the land it flattens with the terrain its new height calls for."));
             }
         }
         Tool::Road => crate::road_draft::settings(ui, tools, doc),
         Tool::Roughen => {
-            slider_row(ui, "Amplitude", |ui| ui.add(crate::widgets::Field::new(&mut tools.roughness, 0.5..=40.0).suffix(" blocks")));
+            slider_row(ui, tr!("Amplitude"), |ui| ui.add(crate::widgets::Field::new(&mut tools.roughness, 0.5..=40.0).suffix(tr!(" blocks"))));
         }
         Tool::PaintTerrain => {
             let on = tools.pattern.on;
-            if let Some(k) = crate::widgets::button_group(ui, "paint what", &["One terrain", "Noise"], &[!on, on]) {
+            if let Some(k) = crate::widgets::button_group(ui, "paint what", &[tr!("One terrain"), tr!("Noise")], &[!on, on]) {
                 tools.pattern.on = k == 1;
             }
             ui.add_space(4.0);
@@ -356,7 +356,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
                 });
                 hint(
                     ui,
-                    "Pick it in Terrain or Blocks; Alt-click picks it on the map.",
+                    tr!("Pick it in Terrain or Blocks; Alt-click picks it on the map."),
                 );
             }
         }
@@ -369,34 +369,34 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
                 swatch(ui, theme::rgb(def.color));
                 ui.label(RichText::new(&def.name).bold());
             });
-            hint(ui, "Pick it in Biomes.");
+            hint(ui, tr!("Pick it in Biomes."));
         }
         Tool::AutoBiome | Tool::AutoPaint => {
             let biomes = tool == Tool::AutoBiome;
-            hint(ui, "Hover: see what changes, in colour · drag: paint it.");
+            hint(ui, tr!("Hover: see what changes, in colour · drag: paint it."));
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 if ui
-                    .button(theme::with_icon(Icon::Map, "Whole map"))
+                    .button(theme::with_icon(Icon::Map, tr!("Whole map")))
                     .on_hover_text(if biomes {
-                        "Set the biomes of the whole map (undoable)"
+                        tr!("Set the biomes of the whole map (undoable)")
                     } else {
-                        "Paint the whole map (undoable)"
+                        tr!("Paint the whole map (undoable)")
                     })
                     .clicked()
                 {
                     tools.run_auto = Some(biomes);
                 }
                 if ui
-                    .button(theme::with_icon(Icon::Settings2, "Rules…"))
-                    .on_hover_text("The biome of each kind of land, the terrains of each biome")
+                    .button(theme::with_icon(Icon::Settings2, tr!("Rules…")))
+                    .on_hover_text(tr!("The biome of each kind of land, the terrains of each biome"))
                     .clicked()
                 {
                     tools.open_rules = true;
                 }
             });
             if let Some((_, changed)) = tools.auto_done.filter(|(b, _)| *b == biomes) {
-                hint(ui, &format!("{changed} columns changed over the whole map."));
+                hint(ui, &tr!("{changed} columns changed over the whole map.", changed));
             }
         }
         Tool::River => {
@@ -407,19 +407,19 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
                     .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0))
             }
             let mut changed = false;
-            changed |= tip_row(ui, "Width", "Width of the water at the source", |ui| ui.add(crate::widgets::Field::new(&mut r.width, 2.0..=200.0).suffix(" blocks").max_decimals(0)));
-            changed |= tip_row(ui, "Flow", "How much wider and deeper it grows downstream", |ui| ui.add(percent(&mut r.flow)));
-            changed |= tip_row(ui, "Depth", "Depth of the water at the source", |ui| ui.add(crate::widgets::Field::new(&mut r.depth, 1.0..=30.0).suffix(" blocks").max_decimals(0)));
-            changed |= tip_row(ui, "Erosion", "How much it wears the land beside its bed", |ui| ui.add(percent(&mut r.erosion)));
-            changed |= tip_row(ui, "Banks", "How far its banks slope back up to the land", |ui| ui.add(crate::widgets::Field::new(&mut r.banks, 0.0..=120.0).suffix(" blocks").max_decimals(0)));
-            changed |= tip_row(ui, "Lakes", "Which hollows on its way fill up as lakes: none, the deep ones, all", |ui| ui.add(percent(&mut r.lakes)));
-            crate::widgets::checkbox(ui, &mut r.water, "Fill it with water");
-            crate::widgets::checkbox(ui, &mut r.biome, "River biome on its water");
+            changed |= tip_row(ui, tr!("Width"), tr!("Width of the water at the source"), |ui| ui.add(crate::widgets::Field::new(&mut r.width, 2.0..=200.0).suffix(tr!(" blocks")).max_decimals(0)));
+            changed |= tip_row(ui, tr!("Flow"), tr!("How much wider and deeper it grows downstream"), |ui| ui.add(percent(&mut r.flow)));
+            changed |= tip_row(ui, tr!("Depth"), tr!("Depth of the water at the source"), |ui| ui.add(crate::widgets::Field::new(&mut r.depth, 1.0..=30.0).suffix(tr!(" blocks")).max_decimals(0)));
+            changed |= tip_row(ui, tr!("Erosion"), tr!("How much it wears the land beside its bed"), |ui| ui.add(percent(&mut r.erosion)));
+            changed |= tip_row(ui, tr!("Banks"), tr!("How far its banks slope back up to the land"), |ui| ui.add(crate::widgets::Field::new(&mut r.banks, 0.0..=120.0).suffix(tr!(" blocks")).max_decimals(0)));
+            changed |= tip_row(ui, tr!("Lakes"), tr!("Which hollows on its way fill up as lakes: none, the deep ones, all"), |ui| ui.add(percent(&mut r.lakes)));
+            crate::widgets::checkbox(ui, &mut r.water, tr!("Fill it with water"));
+            crate::widgets::checkbox(ui, &mut r.biome, tr!("River biome on its water"));
             ui.horizontal(|ui| {
-                ui.add_sized([72.0, 18.0], egui::Label::new("Bed"));
-                let shown = if r.bed.is_empty() { "As it is".to_owned() } else { r.bed.clone() };
+                ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Bed")));
+                let shown = if r.bed.is_empty() { tr!("As it is").to_owned() } else { r.bed.clone() };
                 crate::widgets::combo("river bed").selected_text(shown).width(150.0).show_ui(ui, |ui| {
-                    if ui.selectable_label(r.bed.is_empty(), "As it is").clicked() {
+                    if ui.selectable_label(r.bed.is_empty(), tr!("As it is")).clicked() {
                         r.bed.clear();
                     }
                     for t in &doc.world.registry.terrains {
@@ -432,25 +432,22 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             let spec = r.spring_spec(&doc.world.registry);
             hint(
                 ui,
-                &format!(
-                    "{:.0} × {:.0} at the source, {:.0} × {:.0} at the end (width × depth).",
-                    spec.width, spec.depth, spec.width_end, spec.depth_end
-                ),
+                &tr!("{width:.0} × {depth:.0} at the source, {width_end:.0} × {depth_end:.0} at the end (width × depth).", width = spec.width, depth = spec.depth, width_end = spec.width_end, depth_end = spec.depth_end),
             );
             ui.add_space(4.0);
             if changed && let Some(draft) = &mut tools.river_draft {
                 draft.plan(doc, &tools.river, None);
             }
             match &tools.river_draft {
-                None => hint(ui, "Click on land: where it springs. The water finds its way down."),
+                None => hint(ui, tr!("Click on land: where it springs. The water finds its way down.")),
                 Some(draft) => {
                     ui.label(RichText::new(draft.summary()).strong());
-                    hint(ui, "Drag the river to guide it · click elsewhere: where it ends · right-click a point: remove it.");
+                    hint(ui, tr!("Drag the river to guide it · click elsewhere: where it ends · right-click a point: remove it."));
                     ui.horizontal(|ui| {
-                        if ui.button(theme::with_icon(Icon::Route, "Dig river")).on_hover_text("Enter").clicked() {
+                        if ui.button(theme::with_icon(Icon::Route, tr!("Dig river"))).on_hover_text(tr!("Enter")).clicked() {
                             tools.river_note = crate::tools::dig_draft(doc, tools);
                         }
-                        if ui.button("Cancel").on_hover_text("Esc").clicked() {
+                        if ui.button(tr!("Cancel")).on_hover_text(tr!("Esc")).clicked() {
                             tools.river_draft = None;
                         }
                     });
@@ -461,47 +458,47 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             }
         }
         Tool::Flood | Tool::Water => {
-            slider_row(ui, "Water level", |ui| {
+            slider_row(ui, tr!("Water level"), |ui| {
                 crate::widgets::drag(ui, egui::DragValue::new(&mut tools.water_level).range(doc.dimension().min_y as i16..=doc.dimension().max_y as i16))
             });
             ui.horizontal(|ui| {
                 ui.add_space(76.0);
-                if ui.small_button(format!("Sea level ({})", doc.world.meta.sea_level)).clicked() {
+                if ui.small_button(tr!("Sea level ({sea_level})", sea_level = doc.world.meta.sea_level)).clicked() {
                     tools.water_level = doc.world.meta.sea_level as i16;
                 }
             });
         }
         Tool::StampSlab => {
-            slider_row(ui, "Thickness", |ui| {
-                ui.add(crate::widgets::Field::new(&mut tools.slab_thickness, 1.0..=128.0).logarithmic(true).suffix(" blocks"))
+            slider_row(ui, tr!("Thickness"), |ui| {
+                ui.add(crate::widgets::Field::new(&mut tools.slab_thickness, 1.0..=128.0).logarithmic(true).suffix(tr!(" blocks")))
             });
             ui.horizontal(|ui| {
-                ui.add_sized([72.0, 18.0], egui::Label::new("Centre"));
-                ui.selectable_value(&mut tools.anchor, AnchorMode::AboveGround, "Above ground");
-                ui.selectable_value(&mut tools.anchor, AnchorMode::Absolute, "At height");
+                ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Centre")));
+                ui.selectable_value(&mut tools.anchor, AnchorMode::AboveGround, tr!("Above ground"));
+                ui.selectable_value(&mut tools.anchor, AnchorMode::Absolute, tr!("At height"));
             });
             match tools.anchor {
                 AnchorMode::AboveGround => {
-                    slider_row(ui, "Offset", |ui| {
+                    slider_row(ui, tr!("Offset"), |ui| {
                         crate::widgets::drag(ui, egui::DragValue::new(&mut tools.slab_offset)
                                 .speed(0.5)
-                                .suffix(" blocks"),
+                                .suffix(tr!(" blocks")),
                         )
                     });
-                    hint(ui, "Negative: underground.");
+                    hint(ui, tr!("Negative: underground."));
                 }
                 AnchorMode::Absolute => {
-                    slider_row(ui, "Height", |ui| {
+                    slider_row(ui, tr!("Height"), |ui| {
                         crate::widgets::drag(ui, egui::DragValue::new(&mut tools.slab_height).speed(0.5).range(doc.dimension().min_y..=doc.dimension().max_y))
                     });
                 }
             }
         }
         Tool::Build | Tool::Dig | Tool::Smooth3d => {
-            hint(ui, "Best in the 3D view.");
+            hint(ui, tr!("Best in the 3D view."));
             let sculpted = doc.dimension().voxels.len();
             if sculpted > 0 {
-                hint(ui, &format!("{sculpted} sculpted chunks of 16³ blocks in this dimension."));
+                hint(ui, &tr!("{sculpted} sculpted chunks of 16³ blocks in this dimension.", sculpted));
             }
         }
         Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush => crate::select::settings(ui, tools, doc, blocks),
@@ -510,10 +507,10 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
 
     // Which level the tool edits.
     if !matches!(tool, Tool::Pan | Tool::Flood | Tool::Drain | Tool::Eyedropper) && !tool.is_sculpt() && !tool.is_select() {
-        section(ui, Icon::Layers, "Level");
-        let levels: Vec<(String, LevelKind)> = doc.dimension().levels.iter().map(|l| (l.name.clone(), l.kind)).collect();
+        section(ui, Icon::Layers, tr!("Level"));
+        let levels: Vec<(String, LevelKind)> = doc.dimension().levels.iter().map(|l| (crate::i18n::tr_name(&l.name).to_owned(), l.kind)).collect();
         ui.horizontal(|ui| {
-            ui.add_sized([72.0, 18.0], egui::Label::new("Edit"));
+            ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Edit")));
             crate::widgets::combo("active level")
                 .selected_text(level_label(&levels[doc.active_level.min(levels.len() - 1)]))
                 .show_ui(ui, |ui| {
@@ -524,18 +521,18 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
         });
         if doc.active_kind() != LevelKind::Ground && !matches!(tool, Tool::StampSlab | Tool::EraseSlab) {
             ui.horizontal(|ui| {
-                ui.add_sized([72.0, 18.0], egui::Label::new("Surface"));
-                ui.selectable_value(&mut tools.surface, SurfaceChoice::Top, "Top");
-                ui.selectable_value(&mut tools.surface, SurfaceChoice::Bottom, "Bottom");
+                ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Surface")));
+                ui.selectable_value(&mut tools.surface, SurfaceChoice::Top, tr!("Top"));
+                ui.selectable_value(&mut tools.surface, SurfaceChoice::Bottom, tr!("Bottom"));
             });
         }
         if tool.needs_slab_level() && doc.active_kind() == LevelKind::Ground {
-            ui.label(RichText::new("This tool edits a Solid or Carve level.").color(pal.danger).size(12.0));
+            ui.label(RichText::new(tr!("This tool edits a Solid or Carve level.")).color(pal.danger).size(12.0));
             ui.horizontal(|ui| {
-                if ui.button(format!("{} Add solid level", theme::glyph(Icon::Plus))).clicked() {
+                if ui.button(tr!("{glyph} Add solid level", glyph = theme::glyph(Icon::Plus))).clicked() {
                     doc.add_level(LevelKind::Solid);
                 }
-                if ui.button(format!("{} Add carve level", theme::glyph(Icon::Plus))).clicked() {
+                if ui.button(tr!("{glyph} Add carve level", glyph = theme::glyph(Icon::Plus))).clicked() {
                     doc.add_level(LevelKind::Carve);
                 }
             });
@@ -602,7 +599,7 @@ fn brush_grid(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibrary, br
         }
         if let Some(add) = add {
             let r = icon_button(ui, Icon::Plus, false, 44.0)
-                .on_hover_text("Add greyscale images as brushes");
+                .on_hover_text(tr!("Add greyscale images as brushes"));
             *add |= r.clicked();
         }
     });
@@ -612,15 +609,15 @@ fn brush_grid(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibrary, br
 /// `group` is `None`).
 fn add_brushes(library: &mut BrushLibrary, group: Option<&std::path::Path>, ctx: &egui::Context) -> Option<String> {
     let files = rfd::FileDialog::new()
-        .set_title("Add brushes")
-        .add_filter("Images", &["png", "jpg", "jpeg"])
+        .set_title(tr!("Add brushes"))
+        .add_filter(tr!("Images"), &["png", "jpg", "jpeg"])
         .pick_files()?;
     Some(match library.add_images(group, &files) {
         Ok(n) => {
             library.load_in_background(ctx);
-            format!("Added {n} brush{}", if n == 1 { "" } else { "es" })
+            trn!("Added {n} brush", "Added {n} brushes", n = n)
         }
-        Err(e) => format!("Could not add the brushes: {e}"),
+        Err(e) => tr!("Could not add the brushes: {e}", e),
     })
 }
 
@@ -630,37 +627,37 @@ pub fn brushes_panel(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibr
     let named = |library: &BrushLibrary, list: &[BrushSource]| -> Vec<(BrushSource, String)> {
         list.iter().map(|s| (s.clone(), library.name(s))).collect()
     };
-    section(ui, Icon::Circle, "Basic");
+    section(ui, Icon::Circle, tr!("Basic"));
     let basic = named(library, &BrushSource::BASIC);
     brush_grid(ui, tools, library, &basic, None);
-    section(ui, Icon::Shapes, "More shapes");
+    section(ui, Icon::Shapes, tr!("More shapes"));
     let more = named(library, &BrushSource::MORE);
     brush_grid(ui, tools, library, &more, None);
     for family in Family::ALL {
-        section(ui, Icon::MountainSnow, family.label());
+        section(ui, Icon::MountainSnow, crate::i18n::tr_name(family.label()));
         let stamps: Vec<(BrushSource, String)> = Stamp::ALL
             .iter()
             .filter(|s| s.family() == family)
-            .map(|s| (BrushSource::Stamp(*s), s.label().to_owned()))
+            .map(|s| (BrushSource::Stamp(*s), crate::i18n::tr_name(s.label()).to_owned()))
             .collect();
         brush_grid(ui, tools, library, &stamps, None);
     }
 
-    section(ui, Icon::Images, "Your brushes");
+    section(ui, Icon::Images, tr!("Your brushes"));
     ui.horizontal_wrapped(|ui| {
-        if ui.button(theme::with_icon(Icon::Plus, "Add brushes…")).clicked() {
+        if ui.button(theme::with_icon(Icon::Plus, tr!("Add brushes…"))).clicked() {
             feedback = add_brushes(library, None, ui.ctx());
         }
-        if ui.button(theme::with_icon(Icon::FolderPlus, "New group…")).clicked() {
+        if ui.button(theme::with_icon(Icon::FolderPlus, tr!("New group…"))).clicked() {
             *new_group = Some(String::new());
         }
-        if ui.button(theme::with_icon(Icon::FolderOpen, "Open the folder")).clicked()
+        if ui.button(theme::with_icon(Icon::FolderOpen, tr!("Open the folder"))).clicked()
             && let Err(e) = library.open_folder()
         {
-            feedback = Some(format!("Could not open the brushes folder: {e}"));
+            feedback = Some(tr!("Could not open the brushes folder: {e}", e));
         }
         if ui
-            .add_enabled(!library.is_loading(), egui::Button::new(theme::with_icon(Icon::RefreshCw, "Reload")))
+            .add_enabled(!library.is_loading(), egui::Button::new(theme::with_icon(Icon::RefreshCw, tr!("Reload"))))
             .clicked()
         {
             library.load_in_background(ui.ctx());
@@ -669,15 +666,15 @@ pub fn brushes_panel(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibr
     if let Some(name) = new_group {
         let mut done = None;
         ui.horizontal(|ui| {
-            let edit = ui.add(egui::TextEdit::singleline(name).hint_text("Group name").desired_width(140.0));
+            let edit = ui.add(egui::TextEdit::singleline(name).hint_text(tr!("Group name")).desired_width(140.0));
             if !edit.has_focus() && name.is_empty() {
                 edit.request_focus();
             }
             let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if ui.button("Create").clicked() || enter {
+            if ui.button(tr!("Create")).clicked() || enter {
                 done = Some(true);
             }
-            if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if ui.button(tr!("Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 done = Some(false);
             }
         });
@@ -686,9 +683,9 @@ pub fn brushes_panel(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibr
                 feedback = Some(match library.new_group(name) {
                     Ok(_) => {
                         library.load_in_background(ui.ctx());
-                        format!("Made the group “{}”", name.trim())
+                        tr!("Made the group “{trim}”", trim = name.trim())
                     }
-                    Err(e) => format!("Could not make the group: {e}"),
+                    Err(e) => tr!("Could not make the group: {e}", e),
                 });
                 *new_group = None;
             }
@@ -698,7 +695,7 @@ pub fn brushes_panel(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibr
     }
     hint(
         ui,
-        "Greyscale images: white paints, black doesn't.",
+        tr!("Greyscale images: white paints, black doesn't."),
     );
     feedback
 }
@@ -709,13 +706,13 @@ pub fn custom_brushes_panel(ui: &mut Ui, tools: &mut ToolState, library: &mut Br
     if !library.is_loaded() {
         ui.horizontal(|ui| {
             crate::loader::loader(ui, 16.0);
-            hint(ui, "Loading the brushes…");
+            hint(ui, tr!("Loading the brushes…"));
         });
         return None;
     }
     if library.groups.is_empty() {
-        hint(ui, "No custom brushes yet.");
-        if ui.button(theme::with_icon(Icon::Plus, "Add brushes…")).clicked() {
+        hint(ui, tr!("No custom brushes yet."));
+        if ui.button(theme::with_icon(Icon::Plus, tr!("Add brushes…"))).clicked() {
             feedback = add_brushes(library, None, ui.ctx());
         }
         return feedback;
@@ -730,7 +727,7 @@ pub fn custom_brushes_panel(ui: &mut Ui, tools: &mut ToolState, library: &mut Br
         })
         .collect();
     for (name, dir, writable, entries) in groups {
-        section(ui, if writable { Icon::Folder } else { Icon::FolderOpen }, &format!("{name}  ·  {}", entries.len()));
+        section(ui, if writable { Icon::Folder } else { Icon::FolderOpen }, &tr!("{name}  ·  {n}", n = entries.len(), name));
         let mut add = false;
         brush_grid(ui, tools, library, &entries, writable.then_some(&mut add));
         if add {
@@ -739,7 +736,7 @@ pub fn custom_brushes_panel(ui: &mut Ui, tools: &mut ToolState, library: &mut Br
     }
     if !library.errors.is_empty() {
         let pal = Palette::of(ui);
-        ui.label(RichText::new(format!("{} image(s) could not be read", library.errors.len())).color(pal.danger).size(11.5))
+        ui.label(RichText::new(tr!("{n} image(s) could not be read", n = library.errors.len())).color(pal.danger).size(11.5))
             .on_hover_text(library.errors.join("\n"));
     }
     feedback
@@ -763,21 +760,21 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
             ui.add_space(6.0);
             ui.label(RichText::new(library.name(&tools.brush_source)).bold().size(14.0));
             let kind = match tools.brush_source {
-                BrushSource::Symmetric(..) => "Built-in brush",
-                BrushSource::Stamp(_) => "Terrain stamp",
-                BrushSource::Image(_) => "Custom brush",
+                BrushSource::Symmetric(..) => tr!("Built-in brush"),
+                BrushSource::Stamp(_) => tr!("Terrain stamp"),
+                BrushSource::Image(_) => tr!("Custom brush"),
             };
             hint(ui, kind);
             let r = tools.brush.radius.round();
-            hint(ui, &format!("{} blocks across", 2.0 * r + 1.0));
+            hint(ui, &tr!("{value} blocks across", value = 2.0 * r + 1.0));
         });
     });
     ui.add_space(4.0);
     let b = &mut tools.brush;
-    slider_row(ui, "Size", |ui| {
-        ui.add(crate::widgets::Field::new(&mut b.radius, 1.0..=MAX_RADIUS).logarithmic(true).suffix(" radius").max_decimals(0))
+    slider_row(ui, tr!("Size"), |ui| {
+        ui.add(crate::widgets::Field::new(&mut b.radius, 1.0..=MAX_RADIUS).logarithmic(true).suffix(tr!(" radius")).max_decimals(0))
     });
-    slider_row(ui, "Intensity", |ui| {
+    slider_row(ui, tr!("Intensity"), |ui| {
         ui.add(
             crate::widgets::Field::new(&mut b.strength, 0.01..=1.0)
                 .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
@@ -785,7 +782,7 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
         )
     });
     let mut degrees = if b.rotation > 180.0 { b.rotation - 360.0 } else { b.rotation };
-    let turned = slider_row(ui, "Rotation", |ui| {
+    let turned = slider_row(ui, tr!("Rotation"), |ui| {
         // No steps: the wheel turns the brush 5° (or 1°) at a time.
         ui.add(crate::widgets::Field::new(&mut degrees, -180.0..=180.0).suffix("°").max_decimals(0))
     });
@@ -796,51 +793,51 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
     hint(
         ui,
         if cfg!(target_os = "macos") {
-            "Scroll: size · 1…0: intensity · ⌘+scroll: turn"
+            tr!("Scroll: size · 1…0: intensity · ⌘+scroll: turn")
         } else {
-            "Scroll: size · 1…0: intensity · Ctrl+Shift+scroll: turn"
+            tr!("Scroll: size · 1…0: intensity · Ctrl+Shift+scroll: turn")
         },
     );
-    crate::widgets::checkbox(ui, &mut tools.show_strength, "Strength on the map")
-        .on_hover_text("Under the pointer, lighter where the brush presses harder. Its lines at a quarter, a half and three quarters of its strength show either way.");
+    crate::widgets::checkbox(ui, &mut tools.show_strength, tr!("Strength on the map"))
+        .on_hover_text(tr!("Under the pointer, lighter where the brush presses harder. Its lines at a quarter, a half and three quarters of its strength show either way."));
 
     // ---- options ---------------------------------------------------------
     let f = &mut tools.filter;
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Options").bold());
+        ui.label(RichText::new(tr!("Options")).bold());
         if f.is_active() {
             ui.label(RichText::new(theme::glyph(Icon::Funnel).to_string()).color(pal.accent))
-                .on_hover_text("A filter is on: the brushes only act where it lets them");
+                .on_hover_text(tr!("A filter is on: the brushes only act where it lets them"));
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                if ui.small_button("Reset").on_hover_text("Act everywhere again").clicked() {
+                if ui.small_button(tr!("Reset")).on_hover_text(tr!("Act everywhere again")).clicked() {
                     *f = massif_core::filter::Filter::default();
                 }
             });
         }
     });
 
-    section(ui, Icon::ArrowUpDown, "Height limits");
+    section(ui, Icon::ArrowUpDown, tr!("Height limits"));
     height_limits(ui, f, heights, min_y, max_y, sea);
 
-    section(ui, Icon::Layers, "What is on the map");
+    section(ui, Icon::Layers, tr!("What is on the map"));
     match_list(ui, "only on", &mut f.only_on, reg, "only on");
     match_list(ui, "except on", &mut f.except_on, reg, "except on");
 
-    section(ui, Icon::TrendingUp, "Slope");
+    section(ui, Icon::TrendingUp, tr!("Slope"));
     ui.horizontal(|ui| {
-        crate::widgets::checkbox(ui, &mut f.slope_above, "above");
-        crate::widgets::checkbox(ui, &mut f.slope_below, "below");
+        crate::widgets::checkbox(ui, &mut f.slope_above, tr!("above"));
+        crate::widgets::checkbox(ui, &mut f.slope_below, tr!("below"));
         crate::widgets::drag_enabled(ui, f.slope_above || f.slope_below, egui::DragValue::new(&mut f.slope).range(0.0..=90.0).speed(0.5).suffix("°"),
         );
     });
 
-    section(ui, Icon::Compass, "Facing");
+    section(ui, Icon::Compass, tr!("Facing"));
     ui.horizontal(|ui| {
         facing_dial(ui, f);
         ui.vertical(|ui| {
-            crate::widgets::checkbox(ui, &mut f.facing_on, "only slopes facing")
-                .on_hover_text("Only slopes facing this way.");
+            crate::widgets::checkbox(ui, &mut f.facing_on, tr!("only slopes facing"))
+                .on_hover_text(tr!("Only slopes facing this way."));
             ui.horizontal(|ui| {
                 crate::widgets::drag_enabled(ui, f.facing_on, egui::DragValue::new(&mut f.facing)
                         .range(0.0..=360.0)
@@ -854,16 +851,16 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
             });
             ui.horizontal(|ui| {
                 if ui
-                    .small_button(theme::with_icon(Icon::Sun, "Sun"))
-                    .on_hover_text("The slopes the light of the map falls on (R and L turn it)")
+                    .small_button(theme::with_icon(Icon::Sun, tr!("Sun")))
+                    .on_hover_text(tr!("The slopes the light of the map falls on (R and L turn it)"))
                     .clicked()
                 {
                     f.facing_on = true;
                     f.facing = light.rem_euclid(360.0);
                 }
                 if ui
-                    .small_button(theme::with_icon(Icon::Moon, "Shade"))
-                    .on_hover_text("The slopes turned away from the light of the map")
+                    .small_button(theme::with_icon(Icon::Moon, tr!("Shade")))
+                    .on_hover_text(tr!("The slopes turned away from the light of the map"))
                     .clicked()
                 {
                     f.facing_on = true;
@@ -874,17 +871,17 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
     });
     f.facing = f.facing.rem_euclid(360.0);
 
-    section(ui, Icon::Waves, "Curvature");
+    section(ui, Icon::Waves, tr!("Curvature"));
     ui.horizontal(|ui| {
-        crate::widgets::checkbox(ui, &mut f.hollows, "hollows").on_hover_text("Columns lower than the ones around them");
-        crate::widgets::checkbox(ui, &mut f.bumps, "bumps").on_hover_text("Columns higher than the ones around them");
+        crate::widgets::checkbox(ui, &mut f.hollows, tr!("hollows")).on_hover_text(tr!("Columns lower than the ones around them"));
+        crate::widgets::checkbox(ui, &mut f.bumps, tr!("bumps")).on_hover_text(tr!("Columns higher than the ones around them"));
     });
     let on = f.hollows || f.bumps;
     ui.horizontal(|ui| {
         crate::widgets::drag_enabled(ui, on, egui::DragValue::new(&mut f.depth).range(0.1..=64.0).speed(0.1).max_decimals(1));
-        ui.label("blocks deep");
+        ui.label(tr!("blocks deep"));
         crate::widgets::drag_enabled(ui, on, egui::DragValue::new(&mut f.radius).range(1..=64));
-        ui.label("blocks around");
+        ui.label(tr!("blocks around"));
     });
 }
 
@@ -933,7 +930,7 @@ pub fn import_objects(doc: &mut Document, tools: &mut ToolState, files: &[std::p
         match into.and_then(|n| n.checked_sub(1)).and_then(|k| reg.object_layers.get_mut(k as usize)).filter(|l| !l.removed) {
             Some(layer) => layer.objects.extend(added.iter().map(|&k| (k, 1))),
             None => {
-                let name = if added.len() == 1 { reg.objects[added[0] as usize].name.clone() } else { format!("{} and {} more", reg.objects[added[0] as usize].name, added.len() - 1) };
+                let name = if added.len() == 1 { reg.objects[added[0] as usize].name.clone() } else { tr!("{name} and {value} more", name = reg.objects[added[0] as usize].name, value = added.len() - 1) };
                 let layer = massif_core::objects::ObjectLayerDef::new(&name, &added, reg);
                 tools.object_layer = reg.add_object_layer(layer);
             }
@@ -945,17 +942,17 @@ pub fn import_objects(doc: &mut Document, tools: &mut ToolState, files: &[std::p
     }
     let mut note = match added.len() {
         0 => String::new(),
-        1 => format!("Read 1 object ({})", formats.join(", ")),
-        n => format!("Read {n} objects ({})", formats.join(", ")),
+        1 => tr!("Read 1 object ({join})", join = formats.join(", ")),
+        n => tr!("Read {n} objects ({join})", join = formats.join(", "), n),
     };
     if left_out > 0 {
-        note.push_str(&format!(" · {left_out} blocks of unknown numbers left out"));
+        note.push_str(&tr!(" · {left_out} blocks of unknown numbers left out", left_out));
     }
     if !failed.is_empty() {
         if !note.is_empty() {
             note.push_str(" · ");
         }
-        note.push_str(&format!("Could not read {}", failed.join("; ")));
+        note.push_str(&tr!("Could not read {join}", join = failed.join("; ")));
     }
     tools.objects_note = Some(note.clone());
     note
@@ -1021,21 +1018,21 @@ fn object_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, block
     let pick = |title: &str| {
         rfd::FileDialog::new()
             .set_title(title)
-            .add_filter("Schematics", &massif_objects::EXTENSIONS)
+            .add_filter(tr!("Schematics"), &massif_objects::EXTENSIONS)
             .pick_files()
             .unwrap_or_default()
     };
     if ui
-        .button(theme::with_icon(Icon::FolderOpen, "Import objects…"))
-        .on_hover_text("Sponge .schem, MCEdit .schematic, Axiom .bp, Litematica .litematic, structure .nbt")
+        .button(theme::with_icon(Icon::FolderOpen, tr!("Import objects…")))
+        .on_hover_text(tr!("Sponge .schem, MCEdit .schematic, Axiom .bp, Litematica .litematic, structure .nbt"))
         .clicked()
     {
-        let files = pick("Import objects");
+        let files = pick(tr!("Import objects"));
         if !files.is_empty() {
             import_objects(doc, tools, &files, None, blocks.catalogue.as_deref());
         }
     }
-    hint(ui, "Trees, rocks, ruins from .schem, .schematic, .bp, .litematic or .nbt files — or drop them on the window. Every layer of the map: the Layers panel.");
+    hint(ui, tr!("Trees, rocks, ruins from .schem, .schematic, .bp, .litematic or .nbt files — or drop them on the window. Every layer of the map: the Layers panel."));
     if let Some(note) = &tools.objects_note {
         ui.label(RichText::new(note).size(11.5).color(if note.contains("Could not") { pal.danger } else { pal.weak }));
     }
@@ -1063,7 +1060,7 @@ fn object_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, block
         painter.rect(dot, 3, theme::rgb(layer.color), Stroke::new(1.0, Color32::from_black_alpha(60)), StrokeKind::Inside);
         painter.text(rect.left_center() + vec2(26.0, 0.0), egui::Align2::LEFT_CENTER, &layer.name, egui::FontId::proportional(12.5), pal.text);
         let count = layer.objects.len();
-        painter.text(rect.right_center() - vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, format!("{count} object{}", if count == 1 { "" } else { "s" }), egui::FontId::proportional(11.0), pal.weak);
+        painter.text(rect.right_center() - vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, trn!("{n} object", "{n} objects", n = count), egui::FontId::proportional(11.0), pal.weak);
         response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &layer.name));
         if response.clicked() {
             picked = Some(n);
@@ -1078,7 +1075,7 @@ fn object_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, block
     let k = tools.object_layer.checked_sub(1).map(|k| k as usize);
     if k.and_then(|k| doc.world.registry.object_layers.get(k)).is_none_or(|l| l.removed) {
         if doc.world.registry.object_layers.iter().all(|l| l.removed) {
-            hint(ui, "No objects yet: import some to paint them.");
+            hint(ui, tr!("No objects yet: import some to paint them."));
         }
         return;
     }
@@ -1089,37 +1086,37 @@ fn object_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, block
     ui.add_space(4.0);
     section(ui, Icon::TreePine, &layer.name.clone());
     ui.horizontal(|ui| {
-        ui.add_sized([72.0, 18.0], egui::Label::new("Name"));
+        ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Name")));
         ui.add(egui::TextEdit::singleline(&mut layer.name).desired_width((ui.available_width() - 40.0).max(60.0)));
         let mut c = Color32::from_rgb(layer.color[0], layer.color[1], layer.color[2]);
-        if egui::color_picker::color_edit_button_srgba(ui, &mut c, egui::color_picker::Alpha::Opaque).on_hover_text("Its colour in the list").changed() {
+        if egui::color_picker::color_edit_button_srgba(ui, &mut c, egui::color_picker::Alpha::Opaque).on_hover_text(tr!("Its colour in the list")).changed() {
             layer.color = [c.r(), c.g(), c.b()];
         }
     });
-    tip_row(ui, "Spacing", "One object at most in each square of this side", |ui| {
-        ui.add(crate::widgets::Field::new(&mut layer.spacing, 2..=256).suffix(" blocks").max_decimals(0))
+    tip_row(ui, tr!("Spacing"), tr!("One object at most in each square of this side"), |ui| {
+        ui.add(crate::widgets::Field::new(&mut layer.spacing, 2..=256).suffix(tr!(" blocks")).max_decimals(0))
     });
-    tip_row(ui, "Density", "Share of those squares where one stands", |ui| {
+    tip_row(ui, tr!("Density"), tr!("Share of those squares where one stands"), |ui| {
         ui.add(
             crate::widgets::Field::new(&mut layer.density, 0.0..=1.0)
                 .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
                 .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
         )
     });
-    tip_row(ui, "Sink", "How many blocks into the ground they go (rocks bedded in)", |ui| {
-        ui.add(crate::widgets::Field::new(&mut layer.sink, -16..=32).suffix(" blocks").max_decimals(0))
+    tip_row(ui, tr!("Sink"), tr!("How many blocks into the ground they go (rocks bedded in)"), |ui| {
+        ui.add(crate::widgets::Field::new(&mut layer.sink, -16..=32).suffix(tr!(" blocks")).max_decimals(0))
     });
     ui.horizontal(|ui| {
-        crate::widgets::checkbox(ui, &mut layer.rotate, "Turn at random").on_hover_text("A quarter turn picked for each");
-        crate::widgets::checkbox(ui, &mut layer.mirror, "Mirror").on_hover_text("Half of them mirrored");
+        crate::widgets::checkbox(ui, &mut layer.rotate, tr!("Turn at random")).on_hover_text(tr!("A quarter turn picked for each"));
+        crate::widgets::checkbox(ui, &mut layer.mirror, tr!("Mirror")).on_hover_text(tr!("Half of them mirrored"));
     });
     ui.horizontal(|ui| {
-        crate::widgets::checkbox(ui, &mut layer.soil_only, "Only on soil").on_hover_text("Grass, dirt, podzol, moss, mud…");
-        crate::widgets::checkbox(ui, &mut layer.underwater, "Under water").on_hover_text("Coral, wrecks: in the water rather than the air");
+        crate::widgets::checkbox(ui, &mut layer.soil_only, tr!("Only on soil")).on_hover_text(tr!("Grass, dirt, podzol, moss, mud…"));
+        crate::widgets::checkbox(ui, &mut layer.underwater, tr!("Under water")).on_hover_text(tr!("Coral, wrecks: in the water rather than the air"));
     });
-    crate::widgets::checkbox(ui, &mut layer.replace, "Replace the ground").on_hover_text("Their blocks take the place of the ground they reach; otherwise only of air, water and plants");
+    crate::widgets::checkbox(ui, &mut layer.replace, tr!("Replace the ground")).on_hover_text(tr!("Their blocks take the place of the ground they reach; otherwise only of air, water and plants"));
 
-    section(ui, Icon::Boxes, &format!("Objects · {}", layer.objects.len()));
+    section(ui, Icon::Boxes, &tr!("Objects · {n}", n = layer.objects.len()));
     let total: f32 = layer.objects.iter().map(|o| o.1 as f32).sum::<f32>().max(1.0);
     let mut remove = None;
     for (row, (index, weight)) in layer.objects.iter_mut().enumerate() {
@@ -1133,11 +1130,11 @@ fn object_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, block
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 1.0;
                 ui.add(egui::Label::new(RichText::new(&def.name).strong()).truncate()).on_hover_text(&def.source);
-                ui.label(RichText::new(format!("{} × {} × {} · {} blocks", def.size[0], def.size[1], def.size[2], def.count())).size(11.0).color(pal.weak));
+                ui.label(RichText::new(tr!("{value} × {value2} × {value3} · {n} blocks", value = def.size[0], value2 = def.size[1], value3 = def.size[2], n = def.count())).size(11.0).color(pal.weak));
                 ui.horizontal(|ui| {
-                    crate::widgets::drag(ui, egui::DragValue::new(weight).range(1..=1000).speed(0.2)).on_hover_text("Weight: how often it stands against the others");
+                    crate::widgets::drag(ui, egui::DragValue::new(weight).range(1..=1000).speed(0.2)).on_hover_text(tr!("Weight: how often it stands against the others"));
                     ui.label(RichText::new(format!("{:.0}%", *weight as f32 * 100.0 / total)).size(11.0).color(pal.weak));
-                    if ui.add(egui::Button::new(theme::glyph(Icon::X).to_string()).frame(false).small()).on_hover_text("Take it out of the layer").clicked() {
+                    if ui.add(egui::Button::new(theme::glyph(Icon::X).to_string()).frame(false).small()).on_hover_text(tr!("Take it out of the layer")).clicked() {
                         remove = Some(row);
                     }
                 });
@@ -1147,14 +1144,14 @@ fn object_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, block
     if let Some(row) = remove {
         layer.objects.remove(row);
     }
-    let add = ui.button(theme::with_icon(Icon::Plus, "Add objects…")).on_hover_text("Read more files into this layer").clicked();
+    let add = ui.button(theme::with_icon(Icon::Plus, tr!("Add objects…"))).on_hover_text(tr!("Read more files into this layer")).clicked();
     if layer.objects.is_empty() {
-        hint(ui, "Nothing stands yet: add objects.");
+        hint(ui, tr!("Nothing stands yet: add objects."));
     }
     ui.add_space(6.0);
     let removed = ui
-        .button(RichText::new(theme::with_icon(Icon::Trash2, "Remove this layer")).color(pal.danger))
-        .on_hover_text("Nothing stands where it was painted any more")
+        .button(RichText::new(theme::with_icon(Icon::Trash2, tr!("Remove this layer"))).color(pal.danger))
+        .on_hover_text(tr!("Nothing stands where it was painted any more"))
         .clicked();
     if removed {
         layer.removed = true;
@@ -1164,7 +1161,7 @@ fn object_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, block
         tools.object_layer = reg.object_layers.iter().position(|l| !l.removed).map_or(0, |k| k as u16 + 1);
     }
     if add {
-        let files = pick("Add objects");
+        let files = pick(tr!("Add objects"));
         if !files.is_empty() {
             import_objects(doc, tools, &files, Some(k as u16 + 1), blocks.catalogue.as_deref());
         }
@@ -1215,11 +1212,11 @@ pub fn describe_cover(def: &massif_core::registry::CoverDef) -> String {
     let total: u32 = def.plants.iter().map(|p| p.1 as u32).sum::<u32>().max(1);
     let plants: Vec<String> = def.plants.iter().map(|(b, w)| format!("{} {:.0}%", plant_name(b), *w as f32 * 100.0 / total as f32)).collect();
     let where_ = match (def.underwater, def.soil_only) {
-        (true, _) => " · under water",
-        (false, true) => " · on soil",
+        (true, _) => tr!(" · under water"),
+        (false, true) => tr!(" · on soil"),
         _ => "",
     };
-    format!("{:.0}% of the ground: {}{where_}", def.density * 100.0, plants.join(", "))
+    tr!("{value:.0}% of the ground: {join}{where_}", value = def.density * 100.0, join = plants.join(", "), where_)
 }
 
 /// The cover of a block of the game: one that grows it alone, made if
@@ -1242,7 +1239,7 @@ pub fn block_cover(reg: &mut Registry, block: &massif_assets::Block) -> u16 {
 /// its number.
 pub fn new_cover(reg: &mut Registry) -> u16 {
     let count = reg.covers.iter().filter(|c| !c.removed).count();
-    let name = crate::layers::unique_name(&format!("Cover {}", count + 1), reg.covers.iter().filter(|c| !c.removed).map(|c| c.name.as_str()));
+    let name = crate::layers::unique_name(&tr!("Cover {value}", value = count + 1), reg.covers.iter().filter(|c| !c.removed).map(|c| c.name.as_str()));
     reg.add_cover(massif_core::registry::CoverDef::new(&name, [120, 170, 90], &[("minecraft:short_grass", 1)], 0.5))
 }
 
@@ -1285,10 +1282,10 @@ fn cover_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks
     if let Some(n) = picked {
         tools.cover = n;
     }
-    if ui.button(theme::with_icon(Icon::Plus, "New cover")).on_hover_text("A cover of your own: any blocks, any mix").clicked() {
+    if ui.button(theme::with_icon(Icon::Plus, tr!("New cover"))).on_hover_text(tr!("A cover of your own: any blocks, any mix")).clicked() {
         tools.cover = new_cover(&mut doc.world.registry);
     }
-    hint(ui, "Non-cube blocks clicked in Blocks become covers too. Every cover and object layer of the map: the Layers panel.");
+    hint(ui, tr!("Non-cube blocks clicked in Blocks become covers too. Every cover and object layer of the map: the Layers panel."));
 
     // The selected cover.
     let catalogue = blocks.catalogue.clone();
@@ -1298,14 +1295,14 @@ fn cover_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks
     ui.add_space(4.0);
     section(ui, Icon::Sprout, &def.name.clone());
     ui.horizontal(|ui| {
-        ui.add_sized([72.0, 18.0], egui::Label::new("Name"));
+        ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Name")));
         ui.add(egui::TextEdit::singleline(&mut def.name).desired_width((ui.available_width() - 40.0).max(60.0)));
         let mut c = Color32::from_rgb(def.color[0], def.color[1], def.color[2]);
-        if egui::color_picker::color_edit_button_srgba(ui, &mut c, egui::color_picker::Alpha::Opaque).on_hover_text("Its colour on the map").changed() {
+        if egui::color_picker::color_edit_button_srgba(ui, &mut c, egui::color_picker::Alpha::Opaque).on_hover_text(tr!("Its colour on the map")).changed() {
             def.color = [c.r(), c.g(), c.b()];
         }
     });
-    tip_row(ui, "Density", "Share of the painted ground where something grows", |ui| {
+    tip_row(ui, tr!("Density"), tr!("Share of the painted ground where something grows"), |ui| {
         ui.add(
             crate::widgets::Field::new(&mut def.density, 0.0..=1.0)
                 .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
@@ -1313,20 +1310,20 @@ fn cover_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks
         )
     });
     ui.horizontal(|ui| {
-        let tip = "How many blocks high it grows (cane, cactus: 1 to 3). Tall plants are always two.";
-        ui.add_sized([72.0, 18.0], egui::Label::new("Height")).on_hover_text(tip);
+        let tip = tr!("How many blocks high it grows (cane, cactus: 1 to 3). Tall plants are always two.");
+        ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Height"))).on_hover_text(tip);
         let (mut lo, mut hi) = (def.height[0] as i32, def.height[1] as i32);
         crate::widgets::drag(ui, egui::DragValue::new(&mut lo).range(1..=16)).on_hover_text(tip);
-        ui.label(RichText::new("to").color(pal.weak));
+        ui.label(RichText::new(tr!("to")).color(pal.weak));
         crate::widgets::drag(ui, egui::DragValue::new(&mut hi).range(1..=16)).on_hover_text(tip);
-        ui.label(RichText::new("blocks").color(pal.weak));
+        ui.label(RichText::new(tr!("blocks")).color(pal.weak));
         def.height = [lo as u8, hi.max(lo) as u8];
     });
-    crate::widgets::checkbox(ui, &mut def.soil_only, "Only on soil").on_hover_text("Grass, dirt, podzol, moss, mud… as plants need in the game");
-    crate::widgets::checkbox(ui, &mut def.underwater, "Under water").on_hover_text("Grows in the water (seagrass, coral) rather than in the air");
+    crate::widgets::checkbox(ui, &mut def.soil_only, tr!("Only on soil")).on_hover_text(tr!("Grass, dirt, podzol, moss, mud… as plants need in the game"));
+    crate::widgets::checkbox(ui, &mut def.underwater, tr!("Under water")).on_hover_text(tr!("Grows in the water (seagrass, coral) rather than in the air"));
 
     // What it grows, and how much of each.
-    section(ui, Icon::Flower2, "Grows");
+    section(ui, Icon::Flower2, tr!("Grows"));
     let total: f32 = def.plants.iter().map(|p| p.1 as f32).sum::<f32>().max(1.0);
     let mut remove = None;
     let color = def.color;
@@ -1344,14 +1341,14 @@ fn cover_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks
                 }
             }
             let known = catalogue.as_ref().is_none_or(|cat| cat.block(state).is_some());
-            let tip = if known { state.clone() } else { format!("{state}\nNot a block of Minecraft {}", catalogue.as_ref().map_or("", |c| c.version.as_str())) };
+            let tip = if known { state.clone() } else { tr!("{state}\nNot a block of Minecraft {map_or}", map_or = catalogue.as_ref().map_or("", |c| c.version.as_str()), state) };
             ui.allocate_ui_with_layout(vec2(118.0, 20.0), egui::Layout::left_to_right(Align::Center), |ui| {
                 ui.set_width(118.0);
                 ui.add(egui::Label::new(RichText::new(plant_name(state)).color(if known { pal.text } else { pal.danger })).truncate()).on_hover_text(tip);
             });
-            crate::widgets::drag(ui, egui::DragValue::new(weight).range(1..=1000).speed(0.2)).on_hover_text("Weight: how often it grows against the others");
+            crate::widgets::drag(ui, egui::DragValue::new(weight).range(1..=1000).speed(0.2)).on_hover_text(tr!("Weight: how often it grows against the others"));
             ui.label(RichText::new(format!("{:.0}%", *weight as f32 * 100.0 / total)).size(11.0).color(pal.weak));
-            if ui.add(egui::Button::new(theme::glyph(Icon::X).to_string()).frame(false).small()).on_hover_text("Take it out").clicked() {
+            if ui.add(egui::Button::new(theme::glyph(Icon::X).to_string()).frame(false).small()).on_hover_text(tr!("Take it out")).clicked() {
                 remove = Some(k);
             }
             ui.end_row();
@@ -1363,10 +1360,10 @@ fn cover_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks
     // Add a plant: one of the game's blocks, or typed.
     let search_id = egui::Id::unique("cover plant search");
     let mut added = None;
-    ui.menu_button(theme::with_icon(Icon::Plus, "Add a block"), |ui| {
+    ui.menu_button(theme::with_icon(Icon::Plus, tr!("Add a block")), |ui| {
         ui.set_max_width(300.0);
         let mut search: String = ui.ctx().data(|d| d.get_temp(search_id)).unwrap_or_default();
-        let hint_text = format!("{}  Search, or type a block id", theme::glyph(Icon::Search));
+        let hint_text = tr!("{glyph}  Search, or type a block id", glyph = theme::glyph(Icon::Search));
         let edit = ui.add(egui::TextEdit::singleline(&mut search).hint_text(hint_text).desired_width(280.0));
         edit.request_focus();
         let needle = search.trim().to_lowercase();
@@ -1410,7 +1407,7 @@ fn cover_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks
             // Any block by its id.
             if needle.contains(':') || (shown == 0 && !needle.is_empty()) {
                 let id = if needle.contains(':') { needle.clone() } else { format!("minecraft:{}", needle.replace(' ', "_")) };
-                if ui.button(format!("Add {id}")).clicked() {
+                if ui.button(tr!("Add {id}", id)).clicked() {
                     added = Some(id);
                 }
             }
@@ -1428,12 +1425,12 @@ fn cover_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks
         ui.ctx().data_mut(|d| d.remove::<String>(search_id));
     }
     if def.plants.is_empty() {
-        hint(ui, "Nothing grows yet: add a block.");
+        hint(ui, tr!("Nothing grows yet: add a block."));
     }
     ui.add_space(6.0);
     if ui
-        .button(RichText::new(theme::with_icon(Icon::Trash2, "Remove this cover")).color(pal.danger))
-        .on_hover_text("Nothing grows where it was painted any more")
+        .button(RichText::new(theme::with_icon(Icon::Trash2, tr!("Remove this cover"))).color(pal.danger))
+        .on_hover_text(tr!("Nothing grows where it was painted any more"))
         .clicked()
     {
         def.removed = true;
@@ -1471,7 +1468,7 @@ fn ground_picker(ui: &mut Ui, id: egui::Id, reg: &Registry, blocks: &mut BlockLi
     let mut search: String = ctx.data(|d| d.get_temp(id)).unwrap_or_default();
     let edit = ui.add(
         egui::TextEdit::singleline(&mut search)
-            .hint_text(format!("{}  Search terrains and blocks", theme::glyph(Icon::Search)))
+            .hint_text(tr!("{glyph}  Search terrains and blocks", glyph = theme::glyph(Icon::Search)))
             .desired_width(ui.available_width().min(280.0)),
     );
     edit.request_focus();
@@ -1487,7 +1484,7 @@ fn ground_picker(ui: &mut Ui, id: egui::Id, reg: &Registry, blocks: &mut BlockLi
             })
             .inner
         };
-        ui.label(RichText::new("IN THIS MAP").size(10.5).bold().color(pal.weak));
+        ui.label(RichText::new(tr!("IN THIS MAP")).size(10.5).bold().color(pal.weak));
         for (k, t) in reg.terrains.iter().enumerate() {
             if matches(&t.name, &t.group.to_lowercase()) && entry(ui, current == Some(t.name.as_str()), &t.name, &t.group, &mut |ui, r| terrain_icon(ui, r, reg, k as u16, blocks)) {
                 picked = Some(Pick::Terrain(t.name.clone()));
@@ -1495,7 +1492,7 @@ fn ground_picker(ui: &mut Ui, id: egui::Id, reg: &Registry, blocks: &mut BlockLi
         }
         if let Some(cat) = blocks.catalogue.clone() {
             ui.add_space(4.0);
-            ui.label(RichText::new(format!("BLOCKS OF MINECRAFT {}", cat.version)).size(10.5).bold().color(pal.weak));
+            ui.label(RichText::new(tr!("BLOCKS OF MINECRAFT {version}", version = cat.version)).size(10.5).bold().color(pal.weak));
             // Searching shows every match; otherwise the first ones.
             let limit = if needle.is_empty() { 120 } else { usize::MAX };
             let list = cat.blocks.iter().filter(|b| b.full_cube && matches(&b.name, &b.id) && reg.terrain_by_name(&b.name).is_none());
@@ -1511,7 +1508,7 @@ fn ground_picker(ui: &mut Ui, id: egui::Id, reg: &Registry, blocks: &mut BlockLi
                 }
             }
         } else {
-            hint(ui, "Every block of the game shows here once Blocks has read it.");
+            hint(ui, tr!("Every block of the game shows here once Blocks has read it."));
         }
     });
     ctx.data_mut(|d| d.insert_temp(id, search));
@@ -1528,9 +1525,9 @@ fn pattern_presets(ui: &mut Ui, ps: &mut crate::tools::PatternSettings) {
     let current = ps.preset_name();
     let (mut load, mut forget) = (None, None);
     ui.horizontal(|ui| {
-        ui.add_sized([72.0, 18.0], egui::Label::new("Preset"));
+        ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Preset")));
         let width = (ui.available_width() - 40.0).clamp(90.0, 190.0);
-        crate::widgets::combo("noise preset").selected_text(current.clone().unwrap_or_else(|| "Custom".to_owned())).width(width).show_ui(ui, |ui| {
+        crate::widgets::combo("noise preset").selected_text(current.clone().unwrap_or_else(|| tr!("Custom").to_owned())).width(width).show_ui(ui, |ui| {
             for p in PatternPreset::built_in() {
                 if ui.selectable_label(current.as_deref() == Some(p.name.as_str()), &p.name).clicked() {
                     load = Some(p);
@@ -1543,7 +1540,7 @@ fn pattern_presets(ui: &mut Ui, ps: &mut crate::tools::PatternSettings) {
                         if ui.selectable_label(current.as_deref() == Some(p.name.as_str()), &p.name).clicked() {
                             load = Some(p.clone());
                         }
-                        if ui.add(egui::Button::new(theme::glyph(Icon::X).to_string()).frame(false).small()).on_hover_text("Forget it").clicked() {
+                        if ui.add(egui::Button::new(theme::glyph(Icon::X).to_string()).frame(false).small()).on_hover_text(tr!("Forget it")).clicked() {
                             forget = Some(k);
                         }
                     });
@@ -1553,12 +1550,12 @@ fn pattern_presets(ui: &mut Ui, ps: &mut crate::tools::PatternSettings) {
         let name_id = egui::Id::unique("noise preset name");
         ui.menu_button(theme::glyph(Icon::Save).to_string(), |ui| {
             ui.set_min_width(220.0);
-            ui.label(RichText::new("Save this pattern as").size(12.0));
+            ui.label(RichText::new(tr!("Save this pattern as")).size(12.0));
             let mut name: String = ui.ctx().data(|d| d.get_temp(name_id)).unwrap_or_else(|| current.clone().unwrap_or_default());
-            let edit = ui.add(egui::TextEdit::singleline(&mut name).hint_text("Its name").desired_width(200.0));
+            let edit = ui.add(egui::TextEdit::singleline(&mut name).hint_text(tr!("Its name")).desired_width(200.0));
             let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             let taken = ps.saved.iter().any(|p| p.name.eq_ignore_ascii_case(name.trim()));
-            let label = if taken { "Replace it" } else { "Save" };
+            let label = if taken { tr!("Replace it") } else { tr!("Save") };
             if (ui.add_enabled(!name.trim().is_empty(), egui::Button::new(label)).clicked() || enter) && !name.trim().is_empty() {
                 ps.save(&name);
                 ui.ctx().data_mut(|d| d.remove::<String>(name_id));
@@ -1568,7 +1565,7 @@ fn pattern_presets(ui: &mut Ui, ps: &mut crate::tools::PatternSettings) {
             }
         })
         .response
-        .on_hover_text("Save this pattern, to paint with it again");
+        .on_hover_text(tr!("Save this pattern, to paint with it again"));
     });
     if let Some(p) = load {
         ps.load(&p);
@@ -1584,55 +1581,55 @@ fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     use massif_core::noise::Basis;
     use massif_core::pattern::{MAX_OCTAVES, MAX_STRETCH, PatternKind};
     let pal = Palette::of(ui);
-    hint(ui, "Blocks mixed by a noise, each over its share of the ground. Neighbours in the list meet on the ground.");
+    hint(ui, tr!("Blocks mixed by a noise, each over its share of the ground. Neighbours in the list meet on the ground."));
     ui.add_space(2.0);
     pattern_presets(ui, &mut tools.pattern);
 
     // ---- the noise -------------------------------------------------------
-    section(ui, Icon::Waves, "Noise");
+    section(ui, Icon::Waves, tr!("Noise"));
     let p = &mut tools.pattern.pattern;
     ui.horizontal(|ui| {
-        ui.add_sized([72.0, 18.0], egui::Label::new("Shape")).on_hover_text("Patches, thin veins, blobs with creases, cells, or wavering stripes");
-        crate::widgets::combo("pattern kind").selected_text(p.kind.label()).width(120.0).show_ui(ui, |ui| {
+        ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Shape"))).on_hover_text(tr!("Patches, thin veins, blobs with creases, cells, or wavering stripes"));
+        crate::widgets::combo("pattern kind").selected_text(crate::i18n::tr_name(p.kind.label())).width(120.0).show_ui(ui, |ui| {
             for k in PatternKind::ALL {
-                ui.selectable_value(&mut p.kind, k, k.label());
+                ui.selectable_value(&mut p.kind, k, crate::i18n::tr_name(k.label()));
             }
         });
     });
     let fractal = p.kind.is_fractal();
     ui.add_enabled_ui(fractal, |ui| {
         ui.horizontal(|ui| {
-            ui.add_sized([72.0, 18.0], egui::Label::new("Noise")).on_hover_text("Simplex: round shapes · Perlin: a little squarer · Value: soft, blocky blobs");
-            crate::widgets::combo("pattern noise").selected_text(p.noise.label()).width(120.0).show_ui(ui, |ui| {
+            ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Noise"))).on_hover_text(tr!("Simplex: round shapes · Perlin: a little squarer · Value: soft, blocky blobs"));
+            crate::widgets::combo("pattern noise").selected_text(crate::i18n::tr_name(p.noise.label())).width(120.0).show_ui(ui, |ui| {
                 for b in Basis::ALL {
-                    ui.selectable_value(&mut p.noise, b, b.label());
+                    ui.selectable_value(&mut p.noise, b, crate::i18n::tr_name(b.label()));
                 }
             });
         });
     });
-    tip_row(ui, "Size", "The size of the largest shapes", |ui| {
-        ui.add(crate::widgets::Field::new(&mut p.scale, 2.0..=600.0).logarithmic(true).suffix(" blocks").max_decimals(0))
+    tip_row(ui, tr!("Size"), tr!("The size of the largest shapes"), |ui| {
+        ui.add(crate::widgets::Field::new(&mut p.scale, 2.0..=600.0).logarithmic(true).suffix(tr!(" blocks")).max_decimals(0))
     });
     ui.add_enabled_ui(fractal, |ui| {
-        tip_row(ui, "Octaves", "Layers of finer and finer detail over the largest shapes", |ui| {
+        tip_row(ui, tr!("Octaves"), tr!("Layers of finer and finer detail over the largest shapes"), |ui| {
             ui.add(crate::widgets::Field::new(&mut p.octaves, 1..=MAX_OCTAVES))
         });
-        tip_row(ui, "Lacunarity", "How much finer each layer of detail is than the one before", |ui| {
+        tip_row(ui, tr!("Lacunarity"), tr!("How much finer each layer of detail is than the one before"), |ui| {
             ui.add(crate::widgets::Field::new(&mut p.lacunarity, 1.0..=4.0).max_decimals(2))
         });
-        tip_row(ui, "Gain", "How much each layer of detail counts: low, smooth edges; high, ragged ones", |ui| {
+        tip_row(ui, tr!("Gain"), tr!("How much each layer of detail counts: low, smooth edges; high, ragged ones"), |ui| {
             ui.add(crate::widgets::Field::new(&mut p.gain, 0.0..=1.0).max_decimals(2))
         });
     });
-    tip_row(ui, "Stretch", "Draws the shapes out along the direction: streaks, bands", |ui| {
+    tip_row(ui, tr!("Stretch"), tr!("Draws the shapes out along the direction: streaks, bands"), |ui| {
         ui.add(crate::widgets::Field::new(&mut p.stretch, 1.0..=MAX_STRETCH).logarithmic(true).suffix("×").max_decimals(1))
     });
     ui.add_enabled_ui(p.stretch > 1.01 || p.kind == PatternKind::Stripes, |ui| {
-        tip_row(ui, "Direction", "The way the shapes run: 0° east–west, 90° north–south", |ui| {
+        tip_row(ui, tr!("Direction"), tr!("The way the shapes run: 0° east–west, 90° north–south"), |ui| {
             ui.add(crate::widgets::Field::new(&mut p.angle, 0.0..=180.0).suffix("°").max_decimals(0))
         });
     });
-    tip_row(ui, "Soft edges", "Blocks of each side scattered into the other along the edges", |ui| {
+    tip_row(ui, tr!("Soft edges"), tr!("Blocks of each side scattered into the other along the edges"), |ui| {
         ui.add(
             crate::widgets::Field::new(&mut p.softness, 0.0..=1.0)
                 .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
@@ -1640,15 +1637,15 @@ fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
         )
     });
     ui.horizontal(|ui| {
-        ui.add_sized([72.0, 18.0], egui::Label::new("Seed")).on_hover_text("Another layout of the same pattern");
+        ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Seed"))).on_hover_text(tr!("Another layout of the same pattern"));
         crate::widgets::drag(ui, egui::DragValue::new(&mut p.seed));
-        if ui.small_button(theme::glyph(Icon::Dices).to_string()).on_hover_text("Another layout").clicked() {
+        if ui.small_button(theme::glyph(Icon::Dices).to_string()).on_hover_text(tr!("Another layout")).clicked() {
             p.seed = p.seed.wrapping_mul(1_103_515_245).wrapping_add(12_345) % 1_000_000_000;
         }
     });
 
     // ---- the blocks, in their order, with their shares -----------------
-    section(ui, Icon::Blocks, "Blocks");
+    section(ui, Icon::Blocks, tr!("Blocks"));
     let ps = &mut tools.pattern;
     let (mut moved, mut remove, mut replace) = (None, None, None);
     {
@@ -1671,7 +1668,7 @@ fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                         }
                     })
                     .response
-                    .on_hover_text("Drag it up or down the list: neighbours in the list meet on the ground");
+                    .on_hover_text(tr!("Drag it up or down the list: neighbours in the list meet on the ground"));
                     // Its name: click to put another block in its place.
                     let ink = if terrain.is_some() { pal.text } else { pal.danger };
                     let label = ui
@@ -1681,7 +1678,7 @@ fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                         })
                         .inner
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .on_hover_text(if terrain.is_some() { "Change it" } else { "Not a terrain of this map: change it" });
+                        .on_hover_text(if terrain.is_some() { tr!("Change it") } else { tr!("Not a terrain of this map: change it") });
                     egui::Popup::menu(&label).show(|ui| {
                         if let Some(pick) = ground_picker(ui, egui::Id::unique(("noise block search", k)), reg, blocks, Some(&name)) {
                             replace = Some((k, pick));
@@ -1694,10 +1691,10 @@ fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                             .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
                             .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
                     );
-                    if field.on_hover_text("Its share of the ground: the others share the rest").changed() {
+                    if field.on_hover_text(tr!("Its share of the ground: the others share the rest")).changed() {
                         ps.set_share(k, share);
                     }
-                    if ui.add(egui::Button::new(theme::glyph(Icon::X).to_string()).frame(false).small()).on_hover_text("Take it out").clicked() {
+                    if ui.add(egui::Button::new(theme::glyph(Icon::X).to_string()).frame(false).small()).on_hover_text(tr!("Take it out")).clicked() {
                         remove = Some(k);
                     }
                 })
@@ -1732,14 +1729,14 @@ fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     }
     let mut added = None;
     ui.horizontal(|ui| {
-        ui.menu_button(theme::with_icon(Icon::Plus, "Add a block"), |ui| {
+        ui.menu_button(theme::with_icon(Icon::Plus, tr!("Add a block")), |ui| {
             if let Some(pick) = ground_picker(ui, egui::Id::unique("noise block add"), &doc.world.registry, blocks, None) {
                 added = Some(pick);
             }
         });
         let selected = doc.world.registry.terrain(TerrainId(tools.terrain)).name.clone();
         if !tools.pattern.terrains.iter().any(|t| t.0 == selected)
-            && ui.button(theme::with_icon(Icon::Pipette, &selected)).on_hover_text("Add the terrain chosen in Terrain or Blocks").clicked()
+            && ui.button(theme::with_icon(Icon::Pipette, &selected)).on_hover_text(tr!("Add the terrain chosen in Terrain or Blocks")).clicked()
         {
             added = Some(Pick::Terrain(selected));
         }
@@ -1749,7 +1746,7 @@ fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
         tools.pattern.add(&name);
     }
     if tools.pattern.terrains.is_empty() {
-        hint(ui, "No block yet: add one.");
+        hint(ui, tr!("No block yet: add one."));
     }
 
     // ---- what it looks like ----------------------------------------------
@@ -1759,8 +1756,8 @@ fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     ui.add_space(6.0);
     let ready = tools.pattern.sampler(&doc.world.registry).is_some();
     if ui
-        .add_enabled(ready, egui::Button::new(theme::with_icon(Icon::Map, "Paint the whole map")))
-        .on_hover_text("This noise over every column of the active level, in the background; one step to undo")
+        .add_enabled(ready, egui::Button::new(theme::with_icon(Icon::Map, tr!("Paint the whole map"))))
+        .on_hover_text(tr!("This noise over every column of the active level, in the background; one step to undo"))
         .clicked()
     {
         tools.pattern.paint_map = true;
@@ -1768,13 +1765,13 @@ fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     hint(
         ui,
         if tools.filter.is_active() {
-            "Only where the options of Brush Settings let the brush act."
+            tr!("Only where the options of Brush Settings let the brush act.")
         } else {
-            "Every column of the active level: Brush Settings ▸ Options limit it (only on grass, a height band…)."
+            tr!("Every column of the active level: Brush Settings ▸ Options limit it (only on grass, a height band…).")
         },
     );
     if let Some(n) = tools.pattern.done {
-        hint(ui, &format!("{n} columns changed over the whole map."));
+        hint(ui, &tr!("{n} columns changed over the whole map.", n));
     }
 }
 
@@ -1828,7 +1825,7 @@ fn pattern_pictures(ui: &mut Ui, tools: &ToolState, doc: &Document) {
     ui.add_space(6.0);
     let side = ((ui.available_width() - 8.0) / 2.0).clamp(60.0, 150.0);
     ui.horizontal(|ui| {
-        for (texture, caption, tip) in [(&ground, "Ground", "What it paints"), (&noise, "Noise", "Its noise, dark to light: the blocks follow it in the order of the list")] {
+        for (texture, caption, tip) in [(&ground, tr!("Ground"), tr!("What it paints")), (&noise, tr!("Noise"), tr!("Its noise, dark to light: the blocks follow it in the order of the list"))] {
             ui.vertical(|ui| {
                 ui.add(egui::Image::new(texture).fit_to_exact_size(vec2(side, side)).corner_radius(6)).on_hover_text(tip);
                 ui.label(RichText::new(caption).size(11.0).color(pal.weak));
@@ -1853,8 +1850,8 @@ fn pattern_pictures(ui: &mut Ui, tools: &ToolState, doc: &Document) {
         let x = rect.left() + rect.width() * l;
         painter.vline(x, rect.y_range(), Stroke::new(1.0, pal.text.gamma_multiply(0.55)));
     }
-    response.on_hover_text("How often each value of the noise comes, low to high, in the colour of the block it gives");
-    hint(ui, &format!("{:.0} blocks across", tools.pattern.pattern.scale * 8.0));
+    response.on_hover_text(tr!("How often each value of the noise comes, low to high, in the colour of the block it gives"));
+    hint(ui, &tr!("{value:.0} blocks across", value = tools.pattern.pattern.scale * 8.0));
 }
 
 /// The rules of the automatic biomes: how the land is read, and the biome
@@ -1862,32 +1859,32 @@ fn pattern_pictures(ui: &mut Ui, tools: &ToolState, doc: &Document) {
 pub fn land_rules(ui: &mut Ui, rules: &mut massif_core::auto::BiomeRules, reg: &Registry) {
     use massif_core::auto::Land;
     let pal = Palette::of(ui);
-    section(ui, Icon::Ruler, "Reading the land");
+    section(ui, Icon::Ruler, tr!("Reading the land"));
     egui::Grid::new("land thresholds").num_columns(4).spacing([10.0, 4.0]).show(ui, |ui| {
         let blocks = |ui: &mut Ui, label: &str, v: &mut f32, hover: &str| {
             ui.label(label).on_hover_text(hover);
-            crate::widgets::drag(ui, egui::DragValue::new(v).range(0.0..=384.0).speed(0.5).max_decimals(0).suffix(" blocks"));
+            crate::widgets::drag(ui, egui::DragValue::new(v).range(0.0..=384.0).speed(0.5).max_decimals(0).suffix(tr!(" blocks")));
         };
-        blocks(ui, "Deep water from", &mut rules.deep_water, "Water at least this deep is deep water");
-        ui.label("Rivers up to").on_hover_text("Water with a bank on both sides within this width is a river");
-        crate::widgets::drag(ui, egui::DragValue::new(&mut rules.river_width).range(4..=64).suffix(" blocks wide"));
+        blocks(ui, tr!("Deep water from"), &mut rules.deep_water, tr!("Water at least this deep is deep water"));
+        ui.label(tr!("Rivers up to")).on_hover_text(tr!("Water with a bank on both sides within this width is a river"));
+        crate::widgets::drag(ui, egui::DragValue::new(&mut rules.river_width).range(4..=64).suffix(tr!(" blocks wide")));
         ui.end_row();
-        blocks(ui, "Shores up to", &mut rules.shore_height, "Ground at most this high over the water beside it is its shore");
-        ui.label("Cliffs from").on_hover_text("Slopes at least this steep are rock, whatever grows on them");
+        blocks(ui, tr!("Shores up to"), &mut rules.shore_height, tr!("Ground at most this high over the water beside it is its shore"));
+        ui.label(tr!("Cliffs from")).on_hover_text(tr!("Slopes at least this steep are rock, whatever grows on them"));
         crate::widgets::drag(ui, egui::DragValue::new(&mut rules.steep).range(10.0..=85.0).speed(0.5).max_decimals(0).suffix("°"));
         ui.end_row();
-        blocks(ui, "Hills from", &mut rules.hills, "Height over the sea where the hills begin");
-        blocks(ui, "Mountains from", &mut rules.mountains, "Height over the sea where the mountains begin");
+        blocks(ui, tr!("Hills from"), &mut rules.hills, tr!("Height over the sea where the hills begin"));
+        blocks(ui, tr!("Mountains from"), &mut rules.mountains, tr!("Height over the sea where the mountains begin"));
         ui.end_row();
-        blocks(ui, "Peaks from", &mut rules.peaks, "Height over the sea where the peaks begin");
+        blocks(ui, tr!("Peaks from"), &mut rules.peaks, tr!("Height over the sea where the peaks begin"));
         ui.end_row();
     });
     rules.mountains = rules.mountains.max(rules.hills);
     rules.peaks = rules.peaks.max(rules.mountains);
-    section(ui, Icon::Trees, "The biome of each kind of land");
+    section(ui, Icon::Trees, tr!("The biome of each kind of land"));
     egui::Grid::new("land biomes").num_columns(2).spacing([14.0, 4.0]).striped(true).show(ui, |ui| {
         for land in Land::ALL {
-            ui.label(land.label()).on_hover_text(land.hint());
+            ui.label(crate::i18n::tr_name(land.label())).on_hover_text(crate::i18n::tr_name(land.hint()));
             let current = rules.biome_of(land).to_owned();
             let name = reg.biome_by_id(&current).map_or(current.as_str(), |b| reg.biome(b).name.as_str()).to_owned();
             let mut picked = None;
@@ -1902,7 +1899,7 @@ pub fn land_rules(ui: &mut Ui, rules: &mut massif_core::auto::BiomeRules, reg: &
                         }
                     }
                 });
-                ui.label(RichText::new(land.hint()).size(11.0).color(pal.weak));
+                ui.label(RichText::new(crate::i18n::tr_name(land.hint())).size(11.0).color(pal.weak));
             });
             if let Some(id) = picked {
                 rules.set_biome(land, &id);
@@ -1916,15 +1913,15 @@ pub fn land_rules(ui: &mut Ui, rules: &mut massif_core::auto::BiomeRules, reg: &
 pub fn paint_rules(ui: &mut Ui, rules: &mut massif_core::auto::PaintRules, reg: &Registry) {
     let pal = Palette::of(ui);
     ui.horizontal(|ui| {
-        ui.label("Cliffs from").on_hover_text("Slopes at least this steep get the cliffs' terrain");
+        ui.label(tr!("Cliffs from")).on_hover_text(tr!("Slopes at least this steep get the cliffs' terrain"));
         crate::widgets::drag(ui, egui::DragValue::new(&mut rules.steep).range(10.0..=85.0).speed(0.5).max_decimals(0).suffix("°"));
         ui.add_space(12.0);
-        crate::widgets::checkbox(ui, &mut rules.read_the_land, "where the biome is automatic, paint as the land is")
-            .on_hover_text("Unset biomes count as automatic");
+        crate::widgets::checkbox(ui, &mut rules.read_the_land, tr!("where the biome is automatic, paint as the land is"))
+            .on_hover_text(tr!("Unset biomes count as automatic"));
     });
     ui.add_space(4.0);
     egui::Grid::new("biome paint").num_columns(4).spacing([10.0, 4.0]).striped(true).show(ui, |ui| {
-        for title in ["Biome", "Ground", "Cliffs", "Under water"] {
+        for title in [tr!("Biome"), tr!("Ground"), tr!("Cliffs"), tr!("Under water")] {
             ui.label(RichText::new(title).size(11.5).color(pal.weak));
         }
         ui.end_row();
@@ -1937,9 +1934,9 @@ pub fn paint_rules(ui: &mut Ui, rules: &mut massif_core::auto::PaintRules, reg: 
             let mut changed: Option<(usize, String)> = None;
             for k in 0..3 {
                 let current = paint.as_ref().map_or("", |p| [p.ground.as_str(), p.cliffs.as_str(), p.underwater.as_str()][k]).to_owned();
-                let shown = if current.is_empty() { "— as it is".to_owned() } else { current.clone() };
+                let shown = if current.is_empty() { tr!("— as it is").to_owned() } else { current.clone() };
                 crate::widgets::combo(("biome paint", &biome.id, k)).selected_text(shown).width(128.0).show_ui(ui, |ui| {
-                    if ui.selectable_label(current.is_empty(), "— as it is").clicked() {
+                    if ui.selectable_label(current.is_empty(), tr!("— as it is")).clicked() {
                         changed = Some((k, String::new()));
                     }
                     for terrain in &reg.terrains {
@@ -2015,7 +2012,7 @@ fn facing_dial(ui: &mut Ui, f: &mut massif_core::filter::Filter) {
     painter.circle_filled(centre, 2.0, ink);
     response
         .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text("Drag to turn (north up)");
+        .on_hover_text(tr!("Drag to turn (north up)"));
 }
 
 /// One of the two height limits.
@@ -2031,7 +2028,7 @@ fn height_limits(ui: &mut Ui, f: &mut massif_core::filter::Filter, heights: Opti
     let top = max_y - 1;
     crate::widgets::well(ui, |ui| {
         land_profile(ui, f, heights, min_y, max_y, sea);
-        crate::widgets::row(ui, "At or above", |ui| {
+        crate::widgets::row(ui, tr!("At or above"), |ui| {
             let mut on = f.above.is_some();
             if crate::widgets::switch(ui, &mut on).changed() {
                 // From the sea up, or under the other limit.
@@ -2043,7 +2040,7 @@ fn height_limits(ui: &mut Ui, f: &mut massif_core::filter::Filter, heights: Opti
                 f.above = Some(f.below.map_or(v, |b| v.min(b)));
             }
         });
-        crate::widgets::row(ui, "At or below", |ui| {
+        crate::widgets::row(ui, tr!("At or below"), |ui| {
             let mut on = f.below.is_some();
             if crate::widgets::switch(ui, &mut on).changed() {
                 // A little over the sea, or over the other limit.
@@ -2056,26 +2053,26 @@ fn height_limits(ui: &mut Ui, f: &mut massif_core::filter::Filter, heights: Opti
             }
         });
         if f.above.is_some() && f.below.is_some() {
-            crate::widgets::row(ui, "Acts", |ui| {
-                if let Some(k) = crate::widgets::button_group(ui, "height band side", &["Between", "Outside"], &[!f.beyond, f.beyond]) {
+            crate::widgets::row(ui, tr!("Acts"), |ui| {
+                if let Some(k) = crate::widgets::button_group(ui, "height band side", &[tr!("Between"), tr!("Outside")], &[!f.beyond, f.beyond]) {
                     f.beyond = k == 1;
                 }
             });
         }
-        crate::widgets::row(ui, &format!("Soften the edges ({} blocks)", massif_core::filter::FADE), |ui| {
+        crate::widgets::row(ui, &tr!("Soften the edges ({fade} blocks)", fade = massif_core::filter::FADE), |ui| {
             ui.add_enabled_ui(f.above.is_some() || f.below.is_some(), |ui| crate::widgets::switch(ui, &mut f.fade));
         });
     });
     let caption = match (f.above, f.below) {
-        (None, None) => "Acts at every height".to_owned(),
-        (Some(a), None) => format!("Acts at {a} and above"),
-        (None, Some(b)) => format!("Acts at {b} and below"),
-        (Some(a), Some(b)) if f.beyond => format!("Acts below {a} and above {b}"),
-        (Some(a), Some(b)) => format!("Acts from {a} to {b}"),
+        (None, None) => tr!("Acts at every height").to_owned(),
+        (Some(a), None) => tr!("Acts at {a} and above", a),
+        (None, Some(b)) => tr!("Acts at {b} and below", b),
+        (Some(a), Some(b)) if f.beyond => tr!("Acts below {a} and above {b}", a, b),
+        (Some(a), Some(b)) => tr!("Acts from {a} to {b}", a, b),
     };
-    let share = heights.filter(|h| h.total > 0 && (f.above.is_some() || f.below.is_some())).map(|h| format!(" · {:.0} % of the map", h.share(f) * 100.0)).unwrap_or_default();
+    let share = heights.filter(|h| h.total > 0 && (f.above.is_some() || f.below.is_some())).map(|h| tr!(" · {value:.0} % of the map", value = h.share(f) * 100.0)).unwrap_or_default();
     ui.add_space(2.0);
-    hint(ui, &format!("{caption}{share}"));
+    hint(ui, &tr!("{caption}{share}", caption, share));
 }
 
 /// A convex polygon added to `mesh` as a fan of triangles, each corner
@@ -2175,7 +2172,7 @@ fn land_profile(ui: &mut Ui, f: &mut massif_core::filter::Filter, heights: Optio
     let v0 = (lo - pad).max(min_y) as f32;
     let v1 = ((hi + pad).min(max_y) as f32).max(v0 + 16.0);
     // The scale on the right: as wide as its longest label.
-    let sea_label = format!("sea {sea}");
+    let sea_label = tr!("sea {sea}", sea);
     let widest = [sea_label.clone(), (v0 as i32).to_string(), (v1 as i32).to_string(), f.above.unwrap_or(0).to_string(), f.below.unwrap_or(0).to_string()]
         .into_iter()
         .map(|s| painter.layout_no_wrap(s, small.clone(), pal.text).size().x)
@@ -2357,7 +2354,7 @@ fn land_profile(ui: &mut Ui, f: &mut massif_core::filter::Filter, heights: Optio
         None => {
             painter.rect_filled(Rect::from_min_max(pos2(plot.left(), sea_y), plot.max), 0, sea_fill);
             painter.hline(plot.x_range(), sea_y, Stroke::new(1.0, water));
-            painter.text(plot.center(), egui::Align2::CENTER_CENTER, "Reading the heights of the map…", egui::FontId::proportional(11.0), pal.weak);
+            painter.text(plot.center(), egui::Align2::CENTER_CENTER, tr!("Reading the heights of the map…"), egui::FontId::proportional(11.0), pal.weak);
         }
     }
 
@@ -2408,8 +2405,8 @@ fn land_profile(ui: &mut Ui, f: &mut massif_core::filter::Filter, heights: Optio
     {
         painter.add(egui::Shape::dashed_line(&[pos2(plot.left(), p.y), pos2(plot.right(), p.y)], Stroke::new(1.0, theme::mix(pal.well(), pal.text, 0.4)), 3.0, 3.0));
         let y = e_at(p.y).round() as i32;
-        let much = heights.map(|_| format!(" · {:.0} % of the map at or above it", share_from(y) * 100.0)).unwrap_or_default();
-        response.on_hover_text_at_pointer(format!("Height {y}{much}"));
+        let much = heights.map(|_| tr!(" · {value:.0} % of the map at or above it", value = share_from(y) * 100.0)).unwrap_or_default();
+        response.on_hover_text_at_pointer(tr!("Height {y}{much}", y, much));
     }
 }
 
@@ -2426,35 +2423,35 @@ fn match_list(ui: &mut Ui, label: &str, list: &mut Option<Vec<massif_core::filte
     let name = |m: &Match| match *m {
         Match::Terrain(t) => reg.terrain(TerrainId(t)).name.clone(),
         Match::Biome(b) => reg.biome(BiomeId(b)).name.clone(),
-        Match::Water => "Water".to_owned(),
-        Match::Land => "Dry land".to_owned(),
+        Match::Water => tr!("Water").to_owned(),
+        Match::Land => tr!("Dry land").to_owned(),
     };
     ui.horizontal_wrapped(|ui| {
         ui.add_space(20.0);
         let mut remove = None;
         for (i, m) in items.iter().enumerate() {
             let text = format!("{}  {}", name(m), theme::glyph(Icon::X));
-            if ui.add(egui::Button::new(RichText::new(text).size(11.5)).corner_radius(10)).on_hover_text("Remove").clicked() {
+            if ui.add(egui::Button::new(RichText::new(text).size(11.5)).corner_radius(10)).on_hover_text(tr!("Remove")).clicked() {
                 remove = Some(i);
             }
         }
         if let Some(i) = remove {
             items.remove(i);
         }
-        ui.menu_button(theme::with_icon(Icon::Plus, "Add"), |ui| {
+        ui.menu_button(theme::with_icon(Icon::Plus, tr!("Add")), |ui| {
             ui.set_max_height(360.0);
             let add = |m: Match, items: &mut Vec<Match>| {
                 if !items.contains(&m) {
                     items.push(m);
                 }
             };
-            if ui.button("Water").clicked() {
+            if ui.button(tr!("Water")).clicked() {
                 add(Match::Water, items);
             }
-            if ui.button("Dry land").clicked() {
+            if ui.button(tr!("Dry land")).clicked() {
                 add(Match::Land, items);
             }
-            ui.menu_button("Terrains", |ui| {
+            ui.menu_button(tr!("Terrains"), |ui| {
                 egui::ScrollArea::vertical().id_salt((id, "terrains")).max_height(320.0).show(ui, |ui| {
                     for (i, t) in reg.terrains.iter().enumerate() {
                         if ui.button(&t.name).clicked() {
@@ -2463,7 +2460,7 @@ fn match_list(ui: &mut Ui, label: &str, list: &mut Option<Vec<massif_core::filte
                     }
                 });
             });
-            ui.menu_button("Biomes", |ui| {
+            ui.menu_button(tr!("Biomes"), |ui| {
                 egui::ScrollArea::vertical().id_salt((id, "biomes")).max_height(320.0).show(ui, |ui| {
                     for (i, b) in reg.biomes.iter().enumerate().skip(1) {
                         if ui.button(&b.name).clicked() {
@@ -2477,7 +2474,7 @@ fn match_list(ui: &mut Ui, label: &str, list: &mut Option<Vec<massif_core::filte
     if items.is_empty() {
         ui.horizontal(|ui| {
             ui.add_space(20.0);
-            ui.label(RichText::new("Add what the brush should act on").size(11.0).color(pal.weak));
+            ui.label(RichText::new(tr!("Add what the brush should act on")).size(11.0).color(pal.weak));
         });
     }
 }
@@ -2558,29 +2555,29 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     ui.horizontal(|ui| {
         let current = blocks.catalogue.as_ref().map(|c| (c.version.clone(), c.source.clone()));
         let label = match &current {
-            Some((v, _)) => format!("Minecraft {v}"),
-            None if blocks.is_loading() => "Reading the game…".to_owned(),
-            None => "No game found".to_owned(),
+            Some((v, _)) => tr!("Minecraft {v}", v),
+            None if blocks.is_loading() => tr!("Reading the game…").to_owned(),
+            None => tr!("No game found").to_owned(),
         };
         crate::widgets::combo("minecraft version")
             .selected_text(label)
             .show_ui(ui, |ui| {
                 for j in blocks.jars.clone() {
                     let selected = current.as_ref().is_some_and(|(_, p)| *p == j.path);
-                    if ui.selectable_label(selected, format!("Minecraft {}", j.version)).on_hover_text(j.path.display().to_string()).clicked() {
+                    if ui.selectable_label(selected, tr!("Minecraft {version}", version = j.version)).on_hover_text(j.path.display().to_string()).clicked() {
                         *jar = Some(j.path.clone());
                         blocks.load(&ctx, jar.clone());
                     }
                 }
                 if blocks.jars.is_empty() {
-                    ui.label(RichText::new("No version found in the usual places").color(pal.weak));
+                    ui.label(RichText::new(tr!("No version found in the usual places")).color(pal.weak));
                 }
             });
         if ui
-            .button(theme::with_icon(Icon::FolderOpen, "Choose…"))
-            .on_hover_text("Another version's client jar")
+            .button(theme::with_icon(Icon::FolderOpen, tr!("Choose…")))
+            .on_hover_text(tr!("Another version's client jar"))
             .clicked()
-            && let Some(path) = rfd::FileDialog::new().set_title("Choose the Minecraft jar").add_filter("Minecraft", &["jar"]).pick_file()
+            && let Some(path) = rfd::FileDialog::new().set_title(tr!("Choose the Minecraft jar")).add_filter(tr!("Minecraft"), &["jar"]).pick_file()
         {
             *jar = Some(path);
             blocks.load(&ctx, jar.clone());
@@ -2591,7 +2588,7 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     });
     hint(
         ui,
-        "Your game's real blocks. Click one to paint with it.",
+        tr!("Your game's real blocks. Click one to paint with it."),
     );
     if let Some(e) = &blocks.error {
         ui.label(RichText::new(e).color(pal.danger).size(11.5));
@@ -2602,11 +2599,11 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     ui.horizontal(|ui| {
         ui.add(
             egui::TextEdit::singleline(&mut blocks.search)
-                .hint_text(format!("{}  Search {} blocks", theme::glyph(Icon::Search), cat.blocks.len()))
+                .hint_text(tr!("{glyph}  Search {n} blocks", glyph = theme::glyph(Icon::Search), n = cat.blocks.len()))
                 .desired_width((ui.available_width() - 110.0).max(80.0)),
         );
-        crate::widgets::checkbox(ui, &mut blocks.all, "All shapes")
-            .on_hover_text("Also non-cube blocks");
+        crate::widgets::checkbox(ui, &mut blocks.all, tr!("All shapes"))
+            .on_hover_text(tr!("Also non-cube blocks"));
     });
     let needle = blocks.search.to_lowercase();
     let reg = &doc.world.registry;
@@ -2623,7 +2620,7 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
             continue;
         }
         ui.add_space(6.0);
-        ui.label(RichText::new(format!("{}  ·  {}", category.label().to_uppercase(), list.len())).size(10.5).bold().color(pal.weak));
+        ui.label(RichText::new(format!("{}  ·  {}", crate::i18n::tr_name(category.label()).to_uppercase(), list.len())).size(10.5).bold().color(pal.weak));
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
             for block in list {
@@ -2643,7 +2640,7 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                     ui.painter()
                         .image(texture, rect.shrink(4.0), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), tint);
                 }
-                let tip = format!("{}\n{}{}", block.name, block.id, if block.full_cube { "" } else { "\nNot a whole block: it grows over the ground, as a cover" });
+                let tip = format!("{}\n{}{}", block.name, block.id, if block.full_cube { "" } else { tr!("\nNot a whole block: it grows over the ground, as a cover") });
                 if response.on_hover_text(tip).clicked() {
                     picked = Some(block);
                 }
@@ -2658,7 +2655,7 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
             if tools.tool != Tool::PaintTerrain {
                 tools.select(Tool::PaintTerrain);
             }
-            feedback = Some(format!("Painting {}", block.name));
+            feedback = Some(tr!("Painting {name}", name = block.name));
         } else {
             // Plants and the like grow over the ground: a cover of them.
             tools.cover = block_cover(&mut doc.world.registry, block);
@@ -2666,7 +2663,7 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
             if tools.tool != Tool::Cover {
                 tools.select(Tool::Cover);
             }
-            feedback = Some(format!("Painting {} as a ground cover", block.name));
+            feedback = Some(tr!("Painting {name} as a ground cover", name = block.name));
         }
     }
     feedback
@@ -2680,11 +2677,11 @@ fn swatch(ui: &mut Ui, color: Color32) {
 /// Returns true when the solo setting changed.
 pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &Registry, solo: &mut bool, search: &mut String, blocks: &mut BlockLibrary) -> bool {
     let pal = Palette::of(ui);
-    hint(ui, "The block on top of the ground.");
-    let solo_changed = crate::widgets::checkbox(ui, solo, "Solo")
-        .on_hover_text("Fade every other terrain on the map")
+    hint(ui, tr!("The block on top of the ground."));
+    let solo_changed = crate::widgets::checkbox(ui, solo, tr!("Solo"))
+        .on_hover_text(tr!("Fade every other terrain on the map"))
         .changed();
-    ui.add(egui::TextEdit::singleline(search).hint_text(format!("{}  Search terrain", theme::glyph(Icon::Search))).desired_width(f32::INFINITY));
+    ui.add(egui::TextEdit::singleline(search).hint_text(tr!("{glyph}  Search terrain", glyph = theme::glyph(Icon::Search))).desired_width(f32::INFINITY));
     let needle = search.to_lowercase();
     let mut groups: Vec<&str> = Vec::new();
     for t in &reg.terrains {
@@ -2754,17 +2751,17 @@ fn describe_terrain(reg: &Registry, terrain: u16) -> String {
                 .map(|(b, _)| reg.block(*b).name().trim_start_matches("minecraft:"))
                 .collect();
             let depth = if s.depth.0 == u16::MAX {
-                "all the way down".to_owned()
+                tr!("all the way down").to_owned()
             } else if s.depth.0 == s.depth.1 {
                 format!("{}", s.depth.0)
             } else {
                 format!("{}–{}", s.depth.0, s.depth.1)
             };
-            format!("{} ({depth})", names.join(" / "))
+            tr!("{join} ({depth})", join = names.join(" / "), depth)
         })
         .collect();
     if parts.is_empty() {
-        parts.push("natural stone".into());
+        parts.push(tr!("natural stone").into());
     }
     format!("{}: {}", def.name, parts.join(", then "))
 }
@@ -2772,8 +2769,8 @@ fn describe_terrain(reg: &Registry, terrain: u16) -> String {
 // ----------------------------------------------------------------- biomes --
 
 pub fn biome_panel(ui: &mut Ui, tools: &mut ToolState, reg: &Registry, search: &mut String) {
-    hint(ui, "Painted biomes override automatic.");
-    ui.add(egui::TextEdit::singleline(search).hint_text(format!("{}  Search biomes", theme::glyph(Icon::Search))).desired_width(f32::INFINITY));
+    hint(ui, tr!("Painted biomes override automatic."));
+    ui.add(egui::TextEdit::singleline(search).hint_text(tr!("{glyph}  Search biomes", glyph = theme::glyph(Icon::Search))).desired_width(f32::INFINITY));
     let needle = search.to_lowercase();
     for (i, b) in reg.biomes.iter().enumerate() {
         if !needle.is_empty() && !b.name.to_lowercase().contains(&needle) && !b.id.contains(&needle) {
@@ -2782,7 +2779,7 @@ pub fn biome_panel(ui: &mut Ui, tools: &mut ToolState, reg: &Registry, search: &
         ui.horizontal(|ui| {
             swatch(ui, theme::rgb(b.color));
             let r = ui.selectable_label(tools.biome as usize == i, &b.name);
-            if r.on_hover_text(if b.id.is_empty() { "Let the exporter decide" } else { &b.id }).clicked() {
+            if r.on_hover_text(if b.id.is_empty() { tr!("Let the exporter decide") } else { &b.id }).clicked() {
                 tools.biome = i as u16;
                 tools.select(Tool::PaintBiome);
             }
@@ -2804,13 +2801,13 @@ pub fn levels_panel(ui: &mut Ui, doc: &mut Document, rename: &mut Option<(usize,
     let mut change = LevelsChange::default();
     hint(
         ui,
-        "Solid adds rock, Carve removes it. Higher wins.",
+        tr!("Solid adds rock, Carve removes it. Higher wins."),
     );
     ui.horizontal(|ui| {
-        if ui.button(format!("{} Solid", theme::glyph(Icon::Plus))).on_hover_text("Add a level that adds matter").clicked() {
+        if ui.button(tr!("{glyph} Solid", glyph = theme::glyph(Icon::Plus))).on_hover_text(tr!("Add a level that adds matter")).clicked() {
             doc.add_level(LevelKind::Solid);
         }
-        if ui.button(format!("{} Carve", theme::glyph(Icon::Plus))).on_hover_text("Add a level that removes matter").clicked() {
+        if ui.button(tr!("{glyph} Carve", glyph = theme::glyph(Icon::Plus))).on_hover_text(tr!("Add a level that removes matter")).clicked() {
             doc.add_level(LevelKind::Carve);
         }
     });
@@ -2836,7 +2833,7 @@ pub fn levels_panel(ui: &mut Ui, doc: &mut Document, rename: &mut Option<(usize,
                 if index > 0
                     && ui
                         .add(egui::Button::new(theme::glyph(eye).to_string()).frame(false))
-                        .on_hover_text(if visible { "Hide this level" } else { "Show this level" })
+                        .on_hover_text(if visible { tr!("Hide this level") } else { tr!("Show this level") })
                         .clicked()
                 {
                     action = Some((index, "toggle"));
@@ -2859,10 +2856,10 @@ pub fn levels_panel(ui: &mut Ui, doc: &mut Document, rename: &mut Option<(usize,
                         }
                     }
                     _ => {
-                        let label = egui::Label::new(RichText::new(&name).bold().color(if visible { pal.text } else { pal.weak }))
+                        let label = egui::Label::new(RichText::new(crate::i18n::tr_name(&name)).bold().color(if visible { pal.text } else { pal.weak }))
                             .sense(Sense::click())
                             .truncate();
-                        let r = ui.add(label).on_hover_text(format!("{} level · {tiles} tiles · double-click to rename", kind.label()));
+                        let r = ui.add(label).on_hover_text(tr!("{label} level · {tiles} tiles · double-click to rename", label = crate::i18n::tr_name(kind.label()), tiles));
                         if r.clicked() {
                             doc.active_level = index;
                         }
@@ -2873,17 +2870,17 @@ pub fn levels_panel(ui: &mut Ui, doc: &mut Document, rename: &mut Option<(usize,
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if index > 0 {
-                        if ui.small_button(theme::glyph(Icon::Trash2).to_string()).on_hover_text("Delete this level").clicked() {
+                        if ui.small_button(theme::glyph(Icon::Trash2).to_string()).on_hover_text(tr!("Delete this level")).clicked() {
                             action = Some((index, "delete"));
                         }
-                        if index > 1 && ui.small_button("▼").on_hover_text("Move down").clicked() {
+                        if index > 1 && ui.small_button("▼").on_hover_text(tr!("Move down")).clicked() {
                             action = Some((index, "down"));
                         }
-                        if index + 1 < n && ui.small_button("▲").on_hover_text("Move up").clicked() {
+                        if index + 1 < n && ui.small_button("▲").on_hover_text(tr!("Move up")).clicked() {
                             action = Some((index, "up"));
                         }
                     }
-                    ui.label(RichText::new(kind.label()).size(10.5).color(pal.weak));
+                    ui.label(RichText::new(crate::i18n::tr_name(kind.label())).size(10.5).color(pal.weak));
                 });
             });
         });
@@ -2927,23 +2924,23 @@ pub fn info_panel(ui: &mut Ui, doc: &mut Document, hover: Option<(i32, i32)>, ca
     let pal = Palette::of(ui);
     let mut affects_map = false;
     let (bottom, top) = (doc.dimension().min_y, doc.dimension().max_y);
-    section(ui, Icon::Globe, "World");
+    section(ui, Icon::Globe, tr!("World"));
     egui::Grid::new("world info").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
         let meta = &mut doc.world.meta;
         let mut changed = false;
-        ui.label("Name");
+        ui.label(tr!("Name"));
         changed |= ui.text_edit_singleline(&mut meta.name).changed();
         ui.end_row();
-        ui.label("Seed");
+        ui.label(tr!("Seed"));
         changed |= crate::widgets::drag(ui, egui::DragValue::new(&mut meta.seed)).changed();
         ui.end_row();
-        ui.label("Sea level");
+        ui.label(tr!("Sea level"));
         if crate::widgets::drag(ui, egui::DragValue::new(&mut meta.sea_level).range(bottom..=top - 1)).changed() {
             changed = true;
             affects_map = true;
         }
         ui.end_row();
-        ui.label("Spawn");
+        ui.label(tr!("Spawn"));
         ui.horizontal(|ui| {
             for v in &mut meta.spawn {
                 changed |= crate::widgets::drag(ui, egui::DragValue::new(v)).changed();
@@ -2955,27 +2952,27 @@ pub fn info_panel(ui: &mut Ui, doc: &mut Document, hover: Option<(i32, i32)>, ca
         }
     });
 
-    section(ui, Icon::Map, "Map");
+    section(ui, Icon::Map, tr!("Map"));
     let dim = doc.dimension();
     match dim.bounds() {
         Some((lo, hi)) => {
             let (w, d) = (hi.x - lo.x + 1, hi.z - lo.z + 1);
-            ui.label(format!("{} × {} blocks ({w} × {d} tiles)", w * 128, d * 128));
+            ui.label(tr!("{value} × {value2} blocks ({w} × {d} tiles)", value = w * 128, value2 = d * 128, w, d));
             ui.label(RichText::new(format!("x {} … {}, z {} … {}", lo.x * 128, (hi.x + 1) * 128 - 1, lo.z * 128, (hi.z + 1) * 128 - 1)).color(pal.weak));
         }
         None => {
-            ui.label("Empty");
+            ui.label(tr!("Empty"));
         }
     }
-    ui.label(RichText::new(format!("Build height {} … {}", dim.min_y, dim.max_y - 1)).color(pal.weak));
+    ui.label(RichText::new(tr!("Build height {min_y} … {value}", min_y = dim.min_y, value = dim.max_y - 1)).color(pal.weak));
 
-    section(ui, Icon::Crosshair, "Under the cursor");
+    section(ui, Icon::Crosshair, tr!("Under the cursor"));
     match hover {
         Some((x, z)) => column_info(ui, doc, x, z),
-        None => hint(ui, "Hover the map to inspect a column."),
+        None => hint(ui, tr!("Hover the map to inspect a column.")),
     }
 
-    section(ui, Icon::Activity, "Memory");
+    section(ui, Icon::Activity, tr!("Memory"));
     let mut hot = 0;
     let mut cold = 0;
     egui::Grid::new("memory").num_columns(3).spacing([10.0, 2.0]).show(ui, |ui| {
@@ -2984,33 +2981,33 @@ pub fn info_panel(ui: &mut Ui, doc: &mut Document, hover: Option<(i32, i32)>, ca
             hot += s.hot_bytes;
             cold += s.cold_bytes;
             ui.label(&level.name);
-            ui.label(RichText::new(format!("{} tiles", s.tiles)).color(pal.weak));
-            ui.label(RichText::new(format!("{} hot", s.hot_tiles)).color(pal.weak));
+            ui.label(RichText::new(tr!("{tiles} tiles", tiles = s.tiles)).color(pal.weak));
+            ui.label(RichText::new(tr!("{hot_tiles} hot", hot_tiles = s.hot_tiles)).color(pal.weak));
             ui.end_row();
         }
     });
-    ui.label(format!("Decoded {} · compressed {}", human(hot as u64), human(cold as u64)));
-    ui.label(RichText::new(format!("Map cache: {} textures, {} grids, {} summaries", cache.0, cache.1, cache.2)).color(pal.weak));
+    ui.label(tr!("Decoded {human} · compressed {human2}", human = human(hot as u64), human2 = human(cold as u64)));
+    ui.label(RichText::new(tr!("Map cache: {value} textures, {value2} grids, {value3} summaries", value = cache.0, value2 = cache.1, value3 = cache.2)).color(pal.weak));
 
-    section(ui, Icon::Save, "File");
+    section(ui, Icon::Save, tr!("File"));
     match &doc.path {
         Some(p) => {
             ui.label(RichText::new(p.display().to_string()).color(pal.weak).size(11.0));
         }
-        None => hint(ui, "Not saved yet"),
+        None => hint(ui, tr!("Not saved yet")),
     }
     if doc.is_modified() {
-        ui.label(RichText::new("Unsaved changes").color(pal.accent));
+        ui.label(RichText::new(tr!("Unsaved changes")).color(pal.accent));
     }
     affects_map
 }
 
 fn column_info(ui: &mut Ui, doc: &Document, x: i32, z: i32) {
     let pal = Palette::of(ui);
-    ui.label(RichText::new(format!("Column {x}, {z}")).bold());
+    ui.label(RichText::new(tr!("Column {x}, {z}", x, z)).bold());
     let dim = doc.dimension();
     let Some(stack) = TileStack::new(dim, TilePos::containing(x, z), true) else {
-        hint(ui, "Outside the map");
+        hint(ui, tr!("Outside the map"));
         return;
     };
     let cell = local_index(x, z);
@@ -3022,7 +3019,7 @@ fn column_info(ui: &mut Ui, doc: &Document, x: i32, z: i32) {
         .iter()
         .map(|s| (s.y0, format!("{} … {}  {}", s.y0, s.y1 - 1, reg.terrain(s.terrain).name)))
         .collect();
-    rows.extend(fluids.iter().map(|&(a, b)| (a, format!("{a} … {}  Water", b - 1))));
+    rows.extend(fluids.iter().map(|&(a, b)| (a, tr!("{a} … {value}  Water", value = b - 1, a))));
     rows.sort_by_key(|r| std::cmp::Reverse(r.0));
     for (_, text) in rows {
         ui.label(RichText::new(text).monospace().size(11.5));
@@ -3030,20 +3027,20 @@ fn column_info(ui: &mut Ui, doc: &Document, x: i32, z: i32) {
     let mut sampler = ColumnSampler::default();
     let s = sampler.sample(&stack, cell);
     let biome = if s.biome == 0 {
-        "automatic".to_owned()
+        tr!("automatic").to_owned()
     } else {
         reg.biome(BiomeId(s.biome)).name.clone()
     };
-    ui.label(RichText::new(format!("Biome: {biome}")).color(pal.weak));
+    ui.label(RichText::new(tr!("Biome: {biome}", biome)).color(pal.weak));
     if let Some(cover) = reg.cover(s.cover) {
-        ui.label(RichText::new(format!("Cover: {}", cover.name)).color(pal.weak));
+        ui.label(RichText::new(tr!("Cover: {name}", name = cover.name)).color(pal.weak));
     }
     let levels: Vec<String> = stack
         .layers()
         .filter(|(_, _, t)| t.present(cell))
         .map(|(i, _, _)| dim.levels[i].name.clone())
         .collect();
-    ui.label(RichText::new(format!("Levels: {}", levels.join(", "))).color(pal.weak));
+    ui.label(RichText::new(tr!("Levels: {join}", join = levels.join(", "))).color(pal.weak));
     let _ = NO_FLUID;
 }
 
@@ -3071,7 +3068,7 @@ pub fn empty_area(ui: &mut Ui, shown: &HashSet<EditorKind>, developer: bool) -> 
     let width = crate::picker::width(columns);
     ui.add_space((ui.available_height() * 0.16).max(12.0));
     ui.vertical_centered(|ui| {
-        ui.label(RichText::new("What should this area show?").bold().size(15.0));
+        ui.label(RichText::new(tr!("What should this area show?")).bold().size(15.0));
     });
     ui.add_space(14.0);
     let margin = ((ui.available_width() - width) / 2.0).max(0.0);

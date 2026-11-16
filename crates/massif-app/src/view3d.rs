@@ -3362,17 +3362,17 @@ impl View3d {
         crate::map_view::mode_selector(ui, &mut self.mode, narrow, "3d mode");
         ui.separator();
         ui.toggle_value(&mut self.water, theme::glyph(Icon::Waves).to_string())
-            .on_hover_text("Show water");
+            .on_hover_text(tr!("Show water"));
         if ui
             .small_button(theme::glyph(Icon::Crosshair).to_string())
-            .on_hover_text("Look at the middle of the map view")
+            .on_hover_text(tr!("Look at the middle of the map view"))
             .clicked()
         {
             self.goto_map = true;
         }
         if ui
             .small_button(theme::glyph(Icon::Rotate3d).to_string())
-            .on_hover_text("Show the whole map")
+            .on_hover_text(tr!("Show the whole map"))
             .clicked()
         {
             self.frame_map = true;
@@ -3719,9 +3719,9 @@ impl View3d {
         painter.hline(bar.x_range(), bar.top(), egui::Stroke::new(1.0, pal.border));
         // What the buttons do with the tool chosen.
         let (tool, inverse) = match tools.sculpt.tool {
-            Tool::Smooth3d => ("Smooth", None),
-            Tool::PaintTerrain => ("Paint", Some("Paint by height")),
-            _ => ("Add", Some("Dig")),
+            Tool::Smooth3d => (tr!("Smooth"), None),
+            Tool::PaintTerrain => (tr!("Paint"), Some(tr!("Paint by height"))),
+            _ => (tr!("Add"), Some(tr!("Dig"))),
         };
         let mut hints: Vec<(&str, &str)> = Vec::new();
         if walk.captured {
@@ -3729,32 +3729,32 @@ impl View3d {
             if let Some(inv) = inverse {
                 hints.push(("LMB", inv));
             }
-            hints.extend([("W A S D", "Move"), ("Space", "Jump · twice: fly"), ("Shift", "Sneak · down"), ("Ctrl", "Sprint"), ("Esc", "Free the mouse")]);
+            hints.extend([("W A S D", tr!("Move")), ("Space", tr!("Jump · twice: fly")), ("Shift", tr!("Sneak · down")), ("Ctrl", tr!("Sprint")), ("Esc", tr!("Free the mouse"))]);
         } else {
-            hints.push(("LMB", "Look around"));
+            hints.push(("LMB", tr!("Look around")));
             hints.push(("RMB", tool));
             if let Some(inv) = inverse {
                 hints.push(("Alt+RMB", inv));
             }
             hints.extend([
-                ("MMB", "Pick block"),
-                ("Ctrl+LMB", "Orbit"),
-                ("Ctrl+RMB", "Pan"),
-                ("Ctrl+MMB", "Size"),
-                ("Click", "Take the mouse"),
-                ("W A S D", "Move"),
+                ("MMB", tr!("Pick block")),
+                ("Ctrl+LMB", tr!("Orbit")),
+                ("Ctrl+RMB", tr!("Pan")),
+                ("Ctrl+MMB", tr!("Size")),
+                (tr!("Click"), tr!("Take the mouse")),
+                ("W A S D", tr!("Move")),
             ]);
         }
         // How the player goes and the speed of flight, on the right.
         let p = &walk.player;
         let state = if p.flying {
-            "Flying"
+            tr!("Flying")
         } else if p.swimming {
-            "Swimming"
+            tr!("Swimming")
         } else if p.sneaking {
-            "Sneaking"
+            tr!("Sneaking")
         } else {
-            "Walking"
+            tr!("Walking")
         };
         let right_w = 260.0;
         let font = FontId::proportional(11.0);
@@ -3777,7 +3777,7 @@ impl View3d {
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(right.shrink2(vec2(8.0, 3.0))).layout(egui::Layout::right_to_left(egui::Align::Center)));
         let mut percent = (tools.sculpt.fly_speed * 100.0).round();
         let (lo, hi) = crate::tools::SculptSettings::FLY_SPEEDS;
-        let field = child.add(crate::widgets::Field::new(&mut percent, (lo * 100.0).round()..=(hi * 100.0).round()).text("Flight speed").suffix("%").width(150.0));
+        let field = child.add(crate::widgets::Field::new(&mut percent, (lo * 100.0).round()..=(hi * 100.0).round()).text(tr!("Flight speed")).suffix("%").width(150.0));
         if field.changed() {
             tools.sculpt.fly_speed = percent / 100.0;
         }
@@ -4032,7 +4032,7 @@ impl View3d {
         let painter = ui.painter_at(rect);
         let Some(render_state) = frame.wgpu_render_state() else {
             painter.rect_filled(rect, 0, pal.canvas);
-            painter.text(rect.center(), Align2::CENTER_CENTER, "The 3D view needs the wgpu renderer", FontId::proportional(13.0), pal.weak);
+            painter.text(rect.center(), Align2::CENTER_CENTER, tr!("The 3D view needs the wgpu renderer"), FontId::proportional(13.0), pal.weak);
             return;
         };
         let mut renderer = self
@@ -4587,18 +4587,14 @@ impl View3d {
         // ---- overlay -------------------------------------------------------
         let stride = self.grid.as_ref().map_or(1, |g| g.stride);
         let mut text = if stride > 1 {
-            format!(
-                "The whole map, a column every {stride} blocks (too large for every block) · {} tiles · {} MB",
-                self.tiles.len() * (stride * stride) as usize,
-                bytes.div_ceil(1 << 20)
-            )
+            tr!("The whole map, a column every {stride} blocks (too large for every block) · {usize} tiles · {div_ceil} MB", usize = self.tiles.len() * (stride * stride) as usize, div_ceil = bytes.div_ceil(1 << 20), stride)
         } else {
-            format!("The whole map, every block · {} tiles · {} MB", self.tiles.len(), bytes.div_ceil(1 << 20))
+            tr!("The whole map, every block · {n} tiles · {div_ceil} MB", n = self.tiles.len(), div_ceil = bytes.div_ceil(1 << 20))
         };
         if self.pending > 0 {
-            text.push_str(&format!(" · building {} tiles…", self.pending));
+            text.push_str(&tr!(" · building {pending} tiles…", pending = self.pending));
         } else if self.build_ms > 0.0 {
-            text.push_str(&format!(" · {:.0} ms", self.build_ms));
+            text.push_str(&tr!(" · {build_ms:.0} ms", build_ms = self.build_ms));
         }
         if self.walk.is_none() {
             let at = rect.left_bottom() + vec2(10.0, -10.0);

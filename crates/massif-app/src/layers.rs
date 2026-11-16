@@ -60,7 +60,7 @@ const ROW_H: f32 = 26.0;
 
 /// The Layers panel. Returns what to say (objects read, or why not).
 pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary, state: &mut LayersUi) -> Option<String> {
-    if let Some(k) = crate::widgets::button_group(ui, "layers or packs", &["This map", "Packs"], &[!state.packs, state.packs]) {
+    if let Some(k) = crate::widgets::button_group(ui, "layers or packs", &[tr!("This map"), tr!("Packs")], &[!state.packs, state.packs]) {
         state.packs = k == 1;
     }
     ui.add_space(6.0);
@@ -90,7 +90,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
             selected: tools.tool == Tool::Cover && tools.cover as usize == k + 1,
         })
         .collect();
-    if header(ui, Icon::Sprout, "Ground covers", "New cover", "A cover of your own: any blocks, any mix") {
+    if header(ui, Icon::Sprout, tr!("Ground covers"), tr!("New cover"), tr!("A cover of your own: any blocks, any mix")) {
         tools.cover = crate::panels::new_cover(&mut doc.world.registry);
         tools.select(Tool::Cover);
     }
@@ -113,21 +113,21 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                 id: k + 1,
                 name: l.name.clone(),
                 color: l.color,
-                detail: format!("{n} object{}", if n == 1 { "" } else { "s" }),
-                tip: format!("{} · one every {} blocks, {:.0}% of the spots", if names.is_empty() { "No objects yet".to_owned() } else { names.join(", ") }, l.spacing, l.density * 100.0),
+                detail: trn!("{n} object", "{n} objects", n = n),
+                tip: tr!("{objects} · one every {spacing} blocks, {share:.0}% of the spots", objects = if names.is_empty() { tr!("No objects yet").to_owned() } else { names.join(", ") }, spacing = l.spacing, share = l.density * 100.0),
                 shown: Some(!l.hidden),
                 selected: tools.tool == Tool::Objects && tools.object_layer as usize == k + 1,
             }
         })
         .collect();
-    if header(ui, Icon::TreePine, "Object layers", "Import objects…", "Trees, rocks, ruins from .schem, .schematic, .bp, .litematic or .nbt files") {
-        let files = rfd::FileDialog::new().set_title("Import objects").add_filter("Schematics", &massif_objects::EXTENSIONS).pick_files().unwrap_or_default();
+    if header(ui, Icon::TreePine, tr!("Object layers"), tr!("Import objects…"), tr!("Trees, rocks, ruins from .schem, .schematic, .bp, .litematic or .nbt files")) {
+        let files = rfd::FileDialog::new().set_title(tr!("Import objects")).add_filter(tr!("Schematics"), &massif_objects::EXTENSIONS).pick_files().unwrap_or_default();
         if !files.is_empty() {
             said = Some(crate::panels::import_objects(doc, tools, &files, None, blocks.catalogue.as_deref()));
         }
     }
     if objects.is_empty() {
-        hint(ui, "None yet: import objects, or drop their files on the window.");
+        hint(ui, tr!("None yet: import objects, or drop their files on the window."));
     }
     list(ui, &objects, state, &mut actions);
 
@@ -147,24 +147,24 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                 id: k,
                 name: p.name.clone(),
                 color,
-                detail: format!("{} terrains", p.terrains.len()),
+                detail: tr!("{n} terrains", n = p.terrains.len()),
                 tip: parts.join(", "),
                 shown: None,
                 selected: current.as_deref() == Some(p.name.as_str()),
             }
         })
         .collect();
-    if header(ui, Icon::Blend, "Terrain mixes", "New mix", "Terrains mixed by a noise: set them up in Tool Settings, then save them") {
+    if header(ui, Icon::Blend, tr!("Terrain mixes"), tr!("New mix"), tr!("Terrains mixed by a noise: set them up in Tool Settings, then save them")) {
         tools.pattern.on = true;
         tools.select(Tool::PaintTerrain);
     }
     if mixes.is_empty() {
-        hint(ui, "Mixes saved from Paint terrain ▸ Noise show here.");
+        hint(ui, tr!("Mixes saved from Paint terrain ▸ Noise show here."));
     }
     list(ui, &mixes, state, &mut actions);
 
     ui.add_space(8.0);
-    hint(ui, "Click one to paint it: its settings are in Tool Settings. Ready-made trees, plants and mixes: Packs, above.");
+    hint(ui, tr!("Click one to paint it: its settings are in Tool Settings. Ready-made trees, plants and mixes: Packs, above."));
 
     for action in actions {
         apply(action, tools, doc, state);
@@ -224,7 +224,7 @@ fn row(ui: &mut Ui, e: &Entry, state: &mut LayersUi, actions: &mut Vec<Action>) 
     let shown = e.shown.unwrap_or(true);
     if let Some(on) = e.shown {
         let r = ui.put(eye, egui::Button::new(RichText::new(theme::glyph(if on { Icon::Eye } else { Icon::EyeOff }).to_string()).color(if on { pal.text } else { pal.weak })).frame(false));
-        if r.on_hover_text(if on { "Hide it on the map" } else { "Show it on the map" }).clicked() {
+        if r.on_hover_text(if on { tr!("Hide it on the map") } else { tr!("Show it on the map") }).clicked() {
             actions.push(Action::ToggleShown(e.kind, e.id));
         }
     }
@@ -269,20 +269,20 @@ fn row(ui: &mut Ui, e: &Entry, state: &mut LayersUi, actions: &mut Vec<Action>) 
         actions.push(Action::Paint(e.kind, e.id));
     }
     response.context_menu(|ui| {
-        if ui.button(theme::with_icon(Icon::Paintbrush, "Paint with it")).clicked() {
+        if ui.button(theme::with_icon(Icon::Paintbrush, tr!("Paint with it"))).clicked() {
             actions.push(Action::Paint(e.kind, e.id));
             ui.close();
         }
-        if ui.button(theme::with_icon(Icon::Pencil, "Rename")).clicked() {
+        if ui.button(theme::with_icon(Icon::Pencil, tr!("Rename"))).clicked() {
             actions.push(Action::Rename(e.kind, e.id, e.name.clone()));
             ui.close();
         }
-        if ui.button(theme::with_icon(Icon::Copy, "Duplicate")).clicked() {
+        if ui.button(theme::with_icon(Icon::Copy, tr!("Duplicate"))).clicked() {
             actions.push(Action::Duplicate(e.kind, e.id));
             ui.close();
         }
         if let Some(on) = e.shown
-            && ui.button(theme::with_icon(if on { Icon::EyeOff } else { Icon::Eye }, if on { "Hide on the map" } else { "Show on the map" })).clicked()
+            && ui.button(theme::with_icon(if on { Icon::EyeOff } else { Icon::Eye }, if on { tr!("Hide on the map") } else { tr!("Show on the map") })).clicked()
         {
             actions.push(Action::ToggleShown(e.kind, e.id));
             ui.close();
@@ -290,11 +290,11 @@ fn row(ui: &mut Ui, e: &Entry, state: &mut LayersUi, actions: &mut Vec<Action>) 
         ui.separator();
         let pal = Palette::of(ui);
         let what = match e.kind {
-            Kind::Cover => "Nothing grows where it was painted any more",
-            Kind::Objects => "Nothing stands where it was painted any more",
-            Kind::Mix => "Forget this mix (the ground painted with it stays)",
+            Kind::Cover => tr!("Nothing grows where it was painted any more"),
+            Kind::Objects => tr!("Nothing stands where it was painted any more"),
+            Kind::Mix => tr!("Forget this mix (the ground painted with it stays)"),
         };
-        if ui.button(RichText::new(theme::with_icon(Icon::Trash2, "Remove")).color(pal.danger)).on_hover_text(what).clicked() {
+        if ui.button(RichText::new(theme::with_icon(Icon::Trash2, tr!("Remove"))).color(pal.danger)).on_hover_text(what).clicked() {
             actions.push(Action::Remove(e.kind, e.id));
             ui.close();
         }
@@ -364,7 +364,7 @@ fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut 
         }
         Action::Duplicate(Kind::Cover, n) => {
             if let Some(mut c) = reg.covers.get(n - 1).cloned() {
-                c.name = unique_name(&format!("{} copy", c.name), reg.covers.iter().filter(|c| !c.removed).map(|c| c.name.as_str()));
+                c.name = unique_name(&tr!("{name} copy", name = c.name), reg.covers.iter().filter(|c| !c.removed).map(|c| c.name.as_str()));
                 c.hidden = false;
                 tools.cover = reg.add_cover(c);
                 tools.select(Tool::Cover);
@@ -372,7 +372,7 @@ fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut 
         }
         Action::Duplicate(Kind::Objects, n) => {
             if let Some(mut l) = reg.object_layers.get(n - 1).cloned() {
-                l.name = unique_name(&format!("{} copy", l.name), reg.object_layers.iter().filter(|l| !l.removed).map(|l| l.name.as_str()));
+                l.name = unique_name(&tr!("{name} copy", name = l.name), reg.object_layers.iter().filter(|l| !l.removed).map(|l| l.name.as_str()));
                 l.hidden = false;
                 tools.object_layer = reg.add_object_layer(l);
                 tools.select(Tool::Objects);
@@ -380,7 +380,7 @@ fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut 
         }
         Action::Duplicate(Kind::Mix, k) => {
             if let Some(mut p) = tools.pattern.saved.get(k).cloned() {
-                p.name = unique_name(&format!("{} copy", p.name), tools.pattern.saved.iter().map(|p| p.name.as_str()));
+                p.name = unique_name(&tr!("{name} copy", name = p.name), tools.pattern.saved.iter().map(|p| p.name.as_str()));
                 tools.pattern.saved.push(p);
             }
         }

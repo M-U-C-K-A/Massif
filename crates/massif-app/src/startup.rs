@@ -168,7 +168,7 @@ pub fn begin() {
         write(&format!("panic in thread {name}: {info}\n{}", std::backtrace::Backtrace::force_capture()));
         printed(info);
         if name == "main" {
-            tell(&format!("Massif stopped on an error:\n\n{}{}", message(info), where_logged()));
+            tell(&tr!("Massif stopped on an error:\n\n{message}{where_logged}", message = message(info), where_logged = where_logged()));
         }
     }));
     // A crash (in a driver, say) ends the process with no panic.
@@ -194,7 +194,7 @@ fn message(info: &std::panic::PanicHookInfo) -> String {
 
 /// The end of a message: where the log is.
 fn where_logged() -> String {
-    log_path().map(|p| format!("\n\nWhat Massif did as it started is written in:\n{}", p.display())).unwrap_or_default()
+    log_path().map(|p| tr!("\n\nWhat Massif did as it started is written in:\n{p}", p = p.display())).unwrap_or_default()
 }
 
 fn lock(log: &Mutex<Log>) -> MutexGuard<'_, Log> {
@@ -281,7 +281,7 @@ pub fn failed(error: &dyn std::fmt::Display) {
     } else {
         "Vulkan or OpenGL"
     };
-    tell(&format!("Massif could not start:\n\n{error}\n\nIt needs a graphics card that {graphics} can use: updating its driver often helps.{}", where_logged()));
+    tell(&tr!("Massif could not start:\n\n{error}\n\nIt needs a graphics card that {graphics} can use: updating its driver often helps.{where_logged}", where_logged = where_logged(), error, graphics));
 }
 
 /// A message box of the system, waited on.
@@ -664,7 +664,7 @@ fn stuck(last: &str) {
     write(&format!("stuck for {} s in the graphics driver at: {last}", STUCK_AFTER.as_secs()));
     let Some(graphics) = GRAPHICS.get() else {
         if cfg!(windows) {
-            tell(&format!("Massif has not opened its window after {} seconds: it may be stuck on the graphics card or its driver.{}", STUCK_AFTER.as_secs(), where_logged()));
+            tell(&tr!("Massif has not opened its window after {as_secs} seconds: it may be stuck on the graphics card or its driver.{where_logged}", as_secs = STUCK_AFTER.as_secs(), where_logged = where_logged()));
         }
         return;
     };
@@ -685,12 +685,7 @@ fn stuck(last: &str) {
         let again = rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Warning)
             .set_title("Massif")
-            .set_description(format!(
-                "Massif has not drawn its window: the graphics card's driver has not answered for {} seconds with {}.\n\nClick OK to start Massif again with {next}, which it will keep to on this computer, or Cancel to wait.{}",
-                STUCK_AFTER.as_secs(),
-                api_name(api),
-                where_logged()
-            ))
+            .set_description(tr!("Massif has not drawn its window: the graphics card's driver has not answered for {as_secs} seconds with {api_name}.\n\nClick OK to start Massif again with {next}, which it will keep to on this computer, or Cancel to wait.{where_logged}", as_secs = STUCK_AFTER.as_secs(), api_name = api_name(api), where_logged = where_logged(), next))
             .set_buttons(rfd::MessageButtons::OkCancel)
             .show()
             == rfd::MessageDialogResult::Ok;

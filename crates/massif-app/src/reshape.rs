@@ -41,15 +41,15 @@ impl WholeOp {
 
     pub fn label(self) -> &'static str {
         match self {
-            WholeOp::Erosion => "Erosion",
-            WholeOp::Weathering => "Thermal erosion",
-            WholeOp::Smooth => "Smooth",
-            WholeOp::Sharpen => "Sharpen",
-            WholeOp::Terraces => "Terraces",
-            WholeOp::Strata => "Strata",
-            WholeOp::Lakes => "Lakes",
-            WholeOp::Rivers => "Rivers",
-            WholeOp::Relief => "Scale and raise",
+            WholeOp::Erosion => tr!("Erosion"),
+            WholeOp::Weathering => tr!("Thermal erosion"),
+            WholeOp::Smooth => tr!("Smooth"),
+            WholeOp::Sharpen => tr!("Sharpen"),
+            WholeOp::Terraces => tr!("Terraces"),
+            WholeOp::Strata => tr!("Strata"),
+            WholeOp::Lakes => tr!("Lakes"),
+            WholeOp::Rivers => tr!("Rivers"),
+            WholeOp::Relief => tr!("Scale and raise"),
         }
     }
 
@@ -70,15 +70,15 @@ impl WholeOp {
     /// What it does, in a sentence.
     pub fn about(self) -> &'static str {
         match self {
-            WholeOp::Erosion => "Rain runs down the slopes and carries soil from the heights to the valleys: gullies, worn flanks, fans of silt.",
-            WholeOp::Weathering => "Loose rock slides down wherever a slope is steeper than it can hold: scree at the feet of cliffs, softer ridges.",
-            WholeOp::Smooth => "The relief softened: noise and small steps gone, the forms kept.",
-            WholeOp::Sharpen => "The relief's detail brought out: ridges and hollows stand out more.",
-            WholeOp::Terraces => "Flat steps with steep risers, over the whole height of the map.",
-            WholeOp::Strata => "Layers of rock of uneven thickness: ledges along the slopes.",
-            WholeOp::Lakes => "Water fills the hollows up to where they spill — or their ground rises, with Fill.",
-            WholeOp::Rivers => "Rivers traced where the water of the whole map runs, dug into the valleys, with their lakes; their beds in gravel.",
-            WholeOp::Relief => "The heights scaled around the sea level, then moved up or down.",
+            WholeOp::Erosion => tr!("Rain runs down the slopes and carries soil from the heights to the valleys: gullies, worn flanks, fans of silt."),
+            WholeOp::Weathering => tr!("Loose rock slides down wherever a slope is steeper than it can hold: scree at the feet of cliffs, softer ridges."),
+            WholeOp::Smooth => tr!("The relief softened: noise and small steps gone, the forms kept."),
+            WholeOp::Sharpen => tr!("The relief's detail brought out: ridges and hollows stand out more."),
+            WholeOp::Terraces => tr!("Flat steps with steep risers, over the whole height of the map."),
+            WholeOp::Strata => tr!("Layers of rock of uneven thickness: ledges along the slopes."),
+            WholeOp::Lakes => tr!("Water fills the hollows up to where they spill — or their ground rises, with Fill."),
+            WholeOp::Rivers => tr!("Rivers traced where the water of the whole map runs, dug into the valleys, with their lakes; their beds in gravel."),
+            WholeOp::Relief => tr!("The heights scaled around the sea level, then moved up or down."),
         }
     }
 
@@ -187,14 +187,14 @@ impl ReshapeForm {
         ui.set_width(700.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new(theme::glyph(self.what.icon()).to_string()).size(17.0).color(pal.accent));
-            ui.label(RichText::new(format!("{} over the whole map", self.what.label())).size(16.0).bold());
+            ui.label(RichText::new(tr!("{label} over the whole map", label = crate::i18n::tr_name(self.what.label()))).size(16.0).bold());
         });
-        ui.add(egui::Label::new(RichText::new(self.what.about()).size(12.0).color(pal.weak)).wrap());
+        ui.add(egui::Label::new(RichText::new(crate::i18n::tr_name(self.what.about())).size(12.0).color(pal.weak)).wrap());
         ui.add_space(12.0);
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
                 ui.set_width(290.0);
-                ui.label(RichText::new("Settings").size(11.5).color(pal.weak).medium());
+                ui.label(RichText::new(tr!("Settings")).size(11.5).color(pal.weak).medium());
                 ui.add_space(4.0);
                 let limits = (self.map.min_y as f32, (self.map.max_y - 1) as f32);
                 match &mut self.op {
@@ -206,7 +206,7 @@ impl ReshapeForm {
                     }
                 }
                 ui.add_space(8.0);
-                if ui.small_button(theme::with_icon(Icon::RotateCcw, "Reset")).clicked() {
+                if ui.small_button(theme::with_icon(Icon::RotateCcw, tr!("Reset"))).clicked() {
                     self.op = self.what.start(self.sea as f32, self.side);
                 }
             });
@@ -215,12 +215,10 @@ impl ReshapeForm {
         });
         ui.add_space(12.0);
         let spacing = (self.side / (self.side as usize).clamp(2, WHOLE_MAX) as f32).max(1.0);
-        let read = if spacing <= 1.001 { "read at every block".to_owned() } else { format!("read a sample every {spacing:.1} blocks, the change spread over the blocks between") };
+        let read = if spacing <= 1.001 { tr!("read at every block").to_owned() } else { tr!("read a sample every {spacing:.1} blocks, the change spread over the blocks between", spacing) };
         let side = self.side as u32;
         ui.label(
-            RichText::new(format!(
-                "The map, {side} blocks across, {read}. Its paint, its levels and what was sculpted in 3D stay; one step to undo."
-            ))
+            RichText::new(tr!("The map, {side} blocks across, {read}. Its paint, its levels and what was sculpted in 3D stay; one step to undo.", side, read))
             .size(11.5)
             .color(pal.weak),
         );
@@ -228,10 +226,10 @@ impl ReshapeForm {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // Scaled by one and raised by nothing: nothing to do.
             let idle = matches!(self.op, Reshape::Relief { scale, shift } if (scale - 1.0).abs() < 1e-4 && shift.abs() < 0.5);
-            if ui.add_enabled(!idle, theme::primary_button(ui, "Apply to the whole map")).clicked() {
+            if ui.add_enabled(!idle, theme::primary_button(ui, tr!("Apply to the whole map"))).clicked() {
                 choice = Choice::Apply(self.op.clone());
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button(tr!("Cancel")).clicked() {
                 choice = Choice::Close;
             }
         });
@@ -295,7 +293,7 @@ impl ReshapeForm {
         let working = p.rx.is_some();
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
-                for (k, name) in ["Before", "After"].into_iter().enumerate() {
+                for (k, name) in [tr!("Before"), tr!("After")].into_iter().enumerate() {
                     ui.vertical(|ui| {
                         ui.label(RichText::new(name).size(11.5).color(pal.weak).medium());
                         ui.add_space(2.0);
@@ -308,7 +306,7 @@ impl ReshapeForm {
                                 egui::Image::new(texture).corner_radius(theme::TILE_RADIUS).paint_at(ui, rect);
                             }
                             None if !shown => {
-                                painter.text(rect.center(), egui::Align2::CENTER_CENTER, "No picture\nof a map this large", egui::FontId::proportional(11.5), pal.weak);
+                                painter.text(rect.center(), egui::Align2::CENTER_CENTER, tr!("No picture\nof a map this large"), egui::FontId::proportional(11.5), pal.weak);
                             }
                             None => {}
                         }
@@ -321,7 +319,7 @@ impl ReshapeForm {
                 }
             });
             if shown {
-                ui.label(RichText::new("The whole map, small: a sample every few blocks.").size(11.0).color(pal.weak));
+                ui.label(RichText::new(tr!("The whole map, small: a sample every few blocks.")).size(11.0).color(pal.weak));
             }
         });
     }
@@ -329,7 +327,7 @@ impl ReshapeForm {
 
 /// The settings of [`Reshape::Relief`].
 fn relief_settings(ui: &mut Ui, scale: &mut f32, shift: &mut f32) {
-    for (label, tip) in [("Height", "How many times as high the relief stands over the sea"), ("Raise by", "Blocks the whole map goes up (or down, below 0)")] {
+    for (label, tip) in [(tr!("Height"), tr!("How many times as high the relief stands over the sea")), (tr!("Raise by"), tr!("Blocks the whole map goes up (or down, below 0)"))] {
         ui.horizontal(|ui| {
             ui.add_sized([96.0, 18.0], egui::Label::new(RichText::new(label).size(12.0))).on_hover_text(tip);
             if label == "Height" {
@@ -339,7 +337,7 @@ fn relief_settings(ui: &mut Ui, scale: &mut f32, shift: &mut f32) {
                     crate::widgets::Field::new(shift, -256.0..=256.0)
                         .clamping(egui::SliderClamping::Never)
                         .max_decimals(0)
-                        .suffix(" blocks"),
+                        .suffix(tr!(" blocks")),
                 );
             }
         });

@@ -72,14 +72,14 @@ pub fn legible(c: Color32, back: Color32, ratio: f32) -> Color32 {
 /// The accent colours offered in the settings: the colour of what is
 /// chosen, of the main buttons, of the art of the home screen.
 pub const ACCENTS: [(&str, [u8; 3]); 8] = [
-    ("Ember", [255, 112, 40]),
-    ("Ocean", [77, 144, 254]),
-    ("Moss", [72, 190, 110]),
-    ("Glacier", [56, 196, 204]),
-    ("Amethyst", [158, 112, 255]),
-    ("Rose", [244, 92, 132]),
-    ("Gold", [232, 182, 64]),
-    ("Silver", [196, 200, 210]),
+    (tn!("Ember"), [255, 112, 40]),
+    (tn!("Ocean"), [77, 144, 254]),
+    (tn!("Moss"), [72, 190, 110]),
+    (tn!("Glacier"), [56, 196, 204]),
+    (tn!("Amethyst"), [158, 112, 255]),
+    (tn!("Rose"), [244, 92, 132]),
+    (tn!("Gold"), [232, 182, 64]),
+    (tn!("Silver"), [196, 200, 210]),
 ];
 pub const DEFAULT_ACCENT: [u8; 3] = ACCENTS[0].1;
 
@@ -447,7 +447,7 @@ impl Typeface {
 
     pub fn name(self) -> &'static str {
         match self {
-            Typeface::System => "System",
+            Typeface::System => tr!("System"),
             Typeface::Inter => "Inter",
             Typeface::Geist => "Geist",
             Typeface::IbmPlexSans => "IBM Plex Sans",
@@ -460,17 +460,17 @@ impl Typeface {
         match self {
             Typeface::System => {
                 if cfg!(target_os = "macos") {
-                    "SF Pro, as the rest of macOS"
+                    tr!("SF Pro, as the rest of macOS")
                 } else if cfg!(target_os = "windows") {
-                    "Segoe UI, as the rest of Windows"
+                    tr!("Segoe UI, as the rest of Windows")
                 } else {
-                    "The system's own, or Inter"
+                    tr!("The system's own, or Inter")
                 }
             }
-            Typeface::Inter => "Drawn for screens: neutral, very clear when small",
-            Typeface::Geist => "A crisp, geometric grotesque",
-            Typeface::IbmPlexSans => "Engineered, with a technical character",
-            Typeface::Manrope => "Open and rounded, a little warmer",
+            Typeface::Inter => tr!("Drawn for screens: neutral, very clear when small"),
+            Typeface::Geist => tr!("A crisp, geometric grotesque"),
+            Typeface::IbmPlexSans => tr!("Engineered, with a technical character"),
+            Typeface::Manrope => tr!("Open and rounded, a little warmer"),
         }
     }
 
