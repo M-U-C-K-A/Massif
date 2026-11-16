@@ -1,7 +1,7 @@
 //! Exporting a dimension as a Minecraft Java world folder.
 
 use crate::chunk::{ExportContext, Scratch, build_chunk, tile_placements};
-use crate::level_dat::{Difficulty, GameMode, LevelSettings, Surroundings, WorldBorder, level_dat};
+use crate::level_dat::{Difficulty, GameMode, LevelSettings, Surroundings, WorldBorder, world_files};
 use crate::region::{Compressor, RegionBuilder};
 use crate::version::{Era, Target};
 use massif_core::TilePos;
@@ -164,7 +164,7 @@ pub fn export(
     if !dir_is_empty(dir)? && !options.overwrite {
         return Err(ExportError::Exists(dir.to_owned()));
     }
-    let region_dir = dir.join("region");
+    let region_dir = dir.join(options.target.region_dir());
     std::fs::create_dir_all(&region_dir)?;
     if options.overwrite {
         for entry in std::fs::read_dir(&region_dir)? {
@@ -287,7 +287,17 @@ pub fn export(
         border: options.border,
         datapacks: packs,
     };
-    massif_core::atomic::write(&dir.join("level.dat"), &level_dat(&settings, &options.target)?, true)?;
+    // The saved data first and level.dat last: a world is whole once its
+    // level.dat is there.
+    let mut files = world_files(&settings, &options.target)?;
+    files.sort_by_key(|(path, _)| path == "level.dat");
+    for (path, bytes) in files {
+        let path = dir.join(path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        massif_core::atomic::write(&path, &bytes, true)?;
+    }
 
     Ok(ExportStats {
         regions: regions.len(),

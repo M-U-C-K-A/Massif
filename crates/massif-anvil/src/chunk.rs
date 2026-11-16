@@ -293,11 +293,12 @@ impl<'a> ExportContext<'a> {
             Era::Modern => Vec::new(),
             _ => reg.biomes.iter().map(|b| target.biome_number(if b.id.is_empty() { "minecraft:plains" } else { &b.id })).collect(),
         };
+        let (name_key, properties_key) = target.state_keys();
         let palette_entries = Encoded::of(states.iter().map(|(name, props)| {
             let mut w = NbtWriter::fragment();
-            w.string("Name", name);
+            w.string(name_key, name);
             if !props.is_empty() {
-                w.compound("Properties");
+                w.compound(properties_key);
                 for (k, v) in props {
                     w.string(k, v);
                 }

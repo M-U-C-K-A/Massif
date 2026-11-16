@@ -357,6 +357,14 @@ ground — and a block renamed since takes the version's name (short grass
 is grass before 1.20.3, an iron chain a chain before 1.21.9). Blocks of
 mods are written as they are.
 
+The world's settings are that version's own too: `level.dat` takes the
+shape the version gives it (the spawn point and the border as 1.21.9
+writes them, the border in a file of its own from 1.21.11), and for 26.1
+and later the world is laid out as 26.1 lays it — the regions under
+`dimensions/minecraft/overworld/`, the world's generation, weather, time
+of day and border in files of their own. The game opens the world as it
+is, with no "make a backup" question and nothing converted.
+
 ## Survival check
 
 **Edit ▸ Analyse the map…** checks the whole map for a survival game. Every

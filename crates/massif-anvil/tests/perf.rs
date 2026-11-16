@@ -63,7 +63,7 @@ fn exporting_a_map() {
             best = best.min(cpu_time() - cpu);
             wall = wall.min(t.elapsed());
         }
-        eprintln!("export 8 × 8 tiles of islands for {version:<7} {:>8.1} ms CPU {:>8.1} ms wall   {:016x}", best.as_secs_f64() * 1000.0, wall.as_secs_f64() * 1000.0, digest(&dir.join("region")));
+        eprintln!("export 8 × 8 tiles of islands for {version:<7} {:>8.1} ms CPU {:>8.1} ms wall   {:016x}", best.as_secs_f64() * 1000.0, wall.as_secs_f64() * 1000.0, digest(&dir.join(options.target.region_dir())));
     }
     std::fs::remove_dir_all(&dir).unwrap();
 }

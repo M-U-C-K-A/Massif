@@ -81,14 +81,28 @@ release from 1.18.2 to 26.3, reads each chunk back with `fastnbt` and
 `fastanvil`, and checks its data version, status, keys, and that each block
 and biome is one the version has, as it names it.
 
+`level.dat` and the saved data are the version's own as well
+(`massif_anvil::level_dat`): what changed since 1.18.2 was read from the
+game's data fixers in 26.3's jar, which turn an older world into the newer
+one and so say exactly what each version writes (`LegacyWorldBorderFix`,
+`WorldSpawnDataFix`, `WorldBorderWarningTimeFix`, `LevelDatDifficultyFix`,
+`DayTimeToClockFix`, `LevelDatToSavedDataFileFix`,
+`DimensionStorageFileFix`), and from its codecs. Since 26.1 the jar is not
+obfuscated, so the names read plainly from its classes' constant pools;
+`javap` from Java 8 cannot read them, a short script over the class files
+can. `each_version_gets_its_own_level_dat` checks every release from 1.19 to
+26.3 field by field, and `older_versions_keep_their_bytes` that
+`level.dat` up to 1.18.2 is still what Massif 0.6 wrote. 26.3 also renamed
+the keys of a block state in the chunks' palettes (`id` and `properties`,
+`BlockStateFieldNamesFix`), which `Target::state_keys` gives.
+
 To check one in the game by hand:
 
 1. Export a map for the version (a small one, or **Test Export**), with
    cherry or pale oak trees, short grass and a cherry grove in it.
-2. Open the world in that version of Minecraft. A world converted from an
-   older version asks to make a backup first: an export from 1.18.2 on
-   still does, as its `level.dat` is written in 1.18.2's shape (the
-   chunks are not converted).
+2. Open the world in that version of Minecraft. It should open at once,
+   without asking to make a backup (the game asks that of a world it has
+   to convert).
 3. In the game, F3 shows the biome under the player; the blocks should be
    those the version has.
 4. Quit, and look in `logs/latest.log` of the game folder for lines with

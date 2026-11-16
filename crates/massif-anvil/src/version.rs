@@ -109,9 +109,6 @@ pub const RELEASES: &[(&str, i32)] = &[
     ("1.7.10", 0),
 ];
 
-/// The newest version whose `level.dat` is written as it is.
-const LEVEL_FORMAT: (&str, i32) = ("1.18.2", 2975);
-
 impl Default for Target {
     /// 1.18.2: the oldest release with today's chunks, which every later
     /// one opens and upgrades by itself.
@@ -173,12 +170,31 @@ impl Target {
         }
     }
 
-    /// The data version `level.dat` is written as. From 1.18.2 on it is
-    /// 1.18.2's own: the file changed shape several times since, and every
-    /// later version brings it up to date by itself when it opens the
-    /// world. (Chunks, whose shape did not change, are the version's own.)
+    /// The data version and name `level.dat` is written with: the
+    /// version's own, as everything else.
     pub fn level_version(&self) -> (i32, &str) {
-        if self.data_version > LEVEL_FORMAT.1 { (LEVEL_FORMAT.1, LEVEL_FORMAT.0) } else { (self.data_version, &self.name) }
+        (self.data_version, &self.name)
+    }
+
+    /// Whether the world is laid out as 26.1 lays it (the game's
+    /// `DimensionStorageFileFix` and `LevelDatToSavedDataFileFix`, data
+    /// version 4772): each dimension's regions and data under
+    /// `dimensions/minecraft/<dimension>/`, and what `level.dat` held of the
+    /// world's generation, weather, time and border in files of their own.
+    pub fn splits_level(&self) -> bool {
+        self.data_version >= 4772
+    }
+
+    /// The folder of the overworld's region files, in the world's folder.
+    pub fn region_dir(&self) -> &'static str {
+        if self.splits_level() { "dimensions/minecraft/overworld/region" } else { "region" }
+    }
+
+    /// The keys of a block state's name and properties: `Name` and
+    /// `Properties`, `id` and `properties` from 26.3 (the game's
+    /// `BlockStateFieldNamesFix`, data version 5006).
+    pub fn state_keys(&self) -> (&'static str, &'static str) {
+        if self.data_version >= 5006 { ("id", "properties") } else { ("Name", "Properties") }
     }
 
     /// The format number of the version's data packs (from 1.18 on).
@@ -738,8 +754,13 @@ mod tests {
         assert_eq!(era("1.21.11"), Era::Modern);
         assert_eq!(Target::installed("27.1", 6000).era(), Era::Modern);
         assert_eq!(era("26.3"), Era::Modern);
-        // level.dat keeps the shape of 1.18.2 for what came after.
-        assert_eq!(Target::release("26.3").unwrap().level_version(), (2975, "1.18.2"));
+        // level.dat is the version's own too.
+        assert_eq!(Target::release("26.3").unwrap().level_version(), (5023, "26.3"));
+        assert_eq!(Target::release("26.3").unwrap().region_dir(), "dimensions/minecraft/overworld/region");
+        assert_eq!(Target::release("26.1").unwrap().region_dir(), "dimensions/minecraft/overworld/region");
+        assert_eq!(Target::release("1.21.11").unwrap().region_dir(), "region");
+        assert_eq!(Target::release("26.2").unwrap().state_keys(), ("Name", "Properties"));
+        assert_eq!(Target::release("26.3").unwrap().state_keys(), ("id", "properties"));
         assert_eq!(Target::release("1.18.1").unwrap().level_version(), (2865, "1.18.1"));
         assert_eq!(Target::release("1.16.5").unwrap().level_version(), (2586, "1.16.5"));
         assert_eq!(Target::default().name, "1.18.2");
@@ -846,7 +867,7 @@ mod tests {
     fn every_block_becomes_one_the_version_has() {
         for target in Target::releases().into_iter().filter(|t| t.lists_blocks()) {
             for (&short, &since) in blocks() {
-                assert!(since <= NEWEST_LISTED && since == 0 || since > LEVEL_FORMAT.1, "{short} {since}");
+                assert!(since <= NEWEST_LISTED && since == 0 || since > 2975, "{short} {since}");
                 let name = format!("minecraft:{short}");
                 let (got, _) = target.block(&name);
                 let got = got.strip_prefix("minecraft:").unwrap();

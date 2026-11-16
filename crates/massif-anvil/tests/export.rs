@@ -96,6 +96,41 @@ fn temp_dir(name: &str) -> PathBuf {
     dir
 }
 
+/// The folder of the overworld's regions: `region`, or where 26.1 keeps it.
+fn region_dir(dir: &Path) -> PathBuf {
+    let split = dir.join("dimensions/minecraft/overworld/region");
+    if split.is_dir() { split } else { dir.join("region") }
+}
+
+/// A chunk as fastanvil reads it: the block states of 26.3 (`id` and
+/// `properties`) under the names they had before (`Name` and `Properties`),
+/// which fastanvil knows.
+fn as_fastanvil_reads(data: &[u8]) -> Vec<u8> {
+    use fastnbt::Value;
+    let mut root: Value = fastnbt::from_bytes(data).unwrap();
+    let Value::Compound(chunk) = &mut root else { panic!("a chunk is a compound") };
+    if !matches!(chunk.get("DataVersion"), Some(Value::Int(v)) if *v >= 5006) {
+        return data.to_vec();
+    }
+    if let Some(Value::List(sections)) = chunk.get_mut("sections") {
+        for section in sections {
+            let Value::Compound(section) = section else { continue };
+            let Some(Value::Compound(states)) = section.get_mut("block_states") else { continue };
+            let Some(Value::List(palette)) = states.get_mut("palette") else { continue };
+            for entry in palette {
+                let Value::Compound(entry) = entry else { continue };
+                if let Some(id) = entry.remove("id") {
+                    entry.insert("Name".into(), id);
+                }
+                if let Some(props) = entry.remove("properties") {
+                    entry.insert("Properties".into(), props);
+                }
+            }
+        }
+    }
+    fastnbt::to_bytes(&root).unwrap()
+}
+
 /// Reads blocks back from an exported world folder.
 struct Reader {
     dir: PathBuf,
@@ -117,14 +152,14 @@ impl Reader {
         let (cx, cz) = (x >> 4, z >> 4);
         let dir = self.dir.clone();
         self.chunks.entry((cx, cz)).or_insert_with(|| {
-            let path = dir.join(format!("region/r.{}.{}.mca", cx >> 5, cz >> 5));
+            let path = region_dir(&dir).join(format!("r.{}.{}.mca", cx >> 5, cz >> 5));
             let file = std::fs::File::open(&path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
             let mut region = Region::from_stream(file).unwrap();
             let data = region
                 .read_chunk((cx & 31) as usize, (cz & 31) as usize)
                 .unwrap()
                 .unwrap_or_else(|| panic!("chunk ({cx}, {cz}) is missing"));
-            match JavaChunk::from_bytes(&data).unwrap() {
+            match JavaChunk::from_bytes(&as_fastanvil_reads(&data)).unwrap() {
                 chunk @ JavaChunk::Post18(_) => chunk,
                 chunk if self.any_version => chunk,
                 _ => panic!("chunk ({cx}, {cz}) was not read as a 1.18+ chunk"),
@@ -500,13 +535,18 @@ fn every_era_gets_its_own_chunks() {
         let fastnbt::Value::Compound(root) = &level else { panic!("{name}: level.dat") };
         let fastnbt::Value::Compound(data) = &root["Data"] else { panic!("{name}: Data") };
         if target.data_version > 0 {
-            // From 1.18.2 on, level.dat is 1.18.2's: later versions bring
-            // it up to date themselves.
-            assert_eq!(data["DataVersion"], fastnbt::Value::Int(target.data_version.min(2975)), "{name}");
+            // Every version's own.
+            assert_eq!(data["DataVersion"], fastnbt::Value::Int(target.data_version), "{name}");
         } else {
             assert!(!data.contains_key("DataVersion"), "{name}: versions before 1.9 have no data version");
         }
         match era {
+            // From 26.1, in a file of its own.
+            Era::Modern if target.splits_level() => {
+                assert!(!data.contains_key("WorldGenSettings"), "{name}");
+                assert!(dir.join("data/minecraft/world_gen_settings.dat").is_file(), "{name}");
+                assert!(!dir.join("region").exists(), "{name}");
+            }
             Era::Modern | Era::Flat16 => assert!(data.contains_key("WorldGenSettings"), "{name}"),
             _ => assert_eq!(data["generatorName"], fastnbt::Value::String("default".into()), "{name}"),
         }
@@ -1261,12 +1301,12 @@ fn newer_world() -> World {
 /// Every chunk's NBT as fastnbt reads it, every region read whole.
 fn chunk_values(dir: &Path) -> Vec<HashMap<String, fastnbt::Value>> {
     let mut chunks = Vec::new();
-    for entry in std::fs::read_dir(dir.join("region")).unwrap() {
+    for entry in std::fs::read_dir(region_dir(dir)).unwrap() {
         let mut region = Region::from_stream(std::fs::File::open(entry.unwrap().path()).unwrap()).unwrap();
         for c in region.iter() {
             let c = c.unwrap();
             // An independent reader takes it as a chunk of today's shape.
-            assert!(matches!(JavaChunk::from_bytes(&c.data).unwrap(), JavaChunk::Post18(_)));
+            assert!(matches!(JavaChunk::from_bytes(&as_fastanvil_reads(&c.data)).unwrap(), JavaChunk::Post18(_)));
             let fastnbt::Value::Compound(root) = fastnbt::from_bytes(&c.data).unwrap() else { panic!("a chunk is a compound") };
             chunks.push(root);
         }
@@ -1309,8 +1349,10 @@ fn chunks_are_each_versions_own() {
                 let fastnbt::Value::List(palette) = &states["palette"] else { panic!() };
                 for entry in palette {
                     let fastnbt::Value::Compound(entry) = entry else { panic!() };
-                    let fastnbt::Value::String(id) = &entry["Name"] else { panic!() };
-                    let props = match entry.get("Properties") {
+                    let (name_key, properties_key) = target.state_keys();
+                    assert!(!entry.keys().any(|k| k != name_key && k != properties_key), "{name}: {entry:?}");
+                    let fastnbt::Value::String(id) = &entry[name_key] else { panic!() };
+                    let props = match entry.get(properties_key) {
                         Some(fastnbt::Value::Compound(p)) => {
                             let mut p: Vec<String> = p.iter().map(|(k, v)| format!("{k}={}", match v { fastnbt::Value::String(s) => s.as_str(), _ => panic!() })).collect();
                             p.sort();
