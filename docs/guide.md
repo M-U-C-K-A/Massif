@@ -37,6 +37,24 @@ window opens too.
 **File ▸ New** (⌘N) comes back to the home screen, with a way back to the open
 map (Esc).
 
+Under the ways in, **Samples** offers three small maps to explore at once:
+**Alpine range**, **Archipelago** and **Floating mountains**, 768 blocks a
+side. None is shipped with Massif: a click makes the map from that template of
+the terrain generator, builds its relief on the Terrain side (a few seconds),
+then shows it on the World side, with nothing to save until you change it.
+
+### The tour
+
+The first time a map is open in Massif, a short tour shows the window, in six
+steps: the World and Terrain sides, the tools, Brush Settings, the 2D map, the
+3D view, and saving and exporting. Each step dims the window but for the part
+it talks about and says a few words beside it. **Next** and **Back** (or the
+arrow keys) move through it; **Skip tour** or Esc ends it at any step. With
+**Don't show again** ticked, as it is at first, it does not come back on its
+own; **Help ▸ Take the tour** shows it again (over a sample, from the home
+screen). Massif shows no other tips or popups. With Reduce motion on, the
+light jumps from one part to the next rather than gliding.
+
 Behind it is one of the pictures of
 [`crates/massif-app/assets/backdrops`](../crates/massif-app/assets/backdrops) —
 ten scenes at night: a canyon, the Alps, volcanic islands, stone pillars in

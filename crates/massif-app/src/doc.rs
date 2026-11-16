@@ -259,6 +259,12 @@ impl Document {
     }
 
     /// Record that revision `revision` is what the file on disk holds.
+    /// Take the map as it is now for one with nothing to save (a sample
+    /// just made): closing it asks nothing until it is changed.
+    pub fn forget_changes(&mut self) {
+        self.saved_revision = self.revision;
+    }
+
     pub fn mark_saved(&mut self, revision: u64, path: PathBuf) {
         self.saved_revision = revision;
         self.path = Some(path);

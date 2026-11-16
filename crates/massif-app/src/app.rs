@@ -92,6 +92,15 @@ struct Settings {
     pack_author: String,
     /// The language of the interface: the system's, or one chosen.
     language: crate::i18n::Language,
+    /// The guided tour was taken or skipped: it does not show on its own
+    /// again (Help ▸ Take the tour still shows it). Settings saved before
+    /// it existed are of someone who knows Massif already.
+    #[serde(default = "yes")]
+    tour_done: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// The intervals of the backups offered in the settings, in minutes.
@@ -141,6 +150,7 @@ impl Default for Settings {
             skipped_version: None,
             pack_author: String::new(),
             language: crate::i18n::Language::System,
+            tour_done: false,
         }
     }
 }
@@ -367,6 +377,23 @@ pub struct MassifApp {
     /// File, Edit, View and Help are in the system's menu bar (macOS), not
     /// in the top bar.
     menus_in_menu_bar: bool,
+    /// The guided tour, while it is shown.
+    tour: Option<crate::tour::Tour>,
+    /// The tour asked for (Help ▸ Take the tour, or the first run): shown
+    /// once a map is open, with nothing else in the way.
+    tour_wanted: bool,
+    /// A sample map being made: its relief built from its template, then
+    /// the World side shown.
+    sample: Option<SampleStage>,
+}
+
+/// Where a sample map is in its making.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SampleStage {
+    /// Asked for: the map is being made.
+    Making,
+    /// Made: its relief is being built from the template's graph.
+    Building,
 }
 
 /// A world from a file: a Massif world, or a WorldPainter one imported.
@@ -473,6 +500,8 @@ impl MassifApp {
         }
         // Whether a newer version is out, asked off the main thread.
         app.check_updates(&cc.egui_ctx);
+        // The first time Massif opens: the tour, once a map is open.
+        app.tour_wanted = !app.settings.tour_done;
         // Tests keep away from the packs of this computer.
         if !cfg!(test) {
             app.layers_ui.library = crate::pack_share::PackLibrary::installed();
@@ -520,6 +549,10 @@ impl MassifApp {
 
     /// Show the home screen, on `page`; with a map open, the way back to it.
     fn open_home(&mut self, page: Page) {
+        // A tour under way starts again over the next map.
+        if self.tour.take().is_some() {
+            self.tour_wanted = true;
+        }
         if self.home.is_none() {
             let mut registry = massif_core::Registry::vanilla();
             if let Some(cat) = &self.blocks.catalogue {
@@ -541,7 +574,13 @@ impl MassifApp {
         match action {
             HomeAction::Create(params, template) => {
                 self.after_create = template;
+                self.sample = None;
                 self.request(ctx, Pending::New(params));
+            }
+            HomeAction::Sample(t) => {
+                self.after_create = Some(t);
+                self.sample = Some(SampleStage::Making);
+                self.request(ctx, Pending::New(home::sample_params(t)));
             }
             HomeAction::FromHeightmap(map, how) => self.request(ctx, Pending::FromHeightmap(map, how)),
             HomeAction::PickHeightmap => self.pick_heightmap(ctx),
@@ -668,6 +707,65 @@ impl MassifApp {
     }
 
     /// Go to the Terrain side and start from a template.
+    /// The guided tour: started once a map is shown with nothing else in
+    /// the way (a dialog, a map being opened, a sample being built), drawn
+    /// over the editor, and what its closing says kept.
+    fn tour_ui(&mut self, ctx: &egui::Context) {
+        // A sample's relief built: its map shown.
+        if self.sample == Some(SampleStage::Building) && !self.graph.converting() {
+            self.sample = None;
+            self.layout.switch_side(false);
+            // As it was made: nothing to save yet.
+            self.doc.forget_changes();
+        }
+        let clear = self.dialog.is_none() && self.pack_dialog.is_none() && self.blocking_job().is_none() && self.sample.is_none();
+        if self.tour.is_none() && self.tour_wanted && self.has_map && clear {
+            self.tour_wanted = false;
+            self.start_tour();
+        }
+        if !clear {
+            return;
+        }
+        if let Some(tour) = &mut self.tour
+            && let Some(_closed) = tour.ui(ctx)
+        {
+            // "Don't show again" unticked: shown again at the next start.
+            self.settings.tour_done = tour.dont_show;
+            self.tour = None;
+            crate::sounds::play(Cue::Close);
+        }
+    }
+
+    /// Show the tour, on the World side, in a workspace with the parts it
+    /// talks about.
+    fn start_tour(&mut self) {
+        use crate::layout::EditorKind as E;
+        self.layout.switch_side(false);
+        let parts = [E::Map, E::Tools, E::BrushSettings, E::View3d];
+        let has_all = |w: &crate::layout::Workspace| !w.terrain && parts.iter().all(|k| w.root.shows(*k));
+        if !has_all(self.layout.current())
+            && let Some(i) = self.layout.workspaces.iter().position(has_all)
+        {
+            self.layout.activate(i);
+        }
+        self.layout.current_mut().maximized = None;
+        self.tour = Some(crate::tour::Tour::default());
+        crate::sounds::play(Cue::Open);
+    }
+
+    /// Help ▸ Take the tour: over the map open, or over a sample made for
+    /// it when there is none.
+    fn take_the_tour(&mut self, ctx: &egui::Context) {
+        self.tour_wanted = true;
+        if self.home.is_some() {
+            if self.has_map {
+                self.home_action(ctx, HomeAction::Back);
+            } else {
+                self.home_action(ctx, HomeAction::Sample(home::SAMPLES[0]));
+            }
+        }
+    }
+
     fn start_terrain(&mut self, t: massif_core::graph::Template) {
         self.layout.switch_side(true);
         self.graph.use_template(&mut self.doc, t);
@@ -727,6 +825,9 @@ impl MassifApp {
             access: AccessState::default(),
             unified_titlebar: false,
             menus_in_menu_bar: false,
+            tour: None,
+            tour_wanted: false,
+            sample: None,
         }
     }
 
@@ -749,6 +850,7 @@ impl MassifApp {
         let settings = Settings {
             high_contrast: Follow::Off,
             reduce_motion: Follow::Off,
+            tour_done: true,
             ..Settings::default()
         };
         Self::with_world(world, Layout::default(), ToolState::default(), settings)
@@ -1686,6 +1788,7 @@ impl MassifApp {
                     self.has_map = true;
                     match path {
                         Some(p) => {
+                            self.sample = None;
                             self.remember(p);
                             self.say(ctx, tr!("Opened “{name}” in {secs:.1} s", name, secs), false, None);
                             self.task_done(ctx, Cue::Ready, tr!("Map opened"), &name, secs);
@@ -1696,6 +1799,15 @@ impl MassifApp {
                             // Its relief from a template: on the Terrain side.
                             if let Some(t) = self.after_create.take() {
                                 self.start_terrain(t);
+                                // A sample: its relief built at once.
+                                if self.sample == Some(SampleStage::Making)
+                                    && let Some(graph) = self.doc.world.meta.graph.clone()
+                                {
+                                    self.graph.start_build(ctx, &mut self.doc, &graph, None);
+                                    self.sample = Some(SampleStage::Building);
+                                } else {
+                                    self.sample = None;
+                                }
                             }
                         }
                     }
@@ -2067,12 +2179,15 @@ impl MassifApp {
             if icon(ui, Icon::FolderOpen, tr!("Open (⌘O)"), !busy) {
                 self.request(&ctx, Pending::Open(None));
             }
+            let save_from = ui.cursor().min.x;
             if icon(ui, Icon::Save, tr!("Save (⌘S)"), !busy) {
                 self.save(&ctx, false);
             }
             if icon(ui, Icon::Package, tr!("Export to Minecraft (⌘E)"), !busy) {
                 self.open_export_dialog();
             }
+            let commands = Rect::from_x_y_ranges(save_from..=ui.cursor().min.x - ui.spacing().item_spacing.x, ui.max_rect().y_range());
+            crate::tour::mark(&ctx, crate::tour::Target::SaveExport, commands);
             ui.separator();
             if icon(ui, Icon::Undo2, tr!("Undo (⌘Z)"), self.doc.history.can_undo()) {
                 self.undo(&ctx);
@@ -2193,6 +2308,7 @@ impl MassifApp {
             Command::Settings => self.dialog = Some(Dialog::Preferences(PrefsSection::Appearance)),
             Command::ResetWorkspaces => self.layout = Layout::default(),
             Command::Help => self.dialog = Some(Dialog::Help(crate::help::HelpState::default())),
+            Command::Tour => self.take_the_tour(ctx),
             Command::Shortcuts => {
                 self.dialog = Some(Dialog::Help(crate::help::HelpState {
                     topic: crate::help::topic_index("Shortcuts"),
@@ -2225,7 +2341,7 @@ impl MassifApp {
             // The two sides of Massif: the map editor (WorldPainter's) and
             // the terrain generator (Gaea's).
             let terrain = self.layout.terrain();
-            egui::Frame::new()
+            let sides = egui::Frame::new()
                 .fill(pal.panel)
                 .stroke(Stroke::new(1.0, pal.border))
                 .corner_radius(theme::PILL)
@@ -2251,6 +2367,7 @@ impl MassifApp {
                         }
                     });
                 });
+            crate::tour::mark(ui.ctx(), crate::tour::Target::Sides, sides.response.rect);
             ui.add_space(4.0);
             // A segmented control: the workspaces of this side in one pill.
             let mut remove = None;
@@ -2492,6 +2609,7 @@ impl MassifApp {
 
     fn area(&mut self, ui: &mut Ui, frame: &eframe::Frame, id: AreaId, editor: EditorKind, rect: Rect, shown: &HashSet<EditorKind>) {
         let pal = Palette::of(ui);
+        crate::tour::mark(ui.ctx(), crate::tour::Target::Editor(editor), rect);
         let painter = ui.painter_at(rect.expand(1.0));
         // A card: its title and commands along its top, on the card itself.
         painter.rect_filled(rect, theme::CARD_RADIUS, pal.panel);
@@ -3879,7 +3997,10 @@ impl MassifApp {
         }
         self.packs(&ctx);
         self.handle_close(&ctx);
-        self.shortcuts(&ctx);
+        // The tour takes the keys while it is shown.
+        if self.tour.is_none() {
+            self.shortcuts(&ctx);
+        }
         self.menu_bar_commands(&ctx);
         self.system_quit(&ctx);
         self.map_cache.sync_generation(self.doc.generation);
@@ -3919,6 +4040,7 @@ impl MassifApp {
 
         step("the dialogs");
         self.dialogs(&ctx);
+        self.tour_ui(&ctx);
         self.autosave_tick(&ctx);
 
         let dirty = self.doc.take_dirty();
@@ -10593,5 +10715,149 @@ mod tests {
             *ratio = 0.25;
         }
         assert_ne!(root, layout.workspaces[0].root);
+    }
+
+    /// An app as at the very first start: settings never saved, so the
+    /// tour wanted; a map open, in a window of `size`.
+    fn first_run(theme: ThemeChoice, size: egui::Vec2) -> egui_kittest::Harness<'static, MassifApp> {
+        egui_kittest::Harness::builder()
+            .with_size(size)
+            .with_pixels_per_point(std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0))
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_eframe(move |cc| {
+                theme::install(&cc.egui_ctx);
+                let world = generate(&GenParams { tiles_x: 8, tiles_z: 8, landform: Landform::Islands, ..GenParams::default() });
+                let mut app = MassifApp::for_tests(world);
+                app.settings.theme = theme;
+                app.settings.tour_done = false;
+                app.tour_wanted = true;
+                app
+            })
+    }
+
+    /// The tour shows on the first run, goes step by step, and once skipped
+    /// is marked done: the next start, from the settings saved, has none.
+    /// Settings saved by a version before the tour count as done.
+    #[test]
+    fn the_tour_shows_on_the_first_run_only() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = first_run(ThemeChoice::Light, vec2(1600.0, 1000.0));
+        h.run_steps(4);
+        assert_eq!(h.state().tour.as_ref().map(|t| t.title()), Some("Welcome to Massif"));
+        h.get_by_label("Next").click();
+        h.run_steps(3);
+        assert_eq!(h.state().tour.as_ref().map(|t| t.step), Some(1));
+        h.get_by_label("Back").click();
+        h.run_steps(2);
+        assert_eq!(h.state().tour.as_ref().map(|t| t.step), Some(0));
+        h.get_by_label("Skip tour").click();
+        h.run_steps(2);
+        assert!(h.state().tour.is_none(), "skipped");
+        assert!(h.state().settings.tour_done, "skipping marks it done");
+        // The next start reads the settings saved.
+        let saved: Settings = serde_json::from_str(&serde_json::to_string(&h.state().settings).unwrap()).unwrap();
+        assert!(saved.tour_done);
+        // Settings from before the tour: someone who knows Massif.
+        let old: Settings = serde_json::from_str(r#"{"theme":"Dark","recent":[]}"#).unwrap();
+        assert!(old.tour_done);
+        // The very first settings: not done.
+        assert!(!Settings::default().tour_done);
+    }
+
+    /// Escape skips; "Don't show again" unticked leaves the tour for the
+    /// next start; Done at the last step ends it; Help ▸ Take the tour
+    /// shows it again.
+    #[test]
+    fn the_tour_ends_as_asked() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = first_run(ThemeChoice::Dark, vec2(1600.0, 1000.0));
+        h.run_steps(4);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        assert!(h.state().tour.is_none() && h.state().settings.tour_done, "Escape skips");
+        let ctx = h.ctx.clone();
+        h.state_mut().command(&ctx, Command::Tour);
+        h.run_steps(3);
+        assert!(h.state().tour.is_some(), "Help ▸ Take the tour");
+        h.get_by_label("Don't show again").click();
+        for _ in 0..crate::tour::STEP_COUNT - 1 {
+            h.get_by_label("Next").click();
+            h.run_steps(2);
+        }
+        assert_eq!(h.state().tour.as_ref().map(|t| t.title()), Some("Save and export"));
+        h.get_by_label("Done").click();
+        h.run_steps(2);
+        assert!(h.state().tour.is_none());
+        assert!(!h.state().settings.tour_done, "shown again at the next start");
+    }
+
+    /// Every step of the tour, for the eye (MASSIF_SNAPSHOT_DIR): in a
+    /// common window and a small one, light and dark.
+    #[test]
+    fn tour_snapshots() {
+        use egui_kittest::kittest::Queryable;
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        for (size_name, size) in [("1440", vec2(1440.0, 900.0)), ("1024", vec2(1024.0, 680.0))] {
+            for theme in [ThemeChoice::Light, ThemeChoice::Dark] {
+                let mut h = first_run(theme, size);
+                h.run_steps(6);
+                for k in 0..crate::tour::STEP_COUNT {
+                    // Past the light's glide.
+                    for _ in 0..30 {
+                        h.step();
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(350));
+                    h.run_steps(3);
+                    let name = format!("tour-{size_name}-{}-{}.png", if theme == ThemeChoice::Dark { "dark" } else { "light" }, k + 1);
+                    h.render().unwrap().save(dir.join(name)).unwrap();
+                    if k + 1 < crate::tour::STEP_COUNT {
+                        h.get_by_label("Next").click();
+                    }
+                }
+            }
+        }
+    }
+
+    /// A sample of the home screen opens in one click: its relief built
+    /// from its template, shown on the World side, with nothing to save;
+    /// the tour of a first run waits for it.
+    #[test]
+    fn a_sample_opens_with_its_relief() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = first_run(ThemeChoice::Light, vec2(1440.0, 900.0));
+        h.state_mut().has_map = false;
+        h.state_mut().open_home(Page::NewMap);
+        h.run_steps(3);
+        assert!(h.state().tour.is_none() && h.state().tour_wanted, "no tour over the home screen");
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            h.render().unwrap().save(dir.join("home-samples.png")).unwrap();
+        }
+        let started = std::time::Instant::now();
+        h.get_by_label("Alpine range").click();
+        h.run_steps(2);
+        while h.state().sample.is_some() || !h.state().jobs.is_empty() {
+            assert!(started.elapsed().as_secs() < 120, "the sample was not made");
+            assert!(h.state().tour.is_none(), "the tour waits for the sample");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let took = started.elapsed().as_secs_f32();
+        h.run_steps(3);
+        let app = h.state();
+        eprintln!("sample made in {took:.2} s");
+        assert_eq!(app.doc.world.meta.name, "Alpine range");
+        assert!(!app.layout.terrain(), "on the World side");
+        assert!(!app.doc.is_modified(), "nothing to save");
+        let dim = app.doc.dimension();
+        let heights: Vec<f32> = (0..16).flat_map(|i| (0..16).map(move |j| (i * 48 - 384, j * 48 - 384))).filter_map(|(x, z)| massif_core::ops::height_at(dim, 0, x, z, massif_core::ops::Surface::Top)).collect();
+        let (lo, hi) = heights.iter().fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+        assert!(hi - lo > 10.0, "relief: {lo} … {hi}");
+        assert!(app.tour.is_some(), "then the tour of the first run");
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            h.render().unwrap().save(dir.join("sample-opened.png")).unwrap();
+        }
     }
 }

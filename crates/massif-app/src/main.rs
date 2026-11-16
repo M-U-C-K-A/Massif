@@ -48,6 +48,7 @@ mod startup;
 mod terrain_view;
 mod theme;
 mod tools;
+mod tour;
 mod update;
 mod versions;
 mod view3d;

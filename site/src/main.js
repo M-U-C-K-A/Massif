@@ -49,15 +49,6 @@
   const mine = os && document.querySelector(`.os-card[data-os="${os}"]`);
   if (mine) { mine.classList.add('mine'); mine.parentElement.prepend(mine); }
 
-  // Every version, when the site was built without GitHub's answer.
-  const versions = document.querySelector('.versions[data-empty] .versions-list');
-  if (versions) {
-    const repo = document.querySelector('.versions-head a')?.href.replace(/\/releases$/, '').replace('https://github.com/', '');
-    fetch(`https://api.github.com/repos/${repo}/releases?per_page=50`).then((r) => r.json()).then((list) => {
-      versions.innerHTML = list.filter((r) => !r.draft && !r.prerelease).map((r) => `<details class="version"><summary><span class="v-name">${r.tag_name.replace(/^v/, '')}</span><span class="v-date">${new Date(r.published_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</span></summary><div class="v-body"><div class="v-files">${r.assets.map((a) => `<a class="file-pill" href="${a.browser_download_url}">${a.name}<span>${Math.round(a.size / 1e6)} MB</span></a>`).join('')}</div><a class="v-link" href="${r.html_url}" rel="noopener">On GitHub</a></div></details>`).join('');
-    }).catch(() => {});
-  }
-
   // Gallery.
   const box = document.querySelector('.lightbox');
   if (box) {

@@ -49,6 +49,8 @@ pub enum Command {
     ResetWorkspaces,
     Help,
     Shortcuts,
+    /// The guided tour of the editor.
+    Tour,
     HomeScreen,
     About,
 }
@@ -260,6 +262,7 @@ pub fn menus(state: &State) -> Vec<Menu> {
     let help = vec![
         item(Command::Help, Icon::BookOpen, tr!("Massif Help"), free),
         item(Command::Shortcuts, Icon::Keyboard, tr!("Keyboard shortcuts"), free),
+        item(Command::Tour, Icon::Compass, tr!("Take the tour"), free),
         Entry::Separator,
         item(Command::HomeScreen, Icon::House, tr!("Home screen"), map),
         item(Command::About, Icon::Info, tr!("About Massif"), free),

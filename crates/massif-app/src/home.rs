@@ -154,6 +154,8 @@ pub enum HomeAction {
     /// Take a map off the list of recent ones.
     Forget(PathBuf),
     Reveal(PathBuf),
+    /// Open a sample map: made from this template, its relief built.
+    Sample(Template),
     /// Back to the map that was open.
     Back,
     Settings,
@@ -245,6 +247,32 @@ pub struct Home {
     /// How tall what is written in the middle was last laid out: lifted
     /// when it would not fit under the top margin.
     content_height: f32,
+    /// The samples' pictures, and those being drawn.
+    sample_pictures: HashMap<Template, TextureHandle>,
+    sample_drawing: Option<Receiver<(Template, egui::ColorImage)>>,
+}
+
+/// The sample maps the home screen offers: made from templates of the
+/// terrain generator when one is opened, so that none is shipped.
+pub const SAMPLES: [Template; 3] = [Template::Alpine, Template::Archipelago, Template::FloatingMountains];
+
+/// The side of a sample map, in blocks.
+const SAMPLE_SIDE: i32 = 768;
+
+/// The settings a sample map is made with: always the same, a flat map
+/// whose relief the template builds.
+pub fn sample_params(t: Template) -> GenParams {
+    let mut p = GenParams {
+        name: crate::i18n::tr_name(t.label()).to_owned(),
+        seed: 20_240_611 + t as i64,
+        tiles_x: SAMPLE_SIDE / 128,
+        tiles_z: SAMPLE_SIDE / 128,
+        ..GenParams::default()
+    };
+    p.landform = Landform::Flat;
+    p.level = None;
+    p.flat_height = p.sea_level as f32 + 1.0;
+    p
 }
 
 impl Home {
@@ -267,6 +295,8 @@ impl Home {
             update: None,
             logo: None,
             content_height: 0.0,
+            sample_pictures: HashMap::new(),
+            sample_drawing: None,
         }
     }
 
@@ -416,6 +446,13 @@ impl Home {
             *action = Some(HomeAction::Import);
         }
         ui.add_space(20.0);
+        ui.horizontal(|ui| {
+            ui.add_space(10.0);
+            ui.label(RichText::new(tr!("Samples")).size(11.5).color(pal.weak));
+        });
+        ui.add_space(4.0);
+        self.sample_rows(ui, action);
+        ui.add_space(16.0);
         ui.horizontal(|ui| {
             ui.add_space(10.0);
             ui.label(RichText::new(tr!("Recent maps")).size(11.5).color(pal.weak));
@@ -1220,6 +1257,85 @@ fn recent_row(ui: &mut Ui, path: &Path, modified: Option<Option<SystemTime>>) ->
     ui.painter().text(rect.left_center() + vec2(34.0, 0.0), Align2::LEFT_CENTER, name, font, ink);
     ui.painter().text(rect.right_center() - vec2(10.0, 0.0), Align2::RIGHT_CENTER, age, FontId::proportional(11.5), pal.weak);
     response.on_hover_text(path.display().to_string())
+}
+
+impl Home {
+    /// The sample maps, one row each: a picture of the land, its name, its
+    /// size. Their pictures are drawn once, on a thread of their own (in
+    /// the frame for tests).
+    fn sample_rows(&mut self, ui: &mut Ui, action: &mut Option<HomeAction>) {
+        if let Some(rx) = &self.sample_drawing {
+            loop {
+                match rx.try_recv() {
+                    Ok((t, image)) => {
+                        let texture = ui.ctx().load_texture(format!("sample {t:?}"), image, egui::TextureOptions::LINEAR);
+                        self.sample_pictures.insert(t, texture);
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        self.sample_drawing = None;
+                        break;
+                    }
+                }
+            }
+        }
+        if self.sample_pictures.len() < SAMPLES.len() && self.sample_drawing.is_none() {
+            let (tx, rx) = channel();
+            let reg = self.new_map.registry.clone();
+            let sea = self.new_map.params.sea_level as f32;
+            let ctx = ui.ctx().clone();
+            let draw = move || {
+                for t in SAMPLES {
+                    let side = SAMPLE_SIDE as f64;
+                    let extent = massif_core::graph::Extent { x0: -side / 2.0, z0: -side / 2.0, size: side, n: 64 };
+                    let image = crate::graph_editor::template_picture(t, &reg, sea, &extent, None).unwrap_or_else(|| egui::ColorImage::filled([1, 1], Color32::GRAY));
+                    if tx.send((t, image)).is_err() {
+                        return;
+                    }
+                    ctx.request_repaint();
+                }
+            };
+            if self.in_frame {
+                draw();
+                self.sample_drawing = Some(rx);
+                return self.sample_rows(ui, action);
+            }
+            if std::thread::Builder::new().name("massif home samples".into()).spawn(draw).is_ok() {
+                self.sample_drawing = Some(rx);
+            }
+        }
+        for t in SAMPLES {
+            if sample_row(ui, t, self.sample_pictures.get(&t)).clicked() {
+                *action = Some(HomeAction::Sample(t));
+            }
+        }
+    }
+}
+
+/// A sample map to open: its picture in a small rounded tile, its name and
+/// its size.
+fn sample_row(ui: &mut Ui, t: Template, picture: Option<&TextureHandle>) -> Response {
+    let pal = Palette::of(ui);
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, crate::i18n::tr_name(t.label())));
+    if response.hovered() {
+        ui.painter().rect_filled(rect, theme::TILE_RADIUS, theme::mix(sidebar_fill(&pal), pal.text, 0.05));
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    let tile = Rect::from_center_size(rect.left_center() + vec2(19.0, 0.0), vec2(22.0, 22.0));
+    match picture {
+        Some(p) => {
+            egui::Image::new((p.id(), tile.size())).corner_radius(theme::TILE_RADIUS / 2).paint_at(ui, tile);
+            ui.painter().rect_stroke(tile, theme::TILE_RADIUS / 2, Stroke::new(1.0, pal.border), StrokeKind::Inside);
+        }
+        None => {
+            ui.painter().rect_filled(tile, theme::TILE_RADIUS / 2, theme::mix(sidebar_fill(&pal), pal.text, 0.06));
+        }
+    }
+    let ink = theme::mix(pal.text, pal.weak, 0.2);
+    ui.painter().text(rect.left_center() + vec2(40.0, 0.0), Align2::LEFT_CENTER, crate::i18n::tr_name(t.label()), FontId::proportional(13.0), ink);
+    ui.painter().text(rect.right_center() - vec2(10.0, 0.0), Align2::RIGHT_CENTER, format!("{SAMPLE_SIDE}²"), FontId::proportional(11.5), pal.weak);
+    response.on_hover_text(crate::i18n::tr_name(t.description()))
 }
 
 /// What the list of recent maps shows while it is empty.

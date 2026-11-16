@@ -1799,7 +1799,6 @@ impl GraphEditor {
     }
 
     /// Whether a conversion is under way.
-    #[cfg(test)]
     pub fn converting(&self) -> bool {
         self.build.is_some()
     }

@@ -45,30 +45,11 @@ async function releases() {
       date: r.published_at,
       url: r.html_url,
       assets: r.assets.map((a) => ({ name: a.name, size: a.size, url: a.browser_download_url })),
-      notes: releaseSection(r.body || '', r.tag_name.replace(/^v/, '')),
     }));
   } catch (e) {
     console.warn(`No releases from GitHub (${e.message}): the download buttons link to the releases page.`);
     return [];
   }
-}
-
-// A release's own part of its notes: the release publishes the whole notes
-// file, newest first, so its section is the one named after it.
-function releaseSection(body, version) {
-  const parts = body.split(/^(?=## )/m);
-  const own = parts.find((p) => p.startsWith(`## New in ${version}`)) || parts.find((p) => p.startsWith('## In this version'));
-  return own ? own.replace(/^## .*\n/, '').trim() : '';
-}
-
-// What a release offers, by system, for the list of every version.
-function files(r) {
-  const mb = (a) => `${Math.round(a.size / 1e6)} MB`;
-  const kinds = [
-    ['Windows', /windows.*\.zip$/i], ['macOS', /^Massif-.*macos\.dmg$/i], ['macOS .zip', /^Massif-.*macos\.zip$/i],
-    ['Linux', /linux.*\.tar\.gz$/i], ['CLI for macOS', /^massif-cli-.*macos\.zip$/i],
-  ];
-  return kinds.map(([label, re]) => { const a = r.assets.find((x) => re.test(x.name)); return a && { label, url: a.url, size: mb(a), name: a.name }; }).filter(Boolean);
 }
 
 const cmp = (a, b) => {
@@ -205,7 +186,6 @@ const icon = {
   moon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/></svg>',
   menu: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 8h16M4 16h16"/></svg>',
   arrow: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg>',
-  heart: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20s-7.5-4.6-7.5-10A4.3 4.3 0 0 1 12 7.3 4.3 4.3 0 0 1 19.5 10c0 5.4-7.5 10-7.5 10Z"/></svg>',
   down: '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2v9M4 7.5 8 11.5l4-4M3 14h10"/></svg>',
 };
 
@@ -366,7 +346,7 @@ function gallery() {
   return shell({ title: 'Gallery', active: 'Gallery', body, description: 'Maps made and rendered in Massif.' });
 }
 
-function downloadPage(dl, rels) {
+function downloadPage(dl) {
   const notStart = docPages.find((p) => p.slug === 'if-massif-does-not-start');
   const card = (os, steps) => `<section class="os-card" id="${os}" data-os="${os}">
   <div class="os-head"><h2>${dl[os].label}</h2><span class="muted">${{ windows: 'Windows 10 and 11, 64-bit', macos: 'macOS 11 or later, Apple silicon and Intel', linux: 'x86-64' }[os]}</span></div>
@@ -374,7 +354,7 @@ function downloadPage(dl, rels) {
   <p class="file"><code>${esc(dl[os].file)}</code>${dl[os].size ? ` · ${dl[os].size}` : ''}</p>
   <ol class="steps">${steps}</ol>
 </section>`;
-  const body = `<div class="page mid">
+  const body = `<div class="page narrow">
   <header class="page-head"><p class="eyebrow">Download</p><h1>Get Massif${dl.version ? ` ${dl.version}` : ''}</h1><p class="lede">Free, for Windows, macOS and Linux. Massif reads the real Minecraft blocks from the game installed on your computer (official launcher, CurseForge, Prism); nothing from the game is included.</p>
   <p class="head-links"><a href="${dl.page}" rel="noopener">Release page ${icon.arrow}</a><a href="${url('/whats-new/')}">What's new ${icon.arrow}</a></p></header>
   <div class="os-cards">
@@ -387,25 +367,6 @@ function downloadPage(dl, rels) {
   ${card('linux', `<li>Extract the archive, then run <code>massif</code>.</li>
     <li>Massif draws with Vulkan or OpenGL: keep the graphics driver up to date.</li>`)}
   </div>
-  ${config.kofi ? `<section class="support">
-    <span class="support-icon">${icon.heart}</span>
-    <div><h2>Support Massif</h2><p>Massif is free and made in the open. If it helps your maps, a coffee on Ko-fi helps it grow.</p></div>
-    <a class="pill pill-ghost" href="${esc(config.kofi)}" rel="noopener">Support on Ko-fi ${icon.arrow}</a>
-  </section>` : ''}
-  <section class="versions" id="all-versions"${rels.length ? '' : ' data-empty'}>
-    <div class="versions-head"><h2>Every version</h2><a href="${REPO}/releases" rel="noopener">On GitHub ${icon.arrow}</a></div>
-    <div class="versions-list">${rels.map((r, i) => {
-      const fmt = new Date(r.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-      return `<details class="version"${i === 0 ? ' open' : ''}>
-        <summary><span class="v-name">${esc(r.version)}</span>${i === 0 ? '<span class="tag accent">Latest</span>' : ''}<span class="v-date">${fmt}</span></summary>
-        <div class="v-body">
-          <div class="v-files">${files(r).map((f) => `<a class="file-pill" href="${f.url}" title="${esc(f.name)}">${icon.down}${f.label}<span>${f.size}</span></a>`).join('')}</div>
-          ${r.notes ? `<details class="v-notes"><summary>Release notes</summary><div class="prose">${markdown(r.notes, '.github/RELEASE_NOTES.md')}</div></details>` : ''}
-          <a class="v-link" href="${r.url}" rel="noopener">Release ${esc(r.version)} on GitHub ${icon.arrow}</a>
-        </div>
-      </details>`;
-    }).join('')}</div>
-  </section>
   <section class="prose block">
     <h2 id="command-line">The command line</h2>
     <p><code>massif-cli</code> creates, inspects, verifies, imports and exports worlds without opening the editor. It comes with the Windows and Linux builds${dl.macos.cli ? `, and <a href="${dl.macos.cli}">separately for macOS</a>` : ', and separately for macOS'}.</p>
@@ -472,7 +433,7 @@ async function build() {
   if (hasGallery) write('/gallery/', gallery());
   fs.writeFileSync(path.join(out, 'assets/search.json'), JSON.stringify(searchIndex()));
   write('/whats-new/', whatsNew(notes, rels));
-  write('/download/', downloadPage(dl, rels.slice().sort((a, b) => cmp(b.version, a.version))));
+  write('/download/', downloadPage(dl));
   write('/faq/', faqPage());
   docPages.forEach((p, i) => write(p.path, guidePage(p, i)));
   write('/404.html', notFound());

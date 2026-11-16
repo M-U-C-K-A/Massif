@@ -10,6 +10,11 @@ The home screen opens with Massif. On the left are the ways in: **New map**, **F
 - **Seed**: the same seed always gives the same land.
 Press **Create map** (or `Enter`). A `.massif`, a `.world` or a height map dropped on the window opens too.
 
+**Samples**, on the left, opens a small map made from a template of the terrain generator (Alpine range, Archipelago, Floating mountains), its relief built in a few seconds, to explore at once.
+
+## The tour
+The first time a map is open, a short tour of six steps shows the window: the World and Terrain sides, the tools, Brush Settings, the 2D map, the 3D view, saving and exporting. **Next** and **Back** (or the arrow keys) move through it, **Skip tour** or `Esc` ends it. **Help ▸ Take the tour** shows it again.
+
 ## A real place
 **From a real place** on the home screen, or **File ▸ New World from a Real Place…**, makes a world of the relief of a place on the Earth; **Edit ▸ Relief of a Real Place…** puts one into the map open, into the selection by its weight or over the whole map.
 - **Source**: **Terrain Tiles**, the heights of the whole Earth, about 30 m apart, ocean floors included, downloaded as needed; or **A file** you downloaded: a GeoTIFF (its metres a pixel read from it), a 16-bit PNG or a raw `.r16` / `.r32` (say how many metres a pixel covers and what black and white stand for).

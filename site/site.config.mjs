@@ -8,7 +8,7 @@ export default {
   // Community links. Left empty, the footer shows them greyed out as
   // "soon". Ko-fi is linked from the site only, never from the repository.
   discord: '', // e.g. 'https://discord.gg/xxxxxxx'
-  kofi: 'https://ko-fi.com/mucka',
+  kofi: '', // e.g. 'https://ko-fi.com/xxxxxxx'
   // The site's own address once it has a domain (used for canonical links
   // and social cards), e.g. 'https://massif.example'. Empty: none written.
   url: '',
