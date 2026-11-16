@@ -61,6 +61,8 @@ struct Settings {
     /// Memory for what is kept decoded (the map's tiles and its images),
     /// in megabytes; 0: as much as it takes.
     memory_mb: u32,
+    /// How the dots of the loaders light while Massif works.
+    loader: crate::loader::Pattern,
     /// The home screen's picture moves (its dither, about once a second).
     animate_backdrop: bool,
     /// The home screen's pictures shown, by name: those not yet come first.
@@ -123,6 +125,7 @@ impl Default for Settings {
             volume: 0.6,
             notify: crate::notify::NotifyWhen::Background,
             memory_mb: 0,
+            loader: crate::loader::Pattern::Orbit,
             animate_backdrop: true,
             backdrops_seen: Vec::new(),
             developer: false,
@@ -424,6 +427,7 @@ impl MassifApp {
             tools.sculpt.tool = Tool::Build;
         }
         theme::set_accent(&cc.egui_ctx, settings.accent);
+        crate::loader::set_pattern(&cc.egui_ctx, settings.loader);
         theme::set_typeface(&cc.egui_ctx, settings.typeface);
         let mut app = Self::with_world(default_world(), layout, tools, settings);
         if let Some(render) = cc.storage.and_then(|s| eframe::get_value(s, "massif.render")) {
@@ -839,6 +843,25 @@ impl MassifApp {
                     self.settings.accent = rgb;
                     theme::set_accent(ctx, rgb);
                     crate::sounds::play(Cue::Select);
+                }
+            });
+            crate::widgets::row(ui, "Loader", |ui| {
+                // Each pattern alive in its tile, laid from the right.
+                ui.spacing_mut().item_spacing.x = 3.0;
+                for p in crate::loader::Pattern::ALL.iter().rev() {
+                    let (rect, tile) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
+                    let on = self.settings.loader == *p;
+                    if on || tile.hovered() {
+                        let fill = if on { theme::mix(pal.well(), pal.text, 0.08) } else { theme::mix(pal.well(), pal.text, 0.04) };
+                        ui.painter().rect(rect, theme::TILE_RADIUS, fill, Stroke::new(1.0, if on { pal.accent } else { pal.border }), egui::StrokeKind::Inside);
+                    }
+                    crate::loader::paint(ui, rect.shrink(5.0), *p);
+                    tile.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, p.label()));
+                    if tile.on_hover_text(p.label()).clicked() {
+                        self.settings.loader = *p;
+                        crate::loader::set_pattern(ctx, *p);
+                        crate::sounds::play(Cue::Select);
+                    }
                 }
             });
             crate::widgets::row(ui, "Animated home screen", |ui| {
@@ -2199,7 +2222,7 @@ impl MassifApp {
                     for &k in &running {
                         let job = &self.jobs[k];
                         card(ui, &mut |ui| {
-                            ui.spinner();
+                            crate::loader::loader(ui, 16.0);
                             ui.label(RichText::new(&job.label).size(12.5));
                             match &job.progress {
                                 Some(p) => {
@@ -2680,7 +2703,7 @@ impl MassifApp {
             modal(ctx, "busy").show(ctx, |ui| {
                 ui.set_width(360.0);
                 ui.horizontal(|ui| {
-                    ui.spinner();
+                    crate::loader::loader(ui, 16.0);
                     ui.label(RichText::new(label).bold());
                 });
                 if let Some(f) = progress {

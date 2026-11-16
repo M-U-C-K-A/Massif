@@ -122,7 +122,10 @@ their own:
 
 - **Appearance**: the theme, the accent colour (the colour of what is
   chosen, of the main buttons and of the home screen's art: eight colours, or
-  any other), the home screen's picture moving or still.
+  any other), the **Loader** shown while Massif works (eight grids of dots
+  lighting in patterns — Orbit, Ripple, Scan, Rain, Bars, Spiral, Sweep,
+  Twinkle — each alive in its tile, still with Reduce motion), the home
+  screen's picture moving or still.
 - **Accessibility**: **High contrast** — text black or white, muted text
   past 7 to 1 on the cards, lines and the edges of controls past 3 to 1, the
   accent darkened or lightened until it reads, links underlined, and the
@@ -219,7 +222,9 @@ removed.
 ## New worlds and export
 
 A new map (the home screen) takes a name, a size (width × depth, in
-multiples of 128 blocks, up to 65,536), its **height** — Minecraft's own (−64 to 320) or
+multiples of 128 blocks, up to 65,536: type any number, and once you press
+Enter or leave the field it becomes the nearest multiple, a note under it
+saying so — 5000 becomes 4,992), its **height** — Minecraft's own (−64 to 320) or
 taller, up to 512, 1024 or 2032 (the highest Minecraft allows), and as deep
 as −2032 — its land — a
 topography (flat, plains, hills, mountains, islands) with its relief height

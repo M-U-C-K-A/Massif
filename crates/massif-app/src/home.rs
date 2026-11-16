@@ -531,11 +531,13 @@ impl Home {
                 input_group(
                     ui,
                     "home size",
-                    &mut [Part::Int(&mut nm.width, 128..=65536, 64.0), Part::Text("×"), Part::Int(&mut nm.depth, 128..=65536, 64.0), Part::Text("blocks")],
+                    &mut [
+                        Part::Snapped(&mut nm.width, MAP_SIDES, 64.0, whole_tiles, "whole tiles of 128 blocks"),
+                        Part::Text("×"),
+                        Part::Snapped(&mut nm.depth, MAP_SIDES, 64.0, whole_tiles, "whole tiles of 128 blocks"),
+                        Part::Text("blocks"),
+                    ],
                 );
-                // Whole tiles only.
-                nm.width = (nm.width + 127) / 128 * 128;
-                nm.depth = (nm.depth + 127) / 128 * 128;
             });
             row(ui, "Height", &mut |ui| limits(ui, &mut nm.params.min_y, &mut nm.params.max_y));
             row(ui, "Land", &mut |ui| {
@@ -1252,6 +1254,14 @@ fn ago(t: std::time::SystemTime) -> String {
     }
 }
 
+/// The sides a new map may have, in blocks.
+const MAP_SIDES: std::ops::RangeInclusive<i32> = 128..=65536;
+
+/// A side of a map made whole tiles: the nearest multiple of 128 blocks.
+fn whole_tiles(v: i32) -> i32 {
+    ((v as f64 / 128.0).round() as i32 * 128).clamp(*MAP_SIDES.start(), *MAP_SIDES.end())
+}
+
 /// A setting of the new map: its name on the left (written on the
 /// picture), its controls after. Where the row is.
 fn setting(ui: &mut Ui, name: &str, add: &mut dyn FnMut(&mut Ui)) -> Rect {
@@ -1280,7 +1290,7 @@ fn limits(ui: &mut Ui, min_y: &mut i32, max_y: &mut i32) {
         *max_y = TOPS[k];
     }
     let mut bottom = *min_y;
-    input_group(ui, "build bottom", &mut [Part::Text("from Y"), Part::Int(&mut bottom, -2032..=-64, 16.0)]);
+    input_group(ui, "build bottom", &mut [Part::Text("from Y"), Part::Snapped(&mut bottom, -2032..=-64, 16.0, |v| (v as f64 / 16.0).round() as i32 * 16, "whole sections of 16 blocks")]);
     let (b, t) = massif_core::generate::build_limits(bottom, *max_y);
     *min_y = b;
     *max_y = t;
@@ -1426,7 +1436,7 @@ fn preview(ui: &mut Ui, nm: &mut NewMap, rect: Rect, in_frame: bool) {
         None => {
             let pal = Palette::of(ui);
             ui.painter().rect(rect, theme::CARD_RADIUS, pal.well(), Stroke::new(1.0, pal.border), StrokeKind::Inside);
-            ui.put(Rect::from_center_size(rect.center(), vec2(24.0, 24.0)), egui::Spinner::new());
+            crate::loader::paint(ui, Rect::from_center_size(rect.center(), vec2(24.0, 24.0)), crate::loader::pattern(ui.ctx()));
         }
     }
     // The centre: a cross, outlined to show on snow as on water.
@@ -1480,7 +1490,7 @@ fn template_preview(ui: &mut Ui, nm: &mut NewMap, t: Template, rect: Rect) {
         Some(id) => picture_tile(ui, rect, id, rect.size(), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))),
         None => {
             ui.painter().rect(rect, theme::CARD_RADIUS, pal.well(), Stroke::new(1.0, pal.border), StrokeKind::Inside);
-            ui.put(Rect::from_center_size(rect.center(), vec2(24.0, 24.0)), egui::Spinner::new());
+            crate::loader::paint(ui, Rect::from_center_size(rect.center(), vec2(24.0, 24.0)), crate::loader::pattern(ui.ctx()));
         }
     }
     ui.interact(rect, egui::Id::unique("home template preview"), Sense::hover()).on_hover_text("What the template's nodes make: the map is made on the Terrain side, from them.");
@@ -1830,6 +1840,61 @@ mod backdrop_tests {
         let img = nocturne(1600, 900, Color32::from_rgb(249, 115, 22), Color32::from_rgb(8, 8, 9));
         let mut out = std::fs::File::create(dir.join("massif-dusk.jpg")).unwrap();
         image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90).encode_image(&img).unwrap();
+    }
+
+    /// The size of a new map typed a key at a time: what shows is what was
+    /// typed, and the map keeps its size, until it is done (Enter); then it
+    /// is whole tiles, the nearest. Enter only ends the typing: the map is
+    /// not made. Renders the field and its note with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn typing_a_size_waits_for_enter() {
+        use egui_kittest::kittest::Queryable;
+        use egui::accesskit::Role;
+        let mut home = Home::new(massif_core::Registry::vanilla());
+        home.in_frame = false;
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1280.0, 800.0))
+            .with_pixels_per_point(std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|s| s.parse().ok()).unwrap_or(1.0))
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_ui_state(move |ui, (made, shown, home): &mut (bool, bool, Home)| {
+                // The app's fonts first, as the app has them when it starts.
+                if !*shown {
+                    crate::theme::install(ui.ctx());
+                    crate::theme::set_typeface(ui.ctx(), Default::default());
+                    *shown = true;
+                    return;
+                }
+                *made |= home.ui(ui, &[], None).is_some();
+            }, (false, false, home));
+        h.run();
+        let snapshots = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from);
+        for (typed, expected) in [("1024", 1024), ("1000", 1024), ("5000", 4992)] {
+            let width = h.get_all_by_role(Role::SpinButton).next().expect("the width").rect();
+            h.get_all_by_role(Role::SpinButton).next().unwrap().click();
+            h.run();
+            let before = h.state().2.new_map.width;
+            let field = |h: &egui_kittest::Harness<'_, (bool, bool, Home)>| h.get_all_by_role(Role::TextInput).find(|n| n.rect().intersects(width)).map(|n| n.value().unwrap_or_default()).expect("the width typed in");
+            h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+            h.run();
+            for k in 1..=typed.len() {
+                h.get_all_by_role(Role::TextInput).find(|n| n.rect().intersects(width)).unwrap().type_text(&typed[k - 1..k]);
+                h.run();
+                assert_eq!(field(&h), typed[..k], "the field shows what was typed");
+                assert_eq!(h.state().2.new_map.width, before, "the size waits while {} is typed", &typed[..k]);
+            }
+            h.key_press(egui::Key::Enter);
+            h.run();
+            assert_eq!(h.state().2.new_map.width, expected, "{typed} became whole tiles");
+            assert!(!h.state().0, "Enter ended the typing, and did not make the map");
+            assert!(h.get_all_by_role(Role::TextInput).all(|n| !n.rect().intersects(width)), "no longer typed in");
+            if let Some(dir) = &snapshots
+                && typed == "5000"
+            {
+                std::fs::create_dir_all(dir).unwrap();
+                h.render().unwrap().save(dir.join("new-map-size-snapped.png")).unwrap();
+            }
+        }
     }
 
     /// Every picture of the folder decodes, and dithers into frames of a

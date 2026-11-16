@@ -1130,7 +1130,7 @@ impl GraphEditor {
                     let hint = if self.pinned.is_some() { "V: back to the output" } else { "V: view the selected node" };
                     ui.label(RichText::new(hint).size(11.0).color(Color32::from_white_alpha(150)));
                     if self.received != self.revision || self.build.is_some() {
-                        ui.spinner();
+                        crate::loader::loader(ui, 16.0);
                     }
                 });
             });
@@ -1485,7 +1485,7 @@ impl GraphEditor {
         ui.horizontal(|ui| {
             ui.add_space(6.0);
             if let Some(b) = &self.build {
-                ui.spinner();
+                crate::loader::loader(ui, 16.0);
                 let (done, total) = (b.progress.done.load(Ordering::Relaxed), b.progress.total.load(Ordering::Relaxed));
                 let node = graph.node(b.progress.node.load(Ordering::Relaxed)).map(|n| n.kind.label()).unwrap_or("");
                 let fraction = if total == 0 { 0.0 } else { done as f32 / total as f32 };
@@ -1589,7 +1589,7 @@ impl GraphEditor {
                 self.revision += 1;
             }
             if self.received != self.revision {
-                ui.spinner();
+                crate::loader::loader(ui, 16.0);
             } else if self.preview_ms > 0.0 {
                 ui.label(RichText::new(format!("{:.0} ms", self.preview_ms)).size(11.5).color(pal.weak));
             }

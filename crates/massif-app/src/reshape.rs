@@ -314,8 +314,8 @@ impl ReshapeForm {
                         }
                         painter.rect_stroke(rect, theme::TILE_RADIUS, egui::Stroke::new(1.0, pal.border), egui::StrokeKind::Inside);
                         if working && k == 1 {
-                            let spinner = egui::Rect::from_center_size(rect.right_top() + vec2(-14.0, 14.0), vec2(14.0, 14.0));
-                            ui.put(spinner, egui::Spinner::new().size(14.0));
+                            let spinner = egui::Rect::from_center_size(rect.right_top() + vec2(-15.0, 15.0), vec2(16.0, 16.0));
+                            crate::loader::paint(ui, spinner, crate::loader::pattern(ui.ctx()));
                         }
                     });
                 }

@@ -527,6 +527,9 @@ pub enum Part<'a> {
     Text(&'a str),
     /// A whole number to type or drag: its range, how fast it drags.
     Int(&'a mut i32, RangeInclusive<i32>, f64),
+    /// The same, made one of the values it may be once typed in: the
+    /// nearest (`snap`), and why, shown a moment under it when it changed.
+    Snapped(&'a mut i32, RangeInclusive<i32>, f64, fn(i32) -> i32, &'a str),
     /// A line of text, this wide.
     Edit(&'a mut String, f32),
     /// A button showing an icon, with what it does.
@@ -568,6 +571,150 @@ pub fn drag_enabled(ui: &mut Ui, enabled: bool, d: egui::DragValue<'_>) -> Respo
     ui.add_enabled_ui(enabled, |ui| drag(ui, d)).inner
 }
 
+/// The nearest value a number may be, and why.
+type Snap<'a> = (fn(i32) -> i32, &'a str);
+
+/// How long what a number became is shown under it.
+const NOTE_SECS: f64 = 2.6;
+
+/// A whole number typed as written: what is typed, a key at a time, stays
+/// as it is typed (no completion, no bound, no rounding) until it is done
+/// — Enter, Tab, or a click elsewhere; Escape drops it. Only then is it
+/// read, kept in `range`, and made the nearest value `snap` allows; when
+/// that is not what was typed, a note under it says what it became, a
+/// moment. Dragged sideways, it changes by `speed` a point. Returns
+/// whether the value changed.
+fn number(ui: &mut Ui, rect: Rect, id: egui::Id, value: &mut i32, range: RangeInclusive<i32>, speed: f64, snap: Option<Snap>) -> bool {
+    let pal = Palette::of(ui);
+    let font = FontId::proportional(12.5);
+    let edit_id = id.with("edit");
+    let mut changed = false;
+    let fit = |v: i64| -> i32 {
+        let v = v.clamp(*range.start() as i64, *range.end() as i64) as i32;
+        snap.map_or(v, |(s, _)| s(v).clamp(*range.start(), *range.end()))
+    };
+    let editing: Option<String> = ui.data(|d| d.get_temp(id));
+    if let Some(mut buffer) = editing {
+        let mut child = bare(ui, rect);
+        let edit = child.add(TextEdit::singleline(&mut buffer).id(edit_id).frame(egui::Frame::NONE).font(font.clone()).align(Align2::CENTER_CENTER).desired_width(rect.width()));
+        if ui.data(|d| d.get_temp::<bool>(id.with("focus")).is_none()) {
+            edit.request_focus();
+            ui.data_mut(|d| d.insert_temp(id.with("focus"), true));
+            // The caret where the number was clicked; all of it chosen
+            // when come to with Tab, so that what is typed replaces it.
+            let at: Option<egui::Pos2> = ui.data(|d| d.get_temp(id.with("click")));
+            let galley = ui.painter().layout_no_wrap(buffer.clone(), font.clone(), pal.text);
+            let range = match at {
+                Some(p) => egui::text::CCursorRange::one(galley.cursor_from_pos(vec2(p.x - (rect.center().x - galley.size().x / 2.0), galley.size().y / 2.0))),
+                None => egui::text::CCursorRange::two(galley.begin(), galley.end()),
+            };
+            let mut state = TextEdit::load_state(ui.ctx(), edit_id).unwrap_or_default();
+            state.cursor.set_char_range(Some(range));
+            state.store(ui.ctx(), edit_id);
+        }
+        let (enter, escape) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
+        if edit.lost_focus() || enter || escape {
+            // The key ends the typing, and does nothing else (Enter does
+            // not also make the map).
+            ui.input_mut(|i| {
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Enter);
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
+            });
+            ui.data_mut(|d| {
+                d.remove::<String>(id);
+                d.remove::<bool>(id.with("focus"));
+                d.remove::<egui::Pos2>(id.with("click"));
+            });
+            if !escape && let Some(typed) = parse_whole(&buffer) {
+                let v = fit(typed);
+                if v as i64 != typed {
+                    let why = if typed > *range.end() as i64 && v == *range.end() {
+                        "the most it may be".to_owned()
+                    } else if typed < *range.start() as i64 && v == *range.start() {
+                        "the least it may be".to_owned()
+                    } else {
+                        snap.map_or(String::new(), |(_, why)| why.to_owned())
+                    };
+                    let now = ui.input(|i| i.time);
+                    ui.data_mut(|d| d.insert_temp(id.with("note"), (now, format!("{typed} → {v}  ·  {why}"))));
+                }
+                if v != *value {
+                    *value = v;
+                    changed = true;
+                }
+            }
+        } else {
+            ui.data_mut(|d| d.insert_temp(id, buffer));
+        }
+    } else {
+        let response = ui.interact(rect, id, Sense::click_and_drag());
+        if response.drag_started() {
+            ui.data_mut(|d| d.insert_temp(id.with("drag"), *value as f64));
+        }
+        if response.dragged() {
+            let fine = ui.input(|i| i.modifiers.shift);
+            let raw: f64 = ui.data(|d| d.get_temp(id.with("drag"))).unwrap_or(*value as f64) + response.drag_delta().x as f64 * speed * if fine { 0.1 } else { 1.0 };
+            let raw = raw.clamp(*range.start() as f64, *range.end() as f64);
+            ui.data_mut(|d| d.insert_temp(id.with("drag"), raw));
+            let v = fit(raw.round() as i64);
+            if v != *value {
+                *value = v;
+                changed = true;
+            }
+        } else if response.clicked() || (response.has_focus() && !response.dragged()) {
+            // Clicked, or come to with Tab: typed in.
+            let at = response.interact_pointer_pos().filter(|_| response.clicked());
+            ui.data_mut(|d| {
+                d.insert_temp(id, value.to_string());
+                if let Some(p) = at {
+                    d.insert_temp(id.with("click"), p);
+                }
+            });
+            ui.ctx().request_repaint();
+        }
+        if response.hovered() || response.dragged() {
+            ui.ctx().set_cursor_icon(CursorIcon::ResizeHorizontal);
+        }
+        response.widget_info(|| egui::WidgetInfo::drag_value(ui.is_enabled(), *value as f64));
+        if ui.is_rect_visible(rect) {
+            ui.painter().text(rect.center(), Align2::CENTER_CENTER, value.to_string(), font, if ui.is_enabled() { pal.text } else { pal.weak });
+        }
+    }
+    // What a number typed became, a moment, under it.
+    if let Some((at, note)) = ui.data(|d| d.get_temp::<(f64, String)>(id.with("note"))) {
+        let age = ui.input(|i| i.time) - at;
+        if age >= NOTE_SECS {
+            ui.data_mut(|d| d.remove::<(f64, String)>(id.with("note")));
+        } else {
+            let still = theme::reduce_motion(ui.ctx());
+            let fade = if still { 1.0 } else { ((NOTE_SECS - age) / 0.4).min(1.0) as f32 };
+            let layer = egui::LayerId::new(egui::Order::Tooltip, id.with("note layer"));
+            let painter = ui.ctx().layer_painter(layer);
+            let galley = painter.layout_no_wrap(note, FontId::proportional(11.5), pal.text);
+            let pill = Rect::from_min_size(pos2(rect.left() - 4.0, rect.bottom() + 8.0), galley.size() + vec2(18.0, 10.0));
+            let back = theme::mix(pal.panel.to_opaque(), pal.text, if pal.dark { 0.08 } else { 0.0 });
+            painter.rect_filled(pill.translate(vec2(0.0, 2.0)).expand(1.0), theme::PILL, Color32::from_black_alpha(if pal.dark { 90 } else { 28 }).gamma_multiply(fade));
+            painter.rect(pill, theme::PILL, back.gamma_multiply(fade), Stroke::new(1.0, pal.control_border().gamma_multiply(fade)), StrokeKind::Inside);
+            painter.galley(pill.min + vec2(9.0, 5.0), galley, pal.text.gamma_multiply(fade));
+            if still {
+                ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(NOTE_SECS - age));
+            } else if age < NOTE_SECS - 0.4 {
+                ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(NOTE_SECS - 0.4 - age));
+            } else {
+                ui.ctx().request_repaint();
+            }
+        }
+    }
+    changed
+}
+
+/// A whole number as people write it: `1024`, `1 024`, `1,024`, `-64`, or
+/// `1024.4` (rounded).
+fn parse_whole(s: &str) -> Option<i64> {
+    let s: String = s.chars().filter(|c| !c.is_whitespace() && !matches!(c, ',' | '_' | '\'' | '\u{202f}')).collect();
+    s.parse::<i64>().ok().or_else(|| s.parse::<f64>().ok().filter(|v| v.is_finite()).map(|v| v.round() as i64))
+}
+
 /// Parts joined in one outline, as one control. Returns whether a value
 /// changed, and the index of a button clicked.
 pub fn input_group(ui: &mut Ui, id: &str, parts: &mut [Part]) -> (bool, Option<usize>) {
@@ -577,7 +724,7 @@ pub fn input_group(ui: &mut Ui, id: &str, parts: &mut [Part]) -> (bool, Option<u
         .iter()
         .map(|p| match p {
             Part::Text(t) => ui.painter().layout_no_wrap((*t).to_owned(), font.clone(), pal.weak).size().x + 24.0,
-            Part::Int(..) => 66.0,
+            Part::Int(..) | Part::Snapped(..) => 66.0,
             Part::Edit(_, w) => *w,
             Part::Button(..) => 32.0,
         })
@@ -596,8 +743,10 @@ pub fn input_group(ui: &mut Ui, id: &str, parts: &mut [Part]) -> (bool, Option<u
                 painter.text(seg.center(), Align2::CENTER_CENTER, *t, font.clone(), pal.weak);
             }
             Part::Int(v, range, speed) => {
-                let mut child = bare(ui, seg.shrink2(vec2(4.0, 3.0)));
-                changed |= drag(&mut child, egui::DragValue::new(*v).range(range.clone()).speed(*speed)).changed();
+                changed |= number(ui, seg.shrink2(vec2(4.0, 3.0)), egui::Id::unique((id, k, "number")), v, range.clone(), *speed, None);
+            }
+            Part::Snapped(v, range, speed, snap, why) => {
+                changed |= number(ui, seg.shrink2(vec2(4.0, 3.0)), egui::Id::unique((id, k, "number")), v, range.clone(), *speed, Some((*snap, *why)));
             }
             Part::Edit(text, _) => {
                 let mut child = bare(ui, seg.shrink2(vec2(2.0, 3.0)));

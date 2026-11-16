@@ -708,7 +708,7 @@ pub fn custom_brushes_panel(ui: &mut Ui, tools: &mut ToolState, library: &mut Br
     let mut feedback = None;
     if !library.is_loaded() {
         ui.horizontal(|ui| {
-            ui.spinner();
+            crate::loader::loader(ui, 16.0);
             hint(ui, "Loading the brushes…");
         });
         return None;
@@ -2586,7 +2586,7 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
             blocks.load(&ctx, jar.clone());
         }
         if blocks.is_loading() {
-            ui.spinner();
+            crate::loader::loader(ui, 16.0);
         }
     });
     hint(

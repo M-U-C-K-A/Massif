@@ -260,7 +260,7 @@ impl AnalysisView {
                 let busy = self.running.is_some();
                 if busy {
                     ui.add_space(6.0);
-                    ui.add(egui::Spinner::new().size(16.0));
+                    crate::loader::loader(ui, 16.0);
                 } else if icon_button(ui, pal, Icon::RotateCw, "Check the map again").clicked() {
                     *choice = Choice::Again;
                 }
@@ -1015,7 +1015,7 @@ fn progress(ui: &mut Ui, pal: &Palette, steps: &Steps) {
     let (done, total) = (steps.done.load(Ordering::Relaxed), steps.total.load(Ordering::Relaxed));
     ui.add_space(120.0);
     ui.vertical_centered(|ui| {
-        ui.add(egui::Spinner::new().size(22.0));
+        crate::loader::loader(ui, 24.0);
         ui.add_space(16.0);
         ui.label(RichText::new("Reading every block of the map").size(14.5).medium());
         ui.add_space(4.0);

@@ -19,6 +19,7 @@ mod icons;
 mod jobs;
 mod layers;
 mod layout;
+mod loader;
 mod map_render;
 mod map_view;
 mod menu;
