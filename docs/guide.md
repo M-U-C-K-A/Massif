@@ -142,8 +142,10 @@ their own:
   chosen, of the main buttons and of the home screen's art: eight colours, or
   any other), the **Loader** shown while Massif works (eight grids of dots
   lighting in patterns — Orbit, Ripple, Scan, Rain, Bars, Spiral, Sweep,
-  Twinkle — each alive in its tile, still with Reduce motion), the home
-  screen's picture moving or still.
+  Twinkle — each alive in its tile, still with Reduce motion), the **Tool
+  icons** (**Line**, the default, in the style of the interface's other
+  icons, or **Classic**, Massif's first drawings), the home screen's picture
+  moving or still.
 - **Accessibility**: **High contrast** — text black or white, muted text
   past 7 to 1 on the cards, lines and the edges of controls past 3 to 1, the
   accent darkened or lightened until it reads, links underlined, and the

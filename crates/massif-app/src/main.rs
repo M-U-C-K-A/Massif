@@ -19,6 +19,7 @@ mod graph_editor;
 mod help;
 mod home;
 mod icons;
+mod icons_classic;
 mod jobs;
 mod keymap;
 mod keys_page;

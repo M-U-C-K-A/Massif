@@ -66,6 +66,8 @@ struct Settings {
     memory_mb: u32,
     /// How the dots of the loaders light while Massif works.
     loader: crate::loader::Pattern,
+    /// The tools' icons: Line (Lucide's style) or Classic.
+    tool_icons: crate::icons::IconStyle,
     /// The home screen's picture moves (its dither, about once a second).
     animate_backdrop: bool,
     /// The home screen's pictures shown, by name: those not yet come first.
@@ -151,6 +153,7 @@ impl Default for Settings {
             notify: crate::notify::NotifyWhen::Background,
             memory_mb: 0,
             loader: crate::loader::Pattern::Orbit,
+            tool_icons: crate::icons::IconStyle::Line,
             animate_backdrop: true,
             backdrops_seen: Vec::new(),
             developer: false,
@@ -508,6 +511,7 @@ impl MassifApp {
         crate::i18n::set_language(settings.language);
         theme::set_accent(&cc.egui_ctx, settings.accent);
         crate::loader::set_pattern(&cc.egui_ctx, settings.loader);
+        crate::icons::set_style(&cc.egui_ctx, settings.tool_icons);
         theme::set_typeface(&cc.egui_ctx, settings.typeface);
         let mut app = Self::with_world(default_world(), layout, tools, settings);
         app.start_graphics(cc);
@@ -1052,6 +1056,16 @@ impl MassifApp {
                         crate::loader::set_pattern(ctx, *p);
                         crate::sounds::play(Cue::Select);
                     }
+                }
+            });
+            crate::widgets::row(ui, tr!("Tool icons"), |ui| {
+                let styles = crate::icons::IconStyle::ALL;
+                let labels: Vec<&str> = styles.iter().map(|s| crate::i18n::tr_name(s.label())).collect();
+                let on: Vec<bool> = styles.iter().map(|s| self.settings.tool_icons == *s).collect();
+                if let Some(k) = crate::widgets::button_group(ui, "tool icons", &labels, &on) {
+                    self.settings.tool_icons = styles[k];
+                    crate::icons::set_style(ctx, styles[k]);
+                    crate::sounds::play(Cue::Select);
                 }
             });
             crate::widgets::row(ui, tr!("Animated home screen"), |ui| {

@@ -211,7 +211,7 @@ The viewport shows the graph's output in 3D, with its sun, clouds, haze and sea 
 
 # Settings
 **Settings…** (`⌘,`: in the **Massif** menu on a Mac, in **View** on Windows and Linux, or the home screen's sidebar) has ten sections.
-- **Appearance**: the theme, the accent colour, the loader shown while Massif works (a grid of dots in one of eight patterns), and whether the home screen's picture moves.
+- **Appearance**: the theme, the accent colour, the loader shown while Massif works (a grid of dots in one of eight patterns), the tool icons (Line or Classic), and whether the home screen's picture moves.
 - **Typeface**: what the interface is set in — the system's own typeface, or Inter, Geist, IBM Plex Sans or Manrope, built into Massif. Each is shown in itself; a click sets the whole interface in it.
 - **Sounds**: little sounds for what happens, made by Massif as it plays them. **Essential**: tasks done, saving, errors. **All**: the interface too (choices, switches, windows, workspaces). Each can be heard from there. The sound output is held only while a sound plays: headphones are free to go to another device.
 - **Notifications**: the system tells when a long task ends (an export, an import, a conversion, a pass over the whole map): never, while Massif is in the background, or always.
