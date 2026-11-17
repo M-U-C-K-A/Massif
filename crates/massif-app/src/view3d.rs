@@ -620,8 +620,25 @@ pub struct TileBuild {
     pub depths: Vec<u8>,
     /// What the tile's traced columns show: colours and blocks.
     pub pairs: Vec<Skin>,
+    /// Per column the meshes draw, where its air lies, packed for the
+    /// tracer (see [`air_bits`]); empty: none.
+    pub airs: Vec<u32>,
     /// Faces of the columns the tracer leaves out, and the water.
     pub faces: ChunkFaces,
+}
+
+/// Where the air of a column the meshes draw lies, for a ghost's view from
+/// inside the ground (the tracer comes out of the ground there): from the
+/// top of its lowest span (the bottom of the world when it does not stand
+/// on it) to the bottom of its highest, in the bits over the height's, which
+/// stay 0 for the tracer to go by (10 bits each, from the bottom of the
+/// world). A cave, an arch, the room under an overhang; between several
+/// caves of a column, its rock counts as air.
+fn air_bits(spans: &[CellSpan], min_y: i32) -> u32 {
+    let (Some(first), Some(last)) = (spans.first(), spans.last()) else { return 0 };
+    let lo = if first.y0 <= min_y { first.y1 } else { min_y };
+    let hi = last.y0.max(lo);
+    ((lo - min_y).clamp(0, 1023) as u32) << HEIGHT_BITS | ((hi - min_y).clamp(1, 1023) as u32) << 22
 }
 
 /// Build tile `tile`: heights and colours of its columns of plain ground,
@@ -705,8 +722,10 @@ fn build_tile_part(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: T
         }
     }
 
-    // The traced columns: height, colours and the water over them.
+    // The traced columns: height, colours and the water over them; the
+    // air of the others.
     let mut heights = vec![0u16; n * n];
+    let mut airs = vec![0u32; if every.is_some() { 0 } else { n * n }];
     let mut column_colors = vec![0u16; n * n];
     let mut depths = vec![0u8; n * n];
     let mut pairs: Vec<Skin> = Vec::new();
@@ -714,6 +733,9 @@ fn build_tile_part(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: T
     for j in 0..n {
         for i in 0..n {
             let (x, z) = (cx + i as i32, cz + j as i32);
+            if every.is_none() && meshed(x, z) {
+                airs[j * n + i] = air_bits(grid.spans(x, z), min_y);
+            }
             if !wanted(i, j) || !traced(x, z) {
                 continue;
             }
@@ -738,6 +760,7 @@ fn build_tile_part(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: T
             colors: column_colors,
             depths,
             pairs,
+            airs,
             faces: ChunkFaces::default(),
         };
     }
@@ -1025,6 +1048,7 @@ fn build_tile_part(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: T
         colors: column_colors,
         depths,
         pairs,
+        airs,
         faces: out,
     }
 }
@@ -1080,7 +1104,7 @@ impl Pairs {
             .iter()
             .zip(&b.colors)
             .enumerate()
-            .map(|(k, (&h, &c))| if h == 0 { 0 } else { h as u32 | map[c as usize] << HEIGHT_BITS | (b.depths.get(k).copied().unwrap_or(0) as u32) << 24 })
+            .map(|(k, (&h, &c))| if h == 0 { b.airs.get(k).copied().unwrap_or(0) } else { h as u32 | map[c as usize] << HEIGHT_BITS | (b.depths.get(k).copied().unwrap_or(0) as u32) << 24 })
             .collect()
     }
 
@@ -1106,7 +1130,9 @@ pub struct Globals {
     pub fog: [f32; 4],
     /// Colour of the haze far away, and how much of it at most.
     pub mist: [f32; 4],
-    /// The camera's forward, right and up directions, for the tracer's rays.
+    /// The camera's forward, right and up directions, for the tracer's rays;
+    /// `cam_f`'s w: 1 when the eyes are in the ground in 3D Sculpt (a
+    /// ghost's), which is then seen through.
     pub cam_f: [f32; 4],
     pub cam_s: [f32; 4],
     pub cam_u: [f32; 4],
@@ -1502,6 +1528,9 @@ struct Terrain {
 
 const PAGE_SHIFT: i32 = 10;
 const STEPS: i32 = 768;
+// The columns a ray from eyes in the ground crosses at most before air:
+// past them, the ground is too deep to see through.
+const OUT_STEPS: i32 = 512;
 
 struct TraceOut {
     @builtin(position) clip: vec4<f32>,
@@ -1647,6 +1676,59 @@ fn trace(o: vec3<f32>, d: vec3<f32>, t_in: f32, t_out: f32, axis_in: i32, pix: f
         cell = child;
     }
     return hit;
+}
+
+/// The heights between which column `c` is air: over a traced column's
+/// top, between the lowest and the highest span of one the meshes draw
+/// (packed with it), everywhere where there is nothing.
+fn air_of(c: vec2<i32>) -> vec2<f32> {
+    let col = column(c);
+    let bottom = terrain.origin.z;
+    if (col == 0u) {
+        return vec2<f32>(-1.0e9, 1.0e9);
+    }
+    let h = col & 0xfffu;
+    if (h != 0u) {
+        return vec2<f32>(bottom + f32(h), 1.0e9);
+    }
+    return vec2<f32>(bottom + f32((col >> 12u) & 0x3ffu), bottom + f32(col >> 22u));
+}
+
+/// Where the ray `o + t d` (grid coordinates), from `t_in` in the ground,
+/// first comes out into air (see `air_of`), and the side it came in by;
+/// x: -1 when it is still in the ground at `t_out`, or far on.
+fn come_out(o: vec3<f32>, d: vec3<f32>, t_in: f32, t_out: f32) -> vec2<f32> {
+    let step = vec2<i32>(select(-1, 1, d.x > 0.0), select(-1, 1, d.z > 0.0));
+    let inv = 1.0 / d.xz;
+    var cell = vec2<i32>(floor(o.xz + d.xz * t_in));
+    var t = t_in;
+    var axis = 2.0;
+    for (var i = 0; i < OUT_STEPS; i++) {
+        let bound = vec2<f32>(cell) + select(vec2<f32>(0.0), vec2<f32>(1.0), step > vec2<i32>(0));
+        let tb = (bound - o.xz) * inv;
+        let t_exit = min(min(tb.x, tb.y), t_out);
+        // The part of the way through the cell where the ray is in air.
+        let air = air_of(cell);
+        let ta = (air.x - o.y) / d.y;
+        let tz = (air.y - o.y) / d.y;
+        let a = max(t, min(ta, tz));
+        let b = min(t_exit, max(ta, tz));
+        if (a < b) {
+            return vec2<f32>(a, axis);
+        }
+        if (t_exit >= t_out) {
+            break;
+        }
+        if (tb.x < tb.y) {
+            cell.x += step.x;
+            axis = 0.0;
+        } else {
+            cell.y += step.y;
+            axis = 1.0;
+        }
+        t = t_exit;
+    }
+    return vec2<f32>(-1.0, 0.0);
 }
 
 /// Height of the ground at a point of the grid (the bottom of the world
@@ -1887,7 +1969,21 @@ fn fs_trace(in: TraceOut) -> TraceFrag {
             axis = 1;
         }
     }
-    let hit = trace(o, d, t0, t1, axis, g.cam_k.z / stride);
+    var start = t0;
+    if (g.cam_f.w > 0.5) {
+        // The eyes in the ground (in 3D Sculpt, a ghost's): it is seen
+        // through, up to where the ray comes out into air; deeper, the dark
+        // of the ground.
+        let out_at = come_out(o, d, t0, t1);
+        if (out_at.x < 0.0) {
+            out.color = vec4<f32>(background(view_d) * 0.25, 1.0);
+            out.depth = 1.0;
+            return out;
+        }
+        start = out_at.x;
+        axis = i32(out_at.y);
+    }
+    let hit = trace(o, d, start, t1, axis, g.cam_k.z / stride);
     if (!hit.found) {
         out.color = vec4<f32>(background(view_d), 1.0);
         out.depth = 1.0;
@@ -1932,7 +2028,7 @@ fn fs_trace(in: TraceOut) -> TraceFrag {
         for (var k = 0; k < 4; k++) {
             let q = corner + size * vec2<f32>(0.25 + 0.5 * f32(k & 1), 0.25 + 0.5 * f32(k >> 1u));
             let col = column(vec2<i32>(floor(q)));
-            if (col != 0u) {
+            if ((col & 0xfffu) != 0u) {
                 sum += far_top(col);
                 count += 1.0;
             }
@@ -1943,7 +2039,7 @@ fn fs_trace(in: TraceOut) -> TraceFrag {
             // section through the column there, not the colour of tops.
             let inside = p.xz - vec2<f32>(hit.normal.x, hit.normal.z) * 0.5;
             let col = column(vec2<i32>(floor(inside)));
-            if (col != 0u) {
+            if ((col & 0xfffu) != 0u) {
                 base = far_side(col, p.y, hit.normal);
             }
         }
@@ -3708,6 +3804,7 @@ fn build_coarse(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, cell: Tile
         colors,
         depths: Vec::new(),
         pairs,
+        airs: Vec::new(),
         faces: ChunkFaces::default(),
     }
 }
@@ -3831,6 +3928,11 @@ pub struct View3d {
     error: Option<String>,
     /// A sculpting stroke in progress, and when its last dab was.
     sculpt: Option<(SculptStroke, Instant)>,
+    /// The buttons went down with a click tool, or one that refused to
+    /// act there: nothing more until they are let go.
+    pressed: bool,
+    /// What a tool said it did (or why it did not), for the status bar.
+    pub feedback: Option<String>,
     /// Where the cursor points in the world.
     hover: Option<massif_core::voxel::Hit>,
     /// The surface there, smoothed: where the brush lies, which way.
@@ -3865,6 +3967,9 @@ pub struct View3d {
     look_key: Option<(usize, u64, u64)>,
     look_seen: Option<(u64, u64, usize)>,
 }
+
+/// The height of the bar along the bottom of the player's view.
+const BAR_HEIGHT: f32 = 36.0;
 
 /// What the drawn image's side is, while the camera moves, of the view's
 /// pixels: on a high-density screen, and on another.
@@ -3902,6 +4007,47 @@ struct Walk {
     /// moved in (a frame drawn twice moves it once).
     pass: u64,
     frame: u64,
+}
+
+/// The points of the closed ring `ring`, with more between them so that
+/// none is farther than `step` from the next (`most` points at most).
+fn along(ring: &[(f32, f32)], step: f32, most: usize) -> Vec<(f32, f32)> {
+    let length: f32 = (0..ring.len()).map(|i| {
+        let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
+        (b.0 - a.0).hypot(b.1 - a.1)
+    }).sum();
+    let step = step.max(length / most as f32);
+    let mut out = Vec::new();
+    for i in 0..ring.len() {
+        let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
+        let n = (((b.0 - a.0).hypot(b.1 - a.1) / step).ceil() as usize).max(1);
+        out.extend((0..n).map(|k| {
+            let t = k as f32 / n as f32;
+            (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t)
+        }));
+    }
+    out
+}
+
+/// The edges of the view darkened, the middle clear: the eyes are in the
+/// ground, seen through.
+fn vignette(painter: &egui::Painter, rect: Rect) {
+    let inner = rect.shrink2(rect.size() * 0.22);
+    let (dark, clear) = (Color32::from_black_alpha(110), Color32::TRANSPARENT);
+    let mut mesh = egui::Mesh::default();
+    for (p, c) in [(rect.left_top(), dark), (rect.right_top(), dark), (rect.right_bottom(), dark), (rect.left_bottom(), dark)] {
+        mesh.colored_vertex(p, c);
+    }
+    for (p, c) in [(inner.left_top(), clear), (inner.right_top(), clear), (inner.right_bottom(), clear), (inner.left_bottom(), clear)] {
+        mesh.colored_vertex(p, c);
+    }
+    // A band of two triangles along each side, outer corners to inner.
+    for k in 0..4u32 {
+        let (a, b) = (k, (k + 1) % 4);
+        mesh.add_triangle(a, b, b + 4);
+        mesh.add_triangle(a, b + 4, a + 4);
+    }
+    painter.add(mesh);
 }
 
 /// The ray through screen point `p` of a view `rect` seen by `camera`:
@@ -3972,6 +4118,8 @@ impl Default for View3d {
             build_ms: 0.0,
             error: None,
             sculpt: None,
+            pressed: false,
+            feedback: None,
             hover: None,
             frame: None,
             goto_map: false,
@@ -4103,6 +4251,12 @@ impl View3d {
         self.walk.as_ref().map(|w| w.player)
     }
 
+    /// The player walking in the view, to move or change.
+    #[cfg(test)]
+    pub fn player_mut(&mut self) -> Option<&mut crate::player::Player> {
+        self.walk.as_mut().map(|w| &mut w.player)
+    }
+
     /// Whether the view holds the mouse.
     #[cfg(test)]
     pub fn captured(&self) -> bool {
@@ -4163,7 +4317,7 @@ impl View3d {
         let (o, d) = self.ray(rect, rect.center());
         let dim = doc.dimension();
         let mut blocks = crate::player::MapBlocks::new(dim);
-        let feet = match massif_core::voxel::raycast(dim, o, d, 100_000.0) {
+        let feet = match massif_core::voxel::raycast_out(dim, o, d, 100_000.0) {
             Some(hit) => {
                 let (n, p) = (hit.normal, hit.point);
                 let y = if n.1 < 0 { p[1] - crate::player::HEIGHT - 0.05 } else { p[1] + 0.02 };
@@ -4204,7 +4358,7 @@ impl View3d {
         let (sy, cy) = self.camera.yaw.sin_cos();
         let (sp, cp) = self.camera.pitch.sin_cos();
         let ahead = [-(cp * sy) as f64, -sp as f64, -(cp * cy) as f64];
-        let to = massif_core::voxel::raycast(doc.dimension(), eye, ahead, 256.0).map_or(32.0, |h| h.distance).clamp(8.0, 256.0);
+        let to = massif_core::voxel::raycast_out(doc.dimension(), eye, ahead, 256.0).map_or(32.0, |h| h.distance).clamp(8.0, 256.0);
         self.camera.pitch = self.camera.pitch.clamp(-1.2, 1.55);
         self.camera.distance = to as f32;
         self.camera.target = [eye[0] + ahead[0] * to, eye[1] + ahead[1] * to, eye[2] + ahead[2] * to];
@@ -4225,6 +4379,14 @@ impl View3d {
         // and a lock taken inside another freezes the app as soon as a
         // thread asks for a repaint in between.
         let escape = crate::keymap::peek(&ctx, crate::keymap::Action::ReleaseMouse);
+        // Ghost on and off (back to flying), over the view or holding it.
+        if (walk.captured || response.hovered()) && !ctx.egui_wants_keyboard_input() && crate::keymap::take(&ctx, crate::keymap::Action::Ghost).is_some() {
+            use crate::player::Motion;
+            walk.player.set_motion(if walk.player.ghost { Motion::Flying } else { Motion::Ghost });
+            ctx.request_repaint();
+        }
+        // Rays see through the ground the eyes are in (a ghost's).
+        let cast = massif_core::voxel::raycast_out;
         let (escape, focused, motion, pointer, dt, turn, mods, scroll, pressed_now) = ui.input(|i| {
             use crate::keymap::{Action, held};
             let key = |a: Action| held(i, a) as i32 as f32;
@@ -4252,7 +4414,7 @@ impl View3d {
             && let Some(p) = pressed_at(PointerButton::Primary).or_else(|| pressed_at(PointerButton::Secondary))
         {
             let (o, d) = camera_ray(&camera, rect, p);
-            walk.pivot = Some(match massif_core::voxel::raycast(doc.dimension(), o, d, 4096.0) {
+            walk.pivot = Some(match cast(doc.dimension(), o, d, 4096.0) {
                 Some(hit) => hit.point,
                 None => [o[0] + d[0] * 32.0, o[1] + d[1] * 32.0, o[2] + d[2] * 32.0],
             });
@@ -4300,8 +4462,10 @@ impl View3d {
             put_eyes(walk, to);
         }
         if free && ctrl && response.dragged_by(PointerButton::Middle) {
-            // The brush's size, sideways.
-            let most = massif_core::voxel::MAX_SCULPT_RADIUS;
+            // The brush's size, sideways (as wide as the tool goes in 3D).
+            use crate::tools::Use3d;
+            let in_3d = matches!(tools.tool.in_3d(), Use3d::Sculpt | Use3d::Smooth | Use3d::Paint);
+            let most = if in_3d { massif_core::voxel::MAX_SCULPT_RADIUS } else { massif_core::MAX_RADIUS };
             let r = &mut tools.brush.radius;
             *r = (r.min(most) * (response.drag_delta().x * 0.01).exp()).clamp(1.0, most);
         }
@@ -4322,7 +4486,7 @@ impl View3d {
             // painted.
             if let Some(p) = response.interact_pointer_pos() {
                 let (o, d) = camera_ray(&camera, rect, p);
-                if let Some(hit) = massif_core::voxel::raycast(doc.dimension(), o, d, 4096.0)
+                if let Some(hit) = cast(doc.dimension(), o, d, 4096.0)
                     && let Some(probe) = crate::tools::probe(doc, hit.block.0, hit.block.2)
                 {
                     tools.terrain = probe.terrain;
@@ -4422,36 +4586,58 @@ impl View3d {
     /// Over the player's view: the game's crosshair while the view holds
     /// the mouse, and along the bottom, as in Axiom's editor, what the
     /// buttons and keys do, how the player moves and the speed of flight.
-    fn player_bar(&self, ui: &mut Ui, rect: Rect, tools: &mut ToolState, back: Option<&str>) {
-        let Some(walk) = &self.walk else { return };
+    fn player_bar(&mut self, ui: &mut Ui, rect: Rect, tools: &mut ToolState, back: Option<&str>, inside: bool) {
+        use crate::player::Motion;
+        use crate::tools::Use3d;
+        let Some(walk) = &mut self.walk else { return };
         let pal = Palette::of(ui);
         let painter = ui.painter_at(rect);
         let c = rect.center();
         if walk.captured {
             crate::reticle::paint(&painter, c, &crate::reticle::get(ui.ctx()));
         }
-        let bar = Rect::from_min_max(pos2(rect.left(), rect.bottom() - 26.0), rect.right_bottom());
+        let bar = Rect::from_min_max(pos2(rect.left(), rect.bottom() - BAR_HEIGHT), rect.right_bottom());
         painter.rect_filled(bar, 0, pal.panel.gamma_multiply(0.94));
         painter.hline(bar.x_range(), bar.top(), egui::Stroke::new(1.0, pal.border));
         // What the buttons do with the tool chosen.
         // (Painting, the inverse puts back the map's own terrain, or the one
         // the height calls for.)
+        // (A tool of the map only: the buttons look and move.)
         let back = back.map(|name| tr!("Back to {name}", name));
-        let (tool, inverse) = match tools.sculpt.tool {
-            Tool::Smooth3d => (tr!("Smooth"), None),
-            Tool::PaintTerrain => (tr!("Paint"), Some(back.as_deref().unwrap_or(tr!("Paint by height")))),
-            _ => (tr!("Add"), Some(tr!("Dig"))),
+        let name = crate::i18n::tr_name(tools.tool.label());
+        let (tool, inverse) = match tools.tool.in_3d() {
+            Use3d::MapOnly => (None, None),
+            Use3d::Smooth => (Some(tr!("Smooth")), None),
+            Use3d::Brush if tools.tool == Tool::Smooth => (Some(tr!("Smooth")), None),
+            Use3d::Paint => (Some(tr!("Paint")), Some(back.as_deref().unwrap_or(tr!("Paint by height")))),
+            Use3d::Sculpt if tools.tool == Tool::Dig => (Some(tr!("Dig")), Some(tr!("Add"))),
+            Use3d::Sculpt => (Some(tr!("Add")), Some(tr!("Dig"))),
+            Use3d::Click => (Some(name), None),
+            Use3d::Brush => (Some(name), Some(tr!("Inverse"))),
         };
+        let ghost_key = crate::keymap::get().label(crate::keymap::Action::Ghost);
+        let ghost_hint = (walk.player.ghost, ghost_key.as_deref());
+        let map_only = tool.is_none().then(|| tr!("{name}: on the map only", name));
         let mut hints: Vec<(&str, &str)> = Vec::new();
         if walk.captured {
-            hints.push(("RMB", tool));
+            if let Some(tool) = tool {
+                hints.push(("RMB", tool));
+            }
             if let Some(inv) = inverse {
                 hints.push(("LMB", inv));
             }
-            hints.extend([("W A S D", tr!("Move")), ("Space", tr!("Jump · twice: fly")), ("Shift", tr!("Sneak · down")), ("Ctrl", tr!("Sprint")), ("Esc", tr!("Free the mouse"))]);
+            hints.extend([("W A S D", tr!("Move")), ("Space", if walk.player.ghost { tr!("Up") } else { tr!("Jump · twice: fly") }), ("Shift", tr!("Sneak · down")), ("Ctrl", tr!("Sprint"))]);
+            if let (on, Some(key)) = ghost_hint {
+                hints.push((key, if on { tr!("Leave Ghost") } else { tr!("Ghost: through the ground") }));
+            }
+            hints.push(("Esc", tr!("Free the mouse")));
         } else {
             hints.push(("LMB", tr!("Look around")));
-            hints.push(("RMB", tool));
+            match (tool, &map_only) {
+                (Some(tool), _) => hints.push(("RMB", tool)),
+                (None, Some(text)) => hints.push(("RMB", text)),
+                (None, None) => {}
+            }
             if let Some(inv) = inverse {
                 hints.push(("Alt+RMB", inv));
             }
@@ -4464,19 +4650,26 @@ impl View3d {
                 ("W A S D", tr!("Move")),
             ]);
         }
-        // How the player goes and the speed of flight, on the right.
+        // On the right, how the player goes (Walking, Flying or Ghost, to
+        // choose; swimming, sneaking or in the ground, said) and the speed
+        // of flight.
         let p = &walk.player;
-        let state = if p.flying {
-            tr!("Flying")
+        let state = if inside {
+            Some(tr!("In the ground"))
         } else if p.swimming {
-            tr!("Swimming")
+            Some(tr!("Swimming"))
         } else if p.sneaking {
-            tr!("Sneaking")
+            Some(tr!("Sneaking"))
         } else {
-            tr!("Walking")
+            None
         };
-        let right_w = 260.0;
+        let motions = [Motion::Walking, Motion::Flying, Motion::Ghost];
+        let labels = [tr!("Walking"), tr!("Flying"), tr!("Ghost")];
+        let now = p.motion();
         let font = FontId::proportional(11.0);
+        let width = |text: &str, size: f32| painter.layout_no_wrap(text.to_owned(), FontId::proportional(size), pal.text).size().x;
+        let group_w: f32 = labels.iter().map(|l| width(l, 12.5) + 26.0).sum::<f32>() + 6.0;
+        let right_w = 16.0 + 150.0 + 8.0 + group_w + state.map_or(0.0, |s| 8.0 + width(s, 11.0));
         let mut x = bar.left() + 10.0;
         let limit = bar.right() - right_w - 8.0;
         for (key, what) in hints {
@@ -4501,7 +4694,13 @@ impl View3d {
             tools.sculpt.fly_speed = percent / 100.0;
         }
         child.add_space(8.0);
-        child.label(egui::RichText::new(state).size(11.0).color(pal.text));
+        if let Some(k) = crate::widgets::button_group(&mut child, "player motion", &labels, &motions.map(|m| m == now)) {
+            walk.player.set_motion(motions[k]);
+        }
+        if let Some(state) = state {
+            child.add_space(8.0);
+            child.label(egui::RichText::new(state).size(11.0).color(pal.text));
+        }
     }
 
     /// Build the missing and stale tiles of the map, nearest the camera
@@ -4765,6 +4964,20 @@ impl View3d {
         self.needs_render = true;
     }
 
+    /// Where the brush lies on the surface `f` for the tool in hand: along
+    /// its slope for the tools that shape or paint in 3D (`in_3d`), flat
+    /// for the map's brushes, which act on the columns around.
+    fn laid(f: massif_core::voxel::Frame, in_3d: bool) -> massif_core::voxel::Frame {
+        if in_3d {
+            f
+        } else {
+            massif_core::voxel::Frame {
+                center: f.center,
+                normal: [0.0, 1.0, 0.0],
+            }
+        }
+    }
+
     /// The ray through screen point `p` of the view `rect`: origin and
     /// direction in block coordinates.
     fn ray(&self, rect: Rect, p: egui::Pos2) -> ([f64; 3], [f64; 3]) {
@@ -4909,11 +5122,16 @@ impl View3d {
         let captured = self.walk.as_ref().is_some_and(|w| w.captured);
 
         // ---- camera control ------------------------------------------------
-        // With a tool of the Sculpt editor the buttons sculpt or paint (the
-        // right one inverts); Shift + drag moves the view, Alt + drag (or
-        // the middle button) turns it. Otherwise the left button turns, the
-        // right one moves.
-        let sculpting = sculpt && crate::tools::SculptSettings::TOOLS.contains(&tools.sculpt.tool);
+        // In the Sculpt editor the buttons use the tool of the Tools panel
+        // (the right one inverts); Shift + drag moves the view, Alt + drag
+        // (or the middle button) turns it. Otherwise, and with a tool of
+        // the map only, the left button turns, the right one moves.
+        use crate::tools::Use3d;
+        let use3d = tools.tool.in_3d();
+        let sculpting = sculpt && use3d != Use3d::MapOnly;
+        // The tools that shape or paint in 3D sculpt this far at most; the
+        // map's brushes go as wide as on the map.
+        let in_3d = matches!(use3d, Use3d::Sculpt | Use3d::Smooth | Use3d::Paint);
         let (shift, alt, command) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt, i.modifiers.command || i.modifiers.ctrl));
         let (orbit, pan) = if sculpting {
             (
@@ -5005,7 +5223,7 @@ impl View3d {
             if sculpting && command && zoom != 1.0 {
                 // The brush of every tool, as in Brush Settings, as wide as
                 // it sculpts in 3D.
-                let most = massif_core::voxel::MAX_SCULPT_RADIUS;
+                let most = if in_3d { massif_core::voxel::MAX_SCULPT_RADIUS } else { massif_core::MAX_RADIUS };
                 let r = &mut tools.brush.radius;
                 *r = (r.min(most) * zoom).clamp(1.0, most);
             } else if walking {
@@ -5044,7 +5262,9 @@ impl View3d {
         let aim = if captured { Some(rect.center()) } else { response.hover_pos() };
         if sculpting && let Some(p) = aim {
             let (o, d) = self.ray(rect, p);
-            self.hover = massif_core::voxel::raycast(doc.dimension(), o, d, (self.camera.distance as f64 + extent as f64) * 1.5);
+            // Through the ground the eyes are in (a ghost's): on the
+            // surface beyond, a cave's wall.
+            self.hover = massif_core::voxel::raycast_out(doc.dimension(), o, d, (self.camera.distance as f64 + extent as f64) * 1.5);
             // The slope under the cursor, smoothed over the blocks around;
             // a little of the last one kept, so that it does not shake.
             let found = self.hover.map(|hit| massif_core::voxel::surface_frame(doc.dimension(), &hit, o, d));
@@ -5085,16 +5305,28 @@ impl View3d {
             }
             None => (sculpting && response.hovered() && !alt && !shift && (primary || secondary), secondary),
         };
-        match (&mut self.sculpt, pressed) {
-            (None, true) if captured || response.is_pointer_button_down_on() => {
-                self.sculpt = crate::tools::begin_sculpt(doc, tools, inverse).map(|s| (s, Instant::now()));
+        match (&mut self.sculpt, pressed, self.frame) {
+            // Once over the land: a stroke of the map's brushes begins where
+            // it is.
+            (None, true, Some(frame)) if (captured || response.is_pointer_button_down_on()) && !self.pressed => {
+                let (stroke, note) = crate::tools::begin_sculpt(doc, tools, inverse, &frame);
+                self.feedback = note.or(self.feedback.take());
+                // A click tool, or one that refused, waits for the button to
+                // be let go.
+                self.pressed = stroke.is_none();
+                self.sculpt = stroke.map(|s| (s, Instant::now()));
             }
-            (Some(_), false) => {
-                if let Some((stroke, _)) = self.sculpt.take() {
-                    crate::tools::end_sculpt(doc, stroke);
+            (Some(_), false, _) => {
+                if let Some((stroke, _)) = self.sculpt.take()
+                    && let Some(note) = crate::tools::end_sculpt(doc, stroke)
+                {
+                    self.feedback = Some(note);
                 }
             }
             _ => {}
+        }
+        if !pressed {
+            self.pressed = false;
         }
         if let (Some((stroke, last)), Some(frame)) = (&mut self.sculpt, self.frame) {
             let dt = last.elapsed().as_secs_f32().max(1.0 / 60.0);
@@ -5222,9 +5454,15 @@ impl View3d {
         // The eyes under water (walking, or the camera brought down there):
         // the water's own light.
         let eye = self.camera.eye();
-        let under = {
+        let (under, inside) = {
             use crate::player::Blocks;
-            crate::player::MapBlocks::new(doc.dimension()).fluid(eye[0].floor() as i32, (eye[1] + 0.12).floor() as i32, eye[2].floor() as i32)
+            let mut blocks = crate::player::MapBlocks::new(doc.dimension());
+            let (x, z) = (eye[0].floor() as i32, eye[2].floor() as i32);
+            // In 3D Sculpt, the eyes in the ground (a ghost's): it is seen
+            // through, as in the game's spectator mode, up to the air
+            // beyond (the tracer starts there; the meshes show only the
+            // faces turned to the eyes, those of the caves beyond).
+            (blocks.fluid(x, (eye[1] + 0.12).floor() as i32, z), sculpt && blocks.solid(x, eye[1].floor() as i32, z))
         };
         // The player's view looks like the game: its blocks, light, sky and
         // clouds, the brush marking the blocks it takes as Axiom does.
@@ -5238,6 +5476,7 @@ impl View3d {
             Sky::of(&pal)
         };
         let mut globals = self.camera.globals(origin, rect.width() / rect.height().max(1.0), extent, sky, region[1].max(1));
+        globals.cam_f[3] = inside as u8 as f32;
         // No fog (Settings ▸ Graphics): nothing veiled far off. Under water
         // the water's own murk stays.
         globals.sun[3] = graphics.reflections as u8 as f32;
@@ -5269,7 +5508,8 @@ impl View3d {
                 globals.pick = [l[0], l[1], l[2], 1.0];
             }
             if let (Some(f), true) = (self.frame, sculpting) {
-                let brush = tools.sculpt_brush();
+                let f = Self::laid(f, in_3d);
+                let brush = tools.brush_3d();
                 let c = local([f.center[0] as f64, f.center[1] as f64, f.center[2] as f64]);
                 let square = brush.is_square() && brush.outline().is_none();
                 let (t1, t2) = massif_core::voxel::tangents(f.normal);
@@ -5283,9 +5523,17 @@ impl View3d {
                 } else {
                     t1
                 };
-                // (A square's half side is its radius.)
+                // (A square's half side is its radius.) The map's brushes
+                // take whole columns: their footprint is marked at any
+                // height (3, 4), the others' blocks in a ball or a box.
                 globals.brush = [c[0], c[1], c[2], brush.radius.max(0.5)];
-                globals.brush_n = [f.normal[0], f.normal[1], f.normal[2], if square { 2.0 } else { 1.0 }];
+                let shape = match (in_3d, square) {
+                    (true, false) => 1.0,
+                    (true, true) => 2.0,
+                    (false, false) => 3.0,
+                    (false, true) => 4.0,
+                };
+                globals.brush_n = [f.normal[0], f.normal[1], f.normal[2], shape];
                 globals.brush_t = [side[0], side[1], side[2], 0.0];
             }
         }
@@ -5348,6 +5596,9 @@ impl View3d {
             let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(region[0] as f32 / px[0].max(1) as f32, region[1] as f32 / px[1].max(1) as f32));
             painter.image(id, rect, uv, Color32::WHITE);
         }
+        if inside {
+            vignette(&painter, rect);
+        }
         if let Some(err) = &self.error {
             painter.text(rect.center(), Align2::CENTER_CENTER, err, FontId::proportional(13.0), pal.danger);
         }
@@ -5355,8 +5606,8 @@ impl View3d {
         // outline (a custom brush's too), and the way the surface faces. In
         // the game's look the blocks it takes are marked instead (but for a
         // custom brush's outline).
-        let marked = game && tools.sculpt_brush().outline().is_none();
-        if let Some(f) = self.frame.filter(|_| !marked) {
+        let marked = game && tools.brush_3d().outline().is_none();
+        if let Some(f) = self.frame.filter(|_| !marked).map(|f| Self::laid(f, in_3d)) {
             let m = Mat4::from_cols_array_2d(&globals.view_proj);
             let to_screen = |p: [f32; 3]| -> Option<egui::Pos2> {
                 let v = m * Vec4::new(p[0] - origin.0 as f32, p[1], p[2] - origin.1 as f32, 1.0);
@@ -5365,12 +5616,14 @@ impl View3d {
             };
             let (t1, t2) = massif_core::voxel::tangents(f.normal);
             let on = |u: f32, v: f32| to_screen([f.center[0] + t1[0] * u + t2[0] * v, f.center[1] + t1[1] * u + t2[1] * v, f.center[2] + t1[2] * u + t2[2] * v]);
-            let brush = &tools.sculpt_brush();
+            let brush = &tools.brush_3d();
             let r = brush.radius;
             // Points behind the eyes (walking, the brush is around the
             // feet) are None: the rest is drawn in runs, without a chord
             // across the view.
-            let rings: Vec<Vec<Option<egui::Pos2>>> = match &brush.mask {
+            // The outline in the brush's plane, (u, v): along the slope for
+            // the tools that shape in 3D, along x and z for the map's.
+            let flat: Vec<Vec<(f32, f32)>> = match &brush.mask {
                 Some(mask) => {
                     // As wide as it shows across the surface (by squares of
                     // the image's pixels where they are smaller than the
@@ -5380,13 +5633,30 @@ impl View3d {
                         _ => 4096.0,
                     };
                     let traced = crate::brushes::outline_for(mask, side);
-                    brush.place_outline(&traced).iter().map(|ring| ring.iter().map(|&(u, v)| on(u, v)).collect()).collect()
+                    brush.place_outline(&traced)
                 }
-                None if brush.is_square() => vec![brush.square_corners(0.0, 0.0).iter().map(|&(u, v)| on(u, v)).collect()],
-                None => vec![(0..64).map(|i| {
-                    let t = i as f32 / 64.0 * std::f32::consts::TAU;
-                    on(t.cos() * r, t.sin() * r)
-                }).collect()],
+                None if brush.is_square() => vec![brush.square_corners(0.0, 0.0).to_vec()],
+                None => {
+                    let n = if in_3d { 64 } else { ((r * std::f32::consts::TAU) as usize).clamp(64, 2048) };
+                    vec![(0..n).map(|i| {
+                        let t = i as f32 / n as f32 * std::f32::consts::TAU;
+                        (t.cos() * r, t.sin() * r)
+                    }).collect()]
+                }
+            };
+            let rings: Vec<Vec<Option<egui::Pos2>>> = if in_3d {
+                flat.iter().map(|ring| ring.iter().map(|&(u, v)| on(u, v)).collect()).collect()
+            } else {
+                // The map's brushes take whole columns: their footprint, as
+                // the map draws it, laid on the land column by column, a
+                // block at a time, on the top of each.
+                let mut blocks = crate::player::MapBlocks::new(doc.dimension());
+                let mut drape = |u: f32, v: f32| {
+                    let (x, z) = (f.center[0] + u, f.center[2] + v);
+                    let y = blocks.top(x.floor() as i32, z.floor() as i32).map_or(f.center[1], |t| t as f32);
+                    to_screen([x, y + 0.05, z])
+                };
+                flat.iter().map(|ring| along(ring, 1.0, 8192).into_iter().map(|(u, v)| drape(u, v)).collect()).collect()
             };
             let draw = |points: Vec<egui::Pos2>, closed: bool| {
                 let Some(points) = crate::brushes::drawable(points, 0.75, closed) else { return };
@@ -5444,7 +5714,7 @@ impl View3d {
             painter.galley(at - vec2(0.0, galley.size().y + 1.0), galley, Color32::WHITE);
         }
         let back = crate::tools::unpaint_to(doc, tools).map(|t| crate::i18n::tr_name(&doc.world.registry.terrain(t).name).to_owned());
-        self.player_bar(ui, rect, tools, back.as_deref());
+        self.player_bar(ui, rect, tools, back.as_deref(), inside);
         if captured {
             ui.ctx().set_cursor_icon(egui::CursorIcon::None);
         } else if response.hovered() {
@@ -5730,6 +6000,7 @@ mod tests {
             colors: vec![0, 0, 1],
             depths: Vec::new(),
             pairs: vec![grass, Skin::flat([7, 8, 9], [1, 1, 1])],
+            airs: Vec::new(),
             faces: ChunkFaces::default(),
         };
         let packed = pairs.pack(&b);
@@ -5740,6 +6011,15 @@ mod tests {
         assert_eq!(pairs.list()[k0 as usize], grass);
         // Packing again finds the same pairs.
         assert_eq!(pairs.pack(&b), packed);
+        // A column the meshes draw keeps where its air is, for a ghost's
+        // view from the ground, its height 0 for the tracer to go by.
+        let span = |y0, y1| CellSpan { y0, y1, terrain: 0, top: y1 as f32, color: None, mat: 0 };
+        let cave = air_bits(&[span(-64, 40), span(50, 70)], -64);
+        assert_eq!((cave & HEIGHT_MASK, (cave >> HEIGHT_BITS) & 0x3ff, cave >> 22), (0, 104, 114));
+        let overhang = air_bits(&[span(50, 70)], -64);
+        assert_eq!(((overhang >> HEIGHT_BITS) & 0x3ff, overhang >> 22), (0, 114), "air from the bottom of the world");
+        let b = TileBuild { airs: vec![0, cave, 0], ..b };
+        assert_eq!(pairs.pack(&b)[1], cave);
         for i in 0..5000u32 {
             pairs.get(Skin::flat([i as u8, (i >> 8) as u8, 7], [0, 0, 0]));
         }

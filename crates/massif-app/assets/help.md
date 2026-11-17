@@ -212,7 +212,11 @@ Levels lay rock over the ground or dig into it, each in its own layer that can b
 - In the **Terrain** look every block shows its own texture, from the game and from the mods and resource packs read in the Blocks panel, with what grows on it and the shade in its corners; far off, where a block is smaller than a pixel, it blends into the colour of its texture. **Settings ▸ Graphics ▸ Game textures in the 3D views** turns it off (Low draws a flat colour a block). The textures come from the game: when no Minecraft is found (nor chosen in the Blocks panel), or the graphics card cannot draw them, the views show a flat colour a block, up close too, and a line under that switch says why.
 
 ## 3D Sculpt
-**Build**, **Dig**, **Smooth** and **Paint** work on the blocks in 3D, with the brush of every tool: its shape, size, intensity and rotation are set in **Brush Settings**, shown beside the 3D Sculpt view (`⌘` + scroll changes its size there too). Left button sculpts where the cursor points, right button inverts; held down, it keeps adding or digging. In 3D a brush sculpts 64 blocks around at most (a larger one works as 64). Matter pushed out keeps the blocks it came from (a sand wall gives a sand ledge), and the ground under it keeps its own; **Paint** repaints sculpted matter too. Converting a terrain graph into the ground later drops what was sculpted on the tiles it rewrites (one step to undo). A brush on the map that moves the ground under sculpted matter takes it along, and a map opened lets go of sculpted cubes of 16³ that hold nothing of their own (earlier versions made them around 3D strokes, where they kept the map's brushes from showing).
+3D Sculpt works with the tool chosen in the **Tools** panel, as the map does, with its **Tool Settings** and the brush of every tool set in **Brush Settings** — all three shown beside the 3D Sculpt view, whose top names the tool in hand (`⌘` + scroll changes the brush's size there too). Left button uses the tool where the cursor points, right button inverts; held down, it keeps going.
+- **Raise / Lower** sculpts in 3D: it pushes the surface out or in along its slope, at its **Speed**, into overhangs and caves. **Smooth** smooths the columns as on the map: the same heights from the same stroke. **Paint terrain** paints the columns under the brush and the matter sculpted there.
+- The map's other brushes (Flatten, the Gradient brush, Paint biome, covers, objects, layers…) act on the columns around the point under the cursor, as on the map; the Eyedropper, Flood and Drain act at the click. Their brush, and Smooth's, shows exactly the columns it takes, laid on the land.
+- A tool of the map only (selections, Pan, Road, River, annotations) says so at the top of the view, where the left button then turns the view.
+In 3D a brush sculpts 64 blocks around at most (a larger one works as 64). Matter pushed out keeps the blocks it came from (a sand wall gives a sand ledge), and the ground under it keeps its own; **Paint terrain** repaints sculpted matter too. Converting a terrain graph into the ground later drops what was sculpted on the tiles it rewrites (one step to undo). A brush on the map that moves the ground under sculpted matter takes it along, and a map opened lets go of sculpted cubes of 16³ that hold nothing of their own (earlier versions made them around 3D strokes, where they kept the map's brushes from showing).
 
 ## Player
 **Player**, in the 3D Sculpt toolbar, walks in the view as in Minecraft with Axiom, coming down where the middle of the view looks. It looks like the game: the textures of the game's own blocks (from the Minecraft installed here), its light and shaded corners, its sky, sun, clouds and fog; the blocks the brush takes are marked in Axiom's lavender and the block under the cursor is outlined. The bar along the bottom lists what the buttons and keys do, with the flight speed.
@@ -222,6 +226,7 @@ Levels lay rock over the ground or dig into it, each in its own layer that can b
 - `Space` jumps; twice quickly, flies: `Space` goes up, `Shift` (or `Q`) down; twice again, or down to the ground, lands.
 - `Shift` (or `Q`) sneaks: crouched, you do not step off an edge.
 - Walking into a step of one block jumps onto it (Minecraft's Auto-Jump).
+- **Ghost** (at the bottom right, or `G`) flies through everything, as the game's spectator mode: into caves, under overhangs, along tunnels. With your eyes in the ground the view sees through it to the air beyond, a cave's walls, and the cursor and brush work on what it shows. `G` again flies out (from the first air above, if you are in the ground).
 Water slows you and lets you swim, and under it the world turns blue and dim, as in the game; a fall off the map puts you back where you last stood. Turn **Player** off to get the orbit camera back.
 
 # Terrain graphs
@@ -284,6 +289,7 @@ Massif's own keys, as they are out of the box. **Settings ▸ Keyboard** changes
 | Right-click · `Esc` (Select tools) | Clear the selection |
 | `Esc` | Cancel the stroke or the selection being drawn; walking, give the mouse back |
 | `W` `A` `S` `D`, `Space`, `Shift`, `Ctrl` | Walk, jump (twice: fly), sneak (flying: down), sprint, with **Player** in 3D Sculpt |
+| `G` | Ghost on and off: fly through the ground, with **Player** in 3D Sculpt |
 | `Ctrl Space` | Maximise the area under the pointer |
 | `Tab` | Add a node (terrain graph) |
 | `V` | View the selected node (terrain graph) |

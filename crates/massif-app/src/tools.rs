@@ -253,6 +253,55 @@ impl Tool {
             _ => return None,
         })
     }
+
+    /// What the tool does in the 3D Sculpt editor, which works with the
+    /// tool of the Tools panel.
+    pub const fn in_3d(self) -> Use3d {
+        match self {
+            Tool::Raise | Tool::Build | Tool::Dig => Use3d::Sculpt,
+            // Smooth smooths as on the map (its kernel, strength and
+            // passes): Smooth3d, from its shortcut, melts sculpted matter.
+            Tool::Smooth3d => Use3d::Smooth,
+            Tool::PaintTerrain => Use3d::Paint,
+            Tool::Eyedropper | Tool::Flood | Tool::Drain => Use3d::Click,
+            Tool::Pan | Tool::Road | Tool::River | Tool::Annotate | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush => Use3d::MapOnly,
+            Tool::Smooth
+            | Tool::Flatten
+            | Tool::SetHeight
+            | Tool::Roughen
+            | Tool::Gradient
+            | Tool::PaintBiome
+            | Tool::Cover
+            | Tool::Objects
+            | Tool::TreeSize
+            | Tool::Pockets
+            | Tool::Combined
+            | Tool::AutoBiome
+            | Tool::AutoPaint
+            | Tool::Water
+            | Tool::StampSlab
+            | Tool::EraseSlab => Use3d::Brush,
+        }
+    }
+}
+
+/// What a tool does in the 3D Sculpt editor ([`Tool::in_3d`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Use3d {
+    /// Pushes the surface out along its slope, or in (Dig, and the
+    /// inverse): matter added on any side, overhangs, caves.
+    Sculpt,
+    /// Melts the bumps of the surface, in 3D.
+    Smooth,
+    /// Paints the terrain of the columns under the brush, and of the matter
+    /// sculpted there.
+    Paint,
+    /// The map's own brush, on the columns around where the view points.
+    Brush,
+    /// A click where the view points.
+    Click,
+    /// Only on the map, where its shapes, points and marks are drawn.
+    MapOnly,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -402,14 +451,13 @@ pub struct ToolState {
     pub select_by: crate::select::SelectBy,
 }
 
-/// The tool of the 3D Sculpt editor, apart from the map's; its brush is
-/// the brush of every tool, set in Brush Settings (see
-/// [`ToolState::sculpt_brush`]).
+/// The 3D Sculpt editor's own settings. It works with the tool of the
+/// Tools panel ([`Tool::in_3d`]) and the brush of every tool, set in Brush
+/// Settings (see [`ToolState::sculpt_brush`]). (Its own Sculpt, Smooth and
+/// Paint of before, saved as `tool`, are let go as settings are read.)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SculptSettings {
-    /// Sculpt (left adds, right digs), Smooth or Paint.
-    pub tool: Tool,
     /// Walking in the view as a player would (for the session only).
     #[serde(skip)]
     pub player: bool,
@@ -421,7 +469,6 @@ pub struct SculptSettings {
 impl Default for SculptSettings {
     fn default() -> Self {
         Self {
-            tool: Tool::Build,
             player: false,
             fly_speed: 1.0,
         }
@@ -429,12 +476,8 @@ impl Default for SculptSettings {
 }
 
 impl SculptSettings {
-    /// The tools of the 3D Sculpt editor: one to add matter and (with the
-    /// right button) dig, one to smooth, one to paint the terrain.
-    pub const TOOLS: [Tool; 3] = [Tool::Build, Tool::Smooth3d, Tool::PaintTerrain];
-
-    /// How many blocks a dab of the Sculpt tool pushes the surface by in a
-    /// second, at full strength.
+    /// How many blocks a dab of the Build and Dig tools pushes the surface
+    /// by in a second, at full strength (Raise / Lower goes at its speed).
     pub const GROWTH: f32 = 16.0;
 
     /// The slowest and the fastest flight, as shares of the game's.
@@ -973,6 +1016,22 @@ impl ToolState {
         self.tool = tool;
     }
 
+    /// Settings saved by an earlier version, made right for this one. The
+    /// 3D Sculpt editor had a tool of its own (Sculpt, Smooth or Paint,
+    /// saved as `sculpt.tool`): it now works with the tool of the Tools
+    /// panel, so that one is let go; and the 3D tools that panel does not
+    /// show are its Raise / Lower (which sculpts in 3D) and Smooth.
+    pub fn settle(&mut self) {
+        self.tool = match self.tool {
+            Tool::Build | Tool::Dig => Tool::Raise,
+            Tool::Smooth3d => Tool::Smooth,
+            tool => tool,
+        };
+        if self.previous.is_sculpt() {
+            self.previous = Tool::PaintTerrain;
+        }
+    }
+
     /// A new tool not tried yet: marked in the Tools panel.
     pub fn untried(&self, tool: Tool) -> bool {
         Tool::NEW.contains(&tool) && !self.tried.contains(&tool) && self.tool != tool
@@ -986,6 +1045,18 @@ impl ToolState {
             filter: None,
             radius: self.brush.radius.min(massif_core::voxel::MAX_SCULPT_RADIUS),
             ..self.brush.clone()
+        }
+    }
+
+    /// The brush as the 3D Sculpt editor shows it: the sculpting brush for
+    /// the tools that shape or paint in 3D, the map's for the others.
+    pub fn brush_3d(&self) -> Brush {
+        match self.tool.in_3d() {
+            Use3d::Sculpt | Use3d::Smooth | Use3d::Paint => self.sculpt_brush(),
+            _ => Brush {
+                filter: None,
+                ..self.brush.clone()
+            },
         }
     }
 
@@ -1381,54 +1452,91 @@ fn surface_at(dim: &massif_core::Dimension, x: f32, z: f32) -> Option<f32> {
 pub struct SculptStroke {
     what: Stroke3d,
     salt: u64,
-    /// The step to undo it records into, and its label.
+    /// The step to undo its 3D edits records into, and its label (a
+    /// stroke of the map's brushes keeps its own, a click none).
     step: u64,
     label: String,
 }
 
-#[derive(Clone, Copy)]
 enum Stroke3d {
-    Sculpt(massif_core::voxel::SculptMode),
+    /// Sculpting, pushing the surface by up to so many blocks a second
+    /// (Raise / Lower's speed, set in Tool Settings).
+    Sculpt(massif_core::voxel::SculptMode, f32),
     /// Paint the terrain; the inverse puts back `back`, the map's own
     /// terrain, or (`None`) the one the height calls for.
     Paint { inverse: bool, back: Option<TerrainId> },
+    /// The map's own brush, as on the map, on the columns where the view
+    /// points.
+    Map(Box<Stroke>),
+    /// A click, done as the button went down.
+    Clicked,
 }
 
-/// Begin a stroke in the 3D Sculpt editor. `None` when its tool does
-/// nothing there.
-pub fn begin_sculpt(doc: &mut Document, tools: &ToolState, inverse: bool) -> Option<SculptStroke> {
-    let tool = tools.sculpt.tool;
-    let what = match tool {
-        Tool::PaintTerrain => Stroke3d::Paint { inverse, back: if inverse { unpaint_for_stroke(doc, tools) } else { None } },
-        _ => Stroke3d::Sculpt(tool.sculpt_mode(inverse)?),
-    };
-    let label = crate::i18n::tr_name(tool.label()).to_owned();
-    let step = doc.history.begin(label.clone(), doc.dim);
+/// Begin a stroke in the 3D Sculpt editor with the tool of the Tools panel,
+/// on the surface at `at`. `None` when the tool does nothing there (the
+/// reason, or what a click did, in the feedback).
+pub fn begin_sculpt(doc: &mut Document, tools: &mut ToolState, inverse: bool, at: &massif_core::voxel::Frame) -> (Option<SculptStroke>, Feedback) {
+    use massif_core::voxel::SculptMode;
+    let tool = tools.tool;
     let salt = doc.revision.wrapping_mul(0x9e37_79b9) ^ 0x3d5c_ab71;
-    Some(SculptStroke { what, salt, step, label })
+    let (x, z) = (at.center[0], at.center[2]);
+    let what = match tool.in_3d() {
+        Use3d::MapOnly => return (None, None),
+        Use3d::Click => {
+            let note = click(doc, tools, x.floor() as i32, z.floor() as i32, inverse);
+            return (Some(SculptStroke { what: Stroke3d::Clicked, salt, step: 0, label: String::new() }), note);
+        }
+        Use3d::Brush => {
+            let (stroke, note) = begin_stroke(doc, tools, (x, z), inverse, false);
+            let Some(mut stroke) = stroke else { return (None, note) };
+            continue_stroke(doc, tools, &mut stroke, (x, z), 1.0 / 60.0);
+            return (Some(SculptStroke { what: Stroke3d::Map(Box::new(stroke)), salt, step: 0, label: String::new() }), note);
+        }
+        Use3d::Paint => Stroke3d::Paint { inverse, back: if inverse { unpaint_for_stroke(doc, tools) } else { None } },
+        Use3d::Smooth => Stroke3d::Sculpt(SculptMode::Smooth, 0.0),
+        // Dig digs, the others add; the inverse the other way. Raise /
+        // Lower goes at its own speed.
+        Use3d::Sculpt => {
+            let speed = if tool == Tool::Raise { tools.raise_speed } else { SculptSettings::GROWTH };
+            Stroke3d::Sculpt(if (tool == Tool::Dig) != inverse { SculptMode::Remove } else { SculptMode::Add }, speed)
+        }
+    };
+    // Raise / Lower shapes the land in 3D here: a step of Sculpt.
+    let label = if tool == Tool::Raise { tr!("Sculpt") } else { crate::i18n::tr_name(tool.label()) }.to_owned();
+    let step = doc.history.begin(label.clone(), doc.dim);
+    (Some(SculptStroke { what, salt, step, label }), None)
 }
 
 /// One dab of a 3D stroke on the surface at `frame`, lasting `dt` seconds:
 /// the brush laid along the slope there. Sculpting pushes the surface out
-/// (or in) a little — [`SculptSettings::GROWTH`] blocks a second at full
-/// strength —, smoothing melts its bumps, painting paints the terrain of
-/// the columns under the brush.
+/// (or in) a little — Raise / Lower's speed in blocks a second at full
+/// strength, [`SculptSettings::GROWTH`] for Build and Dig —, smoothing
+/// melts its bumps, painting paints the terrain of the columns under the
+/// brush, the map's brushes act on the columns around, as on the map.
 pub fn sculpt_dab(doc: &mut Document, tools: &ToolState, stroke: &mut SculptStroke, frame: &massif_core::voxel::Frame, dt: f32) -> usize {
     use massif_core::voxel::{self, SculptMode};
-    keep_step(doc, &mut stroke.step, &stroke.label);
+    // (A stroke of the map's brushes keeps its own step, a click none.)
+    if matches!(stroke.what, Stroke3d::Sculpt(..) | Stroke3d::Paint { .. }) {
+        keep_step(doc, &mut stroke.step, &stroke.label);
+    }
     let brush = tools.sculpt_brush();
     let dt = dt.clamp(0.0, 0.1);
     stroke.salt = stroke.salt.wrapping_add(0x632b_e59b);
-    match stroke.what {
-        Stroke3d::Sculpt(SculptMode::Smooth) => {
+    match &mut stroke.what {
+        Stroke3d::Map(map) => {
+            continue_stroke(doc, tools, map, (frame.center[0], frame.center[2]), dt);
+            1
+        }
+        Stroke3d::Clicked => 0,
+        Stroke3d::Sculpt(SculptMode::Smooth, _) => {
             let mut edit = doc.history.edit(&mut doc.world, 0);
             voxel::sculpt_at(&mut edit, &brush, frame.center, Some(frame.normal), sculpt_strength(&brush, dt), SculptMode::Smooth)
         }
-        Stroke3d::Sculpt(mode) => {
+        &mut Stroke3d::Sculpt(mode, speed) => {
             let mut edit = doc.history.edit(&mut doc.world, 0);
-            voxel::displace_at(&mut edit, &brush, frame.center, frame.normal, brush.strength * SculptSettings::GROWTH * dt, mode)
+            voxel::displace_at(&mut edit, &brush, frame.center, frame.normal, brush.strength * speed * dt, mode)
         }
-        Stroke3d::Paint { inverse, back } => {
+        &mut Stroke3d::Paint { inverse, back } => {
             let reg = &doc.world.registry;
             let pattern = (!inverse && tools.pattern.on).then(|| tools.pattern.sampler(reg)).flatten();
             let theme = (inverse && back.is_none()).then(|| (massif_core::generate::Theme::new(reg), doc.world.meta.sea_level as f32));
@@ -1458,8 +1566,17 @@ pub fn sculpt_dab(doc: &mut Document, tools: &ToolState, stroke: &mut SculptStro
     }
 }
 
-pub fn end_sculpt(doc: &mut Document, stroke: SculptStroke) {
-    end_step(doc, stroke.step);
+/// End a stroke of the 3D Sculpt editor: one step to undo. The automatic
+/// tools say what they did.
+pub fn end_sculpt(doc: &mut Document, stroke: SculptStroke) -> Feedback {
+    match stroke.what {
+        Stroke3d::Map(map) => end_stroke(doc, *map),
+        Stroke3d::Clicked => None,
+        Stroke3d::Sculpt(..) | Stroke3d::Paint { .. } => {
+            end_step(doc, stroke.step);
+            None
+        }
+    }
 }
 
 /// What lies under the cursor, for the eyedropper and the info panel.
@@ -1631,11 +1748,11 @@ mod tests {
         assert_eq!(paint_then_unpaint(&mut d, &mut tools), sand);
         // And in 3D Sculpt, as the player.
         let mut d = rocky();
-        tools.sculpt.tool = Tool::PaintTerrain;
+        tools.select(Tool::PaintTerrain);
         tools.terrain = sand.0;
         let frame = massif_core::voxel::Frame { center: [20.5, height(&d, 20, 20), 20.5], normal: [0.0, 1.0, 0.0] };
         for inverse in [false, true] {
-            let mut stroke = begin_sculpt(&mut d, &tools, inverse).unwrap();
+            let mut stroke = begin_sculpt(&mut d, &mut tools, inverse, &frame).0.unwrap();
             sculpt_dab(&mut d, &tools, &mut stroke, &frame, 0.1);
             end_sculpt(&mut d, stroke);
             assert_eq!(TerrainId(probe(&d, 20, 20).unwrap().terrain), if inverse { TerrainId::ROCK } else { sand });
@@ -2259,19 +2376,135 @@ mod tests {
         assert!(d.dimension().voxels.is_empty());
 
         // In the 3D Sculpt editor, the right button builds with the Dig tool.
-        tools.sculpt.tool = Tool::Dig;
-        tools.brush.radius = 6.0;
-        tools.brush.strength = 1.0;
         tools.brush = Brush::default();
-        let mut s = begin_sculpt(&mut d, &tools, true).unwrap();
         let frame = massif_core::voxel::Frame {
             center: [5.5, 64.0, 5.5],
             normal: [0.0, 1.0, 0.0],
         };
+        let mut s = begin_sculpt(&mut d, &mut tools, true, &frame).0.unwrap();
         let n = sculpt_dab(&mut d, &tools, &mut s, &frame, 0.1);
         end_sculpt(&mut d, s);
         assert!(n > 0);
         assert!(height(&d, 5, 5) > 64.0);
+    }
+
+    /// One Smooth stroke over the same place, in 3D Sculpt and on the map,
+    /// leaves the same heights: Smooth in 3D is the map's (its kernel,
+    /// strength and passes), the brush's shape only shaping its falloff,
+    /// laid flat whatever the slope the view points at.
+    #[test]
+    fn smooth_in_3d_is_smooth_on_the_map() {
+        let hilly = || Document::new(generate(&GenParams { tiles_x: 2, tiles_z: 2, landform: Landform::Mountains, ..GenParams::default() }), None, 1);
+        let mut tools = ToolState { tool: Tool::Smooth, ..ToolState::default() };
+        tools.brush.radius = 14.0;
+        tools.brush.strength = 1.0;
+        // A slope near the middle of the map.
+        let (lo, _) = hilly().dimension().bounds().unwrap();
+        let (cx, cz) = (lo.x * 128 + 100, lo.z * 128 + 100);
+        let at = (cx as f32 + 0.5, cz as f32 + 0.5);
+        // On the map, as its view strokes: a dab where it begins, then one a
+        // frame.
+        let mut map = hilly();
+        let (s, _) = begin_stroke(&mut map, &tools, at, false, false);
+        let mut s = s.unwrap();
+        continue_stroke(&mut map, &tools, &mut s, at, 1.0 / 60.0);
+        for _ in 0..10 {
+            continue_stroke(&mut map, &tools, &mut s, at, 0.05);
+        }
+        end_stroke(&mut map, s);
+        // In 3D Sculpt, the view pointing at the same column on a slope.
+        let mut view = hilly();
+        let frame = massif_core::voxel::Frame { center: [at.0, height(&view, cx, cz), at.1], normal: [0.4, 0.8, 0.2] };
+        let (s, _) = begin_sculpt(&mut view, &mut tools, false, &frame);
+        let mut s = s.unwrap();
+        for _ in 0..10 {
+            sculpt_dab(&mut view, &tools, &mut s, &frame, 0.05);
+        }
+        end_sculpt(&mut view, s);
+        let first = hilly();
+        let (mut changed, mut differ) = (0, 0);
+        for z in cz - 30..cz + 31 {
+            for x in cx - 30..cx + 31 {
+                let h = height(&view, x, z);
+                changed += (h != height(&first, x, z)) as usize;
+                differ += (h != height(&map, x, z)) as usize;
+            }
+        }
+        assert!(changed > 300, "smoothed: {changed} columns");
+        assert_eq!(differ, 0, "the same heights as on the map");
+        assert!(view.dimension().voxels.is_empty(), "nothing sculpted");
+        assert_eq!(view.history.undo_label(), Some("Smooth"));
+    }
+
+    /// Settings of a version whose 3D Sculpt editor had its own Sculpt,
+    /// Smooth and Paint: they read, that tool is let go, and a 3D tool the
+    /// Tools panel does not show becomes the one it does.
+    #[test]
+    fn the_old_3d_sculpt_tool_is_let_go() {
+        let old = r#"{"tool": "PaintBiome", "sculpt": {"tool": "Smooth3d", "fly_speed": 2.5}}"#;
+        let mut tools: ToolState = serde_json::from_str(old).unwrap();
+        tools.settle();
+        assert_eq!((tools.tool, tools.sculpt.fly_speed), (Tool::PaintBiome, 2.5));
+        assert!(!serde_json::to_string(&tools).unwrap().contains("Smooth3d"), "no longer saved");
+        for (saved, now) in [("Build", Tool::Raise), ("Dig", Tool::Raise), ("Smooth3d", Tool::Smooth), ("Gradient", Tool::Gradient)] {
+            let mut tools: ToolState = serde_json::from_str(&format!(r#"{{"tool": "{saved}", "sculpt": {{"tool": "PaintTerrain"}}}}"#)).unwrap();
+            tools.settle();
+            assert_eq!(tools.tool, now, "{saved}");
+        }
+    }
+
+    /// Each tool of the Tools panel says what it does in 3D Sculpt, and
+    /// those that act there do, where the view points.
+    #[test]
+    fn the_tools_of_the_panel_act_in_3d() {
+        use massif_core::voxel::Frame;
+        for (_, _, list) in Tool::GROUPS {
+            for &tool in list {
+                // What draws on the map only: its selections, points, marks.
+                let map_only = matches!(tool, Tool::Pan | Tool::Road | Tool::River | Tool::Annotate) || tool.is_select();
+                assert_eq!(tool.in_3d() == Use3d::MapOnly, map_only, "{tool:?}");
+            }
+        }
+        let at = |d: &Document| Frame { center: [20.5, height(d, 20, 20), 20.5], normal: [0.0, 1.0, 0.0] };
+        let stroke = |d: &mut Document, tools: &mut ToolState, inverse: bool| {
+            let frame = at(d);
+            let (s, _) = begin_sculpt(d, tools, inverse, &frame);
+            let mut s = s.expect("a stroke");
+            for _ in 0..5 {
+                sculpt_dab(d, tools, &mut s, &frame, 0.05);
+            }
+            end_sculpt(d, s)
+        };
+        // Raise adds matter, its inverse digs.
+        let mut d = doc();
+        let mut tools = ToolState::default();
+        tools.brush.radius = 5.0;
+        tools.brush.strength = 1.0;
+        stroke(&mut d, &mut tools, false);
+        assert!(height(&d, 20, 20) > 64.0 && !d.dimension().voxels.is_empty(), "raised in 3D");
+        let mut d = doc();
+        stroke(&mut d, &mut tools, true);
+        assert!(height(&d, 20, 20) < 64.0, "dug in 3D");
+        // A biome painted by the map's own brush, where the view points.
+        let mut d = doc();
+        tools.select(Tool::PaintBiome);
+        tools.biome = 7;
+        stroke(&mut d, &mut tools, false);
+        assert_eq!(probe(&d, 20, 20).unwrap().biome, 7);
+        assert_eq!(d.history.undo_label(), Some(crate::i18n::tr_name(Tool::PaintBiome.label())));
+        // The eyedropper picks there, once.
+        let mut d = doc();
+        tools.select(Tool::Eyedropper);
+        let frame = at(&d);
+        tools.target_height = 0.0;
+        let (s, note) = begin_sculpt(&mut d, &mut tools, false, &frame);
+        assert!(note.is_some() && tools.target_height == 64.0, "picked the height: {note:?}");
+        assert_eq!(tools.tool, Tool::PaintBiome, "back to the tool before");
+        assert!(end_sculpt(&mut d, s.unwrap()).is_none());
+        // A selection shape does nothing in 3D.
+        tools.select(Tool::SelectRect);
+        assert!(begin_sculpt(&mut d, &mut tools, false, &frame).0.is_none());
+        assert!(d.history.undo_label().is_none());
     }
 }
 

@@ -595,15 +595,7 @@ impl MassifApp {
             .and_then(|s| eframe::get_value(s, "massif.tools"))
             .or_else(|| backup.get("massif.tools"))
             .unwrap_or_default();
-        // The 3D tools live in the 3D Sculpt editor now, not on the map;
-        // building and digging are one tool there.
-        if tools.tool.is_sculpt() {
-            tools.sculpt.tool = tools.tool;
-            tools.tool = Tool::Raise;
-        }
-        if tools.sculpt.tool == Tool::Dig {
-            tools.sculpt.tool = Tool::Build;
-        }
+        tools.settle();
         crate::i18n::set_language(settings.language);
         theme::set_accent(&cc.egui_ctx, settings.accent);
         crate::loader::set_pattern(&cc.egui_ctx, settings.loader);
@@ -3489,6 +3481,9 @@ impl MassifApp {
                     .inner_margin(egui::Margin::symmetric(8, 6))
                     .show(&mut cui, |ui| panels::sculpt_toolbar(ui, &mut self.tools, &mut self.brushes, &self.doc.world.registry));
                 self.sculpt3d.ui(&mut cui, frame, &mut self.doc, &mut self.tools, self.map_center, true);
+                if let Some(note) = self.sculpt3d.feedback.take() {
+                    self.feedback = Some(note);
+                }
             }
             EditorKind::Tools => scrolled(&mut cui, &mut |ui| panels::tools_panel(ui, &mut self.tools)),
             EditorKind::ToolSettings => {
@@ -5593,7 +5588,7 @@ mod tests {
         {
             let app = h.state_mut();
             app.layout.active = 4; // 3D Sculpt
-            app.tools.sculpt.tool = Tool::Smooth3d;
+            app.tools.tool = Tool::Smooth;
             app.tools.brush.radius = 12.0;
             app.tools.brush.strength = 1.0;
             app.sculpt3d.camera.distance = 160.0;
@@ -6919,7 +6914,7 @@ mod tests {
         };
         eprintln!("water at {x}, {z}: level {level}, lower toward {down:?}");
         h.state_mut().layout.active = 4; // 3D Sculpt
-        h.state_mut().tools.sculpt.tool = Tool::Build;
+        h.state_mut().tools.tool = Tool::Raise;
         h.state_mut().tools.brush.radius = 4.0;
         h.run_steps(5);
         // Look at it from upstream, then walk.
@@ -7036,7 +7031,7 @@ mod tests {
         {
             let app = h.state_mut();
             app.layout.active = 4; // 3D Sculpt
-            app.tools.sculpt.tool = Tool::Build;
+            app.tools.tool = Tool::Raise;
             app.tools.brush.radius = 3.0;
         }
         h.run_steps(5);
@@ -8948,8 +8943,8 @@ mod tests {
             .find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::Sculpt3d))
             .map(|(_, r)| r)
             .expect("the 3D Sculpt workspace shows its editor");
-        for (tool, radius) in [(Tool::Build, 24.0), (Tool::Build, 48.0), (Tool::Smooth3d, 48.0), (Tool::Smooth3d, 64.0)] {
-            h.state_mut().tools.sculpt.tool = tool;
+        for (tool, radius) in [(Tool::Raise, 24.0), (Tool::Raise, 48.0), (Tool::Smooth, 48.0), (Tool::Smooth, 64.0)] {
+            h.state_mut().tools.tool = tool;
             h.state_mut().tools.brush.radius = radius;
             let from = view.center() - vec2(60.0, 0.0);
             h.event(egui::Event::PointerMoved(from));
@@ -9067,7 +9062,7 @@ mod tests {
         {
             let app = h.state_mut();
             app.layout.active = 4; // 3D Sculpt
-            app.tools.sculpt.tool = Tool::Build;
+            app.tools.tool = Tool::Raise;
             app.tools.brush.radius = 3.0;
         }
         h.run_steps(20);
@@ -9346,7 +9341,7 @@ mod tests {
         {
             let app = h.state_mut();
             app.layout.active = 4; // 3D Sculpt
-            app.tools.sculpt.tool = Tool::Build;
+            app.tools.tool = Tool::Raise;
             app.tools.brush.radius = 3.0;
             app.tools.brush.strength = 1.0;
         }
@@ -9466,7 +9461,7 @@ mod tests {
         {
             let app = h.state_mut();
             app.layout.active = 4; // 3D Sculpt
-            app.tools.sculpt.tool = Tool::Build;
+            app.tools.tool = Tool::Raise;
             app.tools.brush.radius = 14.0;
             app.tools.brush.strength = 1.0;
             app.sculpt3d.camera.distance = 160.0;
@@ -9570,7 +9565,7 @@ mod tests {
         let sand = h.state().doc.world.registry.terrain_by_name("Sand").unwrap();
         {
             let app = h.state_mut();
-            app.tools.sculpt.tool = Tool::PaintTerrain;
+            app.tools.tool = Tool::PaintTerrain;
             app.tools.terrain = sand.0;
             app.tools.brush.strength = 1.0;
         }
@@ -9591,6 +9586,281 @@ mod tests {
         h.render().unwrap().save(dir.join("sculpt-paint.png")).unwrap();
         let (w, hgt, rgba) = h.state().sculpt3d.read_back().expect("the 3D view rendered");
         image::save_buffer(dir.join("sculpt-build-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+    }
+
+    /// 3D Sculpt has no tools of its own in its header: it works with the
+    /// tool of the Tools panel, which its workspace shows, and says which.
+    /// A tool of the map only says so there.
+    #[test]
+    fn the_sculpt_header_follows_the_tools_panel() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let mut h = harness(ThemeChoice::Dark);
+        h.state_mut().layout.active = 4; // 3D Sculpt
+        h.state_mut().tools.tool = Tool::Raise;
+        h.run_steps(10);
+        let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        let view = areas.into_iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::Sculpt3d)).map(|(_, r)| r).unwrap();
+        let header = Rect::from_min_size(view.min, vec2(view.width(), 70.0));
+        let in_header = |h: &egui_kittest::Harness<'_, MassifApp>, label: &str, role: Role| h.query_all_by_label(label).filter(|n| n.accesskit_node().role() == role && n.rect().intersects(header)).count();
+        for old in ["Sculpt", "Smooth", "Paint"] {
+            assert_eq!(in_header(&h, old, Role::Button), 0, "no {old} button of its own");
+        }
+        assert_eq!(in_header(&h, "Raise / Lower", Role::Label), 1, "the tool in hand");
+        // Picked in the Tools panel, the tool is 3D Sculpt's too.
+        for (tool, label) in [(Tool::Smooth, "Smooth"), (Tool::PaintBiome, "Paint biome"), (Tool::Gradient, "Gradient brush")] {
+            h.query_all_by_label(label).find(|n| n.accesskit_node().role() == Role::Button && !n.rect().intersects(header)).expect("in the Tools panel").click_accesskit();
+            h.run_steps(3);
+            assert_eq!(h.state().tools.tool, tool);
+            assert_eq!(in_header(&h, label, Role::Label), 1, "{label} in the header");
+        }
+        // A selection shape: on the map only, said in the header.
+        h.query_all_by_label("Rectangle selection").find(|n| n.accesskit_node().role() == Role::Button).expect("in the Tools panel").click_accesskit();
+        h.run_steps(3);
+        let labels: Vec<String> = h.query_all_by_role(Role::Label).filter(|n| n.rect().intersects(header)).filter_map(|n| n.accesskit_node().value().or_else(|| n.accesskit_node().label())).collect();
+        assert!(labels.iter().any(|l| l.contains("works on the map")), "the hint says it works on the map: {labels:?}");
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            h.state_mut().tools.tool = Tool::Smooth;
+            h.run_steps(3);
+            let image = h.render().unwrap();
+            let ppp = h.ctx.pixels_per_point();
+            let (x, y, w, hgt) = ((header.min.x * ppp) as u32, (header.min.y * ppp) as u32, (header.width() * ppp) as u32, (header.height() * ppp) as u32);
+            image::imageops::crop_imm(&image, x, y, w.min(image.width() - x), hgt).to_image().save(dir.join(format!("sculpt-header-{ppp}x.png"))).unwrap();
+        }
+    }
+
+    /// The tools of the Tools panel act in 3D Sculpt where the cursor
+    /// points: Smooth melts the land in 3D, Paint biome paints the columns
+    /// there, each a step to undo of its name.
+    #[test]
+    fn tools_of_the_panel_act_in_3d_sculpt() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let mut h = harness(ThemeChoice::Dark);
+        {
+            let app = h.state_mut();
+            app.layout.active = 4; // 3D Sculpt
+            app.tools.brush.radius = 8.0;
+            app.tools.brush.strength = 1.0;
+            app.sculpt3d.camera.distance = 160.0;
+        }
+        h.run_steps(30);
+        let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        let view = areas.into_iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::Sculpt3d)).map(|(_, r)| r).unwrap();
+        let header = Rect::from_min_size(view.min, vec2(view.width(), 70.0));
+        let at = view.center() + vec2(0.0, 20.0);
+        let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        let stroke = |h: &mut egui_kittest::Harness<'_, MassifApp>| {
+            h.event(egui::Event::PointerMoved(at));
+            h.run_steps(3);
+            let hit = h.state().sculpt3d.hover().expect("the cursor points at the land");
+            h.event(press(true));
+            for _ in 0..12 {
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            h.event(press(false));
+            h.run_steps(5);
+            hit
+        };
+        // Smooth, picked in the Tools panel.
+        h.query_all_by_label("Smooth").find(|n| n.accesskit_node().role() == Role::Button && !n.rect().intersects(header)).expect("in the Tools panel").click_accesskit();
+        h.run_steps(3);
+        assert_eq!(h.state().tools.tool, Tool::Smooth);
+        let before = h.state().doc.revision;
+        stroke(&mut h);
+        assert_eq!(h.state().doc.history.undo_label(), Some("Smooth"));
+        assert!(h.state().doc.revision > before && h.state().doc.dimension().voxels.is_empty(), "smoothed as on the map");
+        // Paint biome, picked there too: the biome of the columns pointed at.
+        h.query_all_by_label("Paint biome").find(|n| n.accesskit_node().role() == Role::Button && !n.rect().intersects(header)).expect("in the Tools panel").click_accesskit();
+        h.run_steps(3);
+        let biome = h.state().tools.biome;
+        let hit = stroke(&mut h);
+        assert_eq!(h.state().doc.history.undo_label(), Some("Paint biome"));
+        assert_eq!(crate::tools::probe(&h.state().doc, hit.block.0, hit.block.2).unwrap().biome, biome, "painted where it pointed");
+    }
+
+    /// Smooth in 3D Sculpt, from the player's height, as on the map: a hill
+    /// with a stamp for brush, before and after (MASSIF_SNAPSHOT_DIR; 2×:
+    /// MASSIF_SNAPSHOT_PPP=2). The footprint is laid on the land, the
+    /// columns it takes marked whatever their height.
+    #[test]
+    fn smooth_in_3d_from_the_players_height() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        let (x, z, top) = {
+            let doc = &h.state().doc;
+            let (lo, hi) = doc.dimension().bounds().unwrap();
+            let t = massif_core::coords::TILE_SIZE;
+            // The steepest dry ground: the most height between columns 10
+            // blocks apart around it.
+            let mut best = (0, 0, f32::MIN, f32::MIN);
+            for z in (lo.z * t + 32..(hi.z + 1) * t - 32).step_by(8) {
+                for x in (lo.x * t + 32..(hi.x + 1) * t - 32).step_by(8) {
+                    let around: Vec<f32> = [(0, 0), (10, 0), (-10, 0), (0, 10), (0, -10)].iter().filter_map(|(dx, dz)| crate::tools::probe(doc, x + dx, z + dz)).filter(|p| p.fluid == massif_core::tile::NO_FLUID || p.fluid as f32 <= p.height).map(|p| p.height).collect();
+                    if around.len() < 5 {
+                        continue;
+                    }
+                    let span = around.iter().fold(f32::MIN, |a, &b| a.max(b)) - around.iter().fold(f32::MAX, |a, &b| a.min(b));
+                    if span > best.3 {
+                        best = (x, z, around[0], span);
+                    }
+                }
+            }
+            (best.0, best.1, best.2)
+        };
+        {
+            let app = h.state_mut();
+            app.layout.active = 4; // 3D Sculpt
+            app.tools.tool = Tool::Smooth;
+            let source = BrushSource::Stamp(massif_core::stamps::Stamp::ALL[3]);
+            assert!(panels::select_brush(&mut app.tools, &app.brushes, source), "the stamp is a brush");
+            app.tools.brush.radius = 14.0;
+            app.tools.brush.strength = 1.0;
+        }
+        h.run_steps(20);
+        let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        let view = areas.into_iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::Sculpt3d)).map(|(_, r)| r).unwrap();
+        h.state_mut().tools.sculpt.player = true;
+        h.event(egui::Event::PointerMoved(view.center()));
+        h.run_steps(5);
+        // Flying a little off the hill's top, looking at it.
+        h.state_mut().sculpt3d.player_mut().unwrap().set_motion(crate::player::Motion::Flying);
+        h.state_mut().sculpt3d.player_mut().unwrap().feet = [x as f64 + 0.5, top as f64 + 12.0, z as f64 + 26.5];
+        h.state_mut().sculpt3d.camera.yaw = 0.0;
+        h.state_mut().sculpt3d.camera.pitch = 0.45;
+        h.event(egui::Event::PointerMoved(view.center()));
+        h.run_steps(20);
+        assert!(h.state().sculpt3d.hover().is_some(), "the hill pointed at");
+        let ppp = h.ctx.pixels_per_point();
+        let shot = |h: &mut egui_kittest::Harness<'_, MassifApp>, name: &str| {
+            let (w, hgt, rgba) = h.state().sculpt3d.read_back().expect("the 3D view rendered");
+            image::save_buffer(dir.join(format!("{name}-{ppp}x.png")), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+        };
+        shot(&mut h, "smooth-3d-before");
+        h.render().unwrap().save(dir.join(format!("smooth-3d-before-window-{ppp}x.png"))).unwrap();
+        let revision = h.state().doc.revision;
+        h.event(egui::Event::PointerButton { pos: view.center(), button: egui::PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+        for _ in 0..40 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.event(egui::Event::PointerButton { pos: view.center(), button: egui::PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+        h.state_mut().sculpt3d.invalidate_all();
+        h.run_steps(30);
+        assert!(h.state().doc.revision > revision && h.state().doc.history.undo_label() == Some("Smooth"));
+        shot(&mut h, "smooth-3d-after");
+    }
+
+    /// Ghost, in 3D Sculpt's player: through the ground into a cave. In the
+    /// rock the view sees through it to the cave, and the cursor sculpts the
+    /// cave's wall it shows. Renders with MASSIF_SNAPSHOT_DIR (2×:
+    /// MASSIF_SNAPSHOT_PPP=2).
+    #[test]
+    fn a_ghost_goes_into_a_cave() {
+        use crate::player::Blocks;
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(ThemeChoice::Dark);
+        // Under the highest land: the eyes 4 blocks in the rock, a cave a
+        // few blocks east and under them.
+        let (x, z, eye_y) = {
+            let doc = &h.state().doc;
+            let mut blocks = crate::player::MapBlocks::new(doc.dimension());
+            let (lo, hi) = doc.dimension().bounds().unwrap();
+            let t = massif_core::coords::TILE_SIZE;
+            let mut best = (0, 0, i32::MIN);
+            for z in (lo.z * t + 16..(hi.z + 1) * t - 16).step_by(4) {
+                for x in (lo.x * t + 16..(hi.x + 1) * t - 16).step_by(4) {
+                    // The lowest top of the columns from the eyes to past the cave.
+                    let low = (x - 4..=x + 12).filter_map(|cx| blocks.top(cx, z)).min().unwrap_or(i32::MIN);
+                    if low > best.2 {
+                        best = (x, z, low);
+                    }
+                }
+            }
+            (best.0, best.1, best.2 - 4)
+        };
+        let cave = [x as f32 + 6.5, eye_y as f32 - 8.5, z as f32 + 0.5];
+        {
+            let app = h.state_mut();
+            app.layout.active = 4; // 3D Sculpt
+            app.tools.tool = Tool::Raise;
+            app.tools.brush.radius = 2.0;
+            app.tools.brush.strength = 1.0;
+            let doc = &mut app.doc;
+            doc.history.begin("Dig", doc.dim);
+            let brush = massif_core::Brush { radius: 6.0, profile: massif_core::Profile::Constant, ..massif_core::Brush::default() };
+            massif_core::voxel::sculpt(&mut doc.history.edit(&mut doc.world, 0), &brush, cave, 1.0, massif_core::voxel::SculptMode::Remove);
+            doc.commit();
+            app.sculpt3d.invalidate_all();
+        }
+        h.run_steps(20);
+        let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        let view = areas.into_iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::Sculpt3d)).map(|(_, r)| r).unwrap();
+        h.state_mut().tools.sculpt.player = true;
+        h.event(egui::Event::PointerMoved(view.center()));
+        h.run_steps(5);
+        // Ghost, from the control at the bottom right.
+        h.get_by_label("Ghost").click_accesskit();
+        h.run_steps(2);
+        assert_eq!(h.state().sculpt3d.player().unwrap().motion(), crate::player::Motion::Ghost);
+        // In the rock west of the cave, looking at it, east and down.
+        let feet = [x as f64 + 0.5, eye_y as f64 + 0.5 - crate::player::EYE, z as f64 + 0.5];
+        h.state_mut().sculpt3d.player_mut().unwrap().feet = feet;
+        h.state_mut().sculpt3d.camera.yaw = -std::f32::consts::FRAC_PI_2;
+        h.state_mut().sculpt3d.camera.pitch = 0.75;
+        h.event(egui::Event::PointerMoved(view.center()));
+        h.run_steps(10);
+        let p = h.state().sculpt3d.player().unwrap();
+        assert!((p.feet[0] - feet[0]).abs() < 1e-6 && (p.feet[1] - feet[1]).abs() < 1e-6, "a ghost stays in the rock: {p:?}");
+        let eye = h.state().sculpt3d.camera.eye();
+        assert!(crate::player::MapBlocks::new(h.state().doc.dimension()).solid(eye[0].floor() as i32, eye[1].floor() as i32, eye[2].floor() as i32), "the eyes in the rock");
+        // The cursor is on the cave's wall, beyond the rock.
+        let hit = h.state().sculpt3d.hover().expect("the cursor sees through the rock");
+        let d = ((hit.point[0] - cave[0] as f64).powi(2) + (hit.point[1] - cave[1] as f64).powi(2) + (hit.point[2] - cave[2] as f64).powi(2)).sqrt();
+        assert!(d < 8.0, "on the cave's wall: {hit:?}, {d:.1} from its middle");
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            let ppp = h.ctx.pixels_per_point();
+            h.render().unwrap().save(dir.join(format!("ghost-in-rock-{ppp}x.png"))).unwrap();
+            let (w, hgt, rgba) = h.state().sculpt3d.read_back().expect("the 3D view rendered");
+            image::save_buffer(dir.join(format!("ghost-in-rock-3d-{ppp}x.png")), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+        }
+        // The right button adds matter there, on the wall.
+        let solid_near = |h: &egui_kittest::Harness<'_, MassifApp>| {
+            let mut blocks = crate::player::MapBlocks::new(h.state().doc.dimension());
+            let (bx, by, bz) = hit.block;
+            (-3..=3).flat_map(|dx| (-3..=3).flat_map(move |dy| (-3..=3).map(move |dz| (dx, dy, dz)))).filter(|&(dx, dy, dz)| blocks.solid(bx + dx, by + dy, bz + dz)).count()
+        };
+        let before = solid_near(&h);
+        h.event(egui::Event::PointerButton { pos: view.center(), button: egui::PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+        for _ in 0..12 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.event(egui::Event::PointerButton { pos: view.center(), button: egui::PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(5);
+        assert_eq!(h.state().doc.history.undo_label(), Some("Sculpt"));
+        assert!(solid_near(&h) > before, "matter added on the cave's wall");
+        h.state_mut().doc.undo();
+        // In the cave: the eyes in air, the cave seen as it is.
+        h.state_mut().sculpt3d.player_mut().unwrap().feet = [cave[0] as f64 - 3.0, cave[1] as f64 - 2.0, cave[2] as f64];
+        h.state_mut().sculpt3d.camera.pitch = 0.1;
+        h.state_mut().sculpt3d.invalidate_all();
+        h.run_steps(20);
+        let eye = h.state().sculpt3d.camera.eye();
+        assert!(!crate::player::MapBlocks::new(h.state().doc.dimension()).solid(eye[0].floor() as i32, eye[1].floor() as i32, eye[2].floor() as i32), "the eyes in the cave");
+        assert!(h.state().sculpt3d.hover().is_some(), "the cave's wall pointed at");
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            let ppp = h.ctx.pixels_per_point();
+            let (w, hgt, rgba) = h.state().sculpt3d.read_back().expect("the 3D view rendered");
+            image::save_buffer(dir.join(format!("ghost-in-cave-3d-{ppp}x.png")), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+        }
+        // G: out of Ghost, flying in the cave.
+        h.key_press(Key::G);
+        h.step();
+        assert_eq!(h.state().sculpt3d.player().unwrap().motion(), crate::player::Motion::Flying);
     }
 
     /// Import a real WorldPainter world through the editor and show the
@@ -14145,7 +14415,7 @@ mod tests {
             app.layout.active = 4; // 3D Sculpt
             let source = BrushSource::Stamp(massif_core::stamps::Stamp::ALL[3]);
             assert!(panels::select_brush(&mut app.tools, &app.brushes, source), "the stamp is a brush");
-            app.tools.sculpt.tool = Tool::Build;
+            app.tools.tool = Tool::Raise;
             app.tools.brush.radius = 40.0;
             app.tools.brush.strength = 0.5;
         }

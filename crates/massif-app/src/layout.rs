@@ -453,7 +453,7 @@ pub struct Layout {
 
 /// The workspaces a layout saved by an older version lacks are added to it
 /// once: this is the version they come with.
-const LAYOUT_VERSION: u32 = 4;
+const LAYOUT_VERSION: u32 = 5;
 
 /// The share of the window's width the column of the tools takes on the
 /// left of the Layout, Sculpting and Painting workspaces: the same in all
@@ -493,15 +493,22 @@ impl Builder<'_> {
     }
 }
 
-/// The 3D Sculpt workspace: its editor, with the map and the levels beside.
+/// The 3D Sculpt workspace: the tools and their settings on the left, as
+/// in Sculpting (its editor works with the tool of the Tools panel), its
+/// editor, the map and the levels beside.
 fn sculpt_workspace(b: &mut Builder) -> Node {
+    let left = {
+        let (tools, settings, brush) = (b.area(EditorKind::Tools), b.area(EditorKind::ToolSettings), b.area(EditorKind::BrushSettings));
+        let lower = b.column(0.45, settings, brush);
+        b.column(0.3, tools, lower)
+    };
     let side = {
-        let (brush, map, levels) = (b.area(EditorKind::BrushSettings), b.area(EditorKind::Map), b.area(EditorKind::Levels));
-        let lower = b.column(0.6, map, levels);
-        b.column(0.42, brush, lower)
+        let (map, levels) = (b.area(EditorKind::Map), b.area(EditorKind::Levels));
+        b.column(0.6, map, levels)
     };
     let view = b.area(EditorKind::Sculpt3d);
-    b.row(0.76, view, side)
+    let centre = b.row(0.78, view, side);
+    b.row(SIDEBAR, left, centre)
 }
 
 /// Give every area of `node` a new id, from `next` on, so that no view
@@ -695,6 +702,15 @@ impl Layout {
                     *ratio = SIDEBAR;
                 }
             }
+        }
+        // Version 5: the 3D Sculpt editor works with the tool of the Tools
+        // panel, which its workspace shows from then on, with Tool Settings
+        // (unless it was given them by hand).
+        if self.version < 5
+            && let Some(k) = self.workspaces.iter().position(|w| w.name == "3D Sculpt" && !w.terrain)
+            && !self.workspaces[k].root.shows(EditorKind::Tools)
+        {
+            self.reset_workspace(k);
         }
         self.version = LAYOUT_VERSION;
         self
@@ -998,6 +1014,38 @@ mod tests {
         gone.workspaces.retain(|w| w.name != "3D Sculpt");
         let again = serde_json::from_str::<Layout>(&serde_json::to_string(&gone).unwrap()).unwrap().sanitize();
         assert!(!again.workspaces.iter().any(|w| w.name == "3D Sculpt"));
+    }
+
+    /// The 3D Sculpt workspace of an older layout gets the Tools panel and
+    /// Tool Settings, whose tool its editor works with, once; one given
+    /// the Tools panel by hand is left as it is.
+    #[test]
+    fn the_sculpt_workspace_gets_the_tools() {
+        let sculpt = |l: &Layout| l.workspaces.iter().find(|w| w.name == "3D Sculpt").unwrap().root.clone();
+        let fresh = Layout::default();
+        for kind in [EditorKind::Tools, EditorKind::ToolSettings, EditorKind::BrushSettings, EditorKind::Sculpt3d, EditorKind::Map, EditorKind::Levels] {
+            assert!(sculpt(&fresh).shows(kind), "{kind:?}");
+        }
+        // As version 4 laid it out: its editor, Brush Settings, the map and
+        // the levels.
+        let mut old = Layout { version: 4, ..Layout::default() };
+        let k = old.workspaces.iter().position(|w| w.name == "3D Sculpt").unwrap();
+        let mut b = Builder(&mut old.next_id);
+        let (brush, map, levels) = (b.area(EditorKind::BrushSettings), b.area(EditorKind::Map), b.area(EditorKind::Levels));
+        let lower = b.column(0.6, map, levels);
+        let side = b.column(0.42, brush, lower);
+        let view = b.area(EditorKind::Sculpt3d);
+        old.workspaces[k].root = b.row(0.76, view, side);
+        let json = serde_json::to_string(&old).unwrap();
+        let layout = serde_json::from_str::<Layout>(&json).unwrap().sanitize();
+        assert!(sculpt(&layout).shows(EditorKind::Tools) && sculpt(&layout).shows(EditorKind::ToolSettings));
+        // Given the Tools panel by hand: kept.
+        let mut mine = Layout { version: 4, ..Layout::default() };
+        let mut b = Builder(&mut mine.next_id);
+        let (tools, view) = (b.area(EditorKind::Tools), b.area(EditorKind::Sculpt3d));
+        mine.workspaces[k].root = b.row(0.2, tools, view);
+        let kept = mine.workspaces[k].root.clone();
+        assert_eq!(sculpt(&mine.sanitize()), kept);
     }
 
     #[test]

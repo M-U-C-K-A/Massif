@@ -77,27 +77,18 @@ fn tool_button(ui: &mut Ui, tool: Tool, selected: bool, size: f32) -> egui::Resp
     response
 }
 
-/// A tool to choose in a row of them: its icon and its name, in a pill.
-fn tool_chip(ui: &mut Ui, tool: Tool, label: &str, selected: bool) -> egui::Response {
+/// The tool in hand, as a chip that only shows it: its icon and name, in
+/// the accent where it acts (else greyed).
+fn tool_tag(ui: &mut Ui, tool: Tool, label: &str, acts: bool) -> egui::Response {
     let pal = Palette::of(ui);
     let font = egui::FontId::proportional(12.5);
-    let galley = ui.painter().layout_no_wrap(label.to_owned(), font, if selected { pal.text } else { pal.weak });
-    let (rect, response) = ui.allocate_exact_size(vec2(10.0 + 16.0 + 6.0 + galley.size().x + 12.0, 26.0), Sense::click());
-    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
-    let fill = if selected {
-        pal.accent_soft
-    } else if response.hovered() {
-        theme::mix(pal.panel, pal.text, 0.07)
-    } else {
-        Color32::TRANSPARENT
-    };
-    ui.painter().rect_filled(rect, theme::PILL, fill);
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), font, if acts { pal.text } else { pal.weak });
+    let (rect, response) = ui.allocate_exact_size(vec2(10.0 + 16.0 + 6.0 + galley.size().x + 12.0, 26.0), Sense::hover());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, label));
+    ui.painter().rect_filled(rect, theme::PILL, if acts { pal.accent_soft } else { theme::mix(pal.panel, pal.text, 0.05) });
     let icon = Rect::from_center_size(pos2(rect.left() + 18.0, rect.center().y), vec2(16.0, 16.0));
-    crate::icons::paint(ui.painter(), icon, tool, if selected { pal.accent } else { pal.weak });
-    ui.painter().galley(pos2(rect.left() + 32.0, rect.center().y - galley.size().y / 2.0), galley, pal.text);
-    if response.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
+    crate::icons::paint(ui.painter(), icon, tool, if acts { pal.accent } else { pal.weak });
+    ui.painter().galley(pos2(rect.left() + 32.0, rect.center().y - galley.size().y / 2.0), galley, if acts { pal.text } else { pal.weak });
     response
 }
 
@@ -181,20 +172,19 @@ pub fn tools_panel(ui: &mut Ui, tools: &mut ToolState) {
 
 // --------------------------------------------------------- tool settings --
 
-/// The tools of the 3D Sculpt editor, along its top: which one, with which
-/// brush — the one chosen for every tool, a custom one too —, how big, how
-/// hard; with Paint, the terrain it paints.
+/// Along the top of the 3D Sculpt editor: the tool in hand — the one chosen
+/// in the Tools panel, as on the map —, the player, the brush — the one
+/// chosen for every tool, a custom one too —, how big, how hard; with
+/// Paint, the terrain it paints; what the buttons do.
 pub fn sculpt_toolbar(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibrary, reg: &Registry) {
+    use crate::tools::Use3d;
     let pal = Palette::of(ui);
+    let use3d = tools.tool.in_3d();
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(4.0, 0.0);
         ui.spacing_mut().interact_size.y = 22.0;
-        for tool in crate::tools::SculptSettings::TOOLS {
-            let label = if tool == Tool::PaintTerrain { tr!("Paint") } else { crate::i18n::tr_name(tool.label()) };
-            if crate::cards::tool(tool_chip(ui, tool, label, tools.sculpt.tool == tool), tool).clicked() {
-                tools.sculpt.tool = tool;
-            }
-        }
+        let name = crate::i18n::tr_name(tools.tool.label());
+        crate::cards::tool(tool_tag(ui, tools.tool, name, use3d != Use3d::MapOnly), tools.tool);
         ui.add_space(8.0);
         ui.separator();
         ui.add_space(4.0);
@@ -204,7 +194,8 @@ pub fn sculpt_toolbar(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
              the left button looks around, the right one uses the tool (Alt: its inverse), the middle one picks a block, \
              Ctrl turns about a point or moves the view, the wheel sets the flight speed. A click takes the mouse \
              as in the game (Esc gives it back): the right button builds, the left one breaks. W A S D walk, \
-             Space jumps (twice: flies), Shift sneaks or goes down, Ctrl sprints",
+             Space jumps (twice: flies), Shift sneaks or goes down, Ctrl sprints, G turns Ghost on and off: \
+             flying through the ground, into caves",
         );
         if player.clicked() {
             tools.sculpt.player = !tools.sculpt.player;
@@ -260,29 +251,34 @@ pub fn sculpt_toolbar(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
         // Its size and intensity are those of Brush Settings, as for every
         // tool: said here, set there.
         ui.add_space(6.0);
-        let b = tools.sculpt_brush();
+        let b = tools.brush_3d();
         let most = massif_core::voxel::MAX_SCULPT_RADIUS;
-        let capped = tools.brush.radius > most;
+        let capped = matches!(use3d, Use3d::Sculpt | Use3d::Smooth | Use3d::Paint) && tools.brush.radius > most;
         let size = if capped { tr!("{most:.0} radius (the most in 3D)", most) } else { tr!("{radius:.0} radius", radius = b.radius) };
         ui.label(RichText::new(tr!("{size} · {value:.0}%", value = b.strength * 100.0, size)).size(12.0).color(if capped { pal.accent } else { pal.weak }))
             .on_hover_text(tr!("Size, intensity and rotation: in Brush Settings, as for every tool (⌘+wheel: size). In 3D a brush sculpts {most:.0} blocks around at most.", most));
         // What Paint paints: the terrain chosen (in Terrain or Blocks).
-        if tools.sculpt.tool == Tool::PaintTerrain {
+        if tools.tool == Tool::PaintTerrain {
             ui.add_space(6.0);
             let def = reg.terrain(TerrainId(tools.terrain));
             swatch(ui, theme::rgb(def.color));
             let what = if tools.pattern.on { tr!("a noise of {n} blocks", n = tools.pattern.terrains.len()) } else { def.name.clone() };
             ui.label(RichText::new(what).size(12.0)).on_hover_text(tr!("Pick it in Terrain or Blocks"));
         }
-        let hint = match tools.sculpt.tool {
-            _ if tools.sculpt.player => tr!("The keys and buttons: along the bottom of the view"),
-            Tool::PaintTerrain if tools.unpaint == crate::tools::Unpaint::MapTerrain => tr!("Left: paint · right: back to the map's terrain · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point"),
-            Tool::PaintTerrain => tr!("Left: paint · right: what the height calls for · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point"),
-            Tool::Smooth3d => tr!("Left: smooth · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point"),
-            _ => tr!("Left: add · right: dig · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point"),
+        let hint = match use3d {
+            Use3d::MapOnly => tr!("{name} works on the map: here the left button turns the view, the right one moves it", name).into(),
+            _ if tools.sculpt.player => std::borrow::Cow::Borrowed(tr!("The keys and buttons: along the bottom of the view")),
+            Use3d::Paint if tools.unpaint == crate::tools::Unpaint::MapTerrain => tr!("Left: paint · right: back to the map's terrain · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point").into(),
+            Use3d::Paint => tr!("Left: paint · right: what the height calls for · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point").into(),
+            Use3d::Smooth => tr!("Left: smooth · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point").into(),
+            Use3d::Brush if tools.tool == Tool::Smooth => tr!("Left: smooth · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point").into(),
+            Use3d::Sculpt if tools.tool == Tool::Dig => tr!("Left: dig · right: add · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point").into(),
+            Use3d::Sculpt => tr!("Left: add · right: dig · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point").into(),
+            Use3d::Click => tr!("Click: {name} where the cursor points · Shift+drag: move · Alt+drag: turn", name).into(),
+            Use3d::Brush => tr!("Left: {name} · right: its inverse · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point", name).into(),
         };
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add(egui::Label::new(RichText::new(hint).size(11.5).color(pal.weak)).truncate());
+            ui.add(egui::Label::new(RichText::new(hint.as_ref()).size(11.5).color(pal.weak)).truncate());
         });
     });
 }

@@ -2,7 +2,8 @@
 //! jumps (twice quickly: flies, and twice again: falls back), Q sneaks
 //! (flying: goes down), Shift runs (or W twice). The body is Minecraft's
 //! (0.6 × 1.8 blocks, its eyes at 1.62) and bumps into the blocks of the map
-//! as composed: levels and sculpted matter, with water to swim in.
+//! as composed: levels and sculpted matter, with water to swim in. As a
+//! ghost (the game's spectator mode) it flies through everything.
 
 use massif_core::compose::{Span, TileStack};
 use massif_core::coords::{TilePos, local_index};
@@ -50,6 +51,17 @@ pub struct Keys {
     pub sneak: bool,
     /// Shift: run.
     pub run: bool,
+}
+
+/// How the player goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Motion {
+    /// On foot (swimming in water, sneaking with Shift).
+    Walking,
+    Flying,
+    /// Flying through the ground, as the game's spectator mode: into caves,
+    /// under overhangs, along tunnels.
+    Ghost,
 }
 
 /// What the body bumps into and swims in.
@@ -127,6 +139,8 @@ pub struct Player {
     /// Blocks a second.
     pub velocity: [f64; 3],
     pub flying: bool,
+    /// Flying through the blocks (see [`Motion::Ghost`]).
+    pub ghost: bool,
     pub on_ground: bool,
     pub sneaking: bool,
     pub swimming: bool,
@@ -152,6 +166,7 @@ impl Player {
             feet,
             velocity: [0.0; 3],
             flying: false,
+            ghost: false,
             on_ground: false,
             sneaking: false,
             swimming: false,
@@ -177,6 +192,27 @@ impl Player {
         ([feet[0] - w, feet[1], feet[2] - w], [feet[0] + w, feet[1] + h, feet[2] + w])
     }
 
+    /// How the player goes.
+    pub fn motion(&self) -> Motion {
+        match (self.ghost, self.flying) {
+            (true, _) => Motion::Ghost,
+            (false, true) => Motion::Flying,
+            (false, false) => Motion::Walking,
+        }
+    }
+
+    /// Go another way. Out of Ghost the player flies, so as not to fall:
+    /// inside the ground, they come up to the first air above.
+    pub fn set_motion(&mut self, motion: Motion) {
+        if motion == self.motion() {
+            return;
+        }
+        self.ghost = motion == Motion::Ghost;
+        self.flying = motion != Motion::Walking;
+        self.velocity[1] = 0.0;
+        self.since_jump = f64::INFINITY;
+    }
+
     /// Whether moving: something to draw again.
     pub fn moving(&self) -> bool {
         !self.on_ground && !self.flying || self.velocity.iter().any(|v| v.abs() > 1e-3) || (self.eye - self.target_eye()).abs() > 1e-3
@@ -193,7 +229,7 @@ impl Player {
         // Presses count once, in the first step.
         self.since_jump += dt;
         self.since_forward += dt;
-        if keys.jump_pressed {
+        if keys.jump_pressed && !self.ghost {
             if self.since_jump < DOUBLE_TAP {
                 self.flying = !self.flying;
                 self.velocity[1] = 0.0;
@@ -215,6 +251,10 @@ impl Player {
     }
 
     fn tick(&mut self, blocks: &mut impl Blocks, keys: Keys, yaw: f32, dt: f64) {
+        if self.ghost {
+            self.drift(keys, yaw, dt, blocks.bottom());
+            return;
+        }
         // Inside matter (built over the player, or arrived there): out
         // through the top.
         let (lo, hi) = self.body(self.feet, self.sneaking);
@@ -346,6 +386,39 @@ impl Player {
         if self.feet[1] < (blocks.bottom() - 64) as f64 {
             self.feet = self.safe;
             self.velocity = [0.0; 3];
+        }
+    }
+
+    /// A step as a ghost: flying as the keys ask, through everything, no
+    /// lower than a little under the bottom of the world.
+    fn drift(&mut self, keys: Keys, yaw: f32, dt: f64, bottom: i32) {
+        self.sneaking = false;
+        self.swimming = false;
+        self.on_ground = false;
+        self.eye += (EYE - self.eye) * (1.0 - (-dt * 18.0).exp());
+        if keys.forward <= 0.0 {
+            self.running = false;
+        }
+        let running = (keys.run || self.running) && keys.forward > 0.0;
+        let (sy, cy) = (yaw.sin() as f64, yaw.cos() as f64);
+        let mut wish = [-sy * keys.forward + cy * keys.right, -cy * keys.forward - sy * keys.right];
+        let len = wish[0].hypot(wish[1]);
+        if len > 1.0 {
+            wish = [wish[0] / len, wish[1] / len];
+        }
+        let speed = self.fly_speed * if running { FLY_RUN } else { FLY };
+        let k = 1.0 - (-7.0 * dt).exp();
+        self.velocity[0] += (wish[0] * speed - self.velocity[0]) * k;
+        self.velocity[2] += (wish[1] * speed - self.velocity[2]) * k;
+        let want = (keys.jump as i32 - keys.sneak as i32) as f64 * FLY_UP * self.fly_speed.max(1.0);
+        self.velocity[1] += (want - self.velocity[1]) * (1.0 - (-10.0 * dt).exp());
+        for (p, v) in self.feet.iter_mut().zip(self.velocity) {
+            *p += v * dt;
+        }
+        let floor = (bottom - 16) as f64;
+        if self.feet[1] < floor {
+            self.feet[1] = floor;
+            self.velocity[1] = self.velocity[1].max(0.0);
         }
     }
 
@@ -583,6 +656,49 @@ mod tests {
         run(&mut p, &mut w, Keys::default(), 0.5);
         run(&mut p, &mut w, NORTH, 1.0);
         assert!((3.6..4.4).contains(&(0.5 - p.feet[2])), "{:?}", p.feet);
+    }
+
+    #[test]
+    fn a_ghost_goes_through_a_wall_where_walking_and_flying_stop() {
+        let mut w = World::default();
+        // A wall six blocks high and three thick, from z −4 to −6.
+        for x in -3..=3 {
+            for z in -6..=-4 {
+                for y in 64..70 {
+                    w.blocks.insert((x, y, z));
+                }
+            }
+        }
+        let mut ends = Vec::new();
+        for motion in [Motion::Walking, Motion::Flying, Motion::Ghost] {
+            let mut p = Player::new([0.5, 64.0, 0.5]);
+            p.auto_jump = false;
+            run(&mut p, &mut w, Keys::default(), 0.2);
+            p.set_motion(motion);
+            assert_eq!(p.motion(), motion);
+            run(&mut p, &mut w, NORTH, 2.0);
+            ends.push(p);
+        }
+        // Walking and flying stop against its face, at z −3.
+        for p in &ends[..2] {
+            assert!((p.feet[2] - (-2.7)).abs() < 1e-6, "stopped by the wall: {p:?}");
+        }
+        // A ghost flies on through it, at its height, at the speed of flight.
+        let ghost = ends[2];
+        assert!(ghost.feet[2] < -15.0 && (ghost.feet[1] - 64.0).abs() < 1e-6, "through the wall: {ghost:?}");
+        // Space and Shift take it up and down, through the ground too.
+        let mut p = Player::new([0.5, 64.0, 0.5]);
+        p.set_motion(Motion::Ghost);
+        run(&mut p, &mut w, Keys { sneak: true, ..Keys::default() }, 1.0);
+        assert!(p.feet[1] < 60.0 && !p.swimming && !p.sneaking, "down into the ground: {p:?}");
+        // Out of Ghost inside the wall, the player flies, on its top.
+        let mut p = Player::new([0.5, 65.0, -5.0]);
+        p.set_motion(Motion::Ghost);
+        run(&mut p, &mut w, Keys::default(), 0.1);
+        assert!((p.feet[1] - 65.0).abs() < 1e-6, "a ghost stays in the wall: {p:?}");
+        p.set_motion(Motion::Flying);
+        run(&mut p, &mut w, Keys::default(), 0.1);
+        assert!(p.flying && (p.feet[1] - 70.0).abs() < 1e-6, "out on the wall's top: {p:?}");
     }
 
     #[test]

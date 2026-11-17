@@ -455,10 +455,20 @@ fn game_clouds(o: vec3<f32>, d: vec3<f32>, t_max: f32) -> vec4<f32> {
 }
 
 /// Whether the middle of a block `p` (from the frame's origin) is under the
-/// brush: a ball, or a box for a square brush.
+/// brush: a ball, or a box for a square brush; for the map's brushes,
+/// which take whole columns, the columns of its footprint at any height.
 fn in_brush(p: vec3<f32>) -> bool {
-    let v = p - g.brush.xyz;
+    var v = p - g.brush.xyz;
     let r = g.brush.w;
+    if (g.brush_n.w > 2.5) {
+        v.y = 0.0;
+        if (g.brush_n.w > 3.5) {
+            let a = vec3<f32>(g.brush_t.x, 0.0, g.brush_t.z);
+            let b = vec3<f32>(-a.z, 0.0, a.x);
+            return abs(dot(v, a)) <= r && abs(dot(v, b)) <= r;
+        }
+        return dot(v, v) <= r * r;
+    }
     if (g.brush_n.w > 1.5) {
         let n = g.brush_n.xyz;
         let a = g.brush_t.xyz;

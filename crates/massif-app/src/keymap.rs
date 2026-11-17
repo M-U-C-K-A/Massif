@@ -328,10 +328,11 @@ pub enum Action {
     LookUp,
     LookDown,
     ReleaseMouse,
+    Ghost,
 }
 
-/// The tools a shortcut can pick, in the order of the toolbox, then 3D
-/// Sculpt's.
+/// The tools a shortcut can pick, in the order of the toolbox, then the
+/// 3D ones it does not show (3D Sculpt works with the toolbox's).
 pub fn tools() -> Vec<Tool> {
     let mut list: Vec<Tool> = Tool::GROUPS.iter().flat_map(|(_, _, tools)| tools.iter().copied()).collect();
     list.extend([Tool::Build, Tool::Dig, Tool::Smooth3d]);
@@ -348,7 +349,7 @@ impl Action {
         list.extend([BrushSmaller, BrushLarger, TurnLeft, TurnRight, TurnReset, Turn30, Turn45, Turn90]);
         list.extend([Pan, MapZoomIn, MapZoomOut, MapZoomReset, LightRight, LightLeft, SelectAll, Deselect, InvertSelection, SelectAdd, SelectSubtract]);
         list.extend([FlyForward, FlyBack, FlyLeft, FlyRight, FlyUp, FlyDown, FlyFaster]);
-        list.extend([WalkForward, WalkBack, WalkLeft, WalkRight, Jump, Sneak, Sprint, LookLeft, LookRight, LookUp, LookDown, ReleaseMouse]);
+        list.extend([WalkForward, WalkBack, WalkLeft, WalkRight, Jump, Sneak, Sprint, LookLeft, LookRight, LookUp, LookDown, ReleaseMouse, Ghost]);
         list
     }
 
@@ -413,6 +414,7 @@ impl Action {
             LookUp => "player.look_up",
             LookDown => "player.look_down",
             ReleaseMouse => "player.release_mouse",
+            Ghost => "player.ghost",
         };
         s.to_owned()
     }
@@ -425,7 +427,7 @@ impl Action {
             Intensity(_) | BrushSmaller | BrushLarger | TurnLeft | TurnRight | TurnReset | Turn30 | Turn45 | Turn90 => Area::Brushes,
             LightRight | LightLeft | Pan | SelectAll | Deselect | InvertSelection | SelectAdd | SelectSubtract | MapZoomIn | MapZoomOut | MapZoomReset => Area::Map,
             FlyForward | FlyBack | FlyLeft | FlyRight | FlyDown | FlyUp | FlyFaster => Area::View3d,
-            WalkForward | WalkBack | WalkLeft | WalkRight | Jump | Sneak | Sprint | LookLeft | LookRight | LookUp | LookDown | ReleaseMouse => Area::Player,
+            WalkForward | WalkBack | WalkLeft | WalkRight | Jump | Sneak | Sprint | LookLeft | LookRight | LookUp | LookDown | ReleaseMouse | Ghost => Area::Player,
         }
     }
 
@@ -518,6 +520,7 @@ impl Action {
             LookUp => tr!("Look up"),
             LookDown => tr!("Look down"),
             ReleaseMouse => tr!("Give the mouse back"),
+            Ghost => tr!("Ghost: through the ground"),
         };
         s.to_owned()
     }
@@ -607,6 +610,7 @@ impl Action {
             LookUp => vec![k(Key::ArrowUp)],
             LookDown => vec![k(Key::ArrowDown)],
             ReleaseMouse => vec![k(Key::Escape)],
+            Ghost => vec![k(Key::G)],
         }
     }
 

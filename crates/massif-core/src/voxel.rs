@@ -1249,6 +1249,17 @@ pub struct Hit {
 /// Cast a ray from `origin` along `dir` and return the first solid block
 /// within `max_distance`, as composed (levels and sculpted chunks).
 pub fn raycast(dim: &Dimension, origin: [f64; 3], dir: [f64; 3], max_distance: f64) -> Option<Hit> {
+    cast(dim, origin, dir, max_distance, false)
+}
+
+/// [`raycast`] seeing through the ground `origin` is in, as the game's
+/// spectator mode does: the first solid block entered once out of it (a
+/// cave's wall seen from the rock around it), or as [`raycast`] from air.
+pub fn raycast_out(dim: &Dimension, origin: [f64; 3], dir: [f64; 3], max_distance: f64) -> Option<Hit> {
+    cast(dim, origin, dir, max_distance, true)
+}
+
+fn cast(dim: &Dimension, origin: [f64; 3], dir: [f64; 3], max_distance: f64, through: bool) -> Option<Hit> {
     let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
     if len == 0.0 {
         return None;
@@ -1293,6 +1304,8 @@ pub fn raycast(dim: &Dimension, origin: [f64; 3], dir: [f64; 3], max_distance: f
     let mut column: Option<((i32, i32), Vec<Span>)> = None;
     let mut spans = Vec::new();
     let mut entered = t;
+    // Out of the ground the ray starts in (always, but seeing through it).
+    let mut out = !through;
     while entered <= max_distance {
         let (x, y, z) = (cell[0], cell[1], cell[2]);
         if (y as f64) < min_y - 1.0 && step[1] <= 0 || (y as f64) >= max_y && step[1] >= 0 {
@@ -1308,7 +1321,9 @@ pub fn raycast(dim: &Dimension, origin: [f64; 3], dir: [f64; 3], max_distance: f
             column = Some(((x, z), std::mem::take(&mut spans)));
         }
         let solid = column.as_ref().is_some_and(|(_, s)| s.iter().any(|s| s.y0 <= y && y < s.y1));
-        if solid {
+        if !solid {
+            out = true;
+        } else if out {
             return Some(Hit {
                 block: (x, y, z),
                 normal,
@@ -1873,6 +1888,26 @@ mod tests {
         // Rays that leave the world miss.
         assert!(raycast(&w.dims[0], [0.0, 100.0, 0.0], [0.0, 1.0, 0.0], 500.0).is_none());
         assert!(raycast(&w.dims[0], [1000.0, 70.0, 0.0], [1.0, 0.0, 0.0], 500.0).is_none());
+    }
+
+    #[test]
+    fn rays_from_inside_the_ground_see_through_it() {
+        let mut w = world();
+        // A cave dug at y 50, the eye in the rock beside it.
+        let mut h = History::default();
+        h.begin("Dig", 0);
+        sculpt(&mut h.edit(&mut w, 0), &brush(4.0), [20.5, 50.5, 10.5], 1.0, SculptMode::Remove);
+        h.commit();
+        let (eye, east) = ([5.5, 50.5, 10.5], [1.0, 0.0, 0.0]);
+        // A plain ray stops in the block of the eye.
+        assert_eq!(raycast(&w.dims[0], eye, east, 100.0).unwrap().block, (5, 50, 10));
+        // Seen through, the far wall of the cave, entered from it.
+        let hit = raycast_out(&w.dims[0], eye, east, 100.0).unwrap();
+        assert!(hit.block.0 > 20 && hit.block.0 < 26 && hit.normal == (-1, 0, 0), "{hit:?}");
+        // From air, both agree; through nothing but rock, nothing.
+        let above = [10.5, 100.0, 10.5];
+        assert_eq!(raycast_out(&w.dims[0], above, [0.0, -1.0, 0.0], 500.0).unwrap().block, (10, 63, 10));
+        assert!(raycast_out(&w.dims[0], [5.5, 30.5, 10.5], [0.0, -1.0, 0.0], 500.0).is_none());
     }
 
     #[test]

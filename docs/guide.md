@@ -1606,27 +1606,50 @@ a second, and its blocks take about 70 MB of memory.
 ## 3D Sculpt
 
 Sculpting in 3D has its own editor, **3D Sculpt** (its workspace sits next
-to 3D; the 3D View's **Sculpt** button opens it): a 3D view with its tools
-along the top — **Sculpt** (the left button adds matter, the right one
-digs), **Smooth** and **Paint** (the terrain chosen in Terrain or Blocks, or
-a noise of several; the right button puts back the map's own terrain) — with the
-brush of every tool: its shape (custom images too, turned as they are),
-size, intensity and rotation are those of **Brush Settings**, which the
-3D Sculpt workspace shows beside its view.
+to 3D; the 3D View's **Sculpt** button opens it): a 3D view that works with
+the tool chosen in the **Tools** panel, as the map does, with its Tool
+Settings and the brush of every tool — its shape (custom images too, turned
+as they are), size, intensity and rotation are those of **Brush Settings**.
+Its workspace shows the Tools panel, Tool Settings and Brush Settings on
+the left, the map and the levels on the right; the top of the view names
+the tool in hand and says what the buttons do with it. (A 3D Sculpt
+workspace laid out by an earlier version gets these panels once; one given
+the Tools panel by hand is left as it is.)
 
-- Sculpt pushes the surface out or in under the brush, along its slope, a
-  layer at a time — 16 blocks a second at full strength —, the brush's
-  shape setting how far each point goes: a click adds a bump, holding grows
-  it.
-- Smooth melts bumps and steps away without wearing the land down: it blurs
-  the matter, then pushes it back out a little (Taubin's smoothing), so a
-  hill keeps its height and a hollow its depth.
+- **Raise / Lower** sculpts in 3D: it pushes the surface out (the left
+  button) or in (the right one) under the brush, along its slope, a layer at
+  a time — at its **Speed** in Tool Settings, in blocks a second at full
+  strength —, the brush's shape setting how far each point goes: a click
+  adds a bump, holding grows it, and on a cliff it builds outward, into
+  overhangs, or digs caves into it.
+- **Smooth** smooths the columns under the brush exactly as it does on
+  the map — the same kernel, strength and passes, the brush's shape (a
+  stamp too) only shaping its falloff —: a stroke in 3D and one on the map
+  over the same place leave the same heights. (Smooth3d, from its
+  shortcut, still melts sculpted matter in 3D, Taubin's smoothing.)
+- **Paint terrain** paints the terrain chosen in Terrain or Blocks, or a
+  noise of several, on the columns under the brush and on the matter
+  sculpted there; the right button puts back the map's own terrain.
+- The map's other brushes — Flatten, Set height, Roughen, the Gradient
+  brush, Paint biome, Auto paint and Auto biome, ground covers, objects,
+  tree sizes, pockets, combined layers, the Water brush, the slabs — act on
+  the columns around the point under the cursor, as they do on the map;
+  the Eyedropper, Flood and Drain act where
+  the click points. A tool of the map only — the selections, Pan, Road,
+  River, annotations — says so at the top of the view, where the left
+  button then turns the view and the right one moves it.
+- The brush of the tools that act on columns (Smooth and the map's
+  brushes) shows exactly the columns it takes: its outline, as wide in
+  blocks as on the map, laid on the land column by column, and in the
+  player's view the blocks of those columns marked at any height, cliffs
+  included. The tools that shape in 3D show the brush laid along the slope.
 - Shift + drag moves the view, Alt + drag (or the middle button) turns it.
   The wheel brings the view closer around what it turns about; Shift +
   wheel moves forward over the land; Alt + wheel flies toward the point
   under the cursor; ⌘ (Ctrl) + wheel sizes the brush. In 3D a brush
   sculpts 64 blocks around at most: the work of a dab grows with the cube
-  of its size (a larger brush works as 64, and the toolbar says so).
+  of its size (a larger brush works as 64, and the toolbar says so); the
+  map's brushes go as wide as on the map.
 - **Player** walks in the view as in Minecraft with Axiom, to see and
   sculpt the land at a player's height: it comes down where the middle of
   the view looks, with Minecraft's body (0.6 × 1.8 blocks, its eyes at
@@ -1660,6 +1683,16 @@ size, intensity and rotation are those of **Brush Settings**, which the
     sneaks, and a crouched player does not step off an edge; walking into a
     step of one block jumps onto it (Minecraft's Auto-Jump). Turning or
     moving the view with Ctrl flies.
+  - **Ghost**, chosen at the bottom right of the view (**Walking**,
+    **Flying**, **Ghost**) or with G (its key can be changed in Settings ▸
+    Keyboard), flies through everything, as the game's spectator mode does:
+    into caves, under overhangs, along tunnels, to sculpt or paint there.
+    Space goes up, Shift (or Q) down, Ctrl faster, at the flight speed. With
+    the eyes in the ground, the view sees through it — its edges darkened,
+    **In the ground** said in the bar — to the air beyond and what stands in
+    it, a cave's walls and floor, and the cursor and the brush work on that
+    surface, the one shown. G again, or Flying, flies out of Ghost; inside
+    the ground, the player comes up to the first air above.
   - Water slows and lets swim, and under it the world turns blue and dim,
     as in the game; matter sculpted over the player lifts them, and a fall
     off the map puts them back where they last stood. Player off, the
@@ -1780,10 +1813,10 @@ In the 3D view:
 | Double-click | Look at the point under the cursor |
 | Header buttons | Look at the middle of the map view; show the whole map |
 | The dot on the 2D map | Where the 3D view is (the point it turns about, or the player, ringed), with a wedge the way it looks; it follows the view live, and dragging it moves the 3D view there. The small white plus beside is the world's origin, x 0, z 0 |
-| With Build, Dig, Smooth (3D) | Left sculpts where the cursor points, right inverts; middle drag or Alt + drag turns, Shift + middle drag moves |
+| In 3D Sculpt, with the tool of the Tools panel | Left uses it where the cursor points, right inverts; middle drag or Alt + drag turns, Shift + middle drag moves |
 | 3D Sculpt's **Player**, cursor free (Axiom's editor) | Left drag looks around; right uses the tool under the cursor (Alt: inverts); middle picks the block; Ctrl (⌘) + left turns about the point, Ctrl + right moves, Ctrl + middle sizes the brush; the wheel sets the flight speed |
 | 3D Sculpt's **Player**, mouse taken (a click) | The mouse looks around; right uses the tool at the crosshair, left inverts; Esc gives the mouse back |
-| 3D Sculpt's **Player**, keys | W A S D walk, Ctrl or W twice sprints, Space jumps (twice: flies, up), Shift or Q sneaks (flying: down) |
+| 3D Sculpt's **Player**, keys | W A S D walk, Ctrl or W twice sprints, Space jumps (twice: flies, up), Shift or Q sneaks (flying: down), G turns Ghost on and off (flies through the ground) |
 
 ### Moving smoothly
 
