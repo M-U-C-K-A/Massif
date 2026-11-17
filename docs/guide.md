@@ -1243,7 +1243,10 @@ The **River** tool (Water group) lays a river out from its source:
   drops it. The bar over the map says how long it is and where it goes.
 
 Its settings: **Width** at the source, **Flow** (how much it grows
-downstream: up to five times wider and two and a half times deeper),
+downstream: up to five times wider and two and a half times deeper at its
+mouth; on the way, as the land draining into it grows, as water finds its
+way over the ground around it: it widens over some thirty blocks where a
+valley joins it, little along a stretch that gathers nothing),
 **Depth**, **Erosion** (how much it wears the land beside its bed: a wider
 valley), **Banks**, **Lakes** (which hollows fill: deep ones only, or every
 one, or none — through the others it cuts a gorge), the terrain of its bed

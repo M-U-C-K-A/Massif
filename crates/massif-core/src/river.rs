@@ -281,6 +281,140 @@ fn under_sea(ground: &mut Ground, course: &[(f32, f32)], sea: f32, depth: f32, w
     out
 }
 
+/// How much land drains through each of the first `n` points of `course`,
+/// in square blocks, as water finds its way over the ground around it: a
+/// grid of cells over the course and 192 blocks around (4 blocks a side,
+/// coarser to keep it under 250,000 cells) is flooded from its edges and
+/// from what lies under the `sea`, lowest first, every cell draining to the
+/// one the flood reached it from; the cells upstream of each are summed.
+/// Each point takes the most of the cells around it (it lies on the flow,
+/// not beside it), and never less than the point before: downstream, a
+/// river only gathers water.
+fn catchment(ground: &mut Ground, course: &[(f32, f32)], n: usize, sea: f32) -> Vec<f32> {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+    const MARGIN: f32 = 192.0;
+    let pts = &course[..n.min(course.len())];
+    if pts.is_empty() {
+        return Vec::new();
+    }
+    let (mut x0, mut z0, mut x1, mut z1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for &(x, z) in pts {
+        (x0, z0, x1, z1) = (x0.min(x), z0.min(z), x1.max(x), z1.max(z));
+    }
+    let (x0, z0) = (x0 - MARGIN, z0 - MARGIN);
+    let (w, d) = (x1 + MARGIN - x0, z1 + MARGIN - z0);
+    let cell = ((w * d / 250_000.0).sqrt().ceil()).max(4.0);
+    let (nx, nz) = ((w / cell).ceil() as usize + 1, (d / cell).ceil() as usize + 1);
+    // The surface of each cell: the water's where there is water; none off
+    // the map.
+    let h: Vec<f32> = (0..nx * nz)
+        .map(|c| {
+            let (x, z) = (x0 + ((c % nx) as f32 + 0.5) * cell, z0 + ((c / nx) as f32 + 0.5) * cell);
+            ground.at(x.floor() as i32, z.floor() as i32).map_or(f32::NAN, |(g, w)| w.unwrap_or(g))
+        })
+        .collect();
+    #[derive(PartialEq)]
+    struct Key(f32);
+    impl Eq for Key {}
+    impl Ord for Key {
+        fn cmp(&self, o: &Self) -> std::cmp::Ordering {
+            self.0.total_cmp(&o.0)
+        }
+    }
+    impl PartialOrd for Key {
+        fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> {
+            Some(self.cmp(o))
+        }
+    }
+    const NONE: u32 = u32::MAX;
+    let mut receiver = vec![NONE; nx * nz];
+    let mut done = vec![false; nx * nz];
+    let mut order: Vec<u32> = Vec::with_capacity(nx * nz);
+    let mut heap: BinaryHeap<Reverse<(Key, u32)>> = BinaryHeap::new();
+    // The edges of the grid, the edges of the map and the sea drain away;
+    // past the map, nothing.
+    let off = |i: i32, j: i32| i < 0 || j < 0 || i >= nx as i32 || j >= nz as i32 || h[j as usize * nx + i as usize].is_nan();
+    for c in 0..nx * nz {
+        let (i, j) = ((c % nx) as i32, (c / nx) as i32);
+        if h[c].is_nan() {
+            done[c] = true;
+        } else if i == 0 || j == 0 || i == nx as i32 - 1 || j == nz as i32 - 1 || h[c] < sea || AROUND.iter().any(|&(di, dj)| off(i + di, j + dj)) {
+            done[c] = true;
+            heap.push(Reverse((Key(h[c]), c as u32)));
+        }
+    }
+    let mut filled = vec![f32::NAN; nx * nz];
+    while let Some(Reverse((Key(level), c))) = heap.pop() {
+        let c = c as usize;
+        order.push(c as u32);
+        filled[c] = level;
+        let (i, j) = ((c % nx) as i32, (c / nx) as i32);
+        for (di, dj) in AROUND {
+            let (a, b) = (i + di, j + dj);
+            if a < 0 || b < 0 || a >= nx as i32 || b >= nz as i32 {
+                continue;
+            }
+            let nb = b as usize * nx + a as usize;
+            if done[nb] {
+                continue;
+            }
+            done[nb] = true;
+            receiver[nb] = c as u32;
+            heap.push(Reverse((Key(h[nb].max(level)), nb as u32)));
+        }
+    }
+    // Down the slope, each cell drains to the steepest of the cells around
+    // it (the flood alone would send the water of an even slope along its
+    // ties); where it lies flat or in a hollow, the way the flood found.
+    for &c in &order {
+        let c = c as usize;
+        if receiver[c] == NONE {
+            continue;
+        }
+        let (i, j) = ((c % nx) as i32, (c / nx) as i32);
+        let mut best: Option<(f32, usize)> = None;
+        for (di, dj) in AROUND {
+            let (a, b) = (i + di, j + dj);
+            if a < 0 || b < 0 || a >= nx as i32 || b >= nz as i32 {
+                continue;
+            }
+            let nb = b as usize * nx + a as usize;
+            let drop = (filled[c] - filled[nb]) / if di != 0 && dj != 0 { std::f32::consts::SQRT_2 } else { 1.0 };
+            if drop > 0.0 && best.is_none_or(|(d, _)| drop > d) {
+                best = Some((drop, nb));
+            }
+        }
+        if let Some((_, nb)) = best {
+            receiver[c] = nb as u32;
+        }
+    }
+    let mut area = vec![cell * cell; nx * nz];
+    for &c in order.iter().rev() {
+        let r = receiver[c as usize];
+        if r != NONE {
+            area[r as usize] += area[c as usize];
+        }
+    }
+    let mut most = 0.0f32;
+    pts.iter()
+        .map(|&(x, z)| {
+            let (i, j) = (((x - x0) / cell) as i32, ((z - z0) / cell) as i32);
+            let mut a = 0.0f32;
+            for dj in -1..=1 {
+                for di in -1..=1 {
+                    let (p, q) = (i + di, j + dj);
+                    if p >= 0 && q >= 0 && (p as usize) < nx && (q as usize) < nz {
+                        a = a.max(area[q as usize * nx + p as usize]);
+                    }
+                }
+            }
+            most = most.max(a);
+            most
+        })
+        .collect()
+}
+
 /// Dig a river along `points` (block coordinates, in any order of flow)
 /// into the level `edit` works on, recorded for undo.
 pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> RiverReport {
@@ -358,7 +492,25 @@ pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> 
     }
     let length = coast as f32 * STEP;
     // From the source to the mouth: under the sea, as at the mouth.
-    let along = |k: usize, a: f32, b: f32| a + (b - a) * k.min(coast - 1) as f32 / (coast - 1).max(1) as f32;
+    // From the source to the mouth, wider and deeper as the land draining
+    // through it grows (as the square root of its catchment's share of the
+    // mouth's): where a tributary joins, it widens over some thirty blocks
+    // downstream. Under the sea, as at the mouth.
+    let gathered = catchment(&mut ground, &course, coast, spec.sea.unwrap_or(f32::MIN));
+    let at_mouth = gathered.last().copied().unwrap_or(1.0).max(1.0);
+    let raw: Vec<f32> = (0..coast).map(|k| (gathered.get(k).copied().unwrap_or(at_mouth) / at_mouth).sqrt().clamp(0.0, 1.0)).collect();
+    // The mean over the points behind each: a ramp, still never narrower
+    // downstream.
+    let behind = (30.0 / STEP) as usize;
+    let mut sums = vec![0.0f32; coast + 1];
+    for k in 0..coast {
+        sums[k + 1] = sums[k] + raw[k];
+    }
+    let ramp: Vec<f32> = (0..coast).map(|k| (sums[k + 1] - sums[k.saturating_sub(behind)]) / (k + 1 - k.saturating_sub(behind)) as f32).collect();
+    // As wide at its mouth as set.
+    let last = ramp.last().copied().unwrap_or(1.0).max(1e-6);
+    let share: Vec<f32> = ramp.iter().map(|r| (r / last).min(1.0)).collect();
+    let along = |k: usize, a: f32, b: f32| a + (b - a) * share[k.min(coast - 1)];
     // How far under the sea a point is, 0 at the mouth to 1 where the
     // channel has faded into the floor.
     let out = |k: usize| if k < coast { 0.0 } else { (k + 1 - coast) as f32 / (n - coast) as f32 };
@@ -581,8 +733,10 @@ pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> 
     let (columns, wet) = counts.into_inner().expect("not poisoned");
     let dug = dug.into_inner().expect("not poisoned");
     let poured = poured.into_inner().expect("not poisoned");
-    // Never under the water it runs into.
-    let floor = mouth.map_or(i16::MIN, |w| w.round() as i16);
+    // Never under the sea it runs into. Water a river runs into on land
+    // (a lake, a river) may stand higher than the land around it: there the
+    // river's water goes down rather than run over the land.
+    let floor = spec.sea.filter(|_| mouth.is_some()).map_or(i16::MIN, |w| w.round() as i16);
     crate::water::seal(edit, rect, &|x, z| dug.get(&(x, z)).copied().unwrap_or(f32::MIN), &|x, z| poured.contains(&(x, z)), floor);
     RiverReport {
         length,
@@ -925,7 +1079,9 @@ pub fn dig_descent(edit: &mut Edit, descent: &Descent, spec: &RiverSpec) -> Rive
                 (x0, z0, x1, z1) = (x0.min(x), z0.min(z), x1.max(x), z1.max(z));
             }
             let rect = BlockRect::new(x0, z0, x1 + 1, z1 + 1);
-            let water = level.round().clamp(lo, hi) as i16;
+            // Rounded down: rounded up, the water would stand a block over
+            // the lowest of its rim, and run out over it.
+            let water = level.floor().clamp(lo, hi) as i16;
             edit.par_tiles(rect.tiles(), rect, false, |_, clip, tile| {
                 let mut any = false;
                 for z in clip.z0..clip.z1 {
@@ -941,6 +1097,10 @@ pub fn dig_descent(edit: &mut Edit, descent: &Descent, spec: &RiverSpec) -> Rive
                     tile.compact();
                 }
             });
+            // A lake held by its rim stays as it is; one that would run out
+            // over lower ground beside it (a hollow not closed all round)
+            // goes down to what holds it.
+            crate::water::seal(edit, rect, &|_, _| f32::MIN, &|x, z| set.contains(&(x, z)), i16::MIN);
         }
     }
     // A point every two blocks is plenty for the curve.
@@ -1579,6 +1739,19 @@ mod tests {
         let (out, _) = natural_course(world.dims[0].ground(), &down, 8.0, &[]);
         let off = out.iter().map(|p| (p.1 - 64.0).abs()).fold(0.0f32, f32::max);
         assert!(off < 0.5, "no meanders down a slope: {off}");
+    }
+
+    /// Down a slope, the land draining through a river grows from its
+    /// source to its mouth, and never shrinks; down a valley that gathers
+    /// the water of its sides, it grows faster.
+    #[test]
+    fn a_river_gathers_more_land_downstream() {
+        let world = slope();
+        let mut ground = Ground::new(world.dims[0].ground());
+        let course: Vec<(f32, f32)> = (0..400).map(|k| (20.0 + k as f32 * 0.5, 64.5)).collect();
+        let gathered = catchment(&mut ground, &course, course.len(), 0.0);
+        assert!(gathered.windows(2).all(|w| w[1] >= w[0]));
+        assert!(gathered[399] > 4.0 * gathered[20], "{} → {}", gathered[20], gathered[399]);
     }
 
     /// A hollow on the way fills into a lake up to where it overflows, and
