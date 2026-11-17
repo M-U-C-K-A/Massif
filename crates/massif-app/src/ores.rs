@@ -28,9 +28,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, channel};
 
-/// The window's width, the cut's share of it, the room between parts.
+/// The window's width at most, the cut's share of it, the room between
+/// parts.
 const WIDTH: f32 = 1140.0;
 const CUT_W: f32 = 690.0;
+
+/// The window's width in the room `ctx` gives it: [`WIDTH`], less in a
+/// small window, so that it stays whole on screen.
+fn width(ctx: &egui::Context) -> f32 {
+    (ctx.content_rect().width() - 96.0).clamp(760.0, WIDTH)
+}
 const GAP: f32 = 18.0;
 /// The gutter of the height labels, and the cards' header strips.
 const AXIS: f32 = 38.0;
@@ -396,16 +403,19 @@ impl OresView {
         let pal = Palette::of(ui);
         let mut choice = Choice::Keep;
         let room = ctx.content_rect().height() - 150.0;
-        let plot_h = (room - 400.0).clamp(220.0, 400.0);
-        ui.set_width(WIDTH);
+        // Lower in a small window, so that the whole of it shows.
+        let plot_h = (room - 400.0).clamp(120.0, 400.0);
+        let w = width(&ctx);
+        ui.set_width(w);
         self.header(ui, &pal, &mut choice);
         ui.add_space(14.0);
         self.strip(ui, &pal);
         ui.add_space(14.0);
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = GAP;
-            let (cut_rect, _) = ui.allocate_exact_size(vec2(CUT_W, STRIP + plot_h + FOOT), Sense::hover());
-            let (chart_rect, _) = ui.allocate_exact_size(vec2(WIDTH - CUT_W - GAP, STRIP + plot_h + FOOT), Sense::hover());
+            let cut_w = (w * CUT_W / WIDTH).round();
+            let (cut_rect, _) = ui.allocate_exact_size(vec2(cut_w, STRIP + plot_h + FOOT), Sense::hover());
+            let (chart_rect, _) = ui.allocate_exact_size(vec2(w - cut_w - GAP, STRIP + plot_h + FOOT), Sense::hover());
             self.cut_card(ui, &pal, cut_rect);
             self.chart_card(ui, &pal, chart_rect);
         });
@@ -421,22 +431,9 @@ impl OresView {
     // ------------------------------------------------------------ top --
 
     fn header(&mut self, ui: &mut Ui, pal: &Palette, choice: &mut Choice) {
+        // The commands first, from the right; the title and what the ores
+        // come to in the room they leave, on two lines if need be.
         ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(theme::glyph(Icon::Pickaxe).to_string()).size(18.0).color(pal.accent));
-                    ui.label(RichText::new(tr!("Ores")).size(19.0).bold());
-                });
-                ui.add_space(3.0);
-                let preset = self.settings.preset().map_or(tr!("Custom"), |p| crate::i18n::tr_name(p.label()));
-                let per_chunk: f64 = self.settings.ores.iter().map(|o| self.settings.per_chunk(o)).sum();
-                let words = if self.settings.on {
-                    tr!("Laid in the rock by the export · {preset} · about {thousands} ore blocks a chunk of rock", thousands = thousands(per_chunk.round() as u64), preset)
-                } else {
-                    tr!("Off: the export lays no ore, and Minecraft adds none to the map's finished chunks").to_owned()
-                };
-                ui.label(RichText::new(words).size(12.5).color(pal.weak));
-            });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 10.0;
                 let done = egui::Button::new(RichText::new(theme::with_icon(Icon::Check, tr!("Done"))).size(13.0).medium())
@@ -468,13 +465,30 @@ impl OresView {
                         }
                     }
                 });
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(theme::glyph(Icon::Pickaxe).to_string()).size(18.0).color(pal.accent));
+                            ui.label(RichText::new(tr!("Ores")).size(19.0).bold());
+                        });
+                        ui.add_space(3.0);
+                        let preset = self.settings.preset().map_or(tr!("Custom"), |p| crate::i18n::tr_name(p.label()));
+                        let per_chunk: f64 = self.settings.ores.iter().map(|o| self.settings.per_chunk(o)).sum();
+                        let words = if self.settings.on {
+                            tr!("Laid in the rock by the export · {preset} · about {thousands} ore blocks a chunk of rock", thousands = thousands(per_chunk.round() as u64), preset)
+                        } else {
+                            tr!("Off: the export lays no ore, and Minecraft adds none to the map's finished chunks").to_owned()
+                        };
+                        ui.add(egui::Label::new(RichText::new(words).size(12.5).color(pal.weak)).wrap());
+                    });
+                });
             });
         });
     }
 
     /// Every ore with what the map holds of it, and the map to pick the cut.
     fn strip(&mut self, ui: &mut Ui, pal: &Palette) {
-        let (rect, _) = ui.allocate_exact_size(vec2(WIDTH, 64.0), Sense::hover());
+        let (rect, _) = ui.allocate_exact_size(vec2(width(ui.ctx()), 64.0), Sense::hover());
         let p = ui.painter().clone();
         p.rect(rect, theme::CARD_RADIUS, card_fill(pal), Stroke::new(1.0, pal.border), StrokeKind::Inside);
         // The map, small: a click picks the row cut through.
@@ -1138,7 +1152,7 @@ impl OresView {
             .corner_radius(theme::CARD_RADIUS)
             .inner_margin(egui::Margin { left: 18, right: 16, top: 12, bottom: 12 })
             .show(ui, |ui| {
-                ui.set_width(WIDTH - 34.0);
+                ui.set_width(width(ui.ctx()) - 34.0);
                 let Some(rule) = self.settings.ores.get_mut(selected) else {
                     ui.label(RichText::new(tr!("No ore: the export lays none. Add one with the + at the end of the ores.")).size(12.5).color(pal.weak));
                     return None;
@@ -1184,7 +1198,8 @@ impl OresView {
                     let picked = j == self.band;
                     // Its row lit: picked, or its candle pointed at, or under the pointer.
                     let behind = ui.painter().add(egui::Shape::Noop);
-                    let row = ui.horizontal(|ui| {
+                    // On two lines where it does not fit on one.
+                    let row = ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing.x = 10.0;
                         let words = RichText::new(tr!("Band {value}", value = j + 1)).size(12.0).color(if picked { pal.text } else { pal.weak });
                         if tag(ui, if picked { words.medium() } else { words }).clicked() {

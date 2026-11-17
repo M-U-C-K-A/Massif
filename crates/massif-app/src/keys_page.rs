@@ -51,7 +51,24 @@ pub fn page(ui: &mut Ui, saved: &mut Saved) {
         record(ui, saved, &map, &mut state);
     }
 
-    // The preset, the search, files and reset, on one line.
+    // The preset, the search, files and reset, on one line; on two where
+    // they do not fit.
+    let one_line = ui.available_width() >= 820.0;
+    let buttons = |ui: &mut Ui, saved: &mut Saved, state: &mut State| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let reset = ui.add_enabled(!saved.changed.is_empty(), egui::Button::new(theme::with_icon(Icon::RotateCcw, tr!("Reset all"))));
+            if reset.clicked() {
+                saved.changed.clear();
+                state.note = Some(tr!("Every shortcut is as in {preset} again.", preset = saved.preset.name()));
+            }
+            if ui.button(theme::with_icon(Icon::Upload, tr!("Export…"))).clicked() {
+                export(saved, state);
+            }
+            if ui.button(theme::with_icon(Icon::Download, tr!("Import…"))).clicked() {
+                import(saved, state);
+            }
+        });
+    };
     ui.horizontal(|ui| {
         ui.label(RichText::new(tr!("Start from")).size(12.5));
         let on = Preset::ALL.map(|p| p == saved.preset);
@@ -62,21 +79,15 @@ pub fn page(ui: &mut Ui, saved: &mut Saved) {
         }
         ui.add_space(10.0);
         let hint = format!("{}  {}", theme::glyph(Icon::Search), tr!("Search"));
-        ui.add(egui::TextEdit::singleline(&mut state.query).hint_text(hint).desired_width(220.0));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let reset = ui.add_enabled(!saved.changed.is_empty(), egui::Button::new(theme::with_icon(Icon::RotateCcw, tr!("Reset all"))));
-            if reset.clicked() {
-                saved.changed.clear();
-                state.note = Some(tr!("Every shortcut is as in {preset} again.", preset = saved.preset.name()));
-            }
-            if ui.button(theme::with_icon(Icon::Upload, tr!("Export…"))).clicked() {
-                export(saved, &mut state);
-            }
-            if ui.button(theme::with_icon(Icon::Download, tr!("Import…"))).clicked() {
-                import(saved, &mut state);
-            }
-        });
+        ui.add(egui::TextEdit::singleline(&mut state.query).hint_text(hint).desired_width(ui.available_width().min(220.0)));
+        if one_line {
+            buttons(ui, saved, &mut state);
+        }
     });
+    if !one_line {
+        ui.add_space(6.0);
+        ui.horizontal(|ui| buttons(ui, saved, &mut state));
+    }
     ui.add_space(8.0);
 
     // What a recording asks, or said.

@@ -3997,7 +3997,10 @@ impl MassifApp {
                 let response = modal(ctx, "preferences").show(ctx, |ui| {
                     // The keyboard's shortcuts take three columns.
                     let keys = section == PrefsSection::Keyboard;
-                    let (content, height) = if keys { (crate::keys_page::WIDTH, 560.0) } else { (520.0, 360.0) };
+                    // In a small window, the columns narrower, all on screen.
+                    let keys_width = crate::keys_page::WIDTH.min(ctx.content_rect().width() - 240.0 - 96.0);
+                    let keys_height = 560.0f32.min(ctx.content_rect().height() - 190.0).max(360.0);
+                    let (content, height) = if keys { (keys_width, keys_height) } else { (520.0, 360.0) };
                     ui.set_width(content + 240.0);
                     let pal = Palette::of(ui);
                     ui.horizontal(|ui| {
@@ -5382,9 +5385,40 @@ fn glyph_in(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
 }
 
 /// A dialog: generous corners and margins, as the references draw them.
-pub(crate) fn modal(ctx: &egui::Context, id: &str) -> egui::Modal {
+pub(crate) fn modal(ctx: &egui::Context, id: &str) -> Modal {
     let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::same(22));
-    egui::Modal::new(Id::unique(id)).frame(frame)
+    Modal { modal: egui::Modal::new(Id::unique(id)).frame(frame), id: Id::unique(id) }
+}
+
+/// A dialog over the window (see [`modal`]): taller than the window, its
+/// content scrolls, so that its title and its buttons can always be
+/// reached.
+pub(crate) struct Modal {
+    modal: egui::Modal,
+    id: Id,
+}
+
+impl Modal {
+    pub fn show<R>(self, ctx: &egui::Context, add: impl FnOnce(&mut Ui) -> R) -> egui::ModalResponse<R> {
+        // The room inside the frame's margins, and a little air.
+        let room = (ctx.content_rect().height() - 2.0 * 22.0 - 24.0).max(120.0);
+        let key = self.id.with("content height");
+        let tall = ctx.data(|d| d.get_temp::<f32>(key)).is_some_and(|h| h > room + 0.5);
+        self.modal.show(ctx, |ui| {
+            if tall {
+                let out = egui::ScrollArea::vertical().id_salt(key).max_height(room).auto_shrink([true, true]).show(ui, add);
+                let height = out.content_size.y;
+                ui.data_mut(|d| d.insert_temp(key, height));
+                out.inner
+            } else {
+                let top = ui.min_rect().top();
+                let inner = add(ui);
+                let height = ui.min_rect().bottom() - top;
+                ui.data_mut(|d| d.insert_temp(key, height));
+                inner
+            }
+        })
+    }
 }
 
 /// A titled group of settings: its name, a word on it, its settings in a
@@ -16150,5 +16184,100 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Every dialog in the smallest window (960 × 640), in every language:
+    /// nothing past the window's sides. With MASSIF_SNAPSHOT_DIR, each is
+    /// saved.
+    #[test]
+    fn every_dialog_fits_the_smallest_window() {
+        use crate::i18n::{Language, set_language};
+        use crate::menu::Command;
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let (w, hgt) = (960.0, 640.0);
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(w, hgt))
+            .with_pixels_per_point(std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0))
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_eframe(move |cc| {
+                theme::install(&cc.egui_ctx);
+                let world = generate(&GenParams { tiles_x: 2, tiles_z: 2, landform: Landform::Islands, ..GenParams::default() });
+                let mut app = MassifApp::for_tests(world);
+                app.settings.theme = ThemeChoice::Dark;
+                app.settings.reduce_motion = Follow::On;
+                app
+            });
+        h.run_steps(3);
+        type Opener = Box<dyn Fn(&mut MassifApp, &egui::Context)>;
+        let mut openers: Vec<(String, Opener)> = Vec::new();
+        for command in [Command::Export, Command::ExportPack, Command::ExportRegion, Command::AutoRules, Command::Caves, Command::RealTerrain, Command::Ores, Command::Analyse, Command::Help, Command::Shortcuts, Command::About, Command::ReportProblem, Command::SavePoint, Command::NewWorld, Command::FromHeightMap] {
+            let name = format!("{command:?}");
+            openers.push((name, Box::new(move |app: &mut MassifApp, ctx: &egui::Context| app.command(ctx, command.clone()))));
+        }
+        for op in crate::reshape::WholeOp::ALL {
+            openers.push((format!("{op:?}"), Box::new(move |app: &mut MassifApp, ctx: &egui::Context| app.command(ctx, Command::WholeMap(op)))));
+        }
+        for section in [PrefsSection::Appearance, PrefsSection::Accessibility, PrefsSection::Typeface, PrefsSection::Sounds, PrefsSection::Notifications, PrefsSection::Memory, PrefsSection::Autosave, PrefsSection::Keyboard, PrefsSection::Updates, PrefsSection::Graphics, PrefsSection::Developer] {
+            openers.push((format!("Settings-{section:?}"), Box::new(move |app: &mut MassifApp, _: &egui::Context| app.dialog = Some(Dialog::Preferences(section)))));
+        }
+        openers.push(("Recover".into(), Box::new(|app: &mut MassifApp, _: &egui::Context| app.dialog = Some(Dialog::Recover))));
+        openers.push(("Update".into(), Box::new(|app: &mut MassifApp, _: &egui::Context| app.dialog = Some(Dialog::Update))));
+        openers.push(("Crashed".into(), Box::new(|app: &mut MassifApp, _: &egui::Context| app.dialog = Some(Dialog::Crashed("index out of bounds: the len is 3 but the index is 7".into(), None)))));
+        openers.push(("PointName".into(), Box::new(|app: &mut MassifApp, _: &egui::Context| app.dialog = Some(Dialog::PointName(None, "Before the rivers".into())))));
+        openers.push(("FloodAsk".into(), Box::new(|app: &mut MassifApp, _: &egui::Context| app.dialog = Some(Dialog::FloodAsk(crate::tools::FloodAsk { x: 0, z: 0, level: 70, columns: 65536, more: true, at_rim: false })))));
+        // What is past the window with no dialog (the 3D View's header, cut
+        // by its area) is not the dialogs'.
+        let past = |h: &egui_kittest::Harness<'_, MassifApp>| -> Vec<String> {
+            let mut out = Vec::new();
+            for node in h.query_all_by(|_| true) {
+                let Some(b) = node.accesskit_node().bounding_box() else { continue };
+                let ppp = h.ctx.pixels_per_point();
+                let r = Rect::from_min_max(pos2(b.x0 as f32, b.y0 as f32), pos2(b.x1 as f32, b.y1 as f32)) / ppp;
+                let unnamed = node.accesskit_node().label().is_none_or(|l| l.is_empty()) && node.accesskit_node().value().is_none_or(|v| v.is_empty());
+                if r.width() <= 0.0 || unnamed || r.top() > hgt || r.bottom() < 0.0 || node.accesskit_node().role() == egui::accesskit::Role::TextRun {
+                    continue;
+                }
+                if r.left() < -0.5 || r.right() > w + 0.5 {
+                    let label = node.accesskit_node().label().or_else(|| node.accesskit_node().value()).unwrap_or_default();
+                    out.push(format!("{:?} {label:?} {:.0}…{:.0}", node.accesskit_node().role(), r.left(), r.right()));
+                }
+            }
+            out
+        };
+        let mut faults = Vec::new();
+        for language in Language::ALL {
+            set_language(language);
+            h.run_steps(3);
+            let behind = past(&h);
+            for (name, open) in &openers {
+                let ctx = h.ctx.clone();
+                open(h.state_mut(), &ctx);
+                h.run_steps(6);
+                // The dialog's frame inside the window, top to bottom.
+                if let Some(rect) = h.ctx.memory(|m| m.areas().top_layer_id(egui::Order::Foreground).and_then(|l| m.area_rect(l.id)))
+                    && (rect.top() < -0.5 || rect.bottom() > hgt + 0.5)
+                {
+                    faults.push(format!("{language:?} {name}: the dialog from y {:.0} to {:.0}", rect.top(), rect.bottom()));
+                }
+                for fault in past(&h) {
+                    let fault = format!("{language:?} {name}: {fault}");
+                    if !behind.iter().any(|b| fault.ends_with(b.as_str())) && !faults.contains(&fault) {
+                        faults.push(fault);
+                    }
+                }
+                if let Some(dir) = &dir {
+                    h.render().unwrap().save(dir.join(format!("dialog-small-{}-{name}.png", crate::i18n::current().code()))).unwrap();
+                }
+                let app = h.state_mut();
+                app.dialog = None;
+                app.pack_dialog = None;
+                app.home = None;
+                h.run_steps(2);
+            }
+        }
+        set_language(Language::English);
+        assert!(faults.is_empty(), "{} past the window:\n{}", faults.len(), faults.join("\n"));
     }
 }
