@@ -705,6 +705,8 @@ impl Pack {
             removed: false,
             hidden: false,
             understory: l.understory,
+            locked: false,
+            order: 0,
         })
     }
 

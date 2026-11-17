@@ -31,12 +31,19 @@ pub struct LayersUi {
     pub search: String,
     /// The packs imported.
     pub library: crate::pack_share::PackLibrary,
+    /// A layer whose settings were asked for (Settings… in its menu): the
+    /// window opens its dialog.
+    pub open: Option<(Kind, usize)>,
 }
 
 /// What a row was asked to do.
 enum Action {
     Paint(Kind, usize),
+    Settings(Kind, usize),
     ToggleShown(Kind, usize),
+    ToggleLock(Kind, usize),
+    /// Up (`true`) or down the list of its section.
+    Move(Kind, usize, bool),
     Rename(Kind, usize, String),
     Renamed(Kind, usize, String),
     Duplicate(Kind, usize),
@@ -53,12 +60,17 @@ struct Entry {
     tip: String,
     /// `None` for a layer that is not drawn on the map.
     shown: Option<bool>,
+    /// `None` for one that cannot be locked.
+    locked: Option<bool>,
     selected: bool,
 }
 
 const ROW_H: f32 = 26.0;
 
-/// The Layers panel. Returns what to say (objects read, or why not).
+/// The Layers panel, every layer of the map by the slot of a block it
+/// paints (see `docs/layers.md`): terrain mixes, ground covers (plants,
+/// Frost, Lava), tree layers, sub-canopy layers, then the tree sizes and the
+/// annotations. Returns what to say (objects read, or why not).
 pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary, state: &mut LayersUi) -> Option<String> {
     if let Some(k) = crate::widgets::button_group(ui, "layers or packs", &[tr!("This map"), tr!("Packs")], &[!state.packs, state.packs]) {
         state.packs = k == 1;
@@ -71,65 +83,119 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     let mut said = None;
     let mut actions = Vec::new();
 
-    // Ground covers.
-    let covers: Vec<Entry> = doc
+    // Terrain mixes: the ground.
+    let current = (tools.tool == Tool::PaintTerrain && tools.pattern.on).then(|| tools.pattern.preset_name()).flatten();
+    let mixes: Vec<Entry> = tools
+        .pattern
+        .saved
+        .iter()
+        .enumerate()
+        .map(|(k, p)| {
+            let color = p.terrains.first().and_then(|(t, _)| doc.world.registry.terrain_by_name(t)).map_or([128; 3], |t| doc.world.registry.terrain(t).color);
+            let parts: Vec<String> = p.terrains.iter().map(|(t, w)| format!("{t} {:.0}%", w * 100.0)).collect();
+            Entry {
+                kind: Kind::Mix,
+                id: k,
+                name: p.name.clone(),
+                color,
+                detail: tr!("{n} terrains", n = p.terrains.len()),
+                tip: parts.join(", "),
+                shown: None,
+                locked: None,
+                selected: current.as_deref() == Some(p.name.as_str()),
+            }
+        })
+        .collect();
+    if header(ui, Icon::Blend, tr!("Terrain mixes"), tr!("New mix"), tr!("Terrains mixed by a noise: set them up in Tool Settings, then save them")) {
+        tools.pattern.on = true;
+        tools.select(Tool::PaintTerrain);
+    }
+    if mixes.is_empty() {
+        hint(ui, tr!("Mixes saved from Paint terrain ▸ Noise show here."));
+    }
+    list(ui, &mixes, state, &mut actions);
+
+    // Ground covers: one a block.
+    ui.add_space(8.0);
+    let mut covers: Vec<(u32, Entry)> = doc
         .world
         .registry
         .covers
         .iter()
         .enumerate()
         .filter(|(_, c)| !c.removed)
-        .map(|(k, c)| Entry {
-            kind: Kind::Cover,
-            id: k + 1,
-            name: c.name.clone(),
-            color: c.color,
-            detail: format!("{:.0}%", c.density * 100.0),
-            tip: crate::panels::describe_cover(c),
-            shown: Some(!c.hidden),
-            selected: tools.tool == Tool::Cover && tools.cover as usize == k + 1,
+        .map(|(k, c)| {
+            (
+                c.order,
+                Entry {
+                    kind: Kind::Cover,
+                    id: k + 1,
+                    name: c.name.clone(),
+                    color: c.color,
+                    detail: format!("{:.0}%", c.density * 100.0),
+                    tip: crate::panels::describe_cover(c),
+                    shown: Some(!c.hidden),
+                    locked: Some(c.locked),
+                    selected: tools.tool == Tool::Cover && tools.cover as usize == k + 1,
+                },
+            )
         })
         .collect();
+    covers.sort_by_key(|(order, e)| (*order, e.id));
+    let covers: Vec<Entry> = covers.into_iter().map(|c| c.1).collect();
     if header(ui, Icon::Sprout, tr!("Ground covers"), tr!("New cover"), tr!("A cover of your own: any blocks, any mix")) {
         tools.cover = crate::panels::new_cover(&mut doc.world.registry);
         tools.select(Tool::Cover);
     }
     list(ui, &covers, state, &mut actions);
 
-    // Object layers.
-    ui.add_space(8.0);
-    let objects: Vec<Entry> = doc
-        .world
-        .registry
+    // Tree and object layers, one a block, then the sub-canopy ones.
+    let reg = &doc.world.registry;
+    let mut trees: Vec<(u32, bool, Entry)> = reg
         .object_layers
         .iter()
         .enumerate()
         .filter(|(_, l)| !l.removed)
         .map(|(k, l)| {
             let n = l.objects.len();
-            let names: Vec<&str> = l.objects.iter().filter_map(|o| doc.world.registry.objects.get(o.0 as usize)).map(|o| o.name.as_str()).take(6).collect();
-            Entry {
-                kind: Kind::Objects,
-                id: k + 1,
-                name: l.name.clone(),
-                color: l.color,
-                detail: if l.understory { tr!("{n} · sub-canopy", n = n) } else { trn!("{n} object", "{n} objects", n = n) },
-                tip: tr!("{objects} · one every {spacing} blocks, {share:.0}% of the spots", objects = if names.is_empty() { tr!("No objects yet").to_owned() } else { names.join(", ") }, spacing = l.spacing, share = l.density * 100.0),
-                shown: Some(!l.hidden),
-                selected: tools.tool == Tool::Objects && tools.object_layer as usize == k + 1,
-            }
+            let names: Vec<&str> = l.objects.iter().filter_map(|o| reg.objects.get(o.0 as usize)).map(|o| o.name.as_str()).take(6).collect();
+            (
+                l.order,
+                l.understory,
+                Entry {
+                    kind: Kind::Objects,
+                    id: k + 1,
+                    name: l.name.clone(),
+                    color: l.color,
+                    detail: trn!("{n} object", "{n} objects", n = n),
+                    tip: tr!("{objects} · one every {spacing} blocks, {share:.0}% of the spots", objects = if names.is_empty() { tr!("No objects yet").to_owned() } else { names.join(", ") }, spacing = l.spacing, share = l.density * 100.0),
+                    shown: Some(!l.hidden),
+                    locked: Some(l.locked),
+                    selected: tools.tool == Tool::Objects && tools.object_layer as usize == k + 1,
+                },
+            )
         })
         .collect();
-    if header(ui, Icon::TreePine, tr!("Object layers"), tr!("Import objects…"), tr!("Trees, rocks, ruins from .schem, .schematic, .bp, .litematic or .nbt files")) {
+    trees.sort_by_key(|(order, _, e)| (*order, e.id));
+    let (under, base): (Vec<_>, Vec<_>) = trees.into_iter().partition(|t| t.1);
+    let (base, under): (Vec<Entry>, Vec<Entry>) = (base.into_iter().map(|t| t.2).collect(), under.into_iter().map(|t| t.2).collect());
+    ui.add_space(8.0);
+    if header(ui, Icon::TreePine, tr!("Trees and objects"), tr!("Import objects…"), tr!("Trees, rocks, ruins from .schem, .schematic, .bp, .litematic or .nbt files")) {
         let files = rfd::FileDialog::new().set_title(tr!("Import objects")).add_filter(tr!("Schematics"), &massif_objects::EXTENSIONS).pick_files().unwrap_or_default();
         if !files.is_empty() {
             said = Some(crate::panels::import_objects(doc, tools, &files, None, blocks.catalogue.as_deref()));
         }
     }
-    if objects.is_empty() {
+    if base.is_empty() {
         hint(ui, tr!("None yet: import objects, or drop their files on the window."));
     }
-    list(ui, &objects, state, &mut actions);
+    list(ui, &base, state, &mut actions);
+    ui.add_space(8.0);
+    title(ui, Icon::Shrub, tr!("Under the trees"));
+    if under.is_empty() {
+        hint(ui, tr!("Bushes, hazel, holly that grow under the trees: Bushes from Packs, or any object layer made Sub-canopy in its settings."));
+    }
+    list(ui, &under, state, &mut actions);
 
     // The tree sizes the object layers take where they are painted.
     ui.add_space(8.0);
@@ -149,42 +215,9 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     }
     hint(ui, tr!("Paint sizes, then a species over them: each spot takes its objects of the size marked."));
 
-    // Terrain mixes.
-    ui.add_space(8.0);
-    let current = (tools.tool == Tool::PaintTerrain && tools.pattern.on).then(|| tools.pattern.preset_name()).flatten();
-    let mixes: Vec<Entry> = tools
-        .pattern
-        .saved
-        .iter()
-        .enumerate()
-        .map(|(k, p)| {
-            let color = p.terrains.first().and_then(|(t, _)| doc.world.registry.terrain_by_name(t)).map_or([128; 3], |t| doc.world.registry.terrain(t).color);
-            let parts: Vec<String> = p.terrains.iter().map(|(t, w)| format!("{t} {:.0}%", w * 100.0)).collect();
-            Entry {
-                kind: Kind::Mix,
-                id: k,
-                name: p.name.clone(),
-                color,
-                detail: tr!("{n} terrains", n = p.terrains.len()),
-                tip: parts.join(", "),
-                shown: None,
-                selected: current.as_deref() == Some(p.name.as_str()),
-            }
-        })
-        .collect();
-    if header(ui, Icon::Blend, tr!("Terrain mixes"), tr!("New mix"), tr!("Terrains mixed by a noise: set them up in Tool Settings, then save them")) {
-        tools.pattern.on = true;
-        tools.select(Tool::PaintTerrain);
-    }
-    if mixes.is_empty() {
-        hint(ui, tr!("Mixes saved from Paint terrain ▸ Noise show here."));
-    }
-    list(ui, &mixes, state, &mut actions);
-
     // Annotations: a click on a colour paints with it.
     ui.add_space(8.0);
-    let pal = Palette::of(ui);
-    ui.label(RichText::new(format!("{}  {}", theme::glyph(Icon::PenLine), tr!("Annotations").to_uppercase())).size(10.5).strong().color(pal.weak));
+    title(ui, Icon::PenLine, tr!("Annotations"));
     if let Some(n) = crate::panels::annotation_swatches(ui, 20.0, (tools.tool == Tool::Annotate).then_some(tools.annotation)) {
         tools.annotation = n;
         tools.select(Tool::Annotate);
@@ -192,15 +225,22 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     hint(ui, tr!("Marks on the map, to plan it, as in WorldPainter: never exported."));
 
     ui.add_space(8.0);
-    hint(ui, tr!("Click one to paint it: its settings are in Tool Settings. Ready-made trees, plants and mixes: Packs, above."));
+    hint(ui, tr!("Click a layer to paint it, double-click to rename it; its menu has its settings, its place in the list, its lock. A block holds one layer of each section. Ready-made trees, plants and mixes: Packs, above."));
 
+    let lists = [(Kind::Mix, false, mixes), (Kind::Cover, false, covers), (Kind::Objects, false, base), (Kind::Objects, true, under)];
     for action in actions {
-        apply(action, tools, doc, state);
+        apply(action, tools, doc, state, &lists);
     }
     if (doc.world.registry.covers.clone(), doc.world.registry.object_layers.clone()) != before {
         doc.mark_changed();
     }
     said
+}
+
+/// A section's title, without a button.
+fn title(ui: &mut Ui, icon: Icon, title: &str) {
+    let pal = Palette::of(ui);
+    ui.add(egui::Label::new(RichText::new(format!("{}  {}", theme::glyph(icon), title.to_uppercase())).size(10.5).strong().color(pal.weak)).truncate());
 }
 
 fn hint(ui: &mut Ui, text: &str) {
@@ -262,8 +302,22 @@ fn row(ui: &mut Ui, e: &Entry, state: &mut LayersUi, actions: &mut Vec<Action>) 
     }
     let dot = Rect::from_center_size(rect.left_center() + vec2(34.0, 0.0), vec2(11.0, 11.0));
     painter.rect(dot, 3, theme::rgb(e.color), Stroke::new(1.0, Color32::from_black_alpha(60)), StrokeKind::Inside);
+    // The lock, on the right: shown when locked, and to lock it when the
+    // row is pointed at.
+    let mut lock_w = 0.0;
+    if let Some(locked) = e.locked
+        && (locked || response.hovered() || ui.rect_contains_pointer(rect))
+    {
+        lock_w = 20.0;
+        let at = Rect::from_center_size(rect.right_center() - vec2(13.0, 2.0), vec2(20.0, 20.0));
+        let r = ui.put(at, egui::Button::new(RichText::new(theme::glyph(if locked { Icon::Lock } else { Icon::LockOpen }).to_string()).color(if locked { pal.text } else { pal.weak })).frame(false));
+        r.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, locked, tr!("Lock")));
+        if r.on_hover_text(if locked { tr!("Locked: brushes leave its blocks as they are. Click to unlock") } else { tr!("Lock it: brushes then leave its blocks as they are") }).clicked() {
+            actions.push(Action::ToggleLock(e.kind, e.id));
+        }
+    }
     let detail = painter.layout_no_wrap(e.detail.clone(), egui::FontId::proportional(11.0), pal.weak);
-    let detail_w = detail.size().x;
+    let detail_w = detail.size().x + lock_w;
     painter.galley(rect.right_center() - vec2(8.0 + detail_w, detail.size().y / 2.0), detail, pal.weak);
     let name_rect = Rect::from_min_max(rect.left_top() + vec2(46.0, 3.0), rect.right_bottom() - vec2(16.0 + detail_w, 3.0));
 
@@ -301,6 +355,10 @@ fn row(ui: &mut Ui, e: &Entry, state: &mut LayersUi, actions: &mut Vec<Action>) 
         actions.push(Action::Paint(e.kind, e.id));
     }
     response.context_menu(|ui| {
+        if e.kind != Kind::Mix && ui.button(theme::with_icon(Icon::SlidersHorizontal, tr!("Settings…"))).clicked() {
+            actions.push(Action::Settings(e.kind, e.id));
+            ui.close();
+        }
         if ui.button(theme::with_icon(Icon::Paintbrush, tr!("Paint with it"))).clicked() {
             actions.push(Action::Paint(e.kind, e.id));
             ui.close();
@@ -313,10 +371,24 @@ fn row(ui: &mut Ui, e: &Entry, state: &mut LayersUi, actions: &mut Vec<Action>) 
             actions.push(Action::Duplicate(e.kind, e.id));
             ui.close();
         }
+        if ui.button(theme::with_icon(Icon::ArrowUp, tr!("Move up"))).clicked() {
+            actions.push(Action::Move(e.kind, e.id, true));
+            ui.close();
+        }
+        if ui.button(theme::with_icon(Icon::ArrowDown, tr!("Move down"))).clicked() {
+            actions.push(Action::Move(e.kind, e.id, false));
+            ui.close();
+        }
         if let Some(on) = e.shown
             && ui.button(theme::with_icon(if on { Icon::EyeOff } else { Icon::Eye }, if on { tr!("Hide on the map") } else { tr!("Show on the map") })).clicked()
         {
             actions.push(Action::ToggleShown(e.kind, e.id));
+            ui.close();
+        }
+        if let Some(locked) = e.locked
+            && ui.button(theme::with_icon(if locked { Icon::LockOpen } else { Icon::Lock }, if locked { tr!("Unlock") } else { tr!("Lock") })).clicked()
+        {
+            actions.push(Action::ToggleLock(e.kind, e.id));
             ui.close();
         }
         ui.separator();
@@ -342,9 +414,51 @@ pub fn unique_name<'a>(name: &str, taken: impl Iterator<Item = &'a str> + Clone)
     (2..).map(|k| format!("{name} {k}")).find(|n| free(n)).expect("a free name")
 }
 
-fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut LayersUi) {
+fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut LayersUi, lists: &[(Kind, bool, Vec<Entry>)]) {
     let reg = &mut doc.world.registry;
     match action {
+        Action::Settings(kind, n) => {
+            apply(Action::Paint(kind, n), tools, doc, state, lists);
+            state.open = Some((kind, n));
+        }
+        Action::ToggleLock(Kind::Cover, n) => {
+            if let Some(c) = reg.covers.get_mut(n - 1) {
+                c.locked = !c.locked;
+            }
+        }
+        Action::ToggleLock(Kind::Objects, n) => {
+            if let Some(l) = reg.object_layers.get_mut(n - 1) {
+                l.locked = !l.locked;
+            }
+        }
+        Action::ToggleLock(Kind::Mix, _) => {}
+        Action::Move(kind, id, up) => {
+            // Its section's list, in the order shown; it changes place with
+            // its neighbour.
+            let Some(ids) = lists.iter().find(|l| l.0 == kind && l.2.iter().any(|e| e.id == id)).map(|l| l.2.iter().map(|e| e.id).collect::<Vec<usize>>()) else { return };
+            let Some(k) = ids.iter().position(|&i| i == id) else { return };
+            let other = if up { k.checked_sub(1) } else { Some(k + 1).filter(|&o| o < ids.len()) };
+            let Some(other) = other else { return };
+            let mut ids = ids;
+            ids.swap(k, other);
+            match kind {
+                Kind::Mix => tools.pattern.saved.swap(k, other),
+                Kind::Cover => {
+                    for (place, &n) in ids.iter().enumerate() {
+                        if let Some(c) = reg.covers.get_mut(n - 1) {
+                            c.order = place as u32 + 1;
+                        }
+                    }
+                }
+                Kind::Objects => {
+                    for (place, &n) in ids.iter().enumerate() {
+                        if let Some(l) = reg.object_layers.get_mut(n - 1) {
+                            l.order = place as u32 + 1;
+                        }
+                    }
+                }
+            }
+        }
         Action::Paint(Kind::Cover, n) => {
             tools.cover = n as u16;
             tools.select(Tool::Cover);
@@ -506,30 +620,51 @@ mod tests {
         h.get_by_label("Large trees").click();
         h.run_steps(2);
         assert_eq!((h.state().tools.tool, h.state().tools.tree_size), (Tool::TreeSize, 4));
+        // A layer locked, moved up its section, and its settings asked for.
+        let lists = |s: &State| -> Vec<(Kind, bool, Vec<Entry>)> {
+            let reg = &s.doc.world.registry;
+            let mut covers: Vec<Entry> = reg.covers.iter().enumerate().filter(|(_, c)| !c.removed).map(|(k, c)| entry(Kind::Cover, k + 1, &c.name)).collect();
+            covers.sort_by_key(|e| (reg.covers[e.id - 1].order, e.id));
+            vec![(Kind::Cover, false, covers)]
+        };
+        let s = h.state_mut();
+        apply(Action::ToggleLock(Kind::Cover, flowers as usize), &mut s.tools, &mut s.doc, &mut s.ui, &[]);
+        assert!(s.doc.world.registry.covers[flowers as usize - 1].locked);
+        let l = lists(s);
+        apply(Action::Move(Kind::Cover, flowers as usize, true), &mut s.tools, &mut s.doc, &mut s.ui, &l);
+        let order: Vec<String> = lists(s)[0].2.iter().map(|e| e.name.clone()).take(3).collect();
+        assert_eq!(order, ["Grass", "Flowers", "Tall grass"]);
+        let l = lists(s);
+        apply(Action::Settings(Kind::Cover, flowers as usize), &mut s.tools, &mut s.doc, &mut s.ui, &l);
+        assert_eq!(s.ui.open, Some((Kind::Cover, flowers as usize)));
 
         // Hidden: left off the map, written in the file, nothing else.
         let s = h.state_mut();
-        apply(Action::ToggleShown(Kind::Cover, flowers as usize), &mut s.tools, &mut s.doc, &mut s.ui);
+        apply(Action::ToggleShown(Kind::Cover, flowers as usize), &mut s.tools, &mut s.doc, &mut s.ui, &[]);
         assert!(s.doc.world.registry.covers[flowers as usize - 1].hidden);
         let json = serde_json::to_string(&s.doc.world.registry.covers).unwrap();
         assert_eq!(json.matches("\"hidden\"").count(), 1, "only a hidden cover says so");
 
         let s = h.state_mut();
-        apply(Action::Renamed(Kind::Objects, 1, "Big oaks".into()), &mut s.tools, &mut s.doc, &mut s.ui);
-        apply(Action::Duplicate(Kind::Objects, 1), &mut s.tools, &mut s.doc, &mut s.ui);
+        apply(Action::Renamed(Kind::Objects, 1, "Big oaks".into()), &mut s.tools, &mut s.doc, &mut s.ui, &[]);
+        apply(Action::Duplicate(Kind::Objects, 1), &mut s.tools, &mut s.doc, &mut s.ui, &[]);
         let names: Vec<&str> = s.doc.world.registry.object_layers.iter().map(|l| l.name.as_str()).collect();
         assert_eq!(names, ["Big oaks", "Big oaks copy"]);
         assert_eq!(s.tools.object_layer, 2);
-        apply(Action::Remove(Kind::Objects, 2), &mut s.tools, &mut s.doc, &mut s.ui);
+        apply(Action::Remove(Kind::Objects, 2), &mut s.tools, &mut s.doc, &mut s.ui, &[]);
         assert!(s.doc.world.registry.object_layer(2).is_none());
         assert_eq!(s.tools.object_layer, 1);
-        apply(Action::Duplicate(Kind::Cover, flowers as usize), &mut s.tools, &mut s.doc, &mut s.ui);
+        apply(Action::Duplicate(Kind::Cover, flowers as usize), &mut s.tools, &mut s.doc, &mut s.ui, &[]);
         assert!(s.doc.world.registry.cover_by_name("Flowers copy").is_some());
         assert!(!s.doc.world.registry.covers.last().unwrap().hidden, "a copy is shown");
-        apply(Action::Remove(Kind::Mix, 0), &mut s.tools, &mut s.doc, &mut s.ui);
+        apply(Action::Remove(Kind::Mix, 0), &mut s.tools, &mut s.doc, &mut s.ui, &[]);
         assert!(s.tools.pattern.saved.is_empty());
         h.run_steps(2);
         h.get_by_label("Big oaks");
+    }
+
+    fn entry(kind: Kind, id: usize, name: &str) -> Entry {
+        Entry { kind, id, name: name.to_owned(), color: [0; 3], detail: String::new(), tip: String::new(), shown: None, locked: None, selected: false }
     }
 
     #[test]
@@ -550,6 +685,11 @@ mod tests {
         for dark in [true, false] {
             let mut s = state();
             s.doc.world.registry.covers[6].hidden = true;
+            // A locked tree layer, and a sub-canopy one under it.
+            s.doc.world.registry.object_layers[0].locked = true;
+            let mut hazel = s.doc.world.registry.object_layers[0].clone();
+            (hazel.name, hazel.understory, hazel.locked, hazel.color) = ("Hazel".into(), true, false, [126, 150, 70]);
+            s.doc.world.registry.add_object_layer(hazel);
             s.tools.cover = 3;
             s.tools.select(Tool::Cover);
             let mut h = egui_kittest::Harness::builder()

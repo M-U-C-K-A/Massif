@@ -102,6 +102,9 @@ pub struct History {
     /// The bytes the steps may hold together; past it the oldest go, the
     /// last one always kept.
     budget: usize,
+    /// The layers brushes leave as they are (see [`crate::registry::Locks`]),
+    /// set by whoever paints before they do.
+    pub locks: crate::registry::Locks,
 }
 
 /// What the steps to undo and redo may hold by default: on a map of 44,544
@@ -122,6 +125,7 @@ impl History {
             open: None,
             limit: limit.max(1),
             budget: HISTORY_BYTES,
+            locks: Default::default(),
         }
     }
 
@@ -166,7 +170,7 @@ impl History {
         let step = self.open.as_mut().expect("History::begin was not called");
         let dim = &mut world.dims[step.dim];
         assert!(level < dim.levels.len(), "no such level");
-        Edit { dim, step, level }
+        Edit { dim, step, level, locks: &self.locks }
     }
 
     /// Close the open step. Returns whether it changed anything.
@@ -368,6 +372,7 @@ pub struct Edit<'a> {
     dim: &'a mut Dimension,
     step: &'a mut Step,
     level: usize,
+    locks: &'a crate::registry::Locks,
 }
 
 impl Edit<'_> {
@@ -377,6 +382,11 @@ impl Edit<'_> {
 
     pub fn level_index(&self) -> usize {
         self.level
+    }
+
+    /// The layers brushes leave as they are.
+    pub fn locks(&self) -> &crate::registry::Locks {
+        self.locks
     }
 
     pub fn level(&self) -> &Level {

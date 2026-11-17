@@ -1174,6 +1174,24 @@ fn object_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, block
         tools.object_layer = n;
     }
 
+    object_layer_editor(ui, tools, doc, blocks);
+    if (doc.world.registry.object_layers.clone(), doc.world.registry.objects.len()) != before {
+        doc.mark_changed();
+    }
+}
+
+/// The settings of the object layer picked (`tools.object_layer`), as Tool
+/// Settings and the layer's own dialog show them.
+pub fn object_layer_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary) {
+    let pal = Palette::of(ui);
+    let before = (doc.world.registry.object_layers.clone(), doc.world.registry.objects.len());
+    let pick = |title: &str| {
+        rfd::FileDialog::new()
+            .set_title(title)
+            .add_filter(tr!("Schematics"), &massif_objects::EXTENSIONS)
+            .pick_files()
+            .unwrap_or_default()
+    };
     // The selected layer.
     let k = tools.object_layer.checked_sub(1).map(|k| k as usize);
     if k.and_then(|k| doc.world.registry.object_layers.get(k)).is_none_or(|l| l.removed) {
@@ -1513,7 +1531,6 @@ pub fn new_cover(reg: &mut Registry) -> u16 {
 /// thick, where.
 fn cover_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary) {
     let pal = Palette::of(ui);
-    let ctx = ui.ctx().clone();
     let before = doc.world.registry.covers.clone();
 
     // The covers to choose from.
@@ -1553,6 +1570,18 @@ fn cover_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks
     }
     hint(ui, tr!("Non-cube blocks clicked in Blocks become covers too. Every cover and object layer of the map: the Layers panel."));
 
+    cover_editor(ui, tools, doc, blocks);
+    if doc.world.registry.covers != before {
+        doc.mark_changed();
+    }
+}
+
+/// The settings of the cover picked (`tools.cover`), as Tool Settings and
+/// the layer's own dialog show them.
+pub fn cover_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary) {
+    let pal = Palette::of(ui);
+    let ctx = ui.ctx().clone();
+    let before = doc.world.registry.covers.clone();
     // The selected cover.
     let catalogue = blocks.catalogue.clone();
     let Some(def) = tools.cover.checked_sub(1).and_then(|k| doc.world.registry.covers.get_mut(k as usize)).filter(|d| !d.removed) else {

@@ -179,6 +179,13 @@ pub struct CoverDef {
     /// painted is lava.
     #[serde(default, skip_serializing_if = "crate::registry::is_false")]
     pub lava: bool,
+    /// Locked: brushes neither paint another cover over its blocks nor rub
+    /// it out (see [`Locks`]).
+    #[serde(default, skip_serializing_if = "crate::registry::is_false")]
+    pub locked: bool,
+    /// Its place among the covers in the Layers panel (0: by its number).
+    #[serde(default, skip_serializing_if = "crate::registry::is_zero")]
+    pub order: u32,
     /// Removed: no longer offered, and nothing grows where it was painted.
     #[serde(default)]
     pub removed: bool,
@@ -191,6 +198,54 @@ pub struct CoverDef {
 /// For `skip_serializing_if`: a flag left off is not written.
 pub fn is_false(b: &bool) -> bool {
     !*b
+}
+
+/// For `skip_serializing_if`: a number left at 0 is not written.
+pub fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+/// The slots of a block that brushes paint layers in, as far as locks go
+/// (see `docs/layers.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Slot {
+    /// Ground covers: plants, Frost, Lava.
+    Cover,
+    /// Object layers, base or sub-canopy.
+    Objects,
+}
+
+/// The layers locked in a registry, by their number in their plane: a
+/// brush leaves their blocks as they are.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Locks {
+    covers: Vec<bool>,
+    objects: Vec<bool>,
+}
+
+impl Locks {
+    /// The layers locked in `reg`.
+    pub fn of(reg: &Registry) -> Self {
+        let numbered = |locked: Vec<bool>| if locked.iter().any(|&l| l) { std::iter::once(false).chain(locked).collect() } else { Vec::new() };
+        Self {
+            covers: numbered(reg.covers.iter().map(|c| c.locked && !c.removed).collect()),
+            objects: numbered(reg.object_layers.iter().map(|l| l.locked && !l.removed).collect()),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.covers.is_empty() && self.objects.is_empty()
+    }
+
+    /// Whether the layer numbered `n` in `slot`'s plane is locked.
+    #[inline]
+    pub fn holds(&self, slot: Slot, n: u16) -> bool {
+        let list = match slot {
+            Slot::Cover => &self.covers,
+            Slot::Objects => &self.objects,
+        };
+        list.get(n as usize).copied().unwrap_or(false)
+    }
 }
 
 fn one_high() -> [u8; 2] {
@@ -290,6 +345,8 @@ impl CoverDef {
             underwater: false,
             frost: false,
             lava: false,
+            locked: false,
+            order: 0,
             removed: false,
             hidden: false,
         }

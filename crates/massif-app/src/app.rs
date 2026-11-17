@@ -363,6 +363,8 @@ enum Dialog {
     Crashed(String, Option<PathBuf>),
     /// A problem report to save (see `report`).
     Report(Box<crate::report_view::ReportForm>),
+    /// The settings of one layer of the Layers panel.
+    Layer(crate::layers::Kind, usize),
 }
 
 struct Status {
@@ -3660,9 +3662,52 @@ impl MassifApp {
         if std::mem::take(&mut self.tools.open_rules) && self.dialog.is_none() {
             self.dialog = Some(Dialog::AutoRules(self.tools.tool == Tool::AutoPaint));
         }
+        if let Some((kind, n)) = self.layers_ui.open.take()
+            && self.dialog.is_none()
+        {
+            self.dialog = Some(Dialog::Layer(kind, n));
+        }
         let Some(dialog) = self.dialog.take() else { return };
         let mut keep = true;
         match dialog {
+            Dialog::Layer(kind, n) => {
+                use crate::layers::Kind;
+                let response = modal(ctx, "layer settings").show(ctx, |ui| {
+                    ui.set_width(400.0);
+                    let pal = Palette::of(ui);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(theme::glyph(Icon::SlidersHorizontal).to_string()).size(17.0).color(pal.accent));
+                        ui.label(RichText::new(tr!("Layer settings")).bold().size(15.0));
+                    });
+                    ui.add_space(6.0);
+                    // A height of its own, so that the dialog keeps its size
+                    // as its settings change.
+                    let height = (ctx.content_rect().height() - 220.0).clamp(200.0, 520.0);
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).min_scrolled_height(height).max_height(height).show(ui, |ui| match kind {
+                        Kind::Cover => {
+                            self.tools.cover = n as u16;
+                            crate::panels::cover_editor(ui, &mut self.tools, &mut self.doc, &mut self.blocks);
+                        }
+                        Kind::Objects => {
+                            self.tools.object_layer = n as u16;
+                            crate::panels::object_layer_editor(ui, &mut self.tools, &mut self.doc, &mut self.blocks);
+                        }
+                        Kind::Mix => {}
+                    });
+                    ui.add_space(10.0);
+                    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                        if ui.add(theme::primary_button(ui, tr!("Done"))).clicked() {
+                            keep = false;
+                        }
+                    });
+                });
+                if response.should_close() {
+                    keep = false;
+                }
+                if keep {
+                    self.dialog = Some(Dialog::Layer(kind, n));
+                }
+            }
             Dialog::Help(mut state) => {
                 let response = modal(ctx, "help").show(ctx, |ui| {
                     if crate::help::ui(ui, &mut state) {
@@ -7211,6 +7256,27 @@ mod tests {
         h.state_mut().undo(&ctx);
         h.run_steps(2);
         assert_eq!(heights(&h), before, "one undo takes it all back");
+    }
+
+    /// A layer's settings in a dialog of their own (Settings… in its menu
+    /// in the Layers panel), Done closing it; rendered with
+    /// MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn layer_settings_open_in_a_dialog() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let n = massif_core::treepack::TreeKind::Bush.install(&mut h.state_mut().doc.world.registry);
+        h.state_mut().layers_ui.open = Some((crate::layers::Kind::Objects, n as usize));
+        h.run_steps(5);
+        assert!(matches!(h.state().dialog, Some(Dialog::Layer(crate::layers::Kind::Objects, k)) if k == n as usize));
+        assert_eq!(h.state().tools.object_layer, n, "the layer is picked");
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            h.render().unwrap().save(dir.join("layer-settings-dialog.png")).unwrap();
+        }
+        h.get_by_label("Done").click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none());
     }
 
     /// Jack's forest, as the Conquest Reforged team paints one: tree sizes

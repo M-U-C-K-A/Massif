@@ -1137,6 +1137,8 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
     // Annotations are marks on the map, whatever the level: on the ground's.
     let level = if stroke.tool == Tool::Annotate { 0 } else { stroke.level.min(doc.dimension().levels.len() - 1) };
     let understory = doc.world.registry.object_layer(tools.object_layer).is_some_and(|l| l.understory);
+    // Locked layers keep their blocks.
+    doc.history.locks = massif_core::registry::Locks::of(&doc.world.registry);
     let surface = tools.surface();
     let mut edit = doc.history.edit(&mut doc.world, level);
     for k in 1..=n {

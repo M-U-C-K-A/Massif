@@ -865,8 +865,11 @@ adds its terrains to the map and paints with it.
 What WorldPainter calls layers — its custom plant layers, custom object
 layers and custom terrain mixes — are in Massif the **ground covers**, the
 **object layers** and the **terrain mixes**. The **Layers** panel lists all
-of the map's in one place (it sits under the Terrain panel; any area can
-show it, from Paint in the area's chooser):
+of the map's in one place, by the slot of a block they paint — terrain
+mixes, ground covers, trees and objects, under the trees, tree sizes,
+annotations (it sits under the Terrain panel; any area can show it, from
+Paint in the area's chooser). How they fit together is in
+[Layers](layers.md).
 
 - a **click** picks one to paint with, with its tool — Ground cover,
   Objects, or Paint terrain with its noise — and Tool Settings shows its
@@ -874,8 +877,12 @@ show it, from Paint in the area's chooser):
 - a **double-click** renames it;
 - its **eye** hides it on the map and in the 3D view, to see the ground
   under it; the export writes it all the same, and the map remembers it;
-- its menu (right button) paints with it, renames, **duplicates** or
-  **removes** it;
+- its **lock** (on the right of the row it is pointed at, and in its menu)
+  keeps a ground cover's or a tree layer's blocks: no brush paints another
+  layer of its slot over them, nor rubs them out, until it is unlocked;
+- its menu (right button) opens its **Settings…** in a dialog, paints with
+  it, renames, **duplicates**, moves it **up** or **down** its section,
+  locks or **removes** it;
 - **New cover**, **Import objects…** and **New mix** add one. A mix is
   set up in Paint terrain ▸ Noise and saved there under a name.
 - under them, the fifteen colours of the **annotations**: a click paints

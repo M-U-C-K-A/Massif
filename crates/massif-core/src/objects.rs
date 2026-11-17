@@ -417,6 +417,14 @@ pub struct ObjectLayerDef {
     /// in the air the base layer's leave (hazel, holly, bushes).
     #[serde(default, skip_serializing_if = "crate::registry::is_false")]
     pub understory: bool,
+    /// Locked: brushes neither paint another object layer of its slot over
+    /// its blocks nor rub it out.
+    #[serde(default, skip_serializing_if = "crate::registry::is_false")]
+    pub locked: bool,
+    /// Its place among the object layers in the Layers panel (0: by its
+    /// number).
+    #[serde(default, skip_serializing_if = "crate::registry::is_zero")]
+    pub order: u32,
 }
 
 impl ObjectLayerDef {
@@ -438,6 +446,8 @@ impl ObjectLayerDef {
             removed: false,
             hidden: false,
             understory: false,
+            locked: false,
+            order: 0,
         }
     }
 

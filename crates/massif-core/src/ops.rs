@@ -434,6 +434,7 @@ fn paint_hit(w: f32, strength: f32, x: i32, z: i32, salt: u64) -> bool {
     p >= 1.0 || (hash2(x, z, salt) as f32) < p * p * u32::MAX as f32
 }
 
+#[allow(clippy::too_many_arguments)]
 fn paint_plane(
     edit: &mut Edit,
     brush: &Brush,
@@ -441,12 +442,15 @@ fn paint_plane(
     cz: f32,
     salt: u64,
     value: u16,
+    slot: Option<crate::registry::Slot>,
     plane: impl Fn(&mut Tile) -> &mut Plane<u16> + Sync,
 ) {
     let dab = Dab::new(edit, brush, cx, cz);
     if dab.idle {
         return;
     }
+    // A locked layer of the slot keeps its blocks.
+    let locks = slot.filter(|_| !edit.locks().is_empty()).map(|s| (s, edit.locks().clone()));
     let footprint = BlockRect::around(cx, cz, brush.reach());
     edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
         let slab = tile.bottom.is_some();
@@ -458,6 +462,11 @@ fn paint_plane(
                 }
                 let i = local_index(x, z);
                 if slab && !tile.present(i) {
+                    continue;
+                }
+                if let Some((slot, locks)) = &locks
+                    && locks.holds(*slot, plane(tile).get(i))
+                {
                     continue;
                 }
                 plane(tile).set(i, value);
@@ -502,38 +511,38 @@ pub fn paint_terrain_with(
 
 /// Paint a terrain. `salt` should change from dab to dab.
 pub fn paint_terrain(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, terrain: TerrainId, salt: u64) {
-    paint_plane(edit, brush, cx, cz, salt, terrain.0, |t| &mut t.terrain);
+    paint_plane(edit, brush, cx, cz, salt, terrain.0, None, |t| &mut t.terrain);
 }
 
 /// Paint a biome. `salt` should change from dab to dab.
 pub fn paint_biome(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, biome: BiomeId, salt: u64) {
-    paint_plane(edit, brush, cx, cz, salt, biome.0, |t| &mut t.biome);
+    paint_plane(edit, brush, cx, cz, salt, biome.0, None, |t| &mut t.biome);
 }
 
 /// Paint a ground cover by its number (0 removes it). `salt` should
 /// change from dab to dab.
 pub fn paint_cover(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, cover: u16, salt: u64) {
-    paint_plane(edit, brush, cx, cz, salt, cover, |t| &mut t.cover);
+    paint_plane(edit, brush, cx, cz, salt, cover, Some(crate::registry::Slot::Cover), |t| &mut t.cover);
 }
 
 /// Paint an annotation, one of [`crate::tile::ANNOTATION_COLORS`] by its
 /// number (1 to 15; 0 removes it). `salt` should change from dab to dab.
 pub fn paint_annotation(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, color: u16, salt: u64) {
-    paint_plane(edit, brush, cx, cz, salt, color.min(15), |t| &mut t.annotations);
+    paint_plane(edit, brush, cx, cz, salt, color.min(15), None, |t| &mut t.annotations);
 }
 
 /// Paint a sub-canopy object layer by its number (0 removes it): beside
 /// the base object layer of each column, not in its place. `salt` should
 /// change from dab to dab.
 pub fn paint_understory(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, layer: u16, salt: u64) {
-    paint_plane(edit, brush, cx, cz, salt, layer, |t| &mut t.understory);
+    paint_plane(edit, brush, cx, cz, salt, layer, Some(crate::registry::Slot::Objects), |t| &mut t.understory);
 }
 
 /// Paint the size of tree the objects standing there take, from
 /// [`crate::tile::SIZE_BUSHES`] to [`crate::tile::SIZE_LARGE`] (0: any
 /// size). `salt` should change from dab to dab.
 pub fn paint_tree_size(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, size: u16, salt: u64) {
-    paint_plane(edit, brush, cx, cz, salt, size.min(crate::tile::SIZE_LARGE), |t| &mut t.sizes);
+    paint_plane(edit, brush, cx, cz, salt, size.min(crate::tile::SIZE_LARGE), None, |t| &mut t.sizes);
 }
 
 /// Move what is painted of object layer `n` to the sub-canopy plane
@@ -577,7 +586,7 @@ pub fn move_object_layer(edit: &mut Edit, n: u16, under: bool) -> usize {
 /// Paint an object layer by its number (0 removes it). `salt` should
 /// change from dab to dab.
 pub fn paint_objects(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, layer: u16, salt: u64) {
-    paint_plane(edit, brush, cx, cz, salt, layer, |t| &mut t.objects);
+    paint_plane(edit, brush, cx, cz, salt, layer, Some(crate::registry::Slot::Objects), |t| &mut t.objects);
 }
 
 /// Paint the terrains of a pattern under the brush (see
@@ -1291,6 +1300,55 @@ mod tests {
             mask: None,
             filter: None,
         }
+    }
+
+    /// A locked layer keeps its blocks: neither another layer of its slot
+    /// painted over them nor the right button takes them; unlocked, they go
+    /// as any others. Other slots paint as before.
+    #[test]
+    fn locked_layers_keep_their_blocks() {
+        use crate::registry::{CoverDef, Locks, Registry, Slot};
+        let mut w = world(1);
+        let mut reg = Registry::vanilla();
+        let grass = reg.cover_by_name("Grass").unwrap();
+        let ferns = reg.add_cover(CoverDef::new("Ferns too", [0; 3], &[("minecraft:fern", 1)], 1.0));
+        let mut hist = History::default();
+        let cover = |w: &World, x: i32| w.dims[0].ground().view(TilePos::containing(x, 0)).unwrap().cover.get(local_index(x, 0));
+        hist.begin("grass", 0);
+        paint_cover(&mut hist.edit(&mut w, 0), &hard_brush(10.0), -5.0, 0.0, grass, 1);
+        hist.commit();
+        reg.covers[grass as usize - 1].locked = true;
+        hist.locks = Locks::of(&reg);
+        assert!(hist.locks.holds(Slot::Cover, grass) && !hist.locks.holds(Slot::Cover, ferns) && !hist.locks.holds(Slot::Objects, grass));
+        hist.begin("ferns", 0);
+        paint_cover(&mut hist.edit(&mut w, 0), &hard_brush(10.0), 5.0, 0.0, ferns, 2);
+        hist.commit();
+        // The grass west of x = -5 + 10 stays; ferns east of it.
+        assert_eq!((cover(&w, -10), cover(&w, 0), cover(&w, 4), cover(&w, 8)), (grass, grass, grass, ferns));
+        hist.begin("rub out", 0);
+        paint_cover(&mut hist.edit(&mut w, 0), &hard_brush(20.0), 0.0, 0.0, 0, 3);
+        hist.commit();
+        assert_eq!((cover(&w, -10), cover(&w, 8)), (grass, 0));
+        // Object layers likewise, base and sub-canopy alike.
+        hist.locks = Locks::of(&Registry { object_layers: vec![{
+            let mut l = crate::objects::ObjectLayerDef::new("Oaks", &[], &reg);
+            l.locked = true;
+            l
+        }], ..reg.clone() });
+        let objects = |w: &World, x: i32| w.dims[0].ground().view(TilePos::containing(x, 0)).unwrap().objects.get(local_index(x, 0));
+        hist.begin("oaks", 0);
+        paint_objects(&mut hist.edit(&mut w, 0), &hard_brush(4.0), 0.0, 0.0, 1, 4);
+        hist.commit();
+        hist.begin("pines", 0);
+        paint_objects(&mut hist.edit(&mut w, 0), &hard_brush(8.0), 0.0, 0.0, 2, 5);
+        hist.commit();
+        assert_eq!((objects(&w, 0), objects(&w, 6)), (1, 2));
+        // Unlocked: everything goes.
+        hist.locks = Locks::default();
+        hist.begin("all", 0);
+        paint_cover(&mut hist.edit(&mut w, 0), &hard_brush(30.0), 0.0, 0.0, ferns, 6);
+        hist.commit();
+        assert_eq!((cover(&w, -10), cover(&w, 8)), (ferns, ferns));
     }
 
     /// Annotations are painted in their colour, rubbed out with 0, and

@@ -8,9 +8,9 @@ annotations. Every layer works the same way:
   your own brushes, the gradient brush for terrains — and the brush filters
   (only on grass, a height band, a slope…);
 - see it on the map and in the 3D view, or hide it with its **eye**;
-- **lock** it, so that no brush paints over it or rubs it out;
-- open its **settings**, **duplicate** it, **delete** it, or move it in the
-  list;
+- **lock** it, so that no brush paints over its blocks or rubs it out;
+- open its **settings** in a dialog, **duplicate** it, **delete** it, or
+  move it up and down its section;
 - save it with the map, share it in a pack, bring it from WorldPainter,
   and export it.
 
@@ -55,23 +55,28 @@ annotations.
 ## Order, visibility and lock
 
 The panel lists the layers by slot, in the order the export lays them:
-ground, biome, cover, trees, under the trees; then the masks and the
-annotations. Within a slot, the order is yours: drag a layer to move it.
-As a block holds one layer of a slot, the order changes the list and the
-palettes, not the world.
+terrain mixes (the ground), ground covers, trees and objects, under the
+trees; then the tree sizes and the annotations. Biomes are painted from
+the Biome panel. Within a section, the order is yours: **Move up** and
+**Move down** in a layer's menu. As a block holds one layer of a slot, the
+order changes the list, not the world.
 
 The **eye** hides a layer on the map and in the 3D view, to see what lies
-under it; the export writes it all the same. The **lock** keeps a layer's
-blocks: brushes neither paint another layer of its slot over them nor rub
-them out, until it is unlocked.
+under it; the export writes it all the same. The **lock** (pointed at, a
+row shows it on its right; also in its menu) keeps a ground cover's or a
+tree layer's blocks: brushes neither paint another layer of its slot over
+them nor rub them out, until it is unlocked. Terrains are kept the way
+WorldPainter keeps them, by the brush filters (**Except on** a terrain).
 
 ## Settings
 
-A layer's settings open in a dialog of their own (double-click it, or
-**Settings…** in its menu): its name and colour, and what its kind needs —
-a terrain's blocks and strata, a plant layer's plants and density, a tree
-layer's objects, spacing, density, turn and slot (Trees or Under the
-trees), Frost's snow and ice. **New layer** asks for a kind first.
+A ground cover's or a tree layer's settings open in a dialog of their own
+(**Settings…** in its menu), and in Tool Settings while it is painted: its
+name and colour, and what its kind needs — a plant layer's plants, density
+and what it does to the water (Frost, Lava), a tree layer's objects and
+their sizes, spacing, density, turn and slot (Base or Sub-canopy). A
+double-click renames a layer. Each section has its button to add one: New
+mix, New cover, Import objects…
 
 ## Saving, packs, WorldPainter and export
 
@@ -93,8 +98,13 @@ trees), Frost's snow and ice. **New layer** asks for a kind first.
   something, so maps without it are unchanged, and a version that does not
   know a plane keeps it as it read it.
 - Every slot is painted by `ops::paint_plane`: the brush, its dab, the
-  filters and the selection apply to all of them; a locked layer's number
-  is skipped.
+  filters and the selection apply to all of them. `History::locks`
+  (`registry::Locks::of`, set by the tool before it paints) holds the
+  locked covers and object layers; `paint_plane` skips a column whose
+  layer in that plane is locked, painting or rubbing out.
+- `order` (covers, object layers) is a layer's place in its section of the
+  panel; `locked` its lock; `hidden` its eye. None of them changes the
+  export.
 - `objects::tile_placements` stands the Trees slot's objects first and the
   Under the trees slot's after, with the object of the size the Size plane
   asks for (`ObjectLayerDef::pick`); the export lays the sub-canopy's blocks
@@ -104,12 +114,13 @@ trees), Frost's snow and ice. **New layer** asks for a kind first.
 
 ## Steps
 
-1. **Slots for trees, sizes, and the rest of WorldPainter's layers** — the
-   Trees and Under the trees slots, the Size mask and its tool, the four
-   sizes of every kind of tree of the packs; caves, tunnels, custom ground
-   covers and combined layers from a `.world`.
-2. **One Layers panel** — every layer in one list, by slot, with its eye,
-   its lock, its menu (Settings…, Duplicate, Delete) and drag to reorder;
-   **New layer** by kind; a settings dialog for each kind instead of
-   settings in Tool Settings.
-3. **Lock** — brushes skip a locked layer's blocks.
+1. **Slots for trees, sizes, and the rest of WorldPainter's layers**
+   (landed) — the Trees and Under the trees slots, the Size mask and its
+   tool, the four sizes of every kind of tree of the packs; caves, tunnels,
+   custom ground covers and combined layers from a `.world`.
+2. **One Layers panel and the lock** — the sections by slot (terrain
+   mixes, ground covers, trees and objects, under the trees, tree sizes,
+   annotations), each row with its eye and its lock, a menu with
+   Settings…, Paint, Rename, Duplicate, Move up and down, Lock, Hide and
+   Remove, and a dialog with the settings of a cover or a tree layer;
+   brushes skip a locked layer's blocks.
