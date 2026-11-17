@@ -519,7 +519,9 @@ fn cmd_spring(args: Args) -> Res<()> {
     };
     for pair in coords.chunks(2) {
         let started = Instant::now();
-        let d = massif_core::river::descend(world.dims[0].ground(), (pair[0], pair[1]), sea, 60_000, 2_000_000, 13.0);
+        let mut d = massif_core::river::descend(world.dims[0].ground(), (pair[0], pair[1]), sea, 60_000, 2_000_000, 13.0);
+        // As the River tool lays it out.
+        d.course = massif_core::river::natural_course(world.dims[0].ground(), &d.course, 12.0 * 2.0, &[]).0;
         let mut history = massif_core::history::History::new(1);
         history.begin("River", 0);
         let r = massif_core::river::dig_descent(&mut history.edit(&mut world, 0), &d, &spec);

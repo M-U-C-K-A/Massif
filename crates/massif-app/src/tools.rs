@@ -791,7 +791,7 @@ impl RiverDraft {
         let lake_depth = settings.lake_depth();
         let mut h = std::collections::hash_map::DefaultHasher::new();
         format!("{:?}", self.layout).hash(&mut h);
-        (doc.revision, lake_depth.to_bits(), moving).hash(&mut h);
+        (doc.revision, lake_depth.to_bits(), moving, settings.width.to_bits(), settings.flow.to_bits()).hash(&mut h);
         let key = h.finish();
         if self.planned == Some(key) {
             return;
@@ -842,6 +842,10 @@ impl RiverDraft {
             }
         };
         let sea = (mouth == Some(massif_core::river::Mouth::Sea)).then_some(sea);
+        // Its loops cut, its runs along the grid smoothed, meanders on the
+        // flat: what is shown is what is dug.
+        let width = settings.width * (1.0 + 2.0 * settings.flow.clamp(0.0, 1.0));
+        let (course, stops) = massif_core::river::natural_course(level, &course, width, &stops);
         self.plan = massif_core::river::Descent { course, lakes, mouth, sea };
         self.stops = stops;
         self.planned = Some(key);

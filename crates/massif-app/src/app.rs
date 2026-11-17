@@ -10804,10 +10804,15 @@ mod tests {
         if crate::tools::probe(&h.state().doc, source.0, source.1).is_none() {
             return;
         }
+        // The course as the River tool lays it out (natural_course), with
+        // its default settings.
         let course = {
             let app = h.state();
             let sea = app.doc.world.meta.sea_level as f32;
-            massif_core::river::descend(app.doc.dimension().ground(), source, sea, 60_000, 2_000_000, app.tools.river.lake_depth()).course
+            let settings = crate::tools::RiverSettings::default();
+            let level = app.doc.dimension().ground();
+            let raw = massif_core::river::descend(level, source, sea, 60_000, 2_000_000, settings.lake_depth()).course;
+            massif_core::river::natural_course(level, &raw, settings.width * (1.0 + 2.0 * settings.flow), &[]).0
         };
         assert!(course.len() > 100, "{} points", course.len());
         let mid = course[course.len() / 2];

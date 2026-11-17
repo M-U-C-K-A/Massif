@@ -959,6 +959,166 @@ pub fn dig_descent(edit: &mut Edit, descent: &Descent, spec: &RiverSpec) -> Rive
     carve_river(edit, &points, &spec)
 }
 
+// ------------------------------------------------------- natural course --
+
+/// A river's course made natural before it is dug (`course`: a point every
+/// block or so, from the source; `width`: the river's width there, in
+/// blocks; `anchors`: the indices of the points it must pass, kept where
+/// they are). Returns the new course and the new indices of its anchors.
+///
+/// - Its loops are cut: where it comes back within a width of where it
+///   was before (water filling a shallow hollow wanders round it), it goes
+///   straight across instead, unless that would climb.
+/// - Its runs along the grid (the ways found across hollows and over the
+///   land go from cell to cell) are smoothed over about its width.
+/// - On gentle ground it meanders: a wave across its way some ten widths
+///   long, half a width to either side, smaller where it would climb out
+///   of its valley, none near its ends and its anchors.
+pub fn natural_course(level: &crate::level::Level, course: &[(f32, f32)], width: f32, anchors: &[usize]) -> (Vec<(f32, f32)>, Vec<usize>) {
+    let n = course.len();
+    if n < 8 {
+        return (course.to_vec(), anchors.to_vec());
+    }
+    let mut ground = Ground::new(level);
+    let mut height = |p: (f32, f32)| ground.at(p.0.floor() as i32, p.1.floor() as i32).map_or(f32::MAX, |(h, w)| w.unwrap_or(h));
+    let width = width.max(2.0);
+
+    // ---- loops: where it comes back near where it was, straight across.
+    let near = (0.9 * width).max(4.0);
+    let cell = near.max(4.0);
+    let key = |p: (f32, f32)| ((p.0 / cell).floor() as i32, (p.1 / cell).floor() as i32);
+    let mut kept: Vec<usize> = Vec::with_capacity(n);
+    // The points kept, by cell: their place in `kept` and their index in
+    // the course (stale once that place holds another point).
+    let mut seen: HashMap<(i32, i32), Vec<(usize, usize)>> = HashMap::new();
+    let is_anchor = |k: usize| anchors.contains(&k);
+    // A loop is worth cutting when the way round is much longer than
+    // across: at least four widths.
+    let shortest = (4.0 * width).max(16.0);
+    for (k, &p) in course.iter().enumerate() {
+        // The earliest point kept so far that it comes back near.
+        let (cx, cz) = key(p);
+        let mut back: Option<usize> = None;
+        for dz in -1..=1 {
+            for dx in -1..=1 {
+                for &(j, orig) in seen.get(&(cx + dx, cz + dz)).into_iter().flatten() {
+                    if kept.get(j) != Some(&orig) {
+                        continue;
+                    }
+                    let q = course[orig];
+                    if (q.0 - p.0).hypot(q.1 - p.1) <= near && back.is_none_or(|b| j < b) {
+                        back = Some(j);
+                    }
+                }
+            }
+        }
+        if let Some(j) = back {
+            let from = kept[j];
+            let round: f32 = course[from..=k].windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum();
+            let anchored = kept[j + 1..].iter().any(|&a| is_anchor(a));
+            // Across must not climb over what lies between.
+            let ends = height(course[from]).max(height(p));
+            let climbs = (1..8).any(|s| {
+                let t = s as f32 / 8.0;
+                height((course[from].0 + (p.0 - course[from].0) * t, course[from].1 + (p.1 - course[from].1) * t)) > ends + 1.5
+            });
+            if round >= shortest && !anchored && !climbs {
+                kept.truncate(j + 1);
+            }
+        }
+        seen.entry(key(p)).or_default().push((kept.len(), k));
+        kept.push(k);
+    }
+    let mut pts: Vec<(f32, f32)> = kept.iter().map(|&k| course[k]).collect();
+    let mut anchor_at: Vec<usize> = anchors.iter().filter_map(|a| kept.iter().position(|k| k == a)).collect();
+
+    // ---- runs along the grid: a moving average over about its width,
+    // its ends and anchors held; no point moved up a slope.
+    let fixed = |k: usize, anchor_at: &[usize], len: usize| k == 0 || k + 1 == len || anchor_at.contains(&k);
+    let radius = ((0.6 * width).clamp(3.0, 12.0)) as usize;
+    for _ in 0..2 {
+        let len = pts.len();
+        let before = pts.clone();
+        for k in 0..len {
+            if fixed(k, &anchor_at, len) {
+                continue;
+            }
+            let (a, b) = (k.saturating_sub(radius), (k + radius).min(len - 1));
+            // Not across an anchor.
+            let a = anchor_at.iter().filter(|&&s| s < k).map(|&s| s.max(a)).max().unwrap_or(a);
+            let b = anchor_at.iter().filter(|&&s| s > k).map(|&s| s.min(b)).min().unwrap_or(b);
+            let m = (b - a + 1) as f32;
+            let avg = before[a..=b].iter().fold((0.0, 0.0), |s, p| (s.0 + p.0, s.1 + p.1));
+            let q = (avg.0 / m, avg.1 / m);
+            if height(q) <= height(before[k]) + 1.0 {
+                pts[k] = q;
+            }
+        }
+    }
+
+    // ---- meanders on gentle ground.
+    let len = pts.len();
+    let along: Vec<f32> = std::iter::once(0.0)
+        .chain(pts.windows(2).scan(0.0f32, |s, w| {
+            *s += (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1);
+            Some(*s)
+        }))
+        .collect();
+    let wave = (10.0 * width).clamp(40.0, 400.0);
+    let amplitude = 0.5 * width;
+    let noise = crate::noise::Noise::new(0x3ea7_d3e2);
+    let total = *along.last().unwrap_or(&0.0);
+    let mut out = pts.clone();
+    for k in 1..len - 1 {
+        // Gentle: under one block of drop in twenty, over a wave either way.
+        let span = (wave / 2.0) as usize;
+        let (a, b) = (k.saturating_sub(span), (k + span).min(len - 1));
+        let run = (along[b] - along[a]).max(1.0);
+        let grade = ((height(pts[a]) - height(pts[b])) / run).max(0.0);
+        let gentle = (1.0 - grade / 0.05).clamp(0.0, 1.0);
+        if gentle <= 0.0 {
+            continue;
+        }
+        // None near its ends and its anchors: half a wave to grow.
+        let from_ends = along[k].min(total - along[k]);
+        let from_anchor = anchor_at.iter().map(|&s| (along[s] - along[k]).abs()).fold(f32::MAX, f32::min);
+        let room = (from_ends.min(from_anchor) / (0.5 * wave)).clamp(0.0, 1.0);
+        let room = room * room * (3.0 - 2.0 * room);
+        // A wave whose length wanders a little, as meanders' do.
+        let phase = std::f32::consts::TAU * along[k] / wave + 1.5 * noise.fbm(along[k] as f64 / wave as f64, 0.37, 2, 2.0, 0.5) as f32;
+        let mut offset = amplitude * gentle * room * phase.sin();
+        if offset.abs() < 0.25 {
+            continue;
+        }
+        let (d0, d1) = (pts[k + 1].0 - pts[k - 1].0, pts[k + 1].1 - pts[k - 1].1);
+        let dl = d0.hypot(d1).max(1e-6);
+        let normal = (-d1 / dl, d0 / dl);
+        // Smaller where it would climb out of its valley.
+        let here = height(pts[k]);
+        for _ in 0..4 {
+            let q = (pts[k].0 + normal.0 * offset, pts[k].1 + normal.1 * offset);
+            if height(q) <= here + 1.0 {
+                out[k] = q;
+                break;
+            }
+            offset *= 0.5;
+        }
+    }
+    // The reductions leave kinks: smoothed once more over a few blocks.
+    let mut done = out.clone();
+    for (k, d) in done.iter_mut().enumerate().take(len - 1).skip(1) {
+        if fixed(k, &anchor_at, len) {
+            continue;
+        }
+        let (a, b) = (k.saturating_sub(3), (k + 3).min(len - 1));
+        let m = (b - a + 1) as f32;
+        let avg = out[a..=b].iter().fold((0.0, 0.0), |s, p| (s.0 + p.0, s.1 + p.1));
+        *d = (avg.0 / m, avg.1 / m);
+    }
+    anchor_at.sort_unstable();
+    (done, anchor_at)
+}
+
 // ------------------------------------------------------------- routes --
 
 /// What climbing a block costs a river laid out by hand, in blocks of
@@ -1361,6 +1521,64 @@ mod tests {
         // Not wider at the coast than upstream: no funnel.
         let wet = |x: i32| (0..128).filter(|&z| column(&world, x, z).0 < column(&before, x, z).0 - 1.0).count();
         assert!(wet(176) <= wet(150) + 6, "{} dug at the coast, {} upstream", wet(176), wet(150));
+    }
+
+    /// Flat ground at 70 over 3 × 3 tiles.
+    fn flat() -> World {
+        let mut world = World::new(WorldMeta::default());
+        let mut dim = Dimension::new(DimensionKind::Overworld, -64, 320);
+        for tz in 0..3 {
+            for tx in 0..3 {
+                dim.ground_mut().insert(TilePos::new(tx, tz), Tile::ground(70.0, 1, NO_FLUID));
+            }
+        }
+        world.dims = vec![dim];
+        world
+    }
+
+    /// The course made natural: a loop round a hollow is cut, a staircase
+    /// along the grid smoothed, meanders on the flat and none down a steep
+    /// slope; the points it must pass stay where they are.
+    #[test]
+    fn a_course_is_made_natural() {
+        let world = flat();
+        let level = world.dims[0].ground();
+        // East, a loop round a circle 30 blocks wide, then on east.
+        let mut looped: Vec<(f32, f32)> = (0..100).map(|x| (20.0 + x as f32, 190.0)).collect();
+        for a in 0..94 {
+            let t = a as f32 / 94.0 * std::f32::consts::TAU;
+            looped.push((120.0 + 15.0 * t.sin(), 175.0 + 15.0 * t.cos()));
+        }
+        looped.extend((0..100).map(|x| (121.0 + x as f32, 190.0)));
+        let (out, _) = natural_course(level, &looped, 8.0, &[]);
+        let length = |c: &[(f32, f32)]| c.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).sum::<f32>();
+        assert!(length(&out) < length(&looped) - 60.0, "the loop is cut: {} → {}", length(&looped), length(&out));
+        assert!(out.iter().all(|p| p.1 > 165.0), "nothing left of the loop's far side");
+        // A staircase along the grid, a block east then a block south.
+        let stairs: Vec<(f32, f32)> = (0..300).map(|k| (20.0 + ((k + 1) / 2) as f32, 20.0 + (k / 2) as f32)).collect();
+        let (out, _) = natural_course(level, &stairs, 8.0, &[]);
+        let turn = |c: &[(f32, f32)]| {
+            c.windows(3).map(|w| {
+                let (a, b) = ((w[1].0 - w[0].0, w[1].1 - w[0].1), (w[2].0 - w[1].0, w[2].1 - w[1].1));
+                (a.0 * b.1 - a.1 * b.0).abs() / (a.0.hypot(a.1) * b.0.hypot(b.1)).max(1e-6)
+            })
+            .fold(0.0f32, f32::max)
+        };
+        assert!(turn(&stairs) > 0.9 && turn(&out[20..out.len() - 20]) < 0.5, "smoothed: {} → {}", turn(&stairs), turn(&out[20..out.len() - 20]));
+        // Straight east over the flat: it meanders, half its width to
+        // either side at most, through its anchor.
+        let straight: Vec<(f32, f32)> = (0..340).map(|x| (10.0 + x as f32, 190.0)).collect();
+        let (out, anchors) = natural_course(level, &straight, 8.0, &[170]);
+        let off = out.iter().map(|p| (p.1 - 190.0).abs()).fold(0.0f32, f32::max);
+        assert!(off > 2.0 && off <= 4.5, "meanders on the flat: {off}");
+        assert_eq!(out[anchors[0]], straight[170], "through its anchor");
+        assert_eq!((out[0], *out.last().unwrap()), (straight[0], *straight.last().unwrap()));
+        // Down a steep slope, straight on.
+        let world = slope();
+        let down: Vec<(f32, f32)> = (0..200).map(|x| (10.0 + x as f32, 64.0)).collect();
+        let (out, _) = natural_course(world.dims[0].ground(), &down, 8.0, &[]);
+        let off = out.iter().map(|p| (p.1 - 64.0).abs()).fold(0.0f32, f32::max);
+        assert!(off < 0.5, "no meanders down a slope: {off}");
     }
 
     /// A hollow on the way fills into a lake up to where it overflows, and

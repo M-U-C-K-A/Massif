@@ -1182,7 +1182,16 @@ valley), **Banks**, **Lakes** (which hollows fill: deep ones only, or every
 one, or none — through the others it cuts a gorge), the terrain of its bed
 and a river biome on its water.
 
-- The course is smoothed into a curve through its points.
+- The course is made natural before it is shown and dug. Where it comes
+  back within a width of where it was before (water filling a shallow
+  hollow wanders round it), it goes straight across instead, unless that
+  would climb; its runs along the grid (the ways found across hollows and
+  over the land go from cell to cell) are smoothed over about its width,
+  without moving up a slope; and on gentle ground (a drop of less than one
+  block in twenty) it meanders: a wave across its way some ten times its
+  width long and up to half its width to either side, smaller where it
+  would climb out of its valley, none near its ends and the points you
+  dragged it through. Then a smooth curve runs through all of it.
 - Water runs from the source down. Its level along the river is the lowest
   the land allows so far, a
   little under the banks: it never rises downstream, whatever the bumps.
