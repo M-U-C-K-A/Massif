@@ -1103,7 +1103,7 @@ impl MapView {
                 }
             } else if tools.tool.is_select() {
                 let op = crate::select::combine_of(modifiers, secondary, tools.select_mode);
-                self.select.begin(tools.tool, (x, z), op, &tools.brush);
+                self.select.begin(tools.tool, (x, z), op, secondary, &tools.brush);
             } else if tools.tool.is_click() {
                 *feedback = tools::click(doc, tools, bx, bz, inverse);
             } else if tools.tool.uses_brush() {
@@ -1184,6 +1184,16 @@ impl MapView {
         }
 
         // A selection being drawn follows the pointer; let go, it is made.
+        // Esc drops the one being drawn, or else, with a selection tool in
+        // hand, clears the selection.
+        if !self.select.is_drawing()
+            && tools.tool.is_select()
+            && doc.selection().is_some()
+            && crate::keymap::peek(ui.ctx(), crate::keymap::Action::Cancel)
+            && crate::select::deselect(doc)
+        {
+            *feedback = Some(tr!("Deselected").into());
+        }
         if self.select.is_drawing() {
             if crate::keymap::peek(ui.ctx(), crate::keymap::Action::Cancel) {
                 self.select.cancel();

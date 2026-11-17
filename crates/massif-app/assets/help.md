@@ -116,7 +116,7 @@ The options under the brush settings limit where a brush acts, as in WorldPainte
 ## Selecting an area
 The **Select** tools mark the part of the map the other tools change: once something is selected, every brush, a fill, the 3D tools on the map, **Auto biome**, **Auto paint**, noise painting and **Edit ▸ Whole map** act only inside it, and fade along its edge where it is feathered. A dashed outline, its dashes marching (still with **Reduce motion**), shows it on the map.
 - **Rectangle** and **Ellipse**: drag across the map. **Lasso**: draw around an area; let go and it closes. **Selection brush**: paint it with the brush (right button: take it out); its soft edge feathers it.
-- Shift adds to the selection, Alt takes out of it, both together keep only what both hold; the **New · Add · Subtract · Intersect** buttons set what a shape does with no key held. A click without dragging deselects.
+- Shift or ⌘ (Ctrl) adds to the selection, Alt or the right button takes out of it, both together keep only what both hold; the **New · Add · Subtract · Intersect** buttons set what a shape does with no key held. A right-click, **Esc** or **Clear** beside the modes clears the selection (a left click without dragging too, in the New mode).
 - **Feather** fades new shapes over that many blocks on either side of their edge (up to 64); **Feather it** softens the selection there is.
 - **Select by** picks the columns of the whole map with a terrain (the one picked in Terrain or Blocks), between two heights, or on slopes steeper or gentler than an angle, as the brush filters read them.
 - **All**, **Invert** and **Deselect** are in the tool settings and in the Edit menu (⌘A, ⇧⌘I, ⌘D).
@@ -274,7 +274,8 @@ Massif's own keys, as they are out of the box. **Settings ▸ Keyboard** changes
 | `R` `L` | Turn the light of the map |
 | `⌥H` `⌥A` `⌥S` `⌥P` `⌥R` `⌥F` `⌥Y` | Height, Flatten, Smooth, Paint, Spray, Flood, Eyedropper |
 | `⌘A` `⌘D` `⇧⌘I` | Select the whole map, deselect, invert the selection |
-| `Shift` / `Alt` + drag | Add to the selection / take out of it (both: intersect) |
+| `Shift` or `⌘` / `Alt` + drag | Add to the selection / take out of it (both: intersect) |
+| Right-click · `Esc` (Select tools) | Clear the selection |
 | `Esc` | Cancel the stroke or the selection being drawn; walking, give the mouse back |
 | `W` `A` `S` `D`, `Space`, `Shift`, `Ctrl` | Walk, jump (twice: fly), sneak (flying: down), sprint, with **Player** in 3D Sculpt |
 | `Ctrl Space` | Maximise the area under the pointer |

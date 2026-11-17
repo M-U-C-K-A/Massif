@@ -8591,6 +8591,45 @@ mod tests {
         assert!(h.state().tools.pattern.on);
     }
 
+    /// With a selection tool in hand, Esc clears the selection on the map
+    /// (and drops a shape being drawn first); Tool Settings says how to add,
+    /// take out and clear, beside the mode, and has a Clear button.
+    #[test]
+    fn esc_and_clear_take_the_selection_away() {
+        use egui_kittest::kittest::Queryable;
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let mut h = harness(ThemeChoice::Dark);
+        h.state_mut().tools.select(Tool::SelectRect);
+        h.run_steps(5);
+        let map = map_rect(h.state(), &h.ctx);
+        h.event(egui::Event::PointerMoved(map.center()));
+        crate::select::select_all(&mut h.state_mut().doc);
+        h.run_steps(2);
+        assert!(h.state().doc.selection().is_some());
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("selection-settings.png")).unwrap();
+        }
+        h.key_press(Key::Escape);
+        h.run_steps(2);
+        assert!(h.state().doc.selection().is_none(), "Esc clears it");
+        crate::select::select_all(&mut h.state_mut().doc);
+        h.run_steps(2);
+        h.get_by_label_contains("Clear").click();
+        h.run_steps(2);
+        assert!(h.state().doc.selection().is_none(), "so does Clear");
+        // A right-click on the map, with nothing drawn, too.
+        crate::select::select_all(&mut h.state_mut().doc);
+        h.run_steps(2);
+        let at = map.center();
+        h.event(egui::Event::PointerMoved(at));
+        h.step();
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+        h.step();
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+        assert!(h.state().doc.selection().is_none(), "a right-click clears it");
+    }
+
     #[test]
     fn walking_in_3d_sculpt() {
         let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {

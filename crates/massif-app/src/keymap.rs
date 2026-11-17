@@ -578,7 +578,7 @@ impl Action {
             SelectAll => vec![c(Key::A)],
             Deselect => vec![c(Key::D)],
             InvertSelection => vec![Chord::with(Mods::COMMAND_SHIFT, Key::I)],
-            SelectAdd => vec![Chord::mods(Mods::SHIFT)],
+            SelectAdd => vec![Chord::mods(Mods::SHIFT), Chord::mods(Mods::COMMAND)],
             SelectSubtract => vec![Chord::mods(Mods::ALT)],
             FlyForward => vec![k(Key::W), k(Key::ArrowUp)],
             FlyBack => vec![k(Key::S), k(Key::ArrowDown)],
@@ -936,7 +936,7 @@ mod tests {
         assert_eq!(ids(Action::TurnLeft), ["OpenBracket", "Alt+Minus"]);
         assert_eq!(ids(Action::LightRight), ["R"]);
         assert_eq!(ids(Action::Pan), ["Space"]);
-        assert_eq!(ids(Action::SelectAdd), ["Shift"]);
+        assert_eq!(ids(Action::SelectAdd), ["Shift", "Cmd"]);
         assert_eq!(ids(Action::FlyUp), ["E", "PageUp"]);
         assert_eq!(ids(Action::Sneak), ["Shift", "Q"]);
         if MAC {

@@ -315,13 +315,19 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
         Tool::Smooth3d => card(tr!("Rounds off in 3D: edges, hollows, overhangs."), vec![(tr!("Drag"), tr!("Smooth"))], None, Some(Demo::Smooth)),
         Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso => card(
             tr!("Marks the part of the map the other tools change: brushes, fills and the whole-map filters act only inside it, fading along a feathered edge."),
-            vec![(tr!("Drag"), tr!("A new selection")), (tr!("Shift+drag"), tr!("Add to it")), (tr!("Alt+drag"), tr!("Take out of it")), (tr!("Shift+Alt+drag"), tr!("Keep what both hold")), (tr!("Click"), tr!("Deselect"))],
+            vec![
+                (tr!("Drag"), tr!("A new selection")),
+                (if cfg!(target_os = "macos") { tr!("Shift or ⌘+drag") } else { tr!("Shift or Ctrl+drag") }, tr!("Add to it")),
+                (tr!("Alt+drag"), tr!("Take out of it")),
+                (tr!("Shift+Alt+drag"), tr!("Keep what both hold")),
+                (tr!("Right-click · Esc"), tr!("Clear the selection")),
+            ],
             Some(tr!("⌘D deselects, ⌘A selects the whole map, ⇧⌘I inverts.")),
             Some(Demo::Select),
         ),
         Tool::SelectBrush => card(
             tr!("Paints the part of the map the other tools change, with the brush: its soft edge feathers the selection."),
-            vec![(tr!("Drag"), tr!("Add to the selection")), (tr!("Right-drag"), tr!("Take out of it")), (tr!("Alt+drag"), tr!("Take out of it"))],
+            vec![(tr!("Drag"), tr!("Add to the selection")), (tr!("Right-drag"), tr!("Take out of it")), (tr!("Alt+drag"), tr!("Take out of it")), (tr!("Esc"), tr!("Clear the selection"))],
             Some(tr!("⌘D deselects, ⌘A selects the whole map, ⇧⌘I inverts.")),
             Some(Demo::Select),
         ),

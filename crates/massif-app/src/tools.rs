@@ -207,10 +207,10 @@ impl Tool {
             Tool::Smooth3d => {
                 tr!("Round off in 3D.")
             }
-            Tool::SelectRect => tr!("Drag a rectangle: the other tools then act only inside it."),
-            Tool::SelectEllipse => tr!("Drag an ellipse: the other tools then act only inside it."),
-            Tool::SelectLasso => tr!("Draw around an area: the other tools then act only inside it."),
-            Tool::SelectBrush => tr!("Paint the selection with the brush. Right button: take it out."),
+            Tool::SelectRect => tr!("Drag a rectangle: the other tools then act only inside it. A right-click or Esc clears it."),
+            Tool::SelectEllipse => tr!("Drag an ellipse: the other tools then act only inside it. A right-click or Esc clears it."),
+            Tool::SelectLasso => tr!("Draw around an area: the other tools then act only inside it. A right-click or Esc clears it."),
+            Tool::SelectBrush => tr!("Paint the selection with the brush. Right button: take it out. Esc clears it."),
             Tool::Pan => tr!("Move the map (also: middle button, Space)."),
         }
     }

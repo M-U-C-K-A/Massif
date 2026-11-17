@@ -594,10 +594,14 @@ the tools change. The **Select** row of the Tools panel holds four tools:
   button (or Alt) takes out of it. The brush's soft edge feathers what it
   paints.
 
-Shift while dragging adds the shape to the selection, Alt takes it out, both
-keep only what the two hold. With no key, the shape does what the **New · Add
-· Subtract · Intersect** buttons of Tool Settings say (New by default). A click
-on the map without dragging deselects. Esc drops the shape being drawn.
+Shift or ⌘ (Ctrl on Windows and Linux) while dragging adds the shape to the
+selection, Alt or the right button takes it out, both keep only what the two
+hold. With no key, the shape does what the **New · Add · Subtract ·
+Intersect** buttons of Tool Settings say (New by default). To clear the
+selection, right-click the map, press Esc, or press **Clear** beside those
+buttons (⌘D too); in the New mode a click without dragging clears it as well.
+Esc first drops a shape being drawn. The keys that add and take out can be
+changed in Settings ▸ Keyboard.
 
 Once something is selected, everything that edits the map keeps to it:
 every brush (sculpting, painting, covers, objects, water, levels, the 3D tools
@@ -1684,7 +1688,8 @@ Brushes, Map, 3D view, Player — with a search over names and keys.
 | ⌘A, ⌘D, ⇧⌘I | Select the whole map, deselect, invert the selection |
 | ⌘+, ⌘−, ⌘0 | A larger, smaller interface; back to its size |
 | Ctrl + Space | Fill the window with the area under the pointer |
-| Shift / Alt + drag (Select tools) | Add to the selection / take out of it (both: intersect) |
+| Shift or ⌘ (Ctrl) / Alt + drag (Select tools) | Add to the selection / take out of it (both: intersect) |
+| Right-click, Esc (Select tools) | Clear the selection |
 | Esc | Cancel the stroke or the selection being drawn |
 
 In the 3D view:

@@ -74,9 +74,9 @@ impl SelectBy {
     }
 }
 
-/// What a shape does with the keys held: Shift adds, Alt takes out, both
-/// keep what both hold (as the keymap has them); with neither, the mode
-/// chosen in Tool Settings.
+/// What a shape does with the keys held: Shift or ⌘ (Ctrl) adds, Alt or
+/// the right button takes out, both keep what both hold (as the keymap has
+/// them); with neither, the mode chosen in Tool Settings.
 pub fn combine_of(m: egui::Modifiers, secondary: bool, chosen: Combine) -> Combine {
     use crate::keymap::{Action, mods_hold};
     match (mods_hold(m, Action::SelectAdd), mods_hold(m, Action::SelectSubtract) || secondary) {
@@ -122,11 +122,19 @@ fn apply(doc: &mut Document, label: &str, shape: Selection, op: Combine) -> bool
     doc.select(label, Some(next))
 }
 
+/// Points the pointer moves at most for a press and release to be a click.
+const CLICK_TRAVEL: f32 = 3.0;
+
 /// A shape being drawn on the map.
 #[derive(Debug, Clone)]
 struct Drag {
     tool: Tool,
     op: Combine,
+    /// Drawn with the right button: a click alone clears the selection.
+    secondary: bool,
+    /// How far the pointer went from the start, in points: under a few, a
+    /// click rather than a shape.
+    travel: f32,
     start: (f64, f64),
     at: (f64, f64),
     /// The lasso's path.
@@ -159,10 +167,12 @@ impl SelectView {
     }
 
     /// Start a shape at `at` (blocks).
-    pub fn begin(&mut self, tool: Tool, at: (f64, f64), op: Combine, brush: &Brush) {
+    pub fn begin(&mut self, tool: Tool, at: (f64, f64), op: Combine, secondary: bool, brush: &Brush) {
         let mut drag = Drag {
             tool,
             op,
+            secondary,
+            travel: 0.0,
             start: at,
             at,
             path: vec![(at.0 as f32, at.1 as f32)],
@@ -179,6 +189,7 @@ impl SelectView {
     pub fn update(&mut self, at: (f64, f64), zoom: f32, brush: &Brush) {
         let Some(drag) = &mut self.drag else { return };
         drag.at = at;
+        drag.travel = drag.travel.max(((at.0 - drag.start.0).hypot(at.1 - drag.start.1)) as f32 * zoom);
         let p = (at.0 as f32, at.1 as f32);
         match drag.tool {
             Tool::SelectLasso => {
@@ -216,13 +227,17 @@ impl SelectView {
             Tool::SelectLasso => Some(Shape::Polygon(drag.path)),
             _ => None,
         };
+        // A click (the pointer barely moved): no shape, not the block under it.
+        let click = drag.tool != Tool::SelectBrush && drag.travel < CLICK_TRAVEL;
         let shape = match shape {
+            _ if click => Selection::default(),
             Some(shape) => Selection::shape(&shape),
             None => drag.painted,
         };
         if shape.is_empty() {
-            // A click without a shape: a new selection of nothing.
-            if drag.op == Combine::Replace && doc.selection().is_some() {
+            // A click without a shape (a new selection of nothing), or a
+            // right-click: the selection is cleared.
+            if (drag.op == Combine::Replace || drag.secondary) && doc.selection().is_some() {
                 deselect(doc);
                 return Some(tr!("Deselected").into());
             }
@@ -401,12 +416,37 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: 
     use crate::panels::{hint, section};
     use crate::widgets::{Field, button_group, row, well};
     let modes = Combine::ALL;
-    let labels = modes.map(|m| m.label());
+    let labels = modes.map(|m| crate::i18n::tr_name(m.label()));
     let on = modes.map(|m| tools.select_mode == m);
+    let any = doc.selection().is_some();
     if let Some(k) = button_group(ui, "selection mode", &labels, &on) {
         tools.select_mode = modes[k];
     }
-    hint(ui, tr!("Shift adds to the selection, Alt takes out of it, both keep what both hold."));
+    // Clearing it, right under what shapes do: where it is looked for.
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        if ui
+            .add_enabled(any, egui::Button::new(theme::with_icon(Icon::SquareX, tr!("Clear"))))
+            .on_hover_text(if cfg!(target_os = "macos") { tr!("Clear the selection: the tools act on the whole map again (Esc, a right-click, ⌘D)") } else { tr!("Clear the selection: the tools act on the whole map again (Esc, a right-click, Ctrl+D)") })
+            .clicked()
+        {
+            deselect(doc);
+        }
+        if ui.button(theme::with_icon(Icon::SquareDashedMousePointer, tr!("All"))).clicked() {
+            select_all(doc);
+        }
+        if ui.add_enabled(any, egui::Button::new(theme::with_icon(Icon::SquaresExclude, tr!("Invert")))).clicked() {
+            invert(doc);
+        }
+    });
+    hint(
+        ui,
+        if cfg!(target_os = "macos") {
+            tr!("Shift or ⌘ + drag adds to the selection, Alt + drag takes out of it, both keep what both hold. A right-click or Esc clears it.")
+        } else {
+            tr!("Shift or Ctrl + drag adds to the selection, Alt + drag takes out of it, both keep what both hold. A right-click or Esc clears it.")
+        },
+    );
     ui.add_space(4.0);
     if tools.tool != Tool::SelectBrush {
         well(ui, |ui| {
@@ -427,18 +467,6 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: 
         }
         None => hint(ui, tr!("Nothing selected: the tools act on the whole map.")),
     }
-    let any = doc.selection().is_some();
-    ui.horizontal_wrapped(|ui| {
-        if ui.button(theme::with_icon(Icon::SquareDashedMousePointer, tr!("All"))).clicked() {
-            select_all(doc);
-        }
-        if ui.add_enabled(any, egui::Button::new(theme::with_icon(Icon::SquaresExclude, tr!("Invert")))).clicked() {
-            invert(doc);
-        }
-        if ui.add_enabled(any, egui::Button::new(theme::with_icon(Icon::SquareX, tr!("Deselect")))).clicked() {
-            deselect(doc);
-        }
-    });
     if any && tools.tool != Tool::SelectBrush {
         let n = tools.select_feather;
         let label = if n > 0 { tr!("Feather it by {n}", n) } else { tr!("Feather it").to_owned() };
@@ -517,17 +545,17 @@ mod tests {
         let mut d = doc();
         let mut view = SelectView::default();
         let brush = Brush::default();
-        view.begin(Tool::SelectRect, (-10.2, -10.0), Combine::Replace, &brush);
+        view.begin(Tool::SelectRect, (-10.2, -10.0), Combine::Replace, false, &brush);
         view.update((30.0, 20.5), 1.0, &brush);
         assert!(view.finish(&mut d, 0).is_some());
         assert_eq!(d.selection().unwrap().area(), 41.0 * 31.0);
         // Shift adds an ellipse; Alt takes a lasso's triangle out.
-        view.begin(Tool::SelectEllipse, (100.0, 0.0), combine_of(egui::Modifiers::SHIFT, false, Combine::Replace), &brush);
+        view.begin(Tool::SelectEllipse, (100.0, 0.0), combine_of(egui::Modifiers::SHIFT, false, Combine::Replace), false, &brush);
         view.update((140.0, 40.0), 1.0, &brush);
         view.finish(&mut d, 0);
         let both = d.selection().unwrap().area();
         assert!(both > 41.0 * 31.0 + 1000.0, "{both}");
-        view.begin(Tool::SelectLasso, (-20.0, -20.0), combine_of(egui::Modifiers::ALT, false, Combine::Replace), &brush);
+        view.begin(Tool::SelectLasso, (-20.0, -20.0), combine_of(egui::Modifiers::ALT, false, Combine::Replace), false, &brush);
         for p in [(10.0, -20.0), (10.0, 10.0), (-20.0, 10.0)] {
             view.update(p, 1.0, &brush);
         }
@@ -543,7 +571,43 @@ mod tests {
         d.undo();
         assert_eq!(d.selection().unwrap().get(0, 0), 0);
         // A click with nothing drawn deselects.
-        view.begin(Tool::SelectRect, (5.0, 5.0), Combine::Replace, &brush);
+        view.begin(Tool::SelectRect, (5.0, 5.0), Combine::Replace, false, &brush);
+        view.finish(&mut d, 0);
+        assert!(d.selection().is_none());
+    }
+
+    /// ⌘ (Ctrl) adds as Shift does, Alt takes out, and a right-click with
+    /// nothing drawn clears the selection, as a left click in the New mode
+    /// does; a right-click in the Add mode too.
+    #[test]
+    fn command_adds_alt_subtracts_a_right_click_clears() {
+        let mut d = doc();
+        let mut view = SelectView::default();
+        let brush = Brush::default();
+        let rect = |view: &mut SelectView, d: &mut Document, from: (f64, f64), to: (f64, f64), mods: egui::Modifiers, secondary: bool| {
+            view.begin(Tool::SelectRect, from, combine_of(mods, secondary, Combine::Replace), secondary, &brush);
+            view.update(to, 1.0, &brush);
+            view.finish(d, 0)
+        };
+        rect(&mut view, &mut d, (0.0, 0.0), (20.0, 20.0), egui::Modifiers::NONE, false);
+        assert_eq!(d.selection().unwrap().area(), 400.0);
+        rect(&mut view, &mut d, (40.0, 0.0), (60.0, 20.0), egui::Modifiers::COMMAND, false);
+        assert_eq!(d.selection().unwrap().area(), 800.0, "⌘ adds");
+        rect(&mut view, &mut d, (0.0, 0.0), (10.0, 20.0), egui::Modifiers::ALT, false);
+        assert_eq!(d.selection().unwrap().area(), 600.0, "Alt takes out");
+        // A right-drag takes out too; a right-click alone clears.
+        rect(&mut view, &mut d, (40.0, 0.0), (50.0, 20.0), egui::Modifiers::NONE, true);
+        assert_eq!(d.selection().unwrap().area(), 400.0);
+        assert_eq!(rect(&mut view, &mut d, (5.0, 5.0), (5.0, 5.0), egui::Modifiers::NONE, true).as_deref(), Some("Deselected"));
+        assert!(d.selection().is_none());
+        // Undone, it comes back.
+        d.undo();
+        assert_eq!(d.selection().unwrap().area(), 400.0);
+        // In the Add mode a left click keeps the selection; a right-click clears it.
+        view.begin(Tool::SelectRect, (5.0, 5.0), combine_of(egui::Modifiers::NONE, false, Combine::Add), false, &brush);
+        view.finish(&mut d, 0);
+        assert!(d.selection().is_some());
+        view.begin(Tool::SelectRect, (5.0, 5.0), combine_of(egui::Modifiers::NONE, true, Combine::Add), true, &brush);
         view.finish(&mut d, 0);
         assert!(d.selection().is_none());
     }
@@ -556,7 +620,7 @@ mod tests {
             radius: 10.0,
             ..Brush::default()
         };
-        view.begin(Tool::SelectBrush, (0.0, 0.0), Combine::Add, &brush);
+        view.begin(Tool::SelectBrush, (0.0, 0.0), Combine::Add, false, &brush);
         view.update((60.0, 0.0), 1.0, &brush);
         view.finish(&mut d, 0);
         let s = d.selection().unwrap();
