@@ -235,10 +235,18 @@ impl BlockLibrary {
     }
 }
 
+/// Whether the Blocks panel shows a block before All shapes is on: whole
+/// blocks, plants, and the ground's blocks not quite whole (a path, a
+/// farmland, a layer of snow), all of which can be painted as terrains or
+/// covers.
+pub fn shown_at_first(b: &Block) -> bool {
+    b.full_cube || matches!(b.category, massif_assets::Category::Plants | massif_assets::Category::Natural)
+}
+
 /// The sections of the Blocks panel (see [`BlockLibrary::sections`]).
 /// `needle` is the search, lowercase; `all` shows every shape.
 fn make_sections(cat: &Catalogue, needle: &str, all: bool) -> Vec<Section> {
-    // Whole blocks and plants (terrains and covers) show at first; a
+    // Whole blocks, plants and ground (terrains and covers) show at first; a
     // search looks through every shape, as All shapes does.
     let all = all || !needle.is_empty();
     use massif_assets::{Category, namespace};
@@ -253,7 +261,7 @@ fn make_sections(cat: &Catalogue, needle: &str, all: bool) -> Vec<Section> {
                 .blocks
                 .iter()
                 .enumerate()
-                .filter(|(_, b)| b.category == category && (all || b.full_cube || b.category == Category::Plants) && filter(b) && matches(b, source))
+                .filter(|(_, b)| b.category == category && (all || shown_at_first(b)) && filter(b) && matches(b, source))
                 .map(|(i, _)| i as u32)
                 .collect();
             if blocks.is_empty() {

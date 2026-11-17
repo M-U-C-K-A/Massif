@@ -202,12 +202,16 @@ impl Category {
     /// drawn with bricks, cobble, stone or tiles a building block.
     pub fn of_block(id: &str, models: &[String], textures: [Option<&str>; 2], full_cube: bool) -> Self {
         let n = id.rsplit(':').next().unwrap_or(id);
-        // A mod's whole blocks of ground (`silt_grass_block`, `peat_dirt`,
-        // `volcanic_ash`) are soil, which their names would put among the
+        // A mod's blocks of ground (`silt_grass_block`, `peat_dirt`,
+        // `volcanic_ash`, and those not quite whole, `peat_dirt_path`,
+        // `silt_farmland`) are soil, which their names would put among the
         // plants or nowhere; the game's keep their own groups.
-        if full_cube && crate::namespace(id) != "minecraft" {
+        // (A part block whose name is a plant's, `sand_lily`, stays a plant.)
+        if crate::namespace(id) != "minecraft" && (full_cube || Category::of(id) != Category::Plants) {
             const GROUND: [&str; 17] = ["dirt", "podzol", "mycelium", "nylium", "farmland", "mud", "sand", "gravel", "clay", "snow", "ice", "ash", "soil", "silt", "peat", "loam", "permafrost"];
-            const MADE: [&str; 16] = ["brick", "bricks", "tile", "tiles", "polished", "chiseled", "smooth", "cut", "pillar", "sandstone", "glass", "concrete", "terracotta", "lamp", "slab", "stairs"];
+            const MADE: [&str; 26] = [
+                "brick", "bricks", "tile", "tiles", "polished", "chiseled", "smooth", "cut", "pillar", "sandstone", "glass", "concrete", "terracotta", "lamp", "slab", "stairs", "wall", "fence", "gate", "door", "trapdoor", "button", "plate", "sign", "potted", "pot",
+            ];
             let words = || n.split('_');
             if (n.ends_with("grass_block") || words().any(|w| GROUND.contains(&w))) && !words().any(|w| MADE.contains(&w)) {
                 return Category::Natural;
@@ -251,7 +255,7 @@ impl Category {
             Category::End
         } else if has("_ore") || n.starts_with("raw_") || ["coal_block", "iron_block", "gold_block", "diamond_block", "emerald_block", "lapis_block", "redstone_block", "copper_block", "netherite_block", "amethyst_block", "budding_amethyst"].contains(&n) {
             Category::Ores
-        } else if has("leaves") || has("sapling") || has("flower") || has("grass") && n != "grass_block" || has("fern") || has("mushroom") || has("vine") || has("moss") && !has("cobblestone") && !has("brick") || has("azalea") || has("bush") || has("tulip") || has("orchid") || has("daisy") || has("poppy") || has("dandelion") || has("lily") || has("kelp") || has("coral") || has("bamboo") && !has("planks") && !has("mosaic") && !has("block") || has("cactus") || has("cane") || has("roots") || has("dripleaf") || has("petals") {
+        } else if has("leaves") || has("sapling") || has("flower") || has("grass") && n != "grass_block" || has("fern") || has("mushroom") || has("vine") || has("moss") && !has("cobblestone") && !has("brick") || has("azalea") || has("bush") || has("tulip") || has("orchid") || has("daisy") || has("poppy") || has("dandelion") || has("lily") || has("kelp") || has("coral") || has("bamboo") && !has("planks") && !has("mosaic") && !has("block") || has("cactus") || has("cane") || has("roots") || has("dripleaf") || has("petals") || has("weed") || has("beard") || has("hyacinth") && !has("lamp") || has("bloom") && !has("block") || has("blossom") {
             Category::Plants
         } else if has("planks") || has("_log") || has("_wood") || has("stripped") || has("bamboo") {
             Category::Wood
@@ -352,6 +356,147 @@ pub struct Catalogue {
     /// The blocks the game registers, by namespace, of the namespaces whose
     /// registry's list was read (some mods write one: `blocks-pls.txt`).
     pub registered: HashMap<String, std::collections::HashSet<String>>,
+    /// The biomes the game, the mods and the data packs read define
+    /// (`data/<namespace>/worldgen/biome/`), the game's first, then each
+    /// source's, by name.
+    pub biomes: Vec<BiomeInfo>,
+}
+
+/// A biome as the game or a mod defines it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BiomeInfo {
+    /// `regions_unexplored:alpha_grove`.
+    pub id: String,
+    /// `Alpha Grove`, from the language file when it names it.
+    pub name: String,
+    /// Where it comes from: `Minecraft`, or the mod's or data pack's name.
+    pub source: String,
+    /// The colours the game gives its grass, its leaves and its water.
+    pub grass: [u8; 3],
+    pub foliage: [u8; 3],
+    pub water: [u8; 3],
+    /// Its colour on the map: its grass's (its water's for a sea, a river
+    /// or a lake), mixed with a colour of its own drawn from its id so
+    /// that biomes of the same grass stay apart.
+    pub color: [u8; 3],
+}
+
+impl BiomeInfo {
+    /// The registry's entry for it.
+    pub fn def(&self) -> BiomeDef {
+        BiomeDef {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            color: self.color,
+            group: if self.source == MINECRAFT { String::new() } else { self.source.clone() },
+            grass: Some(self.grass),
+            foliage: Some(self.foliage),
+        }
+    }
+}
+
+/// The source of the game's own biomes.
+pub const MINECRAFT: &str = "Minecraft";
+
+/// The block tags whose blocks are plants (the game's: a mod adds its own
+/// blocks to them), whatever their names and models say.
+const PLANT_TAGS: [&str; 10] = [
+    "minecraft:flowers",
+    "minecraft:small_flowers",
+    "minecraft:tall_flowers",
+    "minecraft:saplings",
+    "minecraft:leaves",
+    "minecraft:crops",
+    "minecraft:cave_vines",
+    "minecraft:replaceable_by_trees",
+    "minecraft:bee_growables",
+    "minecraft:climbable",
+];
+
+/// The biome colour of a colour map (`colormap/grass.png`, 256 × 256) at a
+/// temperature and a downfall, as the game reads it.
+fn colormap(map: Option<&image::RgbaImage>, temperature: f32, downfall: f32, default: [u8; 3]) -> [u8; 3] {
+    let Some(map) = map.filter(|m| m.width() >= 256 && m.height() >= 256) else { return default };
+    let t = temperature.clamp(0.0, 1.0);
+    let d = downfall.clamp(0.0, 1.0) * t;
+    let (x, y) = (((1.0 - t) * 255.0) as u32, ((1.0 - d) * 255.0) as u32);
+    let p = map.get_pixel(x, y).0;
+    [p[0], p[1], p[2]]
+}
+
+fn rgb_of(v: Option<&Value>) -> Option<[u8; 3]> {
+    let n = v?.as_i64()?;
+    Some([(n >> 16) as u8, (n >> 8) as u8, n as u8])
+}
+
+/// A biome read from its file (`id`, `source`), with its name and the
+/// game's colour maps.
+fn biome_info(id: &str, source: &str, json: &Value, name: Option<&String>, maps: [Option<&image::RgbaImage>; 2]) -> BiomeInfo {
+    let effects = json.get("effects");
+    let temperature = json.get("temperature").and_then(Value::as_f64).unwrap_or(0.8) as f32;
+    let downfall = json.get("downfall").and_then(Value::as_f64).unwrap_or(0.4) as f32;
+    let mut grass = rgb_of(effects.and_then(|e| e.get("grass_color"))).unwrap_or_else(|| colormap(maps[0], temperature, downfall, Tint::Grass.color()));
+    match effects.and_then(|e| e.get("grass_color_modifier")).and_then(Value::as_str) {
+        Some("swamp") => grass = [0x6a, 0x70, 0x39],
+        Some("dark_forest") => {
+            let c = ((grass[0] as u32) << 16 | (grass[1] as u32) << 8 | grass[2] as u32) & 0xfefefe;
+            let c = (c + 0x28340a) >> 1;
+            grass = [(c >> 16) as u8, (c >> 8) as u8, c as u8];
+        }
+        _ => {}
+    }
+    let foliage = rgb_of(effects.and_then(|e| e.get("foliage_color"))).unwrap_or_else(|| colormap(maps[1], temperature, downfall, Tint::Foliage.color()));
+    let water = rgb_of(effects.and_then(|e| e.get("water_color"))).unwrap_or(Tint::Water.color());
+    let path = id.rsplit(':').next().unwrap_or(id);
+    let wet = path.split(['_', '/']).any(|w| ["ocean", "river", "lake", "sea", "reef", "lagoon"].contains(&w));
+    let own = massif_core::registry::biome_hash_color(id);
+    let base = if wet { water } else { grass };
+    let color = std::array::from_fn(|k| ((base[k] as u32 * 3 + own[k] as u32 * 2) / 5) as u8);
+    BiomeInfo { id: id.to_owned(), name: name.cloned().unwrap_or_else(|| massif_core::registry::biome_display_name(id)), source: source.to_owned(), grass, foliage, water, color }
+}
+
+/// `data/<ns>/worldgen/biome/<path>.json` → `<ns>:<path>`.
+fn biome_key(name: &str) -> Option<String> {
+    let rest = name.strip_prefix("data/")?;
+    let (ns, rest) = rest.split_once('/')?;
+    let path = rest.strip_prefix("worldgen/biome/")?.strip_suffix(".json")?;
+    (!ns.is_empty() && !path.is_empty()).then(|| format!("{ns}:{path}"))
+}
+
+/// `data/<ns>/tags/block/<path>.json` (`tags/blocks/` before 1.21) →
+/// `<ns>:<path>`.
+fn block_tag_key(name: &str) -> Option<String> {
+    let rest = name.strip_prefix("data/")?;
+    let (ns, rest) = rest.split_once('/')?;
+    let path = rest.strip_prefix("tags/block/").or_else(|| rest.strip_prefix("tags/blocks/"))?.strip_suffix(".json")?;
+    (!ns.is_empty() && !path.is_empty()).then(|| format!("{ns}:{path}"))
+}
+
+/// A file of a data pack left as a folder: its name in the pack, its bytes.
+type FolderFile = (String, Vec<u8>);
+
+/// The files of a data pack left as a folder (`datapacks/<pack>/`), by
+/// their names in it (`data/<ns>/…`), read as a zip's would be: its biomes
+/// and block tags.
+fn folder_files(dir: &Path) -> Vec<FolderFile> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.join("data")];
+    while let Some(d) = stack.pop() {
+        let Ok(read) = std::fs::read_dir(&d) else { continue };
+        for e in read.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if let Ok(rel) = p.strip_prefix(dir) {
+                let name = rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
+                if (biome_key(&name).is_some() || block_tag_key(&name).is_some()) && let Ok(bytes) = std::fs::read(&p) {
+                    out.push((name, bytes));
+                }
+            }
+        }
+    }
+    out.sort();
+    out
 }
 
 /// What a file read beside the game is.
@@ -479,6 +624,11 @@ impl Catalogue {
     }
 
     /// The mod a block comes from, when it is a mod's.
+    /// A biome the game or a mod read defines, by its id.
+    pub fn biome(&self, id: &str) -> Option<&BiomeInfo> {
+        self.biomes.iter().find(|b| b.id == id)
+    }
+
     pub fn mod_of(&self, id: &str) -> Option<&ModInfo> {
         let ns = namespace(id);
         (ns != "minecraft").then(|| self.mods.iter().find(|m| m.kind == SourceKind::Mod && m.namespaces.iter().any(|n| n == ns))).flatten()
@@ -709,6 +859,15 @@ fn first_model(state: &Value) -> Option<String> {
         .find_map(|part| part.get("apply").and_then(pick))
 }
 
+/// The model of a block's upper half (`half=upper`), when its states are
+/// variants.
+fn upper_model(state: &Value) -> Option<String> {
+    let variants = state.get("variants")?.as_object()?;
+    let v = variants.iter().find(|(k, _)| k.split(',').any(|kv| kv.trim() == "half=upper"))?.1;
+    let v = if let Some(a) = v.as_array() { a.first()? } else { v };
+    v.get("model").and_then(Value::as_str).map(str::to_owned)
+}
+
 /// Whether a block's states have a lower and an upper half (tall plants,
 /// doors): `half=lower` and `half=upper` among its variants or the
 /// conditions of its parts.
@@ -847,7 +1006,13 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
     let mut archives: Vec<(zip::Archive, Option<PathBuf>)> = vec![(archive, None)];
     let mut skipped = Vec::new();
     let mut lists: Vec<(PathBuf, materials::List)> = Vec::new();
+    // Data packs left as folders: their biomes and tags.
+    let mut folders: Vec<(PathBuf, Vec<FolderFile>)> = Vec::new();
     for m in mods {
+        if m.is_dir() {
+            folders.push((m.clone(), folder_files(m)));
+            continue;
+        }
         if materials::is_list(m) {
             match materials::read(m) {
                 Ok(list) => lists.push((m.clone(), list)),
@@ -866,6 +1031,10 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
     let mut state_files: HashMap<String, (usize, String)> = HashMap::new();
     let mut texture_files: HashMap<String, (usize, String)> = HashMap::new();
     let mut names_en: HashMap<String, String> = HashMap::new();
+    let mut biome_names: HashMap<String, String> = HashMap::new();
+    // Every biome file and every block tag file, by archive.
+    let mut biome_files: Vec<(String, usize, String)> = Vec::new();
+    let mut tag_files: HashMap<String, Vec<(usize, String)>> = HashMap::new();
     let mut mod_infos = Vec::new();
     for (k, (a, mod_path)) in archives.iter().enumerate() {
         let names: Vec<String> = a.names().map(str::to_owned).collect();
@@ -892,12 +1061,21 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
                 state_files.insert(id, (k, n.clone()));
             } else if let Some(key) = asset_key(n, "textures", ".png") {
                 texture_files.insert(key, (k, n.clone()));
-            } else if k > 0 && n.starts_with("assets/") && n.ends_with("/lang/en_us.json") && n.matches('/').count() == 3 {
-                // A mod's names for its blocks and its creative tabs.
+            } else if let Some(id) = biome_key(n) {
+                biome_files.push((id, k, n.clone()));
+            } else if let Some(tag) = block_tag_key(n) {
+                tag_files.entry(tag).or_default().push((k, n.clone()));
+            } else if n.starts_with("assets/") && n.ends_with("/lang/en_us.json") && n.matches('/').count() == 3 {
+                // A mod's names for its blocks, its biomes and its creative
+                // tabs; the game's for its biomes.
                 if let Some(Value::Object(map)) = json(a, n) {
                     for (key, v) in map {
                         if let Some(v) = v.as_str() {
-                            if let Some(id) = key.strip_prefix("block.").and_then(|r| r.split_once('.')).map(|(ns, p)| format!("{ns}:{p}")) {
+                            if let Some(id) = key.strip_prefix("biome.").and_then(|r| r.split_once('.')).map(|(ns, p)| format!("{ns}:{}", p.replace('.', "/"))) {
+                                biome_names.insert(id, v.to_owned());
+                            } else if k == 0 {
+                                continue;
+                            } else if let Some(id) = key.strip_prefix("block.").and_then(|r| r.split_once('.')).map(|(ns, p)| format!("{ns}:{p}")) {
                                 names_en.insert(id, v.to_owned());
                             } else if key.starts_with("itemGroup.") {
                                 lang.insert(key, v.to_owned());
@@ -962,20 +1140,23 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
     }
     // Each block, the first model its states point to, and whether it is
     // two blocks high.
-    let mut states: Vec<(String, Option<String>, bool)> = state_files
+    // A tall block's upper half too: a tall plant's lower half may be a
+    // model of its own where its upper one is the game's cross.
+    let mut states: Vec<(String, Option<String>, bool, Option<String>)> = state_files
         .into_par_iter()
         .filter_map(|(id, (k, n))| {
             let state = json(&archives[k].0, &n)?;
-            Some((id, first_model(&state), two_halves(&state)))
+            let tall = two_halves(&state);
+            Some((id, first_model(&state), tall, tall.then(|| upper_model(&state)).flatten()))
         })
         .collect();
     states.sort_by(|a, b| a.0.cmp(&b.0));
     // Those models and their parents, a generation at a time, read in
     // parallel.
-    let firsts: Vec<Option<String>> = states.iter().map(|(_, first, _)| first.clone()).collect();
+    let firsts: Vec<Option<String>> = states.iter().map(|(_, first, _, _)| first.clone()).collect();
     let mut raw: HashMap<String, Value> = HashMap::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut wanted: Vec<String> = firsts.iter().flatten().map(|m| key(m)).collect();
+    let mut wanted: Vec<String> = firsts.iter().flatten().chain(states.iter().filter_map(|s| s.3.as_ref())).map(|m| key(m)).collect();
     while !wanted.is_empty() {
         wanted.sort();
         wanted.dedup();
@@ -995,7 +1176,7 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
     let mut blocks: Vec<Block> = states
         .iter()
         .zip(&firsts)
-        .map(|((id, _, tall), first)| {
+        .map(|((id, _, tall, upper), first)| {
             let model = first.as_ref().map(|m| models.resolve(m)).unwrap_or_default();
             let particle = model.textures.get("particle").and_then(|_| model.texture("#particle"));
             let tint = tint_of(id);
@@ -1014,7 +1195,11 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
                 "minecraft:lava" => (Some("block/lava_still".to_owned()), Tint::None),
                 _ => (top, top_tint),
             };
-            let category = Category::of_block(id, &model.chain, [top.as_deref(), side.as_deref()], model.full_cube);
+            let mut chain = model.chain.clone();
+            if let Some(upper) = upper {
+                chain.extend(models.resolve(upper).chain);
+            }
+            let category = Category::of_block(id, &chain, [top.as_deref(), side.as_deref()], model.full_cube);
             Block {
                 id: id.clone(),
                 name: names_en.get(id).cloned().unwrap_or_else(|| display_name(id)),
@@ -1086,6 +1271,79 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
         b.color = color_of(&b.top, b.top_tint).unwrap_or(fallback);
         b.side_color = color_of(&b.side, b.side_tint).unwrap_or(fallback);
     }
+
+    // The block tags, every archive's and folder's files of a tag merged
+    // (a file that says `replace` drops the ones before it).
+    let read_file = |k: usize, n: &str| -> Option<Value> { json(&archives[k].0, n) };
+    let mut tags: HashMap<String, Vec<Value>> = HashMap::new();
+    for (tag, files) in &tag_files {
+        let entry = tags.entry(tag.clone()).or_default();
+        for (k, n) in files {
+            if let Some(v) = read_file(*k, n) {
+                if v.get("replace").and_then(Value::as_bool) == Some(true) {
+                    entry.clear();
+                }
+                entry.push(v);
+            }
+        }
+    }
+    for (_, files) in &folders {
+        for (n, bytes) in files {
+            if let Some(tag) = block_tag_key(n)
+                && let Ok(v) = serde_json::from_slice::<Value>(bytes)
+            {
+                tags.entry(tag).or_default().push(v);
+            }
+        }
+    }
+    // A mod's plants that neither their names nor their models tell
+    // (duckweed, clover, leaf litter, ivy, a beard of moss): the game's tags
+    // of plants they are in.
+    let plants = tag_members(&tags, &PLANT_TAGS);
+    let pots = tag_members(&tags, &["minecraft:flower_pots"]);
+    for b in &mut blocks {
+        let n = b.id.rsplit(':').next().unwrap_or(&b.id);
+        if namespace(&b.id) != "minecraft" && b.category != Category::Plants && !b.full_cube && plants.contains(&b.id) && !pots.contains(&b.id) && !n.starts_with("potted_") && !["ladder", "scaffolding", "chain", "rope", "door", "trapdoor"].iter().any(|w| n.split('_').any(|p| p == *w)) {
+            b.category = Category::Plants;
+        }
+    }
+
+    // The biomes, the game's first, then each mod's and data pack's, the
+    // last file of an id winning.
+    let png = |name: &str| -> Option<image::RgbaImage> {
+        let bytes = archives[0].0.read(name)?.ok()?;
+        Some(image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).ok()?.to_rgba8())
+    };
+    let (grass_map, foliage_map) = (png("assets/minecraft/textures/colormap/grass.png"), png("assets/minecraft/textures/colormap/foliage.png"));
+    let source_of = |k: usize| if k == 0 { MINECRAFT.to_owned() } else { mod_infos.get(k - 1).map_or_else(String::new, |m| m.name.clone()) };
+    let mut biomes: Vec<(usize, BiomeInfo)> = Vec::new();
+    let mut add_biome = |order: usize, id: String, source: String, v: Value| {
+        let info = biome_info(&id, &source, &v, biome_names.get(&id), [grass_map.as_ref(), foliage_map.as_ref()]);
+        match biomes.iter().position(|(_, b)| b.id == id) {
+            Some(i) => biomes[i] = (order, info),
+            None => biomes.push((order, info)),
+        }
+    };
+    for (id, k, n) in &biome_files {
+        if let Some(v) = read_file(*k, n) {
+            add_biome(*k, id.clone(), source_of(*k), v);
+        }
+    }
+    for (i, (dir, files)) in folders.iter().enumerate() {
+        let source = dir.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        for (n, bytes) in files {
+            if let Some(id) = biome_key(n)
+                && let Ok(v) = serde_json::from_slice::<Value>(bytes)
+            {
+                add_biome(archives.len() + i, id, source.clone(), v);
+            }
+        }
+    }
+    biomes.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.name.cmp(&b.1.name)));
+    let biomes: Vec<BiomeInfo> = biomes.into_iter().map(|(_, b)| b).collect();
+    for (dir, _) in &folders {
+        mod_infos.push(ModInfo { name: dir.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default(), path: dir.clone(), kind: SourceKind::Pack, ..Default::default() });
+    }
     Ok(Catalogue {
         version: version.to_owned(),
         source: path.to_owned(),
@@ -1095,7 +1353,34 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
         skipped,
         definitions,
         registered,
+        biomes,
     })
+}
+
+/// The blocks of some tags, the tags they name (`#minecraft:small_flowers`)
+/// followed.
+fn tag_members(tags: &HashMap<String, Vec<Value>>, roots: &[&str]) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut todo: Vec<String> = roots.iter().map(|s| (*s).to_owned()).collect();
+    while let Some(tag) = todo.pop() {
+        if !seen.insert(tag.clone()) {
+            continue;
+        }
+        for file in tags.get(&tag).into_iter().flatten() {
+            for v in file.get("values").and_then(Value::as_array).into_iter().flatten() {
+                let Some(entry) = v.as_str().or_else(|| v.get("id").and_then(Value::as_str)) else { continue };
+                let full = |s: &str| if s.contains(':') { s.to_owned() } else { format!("minecraft:{s}") };
+                match entry.strip_prefix('#') {
+                    Some(t) => todo.push(full(t)),
+                    None => {
+                        out.insert(full(entry));
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The newest jar found on this computer, loaded.
@@ -1106,7 +1391,7 @@ pub fn load_newest() -> Option<Result<Catalogue, AssetError>> {
 
 // --------------------------------------------------------------- registry --
 
-use massif_core::registry::{BlockId, Registry, Stratum, TerrainDef, TerrainId};
+use massif_core::registry::{BiomeDef, BlockId, Registry, Stratum, TerrainDef, TerrainId};
 
 /// Give every block and terrain of a registry its real colour: the mean of
 /// its top texture, tinted as in the game; a terrain takes the mix of its
@@ -1115,6 +1400,21 @@ pub fn apply_colors(reg: &mut Registry, cat: &Catalogue) {
     for b in reg.blocks.iter_mut().skip(1) {
         if let Some(real) = cat.block(&b.state) {
             b.color = real.color;
+        }
+    }
+    // The biomes the game or a mod read defines: the tints of their grass
+    // and leaves; a mod's, its name, its group and its colour (a biome a
+    // profile named before its mod was read had its id's).
+    for b in reg.biomes.iter_mut().skip(1) {
+        if let Some(real) = cat.biome(&b.id) {
+            b.grass = Some(real.grass);
+            b.foliage = Some(real.foliage);
+            if real.source != MINECRAFT {
+                let def = real.def();
+                b.name = def.name;
+                b.group = def.group;
+                b.color = def.color;
+            }
         }
     }
     let blocks = reg.blocks.clone();
@@ -1176,13 +1476,15 @@ pub fn block_terrain(reg: &mut Registry, block: &Block) -> TerrainId {
     if ns != "minecraft" && reg.terrains.iter().any(|t| t.name.eq_ignore_ascii_case(&name)) {
         name = format!("{name} ({})", display_name(ns));
     }
+    // The biome its mod's profile gives it, for Auto biome and the export.
+    let biome_hint = massif_core::mod_profiles::biome_of_block(&block.id).map(|b| reg.intern_biome(BiomeDef::of_id(b)));
     reg.terrains.push(TerrainDef {
         name,
         group: BLOCK_GROUP.to_owned(),
         color: block.color,
         strata,
         submerged_top: None,
-        biome_hint: None,
+        biome_hint,
     });
     TerrainId((reg.terrains.len() - 1) as u16)
 }
@@ -1429,6 +1731,89 @@ mod tests {
         // Grey tinted by the plains grass colour.
         assert_eq!(grass.color, [0x91 * 200 / 255, 0xbd * 200 / 255, 0x59 * 200 / 255].map(|v| v as u8));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// The biomes of the game, of a mod and of a data pack left as a folder:
+    /// each with its name (its language file's, else its id's), its source,
+    /// its grass and leaves (its own colours, else the game's colour maps at
+    /// its temperature) and a colour on the map; a mod's plant that neither
+    /// its name nor its model tells, by the game's tags of plants it is in.
+    #[test]
+    fn mods_define_biomes_and_plants() {
+        let mut map = Vec::new();
+        image::RgbaImage::from_pixel(256, 256, image::Rgba([10, 200, 30, 255])).write_to(&mut std::io::Cursor::new(&mut map), image::ImageFormat::Png).unwrap();
+        let game: Vec<(&str, &[u8], bool)> = vec![
+            ("assets/minecraft/blockstates/stone.json", br#"{"variants":{"":{"model":"minecraft:block/stone"}}}"#, true),
+            ("assets/minecraft/lang/en_us.json", br#"{"biome.minecraft.plains":"Plains","block.minecraft.stone":"Stone"}"#, true),
+            ("assets/minecraft/textures/colormap/grass.png", &map, false),
+            ("data/minecraft/worldgen/biome/plains.json", br#"{"temperature":0.8,"downfall":0.4,"effects":{"water_color":4159204}}"#, true),
+            ("data/minecraft/tags/block/flowers.json", br##"{"values":["#minecraft:small_flowers"]}"##, true),
+            ("data/minecraft/tags/block/small_flowers.json", br#"{"values":["minecraft:poppy"]}"#, true),
+        ];
+        let mod_files: Vec<(&str, &[u8], bool)> = vec![
+            ("META-INF/mods.toml", b"modLoader=\"javafml\"\n[[mods]]\nmodId=\"testmod\"\ndisplayName=\"Test Mod\"\n", true),
+            ("assets/testmod/lang/en_us.json", br#"{"biome.testmod.bayou":"Bayou of Tests"}"#, true),
+            // A flat plant drawn with a model of its own, called a flower by
+            // the game's tag; a pot of it is no plant.
+            ("assets/testmod/blockstates/duckmat.json", br#"{"variants":{"":{"model":"testmod:block/duckmat"}}}"#, true),
+            ("assets/testmod/models/block/duckmat.json", br##"{"textures":{"particle":"testmod:block/duckmat"},"elements":[{"from":[0,0,0],"to":[16,0.25,16],"faces":{"up":{"texture":"#particle"}}}]}"##, true),
+            ("assets/testmod/blockstates/potted_duckmat.json", br#"{"variants":{"":{"model":"testmod:block/duckmat"}}}"#, true),
+            ("data/minecraft/tags/block/small_flowers.json", br#"{"values":["testmod:duckmat",{"id":"testmod:potted_duckmat","required":false}]}"#, true),
+            ("data/testmod/worldgen/biome/bayou.json", br#"{"temperature":0.9,"downfall":0.9,"effects":{"grass_color":1122867,"foliage_color":4478310,"water_color":30583}}"#, true),
+            ("data/testmod/worldgen/biome/sea/murky_lagoon.json", br#"{"temperature":0.5,"downfall":0.5,"effects":{"water_color":30583,"grass_color_modifier":"swamp"}}"#, true),
+        ];
+        let dir = std::env::temp_dir().join(format!("massif-assets-biomes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Misty Pack/data/misty/worldgen/biome")).unwrap();
+        std::fs::write(dir.join("Misty Pack/pack.mcmeta"), b"{}").unwrap();
+        std::fs::write(dir.join("Misty Pack/data/misty/worldgen/biome/glade.json"), br#"{"temperature":0.2,"downfall":0.0,"effects":{"water_color":1}}"#).unwrap();
+        let (game_jar, mod_jar) = (dir.join("1.21.jar"), dir.join("testmod.jar"));
+        std::fs::write(&game_jar, zip::tests_support::tiny_zip(&game)).unwrap();
+        std::fs::write(&mod_jar, zip::tests_support::tiny_zip(&mod_files)).unwrap();
+        let cat = load_with_mods(&game_jar, "1.21", &[mod_jar.clone(), dir.join("Misty Pack")]).unwrap();
+        let ids: Vec<&str> = cat.biomes.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids, ["minecraft:plains", "testmod:bayou", "testmod:sea/murky_lagoon", "misty:glade"], "the game's, then the mod's by name, then the pack's");
+        let plains = cat.biome("minecraft:plains").unwrap();
+        assert_eq!((plains.source.as_str(), plains.name.as_str()), (MINECRAFT, "Plains"));
+        assert_eq!(plains.grass, [10, 200, 30], "from the colour map");
+        assert_eq!(plains.foliage, Tint::Foliage.color(), "no colour map: the plains'");
+        let bayou = cat.biome("testmod:bayou").unwrap();
+        assert_eq!((bayou.source.as_str(), bayou.name.as_str()), ("Test Mod", "Bayou of Tests"));
+        assert_eq!((bayou.grass, bayou.foliage, bayou.water), ([0x11, 0x22, 0x33], [0x44, 0x55, 0x66], [0, 0x77, 0x77]));
+        let lagoon = cat.biome("testmod:sea/murky_lagoon").unwrap();
+        assert_eq!((lagoon.name.as_str(), lagoon.grass), ("Murky Lagoon", [0x6a, 0x70, 0x39]));
+        assert!(lagoon.color[2] > lagoon.color[0], "a sea is drawn in its water's colour: {:?}", lagoon.color);
+        assert_eq!(cat.biome("misty:glade").unwrap().source, "Misty Pack");
+        assert!(cat.mods.iter().any(|m| m.name == "Misty Pack" && m.kind == SourceKind::Pack));
+        let def = bayou.def();
+        assert_eq!((def.group.as_str(), def.grass, def.foliage), ("Test Mod", Some(bayou.grass), Some(bayou.foliage)));
+        assert_eq!(plains.def().group, "", "the game's have no group");
+        assert_eq!(cat.block("testmod:duckmat").unwrap().category, Category::Plants);
+        assert_ne!(cat.block("testmod:potted_duckmat").unwrap().category, Category::Plants);
+
+        // In a map: the biomes it uses take their colours and tints once the
+        // game is read.
+        let mut reg = Registry::vanilla();
+        let b = reg.intern_biome(BiomeDef::of_id("testmod:bayou"));
+        apply_colors(&mut reg, &cat);
+        assert_eq!(reg.biome(b), &def);
+        let p = reg.biome_by_id("minecraft:plains").unwrap();
+        assert_eq!((reg.biome(p).name.as_str(), reg.biome(p).grass), ("Plains", Some([10, 200, 30])));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A terrain made of a mod's block takes the biome the mod's profile
+    /// gives that block (Regions Unexplored's peat mud: its bayou), named
+    /// from its id before the mod is read.
+    #[test]
+    fn profiles_give_mod_terrains_their_biomes() {
+        let mut reg = Registry::vanilla();
+        let block = |id: &str| Block { id: id.into(), name: display_name(id), top: None, side: None, bottom: None, top_tint: Tint::None, side_tint: Tint::None, full_cube: true, tall: false, color: [80, 60, 50], side_color: [80, 60, 50], category: Category::Natural };
+        let t = block_terrain(&mut reg, &block("regions_unexplored:peat_mud"));
+        let b = reg.terrain(t).biome_hint.expect("a biome");
+        assert_eq!((reg.biome(b).id.as_str(), reg.biome(b).name.as_str()), ("regions_unexplored:bayou", "Bayou"));
+        let silt = block_terrain(&mut reg, &block("regions_unexplored:silt_dirt"));
+        assert_eq!(reg.terrain(silt).biome_hint, None, "a block its profile names no biome for");
     }
 
     /// A mod beside the game, as Conquest Reforged is made: its block states
@@ -1725,12 +2110,19 @@ mod tests {
             let files = names.iter().filter(|n| asset_key(n, "blockstates", ".json").is_some_and(|k| spaces.contains(&namespace(&k)))).count();
             let mine: Vec<&Block> = cat.blocks.iter().filter(|b| spaces.contains(&namespace(&b.id))).collect();
             let bare = mine.iter().filter(|b| b.top.as_ref().is_none_or(|k| cat.texture(k).is_none())).count();
-            let first = mine.iter().filter(|b| b.full_cube || b.category == Category::Plants).count();
+            let first = mine.iter().filter(|b| b.full_cube || matches!(b.category, Category::Plants | Category::Natural)).count();
             let mut families: std::collections::BTreeMap<String, usize> = Default::default();
             for b in &mine {
                 *families.entry(format!("{:?}", b.category)).or_default() += 1;
             }
             eprintln!("{}: {} blocks of {} block files, {bare} without textures, {first} shown at first; {families:?}", m.name, mine.len(), files);
+            let biomes: Vec<&BiomeInfo> = cat.biomes.iter().filter(|b| b.source == m.name).collect();
+            eprintln!("{}: {} biomes, {} of the game", m.name, biomes.len(), cat.biomes.iter().filter(|b| b.source == MINECRAFT).count());
+            assert_eq!(biomes.len(), names.iter().filter(|n| biome_key(n).is_some_and(|k| spaces.contains(&namespace(&k)))).count(), "{}: every biome file of its namespaces gives a biome", m.name);
+            if let Some(dump) = std::env::var_os("MASSIF_MOD_DUMP") {
+                let text: String = mine.iter().map(|b| format!("{}\t{:?}\t{}\t{}\t{:?}\t{:?}\n", b.id, b.category, b.full_cube, b.tall, b.top, b.side)).collect();
+                std::fs::write(dump, text).unwrap();
+            }
             assert_eq!(mine.len(), files, "{}: every block file gives a block", m.name);
             assert!(bare * 100 <= mine.len(), "{}: {bare} blocks without textures", m.name);
         }

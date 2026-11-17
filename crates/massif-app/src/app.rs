@@ -3672,7 +3672,10 @@ impl MassifApp {
                 });
                 let _ = solo_changed; // the solo style is part of the cache key
             }
-            EditorKind::Biomes => scrolled(&mut cui, &mut |ui| panels::biome_panel(ui, &mut self.tools, &self.doc.world.registry, &mut self.biome_search)),
+            EditorKind::Biomes => {
+                let catalogue = self.blocks.catalogue.clone();
+                scrolled(&mut cui, &mut |ui| panels::biome_panel(ui, &mut self.tools, &mut self.doc.world.registry, catalogue.as_deref(), &mut self.biome_search));
+            }
             EditorKind::Packs => {
                 let mut said = None;
                 let catalogue = self.blocks.catalogue.clone();
@@ -4501,7 +4504,8 @@ impl MassifApp {
                                 panels::land_rules(
                                     ui,
                                     &mut self.tools.auto.land,
-                                    &self.doc.world.registry,
+                                    &mut self.doc.world.registry,
+                                    self.blocks.catalogue.as_deref(),
                                 );
                             }
                         });
@@ -14652,7 +14656,7 @@ mod tests {
         if !h.state().blocks.namespaces().iter().any(|n| n == "conquest") {
             assert!(!h.state().all_palettes().iter().any(|p| p.name == "Conquest Reforged"), "not offered while the mod is not read");
             let mods = vec![massif_assets::ModInfo { name: "Conquest Reforged".to_owned(), namespaces: vec!["conquest".to_owned()], kind: massif_assets::SourceKind::Mod, ..Default::default() }];
-            let cat = massif_assets::Catalogue { version: "1.20.1".into(), source: PathBuf::new(), blocks: Vec::new(), textures: Default::default(), mods, skipped: Vec::new(), definitions: Default::default(), registered: Default::default() };
+            let cat = massif_assets::Catalogue { version: "1.20.1".into(), source: PathBuf::new(), blocks: Vec::new(), textures: Default::default(), mods, skipped: Vec::new(), definitions: Default::default(), registered: Default::default(), biomes: Vec::new() };
             h.state_mut().blocks.catalogue = Some(std::sync::Arc::new(cat));
         }
         assert!(h.state().blocks.namespaces().iter().any(|n| n == "conquest"), "{:?}", h.state().blocks.error);
@@ -16373,5 +16377,92 @@ mod tests {
         h.query_all_by_role(egui::accesskit::Role::TextInput).last().unwrap().type_text(long);
         h.run_steps(3);
         save(&mut h, field.expand2(vec2(20.0, 20.0)), "help-long");
+    }
+
+    /// The Biomes panel offers the biomes of the mods read, under each
+    /// mod's name, and any biome by its id typed in its search: picked, a
+    /// biome is added to the map and painted with. Auto biome offers them
+    /// too. MASSIF_SNAPSHOT_DIR keeps the panel's renders.
+    #[test]
+    fn modded_biomes_are_offered_and_typed() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(ThemeChoice::Light);
+        h.run_steps(3);
+        let started = std::time::Instant::now();
+        while h.state().blocks.is_loading() && started.elapsed().as_secs() < 60 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let biome = |id: &str, name: &str, source: &str| massif_assets::BiomeInfo { id: id.into(), name: name.into(), source: source.into(), grass: [90, 120, 60], foliage: [70, 110, 50], water: [40, 80, 160], color: massif_core::registry::biome_hash_color(id) };
+        let biomes = vec![
+            biome("minecraft:plains", "Plains", massif_assets::MINECRAFT),
+            biome("minecraft:ice_spikes", "Ice Spikes", massif_assets::MINECRAFT),
+            biome("regions_unexplored:bayou", "Bayou", "Regions Unexplored"),
+            biome("regions_unexplored:alpha_grove", "Alpha Grove", "Regions Unexplored"),
+            biome("biomesoplenty:mystic_grove", "Mystic Grove", "Biomes O' Plenty"),
+        ];
+        let cat = massif_assets::Catalogue { version: "1.21.1".into(), source: PathBuf::new(), blocks: Vec::new(), textures: Default::default(), mods: Vec::new(), skipped: Vec::new(), definitions: Default::default(), registered: Default::default(), biomes };
+        h.state_mut().blocks.catalogue = Some(std::sync::Arc::new(cat));
+        let mut areas = Vec::new();
+        h.state().layout.current().root.areas(&mut areas);
+        let area = areas.into_iter().find(|a| !matches!(a.1, EditorKind::Map | EditorKind::View3d | EditorKind::Sculpt3d)).unwrap().0;
+        h.state_mut().layout.current_mut().root.set_editor(area, EditorKind::Biomes);
+        h.run_steps(4);
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        if let Some(dir) = &dir {
+            std::fs::create_dir_all(dir).unwrap();
+            h.render().unwrap().save(dir.join("biomes-modded.png")).unwrap();
+        }
+        // Grouped by source, the game's extra biomes among the game's.
+        h.get_by_label_contains("REGIONS UNEXPLORED  ·  2");
+        h.get_by_label_contains("BIOMES O' PLENTY  ·  1");
+        let n = h.state().doc.world.registry.biomes.len();
+        assert!(h.state().doc.world.registry.biome_by_id("regions_unexplored:bayou").is_none(), "added only when picked");
+        // Searched by its mod's name.
+        h.state_mut().biome_search = "regions unexplored".into();
+        h.run_steps(3);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("biomes-mod-search.png")).unwrap();
+        }
+        assert!(h.query_by_label("Plains").is_none());
+        h.get_by_label("Bayou").click();
+        h.run_steps(3);
+        let reg = &h.state().doc.world.registry;
+        let bayou = reg.biome_by_id("regions_unexplored:bayou").expect("added");
+        assert_eq!((bayou.index(), reg.biome(bayou).group.as_str(), reg.biome(bayou).grass), (n, "Regions Unexplored", Some([90, 120, 60])));
+        assert_eq!(h.state().tools.biome, bayou.0);
+        assert_eq!(h.state().tools.tool, Tool::PaintBiome);
+        assert_eq!(h.state().doc.world.registry.biomes.len(), n + 1);
+        h.state_mut().biome_search = "spikes".into();
+        h.run_steps(3);
+        h.get_by_label("Ice Spikes").click();
+        h.run_steps(3);
+        assert!(h.state().doc.world.registry.biome_by_id("minecraft:ice_spikes").is_some(), "the game's biomes the map lacked");
+
+        // A biome of a mod not read, by its id.
+        h.state_mut().biome_search = "terralith:moonlight_grove".into();
+        h.run_steps(3);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("biomes-typed.png")).unwrap();
+        }
+        h.get_by_label("Use terralith:moonlight_grove").click();
+        h.run_steps(3);
+        let reg = &h.state().doc.world.registry;
+        let typed = reg.biome_by_id("terralith:moonlight_grove").expect("typed in");
+        assert_eq!(reg.biome(typed).name, "Moonlight Grove");
+        assert_eq!(h.state().tools.biome, typed.0);
+        h.state_mut().biome_search = "Terralith:Bad Id".into();
+        h.run_steps(3);
+        assert!(h.query_by_label_contains("Use terralith").is_none(), "no id of capitals and spaces");
+        h.state_mut().biome_search = "mystic".into();
+        h.run_steps(3);
+        h.get_by_label("Mystic Grove");
+        assert!(h.query_by_label("Bayou").is_none(), "searched");
+
+        // Auto biome's lands choose among them too.
+        let groups = crate::panels::biome_choices(&h.state().doc.world.registry, h.state().blocks.catalogue.as_deref());
+        let names: Vec<&str> = groups.iter().map(|g| g.0.as_str()).collect();
+        assert_eq!(names, [massif_assets::MINECRAFT, "Regions Unexplored", "Biomes O' Plenty", "Typed by hand"]);
+        assert_eq!(groups[1].1.iter().map(|c| (c.def.id.as_str(), c.known.is_some())).collect::<Vec<_>>(), [("regions_unexplored:bayou", true), ("regions_unexplored:alpha_grove", false)]);
     }
 }

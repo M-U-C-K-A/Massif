@@ -441,6 +441,26 @@ impl Colors<'_> {
         self.reg.block(id).color
     }
 
+    /// How the column's biome tints the top of `block` against the plains
+    /// the blocks' colours are tinted for, channel by channel: grass by the
+    /// biome's grass colour, leaves by its leaves', once read from the game
+    /// or its mod; `None` for a block the biome does not tint.
+    fn biome_tint(&self, block: BlockId, sample: &Sample) -> Option<[f32; 3]> {
+        let state = &self.reg.block(block).state;
+        let name = state.split('[').next().unwrap_or(state);
+        let short = name.rsplit(':').next().unwrap_or(name);
+        let biome = self.reg.biome(massif_core::BiomeId(self.auto.resolve(self.reg, sample, self.sea)));
+        let (c, plains) = if short.ends_with("grass_block") && !state.contains("snowy=true") {
+            (biome.grass?, massif_assets::Tint::Grass.color())
+        } else if short.ends_with("leaves") && !["spruce_leaves", "birch_leaves", "cherry_leaves", "pale_oak_leaves"].contains(&short) {
+            (biome.foliage?, massif_assets::Tint::Foliage.color())
+        } else {
+            return None;
+        };
+        let t: [f32; 3] = std::array::from_fn(|k| (c[k] as f32 / plains[k].max(1) as f32).clamp(0.25, 4.0));
+        (t != [1.0; 3]).then_some(t)
+    }
+
     /// Colour of the top face of a span, and of the soil just under it, for
     /// the column `(x, z)` whose ground slopes `slope` degrees, with the
     /// blocks they are. On the column's top, what the cover numbered
@@ -460,6 +480,11 @@ impl Colors<'_> {
                 let block = self.mat.block(&span, x, y1 - 1, z, false);
                 let bare = self.block(block);
                 let mut top = bare;
+                // Grass and leaves in the colours of the column's biome, as
+                // the game tints them (the blocks' colours are the plains').
+                if let Some(t) = self.biome_tint(block, sample) {
+                    top = std::array::from_fn(|c| (top[c] as f32 * t[c]).round().clamp(0.0, 255.0) as u8);
+                }
                 if let Some(def) = self.reg.cover(cover)
                     && !def.hidden
                     && def.underwater == wet

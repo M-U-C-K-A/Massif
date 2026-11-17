@@ -576,6 +576,7 @@ impl Mapper {
                         id: name.into(),
                         name: pretty,
                         color: block_color(name),
+                        ..Default::default()
                     });
                     (self.registry.biomes.len() - 1) as u16
                 }

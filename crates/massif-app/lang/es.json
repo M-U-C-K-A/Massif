@@ -1971,7 +1971,7 @@
  "The colour of the ground, turned into real blocks": "El color del suelo, convertido en bloques reales",
  "The dither of its picture moves on about once a second": "El tramado de su imagen avanza más o menos una vez por segundo",
  "The elevation could not be had": "No se pudo obtener la elevación",
- "The game's biomes, to paint over the automatic ones": "Los biomas del juego, para pintar sobre los automáticos",
+ "The biomes of the game and its mods, to paint over the automatic ones": "Los biomas del juego y sus mods, para pintar sobre los automáticos",
  "The graph cannot be built: {e}": "El grafo no se puede construir: {e}",
  "The graph has no Height output to save": "El grafo no tiene salida Altura que guardar",
  "The graph the last template replaced": "El grafo que reemplazó la última plantilla",
@@ -2365,7 +2365,6 @@
  "{glyph}  Open read-only": "{glyph}  Abrir en solo lectura",
  "{glyph}  Open the release page": "{glyph}  Abrir la página de la versión",
  "{glyph}  Rename…": "{glyph}  Renombrar…",
- "Search biomes": "Buscar biomas",
  "Search nodes": "Buscar nodos",
  "Search packs": "Buscar packs",
  "Search terrain": "Buscar terreno",
@@ -2834,5 +2833,10 @@
  "Where I start": "Donde empiezo",
  "Where I start: as high as where each stroke starts. Sea level or Fixed: up to that level, ground at or above it staying dry.": "Donde empiezo: tan alta como donde empieza cada trazo. Nivel del mar o Fijo: hasta ese nivel, con el terreno a esa altura o más arriba seco.",
  "y {water_limit}": "y {water_limit}",
- "Repeat, a block at a time": "Repetir, bloque a bloque"
+ "Repeat, a block at a time": "Repetir, bloque a bloque",
+ "Search, or type a biome id": "Buscar o escribir un id de bioma",
+ "Typed by hand": "Escritos a mano",
+ "Use {id}": "Usar {id}",
+ "Exported as it is: the game shows it when the mod or data pack that defines it is installed": "Se exporta tal cual: el juego lo muestra cuando está instalado el mod o el paquete de datos que lo define",
+ "A biome id is namespace:biome, in a-z, 0-9, _ - and .": "Un id de bioma es espacio:bioma, con a-z, 0-9, _ - y ."
 }

@@ -1971,7 +1971,7 @@
  "The colour of the ground, turned into real blocks": "A cor do solo, transformada em blocos reais",
  "The dither of its picture moves on about once a second": "O pontilhado da imagem avança mais ou menos uma vez por segundo",
  "The elevation could not be had": "Não foi possível obter a elevação",
- "The game's biomes, to paint over the automatic ones": "Os biomas do jogo, para pintar sobre os automáticos",
+ "The biomes of the game and its mods, to paint over the automatic ones": "Os biomas do jogo e dos seus mods, para pintar sobre os automáticos",
  "The graph cannot be built: {e}": "O grafo não pode ser construído: {e}",
  "The graph has no Height output to save": "O grafo não tem saída Altura para salvar",
  "The graph the last template replaced": "O grafo que o último modelo substituiu",
@@ -2365,7 +2365,6 @@
  "{glyph}  Open read-only": "{glyph}  Abrir só para leitura",
  "{glyph}  Open the release page": "{glyph}  Abrir a página da versão",
  "{glyph}  Rename…": "{glyph}  Renomear…",
- "Search biomes": "Buscar biomas",
  "Search nodes": "Buscar nós",
  "Search packs": "Buscar pacotes",
  "Search terrain": "Buscar terreno",
@@ -2834,5 +2833,10 @@
  "Where I start": "Onde começo",
  "Where I start: as high as where each stroke starts. Sea level or Fixed: up to that level, ground at or above it staying dry.": "Onde começo: tão alta como onde começa cada traço. Nível do mar ou Fixo: até esse nível, com o terreno a essa altura ou acima seco.",
  "y {water_limit}": "y {water_limit}",
- "Repeat, a block at a time": "Repetir, bloco a bloco"
+ "Repeat, a block at a time": "Repetir, bloco a bloco",
+ "Search, or type a biome id": "Buscar ou digitar um id de bioma",
+ "Typed by hand": "Digitados à mão",
+ "Use {id}": "Usar {id}",
+ "Exported as it is: the game shows it when the mod or data pack that defines it is installed": "Exportado como está: o jogo o mostra quando o mod ou o pacote de dados que o define está instalado",
+ "A biome id is namespace:biome, in a-z, 0-9, _ - and .": "Um id de bioma é namespace:bioma, com a-z, 0-9, _ - e ."
 }

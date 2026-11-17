@@ -1,5 +1,14 @@
 {
  "name": "Regions Unexplored",
  "namespace": "regions_unexplored",
- "minecraft": "1.21.1"
+ "minecraft": "1.21.1",
+ "biomes": {
+  "regions_unexplored:peat_mud": "regions_unexplored:bayou",
+  "regions_unexplored:peat_coarse_dirt": "regions_unexplored:fen",
+  "regions_unexplored:peat_podzol": "regions_unexplored:pine_taiga",
+  "regions_unexplored:silt_podzol": "regions_unexplored:autumnal_maple_forest",
+  "regions_unexplored:mossy_stone": "regions_unexplored:maple_forest",
+  "regions_unexplored:ash": "regions_unexplored:ashen_woodland",
+  "regions_unexplored:silt_coarse_dirt": "regions_unexplored:dry_bushland"
+ }
 }

@@ -688,6 +688,39 @@ drawn a column a pixel. With a brush 4,000 blocks across on a 5,888-block
 WorldPainter map, the pointer moves at 30 ms a frame and a stroke at about
 100; at 300 blocks, both under 10 ms.
 
+## Biomes of mods and data packs
+
+Once a mod's blocks are read (Blocks panel), Massif reads the biomes the
+game, its mods and its data packs define too
+(`data/<namespace>/worldgen/biome/*.json`): the mods' jars, the data packs
+added with **Add mods…** (a `.zip`, or a pack left as a folder), and those
+an instance gives every world (its `datapacks`, `global_packs` and
+`openloader` folders), as well as mods that add biomes and no block. The
+**Biomes** panel lists them after the game's, under each mod's name with
+how many it has; its search finds a biome by its name, its id or its
+mod's name. A biome is added to the map when it is first picked, and saved
+with it; the game's biomes the built-in list lacked (its Nether's and End's,
+Ice Spikes, Eroded Badlands…) come the same way once the game is read.
+
+Each has a colour on the map: its grass's (a sea's, river's or lake's
+water), mixed with a colour of its own drawn from its id so that biomes of
+the same grass stay apart. In the 3D view, grass and leaves take the
+colours the biome gives them in the game: its own `grass_color` and
+`foliage_color`, else the game's colour maps at its temperature and
+rainfall, a swamp's or a dark forest's grass as the game changes it.
+
+**Any biome by its id.** Type `namespace:biome` in the panel's search
+(`terralith:moonlight_grove`), then **Use** it: for a mod or a data pack
+that is not read here. It is named after its id and given a colour of its
+own; the export writes it as typed.
+
+The export writes every biome by its id into the chunks' biome palettes:
+open the world with the mod or data pack that defines them installed. Auto biome's **Rules…** offers them
+for each kind of land, and a terrain whose mod's profile names a biome for
+its block (see *Mod profiles*) takes that biome where the biome is left on
+automatic. Before 1.18, when biomes were numbers, a mod's biome is written
+as plains.
+
 **Rules…** (in Tool Settings, or Edit ▸ Automatic rules) opens both tables:
 the depths, heights and slopes the land is read with, the biome of each
 kind of land, the three terrains of each biome. They are kept with the
@@ -1783,10 +1816,14 @@ Reforged's 36, Cobble and Brick, Advanced Masonry, Roofing…), with their real 
 family. A family that a block's name does not tell is read from how the
 block is drawn: a cross of two planes, a crop or leaves make a plant (a
 mod's `amaranth`, `cattail`, `barley`), planks or a log make wood (its
-fences, doors, signs), bricks, cobble or stone a building block. A mod's
-whole blocks of ground (`silt_grass_block`, `peat_dirt`, `volcanic_ash`) go
-with the soils. Whole
-blocks and plants show at first; **All shapes** adds every other shape (a
+fences, doors, signs), bricks, cobble or stone a building block. A plant
+drawn with a model of its own (Regions Unexplored's duckweed, clover, leaf
+litter, ivy, tassels) is told by the game's tags of plants the mod puts it
+in (flowers, saplings, leaves, crops, what trees grow through, what is
+climbed), a pot of it is not. A mod's blocks of ground (`silt_grass_block`,
+`peat_dirt`, `volcanic_ash`, and those not quite whole, `peat_dirt_path`,
+`silt_farmland`) go with the soils. Whole blocks, plants and the ground's
+blocks show at first; **All shapes** adds every other shape (a
 mod's tabs list each block once, and its shapes follow it): slabs, stairs,
 arches, capitals, vertical slabs, fences, doors… The search looks through
 every block and shape, ticked or not. A whole
@@ -1831,6 +1868,18 @@ Anyone can write one for another mod, with no code:
 
   ```json
   { "name": "Regions Unexplored", "namespace": "regions_unexplored", "minecraft": "1.21.1" }
+  ```
+
+- `biomes` in `profile.json` (optional): the biome each of the mod's blocks
+  calls for. A terrain made of that block (from the Blocks panel) takes it
+  where the biome is left on automatic: **Auto biome**, the map's Biome
+  mode and the export give it that biome, as a desert's sand gives the
+  desert. Regions Unexplored's peat mud is its bayou, its silt podzol its
+  autumnal maple forest:
+
+  ```json
+  { "name": "Regions Unexplored", "namespace": "regions_unexplored", "minecraft": "1.21.1",
+    "biomes": { "regions_unexplored:peat_mud": "regions_unexplored:bayou" } }
   ```
 
 - `palette.json` (optional): a block palette of the mod's blocks, the

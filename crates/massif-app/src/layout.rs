@@ -92,7 +92,7 @@ impl EditorKind {
             EditorKind::CustomBrushes => tr!("Brushes from greyscale images, yours and WorldPainter's"),
             EditorKind::Terrain => tr!("The block on top of the ground, to paint"),
             EditorKind::Blocks => tr!("Every block of the game, to paint as a terrain"),
-            EditorKind::Biomes => tr!("The game's biomes, to paint over the automatic ones"),
+            EditorKind::Biomes => tr!("The biomes of the game and its mods, to paint over the automatic ones"),
             EditorKind::Layers => tr!("Ground covers, objects and terrain mixes: paint, show or hide them"),
             EditorKind::Packs => tr!("Ready-made trees, plants and mixes of blocks to paint"),
             EditorKind::Levels => tr!("Levels that add rock over the ground or carve it away"),

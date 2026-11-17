@@ -2650,7 +2650,7 @@ fn pattern_pictures(ui: &mut Ui, tools: &ToolState, doc: &Document) {
 
 /// The rules of the automatic biomes: how the land is read, and the biome
 /// of each kind of it.
-pub fn land_rules(ui: &mut Ui, rules: &mut massif_core::auto::BiomeRules, reg: &Registry) {
+pub fn land_rules(ui: &mut Ui, rules: &mut massif_core::auto::BiomeRules, reg: &mut Registry, cat: Option<&massif_assets::Catalogue>) {
     use massif_core::auto::Land;
     let pal = Palette::of(ui);
     section(ui, Icon::Ruler, tr!("Reading the land"));
@@ -2676,6 +2676,8 @@ pub fn land_rules(ui: &mut Ui, rules: &mut massif_core::auto::BiomeRules, reg: &
     rules.mountains = rules.mountains.max(rules.hills);
     rules.peaks = rules.peaks.max(rules.mountains);
     section(ui, Icon::Trees, tr!("The biome of each kind of land"));
+    let groups = biome_choices(reg, cat);
+    let mut chosen: Option<(Land, BiomeChoice)> = None;
     egui::Grid::new("land biomes").num_columns(2).spacing([14.0, 4.0]).striped(true).show(ui, |ui| {
         for land in Land::ALL {
             ui.label(crate::i18n::tr_name(land.label())).on_hover_text(crate::i18n::tr_name(land.hint()));
@@ -2687,20 +2689,30 @@ pub fn land_rules(ui: &mut Ui, rules: &mut massif_core::auto::BiomeRules, reg: &
                     swatch(ui, theme::rgb(reg.biome(b).color));
                 }
                 crate::widgets::combo(("land biome", land)).selected_text(name).width(210.0).show_ui(ui, |ui| {
-                    for biome in reg.biomes.iter().skip(1) {
-                        if ui.selectable_label(biome.id == current, &biome.name).clicked() {
-                            picked = Some(biome.id.clone());
+                    // The game's, then each mod's, under its name.
+                    for (group, choices) in &groups {
+                        if groups.len() > 1 {
+                            biome_group_title(ui, group, choices.len());
+                        }
+                        for c in choices {
+                            if ui.selectable_label(c.def.id == current, &c.def.name).on_hover_text(&c.def.id).clicked() {
+                                picked = Some(c.clone());
+                            }
                         }
                     }
                 });
                 ui.label(RichText::new(crate::i18n::tr_name(land.hint())).size(11.0).color(pal.weak));
             });
-            if let Some(id) = picked {
-                rules.set_biome(land, &id);
+            if let Some(c) = picked {
+                chosen = Some((land, c));
             }
             ui.end_row();
         }
     });
+    if let Some((land, c)) = chosen {
+        c.intern(reg);
+        rules.set_biome(land, &c.def.id);
+    }
 }
 
 /// The rules of the automatic paint: the terrains of each biome.
@@ -3751,22 +3763,128 @@ fn describe_terrain(reg: &Registry, terrain: u16) -> String {
 
 // ----------------------------------------------------------------- biomes --
 
-pub fn biome_panel(ui: &mut Ui, tools: &mut ToolState, reg: &Registry, search: &mut String) {
-    hint(ui, tr!("Painted biomes override automatic."));
-    crate::widgets::search(ui, search, tr!("Search biomes"), f32::INFINITY);
-    let needle = search.to_lowercase();
-    for (i, b) in reg.biomes.iter().enumerate() {
-        if !needle.is_empty() && !b.name.to_lowercase().contains(&needle) && !b.id.contains(&needle) {
-            continue;
+/// A biome offered in the Biomes panel and Auto biome: one of the map's
+/// (`known`, its number), or one the game, a mod or a data pack read
+/// defines, added to the map when it is picked.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BiomeChoice {
+    pub known: Option<u16>,
+    pub def: massif_core::registry::BiomeDef,
+}
+
+impl BiomeChoice {
+    /// Its number in the map's biomes, added the first time.
+    pub fn intern(&self, reg: &mut Registry) -> u16 {
+        self.known.unwrap_or_else(|| reg.intern_biome(self.def.clone()).0)
+    }
+}
+
+/// The biomes to offer, by group: the game's (the map's, then those of the
+/// game read the map does not have yet), then each mod's and data pack's,
+/// in the order they were read, then those typed by hand. Automatic is not
+/// among them.
+pub fn biome_choices(reg: &Registry, cat: Option<&massif_assets::Catalogue>) -> Vec<(String, Vec<BiomeChoice>)> {
+    let mut groups: Vec<(String, Vec<BiomeChoice>)> = vec![(massif_assets::MINECRAFT.to_owned(), Vec::new())];
+    let mut add = |group: &str, choice: BiomeChoice| match groups.iter_mut().find(|g| g.0 == group) {
+        Some(g) => g.1.push(choice),
+        None => groups.push((group.to_owned(), vec![choice])),
+    };
+    let read = |id: &str| cat.and_then(|c| c.biome(id));
+    let typed = tr!("Typed by hand");
+    for (k, b) in reg.biomes.iter().enumerate().skip(1) {
+        let group = if !b.group.is_empty() {
+            b.group.as_str()
+        } else if b.id.starts_with("minecraft:") || read(&b.id).is_some_and(|r| r.source == massif_assets::MINECRAFT) {
+            massif_assets::MINECRAFT
+        } else {
+            read(&b.id).map_or(typed, |r| r.source.as_str())
+        };
+        add(group, BiomeChoice { known: Some(k as u16), def: b.clone() });
+    }
+    for b in cat.map(|c| c.biomes.as_slice()).unwrap_or_default() {
+        if reg.biome_by_id(&b.id).is_none() {
+            add(&b.source, BiomeChoice { known: None, def: b.def() });
         }
+    }
+    // Typed ids last.
+    if let Some(i) = groups.iter().position(|g| g.0 == typed) {
+        let g = groups.remove(i);
+        groups.push(g);
+    }
+    groups.retain(|g| !g.1.is_empty());
+    groups
+}
+
+/// What a search for a biome finds: its name, its id, or its group's name.
+fn biome_matches(needle: &str, group: &str, def: &massif_core::registry::BiomeDef) -> bool {
+    needle.is_empty() || def.name.to_lowercase().contains(needle) || def.id.contains(needle) || group.to_lowercase().contains(needle)
+}
+
+/// A group's title in a list of biomes, cut to the room.
+fn biome_group_title(ui: &mut Ui, title: &str, count: usize) {
+    let pal = Palette::of(ui);
+    ui.add_space(4.0);
+    ui.add(egui::Label::new(RichText::new(format!("{}  ·  {count}", title.to_uppercase())).size(10.5).bold().color(pal.weak)).truncate());
+}
+
+/// The field to use a biome by its id (`namespace:biome`), when the search
+/// is one the list does not have: the biome of a mod or data pack that is
+/// not read. Returns the id to use.
+fn typed_biome(ui: &mut Ui, needle: &str, known: bool) -> Option<String> {
+    if !needle.contains(':') || known {
+        return None;
+    }
+    match massif_core::registry::check_biome_id(needle) {
+        Ok(()) => ui.add(egui::Button::new(tr!("Use {id}", id = needle)).truncate()).on_hover_text(tr!("Exported as it is: the game shows it when the mod or data pack that defines it is installed")).clicked().then(|| needle.to_owned()),
+        Err(_) => {
+            hint(ui, tr!("A biome id is namespace:biome, in a-z, 0-9, _ - and ."));
+            None
+        }
+    }
+}
+
+pub fn biome_panel(ui: &mut Ui, tools: &mut ToolState, reg: &mut Registry, cat: Option<&massif_assets::Catalogue>, search: &mut String) {
+    hint(ui, tr!("Painted biomes override automatic."));
+    crate::widgets::search(ui, search, tr!("Search, or type a biome id"), f32::INFINITY);
+    let needle = search.trim().to_lowercase();
+    let mut picked: Option<u16> = None;
+    let auto = &reg.biomes[0];
+    if biome_matches(&needle, "", auto) {
         ui.horizontal(|ui| {
-            swatch(ui, theme::rgb(b.color));
-            let r = ui.add(egui::Button::selectable(tools.biome as usize == i, &b.name).truncate());
-            if r.on_hover_text(if b.id.is_empty() { tr!("Let the exporter decide") } else { &b.id }).clicked() {
-                tools.biome = i as u16;
-                tools.select(Tool::PaintBiome);
+            swatch(ui, theme::rgb(auto.color));
+            if ui.add(egui::Button::selectable(tools.biome == 0, crate::i18n::tr_name(&auto.name)).truncate()).on_hover_text(tr!("Let the exporter decide")).clicked() {
+                picked = Some(0);
             }
         });
+    }
+    let groups = biome_choices(reg, cat);
+    let mut chosen: Option<BiomeChoice> = None;
+    for (group, choices) in &groups {
+        let shown: Vec<&BiomeChoice> = choices.iter().filter(|c| biome_matches(&needle, group, &c.def)).collect();
+        if shown.is_empty() {
+            continue;
+        }
+        biome_group_title(ui, group, shown.len());
+        for c in shown {
+            ui.horizontal(|ui| {
+                swatch(ui, theme::rgb(c.def.color));
+                let selected = c.known.is_some_and(|k| k == tools.biome);
+                if ui.add(egui::Button::selectable(selected, &c.def.name).truncate()).on_hover_text(&c.def.id).clicked() {
+                    chosen = Some(c.clone());
+                }
+            });
+        }
+    }
+    let known = groups.iter().flat_map(|g| &g.1).any(|c| c.def.id == needle);
+    if let Some(id) = typed_biome(ui, &needle, known) {
+        chosen = Some(BiomeChoice { known: None, def: massif_core::registry::BiomeDef::of_id(&id) });
+    }
+    if let Some(c) = chosen {
+        picked = Some(c.intern(reg));
+    }
+    if let Some(i) = picked {
+        tools.biome = i;
+        tools.select(Tool::PaintBiome);
     }
 }
 

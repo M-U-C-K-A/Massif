@@ -19,6 +19,12 @@ pub struct ModProfile {
     /// one.
     #[serde(default)]
     pub minecraft: Option<String>,
+    /// The biome each of its blocks calls for, by block id
+    /// (`regions_unexplored:peat_mud` → `regions_unexplored:bayou`): a
+    /// terrain made of that block takes that biome where the biome is left
+    /// on automatic (Auto biome, the export).
+    #[serde(default)]
+    pub biomes: std::collections::BTreeMap<String, String>,
     /// A palette of its blocks, offered once the mod is read.
     #[serde(skip)]
     pub palette: Option<Palette>,
@@ -47,6 +53,13 @@ pub fn of(namespace: &str) -> Option<&'static ModProfile> {
     all().iter().find(|p| p.namespace == namespace)
 }
 
+/// The biome a mod's profile gives a block (by its id, without
+/// properties), if any.
+pub fn biome_of_block(block: &str) -> Option<&'static str> {
+    let id = block.split('[').next().unwrap_or(block);
+    of(id.split(':').next()?)?.biomes.get(id).map(String::as_str)
+}
+
 /// The palettes of the mods whose blocks are read (`read`: their
 /// namespaces): each mod's, when its profile has one and every block it
 /// uses is of a mod read.
@@ -72,6 +85,11 @@ mod tests {
             assert!(!p.name.is_empty() && !p.namespace.is_empty() && p.namespace != "minecraft", "{p:?}");
             assert!(!seen.contains(&&p.namespace), "{} twice", p.namespace);
             seen.push(&p.namespace);
+            for (block, biome) in &p.biomes {
+                assert!(block.starts_with(&format!("{}:", p.namespace)), "{}: {block} is not of its blocks", p.name);
+                assert_eq!(crate::registry::check_biome_id(biome), Ok(()), "{biome}");
+                assert_eq!(biome_of_block(block), Some(biome.as_str()));
+            }
             if let Some(palette) = &p.palette {
                 assert_eq!(palette.namespaces(), [p.namespace.as_str()], "{}: its palette is of its own blocks", p.name);
                 assert!(!palette.is_vanilla());

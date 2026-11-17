@@ -1973,7 +1973,7 @@
  "The colour of the ground, turned into real blocks": "Die Farbe des Bodens, in echte Blöcke verwandelt",
  "The dither of its picture moves on about once a second": "Das Dithering des Bildes läuft etwa einmal pro Sekunde weiter",
  "The elevation could not be had": "Die Höhendaten waren nicht zu bekommen",
- "The game's biomes, to paint over the automatic ones": "Die Biome des Spiels, über die automatischen zu malen",
+ "The biomes of the game and its mods, to paint over the automatic ones": "Die Biome des Spiels und seiner Mods, über die automatischen zu malen",
  "The graph cannot be built: {e}": "Der Graph kann nicht erstellt werden: {e}",
  "The graph has no Height output to save": "Der Graph hat keine Höhenausgabe zum Sichern",
  "The graph the last template replaced": "Der Graph, den die letzte Vorlage ersetzt hat",
@@ -2368,7 +2368,6 @@
  "{glyph}  Open read-only": "{glyph}  Schreibgeschützt öffnen",
  "{glyph}  Open the release page": "{glyph}  Versionsseite öffnen",
  "{glyph}  Rename…": "{glyph}  Umbenennen…",
- "Search biomes": "Biome suchen",
  "Search nodes": "Knoten suchen",
  "Search packs": "Pakete suchen",
  "Search terrain": "Gelände suchen",
@@ -2837,5 +2836,10 @@
  "Where I start": "Wo ich beginne",
  "Where I start: as high as where each stroke starts. Sea level or Fixed: up to that level, ground at or above it staying dry.": "Wo ich beginne: so hoch, wie jeder Strich beginnt. Meeresspiegel oder Fest: bis zu dieser Höhe, Boden auf dieser Höhe oder höher bleibt trocken.",
  "y {water_limit}": "y {water_limit}",
- "Repeat, a block at a time": "Wiederholen, Block für Block"
+ "Repeat, a block at a time": "Wiederholen, Block für Block",
+ "Search, or type a biome id": "Suchen oder eine Biom-ID eingeben",
+ "Typed by hand": "Von Hand eingegeben",
+ "Use {id}": "{id} verwenden",
+ "Exported as it is: the game shows it when the mod or data pack that defines it is installed": "Wird unverändert exportiert: Das Spiel zeigt es, wenn die Mod oder das Datenpaket installiert ist, das es definiert",
+ "A biome id is namespace:biome, in a-z, 0-9, _ - and .": "Eine Biom-ID lautet namensraum:biom, aus a-z, 0-9, _ - und ."
 }

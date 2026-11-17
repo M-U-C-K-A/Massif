@@ -130,12 +130,80 @@ pub struct TerrainDef {
     pub biome_hint: Option<BiomeId>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct BiomeDef {
     /// Namespaced biome id (`minecraft:plains`); empty for the automatic entry.
     pub id: String,
     pub name: String,
+    /// Map colour.
     pub color: [u8; 3],
+    /// The mod or data pack it comes from (`Regions Unexplored`); empty for
+    /// the game's own and for an id typed by hand.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub group: String,
+    /// The colour the game gives grass in it, once read from the game or
+    /// its mod: the 3D view tints grass with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grass: Option<[u8; 3]>,
+    /// The colour of leaves in it, likewise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foliage: Option<[u8; 3]>,
+}
+
+impl BiomeDef {
+    /// A biome known by its id alone (typed by hand, or named by a mod's
+    /// profile before its mod is read): named after its id, in a colour of
+    /// its own drawn from it.
+    pub fn of_id(id: &str) -> Self {
+        BiomeDef { id: id.to_owned(), name: biome_display_name(id), color: biome_hash_color(id), ..Default::default() }
+    }
+}
+
+/// What is wrong with a biome id typed by hand, if anything: it must be
+/// `namespace:path`, of the letters the game allows (`a-z 0-9 _ - .`, and
+/// `/` in the path).
+pub fn check_biome_id(id: &str) -> Result<(), &'static str> {
+    let Some((ns, path)) = id.split_once(':') else { return Err("namespace:biome") };
+    let ok = |s: &str, slash: bool| !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '-' | '.') || slash && c == '/');
+    if ok(ns, false) && ok(path, true) && !path.starts_with('/') && !path.ends_with('/') { Ok(()) } else { Err("a-z 0-9 _ - .") }
+}
+
+/// A biome's name from its id: `regions_unexplored:alpha_grove` is
+/// `Alpha Grove`.
+pub fn biome_display_name(id: &str) -> String {
+    let path = id.rsplit(':').next().unwrap_or(id);
+    let last = path.rsplit('/').next().unwrap_or(path);
+    last.split('_')
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A colour of its own for a biome the game gives none, drawn from its id:
+/// a hue from its hash, of the strength of the game's biome colours.
+pub fn biome_hash_color(id: &str) -> [u8; 3] {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in id.bytes() {
+        h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3);
+    }
+    let hue = (h % 360) as f32;
+    let (s, v) = (0.45 + (h >> 16) as f32 % 30.0 / 100.0, 0.55 + (h >> 24) as f32 % 30.0 / 100.0);
+    let c = v * s;
+    let x = c * (1.0 - ((hue / 60.0) % 2.0 - 1.0).abs());
+    let (r, g, b) = match (hue / 60.0) as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    [r, g, b].map(|k| ((k + m) * 255.0).round() as u8)
 }
 
 /// Blocks the exporter needs regardless of what terrains reference.
@@ -572,6 +640,15 @@ impl Registry {
             .map(|i| BiomeId(i as u16))
     }
 
+    /// Find a biome by its id, adding `def` the first time.
+    pub fn intern_biome(&mut self, def: BiomeDef) -> BiomeId {
+        if let Some(b) = self.biome_by_id(&def.id) {
+            return b;
+        }
+        self.biomes.push(def);
+        BiomeId((self.biomes.len() - 1) as u16)
+    }
+
     /// The built-in registry of a new world.
     pub fn vanilla() -> Self {
         let mut reg = Registry {
@@ -646,6 +723,7 @@ impl Registry {
                 id: (*id).into(),
                 name: (*name).into(),
                 color: *color,
+                ..Default::default()
             });
         }
 
@@ -889,6 +967,34 @@ impl Registry {
 
 #[cfg(test)]
 mod tests {
+
+    /// Biomes of mods and typed by hand: added once by their ids, named and
+    /// coloured from them, and files of before them still read.
+    #[test]
+    fn biomes_are_interned_by_id() {
+        let mut reg = Registry::vanilla();
+        let n = reg.biomes.len();
+        let plains = reg.biome_by_id("minecraft:plains").unwrap();
+        assert_eq!(reg.intern_biome(BiomeDef::of_id("minecraft:plains")), plains, "the game's kept");
+        let b = reg.intern_biome(BiomeDef::of_id("regions_unexplored:alpha_grove"));
+        assert_eq!((b.index(), reg.biomes.len()), (n, n + 1));
+        assert_eq!(reg.intern_biome(BiomeDef::of_id("regions_unexplored:alpha_grove")), b);
+        assert_eq!(reg.biome(b).name, "Alpha Grove");
+        assert_eq!(biome_display_name("terralith:cave/frostfire_caves"), "Frostfire Caves");
+        assert_eq!(biome_hash_color("a:b"), biome_hash_color("a:b"));
+        assert_ne!(biome_hash_color("a:b"), biome_hash_color("a:c"));
+        for id in ["regions_unexplored:bayou", "terralith:cave/deep_caves", "my-pack:glade.2"] {
+            assert_eq!(check_biome_id(id), Ok(()), "{id}");
+        }
+        for id in ["bayou", "Mod:Bayou", ":bayou", "mod:", "mod:a b", "mod:/a", "a:b:c"] {
+            assert!(check_biome_id(id).is_err(), "{id}");
+        }
+        // A biome of before groups and tints reads, and writes as it did.
+        let old: BiomeDef = serde_json::from_str(r#"{"id":"minecraft:plains","name":"Plains","color":[1,2,3]}"#).unwrap();
+        assert_eq!((old.group.as_str(), old.grass, old.foliage), ("", None, None));
+        assert_eq!(serde_json::to_string(&old).unwrap(), r#"{"id":"minecraft:plains","name":"Plains","color":[1,2,3]}"#);
+    }
+
     use super::*;
 
     #[test]

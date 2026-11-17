@@ -33,12 +33,16 @@ pub struct Instance {
     /// Lists of blocks made for WorldPainter, in the instance or in
     /// WorldPainter's folder, for the namespaces of its mods.
     pub lists: Vec<PathBuf>,
+    /// What defines biomes without blocks: its mods with biomes only, and
+    /// the data packs every world of the instance gets (`datapacks`,
+    /// `global_packs`, `openloader`), zips or folders.
+    pub datapacks: Vec<PathBuf>,
 }
 
 impl Instance {
     /// Everything to read, in order: the mods, their lists, then the packs.
     pub fn files(&self) -> Vec<PathBuf> {
-        self.mods.iter().chain(&self.lists).chain(&self.packs).cloned().collect()
+        self.mods.iter().chain(&self.lists).chain(&self.packs).chain(&self.datapacks).cloned().collect()
     }
 
     /// Read an instance from its folder (or the folder of its game, or its
@@ -55,6 +59,10 @@ impl Instance {
         for jar in files_in(&dir.join("mods"), "jar") {
             let Ok(archive) = Archive::open(&jar) else { continue };
             let spaces = namespaces_in(archive.names());
+            if spaces.is_empty() && has_biomes(archive.names()) {
+                instance.datapacks.push(jar);
+                continue;
+            }
             if !spaces.is_empty() {
                 let name = crate::mod_name(&archive).unwrap_or_else(|| jar.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
                 namespaces.extend(spaces);
@@ -66,6 +74,7 @@ impl Instance {
         namespaces.dedup();
         instance.namespaces = namespaces.clone();
         instance.packs = packs_on(&dir);
+        instance.datapacks.extend(datapacks_in(&dir));
         // The lists of the instance itself, then WorldPainter's own for the
         // namespaces left.
         let mut covered: Vec<String> = Vec::new();
@@ -182,6 +191,37 @@ fn namespaces_in<'a>(names: impl Iterator<Item = &'a str>) -> Vec<String> {
         .collect();
     out.sort();
     out.dedup();
+    out
+}
+
+/// Whether a jar's entries define biomes (`data/<ns>/worldgen/biome/`).
+fn has_biomes<'a>(mut names: impl Iterator<Item = &'a str>) -> bool {
+    names.any(|n| n.starts_with("data/") && n.contains("/worldgen/biome/") && n.ends_with(".json"))
+}
+
+/// The data packs an instance gives every world, that define biomes: the
+/// zips and folders of its `datapacks` folder and of the folders of the
+/// mods that load data packs for every world (`global_packs/required_data`
+/// and `optional_data`, `openloader/data`).
+pub fn datapacks_in(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for sub in ["datapacks", "global_packs/required_data", "global_packs/optional_data", "openloader/data", "config/openloader/data"] {
+        let Ok(read) = std::fs::read_dir(dir.join(sub)) else { continue };
+        let mut found: Vec<PathBuf> = read
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')))
+            .filter(|p| {
+                if p.is_dir() {
+                    p.join("data").is_dir() && std::fs::read_dir(p.join("data")).into_iter().flatten().flatten().any(|ns| ns.path().join("worldgen/biome").is_dir())
+                } else {
+                    p.extension().is_some_and(|e| e.eq_ignore_ascii_case("zip") || e.eq_ignore_ascii_case("jar")) && Archive::list(p).is_ok_and(|names| has_biomes(names.iter().map(String::as_str)))
+                }
+            })
+            .collect();
+        found.sort();
+        out.extend(found);
+    }
     out
 }
 

@@ -1689,3 +1689,58 @@ fn chunks_are_each_versions_own() {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
+
+/// The biome ids written in the palettes of a chunk's sections.
+fn biome_ids(dir: &Path, x: i32, z: i32) -> std::collections::BTreeSet<String> {
+    use fastnbt::Value;
+    let (cx, cz) = (x >> 4, z >> 4);
+    let file = std::fs::File::open(region_dir(dir).join(format!("r.{}.{}.mca", cx >> 5, cz >> 5))).unwrap();
+    let data = Region::from_stream(file).unwrap().read_chunk((cx & 31) as usize, (cz & 31) as usize).unwrap().unwrap();
+    let root: Value = fastnbt::from_bytes(&data).unwrap();
+    let Value::Compound(chunk) = root else { panic!("a chunk is a compound") };
+    let Some(Value::List(sections)) = chunk.get("sections") else { panic!("no sections") };
+    let mut out = std::collections::BTreeSet::new();
+    for section in sections {
+        let Value::Compound(section) = section else { continue };
+        let Some(Value::Compound(biomes)) = section.get("biomes") else { continue };
+        let Some(Value::List(palette)) = biomes.get("palette") else { continue };
+        out.extend(palette.iter().filter_map(|v| if let Value::String(s) = v { Some(s.clone()) } else { None }));
+    }
+    out
+}
+
+/// A mod's biomes, and a biome typed by hand, go out by their ids into the
+/// chunks' biome palettes, as the game reads them with the mod installed:
+/// painted, and from a terrain whose biome its mod's profile names, where
+/// the biome is left on automatic.
+#[test]
+fn modded_biomes_are_exported_by_their_ids() {
+    let mut world = build_world();
+    let reg = &mut world.registry;
+    let bayou = reg.intern_biome(massif_core::registry::BiomeDef { group: "Regions Unexplored".into(), grass: Some([90, 110, 60]), ..massif_core::registry::BiomeDef::of_id("regions_unexplored:bayou") });
+    let typed = reg.intern_biome(massif_core::registry::BiomeDef::of_id("mypack:misty_glade"));
+    assert_eq!(reg.intern_biome(massif_core::registry::BiomeDef::of_id("mypack:misty_glade")), typed, "added once");
+    // A terrain calling for a mod's biome, painted on the plateau.
+    let grass = reg.terrain_by_name("Grass").unwrap();
+    let mut fen = reg.terrain(grass).clone();
+    fen.name = "Fen".into();
+    fen.biome_hint = Some(reg.intern_biome(massif_core::registry::BiomeDef::of_id("regions_unexplored:fen")));
+    reg.terrains.push(fen);
+    let fen = TerrainId((reg.terrains.len() - 1) as u16);
+    let mut h = History::default();
+    h.begin("biomes", 0);
+    {
+        let mut e = h.edit(&mut world, 0);
+        ops::paint_biome(&mut e, &hard(10.0), 100.0, 100.0, bayou, 1);
+        ops::paint_biome(&mut e, &hard(10.0), -100.0, 100.0, typed, 2);
+        ops::paint_terrain(&mut e, &hard(6.0), -40.0, -40.0, fen, 3);
+    }
+    h.commit();
+    let dir = temp_dir("modded-biomes");
+    export(&world.snapshot(), &dir, &ExportOptions::default(), &Progress::default()).unwrap();
+    assert!(biome_ids(&dir, 100, 100).contains("regions_unexplored:bayou"), "{:?}", biome_ids(&dir, 100, 100));
+    assert!(biome_ids(&dir, -100, 100).contains("mypack:misty_glade"), "{:?}", biome_ids(&dir, -100, 100));
+    assert!(biome_ids(&dir, -40, -40).contains("regions_unexplored:fen"), "{:?}", biome_ids(&dir, -40, -40));
+    assert!(!biome_ids(&dir, 0, 0).iter().any(|b| !b.starts_with("minecraft:")), "the rest of the map keeps the game's");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
