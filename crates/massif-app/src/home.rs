@@ -165,59 +165,38 @@ pub enum HomeAction {
     Settings,
     /// A file let go over the window.
     Dropped(PathBuf),
-    /// Another picture behind the home screen.
-    AnotherPicture,
     /// What is new in the newer version out.
     Update,
     /// The block palettes window.
     EditPalettes,
 }
 
-/// The pictures of `assets/backdrops` (listed by the build script).
-mod pictures {
-    include!(concat!(env!("OUT_DIR"), "/backdrops.rs"));
+/// Frames a second of the waves behind the home screen. They move slowly,
+/// a cell of their dither every second or so: more would show nothing new.
+const WAVE_FPS: f64 = 15.0;
+
+/// The waves behind the home screen: one frame of them, dithered for one
+/// size and theme, on the graphics card.
+struct Waves {
+    key: WavesKey,
+    /// The frame shown, by its number (seconds × [`WAVE_FPS`]).
+    frame: i64,
+    texture: TextureHandle,
 }
 
-/// Seconds each frame of the backdrop stays: its dither moves on, about once
-/// a second, as bast.sh's does.
-const FRAME_SECS: f64 = 0.9;
-
-/// The picture behind the home screen, dithered for one size and theme: a
-/// few frames of it, each dithered a little differently, shown in turn.
-struct Backdrop {
-    key: BackdropKey,
-    /// None when the picture would not decode.
-    frames: Vec<TextureHandle>,
-}
-
-/// What a backdrop is made for.
+/// What the waves are drawn for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-struct BackdropKey {
-    /// The picture, and whether at dawn (the light theme's) or at night.
-    index: usize,
-    dawn: bool,
+struct WavesKey {
     cols: usize,
     rows: usize,
     dark: bool,
     high: bool,
+    accent: Color32,
     /// Where the words are, in cells.
     calm: [i32; 4],
     /// Pixels a cell.
     pitch: usize,
 }
-
-/// A picture of `assets/backdrops`, decoded.
-struct Picture {
-    index: usize,
-    /// At dawn (the light theme's), or at night.
-    dawn: bool,
-    image: Arc<image::RgbImage>,
-}
-
-/// A backdrop made on a thread of its own: its picture (once decoded) and
-/// its frames, none when the picture would not decode.
-type MadeBackdrop = (Option<Picture>, Vec<egui::ColorImage>);
-
 /// When maps were last changed, `None` for those that are not there.
 type Ages = Vec<(PathBuf, Option<SystemTime>)>;
 
@@ -227,25 +206,20 @@ pub struct Home {
     pub heightmap: Option<HeightmapPick>,
     /// The name of the map open before, to go back to.
     pub back_to: Option<String>,
-    backdrop: Option<Backdrop>,
-    /// The picture of the backdrop, chosen at random when Massif opens
-    /// (among those not shown yet).
-    choice: usize,
-    choice_set: bool,
-    picture: Option<Picture>,
-    /// The backdrop being made on a thread of its own.
-    making: Option<(BackdropKey, Receiver<MadeBackdrop>)>,
+    waves: Option<Waves>,
+    /// The waves shown still at this time, in seconds (the tests' renders).
+    pub wave_time: Option<f64>,
     /// When each recent map was last changed (`None`: it is not there),
     /// read on a thread of its own: a map on a drive that is gone, or on a
     /// network share that does not answer, would hold up the window.
     ages: HashMap<PathBuf, Option<SystemTime>>,
     ages_asked: Option<Receiver<Ages>>,
     ages_at: f64,
-    /// Make the pictures (the backdrop, the preview) and read the recent
+    /// Make the pictures (the preview, the samples') and read the recent
     /// maps in the frame itself, as tests want; the app makes them on other
     /// threads, so that its first frame waits on none of it.
     pub in_frame: bool,
-    /// Whether the picture's dither moves on (the settings).
+    /// Whether the waves behind move (the settings).
     pub animate: bool,
     /// A newer version out, by its number: a line above Settings says so.
     pub update: Option<String>,
@@ -288,11 +262,8 @@ impl Home {
             new_map: NewMap::new(registry),
             heightmap: None,
             back_to: None,
-            backdrop: None,
-            choice: (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos()) as usize) / 7,
-            choice_set: false,
-            picture: None,
-            making: None,
+            waves: None,
+            wave_time: None,
             ages: HashMap::new(),
             ages_asked: None,
             ages_at: f64::NEG_INFINITY,
@@ -304,43 +275,6 @@ impl Home {
             sample_pictures: HashMap::new(),
             sample_drawing: None,
         }
-    }
-
-    /// Show a picture not shown yet (`seen`: the names shown, kept in the
-    /// settings), so that pictures just added come first; once all were,
-    /// any but the last one.
-    pub fn pick_backdrop(&mut self, seen: &mut Vec<String>) {
-        let all = pictures::BACKDROPS;
-        if all.is_empty() {
-            return;
-        }
-        seen.retain(|s| all.iter().any(|(n, _, _)| n == s));
-        let mut pool: Vec<usize> = (0..all.len()).filter(|&k| !seen.iter().any(|s| s == all[k].0)).collect();
-        if pool.is_empty() {
-            let last = seen.last().cloned();
-            seen.clear();
-            pool = (0..all.len()).filter(|&k| Some(all[k].0) != last.as_deref()).collect();
-        }
-        let k = pool.get(self.choice % pool.len().max(1)).copied().unwrap_or(0);
-        self.choice = k;
-        self.choice_set = true;
-        seen.push(all[k].0.to_owned());
-        // A new draw for the next pick.
-        self.choice = k + (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos()) as usize / 7) * all.len();
-    }
-
-    /// Show the picture `k` of `assets/backdrops` (by its place in the
-    /// folder, in name order).
-    #[cfg(test)]
-    pub fn choose_backdrop(&mut self, k: usize) -> &'static str {
-        self.choice = k;
-        pictures::BACKDROPS[k % pictures::BACKDROPS.len()].0
-    }
-
-    /// The number of pictures there are.
-    #[cfg(test)]
-    pub fn backdrops() -> usize {
-        pictures::BACKDROPS.len()
     }
 
     /// Show the home screen over the whole of `ui`. `recent`: the maps
@@ -361,7 +295,7 @@ impl Home {
             });
         }
 
-        crate::startup::frame_step(ui.ctx(), "the home screen: the picture behind it");
+        crate::startup::frame_step(ui.ctx(), "the home screen: the waves behind it");
         self.paint_backdrop(ui, main, column_rect(main, self.content_height));
         ui.painter().rect_filled(sidebar, 0, sidebar_fill(&pal));
         ui.painter().vline(sidebar.max.x - 0.5, sidebar.y_range(), Stroke::new(1.0, pal.border));
@@ -377,22 +311,6 @@ impl Home {
         crate::startup::frame_step(ui.ctx(), "the home screen: the new map's settings and preview");
         let mut centre = ui.new_child(UiBuilder::new().id_salt("home main").max_rect(main));
         self.main(&mut centre, main, &mut action);
-
-        // Another picture, bottom right: quiet, frameless.
-        if !pictures::BACKDROPS.is_empty() {
-            let at = Rect::from_center_size(pos2(main.right() - 26.0, main.bottom() - 26.0), vec2(28.0, 28.0));
-            let response = ui.interact(at, egui::Id::unique("home another picture"), Sense::click()).on_hover_text(tr!("Another picture"));
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr!("Another picture")));
-            let color = if response.hovered() { pal.text } else { art_weak(&pal) };
-            let glyph = ui.painter().layout_no_wrap(theme::glyph(Icon::Images).to_string(), FontId::proportional(15.0), color);
-            paint_on_art(ui.painter(), at.center() - glyph.size() / 2.0, glyph, &pal, None);
-            if response.hovered() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-            }
-            if response.clicked() {
-                action = Some(HomeAction::AnotherPicture);
-            }
-        }
 
         // What happened, at the bottom.
         if let Some((text, error)) = note {
@@ -797,104 +715,59 @@ impl Home {
 
     // ----------------------------------------------------------- backdrop --
 
-    /// The picture behind `rect`: one of `assets/backdrops`, dithered in
-    /// its own palette and dimmed where the settings are written (`calm`),
-    /// its dither moving on every [`FRAME_SECS`]. Made again, on a thread of
-    /// its own, when the window grows past it or the theme changes; the one
-    /// before stays until then (none at first: the page's colour).
+    /// The waves behind `rect`: ridges in layers, from the page's colour to
+    /// a muted accent, dithered in a few colours (see [`wave_frame`]) and
+    /// calmer where the settings are written (`calm`). Drawn again for each
+    /// frame of [`WAVE_FPS`] while they move: with the setting on, Reduce
+    /// motion off and the window in front; still otherwise, at their first
+    /// frame or where they stopped.
     fn paint_backdrop(&mut self, ui: &Ui, rect: Rect, calm: Rect) {
         let pal = Palette::of(ui);
         let bg = backdrop_fill(&pal);
         ui.painter().rect_filled(rect, 0, bg);
-        let all = pictures::BACKDROPS;
-        if all.is_empty() {
-            return;
-        }
-        let index = self.choice % all.len();
-        // The light theme shows the scene at dawn, where there is one.
-        let dawn = !pal.dark && all[index].2.is_some();
         let ppp = ui.ctx().pixels_per_point();
         let pitch = ((2.0 * ppp).round() as usize).max(3);
         let cell = pitch as f32 / ppp;
-        // Made a little larger than needed, so that resizing the window
-        // does not make it again at every step.
-        let bucket = |n: usize| n.div_ceil(32) * 32;
-        let cols = bucket(((rect.width() * ppp) as usize / pitch).max(1));
-        let rows = bucket(((rect.height() * ppp) as usize / pitch).max(1));
-        // Anchored to the bottom left: the land stays, the sky gives way.
-        let placed = |cols: usize, rows: usize| {
-            let size = vec2(cols as f32, rows as f32) * cell;
-            Rect::from_min_size(pos2(rect.left(), rect.bottom() - size.y), size)
-        };
-        let shown = placed(cols, rows);
+        let cols = ((rect.width() / cell).ceil() as usize).max(1);
+        let rows = ((rect.height() / cell).ceil() as usize).max(1);
+        // Anchored to the bottom left, as the land is.
+        let shown = Rect::from_min_size(pos2(rect.left(), rect.bottom() - rows as f32 * cell), vec2(cols as f32, rows as f32) * cell);
         let in_cells = |p: egui::Pos2| [((p.x - shown.left()) / cell) as i32, ((p.y - shown.top()) / cell) as i32];
         let ([x0, y0], [x1, y1]) = (in_cells(calm.min), in_cells(calm.max));
         let calm = [x0, y0, x1, y1].map(|v| v.div_euclid(8) * 8);
-        let key = BackdropKey { index, dawn, cols, rows, dark: pal.dark, high: pal.high, calm, pitch };
-        // What a thread made.
-        if let Some((made_for, rx)) = &self.making {
-            match rx.try_recv() {
-                Ok(made) => {
-                    let made_for = *made_for;
-                    self.making = None;
-                    self.take_backdrop(ui.ctx(), made_for, made);
+        let key = WavesKey { cols, rows, dark: pal.dark, high: pal.high, accent: pal.accent, calm, pitch };
+        let (now, focused) = ui.input(|i| (i.time, i.viewport().focused.unwrap_or(true)));
+        let moving = self.animate && !theme::reduce_motion(ui.ctx()) && self.wave_time.is_none();
+        let frame = match self.wave_time {
+            Some(t) => (t * WAVE_FPS) as i64,
+            // Where they stopped while the window was behind another.
+            None if moving && !focused => self.waves.as_ref().map_or(0, |w| w.frame),
+            None if moving => (now * WAVE_FPS) as i64,
+            None => 0,
+        };
+        if self.waves.as_ref().is_none_or(|w| w.key != key || w.frame != frame) {
+            let image = wave_frame(&WaveLook::of(&pal), cols, rows, calm, frame as f64 / WAVE_FPS);
+            match &mut self.waves {
+                Some(w) => {
+                    w.texture.set(image, egui::TextureOptions::NEAREST);
+                    (w.key, w.frame) = (key, frame);
                 }
-                Err(TryRecvError::Disconnected) => self.making = None,
-                Err(TryRecvError::Empty) => {}
-            }
-        }
-        // One at a time: while the window is resized, the next is made for
-        // its size once the one on its way is done.
-        if self.backdrop.as_ref().is_none_or(|b| b.key != key) && self.making.is_none() {
-            let decoded = self.picture.as_ref().filter(|p| p.index == index && p.dawn == dawn).map(|p| p.image.clone());
-            let bytes = if dawn { all[index].2.unwrap_or(all[index].1) } else { all[index].1 };
-            let light = if dawn { Light::Dawn } else if pal.dark { Light::Night } else { Light::Faded };
-            let high = pal.high;
-            let make = move || -> MadeBackdrop {
-                let image = decoded.or_else(|| image::load_from_memory(bytes).ok().map(|img| Arc::new(img.to_rgb8())));
-                let Some(image) = image else { return (None, Vec::new()) };
-                let frames = dither_frames(&image, cols, rows, light, bg, calm, high);
-                (Some(Picture { index, dawn, image }), frames)
-            };
-            if self.in_frame {
-                self.take_backdrop(ui.ctx(), key, make());
-            } else {
-                let (tx, rx) = channel();
-                let ctx = ui.ctx().clone();
-                // In the pool kept for loads, not the one the main thread
-                // draws with (see `in_loading_pool`).
-                let spawned = std::thread::Builder::new().name("massif home picture".into()).spawn(move || {
-                    let _ = tx.send(crate::jobs::in_loading_pool(make));
-                    ctx.request_repaint();
-                });
-                if spawned.is_ok() {
-                    self.making = Some((key, rx));
+                None => {
+                    let texture = ui.ctx().load_texture("home waves", image, egui::TextureOptions::NEAREST);
+                    self.waves = Some(Waves { key, frame, texture });
                 }
             }
         }
-        if let Some(b) = &self.backdrop
-            && !b.frames.is_empty()
-        {
-            let t = ui.input(|i| i.time);
-            let k = if self.animate { (t / FRAME_SECS) as usize % b.frames.len() } else { 0 };
-            // Where it was made for, until the one for this size comes.
-            let at = if b.key.pitch == pitch { placed(b.key.cols, b.key.rows) } else { shown };
-            ui.painter_at(rect).image(b.frames[k].id(), at, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-            if self.animate {
-                ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(FRAME_SECS - t % FRAME_SECS + 0.01));
-            }
+        if let Some(w) = &self.waves {
+            ui.painter_at(rect).image(w.texture.id(), shown, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        }
+        // The next frame, only while they move and the window is in front:
+        // coming back to it asks for a frame of its own.
+        if moving && focused {
+            let next = (frame + 1) as f64 / WAVE_FPS - now;
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(next.clamp(0.005, 1.0 / WAVE_FPS)));
         }
     }
-
-    /// A backdrop made for `key`: its frames sent to the graphics card.
-    fn take_backdrop(&mut self, ctx: &egui::Context, key: BackdropKey, (picture, frames): MadeBackdrop) {
-        if picture.is_some() {
-            self.picture = picture;
-        }
-        let frames = frames.into_iter().enumerate().map(|(k, image)| ctx.load_texture(format!("home backdrop {k}"), image, egui::TextureOptions::NEAREST)).collect();
-        self.backdrop = Some(Backdrop { key, frames });
-    }
-
     /// When the recent maps were last changed, read again every few
     /// seconds on a thread of its own.
     fn read_ages(&mut self, ctx: &egui::Context, recent: &[PathBuf]) {
@@ -946,14 +819,14 @@ fn column_rect(area: Rect, content: f32) -> Rect {
     Rect::from_min_max(pos2(area.center().x - width / 2.0, area.top() + top), pos2(area.center().x + width / 2.0, area.bottom() - 16.0))
 }
 
-/// The ink of muted words written on the picture: stronger than muted text
-/// elsewhere, as the picture shows around them.
+/// The ink of muted words written over the waves: stronger than muted text
+/// elsewhere, as the waves show around them.
 fn art_weak(pal: &Palette) -> Color32 {
     if pal.high { pal.weak } else { theme::mix(pal.weak, pal.text, 0.4) }
 }
 
-/// `galley` at `at`, written straight on the picture: a halo of the page's
-/// colour around its letters, so that it reads over any part of the picture
+/// `galley` at `at`, written straight over the waves: a halo of the page's
+/// colour around its letters, so that it reads over any part of them
 /// — in `ink`, or in its own colours.
 fn paint_on_art(painter: &egui::Painter, at: egui::Pos2, galley: Arc<egui::Galley>, pal: &Palette, ink: Option<Color32>) {
     let halo = backdrop_fill(pal);
@@ -970,7 +843,7 @@ fn paint_on_art(painter: &egui::Painter, at: egui::Pos2, galley: Arc<egui::Galle
     }
 }
 
-/// Words written straight on the picture (see [`paint_on_art`]).
+/// Words written straight over the waves (see [`paint_on_art`]).
 fn art_label(ui: &mut Ui, text: RichText) -> Response {
     let pal = Palette::of(ui);
     let words = text.text().to_owned();
@@ -1038,148 +911,124 @@ fn shorten(s: &str, n: usize) -> String {
     format!("{head}…{tail}")
 }
 
-/// `img` over `cols` × `rows` cells, in frames: covered (its lower part
-/// kept), toned for the theme — and darker (or paler) within `calm` and
-/// around it, where text is written —, then reduced to a palette of its own
-/// sixteen colours with an ordered dither, a little shifted from frame to
-/// frame.
-/// How a picture is laid behind the home screen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Light {
-    /// A night scene in the dark theme: night falling from the top.
-    Night,
-    /// A scene at dawn in the light theme: as it is, calmer under the words.
-    Dawn,
-    /// A night scene with no dawn, in the light theme: faded into the page.
-    Faded,
+/// The colours the waves are dithered into: from the page's colour to a
+/// muted accent, in a few steps — fewer and fainter in high contrast.
+struct WaveLook {
+    ramp: Vec<Color32>,
+    /// How much of the waves is taken away under the words (0–1).
+    hush: f32,
 }
 
-fn dither_frames(img: &image::RgbImage, cols: usize, rows: usize, light: Light, bg: Color32, calm: [i32; 4], high: bool) -> Vec<egui::ColorImage> {
-    let dark = light == Light::Night;
-    // How much of the picture is taken away under the words: more in high
-    // contrast.
-    let hush = |standard: f32| if high { 0.9 } else { standard };
-    use rayon::prelude::*;
-    let (iw, ih) = (img.width() as f32, img.height() as f32);
-    let scale = (cols as f32 / iw).max(rows as f32 / ih);
-    let (cw, ch) = (((cols as f32 / scale).round() as u32).clamp(1, img.width()), ((rows as f32 / scale).round() as u32).clamp(1, img.height()));
-    let (x0, y0) = ((img.width() - cw) / 2, img.height() - ch);
-    let crop = image::imageops::crop_imm(img, x0, y0, cw, ch).to_image();
-    let small = image::imageops::resize(&crop, cols as u32, rows as u32, image::imageops::FilterType::Triangle);
-    let back = [bg.r(), bg.g(), bg.b()].map(|v| v as f32 / 255.0);
-    // Where the text is: a soft oval over the upper part of the column, the
-    // picture dimmed under it and less and less around it — no edge.
+impl WaveLook {
+    fn of(pal: &Palette) -> Self {
+        let bg = backdrop_fill(pal);
+        // The accent, muted toward a grey of the theme.
+        let grey = if pal.dark { Color32::from_rgb(118, 118, 126) } else { Color32::from_rgb(150, 150, 158) };
+        let (muted, reach, steps, hush) = match (pal.high, pal.dark) {
+            (true, true) => (0.7, 0.30, 4, 0.92),
+            (true, false) => (0.7, 0.26, 4, 0.92),
+            (false, true) => (0.2, 0.62, 7, 0.78),
+            (false, false) => (0.15, 0.58, 7, 0.72),
+        };
+        let tint = theme::mix(pal.accent, grey, muted);
+        let ramp = (0..steps).map(|k| theme::mix(bg, tint, reach * k as f32 / (steps - 1) as f32)).collect();
+        Self { ramp, hush }
+    }
+}
+
+/// The ridges of the waves, far to near: where each stands (in heights of
+/// the area, from the top), how far it swells, how many crests across a
+/// height of the area, how fast they run (turns a second), how strong.
+const RIDGES: [(f32, f32, f32, f32, f32); 5] = [
+    (0.26, 0.050, 1.70, 0.008, 0.22),
+    (0.42, 0.060, 1.30, 0.011, 0.34),
+    (0.54, 0.070, 0.95, -0.015, 0.46),
+    (0.68, 0.080, 0.70, 0.019, 0.60),
+    (0.82, 0.090, 0.50, -0.024, 0.76),
+];
+
+/// The ordered dither of the backdrop.
+const BAYER: [[u8; 8]; 8] = [
+    [0, 32, 8, 40, 2, 34, 10, 42],
+    [48, 16, 56, 24, 50, 18, 58, 26],
+    [12, 44, 4, 36, 14, 46, 6, 38],
+    [60, 28, 52, 20, 62, 30, 54, 22],
+    [3, 35, 11, 43, 1, 33, 9, 41],
+    [51, 19, 59, 27, 49, 17, 57, 25],
+    [15, 47, 7, 39, 13, 45, 5, 37],
+    [63, 31, 55, 23, 61, 29, 53, 21],
+];
+
+/// One frame of the waves, `cols` × `rows` cells, `t` seconds in: ridges in
+/// five layers like a range seen from afar, the farthest highest and finest,
+/// each lit along its crest with contour lines under it that follow its
+/// line and fade down its flank; quieter around `calm` (in cells, where the
+/// words are); each cell put to a colour of `look` by an ordered dither,
+/// fixed on the screen while the ridges run through it. The crests are
+/// worked out once a column, so that a cell costs a few comparisons.
+fn wave_frame(look: &WaveLook, cols: usize, rows: usize, calm: [i32; 4], t: f64) -> egui::ColorImage {
+    use std::f32::consts::TAU;
+    let h = rows.max(1) as f32;
+    // The phases, kept small: f32 would lose the seconds of a long session.
+    let turn = |speed: f32| ((t * speed as f64).fract() as f32) * TAU;
+    // Crests in cells from the top, ridge by ridge, column by column.
+    let crests: Vec<Vec<f32>> = RIDGES
+        .iter()
+        .enumerate()
+        .map(|(k, &(base, swell, crests, speed, _))| {
+            let kf = k as f32;
+            let breathe = 1.0 + 0.18 * (turn(1.0 / 53.0) + kf * 1.7).sin();
+            let (p1, p2, p3) = (turn(speed) + kf * 2.1, turn(-0.63 * speed) + kf * 4.3, turn(1.37 * speed) + kf * 0.9);
+            (0..cols)
+                .map(|x| {
+                    let u = (x as f32 + 0.5) / h * crests * TAU;
+                    let wave = 0.6 * (u + p1).sin() + 0.3 * (1.93 * u + p2).sin() + 0.1 * (4.1 * u + p3).sin();
+                    (base - swell * breathe * wave) * h
+                })
+                .collect()
+        })
+        .collect();
+    let n = look.ramp.len();
+    let steps = (n - 1) as f32;
+    // Contour lines under each crest: so many cells apart, so many of them.
+    let gap = (h * 0.028).max(4.0);
+    let lines = 4.0;
+    let fall = 1.0 / (h * 0.07);
+    // Where the words are: a soft oval over the upper part of the column,
+    // as a product of a column's part and a row's.
     let [cx0, cy0, cx1, cy1] = calm.map(|v| v as f32);
     let (ex, ey) = ((cx0 + cx1) / 2.0, cy0 + 0.4 * (cy1 - cy0));
     let (rx, ry) = (0.78 * (cx1 - cx0).max(1.0), 0.55 * (cy1 - cy0).max(1.0));
-    let pixels: Vec<[f32; 3]> = (0..rows * cols)
-        .into_par_iter()
-        .map(|i| {
-            let (x, y) = ((i % cols) as f32, (i / cols) as f32);
-            let c = small.get_pixel(x as u32, y as u32).0.map(|v| v as f32 / 255.0);
-            // A little more colour, as a dither of few colours loses some.
-            let lum = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
-            let c = c.map(|v| (lum + (v - lum) * 1.25).clamp(0.0, 1.0));
-            let near = (-(((x - ex) / rx).powi(2) + ((y - ey) / ry).powi(2)) * 1.1).exp();
-            match light {
-                // Night falls from the top: the sky darker than the land.
-                Light::Night => {
-                    let k = (0.46 + 0.42 * smooth(0.0, 0.8, y / rows as f32)) * (1.0 - hush(0.72) * near);
-                    c.map(|v| v.powf(1.15) * k)
-                }
-                // Dawn: the picture as it is, quieter where the words are.
-                Light::Dawn => {
-                    let k = 0.94 * (1.0 - hush(0.62) * near);
-                    [0, 1, 2].map(|j| back[j] + (c[j] - back[j]) * k)
-                }
-                Light::Faded => {
-                    let k = 0.42 * (1.0 - hush(0.7) * near);
-                    [0, 1, 2].map(|j| back[j] + (c[j] - back[j]) * k)
+    let across: Vec<f32> = (0..cols).map(|x| (-((x as f32 - ex) / rx).powi(2) * 1.1).exp()).collect();
+    let down: Vec<f32> = (0..rows).map(|y| (-((y as f32 - ey) / ry).powi(2) * 1.1).exp()).collect();
+    let mut pixels = Vec::with_capacity(cols * rows);
+    for (y, near_y) in down.iter().enumerate() {
+        let v = y as f32 + 0.5;
+        let bayer = &BAYER[y % 8];
+        for x in 0..cols {
+            // The nearest ridge this cell is under.
+            let mut s = 0.0;
+            for k in (0..RIDGES.len()).rev() {
+                let d = v - crests[k][x];
+                if d >= 0.0 {
+                    let strength = RIDGES[k].4;
+                    let f = 1.0 / (1.0 + d * fall);
+                    s = strength * (0.2 + 0.45 * f * f);
+                    if d < 1.0 {
+                        s = strength + 0.26;
+                    } else if d < gap * lines && (d % gap) < 1.0 {
+                        s += 0.26 * (1.0 - d / (gap * lines));
+                    }
+                    break;
                 }
             }
-        })
-        .collect();
-    let palette = median_cut(&pixels, 16);
-    const BAYER: [[u8; 8]; 8] = [
-        [0, 32, 8, 40, 2, 34, 10, 42],
-        [48, 16, 56, 24, 50, 18, 58, 26],
-        [12, 44, 4, 36, 14, 46, 6, 38],
-        [60, 28, 52, 20, 62, 30, 54, 22],
-        [3, 35, 11, 43, 1, 33, 9, 41],
-        [51, 19, 59, 27, 49, 17, 57, 25],
-        [15, 47, 7, 39, 13, 45, 5, 37],
-        [63, 31, 55, 23, 61, 29, 53, 21],
-    ];
-    let spread = if dark { 0.13 } else { 0.1 };
-    [(0usize, 0usize), (4, 4), (2, 6), (6, 2)]
-        .par_iter()
-        .map(|&(ox, oy)| {
-            let out = pixels
-                .iter()
-                .enumerate()
-                .map(|(i, c)| {
-                    let (x, y) = (i % cols, i / cols);
-                    let t = (BAYER[(y + oy) % 8][(x + ox) % 8] as f32 + 0.5) / 64.0 - 0.5;
-                    let v = c.map(|ch| ch + t * spread);
-                    let best = palette
-                        .iter()
-                        .min_by(|a, b| {
-                            let d = |p: &[f32; 3]| (p[0] - v[0]).powi(2) + (p[1] - v[1]).powi(2) + (p[2] - v[2]).powi(2);
-                            d(a).total_cmp(&d(b))
-                        })
-                        .copied()
-                        .unwrap_or(back);
-                    let [r, g, b] = best.map(|ch| (ch.clamp(0.0, 1.0) * 255.0).round() as u8);
-                    Color32::from_rgb(r, g, b)
-                })
-                .collect();
-            egui::ColorImage::new([cols, rows], out)
-        })
-        .collect()
-}
-
-/// `n` colours that stand for `pixels` (median cut): the set split again
-/// and again where its colours spread the most.
-fn median_cut(pixels: &[[f32; 3]], n: usize) -> Vec<[f32; 3]> {
-    let step = (pixels.len() / 40_000).max(1);
-    let mut boxes: Vec<Vec<[f32; 3]>> = vec![pixels.iter().step_by(step).copied().collect()];
-    let widest = |b: &[[f32; 3]]| -> (usize, f32) {
-        (0..3)
-            .map(|axis| {
-                let (lo, hi) = b.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p[axis]), hi.max(p[axis])));
-                (axis, hi - lo)
-            })
-            .max_by(|a, b| a.1.total_cmp(&b.1))
-            .unwrap_or((0, 0.0))
-    };
-    while boxes.len() < n {
-        let Some((k, axis)) = boxes
-            .iter()
-            .enumerate()
-            .filter(|(_, b)| b.len() > 1)
-            .map(|(k, b)| {
-                let (axis, range) = widest(b);
-                (k, axis, range * (b.len() as f32).sqrt())
-            })
-            .max_by(|a, b| a.2.total_cmp(&b.2))
-            .map(|(k, axis, _)| (k, axis))
-        else {
-            break;
-        };
-        let mut b = boxes.swap_remove(k);
-        b.sort_by(|p, q| p[axis].total_cmp(&q[axis]));
-        let upper = b.split_off(b.len() / 2);
-        boxes.push(b);
-        boxes.push(upper);
+            s *= 1.0 - look.hush * across[x] * near_y;
+            let dither = (bayer[x % 8] as f32 + 0.5) / 64.0;
+            let level = ((s * steps + dither) as usize).min(n - 1);
+            pixels.push(look.ramp[level]);
+        }
     }
-    boxes
-        .iter()
-        .filter(|b| !b.is_empty())
-        .map(|b| {
-            let sum = b.iter().fold([0.0f32; 3], |s, p| [s[0] + p[0], s[1] + p[1], s[2] + p[2]]);
-            sum.map(|v| v / b.len() as f32)
-        })
-        .collect()
+    egui::ColorImage::new([cols, rows], pixels)
 }
 
 // ---------------------------------------------------------------- parts --
@@ -1691,167 +1540,6 @@ pub fn preview_image(params: &GenParams, reg: &massif_core::Registry, n: usize) 
     egui::ColorImage::new([n, n], pixels)
 }
 
-/// The picture behind the home screen: a massif at dusk. Stars and the
-/// milky way over the glow of a sun gone down, in the accent colour; ranges
-/// of mountains in layers, the farthest pale in the haze, the nearest dark,
-/// lit along their crests and on the flanks that face the glow, snow on the
-/// highest; a valley in the middle, where the settings are written, and a
-/// tall peak to the right. Drawn as a picture, `assets/backdrops/
-/// massif-dusk.jpg` (see the test below), dithered as the others are.
-#[cfg(test)]
-fn nocturne(cols: usize, rows: usize, accent: Color32, bg: Color32) -> image::RgbImage {
-    let dark = true;
-    use rayon::prelude::*;
-    let noise = massif_core::noise::Noise::new(0x6d61_7373);
-    let a = cols as f64 / rows.max(1) as f64;
-    // Far to near: where the range stands, how tall it rises, how fine
-    // its peaks are, how pale the haze leaves it.
-    const LAYERS: [(f64, f64, f64, f32); 5] = [(0.75, 0.08, 3.4, 0.30), (0.80, 0.11, 2.5, 0.21), (0.86, 0.15, 1.8, 0.13), (0.92, 0.17, 1.25, 0.07), (1.0, 0.20, 0.9, 0.03)];
-    let n = LAYERS.len();
-    let crests: Vec<Vec<f64>> = LAYERS
-        .iter()
-        .enumerate()
-        .map(|(k, &(base, amp, freq, _))| {
-            let kf = k as f64;
-            (0..cols)
-                .map(|i| {
-                    let u = (i as f64 + 0.5) / cols as f64;
-                    let x = u * a;
-                    let ridge = noise.ridged(x * freq + kf * 7.31, kf * 3.7, 6, 2.0, 0.5);
-                    let swell = 0.5 + 0.5 * noise.fbm(x * freq * 0.35 + 31.0, kf * 1.9, 3, 2.0, 0.5);
-                    let mut c = base - amp * (0.72 * ridge + 0.38 * swell);
-                    // A valley in the middle, under what is written; the
-                    // ranges rise on either side.
-                    c += (0.07 + 0.02 * kf) * (-((u - 0.47) / 0.33).powi(2)).exp();
-                    c -= 0.05 * (-((u - 0.0) / 0.1).powi(2)).exp();
-                    // The massif: a tall peak to the right, a lesser one to
-                    // the left, far off.
-                    if k == 2 {
-                        c -= 0.30 * (-((u - 0.88) / 0.07).powi(2)).exp() * (0.8 + 0.2 * ridge);
-                    }
-                    if k == 1 {
-                        c -= 0.07 * (-((u - 0.07) / 0.05).powi(2)).exp();
-                    }
-                    c
-                })
-                .collect()
-        })
-        .collect();
-    // The glow of the sun gone down, right of the middle, low.
-    let (gx, gy, gr) = (0.80, 0.76, 0.40);
-    let glow = |u: f64, v: f64| (-(((u - gx) * a).powi(2) + ((v - gy) * 1.5).powi(2)) / (gr * gr)).exp() as f32;
-    // The milky way, across the sky from the left, rising.
-    let band_dir = {
-        let (dx, dy) = (0.96 * a, -0.30);
-        let len = (dx * dx + dy * dy).sqrt();
-        (dx / len, dy / len)
-    };
-    let sky_ink = if dark { Color32::from_rgb(132, 142, 176) } else { Color32::from_rgb(110, 116, 132) };
-    let rock_ink = if dark { Color32::from_rgb(170, 170, 180) } else { Color32::from_rgb(58, 60, 68) };
-    let star_ink = Color32::from_rgb(236, 238, 246);
-    let rows_out: Vec<(Vec<Color32>, Vec<usize>)> = (0..rows)
-        .into_par_iter()
-        .map(|j| {
-            let v = (j as f64 + 0.5) / rows as f64;
-            let mut row = vec![bg; cols];
-            let mut stars = Vec::new();
-            for (i, px) in row.iter_mut().enumerate() {
-                let u = (i as f64 + 0.5) / cols as f64;
-                let x = u * a;
-                let g = glow(u, v);
-                let hash = {
-                    let h = (i as u32).wrapping_mul(0x9e37_79b1) ^ (j as u32).wrapping_mul(0x85eb_ca77);
-                    h ^ (h >> 15)
-                };
-                let (light, ink, star) = match (0..n).rev().find(|&k| crests[k][i] <= v) {
-                    None => {
-                        // The sky: darker overhead, the glow low.
-                        // Calm where the settings are written.
-                        let calm = (-(((u - 0.5) / 0.3).powi(2) + ((v - 0.42) / 0.3).powi(2))).exp() as f32;
-                        let mut l = 0.012 + 0.08 * smooth(0.15, 0.74, v as f32) + 0.36 * g;
-                        let (px0, py0) = (x - 0.02 * a, v - 0.36);
-                        let along = px0 * band_dir.0 + py0 * band_dir.1;
-                        let across = (px0 - along * band_dir.0).hypot(py0 - along * band_dir.1);
-                        let band = (-(across / 0.11).powi(2)).exp() as f32;
-                        let clouds = 0.55 + 0.45 * noise.fbm(x * 3.1 + 5.0, v * 3.1, 4, 2.1, 0.55) as f32;
-                        let dust = (noise.ridged(x * 5.2 + 9.0, v * 5.2, 3, 2.0, 0.5) as f32 - 0.58).max(0.0) * 1.6;
-                        l += band * (0.12 * clouds - 0.07 * dust) * (1.0 - g) * (1.0 - 0.75 * calm);
-                        // Stars, thicker in the milky way, none in the glow.
-                        let fade = (1.0 - smooth(0.45, 0.72, v as f32)) * (1.0 - g * 1.4).max(0.0) * (1.0 - 0.8 * calm);
-                        let density = (0.003 + 0.02 * band) * fade;
-                        let star = ((hash & 0xffff) as f32) < density * 65536.0;
-                        let ink = theme::mix(sky_ink, accent, (g * 1.3).min(1.0));
-                        if !dark {
-                            // By day: a clear sky, the glow low over the ranges.
-                            let l = 0.42 * g + 0.06 * smooth(0.58, 0.8, v as f32);
-                            (l, ink, None)
-                        } else {
-                            (l, ink, star.then(|| 0.55 + 0.45 * ((hash >> 16) & 0xff) as f32 / 255.0))
-                        }
-                    }
-                    Some(k) => {
-                        let (base, amp, _, haze) = LAYERS[k];
-                        let near = k as f32 / (n - 1) as f32;
-                        let c = crests[k][i];
-                        let depth = (v - c) as f32;
-                        // Under the crest, the flank faces the glow where the
-                        // crest falls toward it; lower down, the rock of the
-                        // face, ribs and gullies lit from the same side.
-                        let (l0, l1) = (crests[k][i.saturating_sub(1)], crests[k][(i + 1).min(cols - 1)]);
-                        let fall = ((l1 - l0) * cols as f64 / 2.0) as f32;
-                        let crest_facing = (fall * 2.6).clamp(-1.0, 1.0);
-                        let face = |x: f64| noise.ridged(x * 26.0 + k as f64 * 17.0, v * 15.0 + k as f64 * 5.0, 4, 2.0, 0.5);
-                        let e = a / cols as f64;
-                        let rib = ((face(x + e) - face(x - e)) / (2.0 * e) * 0.012).clamp(-1.0, 1.0) as f32;
-                        let blend = (depth / 0.03).clamp(0.0, 1.0);
-                        let facing = crest_facing * (1.0 - blend) + rib * blend;
-                        let flank = (0.5 + 0.5 * facing) * (-depth / (0.06 + 0.08 * near)).exp();
-                        // Snow on the highest: above a line, ragged.
-                        let height = ((base - c) / amp) as f32;
-                        let ragged = 0.08 * noise.fbm(x * 40.0, v * 40.0, 2, 2.0, 0.5) as f32;
-                        let snow = if height > 0.55 && depth < (height - 0.55) * 0.09 + ragged.abs() * 0.3 { 0.28 * (0.6 + 0.4 * facing.max(0.0)) } else { 0.0 };
-                        let rim = if depth < 1.6 / rows as f32 { 0.32 * (0.35 + 0.65 * glow(u, c)) } else { 0.0 };
-                        let tone = haze * (0.5 + 0.4 * glow(u, c) + 0.45 * g);
-                        let l = tone + 0.3 * (1.0 - 0.5 * near) * flank + snow + rim;
-                        let ink = theme::mix(rock_ink, accent, (0.25 + 0.75 * glow(u, c)).min(1.0) * (0.55 + 0.45 * (1.0 - near)));
-                        (l, ink, None)
-                    }
-                };
-                if let Some(bright) = star {
-                    *px = theme::scale(star_ink, bright);
-                    stars.push(i);
-                    continue;
-                }
-                let lit = theme::scale(ink, light.clamp(0.0, 1.0));
-                *px = Color32::from_rgb(bg.r().max(lit.r()), bg.g().max(lit.g()), bg.b().max(lit.b()));
-            }
-            (row, stars)
-        })
-        .collect();
-    let mut img = image::RgbImage::from_pixel(cols as u32, rows as u32, image::Rgb([bg.r(), bg.g(), bg.b()]));
-    for (j, (row, stars)) in rows_out.into_iter().enumerate() {
-        for (i, px) in row.into_iter().enumerate() {
-            img.put_pixel(i as u32, j as u32, image::Rgb([px.r(), px.g(), px.b()]));
-        }
-        // A star is two pixels wide: still one once the picture is made
-        // smaller for the cells.
-        for i in stars {
-            let px = img.get_pixel(i as u32, j as u32).0;
-            for (dx, dy) in [(1, 0), (0, 1), (1, 1)] {
-                if i + dx < cols && j + dy < rows {
-                    img.put_pixel((i + dx) as u32, (j + dy) as u32, image::Rgb(px));
-                }
-            }
-        }
-    }
-    img
-}
-
-fn smooth(a: f32, b: f32, x: f32) -> f32 {
-    let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
 /// A seed from the clock.
 pub fn random_seed() -> i64 {
     let nanos = std::time::SystemTime::now()
@@ -2015,7 +1703,7 @@ mod backdrop_tests {
         loop {
             h.step();
             let home = &h.state().1;
-            let done = home.backdrop.as_ref().is_some_and(|b| !b.frames.is_empty()) && home.new_map.preview.is_some() && home.ages.len() == 1;
+            let done = home.waves.is_some() && home.new_map.preview.is_some() && home.ages.len() == 1;
             if done {
                 assert_eq!(home.ages.values().next(), Some(&None), "the map is missing");
                 break;
@@ -2049,18 +1737,6 @@ mod backdrop_tests {
         assert!(start.elapsed() < std::time::Duration::from_secs(3), "the global pool waited {:?}", start.elapsed());
         free.store(true, std::sync::atomic::Ordering::SeqCst);
         load.join().unwrap();
-    }
-
-    /// The massif at dusk, drawn into `assets/backdrops` when
-    /// MASSIF_BACKDROP_DIR says where.
-    #[test]
-    fn draw_the_massif_at_dusk() {
-        let Some(dir) = std::env::var_os("MASSIF_BACKDROP_DIR").map(std::path::PathBuf::from) else {
-            return;
-        };
-        let img = nocturne(1600, 900, Color32::from_rgb(249, 115, 22), Color32::from_rgb(8, 8, 9));
-        let mut out = std::fs::File::create(dir.join("massif-dusk.jpg")).unwrap();
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90).encode_image(&img).unwrap();
     }
 
     /// The size of a new map typed a key at a time: what shows is what was
@@ -2121,22 +1797,55 @@ mod backdrop_tests {
         }
     }
 
-    /// Every picture of the folder decodes, and dithers into frames of a
-    /// palette of its own.
+    /// The waves move, keep to their few colours, and leave the words of
+    /// every theme legible: text past 4.5 to 1, muted text past 3 to 1, on
+    /// any cell where the words are, at any time.
     #[test]
-    fn the_backdrops_dither() {
-        assert!(pictures::BACKDROPS.len() >= 4, "{} pictures", pictures::BACKDROPS.len());
-        for (name, bytes, dawn) in pictures::BACKDROPS {
-            // Every scene has its dawn, for the light theme.
-            assert!(dawn.is_some(), "{name}: no dawn");
-            for (bytes, light, bg) in [(*bytes, Light::Night, Color32::from_rgb(8, 8, 9)), (dawn.unwrap_or(bytes), Light::Dawn, Color32::from_rgb(250, 250, 250))] {
-                let img = image::load_from_memory(bytes).unwrap_or_else(|e| panic!("{name}: {e}")).to_rgb8();
-                let frames = dither_frames(&img, 96, 64, light, bg, [20, 10, 70, 50], false);
-                assert_eq!(frames.len(), 4);
-                let colours: std::collections::HashSet<[u8; 4]> = frames[0].pixels.iter().map(|c| c.to_array()).collect();
-                assert!((2..=16).contains(&colours.len()), "{name}: {} colours", colours.len());
-                assert_ne!(frames[0].pixels, frames[1].pixels, "{name}: the frames differ");
+    fn the_waves_move_and_stay_calm_under_the_words() {
+        let (cols, rows) = (420, 300);
+        let calm = [120, 36, 300, 290];
+        for (dark, high) in [(true, false), (false, false), (true, true), (false, true)] {
+            let pal = Palette::themed(dark, high);
+            let look = WaveLook::of(&pal);
+            let frames: Vec<egui::ColorImage> = [0.0, 2.5, 9.0, 600.0].iter().map(|&t| wave_frame(&look, cols, rows, calm, t)).collect();
+            assert!(frames.windows(2).all(|w| w[0].pixels != w[1].pixels), "dark {dark}, high {high}: the waves move");
+            let used: std::collections::HashSet<Color32> = frames.iter().flat_map(|f| f.pixels.iter().copied()).collect();
+            assert!(used.iter().all(|c| look.ramp.contains(c)), "only the ramp's colours");
+            assert!(used.len() >= look.ramp.len() - 1, "dark {dark}, high {high}: {} of {} colours used", used.len(), look.ramp.len());
+            let (mut text, mut weak) = (f32::MAX, f32::MAX);
+            for f in &frames {
+                for y in calm[1]..calm[3] {
+                    for x in calm[0]..calm[2] {
+                        let c = f.pixels[y as usize * cols + x as usize];
+                        text = text.min(theme::contrast(pal.text, c));
+                        weak = weak.min(theme::contrast(art_weak(&pal), c));
+                    }
+                }
             }
+            eprintln!("dark {dark}, high {high}: text {text:.1}:1, muted {weak:.1}:1 at worst under the words");
+            assert!(text >= if high { 7.0 } else { 4.5 } && weak >= 3.0, "dark {dark}, high {high}: text {text:.1}, muted {weak:.1}");
         }
+    }
+
+    /// What a frame of the waves costs (MASSIF_PERF): over the home screen
+    /// of a window of 1600 × 1000 points on a Retina screen.
+    #[test]
+    fn a_frame_of_waves_is_cheap() {
+        if std::env::var_os("MASSIF_PERF").is_none() {
+            return;
+        }
+        let look = WaveLook::of(&Palette::themed(true, false));
+        let (cols, rows) = (680, 500);
+        let mut best = f64::MAX;
+        let mut all = 0.0;
+        for k in 0..60 {
+            let start = std::time::Instant::now();
+            let image = wave_frame(&look, cols, rows, [170, 60, 510, 490], k as f64 / WAVE_FPS);
+            let took = start.elapsed().as_secs_f64();
+            std::hint::black_box(image);
+            best = best.min(took);
+            all += took;
+        }
+        eprintln!("a frame of waves, {cols} × {rows} cells: best {:.3} ms, mean {:.3} ms; {} bytes sent a frame", best * 1e3, all / 60.0 * 1e3, cols * rows * 4);
     }
 }

@@ -70,12 +70,10 @@ struct Settings {
     loader: crate::loader::Pattern,
     /// The tools' icons: Line (Lucide's style) or Classic.
     tool_icons: crate::icons::IconStyle,
-    /// The home screen's picture moves (its dither, about once a second).
+    /// The waves behind the home screen move.
     animate_backdrop: bool,
     /// The crosshair of the player's view.
     reticle: crate::reticle::Reticle,
-    /// The home screen's pictures shown, by name: those not yet come first.
-    backdrops_seen: Vec<String>,
     /// The Developer panel is offered: frames, memory, the processor, live.
     developer: bool,
     /// Developer mode: how many frames a second the window may draw, and
@@ -168,7 +166,6 @@ impl Default for Settings {
             tool_icons: crate::icons::IconStyle::Line,
             animate_backdrop: true,
             reticle: crate::reticle::Reticle::default(),
-            backdrops_seen: Vec::new(),
             developer: false,
             frame_limit: crate::devtools::FrameLimit::Vsync,
             draw_always: false,
@@ -723,9 +720,7 @@ impl MassifApp {
             if let Some(cat) = &self.blocks.catalogue {
                 massif_assets::apply_colors(&mut registry, cat);
             }
-            let mut home = home::Home::new(registry);
-            home.pick_backdrop(&mut self.settings.backdrops_seen);
-            self.home = Some(home);
+            self.home = Some(home::Home::new(registry));
         }
         let back_to = self.has_map.then(|| self.doc.world.meta.name.clone());
         if let Some(home) = &mut self.home {
@@ -779,11 +774,6 @@ impl MassifApp {
             HomeAction::FromHeightmap(map, how) => self.request(ctx, Pending::FromHeightmap(map, how)),
             HomeAction::PickHeightmap => self.pick_heightmap(ctx),
             HomeAction::RealPlace => self.open_real(true),
-            HomeAction::AnotherPicture => {
-                if let Some(home) = &mut self.home {
-                    home.pick_backdrop(&mut self.settings.backdrops_seen);
-                }
-            }
             HomeAction::Open => {
                 if let Some(path) = rfd::FileDialog::new()
                     .set_title(tr!("Open a map"))
@@ -1247,10 +1237,10 @@ impl MassifApp {
                     crate::sounds::play(Cue::Select);
                 }
             });
-            crate::widgets::row(ui, tr!("Animated home screen"), |ui| {
+            crate::widgets::row(ui, tr!("Animate the background"), |ui| {
                 let still = theme::reduce_motion(ui.ctx());
                 let mut on = self.settings.animate_backdrop && !still;
-                let tip = if still { tr!("Still: Reduce motion is on (Accessibility)") } else { tr!("The dither of its picture moves on about once a second") };
+                let tip = if still { tr!("Still: Reduce motion is on (Accessibility)") } else { tr!("The waves behind the home screen drift slowly") };
                 if ui.add_enabled_ui(!still, |ui| crate::widgets::switch(ui, &mut on)).inner.on_hover_text(tip).changed() {
                     self.settings.animate_backdrop = on;
                 }
@@ -1918,7 +1908,7 @@ impl MassifApp {
             ("Interface scale".to_owned(), format!("{}", s.ui_scale)),
             ("High contrast".to_owned(), format!("{} (now {})", follow(s.high_contrast), if s.high_contrast.on(self.access.system.contrast) { "on" } else { "off" })),
             ("Reduce motion".to_owned(), format!("{} (now {})", follow(s.reduce_motion), if s.reduce_motion.on(self.access.system.reduce_motion) { "on" } else { "off" })),
-            ("Moving home picture".to_owned(), if s.animate_backdrop { "on" } else { "off" }.to_owned()),
+            ("Animated home background".to_owned(), if s.animate_backdrop { "on" } else { "off" }.to_owned()),
             ("Memory for decoded tiles".to_owned(), if s.memory_mb == 0 { "as much as it takes".to_owned() } else { format!("{} MB", s.memory_mb) }),
             ("Autosave".to_owned(), if s.autosave { format!("every {} min", s.autosave_minutes) } else { "off".to_owned() }),
             ("Developer mode".to_owned(), if s.developer { "on" } else { "off" }.to_owned()),
@@ -10877,72 +10867,6 @@ mod tests {
         h.run_steps(4);
     }
 
-    /// The pictures behind the home screen (assets/backdrops), rendered from
-    /// templates of the terrain graph at dusk. Writes them, as JPEG, to
-    /// MASSIF_BACKDROP_DIR; MASSIF_BACKDROP_ONLY (a name) renders one,
-    /// MASSIF_BACKDROP_CAM (yaw,pitch,distance,height) and
-    /// MASSIF_BACKDROP_SUN (direction,height) try other framings of it.
-    /// Needs a GPU.
-    #[test]
-    fn render_the_home_backdrops() {
-        use massif_core::graph::Template;
-        let Some(dir) = std::env::var_os("MASSIF_BACKDROP_DIR").map(PathBuf::from) else {
-            return;
-        };
-        let numbers = |name: &str| -> Option<Vec<f32>> { std::env::var(name).ok().map(|v| v.split(',').filter_map(|n| n.trim().parse().ok()).collect()) };
-        let only = std::env::var("MASSIF_BACKDROP_ONLY").ok();
-        // Name, template, camera (yaw, pitch, distance, height looked at),
-        // sun (direction, height), haze.
-        // Name, template, camera (yaw, pitch, distance, height looked at),
-        // sun (direction, height), haze, exaggeration.
-        type Preset = (&'static str, Template, [f32; 4], [f32; 2], f32, f32);
-        let presets: [Preset; 4] = [
-            ("floating-mountains", Template::FloatingMountains, [0.4, 0.18, 0.75, 120.0], [240.0, 8.0], 0.4, 1.0),
-            ("archipelago-sunset", Template::Archipelago, [3.0, 0.16, 0.7, 20.0], [260.0, 5.0], 0.45, 1.0),
-            ("karst-twilight", Template::KarstTowers, [1.7, 0.07, 0.45, 90.0], [200.0, 4.0], 0.5, 1.0),
-            ("canyon-sunset", Template::DesertCanyon, [3.6, 0.16, 0.5, 40.0], [235.0, 7.0], 0.3, 1.3),
-        ];
-        let exaggeration = std::env::var("MASSIF_BACKDROP_EXAGGERATION").ok().and_then(|v| v.parse::<f32>().ok());
-        for (name, template, cam, sun, haze, relief) in presets {
-            if only.as_deref().is_some_and(|o| o != name) {
-                continue;
-            }
-            let cam = numbers("MASSIF_BACKDROP_CAM").filter(|v| v.len() == 4).unwrap_or(cam.to_vec());
-            let sun = numbers("MASSIF_BACKDROP_SUN").filter(|v| v.len() == 2).unwrap_or(sun.to_vec());
-            let mut h = harness(ThemeChoice::Dark);
-            {
-                let app = h.state_mut();
-                app.layout.activate(8); // Render, on the terrain side
-                let sea = app.doc.world.meta.sea_level as f32;
-                let g = template.graph(&app.doc.world.registry, sea, 4096.0);
-                app.doc.world.meta.graph = Some(g);
-                app.graph.graph_replaced();
-            }
-            wait_for_graph(&mut h);
-            {
-                let v = &mut h.state_mut().graph.view;
-                v.render.clouds = false;
-                v.render.sea = true;
-                v.render.haze = haze;
-                v.render.exaggeration = exaggeration.unwrap_or(relief);
-                v.render.sun_azimuth = sun[0];
-                v.render.sun_elevation = sun[1];
-                v.camera.yaw = cam[0];
-                v.camera.pitch = cam[1];
-                v.camera.distance = cam[2];
-                v.camera.target[1] = cam[3];
-            }
-            h.run_steps(8);
-            let (w, hgt, rgba) = h.state_mut().graph.view.render_image([1920, 1080]).expect("rendered");
-            let rgb = image::RgbImage::from_fn(w, hgt, |x, y| {
-                let i = ((y * w + x) * 4) as usize;
-                image::Rgb([rgba[i], rgba[i + 1], rgba[i + 2]])
-            });
-            let mut out = std::fs::File::create(dir.join(format!("{name}.jpg"))).unwrap();
-            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 86).encode_image(&rgb).unwrap();
-        }
-    }
-
     /// The starter graph's viewport over a small terrain and over a huge
     /// one (a sample every hundred blocks), for the eye (MASSIF_SNAPSHOT_DIR):
     /// the land keeps its colours whatever the size.
@@ -14517,6 +14441,52 @@ mod tests {
         }
     }
 
+    /// The waves behind the home screen (MASSIF_SNAPSHOT_DIR): in the dark
+    /// and light themes, in high contrast or not, three frames of each a few
+    /// seconds apart, and still with Reduce motion on (no frame asked for).
+    #[test]
+    fn the_home_waves() {
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let ppp = std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0);
+        let mut h = harness(ThemeChoice::Dark);
+        {
+            let app = h.state_mut();
+            app.has_map = false;
+            app.settings.recent.clear();
+            app.open_home(Page::NewMap);
+        }
+        h.run_steps(5);
+        for (theme, name) in [(ThemeChoice::Dark, "dark"), (ThemeChoice::Light, "light")] {
+            for high in [false, true] {
+                h.state_mut().settings.theme = theme;
+                h.state_mut().settings.high_contrast = if high { Follow::On } else { Follow::Off };
+                for (k, t) in [0.0, 4.0, 8.0].into_iter().enumerate() {
+                    h.state_mut().home.as_mut().unwrap().wave_time = Some(t);
+                    h.run_steps(3);
+                    if let Some(dir) = &dir {
+                        let high = if high { "-high" } else { "" };
+                        h.render().unwrap().save(dir.join(format!("home-waves-{name}{high}-{ppp}x-t{k}.png"))).unwrap();
+                    }
+                }
+            }
+        }
+        // Reduce motion: the first frame, still, and no frame asked for.
+        h.state_mut().settings.theme = ThemeChoice::Dark;
+        h.state_mut().settings.high_contrast = Follow::Off;
+        h.state_mut().settings.reduce_motion = Follow::On;
+        h.state_mut().home.as_mut().unwrap().wave_time = None;
+        h.run_steps(5);
+        assert!(theme::reduce_motion(&h.ctx));
+        let still = h.render().unwrap();
+        for _ in 0..3 {
+            h.step();
+        }
+        assert_eq!(h.render().unwrap().as_raw(), still.as_raw(), "still with Reduce motion on");
+        if let Some(dir) = &dir {
+            still.save(dir.join(format!("home-waves-dark-still-{ppp}x.png"))).unwrap();
+        }
+    }
+
     /// Massif opens on the home screen: no map, the ways in, the settings of
     /// a new map. Making one shows it; the home screen comes back with ⌘N,
     /// with the way back to the map; a template's map goes to the Terrain
@@ -14537,22 +14507,6 @@ mod tests {
         assert!(h.query_by_label_contains("Back to").is_none(), "no map to go back to");
         if let Some(dir) = &dir {
             h.render().unwrap().save(dir.join("home-dark.png")).unwrap();
-            // Every picture of the backdrop, dithered.
-            for k in 0..home::Home::backdrops() {
-                let name = h.state_mut().home.as_mut().unwrap().choose_backdrop(k);
-                h.run_steps(3);
-                h.render().unwrap().save(dir.join(format!("home-backdrop-{name}.png"))).unwrap();
-            }
-            // And in the light theme: each scene at dawn.
-            h.state_mut().settings.theme = ThemeChoice::Light;
-            h.run_steps(3);
-            for k in 0..home::Home::backdrops() {
-                let name = h.state_mut().home.as_mut().unwrap().choose_backdrop(k);
-                h.run_steps(3);
-                h.render().unwrap().save(dir.join(format!("home-backdrop-light-{name}.png"))).unwrap();
-            }
-            h.state_mut().settings.theme = ThemeChoice::Dark;
-            h.run_steps(3);
         }
         // The highest Minecraft allows, and back.
         h.get_by_label("2032").click();
