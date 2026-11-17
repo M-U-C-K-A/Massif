@@ -2592,5 +2592,46 @@
  "{n} layers": {
   "one": "{n} capa",
   "other": "{n} capas"
- }
+ },
+ "A WorldPainter layer file that could not be read whole: {why}": "Un archivo de capa de WorldPainter que no se pudo leer entero: {why}",
+ "Combined layer “{name}”: {parts}": "Capa combinada «{name}»: {parts}",
+ "Custom layers exported from WorldPainter (.layer): plants, objects, ground covers, pockets, combined layers": "Capas personalizadas exportadas de WorldPainter (.layer): plantas, objetos, cubiertas del suelo, bolsas, capas combinadas",
+ "Experimental": "Experimental",
+ "Experimental: look the layers over in the Layers panel before you paint a whole map with them.": "Experimental: revise las capas en el panel Capas antes de pintar todo un mapa con ellas.",
+ "Ground cover “{name}”": "Cubierta del suelo «{name}»",
+ "Import WorldPainter layers": "Importar capas de WorldPainter",
+ "Import WorldPainter layer…": "Importar capa de WorldPainter…",
+ "Imported as": "Importada como",
+ "It could not be read: {why}": "No se pudo leer: {why}",
+ "Not a WorldPainter layer file.": "No es un archivo de capa de WorldPainter.",
+ "Not carried over": "No trasladado",
+ "Object layer “{name}”, {n} objects": {
+  "one": "Capa de objetos «{name}», {n} objeto",
+  "other": "Capa de objetos «{name}», {n} objetos"
+ },
+ "Terrain “{name}”": "Terreno «{name}»",
+ "The custom terrain of “{name}” could not be read.": "No se pudo leer el terreno personalizado de «{name}».",
+ "Underground pockets “{name}”": "Bolsas subterráneas «{name}»",
+ "WorldPainter layers": "Capas de WorldPainter",
+ "annotation layer": "capa de anotaciones",
+ "combined layer": "capa combinada",
+ "custom object layer": "capa de objetos personalizada",
+ "ground cover layer": "capa de cubierta del suelo",
+ "plant layer": "capa de plantas",
+ "tunnel layer": "capa de túnel",
+ "underground pockets layer": "capa de bolsas subterráneas",
+ "{name} · {kind}": "{name} · {kind}",
+ "“{layer}” is a layer of its own: “{combined}” paints one layer of each slot, and another came first.": "«{layer}» es una capa aparte: «{combined}» pinta una capa por lugar, y otra iba antes.",
+ "“{name}” is a floating layer: Massif raises land with Solid levels (Levels panel, Stamp slab).": "«{name}» es una capa flotante: Massif eleva el terreno con niveles Solid (panel Niveles, Stamp slab).",
+ "“{name}” is a tunnel layer: Massif carves with Carve levels (Levels panel, Stamp slab).": "«{name}» es una capa de túnel: Massif excava con niveles Carve (panel Niveles, Stamp slab).",
+ "“{name}” is an annotation layer: Massif's annotations are fifteen colours, painted with the Annotations tool.": "«{name}» es una capa de anotaciones: las anotaciones de Massif son quince colores, pintados con la herramienta Anotaciones.",
+ "“{name}”: farmland under its crops.": "«{name}»: la tierra de cultivo bajo sus cultivos.",
+ "“{name}”: its edge shape.": "«{name}»: la forma de sus bordes.",
+ "“{name}”: its noise.": "«{name}»: su ruido.",
+ "“{name}”: the collision, underground, leaf decay, foundation and height settings of its objects.": "«{name}»: los ajustes de colisión, subterráneo, descomposición de hojas, cimientos y altura de sus objetos.",
+ "“{name}”: {n} objects of only air or entities, which Massif does not place.": {
+  "one": "«{name}»: {n} objeto solo de aire o entidades, que Massif no coloca.",
+  "other": "«{name}»: {n} objetos solo de aire o entidades, que Massif no coloca."
+ },
+ "“{what}”: Massif has no layer like it.": "«{what}»: Massif no tiene una capa así."
 }

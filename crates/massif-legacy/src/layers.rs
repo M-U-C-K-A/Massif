@@ -353,10 +353,15 @@ pub fn convert(arena: &Arena, key: Value, class: &str, reg: &mut Registry) -> Op
         "SwampLand" => forest("Swamp", &[(TreeKind::Willow, 1)], reg),
         "Bo2Layer" => {
             // The trees of the tree pack (which WorldPainter Modernised
-            // describes as such, and older versions only name): Massif has
-            // the same, made the same way.
+            // describes as such, and older versions only name, its trees
+            // made by WorldPainter): Massif has the same, made the same
+            // way. A layer of one's own objects may have the same name.
             let name = string("name")?;
-            match TreeKind::ALL.into_iter().find(|k| k.name() == name || string("description").is_some_and(|d| d.ends_with(TREE_PACK) && d.starts_with(k.name()))) {
+            let made_by_worldpainter = || {
+                let items = arena.field(key, "objectProvider").and_then(|p| arena.field(p, "objects")).and_then(|o| arena.list_items(o)).unwrap_or_default();
+                items.iter().all(|&i| arena.class_name(i).is_some_and(|c| c.ends_with(".GenericObject")))
+            };
+            match TreeKind::ALL.into_iter().find(|k| (k.name() == name && made_by_worldpainter()) || string("description").is_some_and(|d| d.ends_with(TREE_PACK) && d.starts_with(k.name()))) {
                 Some(kind) => {
                     let n = kind.install(reg);
                     Some(objects(n, Curve::Linear, reg))

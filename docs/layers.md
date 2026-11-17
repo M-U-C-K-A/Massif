@@ -112,9 +112,37 @@ cover, Import objects…, New pockets.
   their settings and slot, to share; what is painted stays in the map.
 - A WorldPainter `.world` brings its layers in as Massif's: see the table in
   the guide (Layers ▸ WorldPainter's layers in Massif).
+- A WorldPainter `.layer` (a custom layer exported from its menu) comes in
+  as Massif's layers too, experimentally: see below.
 - The export writes the ground, then the biome, the pockets in the rock
   under the ground's strata, the cover, the trees and then the sub-canopy,
   each block holding one layer of each slot.
+
+## WorldPainter layer files (experimental)
+
+**Import WorldPainter layer…**, at the top of the Layers panel, reads
+`.layer` files, several at once; dropping them on the window does the same.
+Each becomes layers of the map, by the same mapping as a `.world`'s, and the
+first one made is picked to paint with. A report says what each became and
+what was not carried over.
+
+| WorldPainter `.layer` | In Massif |
+|---|---|
+| Plant layer | A ground cover of the same plants, in the same shares, on valid blocks only if it asked |
+| Custom object layer (Bo2, schematics, structures) | An object layer of its objects, read from the file, with their offset, frequency, random turn, density and grid; the trees of WorldPainter's tree pack, the pack's own |
+| Ground cover layer | Laid over the land: a ground cover of its blocks, as high as it is thick. Taking the place of the top of the land: a terrain of its blocks, that deep |
+| Underground pockets layer | Underground pockets of the same blocks, as frequent and as large, between the same heights |
+| Combined layer | A combined layer: its terrain (a custom one from the material written with it), its biome, and the first layer of each slot it holds at its factor; the others it holds are layers of their own |
+| Tunnel and floating layers | Not carried over: Massif carves and raises land with Carve and Solid levels |
+| Custom annotation layers | Not carried over: Massif's annotations are fifteen colours |
+
+Not carried over either, and said in the report: the collision,
+underground, leaf decay, foundation and height settings of a custom object
+layer's objects, and their entities (an object of air or entities only is
+empty); a ground cover's edge shape and noise; farmland under crops. A
+layer of the map is never changed: one with the name of a layer of the file
+but other settings stays as it is, the file's becoming a layer of its own
+("Meadow 2"); a plant layer imported twice is one ground cover.
 
 ## For developers
 
@@ -144,6 +172,13 @@ cover, Import objects…, New pockets.
   only in air, water and plants.
 - Packs carry `CoverDef` (with `frost` and `lava`), `TerrainDef` and
   `ObjectLayerDef` (with `understory`).
+- `massif_legacy::layer_file::read_layer_file` reads a `.layer` (gzip, then
+  a Java stream of one `CustomLayer`) with the `.world` import's
+  `Converter` into a copy of the map's registry, restores any layer of the
+  map the conversion replaced by name, and returns what was made
+  (`Made`) and left out (`LeftOut`). Samples: `crates/massif-legacy/tests/data/layers`,
+  written by `tools/wp-layers/MakeLayers.java` with WorldPainter's classes;
+  `MASSIF_WP_LAYERS=<folder>` reads more (third-party objects).
 - A combined layer (`combined::CombinedDef`, in `Registry::combined`)
   holds `Component`s, one of each `Part`, with the layer's number in its
   slot and its share. `CombinedDef::to_paint` reads them against the

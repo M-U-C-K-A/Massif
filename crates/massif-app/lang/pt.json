@@ -2592,5 +2592,46 @@
  "{n} layers": {
   "one": "{n} camada",
   "other": "{n} camadas"
- }
+ },
+ "A WorldPainter layer file that could not be read whole: {why}": "Um arquivo de camada do WorldPainter que não pôde ser lido por inteiro: {why}",
+ "Combined layer “{name}”: {parts}": "Camada combinada “{name}”: {parts}",
+ "Custom layers exported from WorldPainter (.layer): plants, objects, ground covers, pockets, combined layers": "Camadas personalizadas exportadas do WorldPainter (.layer): plantas, objetos, coberturas do solo, bolsões, camadas combinadas",
+ "Experimental": "Experimental",
+ "Experimental: look the layers over in the Layers panel before you paint a whole map with them.": "Experimental: confira as camadas no painel Camadas antes de pintar um mapa inteiro com elas.",
+ "Ground cover “{name}”": "Cobertura do solo “{name}”",
+ "Import WorldPainter layers": "Importar camadas do WorldPainter",
+ "Import WorldPainter layer…": "Importar camada do WorldPainter…",
+ "Imported as": "Importada como",
+ "It could not be read: {why}": "Não pôde ser lido: {why}",
+ "Not a WorldPainter layer file.": "Não é um arquivo de camada do WorldPainter.",
+ "Not carried over": "Não transferido",
+ "Object layer “{name}”, {n} objects": {
+  "one": "Camada de objetos “{name}”, {n} objeto",
+  "other": "Camada de objetos “{name}”, {n} objetos"
+ },
+ "Terrain “{name}”": "Terreno “{name}”",
+ "The custom terrain of “{name}” could not be read.": "O terreno personalizado de “{name}” não pôde ser lido.",
+ "Underground pockets “{name}”": "Bolsões subterrâneos “{name}”",
+ "WorldPainter layers": "Camadas do WorldPainter",
+ "annotation layer": "camada de anotações",
+ "combined layer": "camada combinada",
+ "custom object layer": "camada de objetos personalizada",
+ "ground cover layer": "camada de cobertura do solo",
+ "plant layer": "camada de plantas",
+ "tunnel layer": "camada de túnel",
+ "underground pockets layer": "camada de bolsões subterrâneos",
+ "{name} · {kind}": "{name} · {kind}",
+ "“{layer}” is a layer of its own: “{combined}” paints one layer of each slot, and another came first.": "“{layer}” é uma camada à parte: “{combined}” pinta uma camada por lugar, e outra veio antes.",
+ "“{name}” is a floating layer: Massif raises land with Solid levels (Levels panel, Stamp slab).": "“{name}” é uma camada flutuante: o Massif eleva o terreno com níveis Solid (painel Níveis, Stamp slab).",
+ "“{name}” is a tunnel layer: Massif carves with Carve levels (Levels panel, Stamp slab).": "“{name}” é uma camada de túnel: o Massif escava com níveis Carve (painel Níveis, Stamp slab).",
+ "“{name}” is an annotation layer: Massif's annotations are fifteen colours, painted with the Annotations tool.": "“{name}” é uma camada de anotações: as anotações do Massif são quinze cores, pintadas com a ferramenta Anotações.",
+ "“{name}”: farmland under its crops.": "“{name}”: a terra arada sob suas plantações.",
+ "“{name}”: its edge shape.": "“{name}”: a forma das suas bordas.",
+ "“{name}”: its noise.": "“{name}”: seu ruído.",
+ "“{name}”: the collision, underground, leaf decay, foundation and height settings of its objects.": "“{name}”: as configurações de colisão, subterrâneo, decomposição das folhas, fundação e altura dos seus objetos.",
+ "“{name}”: {n} objects of only air or entities, which Massif does not place.": {
+  "one": "“{name}”: {n} objeto só de ar ou entidades, que o Massif não coloca.",
+  "other": "“{name}”: {n} objetos só de ar ou entidades, que o Massif não coloca."
+ },
+ "“{what}”: Massif has no layer like it.": "“{what}”: o Massif não tem uma camada assim."
 }

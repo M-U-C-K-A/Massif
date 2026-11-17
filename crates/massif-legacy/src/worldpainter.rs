@@ -605,8 +605,9 @@ pub(crate) fn read_mixed(a: &Arena, v: Value) -> Option<CustomMaterial> {
 pub(crate) fn material_state(a: &Arena, material: Value) -> String {
     let identity = a.field(material, "identity").filter(|i| *i != Value::Null);
     let Some(identity) = identity else {
-        // A pre-1.13 material known only by its numeric id.
-        return "minecraft:stone".into();
+        // A pre-1.13 material known only by its numeric id and data.
+        let int = |n: &str| a.field(material, n).and_then(|v| a.int(v));
+        return int("blockType").and_then(|id| massif_objects::legacy::state(u16::try_from(id).ok()?, int("data").unwrap_or(0).clamp(0, 15) as u8)).unwrap_or_else(|| "minecraft:stone".into());
     };
     let name = a
         .field(identity, "name")

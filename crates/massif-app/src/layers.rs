@@ -38,6 +38,134 @@ pub struct LayersUi {
     /// A layer whose settings were asked for (Settings… in its menu): the
     /// window opens its dialog.
     pub open: Option<(Kind, usize)>,
+    /// WorldPainter layers just imported: the window shows what they became.
+    pub imported: Option<Vec<LayerImport>>,
+}
+
+/// What one WorldPainter `.layer` file became, in words, for its report.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LayerImport {
+    /// The file's name.
+    pub file: String,
+    /// The layer's name and kind in WorldPainter ("Meadow · plant layer"),
+    /// if it was one.
+    pub title: Option<String>,
+    /// The layers it became.
+    pub made: Vec<String>,
+    /// What was not carried over, and why.
+    pub left_out: Vec<String>,
+    /// Why it could not be read.
+    pub error: Option<String>,
+}
+
+/// Import WorldPainter `.layer` files (custom layers exported from
+/// WorldPainter) into the map's layers, and pick the first layer made to
+/// paint with. Experimental: what each became, and what was not carried
+/// over, is in the reports returned.
+pub fn import_wp_layers(doc: &mut Document, tools: &mut ToolState, paths: &[std::path::PathBuf]) -> Vec<LayerImport> {
+    use massif_legacy::layer_file::{LayerFileError, Made, read_layer_file};
+    let mut out = Vec::new();
+    let mut first = None;
+    for path in paths {
+        let file = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
+        let read = std::fs::read(path).map_err(|e| tr!("It could not be read: {why}", why = e.to_string())).and_then(|bytes| {
+            read_layer_file(&bytes, &mut doc.world.registry).map_err(|e| match e {
+                LayerFileError::NotALayer => tr!("Not a WorldPainter layer file.").to_owned(),
+                LayerFileError::Broken(why) => tr!("A WorldPainter layer file that could not be read whole: {why}", why),
+            })
+        });
+        match read {
+            Ok(layer) => {
+                if first.is_none() {
+                    first = layer.made.first().copied();
+                }
+                out.push(describe_import(&doc.world.registry, file, &layer));
+            }
+            Err(error) => out.push(LayerImport { file, title: None, made: Vec::new(), left_out: Vec::new(), error: Some(error) }),
+        }
+    }
+    match first {
+        Some(Made::Cover(n)) => {
+            tools.cover = n;
+            tools.select(Tool::Cover);
+        }
+        Some(Made::Objects(n, _)) => {
+            tools.object_layer = n;
+            tools.select(Tool::Objects);
+        }
+        Some(Made::Pockets(n)) => {
+            tools.pocket_layer = n;
+            tools.select(Tool::Pockets);
+        }
+        Some(Made::Combined(n)) => {
+            tools.combined = n;
+            tools.select(Tool::Combined);
+        }
+        Some(Made::Terrain(t)) => {
+            tools.terrain = t;
+            tools.pattern.on = false;
+            tools.select(Tool::PaintTerrain);
+        }
+        None => {}
+    }
+    if out.iter().any(|i| !i.made.is_empty()) {
+        doc.mark_changed();
+    }
+    out
+}
+
+/// A `.layer` file's import in words.
+fn describe_import(reg: &massif_core::registry::Registry, file: String, layer: &massif_legacy::layer_file::LayerFile) -> LayerImport {
+    use massif_legacy::layer_file::{LeftOut, Made, Setting};
+    let kind = match layer.class.as_str() {
+        "plants.PlantLayer" => tr!("plant layer"),
+        "groundcover.GroundCoverLayer" => tr!("ground cover layer"),
+        "Bo2Layer" => tr!("custom object layer"),
+        "pockets.UndergroundPocketsLayer" => tr!("underground pockets layer"),
+        "CombinedLayer" => tr!("combined layer"),
+        "tunnel.TunnelLayer" => tr!("tunnel layer"),
+        "CustomAnnotationLayer" => tr!("annotation layer"),
+        other => other,
+    };
+    let made = layer
+        .made
+        .iter()
+        .map(|m| match *m {
+            Made::Cover(n) => tr!("Ground cover “{name}”", name = reg.covers[n as usize - 1].name),
+            Made::Objects(n, count) => trn!("Object layer “{name}”, {n} object", "Object layer “{name}”, {n} objects", n = count, name = reg.object_layers[n as usize - 1].name),
+            Made::Pockets(n) => tr!("Underground pockets “{name}”", name = reg.pockets[n as usize - 1].name),
+            Made::Combined(n) => tr!("Combined layer “{name}”: {parts}", name = reg.combined[n as usize - 1].name, parts = crate::panels::describe_combined(reg, &reg.combined[n as usize - 1])),
+            Made::Terrain(t) => tr!("Terrain “{name}”", name = reg.terrains[t as usize].name),
+        })
+        .collect();
+    let left_out = layer
+        .left_out
+        .iter()
+        .map(|l| match l {
+            LeftOut::Tunnel { name, floating: false } => tr!("“{name}” is a tunnel layer: Massif carves with Carve levels (Levels panel, Stamp slab).", name),
+            LeftOut::Tunnel { name, floating: true } => tr!("“{name}” is a floating layer: Massif raises land with Solid levels (Levels panel, Stamp slab).", name),
+            LeftOut::Annotations(name) => tr!("“{name}” is an annotation layer: Massif's annotations are fifteen colours, painted with the Annotations tool.", name),
+            LeftOut::CustomTerrain(name) => tr!("The custom terrain of “{name}” could not be read.", name),
+            LeftOut::Unknown(what) => tr!("“{what}”: Massif has no layer like it.", what),
+            LeftOut::Settings(name, Setting::ObjectRules) => tr!("“{name}”: the collision, underground, leaf decay, foundation and height settings of its objects.", name),
+            LeftOut::Settings(name, Setting::Edges) => tr!("“{name}”: its edge shape.", name),
+            LeftOut::Settings(name, Setting::Noise) => tr!("“{name}”: its noise.", name),
+            LeftOut::Settings(name, Setting::Farmland) => tr!("“{name}”: farmland under its crops.", name),
+            LeftOut::NotInCombined(layer, combined) => tr!("“{layer}” is a layer of its own: “{combined}” paints one layer of each slot, and another came first.", layer, combined),
+            LeftOut::EmptyObjects(name, n) => trn!("“{name}”: {n} object of only air or entities, which Massif does not place.", "“{name}”: {n} objects of only air or entities, which Massif does not place.", n = *n, name),
+        })
+        .collect();
+    LayerImport { file, title: Some(tr!("{name} · {kind}", name = layer.name, kind)), made, left_out, error: None }
+}
+
+/// "Experimental", small, in the accent: a feature still finding its way.
+pub fn experimental(ui: &mut Ui) {
+    let pal = Palette::of(ui);
+    egui::Frame::new()
+        .stroke(Stroke::new(1.0, pal.accent))
+        .corner_radius(theme::PILL)
+        .inner_margin(egui::Margin::symmetric(6, 0))
+        .show(ui, |ui| ui.label(RichText::new(tr!("Experimental")).size(10.5).color(pal.accent)));
 }
 
 /// What a row was asked to do.
@@ -83,6 +211,18 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     if state.packs {
         return crate::packs::packs_panel(ui, tools, doc, blocks.catalogue.as_deref(), &mut state.search, &mut state.library);
     }
+    // Layers exported from WorldPainter; the word Experimental under the
+    // button in a narrow panel.
+    ui.horizontal_wrapped(|ui| {
+        if ui.button(theme::with_icon(Icon::FileInput, tr!("Import WorldPainter layer…"))).on_hover_text(tr!("Custom layers exported from WorldPainter (.layer): plants, objects, ground covers, pockets, combined layers")).clicked() {
+            let files = rfd::FileDialog::new().set_title(tr!("Import WorldPainter layers")).add_filter(tr!("WorldPainter layers"), &["layer"]).pick_files().unwrap_or_default();
+            if !files.is_empty() {
+                state.imported = Some(import_wp_layers(doc, tools, &files));
+            }
+        }
+        experimental(ui);
+    });
+    ui.add_space(6.0);
     let before = (doc.world.registry.covers.clone(), doc.world.registry.object_layers.clone(), doc.world.registry.pockets.clone(), doc.world.registry.combined.clone());
     let mut said = None;
     let mut actions = Vec::new();

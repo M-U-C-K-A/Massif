@@ -2602,5 +2602,46 @@
  "{n} layers": {
   "one": "{n} Ebene",
   "other": "{n} Ebenen"
- }
+ },
+ "A WorldPainter layer file that could not be read whole: {why}": "Eine WorldPainter-Ebenendatei, die nicht vollständig gelesen werden konnte: {why}",
+ "Combined layer “{name}”: {parts}": "Kombinierte Ebene „{name}“: {parts}",
+ "Custom layers exported from WorldPainter (.layer): plants, objects, ground covers, pockets, combined layers": "Aus WorldPainter exportierte eigene Ebenen (.layer): Pflanzen, Objekte, Bodenbewuchs, Taschen, kombinierte Ebenen",
+ "Experimental": "Experimentell",
+ "Experimental: look the layers over in the Layers panel before you paint a whole map with them.": "Experimentell: Prüfen Sie die Ebenen im Ebenen-Panel, bevor Sie eine ganze Karte damit malen.",
+ "Ground cover “{name}”": "Bodenbewuchs „{name}“",
+ "Import WorldPainter layers": "WorldPainter-Ebenen importieren",
+ "Import WorldPainter layer…": "WorldPainter-Ebene importieren…",
+ "Imported as": "Importiert als",
+ "It could not be read: {why}": "Sie konnte nicht gelesen werden: {why}",
+ "Not a WorldPainter layer file.": "Keine WorldPainter-Ebenendatei.",
+ "Not carried over": "Nicht übernommen",
+ "Object layer “{name}”, {n} objects": {
+  "one": "Objektebene „{name}“, {n} Objekt",
+  "other": "Objektebene „{name}“, {n} Objekte"
+ },
+ "Terrain “{name}”": "Gelände „{name}“",
+ "The custom terrain of “{name}” could not be read.": "Das eigene Gelände von „{name}“ konnte nicht gelesen werden.",
+ "Underground pockets “{name}”": "Unterirdische Taschen „{name}“",
+ "WorldPainter layers": "WorldPainter-Ebenen",
+ "annotation layer": "Anmerkungsebene",
+ "combined layer": "kombinierte Ebene",
+ "custom object layer": "eigene Objektebene",
+ "ground cover layer": "Bodenbedeckungsebene",
+ "plant layer": "Pflanzenebene",
+ "tunnel layer": "Tunnelebene",
+ "underground pockets layer": "Ebene unterirdischer Taschen",
+ "{name} · {kind}": "{name} · {kind}",
+ "“{layer}” is a layer of its own: “{combined}” paints one layer of each slot, and another came first.": "„{layer}“ ist eine eigene Ebene: „{combined}“ malt eine Ebene je Platz, und eine andere kam zuerst.",
+ "“{name}” is a floating layer: Massif raises land with Solid levels (Levels panel, Stamp slab).": "„{name}“ ist eine schwebende Ebene: Massif hebt Land mit Solid-Stufen (Panel Stufen, Stamp slab).",
+ "“{name}” is a tunnel layer: Massif carves with Carve levels (Levels panel, Stamp slab).": "„{name}“ ist eine Tunnelebene: Massif gräbt mit Carve-Stufen (Panel Stufen, Stamp slab).",
+ "“{name}” is an annotation layer: Massif's annotations are fifteen colours, painted with the Annotations tool.": "„{name}“ ist eine Anmerkungsebene: Die Anmerkungen von Massif sind fünfzehn Farben, gemalt mit dem Werkzeug Anmerkungen.",
+ "“{name}”: farmland under its crops.": "„{name}“: das Ackerland unter seinen Feldfrüchten.",
+ "“{name}”: its edge shape.": "„{name}“: die Form seiner Ränder.",
+ "“{name}”: its noise.": "„{name}“: sein Rauschen.",
+ "“{name}”: the collision, underground, leaf decay, foundation and height settings of its objects.": "„{name}“: die Einstellungen für Kollision, Untergrund, Laubzerfall, Fundament und Höhe seiner Objekte.",
+ "“{name}”: {n} objects of only air or entities, which Massif does not place.": {
+  "one": "„{name}“: {n} Objekt nur aus Luft oder Entitäten, die Massif nicht setzt.",
+  "other": "„{name}“: {n} Objekte nur aus Luft oder Entitäten, die Massif nicht setzt."
+ },
+ "“{what}”: Massif has no layer like it.": "„{what}“: Massif hat keine solche Ebene."
 }

@@ -365,6 +365,8 @@ enum Dialog {
     Report(Box<crate::report_view::ReportForm>),
     /// The settings of one layer of the Layers panel.
     Layer(crate::layers::Kind, usize),
+    /// What WorldPainter `.layer` files became.
+    LayerImport(Vec<crate::layers::LayerImport>),
 }
 
 struct Status {
@@ -3667,9 +3669,70 @@ impl MassifApp {
         {
             self.dialog = Some(Dialog::Layer(kind, n));
         }
+        if self.dialog.is_none()
+            && let Some(imported) = self.layers_ui.imported.take()
+        {
+            self.dialog = Some(Dialog::LayerImport(imported));
+        }
         let Some(dialog) = self.dialog.take() else { return };
         let mut keep = true;
         match dialog {
+            Dialog::LayerImport(imported) => {
+                let response = modal(ctx, "worldpainter layers").show(ctx, |ui| {
+                    ui.set_width(460.0);
+                    let pal = Palette::of(ui);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(theme::glyph(Icon::FileInput).to_string()).size(17.0).color(pal.accent));
+                        ui.label(RichText::new(tr!("WorldPainter layers")).bold().size(15.0));
+                        crate::layers::experimental(ui);
+                    });
+                    ui.add_space(6.0);
+                    egui::ScrollArea::vertical().max_height((ctx.content_rect().height() - 240.0).clamp(160.0, 460.0)).show(ui, |ui| {
+                        for (k, layer) in imported.iter().enumerate() {
+                            if k > 0 {
+                                ui.add_space(10.0);
+                            }
+                            ui.label(RichText::new(layer.title.as_deref().unwrap_or(&layer.file)).strong());
+                            if layer.title.is_some() {
+                                ui.label(RichText::new(&layer.file).size(11.0).color(pal.weak));
+                            }
+                            if let Some(error) = &layer.error {
+                                ui.label(RichText::new(error).color(pal.danger));
+                            }
+                            if !layer.made.is_empty() {
+                                ui.add_space(2.0);
+                                ui.label(RichText::new(tr!("Imported as")).size(11.5).color(pal.weak));
+                                for made in &layer.made {
+                                    ui.label(format!("•  {made}"));
+                                }
+                            }
+                            if !layer.left_out.is_empty() {
+                                ui.add_space(2.0);
+                                ui.label(RichText::new(tr!("Not carried over")).size(11.5).color(pal.weak));
+                                for left in &layer.left_out {
+                                    ui.label(RichText::new(format!("•  {left}")).color(pal.weak));
+                                }
+                            }
+                        }
+                    });
+                    ui.add_space(8.0);
+                    ui.label(RichText::new(tr!("Experimental: look the layers over in the Layers panel before you paint a whole map with them.")).size(11.5).color(pal.weak));
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                            if ui.add(theme::primary_button(ui, tr!("Done"))).clicked() {
+                                keep = false;
+                            }
+                        });
+                    });
+                });
+                if response.should_close() {
+                    keep = false;
+                }
+                if keep {
+                    self.dialog = Some(Dialog::LayerImport(imported));
+                }
+            }
             Dialog::Layer(kind, n) => {
                 use crate::layers::Kind;
                 let response = modal(ctx, "layer settings").show(ctx, |ui| {
@@ -4783,6 +4846,12 @@ impl MassifApp {
                 let note = panels::import_objects(&mut self.doc, &mut self.tools, &dropped, None, self.blocks.catalogue.as_deref());
                 self.feedback = Some(note);
             }
+            // WorldPainter's custom layers: layers of the map.
+            let layers: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("layer"))).collect());
+            if !layers.is_empty() {
+                let imported = crate::layers::import_wp_layers(&mut self.doc, &mut self.tools, &layers);
+                self.layers_ui.imported = Some(imported);
+            }
         }
         self.packs(&ctx);
         self.handle_close(&ctx);
@@ -5719,6 +5788,57 @@ mod tests {
         assert!(!backup.file.exists(), "a save removes the backup");
         h.state_mut().autosave.close();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// WorldPainter `.layer` files dropped on the window become layers of
+    /// the map, the first one picked to paint with; a report says what each
+    /// became, what was not carried over, and which file was no layer
+    /// (rendered for the eye with MASSIF_SNAPSHOT_DIR).
+    #[test]
+    fn worldpainter_layer_files_dropped_become_layers() {
+        use egui_kittest::kittest::Queryable;
+        let samples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../massif-legacy/tests/data/layers");
+        let scratch = std::env::temp_dir().join(format!("massif-wp-layers-{}", std::process::id()));
+        std::fs::create_dir_all(&scratch).unwrap();
+        let bogus = scratch.join("Notes.layer");
+        std::fs::write(&bogus, b"not a layer").unwrap();
+        let mut files: Vec<PathBuf> = ["Snowy meadow", "Snow cover", "Mine", "River"].iter().map(|n| samples.join(format!("{n}.layer"))).collect();
+        files.push(bogus);
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(3);
+        let (covers, combined) = (h.state().doc.world.registry.covers.len(), h.state().doc.world.registry.combined.len());
+        /// A file dropped on the window, as the system gives it.
+        #[derive(Debug)]
+        struct Dropped(PathBuf);
+        impl egui::DroppedFile for Dropped {
+            fn path(&self) -> &std::path::Path {
+                &self.0
+            }
+            fn bytes(&self) -> Result<Vec<u8>, String> {
+                std::fs::read(&self.0).map_err(|e| e.to_string())
+            }
+        }
+        h.input_mut().dropped_files = files.iter().map(|p| std::sync::Arc::new(Dropped(p.clone())) as egui::DroppedFileHandle).collect();
+        h.run_steps(4);
+        let Some(Dialog::LayerImport(report)) = &h.state().dialog else { panic!("the report opens") };
+        assert_eq!(report.len(), 5);
+        assert_eq!(report[0].title.as_deref(), Some("Snowy meadow · combined layer"));
+        assert!(report[0].made[0].starts_with("Combined layer “Snowy meadow”: Terrain: Grass · Biome: Forest · Cover: Frost 50%"), "{:?}", report[0].made);
+        assert_eq!(report[2].made.len(), 0);
+        assert!(report[2].left_out[0].contains("tunnel layer"), "{:?}", report[2].left_out);
+        assert_eq!(report[4].error.as_deref(), Some("Not a WorldPainter layer file."));
+        let reg = &h.state().doc.world.registry;
+        assert_eq!((reg.combined.len(), reg.combined.last().unwrap().name.as_str()), (combined + 1, "Snowy meadow"));
+        assert!(reg.covers.len() > covers && reg.cover_by_name("Snow cover").is_some() && reg.terrain_by_name("River").is_some());
+        assert_eq!((h.state().tools.tool, h.state().tools.combined as usize), (Tool::Combined, combined + 1), "the first layer made is picked");
+        assert!(h.query_all_by_label("Experimental").count() >= 2, "the report and the Layers panel say it is experimental");
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            h.render().unwrap().save(dir.join("wp-layers-report.png")).unwrap();
+        }
+        h.get_by_label("Done").click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none());
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     /// A newer version out (GitHub replaced by a fixture): a pill in the top

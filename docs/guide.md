@@ -1026,6 +1026,20 @@ riches lying around.
 The import's report says which layers became what, and lists those it
 left out with the number of tiles each covered.
 
+**WorldPainter layer files** (experimental): a custom layer exported from
+WorldPainter (Export in its menu, a `.layer` file) comes in with **Import
+WorldPainter layer…** at the top of the Layers panel, several at once, or
+dropped on the window. Plant layers, custom object layers (Bo2, schematics,
+structures, their objects read from the file), ground covers, underground
+pockets and combined layers (with a custom terrain written with them)
+become Massif's layers, as from a `.world`; tunnel, floating and custom
+annotation layers are not carried over. A report says what each file
+became and what it held that Massif left out — the settings of objects
+Massif does not have (collision, leaf decay, foundations…), a ground
+cover's edges and noise. The map's own layers are never changed: a layer of
+the file with the name of one of the map's comes in as a layer of its own.
+[Layers](layers.md) has the whole table.
+
 ## Packs
 
 **Packs** is the library of ready-made things to paint, so that a new map

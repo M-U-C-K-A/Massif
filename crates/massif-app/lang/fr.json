@@ -2602,5 +2602,46 @@
  "{n} layers": {
   "one": "{n} calque",
   "other": "{n} calques"
- }
+ },
+ "A WorldPainter layer file that could not be read whole: {why}": "Un fichier de calque WorldPainter qui n'a pas pu être lu en entier : {why}",
+ "Combined layer “{name}”: {parts}": "Calque combiné « {name} » : {parts}",
+ "Custom layers exported from WorldPainter (.layer): plants, objects, ground covers, pockets, combined layers": "Calques personnalisés exportés de WorldPainter (.layer) : plantes, objets, couverts du sol, poches, calques combinés",
+ "Experimental": "Expérimental",
+ "Experimental: look the layers over in the Layers panel before you paint a whole map with them.": "Expérimental : vérifiez les calques dans le panneau Calques avant d'en peindre toute une carte.",
+ "Ground cover “{name}”": "Couvert du sol « {name} »",
+ "Import WorldPainter layers": "Importer des calques WorldPainter",
+ "Import WorldPainter layer…": "Importer un calque WorldPainter…",
+ "Imported as": "Importé comme",
+ "It could not be read: {why}": "Il n'a pas pu être lu : {why}",
+ "Not a WorldPainter layer file.": "Ce n'est pas un fichier de calque WorldPainter.",
+ "Not carried over": "Non repris",
+ "Object layer “{name}”, {n} objects": {
+  "one": "Calque d'objets « {name} », {n} objet",
+  "other": "Calque d'objets « {name} », {n} objets"
+ },
+ "Terrain “{name}”": "Terrain « {name} »",
+ "The custom terrain of “{name}” could not be read.": "Le terrain personnalisé de « {name} » n'a pas pu être lu.",
+ "Underground pockets “{name}”": "Poches souterraines « {name} »",
+ "WorldPainter layers": "Calques WorldPainter",
+ "annotation layer": "calque d'annotations",
+ "combined layer": "calque combiné",
+ "custom object layer": "calque d'objets personnalisé",
+ "ground cover layer": "calque de couverture du sol",
+ "plant layer": "calque de plantes",
+ "tunnel layer": "calque de tunnel",
+ "underground pockets layer": "calque de poches souterraines",
+ "{name} · {kind}": "{name} · {kind}",
+ "“{layer}” is a layer of its own: “{combined}” paints one layer of each slot, and another came first.": "« {layer} » est un calque à part : « {combined} » peint un calque par emplacement, et un autre venait avant.",
+ "“{name}” is a floating layer: Massif raises land with Solid levels (Levels panel, Stamp slab).": "« {name} » est un calque flottant : Massif élève le terrain avec des niveaux Solid (panneau Niveaux, Stamp slab).",
+ "“{name}” is a tunnel layer: Massif carves with Carve levels (Levels panel, Stamp slab).": "« {name} » est un calque de tunnel : Massif creuse avec des niveaux Carve (panneau Niveaux, Stamp slab).",
+ "“{name}” is an annotation layer: Massif's annotations are fifteen colours, painted with the Annotations tool.": "« {name} » est un calque d'annotations : les annotations de Massif sont quinze couleurs, peintes avec l'outil Annotations.",
+ "“{name}”: farmland under its crops.": "« {name} » : la terre labourée sous ses cultures.",
+ "“{name}”: its edge shape.": "« {name} » : la forme de ses bords.",
+ "“{name}”: its noise.": "« {name} » : son bruit.",
+ "“{name}”: the collision, underground, leaf decay, foundation and height settings of its objects.": "« {name} » : les réglages de collision, de souterrain, de pourrissement des feuilles, de fondations et de hauteur de ses objets.",
+ "“{name}”: {n} objects of only air or entities, which Massif does not place.": {
+  "one": "« {name} » : {n} objet fait seulement d'air ou d'entités, que Massif ne place pas.",
+  "other": "« {name} » : {n} objets faits seulement d'air ou d'entités, que Massif ne place pas."
+ },
+ "“{what}”: Massif has no layer like it.": "« {what} » : Massif n'a pas de calque comme celui-ci."
 }
