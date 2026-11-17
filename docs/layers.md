@@ -58,6 +58,15 @@ into the four sizes, a quarter of them each; every kind of tree of the packs
 comes in the four sizes. Masks are never exported, and neither are
 annotations.
 
+**Edit ▸ Import mask…** paints any of these from an image, as WorldPainter's
+Import mask: the annotations (each pixel's nearest of the 15 colours, or one
+colour where the image is on), a layer of any slot (a ground cover, trees,
+under the trees, pockets, a tree size), a terrain, a biome, water or the
+height. A grey pixel is a strength: on from a threshold, or a share of the
+columns painted, scattered. With **Replace**, **Add**, **Max** and **Min**
+it goes with what is painted; locked layers keep their columns. See Import
+mask in the guide.
+
 ## Combined layers
 
 A **combined layer** is a brush of several layers, as WorldPainter's

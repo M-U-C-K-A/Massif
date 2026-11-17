@@ -40,6 +40,8 @@ pub enum Command {
     AutoRules,
     WholeMap(WholeOp),
     Caves,
+    /// An image painted onto the map (see `import_mask`).
+    ImportMask,
     /// The relief of a real place, into the map.
     RealTerrain,
     Ores,
@@ -270,6 +272,7 @@ pub fn menus(state: &State) -> Vec<Menu> {
         },
         tipped(Command::RealTerrain, Icon::Earth, tr!("Relief of a Real Place…"), map, tr!("The heights of a place on the Earth, into the selection or the whole map")),
         tipped(Command::Caves, Icon::Shovel, tr!("Caves…"), map, tr!("Tunnels, ravines and caverns carved into the rock, over the whole map or the selection")),
+        tipped(Command::ImportMask, Icon::ImageUp, tr!("Import Mask…"), map, tr!("An image painted onto the map: annotations, a layer, a terrain, a biome, water or the height")),
         Entry::Separator,
         tipped(Command::Ores, Icon::Pickaxe, tr!("Ores…"), map, tr!("The ores the export lays in the rock: where, how many, how large")),
         tipped(
@@ -539,7 +542,7 @@ mod tests {
     fn what_can_be_used_when() {
         let recent = [PathBuf::from("/maps/Alps.massif")];
         let home = menus(&State { editor: false, ..state(&recent) });
-        for command in [Command::Save, Command::SaveAs, Command::Export, Command::ExportPack, Command::ExportHeightMap, Command::Undo, Command::Ores, Command::Analyse, Command::HomeScreen, Command::WholeMap(WholeOp::Rivers), Command::Caves, Command::RealTerrain, Command::SavePoint] {
+        for command in [Command::Save, Command::SaveAs, Command::Export, Command::ExportPack, Command::ExportHeightMap, Command::Undo, Command::Ores, Command::Analyse, Command::HomeScreen, Command::WholeMap(WholeOp::Rivers), Command::Caves, Command::ImportMask, Command::RealTerrain, Command::SavePoint] {
             assert!(!enabled(&home, &command), "{command:?} needs a map");
         }
         for command in [Command::NewWorld, Command::Open, Command::ImportWorld, Command::ImportPack, Command::FromRealPlace, Command::OpenRecent(recent[0].clone()), Command::Settings, Command::Help, Command::About, Command::Quit, Command::Theme(ThemeChoice::Light)] {

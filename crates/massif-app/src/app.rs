@@ -359,6 +359,8 @@ enum Dialog {
     Update,
     /// Caves to carve: their settings.
     Caves(Box<crate::caves::CaveForm>),
+    /// An image to paint onto the map: what, where, how.
+    ImportMask(Box<crate::import_mask::MaskForm>),
     /// The relief of a real place: where, at what scale, how high.
     Real(Box<crate::real_terrain::RealForm>),
     /// A save point to make (`None`) or rename (its index): its name.
@@ -415,6 +417,9 @@ pub struct MassifApp {
     next_generation: u64,
     /// The settings caves were last carved with (per run of the app).
     caves: Option<massif_core::caves::CaveSettings>,
+    /// An imported image kept on the 2D map to trace over, and the map
+    /// it was for (see `import_mask`).
+    guide: Option<(crate::import_mask::Guide, u64)>,
     /// The place, scale and heights the relief of a real place was last
     /// made with (per run of the app).
     real: Option<crate::real_terrain::Remembered>,
@@ -980,6 +985,7 @@ impl MassifApp {
             covers_key: None,
             next_generation: 1,
             caves: None,
+            guide: None,
             real: None,
             versions: Default::default(),
             layout,
@@ -2102,6 +2108,18 @@ impl MassifApp {
         }
     }
 
+    /// Pick an image to import as a mask, and read it in the background.
+    fn pick_mask(&mut self, ctx: &egui::Context) {
+        if let Some(path) = rfd::FileDialog::new()
+            .set_title(tr!("An image to import as a mask"))
+            .add_filter(tr!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "bmp"])
+            .pick_file()
+        {
+            let snapshot = self.doc.world.snapshot();
+            self.jobs.push(Job::read_mask(ctx, path, snapshot).on(self.doc.generation));
+        }
+    }
+
     fn open_caves(&mut self) {
         let dim = &self.doc.world.dims[self.doc.dim];
         let start = massif_core::caves::CaveSettings::for_dimension(dim, self.doc.world.meta.sea_level);
@@ -2649,6 +2667,15 @@ impl MassifApp {
                         self.say(ctx, note.map_or_else(|| msg.clone(), |n| format!("{msg}. {n}")), false, None);
                     }
                 }
+                Outcome::MaskRead { path, info, map } => {
+                    if !other_map {
+                        let dim = &self.doc.world.dims[self.doc.dim];
+                        let t = massif_core::TILE_SIZE;
+                        let bounds = dim.bounds().map_or([0, 0, t, t], |(a, b)| [a.x * t, a.z * t, (b.x + 1) * t, (b.z + 1) * t]);
+                        let form = crate::import_mask::MaskForm::new(path, info, &self.doc.world.registry, bounds, (dim.min_y, dim.max_y), self.doc.world.meta.sea_level, map);
+                        self.dialog = Some(Dialog::ImportMask(Box::new(form)));
+                    }
+                }
                 Outcome::Caves { chunks, blocks, flooded, revision, dim } => {
                     let label = tr!("Caves");
                     if other_map || revision != self.doc.revision || dim != self.doc.dim {
@@ -2999,6 +3026,7 @@ impl MassifApp {
             Command::AutoRules => self.dialog = Some(Dialog::AutoRules(false)),
             Command::WholeMap(what) => self.open_reshape(what),
             Command::Caves => self.open_caves(),
+            Command::ImportMask => self.pick_mask(ctx),
             Command::RealTerrain => self.open_real(false),
             Command::FromRealPlace => self.open_real(true),
             Command::SavePoint => self.versions_action(ctx, crate::versions::Action::Make),
@@ -3401,6 +3429,12 @@ impl MassifApp {
             EditorKind::Map => {
                 hui.add_space(8.0);
                 self.maps.entry(id).or_default().header(&mut hui);
+                if let Some((guide, generation)) = &mut self.guide
+                    && *generation == self.doc.generation
+                    && !guide.header(&mut hui)
+                {
+                    self.guide = None;
+                }
             }
             EditorKind::View3d => {
                 hui.add_space(8.0);
@@ -3513,6 +3547,7 @@ impl MassifApp {
                     self.active_map = Some(id);
                 }
                 let overlay = self.versions.overlay(cui.ctx(), &self.doc);
+                let guide = self.guide.as_ref().filter(|(g, generation)| g.shown && *generation == self.doc.generation).map(|(g, _)| (g.texture.id(), g.rect, g.opacity));
                 let shows_3d = self.layout.current().root.shows(EditorKind::View3d);
                 let view = self.maps.entry(id).or_default();
                 view.ui(
@@ -3527,6 +3562,7 @@ impl MassifApp {
                         pan_key,
                         light: self.settings.light,
                         overlay,
+                        guide,
                         view3d: shows_3d.then_some(&mut self.view3d),
                     },
                 );
@@ -4284,6 +4320,32 @@ impl MassifApp {
                 }
                 if keep {
                     self.dialog = Some(Dialog::Caves(form));
+                }
+            }
+            Dialog::ImportMask(mut form) => {
+                use crate::import_mask::Choice;
+                let mut choice = Choice::Keep;
+                let response = modal(ctx, "import mask").show(ctx, |ui| {
+                    choice = form.ui(ui);
+                });
+                if response.should_close() {
+                    keep = false;
+                }
+                match choice {
+                    Choice::Keep => {}
+                    Choice::Close => keep = false,
+                    Choice::Import(settings) => {
+                        keep = false;
+                        if form.guide {
+                            self.guide = Some((crate::import_mask::Guide::new(ctx, &form), self.doc.generation));
+                        }
+                        let snapshot = self.doc.world.snapshot();
+                        let locks = massif_core::registry::Locks::of(&self.doc.world.registry);
+                        self.jobs.push(Job::import_mask(ctx, snapshot, self.doc.dim, form.path.clone(), form.info.clone(), settings, locks, self.doc.revision).on(self.doc.generation));
+                    }
+                }
+                if keep {
+                    self.dialog = Some(Dialog::ImportMask(form));
                 }
             }
             Dialog::Real(mut form) => {
@@ -8645,6 +8707,121 @@ mod tests {
             h.run_steps(30);
             h.render().unwrap().save(dir.join(name)).unwrap();
         }
+    }
+
+    /// Edit ▸ Import mask: a colour image read in the background opens the
+    /// dialog; imported, its colours become the nearest annotations in one
+    /// step that undo takes back, and the image stays on the map as a
+    /// guide; a grey one scatters a ground cover as strong as it is bright
+    /// (renders of the dialogs and the map with MASSIF_SNAPSHOT_DIR).
+    #[test]
+    fn importing_a_mask() {
+        use egui_kittest::kittest::Queryable;
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let tmp = std::env::temp_dir().join(format!("massif-mask-app-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        // The map is 8 × 8 tiles from (-4, -4): 1,024 blocks from -512.
+        let plan = tmp.join("plan.png");
+        image::RgbImage::from_fn(1024, 1024, |x, y| {
+            let (dx, dy) = (x as i32 - 512, y as i32 - 512);
+            image::Rgb(if dx * dx + dy * dy < 150 * 150 {
+                [230, 40, 30]
+            } else if (x / 128 + y / 128) % 5 == 0 {
+                [250, 200, 40]
+            } else if y > 900 {
+                [50, 60, 160]
+            } else {
+                [0, 0, 0]
+            })
+        })
+        .save(&plan)
+        .unwrap();
+        let wait = |h: &mut egui_kittest::Harness<'static, MassifApp>| {
+            let started = std::time::Instant::now();
+            while !h.state().jobs.is_empty() {
+                assert!(started.elapsed().as_secs() < 60, "the job timed out");
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            h.run_steps(3);
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let before = h.state().doc.dimension().ground().view(massif_core::TilePos::new(0, 0)).unwrap().annotations.clone();
+        {
+            let ctx = h.ctx.clone();
+            let app = h.state_mut();
+            let snapshot = app.doc.world.snapshot();
+            app.jobs.push(Job::read_mask(&ctx, plan.clone(), snapshot).on(app.doc.generation));
+        }
+        wait(&mut h);
+        let Some(Dialog::ImportMask(form)) = &mut h.state_mut().dialog else {
+            panic!("the dialog opens once the image is read");
+        };
+        assert!(form.info.colour, "a colour image");
+        assert_eq!(form.kind, crate::import_mask::Kind::Annotations);
+        form.guide = true;
+        h.run_steps(3);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("dialog-import-mask-colours.png")).unwrap();
+        }
+        // The pointer comes into the dialog first.
+        h.get_by_label("Import").hover();
+        h.run_steps(2);
+        h.get_by_label("Import").click();
+        h.run_steps(2);
+        assert!(h.state().dialog.is_none(), "the dialog closes");
+        wait(&mut h);
+        assert_eq!(h.state().doc.history.undo_label(), Some("Import mask"));
+        let at = |h: &egui_kittest::Harness<'static, MassifApp>, x: i32, z: i32| {
+            let tile = h.state().doc.dimension().ground().view(massif_core::TilePos::containing(x, z)).unwrap();
+            (tile.annotations.get(massif_core::coords::local_index(x, z)), tile.cover.get(massif_core::coords::local_index(x, z)))
+        };
+        assert_eq!(at(&h, 0, 0).0, 14, "red, the nearest of the image's red");
+        assert_eq!(at(&h, -512 + 60, -512 + 60).0, 5, "yellow");
+        assert_eq!(at(&h, 300, 450).0, 11, "blue");
+        assert_eq!(at(&h, 200, 0).0, 0, "black is none");
+        assert!(h.state().guide.is_some(), "the image is kept as a guide");
+        if let Some(dir) = &dir {
+            let view = h.state_mut().maps.values_mut().next().unwrap();
+            view.annotations = true;
+            h.run_steps(20);
+            h.render().unwrap().save(dir.join("import-mask-annotations.png")).unwrap();
+        }
+        let ctx = h.ctx.clone();
+        h.state_mut().undo(&ctx);
+        h.run_steps(2);
+        assert_eq!(h.state().doc.dimension().ground().view(massif_core::TilePos::new(0, 0)).unwrap().annotations, before, "undo takes them back");
+
+        // A grey ramp, west to east, as the strength of a ground cover.
+        let ramp = tmp.join("ramp.png");
+        image::GrayImage::from_fn(1024, 1024, |x, _| image::Luma([(x / 4) as u8])).save(&ramp).unwrap();
+        {
+            let ctx = h.ctx.clone();
+            let app = h.state_mut();
+            app.guide = None;
+            let snapshot = app.doc.world.snapshot();
+            app.jobs.push(Job::read_mask(&ctx, ramp.clone(), snapshot).on(app.doc.generation));
+        }
+        wait(&mut h);
+        let Some(Dialog::ImportMask(form)) = &mut h.state_mut().dialog else {
+            panic!("the dialog opens");
+        };
+        assert_eq!(form.kind, crate::import_mask::Kind::Layer);
+        assert!(matches!(form.target(), massif_core::mask::Target::Cover(1)), "{:?}", form.target());
+        form.mapping.threshold = None;
+        h.run_steps(3);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("dialog-import-mask-strength.png")).unwrap();
+        }
+        h.get_by_label("Import").hover();
+        h.run_steps(2);
+        h.get_by_label("Import").click();
+        h.run_steps(2);
+        wait(&mut h);
+        let share = |h: &egui_kittest::Harness<'static, MassifApp>, x0: i32| (0..64).flat_map(|z| (x0..x0 + 64).map(move |x| (x, z))).filter(|&(x, z)| at(h, x, z).1 == 1).count() as f32 / 4096.0;
+        let (west, east) = (share(&h, -500), share(&h, 400));
+        assert!(west < 0.08 && east > 0.85, "{west} {east}");
     }
 
     /// Edit ▸ Caves: the dialog carves tunnels, ravines and caverns in the

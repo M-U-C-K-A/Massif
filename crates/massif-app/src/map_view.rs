@@ -352,6 +352,9 @@ pub struct MapInput<'a> {
     /// A picture over the map and its block coordinates (west, north, east,
     /// south): where a save point compared differs (see `versions`).
     pub overlay: Option<(egui::TextureHandle, [i32; 4])>,
+    /// An imported image to trace over, its blocks (west, north, east,
+    /// south) and opacity (see `import_mask`).
+    pub guide: Option<(egui::TextureId, [i32; 4], f32)>,
     /// The 3D View, when the workspace shows one: its mark on the map, to
     /// drag (see [`MapView::view3d_mark`]).
     pub view3d: Option<&'a mut crate::view3d::View3d>,
@@ -979,6 +982,7 @@ impl MapView {
             pan_key,
             light,
             overlay,
+            guide,
             mut view3d,
         } = input;
 
@@ -1429,6 +1433,10 @@ impl MapView {
                 }
             }
 
+            if let Some((tex, r, opacity)) = guide {
+                let rect = Rect::from_min_max(self.to_screen(canvas, r[0] as f64, r[1] as f64), self.to_screen(canvas, r[2] as f64, r[3] as f64));
+                painter.image(tex, rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE.gamma_multiply(opacity));
+            }
             if let Some((tex, r)) = &overlay {
                 let rect = Rect::from_min_max(self.to_screen(canvas, r[0] as f64, r[1] as f64), self.to_screen(canvas, r[2] as f64, r[3] as f64));
                 painter.image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);

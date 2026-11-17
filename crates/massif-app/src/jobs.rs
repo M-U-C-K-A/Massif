@@ -106,6 +106,13 @@ pub enum Outcome {
         dim: usize,
         note: Option<String>,
     },
+    /// An image to import as a mask, read once through, and the map's
+    /// picture with the blocks it covers.
+    MaskRead {
+        path: PathBuf,
+        info: Arc<massif_core::mask::ImageInfo>,
+        map: Option<(egui::ColorImage, [i32; 4])>,
+    },
     Failed(String),
     Cancelled,
 }
@@ -403,6 +410,65 @@ impl Job {
             // Sand in the shallows, wherever the beds are painted.
             let shore = bed.and_then(|_| snapshot.registry.terrain_by_name("Sand"));
             let changes = massif_core::graph::reshape_ground(&mut history.edit(&mut snapshot, 0), &op, sea, bed, shore, &p);
+            drop(history);
+            if changes.cancelled {
+                return Outcome::Cancelled;
+            }
+            let level = &mut snapshot.dims[dim].levels[0];
+            level.encode_blobs(&changes.tiles);
+            let tiles = changes.tiles.iter().filter_map(|&pos| level.blob(pos).map(|b| (pos, b))).collect();
+            Outcome::Reshaped {
+                label,
+                tiles,
+                columns: changes.columns,
+                revision,
+                dim,
+            }
+        })
+    }
+
+    /// Read the image at `path` once through for Import mask, and draw the
+    /// picture of the map `snapshot` to show where it lands.
+    pub fn read_mask(ctx: &egui::Context, path: PathBuf, snapshot: World) -> Job {
+        use massif_core::auto::Steps;
+        let progress = Arc::new(Steps::default());
+        let p = progress.clone();
+        let name = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        Job::spawn(JobKind::Auto, tr!("Reading “{name}”", name), Some(progress as Arc<dyn JobProgress>), ctx, move || {
+            let map = std::thread::scope(|s| {
+                let picture = s.spawn(|| {
+                    let (lo, hi) = snapshot.dims.first()?.bounds()?;
+                    let t = massif_core::TILE_SIZE;
+                    let img = massif_core::thumbnail::render(&snapshot, 384)?;
+                    Some((egui::ColorImage::from_rgb([img.width() as usize, img.height() as usize], img.as_raw()), [lo.x * t, lo.z * t, (hi.x + 1) * t, (hi.z + 1) * t]))
+                });
+                let info = massif_core::mask::survey(&path, &p);
+                (info, picture.join().ok().flatten())
+            });
+            match map {
+                (Ok(info), map) => Outcome::MaskRead { path, info: Arc::new(info), map },
+                (Err(_), _) if p.cancel.load(std::sync::atomic::Ordering::Relaxed) => Outcome::Cancelled,
+                (Err(e), _) => Outcome::Failed(tr!("That image cannot be read: {e}", e)),
+            }
+        })
+    }
+
+    /// The image at `path` painted onto dimension `dim` of a snapshot of the
+    /// document at `revision`, as `settings` say.
+    #[allow(clippy::too_many_arguments)]
+    pub fn import_mask(ctx: &egui::Context, mut snapshot: World, dim: usize, path: PathBuf, info: Arc<massif_core::mask::ImageInfo>, settings: massif_core::mask::MaskSettings, locks: massif_core::registry::Locks, revision: u64) -> Job {
+        use massif_core::auto::Steps;
+        let progress = Arc::new(Steps::default());
+        let p = progress.clone();
+        Job::spawn(JobKind::Auto, tr!("Importing the mask").to_owned(), Some(progress as Arc<dyn JobProgress>), ctx, move || {
+            let label = tr!("Import mask");
+            let mut history = massif_core::history::History::new(1);
+            history.locks = locks;
+            history.begin(label, dim);
+            let changes = match massif_core::mask::apply(&mut history.edit(&mut snapshot, 0), &path, &info, &settings, &p) {
+                Ok(c) => c,
+                Err(e) => return Outcome::Failed(tr!("Import mask: {e}", e)),
+            };
             drop(history);
             if changes.cancelled {
                 return Outcome::Cancelled;

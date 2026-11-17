@@ -21,6 +21,7 @@ mod help;
 mod home;
 mod icons;
 mod icons_classic;
+mod import_mask;
 mod jobs;
 mod keymap;
 mod keys_page;

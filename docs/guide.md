@@ -788,6 +788,69 @@ ten-core Mac and the caves about 400 MB of memory (26 MB in the file).
 Within a selection, the caves keep to it, fading out along a feathered
 edge.
 
+## Import mask
+
+**Edit ▸ Import mask…** paints an image onto the map, as WorldPainter's
+Import mask does: a plan drawn in an image editor, a forest mask from
+another tool, a biome map, a heightmap of a part of the map. Massif reads
+PNG (8 or 16 bits, grey, colour or palette, with or without alpha), TIFF
+(8, 16 or 32-bit integers or floats, in strips or tiles), BMP (1 to 32
+bits) and JPEG. The image is read once in the background, for the range of
+its values and a picture of it, then the dialog opens.
+
+**What it paints**:
+
+- **Annotations**: a colour image gives each pixel the nearest of the 15
+  colours of the annotations (**Nearest of the 15**), or **One colour**
+  wherever the image is on; a grey image paints the colour picked.
+- **Layer**: any ground cover, tree layer (as trees or under the trees),
+  layer of pockets, or a tree size.
+- **Terrain**, **Biome**: the one picked.
+- **Water**: water up to the surface set (the sea level to start with).
+- **Height**: the ground, as a heightmap: black gives the **Height of
+  black** (the offset), white the **Height of white**, the greys those
+  between (the scale is the difference). It works on the map as it is,
+  where a new world from a height map makes a new one.
+
+**Where it lands**: **At the world's origin** puts its top left corner on
+x 0, z 0, a block a pixel; **Fit to the map** makes it as large as the map
+lets it, in its middle (an image of the map's size lands on it, block for
+block). **Scale** and **Offset** move it from there; under them, the map
+small, the image over it where it lands, coloured as it will paint.
+Larger than a block a pixel, the greys between pixels are blended; smaller,
+each block takes the average of its pixels (colours: the middle one).
+
+**How its values are read**: **On from a threshold** paints where the grey
+is at or over the threshold; **Strength, scattered** paints that share of
+the columns (a grey of 30 % about 30 % of them), as a spray does, the same
+columns every time. The **Range** runs from black to white, or from the
+image's lowest value to its highest (floating point images start there).
+**Invert** turns it over; **Black leaves the map as it is** skips black
+pixels (and a JPEG's near-blacks), so that only what is drawn counts.
+Transparent pixels always leave the map as it is.
+
+**With what is there**: **Replace** lets the image alone decide where it
+lies, rubbing out the layer where it is off (a terrain stays, a column
+always has one); **Add** and **Max** paint where it is on and keep what was
+painted (for a layer, which is in a column or not, the two are the same);
+**Min** keeps the layer only where it was painted and the image is on. For
+the height, they add to the ground, raise it to the image or lower it to
+the image. Only the tiles the map has are painted, within the selection
+when there is one; a **locked** layer keeps its columns.
+
+**Import** runs in the background, with its progress and a **Cancel**, and
+is one step to undo. The image streams through: a band of 128 rows of the
+map at a time, the next rows decoded meanwhile, never the whole image in
+memory (JPEG and compressed BMP excepted, decoded whole at 8 bits). On an
+M4, a 16,384 × 16,384 greyscale PNG onto a map of the same size is read in
+1.7 s and painted in 2.2 to 2.6 s, the whole process below 0.5 GB.
+
+**Show the image on the map as a guide** keeps the image over the 2D map
+at the opacity set, to trace over with the brushes, as annotations are often
+used. Its button in the map's header (a picture) shows or hides it, sets its
+opacity, or removes it. A guide is only shown: it is not saved with the map
+and never exported.
+
 ## Unpainting
 
 Paint terrain's right button takes the land back to the map's own terrain:

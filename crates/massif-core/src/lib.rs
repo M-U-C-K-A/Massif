@@ -36,6 +36,7 @@ pub mod graph;
 pub mod heightmap;
 pub mod history;
 pub mod level;
+pub mod mask;
 pub mod materials;
 pub mod mod_profiles;
 pub mod noise;

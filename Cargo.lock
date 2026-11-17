@@ -2132,6 +2132,7 @@ dependencies = [
  "flate2",
  "image",
  "log",
+ "png",
  "rayon",
  "serde",
  "serde_json",
