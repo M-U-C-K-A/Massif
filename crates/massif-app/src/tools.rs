@@ -692,6 +692,7 @@ impl RiverSettings {
             bed: if self.bed.is_empty() { None } else { reg.terrain_by_name(&self.bed) },
             // Sand in the shallows, wherever the bed is painted.
             shore: reg.terrain_by_name("Sand"),
+            clay: reg.terrain_by_name("Clay"),
             sea: None,
             biome: self.biome.then(|| reg.biome_by_id("minecraft:river")).flatten(),
         }

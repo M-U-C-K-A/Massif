@@ -513,6 +513,7 @@ fn cmd_spring(args: Args) -> Res<()> {
         water: true,
         bed: reg.terrain_by_name("Gravel"),
         shore: reg.terrain_by_name("Sand"),
+        clay: reg.terrain_by_name("Clay"),
         sea: None,
         biome: reg.biome_by_id("minecraft:river"),
     };

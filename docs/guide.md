@@ -1169,9 +1169,19 @@ and a river biome on its water.
   higher, with a plunge pool dug under each fall. On gentler ground it
   steps down a block at a time, rapids. Through a lake or a river on its
   way, it keeps their level, and never falls below the water it ends in.
+- Its shape follows the land. On gentle ground the river is a little
+  wider, over a flat bed with rounded sides; where the land is steep (a
+  grade of 12 % or more over 16 blocks either way), it is narrower and a
+  quarter shallower, cut in a V. Its width wanders by about a tenth over
+  some fifty blocks, as a real river's does.
 - The bed is `depth` deep in the middle and rises to the water's edge;
-  banks of the chosen width climb back to the ground, smoothly. Only the
-  ground is lowered: nothing is raised.
+  banks climb back to the ground smoothly, over the chosen width at least,
+  and over two and a half times as far as the river lies under the land
+  around it (48 blocks at most): a valley sloping down to the water, not
+  the walls of a trench. Only the ground is lowered, but for a bank that
+  rises back towards the ground it had to hold the water.
+- Where the water runs slowly, on gentle ground, the bed has patches of
+  clay among its gravel.
 - A course that starts on a river is a branch, leaving it at its level; one
   that ends on a river or a lake is a tributary, meeting it at its level.
   Two branches that meet again make a split stream.

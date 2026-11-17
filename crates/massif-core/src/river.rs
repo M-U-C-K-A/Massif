@@ -44,6 +44,9 @@ pub struct RiverSpec {
     /// bends and the foot of the bank there, and its channel under the sea
     /// (`None`: the bed's). Only with a `bed`.
     pub shore: Option<TerrainId>,
+    /// Terrain of the patches of the bed where the water runs slowly, on
+    /// gentle ground (`None`: the bed's). Only with a `bed`.
+    pub clay: Option<TerrainId>,
     /// The level of the sea it runs into, if it does: its water never goes
     /// under it, even where it reaches the sea over dry land lower than the
     /// sea's surface (a beach at the water's level); and its channel goes on
@@ -64,6 +67,7 @@ impl Default for RiverSpec {
             water: true,
             bed: None,
             shore: None,
+            clay: None,
             sea: None,
             biome: None,
         }
@@ -358,9 +362,27 @@ pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> 
     // How far under the sea a point is, 0 at the mouth to 1 where the
     // channel has faded into the floor.
     let out = |k: usize| if k < coast { 0.0 } else { (k + 1 - coast) as f32 / (n - coast) as f32 };
+    // How steep the land is along the course, over 16 blocks either way:
+    // 0 on the flat, 1 from a grade of 12 % up. A river is narrow and cut
+    // in a V where the land is steep, wide over a flat bed in the plains.
+    let ahead = (16.0 / STEP) as usize;
+    let steep: Vec<f32> = (0..n)
+        .map(|k| {
+            let (i, j) = (k.saturating_sub(ahead), (k + ahead).min(n - 1));
+            let run = ((j - i) as f32 * STEP).max(1.0);
+            ((smooth[i] - smooth[j]) / run / 0.12).clamp(0.0, 1.0)
+        })
+        .collect();
+    // Its width wanders a little, over some fifty blocks, as a real
+    // river's does.
+    let wobble = crate::noise::Noise::new(0x71de_5a17);
     // Under the sea the channel opens out a little, a third wider at most.
-    let widths: Vec<f32> = (0..n).map(|k| half(along(k, spec.width, spec.width_end)) * (1.0 + 0.3 * out(k))).collect();
-    let reach = reach.max(widths.iter().fold(0.0f32, |a, &b| a.max(b)) * 1.6 + spec.banks.max(0.0) + 1.0);
+    let widths: Vec<f32> = (0..n)
+        .map(|k| {
+            let natural = (1.1 - 0.35 * steep[k]) * (1.0 + 0.12 * wobble.fbm(k as f64 * STEP as f64 / 48.0, 0.5, 2, 2.0, 0.5) as f32);
+            half(along(k, spec.width, spec.width_end) * if k < coast { natural } else { 1.0 }) * (1.0 + 0.3 * out(k))
+        })
+        .collect();
     // How the course bends at each point: the sine of its turn over a few
     // blocks, positive to the left. On the inside of a bend the river
     // leaves sand.
@@ -377,7 +399,15 @@ pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> 
     // fall; through the water it crosses, it keeps that water's level.
     let crossed: Vec<bool> = land.iter().map(|l| l.1.is_some()).collect();
     let plunge = pools_and_falls(&mut level, STEP, &|k| widths[k], &|k| crossed[k]);
-    let depths: Vec<f32> = (0..n).map(|k| along(k, spec.depth, spec.depth_end).max(0.5) + plunge[k]).collect();
+    let depths: Vec<f32> = (0..n).map(|k| (along(k, spec.depth, spec.depth_end) * (1.0 - 0.25 * steep[k])).max(0.5) + plunge[k]).collect();
+    // The shape of its bed across: flat with rounded sides on the flat,
+    // a V where the land is steep.
+    let shape: Vec<f32> = steep.iter().map(|s| 3.0 - 1.8 * s).collect();
+    // Its banks: as wide as set at least, and as wide as two and a half
+    // times as deep as the river lies under the land around (48 blocks at
+    // most): a valley sloping down to the water, not the walls of a trench.
+    let banks: Vec<f32> = (0..n).map(|k| if k < coast { spec.banks.max(0.0).max((2.5 * (smooth[k] - level[k])).min(48.0)) } else { 0.0 }).collect();
+    let reach = reach.max((0..n).map(|k| widths[k] * if k < coast { 1.0 } else { 1.6 } + banks[k]).fold(0.0f32, f32::max) + 1.0);
     // Under the sea: how deep the channel is cut into the floor, from its
     // bed at the mouth to nothing where it fades out.
     let incision: Vec<f32> = (0..n)
@@ -420,6 +450,7 @@ pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> 
         (x1 + reach).ceil() as i32 + 1,
         (z1 + reach).ceil() as i32 + 1,
     );
+    let patches = crate::noise::Noise::new(0xc1a7_0b5e);
     let counts = std::sync::Mutex::new((0usize, 0usize));
     // The ground of the columns dug, as it was: the banks may rise back
     // to it to hold the water.
@@ -433,7 +464,7 @@ pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> 
                 let (cx, cz) = (x as f32 + 0.5, z as f32 + 0.5);
                 let Some((k, d)) = nearest(cx, cz) else { continue };
                 let hw = widths[k];
-                if d > hw + spec.banks.max(0.0) {
+                if d > hw + banks[k] {
                     continue;
                 }
                 let i = local_index(x, z);
@@ -481,10 +512,10 @@ pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> 
                     // The bed: deepest in the middle, up to the water's
                     // edge at the sides.
                     let t = d / hw;
-                    water - depths[k] * (1.0 - t * t)
+                    water - depths[k] * (1.0 - t.powf(shape[k]))
                 } else {
                     // The bank: from just over the water up to the ground.
-                    let u = ((d - hw) / spec.banks.max(0.01)).clamp(0.0, 1.0);
+                    let u = ((d - hw) / banks[k].max(0.01)).clamp(0.0, 1.0);
                     let u = u * u * (3.0 - 2.0 * u);
                     // As high as the highest water beside it: upstream
                     // of its nearest point, the water may stand a step
@@ -515,7 +546,16 @@ pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> 
                     poured.lock().expect("not poisoned").insert((x, z));
                     wet += 1;
                     if let Some(bed) = spec.bed {
-                        tile.terrain.set(i, if shallow { spec.shore.unwrap_or(bed).0 } else { bed.0 });
+                        // Patches of clay where the water runs slowly.
+                        let slow = steep[k] < 0.3 && spec.clay.is_some() && patches.fbm(x as f64 / 9.0, z as f64 / 9.0, 2, 2.0, 0.5) > 0.3;
+                        let terrain = if shallow {
+                            spec.shore.unwrap_or(bed)
+                        } else if slow {
+                            spec.clay.unwrap_or(bed)
+                        } else {
+                            bed
+                        };
+                        tile.terrain.set(i, terrain.0);
                     }
                     if let Some(biome) = spec.biome {
                         tile.biome.set(i, biome.0);
@@ -1397,8 +1437,10 @@ mod tests {
         assert!(report.source > report.mouth, "it runs down: {report:?}");
         assert_eq!(report.mouth, 75.0, "into the lake at its level");
         assert!(report.wet > 2000, "{report:?}");
-        // Upstream, near the source: a bed under water, under the ground.
-        let (top, fluid) = column(&world, 20, 64);
+        // Upstream, near the source: a bed under water, under the ground,
+        // at its deepest across (the slope is steep there: a narrow V).
+        let deepest = (40..90).min_by(|&a, &b| column(&world, 20, a).0.total_cmp(&column(&world, 20, b).0)).unwrap();
+        let (top, fluid) = column(&world, 20, deepest);
         let ground = 120.0 - 20.0 * 50.0 / 256.0;
         assert!(top < ground - 3.0, "dug: {top} under {ground}");
         assert!(fluid as f32 > top + 2.0 && (fluid as f32) < ground, "water in the bed, under the banks: {fluid}");
