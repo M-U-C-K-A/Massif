@@ -61,7 +61,15 @@ pub enum Command {
     FitMap,
     /// A report of a problem to save and send (see `report`).
     ReportProblem,
+    /// Massif's Discord server, in the browser.
+    JoinDiscord,
 }
+
+/// Massif's community server on Discord: help, ideas, `#bug-reports`.
+pub const DISCORD: &str = "https://discord.gg/2dP7xJb655";
+
+/// Where problems are reported on GitHub.
+pub const GITHUB_ISSUES: &str = "https://github.com/M-U-C-K-A/Massif/issues";
 
 /// The title of the first menu, before File, outside macOS (where the
 /// system's app menu, named after the app, holds the same).
@@ -292,6 +300,7 @@ pub fn menus(state: &State) -> Vec<Menu> {
         item(Command::Shortcuts, Icon::Keyboard, tr!("Keyboard shortcuts"), free),
         item(Command::Tour, Icon::Compass, tr!("Take the tour"), free),
         item(Command::ReportProblem, Icon::Bug, tr!("Report a Problem…"), free),
+        tipped(Command::JoinDiscord, Icon::MessagesSquare, tr!("Join the Discord…"), free, tr!("Massif's community server, in your browser: questions, maps, #bug-reports")),
         Entry::Separator,
         item(Command::HomeScreen, Icon::House, tr!("Home screen"), map),
     ];

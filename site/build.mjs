@@ -201,6 +201,7 @@ function releaseNotes() {
 
 const icon = {
   github: '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38v-1.33c-2.23.48-2.7-1.07-2.7-1.07-.36-.92-.89-1.17-.89-1.17-.73-.5.05-.49.05-.49.8.06 1.23.83 1.23.83.72 1.22 1.88.87 2.33.66.07-.52.28-.87.5-1.07-1.78-.2-3.65-.89-3.65-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.22 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48v2.2c0 .21.15.46.55.38A8 8 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>',
+  discord: '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M20.32 4.37a19.8 19.8 0 0 0-4.89-1.52.07.07 0 0 0-.08.04c-.21.38-.44.87-.61 1.25a18.27 18.27 0 0 0-5.49 0 12.64 12.64 0 0 0-.62-1.25.08.08 0 0 0-.08-.04 19.74 19.74 0 0 0-4.88 1.52.07.07 0 0 0-.03.03C.53 9.05-.32 13.58.1 18.06a.08.08 0 0 0 .03.06 19.9 19.9 0 0 0 5.99 3.03.08.08 0 0 0 .08-.03c.46-.63.87-1.3 1.23-1.99a.08.08 0 0 0-.04-.11 13.1 13.1 0 0 1-1.87-.89.08.08 0 0 1-.01-.13l.37-.29a.07.07 0 0 1 .08-.01c3.93 1.79 8.18 1.79 12.06 0a.07.07 0 0 1 .08.01l.37.29a.08.08 0 0 1-.01.13c-.6.35-1.22.65-1.87.89a.08.08 0 0 0-.04.11c.36.7.77 1.36 1.22 1.99a.08.08 0 0 0 .08.03 19.84 19.84 0 0 0 6.01-3.03.08.08 0 0 0 .03-.06c.5-5.18-.84-9.67-3.55-13.66a.06.06 0 0 0-.03-.03ZM8.02 15.33c-1.18 0-2.16-1.09-2.16-2.42s.96-2.42 2.16-2.42c1.21 0 2.18 1.1 2.16 2.42 0 1.33-.96 2.42-2.16 2.42Zm7.97 0c-1.18 0-2.15-1.09-2.15-2.42s.95-2.42 2.15-2.42c1.21 0 2.18 1.1 2.16 2.42 0 1.33-.95 2.42-2.16 2.42Z"/></svg>',
   sun: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
   moon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/></svg>',
   menu: '<svg class="i-menu" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>',
@@ -253,6 +254,7 @@ ${config.url ? `<meta property="og:image" content="${config.url}/assets/renders/
     <nav class="links" aria-label="Main">${navLinks}</nav>
     <div class="actions">
       <a class="icon-btn" href="${REPO}" aria-label="Massif on GitHub" rel="noopener">${icon.github}</a>
+      ${config.discord ? `<a class="icon-btn hide-xs" href="${esc(config.discord)}" aria-label="Massif's Discord" rel="noopener">${icon.discord}</a>` : ''}
       <button class="icon-btn theme-btn" type="button" aria-label="Switch between light and dark">${icon.sun}${icon.moon}</button>
       <a class="pill pill-solid small hide-sm" href="${url('/download/')}">Download</a>
       <button class="pill pill-ghost small menu-btn" type="button" aria-expanded="false" aria-controls="sheet">${icon.menu}${icon.close}Menu</button>
@@ -262,7 +264,7 @@ ${config.url ? `<meta property="og:image" content="${config.url}/assets/renders/
     <div class="sheet-links">${navLinks}</div>
     ${guideGroups.length ? `<div class="sheet-guide"><h2>In the guide</h2><div>${guideGroups.map((g) => `<a href="${url(g.path)}">${esc(g.group)}</a>`).join('')}</div></div>` : ''}
     <a class="pill pill-solid big" href="${url('/download/')}">${icon.down}Download Massif</a>
-    <div class="sheet-more"><a href="${REPO}" rel="noopener">${icon.github}GitHub</a>${config.kofi ? `<a href="${esc(config.kofi)}" rel="noopener">${icon.heart}Ko-fi</a>` : ''}${config.discord ? `<a href="${esc(config.discord)}" rel="noopener">Discord</a>` : ''}</div>
+    <div class="sheet-more"><a href="${REPO}" rel="noopener">${icon.github}GitHub</a>${config.kofi ? `<a href="${esc(config.kofi)}" rel="noopener">${icon.heart}Ko-fi</a>` : ''}${config.discord ? `<a href="${esc(config.discord)}" rel="noopener">${icon.discord}Discord</a>` : ''}</div>
   </nav>
 </header>
 <main id="main">
@@ -410,6 +412,11 @@ function downloadPage(dl, rels) {
   ${card('linux', `<li>Extract the archive, then run <code>massif</code>.</li>
     <li>Massif draws with Vulkan or OpenGL: keep the graphics driver up to date.</li>`)}
   </div>
+  ${config.discord ? `<section class="support">
+    <span class="support-icon">${icon.discord}</span>
+    <div><h2>Questions, or a bug?</h2><p>Ask on Massif's Discord, show your maps, and send problems to <strong>#bug-reports</strong>. In the app: <strong>Help ▸ Join the Discord…</strong></p></div>
+    <a class="pill pill-ghost" href="${esc(config.discord)}" rel="noopener">Join the Discord ${icon.arrow}</a>
+  </section>` : ''}
   ${config.kofi ? `<section class="support">
     <span class="support-icon">${icon.heart}</span>
     <div><h2>Support Massif</h2><p>Massif is free and made in the open. If it helps your maps, a coffee on Ko-fi helps it grow.</p></div>

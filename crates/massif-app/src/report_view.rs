@@ -74,6 +74,12 @@ pub fn ui(ctx: &egui::Context, form: &mut ReportForm, recording: Option<&Recordi
             tr!("One .zip file with what Massif knows of the problem: save it, then send it to us on Discord. Nothing is sent from here.")
         };
         ui.add(egui::Label::new(RichText::new(about).color(pal.weak)).wrap());
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            ui.label(RichText::new(tr!("Where to send it:")).color(pal.weak));
+            ui.hyperlink_to(theme::with_icon(Icon::MessagesSquare, tr!("#bug-reports on Discord")), crate::menu::DISCORD);
+            ui.hyperlink_to(theme::with_icon(Icon::ExternalLink, tr!("an issue on GitHub")), crate::menu::GITHUB_ISSUES);
+        });
         ui.add_space(10.0);
 
         ui.label(RichText::new(tr!("What happened?")).medium());

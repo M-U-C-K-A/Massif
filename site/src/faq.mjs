@@ -1,7 +1,7 @@
 // The FAQ: questions and their answers in Markdown, from facts of the README,
 // the guide and the release notes.
 
-export function faq({ url, REPO }) {
+export function faq({ url, REPO, config }) {
   return [
     ['Is Massif free?',
       `Yes. Massif is free and open source, under the GPL-3.0-or-later like WorldPainter. Its code is on [GitHub](${REPO}).`],
@@ -20,6 +20,8 @@ export function faq({ url, REPO }) {
     ['Massif does not start. What can I do?',
       `Look at [If Massif does not start](${url('/download/#if-massif-does-not-start')}): where the log is, and how to choose another graphics API. Then [open an issue](${REPO}/issues) with the log.`],
     ['Where do I report a bug or ask for a feature?',
-      `On [GitHub's issues](${REPO}/issues). For a problem at start-up, add \`startup.log\` and \`startup.previous.log\`.`],
+      `In **#bug-reports** on [Massif's Discord](${config.discord}), or on [GitHub's issues](${REPO}/issues). **Help ▸ Report a Problem…** in Massif makes one file to send. For a problem at start-up, add \`startup.log\` and \`startup.previous.log\`.`],
+    ['Where can I ask a question?',
+      `On [Massif's Discord](${config.discord}), the community's server: questions, maps to show, ideas. **Help ▸ Join the Discord…** opens it from Massif.`],
   ];
 }

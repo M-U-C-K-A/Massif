@@ -130,6 +130,8 @@ On a Mac they are in the menu bar at the top of the screen, as in every Mac
 app, and the window's top bar keeps only its buttons. **About Massif**,
 **Settings…** (⌘,) and **Quit Massif** (⌘Q) are in the **Massif** menu,
 where Mac apps keep them, and **Help** has the system's search of the menus.
+**Help ▸ Join the Discord…** opens [Massif's Discord](https://discord.gg/2dP7xJb655) in your
+browser: questions, maps to show, and `#bug-reports`.
 ⌘Q asks first when the map has changes that are not saved. On Windows and
 Linux the menus sit at the top left of the window, with Ctrl for ⌘, and the
 first, **Massif**, stands for the Mac's: **About Massif**, **Settings…**
@@ -2014,9 +2016,11 @@ of its work, live.
 
 ## Reporting a problem
 
-**Help ▸ Report a Problem…** makes one `.zip` file to send us (on Discord,
-say) when Massif crashes or is slow. Nothing is sent from Massif: you save
-the file where you like and send it yourself. It holds:
+**Help ▸ Report a Problem…** makes one `.zip` file to send us when Massif
+crashes or is slow: in `#bug-reports` on [Massif's Discord](https://discord.gg/2dP7xJb655), or with
+an [issue on GitHub](https://github.com/M-U-C-K-A/Massif/issues). Nothing is
+sent from Massif: you save the file where you like and send it yourself. The
+dialog links to both. It holds:
 
 - `report.txt`: what happened, in your words if you write them; Massif's
   version and the commit it was built from; the system, the processor and

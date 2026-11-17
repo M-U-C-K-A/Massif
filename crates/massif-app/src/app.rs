@@ -3030,6 +3030,7 @@ impl MassifApp {
             }
             Command::FitMap => self.fit_map(),
             Command::ReportProblem => self.open_report(ctx, false),
+            Command::JoinDiscord => ctx.open_url(egui::OpenUrl::new_tab(crate::menu::DISCORD)),
         }
     }
 
@@ -6027,6 +6028,8 @@ mod tests {
         h.run_steps(4);
         h.get_by_label("startup.previous.log");
         h.get_by_label_contains("asked to open ~/Maps/Isles.massif");
+        h.get_by_label_contains("#bug-reports on Discord");
+        h.get_by_label_contains("an issue on GitHub");
         if let Some(out) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
             h.render().unwrap().save(out.join("dialog-report.png")).unwrap();
         }
@@ -15233,6 +15236,24 @@ mod tests {
         assert!(rise > 0.5 && rise < 12.0, "the land rose by {rise} blocks");
         let (w, hgt, rgba) = h.state().sculpt3d.read_back().expect("the 3D view rendered");
         image::save_buffer(dir.join("sculpt-three-clicks.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+    }
+
+    /// Help ▸ Join the Discord… opens the community server in the browser.
+    /// Renders the Help menu with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn help_joins_the_discord() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(3);
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Help").click();
+        h.run_steps(3);
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            h.render().unwrap().save(dir.join("menu-help.png")).unwrap();
+        }
+        h.get_by_label_contains("Join the Discord…").click();
+        h.step();
+        let opened = h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::OpenUrl(u) if u.url == crate::menu::DISCORD));
+        assert!(opened, "the Discord's invitation opens: {:?}", h.output().platform_output.commands);
     }
 
     /// Menus as they show: the commands of an area, the list of a combo

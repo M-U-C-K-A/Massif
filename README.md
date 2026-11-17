@@ -7,7 +7,7 @@
 
 **The successor to WorldPainter, made for maps tens of thousands of blocks wide.**
 
-[**Download**](https://github.com/M-U-C-K-A/Massif/releases) · [Guide](docs/guide.md) · [Terrain graphs](docs/terrain-graphs.md) · [How it works](docs/internals.md) · [Roadmap](#roadmap)
+[**Download**](https://github.com/M-U-C-K-A/Massif/releases) · [Guide](docs/guide.md) · [Terrain graphs](docs/terrain-graphs.md) · [How it works](docs/internals.md) · [Roadmap](#roadmap) · [Discord](https://discord.gg/2dP7xJb655)
 
 </div>
 

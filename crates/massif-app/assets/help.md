@@ -67,6 +67,7 @@ The check runs in the background — a few seconds for a map of 5,888 blocks a s
 ## Menus
 **Massif**, **File**, **Edit**, **View** and **Help** hold every command, each item with its shortcut beside it, greyed out when it cannot be used (what acts on the map while the home screen is shown, everything while a dialog is open).
 - On a Mac they are in the menu bar at the top of the screen, as in every Mac app; the window's top bar keeps its buttons. **About Massif**, **Settings…** (`⌘,`) and **Quit Massif** (`⌘Q`) are in the **Massif** menu, and **Help** has the system's search of the menus.
+- **Help ▸ Join the Discord…** opens Massif's community server in your browser: questions, maps to show, and **#bug-reports**.
 - On Windows and Linux they are at the top left of the window, and the first, **Massif**, holds what the Mac's does: **About Massif**, **Settings…** (`Ctrl ,`), **Check for Updates…** (asks GitHub at once and shows the answer in Settings ▸ Updates), **Full Screen** (`F11`) and **Quit** (`Ctrl Q`).
 - `⌘Q` (`Ctrl Q`) asks first when the map has changes that are not saved, and so does quitting from the Dock or the app switcher (`⌘Tab`, then `Q`): Massif comes to the front to ask. A logout, a restart or a shut-down waits for the answer: **Save** or **Don't Save**, and it goes on once Massif has quit; **Cancel**, and it stops.
 
@@ -268,7 +269,7 @@ Its layers come too. Forests (Deciduous, Pine, Jungle, Swamp) and the trees of W
 - **Developer**: developer mode offers a **Developer** panel in every area's menu: frames a second and the time of each, the memory the system counts, the processor's time, in live charts; what is kept decoded, the map, its tasks and the graphics card. **Frames a second** keeps the window in step with the screen (**Vsync**, the default) or lets it draw up to 60, 120, 144, 240 frames a second or **Unlimited**; **Draw every frame** keeps it drawing when nothing changes, to measure.
 
 # Reporting a problem
-**Help ▸ Report a Problem…** makes one `.zip` file to send us on Discord when Massif crashes or is slow. Nothing is sent from Massif: you save it and send it yourself.
+**Help ▸ Report a Problem…** makes one `.zip` file to send us when Massif crashes or is slow: in **#bug-reports** on Massif's Discord, or with an issue on GitHub; the dialog links to both. Nothing is sent from Massif: you save it and send it yourself.
 - It holds what happened in your words, Massif's version, the computer and its graphics card, the settings that change how Massif draws, the map's size, the last minute of the **Developer** panel's figures, and the logs of the last two starts. The map itself goes in only if **Include the map** is on.
 - Every file is listed, and **Show** opens it as it will be written. Your home folder is written `~`, and other accounts' names are left out.
 - **Copy Summary** puts a few lines on the clipboard for your message.
