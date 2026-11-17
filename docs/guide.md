@@ -1270,12 +1270,13 @@ and a river biome on its water.
 - Water runs from the source down. Its level along the river is the lowest
   the land allows so far, a
   little under the banks: it never rises downstream, whatever the bumps.
-- Where the land is steep (the river would drop four blocks or more over
-  the next 24), it falls from pool to pool instead of stepping down a
-  block every few blocks: its water stays level in a pool dug into the
-  slope, then falls two to five blocks into the next one, the steeper the
-  higher, with a plunge pool dug under each fall. On gentler ground it
-  steps down a block at a time, rapids. Through a lake or a river on its
+- Where the land is really steep (the river would drop seven blocks or
+  more over the next 24, a grade of some 30 %), it falls from pool to pool
+  instead of stepping down a block every few blocks: its water stays level
+  in a pool dug into the slope, then falls three to five blocks into the
+  next one, the steeper the higher, with a plunge pool dug under each
+  fall, rounded out a quarter wider. On gentler ground (down a valley of
+  10 or 20 % too) it steps down a block at a time, rapids. Through a lake or a river on its
   way, it keeps their level, and never falls below the water it ends in.
 - Its shape follows the land. On gentle ground the river is a little
   wider, over a flat bed with rounded sides; where the land is steep (a
@@ -1286,7 +1287,9 @@ and a river biome on its water.
   banks climb back to the ground smoothly, over the chosen width at least,
   and over two and a half times as far as the river lies under the land
   around it (48 blocks at most): a valley sloping down to the water, not
-  the walls of a trench. Only the ground is lowered, but for a bank that
+  the walls of a trench. The banks follow the river's level smoothed over
+  some twenty blocks either way, as one valley: past a fall they ramp
+  down rather than step, and no row of ledges lines them. Only the ground is lowered, but for a bank that
   rises back towards the ground it had to hold the water.
 - Where the water runs slowly, on gentle ground, the bed has patches of
   clay among its gravel.

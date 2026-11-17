@@ -12179,6 +12179,44 @@ mod tests {
         ) else {
             return;
         };
+        river_on(&dir, path, source, name, shots);
+    }
+
+    /// A river dug with the River tool's default settings down a valley
+    /// whose floor drops 15 blocks in a hundred (its sides a tenth as steep
+    /// across, a little noise over all), to the sea: seen from above at an
+    /// angle, as river_on_a_real_world shows it (slope-river-…png in
+    /// MASSIF_SNAPSHOT_DIR).
+    #[test]
+    fn river_down_a_moderate_slope() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut world = massif_core::World::new(massif_core::world::WorldMeta::default());
+        let grass = world.registry.terrain_by_name("Grass").unwrap();
+        let sea = world.meta.sea_level as f32;
+        let noise = massif_core::noise::Noise::new(17);
+        let mut dim = massif_core::world::Dimension::new(massif_core::world::DimensionKind::Overworld, -64, 320);
+        for tz in 0..2 {
+            for tx in 0..4 {
+                let mut tile = massif_core::tile::Tile::ground(64.0, grass.0, sea as i16);
+                for lz in 0..128 {
+                    for lx in 0..128 {
+                        let (x, z): (i32, i32) = (tx * 128 + lx, tz * 128 + lz);
+                        let h = sea + 0.15 * (470 - x) as f32 + 0.1 * (z - 128).abs() as f32 + 2.0 * noise.fbm(x as f64 / 40.0, z as f64 / 40.0, 3, 2.0, 0.5) as f32;
+                        tile.top.set(massif_core::coords::local_index(x, z), massif_core::codec::snap_height(h.max(sea - 8.0)));
+                    }
+                }
+                dim.ground_mut().insert(massif_core::TilePos::new(tx, tz), tile);
+            }
+        }
+        world.dims = vec![dim];
+        let path = dir.join("slope.massif");
+        massif_format::save(&world.snapshot(), &path).unwrap();
+        river_on(&dir, path, (12, 128), "slope-river", &[(0.45, 110.0, 0.75, 0.6), (0.3, 160.0, 0.55, -0.5)]);
+    }
+
+    fn river_on(dir: &std::path::Path, path: PathBuf, source: (i32, i32), name: &str, shots: &[(f32, f32, f32, f32)]) {
         let mut h = harness(ThemeChoice::Dark);
         h.run_steps(5);
         let ctx = h.ctx.clone();

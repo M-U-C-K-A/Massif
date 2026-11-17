@@ -147,9 +147,10 @@ impl<'a> Ground<'a> {
 
 /// Blocks ahead a river looks to tell a steep stretch from a gentle one.
 const AHEAD: f32 = 24.0;
-/// Blocks it drops over [`AHEAD`] from which the stretch is steep: there it
-/// falls from pool to pool rather than stepping down a block at a time.
-const STEEP: i32 = 4;
+/// Blocks it drops over [`AHEAD`] from which the stretch is steep (a grade
+/// of some 30 %): there it falls from pool to pool rather than stepping
+/// down a block at a time.
+const STEEP: i32 = 7;
 /// The highest fall.
 const FALL_MAX: i32 = 5;
 
@@ -551,6 +552,22 @@ pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> 
     // fall; through the water it crosses, it keeps that water's level.
     let crossed: Vec<bool> = land.iter().map(|l| l.1.is_some()).collect();
     let plunge = pools_and_falls(&mut level, STEP, &|k| widths[k], &|k| crossed[k]);
+    // Under a fall, its pool rounds out, a quarter wider.
+    let widths: Vec<f32> = widths.iter().zip(&plunge).map(|(w, p)| w * (1.0 + 0.25 * (p / 3.0).min(1.0))).collect();
+    // The valley's floor along the river, for its banks: the water's level
+    // smoothed over some twenty blocks either way (the banks of each pool
+    // would make a terrace of it), never under the water.
+    let floor_window = ((20.0 / STEP) as usize).max(1);
+    let mut level_sums = vec![0.0f32; n + 1];
+    for k in 0..n {
+        level_sums[k + 1] = level_sums[k] + level[k];
+    }
+    let valley: Vec<f32> = (0..n)
+        .map(|k| {
+            let (a, b) = (k.saturating_sub(floor_window), (k + floor_window + 1).min(n));
+            ((level_sums[b] - level_sums[a]) / (b - a) as f32).max(level[k])
+        })
+        .collect();
     let depths: Vec<f32> = (0..n).map(|k| (along(k, spec.depth, spec.depth_end) * (1.0 - 0.25 * steep[k])).max(0.5) + plunge[k]).collect();
     // The shape of its bed across: flat with rounded sides on the flat,
     // a V where the land is steep.
@@ -558,7 +575,24 @@ pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> 
     // Its banks: as wide as set at least, and as wide as two and a half
     // times as deep as the river lies under the land around (48 blocks at
     // most): a valley sloping down to the water, not the walls of a trench.
-    let banks: Vec<f32> = (0..n).map(|k| if k < coast { spec.banks.max(0.0).max((2.5 * (smooth[k] - level[k])).min(48.0)) } else { 0.0 }).collect();
+    let banks: Vec<f32> = (0..n).map(|k| if k < coast { spec.banks.max(0.0).max((2.5 * (smooth[k] - valley[k])).min(48.0)) } else { 0.0 }).collect();
+    // Their width smoothed along the river too: one valley, not a bank
+    // for each pool.
+    let banks: Vec<f32> = {
+        let mut sums = vec![0.0f32; n + 1];
+        for k in 0..n {
+            sums[k + 1] = sums[k] + banks[k];
+        }
+        (0..n)
+            .map(|k| {
+                if k >= coast {
+                    return 0.0;
+                }
+                let (a, b) = (k.saturating_sub(floor_window), (k + floor_window + 1).min(coast));
+                (sums[b] - sums[a]) / (b - a) as f32
+            })
+            .collect()
+    };
     let reach = reach.max((0..n).map(|k| widths[k] * if k < coast { 1.0 } else { 1.6 } + banks[k]).fold(0.0f32, f32::max) + 1.0);
     // Under the sea: how deep the channel is cut into the floor, from its
     // bed at the mouth to nothing where it fades out.
@@ -669,10 +703,11 @@ pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> 
                     // The bank: from just over the water up to the ground.
                     let u = ((d - hw) / banks[k].max(0.01)).clamp(0.0, 1.0);
                     let u = u * u * (3.0 - 2.0 * u);
-                    // As high as the highest water beside it: upstream
+                    // As high as the highest water beside it (upstream
                     // of its nearest point, the water may stand a step
-                    // higher.
-                    let edge = level[k.saturating_sub(((hw + 2.0) / STEP) as usize)] + 0.6;
+                    // higher), and the valley's floor there: the banks
+                    // ramp down past a fall rather than step.
+                    let edge = level[k.saturating_sub(((hw + 2.0) / STEP) as usize)].max(valley[k]) + 0.6;
                     edge + (ground - edge).max(0.0) * u
                 };
                 let new = snap_height(target.min(ground).clamp(lo, hi));
@@ -1437,6 +1472,12 @@ mod tests {
     /// Land falling from 120 in the west to 70 in the east, over 2 × 1
     /// tiles, with a lake in the east (water at 75 over ground at 68).
     fn slope() -> World {
+        slope_of(50.0 / 256.0)
+    }
+
+    /// Two tiles down a slope of `grade` from 120, a lake (its water at 75)
+    /// from x = 230 on.
+    fn slope_of(grade: f32) -> World {
         let mut world = World::new(WorldMeta::default());
         let mut dim = Dimension::new(DimensionKind::Overworld, -64, 320);
         for tx in 0..2 {
@@ -1445,7 +1486,7 @@ mod tests {
                 for x in 0..128 {
                     let bx = tx * 128 + x;
                     let i = local_index(bx, z);
-                    tile.top.set(i, 120.0 - bx as f32 * 50.0 / 256.0);
+                    tile.top.set(i, 120.0 - bx as f32 * grade);
                     if bx >= 230 {
                         tile.top.set(i, 68.0);
                         tile.fluid.set(i, 75);
@@ -1542,38 +1583,71 @@ mod tests {
         assert!(s.added > 0, "{s:?}");
     }
 
-    /// Down a slope of one block in five, the river falls from pool to pool:
-    /// its water stays level for a while, then drops two blocks at once, a
-    /// plunge pool dug deeper under the fall; on gentler ground (one in
-    /// twelve) it steps down a block at a time.
+    /// Down a slope of one block in three, the river falls from pool to
+    /// pool: its water stays level for a while, then drops two blocks or
+    /// more at once, a plunge pool dug deeper under the fall; on gentler
+    /// ground (one in five, one in twelve) it steps down a block at a time.
     #[test]
     fn a_steep_river_falls_from_pool_to_pool() {
         let mut level = vec![0.0f32; 400];
-        // 60 blocks flat at 100, then down one block in five, then flat.
+        // 60 blocks flat at 100, then down one block in three, then flat.
         for (k, l) in level.iter_mut().enumerate() {
             let x = k as f32 * STEP;
-            *l = 100.0 - ((x - 60.0).clamp(0.0, 100.0) / 5.0).floor();
+            *l = 100.0 - ((x - 60.0).clamp(0.0, 100.0) / 3.0).floor();
         }
         let before = level.clone();
         let plunge = pools_and_falls(&mut level, STEP, &|_| 6.0, &|_| false);
         let drops = |l: &[f32]| l.windows(2).map(|w| (w[0].round() - w[1].round()) as i32).filter(|d| *d > 0).collect::<Vec<_>>();
         assert!(drops(&before).iter().all(|d| *d == 1));
-        // Falls of two blocks down the slope; a step of a block where it
-        // starts and where it eases off at its foot.
+        // Falls of two blocks or more down the slope; steps of a block
+        // where it starts and where it eases off at its foot.
         let falls = drops(&level);
         assert!(falls.iter().filter(|d| **d >= 2).count() >= 6, "{falls:?}");
-        assert!(falls.iter().filter(|d| **d == 1).count() <= 4, "{falls:?}");
+        assert!(falls.iter().filter(|d| **d == 1).count() <= 8, "{falls:?}");
         assert!(falls.len() * 10 < drops(&before).len() * 7, "{falls:?}");
         // Never over what the land allows, nor under where it ends.
-        assert!(level.iter().zip(&before).all(|(a, b)| a <= b && *a >= 80.0));
+        assert!(level.iter().zip(&before).all(|(a, b)| a <= b && *a >= 67.0));
         // A plunge pool under each fall, none on the flat.
         assert!(plunge[..100].iter().all(|d| *d == 0.0));
         assert!(plunge.iter().any(|d| *d >= 1.0));
-        // On gentle ground, nothing changes.
-        let mut gentle: Vec<f32> = (0..400).map(|k| 100.0 - (k as f32 * STEP / 12.0).floor()).collect();
-        let was = gentle.clone();
-        pools_and_falls(&mut gentle, STEP, &|_| 6.0, &|_| false);
-        assert_eq!(gentle, was);
+        // On gentler ground, nothing changes: rapids, a block at a time.
+        for run in [5.0, 12.0] {
+            let mut gentle: Vec<f32> = (0..400).map(|k| 100.0 - (k as f32 * STEP / run).floor()).collect();
+            let was = gentle.clone();
+            pools_and_falls(&mut gentle, STEP, &|_| 6.0, &|_| false);
+            assert_eq!(gentle, was, "one in {run}");
+        }
+    }
+
+    /// Down a slope of 18 %, a river steps down a block at a time, with no
+    /// pool or fall, and its banks slope down to it as one valley: along
+    /// each bank the ground drops as evenly as the slope, without a ledge.
+    #[test]
+    fn a_river_down_a_moderate_slope_is_a_valley() {
+        let mut world = slope_of(0.18);
+        let spec = RiverSpec { width: 8.0, width_end: 12.0, depth: 3.0, depth_end: 4.0, banks: 10.0, ..RiverSpec::default() };
+        let mut h = History::default();
+        h.begin("river", 0);
+        carve_river(&mut h.edit(&mut world, 0), &[(20.0, 64.0), (225.0, 64.0)], &spec);
+        h.commit();
+        let first_air = |x: i32, z: i32| crate::compose::block_top(column(&world, x, z).0);
+        // The water down its middle: a block at a time.
+        let mut levels: Vec<i16> = (30..220).map(|x| column(&world, x, 64).1).filter(|&f| f != NO_FLUID).collect();
+        levels.dedup();
+        let drops: Vec<i16> = levels.windows(2).map(|w| w[0] - w[1]).collect();
+        assert!(levels.len() > 15 && drops.iter().all(|&d| d == 1), "{levels:?}");
+        // Along each bank, from its foot to its top: no ledge, the ground
+        // dropping a block or two at a time down the slope, never rising.
+        let mut ledges = Vec::new();
+        for dz in [-10, -8, -6, 6, 8, 10] {
+            for x in 30..215 {
+                let (a, b) = (first_air(x, 64 + dz), first_air(x + 1, 64 + dz));
+                if a - b >= 2 || b > a {
+                    ledges.push((x, dz, a, b));
+                }
+            }
+        }
+        assert!(ledges.len() <= 3, "{} ledges: {:?}", ledges.len(), &ledges[..ledges.len().min(12)]);
     }
 
     /// The bed is gravel in its middle and sand in its shallows and on the

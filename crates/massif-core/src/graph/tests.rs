@@ -1162,7 +1162,7 @@ fn rivers_hold_water_that_runs_down() {
         assert!(r.mask.data[c(j) - 12] < 0.1, "and not its sides at {j}");
         // Shallow near its source, deeper as water joins it.
         let depth = r.water.data[c(j)] - r.dug.data[c(j)];
-        assert!(depth > 1.0 && depth < 7.0, "water in the bed at {j}: {depth}");
+        assert!((1.0..7.0).contains(&depth), "water in the bed at {j}: {depth}");
         // Under the banks: the ground eight blocks to the side.
         assert!(r.water.data[c(j)] < r.dug.data[c(j) + 8], "the water stays in its valley at {j}");
         // Nothing raised.
