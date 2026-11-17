@@ -41,6 +41,20 @@ Two environment variables enable the heavier tests:
   rivers on a real map as a user does — the Rivers on this map template,
   a river laid out from the mountains to the sea, another let go at a source — and renders
   them from above and in 3D.
+- `MASSIF_CONQUEST_DIR=<instance>` reads Conquest Reforged from its own
+  instance (or the best of a folder of instances, such as CurseForge's
+  `Instances`): every block with its textures, its states turned and
+  mirrored against its list for WorldPainter, an export for 1.20.1 read
+  back and checked against every state the game registers, and the app
+  from end to end (`Use` in the Blocks panel, a map painted, the export's
+  choices). `MASSIF_CONQUEST_WORLD=<folder>` keeps that map and its world;
+  `MASSIF_CONQUEST_CHECK=<world>` checks another exported world the same
+  way; `MASSIF_CONQUEST_JAR=<jar>` renders the gradient brush with its
+  blocks.
+- `MASSIF_VANILLA_WORLDS=<folder>` compares Massif's level.dat with those
+  the game itself saved there (a saves folder, an instance, a folder of
+  instances, or `auto` for the official launcher's and every instance).
+  These read the player's own game, so they run only when asked.
 - `MASSIF_GRAPH_BUILD=<samples>` times a whole build of the starter graph
   (run it with `--release`), and with `MASSIF_GRAPH_APPLY=1` its writing to
   a map of as many blocks; `MASSIF_GRAPH_TEMPLATE=<word>` times a template

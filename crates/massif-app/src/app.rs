@@ -11579,9 +11579,10 @@ mod tests {
         }
     }
 
-    /// Conquest Reforged from end to end, where its instance is installed
-    /// here (`MASSIF_CONQUEST_INSTANCE`, or found among the launchers'
-    /// folders) with the version of the game it plays: offered in the
+    /// Conquest Reforged from end to end, when MASSIF_CONQUEST_DIR names
+    /// its instance or a folder of instances (the one with Conquest's lists
+    /// is read; the test reads the player's own game, so it runs only when
+    /// asked) and the version of the game it plays is installed: offered in the
     /// Blocks panel and read in one click, its tabs shown; a map of hills
     /// painted with its ground by the automatic paint (its cliffs in beds
     /// of three limestones), a meadow of a mix and a forest floor of a
@@ -11596,11 +11597,18 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         use massif_core::registry::{Mix, Stratum, TerrainDef, TerrainId};
         use massif_core::Brush;
-        let found = std::env::var_os("MASSIF_CONQUEST_INSTANCE").map(PathBuf::from).and_then(|d| massif_assets::instance::Instance::read(&d)).or_else(|| massif_assets::instance::find_with_mod("conquest"));
-        let Some(instance) = found else {
-            eprintln!("Conquest Reforged is not installed here: skipping");
+        let Some(dir) = std::env::var_os("MASSIF_CONQUEST_DIR").map(PathBuf::from) else {
+            eprintln!("MASSIF_CONQUEST_DIR=<a Conquest Reforged instance, or a folder of instances> runs Conquest from end to end: skipping");
             return;
         };
+        let Some(instance) = massif_assets::instance::with_mod_in(&dir, "conquest").into_iter().next() else {
+            eprintln!("no Conquest Reforged instance in {}: skipping", dir.display());
+            return;
+        };
+        if instance.lists.is_empty() {
+            eprintln!("{} has no lists of Conquest's blocks: skipping", instance.name);
+            return;
+        }
         let jars = massif_assets::find_jars();
         let Some(game) = jars.iter().find(|j| Some(&j.version) == instance.minecraft.as_ref()).cloned() else {
             eprintln!("Minecraft {:?} is not installed here: skipping", instance.minecraft);

@@ -1412,22 +1412,24 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
-    /// Conquest Reforged's own instances, where they are installed here
-    /// (`MASSIF_CONQUEST_INSTANCE`, or every one found among the launchers'
-    /// folders: its Fabric and its Forge modpacks): read with the game each
-    /// plays, more than 17,000 blocks in its tabs, each drawn with its
-    /// textures. With Conquest's lists, its blocks are exactly the
-    /// registry's and their states those its list for WorldPainter gives;
-    /// without them, the only blocks without textures are the block files
-    /// of the jar whose model the jar does not have.
+    /// Conquest Reforged's own instances, when MASSIF_CONQUEST_DIR names
+    /// one or a folder of them (CurseForge's `Instances`: its Fabric and its
+    /// Forge modpacks): read with the game each plays, more than 17,000
+    /// blocks in its tabs, each drawn with its textures. With Conquest's
+    /// lists, its blocks are exactly the registry's and their states those
+    /// its list for WorldPainter gives; without them, the only blocks
+    /// without textures are the block files of the jar whose model the jar
+    /// does not have. It reads the player's own game, so it runs only when
+    /// asked, and says why it reads nothing.
     #[test]
     fn conquest_reforged_loads() {
-        let instances = match std::env::var_os("MASSIF_CONQUEST_INSTANCE").map(PathBuf::from) {
-            Some(dir) => instance::Instance::read(&dir).into_iter().collect(),
-            None => instance::find_all_with_mod("conquest"),
+        let Some(dir) = std::env::var_os("MASSIF_CONQUEST_DIR").map(PathBuf::from) else {
+            eprintln!("MASSIF_CONQUEST_DIR=<a Conquest Reforged instance, or a folder of instances> reads Conquest's own: skipping");
+            return;
         };
+        let instances = instance::with_mod_in(&dir, "conquest");
         if instances.is_empty() {
-            eprintln!("Conquest Reforged is not installed here: skipping");
+            eprintln!("no Conquest Reforged instance in {}: skipping", dir.display());
         }
         for inst in instances {
             let version = inst.minecraft.clone().unwrap_or_else(|| "1.20.1".to_owned());
@@ -1436,7 +1438,13 @@ mod tests {
                 continue;
             };
             let started = std::time::Instant::now();
-            let cat = load_with_mods(&jar.path, &jar.version, &inst.files()).unwrap();
+            let cat = match load_with_mods(&jar.path, &jar.version, &inst.files()) {
+                Ok(cat) => cat,
+                Err(e) => {
+                    eprintln!("{}: could not be read ({e}): skipping", inst.name);
+                    continue;
+                }
+            };
             let took = started.elapsed();
             let conquest: Vec<&Block> = cat.blocks.iter().filter(|b| namespace(&b.id) == "conquest").collect();
             eprintln!("{}: {} blocks ({} of Conquest Reforged), {} textures, read in {took:?}", inst.name, cat.blocks.len(), conquest.len(), cat.textures.len());

@@ -3,9 +3,10 @@
 //! state written must be one the game has.
 //!
 //! Always with a fixture made as Conquest's files are (its list for
-//! WorldPainter, its registry's lists). With its real instance too, when it
-//! is installed here (`MASSIF_CONQUEST_INSTANCE`, or found among the
-//! launchers' folders): then a hundred of its real blocks are painted as
+//! WorldPainter, its registry's lists). With its real instance too, when
+//! `MASSIF_CONQUEST_DIR` names it or a folder of instances (the one with
+//! Conquest's lists is read; the test reads the player's own game, so it
+//! runs only when asked): then a hundred of its real blocks are painted as
 //! terrains, mixes and patterns, its plants grown over its own ground, and
 //! its shaped blocks placed in turned and mirrored objects; each state is
 //! checked against the jar's block states, the mod's list for WorldPainter
@@ -346,14 +347,19 @@ fn conquest_fixture_exports_its_own_states() {
     assert!(truth.check("conquest:cheese_cut", &[]).is_err());
 }
 
-/// Conquest Reforged's instance, when it is installed here: the one with
-/// Conquest's lists of its blocks when there are several (its Fabric and
-/// Forge modpacks).
+/// Conquest Reforged's instance named by MASSIF_CONQUEST_DIR (it, or the
+/// best of a folder of them: the one with Conquest's lists of its blocks);
+/// `None`, said, without it.
 fn conquest_instance() -> Option<massif_assets::instance::Instance> {
-    std::env::var_os("MASSIF_CONQUEST_INSTANCE")
-        .map(PathBuf::from)
-        .and_then(|d| massif_assets::instance::Instance::read(&d))
-        .or_else(|| massif_assets::instance::find_with_mod("conquest"))
+    let Some(dir) = std::env::var_os("MASSIF_CONQUEST_DIR").map(PathBuf::from) else {
+        eprintln!("MASSIF_CONQUEST_DIR=<a Conquest Reforged instance, or a folder of instances> checks Conquest's own blocks: skipping");
+        return None;
+    };
+    let found = massif_assets::instance::with_mod_in(&dir, "conquest").into_iter().next();
+    if found.is_none() {
+        eprintln!("no Conquest Reforged instance in {}: skipping", dir.display());
+    }
+    found
 }
 
 /// The truth of the real game: the catalogue read from the instance (its
@@ -382,10 +388,7 @@ fn real_truth(cat: &massif_assets::Catalogue, dir: &Path, used: &HashSet<String>
 /// game's.
 #[test]
 fn conquest_reforged_exports_its_own_states() {
-    let Some(inst) = conquest_instance() else {
-        eprintln!("Conquest Reforged is not installed here: skipping");
-        return;
-    };
+    let Some(inst) = conquest_instance() else { return };
     // Its states are judged by the lists Conquest writes beside them
     // (conquest_wp.csv, blocks-pls.txt, states-pls.txt).
     if inst.lists.is_empty() {
@@ -397,7 +400,13 @@ fn conquest_reforged_exports_its_own_states() {
         eprintln!("Minecraft {version} is not installed here: skipping");
         return;
     };
-    let cat = massif_assets::load_with_mods(&jar.path, &jar.version, &inst.files()).unwrap();
+    let cat = match massif_assets::load_with_mods(&jar.path, &jar.version, &inst.files()) {
+        Ok(cat) => cat,
+        Err(e) => {
+            eprintln!("{} could not be read ({e}): skipping", inst.name);
+            return;
+        }
+    };
     let m = cat.mods.iter().find(|m| m.kind == massif_assets::SourceKind::Mod && m.namespaces.iter().any(|n| n == "conquest")).unwrap();
     let block = |id: &str| cat.block(id).filter(|b| b.id.starts_with("conquest:"));
     let group = |name: &str| m.groups.iter().find(|g| g.name.eq_ignore_ascii_case(name)).map(|g| g.blocks.iter().filter_map(|id| block(id)).collect::<Vec<_>>()).unwrap_or_default();
@@ -445,12 +454,12 @@ fn conquest_reforged_exports_its_own_states() {
     }
 }
 
-/// A world exported elsewhere (by the app: `MASSIF_CONQUEST_CHECK=<dir>`),
-/// checked against the real game the same way.
+/// A world exported elsewhere (by the app: `MASSIF_CONQUEST_CHECK=<dir>`,
+/// with MASSIF_CONQUEST_DIR), checked against the real game the same way.
 #[test]
 fn an_exported_conquest_world_is_the_games() {
     let Some(dir) = std::env::var_os("MASSIF_CONQUEST_CHECK").map(PathBuf::from) else { return };
-    let inst = conquest_instance().expect("Conquest Reforged's instance");
+    let Some(inst) = conquest_instance() else { return };
     let version = inst.minecraft.clone().unwrap_or_else(|| "1.20.1".to_owned());
     let jar = massif_assets::find_jars().into_iter().find(|j| j.version == version).expect("Minecraft 1.20.1");
     let cat = massif_assets::load_with_mods(&jar.path, &jar.version, &inst.files()).unwrap();

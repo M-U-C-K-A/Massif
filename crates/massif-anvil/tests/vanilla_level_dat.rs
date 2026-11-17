@@ -1,12 +1,13 @@
-//! Massif's level.dat against the ones the game itself wrote on this
-//! computer: the worlds of the official launcher's saves and of the
-//! modpacks' instances (CurseForge, Prism, Modrinth…), read only. For each
+//! Massif's level.dat against the ones the game itself wrote, when
+//! `MASSIF_VANILLA_WORLDS` names where (a `saves` folder, a game's or an
+//! instance's folder, or a folder of instances; `auto`: the official
+//! launcher's saves and every instance found), read only: it reads the
+//! player's own worlds, so it runs only when asked. For each
 //! version of the game found among them (from 1.20, whose reading of
 //! level.dat logs an error for a key it wants and does not find), every key
 //! Massif writes in `Data` is one the game writes too, and every key the
 //! game writes that it reads with an error when missing is in Massif's: the
 //! dragon fight, as the game has it before anyone goes to the End.
-//! Nothing runs where no such world is found (not in CI).
 
 use fastnbt::Value;
 use massif_anvil::level_dat::{LevelSettings, level_nbt};
@@ -31,17 +32,26 @@ fn compound(v: &Value) -> &HashMap<String, Value> {
     }
 }
 
-/// The level.dat files of the worlds on this computer.
-fn worlds() -> Vec<PathBuf> {
+/// The level.dat files of the worlds `MASSIF_VANILLA_WORLDS` names.
+fn worlds(named: &Path) -> Vec<PathBuf> {
     let mut saves: Vec<PathBuf> = Vec::new();
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-        saves.push(home.join("Library/Application Support/minecraft/saves"));
-        saves.push(home.join(".minecraft/saves"));
+    if named == Path::new("auto") {
+        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+            saves.push(home.join("Library/Application Support/minecraft/saves"));
+            saves.push(home.join(".minecraft/saves"));
+        }
+        if let Some(appdata) = std::env::var_os("APPDATA").map(PathBuf::from) {
+            saves.push(appdata.join(".minecraft/saves"));
+        }
+        saves.extend(massif_assets::instance::find_instance_dirs().into_iter().map(|d| d.join("saves")));
+    } else {
+        // A saves folder, a game's folder, or a folder of instances.
+        saves.push(named.to_path_buf());
+        saves.push(named.join("saves"));
+        if let Ok(read) = std::fs::read_dir(named) {
+            saves.extend(read.flatten().map(|e| e.path().join("saves")));
+        }
     }
-    if let Some(appdata) = std::env::var_os("APPDATA").map(PathBuf::from) {
-        saves.push(appdata.join(".minecraft/saves"));
-    }
-    saves.extend(massif_assets::instance::find_instance_dirs().into_iter().map(|d| d.join("saves")));
     let mut out = Vec::new();
     for dir in saves {
         let Ok(read) = std::fs::read_dir(&dir) else { continue };
@@ -69,6 +79,10 @@ fn data_of(path: &Path) -> Option<HashMap<String, Value>> {
 
 #[test]
 fn level_dat_has_what_the_game_writes() {
+    let Some(named) = std::env::var_os("MASSIF_VANILLA_WORLDS").map(PathBuf::from) else {
+        eprintln!("MASSIF_VANILLA_WORLDS=<saves folder, instances, or auto> compares level.dat with the game's own: skipping");
+        return;
+    };
     let settings = LevelSettings {
         name: "Massif".into(),
         seed: 7,
@@ -84,7 +98,7 @@ fn level_dat_has_what_the_game_writes() {
         datapacks: Vec::new(),
     };
     let mut checked: HashMap<String, PathBuf> = HashMap::new();
-    for path in worlds() {
+    for path in worlds(&named) {
         let Some(game) = data_of(&path) else { continue };
         let Some(Value::Compound(version)) = game.get("Version") else { continue };
         let Some(Value::String(name)) = version.get("Name") else { continue };

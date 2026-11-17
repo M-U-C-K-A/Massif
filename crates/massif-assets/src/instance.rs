@@ -256,19 +256,36 @@ pub fn find_instance_dirs() -> Vec<PathBuf> {
     out
 }
 
-/// Every instance on this computer with a mod named `name` (`conquest`)
-/// among its jars, read: those with lists of blocks for it first (a mod's
-/// own lists say which of its blocks are real and what states they have),
-/// then by name. Only those instances' jars are looked into.
-pub fn find_all_with_mod(name: &str) -> Vec<Instance> {
+/// Whether a game folder's mods have a jar named like `name` (lowercase).
+fn has_mod_jar(dir: &Path, name: &str) -> bool {
+    files_in(&dir.join("mods"), "jar").iter().any(|j| j.file_name().is_some_and(|f| f.to_string_lossy().to_lowercase().contains(name)))
+}
+
+/// The instances of these game folders with a mod named like `name`, read,
+/// those with lists of blocks for it first (a mod's own lists say which of
+/// its blocks are real and what states they have), then by name.
+fn read_with_mod(dirs: impl IntoIterator<Item = PathBuf>, name: &str) -> Vec<Instance> {
     let name = name.to_lowercase();
-    let mut out: Vec<Instance> = find_instance_dirs()
-        .into_iter()
-        .filter(|dir| files_in(&dir.join("mods"), "jar").iter().any(|j| j.file_name().is_some_and(|f| f.to_string_lossy().to_lowercase().contains(&name))))
-        .filter_map(|dir| Instance::read(&dir))
-        .collect();
+    let mut out: Vec<Instance> = dirs.into_iter().filter(|dir| has_mod_jar(dir, &name)).filter_map(|dir| Instance::read(&dir)).collect();
     out.sort_by_key(|i| (i.lists.is_empty(), i.name.to_lowercase()));
     out
+}
+
+/// Every instance on this computer with a mod named `name` (`conquest`)
+/// among its jars: see [`read_with_mod`]. Only those instances' jars are
+/// looked into.
+pub fn find_all_with_mod(name: &str) -> Vec<Instance> {
+    read_with_mod(find_instance_dirs(), name)
+}
+
+/// The instances with a mod named `name` in a folder: the folder itself
+/// when it is one, else those it holds (a launcher's folder of instances).
+pub fn with_mod_in(dir: &Path, name: &str) -> Vec<Instance> {
+    if let Some(game) = game_dir(dir) {
+        return read_with_mod([game], name);
+    }
+    let Ok(read) = std::fs::read_dir(dir) else { return Vec::new() };
+    read_with_mod(read.flatten().filter_map(|e| game_dir(&e.path())), name)
 }
 
 /// The instance on this computer with a mod named `name` that reads best:
@@ -313,6 +330,10 @@ mod tests {
         assert_eq!(instance.files(), [conquest.clone(), dir.join("conquest_wp.csv"), dir.join("resourcepacks/Conquest.zip")]);
         // From its mods folder too.
         assert_eq!(Instance::read(&dir.join("mods")).unwrap().dir, dir);
+        // Named, or among those of a folder of instances.
+        assert_eq!(with_mod_in(&dir, "conquest").len(), 1);
+        assert_eq!(with_mod_in(dir.parent().unwrap(), "ConquestReforged").iter().filter(|i| i.dir == dir).count(), 1);
+        assert!(with_mod_in(&dir, "chipped").is_empty());
         assert!(Instance::read(&dir.join("resourcepacks")).is_none());
         std::fs::remove_dir_all(dir).unwrap();
     }

@@ -40,6 +40,16 @@ pub struct BlockLibrary {
     sections: Option<(usize, String, bool, Arc<Vec<Section>>)>,
 }
 
+/// Conquest Reforged's instances to offer: those installed here. In tests,
+/// only those MASSIF_CONQUEST_DIR names, so that no test depends on what
+/// the computer running it has installed.
+fn conquest_instances() -> Vec<Instance> {
+    if cfg!(test) {
+        return std::env::var_os("MASSIF_CONQUEST_DIR").map(|d| massif_assets::instance::with_mod_in(std::path::Path::new(&d), "conquest")).unwrap_or_default();
+    }
+    massif_assets::instance::find_all_with_mod("conquest")
+}
+
 /// A section of the Blocks panel: a title and its blocks, by their index in
 /// the catalogue.
 pub struct Section {
@@ -79,7 +89,7 @@ impl BlockLibrary {
             // Conquest Reforged installed here, to offer while its blocks
             // are not read.
             let has_conquest = result.as_ref().is_ok_and(|c| c.mods.iter().any(|m| m.kind == SourceKind::Mod && m.namespaces.iter().any(|n| n == "conquest")));
-            let conquest = if has_conquest { Vec::new() } else { massif_assets::instance::find_all_with_mod("conquest") };
+            let conquest = if has_conquest { Vec::new() } else { conquest_instances() };
             let _ = tx.send((jars, result, conquest));
             ctx.request_repaint();
         });
