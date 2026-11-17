@@ -782,20 +782,34 @@ pub fn input_group(ui: &mut Ui, id: &str, parts: &mut [Part]) -> (bool, Option<u
 }
 
 /// A segmented control: choices side by side in a pill, those `on` raised
-/// in a pill of their own. Returns the one clicked.
+/// in a pill of their own; one under the other where they are too wide for
+/// the room there is. Returns the one clicked.
 pub fn button_group(ui: &mut Ui, id: &str, labels: &[&str], on: &[bool]) -> Option<usize> {
     let pal = Palette::of(ui);
     let font = FontId::proportional(12.5);
     let galleys: Vec<_> = labels.iter().map(|t| ui.painter().layout_no_wrap((*t).to_owned(), font.clone(), pal.text)).collect();
-    let widths: Vec<f32> = galleys.iter().map(|g| g.size().x + 26.0).collect();
+    let mut widths: Vec<f32> = galleys.iter().map(|g| g.size().x + 26.0).collect();
     const INSET: f32 = 3.0;
-    let (rect, _) = ui.allocate_exact_size(vec2(widths.iter().sum::<f32>() + 2.0 * INSET, GROUP_H), Sense::hover());
+    let seg_h = GROUP_H - 2.0 * INSET;
+    let stacked = widths.len() > 1 && widths.iter().sum::<f32>() + 2.0 * INSET > ui.available_width();
+    let size = if stacked {
+        let w = widths.iter().copied().fold(0.0, f32::max).max(ui.available_width() - 2.0 * INSET);
+        widths.iter_mut().for_each(|x| *x = w);
+        vec2(w + 2.0 * INSET, seg_h * widths.len() as f32 + 2.0 * INSET)
+    } else {
+        vec2(widths.iter().sum::<f32>() + 2.0 * INSET, GROUP_H)
+    };
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     let painter = ui.painter().clone();
     painter.rect(rect, GROUP_R, if pal.dark { pal.well() } else { pal.header }, Stroke::new(1.0, pal.border), StrokeKind::Inside);
     let mut clicked = None;
     let mut x = rect.min.x + INSET;
     for (k, (galley, w)) in galleys.into_iter().zip(&widths).enumerate() {
-        let seg = Rect::from_min_size(pos2(x, rect.min.y + INSET), vec2(*w, GROUP_H - 2.0 * INSET));
+        let seg = if stacked {
+            Rect::from_min_size(pos2(rect.min.x + INSET, rect.min.y + INSET + seg_h * k as f32), vec2(*w, seg_h))
+        } else {
+            Rect::from_min_size(pos2(x, rect.min.y + INSET), vec2(*w, seg_h))
+        };
         let pressed = on.get(k).copied().unwrap_or(false);
         let r = ui.interact(seg, egui::Id::unique((id, k)), Sense::click());
         r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, pressed, labels[k]));

@@ -283,21 +283,15 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
                 (tr!("Click on water"), tr!("Raise it a block")),
                 (tr!("Right-click"), tr!("Lower it a block")),
                 (tr!("Shift+right-click"), tr!("Drain it")),
-                (tr!("Hold"), tr!("Keep going, to the rim or the bottom")),
+                (tr!("Hold"), tr!("Repeat, a block at a time")),
             ],
             None,
             Some(Demo::Flood),
         ),
-        Tool::Drain => card(
-            tr!("Drains a body of water, as far as it reaches."),
-            vec![(tr!("Click"), tr!("Drain it")), (tr!("Right-click"), tr!("Fill it"))],
-            None,
-            Some(Demo::Drain),
-        ),
         Tool::Water => card(
-            tr!("Lays water under the brush, as high as where the stroke starts."),
+            tr!("Lays water under the brush, up to the water height chosen in Tool Settings."),
             vec![(tr!("Drag"), tr!("Lay water")), (tr!("Right-drag"), tr!("Take it off"))],
-            None,
+            Some(tr!("Where I start: as high as where each stroke starts. Sea level or Fixed: up to that level, ground at or above it staying dry.")),
             Some(Demo::Water),
         ),
         Tool::River => card(
@@ -380,7 +374,6 @@ pub enum Demo {
     AutoBiome,
     Eyedropper,
     Flood,
-    Drain,
     Water,
     River,
     Road,
@@ -759,10 +752,10 @@ impl Demo {
                 let m = smooth_step(0.0, 0.55, progress);
                 Some((20.0 + (87.0 - 20.0) * m, 44.0 + (30.0 - 44.0) * m, 2.0, progress > 0.55 && progress < 0.7))
             }
-            Demo::Flood | Demo::Drain => {
+            Demo::Flood => {
                 s.add_basin();
                 let rise = smooth_step(0.15, 1.0, progress);
-                s.water = (54.0 + 12.0 * if self == Demo::Flood { rise } else { 1.0 - rise }) as f32;
+                s.water = (54.0 + 12.0 * rise) as f32;
                 (progress < 0.3).then_some((64.0, 30.0, 2.0, true))
             }
             Demo::Water => {
@@ -1287,7 +1280,7 @@ mod tests {
             return;
         };
         let brush = Brush::default();
-        for (name, which) in [("card-cover", 0), ("card-river", 1), ("card-brush", 2), ("card-objects", 3)] {
+        for (name, which) in [("card-cover", 0), ("card-river", 1), ("card-brush", 2), ("card-objects", 3), ("card-water", 4), ("card-flood", 5)] {
             let brush = brush.clone();
             let mut h = egui_kittest::Harness::builder().with_size(vec2(320.0, 420.0)).with_pixels_per_point(2.0).wgpu().build_ui(move |ui| {
                 crate::theme::install(ui.ctx());
@@ -1296,6 +1289,8 @@ mod tests {
                         0 => tool_card(Tool::Cover),
                         1 => tool_card(Tool::River),
                         3 => tool_card(Tool::Objects),
+                        4 => tool_card(Tool::Water),
+                        5 => tool_card(Tool::Flood),
                         _ => Card {
                             title: "Sine Circle".into(),
                             shortcut: None,

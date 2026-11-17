@@ -4216,7 +4216,7 @@ impl MassifApp {
                 });
                 match choice {
                     Some(true) => {
-                        let msg = crate::tools::flood_anyway(&mut self.doc, &mut self.tools, &ask);
+                        let msg = crate::tools::flood_anyway(&mut self.doc, &ask);
                         self.say(ctx, msg, false, None);
                     }
                     Some(false) => {}
@@ -6387,43 +6387,132 @@ mod tests {
         assert_eq!(h.state().tools.flatten_mode, FlattenMode::Both);
     }
 
-    /// Flood's From the click, on by default, turned off in Tool Settings
-    /// (rendered for the eye with MASSIF_SNAPSHOT_DIR).
+    /// The water height of Flood and of the Water brush, one choice of
+    /// three in Tool Settings, says in words what it will do; Fixed shows
+    /// its level; the height limit is folded apart, its state in its title.
+    /// At the narrowest window, nothing runs past the sidebar. Rendered for
+    /// the eye, each tool in each mode, with MASSIF_SNAPSHOT_DIR.
     #[test]
-    fn flood_from_the_click_in_tool_settings() {
+    fn the_water_height_in_tool_settings() {
+        use crate::tools::WaterHeight;
         use egui_kittest::kittest::Queryable;
-        let mut h = harness(ThemeChoice::Dark);
+        let mut h = egui_kittest::Harness::builder()
+            // As narrow as the window goes (960 points: the sidebar at its
+            // narrowest), tall enough to see the whole of Tool Settings.
+            .with_size(vec2(960.0, 1500.0))
+            .with_pixels_per_point(std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0))
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_eframe(move |cc| {
+                theme::install(&cc.egui_ctx);
+                let world = generate(&GenParams { tiles_x: 4, tiles_z: 4, landform: Landform::Islands, ..GenParams::default() });
+                let mut app = MassifApp::for_tests(world);
+                app.settings.theme = ThemeChoice::Dark;
+                app
+            });
         h.run_steps(3);
-        h.state_mut().tools.select(Tool::Flood);
-        h.run_steps(3);
-        assert!(h.state().tools.water_from_click);
-        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
-            let image = h.render().unwrap();
-            let rect = h.get_by_label("From the click").rect();
-            let ppp = h.ctx.pixels_per_point();
-            let (x0, y0) = (((rect.left() - 40.0).max(0.0) * ppp) as u32, ((rect.top() - 60.0).max(0.0) * ppp) as u32);
-            let crop = image::imageops::crop_imm(&image, x0, y0, (360.0 * ppp) as u32, (200.0 * ppp) as u32).to_image();
-            crop.save(dir.join("tool-settings-flood.png")).unwrap();
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        for (tool, start, name) in [(Tool::Water, "Where I start", "water"), (Tool::Flood, "Where I click", "flood")] {
+            h.state_mut().tools.select(tool);
+            h.run_steps(3);
+            assert_eq!(h.state().tools.water_height(tool), WaterHeight::Start);
+            for (label, mode, words) in [
+                (start, WaterHeight::Start, if tool == Tool::Flood { "Fills the hollow clicked" } else { "Each stroke fills to the height where it starts" }),
+                ("Sea level (63)", WaterHeight::Sea, if tool == Tool::Flood { "Fills the area clicked up to y 63" } else { "Water is laid up to y 63" }),
+                ("Fixed", WaterHeight::Fixed, "up to y 63"),
+            ] {
+                h.get_by_label(label).scroll_to_me();
+                h.run_steps(2);
+                h.get_by_label(label).click();
+                h.run_steps(3);
+                assert_eq!(h.state().tools.water_height(tool), mode, "{label}");
+                assert_eq!(h.query_by_label("Level").is_some(), mode == WaterHeight::Fixed, "{label}");
+                let hint = h.get_by_label_contains(words);
+                // Nothing past the sidebar's edge.
+                let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+                let side = areas.iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::ToolSettings)).map(|(_, r)| *r).expect("Tool Settings shown");
+                for node in [h.get_by_label(start).rect(), h.get_by_label("Fixed").rect(), hint.rect(), h.get_by_label("Height limit").rect()] {
+                    assert!(node.right() <= side.right() + 0.5, "{label}: {node:?} past {side:?}");
+                }
+                if let Some(dir) = &dir {
+                    let image = h.render().unwrap();
+                    let ppp = h.ctx.pixels_per_point();
+                    let crop = image::imageops::crop_imm(&image, (side.left() * ppp) as u32, (side.top() * ppp) as u32, (side.width() * ppp) as u32, (side.height() * ppp) as u32).to_image();
+                    crop.save(dir.join(format!("water-height-{name}-{}.png", format!("{mode:?}").to_lowercase()))).unwrap();
+                }
+            }
+            h.get_by_label(start).scroll_to_me();
+            h.run_steps(2);
+            h.get_by_label(start).click();
+            h.run_steps(2);
         }
-        h.get_by_label("From the click").click();
-        h.run_steps(2);
-        assert!(!h.state().tools.water_from_click);
-        // The limit, off by default, turned on.
+        // The limit, folded and off: its title says so; unfolded, turned on.
         assert!(!h.state().tools.water_limit_on);
-        // (Below the fold of Tool Settings: scrolled to first.)
+        assert!(h.query_by_label("Limit the water's height").is_none());
+        h.get_by_label("Height limit").scroll_to_me();
+        h.run_steps(2);
+        h.get_by_label("Height limit").click();
+        h.run_steps(3);
         h.get_by_label("Limit the water's height").scroll_to_me();
         h.run_steps(3);
         h.get_by_label("Limit the water's height").click();
         h.run_steps(3);
         assert!(h.state().tools.water_limit_on);
-        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+        assert!(h.query_by_label("y 63").is_some(), "the limit in the title");
+        if let Some(dir) = &dir {
             let image = h.render().unwrap();
-            let rect = h.get_by_label("From the click").rect();
+            let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+            let side = areas.iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::ToolSettings)).map(|(_, r)| *r).unwrap();
             let ppp = h.ctx.pixels_per_point();
-            let (x0, y0) = (((rect.left() - 40.0).max(0.0) * ppp) as u32, ((rect.top() - 60.0).max(0.0) * ppp) as u32);
-            let crop = image::imageops::crop_imm(&image, x0, y0, (360.0 * ppp) as u32, (260.0 * ppp) as u32).to_image();
-            crop.save(dir.join("tool-settings-flood-limit.png")).unwrap();
+            let crop = image::imageops::crop_imm(&image, (side.left() * ppp) as u32, (side.top() * ppp) as u32, (side.width() * ppp) as u32, (side.height() * ppp) as u32).to_image();
+            crop.save(dir.join("water-height-flood-limit.png")).unwrap();
         }
+    }
+
+    /// Over the map, the Water brush says by the cursor the level it fills
+    /// to, or why the ground stays dry. Rendered with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn the_water_tag_follows_the_cursor() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(3);
+        for (name, height, level) in [("water-tag-start", crate::tools::WaterHeight::Start, 63), ("water-tag-dry", crate::tools::WaterHeight::Fixed, 40)] {
+            h.state_mut().tools.select(Tool::Water);
+            h.state_mut().tools.brush_height = height;
+            h.state_mut().tools.water_level = level;
+            h.run_steps(2);
+            let map = map_rect(h.state(), &h.ctx);
+            let at = map.center() + vec2(-60.0, -40.0);
+            h.event(egui::Event::PointerMoved(at));
+            h.run_steps(4);
+            let image = h.render().unwrap();
+            let ppp = h.ctx.pixels_per_point();
+            let crop = image::imageops::crop_imm(&image, ((at.x - 120.0) * ppp) as u32, ((at.y - 100.0) * ppp) as u32, (420.0 * ppp) as u32, (220.0 * ppp) as u32).to_image();
+            crop.save(dir.join(format!("{name}.png"))).unwrap();
+        }
+    }
+
+    /// Settings saved before the water heights: From the click on is Where
+    /// I start (or click), off is Fixed at the level that was set; and a
+    /// Drain tool saved is Flood.
+    #[test]
+    fn the_old_water_settings_carry_over() {
+        use crate::tools::{ToolState, WaterHeight};
+        for (old, want) in [(r#"{"water_from_click": true, "water_level": 70}"#, WaterHeight::Start), (r#"{"water_from_click": false, "water_level": 70}"#, WaterHeight::Fixed), (r#"{"flood_from_click": false}"#, WaterHeight::Fixed), (r#"{}"#, WaterHeight::Start)] {
+            let mut tools: ToolState = serde_json::from_str(old).unwrap();
+            tools.settle();
+            assert_eq!((tools.flood_height, tools.brush_height), (want, want), "{old}");
+            let saved = serde_json::to_string(&tools).unwrap();
+            assert!(!saved.contains("from_click"), "no longer written");
+            let again: ToolState = serde_json::from_str(&saved).unwrap();
+            assert_eq!((again.flood_height, again.brush_height), (want, want));
+        }
+        assert_eq!(serde_json::from_str::<ToolState>(r#"{"water_level": 70}"#).unwrap().water_level, 70);
+        let mut tools: ToolState = serde_json::from_str(r#"{"tool": "Drain", "previous": "Drain", "tried": ["Drain"]}"#).unwrap();
+        tools.settle();
+        assert_eq!((tools.tool, tools.previous), (Tool::Flood, Tool::Flood));
     }
 
     /// Flood from the click out of a hollow asks first: the dialog says how

@@ -1207,43 +1207,65 @@ are not kept.
 
 ## Flood and drain
 
-The water tools (Water group) work at any height, wherever you use them;
-the sea's level is not a limit.
+The Water group has three tools: the **Water brush**, **Flood** and the
+**River** tool. They work at any height, wherever you use them; the sea's
+level is not a limit.
 
-- **Flood** fills with water the hollow you click. With **From the click**
-  on (in Tool Settings, the default), the water rises in that hollow up to
-  the lowest point of its rim, where it would spill, and the **Water
-  level** below takes that height; a lake already in the hollow counts as
-  its floor. Clicked where water would only run away (on a slope, a
-  hilltop, flat ground), it asks first: made to stay a block over the spot,
-  the water would spread wherever the land lies lower, and the question
-  says over how many columns and up to what level; **Flood anyway** floods
-  it (one step to undo, inside the selection only when there is one),
-  **Cancel** leaves the map as it was. With **Warn before flooding beyond
-  a hollow** off (Tool Settings), it floods at once.
-- Clicked on water, **Flood** raises that body of water by one block: it
-  covers the shore a block above it, as far as it reaches. At the rim of
-  its hollow, where a block more would spill, it asks first, as above.
-- Flood's **right button** lowers the body of water clicked by one block:
-  its top layer goes, and the shore it uncovers stays as the ground was.
-  When the last layer goes, the water is gone. **Shift + right click**
-  drains the whole body at once, as **Drain** does.
+**Water height.** The Water brush and Flood each take the water's height
+from one choice in Tool Settings, with a line under it saying in plain
+words what will happen:
+
+- **Where I start** (Water brush): each stroke fills to the height where
+  it starts, the surface of the water there, or a block over the ground.
+  **Where I click** (Flood): the hollow clicked fills up to the lowest
+  point of its rim, where it would spill; a lake already in it counts as
+  its floor.
+- **Sea level (63)**: the water is laid up to the map's sea level.
+- **Fixed**: up to a level of your own, set in the **Level** field shown
+  in this mode. This is the water's level, not a limit: ground at or above
+  it stays dry, and the tool says so.
+
+Over the map, a tag by the cursor says what the tool would do there:
+**Fills to y 74**, **Raises to y 75**, or why the ground stays dry
+(**Dry here: the ground is at or above y 62.**), so that a level is never
+a surprise. Settings saved by an older version carry over: From the click
+on is Where I start (or click), off is Fixed at the level that was set.
+
+**Flood.**
+
+- Clicked on dry land, it fills the hollow (or, with Sea level or Fixed,
+  the area clicked, wherever the land lies lower). With Where I click, a
+  spot where water would only run away (a slope, a hilltop, flat ground)
+  asks first: made to stay a block over the spot, the water would spread
+  wherever the land lies lower, and the question says over how many
+  columns and up to what level; **Flood anyway** floods it (one step to
+  undo, inside the selection only when there is one), **Cancel** leaves
+  the map as it was. With **Warn before flooding beyond a hollow** off,
+  it floods at once.
+- Clicked on water with Where I click, it raises that body of water by one
+  block: it covers the shore a block above it, as far as it reaches. At
+  the rim of its hollow, where a block more would spill, it asks first, as
+  above. With Sea level or Fixed, it fills water lower than that level up
+  to it, and says so when the water is already there.
+- Its **right button** lowers the body of water clicked by one block: its
+  top layer goes, and the shore it uncovers stays as the ground was. When
+  the last layer goes, the water is gone. **Shift + right click** drains
+  the whole body at once. (Flood took over from the Drain tool: a Drain
+  saved in your settings is Flood.)
 - **Held down**, either button keeps going, a block at a time, at the pace
-  set by **Hold speed** in Tool Settings (6 blocks a second by default): up to
-  the rim of the hollow (or on past it with Warn before flooding beyond a
-  hollow off), down to the bottom. The 2D map and the 3D views follow it as
-  it goes, and the whole press is one step to undo.
-- The **Water brush** lays water under the brush. With From the click on,
-  each stroke lays it as high as where it starts: the surface of the water
-  there, or a block over the ground. The right button takes water off.
-- With From the click off, both use the **Water level** you set (**Sea
-  level** puts the sea's); Flood says so when that level is under the spot
-  clicked.
-- **Limit the water's height** (off by default) keeps both under a height
-  of your choice (**Sea level** puts the sea's): the water never rises
-  above it, and when the limit is under the spot used, the tool says so.
-- **Drain** (or Shift + right click with Flood) empties the body of water
-  clicked.
+  set by **Hold speed** in Tool Settings (6 blocks a second by default):
+  up to the rim of the hollow (or on past it with Warn before flooding
+  beyond a hollow off), down to the bottom. The 2D map and the 3D views
+  follow it as it goes, and the whole press is one step to undo.
+
+**Water brush.** It lays water under the brush at the water height chosen;
+the right button takes water off.
+
+**Height limit.** Folded under the other settings, its state in its title
+(**Off**, or the limit), **Limit the water's height** is the only thing
+that caps the water: every water tool stops at the **Highest** level set
+there, whatever the water height, and says so when the limit is under the
+spot used.
 
 All of them keep to the selection, and each click, press or stroke is one
 step to undo.
@@ -1772,7 +1794,7 @@ the Tools panel by hand is left as it is.)
   brush, Paint biome, Auto paint and Auto biome, ground covers, objects,
   tree sizes, pockets, combined layers, the Water brush, the slabs — act on
   the columns around the point under the cursor, as they do on the map;
-  the Eyedropper, Flood and Drain act where
+  the Eyedropper and Flood act where
   the click points. A tool of the map only — the selections, Pan, Road,
   River, annotations — says so at the top of the view, where the left
   button then turns the view and the right one moves it.

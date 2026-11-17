@@ -1123,6 +1123,18 @@ impl FloodGrid<'_> {
 /// hollow and water poured there runs away. A hollow of more than `cap`
 /// columns is filled to the level reached by then.
 pub fn spill_level(dim: &Dimension, x: i32, z: i32, cap: usize) -> Option<i16> {
+    spill(dim, x, z, cap)?.0
+}
+
+/// [`spill_level`] over a hollow of at most `cap` columns: `None` when the
+/// hollow is larger (or the column off the map), `Some(None)` where water
+/// poured runs away.
+pub fn spill_level_within(dim: &Dimension, x: i32, z: i32, cap: usize) -> Option<Option<i16>> {
+    spill(dim, x, z, cap).filter(|s| !s.1).map(|s| s.0)
+}
+
+/// The spill level, and whether the hollow was larger than `cap` columns.
+fn spill(dim: &Dimension, x: i32, z: i32, cap: usize) -> Option<(Option<i16>, bool)> {
     use std::cmp::Reverse;
     use std::collections::{BinaryHeap, HashSet};
     let mut ground = crate::river::Ground::new(dim.ground());
@@ -1132,6 +1144,7 @@ pub fn spill_level(dim: &Dimension, x: i32, z: i32, cap: usize) -> Option<i16> {
     let mut seen: HashSet<(i32, i32)> = HashSet::from([(x, z)]);
     let mut heap = BinaryHeap::from([Reverse((start, x, z))]);
     let mut inside = 0usize;
+    let mut capped = false;
     while let Some(Reverse((h, cx, cz))) = heap.pop() {
         if h < level {
             // Lower than the water: it runs out here.
@@ -1140,6 +1153,7 @@ pub fn spill_level(dim: &Dimension, x: i32, z: i32, cap: usize) -> Option<i16> {
         level = level.max(h);
         inside += 1;
         if inside > cap {
+            capped = true;
             break;
         }
         for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
@@ -1153,7 +1167,7 @@ pub fn spill_level(dim: &Dimension, x: i32, z: i32, cap: usize) -> Option<i16> {
             }
         }
     }
-    (level > start).then(|| level.clamp(i16::MIN as i32, i16::MAX as i32) as i16)
+    Some(((level > start).then(|| level.clamp(i16::MIN as i32, i16::MAX as i32) as i16), capped))
 }
 
 /// Flood-fill fluid on the ground level starting from column `(x, z)`.

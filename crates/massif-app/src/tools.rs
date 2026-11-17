@@ -43,8 +43,11 @@ pub enum Tool {
     AutoBiome,
     AutoPaint,
     Eyedropper,
+    /// Fills a hollow with water, raises or lowers a body of water; drains
+    /// it whole (Drain, a tool of its own before, is Flood's Shift + right
+    /// click).
+    #[serde(alias = "Drain")]
     Flood,
-    Drain,
     Water,
     /// A river laid out from its source: the water finds its way down,
     /// guided by the points it is dragged through.
@@ -79,7 +82,7 @@ impl Tool {
         ),
         (tn!("Select"), Icon::SquareDashed, &[Tool::SelectRect, Tool::SelectEllipse, Tool::SelectLasso, Tool::SelectBrush]),
         (tn!("Decor"), Icon::Shrub, &[Tool::Cover, Tool::Objects, Tool::TreeSize, Tool::Pockets, Tool::Combined]),
-        (tn!("Water"), Icon::Droplet, &[Tool::River, Tool::Flood, Tool::Drain, Tool::Water]),
+        (tn!("Water"), Icon::Droplet, &[Tool::Water, Tool::Flood, Tool::River]),
         (tn!("Levels"), Icon::Layers, &[Tool::StampSlab, Tool::EraseSlab]),
         (tn!("Navigate"), Icon::Compass, &[Tool::Pan, Tool::Eyedropper]),
     ];
@@ -109,7 +112,6 @@ impl Tool {
             Tool::AutoPaint => tr!("Auto paint"),
             Tool::Eyedropper => tr!("Eyedropper"),
             Tool::Flood => tr!("Flood"),
-            Tool::Drain => tr!("Drain"),
             Tool::Water => tr!("Water brush"),
             Tool::River => tr!("River"),
             Tool::StampSlab => tr!("Stamp slab"),
@@ -146,7 +148,6 @@ impl Tool {
             Tool::AutoPaint => Icon::WandSparkles,
             Tool::Eyedropper => Icon::Pipette,
             Tool::Flood => Icon::PaintBucket,
-            Tool::Drain => Icon::DropletOff,
             Tool::Water => Icon::Droplets,
             Tool::River => Icon::Route,
             Tool::StampSlab => Icon::Cuboid,
@@ -194,8 +195,7 @@ impl Tool {
             }
             Tool::Eyedropper => tr!("Pick the terrain, biome, height and water under the cursor."),
             Tool::Flood => tr!("Fill a basin with water; on water, raise it a block. Right button: lower it a block, Shift: drain it. Hold to repeat."),
-            Tool::Drain => tr!("Drain a body of water. Right button: fill."),
-            Tool::Water => tr!("Set the water level. Right button: remove water."),
+            Tool::Water => tr!("Lay water under the brush. Right button: take it off."),
             Tool::River => {
                 tr!("Click a source: the water finds its way down. Drag it to guide it.")
             }
@@ -221,7 +221,7 @@ impl Tool {
     }
 
     pub const fn uses_brush(self) -> bool {
-        !matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Drain | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso)
+        !matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso)
     }
 
     /// The tools that draw the selection.
@@ -231,7 +231,7 @@ impl Tool {
 
     /// Tools that apply once per click rather than continuously.
     pub const fn is_click(self) -> bool {
-        matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Drain)
+        matches!(self, Tool::Eyedropper | Tool::Flood)
     }
 
     pub const fn needs_slab_level(self) -> bool {
@@ -263,7 +263,7 @@ impl Tool {
             // passes): Smooth3d, from its shortcut, melts sculpted matter.
             Tool::Smooth3d => Use3d::Smooth,
             Tool::PaintTerrain => Use3d::Paint,
-            Tool::Eyedropper | Tool::Flood | Tool::Drain => Use3d::Click,
+            Tool::Eyedropper | Tool::Flood => Use3d::Click,
             Tool::Pan | Tool::Road | Tool::River | Tool::Annotate | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush => Use3d::MapOnly,
             Tool::Smooth
             | Tool::Flatten
@@ -348,6 +348,33 @@ fn unpaint_for_stroke(doc: &mut Document, tools: &ToolState) -> Option<TerrainId
     Some(back)
 }
 
+/// Where a water tool takes the water's height from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum WaterHeight {
+    /// From where it is used: Flood, the hollow clicked up to where it
+    /// spills; the Water brush, where each stroke starts.
+    #[default]
+    Start,
+    /// The map's sea level.
+    Sea,
+    /// The level set ([`ToolState::water_level`]).
+    Fixed,
+}
+
+impl WaterHeight {
+    pub const ALL: [WaterHeight; 3] = [WaterHeight::Start, WaterHeight::Sea, WaterHeight::Fixed];
+
+    /// The water's level it sets, `None` for Where I start / click (the
+    /// land says).
+    pub fn level(self, doc: &Document, tools: &ToolState) -> Option<i16> {
+        match self {
+            WaterHeight::Start => None,
+            WaterHeight::Sea => Some(doc.world.meta.sea_level.clamp(i16::MIN as i32, i16::MAX as i32) as i16),
+            WaterHeight::Fixed => Some(tools.water_level),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ToolState {
@@ -387,13 +414,20 @@ pub struct ToolState {
     pub combined: u16,
     /// The tree sizes shown over the map even when another tool is in hand.
     pub show_sizes: bool,
+    /// The water's level of the Fixed water height.
     pub water_level: i16,
-    /// The water tools take their level from where they are used: Flood
-    /// fills the hollow clicked up to where it spills, the Water brush lays
-    /// water as high as where its stroke starts; otherwise both use
-    /// `water_level`.
-    #[serde(alias = "flood_from_click")]
-    pub water_from_click: bool,
+    /// Where Flood takes the water's height from: the hollow clicked, up to
+    /// where it spills; the sea's level; or `water_level`.
+    pub flood_height: WaterHeight,
+    /// Where the Water brush takes it from: where each stroke starts (the
+    /// water's surface there, or a block over the ground); the sea's level;
+    /// or `water_level`.
+    pub brush_height: WaterHeight,
+    /// From a version before the water heights: the water tools took their
+    /// level from where they were used, or (false) `water_level`. Read once
+    /// ([`ToolState::settle`]), never written.
+    #[serde(rename = "water_from_click", alias = "flood_from_click", skip_serializing)]
+    pub(crate) old_from_click: Option<bool>,
     /// Flood from the click, on a spot that is not in a hollow: ask first
     /// (the water would spread as far as the land lies under it), or flood.
     pub flood_warn: bool,
@@ -979,7 +1013,9 @@ impl Default for ToolState {
             combined: 0,
             show_sizes: false,
             water_level: 63,
-            water_from_click: true,
+            flood_height: WaterHeight::Start,
+            brush_height: WaterHeight::Start,
+            old_from_click: None,
             flood_warn: true,
             water_rate: 6.0,
             flood_ask: None,
@@ -1041,6 +1077,15 @@ impl ToolState {
         if self.previous.is_sculpt() {
             self.previous = Tool::PaintTerrain;
         }
+        // From the click off: both at the level that was set.
+        if self.old_from_click.take() == Some(false) {
+            (self.flood_height, self.brush_height) = (WaterHeight::Fixed, WaterHeight::Fixed);
+        }
+    }
+
+    /// The water height of the water tool `tool`.
+    pub fn water_height(&self, tool: Tool) -> WaterHeight {
+        if tool == Tool::Flood { self.flood_height } else { self.brush_height }
     }
 
     /// A new tool not tried yet: marked in the Tools panel.
@@ -1125,6 +1170,11 @@ impl Stroke {
         self.secondary
     }
 
+    /// The level a stroke of the Water brush lays its water at.
+    pub fn water_to(&self) -> Option<i16> {
+        self.water_to
+    }
+
     /// What the stroke read of the land, taken back.
     pub fn take_classes(&mut self) -> Option<massif_core::auto::Classes> {
         self.classes.take()
@@ -1160,7 +1210,7 @@ pub fn begin_stroke(doc: &mut Document, tools: &ToolState, at: (f32, f32), inver
         return (None, None);
     }
     let level = match tool {
-        Tool::Flood | Tool::Drain | Tool::Build | Tool::Dig | Tool::Smooth3d => 0,
+        Tool::Flood | Tool::Build | Tool::Dig | Tool::Smooth3d => 0,
         _ => doc.active_level,
     };
     if tool.needs_slab_level() && doc.active_kind() == LevelKind::Ground {
@@ -1173,16 +1223,11 @@ pub fn begin_stroke(doc: &mut Document, tools: &ToolState, at: (f32, f32), inver
         .then(|| ops::height_at(doc.dimension(), level, at.0.floor() as i32, at.1.floor() as i32, tools.surface()))
         .flatten();
     // The Water brush's level: from where the stroke starts (its water's
-    // surface, or a block over its ground), or the one set; under the limit.
+    // surface, or a block over its ground), the sea's or the one set; under
+    // the limit.
     let water_to = if tool == Tool::Water && !inverse {
         let here = probe(doc, at.0.floor() as i32, at.1.floor() as i32);
-        let level = match &here {
-            Some(p) if tools.water_from_click => {
-                if p.fluid != NO_FLUID && p.fluid as i32 > block_top(p.height) { p.fluid } else { (block_top(p.height) + 1).clamp(i16::MIN as i32, i16::MAX as i32) as i16 }
-            }
-            _ => tools.water_level,
-        };
-        let level = tools.limit_water(level);
+        let level = tools.limit_water(brush_level(doc, tools, at.0.floor() as i32, at.1.floor() as i32));
         if tools.water_limit_on && here.is_some_and(|p| block_top(p.height) >= level as i32) {
             return (None, Some(under_the_limit(tools)));
         }
@@ -1413,7 +1458,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                     massif_core::voxel::sculpt(&mut edit, brush, [x, y, z], strength, mode);
                 }
             }
-            Tool::Eyedropper | Tool::Flood | Tool::Drain | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush => {}
+            Tool::Eyedropper | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush => {}
         }
     }
     // A combined layer's pockets, painted from another level: the same
@@ -1650,27 +1695,41 @@ pub struct FloodAsk {
 
 /// Flood as asked: up to the level of `ask`, from where it was clicked;
 /// one step to undo. What it did.
-pub fn flood_anyway(doc: &mut Document, tools: &mut ToolState, ask: &FloodAsk) -> String {
-    tools.water_level = ask.level;
+pub fn flood_anyway(doc: &mut Document, ask: &FloodAsk) -> String {
     doc.history.begin(tr!("Flood"), doc.dim);
     let n = ops::flood_fill(&mut doc.history.edit(&mut doc.world, 0), ask.x, ask.z, Flood::Fill(ask.level), FLOOD_MAX);
     doc.commit();
     tr!("Flooded {n} columns up to {water_level}", water_level = ask.level, n)
 }
 
-/// What a flood (or a drain) from column `(x, z)` is to do: how and up
-/// to what level; or what to say instead, a question asked included.
-fn pour_mode(doc: &Document, tools: &mut ToolState, x: i32, z: i32, flood: bool) -> Result<(Flood, i16), Feedback> {
-    // From the click: the hollow clicked, up to where it spills.
-    if flood && tools.water_from_click {
-        match ops::spill_level(doc.dimension(), x, z, 16 << 20) {
-            Some(level) => tools.water_level = level,
+/// The level a Water brush stroke starting on column `(x, z)` lays its
+/// water at, before the limit: the water's surface there, or a block over
+/// the ground, with Where I start; the sea's or the one set otherwise.
+fn brush_level(doc: &Document, tools: &ToolState, x: i32, z: i32) -> i16 {
+    if let Some(level) = tools.brush_height.level(doc, tools) {
+        return level;
+    }
+    match (ops::water_at(doc.dimension(), x, z), ground_top(doc, x, z)) {
+        (Some(w), _) => w,
+        (None, Some(g)) => (g + 1).clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+        (None, None) => tools.water_level,
+    }
+}
+
+/// The level Flood fills to from column `(x, z)`, under the limit; or what
+/// to say instead, a question asked included.
+fn pour_mode(doc: &Document, tools: &mut ToolState, x: i32, z: i32) -> Result<i16, Feedback> {
+    let level = match tools.flood_height.level(doc, tools) {
+        Some(level) => level,
+        // Where I click: the hollow clicked, up to where it spills.
+        None => match ops::spill_level(doc.dimension(), x, z, 16 << 20) {
+            Some(level) => level,
             // Not in a hollow: the water would run away. Made to stay a
             // block over the spot, it spreads as far as the land lies under
             // it: asked first, unless told not to.
             None => {
                 let Some(level) = ops::pour_level(doc.dimension(), x, z) else {
-                    return Err(Some(tr!("This spot is not in a hollow: water poured here runs away. Untick From the click in Tool Settings to flood up to a level of your own.").to_owned()));
+                    return Err(Some(tr!("There is no land here to hold water.").to_owned()));
                 };
                 let level = tools.limit_water(level);
                 if tools.flood_warn {
@@ -1678,26 +1737,82 @@ fn pour_mode(doc: &Document, tools: &mut ToolState, x: i32, z: i32, flood: bool)
                     tools.flood_ask = Some(FloodAsk { x, z, level, columns, more: columns >= FLOOD_MAX, at_rim: false });
                     return Err(None);
                 }
-                tools.water_level = level;
+                level
             }
-        }
-    }
-    let level = tools.limit_water(tools.water_level);
-    if flood && tools.water_limit_on && probe(doc, x, z).is_some_and(|p| block_top(p.height) >= level as i32) {
+        },
+    };
+    let level = tools.limit_water(level);
+    if tools.water_limit_on && ground_top(doc, x, z).is_some_and(|g| g >= level as i32) {
         return Err(Some(under_the_limit(tools)));
     }
-    Ok((if flood { Flood::Fill(level) } else { Flood::Drain }, level))
+    Ok(level)
 }
 
-/// What a flood (or a drain) of `n` columns up to `level` says.
+/// The top of the ground at column `(x, z)`, as a block's y.
+fn ground_top(doc: &Document, x: i32, z: i32) -> Option<i32> {
+    probe(doc, x, z).map(|p| block_top(p.height))
+}
+
+/// What a flood of `n` columns up to `level` (or a drain, `flood` false)
+/// says.
 fn poured(doc: &Document, tools: &ToolState, x: i32, z: i32, flood: bool, level: i16, n: usize) -> String {
     match (flood, n) {
-        (true, 0) if !tools.water_from_click && probe(doc, x, z).is_some_and(|p| block_top(p.height) >= tools.water_level as i32) => {
-            tr!("The water level {water_level} is under this spot: raise it in Tool Settings, or tick From the click.", water_level = tools.water_level)
-        }
+        (true, 0) if ground_top(doc, x, z).is_some_and(|g| g >= level as i32) => dry_here(tools, level),
         (_, 0) => tr!("Nothing to fill or drain here").to_owned(),
         (true, n) => tr!("Flooded {n} columns up to {water_level}", water_level = level, n),
         (false, n) => tr!("Drained {n} columns", n),
+    }
+}
+
+/// What the water tools say on ground as high as the water they lay, at
+/// `level`: what keeps it dry.
+fn dry_here(tools: &ToolState, level: i16) -> String {
+    if tools.water_limit_on && level >= tools.water_limit {
+        tr!("Dry here: the height limit, y {water_limit}, is under the ground.", water_limit = tools.water_limit)
+    } else {
+        tr!("Dry here: the ground is at or above y {level}.", level)
+    }
+}
+
+/// What the water tool in hand would do at column `(x, z)`, for the tag
+/// by the cursor: the level it fills to, or why it stays dry. A stroke of
+/// the Water brush under way lays its water at `stroke`.
+pub fn water_hint(doc: &Document, tools: &ToolState, x: i32, z: i32, stroke: Option<i16>) -> Option<String> {
+    let ground = ground_top(doc, x, z)?;
+    let water = ops::water_at(doc.dimension(), x, z);
+    let fills = |level: i16| if ground >= level as i32 { dry_here(tools, level) } else { tr!("Fills to y {level}", level) };
+    match tools.tool {
+        Tool::Water => Some(fills(stroke.unwrap_or_else(|| tools.limit_water(brush_level(doc, tools, x, z))))),
+        Tool::Flood => {
+            if let Some(level) = tools.flood_height.level(doc, tools) {
+                let level = tools.limit_water(level);
+                return Some(match water {
+                    Some(w) if w >= level => tr!("The water here is at y {level}", level = w),
+                    _ => fills(level),
+                });
+            }
+            // Where I click: worked out over a hollow of a reasonable
+            // size only, the cursor moving on.
+            let rim = ops::spill_level_within(doc.dimension(), x, z, 1 << 16);
+            Some(match water {
+                Some(w) => {
+                    let higher = w.saturating_add(1);
+                    if tools.limit_water(higher) < higher {
+                        dry_here(tools, higher)
+                    } else if tools.flood_warn && rim.is_some_and(|rim| rim.is_none_or(|rim| higher > rim)) {
+                        tr!("At the rim, y {level}: a block more spills", level = w)
+                    } else {
+                        tr!("Raises to y {level}", level = higher)
+                    }
+                }
+                None => match rim {
+                    Some(Some(level)) => fills(tools.limit_water(level)),
+                    Some(None) => tr!("Not in a hollow: the water would spread").to_owned(),
+                    None => tr!("Fills the hollow up to where it spills").to_owned(),
+                },
+            })
+        }
+        _ => None,
     }
 }
 
@@ -1746,7 +1861,6 @@ impl WaterHold {
     }
 
     /// The blocks raised or lowered so far.
-    #[cfg(test)]
     pub fn blocks(&self) -> u32 {
         self.blocks
     }
@@ -1772,27 +1886,11 @@ pub fn press_water(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, lo
     }
     let water = ops::water_at(doc.dimension(), x, z);
     let mut hold = WaterHold { x, z, lower, step: 0, label: String::new(), rim: None, wait: 0.0, blocks: 0, level: water, flooded: None, end: None };
+    let start = tools.flood_height == WaterHeight::Start;
     match (lower, water) {
         (true, None) => return (None, Some(tr!("No water here to lower").to_owned())),
         (true, Some(_)) => hold.label = tr!("Lower the water").to_owned(),
-        // Dry land: flooded as by a click, the hold raising it on from there.
-        (false, None) => {
-            let (mode, level) = match pour_mode(doc, tools, x, z, true) {
-                Ok(m) => m,
-                Err(note) => return (None, note),
-            };
-            hold.label = tr!("Flood").to_owned();
-            hold.step = doc.history.begin(hold.label.clone(), doc.dim);
-            let n = ops::flood_fill(&mut doc.history.edit(&mut doc.world, 0), x, z, mode, FLOOD_MAX);
-            if n == 0 {
-                doc.commit();
-                return (None, Some(poured(doc, tools, x, z, true, level, n)));
-            }
-            hold.flooded = Some(n);
-            hold.level = ops::water_at(doc.dimension(), x, z);
-            return (Some(hold), None);
-        }
-        (false, Some(level)) => {
+        (false, Some(level)) if start => {
             // At the rim already: a block more, and it spills. Asked first.
             let rim = ops::spill_level(doc.dimension(), x, z, 16 << 20);
             let higher = level.saturating_add(1);
@@ -1806,6 +1904,30 @@ pub fn press_water(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, lo
             }
             hold.rim = Some(rim.filter(|_| tools.flood_warn));
             hold.label = tr!("Raise the water").to_owned();
+        }
+        // Dry land, or water under the level set: flooded up to its level
+        // (Where I click, the hold raising it on from there).
+        (false, water) => {
+            let level = match pour_mode(doc, tools, x, z) {
+                Ok(level) => level,
+                Err(note) => return (None, note),
+            };
+            if let Some(w) = water.filter(|&w| w >= level) {
+                return (None, Some(tr!("The water here is already at y {level}: choose Where I click in Tool Settings to raise it a block at a time.", level = w)));
+            }
+            hold.label = tr!("Flood").to_owned();
+            hold.step = doc.history.begin(hold.label.clone(), doc.dim);
+            let n = ops::flood_fill(&mut doc.history.edit(&mut doc.world, 0), x, z, Flood::Fill(level), FLOOD_MAX);
+            if n == 0 {
+                doc.commit();
+                return (None, Some(poured(doc, tools, x, z, true, level, n)));
+            }
+            hold.flooded = Some(n);
+            hold.level = ops::water_at(doc.dimension(), x, z);
+            if !start {
+                hold.end = Some(HoldEnd::Still);
+            }
+            return (Some(hold), None);
         }
     }
     hold.step = doc.history.begin(hold.label.clone(), doc.dim);
@@ -1927,17 +2049,6 @@ pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse:
                 Some(hold) => release_water(doc, hold).or(note),
                 None => note,
             }
-        }
-        Tool::Drain => {
-            let flood = inverse;
-            let (mode, level) = match pour_mode(doc, tools, x, z, flood) {
-                Ok(m) => m,
-                Err(note) => return note,
-            };
-            doc.history.begin(if flood { tr!("Flood") } else { tr!("Drain") }, doc.dim);
-            let n = ops::flood_fill(&mut doc.history.edit(&mut doc.world, 0), x, z, mode, FLOOD_MAX);
-            doc.commit();
-            Some(poured(doc, tools, x, z, flood, level, n))
         }
         _ => None,
     }
@@ -2387,7 +2498,7 @@ mod tests {
         assert_eq!(tools.terrain, d.world.registry.terrain_by_name("Grass").unwrap().0);
 
         tools.select(Tool::Flood);
-        tools.water_from_click = false;
+        tools.flood_height = WaterHeight::Fixed;
         tools.water_level = 70;
         let msg = click(&mut d, &mut tools, 0, 0, false).unwrap();
         assert!(msg.starts_with("Flooded 65536 columns"), "{msg}");
@@ -2403,7 +2514,7 @@ mod tests {
         let mut d = doc();
         let mut tools = ToolState::default();
         tools.select(Tool::Flood);
-        assert!(tools.water_from_click);
+        assert_eq!(tools.flood_height, WaterHeight::Start);
         // Not a hollow: it asks first, changing nothing.
         let steps = d.history.undo_count();
         assert_eq!(click(&mut d, &mut tools, 50, 50, false), None);
@@ -2412,10 +2523,10 @@ mod tests {
         assert!(ask.columns > 1000 && !ask.more, "{ask:?}");
         assert_eq!(d.history.undo_count(), steps);
         assert_eq!(probe(&d, 50, 50).unwrap().fluid, NO_FLUID);
-        tools.water_from_click = false;
+        tools.flood_height = WaterHeight::Fixed;
         tools.water_level = 40;
         let msg = click(&mut d, &mut tools, 50, 50, false).unwrap();
-        assert!(msg.starts_with("The water level 40 is under this spot"), "{msg}");
+        assert_eq!(msg, "Dry here: the ground is at or above y 40.");
         // With a limit, never higher than it; under the spot, it says so.
         tools.water_level = 70;
         tools.water_limit_on = true;
@@ -2442,7 +2553,7 @@ mod tests {
         let ask = tools.flood_ask.take().unwrap();
         assert_eq!(ask.level as i32, block_top(height(&d, 50, 50)) + 1);
         let steps = d.history.undo_count();
-        let msg = flood_anyway(&mut d, &mut tools, &ask);
+        let msg = flood_anyway(&mut d, &ask);
         assert_eq!(msg, format!("Flooded {} columns up to {}", ask.columns, ask.level));
         assert_eq!(d.history.undo_count(), steps + 1);
         assert_eq!(probe(&d, 50, 50).unwrap().fluid, ask.level);
@@ -2454,7 +2565,7 @@ mod tests {
         assert_eq!(click(&mut d, &mut tools, 50, 50, false), None);
         let inside = tools.flood_ask.take().unwrap();
         assert_eq!(inside.columns, 100 * 100, "{inside:?}");
-        flood_anyway(&mut d, &mut tools, &inside);
+        flood_anyway(&mut d, &inside);
         assert_eq!(probe(&d, -50, -50).unwrap().fluid, NO_FLUID);
         assert_eq!(probe(&d, 99, 99).unwrap().fluid, inside.level);
         // Not asked: flooded at once.
@@ -2535,12 +2646,16 @@ mod tests {
         let mut tools = ToolState::default();
         tools.select(Tool::Flood);
         let (bottom, rim) = pit(&mut d);
-        tools.water_from_click = false;
+        tools.flood_height = WaterHeight::Fixed;
         tools.water_level = bottom + 2;
         click(&mut d, &mut tools, 60, 60, false).unwrap();
         assert_eq!(water(&d, 60, 60), Some(bottom + 2));
+        // At the level set, a click changes nothing and says how to raise it.
+        let msg = click(&mut d, &mut tools, 60, 60, false).unwrap();
+        assert!(msg.starts_with(&format!("The water here is already at y {}", bottom + 2)), "{msg}");
+        tools.flood_height = WaterHeight::Start;
         let steps = d.history.undo_count();
-        // A click: a block.
+        // Where I click: a click, a block.
         assert_eq!(click(&mut d, &mut tools, 60, 60, false).unwrap(), format!("Water raised by 1 block, to {}", bottom + 3));
         // Held for 5 beats: 5 blocks, one step.
         let (hold, _) = press_water(&mut d, &mut tools, 60, 60, false, false);
@@ -2572,7 +2687,7 @@ mod tests {
         let ask = tools.flood_ask.take().expect("a question");
         assert!(ask.at_rim && ask.level == rim + 1, "{ask:?}");
         assert_eq!(water(&d, 60, 60), Some(rim));
-        flood_anyway(&mut d, &mut tools, &ask);
+        flood_anyway(&mut d, &ask);
         assert_eq!(water(&d, 60, 60), Some(rim + 1));
         d.undo();
         // Without the warning, held, it rises on past the rim; the height
@@ -2590,6 +2705,50 @@ mod tests {
         assert_eq!(water(&d, 60, 60), Some(rim + 3));
         assert_eq!(water(&d, 60 + 40, 60), Some(rim + 3));
         assert!(click(&mut d, &mut tools, 60, 60, false).unwrap().starts_with("The height limit"));
+    }
+
+    /// By the cursor, the water tools say the level they fill to, or why
+    /// the ground stays dry: a level under it, or the height limit.
+    #[test]
+    fn the_water_tools_say_what_they_would_fill() {
+        let mut d = doc();
+        let mut tools = ToolState::default();
+        let (bottom, rim) = pit(&mut d);
+        let ground = block_top(height(&d, 120, 120));
+        tools.select(Tool::Water);
+        let hint = |d: &Document, tools: &ToolState, x, z| water_hint(d, tools, x, z, None).unwrap();
+        assert_eq!(hint(&d, &tools, 120, 120), format!("Fills to y {}", ground + 1));
+        assert_eq!(hint(&d, &tools, 60, 60), format!("Fills to y {}", bottom + 1));
+        tools.brush_height = WaterHeight::Fixed;
+        tools.water_level = ground as i16 - 2;
+        assert_eq!(hint(&d, &tools, 120, 120), format!("Dry here: the ground is at or above y {}.", ground - 2));
+        assert_eq!(hint(&d, &tools, 60, 60), format!("Fills to y {}", ground - 2));
+        tools.brush_height = WaterHeight::Sea;
+        assert_eq!(hint(&d, &tools, 60, 60), format!("Fills to y {}", d.world.meta.sea_level));
+        // A stroke under way: its own level.
+        assert_eq!(water_hint(&d, &tools, 120, 120, Some(bottom + 3)).unwrap(), format!("Dry here: the ground is at or above y {}.", bottom + 3));
+        // The limit, under the ground.
+        tools.brush_height = WaterHeight::Start;
+        tools.water_limit_on = true;
+        tools.water_limit = bottom - 1;
+        assert_eq!(hint(&d, &tools, 60, 60), format!("Dry here: the height limit, y {}, is under the ground.", bottom - 1));
+        tools.water_limit_on = false;
+        // Flood, where I click: the hollow up to its rim; flat ground spreads.
+        tools.select(Tool::Flood);
+        assert_eq!(hint(&d, &tools, 60, 60), format!("Fills to y {rim}"));
+        assert_eq!(hint(&d, &tools, 120, 120), "Not in a hollow: the water would spread");
+        tools.flood_height = WaterHeight::Fixed;
+        tools.water_level = bottom + 2;
+        click(&mut d, &mut tools, 60, 60, false).unwrap();
+        assert_eq!(hint(&d, &tools, 60, 60), format!("The water here is at y {}", bottom + 2));
+        tools.flood_height = WaterHeight::Start;
+        assert_eq!(hint(&d, &tools, 60, 60), format!("Raises to y {}", bottom + 3));
+        click(&mut d, &mut tools, 70, 60, true).unwrap();
+        assert_eq!(hint(&d, &tools, 60, 60), format!("Raises to y {}", bottom + 2));
+        d.history.begin("fill", d.dim);
+        ops::flood_fill(&mut d.history.edit(&mut d.world, 0), 60, 60, Flood::Fill(rim), FLOOD_MAX);
+        d.commit();
+        assert_eq!(hint(&d, &tools, 60, 60), format!("At the rim, y {rim}: a block more spills"));
     }
 
     /// The Water brush lays its water as high as where its stroke starts,
@@ -2615,11 +2774,11 @@ mod tests {
         // Started in that water: its surface.
         assert!(paint(&mut d, &tools, (52.5, 50.5)).is_none());
         assert_eq!(probe(&d, 53, 50).unwrap().fluid as i32, ground + 1);
-        tools.water_from_click = false;
+        tools.brush_height = WaterHeight::Fixed;
         tools.water_level = 90;
         assert!(paint(&mut d, &tools, (100.5, 100.5)).is_none());
         assert_eq!(probe(&d, 100, 100).unwrap().fluid, 90);
-        tools.water_from_click = true;
+        tools.brush_height = WaterHeight::Start;
         tools.water_limit_on = true;
         tools.water_limit = 60;
         let msg = paint(&mut d, &tools, (-60.5, -60.5)).expect("it says why");
@@ -2640,7 +2799,7 @@ mod tests {
         assert!(height(&d, 0, 0) < 64.0);
 
         tools.select(Tool::Flood);
-        tools.water_from_click = false;
+        tools.flood_height = WaterHeight::Fixed;
         tools.water_level = 70;
         click(&mut d, &mut tools, 50, 50, false);
         assert_eq!(probe(&d, 60, 60).unwrap().fluid, 70);

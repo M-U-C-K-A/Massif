@@ -250,12 +250,6 @@ pub fn paint(painter: &Painter, rect: Rect, tool: Tool, color: Color32) {
             pen.line(&[(6.5, 12.5), (9.0, 11.5), (11.5, 12.5), (14.0, 11.5), (17.5, 12.5)]);
             pen.arrow((12.0, 2.0), (12.0, 8.0));
         }
-        // A basin, its water going down and out.
-        Tool::Drain => {
-            pen.basin();
-            pen.dashed(&[(7.0, 12.0), (17.0, 12.0)]);
-            pen.arrow((12.0, 3.0), (12.0, 15.5));
-        }
         // A drop of water over a ripple.
         Tool::Water => {
             // Its round bottom, from the upper right round to the upper

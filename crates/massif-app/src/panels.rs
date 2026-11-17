@@ -303,6 +303,81 @@ fn slider_row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> egui::Respo
     .inner
 }
 
+/// The water tools' settings: where the water's height comes from (one
+/// choice: where it is used, the sea's level, or a level of one's own),
+/// said in plain words; Flood's warning and pace; the height limit, apart
+/// and folded, saying whether it is on.
+fn water_settings(ui: &mut Ui, tools: &mut ToolState, doc: &Document, tool: Tool) {
+    use crate::tools::WaterHeight;
+    let (lo, hi) = (doc.dimension().min_y as i16, doc.dimension().max_y as i16);
+    let flood = tool == Tool::Flood;
+    let sea = doc.world.meta.sea_level as i16;
+    ui.label(tr!("Water height"));
+    let height = tools.water_height(tool);
+    let sea_label = tr!("Sea level ({sea_level})", sea_level = sea);
+    let labels = [if flood { tr!("Where I click") } else { tr!("Where I start") }, sea_label.as_str(), tr!("Fixed")];
+    if let Some(k) = crate::widgets::button_group(ui, if flood { "flood height" } else { "brush height" }, &labels, &WaterHeight::ALL.map(|h| h == height)) {
+        if flood {
+            tools.flood_height = WaterHeight::ALL[k];
+        } else {
+            tools.brush_height = WaterHeight::ALL[k];
+        }
+    }
+    let height = tools.water_height(tool);
+    ui.add_space(2.0);
+    if height == WaterHeight::Fixed {
+        slider_row(ui, tr!("Level"), |ui| crate::widgets::drag(ui, egui::DragValue::new(&mut tools.water_level).range(lo..=hi).prefix("y ")));
+    }
+    let level = height.level(doc, tools).unwrap_or(tools.water_level);
+    hint(
+        ui,
+        &match (flood, height) {
+            (true, WaterHeight::Start) => tr!("Fills the hollow clicked up to where it would spill; on water, raises it a block.").to_owned(),
+            (true, _) => tr!("Fills the area clicked up to y {level}, wherever the land lies lower: ground at or above it stays dry.", level),
+            (false, WaterHeight::Start) => tr!("Each stroke fills to the height where it starts: the water's surface there, or a block over the ground.").to_owned(),
+            (false, _) => tr!("Water is laid up to y {level}: ground at or above it stays dry.", level),
+        },
+    );
+    if flood {
+        ui.add_space(4.0);
+        if height == WaterHeight::Start {
+            crate::widgets::checkbox(ui, &mut tools.flood_warn, tr!("Warn before flooding beyond a hollow"));
+            hint(ui, tr!("Out of a hollow, or past its rim, the water spreads wherever the land lies lower: off, it floods at once."));
+            ui.add_space(4.0);
+        }
+        slider_row(ui, tr!("Hold speed"), |ui| ui.add(crate::widgets::Field::new(&mut tools.water_rate, 1.0..=30.0).logarithmic(true).suffix(" b/s")));
+    }
+    // The height limit: apart, folded, its state in its title.
+    ui.add_space(8.0);
+    let id = egui::Id::unique("water limit open");
+    let mut open = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+    let pal = Palette::of(ui);
+    let state = if tools.water_limit_on { tr!("y {water_limit}", water_limit = tools.water_limit) } else { tr!("Off").to_owned() };
+    let response = ui
+        .horizontal(|ui| {
+            let chevron = theme::glyph(if open { Icon::ChevronDown } else { Icon::ChevronRight });
+            ui.label(RichText::new(format!("{chevron}  {}", tr!("Height limit"))).color(pal.weak));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(RichText::new(state).color(if tools.water_limit_on { pal.accent } else { pal.weak }));
+            });
+        })
+        .response
+        .interact(Sense::click());
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, open, tr!("Height limit")));
+    if response.clicked() {
+        open = !open;
+        ui.data_mut(|d| d.insert_temp(id, open));
+    }
+    if open {
+        crate::widgets::checkbox(ui, &mut tools.water_limit_on, tr!("Limit the water's height"));
+        ui.add_enabled_ui(tools.water_limit_on, |ui| {
+            slider_row(ui, tr!("Highest"), |ui| crate::widgets::drag(ui, egui::DragValue::new(&mut tools.water_limit).range(lo..=hi).prefix("y ")));
+        });
+        hint(ui, tr!("Every water tool stops here, whatever the water height: no water is laid above it."));
+    }
+}
+
 /// The ways to paint terrains: One terrain or Noise (Paint terrain), or
 /// Gradient (the Gradient brush, which shows the same choice).
 pub(crate) fn paint_modes(ui: &mut Ui, tools: &mut ToolState) {
@@ -531,50 +606,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
                 hint(ui, note);
             }
         }
-        Tool::Flood | Tool::Water => {
-            let (lo, hi) = (doc.dimension().min_y as i16, doc.dimension().max_y as i16);
-            let sea = doc.world.meta.sea_level as i16;
-            crate::widgets::checkbox(ui, &mut tools.water_from_click, tr!("From the click"));
-            if tools.water_from_click {
-                hint(
-                    ui,
-                    if tool == Tool::Flood {
-                        tr!("Fills the hollow you click up to where it spills, and sets the level below to it.")
-                    } else {
-                        tr!("Lays water as high as where each stroke starts: the water's surface there, or a block over the ground.")
-                    },
-                );
-            }
-            if tool == Tool::Flood {
-                crate::widgets::checkbox(ui, &mut tools.flood_warn, tr!("Warn before flooding beyond a hollow"));
-                hint(ui, tr!("Out of a hollow, or past its rim, the water spreads wherever the land lies lower: off, it floods at once."));
-                ui.add_space(4.0);
-                slider_row(ui, tr!("Hold speed"), |ui| ui.add(crate::widgets::Field::new(&mut tools.water_rate, 1.0..=30.0).logarithmic(true).suffix(" b/s")));
-            }
-            ui.add_space(4.0);
-            // The level set, for when the click does not give it.
-            ui.add_enabled_ui(!tools.water_from_click, |ui| {
-                slider_row(ui, tr!("Water level"), |ui| crate::widgets::drag(ui, egui::DragValue::new(&mut tools.water_level).range(lo..=hi)));
-                ui.horizontal(|ui| {
-                    ui.add_space(76.0);
-                    if ui.small_button(tr!("Sea level ({sea_level})", sea_level = sea)).clicked() {
-                        tools.water_level = sea;
-                    }
-                });
-            });
-            ui.add_space(4.0);
-            crate::widgets::checkbox(ui, &mut tools.water_limit_on, tr!("Limit the water's height"));
-            if tools.water_limit_on {
-                slider_row(ui, tr!("Highest"), |ui| crate::widgets::drag(ui, egui::DragValue::new(&mut tools.water_limit).range(lo..=hi)));
-                ui.horizontal(|ui| {
-                    ui.add_space(76.0);
-                    if ui.small_button(tr!("Sea level ({sea_level})", sea_level = sea)).clicked() {
-                        tools.water_limit = sea;
-                    }
-                });
-                hint(ui, tr!("The water tools never lay water above this height."));
-            }
-        }
+        Tool::Flood | Tool::Water => water_settings(ui, tools, doc, tool),
         Tool::StampSlab => {
             slider_row(ui, tr!("Thickness"), |ui| {
                 ui.add(crate::widgets::Field::new(&mut tools.slab_thickness, 1.0..=128.0).logarithmic(true).suffix(tr!(" blocks")))
@@ -609,23 +641,35 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             }
         }
         Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush => crate::select::settings(ui, tools, doc, blocks),
-        Tool::Eyedropper | Tool::Smooth | Tool::Drain | Tool::EraseSlab | Tool::Pan => {}
+        Tool::Eyedropper | Tool::Smooth | Tool::EraseSlab | Tool::Pan => {}
     }
 
     // Which level the tool edits.
-    if !matches!(tool, Tool::Pan | Tool::Flood | Tool::Drain | Tool::Eyedropper) && !tool.is_sculpt() && !tool.is_select() {
+    if !matches!(tool, Tool::Pan | Tool::Flood | Tool::Eyedropper) && !tool.is_sculpt() && !tool.is_select() {
         section(ui, Icon::Layers, tr!("Level"));
         let levels: Vec<(String, LevelKind)> = doc.dimension().levels.iter().map(|l| (crate::i18n::tr_name(&l.name).to_owned(), l.kind)).collect();
-        ui.horizontal(|ui| {
-            ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Edit")));
+        let pick = |ui: &mut Ui, doc: &mut Document| {
+            let width = ui.available_width().min(ui.spacing().combo_width);
             crate::widgets::combo("active level")
+                .width(width)
+                .truncate()
                 .selected_text(level_label(&levels[doc.active_level.min(levels.len() - 1)]))
                 .show_ui(ui, |ui| {
                     for (i, l) in levels.iter().enumerate() {
                         ui.selectable_value(&mut doc.active_level, i, level_label(l));
                     }
                 });
-        });
+        };
+        // In a narrow sidebar, the level under its label.
+        if ui.available_width() < 72.0 + 110.0 {
+            ui.label(tr!("Edit"));
+            pick(ui, doc);
+        } else {
+            ui.horizontal(|ui| {
+                ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Edit")));
+                pick(ui, doc);
+            });
+        }
         if doc.active_kind() != LevelKind::Ground && !matches!(tool, Tool::StampSlab | Tool::EraseSlab) {
             ui.horizontal(|ui| {
                 ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Surface")));

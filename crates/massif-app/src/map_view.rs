@@ -216,6 +216,10 @@ fn auto_rules_key(doc: &Document, tools: &ToolState) -> u64 {
     h.finish()
 }
 
+/// What the tag of the water tools was worked out for: the column, the
+/// map's state, the tool and its settings, a stroke's level.
+type WaterTagKey = ((i32, i32), (u64, usize, u32), Tool, (tools::WaterHeight, tools::WaterHeight, i16, i32), (bool, i16, bool), Option<i16>);
+
 pub struct MapView {
     /// Block coordinates at the centre of the view.
     pub center: [f64; 2],
@@ -235,6 +239,9 @@ pub struct MapView {
     stroke: Option<Stroke>,
     /// Flood held down, and whether by the right button.
     water: Option<(tools::WaterHold, bool)>,
+    /// What the water tool in hand would do under the cursor, and what it
+    /// was worked out for.
+    water_tag: Option<(WaterTagKey, Option<String>)>,
     last_time: f64,
     probe: Option<((i32, i32, u64), Option<tools::Probe>)>,
     /// Scrolling not yet turned into brush size steps.
@@ -305,6 +312,7 @@ impl Default for MapView {
             fit_view: None,
             stroke: None,
             water: None,
+            water_tag: None,
             last_time: 0.0,
             probe: None,
             wheel: 0.0,
@@ -1672,6 +1680,47 @@ impl MapView {
                 ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
             } else if (tools.tool != Tool::River || tools.river_draft.is_none()) && (tools.tool != Tool::Road || tools.road_draft.is_none()) {
                 ui.ctx().set_cursor_icon(CursorIcon::Crosshair);
+            }
+        }
+
+        // The water tools say what they would do under the cursor: the
+        // level they fill to, or why it stays dry.
+        if matches!(tools.tool, Tool::Water | Tool::Flood)
+            && !panning
+            && let Some(p) = pointer.filter(|p| canvas.contains(*p))
+            && (response.hovered() || self.stroke.is_some() || self.water.is_some())
+            && let Some((x, z)) = world_pointer
+        {
+            let (bx, bz) = (x.floor() as i32, z.floor() as i32);
+            let stroke = self.stroke.as_ref().and_then(|s| s.water_to());
+            let held = self.water.as_ref().map_or(0, |(h, _)| h.blocks());
+            let key: WaterTagKey = (
+                (bx, bz),
+                (doc.revision, doc.dim, held),
+                tools.tool,
+                (tools.flood_height, tools.brush_height, tools.water_level, doc.world.meta.sea_level),
+                (tools.water_limit_on, tools.water_limit, tools.flood_warn),
+                stroke,
+            );
+            if self.water_tag.as_ref().is_none_or(|(k, _)| *k != key) {
+                self.water_tag = Some((key, tools::water_hint(doc, tools, bx, bz, stroke)));
+            }
+            if let Some((_, Some(text))) = &self.water_tag {
+                let galley = painter.layout_no_wrap(text.clone(), FontId::proportional(12.0), Color32::from_gray(235));
+                let size = galley.size() + vec2(16.0, 8.0);
+                let mut at = p + vec2(18.0, 18.0);
+                // Kept on the canvas: to the left or above the cursor near its
+                // edges.
+                if at.x + size.x > canvas.right() - 4.0 {
+                    at.x = p.x - 18.0 - size.x;
+                }
+                if at.y + size.y > canvas.bottom() - 4.0 {
+                    at.y = p.y - 18.0 - size.y;
+                }
+                let back = Rect::from_min_size(at, size);
+                painter.rect_filled(back.translate(vec2(0.0, 1.5)), 7, Color32::from_black_alpha(55));
+                painter.rect(back, 7, Color32::from_rgba_unmultiplied(20, 22, 27, 235), Line::new(1.0, Color32::from_white_alpha(18)), StrokeKind::Inside);
+                painter.galley(back.min + vec2(8.0, 4.0), galley, Color32::from_gray(235));
             }
         }
 

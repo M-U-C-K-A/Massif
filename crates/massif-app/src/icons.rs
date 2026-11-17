@@ -42,8 +42,20 @@ const SET_HEIGHT: &[&str] = &["M2 20h20", "M5 4h14", "M12 7.5v9", "m9 10 3-3 3 3
 const ROUGHEN: &[&str] = &["M2 20h20", "M2 20 5 14l2.5 3 3.5-8 3 5 2-3 3.5 6 2.5-2 1 5"];
 /// A road running away between its edges, dashes down its middle.
 const ROAD: &[&str] = &["M4 21 9.5 3", "M20 21 14.5 3", "M12 21v-3.5", "M12 13.5v-3", "M12 6.5V4.5"];
-/// A basin, water up to its brim.
-const FLOOD: &[&str] = &["M3 4v11a5 5 0 0 0 5 5h8a5 5 0 0 0 5-5V4", "M3 10c1.5 0 2.25 1.25 4.5 1.25S10.5 10 12 10s2.25 1.25 4.5 1.25S19.5 10 21 10"];
+/// A hollow in the ground, water standing in it, rising: fill this place.
+const FLOOD: &[&str] = &[
+    "M2 9h3.5l3 11h7l3-11H22",
+    "M7.6 14.5c.8 0 1.2.75 2.2.75s1.4-.75 2.2-.75 1.2.75 2.2.75 1.4-.75 2.2-.75",
+    "M12 9V2.5",
+    "m9.5 5 2.5-2.5 2.5 2.5",
+];
+/// Lucide's brush, a drop of water by its tip: lay water where it goes.
+const WATER: &[&str] = &[
+    "m11 10 3 3",
+    "M6.5 21A3.5 3.5 0 1 0 3 17.5a2.62 2.62 0 0 1-.708 1.792A1 1 0 0 0 3 21z",
+    "M9.969 17.031 21.378 5.624a1 1 0 0 0-3.002-3.002L6.967 14.031",
+    "@0.5,12,11.75 M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z",
+];
 /// A floating island over the ground: a hill on top, rock tapering under
 /// it.
 const SLAB: &[&str] = &["M6 7c1-2 3-3 6-3s5 1 6 3", "M3 7h18l-3.5 4H15l-3 5-3-5H6.5Z", "M3 21h18"];
@@ -92,8 +104,7 @@ fn art(tool: Tool) -> Art {
         Tool::TreeSize => Art::Glyph(Icon::ChartNoAxesColumnIncreasing),
         Tool::Pockets => Art::Glyph(Icon::Gem),
         Tool::Combined => Art::Glyph(Icon::Combine),
-        Tool::Water => Art::Glyph(Icon::Droplet),
-        Tool::Drain => Art::Glyph(Icon::DropletOff),
+        Tool::Water => Art::Paths(WATER),
         Tool::EraseSlab => Art::Glyph(Icon::Eraser),
         Tool::Build => Art::Glyph(Icon::Pickaxe),
         Tool::Dig => Art::Glyph(Icon::Shovel),
@@ -420,7 +431,7 @@ mod tests {
     use super::*;
 
     /// Every tool, in the order of the Tools panel.
-    pub(super) const ALL: [Tool; 32] = [
+    pub(super) const ALL: [Tool; 31] = [
         Tool::Raise,
         Tool::Smooth,
         Tool::Flatten,
@@ -440,7 +451,6 @@ mod tests {
         Tool::Combined,
         Tool::River,
         Tool::Flood,
-        Tool::Drain,
         Tool::Water,
         Tool::StampSlab,
         Tool::EraseSlab,
@@ -509,6 +519,52 @@ mod tests {
                 });
             h.run();
             h.render().unwrap().save(dir.join(if dark { "icons-dark.png" } else { "icons-light.png" })).unwrap();
+        }
+    }
+}
+
+#[cfg(test)]
+mod water_row {
+    use super::*;
+
+    /// The Water group as the Tools panel shows it — Water brush, Flood,
+    /// River, 20 points on 30-point tiles, Flood chosen —, and each large,
+    /// in light, dark and high contrast, at 1× and 2×. Renders with
+    /// MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn the_water_row_renders() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from) else {
+            return;
+        };
+        const THEMES: [(bool, bool, &str); 4] = [(false, false, "Light"), (true, false, "Dark"), (false, true, "Light, high contrast"), (true, true, "Dark, high contrast")];
+        const TOOLS: [Tool; 3] = [Tool::Water, Tool::Flood, Tool::River];
+        let (col_w, row_h) = (330.0, 64.0);
+        for ppp in [1.0f32, 2.0] {
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(col_w, THEMES.len() as f32 * row_h))
+                .with_pixels_per_point(ppp)
+                .wgpu()
+                .build_ui(move |ui| {
+                    crate::theme::install(ui.ctx());
+                    for (k, (dark, high, name)) in THEMES.iter().enumerate() {
+                        let pal = crate::theme::Palette::themed(*dark, *high);
+                        let y = k as f32 * row_h;
+                        let p = ui.painter();
+                        p.rect_filled(Rect::from_min_size(pos2(0.0, y), egui::vec2(col_w, row_h)), 0, pal.panel);
+                        p.text(pos2(8.0, y + 8.0), egui::Align2::LEFT_TOP, *name, egui::FontId::proportional(10.0), pal.weak);
+                        for (i, tool) in TOOLS.iter().enumerate() {
+                            let tile = Rect::from_min_size(pos2(8.0 + i as f32 * 34.0, y + 26.0), egui::vec2(30.0, 30.0));
+                            let chosen = *tool == Tool::Flood;
+                            if chosen {
+                                p.rect(tile, crate::theme::TILE_RADIUS, pal.accent_soft, egui::Stroke::new(1.0, pal.accent), egui::StrokeKind::Inside);
+                            }
+                            paint(p, Rect::from_center_size(tile.center(), egui::vec2(20.0, 20.0)), *tool, if chosen { pal.accent } else { pal.text });
+                            paint(p, Rect::from_min_size(pos2(130.0 + i as f32 * 64.0, y + 10.0), egui::vec2(48.0, 48.0)), *tool, pal.text);
+                        }
+                    }
+                });
+            h.run();
+            h.render().unwrap().save(dir.join(format!("water-row-{ppp}x.png"))).unwrap();
         }
     }
 }

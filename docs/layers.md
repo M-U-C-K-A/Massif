@@ -44,8 +44,8 @@ Cover slot with plants: a frozen pond holds no flowers. The
 terrain: a pocket layer never meets the ground's blocks, its cover or its
 trees.
 
-Water itself is not a layer: Flood, Drain, the River tool and the Water
-brush shape it. Levels and 3D sculpting are not layers either: they shape
+Water itself is not a layer: Flood, the River tool and the Water brush
+shape it. Levels and 3D sculpting are not layers either: they shape
 the land the layers lie on.
 
 ## Masks
