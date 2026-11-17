@@ -1331,6 +1331,23 @@ fn rivers_find_their_valleys() {
     assert!(leaks * 50 < wet, "{leaks} leaks for {wet} samples of water");
 }
 
+/// The least catchment of a river: a share of the land on a map of some
+/// thousands of blocks, but no more than some 900 blocks a side on a huge
+/// one, whose valleys gather far less than such a share. On a map of 44,544
+/// × 33,536 blocks (3.1 million routing cells of 21.75 blocks) half a
+/// percent of the land is 15,709 cells, more than its largest valley
+/// gathers (15,423): it had no river at all.
+#[test]
+fn rivers_of_a_huge_map_are_not_lost() {
+    let huge = rivers::catchment_floor(3_134_321.0, 0.5, 21.75);
+    assert!((1_600.0..1_800.0).contains(&huge), "{huge}");
+    // "Continent and islands", 5,888 blocks a side, read at every block:
+    // a share of its land, as before.
+    let land = 1_200_000.0;
+    let continent = rivers::catchment_floor(land, 0.5, 2.0);
+    assert_eq!(continent, land * 10f32.powf(-2.3));
+}
+
 /// Water output: the hollows of the map become lakes at the level they
 /// spill at, the rest keeps the sea's level.
 #[test]

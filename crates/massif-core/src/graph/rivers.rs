@@ -318,6 +318,13 @@ fn under_sea(f: &Field, line: &[Point], sea: f32, step: f32, spacing: f32) -> Ve
     out
 }
 
+/// The least catchment of a river, in routing cells (`cell` blocks a side),
+/// on land of `land_cells` cells, `threshold` 0..1 (see [`rivers`]).
+pub(super) fn catchment_floor(land_cells: f32, threshold: f32, cell: f32) -> f32 {
+    let t = threshold.clamp(0.0, 1.0);
+    (land_cells * 10f32.powf(-3.6 + 2.6 * t)).min(10f32.powf(4.6 + 2.6 * t) / (cell * cell)).max(4.0)
+}
+
 /// A piece of a river between two of its points, with what it digs.
 struct Segment {
     a: Point,
@@ -382,8 +389,12 @@ pub(super) fn rivers(f: &Field, existing: Option<&Field>, spacing: f32, p: River
     }
     let land_cells = (0..m * m).filter(|&c| land(c)).count().max(1) as f32;
     // From a 40th of a percent of the land (a dense network of streams) to
-    // a tenth of it (only the great rivers).
-    let a_min = (land_cells * 10f32.powf(-3.6 + 2.6 * p.threshold.clamp(0.0, 1.0))).max(4.0);
+    // a tenth of it (only the great rivers); but on a map so large that this
+    // is more than a square of 200 to 4,000 blocks a side (a catchment of
+    // 10^4.6 to 10^7.2 square blocks, 900 a side by default), that: a share
+    // of a huge map is more than any of its valleys gathers, and it would
+    // have no river at all.
+    let a_min = catchment_floor(land_cells, p.threshold, k * spacing);
     let channel = |c: usize| land(c) && area[c] >= a_min;
 
     // ---- rivers: main stems from the mouths up, tributaries off them

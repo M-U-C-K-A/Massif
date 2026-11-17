@@ -703,7 +703,10 @@ map, without opening the graph:
   the sea their channel goes on under the water, fading into the floor.
   Under their water the bed is gravel, sand in the shallows (under a block
   and a half of water) and in the channels under the sea; the banks keep
-  their ground.
+  their ground. Where a river runs is set by how much land drains there: a
+  share of the map's land, or on a very large map, whose valleys each gather
+  only a small share of it, a catchment of some 900 blocks a side with the
+  default setting (200 to 4,000 from many rivers to few).
 - **Lakes**: water fills the hollows up to where they spill (with **Fill**,
   their ground rises instead).
 - **Smooth**, **Sharpen**, **Terraces** (flat steps over the whole height

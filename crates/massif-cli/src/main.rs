@@ -463,7 +463,7 @@ fn cmd_rivers(mut args: Args) -> Res<()> {
     let mut history = massif_core::history::History::new(1);
     history.begin("Rivers", 0);
     let changes = massif_core::graph::reshape_ground(&mut history.edit(&mut world, 0), &op, sea, bed, shore, &massif_core::auto::Steps::default());
-    eprintln!("rivers: {} columns in {} tiles, {:.2} s", changes.columns, changes.tiles.len(), started.elapsed().as_secs_f32());
+    eprintln!("rivers: {} columns in {} tiles, {:.2} s{}", changes.columns, changes.tiles.len(), started.elapsed().as_secs_f32(), if changes.cancelled { " (stopped: the pass did not finish)" } else { "" });
     massif_format::save(&world.snapshot(), &out).map_err(|e| e.to_string())?;
     Ok(())
 }

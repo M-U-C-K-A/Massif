@@ -628,6 +628,15 @@ impl Planner {
                         match t.fluid.uniform_value() {
                             Some(NO_FLUID) => Kind::Dry,
                             Some(f) if (0..crate::coords::TILE_AREA).all(|i| !t.present(i) || block_top(t.top.get(i)) < f as i32) => Kind::Drowned(f),
+                            // Water nowhere over the ground (a level kept
+                            // under it, as some generated maps keep the
+                            // sea's): dry.
+                            Some(f) if (0..crate::coords::TILE_AREA).all(|i| !t.present(i) || block_top(t.top.get(i)) >= f as i32) => Kind::Dry,
+                            None => {
+                                let (top, fluid) = (t.top.dense(), t.fluid.dense());
+                                let wet = |i: usize| t.present(i) && fluid[i] != NO_FLUID && fluid[i] as i32 > block_top(top[i]);
+                                if (0..crate::coords::TILE_AREA).any(wet) { Kind::Mixed } else { Kind::Dry }
+                            }
                             _ => Kind::Mixed,
                         }
                     }
@@ -702,6 +711,23 @@ mod tests {
         assert!(s.over_land > 0, "{s:?}");
         let s = settle_tile(&world.dims[0], TilePos::new(0, 0), true);
         assert_eq!(s.unsettled, 0, "{s:?}");
+    }
+
+    /// A tile whose water level lies under its ground everywhere (as some
+    /// generated maps keep the sea's) has no water to settle.
+    #[test]
+    fn water_buried_under_the_ground_is_not_settled() {
+        let mut world = World::new(WorldMeta::default());
+        let mut dim = Dimension::new(DimensionKind::Overworld, -64, 320);
+        for tx in 0..2 {
+            let mut tile = Tile::ground(80.0, 1, 63);
+            tile.top.set(local_index(5, 5), 90.0);
+            dim.ground_mut().insert(TilePos::new(tx, 0), tile);
+        }
+        world.dims = vec![dim];
+        let planner = Planner::new(&world.dims[0]);
+        assert!(!planner.needs(TilePos::new(0, 0)) && !planner.needs(TilePos::new(1, 0)));
+        assert!(steady_tile(&world.dims[0], TilePos::new(0, 0), Some(&planner)).is_empty());
     }
 
     #[test]
