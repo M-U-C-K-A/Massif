@@ -32,6 +32,10 @@ pub struct Atlas {
     /// For every material: the layers of its top, its sides and its
     /// bottom, and the axis a log lies along (0: y, 1: x, 2: z).
     pub materials: Vec<[u16; 4]>,
+    /// For every material, its own colour in the views (a block's, the
+    /// mean of its top texture): a top drawn in another colour has
+    /// something growing on it, and its texture takes that tint.
+    pub colors: Vec<[u8; 3]>,
     /// The layers of still water and of lava.
     pub water: u16,
     pub lava: u16,
@@ -43,6 +47,7 @@ impl Atlas {
         Self {
             layers: vec![[255; SIDE * SIDE * 4]],
             materials: Vec::new(),
+            colors: Vec::new(),
             water: 0,
             lava: 0,
         }
@@ -71,6 +76,7 @@ pub fn atlas(reg: &Registry, cat: &Catalogue, most: usize) -> Atlas {
         k
     };
     let states = reg.blocks.iter().map(|b| b.state.as_str()).chain(reg.objects.iter().flat_map(|o| o.palette.iter().map(String::as_str)));
+    out.colors = reg.blocks.iter().map(|b| b.color).chain(reg.objects.iter().flat_map(|o| (0..o.palette.len()).map(|k| o.color(k as u16)))).collect();
     let mut materials = Vec::with_capacity(reg.blocks.len());
     for state in states {
         let name = state.split('[').next().unwrap_or(state);
@@ -243,6 +249,22 @@ pub fn materials_key(reg: &Registry) -> u64 {
     h.finish()
 }
 
+/// The colours of the materials (see [`Atlas::colors`]): when only they
+/// change (the game's blocks read), the atlas is made again, the numbering
+/// stays.
+pub fn colors_key(reg: &Registry) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for b in &reg.blocks {
+        b.color.hash(&mut h);
+    }
+    for o in &reg.objects {
+        for k in 0..o.palette.len() {
+            o.color(k as u16).hash(&mut h);
+        }
+    }
+    h.finish()
+}
+
 /// The shaders' side: the atlas, the materials' layers and the clouds, and
 /// how the game lights, fogs and marks what it draws. Shared by the tracer
 /// and the meshes, after `GLOBALS_WGSL`.
@@ -253,6 +275,8 @@ pub const LOOK_WGSL: &str = r#"
 @group(2) @binding(2) var mats: texture_2d<u32>;
 // The clouds' map: one texel for 12 × 12 blocks.
 @group(2) @binding(3) var cloud_map: texture_2d<f32>;
+// The own colour of every material (see `Atlas::colors`), laid out as `mats`.
+@group(2) @binding(4) var mat_colors: texture_2d<f32>;
 
 // The rock under the soil: stone, deepslate under y 0.
 const ROCK: u32 = 65535u;
@@ -282,6 +306,17 @@ fn face_layer(m0: u32, n: vec3<f32>, y: f32) -> u32 {
         return l.z;
     }
     return l.x;
+}
+
+/// The tint of the texture on the top of material `m` drawn in colour `c`
+/// (sRGB): what grows there (grass, flowers, snow) over the block's own
+/// colour, in linear light; none for the rock, or past the atlas.
+fn top_tint(m: u32, c: vec3<f32>) -> vec3<f32> {
+    if (m == ROCK || f32(m) >= g.look.w) {
+        return vec3<f32>(1.0);
+    }
+    let own = textureLoad(mat_colors, vec2<i32>(i32(m & 1023u), i32(m >> 10u)), 0).rgb;
+    return clamp(to_linear(c) / max(to_linear(own), vec3<f32>(0.004)), vec3<f32>(0.25), vec3<f32>(4.0));
 }
 
 /// Where on its face a point is, as the game lays its textures: tops with

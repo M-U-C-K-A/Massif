@@ -213,8 +213,10 @@ their own:
   been still for a moment, the traced ground is drawn again with a ray
   through each sample, its steps' edges smoothed too, for about three times
   the time of that one frame), **Fog**, **Water
-  reflections**, the game's textures in the player's view, and how much of
-  the map the 3D view keeps on the graphics card (about 320 MB, 800 MB or
+  reflections**, **Game textures in the 3D views** (each block drawn with
+  its texture from the game or its mod, in the 3D View and 3D Sculpt as in
+  the player's view; off, a flat colour a block, as Low draws them), and
+  how much of the map the 3D view keeps on the graphics card (about 320 MB, 800 MB or
   2 GB): a larger map is drawn with a column every 2, 4 or 8 blocks, all of
   it, coarser — on a huge map with much water, far faster than every block.
   The Terrain viewport: its **Light and shadows** (the steps of its

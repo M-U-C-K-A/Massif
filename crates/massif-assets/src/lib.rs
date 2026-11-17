@@ -614,6 +614,9 @@ fn tint_of(id: &str) -> Tint {
     match n {
         "spruce_leaves" => Tint::Fixed([0x61, 0x99, 0x61]),
         "birch_leaves" => Tint::Fixed([0x80, 0xa7, 0x55]),
+        // Their models are the tinted leaves', but the game gives them no
+        // tint: pink and pale grey as their textures.
+        "cherry_leaves" | "pale_oak_leaves" => Tint::None,
         "lily_pad" => Tint::Fixed([0x20, 0x80, 0x30]),
         "redstone_wire" => Tint::Fixed([0xd0, 0x10, 0x10]),
         _ if n.contains("water") || n == "bubble_column" => Tint::Water,
@@ -1175,6 +1178,18 @@ mod tests {
                 assert!(version.is_some_and(|v| v >= 1952), "{}: {version:?}", jar.version);
             }
         }
+    }
+
+    /// Leaves take the colours the game gives them: the biome's, a fixed
+    /// one, or none at all (cherry and pale oak, whose models are the
+    /// tinted leaves' all the same).
+    #[test]
+    fn leaves_are_tinted_as_in_the_game() {
+        assert_eq!(tint_of("minecraft:oak_leaves"), Tint::Foliage);
+        assert_eq!(tint_of("minecraft:mangrove_leaves"), Tint::Foliage);
+        assert!(matches!(tint_of("minecraft:spruce_leaves"), Tint::Fixed(_)));
+        assert_eq!(tint_of("minecraft:cherry_leaves"), Tint::None);
+        assert_eq!(tint_of("minecraft:pale_oak_leaves"), Tint::None);
     }
 
     #[test]

@@ -140,6 +140,21 @@ thick at y 192, crossed cell by cell) and fog. The brush's blocks and the
 block looked at are marked in the shaders too, block by block. The game's
 look costs about 0.4 ms a frame at 1,600 × 1,000 on an M4 (2.3 ms → 2.7).
 
+The views' own look (the 3D View and 3D Sculpt, Terrain) samples the same
+atlas, in its own light, with the corners' shade of the game's smooth
+lighting. Each look is a shader of its own — flat colours, textured, the
+game's — so that Low pays nothing for textures it does not draw. A top
+takes the tint of what grows on it: the colour pair's top over the block's
+bare colour, and for meshed faces the face's colour over the material's own
+(a table beside the atlas). Far off, a square of the max pyramid smaller
+than a pixel takes the mean of its columns' textures (their last level of
+detail, which is what a texture fades to up close), so the near ground and
+the far meet without a seam. On a map of 16,384 × 16,384 blocks at
+2,560 × 1,440 (M4, best of 12), textures cost 0.5 to 1.9 ms a frame while
+the view moves (Medium 5.2–6.4 → 5.7–7.5 ms, High 11.0–14.2 → 12.9–16.2),
+and 1 to 4 ms on the frame drawn once, a ray a sample, when it stops; the
+atlas takes 0.1 to 0.3 MB of the card's memory.
+
 Every block of a 60,000 × 50,000 map would take some 13 GB of textures.
 Past 400 pages (about 1.9 GB), the view keeps a column every 2, 4, 8 or 16
 blocks — the coarsest that fits — and still draws the whole map: each of

@@ -1,7 +1,7 @@
 //! How much the graphics card is asked to do (Settings ▸ Graphics): the
 //! size the 3D views are drawn at, their smoothing, the light of the
 //! Terrain viewport, its sky and clouds, the water's reflections, the fog,
-//! the game's textures in the player's view, how much of a huge map the 3D
+//! the game's textures in the 3D views, how much of a huge map the 3D
 //! view keeps on the card, the map view's images there, and how often an
 //! idle window draws.
 //!
@@ -81,7 +81,9 @@ pub struct Graphics {
     pub reflections: bool,
     /// The land fades into the distance.
     pub fog: bool,
-    /// The game's own textures in the player's view (flat colours without).
+    /// The game's own textures on the blocks of the 3D views: in the
+    /// player's view, and in the 3D View and 3D Sculpt editors' Terrain look
+    /// (a flat colour a block without).
     pub textures: bool,
     /// Pages of 1,024 × 1,024 columns the 3D view keeps on the card (about
     /// 4.8 MB each): a larger map is drawn with a column every 2, 4, 8…
@@ -116,7 +118,7 @@ impl Graphics {
                 clouds: false,
                 reflections: true,
                 fog: true,
-                textures: true,
+                textures: false,
                 gpu_pages: 64,
                 map_images: 2048,
                 idle_fps: 20,
@@ -156,6 +158,15 @@ impl Graphics {
     /// Samples a pixel of the 3D views.
     pub fn samples(&self) -> u32 {
         if self.msaa { 4 } else { 1 }
+    }
+
+    /// Settings an earlier version kept, as this one has them: before 1.0
+    /// only the player's view had the game's textures, and Low kept them;
+    /// Low draws flat colours now that the 3D View has them too.
+    pub fn updated(self) -> Self {
+        let mut old_low = Self::of(Preset::Low);
+        old_low.textures = true;
+        if self == old_low { Self::of(Preset::Low) } else { self }
     }
 
     /// The same, kept within what the settings offer (a file edited by hand).
@@ -318,6 +329,19 @@ mod tests {
         let mut g = Graphics::of(Preset::High);
         g.fog = false;
         assert_eq!(g.preset(), Preset::Custom);
+    }
+
+    #[test]
+    fn low_draws_flat_colours_from_now_on() {
+        let low = Graphics::of(Preset::Low);
+        assert!(!low.textures && Graphics::of(Preset::Medium).textures && Graphics::of(Preset::High).textures);
+        // Low as an earlier version kept it is Low still; anything else stays.
+        let old = Graphics { textures: true, ..low };
+        assert_eq!(old.preset(), Preset::Custom);
+        assert_eq!(old.updated(), low);
+        let custom = Graphics { textures: true, fog: false, ..low };
+        assert_eq!(custom.updated(), custom);
+        assert_eq!(Graphics::of(Preset::Medium).updated(), Graphics::of(Preset::Medium));
     }
 
     #[test]

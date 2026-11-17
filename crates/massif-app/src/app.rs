@@ -1567,7 +1567,7 @@ impl MassifApp {
             crate::widgets::row(ui, tr!("Water reflections"), |ui| {
                 crate::widgets::switch(ui, &mut g.reflections);
             });
-            crate::widgets::row(ui, tr!("Game textures in the player's view"), |ui| {
+            crate::widgets::row(ui, tr!("Game textures in the 3D views"), |ui| {
                 crate::widgets::switch(ui, &mut g.textures);
             });
             crate::widgets::row(ui, tr!("Map kept on the graphics card"), |ui| {
@@ -1653,7 +1653,9 @@ impl MassifApp {
     /// `graphics::suggest`).
     fn start_graphics(&mut self, cc: &eframe::CreationContext<'_>) {
         if let Some(g) = self.settings.graphics {
-            crate::graphics::set(g.sane());
+            let g = g.updated().sane();
+            self.settings.graphics = Some(g);
+            crate::graphics::set(g);
             return;
         }
         crate::graphics::set(crate::graphics::Graphics::default());

@@ -999,9 +999,10 @@ pub struct Globals {
     /// tan(fov / 2) × aspect, tan(fov / 2), radians per pixel, the
     /// frame's origin's z.
     pub cam_k: [f32; 4],
-    /// The game's look (the player's view): x, its textures; y, its light,
-    /// sky and fog; z, the height of its clouds (0: none); w, the number of
-    /// materials the atlas knows.
+    /// x, the game's textures (in the player's view, and in the views' own
+    /// look with Settings ▸ Graphics); y, the game's light, sky and fog (the
+    /// player's view); z, the height of its clouds (0: none); w, the number
+    /// of materials the atlas knows.
     pub look: [f32; 4],
     /// The blocks the sculpting brush takes, shown in the player's view:
     /// its centre (from the frame's origin) and radius (0: none); the
@@ -1015,6 +1016,31 @@ pub struct Globals {
     pub pick: [f32; 4],
     /// The materials of stone and deepslate, the layers of water and lava.
     pub rock: [f32; 4],
+}
+
+/// What the shaders draw: the views' own look in flat colours or with the
+/// game's textures (Settings ▸ Graphics), or the game's (the player's
+/// view). Each is a shader of its own (see [`Renderer3d::with_samples`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Look {
+    Flat,
+    Textured,
+    Game,
+}
+
+impl Look {
+    const ALL: [Look; 3] = [Look::Flat, Look::Textured, Look::Game];
+
+    /// The look `globals` asks for.
+    fn of(globals: &Globals) -> Look {
+        if globals.look[1] > 0.5 {
+            Look::Game
+        } else if globals.look[0] > 0.5 {
+            Look::Textured
+        } else {
+            Look::Flat
+        }
+    }
 }
 
 /// Floats in [`Globals`]: what tells a frame from the last.
@@ -1082,11 +1108,17 @@ fn to_linear(c: vec3<f32>) -> vec3<f32> {
 /// away: the light of the whole sky (strongest from above) and of the sun,
 /// so that tops keep their colour and walls stay readable.
 fn shade(base: vec3<f32>, n: vec3<f32>, d: f32) -> vec3<f32> {
+    return shade_lit(to_linear(base), n, d, 1.0);
+}
+
+/// The same for a colour in linear light (a texture's), `ao` the light
+/// its corners leave it (1: all).
+fn shade_lit(c: vec3<f32>, n: vec3<f32>, d: f32, ao: f32) -> vec3<f32> {
     let sun = max(dot(n, g.sun.xyz), 0.0);
     let sky = 0.72 + 0.28 * n.y;
-    let c = to_linear(base) * (g.fog.z * sky + g.fog.w * sun);
+    let lit = c * (g.fog.z * sky + g.fog.w * sun) * ao;
     let f = clamp((d - g.fog.x) / max(g.fog.y - g.fog.x, 1.0), 0.0, 1.0);
-    return mix(c, to_linear(g.mist.rgb), f * f * g.mist.w);
+    return mix(lit, to_linear(g.mist.rgb), f * f * g.mist.w);
 }
 
 /// How light the block at `world` (on a face turned `n`, `d` blocks away)
@@ -1227,6 +1259,9 @@ fn game_fragment(in: VertexOut, n: vec3<f32>, d: f32) -> vec4<f32> {
     var base = to_linear(in.color.rgb) * block_tint(in.world, n, d);
     if (layer != 0u) {
         base = texel(layer, uv, lod).rgb;
+        if (n.y > 0.5) {
+            base *= top_tint(in.mat, in.color.rgb);
+        }
     }
     var c = game_light(base, n, 1.0, d);
     c = game_marks(c, in.world, n, d);
@@ -1287,6 +1322,20 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let f = clamp((d - g.fog.x) / max(g.fog.y - g.fog.x, 1.0), 0.0, 1.0);
         c = mix(c, to_linear(g.mist.rgb), f * f * g.mist.w);
         return vec4<f32>(c, mix(in.color.a, 1.0, 0.55 * fres));
+    }
+    if (TEXTURED) {
+        // The views' own light on the game's textures (Settings ▸
+        // Graphics): the block's texture, tinted on a top by what grows
+        // there.
+        let layer = face_layer(in.mat, n, in.world.y);
+        if (layer != 0u) {
+            let view = normalize(in.world - g.eye.xyz);
+            var base = texel(layer, face_uv(in.world, n), tex_lod(d, abs(dot(n, view)))).rgb;
+            if (n.y > 0.5) {
+                base *= top_tint(in.mat, in.color.rgb);
+            }
+            return vec4<f32>(shade_lit(base, n, d, 1.0), in.color.a);
+        }
     }
     let c = shade(in.color.rgb, n, d) * block_tint(in.world, n, d);
     return vec4<f32>(c, in.color.a);
@@ -1560,11 +1609,20 @@ fn column_light(cell: vec2<i32>, p: vec3<f32>, n: vec3<f32>, height: f32, t: f32
     return 0.55 + 0.15 * light;
 }
 
-/// A traced column's face in the game's look: its block's texture (the top
-/// block's at the top, the soil's under it, then the rock), tinted by what
-/// grows on its top, in the game's light, marked.
-fn game_column(cell: vec2<i32>, p: vec3<f32>, world: vec3<f32>, n: vec3<f32>, t: f32, view_d: vec3<f32>) -> vec3<f32> {
-    let col = column(cell);
+/// How what grows on the top of pair `pair` tints its block's texture: the
+/// top's colour over the block's own, in linear light.
+fn cover_tint(pair: i32) -> vec3<f32> {
+    let top = to_linear(textureLoad(palette, vec2<i32>(pair, 0), 0).rgb);
+    let bare = to_linear(textureLoad(palette, vec2<i32>(pair, 2), 0).rgb);
+    return clamp(top / max(bare, vec3<f32>(0.004)), vec3<f32>(0.25), vec3<f32>(4.0));
+}
+
+/// The colour (linear) of point `p` (`world`, from the frame's origin) of a
+/// face of the packed column `col` turned `n`, `t` blocks away: its block's
+/// texture (the top block's at the top, the soil's under it, then the
+/// rock), tinted on the top by what grows there; without the game's
+/// textures, its colour, block by block.
+fn column_base(col: u32, p: vec3<f32>, world: vec3<f32>, n: vec3<f32>, t: f32, view_d: vec3<f32>) -> vec3<f32> {
     let pair = i32((col >> 12u) & 0xfffu);
     let height = terrain.origin.z + f32(col & 0xfffu);
     let up = n.y > 0.5;
@@ -1576,16 +1634,48 @@ fn game_column(cell: vec2<i32>, p: vec3<f32>, world: vec3<f32>, n: vec3<f32>, t:
         mat = m.y;
     }
     let layer = face_layer(mat, n, p.y);
-    // Without the game's textures, its colour, block by block.
-    var base = to_linear(surface_color(col, p.y, up)) * block_tint(world, n, t);
-    if (layer != 0u) {
-        base = texel(layer, face_uv(world, n), tex_lod(t, abs(dot(n, view_d)))).rgb;
-        if (up) {
-            let top = to_linear(textureLoad(palette, vec2<i32>(pair, 0), 0).rgb);
-            let bare = to_linear(textureLoad(palette, vec2<i32>(pair, 2), 0).rgb);
-            base *= clamp(top / max(bare, vec3<f32>(0.004)), vec3<f32>(0.25), vec3<f32>(4.0));
-        }
+    if (layer == 0u) {
+        return to_linear(surface_color(col, p.y, up)) * block_tint(world, n, t);
     }
+    var base = texel(layer, face_uv(world, n), tex_lod(t, abs(dot(n, view_d)))).rgb;
+    if (up) {
+        base *= cover_tint(pair);
+    }
+    return base;
+}
+
+/// The top of the packed column `col` seen from afar (sRGB): with the
+/// game's textures, the mean of its block's (the texture's last level of
+/// detail, what it fades to up close), tinted; else its colour.
+fn far_top(col: u32) -> vec3<f32> {
+    let pair = i32((col >> 12u) & 0xfffu);
+    let top = textureLoad(palette, vec2<i32>(pair, 0), 0).rgb;
+    if (!TEXTURED) {
+        return top;
+    }
+    let layer = face_layer(textureLoad(pair_mats, vec2<i32>(pair, 0), 0).x, vec3<f32>(0.0, 1.0, 0.0), 0.0);
+    if (layer == 0u) {
+        return top;
+    }
+    return pow(texel(layer, vec2<f32>(0.5), 4.0).rgb * cover_tint(pair), vec3<f32>(1.0 / 2.2));
+}
+
+/// A traced column's face in the views' own light with the game's
+/// textures (Settings ▸ Graphics): the texture of its block, darker in the
+/// corners that blocks close, as the game's smooth light has it; `lit`,
+/// the normal it is lit by.
+fn view_column(cell: vec2<i32>, col: u32, p: vec3<f32>, world: vec3<f32>, n: vec3<f32>, lit: vec3<f32>, t: f32, view_d: vec3<f32>) -> vec3<f32> {
+    let height = terrain.origin.z + f32(col & 0xfffu);
+    return shade_lit(column_base(col, p, world, n, t, view_d), lit, t, column_light(cell, p, n, height, t));
+}
+
+/// A traced column's face in the game's look: its block's texture (the top
+/// block's at the top, the soil's under it, then the rock), tinted by what
+/// grows on its top, in the game's light, marked.
+fn game_column(cell: vec2<i32>, p: vec3<f32>, world: vec3<f32>, n: vec3<f32>, t: f32, view_d: vec3<f32>) -> vec3<f32> {
+    let col = column(cell);
+    let height = terrain.origin.z + f32(col & 0xfffu);
+    let base = column_base(col, p, world, n, t, view_d);
     // Under water the light fades a level a block, as in the game.
     var light = column_light(cell, p, n, height, t);
     let depth = f32(col >> 24u);
@@ -1679,7 +1769,7 @@ fn fs_trace(in: TraceOut) -> TraceFrag {
             let q = corner + size * vec2<f32>(0.25 + 0.5 * f32(k & 1), 0.25 + 0.5 * f32(k >> 1u));
             let col = column(vec2<i32>(floor(q)));
             if (col != 0u) {
-                sum += surface_color(col, p.y, true);
+                sum += far_top(col);
                 count += 1.0;
             }
         }
@@ -1708,6 +1798,16 @@ fn fs_trace(in: TraceOut) -> TraceFrag {
         }
         let cl = game_clouds(g.eye.xyz, view_d, hit.t);
         out.color = vec4<f32>(mix(c, cl.rgb, cl.a), 1.0);
+    } else if (TEXTURED && hit.level == 0) {
+        let col = column(hit.cell);
+        var c = view_column(hit.cell, col, p, world, normal, normal, hit.t, view_d);
+        if (sliver > 0.0) {
+            // A side narrower than a pixel: into the top, lit as the hillside.
+            let top = terrain.origin.z + f32(col & 0xfffu);
+            let up = vec3<f32>(0.0, 1.0, 0.0);
+            c = mix(c, view_column(hit.cell, col, vec3<f32>(p.x, top, p.z), vec3<f32>(world.x, top, world.z), up, hill, hit.t, view_d), sliver);
+        }
+        out.color = vec4<f32>(c, 1.0);
     } else {
         var tint = 1.0;
         if (hit.level == 0 && stride == 1.0) {
@@ -1810,6 +1910,17 @@ fn halve(level: &[u16], side: usize) -> Vec<u16> {
         .collect()
 }
 
+/// The game's textures as made on the graphics card (see
+/// [`Renderer3d::make_atlas`]).
+struct MadeAtlas {
+    atlas: wgpu::TextureView,
+    materials: wgpu::TextureView,
+    colors: wgpu::TextureView,
+    /// Materials, and bytes of memory taken.
+    count: u32,
+    bytes: u64,
+}
+
 /// GPU resources of the 3D preview. Independent of egui, so it can render
 /// headlessly in tests.
 pub struct Renderer3d {
@@ -1820,14 +1931,14 @@ pub struct Renderer3d {
     /// Where the device cannot view the image as plain bytes (OpenGL):
     /// the pass that copies it so.
     copier: Option<crate::view_image::Copier>,
-    /// In the views' own look, then in the game's.
-    opaque_pipeline: [wgpu::RenderPipeline; 2],
-    water_pipeline: [wgpu::RenderPipeline; 2],
-    trace_pipeline: [wgpu::RenderPipeline; 2],
+    /// In each [`Look`].
+    opaque_pipeline: [wgpu::RenderPipeline; 3],
+    water_pipeline: [wgpu::RenderPipeline; 3],
+    trace_pipeline: [wgpu::RenderPipeline; 3],
     /// The tracer once a sample: a ray through each of a pixel's samples
     /// rather than one through its middle, which smooths the edges of the
     /// traced ground as the samples do the meshes'. Built with 4 samples.
-    trace_fine_pipeline: Option<[wgpu::RenderPipeline; 2]>,
+    trace_fine_pipeline: Option<[wgpu::RenderPipeline; 3]>,
     /// The next frames trace a ray a sample (when it was built): a still
     /// view. Moving, one a pixel is enough, and four times cheaper.
     pub fine: bool,
@@ -1847,11 +1958,11 @@ pub struct Renderer3d {
     look_layout: wgpu::BindGroupLayout,
     look_group: wgpu::BindGroup,
     sampler: wgpu::Sampler,
-    atlas: wgpu::TextureView,
-    materials: wgpu::TextureView,
     clouds: wgpu::TextureView,
     /// Materials the atlas knows, and the layers of water and lava.
     material_count: u32,
+    /// Bytes of the graphics card's memory the atlas takes.
+    look_bytes: u64,
     fluid_layers: [u16; 2],
     tracer: Option<Tracer>,
     target: Option<Target>,
@@ -1866,22 +1977,24 @@ impl Renderer3d {
 
     /// The same, `samples` a pixel (1 or 4).
     pub fn with_samples(device: &wgpu::Device, queue: &wgpu::Queue, samples: u32) -> Self {
-        // Each shader twice: in the views' own look, and in the game's. One
-        // shader for both, choosing at each pixel, made the views' own look
-        // pay for the game's (registers held for its textures and light
-        // whether used or not, which leaves fewer pixels in flight).
-        let shader = |label: &str, body: &str, game: bool| {
+        // Each shader once a look (see [`Look`]): in the views' own in flat
+        // colours, with the game's textures, and in the game's. One shader
+        // for all, choosing at each pixel, made the views' own look pay for
+        // the others (registers held for textures and light whether used or
+        // not, which leaves fewer pixels in flight).
+        let shader = |label: &str, body: &str, look: Look| {
+            let (game, textured) = (look == Look::Game, look != Look::Flat);
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some(label),
-                source: wgpu::ShaderSource::Wgsl(Cow::Owned(format!("const GAME_LOOK: bool = {game};\n{GLOBALS_WGSL}{}{body}", crate::textures::LOOK_WGSL))),
+                source: wgpu::ShaderSource::Wgsl(Cow::Owned(format!("const GAME_LOOK: bool = {game};\nconst TEXTURED: bool = {textured};\n{GLOBALS_WGSL}{}{body}", crate::textures::LOOK_WGSL))),
             })
         };
-        let mesh_shaders = [false, true].map(|game| shader("massif 3d meshes", MESH_WGSL, game));
-        let trace_shaders = [false, true].map(|game| shader("massif 3d tracer", TRACE_WGSL, game));
+        let mesh_shaders = Look::ALL.map(|look| shader("massif 3d meshes", MESH_WGSL, look));
+        let trace_shaders = Look::ALL.map(|look| shader("massif 3d tracer", TRACE_WGSL, look));
         // The same, its direction read at each sample: the pixel shaded
         // once a sample.
         let fine_wgsl = TRACE_WGSL.replace("@location(0) ndc: vec2<f32>,", "@location(0) @interpolate(perspective, sample) ndc: vec2<f32>,");
-        let fine_shaders = (samples > 1).then(|| [false, true].map(|game| shader("massif 3d tracer, a ray a sample", &fine_wgsl, game)));
+        let fine_shaders = (samples > 1).then(|| Look::ALL.map(|look| shader("massif 3d tracer, a ray a sample", &fine_wgsl, look)));
         let uniform = |binding: u32, dynamic: bool, size: u64| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -1935,6 +2048,7 @@ impl Renderer3d {
                 },
                 texture(2, uint, wgpu::TextureViewDimension::D2),
                 texture(3, wgpu::TextureSampleType::Float { filterable: false }, wgpu::TextureViewDimension::D2),
+                texture(4, wgpu::TextureSampleType::Float { filterable: false }, wgpu::TextureViewDimension::D2),
             ],
         });
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1987,9 +2101,9 @@ impl Renderer3d {
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
-        let (atlas, materials, count) = Self::make_atlas(device, queue, &crate::textures::Atlas::plain());
+        let made = Self::make_atlas(device, queue, &crate::textures::Atlas::plain());
         let clouds = Self::make_clouds(device, queue, &crate::textures::clouds(None));
-        let look_group = Self::make_look(device, &look_layout, &atlas, &sampler, &materials, &clouds);
+        let look_group = Self::make_look(device, &look_layout, &made, &sampler, &clouds);
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("massif 3d globals"),
             layout: &layout,
@@ -2117,10 +2231,9 @@ impl Renderer3d {
             look_layout,
             look_group,
             sampler,
-            atlas,
-            materials,
             clouds,
-            material_count: count,
+            material_count: made.count,
+            look_bytes: made.bytes,
             fluid_layers: [0, 0],
             tracer: None,
             target: None,
@@ -2130,9 +2243,9 @@ impl Renderer3d {
     }
 
     /// The game's textures on the graphics card: the layers with their
-    /// levels of detail, and the materials' layers (1,024 a row). Returns
-    /// the views and the number of materials.
-    fn make_atlas(device: &wgpu::Device, queue: &wgpu::Queue, atlas: &crate::textures::Atlas) -> (wgpu::TextureView, wgpu::TextureView, u32) {
+    /// levels of detail, and the materials' layers and colours (1,024 a
+    /// row).
+    fn make_atlas(device: &wgpu::Device, queue: &wgpu::Queue, atlas: &crate::textures::Atlas) -> MadeAtlas {
         use crate::textures::{MIPS, SIDE, mip_chain};
         // Two layers at least, for OpenGL (see `set_grid`).
         let layers = atlas.layers.len().max(2) as u32;
@@ -2209,11 +2322,52 @@ impl Renderer3d {
                 depth_or_array_layers: 1,
             },
         );
+        let mut rgba = vec![0u8; w * h * 4];
+        for (k, c) in atlas.colors.iter().take(count).enumerate() {
+            rgba[k * 4..k * 4 + 3].copy_from_slice(c);
+            rgba[k * 4 + 3] = 255;
+        }
+        let colors = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("massif 3d material colours"),
+            size: wgpu::Extent3d {
+                width: w as u32,
+                height: h as u32,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            colors.as_image_copy(),
+            &rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w as u32 * 4),
+                rows_per_image: Some(h as u32),
+            },
+            wgpu::Extent3d {
+                width: w as u32,
+                height: h as u32,
+                depth_or_array_layers: 1,
+            },
+        );
         let array = texture.create_view(&wgpu::TextureViewDescriptor {
             dimension: Some(wgpu::TextureViewDimension::D2Array),
             ..Default::default()
         });
-        (array, materials.create_view(&wgpu::TextureViewDescriptor::default()), count as u32)
+        // Each layer and its levels of detail (a third more), the tables.
+        let bytes = layers as u64 * (SIDE * SIDE * 4) as u64 * 4 / 3 + (w * h * 12) as u64;
+        MadeAtlas {
+            atlas: array,
+            materials: materials.create_view(&wgpu::TextureViewDescriptor::default()),
+            colors: colors.create_view(&wgpu::TextureViewDescriptor::default()),
+            count: count as u32,
+            bytes,
+        }
     }
 
     fn make_clouds(device: &wgpu::Device, queue: &wgpu::Queue, map: &[u8]) -> wgpu::TextureView {
@@ -2249,14 +2403,14 @@ impl Renderer3d {
         texture.create_view(&wgpu::TextureViewDescriptor::default())
     }
 
-    fn make_look(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, atlas: &wgpu::TextureView, sampler: &wgpu::Sampler, materials: &wgpu::TextureView, clouds: &wgpu::TextureView) -> wgpu::BindGroup {
+    fn make_look(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, made: &MadeAtlas, sampler: &wgpu::Sampler, clouds: &wgpu::TextureView) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("massif 3d look"),
             layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(atlas),
+                    resource: wgpu::BindingResource::TextureView(&made.atlas),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -2264,30 +2418,39 @@ impl Renderer3d {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(materials),
+                    resource: wgpu::BindingResource::TextureView(&made.materials),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::TextureView(clouds),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&made.colors),
+                },
             ],
         })
     }
 
-    /// The game's textures for the player's view, and its clouds.
+    /// The game's textures, for the player's view and the views' own look
+    /// (Settings ▸ Graphics), and its clouds.
     pub fn set_look(&mut self, atlas: &crate::textures::Atlas, clouds: &[u8]) {
         let most = self.device.limits().max_texture_array_layers as usize;
-        let (view, materials, count) = if atlas.layers.len() <= most {
+        let made = if atlas.layers.len() <= most {
             Self::make_atlas(&self.device, &self.queue, atlas)
         } else {
             Self::make_atlas(&self.device, &self.queue, &crate::textures::Atlas::plain())
         };
-        self.atlas = view;
-        self.materials = materials;
-        self.material_count = count;
-        self.fluid_layers = [atlas.water, atlas.lava];
         self.clouds = Self::make_clouds(&self.device, &self.queue, clouds);
-        self.look_group = Self::make_look(&self.device, &self.look_layout, &self.atlas, &self.sampler, &self.materials, &self.clouds);
+        self.look_group = Self::make_look(&self.device, &self.look_layout, &made, &self.sampler, &self.clouds);
+        self.material_count = made.count;
+        self.look_bytes = made.bytes;
+        self.fluid_layers = [atlas.water, atlas.lava];
+    }
+
+    /// Bytes of the graphics card's memory the game's textures take.
+    pub fn look_bytes(&self) -> u64 {
+        self.look_bytes
     }
 
     /// The materials the atlas knows, and the layers of water and lava.
@@ -2782,17 +2945,17 @@ impl Renderer3d {
             pass.set_viewport(0.0, 0.0, region[0].clamp(1, w) as f32, region[1].clamp(1, h) as f32, 0.0, 1.0);
             pass.set_bind_group(0, &self.bind_group, &[]);
             pass.set_bind_group(2, &self.look_group, &[]);
-            let game = (globals.look[1] > 0.5) as usize;
+            let look = Look::of(globals) as usize;
             // The traced ground first, then the meshed chunks, then the
             // water over everything.
             if let Some(tr) = &self.tracer {
                 let pipelines = self.trace_fine_pipeline.as_ref().filter(|_| self.fine).unwrap_or(&self.trace_pipeline);
-                pass.set_pipeline(&pipelines[game]);
+                pass.set_pipeline(&pipelines[look]);
                 pass.set_bind_group(1, &tr.group, &[]);
                 pass.draw(0..3, 0..1);
             }
             for water in [false, true] {
-                pass.set_pipeline(if water { &self.water_pipeline[game] } else { &self.opaque_pipeline[game] });
+                pass.set_pipeline(if water { &self.water_pipeline[look] } else { &self.opaque_pipeline[look] });
                 for (k, (t, ..)) in drawn.iter().enumerate() {
                     let chunk = &self.chunks[t];
                     let Some(faces) = (if water { &chunk.water } else { &chunk.solid }) else {
@@ -3331,9 +3494,9 @@ pub struct View3d {
     /// app as they are read).
     pub catalogue: Option<std::sync::Arc<massif_assets::Catalogue>>,
     /// What the atlas on the graphics card was made from (the catalogue,
-    /// the registry's materials), and the document and catalogue last
-    /// checked against it.
-    look_key: Option<(usize, u64)>,
+    /// the registry's materials and their colours), and the document and
+    /// catalogue last checked against it.
+    look_key: Option<(usize, u64, u64)>,
     look_seen: Option<(u64, u64, usize)>,
 }
 
@@ -3552,7 +3715,7 @@ impl View3d {
     }
 
     pub fn gpu_bytes(&self) -> u64 {
-        self.renderer.as_ref().map_or(0, |r| r.bytes())
+        self.renderer.as_ref().map_or(0, |r| r.bytes() + r.look_bytes())
     }
 
     /// The player walking in the view, if any.
@@ -4180,7 +4343,8 @@ impl View3d {
             return;
         }
         self.look_seen = Some(seen);
-        let key = (cat, crate::textures::materials_key(&doc.world.registry));
+        let reg = &doc.world.registry;
+        let key = (cat, crate::textures::materials_key(reg), crate::textures::colors_key(reg));
         if self.look_key == Some(key) {
             return;
         }
@@ -4633,9 +4797,16 @@ impl View3d {
         if !graphics.fog && !under_water {
             globals.mist[3] = 0.0;
         }
+        // The game's textures (Settings ▸ Graphics), in the player's view and
+        // in the views' own look of the map's blocks (Terrain).
+        let (materials, fluids) = renderer.look_info();
+        let textured = graphics.textures && self.catalogue.is_some() && materials > 0;
+        if textured && !game && self.mode == MapMode::Terrain {
+            let wk = doc.world.registry.well_known;
+            globals.look = [1.0, 0.0, 0.0, materials as f32];
+            globals.rock = [wk.stone.0 as f32, wk.deepslate.0 as f32, fluids[0] as f32, fluids[1] as f32];
+        }
         if game {
-            let (materials, fluids) = renderer.look_info();
-            let textured = graphics.textures && self.catalogue.is_some() && materials > 0;
             globals.look = [textured as u8 as f32, 1.0, if under_water || !graphics.clouds { 0.0 } else { CLOUDS_Y }, materials as f32];
             if !under_water && graphics.fog {
                 // The game's fog: the land fades into the horizon far off.
@@ -4724,7 +4895,7 @@ impl View3d {
             let still_at = (self.changed_at + STILL_AFTER).max(self.moving_until);
             ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((still_at - now).max(0.0) + 0.01));
         }
-        let bytes = renderer.bytes();
+        let bytes = renderer.bytes() + renderer.look_bytes();
         self.renderer = Some(renderer);
         if let Some(id) = self.texture {
             let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(region[0] as f32 / px[0].max(1) as f32, region[1] as f32 / px[1].max(1) as f32));
@@ -5624,7 +5795,7 @@ mod graphics_perf {
                     renderer.set_look(&atlas, &crate::textures::clouds(Some(cat)));
                 }
                 renderer.ensure_target(full);
-                eprintln!("-- {samples} samples a pixel: terrain {:.0} MB on the card, target {:.0} MB", renderer.bytes() as f64 / 1048576.0, (2560.0 * 1440.0 * (4.0 * samples as f64 + 4.0 * samples as f64 + 8.0)) / 1048576.0);
+                eprintln!("-- {samples} samples a pixel: terrain {:.0} MB on the card, textures {:.2} MB, target {:.0} MB", renderer.bytes() as f64 / 1048576.0, renderer.look_bytes() as f64 / 1048576.0, (2560.0 * 1440.0 * (4.0 * samples as f64 + 4.0 * samples as f64 + 8.0)) / 1048576.0);
                 let scales: &[f32] = if samples == 4 { &[1.0, 0.67, 0.5] } else { &[1.0, 0.67] };
                 for (name, distance, pitch) in [("whole map", extent * 0.85, None), ("halfway", extent * 0.2, Some(0.35f32)), ("near the ground", 400.0, Some(0.12f32))] {
                     let mut camera = Camera { target: [cx, 300.0, cz], distance: distance as f32, ..Camera::default() };
@@ -5636,6 +5807,24 @@ mod graphics_perf {
                         let (b, m) = frames(&mut renderer, &camera, extent as f32, &tiles, dim.min_y, region, &|_| {});
                         eprintln!("{name}, scale {scale}: best {b:.1} ms, middle {m:.1} ms");
                     }
+                    // The views' own look with the game's textures, a ray a
+                    // pixel (moving) and, with four samples, a ray a sample
+                    // (still).
+                    let (materials, fluids) = renderer.look_info();
+                    let wk = world.registry.well_known;
+                    let textured = move |g: &mut Globals| {
+                        g.look = [(materials > 0) as u8 as f32, 0.0, 0.0, materials as f32];
+                        g.rock = [wk.stone.0 as f32, wk.deepslate.0 as f32, fluids[0] as f32, fluids[1] as f32];
+                    };
+                    for fine in if samples == 4 { &[false, true][..] } else { &[false][..] } {
+                        set_fine(&mut renderer, *fine);
+                        let still = if *fine { ", a ray a sample" } else { "" };
+                        let (b, m) = frames(&mut renderer, &camera, extent as f32, &tiles, dim.min_y, full, &|_| {});
+                        eprintln!("{name}, flat{still}: best {b:.1} ms, middle {m:.1} ms");
+                        let (b, m) = frames(&mut renderer, &camera, extent as f32, &tiles, dim.min_y, full, &textured);
+                        eprintln!("{name}, textures{still}: best {b:.1} ms, middle {m:.1} ms");
+                    }
+                    set_fine(&mut renderer, false);
                     if samples == 4 && name != "whole map" {
                         let (b, m) = frames(&mut renderer, &camera, extent as f32, &tiles, dim.min_y, full, &|g| g.sun[3] = 0.0);
                         eprintln!("{name}, no reflections: best {b:.1} ms, middle {m:.1} ms");
@@ -5800,3 +5989,7 @@ fn set_fine(renderer: &mut Renderer3d, on: bool) {
 #[cfg(test)]
 #[path = "view3d_aa.rs"]
 mod aa;
+
+#[cfg(test)]
+#[path = "view3d_textures.rs"]
+mod textured;
