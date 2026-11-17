@@ -2053,10 +2053,13 @@ mod backdrop_tests {
         use egui::accesskit::Role;
         let mut home = Home::new(massif_core::Registry::vanilla());
         home.in_frame = false;
+        // The preview of the new map is drawn on a thread that asks for a
+        // frame when done: on a busy machine that comes a few frames late.
         let mut h = egui_kittest::Harness::builder()
             .with_size(vec2(1280.0, 800.0))
             .with_pixels_per_point(std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|s| s.parse().ok()).unwrap_or(1.0))
             .with_accessibility_check(false)
+            .with_max_steps(32)
             .wgpu()
             .build_ui_state(move |ui, (made, shown, home): &mut (bool, bool, Home)| {
                 // The app's fonts first, as the app has them when it starts.
