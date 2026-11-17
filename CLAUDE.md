@@ -28,9 +28,9 @@ Several sessions work on this repository at the same time, each with its own sub
 
 ## Version and release notes
 
-- The version in `Cargo.toml` and the top section of `.github/RELEASE_NOTES.md` (`## New in X.Y.Z`) both name the next, unpublished release. Add your user-facing change to that section: a bold title, then one paragraph in the user's terms.
+- The version in `Cargo.toml` and the top section of `.github/RELEASE_NOTES.md` (`## New in X.Y.Z`) both name the next, unpublished release. Write your user-facing change as a file of its own, `.github/notes/<your branch>.md`: a bold title, then one paragraph in the user's terms. Never edit `RELEASE_NOTES.md` for a new change: separate files are what keeps sessions landing side by side from conflicting.
 - If `vX.Y.Z` is already tagged, that version is out, and `land` refuses. Bump `Cargo.toml` to the next patch and open a new top section. The user decides when the next one is a minor version.
-- To publish (only on the user's request): land everything, then make sure the top section names the version and that `Cargo.toml` agrees. Then tag `vX.Y.Z` on `main` and push the tag. `.github/workflows/release.yml` builds Windows, macOS and Linux, and publishes the whole notes file.
+- To publish (only on the user's request): land everything, run `tools/task.sh notes` in a worktree to move `.github/notes/*.md` into the top section, land that, then make sure the top section names the version and that `Cargo.toml` agrees. Then tag `vX.Y.Z` on `main` and push the tag. `.github/workflows/release.yml` builds Windows, macOS and Linux, and publishes the whole notes file.
 
 ## Building and testing
 

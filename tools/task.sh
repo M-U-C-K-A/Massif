@@ -10,6 +10,8 @@
 #   tools/task.sh install        build the app from a copy of main and install it, one
 #                                session at a time; nothing to build when main is installed
 #                                already (--force builds it again)
+#   tools/task.sh notes          move the notes waiting in .github/notes into the top
+#                                section of .github/RELEASE_NOTES.md (before a release)
 #   tools/task.sh status         the worktrees, and whether the main checkout is clean
 set -eu
 export PATH="$HOME/.cargo/bin:$PATH"
@@ -154,6 +156,32 @@ install)
     (cd "$build" && MASSIF_COMMIT="$head" sh tools/install-macos.sh)
     echo "$head $(stat -f %m "$app")" > "$record"
     echo "Installed from main ($what)."
+    ;;
+notes)
+    # Oldest first: by the commit that added each note.
+    dir="$here/.github/notes"
+    files=$(for f in "$dir"/*.md; do
+        [ -f "$f" ] && [ "$(basename "$f")" != README.md ] || continue
+        printf '%s\t%s\n' "$(git -C "$here" log --diff-filter=A --format=%ct -1 -- "$f" 2>/dev/null || echo 0)" "$f"
+    done | sort -n | cut -f2-)
+    [ -n "$files" ] || { echo "No notes waiting in .github/notes."; exit 0; }
+    notes="$here/.github/RELEASE_NOTES.md"
+    body=$(printf '%s\n' "$files" | while IFS= read -r f; do cat "$f"; printf '\n\n'; done)
+    python3 - "$notes" "$body" <<'PY'
+import sys
+path, body = sys.argv[1], sys.argv[2].strip()
+s = open(path).read()
+head = s.index("## New in ")
+end = s.index("\n", head) + 1
+# After the top section's existing paragraphs, before the next section.
+nxt = s.find("\n## New in ", end)
+cut = nxt + 1 if nxt >= 0 else len(s)
+top = s[end:cut].rstrip("\n")
+s = s[:end] + (top + "\n\n" if top.strip() else "\n") + body + "\n\n" + s[cut:]
+open(path, "w").write(s)
+PY
+    printf '%s\n' "$files" | while IFS= read -r f; do git -C "$here" rm -q "$f" 2>/dev/null || rm -f "$f"; done
+    echo "Moved $(echo "$files" | wc -l | tr -d ' ') notes into $(sed -n 's/^## New in \(.*\)/\1/p' "$notes" | head -1). Review, then commit."
     ;;
 status)
     git -C "$main" worktree list
