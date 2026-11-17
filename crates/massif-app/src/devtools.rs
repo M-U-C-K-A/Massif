@@ -54,17 +54,50 @@ impl FrameLimit {
     }
 }
 
-/// Keep a frame from beginning sooner than `fps` allows after the one
-/// before began (`last`, then now).
-pub fn pace(last: &mut Option<Instant>, fps: u32) {
-    if let Some(began) = *last {
-        let least = Duration::from_secs_f64(1.0 / fps as f64);
-        let spent = began.elapsed();
-        if spent < least {
-            std::thread::sleep(least - spent);
-        }
+/// Hold frames to `fps` a second: wait until the frame is due (`due`, then
+/// when the next one is). The next is due a period after this one was, not
+/// after it ended, so that a frame shown a little late (the screen's own
+/// pace still rounds some) does not push the rhythm back; a frame later than
+/// a whole period starts it again.
+pub fn pace(due: &mut Option<Instant>, fps: u32) {
+    let now = Instant::now();
+    let (start, next) = schedule(*due, now, Duration::from_secs_f64(1.0 / fps as f64));
+    if start > now {
+        std::thread::sleep(start - now);
     }
-    *last = Some(Instant::now());
+    *due = Some(next);
+}
+
+/// [`pace`]'s clock: a frame due at `due`, ready at `now`, starts when
+/// (now, or when due), and the next is due a period after this one was.
+fn schedule(due: Option<Instant>, now: Instant, period: Duration) -> (Instant, Instant) {
+    let this = match due {
+        Some(at) if now < at + period => at,
+        _ => now,
+    };
+    (this.max(now), this + period)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Frames held to a rhythm: on time they wait until due; a little late
+    /// they start at once and the next keeps the rhythm; later than a
+    /// period the rhythm starts again.
+    #[test]
+    fn frames_keep_their_rhythm() {
+        let ms = Duration::from_millis;
+        let t0 = Instant::now();
+        let period = ms(10);
+        assert_eq!(schedule(None, t0, period), (t0, t0 + period));
+        // Early: waits until due.
+        assert_eq!(schedule(Some(t0 + ms(10)), t0 + ms(4), period), (t0 + ms(10), t0 + ms(20)));
+        // 3 ms late: at once, the next still due at 20.
+        assert_eq!(schedule(Some(t0 + ms(10)), t0 + ms(13), period), (t0 + ms(13), t0 + ms(20)));
+        // A period and more late: the rhythm starts again from now.
+        assert_eq!(schedule(Some(t0 + ms(10)), t0 + ms(25), period), (t0 + ms(25), t0 + ms(35)));
+    }
 }
 
 /// Seconds of history the charts show.

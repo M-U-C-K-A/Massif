@@ -445,8 +445,11 @@ pub struct MassifApp {
     /// an idle window draws at most `idle_fps` frames a second.
     last_input: f64,
     frame_began: Option<std::time::Instant>,
-    /// When the last frame began, for the limit of Settings ▸ Developer.
+    /// When the next frame is due, for the limit of Settings ▸ Developer.
     paced: Option<std::time::Instant>,
+    /// How the window's images were shown at the start (vsync's), to go
+    /// back to.
+    surface_at_start: Option<eframe::egui_wgpu::SurfaceConfig>,
     /// What the Developer panel shows, measured frame after frame.
     dev: crate::devtools::DevStats,
     /// A performance recording, on or done, for the problem report.
@@ -959,6 +962,7 @@ impl MassifApp {
             last_input: 0.0,
             frame_began: None,
             paced: None,
+            surface_at_start: None,
             dev: crate::devtools::DevStats::default(),
             recording: None,
             report_aside: None,
@@ -1739,11 +1743,20 @@ impl MassifApp {
     /// screen's pace as always.
     fn limit_frames(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let limit = if self.settings.developer { self.settings.frame_limit } else { crate::devtools::FrameLimit::Vsync };
-        if let Some(config) = frame.wgpu_surface_config()
-            && config.present_mode != limit.present_mode()
-        {
-            log::info!("frames: {:?} ({:?})", limit, limit.present_mode());
-            frame.set_wgpu_surface_config(eframe::egui_wgpu::SurfaceConfig { present_mode: limit.present_mode(), ..config });
+        if let Some(config) = frame.wgpu_surface_config() {
+            // Without vsync, one frame in flight: macOS lets a window with
+            // three drawables (the latency of two frames Massif starts with)
+            // draw no more frames than the screen shows; with two, they go
+            // out as soon as drawn (the home screen on a 144 Hz screen: 144
+            // frames a second either way before, 280 to 520 now).
+            let start = *self.surface_at_start.get_or_insert(config);
+            let want = match limit {
+                crate::devtools::FrameLimit::Vsync => start,
+                _ => eframe::egui_wgpu::SurfaceConfig { present_mode: limit.present_mode(), desired_maximum_frame_latency: Some(1) },
+            };
+            if config != want {
+                frame.set_wgpu_surface_config(want);
+            }
         }
         if let Some(fps) = limit.fps()
             && !cfg!(test)
@@ -6759,11 +6772,12 @@ mod tests {
         assert_eq!(crate::devtools::FrameLimit::Fps144.present_mode(), eframe::wgpu::PresentMode::AutoNoVsync);
         assert_eq!(crate::devtools::FrameLimit::Fps144.fps(), Some(144));
         // A cap of 60: two frames at least a sixtieth of a second apart.
-        let mut last = None;
-        crate::devtools::pace(&mut last, 60);
+        let mut due = None;
+        crate::devtools::pace(&mut due, 60);
         let t = std::time::Instant::now();
-        crate::devtools::pace(&mut last, 60);
+        crate::devtools::pace(&mut due, 60);
         assert!(t.elapsed().as_secs_f64() > 0.014, "{:?}", t.elapsed());
+
     }
 
     /// The page of editors: an area's header opens it, the editor under the
