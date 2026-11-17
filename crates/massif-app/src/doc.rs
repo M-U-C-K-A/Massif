@@ -173,6 +173,11 @@ pub struct Document {
     /// The name of the save point this map is, opened read-only: changes
     /// are taken back, and saving asks for a new file.
     pub read_only: Option<String>,
+    /// What the Gradient brush learnt of the ground before it painted,
+    /// kept from stroke to stroke: painting it again where it painted
+    /// measures from the boundary as it first was (see
+    /// [`massif_core::gradient::Sides`]).
+    pub gradient_sides: Option<massif_core::gradient::Sides>,
 }
 
 impl Document {
@@ -187,6 +192,7 @@ impl Document {
             saved_revision: 0,
             generation,
             auto_base: std::sync::Mutex::new(None),
+            gradient_sides: None,
             max_hot_tiles: MAX_HOT_TILES,
             heights: HeightsJob::default(),
             read_only: None,

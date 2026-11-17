@@ -15,7 +15,7 @@ use crate::noise::Noise;
 use crate::registry::{Registry, TerrainId};
 use crate::world::Dimension;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// The most bands a gradient has.
 pub const MAX_BANDS: usize = 16;
@@ -449,6 +449,32 @@ impl GradientSampler {
         let k = self.terrains.iter().position(|&id| id == t)?;
         Some(n == 1 || k == 0 || (k + 1 < n && self.gradient.band_middle(k) < self.gradient.edge))
     }
+
+    /// What terrain `t` is to the Across layout: the gradient's first
+    /// terrain ([`INSIDE`]) or its last ([`OUTSIDE`]), between which the
+    /// boundary is found and which alone are painted; one of its middle
+    /// terrains ([`MIDDLE`]), the transition a stroke laid; or a terrain it
+    /// does not paint ([`OTHER`]). A gradient that ends with the terrain it
+    /// starts with sides its terrains as [`GradientSampler::side`] says.
+    fn role(&self, t: TerrainId) -> u8 {
+        let (first, last) = (self.terrains[0], self.terrains[self.terrains.len() - 1]);
+        if first == last {
+            return match self.side(t) {
+                Some(true) => INSIDE,
+                Some(false) => OUTSIDE,
+                None => OTHER,
+            };
+        }
+        if t == first {
+            INSIDE
+        } else if t == last {
+            OUTSIDE
+        } else if self.terrains.contains(&t) {
+            MIDDLE
+        } else {
+            OTHER
+        }
+    }
 }
 
 /// How the Gradient brush measures where a column lies along the gradient.
@@ -462,38 +488,91 @@ pub enum Layout {
     Radial,
 }
 
-/// What side of the boundary each column was on when a stroke started,
-/// kept for the stroke so that what it paints does not move the boundary
-/// under it.
+/// What each column was to the gradient before it painted there (see
+/// [`GradientSampler::role`]): kept for the stroke, so that what it paints
+/// does not move the boundary under it, and from stroke to stroke of the
+/// same gradient ([`Sides::begin`], [`Sides::end`]), so that painting
+/// again where it painted measures from the boundary as it first was and
+/// paints the same: the blocks of its transitions (its first terrain
+/// scattered past the edge, say) never stand for a new boundary. A tile
+/// changed since by anything else is read afresh.
 #[derive(Debug, Default, Clone)]
 pub struct Sides {
     tiles: HashMap<TilePos, Box<[u8; TILE_AREA]>>,
-    /// Whether terrains the gradient does not paint lie inside (decided at
-    /// the first dab: outside when the first terrains of the gradient are
-    /// in reach, inside otherwise).
-    others_inside: Option<bool>,
+    /// The terrains of each tile as the last stroke left them (or as they
+    /// were read): while they are still so, what was learnt holds.
+    seen: HashMap<TilePos, u64>,
+    /// The tiles looked at by the stroke under way.
+    checked: HashSet<TilePos>,
+    /// What the memory is for (the gradient, its way, the level…).
+    key: u64,
+}
+
+/// Tiles of sides kept from stroke to stroke, at most (16 kB each).
+const SIDES_KEPT: usize = 4096;
+
+/// What the terrains of a tile are, as a number: equal while they are
+/// unchanged.
+fn terrain_print(lvl: &crate::level::Level, pos: TilePos) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    if let Some(tile) = lvl.view(pos) {
+        tile.terrain.dense().hash(&mut h);
+        tile.fluid.dense().hash(&mut h);
+        tile.bottom.is_some().hash(&mut h);
+    }
+    h.finish()
 }
 
 /// No column there.
 const NONE: u8 = 0;
+/// The gradient's first terrain.
 const INSIDE: u8 = 1;
+/// Its last terrain.
 const OUTSIDE: u8 = 2;
-/// A terrain the gradient does not paint.
+/// A terrain the gradient does not paint: never painted, no side.
 const OTHER: u8 = 3;
+/// One of its middle terrains: the transition a stroke laid, never painted
+/// again, no side.
+const MIDDLE: u8 = 4;
 
 impl Sides {
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Learn the columns of `rect` not learnt yet.
+    /// A stroke begins, of the gradient (and way, level…) `key` stands for:
+    /// what was learnt for another is forgotten.
+    pub fn begin(&mut self, key: u64) {
+        if key != self.key || self.tiles.len() > SIDES_KEPT {
+            *self = Sides { key, ..Sides::default() };
+        }
+        self.checked.clear();
+    }
+
+    /// The stroke ended: the terrains it left are those its sides hold for.
+    pub fn end(&mut self, dim: &Dimension, level: usize) {
+        let Some(lvl) = dim.levels.get(level) else { return };
+        for &pos in &self.checked {
+            self.seen.insert(pos, terrain_print(lvl, pos));
+        }
+        self.checked.clear();
+    }
+
+    /// Learn the columns of `rect` not learnt in this stroke, unless what
+    /// an earlier one learnt still holds (the tile as it left it).
     fn learn(&mut self, dim: &Dimension, level: usize, rect: BlockRect, sampler: &GradientSampler) {
         let Some(lvl) = dim.levels.get(level) else { return };
         let mut sides: HashMap<u16, u8> = HashMap::new();
         for pos in rect.tiles() {
-            if self.tiles.contains_key(&pos) {
+            if !self.checked.insert(pos) {
                 continue;
             }
+            let print = terrain_print(lvl, pos);
+            if self.tiles.contains_key(&pos) && self.seen.get(&pos) == Some(&print) {
+                continue;
+            }
+            self.seen.insert(pos, print);
             let mut cells = Box::new([NONE; TILE_AREA]);
             if let Some(tile) = lvl.view(pos) {
                 let slab = tile.bottom.is_some();
@@ -501,20 +580,22 @@ impl Sides {
                     if slab && !tile.present(i) {
                         continue;
                     }
+                    // The gradient stops at the water's edge: the ground
+                    // under water (a sea floor) is left as it is.
+                    let fluid = tile.fluid.get(i);
+                    if fluid != crate::tile::NO_FLUID && fluid as f32 > tile.top.get(i) {
+                        *c = OTHER;
+                        continue;
+                    }
                     let t = tile.terrain.get(i);
-                    *c = *sides.entry(t).or_insert_with(|| match sampler.side(TerrainId(t)) {
-                        Some(true) => INSIDE,
-                        Some(false) => OUTSIDE,
-                        None => OTHER,
-                    });
+                    *c = *sides.entry(t).or_insert_with(|| sampler.role(TerrainId(t)));
                 }
             }
             self.tiles.insert(pos, cells);
         }
     }
 
-    /// The side of every column of `rect`, row-major: inside, outside, or
-    /// none.
+    /// What every column of `rect` is to the gradient, row-major.
     fn read(&mut self, dim: &Dimension, level: usize, rect: BlockRect, sampler: &GradientSampler) -> Vec<u8> {
         use rayon::prelude::*;
         self.learn(dim, level, rect, sampler);
@@ -534,13 +615,6 @@ impl Sides {
                 x = end;
             }
         });
-        let others_inside = *self.others_inside.get_or_insert_with(|| !out.contains(&INSIDE));
-        let other = if others_inside { INSIDE } else { OUTSIDE };
-        for c in &mut out {
-            if *c == OTHER {
-                *c = other;
-            }
-        }
         out
     }
 }
@@ -678,20 +752,44 @@ pub fn positions(dim: &Dimension, level: usize, sampler: &GradientSampler, layou
         return out;
     }
     let (to_in, to_out) = rayon::join(|| distance_field(rw, rh, |i| side[i] == INSIDE), || distance_field(rw, rh, |i| side[i] == OUTSIDE));
+    // The middle terrains: a transition laid already, unless none is near.
+    let to_mid = has(MIDDLE).then(|| distance_field(rw, rh, |i| side[i] == MIDDLE));
     let total = g.total();
+    // Where the middle terrains can lie along the gradient: from the start
+    // of its first transition to the end of its last.
+    let (mid_from, mid_to) = (g.bands[0].width, total - g.bands[g.bands.len() - 1].width);
     out.par_chunks_mut(w.max(1)).enumerate().for_each(|(row, line)| {
         let z = clip.z0 + row as i32;
         for (x, o) in (clip.x0..clip.x1).zip(line.iter_mut()) {
             let i = (z - rect.z0) as usize * rw + (x - rect.x0) as usize;
-            // The boundary lies between the cells, half a block from each.
-            let (d, sign) = match side[i] {
-                INSIDE => (to_out[i] - 0.5, -1.0),
-                OUTSIDE => (to_in[i] - 0.5, 1.0),
-                _ => (f32::NAN, 0.0),
+            // Only the gradient's first and last terrains are painted, each
+            // by its distance to the other across the boundary (which lies
+            // between the cells, half a block from each). Its middle ones
+            // are a transition laid already: painting again where one was
+            // laid keeps what is there. A column of the first or last
+            // terrain nearer a middle one than the other end is measured
+            // from as far along as a middle terrain can lie, so that it
+            // lies at least as far toward its own end as it did, where its
+            // band is still its own (the band a column takes only grows
+            // along the gradient); and so does one whose other end lies
+            // farther off now. Terrains it does not paint (a sand shore,
+            // the sea floor) stay as they are.
+            let mid = to_mid.as_ref().map_or(f32::INFINITY, |m| m[i] - 0.5);
+            let s = sampler.stretch(x, z);
+            let p = match side[i] {
+                INSIDE if mid < to_out[i] - 0.5 => mid_from - mid * s,
+                INSIDE => g.edge - (to_out[i] - 0.5) * s,
+                OUTSIDE if mid < to_in[i] - 0.5 => mid_to + mid * s,
+                OUTSIDE => g.edge + (to_in[i] - 0.5) * s,
+                _ => f32::NAN,
             };
-            let p = if d < far { g.edge + sign * d * sampler.stretch(x, z) } else { f32::NAN };
+            let near = match side[i] {
+                INSIDE => mid.min(to_out[i] - 0.5),
+                OUTSIDE => mid.min(to_in[i] - 0.5),
+                _ => f32::INFINITY,
+            };
             // Past the gradient's ends the ground is left as it is.
-            *o = if (0.0..total).contains(&p) { p } else { f32::NAN };
+            *o = if near < far && (0.0..total).contains(&p) { p } else { f32::NAN };
         }
     });
     out

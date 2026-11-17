@@ -52,6 +52,21 @@ fn paint(w: &mut World, g: &Gradient, layout: Layout, brush: &Brush, dabs: &[(f3
     history
 }
 
+/// A stroke as the app paints it: the sides kept from the strokes before
+/// it, of the same gradient.
+fn stroke(w: &mut World, g: &Gradient, brush: &Brush, dabs: &[(f32, f32)], sides: &mut Sides) {
+    let sampler = g.sampler(&w.registry, w.meta.seed).unwrap();
+    sides.begin(7);
+    let mut history = History::default();
+    history.begin("Gradient", 0);
+    let mut edit = history.edit(w, 0);
+    for (k, &(x, z)) in dabs.iter().enumerate() {
+        ops::paint_gradient(&mut edit, brush, x, z, k as u64, &sampler, Layout::Across, sides);
+    }
+    history.commit();
+    sides.end(&w.dims[0], 0);
+}
+
 fn brush(r: f32) -> Brush {
     Brush::symmetric(BrushShape::Circle, Profile::Constant, r)
 }
@@ -175,4 +190,124 @@ fn a_brush_filter_is_kept_to() {
     paint(&mut w, &rings(), Layout::Across, &filtered, &[(0.0, 0.0)]);
     // The grass side is not stone: left as it was.
     assert_eq!(terrain(&w, -3, 0), grass);
+}
+
+/// Grass from x = 0 westward and a square of `first` (the forest)
+/// eastward, as `map` lays stone; a shore of sand from x = -14 to -8, its
+/// western half under the water, crossing the edge's reach from north to
+/// south.
+fn shore(first: &str) -> (World, TerrainId) {
+    let (mut w, _, stone) = map(2);
+    let reg = w.registry.clone();
+    let (first, sand) = (reg.terrain_by_name(first).unwrap(), reg.terrain_by_name("Sand").unwrap());
+    let mut history = History::default();
+    history.begin("base", 0);
+    let mut edit = history.edit(&mut w, 0);
+    if first != stone {
+        let square = Brush::symmetric(BrushShape::Square, Profile::Constant, 100.0);
+        ops::paint_terrain(&mut edit, &square, 100.0, 0.0, first, 1);
+    }
+    let strip = Brush::symmetric(BrushShape::Square, Profile::Constant, 3.0);
+    for z in (-200..200).step_by(4) {
+        ops::paint_terrain(&mut edit, &strip, -11.0, z as f32, sand, 1);
+    }
+    history.commit();
+    // The western half of the shore under the sea.
+    for tz in -2..2 {
+        let tile = w.dims[0].ground_mut().tile_mut(TilePos::new(-1, tz)).unwrap();
+        for i in 0..massif_core::coords::TILE_AREA {
+            let x = -128 + (i % 128) as i32;
+            if (-14..-11).contains(&x) {
+                tile.top.set(i, 60.0);
+            }
+        }
+    }
+    (w, sand)
+}
+
+fn snapshot(w: &World) -> Vec<u16> {
+    (-80..80).flat_map(|z| (-80..80).map(move |x| (x, z))).map(|(x, z)| terrain(w, x, z).0).collect()
+}
+
+/// The columns where two maps differ: (x, z, terrain in the first, in the
+/// second), the first few.
+fn differ(a: &World, b: &World) -> Vec<(i32, i32, u16, u16)> {
+    (-80..80).flat_map(|z| (-80..80).map(move |x| (x, z))).filter(|&(x, z)| terrain(a, x, z) != terrain(b, x, z)).map(|(x, z)| (x, z, terrain(a, x, z).0, terrain(b, x, z).0)).take(12).collect()
+}
+
+/// Clicking again over the same edge changes nothing: the boundary is found
+/// between the gradient's first and last terrains, the middle ones it laid
+/// being its transition, not new terrains; a terrain it does not paint (a
+/// sand shore, a sea floor) is never painted. The terraformers' gradient
+/// (noise, blobs, a hard cut, wander) and one with a wide wander, each
+/// stroke three dabs, one, two and five strokes.
+#[test]
+fn clicking_again_over_the_same_edge_changes_nothing() {
+    let sketch = massif_core::gradient::built_in().into_iter().find(|g| g.name == "Deciduous forest to grass").unwrap();
+    let wide = Gradient { wander: 0.8, transitions: vec![Transition::noise(8.0, 0.9, 4.0), Transition::blobs(8.0, 0.7, 5.0), Transition::noise(6.0, 0.6, 3.0)], ..sketch.clone() };
+    let two = Gradient { wander: 0.5, ..Gradient::new("two", &[("Podzol", 6.0), ("Grass", 10.0)], &[Transition::noise(10.0, 0.9, 3.0)]) };
+    for g in [sketch, wide, two] {
+        let (base, sand) = shore(&g.bands[0].terrain);
+        let dabs = [(0.0, -20.0), (0.0, 0.0), (0.0, 20.0)];
+        let after = |strokes: usize| {
+            let mut w = base.copy_unfrozen();
+            let mut sides = Sides::new();
+            for _ in 0..strokes {
+                stroke(&mut w, &g, &brush(60.0), &dabs, &mut sides);
+            }
+            w
+        };
+        let (one, two, five) = (after(1), after(2), after(5));
+        assert_ne!(snapshot(&one), snapshot(&base), "{}: the first stroke paints", g.name);
+        assert_eq!(differ(&one, &two), [], "{}: a second stroke changes nothing", g.name);
+        assert_eq!(differ(&one, &five), [], "{}: nor five", g.name);
+        for z in -60..60 {
+            for x in -14..-8 {
+                assert_eq!(terrain(&five, x, z), sand, "{}: the shore at {x}, {z} stays sand, under the water too", g.name);
+            }
+        }
+        // Without what the strokes before learnt (the map opened again),
+        // the boundary is found between the first and last terrains alone:
+        // a second stroke leaves the middle ones, the shore and all but a
+        // few columns where the first terrain lies scattered past the edge
+        // as they are, and never creeps.
+        let mut again = one.copy_unfrozen();
+        paint(&mut again, &g, Layout::Across, &brush(60.0), &dabs);
+        let changed = (-80..80).flat_map(|z| (-80..80).map(move |x| (x, z))).filter(|&(x, z)| terrain(&again, x, z) != terrain(&one, x, z)).collect::<Vec<_>>();
+        eprintln!("{}: {} columns changed by a stroke without memory", g.name, changed.len());
+        if g.bands.len() > 2 {
+            assert!(changed.is_empty(), "{}: {} columns changed", g.name, changed.len());
+        }
+        let reach = (g.total() - g.edge) / (1.0 - g.wander) + 2.0;
+        assert!(changed.iter().all(|&(x, _)| (x as f32) > -reach && !(-14..-8).contains(&x)), "{}: {changed:?}", g.name);
+    }
+}
+
+/// With a soft brush, a second stroke fills in what the first left at its
+/// rim, and nothing past where the gradient ends: it does not creep.
+#[test]
+fn a_soft_brush_fills_in_without_creeping() {
+    let g = massif_core::gradient::built_in().into_iter().find(|g| g.name == "Deciduous forest to grass").unwrap();
+    let (base, sand) = shore(&g.bands[0].terrain);
+    let reg = base.registry.clone();
+    let grass = reg.terrain_by_name("Grass").unwrap();
+    let soft = Brush { strength: 1.0, ..Brush::symmetric(BrushShape::Circle, Profile::Sine, 70.0) };
+    let mut w = base.copy_unfrozen();
+    let mut sides = Sides::new();
+    for _ in 0..5 {
+        stroke(&mut w, &g, &soft, &[(0.0, 0.0)], &mut sides);
+    }
+    // West of the edge, farther than the gradient's length from it, the
+    // grass is grass; the shore is sand.
+    let reach = (g.total() - g.edge) / (1.0 - g.wander) + 2.0;
+    for z in -40..40 {
+        for x in -70..0 {
+            let t = terrain(&w, x, z);
+            if (-14..-8).contains(&x) {
+                assert_eq!(t, sand, "{x}, {z}");
+            } else if (-x as f32) > reach {
+                assert_eq!(t, grass, "{x}, {z}: past the gradient's end");
+            }
+        }
+    }
 }

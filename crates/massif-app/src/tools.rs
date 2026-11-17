@@ -1122,7 +1122,7 @@ pub fn begin_stroke(doc: &mut Document, tools: &ToolState, at: (f32, f32), inver
         water_to,
         changed: 0,
         classes: None,
-        sides: massif_core::gradient::Sides::new(),
+        sides: gradient_sides(doc, tools, tool, inverse, level),
         back,
     };
     if tool == Tool::Gradient {
@@ -1130,6 +1130,22 @@ pub fn begin_stroke(doc: &mut Document, tools: &ToolState, at: (f32, f32), inver
         tools.gradient.keep_in(doc);
     }
     (Some(stroke), None)
+}
+
+/// The Gradient brush's sides for a stroke beginning: those its strokes
+/// before learnt, when they were of the same gradient, the same way, on the
+/// same level of the same map.
+fn gradient_sides(doc: &mut Document, tools: &ToolState, tool: Tool, inverse: bool, level: usize) -> massif_core::gradient::Sides {
+    use std::hash::{Hash, Hasher};
+    if tool != Tool::Gradient {
+        return massif_core::gradient::Sides::new();
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    serde_json::to_string(&tools.gradient.gradient).unwrap_or_default().hash(&mut h);
+    (inverse, format!("{:?}", tools.gradient.layout), level, doc.dim, doc.generation).hash(&mut h);
+    let mut sides = doc.gradient_sides.take().unwrap_or_default();
+    sides.begin(h.finish());
+    sides
 }
 
 /// Continue a stroke to `to`. `dt` is the time since the previous call.
@@ -1304,8 +1320,13 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
 }
 
 /// End a stroke: one step to undo. The automatic tools say what they did.
-pub fn end_stroke(doc: &mut Document, stroke: Stroke) -> Feedback {
+pub fn end_stroke(doc: &mut Document, mut stroke: Stroke) -> Feedback {
     doc.commit();
+    if stroke.tool == Tool::Gradient {
+        // What it learnt of the ground holds for the ground it left.
+        stroke.sides.end(doc.dimension(), stroke.level.min(doc.dimension().levels.len() - 1));
+        doc.gradient_sides = Some(std::mem::take(&mut stroke.sides));
+    }
     match stroke.tool {
         Tool::AutoPaint | Tool::AutoBiome if !stroke.inverse => Some(match (stroke.changed, stroke.tool) {
             (0, _) => tr!("Nothing to change here: the land already follows the rules").to_owned(),
@@ -1588,6 +1609,156 @@ mod tests {
             end_sculpt(&mut d, stroke);
             assert_eq!(TerrainId(probe(&d, 20, 20).unwrap().terrain), if inverse { TerrainId::ROCK } else { sand });
         }
+    }
+
+    /// Clicking the Gradient brush again where it painted changes nothing,
+    /// even a gradient of two terrains whose noise scatters each into the
+    /// other (the document keeps what it learnt of the ground); after an
+    /// undo it paints the same again; the sand it does not paint stays.
+    #[test]
+    fn clicking_the_gradient_again_changes_nothing() {
+        let mut doc = doc();
+        let mut tools = ToolState::default();
+        let reg = doc.world.registry.clone();
+        let id = |n: &str| reg.terrain_by_name(n).unwrap().0;
+        let click = |doc: &mut Document, tools: &ToolState, at: (f32, f32)| {
+            let (stroke, _) = begin_stroke(doc, tools, at, false, false);
+            let mut stroke = stroke.unwrap();
+            continue_stroke(doc, tools, &mut stroke, at, 0.02);
+            end_stroke(doc, stroke);
+        };
+        let snapshot = |doc: &Document| -> Vec<u16> { (-40..80).flat_map(|z| (-40..80).map(move |x| (x, z))).map(|(x, z)| probe(doc, x, z).unwrap().terrain).collect() };
+        // Podzol over the east, grass west of it, a strip of sand.
+        tools.select(Tool::PaintTerrain);
+        for (t, x, r) in [("Grass", 20.0, 60.0), ("Podzol", 60.0, 30.0), ("Sand", 12.0, 2.0)] {
+            tools.terrain = id(t);
+            tools.brush = Brush::symmetric(massif_core::BrushShape::Square, massif_core::Profile::Constant, r);
+            click(&mut doc, &tools, (x, 20.0));
+        }
+        tools.select(Tool::Gradient);
+        tools.gradient.gradient = massif_core::gradient::Gradient { wander: 0.5, ..massif_core::gradient::Gradient::new("two", &[("Podzol", 6.0), ("Grass", 10.0)], &[massif_core::gradient::Transition::noise(10.0, 0.9, 3.0)]) };
+        tools.brush = Brush::symmetric(massif_core::BrushShape::Circle, massif_core::Profile::Constant, 30.0);
+        let before = snapshot(&doc);
+        click(&mut doc, &tools, (30.0, 20.0));
+        let once = snapshot(&doc);
+        assert_ne!(once, before);
+        for _ in 0..4 {
+            click(&mut doc, &tools, (30.0, 20.0));
+        }
+        assert_eq!(snapshot(&doc), once, "five clicks paint what one did");
+        assert!((10..14).all(|x| probe(&doc, x, 20).unwrap().terrain == id("Sand")), "the sand stays");
+        // Undone, then clicked again: the same.
+        for _ in 0..5 {
+            doc.undo();
+        }
+        assert_eq!(snapshot(&doc), before);
+        click(&mut doc, &tools, (30.0, 20.0));
+        assert_eq!(snapshot(&doc), once);
+    }
+
+    /// The Gradient brush on a real shore (MASSIF_SHORE_WORLD: a .massif;
+    /// MASSIF_SNAPSHOT_DIR): a forest of podzol laid inland of grass by a
+    /// sand shore and the sea, then the terraformers' gradient clicked on
+    /// its edge by the shore with a Sine circle of radius 131, once and
+    /// twice. Renders the place before, after one click and after two;
+    /// the second only fills in the soft rim the first left half painted,
+    /// as a hard brush paints it in one click; the beach and the sea floor
+    /// stay as they were.
+    #[test]
+    fn the_gradient_by_a_real_shore() {
+        let (Some(path), Some(dir)) = (std::env::var_os("MASSIF_SHORE_WORLD"), std::env::var_os("MASSIF_SNAPSHOT_DIR")) else { return };
+        let dir = std::path::PathBuf::from(dir);
+        let world = massif_format::load(std::path::Path::new(&path)).unwrap();
+        let mut doc = Document::new(world, None, 1);
+        let reg = doc.world.registry.clone();
+        let id = |n: &str| reg.terrain_by_name(n).unwrap().0;
+        let (grass, sand, beach) = (id("Grass"), id("Sand"), id("Beach mix"));
+        let dry = |doc: &Document, x: i32, z: i32, t: u16| probe(doc, x, z).is_some_and(|p| p.terrain == t && (p.fluid == NO_FLUID || (p.fluid as f32) <= p.height));
+        let wet = |doc: &Document, x: i32, z: i32| probe(doc, x, z).is_some_and(|p| p.fluid != NO_FLUID && p.fluid as f32 > p.height + 2.0);
+        // Grass, then a beach a few blocks on, then the sea, any way: the
+        // nearest to the map's middle.
+        let ways = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+        let shore = |doc: &Document, x: i32, z: i32, (dx, dz): (i32, i32)| {
+            (0..4).all(|k| dry(doc, x - dx * k * 6, z - dz * k * 6, grass))
+                && (4..30).any(|k| dry(doc, x + dx * k, z + dz * k, sand) || dry(doc, x + dx * k, z + dz * k, beach))
+                && (20..90).any(|k| wet(doc, x + dx * k, z + dz * k))
+        };
+        // (MASSIF_SHORE_AT: "x,z,dx,dz", where it is, to look no further.)
+        let given = std::env::var("MASSIF_SHORE_AT").ok().map(|v| v.split(',').map(|n| n.trim().parse::<i32>().unwrap()).collect::<Vec<_>>());
+        let (x, z, (dx, dz)) = match given.as_deref() {
+            Some(&[x, z, dx, dz]) => (x, z, (dx, dz)),
+            _ => {
+                let mut spots: Vec<(i32, i32)> = (-2900..2900).step_by(32).flat_map(|z| (-2900..2900).step_by(32).map(move |x| (x, z))).collect();
+                spots.sort_by_key(|&(x, z)| x.abs() + z.abs());
+                spots.into_iter().flat_map(|(x, z)| ways.map(|w| (x, z, w))).find(|&(x, z, w)| shore(&doc, x, z, w)).expect("a shore")
+            }
+        };
+        eprintln!("shore at {x}, {z}, the sea toward {dx}, {dz}");
+        let click = |doc: &mut Document, tools: &ToolState, at: (f32, f32)| {
+            let (stroke, _) = begin_stroke(doc, tools, at, false, false);
+            let mut stroke = stroke.unwrap();
+            continue_stroke(doc, tools, &mut stroke, at, 0.02);
+            end_stroke(doc, stroke);
+        };
+        // The forest: a disc of podzol whose east edge is by the shore.
+        let mut tools = ToolState::default();
+        tools.select(Tool::PaintTerrain);
+        tools.terrain = id("Podzol");
+        tools.brush = Brush::symmetric(massif_core::BrushShape::Circle, massif_core::Profile::Constant, 60.0);
+        tools.filter = massif_core::filter::Filter { only_on: Some(vec![massif_core::filter::Match::Terrain(grass)]), ..Default::default() };
+        click(&mut doc, &tools, ((x - dx * 70) as f32, (z - dz * 70) as f32));
+        tools.filter = massif_core::filter::Filter::default();
+        tools.select(Tool::Gradient);
+        tools.gradient.gradient = massif_core::gradient::built_in().into_iter().find(|g| g.name == "Deciduous forest to grass").unwrap();
+        tools.brush = Brush::symmetric(massif_core::BrushShape::Circle, massif_core::Profile::Sine, 131.0);
+        tools.brush.strength = 1.0;
+        let sea = doc.world.meta.sea_level as f32;
+        let (x0, z0) = (x - 192, z - 128);
+        let render = |doc: &Document, name: &str| {
+            let image = crate::map_render::render_region(doc.dimension(), &doc.world.registry, sea, crate::map_render::MapStyle::default(), 0, x0, z0, 3, 2);
+            let rgba: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
+            image::save_buffer(dir.join(name), &rgba, image.width() as u32, image.height() as u32, image::ColorType::Rgba8).unwrap();
+        };
+        let snapshot = |doc: &Document| -> Vec<(u16, bool)> { (z0..z0 + 256).flat_map(|zz| (x0..x0 + 384).map(move |xx| (xx, zz))).map(|(xx, zz)| probe(doc, xx, zz).map_or((0, false), |p| (p.terrain, wet(doc, xx, zz)))).collect() };
+        render(&doc, "gradient-shore-before.png");
+        let before = snapshot(&doc);
+        let at = ((x - dx * 12) as f32, (z - dz * 12) as f32);
+        click(&mut doc, &tools, at);
+        render(&doc, "gradient-shore-1.png");
+        let one = snapshot(&doc);
+        click(&mut doc, &tools, at);
+        render(&doc, "gradient-shore-2.png");
+        let two = snapshot(&doc);
+        // What the second click added, at the soft rim the first left
+        // half painted, is what one click of a hard brush lays there: the
+        // same positions, nothing further.
+        let mut hard = Document::new(massif_format::load(std::path::Path::new(&path)).unwrap(), None, 1);
+        {
+            let mut t = tools.clone();
+            t.select(Tool::PaintTerrain);
+            t.brush = Brush::symmetric(massif_core::BrushShape::Circle, massif_core::Profile::Constant, 60.0);
+            t.filter = massif_core::filter::Filter { only_on: Some(vec![massif_core::filter::Match::Terrain(grass)]), ..Default::default() };
+            click(&mut hard, &t, ((x - dx * 70) as f32, (z - dz * 70) as f32));
+            t.filter = massif_core::filter::Filter::default();
+            t.select(Tool::Gradient);
+            t.brush = Brush::symmetric(massif_core::BrushShape::Circle, massif_core::Profile::Constant, 131.0);
+            click(&mut hard, &t, at);
+        }
+        let reference = snapshot(&hard);
+        let filled = one.iter().zip(&two).zip(&reference).filter(|((a, b), _)| a != b);
+        assert!(filled.clone().all(|((_, b), r)| b == r), "the rim filled in as a hard brush paints it");
+        let changed = filled.count();
+        let painted = before.iter().zip(&one).filter(|(a, b)| a != b).count();
+        // Every column of a terrain the gradient does not start or end with
+        // (the beach, the sea floor…) as it was.
+        let ends = [id("Podzol"), grass];
+        let others = before.iter().zip(&two).filter(|(a, _)| !ends.contains(&a.0));
+        let moved = others.clone().filter(|(a, b)| a != b).count();
+        let wet_painted = before.iter().zip(&two).filter(|(a, b)| a.1 && a != b).count();
+        eprintln!("first click: {painted} columns painted; second: {changed} filled in at the rim; other terrains changed: {moved} of {}; under water painted: {wet_painted}", others.count());
+        assert!(painted > 1000);
+        assert_eq!(moved, 0, "the beach and the sea floor stay as they were");
+        assert_eq!(wet_painted, 0, "nothing under the water is painted");
     }
 
     /// The Gradient brush dragged over the edge of a patch: the rim

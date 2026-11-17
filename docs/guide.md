@@ -839,10 +839,14 @@ distance to the boundary says. The bands before the **edge** lie on the side
 of the gradient's first terrain, those after it on the side of its last; out
 of the box the edge falls in the first transition, so the first terrain
 keeps its ground and the others ring it. The boundary is found within the
-brush's reach, between the gradient's first terrain (and any terrain it does
-not paint, on that side) and its last, as it was when the stroke began:
-going over the same place again paints the same thing, and what the stroke
-paints never moves the edge under it. Past the gradient's ends the ground is
+brush's reach, between the gradient's first terrain and its last, as it was
+before the brush painted there, and only those two terrains are painted:
+its middle terrains are the transition it laid, and a terrain it does not
+paint (a beach, a field) stays as it is, as does the ground under water
+(the gradient stops at the water's edge). Clicking again over the same edge
+paints the same thing: the brush remembers the boundary it found until the
+ground is changed by something else, and a soft brush only fills in the rim
+its first click left half painted. Past the gradient's ends the ground is
 left as it is. **Wander** widens and narrows the bands along the edge, so
 that a rim is wide here and thin there as on real ground; the edge itself
 stays where it is. With a selection, the gradient runs in from the
