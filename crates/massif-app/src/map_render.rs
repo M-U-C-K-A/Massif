@@ -10,7 +10,7 @@
 
 use egui::{Color32, ColorImage, TextureFilter, TextureHandle, TextureOptions, TextureWrapMode};
 use massif_core::compose::{Span, TileStack, block_top};
-use massif_core::coords::{TILE_AREA, TilePos, cell_index, local_index};
+use massif_core::coords::{TILE_AREA, TILE_SIZE, TilePos, cell_index, local_index};
 use massif_core::level::LevelKind;
 use massif_core::registry::Registry;
 use massif_core::tile::NO_FLUID;
@@ -574,7 +574,9 @@ impl<'a> Colorizer<'a> {
 
     /// Colour of the centre sample `c` given its four neighbours, `spacing`
     /// blocks apart. `at`: the column of `c`, when a texel is one or two
-    /// blocks (the plants of covers show one by one).
+    /// blocks (the plants of covers show one by one). `steps`: the lines of
+    /// the one-block steps across the texel, added to its light (see
+    /// [`block_step_shades`]).
     #[allow(clippy::too_many_arguments)]
     pub fn pixel(
         &self,
@@ -588,6 +590,7 @@ impl<'a> Colorizer<'a> {
         exaggeration: f32,
         contour: Option<f32>,
         trend: Option<f32>,
+        steps: Option<f32>,
     ) -> Color32 {
         if c.is_empty() {
             return Color32::TRANSPARENT;
@@ -613,6 +616,7 @@ impl<'a> Colorizer<'a> {
             ((h(r) - h(l)) / (2.0 * spacing), (h(d) - h(u)) / (2.0 * spacing))
         };
         let shade = hillshade(dx * exaggeration, dz * exaggeration, self.light);
+        let shade = steps.map_or(shade, |line| (shade + line).clamp(0.3, 1.32));
 
         let mut out = match self.style.mode {
             MapMode::Terrain => {
@@ -840,6 +844,98 @@ fn slope_ring(lod: u8) -> usize {
     ((massif_core::filter::SLOPE_REACH as usize) >> lod).max(1)
 }
 
+/// The levels of detail past the first whose texels are lit block by block
+/// (a texel of 2 × 2 and 4 × 4 blocks; the grids hold every column up to
+/// there). Further out a step's line would be an eighth of a texel or less.
+const STEP_LODS: u8 = GRID_LODS;
+
+/// The lines of the one-block steps over each texel of the chunk at `key`
+/// (a level of detail of [`STEP_LODS`]), to add to its light. Each block is
+/// shaded by its step to the neighbour on the side the light comes from,
+/// as the closest level shades a texel a block; a texel takes the mean of
+/// its blocks, and gives what sets it apart from the texels around: where
+/// a step crosses it, the line of that step, √k as strong as its share of
+/// the texel (k blocks a side: half as strong as close up at 4 × 4 blocks),
+/// while the light of the hillside, from the texels' own heights, stays as
+/// it was. A texel's one sample shaded from the texels around would smooth
+/// the steps away, or alias them into patterns. `None` for a texel without
+/// ground.
+fn block_step_shades(key: ChunkKey, sources: &Sources, light: [f32; 3]) -> Vec<Option<f32>> {
+    let k = 1usize << key.lod;
+    // The texels of the chunk and a ring of them around; their blocks, and
+    // a ring of blocks around for the neighbours.
+    let t = CHUNK_PX + 2;
+    let w = t * k + 2;
+    let (x0, z0) = key.origin();
+    let (x0, z0) = (x0 - k as i64 - 1, z0 - k as i64 - 1);
+    // The top block of each column, NaN where there is no ground; read a
+    // tile's row at a time.
+    let mut tops = vec![f32::NAN; w * w];
+    for j in 0..w {
+        let z = (z0 + j as i64) as i32;
+        let mut i = 0;
+        while i < w {
+            let x = (x0 + i as i64) as i32;
+            let tile = TilePos::containing(x, z);
+            let end = (((tile.x as i64 + 1) * TILE_SIZE as i64 - x0) as usize).min(w);
+            if let Some(grid) = sources.grids.get(&tile).and_then(|g| g.grid.as_ref()) {
+                for (ii, top) in tops[j * w + i..j * w + end].iter_mut().enumerate() {
+                    let s = &grid.0[local_index(x + ii as i32, z)];
+                    if !s.is_empty() {
+                        *top = block_top(s.height) as f32;
+                    }
+                }
+            }
+            i = end;
+        }
+    }
+    // The mean light of each texel's blocks, NaN without ground.
+    let mut means = vec![f32::NAN; t * t];
+    for (n, mean) in means.iter_mut().enumerate() {
+        let (ti, tj) = (n % t, n / t);
+        let (mut sum, mut count) = (0.0f32, 0usize);
+        for bj in 0..k {
+            let row = (tj * k + bj + 1) * w;
+            for bi in 0..k {
+                let at = row + ti * k + bi + 1;
+                let c = tops[at];
+                if c.is_nan() {
+                    continue;
+                }
+                let h = |v: f32| if v.is_nan() { c } else { v };
+                let dx = if light[0] <= 0.0 { c - h(tops[at - 1]) } else { h(tops[at + 1]) - c };
+                let dz = if light[2] <= 0.0 { c - h(tops[at - w]) } else { h(tops[at + w]) - c };
+                sum += hillshade(dx, dz, light);
+                count += 1;
+            }
+        }
+        if count > 0 {
+            *mean = sum / count as f32;
+        }
+    }
+    let boost = (k as f32).sqrt();
+    let mut out = vec![None; CHUNK_PX * CHUNK_PX];
+    for (n, line) in out.iter_mut().enumerate() {
+        let (ti, tj) = (n % CHUNK_PX + 1, n / CHUNK_PX + 1);
+        let m = means[tj * t + ti];
+        if m.is_nan() {
+            continue;
+        }
+        let (mut sum, mut count) = (0.0f32, 0usize);
+        for dj in 0..3 {
+            for di in 0..3 {
+                let v = means[(tj + dj - 1) * t + ti + di - 1];
+                if !v.is_nan() {
+                    sum += v;
+                    count += 1;
+                }
+            }
+        }
+        *line = Some((m - sum / count as f32) * boost);
+    }
+    out
+}
+
 fn build_chunk(key: ChunkKey, sources: &Sources, colorizer: &Colorizer) -> ColorImage {
     let slope = colorizer.style.mode == MapMode::Slope;
     let ring = if slope { slope_ring(key.lod) } else { 1 };
@@ -854,6 +950,9 @@ fn build_chunk(key: ChunkKey, sources: &Sources, colorizer: &Colorizer) -> Color
     let spacing = (1u32 << key.lod) as f32;
     let exaggeration = 1.0 + 0.3 * key.lod as f32;
     let contour = colorizer.style.contours.then(|| contour_interval(key.lod));
+    // A texel of 2 × 2 or 4 × 4 blocks: the lines of its blocks' steps over
+    // the light of the hillside (see `block_step_shades`).
+    let steps = (!colorizer.style.smooth && !slope && (1..=STEP_LODS).contains(&key.lod)).then(|| block_step_shades(key, sources, colorizer.light));
     let mut pixels = Vec::with_capacity(CHUNK_PX * CHUNK_PX);
     for j in ring..ring + CHUNK_PX {
         for i in ring..ring + CHUNK_PX {
@@ -877,6 +976,7 @@ fn build_chunk(key: ChunkKey, sources: &Sources, colorizer: &Colorizer) -> Color
                 exaggeration,
                 contour,
                 trend,
+                steps.as_ref().and_then(|s| s[(j - ring) * CHUNK_PX + (i - ring)]),
             ));
         }
     }
@@ -1517,7 +1617,7 @@ mod tests {
             let colorizer = Colorizer::new(&w.registry, MapStyle { smooth, ..MapStyle::default() }, 63.0);
             // Block `k` of a row from west to east, its west neighbour `lift` blocks higher.
             let pixel = |row: &[f32], k: usize, lift: f32| {
-                colorizer.pixel(&at(row[k]), None, &at(row[k - 1] + lift), &at(row[k + 1]), &at(row[k]), &at(row[k]), 1.0, 1.0, None, None)
+                colorizer.pixel(&at(row[k]), None, &at(row[k - 1] + lift), &at(row[k + 1]), &at(row[k]), &at(row[k]), 1.0, 1.0, None, None, None)
             };
             let flat = pixel(&[70.0; 3], 1, 0.0);
             let step = [70.0, 70.0, 71.0, 71.0];
@@ -1533,6 +1633,48 @@ mod tests {
                 assert!(pixel(&bump, 1, 0.0).r() > flat.r(), "a block alone above the others is lit");
                 assert!(pixel(&bump, 2, 0.0).r() < flat.r(), "the block east of it is in its shadow");
             }
+        }
+    }
+
+    /// Out to a texel of 4 × 4 blocks, a one-block step keeps its line: a
+    /// texel holding a step facing the light is lit, its neighbours without
+    /// one are not, where the light worked out from the texels around (the
+    /// smooth way, as before) is the same over the whole hillside. The mean
+    /// light of the hillside stays what it was.
+    #[test]
+    fn a_texel_of_several_blocks_keeps_its_steps() {
+        let w = world();
+        for (lod, every) in [(1u8, 4i32), (2, 8)] {
+            // Ground rising a block every `every` blocks eastward.
+            let mut grids = HashMap::new();
+            for tz in -1..=4 {
+                for tx in -1..=4 {
+                    let samples = (0..TILE_AREA)
+                        .map(|i| {
+                            let x = tx * TILE_SIZE + (i % TILE_SIZE as usize) as i32;
+                            Sample { height: 64.0 + x.div_euclid(every) as f32, levels: 1, ..Sample::EMPTY }
+                        })
+                        .collect();
+                    grids.insert(TilePos::new(tx, tz), GridEntry { grid: Some(Arc::new(SurfaceGrid(samples))), used: 0 });
+                }
+            }
+            let summaries = HashMap::new();
+            let sources = Sources { grids: &grids, summaries: &summaries };
+            let key = ChunkKey { lod, x: 0, z: 0 };
+            let row = |smooth: bool| -> Vec<f32> {
+                let colorizer = Colorizer::new(&w.registry, MapStyle { smooth, ..MapStyle::default() }, 63.0);
+                let image = build_chunk(key, &sources, &colorizer);
+                (8..40).map(|i| image.pixels[64 * CHUNK_PX + i].r() as f32).collect()
+            };
+            let (steps, smooth) = (row(false), row(true));
+            let spread = |v: &[f32]| v.iter().cloned().fold(f32::MIN, f32::max) - v.iter().cloned().fold(f32::MAX, f32::min);
+            assert!(spread(&smooth) <= 1.0, "lod {lod}: smooth, the hillside is one shade: {smooth:?}");
+            assert!(spread(&steps) >= 8.0, "lod {lod}: block by block, the steps show: {steps:?}");
+            // Every other texel holds a step: lit, then not.
+            assert!(steps.windows(2).all(|p| (p[0] - p[1]).abs() >= 8.0), "lod {lod}: {steps:?}");
+            let mean = |v: &[f32]| v.iter().sum::<f32>() / v.len() as f32;
+            assert!((mean(&steps) - mean(&smooth)).abs() <= 3.0, "lod {lod}: the hillside's mean light: {} against {}", mean(&steps), mean(&smooth));
+            eprintln!("lod {lod}: steps {:?}, smooth {:?}", &steps[..4], &smooth[..4]);
         }
     }
 
@@ -1741,6 +1883,16 @@ mod tests {
                 })
                 .fold(f64::MAX, f64::min);
             eprintln!("chunk at lod {lod}{}: {best:.3} ms", if smooth { ", smooth" } else { "" });
+            if !smooth && (1..=STEP_LODS).contains(&lod) {
+                let best = (0..20)
+                    .map(|_| {
+                        let t = Instant::now();
+                        drop(block_step_shades(key, &sources, colorizer.light));
+                        t.elapsed().as_secs_f64() * 1000.0
+                    })
+                    .fold(f64::MAX, f64::min);
+                eprintln!("  of which the block steps: {best:.3} ms");
+            }
         }
     }
 

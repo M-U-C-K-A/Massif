@@ -110,8 +110,11 @@ as the game's own maps are: each block is compared with its neighbour on the
 side the light comes from, so a step of one block is a sharp line one block
 wide, lit where it faces the light and in shadow at its foot, and the contour
 lines follow the blocks. Off, the shading follows the smooth height the ground
-was shaped to, softer and without the steps. Zoomed out, where a pixel spans
-several blocks, both are the smooth shading.
+was shaped to, softer and without the steps. A little further out, where a
+pixel spans 2 × 2 or 4 × 4 blocks, the light of the hillsides is the smooth
+one and each step still draws its line over it, thinner and fainter the
+further out; further still, where a pixel spans 8 blocks or more, both are
+the smooth shading.
 
 **Help ▸ Massif Help** (F1) opens the help: every part of Massif, topic by
 topic, with a search, and the keyboard shortcuts.

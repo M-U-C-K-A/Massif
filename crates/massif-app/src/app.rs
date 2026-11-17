@@ -7009,6 +7009,91 @@ mod tests {
         assert!((view.center[0] - c0[0]).abs() < 0.01 && (view.center[1] - c0[1]).abs() < 0.01, "around the middle of the view");
     }
 
+    /// One-block steps on a real map at every zoom (MASSIF_STEPS_WORLD: a
+    /// .massif, MASSIF_STEPS_AT: "x,z"; MASSIF_SNAPSHOT_DIR,
+    /// MASSIF_SNAPSHOT_PPP): the map view alone, from 2 to 0.125 points a
+    /// block (between two levels of detail too, where the closer one is
+    /// drawn smaller), its shading smooth (as 0.6 drew it) and block by
+    /// block, cropped to the map.
+    #[test]
+    fn block_steps_on_a_real_map() {
+        let (Some(path), Some(dir)) = (std::env::var_os("MASSIF_STEPS_WORLD").map(PathBuf::from), std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from)) else {
+            return;
+        };
+        let at = std::env::var("MASSIF_STEPS_AT").ok().and_then(|v| v.split_once(',').map(|(x, z)| [x.trim().parse::<f64>().unwrap(), z.trim().parse::<f64>().unwrap()]));
+        let ppp: f32 = std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(900.0, 640.0))
+            .with_pixels_per_point(ppp)
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_eframe(move |cc| {
+                theme::install(&cc.egui_ctx);
+                MassifApp::for_tests(generate(&GenParams { tiles_x: 2, tiles_z: 2, ..GenParams::default() }))
+            });
+        h.run_steps(3);
+        let ctx = h.ctx.clone();
+        h.state_mut().jobs.push(Job::open(&ctx, path));
+        while !h.state().jobs.is_empty() {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.state_mut().dialog = None;
+        h.run_steps(3);
+        let id = h.state().active_map.or_else(|| h.state().maps.keys().next().copied()).expect("a map view");
+        h.state_mut().layout.current_mut().maximized = Some(id);
+        h.run_steps(3);
+        for zoom in [2.0f32, 0.7, 0.5, 0.35, 0.25, 0.125] {
+            for smooth in [true, false] {
+                {
+                    let view = h.state_mut().maps.get_mut(&id).unwrap();
+                    if let Some(at) = at {
+                        view.center = at;
+                    }
+                    view.zoom = zoom;
+                    view.smooth = smooth;
+                }
+                h.step();
+                let mut frames = 0;
+                while (h.state().map_cache.busy() || frames < 5) && frames < 3000 {
+                    h.step();
+                    frames += 1;
+                }
+                h.run_steps(3);
+                let rect = map_rect(h.state(), &h.ctx).shrink(4.0);
+                let image = h.render().unwrap();
+                let (x, y, w, hh) = ((rect.left() * ppp) as u32, (rect.top() * ppp + 40.0 * ppp) as u32, (rect.width() * ppp) as u32, ((rect.height() - 80.0) * ppp) as u32);
+                let crop = image::imageops::crop_imm(&image, x, y, w, hh).to_image();
+                crop.save(dir.join(format!("steps-{ppp}x-z{zoom}-{}.png", if smooth { "before" } else { "after" }))).unwrap();
+            }
+        }
+        // The 3D view's Terrain look over the same place, close, at middle
+        // distance and far.
+        h.state_mut().layout.current_mut().maximized = None;
+        h.state_mut().layout.active = 3;
+        let mut frames = 0;
+        while frames < 5 || h.state().view3d.pending() > 0 {
+            h.step();
+            frames += 1;
+            assert!(frames < 5000, "the 3D view never finished");
+        }
+        let [x, z] = at.unwrap_or([0.0, 0.0]);
+        let top = massif_core::ops::height_at(h.state().doc.dimension(), 0, x as i32, z as i32, massif_core::ops::Surface::Top).unwrap_or(64.0);
+        for distance in [60.0f32, 180.0, 500.0] {
+            h.state_mut().view3d.camera = crate::view3d::Camera { target: [x, top as f64, z], yaw: 0.6, pitch: 0.55, distance };
+            let mut frames = 0;
+            while frames < 30 || h.state().view3d.pending() > 0 {
+                h.step();
+                frames += 1;
+                if frames > 3000 {
+                    break;
+                }
+            }
+            let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+            image::save_buffer(dir.join(format!("steps-{ppp}x-3d-{distance}.png")), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+        }
+    }
+
     /// How smoothly a real map moves (MASSIF_MOVE_WORLD: a .massif): the
     /// time of each frame while the map view zooms in, pans and zooms out,
     /// and while the 3D view turns and moves, on a Retina-like screen.
