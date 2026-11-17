@@ -6971,14 +6971,18 @@ mod tests {
         eprintln!("idle frame: {:.2} ms", t.elapsed().as_secs_f32() * 1000.0 / 30.0);
     }
 
-    /// A disk that takes seconds to read the backups' folder, and a network
-    /// that never answers about new versions, do not hold up the start:
-    /// the app is made and its first frames laid out at once (on a slow
-    /// Windows PC, a main thread held for 5 s is a window "not responding").
+    /// A disk that takes a minute to read the backups' folder, and a
+    /// network that never answers about new versions, do not hold up the
+    /// start: the app is made and its first frames laid out while both are
+    /// still pending (on a slow Windows PC, a main thread held for 5 s is a
+    /// window "not responding"). Alone it starts in about 0.2 s; under the
+    /// load of the whole suite, in up to 8 s: it must take less than half
+    /// the disk's minute, which a start that waited on either could not.
     #[test]
     fn a_slow_disk_or_network_does_not_hold_up_the_start() {
-        crate::autosave::TEST_SLOW_DISK.store(10_000, std::sync::atomic::Ordering::SeqCst);
-        crate::update::TEST_BLOCKED_NETWORK.store(30_000, std::sync::atomic::Ordering::SeqCst);
+        const SLOW: u64 = 60_000;
+        crate::autosave::TEST_SLOW_DISK.store(SLOW, std::sync::atomic::Ordering::SeqCst);
+        crate::update::TEST_BLOCKED_NETWORK.store(SLOW, std::sync::atomic::Ordering::SeqCst);
         let started = std::time::Instant::now();
         let mut h = egui_kittest::Harness::builder()
             .with_size(vec2(1280.0, 800.0))
@@ -6995,7 +6999,10 @@ mod tests {
         assert!(h.state().autosave_opening.is_some(), "the backups' folder is still being read");
         assert!(h.state().updates.waiting() || h.state().updates.latest.is_some() || !h.state().settings.check_updates, "GitHub is still being asked");
         eprintln!("made in {:.0} ms, three frames in {:.0} ms", made.as_secs_f64() * 1000.0, frames.as_secs_f64() * 1000.0);
-        assert!(frames < std::time::Duration::from_secs(5), "the start waited on the disk or the network: {frames:?}");
+        // The apps other tests make read their disk and network at once.
+        crate::autosave::TEST_SLOW_DISK.store(0, std::sync::atomic::Ordering::SeqCst);
+        crate::update::TEST_BLOCKED_NETWORK.store(0, std::sync::atomic::Ordering::SeqCst);
+        assert!(frames < std::time::Duration::from_millis(SLOW / 2), "the start waited on the disk or the network: {frames:?}");
     }
 
     /// The zoom buttons and keys glide: the zoom gets there over a few
