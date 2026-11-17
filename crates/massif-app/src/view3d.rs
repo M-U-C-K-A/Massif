@@ -3358,6 +3358,14 @@ struct Walk {
     /// Where egui last saw the pointer while the view held it (where the
     /// system cannot lock it, it is brought back to the middle).
     anchor: Option<egui::Pos2>,
+    /// While the view holds the mouse, the pointer's events are moved to
+    /// its middle before egui sees them (`pin_pointer`): the buttons never
+    /// reach another panel, nor the pointer leave the view. Here: that
+    /// middle, where the system put the pointer last, and how far it moved
+    /// in the frame.
+    pinned: Option<egui::Pos2>,
+    raw: Option<egui::Pos2>,
+    raw_delta: egui::Vec2,
     /// The point a drag with Ctrl turns the view about (or that moving it
     /// keeps pace with).
     pivot: Option<[f64; 3]>,
@@ -3390,6 +3398,10 @@ const LOOK: f32 = 1.0;
 const MOUSE_LOOK: f32 = 0.0026;
 /// Radians a point of dragging turns them.
 const DRAG_LOOK: f32 = 0.005;
+
+/// The system locks the pointer where the view holds the mouse (else it is
+/// kept in the window and brought back to the middle of the view).
+const LOCKS_POINTER: bool = cfg!(target_os = "macos");
 
 /// Hold the mouse (locked where the system can, else kept in the window),
 /// or let it go.
@@ -3549,6 +3561,12 @@ impl View3d {
         self.walk.as_ref().map(|w| w.player)
     }
 
+    /// Whether the view holds the mouse.
+    #[cfg(test)]
+    pub fn captured(&self) -> bool {
+        self.walk.as_ref().is_some_and(|w| w.captured)
+    }
+
     /// Put the player at `feet`, flying or not.
     #[cfg(test)]
     pub fn place_player(&mut self, feet: [f64; 3], flying: bool) {
@@ -3556,6 +3574,33 @@ impl View3d {
             walk.player = crate::player::Player::new(feet);
             walk.player.flying = flying;
         }
+    }
+
+    /// Before egui reads the frame's input (`App::raw_input_hook`): while
+    /// the view holds the mouse, the pointer stays at its middle, where the
+    /// crosshair is, whatever point the system gives (on macOS the button
+    /// events of a locked pointer come with points of their own): a press
+    /// is the view's, never a panel's, a menu's or another window's.
+    pub fn pin_pointer(&mut self, input: &mut egui::RawInput) {
+        let Some(walk) = &mut self.walk else { return };
+        let Some(c) = walk.pinned.filter(|_| walk.captured) else { return };
+        walk.raw_delta = egui::Vec2::ZERO;
+        input.events.retain_mut(|e| match e {
+            egui::Event::PointerMoved(p) => {
+                if let Some(r) = walk.raw {
+                    walk.raw_delta += *p - r;
+                }
+                walk.raw = Some(*p);
+                *p = c;
+                true
+            }
+            egui::Event::PointerButton { pos, .. } => {
+                *pos = c;
+                true
+            }
+            egui::Event::PointerGone => false,
+            _ => true,
+        });
     }
 
     /// The view held the mouse and was not drawn in the last frame (another
@@ -3597,6 +3642,9 @@ impl View3d {
             captured: false,
             swallow: false,
             anchor: None,
+            pinned: None,
+            raw: None,
+            raw_delta: egui::Vec2::ZERO,
             pivot: None,
             pass: 0,
             frame: u64::MAX,
@@ -3635,20 +3683,20 @@ impl View3d {
         // and a lock taken inside another freezes the app as soon as a
         // thread asks for a repaint in between.
         let escape = crate::keymap::peek(&ctx, crate::keymap::Action::ReleaseMouse);
-        let (escape, focused, motion, moved, pointer, dt, turn, mods, scroll) = ui.input(|i| {
+        let (escape, focused, motion, pointer, dt, turn, mods, scroll, pressed_now) = ui.input(|i| {
             use crate::keymap::{Action, held};
             let key = |a: Action| held(i, a) as i32 as f32;
             (
                 escape,
                 i.viewport().focused.unwrap_or(true),
                 i.pointer.motion(),
-                i.pointer.delta(),
                 i.pointer.latest_pos(),
                 i.stable_dt.min(0.1) as f64,
                 // The arrows turn the eyes: left, right, up, down.
                 [key(Action::LookRight) - key(Action::LookLeft), key(Action::LookDown) - key(Action::LookUp)],
                 i.modifiers,
                 i.smooth_scroll_delta.y + i.smooth_scroll_delta.x,
+                i.pointer.any_pressed(),
             )
         });
         let ctrl = mods.ctrl || mods.command;
@@ -3720,6 +3768,8 @@ impl View3d {
             walk.captured = true;
             walk.swallow = true;
             walk.anchor = pointer;
+            walk.raw = pointer;
+            walk.raw_delta = egui::Vec2::ZERO;
             hold_mouse(&ctx, true);
         } else if walk.captured && (escape || !focused) {
             walk.captured = false;
@@ -3751,7 +3801,8 @@ impl View3d {
         }
         // Held, the mouse turns the eyes as it moves: its own motion where
         // the system gives it, else where the pointer goes.
-        let motion = motion.unwrap_or(if walk.captured { moved } else { egui::Vec2::ZERO });
+        let motion = motion.unwrap_or(if walk.captured { std::mem::take(&mut walk.raw_delta) } else { egui::Vec2::ZERO });
+        walk.pinned = walk.captured.then(|| rect.center());
         if walk.captured {
             self.camera.yaw -= motion.x * MOUSE_LOOK;
             self.camera.pitch = (self.camera.pitch + motion.y * MOUSE_LOOK).clamp(-1.55, 1.55);
@@ -3762,12 +3813,23 @@ impl View3d {
                 }
             });
             // Where the system cannot lock the pointer, it goes back to the
-            // middle of the view.
-            if let (Some(p), Some(a)) = (pointer, walk.anchor)
+            // middle of the view. Never on macOS, where it is locked: moving
+            // it there (winit) ties the pointer to the mouse again, which
+            // undid the lock at the first press of the right button, whose
+            // event comes with a point other than the click's; the hidden
+            // pointer then wandered off the view, out of the window.
+            if !LOCKS_POINTER
+                && let (Some(p), Some(a)) = (walk.raw, walk.anchor)
                 && p.distance(a) > 2.0
             {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CursorPosition(rect.center()));
                 walk.anchor = Some(rect.center());
+                walk.raw = Some(rect.center());
+            }
+            // A press holds the mouse again, should anything have let it go
+            // (a gesture of the system, another app's dialog).
+            if pressed_now && !walk.swallow {
+                hold_mouse(&ctx, true);
             }
         }
         use crate::player::Keys;

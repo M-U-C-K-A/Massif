@@ -4758,6 +4758,12 @@ impl MassifApp {
 }
 
 impl eframe::App for MassifApp {
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        // The player's view holding the mouse keeps the pointer at its
+        // crosshair.
+        self.sculpt3d.pin_pointer(raw_input);
+    }
+
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         // The system's Quit is not answered now during a frame (see `quit`).
         crate::quit::frame_begins();
@@ -8089,6 +8095,95 @@ mod tests {
             );
             h.run_steps(3);
         }
+    }
+
+    /// The right button uses the tool as the player, the mouse free or held,
+    /// and never lets the view's hold of the mouse go: on macOS the events
+    /// of a locked pointer come with points of their own (here, over the
+    /// side panel), which moved the pointer out of the view, onto a panel,
+    /// and brought it back to the middle in a way that undid the lock.
+    #[test]
+    fn the_right_button_as_the_player_keeps_the_view() {
+        let mut h = harness(ThemeChoice::Dark);
+        {
+            let app = h.state_mut();
+            app.layout.active = 4; // 3D Sculpt
+            app.tools.sculpt.tool = Tool::Build;
+            app.tools.brush.radius = 3.0;
+        }
+        h.run_steps(20);
+        let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        let view = areas.into_iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::Sculpt3d)).map(|(_, r)| r).unwrap();
+        h.state_mut().tools.sculpt.player = true;
+        let at = view.center() + vec2(0.0, 60.0);
+        h.event(egui::Event::PointerMoved(at));
+        h.run_steps(20);
+        // A frame as eframe gives it: the input through the app's hook first.
+        let step = |h: &mut egui_kittest::Harness<'_, MassifApp>| {
+            let mut input = std::mem::take(h.input_mut());
+            h.state_mut().sculpt3d.pin_pointer(&mut input);
+            *h.input_mut() = input;
+            h.step();
+        };
+        // (Events straight into the frame's input, which the hook sees.)
+        let send = |h: &mut egui_kittest::Harness<'_, MassifApp>, e: egui::Event| h.input_mut().events.push(e);
+        let warps = |h: &egui_kittest::Harness<'_, MassifApp>| h.output().viewport_output.values().flat_map(|v| v.commands.iter()).filter(|c| matches!(c, egui::ViewportCommand::CursorPosition(_))).count();
+        // The mouse free: the right button sculpts under the cursor, the view
+        // stays as it is.
+        let (yaw, pitch) = (h.state().sculpt3d.camera.yaw, h.state().sculpt3d.camera.pitch);
+        let steps = h.state().doc.history.undo_count();
+        send(&mut h, egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+        step(&mut h);
+        for k in 1..4 {
+            send(&mut h, egui::Event::PointerMoved(at + vec2(k as f32 * 6.0, k as f32 * 3.0)));
+            step(&mut h);
+        }
+        send(&mut h, egui::Event::PointerButton { pos: at + vec2(18.0, 9.0), button: egui::PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+        step(&mut h);
+        assert_eq!(h.state().doc.history.undo_count(), steps + 1, "the right button sculpts");
+        assert!(!h.state().sculpt3d.captured(), "and does not take the mouse");
+        assert_eq!((h.state().sculpt3d.camera.yaw, h.state().sculpt3d.camera.pitch), (yaw, pitch), "nor turn the view");
+        // A click takes the mouse.
+        send(&mut h, egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        step(&mut h);
+        send(&mut h, egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        step(&mut h);
+        step(&mut h);
+        assert!(h.state().sculpt3d.captured());
+        send(&mut h, egui::Event::MouseMoved(vec2(0.0, 150.0)));
+        step(&mut h);
+        // The right button, its events said to be over a panel beside.
+        let elsewhere = if view.left() > 60.0 { pos2(view.left() - 30.0, view.center().y) } else { pos2(view.right() + 30.0, view.center().y) };
+        assert!(!view.contains(elsewhere));
+        let steps = h.state().doc.history.undo_count();
+        send(&mut h, egui::Event::PointerMoved(elsewhere));
+        send(&mut h, egui::Event::PointerButton { pos: elsewhere, button: egui::PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+        step(&mut h);
+        let (mut moved, mut crosshair) = (0, None);
+        for k in 1..6 {
+            send(&mut h, egui::Event::MouseMoved(vec2(4.0, 0.0)));
+            send(&mut h, egui::Event::PointerMoved(elsewhere + vec2(k as f32 * 4.0, 0.0)));
+            step(&mut h);
+            moved += warps(&h);
+            let p = h.ctx.input(|i| i.pointer.latest_pos()).unwrap();
+            assert!(view.contains(p) && *crosshair.get_or_insert(p) == p, "the pointer stays at the crosshair: {p:?}");
+            assert!(h.state().sculpt3d.captured(), "the view keeps the mouse");
+            assert_eq!(h.ctx.memory(|m| m.focused()), None, "no widget takes the focus");
+        }
+        send(&mut h, egui::Event::PointerButton { pos: elsewhere, button: egui::PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+        step(&mut h);
+        assert_eq!(h.state().doc.history.undo_count(), steps + 1, "the right button sculpts at the crosshair");
+        assert_eq!(h.state().doc.history.undo_label(), Some("Sculpt"));
+        if cfg!(target_os = "macos") {
+            assert_eq!(moved, 0, "the locked pointer is never moved (it would undo the lock)");
+        }
+        // Esc lets it go; the pointer is the system's again.
+        h.key_press(Key::Escape);
+        step(&mut h);
+        assert!(!h.state().sculpt3d.captured());
+        send(&mut h, egui::Event::PointerMoved(elsewhere));
+        step(&mut h);
+        assert_eq!(h.ctx.input(|i| i.pointer.latest_pos()), Some(elsewhere));
     }
 
     #[test]
