@@ -453,7 +453,14 @@ pub struct Layout {
 
 /// The workspaces a layout saved by an older version lacks are added to it
 /// once: this is the version they come with.
-const LAYOUT_VERSION: u32 = 3;
+const LAYOUT_VERSION: u32 = 4;
+
+/// The share of the window's width the column of the tools takes on the
+/// left of the Layout, Sculpting and Painting workspaces: the same in all
+/// three, so that switching between them does not move the map's edge.
+const SIDEBAR: f32 = 0.17;
+/// What Sculpting and Painting gave it before version 4.
+const OLD_SIDEBAR: f32 = 0.16;
 
 /// Builds trees with fresh area ids.
 struct Builder<'a>(&'a mut AreaId);
@@ -546,7 +553,7 @@ impl Default for Layout {
         };
         let map = b.area(Map);
         let centre = b.row(0.64, map, right);
-        add(tn!("Layout"), b.row(0.17, left, centre));
+        add(tn!("Layout"), b.row(SIDEBAR, left, centre));
 
         // Sculpting: a big map, the brushes and the 3D view beside it.
         let left = {
@@ -562,7 +569,7 @@ impl Default for Layout {
         };
         let map = b.area(Map);
         let views = b.row(0.7, map, right);
-        add(tn!("Sculpting"), b.row(0.16, left, views));
+        add(tn!("Sculpting"), b.row(SIDEBAR, left, views));
 
         // Painting: palettes on both sides of the map.
         let left = {
@@ -578,7 +585,7 @@ impl Default for Layout {
         };
         let map = b.area(Map);
         let centre = b.row(0.72, map, right);
-        add(tn!("Painting"), b.row(0.16, left, centre));
+        add(tn!("Painting"), b.row(SIDEBAR, left, centre));
 
         // 3D: the preview takes the stage.
         let side = {
@@ -675,6 +682,17 @@ impl Layout {
             for w in self.workspaces.iter_mut().filter(|w| !w.terrain) {
                 if !w.root.shows(EditorKind::Layers) {
                     w.root.add_below(EditorKind::Terrain, EditorKind::Layers, 0.55, &mut self.next_id);
+                }
+            }
+        }
+        // Version 4: the tools' column as wide in Sculpting and Painting as
+        // in Layout, where it was left as it came.
+        if self.version < 4 {
+            for w in self.workspaces.iter_mut().filter(|w| !w.terrain && (w.name == "Sculpting" || w.name == "Painting")) {
+                if let Node::Split { dir: Dir::Row, ratio, .. } = &mut w.root
+                    && (*ratio - OLD_SIDEBAR).abs() < 1e-4
+                {
+                    *ratio = SIDEBAR;
                 }
             }
         }
@@ -1123,5 +1141,31 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), before, "every area has an id of its own");
+    }
+
+    /// The tools' column takes the same share of the width in Layout,
+    /// Sculpting and Painting; a layout saved before gets it where it was
+    /// left as it came, and keeps a column the hand moved.
+    #[test]
+    fn the_tools_column_is_as_wide_everywhere() {
+        let ratio = |l: &Layout, name: &str| match &l.workspaces.iter().find(|w| w.name == name).unwrap().root {
+            Node::Split { dir: Dir::Row, ratio, .. } => *ratio,
+            other => panic!("{name}: {other:?}"),
+        };
+        let fresh = Layout::default();
+        for name in ["Layout", "Sculpting", "Painting"] {
+            assert_eq!(ratio(&fresh, name), SIDEBAR, "{name}");
+        }
+        let mut old = Layout { version: 3, ..Layout::default() };
+        let set = |l: &mut Layout, name: &str, v: f32| {
+            if let Node::Split { ratio, .. } = &mut l.workspaces.iter_mut().find(|w| w.name == name).unwrap().root {
+                *ratio = v;
+            }
+        };
+        set(&mut old, "Painting", OLD_SIDEBAR);
+        set(&mut old, "Sculpting", 0.23);
+        let layout = old.sanitize();
+        assert_eq!(ratio(&layout, "Painting"), SIDEBAR);
+        assert_eq!(ratio(&layout, "Sculpting"), 0.23, "moved by hand: kept");
     }
 }

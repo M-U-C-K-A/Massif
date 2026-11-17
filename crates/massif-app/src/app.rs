@@ -8630,6 +8630,27 @@ mod tests {
         assert!(h.state().doc.selection().is_none(), "a right-click clears it");
     }
 
+    /// Layout, Sculpting and Painting show the tools in a column as wide:
+    /// switching between them leaves the map's left edge where it was.
+    /// Renders each (MASSIF_SNAPSHOT_DIR).
+    #[test]
+    fn the_tools_column_is_as_wide_in_every_workspace() {
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let mut h = harness(ThemeChoice::Dark);
+        let mut widths = Vec::new();
+        for (k, name) in [(0, "layout"), (1, "sculpting"), (2, "painting")] {
+            h.state_mut().layout.active = k;
+            h.run_steps(5);
+            let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+            let tools = areas.into_iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::Tools)).map(|(_, r)| r).unwrap();
+            widths.push(tools.width());
+            if let Some(dir) = &dir {
+                h.render().unwrap().save(dir.join(format!("workspace-{name}.png"))).unwrap();
+            }
+        }
+        assert!(widths.iter().all(|w| (w - widths[0]).abs() < 0.5), "{widths:?}");
+    }
+
     #[test]
     fn walking_in_3d_sculpt() {
         let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
