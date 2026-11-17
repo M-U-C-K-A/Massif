@@ -1763,7 +1763,7 @@ pub fn pocket_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
     }
     let search_id = egui::Id::unique("pocket block search");
     let mut added = None;
-    ui.menu_button(theme::with_icon(Icon::Plus, tr!("Add a block")), |ui| {
+    crate::widgets::menu_button(ui, theme::with_icon(Icon::Plus, tr!("Add a block")), |ui| {
         ui.set_max_width(300.0);
         let mut search: String = ui.ctx().data(|d| d.get_temp(search_id)).unwrap_or_default();
         crate::widgets::search(ui, &mut search, tr!("Search, or type a block id"), 280.0).request_focus();
@@ -2174,7 +2174,7 @@ pub fn cover_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     // Add a plant: one of the game's blocks, or typed.
     let search_id = egui::Id::unique("cover plant search");
     let mut added = None;
-    ui.menu_button(theme::with_icon(Icon::Plus, tr!("Add a block")), |ui| {
+    crate::widgets::menu_button(ui, theme::with_icon(Icon::Plus, tr!("Add a block")), |ui| {
         ui.set_max_width(300.0);
         let mut search: String = ui.ctx().data(|d| d.get_temp(search_id)).unwrap_or_default();
         let edit = crate::widgets::search(ui, &mut search, tr!("Search, or type a block id"), 280.0);
@@ -2543,7 +2543,7 @@ fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     }
     let mut added = None;
     ui.horizontal(|ui| {
-        ui.menu_button(theme::with_icon(Icon::Plus, tr!("Add a block")), |ui| {
+        crate::widgets::menu_button(ui, theme::with_icon(Icon::Plus, tr!("Add a block")), |ui| {
             if let Some(pick) = ground_picker(ui, egui::Id::unique("noise block add"), &doc.world.registry, blocks, None) {
                 added = Some(pick);
             }
@@ -3264,7 +3264,7 @@ fn match_list(ui: &mut Ui, label: &str, list: &mut Option<Vec<massif_core::filte
         if let Some(i) = remove {
             items.remove(i);
         }
-        ui.menu_button(theme::with_icon(Icon::Plus, tr!("Add")), |ui| {
+        crate::widgets::menu_button(ui, theme::with_icon(Icon::Plus, tr!("Add")), |ui| {
             ui.set_max_height(360.0);
             let add = |m: Match, items: &mut Vec<Match>| {
                 if !items.contains(&m) {

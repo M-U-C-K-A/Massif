@@ -483,6 +483,11 @@ pub fn button(ui: &mut Ui, text: impl Into<egui::WidgetText>) -> Response {
     ui.add(egui::Button::new(text).truncate())
 }
 
+/// A button opening a menu, its words on one line as [`button`]'s.
+pub fn menu_button(ui: &mut Ui, text: impl Into<egui::WidgetText>, add: impl FnOnce(&mut Ui)) -> Response {
+    egui::containers::menu::MenuButton::from_button(egui::Button::new(text).truncate()).ui(ui, add).0
+}
+
 /// A search field: a pill with a magnifier at its left, the text after it,
 /// `hint` in it while empty, centred top to bottom. `width` at most (as
 /// wide as the room with `f32::INFINITY`). The text is laid inside the
