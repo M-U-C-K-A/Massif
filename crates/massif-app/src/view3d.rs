@@ -4742,6 +4742,36 @@ impl View3d {
         camera_ray(&self.camera, rect, p)
     }
 
+    /// Where the view stands, for the 2D map to show: the player's eyes
+    /// while walking, else the point it turns about, in block coordinates
+    /// `(x, z)`; the way it looks over the land, a unit vector `(x, z)`; and
+    /// whether it is the player.
+    pub fn map_marker(&self) -> ([f64; 2], [f32; 2], bool) {
+        let (eye, target) = (self.camera.eye(), self.camera.target);
+        let (dx, dz) = ((target[0] - eye[0]) as f32, (target[2] - eye[2]) as f32);
+        let len = (dx * dx + dz * dz).sqrt();
+        // Looking straight down: the way the top of the view faces.
+        let dir = if len > 1e-4 { [dx / len, dz / len] } else { [-self.camera.yaw.sin(), -self.camera.yaw.cos()] };
+        match &self.walk {
+            Some(walk) => ([walk.player.feet[0], walk.player.feet[2]], dir, true),
+            None => ([target[0], target[2]], dir, false),
+        }
+    }
+
+    /// Sent from the 2D map: look at block `(x, z)` (on the ground there),
+    /// or take the player there; `glide`, over a few frames.
+    pub fn go_to(&mut self, doc: &Document, x: f64, z: f64, glide: bool) {
+        let y = ground_at(doc, x, z).unwrap_or(self.camera.target[1]);
+        match &mut self.walk {
+            Some(walk) => walk.player = crate::player::Player::new([x, y, z]),
+            None if glide => self.look_goal = Some([x, y, z]),
+            None => {
+                self.look_goal = None;
+                self.camera.target = [x, y, z];
+            }
+        }
+    }
+
     /// Show the view; `sculpt`: the 3D Sculpt editor's, where the buttons
     /// sculpt with its tool.
     pub fn ui(&mut self, ui: &mut Ui, frame: &eframe::Frame, doc: &mut Document, tools: &mut ToolState, map_center: Option<[f64; 2]>, sculpt: bool) {

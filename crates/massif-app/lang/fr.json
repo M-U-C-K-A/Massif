@@ -2643,5 +2643,7 @@
   "one": "« {name} » : {n} objet fait seulement d'air ou d'entités, que Massif ne place pas.",
   "other": "« {name} » : {n} objets faits seulement d'air ou d'entités, que Massif ne place pas."
  },
- "“{what}”: Massif has no layer like it.": "« {what} » : Massif n'a pas de calque comme celui-ci."
+ "“{what}”: Massif has no layer like it.": "« {what} » : Massif n'a pas de calque comme celui-ci.",
+ "The world's origin: x 0, z 0": "L'origine du monde : x 0, z 0",
+ "The 3D View: drag to move it": "La vue 3D : glisser pour la déplacer"
 }

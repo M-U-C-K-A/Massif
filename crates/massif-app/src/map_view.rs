@@ -266,6 +266,8 @@ pub struct MapView {
     ping: Option<([f64; 2], Option<f64>)>,
     /// The selection: the shape being drawn, its outline.
     select: crate::select::SelectView,
+    /// The mark of the 3D view is held: the 3D view follows the pointer.
+    view3d_grab: bool,
 }
 
 /// What the view glides to.
@@ -313,6 +315,7 @@ impl Default for MapView {
             last_view: ([0.0, 0.0], 1.0),
             ping: None,
             select: Default::default(),
+            view3d_grab: false,
         }
     }
 }
@@ -332,6 +335,9 @@ pub struct MapInput<'a> {
     /// A picture over the map and its block coordinates (west, north, east,
     /// south): where a save point compared differs (see `versions`).
     pub overlay: Option<(egui::TextureHandle, [i32; 4])>,
+    /// The 3D View, when the workspace shows one: its mark on the map, to
+    /// drag (see [`MapView::view3d_mark`]).
+    pub view3d: Option<&'a mut crate::view3d::View3d>,
 }
 
 impl MapView {
@@ -823,6 +829,40 @@ impl MapView {
         self.ping = Some(([x, z], None));
     }
 
+    /// The 3D View's mark on the screen: where it stands and the way it
+    /// looks.
+    fn view3d_mark(&self, canvas: Rect, v: &crate::view3d::View3d) -> (Pos2, Vec2, bool) {
+        let (at, dir, player) = v.map_marker();
+        (self.to_screen(canvas, at[0], at[1]), vec2(dir[0], dir[1]), player)
+    }
+
+    /// Whether `p` is over the 3D View's mark.
+    fn on_view3d_mark(&self, canvas: Rect, v: &crate::view3d::View3d, p: Pos2) -> bool {
+        let (at, _, _) = self.view3d_mark(canvas, v);
+        canvas.contains(at) && p.distance(at) <= 11.0
+    }
+
+    /// The 3D View's mark: a dot in the accent, in a dark outline, with a
+    /// wedge the way it looks; a ring round it for the player.
+    fn draw_view3d_mark(&self, painter: &egui::Painter, canvas: Rect, v: &crate::view3d::View3d, pal: Palette, hot: bool) {
+        let (at, dir, player) = self.view3d_mark(canvas, v);
+        if !canvas.expand(16.0).contains(at) {
+            return;
+        }
+        let side = vec2(-dir.y, dir.x);
+        let r = if hot { 6.5 } else { 5.5 };
+        // The wedge: a field of view of about 70°, 28 points long.
+        let tip = |k: f32| at + (dir * 0.82 + side * k * 0.57).normalized() * 28.0;
+        let wedge = vec![at, tip(-1.0), tip(-0.5), tip(0.0), tip(0.5), tip(1.0)];
+        painter.add(egui::Shape::convex_polygon(wedge, pal.accent.gamma_multiply(0.45), Line::new(1.5, Color32::WHITE.gamma_multiply(0.85))));
+        if player {
+            painter.circle_stroke(at, r + 3.5, Line::new(3.0, Color32::from_black_alpha(140)));
+            painter.circle_stroke(at, r + 3.5, Line::new(1.5, pal.accent));
+        }
+        painter.circle(at, r, pal.accent, Line::new(2.0, Color32::WHITE));
+        painter.circle_stroke(at, r + 1.5, Line::new(1.0, Color32::from_black_alpha(140)));
+    }
+
     /// One block per point.
     pub fn zoom_reset(&mut self) {
         self.goal = Some(Goal {
@@ -907,6 +947,7 @@ impl MapView {
             pan_key,
             light,
             overlay,
+            mut view3d,
         } = input;
 
         if self.fitted != Some(doc.generation) && canvas.width() > 10.0 {
@@ -1035,6 +1076,24 @@ impl MapView {
         // left one) its inverse: lower instead of raise, erase instead of
         // paint, drain instead of flood.
         let world_pointer = pointer.map(|p| self.to_world(canvas, p));
+        // The mark of the 3D view, taken with the primary button: the 3D
+        // view follows it rather than the tool acting.
+        let on_mark = match (&view3d, pointer) {
+            (Some(v), Some(p)) if response.hovered() && !panning => self.on_view3d_mark(canvas, v, p),
+            _ => false,
+        };
+        if pressed[0] && on_mark && self.stroke.is_none() && response.is_pointer_button_down_on() {
+            self.view3d_grab = true;
+        }
+        if self.view3d_grab {
+            match (view3d.as_deref_mut(), world_pointer) {
+                (Some(v), Some((x, z))) if down[0] => v.go_to(doc, x, z, false),
+                _ => self.view3d_grab = false,
+            }
+        }
+        if on_mark || self.view3d_grab {
+            ui.ctx().set_cursor_icon(if self.view3d_grab { CursorIcon::Grabbing } else { CursorIcon::Grab });
+        }
         if let Some((x, z)) = world_pointer.filter(|_| response.hovered()) {
             *hover = Some((x.floor() as i32, z.floor() as i32));
         }
@@ -1048,6 +1107,7 @@ impl MapView {
         if let Some(button) = button
             && response.is_pointer_button_down_on()
             && self.stroke.is_none()
+            && !self.view3d_grab
             && let Some((x, z)) = world_pointer
         {
             let secondary = button == PointerButton::Secondary;
@@ -1344,12 +1404,28 @@ impl MapView {
             self.select = select;
         }
 
-        // Origin marker.
+        // The world's origin (x 0, z 0), where the game counts blocks
+        // from: a small plus, light in a dark outline to read on any land.
         let o = self.to_screen(canvas, 0.0, 0.0);
         if canvas.contains(o) {
-            let red = Color32::from_rgb(230, 40, 40);
-            painter.line_segment([o - vec2(0.0, 7.0), o + vec2(0.0, 7.0)], Line::new(1.5, red));
-            painter.line_segment([o - vec2(4.0, 0.0), o + vec2(4.0, 0.0)], Line::new(1.5, red));
+            let halo = Color32::from_black_alpha(150);
+            for (a, b) in [(vec2(0.0, 6.0), vec2(0.0, -6.0)), (vec2(6.0, 0.0), vec2(-6.0, 0.0))] {
+                painter.line_segment([o + a, o + b], Line::new(3.5, halo));
+            }
+            for (a, b) in [(vec2(0.0, 5.0), vec2(0.0, -5.0)), (vec2(5.0, 0.0), vec2(-5.0, 0.0))] {
+                painter.line_segment([o + a, o + b], Line::new(1.5, Color32::WHITE));
+            }
+            if pointer.is_some_and(|p| response.hovered() && p.distance(o) < 8.0) && !self.view3d_grab {
+                response.clone().on_hover_text(tr!("The world's origin: x 0, z 0"));
+            }
+        }
+
+        // Where the 3D View is and the way it looks.
+        if let Some(v) = &view3d {
+            self.draw_view3d_mark(&painter, canvas, v, pal, on_mark || self.view3d_grab);
+            if on_mark && !self.view3d_grab {
+                response.clone().on_hover_text(tr!("The 3D View: drag to move it"));
+            }
         }
 
         // A spot pointed out: rings spreading from it for a few seconds.

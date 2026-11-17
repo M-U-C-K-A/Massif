@@ -2633,5 +2633,7 @@
   "one": "«{name}»: {n} objeto solo de aire o entidades, que Massif no coloca.",
   "other": "«{name}»: {n} objetos solo de aire o entidades, que Massif no coloca."
  },
- "“{what}”: Massif has no layer like it.": "«{what}»: Massif no tiene una capa así."
+ "“{what}”: Massif has no layer like it.": "«{what}»: Massif no tiene una capa así.",
+ "The world's origin: x 0, z 0": "El origen del mundo: x 0, z 0",
+ "The 3D View: drag to move it": "La vista 3D: arrastra para moverla"
 }

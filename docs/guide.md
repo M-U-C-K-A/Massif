@@ -1761,6 +1761,7 @@ In the 3D view:
 | W A S D or arrows, Q / E | Fly over the map, down / up (Shift: faster) |
 | Double-click | Look at the point under the cursor |
 | Header buttons | Look at the middle of the map view; show the whole map |
+| The dot on the 2D map | Where the 3D view is (the point it turns about, or the player, ringed), with a wedge the way it looks; it follows the view live, and dragging it moves the 3D view there. The small white plus beside is the world's origin, x 0, z 0 |
 | With Build, Dig, Smooth (3D) | Left sculpts where the cursor points, right inverts; middle drag or Alt + drag turns, Shift + middle drag moves |
 | 3D Sculpt's **Player**, cursor free (Axiom's editor) | Left drag looks around; right uses the tool under the cursor (Alt: inverts); middle picks the block; Ctrl (⌘) + left turns about the point, Ctrl + right moves, Ctrl + middle sizes the brush; the wheel sets the flight speed |
 | 3D Sculpt's **Player**, mouse taken (a click) | The mouse looks around; right uses the tool at the crosshair, left inverts; Esc gives the mouse back |

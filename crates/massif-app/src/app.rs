@@ -3431,6 +3431,7 @@ impl MassifApp {
                     self.active_map = Some(id);
                 }
                 let overlay = self.versions.overlay(cui.ctx(), &self.doc);
+                let shows_3d = self.layout.current().root.shows(EditorKind::View3d);
                 let view = self.maps.entry(id).or_default();
                 view.ui(
                     &mut cui,
@@ -3444,6 +3445,7 @@ impl MassifApp {
                         pan_key,
                         light: self.settings.light,
                         overlay,
+                        view3d: shows_3d.then_some(&mut self.view3d),
                     },
                 );
                 if self.map_center.is_none() {
@@ -6104,6 +6106,83 @@ mod tests {
         h.key_press_modifiers(Modifiers::COMMAND, Key::Comma);
         h.run_steps(2);
         assert!(matches!(h.state().dialog, Some(Dialog::Preferences(_))));
+    }
+
+    /// The 2D map shows where the 3D View is and the way it looks, in the
+    /// theme's accent; dragging the mark moves the 3D View there and leaves
+    /// the land alone; walking, it is the player's. Renders the mark over
+    /// land and water in the light, dark and high-contrast themes with
+    /// MASSIF_SNAPSHOT_DIR (view3d-mark-*.png).
+    #[test]
+    fn the_3d_views_mark_on_the_map() {
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        for (name, theme, high) in [("light", ThemeChoice::Light, false), ("dark", ThemeChoice::Dark, false), ("contrast", ThemeChoice::Dark, true)] {
+            let mut h = harness(theme);
+            if high {
+                h.state_mut().settings.high_contrast = Follow::On;
+            }
+            let k = h.state().layout.workspaces.iter().position(|w| w.root.shows(EditorKind::Map) && w.root.shows(EditorKind::View3d)).expect("a workspace with both views");
+            h.state_mut().layout.active = k;
+            h.run_steps(6);
+            // A spot of land and one of water, along z = 0.
+            let (land, water) = {
+                let doc = &h.state().doc;
+                // The highest land, and the first water.
+                let (mut land, mut water) = (None::<(i32, f32)>, None);
+                for x in (-400..400).step_by(8) {
+                    if let Some(p) = crate::tools::probe(doc, x, 0) {
+                        if p.fluid != massif_core::NO_FLUID {
+                            water.get_or_insert(x);
+                        } else if land.is_none_or(|l| p.height > l.1) {
+                            land = Some((x, p.height));
+                        }
+                    }
+                }
+                let land = land.map(|l| l.0);
+                (land.expect("land") as f64 + 0.5, water.expect("water") as f64 + 0.5)
+            };
+            let id = h.state().maps.keys().next().copied().expect("a map view");
+            for (spot, x) in [("land", land), ("water", water)] {
+                h.state_mut().view3d.camera = crate::view3d::Camera { target: [x, 70.0, 0.5], yaw: 0.6, pitch: 0.55, distance: 300.0 };
+                {
+                    let view = h.state_mut().maps.get_mut(&id).unwrap();
+                    view.center = [x, 0.5];
+                    view.zoom = 2.0;
+                }
+                h.run_steps(4);
+                let p = h.state().maps[&id].screen_of(x, 0.5);
+                if let Some(dir) = &dir {
+                    let image = h.render().expect("rendered");
+                    let crop = image::imageops::crop_imm(&image, (p.x as u32).saturating_sub(90), (p.y as u32).saturating_sub(90), 180, 180).to_image();
+                    crop.save(dir.join(format!("view3d-mark-{name}-{spot}.png"))).unwrap();
+                }
+            }
+            if name != "dark" {
+                continue;
+            }
+            // Dragged with the paint tool in hand: the 3D View goes there,
+            // the land is not painted.
+            h.state_mut().tools.select(Tool::PaintTerrain);
+            h.run_steps(2);
+            let revision = h.state().doc.revision;
+            let from = h.state().maps[&id].screen_of(water, 0.5);
+            let to = from + vec2(60.0, 40.0);
+            h.event(egui::Event::PointerMoved(from));
+            h.run_steps(1);
+            h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+            h.run_steps(1);
+            for k in 1..=6 {
+                h.event(egui::Event::PointerMoved(from + (to - from) * (k as f32 / 6.0)));
+                h.run_steps(1);
+            }
+            h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+            h.run_steps(2);
+            let target = h.state().view3d.camera.target;
+            assert!((target[0] - (water + 30.0)).abs() < 1.0 && (target[2] - 20.5).abs() < 1.0, "the 3D View looks at {target:?}");
+            assert_eq!(h.state().doc.revision, revision, "the land was painted");
+            let (at, _, player) = h.state().view3d.map_marker();
+            assert!(!player && (at[0] - target[0]).abs() < 1e-6, "the mark is at {at:?}");
+        }
     }
 
     /// One step to undo: a level added, named "Tower".

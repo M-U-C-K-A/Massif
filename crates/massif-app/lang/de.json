@@ -2643,5 +2643,7 @@
   "one": "„{name}“: {n} Objekt nur aus Luft oder Entitäten, die Massif nicht setzt.",
   "other": "„{name}“: {n} Objekte nur aus Luft oder Entitäten, die Massif nicht setzt."
  },
- "“{what}”: Massif has no layer like it.": "„{what}“: Massif hat keine solche Ebene."
+ "“{what}”: Massif has no layer like it.": "„{what}“: Massif hat keine solche Ebene.",
+ "The world's origin: x 0, z 0": "Der Ursprung der Welt: x 0, z 0",
+ "The 3D View: drag to move it": "Die 3D-Ansicht: ziehen, um sie zu verschieben"
 }
