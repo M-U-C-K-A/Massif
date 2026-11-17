@@ -544,6 +544,10 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
                         tr!("Lays water as high as where each stroke starts: the water's surface there, or a block over the ground.")
                     },
                 );
+                if tool == Tool::Flood {
+                    crate::widgets::checkbox(ui, &mut tools.flood_warn, tr!("Warn before flooding beyond a hollow"));
+                    hint(ui, tr!("Clicked out of a hollow, the water is made to stay a block over the spot and spreads wherever the land lies lower: off, it floods at once."));
+                }
             }
             ui.add_space(4.0);
             // The level set, for when the click does not give it.

@@ -394,6 +394,12 @@ pub struct ToolState {
     /// `water_level`.
     #[serde(alias = "flood_from_click")]
     pub water_from_click: bool,
+    /// Flood from the click, on a spot that is not in a hollow: ask first
+    /// (the water would spread as far as the land lies under it), or flood.
+    pub flood_warn: bool,
+    /// A flood beyond a hollow waiting for an answer.
+    #[serde(skip)]
+    pub flood_ask: Option<FloodAsk>,
     /// The water tools never lay water higher than `water_limit`.
     pub water_limit_on: bool,
     pub water_limit: i16,
@@ -972,6 +978,8 @@ impl Default for ToolState {
             show_sizes: false,
             water_level: 63,
             water_from_click: true,
+            flood_warn: true,
+            flood_ask: None,
             water_limit_on: false,
             water_limit: 63,
             slab_thickness: 16.0,
@@ -1611,6 +1619,31 @@ pub fn probe(doc: &Document, x: i32, z: i32) -> Option<Probe> {
     })
 }
 
+/// The columns a flood fills at most.
+const FLOOD_MAX: usize = 64 << 20;
+
+/// A flood from the click on a spot not in a hollow, to ask about: where,
+/// the level the water would stand at (a block over the spot), and how
+/// many columns it would cover (`more`: that many at least).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FloodAsk {
+    pub x: i32,
+    pub z: i32,
+    pub level: i16,
+    pub columns: usize,
+    pub more: bool,
+}
+
+/// Flood as asked: up to the level of `ask`, from where it was clicked;
+/// one step to undo. What it did.
+pub fn flood_anyway(doc: &mut Document, tools: &mut ToolState, ask: &FloodAsk) -> String {
+    tools.water_level = ask.level;
+    doc.history.begin(tr!("Flood"), doc.dim);
+    let n = ops::flood_fill(&mut doc.history.edit(&mut doc.world, 0), ask.x, ask.z, Flood::Fill(ask.level), FLOOD_MAX);
+    doc.commit();
+    tr!("Flooded {n} columns up to {water_level}", water_level = ask.level, n)
+}
+
 /// A single-click tool at block `(x, z)`. `inverse` is the right button.
 pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse: bool) -> Feedback {
     match tools.tool {
@@ -1641,7 +1674,21 @@ pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse:
             if flood && tools.water_from_click {
                 match ops::spill_level(doc.dimension(), x, z, 16 << 20) {
                     Some(level) => tools.water_level = level,
-                    None => return Some(tr!("This spot is not in a hollow: water poured here runs away. Untick From the click in Tool Settings to flood up to a level of your own.").to_owned()),
+                    // Not in a hollow: the water would run away. Made to
+                    // stay a block over the spot, it spreads as far as the
+                    // land lies under it: asked first, unless told not to.
+                    None => {
+                        let Some(level) = ops::pour_level(doc.dimension(), x, z) else {
+                            return Some(tr!("This spot is not in a hollow: water poured here runs away. Untick From the click in Tool Settings to flood up to a level of your own.").to_owned());
+                        };
+                        let level = tools.limit_water(level);
+                        if tools.flood_warn {
+                            let columns = ops::flood_count(doc.dimension(), x, z, Flood::Fill(level), FLOOD_MAX);
+                            tools.flood_ask = Some(FloodAsk { x, z, level, columns, more: columns >= FLOOD_MAX });
+                            return None;
+                        }
+                        tools.water_level = level;
+                    }
                 }
             }
             let level = tools.limit_water(tools.water_level);
@@ -1650,7 +1697,7 @@ pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse:
             }
             let mode = if flood { Flood::Fill(level) } else { Flood::Drain };
             doc.history.begin(if flood { tr!("Flood") } else { tr!("Drain") }, doc.dim);
-            let n = ops::flood_fill(&mut doc.history.edit(&mut doc.world, 0), x, z, mode, 64 << 20);
+            let n = ops::flood_fill(&mut doc.history.edit(&mut doc.world, 0), x, z, mode, FLOOD_MAX);
             doc.commit();
             Some(match (flood, n) {
                 (true, 0) if !tools.water_from_click && probe(doc, x, z).is_some_and(|p| block_top(p.height) >= tools.water_level as i32) => {
@@ -2126,8 +2173,14 @@ mod tests {
         let mut tools = ToolState::default();
         tools.select(Tool::Flood);
         assert!(tools.water_from_click);
-        let msg = click(&mut d, &mut tools, 50, 50, false).unwrap();
-        assert!(msg.starts_with("This spot is not in a hollow"), "{msg}");
+        // Not a hollow: it asks first, changing nothing.
+        let steps = d.history.undo_count();
+        assert_eq!(click(&mut d, &mut tools, 50, 50, false), None);
+        let ask = tools.flood_ask.take().expect("a question");
+        assert_eq!((ask.x, ask.z), (50, 50));
+        assert!(ask.columns > 1000 && !ask.more, "{ask:?}");
+        assert_eq!(d.history.undo_count(), steps);
+        assert_eq!(probe(&d, 50, 50).unwrap().fluid, NO_FLUID);
         tools.water_from_click = false;
         tools.water_level = 40;
         let msg = click(&mut d, &mut tools, 50, 50, false).unwrap();
@@ -2142,6 +2195,42 @@ mod tests {
         tools.water_limit = 60;
         let msg = click(&mut d, &mut tools, 120, 120, false).unwrap();
         assert!(msg.starts_with("The height limit 60 is under this spot"), "{msg}");
+    }
+
+    /// Flood from the click beyond a hollow: asked, Flood anyway fills as
+    /// many columns as it said, a block over the spot, in one step to undo,
+    /// and only inside the selection when there is one; with the warning
+    /// off, the click floods at once.
+    #[test]
+    fn flood_beyond_a_hollow_when_asked() {
+        let mut d = doc();
+        let mut tools = ToolState::default();
+        tools.select(Tool::Flood);
+        assert!(tools.flood_warn);
+        assert_eq!(click(&mut d, &mut tools, 50, 50, false), None);
+        let ask = tools.flood_ask.take().unwrap();
+        assert_eq!(ask.level as i32, block_top(height(&d, 50, 50)) + 1);
+        let steps = d.history.undo_count();
+        let msg = flood_anyway(&mut d, &mut tools, &ask);
+        assert_eq!(msg, format!("Flooded {} columns up to {}", ask.columns, ask.level));
+        assert_eq!(d.history.undo_count(), steps + 1);
+        assert_eq!(probe(&d, 50, 50).unwrap().fluid, ask.level);
+        d.undo();
+        assert_eq!(probe(&d, 50, 50).unwrap().fluid, NO_FLUID);
+        // Inside a selection only.
+        let sel = massif_core::selection::Selection::shape(&massif_core::selection::Shape::Rect(massif_core::coords::BlockRect::new(0, 0, 100, 100)));
+        assert!(d.history.select(&mut d.world, 0, "Select", Some(sel)));
+        assert_eq!(click(&mut d, &mut tools, 50, 50, false), None);
+        let inside = tools.flood_ask.take().unwrap();
+        assert_eq!(inside.columns, 100 * 100, "{inside:?}");
+        flood_anyway(&mut d, &mut tools, &inside);
+        assert_eq!(probe(&d, -50, -50).unwrap().fluid, NO_FLUID);
+        assert_eq!(probe(&d, 99, 99).unwrap().fluid, inside.level);
+        // Not asked: flooded at once.
+        d.undo();
+        tools.flood_warn = false;
+        let msg = click(&mut d, &mut tools, 50, 50, false).unwrap();
+        assert!(tools.flood_ask.is_none() && msg.starts_with("Flooded 10000 columns"), "{msg}");
     }
 
     /// The Water brush lays its water as high as where its stroke starts,

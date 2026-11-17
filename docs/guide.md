@@ -1213,7 +1213,12 @@ the sea's level is not a limit.
   the lowest point of its rim, where it would spill, and the **Water
   level** below takes that height; a lake already in the hollow counts as
   its floor. Clicked where water would only run away (on a slope, a
-  hilltop, flat ground), it fills nothing and says so.
+  hilltop, flat ground), it asks first: made to stay a block over the spot,
+  the water would spread wherever the land lies lower, and the question
+  says over how many columns and up to what level; **Flood anyway** floods
+  it (one step to undo, inside the selection only when there is one),
+  **Cancel** leaves the map as it was. With **Warn before flooding beyond
+  a hollow** off (Tool Settings, under From the click), it floods at once.
 - The **Water brush** lays water under the brush. With From the click on,
   each stroke lays it as high as where it starts: the surface of the water
   there, or a block over the ground. The right button takes water off.

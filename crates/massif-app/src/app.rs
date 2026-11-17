@@ -372,6 +372,9 @@ enum Dialog {
     LayerImport(Vec<crate::layers::LayerImport>),
     /// The block palettes window.
     Palettes(Box<crate::palettes::PaletteEditor>),
+    /// Flood from the click on a spot that is not in a hollow: how far the
+    /// water would spread, to flood anyway or not.
+    FloodAsk(crate::tools::FloodAsk),
 }
 
 struct Status {
@@ -4174,6 +4177,45 @@ impl MassifApp {
                     }
                 }
             }
+            Dialog::FloodAsk(ask) => {
+                let mut choice = None;
+                let response = modal(ctx, "flood ask").show(ctx, |ui| {
+                    ui.set_width(400.0);
+                    ui.label(RichText::new(tr!("Flood beyond the hollow?")).bold().size(15.0));
+                    let (columns, level) = (crate::select::thousands(ask.columns as u64), ask.level);
+                    let what = if ask.more {
+                        tr!("This spot is not in a hollow: the water would run away. Made to stay a block over it, it would spread wherever the land lies lower, over more than {columns} columns, up to {level}.", columns, level)
+                    } else {
+                        tr!("This spot is not in a hollow: the water would run away. Made to stay a block over it, it would spread wherever the land lies lower, over {columns} columns, up to {level}.", columns, level)
+                    };
+                    ui.add(egui::Label::new(what).wrap());
+                    ui.add_space(4.0);
+                    ui.add(egui::Label::new(RichText::new(tr!("Turn off Warn before flooding beyond a hollow in Tool Settings to flood without asking.")).color(Palette::of(ui).weak)).wrap());
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                            if ui.add(theme::primary_button(ui, tr!("Flood anyway, up to {level}", level))).clicked() {
+                                choice = Some(true);
+                            }
+                            if ui.button(tr!("Cancel")).clicked() {
+                                choice = Some(false);
+                            }
+                        });
+                    });
+                });
+                match choice {
+                    Some(true) => {
+                        let msg = crate::tools::flood_anyway(&mut self.doc, &mut self.tools, &ask);
+                        self.say(ctx, msg, false, None);
+                    }
+                    Some(false) => {}
+                    None => {
+                        if !response.should_close() {
+                            self.dialog = Some(Dialog::FloodAsk(ask));
+                        }
+                    }
+                }
+            }
             Dialog::DeletePoint(index) => {
                 let mut choice = None;
                 let name = self.doc.world.points.get(index).map(|p| p.name.clone()).unwrap_or_default();
@@ -4990,6 +5032,12 @@ impl MassifApp {
         self.map_cache.sync_generation(self.doc.generation);
         if let Some(msg) = self.feedback.take() {
             self.say(&ctx, msg, false, None);
+        }
+        // A flood beyond a hollow to ask about.
+        if self.dialog.is_none()
+            && let Some(ask) = self.tools.flood_ask.take()
+        {
+            self.dialog = Some(Dialog::FloodAsk(ask));
         }
         if let Some(msg) = self.doc.take_checked() {
             self.say(&ctx, msg, false, None);
@@ -6362,6 +6410,52 @@ mod tests {
             let crop = image::imageops::crop_imm(&image, x0, y0, (360.0 * ppp) as u32, (260.0 * ppp) as u32).to_image();
             crop.save(dir.join("tool-settings-flood-limit.png")).unwrap();
         }
+    }
+
+    /// Flood from the click out of a hollow asks first: the dialog says how
+    /// far the water would spread and to what level, Flood anyway floods
+    /// (one step to undo), Cancel leaves the map as it was; the warning is
+    /// a setting of the tool. Rendered with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn flood_beyond_a_hollow_asks_first() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(3);
+        h.state_mut().tools.select(Tool::Flood);
+        h.run_steps(3);
+        assert!(h.state().tools.flood_warn);
+        h.get_by_label("Warn before flooding beyond a hollow");
+        // A spot of the map, its level as a click there out of a hollow
+        // would give it.
+        let (x, z) = {
+            let doc = &h.state().doc;
+            let (lo, hi) = doc.dimension().bounds().unwrap();
+            let t = massif_core::coords::TILE_SIZE;
+            ((lo.x + hi.x + 1) * t / 2, (lo.z + hi.z + 1) * t / 2)
+        };
+        let level = massif_core::ops::pour_level(h.state().doc.dimension(), x, z).unwrap();
+        let columns = massif_core::ops::flood_count(h.state().doc.dimension(), x, z, massif_core::ops::Flood::Fill(level), 64 << 20);
+        let ask = crate::tools::FloodAsk { x, z, level, columns, more: false };
+        h.state_mut().tools.flood_ask = Some(ask.clone());
+        h.run_steps(3);
+        assert!(matches!(h.state().dialog, Some(Dialog::FloodAsk(_))));
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            h.render().unwrap().save(dir.join("flood-ask.png")).unwrap();
+        }
+        // Cancel: nothing.
+        let steps = h.state().doc.history.undo_count();
+        h.get_by_label("Cancel").click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none());
+        assert_eq!(h.state().doc.history.undo_count(), steps);
+        // Flood anyway: one step.
+        h.state_mut().tools.flood_ask = Some(ask);
+        h.run_steps(3);
+        h.get_by_label(&format!("Flood anyway, up to {level}")).click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none());
+        assert_eq!(h.state().doc.history.undo_count(), steps + 1);
+        assert_eq!(crate::tools::probe(&h.state().doc, x, z).unwrap().fluid, level);
     }
 
     /// The menu bar, the pointer over View, for the eye (MASSIF_SNAPSHOT_DIR);

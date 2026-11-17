@@ -399,7 +399,7 @@ fn ants(painter: &egui::Painter, canvas: Rect, to_screen: &dyn Fn(f64, f64) -> P
 }
 
 /// 12345678 as "12,345,678".
-fn thousands(n: u64) -> String {
+pub(crate) fn thousands(n: u64) -> String {
     let s = n.to_string();
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {

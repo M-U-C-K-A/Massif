@@ -2703,5 +2703,12 @@
  "What the terrains of a new map are made of: the generator's grass, rock, sand, gravel and snow by height and slope, the other natural terrains, and the rock under them. A terrain a palette leaves out is the game's.": "Ce dont sont faits les terrains d'une nouvelle carte : l'herbe, la roche, le sable, le gravier et la neige que le générateur pose selon la hauteur et la pente, les autres terrains naturels, et la roche dessous. Un terrain qu'une palette omet est celui du jeu.",
  "Where caves are carved and ores laid. Pick Above or Under, then a block below.": "Là où les grottes sont creusées et les minerais posés. Choisissez Dessus ou Dessous, puis un bloc plus bas.",
  "built in": "intégrée",
- "“{text}” is not a block id": "« {text} » n'est pas un id de bloc"
+ "“{text}” is not a block id": "« {text} » n'est pas un id de bloc",
+ "Flood beyond the hollow?": "Inonder au-delà du creux ?",
+ "This spot is not in a hollow: the water would run away. Made to stay a block over it, it would spread wherever the land lies lower, over {columns} columns, up to {level}.": "Cet endroit n'est pas dans un creux : l'eau s'écoulerait. Maintenue un bloc au-dessus, elle s'étendrait partout où le terrain est plus bas, sur {columns} colonnes, jusqu'à {level}.",
+ "This spot is not in a hollow: the water would run away. Made to stay a block over it, it would spread wherever the land lies lower, over more than {columns} columns, up to {level}.": "Cet endroit n'est pas dans un creux : l'eau s'écoulerait. Maintenue un bloc au-dessus, elle s'étendrait partout où le terrain est plus bas, sur plus de {columns} colonnes, jusqu'à {level}.",
+ "Turn off Warn before flooding beyond a hollow in Tool Settings to flood without asking.": "Désactivez Avertir avant d'inonder au-delà d'un creux dans les réglages de l'outil pour inonder sans confirmation.",
+ "Flood anyway, up to {level}": "Inonder quand même, jusqu'à {level}",
+ "Warn before flooding beyond a hollow": "Avertir avant d'inonder au-delà d'un creux",
+ "Clicked out of a hollow, the water is made to stay a block over the spot and spreads wherever the land lies lower: off, it floods at once.": "Cliquée hors d'un creux, l'eau est maintenue un bloc au-dessus de l'endroit et s'étend partout où le terrain est plus bas : désactivé, l'inondation se fait aussitôt."
 }

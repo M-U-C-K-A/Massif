@@ -1147,11 +1147,41 @@ pub fn flood_fill(edit: &mut Edit, x: i32, z: i32, mode: Flood, max_cells: usize
     if edit.level_index() != 0 {
         return 0;
     }
+    let (filled, changed) = flood_plan(edit.dim(), x, z, mode, max_cells);
+    for (pos, fluid) in changed {
+        if let Some(tile) = edit.tile_mut(pos) {
+            debug_assert_eq!(fluid.len(), TILE_AREA);
+            tile.fluid = Plane::from_vec(fluid);
+            tile.fluid.compact();
+        }
+    }
+    filled
+}
+
+/// How many columns [`flood_fill`] would change from column `(x, z)`, at
+/// most `max_cells`, changing nothing.
+pub fn flood_count(dim: &Dimension, x: i32, z: i32, mode: Flood, max_cells: usize) -> usize {
+    flood_plan(dim, x, z, mode, max_cells).0
+}
+
+/// The level water poured at column `(x, z)` stands at if it is made to
+/// stay: a block over the ground there, or over the water there. `None`
+/// off the map.
+pub fn pour_level(dim: &Dimension, x: i32, z: i32) -> Option<i16> {
+    let mut ground = crate::river::Ground::new(dim.ground());
+    let (h, w) = ground.at(x, z)?;
+    let surface = w.map_or(block_top(h), |w| (w as i32).max(block_top(h)));
+    Some((surface + 1).clamp(i16::MIN as i32, i16::MAX as i32) as i16)
+}
+
+/// The columns a flood from `(x, z)` changes and the water of the tiles it
+/// changes, as [`flood_fill`] would write them.
+fn flood_plan(dim: &Dimension, x: i32, z: i32, mode: Flood, max_cells: usize) -> (usize, Vec<(TilePos, Vec<i16>)>) {
     let mut filled = 0usize;
     let changed: Vec<(TilePos, Vec<i16>)> = {
         let mut grid = FloodGrid {
-            dim: edit.dim(),
-            selection: edit.dim().selection.as_deref(),
+            dim,
+            selection: dim.selection.as_deref(),
             tiles: Vec::new(),
             lookup: HashMap::new(),
             last: None,
@@ -1199,14 +1229,7 @@ pub fn flood_fill(edit: &mut Edit, x: i32, z: i32, mode: Flood, max_cells: usize
             .map(|t| (t.pos, t.fluid))
             .collect()
     };
-    for (pos, fluid) in changed {
-        if let Some(tile) = edit.tile_mut(pos) {
-            debug_assert_eq!(fluid.len(), TILE_AREA);
-            tile.fluid = Plane::from_vec(fluid);
-            tile.fluid.compact();
-        }
-    }
-    filled
+    (filled, changed)
 }
 
 // --------------------------------------------------------- whole-map ops --

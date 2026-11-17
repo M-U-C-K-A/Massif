@@ -2693,5 +2693,12 @@
  "What the terrains of a new map are made of: the generator's grass, rock, sand, gravel and snow by height and slope, the other natural terrains, and the rock under them. A terrain a palette leaves out is the game's.": "De qué están hechos los terrenos de un mapa nuevo: la hierba, la roca, la arena, la grava y la nieve que el generador pone según la altura y la pendiente, los demás terrenos naturales y la roca debajo. Un terreno que la paleta omite es el del juego.",
  "Where caves are carved and ores laid. Pick Above or Under, then a block below.": "Donde se excavan las cuevas y se ponen los minerales. Elige Arriba o Abajo y luego un bloque más abajo.",
  "built in": "incluida",
- "“{text}” is not a block id": "«{text}» no es un id de bloque"
+ "“{text}” is not a block id": "«{text}» no es un id de bloque",
+ "Flood beyond the hollow?": "¿Inundar más allá de la hondonada?",
+ "This spot is not in a hollow: the water would run away. Made to stay a block over it, it would spread wherever the land lies lower, over {columns} columns, up to {level}.": "Este lugar no está en una hondonada: el agua se escurriría. Mantenida un bloque por encima, se extendería allí donde el terreno es más bajo, sobre {columns} columnas, hasta {level}.",
+ "This spot is not in a hollow: the water would run away. Made to stay a block over it, it would spread wherever the land lies lower, over more than {columns} columns, up to {level}.": "Este lugar no está en una hondonada: el agua se escurriría. Mantenida un bloque por encima, se extendería allí donde el terreno es más bajo, sobre más de {columns} columnas, hasta {level}.",
+ "Turn off Warn before flooding beyond a hollow in Tool Settings to flood without asking.": "Desactive Avisar antes de inundar más allá de una hondonada en los ajustes de la herramienta para inundar sin preguntar.",
+ "Flood anyway, up to {level}": "Inundar de todos modos, hasta {level}",
+ "Warn before flooding beyond a hollow": "Avisar antes de inundar más allá de una hondonada",
+ "Clicked out of a hollow, the water is made to stay a block over the spot and spreads wherever the land lies lower: off, it floods at once.": "Al hacer clic fuera de una hondonada, el agua se mantiene un bloque por encima del lugar y se extiende allí donde el terreno es más bajo: desactivado, inunda en el acto."
 }

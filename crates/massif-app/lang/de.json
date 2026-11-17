@@ -2703,5 +2703,12 @@
  "What the terrains of a new map are made of: the generator's grass, rock, sand, gravel and snow by height and slope, the other natural terrains, and the rock under them. A terrain a palette leaves out is the game's.": "Woraus die Gelände einer neuen Karte bestehen: Gras, Fels, Sand, Kies und Schnee, die der Generator nach Höhe und Neigung legt, die anderen natürlichen Gelände und das Gestein darunter. Ein Gelände, das eine Palette auslässt, ist das des Spiels.",
  "Where caves are carved and ores laid. Pick Above or Under, then a block below.": "Wo Höhlen gegraben und Erze gelegt werden. Wähle Oben oder Unten, dann unten einen Block.",
  "built in": "eingebaut",
- "“{text}” is not a block id": "„{text}“ ist keine Block-ID"
+ "“{text}” is not a block id": "„{text}“ ist keine Block-ID",
+ "Flood beyond the hollow?": "Über die Senke hinaus fluten?",
+ "This spot is not in a hollow: the water would run away. Made to stay a block over it, it would spread wherever the land lies lower, over {columns} columns, up to {level}.": "Diese Stelle liegt in keiner Senke: Das Wasser würde abfließen. Einen Block darüber gehalten, breitet es sich überall aus, wo das Land tiefer liegt, über {columns} Säulen, bis {level}.",
+ "This spot is not in a hollow: the water would run away. Made to stay a block over it, it would spread wherever the land lies lower, over more than {columns} columns, up to {level}.": "Diese Stelle liegt in keiner Senke: Das Wasser würde abfließen. Einen Block darüber gehalten, breitet es sich überall aus, wo das Land tiefer liegt, über mehr als {columns} Säulen, bis {level}.",
+ "Turn off Warn before flooding beyond a hollow in Tool Settings to flood without asking.": "Schalten Sie „Vor dem Fluten über eine Senke hinaus warnen“ in den Werkzeugeinstellungen aus, um ohne Nachfrage zu fluten.",
+ "Flood anyway, up to {level}": "Trotzdem fluten, bis {level}",
+ "Warn before flooding beyond a hollow": "Vor dem Fluten über eine Senke hinaus warnen",
+ "Clicked out of a hollow, the water is made to stay a block over the spot and spreads wherever the land lies lower: off, it floods at once.": "Außerhalb einer Senke geklickt, wird das Wasser einen Block über der Stelle gehalten und breitet sich überall aus, wo das Land tiefer liegt: ausgeschaltet, wird sofort geflutet."
 }
