@@ -1523,7 +1523,7 @@ impl MassifApp {
 
     /// The newer version to tell of, if any.
     fn update_offer(&self) -> Option<&crate::update::Release> {
-        if !self.settings.check_updates {
+        if !self.settings.check_updates && !self.updates.asked {
             return None;
         }
         self.updates.offer(crate::update::RUNNING, self.settings.skipped_version.as_deref())
@@ -2642,6 +2642,14 @@ impl MassifApp {
         if pressed(Action::UiZoomOut) {
             egui::gui_zoom::zoom_out(ctx);
         }
+        // Full screen and Quit, whatever is open (Quit asks first, as the
+        // menu's does). On a Mac the app menu's ⌘Q quits.
+        if pressed(Action::FullScreen) {
+            self.command(ctx, Command::FullScreen);
+        }
+        if pressed(Action::Quit) && !self.menus_in_menu_bar {
+            self.command(ctx, Command::Quit);
+        }
         if self.dialog.is_some() || self.blocking_job().is_some() {
             return;
         }
@@ -2949,6 +2957,17 @@ impl MassifApp {
             }
             Command::HomeScreen => self.open_home(Page::NewMap),
             Command::About => self.dialog = Some(Dialog::About),
+            Command::CheckUpdates => {
+                // Asked for: whatever the setting and the day's answer.
+                if let Some(cache) = crate::update::default_cache() {
+                    self.updates.ask_now(ctx, cache, crate::update::fetch_github);
+                }
+                self.dialog = Some(Dialog::Preferences(PrefsSection::Updates));
+            }
+            Command::FullScreen => {
+                let full = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+                ctx.send_viewport_cmd(ViewportCommand::Fullscreen(!full));
+            }
             Command::ReportProblem => self.open_report(ctx, false),
         }
     }
@@ -6065,11 +6084,12 @@ mod tests {
         h.event(egui::Event::PointerMoved(view.center()));
         h.run_steps(3);
         let image = h.render().expect("rendered");
-        let crop = image::imageops::crop_imm(&image, 0, 0, 420, 44).to_image();
+        let crop = image::imageops::crop_imm(&image, 0, 0, 480, 44).to_image();
         crop.save(dir.join("menu-bar.png")).unwrap();
-        // File and Edit open, their shortcuts beside their items.
+        // Massif, File, Edit and View open, their shortcuts beside their
+        // items.
         add_tower(&mut h);
-        for (menu, height) in [("File", 380), ("Edit", 380)] {
+        for (menu, height) in [("Massif", 260), ("File", 380), ("Edit", 380), ("View", 220)] {
             h.get_by_role_and_label(egui::accesskit::Role::Button, menu).click();
             h.run_steps(3);
             let image = h.render().expect("rendered");
@@ -6096,9 +6116,9 @@ mod tests {
         let mut h = harness(ThemeChoice::Dark);
         h.run_steps(3);
         let menus = |h: &egui_kittest::Harness<'_, MassifApp>| -> Vec<&str> {
-            ["File", "Edit", "View", "Help"].into_iter().filter(|t| h.query_by_role_and_label(egui::accesskit::Role::Button, t).is_some()).collect()
+            ["Massif", "File", "Edit", "View", "Help"].into_iter().filter(|t| h.query_by_role_and_label(egui::accesskit::Role::Button, t).is_some()).collect()
         };
-        assert_eq!(menus(&h), ["File", "Edit", "View", "Help"]);
+        assert_eq!(menus(&h), ["Massif", "File", "Edit", "View", "Help"]);
         h.state_mut().menus_in_menu_bar = true;
         h.run_steps(3);
         assert!(menus(&h).is_empty(), "in the window too: {:?}", menus(&h));

@@ -121,8 +121,8 @@ topic, with a search, and the keyboard shortcuts.
 
 ### Menus
 
-**File**, **Edit**, **View** and **Help** hold every command, each item with
-its shortcut beside it. An item is greyed out when it cannot be used: what
+**Massif**, **File**, **Edit**, **View** and **Help** hold every command,
+each item with its shortcut beside it. An item is greyed out when it cannot be used: what
 acts on the map waits while the home screen is shown, and everything but
 Quit waits while a dialog is open or a map is being opened.
 
@@ -130,9 +130,12 @@ On a Mac they are in the menu bar at the top of the screen, as in every Mac
 app, and the window's top bar keeps only its buttons. **About Massif**,
 **Settings…** (⌘,) and **Quit Massif** (⌘Q) are in the **Massif** menu,
 where Mac apps keep them, and **Help** has the system's search of the menus.
-⌘Q asks first when the map has changes that are not saved, as **File ▸
-Quit** does. On Windows and Linux the menus sit at the top left of the
-window, with Ctrl for ⌘.
+⌘Q asks first when the map has changes that are not saved. On Windows and
+Linux the menus sit at the top left of the window, with Ctrl for ⌘, and the
+first, **Massif**, stands for the Mac's: **About Massif**, **Settings…**
+(Ctrl+,), **Check for Updates…** (asks GitHub at once, whatever the daily
+check, and opens Settings ▸ Updates with the answer), then **Full Screen**
+(F11) and **Quit** (Ctrl+Q), which asks first as ⌘Q does.
 
 On a Mac, quitting from the Dock (**Quit** in Massif's menu there) or from
 the app switcher (⌘Tab, then Q) asks as ⌘Q does, Massif coming to the front
@@ -148,8 +151,8 @@ field or in Edit ▸ Ores as before, and ⌘C, ⌘V and ⌘A work in text fields
 
 ## Settings
 
-**Settings** (⌘, — in the **Massif** menu on a Mac, in **View** on Windows
-and Linux — or the home screen's sidebar) has ten sections, in a window of
+**Settings** (⌘, — in the **Massif** menu, the first, on every system — or
+the home screen's sidebar) has ten sections, in a window of
 their own:
 
 - **Appearance**: the theme, the accent colour (the colour of what is

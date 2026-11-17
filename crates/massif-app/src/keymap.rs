@@ -279,6 +279,8 @@ pub enum Action {
     Redo,
     Settings,
     Help,
+    Quit,
+    FullScreen,
     UiZoomIn,
     UiZoomOut,
     UiZoomReset,
@@ -340,7 +342,7 @@ impl Action {
     /// Every action, area by area.
     pub fn all() -> Vec<Action> {
         use Action::*;
-        let mut list = vec![NewWorld, Open, Save, SaveAs, Export, Undo, Redo, Delete, Cancel, Settings, Help, UiZoomIn, UiZoomOut, UiZoomReset, MaximizeArea];
+        let mut list = vec![NewWorld, Open, Save, SaveAs, Export, Undo, Redo, Delete, Cancel, Settings, Help, Quit, FullScreen, UiZoomIn, UiZoomOut, UiZoomReset, MaximizeArea];
         list.extend(tools().into_iter().map(Tool));
         list.extend((1..=10).map(Intensity));
         list.extend([BrushSmaller, BrushLarger, TurnLeft, TurnRight, TurnReset, Turn30, Turn45, Turn90]);
@@ -365,6 +367,8 @@ impl Action {
             Redo => "edit.redo",
             Settings => "app.settings",
             Help => "app.help",
+            Quit => "app.quit",
+            FullScreen => "app.full_screen",
             UiZoomIn => "app.zoom_in",
             UiZoomOut => "app.zoom_out",
             UiZoomReset => "app.zoom_reset",
@@ -416,7 +420,7 @@ impl Action {
     pub fn area(self) -> Area {
         use Action::*;
         match self {
-            NewWorld | Open | Save | SaveAs | Export | Undo | Redo | Settings | Help | UiZoomIn | UiZoomOut | UiZoomReset | MaximizeArea | Delete | Cancel => Area::General,
+            NewWorld | Open | Save | SaveAs | Export | Undo | Redo | Settings | Help | Quit | FullScreen | UiZoomIn | UiZoomOut | UiZoomReset | MaximizeArea | Delete | Cancel => Area::General,
             Tool(_) => Area::Tools,
             Intensity(_) | BrushSmaller | BrushLarger | TurnLeft | TurnRight | TurnReset | Turn30 | Turn45 | Turn90 => Area::Brushes,
             LightRight | LightLeft | Pan | SelectAll | Deselect | InvertSelection | SelectAdd | SelectSubtract | MapZoomIn | MapZoomOut | MapZoomReset => Area::Map,
@@ -450,7 +454,7 @@ impl Action {
     /// (Ctrl): typing has no use for them.
     fn while_typing(self) -> bool {
         use Action::*;
-        matches!(self, NewWorld | Open | Save | SaveAs | Export | Settings | Help | UiZoomIn | UiZoomOut | UiZoomReset)
+        matches!(self, NewWorld | Open | Save | SaveAs | Export | Settings | Help | Quit | FullScreen | UiZoomIn | UiZoomOut | UiZoomReset)
     }
 
     /// What it does, as the settings list it.
@@ -468,6 +472,8 @@ impl Action {
             Redo => tr!("Redo"),
             Settings => tr!("Settings"),
             Help => tr!("Help"),
+            Quit => tr!("Quit"),
+            FullScreen => tr!("Full screen"),
             UiZoomIn => tr!("Larger interface"),
             UiZoomOut => tr!("Smaller interface"),
             UiZoomReset => tr!("Interface at its size"),
@@ -539,6 +545,8 @@ impl Action {
             Redo => vec![Chord::with(Mods::COMMAND_SHIFT, Key::Z), c(Key::Y)],
             Settings => vec![c(Key::Comma)],
             Help => vec![k(Key::F1)],
+            Quit => vec![c(Key::Q)],
+            FullScreen => vec![k(Key::F11)],
             // WorldPainter zooms the map with ⌘ and +, − and 0; Massif the
             // interface, as a browser does (Settings ▸ Accessibility).
             UiZoomIn if !wp => vec![c(Key::Plus), c(Key::Equals)],

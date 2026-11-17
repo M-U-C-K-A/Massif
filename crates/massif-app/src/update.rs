@@ -276,6 +276,9 @@ pub struct Updates {
     pending: Option<Receiver<Option<Release>>>,
     /// Whether a check was started (or the cache answered) in this run.
     started: bool,
+    /// The user asked (Massif ▸ Check for Updates…): the answer is told
+    /// even with the daily check off.
+    pub asked: bool,
 }
 
 impl Updates {
@@ -296,6 +299,29 @@ impl Updates {
         }
         let (tx, rx) = std::sync::mpsc::channel();
         let ctx = ctx.clone();
+        let spawned = std::thread::Builder::new().name("massif new versions".into()).spawn(move || {
+            let _ = tx.send(check(fetch, &cache, now));
+            ctx.request_repaint();
+        });
+        if spawned.is_ok() {
+            self.pending = Some(rx);
+        }
+    }
+
+    /// Ask GitHub now, on a thread of its own, whatever the cache holds
+    /// (unless an answer is awaited already).
+    pub fn ask_now(&mut self, ctx: &egui::Context, cache: PathBuf, fetch: Fetch) {
+        self.asked = true;
+        if self.pending.is_some() {
+            return;
+        }
+        self.started = true;
+        if self.latest.is_none() {
+            self.latest = Cache::read(&cache).map(|c| c.release);
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ctx = ctx.clone();
+        let now = now_secs();
         let spawned = std::thread::Builder::new().name("massif new versions".into()).spawn(move || {
             let _ = tx.send(check(fetch, &cache, now));
             ctx.request_repaint();
@@ -333,7 +359,7 @@ impl Updates {
 
     #[cfg(test)]
     pub fn known(release: Release) -> Self {
-        Self { latest: Some(release), pending: None, started: true }
+        Self { latest: Some(release), pending: None, started: true, asked: false }
     }
 }
 

@@ -1,8 +1,8 @@
-//! The menus — File, Edit, View and Help — as one list: what each item
-//! does, its name, its shortcut, whether it can be used now. On macOS the
-//! menu bar at the top of the screen shows the list (`menubar`); elsewhere
-//! the window's top bar draws it. The keys are the same either way
-//! (`MassifApp::shortcuts`).
+//! The menus — Massif, File, Edit, View and Help — as one list: what each
+//! item does, its name, its shortcut, whether it can be used now. On macOS
+//! the menu bar at the top of the screen shows the list (`menubar`), the
+//! system's own app menu standing for Massif's; elsewhere the window's top
+//! bar draws it. The keys are the same either way (`MassifApp::shortcuts`).
 
 use crate::app::ThemeChoice;
 use crate::reshape::WholeOp;
@@ -53,12 +53,21 @@ pub enum Command {
     Tour,
     HomeScreen,
     About,
+    /// Ask GitHub now whether a newer version is out.
+    CheckUpdates,
+    /// The window over the whole screen, or back.
+    FullScreen,
     /// A report of a problem to save and send (see `report`).
     ReportProblem,
 }
 
+/// The title of the first menu, before File, outside macOS (where the
+/// system's app menu, named after the app, holds the same).
+pub const APP_MENU: &str = "Massif";
+
 /// Where macOS keeps an item: in its menu, or in the app menu (named after
-/// the app), where Mac apps have About, Settings and Quit.
+/// the app), where Mac apps have About, Settings and Quit; or nowhere, the
+/// system doing it itself (`Elsewhere`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub enum Role {
@@ -66,6 +75,10 @@ pub enum Role {
     About,
     Settings,
     Quit,
+    /// Massif's own menu has it outside macOS; the Mac's app menu, kept
+    /// as the system makes it, does not (full screen is the system's
+    /// Window menu's there).
+    Elsewhere,
 }
 
 impl Command {
@@ -85,6 +98,8 @@ impl Command {
             Command::InvertSelection => Action::InvertSelection,
             Command::Settings => Action::Settings,
             Command::Help => Action::Help,
+            Command::Quit => Action::Quit,
+            Command::FullScreen => Action::FullScreen,
             _ => return None,
         })
     }
@@ -101,6 +116,7 @@ impl Command {
             Command::About => Role::About,
             Command::Settings => Role::Settings,
             Command::Quit => Role::Quit,
+            Command::CheckUpdates | Command::FullScreen => Role::Elsewhere,
             _ => Role::Menu,
         }
     }
@@ -217,8 +233,6 @@ pub fn menus(state: &State) -> Vec<Menu> {
         Entry::Separator,
         tipped(Command::ImportPack, Icon::Import, tr!("Import Pack…"), free, tr!("Add a .massifpack file someone shared to your packs")),
         tipped(Command::ExportPack, Icon::FileDown, tr!("Export Pack…"), map, tr!("Make a .massifpack file of the map's layers, to share")),
-        Entry::Separator,
-        item(Command::Quit, Icon::X, tr!("Quit"), true),
     ];
     let undo = state.undo.map_or_else(|| tr!("Undo").to_owned(), |l| tr!("Undo {l}", l));
     let redo = state.redo.map_or_else(|| tr!("Redo").to_owned(), |l| tr!("Redo {l}", l));
@@ -264,11 +278,7 @@ pub fn menus(state: &State) -> Vec<Menu> {
             })
         })
         .collect();
-    view.extend([
-        Entry::Separator,
-        item(Command::Settings, Icon::Settings, tr!("Settings…"), free),
-        Entry::Item(Item::new(Command::ResetWorkspaces, None, tr!("Reset workspaces"), free)),
-    ]);
+    view.extend([Entry::Separator, Entry::Item(Item::new(Command::ResetWorkspaces, None, tr!("Reset workspaces"), free))]);
     let help = vec![
         item(Command::Help, Icon::BookOpen, tr!("Massif Help"), free),
         item(Command::Shortcuts, Icon::Keyboard, tr!("Keyboard shortcuts"), free),
@@ -276,9 +286,20 @@ pub fn menus(state: &State) -> Vec<Menu> {
         item(Command::ReportProblem, Icon::Bug, tr!("Report a Problem…"), free),
         Entry::Separator,
         item(Command::HomeScreen, Icon::House, tr!("Home screen"), map),
+    ];
+    // As the Mac's app menu: About, Settings… and Quit, with what is the
+    // application's rather than the map's.
+    let app = vec![
         item(Command::About, Icon::Info, tr!("About Massif"), free),
+        Entry::Separator,
+        item(Command::Settings, Icon::Settings, tr!("Settings…"), free),
+        tipped(Command::CheckUpdates, Icon::CircleArrowUp, tr!("Check for Updates…"), free, tr!("Ask GitHub now whether a newer version of Massif is out")),
+        Entry::Separator,
+        item(Command::FullScreen, Icon::Maximize, tr!("Full Screen"), true),
+        item(Command::Quit, Icon::X, tr!("Quit"), true),
     ];
     vec![
+        Menu { title: APP_MENU, entries: app },
         Menu { title: tr!("File"), entries: file },
         Menu { title: tr!("Edit"), entries: edit },
         Menu { title: tr!("View"), entries: view },
@@ -340,7 +361,8 @@ pub fn ui(ui: &mut Ui, entries: &[Entry]) -> Option<Command> {
 }
 
 /// The menus as macOS shows them: About, Settings… and Quit in the app
-/// menu, the rest in File, Edit, View and Help.
+/// menu, the rest in File, Edit, View and Help; Massif's own menu, whose
+/// place the app menu takes, not at all.
 #[derive(Debug, Default, PartialEq)]
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub struct MacMenus {
@@ -359,6 +381,7 @@ pub fn for_macos(menus: &[Menu]) -> MacMenus {
             if let Entry::Item(item) = entry {
                 let slot = match item.command.role() {
                     Role::Menu => None,
+                    Role::Elsewhere => continue,
                     Role::About => Some(&mut mac.about),
                     Role::Settings => Some(&mut mac.settings),
                     Role::Quit => Some(&mut mac.quit),
@@ -370,7 +393,10 @@ pub fn for_macos(menus: &[Menu]) -> MacMenus {
             }
             entries.push(entry.clone());
         }
-        mac.menus.push(Menu { title: menu.title, entries: tidy(entries) });
+        let entries = tidy(entries);
+        if !entries.is_empty() {
+            mac.menus.push(Menu { title: menu.title, entries });
+        }
     }
     mac
 }
@@ -456,8 +482,8 @@ mod tests {
         let recent = [PathBuf::from("/maps/Alps.massif"), PathBuf::from("/maps/Coast.massif")];
         let menus = menus(&state(&recent));
         let titles: Vec<&str> = menus.iter().map(|m| m.title).collect();
-        assert_eq!(titles, ["File", "Edit", "View", "Help"]);
-        let labels: Vec<&str> = items(&menus[0].entries).iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(titles, ["Massif", "File", "Edit", "View", "Help"]);
+        let labels: Vec<&str> = items(&menus[1].entries).iter().map(|i| i.label.as_str()).collect();
         assert_eq!(
             labels,
             [
@@ -475,7 +501,6 @@ mod tests {
                 "Export to Minecraft…",
                 "Import Pack…",
                 "Export Pack…",
-                "Quit"
             ]
         );
         assert_eq!(item(&menus, &Command::OpenRecent(recent[1].clone())).tip.as_deref(), Some("/maps/Coast.massif"));
@@ -483,8 +508,8 @@ mod tests {
         assert!(undo.label == "Undo Raise" && undo.enabled);
         let redo = item(&menus, &Command::Redo);
         assert!(redo.label == "Redo" && !redo.enabled, "nothing to redo");
-        assert_eq!(items(&menus[1].entries).iter().filter(|i| matches!(i.command, Command::WholeMap(_))).count(), WholeOp::ALL.len());
-        let checked: Vec<&Command> = items(&menus[2].entries).iter().filter(|i| i.checked == Some(true)).map(|i| &i.command).collect();
+        assert_eq!(items(&menus[2].entries).iter().filter(|i| matches!(i.command, Command::WholeMap(_))).count(), WholeOp::ALL.len());
+        let checked: Vec<&Command> = items(&menus[3].entries).iter().filter(|i| i.checked == Some(true)).map(|i| &i.command).collect();
         assert_eq!(checked, [&Command::Theme(ThemeChoice::Dark)]);
         assert!(all(&menus).iter().all(|i| i.enabled || matches!(i.command, Command::Redo)));
     }
@@ -503,12 +528,12 @@ mod tests {
         }
         let busy = menus(&State { idle: false, ..state(&recent) });
         let usable: Vec<&Command> = all(&busy).into_iter().filter(|i| enabled(&busy, &i.command)).map(|i| &i.command).collect();
-        assert_eq!(usable, [&Command::Quit]);
+        assert_eq!(usable, [&Command::FullScreen, &Command::Quit]);
         // A map no longer in the list cannot be opened from it.
         assert!(!enabled(&menus(&state(&recent)), &Command::OpenRecent(PathBuf::from("/elsewhere.massif"))));
         // No recent map: Open Recent is greyed.
         let none = menus(&state(&[]));
-        assert!(matches!(&none[0].entries[5], Entry::Submenu { label, enabled: false, .. } if label == "Open Recent"));
+        assert!(matches!(&none[1].entries[5], Entry::Submenu { label, enabled: false, .. } if label == "Open Recent"));
     }
 
     /// The shortcuts shown are the ones `MassifApp::shortcuts` handles, as
@@ -525,6 +550,9 @@ mod tests {
         assert_eq!(
             shown,
             [
+                ("Settings…", Some((",".to_owned(), command))),
+                ("Full Screen", Some(("\u{F70E}".to_owned(), Modifiers::NONE))),
+                ("Quit", Some(("q".to_owned(), command))),
                 ("New World…", Some(("n".to_owned(), command))),
                 ("Open…", Some(("o".to_owned(), command))),
                 ("Save", Some(("s".to_owned(), command))),
@@ -535,7 +563,6 @@ mod tests {
                 ("Select All", Some(("a".to_owned(), command))),
                 ("Deselect", Some(("d".to_owned(), command))),
                 ("Invert Selection", Some(("i".to_owned(), shifted))),
-                ("Settings…", Some((",".to_owned(), command))),
                 ("Massif Help", Some(("\u{F704}".to_owned(), Modifiers::NONE))),
             ]
         );
@@ -565,5 +592,40 @@ mod tests {
         assert_eq!(kept(&mac.menus), kept(&menus));
         assert!(matches!(mac.menus[0].entries.last(), Some(Entry::Item(Item { command: Command::ExportPack, .. }))));
         assert!(matches!(mac.menus[3].entries.last(), Some(Entry::Item(Item { command: Command::HomeScreen, .. }))));
+        // Massif's own menu is the system's app menu there: nothing of it
+        // shows elsewhere, and Check for Updates and Full Screen are not
+        // added to the Mac's.
+        for command in [Command::CheckUpdates, Command::FullScreen] {
+            assert!(all(&mac.menus).iter().all(|i| i.command != command), "{command:?} stays out of the Mac's menus");
+        }
+    }
+
+    /// On Windows and Linux, Massif's menu comes first, as the Mac's app
+    /// menu: About, Settings… (Ctrl+,), Check for Updates…, then Full
+    /// Screen (F11) and Quit (Ctrl+Q); View and File no longer hold
+    /// Settings and Quit, nor Help About.
+    #[test]
+    fn windows_and_linux_have_a_massif_menu_first() {
+        let menus = menus(&state(&[]));
+        assert_eq!(menus[0].title, APP_MENU);
+        let app: Vec<(&Command, Option<String>)> = items(&menus[0].entries).iter().map(|i| (&i.command, i.shortcut.as_ref().map(|s| format!("{:?}+{:?}", s.modifiers, s.logical_key)))).collect();
+        let command = format!("{:?}", Modifiers::COMMAND);
+        assert_eq!(
+            app,
+            [
+                (&Command::About, None),
+                (&Command::Settings, Some(format!("{command}+Comma"))),
+                (&Command::CheckUpdates, None),
+                (&Command::FullScreen, Some(format!("{:?}+F11", Modifiers::NONE))),
+                (&Command::Quit, Some(format!("{command}+Q"))),
+            ]
+        );
+        assert!(matches!(menus[0].entries[1], Entry::Separator) && matches!(menus[0].entries[4], Entry::Separator));
+        for menu in &menus[1..] {
+            for command in [Command::About, Command::Settings, Command::CheckUpdates, Command::FullScreen, Command::Quit] {
+                assert!(items(&menu.entries).iter().all(|i| i.command != command), "{} holds {command:?}", menu.title);
+            }
+            assert!(!matches!(menu.entries.last(), Some(Entry::Separator)), "{} ends with a separator", menu.title);
+        }
     }
 }

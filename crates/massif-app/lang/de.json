@@ -2645,5 +2645,9 @@
  },
  "“{what}”: Massif has no layer like it.": "„{what}“: Massif hat keine solche Ebene.",
  "The world's origin: x 0, z 0": "Der Ursprung der Welt: x 0, z 0",
- "The 3D View: drag to move it": "Die 3D-Ansicht: ziehen, um sie zu verschieben"
+ "The 3D View: drag to move it": "Die 3D-Ansicht: ziehen, um sie zu verschieben",
+ "Check for Updates…": "Nach Updates suchen…",
+ "Ask GitHub now whether a newer version of Massif is out": "GitHub jetzt fragen, ob eine neuere Version von Massif erschienen ist",
+ "Full Screen": "Vollbild",
+ "Full screen": "Vollbild"
 }

@@ -64,10 +64,10 @@ The check runs in the background — a few seconds for a map of 5,888 blocks a s
 
 # The window
 ## Menus
-**File**, **Edit**, **View** and **Help** hold every command, each item with its shortcut beside it, greyed out when it cannot be used (what acts on the map while the home screen is shown, everything while a dialog is open).
+**Massif**, **File**, **Edit**, **View** and **Help** hold every command, each item with its shortcut beside it, greyed out when it cannot be used (what acts on the map while the home screen is shown, everything while a dialog is open).
 - On a Mac they are in the menu bar at the top of the screen, as in every Mac app; the window's top bar keeps its buttons. **About Massif**, **Settings…** (`⌘,`) and **Quit Massif** (`⌘Q`) are in the **Massif** menu, and **Help** has the system's search of the menus.
-- On Windows and Linux they are at the top left of the window.
-- `⌘Q` asks first when the map has changes that are not saved, as **File ▸ Quit** does, and so does quitting from the Dock or the app switcher (`⌘Tab`, then `Q`): Massif comes to the front to ask. A logout, a restart or a shut-down waits for the answer: **Save** or **Don't Save**, and it goes on once Massif has quit; **Cancel**, and it stops.
+- On Windows and Linux they are at the top left of the window, and the first, **Massif**, holds what the Mac's does: **About Massif**, **Settings…** (`Ctrl ,`), **Check for Updates…** (asks GitHub at once and shows the answer in Settings ▸ Updates), **Full Screen** (`F11`) and **Quit** (`Ctrl Q`).
+- `⌘Q` (`Ctrl Q`) asks first when the map has changes that are not saved, and so does quitting from the Dock or the app switcher (`⌘Tab`, then `Q`): Massif comes to the front to ask. A logout, a restart or a shut-down waits for the answer: **Save** or **Don't Save**, and it goes on once Massif has quit; **Cancel**, and it stops.
 
 ## Areas
 The window is made of areas, as in Blender. Each area shows one editor: the map, the 3D view, tools, settings, brushes, palettes, levels or information.
@@ -242,7 +242,7 @@ Its layers come too. Forests (Deciduous, Pine, Jungle, Swamp) and the trees of W
 **Import WorldPainter layer…** (top of the Layers panel, Experimental) reads `.layer` files, custom layers exported from WorldPainter, several at once; dropping them on the window does the same. Plant layers, custom object layers (Bo2, schematics, structures), ground covers, underground pockets and combined layers become Massif's layers, the first picked to paint with; tunnel, floating and custom annotation layers are not carried over. A report says what each became and what was left out (object settings Massif does not have, a ground cover's edges and noise). Layers of the map are never changed: one with a layer's name comes in as a layer of its own.
 
 # Settings
-**Settings…** (`⌘,`: in the **Massif** menu on a Mac, in **View** on Windows and Linux, or the home screen's sidebar) has ten sections.
+**Settings…** (`⌘,`: in the **Massif** menu, or the home screen's sidebar) has ten sections.
 - **Appearance**: the theme, the accent colour, the loader shown while Massif works (a grid of dots in one of eight patterns), the tool icons (Line or Classic), whether the home screen's picture moves, and the crosshair of the player's view (a dot, a cross, a circle, Minecraft's plus or none, its size and opacity, with a preview).
 - **Typeface**: what the interface is set in — the system's own typeface, or Inter, Geist, IBM Plex Sans or Manrope, built into Massif. Each is shown in itself; a click sets the whole interface in it.
 - **Sounds**: little sounds for what happens, made by Massif as it plays them. **Essential**: tasks done, saving, errors. **All**: the interface too (choices, switches, windows, workspaces). Each can be heard from there. The sound output is held only while a sound plays: headphones are free to go to another device.
