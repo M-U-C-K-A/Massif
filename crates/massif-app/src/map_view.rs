@@ -1862,7 +1862,8 @@ impl MapView {
             }
             None => tr!("Location: –").to_owned(),
         };
-        child.label(egui::RichText::new(location).size(11.5).color(pal.weak));
+        // The zoom's controls first, from the right; the location in the
+        // room they leave, cut with an ellipsis (whole on hover).
         child.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.small_button(theme::glyph(Icon::Maximize2).to_string()).on_hover_text(tr!("Fit the whole map")).clicked() {
                 self.fit_smoothly(doc);
@@ -1882,6 +1883,10 @@ impl MapView {
                 let canvas = self.canvas;
                 self.zoom_at(canvas, canvas.center(), log.exp2() / self.zoom);
             }
+            ui.add_space(8.0);
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add(egui::Label::new(egui::RichText::new(location).size(11.5).color(pal.weak)).truncate());
+            });
         });
     }
 }

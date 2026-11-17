@@ -16433,4 +16433,86 @@ mod tests {
         assert_eq!(names, [massif_assets::MINECRAFT, "Regions Unexplored", "Biomes O' Plenty", "Typed by hand"]);
         assert_eq!(groups[1].1.iter().map(|c| (c.def.id.as_str(), c.known.is_some())).collect::<Vec<_>>(), [("regions_unexplored:bayou", true), ("regions_unexplored:alpha_grove", false)]);
     }
+
+    /// The menus, the map's status line under the pointer and a long note,
+    /// in the smallest window in every language: nothing past the window,
+    /// and the status line's words never under its zoom buttons. With
+    /// MASSIF_SNAPSHOT_DIR, each is saved.
+    #[test]
+    fn menus_and_notes_fit_the_smallest_window() {
+        use crate::i18n::{Language, set_language};
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let (w, hgt) = (960.0, 640.0);
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(w, hgt))
+            .with_pixels_per_point(std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0))
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_eframe(move |cc| {
+                theme::install(&cc.egui_ctx);
+                let world = generate(&GenParams { tiles_x: 2, tiles_z: 2, landform: Landform::Islands, ..GenParams::default() });
+                let mut app = MassifApp::for_tests(world);
+                app.settings.theme = ThemeChoice::Dark;
+                app.settings.reduce_motion = Follow::On;
+                app.menus_in_menu_bar = false;
+                app
+            });
+        h.run_steps(3);
+        let rects = |h: &egui_kittest::Harness<'_, MassifApp>| -> Vec<(egui::accesskit::Role, String, Rect)> {
+            let ppp = h.ctx.pixels_per_point();
+            h.query_all_by(|_| true)
+                .filter_map(|n| {
+                    let b = n.accesskit_node().bounding_box()?;
+                    let label = n.accesskit_node().label().or_else(|| n.accesskit_node().value()).unwrap_or_default();
+                    (!label.is_empty()).then(|| (n.accesskit_node().role(), label, Rect::from_min_max(pos2(b.x0 as f32, b.y0 as f32), pos2(b.x1 as f32, b.y1 as f32)) / ppp))
+                })
+                .collect()
+        };
+        let mut faults = Vec::new();
+        for language in Language::ALL {
+            set_language(language);
+            h.run_steps(3);
+            // What is past the window with nothing open (the 3D view's
+            // header, cut by its area) is not the menus'.
+            let behind: Vec<String> = rects(&h).into_iter().filter(|(_, _, r)| r.left() < -0.5 || r.right() > w + 0.5).map(|(_, l, _)| l).collect();
+            // Each menu of the bar, open.
+            let titles: Vec<String> = h.state().menus().iter().map(|m| m.title.to_owned()).collect();
+            for title in &titles {
+                // The bar's own, at the top.
+                h.query_all_by_label(title).min_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap().click();
+                h.run_steps(4);
+                for (role, label, r) in rects(&h) {
+                    if (r.left() < -0.5 || r.right() > w + 0.5) && !behind.contains(&label) && r.top() < hgt {
+                        faults.push(format!("{language:?} menu {title}: {role:?} {label:?} {r:?}"));
+                    }
+                }
+                if let Some(dir) = &dir {
+                    h.render().unwrap().save(dir.join(format!("menu-{}-{title}.png", language.code()))).unwrap();
+                }
+                h.key_press(egui::Key::Escape);
+                h.run_steps(3);
+            }
+            // The status line with the pointer over the map, and a long note.
+            let map = map_rect(h.state(), &h.ctx);
+            h.event(egui::Event::PointerMoved(map.center()));
+            h.state_mut().feedback = Some(tr!("Flooded {n} columns up to {water_level}", n = 65536, water_level = 74).repeat(3));
+            h.run_steps(4);
+            let all = rects(&h);
+            let zoom = all.iter().filter(|(role, _, r)| *role == egui::accesskit::Role::Button && r.top() > map.bottom() - 4.0 && r.center().x > map.center().x).map(|(_, _, r)| r.left()).fold(f32::INFINITY, f32::min);
+            for (role, label, r) in &all {
+                if label.starts_with(tr!("Location: {x}, {z}", x = "", z = "").split(':').next().unwrap()) && r.right() > zoom + 0.5 && r.top() > map.bottom() - 30.0 {
+                    faults.push(format!("{language:?} status: {role:?} {label:?} {r:?} under the zoom from {zoom:.0}"));
+                }
+                if (r.left() < -0.5 || r.right() > w + 0.5) && !behind.contains(label) {
+                    faults.push(format!("{language:?} note: {role:?} {label:?} {r:?}"));
+                }
+            }
+            if let Some(dir) = &dir {
+                h.render().unwrap().save(dir.join(format!("status-{}.png", language.code()))).unwrap();
+            }
+        }
+        set_language(Language::English);
+        assert!(faults.is_empty(), "{}:\n{}", faults.len(), faults.join("\n"));
+    }
 }

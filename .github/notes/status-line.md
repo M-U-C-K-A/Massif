@@ -1,0 +1,1 @@
+**The map's status line no longer runs under its zoom buttons.** In a narrow window, the line under the map saying where the pointer is (its height, terrain, water and biome) was drawn under the zoom slider and buttons at its right. It now stops before them, cut with an ellipsis, the whole line on hover.
