@@ -931,6 +931,14 @@ impl WaveLook {
             (false, false) => (0.15, 0.58, 7, 0.72),
         };
         let tint = theme::mix(pal.accent, grey, muted);
+        // A pale accent (silver, gold) would stand out more than the others
+        // from the page: its reach shortened until its strongest colour is
+        // no further from the page than the default accent's.
+        let most = if pal.dark { 3.1 } else { 1.75 };
+        let mut reach = reach;
+        while reach > 0.1 && theme::contrast(bg, theme::mix(bg, tint, reach)) > most {
+            reach -= 0.01;
+        }
         let ramp = (0..steps).map(|k| theme::mix(bg, tint, reach * k as f32 / (steps - 1) as f32)).collect();
         Self { ramp, hush }
     }
@@ -1804,8 +1812,13 @@ mod backdrop_tests {
     fn the_waves_move_and_stay_calm_under_the_words() {
         let (cols, rows) = (420, 300);
         let calm = [120, 36, 300, 290];
-        for (dark, high) in [(true, false), (false, false), (true, true), (false, true)] {
-            let pal = Palette::themed(dark, high);
+        // Every accent offered, set here rather than read from the settings
+        // other tests change; in high contrast made legible as the app does.
+        let themes = [(true, false), (false, false), (true, true), (false, true)];
+        for ((dark, high), (_, accent)) in themes.into_iter().flat_map(|t| theme::ACCENTS.into_iter().map(move |a| (t, a))) {
+            let base = Palette::themed(dark, high);
+            let accent = if high { theme::legible(theme::rgb(accent), base.panel, 4.5) } else { theme::rgb(accent) };
+            let pal = Palette { accent, ..base };
             let look = WaveLook::of(&pal);
             let frames: Vec<egui::ColorImage> = [0.0, 2.5, 9.0, 600.0].iter().map(|&t| wave_frame(&look, cols, rows, calm, t)).collect();
             assert!(frames.windows(2).all(|w| w[0].pixels != w[1].pixels), "dark {dark}, high {high}: the waves move");
@@ -1822,7 +1835,7 @@ mod backdrop_tests {
                     }
                 }
             }
-            eprintln!("dark {dark}, high {high}: text {text:.1}:1, muted {weak:.1}:1 at worst under the words");
+            eprintln!("dark {dark}, high {high}, accent {accent:?}: text {text:.1}:1, muted {weak:.1}:1 at worst under the words");
             assert!(text >= if high { 7.0 } else { 4.5 } && weak >= 3.0, "dark {dark}, high {high}: text {text:.1}, muted {weak:.1}");
         }
     }
