@@ -504,6 +504,28 @@ impl AutoBiome {
 
 /// Hillshade factor: 1 on flat ground, brighter facing the light.
 #[inline]
+/// The light of one block's step (`dx`, `dz`: blocks up to the
+/// neighbour on the side the light comes from). A step of one block stands
+/// for the slope of the hillside it is on, which the smooth shading lights
+/// a little at every block: it is lit by as much as that light grows with
+/// the slope (its first derivative at flat ground), so that the steps of a
+/// gentle hillside add up to the light it had smooth, facing the light as
+/// facing away. A hillside's light lit at 45° a step (0.45 against 1.15,
+/// flat 1) made the steps of gentle slopes too faint where lit, the map
+/// darker the more such steps it had: 2 % over a whole real map at its
+/// closest, more on its hillsides. Steeper, a column a step of two blocks
+/// or more, the ground is lit as the smooth shading lights it.
+fn step_shade(dx: f32, dz: f32, l: [f32; 3]) -> f32 {
+    if dx.abs() > 1.0 || dz.abs() > 1.0 {
+        return hillshade(dx, dz, l);
+    }
+    const E: f32 = 1e-3;
+    let flat = hillshade(0.0, 0.0, l);
+    let gx = (hillshade(E, 0.0, l) - hillshade(-E, 0.0, l)) / (2.0 * E);
+    let gz = (hillshade(0.0, E, l) - hillshade(0.0, -E, l)) / (2.0 * E);
+    (flat + gx * dx + gz * dz).clamp(0.3, 1.32)
+}
+
 fn hillshade(dx: f32, dz: f32, l: [f32; 3]) -> f32 {
     let inv = 1.0 / (dx * dx + 1.0 + dz * dz).sqrt();
     let dot = (-dx * l[0] + l[1] - dz * l[2]) * inv;
@@ -628,7 +650,7 @@ impl<'a> Colorizer<'a> {
         } else {
             ((h(r) - h(l)) / (2.0 * spacing), (h(d) - h(u)) / (2.0 * spacing))
         };
-        let shade = hillshade(dx * exaggeration, dz * exaggeration, self.light);
+        let shade = if blocks { step_shade(dx, dz, self.light) } else { hillshade(dx * exaggeration, dz * exaggeration, self.light) };
         let shade = steps.map_or(shade, |line| (shade + line).clamp(0.3, 1.32));
 
         let mut out = match self.style.mode {
@@ -926,7 +948,7 @@ fn block_step_shades(key: ChunkKey, sources: &Sources, light: [f32; 3]) -> Vec<O
                 let h = |v: f32| if v.is_nan() { c } else { v };
                 let dx = if light[0] <= 0.0 { c - h(tops[at - 1]) } else { h(tops[at + 1]) - c };
                 let dz = if light[2] <= 0.0 { c - h(tops[at - w]) } else { h(tops[at + w]) - c };
-                sum += hillshade(dx, dz, light);
+                sum += step_shade(dx, dz, light);
                 count += 1;
             }
         }
@@ -1696,6 +1718,37 @@ mod tests {
             let mean = |v: &[f32]| v.iter().sum::<f32>() / v.len() as f32;
             assert!((mean(&steps) - mean(&smooth)).abs() <= 3.0, "lod {lod}: the hillside's mean light: {} against {}", mean(&steps), mean(&smooth));
             eprintln!("lod {lod}: steps {:?}, smooth {:?}", &steps[..4], &smooth[..4]);
+        }
+    }
+
+    /// Block by block, a gentle hillside is as bright on the whole as it
+    /// is shaded smooth, facing the light or away from it, and its steps
+    /// still show.
+    #[test]
+    fn steps_keep_the_map_as_bright() {
+        for step in [0u8, 3, 8] {
+            let l = light_vector(step);
+            let flat = hillshade(0.0, 0.0, l);
+            for every in [4.0f32, 8.0] {
+                for (ux, uz) in [(1.0f32, 0.0f32), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
+                    // A step every `every` blocks: the smooth slope 1 / every.
+                    let s = 1.0 / every;
+                    let smooth = hillshade(ux * s, uz * s, l);
+                    let lit = step_shade(ux, uz, l);
+                    if lit >= 1.32 || lit <= 0.3 {
+                        // A light low enough that a step reaches the
+                        // brightest or darkest a slope gets.
+                        continue;
+                    }
+                    let steps = (lit + (every - 1.0) * flat) / every;
+                    // (Within the curve of the smooth light, which a step
+                    // of a block the same everywhere cannot follow.)
+                    assert!((steps - smooth).abs() < 0.025, "light {step}, every {every}, way {ux},{uz}: steps {steps}, smooth {smooth}");
+                    if (ux * l[0] + uz * l[2]).abs() > 0.3 {
+                        assert!((step_shade(ux, uz, l) - flat).abs() > 0.2, "the step shows");
+                    }
+                }
+            }
         }
     }
 

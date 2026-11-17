@@ -8651,6 +8651,50 @@ mod tests {
         assert!(widths.iter().all(|w| (w - widths[0]).abs() < 0.5), "{widths:?}");
     }
 
+    /// How the brush hovered over the map changes the light of the land
+    /// under it, tool by tool: the mean luminance of the brush's square with
+    /// the pointer there, against the same square without it.
+    #[test]
+    fn the_brush_does_not_darken_the_map() {
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let map = map_rect(h.state(), &h.ctx);
+        let at = map.center() + vec2(-40.0, 30.0);
+        let ppp = h.ctx.pixels_per_point();
+        let luminance = |img: &image::RgbaImage, r: Rect| {
+            let (mut sum, mut n) = (0.0f64, 0usize);
+            for y in (r.top() * ppp) as u32..(r.bottom() * ppp) as u32 {
+                for x in (r.left() * ppp) as u32..(r.right() * ppp) as u32 {
+                    let p = img.get_pixel(x, y);
+                    sum += 0.2126 * p[0] as f64 + 0.7152 * p[1] as f64 + 0.0722 * p[2] as f64;
+                    n += 1;
+                }
+            }
+            sum / n as f64
+        };
+        for (name, tool, noise) in [("raise", Tool::Raise, false), ("paint", Tool::PaintTerrain, false), ("noise", Tool::PaintTerrain, true)] {
+            {
+                let app = h.state_mut();
+                app.tools.select(tool);
+                app.tools.pattern.on = noise;
+            }
+            h.event(egui::Event::PointerGone);
+            h.run_steps(4);
+            let bare = h.render().unwrap();
+            h.event(egui::Event::PointerMoved(at));
+            h.run_steps(4);
+            let hovered = h.render().unwrap();
+            let r = h.state().tools.brush.radius * h.state().maps.values().next().unwrap().zoom * 0.7;
+            let square = Rect::from_center_size(at, vec2(r, r) * 2.0);
+            let (a, b) = (luminance(&bare, square), luminance(&hovered, square));
+            eprintln!("{name}: under the brush {b:.1} against {a:.1} without it ({:+.1}%)", (b / a - 1.0) * 100.0);
+            if let Some(dir) = &dir {
+                hovered.save(dir.join(format!("brush-over-map-{name}.png"))).unwrap();
+            }
+        }
+    }
+
     #[test]
     fn walking_in_3d_sculpt() {
         let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
