@@ -47,7 +47,7 @@ fn steps() -> [Step; STEP_COUNT] {
         Step {
             targets: &[Target::Editor(EditorKind::Tools), Target::Editor(EditorKind::ToolSettings)],
             title: tr!("Tools"),
-            body: tr!("Raise, smooth, flatten, paint terrains, flood with water… Pick a tool here; its own settings show just below."),
+            body: tr!("Raise, smooth, flatten, flood with water, paint terrains: one, a noise of several, or a gradient that blends two into each other… Pick a tool here; its own settings show just below. A dot marks the tools new in this version."),
         },
         Step {
             targets: &[Target::Editor(EditorKind::BrushSettings)],

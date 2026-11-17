@@ -77,6 +77,10 @@ impl Tool {
         (tn!("Navigate"), Icon::Compass, &[Tool::Pan, Tool::Eyedropper]),
     ];
 
+    /// Tools new in this version: the Tools panel marks them until they
+    /// are first tried.
+    pub const NEW: [Tool; 1] = [Tool::Gradient];
+
     pub fn label(self) -> &'static str {
         match self {
             Tool::Raise => tr!("Raise / Lower"),
@@ -297,6 +301,8 @@ pub struct ToolState {
     pub flatten_theme: bool,
     /// What Paint terrain's right button puts back.
     pub unpaint: Unpaint,
+    /// The new tools ([`Tool::NEW`]) tried once: no longer marked.
+    pub tried: Vec<Tool>,
     pub roughness: f32,
     pub terrain: u16,
     pub biome: u16,
@@ -876,6 +882,7 @@ impl Default for ToolState {
             flatten_mode: ops::FlattenMode::Both,
             flatten_theme: false,
             unpaint: Unpaint::MapTerrain,
+            tried: Vec::new(),
             roughness: 4.0,
             terrain: 1,
             biome: 0,
@@ -922,7 +929,15 @@ impl ToolState {
         if tool != self.tool {
             crate::sounds::play(crate::sounds::Cue::Select);
         }
+        if Tool::NEW.contains(&tool) && !self.tried.contains(&tool) {
+            self.tried.push(tool);
+        }
         self.tool = tool;
+    }
+
+    /// A new tool not tried yet: marked in the Tools panel.
+    pub fn untried(&self, tool: Tool) -> bool {
+        Tool::NEW.contains(&tool) && !self.tried.contains(&tool) && self.tool != tool
     }
 
     /// The brush of the 3D Sculpt editor: the brush chosen for every tool

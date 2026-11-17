@@ -2,6 +2,8 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 
 ## New in 1.0.0
 
+**The Gradient brush is easy to find.** It sat in the Paint row behind an icon of two circles that said little. It now has an icon of its own, a swatch fading from full to empty, marked with a dot until you first try it, and its card says it is new. Paint terrain's Tool Settings also offer it as a third way to paint, beside **One terrain** and **Noise**, and the Gradient brush shows the same choice to go back. The tour and the help point to it.
+
 **Unpainting gives back the map's own terrain.** The right button of Paint terrain used to put back the terrain the height calls for, so on a map filled with rock, unpainting a high place turned it to snow. It now puts back the map's own terrain: the one a new map was filled with, or, on a map made before, the one covering nearly all of it. Tool Settings shows which under **Right button**, where **Change** picks another and **By height** brings back the old way, which maps made from their height keep. 3D Sculpt's Paint does the same.
 
 **Frames a second without vsync, for developers.** **Settings ▸ Developer** now has **Frames a second**: **Vsync** keeps the window in step with the screen as before, while 60, 120, 144, 240 or **Unlimited** show each frame as soon as it is drawn, up to that number. **Draw every frame** keeps the window drawing even when nothing changes, so the Developer panel's charts show how many frames your computer makes. Both apply at once and only while developer mode is on.

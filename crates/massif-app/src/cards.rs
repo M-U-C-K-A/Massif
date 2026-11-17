@@ -35,6 +35,8 @@ pub struct Card<'a> {
     pub actions: Vec<(&'a str, &'a str)>,
     pub tip: Option<&'a str>,
     pub preview: Option<Preview<'a>>,
+    /// A word beside the title, in the accent ("New").
+    pub badge: Option<&'a str>,
 }
 
 /// Show `card` as the tooltip of `response`, while it is hovered.
@@ -61,6 +63,7 @@ pub fn brush(response: egui::Response, name: &str, key: &str, brush: Option<&Bru
             ],
             tip: None,
             preview: Some(Preview::Relief { key: key.to_owned(), brush }),
+            badge: None,
         }),
         None => response.on_hover_text(name),
     }
@@ -127,6 +130,9 @@ pub(crate) fn show(ui: &mut Ui, card: &Card) {
     }
     ui.horizontal(|ui| {
         ui.label(RichText::new(&card.title).bold().size(14.0).color(pal.text));
+        if let Some(badge) = card.badge {
+            ui.label(RichText::new(badge).size(11.0).strong().color(pal.accent));
+        }
         if let Some(key) = &card.shortcut {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| chip(ui, key, &pal));
         }
@@ -159,6 +165,7 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
         actions,
         tip,
         preview: demo.map(Preview::Demo),
+        badge: Tool::NEW.contains(&tool).then_some(tr!("New")),
     };
     match tool {
         Tool::Raise => card(
@@ -1209,6 +1216,7 @@ mod tests {
                             actions: vec![("Scroll", "On the map: change its size")],
                             tip: None,
                             preview: Some(Preview::Relief { key: "sine".into(), brush: &brush }),
+                            badge: None,
                         },
                     };
                     show(ui, &card);

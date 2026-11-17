@@ -791,8 +791,10 @@ again gives the same blocks.
 
 ![The Gradient brush's editor on the gradient of the terraformers' sketch: moss, coarse dirt, podzol and grass on a bar with their textures, the stops and midpoints under it, the edge's marker over it, a blobby transition chosen, a patch and a strip showing the result](assets/renders/gradient-editor.jpg)
 
-The **Gradient brush** (in the Paint tools, beside Paint terrain) blends two
-terrains over their edge instead of leaving a hard line. Paint the base
+The **Gradient brush** (in the Paint tools, beside Paint terrain: a swatch
+fading out, marked with a dot until it is first tried; or **Gradient** at the
+top of Paint terrain's Tool Settings, beside **One terrain** and **Noise**)
+blends two terrains over their edge instead of leaving a hard line. Paint the base
 terrains first — patches of rock in grass, a dark pit — then drag the
 Gradient brush over the boundary: rock, then a rim of other blocks, then
 grass.

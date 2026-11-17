@@ -55,6 +55,21 @@ const AUTO_BIOME: &[&str] = &[
     "M22 4h-4",
 ];
 
+/// A swatch going from full to empty, left to right: a solid band, dots
+/// thinning out, then nothing — terrains blending over an edge.
+const GRADIENT: &[&str] = &[
+    "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z",
+    "M6.5 6.5v11",
+    "M8.5 6.5v11",
+    "M11.5 7h0",
+    "M11.5 10.33h0",
+    "M11.5 13.67h0",
+    "M11.5 17h0",
+    "M14.5 8.67h0",
+    "M14.5 15.33h0",
+    "M17.5 12h0",
+];
+
 fn art(tool: Tool) -> Art {
     match tool {
         Tool::Raise => Art::Paths(RAISE),
@@ -68,7 +83,7 @@ fn art(tool: Tool) -> Art {
         Tool::StampSlab => Art::Paths(SLAB),
         Tool::AutoBiome => Art::Paths(AUTO_BIOME),
         Tool::PaintTerrain => Art::Glyph(Icon::Paintbrush),
-        Tool::Gradient => Art::Glyph(Icon::Blend),
+        Tool::Gradient => Art::Paths(GRADIENT),
         Tool::PaintBiome => Art::Glyph(Icon::TreeDeciduous),
         Tool::AutoPaint => Art::Glyph(Icon::WandSparkles),
         Tool::Cover => Art::Glyph(Icon::Sprout),

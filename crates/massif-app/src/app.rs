@@ -8300,6 +8300,41 @@ mod tests {
         }
     }
 
+    /// A first-time user finds the Gradient brush: in the Paint row, its
+    /// own icon marked with a dot until it is tried, its card saying it is
+    /// new; and among Paint terrain's ways to paint (One terrain, Noise,
+    /// Gradient), which the Gradient brush shows too, to go back. Renders
+    /// each (MASSIF_SNAPSHOT_DIR).
+    #[test]
+    fn a_first_time_user_finds_the_gradient_brush() {
+        use egui_kittest::kittest::Queryable;
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let mut h = harness(ThemeChoice::Dark);
+        h.state_mut().layout.active = 2; // Painting
+        h.state_mut().tools.select(Tool::PaintTerrain);
+        h.run_steps(5);
+        assert!(h.state().tools.untried(Tool::Gradient), "new, not tried yet: marked");
+        h.get_by_label("Gradient brush").hover();
+        h.run_steps(30);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("gradient-find-tools.png")).unwrap();
+        }
+        assert!(h.query_by_label("New").is_some(), "its card says it is new");
+        // Paint terrain's third way to paint.
+        h.get_by_label("Gradient").click();
+        h.run_steps(3);
+        assert_eq!(h.state().tools.tool, Tool::Gradient);
+        assert!(!h.state().tools.untried(Tool::Gradient), "tried: no longer marked");
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("gradient-find-settings.png")).unwrap();
+        }
+        // And back.
+        h.get_by_label("Noise").click();
+        h.run_steps(3);
+        assert_eq!(h.state().tools.tool, Tool::PaintTerrain);
+        assert!(h.state().tools.pattern.on);
+    }
+
     #[test]
     fn walking_in_3d_sculpt() {
         let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {

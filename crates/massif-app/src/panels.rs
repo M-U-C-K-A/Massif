@@ -164,7 +164,13 @@ pub fn tools_panel(ui: &mut Ui, tools: &mut ToolState) {
                     );
                     name.on_hover_text(group);
                     for &tool in list {
-                        if crate::cards::tool(tool_button(ui, tool, tools.tool == tool, 28.0), tool).clicked() {
+                        let button = tool_button(ui, tool, tools.tool == tool, 28.0);
+                        if tools.untried(tool) {
+                            // A new tool: a dot of the accent until it is tried.
+                            let at = button.rect.right_top() + vec2(-4.5, 4.5);
+                            ui.painter().circle(at, 3.0, pal.accent, Stroke::new(1.5, fill));
+                        }
+                        if crate::cards::tool(button, tool).clicked() {
                             tools.select(tool);
                         }
                     }
@@ -301,6 +307,21 @@ fn slider_row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> egui::Respo
     .inner
 }
 
+/// The ways to paint terrains: One terrain or Noise (Paint terrain), or
+/// Gradient (the Gradient brush, which shows the same choice).
+pub(crate) fn paint_modes(ui: &mut Ui, tools: &mut ToolState) {
+    let gradient = tools.tool == Tool::Gradient;
+    let on = [!gradient && !tools.pattern.on, !gradient && tools.pattern.on, gradient];
+    if let Some(k) = crate::widgets::button_group(ui, "paint what", &[tr!("One terrain"), tr!("Noise"), tr!("Gradient")], &on) {
+        if k == 2 {
+            tools.select(Tool::Gradient);
+        } else {
+            tools.select(Tool::PaintTerrain);
+            tools.pattern.on = k == 1;
+        }
+    }
+}
+
 /// Paint terrain's right button: back to the map's own terrain (shown, and
 /// chosen here), or to the one the height calls for.
 fn unpaint_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary) {
@@ -391,10 +412,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             slider_row(ui, tr!("Amplitude"), |ui| ui.add(crate::widgets::Field::new(&mut tools.roughness, 0.5..=40.0).suffix(tr!(" blocks"))));
         }
         Tool::PaintTerrain => {
-            let on = tools.pattern.on;
-            if let Some(k) = crate::widgets::button_group(ui, "paint what", &[tr!("One terrain"), tr!("Noise")], &[!on, on]) {
-                tools.pattern.on = k == 1;
-            }
+            paint_modes(ui, tools);
             ui.add_space(4.0);
             if tools.pattern.on {
                 pattern_settings(ui, tools, doc, blocks);

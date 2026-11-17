@@ -125,7 +125,7 @@ Each change of the selection is a step to undo. The selection is saved in the ma
 
 # Painting
 ## Terrains and biomes
-**Paint** gives the ground a terrain: pick it in the Terrain palette. **Biome** paints biomes the same way: pick one in the Biomes palette. The right button takes a biome back to the automatic one, and a terrain back to the map's own: the terrain a new map was filled with (one covering nearly all of an older map), shown under **Right button** in Tool Settings, where **Change** chooses another. On a map whose terrains came from its height, or with **By height**, it puts back what the height calls for: grass, sand by the water, rock and snow up high.
+**Paint** gives the ground a terrain: pick it in the Terrain palette. To blend two terrains into each other instead of meeting on a line, take the **Gradient brush**: beside Paint in the Paint row of the Tools panel (a swatch fading out, with a dot until you try it), or **Gradient** among the ways to paint at the top of Paint terrain's Tool Settings (**One terrain**, **Noise**, **Gradient**). **Biome** paints biomes the same way: pick one in the Biomes palette. The right button takes a biome back to the automatic one, and a terrain back to the map's own: the terrain a new map was filled with (one covering nearly all of an older map), shown under **Right button** in Tool Settings, where **Change** chooses another. On a map whose terrains came from its height, or with **By height**, it puts back what the height calls for: grass, sand by the water, rock and snow up high.
 
 ## Conquest Reforged and other mods
 

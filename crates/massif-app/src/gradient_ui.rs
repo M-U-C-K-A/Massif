@@ -198,6 +198,12 @@ enum Origin {
 /// The Gradient brush's part of the Tool panel.
 pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
     let pal = Palette::of(ui);
+    // Beside Paint terrain's own ways to paint, to go back to them.
+    crate::panels::paint_modes(ui, tools);
+    if tools.tool != crate::tools::Tool::Gradient {
+        return;
+    }
+    ui.add_space(6.0);
     let layouts = [Layout::Across, Layout::Radial];
     let on = layouts.map(|l| tools.gradient.layout == l);
     if let Some(k) = crate::widgets::button_group(ui, "gradient layout", &[tr!("Across an edge"), tr!("From the centre")], &on) {
