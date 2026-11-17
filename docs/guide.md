@@ -1440,14 +1440,28 @@ remembered, and read again each time Massif starts.
 **The blocks.** A mod's blocks come after the game's, in its own creative
 tabs when it gives them (Conquest Reforged's 36: Cobble and Brick, Advanced
 Masonry, Columns, Roofing…), with their real textures and names, else by
-family. The tabs list each block once; **All shapes** adds every shape of a
-block after it: its slabs, stairs, arches, capitals, vertical slabs… A whole
+family. A family that a block's name does not tell is read from how the
+block is drawn: a cross of two planes, a crop or leaves make a plant (a
+mod's `amaranth`, `cattail`, `barley`), planks or a log make wood (its
+fences, doors, signs), bricks, cobble or stone a building block. Whole
+blocks and plants show at first; **All shapes** adds every other shape (a
+mod's tabs list each block once, and its shapes follow it): slabs, stairs,
+arches, capitals, vertical slabs, fences, doors… The search looks through
+every block and shape, ticked or not. A whole
 block becomes a terrain and any other (a plant, a shape) a ground cover, as
 the game's do. The terrains of a mod mix, lay in patterns and beds, and
 serve the automatic paint like any other. A mod's tall plants (Conquest
 Reforged's lilacs, peonies…) grow in their two halves, and its plants grow
 on its own ground: its grass, moss, forest floors, dirts, soils, silts,
 muds and peat count as soil.
+
+**Any block by its id.** For a block nothing in the panel finds, type its id
+in the field under the search, with its properties if it has any:
+`regions_unexplored:redwood_log[axis=x]`. **As terrain** paints it as the
+ground, **As cover** grows it over the ground. A block among those read
+keeps its textures; another is written as typed and drawn in grey, and the
+game needs its mod to have it. A mistyped id or property says what is wrong,
+and a property a mod's list for WorldPainter does not give is refused.
 
 **Conquest Reforged's list for WorldPainter.** Conquest Reforged writes
 `conquest_wp.csv` for WorldPainter (which reads it from the `materials`

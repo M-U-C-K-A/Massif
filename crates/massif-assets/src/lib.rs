@@ -176,6 +176,35 @@ impl Category {
         }
     }
 
+    /// The group of a block by its name, and, for a name that says nothing
+    /// (a mod's `barley`, `cattail`, `aspen_fence`), by how it is drawn:
+    /// a cross of two planes, a crop, leaves or a coral fan are plants
+    /// (not a potted one), a block drawn with planks or a log is wood, one
+    /// drawn with bricks, cobble, stone or tiles a building block.
+    pub fn of_block(id: &str, models: &[String], textures: [Option<&str>; 2]) -> Self {
+        let named = Category::of(id);
+        if named != Category::Other {
+            return named;
+        }
+        let n = id.rsplit(':').next().unwrap_or(id);
+        const PLANT_MODELS: [&str; 12] = [
+            "block/cross", "block/tinted_cross", "block/crop", "block/leaves", "block/coral_fan", "block/coral_wall_fan", "block/template_seagrass", "block/attached_stem", "block/stem_growth0", "block/stem_growth7", "block/flowerbed_1", "block/template_azalea",
+        ];
+        if !n.starts_with("potted_") && models.iter().any(|m| PLANT_MODELS.contains(&m.as_str())) {
+            return Category::Plants;
+        }
+        let drawn = |part: &str| textures.iter().flatten().any(|t| t.rsplit('/').next().is_some_and(|f| f.contains(part)) || t.contains(&format!("{part}/")));
+        if drawn("planks") || drawn("_log") || drawn("stripped") || textures.iter().flatten().any(|t| t.ends_with("/log")) {
+            Category::Wood
+        } else if drawn("brick") || drawn("cobble") || drawn("stone") || drawn("tile") {
+            Category::Building
+        } else if drawn("leaves") {
+            Category::Plants
+        } else {
+            Category::Other
+        }
+    }
+
     fn of(id: &str) -> Self {
         // A mod's blocks are sorted by their names as the game's are.
         let n = id.rsplit(':').next().unwrap_or(id);
@@ -353,6 +382,57 @@ impl Default for ModInfo {
     }
 }
 
+/// What is wrong with a block state typed by hand.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StateSyntax {
+    /// Nothing typed.
+    Empty,
+    /// The id has characters a block id cannot have (`a-z 0-9 _ - . /`,
+    /// and one `:` after the namespace).
+    BadId(String),
+    /// A property is not `name=value`, or the list is not closed by `]`.
+    BadProperty(String),
+}
+
+/// A block state typed by hand (`regions_unexplored:redwood_log[axis=x]`,
+/// `Stone`): its id lowercased, `minecraft:` when it names no namespace,
+/// and its properties as `[name=value,…]`.
+pub fn parse_state(text: &str) -> Result<String, StateSyntax> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err(StateSyntax::Empty);
+    }
+    let (id, props) = match text.split_once('[') {
+        Some((id, rest)) => {
+            let Some(inner) = rest.trim_end().strip_suffix(']') else { return Err(StateSyntax::BadProperty(rest.to_owned())) };
+            (id.trim(), Some(inner))
+        }
+        None => (text, None),
+    };
+    let id = id.to_lowercase().replace(' ', "_");
+    let (ns, path) = id.split_once(':').unwrap_or(("minecraft", &id));
+    let ok = |part: &str, extra: &[char]| !part.is_empty() && part.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "_-.".contains(c) || extra.contains(&c));
+    if !ok(ns, &[]) || !ok(path, &['/']) {
+        return Err(StateSyntax::BadId(id.clone()));
+    }
+    let mut out = format!("{ns}:{path}");
+    if let Some(inner) = props {
+        let mut pairs = Vec::new();
+        for kv in inner.split(',').map(str::trim).filter(|kv| !kv.is_empty()) {
+            let Some((k, v)) = kv.split_once('=') else { return Err(StateSyntax::BadProperty(kv.to_owned())) };
+            let (k, v) = (k.trim().to_lowercase(), v.trim().to_lowercase());
+            if !ok(&k, &[]) || !ok(&v, &[]) {
+                return Err(StateSyntax::BadProperty(kv.to_owned()));
+            }
+            pairs.push(format!("{k}={v}"));
+        }
+        if !pairs.is_empty() {
+            out += &format!("[{}]", pairs.join(","));
+        }
+    }
+    Ok(out)
+}
+
 /// The namespace of a block id: `conquest` of `conquest:old_bricks`.
 pub fn namespace(id: &str) -> &str {
     id.split_once(':').map_or("minecraft", |(ns, _)| ns)
@@ -509,21 +589,25 @@ struct Resolved {
     textures: HashMap<String, String>,
     faces: HashMap<String, (String, bool)>,
     full_cube: bool,
+    /// The model and its parents, by key, the model first.
+    chain: Vec<String>,
 }
 
 impl Models {
     fn resolve(&self, name: &str) -> Resolved {
         let mut chain = Vec::new();
+        let mut keys = Vec::new();
         let mut current = key(name);
         for _ in 0..16 {
             let Some(model) = self.raw.get(&current) else { break };
             chain.push(model);
+            keys.push(current.clone());
             match model.get("parent").and_then(Value::as_str) {
                 Some(p) => current = key(p),
                 None => break,
             }
         }
-        let mut r = Resolved::default();
+        let mut r = Resolved { chain: keys, ..Default::default() };
         // The root first, so that children override.
         for model in chain.iter().rev() {
             if let Some(t) = model.get("textures").and_then(Value::as_object) {
@@ -900,6 +984,7 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
                 "minecraft:lava" => (Some("block/lava_still".to_owned()), Tint::None),
                 _ => (top, top_tint),
             };
+            let category = Category::of_block(id, &model.chain, [top.as_deref(), side.as_deref()]);
             Block {
                 id: id.clone(),
                 name: names_en.get(id).cloned().unwrap_or_else(|| display_name(id)),
@@ -912,7 +997,7 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
                 side_tint,
                 full_cube: model.full_cube,
                 tall: *tall,
-                category: Category::of(id),
+                category,
             }
         })
         .collect();
@@ -1072,6 +1157,33 @@ pub fn block_terrain(reg: &mut Registry, block: &Block) -> TerrainId {
     TerrainId((reg.terrains.len() - 1) as u16)
 }
 
+/// A terrain of one block state typed by hand (any mod's block, with its
+/// properties), added the first time, a few blocks deep over the natural
+/// rock, named `name`.
+pub fn state_terrain(reg: &mut Registry, state: &str, name: &str, color: [u8; 3]) -> TerrainId {
+    if let Some(i) = reg.terrains.iter().position(|t| t.group == BLOCK_GROUP && t.strata.len() == 1 && t.strata[0].blocks.len() == 1 && reg.blocks[t.strata[0].blocks[0].0.index()].state == state) {
+        return TerrainId(i as u16);
+    }
+    let id = reg.intern_block(state, color);
+    let mut name = name.to_owned();
+    if reg.terrains.iter().any(|t| t.name.eq_ignore_ascii_case(&name)) {
+        name = format!("{name} ({state})");
+    }
+    reg.terrains.push(TerrainDef {
+        name,
+        group: BLOCK_GROUP.to_owned(),
+        color,
+        strata: vec![Stratum {
+            blocks: vec![(id, 1)],
+            depth: (3, 5),
+            mix: Default::default(),
+        }],
+        submerged_top: None,
+        biome_hint: None,
+    });
+    TerrainId((reg.terrains.len() - 1) as u16)
+}
+
 /// The block shown for a terrain: the main block of its surface layer.
 pub fn terrain_block<'a>(reg: &Registry, cat: &'a Catalogue, terrain: TerrainId) -> Option<&'a Block> {
     let top = reg.terrain(terrain).strata.first()?;
@@ -1204,6 +1316,27 @@ mod tests {
     }
 
     #[test]
+    fn states_typed_by_hand() {
+        assert_eq!(parse_state("regions_unexplored:redwood_log[axis=x]").as_deref(), Ok("regions_unexplored:redwood_log[axis=x]"));
+        assert_eq!(parse_state("  Stone ").as_deref(), Ok("minecraft:stone"));
+        assert_eq!(parse_state("Mod:Tall Grass[ Half = Lower , ]").as_deref(), Ok("mod:tall_grass[half=lower]"));
+        assert_eq!(parse_state("biomeswevegone:block/odd.name-2[]").as_deref(), Ok("biomeswevegone:block/odd.name-2"));
+        assert_eq!(parse_state(""), Err(StateSyntax::Empty));
+        assert!(matches!(parse_state("mod:a:b"), Err(StateSyntax::BadId(_))));
+        assert!(matches!(parse_state("mod:é"), Err(StateSyntax::BadId(_))));
+        assert!(matches!(parse_state("mod:x[axis]"), Err(StateSyntax::BadProperty(_))));
+        assert!(matches!(parse_state("mod:x[axis=y"), Err(StateSyntax::BadProperty(_))));
+        // A terrain of it, once, by its state.
+        let mut reg = Registry::vanilla();
+        let t = state_terrain(&mut reg, "regions_unexplored:redwood_log[axis=x]", "Redwood Log", [120, 60, 40]);
+        assert_eq!(state_terrain(&mut reg, "regions_unexplored:redwood_log[axis=x]", "Redwood Log", [120, 60, 40]), t);
+        assert_eq!(reg.block(reg.terrain(t).strata[0].blocks[0].0).state, "regions_unexplored:redwood_log[axis=x]");
+        let y = state_terrain(&mut reg, "regions_unexplored:redwood_log[axis=y]", "Redwood Log", [120, 60, 40]);
+        assert_ne!(y, t);
+        assert_eq!(reg.terrain(y).name, "Redwood Log (regions_unexplored:redwood_log[axis=y])", "named apart");
+    }
+
+    #[test]
     fn categories() {
         assert_eq!(Category::of("minecraft:grass_block"), Category::Natural);
         assert_eq!(Category::of("minecraft:stone"), Category::Stone);
@@ -1214,6 +1347,16 @@ mod tests {
         assert_eq!(Category::of("minecraft:red_wool"), Category::Colored);
         assert_eq!(Category::of("minecraft:netherrack"), Category::Nether);
         assert_eq!(Category::of("minecraft:end_stone"), Category::End);
+        // A mod's names that say nothing, by how the blocks are drawn.
+        let models = |m: &[&str]| m.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(Category::of_block("biomeswevegone:amaranth", &models(&["biomeswevegone:block/amaranth", "block/cross"]), [Some("biomeswevegone:block/amaranth"), None]), Category::Plants);
+        assert_eq!(Category::of_block("biomesoplenty:barley", &models(&["biomesoplenty:block/barley_bottom", "block/tinted_cross"]), [None, None]), Category::Plants);
+        assert_eq!(Category::of_block("mod:potted_amaranth", &models(&["block/flower_pot_cross", "block/cross"]), [None, None]), Category::Other);
+        assert_eq!(Category::of_block("biomeswevegone:aspen_fence", &models(&["biomeswevegone:block/aspen_fence_post"]), [Some("biomeswevegone:block/aspen/planks"), None]), Category::Wood);
+        assert_eq!(Category::of_block("biomeswevegone:aspen_hanging_sign", &[], [Some("biomeswevegone:block/aspen/stripped_log"), None]), Category::Wood);
+        assert_eq!(Category::of_block("mod:mystery", &[], [Some("mod:block/mystery_bricks"), None]), Category::Building);
+        assert_eq!(Category::of_block("mod:mystery", &[], [Some("mod:block/mystery"), None]), Category::Other);
+        assert_eq!(Category::of_block("minecraft:oak_planks", &[], [None, None]), Category::Wood, "a name that says is kept");
     }
 
     /// A tiny jar: a block state, its model chain and a texture.

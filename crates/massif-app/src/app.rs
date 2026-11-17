@@ -12187,6 +12187,64 @@ mod tests {
         }
     }
 
+    /// A block nothing in the Blocks panel finds, typed by hand with its
+    /// properties: a mod's block the blocks read do not have becomes a
+    /// terrain of that very state, and another a cover; a mistyped id says
+    /// what is wrong and offers nothing. Mod plants show without All
+    /// shapes; a search finds every shape. Renders with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn a_block_typed_by_hand() {
+        use egui_kittest::kittest::Queryable;
+        if massif_assets::find_jars().is_empty() {
+            eprintln!("no Minecraft installation: skipping");
+            return;
+        }
+        let mut h = harness(ThemeChoice::Light);
+        let ctx = h.ctx.clone();
+        h.state_mut().blocks.load(&ctx, None, Vec::new());
+        h.state_mut().layout.active = 2; // Painting: terrain, blocks, biomes
+        let started = std::time::Instant::now();
+        while h.state().blocks.catalogue.is_none() {
+            assert!(started.elapsed().as_secs() < 60, "the blocks did not load: {:?}", h.state().blocks.error);
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        // Plants show without All shapes, a search finds every shape.
+        let cat = h.state().blocks.catalogue.clone().unwrap();
+        let shown: Vec<String> = h.state_mut().blocks.sections("").iter().flat_map(|s| s.blocks.iter().map(|&i| cat.blocks[i as usize].id.clone())).collect();
+        assert!(shown.iter().any(|id| id == "minecraft:poppy"), "a flower shows at first");
+        assert!(!shown.iter().any(|id| id == "minecraft:oak_fence"), "a fence waits for All shapes");
+        let found: Vec<String> = h.state_mut().blocks.sections("oak fence").iter().flat_map(|s| s.blocks.iter().map(|&i| cat.blocks[i as usize].id.clone())).collect();
+        assert!(found.iter().any(|id| id == "minecraft:oak_fence"), "a search finds it");
+        // A mistyped id.
+        h.state_mut().blocks.typed = "regions_unexplored:red wood:log".into();
+        h.run_steps(3);
+        h.get_by_label_contains("is not a block id");
+        // A mod's block with its properties, unknown here: a terrain of it.
+        h.state_mut().blocks.typed = "regions_unexplored:redwood_log[axis=x]".into();
+        h.run_steps(3);
+        h.get_by_label_contains("Not among the blocks read");
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            h.render().unwrap().save(dir.join("blocks-typed.png")).unwrap();
+        }
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "As terrain").click();
+        h.run_steps(2);
+        let app = h.state();
+        let reg = &app.doc.world.registry;
+        let t = reg.terrain(massif_core::registry::TerrainId(app.tools.terrain));
+        assert_eq!(reg.block(t.strata[0].blocks[0].0).state, "regions_unexplored:redwood_log[axis=x]");
+        assert_eq!(app.tools.tool, Tool::PaintTerrain);
+        // A plant of the game typed: its cover.
+        h.state_mut().blocks.typed = "minecraft:poppy".into();
+        h.run_steps(2);
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "As cover").click();
+        h.run_steps(2);
+        let app = h.state();
+        let cover = app.doc.world.registry.cover(app.tools.cover).unwrap();
+        assert_eq!(cover.plants[0].0, "minecraft:poppy");
+        assert_eq!(app.tools.tool, Tool::Cover);
+    }
+
     /// The game's real blocks: loaded from this computer's installation,
     /// shown with their textures, painted on the map. Runs with
     /// MASSIF_SNAPSHOT_DIR, when a Minecraft jar is installed.

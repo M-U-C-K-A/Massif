@@ -35,6 +35,9 @@ pub struct BlockLibrary {
     /// What reading an instance left to say (the version of the game it
     /// plays is not installed…).
     pub notice: Option<String>,
+    /// A block id typed by hand (`mod:block[property=value]`), for a block
+    /// nothing in the panel finds.
+    pub typed: String,
     /// The sections the panel shows, for the catalogue, search and shapes
     /// they were made for.
     sections: Option<(usize, String, bool, Arc<Vec<Section>>)>,
@@ -206,6 +209,9 @@ impl BlockLibrary {
 /// The sections of the Blocks panel (see [`BlockLibrary::sections`]).
 /// `needle` is the search, lowercase; `all` shows every shape.
 fn make_sections(cat: &Catalogue, needle: &str, all: bool) -> Vec<Section> {
+    // Whole blocks and plants (terrains and covers) show at first; a
+    // search looks through every shape, as All shapes does.
+    let all = all || !needle.is_empty();
     use massif_assets::{Category, namespace};
     let matches = |b: &Block, source: Option<&str>| needle.is_empty() || b.name.to_lowercase().contains(needle) || b.id.contains(needle) || source.is_some_and(|s| s.to_lowercase().contains(needle));
     let index: HashMap<&str, u32> = cat.blocks.iter().enumerate().map(|(i, b)| (b.id.as_str(), i as u32)).collect();
@@ -218,7 +224,7 @@ fn make_sections(cat: &Catalogue, needle: &str, all: bool) -> Vec<Section> {
                 .blocks
                 .iter()
                 .enumerate()
-                .filter(|(_, b)| b.category == category && (all || b.full_cube) && filter(b) && matches(b, source))
+                .filter(|(_, b)| b.category == category && (all || b.full_cube || b.category == Category::Plants) && filter(b) && matches(b, source))
                 .map(|(i, _)| i as u32)
                 .collect();
             if blocks.is_empty() {

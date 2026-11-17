@@ -2849,6 +2849,87 @@ pub fn terrain_icon(ui: &mut Ui, rect: Rect, reg: &Registry, terrain: u16, block
 }
 
 /// Every block of the game, with its real textures: click one to paint it.
+/// A block id typed by hand, for a block nothing in the panel finds (any
+/// mod's, with its properties): painted as a terrain or grown as a cover.
+/// A block the catalogue has keeps its textures and colour; another is
+/// written as typed, in grey on the map. Returns what to say.
+fn typed_block(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary, cat: &massif_assets::Catalogue) -> Option<String> {
+    let pal = Palette::of(ui);
+    let parsed = massif_assets::parse_state(&blocks.typed);
+    let mut pick: Option<bool> = None;
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut blocks.typed)
+                .hint_text(tr!("Block id: mod:block[property=value]"))
+                .desired_width((ui.available_width() - 168.0).max(80.0)),
+        )
+        .on_hover_text(tr!("Any block of the game or of a mod by its id, with its properties if it has any: for a block the list does not show"));
+        let ok = parsed.is_ok();
+        if ui.add_enabled(ok, egui::Button::new(tr!("As terrain")).small()).on_hover_text(tr!("Paint it as the ground")).clicked() {
+            pick = Some(true);
+        }
+        if ui.add_enabled(ok, egui::Button::new(tr!("As cover")).small()).on_hover_text(tr!("Grow it over the ground")).clicked() {
+            pick = Some(false);
+        }
+    });
+    let state = match parsed {
+        Ok(state) => state,
+        Err(massif_assets::StateSyntax::Empty) => return None,
+        Err(e) => {
+            let text = match e {
+                massif_assets::StateSyntax::BadId(id) => tr!("{id} is not a block id: letters, digits and _ - . / only, the mod's name before a colon.", id),
+                massif_assets::StateSyntax::BadProperty(p) => tr!("{p} is not a property: write [name=value,name=value].", p),
+                massif_assets::StateSyntax::Empty => String::new(),
+            };
+            ui.label(RichText::new(text).size(11.5).color(pal.danger));
+            return None;
+        }
+    };
+    let id = state.split('[').next().unwrap_or(&state).to_owned();
+    let known = cat.block(&id);
+    let problem = cat.check_state(&state).err();
+    let note = match (&problem, known) {
+        (Some(massif_assets::materials::StateProblem::UnknownBlock(b)), _) => (tr!("{b} is not a block of the game, by its mod's list.", b), pal.danger),
+        (Some(massif_assets::materials::StateProblem::UnknownProperty { block, property }), _) => (tr!("{block} has no property {property}.", block, property), pal.danger),
+        (Some(massif_assets::materials::StateProblem::BadValue { block, property, value }), _) => (tr!("{block}: {property} cannot be {value}.", block, property, value), pal.danger),
+        (None, Some(b)) => (tr!("{name}, of the blocks read.", name = b.name), pal.weak),
+        (None, None) => (tr!("Not among the blocks read: written as typed, in grey on the map. The game needs its mod to have it.").to_owned(), pal.weak),
+    };
+    ui.label(RichText::new(note.0).size(11.5).color(note.1));
+    let terrain = pick?;
+    doc.mark_changed();
+    let reg = &mut doc.world.registry;
+    let plain = !state.contains('[');
+    let name = known.map_or_else(|| state.clone(), |b| b.name.clone());
+    let color = known.map_or([128, 128, 128], |b| if terrain || b.full_cube { b.color } else { b.side_color });
+    if terrain {
+        let t = match known.filter(|b| plain && b.full_cube) {
+            Some(b) => massif_assets::block_terrain(reg, b),
+            None => massif_assets::state_terrain(reg, &state, &name, color),
+        };
+        tools.terrain = t.0;
+        if tools.tool != Tool::PaintTerrain {
+            tools.select(Tool::PaintTerrain);
+        }
+        Some(tr!("Painting {name}", name))
+    } else {
+        tools.cover = match known.filter(|_| plain) {
+            Some(b) => block_cover(reg, b),
+            None => {
+                let existing = reg.covers.iter().position(|c| !c.removed && c.plants.len() == 1 && c.plants[0].0 == state);
+                match existing {
+                    Some(k) => k as u16 + 1,
+                    None => reg.add_cover(massif_core::registry::CoverDef::new(&name, color, &[(&state, 1)], 0.5)),
+                }
+            }
+        };
+        if tools.tool != Tool::Cover {
+            tools.select(Tool::Cover);
+        }
+        Some(tr!("Painting {name} as a ground cover", name))
+    }
+}
+
 pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary, jar: &mut Option<std::path::PathBuf>, mods: &mut Vec<std::path::PathBuf>) -> Option<String> {
     let pal = Palette::of(ui);
     let ctx = ui.ctx().clone();
@@ -3007,6 +3088,9 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
         crate::widgets::checkbox(ui, &mut blocks.all, tr!("All shapes"))
             .on_hover_text(tr!("Also non-cube blocks, and every shape of a mod's blocks (slabs, stairs, arches…)"));
     });
+    if let Some(said) = typed_block(ui, tools, doc, blocks, &cat) {
+        feedback = Some(said);
+    }
     let needle = blocks.search.to_lowercase();
     let reg = &doc.world.registry;
     let current = massif_assets::terrain_block(reg, &cat, TerrainId(tools.terrain)).map(|b| b.id.clone());

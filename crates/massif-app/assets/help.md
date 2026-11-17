@@ -131,7 +131,8 @@ Each change of the selection is a step to undo. The selection is saved in the ma
 
 - Where Conquest Reforged is installed, the Blocks panel offers it: **Use** reads its instance in one step, its mod, its list of blocks for WorldPainter (`conquest_wp.csv`) and its resource packs, over Minecraft 1.20.1, the version it plays.
 - **Blocks ▸ Mods ▸ Instance…** reads any modpack's instance the same way; **Add mods…** takes jars of mods with blocks (Conquest Reforged, Chipped, Macaw's…), resource packs (`.zip`) and lists of blocks made for WorldPainter (`.csv`) one by one. Click a chip to take it out.
-- A mod's blocks show in its own creative tabs (Conquest Reforged's 36), with their textures; **All shapes** adds each block's slabs, stairs, arches and other shapes after it. A whole block paints as a terrain, any other as a ground cover; tall plants grow in two halves, and plants grow on the mod's own grass, moss and soils.
+- A mod's blocks show in its own creative tabs (Conquest Reforged's 36), with their textures, else by family (a block's family read from its name, or from how it is drawn: plants, wood, building blocks). Whole blocks and plants show at first; **All shapes** adds each block's slabs, stairs, arches and other shapes, and the search looks through all of them.
+- **Any block by its id**: type it under the search, with its properties (`mod:block[axis=x]`), then **As terrain** or **As cover**. A block the panel does not have is written as typed, in grey on the map. A whole block paints as a terrain, any other as a ground cover; tall plants grow in two halves, and plants grow on the mod's own grass, moss and soils.
 - **Export** picks the version the mod is made for (1.20.1 for Conquest Reforged) and its instance's saves, and warns in red when the version or the mod does not match. Blocks are written by their own ids and states: open the world with the same mods in the game.
 
 ## Automatic biomes and paint
