@@ -261,10 +261,10 @@ pub fn dialog(ctx: &egui::Context, dialog: &mut Option<PackDialog>, library: &mu
                     if ui.add_enabled(free, theme::primary_button(ui, tr!("Keep both"))).clicked() {
                         action = Some(true);
                     }
-                    if ui.button(tr!("Replace")).clicked() {
+                    if crate::widgets::button(ui, tr!("Replace")).clicked() {
                         action = Some(false);
                     }
-                    if ui.button(tr!("Cancel")).clicked() {
+                    if crate::widgets::button(ui, tr!("Cancel")).clicked() {
                         close = true;
                     }
                 });
@@ -301,7 +301,7 @@ pub fn dialog(ctx: &egui::Context, dialog: &mut Option<PackDialog>, library: &mu
                     if ui.add(egui::Button::new(RichText::new(tr!("Remove")).color(Color32::WHITE)).fill(pal.danger)).clicked() {
                         remove = true;
                     }
-                    if ui.button(tr!("Cancel")).clicked() {
+                    if crate::widgets::button(ui, tr!("Cancel")).clicked() {
                         close = true;
                     }
                 });
@@ -409,7 +409,7 @@ fn export_ui(ui: &mut Ui, form: &mut ExportForm, reg: &massif_core::Registry, cl
             ui.label(RichText::new(tr!("Picture")).medium());
             ui.label(RichText::new(if form.picture.is_some() { tr!("Chosen") } else { tr!("Made from what it holds") }).size(11.5).color(pal.weak));
             ui.horizontal(|ui| {
-                if ui.button(tr!("Choose…")).clicked()
+                if crate::widgets::button(ui, tr!("Choose…")).clicked()
                     && let Some(path) = rfd::FileDialog::new().set_title(tr!("A picture for the pack")).add_filter(tr!("Pictures"), &["png", "jpg", "jpeg"]).pick_file()
                 {
                     match std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| pack_file::picture_from_file(&b).map_err(|e| e.to_string())) {
@@ -417,7 +417,7 @@ fn export_ui(ui: &mut Ui, form: &mut ExportForm, reg: &massif_core::Registry, cl
                         Err(e) => form.error = Some(e),
                     }
                 }
-                if form.picture.is_some() && ui.button(tr!("Reset")).clicked() {
+                if form.picture.is_some() && crate::widgets::button(ui, tr!("Reset")).clicked() {
                     form.picture = None;
                 }
             });
@@ -448,7 +448,7 @@ fn export_ui(ui: &mut Ui, form: &mut ExportForm, reg: &massif_core::Registry, cl
                     Err(e) => form.error = Some(massif_core::atomic::describe(&e, &path)),
                 }
             }
-            if ui.button(tr!("Cancel")).clicked() {
+            if crate::widgets::button(ui, tr!("Cancel")).clicked() {
                 *close = true;
             }
         });
@@ -501,11 +501,11 @@ pub fn library_ui(ui: &mut Ui, library: &mut PackLibrary, needle: &str, tools: &
             });
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                 ui.menu_button(theme::glyph(Icon::Ellipsis).to_string(), |ui| {
-                    if ui.button(theme::with_icon(Icon::FileDown, tr!("Export a copy…"))).clicked() {
+                    if crate::widgets::button(ui, theme::with_icon(Icon::FileDown, tr!("Export a copy…"))).clicked() {
                         library.request = Some(Request::Share(p));
                         ui.close();
                     }
-                    if ui.button(theme::with_icon(Icon::Trash2, tr!("Remove…"))).clicked() {
+                    if crate::widgets::button(ui, theme::with_icon(Icon::Trash2, tr!("Remove…"))).clicked() {
                         library.request = Some(Request::Remove(p));
                         ui.close();
                     }

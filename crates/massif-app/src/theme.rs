@@ -395,6 +395,8 @@ pub fn primary_button(ui: &egui::Ui, text: impl Into<String>) -> egui::Button<'s
         .stroke(Stroke::NONE)
         .corner_radius(CornerRadius::same(255))
         .min_size(vec2(0.0, 28.0))
+        // On one line: cut where the room is short, never folded in two.
+        .truncate()
 }
 
 /// The system's interface typeface and its monospaced one, when they can be
@@ -567,7 +569,10 @@ pub fn install(ctx: &egui::Context) {
         ]
         .into();
         style.spacing.item_spacing = vec2(8.0, 6.0);
-        style.spacing.button_padding = vec2(12.0, 4.0);
+        // 5.25 points over and under a line of 13-point text (15.4 high) fill
+        // the 26 points of a control: egui sets a text field's text at the
+        // top of its margin, so this centres it, buttons keeping their size.
+        style.spacing.button_padding = vec2(12.0, 5.25);
         style.spacing.interact_size = vec2(28.0, 26.0);
         style.spacing.slider_width = 120.0;
         style.spacing.slider_rail_height = 4.0;

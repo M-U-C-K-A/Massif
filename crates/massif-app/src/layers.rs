@@ -225,7 +225,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     // Layers exported from WorldPainter; the word Experimental under the
     // button in a narrow panel.
     ui.horizontal_wrapped(|ui| {
-        if ui.button(theme::with_icon(Icon::FileInput, tr!("Import WorldPainter layer…"))).on_hover_text(tr!("Custom layers exported from WorldPainter (.layer): plants, objects, ground covers, pockets, combined layers")).clicked() {
+        if crate::widgets::button(ui, theme::with_icon(Icon::FileInput, tr!("Import WorldPainter layer…"))).on_hover_text(tr!("Custom layers exported from WorldPainter (.layer): plants, objects, ground covers, pockets, combined layers")).clicked() {
             let files = rfd::FileDialog::new().set_title(tr!("Import WorldPainter layers")).add_filter(tr!("WorldPainter layers"), &["layer"]).pick_files().unwrap_or_default();
             if !files.is_empty() {
                 state.imported = Some(import_wp_layers(doc, tools, &files));
@@ -584,38 +584,38 @@ fn row(ui: &mut Ui, e: &Entry, state: &mut LayersUi, actions: &mut Vec<Action>) 
         actions.push(Action::Paint(e.kind, e.id));
     }
     response.context_menu(|ui| {
-        if e.kind != Kind::Mix && ui.button(theme::with_icon(Icon::SlidersHorizontal, tr!("Settings…"))).clicked() {
+        if e.kind != Kind::Mix && crate::widgets::button(ui, theme::with_icon(Icon::SlidersHorizontal, tr!("Settings…"))).clicked() {
             actions.push(Action::Settings(e.kind, e.id));
             ui.close();
         }
-        if ui.button(theme::with_icon(Icon::Paintbrush, tr!("Paint with it"))).clicked() {
+        if crate::widgets::button(ui, theme::with_icon(Icon::Paintbrush, tr!("Paint with it"))).clicked() {
             actions.push(Action::Paint(e.kind, e.id));
             ui.close();
         }
-        if ui.button(theme::with_icon(Icon::Pencil, tr!("Rename"))).clicked() {
+        if crate::widgets::button(ui, theme::with_icon(Icon::Pencil, tr!("Rename"))).clicked() {
             actions.push(Action::Rename(e.kind, e.id, e.name.clone()));
             ui.close();
         }
-        if ui.button(theme::with_icon(Icon::Copy, tr!("Duplicate"))).clicked() {
+        if crate::widgets::button(ui, theme::with_icon(Icon::Copy, tr!("Duplicate"))).clicked() {
             actions.push(Action::Duplicate(e.kind, e.id));
             ui.close();
         }
-        if ui.button(theme::with_icon(Icon::ArrowUp, tr!("Move up"))).clicked() {
+        if crate::widgets::button(ui, theme::with_icon(Icon::ArrowUp, tr!("Move up"))).clicked() {
             actions.push(Action::Move(e.kind, e.id, true));
             ui.close();
         }
-        if ui.button(theme::with_icon(Icon::ArrowDown, tr!("Move down"))).clicked() {
+        if crate::widgets::button(ui, theme::with_icon(Icon::ArrowDown, tr!("Move down"))).clicked() {
             actions.push(Action::Move(e.kind, e.id, false));
             ui.close();
         }
         if let Some(on) = e.shown
-            && ui.button(theme::with_icon(if on { Icon::EyeOff } else { Icon::Eye }, if on { tr!("Hide on the map") } else { tr!("Show on the map") })).clicked()
+            && crate::widgets::button(ui, theme::with_icon(if on { Icon::EyeOff } else { Icon::Eye }, if on { tr!("Hide on the map") } else { tr!("Show on the map") })).clicked()
         {
             actions.push(Action::ToggleShown(e.kind, e.id));
             ui.close();
         }
         if let Some(locked) = e.locked
-            && ui.button(theme::with_icon(if locked { Icon::LockOpen } else { Icon::Lock }, if locked { tr!("Unlock") } else { tr!("Lock") })).clicked()
+            && crate::widgets::button(ui, theme::with_icon(if locked { Icon::LockOpen } else { Icon::Lock }, if locked { tr!("Unlock") } else { tr!("Lock") })).clicked()
         {
             actions.push(Action::ToggleLock(e.kind, e.id));
             ui.close();
@@ -629,7 +629,7 @@ fn row(ui: &mut Ui, e: &Entry, state: &mut LayersUi, actions: &mut Vec<Action>) 
             Kind::Pockets => tr!("No pocket where it was painted any more"),
             Kind::Combined => tr!("What it painted stays"),
         };
-        if ui.button(RichText::new(theme::with_icon(Icon::Trash2, tr!("Remove"))).color(pal.danger)).on_hover_text(what).clicked() {
+        if crate::widgets::button(ui, RichText::new(theme::with_icon(Icon::Trash2, tr!("Remove"))).color(pal.danger)).on_hover_text(what).clicked() {
             actions.push(Action::Remove(e.kind, e.id));
             ui.close();
         }

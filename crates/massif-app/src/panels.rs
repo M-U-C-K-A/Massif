@@ -612,10 +612,10 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
                     ui.label(RichText::new(draft.summary()).strong());
                     hint(ui, tr!("Drag the river to guide it · click elsewhere: where it ends · right-click a point: remove it."));
                     ui.horizontal(|ui| {
-                        if ui.button(theme::with_icon(Icon::Route, tr!("Dig river"))).on_hover_text(tr!("Enter")).clicked() {
+                        if crate::widgets::button(ui, theme::with_icon(Icon::Route, tr!("Dig river"))).on_hover_text(tr!("Enter")).clicked() {
                             tools.river_note = crate::tools::dig_draft(doc, tools);
                         }
-                        if ui.button(tr!("Cancel")).on_hover_text(tr!("Esc")).clicked() {
+                        if crate::widgets::button(ui, tr!("Cancel")).on_hover_text(tr!("Esc")).clicked() {
                             tools.river_draft = None;
                         }
                     });
@@ -700,11 +700,16 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
         }
         if tool.needs_slab_level() && doc.active_kind() == LevelKind::Ground {
             ui.label(RichText::new(tr!("This tool edits a Solid or Carve level.")).color(pal.danger).size(12.0));
+            // In a narrow panel, the Levels panel's short names: cut, the
+            // long ones would read the same.
+            let short = ui.available_width() < 220.0;
             ui.horizontal_wrapped(|ui| {
-                if ui.button(tr!("{glyph} Add solid level", glyph = theme::glyph(Icon::Plus))).clicked() {
+                let solid = if short { tr!("{glyph} Solid", glyph = theme::glyph(Icon::Plus)) } else { tr!("{glyph} Add solid level", glyph = theme::glyph(Icon::Plus)) };
+                if crate::widgets::button(ui, solid).clicked() {
                     doc.add_level(LevelKind::Solid);
                 }
-                if ui.button(tr!("{glyph} Add carve level", glyph = theme::glyph(Icon::Plus))).clicked() {
+                let carve = if short { tr!("{glyph} Carve", glyph = theme::glyph(Icon::Plus)) } else { tr!("{glyph} Add carve level", glyph = theme::glyph(Icon::Plus)) };
+                if crate::widgets::button(ui, carve).clicked() {
                     doc.add_level(LevelKind::Carve);
                 }
             });
@@ -817,13 +822,13 @@ pub fn brushes_panel(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibr
 
     section(ui, Icon::Images, tr!("Your brushes"));
     ui.horizontal_wrapped(|ui| {
-        if ui.button(theme::with_icon(Icon::Plus, tr!("Add brushes…"))).clicked() {
+        if crate::widgets::button(ui, theme::with_icon(Icon::Plus, tr!("Add brushes…"))).clicked() {
             feedback = add_brushes(library, None, ui.ctx());
         }
-        if ui.button(theme::with_icon(Icon::FolderPlus, tr!("New group…"))).clicked() {
+        if crate::widgets::button(ui, theme::with_icon(Icon::FolderPlus, tr!("New group…"))).clicked() {
             *new_group = Some(String::new());
         }
-        if ui.button(theme::with_icon(Icon::FolderOpen, tr!("Open the folder"))).clicked()
+        if crate::widgets::button(ui, theme::with_icon(Icon::FolderOpen, tr!("Open the folder"))).clicked()
             && let Err(e) = library.open_folder()
         {
             feedback = Some(tr!("Could not open the brushes folder: {e}", e));
@@ -843,10 +848,10 @@ pub fn brushes_panel(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibr
                 edit.request_focus();
             }
             let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if ui.button(tr!("Create")).clicked() || enter {
+            if crate::widgets::button(ui, tr!("Create")).clicked() || enter {
                 done = Some(true);
             }
-            if ui.button(tr!("Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if crate::widgets::button(ui, tr!("Cancel")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 done = Some(false);
             }
         });
@@ -884,7 +889,7 @@ pub fn custom_brushes_panel(ui: &mut Ui, tools: &mut ToolState, library: &mut Br
     }
     if library.groups.is_empty() {
         hint(ui, tr!("No custom brushes yet."));
-        if ui.button(theme::with_icon(Icon::Plus, tr!("Add brushes…"))).clicked() {
+        if crate::widgets::button(ui, theme::with_icon(Icon::Plus, tr!("Add brushes…"))).clicked() {
             feedback = add_brushes(library, None, ui.ctx());
         }
         return feedback;
@@ -1196,8 +1201,7 @@ fn object_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, block
             .pick_files()
             .unwrap_or_default()
     };
-    if ui
-        .button(theme::with_icon(Icon::FolderOpen, tr!("Import objects…")))
+    if crate::widgets::button(ui, theme::with_icon(Icon::FolderOpen, tr!("Import objects…")))
         .on_hover_text(tr!("Sponge .schem, MCEdit .schematic, Axiom .bp, Litematica .litematic, structure .nbt"))
         .clicked()
     {
@@ -1356,7 +1360,7 @@ pub fn object_layer_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Documen
     if let Some(row) = remove {
         layer.objects.remove(row);
     }
-    let add = ui.button(theme::with_icon(Icon::Plus, tr!("Add objects…"))).on_hover_text(tr!("Read more files into this layer")).clicked();
+    let add = crate::widgets::button(ui, theme::with_icon(Icon::Plus, tr!("Add objects…"))).on_hover_text(tr!("Read more files into this layer")).clicked();
     if layer.objects.is_empty() {
         hint(ui, tr!("Nothing stands yet: add objects."));
     }
@@ -1658,7 +1662,7 @@ fn pocket_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, block
     if let Some(n) = picked {
         tools.pocket_layer = n;
     }
-    if ui.button(theme::with_icon(Icon::Plus, tr!("New pockets"))).on_hover_text(tr!("Pockets of your own: any blocks, in the rock under the ground")).clicked() {
+    if crate::widgets::button(ui, theme::with_icon(Icon::Plus, tr!("New pockets"))).on_hover_text(tr!("Pockets of your own: any blocks, in the rock under the ground")).clicked() {
         let dim = &doc.world.dims[doc.dim];
         tools.pocket_layer = new_pockets(&mut doc.world.registry, dim);
     }
@@ -1784,7 +1788,7 @@ pub fn pocket_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             }
             if needle.contains(':') || (shown == 0 && !needle.is_empty()) {
                 let id = if needle.contains(':') { needle.clone() } else { format!("minecraft:{}", needle.replace(' ', "_")) };
-                if ui.button(tr!("Add {id}", id)).clicked() {
+                if crate::widgets::button(ui, tr!("Add {id}", id)).clicked() {
                     added = Some(id);
                 }
             }
@@ -1796,7 +1800,7 @@ pub fn pocket_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
     });
     hint(ui, tr!("In the rock under the ground's strata, where the layer is painted: blobs of these blocks, as WorldPainter's underground pockets. Shown over the map while the tool is in hand."));
     ui.add_space(6.0);
-    if ui.button(RichText::new(theme::with_icon(Icon::Trash2, tr!("Remove this layer"))).color(pal.danger)).on_hover_text(tr!("No pocket where it was painted any more")).clicked() {
+    if crate::widgets::button(ui, RichText::new(theme::with_icon(Icon::Trash2, tr!("Remove this layer"))).color(pal.danger)).on_hover_text(tr!("No pocket where it was painted any more")).clicked() {
         def.removed = true;
         tools.pocket_layer = reg.pockets.iter().position(|p| !p.removed).map_or(0, |k| k as u16 + 1);
     }
@@ -1898,7 +1902,7 @@ fn combined_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
     if let Some(n) = picked {
         tools.combined = n;
     }
-    if ui.button(theme::with_icon(Icon::Plus, tr!("New combined layer"))).on_hover_text(tr!("Several layers painted at once: a terrain, a biome, a cover, trees, pockets")).clicked() {
+    if crate::widgets::button(ui, theme::with_icon(Icon::Plus, tr!("New combined layer"))).on_hover_text(tr!("Several layers painted at once: a terrain, a biome, a cover, trees, pockets")).clicked() {
         tools.combined = new_combined(&mut doc.world.registry);
     }
     combined_editor(ui, tools, doc);
@@ -1989,7 +1993,7 @@ pub fn combined_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
     });
     hint(ui, tr!("Each layer goes to its slot of the blocks, over its share of the columns painted, as its own tool paints it: a block keeps one layer of each slot. Changing the combined layer changes what it paints next, not what it painted. Right button: rub out what it paints."));
     ui.add_space(6.0);
-    if ui.button(RichText::new(theme::with_icon(Icon::Trash2, tr!("Remove this layer"))).color(pal.danger)).on_hover_text(tr!("What it painted stays")).clicked() {
+    if crate::widgets::button(ui, RichText::new(theme::with_icon(Icon::Trash2, tr!("Remove this layer"))).color(pal.danger)).on_hover_text(tr!("What it painted stays")).clicked() {
         def.removed = true;
         tools.combined = doc.world.registry.combined.iter().position(|c| !c.removed).map_or(0, |k| k as u16 + 1);
     }
@@ -2036,7 +2040,7 @@ fn cover_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks
     if let Some(n) = picked {
         tools.cover = n;
     }
-    if ui.button(theme::with_icon(Icon::Plus, tr!("New cover"))).on_hover_text(tr!("A cover of your own: any blocks, any mix")).clicked() {
+    if crate::widgets::button(ui, theme::with_icon(Icon::Plus, tr!("New cover"))).on_hover_text(tr!("A cover of your own: any blocks, any mix")).clicked() {
         tools.cover = new_cover(&mut doc.world.registry);
     }
     hint(ui, tr!("Non-cube blocks clicked in Blocks become covers too. Every cover and object layer of the map: the Layers panel."));
@@ -2200,7 +2204,7 @@ pub fn cover_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
             // Any block by its id.
             if needle.contains(':') || (shown == 0 && !needle.is_empty()) {
                 let id = if needle.contains(':') { needle.clone() } else { format!("minecraft:{}", needle.replace(' ', "_")) };
-                if ui.button(tr!("Add {id}", id)).clicked() {
+                if crate::widgets::button(ui, tr!("Add {id}", id)).clicked() {
                     added = Some(id);
                 }
             }
@@ -2530,7 +2534,7 @@ fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
         });
         let selected = doc.world.registry.terrain(TerrainId(tools.terrain)).name.clone();
         if !tools.pattern.terrains.iter().any(|t| t.0 == selected)
-            && ui.button(theme::with_icon(Icon::Pipette, &selected)).on_hover_text(tr!("Add the terrain chosen in Terrain or Blocks")).clicked()
+            && crate::widgets::button(ui, theme::with_icon(Icon::Pipette, &selected)).on_hover_text(tr!("Add the terrain chosen in Terrain or Blocks")).clicked()
         {
             added = Some(Pick::Terrain(selected));
         }
@@ -3251,16 +3255,16 @@ fn match_list(ui: &mut Ui, label: &str, list: &mut Option<Vec<massif_core::filte
                     items.push(m);
                 }
             };
-            if ui.button(tr!("Water")).clicked() {
+            if crate::widgets::button(ui, tr!("Water")).clicked() {
                 add(Match::Water, items);
             }
-            if ui.button(tr!("Dry land")).clicked() {
+            if crate::widgets::button(ui, tr!("Dry land")).clicked() {
                 add(Match::Land, items);
             }
             ui.menu_button(tr!("Terrains"), |ui| {
                 egui::ScrollArea::vertical().id_salt((id, "terrains")).max_height(320.0).show(ui, |ui| {
                     for (i, t) in reg.terrains.iter().enumerate() {
-                        if ui.button(&t.name).clicked() {
+                        if crate::widgets::button(ui, &t.name).clicked() {
                             add(Match::Terrain(i as u16), items);
                         }
                     }
@@ -3269,7 +3273,7 @@ fn match_list(ui: &mut Ui, label: &str, list: &mut Option<Vec<massif_core::filte
             ui.menu_button(tr!("Biomes"), |ui| {
                 egui::ScrollArea::vertical().id_salt((id, "biomes")).max_height(320.0).show(ui, |ui| {
                     for (i, b) in reg.biomes.iter().enumerate().skip(1) {
-                        if ui.button(&b.name).clicked() {
+                        if crate::widgets::button(ui, &b.name).clicked() {
                             add(Match::Biome(i as u16), items);
                         }
                     }
@@ -3359,13 +3363,10 @@ fn typed_block(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &
     let pal = Palette::of(ui);
     let parsed = massif_assets::parse_state(&blocks.typed);
     let mut pick: Option<bool> = None;
-    ui.horizontal(|ui| {
-        ui.add(
-            egui::TextEdit::singleline(&mut blocks.typed)
-                .hint_text(tr!("Block id: mod:block[property=value]"))
-                .desired_width((ui.available_width() - 168.0).max(80.0)),
-        )
+    // The id over the whole width, its two buttons after it or under it.
+    ui.add(egui::TextEdit::singleline(&mut blocks.typed).hint_text(tr!("Block id: mod:block[property=value]")).desired_width(ui.available_width()))
         .on_hover_text(tr!("Any block of the game or of a mod by its id, with its properties if it has any: for a block the list does not show"));
+    ui.horizontal_wrapped(|ui| {
         let ok = parsed.is_ok();
         if ui.add_enabled(ok, egui::Button::new(tr!("As terrain")).small()).on_hover_text(tr!("Paint it as the ground")).clicked() {
             pick = Some(true);
@@ -3502,7 +3503,7 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
             }
         }
         if ui
-            .small_button(theme::with_icon(Icon::Plus, tr!("Add mods…")))
+            .add(egui::Button::new(theme::with_icon(Icon::Plus, tr!("Add mods…"))).small().truncate())
             .on_hover_text(tr!("The jars of mods with blocks, from the mods folder of your instance, the resource packs (.zip) that give them their textures, and the lists of blocks made for WorldPainter (.csv) that give their states: their blocks are painted and exported like the game's"))
             .clicked()
             && let Some(files) = rfd::FileDialog::new().set_title(tr!("Choose mods and resource packs")).add_filter(tr!("Mods, resource packs and block lists"), &["jar", "zip", "csv"]).pick_files()
@@ -3515,7 +3516,7 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
             }
         }
         if ui
-            .small_button(theme::with_icon(Icon::FolderOpen, tr!("Instance…")))
+            .add(egui::Button::new(theme::with_icon(Icon::FolderOpen, tr!("Instance…"))).small().truncate())
             .on_hover_text(tr!("A modpack's instance (CurseForge, Prism, Modrinth…): its mods with blocks, its resource packs and its lists of blocks at once, over the version of the game it plays"))
             .clicked()
             && let Some(dir) = rfd::FileDialog::new().set_title(tr!("Choose a modpack's instance")).pick_folder()
@@ -3584,11 +3585,8 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     }
 
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        crate::widgets::search(ui, &mut blocks.search, &tr!("Search {n} blocks", n = cat.blocks.len()), (ui.available_width() - 110.0).max(80.0));
-        crate::widgets::checkbox(ui, &mut blocks.all, tr!("All shapes"))
-            .on_hover_text(tr!("Also non-cube blocks, and every shape of a mod's blocks (slabs, stairs, arches…)"));
-    });
+    crate::widgets::search(ui, &mut blocks.search, &tr!("Search {n} blocks", n = cat.blocks.len()), f32::INFINITY);
+    crate::widgets::checkbox(ui, &mut blocks.all, tr!("All shapes")).on_hover_text(tr!("Also non-cube blocks, and every shape of a mod's blocks (slabs, stairs, arches…)"));
     if let Some(said) = typed_block(ui, tools, doc, blocks, &cat) {
         feedback = Some(said);
     }
@@ -3905,10 +3903,10 @@ pub fn levels_panel(ui: &mut Ui, doc: &mut Document, rename: &mut Option<(usize,
         tr!("Solid adds rock, Carve removes it. Higher wins."),
     );
     ui.horizontal_wrapped(|ui| {
-        if ui.button(tr!("{glyph} Solid", glyph = theme::glyph(Icon::Plus))).on_hover_text(tr!("Add a level that adds matter")).clicked() {
+        if crate::widgets::button(ui, tr!("{glyph} Solid", glyph = theme::glyph(Icon::Plus))).on_hover_text(tr!("Add a level that adds matter")).clicked() {
             doc.add_level(LevelKind::Solid);
         }
-        if ui.button(tr!("{glyph} Carve", glyph = theme::glyph(Icon::Plus))).on_hover_text(tr!("Add a level that removes matter")).clicked() {
+        if crate::widgets::button(ui, tr!("{glyph} Carve", glyph = theme::glyph(Icon::Plus))).on_hover_text(tr!("Add a level that removes matter")).clicked() {
             doc.add_level(LevelKind::Carve);
         }
     });

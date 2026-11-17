@@ -16040,6 +16040,11 @@ mod tests {
                 // Each panel as it settles, not half-way through a fold or a
                 // scroll bar coming, however slowly a loaded machine draws.
                 app.settings.reduce_motion = Follow::On;
+                // The game's blocks where the game is installed: the Blocks
+                // panel, the pickers and their searches as users see them.
+                if let Some(jar) = massif_assets::find_jars().first() {
+                    app.blocks.catalogue = massif_assets::load(&jar.path, &jar.version).ok().map(std::sync::Arc::new);
+                }
                 app
             });
         h.run_steps(3);
@@ -16077,6 +16082,15 @@ mod tests {
                     // Text inside a field scrolls there.
                     if unnamed && node.accesskit_node().role() == egui::accesskit::Role::Unknown || node.accesskit_node().role() == egui::accesskit::Role::TextRun {
                         continue;
+                    }
+                    // A button's words folded onto two lines inside it.
+                    let role = node.accesskit_node().role();
+                    if matches!(role, egui::accesskit::Role::Button | egui::accesskit::Role::ComboBox) && r.height() > 36.0 && r.width() < area.width() {
+                        let label = node.accesskit_node().label().unwrap_or_default();
+                        let fault = format!("{:?} {what} {editor:?}: {role:?} {label:?} folded, {:.0} high", crate::i18n::current(), r.height());
+                        if !label.is_empty() && !faults.contains(&fault) {
+                            faults.push(fault);
+                        }
                     }
                     if left {
                         let label = node.accesskit_node().label().or_else(|| node.accesskit_node().value()).unwrap_or_default();

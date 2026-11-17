@@ -476,6 +476,13 @@ pub fn row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
     name.add(egui::Label::new(egui::RichText::new(label).size(12.5)).truncate());
 }
 
+/// A button whose words stay on one line: cut with an ellipsis (whole on
+/// hover) where the panel is narrower than they are, rather than folded
+/// onto two lines inside it.
+pub fn button(ui: &mut Ui, text: impl Into<egui::WidgetText>) -> Response {
+    ui.add(egui::Button::new(text).truncate())
+}
+
 /// A search field: a pill with a magnifier at its left, the text after it,
 /// `hint` in it while empty, centred top to bottom. `width` at most (as
 /// wide as the room with `f32::INFINITY`). The text is laid inside the
@@ -494,7 +501,9 @@ pub fn search_with<'t>(ui: &mut Ui, text: &'t mut String, hint: &str, width: f32
     let (rect, _) = ui.allocate_exact_size(vec2(w, height), Sense::hover());
     let back = ui.painter().add(egui::Shape::Noop);
     let icon_x = rect.left() + height * 0.5;
-    let inner = Rect::from_min_max(egui::pos2(icon_x + 14.0, rect.top()), egui::pos2(rect.right() - height * 0.45, rect.bottom()));
+    // The text 9 points clear of the magnifier (7 points across from its
+    // middle).
+    let inner = Rect::from_min_max(egui::pos2(icon_x + 16.0, rect.top()), egui::pos2(rect.right() - height * 0.45, rect.bottom()));
     // Cut to its own room: scrolled, the text never runs over the magnifier
     // or the pill's ends.
     let mut room = ui.new_child(UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)));
@@ -903,6 +912,41 @@ mod tests {
     use super::*;
     use egui_kittest::Harness;
     use egui_kittest::kittest::Queryable;
+
+    /// The text of a field sits in its middle, top to bottom: a text field,
+    /// a search field, at 1× and 2×.
+    #[test]
+    fn text_fields_centre_their_text() {
+        use egui_kittest::kittest::NodeT;
+        for ppp in [1.0, 2.0] {
+            let mut h = Harness::builder().with_size(vec2(320.0, 120.0)).with_pixels_per_point(ppp).with_accessibility_check(false).build_ui_state(
+                |ui, s: &mut (String, String)| {
+                    theme::install(ui.ctx());
+                    ui.add(TextEdit::singleline(&mut s.0).desired_width(200.0));
+                    search(ui, &mut s.1, "Search", 200.0);
+                },
+                ("Generated World".to_owned(), "dirt".to_owned()),
+            );
+            h.run_steps(3);
+            let mut seen = 0;
+            for field in h.query_all_by_role(egui::accesskit::Role::TextInput) {
+                let outer = field.rect();
+                for child in field.children() {
+                    if child.accesskit_node().role() != egui::accesskit::Role::TextRun {
+                        continue;
+                    }
+                    let Some(b) = child.accesskit_node().bounding_box() else { continue };
+                    let text = Rect::from_min_max(pos2(b.x0 as f32, b.y0 as f32), pos2(b.x1 as f32, b.y1 as f32)) / ppp;
+                    seen += 1;
+                    let off = text.center().y - outer.center().y;
+                    eprintln!("{ppp}x: field {outer:?}, text {text:?}, {off:+.2}");
+                    assert!(off.abs() <= 0.5, "{ppp}x: the text {off:+.2} points off the middle of its field");
+                    assert!(outer.height() <= 28.5, "{ppp}x: a field {} high, as high as a control", outer.height());
+                }
+            }
+            assert!(seen >= 2, "{seen} texts");
+        }
+    }
 
     /// A digit typed into a number clicked to be typed in adds to it.
     #[test]

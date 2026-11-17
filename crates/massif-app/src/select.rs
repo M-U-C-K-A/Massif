@@ -432,7 +432,7 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: 
         {
             deselect(doc);
         }
-        if ui.button(theme::with_icon(Icon::SquareDashedMousePointer, tr!("All"))).clicked() {
+        if crate::widgets::button(ui, theme::with_icon(Icon::SquareDashedMousePointer, tr!("All"))).clicked() {
             select_all(doc);
         }
         if ui.add_enabled(any, egui::Button::new(theme::with_icon(Icon::SquaresExclude, tr!("Invert")))).clicked() {
@@ -519,7 +519,7 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: 
         hint(ui, tr!("The terrain picked in Terrain or Blocks."));
     }
     ui.add_space(4.0);
-    if ui.button(theme::with_icon(Icon::ScanLine, tr!("Select"))).on_hover_text(tr!("Select the columns of the whole map that match, as the mode above says")).clicked() {
+    if crate::widgets::button(ui, theme::with_icon(Icon::ScanLine, tr!("Select"))).on_hover_text(tr!("Select the columns of the whole map that match, as the mode above says")).clicked() {
         let filter = by.filter(tools.terrain);
         let shape = Selection::by_filter(doc.dimension(), &filter);
         apply(doc, tr!("Select by"), shape, tools.select_mode);

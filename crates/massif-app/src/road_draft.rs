@@ -519,7 +519,7 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
                 if ui.add_enabled(ready, egui::Button::new(theme::with_icon(Icon::Signpost, tr!("Build road")))).on_hover_text(tr!("Enter")).clicked() {
                     crate::road_draft::build(doc, tools);
                 }
-                if ui.button(tr!("Cancel")).on_hover_text(tr!("Esc")).clicked() {
+                if crate::widgets::button(ui, tr!("Cancel")).on_hover_text(tr!("Esc")).clicked() {
                     tools.road_draft = None;
                 }
             });

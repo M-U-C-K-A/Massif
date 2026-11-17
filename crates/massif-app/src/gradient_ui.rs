@@ -226,10 +226,10 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
     strip(ui, &g, &doc.world.registry, vec2(ui.available_width().min(260.0), 18.0));
     ui.add_space(4.0);
     ui.horizontal_wrapped(|ui| {
-        if ui.button(theme::with_icon(Icon::Pencil, tr!("Edit…"))).clicked() {
+        if crate::widgets::button(ui, theme::with_icon(Icon::Pencil, tr!("Edit…"))).clicked() {
             tools.gradient.edit(false);
         }
-        if ui.button(theme::with_icon(Icon::Plus, tr!("New…"))).clicked() {
+        if crate::widgets::button(ui, theme::with_icon(Icon::Plus, tr!("New…"))).clicked() {
             tools.gradient.edit(true);
         }
     });
@@ -437,8 +437,8 @@ fn editor_ui(ui: &mut Ui, ed: &mut Editor, doc: &Document, blocks: &mut BlockLib
     // ---- the buttons ----------------------------------------------------
     ui.add_space(12.0);
     ui.horizontal(|ui| {
-        out.import = ui.button(theme::with_icon(Icon::Import, tr!("Import…"))).clicked();
-        out.export = ui.button(theme::with_icon(Icon::Upload, tr!("Export…"))).clicked();
+        out.import = crate::widgets::button(ui, theme::with_icon(Icon::Import, tr!("Import…"))).clicked();
+        out.export = crate::widgets::button(ui, theme::with_icon(Icon::Upload, tr!("Export…"))).clicked();
         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
             let ready = !ed.draft.name.trim().is_empty();
             if ui.add_enabled(ready, theme::primary_button(ui, tr!("Save"))).clicked() {
@@ -447,7 +447,7 @@ fn editor_ui(ui: &mut Ui, ed: &mut Editor, doc: &Document, blocks: &mut BlockLib
                 g.normalize();
                 out.save = Some(g);
             }
-            out.cancel = ui.button(tr!("Cancel")).clicked();
+            out.cancel = crate::widgets::button(ui, tr!("Cancel")).clicked();
         });
     });
 }
