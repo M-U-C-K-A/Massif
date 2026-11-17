@@ -485,6 +485,8 @@ pub(super) fn rivers(f: &Field, existing: Option<&Field>, spacing: f32, p: River
     // through holds a lake if the water would stand deep enough in it;
     // through the others, the river cuts its way.
     let lake_depth = if p.lakes <= 0.001 { f32::MAX } else { 1.0 + (1.0 - p.lakes.min(1.0)) * 24.0 };
+    let cell_area = (k * spacing).powi(2);
+    let lake_most = (land_cells * cell_area / 64.0).max(super::ops::LAKE_LEAST) * 4f32.powf(2.0 * (p.lakes.clamp(0.0, 1.0) - 0.5));
     let hollow = |c: usize| land(c) && filled.data[c] > routed.data[c] + 0.05;
     let on_river: Vec<bool> = {
         let mut on = vec![false; m * m];
@@ -526,8 +528,19 @@ pub(super) fn rivers(f: &Field, existing: Option<&Field>, spacing: f32, p: River
             }
         }
         if river && deepest > lake_depth && (sea == NO_WATER || spill > sea + 0.5) {
+            // No wider than a 64th of the land (four times more or less
+            // with Lakes): the water of a wider hollow down to where it
+            // covers that much, a lake in its bottom.
+            let mut level = spill;
+            let keep = ((lake_most / cell_area) as usize).max(1);
+            if region.len() > keep {
+                let mut heights: Vec<f32> = region.iter().map(|&c| routed.data[c]).collect();
+                level = level.min(*heights.select_nth_unstable_by(keep, |a, b| a.total_cmp(b)).1 + 1.0);
+            }
             for c in region {
-                lake[c] = spill;
+                if routed.data[c] < level {
+                    lake[c] = level;
+                }
             }
         }
     }

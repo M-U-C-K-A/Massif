@@ -1470,3 +1470,39 @@ fn overlays_leave_the_ground_alone() {
     assert_eq!(column(&world, 64, 64), (Some(90), vec![]));
     let _ = before;
 }
+
+/// A hollow wider than the cap holds a lake in its bottom only, at one
+/// level under its rim and a block deep at least, covering about as much as
+/// the cap; a smaller one fills to where it spills, as before.
+#[test]
+fn giant_lakes_are_capped() {
+    let m = 200;
+    // A wide bowl 12 deep (radius 80) and a small one (radius 12), on a plain at 80.
+    let land: Vec<f32> = (0..m * m)
+        .map(|c| {
+            let (i, j) = ((c % m) as f32, (c / m) as f32);
+            let wide = (1.0 - ((i - 90.0).hypot(j - 100.0) / 80.0)).max(0.0) * 12.0;
+            let small = (1.0 - ((i - 185.0).hypot(j - 15.0) / 12.0)).max(0.0) * 6.0;
+            80.0 - wide - small
+        })
+        .collect();
+    let field = Field::new(m, land.clone());
+    let full = crate::graph::sim::fill(&field, 0.0);
+    let mut capped = full.clone();
+    let most = 4000.0;
+    super::ops::cap_lakes(&land, &mut capped, m, 1.0, most);
+    let wet = |f: &[f32], c: usize| f[c] > land[c] + 1e-3;
+    let in_wide = |c: usize| ((c % m) as f32 - 90.0).hypot((c / m) as f32 - 100.0) < 80.0;
+    let before = (0..m * m).filter(|&c| in_wide(c) && wet(&full, c)).count();
+    let after: Vec<usize> = (0..m * m).filter(|&c| in_wide(c) && wet(&capped, c)).collect();
+    assert!(before > 15_000, "the wide hollow fills: {before}");
+    // About as much as the cap: those under a block of water at least.
+    let deep = after.iter().filter(|&&c| capped[c] - land[c] >= 1.0).count();
+    assert!(deep <= most as usize + 200 && after.len() > 2000, "{} wet, {deep} a block deep", after.len());
+    // One level, under the rim it had.
+    let level = capped[after[0]];
+    assert!(after.iter().all(|&c| capped[c] == level) && level < full[after[0]] - 2.0, "{level} under {}", full[after[0]]);
+    // The small hollow as it was.
+    let small = |c: usize| ((c % m) as f32 - 185.0).hypot((c / m) as f32 - 15.0) < 12.0;
+    assert!((0..m * m).filter(|&c| small(c)).all(|c| capped[c] == full[c]));
+}

@@ -719,9 +719,14 @@ map, without opening the graph:
   The water holds as the game holds it, block by block: the bed under a
   step stays under the water above it (no dam of land across a river), a
   block of land left alone in the water goes under it, and a lake stands
-  at most a block over the water beside it.
+  at most a block over the water beside it. A lake covers a 64th of the
+  land at most (four times more with **Lakes** all the way up, four times
+  less near none): a wider hollow holds one in its bottom.
 - **Lakes**: water fills the hollows up to where they spill, block by block:
-  every lake stands at or under its rim on every side, in one level. Its
+  every lake stands at or under its rim on every side, in one level. No
+  lake covers more than a 64th of the land (or 64 blocks a side): the
+  water of a wider hollow stands lower, a lake in its bottom (a hollow
+  nearly flat all over stays whole). Its
   floor is dug into a bowl, a block deeper every three blocks from its
   shore, down to 2 to 10 blocks as it is larger; sand under its shallows,
   gravel deeper, a sand beach where its shore is flat (with **Fill**, their

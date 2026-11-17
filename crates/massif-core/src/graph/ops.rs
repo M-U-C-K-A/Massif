@@ -344,7 +344,14 @@ pub(super) fn run(
             // rim at or over it); with the ground left as it was (amount
             // 0), the hollows become lakes.
             let water = if want(2) {
-                let level = upsample(&Field::new(m, filled.clone()), n);
+                // No lake over more than a 64th of the land (64 blocks a
+                // side at least): a wider hollow holds one in its bottom.
+                // (The ground Fill raises, all of the hollow.)
+                let mut capped = filled.clone();
+                let cell = (e.size as f32 / m as f32).powi(2);
+                let land_area = work.data.iter().filter(|&&v| v >= sea).count() as f32 * cell;
+                cap_lakes(&land.data, &mut capped, m, cell, (land_area / 64.0).max(LAKE_LEAST));
+                let level = upsample(&Field::new(m, capped), n);
                 Field::new(n, level.data.par_iter().zip(&after.data).map(|(&l, &g)| if l > sea + 0.2 && l.round() as i32 > crate::compose::block_top(g) { l } else { super::NO_WATER }).collect())
             } else {
                 Field::new(0, Vec::new())
@@ -543,6 +550,58 @@ pub(super) fn run(
 /// of the relief and the change they make is carried back to every sample,
 /// so that a 16k build keeps all of its detail and finishes in seconds.
 pub(super) const SIM_MAX: usize = 4096;
+
+/// The area a cap on lakes never goes under, in square blocks.
+pub(super) const LAKE_LEAST: f32 = 64.0 * 64.0;
+
+/// The water of the hollows that would cover more than `most` square
+/// blocks brought down until it covers that much: a lake in the bottom of
+/// its hollow, under its rim, rather than a sheet over all of it. `land`:
+/// the ground, `m` samples a side of `cell` square blocks each; `filled`:
+/// where each hollow's water stands, changed in place (the ground's height
+/// where it is dry).
+pub(super) fn cap_lakes(land: &[f32], filled: &mut [f32], m: usize, cell: f32, most: f32) {
+    let keep = ((most / cell.max(1e-6)) as usize).max(1);
+    let wet = |c: usize, filled: &[f32]| filled[c] > land[c] + 1e-3;
+    let mut seen = vec![false; m * m];
+    for start in 0..m * m {
+        if seen[start] || !wet(start, filled) {
+            continue;
+        }
+        // The hollow: its samples side by side under its water, all at one
+        // level.
+        let mut region = vec![start];
+        seen[start] = true;
+        let mut k = 0;
+        while k < region.len() {
+            let c = region[k];
+            k += 1;
+            let (i, j) = (c % m, c / m);
+            for (di, dj) in [(-1i32, 0i32), (1, 0), (0, -1), (0, 1)] {
+                let (a, b) = (i as i32 + di, j as i32 + dj);
+                if a < 0 || b < 0 || a >= m as i32 || b >= m as i32 {
+                    continue;
+                }
+                let nb = b as usize * m + a as usize;
+                if !seen[nb] && wet(nb, filled) {
+                    seen[nb] = true;
+                    region.push(nb);
+                }
+            }
+        }
+        if region.len() <= keep {
+            continue;
+        }
+        let mut heights: Vec<f32> = region.iter().map(|&c| land[c]).collect();
+        // A block over the ground there: the lowest samples under a block
+        // of water at least, as the map holds it.
+        let (_, cap, _) = heights.select_nth_unstable_by(keep, |a, b| a.total_cmp(b));
+        let cap = *cap + 1.0;
+        for &c in &region {
+            filled[c] = filled[c].min(cap).max(land[c]);
+        }
+    }
+}
 
 /// The field itself if it has at most `max` samples a side, otherwise a
 /// box-filtered copy at `max`; with the extent it covers.

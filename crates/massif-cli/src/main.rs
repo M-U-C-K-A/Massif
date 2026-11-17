@@ -352,6 +352,49 @@ fn cmd_water(args: Args) -> Res<()> {
             });
         }
     }
+    // The largest bodies of water (MASSIF_WATER_BODIES=n): columns side by
+    // side under water at one level.
+    if let Some(n) = std::env::var("MASSIF_WATER_BODIES").ok().and_then(|v| v.parse::<usize>().ok()) {
+        let dim = &world.dims[0];
+        let mut wet: std::collections::HashMap<(i32, i32), (i16, i32)> = std::collections::HashMap::new();
+        for p in dim.ground().positions() {
+            let Some(t) = dim.ground().view(p) else { continue };
+            let (ox, oz) = p.origin();
+            for z in oz..oz + massif_core::coords::TILE_SIZE {
+                for x in ox..ox + massif_core::coords::TILE_SIZE {
+                    let i = massif_core::coords::local_index(x, z);
+                    let (air, f) = (massif_core::compose::block_top(t.top.get(i)), t.fluid.get(i));
+                    if f != massif_core::tile::NO_FLUID && f as i32 > air {
+                        wet.insert((x, z), (f, f as i32 - air));
+                    }
+                }
+            }
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut bodies = Vec::new();
+        for (&start, &(level, _)) in &wet {
+            if !seen.insert(start) {
+                continue;
+            }
+            let (mut stack, mut cols, mut deepest) = (vec![start], 0usize, 0);
+            let (mut x0, mut z0, mut x1, mut z1) = (start.0, start.1, start.0, start.1);
+            while let Some((x, z)) = stack.pop() {
+                cols += 1;
+                deepest = deepest.max(wet[&(x, z)].1);
+                (x0, z0, x1, z1) = (x0.min(x), z0.min(z), x1.max(x), z1.max(z));
+                for q in [(x + 1, z), (x - 1, z), (x, z + 1), (x, z - 1)] {
+                    if wet.get(&q).is_some_and(|w| w.0 == level) && seen.insert(q) {
+                        stack.push(q);
+                    }
+                }
+            }
+            bodies.push((cols, level, deepest, (x0, z0, x1, z1)));
+        }
+        bodies.sort_by(|a, b| b.cmp(a));
+        for (cols, level, deepest, (x0, z0, x1, z1)) in bodies.into_iter().take(n) {
+            println!("body at {level}: {cols} columns, {deepest} deep at most, {x0} {z0} to {x1} {z1}");
+        }
+    }
     println!("columns with water: {}", c.columns);
     println!("steps (water over lower water): {}", c.steps);
     println!("falls (water over water lower by more than a block): {}", c.falls);
