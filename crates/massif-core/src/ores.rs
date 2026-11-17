@@ -578,7 +578,17 @@ pub fn stack_heights(stack: &crate::compose::TileStack, min_y: i32, max_y: i32) 
 
 /// What the blocks of a registry are to an ore, by id.
 pub fn hosts(reg: &Registry) -> Vec<Option<Host>> {
-    reg.blocks.iter().map(|b| host_of(&b.state)).collect()
+    // The rock of the map's palette, whatever its blocks, takes ores.
+    let wk = reg.well_known;
+    reg.blocks
+        .iter()
+        .enumerate()
+        .map(|(i, b)| match i {
+            i if i == wk.stone.index() => Some(Host::Stone),
+            i if i == wk.deepslate.index() => Some(Host::Deepslate),
+            _ => host_of(&b.state),
+        })
+        .collect()
 }
 
 /// What the column whose solid runs are `spans` offers an ore at height

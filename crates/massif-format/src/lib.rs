@@ -1086,6 +1086,21 @@ mod tests {
         assert_eq!(to_bytes(&mut back), bytes);
     }
 
+    /// A map's block palette is saved with it and read back as it was; a
+    /// map of the game's blocks writes none.
+    #[test]
+    fn block_palettes_round_trip() {
+        use massif_core::materials::{Palette, apply};
+        let mut world = sample_world();
+        assert!(serde_json::to_string(&world.meta).unwrap().find("palette").is_none(), "nothing written for the game's blocks");
+        world.meta.palette = Palette::conquest();
+        apply(&mut world.registry, &world.meta.palette);
+        let bytes = to_bytes(&mut world);
+        let back = read(&bytes).unwrap();
+        assert_eq!(back.meta.palette, Palette::conquest());
+        assert_eq!(back.registry, world.registry);
+    }
+
     /// Pocket layers and combined layers are saved with the map and read
     /// back as they were.
     #[test]

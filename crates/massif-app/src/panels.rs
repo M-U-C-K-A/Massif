@@ -3813,7 +3813,9 @@ pub fn levels_panel(ui: &mut Ui, doc: &mut Document, rename: &mut Option<(usize,
 // ------------------------------------------------------------------- info --
 
 /// Returns true when a world setting that affects the map changed.
-pub fn info_panel(ui: &mut Ui, doc: &mut Document, hover: Option<(i32, i32)>, cache: (usize, usize, usize)) -> bool {
+/// `palettes`: the block palettes to make the map's terrains of; `edit` is
+/// set when their window is asked for.
+pub fn info_panel(ui: &mut Ui, doc: &mut Document, hover: Option<(i32, i32)>, cache: (usize, usize, usize), palettes: &[massif_core::materials::Palette], edit: &mut bool) -> bool {
     let pal = Palette::of(ui);
     let mut affects_map = false;
     let (bottom, top) = (doc.dimension().min_y, doc.dimension().max_y);
@@ -3844,6 +3846,19 @@ pub fn info_panel(ui: &mut Ui, doc: &mut Document, hover: Option<(i32, i32)>, ca
             doc.mark_changed();
         }
     });
+    // What the built-in terrains are made of: changed, they are made again
+    // of the other blocks, all over the map at once.
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.label(tr!("Blocks"));
+        let now = doc.world.meta.palette.clone();
+        match crate::palettes::choose(ui, "map palette", palettes, &now, 170.0) {
+            Some(crate::palettes::Picked::Use(p)) => affects_map |= doc.set_palette(p),
+            Some(crate::palettes::Picked::Edit) => *edit = true,
+            None => {}
+        }
+    });
+    hint(ui, tr!("What grass, soils, rock, sand, gravel and snow are made of. Another palette makes them again of its blocks across the whole map, in one step to undo."));
 
     section(ui, Icon::Map, tr!("Map"));
     let dim = doc.dimension();

@@ -322,7 +322,7 @@ impl<'a> ExportContext<'a> {
         if states.len() >= UNSET as usize {
             return Err("the covers and objects use too many blocks".into());
         }
-        let mut hosts: Vec<u8> = reg.blocks.iter().map(|b| massif_core::ores::host_of(&b.state).map_or(0, |h| 1 + (h == massif_core::ores::Host::Deepslate) as u8)).collect();
+        let mut hosts: Vec<u8> = massif_core::ores::hosts(reg).into_iter().map(|h| h.map_or(0, |h| 1 + (h == massif_core::ores::Host::Deepslate) as u8)).collect();
         hosts.resize(states.len(), 0);
         // At least 1 with objects: 0 means none, and an object one block wide
         // reaches no further than its anchor.

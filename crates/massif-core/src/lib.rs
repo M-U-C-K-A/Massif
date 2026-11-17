@@ -35,6 +35,7 @@ pub mod graph;
 pub mod heightmap;
 pub mod history;
 pub mod level;
+pub mod materials;
 pub mod noise;
 pub mod objects;
 pub mod ores;

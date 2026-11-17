@@ -78,6 +78,9 @@ pub struct GenParams {
     pub min_y: i32,
     #[serde(default = "vanilla_top")]
     pub max_y: i32,
+    /// What the terrains are made of: the game's blocks, a mod's…
+    #[serde(default)]
+    pub palette: crate::materials::Palette,
 }
 
 /// Minecraft's own build limits since 1.18.
@@ -127,6 +130,7 @@ impl Default for GenParams {
             lava: false,
             min_y: VANILLA_LIMITS.0,
             max_y: VANILLA_LIMITS.1,
+            palette: crate::materials::Palette::vanilla(),
         }
     }
 }
@@ -410,7 +414,9 @@ pub fn generate(params: &GenParams) -> World {
         ores: Default::default(),
         gradients: Vec::new(),
         fill: params.surface,
+        palette: params.palette.clone(),
     });
+    crate::materials::apply(&mut world.registry, &params.palette);
     let (bottom, top) = build_limits(params.min_y, params.max_y);
     world.dims[0].min_y = bottom;
     world.dims[0].max_y = top;
@@ -467,6 +473,7 @@ pub fn from_heightmap(map: &crate::heightmap::Heightmap, how: &FromHeightmap) ->
         ores: Default::default(),
         gradients: Vec::new(),
         fill: None,
+        palette: Default::default(),
     });
     let (bottom, ceiling) = build_limits(how.min_y, how.max_y);
     world.dims[0].min_y = bottom;

@@ -893,6 +893,7 @@ pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Re
             ores: Default::default(),
             gradients: Vec::new(),
             fill: None,
+            palette: Default::default(),
         },
         registry: mapper.registry,
         dims,

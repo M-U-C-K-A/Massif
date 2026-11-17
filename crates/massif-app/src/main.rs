@@ -35,6 +35,7 @@ mod notify;
 mod ores;
 mod pack_share;
 mod packs;
+mod palettes;
 mod panels;
 mod picker;
 mod player;

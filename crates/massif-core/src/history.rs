@@ -361,6 +361,20 @@ impl History {
         self.commit();
     }
 
+    /// Give the map the settings `meta` and the blocks and terrains
+    /// `registry` (its terrains made of other blocks, say), as one step to
+    /// undo labelled `label`; its dimensions stay as they are.
+    pub fn replace_settings(&mut self, world: &mut World, meta: crate::world::WorldMeta, registry: crate::registry::Registry, label: impl Into<String>) {
+        self.begin(label, 0);
+        // The map as it is, cold, to undo it: its tiles shared, not copied.
+        let before = world.snapshot();
+        world.dims = before.dims;
+        let whole = Whole { meta, registry, dims: world.dims.clone() };
+        let step = self.open.as_mut().expect("just begun");
+        step.whole = Some(Box::new(whole.swap(world)));
+        self.commit();
+    }
+
     pub fn clear(&mut self) {
         self.undo.clear();
         self.redo.clear();

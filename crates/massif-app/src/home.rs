@@ -11,6 +11,7 @@ use crate::widgets::{Field, Part, button_group, input_group};
 use egui::{Align, Align2, Color32, CursorIcon, FontId, Rect, Response, RichText, Sense, Stroke, StrokeKind, TextureHandle, Ui, UiBuilder, pos2, vec2};
 use massif_core::generate::{FromHeightmap, GenParams, Landform};
 use massif_core::graph::Template;
+use massif_core::materials::Palette as BlockPalette;
 use massif_core::heightmap::Heightmap;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -45,6 +46,8 @@ pub struct NewMap {
     /// A template of the terrain generator to make the relief with, rather
     /// than the landform.
     pub template: Option<Template>,
+    /// The block palettes to make it of (those of Massif, the player's).
+    pub palettes: Vec<BlockPalette>,
     preview: Option<(String, TextureHandle)>,
     /// The preview being drawn on a thread of its own, for these settings.
     previewing: Option<(String, Receiver<egui::ColorImage>)>,
@@ -70,6 +73,7 @@ impl NewMap {
             params,
             registry,
             template: None,
+            palettes: BlockPalette::built_in(),
             preview: None,
             previewing: None,
             template_preview: None,
@@ -165,6 +169,8 @@ pub enum HomeAction {
     AnotherPicture,
     /// What is new in the newer version out.
     Update,
+    /// The block palettes window.
+    EditPalettes,
 }
 
 /// The pictures of `assets/backdrops` (listed by the build script).
@@ -648,6 +654,11 @@ impl Home {
                     }
                 }
             });
+            row(ui, tr!("Blocks"), &mut |ui| match crate::palettes::choose(ui, "home palette", &nm.palettes, &nm.params.palette, third * 1.4) {
+                Some(crate::palettes::Picked::Use(p)) => nm.params.palette = p,
+                Some(crate::palettes::Picked::Edit) => *action = Some(HomeAction::EditPalettes),
+                None => {}
+            });
             row(ui, tr!("Seed"), &mut |ui| {
                 let (_, dice) = input_group(ui, "home seed", &mut [Part::Edit(&mut nm.seed, third * 1.4), Part::Button(Icon::Dices, tr!("Another seed"))]);
                 if dice.is_some() {
@@ -672,9 +683,10 @@ impl Home {
             let across = if minutes < 1.0 { tr!("under a minute across").to_owned() } else { tr!("{minutes:.0} min. across on foot", minutes) };
             let (bottom, top) = massif_core::generate::build_limits(params.min_y, params.max_y);
             let pack = if (bottom, top) != massif_core::generate::VANILLA_LIMITS { tr!(" (with a data pack)") } else { "" };
+            let game = crate::palettes::game_of(&params.palette);
             art_label(
                 ui,
-                RichText::new(tr!("Minecraft Java 1.18+  ·  Y {bottom} to {top}{pack}  ·  {across}  ·  about {size}", size = crate::panels::human((tiles * 12_000) as u64), bottom, top, pack, across))
+                RichText::new(tr!("{game}  ·  Y {bottom} to {top}{pack}  ·  {across}  ·  about {size}", game, size = crate::panels::human((tiles * 12_000) as u64), bottom, top, pack, across))
                 .size(11.5)
                 .color(art_weak(&pal)),
             );
@@ -1633,6 +1645,14 @@ fn template_preview(ui: &mut Ui, nm: &mut NewMap, t: Template, rect: Rect) {
 /// What a new map will look like from above: terrain colours, water and
 /// hill shading, over the whole map.
 pub fn preview_image(params: &GenParams, reg: &massif_core::Registry, n: usize) -> egui::ColorImage {
+    // The terrains made of the blocks chosen, in their colours.
+    let mut made_of = None;
+    if !params.palette.is_vanilla() {
+        let mut r = reg.clone();
+        massif_core::materials::apply(&mut r, &params.palette);
+        made_of = Some(r);
+    }
+    let reg = made_of.as_ref().unwrap_or(reg);
     let p = massif_core::generate::preview(params, reg, n);
     let sea = params.sea_level as f32;
     let fluid = if params.lava { [238.0, 112.0, 22.0] } else { [48.0, 96.0, 200.0] };

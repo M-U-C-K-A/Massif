@@ -1517,6 +1517,55 @@ fraction of a second, every time Massif starts.
 - **Mods** in the Blocks panel adds the blocks of mods, Conquest Reforged's
   among them: see [Conquest Reforged and other mods](#conquest-reforged-and-other-mods).
 
+## Block palettes
+
+A block palette says what the terrains of a map are made of: the grass,
+rock, sand, gravel and snow the generator lays by height and slope (and the
+basalt and blackstone along a sea of lava), the other natural terrains (dirt,
+podzol, moss, mud, clay, ice…), and the rock under them, where caves are
+carved and ores laid. Lakes, Rivers, the automatic paint and the brushes
+paint the same terrains, so their beaches and beds follow the palette too.
+A terrain a palette leaves out is the game's own; terrains of your own are
+never touched.
+
+Two palettes come with Massif:
+
+- **Vanilla**, the game's blocks;
+- **Conquest Reforged**, made from the lists Conquest writes for WorldPainter
+  (`conquest_wp.csv`): its grass blocks (clover-covered and taiga grass among
+  the game's, which Conquest retextures), loamy dirt and brown earth, forest
+  floors for podzol, sphagnum moss, muds, gray and mossy limestones, small
+  stones and boulders on rocky ground, tan sand and sand-and-gravel on the
+  beaches, gray and dark gravels and pebbles in river and lake beds, snow over
+  icy limestone, glacier ice and weathered basalt. Several blocks share each
+  surface in patches, as Conquest's own terrain does. The rock under it stays
+  the game's stone, which Conquest makes its limestone, so the ores are the
+  game's.
+
+**Choosing one.** **Blocks** in the New map settings picks the palette of a
+new map; its preview shows it, and the line under the settings names the
+version it is for (1.20.1 for Conquest Reforged). Where Conquest is installed
+but its blocks are not read yet, **Create map** reads its instance as the
+Blocks panel's **Use** does. Later, **Blocks** in the Info panel (World)
+makes the whole map of another palette at once, in one step to undo: nothing
+is painted again, the terrains are only made of other blocks. The map keeps
+its palette in its file.
+
+**Your own.** **Edit palettes…** at the bottom of either menu opens the
+palettes. The built-in ones are shown as they are: **Duplicate** makes one of
+your own from any of them, **From this map** one of the blocks of the open
+map's terrains. Pick a terrain (the generator's first, then the others, a
+dot marking those the palette sets), then each of its layers from the
+surface down: how deep it goes, whether its blocks lie in patches and how
+large, and its blocks, each with a weight (its share is shown beside it).
+Click a layer to pick it, then a block in the grid under it (the game's and
+the mods' read in Blocks, with a search) or type any id with its properties
+(`mod:block[axis=x]`), for a block of a mod or resource pack not read here.
+**+ Layer** adds one under the others, **Back to the game's** leaves the
+terrain to the game. **Rock under the terrains** sets the rock above and
+under Y 0. Your palettes are kept with Massif's settings; one changed since
+it was given to a map is given again by picking it in **Blocks**.
+
 ## Conquest Reforged and other mods
 
 Massif paints with the blocks of mods as with the game's: Conquest

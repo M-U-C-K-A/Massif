@@ -1,0 +1,127 @@
+{
+ "name": "Conquest Reforged",
+ "colors": {
+  "conquest:brown_earth": [88, 64, 49],
+  "conquest:clay_rich_mud": [108, 81, 61],
+  "conquest:clover_covered_grass[snowy=false]": [64, 83, 39],
+  "conquest:cracked_dirt": [144, 103, 80],
+  "conquest:dark_gravel": [43, 41, 38],
+  "conquest:dark_gray_clay": [91, 89, 82],
+  "conquest:dirty_glacier_ice": [124, 133, 134],
+  "conquest:fir_forest_floor": [89, 76, 56],
+  "conquest:glacier_ice": [149, 157, 159],
+  "conquest:gray_gravel": [70, 65, 58],
+  "conquest:gray_limestone": [121, 109, 95],
+  "conquest:green_sphagnum_moss_block": [72, 86, 49],
+  "conquest:icy_limestone": [149, 147, 140],
+  "conquest:light_green_sphagnum_moss_block": [96, 100, 53],
+  "conquest:light_limestone_boulders": [155, 146, 132],
+  "conquest:mossy_forest_floor_with_roots": [72, 63, 41],
+  "conquest:mossy_limestone": [93, 97, 66],
+  "conquest:mossy_soil": [77, 72, 50],
+  "conquest:mud": [68, 56, 48],
+  "conquest:orange_sand": [197, 165, 115],
+  "conquest:porous_basalt": [75, 68, 61],
+  "conquest:red_sandstone": [105, 72, 59],
+  "conquest:rocky_soil": [91, 79, 64],
+  "conquest:sand_and_gravel": [202, 183, 145],
+  "conquest:small_stones": [104, 97, 84],
+  "conquest:smooth_pebbles": [111, 109, 107],
+  "conquest:snow_covered_icy_limestone": [222, 225, 231],
+  "conquest:taiga_forest_floor": [69, 57, 43],
+  "conquest:taiga_grass[snowy=false]": [51, 68, 23],
+  "conquest:tan_sand": [182, 158, 125],
+  "conquest:thick_mud": [77, 63, 53],
+  "conquest:weathered_basalt": [60, 54, 48],
+  "minecraft:clay": [130, 120, 106],
+  "minecraft:dirt": [83, 65, 48],
+  "minecraft:grass_block[snowy=false]": [53, 65, 16],
+  "minecraft:gravel": [93, 87, 73],
+  "minecraft:red_sand": [180, 124, 77],
+  "minecraft:sand": [234, 215, 177],
+  "minecraft:sandstone": [193, 164, 124],
+  "minecraft:snow_block": [222, 225, 231],
+  "minecraft:stone": [136, 124, 109]
+ },
+ "terrains": {
+  "Grass": {
+   "strata": [
+    {"blocks": [["minecraft:grass_block[snowy=false]", 6], ["conquest:clover_covered_grass[snowy=false]", 2], ["conquest:taiga_grass[snowy=false]", 1]], "depth": [1, 1], "patches": 6},
+    {"blocks": [["minecraft:dirt", 4], ["conquest:brown_earth", 1]], "depth": [2, 4]}
+   ],
+   "submerged_top": "minecraft:dirt"
+  },
+  "Dirt": {
+   "strata": [
+    {"blocks": [["minecraft:dirt", 4], ["conquest:brown_earth", 1], ["conquest:rocky_soil", 1]], "depth": [3, 5], "patches": 5}
+   ]
+  },
+  "Coarse Dirt": {
+   "strata": [
+    {"blocks": [["conquest:rocky_soil", 3], ["conquest:cracked_dirt", 1]], "depth": [1, 2], "patches": 4},
+    {"blocks": [["minecraft:dirt", 1]], "depth": [2, 3]}
+   ]
+  },
+  "Podzol": {
+   "strata": [
+    {"blocks": [["conquest:taiga_forest_floor", 3], ["conquest:fir_forest_floor", 2], ["conquest:mossy_forest_floor_with_roots", 1]], "depth": [1, 1], "patches": 5},
+    {"blocks": [["minecraft:dirt", 1]], "depth": [2, 4]}
+   ],
+   "submerged_top": "minecraft:dirt"
+  },
+  "Moss": {
+   "strata": [
+    {"blocks": [["conquest:green_sphagnum_moss_block", 2], ["conquest:mossy_soil", 2], ["conquest:light_green_sphagnum_moss_block", 1]], "depth": [1, 1], "patches": 4},
+    {"blocks": [["minecraft:dirt", 1]], "depth": [2, 3]}
+   ]
+  },
+  "Mud": {
+   "strata": [
+    {"blocks": [["conquest:mud", 3], ["conquest:thick_mud", 1], ["conquest:clay_rich_mud", 1]], "depth": [2, 4], "patches": 4}
+   ]
+  },
+  "Clay": {
+   "strata": [
+    {"blocks": [["minecraft:clay", 3], ["conquest:dark_gray_clay", 1]], "depth": [2, 4], "patches": 4}
+   ]
+  },
+  "Rocky": {
+   "strata": [
+    {"blocks": [["minecraft:stone", 4], ["conquest:gray_limestone", 2], ["conquest:mossy_limestone", 1], ["conquest:small_stones", 1], ["conquest:light_limestone_boulders", 1]], "depth": [3, 5], "patches": 3}
+   ]
+  },
+  "Sand": {
+   "strata": [
+    {"blocks": [["conquest:tan_sand", 3], ["minecraft:sand", 3], ["conquest:sand_and_gravel", 1]], "depth": [3, 5], "patches": 5},
+    {"blocks": [["minecraft:sandstone", 1]], "depth": [3, 6]}
+   ]
+  },
+  "Red Sand": {
+   "strata": [
+    {"blocks": [["conquest:orange_sand", 3], ["minecraft:red_sand", 2]], "depth": [3, 5], "patches": 5},
+    {"blocks": [["conquest:red_sandstone", 1]], "depth": [3, 6]}
+   ]
+  },
+  "Gravel": {
+   "strata": [
+    {"blocks": [["conquest:gray_gravel", 3], ["minecraft:gravel", 2], ["conquest:dark_gravel", 1], ["conquest:smooth_pebbles", 1]], "depth": [3, 5], "patches": 4}
+   ]
+  },
+  "Snow": {
+   "strata": [
+    {"blocks": [["minecraft:snow_block", 5], ["conquest:snow_covered_icy_limestone", 1]], "depth": [1, 2], "patches": 4},
+    {"blocks": [["conquest:icy_limestone", 1]], "depth": [1, 2]}
+   ]
+  },
+  "Ice": {
+   "strata": [
+    {"blocks": [["conquest:glacier_ice", 3], ["conquest:dirty_glacier_ice", 1]], "depth": [3, 6], "patches": 5}
+   ]
+  },
+  "Basalt": {
+   "strata": [
+    {"blocks": [["conquest:weathered_basalt", 2], ["conquest:porous_basalt", 1]], "depth": [6, 10], "patches": 4}
+   ]
+  }
+ }
+}

@@ -470,3 +470,82 @@ fn an_exported_conquest_world_is_the_games() {
     let blocks: HashSet<String> = written.iter().map(|s| split(s).0).collect();
     eprintln!("{}: {} states of {} Conquest Reforged blocks, each the game's", dir.display(), written.len(), blocks.len());
 }
+
+/// Every block of an exported world, column by column of its sections'
+/// palettes: the files compared state for state, whatever order the blocks
+/// were registered in.
+fn region_bytes(dir: &Path) -> Vec<(String, Vec<u8>)> {
+    let mut out: Vec<(String, Vec<u8>)> = std::fs::read_dir(dir.join("region")).unwrap().flatten().filter(|e| e.path().extension().is_some_and(|x| x == "mca")).map(|e| (e.file_name().to_string_lossy().into_owned(), std::fs::read(e.path()).unwrap())).collect();
+    out.sort();
+    out
+}
+
+/// A new map made of Conquest Reforged's palette exports Conquest's own
+/// blocks on its surface, beaches, beds and snow, each state one the game
+/// has; put back to the game's palette, it exports exactly as a map made
+/// vanilla from the start. With MASSIF_CONQUEST_DIR, each state is checked
+/// against Conquest's real lists too.
+#[test]
+fn a_new_map_of_conquest_blocks_exports_them() {
+    use massif_core::materials::{self as palettes, Palette as BlockPalette};
+    let params = GenParams { tiles_x: 3, tiles_z: 3, landform: Landform::Islands, relief: 400.0, seed: 5, ..GenParams::default() };
+    let options = ExportOptions { target: Target::release("1.20.1").unwrap(), ..ExportOptions::default() };
+    let mut conquest = generate(&GenParams { palette: BlockPalette::conquest(), ..params.clone() });
+    assert_eq!(conquest.meta.palette.name, "Conquest Reforged");
+    let dir = temp_dir("palette-conquest");
+    export(&conquest.snapshot(), &dir, &options, &Progress::default()).unwrap();
+    let states = palette_states(&dir, options.target.data_version);
+    let written: Vec<&String> = states.keys().filter(|s| s.starts_with("conquest:")).collect();
+    // Grass, rock, sand, gravel and snow of Conquest's.
+    for want in ["conquest:clover_covered_grass", "conquest:gray_limestone", "conquest:tan_sand", "conquest:gray_gravel", "conquest:icy_limestone"] {
+        assert!(written.iter().any(|s| s.starts_with(want)), "no {want} among {written:?}");
+    }
+    // Conquest's own states, by its lists: the fixture's, or its real ones.
+    let fixture: HashMap<String, Definition> = materials::parse(&std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/conquest_wp_palette.csv")).unwrap()).unwrap().blocks.into_iter().collect();
+    for s in &written {
+        let (name, props) = split(s);
+        let state = format!("{name}[{}]", props.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(","));
+        materials::check(&state, &fixture).unwrap_or_else(|e| panic!("{s}: {e}"));
+    }
+    if let Some(inst) = conquest_instance()
+        && let Some(jar) = massif_assets::find_jars().into_iter().find(|j| Some(&j.version) == inst.minecraft.as_ref())
+        && let Ok(cat) = massif_assets::load_with_mods(&jar.path, &jar.version, &inst.files())
+    {
+        let used: HashSet<String> = written.iter().map(|s| split(s).0).collect();
+        let truth = real_truth(&cat, &inst.dir, &used);
+        let checked = check_world(&dir, &truth);
+        eprintln!("{} Conquest states checked against {}", checked.len(), inst.name);
+        // Each a whole block, its colour (for before the game is read) its
+        // texture's.
+        let conquest = BlockPalette::conquest();
+        let mut colors = BTreeMap::new();
+        for state in conquest.states() {
+            let id = state.split('[').next().unwrap();
+            let block = cat.block(id).filter(|b| b.full_cube).unwrap_or_else(|| panic!("{id} is not a whole block of Conquest's"));
+            colors.insert(state.to_owned(), block.color);
+        }
+        let off: Vec<&String> = colors.iter().filter(|(s, c)| conquest.colors.get(*s).is_none_or(|k| k.iter().zip(c.iter()).any(|(a, b)| a.abs_diff(*b) > 8))).map(|(s, _)| s).collect();
+        let listed: Vec<String> = colors.iter().map(|(s, c)| format!("\"{s}\": [{}, {}, {}]", c[0], c[1], c[2])).collect();
+        assert!(off.is_empty(), "colours to keep in conquest_terrains.json: {{{}}}", listed.join(", "));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // Back to the game's blocks: the same export as a vanilla map's.
+    let mut history = History::default();
+    let mut registry = conquest.registry.clone();
+    assert!(palettes::apply(&mut registry, &BlockPalette::vanilla()) > 0);
+    let meta = massif_core::WorldMeta { palette: BlockPalette::vanilla(), ..conquest.meta.clone() };
+    history.replace_settings(&mut conquest, meta, registry, "Blocks: Vanilla");
+    let back = temp_dir("palette-back");
+    export(&conquest.snapshot(), &back, &options, &Progress::default()).unwrap();
+    let mut vanilla = generate(&params);
+    let plain = temp_dir("palette-vanilla");
+    export(&vanilla.snapshot(), &plain, &options, &Progress::default()).unwrap();
+    assert!(palette_states(&back, options.target.data_version).keys().all(|s| !s.starts_with("conquest:")));
+    assert_eq!(palette_states(&back, options.target.data_version), palette_states(&plain, options.target.data_version));
+    assert!(region_bytes(&back) == region_bytes(&plain), "the regions differ from a vanilla map's");
+    // Undone, the map is Conquest's again.
+    history.undo(&mut conquest);
+    assert_eq!(conquest.meta.palette.name, "Conquest Reforged");
+    let _ = (std::fs::remove_dir_all(&back), std::fs::remove_dir_all(&plain));
+}

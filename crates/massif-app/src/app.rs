@@ -53,6 +53,8 @@ struct Settings {
     /// The jars of the mods whose blocks are painted with too (Conquest
     /// Reforged and the like).
     mod_jars: Vec<PathBuf>,
+    /// The player's own block palettes (see `palettes`).
+    palettes: Vec<massif_core::materials::Palette>,
     /// The accent colour: what is chosen, the main buttons, the art of the
     /// home screen.
     accent: [u8; 3],
@@ -153,6 +155,7 @@ impl Default for Settings {
             light: crate::map_render::DEFAULT_LIGHT,
             minecraft_jar: None,
             mod_jars: Vec::new(),
+            palettes: Vec::new(),
             accent: theme::DEFAULT_ACCENT,
             sounds: crate::sounds::SoundLevel::Essential,
             volume: 0.6,
@@ -367,6 +370,8 @@ enum Dialog {
     Layer(crate::layers::Kind, usize),
     /// What WorldPainter `.layer` files became.
     LayerImport(Vec<crate::layers::LayerImport>),
+    /// The block palettes window.
+    Palettes(Box<crate::palettes::PaletteEditor>),
 }
 
 struct Status {
@@ -715,10 +720,41 @@ impl MassifApp {
         }
     }
 
+    /// The block palettes: those of Massif, the player's, and the map's own
+    /// when it is none of them.
+    fn all_palettes(&self) -> Vec<massif_core::materials::Palette> {
+        let mut all = massif_core::materials::Palette::built_in();
+        all.extend(self.settings.palettes.iter().cloned());
+        let mine = &self.doc.world.meta.palette;
+        if self.home.is_none() && !all.iter().any(|p| p.name == mine.name) {
+            all.push(mine.clone());
+        }
+        all
+    }
+
+    /// The palettes window, `shown` first.
+    fn open_palettes(&mut self, shown: Option<&str>) {
+        let of_map = massif_core::materials::read(&self.doc.world.registry, tr!("This map's blocks"));
+        self.dialog = Some(Dialog::Palettes(Box::new(crate::palettes::PaletteEditor::new(self.settings.palettes.clone(), shown, of_map))));
+    }
+
+    /// Whether Conquest Reforged's blocks are read.
+    fn has_conquest(&self) -> bool {
+        self.blocks.catalogue.as_ref().is_some_and(|c| c.mods.iter().any(|m| m.kind == massif_assets::SourceKind::Mod && m.namespaces.iter().any(|n| n == "conquest")))
+    }
+
     /// Do what the home screen asks.
     fn home_action(&mut self, ctx: &egui::Context, action: HomeAction) {
         match action {
             HomeAction::Create(params, template) => {
+                // A map of Conquest Reforged's blocks: its blocks read, from
+                // its instance found here, to show and export them.
+                if params.palette.namespaces().contains(&"conquest")
+                    && !self.has_conquest()
+                    && let Some(found) = self.blocks.conquest.first().cloned()
+                {
+                    self.blocks.use_instance(ctx, &found, &mut self.settings.minecraft_jar, &mut self.settings.mod_jars);
+                }
                 self.after_create = template;
                 self.sample = None;
                 self.request(ctx, Pending::New(params));
@@ -769,6 +805,10 @@ impl MassifApp {
             }
             HomeAction::Settings => self.dialog = Some(Dialog::Preferences(PrefsSection::Appearance)),
             HomeAction::Update => self.dialog = Some(Dialog::Update),
+            HomeAction::EditPalettes => {
+                let shown = self.home.as_ref().map(|h| h.new_map.params.palette.name.clone());
+                self.open_palettes(shown.as_deref());
+            }
             HomeAction::Dropped(path) => {
                 let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
                 match ext.as_str() {
@@ -793,9 +833,13 @@ impl MassifApp {
         let mut action = None;
         let animate = self.settings.animate_backdrop;
         let update = self.update_offer().map(|r| r.tag_name.trim_start_matches('v').to_owned());
+        let palettes = self.all_palettes();
         egui::CentralPanel::default().frame(egui::Frame::new()).show(ui, |ui| {
             if let Some(home) = &mut self.home {
                 home.animate = animate;
+                if home.new_map.palettes != palettes {
+                    home.new_map.palettes = palettes;
+                }
                 home.update = update;
                 action = home.ui(ui, &recent, note.as_ref().map(|(t, e)| (t.as_str(), *e)));
             }
@@ -3574,7 +3618,27 @@ impl MassifApp {
             EditorKind::Info => {
                 let stats = self.map_cache.stats();
                 let mut affects_map = false;
-                scrolled(&mut cui, &mut |ui| affects_map = panels::info_panel(ui, &mut self.doc, self.hover, stats));
+                let palettes = self.all_palettes();
+                let before = self.doc.world.meta.palette.clone();
+                let mut edit = false;
+                scrolled(&mut cui, &mut |ui| affects_map = panels::info_panel(ui, &mut self.doc, self.hover, stats, &palettes, &mut edit));
+                if edit {
+                    let shown = self.doc.world.meta.palette.name.clone();
+                    self.open_palettes(Some(&shown));
+                }
+                if self.doc.world.meta.palette != before {
+                    // The terrains' new blocks in their real colours, and
+                    // Conquest's read when it is installed but not yet read.
+                    self.blocks.applied = None;
+                    if self.doc.world.meta.palette.namespaces().contains(&"conquest")
+                        && !self.has_conquest()
+                        && !self.blocks.is_loading()
+                        && let Some(found) = self.blocks.conquest.first().cloned()
+                    {
+                        let ctx = cui.ctx().clone();
+                        self.blocks.use_instance(&ctx, &found, &mut self.settings.minecraft_jar, &mut self.settings.mod_jars);
+                    }
+                }
                 if affects_map {
                     self.map_cache.invalidate_all();
                     self.view3d.invalidate_all();
@@ -3705,6 +3769,29 @@ impl MassifApp {
         let Some(dialog) = self.dialog.take() else { return };
         let mut keep = true;
         match dialog {
+            Dialog::Palettes(mut editor) => {
+                let mut close = None;
+                let response = modal(ctx, "palettes").show(ctx, |ui| {
+                    if let crate::palettes::Choice::Close(own) = editor.ui(ui, &mut self.blocks) {
+                        close = Some(own);
+                    }
+                });
+                if response.should_close() && close.is_none() {
+                    close = Some(editor.own.clone());
+                }
+                match close {
+                    Some(own) => {
+                        self.settings.palettes = own;
+                        // The new map's palette, kept up to date.
+                        let all = self.all_palettes();
+                        if let Some(home) = &mut self.home {
+                            let p = &mut home.new_map.params.palette;
+                            *p = all.iter().find(|q| q.name == p.name).cloned().unwrap_or_default();
+                        }
+                    }
+                    None => self.dialog = Some(Dialog::Palettes(editor)),
+                }
+            }
             Dialog::LayerImport(imported) => {
                 let response = modal(ctx, "worldpainter layers").show(ctx, |ui| {
                     ui.set_width(460.0);
@@ -8600,7 +8687,7 @@ mod tests {
                     h.render().unwrap().save(dir.join(format!("dialog-ores-{}.png", scale.to_lowercase()))).unwrap();
                 }
             }
-            h.get_by_label("Blocks").click();
+            h.get_by_role_and_label(egui::accesskit::Role::Button, "Blocks").click();
             // Drag the top of the diamonds' candle up 60 points.
             let diamond = h.state().doc.world.meta.ores.ores.iter().position(|o| o.mineral == massif_core::analysis::Mineral::Diamond).unwrap();
             let (from, before) = match &mut h.state_mut().dialog {
@@ -13633,6 +13720,145 @@ mod tests {
         assert!(h.state().home.is_none());
         assert!(h.state().layout.terrain(), "on the Terrain side");
         assert!(h.state().doc.world.meta.graph.is_some(), "with the template's graph");
+    }
+
+    /// Block palettes from end to end: a new map made of Conquest
+    /// Reforged's blocks from the New map dialog, its palette put back to
+    /// the game's from the map's settings in one step to undo, and a palette
+    /// of one's own made in the palettes window and kept in the settings.
+    /// With MASSIF_CONQUEST_DIR, Conquest's real blocks are read first;
+    /// MASSIF_SNAPSHOT_DIR renders the dialog, the map in 2D and 3D, and the
+    /// window.
+    #[test]
+    fn block_palettes_in_the_app() {
+        use egui_kittest::kittest::Queryable;
+        use massif_core::materials::Palette as BlockPalette;
+        let shots = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let mut h = harness(ThemeChoice::Dark);
+        let ctx = h.ctx.clone();
+        let settle = |h: &mut egui_kittest::Harness<'_, MassifApp>, done: &dyn Fn(&MassifApp) -> bool| {
+            let started = std::time::Instant::now();
+            while !done(h.state()) {
+                assert!(started.elapsed().as_secs() < 180, "{:?}", h.state().blocks.error);
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        };
+        // Conquest's real blocks, when its instance is named.
+        if let Some(dir) = std::env::var_os("MASSIF_CONQUEST_DIR").map(PathBuf::from)
+            && let Some(instance) = massif_assets::instance::with_mod_in(&dir, "conquest").into_iter().next()
+        {
+            let app = h.state_mut();
+            let (mut jar, mut mods) = (None, Vec::new());
+            app.blocks.use_instance(&ctx, &instance, &mut jar, &mut mods);
+            settle(&mut h, &|app| !app.blocks.is_loading());
+            assert!(h.state().has_conquest(), "{:?}", h.state().blocks.error);
+        }
+
+        // The New map dialog offers the palettes.
+        h.state_mut().open_home(Page::NewMap);
+        {
+            let home = h.state_mut().home.as_mut().unwrap();
+            home.new_map.params.name = "Conquest palette".into();
+            home.new_map.params.landform = Landform::Mountains;
+            home.new_map.params.relief = 160.0;
+            home.new_map.seed = "2027".into();
+            home.new_map.width = 1024;
+            home.new_map.depth = 1024;
+        }
+        h.run_steps(3);
+        h.get_by_value("Vanilla").click();
+        h.run_steps(2);
+        h.get_by_label("Conquest Reforged").click();
+        for _ in 0..30 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+        assert_eq!(h.state().home.as_ref().unwrap().new_map.params.palette, BlockPalette::conquest());
+        if let Some(dir) = &shots {
+            h.render().unwrap().save(dir.join("palette-new-map.png")).unwrap();
+        }
+        h.get_by_label("Create map").click();
+        h.run_steps(2);
+        settle(&mut h, &|app| app.jobs.is_empty() && app.home.is_none());
+        let reg = &h.state().doc.world.registry;
+        assert_eq!(h.state().doc.world.meta.palette.name, "Conquest Reforged");
+        let grass = reg.terrain(reg.terrain_by_name("Grass").unwrap());
+        assert!(grass.strata[0].blocks.iter().any(|b| reg.block(b.0).state.starts_with("conquest:")));
+
+        // The map in 2D and 3D, its settings beside it, given the brushes'
+        // room.
+        h.state_mut().layout.active = 0;
+        {
+            let root = &mut h.state_mut().layout.current_mut().root;
+            let mut areas = Vec::new();
+            root.areas(&mut areas);
+            let find = |kind| areas.iter().find(|(_, k)| *k == kind).unwrap().0;
+            let (brushes, info) = (find(crate::layout::EditorKind::Brushes), find(crate::layout::EditorKind::Info));
+            root.set_editor(brushes, crate::layout::EditorKind::Info);
+            root.set_editor(info, crate::layout::EditorKind::Brushes);
+        }
+        h.run_steps(5);
+        settle(&mut h, &|app| app.view3d.pending() == 0 && !app.blocks.is_loading());
+        h.run_steps(5);
+        if let Some(dir) = &shots {
+            h.render().unwrap().save(dir.join("palette-map.png")).unwrap();
+        }
+
+        // Back to the game's blocks from the map's settings, in one step.
+        h.get_by_value("Conquest Reforged").click();
+        h.run_steps(2);
+        h.get_by_label("Vanilla").click();
+        h.run_steps(3);
+        assert!(h.state().doc.world.meta.palette.is_vanilla());
+        let reg = &h.state().doc.world.registry;
+        let grass = reg.terrain(reg.terrain_by_name("Grass").unwrap());
+        assert!(grass.strata.iter().flat_map(|s| &s.blocks).all(|b| reg.block(b.0).state.starts_with("minecraft:")));
+        assert_eq!(h.state().doc.history.undo_label(), Some("Blocks: Vanilla"));
+        settle(&mut h, &|app| app.view3d.pending() == 0);
+        h.run_steps(3);
+        if let Some(dir) = &shots {
+            h.render().unwrap().save(dir.join("palette-map-vanilla.png")).unwrap();
+        }
+        h.state_mut().doc.undo();
+        assert_eq!(h.state().doc.world.meta.palette.name, "Conquest Reforged", "undone");
+        h.run_steps(2);
+
+        // A palette of one's own: Conquest's duplicated, a block typed into
+        // its grass, kept in the settings.
+        h.get_by_value("Conquest Reforged").click();
+        h.run_steps(2);
+        h.get_by_label("Edit palettes…").click();
+        h.run_steps(3);
+        assert!(matches!(h.state().dialog, Some(Dialog::Palettes(_))));
+        h.get_by_label(&theme::with_icon(Icon::Copy, "Duplicate")).click();
+        h.run_steps(2);
+        if let Some(Dialog::Palettes(editor)) = &mut h.state_mut().dialog {
+            editor.typed = "conquest:peat".into();
+        }
+        h.run_steps(1);
+        h.get_by_label(&theme::with_icon(Icon::Plus, "Add")).click();
+        h.run_steps(3);
+        if let Some(dir) = &shots {
+            settle(&mut h, &|app| !app.blocks.is_loading());
+            h.run_steps(3);
+            h.render().unwrap().save(dir.join("palette-editor.png")).unwrap();
+        }
+        h.get_by_label(&theme::with_icon(Icon::Check, "Done")).click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none());
+        let own = &h.state().settings.palettes;
+        assert_eq!(own.len(), 1);
+        assert_eq!(own[0].name, "Conquest Reforged copy");
+        assert!(own[0].terrains["Grass"].strata[0].blocks.iter().any(|b| b.0 == "conquest:peat"));
+        // Picked from the map's settings, it makes the map of its blocks.
+        h.get_by_value("Conquest Reforged").click();
+        h.run_steps(2);
+        h.get_by_label("Conquest Reforged copy").click();
+        h.run_steps(3);
+        let reg = &h.state().doc.world.registry;
+        let grass = reg.terrain(reg.terrain_by_name("Grass").unwrap());
+        assert!(grass.strata[0].blocks.iter().any(|b| reg.block(b.0).state == "conquest:peat"));
     }
 
     /// A map of lava: its preview, then the map itself, opaque and bright

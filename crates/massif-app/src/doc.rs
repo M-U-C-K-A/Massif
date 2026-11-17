@@ -392,6 +392,22 @@ impl Document {
         Some(name)
     }
 
+    /// Make the built-in terrains of the map of the blocks of `palette`
+    /// (the game's, Conquest Reforged's, the player's own…), as one step to
+    /// undo. Returns whether anything changed.
+    pub fn set_palette(&mut self, palette: massif_core::materials::Palette) -> bool {
+        let mut registry = self.world.registry.clone();
+        let changed = massif_core::materials::apply(&mut registry, &palette);
+        if changed == 0 && self.world.meta.palette == palette {
+            return false;
+        }
+        let name = if palette.is_vanilla() { tr!("Vanilla").to_owned() } else { palette.name.clone() };
+        let meta = massif_core::WorldMeta { palette, ..self.world.meta.clone() };
+        self.history.replace_settings(&mut self.world, meta, registry, tr!("Blocks: {name}", name));
+        self.after_history();
+        true
+    }
+
     /// Put `dimension` in place of dimension `dim` (the map made another
     /// size), as one step to undo named `label`.
     pub fn replace_dimension(&mut self, dim: usize, dimension: massif_core::world::Dimension, label: &str) {

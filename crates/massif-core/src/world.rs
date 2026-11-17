@@ -34,6 +34,10 @@ pub struct WorldMeta {
     /// back. `None`: the height chose the terrains.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fill: Option<crate::registry::TerrainId>,
+    /// What the built-in terrains are made of: the game's blocks or a
+    /// mod's (see [`crate::materials`]).
+    #[serde(default, skip_serializing_if = "crate::materials::Palette::is_vanilla")]
+    pub palette: crate::materials::Palette,
 }
 
 impl Default for WorldMeta {
@@ -48,6 +52,7 @@ impl Default for WorldMeta {
             ores: crate::ores::OreSettings::default(),
             gradients: Vec::new(),
             fill: None,
+            palette: Default::default(),
         }
     }
 }

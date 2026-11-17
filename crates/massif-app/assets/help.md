@@ -8,6 +8,7 @@ The home screen opens with Massif. On the left are the ways in: **New map**, **F
 - **Land**: a landform (flat, plains, hills, mountains, islands) or a template of the terrain generator, and how the ground is painted.
 - **Water**: its level, water or lava, and beaches along the shores.
 - **Seed**: the same seed always gives the same land.
+- **Blocks**: the block palette the terrains are made of: Vanilla, Conquest Reforged or one of your own: see Painting ▸ Block palettes.
 Press **Create map** (or `Enter`). A `.massif`, a `.world` or a height map dropped on the window opens too.
 
 **Samples**, on the left, opens a small map made from a template of the terrain generator (Alpine range, Archipelago, Floating mountains), its relief built in a few seconds, to explore at once.
@@ -127,6 +128,12 @@ Each change of the selection is a step to undo. The selection is saved in the ma
 # Painting
 ## Terrains and biomes
 **Paint** gives the ground a terrain: pick it in the Terrain palette. To blend two terrains into each other instead of meeting on a line, take the **Gradient brush**: beside Paint in the Paint row of the Tools panel (a swatch fading out, with a dot until you try it), or **Gradient** among the ways to paint at the top of Paint terrain's Tool Settings (**One terrain**, **Noise**, **Gradient**). **Biome** paints biomes the same way: pick one in the Biomes palette. The right button takes a biome back to the automatic one, and a terrain back to the map's own: the terrain a new map was filled with (one covering nearly all of an older map), shown under **Right button** in Tool Settings, where **Change** chooses another. On a map whose terrains came from its height, or with **By height**, it puts back what the height calls for: grass, sand by the water, rock and snow up high.
+
+## Block palettes
+A block palette says what the terrains are made of: the grass, rock, sand, gravel and snow the generator lays by height and slope, the other natural terrains, and the rock under them where caves are carved and ores laid. A terrain a palette leaves out is the game's; terrains of your own are never touched.
+- **Vanilla** and **Conquest Reforged** come with Massif. Conquest's mixes its grass blocks, loamy dirt, limestones, sands, gravels and snow in patches, from its own lists; the rock stays the game's stone, which Conquest makes its limestone.
+- **Blocks** in the New map settings picks the palette of a new map. **Blocks** in the Info panel makes the whole map of another palette at once, in one step to undo.
+- **Edit palettes…** at the bottom of either menu: **Duplicate** a palette or make one **From this map**, pick a terrain, then for each layer its depth, **In patches**, and its blocks with their weights. Click a layer, then a block in the grid, or type any id (`mod:block[axis=x]`). **Rock under the terrains** sets the rock above and under Y 0. Your palettes are kept with the settings.
 
 ## Conquest Reforged and other mods
 
