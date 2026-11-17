@@ -21,6 +21,8 @@ pub enum Kind {
     Mix,
     /// A layer of underground pockets, by number.
     Pockets,
+    /// A combined layer, by number.
+    Combined,
 }
 
 /// What the panel keeps between frames: the layer being renamed.
@@ -81,9 +83,45 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     if state.packs {
         return crate::packs::packs_panel(ui, tools, doc, blocks.catalogue.as_deref(), &mut state.search, &mut state.library);
     }
-    let before = (doc.world.registry.covers.clone(), doc.world.registry.object_layers.clone(), doc.world.registry.pockets.clone());
+    let before = (doc.world.registry.covers.clone(), doc.world.registry.object_layers.clone(), doc.world.registry.pockets.clone(), doc.world.registry.combined.clone());
     let mut said = None;
     let mut actions = Vec::new();
+
+    // Combined layers: several of the others at once.
+    let reg = &doc.world.registry;
+    let mut combined: Vec<(u32, Entry)> = reg
+        .combined
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| !c.removed)
+        .map(|(k, c)| {
+            (
+                c.order,
+                Entry {
+                    kind: Kind::Combined,
+                    id: k + 1,
+                    name: c.name.clone(),
+                    color: c.color,
+                    detail: trn!("{n} layer", "{n} layers", n = c.parts.len()),
+                    tip: crate::panels::describe_combined(reg, c),
+                    shown: None,
+                    locked: None,
+                    selected: tools.tool == Tool::Combined && tools.combined as usize == k + 1,
+                },
+            )
+        })
+        .collect();
+    combined.sort_by_key(|(order, e)| (*order, e.id));
+    let combined: Vec<Entry> = combined.into_iter().map(|c| c.1).collect();
+    if header(ui, Icon::Combine, tr!("Combined layers"), tr!("New combined"), tr!("Several layers painted at once: a terrain, a biome, a cover, trees, pockets")) {
+        tools.combined = crate::panels::new_combined(&mut doc.world.registry);
+        tools.select(Tool::Combined);
+    }
+    if combined.is_empty() {
+        hint(ui, tr!("A forest's terrain, biome, ground cover and trees in one stroke, as WorldPainter's combined layers."));
+    }
+    list(ui, &combined, state, &mut actions);
+    ui.add_space(8.0);
 
     // Terrain mixes: the ground.
     let current = (tools.tool == Tool::PaintTerrain && tools.pattern.on).then(|| tools.pattern.preset_name()).flatten();
@@ -267,11 +305,11 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     ui.add_space(8.0);
     hint(ui, tr!("Click a layer to paint it, double-click to rename it; its menu has its settings, its place in the list, its lock. A block holds one layer of each section. Ready-made trees, plants and mixes: Packs, above."));
 
-    let lists = [(Kind::Mix, false, mixes), (Kind::Cover, false, covers), (Kind::Objects, false, base), (Kind::Objects, true, under), (Kind::Pockets, false, pockets)];
+    let lists = [(Kind::Combined, false, combined), (Kind::Mix, false, mixes), (Kind::Cover, false, covers), (Kind::Objects, false, base), (Kind::Objects, true, under), (Kind::Pockets, false, pockets)];
     for action in actions {
         apply(action, tools, doc, state, &lists);
     }
-    if (doc.world.registry.covers.clone(), doc.world.registry.object_layers.clone(), doc.world.registry.pockets.clone()) != before {
+    if (doc.world.registry.covers.clone(), doc.world.registry.object_layers.clone(), doc.world.registry.pockets.clone(), doc.world.registry.combined.clone()) != before {
         doc.mark_changed();
     }
     said
@@ -438,6 +476,7 @@ fn row(ui: &mut Ui, e: &Entry, state: &mut LayersUi, actions: &mut Vec<Action>) 
             Kind::Objects => tr!("Nothing stands where it was painted any more"),
             Kind::Mix => tr!("Forget this mix (the ground painted with it stays)"),
             Kind::Pockets => tr!("No pocket where it was painted any more"),
+            Kind::Combined => tr!("What it painted stays"),
         };
         if ui.button(RichText::new(theme::with_icon(Icon::Trash2, tr!("Remove"))).color(pal.danger)).on_hover_text(what).clicked() {
             actions.push(Action::Remove(e.kind, e.id));
@@ -477,7 +516,7 @@ fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut 
                 p.locked = !p.locked;
             }
         }
-        Action::ToggleLock(Kind::Mix, _) => {}
+        Action::ToggleLock(Kind::Mix | Kind::Combined, _) => {}
         Action::Move(kind, id, up) => {
             // Its section's list, in the order shown; it changes place with
             // its neighbour.
@@ -493,6 +532,13 @@ fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut 
                     for (place, &n) in ids.iter().enumerate() {
                         if let Some(p) = reg.pockets.get_mut(n - 1) {
                             p.order = place as u32 + 1;
+                        }
+                    }
+                }
+                Kind::Combined => {
+                    for (place, &n) in ids.iter().enumerate() {
+                        if let Some(c) = reg.combined.get_mut(n - 1) {
+                            c.order = place as u32 + 1;
                         }
                     }
                 }
@@ -537,7 +583,26 @@ fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut 
                 l.hidden = !l.hidden;
             }
         }
-        Action::ToggleShown(Kind::Mix | Kind::Pockets, _) => {}
+        Action::ToggleShown(Kind::Mix | Kind::Pockets | Kind::Combined, _) => {}
+        Action::Paint(Kind::Combined, n) => {
+            tools.combined = n as u16;
+            tools.select(Tool::Combined);
+        }
+        Action::Duplicate(Kind::Combined, n) => {
+            if let Some(mut c) = reg.combined.get(n - 1).cloned() {
+                c.name = unique_name(&tr!("{name} copy", name = c.name), reg.combined.iter().filter(|c| !c.removed).map(|c| c.name.as_str()));
+                tools.combined = reg.add_combined(c);
+                tools.select(Tool::Combined);
+            }
+        }
+        Action::Remove(Kind::Combined, n) => {
+            if let Some(c) = reg.combined.get_mut(n - 1) {
+                c.removed = true;
+            }
+            if tools.combined as usize == n {
+                tools.combined = reg.combined.iter().position(|c| !c.removed).map_or(0, |k| k as u16 + 1);
+            }
+        }
         Action::Paint(Kind::Pockets, n) => {
             tools.pocket_layer = n as u16;
             tools.select(Tool::Pockets);
@@ -575,6 +640,11 @@ fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut 
                 Kind::Pockets => {
                     if let Some(p) = reg.pockets.get_mut(id - 1) {
                         p.name = name;
+                    }
+                }
+                Kind::Combined => {
+                    if let Some(c) = reg.combined.get_mut(id - 1) {
+                        c.name = name;
                     }
                 }
                 Kind::Mix => {
@@ -775,10 +845,15 @@ mod tests {
             let mut clay = massif_core::pockets::PocketDef::new("Clay lenses", [160, 166, 179], &[(clay, 1)], 0.08, 7.0, 30, 58);
             clay.locked = true;
             s.doc.world.registry.add_pocket(clay);
+            // A combined layer.
+            let mut forest = massif_core::combined::CombinedDef::new("Oak forest", [74, 116, 52]);
+            forest.set(massif_core::combined::Part::Cover, Some((2, 0.6)));
+            forest.set(massif_core::combined::Part::Trees, Some((1, 1.0)));
+            s.doc.world.registry.add_combined(forest);
             s.tools.cover = 3;
             s.tools.select(Tool::Cover);
             let mut h = egui_kittest::Harness::builder()
-                .with_size(vec2(320.0, 1000.0))
+                .with_size(vec2(320.0, 1100.0))
                 .with_pixels_per_point(ppp)
                 .with_accessibility_check(false)
                 .wgpu()

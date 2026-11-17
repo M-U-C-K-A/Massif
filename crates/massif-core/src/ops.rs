@@ -434,6 +434,10 @@ fn paint_hit(w: f32, strength: f32, x: i32, z: i32, salt: u64) -> bool {
     p >= 1.0 || (hash2(x, z, salt) as f32) < p * p * u32::MAX as f32
 }
 
+/// Paint `value` into a plane of the tiles under the brush. `slot`: the
+/// slot of the plane, whose locked layers keep their blocks. `share`: only
+/// that share of the columns, drawn once for good from the seed with it,
+/// so that painting again over the same blocks paints the same columns.
 #[allow(clippy::too_many_arguments)]
 fn paint_plane(
     edit: &mut Edit,
@@ -443,6 +447,7 @@ fn paint_plane(
     salt: u64,
     value: u16,
     slot: Option<crate::registry::Slot>,
+    share: Option<(f32, u64)>,
     plane: impl Fn(&mut Tile) -> &mut Plane<u16> + Sync,
 ) {
     let dab = Dab::new(edit, brush, cx, cz);
@@ -458,6 +463,11 @@ fn paint_plane(
             for x in dab.row(z, &clip) {
                 let w = dab.weight(x, z);
                 if w <= 0.0 || !paint_hit(w, brush.strength, x, z, salt) {
+                    continue;
+                }
+                if let Some((share, seed)) = share
+                    && hash2(x, z, seed) as f32 >= share * u32::MAX as f32
+                {
                     continue;
                 }
                 let i = local_index(x, z);
@@ -511,38 +521,38 @@ pub fn paint_terrain_with(
 
 /// Paint a terrain. `salt` should change from dab to dab.
 pub fn paint_terrain(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, terrain: TerrainId, salt: u64) {
-    paint_plane(edit, brush, cx, cz, salt, terrain.0, None, |t| &mut t.terrain);
+    paint_plane(edit, brush, cx, cz, salt, terrain.0, None, None, |t| &mut t.terrain);
 }
 
 /// Paint a biome. `salt` should change from dab to dab.
 pub fn paint_biome(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, biome: BiomeId, salt: u64) {
-    paint_plane(edit, brush, cx, cz, salt, biome.0, None, |t| &mut t.biome);
+    paint_plane(edit, brush, cx, cz, salt, biome.0, None, None, |t| &mut t.biome);
 }
 
 /// Paint a ground cover by its number (0 removes it). `salt` should
 /// change from dab to dab.
 pub fn paint_cover(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, cover: u16, salt: u64) {
-    paint_plane(edit, brush, cx, cz, salt, cover, Some(crate::registry::Slot::Cover), |t| &mut t.cover);
+    paint_plane(edit, brush, cx, cz, salt, cover, Some(crate::registry::Slot::Cover), None, |t| &mut t.cover);
 }
 
 /// Paint an annotation, one of [`crate::tile::ANNOTATION_COLORS`] by its
 /// number (1 to 15; 0 removes it). `salt` should change from dab to dab.
 pub fn paint_annotation(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, color: u16, salt: u64) {
-    paint_plane(edit, brush, cx, cz, salt, color.min(15), None, |t| &mut t.annotations);
+    paint_plane(edit, brush, cx, cz, salt, color.min(15), None, None, |t| &mut t.annotations);
 }
 
 /// Paint a sub-canopy object layer by its number (0 removes it): beside
 /// the base object layer of each column, not in its place. `salt` should
 /// change from dab to dab.
 pub fn paint_understory(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, layer: u16, salt: u64) {
-    paint_plane(edit, brush, cx, cz, salt, layer, Some(crate::registry::Slot::Objects), |t| &mut t.understory);
+    paint_plane(edit, brush, cx, cz, salt, layer, Some(crate::registry::Slot::Objects), None, |t| &mut t.understory);
 }
 
 /// Paint the size of tree the objects standing there take, from
 /// [`crate::tile::SIZE_BUSHES`] to [`crate::tile::SIZE_LARGE`] (0: any
 /// size). `salt` should change from dab to dab.
 pub fn paint_tree_size(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, size: u16, salt: u64) {
-    paint_plane(edit, brush, cx, cz, salt, size.min(crate::tile::SIZE_LARGE), None, |t| &mut t.sizes);
+    paint_plane(edit, brush, cx, cz, salt, size.min(crate::tile::SIZE_LARGE), None, None, |t| &mut t.sizes);
 }
 
 /// Move what is painted of object layer `n` to the sub-canopy plane
@@ -586,13 +596,36 @@ pub fn move_object_layer(edit: &mut Edit, n: u16, under: bool) -> usize {
 /// Paint a layer of underground pockets by its number (0 removes it), on
 /// the ground level. `salt` should change from dab to dab.
 pub fn paint_pockets(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, layer: u16, salt: u64) {
-    paint_plane(edit, brush, cx, cz, salt, layer, Some(crate::registry::Slot::Pockets), |t| &mut t.pockets);
+    paint_plane(edit, brush, cx, cz, salt, layer, Some(crate::registry::Slot::Pockets), None, |t| &mut t.pockets);
 }
 
 /// Paint an object layer by its number (0 removes it). `salt` should
 /// change from dab to dab.
 pub fn paint_objects(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, layer: u16, salt: u64) {
-    paint_plane(edit, brush, cx, cz, salt, layer, Some(crate::registry::Slot::Objects), |t| &mut t.objects);
+    paint_plane(edit, brush, cx, cz, salt, layer, Some(crate::registry::Slot::Objects), None, |t| &mut t.objects);
+}
+
+/// Paint the parts of a combined layer (see
+/// [`crate::combined::CombinedDef::to_paint`]), each into its slot as its
+/// own tool paints it, over its share of the columns; a part of layer 0
+/// rubs its slot out. Underground pockets are in the rock of the ground:
+/// paint them with an edit of the ground level. `salt` should change from
+/// dab to dab.
+pub fn paint_parts(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, parts: &[crate::combined::Component], salt: u64) {
+    use crate::combined::Part;
+    use crate::registry::Slot;
+    for c in parts {
+        let share = (c.share < 1.0).then_some((c.share.max(0.0), 0x636f_6d62_696e_6564 ^ (c.part as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)));
+        match c.part {
+            Part::Terrain => paint_plane(edit, brush, cx, cz, salt, c.layer, None, share, |t| &mut t.terrain),
+            Part::Biome => paint_plane(edit, brush, cx, cz, salt, c.layer, None, share, |t| &mut t.biome),
+            Part::Cover => paint_plane(edit, brush, cx, cz, salt, c.layer, Some(Slot::Cover), share, |t| &mut t.cover),
+            Part::Trees => paint_plane(edit, brush, cx, cz, salt, c.layer, Some(Slot::Objects), share, |t| &mut t.objects),
+            Part::Under => paint_plane(edit, brush, cx, cz, salt, c.layer, Some(Slot::Objects), share, |t| &mut t.understory),
+            Part::Size => paint_plane(edit, brush, cx, cz, salt, c.layer.min(crate::tile::SIZE_LARGE), None, share, |t| &mut t.sizes),
+            Part::Pockets => paint_plane(edit, brush, cx, cz, salt, c.layer, Some(Slot::Pockets), share, |t| &mut t.pockets),
+        }
+    }
 }
 
 /// Paint the terrains of a pattern under the brush (see
@@ -1355,6 +1388,53 @@ mod tests {
         paint_cover(&mut hist.edit(&mut w, 0), &hard_brush(30.0), 0.0, 0.0, ferns, 6);
         hist.commit();
         assert_eq!((cover(&w, -10), cover(&w, 8)), (ferns, ferns));
+    }
+
+    /// A combined layer's parts each go to their slot, in one stroke: each
+    /// over its share of the columns, the same columns when painted again;
+    /// a locked layer keeps its blocks; a part of layer 0 rubs its slot out.
+    #[test]
+    fn combined_parts_paint_their_slots() {
+        use crate::combined::{Component, Part};
+        use crate::registry::{Locks, Registry};
+        let mut w = world(1);
+        let part = |part: Part, layer: u16, share: f32| Component { part, layer, share };
+        let forest = [part(Part::Terrain, 3, 1.0), part(Part::Biome, 7, 1.0), part(Part::Cover, 2, 0.5), part(Part::Trees, 1, 1.0), part(Part::Under, 4, 0.25), part(Part::Size, 3, 1.0), part(Part::Pockets, 1, 1.0)];
+        let mut hist = History::default();
+        hist.begin("forest", 0);
+        paint_parts(&mut hist.edit(&mut w, 0), &hard_brush(30.0), 0.0, 0.0, &forest, 1);
+        hist.commit();
+        let tile = |w: &World| w.dims[0].ground().view(TilePos::new(0, 0)).unwrap().clone();
+        let t = tile(&w);
+        let cells: Vec<usize> = (0..16).flat_map(|z| (0..16).map(move |x| local_index(x, z))).collect();
+        let whole: Vec<(u16, u16, u16, u16, u16)> = cells.iter().map(|&i| (t.terrain.get(i), t.biome.get(i), t.objects.get(i), t.sizes.get(i), t.pockets.get(i))).collect();
+        assert!(whole.iter().all(|&v| v == (3, 7, 1, 3, 1)), "the whole parts everywhere: {:?}", whole.iter().find(|&&v| v != (3, 7, 1, 3, 1)));
+        let share = |plane: &crate::plane::Plane<u16>, v: u16| cells.iter().filter(|&&i| plane.get(i) == v).count() as f32 / cells.len() as f32;
+        let (covered, under) = (share(&t.cover, 2), share(&t.understory, 4));
+        assert!((0.38..0.62).contains(&covered) && (0.15..0.35).contains(&under), "cover {covered}, under the trees {under}");
+        // Painted again: the same columns.
+        hist.begin("again", 0);
+        for salt in 2..6 {
+            paint_parts(&mut hist.edit(&mut w, 0), &hard_brush(30.0), 0.0, 0.0, &forest, salt);
+        }
+        hist.commit();
+        assert_eq!(tile(&w).cover, t.cover);
+        // A locked cover keeps its blocks; the other parts paint over.
+        let mut reg = Registry::vanilla();
+        reg.covers[1].locked = true;
+        hist.locks = Locks::of(&reg);
+        hist.begin("meadow", 0);
+        paint_parts(&mut hist.edit(&mut w, 0), &hard_brush(30.0), 0.0, 0.0, &[part(Part::Cover, 5, 1.0), part(Part::Biome, 9, 1.0)], 7);
+        hist.commit();
+        let t2 = tile(&w);
+        assert!(cells.iter().all(|&i| t2.cover.get(i) == if t.cover.get(i) == 2 { 2 } else { 5 }) && cells.iter().all(|&i| t2.biome.get(i) == 9));
+        // Rubbed out: the slots named emptied.
+        hist.locks = Locks::default();
+        hist.begin("rub out", 0);
+        paint_parts(&mut hist.edit(&mut w, 0), &hard_brush(30.0), 0.0, 0.0, &[part(Part::Cover, 0, 1.0), part(Part::Trees, 0, 1.0), part(Part::Pockets, 0, 1.0)], 8);
+        hist.commit();
+        let t3 = tile(&w);
+        assert!(cells.iter().all(|&i| (t3.cover.get(i), t3.objects.get(i), t3.pockets.get(i), t3.terrain.get(i)) == (0, 0, 0, 3)));
     }
 
     /// Annotations are painted in their colour, rubbed out with 0, and

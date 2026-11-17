@@ -2577,5 +2577,30 @@
  "The lowest a pocket goes": "Wie tief eine Tasche höchstens reicht",
  "They take their share of the rock between their heights, never the strata of the ground.": "Sie nehmen ihren Anteil am Fels zwischen ihren Höhen ein, nie die Schichten des Bodens.",
  "Underground pockets": "Unterirdische Taschen",
- "{blocks} · from {low} to {high}": "{blocks} · von {low} bis {high}"
+ "{blocks} · from {low} to {high}": "{blocks} · von {low} bis {high}",
+ "(removed)": "(entfernt)",
+ "A forest's terrain, biome, ground cover and trees in one stroke, as WorldPainter's combined layers.": "Gelände, Biom, Bodenbewuchs und Bäume eines Waldes in einem Strich, wie die kombinierten Ebenen von WorldPainter.",
+ "Combined layer": "Kombinierte Ebene",
+ "Combined layers": "Kombinierte Ebenen",
+ "Combined {value}": "Kombiniert {value}",
+ "Each goes to its slot of the blocks, over its share, as its own tool paints it.": "Jede geht an ihren Platz in den Blöcken, über ihren Anteil, wie ihr eigenes Werkzeug sie malt.",
+ "Each layer goes to its slot of the blocks, over its share of the columns painted, as its own tool paints it: a block keeps one layer of each slot. Changing the combined layer changes what it paints next, not what it painted. Right button: rub out what it paints.": "Jede Ebene geht an ihren Platz in den Blöcken, über ihren Anteil der gemalten Spalten, wie ihr eigenes Werkzeug sie malt: Ein Block behält eine Ebene je Platz. Die kombinierte Ebene zu ändern ändert, was sie künftig malt, nicht was sie gemalt hat. Rechte Taste: wegradieren, was sie malt.",
+ "It paints": "Sie malt",
+ "Its colour in the lists": "Seine Farbe in den Listen",
+ "New combined": "Neue kombinierte",
+ "New combined layer": "Neue kombinierte Ebene",
+ "No combined layers yet: make one to paint several layers at once.": "Noch keine kombinierte Ebene: legen Sie eine an, um mehrere Ebenen auf einmal zu malen.",
+ "Nothing yet: choose what it paints in its settings.": "Noch nichts: Wählen Sie in den Einstellungen, was sie malt.",
+ "Paint several layers at once: a terrain, a biome, a ground cover, trees, pockets, each over its share. Right button: rub out what it paints.": "Mehrere Ebenen auf einmal malen: ein Gelände, ein Biom, einen Bodenbewuchs, Bäume, Taschen, jede über ihren Anteil. Rechte Taste: wegradieren, was sie malt.",
+ "Paint them all": "Alle malen",
+ "Paints several layers at once, as WorldPainter's combined layers: a forest's terrain, biome, ground cover and trees in one stroke.": "Malt mehrere Ebenen auf einmal, wie die kombinierten Ebenen von WorldPainter: Gelände, Biom, Bodenbewuchs und Bäume eines Waldes in einem Strich.",
+ "Pockets": "Taschen",
+ "Several layers painted at once: a terrain, a biome, a cover, trees, pockets": "Mehrere Ebenen auf einmal gemalt: ein Gelände, ein Biom, ein Bewuchs, Bäume, Taschen",
+ "The share of the columns painted it takes": "Der Anteil der gemalten Spalten, den sie nimmt",
+ "Tree size": "Baumgröße",
+ "What it painted stays": "Was sie gemalt hat, bleibt",
+ "{n} layers": {
+  "one": "{n} Ebene",
+  "other": "{n} Ebenen"
+ }
 }

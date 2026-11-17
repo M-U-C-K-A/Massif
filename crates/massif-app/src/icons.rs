@@ -91,6 +91,7 @@ fn art(tool: Tool) -> Art {
         Tool::Annotate => Art::Glyph(Icon::PenLine),
         Tool::TreeSize => Art::Glyph(Icon::ChartNoAxesColumnIncreasing),
         Tool::Pockets => Art::Glyph(Icon::Gem),
+        Tool::Combined => Art::Glyph(Icon::Combine),
         Tool::Water => Art::Glyph(Icon::Droplet),
         Tool::Drain => Art::Glyph(Icon::DropletOff),
         Tool::EraseSlab => Art::Glyph(Icon::Eraser),
@@ -419,7 +420,7 @@ mod tests {
     use super::*;
 
     /// Every tool, in the order of the Tools panel.
-    pub(super) const ALL: [Tool; 28] = [
+    pub(super) const ALL: [Tool; 32] = [
         Tool::Raise,
         Tool::Smooth,
         Tool::Flatten,
@@ -431,8 +432,12 @@ mod tests {
         Tool::PaintBiome,
         Tool::AutoPaint,
         Tool::AutoBiome,
+        Tool::Annotate,
         Tool::Cover,
         Tool::Objects,
+        Tool::TreeSize,
+        Tool::Pockets,
+        Tool::Combined,
         Tool::River,
         Tool::Flood,
         Tool::Drain,

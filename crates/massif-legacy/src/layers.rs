@@ -288,6 +288,28 @@ impl Converter {
                         parts.push((Conv::Biome(mapper.biome(biome as u8)), 1.0));
                     }
                 }
+                // The combined layer itself, to paint on with in Massif: the
+                // first layer of each slot it holds, at its factor (caves,
+                // tunnels and custom ground covers are applied as read).
+                use massif_core::combined::{CombinedDef, Part};
+                let color = arena.field(key, "colour").and_then(|c| arena.int(c)).map_or([96, 132, 62], |c| [(c >> 16) as u8, (c >> 8) as u8, c as u8]);
+                let mut def = CombinedDef::new(&name, color);
+                for (conv, f) in &parts {
+                    let (part, layer) = match conv {
+                        Conv::Terrain(t) => (Part::Terrain, *t),
+                        Conv::Biome(b) => (Part::Biome, *b),
+                        Conv::Cover(n) => (Part::Cover, *n),
+                        Conv::Objects(n, _, under) => (if *under { Part::Under } else { Part::Trees }, *n),
+                        Conv::Pockets(n) => (Part::Pockets, *n),
+                        _ => continue,
+                    };
+                    if def.get(part).is_none() {
+                        def.set(part, Some((layer, f.min(1.0))));
+                    }
+                }
+                if !def.parts.is_empty() {
+                    mapper.registry.add_combined(def);
+                }
                 parts
             }
             _ => convert(arena, key, &class, &mut mapper.registry).map(|c| vec![(c, 1.0)]).unwrap_or_default(),
@@ -1162,6 +1184,13 @@ mod tests {
         let forest = reg.biome_by_id("minecraft:forest").unwrap().0;
         assert_eq!(parts, [(Conv::Cover(frost_cover), 0.5), (Conv::GroundCover(0), 1.0), (Conv::Terrain(sand), 1.0), (Conv::Biome(forest), 1.0)]);
         assert_eq!(conv.ground_covers.len(), 1, "read once");
+        // And a combined layer to paint on with: its frost at its factor,
+        // its terrain and biome (the custom ground cover is no slot).
+        use massif_core::combined::Part;
+        let combined = &mapper.registry.combined;
+        assert_eq!(combined.len(), 1);
+        assert_eq!(combined[0].name, "Snowy sand");
+        assert_eq!(combined[0].parts.iter().map(|c| (c.part, c.layer, c.share)).collect::<Vec<_>>(), [(Part::Terrain, sand, 1.0), (Part::Biome, forest, 1.0), (Part::Cover, frost_cover, 0.5)]);
     }
 
     /// An underground pockets layer becomes a pocket layer of the same

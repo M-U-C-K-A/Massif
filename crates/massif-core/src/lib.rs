@@ -24,6 +24,7 @@ pub mod auto;
 pub mod brush;
 pub mod caves;
 pub mod codec;
+pub mod combined;
 pub mod compose;
 pub mod coords;
 pub mod filter;

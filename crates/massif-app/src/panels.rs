@@ -436,6 +436,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
         Tool::Annotate => annotation_settings(ui, tools),
         Tool::TreeSize => tree_size_settings(ui, tools),
         Tool::Pockets => pocket_settings(ui, tools, doc, blocks),
+        Tool::Combined => combined_settings(ui, tools, doc),
         Tool::PaintBiome => {
             let reg = &doc.world.registry;
             let def = reg.biome(BiomeId(tools.biome));
@@ -1740,6 +1741,177 @@ pub fn pocket_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
         }
     }
     if reg.pockets != before {
+        doc.mark_changed();
+    }
+}
+
+/// A new combined layer, painting nothing yet: its number.
+pub fn new_combined(reg: &mut Registry) -> u16 {
+    let count = reg.combined.iter().filter(|c| !c.removed).count();
+    let name = crate::layers::unique_name(&tr!("Combined {value}", value = count + 1), reg.combined.iter().filter(|c| !c.removed).map(|c| c.name.as_str()));
+    reg.add_combined(massif_core::combined::CombinedDef::new(&name, [96, 132, 62]))
+}
+
+/// The name of a slot a combined layer paints into, short, as
+/// `docs/layers.md` names the slots.
+pub fn part_name(part: massif_core::combined::Part) -> &'static str {
+    use massif_core::combined::Part;
+    match part {
+        Part::Terrain => tr!("Terrain"),
+        Part::Biome => tr!("Biome"),
+        Part::Cover => tr!("Cover"),
+        Part::Trees => tr!("Trees"),
+        Part::Under => tr!("Sub-canopy"),
+        Part::Size => tr!("Tree size"),
+        Part::Pockets => tr!("Pockets"),
+    }
+}
+
+/// The layers of slot `part` a combined layer may paint, by number, with
+/// their names.
+pub fn part_choices(reg: &Registry, part: massif_core::combined::Part) -> Vec<(u16, String)> {
+    use massif_core::combined::Part;
+    let live = |removed: bool| !removed;
+    match part {
+        Part::Terrain => reg.terrains.iter().enumerate().map(|(k, t)| (k as u16, t.name.clone())).collect(),
+        Part::Biome => reg.biomes.iter().enumerate().skip(1).map(|(k, b)| (k as u16, b.name.clone())).collect(),
+        Part::Cover => reg.covers.iter().enumerate().filter(|(_, c)| live(c.removed)).map(|(k, c)| (k as u16 + 1, c.name.clone())).collect(),
+        Part::Trees | Part::Under => reg.object_layers.iter().enumerate().filter(|(_, l)| live(l.removed) && l.understory == (part == Part::Under)).map(|(k, l)| (k as u16 + 1, l.name.clone())).collect(),
+        Part::Size => (1..=4).map(|n| (n, size_name(n).to_owned())).collect(),
+        Part::Pockets => reg.pockets.iter().enumerate().filter(|(_, p)| live(p.removed)).map(|(k, p)| (k as u16 + 1, p.name.clone())).collect(),
+    }
+}
+
+/// What combined layer `def` paints, in words: "Terrain: Grass · Ground
+/// cover: Ferns 50%".
+pub fn describe_combined(reg: &Registry, def: &massif_core::combined::CombinedDef) -> String {
+    let parts: Vec<String> = def
+        .parts
+        .iter()
+        .map(|c| {
+            let name = part_choices(reg, c.part).into_iter().find(|(n, _)| *n == c.layer).map_or_else(|| tr!("(removed)").to_owned(), |(_, name)| name);
+            if c.share < 1.0 { format!("{}: {name} {:.0}%", part_name(c.part), c.share * 100.0) } else { format!("{}: {name}", part_name(c.part)) }
+        })
+        .collect();
+    if parts.is_empty() { tr!("Nothing yet: choose what it paints in its settings.").to_owned() } else { parts.join(" · ") }
+}
+
+/// The combined layers of the world, and the one painted.
+fn combined_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
+    let pal = Palette::of(ui);
+    let mut picked = None;
+    ui.spacing_mut().item_spacing.y = 2.0;
+    for (k, c) in doc.world.registry.combined.iter().enumerate() {
+        if c.removed {
+            continue;
+        }
+        let n = k as u16 + 1;
+        let selected = tools.combined == n;
+        let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
+        let fill = if selected {
+            pal.accent_soft
+        } else if response.hovered() {
+            pal.header
+        } else {
+            Color32::TRANSPARENT
+        };
+        let painter = ui.painter();
+        painter.rect(rect, theme::TILE_RADIUS, fill, if selected { Stroke::new(1.0, pal.accent) } else { Stroke::NONE }, StrokeKind::Inside);
+        let dot = Rect::from_center_size(rect.left_center() + vec2(13.0, 0.0), vec2(11.0, 11.0));
+        painter.rect(dot, 3, theme::rgb(c.color), Stroke::new(1.0, Color32::from_black_alpha(60)), StrokeKind::Inside);
+        painter.text(rect.left_center() + vec2(26.0, 0.0), egui::Align2::LEFT_CENTER, &c.name, egui::FontId::proportional(12.5), pal.text);
+        painter.text(rect.right_center() - vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, trn!("{n} layer", "{n} layers", n = c.parts.len()), egui::FontId::proportional(11.0), pal.weak);
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &c.name));
+        if response.clicked() {
+            picked = Some(n);
+        }
+    }
+    ui.spacing_mut().item_spacing.y = 4.0;
+    if let Some(n) = picked {
+        tools.combined = n;
+    }
+    if ui.button(theme::with_icon(Icon::Plus, tr!("New combined layer"))).on_hover_text(tr!("Several layers painted at once: a terrain, a biome, a cover, trees, pockets")).clicked() {
+        tools.combined = new_combined(&mut doc.world.registry);
+    }
+    combined_editor(ui, tools, doc);
+}
+
+/// The settings of the combined layer picked (`tools.combined`), as Tool
+/// Settings and the layer's own dialog show them: its name and colour,
+/// and the layer of each slot it paints, over its share.
+pub fn combined_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
+    use massif_core::combined::Part;
+    // The widths of the layer and of its share in a row.
+    const LAYER_W: f32 = 124.0;
+    const SHARE_W: f32 = 60.0;
+    let pal = Palette::of(ui);
+    let reg = &doc.world.registry;
+    let Some(k) = tools.combined.checked_sub(1).map(usize::from).filter(|&k| reg.combined.get(k).is_some_and(|c| !c.removed)) else {
+        if reg.combined.iter().all(|c| c.removed) {
+            hint(ui, tr!("No combined layers yet: make one to paint several layers at once."));
+        }
+        return;
+    };
+    // The layers each slot offers, read before the layer is taken to be
+    // edited.
+    let choices: Vec<Vec<(u16, String)>> = Part::ALL.iter().map(|&p| part_choices(reg, p)).collect();
+    let before = reg.combined[k].clone();
+    let def = &mut doc.world.registry.combined[k];
+    ui.add_space(4.0);
+    section(ui, Icon::Combine, &def.name.clone());
+    ui.horizontal(|ui| {
+        ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Name")));
+        ui.add(egui::TextEdit::singleline(&mut def.name).desired_width((ui.available_width() - 40.0).max(60.0)));
+        let mut c = Color32::from_rgb(def.color[0], def.color[1], def.color[2]);
+        if egui::color_picker::color_edit_button_srgba(ui, &mut c, egui::color_picker::Alpha::Opaque).on_hover_text(tr!("Its colour in the lists")).changed() {
+            def.color = [c.r(), c.g(), c.b()];
+        }
+    });
+    ui.add_space(4.0);
+    section(ui, Icon::Layers, tr!("It paints"));
+    crate::widgets::well(ui, |ui| {
+        for (part, choices) in Part::ALL.into_iter().zip(&choices) {
+            crate::widgets::row(ui, part_name(part), |ui| {
+                // From the right: its share (or the room for it, so that the
+                // layers line up), then the layer.
+                let mut current = def.get(part);
+                match &mut current {
+                    Some((_, share)) => {
+                        let field = crate::widgets::Field::new(share, 0.0..=1.0)
+                            .width(SHARE_W)
+                            .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                            .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0));
+                        if ui.add(field).on_hover_text(tr!("The share of the columns painted it takes")).changed() {
+                            def.set(part, current);
+                        }
+                    }
+                    None => ui.add_space(SHARE_W + ui.spacing().item_spacing.x),
+                }
+                let shown = current.and_then(|(n, _)| choices.iter().find(|(c, _)| *c == n)).map_or(tr!("None"), |(_, name)| name.as_str());
+                let mut chosen = None;
+                crate::widgets::combo(("combined part", part as usize)).selected_text(shown).width(LAYER_W).height(320.0).show_ui(ui, |ui| {
+                    if ui.selectable_label(current.is_none(), tr!("None")).clicked() {
+                        chosen = Some(None);
+                    }
+                    for (n, name) in choices {
+                        if ui.selectable_label(current.is_some_and(|c| c.0 == *n), name).clicked() {
+                            chosen = Some(Some((*n, current.map_or(1.0, |c| c.1))));
+                        }
+                    }
+                });
+                if let Some(what) = chosen {
+                    def.set(part, what);
+                }
+            });
+        }
+    });
+    hint(ui, tr!("Each layer goes to its slot of the blocks, over its share of the columns painted, as its own tool paints it: a block keeps one layer of each slot. Changing the combined layer changes what it paints next, not what it painted. Right button: rub out what it paints."));
+    ui.add_space(6.0);
+    if ui.button(RichText::new(theme::with_icon(Icon::Trash2, tr!("Remove this layer"))).color(pal.danger)).on_hover_text(tr!("What it painted stays")).clicked() {
+        def.removed = true;
+        tools.combined = doc.world.registry.combined.iter().position(|c| !c.removed).map_or(0, |k| k as u16 + 1);
+    }
+    if doc.world.registry.combined.get(k) != Some(&before) {
         doc.mark_changed();
     }
 }
@@ -3925,5 +4097,80 @@ mod tests {
         assert_eq!(s.tools.pocket_layer, 2, "the new one is picked");
         let reg = &s.doc.world.registry;
         assert_eq!(reg.pockets[1].blocks.iter().map(|&(b, w)| (reg.block(b).state.as_str(), w)).collect::<Vec<_>>(), [("minecraft:gravel", 1)]);
+    }
+
+    /// A combined layer's settings, drawn offscreen in both themes: an oak
+    /// forest's terrain, biome, cover, trees and size. Needs a GPU: runs
+    /// with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn combined_settings_render() {
+        use massif_core::combined::{CombinedDef, Part};
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from) else {
+            return;
+        };
+        let mut world = generate(&GenParams { tiles_x: 2, tiles_z: 2, ..GenParams::default() });
+        let reg = &mut world.registry;
+        let oaks = reg.add_object_layer(massif_core::objects::ObjectLayerDef::new("Big oaks", &[], reg));
+        let mut forest = CombinedDef::new("Oak forest", [74, 116, 52]);
+        forest.set(Part::Terrain, Some((reg.terrain_by_name("Grass").unwrap().0, 1.0)));
+        forest.set(Part::Biome, Some((reg.biome_by_id("minecraft:forest").unwrap().0, 1.0)));
+        forest.set(Part::Cover, Some((reg.cover_by_name("Ferns").or(reg.cover_by_name("Grass")).unwrap(), 0.6)));
+        forest.set(Part::Trees, Some((oaks, 1.0)));
+        forest.set(Part::Size, Some((4, 0.5)));
+        reg.add_combined(CombinedDef::new("Snowy sand", [230, 226, 200]));
+        let n = reg.add_combined(forest);
+        let mut tools = ToolState::default();
+        tools.select(Tool::Combined);
+        tools.combined = n;
+        for dark in [true, false] {
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(vec2(340.0, 640.0))
+                .with_pixels_per_point(2.0)
+                .with_accessibility_check(false)
+                .wgpu()
+                .build_ui_state(
+                    move |ui, s: &mut Noise| {
+                        theme::install(ui.ctx());
+                        ui.ctx().set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
+                        let pal = Palette::of(ui);
+                        egui::Frame::new().fill(pal.panel).inner_margin(12).show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            tool_settings(ui, &mut s.tools, &mut s.doc, &mut s.blocks);
+                        });
+                    },
+                    Noise { tools: tools.clone(), doc: Document::new(world.clone(), None, 1), blocks: BlockLibrary::default() },
+                );
+            h.run_steps(4);
+            h.render().unwrap().save(dir.join(if dark { "combined-settings-dark.png" } else { "combined-settings-light.png" })).unwrap();
+        }
+    }
+
+    /// New combined layer makes one that paints nothing yet, picks it, and
+    /// names it apart from the others.
+    #[test]
+    fn new_combined_layers_are_made_and_picked() {
+        use egui_kittest::kittest::Queryable;
+        let world = generate(&GenParams { tiles_x: 1, tiles_z: 1, ..GenParams::default() });
+        let mut tools = ToolState::default();
+        tools.select(Tool::Combined);
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(340.0, 900.0)).with_accessibility_check(false).build_ui_state(
+            |ui, s: &mut Noise| {
+                theme::install(ui.ctx());
+                tool_settings(ui, &mut s.tools, &mut s.doc, &mut s.blocks);
+            },
+            Noise { tools, doc: Document::new(world, None, 1), blocks: BlockLibrary::default() },
+        );
+        h.run_steps(2);
+        for _ in 0..2 {
+            h.get_by_label_contains("New combined layer").click();
+            h.run_steps(3);
+        }
+        let s = h.state();
+        let names: Vec<&str> = s.doc.world.registry.combined.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["Combined 1", "Combined 2"]);
+        assert_eq!(s.tools.combined, 2, "the new one is picked");
+        assert!(s.doc.world.registry.combined[1].parts.is_empty());
+        h.get_by_label("Terrain");
+        h.get_by_label("Pockets");
     }
 }

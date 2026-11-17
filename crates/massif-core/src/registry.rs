@@ -472,6 +472,10 @@ pub struct Registry {
     /// Layers of underground pockets, numbered from 1 (0 in a tile: none).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pockets: Vec<crate::pockets::PocketDef>,
+    /// Combined layers, numbered from 1: brushes that paint several layers
+    /// at once (no plane of their own).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub combined: Vec<crate::combined::CombinedDef>,
 }
 
 impl Registry {
@@ -524,6 +528,18 @@ impl Registry {
         self.pockets.len() as u16
     }
 
+    /// The combined layer numbered `n`; `None` for 0, a number past the
+    /// list, and a removed layer.
+    pub fn combined_layer(&self, n: u16) -> Option<&crate::combined::CombinedDef> {
+        self.combined.get((n as usize).checked_sub(1)?).filter(|c| !c.removed)
+    }
+
+    /// Add a combined layer and return its number.
+    pub fn add_combined(&mut self, def: crate::combined::CombinedDef) -> u16 {
+        self.combined.push(def);
+        self.combined.len() as u16
+    }
+
     /// Add an object layer and return its number.
     pub fn add_object_layer(&mut self, def: crate::objects::ObjectLayerDef) -> u16 {
         self.object_layers.push(def);
@@ -569,6 +585,7 @@ impl Registry {
             objects: Vec::new(),
             object_layers: Vec::new(),
             pockets: Vec::new(),
+            combined: Vec::new(),
             well_known: WellKnown {
                 stone: BlockId(0),
                 deepslate: BlockId(0),

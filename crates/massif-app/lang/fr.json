@@ -2577,5 +2577,30 @@
  "The lowest a pocket goes": "Le plus bas où va une poche",
  "They take their share of the rock between their heights, never the strata of the ground.": "Elles prennent leur part de la roche entre leurs hauteurs, jamais les strates du sol.",
  "Underground pockets": "Poches souterraines",
- "{blocks} · from {low} to {high}": "{blocks} · de {low} à {high}"
+ "{blocks} · from {low} to {high}": "{blocks} · de {low} à {high}",
+ "(removed)": "(retiré)",
+ "A forest's terrain, biome, ground cover and trees in one stroke, as WorldPainter's combined layers.": "Le terrain, le biome, le couvert du sol et les arbres d'une forêt d'un seul trait, comme les calques combinés de WorldPainter.",
+ "Combined layer": "Calque combiné",
+ "Combined layers": "Calques combinés",
+ "Combined {value}": "Combiné {value}",
+ "Each goes to its slot of the blocks, over its share, as its own tool paints it.": "Chacun va à son emplacement des blocs, sur sa part, comme son propre outil le peint.",
+ "Each layer goes to its slot of the blocks, over its share of the columns painted, as its own tool paints it: a block keeps one layer of each slot. Changing the combined layer changes what it paints next, not what it painted. Right button: rub out what it paints.": "Chaque calque va à son emplacement des blocs, sur sa part des colonnes peintes, comme son propre outil le peint : un bloc garde un calque de chaque emplacement. Modifier le calque combiné change ce qu'il peindra, pas ce qu'il a peint. Bouton droit : effacer ce qu'il peint.",
+ "It paints": "Il peint",
+ "Its colour in the lists": "Sa couleur dans les listes",
+ "New combined": "Nouveau combiné",
+ "New combined layer": "Nouveau calque combiné",
+ "No combined layers yet: make one to paint several layers at once.": "Pas encore de calque combiné : créez-en un pour peindre plusieurs calques à la fois.",
+ "Nothing yet: choose what it paints in its settings.": "Rien encore : choisissez ce qu'il peint dans ses réglages.",
+ "Paint several layers at once: a terrain, a biome, a ground cover, trees, pockets, each over its share. Right button: rub out what it paints.": "Peindre plusieurs calques à la fois : un terrain, un biome, un couvert du sol, des arbres, des poches, chacun sur sa part. Bouton droit : effacer ce qu'il peint.",
+ "Paint them all": "Les peindre tous",
+ "Paints several layers at once, as WorldPainter's combined layers: a forest's terrain, biome, ground cover and trees in one stroke.": "Peint plusieurs calques à la fois, comme les calques combinés de WorldPainter : le terrain, le biome, le couvert du sol et les arbres d'une forêt d'un seul trait.",
+ "Pockets": "Poches",
+ "Several layers painted at once: a terrain, a biome, a cover, trees, pockets": "Plusieurs calques peints à la fois : un terrain, un biome, un couvert, des arbres, des poches",
+ "The share of the columns painted it takes": "La part des colonnes peintes qu'il prend",
+ "Tree size": "Taille d'arbre",
+ "What it painted stays": "Ce qu'il a peint reste",
+ "{n} layers": {
+  "one": "{n} calque",
+  "other": "{n} calques"
+ }
 }

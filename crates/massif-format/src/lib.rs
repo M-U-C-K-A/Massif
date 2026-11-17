@@ -1086,6 +1086,25 @@ mod tests {
         assert_eq!(to_bytes(&mut back), bytes);
     }
 
+    /// Pocket layers and combined layers are saved with the map and read
+    /// back as they were.
+    #[test]
+    fn pocket_and_combined_layers_round_trip() {
+        use massif_core::combined::{CombinedDef, Part};
+        let mut world = sample_world();
+        let reg = &mut world.registry;
+        let clay = reg.intern_block("minecraft:clay", [160, 166, 179]);
+        let pockets = reg.add_pocket(massif_core::pockets::PocketDef::new("Clay", [1, 2, 3], &[(clay, 2)], 0.25, 5.0, -40, 30));
+        let mut forest = CombinedDef::new("Forest", [4, 5, 6]);
+        forest.set(Part::Cover, Some((1, 0.5)));
+        forest.set(Part::Pockets, Some((pockets, 1.0)));
+        reg.add_combined(forest);
+        let bytes = to_bytes(&mut world);
+        let back = read(&bytes).unwrap();
+        assert_eq!(back.registry.pockets, world.registry.pockets);
+        assert_eq!(back.registry.combined, world.registry.combined);
+    }
+
     #[test]
     fn writing_requires_a_frozen_world() {
         let mut world = sample_world();

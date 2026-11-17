@@ -240,6 +240,12 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
             Some(tr!("They take their share of the rock between their heights, never the strata of the ground.")),
             Some(Demo::Pockets),
         ),
+        Tool::Combined => card(
+            tr!("Paints several layers at once, as WorldPainter's combined layers: a forest's terrain, biome, ground cover and trees in one stroke."),
+            vec![(tr!("Drag"), tr!("Paint them all")), (tr!("Right-drag"), tr!("Rub them out"))],
+            Some(tr!("Each goes to its slot of the blocks, over its share, as its own tool paints it.")),
+            Some(Demo::Combined),
+        ),
         Tool::TreeSize => card(
             tr!("Marks where bushes, small, medium or large trees grow. Paint a species over it: each spot takes that species' objects of the size marked."),
             vec![(tr!("Drag"), tr!("Mark a size")), (tr!("Right-drag"), tr!("Any size"))],
@@ -363,6 +369,7 @@ pub enum Demo {
     Annotate,
     TreeSize,
     Pockets,
+    Combined,
     AutoPaint,
     AutoBiome,
     Eyedropper,
@@ -669,6 +676,30 @@ impl Demo {
                             spots[i] = Some(FLOWERS[(hash(i * 13) * 5.0) as usize % 5]);
                         }
                     });
+                }
+                stroke(9.0)
+            }
+            Demo::Combined => {
+                // A forest at once: its floor tinted, plants, trees.
+                let painted: Vec<(f64, f64)> = (0..steps).map(|k| sweep(k as f64 / SAMPLES as f64)).collect();
+                for &(x, y) in &painted {
+                    let (t, spots) = (&mut s.tint, &mut s.spots);
+                    Scene::near(x, y, 9.0, |i, _| {
+                        t[i] = Some([96, 132, 62]);
+                        if hash(i * 7 + 3) < 0.2 {
+                            spots[i] = Some([140, 176, 74]);
+                        }
+                    });
+                }
+                for gy in 0..H / 9 + 1 {
+                    for gx in 0..W / 9 + 1 {
+                        let cell = gy * 31 + gx;
+                        let (x, y) = (gx as f64 * 9.0 + 2.0 + hash(cell) * 5.0, gy as f64 * 9.0 + 2.0 + hash(cell + 999) * 5.0);
+                        if let Some(k) = painted.iter().position(|&(px, py)| (px - x).hypot(py - y) < 7.0) {
+                            let age = (steps - k) as f64 / 8.0;
+                            s.trees.push((x, y, smooth_step(0.0, 1.0, age)));
+                        }
+                    }
                 }
                 stroke(9.0)
             }

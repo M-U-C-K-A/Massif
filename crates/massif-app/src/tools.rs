@@ -37,6 +37,8 @@ pub enum Tool {
     TreeSize,
     /// Pockets of other blocks in the rock under the ground.
     Pockets,
+    /// A combined layer: several layers painted at once.
+    Combined,
     /// The biome the land calls for; the terrain the biome calls for.
     AutoBiome,
     AutoPaint,
@@ -76,7 +78,7 @@ impl Tool {
             &[Tool::PaintTerrain, Tool::Gradient, Tool::PaintBiome, Tool::AutoPaint, Tool::AutoBiome, Tool::Annotate],
         ),
         (tn!("Select"), Icon::SquareDashed, &[Tool::SelectRect, Tool::SelectEllipse, Tool::SelectLasso, Tool::SelectBrush]),
-        (tn!("Decor"), Icon::Shrub, &[Tool::Cover, Tool::Objects, Tool::TreeSize, Tool::Pockets]),
+        (tn!("Decor"), Icon::Shrub, &[Tool::Cover, Tool::Objects, Tool::TreeSize, Tool::Pockets, Tool::Combined]),
         (tn!("Water"), Icon::Droplet, &[Tool::River, Tool::Flood, Tool::Drain, Tool::Water]),
         (tn!("Levels"), Icon::Layers, &[Tool::StampSlab, Tool::EraseSlab]),
         (tn!("Navigate"), Icon::Compass, &[Tool::Pan, Tool::Eyedropper]),
@@ -102,6 +104,7 @@ impl Tool {
             Tool::Annotate => tr!("Annotations"),
             Tool::TreeSize => tr!("Tree sizes"),
             Tool::Pockets => tr!("Underground pockets"),
+            Tool::Combined => tr!("Combined layer"),
             Tool::AutoBiome => tr!("Auto biome"),
             Tool::AutoPaint => tr!("Auto paint"),
             Tool::Eyedropper => tr!("Eyedropper"),
@@ -138,6 +141,7 @@ impl Tool {
             Tool::Annotate => Icon::PenLine,
             Tool::TreeSize => Icon::ChartNoAxesColumnIncreasing,
             Tool::Pockets => Icon::Gem,
+            Tool::Combined => Icon::Combine,
             Tool::AutoBiome => Icon::Earth,
             Tool::AutoPaint => Icon::WandSparkles,
             Tool::Eyedropper => Icon::Pipette,
@@ -181,6 +185,7 @@ impl Tool {
             Tool::Annotate => tr!("Mark the map in colour, to plan it: never exported. Right button: rub out."),
             Tool::TreeSize => tr!("Mark where bushes, small, medium or large trees grow: the object layers painted there take objects of that size. Right button: any size."),
             Tool::Pockets => tr!("Paint pockets of other blocks into the rock under the ground: gravel, clay, a mod's stone. Right button: rub them out."),
+            Tool::Combined => tr!("Paint several layers at once: a terrain, a biome, a ground cover, trees, pockets, each over its share. Right button: rub out what it paints."),
             Tool::AutoBiome => {
                 tr!("Sets the biome the land calls for: beach, forest, peaks…")
             }
@@ -329,6 +334,8 @@ pub struct ToolState {
     /// The layer of underground pockets painted, by its number (0: none
     /// yet).
     pub pocket_layer: u16,
+    /// The combined layer painted, by its number (0: none yet).
+    pub combined: u16,
     /// The tree sizes shown over the map even when another tool is in hand.
     pub show_sizes: bool,
     pub water_level: i16,
@@ -918,6 +925,7 @@ impl Default for ToolState {
             annotation: 14,
             tree_size: 2,
             pocket_layer: 0,
+            combined: 0,
             show_sizes: false,
             water_level: 63,
             water_from_click: true,
@@ -1097,7 +1105,10 @@ pub fn begin_stroke(doc: &mut Document, tools: &ToolState, at: (f32, f32), inver
     } else {
         None
     };
-    let back = (tool == Tool::PaintTerrain && inverse).then(|| unpaint_for_stroke(doc, tools)).flatten();
+    // The right button puts back the terrain: Paint terrain's, and a
+    // combined layer's that paints one.
+    let terrain = tool == Tool::PaintTerrain || (tool == Tool::Combined && doc.world.registry.combined_layer(tools.combined).is_some_and(|c| c.terrain().is_some()));
+    let back = (terrain && inverse).then(|| unpaint_for_stroke(doc, tools)).flatten();
     doc.history.begin(crate::i18n::tr_name(tool.label()), doc.dim);
     let salt = doc.revision.wrapping_mul(0x9e37_79b9) ^ 0x5bd1_e995;
     let stroke = Stroke {
@@ -1136,7 +1147,14 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
             g.sampler(&doc.world.registry, doc.world.meta.seed)
         })
         .flatten();
-    let theme = ((stroke.tool == Tool::PaintTerrain && invert && stroke.back.is_none()) || (stroke.tool == Tool::AutoPaint && invert) || (stroke.tool == Tool::Flatten && tools.flatten_theme)).then(|| {
+    // A combined layer's parts, as their own tools paint them, or rubbed
+    // out; the terrain it paints, if any. Its pockets are in the rock of
+    // the ground: painted on the ground's level whatever level is edited.
+    let combined = (stroke.tool == Tool::Combined).then(|| doc.world.registry.combined_layer(tools.combined)).flatten().map(|c| {
+        let reg = &doc.world.registry;
+        (if invert { c.to_rub_out(reg) } else { c.to_paint(reg) }, c.terrain().is_some())
+    });
+    let theme = ((matches!(stroke.tool, Tool::PaintTerrain | Tool::Combined) && invert && stroke.back.is_none()) || (stroke.tool == Tool::AutoPaint && invert) || (stroke.tool == Tool::Flatten && tools.flatten_theme)).then(|| {
         (
             massif_core::generate::Theme::new(&doc.world.registry),
             doc.world.meta.sea_level as f32,
@@ -1152,6 +1170,12 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
     // Pockets are in the rock of the ground: on its level too.
     let level = if matches!(stroke.tool, Tool::Annotate | Tool::Pockets) { 0 } else { stroke.level.min(doc.dimension().levels.len() - 1) };
     let understory = doc.world.registry.object_layer(tools.object_layer).is_some_and(|l| l.understory);
+    let (parts, below): (Vec<massif_core::combined::Component>, Vec<massif_core::combined::Component>) = match &combined {
+        Some((parts, _)) if level != 0 => parts.iter().partition(|c| c.part != massif_core::combined::Part::Pockets),
+        Some((parts, _)) => (parts.clone(), Vec::new()),
+        None => (Vec::new(), Vec::new()),
+    };
+    let mut dabs = Vec::new();
     // Locked layers keep their blocks.
     doc.history.locks = massif_core::registry::Locks::of(&doc.world.registry);
     let surface = tools.surface();
@@ -1212,6 +1236,20 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
             Tool::Objects => ops::paint_objects(&mut edit, brush, x, z, if invert { 0 } else { tools.object_layer }, stroke.salt),
             Tool::TreeSize => ops::paint_tree_size(&mut edit, brush, x, z, if invert { 0 } else { tools.tree_size.clamp(1, 4) }, stroke.salt),
             Tool::Pockets => ops::paint_pockets(&mut edit, brush, x, z, if invert { 0 } else { tools.pocket_layer }, stroke.salt),
+            Tool::Combined => {
+                ops::paint_parts(&mut edit, brush, x, z, &parts, stroke.salt);
+                // The terrain put back as Paint terrain's right button does.
+                if invert && combined.as_ref().is_some_and(|c| c.1) {
+                    match (stroke.back, &theme) {
+                        (Some(back), _) => ops::paint_terrain(&mut edit, brush, x, z, back, stroke.salt),
+                        (None, Some((theme, sea))) => ops::paint_terrain_with(&mut edit, brush, x, z, stroke.salt, |h| theme.terrain(h - 1.0, 0.0, *sea, 0.0)),
+                        (None, None) => {}
+                    }
+                }
+                if !below.is_empty() {
+                    dabs.push((x, z, stroke.salt));
+                }
+            }
             Tool::Annotate => ops::paint_annotation(&mut edit, brush, x, z, if invert { 0 } else { tools.annotation.clamp(1, 15) }, stroke.salt),
             Tool::AutoBiome => match &reader {
                 Some(reader) if !invert => {
@@ -1252,6 +1290,14 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                 }
             }
             Tool::Eyedropper | Tool::Flood | Tool::Drain | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush => {}
+        }
+    }
+    // A combined layer's pockets, painted from another level: the same
+    // dabs on the ground's.
+    if !dabs.is_empty() {
+        let mut edit = doc.history.edit(&mut doc.world, 0);
+        for (x, z, salt) in dabs {
+            ops::paint_parts(&mut edit, brush, x, z, &below, salt);
         }
     }
     stroke.last = to;
@@ -1632,6 +1678,64 @@ mod tests {
         let mut stroke = stroke.unwrap();
         continue_stroke(&mut d, &tools, &mut stroke, at, 0.05);
         assert!(end_stroke(&mut d, stroke).unwrap().starts_with("Nothing to change"));
+    }
+
+    /// A combined layer paints its terrain, biome, cover and pockets in one
+    /// stroke, one step to undo; its right button rubs them out and puts
+    /// the map's own terrain back; from another level, its pockets still go
+    /// into the rock of the ground.
+    #[test]
+    fn a_combined_layer_paints_its_slots_in_one_stroke() {
+        use massif_core::combined::{CombinedDef, Part};
+        let mut d = doc();
+        let reg = &mut d.world.registry;
+        let stone = reg.terrain_by_name("Stone").unwrap().0;
+        let forest = reg.biome_by_id("minecraft:forest").unwrap().0;
+        let grass = reg.cover_by_name("Grass").unwrap();
+        let clay = reg.intern_block("minecraft:clay", [160, 166, 179]);
+        let pockets = reg.add_pocket(massif_core::pockets::PocketDef::new("Clay", [0; 3], &[(clay, 1)], 0.3, 4.0, -60, 40));
+        let mut def = CombinedDef::new("Beach", [0; 3]);
+        def.set(Part::Terrain, Some((stone, 1.0)));
+        def.set(Part::Biome, Some((forest, 1.0)));
+        def.set(Part::Cover, Some((grass, 1.0)));
+        def.set(Part::Pockets, Some((pockets, 1.0)));
+        let mut brush = Brush::symmetric(massif_core::BrushShape::Circle, massif_core::Profile::Constant, 10.0);
+        brush.strength = 1.0;
+        let mut tools = ToolState { combined: reg.add_combined(def), brush, ..ToolState::default() };
+        tools.select(Tool::Combined);
+        let paint = |d: &mut Document, tools: &ToolState, inverse: bool| {
+            let (stroke, _) = begin_stroke(d, tools, (0.5, 0.5), inverse, inverse);
+            let mut stroke = stroke.unwrap();
+            continue_stroke(d, tools, &mut stroke, (0.5, 0.5), 0.05);
+            end_stroke(d, stroke);
+        };
+        let at = |d: &Document, x: i32, z: i32| {
+            let t = d.world.dims[0].ground().view(TilePos::containing(x, z)).unwrap();
+            let i = massif_core::coords::local_index(x, z);
+            (t.terrain.get(i), t.biome.get(i), t.cover.get(i), t.pockets.get(i))
+        };
+        let before = at(&d, 0, 0);
+        let undo = d.history.undo_count();
+        paint(&mut d, &tools, false);
+        assert_eq!(at(&d, 0, 0), (stone, forest, grass, pockets));
+        assert_eq!(at(&d, 30, 0), before, "nothing out of the brush");
+        assert_eq!(d.history.undo_count(), undo + 1, "one step");
+        // The right button: its cover, pockets and biome gone, the terrain
+        // Paint terrain's right button puts back there.
+        let mut reference = Document::new(d.world.clone(), None, 1);
+        let mut terrain = ToolState::default();
+        terrain.select(Tool::PaintTerrain);
+        terrain.brush = tools.brush.clone();
+        paint(&mut reference, &terrain, true);
+        let back = at(&reference, 0, 0).0;
+        assert_ne!(back, stone);
+        paint(&mut d, &tools, true);
+        assert_eq!(at(&d, 0, 0), (back, 0, 0, 0));
+        // From a Solid level, the pockets still go into the ground's rock.
+        let slab = d.world.dims[0].add_level("Island", massif_core::level::LevelKind::Solid);
+        d.active_level = slab;
+        paint(&mut d, &tools, false);
+        assert_eq!(at(&d, 0, 0).3, pockets);
     }
 
     #[test]

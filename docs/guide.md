@@ -878,9 +878,10 @@ adds its terrains to the map and paints with it.
 What WorldPainter calls layers — its custom plant layers, custom object
 layers and custom terrain mixes — are in Massif the **ground covers**, the
 **object layers** and the **terrain mixes**. The **Layers** panel lists all
-of the map's in one place, by the slot of a block they paint — terrain
-mixes, ground covers, trees and objects, under the trees, underground
-pockets, tree sizes, annotations (it sits under the Terrain panel; any area can show it, from
+of the map's in one place: the **combined layers** first, then the others
+by the slot of a block they paint — terrain mixes, ground covers, trees
+and objects, under the trees, underground pockets, tree sizes,
+annotations (it sits under the Terrain panel; any area can show it, from
 Paint in the area's chooser). How they fit together is in
 [Layers](layers.md).
 
@@ -896,8 +897,8 @@ Paint in the area's chooser). How they fit together is in
 - its menu (right button) opens its **Settings…** in a dialog, paints with
   it, renames, **duplicates**, moves it **up** or **down** its section,
   locks or **removes** it;
-- **New cover**, **Import objects…**, **New pockets** and **New mix** add
-  one. A mix is
+- **New combined**, **New cover**, **Import objects…**, **New pockets**
+  and **New mix** add one. A mix is
   set up in Paint terrain ▸ Noise and saved there under a name.
 - under them, the fifteen colours of the **annotations**: a click paints
   with that colour.
@@ -955,6 +956,24 @@ show over the map, in four greens, while the tool is in hand, or always with
 the eye of their section in the Layers panel; the right button paints any
 size again.
 
+### Combined layers
+
+A **combined layer** (the **Combined layer** tool, in the Decor group, and
+the first section of the Layers panel) paints several layers at once, as
+WorldPainter's combined layers do: an oak forest's grass, its forest
+biome, its ferns and its oaks in one stroke. Its settings name the layer
+of each slot it paints — **Terrain**, **Biome**, **Cover**, **Trees**,
+**Sub-canopy**, **Tree size** and **Pockets**, or **None** — and the share
+of the columns painted each takes: ferns over 60 % of them, say, the same
+columns every time the brush goes over them. Each layer goes to its slot
+as its own tool paints it, locks included, so a block still holds one
+layer of each slot; changing a combined layer changes what it paints
+next, not what it painted. One stroke is one step to undo. The right
+button rubs out what it paints: its cover, trees, size and pockets gone,
+the biome back to automatic, the terrain put back as Paint terrain's
+right button puts it. Its pockets go into the rock of the ground, whatever
+level is edited.
+
 ### Underground pockets
 
 **Underground pockets** (the tool of that name, in the Decor group) lay
@@ -992,7 +1011,7 @@ riches lying around.
 | Resources | Edit ▸ Ores | Massif lays its own ores |
 | Tunnels, floating layers | Levels: Carve and Solid | Converted: a Carve level each (a Solid level for a floating one), its floor and roof where WorldPainter puts them (at a height, so deep under the ground, inverted, so high over the floor, within their limits), flooded up to its level; their noise and their floor, wall and roof materials are left out (the floor keeps the ground's terrain) |
 | Custom ground cover layers | Terrains with strata | Converted: a terrain of the cover's blocks over each terrain it lies on ("Snow Block on Grass"), the land raised by the cover's thickness, or the top of the land replaced for a negative thickness; its edges are sheer |
-| Combined layers | Each of its layers | Converted: the layers it holds, each as strong as its factor, and its terrain and biome where painted at half strength or more |
+| Combined layers | Combined layers | Converted: a combined layer of the same layers (its terrain, biome, covers, trees and pockets) at their factors, to paint on with; where it was painted, the layers it holds, each as strong as its factor, and its terrain and biome where painted at half strength or more |
 | Underground pockets | Underground pockets | Converted: a pocket layer of the same blocks (its material, its mixed material, or its terrain's blocks), as frequent and as large, between the same heights |
 | River | Rivers | Not yet |
 | Populate, Read Only | — (Massif writes finished chunks, and merges none) | Left out |

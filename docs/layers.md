@@ -14,6 +14,8 @@ pockets in the rock, and the annotations. Every layer works the same way:
 - save it with the map, share it in a pack, bring it from WorldPainter,
   and export it.
 
+A **combined layer** paints several of them at once (see below).
+
 ## Kinds and slots
 
 A block holds **one layer of each slot**. Painting another layer of the
@@ -56,11 +58,29 @@ into the four sizes, a quarter of them each; every kind of tree of the packs
 comes in the four sizes. Masks are never exported, and neither are
 annotations.
 
+## Combined layers
+
+A **combined layer** is a brush of several layers, as WorldPainter's
+combined layers: one layer of each slot it names — a terrain, a biome, a
+ground cover, a tree layer, a sub-canopy layer, a tree size, a pocket
+layer — each over its **share** of the columns painted. It has no slot
+and no blocks of its own: one stroke writes each of its layers into its
+slot, as that layer's own tool does (locks included), one step to undo;
+so a block still holds one layer of each slot, and changing a combined
+layer changes what it paints next, not what it painted. A share is drawn
+once for good: painting again over the same blocks paints the same
+columns. The right button rubs out what it paints: the slots it names
+emptied, the biome back to automatic, and the terrain put back as Paint
+terrain's right button puts it. Its pockets go into the rock of the
+ground, whatever level is edited. A WorldPainter combined layer comes in
+as one, its layers at their factors.
+
 ## Order, visibility and lock
 
-The panel lists the layers by slot, in the order the export lays them:
-terrain mixes (the ground), ground covers, trees and objects, under the
-trees, underground pockets; then the tree sizes and the annotations. Biomes are painted from
+The panel lists the combined layers first, then the layers by slot, in
+the order the export lays them: terrain mixes (the ground), ground
+covers, trees and objects, under the trees, underground pockets; then
+the tree sizes and the annotations. Biomes are painted from
 the Biome panel. Within a section, the order is yours: **Move up** and
 **Move down** in a layer's menu. As a block holds one layer of a slot, the
 order changes the list, not the world.
@@ -79,13 +99,15 @@ A ground cover's or a tree layer's settings open in a dialog of their own
 name and colour, and what its kind needs — a plant layer's plants, density
 and what it does to the water (Frost, Lava), a tree layer's objects and
 their sizes, spacing, density, turn and slot (Base or Sub-canopy), a
-pocket layer's blocks, share of the rock, size and heights. A
-double-click renames a layer. Each section has its button to add one: New
-mix, New cover, Import objects…, New pockets.
+pocket layer's blocks, share of the rock, size and heights, a combined
+layer's layer of each slot and its share. A double-click renames a layer.
+Each section has its button to add one: New combined, New mix, New
+cover, Import objects…, New pockets.
 
 ## Saving, packs, WorldPainter and export
 
-- The map saves every layer, its settings and what is painted.
+- The map saves every layer, its settings and what is painted, and its
+  combined layers.
 - A pack (`.massifpack`) carries terrains, plant layers and tree layers with
   their settings and slot, to share; what is painted stays in the map.
 - A WorldPainter `.world` brings its layers in as Massif's: see the table in
@@ -122,6 +144,12 @@ mix, New cover, Import objects…, New pockets.
   only in air, water and plants.
 - Packs carry `CoverDef` (with `frost` and `lava`), `TerrainDef` and
   `ObjectLayerDef` (with `understory`).
+- A combined layer (`combined::CombinedDef`, in `Registry::combined`)
+  holds `Component`s, one of each `Part`, with the layer's number in its
+  slot and its share. `CombinedDef::to_paint` reads them against the
+  registry (a removed layer left out, a tree layer in the slot it is in
+  now) and `ops::paint_parts` paints them through `paint_plane`, the
+  share a mask of the columns drawn from a seed of the part.
 
 ## Steps
 
@@ -140,6 +168,6 @@ mix, New cover, Import objects…, New pockets.
    (`PocketDef::block_at`, the same blocks for the export and every count),
    and WorldPainter's underground pockets from a `.world`.
 4. **Combined layers** — one layer that paints several at once (a
-   terrain, a biome, a cover, a tree layer, pockets), each at its own
-   strength, with an editor of its own; WorldPainter's combined layers
+   terrain, a biome, a cover, a tree layer, pockets), each over its own
+   share, with an editor of its own; WorldPainter's combined layers
    become one.

@@ -204,6 +204,12 @@ pub fn paint(painter: &Painter, rect: Rect, tool: Tool, color: Color32) {
             }
             pen.ring(19.5, 7.0, 1.8);
         }
+        // Layers stacked, painted at once.
+        Tool::Combined => {
+            pen.line(&[(3.0, 9.0), (12.0, 4.5), (21.0, 9.0), (12.0, 13.5), (3.0, 9.0)]);
+            pen.line(&[(3.0, 13.0), (12.0, 17.5), (21.0, 13.0)]);
+            pen.line(&[(3.0, 17.0), (12.0, 21.5), (21.0, 17.0)]);
+        }
         // The ground, and blobs in the rock under it.
         Tool::Pockets => {
             pen.line(&[(2.0, 6.5), (22.0, 6.5)]);

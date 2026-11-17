@@ -2567,5 +2567,30 @@
  "The lowest a pocket goes": "O mais baixo que um bolsão chega",
  "They take their share of the rock between their heights, never the strata of the ground.": "Ocupam sua parte da rocha entre suas alturas, nunca os estratos do solo.",
  "Underground pockets": "Bolsões subterrâneos",
- "{blocks} · from {low} to {high}": "{blocks} · de {low} a {high}"
+ "{blocks} · from {low} to {high}": "{blocks} · de {low} a {high}",
+ "(removed)": "(removido)",
+ "A forest's terrain, biome, ground cover and trees in one stroke, as WorldPainter's combined layers.": "O terreno, o bioma, a cobertura do solo e as árvores de uma floresta num só traço, como as camadas combinadas do WorldPainter.",
+ "Combined layer": "Camada combinada",
+ "Combined layers": "Camadas combinadas",
+ "Combined {value}": "Combinada {value}",
+ "Each goes to its slot of the blocks, over its share, as its own tool paints it.": "Cada uma vai para o seu lugar nos blocos, sobre a sua parte, como a sua própria ferramenta a pinta.",
+ "Each layer goes to its slot of the blocks, over its share of the columns painted, as its own tool paints it: a block keeps one layer of each slot. Changing the combined layer changes what it paints next, not what it painted. Right button: rub out what it paints.": "Cada camada vai para o seu lugar nos blocos, sobre a sua parte das colunas pintadas, como a sua própria ferramenta a pinta: um bloco guarda uma camada de cada lugar. Mudar a camada combinada muda o que ela vai pintar, não o que pintou. Botão direito: apagar o que ela pinta.",
+ "It paints": "Pinta",
+ "Its colour in the lists": "Sua cor nas listas",
+ "New combined": "Nova combinada",
+ "New combined layer": "Nova camada combinada",
+ "No combined layers yet: make one to paint several layers at once.": "Ainda não há camadas combinadas: crie uma para pintar várias camadas de uma vez.",
+ "Nothing yet: choose what it paints in its settings.": "Nada ainda: escolha o que ela pinta nas suas configurações.",
+ "Paint several layers at once: a terrain, a biome, a ground cover, trees, pockets, each over its share. Right button: rub out what it paints.": "Pintar várias camadas de uma vez: um terreno, um bioma, uma cobertura do solo, árvores, bolsões, cada uma sobre a sua parte. Botão direito: apagar o que ela pinta.",
+ "Paint them all": "Pintar todas",
+ "Paints several layers at once, as WorldPainter's combined layers: a forest's terrain, biome, ground cover and trees in one stroke.": "Pinta várias camadas de uma vez, como as camadas combinadas do WorldPainter: o terreno, o bioma, a cobertura do solo e as árvores de uma floresta num só traço.",
+ "Pockets": "Bolsões",
+ "Several layers painted at once: a terrain, a biome, a cover, trees, pockets": "Várias camadas pintadas de uma vez: um terreno, um bioma, uma cobertura, árvores, bolsões",
+ "The share of the columns painted it takes": "A parte das colunas pintadas que ela ocupa",
+ "Tree size": "Tamanho de árvore",
+ "What it painted stays": "O que ela pintou fica",
+ "{n} layers": {
+  "one": "{n} camada",
+  "other": "{n} camadas"
+ }
 }
