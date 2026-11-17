@@ -1841,8 +1841,7 @@ fn combined_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
 /// and the layer of each slot it paints, over its share.
 pub fn combined_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
     use massif_core::combined::Part;
-    // The widths of the layer and of its share in a row.
-    const LAYER_W: f32 = 124.0;
+    // The width of a row's share.
     const SHARE_W: f32 = 60.0;
     let pal = Palette::of(ui);
     let reg = &doc.world.registry;
@@ -1869,40 +1868,55 @@ pub fn combined_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
     });
     ui.add_space(4.0);
     section(ui, Icon::Layers, tr!("It paints"));
+    // A slot's layer and its share, from the right: the share (or the room
+    // for it, so that the layers line up), then the layer, `width` wide.
+    let mut controls = |ui: &mut Ui, part: Part, choices: &[(u16, String)], width: f32| {
+        let mut current = def.get(part);
+        match &mut current {
+            Some((_, share)) => {
+                let field = crate::widgets::Field::new(share, 0.0..=1.0)
+                    .width(SHARE_W)
+                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                    .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0));
+                if ui.add(field).on_hover_text(tr!("The share of the columns painted it takes")).changed() {
+                    def.set(part, current);
+                }
+            }
+            None => ui.add_space(SHARE_W + ui.spacing().item_spacing.x),
+        }
+        let shown = current.and_then(|(n, _)| choices.iter().find(|(c, _)| *c == n)).map_or(tr!("None"), |(_, name)| name.as_str());
+        let mut chosen = None;
+        crate::widgets::combo(("combined part", part as usize)).selected_text(shown).width(width).height(320.0).truncate().show_ui(ui, |ui| {
+            if ui.selectable_label(current.is_none(), tr!("None")).clicked() {
+                chosen = Some(None);
+            }
+            for (n, name) in choices {
+                if ui.selectable_label(current.is_some_and(|c| c.0 == *n), name).clicked() {
+                    chosen = Some(Some((*n, current.map_or(1.0, |c| c.1))));
+                }
+            }
+        });
+        if let Some(what) = chosen {
+            def.set(part, what);
+        }
+    };
+    // Each slot on a row, its name on the left; in a panel too narrow for
+    // the longest name beside them, its name over them.
+    let spacing = ui.spacing().item_spacing.x;
+    let room = ui.available_width() - 24.0 - SHARE_W - 2.0 * spacing;
+    let longest = Part::ALL.iter().map(|&p| ui.painter().layout_no_wrap(part_name(p).to_owned(), egui::FontId::proportional(12.5), pal.text).size().x).fold(0.0, f32::max);
+    let beside = (room - longest - spacing).min(124.0);
     crate::widgets::well(ui, |ui| {
         for (part, choices) in Part::ALL.into_iter().zip(&choices) {
-            crate::widgets::row(ui, part_name(part), |ui| {
-                // From the right: its share (or the room for it, so that the
-                // layers line up), then the layer.
-                let mut current = def.get(part);
-                match &mut current {
-                    Some((_, share)) => {
-                        let field = crate::widgets::Field::new(share, 0.0..=1.0)
-                            .width(SHARE_W)
-                            .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
-                            .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0));
-                        if ui.add(field).on_hover_text(tr!("The share of the columns painted it takes")).changed() {
-                            def.set(part, current);
-                        }
-                    }
-                    None => ui.add_space(SHARE_W + ui.spacing().item_spacing.x),
-                }
-                let shown = current.and_then(|(n, _)| choices.iter().find(|(c, _)| *c == n)).map_or(tr!("None"), |(_, name)| name.as_str());
-                let mut chosen = None;
-                crate::widgets::combo(("combined part", part as usize)).selected_text(shown).width(LAYER_W).height(320.0).show_ui(ui, |ui| {
-                    if ui.selectable_label(current.is_none(), tr!("None")).clicked() {
-                        chosen = Some(None);
-                    }
-                    for (n, name) in choices {
-                        if ui.selectable_label(current.is_some_and(|c| c.0 == *n), name).clicked() {
-                            chosen = Some(Some((*n, current.map_or(1.0, |c| c.1))));
-                        }
-                    }
-                });
-                if let Some(what) = chosen {
-                    def.set(part, what);
-                }
-            });
+            if beside >= 96.0 {
+                crate::widgets::row(ui, part_name(part), |ui| controls(ui, part, choices, beside));
+            } else {
+                ui.add_space(6.0);
+                ui.label(RichText::new(part_name(part)).size(12.5));
+                ui.add_space(2.0);
+                ui.allocate_ui_with_layout(vec2(ui.available_width(), 28.0), egui::Layout::right_to_left(Align::Center), |ui| controls(ui, part, choices, room));
+                ui.add_space(4.0);
+            }
         }
     });
     hint(ui, tr!("Each layer goes to its slot of the blocks, over its share of the columns painted, as its own tool paints it: a block keeps one layer of each slot. Changing the combined layer changes what it paints next, not what it painted. Right button: rub out what it paints."));
@@ -4122,9 +4136,10 @@ mod tests {
         let mut tools = ToolState::default();
         tools.select(Tool::Combined);
         tools.combined = n;
-        for dark in [true, false] {
+        // Dark and light, then as narrow as Tool Settings in the window.
+        for (dark, width) in [(true, 340.0), (false, 340.0), (true, 250.0)] {
             let mut h = egui_kittest::Harness::builder()
-                .with_size(vec2(340.0, 640.0))
+                .with_size(vec2(width, 640.0))
                 .with_pixels_per_point(2.0)
                 .with_accessibility_check(false)
                 .wgpu()
@@ -4141,7 +4156,12 @@ mod tests {
                     Noise { tools: tools.clone(), doc: Document::new(world.clone(), None, 1), blocks: BlockLibrary::default() },
                 );
             h.run_steps(4);
-            h.render().unwrap().save(dir.join(if dark { "combined-settings-dark.png" } else { "combined-settings-light.png" })).unwrap();
+            let name = match (dark, width < 300.0) {
+                (_, true) => "combined-settings-narrow.png",
+                (true, false) => "combined-settings-dark.png",
+                (false, false) => "combined-settings-light.png",
+            };
+            h.render().unwrap().save(dir.join(name)).unwrap();
         }
     }
 
