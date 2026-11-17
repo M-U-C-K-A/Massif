@@ -233,6 +233,8 @@ pub struct MapView {
     fitted: Option<u64>,
     fit_view: Option<([f64; 2], f32, Vec2)>,
     stroke: Option<Stroke>,
+    /// Flood held down, and whether by the right button.
+    water: Option<(tools::WaterHold, bool)>,
     last_time: f64,
     probe: Option<((i32, i32, u64), Option<tools::Probe>)>,
     /// Scrolling not yet turned into brush size steps.
@@ -302,6 +304,7 @@ impl Default for MapView {
             fitted: None,
             fit_view: None,
             stroke: None,
+            water: None,
             last_time: 0.0,
             probe: None,
             wheel: 0.0,
@@ -1130,6 +1133,7 @@ impl MapView {
         if let Some(button) = button
             && response.is_pointer_button_down_on()
             && self.stroke.is_none()
+            && self.water.is_none()
             && !self.view3d_grab
             && let Some((x, z)) = world_pointer
         {
@@ -1187,6 +1191,12 @@ impl MapView {
             } else if tools.tool.is_select() {
                 let op = crate::select::combine_of(modifiers, secondary, tools.select_mode);
                 self.select.begin(tools.tool, (x, z), op, secondary, &tools.brush);
+            } else if tools.tool == Tool::Flood {
+                // The right button lowers the water a block, Shift drains
+                // it whole; held, it keeps going.
+                let (hold, note) = tools::press_water(doc, tools, bx, bz, inverse, secondary && modifiers.shift);
+                *feedback = note.or(feedback.take());
+                self.water = hold.map(|h| (h, secondary));
             } else if tools.tool.is_click() {
                 *feedback = tools::click(doc, tools, bx, bz, inverse);
             } else if tools.tool.uses_brush() {
@@ -1263,6 +1273,18 @@ impl MapView {
                 if let Some(classes) = classes {
                     self.auto_classes = Some(((true, doc.generation, doc.dim, doc.revision, auto_rules_key(doc, tools)), classes));
                 }
+            }
+        }
+        // Flood held: a block more at each beat, until let go.
+        if let Some((hold, secondary)) = &mut self.water {
+            let held = if *secondary { down[1] } else { down[0] };
+            if held && tools.tool == Tool::Flood {
+                tools::hold_water(doc, tools, hold, dt);
+                if !hold.ended() {
+                    ui.ctx().request_repaint();
+                }
+            } else if let Some((hold, _)) = self.water.take() {
+                *feedback = tools::release_water(doc, hold).or(feedback.take());
             }
         }
 

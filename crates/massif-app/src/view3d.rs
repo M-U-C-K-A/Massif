@@ -4661,6 +4661,7 @@ impl View3d {
             Use3d::Paint => (Some(tr!("Paint")), Some(back.as_deref().unwrap_or(tr!("Paint by height")))),
             Use3d::Sculpt if tools.tool == Tool::Dig => (Some(tr!("Dig")), Some(tr!("Add"))),
             Use3d::Sculpt => (Some(tr!("Add")), Some(tr!("Dig"))),
+            Use3d::Click if tools.tool == Tool::Flood => (Some(name), Some(tr!("Lower the water"))),
             Use3d::Click => (Some(name), None),
             Use3d::Brush => (Some(name), Some(tr!("Inverse"))),
         };

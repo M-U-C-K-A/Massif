@@ -193,7 +193,7 @@ impl Tool {
                 tr!("Paints what the land calls for: rock on cliffs, sand on shores…")
             }
             Tool::Eyedropper => tr!("Pick the terrain, biome, height and water under the cursor."),
-            Tool::Flood => tr!("Fill a basin with water. Right button: drain."),
+            Tool::Flood => tr!("Fill a basin with water; on water, raise it a block. Right button: lower it a block, Shift: drain it. Hold to repeat."),
             Tool::Drain => tr!("Drain a body of water. Right button: fill."),
             Tool::Water => tr!("Set the water level. Right button: remove water."),
             Tool::River => {
@@ -397,6 +397,8 @@ pub struct ToolState {
     /// Flood from the click, on a spot that is not in a hollow: ask first
     /// (the water would spread as far as the land lies under it), or flood.
     pub flood_warn: bool,
+    /// Blocks a second a held Flood raises or lowers the water by.
+    pub water_rate: f32,
     /// A flood beyond a hollow waiting for an answer.
     #[serde(skip)]
     pub flood_ask: Option<FloodAsk>,
@@ -979,6 +981,7 @@ impl Default for ToolState {
             water_level: 63,
             water_from_click: true,
             flood_warn: true,
+            water_rate: 6.0,
             flood_ask: None,
             water_limit_on: false,
             water_limit: 63,
@@ -1478,6 +1481,8 @@ enum Stroke3d {
     Map(Box<Stroke>),
     /// A click, done as the button went down.
     Clicked,
+    /// Flood held down: the water raised or lowered a block at a time.
+    Water(WaterHold),
 }
 
 /// Begin a stroke in the 3D Sculpt editor with the tool of the Tools panel,
@@ -1490,6 +1495,11 @@ pub fn begin_sculpt(doc: &mut Document, tools: &mut ToolState, inverse: bool, at
     let (x, z) = (at.center[0], at.center[2]);
     let what = match tool.in_3d() {
         Use3d::MapOnly => return (None, None),
+        Use3d::Click if tool == Tool::Flood => {
+            let (hold, note) = press_water(doc, tools, x.floor() as i32, z.floor() as i32, inverse, false);
+            let what = hold.map_or(Stroke3d::Clicked, Stroke3d::Water);
+            return (Some(SculptStroke { what, salt, step: 0, label: String::new() }), note);
+        }
         Use3d::Click => {
             let note = click(doc, tools, x.floor() as i32, z.floor() as i32, inverse);
             return (Some(SculptStroke { what: Stroke3d::Clicked, salt, step: 0, label: String::new() }), note);
@@ -1536,6 +1546,7 @@ pub fn sculpt_dab(doc: &mut Document, tools: &ToolState, stroke: &mut SculptStro
             1
         }
         Stroke3d::Clicked => 0,
+        Stroke3d::Water(hold) => hold_water(doc, tools, hold, dt) as usize,
         Stroke3d::Sculpt(SculptMode::Smooth, _) => {
             let mut edit = doc.history.edit(&mut doc.world, 0);
             voxel::sculpt_at(&mut edit, &brush, frame.center, Some(frame.normal), sculpt_strength(&brush, dt), SculptMode::Smooth)
@@ -1580,6 +1591,7 @@ pub fn end_sculpt(doc: &mut Document, stroke: SculptStroke) -> Feedback {
     match stroke.what {
         Stroke3d::Map(map) => end_stroke(doc, *map),
         Stroke3d::Clicked => None,
+        Stroke3d::Water(hold) => release_water(doc, hold),
         Stroke3d::Sculpt(..) | Stroke3d::Paint { .. } => {
             end_step(doc, stroke.step);
             None
@@ -1632,6 +1644,8 @@ pub struct FloodAsk {
     pub level: i16,
     pub columns: usize,
     pub more: bool,
+    /// Raising water at the rim of its hollow, rather than on dry land.
+    pub at_rim: bool,
 }
 
 /// Flood as asked: up to the level of `ask`, from where it was clicked;
@@ -1642,6 +1656,243 @@ pub fn flood_anyway(doc: &mut Document, tools: &mut ToolState, ask: &FloodAsk) -
     let n = ops::flood_fill(&mut doc.history.edit(&mut doc.world, 0), ask.x, ask.z, Flood::Fill(ask.level), FLOOD_MAX);
     doc.commit();
     tr!("Flooded {n} columns up to {water_level}", water_level = ask.level, n)
+}
+
+/// What a flood (or a drain) from column `(x, z)` is to do: how and up
+/// to what level; or what to say instead, a question asked included.
+fn pour_mode(doc: &Document, tools: &mut ToolState, x: i32, z: i32, flood: bool) -> Result<(Flood, i16), Feedback> {
+    // From the click: the hollow clicked, up to where it spills.
+    if flood && tools.water_from_click {
+        match ops::spill_level(doc.dimension(), x, z, 16 << 20) {
+            Some(level) => tools.water_level = level,
+            // Not in a hollow: the water would run away. Made to stay a
+            // block over the spot, it spreads as far as the land lies under
+            // it: asked first, unless told not to.
+            None => {
+                let Some(level) = ops::pour_level(doc.dimension(), x, z) else {
+                    return Err(Some(tr!("This spot is not in a hollow: water poured here runs away. Untick From the click in Tool Settings to flood up to a level of your own.").to_owned()));
+                };
+                let level = tools.limit_water(level);
+                if tools.flood_warn {
+                    let columns = ops::flood_count(doc.dimension(), x, z, Flood::Fill(level), FLOOD_MAX);
+                    tools.flood_ask = Some(FloodAsk { x, z, level, columns, more: columns >= FLOOD_MAX, at_rim: false });
+                    return Err(None);
+                }
+                tools.water_level = level;
+            }
+        }
+    }
+    let level = tools.limit_water(tools.water_level);
+    if flood && tools.water_limit_on && probe(doc, x, z).is_some_and(|p| block_top(p.height) >= level as i32) {
+        return Err(Some(under_the_limit(tools)));
+    }
+    Ok((if flood { Flood::Fill(level) } else { Flood::Drain }, level))
+}
+
+/// What a flood (or a drain) of `n` columns up to `level` says.
+fn poured(doc: &Document, tools: &ToolState, x: i32, z: i32, flood: bool, level: i16, n: usize) -> String {
+    match (flood, n) {
+        (true, 0) if !tools.water_from_click && probe(doc, x, z).is_some_and(|p| block_top(p.height) >= tools.water_level as i32) => {
+            tr!("The water level {water_level} is under this spot: raise it in Tool Settings, or tick From the click.", water_level = tools.water_level)
+        }
+        (_, 0) => tr!("Nothing to fill or drain here").to_owned(),
+        (true, n) => tr!("Flooded {n} columns up to {water_level}", water_level = level, n),
+        (false, n) => tr!("Drained {n} columns", n),
+    }
+}
+
+/// The Flood tool held down: the water raised (or lowered) a block a
+/// step, at the pace set in Tool Settings, all of it one step to undo.
+pub struct WaterHold {
+    /// A column of the body of water: where it was pressed, or, lowering,
+    /// one it still covers.
+    x: i32,
+    z: i32,
+    lower: bool,
+    /// The step to undo it records into.
+    step: u64,
+    label: String,
+    /// The highest the water may rise: the rim of its hollow (`None`: no
+    /// rim to keep to, as told). Worked out at the first rise.
+    rim: Option<Option<i16>>,
+    /// Seconds since the last block.
+    wait: f32,
+    /// Blocks raised or lowered.
+    blocks: u32,
+    /// The level the water stands at, `None` once it is gone.
+    level: Option<i16>,
+    /// The press began on dry land: the columns its flood covered.
+    flooded: Option<usize>,
+    /// Why it goes no further.
+    end: Option<HoldEnd>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum HoldEnd {
+    /// The water is at the rim of its hollow.
+    Rim,
+    /// At the height limit.
+    Limit,
+    /// The last layer is gone.
+    Gone,
+    /// Nothing more to change.
+    Still,
+}
+
+impl WaterHold {
+    /// Whether it has gone as far as it goes.
+    pub fn ended(&self) -> bool {
+        self.end.is_some()
+    }
+
+    /// The blocks raised or lowered so far.
+    #[cfg(test)]
+    pub fn blocks(&self) -> u32 {
+        self.blocks
+    }
+}
+
+/// The time between two blocks of a held Flood, in seconds.
+fn hold_period(tools: &ToolState) -> f32 {
+    1.0 / tools.water_rate.clamp(1.0, 30.0)
+}
+
+/// Press the Flood tool on column `(x, z)`: the left button floods the
+/// hollow, or, on water, raises it a block; the right one (`lower`) lowers
+/// it a block; with Shift (`drain_all`) drains it whole. A hold to keep
+/// going while the button is down ([`hold_water`]), and to let go
+/// ([`release_water`]); `None` when it is done (what it did, or why not,
+/// in the feedback).
+pub fn press_water(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, lower: bool, drain_all: bool) -> (Option<WaterHold>, Feedback) {
+    if drain_all {
+        doc.history.begin(tr!("Drain"), doc.dim);
+        let n = ops::flood_fill(&mut doc.history.edit(&mut doc.world, 0), x, z, Flood::Drain, FLOOD_MAX);
+        doc.commit();
+        return (None, Some(poured(doc, tools, x, z, false, 0, n)));
+    }
+    let water = ops::water_at(doc.dimension(), x, z);
+    let mut hold = WaterHold { x, z, lower, step: 0, label: String::new(), rim: None, wait: 0.0, blocks: 0, level: water, flooded: None, end: None };
+    match (lower, water) {
+        (true, None) => return (None, Some(tr!("No water here to lower").to_owned())),
+        (true, Some(_)) => hold.label = tr!("Lower the water").to_owned(),
+        // Dry land: flooded as by a click, the hold raising it on from there.
+        (false, None) => {
+            let (mode, level) = match pour_mode(doc, tools, x, z, true) {
+                Ok(m) => m,
+                Err(note) => return (None, note),
+            };
+            hold.label = tr!("Flood").to_owned();
+            hold.step = doc.history.begin(hold.label.clone(), doc.dim);
+            let n = ops::flood_fill(&mut doc.history.edit(&mut doc.world, 0), x, z, mode, FLOOD_MAX);
+            if n == 0 {
+                doc.commit();
+                return (None, Some(poured(doc, tools, x, z, true, level, n)));
+            }
+            hold.flooded = Some(n);
+            hold.level = ops::water_at(doc.dimension(), x, z);
+            return (Some(hold), None);
+        }
+        (false, Some(level)) => {
+            // At the rim already: a block more, and it spills. Asked first.
+            let rim = ops::spill_level(doc.dimension(), x, z, 16 << 20);
+            let higher = level.saturating_add(1);
+            if tools.limit_water(higher) < higher {
+                return (None, Some(under_the_limit(tools)));
+            }
+            if tools.flood_warn && rim.is_none_or(|rim| higher > rim) {
+                let columns = ops::flood_count(doc.dimension(), x, z, Flood::Fill(higher), FLOOD_MAX);
+                tools.flood_ask = Some(FloodAsk { x, z, level: higher, columns, more: columns >= FLOOD_MAX, at_rim: true });
+                return (None, None);
+            }
+            hold.rim = Some(rim.filter(|_| tools.flood_warn));
+            hold.label = tr!("Raise the water").to_owned();
+        }
+    }
+    hold.step = doc.history.begin(hold.label.clone(), doc.dim);
+    water_step(doc, tools, &mut hold);
+    (Some(hold), None)
+}
+
+/// A block more of a held Flood (or less).
+fn water_step(doc: &mut Document, tools: &ToolState, hold: &mut WaterHold) {
+    keep_step(doc, &mut hold.step, &hold.label);
+    let Some(level) = hold.level else {
+        hold.end = Some(HoldEnd::Gone);
+        return;
+    };
+    if hold.lower {
+        let mut edit = doc.history.edit(&mut doc.world, 0);
+        match ops::lower_water(&mut edit, hold.x, hold.z, FLOOD_MAX) {
+            Some((n, kept)) if n > 0 => {
+                hold.blocks += 1;
+                match kept {
+                    Some((x, z)) => {
+                        (hold.x, hold.z) = (x, z);
+                        hold.level = Some(level - 1);
+                    }
+                    None => {
+                        hold.level = None;
+                        hold.end = Some(HoldEnd::Gone);
+                    }
+                }
+            }
+            _ => hold.end = Some(HoldEnd::Still),
+        }
+        return;
+    }
+    let higher = level.saturating_add(1);
+    if tools.limit_water(higher) < higher {
+        hold.end = Some(HoldEnd::Limit);
+        return;
+    }
+    let (x, z) = (hold.x, hold.z);
+    let rim = *hold.rim.get_or_insert_with(|| tools.flood_warn.then(|| ops::spill_level(doc.dimension(), x, z, 16 << 20).unwrap_or(level)));
+    if rim.is_some_and(|rim| higher > rim) {
+        hold.end = Some(HoldEnd::Rim);
+        return;
+    }
+    match ops::raise_water(&mut doc.history.edit(&mut doc.world, 0), hold.x, hold.z, FLOOD_MAX) {
+        Some((n, level)) if n > 0 => {
+            hold.blocks += 1;
+            hold.level = Some(level);
+        }
+        _ => hold.end = Some(HoldEnd::Still),
+    }
+}
+
+/// Keep a held Flood going for `dt` more seconds: a block each time the
+/// pace set comes round, until the water reaches the rim of its hollow
+/// (unless told to flood beyond it), the height limit or the bottom.
+/// Whether it changed the water.
+pub fn hold_water(doc: &mut Document, tools: &ToolState, hold: &mut WaterHold, dt: f32) -> bool {
+    if hold.end.is_some() {
+        return false;
+    }
+    let period = hold_period(tools);
+    // A slow frame does not let the water jump: two blocks at most.
+    hold.wait = (hold.wait + dt.max(0.0)).min(period * 2.0);
+    let mut changed = false;
+    while hold.wait >= period && hold.end.is_none() {
+        hold.wait -= period;
+        let before = hold.blocks;
+        water_step(doc, tools, hold);
+        changed |= hold.blocks > before;
+    }
+    changed
+}
+
+/// Let go of a held Flood: its step closed. What it did.
+pub fn release_water(doc: &mut Document, hold: WaterHold) -> Feedback {
+    end_step(doc, hold.step);
+    let level = hold.level;
+    Some(match (hold.flooded, hold.lower, hold.end, level) {
+        (Some(n), _, _, Some(level)) if hold.blocks == 0 => tr!("Flooded {n} columns up to {water_level}", water_level = level, n),
+        (_, true, _, None) => tr!("The water is gone").to_owned(),
+        (_, true, _, Some(level)) => trn!("Water lowered by {n} block, to {level}", "Water lowered by {n} blocks, to {level}", n = hold.blocks, level),
+        (_, false, Some(HoldEnd::Rim), Some(level)) => trn!("Water raised by {n} block, to {level}: it is at the rim of its hollow, a block more and it spills.", "Water raised by {n} blocks, to {level}: it is at the rim of its hollow, a block more and it spills.", n = hold.blocks, level),
+        (_, false, _, Some(level)) => trn!("Water raised by {n} block, to {level}", "Water raised by {n} blocks, to {level}", n = hold.blocks, level),
+        _ => tr!("Nothing to fill or drain here").to_owned(),
+    })
 }
 
 /// A single-click tool at block `(x, z)`. `inverse` is the right button.
@@ -1668,45 +1919,25 @@ pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse:
             tools.tool = tools.previous;
             Some(tr!("Picked {terrain_name} at height {block_top}", block_top = block_top(p.height), terrain_name))
         }
-        Tool::Flood | Tool::Drain => {
-            let flood = (tools.tool == Tool::Flood) != inverse;
-            // From the click: the hollow clicked, up to where it spills.
-            if flood && tools.water_from_click {
-                match ops::spill_level(doc.dimension(), x, z, 16 << 20) {
-                    Some(level) => tools.water_level = level,
-                    // Not in a hollow: the water would run away. Made to
-                    // stay a block over the spot, it spreads as far as the
-                    // land lies under it: asked first, unless told not to.
-                    None => {
-                        let Some(level) = ops::pour_level(doc.dimension(), x, z) else {
-                            return Some(tr!("This spot is not in a hollow: water poured here runs away. Untick From the click in Tool Settings to flood up to a level of your own.").to_owned());
-                        };
-                        let level = tools.limit_water(level);
-                        if tools.flood_warn {
-                            let columns = ops::flood_count(doc.dimension(), x, z, Flood::Fill(level), FLOOD_MAX);
-                            tools.flood_ask = Some(FloodAsk { x, z, level, columns, more: columns >= FLOOD_MAX });
-                            return None;
-                        }
-                        tools.water_level = level;
-                    }
-                }
+        // Flood's own button, the right one: a block lower (Shift: drained
+        // whole).
+        Tool::Flood => {
+            let (hold, note) = press_water(doc, tools, x, z, inverse, false);
+            match hold {
+                Some(hold) => release_water(doc, hold).or(note),
+                None => note,
             }
-            let level = tools.limit_water(tools.water_level);
-            if flood && tools.water_limit_on && probe(doc, x, z).is_some_and(|p| block_top(p.height) >= level as i32) {
-                return Some(under_the_limit(tools));
-            }
-            let mode = if flood { Flood::Fill(level) } else { Flood::Drain };
+        }
+        Tool::Drain => {
+            let flood = inverse;
+            let (mode, level) = match pour_mode(doc, tools, x, z, flood) {
+                Ok(m) => m,
+                Err(note) => return note,
+            };
             doc.history.begin(if flood { tr!("Flood") } else { tr!("Drain") }, doc.dim);
             let n = ops::flood_fill(&mut doc.history.edit(&mut doc.world, 0), x, z, mode, FLOOD_MAX);
             doc.commit();
-            Some(match (flood, n) {
-                (true, 0) if !tools.water_from_click && probe(doc, x, z).is_some_and(|p| block_top(p.height) >= tools.water_level as i32) => {
-                    tr!("The water level {water_level} is under this spot: raise it in Tool Settings, or tick From the click.", water_level = tools.water_level)
-                }
-                (_, 0) => tr!("Nothing to fill or drain here").to_owned(),
-                (true, n) => tr!("Flooded {n} columns up to {water_level}", water_level = level, n),
-                (false, n) => tr!("Drained {n} columns", n),
-            })
+            Some(poured(doc, tools, x, z, flood, level, n))
         }
         _ => None,
     }
@@ -2233,6 +2464,134 @@ mod tests {
         assert!(tools.flood_ask.is_none() && msg.starts_with("Flooded 10000 columns"), "{msg}");
     }
 
+    /// A dry pit 30 blocks across and 14 deep at (60, 60) in flat land: its
+    /// bottom and its rim, as fluid levels (water at the rim stays in it).
+    fn pit(d: &mut Document) -> (i16, i16) {
+        let brush = Brush { shape: massif_core::BrushShape::Circle, radius: 15.0, profile: massif_core::Profile::Constant, strength: 1.0, rotation: 0.0, mask: None, filter: None };
+        let rim = block_top(height(d, 60, 60)) as i16;
+        d.history.begin("Dig", d.dim);
+        ops::raise(&mut d.history.edit(&mut d.world, 0), &brush, 60.0, 60.0, -14.0, ops::Surface::Top);
+        // The sea's level under the land would fill it: none.
+        for pos in d.dimension().ground().positions().collect::<Vec<_>>() {
+            d.history.edit(&mut d.world, 0).tile_mut(pos).unwrap().fluid.fill(NO_FLUID);
+        }
+        d.commit();
+        (block_top(height(d, 60, 60)) as i16, rim)
+    }
+
+    fn water(d: &Document, x: i32, z: i32) -> Option<i16> {
+        ops::water_at(d.dimension(), x, z)
+    }
+
+    /// Flood's right button lowers the water clicked by one block, the
+    /// shore it uncovers left as the ground was; Shift drains it whole.
+    #[test]
+    fn a_right_click_lowers_the_water_a_block() {
+        let mut d = doc();
+        let mut tools = ToolState::default();
+        tools.select(Tool::Flood);
+        let (bottom, rim) = pit(&mut d);
+        let msg = click(&mut d, &mut tools, 60, 60, false).unwrap();
+        assert_eq!(water(&d, 60, 60), Some(rim), "{msg}");
+        assert_eq!(water(&d, 60 + 20, 60), None);
+        let (steps, ground) = (d.history.undo_count(), height(&d, 60, 60));
+        let msg = click(&mut d, &mut tools, 60, 60, true).unwrap();
+        assert_eq!(water(&d, 60, 60), Some(rim - 1), "{msg}");
+        assert_eq!(water(&d, 70, 60), Some(rim - 1));
+        assert_eq!(msg, format!("Water lowered by 1 block, to {}", rim - 1));
+        assert_eq!(d.history.undo_count(), steps + 1);
+        assert_eq!(height(&d, 60, 60), ground);
+        // Held to the bottom: a block at a time, then gone.
+        let (hold, _) = press_water(&mut d, &mut tools, 60, 60, true, false);
+        let mut hold = hold.unwrap();
+        let mut beats = 1;
+        while !hold.ended() {
+            hold_water(&mut d, &tools, &mut hold, hold_period(&tools));
+            beats += 1;
+            assert!(beats < 40);
+        }
+        assert_eq!(release_water(&mut d, hold).unwrap(), "The water is gone");
+        assert_eq!(water(&d, 60, 60), None);
+        assert_eq!(d.history.undo_count(), steps + 2);
+        assert!(beats as i16 >= rim - 1 - bottom, "{beats}");
+        d.undo();
+        assert_eq!(water(&d, 60, 60), Some(rim - 1));
+        // Shift + right click: drained whole, at once.
+        assert_eq!(click(&mut d, &mut tools, 60, 60, true).unwrap(), format!("Water lowered by 1 block, to {}", rim - 2));
+        let (hold, msg) = press_water(&mut d, &mut tools, 60, 60, true, true);
+        assert!(hold.is_none() && msg.unwrap().starts_with("Drained"));
+        for (x, z) in [(60, 60), (50, 60), (70, 70)] {
+            assert_eq!(water(&d, x, z), None);
+        }
+        assert_eq!(click(&mut d, &mut tools, 60, 60, true).unwrap(), "No water here to lower");
+    }
+
+    /// Flood held on water raises it a block at each beat, all of it one
+    /// step to undo, and stops at the rim of its hollow; a click there asks
+    /// before it spills.
+    #[test]
+    fn holding_flood_raises_the_water_to_the_rim() {
+        let mut d = doc();
+        let mut tools = ToolState::default();
+        tools.select(Tool::Flood);
+        let (bottom, rim) = pit(&mut d);
+        tools.water_from_click = false;
+        tools.water_level = bottom + 2;
+        click(&mut d, &mut tools, 60, 60, false).unwrap();
+        assert_eq!(water(&d, 60, 60), Some(bottom + 2));
+        let steps = d.history.undo_count();
+        // A click: a block.
+        assert_eq!(click(&mut d, &mut tools, 60, 60, false).unwrap(), format!("Water raised by 1 block, to {}", bottom + 3));
+        // Held for 5 beats: 5 blocks, one step.
+        let (hold, _) = press_water(&mut d, &mut tools, 60, 60, false, false);
+        let mut hold = hold.unwrap();
+        for _ in 1..5 {
+            assert!(hold_water(&mut d, &tools, &mut hold, hold_period(&tools)));
+        }
+        // Between beats, nothing.
+        assert!(!hold_water(&mut d, &tools, &mut hold, hold_period(&tools) * 0.5));
+        assert_eq!(hold.blocks(), 5);
+        assert_eq!(water(&d, 60, 60), Some(bottom + 8));
+        release_water(&mut d, hold);
+        assert_eq!(d.history.undo_count(), steps + 2);
+        d.undo();
+        assert_eq!(water(&d, 60, 60), Some(bottom + 3));
+        // Held long: up to the rim, no higher.
+        let (hold, _) = press_water(&mut d, &mut tools, 60, 60, false, false);
+        let mut hold = hold.unwrap();
+        for _ in 0..60 {
+            hold_water(&mut d, &tools, &mut hold, hold_period(&tools));
+        }
+        assert!(hold.ended());
+        let msg = release_water(&mut d, hold).unwrap();
+        assert!(msg.contains("rim"), "{msg}");
+        assert_eq!(water(&d, 60, 60), Some(rim));
+        assert_eq!(water(&d, 60 + 20, 60), None);
+        // A click at the rim asks first; Flood anyway raises it a block.
+        assert_eq!(click(&mut d, &mut tools, 60, 60, false), None);
+        let ask = tools.flood_ask.take().expect("a question");
+        assert!(ask.at_rim && ask.level == rim + 1, "{ask:?}");
+        assert_eq!(water(&d, 60, 60), Some(rim));
+        flood_anyway(&mut d, &mut tools, &ask);
+        assert_eq!(water(&d, 60, 60), Some(rim + 1));
+        d.undo();
+        // Without the warning, held, it rises on past the rim; the height
+        // limit still holds.
+        tools.flood_warn = false;
+        tools.water_limit_on = true;
+        tools.water_limit = rim + 3;
+        let (hold, _) = press_water(&mut d, &mut tools, 60, 60, false, false);
+        let mut hold = hold.unwrap();
+        for _ in 0..10 {
+            hold_water(&mut d, &tools, &mut hold, hold_period(&tools));
+        }
+        assert!(hold.ended() && hold.blocks() == 3);
+        release_water(&mut d, hold);
+        assert_eq!(water(&d, 60, 60), Some(rim + 3));
+        assert_eq!(water(&d, 60 + 40, 60), Some(rim + 3));
+        assert!(click(&mut d, &mut tools, 60, 60, false).unwrap().starts_with("The height limit"));
+    }
+
     /// The Water brush lays its water as high as where its stroke starts,
     /// at any height: a block over the ground there, or the surface of the
     /// water there; at the level set with From the click off; and never
@@ -2285,8 +2644,12 @@ mod tests {
         tools.water_level = 70;
         click(&mut d, &mut tools, 50, 50, false);
         assert_eq!(probe(&d, 60, 60).unwrap().fluid, 70);
+        // The right button: a block lower; with Shift, drained whole.
         let msg = click(&mut d, &mut tools, 50, 50, true).unwrap();
-        assert!(msg.starts_with("Drained"), "{msg}");
+        assert_eq!(msg, "Water lowered by 1 block, to 69");
+        assert_eq!(probe(&d, 60, 60).unwrap().fluid, 69);
+        let (_, msg) = press_water(&mut d, &mut tools, 50, 50, true, true);
+        assert!(msg.unwrap().starts_with("Drained"));
         assert_eq!(probe(&d, 60, 60).unwrap().fluid, NO_FLUID);
     }
 

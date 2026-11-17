@@ -1022,6 +1022,10 @@ pub enum Flood {
     Fill(i16),
     /// Remove the connected body of fluid.
     Drain,
+    /// Take the top layer off the connected body of fluid standing at this
+    /// level: it stands a block lower, and the columns where that is
+    /// ground go dry.
+    Lower(i16),
 }
 
 struct FloodTile {
@@ -1039,6 +1043,8 @@ struct FloodGrid<'a> {
     tiles: Vec<FloodTile>,
     lookup: HashMap<TilePos, Option<usize>>,
     last: Option<(TilePos, usize)>,
+    /// A column [`Flood::Lower`] left water on.
+    kept: Option<(i32, i32)>,
 }
 
 impl FloodGrid<'_> {
@@ -1091,6 +1097,17 @@ impl FloodGrid<'_> {
                     return false;
                 }
                 NO_FLUID
+            }
+            Flood::Lower(level) => {
+                if fluid != level || (fluid as i32) <= top {
+                    return false;
+                }
+                if top < level as i32 - 1 {
+                    self.kept.get_or_insert((x, z));
+                    level - 1
+                } else {
+                    NO_FLUID
+                }
             }
         };
         tile.fluid[i] = new;
@@ -1147,7 +1164,12 @@ pub fn flood_fill(edit: &mut Edit, x: i32, z: i32, mode: Flood, max_cells: usize
     if edit.level_index() != 0 {
         return 0;
     }
-    let (filled, changed) = flood_plan(edit.dim(), x, z, mode, max_cells);
+    let (filled, changed, _) = flood_plan(edit.dim(), x, z, mode, max_cells);
+    write_plan(edit, changed);
+    filled
+}
+
+fn write_plan(edit: &mut Edit, changed: Vec<(TilePos, Vec<i16>)>) {
     for (pos, fluid) in changed {
         if let Some(tile) = edit.tile_mut(pos) {
             debug_assert_eq!(fluid.len(), TILE_AREA);
@@ -1155,7 +1177,37 @@ pub fn flood_fill(edit: &mut Edit, x: i32, z: i32, mode: Flood, max_cells: usize
             tile.fluid.compact();
         }
     }
-    filled
+}
+
+/// The level of the water standing on column `(x, z)`, if any.
+pub fn water_at(dim: &Dimension, x: i32, z: i32) -> Option<i16> {
+    let tile = dim.ground().view(TilePos::containing(x, z))?;
+    let i = local_index(x, z);
+    let (top, fluid) = (block_top(tile.top.get(i)), tile.fluid.get(i));
+    (fluid != NO_FLUID && fluid as i32 > top).then_some(fluid)
+}
+
+/// Raise the body of water on column `(x, z)` by one block: it fills up
+/// to a block higher as far as it reaches, over the shore a block above
+/// it and wherever the land lies lower from there. The columns changed,
+/// and the level it stands at; `None` with no water on the column.
+pub fn raise_water(edit: &mut Edit, x: i32, z: i32, max_cells: usize) -> Option<(usize, i16)> {
+    let level = water_at(edit.dim(), x, z)?.checked_add(1)?;
+    Some((flood_fill(edit, x, z, Flood::Fill(level), max_cells), level))
+}
+
+/// Lower the body of water on column `(x, z)` by one block: its top layer
+/// taken off, the shore it uncovers left as the ground was. The columns
+/// changed and a column it still covers (`None`: the water is gone); `None`
+/// with no water on the column.
+pub fn lower_water(edit: &mut Edit, x: i32, z: i32, max_cells: usize) -> Option<(usize, Option<(i32, i32)>)> {
+    if edit.level_index() != 0 {
+        return None;
+    }
+    let level = water_at(edit.dim(), x, z)?;
+    let (n, changed, kept) = flood_plan(edit.dim(), x, z, Flood::Lower(level), max_cells);
+    write_plan(edit, changed);
+    Some((n, kept))
 }
 
 /// How many columns [`flood_fill`] would change from column `(x, z)`, at
@@ -1176,8 +1228,10 @@ pub fn pour_level(dim: &Dimension, x: i32, z: i32) -> Option<i16> {
 
 /// The columns a flood from `(x, z)` changes and the water of the tiles it
 /// changes, as [`flood_fill`] would write them.
-fn flood_plan(dim: &Dimension, x: i32, z: i32, mode: Flood, max_cells: usize) -> (usize, Vec<(TilePos, Vec<i16>)>) {
+#[allow(clippy::type_complexity)]
+fn flood_plan(dim: &Dimension, x: i32, z: i32, mode: Flood, max_cells: usize) -> (usize, Vec<(TilePos, Vec<i16>)>, Option<(i32, i32)>) {
     let mut filled = 0usize;
+    let kept;
     let changed: Vec<(TilePos, Vec<i16>)> = {
         let mut grid = FloodGrid {
             dim,
@@ -1185,6 +1239,7 @@ fn flood_plan(dim: &Dimension, x: i32, z: i32, mode: Flood, max_cells: usize) ->
             tiles: Vec::new(),
             lookup: HashMap::new(),
             last: None,
+            kept: None,
         };
         // Span-based scanline fill: the stack holds runs `(x0, x1, z)` that are
         // already flooded, so it grows with the number of runs, not of cells.
@@ -1223,13 +1278,14 @@ fn flood_plan(dim: &Dimension, x: i32, z: i32, mode: Flood, max_cells: usize) ->
                 }
             }
         }
+        kept = grid.kept;
         grid.tiles
             .into_iter()
             .filter(|t| t.changed)
             .map(|t| (t.pos, t.fluid))
             .collect()
     };
-    (filled, changed)
+    (filled, changed, kept)
 }
 
 // --------------------------------------------------------- whole-map ops --
@@ -1863,6 +1919,58 @@ mod tests {
         assert_eq!(flood_fill(&mut hist.edit(&mut w, 0), 3, 3, Flood::Drain, usize::MAX), n);
         hist.commit();
         assert_eq!(fluid(&w, 0, 0), NO_FLUID);
+    }
+
+    /// A lake raised by a block covers its shore a block over it; lowered by
+    /// a block, it uncovers that shore and leaves the ground as it was;
+    /// lowered layer by layer, it is gone at the last.
+    #[test]
+    fn water_rises_and_falls_a_block_at_a_time() {
+        let mut w = world(1);
+        let mut hist = History::default();
+        hist.begin("Dig", 0);
+        for pos in w.dims[0].ground().positions().collect::<Vec<_>>() {
+            hist.edit(&mut w, 0).tile_mut(pos).unwrap().fluid.fill(NO_FLUID);
+        }
+        raise(&mut hist.edit(&mut w, 0), &hard_brush(10.0), 0.0, 0.0, -14.0, Surface::Top);
+        flood_fill(&mut hist.edit(&mut w, 0), 0, 0, Flood::Fill(55), usize::MAX);
+        hist.commit();
+        let wet = |w: &World| {
+            let dim = &w.dims[0];
+            dim.ground().positions().flat_map(|p| (0..TILE_AREA as i32).map(move |i| (p.x * TILE_SIZE + i % TILE_SIZE, p.z * TILE_SIZE + i / TILE_SIZE))).filter(|&(x, z)| water_at(dim, x, z).is_some()).count()
+        };
+        let ground = w.dims[0].ground().view(TilePos::containing(0, 0)).unwrap().top.dense().into_owned();
+        let lake = wet(&w);
+        assert_eq!(water_at(&w.dims[0], 0, 0), Some(55));
+        hist.begin("Raise", 0);
+        assert_eq!(raise_water(&mut hist.edit(&mut w, 0), 0, 0, usize::MAX).map(|r| r.1), Some(56));
+        hist.commit();
+        assert_eq!(water_at(&w.dims[0], 0, 0), Some(56));
+        assert!(wet(&w) >= lake, "{} < {lake}", wet(&w));
+        hist.begin("Lower", 0);
+        let (_, kept) = lower_water(&mut hist.edit(&mut w, 0), 0, 0, usize::MAX).unwrap();
+        assert!(kept.is_some());
+        let (_, kept) = lower_water(&mut hist.edit(&mut w, 0), 0, 0, usize::MAX).unwrap();
+        hist.commit();
+        assert!(kept.is_some());
+        assert_eq!(water_at(&w.dims[0], 0, 0), Some(54));
+        assert!(wet(&w) <= lake);
+        // The ground is as it was.
+        assert_eq!(w.dims[0].ground().view(TilePos::containing(0, 0)).unwrap().top.dense().into_owned(), ground);
+        hist.begin("Lower", 0);
+        let mut layers = 0;
+        while let Some((_, kept)) = lower_water(&mut hist.edit(&mut w, 0), 0, 0, usize::MAX) {
+            layers += 1;
+            if kept.is_none() {
+                break;
+            }
+        }
+        hist.commit();
+        assert!((1..20).contains(&layers), "{layers}");
+        assert_eq!(wet(&w), 0);
+        hist.begin("Lower", 0);
+        assert!(lower_water(&mut hist.edit(&mut w, 0), 0, 0, usize::MAX).is_none());
+        hist.commit();
     }
 
     #[test]

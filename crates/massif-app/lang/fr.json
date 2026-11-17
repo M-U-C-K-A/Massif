@@ -712,7 +712,6 @@
  "File": "Fichier",
  "File input": "Fichier en entrée",
  "Fill": "Remplir",
- "Fill a basin with water. Right button: drain.": "Remplir un bassin d'eau. Bouton droit : assécher.",
  "Fill it": "Le remplir",
  "Fill it with water": "La remplir d'eau",
  "Fill the hollow clicked": "Remplir le creux cliqué",
@@ -2710,5 +2709,31 @@
  "Turn off Warn before flooding beyond a hollow in Tool Settings to flood without asking.": "Désactivez Avertir avant d'inonder au-delà d'un creux dans les réglages de l'outil pour inonder sans confirmation.",
  "Flood anyway, up to {level}": "Inonder quand même, jusqu'à {level}",
  "Warn before flooding beyond a hollow": "Avertir avant d'inonder au-delà d'un creux",
- "Clicked out of a hollow, the water is made to stay a block over the spot and spreads wherever the land lies lower: off, it floods at once.": "Cliquée hors d'un creux, l'eau est maintenue un bloc au-dessus de l'endroit et s'étend partout où le terrain est plus bas : désactivé, l'inondation se fait aussitôt."
+ "Fill a basin with water; on water, raise it a block. Right button: lower it a block, Shift: drain it. Hold to repeat.": "Remplir un bassin d'eau ; sur l'eau, la monter d'un bloc. Bouton droit : la baisser d'un bloc, Maj : l'assécher. Maintenir pour répéter.",
+ "Click on water": "Clic sur l'eau",
+ "Raise it a block": "La monter d'un bloc",
+ "Lower it a block": "La baisser d'un bloc",
+ "Shift+right-click": "Maj+clic droit",
+ "Hold": "Maintenir",
+ "Keep going, to the rim or the bottom": "Continuer, jusqu'au bord ou jusqu'au fond",
+ "Out of a hollow, or past its rim, the water spreads wherever the land lies lower: off, it floods at once.": "Hors d'un creux, ou au-delà de son bord, l'eau s'étend partout où le terrain est plus bas : désactivé, l'inondation se fait aussitôt.",
+ "Hold speed": "Vitesse au maintien",
+ "The water is at the rim of its hollow: a block higher, it would spill and spread wherever the land lies lower, over more than {columns} columns, up to {level}.": "L'eau est au bord de son creux : un bloc plus haut, elle déborderait et s'étendrait partout où le terrain est plus bas, sur plus de {columns} colonnes, jusqu'à {level}.",
+ "The water is at the rim of its hollow: a block higher, it would spill and spread wherever the land lies lower, over {columns} columns, up to {level}.": "L'eau est au bord de son creux : un bloc plus haut, elle déborderait et s'étendrait partout où le terrain est plus bas, sur {columns} colonnes, jusqu'à {level}.",
+ "No water here to lower": "Pas d'eau à baisser ici",
+ "Lower the water": "Baisser l'eau",
+ "Raise the water": "Monter l'eau",
+ "The water is gone": "L'eau a disparu",
+ "Water lowered by {n} blocks, to {level}": {
+  "one": "Eau baissée de {n} bloc, à {level}",
+  "other": "Eau baissée de {n} blocs, à {level}"
+ },
+ "Water raised by {n} blocks, to {level}: it is at the rim of its hollow, a block more and it spills.": {
+  "one": "Eau montée de {n} bloc, à {level} : elle est au bord de son creux, un bloc de plus et elle déborde.",
+  "other": "Eau montée de {n} blocs, à {level} : elle est au bord de son creux, un bloc de plus et elle déborde."
+ },
+ "Water raised by {n} blocks, to {level}": {
+  "one": "Eau montée de {n} bloc, à {level}",
+  "other": "Eau montée de {n} blocs, à {level}"
+ }
 }

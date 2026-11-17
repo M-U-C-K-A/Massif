@@ -712,7 +712,6 @@
  "File": "Arquivo",
  "File input": "Arquivo de entrada",
  "Fill": "Encher",
- "Fill a basin with water. Right button: drain.": "Encher uma bacia de água. Botão direito: drenar.",
  "Fill it": "Enchê-lo",
  "Fill it with water": "Enchê-lo de água",
  "Fill the window with the area": "Ampliar a área para a janela inteira",
@@ -2700,5 +2699,31 @@
  "Turn off Warn before flooding beyond a hollow in Tool Settings to flood without asking.": "Desative Avisar antes de inundar além de uma depressão nas definições da ferramenta para inundar sem perguntar.",
  "Flood anyway, up to {level}": "Inundar mesmo assim, até {level}",
  "Warn before flooding beyond a hollow": "Avisar antes de inundar além de uma depressão",
- "Clicked out of a hollow, the water is made to stay a block over the spot and spreads wherever the land lies lower: off, it floods at once.": "Clicado fora de uma depressão, a água é mantida um bloco acima do local e espalha-se onde quer que o terreno seja mais baixo: desativado, inunda de imediato."
+ "Fill a basin with water; on water, raise it a block. Right button: lower it a block, Shift: drain it. Hold to repeat.": "Encher uma bacia de água; sobre a água, subi-la um bloco. Botão direito: baixá-la um bloco, Shift: drená-la. Manter para repetir.",
+ "Click on water": "Clique na água",
+ "Raise it a block": "Subi-la um bloco",
+ "Lower it a block": "Baixá-la um bloco",
+ "Shift+right-click": "Shift+clique direito",
+ "Hold": "Manter",
+ "Keep going, to the rim or the bottom": "Continuar, até à borda ou até ao fundo",
+ "Out of a hollow, or past its rim, the water spreads wherever the land lies lower: off, it floods at once.": "Fora de uma depressão, ou além da sua borda, a água espalha-se por onde o terreno é mais baixo: desativado, inunda logo.",
+ "Hold speed": "Ritmo ao manter",
+ "The water is at the rim of its hollow: a block higher, it would spill and spread wherever the land lies lower, over more than {columns} columns, up to {level}.": "A água está na borda da sua depressão: um bloco mais alta, transbordaria e espalhar-se-ia por onde o terreno é mais baixo, sobre mais de {columns} colunas, até {level}.",
+ "The water is at the rim of its hollow: a block higher, it would spill and spread wherever the land lies lower, over {columns} columns, up to {level}.": "A água está na borda da sua depressão: um bloco mais alta, transbordaria e espalhar-se-ia por onde o terreno é mais baixo, sobre {columns} colunas, até {level}.",
+ "No water here to lower": "Não há água para baixar aqui",
+ "Lower the water": "Baixar a água",
+ "Raise the water": "Subir a água",
+ "The water is gone": "A água desapareceu",
+ "Water lowered by {n} blocks, to {level}": {
+  "one": "Água baixada {n} bloco, para {level}",
+  "other": "Água baixada {n} blocos, para {level}"
+ },
+ "Water raised by {n} blocks, to {level}: it is at the rim of its hollow, a block more and it spills.": {
+  "one": "Água subida {n} bloco, para {level}: está na borda da sua depressão, mais um bloco e transborda.",
+  "other": "Água subida {n} blocos, para {level}: está na borda da sua depressão, mais um bloco e transborda."
+ },
+ "Water raised by {n} blocks, to {level}": {
+  "one": "Água subida {n} bloco, para {level}",
+  "other": "Água subida {n} blocos, para {level}"
+ }
 }

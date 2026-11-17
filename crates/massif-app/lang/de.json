@@ -712,7 +712,6 @@
  "File": "Datei",
  "File input": "Dateieingabe",
  "Fill": "Füllen",
- "Fill a basin with water. Right button: drain.": "Ein Becken mit Wasser füllen. Rechte Taste: ablassen.",
  "Fill it": "Füllen",
  "Fill it with water": "Mit Wasser füllen",
  "Fill the hollow clicked": "Die angeklickte Senke füllen",
@@ -2710,5 +2709,31 @@
  "Turn off Warn before flooding beyond a hollow in Tool Settings to flood without asking.": "Schalten Sie „Vor dem Fluten über eine Senke hinaus warnen“ in den Werkzeugeinstellungen aus, um ohne Nachfrage zu fluten.",
  "Flood anyway, up to {level}": "Trotzdem fluten, bis {level}",
  "Warn before flooding beyond a hollow": "Vor dem Fluten über eine Senke hinaus warnen",
- "Clicked out of a hollow, the water is made to stay a block over the spot and spreads wherever the land lies lower: off, it floods at once.": "Außerhalb einer Senke geklickt, wird das Wasser einen Block über der Stelle gehalten und breitet sich überall aus, wo das Land tiefer liegt: ausgeschaltet, wird sofort geflutet."
+ "Fill a basin with water; on water, raise it a block. Right button: lower it a block, Shift: drain it. Hold to repeat.": "Ein Becken mit Wasser füllen; auf Wasser um einen Block anheben. Rechte Taste: um einen Block senken, Umschalt: ablassen. Halten zum Wiederholen.",
+ "Click on water": "Klick auf Wasser",
+ "Raise it a block": "Um einen Block anheben",
+ "Lower it a block": "Um einen Block senken",
+ "Shift+right-click": "Umschalt+Rechtsklick",
+ "Hold": "Halten",
+ "Keep going, to the rim or the bottom": "Weitermachen, bis zum Rand oder zum Grund",
+ "Out of a hollow, or past its rim, the water spreads wherever the land lies lower: off, it floods at once.": "Außerhalb einer Senke oder über ihren Rand hinaus breitet sich das Wasser überall aus, wo das Land tiefer liegt: aus, wird sofort geflutet.",
+ "Hold speed": "Haltetempo",
+ "The water is at the rim of its hollow: a block higher, it would spill and spread wherever the land lies lower, over more than {columns} columns, up to {level}.": "Das Wasser steht am Rand seiner Senke: einen Block höher würde es überlaufen und sich überall ausbreiten, wo das Land tiefer liegt, über mehr als {columns} Säulen, bis {level}.",
+ "The water is at the rim of its hollow: a block higher, it would spill and spread wherever the land lies lower, over {columns} columns, up to {level}.": "Das Wasser steht am Rand seiner Senke: einen Block höher würde es überlaufen und sich überall ausbreiten, wo das Land tiefer liegt, über {columns} Säulen, bis {level}.",
+ "No water here to lower": "Hier ist kein Wasser zum Senken",
+ "Lower the water": "Wasser senken",
+ "Raise the water": "Wasser anheben",
+ "The water is gone": "Das Wasser ist weg",
+ "Water lowered by {n} blocks, to {level}": {
+  "one": "Wasser um {n} Block gesenkt, auf {level}",
+  "other": "Wasser um {n} Blöcke gesenkt, auf {level}"
+ },
+ "Water raised by {n} blocks, to {level}: it is at the rim of its hollow, a block more and it spills.": {
+  "one": "Wasser um {n} Block angehoben, auf {level}: Es steht am Rand seiner Senke, ein Block mehr und es läuft über.",
+  "other": "Wasser um {n} Blöcke angehoben, auf {level}: Es steht am Rand seiner Senke, ein Block mehr und es läuft über."
+ },
+ "Water raised by {n} blocks, to {level}": {
+  "one": "Wasser um {n} Block angehoben, auf {level}",
+  "other": "Wasser um {n} Blöcke angehoben, auf {level}"
+ }
 }

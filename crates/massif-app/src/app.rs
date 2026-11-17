@@ -4175,7 +4175,11 @@ impl MassifApp {
                     ui.set_width(400.0);
                     ui.label(RichText::new(tr!("Flood beyond the hollow?")).bold().size(15.0));
                     let (columns, level) = (crate::select::thousands(ask.columns as u64), ask.level);
-                    let what = if ask.more {
+                    let what = if ask.at_rim && ask.more {
+                        tr!("The water is at the rim of its hollow: a block higher, it would spill and spread wherever the land lies lower, over more than {columns} columns, up to {level}.", columns, level)
+                    } else if ask.at_rim {
+                        tr!("The water is at the rim of its hollow: a block higher, it would spill and spread wherever the land lies lower, over {columns} columns, up to {level}.", columns, level)
+                    } else if ask.more {
                         tr!("This spot is not in a hollow: the water would run away. Made to stay a block over it, it would spread wherever the land lies lower, over more than {columns} columns, up to {level}.", columns, level)
                     } else {
                         tr!("This spot is not in a hollow: the water would run away. Made to stay a block over it, it would spread wherever the land lies lower, over {columns} columns, up to {level}.", columns, level)
@@ -6391,6 +6395,9 @@ mod tests {
         assert!(!h.state().tools.water_from_click);
         // The limit, off by default, turned on.
         assert!(!h.state().tools.water_limit_on);
+        // (Below the fold of Tool Settings: scrolled to first.)
+        h.get_by_label("Limit the water's height").scroll_to_me();
+        h.run_steps(3);
         h.get_by_label("Limit the water's height").click();
         h.run_steps(3);
         assert!(h.state().tools.water_limit_on);
@@ -6427,7 +6434,7 @@ mod tests {
         };
         let level = massif_core::ops::pour_level(h.state().doc.dimension(), x, z).unwrap();
         let columns = massif_core::ops::flood_count(h.state().doc.dimension(), x, z, massif_core::ops::Flood::Fill(level), 64 << 20);
-        let ask = crate::tools::FloodAsk { x, z, level, columns, more: false };
+        let ask = crate::tools::FloodAsk { x, z, level, columns, more: false, at_rim: false };
         h.state_mut().tools.flood_ask = Some(ask.clone());
         h.run_steps(3);
         assert!(matches!(h.state().dialog, Some(Dialog::FloodAsk(_))));

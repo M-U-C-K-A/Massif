@@ -1218,7 +1218,19 @@ the sea's level is not a limit.
   says over how many columns and up to what level; **Flood anyway** floods
   it (one step to undo, inside the selection only when there is one),
   **Cancel** leaves the map as it was. With **Warn before flooding beyond
-  a hollow** off (Tool Settings, under From the click), it floods at once.
+  a hollow** off (Tool Settings), it floods at once.
+- Clicked on water, **Flood** raises that body of water by one block: it
+  covers the shore a block above it, as far as it reaches. At the rim of
+  its hollow, where a block more would spill, it asks first, as above.
+- Flood's **right button** lowers the body of water clicked by one block:
+  its top layer goes, and the shore it uncovers stays as the ground was.
+  When the last layer goes, the water is gone. **Shift + right click**
+  drains the whole body at once, as **Drain** does.
+- **Held down**, either button keeps going, a block at a time, at the pace
+  set by **Hold speed** in Tool Settings (6 blocks a second by default): up to
+  the rim of the hollow (or on past it with Warn before flooding beyond a
+  hollow off), down to the bottom. The 2D map and the 3D views follow it as
+  it goes, and the whole press is one step to undo.
 - The **Water brush** lays water under the brush. With From the click on,
   each stroke lays it as high as where it starts: the surface of the water
   there, or a block over the ground. The right button takes water off.
@@ -1228,10 +1240,11 @@ the sea's level is not a limit.
 - **Limit the water's height** (off by default) keeps both under a height
   of your choice (**Sea level** puts the sea's): the water never rises
   above it, and when the limit is under the spot used, the tool says so.
-- **Drain** (or Flood's right button) empties the body of water clicked.
+- **Drain** (or Shift + right click with Flood) empties the body of water
+  clicked.
 
-All of them keep to the selection, and each click or stroke is one step to
-undo.
+All of them keep to the selection, and each click, press or stroke is one
+step to undo.
 
 ## Rivers
 
