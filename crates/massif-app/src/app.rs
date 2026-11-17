@@ -2932,17 +2932,10 @@ impl MassifApp {
                 }
             }
 
-            // Centred title.
             let title = format!("{}{}", self.doc.title(), if self.doc.is_modified() { " •" } else { "" });
             let bar = ui.max_rect();
-            ui.painter().text(
-                pos2(bar.center().x, bar.center().y),
-                Align2::CENTER_CENTER,
-                title,
-                FontId::proportional(13.0),
-                pal.text,
-            );
-            ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+            let left = ui.cursor().min.x;
+            let right = ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                 let (icon, next) = match self.settings.theme {
                     ThemeChoice::System => (Icon::SunMoon, ThemeChoice::Light),
                     ThemeChoice::Light => (Icon::Sun, ThemeChoice::Dark),
@@ -2957,7 +2950,21 @@ impl MassifApp {
                 {
                     self.dialog = Some(Dialog::Update);
                 }
-            });
+                ui.min_rect().left()
+            })
+            .inner;
+            // The title in the middle of the bar, or of the room the buttons
+            // leave in a narrow window, cut with an ellipsis rather than
+            // drawn over them.
+            let room = (left + 12.0)..=(right - 12.0);
+            if room.end() - room.start() > 40.0 {
+                let mut job = egui::text::LayoutJob::simple_singleline(title, FontId::proportional(13.0), pal.text);
+                job.wrap = egui::text::TextWrapping::truncate_at_width(room.end() - room.start());
+                let galley = ui.painter().layout_job(job);
+                let half = galley.size().x / 2.0;
+                let x = bar.center().x.clamp(room.start() + half, (room.end() - half).max(room.start() + half));
+                ui.painter().galley(pos2(x - half, bar.center().y - galley.size().y / 2.0), galley, pal.text);
+            }
         });
         if let Some(command) = picked {
             self.command(&ctx, command);
@@ -3419,8 +3426,14 @@ impl MassifApp {
         })
         .response
         .on_hover_text(tr!("What this area shows"));
+        // The title, cut with an ellipsis where it would run under the
+        // commands' button of a narrow area.
+        let room = if matches!(editor, EditorKind::Map | EditorKind::View3d | EditorKind::Sculpt3d) { hui.available_width() } else { (hui.available_width() - 30.0).max(0.0) };
         let title = hui
-            .add(egui::Label::new(RichText::new(crate::i18n::tr_name(editor.label())).medium()).sense(Sense::drag()).selectable(false))
+            .allocate_ui(vec2(room, hui.spacing().interact_size.y), |ui| {
+                ui.add(egui::Label::new(RichText::new(crate::i18n::tr_name(editor.label())).medium()).sense(Sense::drag()).selectable(false).truncate())
+            })
+            .inner
             .on_hover_cursor(CursorIcon::Grab);
         if title.drag_started() && !single {
             self.dragging_area = Some(id);
@@ -15825,5 +15838,131 @@ mod tests {
         if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
             h.render().unwrap().save(dir.join("sample-opened.png")).unwrap();
         }
+    }
+
+    /// Every panel of the sidebar, at its narrowest (the window at its
+    /// smallest, 960 points), in every language: no text or control runs
+    /// past the panel's right edge. Tool Settings and Brush Settings for
+    /// every tool, then each other panel in Tool Settings' place. With
+    /// MASSIF_SNAPSHOT_DIR, each panel is saved, cropped.
+    #[test]
+    fn every_panel_fits_the_narrowest_sidebar() {
+        use crate::i18n::{Language, set_language};
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(std::env::var("MASSIF_NARROW_WIDTH").ok().and_then(|v| v.parse().ok()).unwrap_or(960.0), std::env::var("MASSIF_NARROW_HEIGHT").ok().and_then(|v| v.parse().ok()).unwrap_or(1400.0)))
+            .with_pixels_per_point(std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0))
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_eframe(move |cc| {
+                theme::install(&cc.egui_ctx);
+                let world = generate(&GenParams { tiles_x: 2, tiles_z: 2, landform: Landform::Islands, ..GenParams::default() });
+                let mut app = MassifApp::for_tests(world);
+                app.settings.theme = ThemeChoice::Dark;
+                // Each panel as it settles, not half-way through a fold or a
+                // scroll bar coming, however slowly a loaded machine draws.
+                app.settings.reduce_motion = Follow::On;
+                app
+            });
+        h.run_steps(3);
+        // The game's blocks read, which change the panels: the same whenever
+        // they come in.
+        let started = std::time::Instant::now();
+        while h.state().blocks.is_loading() && started.elapsed().as_secs() < 60 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        h.run_steps(3);
+        let areas_of = |h: &egui_kittest::Harness<'_, MassifApp>| -> Vec<(AreaId, EditorKind, Rect)> {
+            let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+            areas.into_iter().filter_map(|(id, r)| h.state().layout.current().root.editor_of(id).map(|e| (id, e, r))).collect()
+        };
+        let settings = areas_of(&h).into_iter().find(|a| a.1 == EditorKind::ToolSettings).unwrap().0;
+        let mut faults: Vec<String> = Vec::new();
+        let check = |h: &egui_kittest::Harness<'_, MassifApp>, what: &str, faults: &mut Vec<String>| {
+            for (_, editor, area) in areas_of(h) {
+                if matches!(editor, EditorKind::Map | EditorKind::View3d | EditorKind::Sculpt3d | EditorKind::Graph | EditorKind::GraphView) {
+                    continue;
+                }
+                for node in h.query_all_by(|_| true) {
+                    let Some(b) = node.accesskit_node().bounding_box() else { continue };
+                    // In pixels: in points, as the areas are.
+                    let ppp = h.ctx.pixels_per_point();
+                    let r = Rect::from_min_max(pos2(b.x0 as f32, b.y0 as f32), pos2(b.x1 as f32, b.y1 as f32)) / ppp;
+                    if r.width() <= 0.0 || r.height() <= 0.0 || !(area.contains(r.left_top() + vec2(0.5, 0.5)) || area.contains(pos2(r.right() - 0.5, r.top() + 0.5))) || r.top() > area.bottom() {
+                        continue;
+                    }
+                    // Past the left edge, from a row's control too wide.
+                    let left = r.right() > area.left() && r.right() <= area.right() && r.left() < area.left() - 0.5 && area.contains(pos2(r.right() - 0.5, r.top() + 0.5));
+                    let unnamed = node.accesskit_node().label().is_none_or(|l| l.is_empty()) && node.accesskit_node().value().is_none_or(|v| v.is_empty());
+                    // A Ui's own node, which may reach under the scroll bar.
+                    // Text inside a field scrolls there.
+                    if unnamed && node.accesskit_node().role() == egui::accesskit::Role::Unknown || node.accesskit_node().role() == egui::accesskit::Role::TextRun {
+                        continue;
+                    }
+                    if left {
+                        let label = node.accesskit_node().label().or_else(|| node.accesskit_node().value()).unwrap_or_default();
+                        let fault = format!("{:?} {what} {editor:?}: {:?} {label:?} from {:.0}, before {:.0}", crate::i18n::current(), node.accesskit_node().role(), r.left(), area.left());
+                        if !faults.contains(&fault) {
+                            faults.push(fault);
+                        }
+                    } else if area.contains(r.left_top() + vec2(0.5, 0.5)) && r.right() > area.right() + 0.5 {
+                        let label = node.accesskit_node().label().or_else(|| node.accesskit_node().value()).unwrap_or_default();
+                        let fault = format!("{:?} {what} {editor:?}: {:?} {label:?} {:.0} past {:.0}", crate::i18n::current(), node.accesskit_node().role(), r.right(), area.right());
+                        if !faults.contains(&fault) {
+                            faults.push(fault);
+                        }
+                    }
+                }
+            }
+        };
+        let save = |h: &mut egui_kittest::Harness<'_, MassifApp>, name: &str| {
+            if let Some(dir) = &dir {
+                let image = h.render().unwrap();
+                let ppp = h.ctx.pixels_per_point();
+                let area = areas_of(h).into_iter().find(|a| a.0 == settings).unwrap().2;
+                let crop = image::imageops::crop_imm(&image, (area.left() * ppp) as u32, (area.top() * ppp) as u32, (area.width() * ppp) as u32, (area.height() * ppp) as u32).to_image();
+                crop.save(dir.join(format!("narrow-{}-{name}.png", crate::i18n::current().code()))).unwrap();
+            }
+        };
+        for language in Language::ALL {
+            set_language(language);
+            h.state_mut().layout.current_mut().root.set_editor(settings, EditorKind::ToolSettings);
+            h.run_steps(3);
+            if let Some(dir) = &dir {
+                h.render().unwrap().save(dir.join(format!("narrow-{}-window.png", crate::i18n::current().code()))).unwrap();
+            }
+            for &tool in Tool::GROUPS.iter().flat_map(|g| g.2.iter()) {
+                h.state_mut().tools.select(tool);
+                h.run_steps(5);
+                // What stays past the edge once a scroll bar come in the
+                // meantime has taken its room.
+                let mut seen = Vec::new();
+                check(&h, &format!("{tool:?}"), &mut seen);
+                if !seen.is_empty() {
+                    h.run_steps(5);
+                    check(&h, &format!("{tool:?}"), &mut faults);
+                }
+                save(&mut h, &format!("{tool:?}"));
+            }
+            for editor in [EditorKind::Blocks, EditorKind::Info, EditorKind::Levels, EditorKind::Layers, EditorKind::Terrain, EditorKind::Biomes, EditorKind::Brushes, EditorKind::CustomBrushes, EditorKind::Packs, EditorKind::Versions, EditorKind::Tools, EditorKind::BrushSettings, EditorKind::GraphProps, EditorKind::RenderSettings] {
+                // An editor shown twice clashes with itself: each checked once.
+                if h.state().layout.current().root.shows(editor) {
+                    continue;
+                }
+                h.state_mut().layout.current_mut().root.set_editor(settings, editor);
+                h.run_steps(5);
+                let mut seen = Vec::new();
+                check(&h, "", &mut seen);
+                if !seen.is_empty() {
+                    h.run_steps(5);
+                    check(&h, "", &mut faults);
+                }
+                save(&mut h, &format!("{editor:?}"));
+            }
+        }
+        set_language(Language::English);
+        assert!(faults.is_empty(), "{} past the panel's edge:\n{}", faults.len(), faults.join("\n"));
     }
 }

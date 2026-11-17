@@ -225,7 +225,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
     });
     strip(ui, &g, &doc.world.registry, vec2(ui.available_width().min(260.0), 18.0));
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         if ui.button(theme::with_icon(Icon::Pencil, tr!("Edit…"))).clicked() {
             tools.gradient.edit(false);
         }
@@ -243,7 +243,21 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
         let chosen = item == tools.gradient.gradient;
         ui.horizontal(|ui| {
             let r = strip(ui, &item, &doc.world.registry, vec2(64.0, 14.0));
-            let label = ui.add(egui::Label::new(RichText::new(&item.name).color(if chosen { pal.text } else { pal.weak }).strong()).truncate().sense(Sense::click()));
+            let what = match origin {
+                Origin::Map => tr!("In this map"),
+                Origin::Saved => tr!("Saved"),
+                Origin::BuiltIn => tr!("Built in"),
+            };
+            // The name in the room the check, the origin and the bin leave.
+            let gap = ui.spacing().item_spacing.x;
+            let after = ui.painter().layout_no_wrap(what.to_owned(), egui::FontId::proportional(11.0), pal.weak).size().x
+                + gap
+                + if chosen { 14.0 + gap } else { 0.0 }
+                + if origin == Origin::Saved { ui.spacing().interact_size.y + gap + 4.0 } else { 0.0 };
+            let room = (ui.available_width() - after - gap).max(0.0);
+            let label = ui
+                .allocate_ui(vec2(room, ui.spacing().interact_size.y), |ui| ui.add(egui::Label::new(RichText::new(&item.name).color(if chosen { pal.text } else { pal.weak }).strong()).truncate().sense(Sense::click())))
+                .inner;
             if r.clicked() || label.clicked() {
                 tools.gradient.gradient = item.clone();
             }
@@ -251,11 +265,6 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
                 ui.label(RichText::new(theme::glyph(Icon::Check).to_string()).color(pal.accent));
             }
             ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                let what = match origin {
-                    Origin::Map => tr!("In this map"),
-                    Origin::Saved => tr!("Saved"),
-                    Origin::BuiltIn => tr!("Built in"),
-                };
                 if origin == Origin::Saved && ui.small_button(theme::glyph(Icon::Trash).to_string()).on_hover_text(tr!("Remove it from the saved gradients")).clicked() {
                     remove = Some(item.name.clone());
                 }

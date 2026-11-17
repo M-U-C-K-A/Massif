@@ -14,9 +14,9 @@
 //! own space on steep ground, forest crowns on a forest. The sides of the
 //! relief are closed down to a base, like a diorama.
 
-use crate::theme::{self, Icon, Palette, RichTextExt};
+use crate::theme::{Icon, Palette};
 use bytemuck::{Pod, Zeroable};
-use egui::{Color32, PointerButton, Rect, RichText, Sense, Ui, pos2};
+use egui::{Color32, PointerButton, Rect, Sense, Ui, pos2};
 use glam::{Mat4, Vec3, Vec4};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -2030,23 +2030,11 @@ impl TerrainView {
     /// The render settings, as a panel. Returns whether they changed.
     pub fn settings_ui(&mut self, ui: &mut Ui) -> bool {
         use crate::widgets::{Field, checkbox, row, well};
-        let pal = Palette::of(ui);
         let before = self.render;
         let r = &mut self.render;
         // Each group of settings: its name, then its rows in a well.
-        let section = |ui: &mut Ui, icon: Icon, name: &str, note: &str| {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(theme::glyph(icon).to_string()).size(13.0).color(pal.weak));
-                ui.label(RichText::new(name).size(13.0).medium());
-                if !note.is_empty() {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new(note).size(11.0).color(pal.weak));
-                    });
-                }
-            });
-            ui.add_space(2.0);
-        };
-        ui.spacing_mut().slider_width = (ui.available_width() - 190.0).clamp(70.0, 220.0);
+        let section = |ui: &mut Ui, icon: Icon, name: &str, note: &str| crate::graph_editor::titled(ui, icon, name, note);
+        ui.spacing_mut().slider_width = (ui.available_width() - 190.0).max(ui.available_width() * 0.2).clamp(30.0, 220.0);
         section(ui, Icon::Sun, tr!("Sun"), tr!("Shift + drag in the view turns it"));
         well(ui, |ui| {
             row(ui, tr!("Direction"), |ui| {

@@ -462,11 +462,14 @@ pub fn library_ui(ui: &mut Ui, library: &mut PackLibrary, needle: &str, tools: &
     let pal = Palette::of(ui);
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        ui.label(RichText::new(tr!("{glyph}  YOUR PACKS", glyph = theme::glyph(Icon::Package))).size(10.5).strong().color(pal.weak));
+        // The button first, the title in the room it leaves.
         ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
             if ui.small_button(theme::with_icon(Icon::Import, tr!("Import…"))).on_hover_text(tr!("Add a .massifpack file someone shared")).clicked() {
                 library.request = Some(Request::Import);
             }
+            ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
+                ui.add(egui::Label::new(RichText::new(tr!("{glyph}  YOUR PACKS", glyph = theme::glyph(Icon::Package))).size(10.5).strong().color(pal.weak)).truncate());
+            });
         });
     });
     if library.packs.is_empty() {

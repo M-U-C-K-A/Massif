@@ -332,7 +332,7 @@ impl VersionsUi {
         }
         ui.horizontal(|ui| {
             let label = if busy { tr!("Saving a point…") } else { tr!("Save point…") };
-            if ui.add_enabled(!busy && doc.read_only.is_none(), theme::primary_button(ui, format!("{}  {label}", theme::glyph(Icon::BookmarkPlus)))).clicked() {
+            if ui.add_enabled(!busy && doc.read_only.is_none(), theme::primary_button(ui, format!("{}  {label}", theme::glyph(Icon::BookmarkPlus))).truncate()).clicked() {
                 action = Some(Action::Make);
             }
         });

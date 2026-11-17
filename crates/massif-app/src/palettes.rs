@@ -454,7 +454,7 @@ pub enum Picked {
 pub fn choose(ui: &mut Ui, id: &str, all: &[Palette], current: &Palette, width: f32) -> Option<Picked> {
     let mut picked = None;
     let shown = if current.is_vanilla() { tr!("Vanilla").to_owned() } else { current.name.clone() };
-    widgets::combo(id).selected_text(shown).width(width).height(360.0).show_ui(ui, |ui| {
+    widgets::combo(id).selected_text(shown).width(width).truncate().height(360.0).show_ui(ui, |ui| {
         for p in all {
             let name = if p.is_vanilla() { tr!("Vanilla").to_owned() } else { p.name.clone() };
             // Shown picked by its name: one changed since is put on again.

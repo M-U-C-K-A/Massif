@@ -445,13 +445,13 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
     let r = &mut tools.road;
     well(ui, |ui| {
         row(ui, tr!("Width"), |ui| {
-            ui.add(Field::new(&mut r.width, 1.0..=64.0).suffix(tr!(" blocks")).max_decimals(0).width(120.0));
+            ui.add(Field::new(&mut r.width, 1.0..=64.0).suffix(tr!(" blocks")).max_decimals(0).width((ui.available_width() * 0.55).min(120.0)));
         });
         row(ui, tr!("Banks"), |ui| {
-            ui.add(Field::new(&mut r.banks, 0.0..=64.0).suffix(tr!(" blocks")).max_decimals(0).width(120.0));
+            ui.add(Field::new(&mut r.banks, 0.0..=64.0).suffix(tr!(" blocks")).max_decimals(0).width((ui.available_width() * 0.55).min(120.0)));
         });
         row(ui, tr!("Steepest slope"), |ui| {
-            ui.add(Field::new(&mut r.slope, 1.0..=100.0).suffix("%").max_decimals(0).width(120.0));
+            ui.add(Field::new(&mut r.slope, 1.0..=100.0).suffix("%").max_decimals(0).width((ui.available_width() * 0.55).min(120.0)));
         });
         row(ui, tr!("Surface"), |ui| {
             let shown = match &r.surface {
@@ -459,7 +459,7 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
                 RoadSurface::Noise => tr!("Paint tool's noise").to_owned(),
                 RoadSurface::Terrain(name) => name.clone(),
             };
-            combo("road surface").selected_text(shown).width(150.0).show_ui(ui, |ui| {
+            combo("road surface").selected_text(shown).width((ui.available_width() * 0.55).min(150.0)).truncate().show_ui(ui, |ui| {
                 let mut pick = |ui: &mut Ui, s: RoadSurface, label: &str| {
                     if ui.selectable_label(r.surface == s, label).clicked() {
                         r.surface = s;
@@ -485,7 +485,7 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
         ui.add_space(4.0);
         well(ui, |ui| {
             row(ui, tr!("Deck"), |ui| {
-                combo("bridge deck").selected_text(r.deck.clone()).width(150.0).show_ui(ui, |ui| {
+                combo("bridge deck").selected_text(r.deck.clone()).width((ui.available_width() * 0.55).min(150.0)).truncate().show_ui(ui, |ui| {
                     for d in DECKS {
                         if ui.selectable_label(r.deck == d, d).clicked() {
                             r.deck = d.into();

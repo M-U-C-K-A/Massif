@@ -284,10 +284,16 @@ pub fn sculpt_toolbar(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
 }
 
 /// A row like [`slider_row`] that says what the setting is for.
+/// The width of the names of [`tip_row`]s and [`slider_row`]s: 72 points,
+/// less in a narrow panel.
+fn label_width(ui: &Ui) -> f32 {
+    (ui.available_width() * 0.33).clamp(40.0, 72.0)
+}
+
 fn tip_row(ui: &mut Ui, label: &str, tip: &str, add: impl FnOnce(&mut Ui) -> egui::Response) -> bool {
     ui.horizontal(|ui| {
         ui.spacing_mut().interact_size.y = 18.0;
-        let label = ui.add_sized([72.0, 18.0], egui::Label::new(label).truncate()).on_hover_text(tip);
+        let label = ui.add_sized([label_width(ui), 18.0], egui::Label::new(label).truncate()).on_hover_text(tip);
         add(ui).on_hover_text(tip).labelled_by(label.id).changed()
     })
     .inner
@@ -297,7 +303,7 @@ fn slider_row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> egui::Respo
     ui.horizontal(|ui| {
         // Slim sliders: the handle's size follows the row height.
         ui.spacing_mut().interact_size.y = 18.0;
-        let label = ui.add_sized([72.0, 18.0], egui::Label::new(label).truncate());
+        let label = ui.add_sized([label_width(ui), 18.0], egui::Label::new(label).truncate());
         add(ui).labelled_by(label.id).changed()
     })
     .inner
@@ -414,14 +420,17 @@ fn unpaint_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
             Some(t) => {
                 let (r, _) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::hover());
                 terrain_icon(ui, r, &doc.world.registry, t.0, blocks);
-                ui.label(RichText::new(crate::i18n::tr_name(&doc.world.registry.terrain(t).name)).bold());
+                // The room the Change menu leaves it.
+                let room = (ui.available_width() - 90.0).max(0.0);
+                ui.allocate_ui(vec2(room, 26.0), |ui| ui.add(egui::Label::new(RichText::new(crate::i18n::tr_name(&doc.world.registry.terrain(t).name)).bold()).truncate()));
             }
             None => {
-                ui.label(RichText::new(tr!("By height, for now")).color(Palette::of(ui).weak));
+                let room = (ui.available_width() - 90.0).max(0.0);
+                ui.allocate_ui(vec2(room, 26.0), |ui| ui.add(egui::Label::new(RichText::new(tr!("By height, for now")).color(Palette::of(ui).weak)).truncate()));
             }
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            crate::widgets::combo("unpaint terrain").selected_text(tr!("Change")).height(320.0).show_ui(ui, |ui| {
+            crate::widgets::combo("unpaint terrain").selected_text(tr!("Change")).width(40.0).height(320.0).show_ui(ui, |ui| {
                 for (i, def) in doc.world.registry.terrains.iter().enumerate() {
                     let t = TerrainId(i as u16);
                     if ui.selectable_label(known == Some(t), crate::i18n::tr_name(&def.name)).clicked() {
@@ -445,11 +454,20 @@ fn unpaint_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
 
 pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary) {
     let pal = Palette::of(ui);
-    ui.spacing_mut().slider_width = (ui.available_width() - 76.0 - 84.0).clamp(60.0, 220.0);
+    ui.spacing_mut().slider_width = (ui.available_width() - label_width(ui) - 4.0 - 84.0).clamp(30.0, 220.0);
     let tool = tools.tool;
     ui.horizontal(|ui| {
         crate::icons::show(ui, tool, 20.0, pal.accent);
-        ui.label(RichText::new(crate::i18n::tr_name(tool.label())).bold().size(14.0));
+        // Smaller where its longest word would not fit the panel, so as not
+        // to be broken in the middle.
+        let name = crate::i18n::tr_name(tool.label());
+        let longest = name
+            .split(' ')
+            .map(|w| egui::WidgetText::from(RichText::new(w).bold().size(14.0)).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::FontSelection::Default).size().x)
+            .fold(0.0, f32::max);
+        let room = ui.available_width() - 2.0;
+        let size = if longest > room { (14.0 * room / longest).floor().clamp(10.0, 14.0) } else { 14.0 };
+        ui.add(egui::Label::new(RichText::new(name).bold().size(size)).wrap());
     });
     hint(ui, tool.help());
 
@@ -524,7 +542,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
                 hint(ui, tr!("Biomes show on the map in its Biome mode."));
             }
             ui.add_space(2.0);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 if ui
                     .button(theme::with_icon(Icon::Map, tr!("Whole map")))
                     .on_hover_text(if biomes {
@@ -565,9 +583,10 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             crate::widgets::checkbox(ui, &mut r.water, tr!("Fill it with water"));
             crate::widgets::checkbox(ui, &mut r.biome, tr!("River biome on its water"));
             ui.horizontal(|ui| {
-                ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Bed")));
+                ui.add_sized([label_width(ui), 18.0], egui::Label::new(tr!("Bed")).truncate());
                 let shown = if r.bed.is_empty() { tr!("As it is").to_owned() } else { r.bed.clone() };
-                crate::widgets::combo("river bed").selected_text(shown).width(150.0).show_ui(ui, |ui| {
+                let width = (ui.available_width() - ui.spacing().item_spacing.x).clamp(60.0, 150.0);
+                crate::widgets::combo("river bed").selected_text(shown).width(width).truncate().show_ui(ui, |ui| {
                     if ui.selectable_label(r.bed.is_empty(), tr!("As it is")).clicked() {
                         r.bed.clear();
                     }
@@ -611,7 +630,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             slider_row(ui, tr!("Thickness"), |ui| {
                 ui.add(crate::widgets::Field::new(&mut tools.slab_thickness, 1.0..=128.0).logarithmic(true).suffix(tr!(" blocks")))
             });
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Centre")));
                 ui.selectable_value(&mut tools.anchor, AnchorMode::AboveGround, tr!("Above ground"));
                 ui.selectable_value(&mut tools.anchor, AnchorMode::Absolute, tr!("At height"));
@@ -621,6 +640,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
                     slider_row(ui, tr!("Offset"), |ui| {
                         crate::widgets::drag(ui, egui::DragValue::new(&mut tools.slab_offset)
                                 .speed(0.5)
+                                .custom_formatter(|v, _| format!("{v:.1}").trim_end_matches(".0").to_owned())
                                 .suffix(tr!(" blocks")),
                         )
                     });
@@ -649,7 +669,8 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
         section(ui, Icon::Layers, tr!("Level"));
         let levels: Vec<(String, LevelKind)> = doc.dimension().levels.iter().map(|l| (crate::i18n::tr_name(&l.name).to_owned(), l.kind)).collect();
         let pick = |ui: &mut Ui, doc: &mut Document| {
-            let width = ui.available_width().min(ui.spacing().combo_width);
+            // Its chevron and padding come on top of the width.
+            let width = (ui.available_width() - 2.0 * ui.spacing().button_padding.x - ui.spacing().icon_width).min(ui.spacing().combo_width);
             crate::widgets::combo("active level")
                 .width(width)
                 .truncate()
@@ -679,7 +700,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
         }
         if tool.needs_slab_level() && doc.active_kind() == LevelKind::Ground {
             ui.label(RichText::new(tr!("This tool edits a Solid or Carve level.")).color(pal.danger).size(12.0));
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 if ui.button(tr!("{glyph} Add solid level", glyph = theme::glyph(Icon::Plus))).clicked() {
                     doc.add_level(LevelKind::Solid);
                 }
@@ -855,7 +876,7 @@ pub fn brushes_panel(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibr
 pub fn custom_brushes_panel(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibrary) -> Option<String> {
     let mut feedback = None;
     if !library.is_loaded() {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             crate::loader::loader(ui, 16.0);
             hint(ui, tr!("Loading the brushes…"));
         });
@@ -899,11 +920,13 @@ pub fn custom_brushes_panel(ui: &mut Ui, tools: &mut ToolState, library: &mut Br
 pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibrary, reg: &Registry, min_y: i32, max_y: i32, light: f32, heights: Option<&crate::doc::Heights>, sea: i32) {
     let pal = Palette::of(ui);
     let dark = ui.visuals().dark_mode;
-    ui.spacing_mut().slider_width = (ui.available_width() - 76.0 - 84.0).clamp(60.0, 260.0);
+    ui.spacing_mut().slider_width = (ui.available_width() - label_width(ui) - 4.0 - 84.0).clamp(30.0, 260.0);
     let ctx = ui.ctx().clone();
     ui.horizontal(|ui| {
         let texture = library.preview(&ctx, &tools.brush_source, &tools.brush, dark);
-        let (rect, _) = ui.allocate_exact_size(vec2(76.0, 76.0), Sense::hover());
+        // Smaller in a narrow panel, to leave its words room on one line.
+        let side = (ui.available_width() * 0.38).clamp(44.0, 76.0);
+        let (rect, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
         ui.painter().rect_filled(rect, 8, pal.header);
         ui.painter()
             .image(texture, rect.shrink(4.0), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
@@ -1666,8 +1689,8 @@ pub fn pocket_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
     ui.add_space(4.0);
     section(ui, Icon::Gem, &def.name.clone());
     ui.horizontal(|ui| {
-        ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Name")));
-        ui.add(egui::TextEdit::singleline(&mut def.name).desired_width((ui.available_width() - 40.0).max(60.0)));
+        ui.add_sized([label_width(ui), 18.0], egui::Label::new(tr!("Name")).truncate());
+        ui.add(egui::TextEdit::singleline(&mut def.name).desired_width((ui.available_width() - 40.0).max(30.0)));
         let mut c = Color32::from_rgb(def.color[0], def.color[1], def.color[2]);
         if egui::color_picker::color_edit_button_srgba(ui, &mut c, egui::color_picker::Alpha::Opaque).on_hover_text(tr!("Its colour over the map while it is painted")).changed() {
             def.color = [c.r(), c.g(), c.b()];
@@ -1905,8 +1928,8 @@ pub fn combined_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
     ui.add_space(4.0);
     section(ui, Icon::Combine, &def.name.clone());
     ui.horizontal(|ui| {
-        ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Name")));
-        ui.add(egui::TextEdit::singleline(&mut def.name).desired_width((ui.available_width() - 40.0).max(60.0)));
+        ui.add_sized([label_width(ui), 18.0], egui::Label::new(tr!("Name")).truncate());
+        ui.add(egui::TextEdit::singleline(&mut def.name).desired_width((ui.available_width() - 40.0).max(30.0)));
         let mut c = Color32::from_rgb(def.color[0], def.color[1], def.color[2]);
         if egui::color_picker::color_edit_button_srgba(ui, &mut c, egui::color_picker::Alpha::Opaque).on_hover_text(tr!("Its colour in the lists")).changed() {
             def.color = [c.r(), c.g(), c.b()];
@@ -2039,8 +2062,8 @@ pub fn cover_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     ui.add_space(4.0);
     section(ui, Icon::Sprout, &def.name.clone());
     ui.horizontal(|ui| {
-        ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Name")));
-        ui.add(egui::TextEdit::singleline(&mut def.name).desired_width((ui.available_width() - 40.0).max(60.0)));
+        ui.add_sized([label_width(ui), 18.0], egui::Label::new(tr!("Name")).truncate());
+        ui.add(egui::TextEdit::singleline(&mut def.name).desired_width((ui.available_width() - 40.0).max(30.0)));
         let mut c = Color32::from_rgb(def.color[0], def.color[1], def.color[2]);
         if egui::color_picker::color_edit_button_srgba(ui, &mut c, egui::color_picker::Alpha::Opaque).on_hover_text(tr!("Its colour on the map")).changed() {
             def.color = [c.r(), c.g(), c.b()];
@@ -2053,9 +2076,9 @@ pub fn cover_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                 .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
         )
     });
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         let tip = tr!("How many blocks high it grows (cane, cactus: 1 to 3). Tall plants are always two.");
-        ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Height"))).on_hover_text(tip);
+        ui.add_sized([label_width(ui), 18.0], egui::Label::new(tr!("Height")).truncate()).on_hover_text(tip);
         let (mut lo, mut hi) = (def.height[0] as i32, def.height[1] as i32);
         crate::widgets::drag(ui, egui::DragValue::new(&mut lo).range(1..=16)).on_hover_text(tip);
         ui.label(RichText::new(tr!("to")).color(pal.weak));
@@ -2065,13 +2088,24 @@ pub fn cover_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     });
     crate::widgets::checkbox(ui, &mut def.soil_only, tr!("Only on soil")).on_hover_text(tr!("Grass, dirt, podzol, moss, mud… as plants need in the game"));
     crate::widgets::checkbox(ui, &mut def.underwater, tr!("Under water")).on_hover_text(tr!("Grows in the water (seagrass, coral) rather than in the air"));
-    ui.horizontal(|ui| {
-        ui.add_sized([72.0, 18.0], egui::Label::new(tr!("The water")));
+    // In a narrow panel, the choices under their label.
+    let water = |ui: &mut Ui, def: &mut massif_core::registry::CoverDef| {
         let chosen = [!def.frost && !def.lava, def.frost, def.lava];
         if let Some(k) = crate::widgets::button_group(ui, "cover water", &[tr!("As it is"), tr!("Frozen"), tr!("Lava")], &chosen) {
             (def.frost, def.lava) = (k == 1, k == 2);
         }
-    })
+    };
+    if ui.available_width() < 72.0 + 200.0 {
+        ui.vertical(|ui| {
+            ui.label(tr!("The water"));
+            water(ui, def);
+        })
+    } else {
+        ui.horizontal(|ui| {
+            ui.add_sized([72.0, 18.0], egui::Label::new(tr!("The water")));
+            water(ui, def);
+        })
+    }
     .response
     .on_hover_text(tr!("Where the cover is painted, the top of the water turns to ice (WorldPainter's Frost), or all of it to lava (its Lava layer)"));
 
@@ -2080,7 +2114,11 @@ pub fn cover_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     let total: f32 = def.plants.iter().map(|p| p.1 as f32).sum::<f32>().max(1.0);
     let mut remove = None;
     let color = def.color;
-    egui::Grid::new("cover plants").num_columns(5).spacing([6.0, 3.0]).show(ui, |ui| {
+    // The names take the room the icon, weight, share and × leave.
+    // Too narrow for all: the shares go (each weight says it on hover).
+    let shares = ui.available_width() >= 190.0;
+    let name_w = (ui.available_width() - 20.0 - 44.0 - if shares { 32.0 + 6.0 } else { 0.0 } - 18.0 - 3.0 * 6.0).clamp(30.0, 118.0);
+    egui::Grid::new("cover plants").num_columns(if shares { 5 } else { 4 }).spacing([6.0, 3.0]).show(ui, |ui| {
         for (k, (state, weight)) in def.plants.iter_mut().enumerate() {
             let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
             let icon = catalogue.as_ref().and_then(|cat| cat.block(state)).and_then(|b| blocks.icon(&ctx, b));
@@ -2095,12 +2133,16 @@ pub fn cover_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
             }
             let known = catalogue.as_ref().is_none_or(|cat| cat.block(state).is_some());
             let tip = if known { state.clone() } else { tr!("{state}\nNot a block of Minecraft {map_or}", map_or = catalogue.as_ref().map_or("", |c| c.version.as_str()), state) };
-            ui.allocate_ui_with_layout(vec2(118.0, 20.0), egui::Layout::left_to_right(Align::Center), |ui| {
-                ui.set_width(118.0);
+            ui.allocate_ui_with_layout(vec2(name_w, 20.0), egui::Layout::left_to_right(Align::Center), |ui| {
+                ui.set_width(name_w);
                 ui.add(egui::Label::new(RichText::new(plant_name(state)).color(if known { pal.text } else { pal.danger })).truncate()).on_hover_text(tip);
             });
-            crate::widgets::drag(ui, egui::DragValue::new(weight).range(1..=1000).speed(0.2)).on_hover_text(tr!("Weight: how often it grows against the others"));
-            ui.label(RichText::new(format!("{:.0}%", *weight as f32 * 100.0 / total)).size(11.0).color(pal.weak));
+            let share = format!("{:.0}%", *weight as f32 * 100.0 / total);
+            let weight_tip = if shares { tr!("Weight: how often it grows against the others").to_owned() } else { format!("{} · {share}", tr!("Weight: how often it grows against the others")) };
+            crate::widgets::drag(ui, egui::DragValue::new(weight).range(1..=1000).speed(0.2)).on_hover_text(weight_tip);
+            if shares {
+                ui.label(RichText::new(share).size(11.0).color(pal.weak));
+            }
             if ui.add(egui::Button::new(theme::glyph(Icon::X).to_string()).frame(false).small()).on_hover_text(tr!("Take it out")).clicked() {
                 remove = Some(k);
             }
@@ -2182,7 +2224,7 @@ pub fn cover_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     }
     ui.add_space(6.0);
     if ui
-        .button(RichText::new(theme::with_icon(Icon::Trash2, tr!("Remove this cover"))).color(pal.danger))
+        .add(egui::Button::new(RichText::new(theme::with_icon(Icon::Trash2, tr!("Remove this cover"))).color(pal.danger)).truncate())
         .on_hover_text(tr!("Nothing grows where it was painted any more"))
         .clicked()
     {
@@ -3385,7 +3427,7 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     let mut feedback = None;
 
     // Where the blocks come from: a version of the game installed here.
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         let current = blocks.catalogue.as_ref().map(|c| (c.version.clone(), c.source.clone()));
         let label = match &current {
             Some((v, _)) => tr!("Minecraft {v}", v),
@@ -3394,6 +3436,8 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
         };
         crate::widgets::combo("minecraft version")
             .selected_text(label)
+            .width((ui.available_width() - 8.0).clamp(60.0, 160.0))
+            .truncate()
             .show_ui(ui, |ui| {
                 for j in blocks.jars.clone() {
                     let selected = current.as_ref().is_some_and(|(_, p)| *p == j.path);
@@ -3722,7 +3766,7 @@ pub fn biome_panel(ui: &mut Ui, tools: &mut ToolState, reg: &Registry, search: &
         }
         ui.horizontal(|ui| {
             swatch(ui, theme::rgb(b.color));
-            let r = ui.selectable_label(tools.biome as usize == i, &b.name);
+            let r = ui.add(egui::Button::selectable(tools.biome as usize == i, &b.name).truncate());
             if r.on_hover_text(if b.id.is_empty() { tr!("Let the exporter decide") } else { &b.id }).clicked() {
                 tools.biome = i as u16;
                 tools.select(Tool::PaintBiome);
@@ -3747,7 +3791,7 @@ pub fn levels_panel(ui: &mut Ui, doc: &mut Document, rename: &mut Option<(usize,
         ui,
         tr!("Solid adds rock, Carve removes it. Higher wins."),
     );
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         if ui.button(tr!("{glyph} Solid", glyph = theme::glyph(Icon::Plus))).on_hover_text(tr!("Add a level that adds matter")).clicked() {
             doc.add_level(LevelKind::Solid);
         }
@@ -3772,6 +3816,7 @@ pub fn levels_panel(ui: &mut Ui, doc: &mut Document, rename: &mut Option<(usize,
             .corner_radius(CornerRadius::same(6))
             .inner_margin(egui::Margin::symmetric(6, 3));
         frame.show(ui, |ui| {
+            let mut show_kind = true;
             ui.horizontal(|ui| {
                 let eye = if visible { Icon::Eye } else { Icon::EyeOff };
                 if index > 0
@@ -3803,7 +3848,16 @@ pub fn levels_panel(ui: &mut Ui, doc: &mut Document, rename: &mut Option<(usize,
                         let label = egui::Label::new(RichText::new(crate::i18n::tr_name(&name)).bold().color(if visible { pal.text } else { pal.weak }))
                             .sense(Sense::click())
                             .truncate();
-                        let r = ui.add(label).on_hover_text(tr!("{label} level · {tiles} tiles · double-click to rename", label = crate::i18n::tr_name(kind.label()), tiles));
+                        // The room the kind and the buttons on the right leave it.
+                        let kind_w = ui.painter().layout_no_wrap(crate::i18n::tr_name(kind.label()).to_owned(), egui::FontId::proportional(10.5), pal.weak).size().x;
+                        let buttons = [index > 0, index > 1, index + 1 < n].iter().filter(|b| **b).count() as f32 * (ui.spacing().interact_size.y + ui.spacing().item_spacing.x + 4.0);
+                        // Too narrow for both: the name, without its kind.
+                        let gap = ui.spacing().item_spacing.x;
+                        let with_kind = ui.available_width() - kind_w - buttons - 2.0 * gap >= 56.0;
+                        show_kind = with_kind;
+                        let room = (ui.available_width() - buttons - gap - if with_kind { kind_w + gap } else { 0.0 }).max(0.0);
+                        let r = ui.allocate_ui(vec2(room, ui.spacing().interact_size.y), |ui| ui.add(label)).inner;
+                        let r = r.on_hover_text(tr!("{label} level · {tiles} tiles · double-click to rename", label = crate::i18n::tr_name(kind.label()), tiles));
                         if r.clicked() {
                             doc.active_level = index;
                         }
@@ -3824,7 +3878,9 @@ pub fn levels_panel(ui: &mut Ui, doc: &mut Document, rename: &mut Option<(usize,
                             action = Some((index, "up"));
                         }
                     }
-                    ui.label(RichText::new(crate::i18n::tr_name(kind.label())).size(10.5).color(pal.weak));
+                    if show_kind {
+                        ui.label(RichText::new(crate::i18n::tr_name(kind.label())).size(10.5).color(pal.weak));
+                    }
                 });
             });
         });
@@ -3871,28 +3927,37 @@ pub fn info_panel(ui: &mut Ui, doc: &mut Document, hover: Option<(i32, i32)>, ca
     let mut affects_map = false;
     let (bottom, top) = (doc.dimension().min_y, doc.dimension().max_y);
     section(ui, Icon::Globe, tr!("World"));
-    egui::Grid::new("world info").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+    crate::widgets::well(ui, |ui| {
         let meta = &mut doc.world.meta;
         let mut changed = false;
-        ui.label(tr!("Name"));
-        changed |= ui.text_edit_singleline(&mut meta.name).changed();
-        ui.end_row();
-        ui.label(tr!("Seed"));
-        changed |= crate::widgets::drag(ui, egui::DragValue::new(&mut meta.seed)).changed();
-        ui.end_row();
-        ui.label(tr!("Sea level"));
-        if crate::widgets::drag(ui, egui::DragValue::new(&mut meta.sea_level).range(bottom..=top - 1)).changed() {
-            changed = true;
-            affects_map = true;
-        }
-        ui.end_row();
-        ui.label(tr!("Spawn"));
-        ui.horizontal(|ui| {
-            for v in &mut meta.spawn {
-                changed |= crate::widgets::drag(ui, egui::DragValue::new(v)).changed();
+        crate::widgets::row(ui, tr!("Name"), |ui| {
+            changed |= ui.add(egui::TextEdit::singleline(&mut meta.name).desired_width((ui.available_width() * 0.62).min(170.0))).changed();
+        });
+        crate::widgets::row(ui, tr!("Seed"), |ui| {
+            changed |= crate::widgets::drag(ui, egui::DragValue::new(&mut meta.seed)).changed();
+        });
+        crate::widgets::row(ui, tr!("Sea level"), |ui| {
+            if crate::widgets::drag(ui, egui::DragValue::new(&mut meta.sea_level).range(bottom..=top - 1)).changed() {
+                changed = true;
+                affects_map = true;
             }
         });
-        ui.end_row();
+        // Right to left: z, then x before it; in a narrow panel, under
+        // their name.
+        let mut spawn = |ui: &mut Ui| {
+            ui.spacing_mut().interact_size.x = 24.0;
+            ui.spacing_mut().item_spacing.x = 3.0;
+            ui.spacing_mut().button_padding.x = 3.0;
+            for v in meta.spawn.iter_mut().rev() {
+                changed |= crate::widgets::drag(ui, egui::DragValue::new(v)).changed();
+            }
+        };
+        if ui.available_width() < 160.0 {
+            crate::widgets::row(ui, tr!("Spawn"), |_| {});
+            crate::widgets::row(ui, "", &mut spawn);
+        } else {
+            crate::widgets::row(ui, tr!("Spawn"), &mut spawn);
+        }
         if changed {
             doc.mark_changed();
         }
@@ -3904,7 +3969,7 @@ pub fn info_panel(ui: &mut Ui, doc: &mut Document, hover: Option<(i32, i32)>, ca
         ui.label(tr!("Blocks"));
         let now = doc.world.meta.palette.clone();
         // As wide as the panel lets it, in a narrow one.
-        let width = (ui.available_width() - 24.0).clamp(80.0, 170.0);
+        let width = (ui.available_width() - 24.0).clamp(40.0, 170.0);
         match crate::palettes::choose(ui, "map palette", palettes, &now, width) {
             Some(crate::palettes::Picked::Use(p)) => affects_map |= doc.set_palette(p),
             Some(crate::palettes::Picked::Edit) => *edit = true,

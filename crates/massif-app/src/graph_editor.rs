@@ -1440,20 +1440,14 @@ impl GraphEditor {
         }
         ui.add_space(14.0);
         let detail = self.preview;
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(theme::glyph(Icon::Camera).to_string()).size(13.0).color(pal.weak));
-            ui.label(RichText::new(tr!("Image")).size(13.0).medium());
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(RichText::new(tr!("from the preview, {detail} × {detail} samples", detail)).size(11.0).color(pal.weak));
-            });
-        });
-        ui.add_space(2.0);
+        titled(ui, Icon::Camera, tr!("Image"), &tr!("from the preview, {detail} × {detail} samples", detail));
         crate::widgets::well(ui, |ui| {
             crate::widgets::row(ui, tr!("Size"), |ui| {
                 let [w, h] = self.image_size;
                 crate::widgets::combo("render image size")
                     .selected_text(format!("{w} × {h}"))
-                    .width(130.0)
+                    .width((ui.available_width() * 0.62).min(130.0))
+                    .truncate()
                     .show_ui(ui, |ui| {
                         for (name, size) in IMAGE_SIZES {
                             ui.selectable_value(&mut self.image_size, size, format!("{} · {} × {}", crate::i18n::tr_name(name), size[0], size[1]));
@@ -4106,6 +4100,27 @@ fn properties(ui: &mut Ui, kind: &mut NodeKind, reg: &Registry) {
     }
 }
 
+/// A group's title in the render settings: its icon and name, and a note
+/// on the right, or under them where it does not fit beside.
+pub fn titled(ui: &mut Ui, icon: Icon, name: &str, note: &str) {
+    let pal = Palette::of(ui);
+    let width = |ui: &Ui, text: &str, size: f32| ui.painter().layout_no_wrap(text.to_owned(), egui::FontId::proportional(size), pal.text).size().x;
+    let beside = note.is_empty() || width(ui, name, 13.0) + width(ui, note, 11.0) + 40.0 <= ui.available_width();
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(theme::glyph(icon).to_string()).size(13.0).color(pal.weak));
+        ui.label(RichText::new(name).size(13.0).medium());
+        if beside && !note.is_empty() {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(RichText::new(note).size(11.0).color(pal.weak));
+            });
+        }
+    });
+    if !beside {
+        ui.label(RichText::new(note).size(11.0).color(pal.weak));
+    }
+    ui.add_space(2.0);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4238,3 +4253,4 @@ mod tests {
         assert_eq!(first("mountain r"), Some("Mountain range"));
     }
 }
+

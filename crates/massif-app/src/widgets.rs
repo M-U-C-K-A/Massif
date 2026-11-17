@@ -465,9 +465,15 @@ pub fn row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
     if !first {
         ui.painter().hline(rect.x_range().expand(12.0), rect.top(), Stroke::new(1.0, pal.border));
     }
-    let mut child = ui.new_child(UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
-    child.label(egui::RichText::new(label).size(12.5));
-    child.with_layout(egui::Layout::right_to_left(egui::Align::Center), add);
+    // The control first, from the right; the name in the room it leaves,
+    // cut with an ellipsis (whole on hover) in a narrow panel.
+    let mut control = ui.new_child(UiBuilder::new().max_rect(rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    add(&mut control);
+    let used = control.min_rect();
+    let right = if used.width() > 0.0 { used.left() - ui.spacing().item_spacing.x } else { rect.right() };
+    let room = Rect::from_min_max(rect.left_top(), egui::pos2(right.max(rect.left()), rect.bottom()));
+    let mut name = ui.new_child(UiBuilder::new().max_rect(room).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    name.add(egui::Label::new(egui::RichText::new(label).size(12.5)).truncate());
 }
 
 /// A combo box with a chevron rather than egui's triangle.
@@ -787,13 +793,22 @@ pub fn input_group(ui: &mut Ui, id: &str, parts: &mut [Part]) -> (bool, Option<u
 pub fn button_group(ui: &mut Ui, id: &str, labels: &[&str], on: &[bool]) -> Option<usize> {
     let pal = Palette::of(ui);
     let font = FontId::proportional(12.5);
-    let galleys: Vec<_> = labels.iter().map(|t| ui.painter().layout_no_wrap((*t).to_owned(), font.clone(), pal.text)).collect();
+    let mut galleys: Vec<_> = labels.iter().map(|t| ui.painter().layout_no_wrap((*t).to_owned(), font.clone(), pal.text)).collect();
     let mut widths: Vec<f32> = galleys.iter().map(|g| g.size().x + 26.0).collect();
     const INSET: f32 = 3.0;
     let seg_h = GROUP_H - 2.0 * INSET;
     let stacked = widths.len() > 1 && widths.iter().sum::<f32>() + 2.0 * INSET > ui.available_width();
     let size = if stacked {
-        let w = widths.iter().copied().fold(0.0, f32::max).max(ui.available_width() - 2.0 * INSET);
+        // As wide as the room: a choice longer than it is cut with an
+        // ellipsis (its whole name stays the button's).
+        let w = (ui.available_width() - 2.0 * INSET).max(24.0);
+        for (g, t) in galleys.iter_mut().zip(labels) {
+            if g.size().x + 12.0 > w {
+                let mut job = egui::text::LayoutJob::simple_singleline((*t).to_owned(), font.clone(), pal.text);
+                job.wrap = egui::text::TextWrapping::truncate_at_width(w - 12.0);
+                *g = ui.painter().layout_job(job);
+            }
+        }
         widths.iter_mut().for_each(|x| *x = w);
         vec2(w + 2.0 * INSET, seg_h * widths.len() as f32 + 2.0 * INSET)
     } else {
