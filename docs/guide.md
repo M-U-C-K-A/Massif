@@ -1366,7 +1366,8 @@ on is Where I start (or click), off is Fixed at the level that was set.
 - **Held down**, either button keeps going, a block at a time, at the pace
   set by **Hold speed** in Tool Settings (6 blocks a second by default):
   up to the rim of the hollow (or on past it with Warn before flooding
-  beyond a hollow off), down to the bottom. The 2D map and the 3D views
+  beyond a hollow off), never over the height limit or the top of the
+  world, down to the bottom. The 2D map and the 3D views
   follow it as it goes, and the whole press is one step to undo.
 
 **Water brush.** It lays water under the brush at the water height chosen;

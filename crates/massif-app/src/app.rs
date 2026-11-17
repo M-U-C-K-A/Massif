@@ -16104,4 +16104,43 @@ mod tests {
         set_language(Language::English);
         assert!(faults.is_empty(), "{} past the panel's edge:\n{}", faults.len(), faults.join("\n"));
     }
+
+    /// A map of one tile, and a map with no tiles at all, show in every
+    /// workspace, 3D views and 3D Sculpt among them, without a panic: the
+    /// views frame what there is, Info says the map is empty.
+    #[test]
+    fn the_smallest_maps_show_everywhere() {
+        let one = generate(&GenParams { tiles_x: 1, tiles_z: 1, ..GenParams::default() });
+        let mut none = one.clone();
+        let positions: Vec<TilePos> = none.dims[0].ground().positions().collect();
+        for pos in positions {
+            none.dims[0].ground_mut().remove(pos);
+        }
+        assert!(none.dims[0].bounds().is_none(), "no tiles");
+        for world in [one, none] {
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(1280.0, 800.0)).with_accessibility_check(false).wgpu().build_eframe(move |cc| {
+                theme::install(&cc.egui_ctx);
+                MassifApp::for_tests(world.clone())
+            });
+            h.run_steps(3);
+            let crashed = |h: &egui_kittest::Harness<'_, MassifApp>| matches!(h.state().dialog, Some(Dialog::Crashed(..)));
+            let n = h.state().layout.workspaces.len();
+            for k in 0..n {
+                h.state_mut().layout.activate(k);
+                h.run_steps(6);
+                assert!(!crashed(&h), "workspace {k}: {:?}", h.state().dialog.as_ref().map(|_| "crashed"));
+            }
+            // Walking, flying and as a ghost in 3D Sculpt.
+            if let Some(k) = h.state().layout.workspaces.iter().position(|w| w.root.shows(EditorKind::Sculpt3d)) {
+                h.state_mut().layout.activate(k);
+                for motion in [crate::player::Motion::Walking, crate::player::Motion::Flying, crate::player::Motion::Ghost] {
+                    if let Some(p) = h.state_mut().sculpt3d.player_mut() {
+                        p.set_motion(motion);
+                    }
+                    h.run_steps(4);
+                    assert!(!crashed(&h), "{motion:?}");
+                }
+            }
+        }
+    }
 }

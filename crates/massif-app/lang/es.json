@@ -2825,6 +2825,7 @@
  "Not in a hollow: the water would spread": "Fuera de una hondonada: el agua se extendería",
  "Raises to y {level}": "Sube a y {level}",
  "The water here is already at y {level}: choose Where I click in Tool Settings to raise it a block at a time.": "El agua aquí ya está a y {level}: elija Donde hago clic en los ajustes de la herramienta para subirla bloque a bloque.",
+ "The water here is at the top of the world already": "El agua ya está aquí en lo alto del mundo",
  "The water here is at y {level}": "El agua aquí está a y {level}",
  "There is no land here to hold water.": "Aquí no hay terreno que retenga el agua.",
  "Water height": "Altura del agua",

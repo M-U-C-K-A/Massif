@@ -1741,7 +1741,8 @@ fn pour_mode(doc: &Document, tools: &mut ToolState, x: i32, z: i32) -> Result<i1
             }
         },
     };
-    let level = tools.limit_water(level);
+    // Never over the top of the world.
+    let level = tools.limit_water(level).min(doc.dimension().max_y as i16);
     if tools.water_limit_on && ground_top(doc, x, z).is_some_and(|g| g >= level as i32) {
         return Err(Some(under_the_limit(tools)));
     }
@@ -1894,6 +1895,9 @@ pub fn press_water(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, lo
             // At the rim already: a block more, and it spills. Asked first.
             let rim = ops::spill_level(doc.dimension(), x, z, 16 << 20);
             let higher = level.saturating_add(1);
+            if higher > doc.dimension().max_y as i16 {
+                return (None, Some(tr!("The water here is at the top of the world already").to_owned()));
+            }
             if tools.limit_water(higher) < higher {
                 return (None, Some(under_the_limit(tools)));
             }
@@ -1963,7 +1967,8 @@ fn water_step(doc: &mut Document, tools: &ToolState, hold: &mut WaterHold) {
         return;
     }
     let higher = level.saturating_add(1);
-    if tools.limit_water(higher) < higher {
+    // No higher than the height limit, nor than the top of the world.
+    if tools.limit_water(higher) < higher || higher > doc.dimension().max_y as i16 {
         hold.end = Some(HoldEnd::Limit);
         return;
     }
@@ -2594,6 +2599,175 @@ mod tests {
         ops::water_at(d.dimension(), x, z)
     }
 
+    /// Every column's water, to compare a map before and after.
+    fn fluids(d: &Document) -> Vec<i16> {
+        let ground = d.dimension().ground();
+        let mut out = Vec::new();
+        for pos in ground.positions().collect::<Vec<_>>() {
+            let tile = ground.view(pos).unwrap();
+            out.extend((0..massif_core::coords::TILE_AREA).map(|i| tile.fluid.get(i)));
+        }
+        out
+    }
+
+    /// Every way of choosing the water's height keeps to a selection: the
+    /// Water brush across its edge, and Flood at the sea's level or a level
+    /// set, lay water inside it only; undone and redone exactly.
+    #[test]
+    fn the_water_heights_keep_to_a_selection() {
+        let mut d = doc();
+        let mut tools = ToolState { flood_warn: false, ..ToolState::default() };
+        tools.brush.radius = 20.0;
+        tools.brush.strength = 1.0;
+        let sel = massif_core::selection::Selection::shape(&massif_core::selection::Shape::Rect(massif_core::coords::BlockRect::new(0, 0, 100, 100)));
+        assert!(d.history.select(&mut d.world, 0, "Select", Some(sel)));
+        d.world.meta.sea_level = 80;
+        tools.water_level = 75;
+        for tool in [Tool::Water, Tool::Flood] {
+            for mode in WaterHeight::ALL {
+                tools.select(tool);
+                if tool == Tool::Water {
+                    tools.brush_height = mode;
+                } else {
+                    tools.flood_height = mode;
+                }
+                let before = fluids(&d);
+                if tool == Tool::Water {
+                    let (stroke, msg) = begin_stroke(&mut d, &tools, (0.5, 50.5), false, false);
+                    let mut stroke = stroke.unwrap_or_else(|| panic!("{mode:?}: {msg:?}"));
+                    continue_stroke(&mut d, &tools, &mut stroke, (0.5, 50.5), 0.1);
+                    end_stroke(&mut d, stroke);
+                } else {
+                    click(&mut d, &mut tools, 50, 50, false);
+                }
+                assert!(water(&d, 5, 50).is_some(), "{tool:?} {mode:?}: inside");
+                assert_eq!(water(&d, -5, 50), None, "{tool:?} {mode:?}: outside");
+                assert_eq!(water(&d, 50, -5), None, "{tool:?} {mode:?}: outside");
+                let after = fluids(&d);
+                d.undo();
+                assert!(fluids(&d) == before, "{tool:?} {mode:?}: undone");
+                d.redo();
+                assert!(fluids(&d) == after, "{tool:?} {mode:?}: redone");
+                d.undo();
+            }
+        }
+    }
+
+    /// The whole of a map, to compare it before and after: every level's
+    /// tiles, the sculpted chunks, the selection, the registry and the
+    /// settings.
+    #[allow(clippy::type_complexity)]
+    fn whole(d: &Document) -> (Vec<Vec<(TilePos, Vec<u8>)>>, String, Option<Vec<u8>>, String) {
+        let dim = d.dimension();
+        let levels = dim
+            .levels
+            .iter()
+            .map(|l| {
+                let mut tiles: Vec<(TilePos, Vec<u8>)> = l.positions().map(|p| (p, {
+                    // Compacted: the same content, however its planes are kept.
+                    let mut t = (*l.view(p).unwrap()).clone();
+                    t.compact();
+                    t.encode()
+                })).collect();
+                tiles.sort_by_key(|t| (t.0.x, t.0.z));
+                tiles
+            })
+            .collect();
+        (levels, format!("{:?}", dim.voxels), dim.selection.as_ref().map(|s| s.encode()), format!("{:?}{:?}", d.world.registry, d.world.meta))
+    }
+
+    /// Each tool that paints with the brush, from either button: one stroke
+    /// is one step, undo puts the map back exactly as it was and redo makes
+    /// it exactly as the stroke left it.
+    #[test]
+    fn every_stroke_undoes_and_redoes_exactly() {
+        let mut d = doc();
+        let mut tools = ToolState::default();
+        tools.brush.radius = 12.0;
+        tools.brush.strength = 1.0;
+        let mut done = Vec::new();
+        for &tool in Tool::GROUPS.iter().flat_map(|g| g.2.iter()) {
+            tools.select(tool);
+            // Layers to paint with where the tool needs one.
+            if tool == Tool::StampSlab || tool == Tool::EraseSlab {
+                if d.active_kind() == massif_core::level::LevelKind::Ground {
+                    d.add_level(massif_core::level::LevelKind::Solid);
+                }
+            } else {
+                d.active_level = 0;
+            }
+            for inverse in [false, true] {
+                let before = whole(&d);
+                let steps = d.history.undo_count();
+                let (stroke, _) = begin_stroke(&mut d, &tools, (20.5, 20.5), inverse, inverse);
+                let Some(mut stroke) = stroke else { continue };
+                for k in 0..6 {
+                    continue_stroke(&mut d, &tools, &mut stroke, (20.5 + k as f32 * 3.0, 20.5), 0.05);
+                }
+                end_stroke(&mut d, stroke);
+                if d.history.undo_count() == steps {
+                    continue;
+                }
+                assert_eq!(d.history.undo_count(), steps + 1, "{tool:?} {inverse}: one step");
+                let after = whole(&d);
+                d.undo();
+                assert!(whole(&d) == before, "{tool:?} {inverse}: undone exactly");
+                d.redo();
+                assert!(whole(&d) == after, "{tool:?} {inverse}: redone exactly");
+                done.push(format!("{tool:?}{}", if inverse { " (right)" } else { "" }));
+            }
+        }
+        eprintln!("undone and redone: {}", done.join(", "));
+        assert!(done.len() > 20, "{done:?}");
+    }
+
+    /// Flood held at the map's edge, without the warning: the water spreads
+    /// to the edge and rises no higher than the top of the world; held
+    /// with the right button, it goes down to nothing. Each press is one
+    /// step, undone and redone exactly; a click off the map does nothing.
+    #[test]
+    fn flood_held_at_the_map_edge_stops_at_the_top() {
+        let mut d = doc();
+        let mut tools = ToolState { flood_warn: false, ..ToolState::default() };
+        tools.select(Tool::Flood);
+        let top = d.dimension().max_y as i16;
+        assert!(click(&mut d, &mut tools, 500, 500, false).is_some_and(|m| !m.is_empty()), "off the map: said, not done");
+        click(&mut d, &mut tools, 127, 127, false).unwrap();
+        assert!(water(&d, 127, 127).is_some() && water(&d, -128, -128) == water(&d, 127, 127), "the whole flat map");
+        let before = fluids(&d);
+        let steps = d.history.undo_count();
+        let (hold, _) = press_water(&mut d, &mut tools, 127, 127, false, false);
+        let mut hold = hold.unwrap();
+        for _ in 0..1000 {
+            hold_water(&mut d, &tools, &mut hold, hold_period(&tools));
+        }
+        assert!(hold.ended(), "it stops");
+        release_water(&mut d, hold);
+        let level = water(&d, 127, 127).unwrap();
+        assert_eq!(level, top, "up to the top of the world, no higher");
+        let msg = click(&mut d, &mut tools, 127, 127, false).unwrap();
+        assert_eq!(msg, "The water here is at the top of the world already");
+        assert_eq!(d.history.undo_count(), steps + 1, "one step");
+        let after = fluids(&d);
+        d.undo();
+        assert!(fluids(&d) == before, "undone whole");
+        d.redo();
+        assert!(fluids(&d) == after, "redone exactly");
+        // Lowered while held: down to nothing, one step.
+        let (hold, _) = press_water(&mut d, &mut tools, -128, 127, true, false);
+        let mut hold = hold.unwrap();
+        for _ in 0..1000 {
+            hold_water(&mut d, &tools, &mut hold, hold_period(&tools));
+        }
+        assert!(hold.ended());
+        release_water(&mut d, hold);
+        assert_eq!(water(&d, 0, 0), None);
+        d.undo();
+        assert!(fluids(&d) == after, "the lowering undone whole");
+        d.redo();
+        assert_eq!(water(&d, 127, 127), None);
+    }
+
     /// Flood's right button lowers the water clicked by one block, the
     /// shore it uncovers left as the ground was; Shift drains it whole.
     #[test]
@@ -3195,4 +3369,5 @@ mod auto_biome_tests {
         }
         assert!(kept > 500 && changed > 500, "kept {kept}, changed {changed}");
     }
+
 }

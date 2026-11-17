@@ -557,6 +557,31 @@ mod tests {
         Document::new(world, None, 1)
     }
 
+    /// Every palette that comes with Massif, mods' included, applies to a
+    /// map with no mod read, one step each, undone and redone exactly; the
+    /// map's own palette kept with it whatever is installed.
+    #[test]
+    fn every_palette_applies_without_its_mods() {
+        let mut d = doc();
+        let offered = massif_core::materials::Palette::offered(&[]);
+        assert_eq!(offered.len(), 1, "with no mod read, the game's alone");
+        for palette in massif_core::materials::Palette::built_in().into_iter().rev() {
+            let (reg, meta) = (d.world.registry.clone(), d.world.meta.clone());
+            let steps = d.history.undo_count();
+            if !d.set_palette(palette.clone()) {
+                assert_eq!(d.world.meta.palette, palette, "{}: already it", palette.name);
+                continue;
+            }
+            assert_eq!(d.history.undo_count(), steps + 1, "{}: one step", palette.name);
+            assert_eq!(d.world.meta.palette, palette);
+            let (reg2, meta2) = (d.world.registry.clone(), d.world.meta.clone());
+            d.undo();
+            assert!(d.world.registry == reg && d.world.meta == meta, "{}: undone exactly", palette.name);
+            d.redo();
+            assert!(d.world.registry == reg2 && d.world.meta == meta2, "{}: redone exactly", palette.name);
+        }
+    }
+
     #[test]
     fn level_management_is_undoable_and_tracks_the_active_level() {
         let mut d = doc();
