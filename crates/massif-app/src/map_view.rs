@@ -108,6 +108,8 @@ type BlockStrengthKey = ((BrushShape, massif_core::Profile, u32, usize), u32, u3
 const MIN_ZOOM: f32 = 1.0 / 2048.0;
 const MAX_ZOOM: f32 = 48.0;
 const FOOTER: f32 = 28.0;
+/// The least room, in points each way, the map is framed by itself in.
+const FIT_ROOM: f32 = 64.0;
 /// Points of scrolling per brush size step (about one wheel notch).
 const WHEEL_STEP: f32 = 20.0;
 /// Degrees the brush turns per wheel notch (one with Shift).
@@ -226,7 +228,10 @@ pub struct MapView {
     pub grid: bool,
     /// Annotations drawn over the map.
     pub annotations: bool,
+    /// The map framed by itself (see [`MapView::should_fit`]): for which
+    /// document, and the view it gave, with the size of the canvas then.
     fitted: Option<u64>,
+    fit_view: Option<([f64; 2], f32, Vec2)>,
     stroke: Option<Stroke>,
     last_time: f64,
     probe: Option<((i32, i32, u64), Option<tools::Probe>)>,
@@ -295,6 +300,7 @@ impl Default for MapView {
             grid: false,
             annotations: true,
             fitted: None,
+            fit_view: None,
             stroke: None,
             last_time: 0.0,
             probe: None,
@@ -872,8 +878,23 @@ impl MapView {
         });
     }
 
+    /// Whether to frame the map by itself on `canvas`: a map just opened
+    /// (another document), once the canvas has room to show it — framed on
+    /// a canvas a few points high, it came out at 1 % and stayed so —, or
+    /// the canvas grown well past the size it was framed on while the view
+    /// is still as that framing left it.
+    pub fn should_fit(&self, generation: u64, canvas: Vec2) -> bool {
+        if canvas.x < FIT_ROOM || canvas.y < FIT_ROOM {
+            return false;
+        }
+        if self.fitted != Some(generation) {
+            return true;
+        }
+        self.goal.is_none() && self.fit_view.is_some_and(|(c, z, size)| c == self.center && z == self.zoom && (canvas.x > size.x * 1.5 || canvas.y > size.y * 1.5))
+    }
+
     /// Glide to the whole map.
-    fn fit_smoothly(&mut self, doc: &Document) {
+    pub fn fit_smoothly(&mut self, doc: &Document) {
         let (center, zoom) = (self.center, self.zoom);
         self.fit(doc, self.canvas);
         self.goal = Some(Goal {
@@ -950,9 +971,11 @@ impl MapView {
             mut view3d,
         } = input;
 
-        if self.fitted != Some(doc.generation) && canvas.width() > 10.0 {
+        if self.should_fit(doc.generation, canvas.size()) {
             self.fit(doc, canvas);
+            self.goal = None;
             self.fitted = Some(doc.generation);
+            self.fit_view = Some((self.center, self.zoom, canvas.size()));
         }
 
         // ---- navigation, the WorldPainter way ----------------------------
@@ -1788,4 +1811,27 @@ impl MapView {
 /// reach applications.
 fn turns_brush(m: egui::Modifiers) -> bool {
     m.mac_cmd || (!cfg!(target_os = "macos") && m.ctrl && m.shift)
+}
+
+#[cfg(test)]
+mod fit_tests {
+    use super::*;
+
+    /// A map is framed once the canvas has room to show it: not on a canvas
+    /// a few points high, where it came out at 1 % and stayed; again when
+    /// the canvas grows well past the size it was framed on while the view
+    /// is still as the framing left it, but not once the user moved it.
+    #[test]
+    fn the_map_is_framed_once_there_is_room() {
+        let mut view = MapView::default();
+        assert!(!view.should_fit(1, vec2(900.0, 12.0)), "no room yet");
+        assert!(view.should_fit(1, vec2(900.0, 600.0)));
+        view.fitted = Some(1);
+        view.fit_view = Some((view.center, view.zoom, vec2(300.0, 80.0)));
+        assert!(view.should_fit(1, vec2(900.0, 600.0)), "framed small, the canvas grown: again");
+        assert!(!view.should_fit(1, vec2(320.0, 90.0)), "much the same size: as it is");
+        view.center[0] += 40.0;
+        assert!(!view.should_fit(1, vec2(900.0, 600.0)), "moved by the user: left alone");
+        assert!(view.should_fit(2, vec2(900.0, 600.0)), "another map: framed");
+    }
 }

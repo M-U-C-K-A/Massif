@@ -1839,6 +1839,7 @@ Brushes, Map, 3D view, Player — with a search over names and keys.
 | ⌘ + scroll (the Windows key on a PC keyboard) | Turn the brush, 5° a notch (Shift: 1°); Ctrl + Shift + scroll on Windows and Linux |
 | Ctrl or Alt + scroll, pinch | Zoom the map |
 | Middle button, Space + drag | Move the map |
+| Home, View ▸ Fit the whole map, the button by the zoom | The whole map in view (a map opened is framed so by itself) |
 | `−` `+` | Brush size |
 | `1` … `9`, `0` | Intensity 10 % … 100 % |
 | `[` `]` | Turn the brush |

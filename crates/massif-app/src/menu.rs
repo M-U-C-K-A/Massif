@@ -57,6 +57,8 @@ pub enum Command {
     CheckUpdates,
     /// The window over the whole screen, or back.
     FullScreen,
+    /// The whole map in the map view.
+    FitMap,
     /// A report of a problem to save and send (see `report`).
     ReportProblem,
 }
@@ -100,6 +102,7 @@ impl Command {
             Command::Help => Action::Help,
             Command::Quit => Action::Quit,
             Command::FullScreen => Action::FullScreen,
+            Command::FitMap => Action::MapFit,
             _ => return None,
         })
     }
@@ -278,7 +281,12 @@ pub fn menus(state: &State) -> Vec<Menu> {
             })
         })
         .collect();
-    view.extend([Entry::Separator, Entry::Item(Item::new(Command::ResetWorkspaces, None, tr!("Reset workspaces"), free))]);
+    view.extend([
+        Entry::Separator,
+        item(Command::FitMap, Icon::Maximize2, tr!("Fit the whole map"), map),
+        Entry::Separator,
+        Entry::Item(Item::new(Command::ResetWorkspaces, None, tr!("Reset workspaces"), free)),
+    ]);
     let help = vec![
         item(Command::Help, Icon::BookOpen, tr!("Massif Help"), free),
         item(Command::Shortcuts, Icon::Keyboard, tr!("Keyboard shortcuts"), free),
@@ -428,6 +436,8 @@ pub fn key_equivalent(shortcut: &KeyboardShortcut) -> Option<(String, Modifiers)
         Some(n) => char::from_u32(0xF704 + n as u32)?.to_string(),
         // egui draws the minus sign for −: the key types a hyphen.
         None if shortcut.logical_key == Key::Minus => "-".to_owned(),
+        // NSHomeFunctionKey.
+        None if shortcut.logical_key == Key::Home => "\u{F729}".to_owned(),
         None => {
             let mut chars = shortcut.logical_key.symbol_or_name().chars();
             let c = chars.next()?;
@@ -563,6 +573,7 @@ mod tests {
                 ("Select All", Some(("a".to_owned(), command))),
                 ("Deselect", Some(("d".to_owned(), command))),
                 ("Invert Selection", Some(("i".to_owned(), shifted))),
+                ("Fit the whole map", Some(("\u{F729}".to_owned(), Modifiers::NONE))),
                 ("Massif Help", Some(("\u{F704}".to_owned(), Modifiers::NONE))),
             ]
         );

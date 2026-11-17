@@ -309,6 +309,7 @@ pub enum Action {
     MapZoomIn,
     MapZoomOut,
     MapZoomReset,
+    MapFit,
     FlyForward,
     FlyBack,
     FlyLeft,
@@ -347,7 +348,7 @@ impl Action {
         list.extend(tools().into_iter().map(Tool));
         list.extend((1..=10).map(Intensity));
         list.extend([BrushSmaller, BrushLarger, TurnLeft, TurnRight, TurnReset, Turn30, Turn45, Turn90]);
-        list.extend([Pan, MapZoomIn, MapZoomOut, MapZoomReset, LightRight, LightLeft, SelectAll, Deselect, InvertSelection, SelectAdd, SelectSubtract]);
+        list.extend([Pan, MapZoomIn, MapZoomOut, MapZoomReset, MapFit, LightRight, LightLeft, SelectAll, Deselect, InvertSelection, SelectAdd, SelectSubtract]);
         list.extend([FlyForward, FlyBack, FlyLeft, FlyRight, FlyUp, FlyDown, FlyFaster]);
         list.extend([WalkForward, WalkBack, WalkLeft, WalkRight, Jump, Sneak, Sprint, LookLeft, LookRight, LookUp, LookDown, ReleaseMouse, Ghost]);
         list
@@ -395,6 +396,7 @@ impl Action {
             MapZoomIn => "map.zoom_in",
             MapZoomOut => "map.zoom_out",
             MapZoomReset => "map.zoom_reset",
+            MapFit => "map.fit",
             FlyForward => "fly.forward",
             FlyBack => "fly.back",
             FlyLeft => "fly.left",
@@ -425,7 +427,7 @@ impl Action {
             NewWorld | Open | Save | SaveAs | Export | Undo | Redo | Settings | Help | Quit | FullScreen | UiZoomIn | UiZoomOut | UiZoomReset | MaximizeArea | Delete | Cancel => Area::General,
             Tool(_) => Area::Tools,
             Intensity(_) | BrushSmaller | BrushLarger | TurnLeft | TurnRight | TurnReset | Turn30 | Turn45 | Turn90 => Area::Brushes,
-            LightRight | LightLeft | Pan | SelectAll | Deselect | InvertSelection | SelectAdd | SelectSubtract | MapZoomIn | MapZoomOut | MapZoomReset => Area::Map,
+            LightRight | LightLeft | Pan | SelectAll | Deselect | InvertSelection | SelectAdd | SelectSubtract | MapZoomIn | MapZoomOut | MapZoomReset | MapFit => Area::Map,
             FlyForward | FlyBack | FlyLeft | FlyRight | FlyDown | FlyUp | FlyFaster => Area::View3d,
             WalkForward | WalkBack | WalkLeft | WalkRight | Jump | Sneak | Sprint | LookLeft | LookRight | LookUp | LookDown | ReleaseMouse | Ghost => Area::Player,
         }
@@ -501,6 +503,7 @@ impl Action {
             MapZoomIn => tr!("Zoom in"),
             MapZoomOut => tr!("Zoom out"),
             MapZoomReset => tr!("Zoom to 100 %"),
+            MapFit => tr!("Fit the whole map"),
             FlyForward => tr!("Forward"),
             FlyBack => tr!("Back"),
             FlyLeft => tr!("Left"),
@@ -559,6 +562,7 @@ impl Action {
             MapZoomOut if wp => vec![c(Key::Minus)],
             MapZoomReset if wp => vec![c(Key::Num0)],
             UiZoomIn | UiZoomOut | UiZoomReset | MapZoomIn | MapZoomOut | MapZoomReset => vec![],
+            MapFit => vec![k(Key::Home)],
             MaximizeArea => vec![Chord::with(Mods::CTRL, Key::Space)],
             Delete => vec![k(Key::Delete), k(Key::Backspace)],
             Cancel => vec![k(Key::Escape)],

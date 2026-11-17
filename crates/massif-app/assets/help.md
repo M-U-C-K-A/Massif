@@ -285,6 +285,7 @@ Massif's own keys, as they are out of the box. **Settings ▸ Keyboard** changes
 | Scroll | Brush size (`Shift`: one block at a time) |
 | `⌘` + scroll | Turn the brush |
 | `Ctrl` or `Alt` + scroll, pinch | Zoom the map |
+| `Home` | The whole map in view (also View ▸ Fit the whole map, and the button by the zoom) |
 | Middle button, `Space` + drag | Move the map |
 | `−` `+` | Brush size |
 | `1` … `9`, `0` | Intensity 10 % … 100 % |

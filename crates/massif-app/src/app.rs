@@ -2753,6 +2753,10 @@ impl MassifApp {
                 self.layout.toggle_maximize(id);
             }
         }
+        // The whole map in view (Home).
+        if pressed(Action::MapFit) {
+            self.fit_map();
+        }
         // The map's zoom (WorldPainter's ⌘ with +, − and 0).
         for (action, factor) in [(Action::MapZoomIn, 2.0), (Action::MapZoomOut, 0.5), (Action::MapZoomReset, 0.0)] {
             if pressed(action) {
@@ -3016,6 +3020,7 @@ impl MassifApp {
                 let full = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
                 ctx.send_viewport_cmd(ViewportCommand::Fullscreen(!full));
             }
+            Command::FitMap => self.fit_map(),
             Command::ReportProblem => self.open_report(ctx, false),
         }
     }
@@ -5040,6 +5045,15 @@ impl MassifApp {
 }
 
 impl MassifApp {
+    /// The whole map in the map view the user last worked in (View ▸ Fit
+    /// the whole map, Home, the button by the zoom).
+    fn fit_map(&mut self) {
+        let id = self.active_map.or_else(|| self.maps.keys().next().copied());
+        if let Some(view) = id.and_then(|id| self.maps.get_mut(&id)) {
+            view.fit_smoothly(&self.doc);
+        }
+    }
+
     /// A frame stopped on an error: back the map up at once and say so,
     /// with a way to save it elsewhere. Errors that keep coming give up:
     /// the process ends as before, the map's copy offered at the next
@@ -5663,6 +5677,59 @@ mod tests {
         assert_eq!(next.found.len(), 1);
         assert_eq!(next.found[0].file, copy);
         drop(next);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A map opened while the map view looked far off at 1 % (where a map
+    /// framed on a canvas with no room had left it, and a drag at that zoom
+    /// took it thousands of blocks away): the map is framed, whole and in
+    /// the middle of the view. View ▸ Fit the whole map, and Home, frame it
+    /// again after the view was moved away.
+    #[test]
+    fn a_map_opened_is_framed_whatever_the_view_was() {
+        let dir = std::env::temp_dir().join(format!("massif-fit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("small.massif");
+        let small = generate(&GenParams { tiles_x: 6, tiles_z: 6, ..GenParams::default() });
+        massif_format::save(&small, &path).unwrap();
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let lost = |h: &mut egui_kittest::Harness<'_, MassifApp>| {
+            for view in h.state_mut().maps.values_mut() {
+                view.center = [-26942.0, -10124.0];
+                view.zoom = 0.01;
+            }
+        };
+        lost(&mut h);
+        let ctx = h.ctx.clone();
+        h.state_mut().jobs.push(Job::open(&ctx, path.clone()));
+        while !h.state().jobs.is_empty() {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.state_mut().dialog = None;
+        h.run_steps(5);
+        let framed = |h: &egui_kittest::Harness<'_, MassifApp>| {
+            let rect = map_rect(h.state(), &h.ctx);
+            let (lo, hi) = h.state().doc.dimension().bounds().unwrap();
+            let t = massif_core::coords::TILE_SIZE as f64;
+            let (w, d) = (((hi.x - lo.x + 1) as f64 * t) as f32, ((hi.z - lo.z + 1) as f64 * t) as f32);
+            let middle = [(lo.x as f64 + hi.x as f64 + 1.0) * t / 2.0, (lo.z as f64 + hi.z as f64 + 1.0) * t / 2.0];
+            h.state().maps.values().all(|v| {
+                let shown = (w * v.zoom, d * v.zoom);
+                (v.center[0] - middle[0]).abs() < 1.0 && (v.center[1] - middle[1]).abs() < 1.0 && shown.0 <= rect.width() && shown.1 <= rect.height() && shown.0.max(shown.1) > rect.width().min(rect.height()) * 0.5
+            })
+        };
+        assert!(framed(&h), "the map opened is framed: {:?}", h.state().maps.values().map(|v| (v.center, v.zoom)).collect::<Vec<_>>());
+        // Moved away, then View ▸ Fit the whole map, and Home.
+        lost(&mut h);
+        h.state_mut().command(&ctx, Command::FitMap);
+        h.run_steps(60);
+        assert!(framed(&h), "framed again from the menu");
+        lost(&mut h);
+        h.key_press(Key::Home);
+        h.run_steps(60);
+        assert!(framed(&h), "and with Home");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
