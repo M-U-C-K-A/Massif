@@ -55,12 +55,15 @@ own; **Help ▸ Take the tour** shows it again (over a sample, from the home
 screen). Massif shows no other tips or popups. With Reduce motion on, the
 light jumps from one part to the next rather than gliding.
 
-Behind it, as **Home background** says (Settings ▸ Appearance), waves or
-pictures. The waves, the default: five ridges in layers, like a range seen from afar, each
-lit along its crest with contour lines under it, from the page's colour to a
-muted accent, drawn in a few colours with an ordered dither in square cells.
-They drift slowly, a cycle taking half a minute or more, and stay quiet where
-the settings are written. They are drawn on the processor at 15 frames a
+Behind it, as **Home background** says (Settings ▸ Appearance), ridges or
+pictures. The ridges, the default: six ranges of mountains seen from afar, one
+behind the other, each a jagged crest drawn in the accent colour over land
+that darkens down from it, the far ones paler in the haze; low on the right,
+a glow of the accent behind them, as of a sun gone down; an empty sky above.
+All of it is made of dots, an ordered dither in square cells. The ranges
+drift slowly, the nearer faster, and the glow pulses; where the settings are
+written they fade out. Light theme: the same on a light page, grey land. High
+contrast: the crests alone, none under the words. They are drawn on the processor at 15 frames a
 second, only while the home screen is shown and the window is in front; with
 **Animate the background** off (Settings ▸ Appearance) or Reduce motion on,
 they stand still. The pictures are those of
@@ -170,7 +173,7 @@ their own:
   Twinkle — each alive in its tile, still with Reduce motion), the **Tool
   icons** (**Line**, the default, in the style of the interface's other
   icons, or **Classic**, Massif's first drawings), the **Home background**
-  (**Waves** or **Pictures**), **Animate the background** (the waves
+  (**Ridges** or **Pictures**), **Animate the background** (the ridges
   drifting, a picture's dither moving on, or still), and the **Crosshair** of the player's view: a **Dot**, a
   **Cross** (the default: four short strokes around an open middle), a
   **Circle**, a plain **Minecraft** plus, or **None**, with its **Size** (6
@@ -180,9 +183,9 @@ their own:
 - **Accessibility**: **High contrast** — text black or white, muted text
   past 7 to 1 on the cards, lines and the edges of controls past 3 to 1, the
   accent darkened or lightened until it reads, links underlined, and the
-  home screen's waves fainter and calmer behind its words; **Reduce motion** — the map
+  home screen's ridges reduced to their crests, none behind its words; **Reduce motion** — the map
   and the 3D views stop where they are let go and go straight where they are
-  sent (no gliding on, no coasting, no easing), the home screen's waves and
+  sent (no gliding on, no coasting, no easing), the home screen's ridges and
   the cards of tools and brushes stay still, switches flip at once; and
   **Interface size** — 100, 110, 125 or 150 %, everything larger at once (⌘+
   and ⌘− change it too, ⌘0 puts it back, and the change is kept). On macOS
@@ -2257,7 +2260,7 @@ computer and the graphics card (see above); otherwise send the two logs:
 the last line says where Massif stopped.
 
 - The first frames are followed step by step until one is on the screen:
-  the interface laid out, part by part (the home screen's waves, its side
+  the interface laid out, part by part (the home screen's ridges, its side
   bar, the new map's settings), its shapes and textures sent to the graphics card,
   the image the window gives to draw on (`get_current_texture`), the frame
   drawn and presented. A frame the window gives no image for is written

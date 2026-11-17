@@ -171,7 +171,7 @@ impl Default for Settings {
             memory_mb: 0,
             loader: crate::loader::Pattern::Orbit,
             tool_icons: crate::icons::IconStyle::Line,
-            home_background: home::Background::Waves,
+            home_background: home::Background::Ridges,
             animate_backdrop: true,
             backdrops_seen: Vec::new(),
             reticle: crate::reticle::Reticle::default(),
@@ -1271,7 +1271,7 @@ impl MassifApp {
             crate::widgets::row(ui, tr!("Animate the background"), |ui| {
                 let still = theme::reduce_motion(ui.ctx());
                 let mut on = self.settings.animate_backdrop && !still;
-                let tip = if still { tr!("Still: Reduce motion is on (Accessibility)") } else { if self.settings.home_background == home::Background::Pictures { tr!("The dither of its picture moves on about once a second") } else { tr!("The waves behind the home screen drift slowly") } };
+                let tip = if still { tr!("Still: Reduce motion is on (Accessibility)") } else { if self.settings.home_background == home::Background::Pictures { tr!("The dither of its picture moves on about once a second") } else { tr!("The ridges behind the home screen drift slowly") } };
                 if ui.add_enabled_ui(!still, |ui| crate::widgets::switch(ui, &mut on)).inner.on_hover_text(tip).changed() {
                     self.settings.animate_backdrop = on;
                 }
@@ -9866,7 +9866,7 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
         let mut h = harness(ThemeChoice::Dark);
-        assert_eq!(h.state().settings.home_background, home::Background::Waves, "waves by default");
+        assert_eq!(h.state().settings.home_background, home::Background::Ridges, "waves by default");
         h.state_mut().dialog = Some(Dialog::Preferences(PrefsSection::Appearance));
         h.run_steps(4);
         h.get_by_label("Pictures").click();
