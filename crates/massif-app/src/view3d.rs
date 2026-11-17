@@ -1658,6 +1658,30 @@ fn far_top(col: u32) -> vec3<f32> {
     return pow(texel(layer, vec2<f32>(0.5), 4.0).rgb * cover_tint(pair), vec3<f32>(1.0 / 2.2));
 }
 
+/// The side of the packed column `col` at height `y` seen from afar (sRGB):
+/// its top block, its soil, then the rock down to the bottom (as the side
+/// up close), with the game's textures the mean of theirs.
+fn far_side(col: u32, y: f32, n: vec3<f32>) -> vec3<f32> {
+    let flat = surface_color(col, y, false);
+    if (!TEXTURED) {
+        return flat;
+    }
+    let pair = i32((col >> 12u) & 0xfffu);
+    let height = terrain.origin.z + f32(col & 0xfffu);
+    let m = textureLoad(pair_mats, vec2<i32>(pair, 0), 0);
+    var mat = ROCK;
+    if (height - y <= 1.0) {
+        mat = m.x;
+    } else if (height - y <= 3.0) {
+        mat = m.y;
+    }
+    let layer = face_layer(mat, n, y);
+    if (layer == 0u) {
+        return flat;
+    }
+    return pow(texel(layer, vec2<f32>(0.5), 4.0).rgb, vec3<f32>(1.0 / 2.2));
+}
+
 /// A traced column's face in the views' own light with the game's
 /// textures (Settings ▸ Graphics): the texture of its block, darker in the
 /// corners that blocks close, as the game's smooth light has it; `lit`,
@@ -1745,7 +1769,12 @@ fn fs_trace(in: TraceOut) -> TraceFrag {
     if (hit.level == 0) {
         base = surface_color(column(hit.cell), p.y, hit.normal.y > 0.5);
         if (hit.normal.y < 0.5) {
-            sliver = smoothstep(0.35, 1.0, hit.t * g.cam_k.z / stride);
+            // How many pixels high the side is: its drop to the column the
+            // ray came from (the bottom of the world off the map).
+            let height = terrain.origin.z + f32(column(hit.cell) & 0xfffu);
+            let beside = terrain.origin.z + f32(column(hit.cell + vec2<i32>(i32(hit.normal.x), i32(hit.normal.z))) & 0xfffu);
+            let tall = smoothstep(1.0, 2.5, (height - beside) / max(hit.t * g.cam_k.z, 1.0e-4));
+            sliver = smoothstep(0.35, 1.0, hit.t * g.cam_k.z / stride) * (1.0 - tall);
         }
         if (sliver > 0.0) {
             let mid = vec2<f32>(hit.cell) + vec2<f32>(0.5);
@@ -1772,12 +1801,23 @@ fn fs_trace(in: TraceOut) -> TraceFrag {
             }
         }
         base = select(textureLoad(palette, vec2<i32>(0, 0), 0).rgb, sum / max(count, 1.0), count > 0.0);
+        if (hit.normal.y < 0.5) {
+            // Into its side (the map's sides, a cliff seen from afar): the
+            // section through the column there, not the colour of tops.
+            let inside = p.xz - vec2<f32>(hit.normal.x, hit.normal.z) * 0.5;
+            let col = column(vec2<i32>(floor(inside)));
+            if (col != 0u) {
+                base = far_side(col, p.y, hit.normal);
+            }
+        }
         let mid = corner + vec2<f32>(size * 0.5);
         let hl = ground_height(mid - vec2<f32>(size, 0.0));
         let hr = ground_height(mid + vec2<f32>(size, 0.0));
         let hu = ground_height(mid - vec2<f32>(0.0, size));
         let hd = ground_height(mid + vec2<f32>(0.0, size));
-        normal = normalize(vec3<f32>(-(hr - hl) / (2.0 * size * stride), 1.0, -(hd - hu) / (2.0 * size * stride)));
+        if (hit.normal.y > 0.5) {
+            normal = normalize(vec3<f32>(-(hr - hl) / (2.0 * size * stride), 1.0, -(hd - hu) / (2.0 * size * stride)));
+        }
     }
     let world = vec3<f32>(p.x * stride + terrain.origin.x, p.y, p.z * stride + terrain.origin.y);
     if (GAME_LOOK) {

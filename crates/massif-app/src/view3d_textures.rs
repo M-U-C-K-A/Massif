@@ -296,3 +296,45 @@ fn the_games_textures_in_the_views_look() {
         }
     }
 }
+
+/// The map's sides (MASSIF_SNAPSHOT_DIR): a grassy map of mountains seen
+/// whole, from as far as the 3D view frames it, and one of its sides up
+/// close, flat and textured, at one and two pixels a point. A side is the
+/// section through the land: its top block, the soil under it, the rock
+/// down to the bottom of the world (no streaks of the tops' colours).
+#[test]
+fn the_maps_sides() {
+    let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+        return;
+    };
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+        eprintln!("no GPU adapter: skipping");
+        return;
+    };
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor { required_limits: adapter.limits(), ..Default::default() })).unwrap();
+    let Some(Ok(cat)) = massif_assets::load_newest() else {
+        eprintln!("Minecraft is not installed here: skipping");
+        return;
+    };
+    let world = generate(&GenParams { tiles_x: 6, tiles_z: 6, landform: Landform::Mountains, seed: 3, ..GenParams::default() });
+    let mut sc = scene(&device, &queue, "sides", world, &cat, Some((0, 0)));
+    let dim = &sc.world.dims[0];
+    let (lo, hi) = dim.bounds().unwrap();
+    let (x0, z1) = (lo.x * TILE_SIZE, (hi.z + 1) * TILE_SIZE);
+    let x1 = (hi.x + 1) * TILE_SIZE;
+    let cx = (x0 + x1) / 2;
+    let top = ground(dim, cx, z1 - 1);
+    let whole = Camera { target: [cx as f64, 64.0, ((lo.z * TILE_SIZE + z1) / 2) as f64], yaw: 0.65, pitch: 0.42, distance: 1250.0 };
+    // Outside the south side, looking at it, a little from one side.
+    let side = Camera { target: [cx as f64, (top + dim.min_y as f64) / 2.0, z1 as f64], yaw: 0.35, pitch: 0.12, distance: 170.0 };
+    for (name, camera) in [("whole", whole), ("side", side)] {
+        for ppp in [1u32, 2] {
+            let size = [1600 * ppp, 1000 * ppp];
+            let flat = sc.draw(&camera, size, false, true, true, false).0.unwrap();
+            let textured = sc.draw(&camera, size, true, true, true, false).0.unwrap();
+            let (w, h, rgba) = side_by_side(&flat, &textured);
+            image::save_buffer(dir.join(format!("sides-{name}-{ppp}x.png")), &rgba, w, h, image::ColorType::Rgba8).unwrap();
+        }
+    }
+}
