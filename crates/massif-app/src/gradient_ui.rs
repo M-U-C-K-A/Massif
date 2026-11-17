@@ -219,7 +219,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
     );
     ui.add_space(4.0);
     let g = tools.gradient.gradient.clone();
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(&g.name).strong());
         ui.label(RichText::new(tr!("{n} blocks", n = format!("{:.0}", g.total()))).size(11.5).color(pal.weak));
     });

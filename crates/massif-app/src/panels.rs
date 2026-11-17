@@ -2223,8 +2223,13 @@ pub fn cover_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
         hint(ui, tr!("Nothing grows yet: add a block."));
     }
     ui.add_space(6.0);
-    if ui
-        .add(egui::Button::new(RichText::new(theme::with_icon(Icon::Trash2, tr!("Remove this cover"))).color(pal.danger)).truncate())
+    // Its frame inside the panel's edge, the words cut to fit.
+    let remove = ui.scope(|ui| {
+        ui.set_max_width(ui.available_width() - 2.0);
+        ui.add(egui::Button::new(RichText::new(theme::with_icon(Icon::Trash2, tr!("Remove this cover"))).color(pal.danger)).truncate())
+    });
+    if remove
+        .inner
         .on_hover_text(tr!("Nothing grows where it was painted any more"))
         .clicked()
     {

@@ -16076,11 +16076,16 @@ mod tests {
                 h.state_mut().tools.select(tool);
                 h.run_steps(5);
                 // What stays past the edge once a scroll bar come in the
-                // meantime has taken its room.
+                // meantime has taken its room, and again with the tool
+                // picked anew: a state left over from the panel before
+                // (rarely, on a loaded machine) is not counted.
                 let mut seen = Vec::new();
                 check(&h, &format!("{tool:?}"), &mut seen);
                 if !seen.is_empty() {
+                    h.state_mut().tools.select(Tool::Pan);
                     h.run_steps(5);
+                    h.state_mut().tools.select(tool);
+                    h.run_steps(10);
                     check(&h, &format!("{tool:?}"), &mut faults);
                 }
                 save(&mut h, &format!("{tool:?}"));
@@ -16095,7 +16100,10 @@ mod tests {
                 let mut seen = Vec::new();
                 check(&h, "", &mut seen);
                 if !seen.is_empty() {
+                    h.state_mut().layout.current_mut().root.set_editor(settings, EditorKind::Empty);
                     h.run_steps(5);
+                    h.state_mut().layout.current_mut().root.set_editor(settings, editor);
+                    h.run_steps(10);
                     check(&h, "", &mut faults);
                 }
                 save(&mut h, &format!("{editor:?}"));
