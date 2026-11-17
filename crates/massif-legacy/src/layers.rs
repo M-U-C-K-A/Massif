@@ -58,13 +58,16 @@ pub enum Conv {
     Biome(u16),
     /// A layer of underground pockets, by number.
     Pockets(u16),
+    /// WorldPainter's River: a river dug where painted, once the whole
+    /// dimension is read.
+    River,
 }
 
 impl Conv {
     /// Whether it is applied once the whole dimension is read, rather than
     /// tile by tile.
     pub fn after(self) -> bool {
-        matches!(self, Conv::Caves(_) | Conv::GroundCover(_) | Conv::Tunnel(_))
+        matches!(self, Conv::Caves(_) | Conv::GroundCover(_) | Conv::Tunnel(_) | Conv::River)
     }
 }
 
@@ -199,6 +202,7 @@ impl Converter {
             "Caverns" => vec![(Conv::Caves(CaveKind::Caverns), 1.0)],
             "Chasms" => vec![(Conv::Caves(CaveKind::Chasms), 1.0)],
             "Caves" => vec![(Conv::Caves(CaveKind::Tunnels), 1.0)],
+            "River" => vec![(Conv::River, 1.0)],
             "groundcover.GroundCoverLayer" => {
                 let blocks = match arena.field(key, "mixedMaterial").filter(|m| *m != Value::Null).and_then(|m| crate::worldpainter::read_mixed(arena, m)) {
                     Some(mixed) if !mixed.rows.is_empty() => mixed.rows,
@@ -581,6 +585,12 @@ pub fn apply_after(dim: &mut Dimension, painted: &[(TilePos, After)], conv: &Con
         }
     }
 
+    // Rivers, dug into the ground where painted.
+    let rivers: Vec<(TilePos, &Vec<u8>)> = of(Conv::River).collect();
+    if !rivers.is_empty() {
+        dig_painted_rivers(dim, &rivers, reg, seed);
+    }
+
     // Tunnels: a level each.
     for (k, tunnel) in conv.tunnels.iter().enumerate() {
         let tiles: Vec<(TilePos, &Vec<u8>)> = of(Conv::Tunnel(k as u16)).collect();
@@ -657,6 +667,174 @@ pub fn apply_after(dim: &mut Dimension, painted: &[(TilePos, After)], conv: &Con
     }
     dim.ground_mut().take_dirty();
     dim.voxels.take_dirty();
+    // What was changed here is kept as it will be saved.
+    for level in &mut dim.levels {
+        level.freeze();
+    }
+}
+
+/// WorldPainter's River layer, dug as its exporter digs it (RiverExporter,
+/// whose settings are fixed): the water's surface two blocks under the
+/// ground, and the bed four to seven blocks under it, its depth wandering
+/// with a fine noise and shallower towards the edges of what is painted,
+/// as many blocks deep as the column lies from the nearest column not
+/// painted. In water already there (a lake painted over), only the bed is
+/// dug, under that water. Where a river comes within ten blocks of water
+/// that was there before (a lake, the sea) lying higher than its own, its
+/// water rises to that water's level, so that it joins it without a wall.
+/// Its bed is Massif's rivers': gravel, sand where the water is under two
+/// blocks deep, clay in patches (WorldPainter's own riverbed is a mix of
+/// grass, gravel, clay and stone); the river biome where painted.
+pub fn dig_painted_rivers(dim: &mut Dimension, tiles: &[(TilePos, &Vec<u8>)], reg: &mut Registry, seed: i64) {
+    use massif_core::compose::block_top;
+    use massif_core::coords::local_index;
+    const SHORE: i32 = 2;
+    const MAX_DEPTH: i32 = SHORE + 7;
+    const VARIATION: i32 = 7 - 4;
+    const REACH: i32 = 10;
+    const N: i32 = 128 + 2 * REACH;
+    let painted: HashMap<TilePos, &Vec<u8>> = tiles.iter().map(|(p, s)| (*p, *s)).collect();
+    let river = |x: i32, z: i32| painted.get(&TilePos::containing(x, z)).is_some_and(|s| s[local_index(x, z)] > 0);
+    let (gravel, sand, clay) = (reg.terrain_by_name("Gravel"), reg.terrain_by_name("Sand"), reg.terrain_by_name("Clay"));
+    let biome = reg.biome_by_id("minecraft:river");
+    let floor = massif_core::noise::Noise::new((seed as u64) ^ 0x7269_7665);
+    let patches = massif_core::noise::Noise::new((seed as u64) ^ 0x636c_6179);
+    // What each painted tile becomes, worked out from the map as it was.
+    type Dug = (TilePos, Vec<(usize, f32, i16, Option<u16>)>);
+    let ground = dim.ground();
+    let mut views: HashMap<TilePos, Option<massif_core::level::TileRef>> = HashMap::new();
+    let mut work: Vec<Dug> = Vec::new();
+    for &(pos, _) in tiles {
+        let (ox, oz) = pos.origin();
+        let (x0, z0) = (ox - REACH, oz - REACH);
+        let mut column = |x: i32, z: i32| -> Option<(f32, i16)> {
+            let p = TilePos::containing(x, z);
+            let t = views.entry(p).or_insert_with(|| ground.view(p)).as_ref()?;
+            let i = local_index(x, z);
+            t.present(i).then(|| (t.top.get(i), t.fluid.get(i)))
+        };
+        // Blocks to the nearest column not painted, up to the deepest a
+        // river digs (two passes of a chamfer: 1 along, 1.4 across).
+        let (n, big) = (N as usize, MAX_DEPTH as f32 + 1.0);
+        let mut dist = vec![0.0f32; n * n];
+        for j in 0..n {
+            for i in 0..n {
+                if river(x0 + i as i32, z0 + j as i32) {
+                    dist[j * n + i] = big;
+                }
+            }
+        }
+        for j in 0..n {
+            for i in 0..n {
+                let c = j * n + i;
+                if dist[c] == 0.0 {
+                    continue;
+                }
+                let mut d = dist[c];
+                if i > 0 { d = d.min(dist[c - 1] + 1.0); } else { d = d.min(1.0); }
+                if j > 0 { d = d.min(dist[c - n] + 1.0); } else { d = d.min(1.0); }
+                if i > 0 && j > 0 { d = d.min(dist[c - n - 1] + 1.4); }
+                if i + 1 < n && j > 0 { d = d.min(dist[c - n + 1] + 1.4); }
+                dist[c] = d;
+            }
+        }
+        for j in (0..n).rev() {
+            for i in (0..n).rev() {
+                let c = j * n + i;
+                if dist[c] == 0.0 {
+                    continue;
+                }
+                let mut d = dist[c];
+                if i + 1 < n { d = d.min(dist[c + 1] + 1.0); } else { d = d.min(1.0); }
+                if j + 1 < n { d = d.min(dist[c + n] + 1.0); } else { d = d.min(1.0); }
+                if i + 1 < n && j + 1 < n { d = d.min(dist[c + n + 1] + 1.4); }
+                if i > 0 && j + 1 < n { d = d.min(dist[c + n - 1] + 1.4); }
+                dist[c] = d;
+            }
+        }
+        // The water standing there before, not painted: what a river within
+        // ten blocks joins.
+        let mut body = vec![NO_FLUID; n * n];
+        for j in 0..n {
+            for i in 0..n {
+                let (x, z) = (x0 + i as i32, z0 + j as i32);
+                if !river(x, z)
+                    && let Some((top, fluid)) = column(x, z)
+                    && fluid != NO_FLUID
+                    && fluid as i32 > block_top(top)
+                {
+                    body[j * n + i] = fluid;
+                }
+            }
+        }
+        let mut cells = Vec::new();
+        for lz in 0..128 {
+            for lx in 0..128 {
+                let (x, z) = (ox + lx, oz + lz);
+                if !river(x, z) {
+                    continue;
+                }
+                let Some((top, fluid)) = column(x, z) else { continue };
+                let c = (lz + REACH) as usize * n + (lx + REACH) as usize;
+                let wander = ((floor.get(x as f64 / 4.099, z as f64 / 4.099) * 0.5 + 0.5).clamp(0.0, 1.0) * VARIATION as f64).round() as i32;
+                let depth = (dist[c] as i32).max(1).min(MAX_DEPTH - wander);
+                let height = block_top(top) - 1;
+                let flooded = fluid != NO_FLUID && fluid as i32 > block_top(top);
+                let (mut new_top, mut new_fluid) = if flooded {
+                    // Already under water: the bed dug under it.
+                    (((fluid as i32 - depth) as f32).min(top), fluid)
+                } else {
+                    let bed = (height - depth + 1) as f32;
+                    let water = height - SHORE + 1;
+                    (bed.min(top), if water > block_top(bed) { water as i16 } else { NO_FLUID })
+                };
+                // Water there before, higher, within ten blocks: joined.
+                let mut joined = NO_FLUID;
+                for dz in -REACH..=REACH {
+                    for dx in -REACH..=REACH {
+                        if dx * dx + dz * dz > REACH * REACH {
+                            continue;
+                        }
+                        let b = body[(lz + REACH + dz) as usize * n + (lx + REACH + dx) as usize];
+                        if b != NO_FLUID && (joined == NO_FLUID || b > joined) {
+                            joined = b;
+                        }
+                    }
+                }
+                if joined != NO_FLUID && joined as i32 > block_top(new_top) && (new_fluid == NO_FLUID || joined > new_fluid) {
+                    new_fluid = joined;
+                }
+                new_top = new_top.min(top);
+                let terrain = (new_fluid != NO_FLUID && new_fluid as i32 > block_top(new_top)).then(|| {
+                    let deep = new_fluid as i32 - block_top(new_top);
+                    if deep < 2 {
+                        sand.or(gravel)
+                    } else if patches.fbm(x as f64 / 9.0, z as f64 / 9.0, 2, 2.0, 0.5) > 0.35 {
+                        clay.or(gravel)
+                    } else {
+                        gravel
+                    }
+                });
+                cells.push((local_index(x, z), new_top, new_fluid, terrain.flatten().map(|t| t.0)));
+            }
+        }
+        work.push((pos, cells));
+    }
+    drop(views);
+    for (pos, cells) in work {
+        let Some(tile) = dim.ground_mut().tile_mut(pos) else { continue };
+        for (i, top, fluid, terrain) in cells {
+            tile.top.set(i, top);
+            tile.fluid.set(i, fluid);
+            if let Some(t) = terrain {
+                tile.terrain.set(i, t);
+            }
+            if let Some(b) = biome {
+                tile.biome.set(i, b.0);
+            }
+        }
+        tile.compact();
+    }
 }
 
 /// The terrain of a custom ground cover over terrain `base`: the cover's
@@ -1254,6 +1432,52 @@ mod tests {
         assert_eq!(def.blocks.iter().map(|&(b, w)| (reg.block(b).state.as_str(), w)).collect::<Vec<_>>(), [("minecraft:gravel", 1)]);
         assert_eq!((def.share, def.low, def.high), (0.2, -30, 60));
         assert!((def.size - 4.099 * 1.5).abs() < 1e-4, "{}", def.size);
+    }
+
+    /// WorldPainter's River layer dug as WorldPainter's exporter digs it:
+    /// across a band painted 20 blocks wide over flat ground at 80, the
+    /// water two blocks under the ground in the middle over a bed six to
+    /// nine blocks down, dry and shallow at its edges, gravel or sand under
+    /// the water and the river biome where painted; within ten blocks of a
+    /// lake standing higher, the river's water rises to the lake's.
+    #[test]
+    fn worldpainters_river_layer_is_dug() {
+        use massif_core::coords::local_index;
+        use massif_core::world::{DimensionKind, World, WorldMeta};
+        let mut world = World::new(WorldMeta::default());
+        let mut dim = Dimension::new(DimensionKind::Overworld, -64, 320);
+        let grass = world.registry.terrain_by_name("Grass").unwrap().0;
+        let mut tile = Tile::ground(81.0, grass, NO_FLUID);
+        // A lake at 90 over ground at 79 in the corner x, z < 8.
+        for z in 0..8 {
+            for x in 0..8 {
+                tile.top.set(local_index(x, z), 79.0);
+                tile.fluid.set(local_index(x, z), 90);
+            }
+        }
+        dim.ground_mut().insert(TilePos::new(0, 0), tile);
+        // A band 20 wide along z = 50..70, and a short one by the lake.
+        let painted_at = |x: i32, z: i32| (50..70).contains(&z) || ((10..16).contains(&x) && z < 20);
+        let band: Vec<u8> = (0..massif_core::TILE_AREA).map(|i| if painted_at((i & 127) as i32, (i >> 7) as i32) { 255 } else { 0 }).collect();
+        let painted = vec![(TilePos::new(0, 0), vec![(Conv::River, band)])];
+        apply_after(&mut dim, &painted, &Converter::default(), &mut world.registry, 7, 63);
+        let reg = &world.registry;
+        let t = dim.ground().view(TilePos::new(0, 0)).unwrap();
+        let column = |x: i32, z: i32| (massif_core::compose::block_top(t.top.get(local_index(x, z))) - 1, t.fluid.get(local_index(x, z)));
+        // In the middle: the water's top block at 78, the bed 6 to 9 down.
+        let (bed, fluid) = column(64, 60);
+        assert_eq!(fluid, 79, "the water two blocks under the ground");
+        assert!((71..=74).contains(&bed), "bed at {bed}");
+        let terrain = reg.terrain(TerrainId(t.terrain.get(local_index(64, 60)))).name.clone();
+        assert!(terrain == "Gravel" || terrain == "Clay", "{terrain}");
+        assert_eq!(reg.biome(massif_core::registry::BiomeId(t.biome.get(local_index(64, 60)))).id, "minecraft:river");
+        // At its edge: a block or two dug, no water.
+        let (edge, dry) = column(64, 50);
+        assert!((78..=79).contains(&edge) && dry == NO_FLUID, "{edge} {dry}");
+        // Not painted: as it was.
+        assert_eq!(column(64, 40), (80, NO_FLUID));
+        // By the lake: its water at the lake's level.
+        assert_eq!(column(13, 10).1, 90);
     }
 
     /// Custom ground covers, tunnels and caves applied to a dimension:

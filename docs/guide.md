@@ -1016,7 +1016,7 @@ riches lying around.
 | Custom ground cover layers | Terrains with strata | Converted: a terrain of the cover's blocks over each terrain it lies on ("Snow Block on Grass"), the land raised by the cover's thickness, or the top of the land replaced for a negative thickness; its edges are sheer |
 | Combined layers | Combined layers | Converted: a combined layer of the same layers (its terrain, biome, covers, trees and pockets) at their factors, to paint on with; where it was painted, the layers it holds, each as strong as its factor, and its terrain and biome where painted at half strength or more |
 | Underground pockets | Underground pockets | Converted: a pocket layer of the same blocks (its material, its mixed material, or its terrain's blocks), as frequent and as large, between the same heights |
-| River | Rivers | Not yet |
+| River | A river dug into the ground | Converted: dug where painted as WorldPainter's export digs it (its water two blocks under the ground, its bed four to seven blocks under the water, shallower towards the edges of what is painted, under water already there only its bed), joining a lake or the sea within ten blocks at its level; its bed is Massif's rivers' (gravel, sand in the shallows, clay in patches) rather than WorldPainter's mix of grass, gravel, clay and stone, with the river biome. Exported, its ground and water match WorldPainter's own export to the block in 78 columns of 80 checked, the other two a block apart |
 | Populate, Read Only | — (Massif writes finished chunks, and merges none) | Left out |
 
 The import's report says which layers became what, and lists those it
