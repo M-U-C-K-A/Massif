@@ -209,7 +209,7 @@ fn ground_on_top(pos: TilePos, tile: &Tile, others: &Others<'_>) -> Option<Vec<b
 /// must be the ground). `sea` is the world's; `bed`, the terrain of the
 /// beds rivers dig. Writes the heights, water and terrains of the columns
 /// it changes; stops between tiles if `steps` is cancelled.
-pub fn reshape_ground(edit: &mut Edit, op: &Reshape, sea: i32, bed: Option<TerrainId>, steps: &Steps) -> Changes {
+pub fn reshape_ground(edit: &mut Edit, op: &Reshape, sea: i32, bed: Option<TerrainId>, shore: Option<TerrainId>, steps: &Steps) -> Changes {
     // Only the tiles of the selection, when there is one.
     let selection = edit.dim().selection.clone();
     let positions: Vec<TilePos> = edit.level().positions().filter(|p| selection.as_ref().is_none_or(|s| s.tile(*p).is_some())).collect();
@@ -292,9 +292,19 @@ pub fn reshape_ground(edit: &mut Edit, op: &Reshape, sea: i32, bed: Option<Terra
                             }
                             if let (Some(beds), Some(bed)) = (beds, bed) {
                                 let dither = hash2(x, z, 0xbed5) as f32 / u32::MAX as f32;
-                                if beds.sample(u, v) > dither.max(0.05) && tile.terrain.get(i) != bed.0 && lets(x, z) {
-                                    tile.terrain.set(i, bed.0);
-                                    moved = true;
+                                // Only under the water: gravel in its
+                                // depths, sand in its shallows and in its
+                                // channel under the sea; the banks keep
+                                // their ground.
+                                let fluid = tile.fluid.get(i);
+                                let depth = if fluid != crate::tile::NO_FLUID { fluid as f32 - new } else { 0.0 };
+                                if beds.sample(u, v) > dither.max(0.05) && depth > 0.3 && lets(x, z) {
+                                    let river = water.as_ref().is_some_and(|w| w.at(u.round().max(0.0) as usize, v.round().max(0.0) as usize) != NO_WATER);
+                                    let terrain = if !river || depth < 1.6 { shore.unwrap_or(bed) } else { bed };
+                                    if tile.terrain.get(i) != terrain.0 {
+                                        tile.terrain.set(i, terrain.0);
+                                        moved = true;
+                                    }
                                 }
                             }
                             new
@@ -393,9 +403,10 @@ mod tests {
 
     fn run(world: &mut World, op: &Reshape, steps: &Steps) -> Changes {
         let bed = world.registry.terrain_by_name("Gravel");
+        let shore = world.registry.terrain_by_name("Sand");
         let mut history = History::new(2);
         history.begin(op.label(), 0);
-        reshape_ground(&mut history.edit(world, 0), op, SEA, bed, steps)
+        reshape_ground(&mut history.edit(world, 0), op, SEA, bed, shore, steps)
     }
 
     fn column(world: &World, x: i32, z: i32) -> (f32, i16, u16) {

@@ -385,6 +385,7 @@ mod tests {
         let world = massif_format::load(std::path::Path::new(&path)).expect("the world loads");
         let sea = world.meta.sea_level;
         let bed = world.registry.terrain_by_name("Gravel");
+        let shore = world.registry.terrain_by_name("Sand");
         let mut dim = world.dims[0].clone();
         let form = ReshapeForm::new(WholeOp::Erosion, dim.snapshot(), sea);
         for what in WholeOp::ALL {
@@ -392,7 +393,7 @@ mod tests {
             let started = std::time::Instant::now();
             let mut history = massif_core::history::History::new(1);
             history.begin(what.label(), 0);
-            let changes = massif_core::graph::reshape_ground(&mut history.edit(&mut w, 0), &what.start(sea as f32, form.side), sea, bed, &Steps::default());
+            let changes = massif_core::graph::reshape_ground(&mut history.edit(&mut w, 0), &what.start(sea as f32, form.side), sea, bed, shore, &Steps::default());
             eprintln!("{}: {} columns in {} tiles, {:.2} s", what.label(), changes.columns, changes.tiles.len(), started.elapsed().as_secs_f32());
             assert!(!changes.cancelled);
         }

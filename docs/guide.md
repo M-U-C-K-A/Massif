@@ -696,8 +696,14 @@ map, without opening the graph:
   it can hold — scree at the feet of cliffs, softer ridges.
 - **Rivers**: traced where the water of the whole map runs, dug into the
   bottoms of the valleys, wider downstream, with their lakes, keeping to
-  the water already on the map; their beds in gravel. Down steep valleys
-  they fall from pool to pool, as the River tool's do.
+  the water already on the map. They are shaped as the River tool's: down
+  steep valleys they fall from pool to pool, narrower and in a V; on gentle
+  ground they run wider over a flat bed; their width wanders a little; their
+  banks open out into a valley where they lie deep under the land; and into
+  the sea their channel goes on under the water, fading into the floor.
+  Under their water the bed is gravel, sand in the shallows (under a block
+  and a half of water) and in the channels under the sea; the banks keep
+  their ground.
 - **Lakes**: water fills the hollows up to where they spill (with **Fill**,
   their ground rises instead).
 - **Smooth**, **Sharpen**, **Terraces** (flat steps over the whole height

@@ -392,7 +392,9 @@ impl Job {
             let sea = snapshot.meta.sea_level;
             let mut history = massif_core::history::History::new(1);
             history.begin(label, dim);
-            let changes = massif_core::graph::reshape_ground(&mut history.edit(&mut snapshot, 0), &op, sea, bed, &p);
+            // Sand in the shallows, wherever the beds are painted.
+            let shore = bed.and_then(|_| snapshot.registry.terrain_by_name("Sand"));
+            let changes = massif_core::graph::reshape_ground(&mut history.edit(&mut snapshot, 0), &op, sea, bed, shore, &p);
             drop(history);
             if changes.cancelled {
                 return Outcome::Cancelled;

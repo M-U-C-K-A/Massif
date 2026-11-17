@@ -448,6 +448,7 @@ fn cmd_rivers(mut args: Args) -> Res<()> {
     let mut world = massif_format::load(&path).map_err(|e| e.to_string())?;
     let sea = world.meta.sea_level;
     let bed = world.registry.terrain_by_name("Gravel");
+    let shore = world.registry.terrain_by_name("Sand");
     let side = world.dims[0].ground().positions().fold((i32::MAX, i32::MIN), |(a, b), p| (a.min(p.x), b.max(p.x)));
     let f = (((side.1 - side.0 + 1) * 128) as f32 / 2048.0).clamp(0.5, 3.0);
     let op = massif_core::graph::Reshape::Filter(massif_core::graph::NodeKind::Rivers {
@@ -461,7 +462,7 @@ fn cmd_rivers(mut args: Args) -> Res<()> {
     let started = Instant::now();
     let mut history = massif_core::history::History::new(1);
     history.begin("Rivers", 0);
-    let changes = massif_core::graph::reshape_ground(&mut history.edit(&mut world, 0), &op, sea, bed, &massif_core::auto::Steps::default());
+    let changes = massif_core::graph::reshape_ground(&mut history.edit(&mut world, 0), &op, sea, bed, shore, &massif_core::auto::Steps::default());
     eprintln!("rivers: {} columns in {} tiles, {:.2} s", changes.columns, changes.tiles.len(), started.elapsed().as_secs_f32());
     massif_format::save(&world.snapshot(), &out).map_err(|e| e.to_string())?;
     Ok(())

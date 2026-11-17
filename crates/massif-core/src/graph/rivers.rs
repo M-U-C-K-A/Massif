@@ -174,6 +174,16 @@ struct Point {
     level: f32,
     /// In water already on the map: nothing is dug there.
     held: bool,
+    /// The shape of its bed across: the depth goes as 1 − t^shape from
+    /// the middle (t = 0) to the edge (t = 1): flat with rounded sides
+    /// (3) to a V (1.2).
+    shape: f32,
+    /// The width of its banks, in samples.
+    bank: f32,
+    /// Under the sea: its channel goes on there, cut `cut` blocks into the
+    /// floor.
+    sea: bool,
+    cut: f32,
 }
 
 /// A moving average of the points' positions, its ends left where they are.
@@ -244,6 +254,65 @@ fn resample(points: &[Point], step: f32) -> Vec<Point> {
                     ..Point::default()
                 });
             }
+        }
+    }
+    out
+}
+
+/// The way a river's channel goes on under the sea from the end of `line`
+/// (points `step` samples apart, `spacing` blocks between samples of `f`):
+/// down the sea floor, keeping more or less to its heading, until the floor
+/// lies as deep as its bed under the `sea` (the channel has faded into it),
+/// it comes to land again, it leaves the relief, or it has run six times
+/// its width (24 to 128 blocks). As the River tool's.
+fn under_sea(f: &Field, line: &[Point], sea: f32, step: f32, spacing: f32) -> Vec<(f32, f32)> {
+    let n = line.len();
+    let last = line[n - 1];
+    let back = line[n.saturating_sub(1 + (8.0 / (step * spacing)).ceil() as usize)];
+    let (mut hx, mut hy) = (last.x - back.x, last.y - back.y);
+    let l = hx.hypot(hy);
+    if l < 1e-3 {
+        return Vec::new();
+    }
+    (hx, hy) = (hx / l, hy / l);
+    let bed = sea - last.depth;
+    let longest = (12.0 * last.hw * spacing).clamp(24.0, 128.0) / spacing;
+    let ahead = 4.0 / spacing;
+    let inside = |x: f32, y: f32| x >= 0.0 && y >= 0.0 && x <= (f.n - 1) as f32 && y <= (f.n - 1) as f32;
+    let (mut x, mut y) = (last.x, last.y);
+    let mut out = Vec::new();
+    let mut run = 0.0;
+    while run < longest {
+        let mut best: Option<(f32, (f32, f32))> = None;
+        for a in [-0.5f32, -0.25, 0.0, 0.25, 0.5] {
+            let (s, c) = a.sin_cos();
+            let (dx, dy) = (hx * c - hy * s, hx * s + hy * c);
+            let (ax, ay) = (x + ahead * dx, y + ahead * dy);
+            if !inside(ax, ay) {
+                continue;
+            }
+            let score = f.sample(ax, ay) + 0.8 * a.abs();
+            if best.is_none_or(|b| score < b.0) {
+                best = Some((score, (dx, dy)));
+            }
+        }
+        let Some((_, (dx, dy))) = best else { break };
+        let (nx, ny) = (0.8 * hx + 0.2 * dx, 0.8 * hy + 0.2 * dy);
+        let nl = nx.hypot(ny).max(1e-6);
+        (hx, hy) = (nx / nl, ny / nl);
+        x += hx * step;
+        y += hy * step;
+        run += step;
+        if !inside(x, y) {
+            break;
+        }
+        let h = f.sample(x, y);
+        if h > sea + 0.5 {
+            break;
+        }
+        out.push((x, y));
+        if h < bed - 1.0 {
+            break;
         }
     }
     out
@@ -441,6 +510,7 @@ pub(super) fn rivers(f: &Field, existing: Option<&Field>, spacing: f32, p: River
     }
     let step = (0.5 * k).clamp(0.75, 2.0);
     let bank_of = |hw: f32| (p.banks.max(0.0) * 2.0 * hw).max(1.0);
+    let wobble = Noise::new(0x71de_5a17);
     let mut lines: Vec<Vec<Point>> = vec![Vec::new(); stems.len()];
     // Where along its parent each river ends: the index of the point.
     for (id, stem) in stems.iter().enumerate() {
@@ -529,6 +599,26 @@ pub(super) fn rivers(f: &Field, existing: Option<&Field>, spacing: f32, p: River
         }
         smooth_value(&mut line, 6, |q| q.hw, |q, v| q.hw = v);
         smooth_value(&mut line, 6, |q| q.depth, |q, v| q.depth = v);
+        // Its shape follows the land, as the River tool's: how steep the
+        // land is over 16 blocks either way, 0 on the flat to 1 from a
+        // grade of 12 %; narrower, shallower and in a V where steep, a
+        // little wider over a flat bed on the flat, its width wandering by
+        // a tenth over some fifty blocks.
+        let ground_at: Vec<f32> = line.iter().map(|q| f.sample(q.x, q.y)).collect();
+        let along = (16.0 / (step * spacing)).ceil().max(1.0) as usize;
+        let steep: Vec<f32> = (0..line.len())
+            .map(|i| {
+                let (a, b) = (i.saturating_sub(along), (i + along).min(line.len() - 1));
+                let run = ((b - a) as f32 * step * spacing).max(1.0);
+                ((ground_at[a] - ground_at[b]) / run / 0.12).clamp(0.0, 1.0)
+            })
+            .collect();
+        for (i, q) in line.iter_mut().enumerate() {
+            let wander = 1.0 + 0.12 * wobble.fbm(i as f64 * (step * spacing) as f64 / 48.0, id as f64 * 7.31, 2, 2.0, 0.5) as f32;
+            q.hw = (q.hw * (1.1 - 0.35 * steep[i]) * wander).max(0.55);
+            q.depth = (q.depth * (1.0 - 0.25 * steep[i])).max(1.0);
+            q.shape = 3.0 - 1.8 * steep[i];
+        }
         // Its water: under the lowest ground around it, a little under its
         // banks, never going up; the lake's level in the hollows it fills.
         let mut level = f32::MAX;
@@ -580,6 +670,36 @@ pub(super) fn rivers(f: &Field, existing: Option<&Field>, spacing: f32, p: River
             q.level = l;
             q.depth += d;
         }
+        // Its banks: as wide as set at least, and two and a half times as
+        // far as the river lies under the land around it (48 blocks at
+        // most): a valley sloping down to the water, not a trench.
+        for (q, g) in line.iter_mut().zip(&ground_at) {
+            q.bank = bank_of(q.hw).max((2.5 * (g - q.level)).clamp(0.0, 48.0) / spacing);
+        }
+        // Into the sea, its channel goes on under the water, down the sea
+        // floor, fading into it.
+        if stem.parent.is_none() && stem.mouth.is_some() && sea != NO_WATER && line.len() > 2 {
+            let tail = under_sea(f, &line, sea, step, spacing);
+            let count = tail.len();
+            let last = *line.last().expect("a line");
+            let bed = sea - last.depth;
+            for (k, (x, y)) in tail.into_iter().enumerate() {
+                let out = (k + 1) as f32 / count as f32;
+                line.push(Point {
+                    x,
+                    y,
+                    area: last.area,
+                    hw: last.hw * (1.0 + 0.3 * out),
+                    depth: last.depth,
+                    level: sea,
+                    held: false,
+                    shape: 2.0,
+                    bank: 0.0,
+                    sea: true,
+                    cut: (f.sample(x, y) - bed).max(0.0) * (1.0 - out),
+                });
+            }
+        }
         lines[id] = line;
     }
 
@@ -591,7 +711,7 @@ pub(super) fn rivers(f: &Field, existing: Option<&Field>, spacing: f32, p: River
             if w[0].held && w[1].held {
                 continue;
             }
-            let bank = bank_of(w[0].hw.max(w[1].hw));
+            let bank = w[0].bank.max(w[1].bank);
             segments.push(Segment { a: w[0], b: w[1], bank });
         }
     }
@@ -642,10 +762,20 @@ pub(super) fn rivers(f: &Field, existing: Option<&Field>, spacing: f32, p: River
                             continue;
                         }
                         let level = lerp(seg.a.level, seg.b.level);
+                        if seg.a.sea || seg.b.sea {
+                            // Under the sea: a channel cut into the floor,
+                            // fading out; the sea's water over it.
+                            if dist < hw {
+                                let t = dist / hw;
+                                bed = bed.min(ground - lerp(seg.a.cut, seg.b.cut) * (1.0 - t * t));
+                                mk = 1.0;
+                            }
+                            continue;
+                        }
                         if dist < hw {
-                            // A bed with a flat bottom, steeper at its sides.
+                            // Its bed, as the land shapes it.
                             let t = dist / hw;
-                            bed = bed.min(level - lerp(seg.a.depth, seg.b.depth) * (1.0 - t.powf(2.5)));
+                            bed = bed.min(level - lerp(seg.a.depth, seg.b.depth) * (1.0 - t.powf(lerp(seg.a.shape, seg.b.shape))));
                             mk = 1.0;
                             if t < inside {
                                 inside = t;

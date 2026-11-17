@@ -10867,6 +10867,68 @@ mod tests {
         image::save_buffer(dir.join("real-river-tool-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
     }
 
+    /// Views of a map as it is (MASSIF_RIVER_WORLD), for the eye: the 2D map
+    /// centred on the first view, and a 3D view for each of MASSIF_VIEWS
+    /// ("x,z,distance,pitch,yaw;…", the camera's target on the ground at x,
+    /// z), saved as map-view.png and view-1.png… (MASSIF_SNAPSHOT_DIR).
+    #[test]
+    fn views_of_a_real_world() {
+        let (Some(dir), Some(path), Some(views)) = (
+            std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from),
+            std::env::var_os("MASSIF_RIVER_WORLD").map(PathBuf::from),
+            std::env::var("MASSIF_VIEWS").ok(),
+        ) else {
+            return;
+        };
+        let views: Vec<[f32; 5]> = views
+            .split(';')
+            .filter_map(|v| {
+                let n: Vec<f32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                (n.len() == 5).then(|| [n[0], n[1], n[2], n[3], n[4]])
+            })
+            .collect();
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let ctx = h.ctx.clone();
+        h.state_mut().jobs.push(Job::open(&ctx, path));
+        while !h.state().jobs.is_empty() {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        h.run_steps(10);
+        h.state_mut().dialog = None;
+        if let Some(v) = views.first() {
+            for m in h.state_mut().maps.values_mut() {
+                m.center = [v[0] as f64, v[1] as f64];
+                m.zoom = 1.0;
+            }
+        }
+        h.run_steps(10);
+        h.render().unwrap().save(dir.join("map-view.png")).unwrap();
+        for (k, v) in views.iter().enumerate() {
+            {
+                let app = h.state_mut();
+                let y = crate::tools::probe(&app.doc, v[0] as i32, v[1] as i32).map_or(80.0, |p| p.height);
+                app.layout.activate(3);
+                app.view3d.camera.target = [v[0] as f64, y as f64, v[1] as f64];
+                app.view3d.camera.distance = v[2];
+                app.view3d.camera.pitch = v[3];
+                app.view3d.camera.yaw = v[4];
+            }
+            let mut quiet = 0;
+            for _ in 0..1500 {
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(15));
+                quiet = if h.state().view3d.pending() == 0 { quiet + 1 } else { 0 };
+                if quiet >= 40 {
+                    break;
+                }
+            }
+            let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+            image::save_buffer(dir.join(format!("view-{}.png", k + 1)), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+        }
+    }
+
     /// A river from a source high on a steep slope of a real map
     /// (MASSIF_RIVER_WORLD, "Continent and islands" or the part of it
     /// around (-102, -1607)), down to the sea: the 2D map and two 3D views of
