@@ -16699,11 +16699,13 @@ mod tests {
             }
             // The status line with the pointer over the map, and a long note.
             let map = map_rect(h.state(), &h.ctx);
-            h.event(egui::Event::PointerMoved(map.center()));
+            // Away from the 3D view's mark in the middle, whose hint would
+            // hide the line.
+            h.event(egui::Event::PointerMoved(map.center() + vec2(map.width() * 0.3, map.height() * 0.3)));
             h.state_mut().feedback = Some(tr!("Flooded {n} columns up to {water_level}", n = 65536, water_level = 74).repeat(3));
             h.run_steps(4);
             let all = rects(&h);
-            let zoom = all.iter().filter(|(role, _, r)| *role == egui::accesskit::Role::Button && r.top() > map.bottom() - 4.0 && r.center().x > map.center().x).map(|(_, _, r)| r.left()).fold(f32::INFINITY, f32::min);
+            let zoom = all.iter().filter(|(role, _, r)| matches!(role, egui::accesskit::Role::Button | egui::accesskit::Role::Slider) && r.top() > map.bottom() - 30.0 && r.bottom() < map.bottom() + 30.0 && r.center().x > map.center().x).map(|(_, _, r)| r.left()).fold(f32::INFINITY, f32::min);
             for (role, label, r) in &all {
                 if label.starts_with(tr!("Location: {x}, {z}", x = "", z = "").split(':').next().unwrap()) && r.right() > zoom + 0.5 && r.top() > map.bottom() - 30.0 {
                     faults.push(format!("{language:?} status: {role:?} {label:?} {r:?} under the zoom from {zoom:.0}"));
