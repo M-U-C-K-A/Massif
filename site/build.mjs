@@ -477,7 +477,7 @@ function copyAssets() {
   }
   for (const f of fs.readdirSync(path.join(root, 'docs/assets/renders'))) fs.copyFileSync(path.join(root, 'docs/assets/renders', f), path.join(a, 'renders', f));
   for (const f of fs.readdirSync(path.join(here, 'src/fonts'))) fs.copyFileSync(path.join(here, 'src/fonts', f), path.join(a, 'fonts', f));
-  // The site's own pictures: the next release's banner.
+  // The site's own pictures: the next release's mark.
   fs.mkdirSync(path.join(a, 'img'), { recursive: true });
   for (const f of fs.readdirSync(path.join(here, 'src/img'))) fs.copyFileSync(path.join(here, 'src/img', f), path.join(a, 'img', f));
   fs.copyFileSync(path.join(root, 'crates/massif-app/assets/icon.png'), path.join(a, 'icon.png'));

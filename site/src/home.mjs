@@ -60,11 +60,9 @@ export const more = [
 ];
 
 // The next release, announced under the hero on a band of halftone water
-// until it is out, then said to be out. Its picture is in site/src/img.
+// until it is out, then said to be out. Its mark is in site/src/img.
 export const launch = {
-  version: '1.0.0', name: 'Aquatic Update', label: 'Preview · Island_01',
-  art: 'aquatic-island', mark: 'aquatic-mark',
-  alt: 'An island in the sea, a volcano at its heart, a reef and sand round its shore',
+  version: '1.0.0', name: 'Aquatic Update', mark: 'aquatic-mark',
   coming: 'Coming soon: water that stays where you put it in the game, a flood that fills the hollow you click, and blocks from your mods.',
   out: 'Out now: water that stays where you put it in the game, a flood that fills the hollow you click, and blocks from your mods.',
 };
@@ -85,7 +83,7 @@ export function home({ url, esc, REPO, icon, figure, latest, cmp, guideLink }) {
     if (cmp(v, since) === 0) return `<span class="tag ${tone}">New in ${short}</span>`;
     return '';
   };
-  // The band and its card: the halftone wash behind, the release's banner in front.
+  // The band and its card: the halftone wash behind, the release's name and line in front.
   const banner = () => {
     const out = v && cmp(v, launch.version) >= 0, short = launch.version.replace(/\.0$/, '');
     const img = (n) => url(`/assets/img/${n}`);
@@ -94,14 +92,12 @@ export function home({ url, esc, REPO, icon, figure, latest, cmp, guideLink }) {
   <figure class="launch-card">
     <figcaption class="launch-bar"><span><i></i><span>Massif ${short} ·<span class="hide-xs"> The</span> ${launch.name}</span></span><span class="soon${out ? ' out' : ''}">${out ? 'Out now' : 'Coming soon'}</span></figcaption>
     <div class="banner">
-      <picture class="banner-art"><source type="image/webp" srcset="${img(launch.art + '.webp')}"><img src="${img(launch.art + '.jpg')}" alt="${esc(launch.alt)}" width="1180" height="695" decoding="async"></picture>
+      <h2 class="banner-title" id="launch-title"><span class="banner-brand"><img src="${img(launch.mark + '.png')}" alt="" width="64" height="64">Massif</span><span class="banner-v">${short}</span><span class="banner-tag">${launch.name}</span></h2>
       <div class="banner-text">
-        <h2 class="banner-title" id="launch-title"><span class="banner-brand"><img src="${img(launch.mark + '.png')}" alt="" width="64" height="64">Massif</span><span class="banner-v">${short}</span><span class="banner-tag">${launch.name}</span></h2>
         <p class="banner-lede">${esc(out ? launch.out : launch.coming)}</p>
         <div class="banner-cta">${out ? `<a class="pill banner-pill dl-auto" href="${url('/download/')}">${icon.down}<span class="dl-label">Download</span></a>` : ''}<a class="pill banner-pill${out ? ' ghost' : ''}" href="${url('/whats-new/')}#v${launch.version}">${out ? "What's new" : "See what's coming"} ${icon.arrow}</a></div>
       </div>
       <span class="banner-frame" aria-hidden="true"></span>
-      <span class="banner-label" aria-hidden="true">${esc(launch.label)}</span>
     </div>
   </figure>
 </section>`;
