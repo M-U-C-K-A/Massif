@@ -16,7 +16,7 @@ export const showcase = [
     alt: 'A river comes down a valley in steps: its pools fill from the source and the water falls over each step, then holds' },
   { fig: 'flood', guide: 'flood-and-drain', since: '1.0.0', title: 'Flood a hollow', text: 'Click a hollow and it fills to the lowest point of its rim, where it would spill.',
     alt: 'A click in a hollow: the water rises up to the lowest point of its rim' },
-  { fig: 'mods', guide: 'real-blocks', since: '1.0.0', title: 'Blocks from mods', text: "Conquest Reforged and others: their blocks beside the game's, with their textures.",
+  { fig: 'mods', guide: 'real-blocks', since: '1.0.0', title: 'Blocks from mods', text: "Any mod's blocks beside the game's, with their textures, read from its instance in one click.",
     alt: "A mod's jar opens and its blocks come out to their places" },
   { fig: 'islands', guide: '3d-sculpt', title: 'Sculpt in 3D', text: 'Overhangs, arches, floating islands. Walk them as a player.',
     alt: 'Two islands of rock float over a field of columns' },

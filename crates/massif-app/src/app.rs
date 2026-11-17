@@ -723,10 +723,10 @@ impl MassifApp {
         }
     }
 
-    /// The block palettes: those of Massif, the player's, and the map's own
-    /// when it is none of them.
+    /// The block palettes: the game's, those of the mods read, the
+    /// player's, and the map's own when it is none of them.
     fn all_palettes(&self) -> Vec<massif_core::materials::Palette> {
-        let mut all = massif_core::materials::Palette::built_in();
+        let mut all = self.blocks.offered_palettes();
         all.extend(self.settings.palettes.iter().cloned());
         let mine = &self.doc.world.meta.palette;
         if self.home.is_none() && !all.iter().any(|p| p.name == mine.name) {
@@ -738,26 +738,24 @@ impl MassifApp {
     /// The palettes window, `shown` first.
     fn open_palettes(&mut self, shown: Option<&str>) {
         let of_map = massif_core::materials::read(&self.doc.world.registry, tr!("This map's blocks"));
-        self.dialog = Some(Dialog::Palettes(Box::new(crate::palettes::PaletteEditor::new(self.settings.palettes.clone(), shown, of_map))));
+        self.dialog = Some(Dialog::Palettes(Box::new(crate::palettes::PaletteEditor::new(self.blocks.offered_palettes(), self.settings.palettes.clone(), shown, of_map))));
     }
 
-    /// Whether Conquest Reforged's blocks are read.
-    fn has_conquest(&self) -> bool {
-        self.blocks.catalogue.as_ref().is_some_and(|c| c.mods.iter().any(|m| m.kind == massif_assets::SourceKind::Mod && m.namespaces.iter().any(|n| n == "conquest")))
+    /// Read the blocks of the mods `palette` uses from an instance found
+    /// here, when they are not read yet: to show and export them.
+    fn read_mods_of(&mut self, ctx: &egui::Context, palette: &massif_core::materials::Palette) {
+        if let Some(found) = self.blocks.instance_for(&palette.namespaces()) {
+            self.blocks.use_instance(ctx, &found, &mut self.settings.minecraft_jar, &mut self.settings.mod_jars);
+        }
     }
 
     /// Do what the home screen asks.
     fn home_action(&mut self, ctx: &egui::Context, action: HomeAction) {
         match action {
             HomeAction::Create(params, template) => {
-                // A map of Conquest Reforged's blocks: its blocks read, from
-                // its instance found here, to show and export them.
-                if params.palette.namespaces().contains(&"conquest")
-                    && !self.has_conquest()
-                    && let Some(found) = self.blocks.conquest.first().cloned()
-                {
-                    self.blocks.use_instance(ctx, &found, &mut self.settings.minecraft_jar, &mut self.settings.mod_jars);
-                }
+                // A map of a mod's blocks: its blocks read, from an instance
+                // found here, to show and export them.
+                self.read_mods_of(ctx, &params.palette);
                 self.after_create = template;
                 self.sample = None;
                 self.request(ctx, Pending::New(params));
@@ -2354,8 +2352,7 @@ impl MassifApp {
             .or_else(|| self.doc.path.as_ref().and_then(|p| p.parent().map(PathBuf::from)))
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
         let centre = self.map_center.map_or((0, 0), |c| (c[0].floor() as i32, c[1].floor() as i32));
-        // For the version the map's mods are made for (Conquest Reforged's
-        // 1.20.1), else for the game installed here, the newest; without
+        // For the version the map's mods are made for, else for the game installed here, the newest; without
         // one, 1.18.2, which every later version opens.
         let versions = export_versions();
         let mods = mod_uses(&self.doc.world.registry, self.blocks.catalogue.as_deref());
@@ -3636,17 +3633,12 @@ impl MassifApp {
                     self.open_palettes(Some(&shown));
                 }
                 if self.doc.world.meta.palette != before {
-                    // The terrains' new blocks in their real colours, and
-                    // Conquest's read when it is installed but not yet read.
+                    // The terrains' new blocks in their real colours, and the
+                    // mods' read when installed here but not yet read.
                     self.blocks.applied = None;
-                    if self.doc.world.meta.palette.namespaces().contains(&"conquest")
-                        && !self.has_conquest()
-                        && !self.blocks.is_loading()
-                        && let Some(found) = self.blocks.conquest.first().cloned()
-                    {
-                        let ctx = cui.ctx().clone();
-                        self.blocks.use_instance(&ctx, &found, &mut self.settings.minecraft_jar, &mut self.settings.mod_jars);
-                    }
+                    let ctx = cui.ctx().clone();
+                    let palette = self.doc.world.meta.palette.clone();
+                    self.read_mods_of(&ctx, &palette);
                 }
                 if affects_map {
                     self.map_cache.invalidate_all();
@@ -13448,7 +13440,10 @@ mod tests {
         h.state_mut().settings.mod_jars.clear();
         h.state_mut().blocks.load(&ctx, None, Vec::new());
         wait_for(&mut h, "the game's blocks", &|app| app.blocks.catalogue.is_some() && !app.blocks.is_loading());
-        assert_eq!(h.state().blocks.conquest.first().map(|i| i.dir.clone()), Some(instance.dir.clone()), "the instance is found, the one with Conquest's lists first");
+        let offered = h.state().blocks.instances.iter().find(|i| i.namespaces.iter().any(|n| n == "conquest")).map(|i| i.dir.clone());
+        assert_eq!(offered, Some(instance.dir.clone()), "the instance is found, the one with Conquest's lists first");
+        // Its palette is offered only once its blocks are read.
+        assert!(!h.state().all_palettes().iter().any(|p| p.name == "Conquest Reforged"));
         h.run_steps(4);
         if let Some(dir) = &shots {
             h.render().unwrap().save(dir.join("conquest-offered.png")).unwrap();
@@ -13456,8 +13451,9 @@ mod tests {
         // One click: its jar, its list and its packs, over 1.20.1.
         let before = crate::memory_tests::resident();
         let started = std::time::Instant::now();
-        // Its row's button: the first, for the instance read best.
-        h.query_all_by_label("Use").next().expect("a Use button").click();
+        // Its row's button, among those of every instance with block mods.
+        let row = h.state().blocks.instances.iter().position(|i| i.dir == instance.dir).unwrap();
+        h.query_all_by_label("Use").nth(row).expect("a Use button").click();
         h.run_steps(2);
         wait_for(&mut h, "Conquest Reforged's blocks", &|app| has_conquest(app) && !app.blocks.is_loading());
         let took = started.elapsed();
@@ -13467,7 +13463,8 @@ mod tests {
         assert_eq!(h.state().settings.minecraft_jar.as_ref(), Some(&game.path), "over the version it plays");
         assert_eq!(h.state().settings.mod_jars, instance.files(), "remembered");
         assert_eq!(cat.version, game.version);
-        assert!(h.state().blocks.conquest.is_empty(), "no longer offered");
+        assert!(!h.state().blocks.instances.iter().any(|i| i.dir == instance.dir), "no longer offered");
+        assert!(h.state().all_palettes().iter().any(|p| p.name == "Conquest Reforged"), "its palette offered");
         let conquest = cat.mods.iter().find(|m| m.kind == massif_assets::SourceKind::Mod && m.namespaces.iter().any(|n| n == "conquest")).unwrap().clone();
         assert_eq!(conquest.name, "Conquest Reforged");
         // Its tabs, in its order, after the game's blocks; made again as
@@ -14048,8 +14045,16 @@ mod tests {
             let (mut jar, mut mods) = (None, Vec::new());
             app.blocks.use_instance(&ctx, &instance, &mut jar, &mut mods);
             settle(&mut h, &|app| !app.blocks.is_loading());
-            assert!(h.state().has_conquest(), "{:?}", h.state().blocks.error);
         }
+        // Else a catalogue with only the mod's name in it: what offers its
+        // palette, as for any mod whose profile brings one.
+        if !h.state().blocks.namespaces().iter().any(|n| n == "conquest") {
+            assert!(!h.state().all_palettes().iter().any(|p| p.name == "Conquest Reforged"), "not offered while the mod is not read");
+            let mods = vec![massif_assets::ModInfo { name: "Conquest Reforged".to_owned(), namespaces: vec!["conquest".to_owned()], kind: massif_assets::SourceKind::Mod, ..Default::default() }];
+            let cat = massif_assets::Catalogue { version: "1.20.1".into(), source: PathBuf::new(), blocks: Vec::new(), textures: Default::default(), mods, skipped: Vec::new(), definitions: Default::default(), registered: Default::default() };
+            h.state_mut().blocks.catalogue = Some(std::sync::Arc::new(cat));
+        }
+        assert!(h.state().blocks.namespaces().iter().any(|n| n == "conquest"), "{:?}", h.state().blocks.error);
 
         // The New map dialog offers the palettes.
         h.state_mut().open_home(Page::NewMap);
@@ -14070,7 +14075,7 @@ mod tests {
             h.step();
             std::thread::sleep(std::time::Duration::from_millis(15));
         }
-        assert_eq!(h.state().home.as_ref().unwrap().new_map.params.palette, BlockPalette::conquest());
+        assert_eq!(h.state().home.as_ref().unwrap().new_map.params.palette, BlockPalette::of_mod("conquest").unwrap());
         if let Some(dir) = &shots {
             h.render().unwrap().save(dir.join("palette-new-map.png")).unwrap();
         }

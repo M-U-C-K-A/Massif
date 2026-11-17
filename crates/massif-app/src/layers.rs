@@ -159,13 +159,24 @@ fn describe_import(reg: &massif_core::registry::Registry, file: String, layer: &
 }
 
 /// "Experimental", small, in the accent: a feature still finding its way.
+/// A pill on one line, never wrapped: in a wrapping row too narrow for it
+/// beside what comes before, on a row of its own.
 pub fn experimental(ui: &mut Ui) {
     let pal = Palette::of(ui);
+    let text = egui::WidgetText::from(RichText::new(tr!("Experimental")).size(10.5).color(pal.accent));
+    let galley = text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body);
+    let needed = galley.size().x + 2.0 * 6.0 + 2.0;
+    // What is left of the row (a wrapping row's available width is a whole
+    // row's).
+    let left = ui.max_rect().right() - ui.cursor().min.x;
+    if ui.layout().main_wrap() && left < needed && ui.cursor().min.x > ui.max_rect().min.x + 1.0 {
+        ui.end_row();
+    }
     egui::Frame::new()
         .stroke(Stroke::new(1.0, pal.accent))
         .corner_radius(theme::PILL)
         .inner_margin(egui::Margin::symmetric(6, 0))
-        .show(ui, |ui| ui.label(RichText::new(tr!("Experimental")).size(10.5).color(pal.accent)));
+        .show(ui, |ui| ui.add(egui::Label::new(galley).extend()));
 }
 
 /// What a row was asked to do.
@@ -874,6 +885,27 @@ mod tests {
             ui.set_width(ui.available_width());
             layers_panel(ui, &mut s.tools, &mut s.doc, &mut s.blocks, &mut s.ui);
         });
+    }
+
+    /// The Experimental badge beside "Import WorldPainter layer…" stays a
+    /// pill on one line at every width of the panel: beside the button
+    /// when there is room, else on a line of its own, never wrapped inside
+    /// itself (rendered with MASSIF_SNAPSHOT_DIR).
+    #[test]
+    fn the_experimental_badge_stays_on_one_line() {
+        for width in [200.0, 240.0, 270.0, 300.0, 360.0] {
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(width, 260.0)).build_ui_state(draw, state());
+            h.run_steps(2);
+            if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from) {
+                h.render().unwrap().save(dir.join(format!("experimental-badge-{width}.png"))).unwrap();
+            }
+            let badge = h.get_by_label("Experimental").rect();
+            let button = h.get_by_label_contains("Import WorldPainter layer").rect();
+            let line = h.get_by_label("This map").rect().height();
+            assert!(badge.height() < line, "{width}: one line, {badge:?}");
+            assert!(badge.right() <= width - 12.0 + 0.5, "{width}: inside the panel, {badge:?}");
+            assert!(badge.min.y >= button.max.y - 1.0 || (badge.left() >= button.right() && badge.center().y > button.top() && badge.center().y < button.bottom()), "{width}: beside the button or under it, {badge:?} {button:?}");
+        }
     }
 
     /// Every cover, object layer and saved mix is listed; a click paints

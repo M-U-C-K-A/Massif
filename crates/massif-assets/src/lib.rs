@@ -350,7 +350,7 @@ pub struct Catalogue {
     /// is.
     pub definitions: HashMap<String, materials::Definition>,
     /// The blocks the game registers, by namespace, of the namespaces whose
-    /// registry's list was read (Conquest Reforged writes `blocks-pls.txt`).
+    /// registry's list was read (some mods write one: `blocks-pls.txt`).
     pub registered: HashMap<String, std::collections::HashSet<String>>,
 }
 
@@ -568,7 +568,7 @@ fn plain_mod_name(name: &str) -> String {
 
 /// A mod's name as its jar gives it: `displayName` of `mods.toml` (Forge,
 /// NeoForge) or `name` of `fabric.mod.json` (Fabric, Quilt).
-fn mod_name(archive: &zip::Archive) -> Option<String> {
+pub(crate) fn mod_name(archive: &zip::Archive) -> Option<String> {
     mod_given_name(archive).map(|n| plain_mod_name(&n))
 }
 
@@ -1733,6 +1733,56 @@ mod tests {
             eprintln!("{}: {} blocks of {} block files, {bare} without textures, {first} shown at first; {families:?}", m.name, mine.len(), files);
             assert_eq!(mine.len(), files, "{}: every block file gives a block", m.name);
             assert!(bare * 100 <= mine.len(), "{}: {bare} blocks without textures", m.name);
+        }
+    }
+
+    /// The mod profiles (`massif_core::mod_profiles`) against the mods'
+    /// own jars, named by MASSIF_MOD_JARS (separated by `;`) and read over
+    /// the game installed nearest their version: each profile's name is its
+    /// mod's, every block of its palette is a whole block of the mod or the
+    /// game with its textures and a state the mod gives, and the colours
+    /// the palette keeps for before the game is read are its textures'.
+    /// MASSIF_PROFILE_CANDIDATES=1 prints each mod's whole blocks of
+    /// ground and stone with their colours, to make a profile from.
+    #[test]
+    fn mod_profiles_match_their_mods() {
+        let Some(list) = std::env::var_os("MASSIF_MOD_JARS") else {
+            eprintln!("MASSIF_MOD_JARS=<jar;jar…> checks the mod profiles against their mods: skipping");
+            return;
+        };
+        let series = |v: &str| v.split('.').take(2).collect::<Vec<_>>().join(".");
+        let jars = find_jars();
+        for jar in list.to_string_lossy().split(';').map(PathBuf::from).filter(|p| p.is_file()) {
+            let Some(version) = zip::Archive::open(&jar).ok().and_then(|a| mod_minecraft(&a, &jar)) else { continue };
+            let Some(game) = jars.iter().find(|j| j.version == version).or_else(|| jars.iter().find(|j| series(&j.version) == series(&version))).or(jars.first()).cloned() else {
+                eprintln!("no Minecraft installed: skipping");
+                return;
+            };
+            let cat = load_with_mods(&game.path, &game.version, std::slice::from_ref(&jar)).unwrap();
+            let m = cat.mods.iter().find(|m| m.kind == SourceKind::Mod).unwrap().clone();
+            if std::env::var_os("MASSIF_PROFILE_CANDIDATES").is_some() {
+                for b in cat.blocks.iter().filter(|b| m.namespaces.contains(&namespace(&b.id).to_owned()) && b.full_cube && matches!(b.category, Category::Natural | Category::Stone)) {
+                    eprintln!("{} {:?} {:?} {:?}", b.id, b.category, b.color, b.name);
+                }
+            }
+            for ns in &m.namespaces {
+                let Some(profile) = massif_core::mod_profiles::of(ns) else { continue };
+                eprintln!("{}: profile {} against {} (Minecraft {}), {} blocks", jar.display(), profile.namespace, m.name, game.version, cat.blocks.iter().filter(|b| namespace(&b.id) == ns).count());
+                assert_eq!(profile.name, m.name, "the profile names the mod as its jar does");
+                let Some(palette) = &profile.palette else { continue };
+                let mut off = Vec::new();
+                for state in palette.states() {
+                    let id = state.split('[').next().unwrap();
+                    let block = cat.block(id).unwrap_or_else(|| panic!("{state}: no such block"));
+                    assert!(block.full_cube, "{state}: not a whole block");
+                    assert!(block.top.as_ref().is_some_and(|t| cat.texture(t).is_some()), "{state}: no texture");
+                    assert_eq!(cat.check_state(state), Ok(()), "{state}");
+                    if namespace(id) != "minecraft" && palette.colors.get(state).is_none_or(|c| c.iter().zip(block.color).any(|(a, b)| a.abs_diff(b) > 8)) {
+                        off.push(format!("\"{state}\": [{}, {}, {}]", block.color[0], block.color[1], block.color[2]));
+                    }
+                }
+                assert!(off.is_empty(), "{}: colours to keep in its palette.json: {{{}}}", profile.namespace, off.join(", "));
+            }
         }
     }
 

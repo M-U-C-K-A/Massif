@@ -73,7 +73,7 @@ impl NewMap {
             params,
             registry,
             template: None,
-            palettes: BlockPalette::built_in(),
+            palettes: vec![BlockPalette::vanilla()],
             preview: None,
             previewing: None,
             template_preview: None,

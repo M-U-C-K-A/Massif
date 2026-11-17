@@ -1,0 +1,157 @@
+{
+ "name": "Biomes O' Plenty",
+ "colors": {
+  "biomesoplenty:black_sand": [
+   37,
+   37,
+   39
+  ],
+  "biomesoplenty:black_sandstone": [
+   40,
+   40,
+   42
+  ],
+  "biomesoplenty:mossy_black_sand": [
+   72,
+   94,
+   44
+  ],
+  "biomesoplenty:orange_sand": [
+   204,
+   154,
+   97
+  ],
+  "biomesoplenty:orange_sandstone": [
+   201,
+   155,
+   100
+  ],
+  "biomesoplenty:white_sand": [
+   237,
+   234,
+   222
+  ]
+ },
+ "terrains": {
+  "Sand": {
+   "strata": [
+    {
+     "blocks": [
+      [
+       "minecraft:sand",
+       4
+      ],
+      [
+       "biomesoplenty:white_sand",
+       2
+      ]
+     ],
+     "depth": [
+      3,
+      5
+     ],
+     "patches": 5
+    },
+    {
+     "blocks": [
+      [
+       "minecraft:sandstone",
+       1
+      ]
+     ],
+     "depth": [
+      3,
+      6
+     ]
+    }
+   ]
+  },
+  "Red Sand": {
+   "strata": [
+    {
+     "blocks": [
+      [
+       "biomesoplenty:orange_sand",
+       3
+      ],
+      [
+       "minecraft:red_sand",
+       2
+      ]
+     ],
+     "depth": [
+      3,
+      5
+     ],
+     "patches": 5
+    },
+    {
+     "blocks": [
+      [
+       "biomesoplenty:orange_sandstone",
+       1
+      ]
+     ],
+     "depth": [
+      3,
+      6
+     ]
+    }
+   ]
+  },
+  "Gravel": {
+   "strata": [
+    {
+     "blocks": [
+      [
+       "minecraft:gravel",
+       4
+      ],
+      [
+       "biomesoplenty:black_sand",
+       1
+      ]
+     ],
+     "depth": [
+      3,
+      5
+     ],
+     "patches": 4
+    }
+   ]
+  },
+  "Basalt": {
+   "strata": [
+    {
+     "blocks": [
+      [
+       "biomesoplenty:black_sand",
+       3
+      ],
+      [
+       "biomesoplenty:mossy_black_sand",
+       1
+      ]
+     ],
+     "depth": [
+      1,
+      2
+     ],
+     "patches": 4
+    },
+    {
+     "blocks": [
+      [
+       "biomesoplenty:black_sandstone",
+       1
+      ]
+     ],
+     "depth": [
+      6,
+      10
+     ]
+    }
+   ]
+  }
+ }
+}

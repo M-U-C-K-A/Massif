@@ -3,9 +3,10 @@
 //! version of the game, the mods with blocks in them, the resource packs
 //! the player turned on, and the lists of blocks made for WorldPainter.
 //!
-//! Reading an instance is what makes a modpack's blocks one step away:
-//! Conquest Reforged's instance gives its jar, its resource packs and its
-//! `conquest_wp.csv` at once.
+//! Reading an instance is what makes a modpack's blocks one step away: a
+//! block mod's instance gives its jar, its resource packs and the list of
+//! blocks the mod writes for WorldPainter (`<mod>_wp.csv`) at once. Every
+//! instance with a mod with blocks is found the same way, whatever the mod.
 
 use crate::materials;
 use crate::zip::Archive;
@@ -23,6 +24,10 @@ pub struct Instance {
     pub minecraft: Option<String>,
     /// The jars of its mods that have blocks, by name.
     pub mods: Vec<PathBuf>,
+    /// Those mods' names, as their jars give them, in the same order.
+    pub mod_names: Vec<String>,
+    /// The namespaces of their blocks, sorted.
+    pub namespaces: Vec<String>,
     /// The resource packs it has turned on, the lowest first.
     pub packs: Vec<PathBuf>,
     /// Lists of blocks made for WorldPainter, in the instance or in
@@ -48,14 +53,18 @@ impl Instance {
         };
         let mut namespaces = Vec::new();
         for jar in files_in(&dir.join("mods"), "jar") {
-            let spaces = block_namespaces(&jar);
+            let Ok(archive) = Archive::open(&jar) else { continue };
+            let spaces = namespaces_in(archive.names());
             if !spaces.is_empty() {
+                let name = crate::mod_name(&archive).unwrap_or_else(|| jar.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
                 namespaces.extend(spaces);
                 instance.mods.push(jar);
+                instance.mod_names.push(name);
             }
         }
         namespaces.sort();
         namespaces.dedup();
+        instance.namespaces = namespaces.clone();
         instance.packs = packs_on(&dir);
         // The lists of the instance itself, then WorldPainter's own for the
         // namespaces left.
@@ -80,7 +89,7 @@ impl Instance {
         Some(instance)
     }
 
-    /// Whether one of its mods is the one named (`conquest`): by its jar's
+    /// Whether one of its mods is the one named (`create`): by its jar's
     /// name.
     pub fn has_mod(&self, name: &str) -> bool {
         let name = name.to_lowercase();
@@ -159,8 +168,12 @@ fn files_in(dir: &Path, ext: &str) -> Vec<PathBuf> {
 /// sorted; reading only its directory.
 pub fn block_namespaces(jar: &Path) -> Vec<String> {
     let Ok(names) = Archive::list(jar) else { return Vec::new() };
+    namespaces_in(names.iter().map(String::as_str))
+}
+
+/// The namespaces of the block states among a jar's entries.
+fn namespaces_in<'a>(names: impl Iterator<Item = &'a str>) -> Vec<String> {
     let mut out: Vec<String> = names
-        .iter()
         .filter_map(|n| {
             let rest = n.strip_prefix("assets/")?;
             let (ns, rest) = rest.split_once('/')?;
@@ -271,7 +284,33 @@ fn read_with_mod(dirs: impl IntoIterator<Item = PathBuf>, name: &str) -> Vec<Ins
     out
 }
 
-/// Every instance on this computer with a mod named `name` (`conquest`)
+/// Instances read, those with mods with blocks, those with lists of blocks
+/// first (a mod's own lists say which of its blocks are real and what
+/// states they have), then by name.
+fn with_blocks(dirs: impl IntoIterator<Item = PathBuf>) -> Vec<Instance> {
+    let mut out: Vec<Instance> = dirs.into_iter().filter_map(|dir| Instance::read(&dir)).filter(|i| !i.mods.is_empty()).collect();
+    out.sort_by_key(|i| (i.lists.is_empty(), i.name.to_lowercase()));
+    out
+}
+
+/// Every instance on this computer with a mod with blocks, whatever the
+/// mod: see [`with_blocks`]. Every jar of their mods folders is looked
+/// into, its directory only.
+pub fn find_all_with_blocks() -> Vec<Instance> {
+    with_blocks(find_instance_dirs())
+}
+
+/// The instances with a mod with blocks in a folder: the folder itself
+/// when it is one, else those it holds (a launcher's folder of instances).
+pub fn with_blocks_in(dir: &Path) -> Vec<Instance> {
+    if let Some(game) = game_dir(dir) {
+        return with_blocks([game]);
+    }
+    let Ok(read) = std::fs::read_dir(dir) else { return Vec::new() };
+    with_blocks(read.flatten().filter_map(|e| game_dir(&e.path())))
+}
+
+/// Every instance on this computer with a mod named `name` (`create`)
 /// among its jars: see [`read_with_mod`]. Only those instances' jars are
 /// looked into.
 pub fn find_all_with_mod(name: &str) -> Vec<Instance> {
@@ -327,6 +366,9 @@ mod tests {
         assert_eq!(instance.packs, [dir.join("resourcepacks/Conquest.zip")]);
         assert_eq!(instance.lists, [dir.join("conquest_wp.csv")], "only the list of a mod it has");
         assert!(instance.has_mod("conquest") && !instance.has_mod("chipped"));
+        assert_eq!((instance.mod_names.as_slice(), instance.namespaces.as_slice()), (["Conquest Reforged".to_owned()].as_slice(), ["conquest".to_owned()].as_slice()));
+        assert_eq!(with_blocks_in(&dir).len(), 1);
+        assert_eq!(with_blocks_in(dir.parent().unwrap()).iter().filter(|i| i.dir == dir).count(), 1);
         assert_eq!(instance.files(), [conquest.clone(), dir.join("conquest_wp.csv"), dir.join("resourcepacks/Conquest.zip")]);
         // From its mods folder too.
         assert_eq!(Instance::read(&dir.join("mods")).unwrap().dir, dir);

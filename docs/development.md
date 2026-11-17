@@ -51,6 +51,13 @@ Two environment variables enable the heavier tests:
   `MASSIF_CONQUEST_CHECK=<world>` checks another exported world the same
   way; `MASSIF_CONQUEST_JAR=<jar>` renders the gradient brush with its
   blocks.
+- `MASSIF_INSTANCES_DIR=<folder>`: in tests, the instances the Blocks panel
+  offers are only those of this folder (else of `MASSIF_CONQUEST_DIR`), never
+  what the computer running the tests has installed.
+- Mod profiles (`crates/massif-core/assets/mods/<namespace>/`, see its
+  README) are data: a mod's name, the version of the game it is made for and
+  an optional palette. `build.rs` bundles every folder found; no mod is
+  named in the code outside tests.
 - `MASSIF_MOD_JARS=<jar;jar…>` reads mods' jars over the version of the game
   each is made for: every block file gives a block, nearly all with their
   textures, and it prints how many show at first and each family's count.

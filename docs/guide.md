@@ -1543,8 +1543,8 @@ fraction of a second, every time Massif starts.
   dirt, as in the game; other blocks a few deep over the natural rock) and
   paints it. Clicking any other block (a flower, grass, a carpet, coral…)
   makes it a ground cover that grows it, and paints that.
-- **Mods** in the Blocks panel adds the blocks of mods, Conquest Reforged's
-  among them: see [Conquest Reforged and other mods](#conquest-reforged-and-other-mods).
+- **Mods** in the Blocks panel adds the blocks of mods: see
+  [Blocks from mods](#blocks-from-mods).
 
 ## Block palettes
 
@@ -1557,31 +1557,35 @@ paint the same terrains, so their beaches and beds follow the palette too.
 A terrain a palette leaves out is the game's own; terrains of your own are
 never touched.
 
-Two palettes come with Massif:
+**Vanilla**, the game's blocks, comes with Massif. A mod may have a palette
+of its blocks too, offered only once that mod's blocks are read (see
+[Blocks from mods](#blocks-from-mods)): the menus list Vanilla, the palettes
+of the mods read for this map, and your own. Massif knows no mod in its
+code: a mod's palette is data, a *mod profile* shipped with Massif
+(`crates/massif-core/assets/mods/<namespace>/`: the mod's name, the version
+of the game it is made for, and its palette), and any mod can have one.
 
-- **Vanilla**, the game's blocks;
-- **Conquest Reforged**, made from the lists Conquest writes for WorldPainter
-  (`conquest_wp.csv`): its grass blocks (clover-covered and taiga grass among
-  the game's, which Conquest retextures), loamy dirt and brown earth, forest
-  floors for podzol, sphagnum moss, muds, gray and mossy limestones, small
-  stones and boulders on rocky ground, tan sand and sand-and-gravel on the
-  beaches, gray and dark gravels and pebbles in river and lake beds, snow over
-  icy limestone, glacier ice and weathered basalt. Several blocks share each
-  surface in patches, as Conquest's own terrain does. The rock under it stays
-  the game's stone, which Conquest makes its limestone, so the ores are the
-  game's.
+Conquest Reforged's profile, for one, has a palette made from the lists
+Conquest writes for WorldPainter (`conquest_wp.csv`): its grass blocks,
+loamy dirt and brown earth, forest floors for podzol, sphagnum moss, muds,
+gray and mossy limestones, small stones and boulders on rocky ground, tan
+sand on the beaches, gravels and pebbles in river and lake beds, snow over
+icy limestone, glacier ice and weathered basalt, several blocks sharing
+each surface in patches. The rock under it stays the game's stone, so the
+ores are the game's.
 
 **Choosing one.** **Blocks** in the New map settings picks the palette of a
 new map; its preview shows it, and the line under the settings names the
-version it is for (1.20.1 for Conquest Reforged). Where Conquest is installed
-but its blocks are not read yet, **Create map** reads its instance as the
+version it is for: the one its mod's profile names. When a palette uses
+the blocks of a mod not read yet but installed in an instance here,
+**Create map** (and **Blocks** in the Info panel) reads that instance as the
 Blocks panel's **Use** does. Later, **Blocks** in the Info panel (World)
 makes the whole map of another palette at once, in one step to undo: nothing
 is painted again, the terrains are only made of other blocks. The map keeps
 its palette in its file.
 
 **Your own.** **Edit palettes…** at the bottom of either menu opens the
-palettes. The built-in ones are shown as they are: **Duplicate** makes one of
+palettes. Vanilla and the palettes of the mods read are shown as they are: **Duplicate** makes one of
 your own from any of them, **From this map** one of the blocks of the open
 map's terrains. Pick a terrain (the generator's first, then the others, a
 dot marking those the palette sets), then each of its layers from the
@@ -1595,25 +1599,27 @@ terrain to the game. **Rock under the terrains** sets the rock above and
 under Y 0. Your palettes are kept with Massif's settings; one changed since
 it was given to a map is given again by picking it in **Blocks**.
 
-## Conquest Reforged and other mods
+## Blocks from mods
 
-Massif paints with the blocks of mods as with the game's: Conquest
+Massif paints with the blocks of any mod as with the game's: Conquest
 Reforged's 17,000 blocks, Chipped, Macaw's and the like, made for Forge,
-NeoForge, Fabric or Quilt.
+NeoForge, Fabric or Quilt. No mod is treated apart: what Massif reads of
+one (its jar, its instance, its list for WorldPainter) it reads of all.
 
-**In one step, from the modpack's instance.** Where Conquest Reforged is
-installed (CurseForge, Prism, MultiMC, Modrinth or the official launcher, on
-any drive), the Blocks panel says so, and **Use** reads its instance; with
-both its Fabric and its Forge modpacks installed, each has a row of its
-own, the one with Conquest's lists of its blocks first.
-**Instance…** reads any other modpack: choose its folder (the one with
+**In one step, from the modpack's instance.** Massif looks through the
+instances installed here (CurseForge, Prism, MultiMC, Modrinth or the
+official launcher, on any drive) for mods with blocks, whatever the mods.
+Those whose blocks are not read yet are listed in the Blocks panel under
+**Mods with blocks in your Minecraft instances**: each instance on a row,
+with the names of its mods with blocks and the version of the game it
+plays, and **Use** reads it. Instances with lists of blocks for WorldPainter
+come first. **Instance…** reads any other modpack: choose its folder (the one with
 `mods` in it, or the instance's own). Reading an instance:
 
 - reads its mods that have blocks (the others, Sodium, Iris and the like,
   are left out), its list of blocks made for WorldPainter (see below), and
   the resource packs it has turned on in the game;
-- reads them over the version of the game the instance plays (Minecraft
-  1.20.1 for Conquest Reforged's), when that version is installed here;
+- reads them over the version of the game the instance plays, when that version is installed here;
   otherwise over the version read now, and the panel says so.
 
 **One file at a time.** **Add mods…** takes the jars of mods (from the
@@ -1623,8 +1629,8 @@ a pack's textures replace its mod's) and lists of blocks for WorldPainter
 remembered, and read again each time Massif starts.
 
 **The blocks.** A mod's blocks come after the game's, in its own creative
-tabs when it gives them (Conquest Reforged's 36: Cobble and Brick, Advanced
-Masonry, Columns, Roofing…), with their real textures and names, else by
+tabs when it gives them (`assets/<namespace>/groups/*.txt`: Conquest
+Reforged's 36, Cobble and Brick, Advanced Masonry, Roofing…), with their real textures and names, else by
 family. A family that a block's name does not tell is read from how the
 block is drawn: a cross of two planes, a crop or leaves make a plant (a
 mod's `amaranth`, `cattail`, `barley`), planks or a log make wood (its
@@ -1637,8 +1643,8 @@ arches, capitals, vertical slabs, fences, doors… The search looks through
 every block and shape, ticked or not. A whole
 block becomes a terrain and any other (a plant, a shape) a ground cover, as
 the game's do. The terrains of a mod mix, lay in patterns and beds, and
-serve the automatic paint like any other. A mod's tall plants (Conquest
-Reforged's lilacs, peonies…) grow in their two halves, and its plants grow
+serve the automatic paint like any other. A mod's tall plants (its lilacs,
+peonies…) grow in their two halves, and its plants grow
 on its own ground: its grass, moss, forest floors, dirts, soils, silts,
 muds and peat count as soil.
 
@@ -1650,24 +1656,63 @@ keeps its textures; another is written as typed and drawn in grey, and the
 game needs its mod to have it. A mistyped id or property says what is wrong,
 and a property a mod's list for WorldPainter does not give is refused.
 
-**Conquest Reforged's list for WorldPainter.** Conquest Reforged writes
-`conquest_wp.csv` for WorldPainter (which reads it from the `materials`
-folder of its settings) and, beside it, the list of every block the game
-registers (`blocks-pls.txt`). Massif reads both, from the instance or from
-WorldPainter's folder, so a WorldPainter user finds the same palette: the
-list gives every property of every block and the values it takes; the
-registry's list tells the real blocks from the 79 block files of the jar
-the game never registers, which Massif leaves out. Objects (schematics)
-made of Conquest's shaped blocks keep their states valid when they are
+**A mod's list for WorldPainter.** Some mods write a list of their blocks
+for WorldPainter, in WorldPainter's custom-materials format (`<mod>_wp.csv`,
+which WorldPainter reads from the `materials` folder of its settings:
+Conquest Reforged writes `conquest_wp.csv`), and some, beside it, the list
+of every block the game registers (`blocks-pls.txt`). Massif reads them for
+any mod, from the instance or from WorldPainter's folder, so a WorldPainter
+user finds the same blocks: the list gives every property of every block
+and the values it takes; the registry's list tells the real blocks from
+block files of the jar the game never registers (79 in Conquest's), which
+Massif leaves out. Objects (schematics) made of a mod's shaped blocks keep their states valid when they are
 turned or mirrored: an arch lying north–south turns east–west, left and
 right shapes swap in a mirror.
 
+**Mod profiles: a palette for any mod.** What Massif knows of a mod beyond
+its jar is data, one folder per mod in `crates/massif-core/assets/mods/`,
+named after the namespace of its blocks. Massif ships profiles for Conquest
+Reforged (`conquest`), Biomes O' Plenty (`biomesoplenty`), Regions
+Unexplored (`regions_unexplored`) and Oh The Biomes We've Gone
+(`biomeswevegone`); a profile is used only once its mod's blocks are read.
+Anyone can write one for another mod, with no code:
+
+- `profile.json`: the mod's name as its jar gives it, its namespace, and the
+  version of the game it is made for:
+
+  ```json
+  { "name": "Regions Unexplored", "namespace": "regions_unexplored", "minecraft": "1.21.1" }
+  ```
+
+- `palette.json` (optional): a block palette of the mod's blocks, the
+  game's mixed in as you like. `terrains` maps a built-in terrain (`Grass`,
+  `Dirt`, `Coarse Dirt`, `Podzol`, `Moss`, `Mud`, `Clay`, `Rocky`, `Sand`,
+  `Red Sand`, `Gravel`, `Snow`, `Ice`, `Basalt`…) to its layers from the
+  surface down: blocks with their weights, a depth range in blocks, and
+  `patches`, how wide the patches of its blocks are. `colors` gives each
+  mod block's colour, for the map before the game is read. The easiest way
+  to write one: make the palette in **Edit palettes…** with the mod read,
+  then copy it from Massif's settings.
+
+  ```json
+  { "name": "Regions Unexplored", "colors": { "regions_unexplored:peat_mud": [67, 56, 45] },
+    "terrains": { "Mud": { "strata": [ { "blocks": [["minecraft:mud", 2], ["regions_unexplored:peat_mud", 2]],
+                                         "depth": [2, 4], "patches": 4 } ] } } }
+  ```
+
+Rebuild Massif and the profile is in. `MASSIF_MOD_JARS=<the mod's jar>
+cargo test -p massif-assets mod_profiles_match_their_mods` checks it against
+the mod: its name, every block a whole block with its texture and a state the
+mod gives, and the colours (it prints the right ones). The gradient brush's
+presets need nothing per mod: they paint the built-in terrains, which a
+mod's palette makes of its blocks.
+
 **Exporting for the mod.** A mod is made for one version of the game:
-Conquest Reforged's jar for Minecraft 1.20.1. When the map uses a mod's
-blocks, **Export** picks that version and the instance's `saves` folder,
+Conquest Reforged's for Minecraft 1.20.1, as its jar says. When the map uses
+a mod's blocks, **Export** picks that version and the instance's `saves` folder,
 and lists each mod under **Mods** with how many of its blocks the map
 uses. It warns, in red, when another version is chosen (the game may not
-load the mod's blocks; **Export for 1.20.1** puts it back), when a block
+load the mod's blocks; **Export for** that version puts it back), when a block
 comes from a mod Massif has not read, and when a state is none of the
 game's by the mod's list. Blocks are written by their own ids and states
 (`conquest:travertine_brick_small_arch[direction=eastwest,waterlogged=false]`),

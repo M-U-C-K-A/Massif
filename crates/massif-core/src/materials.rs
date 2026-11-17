@@ -9,9 +9,10 @@
 //! without a column of it being painted again. A terrain a palette leaves
 //! out is the game's own; terrains of the player's own are never touched.
 //!
-//! Two palettes come with Massif: [`Palette::vanilla`] and Conquest
-//! Reforged's ([`Palette::conquest`], data in
-//! `assets/conquest_terrains.json`); players make their own from them.
+//! The game's own palette, [`Palette::vanilla`], comes with Massif; a mod's
+//! profile may bring one of its blocks, as data (`assets/mods/<namespace>/
+//! palette.json`, see [`crate::mod_profiles`]), offered once that mod's
+//! blocks are read. Players make their own from them.
 
 use crate::registry::{BlockId, Mix, Registry, Stratum, TerrainDef, TerrainId};
 use serde::{Deserialize, Serialize};
@@ -84,15 +85,21 @@ impl Palette {
         Self { name: "Vanilla".into(), terrains: BTreeMap::new(), stone: None, deepslate: None, colors: BTreeMap::new() }
     }
 
-    /// Conquest Reforged's natural blocks, several mixed in patches.
-    pub fn conquest() -> Self {
-        static CONQUEST: std::sync::OnceLock<Palette> = std::sync::OnceLock::new();
-        CONQUEST.get_or_init(|| serde_json::from_str(include_str!("../assets/conquest_terrains.json")).expect("conquest_terrains.json")).clone()
+    /// The palette the profile of the mod `namespace` brings, if any.
+    pub fn of_mod(namespace: &str) -> Option<Self> {
+        crate::mod_profiles::of(namespace)?.palette.clone()
     }
 
-    /// The palettes that come with Massif.
+    /// The palettes that come with Massif: the game's, and those of the
+    /// mod profiles, whether their mods are read or not.
     pub fn built_in() -> Vec<Palette> {
-        vec![Self::vanilla(), Self::conquest()]
+        std::iter::once(Self::vanilla()).chain(crate::mod_profiles::all().iter().filter_map(|p| p.palette.clone())).collect()
+    }
+
+    /// The palettes that come with Massif to offer while the mods of the
+    /// namespaces `read` are read: the game's, and those of these mods.
+    pub fn offered(read: &[&str]) -> Vec<Palette> {
+        std::iter::once(Self::vanilla()).chain(crate::mod_profiles::palettes_of(read)).collect()
     }
 
     pub fn is_vanilla(&self) -> bool {
@@ -121,7 +128,8 @@ impl Palette {
         out
     }
 
-    /// The namespaces of the mods whose blocks it uses (`conquest`).
+    /// The namespaces of the mods whose blocks it uses (`create` of
+    /// `create:andesite_casing`).
     pub fn namespaces(&self) -> Vec<&str> {
         let mut out: Vec<&str> = self.states().into_iter().map(|s| s.split_once(':').map_or("minecraft", |(ns, _)| ns)).filter(|ns| *ns != "minecraft").collect();
         out.sort_unstable();
@@ -264,7 +272,7 @@ mod tests {
     #[test]
     fn conquest_reads_and_names_built_in_terrains() {
         let reg = Registry::vanilla();
-        let conquest = Palette::conquest();
+        let conquest = Palette::of_mod("conquest").unwrap();
         assert_eq!(conquest.name, "Conquest Reforged");
         let slots = slots();
         for name in conquest.terrains.keys() {
@@ -279,7 +287,9 @@ mod tests {
             assert!(top.blocks.len() >= 2 && top.patches.is_some(), "{name}");
         }
         assert!(reg.terrain_by_name("Rock").is_some() && !slots.contains(&"Rock".to_owned()));
-        assert!(Palette::vanilla().is_vanilla() && Palette::conquest().is_built_in());
+        assert!(Palette::vanilla().is_vanilla() && Palette::of_mod("conquest").unwrap().is_built_in());
+        assert_eq!(Palette::offered(&[]), [Palette::vanilla()], "a mod's palette only once its blocks are read");
+        assert_eq!(Palette::offered(&["conquest"]), [Palette::vanilla(), conquest]);
     }
 
     #[test]
@@ -288,7 +298,7 @@ mod tests {
         let mut reg = vanilla.clone();
         assert_eq!(apply(&mut reg, &Palette::vanilla()), 0, "a new map is the game's");
         assert_eq!(read(&reg, "Vanilla"), Palette::vanilla());
-        let conquest = Palette::conquest();
+        let conquest = Palette::of_mod("conquest").unwrap();
         let n = apply(&mut reg, &conquest);
         assert_eq!(n, conquest.terrains.len());
         let grass = reg.terrain(reg.terrain_by_name("Grass").unwrap());

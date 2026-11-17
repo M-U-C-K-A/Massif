@@ -1,0 +1,297 @@
+{
+ "name": "Regions Unexplored",
+ "colors": {
+  "regions_unexplored:ash": [
+   101,
+   99,
+   94
+  ],
+  "regions_unexplored:mossy_stone": [
+   120,
+   125,
+   111
+  ],
+  "regions_unexplored:peat_coarse_dirt": [
+   76,
+   63,
+   53
+  ],
+  "regions_unexplored:peat_dirt": [
+   85,
+   70,
+   60
+  ],
+  "regions_unexplored:peat_grass_block[snowy=false]": [
+   83,
+   108,
+   51
+  ],
+  "regions_unexplored:peat_mud": [
+   67,
+   56,
+   45
+  ],
+  "regions_unexplored:peat_podzol[snowy=false]": [
+   68,
+   55,
+   41
+  ],
+  "regions_unexplored:silt_coarse_dirt": [
+   162,
+   127,
+   78
+  ],
+  "regions_unexplored:silt_dirt": [
+   172,
+   131,
+   77
+  ],
+  "regions_unexplored:silt_grass_block[snowy=false]": [
+   83,
+   108,
+   51
+  ],
+  "regions_unexplored:silt_mud": [
+   106,
+   84,
+   53
+  ],
+  "regions_unexplored:silt_podzol[snowy=false]": [
+   117,
+   83,
+   52
+  ],
+  "regions_unexplored:volcanic_ash": [
+   36,
+   34,
+   34
+  ]
+ },
+ "terrains": {
+  "Grass": {
+   "strata": [
+    {
+     "blocks": [
+      [
+       "minecraft:grass_block[snowy=false]",
+       5
+      ],
+      [
+       "regions_unexplored:silt_grass_block[snowy=false]",
+       2
+      ],
+      [
+       "regions_unexplored:peat_grass_block[snowy=false]",
+       1
+      ]
+     ],
+     "depth": [
+      1,
+      1
+     ],
+     "patches": 6
+    },
+    {
+     "blocks": [
+      [
+       "minecraft:dirt",
+       3
+      ],
+      [
+       "regions_unexplored:silt_dirt",
+       1
+      ]
+     ],
+     "depth": [
+      2,
+      4
+     ]
+    }
+   ],
+   "submerged_top": "minecraft:dirt"
+  },
+  "Dirt": {
+   "strata": [
+    {
+     "blocks": [
+      [
+       "minecraft:dirt",
+       3
+      ],
+      [
+       "regions_unexplored:silt_dirt",
+       1
+      ],
+      [
+       "regions_unexplored:peat_dirt",
+       1
+      ]
+     ],
+     "depth": [
+      3,
+      5
+     ],
+     "patches": 5
+    }
+   ]
+  },
+  "Coarse Dirt": {
+   "strata": [
+    {
+     "blocks": [
+      [
+       "minecraft:coarse_dirt",
+       2
+      ],
+      [
+       "regions_unexplored:silt_coarse_dirt",
+       2
+      ],
+      [
+       "regions_unexplored:peat_coarse_dirt",
+       1
+      ]
+     ],
+     "depth": [
+      1,
+      2
+     ],
+     "patches": 4
+    },
+    {
+     "blocks": [
+      [
+       "minecraft:dirt",
+       1
+      ]
+     ],
+     "depth": [
+      2,
+      3
+     ]
+    }
+   ]
+  },
+  "Podzol": {
+   "strata": [
+    {
+     "blocks": [
+      [
+       "minecraft:podzol[snowy=false]",
+       2
+      ],
+      [
+       "regions_unexplored:peat_podzol[snowy=false]",
+       2
+      ],
+      [
+       "regions_unexplored:silt_podzol[snowy=false]",
+       1
+      ]
+     ],
+     "depth": [
+      1,
+      1
+     ],
+     "patches": 5
+    },
+    {
+     "blocks": [
+      [
+       "minecraft:dirt",
+       1
+      ]
+     ],
+     "depth": [
+      2,
+      4
+     ]
+    }
+   ],
+   "submerged_top": "minecraft:dirt"
+  },
+  "Mud": {
+   "strata": [
+    {
+     "blocks": [
+      [
+       "minecraft:mud",
+       2
+      ],
+      [
+       "regions_unexplored:peat_mud",
+       2
+      ],
+      [
+       "regions_unexplored:silt_mud",
+       1
+      ]
+     ],
+     "depth": [
+      2,
+      4
+     ],
+     "patches": 4
+    }
+   ]
+  },
+  "Rocky": {
+   "strata": [
+    {
+     "blocks": [
+      [
+       "minecraft:stone",
+       5
+      ],
+      [
+       "regions_unexplored:mossy_stone",
+       2
+      ],
+      [
+       "minecraft:andesite",
+       1
+      ]
+     ],
+     "depth": [
+      3,
+      5
+     ],
+     "patches": 3
+    }
+   ]
+  },
+  "Basalt": {
+   "strata": [
+    {
+     "blocks": [
+      [
+       "regions_unexplored:volcanic_ash",
+       2
+      ],
+      [
+       "regions_unexplored:ash",
+       1
+      ]
+     ],
+     "depth": [
+      1,
+      2
+     ],
+     "patches": 4
+    },
+    {
+     "blocks": [
+      [
+       "minecraft:basalt[axis=y]",
+       1
+      ]
+     ],
+     "depth": [
+      6,
+      10
+     ]
+    }
+   ]
+  }
+ }
+}

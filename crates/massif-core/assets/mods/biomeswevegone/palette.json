@@ -1,0 +1,329 @@
+{
+ "name": "Oh The Biomes We've Gone",
+ "colors": {
+  "biomeswevegone:black_sand": [
+   85,
+   85,
+   85
+  ],
+  "biomeswevegone:black_sandstone": [
+   89,
+   89,
+   89
+  ],
+  "biomeswevegone:cracked_red_sand": [
+   193,
+   105,
+   34
+  ],
+  "biomeswevegone:lush_dirt": [
+   83,
+   64,
+   49
+  ],
+  "biomeswevegone:lush_grass_block[snowy=false]": [
+   80,
+   104,
+   49
+  ],
+  "biomeswevegone:mossy_stone": [
+   104,
+   113,
+   89
+  ],
+  "biomeswevegone:pale_mud": [
+   101,
+   100,
+   100
+  ],
+  "biomeswevegone:peat": [
+   81,
+   64,
+   55
+  ],
+  "biomeswevegone:podzol_dacite": [
+   91,
+   63,
+   24
+  ],
+  "biomeswevegone:red_rock": [
+   153,
+   80,
+   47
+  ],
+  "biomeswevegone:rocky_stone": [
+   125,
+   125,
+   125
+  ],
+  "biomeswevegone:white_sand": [
+   225,
+   225,
+   225
+  ]
+ },
+ "terrains": {
+  "Grass": {
+   "strata": [
+    {
+     "blocks": [
+      [
+       "minecraft:grass_block[snowy=false]",
+       6
+      ],
+      [
+       "biomeswevegone:lush_grass_block[snowy=false]",
+       2
+      ]
+     ],
+     "depth": [
+      1,
+      1
+     ],
+     "patches": 6
+    },
+    {
+     "blocks": [
+      [
+       "minecraft:dirt",
+       4
+      ],
+      [
+       "biomeswevegone:lush_dirt",
+       1
+      ]
+     ],
+     "depth": [
+      2,
+      4
+     ]
+    }
+   ],
+   "submerged_top": "minecraft:dirt"
+  },
+  "Dirt": {
+   "strata": [
+    {
+     "blocks": [
+      [
+       "minecraft:dirt",
+       3
+      ],
+      [
+       "biomeswevegone:lush_dirt",
+       1
+      ]
+     ],
+     "depth": [
+      3,
+      5
+     ],
+     "patches": 5
+    }
+   ]
+  },
+  "Podzol": {
+   "strata": [
+    {
+     "blocks": [
+      [
+       "minecraft:podzol[snowy=false]",
+       3
+      ],
+      [
+       "biomeswevegone:podzol_dacite",
+       1
+      ]
+     ],
+     "depth": [
+      1,
+      1
+     ],
+     "patches": 5
+    },
+    {
+     "blocks": [
+      [
+       "minecraft:dirt",
+       1
+      ]
+     ],
+     "depth": [
+      2,
+      4
+     ]
+    }
+   ],
+   "submerged_top": "minecraft:dirt"
+  },
+  "Mud": {
+   "strata": [
+    {
+     "blocks": [
+      [
+       "minecraft:mud",
+       3
+      ],
+      [
+       "biomeswevegone:pale_mud",
+       1
+      ],
+      [
+       "biomeswevegone:peat",
+       1
+      ]
+     ],
+     "depth": [
+      2,
+      4
+     ],
+     "patches": 4
+    }
+   ]
+  },
+  "Rocky": {
+   "strata": [
+    {
+     "blocks": [
+      [
+       "minecraft:stone",
+       4
+      ],
+      [
+       "biomeswevegone:rocky_stone",
+       2
+      ],
+      [
+       "biomeswevegone:mossy_stone",
+       1
+      ],
+      [
+       "minecraft:andesite",
+       1
+      ]
+     ],
+     "depth": [
+      3,
+      5
+     ],
+     "patches": 3
+    }
+   ]
+  },
+  "Sand": {
+   "strata": [
+    {
+     "blocks": [
+      [
+       "minecraft:sand",
+       4
+      ],
+      [
+       "biomeswevegone:white_sand",
+       1
+      ]
+     ],
+     "depth": [
+      3,
+      5
+     ],
+     "patches": 5
+    },
+    {
+     "blocks": [
+      [
+       "minecraft:sandstone",
+       1
+      ]
+     ],
+     "depth": [
+      3,
+      6
+     ]
+    }
+   ]
+  },
+  "Red Sand": {
+   "strata": [
+    {
+     "blocks": [
+      [
+       "minecraft:red_sand",
+       3
+      ],
+      [
+       "biomeswevegone:cracked_red_sand",
+       1
+      ]
+     ],
+     "depth": [
+      3,
+      5
+     ],
+     "patches": 5
+    },
+    {
+     "blocks": [
+      [
+       "biomeswevegone:red_rock",
+       1
+      ]
+     ],
+     "depth": [
+      3,
+      6
+     ]
+    }
+   ]
+  },
+  "Gravel": {
+   "strata": [
+    {
+     "blocks": [
+      [
+       "minecraft:gravel",
+       3
+      ],
+      [
+       "biomeswevegone:black_sand",
+       1
+      ]
+     ],
+     "depth": [
+      3,
+      5
+     ],
+     "patches": 4
+    }
+   ]
+  },
+  "Basalt": {
+   "strata": [
+    {
+     "blocks": [
+      [
+       "biomeswevegone:black_sand",
+       1
+      ]
+     ],
+     "depth": [
+      1,
+      2
+     ]
+    },
+    {
+     "blocks": [
+      [
+       "biomeswevegone:black_sandstone",
+       1
+      ]
+     ],
+     "depth": [
+      6,
+      10
+     ]
+    }
+   ]
+  }
+ }
+}

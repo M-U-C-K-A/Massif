@@ -490,7 +490,7 @@ fn a_new_map_of_conquest_blocks_exports_them() {
     use massif_core::materials::{self as palettes, Palette as BlockPalette};
     let params = GenParams { tiles_x: 3, tiles_z: 3, landform: Landform::Islands, relief: 400.0, seed: 5, ..GenParams::default() };
     let options = ExportOptions { target: Target::release("1.20.1").unwrap(), ..ExportOptions::default() };
-    let mut conquest = generate(&GenParams { palette: BlockPalette::conquest(), ..params.clone() });
+    let mut conquest = generate(&GenParams { palette: BlockPalette::of_mod("conquest").unwrap(), ..params.clone() });
     assert_eq!(conquest.meta.palette.name, "Conquest Reforged");
     let dir = temp_dir("palette-conquest");
     export(&conquest.snapshot(), &dir, &options, &Progress::default()).unwrap();
@@ -517,7 +517,7 @@ fn a_new_map_of_conquest_blocks_exports_them() {
         eprintln!("{} Conquest states checked against {}", checked.len(), inst.name);
         // Each a whole block, its colour (for before the game is read) its
         // texture's.
-        let conquest = BlockPalette::conquest();
+        let conquest = BlockPalette::of_mod("conquest").unwrap();
         let mut colors = BTreeMap::new();
         for state in conquest.states() {
             let id = state.split('[').next().unwrap();
@@ -548,4 +548,35 @@ fn a_new_map_of_conquest_blocks_exports_them() {
     history.undo(&mut conquest);
     assert_eq!(conquest.meta.palette.name, "Conquest Reforged");
     let _ = (std::fs::remove_dir_all(&back), std::fs::remove_dir_all(&plain));
+}
+
+/// Every mod profile's palette (`massif_core::mod_profiles`), whatever the
+/// mod: a new map made of it exports for the version its mod is made for,
+/// and writes the mod's blocks of the palette, each as the palette states
+/// it, and no other block of the mod.
+#[test]
+fn every_mod_profile_palette_exports_its_blocks() {
+    use massif_core::materials::Palette as BlockPalette;
+    for profile in massif_core::mod_profiles::all() {
+        let Some(palette) = &profile.palette else { continue };
+        let version = profile.minecraft.as_deref().unwrap_or("1.21.1");
+        let options = ExportOptions { target: Target::release(version).unwrap(), ..ExportOptions::default() };
+        let params = GenParams { tiles_x: 3, tiles_z: 3, landform: Landform::Islands, relief: 400.0, seed: 5, palette: BlockPalette::of_mod(&profile.namespace).unwrap(), ..GenParams::default() };
+        let mut world = generate(&params);
+        assert_eq!(&world.meta.palette, palette);
+        let dir = temp_dir(&format!("profile-{}", profile.namespace));
+        export(&world.snapshot(), &dir, &options, &Progress::default()).unwrap();
+        let states = palette_states(&dir, options.target.data_version);
+        let prefix = format!("{}:", profile.namespace);
+        let written: Vec<&String> = states.keys().filter(|s| s.starts_with(&prefix)).collect();
+        let wanted: HashSet<(String, Vec<(String, String)>)> = palette.states().iter().map(|s| split(s)).collect();
+        assert!(written.len() >= 2, "{}: {written:?}", profile.name);
+        for s in &written {
+            let (id, mut props) = split(s);
+            props.sort();
+            assert!(wanted.iter().any(|(w, p)| *w == id && { let mut p = p.clone(); p.sort(); p == props }), "{}: {s} is not of its palette", profile.name);
+        }
+        eprintln!("{}: {} states of its blocks written for {version}, of the {} its palette uses", profile.name, written.len(), wanted.iter().filter(|(id, _)| id.starts_with(&prefix)).count());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

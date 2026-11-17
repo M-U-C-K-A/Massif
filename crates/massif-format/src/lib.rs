@@ -1093,11 +1093,11 @@ mod tests {
         use massif_core::materials::{Palette, apply};
         let mut world = sample_world();
         assert!(serde_json::to_string(&world.meta).unwrap().find("palette").is_none(), "nothing written for the game's blocks");
-        world.meta.palette = Palette::conquest();
+        world.meta.palette = Palette::of_mod("conquest").unwrap();
         apply(&mut world.registry, &world.meta.palette);
         let bytes = to_bytes(&mut world);
         let back = read(&bytes).unwrap();
-        assert_eq!(back.meta.palette, Palette::conquest());
+        assert_eq!(back.meta.palette, Palette::of_mod("conquest").unwrap());
         assert_eq!(back.registry, world.registry);
     }
 

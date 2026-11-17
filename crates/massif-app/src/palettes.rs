@@ -3,8 +3,8 @@
 //! A palette (see `massif_core::materials`) says what the built-in
 //! terrains of a map are made of: the generator's grass, rock, sand, gravel
 //! and snow, the other natural terrains, and the rock under them. Those
-//! that come with Massif (Vanilla, Conquest Reforged) are shown as they are
-//! and duplicated to be changed; the player's own are kept in the settings.
+//! that come with Massif (Vanilla, and those of the mods read whose
+//! profiles bring one) are shown as they are and duplicated to be changed; the player's own are kept in the settings.
 //! Each terrain is a few layers from the surface down, each of blocks with
 //! their weights, picked from the game's and the mods' blocks or typed.
 
@@ -21,6 +21,8 @@ const PICKS: usize = 160;
 
 /// The palettes window.
 pub struct PaletteEditor {
+    /// The palettes that come with Massif, offered now.
+    shipped: Vec<Palette>,
     /// The player's own palettes.
     pub own: Vec<Palette>,
     /// The one shown: an index in [`PaletteEditor::all`].
@@ -44,10 +46,11 @@ pub enum Choice {
 }
 
 impl PaletteEditor {
-    /// The window over the player's palettes `own`, `shown` first if it is
-    /// one of them; `of_map` is the map's terrains read as a palette.
-    pub fn new(own: Vec<Palette>, shown: Option<&str>, of_map: Palette) -> Self {
-        let mut me = Self { own, selected: 0, slot: Some("Grass".into()), layer: 0, search: String::new(), typed: String::new(), problem: None, of_map };
+    /// The window over the palettes that come with Massif `shipped` and the
+    /// player's `own`, `shown` first if it is one of them; `of_map` is the
+    /// map's terrains read as a palette.
+    pub fn new(shipped: Vec<Palette>, own: Vec<Palette>, shown: Option<&str>, of_map: Palette) -> Self {
+        let mut me = Self { shipped, own, selected: 0, slot: Some("Grass".into()), layer: 0, search: String::new(), typed: String::new(), problem: None, of_map };
         if let Some(name) = shown {
             me.selected = me.all().iter().position(|p| p.name == name).unwrap_or(0);
         }
@@ -56,16 +59,16 @@ impl PaletteEditor {
 
     /// The palettes that come with Massif, then the player's.
     pub fn all(&self) -> Vec<Palette> {
-        Palette::built_in().into_iter().chain(self.own.iter().cloned()).collect()
+        self.shipped.iter().chain(&self.own).cloned().collect()
     }
 
-    fn built_ins() -> usize {
-        Palette::built_in().len()
+    fn built_ins(&self) -> usize {
+        self.shipped.len()
     }
 
     /// The player's palette shown, to change.
     fn own_mut(&mut self) -> Option<&mut Palette> {
-        let i = self.selected.checked_sub(Self::built_ins())?;
+        let i = self.selected.checked_sub(self.built_ins())?;
         self.own.get_mut(i)
     }
 
@@ -82,7 +85,7 @@ impl PaletteEditor {
     fn add(&mut self, mut palette: Palette, name: &str) {
         palette.name = self.free_name(name);
         self.own.push(palette);
-        self.selected = Self::built_ins() + self.own.len() - 1;
+        self.selected = self.built_ins() + self.own.len() - 1;
     }
 
     pub fn ui(&mut self, ui: &mut Ui, blocks: &mut BlockLibrary) -> Choice {
@@ -126,7 +129,7 @@ impl PaletteEditor {
         let all = self.all();
         egui::ScrollArea::vertical().id_salt("palette list").max_height(ui.available_height() - 110.0).show(ui, |ui| {
             for (i, p) in all.iter().enumerate() {
-                let built_in = i < Self::built_ins();
+                let built_in = i < self.built_ins();
                 let text = if built_in { format!("{}  ·  {}", p.name, tr!("built in")) } else { p.name.clone() };
                 let on = self.selected == i;
                 let button = egui::Button::selectable(on, RichText::new(text).size(12.5)).min_size(vec2(LIST_W - 8.0, 26.0));
@@ -146,8 +149,8 @@ impl PaletteEditor {
             let of_map = self.of_map.clone();
             self.add(of_map, tr!("This map's blocks"));
         }
-        if self.selected >= Self::built_ins() && ui.button(theme::with_icon(Icon::Trash2, tr!("Delete"))).clicked() {
-            self.own.remove(self.selected - Self::built_ins());
+        if self.selected >= self.built_ins() && ui.button(theme::with_icon(Icon::Trash2, tr!("Delete"))).clicked() {
+            self.own.remove(self.selected - self.built_ins());
             self.selected -= 1;
         }
     }
@@ -156,7 +159,7 @@ impl PaletteEditor {
     /// pick from.
     fn body(&mut self, ui: &mut Ui, pal: &Colors, blocks: &mut BlockLibrary) {
         let shown = self.all()[self.selected].clone();
-        let editable = self.selected >= Self::built_ins();
+        let editable = self.selected >= self.built_ins();
         let missing: Vec<&str> = shown.namespaces().into_iter().filter(|ns| !blocks.catalogue.as_ref().is_some_and(|c| c.mods.iter().any(|m| m.namespaces.iter().any(|n| n == ns)))).collect();
         if editable {
             ui.horizontal(|ui| {
@@ -473,7 +476,7 @@ pub fn game_of(palette: &Palette) -> String {
     if palette.is_vanilla() {
         return tr!("Minecraft Java 1.18+").to_owned();
     }
-    // Conquest Reforged plays 1.20.1.
-    let version = if palette.namespaces().contains(&"conquest") { "1.20.1" } else { "1.18+" };
+    // The version its mods' profiles name, if any.
+    let version = massif_core::mod_profiles::minecraft_of(palette).unwrap_or("1.18+");
     format!("{}  ·  Minecraft Java {version}", palette.name)
 }

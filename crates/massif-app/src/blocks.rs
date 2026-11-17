@@ -28,10 +28,9 @@ pub struct BlockLibrary {
     pub search: String,
     /// Show the blocks that are not whole cubes (flowers, torches…).
     pub all: bool,
-    /// Conquest Reforged's instances installed here (its Fabric and Forge
-    /// modpacks…), the best read first, while its blocks are not read:
-    /// each offered in one click.
-    pub conquest: Vec<Instance>,
+    /// The instances installed here with mods with blocks not read yet,
+    /// whatever the mods, the best read first: each offered in one click.
+    pub instances: Vec<Instance>,
     /// What reading an instance left to say (the version of the game it
     /// plays is not installed…).
     pub notice: Option<String>,
@@ -43,14 +42,20 @@ pub struct BlockLibrary {
     sections: Option<(usize, String, bool, Arc<Vec<Section>>)>,
 }
 
-/// Conquest Reforged's instances to offer: those installed here. In tests,
-/// only those MASSIF_CONQUEST_DIR names, so that no test depends on what
-/// the computer running it has installed.
-fn conquest_instances() -> Vec<Instance> {
+/// The instances installed here with mods with blocks. In tests, only
+/// those of the folder MASSIF_INSTANCES_DIR (or MASSIF_CONQUEST_DIR) names,
+/// so that no test depends on what the computer running it has installed.
+fn installed_instances() -> Vec<Instance> {
     if cfg!(test) {
-        return std::env::var_os("MASSIF_CONQUEST_DIR").map(|d| massif_assets::instance::with_mod_in(std::path::Path::new(&d), "conquest")).unwrap_or_default();
+        let dir = std::env::var_os("MASSIF_INSTANCES_DIR").or_else(|| std::env::var_os("MASSIF_CONQUEST_DIR"));
+        return dir.map(|d| massif_assets::instance::with_blocks_in(std::path::Path::new(&d))).unwrap_or_default();
     }
-    massif_assets::instance::find_all_with_mod("conquest")
+    massif_assets::instance::find_all_with_blocks()
+}
+
+/// The namespaces of the mods a catalogue has read.
+pub fn read_namespaces(cat: &Catalogue) -> Vec<&str> {
+    cat.mods.iter().filter(|m| m.kind == SourceKind::Mod).flat_map(|m| m.namespaces.iter().map(String::as_str)).collect()
 }
 
 /// A section of the Blocks panel: a title and its blocks, by their index in
@@ -63,6 +68,30 @@ pub struct Section {
 impl BlockLibrary {
     pub fn is_loading(&self) -> bool {
         self.pending.is_some()
+    }
+
+    /// The namespaces of the mods whose blocks are read.
+    pub fn namespaces(&self) -> Vec<String> {
+        self.catalogue.as_deref().map(|c| read_namespaces(c).into_iter().map(str::to_owned).collect()).unwrap_or_default()
+    }
+
+    /// The palettes that come with Massif to offer now: the game's, and
+    /// those of the mods read (see `massif_core::mod_profiles`).
+    pub fn offered_palettes(&self) -> Vec<massif_core::materials::Palette> {
+        let read = self.namespaces();
+        massif_core::materials::Palette::offered(&read.iter().map(String::as_str).collect::<Vec<_>>())
+    }
+
+    /// An instance installed here to read for the blocks of the mods
+    /// `needed` (namespaces), when some are not read yet and it has them
+    /// all: the best read first.
+    pub fn instance_for(&self, needed: &[&str]) -> Option<Instance> {
+        let read = self.namespaces();
+        let missing: Vec<&str> = needed.iter().copied().filter(|ns| !read.iter().any(|r| r == ns)).collect();
+        if missing.is_empty() || self.is_loading() {
+            return None;
+        }
+        self.instances.iter().find(|i| missing.iter().all(|ns| i.namespaces.iter().any(|n| n == ns))).cloned()
     }
 
     /// Find the game's jars and read `jar` (or the newest) on another thread,
@@ -89,11 +118,12 @@ impl BlockLibrary {
                 Some(j) => crate::jobs::in_loading_pool(|| massif_assets::load_with_mods(&j.path, &j.version, &mods)).map_err(|e| format!("{}: {e}", j.path.display())),
                 None => Err(tr!("No Minecraft installation was found. Choose the game's jar (versions/<version>/<version>.jar).").to_owned()),
             };
-            // Conquest Reforged installed here, to offer while its blocks
-            // are not read.
-            let has_conquest = result.as_ref().is_ok_and(|c| c.mods.iter().any(|m| m.kind == SourceKind::Mod && m.namespaces.iter().any(|n| n == "conquest")));
-            let conquest = if has_conquest { Vec::new() } else { conquest_instances() };
-            let _ = tx.send((jars, result, conquest));
+            // The instances installed here with block mods not read yet,
+            // to offer.
+            let read: Vec<String> = result.as_ref().map(|c| read_namespaces(c).into_iter().map(str::to_owned).collect()).unwrap_or_default();
+            let mut instances = installed_instances();
+            instances.retain(|i| i.namespaces.iter().any(|ns| !read.contains(ns)));
+            let _ = tx.send((jars, result, instances));
             ctx.request_repaint();
         });
         self.pending = Some(rx);
@@ -102,10 +132,10 @@ impl BlockLibrary {
     /// Take the result of a load. Returns whether a catalogue arrived.
     pub fn poll(&mut self) -> bool {
         let Some(rx) = &self.pending else { return false };
-        let Ok((jars, result, conquest)) = rx.try_recv() else { return false };
+        let Ok((jars, result, instances)) = rx.try_recv() else { return false };
         self.pending = None;
         self.jars = jars;
-        self.conquest = conquest;
+        self.instances = instances;
         match result {
             Ok(cat) => {
                 self.catalogue = Some(Arc::new(cat));
@@ -142,14 +172,13 @@ impl BlockLibrary {
         if instance.mods.is_empty() {
             self.notice = Some(tr!("{instance} has no mod with blocks.", instance = instance.name));
         }
-        self.conquest.clear();
+        self.instances.clear();
         self.load(ctx, jar.clone(), mods.clone());
     }
 
     /// The panel's sections, made again only when the catalogue, the search
     /// or the shapes shown change: the game's blocks by category, then each
-    /// mod's, by its creative tabs when it gives them (Conquest Reforged's
-    /// 36), else by category.
+    /// mod's, by its creative tabs when it gives them, else by category.
     pub fn sections(&mut self, needle: &str) -> Arc<Vec<Section>> {
         let Some(cat) = self.catalogue.clone() else { return Arc::default() };
         let key = Arc::as_ptr(&cat) as usize;

@@ -8,7 +8,7 @@ The home screen opens with Massif. On the left are the ways in: **New map**, **F
 - **Land**: a landform (flat, plains, hills, mountains, islands) or a template of the terrain generator, and how the ground is painted.
 - **Water**: its level, water or lava, and beaches along the shores.
 - **Seed**: the same seed always gives the same land.
-- **Blocks**: the block palette the terrains are made of: Vanilla, Conquest Reforged or one of your own: see Painting ▸ Block palettes.
+- **Blocks**: the block palette the terrains are made of: Vanilla, a palette of a mod read for this map, or one of your own: see Painting ▸ Block palettes.
 Press **Create map** (or `Enter`). A `.massif`, a `.world` or a height map dropped on the window opens too.
 
 **Samples**, on the left, opens a small map made from a template of the terrain generator (Alpine range, Archipelago, Floating mountains), its relief built in a few seconds, to explore at once.
@@ -131,17 +131,18 @@ Each change of the selection is a step to undo. The selection is saved in the ma
 
 ## Block palettes
 A block palette says what the terrains are made of: the grass, rock, sand, gravel and snow the generator lays by height and slope, the other natural terrains, and the rock under them where caves are carved and ores laid. A terrain a palette leaves out is the game's; terrains of your own are never touched.
-- **Vanilla** and **Conquest Reforged** come with Massif. Conquest's mixes its grass blocks, loamy dirt, limestones, sands, gravels and snow in patches, from its own lists; the rock stays the game's stone, which Conquest makes its limestone.
+- **Vanilla** comes with Massif. A mod may bring a palette of its blocks (Conquest Reforged's mixes its grass blocks, loamy dirt, limestones, sands, gravels and snow in patches), offered only once that mod's blocks are read: the menus list Vanilla, the palettes of the mods read, and your own.
 - **Blocks** in the New map settings picks the palette of a new map. **Blocks** in the Info panel makes the whole map of another palette at once, in one step to undo.
 - **Edit palettes…** at the bottom of either menu: **Duplicate** a palette or make one **From this map**, pick a terrain, then for each layer its depth, **In patches**, and its blocks with their weights. Click a layer, then a block in the grid, or type any id (`mod:block[axis=x]`). **Rock under the terrains** sets the rock above and under Y 0. Your palettes are kept with the settings.
 
-## Conquest Reforged and other mods
+## Blocks from mods
 
-- Where Conquest Reforged is installed, the Blocks panel offers it: **Use** reads its instance in one step, its mod, its list of blocks for WorldPainter (`conquest_wp.csv`) and its resource packs, over Minecraft 1.20.1, the version it plays.
+- Massif finds the instances installed here with mods with blocks, whatever the mods, and lists those not read yet in the Blocks panel under **Mods with blocks in your Minecraft instances**: **Use** reads one in one step, its mods, their lists of blocks for WorldPainter (`<mod>_wp.csv`) and its resource packs, over the version of the game it plays.
 - **Blocks ▸ Mods ▸ Instance…** reads any modpack's instance the same way; **Add mods…** takes jars of mods with blocks (Conquest Reforged, Chipped, Macaw's…), resource packs (`.zip`) and lists of blocks made for WorldPainter (`.csv`) one by one. Click a chip to take it out.
-- A mod's blocks show in its own creative tabs (Conquest Reforged's 36), with their textures, else by family (a block's family read from its name, or from how it is drawn: plants, wood, building blocks). Whole blocks and plants show at first; **All shapes** adds each block's slabs, stairs, arches and other shapes, and the search looks through all of them.
+- A mod's blocks show in its own creative tabs when it gives them, with their textures, else by family (a block's family read from its name, or from how it is drawn: plants, wood, building blocks). Whole blocks and plants show at first; **All shapes** adds each block's slabs, stairs, arches and other shapes, and the search looks through all of them.
 - **Any block by its id**: type it under the search, with its properties (`mod:block[axis=x]`), then **As terrain** or **As cover**. A block the panel does not have is written as typed, in grey on the map. A whole block paints as a terrain, any other as a ground cover; tall plants grow in two halves, and plants grow on the mod's own grass, moss and soils.
-- **Export** picks the version the mod is made for (1.20.1 for Conquest Reforged) and its instance's saves, and warns in red when the version or the mod does not match. Blocks are written by their own ids and states: open the world with the same mods in the game.
+- Massif comes with palettes for Conquest Reforged, Biomes O' Plenty, Regions Unexplored and Oh The Biomes We've Gone, offered once their blocks are read. A palette for another mod is a data file anyone can write: see the guide's *Mod profiles*.
+- **Export** picks the version the mod is made for and its instance's saves, and warns in red when the version or the mod does not match. Blocks are written by their own ids and states: open the world with the same mods in the game.
 
 ## Automatic biomes and paint
 - **Auto biome** reads the land and gives it biomes: water, rivers and beaches, lowland, hills, mountains, peaks, cliffs, from its water, height, slope and ground. Sand at the water's edge is a beach; sand far from the water is a desert only where sand is all around, not a patch in a plain.

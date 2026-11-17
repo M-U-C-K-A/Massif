@@ -3402,7 +3402,7 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
         }
         if ui
             .small_button(theme::with_icon(Icon::Plus, tr!("Add mods…")))
-            .on_hover_text(tr!("The jars of mods with blocks (Conquest Reforged, Chipped, Macaw's…), from the mods folder of your instance, the resource packs (.zip) that give them their textures, and the lists of blocks made for WorldPainter (.csv) that give their states: their blocks are painted and exported like the game's"))
+            .on_hover_text(tr!("The jars of mods with blocks, from the mods folder of your instance, the resource packs (.zip) that give them their textures, and the lists of blocks made for WorldPainter (.csv) that give their states: their blocks are painted and exported like the game's"))
             .clicked()
             && let Some(files) = rfd::FileDialog::new().set_title(tr!("Choose mods and resource packs")).add_filter(tr!("Mods, resource packs and block lists"), &["jar", "zip", "csv"]).pick_files()
         {
@@ -3425,10 +3425,9 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
             }
         }
     });
-    // Conquest Reforged installed here: its blocks in one click, while they
-    // are not read; each of its instances (Fabric, Forge…) on a row.
-    let read_conquest = blocks.catalogue.as_ref().is_some_and(|c| c.mods.iter().any(|m| m.kind == massif_assets::SourceKind::Mod && m.namespaces.iter().any(|n| n == "conquest")));
-    if !blocks.conquest.is_empty() && !read_conquest {
+    // The instances installed here with mods with blocks not read yet,
+    // whatever the mods: each one's blocks in one click, on a row.
+    if !blocks.instances.is_empty() {
         ui.add_space(4.0);
         egui::Frame::new()
             .fill(pal.well())
@@ -3437,17 +3436,19 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
             .inner_margin(egui::Margin::symmetric(10, 8))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.label(RichText::new(tr!("Conquest Reforged is installed")).medium().size(12.5));
-                for found in blocks.conquest.clone() {
+                ui.add(egui::Label::new(RichText::new(tr!("Mods with blocks in your Minecraft instances")).medium().size(12.5)).wrap());
+                for found in blocks.instances.clone() {
                     ui.add_space(4.0);
-                    // A row as high as its text: the instance, then its button.
+                    // A row as high as its text: the mods and the instance,
+                    // then its button.
                     ui.horizontal(|ui| {
-                        let detail = match &found.minecraft {
-                            Some(v) => tr!("{name} · Minecraft {v}", name = found.name, v),
-                            None => found.name.clone(),
-                        };
                         let text_width = (ui.available_width() - 64.0).max(80.0);
-                        ui.allocate_ui_with_layout(vec2(text_width, 0.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.allocate_ui_with_layout(vec2(text_width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                            ui.add(egui::Label::new(RichText::new(found.mod_names.join(", ")).size(12.0)).wrap());
+                            let detail = match &found.minecraft {
+                                Some(v) => tr!("{name} · Minecraft {v}", name = found.name, v),
+                                None => found.name.clone(),
+                            };
                             ui.add(egui::Label::new(RichText::new(detail).size(11.5).color(pal.weak)).wrap());
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -3856,7 +3857,9 @@ pub fn info_panel(ui: &mut Ui, doc: &mut Document, hover: Option<(i32, i32)>, ca
     ui.horizontal(|ui| {
         ui.label(tr!("Blocks"));
         let now = doc.world.meta.palette.clone();
-        match crate::palettes::choose(ui, "map palette", palettes, &now, 170.0) {
+        // As wide as the panel lets it, in a narrow one.
+        let width = (ui.available_width() - 24.0).clamp(80.0, 170.0);
+        match crate::palettes::choose(ui, "map palette", palettes, &now, width) {
             Some(crate::palettes::Picked::Use(p)) => affects_map |= doc.set_palette(p),
             Some(crate::palettes::Picked::Edit) => *edit = true,
             None => {}
@@ -3994,6 +3997,42 @@ pub fn empty_area(ui: &mut Ui, shown: &HashSet<EditorKind>, developer: bool) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Info at a narrow panel's width: the Blocks menu, opened, and its
+    /// help stay inside the panel, the mod's palette offered beside the
+    /// game's (rendered with MASSIF_SNAPSHOT_DIR).
+    #[test]
+    fn info_blocks_fit_a_narrow_panel() {
+        use egui_kittest::kittest::Queryable;
+        let world = massif_core::generate::generate(&massif_core::generate::GenParams { tiles_x: 2, tiles_z: 2, ..Default::default() });
+        let palettes = massif_core::materials::Palette::offered(&["conquest"]);
+        for width in [220.0, 300.0] {
+            let doc = crate::doc::Document::new(world.clone(), None, 1);
+            let palettes = palettes.clone();
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(width, 520.0)).with_accessibility_check(false).build_ui_state(
+                move |ui, doc: &mut crate::doc::Document| {
+                    crate::theme::install(ui.ctx());
+                    let pal = crate::theme::Palette::of(ui);
+                    egui::Frame::new().fill(pal.panel).inner_margin(12).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        let mut edit = false;
+                        info_panel(ui, doc, None, (0, 0, 0), &palettes, &mut edit);
+                    });
+                },
+                doc,
+            );
+            h.run_steps(2);
+            h.get_by_value("Vanilla").click();
+            h.run_steps(3);
+            for node in [h.get_by_label("Conquest Reforged"), h.get_by_label("Edit palettes…"), h.get_by_label_contains("What grass, soils")] {
+                let r = node.rect();
+                assert!(r.right() <= width + 0.5, "{width}: {r:?}");
+            }
+            if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from) {
+                h.render().unwrap().save(dir.join(format!("info-blocks-{width}.png"))).unwrap();
+            }
+        }
+    }
     use massif_core::generate::{GenParams, generate};
 
     /// What a noise settings panel holds while it is drawn.
