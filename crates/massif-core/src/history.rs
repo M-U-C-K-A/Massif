@@ -17,6 +17,9 @@ use std::sync::Arc;
 
 #[derive(Debug)]
 struct Step {
+    /// Its number, for a stroke to know whether the step open is still its
+    /// own (see [`History::open_step`]).
+    id: u64,
     label: String,
     dim: usize,
     /// Pre-images of the touched tiles, in the order they were first touched.
@@ -64,6 +67,7 @@ impl Whole {
 impl Step {
     fn new(label: String, dim: usize) -> Self {
         Self {
+            id: 0,
             label,
             dim,
             tiles: Vec::new(),
@@ -105,6 +109,10 @@ pub struct History {
     /// The layers brushes leave as they are (see [`crate::registry::Locks`]),
     /// set by whoever paints before they do.
     pub locks: crate::registry::Locks,
+    /// The number the next step begun takes, and the label and dimension
+    /// of the last one begun.
+    next_id: u64,
+    last: (String, usize),
 }
 
 /// What the steps to undo and redo may hold by default: on a map of 44,544
@@ -126,6 +134,8 @@ impl History {
             limit: limit.max(1),
             budget: HISTORY_BYTES,
             locks: Default::default(),
+            next_id: 1,
+            last: (String::new(), 0),
         }
     }
 
@@ -154,23 +164,93 @@ impl History {
     }
 
     /// Start recording a step. Any step still open is committed first.
-    pub fn begin(&mut self, label: impl Into<String>, dim: usize) {
+    /// Returns its number (see [`History::open_step`]).
+    pub fn begin(&mut self, label: impl Into<String>, dim: usize) -> u64 {
         self.commit();
-        self.open = Some(Step::new(label.into(), dim));
+        let label = label.into();
+        let id = self.next_id;
+        self.next_id += 1;
+        self.last = (label.clone(), dim);
+        self.open = Some(Step { id, ..Step::new(label, dim) });
+        id
     }
 
     pub fn is_recording(&self) -> bool {
         self.open.is_some()
     }
 
+    /// The number of the step open, if any. A stroke keeps the one it
+    /// began: anything else may close it under the stroke's feet (an undo,
+    /// a selection, a task's result put in place), and the stroke then
+    /// begins another rather than edit with no step open.
+    pub fn open_step(&self) -> Option<u64> {
+        self.open.as_ref().map(|s| s.id)
+    }
+
     /// Edit `level` of the dimension the open step was begun on.
     ///
-    /// Panics if no step is open: every edit must be undoable.
+    /// Every edit must be undoable: with no step open, a bug, debug builds
+    /// (and the tests) stop here; a build for use begins a step, as the
+    /// last one begun was labelled, and says so in the log, rather than
+    /// lose the map.
     pub fn edit<'a>(&'a mut self, world: &'a mut World, level: usize) -> Edit<'a> {
-        let step = self.open.as_mut().expect("History::begin was not called");
+        if self.open.is_none() {
+            debug_assert!(false, "History::begin was not called");
+            log::warn!("an edit with no step open: a step “{}” is begun for it", self.last.0);
+            let (label, dim) = self.last.clone();
+            self.begin(label, dim.min(world.dims.len().saturating_sub(1)));
+        }
+        let step = self.open.as_mut().expect("begun above");
         let dim = &mut world.dims[step.dim];
         assert!(level < dim.levels.len(), "no such level");
         Edit { dim, step, level, locks: &self.locks }
+    }
+
+    /// Undo the open step, as far as it went, and drop it: after an error
+    /// in the middle of a stroke, the map as it was before it, whatever the
+    /// stroke left half done (tiles taken out to edit included). Returns
+    /// whether a step was open.
+    pub fn abandon(&mut self, world: &mut World) -> bool {
+        let Some(step) = self.open.take() else {
+            return false;
+        };
+        swap(step, world);
+        true
+    }
+
+    /// A copy of `world` as the last step committed left it: the open
+    /// step's edits, if any, taken back on the copy (see [`World::copy_unfrozen`]);
+    /// `world` stays as it is.
+    pub fn copy_committed(&self, world: &World) -> World {
+        let mut copy = world.copy_unfrozen();
+        let Some(step) = &self.open else {
+            return copy;
+        };
+        if let Some(whole) = &step.whole {
+            copy.meta = whole.meta.clone();
+            copy.registry = whole.registry.clone();
+            copy.dims = whole.dims.clone();
+            return copy;
+        }
+        let Some(dim) = copy.dims.get_mut(step.dim) else {
+            return copy;
+        };
+        if let Some(selection) = &step.selection {
+            dim.selection = selection.clone();
+        }
+        for (pos, state) in step.voxels.iter().rev() {
+            dim.voxels.restore(*pos, state.clone());
+        }
+        if let Some(levels) = &step.structure {
+            dim.replace_levels(levels.clone());
+            return copy;
+        }
+        for (id, pos, state) in step.tiles.iter().rev() {
+            if let Some(index) = dim.level_index(*id) {
+                dim.levels[index].restore(*pos, state.clone());
+            }
+        }
+        copy
     }
 
     /// Close the open step. Returns whether it changed anything.
@@ -813,6 +893,102 @@ mod tests {
         h.redo(&mut w);
         h.redo(&mut w);
         assert!(w.dims[0].levels[1].view(POS).unwrap().present(0));
+    }
+
+    /// A map of four tiles at 64, each tile's encoded form.
+    fn four_tiles() -> World {
+        let mut w = World::new(WorldMeta::default());
+        for (x, z) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            w.dims[0].ground_mut().insert(TilePos::new(x, z), Tile::ground(64.0, 1, 63));
+        }
+        w
+    }
+
+    fn blobs(w: &mut World) -> Vec<(TilePos, crate::level::Blob)> {
+        let ground = &mut w.dims[0].levels[0];
+        ground.freeze();
+        ground.blobs().expect("frozen")
+    }
+
+    /// A step's number tells a stroke whether the step open is still its
+    /// own: another one begun, or an undo, closes it.
+    #[test]
+    fn steps_are_numbered() {
+        let mut w = world();
+        let mut h = History::default();
+        let a = h.begin("Stroke", 0);
+        assert_eq!(h.open_step(), Some(a));
+        h.edit(&mut w, 0).tile_mut(POS).unwrap().top.set(0, 70.0);
+        // Something else begins (a selection, a task's result): the
+        // stroke's step is committed and another is open.
+        let b = h.begin("Select", 0);
+        assert_ne!(a, b);
+        assert_eq!(h.open_step(), Some(b));
+        h.commit();
+        assert_eq!(h.open_step(), None);
+        assert_eq!(h.undo_label(), Some("Stroke"));
+    }
+
+    /// An error in the middle of a stroke, while tiles are taken out to be
+    /// edited on other threads: the map is short of them. A copy of the
+    /// map as committed has them all, as before the stroke; abandoning
+    /// the step puts the map itself back so.
+    #[test]
+    fn a_stroke_cut_short_by_an_error_is_taken_back() {
+        let mut w = four_tiles();
+        let before = blobs(&mut w);
+        let mut h = History::default();
+        h.begin("Raise", 0);
+        h.edit(&mut w, 0).tile_mut(TilePos::new(0, 0)).unwrap().top.set(0, 80.0);
+        let rect = BlockRect::new(0, 0, 256, 256);
+        let cut = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            h.edit(&mut w, 0).par_tiles([TilePos::new(1, 0), TilePos::new(0, 1), TilePos::new(1, 1)], rect, false, |pos, _, tile| {
+                if pos == TilePos::new(1, 1) {
+                    panic!("an error in the middle of the stroke");
+                }
+                tile.top.set(0, 90.0);
+            });
+        }));
+        assert!(cut.is_err());
+        assert!(w.dims[0].ground().positions().count() < 4, "tiles taken out and lost");
+        let mut copy = h.copy_committed(&w);
+        assert_eq!(blobs(&mut copy), before, "the copy is the map before the stroke");
+        assert!(h.abandon(&mut w));
+        assert_eq!(h.open_step(), None);
+        assert_eq!(blobs(&mut w), before, "the map itself is back as before");
+        assert!(!h.can_undo(), "nothing of it to undo");
+        // With no step open, the copy is the map as it is.
+        let mut copy = h.copy_committed(&w);
+        assert_eq!(blobs(&mut copy), before);
+    }
+
+    /// An edit with no step open is a bug: the tests stop on it.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "History::begin was not called")]
+    fn an_edit_with_no_step_stops_the_tests() {
+        let mut w = world();
+        let mut h = History::default();
+        h.begin("Raise", 0);
+        h.commit();
+        let _ = h.edit(&mut w, 0);
+    }
+
+    /// A build for use records such an edit in a step of its own, as the
+    /// last one begun was labelled, rather than stop.
+    #[test]
+    #[cfg(not(debug_assertions))]
+    fn an_edit_with_no_step_begins_one() {
+        let mut w = world();
+        let mut h = History::default();
+        h.begin("Smooth", 0);
+        h.edit(&mut w, 0).tile_mut(POS).unwrap().top.set(0, 70.0);
+        h.commit();
+        h.edit(&mut w, 0).tile_mut(POS).unwrap().top.set(0, 75.0);
+        assert!(h.open_step().is_some());
+        h.commit();
+        assert_eq!(h.undo_count(), 2);
+        assert_eq!(h.undo_label(), Some("Smooth"));
     }
 
     #[test]

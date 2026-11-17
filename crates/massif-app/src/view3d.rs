@@ -4800,9 +4800,11 @@ impl View3d {
             .unwrap_or_else(|| Renderer3d::with_samples(&render_state.device, &render_state.queue, graphics.samples()));
         self.update_look(doc, &mut renderer);
 
-        // A new world: show all of it, forget the old tiles.
+        // A new world: show all of it, forget the old tiles, and a stroke
+        // that was the old map's.
         if self.generation != Some(doc.generation) {
             self.generation = Some(doc.generation);
+            self.sculpt = None;
             if let Some(walk) = self.walk.take() {
                 if walk.captured {
                     hold_mouse(ui.ctx(), false);

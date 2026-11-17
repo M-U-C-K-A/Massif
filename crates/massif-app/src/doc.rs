@@ -393,6 +393,14 @@ impl Document {
         changed
     }
 
+    /// After an error in a frame: the step open, if any, taken back as far
+    /// as it went (a stroke cut short, tiles it had taken out to edit
+    /// included), so that the map is as the last step left it. Returns
+    /// whether one was open.
+    pub fn abandon_step(&mut self) -> bool {
+        self.history.abandon(&mut self.world)
+    }
+
     /// Close the current undo step and bound memory use.
     pub fn commit(&mut self) {
         if self.history.commit() {

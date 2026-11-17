@@ -2402,6 +2402,15 @@ impl MassifApp {
     // --------------------------------------------------------------- jobs --
 
     fn poll_jobs(&mut self, ctx: &egui::Context) {
+        // A stroke under way: what the tasks bring waits until it ends, so
+        // that their tiles, worked out before it, do not close its step
+        // nor write over what it does.
+        if self.doc.history.is_recording() {
+            if !self.jobs.is_empty() {
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            }
+            return;
+        }
         let mut i = 0;
         while i < self.jobs.len() {
             let Some(outcome) = self.jobs[i].poll() else {
@@ -4947,6 +4956,12 @@ impl MassifApp {
         let now = std::time::Instant::now();
         self.panics.retain(|t| now.duration_since(*t) < std::time::Duration::from_secs(10));
         self.panics.push(now);
+        // A stroke the error cut short is taken back, as far as it went
+        // (with the tiles it had taken out to edit), so that neither the
+        // map nor its copy holds half of it.
+        if self.doc.abandon_step() {
+            crate::startup::step("the step under way when the error came was taken back");
+        }
         let rescued = crate::startup::catch(|| self.autosave.rescue(&self.doc));
         let copy = match rescued {
             Ok(Ok(b)) => b.map(|b| b.file),
@@ -5556,6 +5571,126 @@ mod tests {
         assert_eq!(next.found.len(), 1);
         assert_eq!(next.found[0].file, copy);
         drop(next);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A long Smooth stroke in 3D Sculpt goes on when something closes its
+    /// step under it — a selection made (as Esc with a selection tool, ⌘A
+    /// or ⌘D do), an undo, a task's result put in place —, where it
+    /// stopped the app ("History::begin was not called"). A backup taken in
+    /// the middle of a stroke is the map before it, never half of it.
+    #[test]
+    fn a_long_3d_stroke_survives_its_step_being_closed() {
+        let dir = std::env::temp_dir().join(format!("massif-stroke-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut h = harness(ThemeChoice::Dark);
+        {
+            let app = h.state_mut();
+            app.layout.active = 4; // 3D Sculpt
+            app.tools.sculpt.tool = Tool::Smooth3d;
+            app.tools.brush.radius = 12.0;
+            app.tools.brush.strength = 1.0;
+            app.sculpt3d.camera.distance = 160.0;
+            app.autosave = crate::autosave::Autosave::open(dir.clone());
+        }
+        h.run_steps(30);
+        let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        let view = areas.into_iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::Sculpt3d)).map(|(_, r)| r).unwrap();
+        let at = view.center() + vec2(0.0, 20.0);
+        h.event(egui::Event::PointerMoved(at));
+        h.run_steps(3);
+        assert!(h.state().sculpt3d.hover().is_some(), "the cursor points at the land");
+        // The map before the stroke: its ground and its sculpted chunks.
+        type Map = (Vec<(TilePos, massif_core::level::Blob)>, Vec<(massif_core::voxel::ChunkPos, massif_core::voxel::VoxelChunk)>);
+        let map_of = |world: &mut World| -> Map {
+            let dim = &mut world.dims[0];
+            dim.levels[0].freeze();
+            let mut chunks: Vec<_> = dim.voxels.iter().map(|(p, c)| (p, (**c).clone())).collect();
+            chunks.sort_by_key(|(p, _)| (p.x, p.y, p.z));
+            (dim.levels[0].blobs().unwrap(), chunks)
+        };
+        h.state_mut().doc.mark_changed();
+        let before = map_of(&mut h.state_mut().doc.world.copy_unfrozen());
+        let steps = h.state().doc.history.undo_count();
+        let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        h.event(press(true));
+        for k in 0..40 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            match k {
+                // A backup in the middle of the stroke: the map before it.
+                8 => {
+                    assert!(h.state().doc.history.is_recording(), "the stroke under way");
+                    let app = h.state_mut();
+                    let backup = app.autosave.rescue(&app.doc).unwrap().expect("a backup");
+                    let mut read = massif_format::load(&backup.file).unwrap();
+                    assert!(map_of(&mut read) == before, "the backup holds the map before the stroke, not half of it");
+                }
+                // Steps closed under the stroke: a selection, an undo.
+                14 => assert!(crate::select::select_all(&mut h.state_mut().doc)),
+                26 => {
+                    h.state_mut().doc.undo();
+                }
+                _ => {}
+            }
+        }
+        h.event(press(false));
+        h.run_steps(5);
+        assert!(!matches!(h.state().dialog, Some(Dialog::Crashed(..))), "no error");
+        let history = &h.state().doc.history;
+        assert!(!history.is_recording(), "the stroke's last step is closed");
+        assert_eq!(history.undo_label(), Some("Smooth"), "the rest of the stroke is a step of its own");
+        assert!(history.undo_count() >= steps + 2, "the stroke before the selection, the selection, the rest");
+        assert!(map_of(&mut h.state_mut().doc.world.copy_unfrozen()) != before, "smoothed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An error in the middle of a stroke on the map, while tiles are taken
+    /// out to be edited: the stroke is taken back, so that the map, and the
+    /// copy kept of it, are as before the stroke, never a mix.
+    #[test]
+    fn an_error_in_a_stroke_takes_it_back_in_the_map_and_its_copy() {
+        let dir = std::env::temp_dir().join(format!("massif-cut-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut h = harness(ThemeChoice::Light);
+        h.run_steps(3);
+        h.state_mut().autosave = crate::autosave::Autosave::open(dir.clone());
+        h.state_mut().doc.mark_changed();
+        let blobs = |world: &mut World| {
+            world.dims[0].levels[0].freeze();
+            world.dims[0].levels[0].blobs().unwrap()
+        };
+        let before = blobs(&mut h.state_mut().doc.world.copy_unfrozen());
+        // A stroke, cut short by an error while its tiles are out.
+        {
+            let doc = &mut h.state_mut().doc;
+            doc.history.begin("Raise", doc.dim);
+            let positions: Vec<TilePos> = doc.dimension().ground().positions().take(6).collect();
+            let last = positions[5];
+            let rect = massif_core::coords::BlockRect::new(-100_000, -100_000, 100_000, 100_000);
+            let cut = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                doc.history.edit(&mut doc.world, 0).par_tiles(positions, rect, false, |pos, _, tile| {
+                    if pos == last {
+                        panic!("an error made by a test");
+                    }
+                    for k in 0..128 * 128 {
+                        tile.top.set(k, 200.0);
+                    }
+                });
+            }));
+            assert!(cut.is_err());
+            assert!(doc.dimension().ground().positions().count() < before.len(), "tiles lost with the error");
+        }
+        // The frame's error, as the app meets it.
+        PANIC_NEXT_FRAME.set(true);
+        h.run_steps(3);
+        let copy = match &h.state().dialog {
+            Some(Dialog::Crashed(_, Some(copy))) => copy.clone(),
+            _ => panic!("no dialog with a copy after the error"),
+        };
+        assert!(blobs(&mut massif_format::load(&copy).unwrap()) == before, "the copy is the map before the stroke");
+        assert!(blobs(&mut h.state_mut().doc.world.copy_unfrozen()) == before, "and so is the map");
+        assert!(!h.state().doc.history.is_recording());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

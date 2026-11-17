@@ -1033,6 +1033,9 @@ pub struct Stroke {
     /// Paint terrain's right button: the terrain it puts back (`None`: by
     /// height).
     back: Option<TerrainId>,
+    /// The step to undo it records into, and its label.
+    step: u64,
+    label: String,
 }
 
 impl Stroke {
@@ -1109,7 +1112,8 @@ pub fn begin_stroke(doc: &mut Document, tools: &ToolState, at: (f32, f32), inver
     // combined layer's that paints one.
     let terrain = tool == Tool::PaintTerrain || (tool == Tool::Combined && doc.world.registry.combined_layer(tools.combined).is_some_and(|c| c.terrain().is_some()));
     let back = (terrain && inverse).then(|| unpaint_for_stroke(doc, tools)).flatten();
-    doc.history.begin(crate::i18n::tr_name(tool.label()), doc.dim);
+    let label = crate::i18n::tr_name(tool.label()).to_owned();
+    let step = doc.history.begin(label.clone(), doc.dim);
     let salt = doc.revision.wrapping_mul(0x9e37_79b9) ^ 0x5bd1_e995;
     let stroke = Stroke {
         last: at,
@@ -1124,6 +1128,8 @@ pub fn begin_stroke(doc: &mut Document, tools: &ToolState, at: (f32, f32), inver
         classes: None,
         sides: gradient_sides(doc, tools, tool, inverse, level),
         back,
+        step,
+        label,
     };
     if tool == Tool::Gradient {
         // The map keeps the gradients it is painted with.
@@ -1148,8 +1154,28 @@ fn gradient_sides(doc: &mut Document, tools: &ToolState, tool: Tool, inverse: bo
     sides
 }
 
+/// Before a stroke edits the map: its step still the one open, or, when
+/// something closed it under the stroke (an undo, a selection, a task's or
+/// the terrain graph's result put in place), a new one for the rest of the
+/// stroke, said in the log. Editing with no step open stopped the app.
+fn keep_step(doc: &mut Document, step: &mut u64, label: &str) {
+    if doc.history.open_step() != Some(*step) {
+        crate::startup::note(&format!("the step of a stroke ({label}) was closed under it: the rest of the stroke is a step of its own"));
+        *step = doc.history.begin(label.to_owned(), doc.dim);
+    }
+}
+
+/// End a stroke's step, if it is still the one open (something else may
+/// have closed it, and begun its own).
+fn end_step(doc: &mut Document, step: u64) {
+    if doc.history.open_step() == Some(step) {
+        doc.commit();
+    }
+}
+
 /// Continue a stroke to `to`. `dt` is the time since the previous call.
 pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Stroke, to: (f32, f32), dt: f32) {
+    keep_step(doc, &mut stroke.step, &stroke.label);
     let invert = stroke.inverse;
     // The automatic tools read the land with the rules of the settings.
     let reader = matches!(stroke.tool, Tool::AutoBiome | Tool::AutoPaint)
@@ -1321,7 +1347,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
 
 /// End a stroke: one step to undo. The automatic tools say what they did.
 pub fn end_stroke(doc: &mut Document, mut stroke: Stroke) -> Feedback {
-    doc.commit();
+    end_step(doc, stroke.step);
     if stroke.tool == Tool::Gradient {
         // What it learnt of the ground holds for the ground it left.
         stroke.sides.end(doc.dimension(), stroke.level.min(doc.dimension().levels.len() - 1));
@@ -1355,6 +1381,9 @@ fn surface_at(dim: &massif_core::Dimension, x: f32, z: f32) -> Option<f32> {
 pub struct SculptStroke {
     what: Stroke3d,
     salt: u64,
+    /// The step to undo it records into, and its label.
+    step: u64,
+    label: String,
 }
 
 #[derive(Clone, Copy)]
@@ -1373,9 +1402,10 @@ pub fn begin_sculpt(doc: &mut Document, tools: &ToolState, inverse: bool) -> Opt
         Tool::PaintTerrain => Stroke3d::Paint { inverse, back: if inverse { unpaint_for_stroke(doc, tools) } else { None } },
         _ => Stroke3d::Sculpt(tool.sculpt_mode(inverse)?),
     };
-    doc.history.begin(crate::i18n::tr_name(tool.label()), doc.dim);
+    let label = crate::i18n::tr_name(tool.label()).to_owned();
+    let step = doc.history.begin(label.clone(), doc.dim);
     let salt = doc.revision.wrapping_mul(0x9e37_79b9) ^ 0x3d5c_ab71;
-    Some(SculptStroke { what, salt })
+    Some(SculptStroke { what, salt, step, label })
 }
 
 /// One dab of a 3D stroke on the surface at `frame`, lasting `dt` seconds:
@@ -1385,6 +1415,7 @@ pub fn begin_sculpt(doc: &mut Document, tools: &ToolState, inverse: bool) -> Opt
 /// the columns under the brush.
 pub fn sculpt_dab(doc: &mut Document, tools: &ToolState, stroke: &mut SculptStroke, frame: &massif_core::voxel::Frame, dt: f32) -> usize {
     use massif_core::voxel::{self, SculptMode};
+    keep_step(doc, &mut stroke.step, &stroke.label);
     let brush = tools.sculpt_brush();
     let dt = dt.clamp(0.0, 0.1);
     stroke.salt = stroke.salt.wrapping_add(0x632b_e59b);
@@ -1427,8 +1458,8 @@ pub fn sculpt_dab(doc: &mut Document, tools: &ToolState, stroke: &mut SculptStro
     }
 }
 
-pub fn end_sculpt(doc: &mut Document, _stroke: SculptStroke) {
-    doc.commit();
+pub fn end_sculpt(doc: &mut Document, stroke: SculptStroke) {
+    end_step(doc, stroke.step);
 }
 
 /// What lies under the cursor, for the eyedropper and the info panel.

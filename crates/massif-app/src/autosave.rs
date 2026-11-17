@@ -380,7 +380,7 @@ impl Autosave {
             return Some(Duration::from_secs(1));
         }
         let started = Instant::now();
-        let copy = doc.world.copy_unfrozen();
+        let copy = doc.history.copy_committed(&doc.world);
         let copied = started.elapsed();
         let info = Info {
             session: self.session.clone(),
@@ -466,7 +466,9 @@ impl Autosave {
             taken: now_secs(),
             revision: doc.revision,
         };
-        let backup = write(&dir, doc.world.copy_unfrozen(), info)?;
+        // The map as its last step left it: a stroke the error cut short
+        // taken back, never half of it.
+        let backup = write(&dir, doc.history.copy_committed(&doc.world), info)?;
         if let Some(old) = self.current.replace(backup.clone())
             && old.file != backup.file
         {
