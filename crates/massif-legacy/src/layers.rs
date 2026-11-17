@@ -1,6 +1,9 @@
 //! WorldPainter's layers as Massif has them: forests and the trees of the
 //! tree pack become object layers, plant layers ground covers, Frost the
-//! frost cover (snow on the ground, ice on the water).
+//! frost cover (snow on the ground, ice on the water), custom ground cover
+//! layers terrains, tunnel layers levels, and caverns, chasms and caves are
+//! carved where painted. A combined layer is the layers it holds, with
+//! their factors, and its terrain and biome.
 //!
 //! A layer is a key of a tile's `layerData` (a nibble or a byte a column)
 //! or `bitLayerData` (a bit a column) map. Its strength in a column, 0 to
@@ -9,9 +12,14 @@
 //! that share of its columns, as WorldPainter plants about that share of
 //! trees.
 
-use crate::javaser::{Arena, Array, Value};
-use massif_core::registry::{CoverDef, Registry};
+use crate::javaser::{Arena, Array, Handle, Value};
+use crate::terrains::Mapper;
+use massif_core::TilePos;
+use massif_core::registry::{CoverDef, Registry, Stratum, TerrainDef, TerrainId};
+use massif_core::tile::{NO_FLUID, Tile};
 use massif_core::treepack::TreeKind;
+use massif_core::world::Dimension;
+use std::collections::HashMap;
 
 const LAYERS: &str = "org.pepsoft.worldpainter.layers.";
 /// What the layers of WorldPainter's tree pack say they are.
@@ -37,6 +45,221 @@ pub enum Conv {
     Void,
     /// Annotations: their colour, 1 to 15, a nibble a column.
     Annotations,
+    /// Caves carved where painted, once the whole dimension is read.
+    Caves(CaveKind),
+    /// A custom ground cover: its index in [`Converter::ground_covers`].
+    GroundCover(u16),
+    /// A tunnel or floating layer: its index in [`Converter::tunnels`].
+    Tunnel(u16),
+    /// A terrain set where painted at half strength or more (a combined
+    /// layer's).
+    Terrain(u16),
+    /// A biome likewise.
+    Biome(u16),
+}
+
+impl Conv {
+    /// Whether it is applied once the whole dimension is read, rather than
+    /// tile by tile.
+    pub fn after(self) -> bool {
+        matches!(self, Conv::Caves(_) | Conv::GroundCover(_) | Conv::Tunnel(_))
+    }
+}
+
+/// What kind of caves a layer carves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CaveKind {
+    /// WorldPainter's Caverns: large halls.
+    Caverns,
+    /// Its Chasms: ravines.
+    Chasms,
+    /// Its Caves: winding tunnels.
+    Tunnels,
+}
+
+/// A custom ground cover layer of WorldPainter: a layer of blocks over the
+/// terrain, so many blocks thick (or into it, for a negative thickness).
+#[derive(Debug, Clone, PartialEq)]
+pub struct GroundCover {
+    pub name: String,
+    /// Block states and their counts.
+    pub blocks: Vec<(String, u32)>,
+    pub thickness: i32,
+}
+
+/// How a tunnel layer's floor or roof is placed (WorldPainter's
+/// `TunnelLayer.Mode`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Mode {
+    /// At a height.
+    Fixed,
+    /// So deep under the ground.
+    Depth,
+    /// As deep under the level as the ground is over it.
+    Inverted,
+    /// So high over the floor (the roof only).
+    AboveFloor,
+}
+
+/// Where a tunnel's floor or roof is: its mode, level and limits.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Bound {
+    pub mode: Mode,
+    pub level: i32,
+    pub min: i32,
+    pub max: i32,
+}
+
+impl Bound {
+    /// The height (of a block, as WorldPainter counts) over ground whose
+    /// top block is at `terrain`, a floor at `floor`.
+    fn at(&self, terrain: i32, floor: i32) -> i32 {
+        let clamp = |v: i32| v.clamp(self.min, self.max.max(self.min));
+        match self.mode {
+            Mode::Fixed => self.level,
+            Mode::Depth => clamp(terrain - self.level),
+            Mode::Inverted => clamp(self.level - (terrain - self.level)),
+            Mode::AboveFloor => clamp(floor + self.level),
+        }
+    }
+}
+
+/// A tunnel layer of WorldPainter: a void carved between a floor and a
+/// roof, or, floating, land laid over the void.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Tunnel {
+    pub name: String,
+    /// Land laid at the floor's height, as deep as the roof says, rather
+    /// than a void carved.
+    pub floating: bool,
+    pub floor: Bound,
+    pub roof: Bound,
+    /// Water up to this height (a block's), if any.
+    pub flood: Option<i32>,
+}
+
+impl Tunnel {
+    /// The blocks a column whose top block is at `terrain` gets, in a world
+    /// from `min` to `max`: carved, from the block over the floor up to the
+    /// roof or the ground; floating, from its bottom up to the floor. As
+    /// surface heights, `(bottom, top)`; empty where `top <= bottom`.
+    pub fn span(&self, terrain: i32, min: i32, max: i32) -> (f32, f32) {
+        let floor = self.floor.at(terrain, 0).clamp(min + 1, max - 1);
+        if self.floating {
+            let bottom = match self.roof.mode {
+                Mode::Fixed => self.roof.level,
+                _ => floor - self.roof.level,
+            }
+            .clamp(min, max);
+            return (bottom as f32 + 1.0, floor as f32 + 1.0);
+        }
+        let roof = self.roof.at(terrain, floor).clamp(min + 1, max - 1).min(terrain);
+        (floor as f32 + 1.0, roof as f32 + 1.0)
+    }
+}
+
+/// What the layers of one import become: decided once for each layer, its
+/// custom ground covers and tunnels kept aside for the end of the import.
+#[derive(Debug, Default)]
+pub struct Converter {
+    known: HashMap<Handle, Vec<(Conv, f32)>>,
+    pub ground_covers: Vec<GroundCover>,
+    pub tunnels: Vec<Tunnel>,
+}
+
+impl Converter {
+    /// What layer `key` (an object of the stream, `handle`) becomes, each
+    /// part with the factor its strength takes; empty for a layer Massif
+    /// does not convert.
+    pub fn parts(&mut self, arena: &Arena, key: Value, handle: Handle, mapper: &mut Mapper) -> Vec<(Conv, f32)> {
+        self.parts_at(arena, key, handle, mapper, 0)
+    }
+
+    fn parts_at(&mut self, arena: &Arena, key: Value, handle: Handle, mapper: &mut Mapper, depth: u32) -> Vec<(Conv, f32)> {
+        if let Some(parts) = self.known.get(&handle) {
+            return parts.clone();
+        }
+        let parts = self.resolve(arena, key, mapper, depth);
+        self.known.insert(handle, parts.clone());
+        parts
+    }
+
+    fn resolve(&mut self, arena: &Arena, key: Value, mapper: &mut Mapper, depth: u32) -> Vec<(Conv, f32)> {
+        let Some(class) = arena.class_name(key).map(str::to_owned) else { return Vec::new() };
+        let Some(short) = class.strip_prefix(LAYERS) else { return Vec::new() };
+        let name = arena.field(key, "name").and_then(|v| arena.string(v)).unwrap_or(short).to_owned();
+        let int = |n: &str, default: i64| arena.field(key, n).and_then(|v| arena.int(v)).unwrap_or(default);
+        match short {
+            "Caverns" => vec![(Conv::Caves(CaveKind::Caverns), 1.0)],
+            "Chasms" => vec![(Conv::Caves(CaveKind::Chasms), 1.0)],
+            "Caves" => vec![(Conv::Caves(CaveKind::Tunnels), 1.0)],
+            "groundcover.GroundCoverLayer" => {
+                let blocks = match arena.field(key, "mixedMaterial").filter(|m| *m != Value::Null).and_then(|m| crate::worldpainter::read_mixed(arena, m)) {
+                    Some(mixed) if !mixed.rows.is_empty() => mixed.rows,
+                    _ => match arena.field(key, "material").filter(|m| *m != Value::Null) {
+                        Some(m) => vec![(crate::worldpainter::material_state(arena, m), 1)],
+                        None => return Vec::new(),
+                    },
+                };
+                let thickness = int("thickness", 1).clamp(-64, 64) as i32;
+                if thickness == 0 {
+                    return Vec::new();
+                }
+                self.ground_covers.push(GroundCover { name, blocks, thickness });
+                vec![(Conv::GroundCover(self.ground_covers.len() as u16 - 1), 1.0)]
+            }
+            "tunnel.TunnelLayer" => {
+                let mode = |n: &str, default: Mode| match arena.field(key, n).and_then(|v| arena.enum_name(v)) {
+                    Some("FIXED_HEIGHT") => Mode::Fixed,
+                    Some("CONSTANT_DEPTH") => Mode::Depth,
+                    Some("INVERTED_DEPTH") => Mode::Inverted,
+                    Some("FIXED_HEIGHT_ABOVE_FLOOR") => Mode::AboveFloor,
+                    // A floor of a dimension of its own: at its level.
+                    _ => default,
+                };
+                let bound = |prefix: &str, default: Mode, level: i64| Bound {
+                    mode: mode(&format!("{prefix}Mode"), default),
+                    level: int(&format!("{prefix}Level"), level) as i32,
+                    min: int(&format!("{prefix}Min"), i32::MIN as i64) as i32,
+                    max: int(&format!("{prefix}Max"), i32::MAX as i64) as i32,
+                };
+                let flood = int("floodLevel", i32::MIN as i64) as i32;
+                let floating = arena.field(key, "mode").and_then(|v| arena.enum_name(v)) == Some("FLOATING");
+                self.tunnels.push(Tunnel {
+                    name,
+                    floating,
+                    floor: bound("floor", Mode::Fixed, 32),
+                    roof: bound("roof", Mode::AboveFloor, 16),
+                    flood: (flood != i32::MIN).then_some(flood),
+                });
+                vec![(Conv::Tunnel(self.tunnels.len() as u16 - 1), 1.0)]
+            }
+            "CombinedLayer" if depth < 4 => {
+                let mut parts = Vec::new();
+                let factors = arena.field(key, "factors").and_then(|f| arena.map_entries(f)).unwrap_or_default();
+                for layer in arena.field(key, "layers").and_then(|l| arena.list_items(l)).unwrap_or_default() {
+                    let Value::Ref(handle) = layer else { continue };
+                    let factor = factors.iter().find(|(k, _)| *k == layer).and_then(|(_, f)| arena.float(*f)).unwrap_or(1.0) as f32;
+                    for (conv, f) in self.parts_at(arena, layer, handle, mapper, depth + 1) {
+                        parts.push((conv, f * factor));
+                    }
+                }
+                let applies = arena.field(key, "applyTerrainAndBiomeOnExport").and_then(|v| arena.bool(v)).unwrap_or(true);
+                if applies {
+                    let terrain = arena.field(key, "terrain").and_then(|t| arena.enum_name(t)).and_then(|t| crate::tables::TERRAINS.iter().position(|n| *n == t));
+                    if let Some(ordinal) = terrain {
+                        parts.push((Conv::Terrain(mapper.terrain(ordinal as u8)), 1.0));
+                    }
+                    let biome = int("biome", -1);
+                    if (0..255).contains(&biome) {
+                        parts.push((Conv::Biome(mapper.biome(biome as u8)), 1.0));
+                    }
+                }
+                parts
+            }
+            _ => convert(arena, key, &class, &mut mapper.registry).map(|c| vec![(c, 1.0)]).unwrap_or_default(),
+        }
+    }
 }
 
 /// One layer of a tile: what it became, and its strength in each column
@@ -257,6 +480,145 @@ fn wp_object(arena: &Arena, object: Value) -> Option<(massif_core::objects::Obje
         }
         _ => None,
     }
+}
+
+/// The layers of a dimension applied once all of it is read, from what
+/// `painted` holds of them, tile by tile, with their strength in each
+/// column: custom ground covers (a terrain of the cover's blocks over the
+/// ground's, the ground raised by the cover's thickness), tunnels (a level
+/// each: Carve, or Solid when floating) and caves carved where painted, as
+/// deep as the strength (Edit ▸ Caves over a selection of those weights).
+pub fn apply_after(dim: &mut Dimension, painted: &[(TilePos, Vec<(Conv, Vec<u8>)>)], conv: &Converter, reg: &mut Registry, seed: i64, sea: i32) {
+    use massif_core::compose::block_top;
+    use massif_core::plane::Plane;
+    const AREA: usize = massif_core::TILE_AREA;
+    let column = |pos: TilePos, i: usize| {
+        let (ox, oz) = pos.origin();
+        (ox + (i & 127) as i32, oz + (i >> 7) as i32)
+    };
+    let of = |target: Conv| painted.iter().filter_map(move |(pos, parts)| parts.iter().find(|(c, _)| *c == target).map(|(_, s)| (*pos, s)));
+
+    // Custom ground covers.
+    let mut made: HashMap<(u16, u16), u16> = HashMap::new();
+    for (k, cover) in conv.ground_covers.iter().enumerate() {
+        for (pos, strength) in of(Conv::GroundCover(k as u16)) {
+            let Some(tile) = dim.ground_mut().tile_mut(pos) else { continue };
+            for (i, &s) in strength.iter().enumerate() {
+                let (x, z) = column(pos, i);
+                if s == 0 || !kept(s, Curve::Linear, x, z, 0x6763_0000 | k as u64) {
+                    continue;
+                }
+                let base = tile.terrain.get(i);
+                let t = *made.entry((k as u16, base)).or_insert_with(|| ground_terrain(reg, cover, base));
+                tile.terrain.set(i, t);
+                if cover.thickness > 0 {
+                    tile.top.set(i, tile.top.get(i) + cover.thickness as f32);
+                }
+            }
+            tile.compact();
+        }
+    }
+
+    // Tunnels: a level each.
+    for (k, tunnel) in conv.tunnels.iter().enumerate() {
+        let tiles: Vec<(TilePos, &Vec<u8>)> = of(Conv::Tunnel(k as u16)).collect();
+        if tiles.is_empty() {
+            continue;
+        }
+        let kind = if tunnel.floating { massif_core::level::LevelKind::Solid } else { massif_core::level::LevelKind::Carve };
+        let level = dim.add_level(tunnel.name.clone(), kind);
+        let (min, max) = (dim.min_y, dim.max_y);
+        for (pos, strength) in tiles {
+            let Some(ground) = dim.ground_mut().tile_mut(pos) else { continue };
+            let (top, terrain) = (ground.top.dense().to_vec(), ground.terrain.dense().to_vec());
+            let (mut tops, mut bottoms, mut terrains, mut fluids) = (vec![0.0f32; AREA], vec![0.0f32; AREA], vec![0u16; AREA], vec![NO_FLUID; AREA]);
+            for i in 0..AREA {
+                let (x, z) = column(pos, i);
+                if strength[i] == 0 || !kept(strength[i], Curve::Linear, x, z, 0x7475_0000 | k as u64) {
+                    continue;
+                }
+                let (bottom, roof) = tunnel.span(block_top(top[i]) - 1, min, max);
+                if roof <= bottom {
+                    continue;
+                }
+                (bottoms[i], tops[i], terrains[i]) = (bottom, roof, terrain[i]);
+                if let Some(f) = tunnel.flood.filter(|_| !tunnel.floating) {
+                    let surface = (f + 1) as f32;
+                    if surface > bottom {
+                        fluids[i] = surface.min(roof) as i16;
+                    }
+                }
+            }
+            let mut tile = Tile::empty_slab();
+            tile.top = Plane::from_vec(tops);
+            tile.bottom = Some(Plane::from_vec(bottoms));
+            tile.terrain = Plane::from_vec(terrains);
+            tile.fluid = Plane::from_vec(fluids);
+            tile.compact();
+            if !tile.is_empty_slab() {
+                dim.levels[level].insert(pos, tile);
+            }
+        }
+        dim.levels[level].take_dirty();
+    }
+
+    // Caves, each kind over the columns painted with it, as many as the
+    // strength they were painted at (WorldPainter carves more of them the
+    // stronger a layer is).
+    for (n, kind) in [CaveKind::Caverns, CaveKind::Chasms, CaveKind::Tunnels].into_iter().enumerate() {
+        let tiles: Vec<(TilePos, &Vec<u8>)> = of(Conv::Caves(kind)).collect();
+        let (columns, total) = tiles.iter().flat_map(|t| t.1.iter()).filter(|&&s| s > 0).fold((0u64, 0u64), |(n, sum), &s| (n + 1, sum + s as u64));
+        if columns == 0 {
+            continue;
+        }
+        let mut settings = massif_core::caves::CaveSettings::for_dimension(dim, sea);
+        (settings.caverns, settings.ravines, settings.tunnels) = (kind == CaveKind::Caverns, kind == CaveKind::Chasms, kind == CaveKind::Tunnels);
+        settings.seed = (seed as u32).wrapping_add(n as u32);
+        settings.openings = 0.0;
+        // Massif's own caverns and ravines are rare (a few in ten tiles);
+        // WorldPainter fills what is painted with them: at full strength,
+        // about one cavern and three ravines a tile.
+        let share = total as f32 / columns as f32 / 255.0;
+        settings.density = share
+            * match kind {
+                CaveKind::Caverns => 14.0,
+                CaveKind::Chasms => 20.0,
+                CaveKind::Tunnels => 1.6,
+            };
+        let weights = tiles.iter().map(|(p, s)| (*p, s.iter().map(|&v| if v > 0 { massif_core::selection::IN } else { 0 }).collect()));
+        dim.selection = Some(std::sync::Arc::new(massif_core::selection::Selection::from_tiles(weights)));
+        let carved = massif_core::caves::carve(dim, &settings, &massif_core::auto::Steps::default());
+        dim.selection = None;
+        for (pos, chunk) in carved.chunks {
+            dim.voxels.insert(pos, chunk);
+        }
+    }
+    dim.ground_mut().take_dirty();
+    dim.voxels.take_dirty();
+}
+
+/// The terrain of a custom ground cover over terrain `base`: the cover's
+/// blocks, as thick as it is, over the strata of `base`; made once.
+fn ground_terrain(reg: &mut Registry, cover: &GroundCover, base: u16) -> u16 {
+    let under = reg.terrain(TerrainId(base)).clone();
+    let name = format!("{} on {}", cover.name, under.name);
+    if let Some(t) = reg.terrain_by_name(&name) {
+        return t.0;
+    }
+    let total: u64 = cover.blocks.iter().map(|b| b.1 as u64).sum::<u64>().max(1);
+    let blocks = cover.blocks.iter().map(|(state, n)| (reg.intern_block(state, crate::terrains::block_color(state)), ((*n as u64 * 1000) / total).clamp(1, 1000) as u16)).collect();
+    let depth = cover.thickness.unsigned_abs().min(64) as u16;
+    let mut strata = vec![Stratum { blocks, depth: (depth, depth), mix: Default::default() }];
+    strata.extend(under.strata.iter().cloned());
+    reg.terrains.push(TerrainDef {
+        name,
+        group: "Imported".into(),
+        color: crate::terrains::block_color(&cover.blocks[0].0),
+        strata,
+        submerged_top: None,
+        biome_hint: under.biome_hint,
+    });
+    (reg.terrains.len() - 1) as u16
 }
 
 /// The frost cover of `reg`, added if it has none.
@@ -596,6 +958,228 @@ mod tests {
         assert_eq!(bush.size, [1, 2, 1]);
         assert!(bush.palette[bush.blocks[0] as usize].starts_with("minecraft:oak_log"), "{:?}", bush.palette);
         assert!(bush.palette[bush.blocks[1] as usize].starts_with("minecraft:oak_leaves"), "{:?}", bush.palette);
+    }
+
+    /// Where WorldPainter's tunnel modes put a floor and a roof, over ground
+    /// whose top block is at 70, in a world from -64 to 320.
+    #[test]
+    fn tunnels_find_their_floor_and_roof() {
+        let bound = |mode, level| Bound { mode, level, min: i32::MIN, max: i32::MAX };
+        let tunnel = |floor, roof, floating| Tunnel { name: "T".into(), floating, floor, roof, flood: None };
+        // The default: a floor at 32, a roof 16 over it.
+        let t = tunnel(bound(Mode::Fixed, 32), bound(Mode::AboveFloor, 16), false);
+        assert_eq!(t.span(70, -64, 320), (33.0, 49.0));
+        // 10 under the ground, a roof 4 under it: carved from 61 to 66.
+        let t = tunnel(bound(Mode::Depth, 10), bound(Mode::Depth, 4), false);
+        assert_eq!(t.span(70, -64, 320), (61.0, 67.0));
+        // A roof over the ground: open to the sky, up to the ground.
+        let t = tunnel(bound(Mode::Depth, 3), bound(Mode::AboveFloor, 20), false);
+        assert_eq!(t.span(70, -64, 320), (68.0, 71.0));
+        // As deep under 40 as the ground is over it: 10.
+        let t = tunnel(bound(Mode::Inverted, 40), bound(Mode::AboveFloor, 5), false);
+        assert_eq!(t.span(70, -64, 320), (11.0, 16.0));
+        // Limits keep the floor in its range.
+        let t = tunnel(Bound { mode: Mode::Depth, level: 100, min: 0, max: 50 }, bound(Mode::AboveFloor, 5), false);
+        assert_eq!(t.span(70, -64, 320).0, 1.0);
+        // Floating: land from 12 under the floor up to it.
+        let t = tunnel(bound(Mode::Fixed, 150), bound(Mode::AboveFloor, 12), true);
+        assert_eq!(t.span(70, -64, 320), (139.0, 151.0));
+    }
+
+    /// A tunnel layer, a custom ground cover layer and a combined layer of
+    /// Frost at half strength, that ground cover, sand and a forest, as
+    /// WorldPainter keeps them in a world.
+    #[test]
+    fn tunnels_ground_covers_and_combined_layers_are_read() {
+        use crate::javaser::tests::StreamWriter;
+        use crate::javaser::*;
+        let null = |w: &mut StreamWriter| {
+            w.u8(TC_NULL);
+        };
+        let enum_class = |w: &mut StreamWriter, class: &str| {
+            w.u8(TC_ENUM).class(class, SC_SERIALIZABLE | 0x10, &[], |w| {
+                w.class("java.lang.Enum", SC_SERIALIZABLE | 0x10, &[], |w| {
+                    w.u8(TC_NULL);
+                });
+            });
+        };
+        let mut w = StreamWriter::new();
+        // TunnelLayer { I floodLevel, I floorLevel, I roofLevel, L floorMode, L mode, L name, L roofMode }
+        w.u8(TC_OBJECT).class(
+            "org.pepsoft.worldpainter.layers.tunnel.TunnelLayer",
+            SC_SERIALIZABLE,
+            &[
+                (b'I', "floodLevel", None),
+                (b'I', "floorLevel", None),
+                (b'I', "roofLevel", None),
+                (b'L', "floorMode", Some("Lorg/pepsoft/worldpainter/layers/tunnel/TunnelLayer$Mode;")),
+                (b'L', "mode", Some("Lorg/pepsoft/worldpainter/layers/tunnel/TunnelLayer$LayerMode;")),
+                (b'L', "name", Some("Ljava/lang/String;")),
+                (b'L', "roofMode", Some("Lorg/pepsoft/worldpainter/layers/tunnel/TunnelLayer$Mode;")),
+            ],
+            null,
+        );
+        let tunnel = w.handle();
+        w.i32(55).i32(10).i32(5);
+        let mode = w.next;
+        enum_class(&mut w, "org.pepsoft.worldpainter.layers.tunnel.TunnelLayer$Mode");
+        w.handle();
+        w.string("CONSTANT_DEPTH");
+        enum_class(&mut w, "org.pepsoft.worldpainter.layers.tunnel.TunnelLayer$LayerMode");
+        w.handle();
+        w.string("CAVE");
+        w.string("Mine");
+        w.u8(TC_ENUM).reference(mode);
+        w.handle();
+        w.string("FIXED_HEIGHT_ABOVE_FLOOR");
+        // GroundCoverLayer { I thickness, L material, L name }
+        w.u8(TC_OBJECT).class(
+            "org.pepsoft.worldpainter.layers.groundcover.GroundCoverLayer",
+            SC_SERIALIZABLE,
+            &[(b'I', "thickness", None), (b'L', "material", Some("Lorg/pepsoft/minecraft/Material;")), (b'L', "name", Some("Ljava/lang/String;"))],
+            null,
+        );
+        let cover = w.handle();
+        w.i32(2);
+        w.u8(TC_OBJECT).class(
+            "org.pepsoft.minecraft.Material",
+            SC_SERIALIZABLE,
+            &[(b'I', "blockType", None), (b'I', "data", None), (b'L', "identity", Some("Lorg/pepsoft/minecraft/Material$Identity;"))],
+            null,
+        );
+        w.handle();
+        w.i32(-1).i32(-1);
+        w.u8(TC_OBJECT).class(
+            "org.pepsoft.minecraft.Material$Identity",
+            SC_SERIALIZABLE,
+            &[(b'L', "name", Some("Ljava/lang/String;")), (b'L', "properties", Some("Ljava/util/Map;"))],
+            null,
+        );
+        w.handle();
+        w.string("minecraft:snow_block");
+        w.u8(TC_NULL);
+        w.string("Snow Block");
+        // CombinedLayer { I biome, [ layers, L factors, L name, L terrain }:
+        // Frost ×0.5 and the ground cover, sand, a forest (4).
+        w.u8(TC_OBJECT).class(
+            "org.pepsoft.worldpainter.layers.CombinedLayer",
+            SC_SERIALIZABLE,
+            &[
+                (b'I', "biome", None),
+                (b'[', "layers", Some("[Lorg/pepsoft/worldpainter/layers/Layer;")),
+                (b'L', "factors", Some("Ljava/util/Map;")),
+                (b'L', "name", Some("Ljava/lang/String;")),
+                (b'L', "terrain", Some("Lorg/pepsoft/worldpainter/Terrain;")),
+            ],
+            null,
+        );
+        w.handle();
+        w.i32(4);
+        w.u8(TC_ARRAY).class("[Lorg.pepsoft.worldpainter.layers.Layer;", SC_SERIALIZABLE, &[], null);
+        w.handle();
+        w.i32(2);
+        w.u8(TC_OBJECT).class("org.pepsoft.worldpainter.layers.Frost", SC_SERIALIZABLE, &[(b'L', "name", Some("Ljava/lang/String;"))], null);
+        let frost = w.handle();
+        w.string("Frost");
+        w.u8(TC_REFERENCE).i32(0x7E_0000 + cover);
+        w.u8(TC_OBJECT).class("java.util.Collections$SingletonMap", SC_SERIALIZABLE, &[(b'L', "k", Some("Ljava/lang/Object;")), (b'L', "v", Some("Ljava/lang/Object;"))], null);
+        w.handle();
+        w.u8(TC_REFERENCE).i32(0x7E_0000 + frost);
+        w.u8(TC_OBJECT).class("java.lang.Float", SC_SERIALIZABLE, &[(b'F', "value", None)], |w| {
+            w.class("java.lang.Number", SC_SERIALIZABLE, &[], |w| {
+                w.u8(TC_NULL);
+            });
+        });
+        w.handle();
+        w.i32(0.5f32.to_bits() as i32);
+        w.string("Snowy sand");
+        enum_class(&mut w, "org.pepsoft.worldpainter.Terrain");
+        w.handle();
+        w.string("SAND");
+
+        let mut parser = Parser::new(&w.out[..]).unwrap();
+        let values: Vec<Value> = (0..3).map(|_| parser.next_object().unwrap().unwrap()).collect();
+        let arena = &parser.arena;
+        let mut mapper = Mapper::new(Registry::vanilla());
+        let mut conv = Converter::default();
+        let handle = |v: Value| match v {
+            Value::Ref(h) => h,
+            _ => panic!(),
+        };
+        assert_eq!(handle(values[0]), tunnel as usize);
+        assert_eq!(handle(values[1]), cover as usize);
+        assert_eq!(conv.parts(arena, values[0], handle(values[0]), &mut mapper), [(Conv::Tunnel(0), 1.0)]);
+        let t = &conv.tunnels[0];
+        assert_eq!((t.name.as_str(), t.floating, t.flood), ("Mine", false, Some(55)));
+        assert_eq!((t.floor.mode, t.floor.level, t.roof.mode, t.roof.level), (Mode::Depth, 10, Mode::AboveFloor, 5));
+        assert_eq!(t.span(70, -64, 320), (61.0, 66.0));
+        assert_eq!(conv.parts(arena, values[1], handle(values[1]), &mut mapper), [(Conv::GroundCover(0), 1.0)]);
+        assert_eq!(conv.ground_covers[0], GroundCover { name: "Snow Block".into(), blocks: vec![("minecraft:snow_block".into(), 1)], thickness: 2 });
+        let parts = conv.parts(arena, values[2], handle(values[2]), &mut mapper);
+        let reg = &mapper.registry;
+        let frost_cover = reg.covers.iter().position(|c| c.frost).unwrap() as u16 + 1;
+        let sand = reg.terrain_by_name("Sand").unwrap().0;
+        let forest = reg.biome_by_id("minecraft:forest").unwrap().0;
+        assert_eq!(parts, [(Conv::Cover(frost_cover), 0.5), (Conv::GroundCover(0), 1.0), (Conv::Terrain(sand), 1.0), (Conv::Biome(forest), 1.0)]);
+        assert_eq!(conv.ground_covers.len(), 1, "read once");
+    }
+
+    /// Custom ground covers, tunnels and caves applied to a dimension:
+    /// the cover's blocks over the ground's terrain (raised by its
+    /// thickness, or in place of the top of it), a level of a tunnel
+    /// flooded to its level, and caves carved only where painted.
+    #[test]
+    fn layers_after_the_tiles() {
+        use massif_core::world::{DimensionKind, World, WorldMeta};
+        let mut world = World::new(WorldMeta::default());
+        let mut dim = Dimension::new(DimensionKind::Overworld, -64, 320);
+        let grass = world.registry.terrain_by_name("Grass").unwrap().0;
+        for z in -1..1 {
+            for x in -1..1 {
+                dim.ground_mut().insert(TilePos::new(x, z), Tile::ground(71.0, grass, NO_FLUID));
+            }
+        }
+        let mut conv = Converter::default();
+        conv.ground_covers.push(GroundCover { name: "Snow Block".into(), blocks: vec![("minecraft:snow_block".into(), 1)], thickness: 2 });
+        conv.ground_covers.push(GroundCover { name: "Gravel".into(), blocks: vec![("minecraft:gravel".into(), 1)], thickness: -3 });
+        let bound = |mode, level| Bound { mode, level, min: i32::MIN, max: i32::MAX };
+        conv.tunnels.push(Tunnel { name: "Tunnels".into(), floating: false, floor: bound(Mode::Depth, 12), roof: bound(Mode::AboveFloor, 6), flood: Some(60) });
+        let row = |r: usize| -> Vec<u8> { (0..massif_core::TILE_AREA).map(|i| if i >> 7 == r { 255 } else { 0 }).collect() };
+        let everywhere = vec![255u8; massif_core::TILE_AREA];
+        let painted = vec![
+            (TilePos::new(0, 0), vec![(Conv::GroundCover(0), row(1)), (Conv::GroundCover(1), row(2)), (Conv::Tunnel(0), row(3))]),
+            (TilePos::new(-1, -1), vec![(Conv::Caves(CaveKind::Caverns), everywhere)]),
+        ];
+        apply_after(&mut dim, &painted, &conv, &mut world.registry, 7, 63);
+
+        let reg = &world.registry;
+        let tile = dim.ground().view(TilePos::new(0, 0)).unwrap();
+        let snow = reg.terrain(TerrainId(tile.terrain.get(128 + 5)));
+        assert_eq!(snow.name, "Snow Block on Grass");
+        assert_eq!(reg.block(snow.strata[0].blocks[0].0).state, "minecraft:snow_block");
+        assert_eq!(snow.strata[0].depth, (2, 2));
+        assert_eq!(snow.strata[1..], reg.terrain(TerrainId(grass)).strata[..]);
+        assert_eq!(tile.top.get(128 + 5), 73.0, "raised by its thickness");
+        let gravel = reg.terrain(TerrainId(tile.terrain.get(256 + 5)));
+        assert_eq!((gravel.name.as_str(), gravel.strata[0].depth), ("Gravel on Grass", (3, 3)));
+        assert_eq!(tile.top.get(256 + 5), 71.0, "in place of the top of the ground");
+        assert_eq!((tile.terrain.get(5), tile.top.get(5)), (grass, 71.0));
+        drop(tile);
+
+        // The tunnel: carved from the block over its floor (70 - 12 = 58) up
+        // to its roof (64), water to 60.
+        let level = dim.levels.iter().find(|l| l.name == "Tunnels").unwrap();
+        assert_eq!(level.kind, massif_core::level::LevelKind::Carve);
+        let carve = level.view(TilePos::new(0, 0)).unwrap();
+        let i = 3 * 128 + 9;
+        assert_eq!((carve.bottom.as_ref().unwrap().get(i), carve.top.get(i), carve.fluid.get(i)), (59.0, 65.0, 61));
+        assert!(!carve.present(2 * 128 + 9) && !carve.present(4 * 128 + 9));
+        drop(carve);
+
+        // Caverns in the tile painted, nowhere else.
+        assert!(dim.voxels.len() > 0, "caverns carved");
+        assert!(dim.voxels.iter().all(|(p, _)| p.tile() == TilePos::new(-1, -1)));
+        assert!(dim.selection.is_none());
     }
 
     #[test]

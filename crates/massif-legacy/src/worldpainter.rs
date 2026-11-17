@@ -351,7 +351,7 @@ struct TileHook<'m> {
     /// Layers converted, with the tiles using each.
     converted: &'m mut BTreeMap<String, usize>,
     /// What each layer (by its handle) becomes, once asked.
-    convs: &'m mut HashMap<Handle, Option<(Conv, u8)>>,
+    converter: &'m mut crate::layers::Converter,
     histogram: [u64; 256],
     damaged: usize,
 }
@@ -387,16 +387,23 @@ impl TileHook<'_> {
                     .and_then(|n| arena.string(n))
                     .map(str::to_owned)
                     .unwrap_or_else(|| short_class(&class));
-                let conv = match key {
-                    Value::Ref(hk) => *self.convs.entry(hk).or_insert_with(|| {
-                        let frost = class.ends_with(".Frost") || class.ends_with(".FloodWithLava");
-                        crate::layers::convert(arena, key, &class, &mut self.mapper.registry).map(|c| (c, if frost { 0 } else { 1 }))
-                    }),
-                    _ => None,
+                let parts = match key {
+                    Value::Ref(hk) => self.converter.parts(arena, key, hk, self.mapper),
+                    _ => Vec::new(),
                 };
-                match conv.and_then(|(conv, priority)| crate::layers::strengths(arena, value).map(|strength| Painted { conv, strength, priority })) {
-                    Some(p) => {
-                        painted.push(p);
+                let strength = if parts.is_empty() { None } else { crate::layers::strengths(arena, value) };
+                match strength {
+                    Some(strength) => {
+                        // A combined layer's parts, each as strong as its
+                        // factor says.
+                        for (conv, factor) in parts {
+                            let strength = if factor == 1.0 { strength.clone() } else { strength.iter().map(|&s| (s as f32 * factor).round().clamp(0.0, 255.0) as u8).collect() };
+                            let priority = match conv {
+                                Conv::Cover(n) if self.mapper.registry.cover(n).is_some_and(|c| c.changes_water()) => 0,
+                                _ => 1,
+                            };
+                            painted.push(Painted { conv, strength, priority });
+                        }
                         *self.converted.entry(name).or_default() += 1;
                     }
                     None => *self.layers.entry(name).or_default() += 1,
@@ -465,7 +472,11 @@ impl TileHook<'_> {
     }
 }
 
-fn encode(raw: RawTile, beaches: &crate::terrains::Beaches) -> (Handle, TilePos, Blob) {
+/// A tile's layers applied once its whole dimension is read (see
+/// [`crate::layers::apply_after`]), with their strengths.
+type After = Vec<(Conv, Vec<u8>)>;
+
+fn encode(raw: RawTile, beaches: &crate::terrains::Beaches) -> (Handle, TilePos, Blob, After) {
     let mut tile = Tile::ground(0.0, 0, NO_FLUID);
     let mut top = raw.top();
     let mut fluid = raw.fluid();
@@ -521,9 +532,26 @@ fn encode(raw: RawTile, beaches: &crate::terrains::Beaches) -> (Handle, TilePos,
             // Strengths are nibbles × 17: back to the colour.
             tile.annotations = Plane::from_vec(p.strength.iter().map(|&s| (s / 17) as u16).collect());
         }
+        // A combined layer's terrain and biome, where it is painted at half
+        // strength or more, and at random a share of the rest.
+        for p in &raw.painted {
+            let (Conv::Terrain(_) | Conv::Biome(_)) = p.conv else { continue };
+            for (i, &strength) in p.strength.iter().enumerate() {
+                let (x, z) = (ox + (i & 127) as i32, oz + (i >> 7) as i32);
+                if strength == 0 || !crate::layers::kept(strength.saturating_mul(2), Curve::Linear, x, z, 0x7465_7272) {
+                    continue;
+                }
+                match p.conv {
+                    Conv::Terrain(t) => tile.terrain.set(i, t),
+                    Conv::Biome(b) => tile.biome.set(i, b),
+                    _ => {}
+                }
+            }
+        }
     }
     tile.compact();
-    (raw.handle, raw.pos, Blob::from(tile.encode()))
+    let after = raw.painted.into_iter().filter(|p| p.conv.after()).map(|p| (p.conv, p.strength)).collect();
+    (raw.handle, raw.pos, Blob::from(tile.encode()), after)
 }
 
 fn damaged(e: JavaError, progress: &ImportProgress) -> ImportError {
@@ -536,7 +564,7 @@ fn damaged(e: JavaError, progress: &ImportProgress) -> ImportError {
     }
 }
 
-fn read_mixed(a: &Arena, v: Value) -> Option<CustomMaterial> {
+pub(crate) fn read_mixed(a: &Arena, v: Value) -> Option<CustomMaterial> {
     if !a.class_name(v)?.ends_with("MixedMaterial") {
         return None;
     }
@@ -597,8 +625,8 @@ pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Re
     let mut mapper = Mapper::new(Registry::vanilla());
     let mut layers = BTreeMap::new();
     let mut converted_layers = BTreeMap::new();
-    let mut convs = HashMap::new();
-    let converted: Mutex<HashMap<Handle, (TilePos, Blob)>> = Mutex::new(HashMap::new());
+    let mut converter = crate::layers::Converter::default();
+    let converted: Mutex<HashMap<Handle, (TilePos, Blob, After)>> = Mutex::new(HashMap::new());
     let mut histogram = [0u64; 256];
     let mut damaged_tiles = 0;
     let beaches = crate::terrains::Beaches::new(&mapper.registry);
@@ -611,7 +639,7 @@ pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Re
             mapper: &mut mapper,
             layers: &mut layers,
             converted: &mut converted_layers,
-            convs: &mut convs,
+            converter: &mut converter,
             histogram: [0; 256],
             damaged: 0,
         };
@@ -622,8 +650,8 @@ pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Re
             parser.set_hook(Box::new(move |arena: &mut Arena, h: Handle| {
                 if let Some(raw) = hook_ref.extract(arena, h) {
                     s.spawn(move |_| {
-                        let (handle, pos, blob) = encode(raw, beaches);
-                        converted.lock().expect("no panics while holding the lock").insert(handle, (pos, blob));
+                        let (handle, pos, blob, after) = encode(raw, beaches);
+                        converted.lock().expect("no panics while holding the lock").insert(handle, (pos, blob, after));
                         progress.tiles.fetch_add(1, Ordering::Relaxed);
                     });
                 }
@@ -747,14 +775,30 @@ pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Re
         let mut dim = Dimension::new(kind, min_y, max_y);
         let ground = dim.ground_mut();
         let mut count = 0;
+        let mut after = Vec::new();
         for (_, tile) in tiles {
             let Value::Ref(h) = tile else { continue };
-            if let Some((pos, blob)) = converted.get(&h) {
+            if let Some((pos, blob, later)) = converted.get(&h) {
                 ground.insert_blob(*pos, blob.clone());
                 count += 1;
+                if !later.is_empty() {
+                    after.push((*pos, later.clone()));
+                }
             }
         }
         ground.take_dirty();
+        if !after.is_empty() {
+            // Ground covers, tunnels and caves, now that the dimension is
+            // whole.
+            let sea = int("borderLevel").map_or(63, |b| b as i32 + 1);
+            let seed = arena
+                .field(f.dimension, "generator")
+                .and_then(|g| arena.field(g, "seed"))
+                .and_then(|s| arena.int(s))
+                .or_else(|| int("minecraftSeed"))
+                .unwrap_or(0);
+            crate::layers::apply_after(&mut dim, &after, &converter, &mut mapper.registry, seed, sea);
+        }
         report.tiles += count;
         report
             .dimensions
@@ -1346,6 +1390,15 @@ mod tests {
                 }
                 for c in reg.covers.iter() {
                     eprintln!("  cover {:<24} {:?} density {} soil {} under water {} frost {} lava {}", c.name, c.plants, c.density, c.soil_only, c.underwater, c.frost, c.lava);
+                }
+                for d in &world.dims {
+                    for l in &d.levels {
+                        eprintln!("  level {:?} {} {:?}: {} tiles", d.kind, l.name, l.kind, l.len());
+                    }
+                    eprintln!("  voxel chunks {:?}: {}", d.kind, d.voxels.len());
+                }
+                for t in reg.terrains.iter().filter(|t| t.name.contains(" on ")) {
+                    eprintln!("  terrain {} {:?}", t.name, t.strata.iter().map(|s| (s.blocks.len(), s.depth)).collect::<Vec<_>>());
                 }
             }
             assert!(report.tiles > 0);

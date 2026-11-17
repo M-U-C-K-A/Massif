@@ -911,10 +911,12 @@ right button rubs them out; the pen button in the map's header hides them.
 | Void | Columns of nothing: lower the land to the floor of the world | Converted: nothing in those columns |
 | Annotations | Annotations | Converted, colour for colour |
 | Biomes, custom terrains | Biomes, terrains | Converted |
-| Caverns, Chasms, Caves | Edit ▸ Caves (over the map or a selection) | Not yet: listed in the import report |
+| Caverns, Chasms, Caves | Edit ▸ Caves (over the map or a selection: paint the selection with the Selection brush, then carve) | Converted: caverns, ravines or tunnels carved where painted, the more the stronger they were painted (about one cavern and three ravines a tile at full strength), always under the ground |
 | Resources | Edit ▸ Ores | Massif lays its own ores |
-| Tunnels, floating layers | Levels: Carve and Solid | Not yet |
-| Custom ground cover layers, underground pockets, combined layers | Terrains with strata | Not yet |
+| Tunnels, floating layers | Levels: Carve and Solid | Converted: a Carve level each (a Solid level for a floating one), its floor and roof where WorldPainter puts them (at a height, so deep under the ground, inverted, so high over the floor, within their limits), flooded up to its level; their noise and their floor, wall and roof materials are left out (the floor keeps the ground's terrain) |
+| Custom ground cover layers | Terrains with strata | Converted: a terrain of the cover's blocks over each terrain it lies on ("Snow Block on Grass"), the land raised by the cover's thickness, or the top of the land replaced for a negative thickness; its edges are sheer |
+| Combined layers | Each of its layers | Converted: the layers it holds, each as strong as its factor, and its terrain and biome where painted at half strength or more |
+| Underground pockets | — (Massif has no blocks of its own inside the rock but ores) | Not yet |
 | River | Rivers | Not yet |
 | Populate, Read Only | — (Massif writes finished chunks, and merges none) | Left out |
 

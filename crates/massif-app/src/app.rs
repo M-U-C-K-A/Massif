@@ -4469,7 +4469,7 @@ impl MassifApp {
                             if !report.converted.is_empty() {
                                 ui.label(RichText::new(tr!("Layers")).color(pal.weak));
                                 ui.vertical(|ui| {
-                                    ui.label(tr!("Forests and trees as object layers, plants, Frost and Lava as ground covers, Void as empty columns:"));
+                                    ui.label(tr!("Imported as object layers, ground covers, terrains, levels and caves:"));
                                     let names: Vec<String> = report.converted.iter().map(|(n, t)| tr!("{n} ({t} tiles)", n, t)).collect();
                                     ui.label(RichText::new(names.join(", ")).size(11.5).color(pal.weak));
                                 });

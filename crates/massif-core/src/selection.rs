@@ -263,6 +263,14 @@ impl Selection {
         Some(out)
     }
 
+    /// The selection of the given weights, tile by tile (each tile's columns
+    /// in [`local_index`] order); a tile all 0 is left out.
+    pub fn from_tiles(tiles: impl IntoIterator<Item = (TilePos, Vec<u8>)>) -> Self {
+        Self {
+            tiles: tiles.into_iter().filter(|(_, w)| w.len() == TILE_AREA).filter_map(|(p, w)| Cells::of(w).map(|c| (p, c))).collect(),
+        }
+    }
+
     /// The selection `f` draws over `rect`: `f(z, x0, row)` sets the weights
     /// of the columns `x0..` of row `z` (0 to start with).
     pub fn rasterize(rect: BlockRect, f: impl Fn(i32, i32, &mut [u8]) + Sync) -> Self {

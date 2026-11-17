@@ -2471,7 +2471,6 @@
  "⌘+scroll": "⌘+roda",
  "⌘D deselects, ⌘A selects the whole map, ⇧⌘I inverts.": "⌘D desmarca, ⌘A seleciona o mapa inteiro, ⇧⌘I inverte.",
  "⌘S saves the map as a .massif file to come back to. Export (⌘E) writes it as a Minecraft world, ready to play.": "⌘S salva o mapa em um arquivo .massif para você voltar a ele. Exportar (⌘E) o grava como um mundo do Minecraft, pronto para jogar.",
- "Forests and trees as object layers, plants, Frost and Lava as ground covers, Void as empty columns:": "Florestas e árvores como camadas de objetos; plantas, Frost e Lava como coberturas do solo; Void como colunas vazias:",
  "Layers Massif does not have yet:": "Camadas que o Massif ainda não tem:",
  "The water": "A água",
  "Frozen": "Congelada",
@@ -2500,5 +2499,6 @@
  "Rub out": "Apagar",
  "Annotations show on the map only: the export leaves them out.": "As anotações só aparecem no mapa: a exportação as deixa de fora.",
  "Annotations: the marks painted with the Annotations tool. They are never exported": "Anotações: as marcas pintadas com a ferramenta Anotações. Nunca são exportadas",
- "Marks on the map, to plan it, as in WorldPainter: never exported.": "Marcas no mapa para planejá-lo, como no WorldPainter: nunca exportadas."
+ "Marks on the map, to plan it, as in WorldPainter: never exported.": "Marcas no mapa para planejá-lo, como no WorldPainter: nunca exportadas.",
+ "Imported as object layers, ground covers, terrains, levels and caves:": "Importadas como camadas de objetos, coberturas do solo, terrenos, níveis e cavernas:"
 }
