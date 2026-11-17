@@ -690,6 +690,9 @@ impl RiverSettings {
             banks: self.banks + self.erosion.clamp(0.0, 1.0) * 4.0 * self.width,
             water: self.water,
             bed: if self.bed.is_empty() { None } else { reg.terrain_by_name(&self.bed) },
+            // Sand in the shallows, wherever the bed is painted.
+            shore: reg.terrain_by_name("Sand"),
+            sea: None,
             biome: self.biome.then(|| reg.biome_by_id("minecraft:river")).flatten(),
         }
     }
@@ -829,7 +832,8 @@ impl RiverDraft {
                 (tail.lakes.clone(), tail.mouth)
             }
         };
-        self.plan = massif_core::river::Descent { course, lakes, mouth };
+        let sea = (mouth == Some(massif_core::river::Mouth::Sea)).then_some(sea);
+        self.plan = massif_core::river::Descent { course, lakes, mouth, sea };
         self.stops = stops;
         self.planned = Some(key);
     }

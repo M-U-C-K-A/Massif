@@ -512,6 +512,8 @@ fn cmd_spring(args: Args) -> Res<()> {
         banks: 12.0 + 0.3 * 4.0 * 12.0,
         water: true,
         bed: reg.terrain_by_name("Gravel"),
+        shore: reg.terrain_by_name("Sand"),
+        sea: None,
         biome: reg.biome_by_id("minecraft:river"),
     };
     for pair in coords.chunks(2) {

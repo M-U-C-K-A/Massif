@@ -183,7 +183,7 @@ A block has one plant layer and one tree layer: painting another over it takes i
 **Objects** places trees, rocks or ruins from `.schem`, `.schematic`, `.bp`, `.litematic` and `.nbt` files: import them, or drop them on the window, then paint where they stand, how far apart and how many.
 
 # Water
-- **River** lays a river from a click to another: its bed, its banks and its water. Down steep slopes it falls from pool to pool, a plunge pool under each fall.
+- **River** lays a river from a click to another: its bed, its banks and its water. Down steep slopes it falls from pool to pool, a plunge pool under each fall; its shallows and the inside of its bends are sand, and into the sea its channel goes on under the water, fading into the sea floor.
 - **Flood** fills the hollow you click with water up to where it would spill over its rim, at any height; the **Water brush** lays water as high as where each stroke starts (the water's surface there, or a block over the ground). With **From the click** off (Tool Settings), both use the **Water level** you set; **Limit the water's height** (off by default) keeps them under a height of your choice. When nothing fills, the message says why. **Drain** empties a body of water.
 - **Water brush** paints water at a level.
 

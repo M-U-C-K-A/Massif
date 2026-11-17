@@ -1168,7 +1168,19 @@ and a river biome on its water.
 - A course that starts on a river is a branch, leaving it at its level; one
   that ends on a river or a lake is a tributary, meeting it at its level.
   Two branches that meet again make a split stream.
-- The bed gets a terrain (gravel, sand…), the water a river biome.
+- The bed gets a terrain (gravel by default), the water a river biome.
+  Its shallows are sand: the edges of the bed, the inside of its bends,
+  where the current is slow, with a strip of beach at the foot of the bank
+  there.
+- Into the sea, the river does not widen: its channel goes on under the
+  water, cut into the sea floor and down it, shallower and shallower until
+  it fades into the floor (or after six times its width), opening out a
+  third wider at most; its floor is sand, with a fan of sand where it
+  ends, and the river's biome thins out into the sea's. Its water never
+  goes under the sea's surface, even where it reaches the sea over a beach
+  at the water's level.
+- The lakes and the rivers it runs into keep their floor, their terrain
+  and their water.
 
 The water's level is a whole block per column, so it stands in steps
 along the river. The water stays in its bed: where a bank was dug lower

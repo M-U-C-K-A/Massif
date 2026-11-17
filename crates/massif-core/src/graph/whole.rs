@@ -329,7 +329,7 @@ pub fn reshape_ground(edit: &mut Edit, op: &Reshape, sea: i32, bed: Option<Terra
             for &pos in &touched {
                 let r = pos.rect();
                 let r = BlockRect::new(r.x0 + shift, r.z0 + shift, r.x1 + shift, r.z1 + shift);
-                crate::water::seal(edit, r, &|x, z| dug.get(&(x, z)).copied().unwrap_or(f32::MIN), &|x, z| poured.contains(&(x, z)));
+                crate::water::seal(edit, r, &|x, z| dug.get(&(x, z)).copied().unwrap_or(f32::MIN), &|x, z| poured.contains(&(x, z)), sea as i16);
             }
         }
     }

@@ -40,6 +40,15 @@ pub struct RiverSpec {
     pub water: bool,
     /// Terrain of the bed under the water (`None`: left as it is).
     pub bed: Option<TerrainId>,
+    /// Terrain of the shallows: the edges of the bed, the inside of its
+    /// bends and the foot of the bank there, and its channel under the sea
+    /// (`None`: the bed's). Only with a `bed`.
+    pub shore: Option<TerrainId>,
+    /// The level of the sea it runs into, if it does: its water never goes
+    /// under it, even where it reaches the sea over dry land lower than the
+    /// sea's surface (a beach at the water's level); and its channel goes on
+    /// under the sea, fading into the sea floor.
+    pub sea: Option<f32>,
     /// Biome of the water (`None`: left as it is).
     pub biome: Option<BiomeId>,
 }
@@ -54,6 +63,8 @@ impl Default for RiverSpec {
             banks: 10.0,
             water: true,
             bed: None,
+            shore: None,
+            sea: None,
             biome: None,
         }
     }
@@ -205,6 +216,67 @@ pub(crate) fn pools_and_falls(level: &mut [f32], step: f32, half: &dyn Fn(usize)
     plunge
 }
 
+/// The way a river's channel goes on under the sea from the end of
+/// `course` (a point every [`STEP`] blocks): down the sea floor, keeping
+/// more or less to its heading, until the floor lies as deep as its bed
+/// (`depth` under the `sea`: there the channel has faded into it), it
+/// comes to land again (an island), the map ends, or it has run six times
+/// its `width` (24 to 128 blocks).
+fn under_sea(ground: &mut Ground, course: &[(f32, f32)], sea: f32, depth: f32, width: f32) -> Vec<(f32, f32)> {
+    let n = course.len();
+    if n < 2 {
+        return Vec::new();
+    }
+    let back = course[n.saturating_sub(1 + (8.0 / STEP) as usize)];
+    let last = course[n - 1];
+    let (mut hx, mut hz) = (last.0 - back.0, last.1 - back.1);
+    let l = hx.hypot(hz);
+    if l < 1e-3 {
+        return Vec::new();
+    }
+    (hx, hz) = (hx / l, hz / l);
+    let floor = |g: &mut Ground, x: f32, z: f32| g.at(x.floor() as i32, z.floor() as i32).map(|(h, _)| h);
+    let bed = sea - depth;
+    let longest = (6.0 * width).clamp(24.0, 128.0);
+    let (mut x, mut z) = last;
+    let mut out = Vec::new();
+    let mut run = 0.0;
+    while run < longest {
+        // Of a few ways ahead, the one down the floor the most; straight
+        // on, at the same depth.
+        let mut best: Option<(f32, (f32, f32))> = None;
+        for a in [-0.5f32, -0.25, 0.0, 0.25, 0.5] {
+            let (s, c) = a.sin_cos();
+            let (dx, dz) = (hx * c - hz * s, hx * s + hz * c);
+            let Some(h) = floor(ground, x + 4.0 * dx, z + 4.0 * dz) else { continue };
+            let score = h + 0.8 * a.abs();
+            if best.is_none_or(|b| score < b.0) {
+                best = Some((score, (dx, dz)));
+            }
+        }
+        let Some((_, (dx, dz))) = best else { break };
+        // Keeping most of its heading: no sharp turn under the water.
+        let (nx, nz) = (0.8 * hx + 0.2 * dx, 0.8 * hz + 0.2 * dz);
+        let nl = nx.hypot(nz).max(1e-6);
+        (hx, hz) = (nx / nl, nz / nl);
+        x += hx * STEP;
+        z += hz * STEP;
+        run += STEP;
+        match floor(ground, x, z) {
+            // Over the shallows of a beach, out to the deep.
+            Some(h) if h < sea + 0.5 => {
+                out.push((x, z));
+                if h < bed - 1.0 {
+                    break;
+                }
+            }
+            // Land again, or the edge of the map.
+            _ => break,
+        }
+    }
+    out
+}
+
 /// Dig a river along `points` (block coordinates, in any order of flow)
 /// into the level `edit` works on, recorded for undo.
 pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> RiverReport {
@@ -243,6 +315,18 @@ pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> 
         course.reverse();
         land = reversed;
     }
+    // Into the sea, its channel goes on under the water, down the sea
+    // floor: the points from `coast` on are under the sea.
+    let coast = course.len();
+    if let Some(sea) = spec.sea
+        && land.last().is_some_and(|l| l.0 < sea + 0.5)
+    {
+        for p in under_sea(&mut ground, &course, sea, spec.depth.max(spec.depth_end), spec.width.max(spec.width_end)) {
+            land.push(ground.at(p.0.floor() as i32, p.1.floor() as i32).unwrap_or((lo, Some(sea))));
+            course.push(p);
+        }
+    }
+    let n = course.len();
     let window = ((half(spec.width) / STEP) as usize).max(2);
     let smooth: Vec<f32> = (0..land.len())
         .map(|k| {
@@ -261,19 +345,47 @@ pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> 
         current = current.min(g - freeboard);
         level.push(current);
     }
-    if let Some(mouth) = land.last().and_then(|l| l.1) {
+    // Never under the water it runs into: that at its end, or the sea's.
+    let mouth = land.last().and_then(|l| l.1).or(spec.sea);
+    if let Some(mouth) = mouth {
         for l in &mut level {
             *l = l.max(mouth);
         }
     }
-    let length = course.len() as f32 * STEP;
-    let along = |k: usize, a: f32, b: f32| a + (b - a) * k as f32 / (course.len() - 1) as f32;
-    let widths: Vec<f32> = (0..course.len()).map(|k| half(along(k, spec.width, spec.width_end))).collect();
+    let length = coast as f32 * STEP;
+    // From the source to the mouth: under the sea, as at the mouth.
+    let along = |k: usize, a: f32, b: f32| a + (b - a) * k.min(coast - 1) as f32 / (coast - 1).max(1) as f32;
+    // How far under the sea a point is, 0 at the mouth to 1 where the
+    // channel has faded into the floor.
+    let out = |k: usize| if k < coast { 0.0 } else { (k + 1 - coast) as f32 / (n - coast) as f32 };
+    // Under the sea the channel opens out a little, a third wider at most.
+    let widths: Vec<f32> = (0..n).map(|k| half(along(k, spec.width, spec.width_end)) * (1.0 + 0.3 * out(k))).collect();
+    let reach = reach.max(widths.iter().fold(0.0f32, |a, &b| a.max(b)) * 1.6 + spec.banks.max(0.0) + 1.0);
+    // How the course bends at each point: the sine of its turn over a few
+    // blocks, positive to the left. On the inside of a bend the river
+    // leaves sand.
+    let span = 8usize;
+    let bend: Vec<f32> = (0..n)
+        .map(|k| {
+            let (a, b, c) = (course[k.saturating_sub(span)], course[k], course[(k + span).min(n - 1)]);
+            let (u, v) = ((b.0 - a.0, b.1 - a.1), (c.0 - b.0, c.1 - b.1));
+            let norm = (u.0.hypot(u.1) * v.0.hypot(v.1)).max(1e-6);
+            (u.0 * v.1 - u.1 * v.0) / norm
+        })
+        .collect();
     // Pools and falls down the steep stretches, a plunge pool under each
     // fall; through the water it crosses, it keeps that water's level.
     let crossed: Vec<bool> = land.iter().map(|l| l.1.is_some()).collect();
     let plunge = pools_and_falls(&mut level, STEP, &|k| widths[k], &|k| crossed[k]);
-    let depths: Vec<f32> = (0..course.len()).map(|k| along(k, spec.depth, spec.depth_end).max(0.5) + plunge[k]).collect();
+    let depths: Vec<f32> = (0..n).map(|k| along(k, spec.depth, spec.depth_end).max(0.5) + plunge[k]).collect();
+    // Under the sea: how deep the channel is cut into the floor, from its
+    // bed at the mouth to nothing where it fades out.
+    let incision: Vec<f32> = (0..n)
+        .map(|k| match spec.sea {
+            Some(sea) if k >= coast => (land[k].0 - (sea - depths[coast - 1])).max(0.0) * (1.0 - out(k)),
+            _ => 0.0,
+        })
+        .collect();
 
     // The course in buckets, to find the nearest point of it fast.
     let cell = reach.max(4.0);
@@ -326,6 +438,44 @@ pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> 
                 }
                 let i = local_index(x, z);
                 let ground = tile.top.get(i);
+                if k >= coast {
+                    // Under the sea: a channel cut into the floor, fading
+                    // out; sand on its floor and in a fan where it ends,
+                    // the river's biome thinning out into the sea's.
+                    let t = d / hw;
+                    let f = out(k);
+                    let mut any = false;
+                    if t < 1.0 {
+                        let new = snap_height((ground - incision[k] * (1.0 - t * t)).clamp(lo, hi));
+                        if new < ground {
+                            tile.top.set(i, new);
+                            dug.lock().expect("not poisoned").insert((x, z), ground);
+                            any = true;
+                        }
+                        if let Some(biome) = spec.biome
+                            && (crate::compose::hash2(x, z, 0x51ea) % 1000) as f32 > 1000.0 * f
+                        {
+                            tile.biome.set(i, biome.0);
+                            any = true;
+                        }
+                    }
+                    if let (Some(_), Some(shore)) = (spec.bed, spec.shore)
+                        && (t < 1.0 || (f > 0.6 && t < 1.6))
+                        && tile.terrain.get(i) != shore.0
+                    {
+                        tile.terrain.set(i, shore.0);
+                        any = true;
+                    }
+                    changed += any as usize;
+                    continue;
+                }
+                // The sea, a lake or a river already there: the river runs
+                // into it and leaves its floor, its terrain and its water as
+                // they are.
+                let before = tile.fluid.get(i);
+                if before != NO_FLUID && before as f32 > ground + 0.3 {
+                    continue;
+                }
                 let water = level[k];
                 let target = if d <= hw {
                     // The bed: deepest in the middle, up to the water's
@@ -348,23 +498,35 @@ pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> 
                     changed += 1;
                     dug.lock().expect("not poisoned").insert((x, z), ground);
                 }
+                // The shallows: the edges of the bed, and the inside of a
+                // bend (the side the course turns towards).
+                let inner = {
+                    let (a, b) = (course[k.saturating_sub(1)], course[(k + 1).min(n - 1)]);
+                    let side = (b.0 - a.0) * (cz - course[k].1) - (b.1 - a.1) * (cx - course[k].0);
+                    bend[k].abs() > 0.12 && side * bend[k] > 0.0
+                };
+                let t = d / hw;
+                let shallow = t > 0.7 || (inner && t > 0.3);
                 if d <= hw && spec.water && water > new + 0.3 {
                     let level = water.round().clamp(lo, hi) as i16;
-                    let before = tile.fluid.get(i);
-                    // Where two rivers meet, the higher water stays.
-                    let keep = if before != NO_FLUID && before as f32 > ground { before.max(level) } else { level };
-                    tile.fluid.set(i, keep);
-                    // Where there was no water, the river's own, which
-                    // it may lower to hold it in its bed.
-                    if before == NO_FLUID || before as f32 <= ground {
-                        poured.lock().expect("not poisoned").insert((x, z));
-                    }
+                    tile.fluid.set(i, level);
+                    // Where there was no water: the river's own, which it
+                    // may lower to hold it in its bed.
+                    poured.lock().expect("not poisoned").insert((x, z));
                     wet += 1;
                     if let Some(bed) = spec.bed {
-                        tile.terrain.set(i, bed.0);
+                        tile.terrain.set(i, if shallow { spec.shore.unwrap_or(bed).0 } else { bed.0 });
                     }
                     if let Some(biome) = spec.biome {
                         tile.biome.set(i, biome.0);
+                    }
+                } else if d > hw && let (Some(_), Some(shore)) = (spec.bed, spec.shore) {
+                    // A beach at the foot of the bank inside a bend, just
+                    // over the water.
+                    let beach = if inner { 1.5 } else { 0.0 };
+                    if d <= hw + beach && new <= water + 1.5 && tile.terrain.get(i) != shore.0 {
+                        tile.terrain.set(i, shore.0);
+                        changed += 1;
                     }
                 }
             }
@@ -379,7 +541,9 @@ pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> 
     let (columns, wet) = counts.into_inner().expect("not poisoned");
     let dug = dug.into_inner().expect("not poisoned");
     let poured = poured.into_inner().expect("not poisoned");
-    crate::water::seal(edit, rect, &|x, z| dug.get(&(x, z)).copied().unwrap_or(f32::MIN), &|x, z| poured.contains(&(x, z)));
+    // Never under the water it runs into.
+    let floor = mouth.map_or(i16::MIN, |w| w.round() as i16);
+    crate::water::seal(edit, rect, &|x, z| dug.get(&(x, z)).copied().unwrap_or(f32::MIN), &|x, z| poured.contains(&(x, z)), floor);
     RiverReport {
         length,
         columns,
@@ -430,6 +594,8 @@ pub struct Descent {
     /// the level they overflow at.
     pub lakes: Vec<(Vec<(i32, i32)>, f32)>,
     pub mouth: Option<Mouth>,
+    /// The level of the sea, when it ends in the sea.
+    pub sea: Option<f32>,
 }
 
 /// The ground as water let go at a spring sees it: the hollows it filled
@@ -572,6 +738,7 @@ pub fn descend(level: &crate::level::Level, start: (i32, i32), sea: f32, max_len
     };
     if w0.is_some() || h0 < sea {
         d.mouth = Some(if h0 < sea { Mouth::Sea } else { Mouth::Water });
+        d.sea = (h0 < sea).then_some(sea);
         return d;
     }
     // The height between columns, noise and all.
@@ -701,6 +868,7 @@ pub fn descend(level: &crate::level::Level, start: (i32, i32), sea: f32, max_len
         d.course = d.course.iter().enumerate().filter(|(k, p)| *k == 0 || *k == last || !under(p)).map(|(_, p)| *p).collect();
     }
     d.lakes = kept.into_iter().map(|(_, cells, level)| (cells, level)).collect();
+    d.sea = (d.mouth == Some(Mouth::Sea)).then_some(sea);
     d
 }
 
@@ -743,7 +911,12 @@ pub fn dig_descent(edit: &mut Edit, descent: &Descent, spec: &RiverSpec) -> Rive
         .filter(|(k, _)| k % 2 == 0 || *k + 1 == descent.course.len())
         .map(|(_, p)| *p)
         .collect();
-    carve_river(edit, &points, spec)
+    // Into the sea: its channel goes on under it.
+    let spec = RiverSpec {
+        sea: spec.sea.or(descent.sea),
+        ..*spec
+    };
+    carve_river(edit, &points, &spec)
 }
 
 // ------------------------------------------------------------- routes --
@@ -1041,6 +1214,113 @@ mod tests {
         let was = gentle.clone();
         pools_and_falls(&mut gentle, STEP, &|_| 6.0, &|_| false);
         assert_eq!(gentle, was);
+    }
+
+    /// The bed is gravel in its middle and sand in its shallows and on the
+    /// inside of its bends.
+    #[test]
+    fn a_river_leaves_sand_in_its_shallows() {
+        let mut world = slope();
+        let gravel = world.registry.terrain_by_name("Gravel").expect("gravel");
+        let sand = world.registry.terrain_by_name("Sand").expect("sand");
+        let spec = RiverSpec {
+            width: 10.0,
+            width_end: 14.0,
+            bed: Some(gravel),
+            shore: Some(sand),
+            ..RiverSpec::default()
+        };
+        let mut h = History::default();
+        h.begin("river", 0);
+        // Down the slope with a bend, into the lake.
+        carve_river(&mut h.edit(&mut world, 0), &[(20.0, 64.0), (120.0, 64.0), (170.0, 30.0), (240.0, 40.0)], &spec);
+        h.commit();
+        let (mut gravel_n, mut sand_n) = (0, 0);
+        for z in 0..128 {
+            for x in 0..230 {
+                let t = world.dims[0].ground().view(TilePos::containing(x, z)).unwrap();
+                let i = local_index(x, z);
+                if t.fluid.get(i) != NO_FLUID && t.fluid.get(i) as f32 > t.top.get(i) + 0.3 {
+                    gravel_n += (t.terrain.get(i) == gravel.0) as usize;
+                    sand_n += (t.terrain.get(i) == sand.0) as usize;
+                }
+            }
+        }
+        assert!(gravel_n > sand_n && sand_n * 6 > gravel_n, "gravel {gravel_n}, sand {sand_n}");
+    }
+
+    /// Land falling from 100 to the sea (63) at x = 180, the sea floor on
+    /// down to 40 at x = 383.
+    fn coast() -> World {
+        let mut world = World::new(WorldMeta::default());
+        let mut dim = Dimension::new(DimensionKind::Overworld, -64, 320);
+        for tx in 0..3 {
+            let mut tile = Tile::ground(0.0, 1, NO_FLUID);
+            for z in 0..128 {
+                for x in 0..128 {
+                    let bx = tx * 128 + x;
+                    let i = local_index(bx, z);
+                    let h = if bx < 180 { 100.0 - bx as f32 * 37.0 / 180.0 } else { 63.0 - (bx - 180) as f32 * 23.0 / 203.0 };
+                    tile.top.set(i, h);
+                    if h < 62.5 {
+                        tile.fluid.set(i, 63);
+                    }
+                }
+            }
+            dim.ground_mut().insert(TilePos::new(tx, 0), tile);
+        }
+        world.dims = vec![dim];
+        world
+    }
+
+    /// Into the sea, the river does not widen: its channel goes on under the
+    /// water, cut into the sea floor, shallower and shallower until it fades
+    /// into it, with sand on its floor; the sea's water stays as it was.
+    #[test]
+    fn a_river_goes_on_under_the_sea_and_fades_into_its_floor() {
+        let mut world = coast();
+        let before = world.clone();
+        let d = descend(world.dims[0].ground(), (20, 64), 63.0, 10_000, 100_000, 1.0);
+        assert_eq!(d.mouth, Some(Mouth::Sea));
+        assert_eq!(d.sea, Some(63.0));
+        let sand = world.registry.terrain_by_name("Sand").expect("sand");
+        let spec = RiverSpec {
+            width: 8.0,
+            width_end: 12.0,
+            depth: 3.0,
+            depth_end: 5.0,
+            bed: world.registry.terrain_by_name("Gravel"),
+            shore: Some(sand),
+            ..RiverSpec::default()
+        };
+        let mut h = History::default();
+        h.begin("river", 0);
+        dig_descent(&mut h.edit(&mut world, 0), &d, &spec);
+        h.commit();
+        let column = |w: &World, x: i32, z: i32| {
+            let t = w.dims[0].ground().view(TilePos::containing(x, z)).unwrap();
+            let i = local_index(x, z);
+            (t.top.get(i), t.fluid.get(i), t.terrain.get(i))
+        };
+        // How much deeper than the floor the middle of the channel is, past
+        // the coast.
+        let cut = |x: i32| (60..69).map(|z| column(&before, x, z).0 - column(&world, x, z).0).fold(0.0f32, f32::max);
+        let near = cut(195);
+        let farther = cut(215);
+        assert!(near >= 2.0, "a channel under the sea by the coast: {near}");
+        assert!(farther < near, "fading out: {near} by the coast, {farther} farther");
+        assert_eq!(cut(300), 0.0, "and gone far out");
+        // The sea's water and the floor away from the channel untouched
+        // (from x = 185, where the fixture's sea has water).
+        for x in 185..383 {
+            assert_eq!(column(&world, x, 64).1, 63);
+            assert_eq!(column(&world, x, 20).0, column(&before, x, 20).0);
+        }
+        // Sand on its floor.
+        assert_eq!(column(&world, 195, 64).2, sand.0);
+        // Not wider at the coast than upstream: no funnel.
+        let wet = |x: i32| (0..128).filter(|&z| column(&world, x, z).0 < column(&before, x, z).0 - 1.0).count();
+        assert!(wet(176) <= wet(150) + 6, "{} dug at the coast, {} upstream", wet(176), wet(150));
     }
 
     /// A hollow on the way fills into a lake up to where it overflows, and

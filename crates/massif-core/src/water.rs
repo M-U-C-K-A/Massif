@@ -233,9 +233,11 @@ pub fn check(dim: &Dimension) -> WaterCheck {
 /// it had before it was dug, say); where it cannot, the water goes down to
 /// the neighbour's ground, and so on until it holds. Only the water of
 /// the columns `mine` names is lowered: the water already on the map is
-/// left as it was. Water beside lower water (a step along a river) is
-/// left. Returns the columns changed.
-pub fn seal(edit: &mut crate::history::Edit, rect: crate::coords::BlockRect, rise: &dyn Fn(i32, i32) -> f32, mine: &dyn Fn(i32, i32) -> bool) -> usize {
+/// left as it was; and never under `floor` (the level of the sea or the
+/// lake a river runs into: lower, its mouth would stand under the water it
+/// meets). Water beside lower water (a step along a river) is left.
+/// Returns the columns changed.
+pub fn seal(edit: &mut crate::history::Edit, rect: crate::coords::BlockRect, rise: &dyn Fn(i32, i32) -> f32, mine: &dyn Fn(i32, i32) -> bool, floor: i16) -> usize {
     use crate::codec::snap_height;
     use crate::compose::block_top;
     use crate::tile::NO_FLUID;
@@ -284,9 +286,10 @@ pub fn seal(edit: &mut crate::history::Edit, rect: crate::coords::BlockRect, ris
             if limit >= want - 0.5 {
                 top[n] = top[n].max(want.min(limit));
             }
-            if ours && block_top(top[n]) < f {
-                // It cannot hold: the water goes down to its rim.
-                let rim = block_top(top[n]);
+            if ours && block_top(top[n]) < f && f > floor as i32 {
+                // It cannot hold: the water goes down to its rim, never
+                // under the floor.
+                let rim = block_top(top[n]).max(floor as i32);
                 fluid[c] = if rim > block_top(top[c]) { rim as i16 } else { NO_FLUID };
                 queue.extend([c - 1, c + 1, c - w, c + w, c]);
                 break;
@@ -708,13 +711,13 @@ mod tests {
         let mut world = shelf();
         let mut h = History::default();
         h.begin("seal", 0);
-        assert_eq!(seal(&mut h.edit(&mut world, 0), rect, &|_, _| f32::MIN, &|_, _| false), 0);
+        assert_eq!(seal(&mut h.edit(&mut world, 0), rect, &|_, _| f32::MIN, &|_, _| false, i16::MIN), 0);
         h.commit();
         assert_eq!(check(&world.dims[0]).spills, 128);
         // Its own goes down to the rim of the land beside it.
         let mut h = History::default();
         h.begin("seal", 0);
-        assert!(seal(&mut h.edit(&mut world, 0), rect, &|_, _| f32::MIN, &|_, _| true) > 0);
+        assert!(seal(&mut h.edit(&mut world, 0), rect, &|_, _| f32::MIN, &|_, _| true, i16::MIN) > 0);
         h.commit();
         // The edge goes down to the land's rim, and the rest falls into it.
         let c = check(&world.dims[0]);
@@ -726,7 +729,7 @@ mod tests {
         let mut world = shelf();
         let mut h = History::default();
         h.begin("seal", 0);
-        seal(&mut h.edit(&mut world, 0), rect, &|_, _| 90.0, &|_, _| true);
+        seal(&mut h.edit(&mut world, 0), rect, &|_, _| 90.0, &|_, _| true, i16::MIN);
         h.commit();
         let t = world.dims[0].ground().view(TilePos::new(0, 0)).unwrap();
         assert_eq!(t.fluid.get(local_index(10, 10)), 80);

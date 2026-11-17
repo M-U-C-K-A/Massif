@@ -10609,11 +10609,28 @@ mod tests {
     }
 
     /// A river from a source high on a steep slope of a real map
-    /// (MASSIF_RIVER_WORLD), down to the sea: the 2D map and two 3D views
-    /// of it, and its water level along its course, for the eye. Needs a
-    /// GPU: runs with MASSIF_SNAPSHOT_DIR.
+    /// (MASSIF_RIVER_WORLD, "Continent and islands" or the part of it
+    /// around (-102, -1607)), down to the sea: the 2D map and two 3D views of
+    /// it, and its water level along its course, for the eye. Needs a GPU:
+    /// runs with MASSIF_SNAPSHOT_DIR.
     #[test]
     fn steep_river_on_a_real_world() {
+        river_on_a_real_world((-102, -1607), "steep-river", &[(0.25, 240.0, 0.75, 0.5), (0.5, 200.0, 0.6, -0.6)]);
+    }
+
+    /// A river winding down to the sea on a real map (the part of
+    /// "Continent and islands" around (-565, 1002)): its bends and its
+    /// estuary, for the eye.
+    #[test]
+    fn winding_river_on_a_real_world() {
+        river_on_a_real_world((-565, 1002), "winding-river", &[(0.55, 160.0, 0.9, 0.4), (0.97, 220.0, 0.8, 0.3)]);
+    }
+
+    /// A river from `source` dug with the River tool's default settings on
+    /// the map MASSIF_RIVER_WORLD (nothing if the source is not on it), its
+    /// 2D map and 3D views from downstream at the given shares of its
+    /// course (distance, pitch, turn), saved as `<name>-…png`.
+    fn river_on_a_real_world(source: (i32, i32), name: &str, shots: &[(f32, f32, f32, f32)]) {
         let (Some(dir), Some(path)) = (
             std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from),
             std::env::var_os("MASSIF_RIVER_WORLD").map(PathBuf::from),
@@ -10629,7 +10646,9 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         h.run_steps(10);
-        let source = (-102, -1607);
+        if crate::tools::probe(&h.state().doc, source.0, source.1).is_none() {
+            return;
+        }
         let course = {
             let app = h.state();
             let sea = app.doc.world.meta.sea_level as f32;
@@ -10646,7 +10665,7 @@ mod tests {
         h.run_steps(5);
         for m in h.state_mut().maps.values_mut() {
             m.center = [mid.0 as f64, mid.1 as f64];
-            m.zoom = 1.4;
+            m.zoom = 1.0;
         }
         h.run_steps(5);
         let p = h.state().maps.values().next().unwrap().screen_of(source.0 as f64 + 0.5, source.1 as f64 + 0.5);
@@ -10679,13 +10698,17 @@ mod tests {
             eprintln!("levels along the course: {levels:?}");
             eprintln!("drops: {} of 1, {} of 2-3, {} of 4+", drops.iter().filter(|d| **d == 1).count(), drops.iter().filter(|d| (2..=3).contains(*d)).count(), drops.iter().filter(|d| **d >= 4).count());
         }
-        h.render().unwrap().save(dir.join("steep-river-map.png")).unwrap();
+        h.render().unwrap().save(dir.join(format!("{name}-map.png"))).unwrap();
         let ground = |app: &MassifApp, p: (f32, f32)| crate::tools::probe(&app.doc, p.0 as i32, p.1 as i32).map_or(80.0, |p| p.height);
         // From downstream, a little to the side, looking up the river.
-        for (name, at, distance, pitch, turn) in [("steep-river-3d", course.len() / 4, 240.0, 0.75, 0.5f32), ("steep-river-3d-2", course.len() / 2, 200.0, 0.6, -0.6)] {
+        for (k, &(share, distance, pitch, turn)) in shots.iter().enumerate() {
+            let at = ((course.len() as f32 * share) as usize).min(course.len() - 1);
             let target = course[at];
             let ahead = course[(at + 40).min(course.len() - 1)];
-            let yaw = (ahead.0 - target.0).atan2(ahead.1 - target.1) + turn;
+            let back = course[at.saturating_sub(40)];
+            // Near the mouth, from the sea looking up the river.
+            let (dx, dz) = if at + 40 < course.len() { (ahead.0 - target.0, ahead.1 - target.1) } else { (target.0 - back.0, target.1 - back.1) };
+            let yaw = dx.atan2(dz) + turn;
             {
                 let app = h.state_mut();
                 let y = ground(app, target);
@@ -10707,8 +10730,8 @@ mod tests {
                 }
             }
             let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
-            image::save_buffer(dir.join(format!("{name}.png")), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
-            h.render().unwrap().save(dir.join(format!("{name}-window.png"))).unwrap();
+            let suffix = if k == 0 { String::new() } else { format!("-{}", k + 1) };
+            image::save_buffer(dir.join(format!("{name}-3d{suffix}.png")), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
         }
     }
 
