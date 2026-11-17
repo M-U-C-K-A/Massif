@@ -1746,8 +1746,7 @@ pub fn pocket_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
     ui.menu_button(theme::with_icon(Icon::Plus, tr!("Add a block")), |ui| {
         ui.set_max_width(300.0);
         let mut search: String = ui.ctx().data(|d| d.get_temp(search_id)).unwrap_or_default();
-        let hint_text = tr!("{glyph}  Search, or type a block id", glyph = theme::glyph(Icon::Search));
-        ui.add(egui::TextEdit::singleline(&mut search).hint_text(hint_text).desired_width(280.0)).request_focus();
+        crate::widgets::search(ui, &mut search, tr!("Search, or type a block id"), 280.0).request_focus();
         let needle = search.trim().to_lowercase();
         egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
             let mut shown = 0;
@@ -2158,8 +2157,7 @@ pub fn cover_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     ui.menu_button(theme::with_icon(Icon::Plus, tr!("Add a block")), |ui| {
         ui.set_max_width(300.0);
         let mut search: String = ui.ctx().data(|d| d.get_temp(search_id)).unwrap_or_default();
-        let hint_text = tr!("{glyph}  Search, or type a block id", glyph = theme::glyph(Icon::Search));
-        let edit = ui.add(egui::TextEdit::singleline(&mut search).hint_text(hint_text).desired_width(280.0));
+        let edit = crate::widgets::search(ui, &mut search, tr!("Search, or type a block id"), 280.0);
         edit.request_focus();
         let needle = search.trim().to_lowercase();
         egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
@@ -2266,11 +2264,7 @@ pub(crate) fn ground_picker(ui: &mut Ui, id: egui::Id, reg: &Registry, blocks: &
     let ctx = ui.ctx().clone();
     ui.set_max_width(300.0);
     let mut search: String = ctx.data(|d| d.get_temp(id)).unwrap_or_default();
-    let edit = ui.add(
-        egui::TextEdit::singleline(&mut search)
-            .hint_text(tr!("{glyph}  Search terrains and blocks", glyph = theme::glyph(Icon::Search)))
-            .desired_width(ui.available_width().min(280.0)),
-    );
+    let edit = crate::widgets::search(ui, &mut search, tr!("Search terrains and blocks"), 280.0);
     edit.request_focus();
     let needle = search.trim().to_lowercase();
     let matches = |name: &str, id: &str| needle.is_empty() || name.to_lowercase().contains(&needle) || id.contains(&needle);
@@ -3579,11 +3573,7 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
 
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        ui.add(
-            egui::TextEdit::singleline(&mut blocks.search)
-                .hint_text(tr!("{glyph}  Search {n} blocks", glyph = theme::glyph(Icon::Search), n = cat.blocks.len()))
-                .desired_width((ui.available_width() - 110.0).max(80.0)),
-        );
+        crate::widgets::search(ui, &mut blocks.search, &tr!("Search {n} blocks", n = cat.blocks.len()), (ui.available_width() - 110.0).max(80.0));
         crate::widgets::checkbox(ui, &mut blocks.all, tr!("All shapes"))
             .on_hover_text(tr!("Also non-cube blocks, and every shape of a mod's blocks (slabs, stairs, arches…)"));
     });
@@ -3674,7 +3664,7 @@ pub fn terrain_panel(ui: &mut Ui, tools: &mut ToolState, reg: &Registry, solo: &
     let solo_changed = crate::widgets::checkbox(ui, solo, tr!("Solo"))
         .on_hover_text(tr!("Fade every other terrain on the map"))
         .changed();
-    ui.add(egui::TextEdit::singleline(search).hint_text(tr!("{glyph}  Search terrain", glyph = theme::glyph(Icon::Search))).desired_width(f32::INFINITY));
+    crate::widgets::search(ui, search, tr!("Search terrain"), f32::INFINITY);
     let needle = search.to_lowercase();
     let mut groups: Vec<&str> = Vec::new();
     for t in &reg.terrains {
@@ -3763,7 +3753,7 @@ fn describe_terrain(reg: &Registry, terrain: u16) -> String {
 
 pub fn biome_panel(ui: &mut Ui, tools: &mut ToolState, reg: &Registry, search: &mut String) {
     hint(ui, tr!("Painted biomes override automatic."));
-    ui.add(egui::TextEdit::singleline(search).hint_text(tr!("{glyph}  Search biomes", glyph = theme::glyph(Icon::Search))).desired_width(f32::INFINITY));
+    crate::widgets::search(ui, search, tr!("Search biomes"), f32::INFINITY);
     let needle = search.to_lowercase();
     for (i, b) in reg.biomes.iter().enumerate() {
         if !needle.is_empty() && !b.name.to_lowercase().contains(&needle) && !b.id.contains(&needle) {

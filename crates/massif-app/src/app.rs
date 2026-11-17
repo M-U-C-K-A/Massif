@@ -16280,4 +16280,98 @@ mod tests {
         set_language(Language::English);
         assert!(faults.is_empty(), "{} past the window:\n{}", faults.len(), faults.join("\n"));
     }
+
+    /// The search fields, empty and with a long text typed: in the Blocks,
+    /// Terrain, Biomes and Packs panels, a ground cover's Add a block, the
+    /// keyboard's settings and the help. Rendered with MASSIF_SNAPSHOT_DIR
+    /// (MASSIF_SNAPSHOT_PPP=2 as on a Retina screen); everywhere the text
+    /// starts inside the field, after its magnifier.
+    #[test]
+    fn search_fields_render() {
+        use egui_kittest::kittest::Queryable;
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1280.0, 800.0))
+            .with_pixels_per_point(std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0))
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_eframe(move |cc| {
+                theme::install(&cc.egui_ctx);
+                let world = generate(&GenParams { tiles_x: 2, tiles_z: 2, ..GenParams::default() });
+                let mut app = MassifApp::for_tests(world);
+                app.settings.theme = ThemeChoice::Dark;
+                if let Some(jar) = massif_assets::find_jars().first() {
+                    app.blocks.catalogue = massif_assets::load(&jar.path, &jar.version).ok().map(std::sync::Arc::new);
+                }
+                app
+            });
+        h.run_steps(3);
+        let ppp = h.ctx.pixels_per_point();
+        let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        let (settings, side) = areas.iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::ToolSettings)).copied().unwrap();
+        let long = "minecraft:polished_blackstone_brick_stairs_and_more";
+        let save = |h: &mut egui_kittest::Harness<'_, MassifApp>, rect: Rect, name: &str| {
+            let image = h.render().unwrap();
+            let crop = image::imageops::crop_imm(&image, (rect.left() * ppp) as u32, (rect.top() * ppp) as u32, (rect.width() * ppp) as u32, (rect.height() * ppp) as u32).to_image();
+            crop.save(dir.join(format!("search-{name}-{ppp}x.png"))).unwrap();
+        };
+        for (editor, name) in [(EditorKind::Blocks, "blocks"), (EditorKind::Terrain, "terrain"), (EditorKind::Biomes, "biomes"), (EditorKind::Packs, "packs")] {
+            h.state_mut().layout.current_mut().root.set_editor(settings, editor);
+            h.state_mut().blocks.search.clear();
+            h.state_mut().terrain_search.clear();
+            h.state_mut().biome_search.clear();
+            h.state_mut().layers_ui.search.clear();
+            h.run_steps(4);
+            // The panel's search field and around it.
+            let at = h.query_all_by_role(egui::accesskit::Role::TextInput).find(|n| side.contains(n.rect().center())).expect("a search field").rect();
+            let rect = Rect::from_min_max(pos2(side.left(), at.top() - 40.0), pos2(side.right(), at.bottom() + 20.0));
+            save(&mut h, rect, name);
+            // Typed into, the field focused: the text's end in view.
+            h.query_all_by_role(egui::accesskit::Role::TextInput).find(|n| side.contains(n.rect().center())).unwrap().click();
+            h.run_steps(2);
+            h.query_all_by_role(egui::accesskit::Role::TextInput).find(|n| side.contains(n.rect().center())).unwrap().type_text(long);
+            h.run_steps(4);
+            save(&mut h, rect, &format!("{name}-long"));
+            h.ctx.memory_mut(|m| m.stop_text_input());
+            h.run_steps(2);
+        }
+        // A ground cover's Add a block, typed into.
+        h.state_mut().layout.current_mut().root.set_editor(settings, EditorKind::ToolSettings);
+        h.state_mut().tools.select(Tool::Cover);
+        h.state_mut().tools.cover = 1;
+        h.run_steps(4);
+        h.get_by_label_contains("Add a block").scroll_to_me();
+        h.run_steps(2);
+        h.get_by_label_contains("Add a block").click_accesskit();
+        h.run_steps(4);
+        // The popup's field, which has the keys.
+        let field = h.ctx.memory(|m| m.focused()).and_then(|id| h.ctx.read_response(id)).expect("the field with the keys").rect;
+        save(&mut h, field.expand2(vec2(60.0, 30.0)), "cover-add");
+        h.event(egui::Event::Text(long.into()));
+        h.run_steps(3);
+        save(&mut h, field.expand2(vec2(60.0, 30.0)), "cover-add-long");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        // Settings ▸ Keyboard, and the help.
+        h.state_mut().dialog = Some(Dialog::Preferences(PrefsSection::Keyboard));
+        h.run_steps(4);
+        let rect = h.query_all_by_role(egui::accesskit::Role::TextInput).last().unwrap().rect();
+        h.query_all_by_role(egui::accesskit::Role::TextInput).last().unwrap().click();
+        save(&mut h, rect.expand2(vec2(20.0, 20.0)), "keys");
+        h.run_steps(2);
+        h.event(egui::Event::Text(long.into()));
+        h.run_steps(3);
+        save(&mut h, rect.expand2(vec2(20.0, 20.0)), "keys-long");
+        h.state_mut().dialog = None;
+        let ctx = h.ctx.clone();
+        h.state_mut().command(&ctx, crate::menu::Command::Help);
+        h.run_steps(4);
+        let field = h.query_all_by_role(egui::accesskit::Role::TextInput).last().unwrap().rect();
+        save(&mut h, field.expand2(vec2(20.0, 20.0)), "help");
+        h.query_all_by_role(egui::accesskit::Role::TextInput).last().unwrap().type_text(long);
+        h.run_steps(3);
+        save(&mut h, field.expand2(vec2(20.0, 20.0)), "help-long");
+    }
 }

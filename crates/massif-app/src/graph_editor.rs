@@ -2788,19 +2788,15 @@ impl GraphEditor {
                 egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(LIBRARY_PAD as i8)).show(ui, |ui| {
                     let inner = width - 2.0 * LIBRARY_PAD;
                     ui.set_width(inner);
-                    let edit = ui.add(
-                        egui::TextEdit::singleline(&mut lib.query)
-                            .hint_text(tr!("{glyph}  Search nodes", glyph = theme::glyph(Icon::Search)))
-                            .desired_width(f32::INFINITY)
-                            .margin(vec2(8.0, 6.0))
-                            // ↑ and ↓ choose a row, rather than move the keyboard to another field.
-                            .event_filter(egui::EventFilter {
-                                horizontal_arrows: true,
-                                vertical_arrows: true,
-                                tab: false,
-                                escape: false,
-                            }),
-                    );
+                    // ↑ and ↓ choose a row, rather than move the keyboard to another field.
+                    let edit = crate::widgets::search_with(ui, &mut lib.query, tr!("Search nodes"), f32::INFINITY, |edit| {
+                        edit.event_filter(egui::EventFilter {
+                            horizontal_arrows: true,
+                            vertical_arrows: true,
+                            tab: false,
+                            escape: false,
+                        })
+                    });
                     if lib.focus {
                         edit.request_focus();
                         lib.focus = false;

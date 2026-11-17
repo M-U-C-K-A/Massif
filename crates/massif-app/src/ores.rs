@@ -1482,7 +1482,7 @@ fn biome_list(ui: &mut Ui, pal: &Palette, width: f32, (label, empty): (&str, &st
             // A search over the names: the game has some sixty biomes.
             let key = egui::Id::unique((id, "search"));
             let mut search = ui.data_mut(|d| d.get_temp::<String>(key)).unwrap_or_default();
-            ui.add(egui::TextEdit::singleline(&mut search).hint_text(tr!("Search")).desired_width(f32::INFINITY));
+            widgets::search(ui, &mut search, tr!("Search"), f32::INFINITY);
             ui.data_mut(|d| d.insert_temp(key, search.clone()));
             let search = search.to_lowercase();
             ui.add_space(4.0);

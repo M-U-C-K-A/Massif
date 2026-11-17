@@ -78,8 +78,7 @@ pub fn page(ui: &mut Ui, saved: &mut Saved) {
             state.note = Some(tr!("The {preset} keys, with your changes over them.", preset = Preset::ALL[k].name()));
         }
         ui.add_space(10.0);
-        let hint = format!("{}  {}", theme::glyph(Icon::Search), tr!("Search"));
-        ui.add(egui::TextEdit::singleline(&mut state.query).hint_text(hint).desired_width(ui.available_width().min(220.0)));
+        crate::widgets::search(ui, &mut state.query, tr!("Search"), 220.0);
         if one_line {
             buttons(ui, saved, &mut state);
         }

@@ -476,6 +476,55 @@ pub fn row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
     name.add(egui::Label::new(egui::RichText::new(label).size(12.5)).truncate());
 }
 
+/// A search field: a pill with a magnifier at its left, the text after it,
+/// `hint` in it while empty, centred top to bottom. `width` at most (as
+/// wide as the room with `f32::INFINITY`). The text is laid inside the
+/// pill's straight part, so that, scrolled to its end as it is typed, its
+/// start never shows under the rounded edge. The text field's response.
+pub fn search(ui: &mut Ui, text: &mut String, hint: &str, width: f32) -> Response {
+    search_with(ui, text, hint, width, |edit| edit)
+}
+
+/// A [`search`] field whose text field `more` sets up further (the keys it
+/// takes, say).
+pub fn search_with<'t>(ui: &mut Ui, text: &'t mut String, hint: &str, width: f32, more: impl FnOnce(TextEdit<'t>) -> TextEdit<'t>) -> Response {
+    let pal = Palette::of(ui);
+    let height = ui.spacing().interact_size.y.max(28.0);
+    let w = width.min(ui.available_width()).max(height * 2.0);
+    let (rect, _) = ui.allocate_exact_size(vec2(w, height), Sense::hover());
+    let back = ui.painter().add(egui::Shape::Noop);
+    let icon_x = rect.left() + height * 0.5;
+    let inner = Rect::from_min_max(egui::pos2(icon_x + 14.0, rect.top()), egui::pos2(rect.right() - height * 0.45, rect.bottom()));
+    // Cut to its own room: scrolled, the text never runs over the magnifier
+    // or the pill's ends.
+    let mut room = ui.new_child(UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    room.set_clip_rect(inner.intersect(ui.clip_rect()));
+    let edit = room.put(
+        inner,
+        more(
+            TextEdit::singleline(text)
+                .hint_text(hint)
+                .frame(egui::Frame::NONE)
+                .margin(egui::Margin::ZERO)
+                .align(egui::Align2::LEFT_CENTER)
+                .min_size(inner.size())
+                .desired_width(inner.width()),
+        ),
+    );
+    let visuals = ui.visuals();
+    let stroke = if edit.has_focus() {
+        visuals.selection.stroke
+    } else if edit.hovered() {
+        visuals.widgets.hovered.bg_stroke
+    } else {
+        visuals.widgets.inactive.bg_stroke
+    };
+    let fill = visuals.text_edit_bg_color();
+    ui.painter().set(back, egui::Shape::Rect(egui::epaint::RectShape::new(rect, theme::PILL, fill, stroke, StrokeKind::Inside)));
+    ui.painter().text(egui::pos2(icon_x, rect.center().y), egui::Align2::CENTER_CENTER, theme::glyph(theme::Icon::Search), FontId::proportional(14.0), pal.weak);
+    edit
+}
+
 /// A combo box with a chevron rather than egui's triangle.
 pub fn combo(id: impl egui::AsIdSalt) -> egui::ComboBox<'static> {
     egui::ComboBox::from_id_salt(id).icon(chevron)

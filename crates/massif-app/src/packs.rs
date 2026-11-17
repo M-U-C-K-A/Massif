@@ -124,7 +124,7 @@ pub fn apply(item: Item, tools: &mut ToolState, doc: &mut Document, catalogue: O
 pub fn packs_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, catalogue: Option<&massif_assets::Catalogue>, search: &mut String, library: &mut crate::pack_share::PackLibrary) -> Option<String> {
     let pal = Palette::of(ui);
     ui.label(RichText::new(tr!("Ready-made trees, plants and mixes of blocks. Click one to add it to the map and paint it.")).size(11.5).color(pal.weak));
-    ui.add(egui::TextEdit::singleline(search).hint_text(tr!("{glyph}  Search packs", glyph = theme::glyph(Icon::Search))).desired_width(f32::INFINITY));
+    crate::widgets::search(ui, search, tr!("Search packs"), f32::INFINITY);
     let needle = search.trim().to_lowercase();
     let said = crate::pack_share::library_ui(ui, library, &needle, tools, doc, catalogue);
     let mut picked = None;

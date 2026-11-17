@@ -159,11 +159,7 @@ pub fn ui(ui: &mut Ui, state: &mut HelpState) -> bool {
             if ui.add(x).on_hover_text(tr!("Close (Esc)")).clicked() {
                 close = true;
             }
-            ui.add(
-                egui::TextEdit::singleline(&mut state.query)
-                    .hint_text(tr!("{glyph}  Search the help", glyph = theme::glyph(Icon::Search)))
-                    .desired_width(240.0),
-            );
+            crate::widgets::search(ui, &mut state.query, tr!("Search the help"), 240.0);
         });
     });
     ui.add_space(10.0);

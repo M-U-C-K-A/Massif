@@ -396,7 +396,7 @@ impl PaletteEditor {
             ui.label(RichText::new(tr!("The game's blocks are not read: type an id, or choose the game in the Blocks panel.")).size(11.5).color(pal.weak));
             return picked;
         };
-        ui.add(egui::TextEdit::singleline(&mut self.search).hint_text(tr!("{glyph}  Search {n} blocks", glyph = theme::glyph(Icon::Search), n = cat.blocks.len())).desired_width(300.0));
+        crate::widgets::search(ui, &mut self.search, &tr!("Search {n} blocks", n = cat.blocks.len()), 300.0);
         let needle = self.search.to_lowercase();
         let indices: Vec<u32> = blocks.sections(&needle).iter().flat_map(|s| s.blocks.iter().copied()).filter(|&i| cat.blocks[i as usize].full_cube).take(PICKS).collect();
         const CELL: f32 = 34.0;
