@@ -3873,10 +3873,15 @@ pub static COLD_BUILDS: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 fn builders() -> &'static rayon::ThreadPool {
     static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
     POOL.get_or_init(|| {
-        let n = std::thread::available_parallelism().map_or(4, |n| n.get()).saturating_sub(2).max(1);
+        // At most 16: past that, on a processor of 24 cores and 32 threads,
+        // more threads only crowd the memory and the interface's own.
+        let n = std::thread::available_parallelism().map_or(4, |n| n.get()).saturating_sub(2).clamp(1, 16);
         rayon::ThreadPoolBuilder::new()
             .num_threads(n)
             .thread_name(|i| format!("massif 3d tiles {i}"))
+            // Below the interface on Windows, where a thread of normal
+            // priority takes a core from the window's.
+            .start_handler(|_| crate::startup::below_normal_priority())
             .build()
             .expect("threads for the 3D tiles")
     })
@@ -3966,7 +3971,17 @@ pub struct View3d {
     /// catalogue last checked against it.
     look_key: Option<(usize, u64, u64)>,
     look_seen: Option<(u64, u64, usize)>,
+    /// The pass in which the view was last shown, and when: a view no
+    /// longer shown builds nothing, and gives its memory back after a
+    /// while (see [`View3d::rest_if_hidden`]).
+    shown_pass: u64,
+    shown_at: f64,
 }
+
+/// How long a 3D view stays out of sight before its tiles and the
+/// graphics card's memory it holds are given back (seconds): switching
+/// workspaces back and forth finds it as it was.
+const HIDDEN_RELEASE: f64 = 20.0;
 
 /// The height of the bar along the bottom of the player's view.
 const BAR_HEIGHT: f32 = 36.0;
@@ -4138,6 +4153,8 @@ impl Default for View3d {
             catalogue: None,
             look_key: None,
             look_seen: None,
+            shown_pass: 0,
+            shown_at: 0.0,
         }
     }
 }
@@ -4183,6 +4200,32 @@ impl View3d {
                     b.edited.insert(cell);
                 }
             }
+        }
+    }
+
+    /// Called every frame, before the views are shown: a view the
+    /// workspace no longer shows stops building its tiles at once (its
+    /// threads go back to the pool, what they brought and nobody took is
+    /// dropped), and once out of sight for [`HIDDEN_RELEASE`] gives back
+    /// its tiles and what it holds on the graphics card, made again when
+    /// it is shown.
+    pub fn rest_if_hidden(&mut self, ctx: &egui::Context) {
+        if self.shown_pass + 1 >= ctx.cumulative_pass_nr() {
+            return;
+        }
+        if self.builder.take().is_some() {
+            log::info!("3D view out of sight: its tile building stopped");
+        }
+        let now = ctx.input(|i| i.time);
+        if self.renderer.is_some() && now - self.shown_at > HIDDEN_RELEASE {
+            log::info!("3D view out of sight for {HIDDEN_RELEASE} s: {} tiles and {} MB of the graphics card given back", self.tiles.len(), self.gpu_bytes() / 1_000_000);
+            self.renderer = None;
+            self.tiles.clear();
+            self.grid = None;
+            self.look_key = None;
+            self.look_seen = None;
+            self.pairs.dirty = true;
+            self.needs_render = true;
         }
     }
 
@@ -4235,6 +4278,12 @@ impl View3d {
     #[cfg(test)]
     pub fn pairs(&self) -> usize {
         self.pairs.list().len()
+    }
+
+    /// Whether tiles are being built away from the frames.
+    #[cfg(test)]
+    pub fn building(&self) -> bool {
+        self.builder.is_some()
     }
 
     pub fn tiles_built(&self) -> usize {
@@ -5029,6 +5078,8 @@ impl View3d {
     /// Show the view; `sculpt`: the 3D Sculpt editor's, where the buttons
     /// sculpt with its tool.
     pub fn ui(&mut self, ui: &mut Ui, frame: &eframe::Frame, doc: &mut Document, tools: &mut ToolState, map_center: Option<[f64; 2]>, sculpt: bool) {
+        self.shown_pass = ui.ctx().cumulative_pass_nr();
+        self.shown_at = ui.input(|i| i.time);
         let pal = Palette::of(ui);
         let rect = ui.available_rect_before_wrap();
         let response = ui.allocate_rect(rect, Sense::click_and_drag());

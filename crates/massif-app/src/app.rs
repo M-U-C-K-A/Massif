@@ -4906,6 +4906,10 @@ impl MassifApp {
         self.apply_memory_limit(now);
         // Walking in 3D Sculpt held the mouse, and its view is gone.
         self.sculpt3d.release_if_hidden(&ctx);
+        // A 3D view the workspace no longer shows builds nothing, and gives
+        // its memory back after a while.
+        self.view3d.rest_if_hidden(&ctx);
+        self.sculpt3d.rest_if_hidden(&ctx);
         let open = self.dialog.is_some();
         if open != self.dialog_was_open {
             crate::sounds::play(if open { Cue::Open } else { Cue::Close });
@@ -7665,6 +7669,98 @@ mod tests {
             assert!(share > 0.2, "the textures are not drawn up close at High: {:.0} % of the pixels differ", share * 100.0);
             assert_eq!(h.state().view3d.look_problem(), None);
         }
+    }
+
+    /// The 3D view opened and closed on a huge map (MASSIF_MOVE_WORLD, a
+    /// .massif; MASSIF_GRAPHICS_PRESET), as a tester did on a map of
+    /// 32,000 × 20,000 blocks: the 2D map panned before, the 3D view still
+    /// and turning beside it, then the 2D map panned again at once after
+    /// the 3D view is closed (its workspace left for one without it), and
+    /// a few seconds later. For each: a frame's work (middle, p95), the
+    /// processor's time of every thread (in cores), the memory in use and
+    /// what the 3D view keeps. Closed, the 3D view builds nothing.
+    #[test]
+    fn opening_and_closing_the_3d_view_on_a_huge_map() {
+        let Some(path) = std::env::var_os("MASSIF_MOVE_WORLD").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1440.0, 900.0))
+            .with_pixels_per_point(2.0)
+            .with_step_dt(1.0 / 60.0)
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_eframe(move |cc| {
+                theme::install(&cc.egui_ctx);
+                MassifApp::for_tests(generate(&GenParams { tiles_x: 2, tiles_z: 2, ..GenParams::default() }))
+            });
+        h.run_steps(3);
+        let ctx = h.ctx.clone();
+        h.state_mut().jobs.push(Job::open(&ctx, path));
+        while !h.state().jobs.is_empty() {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.state_mut().dialog = None;
+        if let Ok(name) = std::env::var("MASSIF_GRAPHICS_PRESET") {
+            use crate::graphics::{Graphics, Preset};
+            let preset = [Preset::Low, Preset::Medium, Preset::High].into_iter().find(|p| format!("{p:?}").eq_ignore_ascii_case(&name)).expect("low, medium or high");
+            crate::graphics::set(Graphics::of(preset));
+        }
+        type H = egui_kittest::Harness<'static, MassifApp>;
+        let spaces = &h.state().layout.workspaces;
+        let with_3d = spaces.iter().position(|w| w.root.shows(EditorKind::Map) && w.root.shows(EditorKind::View3d)).expect("a workspace with both views");
+        let without = spaces.iter().position(|w| w.root.shows(EditorKind::Map) && !w.root.shows(EditorKind::View3d) && !w.root.shows(EditorKind::Sculpt3d)).expect("a workspace with the map alone");
+        h.state_mut().layout.active = without;
+        h.run_steps(30);
+        // `frames` frames, `each` done before each: their work and the
+        // processor's time.
+        let run = |h: &mut H, name: &str, frames: usize, each: &dyn Fn(&mut MassifApp, usize)| {
+            let (started, cpu0) = (std::time::Instant::now(), crate::devtools::cpu_time().unwrap_or_default());
+            let mut work = Vec::with_capacity(frames);
+            for k in 0..frames {
+                each(h.state_mut(), k);
+                let t = std::time::Instant::now();
+                h.step();
+                work.push(t.elapsed().as_secs_f32() * 1000.0);
+            }
+            let took = started.elapsed().as_secs_f32();
+            let cpu = (crate::devtools::cpu_time().unwrap_or_default() - cpu0).as_secs_f32();
+            work.sort_by(f32::total_cmp);
+            let app = h.state();
+            eprintln!(
+                "{name}: {frames} frames in {took:.2} s; a frame's work middle {:.1} ms, p95 {:.1}, max {:.1}; CPU {cpu:.2} s ({:.1} cores); memory {} MB; 3D: {} tiles, {} MB on the card, building {}",
+                work[frames / 2],
+                work[frames * 95 / 100],
+                work[frames - 1],
+                cpu / took.max(1e-3),
+                crate::devtools::memory_in_use().unwrap_or(0) / 1_000_000,
+                app.view3d.tiles_built(),
+                app.view3d.gpu_bytes() / 1_000_000,
+                app.view3d.building(),
+            );
+        };
+        let pan = |app: &mut MassifApp, k: usize| {
+            if let Some(view) = app.maps.values_mut().next() {
+                view.center[0] += if (k / 120).is_multiple_of(2) { 24.0 } else { -24.0 };
+            }
+        };
+        run(&mut h, "2D map panned, before", 240, &pan);
+        h.state_mut().layout.active = with_3d;
+        run(&mut h, "3D view opened, still", 240, &|_, _| {});
+        run(&mut h, "3D view turning", 240, &|app, _| app.view3d.camera.yaw += 0.02);
+        h.state_mut().layout.active = without;
+        run(&mut h, "3D view closed, 2D map panned at once", 240, &pan);
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        run(&mut h, "3D view closed, 2D map panned 3 s later", 240, &pan);
+        assert!(!h.state().view3d.building(), "the 3D view, closed, still builds tiles");
+        // Out of sight long enough, it gives its tiles and the graphics
+        // card's memory back; shown again, it builds them again.
+        run(&mut h, "3D view closed for 20 s, 2D map panned", 1260, &pan);
+        assert_eq!((h.state().view3d.tiles_built(), h.state().view3d.gpu_bytes()), (0, 0), "the 3D view, closed for long, keeps its memory");
+        h.state_mut().layout.active = with_3d;
+        run(&mut h, "3D view opened again", 240, &|_, _| {});
+        assert!(h.state().view3d.tiles_built() > 0, "the 3D view, opened again, shows nothing");
     }
 
     /// Switching the views' styles (Terrain, Height, Slope, Biome, Relief)

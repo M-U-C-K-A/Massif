@@ -1871,6 +1871,11 @@ In the 3D view:
 
 The map and the 3D view are made to follow the hand:
 
+- A 3D view the workspace no longer shows (another workspace, or its area
+  given to another editor) stops building its tiles at once, and after 20
+  seconds out of sight gives back its tiles and the memory it holds on the
+  graphics card; shown again, it builds them again. Its threads for the
+  tiles are at most 16, below the interface's priority on Windows.
 - A drag of the map let go while moving glides on, slowing down within a
   quarter of a second (any click stops it); the zoom buttons and keys and
   **Fit the whole map** glide to where they go in about 150 ms, around the
