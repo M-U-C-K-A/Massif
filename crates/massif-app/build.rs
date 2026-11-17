@@ -5,6 +5,7 @@ fn main() {
     println!("cargo:rerun-if-changed=assets/icon.ico");
     backdrops();
     commit();
+    version();
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut res = winresource::WindowsResource::new();
         res.set_icon("assets/icon.ico");
@@ -69,6 +70,24 @@ fn backdrops() {
     code.push_str("];\n");
     let out = std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("backdrops.rs");
     std::fs::write(out, code).expect("writing backdrops.rs");
+}
+
+/// `MASSIF_VERSION`: the version shown and compared with GitHub's releases.
+/// A release built from a tag gives the tag's (`1.0.0-beta.1` for
+/// `v1.0.0-beta.1`); else it is Cargo.toml's. A tag of other numbers than
+/// Cargo.toml's stops the build: a beta of 1.0.0 is built from 1.0.0's code.
+fn version() {
+    println!("cargo:rerun-if-env-changed=MASSIF_VERSION");
+    let cargo = std::env::var("CARGO_PKG_VERSION").unwrap();
+    let version = match std::env::var("MASSIF_VERSION").ok().map(|v| v.trim().trim_start_matches('v').to_owned()).filter(|v| !v.is_empty()) {
+        Some(v) => {
+            let core = v.split(['-', '+']).next().unwrap_or("");
+            assert!(core == cargo, "MASSIF_VERSION is {v} but Cargo.toml says {cargo}: tag the version Cargo.toml names");
+            v
+        }
+        None => cargo,
+    };
+    println!("cargo:rustc-env=MASSIF_VERSION={version}");
 }
 
 /// `MASSIF_COMMIT`: the commit the app is built from, for a problem report.

@@ -116,7 +116,7 @@ impl Gpu {
 /// The version of Massif and the commit it was built from.
 pub fn version() -> String {
     let commit = env!("MASSIF_COMMIT");
-    if commit.is_empty() { env!("CARGO_PKG_VERSION").to_owned() } else { format!("{} ({commit})", env!("CARGO_PKG_VERSION")) }
+    if commit.is_empty() { crate::update::RUNNING.to_owned() } else { format!("{} ({commit})", crate::update::RUNNING) }
 }
 
 impl System {

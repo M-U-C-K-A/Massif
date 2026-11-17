@@ -3,6 +3,9 @@ name: Release
 # Builds Massif for Windows, macOS (Apple silicon and Intel in one app) and
 # Linux. A tag `v*` publishes the builds as a GitHub release; running the
 # workflow by hand only builds them (to check that every platform builds).
+# A tag with a pre-release after a dash (`v1.0.0-beta.1`) publishes a beta:
+# a GitHub pre-release, never the "latest" release that the app checks, and
+# the app built from it says it is 1.0.0-beta.1.
 
 on:
   push:
@@ -37,6 +40,11 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+            # A beta's builds know their version (build.rs of massif-app
+            # checks its numbers are Cargo.toml's).
+            if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+              echo "MASSIF_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+            fi
           else
             echo "VERSION=dev-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
           fi
@@ -177,6 +185,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" out/* \
-            --title "Massif ${GITHUB_REF_NAME}" \
-            --notes-file .github/RELEASE_NOTES.md
+          version=${GITHUB_REF_NAME#v}
+          if [[ "$version" == *-* ]]; then
+            # v1.0.0-beta.1: "Massif 1.0.0 beta 1", a pre-release.
+            pre=${version#*-}
+            gh release create "$GITHUB_REF_NAME" out/* \
+              --title "Massif ${version%%-*} ${pre//./ }" \
+              --notes-file .github/RELEASE_NOTES.md \
+              --prerelease
+          else
+            gh release create "$GITHUB_REF_NAME" out/* \
+              --title "Massif ${GITHUB_REF_NAME}" \
+              --notes-file .github/RELEASE_NOTES.md
+          fi

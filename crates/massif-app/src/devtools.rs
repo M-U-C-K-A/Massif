@@ -348,7 +348,7 @@ pub fn panel(ui: &mut Ui, stats: &DevStats, info: &DevInfo<'_>) {
         let s = size.unwrap_or_default();
         line(ui, "Window", &format!("{:.0} × {:.0}", s.x, s.y), &format!("points, {ppp:.1} pixels a point"));
         line(ui, "Threads", &format!("{}", rayon::current_num_threads()), "working together");
-        line(ui, "Massif", env!("CARGO_PKG_VERSION"), &format!("{} {}", std::env::consts::OS, std::env::consts::ARCH));
+        line(ui, "Massif", crate::update::RUNNING, &format!("{} {}", std::env::consts::OS, std::env::consts::ARCH));
     });
     section(ui, "Why it draws again");
     crate::widgets::well(ui, |ui| {

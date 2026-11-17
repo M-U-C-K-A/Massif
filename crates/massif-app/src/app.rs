@@ -4704,7 +4704,7 @@ impl MassifApp {
                             .size(18.0),
                     );
                     ui.label(
-                        RichText::new(tr!("Version {value}", value = env!("CARGO_PKG_VERSION")))
+                        RichText::new(tr!("Version {value}", value = crate::update::RUNNING))
                             .color(Palette::of(ui).weak),
                     );
                     ui.add_space(6.0);

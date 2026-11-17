@@ -940,7 +940,7 @@ pub fn help_picture(ui: &mut Ui) {
 fn pack_of(g: &Gradient, reg: &Registry, author: &str) -> Pack {
     let mut content = Content::default();
     Pack::gather_gradients(&mut content, reg, std::slice::from_ref(g));
-    let mut pack = Pack { name: g.name.clone(), author: author.to_owned(), description: String::new(), made_with: env!("CARGO_PKG_VERSION").to_owned(), preview: None, content };
+    let mut pack = Pack { name: g.name.clone(), author: author.to_owned(), description: String::new(), made_with: crate::update::RUNNING.to_owned(), preview: None, content };
     pack.preview = Some(pack.draw_preview());
     pack
 }

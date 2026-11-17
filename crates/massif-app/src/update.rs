@@ -17,25 +17,54 @@ pub const REPOSITORY: &str = "M-U-C-K-A/Massif";
 const LATEST: &str = "https://api.github.com/repos/M-U-C-K-A/Massif/releases/latest";
 /// How long an answer is kept before GitHub is asked again.
 pub const EVERY: Duration = Duration::from_secs(24 * 60 * 60);
-/// The version running.
-pub const RUNNING: &str = env!("CARGO_PKG_VERSION");
+/// The version running: Cargo.toml's, or the tag's a release was built from
+/// (`1.0.0-beta.1`), as `build.rs` gives it.
+pub const RUNNING: &str = env!("MASSIF_VERSION");
 
-/// A version, `1.2.3` (a `v` before it and a `-beta` after it allowed: a
-/// pre-release comes before its release).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+/// A version, `1.2.3`, a `v` before it allowed, and after it a pre-release
+/// (`-beta.2`) and build data (`+abc`, not compared). The order is
+/// semver's: a pre-release comes before its release, and pre-releases of
+/// the same numbers by their dot-separated parts, numbers numerically and
+/// before words (`beta.2` < `beta.10` < `rc.1`).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Version {
     pub numbers: [u64; 3],
-    /// No suffix (`true`) sorts after any pre-release of the same numbers.
-    released: bool,
+    /// The parts of the pre-release, empty for a release.
+    pre: Vec<Part>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Part {
+    Number(u64),
+    Word(String),
+}
+
+impl Ord for Version {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        self.numbers.cmp(&other.numbers).then_with(|| match (self.pre.is_empty(), other.pre.is_empty()) {
+            (true, true) => Ordering::Equal,
+            (true, false) => Ordering::Greater,
+            (false, true) => Ordering::Less,
+            (false, false) => self.pre.cmp(&other.pre),
+        })
+    }
+}
+
+impl PartialOrd for Version {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl Version {
     pub fn parse(text: &str) -> Option<Self> {
         let text = text.trim();
         let text = text.strip_prefix(['v', 'V']).unwrap_or(text);
-        let (core, pre) = match text.find(['-', '+']) {
-            Some(k) => (&text[..k], text[k..].starts_with('-')),
-            None => (text, false),
+        let text = text.split('+').next().unwrap_or(text);
+        let (core, pre) = match text.split_once('-') {
+            Some((core, pre)) => (core, Some(pre)),
+            None => (text, None),
         };
         let mut numbers = [0u64; 3];
         let mut parts = core.split('.');
@@ -50,14 +79,38 @@ impl Version {
         if parts.next().is_some() {
             return None;
         }
-        Some(Self { numbers, released: !pre })
+        let pre = match pre {
+            None => Vec::new(),
+            Some(pre) => pre
+                .split('.')
+                .map(|p| match p.parse() {
+                    Ok(n) => Some(Part::Number(n)),
+                    Err(_) if !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') => Some(Part::Word(p.to_ascii_lowercase())),
+                    Err(_) => None,
+                })
+                .collect::<Option<_>>()?,
+        };
+        Some(Self { numbers, pre })
+    }
+
+    /// Whether it is a pre-release (a beta).
+    pub fn is_pre_release(&self) -> bool {
+        !self.pre.is_empty()
     }
 }
 
 impl std::fmt::Display for Version {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let [a, b, c] = self.numbers;
-        write!(f, "{a}.{b}.{c}")
+        write!(f, "{a}.{b}.{c}")?;
+        for (k, p) in self.pre.iter().enumerate() {
+            f.write_str(if k == 0 { "-" } else { "." })?;
+            match p {
+                Part::Number(n) => write!(f, "{n}")?,
+                Part::Word(w) => f.write_str(w)?,
+            }
+        }
+        Ok(())
     }
 }
 
@@ -72,6 +125,9 @@ pub struct Release {
     pub body: Option<String>,
     /// Its page on GitHub.
     pub html_url: String,
+    /// A beta, which GitHub's latest release never is.
+    #[serde(default)]
+    pub prerelease: bool,
 }
 
 impl Release {
@@ -79,10 +135,12 @@ impl Release {
         Version::parse(&self.tag_name)
     }
 
-    /// Whether it is newer than `running`.
+    /// Whether it is newer than `running`, and one to offer it: a beta is
+    /// offered only to a beta (GitHub's latest release is never one, but an
+    /// answer is not trusted that far).
     pub fn is_newer_than(&self, running: &str) -> bool {
         match (self.version(), Version::parse(running)) {
-            (Some(new), Some(old)) => new > old,
+            (Some(new), Some(old)) => new > old && (old.is_pre_release() || !(new.is_pre_release() || self.prerelease)),
             _ => false,
         }
     }
@@ -325,6 +383,54 @@ pub mod tests {
         assert!(r.is_newer_than("0.6.0") && r.is_newer_than("9.0.9"));
         assert!(!r.is_newer_than("9.1.0") && !r.is_newer_than("10.0.0"), "the same or older is not news");
         assert!(!r.is_newer_than("not a version"));
+    }
+
+    #[test]
+    fn betas_come_in_semver_order() {
+        let v = |s| Version::parse(s).unwrap_or_else(|| panic!("{s}"));
+        assert!(v("1.0.0-beta.1") < v("1.0.0-beta.2") && v("1.0.0-beta.2") < v("1.0.0"));
+        assert!(v("0.6.0") < v("1.0.0-beta.1"));
+        assert!(v("1.0.0-beta.2") < v("1.0.0-beta.10"), "numbers, not text");
+        assert!(v("1.0.0-alpha") < v("1.0.0-alpha.1") && v("1.0.0-alpha.1") < v("1.0.0-beta") && v("1.0.0-beta.11") < v("1.0.0-rc.1"));
+        assert_eq!(v("v1.0.0-beta.1+abc"), v("1.0.0-beta.1"));
+        assert_eq!(v("v1.0.0-beta.1").to_string(), "1.0.0-beta.1");
+        assert_eq!(v("1.0.0").to_string(), "1.0.0");
+        assert!(v("1.0.0-beta.1").is_pre_release() && !v("1.0.0").is_pre_release());
+        for bad in ["1.0.0-", "1.0.0-beta..1", "1.0.0-be ta"] {
+            assert!(Version::parse(bad).is_none(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn betas_are_offered_to_betas_only() {
+        let release = |tag: &str, prerelease| Release { tag_name: tag.into(), html_url: format!("https://github.com/{REPOSITORY}/releases/tag/{tag}"), prerelease, ..fixture() };
+        // A beta tester is told of the release once it is out.
+        assert!(release("v1.0.0", false).is_newer_than("1.0.0-beta.1"));
+        assert!(Updates::known(release("v1.0.0", false)).offer("1.0.0-beta.2", None).is_some());
+        // ...and of a later beta, should one be the answer.
+        assert!(release("v1.0.0-beta.2", true).is_newer_than("1.0.0-beta.1"));
+        assert!(!release("v1.0.0-beta.1", true).is_newer_than("1.0.0-beta.2"));
+        // While the beta is out, the latest release is the last stable one:
+        // nothing to tell its testers.
+        assert!(!release("v0.6.0", false).is_newer_than("1.0.0-beta.1"));
+        // A stable user is never pushed to a beta, whichever way it is marked.
+        assert!(!release("v1.0.0-beta.1", true).is_newer_than("0.6.0"));
+        assert!(!release("v1.0.0-beta.1", false).is_newer_than("0.6.0"));
+        assert!(!release("v1.0.0", true).is_newer_than("0.6.0"));
+        assert!(Updates::known(release("v1.0.0-beta.1", true)).offer("0.6.0", None).is_none());
+        assert!(release("v1.0.0", false).is_newer_than("0.6.0"));
+        // A cache written before the field was there reads as a release.
+        let old: Release = serde_json::from_str(r#"{"tag_name": "v0.6.0", "html_url": "https://github.com/M-U-C-K-A/Massif/releases/tag/v0.6.0"}"#).unwrap();
+        assert!(!old.prerelease);
+        // The beta's notes: the release's sections after it.
+        assert!(fixture().notes_since("9.1.0-beta.1").starts_with("## New in 9.1.0"));
+    }
+
+    #[test]
+    fn the_running_version_is_cargos_or_the_tags() {
+        let running = Version::parse(RUNNING).expect(RUNNING);
+        assert_eq!(running.numbers, Version::parse(env!("CARGO_PKG_VERSION")).unwrap().numbers);
+        assert_eq!(running.to_string(), RUNNING);
     }
 
     #[test]

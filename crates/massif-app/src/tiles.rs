@@ -26,7 +26,7 @@ const CACHE_BYTES: u64 = 2 << 30;
 
 /// Massif, its version and its page, and nothing about who uses it.
 pub fn user_agent() -> String {
-    format!("Massif/{} (+https://github.com/M-U-C-K-A/Massif)", env!("CARGO_PKG_VERSION"))
+    format!("Massif/{} (+https://github.com/M-U-C-K-A/Massif)", crate::update::RUNNING)
 }
 
 /// Where the tiles are kept: the system's folder of caches.

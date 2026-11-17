@@ -110,7 +110,8 @@ land)
     take_turn "$land_lock" "landing on main"
     git -C "$here" rebase main
     # The version is the next release: not one already tagged, and the same
-    # as the top of the release notes.
+    # as the top of the release notes. A beta of it (vX.Y.Z-beta.N) does not
+    # make it out: only the exact tag vX.Y.Z does.
     version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$here/Cargo.toml" | head -1)
     notes=$(sed -n 's/^## New in \(.*\)/\1/p' "$here/.github/RELEASE_NOTES.md" | head -1)
     if git -C "$here" rev-parse -q --verify "refs/tags/v$version" >/dev/null; then

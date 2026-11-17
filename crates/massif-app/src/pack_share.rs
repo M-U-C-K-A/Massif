@@ -206,7 +206,7 @@ impl ExportForm {
             name: pack_file::clean_text(&self.name, pack_file::MAX_NAME, false),
             author: pack_file::clean_text(&self.author, pack_file::MAX_NAME, false),
             description: pack_file::clean_text(&self.description, pack_file::MAX_DESCRIPTION, true),
-            made_with: env!("CARGO_PKG_VERSION").to_owned(),
+            made_with: crate::update::RUNNING.to_owned(),
             preview: None,
             content,
         };

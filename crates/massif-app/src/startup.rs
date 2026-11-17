@@ -261,7 +261,7 @@ pub fn begin() {
     }
     #[cfg(windows)]
     windows::remember_main_thread();
-    step(&format!("Massif {} on {} {}", env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH));
+    step(&format!("Massif {} on {} {}", crate::update::RUNNING, std::env::consts::OS, std::env::consts::ARCH));
     let args: Vec<String> = std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
     if !args.is_empty() {
         step(&format!("asked to open {}", args.join(" ")));
