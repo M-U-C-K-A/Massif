@@ -1578,6 +1578,9 @@ impl MassifApp {
             crate::widgets::row(ui, tr!("Game textures in the 3D views"), |ui| {
                 crate::widgets::switch(ui, &mut g.textures);
             });
+            if let Some(problem) = self.view3d.look_problem().filter(|_| g.textures) {
+                ui.add(egui::Label::new(RichText::new(problem).size(11.5).color(Palette::of(ui).weak)).wrap());
+            }
             crate::widgets::row(ui, tr!("Map kept on the graphics card"), |ui| {
                 let pages = [64u32, 160, 400];
                 let labels = pages.map(|p| tr!("{size} MB", size = (p as u64 * crate::graphics::PAGE_BYTES / 1_000_000)));
@@ -7463,6 +7466,122 @@ mod tests {
             }
             let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
             image::save_buffer(dir.join(format!("steps-{ppp}x-3d-{distance}.png")), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+        }
+    }
+
+    /// The 3D view at Settings ▸ Graphics ▸ High up close, as a tester on
+    /// Windows saw it, beside Medium: on a real map (MASSIF_HIGH_WORLD, a
+    /// .massif) or a made one, with the game's textures when a Minecraft
+    /// jar is installed and without. Renders with MASSIF_SNAPSHOT_DIR
+    /// (high-near-*.png), and says what the textured look got.
+    #[test]
+    fn high_graphics_up_close() {
+        use crate::graphics::{Graphics, Preset};
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let world = std::env::var_os("MASSIF_HIGH_WORLD").map(PathBuf::from);
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1280.0, 800.0))
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_eframe(move |cc| {
+                theme::install(&cc.egui_ctx);
+                MassifApp::for_tests(generate(&GenParams { tiles_x: 6, tiles_z: 6, landform: Landform::Islands, ..GenParams::default() }))
+            });
+        h.run_steps(3);
+        if let Some(path) = world {
+            let ctx = h.ctx.clone();
+            h.state_mut().jobs.push(Job::open(&ctx, path));
+            while !h.state().jobs.is_empty() {
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            h.state_mut().dialog = None;
+        }
+        let k = h.state().layout.workspaces.iter().position(|w| w.root.shows(EditorKind::View3d)).expect("a workspace with the 3D view");
+        h.state_mut().layout.active = k;
+        h.run_steps(3);
+        // Dry land a few blocks over the sea, near the middle.
+        let (x, z, top) = {
+            let doc = &h.state().doc;
+            let sea = doc.world.meta.sea_level as f32;
+            let mut best = (0, 0, 64.0f32);
+            'find: for r in (0..2000).step_by(16) {
+                for (dx, dz) in [(r, 0), (-r, 0), (0, r), (0, -r), (r, r), (-r, -r)] {
+                    if let Some(p) = crate::tools::probe(doc, dx, dz)
+                        && p.fluid == massif_core::NO_FLUID
+                        && p.height > sea + 3.0
+                    {
+                        best = (dx, dz, p.height);
+                        break 'find;
+                    }
+                }
+            }
+            best
+        };
+        let settle = |h: &mut egui_kittest::Harness<'static, MassifApp>| {
+            let mut frames = 0;
+            while frames < 30 || h.state().view3d.pending() > 0 {
+                h.step();
+                frames += 1;
+                if frames > 4000 {
+                    break;
+                }
+            }
+        };
+        let jar = !massif_assets::find_jars().is_empty();
+        let mut near: Vec<Vec<u8>> = Vec::new();
+        for textures in [false, true] {
+            if !textures {
+                // Without the game's blocks the textures cannot be drawn,
+                // and Settings ▸ Graphics says so under their switch.
+                crate::graphics::set(Graphics::of(Preset::High));
+                settle(&mut h);
+                assert!(h.state().view3d.look_problem().is_some_and(|p| p.contains("No Minecraft found")), "{:?}", h.state().view3d.look_problem());
+                h.state_mut().dialog = Some(Dialog::Preferences(PrefsSection::Graphics));
+                h.run_steps(4);
+                h.render().unwrap().save(dir.join("high-near-settings-no-jar.png")).unwrap();
+                h.state_mut().dialog = None;
+            }
+            if textures {
+                if !jar {
+                    eprintln!("no Minecraft installation: the textured renders are skipped");
+                    break;
+                }
+                let ctx = h.ctx.clone();
+                h.state_mut().blocks.load(&ctx, None, Vec::new());
+                let started = std::time::Instant::now();
+                while h.state().blocks.catalogue.is_none() {
+                    assert!(started.elapsed().as_secs() < 90, "the blocks did not load: {:?}", h.state().blocks.error);
+                    h.step();
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+            }
+            for preset in [Preset::High, Preset::Medium] {
+                crate::graphics::set(Graphics::of(preset));
+                for distance in [30.0f32, 80.0, 400.0] {
+                    h.state_mut().view3d.camera = crate::view3d::Camera { target: [x as f64 + 0.5, top as f64, z as f64 + 0.5], yaw: 0.6, pitch: 0.35, distance };
+                    settle(&mut h);
+                    let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+                    let name = format!("high-near-{}-{:?}-{distance}.png", if textures { "textured" } else { "no-jar" }, preset).to_lowercase();
+                    image::save_buffer(dir.join(&name), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+                    eprintln!("{name}: look {:?}", h.state().view3d.look_state());
+                    if preset == Preset::High && distance == 30.0 {
+                        near.push(rgba);
+                    }
+                }
+            }
+        }
+        // With the game's blocks, High up close draws their textures: the
+        // image differs from the flat one over much of it, and nothing is
+        // said under the switch.
+        if let [flat, textured] = &near[..] {
+            let differ = flat.chunks(4).zip(textured.chunks(4)).filter(|(a, b)| a.iter().zip(b.iter()).take(3).any(|(x, y)| x.abs_diff(*y) > 6)).count();
+            let share = differ as f32 / (flat.len() / 4) as f32;
+            eprintln!("textured against flat, High at 30 blocks: {:.0} % of the pixels differ", share * 100.0);
+            assert!(share > 0.2, "the textures are not drawn up close at High: {:.0} % of the pixels differ", share * 100.0);
+            assert_eq!(h.state().view3d.look_problem(), None);
         }
     }
 

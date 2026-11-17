@@ -2181,6 +2181,10 @@ pub struct Renderer3d {
     clouds: wgpu::TextureView,
     /// Materials the atlas knows, and the layers of water and lava.
     material_count: u32,
+    /// What the graphics card said when the shaders or pipelines were
+    /// made, if anything went wrong: every frame is then drawn in the flat
+    /// look, which has the least in it, rather than not at all.
+    pub looks_failed: Option<String>,
     /// Bytes of the graphics card's memory the atlas takes.
     look_bytes: u64,
     fluid_layers: [u16; 2],
@@ -2197,6 +2201,12 @@ impl Renderer3d {
 
     /// The same, `samples` a pixel (1 or 4).
     pub fn with_samples(device: &wgpu::Device, queue: &wgpu::Queue, samples: u32) -> Self {
+        // What goes wrong making the shaders and pipelines (a shader the
+        // driver's compiler refuses, a format the card lacks) is caught
+        // here rather than lost or fatal: written in startup.log, and the
+        // views drawn in flat colours (see `looks_failed`).
+        let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
         // Each shader once a look (see [`Look`]): in the views' own in flat
         // colours, with the game's textures, and in the game's. One shader
         // for all, choosing at each pixel, made the views' own look pay for
@@ -2442,6 +2452,12 @@ impl Renderer3d {
         let trace_pipeline = trace_shaders.each_ref().map(trace);
         let trace_fine_pipeline = fine_shaders.as_ref().map(|f| f.each_ref().map(trace));
         let (chunk_tiles, chunk_group) = Self::make_chunk_tiles(device, &chunk_layout, &[]);
+        let errors: Vec<String> = [pollster::block_on(validation.pop()), pollster::block_on(internal.pop())].into_iter().flatten().map(|e| e.to_string()).collect();
+        let looks_failed = (!errors.is_empty()).then(|| errors.join("; "));
+        if let Some(e) = &looks_failed {
+            log::error!("the 3D views' shaders failed: {e}");
+            crate::startup::note(&format!("the 3D views' shaders or pipelines failed on this graphics card, the views are drawn in flat colours: {e}"));
+        }
         Self {
             device: device.clone(),
             queue: queue.clone(),
@@ -2468,6 +2484,7 @@ impl Renderer3d {
             sampler,
             clouds,
             material_count: made.count,
+            looks_failed,
             look_bytes: made.bytes,
             fluid_layers: [0, 0],
             tracer: None,
@@ -3266,7 +3283,7 @@ impl Renderer3d {
             pass.set_viewport(0.0, 0.0, region[0].clamp(1, w) as f32, region[1].clamp(1, h) as f32, 0.0, 1.0);
             pass.set_bind_group(0, &self.bind_group, &[]);
             pass.set_bind_group(2, &self.look_group, &[]);
-            let look = Look::of(globals) as usize;
+            let look = if self.looks_failed.is_some() { Look::Flat as usize } else { Look::of(globals) as usize };
             // The traced ground first, then the meshed chunks, then the
             // water over everything.
             if let Some(tr) = &self.tracer {
@@ -4040,6 +4057,13 @@ impl View3d {
         self.renderer.as_ref()?.read_image()
     }
 
+    /// What the views' own look has: the game's blocks read, and the
+    /// materials the atlas on the graphics card knows.
+    #[cfg(test)]
+    pub fn look_state(&self) -> (bool, u32) {
+        (self.catalogue.is_some(), self.renderer.as_ref().map_or(0, |r| r.look_info().0))
+    }
+
     /// Samples a pixel of the renderer, once there is one.
     #[cfg(test)]
     pub fn samples(&self) -> Option<u32> {
@@ -4728,6 +4752,11 @@ impl View3d {
             None => crate::textures::Atlas::plain(),
         };
         renderer.set_look(&atlas, &crate::textures::clouds(self.catalogue.as_deref()));
+        // Said once a change, in startup.log: what the textured look has.
+        crate::startup::note(&match &self.catalogue {
+            None => "the 3D views' game textures: the game's blocks are not read (no Minecraft jar found or chosen), the views draw each block in its colour".to_owned(),
+            Some(_) => format!("the 3D views' game textures: {} layers for {} of the map's {} materials", atlas.layers.len(), atlas.materials.iter().filter(|m| m[0] != 0).count(), atlas.materials.len()),
+        });
         // Objects added or gone: their materials are numbered anew.
         if self.look_key.is_some_and(|k| k.1 != key.1) {
             self.invalidate_all();
@@ -4740,6 +4769,18 @@ impl View3d {
     /// direction in block coordinates.
     fn ray(&self, rect: Rect, p: egui::Pos2) -> ([f64; 3], [f64; 3]) {
         camera_ray(&self.camera, rect, p)
+    }
+
+    /// Why the game's textures, on in Settings ▸ Graphics, are not drawn
+    /// in the 3D views, if they are not: said under the setting.
+    pub fn look_problem(&self) -> Option<String> {
+        if let Some(e) = self.renderer.as_ref().and_then(|r| r.looks_failed.as_ref()) {
+            return Some(tr!("This graphics card could not draw the textures: the 3D views show each block in its colour. What it said is in startup.log ({e}).", e).to_owned());
+        }
+        if self.renderer.is_some() && self.catalogue.is_none() {
+            return Some(tr!("No Minecraft found: the 3D views show each block in its colour. Choose the game's jar in the Blocks panel to see its textures.").to_owned());
+        }
+        None
     }
 
     /// Where the view stands, for the 2D map to show: the player's eyes

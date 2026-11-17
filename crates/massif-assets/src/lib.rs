@@ -39,6 +39,21 @@ pub fn release_numbers(version: &str) -> Option<Vec<u32>> {
     parts.filter(|p| p.len() >= 2)
 }
 
+/// Where applications keep their data, on each system: `%APPDATA%` on
+/// Windows, Application Support on a Mac, `~/.local/share` (or
+/// `$XDG_DATA_HOME`) on Linux.
+fn app_data_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        dirs.push(PathBuf::from(appdata));
+    }
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        dirs.push(home.join("Library/Application Support"));
+        dirs.push(std::env::var_os("XDG_DATA_HOME").map_or_else(|| home.join(".local/share"), PathBuf::from));
+    }
+    dirs
+}
+
 /// Folders where launchers keep their game versions.
 fn version_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
@@ -49,8 +64,12 @@ fn version_dirs() -> Vec<PathBuf> {
         dirs.push(home.join("Documents/curseforge/minecraft/Install/versions"));
         dirs.push(home.join("curseforge/minecraft/Install/versions"));
     }
-    if let Some(appdata) = std::env::var_os("APPDATA") {
-        dirs.push(PathBuf::from(appdata).join(".minecraft/versions"));
+    // The Modrinth App keeps the game's versions as the official launcher
+    // does, under its own folder.
+    for app in app_data_dirs() {
+        dirs.push(app.join(".minecraft/versions"));
+        dirs.push(app.join("ModrinthApp/meta/versions"));
+        dirs.push(app.join("com.modrinth.theseus/meta/versions"));
     }
     // Launchers installed on other drives (CurseForge often is).
     for root in ["/Volumes", "/media", "/mnt"] {
@@ -66,7 +85,7 @@ fn version_dirs() -> Vec<PathBuf> {
 }
 
 /// Client jars of released versions, newest first. Prism and MultiMC keep
-/// them among their libraries.
+/// them among their libraries; the Modrinth App in folders of its own.
 pub fn find_jars() -> Vec<Jar> {
     let mut jars = Vec::new();
     for dir in version_dirs() {
@@ -79,18 +98,18 @@ pub fn find_jars() -> Vec<Jar> {
             }
         }
     }
+    let mut libraries: Vec<PathBuf> = app_data_dirs().into_iter().map(|d| d.join("PrismLauncher/libraries/com/mojang/minecraft")).collect();
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-        for lib in [
-            "Library/Application Support/PrismLauncher/libraries/com/mojang/minecraft",
-            ".local/share/PrismLauncher/libraries/com/mojang/minecraft",
-        ] {
-            let Ok(read) = std::fs::read_dir(home.join(lib)) else { continue };
-            for entry in read.flatten() {
-                let version = entry.file_name().to_string_lossy().into_owned();
-                let jar = entry.path().join(format!("minecraft-{version}-client.jar"));
-                if release_numbers(&version).is_some() && jar.is_file() {
-                    jars.push(Jar { version, path: jar });
-                }
+        // Prism as a Flatpak on Linux.
+        libraries.push(home.join(".var/app/org.prismlauncher.PrismLauncher/data/PrismLauncher/libraries/com/mojang/minecraft"));
+    }
+    for lib in libraries {
+        let Ok(read) = std::fs::read_dir(&lib) else { continue };
+        for entry in read.flatten() {
+            let version = entry.file_name().to_string_lossy().into_owned();
+            let jar = entry.path().join(format!("minecraft-{version}-client.jar"));
+            if release_numbers(&version).is_some() && jar.is_file() {
+                jars.push(Jar { version, path: jar });
             }
         }
     }

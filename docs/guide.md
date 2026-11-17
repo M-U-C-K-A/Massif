@@ -221,7 +221,10 @@ their own:
   the time of that one frame), **Fog**, **Water
   reflections**, **Game textures in the 3D views** (each block drawn with
   its texture from the game or its mod, in the 3D View and 3D Sculpt as in
-  the player's view; off, a flat colour a block, as Low draws them), and
+  the player's view; off, a flat colour a block, as Low draws them; when no
+  Minecraft is found, or the graphics card cannot draw them, the views draw
+  the flat colours and a line under the switch says why, also written in
+  `startup.log`), and
   how much of the map the 3D view keeps on the graphics card (about 320 MB, 800 MB or
   2 GB): a larger map is drawn with a column every 2, 4 or 8 blocks, all of
   it, coarser — on a huge map with much water, far faster than every block.
@@ -1489,8 +1492,9 @@ A world, or a part of one, from the relief of a real place on the Earth.
 ## Real blocks
 
 Massif reads the blocks of the game from your own installation: the client
-jar of a released version, found where the official launcher, CurseForge or
-Prism keep them (on any drive), or chosen by hand. Nothing of the game is
+jar of a released version, found where the official launcher, CurseForge,
+Prism or the Modrinth App keep them (on any drive, on Windows, macOS and
+Linux), or chosen by hand. Nothing of the game is
 copied into Massif or the repository; the jar is read in place, in a
 fraction of a second, every time Massif starts.
 

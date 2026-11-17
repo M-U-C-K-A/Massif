@@ -2643,5 +2643,7 @@
  "Check for Updates…": "Buscar actualizaciones…",
  "Ask GitHub now whether a newer version of Massif is out": "Preguntar ahora a GitHub si hay una versión más reciente de Massif",
  "Full Screen": "Pantalla completa",
- "Full screen": "Pantalla completa"
+ "Full screen": "Pantalla completa",
+ "This graphics card could not draw the textures: the 3D views show each block in its colour. What it said is in startup.log ({e}).": "Esta tarjeta gráfica no pudo dibujar las texturas: las vistas 3D muestran cada bloque en su color. Lo que respondió está en startup.log ({e}).",
+ "No Minecraft found: the 3D views show each block in its colour. Choose the game's jar in the Blocks panel to see its textures.": "No se encontró Minecraft: las vistas 3D muestran cada bloque en su color. Elige el jar del juego en el panel Bloques para ver sus texturas."
 }
