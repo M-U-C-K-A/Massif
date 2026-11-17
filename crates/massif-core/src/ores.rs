@@ -584,15 +584,17 @@ pub fn hosts(reg: &Registry) -> Vec<Option<Host>> {
 /// What the column whose solid runs are `spans` offers an ore at height
 /// `y`: the rock there and what it is to an ore, if an ore takes its place
 /// and solid ground lies right above it. `hosts` is [`hosts`] of the
-/// registry.
-pub fn rock_at(spans: &[Span], mat: &Materializer, hosts: &[Option<Host>], x: i32, y: i32, z: i32, max_y: i32) -> Option<(BlockId, Host)> {
+/// registry; `pockets` the column's underground pockets, whose blocks take
+/// the place of the rock (an ore takes theirs where they are rock too).
+#[allow(clippy::too_many_arguments)]
+pub fn rock_at(spans: &[Span], mat: &Materializer, hosts: &[Option<Host>], pockets: Option<&crate::pockets::Column>, x: i32, y: i32, z: i32, max_y: i32) -> Option<(BlockId, Host)> {
     let span = spans.iter().find(|s| s.y0 <= y && y < s.y1)?;
     if y + 1 >= max_y || !spans.iter().any(|s| s.y0 <= y + 1 && y + 1 < s.y1) {
         return None;
     }
     let recipe = mat.recipe_depth(span.terrain, x, z);
     let split = if recipe >= (span.y1 - span.y0) as u32 { span.y0 } else { span.y1 - recipe as i32 };
-    let block = if y < split { mat.substrate(x, y, z) } else { mat.block(span, x, y, z, false) };
+    let block = if y < split { pockets.and_then(|p| p.at(x, y, z)).unwrap_or_else(|| mat.substrate(x, y, z)) } else { mat.block(span, x, y, z, false) };
     hosts.get(block.index()).copied().flatten().map(|h| (block, h))
 }
 

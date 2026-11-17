@@ -314,31 +314,59 @@ fn biome_of_block(world: &World, x: i32, y: i32, z: i32) -> u16 {
     column.of_block(y)
 }
 
-/// What column `(x, z)` holds once the ores are laid: the world model's
-/// blocks, and the ores where the survival check counts them (over the
-/// runs of the columns, as [`massif_core::ores::rock_at`] reads them, in
-/// the biomes each ore keeps to).
-fn expected_with_ores(world: &World, x: i32, z: i32) -> Vec<String> {
+/// What column `(x, z)` holds with its underground pockets: the world
+/// model's blocks, and the pockets' blocks in the rock where the survival
+/// check and the cut of the Ores window find them.
+fn expected_with_pockets(world: &World, x: i32, z: i32) -> Vec<String> {
     let mut column = expected_column(world, x, z);
+    let dim = &world.dims[0];
+    let reg = &world.registry;
+    let Some(pockets) = massif_core::pockets::Pockets::new(reg, world.meta.seed as u64, dim.min_y) else { return column };
+    let mat = Materializer::new(reg, world.meta.seed, dim.min_y);
+    let stack = TileStack::new(dim, TilePos::containing(x, z), true).unwrap();
+    let cell = local_index(x, z);
+    let mut spans = Vec::new();
+    stack.spans(cell, &mut spans);
+    if let Some(col) = pockets.column(stack.ground().pockets.get(cell), &spans, &mat, x, z) {
+        for y in col.low..=col.high {
+            if let Some(b) = col.at(x, y, z) {
+                column[(y - dim.min_y) as usize] = reg.block(b).name().to_owned();
+            }
+        }
+    }
+    column
+}
+
+/// What column `(x, z)` holds once the ores are laid: the world model's
+/// blocks with its pockets, and the ores where the survival check counts
+/// them (over the runs of the columns, as [`massif_core::ores::rock_at`]
+/// reads them, in the biomes each ore keeps to).
+fn expected_with_ores(world: &World, x: i32, z: i32) -> Vec<String> {
+    let mut column = expected_with_pockets(world, x, z);
     let dim = &world.dims[0];
     let reg = &world.registry;
     let mat = Materializer::new(reg, world.meta.seed, dim.min_y);
     let hosts = massif_core::ores::hosts(reg);
+    let pockets = massif_core::pockets::Pockets::new(reg, world.meta.seed as u64, dim.min_y);
     let placer = massif_core::ores::Placer::new(&world.meta.ores, world.meta.seed).unwrap();
     let (cx, cz) = (x >> 4, z >> 4);
-    let mut runs: HashMap<(i32, i32), Vec<massif_core::Span>> = HashMap::new();
+    let mut runs: HashMap<(i32, i32), (Vec<massif_core::Span>, u16)> = HashMap::new();
     for bz in cz * 16..cz * 16 + 16 {
         for bx in cx * 16..cx * 16 + 16 {
             let stack = TileStack::new(dim, TilePos::containing(bx, bz), true).unwrap();
             let mut spans = Vec::new();
             stack.spans(local_index(bx, bz), &mut spans);
-            runs.insert((bx, bz), spans);
+            runs.insert((bx, bz), (spans, stack.ground().pockets.get(local_index(bx, bz))));
         }
     }
     placer.chunk_over(
         cx,
         cz,
-        |bx, by, bz| massif_core::ores::rock_at(&runs[&(bx, bz)], &mat, &hosts, bx, by, bz, dim.max_y),
+        |bx, by, bz| {
+            let (spans, n) = &runs[&(bx, bz)];
+            let col = pockets.as_ref().and_then(|p| p.column(*n, spans, &mat, bx, bz));
+            massif_core::ores::rock_at(spans, &mat, &hosts, col.as_ref(), bx, by, bz, dim.max_y)
+        },
         |bx, by, bz| biome_of_block(world, bx, by, bz),
         |b, (_, host)| {
             if (b.x, b.z) == (x, z) {
@@ -657,6 +685,79 @@ fn covered_world() -> World {
     ops::paint_cover(&mut h.edit(&mut w, 1), &hard(6.0), -40.0, 40.0, cane, 5);
     h.commit();
     w
+}
+
+/// Underground pockets lie in the rock under the ground's strata, between
+/// their heights, about as much of it as their share. With ores on, every
+/// block of the columns painted is the one the survival check and the cut
+/// of the Ores window count there: the pockets' blocks, and the ores in
+/// the rock, also in pockets of rock an ore takes (andesite), never in
+/// gravel.
+#[test]
+fn underground_pockets_lie_in_the_rock() {
+    let mut world = build_world();
+    let reg = &mut world.registry;
+    let (gravel, andesite) = (reg.intern_block("minecraft:gravel", [136, 126, 118]), reg.intern_block("minecraft:andesite", [136, 136, 136]));
+    let loose = reg.add_pocket(massif_core::pockets::PocketDef::new("Gravel", [0; 3], &[(gravel, 1)], 0.3, 4.0, 40, 90));
+    let rock = reg.add_pocket(massif_core::pockets::PocketDef::new("Andesite", [0; 3], &[(andesite, 1)], 0.5, 6.0, -64, 90));
+    let mut h = History::default();
+    h.begin("pockets", 0);
+    ops::paint_pockets(&mut h.edit(&mut world, 0), &hard(8.0), -40.0, -40.0, loose, 1);
+    ops::paint_pockets(&mut h.edit(&mut world, 0), &hard(8.0), 40.0, 40.0, rock, 2);
+    h.commit();
+    let dir = temp_dir("pockets");
+    let options = ExportOptions { target: Target::release("1.21.11").unwrap(), ..ExportOptions::default() };
+    export(&world.snapshot(), &dir, &options, &Progress::default()).unwrap();
+    let mut r = Reader::new(&dir);
+    let (mut pockets, mut stone) = (0, 0);
+    for x in -45..=-35 {
+        for z in -45..=-35 {
+            for y in 30..100 {
+                match r.block(x, y, z).as_str() {
+                    "minecraft:gravel" => {
+                        assert!((40..=90).contains(&y), "gravel at {y}, out of its heights");
+                        pockets += 1;
+                    }
+                    "minecraft:stone" if (40..=90).contains(&y) => stone += 1,
+                    _ => {}
+                }
+            }
+            // The strata of the ground stay: grass on top.
+            assert_eq!(r.block(x, 99, z), "minecraft:grass_block");
+        }
+    }
+    // About its share: the window is small for blobs of four blocks (the
+    // share over a large volume is checked in massif-core).
+    let share = pockets as f32 / (pockets + stone) as f32;
+    assert!((0.12..0.48).contains(&share), "{pockets} gravel, {stone} stone: {share}");
+    // Outside what is painted, the rock is whole.
+    assert!((40..90).all(|y| r.block(-40, y, -55) != "minecraft:gravel"));
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    // With ores on: block for block as the survival check counts them.
+    world.meta.ores = Default::default();
+    let dir = temp_dir("pockets-ores");
+    export(&world.snapshot(), &dir, &options, &Progress::default()).unwrap();
+    let mut r = Reader::new(&dir);
+    let mut in_andesite = 0;
+    for (x0, z0) in [(-40, -40), (40, 40)] {
+        for x in x0 - 6..=x0 + 6 {
+            for z in z0 - 6..=z0 + 6 {
+                let (bare, expected) = (expected_with_pockets(&world, x, z), expected_with_ores(&world, x, z));
+                for (i, want) in expected.iter().enumerate() {
+                    let y = -64 + i as i32;
+                    let got = r.block(x, y, z);
+                    assert_eq!(&got, want, "block at ({x}, {y}, {z})");
+                    if got.ends_with("_ore") {
+                        assert_ne!(bare[i], "minecraft:gravel", "an ore in gravel at ({x}, {y}, {z})");
+                        in_andesite += (bare[i] == "minecraft:andesite") as u32;
+                    }
+                }
+            }
+        }
+    }
+    assert!(in_andesite > 0, "ores take pockets of andesite too");
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// A sub-canopy layer grows in the air the base layer leaves: painted over

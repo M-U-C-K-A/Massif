@@ -99,6 +99,9 @@ pub struct ExportContext<'a> {
     /// The first state of an ore: ores are ground, which objects do not
     /// take the place of.
     first_ore: u16,
+    /// The underground pockets: blocks of the registry, written as the
+    /// terrains' are.
+    pockets: Option<massif_core::pockets::Pockets<'a>>,
     /// What each state is to an ore: 0 nothing, 1 rock of stone, 2 rock of
     /// deepslate.
     hosts: Vec<u8>,
@@ -396,6 +399,7 @@ impl<'a> ExportContext<'a> {
             ores: massif_core::ores::Placer::new(&world.meta.ores, world.meta.seed),
             ore_states,
             first_ore,
+            pockets: massif_core::pockets::Pockets::new(reg, world.meta.seed as u64, dim.min_y),
             hosts,
             auto: AutoBiomes::new(reg, world.meta.sea_level, min_y),
         })
@@ -787,6 +791,15 @@ pub fn build_chunk(
                     ctx.mat.recipe_column(span, x, z, submerged, (lo, hi), |y, b| blocks[at(y)] = b.0);
                 }
                 top = top.max(span.y1);
+            }
+            // Underground pockets, in the rock of the ground under its
+            // strata, between the layer's heights.
+            if let Some(col) = ctx.pockets.as_ref().and_then(|p| p.column(stack.ground().pockets.get(cell), spans, &ctx.mat, x, z)) {
+                for y in col.low.max(min_y)..=col.high.min(max_y - 1) {
+                    if let Some(b) = col.at(x, y, z) {
+                        blocks[at(y)] = b.0;
+                    }
+                }
             }
             for &(y0, y1) in fluids.iter() {
                 for y in y0.max(min_y)..y1.min(max_y) {

@@ -3692,6 +3692,10 @@ impl MassifApp {
                             self.tools.object_layer = n as u16;
                             crate::panels::object_layer_editor(ui, &mut self.tools, &mut self.doc, &mut self.blocks);
                         }
+                        Kind::Pockets => {
+                            self.tools.pocket_layer = n as u16;
+                            crate::panels::pocket_editor(ui, &mut self.tools, &mut self.doc, &mut self.blocks);
+                        }
                         Kind::Mix => {}
                     });
                     ui.add_space(10.0);

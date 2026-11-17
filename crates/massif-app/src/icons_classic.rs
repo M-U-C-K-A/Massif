@@ -204,6 +204,13 @@ pub fn paint(painter: &Painter, rect: Rect, tool: Tool, color: Color32) {
             }
             pen.ring(19.5, 7.0, 1.8);
         }
+        // The ground, and blobs in the rock under it.
+        Tool::Pockets => {
+            pen.line(&[(2.0, 6.5), (22.0, 6.5)]);
+            pen.ring(8.0, 13.0, 2.6);
+            pen.ring(16.0, 17.0, 3.2);
+            pen.ring(17.5, 10.5, 1.6);
+        }
         // Three trees, small to large, on the ground.
         Tool::TreeSize => {
             pen.line(&[(2.0, 20.5), (22.0, 20.5)]);

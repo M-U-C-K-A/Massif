@@ -35,6 +35,8 @@ pub enum Tool {
     /// The size of tree the objects painted there take: bushes, small,
     /// medium or large trees.
     TreeSize,
+    /// Pockets of other blocks in the rock under the ground.
+    Pockets,
     /// The biome the land calls for; the terrain the biome calls for.
     AutoBiome,
     AutoPaint,
@@ -74,7 +76,7 @@ impl Tool {
             &[Tool::PaintTerrain, Tool::Gradient, Tool::PaintBiome, Tool::AutoPaint, Tool::AutoBiome, Tool::Annotate],
         ),
         (tn!("Select"), Icon::SquareDashed, &[Tool::SelectRect, Tool::SelectEllipse, Tool::SelectLasso, Tool::SelectBrush]),
-        (tn!("Decor"), Icon::Shrub, &[Tool::Cover, Tool::Objects, Tool::TreeSize]),
+        (tn!("Decor"), Icon::Shrub, &[Tool::Cover, Tool::Objects, Tool::TreeSize, Tool::Pockets]),
         (tn!("Water"), Icon::Droplet, &[Tool::River, Tool::Flood, Tool::Drain, Tool::Water]),
         (tn!("Levels"), Icon::Layers, &[Tool::StampSlab, Tool::EraseSlab]),
         (tn!("Navigate"), Icon::Compass, &[Tool::Pan, Tool::Eyedropper]),
@@ -99,6 +101,7 @@ impl Tool {
             Tool::Objects => tr!("Objects"),
             Tool::Annotate => tr!("Annotations"),
             Tool::TreeSize => tr!("Tree sizes"),
+            Tool::Pockets => tr!("Underground pockets"),
             Tool::AutoBiome => tr!("Auto biome"),
             Tool::AutoPaint => tr!("Auto paint"),
             Tool::Eyedropper => tr!("Eyedropper"),
@@ -134,6 +137,7 @@ impl Tool {
             Tool::Objects => Icon::TreePine,
             Tool::Annotate => Icon::PenLine,
             Tool::TreeSize => Icon::ChartNoAxesColumnIncreasing,
+            Tool::Pockets => Icon::Gem,
             Tool::AutoBiome => Icon::Earth,
             Tool::AutoPaint => Icon::WandSparkles,
             Tool::Eyedropper => Icon::Pipette,
@@ -176,6 +180,7 @@ impl Tool {
             Tool::Objects => tr!("Paint where objects stand: trees, rocks… Right button: remove them."),
             Tool::Annotate => tr!("Mark the map in colour, to plan it: never exported. Right button: rub out."),
             Tool::TreeSize => tr!("Mark where bushes, small, medium or large trees grow: the object layers painted there take objects of that size. Right button: any size."),
+            Tool::Pockets => tr!("Paint pockets of other blocks into the rock under the ground: gravel, clay, a mod's stone. Right button: rub them out."),
             Tool::AutoBiome => {
                 tr!("Sets the biome the land calls for: beach, forest, peaks…")
             }
@@ -321,6 +326,9 @@ pub struct ToolState {
     pub annotation: u16,
     /// The tree size painted, 1 (bushes) to 4 (large trees).
     pub tree_size: u16,
+    /// The layer of underground pockets painted, by its number (0: none
+    /// yet).
+    pub pocket_layer: u16,
     /// The tree sizes shown over the map even when another tool is in hand.
     pub show_sizes: bool,
     pub water_level: i16,
@@ -905,6 +913,7 @@ impl Default for ToolState {
             object_layer: 0,
             annotation: 14,
             tree_size: 2,
+            pocket_layer: 0,
             show_sizes: false,
             water_level: 63,
             water_from_click: true,
@@ -1136,7 +1145,8 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
     let n = ((len / spacing).ceil() as usize).clamp(1, 512);
     let dt = dt.clamp(0.0, 0.1);
     // Annotations are marks on the map, whatever the level: on the ground's.
-    let level = if stroke.tool == Tool::Annotate { 0 } else { stroke.level.min(doc.dimension().levels.len() - 1) };
+    // Pockets are in the rock of the ground: on its level too.
+    let level = if matches!(stroke.tool, Tool::Annotate | Tool::Pockets) { 0 } else { stroke.level.min(doc.dimension().levels.len() - 1) };
     let understory = doc.world.registry.object_layer(tools.object_layer).is_some_and(|l| l.understory);
     // Locked layers keep their blocks.
     doc.history.locks = massif_core::registry::Locks::of(&doc.world.registry);
@@ -1197,6 +1207,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
             Tool::Objects if understory => ops::paint_understory(&mut edit, brush, x, z, if invert { 0 } else { tools.object_layer }, stroke.salt),
             Tool::Objects => ops::paint_objects(&mut edit, brush, x, z, if invert { 0 } else { tools.object_layer }, stroke.salt),
             Tool::TreeSize => ops::paint_tree_size(&mut edit, brush, x, z, if invert { 0 } else { tools.tree_size.clamp(1, 4) }, stroke.salt),
+            Tool::Pockets => ops::paint_pockets(&mut edit, brush, x, z, if invert { 0 } else { tools.pocket_layer }, stroke.salt),
             Tool::Annotate => ops::paint_annotation(&mut edit, brush, x, z, if invert { 0 } else { tools.annotation.clamp(1, 15) }, stroke.salt),
             Tool::AutoBiome => match &reader {
                 Some(reader) if !invert => {

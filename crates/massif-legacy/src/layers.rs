@@ -15,7 +15,7 @@
 use crate::javaser::{Arena, Array, Handle, Value};
 use crate::terrains::Mapper;
 use massif_core::TilePos;
-use massif_core::registry::{CoverDef, Registry, Stratum, TerrainDef, TerrainId};
+use massif_core::registry::{BlockId, CoverDef, Registry, Stratum, TerrainDef, TerrainId};
 use massif_core::tile::{NO_FLUID, Tile};
 use massif_core::treepack::TreeKind;
 use massif_core::world::Dimension;
@@ -56,6 +56,8 @@ pub enum Conv {
     Terrain(u16),
     /// A biome likewise.
     Biome(u16),
+    /// A layer of underground pockets, by number.
+    Pockets(u16),
 }
 
 impl Conv {
@@ -211,6 +213,33 @@ impl Converter {
                 }
                 self.ground_covers.push(GroundCover { name, blocks, thickness });
                 vec![(Conv::GroundCover(self.ground_covers.len() as u16 - 1), 1.0)]
+            }
+            "pockets.UndergroundPocketsLayer" => {
+                // Its blocks: a mixed material, a material, or a terrain's.
+                let intern = |reg: &mut Registry, state: &str| reg.intern_block(state, crate::terrains::block_color(state));
+                let blocks: Vec<(BlockId, u16)> = match arena.field(key, "mixedMaterial").filter(|m| *m != Value::Null).and_then(|m| crate::worldpainter::read_mixed(arena, m)) {
+                    Some(mixed) if !mixed.rows.is_empty() => mixed.rows.iter().map(|(s, n)| (intern(&mut mapper.registry, s), (*n).clamp(1, 1000) as u16)).collect(),
+                    _ => match arena.field(key, "material").filter(|m| *m != Value::Null) {
+                        Some(m) => vec![(intern(&mut mapper.registry, &crate::worldpainter::material_state(arena, m)), 1)],
+                        None => {
+                            let terrain = arena.field(key, "terrain").and_then(|t| arena.enum_name(t)).and_then(|t| crate::tables::TERRAINS.iter().position(|n| *n == t));
+                            let Some(ordinal) = terrain else { return Vec::new() };
+                            let id = mapper.terrain(ordinal as u8);
+                            mapper.registry.terrain(TerrainId(id)).strata.first().map(|s| s.blocks.iter().map(|&(b, w)| (b, w.max(1))).collect()).unwrap_or_default()
+                        }
+                    },
+                };
+                if blocks.is_empty() {
+                    return Vec::new();
+                }
+                // Its frequency is per thousand of the rock, its scale a
+                // hundredth of blobs of 4.1 blocks.
+                let share = (int("frequency", 50) as f32 / 1000.0).clamp(0.001, 1.0);
+                let size = (4.099 * int("scale", 100) as f32 / 100.0).max(1.0);
+                let (low, high) = (int("minLevel", i32::MIN as i64) as i32, int("maxLevel", i32::MAX as i64) as i32);
+                let color = arena.field(key, "colour").and_then(|c| arena.int(c)).map_or([150, 150, 150], |c| [(c >> 16) as u8, (c >> 8) as u8, c as u8]);
+                let def = massif_core::pockets::PocketDef::new(&name, color, &blocks, share, size, low, high);
+                vec![(Conv::Pockets(mapper.registry.add_pocket(def)), 1.0)]
             }
             "tunnel.TunnelLayer" => {
                 let mode = |n: &str, default: Mode| match arena.field(key, n).and_then(|v| arena.enum_name(v)) {
@@ -1133,6 +1162,69 @@ mod tests {
         let forest = reg.biome_by_id("minecraft:forest").unwrap().0;
         assert_eq!(parts, [(Conv::Cover(frost_cover), 0.5), (Conv::GroundCover(0), 1.0), (Conv::Terrain(sand), 1.0), (Conv::Biome(forest), 1.0)]);
         assert_eq!(conv.ground_covers.len(), 1, "read once");
+    }
+
+    /// An underground pockets layer becomes a pocket layer of the same
+    /// block, its frequency a share of the rock in thousandths, its scale
+    /// the size of its blobs, between the same heights, in its colour.
+    #[test]
+    fn underground_pockets_are_read() {
+        use crate::javaser::tests::StreamWriter;
+        use crate::javaser::*;
+        let null = |w: &mut StreamWriter| {
+            w.u8(TC_NULL);
+        };
+        let mut w = StreamWriter::new();
+        // UndergroundPocketsLayer { I colour, I frequency, I maxLevel, I minLevel, I scale, L material, L name }
+        w.u8(TC_OBJECT).class(
+            "org.pepsoft.worldpainter.layers.pockets.UndergroundPocketsLayer",
+            SC_SERIALIZABLE,
+            &[
+                (b'I', "colour", None),
+                (b'I', "frequency", None),
+                (b'I', "maxLevel", None),
+                (b'I', "minLevel", None),
+                (b'I', "scale", None),
+                (b'L', "material", Some("Lorg/pepsoft/minecraft/Material;")),
+                (b'L', "name", Some("Ljava/lang/String;")),
+            ],
+            null,
+        );
+        let pockets = w.handle();
+        w.i32(0x80_6040).i32(200).i32(60).i32(-30).i32(150);
+        w.u8(TC_OBJECT).class(
+            "org.pepsoft.minecraft.Material",
+            SC_SERIALIZABLE,
+            &[(b'I', "blockType", None), (b'I', "data", None), (b'L', "identity", Some("Lorg/pepsoft/minecraft/Material$Identity;"))],
+            null,
+        );
+        w.handle();
+        w.i32(-1).i32(-1);
+        w.u8(TC_OBJECT).class(
+            "org.pepsoft.minecraft.Material$Identity",
+            SC_SERIALIZABLE,
+            &[(b'L', "name", Some("Ljava/lang/String;")), (b'L', "properties", Some("Ljava/util/Map;"))],
+            null,
+        );
+        w.handle();
+        w.string("minecraft:gravel");
+        w.u8(TC_NULL);
+        w.string("Gravel pockets");
+
+        let mut parser = Parser::new(&w.out[..]).unwrap();
+        let value = parser.next_object().unwrap().unwrap();
+        let arena = &parser.arena;
+        let Value::Ref(h) = value else { panic!() };
+        assert_eq!(h, pockets as usize);
+        let mut mapper = Mapper::new(Registry::vanilla());
+        let mut conv = Converter::default();
+        assert_eq!(conv.parts(arena, value, h, &mut mapper), [(Conv::Pockets(1), 1.0)]);
+        let reg = &mapper.registry;
+        let def = reg.pocket(1).unwrap();
+        assert_eq!((def.name.as_str(), def.color), ("Gravel pockets", [0x80, 0x60, 0x40]));
+        assert_eq!(def.blocks.iter().map(|&(b, w)| (reg.block(b).state.as_str(), w)).collect::<Vec<_>>(), [("minecraft:gravel", 1)]);
+        assert_eq!((def.share, def.low, def.high), (0.2, -30, 60));
+        assert!((def.size - 4.099 * 1.5).abs() < 1e-4, "{}", def.size);
     }
 
     /// Custom ground covers, tunnels and caves applied to a dimension:

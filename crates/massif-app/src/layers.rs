@@ -19,6 +19,8 @@ pub enum Kind {
     Objects,
     /// A terrain mix saved for noise painting, by index.
     Mix,
+    /// A layer of underground pockets, by number.
+    Pockets,
 }
 
 /// What the panel keeps between frames: the layer being renamed.
@@ -79,7 +81,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     if state.packs {
         return crate::packs::packs_panel(ui, tools, doc, blocks.catalogue.as_deref(), &mut state.search, &mut state.library);
     }
-    let before = (doc.world.registry.covers.clone(), doc.world.registry.object_layers.clone());
+    let before = (doc.world.registry.covers.clone(), doc.world.registry.object_layers.clone(), doc.world.registry.pockets.clone());
     let mut said = None;
     let mut actions = Vec::new();
 
@@ -197,6 +199,44 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     }
     list(ui, &under, state, &mut actions);
 
+    // Underground pockets, one layer a block.
+    ui.add_space(8.0);
+    let mut pockets: Vec<(u32, Entry)> = doc
+        .world
+        .registry
+        .pockets
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| !p.removed)
+        .map(|(k, p)| {
+            (
+                p.order,
+                Entry {
+                    kind: Kind::Pockets,
+                    id: k + 1,
+                    name: p.name.clone(),
+                    color: p.color,
+                    detail: format!("{:.0}%", p.share * 100.0),
+                    tip: tr!("{blocks} · from {low} to {high}", blocks = p.blocks.iter().map(|b| crate::panels::plant_name(&doc.world.registry.block(b.0).state)).collect::<Vec<_>>().join(", "), low = p.low, high = p.high),
+                    shown: None,
+                    locked: Some(p.locked),
+                    selected: tools.tool == Tool::Pockets && tools.pocket_layer as usize == k + 1,
+                },
+            )
+        })
+        .collect();
+    pockets.sort_by_key(|(order, e)| (*order, e.id));
+    let pockets: Vec<Entry> = pockets.into_iter().map(|p| p.1).collect();
+    if header(ui, Icon::Gem, tr!("Underground pockets"), tr!("New pockets"), tr!("Pockets of your own: any blocks, in the rock under the ground")) {
+        let dim = &doc.world.dims[doc.dim];
+        tools.pocket_layer = crate::panels::new_pockets(&mut doc.world.registry, dim);
+        tools.select(Tool::Pockets);
+    }
+    if pockets.is_empty() {
+        hint(ui, tr!("Gravel, clay, a mod's stone in the rock under the ground, as WorldPainter's underground pockets."));
+    }
+    list(ui, &pockets, state, &mut actions);
+
     // The tree sizes the object layers take where they are painted.
     ui.add_space(8.0);
     let pal = Palette::of(ui);
@@ -227,11 +267,11 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     ui.add_space(8.0);
     hint(ui, tr!("Click a layer to paint it, double-click to rename it; its menu has its settings, its place in the list, its lock. A block holds one layer of each section. Ready-made trees, plants and mixes: Packs, above."));
 
-    let lists = [(Kind::Mix, false, mixes), (Kind::Cover, false, covers), (Kind::Objects, false, base), (Kind::Objects, true, under)];
+    let lists = [(Kind::Mix, false, mixes), (Kind::Cover, false, covers), (Kind::Objects, false, base), (Kind::Objects, true, under), (Kind::Pockets, false, pockets)];
     for action in actions {
         apply(action, tools, doc, state, &lists);
     }
-    if (doc.world.registry.covers.clone(), doc.world.registry.object_layers.clone()) != before {
+    if (doc.world.registry.covers.clone(), doc.world.registry.object_layers.clone(), doc.world.registry.pockets.clone()) != before {
         doc.mark_changed();
     }
     said
@@ -397,6 +437,7 @@ fn row(ui: &mut Ui, e: &Entry, state: &mut LayersUi, actions: &mut Vec<Action>) 
             Kind::Cover => tr!("Nothing grows where it was painted any more"),
             Kind::Objects => tr!("Nothing stands where it was painted any more"),
             Kind::Mix => tr!("Forget this mix (the ground painted with it stays)"),
+            Kind::Pockets => tr!("No pocket where it was painted any more"),
         };
         if ui.button(RichText::new(theme::with_icon(Icon::Trash2, tr!("Remove"))).color(pal.danger)).on_hover_text(what).clicked() {
             actions.push(Action::Remove(e.kind, e.id));
@@ -431,6 +472,11 @@ fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut 
                 l.locked = !l.locked;
             }
         }
+        Action::ToggleLock(Kind::Pockets, n) => {
+            if let Some(p) = reg.pockets.get_mut(n - 1) {
+                p.locked = !p.locked;
+            }
+        }
         Action::ToggleLock(Kind::Mix, _) => {}
         Action::Move(kind, id, up) => {
             // Its section's list, in the order shown; it changes place with
@@ -443,6 +489,13 @@ fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut 
             ids.swap(k, other);
             match kind {
                 Kind::Mix => tools.pattern.saved.swap(k, other),
+                Kind::Pockets => {
+                    for (place, &n) in ids.iter().enumerate() {
+                        if let Some(p) = reg.pockets.get_mut(n - 1) {
+                            p.order = place as u32 + 1;
+                        }
+                    }
+                }
                 Kind::Cover => {
                     for (place, &n) in ids.iter().enumerate() {
                         if let Some(c) = reg.covers.get_mut(n - 1) {
@@ -484,7 +537,27 @@ fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut 
                 l.hidden = !l.hidden;
             }
         }
-        Action::ToggleShown(Kind::Mix, _) => {}
+        Action::ToggleShown(Kind::Mix | Kind::Pockets, _) => {}
+        Action::Paint(Kind::Pockets, n) => {
+            tools.pocket_layer = n as u16;
+            tools.select(Tool::Pockets);
+        }
+        Action::Duplicate(Kind::Pockets, n) => {
+            if let Some(mut p) = reg.pockets.get(n - 1).cloned() {
+                p.name = unique_name(&tr!("{name} copy", name = p.name), reg.pockets.iter().filter(|p| !p.removed).map(|p| p.name.as_str()));
+                p.locked = false;
+                tools.pocket_layer = reg.add_pocket(p);
+                tools.select(Tool::Pockets);
+            }
+        }
+        Action::Remove(Kind::Pockets, n) => {
+            if let Some(p) = reg.pockets.get_mut(n - 1) {
+                p.removed = true;
+            }
+            if tools.pocket_layer as usize == n {
+                tools.pocket_layer = reg.pockets.iter().position(|p| !p.removed).map_or(0, |k| k as u16 + 1);
+            }
+        }
         Action::Rename(kind, id, name) => state.rename = Some((kind, id, name)),
         Action::Renamed(kind, id, name) => {
             state.rename = None;
@@ -497,6 +570,11 @@ fn apply(action: Action, tools: &mut ToolState, doc: &mut Document, state: &mut 
                 Kind::Objects => {
                     if let Some(l) = reg.object_layers.get_mut(id - 1) {
                         l.name = name;
+                    }
+                }
+                Kind::Pockets => {
+                    if let Some(p) = reg.pockets.get_mut(id - 1) {
+                        p.name = name;
                     }
                 }
                 Kind::Mix => {
@@ -690,10 +768,17 @@ mod tests {
             let mut hazel = s.doc.world.registry.object_layers[0].clone();
             (hazel.name, hazel.understory, hazel.locked, hazel.color) = ("Hazel".into(), true, false, [126, 150, 70]);
             s.doc.world.registry.add_object_layer(hazel);
+            // Two pocket layers, one locked.
+            let reg = &mut s.doc.world.registry;
+            let (gravel, andesite, clay) = (reg.intern_block("minecraft:gravel", [136, 126, 118]), reg.intern_block("minecraft:andesite", [136, 136, 136]), reg.intern_block("minecraft:clay", [160, 166, 179]));
+            reg.add_pocket(massif_core::pockets::PocketDef::new("Gravel and andesite", [136, 126, 118], &[(gravel, 3), (andesite, 1)], 0.2, 5.0, -40, 50));
+            let mut clay = massif_core::pockets::PocketDef::new("Clay lenses", [160, 166, 179], &[(clay, 1)], 0.08, 7.0, 30, 58);
+            clay.locked = true;
+            s.doc.world.registry.add_pocket(clay);
             s.tools.cover = 3;
             s.tools.select(Tool::Cover);
             let mut h = egui_kittest::Harness::builder()
-                .with_size(vec2(320.0, 900.0))
+                .with_size(vec2(320.0, 1000.0))
                 .with_pixels_per_point(ppp)
                 .with_accessibility_check(false)
                 .wgpu()

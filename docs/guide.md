@@ -869,8 +869,8 @@ What WorldPainter calls layers — its custom plant layers, custom object
 layers and custom terrain mixes — are in Massif the **ground covers**, the
 **object layers** and the **terrain mixes**. The **Layers** panel lists all
 of the map's in one place, by the slot of a block they paint — terrain
-mixes, ground covers, trees and objects, under the trees, tree sizes,
-annotations (it sits under the Terrain panel; any area can show it, from
+mixes, ground covers, trees and objects, under the trees, underground
+pockets, tree sizes, annotations (it sits under the Terrain panel; any area can show it, from
 Paint in the area's chooser). How they fit together is in
 [Layers](layers.md).
 
@@ -881,12 +881,13 @@ Paint in the area's chooser). How they fit together is in
 - its **eye** hides it on the map and in the 3D view, to see the ground
   under it; the export writes it all the same, and the map remembers it;
 - its **lock** (on the right of the row it is pointed at, and in its menu)
-  keeps a ground cover's or a tree layer's blocks: no brush paints another
+  keeps a ground cover's, a tree layer's or a pocket layer's blocks: no brush paints another
   layer of its slot over them, nor rubs them out, until it is unlocked;
 - its menu (right button) opens its **Settings…** in a dialog, paints with
   it, renames, **duplicates**, moves it **up** or **down** its section,
   locks or **removes** it;
-- **New cover**, **Import objects…** and **New mix** add one. A mix is
+- **New cover**, **Import objects…**, **New pockets** and **New mix** add
+  one. A mix is
   set up in Paint terrain ▸ Noise and saved there under a name.
 - under them, the fifteen colours of the **annotations**: a click paints
   with that colour.
@@ -944,6 +945,26 @@ show over the map, in four greens, while the tool is in hand, or always with
 the eye of their section in the Layers panel; the right button paints any
 size again.
 
+### Underground pockets
+
+**Underground pockets** (the tool of that name, in the Decor group) lay
+blobs of other blocks in the rock under the ground, as WorldPainter's layer
+of that name: gravel, clay, granite, a mod's stone. Each pocket layer is
+made of blocks of your own, with their weights, and takes its **share** of
+the rock where it is painted (5 % to all of it), in pockets about its
+**size** across, between its **lowest** and **highest** heights. The
+pockets never reach into the strata of the ground's terrain — the grass
+and dirt over the rock stay as they are — nor into caves or water.
+**New pockets** (in Tool Settings or the Layers panel) makes one: gravel,
+dirt, clay, andesite, diorite, granite or tuff, or any full block of the
+game or a mod. The pockets show over the map, hatched in the layer's
+colour, while the tool is in hand; the right button rubs them out. Ores
+take the place of a pocket's blocks where they are rock an ore takes
+(andesite, diorite, granite, tuff), as in the rest of the rock, never of
+gravel or clay; the export, the survival check and the cut of the Ores
+window agree block for block, so a pocket of diamond blocks is caught as
+riches lying around.
+
 ### WorldPainter's layers in Massif
 
 | WorldPainter | In Massif | From a `.world` |
@@ -962,7 +983,7 @@ size again.
 | Tunnels, floating layers | Levels: Carve and Solid | Converted: a Carve level each (a Solid level for a floating one), its floor and roof where WorldPainter puts them (at a height, so deep under the ground, inverted, so high over the floor, within their limits), flooded up to its level; their noise and their floor, wall and roof materials are left out (the floor keeps the ground's terrain) |
 | Custom ground cover layers | Terrains with strata | Converted: a terrain of the cover's blocks over each terrain it lies on ("Snow Block on Grass"), the land raised by the cover's thickness, or the top of the land replaced for a negative thickness; its edges are sheer |
 | Combined layers | Each of its layers | Converted: the layers it holds, each as strong as its factor, and its terrain and biome where painted at half strength or more |
-| Underground pockets | — (Massif has no blocks of its own inside the rock but ores) | Not yet |
+| Underground pockets | Underground pockets | Converted: a pocket layer of the same blocks (its material, its mixed material, or its terrain's blocks), as frequent and as large, between the same heights |
 | River | Rivers | Not yet |
 | Populate, Read Only | — (Massif writes finished chunks, and merges none) | Left out |
 

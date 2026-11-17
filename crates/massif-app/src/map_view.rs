@@ -1229,6 +1229,7 @@ impl MapView {
             seed: doc.world.meta.seed,
             annotations: self.annotations,
             sizes: tools.show_sizes || tools.tool == tools::Tool::TreeSize,
+            pockets: tools.tool == tools::Tool::Pockets,
         };
         let ppp = ui.ctx().pixels_per_point();
         let blocks_per_px = 1.0 / (self.zoom * ppp);
@@ -1658,6 +1659,7 @@ impl MapView {
                             annotation: 0,
                             understory: 0,
                             size: 0,
+                            pockets: 0,
                             flags: 0,
                             levels: 0,
                         };

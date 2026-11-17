@@ -87,6 +87,8 @@ struct Cut {
     key: (i32, i32, usize, i32, i32),
     /// The runs of each column of the cut.
     runs: Vec<Vec<Span>>,
+    /// The layer of underground pockets of each column (0: none).
+    pockets: Vec<u16>,
     /// The biomes the export writes over each column of the cut.
     biomes: Vec<BiomeColumn>,
     terrain: TextureHandle,
@@ -930,6 +932,8 @@ impl OresView {
         let h = (y1 - y0).max(1) as usize;
         let mut pixels = vec![Color32::TRANSPARENT; across * h];
         let mut runs = Vec::with_capacity(across);
+        let mut pockets = Vec::with_capacity(across);
+        let in_rock = massif_core::pockets::Pockets::new(reg, world.meta.seed as u64, dim.min_y);
         let (mut spans, mut fluids) = (Vec::new(), Vec::new());
         let mut stacks: Vec<(TilePos, Option<TileStack>)> = Vec::new();
         let fluid = if world.meta.lava { Color32::from_rgba_unmultiplied(214, 96, 18, 235) } else { Color32::from_rgba_unmultiplied(54, 104, 214, 180) };
@@ -948,6 +952,7 @@ impl OresView {
             };
             let Some(stack) = &stacks[k].1 else {
                 runs.push(Vec::new());
+                pockets.push(0);
                 biomes.push(BiomeColumn::default());
                 continue;
             };
@@ -964,12 +969,14 @@ impl OresView {
             let cell = massif_core::coords::local_index(x, z);
             stack.spans(cell, &mut spans);
             stack.fluids(cell, &spans, &mut fluids);
+            let pocket = stack.ground().pockets.get(cell);
+            let column = in_rock.as_ref().and_then(|p| p.column(pocket, &spans, &mat, x, z));
             for s in &spans {
                 let submerged = fluids.iter().any(|f| f.0 == s.y1);
                 let recipe = mat.recipe_depth(s.terrain, x, z);
                 let split = if recipe >= (s.y1 - s.y0) as u32 { s.y0 } else { s.y1 - recipe as i32 };
                 for y in s.y0.max(y0)..s.y1.min(y1) {
-                    let b = if y < split { mat.substrate(x, y, z) } else { mat.block(s, x, y, z, submerged) };
+                    let b = if y < split { column.as_ref().and_then(|p| p.at(x, y, z)).unwrap_or_else(|| mat.substrate(x, y, z)) } else { mat.block(s, x, y, z, submerged) };
                     let c = reg.block(b).color;
                     let grain = 0.9 + 0.13 * (hash3(x, y, z, 77) & 15) as f32 / 15.0;
                     // The cut face a touch darker under the surface.
@@ -984,9 +991,10 @@ impl OresView {
                 }
             }
             runs.push(spans.clone());
+            pockets.push(pocket);
         }
         let image = ColorImage::new([across, h], pixels);
-        Cut { key, runs, biomes, terrain: ctx.load_texture("ores cut", image, TextureOptions::NEAREST), ores: None }
+        Cut { key, runs, pockets, biomes, terrain: ctx.load_texture("ores cut", image, TextureOptions::NEAREST), ores: None }
     }
 
     // ---------------------------------------------------------- chart --
@@ -1289,6 +1297,7 @@ fn ores_image(world: &World, dim: usize, settings: &OreSettings, cut: &Cut) -> (
     let reg = &world.registry;
     let mat = Materializer::new(reg, world.meta.seed, d.min_y);
     let hosts = massif_core::ores::hosts(reg);
+    let in_rock = massif_core::pockets::Pockets::new(reg, world.meta.seed as u64, d.min_y);
     if let Some(placer) = Placer::new(settings, world.meta.seed) {
         let colors: Vec<Color32> = settings.ores.iter().map(|o| theme::rgb(o.mineral.color())).collect();
         let first = x0.div_euclid(16);
@@ -1300,7 +1309,9 @@ fn ores_image(world: &World, dim: usize, settings: &OreSettings, cut: &Cut) -> (
                     if bz != z || bx < x0 || bx >= x0 + across as i32 || by < y0 || by >= y1 {
                         return None;
                     }
-                    rock_at(&cut.runs[(bx - x0) as usize], &mat, &hosts, bx, by, bz, d.max_y)
+                    let i = (bx - x0) as usize;
+                    let pockets = in_rock.as_ref().and_then(|p| p.column(cut.pockets[i], &cut.runs[i], &mat, bx, bz));
+                    rock_at(&cut.runs[i], &mat, &hosts, pockets.as_ref(), bx, by, bz, d.max_y)
                 },
                 |bx, by, _| cut.biomes[(bx - x0) as usize].of_block(by),
                 |b, (_, host): (massif_core::BlockId, Host)| {

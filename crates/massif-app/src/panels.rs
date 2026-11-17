@@ -435,6 +435,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
         Tool::Objects => object_settings(ui, tools, doc, blocks),
         Tool::Annotate => annotation_settings(ui, tools),
         Tool::TreeSize => tree_size_settings(ui, tools),
+        Tool::Pockets => pocket_settings(ui, tools, doc, blocks),
         Tool::PaintBiome => {
             let reg = &doc.world.registry;
             let def = reg.biome(BiomeId(tools.biome));
@@ -1352,7 +1353,7 @@ const COMMON_PLANTS: [&str; 24] = [
 ];
 
 /// `minecraft:oxeye_daisy[x=y]` → `Oxeye daisy`.
-fn plant_name(state: &str) -> String {
+pub fn plant_name(state: &str) -> String {
     let name = state.split('[').next().unwrap_or(state);
     let short = name.strip_prefix("minecraft:").unwrap_or(name).replace('_', " ");
     let mut c = short.chars();
@@ -1525,6 +1526,222 @@ pub fn new_cover(reg: &mut Registry) -> u16 {
     let count = reg.covers.iter().filter(|c| !c.removed).count();
     let name = crate::layers::unique_name(&tr!("Cover {value}", value = count + 1), reg.covers.iter().filter(|c| !c.removed).map(|c| c.name.as_str()));
     reg.add_cover(massif_core::registry::CoverDef::new(&name, [120, 170, 90], &[("minecraft:short_grass", 1)], 0.5))
+}
+
+/// A new layer of underground pockets, of gravel to start with, in the rock
+/// of the dimension; returns its number.
+pub fn new_pockets(reg: &mut Registry, dim: &massif_core::world::Dimension) -> u16 {
+    let count = reg.pockets.iter().filter(|p| !p.removed).count();
+    let name = crate::layers::unique_name(&tr!("Pockets {value}", value = count + 1), reg.pockets.iter().filter(|p| !p.removed).map(|p| p.name.as_str()));
+    let gravel = reg.intern_block("minecraft:gravel", massif_core::objects::guess_color("minecraft:gravel"));
+    reg.add_pocket(massif_core::pockets::PocketDef::new(&name, [140, 132, 124], &[(gravel, 1)], 0.15, 5.0, dim.min_y + 5, 50))
+}
+
+/// Blocks offered for pockets when the game's blocks are not loaded.
+const COMMON_POCKETS: [&str; 12] = [
+    "minecraft:gravel",
+    "minecraft:dirt",
+    "minecraft:coarse_dirt",
+    "minecraft:clay",
+    "minecraft:sand",
+    "minecraft:andesite",
+    "minecraft:granite",
+    "minecraft:diorite",
+    "minecraft:tuff",
+    "minecraft:calcite",
+    "minecraft:deepslate",
+    "minecraft:magma_block",
+];
+
+/// The pocket layers of the world, and the one painted.
+fn pocket_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary) {
+    let pal = Palette::of(ui);
+    let before = doc.world.registry.pockets.clone();
+    let mut picked = None;
+    ui.spacing_mut().item_spacing.y = 2.0;
+    for (k, p) in doc.world.registry.pockets.iter().enumerate() {
+        if p.removed {
+            continue;
+        }
+        let n = k as u16 + 1;
+        let selected = tools.pocket_layer == n;
+        let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
+        let fill = if selected {
+            pal.accent_soft
+        } else if response.hovered() {
+            pal.header
+        } else {
+            Color32::TRANSPARENT
+        };
+        let painter = ui.painter();
+        painter.rect(rect, theme::TILE_RADIUS, fill, if selected { Stroke::new(1.0, pal.accent) } else { Stroke::NONE }, StrokeKind::Inside);
+        let dot = Rect::from_center_size(rect.left_center() + vec2(13.0, 0.0), vec2(11.0, 11.0));
+        painter.rect(dot, 3, theme::rgb(p.color), Stroke::new(1.0, Color32::from_black_alpha(60)), StrokeKind::Inside);
+        painter.text(rect.left_center() + vec2(26.0, 0.0), egui::Align2::LEFT_CENTER, &p.name, egui::FontId::proportional(12.5), pal.text);
+        painter.text(rect.right_center() - vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, format!("{:.0}%", p.share * 100.0), egui::FontId::proportional(11.0), pal.weak);
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &p.name));
+        if response.clicked() {
+            picked = Some(n);
+        }
+    }
+    ui.spacing_mut().item_spacing.y = 4.0;
+    if let Some(n) = picked {
+        tools.pocket_layer = n;
+    }
+    if ui.button(theme::with_icon(Icon::Plus, tr!("New pockets"))).on_hover_text(tr!("Pockets of your own: any blocks, in the rock under the ground")).clicked() {
+        let dim = &doc.world.dims[doc.dim];
+        tools.pocket_layer = new_pockets(&mut doc.world.registry, dim);
+    }
+    pocket_editor(ui, tools, doc, blocks);
+    if doc.world.registry.pockets != before {
+        doc.mark_changed();
+    }
+}
+
+/// The settings of the pocket layer picked (`tools.pocket_layer`), as Tool
+/// Settings and the layer's own dialog show them.
+pub fn pocket_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary) {
+    let pal = Palette::of(ui);
+    let ctx = ui.ctx().clone();
+    let before = doc.world.registry.pockets.clone();
+    let catalogue = blocks.catalogue.clone();
+    let (floor, ceiling) = (doc.dimension().min_y, doc.dimension().max_y - 1);
+    let reg = &mut doc.world.registry;
+    let Some(k) = tools.pocket_layer.checked_sub(1).map(usize::from).filter(|&k| reg.pockets.get(k).is_some_and(|d| !d.removed)) else {
+        if reg.pockets.iter().all(|p| p.removed) {
+            hint(ui, tr!("No pockets yet: make a layer of them to paint."));
+        }
+        return;
+    };
+    // Its blocks' states, read before the layer is taken to be edited.
+    let states: Vec<String> = reg.pockets[k].blocks.iter().map(|(b, _)| reg.block(*b).state.clone()).collect();
+    let def = &mut reg.pockets[k];
+    ui.add_space(4.0);
+    section(ui, Icon::Gem, &def.name.clone());
+    ui.horizontal(|ui| {
+        ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Name")));
+        ui.add(egui::TextEdit::singleline(&mut def.name).desired_width((ui.available_width() - 40.0).max(60.0)));
+        let mut c = Color32::from_rgb(def.color[0], def.color[1], def.color[2]);
+        if egui::color_picker::color_edit_button_srgba(ui, &mut c, egui::color_picker::Alpha::Opaque).on_hover_text(tr!("Its colour over the map while it is painted")).changed() {
+            def.color = [c.r(), c.g(), c.b()];
+        }
+    });
+    tip_row(ui, tr!("Share"), tr!("How much of the rock the pockets take where the layer is painted"), |ui| {
+        ui.add(
+            crate::widgets::Field::new(&mut def.share, 0.0..=1.0)
+                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
+        )
+    });
+    tip_row(ui, tr!("Size"), tr!("About how many blocks across a pocket is"), |ui| ui.add(crate::widgets::Field::new(&mut def.size, 1.0..=64.0).suffix(tr!(" blocks"))));
+    tip_row(ui, tr!("Highest"), tr!("The highest a pocket goes; never into the strata of the ground"), |ui| crate::widgets::drag(ui, egui::DragValue::new(&mut def.high).range(floor..=ceiling)));
+    tip_row(ui, tr!("Lowest"), tr!("The lowest a pocket goes"), |ui| crate::widgets::drag(ui, egui::DragValue::new(&mut def.low).range(floor..=ceiling)));
+    if def.low > def.high {
+        std::mem::swap(&mut def.low, &mut def.high);
+    }
+
+    // What the pockets are made of, and how much of each.
+    section(ui, Icon::Boxes, tr!("Made of"));
+    let total: f32 = def.blocks.iter().map(|b| b.1 as f32).sum::<f32>().max(1.0);
+    let mut remove = None;
+    egui::Grid::new("pocket blocks").num_columns(4).spacing([6.0, 3.0]).show(ui, |ui| {
+        for (k, ((_, weight), state)) in def.blocks.iter_mut().zip(&states).enumerate() {
+            let (r, _) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
+            match catalogue.as_ref().and_then(|cat| cat.block(state)).and_then(|b| blocks.icon(&ctx, b)) {
+                Some(t) => {
+                    ui.painter().image(t, r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                }
+                None => {
+                    ui.painter().rect_filled(r.shrink(3.0), 3, theme::rgb(massif_core::objects::guess_color(state)));
+                }
+            }
+            ui.label(plant_name(state)).on_hover_text(state.as_str());
+            ui.horizontal(|ui| {
+                crate::widgets::drag(ui, egui::DragValue::new(weight).range(1..=1000).speed(0.2));
+                ui.label(RichText::new(format!("{:.0}%", *weight as f32 * 100.0 / total)).size(11.0).color(pal.weak));
+            });
+            if ui.add(egui::Button::new(theme::glyph(Icon::X).to_string()).frame(false).small()).clicked() {
+                remove = Some(k);
+            }
+            ui.end_row();
+        }
+    });
+    if let Some(k) = remove
+        && def.blocks.len() > 1
+    {
+        def.blocks.remove(k);
+    }
+    let search_id = egui::Id::unique("pocket block search");
+    let mut added = None;
+    ui.menu_button(theme::with_icon(Icon::Plus, tr!("Add a block")), |ui| {
+        ui.set_max_width(300.0);
+        let mut search: String = ui.ctx().data(|d| d.get_temp(search_id)).unwrap_or_default();
+        let hint_text = tr!("{glyph}  Search, or type a block id", glyph = theme::glyph(Icon::Search));
+        ui.add(egui::TextEdit::singleline(&mut search).hint_text(hint_text).desired_width(280.0)).request_focus();
+        let needle = search.trim().to_lowercase();
+        egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
+            let mut shown = 0;
+            match &catalogue {
+                Some(cat) => {
+                    for b in cat.blocks.iter().filter(|b| b.full_cube) {
+                        if !needle.is_empty() && !b.name.to_lowercase().contains(&needle) && !b.id.contains(&needle) {
+                            continue;
+                        }
+                        shown += 1;
+                        if shown > 200 {
+                            break;
+                        }
+                        ui.horizontal(|ui| {
+                            let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
+                            if let Some(t) = blocks.icon(&ctx, b) {
+                                ui.painter().image(t, r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                            }
+                            if ui.selectable_label(false, &b.name).on_hover_text(&b.id).clicked() {
+                                added = Some(b.id.clone());
+                            }
+                        });
+                    }
+                }
+                None => {
+                    for id in COMMON_POCKETS {
+                        if needle.is_empty() || id.contains(&needle) {
+                            shown += 1;
+                            if ui.selectable_label(false, plant_name(id)).on_hover_text(id).clicked() {
+                                added = Some(id.to_owned());
+                            }
+                        }
+                    }
+                }
+            }
+            if needle.contains(':') || (shown == 0 && !needle.is_empty()) {
+                let id = if needle.contains(':') { needle.clone() } else { format!("minecraft:{}", needle.replace(' ', "_")) };
+                if ui.button(tr!("Add {id}", id)).clicked() {
+                    added = Some(id);
+                }
+            }
+        });
+        ui.ctx().data_mut(|d| d.insert_temp(search_id, search));
+        if added.is_some() {
+            ui.close();
+        }
+    });
+    hint(ui, tr!("In the rock under the ground's strata, where the layer is painted: blobs of these blocks, as WorldPainter's underground pockets. Shown over the map while the tool is in hand."));
+    ui.add_space(6.0);
+    if ui.button(RichText::new(theme::with_icon(Icon::Trash2, tr!("Remove this layer"))).color(pal.danger)).on_hover_text(tr!("No pocket where it was painted any more")).clicked() {
+        def.removed = true;
+        tools.pocket_layer = reg.pockets.iter().position(|p| !p.removed).map_or(0, |k| k as u16 + 1);
+    }
+    // A block added: one of the registry's, as a terrain's.
+    if let Some(id) = added {
+        let color = catalogue.as_ref().and_then(|cat| cat.block(&id)).map_or_else(|| massif_core::objects::guess_color(&id), |b| b.color);
+        let b = reg.intern_block(&id, color);
+        if !reg.pockets[k].blocks.iter().any(|x| x.0 == b) {
+            reg.pockets[k].blocks.push((b, 1));
+        }
+    }
+    if reg.pockets != before {
+        doc.mark_changed();
+    }
 }
 
 /// The covers of the world, and the one painted: what it grows, how
@@ -3641,5 +3858,72 @@ mod tests {
                 h.render().unwrap().save(dir.join("noise-picker.png")).unwrap();
             }
         }
+    }
+
+    /// The pockets' settings, drawn offscreen in both themes: two pocket
+    /// layers, one picked, of gravel and andesite. Needs a GPU: runs with
+    /// MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn pocket_settings_render() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from) else {
+            return;
+        };
+        let mut world = generate(&GenParams { tiles_x: 2, tiles_z: 2, ..GenParams::default() });
+        let reg = &mut world.registry;
+        let (gravel, andesite, clay) = (reg.intern_block("minecraft:gravel", [136, 126, 118]), reg.intern_block("minecraft:andesite", [136, 136, 136]), reg.intern_block("minecraft:clay", [160, 166, 179]));
+        reg.add_pocket(massif_core::pockets::PocketDef::new("Clay lenses", [160, 166, 179], &[(clay, 1)], 0.08, 7.0, 30, 58));
+        let gravel = reg.add_pocket(massif_core::pockets::PocketDef::new("Gravel and andesite", [136, 126, 118], &[(gravel, 3), (andesite, 1)], 0.2, 5.0, -40, 50));
+        let mut tools = ToolState::default();
+        tools.select(Tool::Pockets);
+        tools.pocket_layer = gravel;
+        for dark in [true, false] {
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(vec2(340.0, 760.0))
+                .with_pixels_per_point(2.0)
+                .with_accessibility_check(false)
+                .wgpu()
+                .build_ui_state(
+                    move |ui, s: &mut Noise| {
+                        theme::install(ui.ctx());
+                        ui.ctx().set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
+                        let pal = Palette::of(ui);
+                        egui::Frame::new().fill(pal.panel).inner_margin(12).show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            tool_settings(ui, &mut s.tools, &mut s.doc, &mut s.blocks);
+                        });
+                    },
+                    Noise { tools: tools.clone(), doc: Document::new(world.clone(), None, 1), blocks: BlockLibrary::default() },
+                );
+            h.run_steps(4);
+            h.render().unwrap().save(dir.join(if dark { "pockets-settings-dark.png" } else { "pockets-settings-light.png" })).unwrap();
+        }
+    }
+
+    /// New pockets makes a pocket layer of gravel, picks it to paint, and
+    /// gives it a name of its own; its share is edited in the settings.
+    #[test]
+    fn new_pockets_are_made_and_picked() {
+        use egui_kittest::kittest::Queryable;
+        let world = generate(&GenParams { tiles_x: 1, tiles_z: 1, ..GenParams::default() });
+        let mut tools = ToolState::default();
+        tools.select(Tool::Pockets);
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(340.0, 900.0)).with_accessibility_check(false).build_ui_state(
+            |ui, s: &mut Noise| {
+                theme::install(ui.ctx());
+                tool_settings(ui, &mut s.tools, &mut s.doc, &mut s.blocks);
+            },
+            Noise { tools, doc: Document::new(world, None, 1), blocks: BlockLibrary::default() },
+        );
+        h.run_steps(2);
+        h.get_by_label_contains("New pockets").click();
+        h.run_steps(3);
+        h.get_by_label_contains("New pockets").click();
+        h.run_steps(3);
+        let s = h.state();
+        let names: Vec<&str> = s.doc.world.registry.pockets.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Pockets 1", "Pockets 2"]);
+        assert_eq!(s.tools.pocket_layer, 2, "the new one is picked");
+        let reg = &s.doc.world.registry;
+        assert_eq!(reg.pockets[1].blocks.iter().map(|&(b, w)| (reg.block(b).state.as_str(), w)).collect::<Vec<_>>(), [("minecraft:gravel", 1)]);
     }
 }

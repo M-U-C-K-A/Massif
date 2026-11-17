@@ -532,6 +532,18 @@ fn encode(raw: RawTile, beaches: &crate::terrains::Beaches) -> (Handle, TilePos,
         tile.cover = Plane::from_vec(covers);
         tile.objects = Plane::from_vec(objects);
         tile.understory = Plane::from_vec(under);
+        // Underground pockets, where painted at all.
+        for p in &raw.painted {
+            if let Conv::Pockets(n) = p.conv {
+                let mut pockets = tile.pockets.dense().to_vec();
+                for (i, &s) in p.strength.iter().enumerate() {
+                    if s > 0 {
+                        pockets[i] = n;
+                    }
+                }
+                tile.pockets = Plane::from_vec(pockets);
+            }
+        }
         if let Some(p) = raw.painted.iter().find(|p| p.conv == Conv::Annotations) {
             // Strengths are nibbles × 17: back to the colour.
             tile.annotations = Plane::from_vec(p.strength.iter().map(|&s| (s / 17) as u16).collect());

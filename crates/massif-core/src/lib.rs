@@ -43,6 +43,7 @@ pub mod pack_file;
 pub mod real;
 pub mod packs;
 pub mod plane;
+pub mod pockets;
 pub mod registry;
 pub mod river;
 pub mod road;

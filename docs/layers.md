@@ -1,8 +1,8 @@
 # Layers
 
 Everything painted over the land in Massif is a **layer**: the terrain, the
-biome, plants, frost and lava, trees and objects, the tree sizes, and the
-annotations. Every layer works the same way:
+biome, plants, frost and lava, trees and objects, the tree sizes, the
+pockets in the rock, and the annotations. Every layer works the same way:
 
 - pick it in the **Layers** panel, and paint it with any brush — the shapes,
   your own brushes, the gradient brush for terrains — and the brush filters
@@ -28,6 +28,7 @@ two plants or two tree species never pile up on a block.
 | Frost, Lava | Snow on the land and ice on the water; water turned to lava | Cover |
 | Trees and objects | Trees, rocks, ruins, from schematics or the packs | Trees |
 | Sub-canopy | Bushes, hazel, holly growing under the trees | Under the trees |
+| Underground pockets | Gravel, clay, a mod's stone: blobs of other blocks in the rock | Underground |
 | Tree sizes | Where bushes, small, medium or large trees grow | Size |
 | Annotations | Marks in fifteen colours, to plan the map | Notes |
 
@@ -36,7 +37,10 @@ The **Trees** slot is WorldPainter's "base tree" and the **Cover** slot its
 each. The **Under the trees** slot sits beside the Trees slot: a sub-canopy
 layer grows under the canopy of the block's tree layer, in the air its
 trees leave, never through a trunk or a crown. Frost and Lava share the
-Cover slot with plants: a frozen pond holds no flowers.
+Cover slot with plants: a frozen pond holds no flowers. The
+**Underground** slot lies in the rock, under the strata of the ground's
+terrain: a pocket layer never meets the ground's blocks, its cover or its
+trees.
 
 Water itself is not a layer: Flood, Drain, the River tool and the Water
 brush shape it. Levels and 3D sculpting are not layers either: they shape
@@ -56,15 +60,15 @@ annotations.
 
 The panel lists the layers by slot, in the order the export lays them:
 terrain mixes (the ground), ground covers, trees and objects, under the
-trees; then the tree sizes and the annotations. Biomes are painted from
+trees, underground pockets; then the tree sizes and the annotations. Biomes are painted from
 the Biome panel. Within a section, the order is yours: **Move up** and
 **Move down** in a layer's menu. As a block holds one layer of a slot, the
 order changes the list, not the world.
 
 The **eye** hides a layer on the map and in the 3D view, to see what lies
 under it; the export writes it all the same. The **lock** (pointed at, a
-row shows it on its right; also in its menu) keeps a ground cover's or a
-tree layer's blocks: brushes neither paint another layer of its slot over
+row shows it on its right; also in its menu) keeps a ground cover's, a
+tree layer's or a pocket layer's blocks: brushes neither paint another layer of its slot over
 them nor rub them out, until it is unlocked. Terrains are kept the way
 WorldPainter keeps them, by the brush filters (**Except on** a terrain).
 
@@ -74,9 +78,10 @@ A ground cover's or a tree layer's settings open in a dialog of their own
 (**Settings…** in its menu), and in Tool Settings while it is painted: its
 name and colour, and what its kind needs — a plant layer's plants, density
 and what it does to the water (Frost, Lava), a tree layer's objects and
-their sizes, spacing, density, turn and slot (Base or Sub-canopy). A
+their sizes, spacing, density, turn and slot (Base or Sub-canopy), a
+pocket layer's blocks, share of the rock, size and heights. A
 double-click renames a layer. Each section has its button to add one: New
-mix, New cover, Import objects…
+mix, New cover, Import objects…, New pockets.
 
 ## Saving, packs, WorldPainter and export
 
@@ -85,26 +90,32 @@ mix, New cover, Import objects…
   their settings and slot, to share; what is painted stays in the map.
 - A WorldPainter `.world` brings its layers in as Massif's: see the table in
   the guide (Layers ▸ WorldPainter's layers in Massif).
-- The export writes the ground, then the biome, the cover, the trees and
-  then the sub-canopy, each block holding one layer of each slot.
+- The export writes the ground, then the biome, the pockets in the rock
+  under the ground's strata, the cover, the trees and then the sub-canopy,
+  each block holding one layer of each slot.
 
 ## For developers
 
 - Each slot is a plane of the tile: `terrain`, `biome`, `cover`, `objects`
-  (Trees), `understory` (Under the trees), `sizes` (Size) and
-  `annotations` (Notes); a plane holds 0 for none, or the layer's number in
-  the registry (`TerrainId`, `BiomeId`, `Registry::covers`,
-  `Registry::object_layers`). A plane is written only where it holds
+  (Trees), `understory` (Under the trees), `pockets` (Underground), `sizes`
+  (Size) and `annotations` (Notes); a plane holds 0 for none, or the
+  layer's number in the registry (`TerrainId`, `BiomeId`,
+  `Registry::covers`, `Registry::object_layers`, `Registry::pockets`). A plane is written only where it holds
   something, so maps without it are unchanged, and a version that does not
   know a plane keeps it as it read it.
 - Every slot is painted by `ops::paint_plane`: the brush, its dab, the
   filters and the selection apply to all of them. `History::locks`
   (`registry::Locks::of`, set by the tool before it paints) holds the
-  locked covers and object layers; `paint_plane` skips a column whose
+  locked covers, object layers and pocket layers; `paint_plane` skips a column whose
   layer in that plane is locked, painting or rubbing out.
-- `order` (covers, object layers) is a layer's place in its section of the
+- `order` (covers, object layers, pocket layers) is a layer's place in its section of the
   panel; `locked` its lock; `hidden` its eye. None of them changes the
   export.
+- A pocket layer's blocks are the registry's (`BlockId`), as a terrain's.
+  `pockets::Pockets` says which block of a column is a pocket's, the same
+  for the export, the survival check and the cut of the Ores window
+  (`ores::rock_at` takes the column's pockets), so that they agree block
+  for block, ores included.
 - `objects::tile_placements` stands the Trees slot's objects first and the
   Under the trees slot's after, with the object of the size the Size plane
   asks for (`ObjectLayerDef::pick`); the export lays the sub-canopy's blocks
@@ -123,4 +134,12 @@ mix, New cover, Import objects…
    annotations), each row with its eye and its lock, a menu with
    Settings…, Paint, Rename, Duplicate, Move up and down, Lock, Hide and
    Remove, and a dialog with the settings of a cover or a tree layer;
-   brushes skip a locked layer's blocks.
+   brushes skip a locked layer's blocks (landed).
+3. **Underground pockets** — the Underground slot and its tool, pocket
+   layers of any blocks with their share of the rock, size and heights
+   (`PocketDef::block_at`, the same blocks for the export and every count),
+   and WorldPainter's underground pockets from a `.world`.
+4. **Combined layers** — one layer that paints several at once (a
+   terrain, a biome, a cover, a tree layer, pockets), each at its own
+   strength, with an editor of its own; WorldPainter's combined layers
+   become one.

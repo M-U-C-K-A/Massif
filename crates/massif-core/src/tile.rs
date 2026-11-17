@@ -52,6 +52,7 @@ const TAG_OBJECTS: u8 = 7;
 const TAG_ANNOTATIONS: u8 = 8;
 const TAG_UNDERSTORY: u8 = 9;
 const TAG_SIZES: u8 = 10;
+const TAG_POCKETS: u8 = 11;
 
 /// The tree sizes a column may ask for (see [`Tile::sizes`]): any size,
 /// then bushes, small, medium and large trees.
@@ -94,6 +95,9 @@ pub struct Tile {
     /// [`SIZE_BUSHES`] up to [`SIZE_LARGE`] (bushes, small, medium, large
     /// trees), a quarter of a layer's objects each, by height.
     pub sizes: Plane<u16>,
+    /// The layer of underground pockets painted, by number (0: none; see
+    /// [`crate::pockets`]): on the ground level only.
+    pub pockets: Plane<u16>,
     /// Planes written by a newer version, preserved verbatim.
     pub unknown: Vec<(u8, Vec<u8>)>,
 }
@@ -112,6 +116,7 @@ impl Tile {
             annotations: Plane::Uniform(0),
             understory: Plane::Uniform(0),
             sizes: Plane::Uniform(0),
+            pockets: Plane::Uniform(0),
             unknown: Vec::new(),
         }
     }
@@ -129,6 +134,7 @@ impl Tile {
             annotations: Plane::Uniform(0),
             understory: Plane::Uniform(0),
             sizes: Plane::Uniform(0),
+            pockets: Plane::Uniform(0),
             unknown: Vec::new(),
         }
     }
@@ -171,6 +177,7 @@ impl Tile {
         self.annotations.compact();
         self.understory.compact();
         self.sizes.compact();
+        self.pockets.compact();
     }
 
     pub fn heap_bytes(&self) -> usize {
@@ -184,6 +191,7 @@ impl Tile {
             + self.annotations.heap_bytes()
             + self.understory.heap_bytes()
             + self.sizes.heap_bytes()
+            + self.pockets.heap_bytes()
     }
 
     /// Encode to the compressed cold form (a zstd frame).
@@ -233,6 +241,9 @@ impl Tile {
         if self.sizes.uniform_value() != Some(0) {
             plane(TAG_SIZES, &mut |o| codec::encode_categorical(&self.sizes, o));
         }
+        if self.pockets.uniform_value() != Some(0) {
+            plane(TAG_POCKETS, &mut |o| codec::encode_categorical(&self.pockets, o));
+        }
         for (tag, payload) in &self.unknown {
             plane(*tag, &mut |o| o.extend_from_slice(payload));
         }
@@ -259,6 +270,7 @@ impl Tile {
             annotations: Plane::Uniform(0),
             understory: Plane::Uniform(0),
             sizes: Plane::Uniform(0),
+            pockets: Plane::Uniform(0),
             unknown: Vec::new(),
         };
         loop {
@@ -282,6 +294,7 @@ impl Tile {
                 TAG_ANNOTATIONS => tile.annotations = codec::decode_categorical(&mut p)?,
                 TAG_UNDERSTORY => tile.understory = codec::decode_categorical(&mut p)?,
                 TAG_SIZES => tile.sizes = codec::decode_categorical(&mut p)?,
+                TAG_POCKETS => tile.pockets = codec::decode_categorical(&mut p)?,
                 _ => tile.unknown.push((tag, payload.to_vec())),
             }
         }
@@ -339,6 +352,9 @@ mod tests {
         for i in 0..400 {
             t.sizes.set(i, 1 + (i % 4) as u16);
         }
+        for i in 3000..3300 {
+            t.pockets.set(i, 2);
+        }
         t
     }
 
@@ -357,6 +373,7 @@ mod tests {
         assert_eq!(back.annotations.dense(), t.annotations.dense());
         assert_eq!(back.understory.dense(), t.understory.dense());
         assert_eq!(back.sizes.dense(), t.sizes.dense());
+        assert_eq!(back.pockets.dense(), t.pockets.dense());
         // Encoding is canonical: re-encoding the decoded tile is identical.
         assert_eq!(back.encode(), blob);
     }

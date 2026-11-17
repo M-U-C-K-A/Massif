@@ -213,6 +213,8 @@ pub enum Slot {
     Cover,
     /// Object layers, base or sub-canopy.
     Objects,
+    /// Layers of underground pockets.
+    Pockets,
 }
 
 /// The layers locked in a registry, by their number in their plane: a
@@ -221,6 +223,7 @@ pub enum Slot {
 pub struct Locks {
     covers: Vec<bool>,
     objects: Vec<bool>,
+    pockets: Vec<bool>,
 }
 
 impl Locks {
@@ -230,11 +233,12 @@ impl Locks {
         Self {
             covers: numbered(reg.covers.iter().map(|c| c.locked && !c.removed).collect()),
             objects: numbered(reg.object_layers.iter().map(|l| l.locked && !l.removed).collect()),
+            pockets: numbered(reg.pockets.iter().map(|p| p.locked && !p.removed).collect()),
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.covers.is_empty() && self.objects.is_empty()
+        self.covers.is_empty() && self.objects.is_empty() && self.pockets.is_empty()
     }
 
     /// Whether the layer numbered `n` in `slot`'s plane is locked.
@@ -243,6 +247,7 @@ impl Locks {
         let list = match slot {
             Slot::Cover => &self.covers,
             Slot::Objects => &self.objects,
+            Slot::Pockets => &self.pockets,
         };
         list.get(n as usize).copied().unwrap_or(false)
     }
@@ -464,6 +469,9 @@ pub struct Registry {
     /// Object layers, numbered from 1 (0 in a tile: none).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub object_layers: Vec<crate::objects::ObjectLayerDef>,
+    /// Layers of underground pockets, numbered from 1 (0 in a tile: none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pockets: Vec<crate::pockets::PocketDef>,
 }
 
 impl Registry {
@@ -502,6 +510,18 @@ impl Registry {
     pub fn object_layer(&self, n: u16) -> Option<&crate::objects::ObjectLayerDef> {
         let def = self.object_layers.get((n as usize).checked_sub(1)?)?;
         (!def.removed).then_some(def)
+    }
+
+    /// The pocket layer numbered `n` in a tile's pockets plane; `None` for
+    /// 0, for a number past the list, and for a removed layer.
+    pub fn pocket(&self, n: u16) -> Option<&crate::pockets::PocketDef> {
+        self.pockets.get((n as usize).checked_sub(1)?).filter(|p| !p.removed)
+    }
+
+    /// Add a pocket layer and return its number.
+    pub fn add_pocket(&mut self, def: crate::pockets::PocketDef) -> u16 {
+        self.pockets.push(def);
+        self.pockets.len() as u16
     }
 
     /// Add an object layer and return its number.
@@ -548,6 +568,7 @@ impl Registry {
             covers: vanilla_covers(),
             objects: Vec::new(),
             object_layers: Vec::new(),
+            pockets: Vec::new(),
             well_known: WellKnown {
                 stone: BlockId(0),
                 deepslate: BlockId(0),

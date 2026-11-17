@@ -62,6 +62,8 @@ pub struct Sample {
     pub understory: u16,
     /// Tree size asked for on the surface; 0 = any.
     pub size: u8,
+    /// Layer of underground pockets painted (on the ground level); 0 = none.
+    pub pockets: u16,
     pub flags: u8,
     /// Bit `i` set when level `i` (`i < 8`) has the column.
     pub levels: u8,
@@ -78,6 +80,7 @@ impl Sample {
         annotation: 0,
         understory: 0,
         size: 0,
+        pockets: 0,
         flags: 0,
         levels: 0,
     };
@@ -100,7 +103,7 @@ impl Sample {
 
 #[inline]
 #[allow(clippy::too_many_arguments)]
-fn ground_sample(top: f32, terrain: u16, fluid: i16, biome: u16, cover: u16, objects: u16, annotation: u16, understory: u16, size: u16) -> Sample {
+fn ground_sample(top: f32, terrain: u16, fluid: i16, biome: u16, cover: u16, objects: u16, annotation: u16, understory: u16, size: u16, pockets: u16) -> Sample {
     let fluid = if fluid != NO_FLUID && fluid as i32 > block_top(top) {
         fluid
     } else {
@@ -116,6 +119,7 @@ fn ground_sample(top: f32, terrain: u16, fluid: i16, biome: u16, cover: u16, obj
         annotation: annotation as u8,
         understory,
         size: size as u8,
+        pockets,
         flags: 0,
         levels: 1,
     }
@@ -143,6 +147,7 @@ impl ColumnSampler {
                 g.annotations.get(cell),
                 g.understory.get(cell),
                 g.sizes.get(cell),
+                g.pockets.get(cell),
             );
         }
         stack.spans(cell, &mut self.spans);
@@ -211,6 +216,7 @@ impl ColumnSampler {
             annotation: stack.ground().annotations.get(cell) as u8,
             understory: stack.surface_understory(cell, &top),
             size: stack.surface_size(cell, &top) as u8,
+            pockets: stack.ground().pockets.get(cell),
             flags,
             levels,
         }
@@ -227,9 +233,9 @@ impl SurfaceGrid {
             let g = stack.ground();
             let (top, terrain) = (g.top.dense(), g.terrain.dense());
             let (fluid, biome, cover, objects) = (g.fluid.dense(), g.biome.dense(), g.cover.dense(), g.objects.dense());
-            let (annotations, understory, sizes) = (g.annotations.dense(), g.understory.dense(), g.sizes.dense());
+            let (annotations, understory, sizes, pockets) = (g.annotations.dense(), g.understory.dense(), g.sizes.dense(), g.pockets.dense());
             (0..TILE_AREA)
-                .map(|i| ground_sample(top[i], terrain[i], fluid[i], biome[i], cover[i], objects[i], annotations[i], understory[i], sizes[i]))
+                .map(|i| ground_sample(top[i], terrain[i], fluid[i], biome[i], cover[i], objects[i], annotations[i], understory[i], sizes[i], pockets[i]))
                 .collect()
         } else {
             let mut sampler = ColumnSampler::default();
@@ -308,6 +314,7 @@ impl Default for MapStyle {
             seed: 0,
             annotations: true,
             sizes: false,
+            pockets: false,
         }
     }
 }
@@ -361,6 +368,8 @@ pub struct MapStyle {
     pub annotations: bool,
     /// The tree sizes are drawn over the map.
     pub sizes: bool,
+    /// The underground pockets are drawn over the map.
+    pub pockets: bool,
 }
 
 /// Default light direction: from the north-west, like WorldPainter.
@@ -515,6 +524,9 @@ pub struct Colorizer<'a> {
     covers: Vec<Option<massif_core::registry::CoverDef>>,
     /// Whether the top block of each terrain is soil, where plants grow.
     soil: Vec<bool>,
+    /// The colour of each layer of underground pockets (by number − 1);
+    /// `None` for a removed one.
+    pockets: Vec<Option<[u8; 3]>>,
     auto: AutoBiome,
     light: [f32; 3],
 }
@@ -529,6 +541,7 @@ impl<'a> Colorizer<'a> {
             terrain: reg.terrains.iter().map(|t| rgb(t.color)).collect(),
             biome: reg.biomes.iter().map(|b| rgb(b.color)).collect(),
             covers: reg.covers.iter().map(|c| (!c.removed && !c.hidden).then(|| c.clone())).collect(),
+            pockets: reg.pockets.iter().map(|p| (!p.removed).then_some(p.color)).collect(),
             soil: reg
                 .terrains
                 .iter()
@@ -663,6 +676,14 @@ impl<'a> Colorizer<'a> {
             }
         }
 
+        // Underground pockets, while they are painted: hatched in their
+        // colour.
+        if self.style.pockets
+            && let Some(color) = c.pockets.checked_sub(1).and_then(|k| self.pockets.get(k as usize)).copied().flatten()
+            && at.is_none_or(|(x, z)| (x + z).rem_euclid(4) < 2)
+        {
+            out = mix(out, color.map(|v| v as f32), 0.55);
+        }
         // Tree sizes, under the annotations.
         if self.style.sizes
             && let Some(&color) = c.size.checked_sub(1).and_then(|k| SIZE_COLORS.get(k as usize))
@@ -1763,6 +1784,38 @@ mod tests {
         // Outside the map nothing is drawn.
         let img = render_region(dim, &w.registry, 63.0, MapStyle::default(), 0, 4096, 4096, 1, 1);
         assert!(img.pixels.iter().all(|c| c.a() == 0));
+    }
+
+    /// Underground pockets show over the map, hatched in their layer's
+    /// colour, only while they are painted (`MapStyle::pockets`), and only
+    /// where they are.
+    #[test]
+    fn pockets_show_hatched_while_painted() {
+        let mut w = generate(&GenParams { tiles_x: 2, tiles_z: 2, landform: Landform::Hills, seed: 7, ..GenParams::default() });
+        let granite = w.registry.intern_block("minecraft:granite", [149, 103, 85]);
+        let red = w.registry.add_pocket(massif_core::pockets::PocketDef::new("Red", [220, 30, 30], &[(granite, 1)], 0.3, 4.0, -64, 60));
+        let hard = Brush { shape: BrushShape::Circle, radius: 20.0, profile: Profile::Constant, strength: 1.0, rotation: 0.0, mask: None, filter: None };
+        let mut h = History::default();
+        h.begin("paint", 0);
+        ops::paint_pockets(&mut h.edit(&mut w, 0), &hard, -40.0, -40.0, red, 1);
+        h.commit();
+        let dim = &w.dims[0];
+        let reddish = |img: &ColorImage, x0: i32, z0: i32| {
+            let mut n = 0;
+            for z in z0..z0 + 8 {
+                for x in x0..x0 + 8 {
+                    let c = img.pixels[(z + 128) as usize * img.width() + (x + 128) as usize];
+                    n += (c.r() as i32 > c.g() as i32 + 50) as usize;
+                }
+            }
+            n
+        };
+        let shown = render_region(dim, &w.registry, 63.0, MapStyle { pockets: true, ..MapStyle::default() }, 0, -128, -128, 2, 2);
+        save("map-pockets.png", &shown);
+        let plain = render_region(dim, &w.registry, 63.0, MapStyle::default(), 0, -128, -128, 2, 2);
+        let (inside, outside, hidden) = (reddish(&shown, -44, -44), reddish(&shown, 40, 40), reddish(&plain, -44, -44));
+        assert!((16..=48).contains(&inside), "hatched: about half of the pixels, {inside} of 64");
+        assert_eq!((outside, hidden), (0, 0), "nothing where they are not painted, nor while they are not");
     }
 
     /// WorldPainter's Frost, Lava and annotations as the map shows them:

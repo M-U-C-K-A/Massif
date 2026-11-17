@@ -234,6 +234,12 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
             Some(tr!("Import .schem, .schematic, .bp, .litematic or .nbt files in its settings.")),
             Some(Demo::Objects),
         ),
+        Tool::Pockets => card(
+            tr!("Lays pockets of other blocks in the rock under the ground, as WorldPainter's underground pockets: gravel, clay, a mod's stone."),
+            vec![(tr!("Drag"), tr!("Lay pockets")), (tr!("Right-drag"), tr!("Rub them out"))],
+            Some(tr!("They take their share of the rock between their heights, never the strata of the ground.")),
+            Some(Demo::Pockets),
+        ),
         Tool::TreeSize => card(
             tr!("Marks where bushes, small, medium or large trees grow. Paint a species over it: each spot takes that species' objects of the size marked."),
             vec![(tr!("Drag"), tr!("Mark a size")), (tr!("Right-drag"), tr!("Any size"))],
@@ -350,6 +356,7 @@ pub enum Demo {
     Objects,
     Annotate,
     TreeSize,
+    Pockets,
     AutoPaint,
     AutoBiome,
     Eyedropper,
@@ -604,6 +611,20 @@ impl Demo {
                     let (x, y) = sweep(k as f64 / SAMPLES as f64);
                     let t = &mut s.tint;
                     Scene::near(x, y, 9.0, |i, _| t[i] = Some([214, 190, 96]));
+                }
+                stroke(9.0)
+            }
+            Demo::Pockets => {
+                // Blobs of gravel come up where the brush goes, as a cut
+                // through the rock would show them.
+                for k in 0..steps {
+                    let (x, y) = sweep(k as f64 / SAMPLES as f64);
+                    let t = &mut s.tint;
+                    Scene::near(x, y, 9.0, |i, _| {
+                        if hash(i * 5 + 1) < 0.45 {
+                            t[i] = Some([136, 128, 120]);
+                        }
+                    });
                 }
                 stroke(9.0)
             }

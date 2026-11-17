@@ -583,6 +583,12 @@ pub fn move_object_layer(edit: &mut Edit, n: u16, under: bool) -> usize {
     moved.into_inner()
 }
 
+/// Paint a layer of underground pockets by its number (0 removes it), on
+/// the ground level. `salt` should change from dab to dab.
+pub fn paint_pockets(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, layer: u16, salt: u64) {
+    paint_plane(edit, brush, cx, cz, salt, layer, Some(crate::registry::Slot::Pockets), |t| &mut t.pockets);
+}
+
 /// Paint an object layer by its number (0 removes it). `salt` should
 /// change from dab to dab.
 pub fn paint_objects(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, layer: u16, salt: u64) {

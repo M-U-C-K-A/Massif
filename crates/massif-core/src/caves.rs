@@ -159,7 +159,7 @@ fn hash(seed: u64, a: i64, b: i64, salt: u64) -> u64 {
 }
 
 /// Value noise in 3D, 0 to 1, smooth.
-fn noise3(seed: u64, x: f32, y: f32, z: f32) -> f32 {
+pub fn noise3(seed: u64, x: f32, y: f32, z: f32) -> f32 {
     let (xf, yf, zf) = (x.floor(), y.floor(), z.floor());
     let (xi, yi, zi) = (xf as i64, yf as i64, zf as i64);
     let s = |t: f32| t * t * (3.0 - 2.0 * t);

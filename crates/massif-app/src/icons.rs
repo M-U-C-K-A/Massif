@@ -90,6 +90,7 @@ fn art(tool: Tool) -> Art {
         Tool::Objects => Art::Glyph(Icon::TreePine),
         Tool::Annotate => Art::Glyph(Icon::PenLine),
         Tool::TreeSize => Art::Glyph(Icon::ChartNoAxesColumnIncreasing),
+        Tool::Pockets => Art::Glyph(Icon::Gem),
         Tool::Water => Art::Glyph(Icon::Droplet),
         Tool::Drain => Art::Glyph(Icon::DropletOff),
         Tool::EraseSlab => Art::Glyph(Icon::Eraser),

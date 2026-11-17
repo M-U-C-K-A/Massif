@@ -814,6 +814,9 @@ struct Ctx<'a> {
     stone: BlockId,
     deepslate: BlockId,
     terrains: Vec<Marks>,
+    /// The underground pockets, and what each pocket layer holds.
+    pockets: Option<crate::pockets::Pockets<'a>>,
+    pocket_marks: Vec<Marks>,
     /// Blocks that covers and objects add, by name (no properties), and
     /// their colours.
     names: Vec<String>,
@@ -844,6 +847,17 @@ impl<'a> Ctx<'a> {
                     for (b, _) in &s.blocks {
                         m.add_kind(kinds.get(b.index()).copied().unwrap_or(Kind::Other));
                     }
+                }
+                m
+            })
+            .collect();
+        let pocket_marks = reg
+            .pockets
+            .iter()
+            .map(|p| {
+                let mut m = Marks::default();
+                for (b, _) in &p.blocks {
+                    m.add_kind(kinds.get(b.index()).copied().unwrap_or(Kind::Other));
                 }
                 m
             })
@@ -916,6 +930,8 @@ impl<'a> Ctx<'a> {
             stone: wk.stone,
             deepslate: wk.deepslate,
             terrains,
+            pockets: crate::pockets::Pockets::new(reg, world.meta.seed as u64, dim.min_y),
+            pocket_marks,
             names,
             name_colors,
             covers,
@@ -1090,6 +1106,17 @@ impl<'a> Ctx<'a> {
                     self.count_span(span, x, z, submerged, t);
                     marks.add(self.terrains.get(span.terrain.index()).copied().unwrap_or_default());
                 }
+                // Underground pockets, in the place of the rock.
+                let pocket = ground.pockets.get(cell);
+                if let Some(col) = self.pockets.as_ref().and_then(|p| p.column(pocket, spans, &self.mat, x, z)) {
+                    for y in col.low..=col.high {
+                        if let Some(b) = col.at(x, y, z) {
+                            t.blocks[self.mat.substrate(x, y, z).index()] -= 1;
+                            t.blocks[b.index()] += 1;
+                        }
+                    }
+                    marks.add(self.pocket_marks.get(pocket as usize - 1).copied().unwrap_or_default());
+                }
                 let under = self.mat.block(&top, x, surface - 1, z, wet.is_some());
                 t.surface[under.index()] += 1;
                 let kind = self.kind(under);
@@ -1202,7 +1229,11 @@ impl<'a> Ctx<'a> {
             for chunk in placer.chunks(ox >> 4, oz >> 4, n, n, (self.min_y, highest)) {
                 placer.lay(
                     &chunk,
-                    |x, y, z| crate::ores::rock_at(run(crate::coords::local_index(x, z)), &self.mat, &self.hosts, x, y, z, self.max_y),
+                    |x, y, z| {
+                        let cell = crate::coords::local_index(x, z);
+                        let pockets = self.pockets.as_ref().and_then(|p| p.column(ground.pockets.get(cell), run(cell), &self.mat, x, z));
+                        crate::ores::rock_at(run(cell), &self.mat, &self.hosts, pockets.as_ref(), x, y, z, self.max_y)
+                    },
                     |x, y, z| biomes[(((z - oz) >> 2) * 32 + ((x - ox) >> 2)) as usize].of_block(y),
                     |b, (rock, host)| {
                         t.blocks[rock.index()] -= 1;
@@ -2201,6 +2232,7 @@ mod tests {
         let h = (max_y - min_y) as usize;
         let placer = crate::ores::Placer::new(&world.meta.ores, world.meta.seed);
         let hosts = crate::ores::hosts(reg);
+        let pockets = crate::pockets::Pockets::new(reg, world.meta.seed as u64, d.min_y);
         let mut out: HashMap<String, u64> = HashMap::new();
         let (mut spans, mut fluids) = (Vec::new(), Vec::new());
         for pos in d.ground().positions() {
@@ -2218,6 +2250,13 @@ mod tests {
                     let split = if recipe >= (span.y1 - span.y0) as u32 { span.y0 } else { span.y1 - recipe as i32 };
                     for y in span.y0..span.y1 {
                         grid[at(cell, y)] = if y < split { mat.substrate(x, y, z) } else { mat.block(span, x, y, z, submerged) }.0;
+                    }
+                }
+                if let Some(col) = pockets.as_ref().and_then(|p| p.column(stack.ground().pockets.get(cell), &spans, &mat, x, z)) {
+                    for y in col.low..=col.high {
+                        if let Some(b) = col.at(x, y, z) {
+                            grid[at(cell, y)] = b.0;
+                        }
                     }
                 }
                 for &(f0, f1) in &fluids {
@@ -2306,6 +2345,29 @@ mod tests {
         assert_eq!((a.grounded(), a.void), (a.columns, 0), "every column has ground");
         assert!(a.layered > 0 && a.hollow > 0, "the slab and the cave");
         assert!(a.at_ceiling > 0, "columns up to the top of the world");
+    }
+
+    /// Underground pockets are counted where the export lays them, in the
+    /// place of the rock, with the ores in pockets of rock; pockets of
+    /// diamond blocks break survival, as diamond blocks anywhere.
+    #[test]
+    fn pockets_are_counted_as_the_export_writes_them() {
+        let mut world = varied();
+        world.meta.ores = Default::default();
+        let reg = &mut world.registry;
+        let (andesite, gravel, diamond) = (reg.intern_block("minecraft:andesite", [136, 136, 136]), reg.intern_block("minecraft:gravel", [136, 126, 118]), reg.intern_block("minecraft:diamond_block", [98, 237, 228]));
+        let rock = reg.add_pocket(crate::pockets::PocketDef::new("Rock", [0; 3], &[(andesite, 3), (gravel, 1)], 0.4, 5.0, -64, 100));
+        let riches = reg.add_pocket(crate::pockets::PocketDef::new("Riches", [0; 3], &[(diamond, 1)], 0.02, 3.0, -64, 100));
+        let tile = world.dims[0].ground_mut().tile_mut(TilePos::new(0, 0)).unwrap();
+        for cell in 0..TILE_AREA {
+            tile.pockets.set(cell, if cell % 128 < 64 { rock } else { riches });
+        }
+        let a = run(&world);
+        let counts = by_name(&a.volume);
+        assert_eq!(counts, every_block(&world));
+        assert!(counts["minecraft:andesite"] > 10_000 && counts["minecraft:gravel"] > 3_000 && counts["minecraft:diamond_block"] > 100, "{counts:?}");
+        let f = a.findings();
+        assert!(f.iter().any(|f| f.title == "Diamonds lying around"), "{:?}", f.iter().map(|f| &f.title).collect::<Vec<_>>());
     }
 
     /// Bedrock and diamond blocks painted on the surface break survival;
