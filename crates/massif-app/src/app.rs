@@ -72,8 +72,13 @@ struct Settings {
     loader: crate::loader::Pattern,
     /// The tools' icons: Line (Lucide's style) or Classic.
     tool_icons: crate::icons::IconStyle,
-    /// The waves behind the home screen move.
+    /// What is behind the home screen: waves, or pictures.
+    home_background: home::Background,
+    /// The home screen's background moves: the waves drift, a picture's
+    /// dither moves on about once a second.
     animate_backdrop: bool,
+    /// The home screen's pictures shown, by name: those not yet come first.
+    backdrops_seen: Vec<String>,
     /// The crosshair of the player's view.
     reticle: crate::reticle::Reticle,
     /// The Developer panel is offered: frames, memory, the processor, live.
@@ -166,7 +171,9 @@ impl Default for Settings {
             memory_mb: 0,
             loader: crate::loader::Pattern::Orbit,
             tool_icons: crate::icons::IconStyle::Line,
+            home_background: home::Background::Waves,
             animate_backdrop: true,
+            backdrops_seen: Vec::new(),
             reticle: crate::reticle::Reticle::default(),
             developer: false,
             frame_limit: crate::devtools::FrameLimit::Vsync,
@@ -725,7 +732,9 @@ impl MassifApp {
             if let Some(cat) = &self.blocks.catalogue {
                 massif_assets::apply_colors(&mut registry, cat);
             }
-            self.home = Some(home::Home::new(registry));
+            let mut home = home::Home::new(registry);
+            home.pick_backdrop(&mut self.settings.backdrops_seen);
+            self.home = Some(home);
         }
         let back_to = self.has_map.then(|| self.doc.world.meta.name.clone());
         if let Some(home) = &mut self.home {
@@ -779,6 +788,11 @@ impl MassifApp {
             HomeAction::FromHeightmap(map, how) => self.request(ctx, Pending::FromHeightmap(map, how)),
             HomeAction::PickHeightmap => self.pick_heightmap(ctx),
             HomeAction::RealPlace => self.open_real(true),
+            HomeAction::AnotherPicture => {
+                if let Some(home) = &mut self.home {
+                    home.pick_backdrop(&mut self.settings.backdrops_seen);
+                }
+            }
             HomeAction::Open => {
                 if let Some(path) = rfd::FileDialog::new()
                     .set_title(tr!("Open a map"))
@@ -839,11 +853,13 @@ impl MassifApp {
         let recent = self.settings.recent.clone();
         let mut action = None;
         let animate = self.settings.animate_backdrop;
+        let background = self.settings.home_background;
         let update = self.update_offer().map(|r| r.tag_name.trim_start_matches('v').to_owned());
         let palettes = self.all_palettes();
         egui::CentralPanel::default().frame(egui::Frame::new()).show(ui, |ui| {
             if let Some(home) = &mut self.home {
                 home.animate = animate;
+                home.background = background;
                 if home.new_map.palettes != palettes {
                     home.new_map.palettes = palettes;
                 }
@@ -1243,10 +1259,19 @@ impl MassifApp {
                     crate::sounds::play(Cue::Select);
                 }
             });
+            crate::widgets::row(ui, tr!("Home background"), |ui| {
+                let all = home::Background::ALL;
+                let labels: Vec<&str> = all.iter().map(|b| crate::i18n::tr_name(b.label())).collect();
+                let on: Vec<bool> = all.iter().map(|b| self.settings.home_background == *b).collect();
+                if let Some(k) = crate::widgets::button_group(ui, "home background", &labels, &on) {
+                    self.settings.home_background = all[k];
+                    crate::sounds::play(Cue::Select);
+                }
+            });
             crate::widgets::row(ui, tr!("Animate the background"), |ui| {
                 let still = theme::reduce_motion(ui.ctx());
                 let mut on = self.settings.animate_backdrop && !still;
-                let tip = if still { tr!("Still: Reduce motion is on (Accessibility)") } else { tr!("The waves behind the home screen drift slowly") };
+                let tip = if still { tr!("Still: Reduce motion is on (Accessibility)") } else { if self.settings.home_background == home::Background::Pictures { tr!("The dither of its picture moves on about once a second") } else { tr!("The waves behind the home screen drift slowly") } };
                 if ui.add_enabled_ui(!still, |ui| crate::widgets::switch(ui, &mut on)).inner.on_hover_text(tip).changed() {
                     self.settings.animate_backdrop = on;
                 }
@@ -1914,6 +1939,7 @@ impl MassifApp {
             ("Interface scale".to_owned(), format!("{}", s.ui_scale)),
             ("High contrast".to_owned(), format!("{} (now {})", follow(s.high_contrast), if s.high_contrast.on(self.access.system.contrast) { "on" } else { "off" })),
             ("Reduce motion".to_owned(), format!("{} (now {})", follow(s.reduce_motion), if s.reduce_motion.on(self.access.system.reduce_motion) { "on" } else { "off" })),
+            ("Home background".to_owned(), s.home_background.label().to_owned()),
             ("Animated home background".to_owned(), if s.animate_backdrop { "on" } else { "off" }.to_owned()),
             ("Memory for decoded tiles".to_owned(), if s.memory_mb == 0 { "as much as it takes".to_owned() } else { format!("{} MB", s.memory_mb) }),
             ("Autosave".to_owned(), if s.autosave { format!("every {} min", s.autosave_minutes) } else { "off".to_owned() }),
@@ -9833,6 +9859,24 @@ mod tests {
         h.render().unwrap().save(dir.join("dialog-analysis-diamonds.png")).unwrap();
     }
 
+    /// Settings ▸ Appearance ▸ Home background: Pictures is chosen by a
+    /// click, and kept.
+    #[test]
+    fn choosing_the_home_background() {
+        use egui_kittest::kittest::Queryable;
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let mut h = harness(ThemeChoice::Dark);
+        assert_eq!(h.state().settings.home_background, home::Background::Waves, "waves by default");
+        h.state_mut().dialog = Some(Dialog::Preferences(PrefsSection::Appearance));
+        h.run_steps(4);
+        h.get_by_label("Pictures").click();
+        h.run_steps(4);
+        assert_eq!(h.state().settings.home_background, home::Background::Pictures);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("dialog-settings-home-background.png")).unwrap();
+        }
+    }
+
     /// The typefaces: the settings show each in itself, a click sets the
     /// interface in it, and each draws the whole interface.
     #[test]
@@ -14688,6 +14732,25 @@ mod tests {
         assert_eq!(h.render().unwrap().as_raw(), still.as_raw(), "still with Reduce motion on");
         if let Some(dir) = &dir {
             still.save(dir.join(format!("home-waves-dark-still-{ppp}x.png"))).unwrap();
+        }
+        // Pictures instead (Settings ▸ Appearance ▸ Home background), with
+        // the button for another one, which the waves do not have.
+        use egui_kittest::kittest::Queryable;
+        assert!(h.query_by_label("Another picture").is_none(), "no other picture to show over the waves");
+        h.state_mut().settings.reduce_motion = Follow::Off;
+        h.state_mut().settings.home_background = home::Background::Pictures;
+        for (theme, name) in [(ThemeChoice::Dark, "dark"), (ThemeChoice::Light, "light")] {
+            h.state_mut().settings.theme = theme;
+            h.run_steps(5);
+            h.get_by_label("Another picture");
+            // Every picture, dithered (at dawn in the light theme).
+            for k in 0..home::Home::backdrops() {
+                let picture = h.state_mut().home.as_mut().unwrap().choose_backdrop(k);
+                h.run_steps(3);
+                if let Some(dir) = &dir {
+                    h.render().unwrap().save(dir.join(format!("home-pictures-{name}-{ppp}x-{picture}.png"))).unwrap();
+                }
+            }
         }
     }
 

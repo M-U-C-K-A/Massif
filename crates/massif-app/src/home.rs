@@ -165,6 +165,8 @@ pub enum HomeAction {
     Settings,
     /// A file let go over the window.
     Dropped(PathBuf),
+    /// Another picture behind the home screen.
+    AnotherPicture,
     /// What is new in the newer version out.
     Update,
     /// The block palettes window.
@@ -197,6 +199,73 @@ struct WavesKey {
     /// Pixels a cell.
     pitch: usize,
 }
+/// The pictures of `assets/backdrops` (listed by the build script).
+mod pictures {
+    include!(concat!(env!("OUT_DIR"), "/backdrops.rs"));
+}
+
+/// Seconds each frame of the backdrop stays: its dither moves on, about once
+/// a second, as bast.sh's does.
+const FRAME_SECS: f64 = 0.9;
+
+/// The picture behind the home screen, dithered for one size and theme: a
+/// few frames of it, each dithered a little differently, shown in turn.
+struct Backdrop {
+    key: BackdropKey,
+    /// None when the picture would not decode.
+    frames: Vec<TextureHandle>,
+}
+
+/// What a backdrop is made for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct BackdropKey {
+    /// The picture, and whether at dawn (the light theme's) or at night.
+    index: usize,
+    dawn: bool,
+    cols: usize,
+    rows: usize,
+    dark: bool,
+    high: bool,
+    /// Where the words are, in cells.
+    calm: [i32; 4],
+    /// Pixels a cell.
+    pitch: usize,
+}
+
+/// A picture of `assets/backdrops`, decoded.
+struct Picture {
+    index: usize,
+    /// At dawn (the light theme's), or at night.
+    dawn: bool,
+    image: Arc<image::RgbImage>,
+}
+
+/// A backdrop made on a thread of its own: its picture (once decoded) and
+/// its frames, none when the picture would not decode.
+type MadeBackdrop = (Option<Picture>, Vec<egui::ColorImage>);
+
+/// What is behind the home screen (Settings ▸ Appearance).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub enum Background {
+    /// Waves in the theme's colours, drawn as they move.
+    #[default]
+    Waves,
+    /// One of the pictures of `assets/backdrops`, a new one each time
+    /// Massif opens.
+    Pictures,
+}
+
+impl Background {
+    pub const ALL: [Background; 2] = [Background::Waves, Background::Pictures];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Background::Waves => "Waves",
+            Background::Pictures => "Pictures",
+        }
+    }
+}
+
 /// When maps were last changed, `None` for those that are not there.
 type Ages = Vec<(PathBuf, Option<SystemTime>)>;
 
@@ -206,7 +275,17 @@ pub struct Home {
     pub heightmap: Option<HeightmapPick>,
     /// The name of the map open before, to go back to.
     pub back_to: Option<String>,
+    /// What is behind it (the settings).
+    pub background: Background,
     waves: Option<Waves>,
+    backdrop: Option<Backdrop>,
+    /// The picture of the backdrop, chosen at random when Massif opens
+    /// (among those not shown yet).
+    choice: usize,
+    choice_set: bool,
+    picture: Option<Picture>,
+    /// The backdrop being made on a thread of its own.
+    making: Option<(BackdropKey, Receiver<MadeBackdrop>)>,
     /// The waves shown still at this time, in seconds (the tests' renders).
     pub wave_time: Option<f64>,
     /// When each recent map was last changed (`None`: it is not there),
@@ -264,6 +343,12 @@ impl Home {
             back_to: None,
             waves: None,
             wave_time: None,
+            background: Background::Waves,
+            backdrop: None,
+            choice: (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos()) as usize) / 7,
+            choice_set: false,
+            picture: None,
+            making: None,
             ages: HashMap::new(),
             ages_asked: None,
             ages_at: f64::NEG_INFINITY,
@@ -275,6 +360,43 @@ impl Home {
             sample_pictures: HashMap::new(),
             sample_drawing: None,
         }
+    }
+
+    /// Show a picture not shown yet (`seen`: the names shown, kept in the
+    /// settings), so that pictures just added come first; once all were,
+    /// any but the last one.
+    pub fn pick_backdrop(&mut self, seen: &mut Vec<String>) {
+        let all = pictures::BACKDROPS;
+        if all.is_empty() {
+            return;
+        }
+        seen.retain(|s| all.iter().any(|(n, _, _)| n == s));
+        let mut pool: Vec<usize> = (0..all.len()).filter(|&k| !seen.iter().any(|s| s == all[k].0)).collect();
+        if pool.is_empty() {
+            let last = seen.last().cloned();
+            seen.clear();
+            pool = (0..all.len()).filter(|&k| Some(all[k].0) != last.as_deref()).collect();
+        }
+        let k = pool.get(self.choice % pool.len().max(1)).copied().unwrap_or(0);
+        self.choice = k;
+        self.choice_set = true;
+        seen.push(all[k].0.to_owned());
+        // A new draw for the next pick.
+        self.choice = k + (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos()) as usize / 7) * all.len();
+    }
+
+    /// Show the picture `k` of `assets/backdrops` (by its place in the
+    /// folder, in name order).
+    #[cfg(test)]
+    pub fn choose_backdrop(&mut self, k: usize) -> &'static str {
+        self.choice = k;
+        pictures::BACKDROPS[k % pictures::BACKDROPS.len()].0
+    }
+
+    /// The number of pictures there are.
+    #[cfg(test)]
+    pub fn backdrops() -> usize {
+        pictures::BACKDROPS.len()
     }
 
     /// Show the home screen over the whole of `ui`. `recent`: the maps
@@ -311,6 +433,22 @@ impl Home {
         crate::startup::frame_step(ui.ctx(), "the home screen: the new map's settings and preview");
         let mut centre = ui.new_child(UiBuilder::new().id_salt("home main").max_rect(main));
         self.main(&mut centre, main, &mut action);
+
+        // Another picture, bottom right: quiet, frameless.
+        if self.background == Background::Pictures && !pictures::BACKDROPS.is_empty() {
+            let at = Rect::from_center_size(pos2(main.right() - 26.0, main.bottom() - 26.0), vec2(28.0, 28.0));
+            let response = ui.interact(at, egui::Id::unique("home another picture"), Sense::click()).on_hover_text(tr!("Another picture"));
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr!("Another picture")));
+            let color = if response.hovered() { pal.text } else { art_weak(&pal) };
+            let glyph = ui.painter().layout_no_wrap(theme::glyph(Icon::Images).to_string(), FontId::proportional(15.0), color);
+            paint_on_art(ui.painter(), at.center() - glyph.size() / 2.0, glyph, &pal, None);
+            if response.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if response.clicked() {
+                action = Some(HomeAction::AnotherPicture);
+            }
+        }
 
         // What happened, at the bottom.
         if let Some((text, error)) = note {
@@ -715,16 +853,128 @@ impl Home {
 
     // ----------------------------------------------------------- backdrop --
 
+    /// What is behind `rect`, as the settings say: the waves or a picture,
+    /// on the page's colour. Only the one shown is kept on the graphics card.
+    fn paint_backdrop(&mut self, ui: &Ui, rect: Rect, calm: Rect) {
+        ui.painter().rect_filled(rect, 0, backdrop_fill(&Palette::of(ui)));
+        match self.background {
+            Background::Waves => {
+                self.backdrop = None;
+                self.paint_waves(ui, rect, calm);
+            }
+            Background::Pictures => {
+                self.waves = None;
+                self.paint_pictures(ui, rect, calm);
+            }
+        }
+    }
+
+    /// The picture behind `rect`: one of `assets/backdrops`, dithered in
+    /// its own palette and dimmed where the settings are written (`calm`),
+    /// its dither moving on every [`FRAME_SECS`]. Made again, on a thread of
+    /// its own, when the window grows past it or the theme changes; the one
+    /// before stays until then (none at first: the page's colour).
+    fn paint_pictures(&mut self, ui: &Ui, rect: Rect, calm: Rect) {
+        let pal = Palette::of(ui);
+        let bg = backdrop_fill(&pal);
+        let all = pictures::BACKDROPS;
+        if all.is_empty() {
+            return;
+        }
+        let index = self.choice % all.len();
+        // The light theme shows the scene at dawn, where there is one.
+        let dawn = !pal.dark && all[index].2.is_some();
+        let ppp = ui.ctx().pixels_per_point();
+        let pitch = ((2.0 * ppp).round() as usize).max(3);
+        let cell = pitch as f32 / ppp;
+        // Made a little larger than needed, so that resizing the window
+        // does not make it again at every step.
+        let bucket = |n: usize| n.div_ceil(32) * 32;
+        let cols = bucket(((rect.width() * ppp) as usize / pitch).max(1));
+        let rows = bucket(((rect.height() * ppp) as usize / pitch).max(1));
+        // Anchored to the bottom left: the land stays, the sky gives way.
+        let placed = |cols: usize, rows: usize| {
+            let size = vec2(cols as f32, rows as f32) * cell;
+            Rect::from_min_size(pos2(rect.left(), rect.bottom() - size.y), size)
+        };
+        let shown = placed(cols, rows);
+        let in_cells = |p: egui::Pos2| [((p.x - shown.left()) / cell) as i32, ((p.y - shown.top()) / cell) as i32];
+        let ([x0, y0], [x1, y1]) = (in_cells(calm.min), in_cells(calm.max));
+        let calm = [x0, y0, x1, y1].map(|v| v.div_euclid(8) * 8);
+        let key = BackdropKey { index, dawn, cols, rows, dark: pal.dark, high: pal.high, calm, pitch };
+        // What a thread made.
+        if let Some((made_for, rx)) = &self.making {
+            match rx.try_recv() {
+                Ok(made) => {
+                    let made_for = *made_for;
+                    self.making = None;
+                    self.take_backdrop(ui.ctx(), made_for, made);
+                }
+                Err(TryRecvError::Disconnected) => self.making = None,
+                Err(TryRecvError::Empty) => {}
+            }
+        }
+        // One at a time: while the window is resized, the next is made for
+        // its size once the one on its way is done.
+        if self.backdrop.as_ref().is_none_or(|b| b.key != key) && self.making.is_none() {
+            let decoded = self.picture.as_ref().filter(|p| p.index == index && p.dawn == dawn).map(|p| p.image.clone());
+            let bytes = if dawn { all[index].2.unwrap_or(all[index].1) } else { all[index].1 };
+            let light = if dawn { Light::Dawn } else if pal.dark { Light::Night } else { Light::Faded };
+            let high = pal.high;
+            let make = move || -> MadeBackdrop {
+                let image = decoded.or_else(|| image::load_from_memory(bytes).ok().map(|img| Arc::new(img.to_rgb8())));
+                let Some(image) = image else { return (None, Vec::new()) };
+                let frames = dither_frames(&image, cols, rows, light, bg, calm, high);
+                (Some(Picture { index, dawn, image }), frames)
+            };
+            if self.in_frame {
+                self.take_backdrop(ui.ctx(), key, make());
+            } else {
+                let (tx, rx) = channel();
+                let ctx = ui.ctx().clone();
+                // In the pool kept for loads, not the one the main thread
+                // draws with (see `in_loading_pool`).
+                let spawned = std::thread::Builder::new().name("massif home picture".into()).spawn(move || {
+                    let _ = tx.send(crate::jobs::in_loading_pool(make));
+                    ctx.request_repaint();
+                });
+                if spawned.is_ok() {
+                    self.making = Some((key, rx));
+                }
+            }
+        }
+        if let Some(b) = &self.backdrop
+            && !b.frames.is_empty()
+        {
+            let (t, focused) = ui.input(|i| (i.time, i.viewport().focused.unwrap_or(true)));
+            let moving = self.animate && !theme::reduce_motion(ui.ctx()) && focused;
+            let k = if moving { (t / FRAME_SECS) as usize % b.frames.len() } else { 0 };
+            // Where it was made for, until the one for this size comes.
+            let at = if b.key.pitch == pitch { placed(b.key.cols, b.key.rows) } else { shown };
+            ui.painter_at(rect).image(b.frames[k].id(), at, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            if moving {
+                ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(FRAME_SECS - t % FRAME_SECS + 0.01));
+            }
+        }
+    }
+
+    /// A backdrop made for `key`: its frames sent to the graphics card.
+    fn take_backdrop(&mut self, ctx: &egui::Context, key: BackdropKey, (picture, frames): MadeBackdrop) {
+        if picture.is_some() {
+            self.picture = picture;
+        }
+        let frames = frames.into_iter().enumerate().map(|(k, image)| ctx.load_texture(format!("home backdrop {k}"), image, egui::TextureOptions::NEAREST)).collect();
+        self.backdrop = Some(Backdrop { key, frames });
+    }
+
     /// The waves behind `rect`: ridges in layers, from the page's colour to
     /// a muted accent, dithered in a few colours (see [`wave_frame`]) and
     /// calmer where the settings are written (`calm`). Drawn again for each
     /// frame of [`WAVE_FPS`] while they move: with the setting on, Reduce
     /// motion off and the window in front; still otherwise, at their first
     /// frame or where they stopped.
-    fn paint_backdrop(&mut self, ui: &Ui, rect: Rect, calm: Rect) {
+    fn paint_waves(&mut self, ui: &Ui, rect: Rect, calm: Rect) {
         let pal = Palette::of(ui);
-        let bg = backdrop_fill(&pal);
-        ui.painter().rect_filled(rect, 0, bg);
         let ppp = ui.ctx().pixels_per_point();
         let pitch = ((2.0 * ppp).round() as usize).max(3);
         let cell = pitch as f32 / ppp;
@@ -909,6 +1159,155 @@ fn shorten(s: &str, n: usize) -> String {
     let head: String = s.chars().take(n / 2).collect();
     let tail: String = s.chars().skip(count - (n - n / 2 - 1)).collect();
     format!("{head}…{tail}")
+}
+
+/// `img` over `cols` × `rows` cells, in frames: covered (its lower part
+/// kept), toned for the theme — and darker (or paler) within `calm` and
+/// around it, where text is written —, then reduced to a palette of its own
+/// sixteen colours with an ordered dither, a little shifted from frame to
+/// frame.
+/// How a picture is laid behind the home screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Light {
+    /// A night scene in the dark theme: night falling from the top.
+    Night,
+    /// A scene at dawn in the light theme: as it is, calmer under the words.
+    Dawn,
+    /// A night scene with no dawn, in the light theme: faded into the page.
+    Faded,
+}
+
+fn dither_frames(img: &image::RgbImage, cols: usize, rows: usize, light: Light, bg: Color32, calm: [i32; 4], high: bool) -> Vec<egui::ColorImage> {
+    let dark = light == Light::Night;
+    // How much of the picture is taken away under the words: more in high
+    // contrast.
+    let hush = |standard: f32| if high { 0.9 } else { standard };
+    use rayon::prelude::*;
+    let (iw, ih) = (img.width() as f32, img.height() as f32);
+    let scale = (cols as f32 / iw).max(rows as f32 / ih);
+    let (cw, ch) = (((cols as f32 / scale).round() as u32).clamp(1, img.width()), ((rows as f32 / scale).round() as u32).clamp(1, img.height()));
+    let (x0, y0) = ((img.width() - cw) / 2, img.height() - ch);
+    let crop = image::imageops::crop_imm(img, x0, y0, cw, ch).to_image();
+    let small = image::imageops::resize(&crop, cols as u32, rows as u32, image::imageops::FilterType::Triangle);
+    let back = [bg.r(), bg.g(), bg.b()].map(|v| v as f32 / 255.0);
+    // Where the text is: a soft oval over the upper part of the column, the
+    // picture dimmed under it and less and less around it — no edge.
+    let [cx0, cy0, cx1, cy1] = calm.map(|v| v as f32);
+    let (ex, ey) = ((cx0 + cx1) / 2.0, cy0 + 0.4 * (cy1 - cy0));
+    let (rx, ry) = (0.78 * (cx1 - cx0).max(1.0), 0.55 * (cy1 - cy0).max(1.0));
+    let pixels: Vec<[f32; 3]> = (0..rows * cols)
+        .into_par_iter()
+        .map(|i| {
+            let (x, y) = ((i % cols) as f32, (i / cols) as f32);
+            let c = small.get_pixel(x as u32, y as u32).0.map(|v| v as f32 / 255.0);
+            // A little more colour, as a dither of few colours loses some.
+            let lum = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+            let c = c.map(|v| (lum + (v - lum) * 1.25).clamp(0.0, 1.0));
+            let near = (-(((x - ex) / rx).powi(2) + ((y - ey) / ry).powi(2)) * 1.1).exp();
+            match light {
+                // Night falls from the top: the sky darker than the land.
+                Light::Night => {
+                    let k = (0.46 + 0.42 * smooth(0.0, 0.8, y / rows as f32)) * (1.0 - hush(0.72) * near);
+                    c.map(|v| v.powf(1.15) * k)
+                }
+                // Dawn: the picture as it is, quieter where the words are.
+                Light::Dawn => {
+                    let k = 0.94 * (1.0 - hush(0.62) * near);
+                    [0, 1, 2].map(|j| back[j] + (c[j] - back[j]) * k)
+                }
+                Light::Faded => {
+                    let k = 0.42 * (1.0 - hush(0.7) * near);
+                    [0, 1, 2].map(|j| back[j] + (c[j] - back[j]) * k)
+                }
+            }
+        })
+        .collect();
+    let palette = median_cut(&pixels, 16);
+    const BAYER: [[u8; 8]; 8] = [
+        [0, 32, 8, 40, 2, 34, 10, 42],
+        [48, 16, 56, 24, 50, 18, 58, 26],
+        [12, 44, 4, 36, 14, 46, 6, 38],
+        [60, 28, 52, 20, 62, 30, 54, 22],
+        [3, 35, 11, 43, 1, 33, 9, 41],
+        [51, 19, 59, 27, 49, 17, 57, 25],
+        [15, 47, 7, 39, 13, 45, 5, 37],
+        [63, 31, 55, 23, 61, 29, 53, 21],
+    ];
+    let spread = if dark { 0.13 } else { 0.1 };
+    [(0usize, 0usize), (4, 4), (2, 6), (6, 2)]
+        .par_iter()
+        .map(|&(ox, oy)| {
+            let out = pixels
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    let (x, y) = (i % cols, i / cols);
+                    let t = (BAYER[(y + oy) % 8][(x + ox) % 8] as f32 + 0.5) / 64.0 - 0.5;
+                    let v = c.map(|ch| ch + t * spread);
+                    let best = palette
+                        .iter()
+                        .min_by(|a, b| {
+                            let d = |p: &[f32; 3]| (p[0] - v[0]).powi(2) + (p[1] - v[1]).powi(2) + (p[2] - v[2]).powi(2);
+                            d(a).total_cmp(&d(b))
+                        })
+                        .copied()
+                        .unwrap_or(back);
+                    let [r, g, b] = best.map(|ch| (ch.clamp(0.0, 1.0) * 255.0).round() as u8);
+                    Color32::from_rgb(r, g, b)
+                })
+                .collect();
+            egui::ColorImage::new([cols, rows], out)
+        })
+        .collect()
+}
+
+/// `n` colours that stand for `pixels` (median cut): the set split again
+/// and again where its colours spread the most.
+fn median_cut(pixels: &[[f32; 3]], n: usize) -> Vec<[f32; 3]> {
+    let step = (pixels.len() / 40_000).max(1);
+    let mut boxes: Vec<Vec<[f32; 3]>> = vec![pixels.iter().step_by(step).copied().collect()];
+    let widest = |b: &[[f32; 3]]| -> (usize, f32) {
+        (0..3)
+            .map(|axis| {
+                let (lo, hi) = b.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p[axis]), hi.max(p[axis])));
+                (axis, hi - lo)
+            })
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .unwrap_or((0, 0.0))
+    };
+    while boxes.len() < n {
+        let Some((k, axis)) = boxes
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.len() > 1)
+            .map(|(k, b)| {
+                let (axis, range) = widest(b);
+                (k, axis, range * (b.len() as f32).sqrt())
+            })
+            .max_by(|a, b| a.2.total_cmp(&b.2))
+            .map(|(k, axis, _)| (k, axis))
+        else {
+            break;
+        };
+        let mut b = boxes.swap_remove(k);
+        b.sort_by(|p, q| p[axis].total_cmp(&q[axis]));
+        let upper = b.split_off(b.len() / 2);
+        boxes.push(b);
+        boxes.push(upper);
+    }
+    boxes
+        .iter()
+        .filter(|b| !b.is_empty())
+        .map(|b| {
+            let sum = b.iter().fold([0.0f32; 3], |s, p| [s[0] + p[0], s[1] + p[1], s[2] + p[2]]);
+            sum.map(|v| v / b.len() as f32)
+        })
+        .collect()
+}
+
+fn smooth(a: f32, b: f32, x: f32) -> f32 {
+    let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 /// The colours the waves are dithered into: from the page's colour to a
@@ -1801,6 +2200,25 @@ mod backdrop_tests {
             {
                 std::fs::create_dir_all(dir).unwrap();
                 h.render().unwrap().save(dir.join("new-map-size-snapped.png")).unwrap();
+            }
+        }
+    }
+
+    /// Every picture of the folder decodes, and dithers into frames of a
+    /// palette of its own.
+    #[test]
+    fn the_backdrops_dither() {
+        assert!(pictures::BACKDROPS.len() >= 4, "{} pictures", pictures::BACKDROPS.len());
+        for (name, bytes, dawn) in pictures::BACKDROPS {
+            // Every scene has its dawn, for the light theme.
+            assert!(dawn.is_some(), "{name}: no dawn");
+            for (bytes, light, bg) in [(*bytes, Light::Night, Color32::from_rgb(8, 8, 9)), (dawn.unwrap_or(bytes), Light::Dawn, Color32::from_rgb(250, 250, 250))] {
+                let img = image::load_from_memory(bytes).unwrap_or_else(|e| panic!("{name}: {e}")).to_rgb8();
+                let frames = dither_frames(&img, 96, 64, light, bg, [20, 10, 70, 50], false);
+                assert_eq!(frames.len(), 4);
+                let colours: std::collections::HashSet<[u8; 4]> = frames[0].pixels.iter().map(|c| c.to_array()).collect();
+                assert!((2..=16).contains(&colours.len()), "{name}: {} colours", colours.len());
+                assert_ne!(frames[0].pixels, frames[1].pixels, "{name}: the frames differ");
             }
         }
     }

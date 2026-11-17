@@ -16,8 +16,7 @@ python3 docs/assets/src/hero.py            # both themes, into docs/assets
 python3 docs/assets/src/hero.py --at 1.2   # frozen 1.2 s in, to look at it
 ```
 
-It needs Pillow, and reads the scenes from `backdrops/` here (the home screen
-showed them before its waves),
+It needs Pillow, and reads the scenes from `crates/massif-app/assets/backdrops`,
 their `_relief` layers (the land cut out, for the dawn) from `scenes/` here.
 
 ## The other figures

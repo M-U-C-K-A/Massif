@@ -26,7 +26,7 @@ from PIL import Image, ImageEnhance
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, "..", "..", ".."))
-BACKDROPS = os.path.join(HERE, "backdrops")
+BACKDROPS = os.path.join(ROOT, "crates", "massif-app", "assets", "backdrops")
 # Each scene's land cut out (its `_relief` layer), for the dawn of the light
 # theme: kept here, as only the banner needs them.
 LAYERS = os.path.join(HERE, "scenes")
