@@ -76,6 +76,10 @@ struct Settings {
     backdrops_seen: Vec<String>,
     /// The Developer panel is offered: frames, memory, the processor, live.
     developer: bool,
+    /// Developer mode: how many frames a second the window may draw, and
+    /// whether it draws every frame, changed or not (to measure).
+    frame_limit: crate::devtools::FrameLimit,
+    draw_always: bool,
     /// The typeface the interface is set in.
     typeface: theme::Typeface,
     /// High contrast: stronger text, lines and edges — as the system says,
@@ -160,6 +164,8 @@ impl Default for Settings {
             reticle: crate::reticle::Reticle::default(),
             backdrops_seen: Vec::new(),
             developer: false,
+            frame_limit: crate::devtools::FrameLimit::Vsync,
+            draw_always: false,
             typeface: theme::Typeface::System,
             high_contrast: Follow::System,
             reduce_motion: Follow::System,
@@ -439,6 +445,8 @@ pub struct MassifApp {
     /// an idle window draws at most `idle_fps` frames a second.
     last_input: f64,
     frame_began: Option<std::time::Instant>,
+    /// When the last frame began, for the limit of Settings ▸ Developer.
+    paced: Option<std::time::Instant>,
     /// What the Developer panel shows, measured frame after frame.
     dev: crate::devtools::DevStats,
     /// A performance recording, on or done, for the problem report.
@@ -950,6 +958,7 @@ impl MassifApp {
             slow_note: None,
             last_input: 0.0,
             frame_began: None,
+            paced: None,
             dev: crate::devtools::DevStats::default(),
             recording: None,
             report_aside: None,
@@ -1709,7 +1718,8 @@ impl MassifApp {
         // draws at most `idle_fps` frames a second.
         let fps = crate::graphics::get().idle_fps;
         let began = self.frame_began.replace(std::time::Instant::now());
-        if !cfg!(test) && fps > 0 && now - self.last_input > 1.0 && ctx.has_requested_repaint() {
+        let measuring = self.settings.developer && self.settings.draw_always;
+        if !cfg!(test) && !measuring && fps > 0 && now - self.last_input > 1.0 && ctx.has_requested_repaint() {
             if let Some(began) = began {
                 let least = std::time::Duration::from_secs_f64(1.0 / fps as f64);
                 let spent = began.elapsed();
@@ -1718,6 +1728,28 @@ impl MassifApp {
                 }
             }
             self.frame_began = Some(std::time::Instant::now());
+        }
+    }
+
+    /// Settings ▸ Developer's frames a second, live: the window's images
+    /// shown in step with the screen or not, the frames held to the number
+    /// chosen, and drawn every frame if asked. Out of developer mode, the
+    /// screen's pace as always.
+    fn limit_frames(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        let limit = if self.settings.developer { self.settings.frame_limit } else { crate::devtools::FrameLimit::Vsync };
+        if let Some(config) = frame.wgpu_surface_config()
+            && config.present_mode != limit.present_mode()
+        {
+            log::info!("frames: {:?} ({:?})", limit, limit.present_mode());
+            frame.set_wgpu_surface_config(eframe::egui_wgpu::SurfaceConfig { present_mode: limit.present_mode(), ..config });
+        }
+        if let Some(fps) = limit.fps()
+            && !cfg!(test)
+        {
+            crate::devtools::pace(&mut self.paced, fps);
+        }
+        if self.settings.developer && self.settings.draw_always {
+            ctx.request_repaint();
         }
     }
 
@@ -1734,8 +1766,28 @@ impl MassifApp {
                         self.show_developer_panel();
                     }
                 });
+                crate::widgets::row(ui, tr!("Frames a second"), |ui| {
+                    use crate::devtools::FrameLimit;
+                    let labels: Vec<String> = FrameLimit::ALL.iter().map(|l| l.label()).collect();
+                    let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+                    let on: Vec<bool> = FrameLimit::ALL.iter().map(|l| *l == self.settings.frame_limit).collect();
+                    if let Some(i) = crate::widgets::button_group(ui, "frame limit", &labels, &on) {
+                        self.settings.frame_limit = FrameLimit::ALL[i];
+                    }
+                });
+                crate::widgets::row(ui, tr!("Draw every frame"), |ui| {
+                    crate::widgets::switch(ui, &mut self.settings.draw_always).on_hover_text(tr!("Even when nothing changes: the charts of the Developer panel then show how many frames the computer makes"));
+                });
             }
         });
+        if self.settings.developer {
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(tr!("Vsync draws in step with the screen. Without it, frames go out as soon as they are drawn (Immediate, or Mailbox where the graphics card has no Immediate; where it has neither, the screen still sets the pace), up to the number chosen or as many as the computer makes. Massif still draws only when something changes, unless it draws every frame."))
+                    .size(11.5)
+                    .color(Palette::of(ui).weak),
+            );
+        }
     }
 
     /// What the Developer panel shows of Massif itself.
@@ -1796,6 +1848,7 @@ impl MassifApp {
             ("Memory for decoded tiles".to_owned(), if s.memory_mb == 0 { "as much as it takes".to_owned() } else { format!("{} MB", s.memory_mb) }),
             ("Autosave".to_owned(), if s.autosave { format!("every {} min", s.autosave_minutes) } else { "off".to_owned() }),
             ("Developer mode".to_owned(), if s.developer { "on" } else { "off" }.to_owned()),
+            ("Frames a second".to_owned(), format!("{:?}{}", s.frame_limit, if s.draw_always { ", every frame" } else { "" })),
         ];
         let g = crate::graphics::get();
         v.push(("Graphics".to_owned(), format!("{:?}{} {g:?}", g.preset(), if s.graphics.is_none() { " (not chosen yet)" } else { "" })));
@@ -4792,6 +4845,8 @@ impl eframe::App for MassifApp {
         self.watch_graphics(ui.ctx());
         let now = ui.input(|i| i.time);
         self.dev.end(now);
+        // (After the frame's work is measured: the wait is not work.)
+        self.limit_frames(ui.ctx(), frame);
         if self.gpu.is_none() {
             self.gpu = frame.wgpu_render_state().map(|rs| crate::report::Gpu::of(&rs.adapter.get_info()));
         }
@@ -6680,9 +6735,33 @@ mod tests {
         assert!(h.state().dev.fps() > 0.0, "frames counted");
         assert!(crate::devtools::memory_in_use().is_some_and(|b| b > 10 << 20), "the memory the system counts");
         assert!(crate::devtools::cpu_time().is_some());
-        if let Some(dir) = dir {
+        if let Some(dir) = &dir {
             h.render().unwrap().save(dir.join("developer-panel.png")).unwrap();
         }
+        // Settings ▸ Developer: the frames a second, chosen with a click;
+        // drawing every frame keeps the window drawing.
+        h.state_mut().dialog = Some(Dialog::Preferences(PrefsSection::Developer));
+        h.run_steps(3);
+        {
+            use egui_kittest::kittest::Queryable;
+            assert!(h.query_by_label("Draw every frame").is_some());
+        }
+        h.state_mut().settings.frame_limit = crate::devtools::FrameLimit::Unlimited;
+        h.state_mut().settings.draw_always = true;
+        h.run_steps(2);
+        assert!(h.ctx.has_requested_repaint(), "drawing every frame asks for the next one");
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("developer-settings.png")).unwrap();
+        }
+        assert_eq!(crate::devtools::FrameLimit::Vsync.present_mode(), eframe::wgpu::PresentMode::AutoVsync);
+        assert_eq!(crate::devtools::FrameLimit::Fps144.present_mode(), eframe::wgpu::PresentMode::AutoNoVsync);
+        assert_eq!(crate::devtools::FrameLimit::Fps144.fps(), Some(144));
+        // A cap of 60: two frames at least a sixtieth of a second apart.
+        let mut last = None;
+        crate::devtools::pace(&mut last, 60);
+        let t = std::time::Instant::now();
+        crate::devtools::pace(&mut last, 60);
+        assert!(t.elapsed().as_secs_f64() > 0.014, "{:?}", t.elapsed());
     }
 
     /// The page of editors: an area's header opens it, the editor under the

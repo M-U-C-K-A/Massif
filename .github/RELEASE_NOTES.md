@@ -2,6 +2,8 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 
 ## New in 1.0.0
 
+**Frames a second without vsync, for developers.** **Settings ▸ Developer** now has **Frames a second**: **Vsync** keeps the window in step with the screen as before, while 60, 120, 144, 240 or **Unlimited** show each frame as soon as it is drawn, up to that number. **Draw every frame** keeps the window drawing even when nothing changes, so the Developer panel's charts show how many frames your computer makes. Both apply at once and only while developer mode is on.
+
 **The right button no longer upsets the player's view.** In 3D Sculpt as the player, with the mouse held by the view, pressing the right button could let the hidden pointer go: it wandered off the view onto the panels around, or out of the window, and the view lost hold of the mouse. While the view holds the mouse, the pointer now stays at the crosshair whatever the system reports, so both buttons always use the tool there, and on macOS the pointer is never moved behind your back (which undid the lock).
 
 **Speckled custom brushes draw a clean outline.** A custom brush made of many specks (THIJS BRUSHES, WorldPainter's noise and cracked earth…) drew its outline over the map as long straight lines shooting across it from the brush, in a tangle of pieces: its specks smaller than a pixel made loops that turned back on themselves, and the lines' corners shot far away. The outline is now traced at the size it is drawn: specks too small to see merge into the shapes they make, and a few hundred loops at most are drawn, in the 2D map as in the 3D views. Of 32 brushes tried (the 14 of THIJS BRUSHES, WorldPainter's 16 and the two it ships with), 18 drew stray lines at some size; none does now.

@@ -235,6 +235,13 @@ their own:
   counts for Massif and the processor's time, in charts that run live; then
   what is kept decoded, the map, the tasks running, the graphics card, and
   why Massif draws again.
+  **Frames a second** sets how the window draws: **Vsync** (the default)
+  keeps in step with the screen; 60, 120, 144 or 240 frames a second at
+  most, or **Unlimited**, show each frame as soon as it is drawn (the
+  graphics card's Immediate mode, else Mailbox; where it has neither, the
+  screen still sets the pace). **Draw every frame** keeps the window
+  drawing when nothing changes, so the charts show how many frames the
+  computer makes. Both apply at once, and only in developer mode.
 
 ## New versions
 

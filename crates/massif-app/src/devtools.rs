@@ -7,6 +7,66 @@ use egui::{Color32, RichText, Sense, Stroke, Ui, pos2, vec2};
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
+/// How many frames a second the window may draw (Settings ▸ Developer):
+/// in step with the screen, as always, or without waiting for it, up to a
+/// number or as many as the computer makes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum FrameLimit {
+    #[default]
+    Vsync,
+    Fps60,
+    Fps120,
+    Fps144,
+    Fps240,
+    Unlimited,
+}
+
+impl FrameLimit {
+    pub const ALL: [FrameLimit; 6] = [FrameLimit::Vsync, FrameLimit::Fps60, FrameLimit::Fps120, FrameLimit::Fps144, FrameLimit::Fps240, FrameLimit::Unlimited];
+
+    pub fn label(self) -> String {
+        match self {
+            FrameLimit::Vsync => tr!("Vsync").to_owned(),
+            FrameLimit::Unlimited => tr!("Unlimited").to_owned(),
+            other => other.fps().unwrap_or_default().to_string(),
+        }
+    }
+
+    /// The most frames a second, when the screen does not set the pace.
+    pub fn fps(self) -> Option<u32> {
+        match self {
+            FrameLimit::Fps60 => Some(60),
+            FrameLimit::Fps120 => Some(120),
+            FrameLimit::Fps144 => Some(144),
+            FrameLimit::Fps240 => Some(240),
+            FrameLimit::Vsync | FrameLimit::Unlimited => None,
+        }
+    }
+
+    /// How the window's images are shown: in step with the screen, or as
+    /// soon as drawn (wgpu takes Immediate, else Mailbox, else the
+    /// screen's pace where the card has neither).
+    pub fn present_mode(self) -> eframe::wgpu::PresentMode {
+        match self {
+            FrameLimit::Vsync => eframe::wgpu::PresentMode::AutoVsync,
+            _ => eframe::wgpu::PresentMode::AutoNoVsync,
+        }
+    }
+}
+
+/// Keep a frame from beginning sooner than `fps` allows after the one
+/// before began (`last`, then now).
+pub fn pace(last: &mut Option<Instant>, fps: u32) {
+    if let Some(began) = *last {
+        let least = Duration::from_secs_f64(1.0 / fps as f64);
+        let spent = began.elapsed();
+        if spent < least {
+            std::thread::sleep(least - spent);
+        }
+    }
+    *last = Some(Instant::now());
+}
+
 /// Seconds of history the charts show.
 const SPAN: f64 = 15.0;
 /// Seconds of history kept: a problem report takes the last minute.
