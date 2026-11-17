@@ -1450,15 +1450,16 @@ impl MapView {
         }
 
         // The world's origin (x 0, z 0), where the game counts blocks
-        // from: a small plus, light in a dark outline to read on any land.
+        // from, with the grid only (alone, it was taken for the pointer): a
+        // small faint plus, light in a dark outline to read on any land.
         let o = self.to_screen(canvas, 0.0, 0.0);
-        if canvas.contains(o) {
-            let halo = Color32::from_black_alpha(150);
-            for (a, b) in [(vec2(0.0, 6.0), vec2(0.0, -6.0)), (vec2(6.0, 0.0), vec2(-6.0, 0.0))] {
-                painter.line_segment([o + a, o + b], Line::new(3.5, halo));
+        if self.grid && canvas.contains(o) {
+            let halo = Color32::from_black_alpha(90);
+            for (a, b) in [(vec2(0.0, 4.0), vec2(0.0, -4.0)), (vec2(4.0, 0.0), vec2(-4.0, 0.0))] {
+                painter.line_segment([o + a, o + b], Line::new(2.5, halo));
             }
-            for (a, b) in [(vec2(0.0, 5.0), vec2(0.0, -5.0)), (vec2(5.0, 0.0), vec2(-5.0, 0.0))] {
-                painter.line_segment([o + a, o + b], Line::new(1.5, Color32::WHITE));
+            for (a, b) in [(vec2(0.0, 3.5), vec2(0.0, -3.5)), (vec2(3.5, 0.0), vec2(-3.5, 0.0))] {
+                painter.line_segment([o + a, o + b], Line::new(1.0, Color32::WHITE.gamma_multiply(0.7)));
             }
             if pointer.is_some_and(|p| response.hovered() && p.distance(o) < 8.0) && !self.view3d_grab {
                 response.clone().on_hover_text(tr!("The world's origin: x 0, z 0"));
