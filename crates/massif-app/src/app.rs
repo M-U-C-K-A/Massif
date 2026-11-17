@@ -2463,7 +2463,7 @@ impl MassifApp {
             let other_map = job.map.is_some_and(|g| g != self.doc.generation);
             let meanwhile = if other_map { tr!("another map was opened meanwhile") } else { tr!("the map changed meanwhile") };
             match outcome {
-                Outcome::World { world, path } => {
+                Outcome::World { world, path, note } => {
                     self.next_generation += 1;
                     let name = world.meta.name.clone();
                     self.doc = Document::new(world, path.clone(), self.next_generation);
@@ -2478,7 +2478,8 @@ impl MassifApp {
                             self.task_done(ctx, Cue::Ready, tr!("Map opened"), &name, secs);
                         }
                         None => {
-                            self.say(ctx, tr!("Created “{name}” in {secs:.1} s", name, secs), false, None);
+                            let said = tr!("Created “{name}” in {secs:.1} s", name, secs);
+                            self.say(ctx, note.map_or_else(|| said.clone(), |n| format!("{said}. {n}")), false, None);
                             self.task_done(ctx, Cue::Ready, tr!("Map created"), &name, secs);
                             // Its relief from a template: on the Terrain side.
                             if let Some(t) = self.after_create.take() {
@@ -2611,7 +2612,7 @@ impl MassifApp {
                         self.say(ctx, msg, false, None);
                     }
                 }
-                Outcome::RealTerrain { tiles, columns, revision, dim } => {
+                Outcome::RealTerrain { tiles, columns, revision, dim, note } => {
                     let label = tr!("Real terrain");
                     if other_map || revision != self.doc.revision || dim != self.doc.dim {
                         crate::sounds::play(Cue::Warning);
@@ -2622,10 +2623,10 @@ impl MassifApp {
                         self.doc.commit();
                         let msg = tr!("Relief of a real place: {columns} columns changed in {secs:.1} s", columns, secs);
                         self.task_done(ctx, Cue::Ready, tr!("Relief of a real place done"), &msg, secs);
-                        self.say(ctx, msg, false, None);
+                        self.say(ctx, note.map_or_else(|| msg.clone(), |n| format!("{msg}. {n}")), false, None);
                     }
                 }
-                Outcome::RealMap { dimension, columns, revision, dim } => {
+                Outcome::RealMap { dimension, columns, revision, dim, note } => {
                     if other_map || revision != self.doc.revision || dim != self.doc.dim {
                         crate::sounds::play(Cue::Warning);
                         self.say(ctx, tr!("Relief of a real place: {meanwhile}, nothing was done", meanwhile), true, None);
@@ -2638,7 +2639,7 @@ impl MassifApp {
                         let (w, d) = rect.unwrap_or_default();
                         let msg = tr!("Relief of a real place: the map is now {w} × {d} blocks, {columns} columns written in {secs:.1} s", w, d, columns, secs);
                         self.task_done(ctx, Cue::Ready, tr!("Relief of a real place done"), &msg, secs);
-                        self.say(ctx, msg, false, None);
+                        self.say(ctx, note.map_or_else(|| msg.clone(), |n| format!("{msg}. {n}")), false, None);
                     }
                 }
                 Outcome::Caves { chunks, blocks, flooded, revision, dim } => {

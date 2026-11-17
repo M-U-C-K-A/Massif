@@ -23,6 +23,7 @@ pub mod atomic;
 pub mod auto;
 pub mod brush;
 pub mod caves;
+pub mod coast;
 pub mod codec;
 pub mod combined;
 pub mod compose;

@@ -299,9 +299,105 @@ pub const SPIKE: f32 = 25.0;
 impl Tiles {
     /// The tiles, cleaned: see [`clean_tile`].
     pub fn new(z: u8, tiles: HashMap<TileKey, Arc<DemTile>>) -> Tiles {
+        Tiles::patched(z, tiles, &std::collections::HashSet::new())
+    }
+
+    /// The tiles, cleaned, `patched` among them made from a coarser zoom's
+    /// (see [`from_coarser`]): those are bent, edge by edge, to meet the
+    /// tiles of their own beside them, so that no seam shows where they
+    /// meet.
+    pub fn patched(z: u8, tiles: HashMap<TileKey, Arc<DemTile>>, patched: &std::collections::HashSet<TileKey>) -> Tiles {
         let raw = Tiles { z, tiles };
-        let cleaned = raw.tiles.par_iter().map(|(k, t)| (*k, Arc::new(raw.cleaned(*k, t)))).collect();
-        Tiles { z, tiles: cleaned }
+        let cleaned: HashMap<TileKey, Arc<DemTile>> = raw.tiles.par_iter().map(|(k, t)| (*k, Arc::new(raw.cleaned(*k, t)))).collect();
+        if patched.is_empty() {
+            return Tiles { z, tiles: cleaned };
+        }
+        let clean = Tiles { z, tiles: cleaned };
+        let met: Vec<(TileKey, Arc<DemTile>)> = patched.par_iter().filter_map(|k| clean.tiles.get(k).map(|t| (*k, Arc::new(clean.met(*k, t, patched))))).collect();
+        let mut tiles = clean.tiles;
+        tiles.extend(met);
+        Tiles { z, tiles }
+    }
+
+    /// Tile `key` bent to meet its neighbours of their own (not in
+    /// `patched`): the difference across each edge, carried into the tile
+    /// less and less (a Coons patch of the four edges' differences).
+    fn met(&self, key: TileKey, tile: &DemTile, patched: &std::collections::HashSet<TileKey>) -> DemTile {
+        let n = TILE_PX;
+        let side = 1u32 << self.z;
+        let neighbour = |dx: i32, dy: i32| {
+            let y = key.y as i64 + dy as i64;
+            if y < 0 || y >= side as i64 {
+                return None;
+            }
+            let k = TileKey { z: key.z, x: (key.x as i64 + dx as i64).rem_euclid(side as i64) as u32, y: y as u32 };
+            if patched.contains(&k) { None } else { self.tiles.get(&k) }
+        };
+        let diff = |a: f32, b: f32| if a.is_finite() && b.is_finite() { a - b } else { f32::NAN };
+        // North, south, west and east: the neighbour's pixel next to the
+        // edge, less the tile's own on it.
+        let edge = |dx: i32, dy: i32| -> Option<Vec<f32>> {
+            match neighbour(dx, dy) {
+                None => None,
+                Some(t) => Some((0..n)
+                    .map(|i| match (dx, dy) {
+                        (0, -1) => diff(t.at(i, n - 1), tile.at(i, 0)),
+                        (0, 1) => diff(t.at(i, 0), tile.at(i, n - 1)),
+                        (-1, 0) => diff(t.at(n - 1, i), tile.at(0, i)),
+                        _ => diff(t.at(0, i), tile.at(n - 1, i)),
+                    })
+                    .collect::<Vec<f32>>())
+                .and_then(|d| {
+                    // A neighbour without data along most of the edge
+                    // says nothing; elsewhere, its gaps take the mean.
+                    let had: Vec<f32> = d.iter().copied().filter(|v| v.is_finite()).collect();
+                    (had.len() * 2 > n).then(|| {
+                        let mean = had.iter().sum::<f32>() / had.len() as f32;
+                        d.iter().map(|v| if v.is_finite() { *v } else { mean }).collect()
+                    })
+                }),
+            }
+        };
+        let (north, south, west, east) = (edge(0, -1), edge(0, 1), edge(-1, 0), edge(1, 0));
+        // An edge with no neighbour of its own goes from one corner to the
+        // other as the edges beside it say, so that the corners agree.
+        let end = |e: &Option<Vec<f32>>, last: bool| e.as_ref().map_or(0.0, |v| if last { v[n - 1] } else { v[0] });
+        let across = |a: f32, b: f32| (0..n).map(|i| a + (b - a) * i as f32 / (n - 1) as f32).collect::<Vec<f32>>();
+        let north = north.clone().unwrap_or_else(|| across(end(&west, false), end(&east, false)));
+        let south = south.clone().unwrap_or_else(|| across(end(&west, true), end(&east, true)));
+        let west = west.unwrap_or_else(|| across(north[0], south[0]));
+        let east = east.unwrap_or_else(|| across(north[n - 1], south[n - 1]));
+        let corner = |a: f32, b: f32| (a + b) / 2.0;
+        let (p00, p10, p01, p11) = (corner(north[0], west[0]), corner(north[n - 1], east[0]), corner(south[0], west[n - 1]), corner(south[n - 1], east[n - 1]));
+        let mut metres = tile.metres.clone();
+        for y in 0..n {
+            let v = y as f32 / (n - 1) as f32;
+            for x in 0..n {
+                let u = x as f32 / (n - 1) as f32;
+                let c = (1.0 - v) * north[x] + v * south[x] + (1.0 - u) * west[y] + u * east[y] - ((1.0 - u) * (1.0 - v) * p00 + u * (1.0 - v) * p10 + (1.0 - u) * v * p01 + u * v * p11);
+                metres[y * n + x] += c;
+            }
+        }
+        DemTile { metres }
+    }
+
+    /// The size of the squares the low land near the sea comes in, in
+    /// pixels (see [`crate::coast::square_size`]): the sources the tiles
+    /// are made of are often coarser than their pixels, blown up square by
+    /// square.
+    pub fn square_px(&self) -> f32 {
+        let mut runs = Vec::new();
+        for t in self.tiles.values() {
+            for row in t.metres.chunks(TILE_PX) {
+                crate::coast::low_runs(row, &mut runs);
+            }
+        }
+        crate::coast::median_run(&mut runs)
+    }
+
+    /// Pixels without data, over all the tiles.
+    pub fn missing_px(&self) -> usize {
+        self.tiles.values().map(|t| t.metres.iter().filter(|m| !m.is_finite()).count()).sum()
     }
 
     /// Tile `key` with its pixels out of reach of the Earth made no data,
@@ -379,6 +475,36 @@ impl Elevation for Tiles {
         let (lat, lon) = area.lat_lon(east, south);
         self.at(lat, lon)
     }
+}
+
+/// Tile `key` made from `parent`, a tile of a coarser zoom over it, its
+/// pixels read between the parent's (bilinear): what stands for a tile that
+/// could not be had.
+pub fn from_coarser(parent: &DemTile, parent_key: TileKey, key: TileKey) -> DemTile {
+    let shift = key.z.saturating_sub(parent_key.z) as u32;
+    let scale = (1u32 << shift) as f64;
+    let n = TILE_PX;
+    // The tile's corner in the parent's pixels.
+    let (ox, oy) = ((key.x as f64 - parent_key.x as f64 * scale) * n as f64 / scale, (key.y as f64 - parent_key.y as f64 * scale) * n as f64 / scale);
+    let at = |x: i64, y: i64| parent.at(x.clamp(0, n as i64 - 1) as usize, y.clamp(0, n as i64 - 1) as usize);
+    let metres = (0..n * n)
+        .map(|k| {
+            let (x, y) = (ox + ((k % n) as f64 + 0.5) / scale - 0.5, oy + ((k / n) as f64 + 0.5) / scale - 0.5);
+            let (i, j) = (x.floor() as i64, y.floor() as i64);
+            let (fx, fy) = ((x - i as f64) as f32, (y - j as f64) as f32);
+            let (a, b, c, d) = (at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1));
+            let top = a + (b - a) * fx;
+            let bottom = c + (d - c) * fx;
+            top + (bottom - top) * fy
+        })
+        .collect();
+    DemTile { metres }
+}
+
+/// The tile of zoom `z` over tile `key` (`z` no finer than its own).
+pub fn parent_of(key: TileKey, z: u8) -> TileKey {
+    let shift = key.z.saturating_sub(z);
+    TileKey { z: key.z - shift, x: key.x >> shift, y: key.y >> shift }
 }
 
 /// A grid of heights read from a file: `metres_per_px` apart, its centre
@@ -503,6 +629,8 @@ pub struct Samples {
     pub nx: usize,
     pub nz: usize,
     pub metres: Vec<f32>,
+    /// The lakes found in the heights (see [`crate::coast::find_lakes`]).
+    pub lakes: crate::coast::Lakes,
 }
 
 impl Samples {
@@ -520,7 +648,7 @@ impl Samples {
                 source.metres(area, bx / area.blocks_per_metre, bz / area.blocks_per_metre).unwrap_or(f32::NAN)
             })
             .collect();
-        Samples { spacing, nx, nz, metres }
+        Samples { spacing, nx, nz, metres, lakes: Default::default() }
     }
 
     /// The lowest and highest real heights read, `None` when none was.
@@ -537,7 +665,39 @@ impl Samples {
         if self.missing() == 0 || self.missing() == self.metres.len() {
             return;
         }
-        fill(&mut self.metres, self.nx, self.nz);
+        let holes: Vec<bool> = self.metres.iter().map(|m| !m.is_finite()).collect();
+        fill_grid(&mut self.metres, self.nx, self.nz);
+        relax(&mut self.metres, &holes, self.nx, self.nz, RELAX);
+    }
+
+    /// Make the samples ready to be ground: the gaps given the heights
+    /// around them ([`Samples::fill_gaps`]), and the coasts shaped (see
+    /// [`crate::coast`]), the area at `blocks_per_metre`.
+    ///
+    /// `square_metres`: the size of the squares the data comes in, when its
+    /// source says (see [`Tiles::square_px`]).
+    pub fn prepare(&mut self, blocks_per_metre: f64, square_metres: Option<f64>) -> Prepared {
+        let missing = self.missing();
+        self.fill_gaps();
+        let mps = self.spacing / blocks_per_metre.max(1e-9);
+        let square = square_metres.map(|m| (m / mps) as f32);
+        // Lakes found in the heights as they came, before the coasts are
+        // shaped.
+        self.lakes = crate::coast::find_lakes(&self.metres, self.nx, self.nz, mps);
+        let coast = crate::coast::shape(&mut self.metres, self.nx, self.nz, mps, square);
+        crate::coast::dig_lakes(&mut self.metres, self.nx, self.nz, mps, &self.lakes);
+        Prepared { missing, coast, lakes: self.lakes.levels.len() }
+    }
+
+    /// The level of the lake at `(bx, bz)` blocks from the area's
+    /// north-west corner, in metres: the nearest sample's.
+    pub fn lake_at(&self, bx: f64, bz: f64) -> Option<f32> {
+        if self.lakes.levels.is_empty() {
+            return None;
+        }
+        let i = ((bx / self.spacing).floor().max(0.0) as usize).min(self.nx - 1);
+        let j = ((bz / self.spacing).floor().max(0.0) as usize).min(self.nz - 1);
+        self.lakes.level(j * self.nx + i)
     }
 
     /// Samples without data.
@@ -567,10 +727,46 @@ impl Samples {
     }
 }
 
+/// What [`Samples::prepare`] found.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct Prepared {
+    /// Samples without data, filled.
+    pub missing: usize,
+    pub coast: crate::coast::CoastReport,
+    /// Lakes found.
+    pub lakes: usize,
+}
+
+/// The biomes of the sea at latitude `lat`, shallow and deep: warm in the
+/// tropics, cold toward the poles (as the game's oceans are).
+pub fn sea_biomes(lat: f64) -> (&'static str, &'static str) {
+    match lat.abs() {
+        l if l < 23.5 => ("minecraft:warm_ocean", "minecraft:deep_lukewarm_ocean"),
+        l if l < 40.0 => ("minecraft:lukewarm_ocean", "minecraft:deep_lukewarm_ocean"),
+        l if l < 58.0 => ("minecraft:ocean", "minecraft:deep_ocean"),
+        l if l < 68.0 => ("minecraft:cold_ocean", "minecraft:deep_cold_ocean"),
+        _ => ("minecraft:frozen_ocean", "minecraft:deep_frozen_ocean"),
+    }
+}
+
+/// The automatic rules for a real place at latitude `lat`: its sea's
+/// biomes by [`sea_biomes`], where the rules keep the game's plain ocean.
+pub fn rules_at(rules: &crate::auto::AutoRules, lat: f64) -> crate::auto::AutoRules {
+    use crate::auto::Land;
+    let mut rules = rules.clone();
+    let (shallow, deep) = sea_biomes(lat);
+    for (land, biome) in [(Land::Water, shallow), (Land::DeepWater, deep)] {
+        if rules.land.biome_of(land) == land.default_biome() {
+            rules.land.set_biome(land, biome);
+        }
+    }
+    rules
+}
+
 /// Fill the `NaN`s of a `w` × `h` grid by push-pull: the grid halved
 /// (each cell the mean of the finite cells under it), filled the same way,
 /// and its cells read back, bilinear, where this one has none.
-fn fill(grid: &mut [f32], w: usize, h: usize) {
+pub fn fill_grid(grid: &mut [f32], w: usize, h: usize) {
     if w <= 1 && h <= 1 {
         if !grid[0].is_finite() {
             grid[0] = 0.0;
@@ -594,7 +790,7 @@ fn fill(grid: &mut [f32], w: usize, h: usize) {
         }
     }
     if half.iter().any(|m| !m.is_finite()) {
-        fill(&mut half, hw, hh);
+        fill_grid(&mut half, hw, hh);
     }
     for z in 0..h {
         for x in 0..w {
@@ -614,6 +810,65 @@ fn fill(grid: &mut [f32], w: usize, h: usize) {
     }
 }
 
+/// Rounds of [`relax`] over the gaps filled.
+const RELAX: usize = 96;
+
+/// Smooth the cells of `holes` of a `w` × `h` grid toward the mean of
+/// their four neighbours (over-relaxed, every other cell at a time), the
+/// others held: a gap filled by [`fill_grid`] meets the data around it with
+/// no step at its edge.
+pub fn relax(grid: &mut [f32], holes: &[bool], w: usize, h: usize, rounds: usize) {
+    // The cells, row by row: a row's cells of one parity read only cells of
+    // the other, so the rows are worked at once.
+    let rows: Vec<Vec<u32>> = (0..h).into_par_iter().map(|z| (0..w).filter(|&x| holes[z * w + x]).map(|x| x as u32).collect()).collect();
+    if rows.iter().all(|r| r.is_empty()) {
+        return;
+    }
+    const OMEGA: f32 = 1.85;
+    struct Cells(*mut f32);
+    unsafe impl Send for Cells {}
+    unsafe impl Sync for Cells {}
+    let cells = Cells(grid.as_mut_ptr());
+    let cells = &cells;
+    for _ in 0..rounds {
+        for parity in 0..2 {
+            rows.par_iter().enumerate().for_each(|(z, row)| {
+                let g = cells.0;
+                for &x in row {
+                    let x = x as usize;
+                    if (x + z) % 2 != parity {
+                        continue;
+                    }
+                    let k = z * w + x;
+                    // SAFETY: this pass writes only cells of its parity and
+                    // reads only cells of the other; each cell is in one row.
+                    unsafe {
+                        let (mut sum, mut n) = (0.0, 0.0);
+                        if x > 0 {
+                            sum += *g.add(k - 1);
+                            n += 1.0;
+                        }
+                        if x + 1 < w {
+                            sum += *g.add(k + 1);
+                            n += 1.0;
+                        }
+                        if z > 0 {
+                            sum += *g.add(k - w);
+                            n += 1.0;
+                        }
+                        if z + 1 < h {
+                            sum += *g.add(k + w);
+                            n += 1.0;
+                        }
+                        let v = g.add(k);
+                        *v += OMEGA * (sum / n - *v);
+                    }
+                }
+            });
+        }
+    }
+}
+
 /// How far apart to read an area for a map: a sample a block, or as far
 /// apart as the data's pixels are, and no more than [`MAX_GRID`] a side.
 pub fn spacing(area: &Area, data_metres: f64) -> f64 {
@@ -623,7 +878,7 @@ pub fn spacing(area: &Area, data_metres: f64) -> f64 {
 }
 
 /// How far from the water a beach goes, in metres.
-pub const BEACH_METRES: f64 = 60.0;
+pub const BEACH_METRES: f64 = 30.0;
 
 /// About where the snow stays all year at latitude `lat`, in metres: some
 /// 5200 m in the tropics, lower toward the poles (some 3000 m in the Alps,
@@ -634,7 +889,7 @@ pub fn snow_line(lat: f64) -> f32 {
 
 /// The ground a real place gives its land, from its real heights: gravel
 /// deep under the water, sand only along the water (as far as a beach goes
-/// on the Earth, about 60 m), rock on steep slopes, snow above the
+/// on the Earth, about 30 m, and no more than 12 blocks), rock on steep slopes, snow above the
 /// [`snow_line`] of its latitude and stony ground under it, grass
 /// elsewhere. The samples' north-west corner lies at block `origin`.
 struct Ground<'a> {
@@ -654,7 +909,7 @@ impl<'a> Ground<'a> {
     fn new(samples: &'a Samples, fit: &'a Fit, area: &Area, theme: crate::generate::Theme, sea: f32, origin: (i32, i32), limits: (f32, f32)) -> Self {
         use crate::generate::{BEACH_REACH, within_reach};
         let wet: Vec<bool> = samples.metres.iter().map(|&m| m.is_finite() && fit.height(m) < sea).collect();
-        let blocks = (BEACH_METRES * area.blocks_per_metre).clamp(BEACH_REACH as f64, 4.0 * BEACH_REACH as f64);
+        let blocks = (BEACH_METRES * area.blocks_per_metre).clamp(2.0, 2.0 * BEACH_REACH as f64);
         let reach = (blocks / samples.spacing).ceil().max(1.0) as usize;
         let shore = within_reach(&wet, samples.nx, reach);
         Self { samples, fit, theme, sea, snow: snow_line(area.lat), origin, limits, shore }
@@ -664,7 +919,17 @@ impl<'a> Ground<'a> {
     /// data), and its height in blocks.
     fn column(&self, bx: i32, bz: i32) -> (f32, f32) {
         let metres = self.samples.at((bx - self.origin.0) as f64 + 0.5, (bz - self.origin.1) as f64 + 0.5);
-        (metres.unwrap_or(f32::MIN), metres.map_or(self.fit.sea - 1.0, |m| self.fit.height(m)).clamp(self.limits.0, self.limits.1))
+        let mut h = metres.map_or(self.fit.sea - 1.0, |m| self.fit.height(m)).clamp(self.limits.0, self.limits.1);
+        if let Some(level) = self.lake(bx, bz) {
+            h = h.min(level as f32 - 1.0);
+        }
+        (metres.unwrap_or(f32::MIN), h)
+    }
+
+    /// The water level of the lake column `(bx, bz)` is in, in blocks.
+    fn lake(&self, bx: i32, bz: i32) -> Option<i16> {
+        let level = self.samples.lake_at((bx - self.origin.0) as f64 + 0.5, (bz - self.origin.1) as f64 + 0.5)?;
+        Some(lake_level(self.fit, level))
     }
 
     fn near_water(&self, bx: i32, bz: i32) -> bool {
@@ -691,6 +956,11 @@ impl<'a> Ground<'a> {
             t.grass
         }
     }
+}
+
+/// The surface of a lake `metres` high, in blocks: the water's level.
+pub fn lake_level(fit: &Fit, metres: f32) -> i16 {
+    fit.height(metres).round().max(fit.sea) as i16
 }
 
 /// A new world of the area: its ground at the heights `fit` gives, the sea
@@ -737,6 +1007,7 @@ pub fn new_world(name: &str, samples: &Samples, fit: &Fit, area: &Area, sea_leve
             let columns: Vec<(f32, f32)> = (0..m * m).map(|k| column(ox - 1 + (k % m) as i32, oz - 1 + (k / m) as i32)).collect();
             let mut top = vec![0f32; n * n];
             let mut terrain = vec![0u16; n * n];
+            let mut fluid = vec![sea_level as i16; n * n];
             for z in 0..n {
                 for x in 0..n {
                     let at = |dx: usize, dz: usize| columns[(z + dz) * m + x + dx].1;
@@ -744,11 +1015,15 @@ pub fn new_world(name: &str, samples: &Samples, fit: &Fit, area: &Area, sea_leve
                     let slope = (at(2, 1) - at(0, 1)).abs().max((at(1, 2) - at(1, 0)).abs()) * 0.5;
                     top[z * n + x] = snap_height(h);
                     terrain[z * n + x] = ground.terrain(ox + x as i32, oz + z as i32, metres, h, slope).0;
+                    if let Some(level) = ground.lake(ox + x as i32, oz + z as i32) {
+                        fluid[z * n + x] = level;
+                    }
                 }
             }
             let mut tile = Tile::ground(0.0, 0, sea_level as i16);
             tile.top = Plane::from_vec(top);
             tile.terrain = Plane::from_vec(terrain);
+            tile.fluid = Plane::from_vec(fluid);
             tile.compact();
             (pos, Blob::from(tile.encode()))
         })
@@ -818,7 +1093,11 @@ pub fn write_ground(edit: &mut Edit, samples: &Samples, fit: &Fit, rect: BlockRe
                         continue;
                     }
                     let Some(metres) = samples.at((x - rect.x0) as f64 + 0.5, (z - rect.z0) as f64 + 0.5) else { continue };
-                    let target = fit.height(metres);
+                    let lake = samples.lake_at((x - rect.x0) as f64 + 0.5, (z - rect.z0) as f64 + 0.5).map(|m| lake_level(fit, m));
+                    let target = match lake {
+                        Some(level) => fit.height(metres).min(level as f32 - 1.0),
+                        None => fit.height(metres),
+                    };
                     let old = tile.top.get(i);
                     let new = if weight == IN { target } else { old + (target - old) * weight as f32 / IN as f32 };
                     let new = snap_height(new.clamp(min_y, max_y));
@@ -828,7 +1107,11 @@ pub fn write_ground(edit: &mut Edit, samples: &Samples, fit: &Fit, rect: BlockRe
                         moved = true;
                     }
                     if crate::selection::lets(weight, x, z) {
-                        let fluid = if new < fit.sea { sea } else { NO_FLUID };
+                        let fluid = match lake {
+                            Some(level) if new < level as f32 => level,
+                            _ if new < fit.sea => sea,
+                            _ => NO_FLUID,
+                        };
                         if tile.fluid.get(i) != fluid {
                             tile.fluid.set(i, fluid);
                             moved = true;
@@ -1077,12 +1360,12 @@ mod tests {
         let (x, y) = ((501 * 256 + 20) as f64 + 0.5, (300 * 256 + 20) as f64 + 0.5);
         let (lat, lon) = from_px(x, y, z);
         assert_eq!(tiles.at(lat, lon), None);
-        let mut s = Samples { spacing: 1.0, nx: 4, nz: 3, metres: vec![1.0, 2.0, 3.0, 4.0, 1.0, f32::NAN, f32::NAN, 4.0, 1.0, 2.0, 3.0, 4.0] };
+        let mut s = Samples { spacing: 1.0, nx: 4, nz: 3, metres: vec![1.0, 2.0, 3.0, 4.0, 1.0, f32::NAN, f32::NAN, 4.0, 1.0, 2.0, 3.0, 4.0], lakes: Default::default() };
         s.fill_gaps();
         assert_eq!(s.missing(), 0);
         assert!(s.metres[5] > 1.0 && s.metres[5] < 3.5 && s.metres[6] > 2.0 && s.metres[6] < 4.0, "{:?}", s.metres);
         // A grid without any data is left as it is.
-        let mut none = Samples { spacing: 1.0, nx: 2, nz: 2, metres: vec![f32::NAN; 4] };
+        let mut none = Samples { spacing: 1.0, nx: 2, nz: 2, metres: vec![f32::NAN; 4], lakes: Default::default() };
         none.fill_gaps();
         assert_eq!(none.missing(), 4);
     }
@@ -1344,5 +1627,192 @@ mod tests {
             history.undo(&mut world);
             assert_eq!(terrain_at(&world, inland), terrain_at(&map, inland), "one undo");
         }
+    }
+
+    /// Heights from a function of metres east and south of the centre.
+    struct Field<F: Fn(f64, f64) -> Option<f32> + Sync>(F);
+    impl<F: Fn(f64, f64) -> Option<f32> + Sync> Elevation for Field<F> {
+        fn metres(&self, _: &Area, east: f64, south: f64) -> Option<f32> {
+            (self.0)(east, south)
+        }
+    }
+
+    /// The largest step between two samples side by side.
+    fn largest_step(s: &Samples) -> f32 {
+        let mut most = 0f32;
+        for j in 0..s.nz {
+            for i in 0..s.nx {
+                let m = s.metres[j * s.nx + i];
+                if i + 1 < s.nx {
+                    most = most.max((s.metres[j * s.nx + i + 1] - m).abs());
+                }
+                if j + 1 < s.nz {
+                    most = most.max((s.metres[(j + 1) * s.nx + i] - m).abs());
+                }
+            }
+        }
+        most
+    }
+
+    #[test]
+    fn a_tile_without_data_is_filled_with_no_seam() {
+        // Gentle hills over tiles of zoom 12; one tile in the middle all no
+        // data (as the server's -32768), another lost and made from the tile
+        // over it two zooms coarser, that one 6 m off (another source).
+        let area = Area { lat: 45.0, lon: 6.0, blocks_per_metre: 0.1, width: 2048, depth: 2048 };
+        let z = 12;
+        let hill = |x: f64, y: f64| (300.0 + 40.0 * (x / 97.0).sin() + 30.0 * (y / 131.0).cos()) as f32;
+        let tile = |k: TileKey, off: f32, scale: f64| {
+            let metres = (0..TILE_PX * TILE_PX).map(|i| hill((k.x as f64 * 256.0 + (i % TILE_PX) as f64 + 0.5) * scale, (k.y as f64 * 256.0 + (i / TILE_PX) as f64 + 0.5) * scale) + off).collect();
+            DemTile { metres }
+        };
+        let keys = area.tiles(z);
+        let mut sorted = keys.clone();
+        sorted.sort();
+        let (hole, lost) = (sorted[sorted.len() / 2], sorted[sorted.len() / 2 + 1]);
+        let mut tiles: HashMap<TileKey, Arc<DemTile>> = keys.iter().map(|&k| (k, Arc::new(tile(k, 0.0, 1.0)))).collect();
+        tiles.insert(hole, Arc::new(DemTile { metres: vec![-32768.0; TILE_PX * TILE_PX] }));
+        let parent = parent_of(lost, z - 2);
+        let coarse = tile(parent, 6.0, 4.0);
+        tiles.insert(lost, Arc::new(from_coarser(&coarse, parent, lost)));
+        let patched: std::collections::HashSet<TileKey> = [lost].into();
+        let source = Tiles::patched(z, tiles, &patched);
+        assert_eq!(source.missing_px(), TILE_PX * TILE_PX);
+        let mut samples = Samples::read(&area, &source, 4.0);
+        let gaps = samples.missing();
+        assert!(gaps > 1000, "{gaps}");
+        let ready = samples.prepare(area.blocks_per_metre, None);
+        assert_eq!((ready.missing, ready.lakes), (gaps, 0));
+        assert_eq!(samples.missing(), 0);
+        // The hills step at most so much from one sample to the next; the
+        // filled tile and the one made from coarser data no more than that,
+        // nowhere a seam.
+        let whole = Samples::read(&area, &Field(|e, s| {
+            let (lat, lon) = area.lat_lon(e, s);
+            let (x, y) = to_px(lat, lon, z);
+            Some(hill(x, y))
+        }), 4.0);
+        let natural = largest_step(&whole);
+        let step = largest_step(&samples);
+        assert!(step < natural * 1.6 + 0.5, "a step of {step} m, the hills' own at most {natural} m");
+    }
+
+    /// A low coast as the land models give it: the sea at 0 m exactly, the
+    /// land rising from 0.5 m, and the band between them ringing either
+    /// side of 0 m in squares; inland, a lagoon at 0 m with a ringing shore,
+    /// and a lake 20 m up, flat. At 2 m a block.
+    fn low_coast() -> (Area, World) {
+        let area = Area { lat: 45.4, lon: 12.3, blocks_per_metre: 0.5, width: 1024, depth: 1024 }.whole_tiles();
+        let ring = |e: f64, s: f64| if (((e / 7.0).floor() + (s / 7.0).floor()) as i64).rem_euclid(2) == 0 { 0.35 } else { -0.3 };
+        let field = Field(move |e: f64, s: f64| {
+            // The coast at 600 m west; land rising eastward.
+            let land = e + 600.0;
+            let lagoon = ((e - 300.0).powi(2) + s.powi(2)).sqrt() - 250.0;
+            let lake = ((e - 300.0).powi(2) + (s - 650.0).powi(2)).sqrt() - 150.0;
+            Some(if land < -30.0 {
+                0.0
+            } else if land < 0.0 {
+                ring(e, s)
+            } else if lagoon < -20.0 {
+                0.0
+            } else if lagoon < 0.0 {
+                ring(e, s)
+            } else if lake < 0.0 {
+                20.0
+            } else {
+                (0.5 + land * 0.01).min(0.5 + lagoon * 0.02 + 0.5).max(0.5) as f32 + 0.05 * ((e / 3.1).sin() * (s / 4.7).cos()) as f32 + if lake < 40.0 { 20.0 * (1.0 - lake / 40.0) as f32 } else { 0.0 }
+            })
+        });
+        let mut samples = Samples::read(&area, &field, 2.0);
+        samples.prepare(area.blocks_per_metre, None);
+        let fit = Vertical { datum: 0.0, sea_level: 62, exaggeration: 1.0, low: -64, high: 320, fit: false }.fit(samples.span().unwrap(), area.blocks_per_metre);
+        assert_eq!(samples.lakes.levels, vec![20.0]);
+        let mut world = new_world("low coast", &samples, &fit, &area, 62, -64, 320);
+        let rules = rules_at(&crate::auto::AutoRules::default(), area.lat);
+        let mut history = crate::history::History::new(1);
+        history.begin("automatic", 0);
+        let base = crate::auto::base_terrain(&world.dims[0], &world.registry);
+        let reader = crate::auto::Reader::new(&rules, &world.registry, 62).with_base(base);
+        crate::auto::paint_over_the_map(&mut history.edit(&mut world, 0), &reader);
+        crate::auto::biomes_over_the_map(&mut history.edit(&mut world, 0), &reader);
+        drop(history);
+        (area, world)
+    }
+
+    fn column(world: &World, x: i32, z: i32) -> (f32, i16, u16, u16) {
+        let t = world.dims[0].ground().view(TilePos::containing(x, z)).unwrap();
+        let i = local_index(x, z);
+        (t.top.get(i), t.fluid.get(i), t.terrain.get(i), t.biome.get(i))
+    }
+
+    #[test]
+    fn a_lagoon_has_water_where_the_source_says_water() {
+        let (_, world) = low_coast();
+        let sand = world.registry.terrain_by_name("Sand").unwrap().0;
+        // The lagoon, 300 m east of the middle and 250 m across: water all
+        // over, not sand, its floor under it.
+        for (e, s) in [(300.0, 0.0), (300.0, 150.0), (150.0, -100.0), (450.0, 100.0)] {
+            let (x, z) = ((e * 0.5) as i32, (s * 0.5) as i32);
+            let (top, fluid, terrain, _) = column(&world, x, z);
+            assert!(fluid == 62 && top < 62.0, "({e}, {s}) m: top {top}, water {fluid}");
+            assert_ne!(terrain, sand, "({e}, {s}) m");
+        }
+        // The lake 20 m up: water at its own level, 10 blocks over the sea.
+        let (top, fluid, _, _) = column(&world, 150, 325);
+        assert!(fluid == 72 && top < 72.0, "the lake: top {top}, water {fluid}");
+        // The sea west of the coast: water, deepening away from it.
+        let (near, far) = (column(&world, (-640.0f64 * 0.5) as i32, 0), column(&world, (-1000.0f64 * 0.5) as i32, 0));
+        assert!(near.1 == 62 && far.1 == 62 && far.0 < near.0, "{near:?} {far:?}");
+        // No pool on the land: between the sea and the lagoon every column
+        // is dry, and sand only along the water (a narrow beach).
+        let (mut pools, mut sandy) = (0, 0);
+        for e in (-560..0).step_by(4) {
+            for s in (-300..300).step_by(8) {
+                let (top, fluid, terrain, _) = column(&world, (e as f64 * 0.5) as i32, (s as f64 * 0.5) as i32);
+                pools += (fluid != NO_FLUID && fluid as f32 > top) as usize;
+                sandy += (terrain == sand) as usize;
+            }
+        }
+        assert_eq!(pools, 0, "pools on the land");
+        assert!(sandy * 10 < 140 * 75, "sand on {sandy} of {} columns", 140 * 75);
+        // The coast follows a line, not the squares of the ringing data: along
+        // it, the shore stays within a few blocks of 600 m west.
+        for s in (-400..400).step_by(16) {
+            let z = (s as f64 * 0.5) as i32;
+            let shore = (-400..0).find(|&x| { let (top, fluid, _, _) = column(&world, x, z); fluid == NO_FLUID || fluid as f32 <= top }).unwrap();
+            assert!((shore + 300).abs() <= 12, "at {s} m south the shore is at {shore}");
+        }
+    }
+
+    #[test]
+    fn the_waters_biomes_are_ocean_river_or_beach() {
+        let (area, world) = low_coast();
+        let reg = &world.registry;
+        let id = |b: u16| reg.biome(crate::registry::BiomeId(b)).id.clone();
+        let (shallow, deep) = sea_biomes(area.lat);
+        let mut seen = std::collections::BTreeMap::new();
+        let dim = &world.dims[0];
+        let (lo, hi) = dim.bounds().unwrap();
+        for z in (lo.z * TILE_SIZE..(hi.z + 1) * TILE_SIZE).step_by(3) {
+            for x in (lo.x * TILE_SIZE..(hi.x + 1) * TILE_SIZE).step_by(3) {
+                let (top, fluid, _, biome) = column(&world, x, z);
+                if fluid == NO_FLUID || fluid as f32 <= top {
+                    continue;
+                }
+                let b = id(biome);
+                assert_ne!(b, "minecraft:plains", "water at ({x}, {z}) is plains");
+                *seen.entry(b).or_insert(0usize) += 1;
+            }
+        }
+        // The sea is the latitude's ocean, the lake over the sea's level is
+        // a river's.
+        assert!(seen.contains_key(shallow) || seen.contains_key(deep), "{seen:?}");
+        assert!(seen.contains_key("minecraft:river"), "{seen:?}");
+        assert!(seen.keys().all(|b| b == shallow || b == deep || b == "minecraft:river" || b == "minecraft:beach"), "{seen:?}");
+        // The coast's sand is beach.
+        let beach = (-310..-280).any(|x| id(column(&world, x, 0).3) == "minecraft:beach");
+        assert!(beach);
+        assert_eq!(sea_biomes(10.0).0, "minecraft:warm_ocean");
+        assert_eq!(sea_biomes(-75.0).1, "minecraft:deep_frozen_ocean");
     }
 }

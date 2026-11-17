@@ -252,6 +252,12 @@ impl TileStore {
                     wait *= 2;
                 }
                 Err(ureq::Error::StatusCode(code)) => return Err(tr!("the server answered {code}", code)),
+                // A connection dropped or slow: once more after a pause; the
+                // network is down only when it fails every time.
+                Err(_) if attempt < 2 => {
+                    std::thread::sleep(wait);
+                    wait *= 2;
+                }
                 Err(e) => {
                     *self.offline_since.lock().expect("not poisoned") = Some(Instant::now());
                     return Err(e.to_string());
@@ -261,13 +267,87 @@ impl TileStore {
         Err(tr!("the server stayed busy").into())
     }
 
-    /// Every tile of `keys`, waiting for them: `progress` hears how many are
-    /// had; stops when `cancel` is set. An error names how many could not be
-    /// had, and why the first could not.
-    pub fn load_all(&self, keys: &[TileKey], progress: &AtomicUsize, cancel: &AtomicBool) -> Result<HashMap<TileKey, Arc<DemTile>>, String> {
+}
+
+/// The tiles of an area as [`TileStore::fetch`] had them.
+pub struct Fetched {
+    pub tiles: HashMap<TileKey, Arc<DemTile>>,
+    /// The tiles that could not be had, made from a coarser zoom's.
+    pub coarser: std::collections::HashSet<TileKey>,
+    /// Tiles that could not be had at any zoom: left without data.
+    pub lost: usize,
+    /// Why the first tile that failed did.
+    pub why: Option<String>,
+}
+
+impl Fetched {
+    /// Tiles that could not be had at the zoom asked.
+    pub fn failed(&self) -> usize {
+        self.coarser.len() + self.lost
+    }
+}
+
+/// How many zooms coarser a tile that could not be had is looked for.
+const COARSER: u8 = 4;
+
+impl TileStore {
+    /// Every tile of `keys`, waiting for them (`progress` hears how many are
+    /// had; stops when `cancel` is set), and those
+    /// that could not be had asked again, then made from the tile of a
+    /// coarser zoom over them (up to [`COARSER`] zooms), or left without
+    /// data (the heights around them fill them in). An error only when not
+    /// a tile could be had.
+    pub fn fetch(&self, keys: &[TileKey], progress: &AtomicUsize, cancel: &AtomicBool) -> Result<Fetched, String> {
+        let (mut tiles, failed, why) = self.load_some(keys, progress, cancel);
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(Fetched { tiles, coarser: Default::default(), lost: 0, why });
+        }
+        if tiles.is_empty() && !keys.is_empty() {
+            let first = why.unwrap_or_default();
+            let offline = !self.online || self.offline();
+            let why = if offline { tr!("offline, and not downloaded before ({first})", first) } else { first };
+            return Err(tr!("{n} of {n2} tiles of elevation could not be had: {why}", n = keys.len(), n2 = keys.len(), why));
+        }
+        // Once more, the network's hiccup past.
+        let mut lost = Vec::new();
+        for key in failed {
+            if cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            match self.load(key) {
+                Ok(t) => {
+                    tiles.insert(key, t);
+                }
+                Err(_) => lost.push(key),
+            }
+        }
+        let mut coarser = std::collections::HashSet::new();
+        let mut parents: HashMap<TileKey, Option<Arc<DemTile>>> = HashMap::new();
+        let mut gone = 0;
+        for key in lost {
+            let made = (1..=COARSER.min(key.z)).find_map(|up| {
+                let parent = massif_core::real::parent_of(key, key.z - up);
+                let tile = parents.entry(parent).or_insert_with(|| self.load(parent).ok()).clone()?;
+                Some(Arc::new(massif_core::real::from_coarser(&tile, parent, key)))
+            });
+            match made {
+                Some(t) => {
+                    tiles.insert(key, t);
+                    coarser.insert(key);
+                }
+                None => gone += 1,
+            }
+        }
+        Ok(Fetched { tiles, coarser, lost: gone, why })
+    }
+
+    /// The tiles of `keys` that could be had, those that could not, and why
+    /// the first could not.
+    fn load_some(&self, keys: &[TileKey], progress: &AtomicUsize, cancel: &AtomicBool) -> (HashMap<TileKey, Arc<DemTile>>, Vec<TileKey>, Option<String>) {
         let next = AtomicUsize::new(0);
         let out = Mutex::new(HashMap::with_capacity(keys.len()));
-        let errors = Mutex::new(Vec::new());
+        let failed = Mutex::new(Vec::new());
+        let why = Mutex::new(None);
         std::thread::scope(|s| {
             for _ in 0..AT_ONCE {
                 s.spawn(|| {
@@ -281,20 +361,18 @@ impl TileStore {
                             Ok(t) => {
                                 out.lock().expect("not poisoned").insert(key, t);
                             }
-                            Err(e) => errors.lock().expect("not poisoned").push(e),
+                            Err(e) => {
+                                log::info!("tile {}/{}/{}: {e}", key.z, key.x, key.y);
+                                why.lock().expect("not poisoned").get_or_insert(e);
+                                failed.lock().expect("not poisoned").push(key);
+                            }
                         }
                         progress.fetch_add(1, Ordering::Relaxed);
                     }
                 });
             }
         });
-        let errors = errors.into_inner().expect("not poisoned");
-        if let Some(first) = errors.first() {
-            let offline = !self.online || self.offline();
-            let why = if offline { tr!("offline, and not downloaded before ({first})", first) } else { first.clone() };
-            return Err(tr!("{n} of {n2} tiles of elevation could not be had: {why}", n = errors.len(), n2 = keys.len(), why));
-        }
-        Ok(out.into_inner().expect("not poisoned"))
+        (out.into_inner().expect("not poisoned"), failed.into_inner().expect("not poisoned"), why.into_inner().expect("not poisoned"))
     }
 }
 
@@ -465,10 +543,26 @@ mod tests {
         assert_eq!(tile.at(200, 3), 200.0);
         // Another, not on disk: a clean error, no network.
         let (had, cancel) = (AtomicUsize::new(0), AtomicBool::new(false));
-        let err = store.load_all(&[key, TileKey { z: 10, x: 531, y: 360 }], &had, &cancel).unwrap_err();
-        assert!(err.starts_with("1 of 2 tiles") && err.contains("offline"), "{err}");
+        let got = store.fetch(&[key, TileKey { z: 10, x: 531, y: 360 }], &had, &cancel).unwrap();
+        assert_eq!((got.tiles.len(), got.lost, got.failed()), (1, 1, 1));
+        assert!(got.why.unwrap().contains("offline"));
         assert_eq!(had.load(Ordering::Relaxed), 2);
+        let err = store.fetch(&[TileKey { z: 10, x: 531, y: 360 }], &had, &cancel).err().unwrap();
+        assert!(err.starts_with("1 of 1 tiles") && err.contains("offline"), "{err}");
         assert_eq!(store.downloaded.load(Ordering::Relaxed), 0);
+        // Fetched: the tile not had is made from the one a zoom coarser
+        // over it, when that one is on disk.
+        let parent = TileKey { z: 9, x: 265, y: 180 };
+        let p = dir.join("9").join("265").join("180.png");
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, encode_terrarium(&vec![77.0; TILE_PX * TILE_PX])).unwrap();
+        let lost = TileKey { z: 10, x: 531, y: 360 };
+        assert_eq!(massif_core::real::parent_of(lost, 9), parent);
+        let got = store.fetch(&[key, lost], &had, &cancel).unwrap();
+        assert_eq!((got.coarser.len(), got.lost, got.failed()), (1, 0, 1));
+        assert!(got.coarser.contains(&lost) && got.tiles[&lost].at(10, 10) == 77.0);
+        // None to be had at any zoom: an error.
+        assert!(store.fetch(&[TileKey { z: 12, x: 0, y: 0 }], &had, &cancel).is_err());
         // A broken file on disk is dropped.
         std::fs::write(&path, b"broken").unwrap();
         assert!(store.load(key).is_err() && !path.exists());
@@ -487,14 +581,14 @@ mod tests {
         let z = area.zoom(massif_core::real::MAX_TILES);
         let keys = area.tiles(z);
         let started = Instant::now();
-        let tiles = store.load_all(&keys, &AtomicUsize::new(0), &AtomicBool::new(false)).unwrap();
+        let tiles = store.fetch(&keys, &AtomicUsize::new(0), &AtomicBool::new(false)).unwrap().tiles;
         eprintln!("zoom {z} ({:.1} m a pixel), {} tiles in {:.2} s", metres_per_px(area.lat, z), keys.len(), started.elapsed().as_secs_f32());
         let span = Samples::read(&area, &Tiles { z, tiles }, 1.0).span().unwrap();
         eprintln!("{span:?}");
         assert!((4700.0..4850.0).contains(&span.high), "{span:?}");
         // Again, from the disk, offline.
         let offline = TileStore::new(Some(dir.clone()), false);
-        assert!(offline.load_all(&keys, &AtomicUsize::new(0), &AtomicBool::new(false)).is_ok());
+        assert!(offline.fetch(&keys, &AtomicUsize::new(0), &AtomicBool::new(false)).is_ok_and(|f| f.failed() == 0));
         eprintln!("{:?}", search("Mont Blanc").unwrap().first());
         let _ = std::fs::remove_dir_all(dir);
     }

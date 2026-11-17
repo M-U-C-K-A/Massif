@@ -1452,13 +1452,29 @@ A world, or a part of one, from the relief of a real place on the Earth.
   1,024 tiles), its pixels then larger than a block.
 - **Clean data.** Heights no place on the Earth has (the gaps of the data)
   and lone spikes and pits a pixel wide are dropped, filled from the
-  heights around them; a ridge or a gully as narrow stays. The sea, which
-  the data often gives as 0 m flat, lies a block under the water at
-  least. The ground is painted from the real place: sand along the water
-  only (about 60 m from it), rock on steep slopes, snow above the snow
-  line of the latitude (about 3,000 m in the Alps, 5,000 m in the
-  tropics), not by the heights of blocks that the scale and the
-  exaggeration move.
+  heights around them, meeting them with no step; a ridge or a gully as
+  narrow stays. A tile the server does not send is asked for again, then
+  made from the tile of a coarser zoom over it, bent at its edges to meet
+  its neighbours; the status bar and the log say how many tiles could not
+  be had.
+- **Coasts.** The data near the sea comes from sources of every
+  resolution, and swings either side of 0 m along a coast: the coastline
+  follows a smooth line through it, not the data's squares, so low coasts
+  and lagoons have no square pools. Where the data's fine part sits in
+  rectangles over a coarse fill (as along the coasts of Sweden), the fill
+  near them takes their coast, and the seams along the rectangles are
+  smoothed away. The sea floor deepens from the shore as far as the
+  bathymetry says, smoothed over its own cells so that no rectangle of its
+  sources shows (some 30 m deep at most where nothing says, far from where
+  something does). A lake the data gives flat over the sea's level is
+  water at its own level, its floor deepening from its shores.
+- **Paint and biomes.** The ground is painted from the real place: sand
+  along the water only (a beach of about 30 m, no more than 12 blocks),
+  rock on steep slopes, snow above the snow line of the latitude (about
+  3,000 m in the Alps, 5,000 m in the tropics), not by the heights of
+  blocks that the scale and the exaggeration move. The biomes follow: the
+  sea is ocean (deep ocean where deep), warm in the tropics and cold toward
+  the poles; lakes and rivers are river; the sand along the water beach.
 - **Heights.** At an **Exaggeration** of 1 the relief keeps the same scale
   upward as across. **Sea level** is the map's, and **Real height there**
   the real height standing at it (0, the sea's; for a place inland, its

@@ -15,7 +15,12 @@ use std::time::Instant;
 
 pub enum Outcome {
     /// A world to open in place of the current one.
-    World { world: World, path: Option<PathBuf> },
+    World {
+        world: World,
+        path: Option<PathBuf>,
+        /// What to say besides (a real place's data that could not be had).
+        note: Option<String>,
+    },
     /// A save point of the map, made on a copy of it (its picture drawn).
     SavePoint(massif_core::versions::SavePoint),
     Saved {
@@ -90,6 +95,7 @@ pub enum Outcome {
         /// The document's revision and dimension it was worked out from.
         revision: u64,
         dim: usize,
+        note: Option<String>,
     },
     /// The same, the map made another size first: the whole dimension, to
     /// put in place of the map's in one undoable step.
@@ -98,6 +104,7 @@ pub enum Outcome {
         columns: usize,
         revision: u64,
         dim: usize,
+        note: Option<String>,
     },
     Failed(String),
     Cancelled,
@@ -247,6 +254,7 @@ impl Job {
     pub fn generate(ctx: &egui::Context, params: GenParams) -> Job {
         let label = tr!("Generating “{name}”", name = params.name);
         Job::spawn(JobKind::Generate, label, None, ctx, move || Outcome::World {
+            note: None,
             world: generate(&params),
             path: None,
         })
@@ -277,7 +285,7 @@ impl Job {
         }
         let label = tr!("Opening {file}", file = display_name(&path));
         Job::spawn(JobKind::Open, label, None, ctx, move || match massif_format::load(&path) {
-            Ok(world) => Outcome::World { world, path: Some(path) },
+            Ok(world) => Outcome::World { world, path: Some(path), note: None },
             Err(e) => Outcome::Failed(tr!("Could not open {file}: {e}", file = display_name(&path), e)),
         })
     }
@@ -453,13 +461,21 @@ impl Job {
             // A new world is whole tiles, each read from data of its own.
             let area = if snapshot.is_none() { job.area.whole_tiles() } else { job.area };
             p.steps.store(if snapshot.is_some() { 3 } else { 2 }, Relaxed);
+            let mut fetched = None;
+            let mut square = None;
             let (source, data_metres): (Box<dyn Elevation>, f64) = match &job.source {
                 crate::real_terrain::Source::Online => {
                     let z = area.zoom(massif_core::real::MAX_TILES);
                     let keys = area.tiles(z);
                     p.tiles.store(keys.len(), Relaxed);
-                    match store.load_all(&keys, &p.fetched, &p.pass.cancel) {
-                        Ok(tiles) => (Box::new(Tiles::new(z, tiles)), metres_per_px(area.lat, z)),
+                    match store.fetch(&keys, &p.fetched, &p.pass.cancel) {
+                        Ok(got) => {
+                            let failed = got.failed();
+                            let tiles = Tiles::patched(z, got.tiles, &got.coarser);
+                            fetched = Some((keys.len(), failed, got.lost, got.why, tiles.missing_px()));
+                            square = Some(tiles.square_px() as f64 * metres_per_px(area.lat, z));
+                            (Box::new(tiles), metres_per_px(area.lat, z))
+                        }
                         Err(e) => return Outcome::Failed(tr!("Relief of a real place: {e}", e)),
                     }
                 }
@@ -475,20 +491,30 @@ impl Job {
             p.step.store(1, Relaxed);
             let mut samples = Samples::read(&area, source.as_ref(), spacing(&area, data_metres));
             drop(source);
-            // A map made another size has new ground with nothing on it:
-            // the heights fill it all, data or not.
-            if snapshot.is_none() || job.resize.is_some() {
-                samples.fill_gaps();
-            }
+            // Gaps in the data given the heights around them, and the coasts
+            // shaped.
+            let prepared = samples.prepare(area.blocks_per_metre, square);
+            let note = real_note(&job.name, fetched, &prepared, samples.metres.len());
             let Some(span) = samples.span() else {
                 return Outcome::Failed(tr!("Relief of a real place: no heights over this area").to_owned());
             };
             let fit = job.vertical.fit(span, area.blocks_per_metre);
             let sea = job.vertical.sea_level;
+            // The sea's biomes by the place's latitude.
+            let rules = massif_core::real::rules_at(&rules, area.lat);
+            let painted_land = snapshot.is_none() || job.repaint;
             let paint = |world: &mut World, history: &mut massif_core::history::History| {
                 let base = massif_core::auto::base_terrain(&world.dims[dim], &world.registry);
                 let reader = massif_core::auto::Reader::new(&rules, &world.registry, sea).with_base(base);
-                massif_core::auto::paint_over_the_map_with(&mut history.edit(world, 0), &reader, &p.pass)
+                let mut painted = massif_core::auto::paint_over_the_map_with(&mut history.edit(world, 0), &reader, &p.pass);
+                // A land painted from the place gets its biomes too: the sea's
+                // ocean, its lakes river, its beaches beach.
+                if painted_land && !painted.cancelled {
+                    let biomes = massif_core::auto::biomes_over_the_map_with(&mut history.edit(world, 0), &reader, &p.pass);
+                    painted.cancelled = biomes.cancelled;
+                    painted.tiles.extend(biomes.tiles);
+                }
+                painted
             };
             match snapshot {
                 None => {
@@ -503,7 +529,7 @@ impl Job {
                     if painted.cancelled {
                         return Outcome::Cancelled;
                     }
-                    Outcome::World { world, path: None }
+                    Outcome::World { world, path: None, note }
                 }
                 Some(mut snapshot) => {
                     let rect = match (job.target, job.resize) {
@@ -535,6 +561,7 @@ impl Job {
                             columns: written.columns,
                             revision,
                             dim,
+                            note,
                         };
                     }
                     let mut changed = written.tiles;
@@ -549,6 +576,7 @@ impl Job {
                         columns: written.columns,
                         revision,
                         dim,
+                        note,
                     }
                 }
             }
@@ -568,6 +596,35 @@ impl Job {
             }
         })
     }
+}
+
+/// What the relief of real place `name` lacked and how it was made good,
+/// written to the log; returned to be said when tiles could not be had
+/// (`fetched`: the tiles asked, failed, lost, why the first failed,
+/// pixels without data) or samples had no data.
+fn real_note(name: &str, fetched: Option<(usize, usize, usize, Option<String>, usize)>, prepared: &massif_core::real::Prepared, samples: usize) -> Option<String> {
+    let c = &prepared.coast;
+    let mut log = format!(
+        "real place “{name}”: {samples} samples, {} without data filled; coast: data in squares of {:.1} samples, {} samples of a coarse fill mended, {} under the sea ({} with a depth of the data)",
+        prepared.missing, c.square, c.coarse, c.sea, c.known
+    );
+    let mut said = None;
+    if let Some((asked, failed, lost, why, px)) = fetched {
+        let coarser = failed - lost;
+        log += &format!("; {asked} tiles, {failed} failed: {coarser} made from a coarser zoom, {lost} lost; {px} pixels without data");
+        if let Some(why) = &why {
+            log += &format!(" (first failure: {why})");
+        }
+        if failed > 0 {
+            said = Some(tr!("{n} of {total} tiles of elevation could not be downloaded: {coarser} were made from coarser data, {lost} filled from the land around them", n = failed, total = asked, coarser, lost));
+        }
+    }
+    if said.is_none() && prepared.missing * 100 > samples {
+        let share = prepared.missing as f64 * 100.0 / samples as f64;
+        said = Some(tr!("{share:.0} % of the area had no elevation data and was filled from the land around it", share));
+    }
+    crate::startup::note(&log);
+    said
 }
 
 /// Whether a path names a WorldPainter world.
@@ -654,7 +711,7 @@ mod tests {
         };
         let job = Job::generate(&ctx, params);
         assert!(job.kind.blocks_editing());
-        let Outcome::World { mut world, path: None } = wait(&job) else {
+        let Outcome::World { mut world, path: None, .. } = wait(&job) else {
             panic!("generation failed")
         };
         assert_eq!(world.meta.name, "Jobs");
@@ -670,7 +727,7 @@ mod tests {
         }
 
         let job = Job::open(&ctx, path.clone());
-        let Outcome::World { world: back, path: Some(p) } = wait(&job) else {
+        let Outcome::World { world: back, path: Some(p), .. } = wait(&job) else {
             panic!("open failed")
         };
         assert_eq!(p, path);

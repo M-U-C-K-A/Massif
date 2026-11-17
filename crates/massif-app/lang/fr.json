@@ -1468,6 +1468,8 @@
  "Relief of a real place: no heights over this area": "Relief d'un lieu réel : aucune hauteur sur cette zone",
  "Relief of a real place: the map is now {w} × {d} blocks, {columns} columns written in {secs:.1} s": "Relief d'un lieu réel : la carte fait maintenant {w} × {d} blocs, {columns} colonnes écrites en {secs:.1} s",
  "Relief of a real place: {columns} columns changed in {secs:.1} s": "Relief d'un lieu réel : {columns} colonnes changées en {secs:.1} s",
+ "{n} of {total} tiles of elevation could not be downloaded: {coarser} were made from coarser data, {lost} filled from the land around them": "{n} tuiles d'altitude sur {total} n'ont pas pu être téléchargées : {coarser} ont été faites à partir de données plus grossières, {lost} complétées par le terrain alentour",
+ "{share:.0} % of the area had no elevation data and was filled from the land around it": "{share:.0} % de la zone n'avait pas de données d'altitude et a été complété par le terrain alentour",
  "Relief of a real place: {e}": "Relief d'un lieu réel : {e}",
  "Relief of a real place: {meanwhile}, nothing was done": "Relief d'un lieu réel : {meanwhile}, rien n'a été fait",
  "Reload": "Recharger",

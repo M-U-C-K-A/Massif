@@ -506,7 +506,9 @@ impl<'a> Reader<'a> {
         let c = s.col(x, z)?;
         let r = &self.rules.land;
         if c.depth > 0.0 {
-            return Some(if s.river[s.index(x, z)] {
+            // Water standing over the sea's level is a lake or a river's:
+            // fresh water, not the sea.
+            return Some(if s.river[s.index(x, z)] || c.level > self.sea + 0.5 {
                 Land::River
             } else if c.depth >= r.deep_water {
                 Land::DeepWater
