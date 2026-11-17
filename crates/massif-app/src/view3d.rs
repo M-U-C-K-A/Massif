@@ -45,6 +45,9 @@ const BUILD_BUDGET: Duration = Duration::from_millis(14);
 /// From how many tiles to build the work goes away from the frames (see
 /// [`Builder`]).
 const BUILD_AWAY: usize = 32;
+/// Cells to build from which a first look at all of them comes first (see
+/// [`build_rough`]).
+const ROUGH_FROM: usize = 256;
 /// The most time a frame spends putting built tiles on the graphics card;
 /// while a view moves, less.
 const UPLOAD_BUDGET: Duration = Duration::from_millis(6);
@@ -1592,6 +1595,20 @@ struct Hit {
     found: bool,
 };
 
+/// Whether one of the four columns a square far off is coloured by (see
+/// `shade`) is built.
+fn square_seen(level: i32, cell: vec2<i32>) -> bool {
+    let size = f32(1 << u32(level));
+    let corner = vec2<f32>(cell) * size;
+    for (var k = 0; k < 4; k++) {
+        let q = corner + size * vec2<f32>(0.25 + 0.5 * f32(k & 1), 0.25 + 0.5 * f32(k >> 1u));
+        if ((column(vec2<i32>(floor(q))) & 0xfffu) != 0u) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /// Walk the ray `o + t d` (grid coordinates) from `t_in` to `t_out` down
 /// the max pyramid: skip every square whose highest column stays under the
 /// ray, go down into the others, stop on a column, or on a square smaller
@@ -1641,7 +1658,10 @@ fn trace(o: vec3<f32>, d: vec3<f32>, t_in: f32, t_out: f32, axis_in: i32, pix: f
             }
             continue;
         }
-        if (level == 0 || size <= t * pix) {
+        // A square smaller than a pixel is coloured by four of its columns
+        // (see `shade`): while none of them is built yet, a finer square
+        // that is, rather than a square of no colour (it was black).
+        if (level == 0 || (size <= t * pix && square_seen(level, cell))) {
             hit.found = true;
             hit.level = level;
             hit.cell = cell;
@@ -3758,9 +3778,148 @@ impl GridShape {
 /// A tile of the grid on a very large map: `stride` × `stride` tiles of the
 /// map, a column every `stride` blocks, their water drawn as a surface (the
 /// meshes are left out at this scale).
-fn build_coarse(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, cell: TilePos, stride: i32, style: Style) -> TileBuild {
+/// The summaries of the 2D map's tiles (see `MapCache::summaries_of`).
+pub type Glimpse = HashMap<TilePos, std::sync::Arc<crate::map_render::Summary>>;
+
+/// How far, in tiles, a tile the 2D map did not read takes the summary of
+/// one it did: seen whole, the map reads a tile of every 2 × 2 or 4 × 4.
+const GLIMPSE_REACH: i32 = 4;
+
+/// The summary of `tile`, or of the nearest tile read within
+/// [`GLIMPSE_REACH`].
+fn nearest_summary(glimpse: &Glimpse, tile: TilePos) -> Option<&std::sync::Arc<crate::map_render::Summary>> {
+    (0..=GLIMPSE_REACH).find_map(|r| {
+        (-r..=r).flat_map(move |dz| (-r..=r).map(move |dx| (dx, dz))).filter(|(dx, dz)| dx.abs().max(dz.abs()) == r).find_map(|(dx, dz)| glimpse.get(&TilePos::new(tile.x + dx, tile.z + dz)))
+    })
+}
+
+/// Whether `glimpse` gives every tile of grid cell `cell` the map has a
+/// summary (its own or a near one).
+fn glimpsed(dim: &Dimension, glimpse: &Glimpse, cell: TilePos, stride: i32) -> bool {
+    let ground = dim.ground();
+    (0..stride * stride).all(|k| {
+        let t = TilePos::new(cell.x * stride + k % stride, cell.z * stride + k / stride);
+        !ground.contains(t) || nearest_summary(glimpse, t).is_some()
+    })
+}
+
+/// A first look at grid cell `cell` from what the 2D map already read of
+/// its tiles (a few columns a tile, `glimpse`): no tile of the map is
+/// decoded, so the whole of a large map stands within a second. Each place
+/// takes the summary's column nearest it: its height, its top as the view
+/// colours it, its water.
+#[allow(clippy::too_many_arguments)]
+fn build_glimpse(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, cell: TilePos, stride: i32, style: Style, glimpse: &Glimpse) -> TileBuild {
     let n = TILE_SIZE as usize;
-    let per = n / stride as usize;
+    let places = n / stride as usize;
+    let mut heights = vec![0u16; n * n];
+    let mut colors = vec![0u16; n * n];
+    let mut pairs: Vec<Skin> = Vec::new();
+    let mut index: HashMap<Skin, u16> = HashMap::new();
+    let water_pair = if style.lava { Skin::flat([207, 92, 20], [160, 60, 10]) } else { Skin::flat([52, 96, 200], [40, 70, 160]) };
+    let colours = Colors {
+        reg,
+        mode: style.mode,
+        sea,
+        auto: AutoBiome::new(reg),
+        stone: reg.block(reg.well_known.stone).color,
+        deepslate: reg.block(reg.well_known.deepslate).color,
+        mat: Materializer::new(reg, seed, dim.min_y),
+        seed: seed as u64,
+        lava: style.lava,
+    };
+    let mut pair = |skin: Skin| *index.entry(skin).or_insert_with(|| {
+        pairs.push(skin);
+        (pairs.len() - 1) as u16
+    });
+    for rz in 0..stride {
+        for rx in 0..stride {
+            let tile = TilePos::new(cell.x * stride + rx, cell.z * stride + rz);
+            if !dim.ground().contains(tile) {
+                continue;
+            }
+            let Some(summary) = nearest_summary(glimpse, tile) else { continue };
+            // Each of the summary's columns coloured once (a few a tile),
+            // for every place it stands for.
+            let mut known: Vec<Option<(u16, u16)>> = vec![None; summary.len()];
+            for j in 0..places {
+                for i in 0..places {
+                    let (lx, lz) = ((i * stride as usize + stride as usize / 2) as i64, (j * stride as usize + stride as usize / 2) as i64);
+                    let slot = summary.slot(lx, lz);
+                    let (h, col) = match known[slot] {
+                        Some(v) => v,
+                        None => {
+                            let sample = summary.sample(slot);
+                            let v = if sample.height.is_nan() {
+                                (0, 0)
+                            } else {
+                                let (x, z) = (tile.x * TILE_SIZE + lx as i32, tile.z * TILE_SIZE + lz as i32);
+                                let top = massif_core::compose::block_top(sample.height);
+                                let wet = sample.fluid != NO_FLUID && sample.fluid as f32 > sample.height + 0.3;
+                                if style.water && wet {
+                                    ((sample.fluid as i32 - dim.min_y).clamp(1, HEIGHT_MASK as i32) as u16, pair(water_pair))
+                                } else {
+                                    let skin = colours.top(sample.terrain, dim.min_y, top, x, z, 0.0, &sample, sample.cover, wet);
+                                    ((top - dim.min_y).clamp(1, HEIGHT_MASK as i32) as u16, pair(skin))
+                                }
+                            };
+                            known[slot] = Some(v);
+                            v
+                        }
+                    };
+                    if h == 0 {
+                        continue;
+                    }
+                    let k = (rz as usize * places + j) * n + rx as usize * places + i;
+                    heights[k] = h;
+                    colors[k] = col;
+                }
+            }
+        }
+    }
+    TileBuild {
+        heights,
+        colors,
+        depths: Vec::new(),
+        pairs,
+        airs: Vec::new(),
+        faces: ChunkFaces::default(),
+    }
+}
+
+fn build_coarse(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, cell: TilePos, stride: i32, style: Style) -> TileBuild {
+    build_sampled(dim, reg, sea, seed, cell, stride, 1, style)
+}
+
+/// A first look at grid cell `cell` (`stride` × `stride` tiles), a column
+/// every `stride × rough` blocks spread over its `rough` × `rough` places:
+/// the whole map is up at once, rightly shaped and coloured, before every
+/// column is read (see [`ROUGH`]).
+fn build_rough(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, cell: TilePos, stride: i32, style: Style) -> TileBuild {
+    build_sampled(dim, reg, sea, seed, cell, stride, ROUGH, style)
+}
+
+/// The passes of a large build (see [`View3d::start_builder`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pass {
+    /// From the 2D map's summaries of the tiles.
+    Glimpse,
+    /// A column every [`ROUGH`] places, decoded.
+    Rough,
+    /// Every column.
+    Fine,
+}
+
+/// How much coarser the first look at a large map is than its grid: a
+/// column every 8 of its places, a 64th of the reading.
+const ROUGH: usize = 8;
+
+#[allow(clippy::too_many_arguments)]
+fn build_sampled(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, cell: TilePos, stride: i32, rough: usize, style: Style) -> TileBuild {
+    let n = TILE_SIZE as usize;
+    // Columns read along a tile, and every how many blocks.
+    let step = stride as usize * rough;
+    let per = n / step;
     let ground = dim.ground();
     let mut heights = vec![0u16; n * n];
     let mut colors = vec![0u16; n * n];
@@ -3771,14 +3930,15 @@ fn build_coarse(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, cell: Tile
         for rx in 0..stride {
             let real = TilePos::new(cell.x * stride + rx, cell.z * stride + rz);
             let Some(view) = ground.view(real) else { continue };
-            let b = build_tile_part(dim, reg, sea, seed, real, style, Some(stride as usize));
+            let b = build_tile_part(dim, reg, sea, seed, real, style, Some(step));
             let base = pairs.len() as u16;
             pairs.extend(&b.pairs);
+            // Places of the cell a tile covers, along each side.
+            let places = n / stride as usize;
             for j in 0..per {
                 for i in 0..per {
-                    let (lx, lz) = (i * stride as usize + stride as usize / 2, j * stride as usize + stride as usize / 2);
+                    let (lx, lz) = (i * step + step / 2, j * step + step / 2);
                     let c = lz * n + lx;
-                    let k = (rz as usize * per + j) * n + rx as usize * per + i;
                     let top = view.top.get(c);
                     let fluid = view.fluid.get(c);
                     let (mut h, mut col) = (b.heights[c], base + b.colors[c]);
@@ -3793,8 +3953,13 @@ fn build_coarse(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, cell: Tile
                             (pairs.len() - 1) as u16
                         });
                     }
-                    heights[k] = h;
-                    colors[k] = col;
+                    for dj in 0..rough {
+                        for di in 0..rough {
+                            let k = (rz as usize * places + j * rough + dj) * n + rx as usize * places + i * rough + di;
+                            heights[k] = h;
+                            colors[k] = col;
+                        }
+                    }
                 }
             }
         }
@@ -3824,7 +3989,9 @@ struct Builder {
     /// What it builds for: the document's generation, the style and the
     /// grid's stride.
     key: (u64, Style, i32),
-    results: std::sync::mpsc::Receiver<(TilePos, TileBuild)>,
+    /// What it built: the cell, its build, and whether it is a first look
+    /// (see [`build_rough`]) the cell's own build comes after.
+    results: std::sync::mpsc::Receiver<(TilePos, TileBuild, bool)>,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// The tiles it builds, and how many it brought.
     given: HashSet<TilePos>,
@@ -3856,6 +4023,18 @@ fn cell_reads(cell: TilePos, stride: i32, around: i32) -> impl Iterator<Item = T
 
 /// Whether the builder decodes the tiles it reads once a part (see
 /// [`View3d::start_builder`]); tests time it without.
+/// Whether a large build begins with a first look at every cell (see
+/// [`build_rough`]); tests time it against no first look.
+fn rough_first() -> bool {
+    #[cfg(test)]
+    return !NO_ROUGH.load(std::sync::atomic::Ordering::Relaxed);
+    #[cfg(not(test))]
+    true
+}
+
+#[cfg(test)]
+pub static NO_ROUGH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn warm_builds() -> bool {
     #[cfg(test)]
     return !COLD_BUILDS.load(std::sync::atomic::Ordering::Relaxed);
@@ -3976,6 +4155,10 @@ pub struct View3d {
     /// while (see [`View3d::rest_if_hidden`]).
     shown_pass: u64,
     shown_at: f64,
+    /// What the 2D map read of the tiles, given when the view is about to
+    /// build all of a map (see [`View3d::wants_glimpse`]).
+    /// It is for the map's generation and revision then.
+    glimpse: Option<((u64, u64), std::sync::Arc<Glimpse>)>,
 }
 
 /// How long a 3D view stays out of sight before its tiles and the
@@ -4155,6 +4338,7 @@ impl Default for View3d {
             look_seen: None,
             shown_pass: 0,
             shown_at: 0.0,
+            glimpse: None,
         }
     }
 }
@@ -4280,10 +4464,35 @@ impl View3d {
         self.pairs.list().len()
     }
 
+    /// The cells of the grid that show something (built, or a first look),
+    /// and all of them.
+    #[cfg(test)]
+    pub fn covered(&self) -> (usize, usize) {
+        let all = self.cells.as_ref().map_or(0, |c| c.1.len());
+        (self.tiles.len(), all)
+    }
+
     /// Whether tiles are being built away from the frames.
     #[cfg(test)]
     pub fn building(&self) -> bool {
         self.builder.is_some()
+    }
+
+    /// Whether the view has nothing built and is about to build the whole
+    /// map: the 2D map's summaries of the tiles then give it a first look
+    /// at once ([`View3d::give_glimpse`]).
+    pub fn wants_glimpse(&self, doc: &Document) -> bool {
+        let fresh = self.tiles.is_empty() || self.generation != Some(doc.generation);
+        fresh && self.glimpse.as_ref().is_none_or(|(k, _)| *k != (doc.generation, doc.revision))
+    }
+
+    pub fn give_glimpse(&mut self, doc: &Document, glimpse: Glimpse) {
+        self.glimpse = (!glimpse.is_empty()).then(|| ((doc.generation, doc.revision), std::sync::Arc::new(glimpse)));
+    }
+
+    /// Whether tiles are still to build, here or away from the frames.
+    pub fn is_building(&self) -> bool {
+        self.builder.is_some() || self.pending > 0
     }
 
     pub fn tiles_built(&self) -> usize {
@@ -4811,23 +5020,27 @@ impl View3d {
                     break;
                 }
                 match b.results.try_recv() {
-                    Ok((t, built)) => {
-                        b.delivered += 1;
+                    Ok((t, built, rough)) => {
+                        if !rough {
+                            b.delivered += 1;
+                        }
                         let edited = b.edited.contains(&t);
                         // Built again here since it changed: newer than this.
-                        if edited && self.tiles.get(&t).is_some_and(|c| !c.stale) {
+                        // A first look never covers a cell's own build.
+                        if (edited || rough) && self.tiles.get(&t).is_some_and(|c| !c.stale) {
                             continue;
                         }
                         let packed = self.pairs.pack(&built);
                         renderer.upload_columns(t, &packed);
-                        if stride == 1 {
+                        if stride == 1 && !rough {
                             renderer.upload(t, &built.faces);
                         }
                         self.tiles.insert(
                             t,
                             TileInfo {
                                 faces: built.faces.solid.len() + built.faces.water.len(),
-                                stale: edited,
+                                // A first look stays to build.
+                                stale: edited || rough,
                             },
                         );
                         uploaded += 1;
@@ -4930,6 +5143,9 @@ impl View3d {
         let ring = if style.mode == MapMode::Slope { SLOPE_REACH } else { 1 };
         let around = ((massif_core::objects::max_reach(&reg) + ring).max(1) as u32).div_ceil(TILE_SIZE as u32) as i32;
         let warm = warm_builds();
+        let rough_first = rough_first();
+        // What the 2D map read, if of the map as it is.
+        let glimpse = self.glimpse.take().filter(|(k, _)| *k == (doc.generation, doc.revision)).map(|(_, g)| g);
         let (sea, seed) = (doc.world.meta.sea_level as f32, doc.world.meta.seed);
         let (tx, rx) = std::sync::mpsc::channel();
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -4939,33 +5155,66 @@ impl View3d {
         let spawned = std::thread::Builder::new().name("massif 3d builder".into()).spawn(move || {
             let pool = builders();
             pool.install(|| {
-                // The nearest first, as many at a time as there are threads
-                // (twice: they do not all take as long).
-                for part in order.chunks(2 * pool.current_num_threads()) {
-                    if stop.load(std::sync::atomic::Ordering::Relaxed) {
-                        return;
-                    }
-                    // The copy is cold: each read of a tile decoded it
-                    // again, and a tile is read by its own build and by
-                    // its neighbours' (a dozen times a rebuild of the
-                    // whole map). The tiles this part reads are decoded
-                    // once, and those read longest ago put away again.
-                    if warm {
-                        let mut read: Vec<TilePos> = part.iter().flat_map(|&c| cell_reads(c, stride, around)).collect();
-                        read.sort_unstable_by_key(|t| (t.z, t.x));
-                        read.dedup();
-                        for level in &mut dim.levels {
-                            level.warm(&read);
-                            level.trim(WARM_TILES.max(read.len()));
-                        }
-                    }
-                    let built: Vec<(TilePos, TileBuild)> = part.par_iter().map(|&t| (t, build_cell(&dim, &reg, sea, seed, t, stride, style))).collect();
-                    for b in built {
-                        if tx.send(b).is_err() {
+                // Many cells: a first look at all of them first, the nearest
+                // first, then every column. The first look is the 2D map's
+                // summaries of the tiles where it read them all (nothing
+                // decoded: the whole map within a second), else a column
+                // every `ROUGH` places (see `build_rough`): the whole map
+                // stands at once rather than black or missing.
+                let first = rough_first && order.len() >= ROUGH_FROM;
+                let (seen, unseen): (Vec<TilePos>, Vec<TilePos>) = match glimpse.as_deref().filter(|_| first) {
+                    Some(g) => order.iter().partition(|&&c| glimpsed(&dim, g, c, stride)),
+                    None => (Vec::new(), order.clone()),
+                };
+                let passes: Vec<(Pass, &[TilePos])> = if first {
+                    vec![(Pass::Glimpse, &seen[..]), (Pass::Rough, &unseen[..]), (Pass::Fine, &order[..])]
+                } else {
+                    vec![(Pass::Fine, &order[..])]
+                };
+                for (pass, cells) in passes {
+                    // As many at a time as there are threads (twice: they do
+                    // not all take as long; more for a first look, quicker).
+                    let batch = match pass {
+                        Pass::Glimpse => 32,
+                        Pass::Rough => 8,
+                        Pass::Fine => 2,
+                    } * pool.current_num_threads();
+                    for part in cells.chunks(batch) {
+                        if stop.load(std::sync::atomic::Ordering::Relaxed) {
                             return;
                         }
+                        // The copy is cold: each read of a tile decoded it
+                        // again, and a tile is read by its own build and by
+                        // its neighbours' (a dozen times a rebuild of the
+                        // whole map). The tiles this part reads are decoded
+                        // once, and those read longest ago put away again.
+                        if warm && pass != Pass::Glimpse {
+                            let mut read: Vec<TilePos> = part.iter().flat_map(|&c| cell_reads(c, stride, around)).collect();
+                            read.sort_unstable_by_key(|t| (t.z, t.x));
+                            read.dedup();
+                            for level in &mut dim.levels {
+                                level.warm(&read);
+                                level.trim(WARM_TILES.max(read.len()));
+                            }
+                        }
+                        let built: Vec<(TilePos, TileBuild, bool)> = part
+                            .par_iter()
+                            .map(|&t| {
+                                let b = match (pass, glimpse.as_deref()) {
+                                    (Pass::Glimpse, Some(g)) => build_glimpse(&dim, &reg, sea, seed, t, stride, style, g),
+                                    (Pass::Fine, _) => build_cell(&dim, &reg, sea, seed, t, stride, style),
+                                    _ => build_rough(&dim, &reg, sea, seed, t, stride, style),
+                                };
+                                (t, b, pass != Pass::Fine)
+                            })
+                            .collect();
+                        for b in built {
+                            if tx.send(b).is_err() {
+                                return;
+                            }
+                        }
+                        ctx.request_repaint();
                     }
-                    ctx.request_repaint();
                 }
             });
         });

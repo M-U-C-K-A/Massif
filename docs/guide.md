@@ -238,8 +238,10 @@ their own:
   software renderer; Medium on recent integrated graphics; High on a
   graphics card of its own) after drawing a few frames of the 3D view as a
   trial, and writes the choice in `startup.log`; a preset you choose is
-  never changed. When the 3D views stay slow for a while as you move them,
-  a quiet note offers the preset one step lower, once a run.
+  never changed. When the 3D views stay slow for a while as you move them
+  (not while their tiles are still being built), a quiet note suggests the
+  preset one step lower, with a button that applies it; its × stops the
+  suggestion for good.
 - **Developer**: developer mode adds a **Developer** panel to every area's
   menu, as the brushes or the layers: frames a second and the time each
   takes (and how much of it is Massif's own work), the memory the system
@@ -1962,7 +1964,10 @@ The map and the 3D view are made to follow the hand:
 - A 3D view the workspace no longer shows (another workspace, or its area
   given to another editor) stops building its tiles at once, and after 20
   seconds out of sight gives back its tiles and the memory it holds on the
-  graphics card; shown again, it builds them again. Its threads for the
+  graphics card; shown again, it builds them again. Opened on a large map,
+  it first shows all of it at once from what the 2D map has read of every
+  tile (a few columns a tile), then reads every column, the nearest first;
+  a part not built yet is never drawn black. Its threads for the
   tiles are at most 16, below the interface's priority on Windows.
 - A drag of the map let go while moving glides on, slowing down within a
   quarter of a second (any click stops it); the zoom buttons and keys and

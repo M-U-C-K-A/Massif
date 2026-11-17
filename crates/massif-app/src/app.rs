@@ -101,6 +101,9 @@ struct Settings {
     check_updates: bool,
     /// The version the user chose not to hear about again.
     skipped_version: Option<String>,
+    /// The suggestion of a lighter graphics preset when the 3D views stay
+    /// slow was dismissed: it is not made again.
+    no_slow_note: bool,
     /// The author written in the packs exported.
     pack_author: String,
     /// The language of the interface: the system's, or one chosen.
@@ -177,6 +180,7 @@ impl Default for Settings {
             autosave_minutes: 5,
             check_updates: true,
             skipped_version: None,
+            no_slow_note: false,
             pack_author: String::new(),
             language: crate::i18n::Language::System,
             tour_done: false,
@@ -1754,8 +1758,11 @@ impl MassifApp {
             self.last_input = now;
         }
         // Slow frames of a 3D view being moved: a lighter preset suggested,
-        // once a run, never past Low.
-        if crate::graphics::take_drew_3d() && now - self.last_input < 0.5 {
+        // once a run, never past Low, never once dismissed. Not while its
+        // tiles are being built: those frames are slow for a while
+        // whatever the preset.
+        let building = self.view3d.is_building() || self.sculpt3d.is_building();
+        if crate::graphics::take_drew_3d() && now - self.last_input < 0.5 && !building && !self.settings.no_slow_note {
             let preset = crate::graphics::get().preset();
             if preset != crate::graphics::Preset::Low && self.slow_frames.frame(dt) {
                 self.slow_note = preset.lower();
@@ -3200,12 +3207,12 @@ impl MassifApp {
                         card(ui, &mut |ui| {
                             ui.label(RichText::new(theme::glyph(Icon::Gauge).to_string()).color(pal.weak).size(13.0));
                             let name = if lower == crate::graphics::Preset::Medium { tr!("Medium") } else { tr!("Low") };
-                            ui.add(egui::Label::new(RichText::new(tr!("The 3D views are slow here. The {preset} graphics preset would be lighter.", preset = name)).size(12.5)).wrap());
+                            ui.add(egui::Label::new(RichText::new(tr!("The 3D views have been slow for a while. The {preset} graphics preset could make them smoother.", preset = name)).size(12.5)).wrap());
                             if ui.button(tr!("Use {preset}", preset = name)).clicked() {
                                 lighter = true;
                             }
                             let x = egui::Button::new(RichText::new(theme::glyph(Icon::X).to_string()).color(pal.weak)).fill(Color32::TRANSPARENT).stroke(Stroke::NONE);
-                            if ui.add(x).on_hover_text(tr!("Not now")).clicked() {
+                            if ui.add(x).on_hover_text(tr!("Don't suggest this again")).clicked() {
                                 not_now = true;
                             }
                         });
@@ -3248,6 +3255,7 @@ impl MassifApp {
         }
         if not_now {
             self.slow_note = None;
+            self.settings.no_slow_note = true;
         }
         // Drawn again only for what moves: the progress of tasks, the fade
         // of a message, and its end (an error stays, still).
@@ -3525,7 +3533,14 @@ impl MassifApp {
                     self.map_center = Some(view.center);
                 }
             }
-            EditorKind::View3d => self.view3d.ui(&mut cui, frame, &mut self.doc, &mut self.tools, self.map_center, false),
+            EditorKind::View3d => {
+                // Opened on a map it has not built: what the 2D map read of
+                // its tiles, for a first look at once.
+                if self.view3d.wants_glimpse(&self.doc) {
+                    self.view3d.give_glimpse(&self.doc, self.map_cache.summaries_of(self.doc.generation));
+                }
+                self.view3d.ui(&mut cui, frame, &mut self.doc, &mut self.tools, self.map_center, false)
+            }
             EditorKind::Sculpt3d => {
                 egui::Frame::new()
                     .inner_margin(egui::Margin::symmetric(8, 6))
@@ -7830,6 +7845,130 @@ mod tests {
             assert!(share > 0.2, "the textures are not drawn up close at High: {:.0} % of the pixels differ", share * 100.0);
             assert_eq!(h.state().view3d.look_problem(), None);
         }
+    }
+
+    /// The suggestion of a lighter preset when the 3D views stay slow: a
+    /// card with a button that applies it and an × that dismisses it for
+    /// good (rendered with MASSIF_SNAPSHOT_DIR, slow-note.png).
+    #[test]
+    fn the_slow_note_offers_and_remembers_its_dismissal() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(3);
+        h.state_mut().slow_note = Some(crate::graphics::Preset::Low);
+        h.run_steps(3);
+        h.get_by_label("Use Low");
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            let image = h.render().expect("rendered");
+            let (w, hh) = (image.width(), image.height());
+            image::imageops::crop_imm(&image, w.saturating_sub(520), hh.saturating_sub(120), 520, 120).to_image().save(dir.join("slow-note.png")).unwrap();
+        }
+        h.get_by_label(&theme::glyph(Icon::X).to_string()).click();
+        h.run_steps(3);
+        assert!(h.state().slow_note.is_none() && h.state().settings.no_slow_note, "dismissed for good");
+        assert!(h.query_by_label("Use Low").is_none());
+    }
+
+    /// The 3D view opened on a huge map (MASSIF_MOVE_WORLD, a .massif;
+    /// MASSIF_GRAPHICS_PRESET), with and without a first look at the whole
+    /// map before its every column: the time until every cell of the view
+    /// shows something, and until all are built, and the share of black
+    /// pixels on the way (none, now: a cell not built yet showed black from
+    /// afar). Renders the view after a second and when whole
+    /// (MASSIF_SNAPSHOT_DIR, open3d-*.png).
+    #[test]
+    fn the_3d_view_of_a_huge_map_comes_whole_at_once() {
+        let Some(path) = std::env::var_os("MASSIF_MOVE_WORLD").map(PathBuf::from) else {
+            return;
+        };
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        // Black: every channel under 16, the sky and the land never are.
+        let black = |rgba: &[u8]| rgba.chunks(4).filter(|p| p[0] < 16 && p[1] < 16 && p[2] < 16).count() as f32 / (rgba.len() / 4).max(1) as f32;
+        for rough in [false, true] {
+            crate::view3d::NO_ROUGH.store(!rough, std::sync::atomic::Ordering::Relaxed);
+            let path = path.clone();
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(vec2(1440.0, 900.0))
+                .with_step_dt(1.0 / 60.0)
+                .with_accessibility_check(false)
+                .wgpu()
+                .build_eframe(move |cc| {
+                    theme::install(&cc.egui_ctx);
+                    MassifApp::for_tests(generate(&GenParams { tiles_x: 2, tiles_z: 2, ..GenParams::default() }))
+                });
+            h.run_steps(3);
+            let spaces = &h.state().layout.workspaces;
+            let with_3d = spaces.iter().position(|w| w.root.shows(EditorKind::Map) && w.root.shows(EditorKind::View3d)).expect("a workspace with both views");
+            let without = spaces.iter().position(|w| w.root.shows(EditorKind::Map) && !w.root.shows(EditorKind::View3d) && !w.root.shows(EditorKind::Sculpt3d)).expect("a workspace with the map alone");
+            h.state_mut().layout.active = without;
+            let ctx = h.ctx.clone();
+            h.state_mut().jobs.push(Job::open(&ctx, path));
+            while !h.state().jobs.is_empty() {
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            h.state_mut().dialog = None;
+            if let Ok(name) = std::env::var("MASSIF_GRAPHICS_PRESET") {
+                use crate::graphics::{Graphics, Preset};
+                let preset = [Preset::Low, Preset::Medium, Preset::High].into_iter().find(|p| format!("{p:?}").eq_ignore_ascii_case(&name)).expect("low, medium or high");
+                crate::graphics::set(Graphics::of(preset));
+            }
+            h.state_mut().layout.active = without;
+            // The 2D map drawn whole first, as it is when a map opens.
+            let mut waited = 0;
+            while (waited < 30 || h.state().map_cache.busy()) && waited < 6000 {
+                h.step();
+                waited += 1;
+            }
+            let how = if rough { "first look, then every column" } else { "every column at once" };
+            let name = if rough { "rough" } else { "plain" };
+            h.state_mut().layout.active = with_3d;
+            let started = std::time::Instant::now();
+            let (mut whole, mut shot, mut worst, mut frames) = (None, false, 0.0f32, 0);
+            let mut work = Vec::new();
+            loop {
+                let t = std::time::Instant::now();
+                h.step();
+                work.push(t.elapsed().as_secs_f32() * 1000.0);
+                frames += 1;
+                let (shown, all) = h.state().view3d.covered();
+                let at = started.elapsed().as_secs_f32();
+                if frames % 10 == 0
+                    && let Some((w, hh, rgba)) = h.state().view3d.read_back()
+                {
+                    worst = worst.max(black(&rgba));
+                    if !shot && at > 1.0 {
+                        shot = true;
+                        if let Some(dir) = &dir {
+                            image::save_buffer(dir.join(format!("open3d-{name}-1s.png")), &rgba, w, hh, image::ColorType::Rgba8).unwrap();
+                        }
+                    }
+                }
+                if whole.is_none() && all > 0 && shown >= all {
+                    whole = Some(at);
+                    if let (Some(dir), Some((w, hh, rgba))) = (&dir, h.state().view3d.read_back()) {
+                        image::save_buffer(dir.join(format!("open3d-{name}-whole.png")), &rgba, w, hh, image::ColorType::Rgba8).unwrap();
+                    }
+                }
+                if (frames > 30 && h.state().view3d.pending() == 0 && !h.state().view3d.building()) || at > 240.0 {
+                    break;
+                }
+            }
+            let done = started.elapsed().as_secs_f32();
+            work.sort_by(f32::total_cmp);
+            let n = work.len();
+            eprintln!(
+                "{how}: the whole view in {}, every column in {done:.1} s ({frames} frames, a frame's work middle {:.1} ms, p95 {:.1}); at most {:.1} % of the view black on the way",
+                whole.map_or("never".to_owned(), |w| format!("{w:.2} s")),
+                work[n / 2],
+                work[n * 95 / 100],
+                worst * 100.0
+            );
+            if rough {
+                assert!(worst < 0.005, "{:.1} % of the 3D view was black while it was built", worst * 100.0);
+            }
+        }
+        crate::view3d::NO_ROUGH.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// The 3D view opened and closed on a huge map (MASSIF_MOVE_WORLD, a

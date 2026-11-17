@@ -278,9 +278,23 @@ impl Summary {
     /// The column at `(lx, lz)` in the tile, or the summary's nearest one
     /// before it.
     fn at(&self, lx: i64, lz: i64) -> Sample {
+        self.samples[self.slot(lx, lz)]
+    }
+
+    /// Which of its columns stands for column `(lx, lz)` of the tile.
+    pub(crate) fn slot(&self, lx: i64, lz: i64) -> usize {
         let step = 128 / self.size as i64;
         let index = |l: i64| (((l - SUMMARY_OFFSET).max(0) / step) as usize).min(self.size - 1);
-        self.samples[index(lz) * self.size + index(lx)]
+        index(lz) * self.size + index(lx)
+    }
+
+    /// Its column `slot` (see [`Summary::slot`]), and how many it holds.
+    pub(crate) fn sample(&self, slot: usize) -> Sample {
+        self.samples[slot]
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.samples.len()
     }
 
     fn bytes(&self) -> usize {
@@ -1184,6 +1198,18 @@ pub struct MapCache {
     /// Chunk textures kept around (64 KiB each).
     pub max_chunks: usize,
     busy: bool,
+}
+
+impl MapCache {
+    /// The summaries of the tiles the map has read, for the map of
+    /// generation `generation`: what the 3D view shows of a large map
+    /// before it reads every column (see `view3d::build_glimpse`).
+    pub fn summaries_of(&self, generation: u64) -> HashMap<TilePos, Arc<Summary>> {
+        if self.generation != generation {
+            return HashMap::new();
+        }
+        self.summaries.iter().filter_map(|(t, e)| Some((*t, e.summary.clone()?))).collect()
+    }
 }
 
 impl Default for MapCache {
