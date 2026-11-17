@@ -106,12 +106,16 @@ pub enum Outcome {
         dim: usize,
         note: Option<String>,
     },
-    /// An image to import as a mask, read once through, and the map's
-    /// picture with the blocks it covers.
+    /// Images to import as masks, each read once through, and the map's
+    /// picture with the blocks it covers (when asked for).
     MaskRead {
-        path: PathBuf,
-        info: Arc<massif_core::mask::ImageInfo>,
+        images: Vec<(PathBuf, Arc<massif_core::mask::ImageInfo>)>,
         map: Option<(egui::ColorImage, [i32; 4])>,
+    },
+    /// A region of the map written as images: its folder and files.
+    RegionExported {
+        dir: PathBuf,
+        files: Vec<PathBuf>,
     },
     Failed(String),
     Cancelled,
@@ -427,45 +431,59 @@ impl Job {
         })
     }
 
-    /// Read the image at `path` once through for Import mask, and draw the
-    /// picture of the map `snapshot` to show where it lands.
-    pub fn read_mask(ctx: &egui::Context, path: PathBuf, snapshot: World) -> Job {
+    /// Read the images at `paths` once through for Import mask, and draw
+    /// the picture of the map `snapshot`, when given, to show where they
+    /// land.
+    pub fn read_mask(ctx: &egui::Context, paths: Vec<PathBuf>, snapshot: Option<World>) -> Job {
         use massif_core::auto::Steps;
         let progress = Arc::new(Steps::default());
         let p = progress.clone();
-        let name = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-        Job::spawn(JobKind::Auto, tr!("Reading “{name}”", name), Some(progress as Arc<dyn JobProgress>), ctx, move || {
-            let map = std::thread::scope(|s| {
+        let label = match paths.as_slice() {
+            [one] => tr!("Reading “{name}”", name = one.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned())),
+            _ => tr!("Reading {n} images", n = paths.len()),
+        };
+        Job::spawn(JobKind::Auto, label, Some(progress as Arc<dyn JobProgress>), ctx, move || {
+            let (read, map) = std::thread::scope(|s| {
                 let picture = s.spawn(|| {
+                    let snapshot = snapshot.as_ref()?;
                     let (lo, hi) = snapshot.dims.first()?.bounds()?;
                     let t = massif_core::TILE_SIZE;
-                    let img = massif_core::thumbnail::render(&snapshot, 384)?;
+                    let img = massif_core::thumbnail::render(snapshot, 384)?;
                     Some((egui::ColorImage::from_rgb([img.width() as usize, img.height() as usize], img.as_raw()), [lo.x * t, lo.z * t, (hi.x + 1) * t, (hi.z + 1) * t]))
                 });
-                let info = massif_core::mask::survey(&path, &p);
-                (info, picture.join().ok().flatten())
+                let mut images = Vec::new();
+                for path in &paths {
+                    match massif_core::mask::survey(path, &p) {
+                        Ok(info) => images.push((path.clone(), Arc::new(info))),
+                        Err(e) => {
+                            let name = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                            return (Err(format!("{name}: {e}")), None);
+                        }
+                    }
+                }
+                (Ok(images), picture.join().ok().flatten())
             });
-            match map {
-                (Ok(info), map) => Outcome::MaskRead { path, info: Arc::new(info), map },
-                (Err(_), _) if p.cancel.load(std::sync::atomic::Ordering::Relaxed) => Outcome::Cancelled,
-                (Err(e), _) => Outcome::Failed(tr!("That image cannot be read: {e}", e)),
+            match read {
+                Ok(images) => Outcome::MaskRead { images, map },
+                Err(_) if p.cancel.load(std::sync::atomic::Ordering::Relaxed) => Outcome::Cancelled,
+                Err(e) => Outcome::Failed(tr!("That image cannot be read: {e}", e)),
             }
         })
     }
 
-    /// The image at `path` painted onto dimension `dim` of a snapshot of the
-    /// document at `revision`, as `settings` say.
-    #[allow(clippy::too_many_arguments)]
-    pub fn import_mask(ctx: &egui::Context, mut snapshot: World, dim: usize, path: PathBuf, info: Arc<massif_core::mask::ImageInfo>, settings: massif_core::mask::MaskSettings, locks: massif_core::registry::Locks, revision: u64) -> Job {
+    /// The images painted onto dimension `dim` of a snapshot of the document
+    /// at `revision`, each as its settings say, as one step to undo.
+    pub fn import_mask(ctx: &egui::Context, mut snapshot: World, dim: usize, images: Vec<(PathBuf, Arc<massif_core::mask::ImageInfo>, massif_core::mask::MaskSettings)>, locks: massif_core::registry::Locks, revision: u64) -> Job {
         use massif_core::auto::Steps;
         let progress = Arc::new(Steps::default());
         let p = progress.clone();
-        Job::spawn(JobKind::Auto, tr!("Importing the mask").to_owned(), Some(progress as Arc<dyn JobProgress>), ctx, move || {
+        let label = if images.len() > 1 { tr!("Importing {n} masks", n = images.len()) } else { tr!("Importing the mask").to_owned() };
+        Job::spawn(JobKind::Auto, label, Some(progress as Arc<dyn JobProgress>), ctx, move || {
             let label = tr!("Import mask");
             let mut history = massif_core::history::History::new(1);
             history.locks = locks;
             history.begin(label, dim);
-            let changes = match massif_core::mask::apply(&mut history.edit(&mut snapshot, 0), &path, &info, &settings, &p) {
+            let changes = match massif_core::mask::apply_all(&mut history.edit(&mut snapshot, 0), &images, &p) {
                 Ok(c) => c,
                 Err(e) => return Outcome::Failed(tr!("Import mask: {e}", e)),
             };
@@ -482,6 +500,21 @@ impl Job {
                 columns: changes.columns,
                 revision,
                 dim,
+            }
+        })
+    }
+
+    /// The part `rect` of dimension `dim` of a snapshot written into the
+    /// folder `dir` as images (see `massif_core::mask::export_region`).
+    pub fn export_region(ctx: &egui::Context, snapshot: World, dim: usize, rect: massif_core::BlockRect, dir: PathBuf, parts: massif_core::mask::RegionParts) -> Job {
+        use massif_core::auto::Steps;
+        let progress = Arc::new(Steps::default());
+        let p = progress.clone();
+        Job::spawn(JobKind::Export, tr!("Exporting the region").to_owned(), Some(progress as Arc<dyn JobProgress>), ctx, move || {
+            match massif_core::mask::export_region(&snapshot.dims[dim], &snapshot.registry, rect, &dir, &parts, &p) {
+                Ok(files) => Outcome::RegionExported { dir, files },
+                Err(_) if p.cancel.load(std::sync::atomic::Ordering::Relaxed) => Outcome::Cancelled,
+                Err(e) => Outcome::Failed(tr!("The region could not be exported: {e}", e)),
             }
         })
     }

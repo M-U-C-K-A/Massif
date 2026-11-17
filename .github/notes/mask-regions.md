@@ -1,0 +1,3 @@
+**Regions out and back, several masks at once**
+
+File ▸ Export Region… writes a part of the map (the selection, the whole map or blocks typed in) as images of 1 pixel a block: a 16-bit heightmap, an image for each terrain and layer found there, and on demand the biomes, the water and the annotations, with a region.txt that says where it lies. Edit ▸ Import Mask… takes several images at once, each with its own target, all in the same place and as one step to undo; given the images of a region, it puts them back where they came from and gives each the target its name says. A heightmap of a part of the map can fade into the land around it over a number of blocks, without a cliff at the seam.

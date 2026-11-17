@@ -6,11 +6,18 @@
 //! what is painted, with a picture of where it lands; the import runs in
 //! the background, as one step to undo. The image may stay on the 2D map
 //! as a guide to trace over, never exported.
+//!
+//! Several images can go in at once, each with what it paints and how,
+//! all in the same place, as one step to undo: the heightmap and masks of
+//! a region of the map worked on in another tool. Images of a region
+//! written by File ▸ Export Region… come back by themselves: the
+//! `region.txt` beside them places them, and their names say what they
+//! paint (`massif_core::mask::named`).
 
 use crate::theme::{self, Icon, Palette, RichTextExt};
 use crate::widgets::{Field, button_group, combo, row, switch, well};
 use egui::{Color32, Rect, RichText, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
-use massif_core::mask::{ImageInfo, Mapping, MaskSettings, Mode, Placement, Target};
+use massif_core::mask::{ImageInfo, Mapping, MaskSettings, Mode, Named, Placement, Region, Target};
 use massif_core::registry::Registry;
 use massif_core::tile::ANNOTATION_COLORS;
 use std::path::PathBuf;
@@ -54,9 +61,29 @@ struct LayerChoice {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Origin {
     /// Its top left corner on x 0, z 0, a block a pixel.
-    MapOrigin,
+    AtZero,
     /// As large as the map lets it, in its middle.
     Fit,
+    /// Where its `region.txt` says.
+    Region,
+}
+
+/// One image's own settings, while another one is shown.
+#[derive(Clone)]
+struct Entry {
+    path: PathBuf,
+    info: Arc<ImageInfo>,
+    kind: Kind,
+    by_colour: bool,
+    colour: u16,
+    layer: usize,
+    terrain: u16,
+    biome: u16,
+    water: i32,
+    black: f32,
+    white: f32,
+    mapping: Mapping,
+    mode: Mode,
 }
 
 /// The dialog's settings and what it shows.
@@ -93,19 +120,31 @@ pub struct MaskForm {
     pub guide: bool,
     pub opacity: f32,
     preview: Option<(egui::TextureHandle, u64)>,
+    /// Every image, the one shown (`current`) as it was when last left:
+    /// its settings are the form's own while it is shown.
+    entries: Vec<Entry>,
+    current: usize,
+    /// Where the images' `region.txt` places them, if they have one.
+    region: Option<Region>,
+    /// Blocks over which a heightmap fades into the land around it.
+    pub feather: u32,
 }
 
 /// What the dialog wants done.
 pub enum Choice {
     Keep,
     Close,
-    Import(MaskSettings),
+    /// More images to read and add.
+    AddImages,
+    Import(Vec<(PathBuf, Arc<ImageInfo>, MaskSettings)>),
 }
 
 impl MaskForm {
     /// The dialog for the image at `path`, surveyed as `info`, onto a map of
     /// `bounds` (blocks), its picture `map`.
-    pub fn new(path: PathBuf, info: Arc<ImageInfo>, reg: &Registry, bounds: [i32; 4], heights: (i32, i32), sea: i32, map: Option<(egui::ColorImage, [i32; 4])>) -> Self {
+    pub fn new(images: Vec<(PathBuf, Arc<ImageInfo>)>, reg: &Registry, bounds: [i32; 4], heights: (i32, i32), sea: i32, map: Option<(egui::ColorImage, [i32; 4])>) -> Self {
+        let mut images = images.into_iter();
+        let (path, info) = images.next().expect("an image at least");
         let mut layers = Vec::new();
         for (k, c) in reg.covers.iter().enumerate().filter(|(_, c)| !c.removed) {
             layers.push(LayerChoice { target: Target::Cover(k as u16 + 1), name: c.name.clone(), color: c.color });
@@ -159,22 +198,187 @@ impl MaskForm {
             guide: false,
             opacity: 0.5,
             preview: None,
+            entries: Vec::new(),
+            current: 0,
+            region: None,
+            feather: 16,
         };
+        let first = form.stash();
+        let first = form.guessed(first, reg);
+        form.load(first.clone());
+        form.entries.push(first);
         // An image of the map's size lands on it; another one at the origin.
         let (w, h) = (form.info.header.width as i32, form.info.header.height as i32);
-        if (w, h) == (bounds[2] - bounds[0], bounds[3] - bounds[1]) {
+        if form.region.is_some() {
+            form.set_origin(Origin::Region);
+        } else if (w, h) == (bounds[2] - bounds[0], bounds[3] - bounds[1]) {
             form.set_origin(Origin::Fit);
         } else {
-            form.set_origin(Origin::MapOrigin);
+            form.set_origin(Origin::AtZero);
         }
+        form.add(images.collect(), reg);
         form
     }
+
+    /// The form's settings as an entry.
+    fn stash(&self) -> Entry {
+        Entry {
+            path: self.path.clone(),
+            info: self.info.clone(),
+            kind: self.kind,
+            by_colour: self.by_colour,
+            colour: self.colour,
+            layer: self.layer,
+            terrain: self.terrain,
+            biome: self.biome,
+            water: self.water,
+            black: self.black,
+            white: self.white,
+            mapping: self.mapping,
+            mode: self.mode,
+        }
+    }
+
+    fn load(&mut self, e: Entry) {
+        self.path = e.path;
+        self.info = e.info;
+        self.kind = e.kind;
+        self.by_colour = e.by_colour;
+        self.colour = e.colour;
+        self.layer = e.layer;
+        self.terrain = e.terrain;
+        self.biome = e.biome;
+        self.water = e.water;
+        self.black = e.black;
+        self.white = e.white;
+        self.mapping = e.mapping;
+        self.mode = e.mode;
+        self.preview = None;
+    }
+
+    /// `e` with what its name and its `region.txt` say: what it paints,
+    /// and the heights of its black and white.
+    fn guessed(&mut self, mut e: Entry, reg: &Registry) -> Entry {
+        use massif_core::mask::file_safe;
+        let region = Region::beside(&e.path);
+        if self.region.is_none() {
+            self.region = region;
+        }
+        let same = |a: &str, b: &str| file_safe(a).to_lowercase() == *b;
+        let layer = |target: &dyn Fn(Target) -> bool| self.layers.iter().position(|l| target(l.target));
+        match massif_core::mask::named(&e.path) {
+            Some(Named::Height) => e.kind = Kind::Height,
+            Some(Named::Annotations) => e.kind = Kind::Annotations,
+            Some(Named::Water) => e.kind = Kind::Water,
+            Some(Named::Terrain(name)) => {
+                if let Some(k) = reg.terrains.iter().position(|t| same(&t.name, &name)) {
+                    (e.kind, e.terrain) = (Kind::Terrain, k as u16);
+                }
+            }
+            Some(Named::Biome(name)) => {
+                if let Some(k) = reg.biomes.iter().position(|b| same(&b.name, &name)) {
+                    (e.kind, e.biome) = (Kind::Biome, k as u16);
+                }
+            }
+            Some(named) => {
+                let found = match &named {
+                    Named::Cover(n) => layer(&|t| matches!(t, Target::Cover(k) if reg.cover(k).is_some_and(|c| same(&c.name, n)))),
+                    Named::Trees(n) => layer(&|t| matches!(t, Target::Trees(k) if reg.object_layer(k).is_some_and(|c| same(&c.name, n)))),
+                    Named::Understory(n) => layer(&|t| matches!(t, Target::Understory(k) if reg.object_layer(k).is_some_and(|c| same(&c.name, n)))),
+                    Named::Pockets(n) => layer(&|t| matches!(t, Target::Pockets(k) if reg.pocket(k).is_some_and(|c| same(&c.name, n)))),
+                    Named::TreeSize(n) => layer(&|t| t == Target::TreeSize(*n)),
+                    _ => None,
+                };
+                if let Some(k) = found {
+                    (e.kind, e.layer) = (Kind::Layer, k);
+                }
+            }
+            None => {}
+        }
+        // What a region wrote is read back as it was written: masks white
+        // where they are, the heights from black to white.
+        if region.is_some() || massif_core::mask::named(&e.path).is_some() {
+            e.mapping = Mapping { full_range: true, invert: false, black_is_none: false, threshold: Some(0.5) };
+            if e.kind == Kind::Annotations {
+                e.mapping.black_is_none = true;
+            }
+        }
+        if e.kind == Kind::Height {
+            e.mapping.black_is_none = false;
+            e.mapping.threshold = None;
+            if let Some(r) = region {
+                (e.black, e.white) = (r.black, r.white);
+            }
+        }
+        e
+    }
+
+    /// Add images, each with what its name says it paints.
+    pub fn add(&mut self, images: Vec<(PathBuf, Arc<ImageInfo>)>, reg: &Registry) {
+        let had_region = self.region.is_some();
+        let base = self.stash();
+        for (path, info) in images {
+            let mut e = base.clone();
+            e.kind = if info.colour { Kind::Annotations } else { Kind::Layer };
+            e.mapping = Mapping {
+                full_range: !info.header.float,
+                threshold: if info.header.bits <= 8 && !info.header.float { Some(0.5) } else { None },
+                ..Mapping::default()
+            };
+            (e.path, e.info) = (path, info);
+            let e = self.guessed(e, reg);
+            self.entries.push(e);
+        }
+        if !had_region && self.region.is_some() {
+            self.set_origin(Origin::Region);
+        }
+    }
+
+    /// Show image `k`.
+    fn show(&mut self, k: usize) {
+        if k == self.current || k >= self.entries.len() {
+            return;
+        }
+        self.entries[self.current] = self.stash();
+        self.current = k;
+        self.load(self.entries[k].clone());
+    }
+
+    /// Every image with its settings, the one shown as the form has it.
+    pub fn all(&self) -> Vec<(PathBuf, Arc<ImageInfo>, MaskSettings)> {
+        let mut entries = self.entries.clone();
+        entries[self.current] = self.stash();
+        entries
+            .into_iter()
+            .map(|e| {
+                let mut form = MaskSettings {
+                    target: self.target_of(&e),
+                    mapping: e.mapping,
+                    mode: e.mode,
+                    placement: self.placement(),
+                    feather: self.feather,
+                };
+                if !matches!(form.target, Target::Height { .. }) {
+                    form.feather = 0;
+                }
+                (e.path, e.info, form)
+            })
+            .collect()
+    }
+
 
     fn set_origin(&mut self, origin: Origin) {
         self.origin = Some(origin);
         let (w, h) = (self.info.header.width as f64, self.info.header.height as f64);
         match origin {
-            Origin::MapOrigin => {
+            Origin::Region => match self.region {
+                Some(r) => {
+                    let p = r.placement(self.info.header.width);
+                    (self.x, self.z, self.scale) = (p.x, p.z, p.scale);
+                }
+                None => self.origin = None,
+            },
+            Origin::AtZero => {
                 (self.x, self.z, self.scale) = (0, 0, 1.0);
             }
             Origin::Fit => {
@@ -190,27 +394,22 @@ impl MaskForm {
 
     /// The target the settings make.
     pub fn target(&self) -> Target {
-        match self.kind {
-            Kind::Annotations => Target::Annotations((!self.by_colour || !self.info.colour).then_some(self.colour)),
-            Kind::Layer => self.layers.get(self.layer).map_or(Target::TreeSize(1), |l| l.target),
-            Kind::Terrain => Target::Terrain(self.terrain),
-            Kind::Biome => Target::Biome(self.biome),
-            Kind::Water => Target::Water(self.water.clamp(i16::MIN as i32 + 1, i16::MAX as i32) as i16),
-            Kind::Height => Target::Height { black: self.black, white: self.white },
+        self.target_of(&self.stash())
+    }
+
+    fn target_of(&self, e: &Entry) -> Target {
+        match e.kind {
+            Kind::Annotations => Target::Annotations((!e.by_colour || !e.info.colour).then_some(e.colour)),
+            Kind::Layer => self.layers.get(e.layer).map_or(Target::TreeSize(1), |l| l.target),
+            Kind::Terrain => Target::Terrain(e.terrain),
+            Kind::Biome => Target::Biome(e.biome),
+            Kind::Water => Target::Water(e.water.clamp(i16::MIN as i32 + 1, i16::MAX as i32) as i16),
+            Kind::Height => Target::Height { black: e.black, white: e.white },
         }
     }
 
     pub fn placement(&self) -> Placement {
         Placement { x: self.x, z: self.z, scale: self.scale }
-    }
-
-    pub fn settings(&self) -> MaskSettings {
-        MaskSettings {
-            target: self.target(),
-            mapping: self.mapping,
-            mode: self.mode,
-            placement: self.placement(),
-        }
     }
 
     /// The colour the target shows in.
@@ -280,6 +479,40 @@ impl MaskForm {
         };
         let about = tr!("{name}: {w} × {h} pixels, {bits}-bit {what} {format}", name, w = h.width, h = h.height, bits = h.bits, what, format = h.format);
         ui.add(egui::Label::new(RichText::new(about).size(12.0).color(pal.weak)).wrap());
+        ui.add_space(8.0);
+        // The images, one shown at a time: all go in, in the same place,
+        // as one step to undo.
+        let mut remove = None;
+        ui.horizontal_wrapped(|ui| {
+            if self.entries.len() > 1 {
+                let names: Vec<String> = self
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .map(|(k, e)| {
+                        let path = if k == self.current { &self.path } else { &e.path };
+                        let name = path.file_stem().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+                        if name.chars().count() > 22 { format!("{}…", name.chars().take(21).collect::<String>()) } else { name }
+                    })
+                    .collect();
+                let labels: Vec<&str> = names.iter().map(String::as_str).collect();
+                let on: Vec<bool> = (0..names.len()).map(|k| k == self.current).collect();
+                if let Some(k) = button_group(ui, "mask images", &labels, &on) {
+                    self.show(k);
+                }
+                if ui.button(theme::glyph(Icon::X).to_string()).on_hover_text(tr!("Leave this image out")).clicked() {
+                    remove = Some(self.current);
+                }
+            }
+            if ui.button(theme::with_icon(Icon::Plus, tr!("Add images…"))).clicked() {
+                choice = Choice::AddImages;
+            }
+        });
+        if let Some(k) = remove {
+            self.entries.remove(k);
+            self.current = k.min(self.entries.len() - 1);
+            self.load(self.entries[self.current].clone());
+        }
         ui.add_space(10.0);
 
         // Two columns where the window has room: what and how on the left,
@@ -317,8 +550,9 @@ impl MaskForm {
         ui.add_space(14.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let ok = !matches!(self.kind, Kind::Layer) || !self.layers.is_empty();
-            if ui.add_enabled(ok, theme::primary_button(ui, tr!("Import"))).clicked() {
-                choice = Choice::Import(self.settings());
+            let label = if self.entries.len() > 1 { tr!("Import {n} images", n = self.entries.len()) } else { tr!("Import").to_owned() };
+            if ui.add_enabled(ok, theme::primary_button(ui, label)).clicked() {
+                choice = Choice::Import(self.all());
             }
             if ui.button(tr!("Cancel")).clicked() {
                 choice = Choice::Close;
@@ -449,10 +683,14 @@ impl MaskForm {
         let pal = Palette::of(ui);
         ui.label(RichText::new(tr!("Where it lands")).size(11.5).color(pal.weak).medium());
         ui.add_space(4.0);
-        let labels = [tr!("At the world's origin"), tr!("Fit to the map")];
-        let on = [self.origin == Some(Origin::MapOrigin), self.origin == Some(Origin::Fit)];
+        let mut origins = vec![(Origin::AtZero, tr!("At the world's origin")), (Origin::Fit, tr!("Fit to the map"))];
+        if self.region.is_some() {
+            origins.push((Origin::Region, tr!("Where region.txt says")));
+        }
+        let labels: Vec<&str> = origins.iter().map(|o| o.1).collect();
+        let on: Vec<bool> = origins.iter().map(|o| self.origin == Some(o.0)).collect();
         if let Some(i) = button_group(ui, "mask origin", &labels, &on) {
-            self.set_origin([Origin::MapOrigin, Origin::Fit][i]);
+            self.set_origin(origins[i].0);
         }
         ui.add_space(6.0);
         well(ui, |ui| {
@@ -471,6 +709,11 @@ impl MaskForm {
                     self.origin = None;
                 }
             });
+            if self.entries.iter().enumerate().any(|(k, e)| if k == self.current { self.kind == Kind::Height } else { e.kind == Kind::Height }) {
+                row(ui, tr!("Blend the heights' edges over"), |ui| {
+                    ui.add(Field::new(&mut self.feather, 0..=512).suffix(tr!(" blocks")));
+                });
+            }
         });
         let r = self.placement().rect(self.info.header.width, self.info.header.height);
         let [x0, z0, x1, z1] = self.bounds;

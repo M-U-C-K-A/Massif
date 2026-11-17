@@ -826,6 +826,11 @@ pub struct MaskSettings {
     pub mapping: Mapping,
     pub mode: Mode,
     pub placement: Placement,
+    /// For the height: over this many blocks in from the image's edges,
+    /// the ground goes from its own height to the image's, so that a
+    /// heightmap of a part of the map meets the land around it without a
+    /// step (0: none).
+    pub feather: u32,
 }
 
 /// The nearest of the annotation colours to `c` (1 to 15).
@@ -992,6 +997,38 @@ fn hit(p: f32, x: i32, z: i32) -> bool {
 /// asked. Only the tiles the level has are painted, within its selection
 /// when it has one; the locked layers keep their columns.
 pub fn apply(edit: &mut Edit, path: &Path, info: &ImageInfo, settings: &MaskSettings, steps: &Steps) -> Result<Changes, String> {
+    steps.total.store(info.header.height, Ordering::Relaxed);
+    steps.done.store(0, Ordering::Relaxed);
+    apply_from(edit, path, info, settings, steps, 0)
+}
+
+/// Several images, each with its settings, one after the other into the
+/// same edit (one step to undo): the heights first, so that what is
+/// painted after reads the new ground.
+pub fn apply_all(edit: &mut Edit, images: &[(std::path::PathBuf, std::sync::Arc<ImageInfo>, MaskSettings)], steps: &Steps) -> Result<Changes, String> {
+    let mut order: Vec<&(std::path::PathBuf, std::sync::Arc<ImageInfo>, MaskSettings)> = images.iter().collect();
+    order.sort_by_key(|(_, _, s)| !matches!(s.target, Target::Height { .. }));
+    steps.total.store(images.iter().map(|(_, i, _)| i.header.height).sum(), Ordering::Relaxed);
+    steps.done.store(0, Ordering::Relaxed);
+    let mut all = Changes::default();
+    let mut base = 0;
+    for (path, info, settings) in order {
+        let changes = apply_from(edit, path, info, settings, steps, base)?;
+        base += info.header.height;
+        all.columns += changes.columns;
+        all.tiles.extend(changes.tiles);
+        if changes.cancelled {
+            all.cancelled = true;
+            break;
+        }
+    }
+    all.tiles.sort_unstable_by_key(|p| (p.z, p.x));
+    all.tiles.dedup();
+    Ok(all)
+}
+
+/// [`apply`], the rows read counted in `steps` from `base`.
+fn apply_from(edit: &mut Edit, path: &Path, info: &ImageInfo, settings: &MaskSettings, steps: &Steps, base: usize) -> Result<Changes, String> {
     let (w, h) = (info.header.width, info.header.height);
     let p = settings.placement;
     if !(p.scale > 0.0 && p.scale.is_finite()) {
@@ -1005,11 +1042,9 @@ pub fn apply(edit: &mut Edit, path: &Path, info: &ImageInfo, settings: &MaskSett
             bands.entry(pos.z).or_default().push(pos);
         }
     }
-    steps.total.store(h, Ordering::Relaxed);
-    steps.done.store(0, Ordering::Relaxed);
     let mut changes = Changes::default();
     if bands.is_empty() {
-        steps.done.store(h, Ordering::Relaxed);
+        steps.done.store(base + h, Ordering::Relaxed);
         return Ok(changes);
     }
     let reading = Reading::new(info, &settings.mapping);
@@ -1082,7 +1117,7 @@ pub fn apply(edit: &mut Edit, path: &Path, info: &ImageInfo, settings: &MaskSett
                 win.rows.push_back(row);
             }
             read += 1;
-            steps.done.store(read, Ordering::Relaxed);
+            steps.done.store(base + read, Ordering::Relaxed);
         }
         if result.is_err() {
             break;
@@ -1099,6 +1134,16 @@ pub fn apply(edit: &mut Edit, path: &Path, info: &ImageInfo, settings: &MaskSett
             .collect();
         let target = settings.target;
         let mode = settings.mode;
+        // In from the image's edges, the height fades in.
+        let feather = if matches!(target, Target::Height { .. }) { settings.feather as f32 } else { 0.0 };
+        let fade = |x: i32, z: i32| {
+            if feather <= 0.0 {
+                return 1.0;
+            }
+            let d = (x - footprint.x0).min(footprint.x1 - 1 - x).min(z - footprint.z0).min(footprint.z1 - 1 - z) as f32 + 0.5;
+            let t = (d / feather).clamp(0.0, 1.0);
+            t * t * (3.0 - 2.0 * t)
+        };
         edit.par_tiles(positions.iter().copied(), band, false, |pos, clip, tile| {
             let cells = selection.as_ref().and_then(|s| s.tile(pos));
             let mut n = 0;
@@ -1114,7 +1159,7 @@ pub fn apply(edit: &mut Edit, path: &Path, info: &ImageInfo, settings: &MaskSett
                     if cells.is_some_and(|c| !crate::selection::lets(c.get(i), x, z)) {
                         continue;
                     }
-                    if put(tile, i, x, z, s, target, mode, &settings.mapping, locks.as_ref(), (lo, hi)) {
+                    if put(tile, i, x, z, s, target, mode, &settings.mapping, locks.as_ref(), (lo, hi), fade(x, z)) {
                         n += 1;
                     }
                 }
@@ -1134,7 +1179,7 @@ pub fn apply(edit: &mut Edit, path: &Path, info: &ImageInfo, settings: &MaskSett
     let _ = reader.join();
     result?;
     if !changes.cancelled {
-        steps.done.store(h, Ordering::Relaxed);
+        steps.done.store(base + h, Ordering::Relaxed);
     }
     changes.columns = columns.into_inner();
     changes.tiles = touched.into_inner().expect("not poisoned");
@@ -1145,7 +1190,7 @@ pub fn apply(edit: &mut Edit, path: &Path, info: &ImageInfo, settings: &MaskSett
 /// Paint one column; true if it changed.
 #[allow(clippy::too_many_arguments)]
 #[inline]
-fn put(tile: &mut Tile, i: usize, x: i32, z: i32, s: Sample, target: Target, mode: Mode, m: &Mapping, locks: Option<&(Slot, crate::registry::Locks)>, (lo, hi): (f32, f32)) -> bool {
+fn put(tile: &mut Tile, i: usize, x: i32, z: i32, s: Sample, target: Target, mode: Mode, m: &Mapping, locks: Option<&(Slot, crate::registry::Locks)>, (lo, hi): (f32, f32), fade: f32) -> bool {
     if let Target::Height { black, white } = target {
         let new = black + s.v * (white - black);
         let old = tile.top.get(i);
@@ -1155,6 +1200,7 @@ fn put(tile: &mut Tile, i: usize, x: i32, z: i32, s: Sample, target: Target, mod
             Mode::Max => old.max(new),
             Mode::Min => old.min(new),
         };
+        let h = old + (h - old) * fade;
         let h = crate::codec::snap_height(h.clamp(lo, hi));
         if tile.bottom.is_some() || h == old {
             return false;
@@ -1267,6 +1313,341 @@ pub fn preview_strength(info: &ImageInfo, mapping: &Mapping, target: Target, k: 
     }
 }
 
+/// The file beside the images of a region that says where it lies.
+pub const SIDECAR: &str = "region.txt";
+
+/// A part of the map written as images (see [`export_region`]): its top
+/// left block, its size, and the heights black and white stand for in
+/// its heightmap.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Region {
+    pub x: i32,
+    pub z: i32,
+    pub width: i32,
+    pub depth: i32,
+    pub black: f32,
+    pub white: f32,
+}
+
+impl Region {
+    pub fn to_text(&self) -> String {
+        format!(
+            "# A region of a Massif map: its images are 1 pixel a block, their top left corner\n# on block x, z. In height.png, black is Y `black` and white Y `white`.\n# Import mask reads this file to put the images back in their place.\nx = {}\nz = {}\nwidth = {}\ndepth = {}\nblack = {}\nwhite = {}\n",
+            self.x, self.z, self.width, self.depth, self.black, self.white
+        )
+    }
+
+    pub fn parse(text: &str) -> Option<Region> {
+        let mut values = std::collections::HashMap::new();
+        for line in text.lines() {
+            let line = line.trim();
+            if line.starts_with('#') {
+                continue;
+            }
+            if let Some((k, v)) = line.split_once(['=', ':']) {
+                values.insert(k.trim().to_ascii_lowercase(), v.trim().to_owned());
+            }
+        }
+        let int = |k: &str| values.get(k).and_then(|v| v.parse::<i32>().ok());
+        let float = |k: &str| values.get(k).and_then(|v| v.parse::<f32>().ok());
+        Some(Region {
+            x: int("x")?,
+            z: int("z")?,
+            width: int("width")?,
+            depth: int("depth")?,
+            black: float("black").unwrap_or(-64.0),
+            white: float("white").unwrap_or(320.0),
+        })
+    }
+
+    /// The region of the image at `image`: the sidecar in its folder.
+    pub fn beside(image: &Path) -> Option<Region> {
+        let text = std::fs::read_to_string(image.parent()?.join(SIDECAR)).ok()?;
+        Self::parse(&text)
+    }
+
+    /// Where an image of `width` × `height` pixels of this region lands:
+    /// on its blocks, scaled if it was resized meanwhile.
+    pub fn placement(&self, width: usize) -> Placement {
+        Placement { x: self.x, z: self.z, scale: self.width as f32 / width.max(1) as f32 }
+    }
+}
+
+/// What the name of an image of a region says it holds (see
+/// [`export_region`]): a layer by its name, which the caller looks for.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Named {
+    Height,
+    Annotations,
+    Water,
+    Terrain(String),
+    Biome(String),
+    Cover(String),
+    Trees(String),
+    Understory(String),
+    Pockets(String),
+    TreeSize(u16),
+}
+
+const SIZE_NAMES: [&str; 4] = ["bushes", "small", "medium", "large"];
+
+/// What the file name of an image says it holds, as [`export_region`]
+/// names them; `None` for another name.
+pub fn named(path: &Path) -> Option<Named> {
+    let stem = path.file_stem()?.to_str()?.trim().to_ascii_lowercase();
+    let rest = |prefix: &str| stem.strip_prefix(prefix).map(|r| r.trim().to_owned()).filter(|r| !r.is_empty());
+    Some(match stem.as_str() {
+        "height" | "heightmap" | "height map" => Named::Height,
+        "annotations" => Named::Annotations,
+        "water" => Named::Water,
+        _ => {
+            if let Some(r) = rest("under the trees ") {
+                Named::Understory(r)
+            } else if let Some(r) = rest("tree size ") {
+                Named::TreeSize(SIZE_NAMES.iter().position(|n| *n == r)? as u16 + 1)
+            } else if let Some(r) = rest("terrain ") {
+                Named::Terrain(r)
+            } else if let Some(r) = rest("biome ") {
+                Named::Biome(r)
+            } else if let Some(r) = rest("cover ") {
+                Named::Cover(r)
+            } else if let Some(r) = rest("trees ") {
+                Named::Trees(r)
+            } else {
+                Named::Pockets(rest("pockets ")?)
+            }
+        }
+    })
+}
+
+/// A name as a file name has it: what a file system refuses made `_`.
+pub fn file_safe(name: &str) -> String {
+    name.chars().map(|c| if c.is_alphanumeric() || " -_'(),.".contains(c) { c } else { '_' }).collect::<String>().trim().to_owned()
+}
+
+/// What [`export_region`] writes besides the heightmap.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RegionParts {
+    pub height: bool,
+    pub annotations: bool,
+    pub water: bool,
+    /// One image for each terrain, biome or layer found in the region.
+    pub terrains: bool,
+    pub biomes: bool,
+    pub layers: bool,
+}
+
+impl Default for RegionParts {
+    fn default() -> Self {
+        Self { height: true, annotations: true, water: false, terrains: true, biomes: false, layers: true }
+    }
+}
+
+/// A plane of a tile an image of the region is made from.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Part {
+    Height,
+    Annotations,
+    Water,
+    Terrain(u16),
+    Biome(u16),
+    Cover(u16),
+    Trees(u16),
+    Understory(u16),
+    Pockets(u16),
+    TreeSize(u16),
+}
+
+impl Part {
+    /// The value of column `i` of `tile`: 0 to 65,535 for the height, an
+    /// annotation's number, else 255 where it is and 0 where not.
+    #[inline]
+    fn value(self, tile: &Tile, i: usize, lo: f32, span: f32) -> u16 {
+        let on = |b: bool| if b { 255 } else { 0 };
+        match self {
+            Part::Height => (((tile.top.get(i) - lo) / span).clamp(0.0, 1.0) * 65535.0).round() as u16,
+            Part::Annotations => tile.annotations.get(i),
+            Part::Water => on(tile.fluid.get(i) != NO_FLUID),
+            Part::Terrain(v) => on(tile.terrain.get(i) == v),
+            Part::Biome(v) => on(tile.biome.get(i) == v),
+            Part::Cover(v) => on(tile.cover.get(i) == v),
+            Part::Trees(v) => on(tile.objects.get(i) == v),
+            Part::Understory(v) => on(tile.understory.get(i) == v),
+            Part::Pockets(v) => on(tile.pockets.get(i) == v),
+            Part::TreeSize(v) => on(tile.sizes.get(i) == v),
+        }
+    }
+}
+
+/// The values a plane has within `clip` of a tile.
+fn values_in(plane: &crate::plane::Plane<u16>, clip: &BlockRect, into: &mut std::collections::BTreeSet<u16>) {
+    if let Some(v) = plane.uniform_value() {
+        into.insert(v);
+        return;
+    }
+    let dense = plane.dense();
+    for z in clip.z0..clip.z1 {
+        for x in clip.x0..clip.x1 {
+            into.insert(dense[local_index(x, z)]);
+        }
+    }
+}
+
+/// Write the part `rect` of the ground of `dim` into the folder `dir` as
+/// images of 1 pixel a block, with a [`SIDECAR`] saying where it lies:
+/// `height.png` (16 bits, black the world's floor, white its top),
+/// `annotations.png` (their colours, black where none; when the region
+/// has some), `water.png` (white where there is water), and
+/// for each terrain, biome or layer found in it an image of where it is
+/// (white) and is not (black), named as [`named`] reads them back. Rows
+/// are written as they are read, a row of tiles at a time. Returns the
+/// files written.
+pub fn export_region(dim: &crate::world::Dimension, reg: &crate::registry::Registry, rect: BlockRect, dir: &Path, parts: &RegionParts, steps: &Steps) -> Result<Vec<std::path::PathBuf>, String> {
+    use std::collections::BTreeSet;
+    if rect.is_empty() {
+        return Err("an empty region".into());
+    }
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let ground = dim.ground();
+    let (lo, span) = (dim.min_y as f32, (dim.max_y - dim.min_y) as f32);
+    // What the region has, to give each its image.
+    let mut found: [BTreeSet<u16>; 8] = Default::default();
+    if parts.terrains || parts.biomes || parts.layers || parts.annotations {
+        for pos in rect.tiles() {
+            let Some(tile) = ground.view(pos) else { continue };
+            let clip = rect.intersect(&pos.rect());
+            if parts.terrains {
+                values_in(&tile.terrain, &clip, &mut found[0]);
+            }
+            if parts.biomes {
+                values_in(&tile.biome, &clip, &mut found[1]);
+            }
+            if parts.annotations {
+                values_in(&tile.annotations, &clip, &mut found[7]);
+            }
+            if parts.layers {
+                for (k, plane) in [&tile.cover, &tile.objects, &tile.understory, &tile.pockets, &tile.sizes].into_iter().enumerate() {
+                    values_in(plane, &clip, &mut found[k + 2]);
+                }
+            }
+        }
+    }
+    let mut outs: Vec<(Part, String)> = Vec::new();
+    if parts.height {
+        outs.push((Part::Height, "height".into()));
+    }
+    // Annotations only where there are some.
+    if parts.annotations && found[7].iter().any(|&a| a != 0) {
+        outs.push((Part::Annotations, "annotations".into()));
+    }
+    if parts.water {
+        outs.push((Part::Water, "water".into()));
+    }
+    for &t in &found[0] {
+        if let Some(def) = reg.terrains.get(t as usize) {
+            outs.push((Part::Terrain(t), format!("terrain {}", def.name)));
+        }
+    }
+    for &b in found[1].iter().filter(|&&b| b != 0) {
+        if let Some(def) = reg.biomes.get(b as usize) {
+            outs.push((Part::Biome(b), format!("biome {}", def.name)));
+        }
+    }
+    for &n in found[2].iter().filter(|&&n| n != 0) {
+        if let Some(def) = reg.cover(n) {
+            outs.push((Part::Cover(n), format!("cover {}", def.name)));
+        }
+    }
+    for &n in found[3].iter().filter(|&&n| n != 0) {
+        if let Some(def) = reg.object_layer(n) {
+            outs.push((Part::Trees(n), format!("trees {}", def.name)));
+        }
+    }
+    for &n in found[4].iter().filter(|&&n| n != 0) {
+        if let Some(def) = reg.object_layer(n) {
+            outs.push((Part::Understory(n), format!("under the trees {}", def.name)));
+        }
+    }
+    for &n in found[5].iter().filter(|&&n| n != 0) {
+        if let Some(def) = reg.pocket(n) {
+            outs.push((Part::Pockets(n), format!("pockets {}", def.name)));
+        }
+    }
+    for &n in found[6].iter().filter(|&&n| (1..=4).contains(&n)) {
+        outs.push((Part::TreeSize(n), format!("tree size {}", SIZE_NAMES[n as usize - 1])));
+    }
+    let (w, d) = (rect.width() as usize, rect.depth() as usize);
+    let mut files = Vec::new();
+    let mut writers = Vec::new();
+    let mut used = std::collections::HashSet::new();
+    for (part, name) in &outs {
+        let mut name = file_safe(name);
+        while !used.insert(name.to_ascii_lowercase()) {
+            name.push('_');
+        }
+        let path = dir.join(format!("{name}.png"));
+        let file = std::fs::File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w as u32, d as u32);
+        let (colour, depth) = match part {
+            Part::Height => (png::ColorType::Grayscale, png::BitDepth::Sixteen),
+            Part::Annotations => (png::ColorType::Rgb, png::BitDepth::Eight),
+            _ => (png::ColorType::Grayscale, png::BitDepth::Eight),
+        };
+        enc.set_color(colour);
+        enc.set_depth(depth);
+        enc.set_compression(png::Compression::Fast);
+        let writer = enc.write_header().map_err(|e| e.to_string())?.into_stream_writer().map_err(|e| e.to_string())?;
+        writers.push((*part, writer));
+        files.push(path);
+    }
+    steps.total.store(d, Ordering::Relaxed);
+    steps.done.store(0, Ordering::Relaxed);
+    let (tz0, tz1) = (rect.z0.div_euclid(TILE_SIZE), (rect.z1 - 1).div_euclid(TILE_SIZE));
+    let (tx0, tx1) = (rect.x0.div_euclid(TILE_SIZE), (rect.x1 - 1).div_euclid(TILE_SIZE));
+    for tz in tz0..=tz1 {
+        if steps.cancel.load(Ordering::Relaxed) {
+            return Err("stopped".into());
+        }
+        let tiles: Vec<Option<crate::level::TileRef<'_>>> = (tx0..=tx1).map(|tx| ground.view(TilePos::new(tx, tz))).collect();
+        let (z0, z1) = ((tz * TILE_SIZE).max(rect.z0), ((tz + 1) * TILE_SIZE).min(rect.z1));
+        // Each image's rows of this band, made side by side.
+        let bands: Vec<Vec<u8>> = writers
+            .par_iter()
+            .map(|(part, _)| {
+                let bytes = match part {
+                    Part::Height => 2,
+                    Part::Annotations => 3,
+                    _ => 1,
+                };
+                let mut out = Vec::with_capacity(w * (z1 - z0) as usize * bytes);
+                for z in z0..z1 {
+                    for x in rect.x0..rect.x1 {
+                        let v = tiles[(x.div_euclid(TILE_SIZE) - tx0) as usize].as_ref().map_or(0, |t| part.value(t, local_index(x, z), lo, span));
+                        match part {
+                            Part::Height => out.extend_from_slice(&v.to_be_bytes()),
+                            Part::Annotations => out.extend_from_slice(&if (1..=15).contains(&v) { ANNOTATION_COLORS[v as usize - 1] } else { [0; 3] }),
+                            _ => out.push(v as u8),
+                        }
+                    }
+                }
+                out
+            })
+            .collect();
+        for ((_, writer), band) in writers.iter_mut().zip(bands) {
+            std::io::Write::write_all(writer, &band).map_err(|e| e.to_string())?;
+        }
+        steps.done.store((z1 - rect.z0) as usize, Ordering::Relaxed);
+    }
+    for (_, writer) in writers {
+        writer.finish().map_err(|e| e.to_string())?;
+    }
+    let region = Region { x: rect.x0, z: rect.z0, width: rect.width(), depth: rect.depth(), black: lo, white: lo + span };
+    let sidecar = dir.join(SIDECAR);
+    std::fs::write(&sidecar, region.to_text()).map_err(|e| e.to_string())?;
+    files.push(sidecar);
+    Ok(files)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1317,6 +1698,7 @@ mod tests {
             mapping: Mapping::default(),
             mode: Mode::Replace,
             placement: Placement { x: 0, z: 0, scale: 1.0 },
+            feather: 0,
         }
     }
 
@@ -1540,6 +1922,124 @@ mod tests {
         want.clear();
     }
 
+    #[test]
+    fn a_heightmap_fades_into_the_land_around_it() {
+        let mut w = world(2);
+        // A plateau at 100 over a part of the map, faded over 16 blocks.
+        let png = grey_png("plateau.png", 128, 128, |_, _| 255);
+        let mut s = settings(Target::Height { black: 0.0, white: 100.0 });
+        s.placement = Placement { x: 64, z: 64, scale: 1.0 };
+        s.feather = 16;
+        import(&mut w, &png, s);
+        assert_eq!(at(&w, 63, 100, |t| &t.top), 64.0, "outside, as it was");
+        let edge = at(&w, 64, 100, |t| &t.top);
+        assert!(edge > 64.0 && edge < 66.0, "at the edge, almost the land's: {edge}");
+        let mid = at(&w, 72, 100, |t| &t.top);
+        assert!(mid > 75.0 && mid < 90.0, "half way: {mid}");
+        assert_eq!(at(&w, 100, 100, |t| &t.top), 100.0, "inside, the image's");
+        // Each step to the next column stays small.
+        let steps: Vec<f32> = (64..81).map(|x| at(&w, x, 100, |t| &t.top)).collect();
+        assert!(steps.windows(2).all(|p| p[1] - p[0] < 4.5), "{steps:?}");
+    }
+
+    #[test]
+    fn several_images_are_one_step_to_undo_heights_first() {
+        let mut w = world(1);
+        let before = w.dims[0].ground().view(TilePos::new(0, 0)).unwrap().clone();
+        let a = grey_png("several-a.png", 128, 128, |x, _| if x < 64 { 255 } else { 0 });
+        let b = grey_png("several-b.png", 128, 128, |_, y| if y < 64 { 255 } else { 0 });
+        let info = |p: &Path| std::sync::Arc::new(survey(p, &Steps::default()).unwrap());
+        let mut height = settings(Target::Height { black: 64.0, white: 80.0 });
+        height.mapping.black_is_none = false;
+        let images = vec![(a.clone(), info(&a), settings(Target::Cover(1))), (b.clone(), info(&b), height)];
+        let mut history = History::new(4);
+        history.begin("import masks", 0);
+        let steps = Steps::default();
+        let changes = apply_all(&mut history.edit(&mut w, 0), &images, &steps).unwrap();
+        history.commit();
+        assert_eq!(steps.fraction(), 1.0);
+        assert_eq!(changes.tiles, vec![TilePos::new(0, 0)]);
+        assert_eq!((at(&w, 10, 10, |t| &t.cover), at(&w, 10, 10, |t| &t.top)), (1, 80.0));
+        assert_eq!((at(&w, 100, 100, |t| &t.cover), at(&w, 100, 100, |t| &t.top)), (0, 64.0));
+        assert_eq!(history.undo_count(), 1);
+        history.undo(&mut w).unwrap();
+        assert_eq!(*w.dims[0].ground().view(TilePos::new(0, 0)).unwrap(), before);
+    }
+
+    #[test]
+    fn a_region_goes_out_and_comes_back_in_its_place() {
+        // Heights, a terrain and a cover painted in a part of the map.
+        let mut w = world(3);
+        let sand = w.registry.terrain_by_name("Sand").unwrap().0;
+        {
+            let mut h = History::new(2);
+            h.begin("setup", 0);
+            let mut e = h.edit(&mut w, 0);
+            let t = e.tile_mut(TilePos::new(1, 1)).unwrap();
+            for z in 0..128 {
+                for x in 0..128 {
+                    let i = local_index(x, z);
+                    t.top.set(i, 50.0 + ((x * 3 + z) % 90) as f32 + 0.5);
+                    if x > z {
+                        t.terrain.set(i, sand);
+                    }
+                    if (x / 16 + z / 16) % 2 == 0 {
+                        t.cover.set(i, 2);
+                    }
+                    if (30..40).contains(&x) {
+                        t.annotations.set(i, 4);
+                    }
+                }
+            }
+        }
+        let rect = BlockRect::new(150, 140, 250, 260);
+        let dir = dir().join("region");
+        let _ = std::fs::remove_dir_all(&dir);
+        let files = export_region(&w.dims[0], &w.registry, rect, &dir, &RegionParts::default(), &Steps::default()).unwrap();
+        let names: Vec<String> = files.iter().map(|f| f.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        assert!(names.contains(&"height.png".to_owned()) && names.contains(&"terrain Sand.png".to_owned()) && names.contains(&SIDECAR.to_owned()), "{names:?}");
+        let cover = w.registry.cover(2).unwrap().name.clone();
+        assert!(names.contains(&format!("cover {}.png", file_safe(&cover))), "{names:?}");
+        let region = Region::beside(&dir.join("height.png")).unwrap();
+        assert_eq!((region.x, region.z, region.width, region.depth, region.black, region.white), (150, 140, 100, 120, -64.0, 320.0));
+        assert_eq!(named(&dir.join("terrain Sand.png")), Some(Named::Terrain("sand".into())));
+        assert_eq!(named(&dir.join("tree size medium.png")), Some(Named::TreeSize(3)));
+
+        // Into a flat map, each where it came from.
+        let mut back = world(3);
+        let place = region.placement(100);
+        let mut height = settings(Target::Height { black: region.black, white: region.white });
+        height.placement = place;
+        height.mapping.black_is_none = false;
+        let mut terrain = settings(Target::Terrain(sand));
+        terrain.placement = place;
+        let mut covers = settings(Target::Cover(2));
+        covers.placement = place;
+        let mut notes = settings(Target::Annotations(None));
+        notes.placement = place;
+        let info = |name: &str| (dir.join(name), std::sync::Arc::new(survey(&dir.join(name), &Steps::default()).unwrap()));
+        let images: Vec<_> = [("height.png", height), ("terrain Sand.png", terrain), (&format!("cover {}.png", file_safe(&cover)) as &str, covers), ("annotations.png", notes)]
+            .into_iter()
+            .map(|(n, s)| {
+                let (p, i) = info(n);
+                (p, i, s)
+            })
+            .collect();
+        let mut history = History::new(2);
+        history.begin("back", 0);
+        apply_all(&mut history.edit(&mut back, 0), &images, &Steps::default()).unwrap();
+        for z in rect.z0..rect.z1 {
+            for x in rect.x0..rect.x1 {
+                let (a, b) = (at(&w, x, z, |t| &t.top), at(&back, x, z, |t| &t.top));
+                assert!((a - b).abs() <= 384.0 / 65535.0 + 1.0 / 256.0, "height at {x}, {z}: {a} then {b}");
+                assert_eq!(at(&w, x, z, |t| &t.terrain), at(&back, x, z, |t| &t.terrain), "terrain at {x}, {z}");
+                assert_eq!(at(&w, x, z, |t| &t.cover), at(&back, x, z, |t| &t.cover), "cover at {x}, {z}");
+                assert_eq!(at(&w, x, z, |t| &t.annotations), at(&back, x, z, |t| &t.annotations), "annotation at {x}, {z}");
+            }
+        }
+        assert_eq!(at(&back, 149, 200, |t| &t.top), 64.0, "outside the region, as it was");
+    }
+
     /// The time to import a large image, and the memory it takes: with
     /// `MASSIF_MASK_SIDE` (default 16384) a side of the image and the map.
     #[test]
@@ -1578,5 +2078,12 @@ mod tests {
         let changes = apply(&mut history.edit(&mut w, 0), &path, &info, &s, &Steps::default()).unwrap();
         let applied = t.elapsed().as_secs_f32();
         eprintln!("{side}² ({} tiles): survey {surveyed:.2} s, apply {applied:.2} s, {} columns changed", n * n, changes.columns);
+        drop(history);
+        let out = dir().join(format!("large-region-{side}"));
+        let t = std::time::Instant::now();
+        let parts = RegionParts { annotations: false, ..RegionParts::default() };
+        let files = export_region(&w.dims[0], &w.registry, BlockRect::new(0, 0, side as i32, side as i32), &out, &parts, &Steps::default()).unwrap();
+        eprintln!("region of {side}²: {} files in {:.2} s", files.len(), t.elapsed().as_secs_f32());
+        let _ = std::fs::remove_dir_all(&out);
     }
 }

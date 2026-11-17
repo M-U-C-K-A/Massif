@@ -64,8 +64,10 @@ colour where the image is on), a layer of any slot (a ground cover, trees,
 under the trees, pockets, a tree size), a terrain, a biome, water or the
 height. A grey pixel is a strength: on from a threshold, or a share of the
 columns painted, scattered. With **Replace**, **Add**, **Max** and **Min**
-it goes with what is painted; locked layers keep their columns. See Import
-mask in the guide.
+it goes with what is painted; locked layers keep their columns. **File ▸
+Export Region…** writes each terrain and layer of a part of the map as such
+an image, to work on elsewhere and import back in place. See Import mask in
+the guide.
 
 ## Combined layers
 

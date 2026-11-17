@@ -361,6 +361,8 @@ enum Dialog {
     Caves(Box<crate::caves::CaveForm>),
     /// An image to paint onto the map: what, where, how.
     ImportMask(Box<crate::import_mask::MaskForm>),
+    /// A part of the map to write as images: where, and what.
+    ExportRegion(Box<crate::region_export::RegionForm>),
     /// The relief of a real place: where, at what scale, how high.
     Real(Box<crate::real_terrain::RealForm>),
     /// A save point to make (`None`) or rename (its index): its name.
@@ -2108,15 +2110,17 @@ impl MassifApp {
         }
     }
 
-    /// Pick an image to import as a mask, and read it in the background.
-    fn pick_mask(&mut self, ctx: &egui::Context) {
-        if let Some(path) = rfd::FileDialog::new()
-            .set_title(tr!("An image to import as a mask"))
+    /// Pick images to import as masks, and read them in the background:
+    /// for a new dialog, or `more` for the one open.
+    fn pick_mask(&mut self, ctx: &egui::Context, more: bool) {
+        if let Some(paths) = rfd::FileDialog::new()
+            .set_title(tr!("Images to import as masks"))
             .add_filter(tr!("Images"), &["png", "jpg", "jpeg", "tif", "tiff", "bmp"])
-            .pick_file()
+            .pick_files()
+            && !paths.is_empty()
         {
-            let snapshot = self.doc.world.snapshot();
-            self.jobs.push(Job::read_mask(ctx, path, snapshot).on(self.doc.generation));
+            let snapshot = (!more).then(|| self.doc.world.snapshot());
+            self.jobs.push(Job::read_mask(ctx, paths, snapshot).on(self.doc.generation));
         }
     }
 
@@ -2667,12 +2671,20 @@ impl MassifApp {
                         self.say(ctx, note.map_or_else(|| msg.clone(), |n| format!("{msg}. {n}")), false, None);
                     }
                 }
-                Outcome::MaskRead { path, info, map } => {
-                    if !other_map {
+                Outcome::RegionExported { dir, files } => {
+                    let n = files.len().saturating_sub(1);
+                    let msg = tr!("Exported the region: {n} images and region.txt in {secs:.1} s", n, secs);
+                    self.task_done(ctx, Cue::Ready, tr!("Region exported"), &msg, secs);
+                    self.say(ctx, msg, false, Some(dir));
+                }
+                Outcome::MaskRead { images, map } => {
+                    if let Some(Dialog::ImportMask(form)) = &mut self.dialog {
+                        form.add(images, &self.doc.world.registry);
+                    } else if !other_map {
                         let dim = &self.doc.world.dims[self.doc.dim];
                         let t = massif_core::TILE_SIZE;
                         let bounds = dim.bounds().map_or([0, 0, t, t], |(a, b)| [a.x * t, a.z * t, (b.x + 1) * t, (b.z + 1) * t]);
-                        let form = crate::import_mask::MaskForm::new(path, info, &self.doc.world.registry, bounds, (dim.min_y, dim.max_y), self.doc.world.meta.sea_level, map);
+                        let form = crate::import_mask::MaskForm::new(images, &self.doc.world.registry, bounds, (dim.min_y, dim.max_y), self.doc.world.meta.sea_level, map);
                         self.dialog = Some(Dialog::ImportMask(Box::new(form)));
                     }
                 }
@@ -3014,6 +3026,14 @@ impl MassifApp {
                 self.save(ctx, true);
             }
             Command::ExportHeightMap => self.export_heightmap(ctx),
+            Command::ExportRegion => {
+                let dim = self.doc.dimension();
+                if let Some((lo, hi)) = dim.bounds() {
+                    let map = massif_core::BlockRect::new(lo.x * TILE_SIZE, lo.z * TILE_SIZE, (hi.x + 1) * TILE_SIZE, (hi.z + 1) * TILE_SIZE);
+                    let selection = dim.selection.as_ref().and_then(|s| s.bounds());
+                    self.dialog = Some(Dialog::ExportRegion(Box::new(crate::region_export::RegionForm::new(map, selection))));
+                }
+            }
             Command::Export => self.open_export_dialog(),
             // Asked first if the map has changes (see `handle_close`).
             Command::Quit => ctx.send_viewport_cmd(ViewportCommand::Close),
@@ -3033,7 +3053,7 @@ impl MassifApp {
             Command::AutoRules => self.dialog = Some(Dialog::AutoRules(false)),
             Command::WholeMap(what) => self.open_reshape(what),
             Command::Caves => self.open_caves(),
-            Command::ImportMask => self.pick_mask(ctx),
+            Command::ImportMask => self.pick_mask(ctx, false),
             Command::RealTerrain => self.open_real(false),
             Command::FromRealPlace => self.open_real(true),
             Command::SavePoint => self.versions_action(ctx, crate::versions::Action::Make),
@@ -4347,18 +4367,44 @@ impl MassifApp {
                 match choice {
                     Choice::Keep => {}
                     Choice::Close => keep = false,
-                    Choice::Import(settings) => {
+                    Choice::AddImages => self.pick_mask(ctx, true),
+                    Choice::Import(images) => {
                         keep = false;
                         if form.guide {
                             self.guide = Some((crate::import_mask::Guide::new(ctx, &form), self.doc.generation));
                         }
                         let snapshot = self.doc.world.snapshot();
                         let locks = massif_core::registry::Locks::of(&self.doc.world.registry);
-                        self.jobs.push(Job::import_mask(ctx, snapshot, self.doc.dim, form.path.clone(), form.info.clone(), settings, locks, self.doc.revision).on(self.doc.generation));
+                        self.jobs.push(Job::import_mask(ctx, snapshot, self.doc.dim, images, locks, self.doc.revision).on(self.doc.generation));
                     }
                 }
                 if keep {
                     self.dialog = Some(Dialog::ImportMask(form));
+                }
+            }
+            Dialog::ExportRegion(mut form) => {
+                use crate::region_export::Choice;
+                let mut choice = Choice::Keep;
+                let response = modal(ctx, "export region").show(ctx, |ui| {
+                    choice = form.ui(ui);
+                });
+                if response.should_close() {
+                    keep = false;
+                }
+                match choice {
+                    Choice::Keep => {}
+                    Choice::Close => keep = false,
+                    Choice::Export(rect, parts) => {
+                        if let Some(folder) = rfd::FileDialog::new().set_title(tr!("A folder to write the region in")).pick_folder() {
+                            keep = false;
+                            let name = massif_core::mask::file_safe(&format!("{} region {} {}", self.doc.world.meta.name, rect.x0, rect.z0));
+                            let snapshot = self.doc.world.snapshot();
+                            self.jobs.push(Job::export_region(ctx, snapshot, self.doc.dim, rect, folder.join(name), parts));
+                        }
+                    }
+                }
+                if keep {
+                    self.dialog = Some(Dialog::ExportRegion(form));
                 }
             }
             Dialog::Real(mut form) => {
@@ -8765,7 +8811,7 @@ mod tests {
             let ctx = h.ctx.clone();
             let app = h.state_mut();
             let snapshot = app.doc.world.snapshot();
-            app.jobs.push(Job::read_mask(&ctx, plan.clone(), snapshot).on(app.doc.generation));
+            app.jobs.push(Job::read_mask(&ctx, vec![plan.clone()], Some(snapshot)).on(app.doc.generation));
         }
         wait(&mut h);
         let Some(Dialog::ImportMask(form)) = &mut h.state_mut().dialog else {
@@ -8814,7 +8860,7 @@ mod tests {
             let app = h.state_mut();
             app.guide = None;
             let snapshot = app.doc.world.snapshot();
-            app.jobs.push(Job::read_mask(&ctx, ramp.clone(), snapshot).on(app.doc.generation));
+            app.jobs.push(Job::read_mask(&ctx, vec![ramp.clone()], Some(snapshot)).on(app.doc.generation));
         }
         wait(&mut h);
         let Some(Dialog::ImportMask(form)) = &mut h.state_mut().dialog else {
@@ -8835,6 +8881,99 @@ mod tests {
         let share = |h: &egui_kittest::Harness<'static, MassifApp>, x0: i32| (0..64).flat_map(|z| (x0..x0 + 64).map(move |x| (x, z))).filter(|&(x, z)| at(h, x, z).1 == 1).count() as f32 / 4096.0;
         let (west, east) = (share(&h, -500), share(&h, 400));
         assert!(west < 0.08 && east > 0.85, "{west} {east}");
+    }
+
+    /// File ▸ Export Region writes a part of the map as a heightmap and
+    /// masks with its region.txt; Import mask, given them all, places them
+    /// back by themselves, each painting what its name says, and puts the
+    /// region back as it was in one step to undo (renders of both dialogs
+    /// with MASSIF_SNAPSHOT_DIR).
+    #[test]
+    fn a_region_goes_out_and_comes_back() {
+        use egui_kittest::kittest::Queryable;
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let out = std::env::temp_dir().join(format!("massif-region-app-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        let wait = |h: &mut egui_kittest::Harness<'static, MassifApp>| {
+            let started = std::time::Instant::now();
+            while !h.state().jobs.is_empty() {
+                assert!(started.elapsed().as_secs() < 60, "the job timed out");
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            h.run_steps(3);
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let ctx = h.ctx.clone();
+        h.state_mut().command(&ctx, Command::ExportRegion);
+        h.run_steps(3);
+        assert!(matches!(h.state().dialog, Some(Dialog::ExportRegion(_))));
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("dialog-export-region.png")).unwrap();
+        }
+        h.state_mut().dialog = None;
+        let rect = massif_core::BlockRect::new(-200, -150, 100, 110);
+        {
+            let app = h.state_mut();
+            let snapshot = app.doc.world.snapshot();
+            app.jobs.push(Job::export_region(&ctx, snapshot, app.doc.dim, rect, out.clone(), massif_core::mask::RegionParts::default()));
+        }
+        wait(&mut h);
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&out).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "png")).collect();
+        files.sort();
+        assert!(files.len() >= 3, "{files:?}");
+        let heights = |h: &egui_kittest::Harness<'static, MassifApp>| {
+            let dim = h.state().doc.dimension();
+            (rect.z0..rect.z1).step_by(7).flat_map(|z| (rect.x0..rect.x1).step_by(7).map(move |x| (x, z))).map(|(x, z)| massif_core::ops::height_at(dim, 0, x, z, massif_core::ops::Surface::Top).unwrap()).collect::<Vec<f32>>()
+        };
+        let before = heights(&h);
+        // The region flattened, as another tool might have left it.
+        {
+            let app = h.state_mut();
+            app.doc.history.begin("flatten", app.doc.dim);
+            let mut edit = app.doc.history.edit(&mut app.doc.world, 0);
+            edit.par_tiles(rect.tiles(), rect, false, |_, clip, tile| {
+                for z in clip.z0..clip.z1 {
+                    for x in clip.x0..clip.x1 {
+                        tile.top.set(massif_core::coords::local_index(x, z), 10.0);
+                    }
+                }
+            });
+            app.doc.commit();
+        }
+        assert_ne!(heights(&h), before);
+        {
+            let app = h.state_mut();
+            let snapshot = app.doc.world.snapshot();
+            app.jobs.push(Job::read_mask(&ctx, files.clone(), Some(snapshot)).on(app.doc.generation));
+        }
+        wait(&mut h);
+        let Some(Dialog::ImportMask(form)) = &mut h.state_mut().dialog else {
+            panic!("the dialog opens");
+        };
+        assert_eq!(form.placement(), massif_core::mask::Placement { x: -200, z: -150, scale: 1.0 }, "region.txt places them");
+        let all = form.all();
+        assert_eq!(all.len(), files.len());
+        assert!(all.iter().any(|(_, _, s)| s.target == massif_core::mask::Target::Height { black: -64.0, white: 320.0 }), "height.png is the height");
+        assert!(all.iter().any(|(_, _, s)| matches!(s.target, massif_core::mask::Target::Terrain(_))), "a terrain is a terrain");
+        form.feather = 0;
+        h.run_steps(3);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("dialog-import-mask-region.png")).unwrap();
+        }
+        let undo_before = h.state().doc.history.undo_count();
+        let label = format!("Import {} images", files.len());
+        h.get_by_label(&label).hover();
+        h.run_steps(2);
+        h.get_by_label(&label).click();
+        h.run_steps(2);
+        wait(&mut h);
+        assert_eq!(h.state().doc.history.undo_count(), undo_before + 1, "one step to undo");
+        let after = heights(&h);
+        for (a, b) in before.iter().zip(&after) {
+            assert!((a - b).abs() < 0.02, "{a} came back as {b}");
+        }
     }
 
     /// Edit ▸ Caves: the dialog carves tunnels, ravines and caverns in the

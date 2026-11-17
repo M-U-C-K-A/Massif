@@ -838,6 +838,18 @@ the height, they add to the ground, raise it to the image or lower it to
 the image. Only the tiles the map has are painted, within the selection
 when there is one; a **locked** layer keeps its columns.
 
+**Several images** go in at once: pick them together, or **Add images…** in
+the dialog. Each has its tab, with what it paints and how; they all land in
+the same place, and **Import** puts them all in as one step to undo, the
+heightmaps first so that the masks after them read the new ground. The ✕
+beside the tabs leaves one out.
+
+**Blend the heights' edges over** (shown once an image paints the height)
+fades a heightmap of a part of the map into the land around it: over that
+many blocks in from the image's edges the ground goes smoothly from its own
+height to the image's, so that there is no cliff at the seam (16 blocks to
+start with; 0 for none).
+
 **Import** runs in the background, with its progress and a **Cancel**, and
 is one step to undo. The image streams through: a band of 128 rows of the
 map at a time, the next rows decoded meanwhile, never the whole image in
@@ -850,6 +862,40 @@ at the opacity set, to trace over with the brushes, as annotations are often
 used. Its button in the map's header (a picture) shows or hides it, sets its
 opacity, or removes it. A guide is only shown: it is not saved with the map
 and never exported.
+
+### A region out and back
+
+**File ▸ Export Region…** writes a part of the map as images of 1 pixel a
+block, to work on in another tool (World Machine, Gaea, an image editor)
+and bring back: the **selection** (its bounding rectangle), **the whole
+map**, or **these blocks** (a top left corner and a size). Into a folder of
+its own, named after the map and the region's corner, go `height.png` (16
+bits: black the world's floor, white its top), one image for each terrain
+and layer found there (`terrain Grass.png`, `cover Tall grass.png`, `trees
+Big oaks.png`, `under the trees …`, `pockets …`, `tree size medium.png`:
+white where it is, black elsewhere), and on demand one for each biome, the
+water and the annotations (in their colours, when there are some). Beside
+them, `region.txt` says where the region lies and which heights black and
+white stand for:
+
+```text
+x = -512
+z = -512
+width = 1024
+depth = 1024
+black = -64
+white = 320
+```
+
+**Edit ▸ Import mask…**, given these images (all of them at once, or
+those that came back from the other tool), reads the `region.txt` beside
+them and puts them back in their place (**Where region.txt says**; an image
+made larger or smaller meanwhile is scaled to fit the region), each painting
+what its name says, the heights between the black and white of the file.
+Only a name the other tool kept is understood; any other image gets a
+target to pick, as usual. Rows are written as they are read, a row of tiles
+at a time: a region of 16,384 × 16,384 blocks, its heightmap and a terrain,
+is written in about 2 s on an M4.
 
 ## Unpainting
 
