@@ -204,6 +204,13 @@ pub fn paint(painter: &Painter, rect: Rect, tool: Tool, color: Color32) {
             }
             pen.ring(19.5, 7.0, 1.8);
         }
+        // Three trees, small to large, on the ground.
+        Tool::TreeSize => {
+            pen.line(&[(2.0, 20.5), (22.0, 20.5)]);
+            pen.tree(5.0, 20.5, 6.0);
+            pen.tree(11.0, 20.5, 10.0);
+            pen.tree(18.0, 20.5, 15.0);
+        }
         // A pen and the mark it draws over the map.
         Tool::Annotate => {
             pen.line(&[(2.0, 21.0), (5.0, 17.5), (8.0, 19.5), (11.5, 16.0)]);

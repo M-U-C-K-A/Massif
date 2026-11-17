@@ -50,6 +50,14 @@ const TAG_BIOME: u8 = 5;
 const TAG_COVER: u8 = 6;
 const TAG_OBJECTS: u8 = 7;
 const TAG_ANNOTATIONS: u8 = 8;
+const TAG_UNDERSTORY: u8 = 9;
+const TAG_SIZES: u8 = 10;
+
+/// The tree sizes a column may ask for (see [`Tile::sizes`]): any size,
+/// then bushes, small, medium and large trees.
+pub const SIZE_ANY: u16 = 0;
+pub const SIZE_BUSHES: u16 = 1;
+pub const SIZE_LARGE: u16 = 4;
 
 /// One tile of one level.
 ///
@@ -78,6 +86,14 @@ pub struct Tile {
     /// Annotations, as WorldPainter's: 0 for none, else one of the
     /// [`ANNOTATION_COLORS`] (1 to 15). Shown on the map, never exported.
     pub annotations: Plane<u16>,
+    /// The sub-canopy object layer painted, by number (0: none): it shares
+    /// the column with the object layer of [`Tile::objects`], the base
+    /// one, growing under its canopy.
+    pub understory: Plane<u16>,
+    /// The size of tree the objects standing here take: [`SIZE_ANY`], or
+    /// [`SIZE_BUSHES`] up to [`SIZE_LARGE`] (bushes, small, medium, large
+    /// trees), a quarter of a layer's objects each, by height.
+    pub sizes: Plane<u16>,
     /// Planes written by a newer version, preserved verbatim.
     pub unknown: Vec<(u8, Vec<u8>)>,
 }
@@ -94,6 +110,8 @@ impl Tile {
             cover: Plane::Uniform(0),
             objects: Plane::Uniform(0),
             annotations: Plane::Uniform(0),
+            understory: Plane::Uniform(0),
+            sizes: Plane::Uniform(0),
             unknown: Vec::new(),
         }
     }
@@ -109,6 +127,8 @@ impl Tile {
             cover: Plane::Uniform(0),
             objects: Plane::Uniform(0),
             annotations: Plane::Uniform(0),
+            understory: Plane::Uniform(0),
+            sizes: Plane::Uniform(0),
             unknown: Vec::new(),
         }
     }
@@ -149,6 +169,8 @@ impl Tile {
         self.cover.compact();
         self.objects.compact();
         self.annotations.compact();
+        self.understory.compact();
+        self.sizes.compact();
     }
 
     pub fn heap_bytes(&self) -> usize {
@@ -160,6 +182,8 @@ impl Tile {
             + self.cover.heap_bytes()
             + self.objects.heap_bytes()
             + self.annotations.heap_bytes()
+            + self.understory.heap_bytes()
+            + self.sizes.heap_bytes()
     }
 
     /// Encode to the compressed cold form (a zstd frame).
@@ -203,6 +227,12 @@ impl Tile {
         if self.annotations.uniform_value() != Some(0) {
             plane(TAG_ANNOTATIONS, &mut |o| codec::encode_categorical(&self.annotations, o));
         }
+        if self.understory.uniform_value() != Some(0) {
+            plane(TAG_UNDERSTORY, &mut |o| codec::encode_categorical(&self.understory, o));
+        }
+        if self.sizes.uniform_value() != Some(0) {
+            plane(TAG_SIZES, &mut |o| codec::encode_categorical(&self.sizes, o));
+        }
         for (tag, payload) in &self.unknown {
             plane(*tag, &mut |o| o.extend_from_slice(payload));
         }
@@ -227,6 +257,8 @@ impl Tile {
             cover: Plane::Uniform(0),
             objects: Plane::Uniform(0),
             annotations: Plane::Uniform(0),
+            understory: Plane::Uniform(0),
+            sizes: Plane::Uniform(0),
             unknown: Vec::new(),
         };
         loop {
@@ -248,6 +280,8 @@ impl Tile {
                 TAG_COVER => tile.cover = codec::decode_categorical(&mut p)?,
                 TAG_OBJECTS => tile.objects = codec::decode_categorical(&mut p)?,
                 TAG_ANNOTATIONS => tile.annotations = codec::decode_categorical(&mut p)?,
+                TAG_UNDERSTORY => tile.understory = codec::decode_categorical(&mut p)?,
+                TAG_SIZES => tile.sizes = codec::decode_categorical(&mut p)?,
                 _ => tile.unknown.push((tag, payload.to_vec())),
             }
         }
@@ -299,6 +333,12 @@ mod tests {
         for i in 1000..1100 {
             t.annotations.set(i, 14);
         }
+        for i in 700..800 {
+            t.understory.set(i, 2);
+        }
+        for i in 0..400 {
+            t.sizes.set(i, 1 + (i % 4) as u16);
+        }
         t
     }
 
@@ -315,6 +355,8 @@ mod tests {
         assert_eq!(back.cover.dense(), t.cover.dense());
         assert_eq!(back.objects.dense(), t.objects.dense());
         assert_eq!(back.annotations.dense(), t.annotations.dense());
+        assert_eq!(back.understory.dense(), t.understory.dense());
+        assert_eq!(back.sizes.dense(), t.sizes.dense());
         // Encoding is canonical: re-encoding the decoded tile is identical.
         assert_eq!(back.encode(), blob);
     }

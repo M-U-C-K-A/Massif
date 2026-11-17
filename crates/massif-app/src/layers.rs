@@ -113,7 +113,7 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
                 id: k + 1,
                 name: l.name.clone(),
                 color: l.color,
-                detail: trn!("{n} object", "{n} objects", n = n),
+                detail: if l.understory { tr!("{n} · sub-canopy", n = n) } else { trn!("{n} object", "{n} objects", n = n) },
                 tip: tr!("{objects} · one every {spacing} blocks, {share:.0}% of the spots", objects = if names.is_empty() { tr!("No objects yet").to_owned() } else { names.join(", ") }, spacing = l.spacing, share = l.density * 100.0),
                 shown: Some(!l.hidden),
                 selected: tools.tool == Tool::Objects && tools.object_layer as usize == k + 1,
@@ -130,6 +130,24 @@ pub fn layers_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
         hint(ui, tr!("None yet: import objects, or drop their files on the window."));
     }
     list(ui, &objects, state, &mut actions);
+
+    // The tree sizes the object layers take where they are painted.
+    ui.add_space(8.0);
+    let pal = Palette::of(ui);
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(format!("{}  {}", theme::glyph(Icon::ChartNoAxesColumnIncreasing), tr!("Tree sizes").to_uppercase())).size(10.5).strong().color(pal.weak));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let eye = if tools.show_sizes { Icon::Eye } else { Icon::EyeOff };
+            if ui.add(egui::Button::new(RichText::new(theme::glyph(eye).to_string()).size(12.0)).frame(false)).on_hover_text(tr!("Show the tree sizes over the map with every tool")).clicked() {
+                tools.show_sizes = !tools.show_sizes;
+            }
+        });
+    });
+    if let Some(n) = crate::panels::size_swatches(ui, 20.0, (tools.tool == Tool::TreeSize).then_some(tools.tree_size), false) {
+        tools.tree_size = n;
+        tools.select(Tool::TreeSize);
+    }
+    hint(ui, tr!("Paint sizes, then a species over them: each spot takes its objects of the size marked."));
 
     // Terrain mixes.
     ui.add_space(8.0);
@@ -484,6 +502,10 @@ mod tests {
         h.get_by_label("Light blue").click();
         h.run_steps(2);
         assert_eq!((h.state().tools.tool, h.state().tools.annotation), (Tool::Annotate, 4));
+        // A tree size paints with it.
+        h.get_by_label("Large trees").click();
+        h.run_steps(2);
+        assert_eq!((h.state().tools.tool, h.state().tools.tree_size), (Tool::TreeSize, 4));
 
         // Hidden: left off the map, written in the file, nothing else.
         let s = h.state_mut();

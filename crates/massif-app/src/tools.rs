@@ -32,6 +32,9 @@ pub enum Tool {
     /// Marks in colour on the map, as WorldPainter's annotations: never
     /// exported.
     Annotate,
+    /// The size of tree the objects painted there take: bushes, small,
+    /// medium or large trees.
+    TreeSize,
     /// The biome the land calls for; the terrain the biome calls for.
     AutoBiome,
     AutoPaint,
@@ -71,7 +74,7 @@ impl Tool {
             &[Tool::PaintTerrain, Tool::Gradient, Tool::PaintBiome, Tool::AutoPaint, Tool::AutoBiome, Tool::Annotate],
         ),
         (tn!("Select"), Icon::SquareDashed, &[Tool::SelectRect, Tool::SelectEllipse, Tool::SelectLasso, Tool::SelectBrush]),
-        (tn!("Decor"), Icon::Shrub, &[Tool::Cover, Tool::Objects]),
+        (tn!("Decor"), Icon::Shrub, &[Tool::Cover, Tool::Objects, Tool::TreeSize]),
         (tn!("Water"), Icon::Droplet, &[Tool::River, Tool::Flood, Tool::Drain, Tool::Water]),
         (tn!("Levels"), Icon::Layers, &[Tool::StampSlab, Tool::EraseSlab]),
         (tn!("Navigate"), Icon::Compass, &[Tool::Pan, Tool::Eyedropper]),
@@ -95,6 +98,7 @@ impl Tool {
             Tool::Cover => tr!("Ground cover"),
             Tool::Objects => tr!("Objects"),
             Tool::Annotate => tr!("Annotations"),
+            Tool::TreeSize => tr!("Tree sizes"),
             Tool::AutoBiome => tr!("Auto biome"),
             Tool::AutoPaint => tr!("Auto paint"),
             Tool::Eyedropper => tr!("Eyedropper"),
@@ -129,6 +133,7 @@ impl Tool {
             Tool::Cover => Icon::Sprout,
             Tool::Objects => Icon::TreePine,
             Tool::Annotate => Icon::PenLine,
+            Tool::TreeSize => Icon::ChartNoAxesColumnIncreasing,
             Tool::AutoBiome => Icon::Earth,
             Tool::AutoPaint => Icon::WandSparkles,
             Tool::Eyedropper => Icon::Pipette,
@@ -170,6 +175,7 @@ impl Tool {
             Tool::Cover => tr!("Paint what grows: grass, flowers, snow… Right button: remove it."),
             Tool::Objects => tr!("Paint where objects stand: trees, rocks… Right button: remove them."),
             Tool::Annotate => tr!("Mark the map in colour, to plan it: never exported. Right button: rub out."),
+            Tool::TreeSize => tr!("Mark where bushes, small, medium or large trees grow: the object layers painted there take objects of that size. Right button: any size."),
             Tool::AutoBiome => {
                 tr!("Sets the biome the land calls for: beach, forest, peaks…")
             }
@@ -313,6 +319,10 @@ pub struct ToolState {
     /// The colour annotations are painted in, 1 to 15 (see
     /// [`massif_core::tile::ANNOTATION_COLORS`]).
     pub annotation: u16,
+    /// The tree size painted, 1 (bushes) to 4 (large trees).
+    pub tree_size: u16,
+    /// The tree sizes shown over the map even when another tool is in hand.
+    pub show_sizes: bool,
     pub water_level: i16,
     /// The water tools take their level from where they are used: Flood
     /// fills the hollow clicked up to where it spills, the Water brush lays
@@ -889,6 +899,8 @@ impl Default for ToolState {
             cover: 1,
             object_layer: 0,
             annotation: 14,
+            tree_size: 2,
+            show_sizes: false,
             water_level: 63,
             water_from_click: true,
             water_limit_on: false,
@@ -1120,6 +1132,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
     let dt = dt.clamp(0.0, 0.1);
     // Annotations are marks on the map, whatever the level: on the ground's.
     let level = if stroke.tool == Tool::Annotate { 0 } else { stroke.level.min(doc.dimension().levels.len() - 1) };
+    let understory = doc.world.registry.object_layer(tools.object_layer).is_some_and(|l| l.understory);
     let surface = tools.surface();
     let mut edit = doc.history.edit(&mut doc.world, level);
     for k in 1..=n {
@@ -1173,7 +1186,10 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                 ops::paint_biome(&mut edit, brush, x, z, BiomeId(biome), stroke.salt)
             }
             Tool::Cover => ops::paint_cover(&mut edit, brush, x, z, if invert { 0 } else { tools.cover }, stroke.salt),
+            // A sub-canopy layer is painted beside the base one.
+            Tool::Objects if understory => ops::paint_understory(&mut edit, brush, x, z, if invert { 0 } else { tools.object_layer }, stroke.salt),
             Tool::Objects => ops::paint_objects(&mut edit, brush, x, z, if invert { 0 } else { tools.object_layer }, stroke.salt),
+            Tool::TreeSize => ops::paint_tree_size(&mut edit, brush, x, z, if invert { 0 } else { tools.tree_size.clamp(1, 4) }, stroke.salt),
             Tool::Annotate => ops::paint_annotation(&mut edit, brush, x, z, if invert { 0 } else { tools.annotation.clamp(1, 15) }, stroke.salt),
             Tool::AutoBiome => match &reader {
                 Some(reader) if !invert => {

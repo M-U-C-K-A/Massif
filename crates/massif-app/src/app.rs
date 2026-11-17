@@ -7199,6 +7199,91 @@ mod tests {
         assert_eq!(heights(&h), before, "one undo takes it all back");
     }
 
+    /// Jack's forest, as the Conquest Reforged team paints one: tree sizes
+    /// in four bands (bushes, small, medium, large trees), one species of
+    /// oaks over all of them, a sub-canopy of bushes under them. Rendered
+    /// (with MASSIF_SNAPSHOT_DIR) on the map with the sizes over it, on the
+    /// map close up, and in the 3D view.
+    #[test]
+    fn forest_of_sizes_and_sub_canopy_renders() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        use massif_core::treepack::TreeKind;
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1600.0, 1000.0))
+            .with_pixels_per_point(std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0))
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_eframe(move |cc| {
+                theme::install(&cc.egui_ctx);
+                let mut world = generate(&GenParams { tiles_x: 4, tiles_z: 4, landform: Landform::Plains, seed: 3, ..GenParams::default() });
+                let oaks = TreeKind::BigOak.install(&mut world.registry);
+                let bushes = TreeKind::Bush.install(&mut world.registry);
+                assert!(world.registry.object_layer(bushes).unwrap().understory, "bushes grow under the canopy");
+                let band = |_x: f32| massif_core::Brush { shape: massif_core::BrushShape::Square, radius: 40.0, profile: massif_core::Profile::Constant, strength: 1.0, ..massif_core::Brush::default() };
+                let all = massif_core::Brush { shape: massif_core::BrushShape::Square, radius: 160.0, profile: massif_core::Profile::Constant, strength: 1.0, ..massif_core::Brush::default() };
+                let mut hist = massif_core::history::History::default();
+                hist.begin("forest", 0);
+                {
+                    let mut e = hist.edit(&mut world, 0);
+                    for (k, x) in [-120.0f32, -40.0, 40.0, 120.0].into_iter().enumerate() {
+                        for z in [-120.0f32, -40.0, 40.0, 120.0] {
+                            massif_core::ops::paint_tree_size(&mut e, &band(x), x, z, k as u16 + 1, 7 + k as u64);
+                        }
+                    }
+                    massif_core::ops::paint_objects(&mut e, &all, 0.0, 0.0, oaks, 1);
+                    massif_core::ops::paint_understory(&mut e, &all, 0.0, 0.0, bushes, 2);
+                }
+                hist.commit();
+                let mut app = MassifApp::for_tests(world);
+                app.settings.theme = ThemeChoice::Dark;
+                app.tools.select(Tool::TreeSize);
+                app
+            });
+        h.run_steps(10);
+        let id = h.state().active_map.or_else(|| h.state().maps.keys().next().copied()).expect("a map view");
+        {
+            let view = h.state_mut().maps.get_mut(&id).unwrap();
+            view.center = [0.5, 0.5];
+            view.zoom = 1.6;
+        }
+        h.run_steps(40);
+        h.render().unwrap().save(dir.join("forest-sizes-map.png")).unwrap();
+        // Close up, without the sizes: the oaks seen from above, small to
+        // large, the bushes between them.
+        h.state_mut().tools.select(Tool::Objects);
+        {
+            let view = h.state_mut().maps.get_mut(&id).unwrap();
+            view.center = [0.5, 0.5];
+            view.zoom = 3.2;
+        }
+        h.run_steps(40);
+        h.render().unwrap().save(dir.join("forest-map.png")).unwrap();
+        // The 3D view, looking along the bands from the south.
+        h.state_mut().layout.active = 3;
+        let mut frames = 0;
+        while frames < 5 || h.state().view3d.pending() > 0 {
+            h.step();
+            frames += 1;
+            assert!(frames < 3000, "the 3D view never finished");
+        }
+        let top = {
+            let dim = h.state().doc.dimension();
+            massif_core::ops::height_at(dim, 0, 0, 0, massif_core::ops::Surface::Top).unwrap_or(64.0)
+        };
+        h.state_mut().view3d.camera = crate::view3d::Camera { target: [0.5, top as f64, 40.5], yaw: 0.0, pitch: 0.3, distance: 260.0 };
+        h.run_steps(30);
+        h.render().unwrap().save(dir.join("forest-3d.png")).unwrap();
+        // Close, where the bushes meet the small trees, and the medium the
+        // large ones.
+        for (x, name) in [(-80.5, "forest-3d-bushes-small.png"), (80.5, "forest-3d-medium-large.png")] {
+            h.state_mut().view3d.camera = crate::view3d::Camera { target: [x, top as f64 + 3.0, 150.5], yaw: 0.0, pitch: 0.22, distance: 70.0 };
+            h.run_steps(30);
+            h.render().unwrap().save(dir.join(name)).unwrap();
+        }
+    }
+
     /// Edit ▸ Caves: the dialog carves tunnels, ravines and caverns in the
     /// background, in one step that undo takes back; they show in the 3D
     /// view and in 3D Sculpt (renders with MASSIF_SNAPSHOT_DIR).

@@ -522,6 +522,58 @@ pub fn paint_annotation(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, color:
     paint_plane(edit, brush, cx, cz, salt, color.min(15), |t| &mut t.annotations);
 }
 
+/// Paint a sub-canopy object layer by its number (0 removes it): beside
+/// the base object layer of each column, not in its place. `salt` should
+/// change from dab to dab.
+pub fn paint_understory(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, layer: u16, salt: u64) {
+    paint_plane(edit, brush, cx, cz, salt, layer, |t| &mut t.understory);
+}
+
+/// Paint the size of tree the objects standing there take, from
+/// [`crate::tile::SIZE_BUSHES`] to [`crate::tile::SIZE_LARGE`] (0: any
+/// size). `salt` should change from dab to dab.
+pub fn paint_tree_size(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, size: u16, salt: u64) {
+    paint_plane(edit, brush, cx, cz, salt, size.min(crate::tile::SIZE_LARGE), |t| &mut t.sizes);
+}
+
+/// Move what is painted of object layer `n` to the sub-canopy plane
+/// (`under`) or back to the base one, in every tile of the level edited:
+/// where the column already has a layer there, it gives its place.
+/// Returns the columns moved.
+pub fn move_object_layer(edit: &mut Edit, n: u16, under: bool) -> usize {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    // Only the tiles that have some of it, so that the step to undo holds
+    // no others.
+    let holds = |p: &Plane<u16>| match p.uniform_value() {
+        Some(v) => v == n,
+        None => p.dense().contains(&n),
+    };
+    let tiles: Vec<TilePos> = edit.level().positions().filter(|&p| edit.view(p).is_some_and(|t| holds(if under { &t.objects } else { &t.understory }))).collect();
+    let moved = AtomicUsize::new(0);
+    let everywhere = BlockRect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX);
+    edit.par_tiles(tiles, everywhere, false, |_, _, tile| {
+        let (from, to) = if under { (&tile.objects, &tile.understory) } else { (&tile.understory, &tile.objects) };
+        if from.uniform_value().is_some_and(|v| v != n) {
+            return;
+        }
+        let (mut from, mut to) = (from.dense().to_vec(), to.dense().to_vec());
+        let mut count = 0;
+        for i in 0..TILE_AREA {
+            if from[i] == n {
+                (from[i], to[i]) = (0, n);
+                count += 1;
+            }
+        }
+        if count > 0 {
+            let (a, b) = if under { (&mut tile.objects, &mut tile.understory) } else { (&mut tile.understory, &mut tile.objects) };
+            *a = Plane::from_vec(from);
+            *b = Plane::from_vec(to);
+            moved.fetch_add(count, Ordering::Relaxed);
+        }
+    });
+    moved.into_inner()
+}
+
 /// Paint an object layer by its number (0 removes it). `salt` should
 /// change from dab to dab.
 pub fn paint_objects(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, layer: u16, salt: u64) {

@@ -294,7 +294,7 @@ mod tests {
             h.run_steps(2);
         }
         let reg = &h.state().doc.world.registry;
-        assert_eq!(reg.objects.len(), objects + massif_core::treepack::VARIANTS, "added once");
+        assert_eq!(reg.objects.len(), objects + 2 * massif_core::treepack::VARIANTS, "added once, its trees and their smaller ones");
         assert_eq!(h.state().tools.tool, Tool::Objects);
         assert_eq!(reg.object_layer(h.state().tools.object_layer).unwrap().name, "Firs");
 

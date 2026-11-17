@@ -193,6 +193,57 @@ impl ObjectDef {
         self.size.iter().map(|&s| s as usize).product()
     }
 
+    /// The object made smaller (or larger) by `scale`, named `name`: each
+    /// block of the new box takes the most telling block of the part of the
+    /// old box it covers — wood over leaves over anything else over air —,
+    /// so that a trunk stays whole and a crown stays a crown.
+    pub fn scaled(&self, scale: f32, name: &str) -> ObjectDef {
+        let scale = scale.clamp(0.1, 4.0);
+        let old = self.size.map(|s| s as usize);
+        let new = self.size.map(|s| ((s as f32 * scale).round() as usize).max(1));
+        let rank = |k: u16| -> u8 {
+            let state = self.palette.get(k as usize).map_or("", |s| s.as_str());
+            match state {
+                _ if k == 0 => 0,
+                s if ["_log", "_wood", "_stem", "_hyphae", "mushroom_stem"].iter().any(|w| s.contains(w)) => 3,
+                s if s.contains("leaves") => 2,
+                _ => 1,
+            }
+        };
+        let span = |n: usize, axis: usize| -> (usize, usize) {
+            let a = ((n as f32 / scale).floor() as usize).min(old[axis] - 1);
+            let b = (((n + 1) as f32 / scale).floor() as usize).clamp(a + 1, old[axis]);
+            (a, b)
+        };
+        let mut blocks = vec![0u16; new[0] * new[1] * new[2]];
+        for y in 0..new[1] {
+            let (y0, y1) = span(y, 1);
+            for z in 0..new[2] {
+                let (z0, z1) = span(z, 2);
+                for x in 0..new[0] {
+                    let (x0, x1) = span(x, 0);
+                    let mut best = (0u8, 0u16);
+                    for sy in y0..y1 {
+                        for sz in z0..z1 {
+                            for sx in x0..x1 {
+                                let k = self.at(sx, sy, sz);
+                                let r = rank(k);
+                                if r > best.0 {
+                                    best = (r, k);
+                                }
+                            }
+                        }
+                    }
+                    blocks[x + z * new[0] + y * new[0] * new[2]] = best.1;
+                }
+            }
+        }
+        let mut def = ObjectDef::new(name, new.map(|s| s as u16), self.palette.clone(), blocks);
+        def.anchor = std::array::from_fn(|k| ((self.anchor[k] as f32 * scale).floor() as u16).min(new[k] as u16 - 1));
+        def.source = self.source.clone();
+        def
+    }
+
     /// The palette index of block `(x, y, z)` of the box.
     #[inline]
     pub fn at(&self, x: usize, y: usize, z: usize) -> u16 {
@@ -361,6 +412,11 @@ pub struct ObjectLayerDef {
     /// Left off the map and the 3D view; the export writes it all the same.
     #[serde(default, skip_serializing_if = "crate::registry::is_false")]
     pub hidden: bool,
+    /// A sub-canopy layer: it is painted beside the base layer of a column
+    /// rather than in its place, and its objects grow under the canopy,
+    /// in the air the base layer's leave (hazel, holly, bushes).
+    #[serde(default, skip_serializing_if = "crate::registry::is_false")]
+    pub understory: bool,
 }
 
 impl ObjectLayerDef {
@@ -381,7 +437,50 @@ impl ObjectLayerDef {
             replace: false,
             removed: false,
             hidden: false,
+            understory: false,
         }
+    }
+
+    /// The size of each of its objects (in the order of
+    /// [`ObjectLayerDef::objects`]), from 1 (bushes) to 4 (large trees): a
+    /// quarter of them each, by their height, the lowest first.
+    pub fn size_classes(&self, reg: &Registry) -> Vec<u8> {
+        let height = |k: usize| self.objects.get(k).and_then(|o| reg.objects.get(o.0 as usize)).map_or(0, |d| d.size[1]);
+        let mut order: Vec<usize> = (0..self.objects.len()).collect();
+        order.sort_by_key(|&k| (height(k), k));
+        let n = order.len().max(1);
+        let mut classes = vec![1u8; self.objects.len()];
+        for (rank, k) in order.into_iter().enumerate() {
+            classes[k] = 1 + (rank * 4 / n) as u8;
+        }
+        classes
+    }
+
+    /// The object one of its spots gets, from the draw `r` of its
+    /// [`Candidate`]: by their weights among all of them for size 0 (any),
+    /// else among those of the size asked (see
+    /// [`ObjectLayerDef::size_classes`], given as `classes`), or the nearest
+    /// size it has.
+    pub fn pick(&self, r: u32, size: u16, classes: &[u8]) -> Option<u32> {
+        // The size it has nearest to the one asked, the smaller of two as
+        // near.
+        let class = if size == 0 { None } else { classes.iter().copied().min_by_key(|&c| ((c as i32 - size as i32).abs(), c)) };
+        let wanted = |k: usize| class.is_none_or(|c| classes.get(k) == Some(&c));
+        // An object of weight 0 stands only where its size is asked for.
+        let weight = |w: u16| if size == 0 { w as u32 } else { w.max(1) as u32 };
+        let total: u32 = self.objects.iter().enumerate().filter(|(k, _)| wanted(*k)).map(|(_, o)| weight(o.1)).sum();
+        if total == 0 {
+            return None;
+        }
+        let mut r = r % total;
+        self.objects.iter().enumerate().filter(|(k, _)| wanted(*k)).find(|(_, o)| {
+            if r < weight(o.1) {
+                true
+            } else {
+                r -= weight(o.1);
+                false
+            }
+        }).map(|(_, o)| o.0)
     }
 
     /// Where an object of this layer, numbered `number`, may stand in
@@ -398,19 +497,8 @@ impl ObjectLayerDef {
         if density < 1.0 && h(0) as f32 >= density * u32::MAX as f32 {
             return None;
         }
-        let total: u32 = self.objects.iter().map(|o| o.1 as u32).sum();
-        if total == 0 {
-            return None;
-        }
-        let mut r = h(1) % total;
-        let object = self.objects.iter().find(|o| {
-            if r < o.1 as u32 {
-                true
-            } else {
-                r -= o.1 as u32;
-                false
-            }
-        })?;
+        let pick = h(1);
+        let object = self.pick(pick, 0, &[])?;
         // Kept off the edges of the square: two objects are never closer
         // than a third of the spacing.
         let margin = s / 6;
@@ -418,7 +506,8 @@ impl ObjectLayerDef {
         Some(Candidate {
             x: i * s + margin + (h(2) % room) as i32,
             z: j * s + margin + (h(3) % room) as i32,
-            object: object.0,
+            object,
+            pick,
             turn: if self.rotate { (h(4) % 4) as u8 } else { 0 },
             mirror: self.mirror && h(5) & 1 == 1,
         })
@@ -430,7 +519,11 @@ impl ObjectLayerDef {
 pub struct Candidate {
     pub x: i32,
     pub z: i32,
+    /// The object, of any size.
     pub object: u32,
+    /// The draw that chose it, to choose again among the objects of one
+    /// size (see [`ObjectLayerDef::pick`]).
+    pub pick: u32,
     pub turn: u8,
     pub mirror: bool,
 }
@@ -449,6 +542,9 @@ pub struct Placement {
     /// Quarter turns clockwise seen from above, after mirroring along x.
     pub turn: u8,
     pub mirror: bool,
+    /// Of a sub-canopy layer: it only takes the place of air (and water and
+    /// plants), never of the base layer's objects.
+    pub under: bool,
 }
 
 /// `(dx, dz)` turned `turn` quarter turns clockwise seen from above (east
@@ -608,13 +704,16 @@ pub fn transform_state(state: &str, turn: u8, mirror: bool) -> String {
 /// In a fixed order: by layer, then row by row of their grid.
 pub fn tile_placements(reg: &Registry, mat: &Materializer, seed: u64, lava: bool, stack: &TileStack, pos: TilePos) -> Vec<Placement> {
     let mut out = Vec::new();
-    // The layers painted on the tile at all.
-    let mut painted: Vec<u16> = Vec::new();
+    // The layers painted on the tile at all: the base ones, then the
+    // sub-canopy ones, which stand where the base ones leave air.
+    let mut painted: Vec<(bool, u16)> = Vec::new();
     for (_, _, tile) in stack.layers() {
-        match tile.objects.uniform_value() {
-            Some(0) => {}
-            Some(v) => painted.push(v),
-            None => painted.extend(tile.objects.dense().iter().copied().filter(|&v| v != 0)),
+        for (under, plane) in [(false, &tile.objects), (true, &tile.understory)] {
+            match plane.uniform_value() {
+                Some(0) => {}
+                Some(v) => painted.push((under, v)),
+                None => painted.extend(plane.dense().iter().copied().filter(|&v| v != 0).map(|v| (under, v))),
+            }
         }
         painted.sort_unstable();
         painted.dedup();
@@ -624,8 +723,9 @@ pub fn tile_placements(reg: &Registry, mat: &Materializer, seed: u64, lava: bool
     }
     let (ox, oz) = pos.origin();
     let (mut spans, mut fluids) = (Vec::new(), Vec::new());
-    for n in painted {
+    for (under, n) in painted {
         let Some(layer) = reg.object_layer(n) else { continue };
+        let classes = layer.size_classes(reg);
         let s = layer.spacing.max(1) as i32;
         let (i0, i1) = (ox.div_euclid(s), (ox + 127).div_euclid(s));
         let (j0, j1) = (oz.div_euclid(s), (oz + 127).div_euclid(s));
@@ -638,9 +738,18 @@ pub fn tile_placements(reg: &Registry, mat: &Materializer, seed: u64, lava: bool
                 let cell = local_index(c.x, c.z);
                 stack.spans(cell, &mut spans);
                 let Some(top) = spans.last().copied() else { continue };
-                if stack.surface_objects(cell, &top) != n {
+                let here = if under { stack.surface_understory(cell, &top) } else { stack.surface_objects(cell, &top) };
+                if here != n {
                     continue;
                 }
+                // The size of tree asked for here, if any.
+                let object = match stack.surface_size(cell, &top) {
+                    0 => c.object,
+                    size => match layer.pick(c.pick, size, &classes) {
+                        Some(o) if reg.objects.get(o as usize).is_some() => o,
+                        _ => continue,
+                    },
+                };
                 stack.fluids(cell, &spans, &mut fluids);
                 let wet = fluids.iter().any(|f| f.0 == top.y1);
                 if wet != layer.underwater || (wet && lava) {
@@ -651,12 +760,13 @@ pub fn tile_placements(reg: &Registry, mat: &Materializer, seed: u64, lava: bool
                 }
                 out.push(Placement {
                     layer: n,
-                    object: c.object,
+                    object,
                     x: c.x,
                     y: top.y1 - layer.sink as i32,
                     z: c.z,
                     turn: c.turn,
                     mirror: c.mirror,
+                    under,
                 });
             }
         }
@@ -773,7 +883,7 @@ mod tests {
     #[test]
     fn placements_turn_their_blocks_around_the_anchor() {
         let t = tree();
-        let p = Placement { layer: 1, object: 0, x: 100, y: 64, z: 50, turn: 1, mirror: false };
+        let p = Placement { layer: 1, object: 0, x: 100, y: 64, z: 50, turn: 1, mirror: false, under: false };
         // The anchor stays put; the vine east of the trunk goes south.
         assert_eq!(p.world(&t, 2, 1, 2), (100, 64, 50));
         assert_eq!(p.world(&t, 3, 2, 2), (100, 65, 51));
@@ -836,5 +946,113 @@ mod tests {
         let mut spans = Vec::new();
         stack.spans(local_index(p.x, p.z), &mut spans);
         assert_eq!(p.y, spans.last().unwrap().y1);
+    }
+
+    /// A column of `h` logs: an object `h` blocks tall.
+    fn pole(name: &str, h: u16) -> ObjectDef {
+        ObjectDef::new(name, [1, h, 1], vec!["minecraft:air".into(), "minecraft:oak_log[axis=y]".into()], vec![1; h as usize])
+    }
+
+    /// A layer's objects split by height into four sizes, a quarter each;
+    /// a size asked for takes the objects of that size, or of the nearest
+    /// it has (the smaller of two as near), by their weights.
+    #[test]
+    fn sizes_split_a_layers_objects_by_height() {
+        let mut reg = Registry::vanilla();
+        for h in [9u16, 2, 7, 4, 3, 8, 5, 6] {
+            reg.objects.push(pole(&format!("{h} high"), h));
+        }
+        let all: Vec<u32> = (0..8).collect();
+        let layer = ObjectLayerDef::new("Poles", &all, &reg);
+        let classes = layer.size_classes(&reg);
+        assert_eq!(classes, [4, 1, 3, 2, 1, 4, 2, 3]);
+        let height = |o: u32| reg.objects[o as usize].size[1];
+        for r in 0..200u32 {
+            assert!(matches!(height(layer.pick(r, 1, &classes).unwrap()), 2 | 3));
+            assert!(matches!(height(layer.pick(r, 4, &classes).unwrap()), 8 | 9));
+        }
+        // Size 0 picks as the candidate does, among all of them.
+        let picked: std::collections::HashSet<u32> = (0..64).map(|r| layer.pick(r, 0, &classes).unwrap()).collect();
+        assert_eq!(picked.len(), 8);
+        let c = layer.candidate(3, 1, 4, 7).unwrap();
+        assert_eq!(layer.pick(c.pick, 0, &classes), Some(c.object));
+        // Fewer than four: the nearest size it has.
+        let few = ObjectLayerDef::new("Two", &[1, 0], &reg);
+        let classes = few.size_classes(&reg);
+        assert_eq!(classes, [1, 3]);
+        assert_eq!(few.pick(5, 4, &classes), Some(0), "large: the 9 high");
+        assert_eq!(few.pick(5, 2, &classes), Some(1), "small: as near to the bush as to the medium, the smaller");
+    }
+
+    /// A sub-canopy layer is painted beside the base one and stands its
+    /// objects with them; the sizes painted choose each spot's object; a
+    /// layer turned sub-canopy takes what was painted of it along, and an
+    /// undo puts it back.
+    #[test]
+    fn sub_canopy_layers_and_sizes() {
+        let mut w = generate(&GenParams { tiles_x: 2, tiles_z: 2, seed: 5, ..GenParams::default() });
+        for (name, h) in [("small", 3u16), ("big", 12), ("bush", 2)] {
+            w.registry.objects.push(pole(name, h));
+        }
+        let mut oaks = ObjectLayerDef::new("Oaks", &[0, 1], &w.registry);
+        (oaks.soil_only, oaks.density, oaks.spacing) = (false, 1.0, 6);
+        let oaks = w.registry.add_object_layer(oaks);
+        let mut hazel = ObjectLayerDef::new("Hazel", &[2], &w.registry);
+        (hazel.soil_only, hazel.density, hazel.spacing, hazel.understory) = (false, 1.0, 5, true);
+        let hazel = w.registry.add_object_layer(hazel);
+        let flat = crate::Brush { radius: 60.0, profile: crate::Profile::Constant, strength: 1.0, ..crate::Brush::default() };
+        let mut h = History::default();
+        h.begin("forest", 0);
+        {
+            let mut e = h.edit(&mut w, 0);
+            crate::ops::set_height(&mut e, &flat, 0.0, 0.0, 80.0, crate::ops::Surface::Top);
+            crate::ops::paint_objects(&mut e, &flat, 0.0, 0.0, oaks, 1);
+            crate::ops::paint_understory(&mut e, &flat, 0.0, 0.0, hazel, 2);
+            // Small trees west, large ones east.
+            let half = crate::Brush { radius: 30.0, shape: crate::BrushShape::Square, profile: crate::Profile::Constant, strength: 1.0, ..crate::Brush::default() };
+            crate::ops::paint_tree_size(&mut e, &half, -30.0, 0.0, crate::tile::SIZE_BUSHES + 1, 3);
+            crate::ops::paint_tree_size(&mut e, &half, 30.0, 0.0, crate::tile::SIZE_LARGE, 4);
+        }
+        h.commit();
+        let placements = |w: &crate::world::World| {
+            let dim = &w.dims[0];
+            let mat = Materializer::new(&w.registry, w.meta.seed, dim.min_y);
+            let mut all = Vec::new();
+            for pos in [TilePos::new(-1, -1), TilePos::new(0, -1), TilePos::new(-1, 0), TilePos::new(0, 0)] {
+                let stack = TileStack::new(dim, pos, true).unwrap();
+                all.extend(tile_placements(&w.registry, &mat, 1, false, &stack, pos));
+            }
+            all
+        };
+        let all = placements(&w);
+        let (base, under): (Vec<&Placement>, Vec<&Placement>) = all.iter().partition(|p| !p.under);
+        assert!(base.len() > 100 && under.len() > 100, "{} oaks, {} hazels", base.len(), under.len());
+        assert!(base.iter().all(|p| p.layer == oaks) && under.iter().all(|p| p.layer == hazel && p.object == 2));
+        // West of x = 0 the small oaks, east the big ones.
+        for p in &base {
+            if p.x < -2 && p.x > -58 && p.z.abs() < 28 {
+                assert_eq!(p.object, 0, "small at {}", p.x);
+            }
+            if p.x > 2 && p.x < 58 && p.z.abs() < 28 {
+                assert_eq!(p.object, 1, "big at {}", p.x);
+            }
+        }
+        // Painting a base layer over another takes its place; the
+        // sub-canopy stays.
+        let tile = |w: &crate::world::World| w.dims[0].ground().view(TilePos::new(0, 0)).unwrap().understory.get(local_index(10, 10));
+        assert_eq!(tile(&w), hazel);
+
+        // Hazel turned base: its columns move to the base plane, where they
+        // take the oaks' place; undone, they come back.
+        h.begin("role", 0);
+        let moved = crate::ops::move_object_layer(&mut h.edit(&mut w, 0), hazel, false);
+        h.commit();
+        assert!(moved > 10_000, "{moved}");
+        let view = w.dims[0].ground().view(TilePos::new(0, 0)).unwrap();
+        assert_eq!((view.objects.get(local_index(10, 10)), view.understory.get(local_index(10, 10))), (hazel, 0));
+        drop(view);
+        h.undo(&mut w);
+        let view = w.dims[0].ground().view(TilePos::new(0, 0)).unwrap();
+        assert_eq!((view.objects.get(local_index(10, 10)), view.understory.get(local_index(10, 10))), (oaks, hazel));
     }
 }

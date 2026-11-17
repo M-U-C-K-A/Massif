@@ -234,6 +234,12 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
             Some(tr!("Import .schem, .schematic, .bp, .litematic or .nbt files in its settings.")),
             Some(Demo::Objects),
         ),
+        Tool::TreeSize => card(
+            tr!("Marks where bushes, small, medium or large trees grow. Paint a species over it: each spot takes that species' objects of the size marked."),
+            vec![(tr!("Drag"), tr!("Mark a size")), (tr!("Right-drag"), tr!("Any size"))],
+            Some(tr!("A layer's objects are split by height into four sizes, a quarter each.")),
+            Some(Demo::TreeSize),
+        ),
         Tool::Annotate => card(
             tr!("Marks the map in colour, as WorldPainter's annotations: where a town goes, a road, a river to dig."),
             vec![(tr!("Drag"), tr!("Mark")), (tr!("Right-drag"), tr!("Rub out"))],
@@ -343,6 +349,7 @@ pub enum Demo {
     Cover,
     Objects,
     Annotate,
+    TreeSize,
     AutoPaint,
     AutoBiome,
     Eyedropper,
@@ -599,6 +606,22 @@ impl Demo {
                     Scene::near(x, y, 9.0, |i, _| t[i] = Some([214, 190, 96]));
                 }
                 stroke(9.0)
+            }
+            Demo::TreeSize => {
+                // Bands of sizes, then trees grown to them.
+                s.add_hills(3.0);
+                for k in 0..steps {
+                    let (x, y) = sweep(k as f64 / SAMPLES as f64);
+                    let t = &mut s.tint;
+                    Scene::near(x, y, 8.0, |i, _| t[i] = Some(if (i % W) < W / 2 { [126, 190, 82] } else { [24, 84, 52] }));
+                }
+                for (n, x) in [16.0, 30.0, 44.0, 58.0, 72.0].into_iter().enumerate() {
+                    let grown = smooth_step(0.0, 1.0, steps as f64 / SAMPLES as f64 * 1.4 - n as f64 * 0.12);
+                    if grown > 0.0 {
+                        s.trees.push((x, H as f64 / 2.0, grown * (0.45 + 0.13 * n as f64)));
+                    }
+                }
+                stroke(8.0)
             }
             Demo::Annotate => {
                 // A red line drawn over the land, as a pen would.

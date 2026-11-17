@@ -148,6 +148,15 @@ impl TreeKind {
         matches!(self, TreeKind::TallSpruce | TreeKind::Fir | TreeKind::Redwood | TreeKind::SlenderSpruce | TreeKind::Larch)
     }
 
+    /// Its trees, in [`VARIANTS`] sizes and shapes, then as many smaller
+    /// ones, the first half of them made bushes and the second half small
+    /// trees (see [`sized`]). Always the same ones.
+    pub fn trees_and_sizes(self) -> Vec<ObjectDef> {
+        let trees = self.trees();
+        let small = sized(&trees);
+        trees.into_iter().chain(small).collect()
+    }
+
     /// Its trees, in [`VARIANTS`] sizes and shapes: always the same ones.
     pub fn trees(self) -> Vec<ObjectDef> {
         let mut random = JavaRandom::new(self.ordinal() * 7919 + 17);
@@ -183,16 +192,22 @@ impl TreeKind {
             return k as u16 + 1;
         }
         let first = reg.objects.len() as u32;
-        let trees = self.trees();
+        let trees = self.trees_and_sizes();
         let n = trees.len() as u32;
         reg.objects.extend(trees);
         let indices: Vec<u32> = (first..first + n).collect();
         let mut layer = ObjectLayerDef::new(self.name(), &indices, reg);
+        // The smaller ones only where Tree sizes ask for them.
+        for o in layer.objects.iter_mut().skip(VARIANTS) {
+            o.1 = 0;
+        }
         let reach = indices.iter().map(|&k| reg.objects[k as usize].reach()).max().unwrap_or(2);
         // A forest: crowns may touch, a little.
         layer.spacing = ((reach as f32 * 1.3) as u16 + 2).clamp(3, 64);
         layer.density = 0.75;
         layer.color = self.color();
+        // Bushes grow under the canopy of the trees painted with them.
+        layer.understory = matches!(self, TreeKind::Bush | TreeKind::Azalea);
         reg.add_object_layer(layer)
     }
 }
@@ -209,10 +224,11 @@ pub fn install_mix(name: &str, kinds: &[(TreeKind, u16)], reg: &mut Registry) ->
     let mut objects = Vec::new();
     for &(kind, weight) in kinds {
         let first = reg.objects.len() as u32;
-        let trees = kind.trees();
+        let trees = kind.trees_and_sizes();
         let n = trees.len() as u32;
         reg.objects.extend(trees);
-        objects.extend((first..first + n).map(|k| (k, weight.max(1))));
+        // The smaller ones only where Tree sizes ask for them.
+        objects.extend((first..first + n).map(|k| (k, if k - first < VARIANTS as u32 { weight.max(1) } else { 0 })));
     }
     let indices: Vec<u32> = objects.iter().map(|o| o.0).collect();
     let mut layer = ObjectLayerDef::new(name, &indices, reg);
@@ -222,6 +238,23 @@ pub fn install_mix(name: &str, kinds: &[(TreeKind, u16)], reg: &mut Registry) ->
     layer.density = 0.75;
     layer.color = kinds.first().map_or([58, 112, 52], |k| k.0.color());
     reg.add_object_layer(layer)
+}
+
+/// Smaller trees for the sizes of a kind, from its `trees`: the first half
+/// made bushes (two fifths of their size), the second half small trees
+/// (two thirds), so that the four sizes of Tree sizes each have trees of
+/// their own: bushes, small trees, and the kind's own for the medium and
+/// large ones.
+pub fn sized(trees: &[ObjectDef]) -> Vec<ObjectDef> {
+    let half = trees.len() / 2;
+    trees
+        .iter()
+        .enumerate()
+        .map(|(k, t)| {
+            let (scale, what) = if k < half { (0.4, "bush") } else { (0.66, "small") };
+            t.scaled(scale, &format!("{} ({what})", t.name))
+        })
+        .collect()
 }
 
 /// What the pack's trees say they were read from.
@@ -827,12 +860,47 @@ mod tests {
         let mut reg = Registry::vanilla();
         let n = TreeKind::Fir.install(&mut reg);
         assert_eq!(TreeKind::Fir.install(&mut reg), n);
-        assert_eq!(reg.objects.len(), VARIANTS);
+        assert_eq!(reg.objects.len(), 2 * VARIANTS);
         let layer = reg.object_layer(n).unwrap();
-        assert_eq!((layer.name.as_str(), layer.objects.len()), ("Firs", VARIANTS));
+        assert_eq!((layer.name.as_str(), layer.objects.len()), ("Firs", 2 * VARIANTS));
         assert!(layer.spacing >= 3);
+        // Its own trees stand anywhere; the smaller ones only where a tree
+        // size asks for them.
+        assert!(layer.objects[..VARIANTS].iter().all(|o| o.1 > 0) && layer.objects[VARIANTS..].iter().all(|o| o.1 == 0));
         let m = TreeKind::Birch.install(&mut reg);
         assert_ne!(m, n);
-        assert_eq!(reg.objects.len(), 2 * VARIANTS);
+        assert_eq!(reg.objects.len(), 4 * VARIANTS);
+    }
+
+    /// The four sizes of a kind each have trees of their own: its bushes,
+    /// its small trees, its own trees for the medium and large ones; made
+    /// smaller, a tree keeps its trunk whole.
+    #[test]
+    fn every_kind_comes_in_four_sizes() {
+        let mut reg = Registry::vanilla();
+        for kind in TreeKind::ALL {
+            let n = kind.install(&mut reg);
+            let layer = reg.object_layer(n).unwrap().clone();
+            let classes = layer.size_classes(&reg);
+            let height = |k: usize| reg.objects[layer.objects[k].0 as usize].size[1];
+            for size in 1..=4u16 {
+                let of: Vec<usize> = (0..classes.len()).filter(|&k| classes[k] as u16 == size).collect();
+                assert_eq!(of.len(), VARIANTS / 2, "{} size {size}", kind.name());
+            }
+            let tallest = |size: u8| (0..classes.len()).filter(|&k| classes[k] == size).map(height).max().unwrap();
+            let lowest = |size: u8| (0..classes.len()).filter(|&k| classes[k] == size).map(height).min().unwrap();
+            for size in 1..4u8 {
+                assert!(tallest(size) <= lowest(size + 1), "{}: size {size} up to {}, the next from {}", kind.name(), tallest(size), lowest(size + 1));
+            }
+            // The bushes are of its smaller ones.
+            assert!((0..classes.len()).filter(|&k| classes[k] == 1).all(|k| k >= VARIANTS), "{}", kind.name());
+        }
+        // A tree made smaller: its trunk whole from its foot up.
+        let oak = &TreeKind::BigOak.trees()[0];
+        let bush = oak.scaled(0.4, "bush");
+        let [ax, _, az] = bush.anchor.map(|a| a as usize);
+        let trunk = (0..bush.size[1] as usize).take_while(|&y| bush.palette[bush.at(ax, y, az) as usize].contains("_log")).count();
+        assert!(trunk >= 2, "a trunk of {trunk}");
+        assert!(bush.size[1] < oak.size[1] / 2 + 2);
     }
 }

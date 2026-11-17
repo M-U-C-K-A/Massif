@@ -898,6 +898,42 @@ to build, a river to dig — to plan a map. They are drawn over the map in
 every view mode, whatever the level being edited, and never exported. The
 right button rubs them out; the pen button in the map's header hides them.
 
+### Base layers, sub-canopy and tree sizes
+
+How all the layers fit together — kinds, the slots of a block, masks, order,
+visibility and lock — is in [Layers](layers.md).
+
+A block has one **base** plant layer (its ground cover) and one **base**
+tree layer (its object layer): painting another over it takes the place of
+the first, so two plants or two species of trees never grow on one block.
+WorldPainter lets layers pile up on a block; Massif keeps them apart by
+itself.
+
+An object layer can instead be a **sub-canopy** layer (**Canopy ▸
+Sub-canopy** in its settings): it is painted beside the base tree layer of a
+block, not in its place, and its objects grow under that layer's trees —
+hazel, holly, dogwood, bushes. A block has one sub-canopy layer too. In the
+export and the 3D view, the base layer's trees stand first and the
+sub-canopy's grow only in the air they leave (and in water and plants):
+never through a trunk or a crown. The **Bushes** and **Azalea bushes** of
+Packs ▸ Trees are sub-canopy layers. Turning a layer sub-canopy, or back to
+base, takes what is painted of it along, as one step to undo. In the Layers
+panel, a sub-canopy layer says so beside its count of objects.
+
+**Tree sizes** (the **Tree sizes** tool, in the Decor group, and the four
+swatches under the object layers in the Layers panel) mark where
+**bushes**, **small trees**, **medium trees** and **large trees** grow. Paint
+them first, then paint one species over everything — Big oaks, say — and
+each spot takes that species' objects of the size marked: its smallest
+where Bushes is painted, its tallest where Large trees is. A layer's objects
+are split by their height into the four sizes, a quarter of them each (the
+sixteen kinds of trees of Packs come in eight sizes, two to each); where a
+layer has none of the size asked for, the nearest one it has stands. The
+settings of an object layer show the size of each of its objects. The sizes
+show over the map, in four greens, while the tool is in hand, or always with
+the eye of their section in the Layers panel; the right button paints any
+size again.
+
 ### WorldPainter's layers in Massif
 
 | WorldPainter | In Massif | From a `.world` |
@@ -934,7 +970,7 @@ already (marked with a dot) picks it again. A search field filters them.
 
 | Section | Holds | Becomes |
 |---|---|---|
-| Trees | Tall spruces, slender spruces, firs, larches, giant redwoods, big oaks, pale oaks, birches, cherry trees, acacias, willows, rainforest giants, palm trees, dead trees, bushes, azalea bushes — eight of each, in different sizes and shapes | An object layer |
+| Trees | Tall spruces, slender spruces, firs, larches, giant redwoods, big oaks, pale oaks, birches, cherry trees, acacias, willows, rainforest giants, palm trees, dead trees, bushes, azalea bushes — eight of each, in different sizes and shapes, and eight smaller ones (bushes and small trees) that stand only where Tree sizes ask for them | An object layer (bushes and azalea bushes: a sub-canopy one) |
 | Flowers | Wildflower meadow, flower mix, tulip field, sunflower field, roses and lilacs, spring flowers, pink petals, swamp flowers | A ground cover |
 | Plants & ground cover | Grass and flowers, dense grass, forest ferns, forest floor, berry bushes, dry grass, desert plants, jungle undergrowth, pale garden, mushroom patches, pumpkins and melons | A ground cover |
 | Water plants | Seagrass and kelp, coral garden, sugar cane | A ground cover |

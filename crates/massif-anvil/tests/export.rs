@@ -659,6 +659,86 @@ fn covered_world() -> World {
     w
 }
 
+/// A sub-canopy layer grows in the air the base layer leaves: painted over
+/// the same blocks as oaks, hazels change none of the oaks' blocks, and
+/// stand in the air between them. A tree size painted chooses the objects
+/// written: small oaks where small trees are marked.
+#[test]
+fn sub_canopy_grows_under_the_canopy() {
+    let pole = |name: &str, h: u16, state: &str| ObjectDef::new(name, [1, h, 1], vec!["minecraft:air".into(), state.into()], vec![1; h as usize]);
+    let bush = ObjectDef::new("Hazel", [3, 2, 3], vec!["minecraft:air".into(), "minecraft:azalea_leaves[distance=1,persistent=true,waterlogged=false]".into()], vec![1; 18]);
+    let mut world = build_world();
+    let first = world.registry.objects.len() as u32;
+    world.registry.objects.extend([pole("Oak", 10, "minecraft:oak_log[axis=y]"), pole("Small oak", 4, "minecraft:birch_log[axis=y]"), bush]);
+    let mut oaks = ObjectLayerDef::new("Oaks", &[first, first + 1], &world.registry);
+    (oaks.soil_only, oaks.density, oaks.spacing, oaks.rotate, oaks.mirror) = (false, 1.0, 4, false, false);
+    let oaks = world.registry.add_object_layer(oaks);
+    let mut hazel = ObjectLayerDef::new("Hazel", &[first + 2], &world.registry);
+    (hazel.soil_only, hazel.density, hazel.spacing, hazel.understory) = (false, 1.0, 3, true);
+    let hazel = world.registry.add_object_layer(hazel);
+    let mut only_oaks = world.clone();
+    let paint = |w: &mut World, under: bool| {
+        let mut h = History::default();
+        h.begin("forest", 0);
+        {
+            let mut e = h.edit(w, 0);
+            ops::paint_objects(&mut e, &hard(10.0), -40.0, -40.0, oaks, 1);
+            if under {
+                ops::paint_understory(&mut e, &hard(10.0), -40.0, -40.0, hazel, 2);
+            }
+        }
+        h.commit();
+    };
+    paint(&mut only_oaks, false);
+    paint(&mut world, true);
+    let export_to = |w: &mut World, name: &str| {
+        let dir = temp_dir(name);
+        let options = ExportOptions { target: Target::release("1.21.11").unwrap(), ..ExportOptions::default() };
+        export(&w.snapshot(), &dir, &options, &Progress::default()).unwrap();
+        dir
+    };
+    let (a, b) = (export_to(&mut only_oaks, "canopy-oaks"), export_to(&mut world, "canopy-hazel"));
+    let (mut ra, mut rb) = (Reader::new(&a), Reader::new(&b));
+    let (mut logs, mut leaves) = (0, 0);
+    for x in -50..=-30 {
+        for z in -50..=-30 {
+            for y in 100..112 {
+                let (was, is) = (ra.block(x, y, z), rb.block(x, y, z));
+                if was != "minecraft:air" {
+                    assert_eq!(is, was, "the oaks' block at ({x}, {y}, {z})");
+                    logs += 1;
+                } else if is == "minecraft:azalea_leaves" {
+                    leaves += 1;
+                }
+            }
+        }
+    }
+    assert!(logs > 100 && leaves > 100, "{logs} blocks of oaks, {leaves} of hazels");
+    std::fs::remove_dir_all(&a).unwrap();
+    std::fs::remove_dir_all(&b).unwrap();
+
+    // Small trees marked: the small oak only (4 high, birch logs here).
+    let mut h = History::default();
+    h.begin("sizes", 0);
+    ops::paint_tree_size(&mut h.edit(&mut world, 0), &hard(12.0), -40.0, -40.0, massif_core::tile::SIZE_BUSHES, 3);
+    h.commit();
+    let c = export_to(&mut world, "canopy-small");
+    let mut r = Reader::new(&c);
+    let (mut small, mut tall) = (0, 0);
+    for x in -48..=-32 {
+        for z in -48..=-32 {
+            if r.block(x, 100, z) == "minecraft:birch_log" {
+                small += 1;
+            }
+            if r.block(x, 100, z) == "minecraft:oak_log" {
+                tall += 1;
+            }
+        }
+    }
+    assert!(small > 5 && tall == 0, "{small} small oaks, {tall} tall ones");
+    std::fs::remove_dir_all(&c).unwrap();
+}
+
 /// Frost and Lava come with every new map: unpainted, they change nothing,
 /// and the map exports the same bytes as one made before them, which has
 /// neither. Annotations are never exported.

@@ -167,6 +167,9 @@ Hovered over the map, the brush shows in colour what would change.
 ## Layers
 The **Layers** panel (under Terrain; or any area's chooser, in Paint) lists everything painted over the ground, as WorldPainter's layers: the map's ground covers, its object layers and the terrain mixes saved for noise painting. Click one to paint with it (its settings open in Tool Settings), double-click to rename it, click its eye to hide it on the map and in the 3D view (the export writes it all the same), and right-click for Duplicate and Remove. **New cover**, **Import objects…** and **New mix** make new ones. At the bottom, the fifteen colours of the annotations: a click paints with one.
 
+## Base layers, sub-canopy and tree sizes
+A block has one plant layer and one tree layer: painting another over it takes its place. A tree layer can be a **sub-canopy** layer instead (**Canopy ▸ Sub-canopy** in its settings): it is painted beside the trees, not in their place, and its objects (hazel, holly, bushes) grow under their canopy, in the air the trees leave. The Bushes and Azalea bushes of Packs are sub-canopy layers. **Tree sizes** (Decor group, and four swatches in the Layers panel) marks where bushes, small, medium or large trees grow: paint the sizes, then one species over everything, and each spot takes its objects of the size marked. A layer's objects are split by height into four sizes, a quarter each; every kind of tree of the packs comes in the four sizes (its smaller ones, of weight 0, stand only where their size is painted). How every layer works together: see Layers in the guide.
+
 ## Annotations
 **Annotations** (Paint group) marks the map in colour to plan it, as WorldPainter's annotations: where a town goes, a road, a river to dig. They show on the map in every mode, whatever the level, and are never exported. The right button rubs them out; the pen button in the map's header hides them.
 

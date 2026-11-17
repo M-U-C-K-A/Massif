@@ -214,6 +214,9 @@ pub struct PackLayer {
     pub sink: i16,
     #[serde(default)]
     pub replace: bool,
+    /// A sub-canopy layer (see [`crate::objects::ObjectLayerDef::understory`]).
+    #[serde(default, skip_serializing_if = "crate::registry::is_false")]
+    pub understory: bool,
 }
 
 /// An object: blocks in a box. Its blocks are in `objects/<n>.bin`.
@@ -353,6 +356,7 @@ impl Pack {
                 underwater: l.underwater,
                 sink: l.sink,
                 replace: l.replace,
+                understory: l.understory,
             });
         }
         content
@@ -700,6 +704,7 @@ impl Pack {
             replace: l.replace,
             removed: false,
             hidden: false,
+            understory: l.understory,
         })
     }
 
@@ -905,7 +910,7 @@ fn same_terrain(a: &PackTerrain, b: &PackTerrain) -> bool {
 /// Whether a map's layer stands the very objects of a pack's layer, the
 /// same way, whatever its name and colours.
 fn layer_fits(reg: &Registry, def: &crate::objects::ObjectLayerDef, l: &PackLayer, objects: &[PackObject]) -> bool {
-    (def.spacing, def.density, def.rotate, def.mirror, def.soil_only, def.underwater, def.sink, def.replace) == (l.spacing, l.density, l.rotate, l.mirror, l.soil_only, l.underwater, l.sink, l.replace)
+    (def.spacing, def.density, def.rotate, def.mirror, def.soil_only, def.underwater, def.sink, def.replace, def.understory) == (l.spacing, l.density, l.rotate, l.mirror, l.soil_only, l.underwater, l.sink, l.replace, l.understory)
         && def.objects.len() == l.objects.len()
         && def.objects.iter().zip(&l.objects).all(|(&(k, weight), choice)| {
             let (Some(p), q) = (reg.objects.get(k as usize), &objects[choice.object as usize]) else { return false };
@@ -1264,7 +1269,7 @@ mod tests {
     fn a_pack_reads_back_as_it_was_written() {
         let (_, pack) = sample();
         assert_eq!(pack.content.object_layers.len(), 1);
-        assert_eq!(pack.content.objects.len(), crate::treepack::VARIANTS);
+        assert_eq!(pack.content.objects.len(), 2 * crate::treepack::VARIANTS, "its trees, and their bushes and small ones");
         let bytes = pack.to_bytes();
         assert_eq!(bytes, pack.to_bytes(), "written the same each time");
         let back = Pack::from_bytes(&bytes).unwrap();

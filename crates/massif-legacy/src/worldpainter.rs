@@ -472,9 +472,7 @@ impl TileHook<'_> {
     }
 }
 
-/// A tile's layers applied once its whole dimension is read (see
-/// [`crate::layers::apply_after`]), with their strengths.
-type After = Vec<(Conv, Vec<u8>)>;
+use crate::layers::After;
 
 fn encode(raw: RawTile, beaches: &crate::terrains::Beaches) -> (Handle, TilePos, Blob, After) {
     let mut tile = Tile::ground(0.0, 0, NO_FLUID);
@@ -507,8 +505,8 @@ fn encode(raw: RawTile, beaches: &crate::terrains::Beaches) -> (Handle, TilePos,
     }
     if !raw.painted.is_empty() {
         let (ox, oz) = raw.pos.origin();
-        let (mut covers, mut objects) = (vec![0u16; TILE_AREA], vec![0u16; TILE_AREA]);
-        let mut best = vec![0u8; TILE_AREA];
+        let (mut covers, mut objects, mut under) = (vec![0u16; TILE_AREA], vec![0u16; TILE_AREA], vec![0u16; TILE_AREA]);
+        let (mut best, mut best_under) = (vec![0u8; TILE_AREA], vec![0u8; TILE_AREA]);
         for p in &raw.painted {
             for (i, &strength) in p.strength.iter().enumerate() {
                 if strength == 0 {
@@ -517,10 +515,15 @@ fn encode(raw: RawTile, beaches: &crate::terrains::Beaches) -> (Handle, TilePos,
                 let (x, z) = (ox + (i & 127) as i32, oz + (i >> 7) as i32);
                 match p.conv {
                     Conv::Cover(n) if covers[i] == 0 && crate::layers::kept(strength, Curve::Linear, x, z, n as u64) => covers[i] = n,
-                    // The strongest object layer of the column.
-                    Conv::Objects(n, curve) if strength > best[i] && crate::layers::kept(strength, curve, x, z, 0x10000 | n as u64) => {
+                    // The strongest base object layer of the column, and
+                    // the strongest sub-canopy one.
+                    Conv::Objects(n, curve, false) if strength > best[i] && crate::layers::kept(strength, curve, x, z, 0x10000 | n as u64) => {
                         objects[i] = n;
                         best[i] = strength;
+                    }
+                    Conv::Objects(n, curve, true) if strength > best_under[i] && crate::layers::kept(strength, curve, x, z, 0x10000 | n as u64) => {
+                        under[i] = n;
+                        best_under[i] = strength;
                     }
                     _ => {}
                 }
@@ -528,6 +531,7 @@ fn encode(raw: RawTile, beaches: &crate::terrains::Beaches) -> (Handle, TilePos,
         }
         tile.cover = Plane::from_vec(covers);
         tile.objects = Plane::from_vec(objects);
+        tile.understory = Plane::from_vec(under);
         if let Some(p) = raw.painted.iter().find(|p| p.conv == Conv::Annotations) {
             // Strengths are nibbles × 17: back to the colour.
             tile.annotations = Plane::from_vec(p.strength.iter().map(|&s| (s / 17) as u16).collect());
@@ -1307,7 +1311,8 @@ mod tests {
         assert!(forest.iter().all(|&n| n == forest[0]));
         let share = forest.len() as f32 / (TILE_AREA - 384) as f32;
         assert!((0.2..0.3).contains(&share), "{share}");
-        assert_eq!(deciduous.objects.len(), 16, "big oaks and birches, eight of each");
+        assert_eq!(deciduous.objects.iter().filter(|o| o.1 > 0).count(), 16, "big oaks and birches, eight of each");
+        assert_eq!(deciduous.objects.len(), 32, "and their bushes and small ones, for Tree sizes");
         assert_eq!(short.cover.get(0), 0);
         assert_eq!(short.objects.get(0), 0);
         // Lava on row 5, as a cover; Void on row 6, nothing down to the

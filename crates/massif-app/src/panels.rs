@@ -434,6 +434,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
         Tool::Cover => cover_settings(ui, tools, doc, blocks),
         Tool::Objects => object_settings(ui, tools, doc, blocks),
         Tool::Annotate => annotation_settings(ui, tools),
+        Tool::TreeSize => tree_size_settings(ui, tools),
         Tool::PaintBiome => {
             let reg = &doc.world.registry;
             let def = reg.biome(BiomeId(tools.biome));
@@ -1183,6 +1184,7 @@ fn object_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, block
     }
     let k = k.expect("checked above");
     let reg = &mut doc.world.registry;
+    let classes = reg.object_layers[k].size_classes(reg);
     let objects = std::mem::take(&mut reg.objects);
     let layer = &mut reg.object_layers[k];
     ui.add_space(4.0);
@@ -1217,6 +1219,24 @@ fn object_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, block
         crate::widgets::checkbox(ui, &mut layer.underwater, tr!("Under water")).on_hover_text(tr!("Coral, wrecks: in the water rather than the air"));
     });
     crate::widgets::checkbox(ui, &mut layer.replace, tr!("Replace the ground")).on_hover_text(tr!("Their blocks take the place of the ground they reach; otherwise only of air, water and plants"));
+    // Base or sub-canopy.
+    let mut role = None;
+    ui.horizontal(|ui| {
+        ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Canopy")));
+        if let Some(c) = crate::widgets::button_group(ui, "canopy", &[tr!("Base"), tr!("Sub-canopy")], &[!layer.understory, layer.understory])
+            && (c == 1) != layer.understory
+        {
+            role = Some(c == 1);
+        }
+    });
+    hint(
+        ui,
+        if layer.understory {
+            tr!("Grows under the canopy of the base layer painted on the same blocks (hazel, holly, bushes), in the air its trees leave. A block has one sub-canopy layer: painting another takes its place.")
+        } else {
+            tr!("A block has one base tree layer: painting another over it takes its place. A sub-canopy layer shares its blocks.")
+        },
+    );
 
     section(ui, Icon::Boxes, &tr!("Objects · {n}", n = layer.objects.len()));
     let total: f32 = layer.objects.iter().map(|o| o.1 as f32).sum::<f32>().max(1.0);
@@ -1233,8 +1253,9 @@ fn object_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, block
                 ui.spacing_mut().item_spacing.y = 1.0;
                 ui.add(egui::Label::new(RichText::new(&def.name).strong()).truncate()).on_hover_text(&def.source);
                 ui.label(RichText::new(tr!("{value} × {value2} × {value3} · {n} blocks", value = def.size[0], value2 = def.size[1], value3 = def.size[2], n = def.count())).size(11.0).color(pal.weak));
+                ui.label(RichText::new(size_name(classes.get(row).copied().unwrap_or(1) as u16)).size(11.0).color(pal.weak)).on_hover_text(tr!("Its size, where Tree sizes are painted: a quarter of the layer's objects each, by height"));
                 ui.horizontal(|ui| {
-                    crate::widgets::drag(ui, egui::DragValue::new(weight).range(1..=1000).speed(0.2)).on_hover_text(tr!("Weight: how often it stands against the others"));
+                    crate::widgets::drag(ui, egui::DragValue::new(weight).range(0..=1000).speed(0.2)).on_hover_text(tr!("Weight: how often it stands against the others. 0: only where Tree sizes ask for its size"));
                     ui.label(RichText::new(format!("{:.0}%", *weight as f32 * 100.0 / total)).size(11.0).color(pal.weak));
                     if ui.add(egui::Button::new(theme::glyph(Icon::X).to_string()).frame(false).small()).on_hover_text(tr!("Take it out of the layer")).clicked() {
                         remove = Some(row);
@@ -1261,6 +1282,17 @@ fn object_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, block
     reg.objects = objects;
     if removed {
         tools.object_layer = reg.object_layers.iter().position(|l| !l.removed).map_or(0, |k| k as u16 + 1);
+    }
+    // What is painted of it moves to the sub-canopy, or back to the base,
+    // as one step to undo.
+    if let Some(under) = role {
+        reg.object_layers[k].understory = under;
+        let (n, levels) = (k as u16 + 1, doc.dimension().levels.len());
+        doc.history.begin(if under { tr!("Sub-canopy layer") } else { tr!("Base tree layer") }, doc.dim);
+        for level in 0..levels {
+            massif_core::ops::move_object_layer(&mut doc.history.edit(&mut doc.world, level), n, under);
+        }
+        doc.history.commit();
     }
     if add {
         let files = pick(tr!("Add objects"));
@@ -1307,6 +1339,70 @@ fn plant_name(state: &str) -> String {
     let short = name.strip_prefix("minecraft:").unwrap_or(name).replace('_', " ");
     let mut c = short.chars();
     c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+}
+
+/// The name of tree size `n` (1 to 4).
+pub fn size_name(n: u16) -> &'static str {
+    match n {
+        1 => tr!("Bushes"),
+        2 => tr!("Small trees"),
+        3 => tr!("Medium trees"),
+        _ => tr!("Large trees"),
+    }
+}
+
+/// The four tree sizes as swatches `size` points wide in their colours, the
+/// one of `picked` ringed, each named beside it when `named`; returns the
+/// one clicked.
+pub fn size_swatches(ui: &mut Ui, size: f32, picked: Option<u16>, named: bool) -> Option<u16> {
+    let pal = Palette::of(ui);
+    let mut clicked = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(size / 4.0, size / 6.0);
+        for (k, color) in crate::map_render::SIZE_COLORS.iter().enumerate() {
+            let n = k as u16 + 1;
+            let name = size_name(n);
+            let width = if named { size + 8.0 + ui.painter().layout_no_wrap(name.to_owned(), egui::FontId::proportional(12.0), pal.text).size().x + 8.0 } else { size };
+            let (rect, response) = ui.allocate_exact_size(vec2(width, size), Sense::click());
+            response.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, picked == Some(n), name));
+            let painter = ui.painter();
+            let radius = theme::TILE_RADIUS / 2;
+            let swatch = Rect::from_min_size(rect.min, vec2(size, size)).shrink(size / 8.0);
+            painter.rect(swatch, radius, theme::rgb(*color), Stroke::new(1.0, pal.border), StrokeKind::Inside);
+            // A tree, as tall as the size.
+            let h = swatch.height() * (0.35 + 0.15 * n as f32);
+            let foot = swatch.center_bottom() - vec2(0.0, swatch.height() * 0.12);
+            painter.circle_filled(foot - vec2(0.0, h * 0.6), h * 0.35, Color32::from_black_alpha(90));
+            painter.line_segment([foot, foot - vec2(0.0, h * 0.4)], Stroke::new(1.5, Color32::from_black_alpha(110)));
+            if named {
+                painter.text(rect.left_center() + vec2(size + 6.0, 0.0), egui::Align2::LEFT_CENTER, name, egui::FontId::proportional(12.0), pal.text);
+            }
+            if picked == Some(n) {
+                painter.rect_stroke(rect, radius, Stroke::new(2.0, pal.accent), StrokeKind::Inside);
+            } else if response.hovered() {
+                painter.rect_stroke(rect, radius, Stroke::new(1.0, pal.text), StrokeKind::Inside);
+            }
+            let response = if named { response } else { response.on_hover_text(name) };
+            if response.clicked() {
+                clicked = Some(n);
+            }
+        }
+    });
+    clicked
+}
+
+/// The tree sizes to paint: a click picks one.
+fn tree_size_settings(ui: &mut Ui, tools: &mut ToolState) {
+    if let Some(n) = size_swatches(ui, 26.0, Some(tools.tree_size), true) {
+        tools.tree_size = n;
+    }
+    hint(ui, tr!("Paint the sizes first, then a species over them (one object layer, such as Oaks): where Small trees is marked, only its small oaks stand. A layer's objects are split by height into four sizes, a quarter each; where it has none of a size, the nearest one."));
+    ui.add_space(4.0);
+    crate::widgets::well(ui, |ui| {
+        crate::widgets::row(ui, tr!("Show over the map with every tool"), |ui| {
+            crate::widgets::switch(ui, &mut tools.show_sizes);
+        });
+    });
 }
 
 /// The name of annotation colour `n` (1 to 15).

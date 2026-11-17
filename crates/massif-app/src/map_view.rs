@@ -1228,6 +1228,7 @@ impl MapView {
             top: doc.dimension().max_y,
             seed: doc.world.meta.seed,
             annotations: self.annotations,
+            sizes: tools.show_sizes || tools.tool == tools::Tool::TreeSize,
         };
         let ppp = ui.ctx().pixels_per_point();
         let blocks_per_px = 1.0 / (self.zoom * ppp);
@@ -1655,6 +1656,8 @@ impl MapView {
                             cover: p.cover,
                             objects: p.objects,
                             annotation: 0,
+                            understory: 0,
+                            size: 0,
                             flags: 0,
                             levels: 0,
                         };

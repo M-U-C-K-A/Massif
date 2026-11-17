@@ -118,6 +118,26 @@ impl<'a> TileStack<'a> {
         self.layers.iter().find(|l| l.index == level).map_or(0, |l| l.tile.objects.get(cell))
     }
 
+    /// The sub-canopy object layer painted on the top of column `cell` (see
+    /// [`TileStack::surface_cover`]).
+    pub fn surface_understory(&self, cell: usize, top: &Span) -> u16 {
+        if self.is_ground_only() {
+            return self.ground().understory.get(cell);
+        }
+        let level = self.surface_level(cell, top).unwrap_or(0);
+        self.layers.iter().find(|l| l.index == level).map_or(0, |l| l.tile.understory.get(cell))
+    }
+
+    /// The tree size asked for on the top of column `cell` (see
+    /// [`TileStack::surface_cover`]).
+    pub fn surface_size(&self, cell: usize, top: &Span) -> u16 {
+        if self.is_ground_only() {
+            return self.ground().sizes.get(cell);
+        }
+        let level = self.surface_level(cell, top).unwrap_or(0);
+        self.layers.iter().find(|l| l.index == level).map_or(0, |l| l.tile.sizes.get(cell))
+    }
+
     /// True when only the ground level has data here (the common fast path).
     pub fn is_ground_only(&self) -> bool {
         self.layers.len() == 1 && self.sculpt.is_none()

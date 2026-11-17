@@ -86,6 +86,9 @@ pub struct ExportContext<'a> {
     /// The first state that is not a block of the registry: plants of
     /// covers and blocks of objects, which objects may take the place of.
     first_extra: u16,
+    /// The first state of an object's block (after the plants of covers):
+    /// a sub-canopy object never takes the place of one.
+    first_object: u16,
     /// How far any object reaches from its anchor; 0 without objects.
     pub reach: i32,
     /// The ores laid in the rock, if any.
@@ -193,6 +196,7 @@ impl<'a> ExportContext<'a> {
             covers.push(plants);
         }
         // The objects of the layers, each way they may stand.
+        let first_object = states.len().min(SKIP as usize - 1) as u16;
         let used: std::collections::HashSet<u32> = reg.object_layers.iter().filter(|l| !l.removed).flat_map(|l| l.objects.iter().map(|o| o.0)).collect();
         let mut known: std::collections::HashMap<String, u16> = std::collections::HashMap::new();
         let mut waterlogged: Vec<(u16, u16)> = Vec::new();
@@ -387,6 +391,7 @@ impl<'a> ExportContext<'a> {
             soil,
             objects,
             first_extra: reg.blocks.len() as u16,
+            first_object,
             reach,
             ores: massif_core::ores::Placer::new(&world.meta.ores, world.meta.seed),
             ore_states,
@@ -651,7 +656,9 @@ pub fn tile_placements(ctx: &ExportContext, world: &World, dim: &Dimension, pos:
 /// Stand objects in the blocks of the chunk whose corner is `(x0, z0)`.
 fn stand_objects(ctx: &ExportContext, objects: &[Placement], x0: i32, z0: i32, blocks: &mut [u16]) {
     let (min_y, max_y) = (ctx.min_y, ctx.max_y);
-    for p in objects {
+    // The base layers' objects first; the sub-canopy ones then grow in
+    // the air they leave.
+    for p in objects.iter().filter(|p| !p.under).chain(objects.iter().filter(|p| p.under)) {
         let (Some(def), Some(ways)) = (ctx.reg.objects.get(p.object as usize), ctx.objects.get(p.object as usize)) else { continue };
         let Some(states) = ways.get((p.turn & 3) as usize + if p.mirror { 4 } else { 0 }) else { continue };
         let replace = ctx.reg.object_layer(p.layer).is_some_and(|l| l.replace);
@@ -678,8 +685,10 @@ fn stand_objects(ctx: &ExportContext, objects: &[Placement], x0: i32, z0: i32, b
                     let i = (((y - min_y) as usize) << 8) | column;
                     let old = blocks[i];
                     // Unless it replaces the ground, an object only takes
-                    // the place of air, water, plants and other objects.
-                    if replace || old == 0 || old == ctx.water || (old >= ctx.first_extra && old < ctx.first_ore) {
+                    // the place of air, water, plants and other objects; a
+                    // sub-canopy one, of air, water and plants.
+                    let free = old == 0 || old == ctx.water || (old >= ctx.first_extra && old < if p.under { ctx.first_object } else { ctx.first_ore });
+                    if (replace && !p.under) || free {
                         // In still water, a block that can hold water does.
                         let wet = if old == ctx.water && !ctx.lava { ctx.waterlogged.binary_search_by_key(&state, |w| w.0).ok().map(|k| ctx.waterlogged[k].1) } else { None };
                         blocks[i] = wet.unwrap_or(state);

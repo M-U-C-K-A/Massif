@@ -39,8 +39,8 @@ pub enum Curve {
 pub enum Conv {
     /// A ground cover, by number.
     Cover(u16),
-    /// An object layer, by number.
-    Objects(u16, Curve),
+    /// An object layer, by number; a sub-canopy one when `true`.
+    Objects(u16, Curve, bool),
     /// Nothing at all in the column, down to the floor of the world.
     Void,
     /// Annotations: their colour, 1 to 15, a nibble a column.
@@ -65,6 +65,10 @@ impl Conv {
         matches!(self, Conv::Caves(_) | Conv::GroundCover(_) | Conv::Tunnel(_))
     }
 }
+
+/// A tile's layers applied once its whole dimension is read, each with its
+/// strength in every column.
+pub type After = Vec<(Conv, Vec<u8>)>;
 
 /// What kind of caves a layer carves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -277,7 +281,11 @@ pub struct Painted {
 pub fn convert(arena: &Arena, key: Value, class: &str, reg: &mut Registry) -> Option<Conv> {
     let short = class.strip_prefix(LAYERS)?;
     let string = |name: &str| arena.field(key, name).and_then(|v| arena.string(v)).map(str::to_owned);
-    let forest = |name: &str, kinds: &[(TreeKind, u16)], reg: &mut Registry| Some(Conv::Objects(massif_core::treepack::install_mix(name, kinds, reg), Curve::Square));
+    let objects = |n: u16, curve: Curve, reg: &Registry| Conv::Objects(n, curve, reg.object_layer(n).is_some_and(|l| l.understory));
+    let forest = |name: &str, kinds: &[(TreeKind, u16)], reg: &mut Registry| {
+        let n = massif_core::treepack::install_mix(name, kinds, reg);
+        Some(objects(n, Curve::Square, reg))
+    };
     match short {
         "Frost" => Some(Conv::Cover(frost_cover(reg))),
         "FloodWithLava" => Some(Conv::Cover(match reg.covers.iter().position(|c| c.lava && !c.removed) {
@@ -294,9 +302,12 @@ pub fn convert(arena: &Arena, key: Value, class: &str, reg: &mut Registry) -> Op
             // the same, made the same way.
             let name = string("name")?;
             match TreeKind::ALL.into_iter().find(|k| k.name() == name || string("description").is_some_and(|d| d.ends_with(TREE_PACK) && d.starts_with(k.name()))) {
-                Some(kind) => Some(Conv::Objects(kind.install(reg), Curve::Linear)),
+                Some(kind) => {
+                    let n = kind.install(reg);
+                    Some(objects(n, Curve::Linear, reg))
+                }
                 // A layer of the user's own objects, which the world holds.
-                None => object_layer(arena, key, &name, reg).map(|n| Conv::Objects(n, Curve::Square)),
+                None => object_layer(arena, key, &name, reg).map(|n| objects(n, Curve::Square, reg)),
             }
         }
         "plants.PlantLayer" => plant_cover(arena, key, reg).map(Conv::Cover),
@@ -488,7 +499,7 @@ fn wp_object(arena: &Arena, object: Value) -> Option<(massif_core::objects::Obje
 /// ground's, the ground raised by the cover's thickness), tunnels (a level
 /// each: Carve, or Solid when floating) and caves carved where painted, as
 /// deep as the strength (Edit ▸ Caves over a selection of those weights).
-pub fn apply_after(dim: &mut Dimension, painted: &[(TilePos, Vec<(Conv, Vec<u8>)>)], conv: &Converter, reg: &mut Registry, seed: i64, sea: i32) {
+pub fn apply_after(dim: &mut Dimension, painted: &[(TilePos, After)], conv: &Converter, reg: &mut Registry, seed: i64, sea: i32) {
     use massif_core::compose::block_top;
     use massif_core::plane::Plane;
     const AREA: usize = massif_core::TILE_AREA;
@@ -1177,7 +1188,7 @@ mod tests {
         drop(carve);
 
         // Caverns in the tile painted, nowhere else.
-        assert!(dim.voxels.len() > 0, "caverns carved");
+        assert!(!dim.voxels.is_empty(), "caverns carved");
         assert!(dim.voxels.iter().all(|(p, _)| p.tile() == TilePos::new(-1, -1)));
         assert!(dim.selection.is_none());
     }

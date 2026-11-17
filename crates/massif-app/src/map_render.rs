@@ -58,6 +58,10 @@ pub struct Sample {
     pub objects: u16,
     /// Annotation of the column (on the ground level); 0 = none.
     pub annotation: u8,
+    /// Sub-canopy object layer painted on the surface; 0 = none.
+    pub understory: u16,
+    /// Tree size asked for on the surface; 0 = any.
+    pub size: u8,
     pub flags: u8,
     /// Bit `i` set when level `i` (`i < 8`) has the column.
     pub levels: u8,
@@ -72,6 +76,8 @@ impl Sample {
         cover: 0,
         objects: 0,
         annotation: 0,
+        understory: 0,
+        size: 0,
         flags: 0,
         levels: 0,
     };
@@ -93,7 +99,8 @@ impl Sample {
 }
 
 #[inline]
-fn ground_sample(top: f32, terrain: u16, fluid: i16, biome: u16, cover: u16, objects: u16, annotation: u16) -> Sample {
+#[allow(clippy::too_many_arguments)]
+fn ground_sample(top: f32, terrain: u16, fluid: i16, biome: u16, cover: u16, objects: u16, annotation: u16, understory: u16, size: u16) -> Sample {
     let fluid = if fluid != NO_FLUID && fluid as i32 > block_top(top) {
         fluid
     } else {
@@ -107,6 +114,8 @@ fn ground_sample(top: f32, terrain: u16, fluid: i16, biome: u16, cover: u16, obj
         cover,
         objects,
         annotation: annotation as u8,
+        understory,
+        size: size as u8,
         flags: 0,
         levels: 1,
     }
@@ -132,6 +141,8 @@ impl ColumnSampler {
                 g.cover.get(cell),
                 g.objects.get(cell),
                 g.annotations.get(cell),
+                g.understory.get(cell),
+                g.sizes.get(cell),
             );
         }
         stack.spans(cell, &mut self.spans);
@@ -198,6 +209,8 @@ impl ColumnSampler {
             cover: stack.surface_cover(cell, &top),
             objects: stack.surface_objects(cell, &top),
             annotation: stack.ground().annotations.get(cell) as u8,
+            understory: stack.surface_understory(cell, &top),
+            size: stack.surface_size(cell, &top) as u8,
             flags,
             levels,
         }
@@ -214,9 +227,9 @@ impl SurfaceGrid {
             let g = stack.ground();
             let (top, terrain) = (g.top.dense(), g.terrain.dense());
             let (fluid, biome, cover, objects) = (g.fluid.dense(), g.biome.dense(), g.cover.dense(), g.objects.dense());
-            let annotations = g.annotations.dense();
+            let (annotations, understory, sizes) = (g.annotations.dense(), g.understory.dense(), g.sizes.dense());
             (0..TILE_AREA)
-                .map(|i| ground_sample(top[i], terrain[i], fluid[i], biome[i], cover[i], objects[i], annotations[i]))
+                .map(|i| ground_sample(top[i], terrain[i], fluid[i], biome[i], cover[i], objects[i], annotations[i], understory[i], sizes[i]))
                 .collect()
         } else {
             let mut sampler = ColumnSampler::default();
@@ -294,6 +307,7 @@ impl Default for MapStyle {
             top: 320,
             seed: 0,
             annotations: true,
+            sizes: false,
         }
     }
 }
@@ -318,6 +332,10 @@ impl MapMode {
     }
 }
 
+/// The colours of the tree sizes over the map, bushes to large trees: pale
+/// to dark greens.
+pub const SIZE_COLORS: [[u8; 3]; 4] = [[214, 226, 124], [140, 196, 86], [60, 142, 70], [22, 86, 56]];
+
 /// Everything that changes the colour of a texel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MapStyle {
@@ -341,6 +359,8 @@ pub struct MapStyle {
     pub seed: i64,
     /// Annotations are drawn over the map.
     pub annotations: bool,
+    /// The tree sizes are drawn over the map.
+    pub sizes: bool,
 }
 
 /// Default light direction: from the north-west, like WorldPainter.
@@ -639,6 +659,12 @@ impl<'a> Colorizer<'a> {
             }
         }
 
+        // Tree sizes, under the annotations.
+        if self.style.sizes
+            && let Some(&color) = c.size.checked_sub(1).and_then(|k| SIZE_COLORS.get(k as usize))
+        {
+            out = mix(out, color.map(|v| v as f32), 0.6);
+        }
         // Annotations: marks of colour over everything else.
         if self.style.annotations
             && let Some(&color) = c.annotation.checked_sub(1).and_then(|k| massif_core::tile::ANNOTATION_COLORS.get(k as usize))
@@ -877,6 +903,7 @@ fn draw_objects(key: ChunkKey, sources: &Sources, colorizer: &Colorizer, pixels:
             continue;
         }
         let n = k as u16 + 1;
+        let classes = layer.size_classes(reg);
         let s = layer.spacing.max(1) as i64;
         for j in (z0 - reach).div_euclid(s)..=(z0 + span + reach).div_euclid(s) {
             for i in (x0 - reach).div_euclid(s)..=(x0 + span + reach).div_euclid(s) {
@@ -887,18 +914,28 @@ fn draw_objects(key: ChunkKey, sources: &Sources, colorizer: &Colorizer, pixels:
                     continue;
                 }
                 let at = sources.sample(0, c.x, c.z);
-                if at.is_empty() || at.objects != n {
+                // On the base plane, or under the canopy.
+                let under = at.understory == n;
+                if at.is_empty() || (at.objects != n && !under) {
                     continue;
                 }
                 let wet = at.water_depth() > 0.0;
                 if wet != layer.underwater || (wet && colorizer.style.lava) || (layer.soil_only && !colorizer.soil.get(at.terrain as usize).copied().unwrap_or(false)) {
                     continue;
                 }
-                placed.push(massif_core::objects::Placement { layer: n, object: c.object, x: c.x, y: 0, z: c.z, turn: c.turn, mirror: c.mirror });
+                let object = match at.size {
+                    0 => c.object,
+                    size => match layer.pick(c.pick, size as u16, &classes) {
+                        Some(o) if reg.objects.get(o as usize).is_some() => o,
+                        _ => continue,
+                    },
+                };
+                placed.push(massif_core::objects::Placement { layer: n, object, x: c.x, y: 0, z: c.z, turn: c.turn, mirror: c.mirror, under });
             }
         }
     }
-    placed.sort_unstable_by_key(|p| (p.layer, p.x, p.z));
+    // The sub-canopy first: the canopy hides it from above.
+    placed.sort_unstable_by_key(|p| (!p.under, p.layer, p.x, p.z));
     let mut views: HashMap<u32, Vec<(u16, u16)>> = HashMap::new();
     // The texels of each object's top, its shadow a block to the south-east.
     let texels = |p: &massif_core::objects::Placement, views: &mut HashMap<u32, Vec<(u16, u16)>>, shift: i64| -> Vec<(usize, u16, u16)> {
@@ -931,10 +968,21 @@ fn draw_objects(key: ChunkKey, sources: &Sources, colorizer: &Colorizer, pixels:
     for p in &placed {
         let def = &reg.objects[p.object as usize];
         let h = def.size[1].max(1) as f32;
+        // With the tree sizes shown, each tree takes the colour of its size.
+        let tint = if colorizer.style.sizes {
+            let at = sources.sample(0, p.x, p.z);
+            at.size.checked_sub(1).and_then(|k| SIZE_COLORS.get(k as usize)).map(|c| c.map(|v| v as f32))
+        } else {
+            None
+        };
         for (t, k, y) in texels(p, &mut views, 0) {
             // Higher up, lighter: a crown shows its round.
             let shade = 0.72 + 0.4 * (y as f32 + 1.0) / h;
-            pixels[t] = to_color(scale(rgb(def.color(k)), shade));
+            let color = scale(rgb(def.color(k)), shade);
+            pixels[t] = to_color(match tint {
+                Some(tint) => mix(color, tint, 0.55),
+                None => color,
+            });
         }
     }
 }
