@@ -165,6 +165,51 @@ A river dug with the River tool widened evenly from its source to its mouth, wha
 
 On a huge map, closing the 3D view left it building the tiles of the whole map in the background, on nearly every core, for a minute or more: the 2D map stayed slow after it. A 3D view out of sight now stops building at once, and after 20 seconds gives back the memory it holds on the graphics card; opening it again builds what it shows. Its building threads are also fewer on processors with many cores, and on Windows they run below the interface's priority.
 
+**A map opened is always in view.** Opened from the home screen, the recent maps or a backup, a map could show as a black background: framed while the map view had no room yet, a few points high, it came out at 1 %, and a drag at that zoom took the view thousands of blocks away. The map is now framed once its view has room, and framed again when the view grows before you move it. **View ▸ Fit the whole map**, the Home key (in Settings ▸ Keyboard) and the button by the zoom bring the whole map back into view at any time.
+
+
+**No more giant lakes over whole maps**
+
+Edit ▸ Whole map ▸ Lakes and Rivers could flood a wide hollow of a generated map into a lake hundreds of blocks across. A lake now covers at most a 64th of the map's land (64 blocks a side at least; with Rivers, four times more or less with the Lakes setting): in a wider hollow, its water stands lower, a lake in the bottom of the hollow, still held by its rim. A hollow almost flat all over stays whole.
+
+
+**Real coasts, lagoons and lakes come out right**
+
+Edit ▸ Relief of a Real Place and New World from a Real Place made low coasts a wide sand plain dotted with square pools, left rectangles and straight seams in the sea and on some capes, and painted all the water as plains. The coastline now follows a smooth line through the elevation data (which swings either side of 0 m along a coast), the beach is a narrow strip, and the sea floor deepens from the shore with no rectangle of the data's sources showing; where fine data sits in rectangles over a coarse fill, as along Sweden's coast, the fill takes the fine data's coast. Lakes the data gives flat are water at their own level. The sea gets ocean biomes (deep where deep, warm or cold by latitude), lakes and rivers river, the sand beach. A tile the server does not send is asked for again, then made from coarser data with no seam, and the status bar and the log say how many.
+
+
+**Rivers down a slope run in a valley, not down a staircase**
+
+Down a moderate slope, a river dug with the River tool (or Whole map ▸ Rivers) stood in box-like pools from step to step, its banks a staircase of grass ledges on both sides. It now runs down in rapids, a block at a time, its banks sloping down to it as one smooth valley along the whole run. Pools and falls are kept for really steep ground (a grade of some 30 %), fewer and rounder, and the banks ramp down past each fall instead of stepping.
+
+
+**Flood anywhere, warned first**
+
+Clicked with the Flood tool on a spot that is not in a hollow (a slope, a hilltop, flat ground), Flood refused. It now asks: made to stay a block over the spot, the water would spread wherever the land lies lower, and the question says over how many columns and up to what level, with **Flood anyway** to do it (one step to undo, inside the selection when there is one). **Warn before flooding beyond a hollow**, in Tool Settings and on by default, can be turned off to flood at once.
+
+
+**Every mod's blocks the same way.** The Blocks panel now finds the instances installed here with any mod that has blocks, not just Conquest Reforged, and lists those not read yet under "Mods with blocks in your Minecraft instances", each with its mods' names and the version it plays; Use reads it in one click. The Blocks menu (Info ▸ World, and the New map settings) lists Vanilla, the palettes of the mods read for this map, and your own: a mod's palette, such as Conquest Reforged's, is offered only once its blocks are read. Mod palettes are data files shipped with Massif: besides Conquest Reforged's, Biomes O' Plenty, Regions Unexplored and Oh The Biomes We've Gone now have one, and the guide says how to write one for any other mod. The Experimental badge beside "Import WorldPainter layer…" stays on one line in a narrow panel.
+
+
+**Flood raises and lowers water a block at a time**
+
+Clicked on a lake, Flood now raises it by one block, over the shore a block above it, and asks first when a block more would spill over the rim of its hollow. Its right button lowers the lake clicked by one block, leaving the shore it uncovers as the ground was, until the last layer goes, instead of draining the whole lake at once; Shift + right click drains it whole. Held down, either button keeps going at a steady pace, 6 blocks a second by default (**Hold speed** in Tool Settings), up to the rim or down to the bottom, with the 2D map and the 3D views following, and the whole press is one step to undo.
+
+
+**The world's origin no longer looks like a pointer**
+
+The small white plus at x 0, z 0 on the 2D map was taken for the pointer. It now shows only with the tile and chunk grid, smaller and fainter.
+
+
+**The 3D view of a huge map shows at once, never black**
+
+Opened on a very large map, the 3D view used to show a large flat black shape until its tiles were built, and took about ten seconds to show the whole map. It now shows all of the map within about two seconds, from what the 2D map has already read, then refines it from near to far; a part not built yet is never drawn black. The note suggesting a lighter graphics preset no longer appears while the tiles are being built, only when the 3D views stay slow; its button applies the preset and its × stops the suggestion for good.
+
+
+**One clear choice for the water's height, and three water tools that look like what they do**
+
+The Water brush and Flood each take the water's height from one choice in Tool Settings, **Water height**: **Where I start** (the brush fills to the height where each stroke starts; for Flood, **Where I click**: the hollow up to where it would spill), **Sea level**, or **Fixed**, with its level shown only in that mode, and a line under it saying in plain words what will happen. Over the map, a tag by the cursor says the level the tool fills to (**Fills to y 74**) or why the ground stays dry (**Dry here: the ground is at or above y 62.**). The fixed level is the water's level, not a limit: the only limit is **Height limit**, folded apart with its state in its title. Settings from before carry over (From the click on is Where I start, off is Fixed at the same level). The Drain tool is gone: Flood's right click lowers water a block and Shift + right click drains it whole, and a Drain saved in your settings becomes Flood. The Water group is now the Water brush, Flood and River, with new icons for the Water brush (a brush and a drop) and Flood (a hollow filling up).
+
 ## New in 0.6.0
 
 **Massif in French and German.** The whole interface (menus, panels, tools and their cards, tooltips, dialogs, the home screen, Settings and the macOS menu bar) is now also in French and in German, in the words Minecraft and WorldPainter players use. Massif follows the system's language by default; **Settings ▸ Appearance ▸ Language** picks another, and the change applies at once, without a restart. A text not yet translated shows in English rather than in pieces, and the help and the online guide stay in English for now. Names that belong to your map (layers, levels, workspaces you renamed) stay as you wrote them.

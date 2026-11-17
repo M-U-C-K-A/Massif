@@ -1,3 +1,0 @@
-**Flood raises and lowers water a block at a time**
-
-Clicked on a lake, Flood now raises it by one block, over the shore a block above it, and asks first when a block more would spill over the rim of its hollow. Its right button lowers the lake clicked by one block, leaving the shore it uncovers as the ground was, until the last layer goes, instead of draining the whole lake at once; Shift + right click drains it whole. Held down, either button keeps going at a steady pace, 6 blocks a second by default (**Hold speed** in Tool Settings), up to the rim or down to the bottom, with the 2D map and the 3D views following, and the whole press is one step to undo.
