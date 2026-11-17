@@ -311,3 +311,72 @@ fn a_soft_brush_fills_in_without_creeping() {
         }
     }
 }
+
+/// A shore that bends within the brush, the first click: grass with a
+/// forest of `first` from x = 0 eastward, a beach of sand turning a corner
+/// (down x = -14..-8, then along z = 20..26 to the forest's edge), and the
+/// sea beyond it (its floor grass, under the water). The gradient paints
+/// the grass in the inner corner and leaves every grain of sand and the
+/// sea floor as they were, at the bend too, from the first click on.
+#[test]
+fn a_bend_in_the_shore_is_left_as_it_is_from_the_first_click() {
+    let g = massif_core::gradient::built_in().into_iter().find(|g| g.name == "Deciduous forest to grass").unwrap();
+    let (mut w, _, stone) = map(2);
+    let reg = w.registry.clone();
+    let (first, sand, grass) = (reg.terrain_by_name(&g.bands[0].terrain).unwrap(), reg.terrain_by_name("Sand").unwrap(), reg.terrain_by_name("Grass").unwrap());
+    assert_ne!(first, stone);
+    let mut history = History::default();
+    history.begin("base", 0);
+    let mut edit = history.edit(&mut w, 0);
+    ops::paint_terrain(&mut edit, &Brush::symmetric(BrushShape::Square, Profile::Constant, 100.0), 100.0, 0.0, first, 1);
+    let cell = Brush::symmetric(BrushShape::Square, Profile::Constant, 0.5);
+    let beach = |x: i32, z: i32| ((-14..-8).contains(&x) && z < 26) || ((-14..-2).contains(&x) && (20..26).contains(&z));
+    let sea = |x: i32, z: i32| (x < -14 && z < 26) || (x < -2 && z >= 26);
+    for z in -100..100 {
+        for x in -60..0 {
+            if beach(x, z) {
+                ops::paint_terrain(&mut edit, &cell, x as f32 + 0.5, z as f32 + 0.5, sand, 1);
+            }
+        }
+    }
+    history.commit();
+    // The sea: its floor four blocks under the water.
+    for tz in -2..2 {
+        for tx in -2..1 {
+            let Some(tile) = w.dims[0].ground_mut().tile_mut(TilePos::new(tx, tz)) else { continue };
+            for i in 0..massif_core::coords::TILE_AREA {
+                let (x, z) = (tx * 128 + (i % 128) as i32, tz * 128 + (i / 128) as i32);
+                if sea(x, z) {
+                    tile.top.set(i, 59.0);
+                }
+            }
+        }
+    }
+    let before = w.copy_unfrozen();
+    // One click by the corner, the brush over the beach, the bend and the sea.
+    let soft = Brush { strength: 1.0, ..Brush::symmetric(BrushShape::Circle, Profile::Sine, 60.0) };
+    let mut sides = Sides::new();
+    stroke(&mut w, &g, &soft, &[(0.0, 10.0)], &mut sides);
+    let mut painted = 0;
+    for z in -60..80 {
+        for x in -60..0 {
+            let (was, now) = (terrain(&before, x, z), terrain(&w, x, z));
+            if beach(x, z) || sea(x, z) {
+                assert_eq!(now, was, "{x}, {z}: {} stays as it was", if beach(x, z) { "the beach" } else { "the sea floor" });
+            } else if was == grass && now != grass {
+                painted += 1;
+            }
+        }
+    }
+    assert!(painted > 100, "the grass in the inner corner is painted: {painted} columns");
+    // A second click changes nothing but the soft rim it fills in.
+    let once = w.copy_unfrozen();
+    stroke(&mut w, &g, &soft, &[(0.0, 10.0)], &mut sides);
+    for z in -60..80 {
+        for x in -60..0 {
+            if beach(x, z) || sea(x, z) {
+                assert_eq!(terrain(&w, x, z), terrain(&once, x, z), "{x}, {z}");
+            }
+        }
+    }
+}
