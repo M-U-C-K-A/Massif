@@ -7109,6 +7109,143 @@ mod tests {
         }
     }
 
+    /// Switching the views' styles (Terrain, Height, Slope, Biome, Relief)
+    /// on a real map (MASSIF_MOVE_WORLD: a .massif), the 3D view beside the
+    /// map: each frame's work and the processor's time (every thread) until
+    /// both views show the new style, flipping through the styles a frame
+    /// apart, and whether anything is drawn once nothing changes.
+    #[test]
+    fn switching_view_styles_on_a_real_world() {
+        use crate::map_render::MapMode;
+        let Some(path) = std::env::var_os("MASSIF_MOVE_WORLD").map(PathBuf::from) else {
+            return;
+        };
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1440.0, 900.0))
+            .with_pixels_per_point(2.0)
+            .with_step_dt(1.0 / 60.0)
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_eframe(move |cc| {
+                theme::install(&cc.egui_ctx);
+                MassifApp::for_tests(generate(&GenParams { tiles_x: 2, tiles_z: 2, ..GenParams::default() }))
+            });
+        h.run_steps(3);
+        let ctx = h.ctx.clone();
+        h.state_mut().jobs.push(Job::open(&ctx, path));
+        while !h.state().jobs.is_empty() {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.state_mut().dialog = None;
+        // MASSIF_GRAPHICS_PRESET (low, medium, high): the graphics preset,
+        // Medium if not said.
+        if let Ok(name) = std::env::var("MASSIF_GRAPHICS_PRESET") {
+            use crate::graphics::{Graphics, Preset};
+            let preset = [Preset::Low, Preset::Medium, Preset::High].into_iter().find(|p| format!("{p:?}").eq_ignore_ascii_case(&name)).expect("low, medium or high");
+            crate::graphics::set(Graphics::of(preset));
+        }
+        // The workspace with the map and the 3D view side by side.
+        let k = h.state().layout.workspaces.iter().position(|w| w.root.shows(EditorKind::Map) && w.root.shows(EditorKind::View3d)).expect("a workspace with both views");
+        h.state_mut().layout.active = k;
+        h.state_mut().view3d.reduce_while_moving = true;
+        type H = egui_kittest::Harness<'static, MassifApp>;
+        let busy = |app: &MassifApp| app.view3d.pending() > 0 || app.map_cache.busy();
+        // Frames until both views have drawn what they show (at most 6,000):
+        // their count, the time, each frame's work and the processor's time.
+        let settle = |h: &mut H, name: &str, first: &dyn Fn(&mut MassifApp)| {
+            let (started, cpu0) = (std::time::Instant::now(), crate::devtools::cpu_time().unwrap_or_default());
+            let mut work = Vec::new();
+            first(h.state_mut());
+            loop {
+                let t = std::time::Instant::now();
+                h.step();
+                work.push(t.elapsed().as_secs_f32() * 1000.0);
+                if (work.len() >= 3 && !busy(h.state())) || work.len() >= 6000 {
+                    break;
+                }
+            }
+            let took = started.elapsed().as_secs_f32();
+            let cpu = (crate::devtools::cpu_time().unwrap_or_default() - cpu0).as_secs_f32();
+            let n = work.len();
+            work.sort_by(f32::total_cmp);
+            eprintln!(
+                "{name}: {n} frames, {took:.2} s, CPU {cpu:.2} s ({:.0} % of a core); {} colour pairs; frame work mean {:.1} p95 {:.1} max {:.1} ms",
+                100.0 * cpu / took.max(1e-3),
+                h.state().view3d.pairs(),
+                work.iter().sum::<f32>() / n as f32,
+                work[(n * 95 / 100).min(n - 1)],
+                work[n - 1]
+            );
+        };
+        settle(&mut h, "opened, both views drawn", &|_| {});
+        // At rest: the work of a frame and the frames asked for.
+        let rest = |h: &mut H, name: &str| {
+            h.run_steps(30);
+            let (mut asked, mut causes, mut work) = (0, std::collections::BTreeSet::new(), Vec::new());
+            let cpu0 = crate::devtools::cpu_time().unwrap_or_default();
+            for _ in 0..240 {
+                let t = std::time::Instant::now();
+                h.step();
+                work.push(t.elapsed().as_secs_f32() * 1000.0);
+                if h.ctx.requested_repaint_last_pass_for(&h.ctx.viewport_id()) {
+                    asked += 1;
+                    causes.extend(h.ctx.repaint_causes().iter().map(|c| c.to_string()));
+                }
+            }
+            let cpu = (crate::devtools::cpu_time().unwrap_or_default() - cpu0).as_secs_f32() * 1000.0 / 240.0;
+            work.sort_by(f32::total_cmp);
+            eprintln!("{name}: {asked} of 240 frames asked for another; a frame's work {:.2} ms (middle), CPU {cpu:.2} ms; causes {causes:?}", work[120]);
+        };
+        rest(&mut h, "at rest");
+        let id = h.state().active_map.or_else(|| h.state().maps.keys().next().copied()).expect("a map view");
+        let styles = [MapMode::Height, MapMode::Slope, MapMode::Biome, MapMode::Relief, MapMode::Terrain];
+        // The builder as it was (each read of a tile decoding it again), then
+        // decoding each tile once.
+        for (how, cold) in [("decoded at each read", true), ("decoded once", false)] {
+            crate::view3d::COLD_BUILDS.store(cold, std::sync::atomic::Ordering::Relaxed);
+            for m in styles {
+                settle(&mut h, &format!("3D view to {m:?}, tiles {how}"), &|app| app.view3d.mode = m);
+            }
+        }
+        for m in styles {
+            settle(&mut h, &format!("map to {m:?}"), &|app| app.maps.get_mut(&id).unwrap().mode = m);
+        }
+        // Flipping through them, a frame apart, then back to Terrain.
+        let flip = |h: &mut H, name: &str, set: &dyn Fn(&mut MassifApp, MapMode)| {
+            let (started, cpu0) = (std::time::Instant::now(), crate::devtools::cpu_time().unwrap_or_default());
+            let mut work = Vec::new();
+            for m in styles.iter().chain(styles.iter()) {
+                set(h.state_mut(), *m);
+                for _ in 0..6 {
+                    let t = std::time::Instant::now();
+                    h.step();
+                    work.push(t.elapsed().as_secs_f32() * 1000.0);
+                }
+            }
+            let flipping = work.len();
+            while busy(h.state()) && work.len() < 6000 {
+                let t = std::time::Instant::now();
+                h.step();
+                work.push(t.elapsed().as_secs_f32() * 1000.0);
+            }
+            let took = started.elapsed().as_secs_f32();
+            let cpu = (crate::devtools::cpu_time().unwrap_or_default() - cpu0).as_secs_f32();
+            let mean = work.iter().sum::<f32>() / work.len() as f32;
+            let mut sorted = work.clone();
+            sorted.sort_by(f32::total_cmp);
+            eprintln!(
+                "{name}: {flipping} frames flipping, {} after; {took:.2} s, CPU {cpu:.2} s; frame work mean {mean:.1} p95 {:.1} max {:.1} ms",
+                work.len() - flipping,
+                sorted[sorted.len() * 95 / 100],
+                sorted[sorted.len() - 1]
+            );
+        };
+        flip(&mut h, "3D view, flipping through the styles", &|app, m| app.view3d.mode = m);
+        flip(&mut h, "map, flipping through the styles", &|app, m| app.maps.get_mut(&id).unwrap().mode = m);
+        rest(&mut h, "at rest again");
+    }
+
     /// How smoothly a real map moves (MASSIF_MOVE_WORLD: a .massif): the
     /// time of each frame while the map view zooms in, pans and zooms out,
     /// and while the 3D view turns and moves, on a Retina-like screen.

@@ -36,7 +36,6 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
-use wgpu::util::DeviceExt;
 
 const SAMPLES: u32 = 4;
 const COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -54,8 +53,12 @@ const UPLOAD_BUDGET_MOVING: Duration = Duration::from_millis(2);
 const FOV_Y: f32 = 50.0 * std::f32::consts::PI / 180.0;
 /// Walking, Minecraft's (wider: the land is all around).
 const FOV_WALK: f32 = 70.0 * std::f32::consts::PI / 180.0;
-/// Size of one chunk's slot in the uniform buffer of chunk origins.
-const SLOT: u64 = 256;
+/// Faces of the first page of a face arena (see [`Arena`]); each new page
+/// holds twice as many, up to [`ARENA_FACES`].
+const FIRST_ARENA_FACES: u32 = 1 << 16;
+const ARENA_FACES: u32 = 1 << 21;
+/// Columns of the texture of the chunks' tiles (see [`Renderer3d::upload`]).
+const SLOT_ROW: u32 = 256;
 /// The height of the game's clouds (since 1.18).
 const CLOUDS_Y: f32 = 192.0;
 
@@ -92,7 +95,8 @@ pub const NORTH: u8 = 5;
 /// * south / north: the plane `z`, `len` blocks along x from `x`, `h` high.
 ///
 /// `mat` says what it is made of, for the game's textures (see
-/// [`object_bases`], [`ROCK`]); 0: nothing known, its colour.
+/// [`object_bases`], [`ROCK`]); 0: nothing known, its colour. `pad` is set
+/// on the graphics card to its chunk's slot, which says where the chunk is.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
 pub struct Face {
@@ -1046,14 +1050,6 @@ impl Look {
 /// Floats in [`Globals`]: what tells a frame from the last.
 const GLOBAL_FLOATS: usize = size_of::<Globals>() / 4;
 
-/// Where a chunk is, relative to the origin of the frame.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Pod, Zeroable)]
-struct ChunkUniform {
-    /// x, y, z offset; w = 1 for water.
-    origin: [f32; 4],
-}
-
 /// What the tracer needs besides its textures.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
@@ -1153,10 +1149,8 @@ fn sky_color(d: vec3<f32>) -> vec3<f32> {
 "#;
 
 const MESH_WGSL: &str = r#"
-struct Chunk {
-    origin: vec4<f32>,
-};
-@group(1) @binding(0) var<uniform> chunk: Chunk;
+// The tile of every chunk (x, z), by its slot: each face carries its own.
+@group(1) @binding(0) var chunk_tiles: texture_2d<i32>;
 
 struct FaceIn {
     @location(0) xz_dir_len: vec4<u32>,
@@ -1185,6 +1179,10 @@ fn vs_main(@builtin(vertex_index) vi: u32, f: FaceIn) -> VertexOut {
     let len = f32(f.xz_dir_len.w);
     let y = f32(f.y_h.x);
     let h = f32(f.y_h.y);
+    let slot = i32(f.mat.y);
+    let tile = textureLoad(chunk_tiles, vec2<i32>(slot % 256, slot / 256), 0).xy;
+    // Where the chunk is from the frame's origin, in whole blocks.
+    let corner = vec3<f32>(f32(tile.x * 128 - i32(g.eye.w)), 0.0, f32(tile.y * 128 - i32(g.cam_k.w)));
     var p: vec3<f32>;
     var n: vec3<f32>;
     var top = y + h;
@@ -1218,16 +1216,16 @@ fn vs_main(@builtin(vertex_index) vi: u32, f: FaceIn) -> VertexOut {
     }
     // Water sits a little below the top of its block; its sides go down
     // as much, so that a fall meets the water under it.
-    if (chunk.origin.w > 0.5 && (dir >= 2u || p.y >= top - 0.01)) {
+    if (WATER && (dir >= 2u || p.y >= top - 0.01)) {
         p.y = p.y - 0.12;
     }
-    let world = p + chunk.origin.xyz;
+    let world = p + corner;
     var out: VertexOut;
     out.clip = g.view_proj * vec4<f32>(world, 1.0);
     out.color = f.color;
     out.normal = n;
     out.world = world;
-    out.water = chunk.origin.w;
+    out.water = select(0.0, 1.0, WATER);
     out.mat = f.mat.x;
     return out;
 }
@@ -1825,24 +1823,65 @@ fn fs_trace(in: TraceOut) -> TraceFrag {
 }
 "#;
 
-struct GpuFaces {
-    buffer: wgpu::Buffer,
+/// Where a chunk's faces of one kind lie: a page of an arena, the first
+/// face and how many.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Range {
+    page: u32,
+    start: u32,
     count: u32,
 }
 
-/// The GPU side of one chunk.
+/// The GPU side of one chunk: its slot (see [`Renderer3d::upload`]) and its
+/// solid faces and water.
 struct GpuChunk {
-    solid: Option<GpuFaces>,
-    water: Option<GpuFaces>,
+    slot: u16,
+    solid: Option<Range>,
+    water: Option<Range>,
 }
 
-impl GpuChunk {
-    fn bytes(&self) -> u64 {
-        [&self.solid, &self.water]
-            .iter()
-            .filter_map(|f| f.as_ref())
-            .map(|f| f.count as u64 * size_of::<Face>() as u64)
-            .sum()
+/// One vertex buffer holding the faces of many chunks, each a range of it:
+/// chunks side by side in it are drawn in one call, where a buffer a chunk
+/// cost a call each (thousands on a large map with much water or many
+/// trees). Ranges freed are taken again.
+struct Arena {
+    buffer: wgpu::Buffer,
+    /// Faces it holds at most.
+    capacity: u32,
+    free: FreeRanges,
+}
+
+/// The free ranges of an arena: (first face, count), in order, never
+/// touching.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FreeRanges(Vec<(u32, u32)>);
+
+impl FreeRanges {
+    /// The first face of a free range of `count`, taken (first fit).
+    fn take(&mut self, count: u32) -> Option<u32> {
+        let k = self.0.iter().position(|&(_, n)| n >= count)?;
+        let (start, n) = self.0[k];
+        if n == count {
+            self.0.remove(k);
+        } else {
+            self.0[k] = (start + count, n - count);
+        }
+        Some(start)
+    }
+
+    /// Give `count` faces from `start` back, joined to the free ranges
+    /// beside them.
+    fn give(&mut self, start: u32, count: u32) {
+        let k = self.0.partition_point(|&(s, _)| s < start);
+        self.0.insert(k, (start, count));
+        if k + 1 < self.0.len() && self.0[k].0 + self.0[k].1 == self.0[k + 1].0 {
+            self.0[k].1 += self.0[k + 1].1;
+            self.0.remove(k + 1);
+        }
+        if k > 0 && self.0[k - 1].0 + self.0[k - 1].1 == self.0[k].0 {
+            self.0[k - 1].1 += self.0[k].1;
+            self.0.remove(k);
+        }
     }
 }
 
@@ -1946,10 +1985,14 @@ pub struct Renderer3d {
     bind_group: wgpu::BindGroup,
     chunk_layout: wgpu::BindGroupLayout,
     trace_layout: wgpu::BindGroupLayout,
-    /// One slot per drawn chunk (twice: solid and water).
-    origins: wgpu::Buffer,
-    origins_group: wgpu::BindGroup,
-    slots: u64,
+    /// The tile of every chunk's slot (two integers a slot, `SLOT_ROW` a
+    /// row), and its copy here; the slots free.
+    chunk_tiles: wgpu::Texture,
+    chunk_group: wgpu::BindGroup,
+    slot_tiles: Vec<[i32; 2]>,
+    free_slots: Vec<u16>,
+    /// The faces of every chunk: solid, then water.
+    arenas: [Vec<Arena>; 2],
     terrain: wgpu::Buffer,
     palette: wgpu::Texture,
     /// The blocks of every colour pair (see [`Skin`]).
@@ -1989,7 +2032,11 @@ impl Renderer3d {
                 source: wgpu::ShaderSource::Wgsl(Cow::Owned(format!("const GAME_LOOK: bool = {game};\nconst TEXTURED: bool = {textured};\n{GLOBALS_WGSL}{}{body}", crate::textures::LOOK_WGSL))),
             })
         };
-        let mesh_shaders = Look::ALL.map(|look| shader("massif 3d meshes", MESH_WGSL, look));
+        // The meshes twice more: solid, and water (its surface a little
+        // below its blocks' tops, see-through).
+        let (solid_wgsl, water_wgsl) = (format!("const WATER: bool = false;\n{MESH_WGSL}"), format!("const WATER: bool = true;\n{MESH_WGSL}"));
+        let mesh_shaders = Look::ALL.map(|look| shader("massif 3d meshes", &solid_wgsl, look));
+        let water_shaders = Look::ALL.map(|look| shader("massif 3d water", &water_wgsl, look));
         let trace_shaders = Look::ALL.map(|look| shader("massif 3d tracer", TRACE_WGSL, look));
         // The same, its direction read at each sample: the pixel shaded
         // once a sample.
@@ -2020,8 +2067,17 @@ impl Renderer3d {
             entries: &[uniform(0, false, size_of::<Globals>() as u64)],
         });
         let chunk_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("massif 3d chunk"),
-            entries: &[uniform(0, true, size_of::<ChunkUniform>() as u64)],
+            label: Some("massif 3d chunks"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Sint,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
         });
         let uint = wgpu::TextureSampleType::Uint;
         let trace_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -2177,7 +2233,7 @@ impl Renderer3d {
             })
         };
         let opaque_pipeline = mesh_shaders.each_ref().map(|m| pipeline("massif 3d opaque", wgpu::BlendState::REPLACE, true, Some(wgpu::Face::Back), m));
-        let water_pipeline = mesh_shaders.each_ref().map(|m| pipeline("massif 3d water", wgpu::BlendState::ALPHA_BLENDING, false, None, m));
+        let water_pipeline = water_shaders.each_ref().map(|m| pipeline("massif 3d water", wgpu::BlendState::ALPHA_BLENDING, false, None, m));
         let trace = |trace_shader: &wgpu::ShaderModule| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("massif 3d tracer"),
             layout: Some(&trace_pipeline_layout),
@@ -2208,7 +2264,7 @@ impl Renderer3d {
         });
         let trace_pipeline = trace_shaders.each_ref().map(trace);
         let trace_fine_pipeline = fine_shaders.as_ref().map(|f| f.each_ref().map(trace));
-        let (origins, origins_group) = Self::make_origins(device, &chunk_layout, 64);
+        let (chunk_tiles, chunk_group) = Self::make_chunk_tiles(device, &chunk_layout, &[]);
         Self {
             device: device.clone(),
             queue: queue.clone(),
@@ -2222,9 +2278,11 @@ impl Renderer3d {
             bind_group,
             chunk_layout,
             trace_layout,
-            origins,
-            origins_group,
-            slots: 64,
+            chunk_tiles,
+            chunk_group,
+            slot_tiles: Vec::new(),
+            free_slots: Vec::new(),
+            arenas: [Vec::new(), Vec::new()],
             terrain,
             palette,
             pair_mats,
@@ -2458,26 +2516,126 @@ impl Renderer3d {
         (self.material_count, self.fluid_layers)
     }
 
-    fn make_origins(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, slots: u64) -> (wgpu::Buffer, wgpu::BindGroup) {
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("massif 3d chunk origins"),
-            size: slots * SLOT,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
+    /// The texture of the chunks' tiles, room for `tiles` and more (rows of
+    /// `SLOT_ROW` slots, as many rows as a power of two), filled with them.
+    fn make_chunk_tiles(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, tiles: &[[i32; 2]]) -> (wgpu::Texture, wgpu::BindGroup) {
+        let rows = (tiles.len() as u32).div_ceil(SLOT_ROW).max(1).next_power_of_two();
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("massif 3d chunk tiles"),
+            size: wgpu::Extent3d {
+                width: SLOT_ROW,
+                height: rows,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rg32Sint,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
         });
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("massif 3d chunk origins"),
+            label: Some("massif 3d chunk tiles"),
             layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &buffer,
-                    offset: 0,
-                    size: NonZeroU64::new(size_of::<ChunkUniform>() as u64),
-                }),
+                resource: wgpu::BindingResource::TextureView(&texture.create_view(&wgpu::TextureViewDescriptor::default())),
             }],
         });
-        (buffer, group)
+        (texture, group)
+    }
+
+    /// Write the tile of slots `from..` to the texture of the chunks' tiles
+    /// (whole rows).
+    fn write_chunk_tiles(&self, from: usize) {
+        let row = SLOT_ROW as usize;
+        let (first, last) = (from / row, self.slot_tiles.len().div_ceil(row));
+        if last <= first {
+            return;
+        }
+        let mut data = vec![[0i32; 2]; (last - first) * row];
+        let end = self.slot_tiles.len().min(last * row);
+        data[..end - first * row].copy_from_slice(&self.slot_tiles[first * row..end]);
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.chunk_tiles,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: 0, y: first as u32, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(&data),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(SLOT_ROW * 8),
+                rows_per_image: Some((last - first) as u32),
+            },
+            wgpu::Extent3d {
+                width: SLOT_ROW,
+                height: (last - first) as u32,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    /// A slot for a chunk of `tile`, its tile written for the shaders.
+    fn take_slot(&mut self, tile: TilePos) -> u16 {
+        if let Some(slot) = self.free_slots.pop() {
+            self.slot_tiles[slot as usize] = [tile.x, tile.z];
+            self.write_chunk_tiles(slot as usize);
+            return slot;
+        }
+        let slot = self.slot_tiles.len();
+        self.slot_tiles.push([tile.x, tile.z]);
+        if self.slot_tiles.len() as u32 > SLOT_ROW * self.chunk_tiles.height() {
+            // Room for twice as many: everything written again.
+            let (texture, group) = Self::make_chunk_tiles(&self.device, &self.chunk_layout, &self.slot_tiles);
+            self.chunk_tiles = texture;
+            self.chunk_group = group;
+            self.write_chunk_tiles(0);
+        } else {
+            self.write_chunk_tiles(slot);
+        }
+        slot as u16
+    }
+
+    /// Put `faces` in an arena of `kind` (0: solid, 1: water), each carrying
+    /// `slot`.
+    fn place(&mut self, kind: usize, faces: &[Face], slot: u16) -> Option<Range> {
+        if faces.is_empty() {
+            return None;
+        }
+        let count = faces.len() as u32;
+        let arenas = &mut self.arenas[kind];
+        let (page, start) = match arenas.iter_mut().enumerate().find_map(|(k, a)| a.free.take(count).map(|s| (k, s))) {
+            Some(found) => found,
+            None => {
+                // A new page, twice the last (or as large as these faces).
+                let capacity = arenas.last().map_or(FIRST_ARENA_FACES, |a| (a.capacity * 2).min(ARENA_FACES)).max(count);
+                let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(if kind == 0 { "massif 3d faces" } else { "massif 3d water faces" }),
+                    size: capacity as u64 * size_of::<Face>() as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                let mut arena = Arena { buffer, capacity, free: FreeRanges(vec![(0, capacity)]) };
+                let start = arena.free.take(count).expect("a new page holds them");
+                arenas.push(arena);
+                (arenas.len() - 1, start)
+            }
+        };
+        let carried: Vec<Face> = faces.iter().map(|f| Face { pad: slot, ..*f }).collect();
+        self.queue.write_buffer(&self.arenas[kind][page].buffer, start as u64 * size_of::<Face>() as u64, bytemuck::cast_slice(&carried));
+        Some(Range { page: page as u32, start, count })
+    }
+
+    /// Give a chunk's faces and slot back.
+    fn free_chunk(&mut self, chunk: GpuChunk) {
+        for (kind, range) in [(0, chunk.solid), (1, chunk.water)] {
+            if let Some(r) = range {
+                self.arenas[kind][r.page as usize].free.give(r.start, r.count);
+            }
+        }
+        self.free_slots.push(chunk.slot);
     }
 
     /// Make the tracer's textures for a grid of `pages` pages from `page0`,
@@ -2758,47 +2916,41 @@ impl Renderer3d {
         );
     }
 
-    fn upload_faces(&self, faces: &[Face], label: &str) -> Option<GpuFaces> {
-        if faces.is_empty() {
-            return None;
-        }
-        Some(GpuFaces {
-            buffer: self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents: bytemuck::cast_slice(faces),
-                usage: wgpu::BufferUsages::VERTEX,
-            }),
-            count: faces.len() as u32,
-        })
-    }
-
-    /// Put (or replace) the meshed faces of a tile on the GPU.
+    /// Put (or replace) the meshed faces of a tile on the GPU: in the
+    /// arenas, each face carrying the chunk's slot, which holds its tile.
     pub fn upload(&mut self, tile: TilePos, faces: &ChunkFaces) {
+        if let Some(old) = self.chunks.remove(&tile) {
+            self.free_chunk(old);
+        }
         if faces.solid.is_empty() && faces.water.is_empty() {
-            self.chunks.remove(&tile);
             return;
         }
-        let chunk = GpuChunk {
-            solid: self.upload_faces(&faces.solid, "massif 3d chunk"),
-            water: self.upload_faces(&faces.water, "massif 3d water"),
-        };
-        self.chunks.insert(tile, chunk);
+        let slot = self.take_slot(tile);
+        let solid = self.place(0, &faces.solid, slot);
+        let water = self.place(1, &faces.water, slot);
+        self.chunks.insert(tile, GpuChunk { slot, solid, water });
     }
 
     /// Forget a tile that left the map.
     pub fn remove(&mut self, tile: TilePos) {
-        self.chunks.remove(&tile);
+        if let Some(old) = self.chunks.remove(&tile) {
+            self.free_chunk(old);
+        }
         self.upload_columns(tile, &[0; (TILE_SIZE * TILE_SIZE) as usize]);
     }
 
     pub fn clear(&mut self) {
         self.chunks.clear();
+        self.arenas = [Vec::new(), Vec::new()];
+        self.slot_tiles.clear();
+        self.free_slots.clear();
         self.tracer = None;
     }
 
     /// Bytes of GPU memory the terrain takes.
     pub fn bytes(&self) -> u64 {
-        self.tracer.as_ref().map_or(0, |t| t.bytes) + self.chunks.values().map(GpuChunk::bytes).sum::<u64>()
+        let faces: u64 = self.arenas.iter().flatten().map(|a| a.capacity as u64 * size_of::<Face>() as u64).sum();
+        self.tracer.as_ref().map_or(0, |t| t.bytes) + faces + self.chunk_tiles.height() as u64 * SLOT_ROW as u64 * 8
     }
 
     /// Make sure the render target has `size` pixels. Returns whether it was
@@ -2861,29 +3013,21 @@ impl Renderer3d {
         if self.target.is_none() {
             return;
         }
-        let drawn: Vec<(TilePos, f32, f32)> = tiles
-            .iter()
-            .filter(|t| self.chunks.contains_key(t))
-            .map(|t| (*t, (t.x * TILE_SIZE - origin.0) as f32, (t.z * TILE_SIZE - origin.1) as f32))
-            .collect();
-        let needed = (drawn.len() as u64 * 2).max(1);
-        if needed > self.slots {
-            self.slots = needed.next_power_of_two();
-            let (buffer, group) = Self::make_origins(&self.device, &self.chunk_layout, self.slots);
-            self.origins = buffer;
-            self.origins_group = group;
-        }
-        // Slot 2k is chunk k's solid faces, 2k + 1 its water.
-        let mut data = vec![0u8; (drawn.len() * 2).max(1) * SLOT as usize];
-        for (k, &(_, ox, oz)) in drawn.iter().enumerate() {
-            for (slot, water) in [(2 * k, 0.0), (2 * k + 1, 1.0)] {
-                let u = ChunkUniform {
-                    origin: [ox, 0.0, oz, water],
-                };
-                data[slot * SLOT as usize..][..size_of::<ChunkUniform>()].copy_from_slice(bytemuck::bytes_of(&u));
+        // The faces to draw, solid and water, in the order they lie in the
+        // arenas: ranges side by side are drawn in one call.
+        let runs = |kind: usize| -> Vec<Range> {
+            let mut ranges: Vec<Range> = tiles.iter().filter_map(|t| self.chunks.get(t)).filter_map(|c| if kind == 0 { c.solid } else { c.water }).collect();
+            ranges.sort_unstable_by_key(|r| (r.page, r.start));
+            let mut runs: Vec<Range> = Vec::with_capacity(ranges.len());
+            for r in ranges {
+                match runs.last_mut() {
+                    Some(last) if last.page == r.page && last.start + last.count == r.start => last.count += r.count,
+                    _ => runs.push(r),
+                }
             }
-        }
-        self.queue.write_buffer(&self.origins, 0, &data);
+            runs
+        };
+        let draws = [runs(0), runs(1)];
         self.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(globals));
         if let Some(tr) = &self.tracer {
             let top = tr.page_tops.iter().copied().max().unwrap_or(0);
@@ -2954,17 +3098,19 @@ impl Renderer3d {
                 pass.set_bind_group(1, &tr.group, &[]);
                 pass.draw(0..3, 0..1);
             }
-            for water in [false, true] {
-                pass.set_pipeline(if water { &self.water_pipeline[look] } else { &self.opaque_pipeline[look] });
-                for (k, (t, ..)) in drawn.iter().enumerate() {
-                    let chunk = &self.chunks[t];
-                    let Some(faces) = (if water { &chunk.water } else { &chunk.solid }) else {
-                        continue;
-                    };
-                    let slot = (2 * k + water as usize) as u64 * SLOT;
-                    pass.set_bind_group(1, &self.origins_group, &[slot as u32]);
-                    pass.set_vertex_buffer(0, faces.buffer.slice(..));
-                    pass.draw(0..6, 0..faces.count);
+            for (kind, runs) in draws.iter().enumerate() {
+                if runs.is_empty() {
+                    continue;
+                }
+                pass.set_pipeline(if kind == 1 { &self.water_pipeline[look] } else { &self.opaque_pipeline[look] });
+                pass.set_bind_group(1, &self.chunk_group, &[]);
+                let mut page = u32::MAX;
+                for r in runs {
+                    if r.page != page {
+                        page = r.page;
+                        pass.set_vertex_buffer(0, self.arenas[kind][page as usize].buffer.slice(..));
+                    }
+                    pass.draw(0..6, r.start..r.start + r.count);
                 }
             }
         }
@@ -3222,16 +3368,14 @@ fn look_at(eye: Vec3, center: Vec3, up: Vec3) -> Mat4 {
 
 /// Whether the box `lo`..`hi` may be on screen through `m`.
 fn in_view(m: &Mat4, lo: Vec3, hi: Vec3) -> bool {
-    let corners: Vec<Vec4> = (0..8)
-        .map(|k| {
-            let p = Vec3::new(
-                if k & 1 == 0 { lo.x } else { hi.x },
-                if k & 2 == 0 { lo.y } else { hi.y },
-                if k & 4 == 0 { lo.z } else { hi.z },
-            );
-            *m * p.extend(1.0)
-        })
-        .collect();
+    let corners: [Vec4; 8] = std::array::from_fn(|k| {
+        let p = Vec3::new(
+            if k & 1 == 0 { lo.x } else { hi.x },
+            if k & 2 == 0 { lo.y } else { hi.y },
+            if k & 4 == 0 { lo.z } else { hi.z },
+        );
+        *m * p.extend(1.0)
+    });
     let all = |f: &dyn Fn(&Vec4) -> bool| corners.iter().all(f);
     !(all(&|c| c.x < -c.w) || all(&|c| c.x > c.w) || all(&|c| c.y < -c.w) || all(&|c| c.y > c.w) || all(&|c| c.z < 0.0) || all(&|c| c.z > c.w))
 }
@@ -3405,8 +3549,36 @@ impl Drop for Builder {
     }
 }
 
+/// Tiles the builder keeps decoded at most (a few hundred kB each): the
+/// nearest first is a ring growing around the camera, whose neighbours are
+/// read again soon.
+const WARM_TILES: usize = 512;
+
+/// The tiles of the map the build of grid cell `cell` reads: its own
+/// (`stride` × `stride` of them on a coarse grid) and `around` tiles
+/// around.
+fn cell_reads(cell: TilePos, stride: i32, around: i32) -> impl Iterator<Item = TilePos> {
+    let (x0, z0) = (cell.x * stride - around, cell.z * stride - around);
+    let side = stride + 2 * around;
+    (0..side * side).map(move |k| TilePos::new(x0 + k % side, z0 + k / side))
+}
+
+/// Whether the builder decodes the tiles it reads once a part (see
+/// [`View3d::start_builder`]); tests time it without.
+fn warm_builds() -> bool {
+    #[cfg(test)]
+    return !COLD_BUILDS.load(std::sync::atomic::Ordering::Relaxed);
+    #[cfg(not(test))]
+    true
+}
+
+#[cfg(test)]
+pub static COLD_BUILDS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// The threads that build tiles away from the frames: all the cores but
-/// two, which stay for the interface's own work.
+/// two, which stay for the interface's own work. (At a lower priority, on
+/// macOS's efficiency cores, a whole map took two to six times as long to
+/// build again, for frames that were not smoother.)
 fn builders() -> &'static rayon::ThreadPool {
     static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
     POOL.get_or_init(|| {
@@ -3710,6 +3882,12 @@ impl View3d {
     }
 
     /// Tiles built, and what the graphics card holds of the view.
+    /// Colour pairs the tracer's palette holds.
+    #[cfg(test)]
+    pub fn pairs(&self) -> usize {
+        self.pairs.list().len()
+    }
+
     pub fn tiles_built(&self) -> usize {
         self.tiles.len()
     }
@@ -4295,8 +4473,13 @@ impl View3d {
     /// Build `order`'s tiles away from the frames, from a cold copy of the
     /// map (see [`Builder`]).
     fn start_builder(&mut self, doc: &mut Document, order: Vec<TilePos>, style: Style, stride: i32, ctx: &egui::Context) {
-        let dim = doc.world.dims[doc.dim].snapshot();
+        let mut dim = doc.world.dims[doc.dim].snapshot();
         let reg = doc.world.registry.clone();
+        // The tiles around a cell its build reads: its neighbours' columns
+        // (walls, slopes), the objects that reach over it.
+        let ring = if style.mode == MapMode::Slope { SLOPE_REACH } else { 1 };
+        let around = ((massif_core::objects::max_reach(&reg) + ring).max(1) as u32).div_ceil(TILE_SIZE as u32) as i32;
+        let warm = warm_builds();
         let (sea, seed) = (doc.world.meta.sea_level as f32, doc.world.meta.seed);
         let (tx, rx) = std::sync::mpsc::channel();
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -4311,6 +4494,20 @@ impl View3d {
                 for part in order.chunks(2 * pool.current_num_threads()) {
                     if stop.load(std::sync::atomic::Ordering::Relaxed) {
                         return;
+                    }
+                    // The copy is cold: each read of a tile decoded it
+                    // again, and a tile is read by its own build and by
+                    // its neighbours' (a dozen times a rebuild of the
+                    // whole map). The tiles this part reads are decoded
+                    // once, and those read longest ago put away again.
+                    if warm {
+                        let mut read: Vec<TilePos> = part.iter().flat_map(|&c| cell_reads(c, stride, around)).collect();
+                        read.sort_unstable_by_key(|t| (t.z, t.x));
+                        read.dedup();
+                        for level in &mut dim.levels {
+                            level.warm(&read);
+                            level.trim(WARM_TILES.max(read.len()));
+                        }
                     }
                     let built: Vec<(TilePos, TileBuild)> = part.par_iter().map(|&t| (t, build_cell(&dim, &reg, sea, seed, t, stride, style))).collect();
                     for b in built {
@@ -5101,6 +5298,26 @@ mod tests {
         assert!(out.is_empty());
         uncovered(0, 40, &[], &mut out);
         assert_eq!(out, vec![(0, 40)]);
+    }
+
+    /// An arena's free ranges: taken first fit, given back joined to those
+    /// beside them, so that it fills again without holes.
+    #[test]
+    fn arena_ranges_are_taken_and_given_back() {
+        let mut free = FreeRanges(vec![(0, 100)]);
+        let (a, b, c) = (free.take(10).unwrap(), free.take(20).unwrap(), free.take(30).unwrap());
+        assert_eq!((a, b, c), (0, 10, 30));
+        assert_eq!(free, FreeRanges(vec![(60, 40)]));
+        free.give(b, 20);
+        assert_eq!(free, FreeRanges(vec![(10, 20), (60, 40)]));
+        assert_eq!(free.take(25), Some(60), "too large for the hole: after");
+        free.give(a, 10);
+        assert_eq!(free, FreeRanges(vec![(0, 30), (85, 15)]), "joined to the range after it");
+        free.give(c, 30);
+        assert_eq!(free, FreeRanges(vec![(0, 60), (85, 15)]), "and to the one before");
+        free.give(60, 25);
+        assert_eq!(free, FreeRanges(vec![(0, 100)]), "all of it again");
+        assert_eq!(free.take(101), None);
     }
 
     #[test]
