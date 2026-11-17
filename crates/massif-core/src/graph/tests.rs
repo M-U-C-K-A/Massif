@@ -1206,8 +1206,9 @@ fn rivers_hold_water_on_low_plains() {
     let r = rivers::rivers(&f, None, 2.0, params, &AtomicBool::new(false)).unwrap();
     let (mut bed, mut wet) = (0, 0);
     for c in 0..n * n {
-        // The bed itself, dug more than a block: its rim is at the water's edge.
-        if r.mask.data[c] >= 0.99 && f.data[c] > sea && f.data[c] - r.dug.data[c] > 1.0 {
+        // The bed itself, dug more than two blocks (a whole block of water
+        // at least, its rim at the water's edge).
+        if r.mask.data[c] >= 0.99 && f.data[c] > sea && f.data[c] - r.dug.data[c] > 2.0 {
             bed += 1;
             wet += (r.water.data[c] != NO_WATER) as usize;
         }
@@ -1317,7 +1318,9 @@ fn rivers_find_their_valleys() {
             }
             for (di, dj) in [(-1i32, 0i32), (1, 0), (0, -1), (0, 1)] {
                 let o = (j as i32 + dj) as usize * n + (i as i32 + di) as usize;
-                if r.water.data[o] == NO_WATER && r.mask.data[o] < 0.99 && r.dug.data[o] < w - 0.6 && r.dug.data[o] > sea {
+                // Counted in blocks, as the map holds them: the ground's top
+                // block under the water's top block.
+                if r.water.data[o] == NO_WATER && r.mask.data[o] < 0.99 && crate::compose::block_top(r.dug.data[o]) < w.round() as i32 && r.dug.data[o] > sea {
                     leaks += 1;
                     if leaks < 12 {
                         eprintln!("leak at ({i}, {j}) water {w:.2} mask {:.2} → ({}, {}) dug {:.2} mask {:.2}", r.mask.data[c], i as i32 + di, j as i32 + dj, r.dug.data[o], r.mask.data[o]);

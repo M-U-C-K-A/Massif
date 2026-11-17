@@ -639,7 +639,9 @@ fn build_tile_part(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: T
     let (cx, cz) = (tile.x * TILE_SIZE, tile.z * TILE_SIZE);
     // The tile and a ring of neighbour columns, for walls, and for slopes,
     // measured as the trend of the ground around each column.
-    let ring = if style.mode == MapMode::Slope { SLOPE_REACH } else { 1 };
+    // The water's slopes need two columns more around (what flows over a
+    // neighbour, and the heights around that).
+    let ring = (if style.mode == MapMode::Slope { SLOPE_REACH } else { 1 }).max(if style.water { 2 } else { 1 });
     let standing = Standing { reg, seed, lava: style.lava };
     let grid = compose_area(dim, cx - ring, cz - ring, n + 2 * ring as usize, n + 2 * ring as usize, style.mode, style.water, Some(standing));
     let wk = reg.well_known;
@@ -856,10 +858,15 @@ fn build_tile_part(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: T
         }
     }
 
-    // Water: its surface merged into rectangles, and its sides wherever
-    // it stands over what is beside it — a lower water (the steps of a
-    // river coming down: falls, as in the game), lower ground, the end of
-    // the map.
+    // Water, as the game draws it. Each column's water is a run of blocks
+    // from its ground up. Where it stands over a lower neighbour (a step
+    // of a river, a fall, open land) the game pours flowing water over that
+    // neighbour: a block over lower water (flowing water over water spreads
+    // no further), down to the water or the ground from higher still. The
+    // top of each run slopes as the game's does: each corner at the mean
+    // of the heights of the four blocks around it (a source 8/9 of a block,
+    // flowing water less, a block with water over it a whole block), the
+    // water's own blocks weighing ten times more; its sides go up to it.
     if style.water {
         let blue = if style.lava { [238, 112, 22, 255] } else { [26, 92, 150, 205] };
         // Under a frost cover, the top of the water is ice; under a lava
@@ -870,42 +877,145 @@ fn build_tile_part(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: T
             Some(d) if !style.lava && !d.hidden && d.lava => 2,
             _ => 0,
         };
-        greedy(
-            n,
-            |i, j| {
-                let c = grid.cell(cx + i as i32, cz + j as i32);
-                let wet = grid.water[c];
-                (wet != i32::MIN).then_some((wet, frozen(c)))
-            },
-            |i, j, w, h, (wet, frozen)| out.water.push(face(i as u8, j as u8, UP, w as u8, clamp16(wet), h as i16, [blue, ice, lava][frozen as usize], 0)),
-        );
-        for j in 0..n {
-            for i in 0..n {
-                let (x, z) = (cx + i as i32, cz + j as i32);
-                let wet = grid.water[grid.cell(x, z)];
-                if wet == i32::MIN {
-                    continue;
+        let (gw, gd) = (grid.w, grid.d);
+        let cell = |x: i32, z: i32| -> Option<usize> {
+            let (i, j) = (x - grid.x0, z - grid.z0);
+            (i >= 0 && j >= 0 && (i as usize) < gw && (j as usize) < gd).then(|| j as usize * gw + i as usize)
+        };
+        // The first air over each column's ground (MIN: no map there), and
+        // the top block of its water (MIN: dry).
+        let ground: Vec<i32> = (0..gw * gd).map(|c| grid.spans(grid.x0 + (c % gw) as i32, grid.z0 + (c / gw) as i32).last().map_or(i32::MIN, |s| s.y1)).collect();
+        let top: Vec<i32> = grid.water.iter().map(|&w| if w == i32::MIN { i32::MIN } else { w - 1 }).collect();
+        let kind: Vec<u8> = (0..gw * gd).map(|c| if top[c] == i32::MIN { 0 } else { frozen(c) }).collect();
+        // Each column's fluid: from its ground up to `hi` (MIN: none),
+        // flowing at the top or not.
+        let mut fluid = vec![(i32::MIN, false); gw * gd];
+        for c in 0..gw * gd {
+            if ground[c] == i32::MIN {
+                continue;
+            }
+            let (x, z) = (grid.x0 + (c % gw) as i32, grid.z0 + (c / gw) as i32);
+            // The first block free over it, and the highest water beside it
+            // (not ice: it does not flow).
+            let free = if top[c] == i32::MIN { ground[c] } else { top[c] + 1 };
+            let beside = [(1, 0), (-1, 0), (0, 1), (0, -1)].into_iter().filter_map(|(dx, dz)| cell(x + dx, z + dz)).filter(|&m| kind[m] != 1).map(|m| top[m]).max().unwrap_or(i32::MIN);
+            fluid[c] = if beside != i32::MIN && beside >= free && kind[c] == 0 { (beside, true) } else { (top[c], false) };
+        }
+        // The heights the game gives the blocks, as fractions of a block:
+        // a source's, flowing water's (lava loses two levels a block).
+        let (source, flowing) = (8.0 / 9.0, if style.lava { 6.0 / 9.0 } else { 7.0 / 9.0 });
+        // The height of the block at `y` of column `m`, as the game reads
+        // it: of its fluid (a whole block under more), -1 for solid (or
+        // past the map), 0 for air.
+        let height = |m: Option<usize>, y: i32| -> f32 {
+            let Some(m) = m else { return -1.0 };
+            let (hi, flows) = fluid[m];
+            if hi != i32::MIN && y >= ground[m] && y <= hi {
+                if kind[m] == 1 && y == hi {
+                    -1.0
+                } else if y < hi {
+                    1.0
+                } else if flows {
+                    flowing
+                } else {
+                    source
                 }
-                let floor = grid.spans(x, z).last().map_or(min_y, |s| s.y1);
-                for (dir, (dx, dz)) in [(EAST, (1, 0)), (WEST, (-1, 0)), (SOUTH, (0, 1)), (NORTH, (0, -1))] {
-                    let (nx, nz) = (x + dx, z + dz);
-                    let inside = nx >= cx - 1 && nz >= cz - 1 && nx <= cx + n as i32 && nz <= cz + n as i32;
-                    if !inside {
-                        continue;
-                    }
-                    // Up from what is beside: its water, its ground.
-                    let bottom = match grid.spans(nx, nz).last() {
-                        None => floor,
-                        Some(s) => {
-                            let beside = grid.water[grid.cell(nx, nz)];
-                            s.y1.max(beside).max(floor)
+            } else if ground[m] == i32::MIN || y < ground[m] {
+                -1.0
+            } else {
+                0.0
+            }
+        };
+        // How far under the top of its block each corner of the top of a
+        // column's water lies, in 16ths: north-west, north-east, south-west,
+        // south-east, four bits each.
+        let corners = |x: i32, z: i32, c: usize| -> u16 {
+            let (hi, flows) = fluid[c];
+            if kind[c] != 0 {
+                return 0x2222;
+            }
+            let own = if flows { flowing } else { source };
+            let mut packed = 0u16;
+            for (k, (dx, dz)) in [(-1, -1), (1, -1), (-1, 1), (1, 1)].into_iter().enumerate() {
+                let (a, b) = (height(cell(x + dx, z), hi), height(cell(x, z + dz), hi));
+                let h = if a >= 1.0 || b >= 1.0 {
+                    1.0
+                } else {
+                    let (mut sum, mut weight) = (0.0f32, 0.0f32);
+                    let mut add = |h: f32| {
+                        if h >= 0.8 {
+                            sum += 10.0 * h;
+                            weight += 10.0;
+                        } else if h >= 0.0 {
+                            sum += h;
+                            weight += 1.0;
                         }
                     };
-                    if bottom >= wet {
+                    let mut whole = false;
+                    if a > 0.0 || b > 0.0 {
+                        let d = height(cell(x + dx, z + dz), hi);
+                        whole = d >= 1.0;
+                        add(d);
+                    }
+                    add(own);
+                    add(a);
+                    add(b);
+                    if whole { 1.0 } else { sum / weight.max(1.0) }
+                };
+                packed |= (((1.0 - h) * 16.0).round().clamp(0.0, 15.0) as u16) << (4 * k);
+            }
+            packed
+        };
+        let water_face = |x: u8, z: u8, dir: u8, len: u8, y: i32, h: i32, color: [u8; 4], drops: u16| Face {
+            x,
+            z,
+            dir,
+            len,
+            y: clamp16(y),
+            h: clamp16(h),
+            color,
+            mat: drops,
+            pad: 0,
+        };
+        let colour = |k: u8| [blue, ice, lava][k as usize];
+        // The tops: merged into rectangles where flat (the same height at
+        // every corner), one by one where they slope.
+        let tops: Vec<Option<(i32, u8, u16)>> = (0..n * n)
+            .map(|c| {
+                let (x, z) = (cx + (c % n) as i32, cz + (c / n) as i32);
+                let g = cell(x, z)?;
+                let (hi, _) = fluid[g];
+                (hi != i32::MIN && hi >= ground[g]).then(|| (hi, kind[g], corners(x, z, g)))
+            })
+            .collect();
+        let flat = |d: u16| d == (d & 15) * 0x1111;
+        greedy(n, |i, j| tops[j * n + i].filter(|t| flat(t.2)), |i, j, w, h, (hi, k, d)| out.water.push(water_face(i as u8, j as u8, UP, w as u8, hi + 1, h as i32, colour(k), d)));
+        for (c, t) in tops.iter().enumerate() {
+            if let Some((hi, k, d)) = t.filter(|t| !flat(t.2)) {
+                out.water.push(water_face((c % n) as u8, (c / n) as u8, UP, 1, hi + 1, 1, colour(k), d));
+            }
+        }
+        // The sides, wherever the water stands over what is beside it: air
+        // over lower water or ground, or the end of the map.
+        for j in 0..n {
+            for i in 0..n {
+                let Some((hi, k, d)) = tops[j * n + i] else { continue };
+                let (x, z) = (cx + i as i32, cz + j as i32);
+                let Some(g) = cell(x, z) else { continue };
+                let lo = ground[g];
+                for (dir, (dx, dz)) in [(EAST, (1, 0)), (WEST, (-1, 0)), (SOUTH, (0, 1)), (NORTH, (0, -1))] {
+                    let Some(m) = cell(x + dx, z + dz) else { continue };
+                    let free = match fluid[m] {
+                        _ if ground[m] == i32::MIN => lo,
+                        (h, _) if h != i32::MIN => h + 1,
+                        _ => ground[m],
+                    };
+                    let bottom = free.max(lo);
+                    if bottom > hi {
                         continue;
                     }
                     let (px, pz) = (i as i32 + dx.max(0), j as i32 + dz.max(0));
-                    out.water.push(face(px as u8, pz as u8, dir, 1, clamp16(bottom), clamp16(wet - bottom), blue, 0));
+                    out.water.push(water_face(px as u8, pz as u8, dir, 1, bottom, hi + 1 - bottom, colour(k), d));
                 }
             }
         }
@@ -1214,10 +1324,37 @@ fn vs_main(@builtin(vertex_index) vi: u32, f: FaceIn) -> VertexOut {
             n = vec3<f32>(0.0, 0.0, -1.0);
         }
     }
-    // Water sits a little below the top of its block; its sides go down
-    // as much, so that a fall meets the water under it.
-    if (WATER && (dir >= 2u || p.y >= top - 0.01)) {
-        p.y = p.y - 0.12;
+    // Water: the top of its blocks where the game puts it, each corner so
+    // far under the top of its block (`mat`, in 16ths: north-west,
+    // north-east, south-west, south-east), and its sides up to it.
+    if (WATER) {
+        var k = 0u;
+        var lift = false;
+        switch dir {
+            case 0u: {
+                k = 2u * u32(u) + u32(v);
+                lift = true;
+            }
+            case 2u: {
+                k = 1u + 2u * u32(v);
+                lift = u > 0.5;
+            }
+            case 3u: {
+                k = 2u * u32(u);
+                lift = v > 0.5;
+            }
+            case 4u: {
+                k = 2u + u32(u);
+                lift = v > 0.5;
+            }
+            default: {
+                k = u32(v);
+                lift = u > 0.5;
+            }
+        }
+        if (lift) {
+            p.y = p.y - f32((f.mat.x >> (4u * k)) & 15u) / 16.0;
+        }
     }
     let world = p + corner;
     var out: VertexOut;
@@ -5323,6 +5460,44 @@ mod tests {
                 assert!(part.pairs.len() <= whole.pairs.len());
             }
         }
+    }
+
+    /// Water down a step is drawn as the game draws it: flowing water over
+    /// the lower water, its top sloping from the upper water's down toward
+    /// the far side, no wall of water at the step; the upper water flat.
+    #[test]
+    fn water_flows_down_a_step() {
+        use massif_core::coords::local_index;
+        use massif_core::world::{Dimension, DimensionKind, WorldMeta};
+        let mut w = World::new(WorldMeta::default());
+        let grass = w.registry.terrain_by_name("Grass").unwrap();
+        let mut dim = Dimension::new(DimensionKind::Overworld, -64, 320);
+        // Ground at 60, its first air; water to 66 west of x 64, to 65 east.
+        let mut tile = massif_core::tile::Tile::ground(60.0, grass.0, massif_core::tile::NO_FLUID);
+        for z in 0..128 {
+            for x in 0..128 {
+                tile.fluid.set(local_index(x, z), if x < 64 { 66 } else { 65 });
+            }
+        }
+        dim.ground_mut().insert(TilePos::new(0, 0), tile);
+        w.dims = vec![dim];
+        let b = build_tile(&w.dims[0], &w.registry, 63.0, w.meta.seed, TilePos::new(0, 0), STYLE);
+        let water = &b.faces.water;
+        let top_at = |i: u8, j: u8| water.iter().find(|f| f.dir == UP && (f.x..f.x + f.len).contains(&i) && (f.z as i16..f.z as i16 + f.h).contains(&(j as i16))).copied();
+        // The upper water: flat, a ninth under the top of its block.
+        let upper = top_at(30, 64).expect("the upper water's top");
+        assert_eq!((upper.y, upper.mat), (66, 0x2222));
+        // Over the first column of the lower water, flowing water at 65: its
+        // top nearly as high as the upper water's on the west, low on the
+        // east (corners north-west, north-east, south-west, south-east).
+        let flow = top_at(64, 64).expect("the flowing water's top");
+        assert_eq!((flow.y, flow.len, flow.h, flow.mat), (66, 1, 1, 0xa2a2), "{flow:?}");
+        // The lower water beyond: flat.
+        assert_eq!(top_at(100, 64).map(|f| (f.y, f.mat)), Some((65, 0x2222)));
+        // No wall at the step (the plane x = 64); the flowing water's lip,
+        // from 65 to its corners, on its east side.
+        assert!(!water.iter().any(|f| (f.dir == EAST || f.dir == WEST) && f.x == 64 && f.z == 64), "a wall at the step");
+        assert!(water.iter().any(|f| f.dir == EAST && f.x == 65 && f.z == 64 && f.y == 65 && f.h == 1 && f.mat == 0xa2a2));
     }
 
     #[test]

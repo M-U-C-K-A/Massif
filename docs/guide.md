@@ -701,14 +701,25 @@ map, without opening the graph:
   ground they run wider over a flat bed; their width wanders a little; their
   banks open out into a valley where they lie deep under the land; and into
   the sea their channel goes on under the water, fading into the floor.
-  Under their water the bed is gravel, sand in the shallows (under a block
-  and a half of water) and in the channels under the sea; the banks keep
-  their ground. Where a river runs is set by how much land drains there: a
-  share of the map's land, or on a very large map, whose valleys each gather
-  only a small share of it, a catchment of some 900 blocks a side with the
-  default setting (200 to 4,000 from many rivers to few).
-- **Lakes**: water fills the hollows up to where they spill (with **Fill**,
-  their ground rises instead).
+  Under their water the bed is gravel, sand in the shallows (under one
+  block of water) and in the channels under the sea; the banks keep
+  their ground, and so does a bed the water leaves dry. Where a river runs
+  is set by how much land drains there: a share of the map's land, or on a
+  very large map, whose valleys each gather only a small share of it, a
+  catchment of some 900 blocks a side with the default setting (200 to
+  4,000 from many rivers to few). **Width** is the width of the greatest
+  river; the others are narrower as they gather less water, down to a
+  quarter of it, and a tributary that would be narrower still is left out.
+  The water holds as the game holds it, block by block: the bed under a
+  step stays under the water above it (no dam of land across a river), a
+  block of land left alone in the water goes under it, and a lake stands
+  at most a block over the water beside it.
+- **Lakes**: water fills the hollows up to where they spill, block by block:
+  every lake stands at or under its rim on every side, in one level. Its
+  floor is dug into a bowl, a block deeper every three blocks from its
+  shore, down to 2 to 10 blocks as it is larger; sand under its shallows,
+  gravel deeper, a sand beach where its shore is flat (with **Fill**, their
+  ground rises instead).
 - **Smooth**, **Sharpen**, **Terraces** (flat steps over the whole height
   of the map) and **Strata** (ledges of rock along the slopes).
 - **Scale and raise**: the relief scaled around the sea level (twice as
@@ -1283,7 +1294,10 @@ and a river biome on its water.
   and their water.
 
 The water's level is a whole block per column, so it stands in steps
-along the river. The water stays in its bed: where a bank was dug lower
+along the river. The 3D View and 3D Sculpt draw each step as the game
+does: flowing water poured over the lower water, its surface sloping down
+from the water above (a fall: a curtain of it down to the water below),
+not a wall of water. The water stays in its bed: where a bank was dug lower
 than the water beside it, the bank rises back towards the ground it had
 to hold it, and where it cannot, the river's own water goes down to the
 bank's height. Water that was on the map before the river (painted by

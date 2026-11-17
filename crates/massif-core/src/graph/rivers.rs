@@ -455,13 +455,25 @@ pub(super) fn rivers(f: &Field, existing: Option<&Field>, spacing: f32, p: River
             joined[p] += 1;
         }
     }
-    let kept: Vec<bool> = stems.iter().enumerate().map(|(k, s)| s.parent.is_none() || joined[k] > 0 || s.cells.len() >= 4).collect();
+    let mut kept: Vec<bool> = stems.iter().enumerate().map(|(k, s)| s.parent.is_none() || joined[k] > 0 || s.cells.len() >= 4).collect();
+    // The water of the greatest river, where it ends: the width set is
+    // its width; a river's width grows as the square root of its water.
+    let q_max = stems.iter().filter_map(|s| s.cells.first()).map(|&c| area[c as usize]).fold(1.0f32, f32::max);
+    // A tributary with less than a 16th of that water would be a thread,
+    // under a quarter of the width set: it is left out, and what joins it
+    // with it (a parent comes before its tributaries). Rivers of their own
+    // to the sea or the edge of the map stay, however small.
+    for k in 0..stems.len() {
+        if let Some((p, _)) = stems[k].parent {
+            let brings = stems[k].cells.first().map_or(0.0, |&c| area[c as usize]);
+            kept[k] = kept[k] && kept[p] && brings * 16.0 >= q_max;
+        }
+    }
     if cancel.load(Ordering::Relaxed) {
         return None;
     }
 
     // ---- each river as a line in the bottom of its valley
-    let q_max = stems.iter().filter_map(|s| s.cells.first()).map(|&c| area[c as usize]).fold(1.0f32, f32::max);
     let at = |c: u32| -> (f32, f32) { (((c as usize % m) as f32 + 0.5) * k - 0.5, ((c as usize / m) as f32 + 0.5) * k - 0.5) };
     let coarse_at = |x: f32, y: f32| ((x + 0.5) / k - 0.5, (y + 0.5) / k - 0.5);
     let filled = Field::new(m, d.filled);
@@ -602,10 +614,11 @@ pub(super) fn rivers(f: &Field, existing: Option<&Field>, spacing: f32, p: River
         }
         smooth(&mut pts, 1, 1);
         let mut line = resample(&pts, step);
-        // Wider and deeper as water joins it.
+        // Wider and deeper as water joins it, from a quarter of the width
+        // set (no thread of a stream) to all of it.
         for q in &mut line {
             let share = (q.area / q_max).clamp(0.0, 1.0);
-            q.hw = (0.5 * (p.width * share.sqrt()).max(2.0) / spacing).max(0.55);
+            q.hw = (0.5 * (p.width * share.sqrt()).max(0.25 * p.width).max(2.0) / spacing).max(0.55);
             q.depth = (p.depth * share.powf(0.4)).max(1.0);
         }
         smooth_value(&mut line, 6, |q| q.hw, |q, v| q.hw = v);
@@ -815,7 +828,7 @@ pub(super) fn rivers(f: &Field, existing: Option<&Field>, spacing: f32, p: River
                     // Water at the sea's level stays where the river runs
                     // over land (a low coastal plain); over what was sea,
                     // the sea's own water is there already.
-                    if wl > h + 0.25 && (sea == NO_WATER || wl > sea + 0.2 || ground > sea) {
+                    if wl.round() as i32 > crate::compose::block_top(h) && (sea == NO_WATER || wl > sea + 0.2 || ground > sea) {
                         wrow[i] = wl;
                     }
                 }
@@ -851,7 +864,7 @@ pub(super) fn rivers(f: &Field, existing: Option<&Field>, spacing: f32, p: River
             for i in 0..n {
                 let ci = (((i as f32 + 0.5) / k) as usize).min(m - 1);
                 let l = grown[cj * m + ci];
-                if l != NO_WATER && l > drow[i] + 0.25 {
+                if l != NO_WATER && l.round() as i32 > crate::compose::block_top(drow[i]) {
                     wrow[i] = wrow[i].max(l);
                 }
             }
@@ -862,7 +875,7 @@ pub(super) fn rivers(f: &Field, existing: Option<&Field>, spacing: f32, p: River
         water.par_chunks_mut(n).zip(dug.par_chunks(n)).enumerate().for_each(|(j, (wrow, drow))| {
             for i in 0..n {
                 let held = standing(i, j);
-                if held != NO_WATER && held > drow[i] + 0.25 {
+                if held != NO_WATER && held.round() as i32 > crate::compose::block_top(drow[i]) {
                     wrow[i] = wrow[i].max(held);
                 }
             }

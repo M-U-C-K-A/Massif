@@ -337,16 +337,19 @@ pub(super) fn run(
             let a = amount.clamp(0.0, 1.0);
             let h = Field::new(m, work.data.par_iter().zip(&filled).map(|(&v, &w)| if v < sea { v } else { v + (w - v) * a }).collect());
             let lakes = Field::new(m, land.data.par_iter().zip(&filled).map(|(&v, &w)| ((w - v) * a / 1.5).clamp(0.0, 1.0)).collect());
-            // Water up to where each hollow spills, wherever it is deep
-            // enough to show; with the ground left as it was (amount 0),
-            // the hollows become lakes.
+            let after = carry(&f, &work, &h);
+            // Water up to where each hollow spills, wherever a block of it
+            // at least stands over the ground (counted in blocks, as the
+            // map holds them: the ground's top block under the water's, its
+            // rim at or over it); with the ground left as it was (amount
+            // 0), the hollows become lakes.
             let water = if want(2) {
-                let (level, deep) = (upsample(&Field::new(m, filled.clone()), n), upsample(&Field::new(m, land.data.iter().zip(&filled).map(|(&v, &w)| w - v).collect()), n));
-                Field::new(n, level.data.par_iter().zip(&deep.data).map(|(&l, &d)| if d > 0.6 && l > sea + 0.2 { l } else { super::NO_WATER }).collect())
+                let level = upsample(&Field::new(m, filled.clone()), n);
+                Field::new(n, level.data.par_iter().zip(&after.data).map(|(&l, &g)| if l > sea + 0.2 && l.round() as i32 > crate::compose::block_top(g) { l } else { super::NO_WATER }).collect())
             } else {
                 Field::new(0, Vec::new())
             };
-            Ok(vec![Value::Field(Arc::new(carry(&f, &work, &h))), Value::Field(Arc::new(full(&lakes, 1))), Value::Field(Arc::new(water))])
+            Ok(vec![Value::Field(Arc::new(after)), Value::Field(Arc::new(full(&lakes, 1))), Value::Field(Arc::new(water))])
         }
         NodeKind::Sea { level, shore } => {
             let f = field(0)?;

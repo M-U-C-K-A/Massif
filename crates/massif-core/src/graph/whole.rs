@@ -226,6 +226,7 @@ pub fn reshape_ground(edit: &mut Edit, op: &Reshape, sea: i32, bed: Option<Terra
             ..Changes::default()
         };
     };
+    let beds_painted = bed.is_some() && matches!(&change, Change::Samples { beds: Some(_), .. });
     steps.done.store(3 * count, Ordering::Relaxed);
     let (min_y, max_y) = (edit.dim().min_y as f32, (edit.dim().max_y - 1) as f32);
     let everywhere = BlockRect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX);
@@ -235,6 +236,13 @@ pub fn reshape_ground(edit: &mut Edit, op: &Reshape, sea: i32, bed: Option<Terra
     // banks rise back to hold the water, or the water goes down.
     let poured = Mutex::new(std::collections::HashSet::new());
     let dug = Mutex::new(std::collections::HashMap::new());
+    // The beds painted under the water, with the terrain they had: where
+    // the water does not stay over them, they get it back.
+    let painted = Mutex::new(std::collections::HashMap::new());
+    // The water poured into lakes.
+    let lakes = Mutex::new(std::collections::HashSet::new());
+    // The ground dug in the rivers' beds (not their banks).
+    let in_bed = Mutex::new(std::collections::HashSet::new());
     let mut cancelled = false;
     for batch in positions.chunks(BATCH) {
         if steps.cancel.load(Ordering::Relaxed) {
@@ -276,7 +284,8 @@ pub fn reshape_ground(edit: &mut Edit, op: &Reshape, sea: i32, bed: Option<Terra
                             let new = snap_height((old + after.sample(u, v) - before.sample(u, v)).clamp(min_y, max_y));
                             if let Some(w) = water {
                                 let level = w.at(u.round().max(0.0) as usize, v.round().max(0.0) as usize);
-                                if level != NO_WATER && level > new + 0.3 && lets(x, z) {
+                                // A block of water at least over the ground.
+                                if level != NO_WATER && level.round() as i32 > crate::compose::block_top(new) && lets(x, z) {
                                     let level = level.round().clamp(min_y, max_y) as i16;
                                     let was = tile.fluid.get(i);
                                     if was != level {
@@ -286,6 +295,12 @@ pub fn reshape_ground(edit: &mut Edit, op: &Reshape, sea: i32, bed: Option<Terra
                                         // pass's own, which it may lower.
                                         if was == crate::tile::NO_FLUID || was as f32 <= old + 0.3 {
                                             poured.lock().expect("no panic while held").insert((x, z));
+                                            // A lake's: all the water lakes
+                                            // pour, what rivers pour out of
+                                            // their beds.
+                                            if beds.as_ref().is_none_or(|b| b.sample(u, v) < 0.5) {
+                                                lakes.lock().expect("no panic while held").insert((x, z));
+                                            }
                                         }
                                     }
                                 }
@@ -296,14 +311,17 @@ pub fn reshape_ground(edit: &mut Edit, op: &Reshape, sea: i32, bed: Option<Terra
                                 // depths, sand in its shallows and in its
                                 // channel under the sea; the banks keep
                                 // their ground.
+                                // Its depth in blocks: water blocks over the ground's top.
                                 let fluid = tile.fluid.get(i);
-                                let depth = if fluid != crate::tile::NO_FLUID { fluid as f32 - new } else { 0.0 };
-                                if beds.sample(u, v) > dither.max(0.05) && depth > 0.3 && lets(x, z) {
+                                let depth = if fluid != crate::tile::NO_FLUID { fluid as i32 - crate::compose::block_top(new) } else { 0 };
+                                if beds.sample(u, v) > dither.max(0.05) && depth >= 1 && lets(x, z) {
                                     let river = water.as_ref().is_some_and(|w| w.at(u.round().max(0.0) as usize, v.round().max(0.0) as usize) != NO_WATER);
-                                    let terrain = if !river || depth < 1.6 { shore.unwrap_or(bed) } else { bed };
-                                    if tile.terrain.get(i) != terrain.0 {
+                                    let terrain = if !river || depth < 2 { shore.unwrap_or(bed) } else { bed };
+                                    let was = tile.terrain.get(i);
+                                    if was != terrain.0 {
                                         tile.terrain.set(i, terrain.0);
                                         moved = true;
+                                        painted.lock().expect("no panic while held").insert((x, z), was);
                                     }
                                 }
                             }
@@ -317,6 +335,13 @@ pub fn reshape_ground(edit: &mut Edit, op: &Reshape, sea: i32, bed: Option<Terra
                         moved = true;
                         if new < old {
                             dug.lock().expect("no panic while held").insert((x, z), old);
+                            // In a river's bed itself, not on its banks.
+                            if let Change::Samples { extent, beds: Some(beds), .. } = &change {
+                                let (u, v) = extent.grid(x as f64 + 0.5, z as f64 + 0.5);
+                                if beds.sample(u, v) >= 0.99 {
+                                    in_bed.lock().expect("no panic while held").insert((x, z));
+                                }
+                            }
                         }
                     }
                     n += moved as usize;
@@ -332,7 +357,23 @@ pub fn reshape_ground(edit: &mut Edit, op: &Reshape, sea: i32, bed: Option<Terra
         touched.extend(edited.into_inner().expect("no panic while held"));
         edit.cool(KEEP_HOT);
     }
-    let (poured, dug) = (poured.into_inner().expect("no panic while held"), dug.into_inner().expect("no panic while held"));
+    let (mut poured, dug) = (poured.into_inner().expect("no panic while held"), dug.into_inner().expect("no panic while held"));
+    let mut painted = painted.into_inner().expect("no panic while held");
+    if !cancelled && !poured.is_empty() && !dug.is_empty() {
+        // The water fills the bed it runs in: a column it dug that stays
+        // dry beside the water, under its surface (at a step, where the
+        // level below comes too low to cover it), is under the water above.
+        let in_bed = in_bed.into_inner().expect("no panic while held");
+        let filled = flood_dug(edit, &poured, &in_bed, beds_painted.then_some(shore.or(bed)).flatten(), &mut painted);
+        poured.extend(filled);
+    }
+    if !cancelled && !poured.is_empty() {
+        // A body of the pass's water that runs over open land its ground
+        // does not hold (a lake worked out on samples coarser than the
+        // blocks, over a notch in its rim) goes down as a whole to where
+        // it spills, filling all of its hollow below that.
+        settle_bodies(edit, &mut poured, &dug, &lakes.lock().expect("no panic while held"));
+    }
     if !cancelled && !poured.is_empty() {
         // Tile by tile, and again across their edges.
         for shift in [0, TILE_SIZE / 2] {
@@ -343,11 +384,506 @@ pub fn reshape_ground(edit: &mut Edit, op: &Reshape, sea: i32, bed: Option<Terra
             }
         }
     }
+    // A block of land left alone in the water, flush with it, is under it.
+    if !cancelled && !poured.is_empty() {
+        fill_islets(edit, &mut poured, &dug, beds_painted.then_some(shore.or(bed)).flatten(), &mut painted);
+    }
+    // The lakes' floors: a bowl, sand in the shallows, gravel deeper.
+    let lakes = lakes.into_inner().expect("no panic while held");
+    let mut beaches = Vec::new();
+    if !cancelled && !lakes.is_empty() && let Some(floor) = bed.or(shore) {
+        let lakes: std::collections::HashSet<(i32, i32)> = lakes.into_iter().filter(|p| poured.contains(p)).collect();
+        beaches = lake_floors(edit, &lakes, shore.unwrap_or(floor), floor, &mut painted);
+    }
+    // A bed the water left (its bank raised back to hold the water, the
+    // water lowered) is not a bed: it gets its ground's terrain back.
+    if !cancelled && !painted.is_empty() {
+        let mut by_tile: std::collections::HashMap<TilePos, Vec<(i32, i32, u16)>> = std::collections::HashMap::new();
+        for (&(x, z), &was) in &painted {
+            by_tile.entry(TilePos::containing(x, z)).or_default().push((x, z, was));
+        }
+        for (pos, cols) in by_tile {
+            let Some(tile) = edit.tile_mut(pos) else { continue };
+            let mut n = 0;
+            for (x, z, was) in cols {
+                let i = local_index(x, z);
+                let fluid = tile.fluid.get(i);
+                if fluid == crate::tile::NO_FLUID || fluid as i32 <= crate::compose::block_top(tile.top.get(i)) {
+                    tile.terrain.set(i, was);
+                    n += 1;
+                }
+            }
+            if n > 0 {
+                tile.compact();
+            }
+        }
+    }
+    // Their beaches, after: dry, they stay.
+    if let Some(sand) = shore.filter(|_| !beaches.is_empty()) {
+        let mut by_tile: std::collections::HashMap<TilePos, Vec<(i32, i32)>> = std::collections::HashMap::new();
+        for &(x, z) in &beaches {
+            by_tile.entry(TilePos::containing(x, z)).or_default().push((x, z));
+        }
+        for (pos, cols) in by_tile {
+            let Some(tile) = edit.tile_mut(pos) else { continue };
+            for (x, z) in cols {
+                tile.terrain.set(local_index(x, z), sand.0);
+            }
+            tile.compact();
+        }
+    }
     Changes {
         columns: changed.into_inner(),
         tiles: touched,
         cancelled,
     }
+}
+
+/// A column, by its block coordinates.
+type Spot = (i32, i32);
+/// What goes to each tile.
+type PerTile<T> = std::collections::HashMap<TilePos, Vec<T>>;
+/// The tops and water levels of a tile's columns.
+type TileTops = (Vec<f32>, Vec<i16>);
+
+/// The columns of the beds a pass dug (`dug`) that stay dry beside the
+/// water it `poured` though their ground lies under its surface, filled
+/// with that water, and so on from them: the highest water around first.
+/// Painted `bed` (their terrain as it was in `painted`). Returns the
+/// columns filled.
+fn flood_dug(edit: &mut Edit, poured: &std::collections::HashSet<(i32, i32)>, dug: &std::collections::HashSet<(i32, i32)>, bed: Option<TerrainId>, painted: &mut std::collections::HashMap<(i32, i32), u16>) -> Vec<(i32, i32)> {
+    use crate::compose::block_top;
+    use crate::tile::NO_FLUID;
+    use std::collections::{BinaryHeap, HashMap};
+    // The first air over each column read, and its water's level.
+    let mut by_tile: HashMap<TilePos, Vec<(i32, i32)>> = HashMap::new();
+    for &(x, z) in poured.iter().chain(dug.iter()) {
+        by_tile.entry(TilePos::containing(x, z)).or_default().push((x, z));
+    }
+    let mut cols: HashMap<(i32, i32), (i32, i16)> = HashMap::with_capacity(poured.len() + dug.len());
+    for (pos, list) in &by_tile {
+        let Some(t) = edit.level().view(*pos) else { continue };
+        for &(x, z) in list {
+            let i = local_index(x, z);
+            cols.insert((x, z), (block_top(t.top.get(i)), t.fluid.get(i)));
+        }
+    }
+    let wet = |(air, fluid): (i32, i16)| fluid != NO_FLUID && fluid as i32 > air;
+    let mut heap: BinaryHeap<(i16, i32, i32)> = poured.iter().filter_map(|&p| cols.get(&p).filter(|&&c| wet(c)).map(|&(_, f)| (f, p.0, p.1))).collect();
+    let mut filled: HashMap<(i32, i32), i16> = HashMap::new();
+    while let Some((f, x, z)) = heap.pop() {
+        for n in [(x + 1, z), (x - 1, z), (x, z + 1), (x, z - 1)] {
+            if !dug.contains(&n) || filled.contains_key(&n) {
+                continue;
+            }
+            let Some(&c) = cols.get(&n) else { continue };
+            if wet(c) || c.0 >= f as i32 {
+                continue;
+            }
+            filled.insert(n, f);
+            heap.push((f, n.0, n.1));
+        }
+    }
+    let mut by_tile: PerTile<(Spot, i16)> = HashMap::new();
+    for (&p, &f) in &filled {
+        by_tile.entry(TilePos::containing(p.0, p.1)).or_default().push((p, f));
+    }
+    for (pos, list) in by_tile {
+        let Some(tile) = edit.tile_mut(pos) else { continue };
+        for (p, f) in list {
+            let i = local_index(p.0, p.1);
+            tile.fluid.set(i, f);
+            if let Some(bed) = bed {
+                let was = tile.terrain.get(i);
+                if was != bed.0 {
+                    tile.terrain.set(i, bed.0);
+                    painted.entry(p).or_insert(was);
+                }
+            }
+        }
+        tile.compact();
+    }
+    filled.into_keys().collect()
+}
+
+/// The dry columns with water on every side, flush with it, beside the
+/// water a pass `poured` or the ground it `dug` (a block the water was dug
+/// around and left, at a mouth, in a bed): a block lower, under that
+/// water, painted `bed` (their terrain as it was in `painted`). Returns
+/// how many.
+fn fill_islets(edit: &mut Edit, poured: &mut std::collections::HashSet<(i32, i32)>, dug: &std::collections::HashMap<(i32, i32), f32>, bed: Option<TerrainId>, painted: &mut std::collections::HashMap<(i32, i32), u16>) -> usize {
+    use crate::compose::block_top;
+    use crate::tile::NO_FLUID;
+    use std::collections::{HashMap, HashSet};
+    const N4: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+    let mut cols: HashMap<(i32, i32), (i32, i16)> = HashMap::new();
+    {
+        let mut by_tile: HashMap<TilePos, HashSet<(i32, i32)>> = HashMap::new();
+        for &(x, z) in poured.iter().chain(dug.keys()) {
+            for (dx, dz) in [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1), (2, 0), (-2, 0), (0, 2), (0, -2), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
+                by_tile.entry(TilePos::containing(x + dx, z + dz)).or_default().insert((x + dx, z + dz));
+            }
+        }
+        for (pos, list) in &by_tile {
+            let Some(t) = edit.level().view(*pos) else { continue };
+            for &(x, z) in list {
+                let i = local_index(x, z);
+                cols.insert((x, z), (block_top(t.top.get(i)), t.fluid.get(i)));
+            }
+        }
+    }
+    let wet = |c: &(i32, i16)| c.1 != NO_FLUID && c.1 as i32 > c.0;
+    let mut islets: Vec<((i32, i32), i32)> = Vec::new();
+    let mut seen: HashSet<(i32, i32)> = HashSet::new();
+    for &(x, z) in poured.iter().chain(dug.keys()) {
+        for (dx, dz) in N4 {
+            let p = (x + dx, z + dz);
+            let Some(c) = cols.get(&p).copied() else { continue };
+            if wet(&c) || !seen.insert(p) {
+                continue;
+            }
+            let around: Vec<(i32, i16)> = N4.iter().filter_map(|(ex, ez)| cols.get(&(p.0 + ex, p.1 + ez)).copied()).collect();
+            if around.len() == 4 && around.iter().all(|n| wet(n) && n.1 as i32 == c.0) {
+                islets.push((p, c.0));
+            }
+        }
+    }
+    let mut by_tile: PerTile<(Spot, i32)> = HashMap::new();
+    for &(p, air) in &islets {
+        by_tile.entry(TilePos::containing(p.0, p.1)).or_default().push((p, air));
+    }
+    for (pos, list) in by_tile {
+        let Some(tile) = edit.tile_mut(pos) else { continue };
+        for (p, air) in list {
+            let i = local_index(p.0, p.1);
+            tile.top.set(i, snap_height((air - 1) as f32));
+            tile.fluid.set(i, air as i16);
+            if let Some(bed) = bed {
+                let was = tile.terrain.get(i);
+                if was != bed.0 {
+                    tile.terrain.set(i, bed.0);
+                    painted.entry(p).or_insert(was);
+                }
+            }
+            poured.insert(p);
+        }
+        tile.compact();
+    }
+    islets.len()
+}
+
+/// The floors of the lakes a pass poured (`lakes`, their columns): each
+/// lake dug into a bowl, a block deeper every three blocks from its shore,
+/// down to a depth that grows with its size (2 to 10 blocks), never
+/// raised; `shallow` (sand) under one or two blocks of water, `deep`
+/// (gravel) under more (their terrain as it was in `painted`). Returns
+/// its beaches: the dry columns beside it at most a block over its water.
+fn lake_floors(edit: &mut Edit, lakes: &std::collections::HashSet<(i32, i32)>, shallow: TerrainId, deep: TerrainId, painted: &mut std::collections::HashMap<(i32, i32), u16>) -> Vec<(i32, i32)> {
+    use crate::compose::block_top;
+    use crate::tile::NO_FLUID;
+    use std::collections::{HashMap, HashSet, VecDeque};
+    const N4: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+    // The first air and water of the lakes' columns and those beside.
+    let mut cols: HashMap<(i32, i32), (i32, i16)> = HashMap::new();
+    {
+        let mut by_tile: HashMap<TilePos, Vec<(i32, i32)>> = HashMap::new();
+        for &(x, z) in lakes {
+            for (dx, dz) in [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)] {
+                by_tile.entry(TilePos::containing(x + dx, z + dz)).or_default().push((x + dx, z + dz));
+            }
+        }
+        for (pos, list) in &by_tile {
+            let Some(t) = edit.level().view(*pos) else { continue };
+            for &(x, z) in list {
+                let i = local_index(x, z);
+                cols.insert((x, z), (block_top(t.top.get(i)), t.fluid.get(i)));
+            }
+        }
+    }
+    let wet = |c: &(i32, i16)| c.1 != NO_FLUID && c.1 as i32 > c.0;
+    let mut floors: HashMap<(i32, i32), (i32, TerrainId)> = HashMap::new();
+    let mut beaches: HashSet<(i32, i32)> = HashSet::new();
+    let mut seen: HashSet<(i32, i32)> = HashSet::new();
+    let mut list: Vec<(i32, i32)> = lakes.iter().copied().collect();
+    list.sort_unstable();
+    for start in list {
+        if seen.contains(&start) {
+            continue;
+        }
+        let Some(&(_, f)) = cols.get(&start).filter(|c| wet(c)) else { continue };
+        // The lake: its columns side by side at its level.
+        let mut body = vec![start];
+        seen.insert(start);
+        let mut k = 0;
+        while k < body.len() {
+            let (x, z) = body[k];
+            k += 1;
+            for (dx, dz) in N4 {
+                let p = (x + dx, z + dz);
+                if lakes.contains(&p) && !seen.contains(&p) && cols.get(&p).is_some_and(|c| wet(c) && c.1 == f) {
+                    seen.insert(p);
+                    body.push(p);
+                }
+            }
+        }
+        let mine: HashSet<(i32, i32)> = body.iter().copied().collect();
+        // How far each column lies from its shore, in blocks (1 on it).
+        let mut far: HashMap<(i32, i32), i32> = HashMap::with_capacity(body.len());
+        let mut queue: VecDeque<(i32, i32)> = VecDeque::new();
+        for &p in &body {
+            if N4.iter().any(|(dx, dz)| !mine.contains(&(p.0 + dx, p.1 + dz))) {
+                far.insert(p, 1);
+                queue.push_back(p);
+            }
+        }
+        while let Some(p) = queue.pop_front() {
+            let d = far[&p];
+            for (dx, dz) in N4 {
+                let q = (p.0 + dx, p.1 + dz);
+                if mine.contains(&q) && !far.contains_key(&q) {
+                    far.insert(q, d + 1);
+                    queue.push_back(q);
+                }
+            }
+        }
+        let most = ((body.len() as f32).sqrt() / 8.0).round().clamp(2.0, 10.0) as i32;
+        for &p in &body {
+            let air = cols[&p].0;
+            let want = 1 + (far.get(&p).copied().unwrap_or(1) - 1) / 3;
+            let air = air.min(f as i32 - want.min(most));
+            let depth = f as i32 - air;
+            floors.insert(p, (air, if depth <= 2 { shallow } else { deep }));
+            for (dx, dz) in N4 {
+                let q = (p.0 + dx, p.1 + dz);
+                if let Some(c) = cols.get(&q)
+                    && !mine.contains(&q)
+                    && !wet(c)
+                    && (c.0 == f as i32 || c.0 == f as i32 + 1)
+                {
+                    beaches.insert(q);
+                }
+            }
+        }
+    }
+    let mut by_tile: PerTile<(Spot, (i32, TerrainId))> = HashMap::new();
+    for (&p, &v) in &floors {
+        by_tile.entry(TilePos::containing(p.0, p.1)).or_default().push((p, v));
+    }
+    for (pos, list) in by_tile {
+        let Some(tile) = edit.tile_mut(pos) else { continue };
+        for (p, (air, terrain)) in list {
+            let i = local_index(p.0, p.1);
+            if block_top(tile.top.get(i)) > air {
+                tile.top.set(i, snap_height(air as f32));
+            }
+            let was = tile.terrain.get(i);
+            if was != terrain.0 {
+                tile.terrain.set(i, terrain.0);
+                painted.entry(p).or_insert(was);
+            }
+        }
+        tile.compact();
+    }
+    beaches.into_iter().collect()
+}
+
+/// The bodies of the water a pass `poured` (columns side by side at one
+/// level) that stand over open land beside them (not ground the pass dug:
+/// that rises back to hold them), each brought down to the level its
+/// ground holds, block by block: the hollow around it filled from its
+/// rim inward (the water already on the map a wall), the body's columns
+/// to the lower of their level and that, and the dry columns of its
+/// hollow under that level joined to it. Returns the columns lowered (or
+/// dried) and added; those added are added to `poured`.
+fn settle_bodies(edit: &mut Edit, poured: &mut std::collections::HashSet<(i32, i32)>, dug: &std::collections::HashMap<(i32, i32), f32>, lakes: &std::collections::HashSet<(i32, i32)>) -> (usize, usize) {
+    use crate::compose::block_top;
+    use crate::tile::NO_FLUID;
+    use std::cmp::Reverse;
+    use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
+    // The first air over a column and its water's level (NO_FLUID: none),
+    // read a tile at a time; `None` past the map.
+    struct Reader<'a> {
+        level: &'a crate::level::Level,
+        tiles: HashMap<TilePos, Option<TileTops>>,
+    }
+    impl Reader<'_> {
+        fn at(&mut self, x: i32, z: i32) -> Option<(i32, i16)> {
+            let pos = TilePos::containing(x, z);
+            let level = self.level;
+            let t = self.tiles.entry(pos).or_insert_with(|| {
+                level.view(pos).map(|t| {
+                    let n = (TILE_SIZE * TILE_SIZE) as usize;
+                    ((0..n).map(|i| t.top.get(i)).collect(), (0..n).map(|i| t.fluid.get(i)).collect())
+                })
+            });
+            let (top, fluid) = t.as_ref()?;
+            let i = local_index(x, z);
+            Some((block_top(top[i]), fluid[i]))
+        }
+    }
+    let wet = |(air, fluid): (i32, i16)| fluid != NO_FLUID && fluid as i32 > air;
+    const N4: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+    let mut changes: HashMap<(i32, i32), i16> = HashMap::new();
+    {
+        let mut read = Reader { level: edit.level(), tiles: HashMap::new() };
+        let mut seen: HashSet<(i32, i32)> = HashSet::new();
+        let mut list: Vec<(i32, i32)> = poured.iter().copied().collect();
+        list.sort_unstable();
+        for start in list {
+            if seen.contains(&start) {
+                continue;
+            }
+            let Some(c0) = read.at(start.0, start.1).filter(|&c| wet(c)) else { continue };
+            let f = c0.1;
+            // The body: the pass's water at this level, side by side.
+            let mut body = vec![start];
+            seen.insert(start);
+            let mut k = 0;
+            while k < body.len() {
+                let (x, z) = body[k];
+                k += 1;
+                for (dx, dz) in N4 {
+                    let p = (x + dx, z + dz);
+                    if poured.contains(&p) && !seen.contains(&p) && read.at(p.0, p.1).is_some_and(|c| wet(c) && c.1 == f) {
+                        seen.insert(p);
+                        body.push(p);
+                    }
+                }
+            }
+            // A lake (most of it poured as one) stands a block over the
+            // water beside it at most: a river that cuts into its rim lower
+            // down drains it to there.
+            let lake = 2 * body.iter().filter(|p| lakes.contains(p)).count() > body.len();
+            let mine: HashSet<(i32, i32)> = body.iter().copied().collect();
+            let mut leaks = false;
+            'look: for &(x, z) in &body {
+                for (dx, dz) in N4 {
+                    let p = (x + dx, z + dz);
+                    if mine.contains(&p) {
+                        continue;
+                    }
+                    let Some(c) = read.at(p.0, p.1) else { continue };
+                    if (!wet(c) && c.0 < f as i32 && !dug.contains_key(&p)) || (lake && wet(c) && (c.1 as i32) < f as i32 - 1) {
+                        leaks = true;
+                        break 'look;
+                    }
+                }
+            }
+            if !leaks {
+                continue;
+            }
+            // Its hollow, in a window around it: filled from the window's
+            // edge inward, over the first air of each column; the water of
+            // the map and of the pass, but for this body's, as walls.
+            const MARGIN: i32 = 12;
+            let (x0, z0) = (body.iter().map(|p| p.0).min().unwrap_or(0) - MARGIN, body.iter().map(|p| p.1).min().unwrap_or(0) - MARGIN);
+            let (x1, z1) = (body.iter().map(|p| p.0).max().unwrap_or(0) + MARGIN, body.iter().map(|p| p.1).max().unwrap_or(0) + MARGIN);
+            let (w, d) = ((x1 - x0 + 1) as usize, (z1 - z0 + 1) as usize);
+            // The ground the pass dug counts as it was: it rises back to
+            // hold the water, rather than let it out.
+            // Other water is a wall to a river; to a lake, a sill a block
+            // over its surface.
+            const WALL: i32 = i32::MAX;
+            let mut ground = vec![WALL; w * d];
+            let mut rim = vec![WALL; w * d];
+            for j in 0..d {
+                for i in 0..w {
+                    let p = (x0 + i as i32, z0 + j as i32);
+                    let c = j * w + i;
+                    (ground[c], rim[c]) = match read.at(p.0, p.1) {
+                        None => (WALL, WALL),
+                        Some(c) if wet(c) && !mine.contains(&p) => (WALL, if lake { c.1 as i32 + 1 } else { WALL }),
+                        Some(c) => (c.0, dug.get(&p).map_or(c.0, |&was| c.0.max(block_top(was)))),
+                    };
+                }
+            }
+            let mut filled = vec![WALL; w * d];
+            let mut heap: BinaryHeap<Reverse<(i32, usize)>> = BinaryHeap::new();
+            for j in 0..d {
+                for i in 0..w {
+                    let c = j * w + i;
+                    if (i == 0 || j == 0 || i == w - 1 || j == d - 1) && rim[c] != WALL {
+                        filled[c] = rim[c];
+                        heap.push(Reverse((rim[c], c)));
+                    }
+                }
+            }
+            while let Some(Reverse((level, c))) = heap.pop() {
+                if level > filled[c] {
+                    continue;
+                }
+                let (i, j) = ((c % w) as i32, (c / w) as i32);
+                for (di, dj) in N4 {
+                    let (a, b) = (i + di, j + dj);
+                    if a < 0 || b < 0 || a >= w as i32 || b >= d as i32 {
+                        continue;
+                    }
+                    let nb = b as usize * w + a as usize;
+                    if rim[nb] == WALL {
+                        continue;
+                    }
+                    let l = level.max(rim[nb]);
+                    if l < filled[nb] {
+                        filled[nb] = l;
+                        heap.push(Reverse((l, nb)));
+                    }
+                }
+            }
+            let at = |p: (i32, i32)| (p.1 - z0) as usize * w + (p.0 - x0) as usize;
+            let new_level = |c: usize| (f as i32).min(filled[c]);
+            // The body's columns down to what holds them; the dry columns
+            // beside them under that, joined to them.
+            let mut queue: VecDeque<(i32, i32)> = VecDeque::new();
+            let mut joined: HashSet<(i32, i32)> = HashSet::new();
+            for &p in &body {
+                let c = at(p);
+                let l = new_level(c);
+                if l > ground[c] {
+                    if l != f as i32 {
+                        changes.insert(p, l as i16);
+                    }
+                    queue.push_back(p);
+                } else {
+                    changes.insert(p, NO_FLUID);
+                }
+            }
+            while let Some(p) = queue.pop_front() {
+                for (dx, dz) in N4 {
+                    let q = (p.0 + dx, p.1 + dz);
+                    if q.0 < x0 || q.1 < z0 || q.0 > x1 || q.1 > z1 || mine.contains(&q) || joined.contains(&q) {
+                        continue;
+                    }
+                    let c = at(q);
+                    if ground[c] == WALL {
+                        continue;
+                    }
+                    let l = new_level(c);
+                    if l > ground[c] {
+                        joined.insert(q);
+                        changes.insert(q, l as i16);
+                        queue.push_back(q);
+                    }
+                }
+            }
+        }
+    }
+    let lowered = changes.values().filter(|&&l| l == NO_FLUID).count() + changes.keys().filter(|p| poured.contains(p)).filter(|p| changes[p] != NO_FLUID).count();
+    let added = changes.keys().filter(|p| !poured.contains(p)).count();
+    let mut by_tile: PerTile<(Spot, i16)> = HashMap::new();
+    for (&p, &l) in &changes {
+        by_tile.entry(TilePos::containing(p.0, p.1)).or_default().push((p, l));
+        if l != NO_FLUID {
+            poured.insert(p);
+        }
+    }
+    for (pos, list) in by_tile {
+        let Some(tile) = edit.tile_mut(pos) else { continue };
+        for (p, l) in list {
+            tile.fluid.set(local_index(p.0, p.1), l);
+        }
+        tile.compact();
+    }
+    (lowered, added)
 }
 
 /// `op` over the map at `n` samples a side, for a picture of it: the square
@@ -509,6 +1045,111 @@ mod tests {
         // The plain stays dry, at the sea's level as before.
         assert_eq!(column(&w, 10, 240).1, SEA as i16);
         assert!(NO_FLUID != SEA as i16);
+    }
+
+    /// A generated map of hills, 4 × 4 tiles: valleys, shallow hollows,
+    /// the sea at 63.
+    fn hills() -> World {
+        use crate::generate::{GenParams, Landform, generate};
+        generate(&GenParams { tiles_x: 4, tiles_z: 4, landform: Landform::Hills, seed: 3, ..GenParams::default() })
+    }
+
+    /// `op` over a map at its own sea level, as Edit ▸ Whole map runs it:
+    /// gravel beds, sand shores.
+    fn run_at_sea(world: &mut World, op: &Reshape) -> Changes {
+        let sea = world.meta.sea_level;
+        let (bed, shore) = (world.registry.terrain_by_name("Gravel"), world.registry.terrain_by_name("Sand"));
+        let mut history = History::new(2);
+        history.begin(op.label(), 0);
+        reshape_ground(&mut history.edit(world, 0), op, sea, bed, shore, &Steps::default())
+    }
+
+    /// Every column of a map: its first air, its water's level, its
+    /// terrain.
+    fn columns(world: &World) -> std::collections::HashMap<(i32, i32), (i32, i16, u16)> {
+        let mut out = std::collections::HashMap::new();
+        for p in world.dims[0].ground().positions() {
+            let t = world.dims[0].ground().view(p).unwrap();
+            let (ox, oz) = p.origin();
+            for z in oz..oz + TILE_SIZE {
+                for x in ox..ox + TILE_SIZE {
+                    let i = local_index(x, z);
+                    out.insert((x, z), (crate::compose::block_top(t.top.get(i)), t.fluid.get(i), t.terrain.get(i)));
+                }
+            }
+        }
+        out
+    }
+
+    const N4: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+
+    /// Water over a column's ground.
+    fn wet(c: &(i32, i16, u16)) -> bool {
+        c.1 != NO_FLUID && c.1 as i32 > c.0
+    }
+
+    /// Holes in the water's surface: dry columns among water on every side
+    /// that stands as high as their ground or higher.
+    fn holes(cols: &std::collections::HashMap<(i32, i32), (i32, i16, u16)>) -> Vec<(i32, i32)> {
+        cols.iter()
+            .filter(|(p, c)| !wet(c) && N4.iter().all(|(dx, dz)| cols.get(&(p.0 + dx, p.1 + dz)).is_some_and(|n| wet(n) && n.1 as i32 >= c.0)))
+            .map(|(p, _)| *p)
+            .collect()
+    }
+
+    /// The columns a pass painted sand that lie neither under the water
+    /// nor beside it: sand left on the land.
+    fn sand_on_land(before: &std::collections::HashMap<(i32, i32), (i32, i16, u16)>, after: &std::collections::HashMap<(i32, i32), (i32, i16, u16)>, sand: u16) -> Vec<(i32, i32)> {
+        after
+            .iter()
+            .filter(|(p, c)| c.2 == sand && before[p].2 != sand && !wet(c) && !N4.iter().any(|(dx, dz)| after.get(&(p.0 + dx, p.1 + dz)).is_some_and(wet)))
+            .map(|(p, _)| *p)
+            .collect()
+    }
+
+    /// On hills, Lakes fills their hollows with lakes that stand in them:
+    /// one level each, held by their rim on every side (no water beside
+    /// lower land, none over a step down to other water, none with air
+    /// under it), no hole in their surface; in a bowl, deeper than their
+    /// shallow hollow where they are wide; sand under their shallows and
+    /// on the flat of their shores, nowhere else.
+    #[test]
+    fn lakes_on_hills_stand_in_their_hollows() {
+        let mut w = hills();
+        let (before, check) = (columns(&w), crate::water::check(&w.dims[0]));
+        let changes = run_at_sea(&mut w, &Reshape::Filter(NodeKind::Lakes { amount: 0.0, sea: 63.0 }));
+        let (after, held) = (columns(&w), crate::water::check(&w.dims[0]));
+        assert!(held.columns > check.columns + 2000, "{} columns of water, {} before ({} changed)", held.columns, check.columns, changes.columns);
+        assert_eq!((held.spills, held.floating, held.steps, held.falls), (check.spills, check.floating, check.steps, check.falls), "{held:?}");
+        assert_eq!(holes(&after), holes(&before));
+        // Deeper than the hollow was: its floor dug into a bowl.
+        let deepest = |cols: &std::collections::HashMap<(i32, i32), (i32, i16, u16)>| after.iter().filter(|(_, c)| wet(c) && c.1 > 63).map(|(p, c)| c.1 as i32 - cols[p].0).max().unwrap_or(0);
+        assert!(deepest(&after) >= deepest(&before) + 2, "{} blocks deep, {} over the ground as it was", deepest(&after), deepest(&before));
+        let sand = w.registry.terrain_by_name("Sand").unwrap().0;
+        assert!(after.iter().any(|(p, c)| c.2 == sand && before[p].2 != sand && !wet(c)), "beaches");
+        assert_eq!(sand_on_land(&before, &after, sand), Vec::<(i32, i32)>::new());
+    }
+
+    /// On hills, Rivers' water holds as it is dug: none beside lower land,
+    /// none with air under it, no hole or dam of land across its surface
+    /// (a bed dug under the water above a step is under it), falls rare;
+    /// its beds' sand and gravel only under it.
+    #[test]
+    fn rivers_on_hills_hold_their_water() {
+        let mut w = hills();
+        let (before, check) = (columns(&w), crate::water::check(&w.dims[0]));
+        let op = Reshape::Filter(NodeKind::Rivers { threshold: 0.5, depth: 4.0, width: 10.0, sea: 63.0, banks: 1.0, lakes: 0.5 });
+        run_at_sea(&mut w, &op);
+        let (after, held) = (columns(&w), crate::water::check(&w.dims[0]));
+        assert!(held.columns > check.columns + 1000, "{} columns of water, {} before", held.columns, check.columns);
+        assert_eq!((held.spills, held.floating), (check.spills, check.floating), "{held:?}");
+        assert!(held.steps > check.steps && held.falls * 20 <= held.steps, "{held:?}");
+        assert_eq!(holes(&after), holes(&before));
+        let sand = w.registry.terrain_by_name("Sand").unwrap().0;
+        let gravel = w.registry.terrain_by_name("Gravel").unwrap().0;
+        assert_eq!(sand_on_land(&before, &after, sand), Vec::<(i32, i32)>::new());
+        let gravel_on_land: Vec<(i32, i32)> = after.iter().filter(|(p, c)| c.2 == gravel && before[p].2 != gravel && !wet(c)).map(|(p, _)| *p).collect();
+        assert_eq!(gravel_on_land, Vec::<(i32, i32)>::new());
     }
 
     #[test]

@@ -19,7 +19,8 @@ USAGE
   massif-cli probe <world.massif> [<x> <z>…] [--random N]
   massif-cli analyse <world.massif>
   massif-cli water <world.massif>
-  massif-cli rivers <world.massif> <out.massif> [--threshold T]
+  massif-cli rivers <world.massif> <out.massif> [--threshold T] [--depth D] [--width W] [--banks B] [--lakes L]
+  massif-cli lakes <world.massif> <out.massif>
   massif-cli spring <world.massif> <out.massif> <x> <z>…
   massif-cli crop <world.massif> <out.massif> <x0> <z0> <x1> <z1>
 
@@ -338,11 +339,13 @@ fn cmd_water(args: Args) -> Res<()> {
     let world = massif_format::load(&path).map_err(|e| e.to_string())?;
     let started = Instant::now();
     let c = massif_core::water::check(&world.dims[0]);
-    if std::env::var_os("MASSIF_WATER_WHERE").is_some() {
+    if let Some(which) = std::env::var_os("MASSIF_WATER_WHERE") {
+        // "all": the steps and falls too.
+        let all = which == "all";
         let mut seen = 0;
         for p in world.dims[0].ground().positions() {
             massif_core::water::check_tile_with(&world.dims[0], p, &mut |x, y, z, k| {
-                if seen < 1_000_000 && !matches!(k, massif_core::water::Problem::Step | massif_core::water::Problem::Fall) {
+                if seen < 1_000_000 && (all || !matches!(k, massif_core::water::Problem::Step | massif_core::water::Problem::Fall)) {
                     println!("{k:?} at {x} {y} {z}");
                     seen += 1;
                 }
@@ -443,7 +446,9 @@ fn cmd_water(args: Args) -> Res<()> {
 
 /// Edit ▸ Whole map ▸ Rivers with the settings the app starts from.
 fn cmd_rivers(mut args: Args) -> Res<()> {
-    let threshold: f32 = args.option("--threshold")?.map(|v| v.parse().map_err(|_| format!("--threshold needs a number, not {v}"))).transpose()?.unwrap_or(0.5);
+    let mut number = |name: &str| -> Res<Option<f32>> { args.option(name)?.map(|v| v.parse().map_err(|_| format!("{name} needs a number, not {v}"))).transpose() };
+    let threshold = number("--threshold")?.unwrap_or(0.5);
+    let (depth, width, banks, lakes) = (number("--depth")?, number("--width")?, number("--banks")?, number("--lakes")?);
     let [path, out] = args.positional(["<world.massif>", "<out.massif>"])?;
     let mut world = massif_format::load(&path).map_err(|e| e.to_string())?;
     let sea = world.meta.sea_level;
@@ -453,17 +458,34 @@ fn cmd_rivers(mut args: Args) -> Res<()> {
     let f = (((side.1 - side.0 + 1) * 128) as f32 / 2048.0).clamp(0.5, 3.0);
     let op = massif_core::graph::Reshape::Filter(massif_core::graph::NodeKind::Rivers {
         threshold,
-        depth: 4.0,
-        width: 10.0 * f.clamp(1.0, 2.5),
+        depth: depth.unwrap_or(4.0),
+        width: width.unwrap_or(10.0 * f.clamp(1.0, 2.5)),
         sea: sea as f32,
-        banks: 1.0,
-        lakes: 0.5,
+        banks: banks.unwrap_or(1.0),
+        lakes: lakes.unwrap_or(0.5),
     });
     let started = Instant::now();
     let mut history = massif_core::history::History::new(1);
     history.begin("Rivers", 0);
     let changes = massif_core::graph::reshape_ground(&mut history.edit(&mut world, 0), &op, sea, bed, shore, &massif_core::auto::Steps::default());
     eprintln!("rivers: {} columns in {} tiles, {:.2} s{}", changes.columns, changes.tiles.len(), started.elapsed().as_secs_f32(), if changes.cancelled { " (stopped: the pass did not finish)" } else { "" });
+    massif_format::save(&world.snapshot(), &out).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Edit ▸ Whole map ▸ Lakes.
+fn cmd_lakes(args: Args) -> Res<()> {
+    let [path, out] = args.positional(["<world.massif>", "<out.massif>"])?;
+    let mut world = massif_format::load(&path).map_err(|e| e.to_string())?;
+    let sea = world.meta.sea_level;
+    let op = massif_core::graph::Reshape::Filter(massif_core::graph::NodeKind::Lakes { amount: 0.0, sea: sea as f32 });
+    let started = Instant::now();
+    let mut history = massif_core::history::History::new(1);
+    history.begin("Lakes", 0);
+    // As the app runs it: gravel beds, sand shores.
+    let (bed, shore) = (world.registry.terrain_by_name("Gravel"), world.registry.terrain_by_name("Sand"));
+    let changes = massif_core::graph::reshape_ground(&mut history.edit(&mut world, 0), &op, sea, bed, shore, &massif_core::auto::Steps::default());
+    eprintln!("lakes: {} columns in {} tiles, {:.2} s", changes.columns, changes.tiles.len(), started.elapsed().as_secs_f32());
     massif_format::save(&world.snapshot(), &out).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -551,6 +573,7 @@ fn main() -> ExitCode {
         "probe" => cmd_probe(args),
         "water" => cmd_water(args),
         "rivers" => cmd_rivers(args),
+        "lakes" => cmd_lakes(args),
         "spring" => cmd_spring(args),
         "crop" => cmd_crop(args),
         "analyse" | "analyze" => cmd_analyse(args),
