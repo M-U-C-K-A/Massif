@@ -256,14 +256,25 @@ pub fn find_instance_dirs() -> Vec<PathBuf> {
     out
 }
 
-/// The first instance on this computer with a mod named `name`
-/// (`conquest`) among its jars: read only for that one.
-pub fn find_with_mod(name: &str) -> Option<Instance> {
+/// Every instance on this computer with a mod named `name` (`conquest`)
+/// among its jars, read: those with lists of blocks for it first (a mod's
+/// own lists say which of its blocks are real and what states they have),
+/// then by name. Only those instances' jars are looked into.
+pub fn find_all_with_mod(name: &str) -> Vec<Instance> {
     let name = name.to_lowercase();
-    find_instance_dirs()
+    let mut out: Vec<Instance> = find_instance_dirs()
         .into_iter()
-        .find(|dir| files_in(&dir.join("mods"), "jar").iter().any(|j| j.file_name().is_some_and(|f| f.to_string_lossy().to_lowercase().contains(&name))))
-        .and_then(|dir| Instance::read(&dir))
+        .filter(|dir| files_in(&dir.join("mods"), "jar").iter().any(|j| j.file_name().is_some_and(|f| f.to_string_lossy().to_lowercase().contains(&name))))
+        .filter_map(|dir| Instance::read(&dir))
+        .collect();
+    out.sort_by_key(|i| (i.lists.is_empty(), i.name.to_lowercase()));
+    out
+}
+
+/// The instance on this computer with a mod named `name` that reads best:
+/// see [`find_all_with_mod`].
+pub fn find_with_mod(name: &str) -> Option<Instance> {
+    find_all_with_mod(name).into_iter().next()
 }
 
 #[cfg(test)]

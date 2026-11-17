@@ -11393,7 +11393,7 @@ mod tests {
         h.state_mut().settings.mod_jars.clear();
         h.state_mut().blocks.load(&ctx, None, Vec::new());
         wait_for(&mut h, "the game's blocks", &|app| app.blocks.catalogue.is_some() && !app.blocks.is_loading());
-        assert_eq!(h.state().blocks.conquest.as_ref().map(|i| i.dir.clone()), Some(instance.dir.clone()), "the instance is found");
+        assert_eq!(h.state().blocks.conquest.first().map(|i| i.dir.clone()), Some(instance.dir.clone()), "the instance is found, the one with Conquest's lists first");
         h.run_steps(4);
         if let Some(dir) = &shots {
             h.render().unwrap().save(dir.join("conquest-offered.png")).unwrap();
@@ -11401,7 +11401,8 @@ mod tests {
         // One click: its jar, its list and its packs, over 1.20.1.
         let before = crate::memory_tests::resident();
         let started = std::time::Instant::now();
-        h.get_by_label("Use").click();
+        // Its row's button: the first, for the instance read best.
+        h.query_all_by_label("Use").next().expect("a Use button").click();
         h.run_steps(2);
         wait_for(&mut h, "Conquest Reforged's blocks", &|app| has_conquest(app) && !app.blocks.is_loading());
         let took = started.elapsed();
@@ -11411,7 +11412,7 @@ mod tests {
         assert_eq!(h.state().settings.minecraft_jar.as_ref(), Some(&game.path), "over the version it plays");
         assert_eq!(h.state().settings.mod_jars, instance.files(), "remembered");
         assert_eq!(cat.version, game.version);
-        assert!(h.state().blocks.conquest.is_none(), "no longer offered");
+        assert!(h.state().blocks.conquest.is_empty(), "no longer offered");
         let conquest = cat.mods.iter().find(|m| m.kind == massif_assets::SourceKind::Mod && m.namespaces.iter().any(|n| n == "conquest")).unwrap().clone();
         assert_eq!(conquest.name, "Conquest Reforged");
         // Its tabs, in its order, after the game's blocks; made again as

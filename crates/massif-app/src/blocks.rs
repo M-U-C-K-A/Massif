@@ -13,7 +13,7 @@ use std::sync::mpsc::{Receiver, channel};
 /// Pixels of the icons (drawn at half that in points, for sharp edges).
 const ICON: usize = 48;
 
-type Loaded = (Vec<Jar>, Result<Catalogue, String>, Option<Instance>);
+type Loaded = (Vec<Jar>, Result<Catalogue, String>, Vec<Instance>);
 
 #[derive(Default)]
 pub struct BlockLibrary {
@@ -28,9 +28,10 @@ pub struct BlockLibrary {
     pub search: String,
     /// Show the blocks that are not whole cubes (flowers, torches…).
     pub all: bool,
-    /// Conquest Reforged's instance, when one is installed here and its
-    /// blocks are not read yet: offered in one click.
-    pub conquest: Option<Instance>,
+    /// Conquest Reforged's instances installed here (its Fabric and Forge
+    /// modpacks…), the best read first, while its blocks are not read:
+    /// each offered in one click.
+    pub conquest: Vec<Instance>,
     /// What reading an instance left to say (the version of the game it
     /// plays is not installed…).
     pub notice: Option<String>,
@@ -78,7 +79,7 @@ impl BlockLibrary {
             // Conquest Reforged installed here, to offer while its blocks
             // are not read.
             let has_conquest = result.as_ref().is_ok_and(|c| c.mods.iter().any(|m| m.kind == SourceKind::Mod && m.namespaces.iter().any(|n| n == "conquest")));
-            let conquest = if has_conquest { None } else { massif_assets::instance::find_with_mod("conquest") };
+            let conquest = if has_conquest { Vec::new() } else { massif_assets::instance::find_all_with_mod("conquest") };
             let _ = tx.send((jars, result, conquest));
             ctx.request_repaint();
         });
@@ -128,7 +129,7 @@ impl BlockLibrary {
         if instance.mods.is_empty() {
             self.notice = Some(tr!("{instance} has no mod with blocks.", instance = instance.name));
         }
-        self.conquest = None;
+        self.conquest.clear();
         self.load(ctx, jar.clone(), mods.clone());
     }
 

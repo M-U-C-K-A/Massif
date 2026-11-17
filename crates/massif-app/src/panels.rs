@@ -2747,9 +2747,9 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
         }
     });
     // Conquest Reforged installed here: its blocks in one click, while they
-    // are not read.
+    // are not read; each of its instances (Fabric, Forge…) on a row.
     let read_conquest = blocks.catalogue.as_ref().is_some_and(|c| c.mods.iter().any(|m| m.kind == massif_assets::SourceKind::Mod && m.namespaces.iter().any(|n| n == "conquest")));
-    if let Some(found) = blocks.conquest.clone().filter(|_| !read_conquest) {
+    if !blocks.conquest.is_empty() && !read_conquest {
         ui.add_space(4.0);
         egui::Frame::new()
             .fill(pal.well())
@@ -2758,19 +2758,26 @@ pub fn blocks_panel(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
             .inner_margin(egui::Margin::symmetric(10, 8))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(theme::primary_button(ui, tr!("Use"))).on_hover_text(tr!("Read its mods, lists of blocks and resource packs from this instance, over the version of the game it plays")).clicked() {
-                        instance = Some(found.clone());
-                    }
-                    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                        ui.label(RichText::new(tr!("Conquest Reforged is installed")).medium().size(12.5));
+                ui.label(RichText::new(tr!("Conquest Reforged is installed")).medium().size(12.5));
+                for found in blocks.conquest.clone() {
+                    ui.add_space(4.0);
+                    // A row as high as its text: the instance, then its button.
+                    ui.horizontal(|ui| {
                         let detail = match &found.minecraft {
                             Some(v) => tr!("{name} · Minecraft {v}", name = found.name, v),
                             None => found.name.clone(),
                         };
-                        ui.add(egui::Label::new(RichText::new(detail).size(11.5).color(pal.weak)).wrap());
+                        let text_width = (ui.available_width() - 64.0).max(80.0);
+                        ui.allocate_ui_with_layout(vec2(text_width, 0.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.add(egui::Label::new(RichText::new(detail).size(11.5).color(pal.weak)).wrap());
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.add(theme::primary_button(ui, tr!("Use"))).on_hover_text(tr!("Read its mods, lists of blocks and resource packs from this instance, over the version of the game it plays")).clicked() {
+                                instance = Some(found.clone());
+                            }
+                        });
                     });
-                });
+                }
             });
     }
     if let Some(found) = instance {

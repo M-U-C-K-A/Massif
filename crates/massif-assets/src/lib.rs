@@ -462,14 +462,29 @@ fn mod_name(archive: &zip::Archive) -> Option<String> {
     mod_given_name(archive).map(|n| plain_mod_name(&n))
 }
 
+/// The value of `key` on a line of a TOML file (`displayName="Conquest
+/// Reforged" #mandatory` → `Conquest Reforged`): a quoted string up to its
+/// closing quote, or a bare value up to a comment.
+fn toml_value(line: &str, key: &str) -> Option<String> {
+    let (k, v) = line.split_once('=')?;
+    if k.trim() != key {
+        return None;
+    }
+    let v = v.trim();
+    let value = match v.chars().next()? {
+        q @ ('"' | '\'') => v[1..].split(q).next()?,
+        _ => v.split('#').next()?.trim(),
+    };
+    Some(value.to_owned())
+}
+
 fn mod_given_name(archive: &zip::Archive) -> Option<String> {
     for toml in ["META-INF/neoforge.mods.toml", "META-INF/mods.toml"] {
         if let Some(Ok(bytes)) = archive.read(toml) {
             let text = String::from_utf8_lossy(&bytes);
             for line in text.lines() {
-                let line = line.trim();
-                if let Some(v) = line.strip_prefix("displayName").map(str::trim).and_then(|v| v.strip_prefix('=')) {
-                    let v = v.trim().trim_matches('"').trim();
+                if let Some(v) = toml_value(line, "displayName") {
+                    let v = v.trim();
                     if !v.is_empty() && !v.contains("${") {
                         return Some(v.to_owned());
                     }
@@ -654,9 +669,9 @@ fn mod_minecraft(archive: &zip::Archive, path: &Path) -> Option<String> {
                 let line = line.trim();
                 if line.starts_with('[') {
                     in_minecraft = false;
-                } else if line.replace(' ', "") == "modId=\"minecraft\"" {
+                } else if toml_value(line, "modId").as_deref() == Some("minecraft") {
                     in_minecraft = true;
-                } else if in_minecraft && line.starts_with("versionRange") && let Some(v) = first_version(line) {
+                } else if in_minecraft && let Some(v) = toml_value(line, "versionRange").and_then(|r| first_version(&r)) {
                     return Some(v);
                 }
             }
@@ -1379,6 +1394,12 @@ mod tests {
         assert_eq!(cat.mods[1].blocks, 5);
         assert_eq!(cat.mod_of("conquest:basalt_pillar").unwrap().name, "Conquest Reforged");
         assert_eq!(plain_mod_name("Macaw's Bridges"), "Macaw's Bridges");
+        // Forge's mods.toml, comments and all (Conquest Reforged 1.7.0's).
+        assert_eq!(toml_value("displayName=\"Conquest Reforged\" #mandatory", "displayName").as_deref(), Some("Conquest Reforged"));
+        assert_eq!(toml_value("   modId=\"minecraft\" #mandatory", "modId").as_deref(), Some("minecraft"));
+        assert_eq!(toml_value("versionRange='[1.20.1,1.21)'", "versionRange").as_deref(), Some("[1.20.1,1.21)"));
+        assert_eq!(toml_value("mandatory=true # a comment", "mandatory").as_deref(), Some("true"));
+        assert_eq!(toml_value("displayNameX=\"no\"", "displayName"), None);
         assert_eq!(plain_mod_name("Chipped (Forge)"), "Chipped");
         assert!(cat.mod_of("minecraft:basalt").is_none());
 
@@ -1391,38 +1412,62 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
-    /// Conquest Reforged's own instance, where it is installed here
-    /// (`MASSIF_CONQUEST_INSTANCE`, or found among the launchers' folders):
-    /// read with the game it plays, its 17,000 blocks are the registry's,
-    /// each drawn with its textures, sorted in its 36 tabs, their states
-    /// those its list for WorldPainter gives.
+    /// Conquest Reforged's own instances, where they are installed here
+    /// (`MASSIF_CONQUEST_INSTANCE`, or every one found among the launchers'
+    /// folders: its Fabric and its Forge modpacks): read with the game each
+    /// plays, more than 17,000 blocks in its tabs, each drawn with its
+    /// textures. With Conquest's lists, its blocks are exactly the
+    /// registry's and their states those its list for WorldPainter gives;
+    /// without them, the only blocks without textures are the block files
+    /// of the jar whose model the jar does not have.
     #[test]
     fn conquest_reforged_loads() {
-        let found = std::env::var_os("MASSIF_CONQUEST_INSTANCE").map(PathBuf::from).and_then(|d| instance::Instance::read(&d)).or_else(|| instance::find_with_mod("conquest"));
-        let Some(inst) = found else {
+        let instances = match std::env::var_os("MASSIF_CONQUEST_INSTANCE").map(PathBuf::from) {
+            Some(dir) => instance::Instance::read(&dir).into_iter().collect(),
+            None => instance::find_all_with_mod("conquest"),
+        };
+        if instances.is_empty() {
             eprintln!("Conquest Reforged is not installed here: skipping");
-            return;
-        };
-        let version = inst.minecraft.clone().unwrap_or_else(|| "1.20.1".to_owned());
-        let Some(jar) = find_jars().into_iter().find(|j| j.version == version) else {
-            eprintln!("Minecraft {version} is not installed here: skipping");
-            return;
-        };
-        let started = std::time::Instant::now();
-        let cat = load_with_mods(&jar.path, &jar.version, &inst.files()).unwrap();
-        let took = started.elapsed();
-        let conquest: Vec<&Block> = cat.blocks.iter().filter(|b| namespace(&b.id) == "conquest").collect();
-        eprintln!("{} blocks ({} of Conquest Reforged), {} textures, read in {took:?}", cat.blocks.len(), conquest.len(), cat.textures.len());
-        assert!(conquest.len() > 17_000, "{}", conquest.len());
-        let m = cat.mods.iter().find(|m| m.namespaces.iter().any(|n| n == "conquest") && m.kind == SourceKind::Mod).unwrap();
-        assert_eq!(m.minecraft.as_deref(), Some("1.20.1"));
-        assert!(m.groups.len() >= 30, "{} tabs", m.groups.len());
-        // Every block drawn with its own textures.
-        let bare: Vec<&str> = conquest.iter().filter(|b| [&b.top, &b.side].iter().any(|t| t.as_ref().is_none_or(|k| cat.texture(k).is_none()))).map(|b| b.id.as_str()).collect();
-        assert!(bare.is_empty(), "{} blocks without their textures: {:?}", bare.len(), &bare[..bare.len().min(20)]);
-        assert!(conquest.iter().filter(|b| b.full_cube).count() > 1_000);
-        // With its lists: exactly the blocks the game registers.
-        if let Some(ids) = cat.registered.get("conquest") {
+        }
+        for inst in instances {
+            let version = inst.minecraft.clone().unwrap_or_else(|| "1.20.1".to_owned());
+            let Some(jar) = find_jars().into_iter().find(|j| j.version == version) else {
+                eprintln!("{}: Minecraft {version} is not installed here: skipping", inst.name);
+                continue;
+            };
+            let started = std::time::Instant::now();
+            let cat = load_with_mods(&jar.path, &jar.version, &inst.files()).unwrap();
+            let took = started.elapsed();
+            let conquest: Vec<&Block> = cat.blocks.iter().filter(|b| namespace(&b.id) == "conquest").collect();
+            eprintln!("{}: {} blocks ({} of Conquest Reforged), {} textures, read in {took:?}", inst.name, cat.blocks.len(), conquest.len(), cat.textures.len());
+            assert!(conquest.len() > 17_000, "{}: {}", inst.name, conquest.len());
+            let m = cat.mods.iter().find(|m| m.namespaces.iter().any(|n| n == "conquest") && m.kind == SourceKind::Mod).unwrap();
+            assert_eq!((m.name.as_str(), m.minecraft.as_deref()), ("Conquest Reforged", Some("1.20.1")), "{}", inst.name);
+            assert!(m.groups.len() >= 30, "{}: {} tabs", inst.name, m.groups.len());
+            assert!(conquest.iter().filter(|b| b.full_cube).count() > 1_000, "{}", inst.name);
+            assert!(cat.blocks.iter().all(|b| !b.id.starts_with("minecraft:parent_")), "{}", inst.name);
+            // Every block drawn with its own textures.
+            let bare: Vec<&str> = conquest.iter().filter(|b| [&b.top, &b.side].iter().any(|t| t.as_ref().is_none_or(|k| cat.texture(k).is_none()))).map(|b| b.id.as_str()).collect();
+            let Some(ids) = cat.registered.get("conquest") else {
+                // Without Conquest's lists: only files of the jar that are
+                // no blocks lack textures, those whose model is missing.
+                let archives: Vec<zip::Archive> = std::iter::once(jar.path.clone()).chain(inst.mods.iter().cloned()).filter_map(|p| zip::Archive::open(&p).ok()).collect();
+                let model_file = |m: &str| {
+                    let k = key(m);
+                    let (ns, path) = k.split_once(':').unwrap_or(("minecraft", &k));
+                    format!("assets/{ns}/models/{path}.json")
+                };
+                for id in &bare {
+                    let path = id.strip_prefix("conquest:").unwrap_or(id);
+                    let state = archives.iter().find_map(|a| a.read(&format!("assets/conquest/blockstates/{path}.json"))?.ok()).and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+                    let model = state.as_ref().and_then(first_model);
+                    assert!(model.as_ref().is_none_or(|m| !archives.iter().any(|a| a.contains(&model_file(m)))), "{}: {id} has its model but no textures", inst.name);
+                }
+                eprintln!("{}: no lists of Conquest's blocks; {} block files without a model: {bare:?}", inst.name, bare.len());
+                continue;
+            };
+            assert!(bare.is_empty(), "{}: {} blocks without their textures: {:?}", inst.name, bare.len(), &bare[..bare.len().min(20)]);
+            // With its lists: exactly the blocks the game registers.
             let ours: std::collections::HashSet<&str> = conquest.iter().map(|b| b.id.as_str()).collect();
             let missing: Vec<&String> = ids.iter().filter(|id| !ours.contains(id.as_str())).collect();
             assert!(missing.is_empty(), "{missing:?}");
@@ -1443,9 +1488,8 @@ mod tests {
                     }
                 }
             }
-            eprintln!("{turned} turned states checked");
+            eprintln!("{}: {turned} turned states checked", inst.name);
         }
-        assert!(cat.blocks.iter().all(|b| !b.id.starts_with("minecraft:parent_")));
     }
 
     /// The jars of this computer, when there are any (not in CI).

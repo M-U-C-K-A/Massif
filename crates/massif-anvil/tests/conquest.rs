@@ -346,7 +346,9 @@ fn conquest_fixture_exports_its_own_states() {
     assert!(truth.check("conquest:cheese_cut", &[]).is_err());
 }
 
-/// Conquest Reforged's instance, when it is installed here.
+/// Conquest Reforged's instance, when it is installed here: the one with
+/// Conquest's lists of its blocks when there are several (its Fabric and
+/// Forge modpacks).
 fn conquest_instance() -> Option<massif_assets::instance::Instance> {
     std::env::var_os("MASSIF_CONQUEST_INSTANCE")
         .map(PathBuf::from)
@@ -384,6 +386,12 @@ fn conquest_reforged_exports_its_own_states() {
         eprintln!("Conquest Reforged is not installed here: skipping");
         return;
     };
+    // Its states are judged by the lists Conquest writes beside them
+    // (conquest_wp.csv, blocks-pls.txt, states-pls.txt).
+    if inst.lists.is_empty() {
+        eprintln!("{} has no lists of Conquest's blocks: skipping", inst.name);
+        return;
+    }
     let version = inst.minecraft.clone().unwrap_or_else(|| "1.20.1".to_owned());
     let Some(jar) = massif_assets::find_jars().into_iter().find(|j| j.version == version) else {
         eprintln!("Minecraft {version} is not installed here: skipping");

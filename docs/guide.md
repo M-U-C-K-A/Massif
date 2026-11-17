@@ -1329,7 +1329,9 @@ NeoForge, Fabric or Quilt.
 
 **In one step, from the modpack's instance.** Where Conquest Reforged is
 installed (CurseForge, Prism, MultiMC, Modrinth or the official launcher, on
-any drive), the Blocks panel says so, and **Use** reads its instance.
+any drive), the Blocks panel says so, and **Use** reads its instance; with
+both its Fabric and its Forge modpacks installed, each has a row of its
+own, the one with Conquest's lists of its blocks first.
 **Instance…** reads any other modpack: choose its folder (the one with
 `mods` in it, or the instance's own). Reading an instance:
 
