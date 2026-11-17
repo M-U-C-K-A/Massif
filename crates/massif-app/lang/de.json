@@ -2403,6 +2403,10 @@
   "one": "{n} Problem",
   "other": "{n} Probleme"
  },
+ "{n} sculpted blocks of 16³ that held nothing of their own were let go: the map's brushes work there again": {
+  "one": "{n} modellierter 16³-Block ohne eigenen Inhalt wurde entfernt: die Pinsel der Karte wirken dort wieder",
+  "other": "{n} modellierte 16³-Blöcke ohne eigenen Inhalt wurden entfernt: die Pinsel der Karte wirken dort wieder"
+ },
  "{n} states are none of the game's, by the mod's list: {first}": {
   "one": "{n} Zustand ist laut der Liste des Mods keiner des Spiels: {first}",
   "other": "{n} Zustände sind laut der Liste des Mods keine des Spiels: {first}"

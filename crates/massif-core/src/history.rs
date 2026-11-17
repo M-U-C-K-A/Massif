@@ -585,31 +585,83 @@ impl Edit<'_> {
             return;
         }
         self.touch_all(&positions);
-        let (min_y, max_y) = (self.dim.min_y, self.dim.max_y);
-        let voxels = &self.dim.voxels;
-        let (before, rest) = self.dim.levels.split_at_mut(self.level);
-        let (level, after) = rest.split_first_mut().expect("the edited level exists");
-        let others = Others {
-            before: &*before,
-            after: &*after,
-            voxels,
-            min_y,
-            max_y,
+        // Tiles with sculpted chunks over them: where their columns move,
+        // the chunks follow (see `follow_ground`).
+        let sculpted: HashSet<TilePos> = positions.iter().copied().filter(|p| self.dim.voxels.has_tile(*p)).collect();
+        let moved: Vec<(TilePos, Vec<bool>)> = {
+            let (min_y, max_y) = (self.dim.min_y, self.dim.max_y);
+            let voxels = &self.dim.voxels;
+            let (before, rest) = self.dim.levels.split_at_mut(self.level);
+            let (level, after) = rest.split_first_mut().expect("the edited level exists");
+            let others = Others {
+                before: &*before,
+                after: &*after,
+                voxels,
+                min_y,
+                max_y,
+            };
+            let taken: Vec<_> = positions
+                .into_iter()
+                .filter_map(|pos| level.check_out(pos, create).map(|t| (pos, t)))
+                .collect();
+            let edited: Vec<(TilePos, Box<Tile>, Option<Vec<bool>>)> = taken
+                .into_par_iter()
+                .map(|(pos, taken)| {
+                    let mut tile = taken.into_tile();
+                    let old = sculpted.contains(&pos).then(|| (tile.top.clone(), tile.bottom.clone()));
+                    f(pos, rect.intersect(&pos.rect()), &mut tile, &others);
+                    let moved = old.map(|(top, bottom)| {
+                        (0..crate::coords::TILE_AREA)
+                            .map(|k| top.get(k) != tile.top.get(k) || bottom.as_ref().map(|b| b.get(k)) != tile.bottom.as_ref().map(|b| b.get(k)))
+                            .collect::<Vec<bool>>()
+                    });
+                    (pos, tile, moved)
+                })
+                .collect();
+            let mut moved = Vec::new();
+            for (pos, tile, m) in edited {
+                level.check_in(pos, tile);
+                if let Some(m) = m.filter(|m| m.iter().any(|&b| b)) {
+                    moved.push((pos, m));
+                }
+            }
+            moved
         };
-        let taken: Vec<_> = positions
-            .into_iter()
-            .filter_map(|pos| level.check_out(pos, create).map(|t| (pos, t)))
-            .collect();
-        let edited: Vec<(TilePos, Box<Tile>)> = taken
-            .into_par_iter()
-            .map(|(pos, taken)| {
-                let mut tile = taken.into_tile();
-                f(pos, rect.intersect(&pos.rect()), &mut tile, &others);
-                (pos, tile)
-            })
-            .collect();
-        for (pos, tile) in edited {
-            level.check_in(pos, tile);
+        for (pos, m) in moved {
+            self.follow_ground(pos, &m);
+        }
+    }
+
+    /// The sculpted chunks over `tile` follow its ground where it moved: in
+    /// the columns `moved` (by local index), what was sculpted over the old
+    /// ground gives way to what the levels compose now, recorded for undo,
+    /// and a chunk left holding nothing of its own goes. A chunk stands for
+    /// its whole 16³ cube: without this, the ground changed under it by a
+    /// brush on the map did not show there, and the brush seemed to do
+    /// nothing.
+    fn follow_ground(&mut self, tile: TilePos, moved: &[bool]) {
+        let over = |p: &ChunkPos| {
+            let (x0, _, z0) = p.origin();
+            (0..crate::voxel::SIZE).any(|lz| (0..crate::voxel::SIZE).any(|lx| moved[crate::coords::local_index(x0 + lx, z0 + lz)]))
+        };
+        let chunks: Vec<ChunkPos> = self.dim.voxels.in_tile(tile).map(|(p, _)| p).filter(over).collect();
+        if chunks.is_empty() {
+            return;
+        }
+        for (pos, bare) in crate::voxel::bare_densities(self.dim, &chunks) {
+            self.touch_voxel(pos);
+            let (x0, _, z0) = pos.origin();
+            let Some(chunk) = self.dim.voxels.get_mut(pos) else { continue };
+            for lz in 0..crate::voxel::SIZE {
+                for lx in 0..crate::voxel::SIZE {
+                    if moved[crate::coords::local_index(x0 + lx, z0 + lz)] {
+                        chunk.follow_column(lx, lz, &bare);
+                    }
+                }
+            }
+            if chunk.is_bare(&bare) {
+                self.dim.voxels.remove(pos);
+            }
         }
     }
 
@@ -673,12 +725,21 @@ impl Edit<'_> {
         }
         let missing: Vec<ChunkPos> = positions.iter().copied().filter(|p| self.dim.voxels.get(*p).is_none()).collect();
         let made: Vec<(ChunkPos, VoxelChunk)> = crate::voxel::densities_of(self.dim, &missing);
+        let bases: std::collections::HashMap<ChunkPos, VoxelChunk> = made.iter().cloned().collect();
         for (pos, chunk) in made {
             self.dim.voxels.insert(pos, Arc::new(chunk));
         }
         let mut taken = self.dim.voxels.take_out(positions);
         taken.par_iter_mut().for_each(|(pos, chunk)| f(*pos, Arc::make_mut(chunk)));
         self.dim.voxels.put_back(taken);
+        // A chunk made here that `f` left as the levels compose it holds
+        // nothing of its own: it goes (it would only stand in the way of
+        // the ground changed under it later).
+        for (pos, base) in &bases {
+            if self.dim.voxels.get(*pos).is_some_and(|c| c.is_bare(base)) {
+                self.dim.voxels.remove(*pos);
+            }
+        }
     }
 
     /// Put sculpted chunks in place, made elsewhere (from what

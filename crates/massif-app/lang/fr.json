@@ -2403,6 +2403,10 @@
   "one": "{n} problème",
   "other": "{n} problèmes"
  },
+ "{n} sculpted blocks of 16³ that held nothing of their own were let go: the map's brushes work there again": {
+  "one": "{n} bloc sculpté de 16³ qui ne contenait rien de propre a été retiré : les brosses de la carte y agissent de nouveau",
+  "other": "{n} blocs sculptés de 16³ qui ne contenaient rien de propre ont été retirés : les brosses de la carte y agissent de nouveau"
+ },
  "{n} states are none of the game's, by the mod's list: {first}": {
   "one": "{n} état n'est pas un état du jeu, d'après la liste du mod : {first}",
   "other": "{n} états ne sont pas des états du jeu, d'après la liste du mod : {first}"

@@ -211,6 +211,22 @@ impl VoxelChunk {
     pub fn solid_count(&self) -> usize {
         self.density.iter().filter(|&&d| d >= SOLID).count()
     }
+
+    /// Whether it holds nothing but `bare`, what the levels compose there
+    /// (whose voxels all follow their columns): no matter of its own, no
+    /// terrain, no fluid.
+    pub fn is_bare(&self, bare: &VoxelChunk) -> bool {
+        self.density == bare.density && self.terrain.as_ref().is_none_or(|plane| plane.iter().all(|&t| t == FOLLOW))
+    }
+
+    /// Column `(lx, lz)` as `bare` has it: what was sculpted there gives
+    /// way to what the levels compose.
+    pub fn follow_column(&mut self, lx: i32, lz: i32, bare: &VoxelChunk) {
+        for ly in 0..SIZE {
+            self.set(lx, ly, lz, bare.get(lx, ly, lz));
+            self.set_terrain(lx, ly, lz, None);
+        }
+    }
 }
 
 /// The sculpted chunks of a dimension.
@@ -542,6 +558,61 @@ pub fn densities_at(dim: &Dimension, pos: ChunkPos) -> VoxelChunk {
         Some(stack) => densities_in(&stack, pos),
         None => VoxelChunk::air(),
     }
+}
+
+/// The sculpted chunks of `dim` that hold nothing of their own: those over
+/// no land of the map, and those whose densities and terrain are what the
+/// levels compose there without any sculpture. They change nothing in the
+/// world, but a chunk stands for its whole 16³ cube: the ground changed
+/// under it later (a brush on the map, a filter over the whole map) would
+/// not show there. Strokes in 3D made them over the whole reach of their
+/// brush (see [`crate::history::Edit::par_voxels`], which keeps them no
+/// more).
+pub fn idle_chunks(dim: &Dimension) -> Vec<ChunkPos> {
+    let ground = dim.ground();
+    let mut idle: Vec<ChunkPos> = dim.voxels.iter().map(|(p, _)| p).filter(|p| !ground.contains(p.tile())).collect();
+    let kept: Vec<ChunkPos> = dim.voxels.iter().map(|(p, _)| p).filter(|p| ground.contains(p.tile())).collect();
+    idle.extend(bare_densities(dim, &kept).into_iter().filter(|(p, bare)| dim.voxels.get(*p).is_some_and(|c| c.is_bare(bare))).map(|(p, _)| p));
+    idle.sort_by_key(|p| (p.x, p.z, p.y));
+    idle
+}
+
+/// What the levels of `dim` compose at each of `positions`, leaving out
+/// what was sculpted: the chunks there as they would be without any.
+pub fn bare_densities(dim: &Dimension, positions: &[ChunkPos]) -> Vec<(ChunkPos, VoxelChunk)> {
+    let mut by_tile: HashMap<TilePos, Vec<ChunkPos>> = HashMap::new();
+    for &p in positions {
+        by_tile.entry(p.tile()).or_default().push(p);
+    }
+    let by_tile: Vec<(TilePos, Vec<ChunkPos>)> = by_tile.into_iter().collect();
+    by_tile
+        .par_iter()
+        .flat_map_iter(|(tile, chunks)| {
+            let empty = VoxelLayer::default();
+            let stack = dim.ground().view(*tile).map(|ground| {
+                let mut layers = vec![(0, crate::level::LevelKind::Ground, ground)];
+                for (index, level) in dim.levels.iter().enumerate().skip(1) {
+                    if level.visible
+                        && let Some(t) = level.view(*tile)
+                    {
+                        layers.push((index, level.kind, t));
+                    }
+                }
+                TileStack::gather(dim.min_y, dim.max_y, &empty, *tile, layers)
+            });
+            let made: Vec<(ChunkPos, VoxelChunk)> = chunks
+                .par_iter()
+                .map(|&p| {
+                    let chunk = match &stack {
+                        Some(stack) => densities_in(stack, p),
+                        None => VoxelChunk::air(),
+                    };
+                    (p, chunk)
+                })
+                .collect();
+            made
+        })
+        .collect()
 }
 
 /// [`densities_at`] for many chunks: each tile they lie in read once (not
@@ -1300,6 +1371,74 @@ mod tests {
         let mut spans = Vec::new();
         stack.spans(local_index(x, z), &mut spans);
         spans
+    }
+
+    /// The top of column `(x, z)` as composed.
+    fn top_at(w: &World, x: i32, z: i32) -> i32 {
+        spans_at(w, x, z).iter().map(|s| s.y1).max().unwrap()
+    }
+
+    /// Smoothing in 3D keeps only the chunks it changed: those it made over
+    /// the reach of its brush and left as the levels compose them go, and
+    /// so do they from a map that holds some (`idle_chunks`).
+    #[test]
+    fn strokes_keep_only_the_chunks_they_change() {
+        let mut w = world();
+        let mut h = History::default();
+        // A bump, then smoothing dabs high in the air and deep in the rock,
+        // far from it: nothing to smooth there, nothing kept (each made a
+        // dozen chunks over the reach of its brush).
+        h.begin("Build", 0);
+        sculpt(&mut h.edit(&mut w, 0), &brush(4.0), [10.5, 66.5, 10.5], 1.0, SculptMode::Add);
+        h.commit();
+        let bump = w.dims[0].voxels.len();
+        assert!(bump > 0);
+        for y in [200.0, 0.0] {
+            h.begin("Smooth", 0);
+            sculpt_at(&mut h.edit(&mut w, 0), &brush(12.0), [-100.5, y, -100.5], Some([0.0, 1.0, 0.0]), 1.0, SculptMode::Smooth);
+            h.commit();
+        }
+        assert_eq!(w.dims[0].voxels.len(), bump, "no chunk kept in the air or the rock");
+        assert!(idle_chunks(&w.dims[0]).is_empty());
+        // A chunk as the levels compose it, put there as older versions
+        // did, and one over no land: both idle.
+        let at = ChunkPos::containing(-200, 40, -200);
+        let base = densities_at(&w.dims[0], at);
+        w.dims[0].voxels.insert(at, Arc::new(base));
+        let off = ChunkPos::containing(5000, 40, 5000);
+        w.dims[0].voxels.insert(off, Arc::new(VoxelChunk::air()));
+        let idle = idle_chunks(&w.dims[0]);
+        assert_eq!(idle.len(), 2, "{idle:?}");
+        assert!(idle.contains(&at) && idle.contains(&off));
+    }
+
+    /// A brush on the map changes the ground under sculpted chunks too: in
+    /// the columns it moves, what was sculpted gives way to the new ground
+    /// (one step to undo), where the chunks used to keep the old one, a
+    /// wall at their edge.
+    #[test]
+    fn the_ground_moved_under_sculpted_chunks_shows() {
+        let mut w = world();
+        let mut h = History::default();
+        // A bump sculpted at (10, 10), on ground at 64.
+        h.begin("Build", 0);
+        sculpt(&mut h.edit(&mut w, 0), &brush(3.0), [10.5, 64.5, 10.5], 1.0, SculptMode::Add);
+        h.commit();
+        assert!(top_at(&w, 10, 10) > 64);
+        let before = w.dims[0].voxels.len();
+        // The ground raised by 20 over a wide area: everywhere, the bump's
+        // columns too.
+        h.begin("Raise", 0);
+        crate::ops::raise(&mut h.edit(&mut w, 0), &Brush { radius: 40.0, ..brush(40.0) }, 10.5, 10.5, 20.0, crate::ops::Surface::Top);
+        h.commit();
+        for (x, z) in [(10, 10), (12, 10), (4, 4), (25, 10), (10, 30)] {
+            assert_eq!(top_at(&w, x, z), 84, "the raised ground shows at ({x}, {z})");
+        }
+        assert!(w.dims[0].voxels.len() < before, "chunks left with nothing of their own go");
+        // One step: undone, the bump is back on the old ground.
+        h.undo(&mut w);
+        assert!(top_at(&w, 10, 10) > 64 && top_at(&w, 25, 10) == 64);
+        assert_eq!(w.dims[0].voxels.len(), before);
     }
 
     #[test]

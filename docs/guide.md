@@ -1658,6 +1658,14 @@ size, intensity and rotation are those of **Brush Settings**, which the
     off the map puts them back where they last stood. Player off, the
     orbit camera comes back from the player's eyes.
 
+Sculpted matter is kept by cubes of 16 blocks, each standing for its whole
+cube. A brush on the map that moves the ground under it takes it along: in
+the columns the brush moves, what was sculpted gives way to the new ground
+(one step to undo with the brush's). Strokes in 3D keep only the cubes they
+change, and a map opened lets go of cubes that hold nothing of their own —
+versions before made them over the whole reach of the brush, and the ground
+changed under them later did not show there —, saying how many.
+
 The brush is laid on the slope under the cursor, read from the matter
 around smoothed over five blocks, so it glides over the steps of the terrain
 without shaking, and a custom brush keeps its shape on a hillside. Where

@@ -186,11 +186,14 @@ fn a_map_sculpted_far_and_wide_opens_again() {
     let mut world = generate(&GenParams { tiles_x: 3, tiles_z: 3, landform: Landform::Mountains, ..GenParams::default() });
     let mut hist = History::default();
     hist.begin("dig", 0);
-    for i in 0..10 {
-        for k in 0..10 {
-            for y in [-30.5, 10.5, 50.5, 90.5, 130.5] {
+    for i in 0..11 {
+        for k in 0..11 {
+            // Dug in the rock, built in the air: strokes keep only the
+            // chunks they change.
+            for y in [-30.5, 10.5, 50.5, 90.5, 130.5, 170.5, 210.5] {
                 let at = [16.5 + 36.0 * i as f32, y, 16.5 + 36.0 * k as f32];
-                massif_core::voxel::sculpt(&mut hist.edit(&mut world, 0), &brush(30.0), at, 1.0, massif_core::voxel::SculptMode::Remove);
+                let mode = if y < 60.0 { massif_core::voxel::SculptMode::Remove } else { massif_core::voxel::SculptMode::Add };
+                massif_core::voxel::sculpt(&mut hist.edit(&mut world, 0), &brush(30.0), at, 1.0, mode);
             }
         }
     }

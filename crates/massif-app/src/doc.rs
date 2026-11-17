@@ -178,6 +178,9 @@ pub struct Document {
     /// measures from the boundary as it first was (see
     /// [`massif_core::gradient::Sides`]).
     pub gradient_sides: Option<massif_core::gradient::Sides>,
+    /// What the map's check found and set right as it was opened, to say
+    /// once (see [`Document::check`]).
+    checked: Option<String>,
 }
 
 impl Document {
@@ -196,7 +199,39 @@ impl Document {
             max_hot_tiles: MAX_HOT_TILES,
             heights: HeightsJob::default(),
             read_only: None,
+            checked: None,
         }
+        .check()
+    }
+
+    /// The map checked as it opens. Sculpted chunks that hold nothing of
+    /// their own — what the levels compose there, or over no land of the
+    /// map — are let go: each stood for its whole 16³ cube, where the
+    /// ground changed later did not show, so that the map's brushes seemed
+    /// to do nothing there (strokes in 3D made them over the whole reach of
+    /// their brush). Nothing of the map's look changes.
+    fn check(mut self) -> Self {
+        let mut idle = 0;
+        for dim in &mut self.world.dims {
+            if dim.voxels.is_empty() {
+                continue;
+            }
+            for pos in massif_core::voxel::idle_chunks(dim) {
+                dim.voxels.remove(pos);
+                idle += 1;
+            }
+            dim.voxels.take_dirty();
+        }
+        if idle > 0 {
+            crate::startup::note(&format!("the map's check: {idle} sculpted chunks holding nothing of their own were let go"));
+            self.checked = Some(trn!("{n} sculpted block of 16³ that held nothing of its own was let go: the map's brushes work there again", "{n} sculpted blocks of 16³ that held nothing of their own were let go: the map's brushes work there again", n = idle));
+        }
+        self
+    }
+
+    /// What the map's check set right as it opened, said once.
+    pub fn take_checked(&mut self) -> Option<String> {
+        self.checked.take()
     }
 
     /// How much of the map lies at each height, from a sample of it read

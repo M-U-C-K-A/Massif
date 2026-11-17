@@ -388,6 +388,32 @@ pub fn note(what: &str) {
     write(what);
 }
 
+/// The warnings and errors of Massif's crates (a tile that does not read,
+/// an edit with no step to undo it) in the log, with the start's steps.
+struct Logger;
+
+impl log::Log for Logger {
+    fn enabled(&self, meta: &log::Metadata) -> bool {
+        meta.level() <= log::Level::Warn
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            write(&format!("{}: {}", record.level(), record.args()));
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+/// Send the crates' warnings and errors to the log (see [`Logger`]).
+pub fn log_warnings() {
+    static LOGGER: Logger = Logger;
+    if log::set_logger(&LOGGER).is_ok() {
+        log::set_max_level(log::LevelFilter::Warn);
+    }
+}
+
 /// Run `f`, a step of the start that is Massif's own work, and write down
 /// how long it took.
 pub fn timed<R>(what: &str, f: impl FnOnce() -> R) -> R {

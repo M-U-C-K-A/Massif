@@ -2166,6 +2166,75 @@ mod tests {
         assert!((64.0..80.0).contains(&h), "{h}");
     }
 
+    /// A map holding sculpted chunks with nothing of their own (3D strokes
+    /// made them over the whole reach of their brush): opened, its check
+    /// lets them go and says so, and a brush on the map works there, where
+    /// each chunk kept its 16³ cube as it was.
+    #[test]
+    fn a_map_opened_lets_idle_chunks_go() {
+        use massif_core::voxel::{ChunkPos, densities_at};
+        let mut world = generate(&GenParams { tiles_x: 2, tiles_z: 2, landform: Landform::Flat, ..GenParams::default() });
+        for cy in [3, 4] {
+            let pos = ChunkPos::new(1, cy, 1);
+            let base = densities_at(&world.dims[0], pos);
+            world.dims[0].voxels.insert(pos, std::sync::Arc::new(base));
+        }
+        let mut d = Document::new(world, None, 1);
+        assert!(d.dimension().voxels.is_empty(), "let go");
+        assert!(d.take_checked().is_some_and(|m| m.starts_with("2 sculpted blocks")), "and said");
+        assert!(d.take_checked().is_none(), "once");
+        let tools = ToolState { tool: Tool::Raise, ..ToolState::default() };
+        let (stroke, _) = begin_stroke(&mut d, &tools, (24.5, 24.5), false, false);
+        let mut stroke = stroke.unwrap();
+        continue_stroke(&mut d, &tools, &mut stroke, (24.5, 24.5), 0.1);
+        end_stroke(&mut d, stroke);
+        assert!(height(&d, 24, 24) > 64.5, "raised there");
+    }
+
+    /// The map a user got back after a crash of 1.0's betas
+    /// (MASSIF_RECOVERED_WORLD, a .massif): smoothed in 3D for minutes, it
+    /// held some 11,000 sculpted chunks, and flattened whole on the map it
+    /// kept two islands of the old land where no brush did anything. Its
+    /// check lets most of them go, and a brush wider than the map sets every
+    /// column to its height.
+    #[test]
+    fn a_recovered_map_flattens_everywhere() {
+        let Some(path) = std::env::var_os("MASSIF_RECOVERED_WORLD") else { return };
+        let world = massif_format::load(std::path::Path::new(&path)).unwrap();
+        let chunks = world.dims[0].voxels.len();
+        let mut d = Document::new(world, None, 1);
+        let kept = d.dimension().voxels.len();
+        eprintln!("{chunks} sculpted chunks, {kept} kept by the check: {:?}", d.take_checked());
+        assert!(kept < chunks);
+        let mut tools = ToolState { tool: Tool::SetHeight, target_height: 50.0, ..ToolState::default() };
+        tools.brush.radius = 900.0;
+        tools.brush.strength = 1.0;
+        tools.brush.profile = massif_core::Profile::Constant;
+        let started = std::time::Instant::now();
+        let (stroke, _) = begin_stroke(&mut d, &tools, (0.5, 0.5), false, false);
+        let mut stroke = stroke.unwrap();
+        for _ in 0..20 {
+            continue_stroke(&mut d, &tools, &mut stroke, (0.5, 0.5), 0.1);
+        }
+        end_stroke(&mut d, stroke);
+        eprintln!("flattened in {:.1} s, {} sculpted chunks left", started.elapsed().as_secs_f32(), d.dimension().voxels.len());
+        let (lo, hi) = d.dimension().bounds().unwrap();
+        let t = massif_core::coords::TILE_SIZE;
+        let mut high = Vec::new();
+        for z in (lo.z * t..(hi.z + 1) * t).step_by(4) {
+            for x in (lo.x * t..(hi.x + 1) * t).step_by(4) {
+                let stack = massif_core::TileStack::new(d.dimension(), TilePos::containing(x, z), false).unwrap();
+                let mut spans = Vec::new();
+                stack.spans(massif_core::coords::local_index(x, z), &mut spans);
+                let top = spans.iter().map(|s| s.y1).max().unwrap_or(i32::MIN);
+                if top > 52 {
+                    high.push((x, z, top));
+                }
+            }
+        }
+        assert!(high.is_empty(), "{} columns above the height set, as {:?}", high.len(), &high[..high.len().min(8)]);
+    }
+
     #[test]
     fn sculpting_from_the_map_digs_and_undoes() {
         let mut d = doc();

@@ -4896,6 +4896,9 @@ impl MassifApp {
         if let Some(msg) = self.feedback.take() {
             self.say(&ctx, msg, false, None);
         }
+        if let Some(msg) = self.doc.take_checked() {
+            self.say(&ctx, msg, false, None);
+        }
         if self.home.is_some() {
             step("the home screen");
             self.home_ui(ui, frame, &ctx);
