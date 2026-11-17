@@ -125,7 +125,7 @@ Each change of the selection is a step to undo. The selection is saved in the ma
 
 # Painting
 ## Terrains and biomes
-**Paint** gives the ground a terrain: pick it in the Terrain palette. **Biome** paints biomes the same way: pick one in the Biomes palette. The right button paints back what the height calls for (terrains) or the automatic biome (biomes).
+**Paint** gives the ground a terrain: pick it in the Terrain palette. **Biome** paints biomes the same way: pick one in the Biomes palette. The right button takes a biome back to the automatic one, and a terrain back to the map's own: the terrain a new map was filled with (one covering nearly all of an older map), shown under **Right button** in Tool Settings, where **Change** chooses another. On a map whose terrains came from its height, or with **By height**, it puts back what the height calls for: grass, sand by the water, rock and snow up high.
 
 ## Conquest Reforged and other mods
 

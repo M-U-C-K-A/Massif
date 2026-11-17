@@ -8265,6 +8265,41 @@ mod tests {
         assert_eq!(h.ctx.input(|i| i.pointer.latest_pos()), Some(elsewhere));
     }
 
+    /// Paint terrain's Tool Settings say what the right button puts back:
+    /// by height on a map whose terrains came from its height, the map's own
+    /// terrain once it has one. Renders both (MASSIF_SNAPSHOT_DIR).
+    #[test]
+    fn paint_terrain_says_what_the_right_button_puts_back() {
+        use egui_kittest::kittest::Queryable;
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let mut h = harness(ThemeChoice::Dark);
+        h.state_mut().layout.active = 2; // Painting
+        h.state_mut().tools.select(Tool::PaintTerrain);
+        h.run_steps(5);
+        assert_eq!(h.state().doc.map_terrain(), None, "a generated map: its height chose its terrains");
+        assert!(h.query_by_label("By height, for now").is_some());
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("unpaint-by-height.png")).unwrap();
+        }
+        h.state_mut().doc.world.meta.fill = Some(massif_core::TerrainId::ROCK);
+        h.run_steps(3);
+        assert!(h.query_by_label("Right button: back to Rock, the map's own terrain.").is_some());
+        // The panel scrolled down to it.
+        let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        let panel = areas.into_iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::ToolSettings)).map(|(_, r)| r).unwrap();
+        h.event(egui::Event::PointerMoved(panel.center()));
+        h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, -400.0), phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel, modifiers: Modifiers::NONE });
+        h.run_steps(10);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("unpaint-rock.png")).unwrap();
+        }
+        h.state_mut().tools.unpaint = crate::tools::Unpaint::ByHeight;
+        h.run_steps(3);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("unpaint-height-chosen.png")).unwrap();
+        }
+    }
+
     #[test]
     fn walking_in_3d_sculpt() {
         let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {

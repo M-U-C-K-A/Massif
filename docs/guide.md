@@ -744,6 +744,17 @@ ten-core Mac and the caves about 400 MB of memory (26 MB in the file).
 Within a selection, the caves keep to it, fading out along a feathered
 edge.
 
+## Unpainting
+
+Paint terrain's right button takes the land back to the map's own terrain:
+the one a new map was filled with (**One terrain** in the new map's
+settings), or, on a map made before Massif kept it, the one covering nearly
+all of its dry land. Tool Settings ▸ **Right button** shows it, and
+**Change** chooses another, kept with the map. On a map whose terrains came
+from its height, or with **By height**, the right button puts back what the
+height calls for, as a new map is painted: grass, sand by the water, rock
+and snow up high. In 3D Sculpt, Paint's inverse does the same.
+
 ## Noise painting
 
 Paint terrain can lay several terrains or blocks at once, mixed by a noise
@@ -1404,7 +1415,7 @@ Sculpting in 3D has its own editor, **3D Sculpt** (its workspace sits next
 to 3D; the 3D View's **Sculpt** button opens it): a 3D view with its tools
 along the top — **Sculpt** (the left button adds matter, the right one
 digs), **Smooth** and **Paint** (the terrain chosen in Terrain or Blocks, or
-a noise of several; the right button puts back what the height calls for) — with the
+a noise of several; the right button puts back the map's own terrain) — with the
 brush of every tool: its shape (custom images too, turned as they are),
 size, intensity and rotation are those of **Brush Settings**, which the
 3D Sculpt workspace shows beside its view.

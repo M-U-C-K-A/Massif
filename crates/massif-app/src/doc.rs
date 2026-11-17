@@ -242,6 +242,14 @@ impl Document {
         base
     }
 
+    /// The map's own terrain: the one it was filled with (or chosen for it
+    /// since), else one other than grass that covers nearly all of it. What
+    /// Paint terrain's right button puts back; `None`: the height chose the
+    /// terrains.
+    pub fn map_terrain(&self) -> Option<massif_core::TerrainId> {
+        self.world.meta.fill.or_else(|| self.auto_base())
+    }
+
     pub fn dimension(&self) -> &Dimension {
         &self.world.dims[self.dim]
     }

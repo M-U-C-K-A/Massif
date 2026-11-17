@@ -409,6 +409,7 @@ pub fn generate(params: &GenParams) -> World {
         graph: None,
         ores: Default::default(),
         gradients: Vec::new(),
+        fill: params.surface,
     });
     let (bottom, top) = build_limits(params.min_y, params.max_y);
     world.dims[0].min_y = bottom;
@@ -465,6 +466,7 @@ pub fn from_heightmap(map: &crate::heightmap::Heightmap, how: &FromHeightmap) ->
         graph: None,
         ores: Default::default(),
         gradients: Vec::new(),
+        fill: None,
     });
     let (bottom, ceiling) = build_limits(how.min_y, how.max_y);
     world.dims[0].min_y = bottom;

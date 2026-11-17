@@ -2,6 +2,8 @@ Massif is a map editor for Minecraft Java worlds in the spirit of WorldPainter, 
 
 ## New in 1.0.0
 
+**Unpainting gives back the map's own terrain.** The right button of Paint terrain used to put back the terrain the height calls for, so on a map filled with rock, unpainting a high place turned it to snow. It now puts back the map's own terrain: the one a new map was filled with, or, on a map made before, the one covering nearly all of it. Tool Settings shows which under **Right button**, where **Change** picks another and **By height** brings back the old way, which maps made from their height keep. 3D Sculpt's Paint does the same.
+
 **Frames a second without vsync, for developers.** **Settings ▸ Developer** now has **Frames a second**: **Vsync** keeps the window in step with the screen as before, while 60, 120, 144, 240 or **Unlimited** show each frame as soon as it is drawn, up to that number. **Draw every frame** keeps the window drawing even when nothing changes, so the Developer panel's charts show how many frames your computer makes. Both apply at once and only while developer mode is on.
 
 **The right button no longer upsets the player's view.** In 3D Sculpt as the player, with the mouse held by the view, pressing the right button could let the hidden pointer go: it wandered off the view onto the panels around, or out of the window, and the view lost hold of the mouse. While the view holds the mouse, the pointer now stays at the crosshair whatever the system reports, so both buttons always use the tool there, and on macOS the pointer is never moved behind your back (which undid the lock).

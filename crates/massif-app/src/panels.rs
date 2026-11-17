@@ -270,6 +270,7 @@ pub fn sculpt_toolbar(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
         }
         let hint = match tools.sculpt.tool {
             _ if tools.sculpt.player => tr!("The keys and buttons: along the bottom of the view"),
+            Tool::PaintTerrain if tools.unpaint == crate::tools::Unpaint::MapTerrain => tr!("Left: paint · right: back to the map's terrain · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point"),
             Tool::PaintTerrain => tr!("Left: paint · right: what the height calls for · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point"),
             Tool::Smooth3d => tr!("Left: smooth · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point"),
             _ => tr!("Left: add · right: dig · Shift+drag: move · Alt+drag: turn · ⌘+wheel: size · Alt+wheel: fly to the point"),
@@ -298,6 +299,56 @@ fn slider_row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> egui::Respo
         add(ui).labelled_by(label.id).changed()
     })
     .inner
+}
+
+/// Paint terrain's right button: back to the map's own terrain (shown, and
+/// chosen here), or to the one the height calls for.
+fn unpaint_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary) {
+    use crate::tools::Unpaint;
+    section(ui, Icon::MouseRight, tr!("Right button"));
+    let modes = [Unpaint::MapTerrain, Unpaint::ByHeight];
+    if let Some(k) = crate::widgets::button_group(ui, "unpaint", &[tr!("The map's terrain"), tr!("By height")], &modes.map(|m| tools.unpaint == m)) {
+        tools.unpaint = modes[k];
+    }
+    ui.add_space(4.0);
+    if tools.unpaint == Unpaint::ByHeight {
+        hint(ui, tr!("Right button: back to the terrain the height calls for, as a new map is painted: grass, sand by the water, rock and snow up high."));
+        return;
+    }
+    let known = doc.map_terrain();
+    let mut chosen = None;
+    ui.horizontal(|ui| {
+        match known {
+            Some(t) => {
+                let (r, _) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::hover());
+                terrain_icon(ui, r, &doc.world.registry, t.0, blocks);
+                ui.label(RichText::new(crate::i18n::tr_name(&doc.world.registry.terrain(t).name)).bold());
+            }
+            None => {
+                ui.label(RichText::new(tr!("By height, for now")).color(Palette::of(ui).weak));
+            }
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            crate::widgets::combo("unpaint terrain").selected_text(tr!("Change")).height(320.0).show_ui(ui, |ui| {
+                for (i, def) in doc.world.registry.terrains.iter().enumerate() {
+                    let t = TerrainId(i as u16);
+                    if ui.selectable_label(known == Some(t), crate::i18n::tr_name(&def.name)).clicked() {
+                        chosen = Some(t);
+                    }
+                }
+            })
+            .response
+            .on_hover_text(tr!("The terrain the map is made of, kept with it"));
+        });
+    });
+    if let Some(t) = chosen {
+        doc.world.meta.fill = Some(t);
+        doc.mark_changed();
+    }
+    match known {
+        Some(t) => hint(ui, &tr!("Right button: back to {name}, the map's own terrain.", name = crate::i18n::tr_name(&doc.world.registry.terrain(t).name))),
+        None => hint(ui, tr!("This map's terrains come from its height: the right button puts back the one the height calls for, until you choose the map's terrain.")),
+    }
 }
 
 pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary) {
@@ -359,6 +410,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
                     tr!("Pick it in Terrain or Blocks; Alt-click picks it on the map."),
                 );
             }
+            unpaint_settings(ui, tools, doc, blocks);
         }
         Tool::Gradient => crate::gradient_ui::tool_settings(ui, tools, doc),
         Tool::Cover => cover_settings(ui, tools, doc, blocks),

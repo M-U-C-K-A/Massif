@@ -3880,7 +3880,7 @@ impl View3d {
     /// Over the player's view: the game's crosshair while the view holds
     /// the mouse, and along the bottom, as in Axiom's editor, what the
     /// buttons and keys do, how the player moves and the speed of flight.
-    fn player_bar(&self, ui: &mut Ui, rect: Rect, tools: &mut ToolState) {
+    fn player_bar(&self, ui: &mut Ui, rect: Rect, tools: &mut ToolState, back: Option<&str>) {
         let Some(walk) = &self.walk else { return };
         let pal = Palette::of(ui);
         let painter = ui.painter_at(rect);
@@ -3892,9 +3892,12 @@ impl View3d {
         painter.rect_filled(bar, 0, pal.panel.gamma_multiply(0.94));
         painter.hline(bar.x_range(), bar.top(), egui::Stroke::new(1.0, pal.border));
         // What the buttons do with the tool chosen.
+        // (Painting, the inverse puts back the map's own terrain, or the one
+        // the height calls for.)
+        let back = back.map(|name| tr!("Back to {name}", name));
         let (tool, inverse) = match tools.sculpt.tool {
             Tool::Smooth3d => (tr!("Smooth"), None),
-            Tool::PaintTerrain => (tr!("Paint"), Some(tr!("Paint by height"))),
+            Tool::PaintTerrain => (tr!("Paint"), Some(back.as_deref().unwrap_or(tr!("Paint by height")))),
             _ => (tr!("Add"), Some(tr!("Dig"))),
         };
         let mut hints: Vec<(&str, &str)> = Vec::new();
@@ -4822,7 +4825,8 @@ impl View3d {
             painter.rect_filled(bg, 4, Color32::from_black_alpha(110));
             painter.galley(at - vec2(0.0, galley.size().y + 1.0), galley, Color32::WHITE);
         }
-        self.player_bar(ui, rect, tools);
+        let back = crate::tools::unpaint_to(doc, tools).map(|t| crate::i18n::tr_name(&doc.world.registry.terrain(t).name).to_owned());
+        self.player_bar(ui, rect, tools, back.as_deref());
         if captured {
             ui.ctx().set_cursor_icon(egui::CursorIcon::None);
         } else if response.hovered() {

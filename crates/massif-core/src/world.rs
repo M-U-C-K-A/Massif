@@ -29,6 +29,11 @@ pub struct WorldMeta {
     /// The gradients of the Gradient brush kept with the map.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gradients: Vec<crate::gradient::Gradient>,
+    /// The terrain the map was filled with (a new map of one terrain), or
+    /// the one chosen for it since: what Paint terrain's right button puts
+    /// back. `None`: the height chose the terrains.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill: Option<crate::registry::TerrainId>,
 }
 
 impl Default for WorldMeta {
@@ -42,6 +47,7 @@ impl Default for WorldMeta {
             graph: None,
             ores: crate::ores::OreSettings::default(),
             gradients: Vec::new(),
+            fill: None,
         }
     }
 }

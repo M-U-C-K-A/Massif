@@ -159,7 +159,7 @@ impl Tool {
             Tool::Roughen => tr!("Roughen the ground. Right button: smoother."),
             Tool::Road => tr!("Click points: a road runs through them. Enter builds it."),
             Tool::PaintTerrain => {
-                tr!("Paint a terrain, or several mixed by a noise. Right button: back to automatic.")
+                tr!("Paint a terrain, or several mixed by a noise. Right button: back to the map's own terrain, or to the one the height calls for (below).")
             }
             Tool::Gradient => tr!("Paint over the edge between two terrains: they blend through the gradient's bands. Right button: the other way round."),
             Tool::PaintBiome => tr!("Paint a biome. Right button: back to automatic."),
@@ -249,6 +249,36 @@ pub enum AnchorMode {
     Absolute,
 }
 
+/// What Paint terrain's right button puts back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Unpaint {
+    /// The map's own terrain ([`Document::map_terrain`]): what it was
+    /// filled with. By height on a map whose terrains the height chose.
+    #[default]
+    MapTerrain,
+    /// The terrain the height calls for, as a new map is painted: grass,
+    /// sand by the water, rock and snow up high.
+    ByHeight,
+}
+
+/// The terrain Paint terrain's right button puts back, `None`: the one the
+/// height calls for.
+pub fn unpaint_to(doc: &Document, tools: &ToolState) -> Option<TerrainId> {
+    match tools.unpaint {
+        Unpaint::MapTerrain => doc.map_terrain(),
+        Unpaint::ByHeight => None,
+    }
+}
+
+/// [`unpaint_to`] for a stroke beginning: a terrain read from the land is
+/// kept with the map, so that the right button keeps putting it back once
+/// the map is painted over.
+fn unpaint_for_stroke(doc: &mut Document, tools: &ToolState) -> Option<TerrainId> {
+    let back = unpaint_to(doc, tools)?;
+    doc.world.meta.fill.get_or_insert(back);
+    Some(back)
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ToolState {
@@ -265,6 +295,8 @@ pub struct ToolState {
     /// flattens with the terrain its new height calls for.
     pub flatten_mode: ops::FlattenMode,
     pub flatten_theme: bool,
+    /// What Paint terrain's right button puts back.
+    pub unpaint: Unpaint,
     pub roughness: f32,
     pub terrain: u16,
     pub biome: u16,
@@ -843,6 +875,7 @@ impl Default for ToolState {
             target_height: 64.0,
             flatten_mode: ops::FlattenMode::Both,
             flatten_theme: false,
+            unpaint: Unpaint::MapTerrain,
             roughness: 4.0,
             terrain: 1,
             biome: 0,
@@ -944,6 +977,9 @@ pub struct Stroke {
     /// The Gradient brush: which side of the boundary each column was on
     /// as the stroke began.
     sides: massif_core::gradient::Sides,
+    /// Paint terrain's right button: the terrain it puts back (`None`: by
+    /// height).
+    back: Option<TerrainId>,
 }
 
 impl Stroke {
@@ -1016,6 +1052,7 @@ pub fn begin_stroke(doc: &mut Document, tools: &ToolState, at: (f32, f32), inver
     } else {
         None
     };
+    let back = (tool == Tool::PaintTerrain && inverse).then(|| unpaint_for_stroke(doc, tools)).flatten();
     doc.history.begin(crate::i18n::tr_name(tool.label()), doc.dim);
     let salt = doc.revision.wrapping_mul(0x9e37_79b9) ^ 0x5bd1_e995;
     let stroke = Stroke {
@@ -1030,6 +1067,7 @@ pub fn begin_stroke(doc: &mut Document, tools: &ToolState, at: (f32, f32), inver
         changed: 0,
         classes: None,
         sides: massif_core::gradient::Sides::new(),
+        back,
     };
     if tool == Tool::Gradient {
         // The map keeps the gradients it is painted with.
@@ -1053,7 +1091,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
             g.sampler(&doc.world.registry, doc.world.meta.seed)
         })
         .flatten();
-    let theme = ((matches!(stroke.tool, Tool::PaintTerrain | Tool::AutoPaint) && invert) || (stroke.tool == Tool::Flatten && tools.flatten_theme)).then(|| {
+    let theme = ((stroke.tool == Tool::PaintTerrain && invert && stroke.back.is_none()) || (stroke.tool == Tool::AutoPaint && invert) || (stroke.tool == Tool::Flatten && tools.flatten_theme)).then(|| {
         (
             massif_core::generate::Theme::new(&doc.world.registry),
             doc.world.meta.sea_level as f32,
@@ -1102,13 +1140,13 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                 let amp = tools.roughness * brush.strength * dt * 4.0 * share;
                 ops::roughen(&mut edit, brush, x, z, if invert { -amp } else { amp }, stroke.salt >> 7, surface);
             }
-            Tool::PaintTerrain => match (&theme, &pattern) {
-                // The inverse puts back the terrain the height calls for.
-                (Some((theme, sea)), _) => ops::paint_terrain_with(&mut edit, brush, x, z, stroke.salt, |h| {
-                    theme.terrain(h - 1.0, 0.0, *sea, 0.0)
-                }),
-                (None, Some(pattern)) => ops::paint_pattern(&mut edit, brush, x, z, stroke.salt, pattern),
-                (None, None) => ops::paint_terrain(&mut edit, brush, x, z, TerrainId(tools.terrain), stroke.salt),
+            Tool::PaintTerrain => match (stroke.back.filter(|_| invert), &theme, &pattern) {
+                // The inverse puts back the map's own terrain, or the one
+                // the height calls for.
+                (Some(back), _, _) => ops::paint_terrain(&mut edit, brush, x, z, back, stroke.salt),
+                (None, Some((theme, sea)), _) => ops::paint_terrain_with(&mut edit, brush, x, z, stroke.salt, |h| theme.terrain(h - 1.0, 0.0, *sea, 0.0)),
+                (None, None, Some(pattern)) => ops::paint_pattern(&mut edit, brush, x, z, stroke.salt, pattern),
+                (None, None, None) => ops::paint_terrain(&mut edit, brush, x, z, TerrainId(tools.terrain), stroke.salt),
             },
             Tool::Gradient => {
                 if let Some(g) = &gradient {
@@ -1202,8 +1240,9 @@ pub struct SculptStroke {
 #[derive(Clone, Copy)]
 enum Stroke3d {
     Sculpt(massif_core::voxel::SculptMode),
-    /// Paint the terrain; the inverse puts back what the height calls for.
-    Paint { inverse: bool },
+    /// Paint the terrain; the inverse puts back `back`, the map's own
+    /// terrain, or (`None`) the one the height calls for.
+    Paint { inverse: bool, back: Option<TerrainId> },
 }
 
 /// Begin a stroke in the 3D Sculpt editor. `None` when its tool does
@@ -1211,7 +1250,7 @@ enum Stroke3d {
 pub fn begin_sculpt(doc: &mut Document, tools: &ToolState, inverse: bool) -> Option<SculptStroke> {
     let tool = tools.sculpt.tool;
     let what = match tool {
-        Tool::PaintTerrain => Stroke3d::Paint { inverse },
+        Tool::PaintTerrain => Stroke3d::Paint { inverse, back: if inverse { unpaint_for_stroke(doc, tools) } else { None } },
         _ => Stroke3d::Sculpt(tool.sculpt_mode(inverse)?),
     };
     doc.history.begin(crate::i18n::tr_name(tool.label()), doc.dim);
@@ -1238,10 +1277,10 @@ pub fn sculpt_dab(doc: &mut Document, tools: &ToolState, stroke: &mut SculptStro
             let mut edit = doc.history.edit(&mut doc.world, 0);
             voxel::displace_at(&mut edit, &brush, frame.center, frame.normal, brush.strength * SculptSettings::GROWTH * dt, mode)
         }
-        Stroke3d::Paint { inverse } => {
+        Stroke3d::Paint { inverse, back } => {
             let reg = &doc.world.registry;
             let pattern = (!inverse && tools.pattern.on).then(|| tools.pattern.sampler(reg)).flatten();
-            let theme = inverse.then(|| (massif_core::generate::Theme::new(reg), doc.world.meta.sea_level as f32));
+            let theme = (inverse && back.is_none()).then(|| (massif_core::generate::Theme::new(reg), doc.world.meta.sea_level as f32));
             let brush = Brush {
                 filter: tools.filter.is_active().then(|| std::sync::Arc::new(tools.filter.clone())),
                 ..brush
@@ -1249,18 +1288,19 @@ pub fn sculpt_dab(doc: &mut Document, tools: &ToolState, stroke: &mut SculptStro
             let level = doc.active_level.min(doc.dimension().levels.len() - 1);
             let (x, z) = (frame.center[0], frame.center[2]);
             let mut edit = doc.history.edit(&mut doc.world, level);
-            match (&theme, &pattern) {
-                (Some((theme, sea)), _) => ops::paint_terrain_with(&mut edit, &brush, x, z, stroke.salt, |h| theme.terrain(h - 1.0, 0.0, *sea, 0.0)),
-                (None, Some(pattern)) => ops::paint_pattern(&mut edit, &brush, x, z, stroke.salt, pattern),
-                (None, None) => ops::paint_terrain(&mut edit, &brush, x, z, TerrainId(tools.terrain), stroke.salt),
+            match (back.filter(|_| inverse), &theme, &pattern) {
+                (Some(back), _, _) => ops::paint_terrain(&mut edit, &brush, x, z, back, stroke.salt),
+                (None, Some((theme, sea)), _) => ops::paint_terrain_with(&mut edit, &brush, x, z, stroke.salt, |h| theme.terrain(h - 1.0, 0.0, *sea, 0.0)),
+                (None, None, Some(pattern)) => ops::paint_pattern(&mut edit, &brush, x, z, stroke.salt, pattern),
+                (None, None, None) => ops::paint_terrain(&mut edit, &brush, x, z, TerrainId(tools.terrain), stroke.salt),
             }
             // The matter sculpting moved keeps its own terrain: it is
             // painted too (back to the column's with the inverse).
             let painted = TerrainId(tools.terrain);
-            match (&theme, &pattern) {
-                (Some(_), _) => voxel::paint_sculpted(&mut edit, &brush, x, z, |_, _| None),
-                (None, Some(pattern)) => voxel::paint_sculpted(&mut edit, &brush, x, z, |px, pz| pattern.terrain(px, pz)),
-                (None, None) => voxel::paint_sculpted(&mut edit, &brush, x, z, |_, _| Some(painted)),
+            match (inverse, &pattern) {
+                (true, _) => voxel::paint_sculpted(&mut edit, &brush, x, z, |_, _| None),
+                (false, Some(pattern)) => voxel::paint_sculpted(&mut edit, &brush, x, z, |px, pz| pattern.terrain(px, pz)),
+                (false, None) => voxel::paint_sculpted(&mut edit, &brush, x, z, |_, _| Some(painted)),
             };
             1
         }
@@ -1374,6 +1414,81 @@ mod tests {
 
     fn height(doc: &Document, x: i32, z: i32) -> f32 {
         probe(doc, x, z).unwrap().height
+    }
+
+    /// Paint terrain's right button puts back the map's own terrain: on a
+    /// map filled with rock, rock, not the grass (or snow) its height calls
+    /// for; on a map saved before it kept its terrain, the one covering
+    /// nearly all of it, kept with the map from then on; by height on a map
+    /// whose terrains its height chose, or when asked.
+    #[test]
+    fn the_right_button_puts_back_the_maps_terrain() {
+        let rocky = || {
+            let world = generate(&GenParams { tiles_x: 2, tiles_z: 2, landform: Landform::Flat, surface: Some(TerrainId::ROCK), ..GenParams::default() });
+            Document::new(world, None, 1)
+        };
+        let paint_then_unpaint = |d: &mut Document, tools: &mut ToolState| {
+            let moss = TerrainId((2..).find(|t| *t != TerrainId::ROCK.0 && TerrainId(probe(d, 20, 20).unwrap().terrain) != TerrainId(*t)).unwrap());
+            tools.select(Tool::PaintTerrain);
+            tools.terrain = moss.0;
+            tools.brush.strength = 1.0;
+            tools.brush.radius = 6.0;
+            tools.brush.profile = massif_core::Profile::Constant;
+            for inverse in [false, true] {
+                let (stroke, _) = begin_stroke(d, tools, (20.5, 20.5), inverse, inverse);
+                let mut stroke = stroke.unwrap();
+                continue_stroke(d, tools, &mut stroke, (20.5, 20.5), 0.1);
+                end_stroke(d, stroke);
+                if !inverse {
+                    assert_eq!(TerrainId(probe(d, 20, 20).unwrap().terrain), moss);
+                }
+            }
+            TerrainId(probe(d, 20, 20).unwrap().terrain)
+        };
+        let by_height = |d: &Document| massif_core::generate::Theme::new(&d.world.registry).terrain(height(d, 20, 20) - 1.0, 0.0, d.world.meta.sea_level as f32, 0.0);
+        let mut tools = ToolState::default();
+        assert_eq!(tools.unpaint, Unpaint::MapTerrain);
+
+        // A new map of rock keeps it.
+        let mut d = rocky();
+        assert_eq!(d.world.meta.fill, Some(TerrainId::ROCK));
+        assert_ne!(by_height(&d), TerrainId::ROCK, "the height calls for another terrain there");
+        assert_eq!(paint_then_unpaint(&mut d, &mut tools), TerrainId::ROCK);
+        // Asked, by height.
+        tools.unpaint = Unpaint::ByHeight;
+        assert_eq!(paint_then_unpaint(&mut d, &mut tools), by_height(&d));
+        tools.unpaint = Unpaint::MapTerrain;
+
+        // A map of rock saved before: read from the land, then kept.
+        let mut d = rocky();
+        d.world.meta.fill = None;
+        assert_eq!(d.map_terrain(), Some(TerrainId::ROCK));
+        assert_eq!(paint_then_unpaint(&mut d, &mut tools), TerrainId::ROCK);
+        assert_eq!(d.world.meta.fill, Some(TerrainId::ROCK), "kept with the map");
+
+        // A map whose terrains the height chose (here, grass all over): by
+        // height.
+        let mut d = doc();
+        assert_eq!(d.world.meta.fill, None);
+        assert_eq!(d.map_terrain(), None);
+        assert_eq!(paint_then_unpaint(&mut d, &mut tools), by_height(&d));
+        assert_eq!(d.world.meta.fill, None);
+
+        // The terrain chosen for the map in Tool Settings.
+        let sand = d.world.registry.terrain_by_name("Sand").unwrap();
+        d.world.meta.fill = Some(sand);
+        assert_eq!(paint_then_unpaint(&mut d, &mut tools), sand);
+        // And in 3D Sculpt, as the player.
+        let mut d = rocky();
+        tools.sculpt.tool = Tool::PaintTerrain;
+        tools.terrain = sand.0;
+        let frame = massif_core::voxel::Frame { center: [20.5, height(&d, 20, 20), 20.5], normal: [0.0, 1.0, 0.0] };
+        for inverse in [false, true] {
+            let mut stroke = begin_sculpt(&mut d, &tools, inverse).unwrap();
+            sculpt_dab(&mut d, &tools, &mut stroke, &frame, 0.1);
+            end_sculpt(&mut d, stroke);
+            assert_eq!(TerrainId(probe(&d, 20, 20).unwrap().terrain), if inverse { TerrainId::ROCK } else { sand });
+        }
     }
 
     /// The Gradient brush dragged over the edge of a patch: the rim
