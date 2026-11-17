@@ -1446,7 +1446,9 @@ Masonry, Columns, Roofing…), with their real textures and names, else by
 family. A family that a block's name does not tell is read from how the
 block is drawn: a cross of two planes, a crop or leaves make a plant (a
 mod's `amaranth`, `cattail`, `barley`), planks or a log make wood (its
-fences, doors, signs), bricks, cobble or stone a building block. Whole
+fences, doors, signs), bricks, cobble or stone a building block. A mod's
+whole blocks of ground (`silt_grass_block`, `peat_dirt`, `volcanic_ash`) go
+with the soils. Whole
 blocks and plants show at first; **All shapes** adds every other shape (a
 mod's tabs list each block once, and its shapes follow it): slabs, stairs,
 arches, capitals, vertical slabs, fences, doors… The search looks through

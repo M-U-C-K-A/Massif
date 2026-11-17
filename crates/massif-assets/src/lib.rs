@@ -181,12 +181,23 @@ impl Category {
     /// a cross of two planes, a crop, leaves or a coral fan are plants
     /// (not a potted one), a block drawn with planks or a log is wood, one
     /// drawn with bricks, cobble, stone or tiles a building block.
-    pub fn of_block(id: &str, models: &[String], textures: [Option<&str>; 2]) -> Self {
+    pub fn of_block(id: &str, models: &[String], textures: [Option<&str>; 2], full_cube: bool) -> Self {
+        let n = id.rsplit(':').next().unwrap_or(id);
+        // A mod's whole blocks of ground (`silt_grass_block`, `peat_dirt`,
+        // `volcanic_ash`) are soil, which their names would put among the
+        // plants or nowhere; the game's keep their own groups.
+        if full_cube && crate::namespace(id) != "minecraft" {
+            const GROUND: [&str; 17] = ["dirt", "podzol", "mycelium", "nylium", "farmland", "mud", "sand", "gravel", "clay", "snow", "ice", "ash", "soil", "silt", "peat", "loam", "permafrost"];
+            const MADE: [&str; 16] = ["brick", "bricks", "tile", "tiles", "polished", "chiseled", "smooth", "cut", "pillar", "sandstone", "glass", "concrete", "terracotta", "lamp", "slab", "stairs"];
+            let words = || n.split('_');
+            if (n.ends_with("grass_block") || words().any(|w| GROUND.contains(&w))) && !words().any(|w| MADE.contains(&w)) {
+                return Category::Natural;
+            }
+        }
         let named = Category::of(id);
         if named != Category::Other {
             return named;
         }
-        let n = id.rsplit(':').next().unwrap_or(id);
         const PLANT_MODELS: [&str; 12] = [
             "block/cross", "block/tinted_cross", "block/crop", "block/leaves", "block/coral_fan", "block/coral_wall_fan", "block/template_seagrass", "block/attached_stem", "block/stem_growth0", "block/stem_growth7", "block/flowerbed_1", "block/template_azalea",
         ];
@@ -984,7 +995,7 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
                 "minecraft:lava" => (Some("block/lava_still".to_owned()), Tint::None),
                 _ => (top, top_tint),
             };
-            let category = Category::of_block(id, &model.chain, [top.as_deref(), side.as_deref()]);
+            let category = Category::of_block(id, &model.chain, [top.as_deref(), side.as_deref()], model.full_cube);
             Block {
                 id: id.clone(),
                 name: names_en.get(id).cloned().unwrap_or_else(|| display_name(id)),
@@ -1349,14 +1360,22 @@ mod tests {
         assert_eq!(Category::of("minecraft:end_stone"), Category::End);
         // A mod's names that say nothing, by how the blocks are drawn.
         let models = |m: &[&str]| m.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(Category::of_block("biomeswevegone:amaranth", &models(&["biomeswevegone:block/amaranth", "block/cross"]), [Some("biomeswevegone:block/amaranth"), None]), Category::Plants);
-        assert_eq!(Category::of_block("biomesoplenty:barley", &models(&["biomesoplenty:block/barley_bottom", "block/tinted_cross"]), [None, None]), Category::Plants);
-        assert_eq!(Category::of_block("mod:potted_amaranth", &models(&["block/flower_pot_cross", "block/cross"]), [None, None]), Category::Other);
-        assert_eq!(Category::of_block("biomeswevegone:aspen_fence", &models(&["biomeswevegone:block/aspen_fence_post"]), [Some("biomeswevegone:block/aspen/planks"), None]), Category::Wood);
-        assert_eq!(Category::of_block("biomeswevegone:aspen_hanging_sign", &[], [Some("biomeswevegone:block/aspen/stripped_log"), None]), Category::Wood);
-        assert_eq!(Category::of_block("mod:mystery", &[], [Some("mod:block/mystery_bricks"), None]), Category::Building);
-        assert_eq!(Category::of_block("mod:mystery", &[], [Some("mod:block/mystery"), None]), Category::Other);
-        assert_eq!(Category::of_block("minecraft:oak_planks", &[], [None, None]), Category::Wood, "a name that says is kept");
+        assert_eq!(Category::of_block("biomeswevegone:amaranth", &models(&["biomeswevegone:block/amaranth", "block/cross"]), [Some("biomeswevegone:block/amaranth"), None], false), Category::Plants);
+        assert_eq!(Category::of_block("biomesoplenty:barley", &models(&["biomesoplenty:block/barley_bottom", "block/tinted_cross"]), [None, None], false), Category::Plants);
+        assert_eq!(Category::of_block("mod:potted_amaranth", &models(&["block/flower_pot_cross", "block/cross"]), [None, None], false), Category::Other);
+        assert_eq!(Category::of_block("biomeswevegone:aspen_fence", &models(&["biomeswevegone:block/aspen_fence_post"]), [Some("biomeswevegone:block/aspen/planks"), None], false), Category::Wood);
+        assert_eq!(Category::of_block("biomeswevegone:aspen_hanging_sign", &[], [Some("biomeswevegone:block/aspen/stripped_log"), None], false), Category::Wood);
+        assert_eq!(Category::of_block("mod:mystery", &[], [Some("mod:block/mystery_bricks"), None], true), Category::Building);
+        assert_eq!(Category::of_block("mod:mystery", &[], [Some("mod:block/mystery"), None], true), Category::Other);
+        assert_eq!(Category::of_block("minecraft:oak_planks", &[], [None, None], true), Category::Wood, "a name that says is kept");
+        // A mod's ground is soil, whole; what is made of it is not.
+        for ground in ["regions_unexplored:silt_grass_block", "regions_unexplored:peat_dirt", "regions_unexplored:silt_mud", "regions_unexplored:volcanic_ash", "regions_unexplored:cobalt_nylium", "biomesoplenty:white_sand", "regions_unexplored:peat_podzol"] {
+            assert_eq!(Category::of_block(ground, &[], [None, None], true), Category::Natural, "{ground}");
+        }
+        assert_eq!(Category::of_block("regions_unexplored:silt_grass_block", &[], [None, None], false), Category::Plants, "not whole: by its name");
+        assert_eq!(Category::of_block("biomesoplenty:white_sandstone", &[], [None, None], true), Category::Stone, "made of sand, not sand");
+        assert_eq!(Category::of_block("mod:mud_bricks", &[], [None, None], true), Category::Building);
+        assert_eq!(Category::of_block("minecraft:soul_sand", &[], [None, None], true), Category::Nether, "the game's keep their groups");
     }
 
     /// A tiny jar: a block state, its model chain and a texture.
@@ -1655,6 +1674,46 @@ mod tests {
                 }
             }
             eprintln!("{}: {turned} turned states checked", inst.name);
+        }
+    }
+
+    /// Mods' jars named by MASSIF_MOD_JARS (separated by `;`), each read
+    /// over the version of the game it is made for when it is installed:
+    /// every block state file of the mod gives a block, nearly every one
+    /// with its textures, and a block's family read from its name or its
+    /// drawing (its ground with the soils, its plants with the plants).
+    /// Prints how many show at first, and how many each family has.
+    #[test]
+    fn mod_jars_give_every_block() {
+        let Some(list) = std::env::var_os("MASSIF_MOD_JARS") else {
+            eprintln!("MASSIF_MOD_JARS=<jar;jar…> reads mods' jars: skipping");
+            return;
+        };
+        for jar in std::env::split_paths(&list).chain(list.to_string_lossy().split(';').map(PathBuf::from)).filter(|p| p.is_file()).collect::<std::collections::BTreeSet<_>>() {
+            let Ok(names) = zip::Archive::list(&jar) else { continue };
+            let Some(version) = zip::Archive::open(&jar).ok().and_then(|a| mod_minecraft(&a, &jar)) else { continue };
+            // Its version, else the newest installed of the same series
+            // (`[1.21,1.21.2)` is read as 1.21; 1.21.1 plays it).
+            let series = |v: &str| v.split('.').take(2).collect::<Vec<_>>().join(".");
+            let jars = find_jars();
+            let Some(game) = jars.iter().find(|j| j.version == version).or_else(|| jars.iter().find(|j| series(&j.version) == series(&version))).cloned() else {
+                eprintln!("{}: Minecraft {version} is not installed here: skipping", jar.display());
+                continue;
+            };
+            let cat = load_with_mods(&game.path, &game.version, std::slice::from_ref(&jar)).unwrap();
+            let m = cat.mods.iter().find(|m| m.kind == SourceKind::Mod).unwrap();
+            let spaces: Vec<&str> = m.namespaces.iter().map(String::as_str).filter(|n| *n != "minecraft").collect();
+            let files = names.iter().filter(|n| asset_key(n, "blockstates", ".json").is_some_and(|k| spaces.contains(&namespace(&k)))).count();
+            let mine: Vec<&Block> = cat.blocks.iter().filter(|b| spaces.contains(&namespace(&b.id))).collect();
+            let bare = mine.iter().filter(|b| b.top.as_ref().is_none_or(|k| cat.texture(k).is_none())).count();
+            let first = mine.iter().filter(|b| b.full_cube || b.category == Category::Plants).count();
+            let mut families: std::collections::BTreeMap<String, usize> = Default::default();
+            for b in &mine {
+                *families.entry(format!("{:?}", b.category)).or_default() += 1;
+            }
+            eprintln!("{}: {} blocks of {} block files, {bare} without textures, {first} shown at first; {families:?}", m.name, mine.len(), files);
+            assert_eq!(mine.len(), files, "{}: every block file gives a block", m.name);
+            assert!(bare * 100 <= mine.len(), "{}: {bare} blocks without textures", m.name);
         }
     }
 

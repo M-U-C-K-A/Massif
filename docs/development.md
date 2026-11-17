@@ -51,6 +51,9 @@ Two environment variables enable the heavier tests:
   `MASSIF_CONQUEST_CHECK=<world>` checks another exported world the same
   way; `MASSIF_CONQUEST_JAR=<jar>` renders the gradient brush with its
   blocks.
+- `MASSIF_MOD_JARS=<jar;jar…>` reads mods' jars over the version of the game
+  each is made for: every block file gives a block, nearly all with their
+  textures, and it prints how many show at first and each family's count.
 - `MASSIF_VANILLA_WORLDS=<folder>` compares Massif's level.dat with those
   the game itself saved there (a saves folder, an instance, a folder of
   instances, or `auto` for the official launcher's and every instance).
