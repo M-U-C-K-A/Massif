@@ -98,6 +98,9 @@ impl std::fmt::Display for LayerFileError {
     }
 }
 
+/// The most a `.layer` file may hold once inflated.
+const MAX_LAYER: u64 = 64 << 20;
+
 /// Read a `.layer` file's bytes into `registry`: the layers it becomes are
 /// added to it (names made unique among the map's), and what it held that
 /// Massif does not take is said. The registry is left as it was if the
@@ -105,7 +108,12 @@ impl std::fmt::Display for LayerFileError {
 pub fn read_layer_file(bytes: &[u8], registry: &mut Registry) -> Result<LayerFile, LayerFileError> {
     let mut raw = Vec::new();
     let data: &[u8] = if bytes.starts_with(&[0x1f, 0x8b]) {
-        flate2::read::GzDecoder::new(bytes).read_to_end(&mut raw).map_err(|_| LayerFileError::NotALayer)?;
+        // A layer is a few kilobytes: more than this is no layer, and would
+        // only take the memory.
+        let n = flate2::read::GzDecoder::new(bytes).take(MAX_LAYER + 1).read_to_end(&mut raw).map_err(|_| LayerFileError::NotALayer)?;
+        if n as u64 > MAX_LAYER {
+            return Err(LayerFileError::Broken("larger than 64 MB once inflated".into()));
+        }
         &raw
     } else {
         bytes

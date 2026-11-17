@@ -54,3 +54,40 @@ fn damaged_worldpainter_files_are_refused_without_panicking() {
         let _ = massif_legacy::worldpainter::read_thumbnail(bytes);
     });
 }
+
+#[test]
+fn damaged_layer_files_are_refused_without_panicking() {
+    // Each WorldPainter layer of the tests, as its file is (gzip) and
+    // inflated (the Java stream itself, which the reader also takes).
+    let mut seeds = Vec::new();
+    for entry in std::fs::read_dir(here("data/layers")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|e| e == "layer") {
+            let bytes = std::fs::read(&path).unwrap();
+            seeds.push(inflate(&bytes));
+            seeds.push(bytes);
+        }
+    }
+    seeds.sort();
+    let registry = massif_core::registry::Registry::vanilla();
+    fuzz_support::fuzz("layer", &seeds, &here("corpus/layer"), |bytes| {
+        let mut reg = registry.clone();
+        let _ = massif_legacy::layer_file::read_layer_file(bytes, &mut reg);
+    });
+}
+
+#[test]
+fn a_layer_file_inflating_without_end_is_refused() {
+    use std::io::Write;
+    // 80 MB of zeros, a few dozen kilobytes once gzipped.
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+    let zeros = vec![0u8; 1 << 20];
+    for _ in 0..80 {
+        gz.write_all(&zeros).unwrap();
+    }
+    let bytes = gz.finish().unwrap();
+    let mut reg = massif_core::registry::Registry::vanilla();
+    let before = reg.clone();
+    assert!(massif_legacy::layer_file::read_layer_file(&bytes, &mut reg).is_err());
+    assert_eq!(format!("{reg:?}").len(), format!("{before:?}").len(), "the registry is left as it was");
+}
