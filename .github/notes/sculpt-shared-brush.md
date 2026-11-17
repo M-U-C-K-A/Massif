@@ -1,0 +1,5 @@
+**3D Sculpt uses the brush of the Brushes panel**
+
+3D Sculpt no longer has a brush menu of its own: it shapes with the brush picked in the Brushes panel, at the size, intensity and rotation of Brush Settings, exactly as the map does, and a brush picked there is 3D Sculpt's at once. The top of the view shows the brush with its size and intensity; a click on it shows the Brushes panel, which the 3D Sculpt workspace now has under the map. A brush larger than 64 blocks of radius still shapes 64 in 3D, as before: the size shows in the accent, and Brush Settings says so under Size while 3D Sculpt is shown.
+
+The brush also faces the way the land faces over its whole area rather than the face of the one block under the cursor: on a slope of one-block steps it no longer turns on its side when the cursor is over a step's riser. Raise / Lower works straight up on gentle slopes, on the same columns as on the map, and along the surface on cliffs and in caves; Paint terrain shows the columns it paints.

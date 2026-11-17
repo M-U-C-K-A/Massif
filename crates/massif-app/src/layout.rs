@@ -453,7 +453,7 @@ pub struct Layout {
 
 /// The workspaces a layout saved by an older version lacks are added to it
 /// once: this is the version they come with.
-const LAYOUT_VERSION: u32 = 5;
+const LAYOUT_VERSION: u32 = 6;
 
 /// The share of the window's width the column of the tools takes on the
 /// left of the Layout, Sculpting and Painting workspaces: the same in all
@@ -502,9 +502,12 @@ fn sculpt_workspace(b: &mut Builder) -> Node {
         let lower = b.column(0.45, settings, brush);
         b.column(0.3, tools, lower)
     };
+    // The map over the brushes (3D Sculpt shapes with the brush of the
+    // Brushes panel) and the levels.
     let side = {
-        let (map, levels) = (b.area(EditorKind::Map), b.area(EditorKind::Levels));
-        b.column(0.6, map, levels)
+        let (map, brushes, levels) = (b.area(EditorKind::Map), b.area(EditorKind::Brushes), b.area(EditorKind::Levels));
+        let lower = b.column(0.62, brushes, levels);
+        b.column(0.45, map, lower)
     };
     let view = b.area(EditorKind::Sculpt3d);
     let centre = b.row(0.78, view, side);
@@ -712,8 +715,34 @@ impl Layout {
         {
             self.reset_workspace(k);
         }
+        // Version 6: 3D Sculpt shapes with the brush of the Brushes panel,
+        // its own picker gone: the panel under the map of its workspace.
+        if self.version < 6 {
+            for w in self.workspaces.iter_mut().filter(|w| !w.terrain && w.root.shows(EditorKind::Sculpt3d) && !w.root.shows(EditorKind::Brushes)) {
+                let _ = w.root.add_below(EditorKind::Map, EditorKind::Brushes, 0.45, &mut self.next_id)
+                    || w.root.add_below(EditorKind::BrushSettings, EditorKind::Brushes, 0.5, &mut self.next_id);
+            }
+        }
         self.version = LAYOUT_VERSION;
         self
+    }
+
+    /// Show an editor of `kind` in the current workspace: an area of it
+    /// there already, else one made under the first of `under` it shows
+    /// (or beside the first area). The maximized area gives way to it.
+    pub fn bring(&mut self, kind: EditorKind, under: &[EditorKind]) {
+        let next = &mut self.next_id;
+        let w = &mut self.workspaces[self.active];
+        w.maximized = None;
+        if w.root.shows(kind) || under.iter().any(|&above| w.root.add_below(above, kind, 0.5, next)) {
+            return;
+        }
+        let mut areas = Vec::new();
+        w.root.areas(&mut areas);
+        if let Some(&(first, _)) = areas.first() {
+            *next += 1;
+            w.root.split(first, Dir::Row, false, Node::Area { id: *next, editor: kind });
+        }
     }
 
     pub fn current(&self) -> &Workspace {
@@ -1046,6 +1075,40 @@ mod tests {
         mine.workspaces[k].root = b.row(0.2, tools, view);
         let kept = mine.workspaces[k].root.clone();
         assert_eq!(sculpt(&mine.sanitize()), kept);
+    }
+
+    /// 3D Sculpt shapes with the brush of the Brushes panel: its workspace
+    /// shows that panel, one of version 5 gets it under its map, once.
+    #[test]
+    fn the_sculpt_workspace_gets_the_brushes() {
+        let sculpt = |l: &Layout| l.workspaces.iter().find(|w| w.name == "3D Sculpt").unwrap().root.clone();
+        assert!(sculpt(&Layout::default()).shows(EditorKind::Brushes));
+        let mut old = Layout { version: 5, ..Layout::default() };
+        let k = old.workspaces.iter().position(|w| w.name == "3D Sculpt").unwrap();
+        let mut b = Builder(&mut old.next_id);
+        let (tools, map, levels, view) = (b.area(EditorKind::Tools), b.area(EditorKind::Map), b.area(EditorKind::Levels), b.area(EditorKind::Sculpt3d));
+        let side = b.column(0.6, map, levels);
+        let centre = b.row(0.78, view, side);
+        old.workspaces[k].root = b.row(0.2, tools, centre);
+        let layout = serde_json::from_str::<Layout>(&serde_json::to_string(&old).unwrap()).unwrap().sanitize();
+        let root = sculpt(&layout);
+        assert!(root.shows(EditorKind::Brushes) && root.shows(EditorKind::Levels) && root.shows(EditorKind::Tools));
+        assert_eq!(root.count(), 5);
+        // Read again: not added twice.
+        let again = serde_json::from_str::<Layout>(&serde_json::to_string(&old.clone().sanitize()).unwrap()).unwrap().sanitize();
+        assert_eq!(sculpt(&again).count(), 5);
+        // Called from the header where it is not: there, the area alone shown
+        // no longer.
+        let mut bare = Layout { active: k, ..Layout::default() };
+        let mut b = Builder(&mut bare.next_id);
+        let (tools, view) = (b.area(EditorKind::Tools), b.area(EditorKind::Sculpt3d));
+        bare.workspaces[k].root = b.row(0.2, tools, view);
+        bare.workspaces[k].maximized = Some(7);
+        bare.bring(EditorKind::Brushes, &[EditorKind::Map, EditorKind::BrushSettings]);
+        assert!(bare.current().root.shows(EditorKind::Brushes) && bare.current().maximized.is_none());
+        assert_eq!(bare.current().root.count(), 3);
+        bare.bring(EditorKind::Brushes, &[EditorKind::Map]);
+        assert_eq!(bare.current().root.count(), 3, "once");
     }
 
     #[test]

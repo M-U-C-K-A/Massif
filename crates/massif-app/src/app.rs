@@ -30,6 +30,8 @@ use std::path::PathBuf;
 const HEADER: f32 = 32.0;
 const GAP: f32 = 4.0;
 const MIN_AREA: f32 = 90.0;
+/// How long the Brushes panel stays outlined, called from 3D Sculpt, in seconds.
+const BRUSHES_CALL: f64 = 1.2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub(crate) enum ThemeChoice {
@@ -502,6 +504,9 @@ pub struct MassifApp {
     brushes: BrushLibrary,
     /// Name of the brush group being made, while its field is shown.
     new_group: Option<String>,
+    /// When the brush of 3D Sculpt's header was clicked: the Brushes panel
+    /// is outlined in the accent for a moment.
+    brushes_called: Option<f64>,
     /// The terrain graph editor.
     graph: crate::graph_editor::GraphEditor,
     /// The game's real blocks.
@@ -1024,6 +1029,7 @@ impl MassifApp {
             biome_search: String::new(),
             brushes: BrushLibrary::default(),
             new_group: None,
+            brushes_called: None,
             graph: Default::default(),
             blocks: BlockLibrary::default(),
             allow_close: false,
@@ -3602,9 +3608,12 @@ impl MassifApp {
                 self.view3d.ui(&mut cui, frame, &mut self.doc, &mut self.tools, self.map_center, false)
             }
             EditorKind::Sculpt3d => {
-                egui::Frame::new()
+                let called = egui::Frame::new()
                     .inner_margin(egui::Margin::symmetric(8, 6))
                     .show(&mut cui, |ui| panels::sculpt_toolbar(ui, &mut self.tools, &mut self.brushes, &self.doc.world.registry));
+                if called.inner {
+                    self.call_brushes(cui.ctx());
+                }
                 self.sculpt3d.ui(&mut cui, frame, &mut self.doc, &mut self.tools, self.map_center, true);
                 if let Some(note) = self.sculpt3d.feedback.take() {
                     self.feedback = Some(note);
@@ -3627,9 +3636,10 @@ impl MassifApp {
                 let (min_y, max_y) = (self.doc.dimension().min_y, self.doc.dimension().max_y);
                 let heights = self.doc.heights(&cui.ctx().clone());
                 let sea = self.doc.world.meta.sea_level;
+                let sculpt_3d = shown.contains(&EditorKind::Sculpt3d);
                 scrolled(&mut cui, &mut |ui| {
                     let light = self.settings.light as f32 * 22.5;
-                    panels::brush_settings(ui, &mut self.tools, &mut self.brushes, &self.doc.world.registry, min_y, max_y, light, heights.as_deref(), sea)
+                    panels::brush_settings(ui, &mut self.tools, &mut self.brushes, &self.doc.world.registry, min_y, max_y, light, heights.as_deref(), sea, sculpt_3d)
                 })
             }
             EditorKind::Brushes => {
@@ -3773,6 +3783,19 @@ impl MassifApp {
         // its hairline over that.
         round_off(&painter, rect, theme::CARD_RADIUS as f32, pal.app_bg);
         painter.rect_stroke(rect, theme::CARD_RADIUS, Stroke::new(1.0, pal.border), StrokeKind::Inside);
+        // The Brushes panel called from 3D Sculpt's header: outlined for a
+        // moment (still, then gone: no motion).
+        if editor == EditorKind::Brushes
+            && let Some(called) = self.brushes_called
+        {
+            let left = BRUSHES_CALL - (ui.input(|i| i.time) - called);
+            if left > 0.0 {
+                painter.rect_stroke(rect, theme::CARD_RADIUS, Stroke::new(2.0, pal.accent), StrokeKind::Inside);
+                ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(left));
+            } else {
+                self.brushes_called = None;
+            }
+        }
         // The bottom corners, over what the editor drew (a map or a 3D view
         // takes every drag there otherwise).
         for corner in [Corner::BottomLeft, Corner::BottomRight] {
@@ -3780,6 +3803,14 @@ impl MassifApp {
                 self.layout.split_at(id, dir, first, at);
             }
         }
+    }
+
+    /// Show the Brushes panel, where 3D Sculpt's brush is picked: in the
+    /// workspace if it is not, under Brush Settings or the map; outlined.
+    fn call_brushes(&mut self, ctx: &egui::Context) {
+        self.layout.bring(EditorKind::Brushes, &[EditorKind::Map, EditorKind::BrushSettings, EditorKind::ToolSettings]);
+        self.brushes_called = Some(ctx.input(|i| i.time));
+        ctx.request_repaint();
     }
 
     // ------------------------------------------------------------ dialogs --
@@ -10559,6 +10590,179 @@ mod tests {
             let (x, y, w, hgt) = ((header.min.x * ppp) as u32, (header.min.y * ppp) as u32, (header.width() * ppp) as u32, (header.height() * ppp) as u32);
             image::imageops::crop_imm(&image, x, y, w.min(image.width() - x), hgt).to_image().save(dir.join(format!("sculpt-header-{ppp}x.png"))).unwrap();
         }
+    }
+
+    /// 3D Sculpt shapes with the brush of the Brushes panel and Brush
+    /// Settings: its header has no picker of its own, only the brush said
+    /// in a word, which shows the Brushes panel; a brush picked there is
+    /// 3D Sculpt's at once, its size and intensity those of Brush Settings,
+    /// which says the size 3D shapes at most. Rendered at 1× and 2× with
+    /// MASSIF_SNAPSHOT_DIR (and MASSIF_SNAPSHOT_PPP=2).
+    #[test]
+    fn the_sculpt_brush_is_the_brushes_panels() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let mut h = harness(ThemeChoice::Dark);
+        {
+            let app = h.state_mut();
+            app.layout.active = 4; // 3D Sculpt
+            app.tools.tool = Tool::Raise;
+            app.tools.brush.radius = 20.0;
+            app.tools.brush.strength = 0.5;
+        }
+        h.run_steps(10);
+        let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        let area = |kind| areas.iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(kind)).map(|(_, r)| *r).unwrap();
+        let (view, settings) = (area(EditorKind::Sculpt3d), area(EditorKind::BrushSettings));
+        assert!(h.state().layout.current().root.shows(EditorKind::Brushes), "the workspace shows the Brushes panel");
+        let header = Rect::from_min_size(view.min, vec2(view.width(), 70.0));
+        let name = |h: &egui_kittest::Harness<'_, MassifApp>| h.state().brushes.name(&h.state().tools.brush_source).to_string();
+        // The brushes named in the header: the one in hand, and none to pick.
+        let library: Vec<String> = BrushSource::BASIC.iter().chain(BrushSource::MORE.iter()).map(|s| h.state().brushes.name(s).to_string()).collect();
+        let buttons_in = |h: &egui_kittest::Harness<'_, MassifApp>, r: Rect| h.query_all_by_role(Role::Button).filter(|n| n.rect().intersects(r)).filter_map(|n| n.accesskit_node().label()).filter(|l| library.contains(l)).collect::<Vec<_>>();
+        let first = name(&h);
+        assert_eq!(buttons_in(&h, header), vec![first.clone()], "the brush, said, and nothing to pick from");
+        let shown_brushes = h.query_all_by_role(Role::Image).count();
+        h.query_all_by_label(&first).find(|n| n.rect().intersects(header)).unwrap().click_accesskit();
+        h.run_steps(3);
+        assert_eq!(h.query_all_by_role(Role::Image).count(), shown_brushes, "no menu of brushes opened");
+        assert!(h.state().brushes_called.is_some(), "the Brushes panel called");
+        // A brush picked in the Brushes panel is 3D Sculpt's at once.
+        let source = BrushSource::BASIC.iter().find(|s| **s != h.state().tools.brush_source).unwrap().clone();
+        let other = h.state().brushes.name(&source).to_string();
+        h.query_all_by_label(&other).find(|n| n.accesskit_node().role() == Role::Image && !n.rect().intersects(header)).expect("in the Brushes panel").click_accesskit();
+        h.run_steps(3);
+        assert_eq!(h.state().tools.brush_source, source);
+        let (map, sculpt) = (h.state().tools.stroke_brush(), h.state().tools.brush_3d());
+        assert_eq!((sculpt.shape, sculpt.profile, sculpt.radius, sculpt.strength, sculpt.rotation), (map.shape, map.profile, map.radius, map.strength, map.rotation));
+        assert_eq!(buttons_in(&h, header), vec![other.clone()], "said in the header");
+        // Size and intensity from Brush Settings; 3D shapes 64 at most, said there.
+        {
+            let app = h.state_mut();
+            app.tools.brush.radius = 100.0;
+            app.tools.brush.strength = 0.3;
+        }
+        h.run_steps(3);
+        let most = massif_core::voxel::MAX_SCULPT_RADIUS;
+        assert_eq!((h.state().tools.brush_3d().radius, h.state().tools.brush_3d().strength), (most, 0.3));
+        let note = format!("3D Sculpt takes {most:.0} at most");
+        assert!(h.query_all_by_label(&note).any(|n| n.rect().intersects(settings)), "Brush Settings says the size 3D shapes");
+        // A brush of the map's (Smooth) goes as wide as on the map, unsaid.
+        h.state_mut().tools.tool = Tool::Smooth;
+        h.run_steps(3);
+        assert_eq!(h.state().tools.brush_3d().radius, 100.0);
+        assert_eq!(h.query_all_by_label(&note).count(), 0);
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            h.state_mut().tools.tool = Tool::Raise;
+            h.state_mut().brushes_called = None;
+            h.run_steps(3);
+            let ppp = h.ctx.pixels_per_point();
+            let crop = |image: &image::RgbaImage, r: Rect| {
+                let (x, y) = ((r.min.x * ppp) as u32, (r.min.y * ppp) as u32);
+                image::imageops::crop_imm(image, x, y, ((r.width() * ppp) as u32).min(image.width() - x), ((r.height() * ppp) as u32).min(image.height() - y)).to_image()
+            };
+            let image = h.render().unwrap();
+            crop(&image, header).save(dir.join(format!("sculpt-brush-header-{ppp}x.png"))).unwrap();
+            crop(&image, settings).save(dir.join(format!("sculpt-brush-settings-{ppp}x.png"))).unwrap();
+            image.save(dir.join(format!("sculpt-brush-window-{ppp}x.png"))).unwrap();
+        }
+    }
+
+    /// On a grassy slope of one-block steps, 3D Sculpt's brush faces the
+    /// slope, a riser under the cursor or not: its outline round on the
+    /// land, not tilted on its side. Rendered before (the face under the
+    /// cursor) and after with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn the_sculpt_brush_faces_a_stepped_slope() {
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1200.0, 800.0))
+            .with_pixels_per_point(std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0))
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_eframe(move |cc| {
+                theme::install(&cc.egui_ctx);
+                let mut world = generate(&GenParams { tiles_x: 2, tiles_z: 2, landform: Landform::Plains, seed: 4, ..GenParams::default() });
+                let ground = world.dims[0].ground_mut();
+                for pos in ground.positions().collect::<Vec<_>>() {
+                    let tile = ground.tile_mut(pos).unwrap();
+                    for lz in 0..massif_core::TILE_SIZE {
+                        for lx in 0..massif_core::TILE_SIZE {
+                            let x = pos.x * massif_core::TILE_SIZE + lx;
+                            tile.top.set(massif_core::coords::local_index(lx, lz), 70.0 + (0.4 * x as f32).floor());
+                        }
+                    }
+                }
+                MassifApp::for_tests(world)
+            });
+        {
+            let app = h.state_mut();
+            app.layout.active = 4; // 3D Sculpt
+            app.tools.tool = Tool::Raise;
+            app.tools.brush.radius = 10.0;
+            let (lo, hi) = app.doc.dimension().bounds().unwrap();
+            let t = massif_core::TILE_SIZE as f64;
+            let (cx, cz) = ((lo.x as f64 + hi.x as f64 + 1.0) * t / 2.0, (lo.z as f64 + hi.z as f64 + 1.0) * t / 2.0);
+            // From the low side, a little aslant: risers face the eye.
+            app.sculpt3d.camera = crate::view3d::Camera { target: [cx, 70.0 + 0.4 * cx, cz], yaw: -1.2, pitch: 0.35, distance: 70.0 };
+        }
+        h.run_steps(30);
+        let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        let view = areas.into_iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::Sculpt3d)).map(|(_, r)| r).unwrap();
+        // A point of the view over a riser, the view turned to face them.
+        let mut at = None;
+        let camera = h.state().sculpt3d.camera;
+        'find: for yaw in [-std::f32::consts::FRAC_PI_2, std::f32::consts::FRAC_PI_2, 0.0, std::f32::consts::PI, -1.2, 1.2] {
+            h.state_mut().sculpt3d.camera = crate::view3d::Camera { yaw, ..camera };
+            h.run_steps(3);
+            for dy in (-60..60).step_by(6) {
+                for dx in (-60..60).step_by(10) {
+                    let p = view.center() + vec2(dx as f32, dy as f32);
+                    h.event(egui::Event::PointerMoved(p));
+                    h.run_steps(2);
+                    if h.state().sculpt3d.hover().is_some_and(|hit| hit.normal.1 == 0 && hit.normal.0 == -1) {
+                        at = Some(p);
+                        break 'find;
+                    }
+                }
+            }
+        }
+        h.run_steps(20);
+        let at = at.expect("a riser in view");
+        let slope = {
+            let l = (0.4f32 * 0.4 + 1.0).sqrt();
+            [-0.4 / l, 1.0 / l, 0.0]
+        };
+        let off = |n: [f32; 3]| (n[0] * slope[0] + n[1] * slope[1] + n[2] * slope[2]).clamp(-1.0, 1.0).acos().to_degrees();
+        let up = |n: [f32; 3]| n[1].clamp(-1.0, 1.0).acos().to_degrees();
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let ppp = h.ctx.pixels_per_point();
+        let shoot = |h: &mut egui_kittest::Harness<'_, MassifApp>, name: &str| {
+            if let Some(dir) = &dir {
+                let image = h.render().unwrap();
+                let (x, y) = ((view.min.x * ppp) as u32, (view.min.y * ppp) as u32);
+                image::imageops::crop_imm(&image, x, y, ((view.width() * ppp) as u32).min(image.width() - x), ((view.height() * ppp) as u32).min(image.height() - y)).to_image().save(dir.join(format!("{name}-{ppp}x.png"))).unwrap();
+            }
+        };
+        crate::view3d::FACE_FRAME.set(true);
+        h.event(egui::Event::PointerMoved(at + vec2(1.0, 0.0)));
+        h.run_steps(20);
+        let before = h.state().sculpt3d.brush_frame().unwrap().normal;
+        shoot(&mut h, "stepped-slope-before");
+        crate::view3d::FACE_FRAME.set(false);
+        h.event(egui::Event::PointerMoved(at));
+        h.run_steps(20);
+        let after = h.state().sculpt3d.brush_frame().unwrap().normal;
+        shoot(&mut h, "stepped-slope-after");
+        eprintln!("on a riser: the brush {:.1}° off the slope before, {:.1}° from straight up after (Raise / Lower)", off(before), up(after));
+        assert!(off(before) > 20.0, "the face turned it before: {before:?}");
+        assert!(up(after) < 1.0, "Raise / Lower straight up on a gentle slope: {after:?}");
+        // Smoothing sculpted matter (Smooth3d) lays it along the slope.
+        h.state_mut().tools.tool = Tool::Smooth3d;
+        h.event(egui::Event::PointerMoved(at + vec2(1.0, 0.0)));
+        h.run_steps(20);
+        let along = h.state().sculpt3d.brush_frame().unwrap().normal;
+        assert!(off(along) < 6.0, "along the slope: {:.1}° off", off(along));
+        h.state_mut().tools.tool = Tool::Raise;
     }
 
     /// The tools of the Tools panel act in 3D Sculpt where the cursor

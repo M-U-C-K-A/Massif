@@ -1927,13 +1927,18 @@ a second, and its blocks take about 70 MB of memory.
 Sculpting in 3D has its own editor, **3D Sculpt** (its workspace sits next
 to 3D; the 3D View's **Sculpt** button opens it): a 3D view that works with
 the tool chosen in the **Tools** panel, as the map does, with its Tool
-Settings and the brush of every tool — its shape (custom images too, turned
-as they are), size, intensity and rotation are those of **Brush Settings**.
-Its workspace shows the Tools panel, Tool Settings and Brush Settings on
-the left, the map and the levels on the right; the top of the view names
-the tool in hand and says what the buttons do with it. (A 3D Sculpt
-workspace laid out by an earlier version gets these panels once; one given
-the Tools panel by hand is left as it is.)
+Settings and the brush the map uses: the one picked in the **Brushes**
+panel, its shape (custom images too, turned as they are), size, intensity
+and rotation those of **Brush Settings**. A brush picked there, or a size
+set there, is 3D Sculpt's at once. Its workspace shows the Tools panel,
+Tool Settings and Brush Settings on the left, the map, the Brushes panel
+and the levels on the right; the top of the view names the tool in hand,
+the brush with its size and intensity (a click on it shows the Brushes
+panel, outlined a moment, and brings it into the workspace if it is not
+there), and says what the buttons do. (A 3D Sculpt workspace laid out by an
+earlier version gets these panels once; one given the Tools panel by hand
+is left as it is. 3D Sculpt had a brush of its own before 0.4: it gives way
+to the shared one.)
 
 - **Raise / Lower** sculpts in 3D: it pushes the surface out (the left
   button) or in (the right one) under the brush, along its slope, a layer at
@@ -1957,8 +1962,18 @@ the Tools panel by hand is left as it is.)
   the click points. A tool of the map only — the selections, Pan, Road,
   River, annotations — says so at the top of the view, where the left
   button then turns the view and the right one moves it.
-- The brush of the tools that act on columns (Smooth and the map's
-  brushes) shows exactly the columns it takes: its outline, as wide in
+- The brush faces the way the land faces over its whole area — the mean
+  of the faces between ground and air within its radius (up to 16 blocks),
+  each counting for its area, less toward the rim —, not the face of the
+  block under the cursor: on a slope of one-block steps the treads and the
+  risers add up to the slope, within a few degrees (2.4° at most on a
+  slope of 22°, where the face under the cursor was 52° off), and it eases
+  from one frame to the next as the cursor moves. Raise / Lower works
+  straight up on slopes up to 25°, on the same columns as the map's Raise,
+  and along the surface from 40° (cliffs, cave walls and ceilings, in
+  Ghost too), blending between the two.
+- The brush of the tools that act on columns (Paint terrain, Smooth and
+  the map's brushes) shows exactly the columns it takes: its outline, as wide in
   blocks as on the map, laid on the land column by column, and in the
   player's view the blocks of those columns marked at any height, cliffs
   included. The tools that shape in 3D show the brush laid along the slope.
@@ -1967,8 +1982,12 @@ the Tools panel by hand is left as it is.)
   wheel moves forward over the land; Alt + wheel flies toward the point
   under the cursor; ⌘ (Ctrl) + wheel sizes the brush. In 3D a brush
   sculpts 64 blocks around at most: the work of a dab grows with the cube
-  of its size (a larger brush works as 64, and the toolbar says so); the
-  map's brushes go as wide as on the map.
+  of its size — a dab of Raise / Lower takes about 18 ms at 64, 50 ms at
+  96 and 145 ms at 128, smoothing sculpted matter 32, 200 and 310 ms —, so
+  a larger brush works as 64 for the tools that shape or paint matter
+  (Raise / Lower, Paint terrain), the top of the view showing its size in
+  the accent and Brush Settings saying so under **Size**; the map's
+  brushes go as wide as on the map.
 - **Player** walks in the view as in Minecraft with Axiom, to see and
   sculpt the land at a player's height: it comes down where the middle of
   the view looks, with Minecraft's body (0.6 × 1.8 blocks, its eyes at

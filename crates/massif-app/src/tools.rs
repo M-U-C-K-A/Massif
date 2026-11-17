@@ -3238,6 +3238,27 @@ mod tests {
         }
     }
 
+    /// Settings of 0.3, whose 3D Sculpt editor had a brush of its own
+    /// (`sculpt.brush`, `sculpt.source`): they read, that brush is let go,
+    /// and 3D Sculpt shapes with the brush of every tool, at its size and
+    /// intensity.
+    #[test]
+    fn the_old_3d_brush_gives_way_to_the_shared_one() {
+        let mut shared = ToolState::default();
+        shared.brush.radius = 30.0;
+        shared.brush.strength = 0.4;
+        let mut json = serde_json::to_value(&shared).unwrap();
+        let own = Brush { radius: 12.0, strength: 0.9, ..shared.brush.clone() };
+        json["sculpt"] = serde_json::json!({"tool": "Build", "brush": own, "source": json["brush_source"].clone(), "fly_speed": 2.0});
+        let mut tools: ToolState = serde_json::from_value(json).unwrap();
+        tools.settle();
+        assert_eq!((tools.brush.radius, tools.brush.strength, tools.sculpt.fly_speed), (30.0, 0.4, 2.0));
+        let b = tools.brush_3d();
+        assert_eq!((b.radius, b.strength), (30.0, 0.4), "3D Sculpt shapes with the shared brush");
+        let saved = serde_json::to_value(&tools).unwrap();
+        assert!(saved["sculpt"].get("brush").is_none() && saved["sculpt"].get("source").is_none(), "no longer saved");
+    }
+
     /// Each tool of the Tools panel says what it does in 3D Sculpt, and
     /// those that act there do, where the view points.
     #[test]

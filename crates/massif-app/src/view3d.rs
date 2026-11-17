@@ -3584,6 +3584,12 @@ impl Sky {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The brush faces the block face under the cursor, as it did before.
+    pub static FACE_FRAME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// An orbit camera.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Camera {
@@ -4451,6 +4457,12 @@ impl View3d {
         self.hover
     }
 
+    /// Where the brush lies and which way it faces.
+    #[cfg(test)]
+    pub fn brush_frame(&self) -> Option<massif_core::voxel::Frame> {
+        self.frame
+    }
+
     /// The last rendered image, read back from the GPU.
     #[cfg(test)]
     pub fn read_back(&self) -> Option<(u32, u32, Vec<u8>)> {
@@ -5289,10 +5301,10 @@ impl View3d {
     }
 
     /// Where the brush lies on the surface `f` for the tool in hand: along
-    /// its slope for the tools that shape or paint in 3D (`in_3d`), flat
-    /// for the map's brushes, which act on the columns around.
-    fn laid(f: massif_core::voxel::Frame, in_3d: bool) -> massif_core::voxel::Frame {
-        if in_3d {
+    /// its slope for the tools that shape matter (`along`), flat for Paint
+    /// and the map's brushes, which act on the columns around.
+    fn laid(f: massif_core::voxel::Frame, along: bool) -> massif_core::voxel::Frame {
+        if along {
             f
         } else {
             massif_core::voxel::Frame {
@@ -5458,6 +5470,9 @@ impl View3d {
         // The tools that shape or paint in 3D sculpt this far at most; the
         // map's brushes go as wide as on the map.
         let in_3d = matches!(use3d, Use3d::Sculpt | Use3d::Smooth | Use3d::Paint);
+        // Laid along the slope: the tools that shape matter. Paint, as the
+        // map's brushes, takes whole columns, its footprint straight down.
+        let along_slope = matches!(use3d, Use3d::Sculpt | Use3d::Smooth);
         let (shift, alt, command) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt, i.modifiers.command || i.modifiers.ctrl));
         let (orbit, pan) = if sculpting {
             (
@@ -5591,12 +5606,29 @@ impl View3d {
             // Through the ground the eyes are in (a ghost's): on the
             // surface beyond, a cave's wall.
             self.hover = massif_core::voxel::raycast_out(doc.dimension(), o, d, (self.camera.distance as f64 + extent as f64) * 1.5);
-            // The slope under the cursor, smoothed over the blocks around;
-            // a little of the last one kept, so that it does not shake.
-            let found = self.hover.map(|hit| massif_core::voxel::surface_frame(doc.dimension(), &hit, o, d));
+            // The way the land faces over the brush's whole area, not the
+            // face of the block under the cursor (a step's riser would turn
+            // it sideways); Raise / Lower straight up on gentle slopes, as
+            // on the map. Eased toward it over a few hundredths of a second,
+            // so that it glides rather than shakes as the cursor moves.
+            let radius = tools.brush_3d().radius;
+            let found = self.hover.map(|hit| {
+                // (As before, for the tests' pictures: the face under the
+                // cursor, smoothed over 5 blocks.)
+                #[cfg(test)]
+                if FACE_FRAME.get() {
+                    return massif_core::voxel::surface_frame(doc.dimension(), &hit, o, d);
+                }
+                let f = massif_core::voxel::brush_frame(doc.dimension(), &hit, o, d, radius);
+                match use3d {
+                    Use3d::Sculpt => massif_core::voxel::Frame { normal: massif_core::voxel::upright(f.normal), ..f },
+                    _ => f,
+                }
+            });
+            let keep = (-ui.input(|i| i.stable_dt).min(0.1) / 0.05).exp();
             self.frame = match (found, self.frame) {
                 (Some(new), Some(old)) => {
-                    let n = [0.65 * new.normal[0] + 0.35 * old.normal[0], 0.65 * new.normal[1] + 0.35 * old.normal[1], 0.65 * new.normal[2] + 0.35 * old.normal[2]];
+                    let n = [(1.0 - keep) * new.normal[0] + keep * old.normal[0], (1.0 - keep) * new.normal[1] + keep * old.normal[1], (1.0 - keep) * new.normal[2] + keep * old.normal[2]];
                     let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
                     Some(if l > 0.3 {
                         massif_core::voxel::Frame {
@@ -5834,7 +5866,7 @@ impl View3d {
                 globals.pick = [l[0], l[1], l[2], 1.0];
             }
             if let (Some(f), true) = (self.frame, sculpting) {
-                let f = Self::laid(f, in_3d);
+                let f = Self::laid(f, along_slope);
                 let brush = tools.brush_3d();
                 let c = local([f.center[0] as f64, f.center[1] as f64, f.center[2] as f64]);
                 let square = brush.is_square() && brush.outline().is_none();
@@ -5853,7 +5885,7 @@ impl View3d {
                 // take whole columns: their footprint is marked at any
                 // height (3, 4), the others' blocks in a ball or a box.
                 globals.brush = [c[0], c[1], c[2], brush.radius.max(0.5)];
-                let shape = match (in_3d, square) {
+                let shape = match (along_slope, square) {
                     (true, false) => 1.0,
                     (true, true) => 2.0,
                     (false, false) => 3.0,
@@ -5933,7 +5965,7 @@ impl View3d {
         // the game's look the blocks it takes are marked instead (but for a
         // custom brush's outline).
         let marked = game && tools.brush_3d().outline().is_none();
-        if let Some(f) = self.frame.filter(|_| !marked).map(|f| Self::laid(f, in_3d)) {
+        if let Some(f) = self.frame.filter(|_| !marked).map(|f| Self::laid(f, along_slope)) {
             let m = Mat4::from_cols_array_2d(&globals.view_proj);
             let to_screen = |p: [f32; 3]| -> Option<egui::Pos2> {
                 let v = m * Vec4::new(p[0] - origin.0 as f32, p[1], p[2] - origin.1 as f32, 1.0);
@@ -5963,14 +5995,14 @@ impl View3d {
                 }
                 None if brush.is_square() => vec![brush.square_corners(0.0, 0.0).to_vec()],
                 None => {
-                    let n = if in_3d { 64 } else { ((r * std::f32::consts::TAU) as usize).clamp(64, 2048) };
+                    let n = if along_slope { 64 } else { ((r * std::f32::consts::TAU) as usize).clamp(64, 2048) };
                     vec![(0..n).map(|i| {
                         let t = i as f32 / n as f32 * std::f32::consts::TAU;
                         (t.cos() * r, t.sin() * r)
                     }).collect()]
                 }
             };
-            let rings: Vec<Vec<Option<egui::Pos2>>> = if in_3d {
+            let rings: Vec<Vec<Option<egui::Pos2>>> = if along_slope {
                 flat.iter().map(|ring| ring.iter().map(|&(u, v)| on(u, v)).collect()).collect()
             } else {
                 // The map's brushes take whole columns: their footprint, as

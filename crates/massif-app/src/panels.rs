@@ -174,12 +174,14 @@ pub fn tools_panel(ui: &mut Ui, tools: &mut ToolState) {
 
 /// Along the top of the 3D Sculpt editor: the tool in hand — the one chosen
 /// in the Tools panel, as on the map —, the player, the brush — the one
-/// chosen for every tool, a custom one too —, how big, how hard; with
-/// Paint, the terrain it paints; what the buttons do.
-pub fn sculpt_toolbar(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibrary, reg: &Registry) {
+/// chosen in the Brushes panel, as on the map —, how big, how hard; with
+/// Paint, the terrain it paints; what the buttons do. Whether the brush was
+/// clicked, to show the Brushes panel.
+pub fn sculpt_toolbar(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibrary, reg: &Registry) -> bool {
     use crate::tools::Use3d;
     let pal = Palette::of(ui);
     let use3d = tools.tool.in_3d();
+    let mut show_brushes = false;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = vec2(4.0, 0.0);
         ui.spacing_mut().interact_size.y = 22.0;
@@ -206,57 +208,20 @@ pub fn sculpt_toolbar(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
         ui.add_space(8.0);
         ui.separator();
         ui.add_space(4.0);
-        // The brush: the one chosen for every tool, from any of the
-        // library's groups, a custom image too.
-        let name = library.name(&tools.brush_source);
-        ui.menu_button(theme::with_icon(Icon::Brush, &name), |ui| {
-            ui.set_max_width(330.0);
-            let dark = ui.visuals().dark_mode;
-            let ctx = ui.ctx().clone();
-            let mut lists: Vec<(String, Vec<BrushSource>)> = vec![
-                (tr!("Basic").into(), BrushSource::BASIC.to_vec()),
-                (tr!("More shapes").into(), BrushSource::MORE.to_vec()),
-                (tr!("Stamps").into(), Stamp::ALL.iter().map(|t| BrushSource::Stamp(*t)).collect()),
-            ];
-            for g in &library.groups {
-                lists.push((g.name.clone(), g.entries.iter().map(|e| e.source.clone()).collect()));
-            }
-            egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
-                for (title, list) in lists {
-                    if list.is_empty() {
-                        continue;
-                    }
-                    ui.label(RichText::new(title).size(11.0).color(pal.weak));
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-                        for source in list {
-                            let texture = library.thumbnail(&ctx, &source, dark);
-                            let tip = library.name(&source);
-                            let response = brush_button(ui, texture, tools.brush_source == source, 40.0);
-                            let response = if response.hovered() {
-                                let shape = library.brush(&source, &tools.brush);
-                                crate::cards::brush(response, &tip, &format!("{source:?}"), shape.as_ref())
-                            } else {
-                                response
-                            };
-                            if response.clicked() && select_brush(tools, library, source) {
-                                ui.close();
-                            }
-                        }
-                    });
-                    ui.add_space(6.0);
-                }
-            });
-        });
-        // Its size and intensity are those of Brush Settings, as for every
-        // tool: said here, set there.
-        ui.add_space(6.0);
+        // The brush: the one of the Brushes panel and Brush Settings, as on
+        // the map, said in a word; a click shows the Brushes panel.
         let b = tools.brush_3d();
         let most = massif_core::voxel::MAX_SCULPT_RADIUS;
         let capped = matches!(use3d, Use3d::Sculpt | Use3d::Smooth | Use3d::Paint) && tools.brush.radius > most;
-        let size = if capped { tr!("{most:.0} radius (the most in 3D)", most) } else { tr!("{radius:.0} radius", radius = b.radius) };
-        ui.label(RichText::new(tr!("{size} · {value:.0}%", value = b.strength * 100.0, size)).size(12.0).color(if capped { pal.accent } else { pal.weak }))
-            .on_hover_text(tr!("Size, intensity and rotation: in Brush Settings, as for every tool (⌘+wheel: size). In 3D a brush sculpts {most:.0} blocks around at most.", most));
+        let texture = library.thumbnail(ui.ctx(), &tools.brush_source, ui.visuals().dark_mode);
+        let brush_name = library.name(&tools.brush_source);
+        let tag = brush_tag(ui, texture, &brush_name, &format!("{:.0}", b.radius), capped, &format!("{:.0}%", b.strength * 100.0));
+        let tip = if capped {
+            tr!("Pick the brush in the Brushes panel; its size, intensity and rotation in Brush Settings. 3D Sculpt shapes {most:.0} blocks around at most.", most)
+        } else {
+            tr!("Pick the brush in the Brushes panel; its size, intensity and rotation in Brush Settings.").into()
+        };
+        show_brushes = tag.on_hover_text(tip).clicked();
         // What Paint paints: the terrain chosen (in Terrain or Blocks).
         if tools.tool == Tool::PaintTerrain {
             ui.add_space(6.0);
@@ -281,6 +246,44 @@ pub fn sculpt_toolbar(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
             ui.add(egui::Label::new(RichText::new(hint.as_ref()).size(11.5).color(pal.weak)).truncate());
         });
     });
+    show_brushes
+}
+
+/// The brush in hand, said in a word along 3D Sculpt's top: its picture,
+/// its name, its size (in the accent when 3D shapes less of it) and
+/// intensity. Frameless, as the header's commands: a click shows where to
+/// change it.
+fn brush_tag(ui: &mut Ui, texture: Option<egui::TextureId>, name: &str, size: &str, capped: bool, intensity: &str) -> egui::Response {
+    let pal = Palette::of(ui);
+    let font = egui::FontId::proportional(12.5);
+    let name = ui.painter().layout_no_wrap(name.to_owned(), font.clone(), pal.text);
+    let mut job = egui::text::LayoutJob::default();
+    let format = |color| egui::TextFormat { font_id: font.clone(), color, ..Default::default() };
+    job.append(" · ", 0.0, format(pal.weak));
+    job.append(size, 0.0, format(if capped { pal.accent } else { pal.weak }));
+    job.append(" · ", 0.0, format(pal.weak));
+    job.append(intensity, 0.0, format(pal.weak));
+    let rest = ui.painter().layout_job(job);
+    let (rect, response) = ui.allocate_exact_size(vec2(8.0 + 18.0 + 6.0 + name.size().x + rest.size().x + 10.0, 26.0), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name.text()));
+    if response.hovered() {
+        ui.painter().rect_filled(rect, theme::PILL, theme::mix(pal.panel, pal.text, 0.07));
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let picture = Rect::from_center_size(pos2(rect.left() + 17.0, rect.center().y), vec2(18.0, 18.0));
+    match texture {
+        Some(tex) => {
+            ui.painter().image(tex, picture, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        }
+        None => {
+            ui.painter().text(picture.center(), egui::Align2::CENTER_CENTER, theme::glyph(Icon::Brush), egui::FontId::proportional(14.0), pal.weak);
+        }
+    }
+    let x = rect.left() + 32.0;
+    let name_w = name.size().x;
+    ui.painter().galley(pos2(x, rect.center().y - name.size().y / 2.0), name, pal.text);
+    ui.painter().galley(pos2(x + name_w, rect.center().y - rest.size().y / 2.0), rest, pal.weak);
+    response
 }
 
 /// A row like [`slider_row`] that says what the setting is for.
@@ -720,9 +723,11 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
 // --------------------------------------------------------------- brushes --
 
 /// A brush thumbnail button.
-fn brush_button(ui: &mut Ui, texture: Option<egui::TextureId>, selected: bool, size: f32) -> egui::Response {
+fn brush_button(ui: &mut Ui, texture: Option<egui::TextureId>, name: &str, selected: bool, size: f32) -> egui::Response {
     let pal = Palette::of(ui);
     let (rect, response) = ui.allocate_exact_size(vec2(size, size), Sense::click());
+    // A picture to click, named for screen readers (not a button of words).
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Image, true, selected, name));
     let fill = if selected {
         pal.accent_soft
     } else if response.hovered() {
@@ -763,7 +768,7 @@ fn brush_grid(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibrary, br
         for (source, name) in brushes {
             let texture = library.thumbnail(&ctx, source, dark);
             let selected = tools.brush_source == *source;
-            let response = brush_button(ui, texture, selected, 44.0);
+            let response = brush_button(ui, texture, name, selected, 44.0);
             let response = if response.hovered() {
                 let shape = library.brush(source, &tools.brush);
                 crate::cards::brush(response, name, &format!("{source:?}"), shape.as_ref())
@@ -922,7 +927,7 @@ pub fn custom_brushes_panel(ui: &mut Ui, tools: &mut ToolState, library: &mut Br
 /// Size, intensity and rotation of the brush, with a preview, then the
 /// options that limit where it acts (WorldPainter's brush options).
 #[allow(clippy::too_many_arguments)]
-pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibrary, reg: &Registry, min_y: i32, max_y: i32, light: f32, heights: Option<&crate::doc::Heights>, sea: i32) {
+pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLibrary, reg: &Registry, min_y: i32, max_y: i32, light: f32, heights: Option<&crate::doc::Heights>, sea: i32, sculpt_3d: bool) {
     let pal = Palette::of(ui);
     let dark = ui.visuals().dark_mode;
     ui.spacing_mut().slider_width = (ui.available_width() - label_width(ui) - 4.0 - 84.0).clamp(30.0, 260.0);
@@ -953,6 +958,17 @@ pub fn brush_settings(ui: &mut Ui, tools: &mut ToolState, library: &mut BrushLib
     slider_row(ui, tr!("Size"), |ui| {
         ui.add(crate::widgets::Field::new(&mut b.radius, 1.0..=MAX_RADIUS).logarithmic(true).suffix(tr!(" radius")).max_decimals(0))
     });
+    // In 3D Sculpt, the tools that shape and paint matter take no more than
+    // their reach: said by the size, in the accent when it is passed.
+    let most = massif_core::voxel::MAX_SCULPT_RADIUS;
+    if sculpt_3d && matches!(tools.tool.in_3d(), crate::tools::Use3d::Sculpt | crate::tools::Use3d::Smooth | crate::tools::Use3d::Paint) {
+        let over = tools.brush.radius > most;
+        ui.horizontal(|ui| {
+            ui.add_space(label_width(ui) + ui.spacing().item_spacing.x);
+            ui.label(RichText::new(tr!("3D Sculpt takes {most:.0} at most", most)).size(11.5).color(if over { pal.accent } else { pal.weak }));
+        });
+    }
+    let b = &mut tools.brush;
     slider_row(ui, tr!("Intensity"), |ui| {
         ui.add(
             crate::widgets::Field::new(&mut b.strength, 0.01..=1.0)

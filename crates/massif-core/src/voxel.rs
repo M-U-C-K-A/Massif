@@ -762,6 +762,79 @@ pub fn surface_frame(dim: &Dimension, hit: &Hit, origin: [f64; 3], dir: [f64; 3]
     Frame { center, normal }
 }
 
+/// The surface under a brush of `radius` where a ray hit it: the point of
+/// [`surface_frame`], facing the way the land faces over the brush's whole
+/// area ([`mean_normal`]), so that the one-block steps of a slope, a riser
+/// pointed at, do not turn the brush sideways.
+pub fn brush_frame(dim: &Dimension, hit: &Hit, origin: [f64; 3], dir: [f64; 3], radius: f32) -> Frame {
+    let near = surface_frame(dim, hit, origin, dir);
+    let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-9);
+    let toward = [(-dir[0] / len) as f32, (-dir[1] / len) as f32, (-dir[2] / len) as f32];
+    Frame {
+        center: near.center,
+        normal: mean_normal(dim, near.center, radius, toward, near.normal),
+    }
+}
+
+/// The widest a brush's surface is averaged over, in blocks of radius: wide
+/// enough to see past any step, small enough to read every frame.
+const MEAN_REACH: f32 = 16.0;
+
+/// The way the matter faces around `center`, over a ball of `radius` (3 to
+/// [`MEAN_REACH`] blocks): the mean of the faces between solid and air in
+/// it, each counting for its area and less toward the rim — the densities'
+/// differences summed over the ball. On a staircase the treads and the
+/// risers add up to the slope they make. Where that mean faces away from
+/// `toward` (the way to the eye: in a hollow, under an arch) or is none
+/// (all rock, all air), `fallback`.
+pub fn mean_normal(dim: &Dimension, center: [f32; 3], radius: f32, toward: [f32; 3], fallback: [f32; 3]) -> [f32; 3] {
+    let w = radius.clamp(3.0, MEAN_REACH);
+    let c = [center[0].floor() as i32, center[1].floor() as i32, center[2].floor() as i32];
+    let r = w.ceil() as i32 + 1;
+    let field = Field::gather(dim, [c[0] - r, c[1] - r, c[2] - r], [c[0] + r + 1, c[1] + r + 1, c[2] + r + 1], 0);
+    let mut g = [0f64; 3];
+    for y in c[1] - r..c[1] + r {
+        for z in c[2] - r..c[2] + r {
+            for x in c[0] - r..c[0] + r {
+                let here = field.at(x, y, z);
+                for (a, next) in [(0, [x + 1, y, z]), (1, [x, y + 1, z]), (2, [x, y, z + 1])] {
+                    let step = field.at(next[0], next[1], next[2]) - here;
+                    if step == 0.0 {
+                        continue;
+                    }
+                    // The face between the two blocks, from the centre.
+                    let mut f = [x as f32 + 0.5 - center[0], y as f32 + 0.5 - center[1], z as f32 + 0.5 - center[2]];
+                    f[a] += 0.5;
+                    let d = (f[0] * f[0] + f[1] * f[1] + f[2] * f[2]).sqrt();
+                    if d < w {
+                        g[a] += (step * (1.0 - d / w)) as f64;
+                    }
+                }
+            }
+        }
+    }
+    let l = (g[0] * g[0] + g[1] * g[1] + g[2] * g[2]).sqrt();
+    if l < 1e-3 {
+        return fallback;
+    }
+    // Out of the matter: against the densities' rise.
+    let n = [(-g[0] / l) as f32, (-g[1] / l) as f32, (-g[2] / l) as f32];
+    if n[0] * toward[0] + n[1] * toward[1] + n[2] * toward[2] < 0.05 { fallback } else { n }
+}
+
+/// The way a brush that raises and lowers the land works on a surface
+/// facing `n`: straight up on gentle slopes (up to 25°), on the columns as
+/// on the map; along the surface on steep ones (from 40°: cliffs, walls,
+/// ceilings), into overhangs and caves; between the two, a blend.
+pub fn upright(n: [f32; 3]) -> [f32; 3] {
+    let (gentle, steep) = (25f32.to_radians().cos(), 40f32.to_radians().cos());
+    let t = ((gentle - n[1]) / (gentle - steep)).clamp(0.0, 1.0);
+    let t = t * t * (3.0 - 2.0 * t);
+    let m = [n[0] * t, 1.0 - t + n[1] * t, n[2] * t];
+    let l = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2]).sqrt();
+    if l < 1e-3 { n } else { [m[0] / l, m[1] / l, m[2] / l] }
+}
+
 /// Two directions along a surface facing `n`: the first as close as can be
 /// to east, the second to south, so that a brush keeps the turn it has on
 /// the map.
@@ -1739,6 +1812,71 @@ mod tests {
             eprintln!("{name}: grew {:.1} blocks in two seconds", first.distance - last.distance);
             assert!(first.distance - last.distance >= 8.0, "{name}: grew {:.1} blocks in two seconds", first.distance - last.distance);
         }
+    }
+
+    /// A grassy slope of one-block steps (2.5 blocks deep, 21.8°): the brush
+    /// faces the slope wherever it points — a tread, a riser, from above or
+    /// aslant — within a few degrees, where the face under the cursor
+    /// turned it sideways; and a Raise there works straight up, on the
+    /// columns the map's Raise takes.
+    #[test]
+    fn a_brush_faces_a_stepped_slope_not_its_steps() {
+        let mut w = world();
+        let step = |x: i32| 64 + (0.4 * x.clamp(-60, 60) as f32).floor() as i32;
+        for z in -2..2 {
+            for x in -2..2 {
+                let pos = TilePos::new(x, z);
+                let tile = w.dims[0].ground_mut().tile_mut(pos).unwrap();
+                for lz in 0..TILE_SIZE {
+                    for lx in 0..TILE_SIZE {
+                        tile.top.set(local_index(lx, lz), step(pos.x * TILE_SIZE + lx) as f32);
+                    }
+                }
+            }
+        }
+        let slope = {
+            let l = (0.4f32 * 0.4 + 1.0).sqrt();
+            [-0.4 / l, 1.0 / l, 0.0]
+        };
+        let angle = |n: [f32; 3]| (n[0] * slope[0] + n[1] * slope[1] + n[2] * slope[2]).clamp(-1.0, 1.0).acos().to_degrees();
+        let (mut worst, mut worst_face, mut risers) = (0f32, 0f32, 0);
+        for k in 0..40 {
+            let x = -20.0 + k as f64;
+            for dir in [[0.0, -1.0, 0.0], [0.8, -0.6, 0.0], [0.6, -0.5, 0.62], [0.95, -0.3, 0.0]] {
+                let origin = [x + 0.5 - dir[0] * 60.0, 64.0 + 0.4 * x - dir[1] * 60.0, 4.5 - dir[2] * 60.0];
+                let Some(hit) = raycast(&w.dims[0], origin, dir, 300.0) else { continue };
+                risers += (hit.normal.1 == 0) as usize;
+                for radius in [4.0, 8.0, 24.0] {
+                    worst = worst.max(angle(brush_frame(&w.dims[0], &hit, origin, dir, radius).normal));
+                }
+                worst_face = worst_face.max(angle(surface_frame(&w.dims[0], &hit, origin, dir).normal));
+            }
+        }
+        eprintln!("stepped slope: {risers} risers pointed at; the brush's normal at most {worst:.1}° off the slope (the face's, smoothed over 5 blocks: {worst_face:.1}°)");
+        assert!(risers > 10, "risers pointed at: {risers}");
+        assert!(worst < 6.0, "{worst:.1}° off the slope");
+        // A Raise of 8 on a tread: straight up, on the columns of the map's.
+        let origin = [3.5, 120.0, 4.5];
+        let hit = raycast(&w.dims[0], origin, [0.0, -1.0, 0.0], 300.0).unwrap();
+        let frame = brush_frame(&w.dims[0], &hit, origin, [0.0, -1.0, 0.0], 8.0);
+        let up = upright(frame.normal);
+        assert!(up[1] > 0.999, "straight up on a gentle slope: {up:?}");
+        let tops = |w: &World| -> HashMap<(i32, i32), i32> { (-12..20).flat_map(|x| (-8..18).map(move |z| (x, z))).map(|(x, z)| ((x, z), spans_at(w, x, z).last().unwrap().y1)).collect() };
+        let before = tops(&w);
+        let mut map = w.clone();
+        let mut h = History::default();
+        h.begin("Raise 3D", 0);
+        displace_at(&mut h.edit(&mut w, 0), &brush(8.0), frame.center, up, 2.0, SculptMode::Add);
+        h.commit();
+        h.begin("Raise", 0);
+        crate::ops::raise(&mut h.edit(&mut map, 0), &brush(8.0), frame.center[0], frame.center[2], 2.0, crate::ops::Surface::Top);
+        h.commit();
+        let changed = |w: &World| -> HashSet<(i32, i32)> { tops(w).into_iter().filter(|(k, v)| before[k] != *v).map(|(k, _)| k).collect() };
+        let (in_3d, on_map) = (changed(&w), changed(&map));
+        let rim = |&(x, z): &(i32, i32)| ((x as f32 + 0.5 - frame.center[0]).hypot(z as f32 + 0.5 - frame.center[2]) - 8.0).abs() <= 1.0;
+        let apart: Vec<_> = in_3d.symmetric_difference(&on_map).filter(|c| !rim(c)).collect();
+        eprintln!("raise of 8: {} columns in 3D, {} on the map, {} apart off the rim", in_3d.len(), on_map.len(), apart.len());
+        assert!(on_map.len() > 150 && apart.is_empty(), "{apart:?}");
     }
 
     /// Matter pushed out of a wall is made of what the wall was made of:
