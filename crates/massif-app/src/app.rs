@@ -390,6 +390,8 @@ enum Dialog {
     /// Flood from the click on a spot that is not in a hollow: how far the
     /// water would spread, to flood anyway or not.
     FloodAsk(crate::tools::FloodAsk),
+    /// A script to run on the map: its parameters, its output.
+    Script(Box<crate::run_script::ScriptForm>),
 }
 
 struct Status {
@@ -3262,6 +3264,11 @@ impl MassifApp {
             Command::SmoothTerrain => self.dialog = Some(Dialog::Smooth(Box::new(crate::smooth_page::SmoothForm::new(self.doc.world.meta.smooth.clone(), &self.doc.world.registry, self.doc.dimension())))),
             Command::Caves => self.open_caves(),
             Command::ImportMask => self.pick_mask(ctx, false),
+            Command::RunScript => {
+                if let Some(path) = rfd::FileDialog::new().set_title(tr!("Script to run")).add_filter(tr!("Scripts"), &["lua", "js"]).pick_file() {
+                    self.dialog = Some(Dialog::Script(Box::new(crate::run_script::ScriptForm::new(path))));
+                }
+            }
             Command::RealTerrain => self.open_real(false),
             Command::FromRealPlace => self.open_real(true),
             Command::SavePoint => self.versions_action(ctx, crate::versions::Action::Make),
@@ -4656,6 +4663,30 @@ impl MassifApp {
                 }
                 if keep {
                     self.dialog = Some(Dialog::Caves(form));
+                }
+            }
+            Dialog::Script(mut form) => {
+                use crate::run_script::Choice;
+                let mut choice = Choice::Keep;
+                let response = modal(ctx, "run script").show(ctx, |ui| {
+                    choice = form.ui(ui);
+                });
+                // A running script is stopped from the dialog, not closed
+                // with it.
+                if response.should_close() && !form.running() {
+                    keep = false;
+                }
+                match choice {
+                    Choice::Keep => {}
+                    Choice::Close => keep = false,
+                    Choice::Run => {
+                        let copy = self.doc.world.snapshot();
+                        form.start(copy, self.doc.dim, self.doc.path.clone());
+                    }
+                    Choice::Apply(world, label) => self.doc.apply_script(*world, &label),
+                }
+                if keep {
+                    self.dialog = Some(Dialog::Script(form));
                 }
             }
             Dialog::ImportMask(mut form) => {
@@ -7579,6 +7610,68 @@ mod tests {
         assert!(above == Some(65) && below.is_some_and(|b| (85..=89).contains(&b)), "34 blocks down, finely: {below:?}");
         let (after, _, _): (Rect, f32, f32) = h.ctx.data(|d| d.get_temp(Id::unique("height profile"))).unwrap();
         assert_eq!(after, plot, "the panel did not scroll under the drags");
+    }
+
+    /// File ▸ Run Script…: a WorldPainter script asks for the parameters its
+    /// descriptor names, runs on the map, prints in the dialog, and what it
+    /// changed is one step to undo; an error says its line. Renders the
+    /// dialog before and after with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn a_script_runs_on_the_map() {
+        use egui_kittest::kittest::Queryable;
+        let scratch = std::env::temp_dir().join(format!("massif-run-script-{}", std::process::id()));
+        std::fs::create_dir_all(&scratch).unwrap();
+        let script = scratch.join("frost.js");
+        std::fs::write(
+            &script,
+            "// script.name=Frost up high\n// script.description=Frost over the land above a height.\n// script.param.above.type=integer\n// script.param.above.default=70\n// script.param.above.description=Lowest height with frost\n// script.param.report.type=boolean\n// script.param.report.default=true\n// script.param.report.displayName=Report\n// script.hideCmdLineParams=true\nvar frost = wp.getLayer().withName('Frost').go();\nvar high = wp.createFilter().aboveLevel(params['above']).go();\nwp.applyLayer(frost).toWorld(world).withFilter(high).go();\nif (params['report']) {\n    print('Frost above ' + params['above'] + ' on ' + dimension.getName());\n}\n",
+        )
+        .unwrap();
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(3);
+        let undo_before = h.state().doc.history.undo_count();
+        h.state_mut().dialog = Some(Dialog::Script(Box::new(crate::run_script::ScriptForm::new(script.clone()))));
+        h.run_steps(4);
+        assert!(h.query_by_label_contains("Frost up high").is_some(), "the script's name");
+        let out = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        if let Some(dir) = &out {
+            h.render().unwrap().save(dir.join("run-script-ready.png")).unwrap();
+        }
+        h.get_by_label("Run").click();
+        for _ in 0..600 {
+            h.run_steps(1);
+            if h.query_by_label_contains("Done in").is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(h.query_by_label_contains("Frost above 70 on Surface").is_some(), "what it printed");
+        assert!(h.query_by_label_contains("the map changed, one step to undo").is_some());
+        assert_eq!(h.state().doc.history.undo_count(), undo_before + 1);
+        assert_eq!(h.state().doc.history.undo_label(), Some("Script Frost up high"));
+        if let Some(dir) = &out {
+            h.render().unwrap().save(dir.join("run-script-done.png")).unwrap();
+        }
+        // An error, and its line.
+        std::fs::write(&script, "var a = 1;\nwp.applyLayer(null);\n").unwrap();
+        h.get_by_label("Run again").click();
+        for _ in 0..600 {
+            h.run_steps(1);
+            if h.query_by_label_contains("Error at line").is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(h.query_by_label_contains("Error at line 2; the map is as it was.").is_some());
+        assert!(h.query_by_label_contains("layer may not be null").is_some());
+        assert_eq!(h.state().doc.history.undo_count(), undo_before + 1, "a failed run changes nothing");
+        if let Some(dir) = &out {
+            h.render().unwrap().save(dir.join("run-script-error.png")).unwrap();
+        }
+        h.get_by_label("Close").click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none());
+        let _ = std::fs::remove_dir_all(&scratch);
     }
 
     fn harness(theme: ThemeChoice) -> egui_kittest::Harness<'static, MassifApp> {
@@ -13724,7 +13817,7 @@ mod tests {
     /// The water of a map at a few places, for the eye: the map
     /// MASSIF_WATER_VIEW_WORLD (a .massif), each place of
     /// MASSIF_WATER_VIEWS ("name:x,z,yaw,pitch,distance;…") drawn on the 2D
-    /// map (128 blocks around it, four pixels a block) and in the 3D view
+    /// map (the 256 blocks around it, four pixels a block) and in the 3D view
     /// (looking at it from `distance` blocks), saved as `<name>-2d.png` and
     /// `<name>-3d.png` in MASSIF_SNAPSHOT_DIR.
     #[test]
@@ -13772,7 +13865,9 @@ mod tests {
                 let app = h.state();
                 let dim = app.doc.dimension();
                 let style = crate::map_render::MapStyle { seed: app.doc.world.meta.seed, ..crate::map_render::MapStyle::default() };
-                let image = crate::map_render::render_region(dim, &app.doc.world.registry, app.doc.world.meta.sea_level as f32, style, 0, x - 64, z - 64, 1, 1);
+                // The 2 × 2 chunks of the map (128 blocks each) around it.
+                let (x0, z0) = ((x - 64).div_euclid(128) * 128, (z - 64).div_euclid(128) * 128);
+                let image = crate::map_render::render_region(dim, &app.doc.world.registry, app.doc.world.meta.sea_level as f32, style, 0, x0, z0, 2, 2);
                 let (w, d) = (image.width(), image.height());
                 let mut rgba = vec![0u8; w * d * 16 * 4];
                 for j in 0..d * 4 {

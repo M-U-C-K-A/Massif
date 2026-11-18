@@ -1,0 +1,10 @@
+{
+ "biome:minecraft:forest": 34059,
+ "biome:minecraft:swamp": 49884,
+ "biome:minecraft:taiga": 43520,
+ "height": 572341072,
+ "terrain:Clay": 676,
+ "terrain:Gravel": 1126,
+ "terrain:Sand": 6410,
+ "water": 6200
+}

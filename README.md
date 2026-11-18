@@ -154,6 +154,9 @@ structure files, painted as layers.
 
 - **WorldPainter import.** `.world` files are read directly, without Java: a
   100 MB world in about a second.
+- **WorldPainter scripts.** Your JavaScript scripts run as they are and give
+  WorldPainter's map: 600 masks in 8 seconds instead of 6 minutes
+  ([Scripts](docs/scripting.md)).
 - **Blocks from mods.** Any mod's blocks (Conquest Reforged's 17,000, Chipped,
   Macaw's…), in its own creative tabs, read from its instance in one click
   and exported for the version it plays, every block state the game's.

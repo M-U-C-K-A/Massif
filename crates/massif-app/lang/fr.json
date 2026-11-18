@@ -2916,5 +2916,25 @@
  "Water raised by {n} blocks, to {level}: height limit reached": {
   "one": "Eau montée de {n} bloc, à {level} : hauteur limite atteinte",
   "other": "Eau montée de {n} blocs, à {level} : hauteur limite atteinte"
- }
+ },
+ "Run": "Exécuter",
+ "Run Script…": "Exécuter un script…",
+ "Script to run": "Script à exécuter",
+ "{name} (optional)": "{name} (facultatif)",
+ "Arguments, one a line": "Arguments, un par ligne",
+ "Running…": "En cours…",
+ "What the script prints shows here.": "Ce que le script affiche apparaît ici.",
+ "Running · {elapsed:.0} s": "En cours · {elapsed:.0} s",
+ "Done in {secs:.2} s: the map changed, one step to undo.": "Terminé en {secs:.2} s : la carte a changé, une étape à annuler.",
+ "Done in {secs:.2} s: the map did not change.": "Terminé en {secs:.2} s : la carte n’a pas changé.",
+ "The script ended with code {code}; the map is as it was.": "Le script s’est arrêté avec le code {code} ; la carte est restée telle quelle.",
+ "Stopped; the map is as it was.": "Arrêté ; la carte est restée telle quelle.",
+ "Error at line {line}; the map is as it was.": "Erreur à la ligne {line} ; la carte est restée telle quelle.",
+ "Error; the map is as it was.": "Erreur ; la carte est restée telle quelle.",
+ "Run again": "Relancer",
+ "Copy output": "Copier la sortie",
+ "Script {name}": "Script {name}",
+ "Scripts": "Scripts",
+ "A script run on the map: one of Massif's, in Lua, or one of WorldPainter's, as it is": "Un script exécuté sur la carte : un de Massif, en Lua, ou un de WorldPainter, tel quel",
+ "A script: one of Massif's, in Lua, or one of WorldPainter's, run as it is.": "Un script : un de Massif, en Lua, ou un de WorldPainter, exécuté tel quel."
 }

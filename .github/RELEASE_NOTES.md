@@ -263,6 +263,63 @@ The brush also faces the way the land faces over its whole area rather than the 
 
 **A real place in the blocks of your choice.** Edit ▸ Relief of a Real Place… and File ▸ New World from a Real Place… now have the Blocks menu of the New map dialog: Vanilla, your own palettes, and those of the mods whose blocks are loaded, such as Conquest Reforged. A new world from a real place is made of the palette chosen. Into an existing map the menu starts on the map's palette; picking another one switches the map's palette along with the relief, and one undo takes both back.
 
+**The 3D View's wheel brings you right down to the land.** Turning the wheel in the 3D View came closer to the point the view turns about, which on a large map is high over the land: the view stopped tens or hundreds of blocks over the ground and could not come nearer. The wheel now flies toward the land under the cursor, down to a few blocks over it whatever the size of the map, slowing as it nears it, and the view then turns about that point; over the sea it stops at the water's surface instead of going under it. Alt + wheel comes closer around the point the view turns about, as the wheel alone did. Reported by Chonky cow cat.
+
+
+**Flood raises the water you click, whatever the Water height**
+
+A click with Flood on a lake, a river or the sea raises it a block, and holding the button keeps raising it, whatever Water height is chosen: Where I click, Sea level and Fixed now only set the level of a new fill on dry land. Before, with Fixed at y 63, a click on a lake at y 63 did nothing and told you to switch to Where I click, although the height limit was off. The tag by the cursor says what the click will do, "Fill to y 63" or "Raise this water to y 64", and the only stop is a real one: "Height limit y 80 reached" when the limit is on, or the rim of the hollow when the warning is on.
+
+
+**Every block up close in the 3D views of huge maps.** On a map too large for the graphics card to hold every block, the 3D View and 3D Sculpt drew it with a column every 2, 4 or 8 blocks even up close, untextured blocks several wide where the player sees one. Once the eyes come low over the land, the views now draw every block, with the game's textures, over about 3 km around them, ready a second or so after you stop, and again as you move on; the rest of the map is drawn as before, and the first view of the whole map still comes within two seconds. Reported by Chonky cow cat.
+
+
+**Even margins in the panels' headers, and messages that stay off the panels**
+
+The commands in a panel's header sit on its middle line and follow the panel's rounded corner, their text lined up with the panel's content; the "…" menu stays inside the panel's corner even when the header is too narrow for everything, what does not fit fading out before it instead of pushing it over the edge. Messages now show over the bottom right of the map, above its footer, instead of over the Levels and Info panels. The names of settings beside sliders and menus (Speed, Size, Edit, Name…) start at the panel's edge like the rest, instead of floating in the middle of their column, and the map's name in Info ends where the other fields end. The tag by the cursor over the map folds a long note and keeps clear of the map's edges.
+
+
+**Relief of a Real Place and Caves fit a low window.** In a window under about 760 points high, the bottom of the Relief of a Real Place dialog and of the Caves dialog, their Apply, Carve and Cancel buttons included, was below the window, to be scrolled to. The real place's map of tiles and preview now shrink to the room there is, and Caves lays its settings in two columns, so that both dialogs show whole, buttons included, down to a window 640 points high.
+
+
+**Terrain, World, Render: the sides in the order of the work**
+
+The switcher at the top left now reads Terrain, World, Render, in the order a map is made: its relief generated, then edited, then shown. Render, marked Beta, is the side where Massif 2.0 will make path-traced images of your map, with the game's textures under a real sky; until then it says what it will be. Each side still comes back on the workspace it was left on, and the layouts you saved are kept as they were.
+
+
+**Choose the home screen's background**
+
+Settings ▸ Appearance ▸ **Home background** offers four backgrounds, shown alive in a picture above their few settings: **Ridges** (the mountains under a glow, made of dots, still the default, now in five palettes, with their height, glow and number of ranges), **Waves** (smooth bands of colour that rise from the foot and melt into each other, as at sunset), **Pixel** (the same waves in large square pixels) and **Prism** (crisp columns of colour drawing a crest, a valley, a tide, a slant or a lens, that expand, gather or breathe). Waves and Pixel come in six palettes, among them one that follows your accent colour, and Prism in six of its own; each palette shows its colours beside its name. Waves can be broader or softer and rise from any side. In the light theme they turn to calm pastels, and over Waves, Pixel and Prism the new map's settings sit on a solid surface. They look right without touching anything, keep the words over them legible in the light theme, the dark one and high contrast, cost almost nothing, and stand still with Reduce motion.
+
+
+**A river never runs into a lake that stands higher than it.** A river let go at a spring with the River tool fills the hollows on its way with lakes; dug wide and deep (a large width, flow, depth or erosion), its water lay several blocks under the land, so it reached a lake from below: the lake stood up to seven blocks over the river that fed it and spilled back into its channel, its water rising downstream. Above a lake it crosses, a river now stands at the lake's level at least. A branch, a river laid out from water already there, never stands over the river it leaves either.
+
+**No more pit where a river runs off the edge of the map.** A river dug with the River tool that ran off the edge of the map took the land past the edge for the bottom of the world: its water dived over its last blocks and its bed was dug into a pit at the edge, down to y 14 for a narrow river on a plain. It now keeps the level of the land at the edge.
+
+**Water stays still in the game along the edges between tiles.** The export works out the water of a map 128 blocks at a time; where a river or a lake crossed the edge between two such tiles, each side was worked out without what the other wrote, and the first block a player changed nearby set the water moving there: flowing water evened out, and sources appeared (up to 9,000 blocks on a plain crossed by a wide river). The tiles are now made to agree along their edges before the world is written.
+
+**Lowering the shore of a lake widens it.** Lowering, flattening or smoothing the land beside a lake or a river under the level of its water left a dry hole beside it, which the game then filled with running water. The water now flows into the land lowered beside it, across everything the stroke lowered.
+
+**WorldPainter's River layer keeps its water in its bed on a slope.** Painted across a hillside, the River layer's water stood over the lower bank and ran out over the land in the game; the bank now rises back to hold it, or the water goes down to what holds it.
+
+
+**Smooth terrain.** Edit ▸ Smooth terrain… builds the top of the land in partial blocks when the map is exported, following its precise height instead of whole blocks: layers by eighths, slabs, stairs facing each step (inner and outer ones in the corners), vertical slabs at the foot of cliffs and corner pieces, each from the block painted there, of the game or a mod. One switch turns it on for the whole map, and the smoothing follows the terrain: repaint grass as sand and its pieces change with it, with no layer to keep in step by hand. The page sets the pieces each terrain may use; the defaults come from the game and from the mods' profiles, Conquest Reforged's giving its soils layers and its rock the whole range of its models. Pieces in water are waterlogged, and the 3D View shows them. The Smoothing brush turns it on or off in places, or lays a slab of your choice. Asked for by Jack, Fenrir and the builders of Conquest Reforged maps.
+
+
+**The theme button is gone from the title bar**
+
+The sun and moon button at the right end of the title bar is gone. The theme follows the system unless you choose Light or Dark in Settings ▸ Appearance or in the View menu, and a theme you had chosen with the button is kept. The right end of the bar stays free, for a button to come.
+
+
+**Flood puts water where you click, and the River tool's points stay where you put them**
+
+Flood's Where I click, now what Flood is set to until you pick another height, puts water wherever you click: in the hollow under the click, or, on a slope or a hilltop, in the hollow the water runs down into, shown by the cursor with a ring before you click; puddles of a few columns are run past, and where the water would run into the sea or off the map, it fills the nearest hollow around the click. With Fixed or Sea level under the land clicked, it fills that hollow instead of saying "Dry here", and says so. Only where no hollow is near does it still ask how far to flood. The River tool adds a point exactly where you click, at the end, and never moves the points already laid: before, a third click moved the end instead of adding a point. A click on the river puts a point between the two that stretch joins, the points are numbered, a click on a handle without dragging leaves it where it is, a right click takes a point away and the others stay, and a quick click on a slow frame is no longer lost. A click on Dig river or Cancel in the bar over the map digs or drops the river instead of going through to the map and adding a point behind it (Build road and Cancel too, and the 3D view's walk bar), and the messages at the map's corner stay above that bar, where they covered Cancel.
+
+
+**WorldPainter's scripts run in Massif**
+
+File ▸ Run Script… runs a WorldPainter JavaScript script on the open map as it is: its height maps and masks, layers (WorldPainter's own and `.layer` files), terrains and custom `.terrain` files, filters, and worlds made from height maps, saved and exported. The dialog asks for the script's parameters, shows what it prints and the line of an error, has a progress bar and Stop, and the whole run is one step to undo. On the command line, `massif-cli script my.js arguments…` runs one too. Scripts give the map WorldPainter gives, checked column by column against WorldPainter itself, and fast: 600 masks on a 4096 × 4096 map take 8 seconds, where WorldPainter takes 6 minutes. What Massif does not do yet stops the script with "… is not supported yet". A script may only use files in its folder or ones you give it, and has no network. See docs/scripting.md and "Coming from WorldPainter scripts".
+
 ## New in 0.6.0
 
 **Massif in French and German.** The whole interface (menus, panels, tools and their cards, tooltips, dialogs, the home screen, Settings and the macOS menu bar) is now also in French and in German, in the words Minecraft and WorldPainter players use. Massif follows the system's language by default; **Settings ▸ Appearance ▸ Language** picks another, and the change applies at once, without a restart. A text not yet translated shows in English rather than in pieces, and the help and the online guide stay in English for now. Names that belong to your map (layers, levels, workspaces you renamed) stay as you wrote them.

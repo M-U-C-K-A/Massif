@@ -1,3 +1,0 @@
-**Flood raises the water you click, whatever the Water height**
-
-A click with Flood on a lake, a river or the sea raises it a block, and holding the button keeps raising it, whatever Water height is chosen: Where I click, Sea level and Fixed now only set the level of a new fill on dry land. Before, with Fixed at y 63, a click on a lake at y 63 did nothing and told you to switch to Where I click, although the height limit was off. The tag by the cursor says what the click will do, "Fill to y 63" or "Raise this water to y 64", and the only stop is a real one: "Height limit y 80 reached" when the limit is on, or the rim of the hollow when the warning is on.

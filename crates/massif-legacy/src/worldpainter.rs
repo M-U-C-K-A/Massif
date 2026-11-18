@@ -580,6 +580,26 @@ fn damaged(e: JavaError, progress: &ImportProgress) -> ImportError {
     }
 }
 
+/// A WorldPainter `.terrain` file (a custom terrain, a `MixedMaterial`
+/// Java-serialised and gzipped, as its Export writes it): its name, its
+/// blocks with their counts and its colour.
+pub fn read_terrain_file(bytes: &[u8]) -> Result<CustomMaterial, String> {
+    let mut raw = Vec::new();
+    let data: &[u8] = if bytes.starts_with(&[0x1f, 0x8b]) {
+        GzDecoder::new(bytes).take(16 << 20).read_to_end(&mut raw).map_err(|_| "not a WorldPainter custom terrain file".to_owned())?;
+        &raw
+    } else {
+        bytes
+    };
+    let mut parser = Parser::new(data).map_err(|_| "not a WorldPainter custom terrain file".to_owned())?;
+    let value = match parser.next_object() {
+        Ok(Some(v @ Value::Ref(_))) => v,
+        Ok(_) => return Err("not a WorldPainter custom terrain file".into()),
+        Err(e) => return Err(format!("a WorldPainter custom terrain file that could not be read: {e:?}")),
+    };
+    read_mixed(&parser.arena, value).filter(|m| !m.rows.is_empty()).ok_or_else(|| "not a WorldPainter custom terrain file".to_owned())
+}
+
 pub(crate) fn read_mixed(a: &Arena, v: Value) -> Option<CustomMaterial> {
     if !a.class_name(v)?.ends_with("MixedMaterial") {
         return None;

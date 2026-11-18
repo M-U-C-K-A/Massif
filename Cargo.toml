@@ -17,6 +17,7 @@ massif-assets = { path = "crates/massif-assets" }
 massif-objects = { path = "crates/massif-objects" }
 massif-thumbnails = { path = "crates/massif-thumbnails" }
 massif-render = { path = "crates/massif-render" }
+massif-script = { path = "crates/massif-script" }
 
 rayon = "1.12"
 zstd = "0.14"

@@ -294,6 +294,21 @@ fn check_step(world: &mut World, step: Step, course: Course) -> Found {
     h.commit();
     let after = state(world);
     let check = massif_core::water::check(&world.dims[0]);
+    if std::env::var_os("MASSIF_WATER_SPILLS").is_some() && check.spills > before_check.spills {
+        // Where the water spills, and the ground and water around it.
+        let mut at = Vec::new();
+        for p in world.dims[0].ground().positions() {
+            massif_core::water::check_tile_with(&world.dims[0], p, &mut |x, y, z, k| {
+                if k == massif_core::water::Problem::Spill && at.len() < 6 {
+                    at.push((x, y, z));
+                }
+            });
+        }
+        for (x, y, z) in at {
+            let near: Vec<String> = [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)].iter().map(|(dx, dz)| format!("{:?}", column(world, x + dx, z + dz))).collect();
+            eprintln!("  spill at {x},{y},{z}: here, +x, -x, +z, -z {}", near.join(" "));
+        }
+    }
     let mut found = Found {
         spills: check.spills as i64 - before_check.spills as i64,
         floating: check.floating as i64 - before_check.floating as i64,
@@ -832,7 +847,9 @@ fn water_holds_on_every_map() {
     // Water laid where nothing holds it (a stroke of the Water brush down a
     // slope, a flood kept inside a selection) runs out once exported, as
     // the game would have it: only its spills are allowed.
-    let held = |name: &str| !name.contains(" brush-") && !name.contains("-selection");
+    // So does a lake whose rim a stroke lowers through: the water fills the
+    // breach and runs out of it, onto land lower than the lake before.
+    let held = |name: &str| !name.contains(" brush-") && !name.contains("-selection") && !name.contains(" shore");
     let broken: Vec<&&(String, Found)> = bad.iter().filter(|r| r.1.floating > 0 || r.1.unsettled > 0 || r.1.rises > 0 || !r.1.undo || !r.1.redo || (r.1.spills > 0 && held(&r.0))).collect();
     assert!(broken.is_empty(), "{broken:#?}");
 }

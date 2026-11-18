@@ -587,6 +587,22 @@ impl Mapper {
     }
 }
 
+/// The WorldPainter terrain (its ordinal in `Terrain.VALUES`) that
+/// terrain `id` of `reg` stands for, as [`Mapper::terrain`] maps them the
+/// other way: the first of WorldPainter's terrains made that terrain, by
+/// name. `None` for a terrain WorldPainter does not have (custom terrains
+/// included, which only their map knows).
+pub fn ordinal_of(reg: &Registry, id: u16) -> Option<u8> {
+    let name = &reg.terrains.get(id as usize)?.name;
+    TERRAINS.iter().position(|wp| {
+        !wp.starts_with("CUSTOM_")
+            && match builtin(wp) {
+                Target::Existing(n) => n.eq_ignore_ascii_case(name),
+                Target::New { name: n, .. } => n.eq_ignore_ascii_case(name),
+            }
+    }).map(|k| k as u8)
+}
+
 /// The terrain id a Massif terrain name resolves to, for tests.
 pub fn massif_terrain(reg: &Registry, name: &str) -> Option<TerrainId> {
     reg.terrain_by_name(name)
