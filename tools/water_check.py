@@ -18,12 +18,18 @@ unless --accept-eula is given.
 
   tools/water_check.py --world my.massif --box -1300,60,-960 --version 1.21.11 \\
       --minecraft "/Volumes/T7 Shield/minecraft/Install" --accept-eula
+
+With --auto N, it also picks N boxes itself: where the map's water has the
+most steps, falls and spills (as `massif-cli water` finds them), the places
+where the export writes running water and the game would move it if
+anything were wrong.
 """
 
 import argparse
 import io
 import os
 import queue
+import re
 import shutil
 import struct
 import subprocess
@@ -180,12 +186,49 @@ def water_key(state):
     return state.split("[", 1)[0]
 
 
+def auto_boxes(cli: Path, world: Path, n: int):
+    """The `n` boxes holding the most of the places where the water of
+    `world` steps, falls or spills, as `massif-cli water` lists them: a box
+    at a time, the points it holds left out of the next."""
+    out = subprocess.run([str(cli), "water", str(world)], env={**os.environ, "MASSIF_WATER_WHERE": "all"}, capture_output=True, text=True, check=True).stdout
+    points = []
+    for line in out.splitlines():
+        m = re.match(r"(\w+) at (-?\d+) (-?\d+) (-?\d+)", line)
+        if m:
+            points.append((m[1], int(m[2]), int(m[3]), int(m[4])))
+    kinds = {}
+    for k, *_ in points:
+        kinds[k] = kinds.get(k, 0) + 1
+    print(f"the map's water: {kinds or 'no steps, falls or spills'}")
+    boxes = []
+    left = points
+    while left and len(boxes) < n:
+        count = {}
+        for _, x, y, z in left:
+            for ox in (0, 16):
+                for oy in (0, 16):
+                    for oz in (0, 16):
+                        key = (((x - ox) // SIDE) * SIDE + ox, ((y - 8 - oy) // SIDE) * SIDE + oy + 8, ((z - oz) // SIDE) * SIDE + oz)
+                        count[key] = count.get(key, 0) + 1
+        (bx, by, bz), _ = max(count.items(), key=lambda kv: (kv[1], kv[0]))
+        box = (bx, by, bz, bx + SIDE, by + SIDE, bz + SIDE)
+        inside = [p for p in left if bx <= p[1] < bx + SIDE and by <= p[2] < by + SIDE and bz <= p[3] < bz + SIDE]
+        what = {}
+        for k, *_ in inside:
+            what[k] = what.get(k, 0) + 1
+        print(f"box {box[:3]} holds {what}")
+        boxes.append(box)
+        left = [p for p in left if p not in inside]
+    return boxes
+
+
 # --------------------------------------------------------------- main ----
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--world", required=True, type=Path)
-    ap.add_argument("--box", action="append", required=True, help="a box of 32 blocks a side from its lowest corner, as x,y,z")
+    ap.add_argument("--box", action="append", default=[], help="a box of 32 blocks a side from its lowest corner, as x,y,z")
+    ap.add_argument("--auto", type=int, default=0, help="also the N boxes with the most steps, falls and spills of the map's water")
     ap.add_argument("--version", default="1.21.11")
     ap.add_argument("--minecraft", type=Path, default=Path.home() / "Library/Application Support/minecraft")
     ap.add_argument("--java")
@@ -200,6 +243,10 @@ def main() -> int:
         x, y, z = (int(v) for v in b.split(","))
         boxes.append((x, y, z, x + SIDE, y + SIDE, z + SIDE))
     cli = ROOT / "target/release/massif-cli"
+    if args.auto:
+        boxes += auto_boxes(cli, args.world, args.auto)
+    if not boxes:
+        ap.error("no box to check: give --box or --auto")
     work = Path(tempfile.mkdtemp(prefix="massif-water-check-"))
     world_dir = work / "massif-check"
     env = dict(os.environ)
