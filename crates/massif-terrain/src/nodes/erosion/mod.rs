@@ -3,6 +3,11 @@
 //! (`Kernel::Global`), each with a CPU kernel and, where it can, a GPU one
 //! ([`crate::kernel::GlobalGpuFn`]); its WGSL lives in this folder.
 
+mod common;
+mod flow;
+mod stream;
+mod water;
+
 use crate::nodes::height_out;
 use crate::gpu::{Gpu, GpuGrid};
 use crate::kernel::{Ctx, Grid, Uniforms};
@@ -10,7 +15,61 @@ use crate::registry::{Family, Kernel, NodeSpec, ParamSpec, PortKind, PortSpec, S
 use rayon::prelude::*;
 
 /// The node types of this family, in the library's order.
-pub static NODES: &[&NodeSpec] = &[&THERMAL];
+pub static NODES: &[&NodeSpec] = &[&STREAM, &THERMAL, &FLOW];
+
+/// The masks every erosion node gives beside its height, named as the Map
+/// Output's inputs are.
+const FLOW_OUT: PortSpec = PortSpec::new("flow", "Flow", PortKind::Mask, "Where water runs: 1 in the largest rivers, fading up the smallest rills.");
+const WEAR_OUT: PortSpec = PortSpec::new("wear", "Wear", PortKind::Mask, "Where the water wore the ground away, the most where it cut the most: river beds, gullies.");
+const DEPOSITION_OUT: PortSpec = PortSpec::new("deposition", "Deposition", PortKind::Mask, "Where what was worn away came to rest: fans, valley floors, deltas.");
+const SEDIMENT_OUT: PortSpec = PortSpec::new("sediment", "Sediment", PortKind::Mask, "How much sediment the water carries at the end: muddy rivers, gravel beds.");
+
+const HARDNESS_IN: PortSpec = PortSpec::new("hardness", "Hardness", PortKind::Mask, "Rock that resists: 1 wears twenty times slower than 0.").or("soft rock everywhere");
+const RAIN_IN: PortSpec = PortSpec::new("rain", "Rain", PortKind::Mask, "How much rain falls where: a rainfall map, a rain shadow.").or("the same rain everywhere");
+
+pub static STREAM: NodeSpec = NodeSpec {
+    id: "erosion.stream",
+    label: "Stream erosion",
+    family: Family::Simulate,
+    summary: "Rivers cut valleys that branch up into every slope, leaving sharp ridges between them, and lay what they carry down where they slow.",
+    help: "The erosion that makes mountains look like mountains: water gathers into streams, the more of it the deeper they cut (stream power), their walls fall back to the talus angle, and the sediment settles at the feet of slopes, on valley floors and at the sea. Use it after shapes and noise to turn lumps into ranges drained by real valleys; follow it with Particle erosion for small gullies and Thermal erosion for scree. Strength is how far the rivers cut back into the land; Hardness keeps some rock standing; Rain gives more water where it falls.",
+    keywords: &["fluvial", "rivers", "valleys", "drainage", "dendritic", "stream power", "incision", "erosion"],
+    inputs: &[
+        PortSpec::new("height", "Height", PortKind::Height, "The relief to erode."),
+        HARDNESS_IN,
+        RAIN_IN,
+        PortSpec::new("uplift", "Uplift", PortKind::Mask, "Where the land rises while the rivers cut, as much as Rebuild says.").or("the relief itself: the higher, the more"),
+    ],
+    outputs: &[height_out("The relief eroded."), FLOW_OUT, WEAR_OUT, DEPOSITION_OUT, SEDIMENT_OUT],
+    params: &[
+        ParamSpec::float("strength", "Strength", Unit::Ratio, 1.0, 0.0, 20.0, "How hard the rivers cut: higher, deeper valleys reaching further up into the land.").soft(0.0, 4.0),
+        ParamSpec::float("rebuild", "Rebuild", Unit::Ratio, 1.0, 0.0, 1.0, "How much of the relief rises while the rivers cut, then is brought back to its height: 1 turns any shape into mountains carved by their rivers; 0 only cuts valleys into it, down to the sea and the low ground."),
+        ParamSpec::int("iterations", "Iterations", 200, 10, 2000, "Steps at each level of the simulation: more, finer valleys reaching further, slower."),
+        ParamSpec::float("talus", "Talus angle", Unit::Degrees, 55.0, 10.0, 80.0, "The steepest the valleys' walls stand: lower, wider valleys and rounder ridges."),
+        ParamSpec::float("deposition", "Deposition", Unit::Ratio, 0.5, 0.0, 1.0, "How readily the water drops what it carries where it slows: fans, filled valleys, deltas."),
+        ParamSpec::float("channel", "Smallest stream", Unit::Blocks, 24.0, 0.0, 512.0, "The side of the smallest area that drains into a stream: under it the ground only creeps and slides.").section(Section::Detail),
+        ParamSpec::float("diffusion", "Creep", Unit::Ratio, 0.0, 0.0, 1.0, "How much soil creeps downhill and rounds the land between the streams.").section(Section::Detail),
+        ParamSpec::float("m", "Area exponent", Unit::Ratio, 0.5, 0.2, 0.8, "How much more large rivers cut than small ones (m of K·A^m·S^n).").section(Section::Advanced),
+        ParamSpec::float("n", "Slope exponent", Unit::Ratio, 1.0, 0.5, 2.0, "How much more steep streams cut than gentle ones (n of K·A^m·S^n).").section(Section::Advanced),
+        ParamSpec::seed(),
+    ],
+    kernel: Kernel::Global { cpu: stream::stream_cpu, gpu: Some(stream::stream_gpu), carry: &[Some(0), None, None, None, None] },
+    ..NodeSpec::BASE
+};
+
+pub static FLOW: NodeSpec = NodeSpec {
+    id: "water.flow",
+    label: "Flow",
+    family: Family::Simulate,
+    summary: "Where the rain runs off, as a mask: bright in the rivers, fading up every rill.",
+    help: "Follows the rain down the relief, across hollows and flats to the sea or the terrain's edge, and measures how much land drains through each place. Use it to paint river beds, wet valley floors and gullies, or to drive vegetation. Small streams shows more of the rills next to the rivers.",
+    keywords: &["drainage", "flow accumulation", "rivers", "watershed", "runoff"],
+    inputs: &[PortSpec::new("height", "Height", PortKind::Height, "The relief the water runs over."), RAIN_IN],
+    outputs: &[FLOW_OUT],
+    params: &[ParamSpec::float("spread", "Small streams", Unit::Ratio, 0.5, 0.0, 1.0, "How much the small streams show next to the large rivers."), ParamSpec::seed()],
+    kernel: Kernel::Global { cpu: water::flow_cpu, gpu: Some(water::flow_gpu), carry: &[None] },
+    ..NodeSpec::BASE
+};
 
 pub static THERMAL: NodeSpec = NodeSpec {
     id: "erosion.thermal",
@@ -35,7 +94,7 @@ pub static THERMAL: NodeSpec = NodeSpec {
 /// proportion to their excess; each sample then gathers what its
 /// neighbours shed to it. Gathering rather than scattering keeps it
 /// parallel and the same on any number of threads.
-fn thermal_pass(h: &[f32], next: &mut [f32], shed: &mut [f32], total: &mut [f32], n: usize, drop: [f32; 2], strength: f32) {
+pub(super) fn thermal_pass(h: &[f32], next: &mut [f32], shed: &mut [f32], total: &mut [f32], n: usize, drop: [f32; 2], strength: f32) {
     const NB: [(i32, i32, usize); 8] = [(-1, -1, 1), (0, -1, 0), (1, -1, 1), (-1, 0, 0), (1, 0, 0), (-1, 1, 1), (0, 1, 0), (1, 1, 1)];
     let inside = |x: i32, z: i32| x >= 0 && z >= 0 && x < n as i32 && z < n as i32;
     shed.par_chunks_mut(n).zip(total.par_chunks_mut(n)).enumerate().for_each(|(z, (srow, trow))| {
