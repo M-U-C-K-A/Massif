@@ -30,6 +30,7 @@ pub mod geom;
 pub mod gpu;
 pub mod kernel;
 pub mod live;
+pub mod migrate;
 pub mod model;
 pub mod noise;
 mod nodes;
@@ -38,5 +39,6 @@ pub mod preview;
 pub mod registry;
 pub mod space;
 pub mod util;
+pub mod world;
 
 pub use space::TILE;
