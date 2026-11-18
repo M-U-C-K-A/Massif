@@ -9,6 +9,7 @@ use crate::kernel::{Ctx, Footprint, Grid};
 use crate::noise::Fbm;
 use crate::params::Params;
 use crate::registry::{Family, Kernel, NodeSpec, ParamSpec, PortKind, PortSpec, Section, Unit};
+use rayon::prelude::*;
 
 /// The node types of this family, in the library's order.
 pub static NODES: &[&NodeSpec] = &[&TEMPERATURE, &WIND, &RAINFALL, &HUMIDITY, &BIOMES];
@@ -219,7 +220,7 @@ pub static HUMIDITY: NodeSpec = NodeSpec {
     label: "Humidity",
     family: Family::Climate,
     summary: "How humid each place is: damp by the sea, drying inland, wetter where rain falls.",
-    help: "Inland is how far from the sea the air stays damp. Connect Rainfall for rain shadows and wet windward slopes; Rain weight is how much it counts against the sea's nearness. Variation adds slow patches. Feed Biomes with it, and the Map Output's Humidity.",
+    help: "Inland is how far from the sea the air stays damp. Connect Rainfall for rain shadows and wet windward slopes; Rain weight is how much it counts against the sea's nearness. Variation adds slow patches; Irregularity lets the damp band by the coast widen and narrow along it, so that forests do not follow the shore at one width. Feed Biomes with it, and the Map Output's Humidity.",
     keywords: &["humidity", "moisture", "damp", "dry", "climate", "continentality"],
     inputs: &[PortSpec::new("height", "Height", PortKind::Height, "The relief: where it is under the sea level is sea."), PortSpec::new("rainfall", "Rainfall", PortKind::Mask, "How much rain falls (the sea's nearness alone, when unconnected).").optional()],
     outputs: &[PortSpec::new("humidity", "Humidity", PortKind::Mask, "From 0 (dry) to 1 (humid).")],
@@ -227,6 +228,7 @@ pub static HUMIDITY: NodeSpec = NodeSpec {
         ParamSpec::float("inland", "Inland", Unit::Blocks, 1500.0, 1.0, 65536.0, "How far from the sea the air stays damp, in blocks.").soft(100.0, 8000.0),
         ParamSpec::float("rain_weight", "Rain weight", Unit::Ratio, 0.6, 0.0, 1.0, "How much rainfall counts against the sea's nearness."),
         ParamSpec::float("variation", "Variation", Unit::Ratio, 0.1, 0.0, 1.0, "How much slow patches vary it.").section(Section::Detail),
+        ParamSpec::float("irregularity", "Irregularity", Unit::Ratio, 0.5, 0.0, 1.0, "How much the damp coastal band widens and narrows along the coast instead of keeping one width.").section(Section::Detail),
         ParamSpec::seed(),
     ],
     kernel: Kernel::Global { cpu: humidity_cpu, gpu: None, carry: &[None] },
@@ -243,12 +245,23 @@ fn humidity_cpu(ctx: &Ctx, inputs: &[Option<&Grid>], _: &(dyn Fn() -> bool + Syn
     let inland = p.f("inland");
     let weight = if inputs[1].is_some() { p.f("rain_weight") } else { 0.0 };
     let var = p.f("variation");
+    let irregular = p.f("irregularity");
     let patches = Fbm::new(inland as f64 * 2.0, 3, 0.5, ctx.seed);
+    // The band's reach varies along the coast, in broad swells and a ragged
+    // edge; scaling the reach keeps the shore itself damp.
+    let swell = Fbm::new(inland as f64 * 2.5, 3, 0.5, ctx.seed ^ 0x2b7e);
+    let ragged = Fbm::new(inland as f64 * 0.5, 4, 0.6, ctx.seed ^ 0x9d1c);
     let out = (0..n * h.rect.h as usize)
+        .into_par_iter()
         .map(|k| {
-            let near = if d[k] == f32::MAX { 0.0 } else { (-(d[k] * spacing) / inland).exp() };
-            let rain = inputs[1].map_or(0.0, |r| r.data[k]);
             let (x, z) = ctx.world(h.rect.x + (k % n) as i32, h.rect.z + (k / n) as i32);
+            let near = if d[k] == f32::MAX {
+                0.0
+            } else {
+                let wide = if irregular > 0.0 { (irregular * (2.4 * swell.at(x, z) + 2.0 * ragged.at(x, z))).exp() } else { 1.0 };
+                (-(d[k] * spacing) / (inland * wide)).exp()
+            };
+            let rain = inputs[1].map_or(0.0, |r| r.data[k]);
             ((1.0 - weight) * near + weight * rain + var * patches.at(x, z)).clamp(0.0, 1.0)
         })
         .collect();
