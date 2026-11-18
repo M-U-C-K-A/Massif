@@ -3340,7 +3340,7 @@ fn sea_level(ui: &mut Ui, v: &mut f32, hover: &str) -> bool {
     let mut on = *v > massif_core::graph::NO_WATER + 1.0;
     let before = *v;
     ui.horizontal(|ui| {
-        ui.add_sized([96.0, 18.0], egui::Label::new(RichText::new(tr!("Sea level")).size(12.0)));
+        crate::widgets::name_label(ui, RichText::new(tr!("Sea level")).size(12.0), vec2(96.0, 18.0));
         if crate::widgets::checkbox(ui, &mut on, "").on_hover_text(hover).changed() {
             *v = if on { 63.0 } else { massif_core::graph::NO_WATER };
         }
@@ -3354,7 +3354,7 @@ fn sea_level(ui: &mut Ui, v: &mut f32, hover: &str) -> bool {
 
 fn seed(ui: &mut Ui, v: &mut u32) -> bool {
     ui.horizontal(|ui| {
-        ui.add_sized([96.0, 18.0], egui::Label::new(RichText::new(tr!("Seed")).size(12.0)));
+        crate::widgets::name_label(ui, RichText::new(tr!("Seed")).size(12.0), vec2(96.0, 18.0));
         let mut changed = crate::widgets::drag(ui, egui::DragValue::new(v)).changed();
         if ui.small_button(theme::glyph(Icon::Dices).to_string()).on_hover_text(tr!("Another seed")).clicked() {
             *v = v.wrapping_mul(1_103_515_245).wrapping_add(12_345) % 100_000;

@@ -8,7 +8,7 @@
 
 use crate::theme::{self, Icon, Palette};
 use egui::emath::Numeric;
-use egui::{Align2, Color32, CornerRadius, CursorIcon, FontId, Rect, Response, Sense, SliderClamping, Stroke, StrokeKind, TextEdit, Ui, UiBuilder, Widget, pos2, vec2};
+use egui::{Align2, Color32, CornerRadius, CursorIcon, FontId, Rect, Response, Sense, SliderClamping, Stroke, StrokeKind, TextEdit, Ui, UiBuilder, Vec2, Widget, pos2, vec2};
 use std::ops::RangeInclusive;
 
 type Formatter<'a> = Box<dyn 'a + Fn(f64, RangeInclusive<usize>) -> String>;
@@ -474,6 +474,18 @@ pub fn row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
     let room = Rect::from_min_max(rect.left_top(), egui::pos2(right.max(rect.left()), rect.bottom()));
     let mut name = ui.new_child(UiBuilder::new().max_rect(room).layout(egui::Layout::left_to_right(egui::Align::Center)));
     name.add(egui::Label::new(egui::RichText::new(label).size(12.5)).truncate());
+}
+
+/// The name of a setting on the left of its control, in a column `size`
+/// wide: at the start of it, as the names of a well's rows and the
+/// headings over them (not centred in it, as `ui.add_sized` puts a label);
+/// cut with an ellipsis, whole on hover, when longer than the column.
+pub fn name_label(ui: &mut Ui, text: impl Into<egui::WidgetText>, size: Vec2) -> Response {
+    ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_min_size(size);
+        ui.add(egui::Label::new(text).truncate())
+    })
+    .inner
 }
 
 /// A button whose words stay on one line: cut with an ellipsis (whole on

@@ -293,10 +293,18 @@ fn label_width(ui: &Ui) -> f32 {
     (ui.available_width() * 0.33).clamp(40.0, 72.0)
 }
 
+/// The name of a setting on the left of its control, [`label_width`]
+/// wide: at the start of its column, as the names of a well's rows and the
+/// headings over them, not centred in it; cut with an ellipsis when long.
+fn side_label(ui: &mut Ui, text: impl Into<egui::WidgetText>) -> egui::Response {
+    let size = vec2(label_width(ui), 18.0);
+    crate::widgets::name_label(ui, text, size)
+}
+
 fn tip_row(ui: &mut Ui, label: &str, tip: &str, add: impl FnOnce(&mut Ui) -> egui::Response) -> bool {
     ui.horizontal(|ui| {
         ui.spacing_mut().interact_size.y = 18.0;
-        let label = ui.add_sized([label_width(ui), 18.0], egui::Label::new(label).truncate()).on_hover_text(tip);
+        let label = side_label(ui, label).on_hover_text(tip);
         add(ui).on_hover_text(tip).labelled_by(label.id).changed()
     })
     .inner
@@ -306,7 +314,7 @@ fn slider_row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> egui::Respo
     ui.horizontal(|ui| {
         // Slim sliders: the handle's size follows the row height.
         ui.spacing_mut().interact_size.y = 18.0;
-        let label = ui.add_sized([label_width(ui), 18.0], egui::Label::new(label).truncate());
+        let label = side_label(ui, label);
         add(ui).labelled_by(label.id).changed()
     })
     .inner
@@ -586,7 +594,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             crate::widgets::checkbox(ui, &mut r.water, tr!("Fill it with water"));
             crate::widgets::checkbox(ui, &mut r.biome, tr!("River biome on its water"));
             ui.horizontal(|ui| {
-                ui.add_sized([label_width(ui), 18.0], egui::Label::new(tr!("Bed")).truncate());
+                side_label(ui, tr!("Bed"));
                 let shown = if r.bed.is_empty() { tr!("As it is").to_owned() } else { r.bed.clone() };
                 let width = (ui.available_width() - ui.spacing().item_spacing.x).clamp(60.0, 150.0);
                 crate::widgets::combo("river bed").selected_text(shown).width(width).truncate().show_ui(ui, |ui| {
@@ -634,7 +642,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
                 ui.add(crate::widgets::Field::new(&mut tools.slab_thickness, 1.0..=128.0).logarithmic(true).suffix(tr!(" blocks")))
             });
             ui.horizontal_wrapped(|ui| {
-                ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Centre")));
+                crate::widgets::name_label(ui, tr!("Centre"), vec2(72.0, 18.0));
                 ui.selectable_value(&mut tools.anchor, AnchorMode::AboveGround, tr!("Above ground"));
                 ui.selectable_value(&mut tools.anchor, AnchorMode::Absolute, tr!("At height"));
             });
@@ -690,13 +698,13 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             pick(ui, doc);
         } else {
             ui.horizontal(|ui| {
-                ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Edit")));
+                crate::widgets::name_label(ui, tr!("Edit"), vec2(72.0, 18.0));
                 pick(ui, doc);
             });
         }
         if doc.active_kind() != LevelKind::Ground && !matches!(tool, Tool::StampSlab | Tool::EraseSlab) {
             ui.horizontal(|ui| {
-                ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Surface")));
+                crate::widgets::name_label(ui, tr!("Surface"), vec2(72.0, 18.0));
                 ui.selectable_value(&mut tools.surface, SurfaceChoice::Top, tr!("Top"));
                 ui.selectable_value(&mut tools.surface, SurfaceChoice::Bottom, tr!("Bottom"));
             });
@@ -1299,7 +1307,7 @@ pub fn object_layer_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Documen
     ui.add_space(4.0);
     section(ui, Icon::TreePine, &layer.name.clone());
     ui.horizontal(|ui| {
-        ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Name")));
+        crate::widgets::name_label(ui, tr!("Name"), vec2(72.0, 18.0));
         ui.add(egui::TextEdit::singleline(&mut layer.name).desired_width((ui.available_width() - 40.0).max(60.0)));
         let mut c = Color32::from_rgb(layer.color[0], layer.color[1], layer.color[2]);
         if egui::color_picker::color_edit_button_srgba(ui, &mut c, egui::color_picker::Alpha::Opaque).on_hover_text(tr!("Its colour in the list")).changed() {
@@ -1331,7 +1339,7 @@ pub fn object_layer_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Documen
     // Base or sub-canopy.
     let mut role = None;
     ui.horizontal(|ui| {
-        ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Canopy")));
+        crate::widgets::name_label(ui, tr!("Canopy"), vec2(72.0, 18.0));
         if let Some(c) = crate::widgets::button_group(ui, "canopy", &[tr!("Base"), tr!("Sub-canopy")], &[!layer.understory, layer.understory])
             && (c == 1) != layer.understory
         {
@@ -1709,7 +1717,7 @@ pub fn pocket_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
     ui.add_space(4.0);
     section(ui, Icon::Gem, &def.name.clone());
     ui.horizontal(|ui| {
-        ui.add_sized([label_width(ui), 18.0], egui::Label::new(tr!("Name")).truncate());
+        side_label(ui, tr!("Name"));
         ui.add(egui::TextEdit::singleline(&mut def.name).desired_width((ui.available_width() - 40.0).max(30.0)));
         let mut c = Color32::from_rgb(def.color[0], def.color[1], def.color[2]);
         if egui::color_picker::color_edit_button_srgba(ui, &mut c, egui::color_picker::Alpha::Opaque).on_hover_text(tr!("Its colour over the map while it is painted")).changed() {
@@ -1947,7 +1955,7 @@ pub fn combined_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
     ui.add_space(4.0);
     section(ui, Icon::Combine, &def.name.clone());
     ui.horizontal(|ui| {
-        ui.add_sized([label_width(ui), 18.0], egui::Label::new(tr!("Name")).truncate());
+        side_label(ui, tr!("Name"));
         ui.add(egui::TextEdit::singleline(&mut def.name).desired_width((ui.available_width() - 40.0).max(30.0)));
         let mut c = Color32::from_rgb(def.color[0], def.color[1], def.color[2]);
         if egui::color_picker::color_edit_button_srgba(ui, &mut c, egui::color_picker::Alpha::Opaque).on_hover_text(tr!("Its colour in the lists")).changed() {
@@ -2081,7 +2089,7 @@ pub fn cover_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     ui.add_space(4.0);
     section(ui, Icon::Sprout, &def.name.clone());
     ui.horizontal(|ui| {
-        ui.add_sized([label_width(ui), 18.0], egui::Label::new(tr!("Name")).truncate());
+        side_label(ui, tr!("Name"));
         ui.add(egui::TextEdit::singleline(&mut def.name).desired_width((ui.available_width() - 40.0).max(30.0)));
         let mut c = Color32::from_rgb(def.color[0], def.color[1], def.color[2]);
         if egui::color_picker::color_edit_button_srgba(ui, &mut c, egui::color_picker::Alpha::Opaque).on_hover_text(tr!("Its colour on the map")).changed() {
@@ -2097,7 +2105,7 @@ pub fn cover_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     });
     ui.horizontal_wrapped(|ui| {
         let tip = tr!("How many blocks high it grows (cane, cactus: 1 to 3). Tall plants are always two.");
-        ui.add_sized([label_width(ui), 18.0], egui::Label::new(tr!("Height")).truncate()).on_hover_text(tip);
+        side_label(ui, tr!("Height")).on_hover_text(tip);
         let (mut lo, mut hi) = (def.height[0] as i32, def.height[1] as i32);
         crate::widgets::drag(ui, egui::DragValue::new(&mut lo).range(1..=16)).on_hover_text(tip);
         ui.label(RichText::new(tr!("to")).color(pal.weak));
@@ -2121,7 +2129,7 @@ pub fn cover_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
         })
     } else {
         ui.horizontal(|ui| {
-            ui.add_sized([72.0, 18.0], egui::Label::new(tr!("The water")));
+            crate::widgets::name_label(ui, tr!("The water"), vec2(72.0, 18.0));
             water(ui, def);
         })
     }
@@ -2339,7 +2347,7 @@ fn pattern_presets(ui: &mut Ui, ps: &mut crate::tools::PatternSettings) {
     let current = ps.preset_name();
     let (mut load, mut forget) = (None, None);
     ui.horizontal(|ui| {
-        ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Preset")));
+        crate::widgets::name_label(ui, tr!("Preset"), vec2(72.0, 18.0));
         let width = (ui.available_width() - 40.0).clamp(90.0, 190.0);
         crate::widgets::combo("noise preset").selected_text(current.clone().unwrap_or_else(|| tr!("Custom").to_owned())).width(width).show_ui(ui, |ui| {
             for p in PatternPreset::built_in() {
@@ -2403,7 +2411,7 @@ fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     section(ui, Icon::Waves, tr!("Noise"));
     let p = &mut tools.pattern.pattern;
     ui.horizontal(|ui| {
-        ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Shape"))).on_hover_text(tr!("Patches, thin veins, blobs with creases, cells, or wavering stripes"));
+        crate::widgets::name_label(ui, tr!("Shape"), vec2(72.0, 18.0)).on_hover_text(tr!("Patches, thin veins, blobs with creases, cells, or wavering stripes"));
         crate::widgets::combo("pattern kind").selected_text(crate::i18n::tr_name(p.kind.label())).width(120.0).show_ui(ui, |ui| {
             for k in PatternKind::ALL {
                 ui.selectable_value(&mut p.kind, k, crate::i18n::tr_name(k.label()));
@@ -2413,7 +2421,7 @@ fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
     let fractal = p.kind.is_fractal();
     ui.add_enabled_ui(fractal, |ui| {
         ui.horizontal(|ui| {
-            ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Noise"))).on_hover_text(tr!("Simplex: round shapes · Perlin: a little squarer · Value: soft, blocky blobs"));
+            crate::widgets::name_label(ui, tr!("Noise"), vec2(72.0, 18.0)).on_hover_text(tr!("Simplex: round shapes · Perlin: a little squarer · Value: soft, blocky blobs"));
             crate::widgets::combo("pattern noise").selected_text(crate::i18n::tr_name(p.noise.label())).width(120.0).show_ui(ui, |ui| {
                 for b in Basis::ALL {
                     ui.selectable_value(&mut p.noise, b, crate::i18n::tr_name(b.label()));
@@ -2451,7 +2459,7 @@ fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
         )
     });
     ui.horizontal(|ui| {
-        ui.add_sized([72.0, 18.0], egui::Label::new(tr!("Seed"))).on_hover_text(tr!("Another layout of the same pattern"));
+        crate::widgets::name_label(ui, tr!("Seed"), vec2(72.0, 18.0)).on_hover_text(tr!("Another layout of the same pattern"));
         crate::widgets::drag(ui, egui::DragValue::new(&mut p.seed));
         if ui.small_button(theme::glyph(Icon::Dices).to_string()).on_hover_text(tr!("Another layout")).clicked() {
             p.seed = p.seed.wrapping_mul(1_103_515_245).wrapping_add(12_345) % 1_000_000_000;
@@ -4058,7 +4066,10 @@ pub fn info_panel(ui: &mut Ui, doc: &mut Document, hover: Option<(i32, i32)>, ca
         let meta = &mut doc.world.meta;
         let mut changed = false;
         crate::widgets::row(ui, tr!("Name"), |ui| {
-            changed |= ui.add(egui::TextEdit::singleline(&mut meta.name).desired_width((ui.available_width() * 0.62).min(170.0))).changed();
+            // Sized whole, margins included, so that it ends where the
+            // other rows' controls end.
+            let size = vec2((ui.available_width() * 0.62).min(170.0), ui.spacing().interact_size.y);
+            changed |= ui.add_sized(size, egui::TextEdit::singleline(&mut meta.name)).changed();
         });
         crate::widgets::row(ui, tr!("Seed"), |ui| {
             changed |= crate::widgets::drag(ui, egui::DragValue::new(&mut meta.seed)).changed();

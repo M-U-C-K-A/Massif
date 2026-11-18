@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-const HEADER: f32 = 32.0;
+const HEADER: f32 = theme::HEADER_H;
 const GAP: f32 = 4.0;
 const MIN_AREA: f32 = 90.0;
 /// How long the Brushes panel stays outlined, called from 3D Sculpt, in seconds.
@@ -3240,16 +3240,26 @@ impl MassifApp {
         }
         let (mut close, mut cancel, mut reveal) = (false, None, None);
         let (mut lighter, mut not_now) = (false, false);
+        // Over the map's bottom right corner, above its footer, so that they
+        // never cover a panel's controls; over the window's when no map is
+        // shown.
+        let areas: Vec<(AreaId, Rect)> = ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap_or_default();
+        let map = areas.iter().filter(|(id, _)| self.layout.current().root.editor_of(*id) == Some(EditorKind::Map)).map(|(_, r)| *r).max_by(|a, b| a.area().total_cmp(&b.area()));
+        let (corner, room) = match map {
+            Some(map) if map.width() > 320.0 => (map.right_bottom() - vec2(theme::PAD, crate::map_view::FOOTER + theme::PAD), map.width() - 2.0 * theme::PAD),
+            _ => (ctx.content_rect().right_bottom() - vec2(20.0, 20.0), f32::INFINITY),
+        };
         egui::Area::new(Id::unique("notices"))
             .order(egui::Order::Foreground)
-            .anchor(egui::Align2::RIGHT_BOTTOM, vec2(-20.0, -20.0))
+            .pivot(egui::Align2::RIGHT_BOTTOM)
+            .fixed_pos(corner)
             .show(ctx, |ui| {
                 let pal = Palette::of(ui);
                 let card = |ui: &mut Ui, add: &mut dyn FnMut(&mut Ui)| {
                     egui::Frame::popup(ui.style())
-                        .inner_margin(egui::Margin::symmetric(14, 10))
+                        .inner_margin(egui::Margin::symmetric(theme::FLOAT_PAD_X as i8, theme::FLOAT_PAD_Y as i8))
                         .show(ui, |ui| {
-                            ui.set_max_width(400.0);
+                            ui.set_max_width(theme::FLOAT_MAX_W.min(room - 2.0 * theme::FLOAT_PAD_X));
                             ui.horizontal(|ui| add(ui));
                         });
                 };
@@ -3433,80 +3443,16 @@ impl MassifApp {
         let single = self.layout.current().root.count() == 1;
 
         // ---- header --------------------------------------------------------
-        let mut hui = ui.new_child(
-            UiBuilder::new()
-                .id_salt(("area header", id))
-                .max_rect(header.shrink2(vec2(8.0, 5.0)))
-                .layout(egui::Layout::left_to_right(Align::Center)),
-        );
-        hui.set_clip_rect(header.intersect(ui.clip_rect()));
-        hui.spacing_mut().item_spacing.x = 4.0;
-        hui.spacing_mut().interact_size.y = 24.0;
-        hui.spacing_mut().button_padding = vec2(8.0, 3.0);
-        // The commands of a header have no outline: they show under the
-        // pointer, and when chosen.
-        {
-            let w = &mut hui.visuals_mut().widgets;
-            w.inactive.weak_bg_fill = Color32::TRANSPARENT;
-            w.inactive.bg_fill = Color32::TRANSPARENT;
-            for state in [&mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
-                state.bg_stroke = Stroke::NONE;
-            }
-        }
-        // What the area shows: every editor on one page, in columns.
-        hui.menu_button(format!("{} {}", theme::glyph(editor.icon()), theme::glyph(Icon::ChevronDown)), |ui| {
-            let columns = crate::picker::columns_for(ui.ctx().content_rect().width() - 32.0);
-            if let Some(kind) = crate::picker::page(ui, Some(editor), shown, self.settings.developer, columns) {
-                self.layout.current_mut().root.set_editor(id, kind);
-                ui.close();
-            }
-        })
-        .response
-        .on_hover_text(tr!("What this area shows"));
-        // The title, cut with an ellipsis where it would run under the
-        // commands' button of a narrow area.
-        let room = if matches!(editor, EditorKind::Map | EditorKind::View3d | EditorKind::Sculpt3d) { hui.available_width() } else { (hui.available_width() - 30.0).max(0.0) };
-        let title = hui
-            .allocate_ui(vec2(room, hui.spacing().interact_size.y), |ui| {
-                ui.add(egui::Label::new(RichText::new(crate::i18n::tr_name(editor.label())).medium()).sense(Sense::drag()).selectable(false).truncate())
-            })
-            .inner
-            .on_hover_cursor(CursorIcon::Grab);
-        if title.drag_started() && !single {
-            self.dragging_area = Some(id);
-        }
-        match editor {
-            EditorKind::Map => {
-                hui.add_space(8.0);
-                self.maps.entry(id).or_default().header(&mut hui);
-                if let Some((guide, generation)) = &mut self.guide
-                    && *generation == self.doc.generation
-                    && !guide.header(&mut hui)
-                {
-                    self.guide = None;
-                }
-            }
-            EditorKind::View3d => {
-                hui.add_space(8.0);
-                self.view3d.header(&mut hui);
-                hui.separator();
-                if hui
-                    .button(theme::with_icon(Icon::Pickaxe, tr!("Sculpt")))
-                    .on_hover_text(tr!("Build and dig in 3D: the 3D Sculpt workspace"))
-                    .clicked()
-                    && let Some(k) = self.layout.workspaces.iter().position(|w| w.root.shows(EditorKind::Sculpt3d))
-                {
-                    self.layout.activate(k);
-                }
-            }
-            EditorKind::Sculpt3d => {
-                hui.add_space(8.0);
-                self.sculpt3d.header(&mut hui);
-            }
-            _ => {}
-        }
+        // Its controls HEADER_CONTROL_H tall on its middle line, HEADER_INSET
+        // from the card's edges, rounded to follow the card's corner.
+        let inner = header.shrink(theme::HEADER_INSET);
         let shift = ui.input(|i| i.modifiers.shift);
-        hui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+        // The area's commands first, at the right end: whatever the header
+        // holds, they stay in the card, clear of its corner.
+        let mut rui = ui.new_child(UiBuilder::new().id_salt(("area commands", id)).max_rect(inner).layout(egui::Layout::right_to_left(Align::Center)));
+        header_style(&mut rui);
+        'commands: {
+            let ui = &mut rui;
             // As in the modernised WorldPainter: a menu of commands, and with
             // Shift held, a button that closes the area at once.
             if shift && !single && !maximized {
@@ -3517,7 +3463,7 @@ impl MassifApp {
                 {
                     self.layout.close(id);
                 }
-                return;
+                break 'commands;
             }
             let sibling = self.layout.current().root.sibling(id);
             ui.menu_button(RichText::new(theme::glyph(Icon::Ellipsis).to_string()).size(14.0).color(pal.weak), |ui| {
@@ -3560,7 +3506,79 @@ impl MassifApp {
             })
             .response
             .on_hover_text(tr!("Area commands · Shift: close button · drag a corner into the area to split it"));
-        });
+        }
+        let commands = rui.min_rect().width();
+        let left = Rect::from_min_max(inner.min, pos2((inner.right() - commands - 4.0).max(inner.left()), inner.bottom()));
+        let mut hui = ui.new_child(UiBuilder::new().id_salt(("area header", id)).max_rect(left).layout(egui::Layout::left_to_right(Align::Center)));
+        // What does not fit is cut at the commands, not run under them.
+        hui.set_clip_rect(left.expand2(vec2(0.0, theme::HEADER_INSET)).intersect(ui.clip_rect()));
+        header_style(&mut hui);
+        // What the area shows: every editor on one page, in columns.
+        hui.menu_button(format!("{} {}", theme::glyph(editor.icon()), theme::glyph(Icon::ChevronDown)), |ui| {
+            let columns = crate::picker::columns_for(ui.ctx().content_rect().width() - 32.0);
+            if let Some(kind) = crate::picker::page(ui, Some(editor), shown, self.settings.developer, columns) {
+                self.layout.current_mut().root.set_editor(id, kind);
+                ui.close();
+            }
+        })
+        .response
+        .on_hover_text(tr!("What this area shows"));
+        // The title, cut with an ellipsis in a narrow area.
+        let room = hui.available_width();
+        let title = hui
+            .allocate_ui(vec2(room, hui.spacing().interact_size.y), |ui| {
+                ui.add(egui::Label::new(RichText::new(crate::i18n::tr_name(editor.label())).medium()).sense(Sense::drag()).selectable(false).truncate())
+            })
+            .inner
+            .on_hover_cursor(CursorIcon::Grab);
+        if title.drag_started() && !single {
+            self.dragging_area = Some(id);
+        }
+        match editor {
+            EditorKind::Map => {
+                hui.add_space(8.0);
+                self.maps.entry(id).or_default().header(&mut hui);
+                if let Some((guide, generation)) = &mut self.guide
+                    && *generation == self.doc.generation
+                    && !guide.header(&mut hui)
+                {
+                    self.guide = None;
+                }
+            }
+            EditorKind::View3d => {
+                hui.add_space(8.0);
+                self.view3d.header(&mut hui);
+                hui.separator();
+                // Its name too, when there is room for it.
+                let text = if hui.available_width() >= 80.0 { theme::with_icon(Icon::Pickaxe, tr!("Sculpt")) } else { theme::glyph(Icon::Pickaxe).to_string() };
+                if hui
+                    .button(text)
+                    .on_hover_text(tr!("Build and dig in 3D: the 3D Sculpt workspace"))
+                    .clicked()
+                    && let Some(k) = self.layout.workspaces.iter().position(|w| w.root.shows(EditorKind::Sculpt3d))
+                {
+                    self.layout.activate(k);
+                }
+            }
+            EditorKind::Sculpt3d => {
+                hui.add_space(8.0);
+                self.sculpt3d.header(&mut hui);
+            }
+            _ => {}
+        }
+        // Cut at the commands: what runs past fades out into the card.
+        if hui.min_rect().right() > left.right() + 0.5 {
+            let fade = Rect::from_min_max(pos2(left.right() - 24.0, header.top() + 1.0), pos2(left.right() + 4.0, header.bottom() - 1.0));
+            let mut mesh = egui::Mesh::default();
+            let (clear, solid) = (pal.panel.gamma_multiply(0.0), pal.panel);
+            for (p, c) in [(fade.left_top(), clear), (fade.right_top(), solid), (fade.right_bottom(), solid), (fade.left_bottom(), clear)] {
+                mesh.colored_vertex(p, c);
+            }
+            mesh.add_triangle(0, 1, 2);
+            mesh.add_triangle(0, 2, 3);
+            ui.painter().add(egui::Shape::mesh(mesh));
+        }
+        ui.ctx().data_mut(|d| d.insert_temp(Id::unique("area header end").with(id), left.right()));
 
         // ---- corners: drag one into the area to split it ----------------------
         // The top ones over the header; the bottom ones go over the content,
@@ -3584,7 +3602,7 @@ impl MassifApp {
                 .id_salt(("scroll", id))
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    egui::Frame::new().inner_margin(egui::Margin::symmetric(10, 8)).show(ui, |ui| {
+                    egui::Frame::new().inner_margin(egui::Margin::symmetric(theme::PAD as i8 - 1, 8)).show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         f(ui);
                     });
@@ -5447,6 +5465,22 @@ fn glyph_in(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
 }
 
 /// A dialog: generous corners and margins, as the references draw them.
+/// The look of an area's header: frameless commands, shown under the
+/// pointer and when chosen, HEADER_CONTROL_H tall, rounded to follow the
+/// card's corner at HEADER_INSET, their text PAD from the card's edge.
+fn header_style(ui: &mut Ui) {
+    ui.spacing_mut().item_spacing.x = 4.0;
+    ui.spacing_mut().interact_size.y = theme::HEADER_CONTROL_H;
+    ui.spacing_mut().button_padding = vec2(theme::PAD - theme::HEADER_INSET, 3.0);
+    let w = &mut ui.visuals_mut().widgets;
+    w.inactive.weak_bg_fill = Color32::TRANSPARENT;
+    w.inactive.bg_fill = Color32::TRANSPARENT;
+    for state in [&mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open, &mut w.noninteractive] {
+        state.bg_stroke = Stroke::NONE;
+        state.corner_radius = egui::CornerRadius::same(theme::HEADER_CONTROL_RADIUS);
+    }
+}
+
 pub(crate) fn modal(ctx: &egui::Context, id: &str) -> Modal {
     let frame = egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::same(22));
     Modal { modal: egui::Modal::new(Id::unique(id)).frame(frame), id: Id::unique(id) }
@@ -5508,7 +5542,7 @@ fn card(ui: &mut Ui, title: &str, subtitle: &str, add: impl FnOnce(&mut Ui)) {
 /// A row of a card: a label on the left, the control on the right.
 fn row(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui)) {
     ui.horizontal(|ui| {
-        ui.add_sized([96.0, 20.0], egui::Label::new(label).truncate());
+        crate::widgets::name_label(ui, label, vec2(96.0, 20.0));
         add(ui);
     });
 }
@@ -17275,5 +17309,126 @@ mod tests {
         // High over the map: the grid alone.
         h.state_mut().view3d.camera.distance = 20_000.0;
         assert!(settle(&mut h, &|a| !a.view3d.near_shown()), "the grid alone");
+    }
+
+    /// The spacing of every workspace's areas, measured: in each area's
+    /// header, every control sits on the header's middle line and clear of
+    /// the card's rounded corners; a message stays off the panels. With
+    /// MASSIF_SNAPSHOT_DIR, every workspace and a few dialogs rendered, in
+    /// light and dark, at MASSIF_SNAPSHOT_PPP (layout-*.png), and what the
+    /// measures found written to layout-report.txt.
+    #[test]
+    fn the_spacing_of_every_area_is_even() {
+        use egui_kittest::kittest::{NodeT, Queryable, by};
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let mut report = String::new();
+        let mut faults = Vec::new();
+        for theme in [ThemeChoice::Light, ThemeChoice::Dark] {
+            let mut h = harness(theme);
+            h.run_steps(4);
+            let tname = if theme == ThemeChoice::Light { "light" } else { "dark" };
+            let ppp = h.ctx.pixels_per_point();
+            let count = h.state().layout.workspaces.len();
+            for k in 0..count {
+                h.state_mut().layout.activate(k);
+                h.run_steps(4);
+                let wname = h.state().layout.workspaces[k].name.to_lowercase().replace(' ', "-");
+                let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+                let nodes: Vec<(String, Rect)> = h
+                    .query_all(by().predicate(|n| matches!(n.role(), egui::accesskit::Role::Button | egui::accesskit::Role::Label | egui::accesskit::Role::ComboBox | egui::accesskit::Role::Tab | egui::accesskit::Role::CheckBox)))
+                    .filter(|n| n.accesskit_node().role() != egui::accesskit::Role::Label || n.accesskit_node().label().is_some_and(|l| !l.is_empty()))
+                    .map(|n| (n.accesskit_node().label().unwrap_or_default(), n.rect()))
+                    .collect();
+                for (id, card) in &areas {
+                    let editor = h.state().layout.current().root.editor_of(*id).map(|e| e.label()).unwrap_or("?");
+                    let header = Rect::from_min_size(card.min, vec2(card.width(), HEADER));
+                    let end: f32 = h.ctx.data(|d| d.get_temp(Id::unique("area header end").with(*id))).unwrap_or(card.right());
+                    for (label, r) in &nodes {
+                        // What runs past the header's end is cut there.
+                        let commands = *label == theme::glyph(Icon::Ellipsis).to_string();
+                        if !commands && r.left() >= end - 0.5 {
+                            continue;
+                        }
+                        let r = &if !commands && r.right() > end { Rect::from_min_max(r.min, pos2(end, r.max.y)) } else { *r };
+                        if !(r.center().y > header.top() && r.center().y < header.bottom() && r.center().x > card.left() && r.center().x < card.right()) || r.top() < card.top() - 0.5 || r.height() > HEADER || r.width() < 1.0 {
+                            continue;
+                        }
+                        let off = r.center().y - header.center().y;
+                        if off.abs() > 1.0 {
+                            faults.push(format!("{wname}/{editor}: {label:?} {off:+.1} off the header's middle"));
+                        }
+                        // Clear of the corners: the control's own rounding
+                        // inside the card's, at the inset given.
+                        let rc = (theme::HEADER_CONTROL_RADIUS as f32).min(r.height() / 2.0);
+                        let rcard = theme::CARD_RADIUS as f32;
+                        let inner = card.shrink(theme::HEADER_INSET - 0.5);
+                        let mut out = !inner.contains_rect(*r);
+                        for (cx, cy, sx, sy) in [(card.left() + rcard, card.top() + rcard, -1.0, -1.0), (card.right() - rcard, card.top() + rcard, 1.0, -1.0)] {
+                            let (px, py) = (if sx < 0.0 { r.left() + rc } else { r.right() - rc }, r.top() + rc);
+                            if (px - cx) * sx > 0.0 && (py - cy) * sy > 0.0 {
+                                out |= ((px - cx).powi(2) + (py - cy).powi(2)).sqrt() + rc > rcard - theme::HEADER_INSET + 0.5;
+                            }
+                        }
+                        if out {
+                            faults.push(format!("{wname}/{editor}: {label:?} {r:?} into the corner of {card:?}"));
+                        }
+                    }
+                }
+                if let Some(dir) = &dir {
+                    h.render().unwrap().save(dir.join(format!("layout-{wname}-{tname}-{ppp}x.png"))).unwrap();
+                }
+            }
+            // A message, at the bottom right: off every panel but the map.
+            h.state_mut().layout.activate(0);
+            h.run_steps(2);
+            let ctx = h.ctx.clone();
+            h.state_mut().say(&ctx, "The water here is at y 63: a message long enough to fold onto a second line in its card", false, None);
+            h.run_steps(4);
+            let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+            let notice = h.ctx.memory(|m| m.area_rect(Id::unique("notices"))).expect("the message shown");
+            for (id, card) in &areas {
+                let editor = h.state().layout.current().root.editor_of(*id);
+                if editor != Some(EditorKind::Map) && card.intersects(notice) {
+                    faults.push(format!("the message {notice:?} over {editor:?} {card:?}"));
+                }
+            }
+            if let Some(dir) = &dir {
+                h.render().unwrap().save(dir.join(format!("layout-toast-{tname}-{ppp}x.png"))).unwrap();
+            }
+            h.state_mut().status = None;
+            // The tag by the cursor, Flood over the sea near the map's
+            // right edge: kept on the canvas, clear of its edge.
+            h.state_mut().tools.select(Tool::Flood);
+            h.run_steps(2);
+            let map = map_rect(h.state(), &h.ctx);
+            for (name, at) in [("middle", map.center() + vec2(-60.0, -40.0)), ("edge", pos2(map.right() - 30.0, map.bottom() - 60.0))] {
+                h.event(egui::Event::PointerMoved(at));
+                h.run_steps(4);
+                if let Some(dir) = &dir {
+                    let image = h.render().unwrap();
+                    let x = ((at.x - 120.0).max(map.left()) * ppp) as u32;
+                    let y = ((at.y - 120.0).max(map.top()) * ppp) as u32;
+                    image::imageops::crop_imm(&image, x, y, (420.0 * ppp) as u32, (200.0 * ppp) as u32).to_image().save(dir.join(format!("layout-tag-{name}-{tname}-{ppp}x.png"))).unwrap();
+                }
+            }
+            h.event(egui::Event::PointerGone);
+            // Dialogs.
+            for (name, dialog) in [("about", Dialog::About), ("settings-appearance", Dialog::Preferences(PrefsSection::Appearance)), ("settings-graphics", Dialog::Preferences(PrefsSection::Graphics)), ("save-point", Dialog::PointName(None, "Before the river".into()))] {
+                h.state_mut().dialog = Some(dialog);
+                h.run_steps(4);
+                if let Some(dir) = &dir {
+                    h.render().unwrap().save(dir.join(format!("layout-dialog-{name}-{tname}-{ppp}x.png"))).unwrap();
+                }
+                h.state_mut().dialog = None;
+                h.run_steps(2);
+            }
+        }
+        faults.sort();
+        faults.dedup();
+        report += &faults.join("\n");
+        if let Some(dir) = &dir {
+            std::fs::write(dir.join("layout-report.txt"), &report).unwrap();
+        }
+        assert!(faults.is_empty() || std::env::var_os("MASSIF_LAYOUT_LENIENT").is_some(), "{} faults:\n{report}", faults.len());
     }
 }

@@ -107,7 +107,7 @@ type BlockStrengthKey = ((BrushShape, massif_core::Profile, u32, usize), u32, u3
 
 const MIN_ZOOM: f32 = 1.0 / 2048.0;
 const MAX_ZOOM: f32 = 48.0;
-const FOOTER: f32 = 28.0;
+pub const FOOTER: f32 = 28.0;
 /// The least room, in points each way, the map is framed by itself in.
 const FIT_ROOM: f32 = 64.0;
 /// Points of scrolling per brush size step (about one wheel notch).
@@ -1714,21 +1714,26 @@ impl MapView {
                 self.water_tag = Some((key, tools::water_hint(doc, tools, bx, bz, stroke)));
             }
             if let Some((_, Some(text))) = &self.water_tag {
-                let galley = painter.layout_no_wrap(text.clone(), FontId::proportional(12.0), Color32::from_gray(235));
-                let size = galley.size() + vec2(16.0, 8.0);
+                // Folded past a width, so that a long reason stays a note.
+                let (pad_x, pad_y) = (theme::FLOAT_PAD_X - 2.0, theme::FLOAT_PAD_Y - 3.0);
+                let galley = painter.layout(text.clone(), FontId::proportional(12.0), Color32::from_gray(235), (theme::FLOAT_MAX_W - 2.0 * pad_x).min(canvas.width() - 2.0 * theme::PAD - 2.0 * pad_x).max(80.0));
+                let size = galley.size() + vec2(2.0 * pad_x, 2.0 * pad_y);
                 let mut at = p + vec2(18.0, 18.0);
-                // Kept on the canvas: to the left or above the cursor near its
-                // edges.
-                if at.x + size.x > canvas.right() - 4.0 {
+                // Kept on the canvas, PAD from its edges: to the left or above
+                // the cursor near them.
+                let edge = canvas.shrink(theme::PAD);
+                if at.x + size.x > edge.right() {
                     at.x = p.x - 18.0 - size.x;
                 }
-                if at.y + size.y > canvas.bottom() - 4.0 {
+                if at.y + size.y > edge.bottom() {
                     at.y = p.y - 18.0 - size.y;
                 }
+                at = at.max(edge.min);
                 let back = Rect::from_min_size(at, size);
-                painter.rect_filled(back.translate(vec2(0.0, 1.5)), 7, Color32::from_black_alpha(55));
-                painter.rect(back, 7, Color32::from_rgba_unmultiplied(20, 22, 27, 235), Line::new(1.0, Color32::from_white_alpha(18)), StrokeKind::Inside);
-                painter.galley(back.min + vec2(8.0, 4.0), galley, Color32::from_gray(235));
+                let radius = theme::TILE_RADIUS;
+                painter.rect_filled(back.translate(vec2(0.0, 1.5)), radius, Color32::from_black_alpha(55));
+                painter.rect(back, radius, Color32::from_rgba_unmultiplied(20, 22, 27, 235), Line::new(1.0, Color32::from_white_alpha(18)), StrokeKind::Inside);
+                painter.galley(back.min + vec2(pad_x, pad_y), galley, Color32::from_gray(235));
             }
         }
 

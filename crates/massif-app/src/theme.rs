@@ -113,6 +113,22 @@ pub const GROUP_RADIUS: u8 = 10;
 pub const TILE_RADIUS: u8 = 8;
 pub const PILL: u8 = 255;
 
+/// Spacing, in points. An area (a card) is [`HEADER_H`] tall at its top,
+/// its commands [`HEADER_CONTROL_H`] tall on the header's middle line,
+/// [`HEADER_INSET`] from its edges, rounded at [`HEADER_CONTROL_RADIUS`]
+/// so as to follow the card's corner at that inset (concentric). Its
+/// content and the text of its first command start [`PAD`] from its edge.
+pub const HEADER_H: f32 = 32.0;
+pub const HEADER_CONTROL_H: f32 = 24.0;
+pub const HEADER_INSET: f32 = (HEADER_H - HEADER_CONTROL_H) / 2.0;
+pub const HEADER_CONTROL_RADIUS: u8 = CARD_RADIUS - HEADER_INSET as u8;
+pub const PAD: f32 = 12.0;
+/// A note floating over the map (a message, the tag by the cursor): its
+/// margins, and the widest it grows before its words fold.
+pub const FLOAT_PAD_X: f32 = 12.0;
+pub const FLOAT_PAD_Y: f32 = 8.0;
+pub const FLOAT_MAX_W: f32 = 380.0;
+
 /// The `wght` axis of variable fonts.
 pub const WGHT: u32 = u32::from_be_bytes(*b"wght");
 /// Weights used in the interface.

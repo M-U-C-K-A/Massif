@@ -329,7 +329,7 @@ impl ReshapeForm {
 fn relief_settings(ui: &mut Ui, scale: &mut f32, shift: &mut f32) {
     for (label, tip) in [(tr!("Height"), tr!("How many times as high the relief stands over the sea")), (tr!("Raise by"), tr!("Blocks the whole map goes up (or down, below 0)"))] {
         ui.horizontal(|ui| {
-            ui.add_sized([96.0, 18.0], egui::Label::new(RichText::new(label).size(12.0))).on_hover_text(tip);
+            crate::widgets::name_label(ui, RichText::new(label).size(12.0), vec2(96.0, 18.0)).on_hover_text(tip);
             if label == "Height" {
                 ui.add(crate::widgets::Field::new(scale, 0.1..=4.0).max_decimals(2).suffix("×"));
             } else {
