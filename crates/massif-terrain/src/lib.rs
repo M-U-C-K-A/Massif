@@ -25,6 +25,7 @@ pub mod compile;
 pub mod engine;
 pub mod files;
 pub mod filters;
+pub mod format;
 pub mod geom;
 pub mod gpu;
 pub mod kernel;
