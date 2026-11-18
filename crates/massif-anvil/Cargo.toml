@@ -13,6 +13,7 @@ flate2.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+massif-structures.workspace = true
 massif-assets.workspace = true
 fastanvil = { version = "0.32", default-features = false }
 fastnbt = "2.6"
