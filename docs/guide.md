@@ -738,6 +738,8 @@ trees will count when layers exist.
 **Edit ▸ Whole map** runs one of the terrain graph's filters over the whole
 map, without opening the graph:
 
+- **Slabs**: the one-block steps smoothed with slabs when the map is
+  exported, and stairs in the corners (see [Slabs](#slabs)).
 - **Erosion**: rain runs down the slopes and carries soil from the heights
   to the valleys — gullies, worn flanks, fans of silt (the Erosion node:
   rain, erosion, deposition, capacity, evaporation, brush, seed).
@@ -1174,6 +1176,30 @@ take the place of a pocket's blocks where they are rock an ore takes
 gravel or clay; the export, the survival check and the cut of the Ores
 window agree block for block, so a pocket of diamond blocks is caught as
 riches lying around.
+
+### Slabs
+
+**Slabs** (the tool of that name, in the Decor group) smooths the land's
+one-block steps when it is exported, as the half blocks of WorldPainter
+did: at the foot of each step, a bottom slab of the block at the surface
+makes a half step, so a slope rises by half blocks. With **Stairs in the
+corners** on, a stair fills each inner corner, where the land steps up on
+two sides side by side. The slab is the one that **matches** the block at
+the surface, found by name as the Blocks panel finds a block's shapes
+(`stone_bricks` → `stone_brick_slab`, `oak_planks` → `oak_slab`, a mod's
+`conquest:old_bricks` → `conquest:old_bricks_slab`) among the blocks of the
+game and of the mods read; a block without a slab — grass, dirt, sand —
+stays whole. **Chosen** lays one slab of your own instead, of the game or
+of a mod, whatever the block at the surface, with its stairs in the
+corners. **Edit ▸ Whole map ▸ Slabs…** does the whole map (or the
+selection) at once, as one step to undo, and rubs it all out.
+
+Only a step of one block is smoothed (two blocks or more is a cliff), and
+only where the slab has room: in the air, or in still water, where the slab
+is waterlogged; never under a plant, snow or an object. The painted area
+shows hatched over the map while the tool is in hand, and the 3D View shows
+the slabs half a block high (a stair as its slab). Exports to 1.12 and
+older have no slabs.
 
 ### WorldPainter's layers in Massif
 

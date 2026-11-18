@@ -528,6 +528,10 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
         Tool::Annotate => annotation_settings(ui, tools),
         Tool::TreeSize => tree_size_settings(ui, tools),
         Tool::Pockets => pocket_settings(ui, tools, doc, blocks),
+        Tool::Slabs => {
+            slab_settings(ui, tools, blocks, "tool");
+            hint(ui, tr!("Shown over the map while the tool is in hand. Edit ▸ Whole map ▸ Slabs does the whole map."));
+        }
         Tool::Combined => combined_settings(ui, tools, doc),
         Tool::PaintBiome => {
             let reg = &doc.world.registry;
@@ -613,7 +617,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
                 None => hint(ui, tr!("Click on land: where it springs. The water finds its way down.")),
                 Some(draft) => {
                     ui.label(RichText::new(draft.summary()).strong());
-                    hint(ui, tr!("Drag the river to guide it · click elsewhere: where it ends · right-click a point: remove it."));
+                    hint(ui, tr!("Drag the river to guide it · click elsewhere: where it ends · right-click a point: remove it · Shift + click: a waterfall, Shift + right-click: remove it."));
                     ui.horizontal(|ui| {
                         if crate::widgets::button(ui, theme::with_icon(Icon::Route, tr!("Dig river"))).on_hover_text(tr!("Enter")).clicked() {
                             tools.river_note = crate::tools::dig_draft(doc, tools);
@@ -1690,6 +1694,84 @@ fn pocket_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, block
 
 /// The settings of the pocket layer picked (`tools.pocket_layer`), as Tool
 /// Settings and the layer's own dialog show them.
+/// What the Slabs tool and Edit ▸ Whole map ▸ Slabs lay: the slab that
+/// matches the block at the surface, or one chosen by hand, and stairs in
+/// the corners or not.
+pub fn slab_settings(ui: &mut Ui, tools: &mut ToolState, blocks: &mut BlockLibrary, id: &str) {
+    let ctx = ui.ctx().clone();
+    let catalogue = blocks.catalogue.clone();
+    let chosen = tools.slab_block.is_some();
+    crate::widgets::well(ui, |ui| {
+        crate::widgets::row(ui, tr!("Slab"), |ui| {
+            if let Some(k) = crate::widgets::button_group(ui, &format!("{id} slab source"), &[tr!("Matching"), tr!("Chosen")], &[!chosen, chosen]) {
+                tools.slab_block = match k {
+                    0 => None,
+                    _ => tools.slab_block.clone().or_else(|| Some("minecraft:stone_slab".to_owned())),
+                };
+            }
+        });
+        if let Some(state) = tools.slab_block.clone() {
+            crate::widgets::row(ui, tr!("Block"), |ui| {
+                let search_id = egui::Id::unique(id).with("slab block search");
+                let mut picked = None;
+                crate::widgets::menu_button(ui, plant_name(&state), |ui| {
+                    ui.set_max_width(300.0);
+                    let mut search: String = ui.ctx().data(|d| d.get_temp(search_id)).unwrap_or_default();
+                    crate::widgets::search(ui, &mut search, tr!("Search, or type a block id"), 280.0).request_focus();
+                    let needle = search.trim().to_lowercase();
+                    egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
+                        let mut shown = 0;
+                        if let Some(cat) = &catalogue {
+                            for b in cat.blocks.iter().filter(|b| massif_core::shapes::is_slab(&b.id)) {
+                                if !needle.is_empty() && !b.name.to_lowercase().contains(&needle) && !b.id.contains(&needle) {
+                                    continue;
+                                }
+                                shown += 1;
+                                if shown > 300 {
+                                    break;
+                                }
+                                ui.horizontal(|ui| {
+                                    let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
+                                    if let Some(t) = blocks.icon(&ctx, b) {
+                                        ui.painter().image(t, r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                                    }
+                                    if ui.selectable_label(false, &b.name).on_hover_text(&b.id).clicked() {
+                                        picked = Some(b.id.clone());
+                                    }
+                                });
+                            }
+                        }
+                        if needle.contains(':') || (shown == 0 && !needle.is_empty()) {
+                            let id = if needle.contains(':') { needle.clone() } else { format!("minecraft:{}", needle.replace(' ', "_")) };
+                            if crate::widgets::button(ui, tr!("Use {id}", id)).clicked() {
+                                picked = Some(id);
+                            }
+                        }
+                    });
+                    ui.ctx().data_mut(|d| d.insert_temp(search_id, search));
+                    if picked.is_some() {
+                        ui.close();
+                    }
+                })
+                .on_hover_text(state.as_str());
+                if picked.is_some() {
+                    tools.slab_block = picked;
+                }
+            });
+        }
+        crate::widgets::row(ui, tr!("Stairs in the corners"), |ui| {
+            crate::widgets::switch(ui, &mut tools.slab_stairs);
+        });
+    });
+    hint(
+        ui,
+        match tools.slab_block {
+            None => tr!("At the foot of each one-block step, a slab of the block at the surface: stone, bricks, planks, a mod's blocks. A block without a slab (grass, sand) stays whole."),
+            Some(_) => tr!("At the foot of each one-block step, this slab, whatever the block at the surface; its stairs in the corners."),
+        },
+    );
+}
+
 pub fn pocket_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary) {
     let pal = Palette::of(ui);
     let ctx = ui.ctx().clone();

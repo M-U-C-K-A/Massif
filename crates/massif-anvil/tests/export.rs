@@ -1744,3 +1744,114 @@ fn modded_biomes_are_exported_by_their_ids() {
     assert!(!biome_ids(&dir, 0, 0).iter().any(|b| !b.starts_with("minecraft:")), "the rest of the map keeps the game's");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// The steps of the land smoothed with slabs where the Slabs layer is
+/// painted: a bottom slab of the surface's block at the foot of each step,
+/// waterlogged in water, a stair in an inner corner, a mod's own slab for
+/// its block, and nothing for a block without a slab.
+#[test]
+fn slabs_smooth_the_steps_of_the_land() {
+    use massif_core::registry::{Mix, Stratum, TerrainDef, TerrainId};
+    use massif_core::shapes;
+    let mut world = generate(&GenParams { tiles_x: 2, tiles_z: 2, landform: Landform::Hills, seed: 3, ..GenParams::default() });
+    world.meta.ores.on = false;
+    let stone = world.registry.terrain_by_name("Stone").unwrap();
+    let grass = world.registry.terrain_by_name("Grass").unwrap();
+    let reg = &mut world.registry;
+    let bricks = reg.intern_block("conquest:old_bricks", [128, 128, 128]);
+    reg.terrains.push(TerrainDef {
+        name: "Old bricks".into(),
+        group: "Conquest Reforged".into(),
+        color: [128, 128, 128],
+        strata: vec![Stratum { blocks: vec![(bricks, 1)], depth: (3, 5), mix: Mix::Grain }],
+        submerged_top: None,
+        biome_hint: None,
+    });
+    let old_bricks = TerrainId((reg.terrains.len() - 1) as u16);
+    let positions: Vec<TilePos> = world.dims[0].ground().positions().collect();
+    for pos in positions {
+        let (ox, oz) = pos.origin();
+        let tile = world.dims[0].ground_mut().tile_mut(pos).unwrap();
+        for i in 0..massif_core::TILE_AREA {
+            let (x, z) = (ox + (i % 128) as i32, oz + (i / 128) as i32);
+            // A step up east of x = 0, a notch up north of (-1, -5), a
+            // pool west of x = -30 level with the land, one block deep.
+            let high = x >= 0 || (x, z) == (-1, -6);
+            let pool = x < -30;
+            tile.top.set(i, if high { 65.0 } else if pool { 63.0 } else { 64.0 });
+            tile.fluid.set(i, if pool { 64 } else { massif_core::NO_FLUID });
+            tile.terrain.set(i, if z < 0 { stone.0 } else if z < 20 { old_bricks.0 } else { grass.0 });
+            tile.cover.set(i, 0);
+            tile.objects.set(i, 0);
+        }
+    }
+    let mut h = History::default();
+    h.begin("slabs", 0);
+    shapes::fill_slabs(&mut h.edit(&mut world, 0), shapes::value(None, true));
+    h.commit();
+    let dir = temp_dir("slabs");
+    let options = ExportOptions {
+        target: Target::release("1.21.11").unwrap(),
+        mod_blocks: std::sync::Arc::new(["conquest:old_bricks_slab", "conquest:old_bricks_stairs"].map(String::from).into_iter().collect()),
+        ..ExportOptions::default()
+    };
+    export(&world.snapshot(), &dir, &options, &Progress::default()).unwrap();
+    let mut r = Reader::new(&dir);
+    let has = |s: &str, parts: &[&str]| parts.iter().all(|p| s.contains(p));
+    // At the foot of the step, on stone: a dry bottom slab of stone.
+    assert_eq!(r.block(-1, 63, -10), "minecraft:stone");
+    let s = r.state(-1, 64, -10);
+    assert!(has(&s, &["minecraft:stone_slab", "type=bottom"]), "{s}");
+    // On top of the step and away from it: nothing.
+    assert_eq!(r.block(0, 65, -10), "minecraft:air");
+    assert_eq!(r.block(-5, 64, -10), "minecraft:air");
+    // In the inner corner, steps up north and east: a stair.
+    let s = r.state(-1, 64, -5);
+    assert!(has(&s, &["minecraft:stone_stairs", "facing=north", "half=bottom", "shape=inner_right"]), "{s}");
+    // At the pool's edge, under water: waterlogged (which fastanvil does
+    // not read: the palettes say it).
+    assert_eq!(r.block(-31, 63, -10), "minecraft:stone_slab");
+    let mut states = std::collections::BTreeSet::new();
+    for chunk in chunk_values(&dir) {
+        let Some(fastnbt::Value::List(sections)) = chunk.get("sections") else { continue };
+        for section in sections {
+            let fastnbt::Value::Compound(section) = section else { continue };
+            let Some(fastnbt::Value::Compound(bs)) = section.get("block_states") else { continue };
+            let Some(fastnbt::Value::List(palette)) = bs.get("palette") else { continue };
+            for entry in palette {
+                let fastnbt::Value::Compound(entry) = entry else { continue };
+                let Some(fastnbt::Value::String(name)) = entry.get("Name") else { continue };
+                let mut props: Vec<String> = match entry.get("Properties") {
+                    Some(fastnbt::Value::Compound(p)) => p.iter().map(|(k, v)| format!("{k}={}", match v { fastnbt::Value::String(s) => s.as_str(), _ => "?" })).collect(),
+                    _ => Vec::new(),
+                };
+                props.sort();
+                states.insert(format!("{name}[{}]", props.join(",")));
+            }
+        }
+    }
+    for want in ["minecraft:stone_slab[type=bottom,waterlogged=true]", "minecraft:stone_slab[type=bottom,waterlogged=false]", "conquest:old_bricks_slab[type=bottom,waterlogged=false]", "minecraft:stone_stairs[facing=north,half=bottom,shape=inner_right,waterlogged=false]"] {
+        assert!(states.contains(want), "{want} in {:?}", states.iter().filter(|s| s.contains("slab") || s.contains("stairs")).collect::<Vec<_>>());
+    }
+    // A mod's block: its own slab.
+    let s = r.state(-1, 64, 5);
+    assert!(has(&s, &["conquest:old_bricks_slab", "type=bottom"]), "{s}");
+    // Grass has no slab: it stays whole.
+    assert_eq!(r.block(-1, 64, 25), "minecraft:air");
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    // A slab chosen by hand, everywhere the step is.
+    let oak = world.registry.intern_block("minecraft:oak_slab", [160, 130, 80]);
+    let mut h = History::default();
+    h.begin("oak", 0);
+    shapes::fill_slabs(&mut h.edit(&mut world, 0), shapes::value(Some(oak), false));
+    h.commit();
+    let dir = temp_dir("slabs-oak");
+    export(&world.snapshot(), &dir, &options, &Progress::default()).unwrap();
+    let mut r = Reader::new(&dir);
+    for z in [-10, -5, 5, 25] {
+        let s = r.state(-1, 64, z);
+        assert!(has(&s, &["minecraft:oak_slab", "type=bottom"]), "at z {z}: {s}");
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}

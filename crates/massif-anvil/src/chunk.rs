@@ -110,12 +110,31 @@ pub struct ExportContext<'a> {
     bands: [(i32, i32, Option<u16>); 4],
     /// The biomes of columns left on automatic.
     auto: AutoBiomes,
+    /// The slab and stairs of each block of the registry, by `BlockId`,
+    /// as written (see [`ShapeStates`]): `None` for a block with none.
+    shapes: Vec<Option<ShapeStates>>,
+}
+
+/// The states of a block's slab and stairs, dry and in water: a bottom
+/// slab, and bottom stairs in an inner corner, by facing (north, east,
+/// south, west) and extra quarter (left, right).
+#[derive(Debug, Clone, Copy)]
+struct ShapeStates {
+    slab: [u16; 2],
+    corners: Option<[[[u16; 2]; 2]; 4]>,
 }
 
 impl<'a> ExportContext<'a> {
     /// Fails with a description if the registry or the build limits cannot be
     /// exported.
     pub fn new(world: &'a World, dim: &Dimension, target: &Target) -> Result<Self, String> {
+        Self::with_mods(world, dim, target, &std::collections::HashSet::new())
+    }
+
+    /// [`Self::new`], knowing the blocks of the mods read (`mods`, by id):
+    /// the slabs and stairs that smooth the land's steps are found among
+    /// them and the version's own.
+    pub fn with_mods(world: &'a World, dim: &Dimension, target: &Target, mods: &std::collections::HashSet<String>) -> Result<Self, String> {
         let reg = &world.registry;
         let era = target.era();
         let (min_y, max_y) = target.heights(dim.min_y, dim.max_y);
@@ -319,6 +338,55 @@ impl<'a> ExportContext<'a> {
                 })
             })
             .collect();
+        // The slabs and stairs that smooth the steps of the land, after the
+        // ores (the ground, which objects do not take the place of). Only
+        // by name, from 1.13 on.
+        let shapes = if era == Era::Numbered {
+            Vec::new()
+        } else {
+            let exists = |name: &str| match name.strip_prefix("minecraft:") {
+                Some(short) => target.has_block(short),
+                None => mods.contains(name),
+            };
+            let family = massif_core::shapes::Family::new(reg, &exists);
+            let mut add = |name: &str, props: Vec<(String, String)>| {
+                states.push((name.to_owned(), props));
+                (states.len() - 1).min(SKIP as usize - 1) as u16
+            };
+            family
+                .of
+                .iter()
+                .enumerate()
+                .map(|(k, f)| {
+                    let (slab, stairs) = f.as_ref()?;
+                    // A slab chosen by hand keeps its own properties (a
+                    // mod's `layers`), but for its half and its water.
+                    let own: Vec<(String, String)> = match reg.blocks[k].name() == slab {
+                        true => reg.blocks[k].properties().filter(|(p, _)| !matches!(*p, "type" | "half" | "waterlogged")).map(|(p, v)| (p.to_owned(), v.to_owned())).collect(),
+                        false => Vec::new(),
+                    };
+                    let wet = |w: bool| ("waterlogged".to_owned(), w.to_string());
+                    let slab = [false, true].map(|w| {
+                        let mut props = own.clone();
+                        props.push(("type".to_owned(), "bottom".to_owned()));
+                        props.push(wet(w));
+                        add(slab, props)
+                    });
+                    let corners = stairs.as_ref().map(|stairs| {
+                        massif_core::shapes::Side::ALL.map(|facing| {
+                            [true, false].map(|left| {
+                                let shape = massif_core::shapes::Shape::Corner { facing, left }.stair_shape();
+                                [false, true].map(|w| {
+                                    let props = vec![("facing".to_owned(), facing.name().to_owned()), ("half".to_owned(), "bottom".to_owned()), ("shape".to_owned(), shape.to_owned()), wet(w)];
+                                    add(stairs, props)
+                                })
+                            })
+                        })
+                    });
+                    Some(ShapeStates { slab, corners })
+                })
+                .collect()
+        };
         if states.len() >= UNSET as usize {
             return Err("the covers and objects use too many blocks".into());
         }
@@ -402,6 +470,7 @@ impl<'a> ExportContext<'a> {
             pockets: massif_core::pockets::Pockets::new(reg, world.meta.seed as u64, dim.min_y),
             hosts,
             auto: AutoBiomes::new(reg, world.meta.sea_level, min_y),
+            shapes,
         })
     }
 
@@ -716,6 +785,7 @@ pub fn build_chunk(
     cz: usize,
     objects: &[Placement],
     steady: &[massif_core::water::Steady],
+    slabs: &[massif_core::shapes::Placed],
     scratch: &mut Scratch,
 ) -> Vec<u8> {
     let (ox, oz) = tile.origin();
@@ -910,6 +980,34 @@ pub fn build_chunk(
             }
         }
     }
+    // ---- slabs -------------------------------------------------------------
+    // The steps of the land smoothed, last: only in the air or the still
+    // water over the top block, so nothing that grows or stands there.
+    if !slabs.is_empty() && !ctx.shapes.is_empty() {
+        for p in slabs {
+            let (lx, lz) = (p.cell as usize % massif_core::TILE_SIZE as usize, p.cell as usize / massif_core::TILE_SIZE as usize);
+            if lx / 16 != cx || lz / 16 != cz || p.y <= min_y || p.y >= max_y {
+                continue;
+            }
+            let column = ((lz & 15) << 4) | (lx & 15);
+            let at = |y: i32| (((y - min_y) as usize) << 8) | column;
+            let old = blocks[at(p.y)];
+            let wet = old == ctx.water && !ctx.lava;
+            if old != 0 && !wet {
+                continue;
+            }
+            // The slab chosen by hand, or the one of the top block.
+            let source = p.block.map_or(blocks[at(p.y - 1)], |b| b.0);
+            let Some(Some(states)) = ctx.shapes.get(source as usize) else { continue };
+            let w = wet as usize;
+            blocks[at(p.y)] = match (p.shape, states.corners) {
+                (massif_core::shapes::Shape::Corner { facing, left }, Some(c)) => c[facing as usize][(!left) as usize][w],
+                _ => states.slab[w],
+            };
+            top = top.max(p.y + 1);
+        }
+    }
+
     // The sections that hold something; those above are air.
     let filled = (((top.min(max_y) - min_y).max(0) as usize).div_ceil(16)).min(sections);
     *dirty = filled * SECTION_VOLUME;

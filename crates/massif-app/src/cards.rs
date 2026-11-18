@@ -240,6 +240,12 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
             Some(tr!("They take their share of the rock between their heights, never the strata of the ground.")),
             Some(Demo::Pockets),
         ),
+        Tool::Slabs => card(
+            tr!("Smooths the land's one-block steps with slabs when it is exported, as the half blocks of WorldPainter: a slab of the block at the surface at the foot of each step, stairs in the inner corners."),
+            vec![(tr!("Drag"), tr!("Smooth the steps")), (tr!("Right-drag"), tr!("Rub it out"))],
+            Some(tr!("Edit ▸ Whole map ▸ Slabs does the whole map. A block without a slab (grass, sand) stays whole, unless a slab is chosen by hand.")),
+            None,
+        ),
         Tool::Combined => card(
             tr!("Paints several layers at once, as WorldPainter's combined layers: a forest's terrain, biome, ground cover and trees in one stroke."),
             vec![(tr!("Drag"), tr!("Paint them all")), (tr!("Right-drag"), tr!("Rub them out"))],

@@ -41,6 +41,8 @@ pub enum Command {
     AutoPaint,
     AutoRules,
     WholeMap(WholeOp),
+    /// Edit ▸ Whole map ▸ Slabs: the steps of the whole map smoothed.
+    WholeSlabs,
     Caves,
     /// An image painted onto the map (see `import_mask`).
     ImportMask,
@@ -271,6 +273,7 @@ pub fn menus(state: &State) -> Vec<Menu> {
             entries: WholeOp::ALL
                 .iter()
                 .map(|&op| tipped(Command::WholeMap(op), op.icon(), &format!("{}…", crate::i18n::tr_name(op.label())), map, crate::i18n::tr_name(op.about())))
+                .chain([Entry::Separator, tipped(Command::WholeSlabs, Icon::ChartNoAxesColumn, tr!("Slabs…"), map, tr!("The one-block steps of the land smoothed with slabs when it is exported, and stairs in the corners"))])
                 .collect(),
         },
         tipped(Command::RealTerrain, Icon::Earth, tr!("Relief of a Real Place…"), map, tr!("The heights of a place on the Earth, into the selection or the whole map")),

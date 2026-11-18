@@ -1357,6 +1357,7 @@ impl MapView {
             annotations: self.annotations,
             sizes: tools.show_sizes || tools.tool == tools::Tool::TreeSize,
             pockets: tools.tool == tools::Tool::Pockets,
+            slabs: tools.tool == tools::Tool::Slabs,
         };
         let ppp = ui.ctx().pixels_per_point();
         let blocks_per_px = 1.0 / (self.zoom * ppp);

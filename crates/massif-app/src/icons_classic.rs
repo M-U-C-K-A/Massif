@@ -217,6 +217,11 @@ pub fn paint(painter: &Painter, rect: Rect, tool: Tool, color: Color32) {
             pen.ring(16.0, 17.0, 3.2);
             pen.ring(17.5, 10.5, 1.6);
         }
+        // Steps of the land, a half step at the foot of each.
+        Tool::Slabs => {
+            pen.line(&[(2.0, 20.5), (22.0, 20.5)]);
+            pen.line(&[(2.0, 20.5), (2.0, 16.5), (6.0, 16.5), (6.0, 14.5), (10.0, 14.5), (10.0, 10.5), (14.0, 10.5), (14.0, 8.5), (18.0, 8.5), (18.0, 4.5), (22.0, 4.5)]);
+        }
         // Three trees, small to large, on the ground.
         Tool::TreeSize => {
             pen.line(&[(2.0, 20.5), (22.0, 20.5)]);

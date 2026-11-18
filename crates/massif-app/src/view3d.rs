@@ -93,6 +93,9 @@ pub const EAST: u8 = 2;
 pub const WEST: u8 = 3;
 pub const SOUTH: u8 = 4;
 pub const NORTH: u8 = 5;
+/// Added to a face's direction: half a block high — a slab's. Its top
+/// (up) is half a block over `y`, its sides `h` halves high.
+pub const HALF: u8 = 8;
 
 /// One face, drawn as an instanced quad. Positions are in blocks from the
 /// north-west corner of the chunk.
@@ -913,6 +916,40 @@ fn build_tile_part(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: T
         }
     }
 
+    // Slabs: the steps the export smooths, half a block high at their foot,
+    // where the land's top is in the air (as the export lays them). A stair
+    // in a corner shows as its slab.
+    let plan = massif_core::shapes::plan_tile(dim, tile);
+    if !plan.is_empty() {
+        let mods = crate::blocks::mod_blocks();
+        let family = massif_core::shapes::Family::new(reg, &|name| crate::blocks::block_exists(None, &mods, name));
+        let solid_at = |x: i32, z: i32, y: i32| grid.spans(x, z).iter().any(|s| s.y0 <= y && y < s.y1);
+        for p in plan {
+            let (i, j) = (p.cell as usize % n, p.cell as usize / n);
+            let (x, z) = (cx + i as i32, cz + j as i32);
+            let spans = grid.spans(x, z);
+            let Some(k) = spans.iter().rposition(|s| s.color.is_none()) else { continue };
+            if spans[k].y1 != p.y || solid_at(x, z, p.y) || grid.cover[grid.cell(x, z)] != 0 {
+                continue;
+            }
+            let skin = tops[j * n + i][k];
+            let (color, mat) = match p.block {
+                Some(b) => (reg.block(b).color, material(b.0 as u32)),
+                None if (skin.top_mat as usize) < reg.blocks.len() && family.has_slab(massif_core::BlockId(skin.top_mat)) => (skin.top, skin.top_mat),
+                None => continue,
+            };
+            let c = rgba(color, 255);
+            out.solid.push(face(i as u8, j as u8, UP | HALF, 1, clamp16(p.y), 1, c, mat));
+            for (dir, (dx, dz)) in [(EAST, (1, 0)), (WEST, (-1, 0)), (SOUTH, (0, 1)), (NORTH, (0, -1))] {
+                if solid_at(x + dx, z + dz, p.y) {
+                    continue;
+                }
+                let (fx, fz) = (i as i32 + dx.max(0), j as i32 + dz.max(0));
+                out.solid.push(face(fx as u8, fz as u8, dir | HALF, 1, clamp16(p.y), 1, c, mat));
+            }
+        }
+    }
+
     // Water, as the game draws it. Each column's water is a run of blocks
     // from its ground up. Where it stands over a lower neighbour (a step
     // of a river, a fall, open land) the game pours flowing water over that
@@ -1341,12 +1378,14 @@ fn vs_main(@builtin(vertex_index) vi: u32, f: FaceIn) -> VertexOut {
     // Corners (0,0) (1,0) (1,1) (0,0) (1,1) (0,1): two triangles.
     let u = f32((0x16u >> vi) & 1u);
     let v = f32((0x34u >> vi) & 1u);
-    let dir = f.xz_dir_len.z;
+    // A slab's faces: half a block high.
+    let half = (f.xz_dir_len.z & 8u) != 0u;
+    let dir = f.xz_dir_len.z & 7u;
     let x = f32(f.xz_dir_len.x);
     let z = f32(f.xz_dir_len.y);
     let len = f32(f.xz_dir_len.w);
-    let y = f32(f.y_h.x);
-    let h = f32(f.y_h.y);
+    let y = f32(f.y_h.x) + select(0.0, 0.5, half && dir == 0u);
+    let h = f32(f.y_h.y) * select(1.0, 0.5, half && dir >= 2u);
     let slot = i32(f.mat.y);
     let tile = textureLoad(chunk_tiles, vec2<i32>(slot % 256, slot / 256), 0).xy;
     // Where the chunk is from the frame's origin, in whole blocks.
@@ -6285,6 +6324,55 @@ mod tests {
         assert!(rects.len() <= 4, "{rects:?}");
     }
 
+    /// A map whose land steps up a block east of x = 0, stone south of
+    /// z = 0 and grass north of it, its steps smoothed with slabs.
+    pub(crate) fn stepped_world() -> World {
+        let mut w = generate(&GenParams { tiles_x: 2, tiles_z: 2, landform: Landform::Hills, seed: 3, ..GenParams::default() });
+        let (stone, grass) = (w.registry.terrain_by_name("Stone").unwrap(), w.registry.terrain_by_name("Grass").unwrap());
+        let positions: Vec<TilePos> = w.dims[0].ground().positions().collect();
+        for pos in positions {
+            let (ox, oz) = pos.origin();
+            let tile = w.dims[0].ground_mut().tile_mut(pos).unwrap();
+            for i in 0..massif_core::TILE_AREA {
+                let (x, z) = (ox + (i % 128) as i32, oz + (i / 128) as i32);
+                // Steps up east every 4 blocks from x = -24, and a notch.
+                let step = ((x + 24).max(0) / 4).min(12) as f32;
+                tile.top.set(i, 64.0 + step + if (x, z) == (-1, -6) { 1.0 } else { 0.0 });
+                tile.fluid.set(i, massif_core::NO_FLUID);
+                tile.terrain.set(i, if z < 0 { stone.0 } else { grass.0 });
+                tile.cover.set(i, 0);
+                tile.objects.set(i, 0);
+            }
+        }
+        let mut h = massif_core::History::new(4);
+        h.begin("slabs", 0);
+        massif_core::shapes::fill_slabs(&mut h.edit(&mut w, 0), massif_core::shapes::value(None, true));
+        h.commit();
+        w
+    }
+
+    /// The steps smoothed with slabs show in 3D: half a block high at the
+    /// foot of each step of stone, none on grass, which has no slab.
+    #[test]
+    fn slabs_show_half_a_block_high() {
+        let w = stepped_world();
+        let dim = &w.dims[0];
+        let tile = TilePos::new(-1, -1);
+        let b = build_tile(dim, &w.registry, 63.0, w.meta.seed, tile, STYLE);
+        let tops: Vec<&Face> = b.faces.solid.iter().filter(|f| f.dir == UP | HALF).collect();
+        // The foot of the step at x = -1 (its top at 69, x = 0.s at 70)…
+        let (i, j) = ((-1 - tile.x * 128) as u8, (-10 - tile.z * 128) as u8);
+        let foot = tops.iter().find(|f| f.x == i && f.z == j).expect("a slab at the foot of the step");
+        assert_eq!(foot.y, 69);
+        // …and a side half a block high toward the lower land west of it.
+        assert!(b.faces.solid.iter().any(|f| f.dir == WEST | HALF && f.x == i && f.z == j && f.h == 1));
+        // None on the flat land west of the steps.
+        assert!(!tops.iter().any(|f| (f.x as i32 + tile.x * 128) < -25));
+        // None on grass, north of z = 0.
+        let b = build_tile(dim, &w.registry, 63.0, w.meta.seed, TilePos::new(-1, 0), STYLE);
+        assert!(!b.faces.solid.iter().any(|f| f.dir & HALF != 0), "grass has no slab");
+    }
+
     /// Columns of plain ground go to the tracer at their exact height; the
     /// others (the island, the cave) are meshed, block by block.
     #[test]
@@ -7085,6 +7173,36 @@ mod gradient_shots {
         h.begin("shot", 0);
         f(&mut h.edit(world, 0));
         h.commit();
+    }
+
+    /// The steps of stone smoothed with slabs, before and after, in the
+    /// game's look, at 1× and 2× (MASSIF_SNAPSHOT_DIR; needs Minecraft).
+    #[test]
+    fn slabs_in_3d_renders() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from) else {
+            return;
+        };
+        let Some((cat, _)) = shots::catalogues() else {
+            eprintln!("needs Minecraft: skipping");
+            return;
+        };
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("no GPU adapter: skipping");
+            return;
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+        let mut world = super::tests::stepped_world();
+        massif_assets::apply_colors(&mut world.registry, &cat);
+        // Facing the steps as they rise, east.
+        let camera = Camera { target: [-10.0, 67.0, -12.0], yaw: 4.71, pitch: 0.3, distance: 14.0 };
+        let mut bare = world.clone();
+        edit(&mut bare, |e| massif_core::shapes::fill_slabs(e, 0));
+        for (scale, tag) in [(1, "1x"), (2, "2x")] {
+            let size = [1200 * scale, 760 * scale];
+            game_look(&device, &queue, &bare, &cat, camera, size).save(dir.join(format!("3d-slabs-before-{tag}.png"))).unwrap();
+            game_look(&device, &queue, &world, &cat, camera, size).save(dir.join(format!("3d-slabs-after-{tag}.png"))).unwrap();
+        }
     }
 
     #[test]

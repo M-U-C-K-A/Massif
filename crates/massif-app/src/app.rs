@@ -381,6 +381,8 @@ enum Dialog {
     LayerImport(Vec<crate::layers::LayerImport>),
     /// The block palettes window.
     Palettes(Box<crate::palettes::PaletteEditor>),
+    /// Edit ▸ Whole map ▸ Slabs: which slabs, to lay or rub out.
+    Slabs,
     /// Flood from the click on a spot that is not in a hollow: how far the
     /// water would spread, to flood anyway or not.
     FloodAsk(crate::tools::FloodAsk),
@@ -2028,6 +2030,20 @@ impl MassifApp {
 
     /// The dialog of a filter over the whole map, with a cold copy of the
     /// map for its pictures.
+    /// Edit ▸ Whole map ▸ Slabs: lay the slabs the tool's settings ask for
+    /// over the whole map (or the selection), or rub them all out, as one
+    /// step to undo.
+    fn slabs_whole(&mut self, ctx: &egui::Context, lay: bool) {
+        let value = if lay { crate::tools::slab_value(&self.tools, &mut self.doc.world.registry) } else { 0 };
+        let label = if lay { tr!("Slabs: whole map") } else { tr!("Slabs rubbed out") };
+        let dim = self.doc.dim;
+        self.doc.history.begin(label, dim);
+        massif_core::shapes::fill_slabs(&mut self.doc.history.edit(&mut self.doc.world, 0), value);
+        self.doc.commit();
+        let msg = if lay { tr!("The steps are smoothed with slabs where the map is exported") } else { tr!("No slabs any more") };
+        self.say(ctx, msg, false, None);
+    }
+
     fn open_reshape(&mut self, what: crate::reshape::WholeOp) {
         let map = self.doc.world.dims[self.doc.dim].snapshot();
         self.dialog = Some(Dialog::Reshape(Box::new(crate::reshape::ReshapeForm::new(what, map, self.doc.world.meta.sea_level))));
@@ -3069,6 +3085,7 @@ impl MassifApp {
             Command::AutoPaint => self.tools.run_auto = Some(false),
             Command::AutoRules => self.dialog = Some(Dialog::AutoRules(false)),
             Command::WholeMap(what) => self.open_reshape(what),
+            Command::WholeSlabs => self.dialog = Some(Dialog::Slabs),
             Command::Caves => self.open_caves(),
             Command::ImportMask => self.pick_mask(ctx, false),
             Command::RealTerrain => self.open_real(false),
@@ -4352,6 +4369,48 @@ impl MassifApp {
                     }
                 }
             }
+            Dialog::Slabs => {
+                let mut choice = None;
+                let selected = self.doc.dimension().selection.is_some();
+                let response = modal(ctx, "slabs").show(ctx, |ui| {
+                    ui.set_width(420.0);
+                    ui.label(RichText::new(tr!("Slabs")).bold().size(15.0));
+                    let what = if selected {
+                        tr!("The one-block steps of the selection smoothed when the map is exported: a slab at the foot of each step, stairs in the inner corners.")
+                    } else {
+                        tr!("The one-block steps of the whole map smoothed when it is exported: a slab at the foot of each step, stairs in the inner corners.")
+                    };
+                    ui.add(egui::Label::new(what).wrap());
+                    ui.add_space(8.0);
+                    crate::panels::slab_settings(ui, &mut self.tools, &mut self.blocks, "whole map");
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                            if ui.add(theme::primary_button(ui, tr!("Smooth the steps"))).clicked() {
+                                choice = Some(true);
+                            }
+                            if ui.button(tr!("Cancel")).clicked() {
+                                choice = Some(false);
+                            }
+                            ui.with_layout(egui::Layout::left_to_right(Align::Center), |ui| {
+                                if crate::widgets::button(ui, tr!("Rub them out")).clicked() {
+                                    choice = Some(false);
+                                    self.slabs_whole(ctx, false);
+                                }
+                            });
+                        });
+                    });
+                });
+                match choice {
+                    Some(true) => self.slabs_whole(ctx, true),
+                    Some(false) => {}
+                    None => {
+                        if !response.should_close() {
+                            self.dialog = Some(Dialog::Slabs);
+                        }
+                    }
+                }
+            }
             Dialog::DeletePoint(index) => {
                 let mut choice = None;
                 let name = self.doc.world.points.get(index).map(|p| p.name.clone()).unwrap_or_default();
@@ -4876,6 +4935,7 @@ impl MassifApp {
                         spawn: Some(form.spawn),
                         target: form.target.clone(),
                         selection_only: form.has_selection && form.selection_only,
+                        mod_blocks: crate::blocks::mod_block_ids(self.blocks.catalogue.as_deref()),
                         ..ExportOptions::default()
                     };
                     // Keeping to the selection, players appear in it.
@@ -5174,6 +5234,7 @@ impl MassifApp {
         self.blocks.poll();
         // The player's view draws the game's own textures.
         self.view3d.catalogue.clone_from(&self.blocks.catalogue);
+        crate::blocks::note_catalogue(self.blocks.catalogue.as_ref());
         self.sculpt3d.catalogue.clone_from(&self.blocks.catalogue);
         if let Some(cat) = self.blocks.catalogue.clone()
             && self.blocks.applied != Some(self.doc.generation)
@@ -6573,6 +6634,64 @@ mod tests {
         h.key_press_modifiers(Modifiers::COMMAND, egui::Key::D);
         h.run_steps(2);
         assert!(h.state().doc.selection().is_none());
+    }
+
+    /// The Slabs tool: its settings in Tool Settings, then Edit ▸ Whole
+    /// map ▸ Slabs lays them over the whole map as one step to undo, with
+    /// the slab chosen there, and rubs them out (rendered with
+    /// MASSIF_SNAPSHOT_DIR, at MASSIF_SNAPSHOT_PPP).
+    #[test]
+    fn slabs_tool_and_whole_map() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(3);
+        h.state_mut().tools.select(Tool::Slabs);
+        h.run_steps(3);
+        assert!(h.state().tools.slab_block.is_none() && h.state().tools.slab_stairs);
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let ppp = h.ctx.pixels_per_point();
+        let tag = if ppp > 1.5 { "2x" } else { "1x" };
+        h.get_by_label("Chosen").click();
+        h.run_steps(3);
+        assert_eq!(h.state().tools.slab_block.as_deref(), Some("minecraft:stone_slab"));
+        if let Some(dir) = &dir {
+            let image = h.render().unwrap();
+            let rect = h.get_by_label("Stairs in the corners").rect();
+            let (x0, y0) = (((rect.left() - 40.0).max(0.0) * ppp) as u32, ((rect.top() - 200.0).max(0.0) * ppp) as u32);
+            let crop = image::imageops::crop_imm(&image, x0, y0, (380.0 * ppp) as u32, (340.0 * ppp) as u32).to_image();
+            crop.save(dir.join(format!("tool-settings-slabs-{tag}.png"))).unwrap();
+        }
+        let ctx = h.ctx.clone();
+        h.state_mut().command(&ctx, Command::WholeSlabs);
+        h.run_steps(4);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join(format!("dialog-whole-map-slabs-{tag}.png"))).unwrap();
+        }
+        h.get_by_label("Smooth the steps").click();
+        h.run_steps(3);
+        let laid = |h: &egui_kittest::Harness<'_, MassifApp>| {
+            let dim = h.state().doc.dimension();
+            dim.ground().positions().filter(|&p| dim.ground().view(p).is_some_and(|t| t.slabs.uniform_value() != Some(0))).count()
+        };
+        let reg = &h.state().doc.world.registry;
+        let stone = reg.blocks.iter().position(|b| b.state == "minecraft:stone_slab").expect("the chosen slab registered");
+        let dim = h.state().doc.dimension();
+        let pos = dim.ground().positions().next().unwrap();
+        assert_eq!(dim.ground().view(pos).unwrap().slabs.uniform_value(), Some(massif_core::shapes::value(Some(massif_core::BlockId(stone as u16)), true)));
+        assert_eq!(laid(&h), h.state().doc.dimension().ground().len());
+        assert!(h.state().dialog.is_none());
+        // One step to undo.
+        let ctx = h.ctx.clone();
+        h.state_mut().command(&ctx, Command::Undo);
+        h.run_steps(2);
+        assert_eq!(laid(&h), 0);
+        // Rubbed out from the dialog.
+        h.state_mut().command(&ctx, Command::Redo);
+        h.state_mut().command(&ctx, Command::WholeSlabs);
+        h.run_steps(4);
+        h.get_by_label("Rub them out").click();
+        h.run_steps(3);
+        assert_eq!(laid(&h), 0);
     }
 
     #[test]
@@ -16739,6 +16858,7 @@ mod tests {
         openers.push(("Update".into(), Box::new(|app: &mut MassifApp, _: &egui::Context| app.dialog = Some(Dialog::Update))));
         openers.push(("Crashed".into(), Box::new(|app: &mut MassifApp, _: &egui::Context| app.dialog = Some(Dialog::Crashed("index out of bounds: the len is 3 but the index is 7".into(), None)))));
         openers.push(("PointName".into(), Box::new(|app: &mut MassifApp, _: &egui::Context| app.dialog = Some(Dialog::PointName(None, "Before the rivers".into())))));
+        openers.push(("Slabs".into(), Box::new(|app: &mut MassifApp, ctx: &egui::Context| app.command(ctx, Command::WholeSlabs))));
         openers.push(("FloodAsk".into(), Box::new(|app: &mut MassifApp, _: &egui::Context| app.dialog = Some(Dialog::FloodAsk(crate::tools::FloodAsk { x: 0, z: 0, level: 70, columns: 65536, more: true, at_rim: false })))));
         // What is past the window with no dialog (the 3D View's header, cut
         // by its area) is not the dialogs'.

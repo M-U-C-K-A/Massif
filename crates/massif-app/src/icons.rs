@@ -59,6 +59,8 @@ const WATER: &[&str] = &[
 /// A floating island over the ground: a hill on top, rock tapering under
 /// it.
 const SLAB: &[&str] = &["M6 7c1-2 3-3 6-3s5 1 6 3", "M3 7h18l-3.5 4H15l-3 5-3-5H6.5Z", "M3 21h18"];
+/// Steps of the land, each with a half step at its foot.
+const SLABS: &[&str] = &["M3 20h18", "M3 20v-4h4v-2h4v-4h4v-2h4v-4h2", "M7 16h-4", "M15 8h-4"];
 /// A tree, the sparkles of the automatic tools.
 const AUTO_BIOME: &[&str] = &[
     "@0.82,-0.5,3.9 M8 19a4 4 0 0 1-2.24-7.32A3.5 3.5 0 0 1 9 6.03V6a3 3 0 1 1 6 0v.04a3.5 3.5 0 0 1 3.24 5.65A4 4 0 0 1 16 19Z",
@@ -103,6 +105,7 @@ fn art(tool: Tool) -> Art {
         Tool::Annotate => Art::Glyph(Icon::PenLine),
         Tool::TreeSize => Art::Glyph(Icon::ChartNoAxesColumnIncreasing),
         Tool::Pockets => Art::Glyph(Icon::Gem),
+        Tool::Slabs => Art::Paths(SLABS),
         Tool::Combined => Art::Glyph(Icon::Combine),
         Tool::Water => Art::Paths(WATER),
         Tool::EraseSlab => Art::Glyph(Icon::Eraser),
@@ -431,7 +434,7 @@ mod tests {
     use super::*;
 
     /// Every tool, in the order of the Tools panel.
-    pub(super) const ALL: [Tool; 31] = [
+    pub(super) const ALL: [Tool; 32] = [
         Tool::Raise,
         Tool::Smooth,
         Tool::Flatten,
@@ -448,6 +451,7 @@ mod tests {
         Tool::Objects,
         Tool::TreeSize,
         Tool::Pockets,
+        Tool::Slabs,
         Tool::Combined,
         Tool::River,
         Tool::Flood,

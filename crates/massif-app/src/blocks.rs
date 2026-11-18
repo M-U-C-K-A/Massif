@@ -330,3 +330,49 @@ fn make_sections(cat: &Catalogue, needle: &str, all: bool) -> Vec<Section> {
     }
     out
 }
+
+/// The blocks of the mods the catalogue read, by id: the export finds the
+/// slabs and stairs that smooth the land's steps among them (the game's
+/// own it knows itself).
+pub fn mod_block_ids(cat: Option<&Catalogue>) -> std::sync::Arc<std::collections::HashSet<String>> {
+    let Some(cat) = cat else { return Default::default() };
+    let mut ids: std::collections::HashSet<String> = cat.blocks.iter().filter(|b| massif_assets::namespace(&b.id) != "minecraft").map(|b| b.id.clone()).collect();
+    for (ns, names) in &cat.registered {
+        if ns != "minecraft" {
+            ids.extend(names.iter().cloned());
+        }
+    }
+    ids.extend(cat.definitions.keys().filter(|id| massif_assets::namespace(id) != "minecraft").cloned());
+    std::sync::Arc::new(ids)
+}
+
+/// Whether a block exists, by id: one of the game's (as the newest
+/// version knows them) or of the mods read.
+pub fn block_exists(cat: Option<&Catalogue>, mods: &std::collections::HashSet<String>, id: &str) -> bool {
+    static NEWEST: std::sync::OnceLock<massif_anvil::Target> = std::sync::OnceLock::new();
+    match id.strip_prefix("minecraft:") {
+        Some(short) => NEWEST.get_or_init(|| massif_anvil::Target::releases().into_iter().next().unwrap_or_default()).has_block(short) || cat.is_some_and(|c| c.block(id).is_some()),
+        None => mods.contains(id),
+    }
+}
+
+/// The blocks of the mods read, as [`mod_block_ids`] lists them, for the 3D
+/// View's slabs: kept up to date by [`note_catalogue`].
+static MOD_BLOCKS: std::sync::RwLock<Option<std::sync::Arc<std::collections::HashSet<String>>>> = std::sync::RwLock::new(None);
+/// The catalogue they were listed from (its address; 0: none).
+static NOTED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// List the mods' blocks of a catalogue newly read, once.
+pub fn note_catalogue(cat: Option<&std::sync::Arc<Catalogue>>) {
+    let at = cat.map_or(0, |c| std::sync::Arc::as_ptr(c) as usize);
+    if NOTED.swap(at, std::sync::atomic::Ordering::Relaxed) != at
+        && let Ok(mut m) = MOD_BLOCKS.write()
+    {
+        *m = Some(mod_block_ids(cat.map(|c| &**c)));
+    }
+}
+
+/// The blocks of the mods read (see [`note_catalogue`]).
+pub fn mod_blocks() -> std::sync::Arc<std::collections::HashSet<String>> {
+    MOD_BLOCKS.read().ok().and_then(|m| m.clone()).unwrap_or_default()
+}

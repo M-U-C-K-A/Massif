@@ -599,6 +599,13 @@ pub fn paint_pockets(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, layer: u1
     paint_plane(edit, brush, cx, cz, salt, layer, Some(crate::registry::Slot::Pockets), None, |t| &mut t.pockets);
 }
 
+/// Paint where the land's steps are smoothed with slabs: `value` is one of
+/// [`crate::shapes::value`] (0 rubs them out). `salt` should change from
+/// dab to dab.
+pub fn paint_slabs(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, value: u16, salt: u64) {
+    paint_plane(edit, brush, cx, cz, salt, value, None, None, |t| &mut t.slabs);
+}
+
 /// Paint an object layer by its number (0 removes it). `salt` should
 /// change from dab to dab.
 pub fn paint_objects(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, layer: u16, salt: u64) {
