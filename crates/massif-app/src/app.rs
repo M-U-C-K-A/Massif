@@ -16621,6 +16621,7 @@ mod tests {
             top_tint: massif_assets::Tint::None,
             side_tint: massif_assets::Tint::None,
             full_cube: false,
+            translucent: false,
             tall: false,
             color: [200, 40, 30],
             side_color: [200, 40, 30],
