@@ -123,7 +123,7 @@ fn a_map_path_traced() {
     let fov = 50f32.to_radians();
     // Noon over the whole map; golden hour in haze halfway; a foggy
     // morning close up, the lens focused on the point looked at.
-    let noon = Light::default();
+    let noon = Light { cloud_cover: 0.45, cloud_height: sea as f32 + 1200.0, cloud_thickness: 500.0, cloud_size: 1200.0, ..Light::default() };
     let mut golden = Light { haze: 4.0, exposure: 2.5, ..Light::default() };
     golden.set_time(18.8, 172.0, 45.0, 0.0);
     let mut morning = Light { fog: 0.02, fog_height: sea as f32 + 6.0, fog_falloff: 14.0, aperture: 0.6, focus: 48.0, ..Light::default() };
@@ -132,6 +132,7 @@ fn a_map_path_traced() {
         ("whole", Camera::orbit([center[0], ground(center[0], center[2]), center[2]], 0.65, -0.55, span * 0.75, fov), noon),
         ("halfway", Camera::orbit([center[0], ground(center[0], center[2]), center[2]], 2.2, -0.35, 260.0, fov), golden),
         ("near", Camera::orbit([center[0] + 40.0, ground(center[0] + 40.0, center[2] - 30.0), center[2] - 30.0], 4.0, -0.22, 48.0, fov), morning),
+        ("sky", Camera::orbit([center[0], ground(center[0], center[2]) + 30.0, center[2]], 2.6, 0.12, 60.0, fov), noon),
     ];
     let (w, h) = (1280, 720);
     r.resize(w, h);

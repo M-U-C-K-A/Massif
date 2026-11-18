@@ -16,6 +16,8 @@ struct Params {
     fog: vec4<f32>,      // extinction a block at its base, base height (scene), falloff (blocks), anisotropy
     media: vec4<f32>,    // shafts on, sea level (scene), emission strength, the lens's radius
     lens: vec4<f32>,     // focus distance
+    clouds: vec4<f32>,   // cover (0..1), base height (scene), thickness, extinction a block (0: none)
+    wind: vec4<f32>,     // how far the wind moved them (x, z), 1 / the size of their shapes
     size: vec4<u32>,     // width, height, seed of the frame, sample (0: start over)
     grid: vec4<i32>,     // chunks across, chunks down, height in blocks, sections
     info: vec4<u32>,     // words a chunk's record, pyramid levels, bounces, shift (pixels per side of a ray: 1 << shift)
@@ -509,12 +511,15 @@ fn through_media(ro: vec3<f32>, rd: vec3<f32>, t_end: f32, all: bool, seed: ptr<
     if (pdf <= 0.0) {
         return out;
     }
-    // The sun there, unless a block hides it (the shafts of light).
+    // The sun there, unless a block hides it (the shafts of light), as
+    // much as the clouds let through.
     var sun = SUN_LIGHT * sun_through_media(x.y);
     if (P.media.x > 0.5 && P.sun.y > -0.02) {
         let shadow = trace(x, P.sun.xyz, 1e30);
         if (shadow.found) {
             sun = vec3<f32>(0.0);
+        } else {
+            sun *= cloud_shadow(x, seed);
         }
     }
     let inscatter = phased * sun + scattering * multi_scattering();
@@ -535,6 +540,146 @@ fn tonemap(c: vec3<f32>) -> vec3<f32> {
     let x = c * P.forward.w;
     let mapped = clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3<f32>(0.0), vec3<f32>(1.0));
     return pow(mapped, vec3<f32>(1.0 / 2.2));
+}
+
+// ---- clouds ---------------------------------------------------------------
+
+fn hash3(p: vec3<i32>) -> f32 {
+    let h = pcg(u32(p.x) * 73856093u ^ u32(p.y) * 19349663u ^ u32(p.z) * 83492791u);
+    return f32(h >> 8u) / 16777216.0;
+}
+
+fn value_noise(p: vec3<f32>) -> f32 {
+    let i = vec3<i32>(floor(p));
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = mix(hash3(i), hash3(i + vec3<i32>(1, 0, 0)), u.x);
+    let b = mix(hash3(i + vec3<i32>(0, 1, 0)), hash3(i + vec3<i32>(1, 1, 0)), u.x);
+    let c = mix(hash3(i + vec3<i32>(0, 0, 1)), hash3(i + vec3<i32>(1, 0, 1)), u.x);
+    let d = mix(hash3(i + vec3<i32>(0, 1, 1)), hash3(i + vec3<i32>(1, 1, 1)), u.x);
+    return mix(mix(a, b, u.y), mix(c, d, u.y), u.z);
+}
+
+fn fbm(p: vec3<f32>, octaves: i32) -> f32 {
+    var sum = 0.0;
+    var amp = 0.5;
+    var norm = 0.0;
+    var q = p;
+    for (var k = 0; k < octaves; k++) {
+        sum += amp * value_noise(q);
+        norm += amp;
+        q = q * 2.03 + vec3<f32>(17.1, 3.7, 9.3);
+        amp *= 0.5;
+    }
+    return sum / norm;
+}
+
+fn clouds_on() -> bool {
+    return P.clouds.w > 0.0 && P.clouds.x > 0.0;
+}
+
+// The clouds' extinction at x: billows of noise, flat underneath and
+// rounded on top, as many as the cover asks for.
+fn cloud_density(x: vec3<f32>, octaves: i32) -> f32 {
+    let h = (x.y - P.clouds.y) / P.clouds.z;
+    if (h <= 0.0 || h >= 1.0) {
+        return 0.0;
+    }
+    let profile = smoothstep(0.0, 0.12, h) * smoothstep(1.0, 0.35, h);
+    let q = (x + vec3<f32>(P.wind.x, 0.0, P.wind.y)) * P.wind.z;
+    let shape = fbm(vec3<f32>(q.x, q.y * 2.0, q.z), octaves);
+    let cover = P.clouds.x;
+    let d = clamp((shape * mix(0.6, 1.0, profile) - (1.0 - cover)) / max(cover, 0.05), 0.0, 1.0) * profile;
+    return d * P.clouds.w;
+}
+
+// Where a ray from ro along rd is between the clouds' base and top.
+fn cloud_span(ro: vec3<f32>, rd: vec3<f32>) -> vec2<f32> {
+    let lo = P.clouds.y;
+    let hi = P.clouds.y + P.clouds.z;
+    if (abs(rd.y) < 1e-5) {
+        if (ro.y > lo && ro.y < hi) {
+            return vec2<f32>(0.0, FAR);
+        }
+        return vec2<f32>(1.0, 0.0);
+    }
+    let a = (lo - ro.y) / rd.y;
+    let b = (hi - ro.y) / rd.y;
+    return vec2<f32>(max(min(a, b), 0.0), min(max(a, b), FAR));
+}
+
+// How much of the sun gets through the clouds to x (a few steps toward it,
+// their shapes coarser).
+fn cloud_shadow(x: vec3<f32>, seed: ptr<function, u32>) -> f32 {
+    if (!clouds_on() || P.sun.y <= 0.0) {
+        return 1.0;
+    }
+    let span = cloud_span(x, P.sun.xyz);
+    if (span.y <= span.x) {
+        return 1.0;
+    }
+    let steps = 4;
+    let dt = (span.y - span.x) / f32(steps);
+    let j = rand(seed);
+    var depth = 0.0;
+    for (var k = 0; k < steps; k++) {
+        depth += cloud_density(x + P.sun.xyz * (span.x + (f32(k) + j) * dt), 3) * dt;
+    }
+    return exp(-depth);
+}
+
+// A ray meeting the clouds before t_end: where, and the light they send
+// back there (the sun through them, scattered many times as octaves of
+// fading phases, and the sky's light); t < 0: it went through.
+struct CloudHit {
+    t: f32,
+    light: vec3<f32>,
+}
+
+fn cloud_hit(ro: vec3<f32>, rd: vec3<f32>, t_end: f32, seed: ptr<function, u32>) -> CloudHit {
+    var out: CloudHit;
+    out.t = -1.0;
+    out.light = vec3<f32>(0.0);
+    if (!clouds_on()) {
+        return out;
+    }
+    let span = cloud_span(ro, rd);
+    let t1 = min(span.y, t_end);
+    if (t1 <= span.x) {
+        return out;
+    }
+    // Delta tracking: tentative collisions at the densest the clouds get,
+    // each kept in proportion to the density there.
+    let most = P.clouds.w;
+    var t = span.x;
+    for (var k = 0; k < 96; k++) {
+        t += -log(1.0 - rand(seed)) / most;
+        if (t >= t1) {
+            return out;
+        }
+        let x = ro + rd * t;
+        let d = cloud_density(x, 5);
+        if (rand(seed) * most < d) {
+            let c = dot(rd, P.sun.xyz);
+            let through = cloud_shadow(x, seed);
+            var sun = vec3<f32>(0.0);
+            var a = 1.0;
+            var b = 1.0;
+            for (var o = 0; o < 4; o++) {
+                let g = 0.8 * b;
+                let phase = mix(hg_phase(c, g), hg_phase(c, -0.2 * b), 0.3);
+                sun += a * phase * pow(through, b);
+                a *= 0.5;
+                b *= 0.5;
+            }
+            let h = clamp((x.y - P.clouds.y) / P.clouds.z, 0.0, 1.0);
+            let sky_light = sky(vec3<f32>(0.0, 1.0, 0.0)) * mix(0.35, 1.0, h);
+            out.t = t;
+            out.light = 0.96 * (SUN_LIGHT * sun * 4.0 * PI * 0.25 + sky_light);
+            return out;
+        }
+    }
+    return out;
 }
 
 // The light of one of the glowing blocks near p (those of its chunk and
@@ -582,11 +727,17 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
     for (var bounce = 0u; bounce <= P.info.z; bounce++) {
         let hit = trace(ro, rd, 1e30);
         if (bounce == 0u) {
-            // The air, the haze and the fog between the eyes and what they see.
             var t_end = hit.t;
             if (!hit.found) {
                 t_end = FAR;
             }
+            // A cloud before what the eyes would see: its light ends the path.
+            let cloud = cloud_hit(ro, rd, t_end, seed);
+            if (cloud.t >= 0.0) {
+                let m = through_media(ro, rd, cloud.t, true, seed);
+                return m.light + m.transmittance * cloud.light;
+            }
+            // The air, the haze and the fog between the eyes and what they see.
             let m = through_media(ro, rd, t_end, hit.found, seed);
             sum += m.light;
             throughput *= m.transmittance;
@@ -631,7 +782,12 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
         if (ndl > 0.0 && P.sun.y > -0.05) {
             let shadow = trace(pos, l, 1e30);
             if (!shadow.found) {
-                sum += throughput * albedo / PI * SUN_LIGHT * sun_through_media(pos.y) * ndl;
+                // The clouds' shadows on what the eyes see (not on the bounces).
+                var clouds = 1.0;
+                if (bounce == 0u) {
+                    clouds = cloud_shadow(pos, seed);
+                }
+                sum += throughput * albedo / PI * SUN_LIGHT * sun_through_media(pos.y) * clouds * ndl;
             }
         }
         if (bounce == P.info.z) {

@@ -77,6 +77,16 @@ pub struct Light {
     pub emission: f32,
     /// The moon's light, a share of the sun's.
     pub moon: f32,
+    /// Clouds: how much of the sky they cover (0: none), the height of
+    /// their base (world y), how thick and how dense they are (extinction
+    /// a block), how wide their shapes (blocks), and how far the wind
+    /// has moved them (blocks, x and z).
+    pub cloud_cover: f32,
+    pub cloud_height: f32,
+    pub cloud_thickness: f32,
+    pub cloud_density: f32,
+    pub cloud_size: f32,
+    pub wind: [f32; 2],
     /// The lens's opening (radius, blocks; 0: all sharp) and the distance
     /// in focus.
     pub aperture: f32,
@@ -105,6 +115,12 @@ impl Default for Light {
             shafts: true,
             emission: 1.0,
             moon: 1.0 / 300.0,
+            cloud_cover: 0.0,
+            cloud_height: 900.0,
+            cloud_thickness: 600.0,
+            cloud_density: 0.02,
+            cloud_size: 1600.0,
+            wind: [0.0; 2],
             aperture: 0.0,
             focus: 100.0,
             bounces: 2,
