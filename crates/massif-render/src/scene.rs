@@ -60,11 +60,16 @@ pub struct Patch {
     pub sections: usize,
     /// By `z * width + x`.
     pub chunks: Vec<Option<Chunk>>,
+    /// What is known of the blocks just outside the patch, on its west,
+    /// east, north and south sides: 1 where they are opaque, by
+    /// `along * height + y` (`along`: z on the west and east, x on the
+    /// north and south). Without it, a side's faces are all kept.
+    pub edges: [Option<Vec<u8>>; 4],
 }
 
 impl Patch {
     pub fn new(x0: i32, z0: i32, width: usize, depth: usize, sections: usize) -> Self {
-        Self { x0, z0, width, depth, sections, chunks: vec![None; width * depth] }
+        Self { x0, z0, width, depth, sections, chunks: vec![None; width * depth], edges: [None, None, None, None] }
     }
 
     /// Put a chunk in its place (one outside the patch is left out).
@@ -88,6 +93,17 @@ impl Patch {
     fn class_at(&self, classes: &[Class], x: i32, y: i32, z: i32) -> Class {
         if y < 0 {
             return Class::Opaque;
+        }
+        let (w, d, h) = (self.width as i32 * 16, self.depth as i32 * 16, self.sections as i32 * 16);
+        if y < h && (x < 0 || z < 0 || x >= w || z >= d) {
+            let (side, along) = match (x < 0, x >= w, z < 0) {
+                (true, _, _) => (0, z),
+                (_, true, _) => (1, z),
+                (_, _, true) => (2, x),
+                _ => (3, x),
+            };
+            let opaque = self.edges[side].as_ref().is_some_and(|e| e.get((along * h + y) as usize).is_some_and(|&o| o != 0));
+            return if opaque { Class::Opaque } else { Class::Air };
         }
         match self.section(x >> 4, z >> 4, y >> 4) {
             Some(s) => class(classes, s.get((x & 15) as usize, (y & 15) as usize, (z & 15) as usize)),
@@ -392,6 +408,23 @@ mod tests {
         // and its ore show.
         let side = trace_cpu(&built, 4, [-5.5, 20.5, 6.5], [1.0, 0.0, 0.0], 200).unwrap();
         assert!(matches!(side.0, 1 | 5) && side.2[0] == 0);
+    }
+
+    #[test]
+    fn what_is_known_beside_the_patch_hides_its_sides() {
+        let build = |known: bool| {
+            let mut patch = Patch::new(0, 0, 1, 1, 4);
+            patch.put(ground(0, 0));
+            if known {
+                // Solid up to y 40 all around, as the chunk itself.
+                let edge: Vec<u8> = (0..16 * 64).map(|k| (k % 64 < 40) as u8).collect();
+                patch.edges = [Some(edge.clone()), Some(edge.clone()), Some(edge.clone()), Some(edge)];
+            }
+            let built = patch.build(&CLASSES);
+            built[0].tree.chunks(3).map(|b| (b[0].count_ones() + b[1].count_ones()) as usize).sum::<usize>()
+        };
+        let (blind, known) = (build(false), build(true));
+        assert!(known * 4 < blind, "{known} blocks kept with the sides known, {blind} without");
     }
 
     #[test]
