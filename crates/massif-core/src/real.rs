@@ -1784,6 +1784,23 @@ mod tests {
         }
     }
 
+    /// The water of a real place holds: the sea, a lagoon behind its low
+    /// coast and a lake up in the land stand beside no lower land and over
+    /// no air, and the game leaves the export's water as it is.
+    #[test]
+    fn a_real_places_water_holds() {
+        let (_, low) = low_coast();
+        let (_, _, _, steep) = coast(512);
+        for (name, world) in [("low coast", &low), ("coast", &steep)] {
+            let dim = &world.dims[0];
+            let held = crate::water::check(dim);
+            assert!(held.columns > 1000, "{name}: water: {held:?}");
+            assert_eq!((held.spills, held.floating), (0, 0), "{name}: {held:?}");
+            let settled = crate::water::settle_all(dim, true);
+            assert_eq!(settled.unsettled, 0, "{name}: {settled:?}");
+        }
+    }
+
     #[test]
     fn the_waters_biomes_are_ocean_river_or_beach() {
         let (area, world) = low_coast();
