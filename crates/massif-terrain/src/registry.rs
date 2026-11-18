@@ -257,7 +257,9 @@ pub struct ParamSpec {
     pub kind: ParamKind,
     pub section: Section,
     /// A number a field can drive (the ◇ beside it): connected through the
-    /// input `@name`, it takes each sample's value there.
+    /// input `@name`, it takes each sample's value there (on Point, Local
+    /// and Global kernels; a local kernel gets the field at its own
+    /// samples).
     pub drivable: bool,
 }
 
@@ -490,7 +492,7 @@ mod tests {
                 }
             }
             for p in s.params.iter().filter(|p| p.drivable) {
-                assert!(matches!(p.kind, ParamKind::Float { .. }) && matches!(s.kernel, Kernel::Point { .. } | Kernel::Global { .. }), "{}.{} cannot be driven", s.id, p.name);
+                assert!(matches!(p.kind, ParamKind::Float { .. }) && matches!(s.kernel, Kernel::Point { .. } | Kernel::Local { .. } | Kernel::Global { .. }), "{}.{} cannot be driven", s.id, p.name);
             }
             let names: Vec<_> = s.params.iter().map(|p| p.name).chain(s.inputs.iter().map(|p| p.name)).collect();
             let unique: std::collections::HashSet<_> = names.iter().collect();
