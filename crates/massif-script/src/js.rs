@@ -55,8 +55,11 @@ fn version() -> String {
     env!("CARGO_PKG_VERSION").to_owned()
 }
 
+/// The terrains as scripts number them (`Terrain.VALUES`), with each
+/// one's ordinal in WorldPainter's enum.
 fn terrain_names() -> String {
-    serde_json::to_string(massif_legacy::TERRAINS.as_slice()).expect("strings")
+    let ordinals: Vec<i32> = (0..crate::session::VALUES.len() as i32).map(|k| crate::session::ordinal_of_index(k).map_or(-1, |o| o as i32)).collect();
+    serde_json::json!({ "names": crate::session::VALUES.as_slice(), "ordinals": ordinals }).to_string()
 }
 
 fn terrain_name(ctx: Ctx<'_>, w: f64, id: f64) -> Q<String> {
@@ -267,7 +270,7 @@ fn terrain_at(ctx: Ctx<'_>, w: f64, d: f64, x: f64, y: f64) -> Q<f64> {
     with(&ctx, |s| {
         let (slot, d) = s.column(w as usize, d as i32)?;
         let Some(id) = slot.read(d, x as i32, y as i32, |t, i| t.terrain.get(i)) else { return Ok(-1.0) };
-        let o = slot.ordinal_of(id);
+        let o = slot.index_of(id);
         Ok(if o >= 0 { o as f64 } else { -(id as f64) - 2.0 })
     })
 }
@@ -299,31 +302,24 @@ fn layer_value(ctx: Ctx<'_>, w: f64, d: f64, l: f64, x: f64, y: f64) -> Q<f64> {
     })
 }
 
-fn set_layer_value(ctx: Ctx<'_>, w: f64, d: f64, l: f64, x: f64, y: f64, v: f64) -> Q<()> {
+fn set_layer_value(ctx: Ctx<'_>, w: f64, dim: f64, l: f64, x: f64, y: f64, v: f64) -> Q<()> {
     with(&ctx, |s| {
         s.flush()?;
         let bound = s.bind(l as usize, w as usize)?;
-        let (slot, d) = s.column(w as usize, d as i32)?;
+        let order = crate::session::bucket(&s.layer(l as usize)?.id);
+        let (slot, d) = s.column(w as usize, dim as i32)?;
         let (x, z, v) = (x as i32, y as i32, v as i32);
         match bound {
             crate::session::Bound::Biome => {
                 let id = slot.biome_id(v)?;
                 slot.write(d, x, z, |t, i| t.biome.set(i, id));
             }
-            crate::session::Bound::Caves(kind) => {
+            b if crate::session::overlaid(b) => {
                 let pos = massif_core::TilePos::containing(x, z);
                 if !slot.world.dims[d].ground().contains(pos) {
                     return Ok(());
                 }
-                let painted = slot.caves.entry((d, pos)).or_default();
-                let k = match painted.iter().position(|c| c.0 == kind) {
-                    Some(k) => k,
-                    None => {
-                        painted.push((kind, vec![0u8; massif_core::TILE_AREA]));
-                        painted.len() - 1
-                    }
-                };
-                painted[k].1[massif_core::coords::local_index(x, z)] = (v.clamp(0, 15) * 17) as u8;
+                crate::session::paint(&mut slot.painted, d, pos, b, order, massif_core::coords::local_index(x, z), v);
                 slot.changed = true;
             }
             crate::session::Bound::GroundCover(k) => {
@@ -353,10 +349,11 @@ fn clear_layer(ctx: Ctx<'_>, w: f64, d: f64, l: f64) -> Q<()> {
         let (slot, d) = s.column(w as usize, d as i32)?;
         use crate::session::Bound;
         let positions: Vec<massif_core::TilePos> = slot.world.dims[d].ground().positions().collect();
-        if let Bound::Caves(kind) = bound {
-            for v in slot.caves.values_mut() {
-                v.retain(|c| c.0 != kind);
-            }
+        // What was painted of it with a strength goes too.
+        for layers in slot.painted.values_mut() {
+            layers.retain(|e| e.0 != bound);
+        }
+        if let Bound::Caves(_) = bound {
             return Ok(());
         }
         let level = slot.world.dims[d].ground_mut();

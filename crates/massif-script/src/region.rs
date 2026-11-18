@@ -91,6 +91,9 @@ pub fn get(s: &mut Session, w: usize, dim: i32, what: &str, x0: i32, z0: i32, x1
     if !floats && !matches!(what, "terrain" | "biome" | "annotations" | "cover" | "trees" | "understory" | "pockets" | "sizes") {
         return Err(format!("Unknown kind of column data \"{what}\": {KINDS}"));
     }
+    if matches!(what, "cover" | "trees" | "understory") {
+        crate::session::resolve(slot);
+    }
     let tiles: Vec<TilePos> = tiles_of(x0, z0, x1, z1).collect();
     let level = slot.world.dims[d].ground_mut();
     level.warm(&tiles);
@@ -153,6 +156,9 @@ pub fn set(s: &mut Session, w: usize, dim: i32, what: &str, x0: i32, z0: i32, x1
         return Err(format!("Unknown kind of column data \"{what}\" to write: {}", KINDS.trim_end_matches(" or selection")));
     }
     let (slot, d) = s.column(w, dim)?;
+    if matches!(what, "cover" | "trees" | "understory") {
+        crate::session::resolve(slot);
+    }
     let (min, max) = (slot.world.dims[d].min_y as f32, slot.world.dims[d].max_y as f32);
     // Numbers of the registry a plane may hold.
     let reg = &slot.world.registry;

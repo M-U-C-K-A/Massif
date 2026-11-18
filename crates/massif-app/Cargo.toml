@@ -16,6 +16,7 @@ massif-core.workspace = true
 massif-format.workspace = true
 massif-anvil.workspace = true
 massif-legacy.workspace = true
+massif-script.workspace = true
 massif-assets.workspace = true
 massif-objects.workspace = true
 massif-thumbnails.workspace = true

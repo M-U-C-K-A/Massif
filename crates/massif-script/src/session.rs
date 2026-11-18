@@ -26,9 +26,70 @@ use std::sync::{Arc, Mutex};
 
 pub type R<T> = Result<T, String>;
 
-/// Caves painted, by dimension and tile: each kind's strength in every
-/// column (0 to 255).
-pub type Painted = HashMap<(usize, TilePos), Vec<(CaveKind, Vec<u8>)>>;
+/// Layers painted with a strength, by dimension and tile, as WorldPainter
+/// keeps them until the map is saved: each layer's value in every column,
+/// plus one (0: not painted there). Caves are carved from it, and the
+/// object layers and ground covers resolved as a `.world`'s import does
+/// (the strongest of a slot where several are painted).
+pub type Painted = HashMap<(usize, TilePos), Vec<(Bound, u8, Vec<u8>)>>;
+
+/// Where Java's `HashMap` of 16 buckets keeps a layer of id `id` among a
+/// tile's layers: the order WorldPainter writes them in, which a `.world`'s
+/// import takes the first of where two are as strong.
+pub fn bucket(id: &str) -> u8 {
+    let h = id.encode_utf16().fold(0i32, |h, c| h.wrapping_mul(31).wrapping_add(c as i32));
+    ((h ^ ((h as u32) >> 16) as i32) & 15) as u8
+}
+
+/// WorldPainter's `Terrain.VALUES`: the terrains in the order scripts
+/// number them (`applyTerrain(36)`, `toTerrain(0)`), which is not the
+/// order of the enum (its ordinals, [`massif_legacy::TERRAINS`]).
+pub const VALUES: [&str; 161] = [
+    "GRASS", "BARE_GRASS", "DIRT", "PERMADIRT", "PODZOL", "SAND",
+    "RED_SAND", "DESERT", "RED_DESERT", "MESA", "HARDENED_CLAY", "WHITE_STAINED_CLAY",
+    "ORANGE_STAINED_CLAY", "MAGENTA_STAINED_CLAY", "LIGHT_BLUE_STAINED_CLAY", "YELLOW_STAINED_CLAY", "LIME_STAINED_CLAY", "PINK_STAINED_CLAY",
+    "GREY_STAINED_CLAY", "LIGHT_GREY_STAINED_CLAY", "CYAN_STAINED_CLAY", "PURPLE_STAINED_CLAY", "BLUE_STAINED_CLAY", "BROWN_STAINED_CLAY",
+    "GREEN_STAINED_CLAY", "RED_STAINED_CLAY", "BLACK_STAINED_CLAY", "SANDSTONE", "STONE", "ROCK",
+    "COBBLESTONE", "MOSSY_COBBLESTONE", "OBSIDIAN", "BEDROCK", "GRAVEL", "CLAY",
+    "BEACHES", "WATER", "LAVA", "SNOW", "DEEP_SNOW", "NETHERRACK",
+    "SOUL_SAND", "NETHERLIKE", "MYCELIUM", "END_STONE", "RESOURCES", "CUSTOM_1",
+    "CUSTOM_2", "CUSTOM_3", "CUSTOM_4", "CUSTOM_5", "CUSTOM_6", "CUSTOM_7",
+    "CUSTOM_8", "CUSTOM_9", "CUSTOM_10", "CUSTOM_11", "CUSTOM_12", "CUSTOM_13",
+    "CUSTOM_14", "CUSTOM_15", "CUSTOM_16", "CUSTOM_17", "CUSTOM_18", "CUSTOM_19",
+    "CUSTOM_20", "CUSTOM_21", "CUSTOM_22", "CUSTOM_23", "CUSTOM_24", "RED_SANDSTONE",
+    "GRANITE", "DIORITE", "ANDESITE", "STONE_MIX", "CUSTOM_25", "CUSTOM_26",
+    "CUSTOM_27", "CUSTOM_28", "CUSTOM_29", "CUSTOM_30", "CUSTOM_31", "CUSTOM_32",
+    "CUSTOM_33", "CUSTOM_34", "CUSTOM_35", "CUSTOM_36", "CUSTOM_37", "CUSTOM_38",
+    "CUSTOM_39", "CUSTOM_40", "CUSTOM_41", "CUSTOM_42", "CUSTOM_43", "CUSTOM_44",
+    "CUSTOM_45", "CUSTOM_46", "CUSTOM_47", "CUSTOM_48", "GRASS_PATH", "MAGMA",
+    "CUSTOM_49", "CUSTOM_50", "CUSTOM_51", "CUSTOM_52", "CUSTOM_53", "CUSTOM_54",
+    "CUSTOM_55", "CUSTOM_56", "CUSTOM_57", "CUSTOM_58", "CUSTOM_59", "CUSTOM_60",
+    "CUSTOM_61", "CUSTOM_62", "CUSTOM_63", "CUSTOM_64", "CUSTOM_65", "CUSTOM_66",
+    "CUSTOM_67", "CUSTOM_68", "CUSTOM_69", "CUSTOM_70", "CUSTOM_71", "CUSTOM_72",
+    "CUSTOM_73", "CUSTOM_74", "CUSTOM_75", "CUSTOM_76", "CUSTOM_77", "CUSTOM_78",
+    "CUSTOM_79", "CUSTOM_80", "CUSTOM_81", "CUSTOM_82", "CUSTOM_83", "CUSTOM_84",
+    "CUSTOM_85", "CUSTOM_86", "CUSTOM_87", "CUSTOM_88", "CUSTOM_89", "CUSTOM_90",
+    "CUSTOM_91", "CUSTOM_92", "CUSTOM_93", "CUSTOM_94", "CUSTOM_95", "CUSTOM_96",
+    "DEEPSLATE", "TUFF", "BASALT", "BLACKSTONE", "SOUL_SOIL", "WARPED_NYLIUM",
+    "CRIMSON_NYLIUM", "CALCITE", "MUD", "BARE_BEACHES", "MOSS",
+];
+
+/// The ordinal of the terrain scripts number `index`.
+pub fn ordinal_of_index(index: i32) -> Option<u8> {
+    let name = VALUES.get(usize::try_from(index).ok()?)?;
+    TERRAINS.iter().position(|t| t == name).map(|o| o as u8)
+}
+
+/// The number scripts give the terrain of ordinal `ordinal`.
+pub fn index_of_ordinal(ordinal: u8) -> Option<i32> {
+    let name = TERRAINS.get(ordinal as usize)?;
+    VALUES.iter().position(|t| t == name).map(|k| k as i32)
+}
+
+/// Whether painting layer `b` keeps its strength until the map is saved.
+pub fn overlaid(b: Bound) -> bool {
+    matches!(b, Bound::Caves(_) | Bound::Objects { .. } | Bound::Cover { bit: false, .. })
+}
 
 /// A line of a script's output.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,6 +232,8 @@ pub struct LayerDef {
     pub name: String,
     pub size: Size,
     source: Source,
+    /// WorldPainter's id of the layer.
+    pub id: String,
 }
 
 /// WorldPainter's own layers, by the names `wp.getLayer().withName()`
@@ -285,9 +348,8 @@ pub struct Slot {
     terrain_ids: Vec<Option<u16>>,
     biome_ids: Vec<Option<u16>>,
     beaches: Option<Arc<Beaches>>,
-    /// Caves painted: strengths a column (0 to 255) by dimension and tile,
-    /// carved once the script is done.
-    pub caves: Painted,
+    /// Layers painted with a strength, resolved once the script is done.
+    pub painted: Painted,
     /// Custom terrain slots filled by the script: WorldPainter's slot (1 to
     /// 96) → Massif's terrain.
     pub custom: HashMap<u8, u16>,
@@ -298,15 +360,15 @@ pub struct Slot {
     pub ground_made: HashMap<(u16, u16), u16>,
 }
 
-/// The WorldPainter ordinal of terrain `CUSTOM_<n>`.
-pub fn custom_ordinal(n: u8) -> Option<u8> {
+/// The number scripts give terrain `CUSTOM_<n>`.
+pub fn custom_index(n: u8) -> Option<i32> {
     let name = format!("CUSTOM_{n}");
-    TERRAINS.iter().position(|t| *t == name).map(|k| k as u8)
+    VALUES.iter().position(|t| *t == name).map(|k| k as i32)
 }
 
-/// The custom slot (1 to 96) of a WorldPainter ordinal, if it is one.
-pub fn custom_slot(ordinal: u8) -> Option<u8> {
-    TERRAINS.get(ordinal as usize)?.strip_prefix("CUSTOM_")?.parse().ok()
+/// The custom slot (1 to 96) of a terrain number, if it is one.
+pub fn custom_slot(index: i32) -> Option<u8> {
+    VALUES.get(usize::try_from(index).ok()?)?.strip_prefix("CUSTOM_")?.parse().ok()
 }
 
 /// Java's `Math.round(float)`.
@@ -321,10 +383,10 @@ impl Slot {
             world,
             path,
             format: None,
-            terrain_ids: vec![None; TERRAINS.len()],
+            terrain_ids: vec![None; VALUES.len()],
             biome_ids: vec![None; 256],
             beaches: None,
-            caves: HashMap::new(),
+            painted: HashMap::new(),
             custom: HashMap::new(),
             changed: false,
             warmed: 0,
@@ -351,21 +413,26 @@ impl Slot {
         out
     }
 
-    /// Massif's terrain for WorldPainter's terrain `ordinal`, added to the
-    /// map if it has none yet; [`BEACH_MARK`] for the beaches, which are
-    /// grass, sand, gravel and clay by place.
-    pub fn terrain_id(&mut self, ordinal: i32) -> R<u16> {
-        let Some(&cached) = usize::try_from(ordinal).ok().and_then(|o| self.terrain_ids.get(o)) else {
-            return Err(format!("Invalid terrain index {ordinal} specified"));
+    /// Massif's terrain for the terrain scripts number `index` (in
+    /// [`VALUES`]), added to the map if it has none yet; [`BEACH_MARK`] for
+    /// the beaches, which are grass, sand, gravel and clay by place.
+    pub fn terrain_id(&mut self, index: i32) -> R<u16> {
+        let Some(&cached) = usize::try_from(index).ok().and_then(|o| self.terrain_ids.get(o)) else {
+            return Err(format!("Invalid terrain index {index} specified"));
         };
         if let Some(id) = cached {
             return Ok(id);
         }
-        if let Some(n) = custom_slot(ordinal as u8) {
-            return self.custom.get(&n).copied().ok_or_else(|| format!("Custom terrain {n} is not installed in this world: install it first with wp.installCustomTerrain(terrain).toWorld(world).inSlot({n}).go()"));
+        // A custom terrain not installed is painted as WorldPainter paints
+        // it: an empty one, as its `.world` imports.
+        if let Some(n) = custom_slot(index)
+            && let Some(&id) = self.custom.get(&n)
+        {
+            return Ok(id);
         }
-        let id = self.with_mapper(|m| m.terrain(ordinal as u8));
-        self.terrain_ids[ordinal as usize] = Some(id);
+        let ordinal = ordinal_of_index(index).ok_or_else(|| format!("Invalid terrain index {index} specified"))?;
+        let id = self.with_mapper(|m| m.terrain(ordinal));
+        self.terrain_ids[index as usize] = Some(id);
         Ok(id)
     }
 
@@ -385,12 +452,13 @@ impl Slot {
         self.beaches.clone().expect("just made")
     }
 
-    /// WorldPainter's ordinal of Massif's terrain `id`, or -1.
-    pub fn ordinal_of(&self, id: u16) -> i32 {
+    /// The number scripts give Massif's terrain `id`, or -1 for one
+    /// WorldPainter has not.
+    pub fn index_of(&self, id: u16) -> i32 {
         if let Some((&n, _)) = self.custom.iter().find(|(_, t)| **t == id) {
-            return custom_ordinal(n).map_or(-1, |o| o as i32);
+            return custom_index(n).unwrap_or(-1);
         }
-        massif_legacy::terrains::ordinal_of(&self.world.registry, id).map_or(-1, |o| o as i32)
+        massif_legacy::terrains::ordinal_of(&self.world.registry, id).and_then(index_of_ordinal).unwrap_or(-1)
     }
 
     /// Massif's biome for WorldPainter's biome number (255: automatic, 0).
@@ -423,7 +491,8 @@ impl Slot {
         } else {
             (1..=96u8).find(|n| !self.custom.contains_key(n)).ok_or("No free custom terrain slots")?
         };
-        let ordinal = custom_ordinal(n).ok_or("No such custom terrain slot")?;
+        let index = custom_index(n).ok_or("No such custom terrain slot")?;
+        let ordinal = ordinal_of_index(index).ok_or("No such custom terrain slot")?;
         let mut materials = vec![None; n as usize];
         materials[n as usize - 1] = Some(material.clone());
         let id = self.with_mapper(|m| {
@@ -432,9 +501,9 @@ impl Slot {
             id
         });
         self.custom.insert(n, id);
-        self.terrain_ids[ordinal as usize] = Some(id);
+        self.terrain_ids[index as usize] = Some(id);
         self.changed = true;
-        Ok(ordinal as i32)
+        Ok(index)
     }
 
     /// The tile at `pos` of dimension `d`'s ground, decoded and kept so.
@@ -514,7 +583,7 @@ pub struct Reader<'a> {
     lava_world: bool,
     lava_covers: Vec<bool>,
     wp_biomes: Vec<u8>,
-    caves: &'a Painted,
+    painted: &'a Painted,
     /// The terrains made for each ground cover.
     ground: HashMap<u16, u16>,
 }
@@ -528,7 +597,7 @@ impl<'a> Reader<'a> {
             lava_world: slot.world.meta.lava,
             lava_covers: std::iter::once(false).chain(reg.covers.iter().map(|c| c.lava && !c.removed)).collect(),
             wp_biomes: slot.wp_biomes(),
-            caves: &slot.caves,
+            painted: &slot.painted,
             ground: slot.ground_made.iter().map(|(&(k, _), &t)| (t, k)).collect(),
         }
     }
@@ -542,6 +611,12 @@ impl<'a> Reader<'a> {
     /// WorldPainter's value of layer `b` in column `i` of tile `t` (at
     /// `pos`).
     pub fn value(&self, b: Bound, t: &Tile, pos: TilePos, i: usize) -> i32 {
+        if overlaid(b)
+            && let Some(v) = self.painted.get(&(self.d, pos)).and_then(|l| l.iter().find(|e| e.0 == b)).map(|e| e.2[i])
+            && v > 0
+        {
+            return v as i32 - 1;
+        }
         let on = |yes: bool, bit: bool| if yes { if bit { 1 } else { 15 } } else { 0 };
         match b {
             Bound::Annotations => t.annotations.get(i) as i32,
@@ -555,7 +630,7 @@ impl<'a> Reader<'a> {
             Bound::Pockets(n) => on(t.pockets.get(i) == n, false),
             Bound::Terrain { id, bit } => on(t.terrain.get(i) == id, bit),
             Bound::GroundCover(k) => on(self.ground.get(&t.terrain.get(i)) == Some(&k), true),
-            Bound::Caves(kind) => self.caves.get(&(self.d, pos)).and_then(|v| v.iter().find(|c| c.0 == kind)).map_or(0, |c| (c.1[i] / 17) as i32),
+            Bound::Caves(_) => 0,
             Bound::Combined(_) | Bound::Inert => 0,
         }
     }
@@ -730,7 +805,12 @@ impl Session {
             Source::Tree(kind) => kind.name().to_owned(),
             _ => name.to_owned(),
         };
-        Ok(self.add_layer(LayerDef { name, size, source }))
+        let id = match name.as_str() {
+            "Annotations" | "Caves" | "Chasms" => format!("org.pepsoft.{name}"),
+            "Half Blocks" => "org.pepsoft.HalfBlocks".into(),
+            _ => name.clone(),
+        };
+        Ok(self.add_layer(LayerDef { name, size, source, id }))
     }
 
     /// `wp.getLayer().fromFile(path)`: a `.layer` file.
@@ -743,7 +823,8 @@ impl Session {
         let mut scratch = Registry::vanilla();
         let read = massif_legacy::layer_file::read_layer_file(&bytes, &mut scratch).map_err(|e| format!("{file}: {e}"))?;
         let size = if read.class.contains("GroundCover") || read.class.contains("Tunnel") { Size::Bit } else { Size::Nibble };
-        let k = self.add_layer(LayerDef { name: read.name, size, source: Source::File(Arc::new(bytes)) });
+        let id = massif_legacy::layer_file::read_layer_id(&bytes).unwrap_or_else(|| read.name.clone());
+        let k = self.add_layer(LayerDef { name: read.name, size, source: Source::File(Arc::new(bytes)), id });
         self.layer_files.insert(path, k);
         Ok(k)
     }
@@ -770,7 +851,7 @@ impl Session {
             reg.combined.iter().position(|c| !c.removed && eq(&c.name)).map(|k| (Bound::Combined(k as u16 + 1), Size::Nibble))
         };
         match found {
-            Some((bound, size)) => Ok(self.add_layer(LayerDef { name: name.to_owned(), size, source: Source::Bound { world: w, bound } })),
+            Some((bound, size)) => Ok(self.add_layer(LayerDef { name: name.to_owned(), size, source: Source::Bound { world: w, bound }, id: name.to_owned() })),
             None => self.standard_layer(name).map_err(|_| format!("World contains no layer named \"{name}\"")),
         }
     }
@@ -902,15 +983,23 @@ impl Session {
     }
 }
 
-/// Carve the caves painted in `slot`, as a `.world`'s are.
+/// Resolve what was painted with a strength in `slot`, and carve the caves
+/// painted, as a `.world`'s are.
 pub fn carve(slot: &mut Slot) {
-    if slot.caves.is_empty() {
+    resolve(slot);
+    if slot.painted.is_empty() {
         return;
     }
-    let caves = std::mem::take(&mut slot.caves);
+    let caves = std::mem::take(&mut slot.painted);
     let mut by_dim: HashMap<usize, Vec<(TilePos, massif_legacy::layers::After)>> = HashMap::new();
     for ((d, pos), painted) in caves {
-        let after = painted.into_iter().map(|(kind, s)| (Conv::Caves(kind), s)).collect();
+        let after = painted
+            .into_iter()
+            .filter_map(|(b, _, values)| match b {
+                Bound::Caves(kind) => Some((Conv::Caves(kind), values.iter().map(|&v| (v.saturating_sub(1) as u16 * 17).min(255) as u8).collect())),
+                _ => None,
+            })
+            .collect();
         by_dim.entry(d).or_default().push((pos, after));
     }
     let seed = slot.world.meta.seed;
@@ -933,4 +1022,88 @@ pub fn tiles_of(x0: i32, z0: i32, x1: i32, z1: i32) -> impl Iterator<Item = Tile
 /// The path of a world file next to `path` with Massif's extension.
 pub fn massif_path(path: &Path) -> PathBuf {
     path.with_extension(massif_format::EXTENSION)
+}
+
+/// Keep strength `v` of layer `b` (of bucket `order`, see [`bucket`]) in
+/// column `i` of tile `pos` of dimension `d`, to resolve once the script
+/// is done.
+#[allow(clippy::too_many_arguments)]
+pub fn paint(painted: &mut Painted, d: usize, pos: TilePos, b: Bound, order: u8, i: usize, v: i32) {
+    let layers = painted.entry((d, pos)).or_default();
+    let k = match layers.iter().position(|e| e.0 == b) {
+        Some(k) => k,
+        None => {
+            layers.push((b, order, vec![0u8; massif_core::TILE_AREA]));
+            layers.len() - 1
+        }
+    };
+    layers[k].2[i] = v.clamp(0, 15) as u8 + 1;
+}
+
+/// Turn the object layers and ground covers painted with a strength into
+/// Massif's single layer of each slot, as a `.world`'s import does: the
+/// strongest object layer kept in a column (the share of columns its
+/// strength says), the first ground cover kept. A layer painted at 0 where
+/// it was takes itself away. Caves stay, to be carved.
+pub fn resolve(slot: &mut Slot) {
+    let mut caves: Painted = HashMap::new();
+    let painted = std::mem::take(&mut slot.painted);
+    for ((d, pos), layers) in painted {
+        let (keep, mut apply): (Vec<_>, Vec<_>) = layers.into_iter().partition(|e| matches!(e.0, Bound::Caves(_)));
+        // In the order WorldPainter keeps a tile's layers: where two are
+        // as strong, the first wins.
+        apply.sort_by_key(|e| e.1);
+        if !keep.is_empty() {
+            caves.insert((d, pos), keep);
+        }
+        if apply.is_empty() {
+            continue;
+        }
+        let Some(tile) = slot.world.dims[d].ground_mut().tile_mut(pos) else { continue };
+        let (ox, oz) = pos.origin();
+        for i in 0..massif_core::TILE_AREA {
+            let (x, z) = (ox + (i & 127) as i32, oz + (i >> 7) as i32);
+            let mut best: [Option<(u16, u8)>; 2] = [None, None];
+            let mut cover: Option<u16> = None;
+            let mut gone: [Vec<u16>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+            for (b, _, values) in &apply {
+                let v = values[i];
+                if v == 0 {
+                    continue;
+                }
+                let strength = ((v as u16 - 1) * 17).min(255) as u8;
+                match *b {
+                    Bound::Objects { n, curve, under } => {
+                        let k = under as usize;
+                        if strength > 0 && massif_legacy::layers::kept(strength, curve, x, z, 0x10000 | n as u64) && best[k].is_none_or(|(_, s)| strength > s) {
+                            best[k] = Some((n, strength));
+                        }
+                        gone[k].push(n);
+                    }
+                    Bound::Cover { n, .. } => {
+                        if cover.is_none() && strength > 0 && massif_legacy::layers::kept(strength, Curve::Linear, x, z, n as u64) {
+                            cover = Some(n);
+                        }
+                        gone[2].push(n);
+                    }
+                    _ => {}
+                }
+            }
+            for (k, plane) in [&mut tile.objects, &mut tile.understory].into_iter().enumerate() {
+                match best[k] {
+                    Some((n, _)) => plane.set(i, n),
+                    None if gone[k].contains(&plane.get(i)) => plane.set(i, 0),
+                    None => {}
+                }
+            }
+            match cover {
+                Some(n) => tile.cover.set(i, n),
+                None if gone[2].contains(&tile.cover.get(i)) => tile.cover.set(i, 0),
+                None => {}
+            }
+        }
+        tile.compact();
+        slot.changed = true;
+    }
+    slot.painted = caves;
 }

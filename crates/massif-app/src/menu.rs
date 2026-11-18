@@ -46,6 +46,8 @@ pub enum Command {
     ImportMask,
     /// The relief of a real place, into the map.
     RealTerrain,
+    /// A script run on the map (see `run_script`).
+    RunScript,
     Ores,
     Analyse,
     Theme(ThemeChoice),
@@ -246,6 +248,8 @@ pub fn menus(state: &State) -> Vec<Menu> {
         item(Command::ExportHeightMap, Icon::ImageDown, tr!("Export Height Map…"), map),
         tipped(Command::ExportRegion, Icon::ImageDown, tr!("Export Region…"), map, tr!("A part of the map as a heightmap and masks, to work on in another tool and import back in place")),
         item(Command::Export, Icon::Package, tr!("Export to Minecraft…"), map),
+        Entry::Separator,
+        tipped(Command::RunScript, Icon::FileCode, tr!("Run Script…"), map, tr!("A WorldPainter script, or one written for Massif's own API, run on the map")),
         Entry::Separator,
         tipped(Command::ImportPack, Icon::Import, tr!("Import Pack…"), free, tr!("Add a .massifpack file someone shared to your packs")),
         tipped(Command::ExportPack, Icon::FileDown, tr!("Export Pack…"), map, tr!("Make a .massifpack file of the map's layers, to share")),

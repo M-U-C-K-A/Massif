@@ -382,6 +382,14 @@ impl Document {
         self.mark_changed();
     }
 
+    /// Take `world`, what a script made of the map, as one step to undo
+    /// named `label`.
+    pub fn apply_script(&mut self, mut world: World, label: &str) {
+        let made = world.snapshot();
+        self.history.restore_point(&mut self.world, &made, label);
+        self.after_history();
+    }
+
     /// Put the map back as save point `index` holds it, as one step to undo.
     /// Returns its name.
     pub fn restore_point(&mut self, index: usize) -> Option<String> {

@@ -108,13 +108,17 @@
 
     // Terrains: WorldPainter's, by ordinal, each one object so that `===`
     // compares them as Java's enum constants.
-    var names = JSON.parse(m.terrainNames());
-    function TerrainValue(ordinal, name, display) {
-        this._o = ordinal;
+    // `Terrain.VALUES` in its own order, which scripts number terrains by;
+    // `ordinal()` is the enum's, another order.
+    var terrains = JSON.parse(m.terrainNames());
+    var names = terrains.names;
+    function TerrainValue(index, name, display, ordinal) {
+        this._o = index;
         this._name = name;
         this._display = display;
+        this._ordinal = ordinal;
     }
-    TerrainValue.prototype.ordinal = function () { return this._o; };
+    TerrainValue.prototype.ordinal = function () { return this._ordinal; };
     TerrainValue.prototype.name = function () { return this._name; };
     TerrainValue.prototype.getName = function () { return this._display; };
     TerrainValue.prototype.toString = function () { return this._display; };
@@ -128,11 +132,11 @@
         if (n.indexOf("CUSTOM_") === 0) {
             display = "Custom " + n.substring(7);
         }
-        var t = new TerrainValue(k, n, display);
+        var t = new TerrainValue(k, n, display, terrains.ordinals[k]);
         Terrain.VALUES.push(t);
         Terrain[n] = t;
     });
-    Terrain.values = function () { return Terrain.VALUES.slice(); };
+    Terrain.values = function () { return Terrain.VALUES.slice().sort(function (a, b) { return a._ordinal - b._ordinal; }); };
     Terrain.valueOf = function (n) {
         if (!Object.prototype.hasOwnProperty.call(Terrain, n) || !(Terrain[n] instanceof TerrainValue)) {
             throw IllegalArgument("No enum constant org.pepsoft.worldpainter.Terrain." + n);
@@ -154,7 +158,7 @@
         var key = w + ":" + code;
         if (!massifTerrains[key]) {
             var name = m.terrainName(w, -code - 2);
-            massifTerrains[key] = new TerrainValue(-1, name.toUpperCase().replace(/[^A-Z0-9]+/g, "_"), name);
+            massifTerrains[key] = new TerrainValue(-1, name.toUpperCase().replace(/[^A-Z0-9]+/g, "_"), name, -1);
             massifTerrains[key]._massif = -code - 2;
         }
         return massifTerrains[key];

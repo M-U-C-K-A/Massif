@@ -227,7 +227,7 @@ impl Session {
         let w = self.add_world(world, None);
         let slot = self.slot(w)?;
         slot.format = spec.format.clone();
-        let ordinal = |n: &str| massif_legacy::TERRAINS.iter().position(|t| *t == n).expect("a terrain of WorldPainter's") as i32;
+        let ordinal = |n: &str| crate::session::VALUES.iter().position(|t| *t == n).expect("a terrain of WorldPainter's") as i32;
         let (grass, permadirt, stone_mix, deep_snow, beaches) = (slot.terrain_id(ordinal("GRASS"))?, slot.terrain_id(ordinal("PERMADIRT"))?, slot.terrain_id(ordinal("STONE_MIX"))?, slot.terrain_id(ordinal("DEEP_SNOW"))?, slot.beaches());
         let frost = massif_legacy::layers::frost_cover(&mut slot.world.registry);
         // WorldPainter's default theme.

@@ -98,6 +98,25 @@ impl std::fmt::Display for LayerFileError {
     }
 }
 
+/// The id of the layer a `.layer` file holds (what WorldPainter tells
+/// layers apart by, and orders a tile's layers by).
+pub fn read_layer_id(bytes: &[u8]) -> Option<String> {
+    let mut raw = Vec::new();
+    let data: &[u8] = if bytes.starts_with(&[0x1f, 0x8b]) {
+        flate2::read::GzDecoder::new(bytes).take(MAX_LAYER + 1).read_to_end(&mut raw).ok()?;
+        &raw
+    } else {
+        bytes
+    };
+    let mut parser = Parser::new(data).ok()?;
+    let value = match parser.next_object() {
+        Ok(Some(v @ Value::Ref(_))) => v,
+        _ => return None,
+    };
+    let arena = &parser.arena;
+    arena.field(value, "id").and_then(|v| arena.string(v)).map(str::to_owned)
+}
+
 /// The custom ground cover a `.layer` file holds, if it is one: what a
 /// `.world` painted with it imports as (see [`crate::layers::apply_after`]).
 pub fn read_ground_cover(bytes: &[u8]) -> Option<crate::layers::GroundCover> {
