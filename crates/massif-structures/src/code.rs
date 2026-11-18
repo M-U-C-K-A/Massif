@@ -10,10 +10,10 @@ use crate::nbt::Compound;
 use crate::rng::Rng;
 use crate::vanilla::{Adapted, Recipe, Request};
 use fastnbt::Value;
-use massif_core::structures::{Piece, Structure};
+use massif_core::structures::Piece;
 use std::collections::HashMap;
 
-pub fn build(ground: &dyn Ground, req: &Request, rng: &mut Rng) -> Result<(Structure, HashMap<(i32, i32), i32>), String> {
+pub fn build(ground: &dyn Ground, req: &Request, rng: &mut Rng) -> Result<crate::vanilla::Laid, String> {
     let turn = req.turn.unwrap_or_else(|| rng.below(4) as u8);
     let (x, z) = (req.at[0], req.at[2]);
     // Its box: centred on the column clicked.
@@ -580,6 +580,7 @@ mod tests {
     use super::*;
     use crate::ground::Flat;
     use crate::vanilla::kind;
+    use massif_core::structures::Structure;
 
     fn built(id: &str, seed: u64) -> Structure {
         let ground = Flat { height: 64, water: None };

@@ -243,7 +243,7 @@ fn processors_of(processors: &Arc<Vec<Processor>>, projection: Projection, legac
 #[allow(clippy::too_many_arguments)]
 pub fn place_template(lib: &Library, b: &mut Builder, location: &str, origin: [i32; 3], turn: u8, list: &[Processor], center: [i32; 3], no_entities: bool) -> Option<BBox> {
     let t = lib.template(location)?;
-    let mut rng = Rng::at(b.seed ^ 0x7061_6c, origin);
+    let mut rng = Rng::at(b.seed ^ 0x0070_616c, origin);
     let palette = &t.palettes[if t.palettes.len() > 1 { rng.below(t.palettes.len() as u32) as usize } else { 0 }];
     let ctx = Ctx { ground: b.ground, seed: b.seed, center };
     let mut locals = Vec::with_capacity(t.blocks.len());
@@ -392,7 +392,7 @@ pub fn carve_boxes(b: &mut Builder, pieces: &[Placed]) {
                     let d2 = (dx * dx + dy * dy + dz * dz) as f32;
                     if d2 > 2.25 {
                         // Less and less likely, the farther out.
-                        let mut rng = Rng::at(b.seed ^ 0x6265_6172_64, [x, y, z]);
+                        let mut rng = Rng::at(b.seed ^ 0x0062_6561_7264, [x, y, z]);
                         if d2 > (MARGIN * MARGIN) as f32 || rng.float() > (-d2 / 8.0).exp() {
                             continue;
                         }
