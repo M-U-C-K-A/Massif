@@ -80,7 +80,7 @@ The window is made of areas, as in Blender. Each area shows one editor: the map,
 - `Ctrl Space` maximises the area under the pointer, and gives it back its place.
 
 ## Workspaces
-The tabs at the top are workspaces: arrangements of areas for a kind of work. The two sides of Massif are switched at the top left: **World**, the map editor, and **Terrain**, the terrain generator.
+The tabs at the top are workspaces: arrangements of areas for a kind of work. The sides of Massif are switched at the top left: **Terrain**, the terrain generator, **World**, the map editor, and **Render** (Beta), where path-traced images of the map will be made: it comes with the Massif 2.0 beta.
 - `+` adds a copy of the workspace shown.
 - Right-click a tab: **Reset** puts it back as it was at first, **Duplicate** copies it, **Delete** removes it.
 

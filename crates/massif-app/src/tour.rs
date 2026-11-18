@@ -42,7 +42,7 @@ fn steps() -> [Step; STEP_COUNT] {
         Step {
             targets: &[Target::Sides],
             title: tr!("Welcome to Massif"),
-            body: tr!("Massif has two sides. World is the map itself: you sculpt it, paint it and export it. Terrain grows relief from a graph of nodes, then sends it to the map."),
+            body: tr!("Massif has three sides. Terrain grows relief from a graph of nodes, then sends it to the map. World is the map itself: you sculpt it, paint it and export it. Render, coming with Massif 2.0, will make path-traced images of it."),
         },
         Step {
             targets: &[Target::Editor(EditorKind::Tools), Target::Editor(EditorKind::ToolSettings)],

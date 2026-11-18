@@ -449,6 +449,19 @@ pub struct Layout {
     /// Which workspaces of later versions it has had added: 1, 3D Sculpt.
     #[serde(default)]
     version: u32,
+    /// The Render side is shown, over the workspaces of the side left. Not
+    /// kept: Massif opens on the side of the workspace it was left in.
+    #[serde(skip)]
+    pub render: bool,
+}
+
+/// The sides of Massif, in the order of the switcher: the terrain
+/// generator, the map editor and the renderer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Terrain,
+    World,
+    Render,
 }
 
 /// The workspaces a layout saved by an older version lacks are added to it
@@ -638,6 +651,7 @@ impl Default for Layout {
             next_id,
             last: [0, first_terrain],
             version: LAYOUT_VERSION,
+            render: false,
         }
     }
 }
@@ -751,12 +765,31 @@ impl Layout {
 
     /// Is the terrain generator's side shown?
     pub fn terrain(&self) -> bool {
-        self.current().terrain
+        !self.render && self.current().terrain
+    }
+
+    /// The side shown.
+    pub fn side(&self) -> Side {
+        match (self.render, self.current().terrain) {
+            (true, _) => Side::Render,
+            (false, true) => Side::Terrain,
+            (false, false) => Side::World,
+        }
+    }
+
+    /// Go to a side, where it was left.
+    pub fn show_side(&mut self, side: Side) {
+        match side {
+            Side::Render => self.render = true,
+            Side::Terrain => self.switch_side(true),
+            Side::World => self.switch_side(false),
+        }
     }
 
     /// Show a workspace, remembering it as the last of its side.
     pub fn activate(&mut self, index: usize) {
         if index < self.workspaces.len() {
+            self.render = false;
             self.active = index;
             self.last[self.workspaces[index].terrain as usize] = index;
         }
@@ -765,6 +798,7 @@ impl Layout {
     /// Go to the map editor's side or the terrain generator's, where it was
     /// left.
     pub fn switch_side(&mut self, terrain: bool) {
+        self.render = false;
         if self.terrain() == terrain {
             return;
         }
@@ -996,6 +1030,27 @@ mod tests {
         let json = serde_json::to_string(&layout).unwrap();
         let back: Layout = serde_json::from_str(&json).unwrap();
         assert_eq!(back.sanitize(), layout);
+    }
+
+    /// The Render side lies over the workspaces: leaving it goes back to
+    /// the workspace of the side asked for, and it is not kept.
+    #[test]
+    fn the_render_side_lies_over_the_workspaces() {
+        let mut layout = Layout::default();
+        let world = layout.active;
+        layout.show_side(Side::Render);
+        assert_eq!(layout.side(), Side::Render);
+        assert!(!layout.terrain(), "the graph's undo is not the Render side's");
+        let back: Layout = serde_json::from_str(&serde_json::to_string(&layout).unwrap()).unwrap();
+        assert_eq!(back.side(), Side::World, "opens on the side of its workspace");
+        layout.show_side(Side::World);
+        assert_eq!((layout.side(), layout.active), (Side::World, world));
+        layout.show_side(Side::Render);
+        layout.show_side(Side::Terrain);
+        assert_eq!(layout.side(), Side::Terrain);
+        layout.show_side(Side::Render);
+        layout.activate(world);
+        assert_eq!(layout.side(), Side::World, "a workspace shown leaves the Render side");
     }
 
     #[test]

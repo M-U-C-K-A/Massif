@@ -88,11 +88,12 @@ brushes, terrain and biome palettes, levels or world info.
 - Drag any corner of an area into it to split it where you let go: the new area opens on that corner's side (across: left or right; up or down: above or below).
 - Drag an area by its title onto another to move it, or onto its centre to
   swap the two. Drag the gaps between areas to resize them.
-- The app has two sides, switched at the top left: **World**, the map
-  editor (workspaces Layout, Sculpting, Painting, 3D, 3D Sculpt, Maps,
-  Minimal), and
-  **Terrain**, the terrain generator (Graph and Render). Each side
-  remembers the workspace it was left on.
+- The app has three sides, switched at the top left: **Terrain**, the
+  terrain generator (Graph and Render), **World**, the map editor
+  (workspaces Layout, Sculpting, Painting, 3D, 3D Sculpt, Maps, Minimal),
+  and **Render**, marked Beta, where path-traced images of the map will be
+  made (it comes with the Massif 2.0 beta and says so until then). Each
+  side remembers the workspace it was left on.
 - Workspaces are tabs of arrangements; duplicate one with `+`, right-click
   it to reset it (back to how it was at first; a copy goes back to what it
   was copied from), duplicate it or delete it. The layout is remembered.

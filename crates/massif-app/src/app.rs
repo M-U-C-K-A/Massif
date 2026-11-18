@@ -3124,9 +3124,10 @@ impl MassifApp {
     fn workspace_tabs(&mut self, ui: &mut Ui) {
         let pal = Palette::of(ui);
         ui.horizontal(|ui| {
-            // The two sides of Massif: the map editor (WorldPainter's) and
-            // the terrain generator (Gaea's).
-            let terrain = self.layout.terrain();
+            // The three sides of Massif: the terrain generator (Gaea's), the
+            // map editor (WorldPainter's) and the renderer (Avoyd's).
+            use crate::layout::Side;
+            let shown = self.layout.side();
             let sides = egui::Frame::new()
                 .fill(pal.panel)
                 .stroke(Stroke::new(1.0, pal.border))
@@ -3136,24 +3137,32 @@ impl MassifApp {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
                         for (side, icon, label, hint) in [
-                            (false, Icon::Map, tr!("World"), tr!("Edit the map: sculpt, paint, levels, 3D, export")),
-                            (true, Icon::MountainSnow, tr!("Terrain"), tr!("Generate terrain from nodes, render it, convert it to the map")),
+                            (Side::Terrain, Icon::MountainSnow, tr!("Terrain"), tr!("Generate terrain from nodes, render it, convert it to the map")),
+                            (Side::World, Icon::Map, tr!("World"), tr!("Edit the map: sculpt, paint, levels, 3D, export")),
+                            (Side::Render, Icon::Aperture, tr!("Render"), tr!("Path-traced images of the map, under a real sky")),
                         ] {
-                            let active = terrain == side;
+                            let active = shown == side;
                             let text = RichText::new(theme::with_icon(icon, label)).color(if active { pal.text } else { pal.weak });
-                            let button = egui::Button::new(if active { text.medium() } else { text })
+                            let mut button = egui::Button::new(if active { text.medium() } else { text })
                                 .fill(if active { pal.accent_soft } else { Color32::TRANSPARENT })
                                 .stroke(Stroke::NONE)
                                 .corner_radius(theme::PILL)
                                 .min_size(vec2(0.0, 24.0));
-                            if ui.add(button).on_hover_text(hint).clicked() && terrain != side {
-                                self.layout.switch_side(side);
+                            if side == Side::Render {
+                                button = button.right_text(RichText::new(tr!("Beta")).size(10.5).strong().color(pal.accent));
+                            }
+                            if ui.add(button).on_hover_text(hint).clicked() && shown != side {
+                                self.layout.show_side(side);
                                 crate::sounds::play(Cue::Navigate);
                             }
                         }
                     });
                 });
             crate::tour::mark(ui.ctx(), crate::tour::Target::Sides, sides.response.rect);
+            if shown == Side::Render {
+                return;
+            }
+            let terrain = self.layout.terrain();
             ui.add_space(4.0);
             // A segmented control: the workspaces of this side in one pill.
             let mut remove = None;
@@ -5286,7 +5295,14 @@ impl MassifApp {
             .show(ui, |ui| self.workspace_tabs(ui));
         egui::CentralPanel::default()
             .frame(egui::Frame::new().fill(pal.app_bg).inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 8 }))
-            .show(ui, |ui| self.dock(ui, frame));
+            .show(ui, |ui| {
+                if self.layout.render {
+                    ui.ctx().data_mut(|d| d.insert_temp(Id::unique("massif areas"), Vec::<(AreaId, Rect)>::new()));
+                    crate::render_side::ui(ui);
+                } else {
+                    self.dock(ui, frame);
+                }
+            });
         self.notices(&ctx);
 
         step("the dialogs");
@@ -7266,6 +7282,37 @@ mod tests {
                 app.settings.theme = theme;
                 app
             })
+    }
+
+    /// The sides in their order, Terrain, World, Render: Render shows what
+    /// it will be, without the workspaces' tabs, and World comes back as it
+    /// was left (MASSIF_SNAPSHOT_DIR: the window on the Render side).
+    #[test]
+    fn the_render_side_comes_third_and_back() {
+        use crate::layout::Side;
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(ThemeChoice::Light);
+        h.run_steps(4);
+        let world = h.state().layout.active;
+        let label = |icon, name| theme::with_icon(icon, name);
+        let [terrain, world_tab, render] = [label(Icon::MountainSnow, "Terrain"), label(Icon::Map, "World"), label(Icon::Aperture, "Render")].map(|l| h.get_by_label_contains(&l).rect().left());
+        assert!(terrain < world_tab && world_tab < render, "Terrain, World, Render: {terrain} {world_tab} {render}");
+        h.get_by_label_contains(&label(Icon::Aperture, "Render")).click();
+        h.run_steps(3);
+        assert_eq!(h.state().layout.side(), Side::Render);
+        h.get_by_label("Coming in the Massif 2.0 beta");
+        assert!(h.query_by_label("Layout").is_none(), "no workspace tabs on the Render side");
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            h.render().unwrap().save(dir.join("render-side.png")).unwrap();
+        }
+        h.get_by_label_contains(&label(Icon::Map, "World")).click();
+        h.run_steps(3);
+        assert_eq!((h.state().layout.side(), h.state().layout.active), (Side::World, world));
+        h.get_by_label_contains(&label(Icon::Aperture, "Render")).click();
+        h.run_steps(2);
+        h.get_by_label_contains(&label(Icon::MountainSnow, "Terrain")).click();
+        h.run_steps(3);
+        assert_eq!(h.state().layout.side(), Side::Terrain);
     }
 
     fn map_rect(app: &MassifApp, ctx: &egui::Context) -> Rect {
