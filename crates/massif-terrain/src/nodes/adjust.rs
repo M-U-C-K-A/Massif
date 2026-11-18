@@ -128,60 +128,8 @@ fn blur_footprint(p: &Params, lod: u8, _: usize) -> Footprint {
     Footprint { lod: work, halo: reach + if work > lod { 2 } else { 0 } }
 }
 
-fn gaussian(s: f64) -> Vec<f32> {
-    let r = (3.0 * s).ceil() as i32;
-    let w: Vec<f64> = (-r..=r).map(|k| (-(k * k) as f64 / (2.0 * s * s)).exp()).collect();
-    let sum: f64 = w.iter().sum();
-    w.iter().map(|v| (v / sum) as f32).collect()
-}
-
 fn blur_cpu(ctx: &Ctx, inputs: &[Option<&Grid>], out: &mut [Vec<f32>]) {
     let src = inputs[0].expect("blur has its input");
-    let work = src.lod;
-    let s = sigma(ctx.params) / Space::spacing(work);
-    let blurred = if s < 0.3 {
-        src.clone()
-    } else {
-        let k = gaussian(s);
-        let r = (k.len() / 2) as i32;
-        let (w, h) = (src.rect.w as i32, src.rect.h as i32);
-        // Rows, then columns, over what the kernel fully covers.
-        let (iw, ih) = ((w - 2 * r).max(1), (h - 2 * r).max(1));
-        let mut rows = vec![0.0f32; (iw * h) as usize];
-        for z in 0..h {
-            let line = &src.data[(z * w) as usize..((z + 1) * w) as usize];
-            for x in 0..iw {
-                let mut acc = 0.0;
-                for (t, kt) in k.iter().enumerate() {
-                    acc += kt * line[(x + t as i32).min(w - 1) as usize];
-                }
-                rows[(z * iw + x) as usize] = acc;
-            }
-        }
-        let mut cols = vec![0.0f32; (iw * ih) as usize];
-        for z in 0..ih {
-            for x in 0..iw {
-                let mut acc = 0.0;
-                for (t, kt) in k.iter().enumerate() {
-                    acc += kt * rows[((z + t as i32).min(h - 1) * iw + x) as usize];
-                }
-                cols[(z * iw + x) as usize] = acc;
-            }
-        }
-        let rect = crate::space::Rect::new(src.rect.x + r, src.rect.z + r, iw as u32, ih as u32);
-        Grid::new(work, rect, cols)
-    };
-    let rect = ctx.rect;
-    if work == ctx.lod {
-        out[0].copy_from_slice(&blurred.crop(rect).data);
-        return;
-    }
-    let f = Space::spacing(ctx.lod) / Space::spacing(work);
-    let w = rect.w as usize;
-    for (j, row) in out[0].chunks_mut(w).enumerate() {
-        let v = (rect.z + j as i32) as f64 * f;
-        for (i, o) in row.iter_mut().enumerate() {
-            *o = blurred.bicubic((rect.x + i as i32) as f64 * f, v);
-        }
-    }
+    let s = sigma(ctx.params) / Space::spacing(src.lod);
+    crate::filters::resample(ctx, &crate::filters::blur(src, s), &mut out[0]);
 }

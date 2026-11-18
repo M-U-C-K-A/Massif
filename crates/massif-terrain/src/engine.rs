@@ -458,13 +458,20 @@ impl Engine {
                 if let (Some(g), Some(kernel)) = (&self.gpu, gpu)
                     && g.takes(kernel.name)
                 {
-                    let connected: Vec<bool> = node.inputs.iter().map(Option::is_some).collect();
+                    // Bound after the uniforms: the inputs' regions, then each
+                    // drivable setting's field at the tile.
+                    let drivable: Vec<usize> = node.spec.params.iter().enumerate().filter(|(_, p)| p.drivable).map(|(i, _)| i).collect();
+                    let connected: Vec<bool> = node.inputs.iter().map(Option::is_some).chain(drivable.iter().map(|&i| driving(i).is_some())).collect();
+                    let fields: Vec<&TileData> = tiles.iter().flat_map(|&(l, x, z)| drivable.iter().filter_map(move |&i| same(driving(i), l, x, z).map(|t| &**t))).collect();
+                    self.to_gpu(&fields);
                     let prepared: Vec<(Vec<u8>, Vec<Option<wgpu::Buffer>>)> = tiles
                         .iter()
                         .map(|&(l, x, z)| {
                             let (reads, grids) = regions(l, x, z);
                             let uniforms = (kernel.uniforms)(&c.ctx(n, l, Rect::tile(x, z), &[], &reads), &connected);
-                            (uniforms, grids.iter().map(|gr| gr.as_ref().map(|gr| g.upload_grid(gr).buffer)).collect())
+                            let mut bound: Vec<Option<wgpu::Buffer>> = grids.iter().map(|gr| gr.as_ref().map(|gr| g.upload_grid(gr).buffer)).collect();
+                            bound.extend(drivable.iter().map(|&i| same(driving(i), l, x, z).and_then(|t| t.gpu_buffer().cloned())));
+                            (uniforms, bound)
                         })
                         .collect();
                     let jobs: Vec<Job> = prepared.iter().map(|(u, b)| (u.clone(), b.iter().map(Option::as_ref).collect())).collect();
@@ -481,8 +488,9 @@ impl Engine {
                         }
                         let (reads, grids) = regions(l, x, z);
                         let ins: Vec<Option<&Grid>> = grids.iter().map(Option::as_ref).collect();
+                        let driven: Vec<Option<&[f32]>> = (0..node.spec.params.len()).map(|i| same(driving(i), l, x, z).map(|t| t.values().expect("fed on the CPU"))).collect();
                         let mut outs = fresh();
-                        cpu(&c.ctx(n, l, Rect::tile(x, z), &[], &reads), &ins, &mut outs);
+                        cpu(&c.ctx(n, l, Rect::tile(x, z), &driven, &reads), &ins, &mut outs);
                         Ok(done(outs))
                     })
                     .collect()
@@ -676,7 +684,7 @@ fn feeds(c: &Compiled, n: usize, l: u8, x: i32, z: i32) -> Vec<Option<Feed>> {
                     Feed { src, lod: f.lod, rect: tile.at_lod(l, f.lod).expand(f.halo) }
                 })
             })
-            .chain(driven.map(|_| None))
+            .chain(driven.map(at_tile))
             .collect(),
         Kernel::Global { carry, .. } => node
             .inputs
