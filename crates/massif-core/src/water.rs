@@ -350,15 +350,71 @@ pub fn fill_lowered(edit: &mut crate::history::Edit, rect: crate::coords::BlockR
 /// meets). Water beside lower water (a step along a river) is left.
 /// Returns the columns changed.
 pub fn seal(edit: &mut crate::history::Edit, rect: crate::coords::BlockRect, rise: &dyn Fn(i32, i32) -> f32, mine: &dyn Fn(i32, i32) -> bool, floor: i16) -> usize {
-    use crate::codec::snap_height;
-    use crate::compose::block_top;
-    use crate::tile::NO_FLUID;
-    let (x0, z0) = (rect.x0 - 1, rect.z0 - 1);
-    let (w, d) = ((rect.x1 - rect.x0 + 2) as usize, (rect.z1 - rect.z0 + 2) as usize);
-    let mut top = vec![f32::NAN; w * d];
-    let mut fluid = vec![NO_FLUID; w * d];
-    {
-        let level = edit.level();
+    let mut cols = SealColumns::read(edit.level(), rect);
+    let changed = cols.seal(rise, mine, floor);
+    if changed == 0 {
+        return 0;
+    }
+    let cols = &cols;
+    edit.par_tiles(rect.tiles(), rect, false, |_, clip, tile| {
+        cols.write(clip, tile);
+    });
+    changed
+}
+
+/// [`seal`] over the ground of a map outside its history (a map being
+/// imported), a few tiles at a time, again until it holds.
+pub fn seal_level(level: &mut crate::level::Level, rect: crate::coords::BlockRect, rise: &dyn Fn(i32, i32) -> f32, mine: &dyn Fn(i32, i32) -> bool, floor: i16) -> usize {
+    const BLOCK: i32 = 8 * TILE_SIZE;
+    let mut total = 0;
+    for _ in 0..8 {
+        let mut changed = 0;
+        let mut z = rect.z0;
+        while z < rect.z1 {
+            let mut x = rect.x0;
+            while x < rect.x1 {
+                let part = crate::coords::BlockRect::new(x, z, (x + BLOCK).min(rect.x1), (z + BLOCK).min(rect.z1));
+                let mut cols = SealColumns::read(level, part);
+                if cols.seal(rise, mine, floor) > 0 {
+                    for p in part.tiles() {
+                        let clip = part.intersect(&p.rect());
+                        if let Some(tile) = level.tile_mut(p) {
+                            changed += cols.write(clip, tile) as usize;
+                        }
+                    }
+                }
+                x += BLOCK;
+            }
+            z += BLOCK;
+        }
+        total += changed;
+        if changed == 0 {
+            break;
+        }
+    }
+    total
+}
+
+/// The columns [`seal`] works on: those of a rectangle and a column
+/// around it (read, never changed), as they were and as they become.
+struct SealColumns {
+    x0: i32,
+    z0: i32,
+    w: usize,
+    d: usize,
+    top: Vec<f32>,
+    fluid: Vec<i16>,
+    before_top: Vec<f32>,
+    before_fluid: Vec<i16>,
+}
+
+impl SealColumns {
+    fn read(level: &crate::level::Level, rect: crate::coords::BlockRect) -> Self {
+        use crate::tile::NO_FLUID;
+        let (x0, z0) = (rect.x0 - 1, rect.z0 - 1);
+        let (w, d) = ((rect.x1 - rect.x0 + 2) as usize, (rect.z1 - rect.z0 + 2) as usize);
+        let mut top = vec![f32::NAN; w * d];
+        let mut fluid = vec![NO_FLUID; w * d];
         let mut tiles: std::collections::HashMap<TilePos, Option<crate::level::TileRef>> = std::collections::HashMap::new();
         for j in 0..d {
             for i in 0..w {
@@ -372,59 +428,67 @@ pub fn seal(edit: &mut crate::history::Edit, rect: crate::coords::BlockRect, ris
                 }
             }
         }
+        Self { x0, z0, w, d, before_top: top.clone(), before_fluid: fluid.clone(), top, fluid }
     }
-    let (before_top, before_fluid) = (top.clone(), fluid.clone());
-    let wet = |top: &[f32], fluid: &[i16], c: usize| fluid[c] != NO_FLUID && fluid[c] as i32 > block_top(top[c]);
-    let mut queue: std::collections::VecDeque<usize> = (0..w * d).filter(|&c| wet(&top, &fluid, c)).collect();
-    while let Some(c) = queue.pop_front() {
-        if !wet(&top, &fluid, c) {
-            continue;
-        }
-        let (i, j) = (c % w, c / w);
-        // The inner columns only: those around are read, not changed.
-        if i == 0 || j == 0 || i == w - 1 || j == d - 1 {
-            continue;
-        }
-        let ours = mine(x0 + i as i32, z0 + j as i32);
-        let f = fluid[c] as i32;
-        for n in [c - 1, c + 1, c - w, c + w] {
-            if top[n].is_nan() || wet(&top, &fluid, n) || block_top(top[n]) >= f {
+
+    /// Hold the water (see [`seal`]); the columns changed.
+    fn seal(&mut self, rise: &dyn Fn(i32, i32) -> f32, mine: &dyn Fn(i32, i32) -> bool, floor: i16) -> usize {
+        use crate::codec::snap_height;
+        use crate::compose::block_top;
+        use crate::tile::NO_FLUID;
+        let (x0, z0, w, d) = (self.x0, self.z0, self.w, self.d);
+        let (top, fluid) = (&mut self.top, &mut self.fluid);
+        let wet = |top: &[f32], fluid: &[i16], c: usize| fluid[c] != NO_FLUID && fluid[c] as i32 > block_top(top[c]);
+        let mut queue: std::collections::VecDeque<usize> = (0..w * d).filter(|&c| wet(top, fluid, c)).collect();
+        while let Some(c) = queue.pop_front() {
+            if !wet(top, fluid, c) {
                 continue;
             }
-            let (ni, nj) = (n % w, n / w);
-            let inner = ni > 0 && nj > 0 && ni < w - 1 && nj < d - 1;
-            let limit = if inner { rise(x0 + ni as i32, z0 + nj as i32) } else { f32::MIN };
-            let want = snap_height(f as f32);
-            if limit >= want - 0.5 {
-                top[n] = top[n].max(want.min(limit));
+            let (i, j) = (c % w, c / w);
+            // The inner columns only: those around are read, not changed.
+            if i == 0 || j == 0 || i == w - 1 || j == d - 1 {
+                continue;
             }
-            if ours && block_top(top[n]) < f && f > floor as i32 {
-                // It cannot hold: the water goes down to its rim, never
-                // under the floor.
-                let rim = block_top(top[n]).max(floor as i32);
-                fluid[c] = if rim > block_top(top[c]) { rim as i16 } else { NO_FLUID };
-                queue.extend([c - 1, c + 1, c - w, c + w, c]);
-                break;
+            let ours = mine(x0 + i as i32, z0 + j as i32);
+            let f = fluid[c] as i32;
+            for n in [c - 1, c + 1, c - w, c + w] {
+                if top[n].is_nan() || wet(top, fluid, n) || block_top(top[n]) >= f {
+                    continue;
+                }
+                let (ni, nj) = (n % w, n / w);
+                let inner = ni > 0 && nj > 0 && ni < w - 1 && nj < d - 1;
+                let limit = if inner { rise(x0 + ni as i32, z0 + nj as i32) } else { f32::MIN };
+                let want = snap_height(f as f32);
+                if limit >= want - 0.5 {
+                    top[n] = top[n].max(want.min(limit));
+                }
+                if ours && block_top(top[n]) < f && f > floor as i32 {
+                    // It cannot hold: the water goes down to its rim, never
+                    // under the floor.
+                    let rim = block_top(top[n]).max(floor as i32);
+                    fluid[c] = if rim > block_top(top[c]) { rim as i16 } else { NO_FLUID };
+                    queue.extend([c - 1, c + 1, c - w, c + w, c]);
+                    break;
+                }
             }
         }
+        (0..w * d).filter(|&c| self.top[c].to_bits() != self.before_top[c].to_bits() || self.fluid[c] != self.before_fluid[c]).count()
     }
-    let changed: Vec<usize> = (0..w * d).filter(|&c| top[c].to_bits() != before_top[c].to_bits() || fluid[c] != before_fluid[c]).collect();
-    if changed.is_empty() {
-        return 0;
-    }
-    let (top, fluid) = (&top, &fluid);
-    edit.par_tiles(rect.tiles(), rect, false, |_, clip, tile| {
+
+    /// Write what changed in `clip` (inside the rectangle) into `tile`;
+    /// whether anything did.
+    fn write(&self, clip: crate::coords::BlockRect, tile: &mut crate::tile::Tile) -> bool {
         let mut any = false;
         for z in clip.z0..clip.z1 {
             for x in clip.x0..clip.x1 {
-                let c = (z - z0) as usize * w + (x - x0) as usize;
+                let c = (z - self.z0) as usize * self.w + (x - self.x0) as usize;
                 let i = local_index(x, z);
-                if top[c].to_bits() != before_top[c].to_bits() {
-                    tile.top.set(i, top[c]);
+                if self.top[c].to_bits() != self.before_top[c].to_bits() {
+                    tile.top.set(i, self.top[c]);
                     any = true;
                 }
-                if fluid[c] != before_fluid[c] {
-                    tile.fluid.set(i, fluid[c]);
+                if self.fluid[c] != self.before_fluid[c] {
+                    tile.fluid.set(i, self.fluid[c]);
                     any = true;
                 }
             }
@@ -432,8 +496,8 @@ pub fn seal(edit: &mut crate::history::Edit, rect: crate::coords::BlockRect, ris
         if any {
             tile.compact();
         }
-    });
-    changed.len()
+        any
+    }
 }
 
 /// The lowest ground water of `cols` (`w` wide, `d` deep) may run down to: under

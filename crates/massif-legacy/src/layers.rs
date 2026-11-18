@@ -826,9 +826,14 @@ pub fn dig_painted_rivers(dim: &mut Dimension, tiles: &[(TilePos, &Vec<u8>)], re
         work.push((pos, cells));
     }
     drop(views);
+    // The ground of the columns dug, as it was: their banks may rise back
+    // to it to hold the water.
+    let mut dug: HashMap<(i32, i32), f32> = HashMap::new();
     for (pos, cells) in work {
         let Some(tile) = dim.ground_mut().tile_mut(pos) else { continue };
+        let (ox, oz) = pos.origin();
         for (i, top, fluid, terrain) in cells {
+            dug.insert((ox + (i % 128) as i32, oz + (i / 128) as i32), tile.top.get(i));
             tile.top.set(i, top);
             tile.fluid.set(i, fluid);
             if let Some(t) = terrain {
@@ -839,6 +844,15 @@ pub fn dig_painted_rivers(dim: &mut Dimension, tiles: &[(TilePos, &Vec<u8>)], re
             }
         }
         tile.compact();
+    }
+    // Down a slope, the water two blocks under each column's ground stands
+    // over the lower bank beside it, and the game would run it out over the
+    // land: there the bank rises back to the ground it had, or the river's
+    // water goes down to what holds it.
+    let (lo, hi) = tiles.iter().fold((TilePos::new(i32::MAX, i32::MAX), TilePos::new(i32::MIN, i32::MIN)), |(lo, hi), (p, _)| (TilePos::new(lo.x.min(p.x), lo.z.min(p.z)), TilePos::new(hi.x.max(p.x), hi.z.max(p.z))));
+    if lo.x <= hi.x {
+        let rect = massif_core::coords::BlockRect::new(lo.x * 128 - 1, lo.z * 128 - 1, (hi.x + 1) * 128 + 1, (hi.z + 1) * 128 + 1);
+        massif_core::water::seal_level(dim.ground_mut(), rect, &|x, z| dug.get(&(x, z)).copied().unwrap_or(f32::MIN), &|x, z| river(x, z), i16::MIN);
     }
 }
 
@@ -1483,6 +1497,42 @@ mod tests {
         assert_eq!(column(64, 40), (80, NO_FLUID));
         // By the lake: its water at the lake's level.
         assert_eq!(column(13, 10).1, 90);
+    }
+
+    /// WorldPainter's River layer painted down a slope and across one: its
+    /// water stands beside no lower land and over no air, and once
+    /// exported the game leaves it as it is.
+    #[test]
+    fn worldpainters_river_layer_holds_on_a_slope() {
+        use massif_core::coords::local_index;
+        use massif_core::world::{DimensionKind, World, WorldMeta};
+        for across in [false, true] {
+            let mut world = World::new(WorldMeta::default());
+            let mut dim = Dimension::new(DimensionKind::Overworld, -64, 320);
+            let grass = world.registry.terrain_by_name("Grass").unwrap().0;
+            for tx in 0..2 {
+                let mut tile = Tile::ground(81.0, grass, NO_FLUID);
+                for z in 0..128 {
+                    for x in 0..128 {
+                        // Down 1 in 8 to the east, and 1 in 4 to the south.
+                        let bx = tx * 128 + x;
+                        tile.top.set(local_index(bx, z), 120.0 - bx as f32 / 8.0 - z as f32 / 4.0);
+                    }
+                }
+                dim.ground_mut().insert(TilePos::new(tx, 0), tile);
+            }
+            // A band 16 wide down the slope (along x), or across it (along z).
+            let painted_at = |x: i32, z: i32| if across { (100..116).contains(&x) } else { (56..72).contains(&z) };
+            type Painted = Vec<(TilePos, Vec<(Conv, Vec<u8>)>)>;
+            let painted: Painted = (0..2)
+                .map(|tx| (TilePos::new(tx, 0), vec![(Conv::River, (0..massif_core::TILE_AREA).map(|i| if painted_at(tx * 128 + (i & 127) as i32, (i >> 7) as i32) { 255 } else { 0 }).collect())]))
+                .collect();
+            apply_after(&mut dim, &painted, &Converter::default(), &mut world.registry, 7, 63);
+            let held = massif_core::water::check(&dim);
+            assert!(held.columns > 500, "across {across}: {held:?}");
+            assert_eq!((held.spills, held.floating), (0, 0), "across {across}: {held:?}");
+            assert_eq!(massif_core::water::settle_all(&dim, true).unsettled, 0, "across {across}");
+        }
     }
 
     /// Custom ground covers, tunnels and caves applied to a dimension:
