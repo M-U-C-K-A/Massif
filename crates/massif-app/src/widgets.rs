@@ -866,6 +866,12 @@ pub fn input_group(ui: &mut Ui, id: &str, parts: &mut [Part]) -> (bool, Option<u
 /// in a pill of their own; one under the other where they are too wide for
 /// the room there is. Returns the one clicked.
 pub fn button_group(ui: &mut Ui, id: &str, labels: &[&str], on: &[bool]) -> Option<usize> {
+    button_group_named(ui, id, labels, labels, on)
+}
+
+/// A [`button_group`] whose choices show `labels` (icons, say) and are
+/// named `names` for the screen reader and under the pointer.
+pub fn button_group_named(ui: &mut Ui, id: &str, labels: &[&str], names: &[&str], on: &[bool]) -> Option<usize> {
     let pal = Palette::of(ui);
     let font = FontId::proportional(12.5);
     let mut galleys: Vec<_> = labels.iter().map(|t| ui.painter().layout_no_wrap((*t).to_owned(), font.clone(), pal.text)).collect();
@@ -901,8 +907,12 @@ pub fn button_group(ui: &mut Ui, id: &str, labels: &[&str], on: &[bool]) -> Opti
             Rect::from_min_size(pos2(x, rect.min.y + INSET), vec2(*w, seg_h))
         };
         let pressed = on.get(k).copied().unwrap_or(false);
-        let r = ui.interact(seg, egui::Id::unique((id, k)), Sense::click());
-        r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, pressed, labels[k]));
+        let mut r = ui.interact(seg, egui::Id::unique((id, k)), Sense::click());
+        let name = names.get(k).copied().unwrap_or(labels[k]);
+        r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, pressed, name));
+        if name != labels[k] {
+            r = r.on_hover_text(name);
+        }
         if pressed {
             let lifted = if pal.dark { theme::mix(pal.control(), pal.text, 0.07) } else { Color32::WHITE };
             painter.rect(seg, GROUP_R, lifted, Stroke::new(1.0, if pal.dark { pal.control_border() } else { pal.border }), StrokeKind::Inside);

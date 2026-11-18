@@ -7,6 +7,7 @@ mod access;
 mod analysis;
 mod app;
 mod autosave;
+mod backdrop;
 mod blocks;
 mod brushes;
 mod cards;

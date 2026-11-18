@@ -72,10 +72,13 @@ struct Settings {
     loader: crate::loader::Pattern,
     /// The tools' icons: Line (Lucide's style) or Classic.
     tool_icons: crate::icons::IconStyle,
-    /// The ridges behind the home screen drift. (Settings saved with a
+    /// The background behind the home screen moves. (Settings saved with a
     /// choice of pictures there, `home_background` and `backdrops_seen`,
     /// read as ever: what is not a field any more is left out.)
     animate_backdrop: bool,
+    /// The background behind the home screen: its style, and each style's
+    /// settings.
+    backdrop: crate::backdrop::Background,
     /// The crosshair of the player's view.
     reticle: crate::reticle::Reticle,
     /// The Developer panel is offered: frames, memory, the processor, live.
@@ -169,6 +172,7 @@ impl Default for Settings {
             loader: crate::loader::Pattern::Orbit,
             tool_icons: crate::icons::IconStyle::Line,
             animate_backdrop: true,
+            backdrop: crate::backdrop::Background::default(),
             reticle: crate::reticle::Reticle::default(),
             developer: false,
             frame_limit: crate::devtools::FrameLimit::Vsync,
@@ -532,6 +536,9 @@ pub struct MassifApp {
     /// The tour asked for (Help ▸ Take the tour, or the first run): shown
     /// once a map is open, with nothing else in the way.
     tour_wanted: bool,
+    /// The live picture of the home screen's background in Settings ▸
+    /// Appearance.
+    backdrop_preview: crate::backdrop::Preview,
     /// A sample map being made: its relief built from its template, then
     /// the World side shown.
     sample: Option<SampleStage>,
@@ -844,11 +851,13 @@ impl MassifApp {
         let recent = self.settings.recent.clone();
         let mut action = None;
         let animate = self.settings.animate_backdrop;
+        let background = self.settings.backdrop;
         let update = self.update_offer().map(|r| r.tag_name.trim_start_matches('v').to_owned());
         let palettes = self.all_palettes();
         egui::CentralPanel::default().frame(egui::Frame::new()).show(ui, |ui| {
             if let Some(home) = &mut self.home {
                 home.animate = animate;
+                home.background = background;
                 if home.new_map.palettes != palettes {
                     home.new_map.palettes = palettes;
                 }
@@ -1046,6 +1055,7 @@ impl MassifApp {
             menus_in_menu_bar: false,
             tour: None,
             tour_wanted: false,
+            backdrop_preview: Default::default(),
             sample: None,
         }
     }
@@ -1249,15 +1259,11 @@ impl MassifApp {
                     crate::sounds::play(Cue::Select);
                 }
             });
-            crate::widgets::row(ui, tr!("Animate the background"), |ui| {
-                let still = theme::reduce_motion(ui.ctx());
-                let mut on = self.settings.animate_backdrop && !still;
-                let tip = if still { tr!("Still: Reduce motion is on (Accessibility)") } else { tr!("The ridges behind the home screen drift slowly") };
-                if ui.add_enabled_ui(!still, |ui| crate::widgets::switch(ui, &mut on)).inner.on_hover_text(tip).changed() {
-                    self.settings.animate_backdrop = on;
-                }
-            });
         });
+        ui.add_space(14.0);
+        ui.label(RichText::new(tr!("Home background")).size(13.0).medium());
+        ui.add_space(4.0);
+        self.prefs_home_background(ui, ctx);
         ui.add_space(14.0);
         ui.label(RichText::new(tr!("Crosshair")).size(13.0).medium());
         ui.add_space(4.0);
@@ -1266,6 +1272,169 @@ impl MassifApp {
             ui.add_space(8.0);
             ui.add(egui::Label::new(RichText::new(tr!("Massif Help and the guide on the website are in English for now.")).size(11.5).color(pal.weak)).wrap());
         }
+    }
+
+    /// The home screen's background: its style, a live picture of it, and
+    /// that style's few settings — none to touch for it to look right.
+    fn prefs_home_background(&mut self, ui: &mut Ui, ctx: &egui::Context) {
+        use crate::backdrop::{Direction, FPS, Motion, PrismPalette, Shape, Style, WavesPalette};
+        let pal = Palette::of(ui);
+        let page = crate::home::backdrop_fill(&pal);
+        let reduced = theme::reduce_motion(ctx);
+        crate::widgets::well(ui, |ui| {
+            crate::widgets::row(ui, tr!("Style"), |ui| {
+                let labels: Vec<&str> = Style::ALL.iter().map(|s| crate::i18n::tr_name(s.label())).collect();
+                let on: Vec<bool> = Style::ALL.iter().map(|s| self.settings.backdrop.style == *s).collect();
+                if let Some(k) = crate::widgets::button_group(ui, "home background", &labels, &on) {
+                    self.settings.backdrop.style = Style::ALL[k];
+                    crate::sounds::play(Cue::Select);
+                }
+            });
+            // The picture, alive while the background would move.
+            let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 172.0), Sense::hover());
+            ui.painter().hline(rect.x_range().expand(12.0), rect.top(), Stroke::new(1.0, pal.border));
+            let picture = rect.shrink2(vec2(0.0, 10.0));
+            let moving = self.settings.animate_backdrop && !reduced;
+            let speed = match self.settings.backdrop.style {
+                Style::Ridges => 1.0,
+                Style::Waves => self.settings.backdrop.waves.speed,
+                Style::Pixel => self.settings.backdrop.pixel.speed,
+                Style::Prism => self.settings.backdrop.prism.speed,
+            };
+            let frame = if moving { (ctx.input(|i| i.time) * FPS) as i64 } else { 0 };
+            let ppp = ctx.pixels_per_point();
+            let cell = (2.0 * ppp).round().max(1.0) / ppp;
+            let size = [(picture.width() / cell).ceil() as usize, (picture.height() / cell).ceil() as usize];
+            let (texture, uv) = self.backdrop_preview.texture(ctx, &pal, &self.settings.backdrop, size, frame);
+            ui.painter().add(egui::epaint::RectShape::filled(picture, theme::TILE_RADIUS, Color32::WHITE).with_texture(texture, uv));
+            ui.painter().rect_stroke(picture, theme::TILE_RADIUS, Stroke::new(1.0, pal.border), egui::StrokeKind::Inside);
+            if moving && speed > 0.0 {
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(1.0 / FPS));
+            }
+            let percent = |v: f64, _: std::ops::RangeInclusive<usize>| format!("{:.0}%", v * 100.0);
+            let parse = |s: &str| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0);
+            // A palette: its colours in a disc, its name, in a menu of rows.
+            let palette_row = |ui: &mut Ui, id: &str, names: Vec<(&'static str, Vec<Color32>)>, chosen: usize| -> Option<usize> {
+                let mut picked = None;
+                crate::widgets::row(ui, tr!("Palette"), |ui| {
+                    let swatch = |ui: &Ui, c: egui::Pos2, colours: &[Color32], r: f32| {
+                        let n = colours.len().max(1);
+                        for (k, colour) in colours.iter().enumerate() {
+                            let start = std::f32::consts::TAU * k as f32 / n as f32 - std::f32::consts::FRAC_PI_2;
+                            let mut points = vec![c];
+                            points.extend((0..=6).map(|i| {
+                                let a = start + std::f32::consts::TAU / n as f32 * i as f32 / 6.0;
+                                c + vec2(a.cos(), a.sin()) * r
+                            }));
+                            ui.painter().add(egui::Shape::convex_polygon(points, *colour, Stroke::NONE));
+                        }
+                        ui.painter().circle_stroke(c, r, Stroke::new(1.0, pal.border));
+                    };
+                    let name = crate::i18n::tr_name(names[chosen].0);
+                    crate::widgets::combo(id).selected_text(name).width(150.0).show_ui(ui, |ui| {
+                        for (k, (label, colours)) in names.iter().enumerate() {
+                            let (rect, response) = ui.allocate_exact_size(vec2(170.0, 28.0), Sense::click());
+                            if response.hovered() || k == chosen {
+                                ui.painter().rect_filled(rect, theme::TILE_RADIUS, if k == chosen { pal.accent_soft } else { theme::mix(pal.well(), pal.text, 0.05) });
+                            }
+                            swatch(ui, pos2(rect.left() + 16.0, rect.center().y), colours, 9.0);
+                            let text = crate::i18n::tr_name(label);
+                            ui.painter().text(pos2(rect.left() + 34.0, rect.center().y), Align2::LEFT_CENTER, text, FontId::proportional(12.5), pal.text);
+                            response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, k == chosen, text));
+                            if response.clicked() {
+                                picked = Some(k);
+                            }
+                        }
+                    });
+                    let (rect, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
+                    swatch(ui, rect.center(), &names[chosen].1, 9.0);
+                });
+                picked
+            };
+            let arrows: Vec<String> = Direction::ALL.iter().map(|d| theme::glyph(d.icon()).to_string()).collect();
+            let arrows: Vec<&str> = arrows.iter().map(String::as_str).collect();
+            let ways: Vec<&str> = Direction::ALL.iter().map(|d| crate::i18n::tr_name(d.label())).collect();
+            let b = &mut self.settings.backdrop;
+            match b.style {
+                Style::Ridges => {}
+                Style::Waves => {
+                    let names = WavesPalette::ALL.iter().map(|p| (p.label(), p.swatch(&pal, page))).collect();
+                    if let Some(k) = palette_row(ui, "waves palette", names, WavesPalette::ALL.iter().position(|p| *p == b.waves.palette).unwrap_or(0)) {
+                        b.waves.palette = WavesPalette::ALL[k];
+                        crate::sounds::play(Cue::Select);
+                    }
+                    crate::widgets::row(ui, tr!("Scale"), |ui| {
+                        ui.add(crate::widgets::Field::new(&mut b.waves.scale, 0.5..=2.0).custom_formatter(percent).custom_parser(parse).width(150.0));
+                    });
+                    crate::widgets::row(ui, tr!("Melt"), |ui| {
+                        ui.add(crate::widgets::Field::new(&mut b.waves.melt, 0.0..=1.0).custom_formatter(percent).custom_parser(parse).width(150.0));
+                    });
+                    crate::widgets::row(ui, tr!("Speed"), |ui| {
+                        ui.add_enabled(moving, crate::widgets::Field::new(&mut b.waves.speed, 0.0..=2.0).custom_formatter(percent).custom_parser(parse).width(150.0));
+                    });
+                    crate::widgets::row(ui, tr!("Direction"), |ui| {
+                        let on: Vec<bool> = Direction::ALL.iter().map(|d| b.waves.direction == *d).collect();
+                        if let Some(k) = crate::widgets::button_group_named(ui, "waves direction", &arrows, &ways, &on) {
+                            b.waves.direction = Direction::ALL[k];
+                            crate::sounds::play(Cue::Select);
+                        }
+                    });
+                }
+                Style::Pixel => {
+                    let names = WavesPalette::ALL.iter().map(|p| (p.label(), p.swatch(&pal, page))).collect();
+                    if let Some(k) = palette_row(ui, "pixel palette", names, WavesPalette::ALL.iter().position(|p| *p == b.pixel.palette).unwrap_or(0)) {
+                        b.pixel.palette = WavesPalette::ALL[k];
+                        crate::sounds::play(Cue::Select);
+                    }
+                    crate::widgets::row(ui, tr!("Pixel size"), |ui| {
+                        ui.add(crate::widgets::Field::new(&mut b.pixel.across, 12.0..=96.0).max_decimals(0).suffix(tr!(" across")).width(150.0));
+                    });
+                    crate::widgets::row(ui, tr!("Speed"), |ui| {
+                        ui.add_enabled(moving, crate::widgets::Field::new(&mut b.pixel.speed, 0.0..=2.0).custom_formatter(percent).custom_parser(parse).width(150.0));
+                    });
+                }
+                Style::Prism => {
+                    let names = PrismPalette::ALL.iter().map(|p| (p.label(), p.swatch(&pal, page))).collect();
+                    if let Some(k) = palette_row(ui, "prism palette", names, PrismPalette::ALL.iter().position(|p| *p == b.prism.palette).unwrap_or(0)) {
+                        b.prism.palette = PrismPalette::ALL[k];
+                        crate::sounds::play(Cue::Select);
+                    }
+                    crate::widgets::row(ui, tr!("Shape"), |ui| {
+                        let labels: Vec<&str> = Shape::ALL.iter().map(|s| crate::i18n::tr_name(s.label())).collect();
+                        let on: Vec<bool> = Shape::ALL.iter().map(|s| b.prism.shape == *s).collect();
+                        if let Some(k) = crate::widgets::button_group(ui, "prism shape", &labels, &on) {
+                            b.prism.shape = Shape::ALL[k];
+                            crate::sounds::play(Cue::Select);
+                        }
+                    });
+                    crate::widgets::row(ui, tr!("Direction"), |ui| {
+                        let on: Vec<bool> = Direction::ALL.iter().map(|d| b.prism.direction == *d).collect();
+                        if let Some(k) = crate::widgets::button_group_named(ui, "prism direction", &arrows, &ways, &on) {
+                            b.prism.direction = Direction::ALL[k];
+                            crate::sounds::play(Cue::Select);
+                        }
+                    });
+                    crate::widgets::row(ui, tr!("Motion"), |ui| {
+                        let labels: Vec<&str> = Motion::ALL.iter().map(|m| crate::i18n::tr_name(m.label())).collect();
+                        let on: Vec<bool> = Motion::ALL.iter().map(|m| b.prism.motion == *m).collect();
+                        if let Some(k) = crate::widgets::button_group(ui, "prism motion", &labels, &on) {
+                            b.prism.motion = Motion::ALL[k];
+                            crate::sounds::play(Cue::Select);
+                        }
+                    });
+                    crate::widgets::row(ui, tr!("Speed"), |ui| {
+                        ui.add_enabled(moving, crate::widgets::Field::new(&mut b.prism.speed, 0.0..=2.0).custom_formatter(percent).custom_parser(parse).width(150.0));
+                    });
+                }
+            }
+            crate::widgets::row(ui, tr!("Animate the background"), |ui| {
+                let mut on = self.settings.animate_backdrop && !reduced;
+                let tip = if reduced { tr!("Still: Reduce motion is on (Accessibility)") } else { tr!("It moves slowly, and stops when the window is behind another") };
+                if ui.add_enabled_ui(!reduced, |ui| crate::widgets::switch(ui, &mut on)).inner.on_hover_text(tip).changed() {
+                    self.settings.animate_backdrop = on;
+                }
+            });
+        });
     }
 
     /// The crosshair of the player's view: its shape, size and opacity,
@@ -1921,6 +2090,12 @@ impl MassifApp {
             ("High contrast".to_owned(), format!("{} (now {})", follow(s.high_contrast), if s.high_contrast.on(self.access.system.contrast) { "on" } else { "off" })),
             ("Reduce motion".to_owned(), format!("{} (now {})", follow(s.reduce_motion), if s.reduce_motion.on(self.access.system.reduce_motion) { "on" } else { "off" })),
             ("Animated home background".to_owned(), if s.animate_backdrop { "on" } else { "off" }.to_owned()),
+            ("Home background".to_owned(), match s.backdrop.style {
+                crate::backdrop::Style::Ridges => "Ridges".to_owned(),
+                crate::backdrop::Style::Waves => format!("Waves, {:?}, scale {:.0}%, melt {:.0}%, speed {:.0}%, {:?}", s.backdrop.waves.palette, s.backdrop.waves.scale * 100.0, s.backdrop.waves.melt * 100.0, s.backdrop.waves.speed * 100.0, s.backdrop.waves.direction),
+                crate::backdrop::Style::Pixel => format!("Pixel, {:?}, {:.0} across, speed {:.0}%", s.backdrop.pixel.palette, s.backdrop.pixel.across, s.backdrop.pixel.speed * 100.0),
+                crate::backdrop::Style::Prism => format!("Prism, {:?}, {:?}, {:?}, {:?}, speed {:.0}%", s.backdrop.prism.palette, s.backdrop.prism.shape, s.backdrop.prism.direction, s.backdrop.prism.motion, s.backdrop.prism.speed * 100.0),
+            }),
             ("Memory for decoded tiles".to_owned(), if s.memory_mb == 0 { "as much as it takes".to_owned() } else { format!("{} MB", s.memory_mb) }),
             ("Autosave".to_owned(), if s.autosave { format!("every {} min", s.autosave_minutes) } else { "off".to_owned() }),
             ("Developer mode".to_owned(), if s.developer { "on" } else { "off" }.to_owned()),
@@ -4079,7 +4254,9 @@ impl MassifApp {
                     // In a small window, the columns narrower, all on screen.
                     let keys_width = crate::keys_page::WIDTH.min(ctx.content_rect().width() - 240.0 - 96.0);
                     let keys_height = 560.0f32.min(ctx.content_rect().height() - 190.0).max(360.0);
-                    let (content, height) = if keys { (keys_width, keys_height) } else { (520.0, 360.0) };
+                    // Appearance and its background's picture, taller.
+                    let tall = 470.0f32.min(ctx.content_rect().height() - 190.0).max(360.0);
+                    let (content, height) = if keys { (keys_width, keys_height) } else if section == PrefsSection::Appearance { (520.0, tall) } else { (520.0, 360.0) };
                     ui.set_width(content + 240.0);
                     let pal = Palette::of(ui);
                     ui.horizontal(|ui| {
@@ -15063,11 +15240,14 @@ mod tests {
         }
     }
 
-    /// The waves behind the home screen (MASSIF_SNAPSHOT_DIR): in the dark
-    /// and light themes, in high contrast or not, three frames of each a few
-    /// seconds apart, and still with Reduce motion on (no frame asked for).
+    /// Every background behind the home screen (MASSIF_SNAPSHOT_DIR): each
+    /// style in two palettes, in the dark and light themes at two moments,
+    /// and in high contrast; and still with Reduce motion on (no frame asked
+    /// for). A sheet of them all, a style and palette a row, is written
+    /// beside them.
     #[test]
-    fn the_home_waves() {
+    fn the_home_backgrounds() {
+        use crate::backdrop::{Background, PrismPalette, Style, WavesPalette};
         let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
         let ppp = std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0);
         let mut h = harness(ThemeChoice::Dark);
@@ -15078,35 +15258,125 @@ mod tests {
             app.open_home(Page::NewMap);
         }
         h.run_steps(5);
-        for (theme, name) in [(ThemeChoice::Dark, "dark"), (ThemeChoice::Light, "light")] {
-            for high in [false, true] {
+        let with = |style: Style, waves: WavesPalette, prism: PrismPalette| {
+            let mut b = Background { style, ..Background::default() };
+            b.waves.palette = waves;
+            b.pixel.palette = waves;
+            b.prism.palette = prism;
+            b
+        };
+        let rows = [
+            ("ridges", with(Style::Ridges, WavesPalette::Flamingo, PrismPalette::Ember)),
+            ("waves-flamingo", with(Style::Waves, WavesPalette::Flamingo, PrismPalette::Ember)),
+            ("waves-theme", with(Style::Waves, WavesPalette::Theme, PrismPalette::Ember)),
+            ("pixel-flamingo", with(Style::Pixel, WavesPalette::Flamingo, PrismPalette::Ember)),
+            ("pixel-lagoon", with(Style::Pixel, WavesPalette::Lagoon, PrismPalette::Ember)),
+            ("prism-ember", with(Style::Prism, WavesPalette::Flamingo, PrismPalette::Ember)),
+            ("prism-ultraviolet", with(Style::Prism, WavesPalette::Flamingo, PrismPalette::Ultraviolet)),
+        ];
+        let shots = [
+            (ThemeChoice::Dark, false, 0.0, "dark-t0"),
+            (ThemeChoice::Dark, false, 6.0, "dark-t1"),
+            (ThemeChoice::Light, false, 0.0, "light-t0"),
+            (ThemeChoice::Light, false, 6.0, "light-t1"),
+            (ThemeChoice::Dark, true, 0.0, "dark-high"),
+            (ThemeChoice::Light, true, 0.0, "light-high"),
+        ];
+        let (tw, th) = (480u32, 300u32);
+        let mut sheet = image::RgbaImage::new(tw * shots.len() as u32, th * rows.len() as u32);
+        for (row, (name, background)) in rows.iter().enumerate() {
+            h.state_mut().settings.backdrop = *background;
+            let mut frames = Vec::new();
+            for (col, (theme, high, t, shot)) in shots.into_iter().enumerate() {
                 h.state_mut().settings.theme = theme;
                 h.state_mut().settings.high_contrast = if high { Follow::On } else { Follow::Off };
-                for (k, t) in [0.0, 4.0, 8.0].into_iter().enumerate() {
-                    h.state_mut().home.as_mut().unwrap().wave_time = Some(t);
-                    h.run_steps(3);
-                    if let Some(dir) = &dir {
-                        let high = if high { "-high" } else { "" };
-                        h.render().unwrap().save(dir.join(format!("home-waves-{name}{high}-{ppp}x-t{k}.png"))).unwrap();
-                    }
+                h.state_mut().home.as_mut().unwrap().wave_time = Some(t);
+                h.run_steps(3);
+                let image = h.render().unwrap();
+                frames.push(image.as_raw().clone());
+                if let Some(dir) = &dir {
+                    image.save(dir.join(format!("home-{name}-{shot}-{ppp}x.png"))).unwrap();
+                    let small = image::imageops::resize(&image, tw, th, image::imageops::FilterType::Triangle);
+                    image::imageops::replace(&mut sheet, &small, (col as u32 * tw) as i64, (row as u32 * th) as i64);
                 }
             }
+            assert_ne!(frames[0], frames[1], "{name} moves");
         }
-        // Reduce motion: the first frame, still, and no frame asked for.
-        h.state_mut().settings.theme = ThemeChoice::Dark;
-        h.state_mut().settings.high_contrast = Follow::Off;
-        h.state_mut().settings.reduce_motion = Follow::On;
-        h.state_mut().home.as_mut().unwrap().wave_time = None;
-        h.run_steps(5);
-        assert!(theme::reduce_motion(&h.ctx));
-        let still = h.render().unwrap();
-        for _ in 0..3 {
-            h.step();
-        }
-        assert_eq!(h.render().unwrap().as_raw(), still.as_raw(), "still with Reduce motion on");
         if let Some(dir) = &dir {
-            still.save(dir.join(format!("home-waves-dark-still-{ppp}x.png"))).unwrap();
+            sheet.save(dir.join(format!("home-backgrounds-sheet-{ppp}x.png"))).unwrap();
         }
+        // Reduce motion: a still frame, and no frame asked for.
+        for style in [Style::Ridges, Style::Waves] {
+            h.state_mut().settings.backdrop = Background { style, ..Background::default() };
+            h.state_mut().settings.theme = ThemeChoice::Dark;
+            h.state_mut().settings.high_contrast = Follow::Off;
+            h.state_mut().settings.reduce_motion = Follow::On;
+            h.state_mut().home.as_mut().unwrap().wave_time = None;
+            h.run_steps(5);
+            assert!(theme::reduce_motion(&h.ctx));
+            let still = h.render().unwrap();
+            for _ in 0..3 {
+                h.step();
+            }
+            assert_eq!(h.render().unwrap().as_raw(), still.as_raw(), "{style:?} still with Reduce motion on");
+            if let Some(dir) = &dir {
+                still.save(dir.join(format!("home-{}-dark-still-{ppp}x.png", format!("{style:?}").to_lowercase()))).unwrap();
+            }
+        }
+    }
+
+    /// Settings ▸ Appearance ▸ Home background: a click on a style shows its
+    /// picture and its own few settings; the page rendered for each style
+    /// with MASSIF_SNAPSHOT_DIR, in both themes.
+    #[test]
+    fn choosing_a_background() {
+        use crate::backdrop::Style;
+        use egui_kittest::kittest::Queryable;
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let ppp = std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0);
+        let mut h = harness(ThemeChoice::Dark);
+        assert_eq!(h.state().settings.backdrop.style, Style::Ridges, "the ridges by default");
+        h.state_mut().dialog = Some(Dialog::Preferences(PrefsSection::Appearance));
+        h.run_steps(4);
+        assert!(h.query_by_label("Melt").is_none(), "the ridges have no settings of their own");
+        // The background's settings, lower in the page.
+        h.event(egui::Event::PointerMoved(pos2(880.0, 560.0)));
+        for _ in 0..4 {
+            h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, -120.0), modifiers: egui::Modifiers::NONE, phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel });
+            h.run_steps(2);
+        }
+        h.run_steps(10);
+        for (label, style, own) in [("Waves", Style::Waves, "Melt"), ("Pixel", Style::Pixel, "Pixel size"), ("Prism", Style::Prism, "Motion"), ("Ridges", Style::Ridges, "Style")] {
+            h.get_by_label(label).click();
+            h.run_steps(4);
+            assert_eq!(h.state().settings.backdrop.style, style);
+            h.get_by_label(own);
+            if style == Style::Waves {
+                // The palettes, a row each with its colours.
+                h.get_by_value("Flamingo").click();
+                h.run_steps(4);
+                if let Some(dir) = &dir {
+                    h.render().unwrap().save(dir.join(format!("dialog-settings-background-palettes-dark-{ppp}x.png"))).unwrap();
+                }
+                h.get_by_label("Lagoon").click();
+                h.run_steps(4);
+                assert_eq!(h.state().settings.backdrop.waves.palette, crate::backdrop::WavesPalette::Lagoon);
+                h.state_mut().settings.backdrop.waves.palette = crate::backdrop::WavesPalette::Flamingo;
+                h.run_steps(4);
+            }
+            if let Some(dir) = &dir {
+                let name = format!("{style:?}").to_lowercase();
+                h.render().unwrap().save(dir.join(format!("dialog-settings-background-{name}-dark-{ppp}x.png"))).unwrap();
+                h.state_mut().settings.theme = ThemeChoice::Light;
+                h.run_steps(4);
+                h.render().unwrap().save(dir.join(format!("dialog-settings-background-{name}-light-{ppp}x.png"))).unwrap();
+                h.state_mut().settings.theme = ThemeChoice::Dark;
+                h.run_steps(4);
+            }
+        }
+        // Settings from before the backgrounds read as the ridges.
+        let old: Settings = serde_json::from_str(r#"{"theme":"Dark","animate_backdrop":true,"recent":[]}"#).unwrap();
+        assert_eq!(old.backdrop, crate::backdrop::Background::default());
     }
 
     /// Massif opens on the home screen: no map, the ways in, the settings of
