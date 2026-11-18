@@ -120,12 +120,16 @@ fn every_node_evaluates_with_its_defaults() {
         let mut inputs = String::new();
         for (k, port) in spec.inputs.iter().enumerate() {
             if !port.optional {
-                let src = if port.kind == registry::PortKind::Color { "paint" } else { "feed" };
+                let src = match port.kind {
+                    registry::PortKind::Color => "paint",
+                    registry::PortKind::Terrain => "lay",
+                    _ => "feed",
+                };
                 inputs.push_str(&format!(r#"{}"{}": "{}""#, if k > 0 && !inputs.is_empty() { ", " } else { "" }, port.name, src));
             }
         }
         let json = format!(
-            r#"{{ "nodes": {{ "feed": {{ "type": "noise.fbm" }}, "paint": {{ "type": "color.ramp", "inputs": {{ "height": "feed" }} }}, "n": {{ "type": "{}", "inputs": {{ {inputs} }} }} }} }}"#,
+            r#"{{ "nodes": {{ "feed": {{ "type": "noise.fbm" }}, "paint": {{ "type": "color.ramp", "inputs": {{ "height": "feed" }} }}, "lay": {{ "type": "terrain.layers" }}, "n": {{ "type": "{}", "inputs": {{ {inputs} }} }} }} }}"#,
             spec.id
         );
         let c = compiled(&json);
