@@ -81,6 +81,10 @@ impl Column {
 /// The blocks of the tile at `pos` to make rock so that no fluid runs (see
 /// the module). `hidden`: whether hidden levels are exported.
 pub fn seal_tile(dim: &Dimension, pos: TilePos, hidden: bool) -> Seals {
+    // A map without cave layers is exported as it always was.
+    if dim.caves.is_empty() {
+        return Seals::default();
+    }
     let Some(stack) = TileStack::new(dim, pos, hidden) else { return Seals::default() };
     // Nothing of the tile may be open to a fluid but where caves, levels or
     // sculpted chunks hollow it.

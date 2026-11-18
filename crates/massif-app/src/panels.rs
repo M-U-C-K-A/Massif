@@ -520,6 +520,8 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             slab_settings(ui, tools, blocks, "tool");
             hint(ui, tr!("Shown over the map while the tool is in hand. Edit ▸ Smooth terrain… sets it for the whole map, terrain by terrain."));
         }
+        Tool::Caves => crate::caves::cave_settings(ui, tools, doc),
+        Tool::CaveBiome => crate::caves::cave_biome_settings(ui, tools, doc),
         Tool::Combined => combined_settings(ui, tools, doc),
         Tool::PaintBiome => {
             let reg = &doc.world.registry;

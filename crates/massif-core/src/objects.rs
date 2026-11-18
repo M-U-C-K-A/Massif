@@ -1516,7 +1516,7 @@ mod tests {
         let mat = Materializer::new(&w.registry, w.meta.seed, dim.min_y);
         let mut all = Vec::new();
         for pos in [TilePos::new(-1, -1), TilePos::new(0, -1), TilePos::new(-1, 0), TilePos::new(0, 0)] {
-            let stack = TileStack::new(dim, pos, true).unwrap();
+            let stack = TileStack::from_above(dim, pos, true).unwrap();
             let here = tile_placements(&w.registry, &mat, 1, false, &stack, pos);
             assert!(here.iter().all(|p| TilePos::containing(p.x, p.z) == pos));
             // The same every time it is asked.
@@ -1536,7 +1536,7 @@ mod tests {
         assert_eq!(turns.len(), 4);
         // On the ground: the anchor in the first block above it.
         let p = all[0];
-        let stack = TileStack::new(dim, TilePos::containing(p.x, p.z), true).unwrap();
+        let stack = TileStack::from_above(dim, TilePos::containing(p.x, p.z), true).unwrap();
         let mut spans = Vec::new();
         stack.spans(local_index(p.x, p.z), &mut spans);
         assert_eq!(p.y, spans.last().unwrap().y1);
@@ -1821,7 +1821,7 @@ mod tests {
             let mat = Materializer::new(&w.registry, w.meta.seed, dim.min_y);
             let mut all = Vec::new();
             for pos in [TilePos::new(-1, -1), TilePos::new(0, -1), TilePos::new(-1, 0), TilePos::new(0, 0)] {
-                let stack = TileStack::new(dim, pos, true).unwrap();
+                let stack = TileStack::from_above(dim, pos, true).unwrap();
                 all.extend(tile_placements(&w.registry, &mat, 1, false, &stack, pos));
             }
             all

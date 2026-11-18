@@ -506,7 +506,7 @@ impl<'a> Others<'a> {
             return None;
         }
         let mut stack = crate::compose::TileStack::gather(self.min_y, self.max_y, self.voxels, pos, layers);
-        stack.with_cave_layers(self.caves, pos, crate::compose::Caves::All);
+        stack.with_cave_layers(self.caves, pos, crate::compose::Caves::All, &[]);
         Some(stack)
     }
 }

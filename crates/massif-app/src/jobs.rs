@@ -77,16 +77,6 @@ pub enum Outcome {
         revision: u64,
         dim: usize,
     },
-    /// Caves carved into a copy of the map: the sculpted chunks they
-    /// changed, to put in place in one undoable step.
-    Caves {
-        chunks: Vec<(massif_core::voxel::ChunkPos, Arc<massif_core::voxel::VoxelChunk>)>,
-        blocks: usize,
-        flooded: usize,
-        /// The document's revision and dimension it was worked out from.
-        revision: u64,
-        dim: usize,
-    },
     /// Ground covers of layer blocks turned into the ground's own layers
     /// (see `massif_core::surface_layers`), to put in place in one step.
     SurfaceLayers {
@@ -794,28 +784,6 @@ impl Job {
             match massif_format::save_patch(&patch, &path) {
                 Ok(bytes) => Outcome::PatchWritten { path, tiles: patch.tiles(), bytes },
                 Err(e) => Outcome::Failed(tr!("Could not save {file}. {why}", file = display_name(&path), why = massif_format::describe(&e, &path))),
-            }
-        })
-    }
-
-    /// Caves carved into dimension `dim` of a snapshot of the document at
-    /// `revision` (over its selection when it has one).
-    pub fn caves(ctx: &egui::Context, snapshot: World, dim: usize, settings: massif_core::caves::CaveSettings, revision: u64) -> Job {
-        use massif_core::auto::Steps;
-        let progress = Arc::new(Steps::default());
-        let p = progress.clone();
-        let label = if snapshot.dims[dim].selection.is_some() { tr!("Carving caves in the selection") } else { tr!("Carving caves over the whole map") };
-        Job::spawn(JobKind::Auto, label.to_owned(), Some(progress as Arc<dyn JobProgress>), ctx, move || {
-            let carved = massif_core::caves::carve(&snapshot.dims[dim], &settings, &p);
-            if carved.cancelled {
-                return Outcome::Cancelled;
-            }
-            Outcome::Caves {
-                chunks: carved.chunks,
-                blocks: carved.blocks,
-                flooded: carved.flooded,
-                revision,
-                dim,
             }
         })
     }

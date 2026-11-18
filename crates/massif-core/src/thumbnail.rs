@@ -56,7 +56,7 @@ pub fn render(world: &World, max: u32) -> Option<image::RgbImage> {
                     let k = match stacks.iter().position(|(p, _)| *p == pos) {
                         Some(k) => k,
                         None => {
-                            stacks.push((pos, TileStack::new(dim, pos, false)));
+                            stacks.push((pos, TileStack::from_above(dim, pos, false)));
                             stacks.len() - 1
                         }
                     };

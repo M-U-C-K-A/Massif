@@ -98,8 +98,8 @@ pub fn diff(now: &World, then: &World, dim: usize) -> Diff {
     let parts: Vec<Part> = tiles
         .par_iter()
         .map(|&t| {
-            let sa = massif_core::compose::TileStack::new(a, t, false);
-            let sb = massif_core::compose::TileStack::new(b, t, false);
+            let sa = massif_core::compose::TileStack::from_above(a, t, false);
+            let sb = massif_core::compose::TileStack::from_above(b, t, false);
             let (mut ca, mut cb) = (crate::map_render::ColumnSampler::default(), crate::map_render::ColumnSampler::default());
             // The tile's pixels, at most 128 × 128.
             let n = (TILE_SIZE / step).max(1) as usize;

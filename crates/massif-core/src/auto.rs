@@ -618,7 +618,7 @@ impl Survey {
                 let mut spans: Vec<Span> = Vec::new();
                 for tx in outer.x0.div_euclid(TILE_SIZE)..=(outer.x1 - 1).div_euclid(TILE_SIZE) {
                     let pos = TilePos::new(tx, tz);
-                    let Some(stack) = TileStack::new(dim, pos, false) else { continue };
+                    let Some(stack) = TileStack::from_above(dim, pos, false) else { continue };
                     let clip = outer.intersect(&pos.rect());
                     let ground = stack.ground();
                     // The ground alone (most tiles): its planes as they are.

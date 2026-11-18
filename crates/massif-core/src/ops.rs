@@ -812,6 +812,80 @@ pub fn fill_caves(edit: &mut Edit, layer: u16) -> usize {
     painted.into_inner()
 }
 
+/// Paint cave biome `biome` (0: none, the columns' own) from height `y0`
+/// up to `y1` under the brush, on the ground level: the cells of 4 × 4 × 4
+/// blocks whose middle column the brush reaches (see
+/// [`crate::caves::CaveBiomes`]). `salt` should change from dab to dab.
+#[allow(clippy::too_many_arguments)]
+pub fn paint_cave_biome(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, biome: u16, (y0, y1): (i32, i32), salt: u64) {
+    let dab = Dab::new(edit, brush, cx, cz);
+    if dab.idle || y1 <= y0 {
+        return;
+    }
+    let (cy0, cy1) = (y0.div_euclid(4), (y1 + 3).div_euclid(4));
+    let footprint = BlockRect::around(cx, cz, brush.reach());
+    edit.par_tiles(footprint.tiles(), footprint, false, |pos, clip, tile| {
+        let (ox, oz) = pos.origin();
+        let cells = crate::caves::CELLS;
+        for cz in 0..cells {
+            for cx in 0..cells {
+                let (x, z) = (ox + cx as i32 * 4 + 2, oz + cz as i32 * 4 + 2);
+                if x < clip.x0 || x >= clip.x1 || z < clip.z0 || z >= clip.z1 {
+                    continue;
+                }
+                let w = dab.weight(x, z);
+                if w <= 0.0 || !paint_hit(w, brush.strength, x, z, salt) {
+                    continue;
+                }
+                tile.cave_biomes.paint((cx, cx + 1), (cy0, cy1), (cz, cz + 1), biome, |_, _, _| true);
+            }
+        }
+    });
+}
+
+/// Paint cave biome `biome` (0: none) in the cells of 4 × 4 × 4 blocks whose
+/// middle lies within `radius` of `center` (block coordinates): a volume
+/// painted from the 3D views. Returns the cells changed.
+pub fn paint_cave_biome_ball(edit: &mut Edit, center: [f32; 3], radius: f32, biome: u16) -> usize {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let r = radius.max(0.5);
+    let footprint = BlockRect::around(center[0], center[2], r + 4.0);
+    let (cy0, cy1) = (((center[1] - r) / 4.0).floor() as i32, ((center[1] + r) / 4.0).ceil() as i32 + 1);
+    let changed = AtomicUsize::new(0);
+    edit.par_tiles(footprint.tiles(), footprint, false, |pos, _, tile| {
+        let (ox, oz) = pos.origin();
+        let cells = crate::caves::CELLS;
+        let inside = |cx: usize, cy: i32, cz: usize| {
+            let m = [(ox + cx as i32 * 4 + 2) as f32 - center[0], (cy * 4 + 2) as f32 - center[1], (oz + cz as i32 * 4 + 2) as f32 - center[2]];
+            m[0] * m[0] + m[1] * m[1] + m[2] * m[2] <= r * r
+        };
+        let n = tile.cave_biomes.paint((0, cells), (cy0, cy1), (0, cells), biome, inside);
+        changed.fetch_add(n, Ordering::Relaxed);
+    });
+    changed.into_inner()
+}
+
+/// Paint cave biome `biome` (0: none) over the cells a box of blocks
+/// `min..max` (max exclusive) reaches — a structure's, say — on the ground
+/// level. Returns the cells changed.
+pub fn paint_cave_biome_box(edit: &mut Edit, min: [i32; 3], max: [i32; 3], biome: u16) -> usize {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    if max[0] <= min[0] || max[1] <= min[1] || max[2] <= min[2] {
+        return 0;
+    }
+    let rect = BlockRect::new(min[0], min[2], max[0], max[2]);
+    let (cy0, cy1) = (min[1].div_euclid(4), (max[1] - 1).div_euclid(4) + 1);
+    let changed = AtomicUsize::new(0);
+    edit.par_tiles(rect.tiles(), rect, false, |pos, clip, tile| {
+        let (ox, oz) = pos.origin();
+        let cell = |a: i32, o: i32| ((a - o).div_euclid(4)).clamp(0, crate::caves::CELLS as i32) as usize;
+        let (cx0, cx1) = (cell(clip.x0, ox), cell(clip.x1 + 3, ox));
+        let (cz0, cz1) = (cell(clip.z0, oz), cell(clip.z1 + 3, oz));
+        changed.fetch_add(tile.cave_biomes.paint((cx0, cx1), (cy0, cy1), (cz0, cz1), biome, |_, _, _| true), Ordering::Relaxed);
+    });
+    changed.into_inner()
+}
+
 /// Paint a layer of underground pockets by its number (0 removes it), on
 /// the ground level. `salt` should change from dab to dab.
 pub fn paint_pockets(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, layer: u16, salt: u64) {

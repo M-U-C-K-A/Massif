@@ -96,8 +96,16 @@ pub struct ExportContext<'a> {
     first_object: u16,
     /// How far any object reaches from its anchor; 0 without objects.
     pub reach: i32,
+    /// The block state of each decoration of caves (see
+    /// [`massif_core::caves::decorate`]), [`SKIP`] where the version has
+    /// nothing like it; empty before 1.13.
+    decos: HashMap<massif_core::caves::decorate::Deco, u16>,
     /// The ores laid in the rock, if any.
     ores: Option<massif_core::ores::Placer>,
+    /// The game's large veins, if laid: their blocks' states by
+    /// [`massif_core::ores::VeinBlock::ALL`] ([`SKIP`] where the version has
+    /// nothing like them).
+    veins: Option<(massif_core::ores::Veins, [u16; 6])>,
     /// Of each ore of the settings, its states in stone and in deepslate
     /// ([`SKIP`] where the version has nothing like it).
     ore_states: Vec<[u16; 2]>,
@@ -319,6 +327,27 @@ impl<'a> ExportContext<'a> {
             }
             (states.len() - 1).min(SKIP as usize - 1) as u16
         });
+        // The decorations of caves: after the ice, before the ores (they
+        // are neither rock an ore takes nor solid ground over one).
+        let decos: HashMap<massif_core::caves::decorate::Deco, u16> = if era == Era::Numbered {
+            HashMap::new()
+        } else {
+            massif_core::caves::decorate::Deco::all()
+                .into_iter()
+                .map(|d| {
+                    if d == massif_core::caves::decorate::Deco::PoolWater {
+                        return (d, wk.water.0);
+                    }
+                    let block = BlockDef { state: d.state(), color: [0; 3] };
+                    let (name, kept) = target.block(block.name());
+                    if name == "minecraft:air" || !name.contains(':') || !kept {
+                        return (d, SKIP);
+                    }
+                    states.push((name.to_owned(), block.properties().map(|(k, v)| (k.to_owned(), v.to_owned())).collect()));
+                    (d, (states.len() - 1).min(SKIP as usize - 1) as u16)
+                })
+                .collect()
+        };
         // The ores, after everything else: in stone and in deepslate.
         let first_ore = states.len().min(SKIP as usize - 1) as u16;
         let ore_states = world
@@ -438,6 +467,19 @@ impl<'a> ExportContext<'a> {
         if states.len() >= UNSET as usize {
             return Err("the covers and objects use too many blocks".into());
         }
+        // The large veins of copper and iron, from 1.17's blocks on: after the
+        // ores, ground as they are (solid over an ore), never rock one takes.
+        let veins = (world.meta.ores.on && world.meta.ores.veins && era != Era::Numbered).then(|| {
+            let ids = massif_core::ores::VeinBlock::ALL.map(|b| {
+                let (name, kept) = target.block(b.state());
+                if name == "minecraft:air" || !kept || name != b.state() {
+                    return SKIP;
+                }
+                states.push((name.to_owned(), Vec::new()));
+                (states.len() - 1).min(SKIP as usize - 1) as u16
+            });
+            (massif_core::ores::Veins::new(world.meta.seed), ids)
+        });
         let mut hosts: Vec<u8> = massif_core::ores::hosts(reg).into_iter().map(|h| h.map_or(0, |h| 1 + (h == massif_core::ores::Host::Deepslate) as u8)).collect();
         hosts.resize(states.len(), 0);
         // At least 1 with objects: 0 means none, and an object one block wide
@@ -515,6 +557,8 @@ impl<'a> ExportContext<'a> {
             reach,
             ores: massif_core::ores::Placer::new(&world.meta.ores, world.meta.seed),
             ore_states,
+            decos,
+            veins,
             first_ore,
             pockets: massif_core::pockets::Pockets::new(reg, world.meta.seed as u64, dim.min_y),
             hosts,
@@ -897,6 +941,7 @@ pub fn build_chunk(
     objects: &[Placement],
     steady: &[massif_core::water::Steady],
     smooth: &[massif_core::shapes::Column],
+    caves: &CaveWork,
     scratch: &mut Scratch,
 ) -> Vec<u8> {
     fill_chunk(ctx, stack, tile, cx, cz, objects, steady, smooth, scratch, true)
@@ -957,6 +1002,8 @@ fn fill_chunk(
         ores,
     } = scratch;
 
+    // The block entities of the chunk: sculk sensors, shriekers, catalysts.
+    let mut entities: Vec<(&'static str, i32, i32, i32)> = Vec::new();
     // ---- blocks ------------------------------------------------------------
     // What the last chunk wrote is cleared (above it, all is air already);
     // `top` follows the highest block this one writes.
@@ -1028,14 +1075,32 @@ fn fill_chunk(
                 }
                 top = top.max(y1);
             }
-            // The lakes of caves hold their own fluid.
-            if stack.is_sculpted() {
-                stack.sculpted_fluids(cell, cave_fluids);
+            // The lakes of caves hold their own fluid: those of sculpted
+            // chunks, and the aquifers of the cave layers.
+            if stack.is_sculpted() || stack.caves().is_some_and(|c| c.has_fluid()) {
+                stack.cave_fluids(cell, cave_fluids);
                 for &(y0, y1, fluid) in cave_fluids.iter() {
                     let block = ctx.cave_fluids[fluid as usize];
                     for y in y0.max(min_y)..y1.min(max_y) {
                         blocks[at(y)] = block;
                     }
+                }
+            }
+            // Rock where a fluid would still run (see caves::seal_tile).
+            for y in caves.seals.column(cell) {
+                if (min_y..max_y).contains(&y) {
+                    blocks[at(y)] = ctx.mat.substrate(x, y, z).0;
+                }
+            }
+            // What grows and forms in the caves (see caves::decorate).
+            for (y, deco) in caves.decorations.column(cell) {
+                let state = ctx.decos.get(&deco).copied().unwrap_or(SKIP);
+                if state == SKIP || !(min_y..max_y).contains(&y) {
+                    continue;
+                }
+                blocks[at(y)] = state;
+                if let Some(id) = deco.entity() {
+                    entities.push((id, x, y, z));
                 }
             }
             // What grows on the top of the column.
@@ -1081,6 +1146,19 @@ fn fill_chunk(
             };
             stack.biome_column(cell, ctx.reg, &ctx.auto, top, &mut biome_columns[bz * 4 + bx]);
         }
+    }
+
+    // ---- the large veins ----------------------------------------------------
+    // In the stone and the deepslate only, before the ores (which take the
+    // rock the veins leave).
+    if let Some((veins, ids)) = &ctx.veins {
+        veins.chunk(bx0, bz0, (min_y, max_y), |x, y, z, b| {
+            let i = (((y - min_y) as usize) << 8) | ((((z - bz0) << 4) | (x - bx0)) as usize);
+            let id = ids[massif_core::ores::VeinBlock::ALL.iter().position(|&v| v == b).unwrap_or(0)];
+            if id != SKIP && ctx.hosts.get(blocks[i] as usize).is_some_and(|&h| h != 0) {
+                blocks[i] = id;
+            }
+        });
     }
 
     // ---- ores --------------------------------------------------------------
@@ -1276,7 +1354,22 @@ fn fill_chunk(
         w.end(); // section
     }
 
-    w.list("block_entities", TagType::Compound, 0);
+    // Only those still standing: an object or an ore may have taken their
+    // place.
+    entities.retain(|&(id, x, y, z)| {
+        let i = (((y - min_y) as usize) << 8) | ((((z - bz0) << 4) | (x - bx0)) as usize);
+        ctx.decos.iter().any(|(d, &s)| d.entity() == Some(id) && s == blocks[i])
+    });
+    w.list("block_entities", TagType::Compound, entities.len());
+    for &(id, x, y, z) in &entities {
+        w.item_compound();
+        w.string("id", id);
+        w.int("x", x);
+        w.int("y", y);
+        w.int("z", z);
+        w.byte("keepPacked", 0);
+        w.end();
+    }
     w.list("block_ticks", TagType::Compound, 0);
     w.list("fluid_ticks", TagType::Compound, 0);
     w.compound("Heightmaps");
@@ -1288,6 +1381,28 @@ fn fill_chunk(
     w.end();
     w.end();
     w.finish()
+}
+
+/// What a tile's caves add to its chunks: the blocks made rock so that no
+/// fluid runs, and the decorations of their surfaces.
+#[derive(Debug, Default)]
+pub struct CaveWork {
+    pub seals: massif_core::caves::Seals,
+    pub decorations: massif_core::caves::decorate::Decorations,
+}
+
+impl CaveWork {
+    /// The work of the tile at `pos` of `dim` (`hidden`: hidden levels are
+    /// exported); none for a dimension without caves.
+    pub fn of(world: &World, dim: &Dimension, pos: TilePos, hidden: bool) -> Self {
+        // No cave of any kind: nothing to read twice.
+        if dim.caves.is_empty() && dim.voxels.is_empty() && dim.levels.len() == 1 {
+            return Self::default();
+        }
+        let seals = massif_core::caves::seal_tile(dim, pos, hidden);
+        let decorations = massif_core::caves::decorate::decorate_tile(dim, &world.registry, pos, hidden, &seals);
+        Self { seals, decorations }
+    }
 }
 
 /// Pack `values` into longs, `bits` per entry, end to end: an entry may

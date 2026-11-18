@@ -40,6 +40,11 @@ pub enum Tool {
     /// Smoothing: where Smooth terrain is on or off whatever the map's
     /// switch, or a slab chosen by hand (shown as "Smoothing").
     Slabs,
+    /// Where a cave layer carves its caves (see `massif_core::caves`).
+    Caves,
+    /// Cave biomes: lush caves, dripstone caves, the deep dark… painted
+    /// between two heights.
+    CaveBiome,
     /// A combined layer: several layers painted at once.
     Combined,
     /// The biome the land calls for; the terrain the biome calls for.
@@ -77,7 +82,7 @@ pub const SELECT_GROUP: &str = tn!("Select");
 pub const WATER_GROUP: &str = tn!("Water");
 
 impl Tool {
-    pub const GROUPS: [(&'static str, Icon, &'static [Tool]); 7] = [
+    pub const GROUPS: [(&'static str, Icon, &'static [Tool]); 8] = [
         (
             SCULPT_GROUP,
             Icon::Mountain,
@@ -91,13 +96,14 @@ impl Tool {
         (SELECT_GROUP, Icon::SquareDashed, &[Tool::SelectRect, Tool::SelectEllipse, Tool::SelectLasso, Tool::SelectBrush]),
         (tn!("Decor"), Icon::Shrub, &[Tool::Cover, Tool::Objects, Tool::TreeSize, Tool::Pockets, Tool::Slabs, Tool::Combined]),
         (WATER_GROUP, Icon::Droplet, &[Tool::Water, Tool::Flood, Tool::River]),
+        (tn!("Underground"), Icon::Pickaxe, &[Tool::Caves, Tool::CaveBiome]),
         (tn!("Levels"), Icon::Layers, &[Tool::StampSlab, Tool::EraseSlab]),
         (tn!("Navigate"), Icon::Compass, &[Tool::Pan, Tool::Eyedropper]),
     ];
 
     /// Tools new in this version: the Tools panel marks them until they
     /// are first tried.
-    pub const NEW: [Tool; 2] = [Tool::Gradient, Tool::Slabs];
+    pub const NEW: [Tool; 4] = [Tool::Gradient, Tool::Slabs, Tool::Caves, Tool::CaveBiome];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -116,6 +122,8 @@ impl Tool {
             Tool::TreeSize => tr!("Tree sizes"),
             Tool::Pockets => tr!("Underground pockets"),
             Tool::Slabs => tr!("Smoothing"),
+            Tool::Caves => tr!("Caves"),
+            Tool::CaveBiome => tr!("Cave biome"),
             Tool::Combined => tr!("Combined layer"),
             Tool::AutoBiome => tr!("Auto biome"),
             Tool::AutoPaint => tr!("Auto paint"),
@@ -153,6 +161,8 @@ impl Tool {
             Tool::TreeSize => Icon::ChartNoAxesColumnIncreasing,
             Tool::Pockets => Icon::Gem,
             Tool::Slabs => Icon::ChartNoAxesColumn,
+            Tool::Caves => Icon::Shovel,
+            Tool::CaveBiome => Icon::Leaf,
             Tool::Combined => Icon::Combine,
             Tool::AutoBiome => Icon::Earth,
             Tool::AutoPaint => Icon::WandSparkles,
@@ -218,6 +228,8 @@ impl Tool {
             Tool::TreeSize => tr!("Mark where bushes, small, medium or large trees grow: the object layers painted there take objects of that size. Right button: any size."),
             Tool::Pockets => tr!("Paint pockets of other blocks into the rock under the ground: gravel, clay, a mod's stone. Right button: rub them out."),
             Tool::Slabs => tr!("Paint where Smooth terrain builds the top of the land in partial blocks, or where it does not, whatever the map's setting. Right button: back to the map's setting."),
+            Tool::Caves => tr!("Paint where a cave layer carves its caves: chambers, tunnels, ravines and lakes of water and lava, as the game's. Right button: no caves there."),
+            Tool::CaveBiome => tr!("Paint a cave biome between two heights: lush caves, dripstone caves, the deep dark, each decorated as in the game. Right button: rub it out."),
             Tool::Combined => tr!("Paint several layers at once: a terrain, a biome, a ground cover, trees, pockets, each over its share. Right button: rub out what it paints."),
             Tool::AutoBiome => {
                 tr!("Sets the biome the land calls for: beach, forest, peaks…")
@@ -308,6 +320,8 @@ impl Tool {
             | Tool::TreeSize
             | Tool::Pockets
             | Tool::Slabs
+            | Tool::Caves
+            | Tool::CaveBiome
             | Tool::Combined
             | Tool::AutoBiome
             | Tool::AutoPaint
@@ -498,6 +512,13 @@ pub struct ToolState {
     pub smooth_off: bool,
     /// The combined layer painted, by its number (0: none yet).
     pub combined: u16,
+    /// The cave layer painted, by its number (0: none yet).
+    pub cave_layer: u16,
+    /// The cave biome painted ([`massif_core::BiomeId`]), and the heights
+    /// it is painted between.
+    pub cave_biome: u16,
+    pub cave_low: i32,
+    pub cave_high: i32,
     /// The tree sizes shown over the map even when another tool is in hand.
     pub show_sizes: bool,
     /// The water's level of the Fixed water height.
@@ -1176,6 +1197,10 @@ impl Default for ToolState {
             slab_block: None,
             smooth_off: false,
             combined: 0,
+            cave_layer: 0,
+            cave_biome: 0,
+            cave_low: -64,
+            cave_high: 0,
             show_sizes: false,
             water_level: 63,
             flood_height: WaterHeight::Start,
@@ -1653,7 +1678,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
     let dt = dt.clamp(0.0, 0.1);
     // Annotations are marks on the map, whatever the level: on the ground's.
     // Pockets are in the rock of the ground: on its level too.
-    let level = if matches!(stroke.tool, Tool::Annotate | Tool::Pockets | Tool::Slabs) { 0 } else { stroke.level.min(doc.dimension().levels.len() - 1) };
+    let level = if matches!(stroke.tool, Tool::Annotate | Tool::Pockets | Tool::Slabs | Tool::Caves | Tool::CaveBiome) { 0 } else { stroke.level.min(doc.dimension().levels.len() - 1) };
     let understory = doc.world.registry.object_layer(tools.object_layer).is_some_and(|l| l.understory);
     let (parts, below): (Vec<massif_core::combined::Component>, Vec<massif_core::combined::Component>) = match &combined {
         Some((parts, _)) if level != 0 => parts.iter().partition(|c| c.part != massif_core::combined::Part::Pockets),
@@ -1749,6 +1774,8 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
             Tool::Pockets if invert => ops::erase_pockets(&mut edit, brush, x, z, tools.pocket_layer, stroke.salt),
             Tool::Pockets => ops::paint_pockets(&mut edit, brush, x, z, tools.pocket_layer, stroke.salt),
             Tool::Slabs => ops::paint_slabs(&mut edit, brush, x, z, if invert { 0 } else { slabs }, stroke.salt),
+            Tool::Caves => ops::paint_caves(&mut edit, brush, x, z, if invert { 0 } else { tools.cave_layer }, stroke.salt),
+            Tool::CaveBiome => ops::paint_cave_biome(&mut edit, brush, x, z, if invert { 0 } else { tools.cave_biome }, (tools.cave_low.min(tools.cave_high), tools.cave_low.max(tools.cave_high) + 1), stroke.salt),
             Tool::Combined => {
                 ops::paint_parts(&mut edit, brush, x, z, &parts, stroke.salt);
                 // The terrain put back as Paint terrain's right button does.
@@ -1842,7 +1869,7 @@ pub fn sculpt_strength(brush: &Brush, dt: f32) -> f32 {
 /// Elevation of the topmost surface of column `(x, z)`, as composed.
 fn surface_at(dim: &massif_core::Dimension, x: f32, z: f32) -> Option<f32> {
     let (bx, bz) = (x.floor() as i32, z.floor() as i32);
-    let stack = massif_core::TileStack::new(dim, TilePos::containing(bx, bz), false)?;
+    let stack = massif_core::TileStack::from_above(dim, TilePos::containing(bx, bz), false)?;
     let mut spans = Vec::new();
     stack.spans(massif_core::coords::local_index(bx, bz), &mut spans);
     spans.last().map(|s| s.y1 as f32)
@@ -2015,7 +2042,7 @@ pub struct Probe {
 
 pub fn probe(doc: &Document, x: i32, z: i32) -> Option<Probe> {
     let dim = doc.dimension();
-    let stack = massif_core::TileStack::new(dim, TilePos::containing(x, z), false)?;
+    let stack = massif_core::TileStack::from_above(dim, TilePos::containing(x, z), false)?;
     let cell = massif_core::coords::local_index(x, z);
     let mut sampler = crate::map_render::ColumnSampler::default();
     let s = sampler.sample(&stack, cell);

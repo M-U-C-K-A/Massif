@@ -379,7 +379,7 @@ fn caves_over_a_large_map() {
             .par_iter()
             .map(|&p| {
                 let ground = dim.ground().view(p).unwrap();
-                let c = tile_caves(&dim.caves, &ground, p, dim.min_y, dim.max_y).unwrap();
+                let c = tile_caves(&dim.caves, &ground, p, dim.min_y, dim.max_y, &[]).unwrap();
                 let (all, wet) = c.count();
                 (all, wet, c.bytes())
             })

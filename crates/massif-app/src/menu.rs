@@ -299,11 +299,10 @@ pub fn menus(state: &State) -> Vec<Menu> {
             entries: WholeOp::ALL
                 .iter()
                 .map(|&op| tipped(Command::WholeMap(op), op.icon(), &format!("{}…", crate::i18n::tr_name(op.label())), map, crate::i18n::tr_name(op.about())))
-                .chain([Entry::Separator, tipped(Command::Snowfall, Icon::Snowflake, tr!("Snowfall…"), map, tr!("Snow laid by the wind and the slopes: drifts in the lee, bare windward ridges"))])
+                .chain([Entry::Separator, tipped(Command::Snowfall, Icon::Snowflake, tr!("Snowfall…"), map, tr!("Snow laid by the wind and the slopes: drifts in the lee, bare windward ridges")), tipped(Command::Caves, Icon::Shovel, tr!("Caves…"), map, tr!("Chambers, tunnels, ravines and lakes of water and lava, as the game's: a cave layer over the whole map or the selection"))])
                 .collect(),
         },
         tipped(Command::RealTerrain, Icon::Earth, tr!("Relief of a Real Place…"), map, tr!("The heights of a place on the Earth, into the selection or the whole map")),
-        tipped(Command::Caves, Icon::Shovel, tr!("Caves…"), map, tr!("Tunnels, ravines and caverns carved into the rock, over the whole map or the selection")),
         tipped(Command::ImportMask, Icon::ImageUp, tr!("Import Mask…"), map, tr!("An image painted onto the map: annotations, a layer, a terrain, a biome, water or the height")),
         tipped(Command::AddReference, Icon::ImagePlus, tr!("Add Reference Image…"), map, tr!("A picture over or under the map to trace over: shown only, never exported")),
         Entry::Separator,

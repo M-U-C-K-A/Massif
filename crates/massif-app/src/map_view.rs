@@ -243,6 +243,11 @@ pub struct MapView {
     /// Shading from the smooth heights rather than whole blocks.
     pub smooth: bool,
     pub grid: bool,
+    /// The map cut through at this height, its caves as a plan (see
+    /// [`MapStyle::cut`]); `None`: seen from above.
+    pub cut: Option<i32>,
+    /// The height of the last cut, to come back to.
+    pub cut_y: i32,
     /// The map framed by itself (see [`MapView::should_fit`]): for which
     /// document, and the view it gave, with the size of the canvas then.
     fitted: Option<u64>,
@@ -332,6 +337,8 @@ impl Default for MapView {
             contours: true,
             smooth: false,
             grid: false,
+            cut: None,
+            cut_y: 0,
             fitted: None,
             fit_view: None,
             stroke: None,
@@ -521,6 +528,19 @@ impl MapView {
             .on_hover_text(tr!("Grid of chunks, tiles and region files (r.x.z.mca, 512 blocks)"));
         ui.toggle_value(&mut tools.show_annotations, theme::glyph(Icon::PenLine).to_string())
             .on_hover_text(tr!("Annotations, on the map and in 3D: the marks painted with the Annotations tool. They are never exported"));
+        ui.separator();
+        let mut under = self.cut.is_some();
+        if ui
+            .toggle_value(&mut under, theme::glyph(Icon::SquareSplitVertical).to_string())
+            .on_hover_text(tr!("Underground: the map cut through at a height, its caves, water and lava as a plan"))
+            .changed()
+        {
+            self.cut = under.then_some(self.cut_y);
+        }
+        if let Some(y) = &mut self.cut {
+            ui.add(crate::widgets::Field::new(y, -2032..=2031).suffix(" y")).on_hover_text(tr!("The height of the cut"));
+            self.cut_y = *y;
+        }
     }
 
     /// What the pointer at `p` is over, on the river being laid out.
@@ -1742,6 +1762,7 @@ impl MapView {
             pockets: tools.tool == tools::Tool::Pockets,
             slabs: tools.tool == tools::Tool::Slabs,
             palette: if self.mode == MapMode::TrueColour { crate::true_color::key(&doc.world.registry) } else { 0 },
+            cut: self.cut,
         };
         let ppp = ui.ctx().pixels_per_point();
         let blocks_per_px = 1.0 / (self.zoom * ppp);
