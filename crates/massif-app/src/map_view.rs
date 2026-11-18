@@ -950,6 +950,19 @@ impl MapView {
         !near
     }
 
+    /// Glide to the blocks of `rect` (west, north, east, south), framed
+    /// with room around them.
+    pub fn glide_to(&mut self, rect: [i32; 4]) {
+        let (w, d) = ((rect[2] - rect[0]).max(1) as f32, (rect[3] - rect[1]).max(1) as f32);
+        let canvas = if self.canvas.is_finite() && self.canvas.width() > 1.0 { self.canvas } else { Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0)) };
+        let zoom = ((canvas.width() / w).min(canvas.height() / d) * 0.6).clamp(MIN_ZOOM, MAX_ZOOM);
+        self.goal = Some(Goal {
+            zoom,
+            center: Some([(rect[0] + rect[2]) as f64 / 2.0, (rect[1] + rect[3]) as f64 / 2.0]),
+            anchor: canvas.center(),
+        });
+    }
+
     /// Frame the whole map.
     pub fn fit(&mut self, doc: &Document, canvas: Rect) {
         let Some((lo, hi)) = doc.dimension().bounds() else {

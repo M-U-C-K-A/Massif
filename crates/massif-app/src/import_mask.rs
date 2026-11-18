@@ -128,6 +128,13 @@ pub struct MaskForm {
     region: Option<Region>,
     /// Blocks over which a heightmap fades into the land around it.
     pub feather: u32,
+    /// The zone the images came from (its `zone.json`, of this map), and
+    /// the index of the version it was exported from, when the map still
+    /// has it.
+    pub zone: Option<(massif_core::patch::Zone, Option<usize>)>,
+    /// Review the images as a contribution against that version, rather
+    /// than paint them at once.
+    pub review: bool,
 }
 
 /// What the dialog wants done.
@@ -202,6 +209,8 @@ impl MaskForm {
             current: 0,
             region: None,
             feather: 16,
+            zone: None,
+            review: false,
         };
         let first = form.stash();
         let first = form.guessed(first, reg);
@@ -548,9 +557,34 @@ impl MaskForm {
         });
 
         ui.add_space(14.0);
+        if let Some((zone, base)) = &self.zone {
+            well(ui, |ui| {
+                row(ui, tr!("Review it as a contribution"), |ui| {
+                    if base.is_some() {
+                        switch(ui, &mut self.review);
+                    } else {
+                        self.review = false;
+                        crate::collab::status_pill(ui, tr!("Version gone"), pal.weak);
+                    }
+                });
+            });
+            let note = match (base, self.review) {
+                (Some(_), true) => tr!("The images are painted onto “{base}”, the version the zone was exported from, and what they change is shown on the map to accept or reject: nothing changes until you apply it.", base = zone.base.name),
+                (Some(_), false) => tr!("The images are painted onto the map at once, as one step to undo.").to_owned(),
+                (None, _) => tr!("“{base}”, the version the zone was exported from, is no longer in the map: the images are painted onto the map at once.", base = zone.base.name),
+            };
+            ui.add(egui::Label::new(RichText::new(note).size(11.5).color(pal.weak)).wrap());
+            ui.add_space(10.0);
+        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let ok = !matches!(self.kind, Kind::Layer) || !self.layers.is_empty();
-            let label = if self.entries.len() > 1 { tr!("Import {n} images", n = self.entries.len()) } else { tr!("Import").to_owned() };
+            let label = if self.review {
+                tr!("Review…").to_owned()
+            } else if self.entries.len() > 1 {
+                tr!("Import {n} images", n = self.entries.len())
+            } else {
+                tr!("Import").to_owned()
+            };
             if ui.add_enabled(ok, theme::primary_button(ui, label)).clicked() {
                 choice = Choice::Import(self.all());
             }

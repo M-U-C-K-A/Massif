@@ -30,6 +30,9 @@ pub struct RegionForm {
     width: i32,
     depth: i32,
     pub parts: RegionParts,
+    /// Keep a version of the map and write `zone.json` beside the images,
+    /// for the region to come back as a contribution to review.
+    pub review: bool,
 }
 
 pub enum Choice {
@@ -50,6 +53,7 @@ impl RegionForm {
             width: start.width(),
             depth: start.depth(),
             parts: RegionParts::default(),
+            review: true,
         }
     }
 
@@ -136,6 +140,18 @@ impl RegionForm {
             });
         });
         ui.add(egui::Label::new(RichText::new(tr!("Each terrain, layer or biome found there gets an image: white where it is, black elsewhere. The images go in a folder of their own.")).size(11.5).color(pal.weak)).wrap());
+        ui.add_space(10.0);
+        well(ui, |ui| {
+            row(ui, tr!("Review it when it comes back"), |ui| {
+                switch(ui, &mut self.review);
+            });
+        });
+        let note = if self.review {
+            tr!("Keeps a version of the map as it is and writes zone.json beside the images: brought back with Versions ▸ Import a contribution…, the zone is compared with that version and reviewed on the map before anything changes.")
+        } else {
+            tr!("Brought back with Edit ▸ Import Mask…, the images are painted onto the map at once.")
+        };
+        ui.add(egui::Label::new(RichText::new(note).size(11.5).color(pal.weak)).wrap());
         ui.add_space(12.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let ok = r.width() > 0 && r.depth() > 0 && r.width() <= 65_535 && r.depth() <= 65_535;

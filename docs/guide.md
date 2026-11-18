@@ -399,6 +399,12 @@ file at the next save. Versions of Massif before 0.6 open a file with save
 points as the map alone, and saving it from them drops the points. Save
 points are not exported.
 
+Save points are also the map's **versions**: each knows the one it was made
+from and who made it, so that copies of the map sent to other people can be
+joined again. To work on one map with others, or to bring back a zone
+edited in another tool, see [Working on one map together](versioning.md)
+(beta).
+
 ## New worlds and export
 
 A new map (the home screen) takes a name, a size (width × depth, in
@@ -973,6 +979,12 @@ Only a name the other tool kept is understood; any other image gets a
 target to pick, as usual. Rows are written as they are read, a row of tiles
 at a time: a region of 16,384 × 16,384 blocks, its heightmap and a terrain,
 is written in about 2 s on an M4.
+
+With **Review it when it comes back** on (as it is unless turned off),
+Export Region also keeps a version of the map and writes `zone.json` beside
+the images. Brought back, the images are then painted onto that version and
+what they change is shown on the map to accept or reject, as a contribution:
+see [A zone through another tool](versioning.md#a-zone-through-another-tool).
 
 ## Unpainting
 
