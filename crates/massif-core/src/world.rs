@@ -91,6 +91,9 @@ pub struct Dimension {
     pub voxels: crate::voxel::VoxelLayer,
     /// The part of the map the tools may change; `None`: all of it.
     pub selection: Option<std::sync::Arc<crate::selection::Selection>>,
+    /// Its cave layers, which the ground's tiles paint by number (see
+    /// [`crate::caves`]).
+    pub caves: crate::caves::CaveLayers,
     next_level_id: u32,
 }
 
@@ -104,6 +107,7 @@ impl Dimension {
             levels: vec![Level::new(LevelId(0), "Ground", LevelKind::Ground)],
             voxels: Default::default(),
             selection: None,
+            caves: Default::default(),
             next_level_id: 1,
         }
     }
@@ -122,6 +126,7 @@ impl Dimension {
             levels,
             voxels: Default::default(),
             selection: None,
+            caves: Default::default(),
             next_level_id,
         }
     }
@@ -181,6 +186,7 @@ impl Dimension {
             levels: self.snapshot_levels(),
             voxels: self.voxels.clone(),
             selection: self.selection.clone(),
+            caves: self.caves.clone(),
             next_level_id: self.next_level_id,
         }
     }
@@ -194,6 +200,7 @@ impl Dimension {
             levels: self.levels.iter().map(Level::copy_unfrozen).collect(),
             voxels: self.voxels.clone(),
             selection: self.selection.clone(),
+            caves: self.caves.clone(),
             next_level_id: self.next_level_id,
         }
     }

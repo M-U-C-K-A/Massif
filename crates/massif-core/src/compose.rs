@@ -34,6 +34,19 @@ struct Layer<'a> {
     tile: TileRef<'a>,
 }
 
+/// How much of the caves of its cave layers (see [`crate::caves`]) a stack
+/// composes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Caves {
+    /// Every cave, with its water and lava.
+    All,
+    /// Only those open to the sky: what shows from above, at the cost of
+    /// working out the caves of a tile only where they may open.
+    Openings,
+    /// None: the ground as if no cave layer were painted.
+    Hidden,
+}
+
 /// Every level's tile at one tile position, ready to compose columns.
 pub struct TileStack<'a> {
     pub min_y: i32,
@@ -41,6 +54,9 @@ pub struct TileStack<'a> {
     layers: Vec<Layer<'a>>,
     /// Sculpted chunks over the tile, per column of chunks.
     sculpt: Option<Vec<Vec<(i32, &'a crate::voxel::VoxelChunk)>>>,
+    /// The caves of the tile's cave layers, and how many of them count.
+    caves: Option<std::sync::Arc<crate::caves::TileCaves>>,
+    cave_view: Caves,
 }
 
 impl<'a> TileStack<'a> {
@@ -53,6 +69,17 @@ impl<'a> TileStack<'a> {
     /// [`TileStack::new`] with only the levels `keep` accepts (given their
     /// index and the level); the ground is always there.
     pub fn new_with(dim: &'a Dimension, pos: TilePos, keep: impl Fn(usize, &Level) -> bool) -> Option<Self> {
+        Self::new_seen(dim, pos, Caves::All, keep)
+    }
+
+    /// The stack at `pos` as it shows from above: its caves only where
+    /// they open to the sky (see [`Caves::Openings`]).
+    pub fn from_above(dim: &'a Dimension, pos: TilePos, include_hidden: bool) -> Option<Self> {
+        Self::new_seen(dim, pos, Caves::Openings, |_, level| level.visible || include_hidden)
+    }
+
+    /// [`TileStack::new_with`], with `caves` of the caves.
+    pub fn new_seen(dim: &'a Dimension, pos: TilePos, caves: Caves, keep: impl Fn(usize, &Level) -> bool) -> Option<Self> {
         let ground = dim.ground().view(pos)?;
         let mut layers = vec![(0, LevelKind::Ground, ground)];
         for (index, level) in dim.levels.iter().enumerate().skip(1) {
@@ -62,7 +89,61 @@ impl<'a> TileStack<'a> {
                 layers.push((index, level.kind, tile));
             }
         }
-        Some(Self::gather(dim.min_y, dim.max_y, &dim.voxels, pos, layers))
+        let mut stack = Self::gather(dim.min_y, dim.max_y, &dim.voxels, pos, layers);
+        stack.set_caves(dim, pos, caves);
+        Some(stack)
+    }
+
+    /// Compose `view` of the caves of `dim`'s cave layers painted over the
+    /// stack's tile, at `pos`.
+    pub fn set_caves(&mut self, dim: &Dimension, pos: TilePos, view: Caves) {
+        self.with_cave_layers(&dim.caves, pos, view);
+    }
+
+    /// Compose `view` of the caves of `layers` painted over the stack's
+    /// tile, at `pos`.
+    pub fn with_cave_layers(&mut self, layers: &crate::caves::CaveLayers, pos: TilePos, view: Caves) {
+        self.cave_view = view;
+        let ground = self.ground();
+        self.caves = match view {
+            Caves::Hidden => None,
+            // Only the tiles some layer of which may open to the sky.
+            Caves::Openings if !opening_layers(layers, ground) => None,
+            _ => crate::caves::tile_caves(layers, ground, pos, self.min_y, self.max_y),
+        };
+        if view == Caves::Openings && self.caves.as_ref().is_some_and(|c| !c.opens()) {
+            self.caves = None;
+        }
+    }
+
+    /// Leave out what was sculpted in 3D: the stack as the levels and the
+    /// caves compose it.
+    pub fn without_sculpt(mut self) -> Self {
+        self.sculpt = None;
+        self
+    }
+
+    /// The caves the stack composes, if any.
+    pub fn caves(&self) -> Option<&crate::caves::TileCaves> {
+        self.caves.as_deref()
+    }
+
+    /// Where caves cut the ground of column `cell`: the block over the
+    /// ground's top and its terrain, the surface its strata hang from (see
+    /// [`crate::pockets::Pockets::column`]). `None` without caves.
+    pub fn cave_ground(&self, cell: usize) -> Option<(i32, TerrainId)> {
+        let caves = self.caves.as_ref()?;
+        if self.cave_view != Caves::All || caves.column(cell).is_empty() {
+            return None;
+        }
+        let ground = self.ground();
+        Some((block_top(ground.top.get(cell)).clamp(self.min_y, self.max_y), TerrainId(ground.terrain.get(cell))))
+    }
+
+    /// Whether the top of column `cell` is the floor of a cave open to the
+    /// sky (nothing grows or stands there).
+    fn opened(&self, cell: usize) -> bool {
+        self.caves.as_ref().is_some_and(|c| c.column(cell).last().is_some_and(|r| r.y1 as i32 >= block_top(self.ground().top.get(cell))))
     }
 
     /// A stack of the given tiles — `(level index, kind, tile)`, the
@@ -75,6 +156,8 @@ impl<'a> TileStack<'a> {
             max_y,
             layers: layers.into_iter().map(|(index, kind, tile)| Layer { kind, index, tile }).collect(),
             sculpt: crate::voxel::tile_columns(voxels, pos),
+            caves: None,
+            cave_view: Caves::Hidden,
         }
     }
 
@@ -104,6 +187,9 @@ impl<'a> TileStack<'a> {
         if self.is_ground_only() {
             return self.ground().cover.get(cell);
         }
+        if self.opened(cell) {
+            return 0;
+        }
         let level = self.surface_level(cell, top).unwrap_or(0);
         self.layers.iter().find(|l| l.index == level).map_or(0, |l| l.tile.cover.get(cell))
     }
@@ -114,6 +200,9 @@ impl<'a> TileStack<'a> {
         if self.is_ground_only() {
             return self.ground().objects.get(cell);
         }
+        if self.opened(cell) {
+            return 0;
+        }
         let level = self.surface_level(cell, top).unwrap_or(0);
         self.layers.iter().find(|l| l.index == level).map_or(0, |l| l.tile.objects.get(cell))
     }
@@ -123,6 +212,9 @@ impl<'a> TileStack<'a> {
     pub fn surface_understory(&self, cell: usize, top: &Span) -> u16 {
         if self.is_ground_only() {
             return self.ground().understory.get(cell);
+        }
+        if self.opened(cell) {
+            return 0;
         }
         let level = self.surface_level(cell, top).unwrap_or(0);
         self.layers.iter().find(|l| l.index == level).map_or(0, |l| l.tile.understory.get(cell))
@@ -140,7 +232,7 @@ impl<'a> TileStack<'a> {
 
     /// True when only the ground level has data here (the common fast path).
     pub fn is_ground_only(&self) -> bool {
-        self.layers.len() == 1 && self.sculpt.is_none()
+        self.layers.len() == 1 && self.sculpt.is_none() && self.caves.is_none()
     }
 
     /// Whether something was sculpted in 3D over this tile.
@@ -172,6 +264,23 @@ impl<'a> TileStack<'a> {
                 terrain: TerrainId(ground.terrain.get(cell)),
                 top,
             });
+        }
+        // The caves, out of the ground: their floors are rock.
+        if let Some(caves) = &self.caves {
+            let runs = caves.column(cell);
+            match self.cave_view {
+                Caves::All => {
+                    for r in runs {
+                        cut(out, r.y0 as i32, r.y1 as i32, TerrainId::ROCK);
+                    }
+                }
+                Caves::Openings => {
+                    if let Some(r) = runs.last().filter(|r| r.y1 as i32 >= y1) {
+                        cut(out, r.y0 as i32, r.y1 as i32, TerrainId::ROCK);
+                    }
+                }
+                Caves::Hidden => {}
+            }
         }
         for layer in &self.layers[1..] {
             let tile = &*layer.tile;
@@ -285,10 +394,11 @@ impl<'a> TileStack<'a> {
                 out.push((y, hi));
             }
         }
-        // The lakes of caves carved in the sculpted matter.
-        if let Some(column) = self.sculpt_column(cell) {
+        // The lakes of caves carved in the sculpted matter, and those of
+        // the caves of the cave layers.
+        if self.sculpt_column(cell).is_some() || self.caves.as_ref().is_some_and(|c| c.has_fluid()) {
             let mut runs = Vec::new();
-            crate::voxel::fluid_runs(column, (cell % 128) as i32 % 16, (cell / 128) as i32 % 16, self.min_y, self.max_y, &mut runs);
+            self.cave_fluids(cell, &mut runs);
             out.extend(runs.iter().map(|r| (r.0, r.1)));
         }
         if out.len() > 1 {
@@ -322,6 +432,42 @@ impl<'a> TileStack<'a> {
         out.clear();
         if let Some(column) = self.sculpt_column(cell) {
             crate::voxel::fluid_runs(column, (cell % 128) as i32 % 16, (cell / 128) as i32 % 16, self.min_y, self.max_y, out);
+        }
+    }
+
+    /// The water and lava of the caves of column `cell`: those sculpted
+    /// chunks hold, and those of the cave layers' aquifers outside them
+    /// (a sculpted chunk holds its own), as `(y0, y1, fluid)`, bottom up.
+    /// [`TileStack::fluids`] counts them in already.
+    pub fn cave_fluids(&self, cell: usize, out: &mut Vec<(i32, i32, crate::voxel::Fluid)>) {
+        self.sculpted_fluids(cell, out);
+        let Some(caves) = self.caves.as_ref().filter(|c| c.has_fluid() && self.cave_view == Caves::All) else { return };
+        let sculpted = self.sculpt_column(cell).unwrap_or(&[]);
+        let had = out.len();
+        for r in caves.column(cell) {
+            let fluid = match r.fill {
+                crate::caves::Fill::Air => continue,
+                crate::caves::Fill::Water => crate::voxel::Fluid::Water,
+                crate::caves::Fill::Lava => crate::voxel::Fluid::Lava,
+            };
+            // What the sculpted cubes of the column leave of it.
+            let (mut y0, y1) = ((r.y0 as i32).max(self.min_y), (r.y1 as i32).min(self.max_y));
+            for &(cy, _) in sculpted {
+                let (a, b) = (cy * crate::voxel::SIZE, (cy + 1) * crate::voxel::SIZE);
+                if b <= y0 || a >= y1 {
+                    continue;
+                }
+                if a > y0 {
+                    out.push((y0, a, fluid));
+                }
+                y0 = y0.max(b);
+            }
+            if y0 < y1 {
+                out.push((y0, y1, fluid));
+            }
+        }
+        if had > 0 && out.len() > had {
+            out.sort_unstable_by_key(|r| r.0);
         }
     }
 
@@ -438,6 +584,16 @@ impl BiomeColumn {
     pub fn of_block(&self, y: i32) -> u16 {
         self.at(y.div_euclid(4) * 4 + 2)
     }
+}
+
+/// Whether some cave layer painted on `ground` may open to the sky.
+fn opening_layers(layers: &crate::caves::CaveLayers, ground: &Tile) -> bool {
+    if layers.is_empty() || ground.caves.uniform_value() == Some(0) {
+        return false;
+    }
+    let mut any = false;
+    ground.caves.for_each_run(|v, _| any |= layers.get(v).is_some_and(|d| d.carves() && d.openings > 0.0));
+    any
 }
 
 /// Remove `[y0, y1)` from sorted spans. The part of a span left *below* the
