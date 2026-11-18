@@ -13,5 +13,7 @@ massif-legacy.workspace = true
 massif-script.workspace = true
 massif-terrain = { path = "../massif-terrain" }
 serde_json.workspace = true
+massif-structures.workspace = true
+massif-assets.workspace = true
 rayon.workspace = true
 image = { version = "0.25", default-features = false, features = ["png"] }

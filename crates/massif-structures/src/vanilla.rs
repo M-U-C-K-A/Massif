@@ -279,6 +279,13 @@ pub fn build(lib: &Library, ground: &dyn Ground, req: &Request) -> Result<Built,
     Ok(Built { structure, heights, unknown: lib.unknowns() })
 }
 
+/// Put `built` on the map being edited: the land flattened under it, the
+/// structure added, in the step open.
+pub fn apply(edit: &mut massif_core::history::Edit, built: &Built) {
+    massif_core::structures::set_heights(edit, &built.heights);
+    edit.structures_mut().push(Arc::new(built.structure.clone()));
+}
+
 /// A template placed as the game's code places them: turned about `pivot`
 /// (a point of the template), its corner at `origin`.
 #[allow(clippy::too_many_arguments)]
