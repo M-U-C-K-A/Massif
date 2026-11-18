@@ -2086,6 +2086,7 @@ dependencies = [
  "massif-format",
  "massif-legacy",
  "massif-objects",
+ "massif-render",
  "massif-thumbnails",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
@@ -2175,6 +2176,27 @@ dependencies = [
  "flate2",
  "massif-core",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "massif-render"
+version = "1.0.0"
+dependencies = [
+ "bytemuck",
+ "fastnbt",
+ "glam",
+ "image",
+ "libc",
+ "log",
+ "massif-anvil",
+ "massif-assets",
+ "massif-core",
+ "massif-format",
+ "massif-legacy",
+ "pollster",
+ "rayon",
+ "serde",
+ "wgpu",
 ]
 
 [[package]]
