@@ -23,9 +23,11 @@ mod aquifer;
 pub mod noise;
 mod old;
 mod ravines;
+mod seal;
 mod tile;
 
 pub use old::{CaveSettings, Carved, carve, noise3};
+pub use seal::{Seals, seal_tile};
 pub use tile::{Fill, Run, TileCaves, cache_bytes, tile_caves};
 
 use serde::{Deserialize, Serialize};
