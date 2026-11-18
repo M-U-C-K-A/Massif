@@ -24,6 +24,7 @@ USAGE
   massif-cli spring <world.massif> <out.massif> <x> <z>…
   massif-cli crop <world.massif> <out.massif> <x0> <z0> <x1> <z1>
   massif-cli script [--world <map>] [--out <map.massif>] [--allow <folder>]… [--param name=value]… <script.js> [arguments…]
+  massif-cli caves <world.massif> <out.massif> [--biomes] [--seed N]
 
   --size      map size in tiles of 128 blocks (default 8x8 = 1024x1024 blocks)
   --landform  flat | plains | hills | mountains | islands (default hills)
@@ -46,6 +47,11 @@ USAGE
 
   analyse prints the survival check of Edit ▸ Analyse the map as Markdown: every
   block counted as the export writes it, what breaks survival, what is missing.
+
+  caves paints a cave layer as the game's over the whole map (Edit ▸ Whole map ▸
+  Caves); with --biomes, lush caves, dripstone caves and the deep dark in thirds
+  of it. It prints places to check in the game, one JSON object a line: cave
+  water and lava, sculk sensors and shriekers, stalactites.
 ";
 
 type Res<T> = Result<T, String>;
@@ -554,6 +560,84 @@ fn cmd_lakes(args: Args) -> Res<()> {
     Ok(())
 }
 
+/// A cave layer as the game's over the whole map, cave biomes in thirds of
+/// it with `--biomes`; places to check in the game printed as JSON lines.
+fn cmd_caves(mut args: Args) -> Res<()> {
+    use massif_core::caves::{CaveDef, CaveLayers};
+    use massif_core::caves::decorate::{Deco, Thickness, decorate_tile};
+    let biomes = args.flag("--biomes");
+    let seed: u32 = args.option("--seed")?.map(|v| v.parse().map_err(|_| format!("not a seed: {v}"))).transpose()?.unwrap_or(1);
+    let [path, out] = args.positional(["<world.massif>", "<out.massif>"])?;
+    let mut world = massif_format::load(&path).map_err(|e| e.to_string())?;
+    let started = Instant::now();
+    let (min_y, max_y, sea) = (world.dims[0].min_y, world.dims[0].max_y, world.meta.sea_level);
+    let mut defs = world.dims[0].caves.to_vec();
+    defs.push(CaveDef::vanilla("Caves", seed, min_y, max_y, sea));
+    let n = defs.len() as u16;
+    let mut history = massif_core::history::History::new(1);
+    history.begin("Caves", 0);
+    let painted = {
+        let mut edit = history.edit(&mut world, 0);
+        edit.set_caves(CaveLayers::new(defs));
+        massif_core::ops::fill_caves(&mut edit, n)
+    };
+    if biomes && let Some((a, b)) = world.dims[0].bounds() {
+        let t = massif_core::TILE_SIZE;
+        let (x0, z0, x1, z1) = (a.x * t, a.z * t, (b.x + 1) * t, (b.z + 1) * t);
+        let third = (x1 - x0) / 3;
+        let id = |w: &massif_core::World, b: &str| w.registry.biome_by_id(b).map_or(0, |b| b.0);
+        let (lush, drip, dark) = (id(&world, "minecraft:lush_caves"), id(&world, "minecraft:dripstone_caves"), id(&world, "minecraft:deep_dark"));
+        let mut edit = history.edit(&mut world, 0);
+        massif_core::ops::paint_cave_biome_box(&mut edit, [x0, -20, z0], [x0 + third, 70, z1], lush);
+        massif_core::ops::paint_cave_biome_box(&mut edit, [x0 + third, -30, z0], [x0 + 2 * third, 70, z1], drip);
+        massif_core::ops::paint_cave_biome_box(&mut edit, [x0 + 2 * third, min_y, z0], [x1, 10, z1], dark);
+    }
+    history.commit();
+    eprintln!("caves: {painted} columns painted in {:.2} s", started.elapsed().as_secs_f32());
+    // Places to check: a few of each kind, spread over the map.
+    let dim = &world.dims[0];
+    let mut found: std::collections::HashMap<&str, Vec<(i32, i32, i32)>> = std::collections::HashMap::new();
+    let mut tiles: Vec<massif_core::TilePos> = dim.ground().positions().collect();
+    tiles.sort();
+    for &pos in tiles.iter().step_by((tiles.len() / 12).max(1)) {
+        let Some(stack) = massif_core::TileStack::new(dim, pos, true) else { continue };
+        let (ox, oz) = pos.origin();
+        let mut fluids = Vec::new();
+        for cell in (0..massif_core::TILE_AREA).step_by(97) {
+            stack.cave_fluids(cell, &mut fluids);
+            for &(y0, y1, f) in &fluids {
+                let kind = if f == massif_core::voxel::Fluid::Lava { "lava" } else { "water" };
+                found.entry(kind).or_default().push((ox + (cell % 128) as i32, y1 - 1, oz + (cell / 128) as i32));
+                let _ = y0;
+            }
+        }
+        let seals = massif_core::caves::seal_tile(dim, pos, true);
+        let decos = decorate_tile(dim, &world.registry, pos, true, &seals);
+        for cell in 0..massif_core::TILE_AREA {
+            for (y, d) in decos.column(cell) {
+                let kind = match d {
+                    Deco::SculkSensor => "sculk_sensor",
+                    Deco::SculkShrieker => "sculk_shrieker",
+                    Deco::SculkCatalyst => "sculk_catalyst",
+                    Deco::PointedDripstone { up: false, thickness: Thickness::Tip } => "stalactite_tip",
+                    Deco::CaveVines { .. } => "cave_vines",
+                    _ => continue,
+                };
+                found.entry(kind).or_default().push((ox + (cell % 128) as i32, y, oz + (cell / 128) as i32));
+            }
+        }
+    }
+    let mut kinds: Vec<_> = found.into_iter().collect();
+    kinds.sort();
+    for (kind, places) in kinds {
+        for &(x, y, z) in places.iter().step_by((places.len() / 8).max(1)).take(8) {
+            println!("{{\"kind\":\"{kind}\",\"x\":{x},\"y\":{y},\"z\":{z}}}");
+        }
+    }
+    massif_format::save(&world.snapshot(), &out).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// The tiles of a map over a rectangle of blocks, as a map of their own.
 fn cmd_crop(args: Args) -> Res<()> {
     let mut rest = args.0.into_iter();
@@ -792,6 +876,7 @@ fn main() -> ExitCode {
         "lakes" => cmd_lakes(args),
         "spring" => cmd_spring(args),
         "crop" => cmd_crop(args),
+        "caves" => cmd_caves(args),
         "analyse" | "analyze" => cmd_analyse(args),
         other => Err(format!("unknown command \"{other}\"\n\n{USAGE}")),
     };
