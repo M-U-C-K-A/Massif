@@ -2178,6 +2178,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "massif-terrain"
+version = "1.0.0"
+dependencies = [
+ "bytemuck",
+ "log",
+ "png",
+ "pollster",
+ "rayon",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "wgpu",
+]
+
+[[package]]
 name = "massif-thumbnails"
 version = "1.0.0"
 dependencies = [

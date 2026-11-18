@@ -1,0 +1,404 @@
+//! What every type of node is: its inputs, outputs and settings, with words
+//! for people and for models, and the kernel that computes it.
+//!
+//! The registry is the single description of the node set: the editor
+//! builds its panels from it, the format checks graphs against it, the
+//! schema and the catalogue a model reads are written from it.
+
+use crate::kernel::{FootprintFn, GlobalFn, GpuKernel, LocalFn, PointFn, StatsFn};
+
+/// Families of nodes, in the order the library shows them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Family {
+    Input,
+    Primitive,
+    Shape,
+    Adjust,
+    Simulate,
+    Climate,
+    Mask,
+    Color,
+    Combine,
+    Output,
+    /// Nodes a compiled graph adds itself (conversions): never in a graph's
+    /// JSON nor in the library.
+    Internal,
+}
+
+impl Family {
+    pub const ALL: [Family; 10] = [Family::Input, Family::Primitive, Family::Shape, Family::Adjust, Family::Simulate, Family::Climate, Family::Mask, Family::Color, Family::Combine, Family::Output];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Family::Input => "Inputs",
+            Family::Primitive => "Primitives",
+            Family::Shape => "Shapes",
+            Family::Adjust => "Adjust",
+            Family::Simulate => "Simulate",
+            Family::Climate => "Climate",
+            Family::Mask => "Masks",
+            Family::Color => "Colours",
+            Family::Combine => "Combine",
+            Family::Output => "Outputs",
+            Family::Internal => "Internal",
+        }
+    }
+}
+
+/// What a socket carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PortKind {
+    /// Heights of the ground, in blocks.
+    Height,
+    /// A value from 0 to 1 over the terrain: where something is, how much.
+    Mask,
+    /// A colour, in linear RGB.
+    Color,
+    /// A direction and its strength: wind, the way water flows.
+    Vector,
+    /// A terrain (the block material) at each sample, by its id.
+    Terrain,
+    /// A biome of the game at each sample, by its id.
+    Biome,
+}
+
+/// What a value goes through to feed a socket of another type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Conversion {
+    /// Taken as it is (heights and masks are both numbers).
+    AsIs,
+    /// A colour's brightness.
+    Luminance,
+    /// A number as a grey.
+    Grey,
+}
+
+impl PortKind {
+    pub const ALL: [PortKind; 6] = [PortKind::Height, PortKind::Mask, PortKind::Color, PortKind::Vector, PortKind::Terrain, PortKind::Biome];
+
+    pub const fn id(self) -> &'static str {
+        match self {
+            PortKind::Height => "height",
+            PortKind::Mask => "mask",
+            PortKind::Color => "color",
+            PortKind::Vector => "vector",
+            PortKind::Terrain => "terrain",
+            PortKind::Biome => "biome",
+        }
+    }
+
+    /// Values per sample, each kept as a plane of the tile.
+    pub const fn planes(self) -> usize {
+        match self {
+            PortKind::Color => 3,
+            PortKind::Vector => 2,
+            _ => 1,
+        }
+    }
+
+    /// Ids rather than amounts: never averaged, resampled to the nearest.
+    pub const fn categorical(self) -> bool {
+        matches!(self, PortKind::Terrain | PortKind::Biome)
+    }
+
+    /// How a value of this type feeds a socket of type `to`; `None` when
+    /// it cannot without a node saying how.
+    pub const fn conversion(self, to: PortKind) -> Option<Conversion> {
+        use PortKind::*;
+        match (self, to) {
+            (a, b) if a as u8 == b as u8 => Some(Conversion::AsIs),
+            (Height | Mask, Height | Mask) => Some(Conversion::AsIs),
+            (Color, Height | Mask) => Some(Conversion::Luminance),
+            (Height | Mask, Color) => Some(Conversion::Grey),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PortSpec {
+    pub name: &'static str,
+    pub label: &'static str,
+    pub kind: PortKind,
+    /// An input that can be left unconnected.
+    pub optional: bool,
+    pub help: &'static str,
+    /// What an optional input left empty stands for.
+    pub default: &'static str,
+}
+
+impl PortSpec {
+    pub const fn new(name: &'static str, label: &'static str, kind: PortKind, help: &'static str) -> Self {
+        Self { name, label, kind, optional: false, help, default: "" }
+    }
+
+    pub const fn optional(mut self) -> Self {
+        self.optional = true;
+        self
+    }
+
+    /// Optional, standing for `default` when left empty.
+    pub const fn or(mut self, default: &'static str) -> Self {
+        self.optional = true;
+        self.default = default;
+        self
+    }
+}
+
+/// The unit of a number setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unit {
+    None,
+    /// Blocks of the world (distances and heights).
+    Blocks,
+    /// A share of the terrain's side, from 0 to 1 (positions).
+    Fraction,
+    Degrees,
+    /// A pure number (a factor, a share).
+    Ratio,
+    Count,
+    Celsius,
+    Percent,
+}
+
+impl Unit {
+    pub const fn id(self) -> &'static str {
+        match self {
+            Unit::None => "",
+            Unit::Blocks => "blocks",
+            Unit::Fraction => "fraction",
+            Unit::Degrees => "degrees",
+            Unit::Ratio => "ratio",
+            Unit::Count => "count",
+            Unit::Celsius => "celsius",
+            Unit::Percent => "percent",
+        }
+    }
+
+    /// What follows a value in the interface.
+    pub const fn suffix(self) -> &'static str {
+        match self {
+            Unit::Blocks => " b",
+            Unit::Degrees => "°",
+            Unit::Celsius => " °C",
+            Unit::Percent => " %",
+            _ => "",
+        }
+    }
+}
+
+/// One choice of a choice setting.
+#[derive(Debug, Clone, Copy)]
+pub struct Choice {
+    pub value: &'static str,
+    pub label: &'static str,
+    pub help: &'static str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ParamKind {
+    /// A number. `soft` is the range the slider shows; values up to `min`
+    /// and `max` can be typed.
+    Float { min: f64, max: f64, soft: [f64; 2], default: f64, unit: Unit },
+    Int { min: i64, max: i64, default: i64 },
+    Bool { default: bool },
+    Choice { options: &'static [Choice], default: &'static str },
+    /// A colour, written `#rrggbb` (sRGB).
+    Color { default: &'static str },
+    /// The node's seed; left out, it comes from the node's name, so two
+    /// nodes of a type never repeat each other.
+    Seed,
+}
+
+/// Where a setting shows in the panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Section {
+    /// The settings that make the node what it is.
+    Main,
+    Shape,
+    Detail,
+    /// Shown on demand.
+    Advanced,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ParamSpec {
+    pub name: &'static str,
+    pub label: &'static str,
+    pub help: &'static str,
+    pub kind: ParamKind,
+    pub section: Section,
+}
+
+impl ParamSpec {
+    pub const fn float(name: &'static str, label: &'static str, unit: Unit, default: f64, min: f64, max: f64, help: &'static str) -> Self {
+        Self { name, label, help, kind: ParamKind::Float { min, max, soft: [min, max], default, unit }, section: Section::Main }
+    }
+
+    pub const fn int(name: &'static str, label: &'static str, default: i64, min: i64, max: i64, help: &'static str) -> Self {
+        Self { name, label, help, kind: ParamKind::Int { min, max, default }, section: Section::Main }
+    }
+
+    pub const fn flag(name: &'static str, label: &'static str, default: bool, help: &'static str) -> Self {
+        Self { name, label, help, kind: ParamKind::Bool { default }, section: Section::Main }
+    }
+
+    pub const fn choice(name: &'static str, label: &'static str, options: &'static [Choice], default: &'static str, help: &'static str) -> Self {
+        Self { name, label, help, kind: ParamKind::Choice { options, default }, section: Section::Main }
+    }
+
+    pub const fn color(name: &'static str, label: &'static str, default: &'static str, help: &'static str) -> Self {
+        Self { name, label, help, kind: ParamKind::Color { default }, section: Section::Main }
+    }
+
+    pub const fn seed() -> Self {
+        Self { name: "seed", label: "Seed", help: "Another seed gives another variation of the same settings.", kind: ParamKind::Seed, section: Section::Detail }
+    }
+
+    /// With a slider range narrower than what can be typed.
+    pub const fn soft(mut self, lo: f64, hi: f64) -> Self {
+        if let ParamKind::Float { min, max, default, unit, .. } = self.kind {
+            self.kind = ParamKind::Float { min, max, soft: [lo, hi], default, unit };
+        }
+        self
+    }
+
+    pub const fn section(mut self, section: Section) -> Self {
+        self.section = section;
+        self
+    }
+}
+
+/// How a node computes, which decides how the engine schedules it.
+#[derive(Clone, Copy)]
+pub enum Kernel {
+    /// Each output sample from the input samples at the same place: any
+    /// tile from the same tiles of its inputs.
+    Point { cpu: PointFn, gpu: Option<&'static GpuKernel> },
+    /// Each output sample from the input samples around it (`footprint`
+    /// says how far, and at what level of detail it reads them).
+    Local { cpu: LocalFn, footprint: FootprintFn },
+    /// A point kernel that needs figures over the whole of its inputs
+    /// (their lowest and highest values).
+    Stats { cpu: StatsFn },
+    /// The whole terrain at once, at the simulation's resolution: erosion,
+    /// water. Finer tiles take the input's tile with the change the node
+    /// made (`carry[output] = Some(input)`), or its output resampled.
+    Global { cpu: GlobalFn, carry: &'static [Option<u8>] },
+    /// What the graph gives the map: its input, as it is.
+    Output,
+}
+
+pub struct NodeSpec {
+    /// `family.name`, as graphs write it.
+    pub id: &'static str,
+    pub label: &'static str,
+    pub family: Family,
+    /// One sentence: what the node makes.
+    pub summary: &'static str,
+    /// When to use it and how its settings play together.
+    pub help: &'static str,
+    /// Other words it is searched by.
+    pub keywords: &'static [&'static str],
+    pub inputs: &'static [PortSpec],
+    /// A family of inputs named by the graph: `name` is their prefix
+    /// (`mask.` takes `mask.snow`, `mask.moss`…).
+    pub open_inputs: Option<PortSpec>,
+    pub outputs: &'static [PortSpec],
+    pub params: &'static [ParamSpec],
+    pub kernel: Kernel,
+}
+
+impl std::fmt::Debug for NodeSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.id)
+    }
+}
+
+impl NodeSpec {
+    pub fn param(&self, name: &str) -> Option<(usize, &ParamSpec)> {
+        self.params.iter().enumerate().find(|(_, p)| p.name == name)
+    }
+
+    pub fn input(&self, name: &str) -> Option<usize> {
+        self.inputs.iter().position(|p| p.name == name)
+    }
+
+    /// Whether `name` is one of the open family of inputs.
+    pub fn open_input(&self, name: &str) -> Option<&PortSpec> {
+        self.open_inputs.as_ref().filter(|o| name.strip_prefix(o.name).is_some_and(crate::model::valid_id))
+    }
+
+    pub fn output(&self, name: &str) -> Option<usize> {
+        self.outputs.iter().position(|p| p.name == name)
+    }
+
+    pub fn is_output(&self) -> bool {
+        matches!(self.kernel, Kernel::Output)
+    }
+
+    pub fn has_seed(&self) -> bool {
+        self.params.iter().any(|p| matches!(p.kind, ParamKind::Seed))
+    }
+}
+
+/// Every type of node.
+pub fn all() -> &'static [&'static NodeSpec] {
+    crate::nodes::ALL
+}
+
+/// The type of node named `id`.
+pub fn spec(id: &str) -> Option<&'static NodeSpec> {
+    all().iter().copied().find(|s| s.id == id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sockets_convert_where_it_makes_sense() {
+        use PortKind::*;
+        assert_eq!(Height.conversion(Mask), Some(Conversion::AsIs));
+        assert_eq!(Color.conversion(Mask), Some(Conversion::Luminance));
+        assert_eq!(Mask.conversion(Color), Some(Conversion::Grey));
+        assert_eq!(Terrain.conversion(Terrain), Some(Conversion::AsIs));
+        assert_eq!(Mask.conversion(Terrain), None);
+        assert_eq!(Biome.conversion(Height), None);
+        assert_eq!(Vector.conversion(Height), None);
+    }
+
+    #[test]
+    fn the_registry_holds_together() {
+        let mut ids = std::collections::HashSet::new();
+        for s in all() {
+            assert!(ids.insert(s.id), "{} twice", s.id);
+            let (family, name) = s.id.split_once('.').expect("ids are family.name");
+            assert!(!family.is_empty() && crate::model::valid_id(name), "{}", s.id);
+            assert!(s.summary.ends_with('.') && !s.help.is_empty(), "{} needs words", s.id);
+            for p in s.params {
+                assert!(!p.help.is_empty(), "{}.{} needs words", s.id, p.name);
+                match p.kind {
+                    ParamKind::Float { min, max, soft, default, .. } => {
+                        assert!(min <= soft[0] && soft[0] < soft[1] && soft[1] <= max && (min..=max).contains(&default), "{}.{}", s.id, p.name)
+                    }
+                    ParamKind::Int { min, max, default } => assert!((min..=max).contains(&default), "{}.{}", s.id, p.name),
+                    ParamKind::Choice { options, default } => assert!(options.iter().any(|o| o.value == default), "{}.{}", s.id, p.name),
+                    ParamKind::Color { default } => assert!(crate::params::parse_color(default).is_some(), "{}.{}", s.id, p.name),
+                    _ => {}
+                }
+            }
+            let names: Vec<_> = s.params.iter().map(|p| p.name).chain(s.inputs.iter().map(|p| p.name)).collect();
+            let unique: std::collections::HashSet<_> = names.iter().collect();
+            assert_eq!(unique.len(), names.len(), "{}: a name twice", s.id);
+            if let Kernel::Global { carry, .. } = s.kernel {
+                assert_eq!(carry.len(), s.outputs.len(), "{}", s.id);
+            }
+            if s.is_output() {
+                assert!(s.outputs.is_empty() && s.inputs.iter().all(|p| p.optional && !p.default.is_empty()), "{}", s.id);
+            } else {
+                assert!(!s.outputs.is_empty(), "{}", s.id);
+            }
+        }
+    }
+}
