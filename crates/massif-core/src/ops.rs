@@ -177,6 +177,8 @@ fn edit_heights_by_tile<G>(
             }
         }
     });
+    // The ground lowered beside water fills with it.
+    crate::water::fill_lowered(edit, footprint);
 }
 
 /// Raise (or lower, with a negative `amount`) by up to `amount` blocks.
@@ -1420,6 +1422,59 @@ mod tests {
         hist.commit();
         // The pit fills; the plateau and the notch stay dry.
         assert!(n > 1000 && n < 1400, "{n}");
+    }
+
+    /// Lowered or flattened, the shore of a lake goes under its water: no
+    /// dry hole beside it, nothing past the brush; undone with the stroke.
+    #[test]
+    fn the_shore_lowered_goes_under_the_lake() {
+        for flatten_it in [false, true] {
+            let mut w = world(1);
+            let positions: Vec<TilePos> = w.dims[0].ground().positions().collect();
+            for pos in positions {
+                let tile = w.dims[0].ground_mut().tile_mut(pos).unwrap();
+                let (ox, oz) = pos.origin();
+                for c in 0..TILE_AREA {
+                    let (x, z) = (ox + (c % 128) as i32, oz + (c / 128) as i32);
+                    tile.top.set(c, if (x as f32).hypot(z as f32) < 20.0 { 70.0 } else { 80.0 });
+                    tile.fluid.set(c, NO_FLUID);
+                }
+            }
+            let mut hist = History::default();
+            hist.begin("flood", 0);
+            flood_fill(&mut hist.edit(&mut w, 0), 0, 0, Flood::Fill(75), usize::MAX);
+            hist.commit();
+            let before = crate::water::check(&w.dims[0]);
+            assert_eq!(before.spills, 0);
+            // Across the shore east of the lake.
+            hist.begin("lower", 0);
+            for z in -6..=6 {
+                let mut edit = hist.edit(&mut w, 0);
+                if flatten_it {
+                    flatten(&mut edit, &hard_brush(4.0), 22.0, z as f32 * 2.0, 72.0, Surface::Top);
+                } else {
+                    raise(&mut edit, &hard_brush(4.0), 22.0, z as f32 * 2.0, -8.0, Surface::Top);
+                }
+            }
+            hist.commit();
+            let at = |w: &World, x: i32, z: i32| {
+                let t = w.dims[0].ground().view(TilePos::containing(x, z)).unwrap();
+                (crate::compose::block_top(t.top.get(local_index(x, z))), t.fluid.get(local_index(x, z)))
+            };
+            let (top, fluid) = at(&w, 22, 0);
+            assert!(top < 75 && fluid == 75, "the shore under the lake: ground {top}, water {fluid}");
+            let held = crate::water::check(&w.dims[0]);
+            let mut spills = Vec::new();
+            for p in w.dims[0].ground().positions() {
+                crate::water::check_tile_with(&w.dims[0], p, &mut |x, y, z, k| if k == crate::water::Problem::Spill { spills.push((x, y, z)) });
+            }
+            let around: Vec<String> = spills.iter().take(3).map(|&(x, y, z)| format!("{x},{y},{z}: {:?} beside {:?}", at(&w, x, z), [(1, 0), (-1, 0), (0, 1), (0, -1)].map(|(dx, dz)| at(&w, x + dx, z + dz)))).collect();
+            assert_eq!((held.spills, held.floating), (0, 0), "flatten {flatten_it}: {held:?} {around:?}");
+            // Past the brush, the plateau is as it was.
+            assert_eq!(at(&w, 40, 0), (80, NO_FLUID));
+            hist.undo(&mut w);
+            assert_eq!(at(&w, 22, 0), (80, NO_FLUID));
+        }
     }
 
     fn hard_brush(radius: f32) -> Brush {

@@ -1,3 +1,9 @@
 **A river never runs into a lake that stands higher than it.** A river let go at a spring with the River tool fills the hollows on its way with lakes; dug wide and deep (a large width, flow, depth or erosion), its water lay several blocks under the land, so it reached a lake from below: the lake stood up to seven blocks over the river that fed it and spilled back into its channel, its water rising downstream. Above a lake it crosses, a river now stands at the lake's level at least.
 
 **No more pit where a river runs off the edge of the map.** A river dug with the River tool that ran off the edge of the map took the land past the edge for the bottom of the world: its water dived over its last blocks and its bed was dug into a pit at the edge, down to y 14 for a narrow river on a plain. It now keeps the level of the land at the edge.
+
+**Water stays still in the game along the edges between tiles.** The export works out the water of a map 128 blocks at a time; where a river or a lake crossed the edge between two such tiles, each side was worked out without what the other wrote, and the first block a player changed nearby set the water moving there: flowing water evened out, and sources appeared (up to 9,000 blocks on a plain crossed by a wide river). The tiles are now made to agree along their edges before the world is written.
+
+**Lowering the shore of a lake widens it.** Lowering, flattening or smoothing the land beside a lake or a river under the level of its water left a dry hole beside it, which the game then filled with running water. The water now flows into the land lowered beside it, across everything the stroke lowered.
+
+**WorldPainter's River layer keeps its water in its bed on a slope.** Painted across a hillside, the River layer's water stood over the lower bank and ran out over the land in the game; the bank now rises back to hold it, or the water goes down to what holds it.

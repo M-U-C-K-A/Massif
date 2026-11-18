@@ -184,8 +184,10 @@ pub fn export(
     let level = options.compression.clamp(1, 9);
 
     let regions: Vec<((i32, i32), Vec<TilePos>)> = regions.into_iter().collect();
-    // Which tiles' water to settle, so that the game leaves it as it is.
+    // The water of the tiles that need it settled, so that the game leaves
+    // it as it is, the tiles agreeing along their seams.
     let planner = (!world.meta.lava && std::env::var_os("MASSIF_NO_STEADY").is_none()).then(|| massif_core::water::Planner::new(dim));
+    let settled = planner.as_ref().map(|p| massif_core::water::steady_all(dim, p)).unwrap_or_default();
     regions
         .par_iter()
         .try_for_each(|((rx, rz), tiles)| -> Result<(), ExportError> {
@@ -228,11 +230,11 @@ pub fn export(
                             objects.sort_unstable_by_key(|p| (p.layer, p.x, p.z));
                         }
                         scratch.lay_ores(&ctx, &stack, pos);
-                        let steady = if planner.as_ref().is_some_and(|p| p.needs(pos)) { massif_core::water::steady_tile(dim, pos, planner.as_ref()) } else { Vec::new() };
+                        let steady: &[massif_core::water::Steady] = settled.get(&pos).map_or(&[], |s| s.as_slice());
                         let mut out = Vec::with_capacity(CHUNKS_PER_TILE * CHUNKS_PER_TILE);
                         for cz in 0..CHUNKS_PER_TILE {
                             for cx in 0..CHUNKS_PER_TILE {
-                                let nbt = build_chunk(&ctx, &stack, pos, cx, cz, &objects, &steady, scratch);
+                                let nbt = build_chunk(&ctx, &stack, pos, cx, cz, &objects, steady, scratch);
                                 let chunk_x = pos.x * CHUNKS_PER_TILE as i32 + cx as i32;
                                 let chunk_z = pos.z * CHUNKS_PER_TILE as i32 + cz as i32;
                                 out.push((chunk_x.rem_euclid(32) as usize, chunk_z.rem_euclid(32) as usize, compressor.record(&nbt)?));

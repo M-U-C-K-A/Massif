@@ -538,13 +538,15 @@ pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> 
     // Nor under the water it crosses further down: a lake on its way
     // (filled before the river is dug) stands at its own level, and the
     // river above it may not stand lower, or the lake would stand over the
-    // river that feeds it.
+    // river that feeds it. A branch, though, never stands over the river
+    // it leaves: water higher than that further down runs into it instead.
+    let cap = land[0].1.unwrap_or(f32::MAX);
     let mut below = f32::MIN;
     for k in (0..level.len()).rev() {
         if let Some(w) = land[k].1 {
             below = below.max(w);
         }
-        level[k] = level[k].max(below);
+        level[k] = level[k].max(below.min(cap));
     }
     let length = coast as f32 * STEP;
     // From the source to the mouth: under the sea, as at the mouth.
@@ -1162,7 +1164,15 @@ pub fn descend(level: &crate::level::Level, start: (i32, i32), sea: f32, max_len
 pub fn dig_descent(edit: &mut Edit, descent: &Descent, spec: &RiverSpec) -> RiverReport {
     if spec.water {
         let (lo, hi) = (edit.dim().min_y as f32, (edit.dim().max_y - 1) as f32);
+        // A branch (a course from water already there) drains the hollows
+        // on its way: their lakes never stand over the water at its ends.
+        let cap = {
+            let mut ground = Ground::new(edit.level());
+            let mut at = |p: Option<&(f32, f32)>| p.and_then(|p| ground.at(p.0.floor() as i32, p.1.floor() as i32)).and_then(|g| g.1);
+            at(descent.course.first()).map(|w| w.max(at(descent.course.last()).unwrap_or(f32::MIN)))
+        };
         for (cells, level) in &descent.lakes {
+            let level = cap.map_or(*level, |c| level.min(c));
             let set: std::collections::HashSet<(i32, i32)> = cells.iter().copied().collect();
             let (mut x0, mut z0, mut x1, mut z1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
             for &(x, z) in cells {

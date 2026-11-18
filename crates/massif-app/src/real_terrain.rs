@@ -1012,7 +1012,8 @@ pub mod tests {
     /// The tiles come from MASSIF_REAL_TILES (a cache folder; the app's by
     /// default), downloaded when missing with MASSIF_REAL_ONLINE. Each place
     /// is drawn whole in the Terrain and Biome views, at 1× and 2×, and its
-    /// middle close up; what the tiles held is said on stderr.
+    /// middle close up; what the tiles held is said on stderr, and how its
+    /// water holds. MASSIF_REAL_SAVE keeps each map, `<name>.massif`.
     #[test]
     fn a_real_place_drawn() {
         use crate::map_render::{MapMode, MapStyle, render_region};
@@ -1105,6 +1106,13 @@ pub mod tests {
                 }
             }
             eprintln!("{name}: the water's biomes {biomes:?}");
+            // Its water as the game will find it, and the map itself with
+            // MASSIF_REAL_SAVE, to export (tools/water_check.py).
+            let held = massif_core::water::check(dim);
+            eprintln!("{name}: water beside open land {}, over air {}, steps {}, falls {}", held.spills, held.floating, held.steps, held.falls);
+            if std::env::var_os("MASSIF_REAL_SAVE").is_some() {
+                massif_format::save(&world.clone().snapshot(), &std::path::Path::new(&out).join(format!("{name}.massif"))).unwrap();
+            }
             let save = |file: &str, image: &ColorImage| {
                 let rgba: Vec<u8> = image.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
                 image::save_buffer(std::path::Path::new(&out).join(format!("{name}-{file}.png")), &rgba, image.width() as u32, image.height() as u32, image::ColorType::Rgba8).unwrap();

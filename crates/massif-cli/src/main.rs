@@ -478,6 +478,18 @@ fn cmd_water(args: Args) -> Res<()> {
         let n: usize = tiles.par_iter().map(|&p| massif_core::water::steady_tile(dim, p, Some(&planner)).len()).sum();
         eprintln!("steady: {:.2} s ({n} blocks)", t.elapsed().as_secs_f32());
     }
+    // The export's water along the seams between its tiles, as the game
+    // finds it (MASSIF_WATER_SEAMS=1).
+    if std::env::var_os("MASSIF_WATER_SEAMS").is_some() {
+        let started = Instant::now();
+        // MASSIF_SEAMS_UNJOINED: each tile's water as worked out on its own.
+        let (s, at) = massif_core::water::check_seams(&world.dims[0], std::env::var_os("MASSIF_SEAMS_UNJOINED").is_none());
+        println!("along the seams, once updated: {} blocks change ({} new sources), {} seams unsettled", s.changed, s.sources, s.unsettled);
+        for (x, y, z) in at.iter().take(400) {
+            println!("  seam change at {x} {y} {z}");
+        }
+        eprintln!("seams checked in {:.2} s", started.elapsed().as_secs_f32());
+    }
     if std::env::var_os("MASSIF_WATER_SETTLE").is_some() {
         let started = Instant::now();
         let s = massif_core::water::settle_all(&world.dims[0], std::env::var_os("MASSIF_WATER_STEADY").is_some());
