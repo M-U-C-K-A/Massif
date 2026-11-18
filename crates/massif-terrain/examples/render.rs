@@ -1,9 +1,10 @@
 //! Renders a terrain graph's height output to a shaded PNG.
 //!
-//! `cargo run --release -p massif-terrain --example render -- graph.json out.png [pixels] [--cpu]`
+//! `cargo run --release -p massif-terrain --example render -- graph.json out.png [pixels] [--cpu] [--mask node.output]`
 //!
 //! The whole terrain is drawn at the finest level of detail with at most
-//! `pixels` samples a side (1024 by default).
+//! `pixels` samples a side (1024 by default), coloured by the Map Output's
+//! Albedo when it has one; `--mask` lays a mask over it in amber.
 
 use massif_terrain::compile::{Severity, compile};
 use massif_terrain::engine::{Engine, Settings, never};
@@ -14,7 +15,8 @@ use std::time::Instant;
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cpu_only = args.iter().any(|a| a == "--cpu");
-    let args: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
+    let mask_of = args.iter().position(|a| a == "--mask").and_then(|i| args.get(i + 1)).cloned();
+    let args: Vec<&String> = args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && !(*i > 0 && args[i - 1] == "--mask")).map(|(_, a)| a).collect();
     let (Some(input), Some(output)) = (args.first(), args.get(1)) else {
         eprintln!("usage: render <graph.json> <out.png> [pixels] [--cpu]");
         std::process::exit(2);
@@ -46,7 +48,14 @@ fn main() {
     for (id, (tiles, ms)) in nodes {
         eprintln!("  {id}: {tiles} tiles, {ms:.0} ms");
     }
-    let rgb = massif_terrain::preview::shade(&grid, c.space.sea_level);
+    let albedo = c.output("albedo").map(|src| engine.region(&c, src, lod, c.space.whole(lod), &never).expect("the albedo evaluates"));
+    let mut rgb = massif_terrain::preview::shade_with(&grid, c.space.sea_level, albedo.as_ref());
+    if let Some(spec) = &mask_of {
+        let (node, port) = spec.split_once('.').map_or((spec.as_str(), None), |(n, p)| (n, Some(p)));
+        let src = c.source(node, port).unwrap_or_else(|| panic!("no output {spec}"));
+        let mask = engine.region(&c, src, lod, c.space.whole(lod), &never).expect("the mask evaluates");
+        massif_terrain::preview::overlay(&mut rgb, &mask, [236, 192, 64], 0.75);
+    }
     let file = std::fs::File::create(output).expect("the picture can be written");
     let mut enc = png::Encoder::new(std::io::BufWriter::new(file), grid.rect.w, grid.rect.h);
     enc.set_color(png::ColorType::Rgb);
