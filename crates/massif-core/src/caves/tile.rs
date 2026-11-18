@@ -245,6 +245,12 @@ fn compute(layers: &CaveLayers, present: &[u16], ground: &Tile, pos: TilePos, mi
     // Columns under water, and those near them.
     let wet: Vec<bool> = (0..TILE_AREA).map(|i| fluid_plane[i] != NO_FLUID && fluid_plane[i] as i32 > tops[i]).collect();
     let near_water = dilate(&wet, SHORE);
+    // Per column, the lowest ground of the columns around (fluid stays a
+    // block under it, never beside the open air), and the lowest floor of
+    // the water within two blocks (caves stay a block under it, never
+    // beside the water).
+    let low_ground = lowest(&tops, |_| true, 1);
+    let wet_floor = lowest(&tops, |i| wet[i], 2);
     let top_max = tops.iter().copied().max().unwrap_or(min_y);
 
     // Each layer: its weight over the lattice (the share of the columns
@@ -345,7 +351,7 @@ fn compute(layers: &CaveLayers, present: &[u16], ground: &Tile, pos: TilePos, mi
                 let top = tops[i];
                 let dry = !near_water[i];
                 let open = dry && lead.def.openings > 0.0 && noise::gradient2(lead.seed ^ 0x0E17, x as f32 / 44.0, z as f32 / 44.0) > lead.opening;
-                let ceiling = if open { top } else { top - lead.def.roof as i32 };
+                let ceiling = if open { top } else { top - lead.def.roof as i32 }.min(wet_floor[i] - 1);
                 let (lo, hi) = lead.def.span();
                 // The noise caves within `from..to`.
                 let (from, to) = (lo.max(ylo), (hi + 1).min(ceiling).min(yhi + 1));
@@ -359,12 +365,13 @@ fn compute(layers: &CaveLayers, present: &[u16], ground: &Tile, pos: TilePos, mi
                 // the surface for those open to the sky, on dry land.
                 let mut first = from;
                 let mut last = to;
+                let shore = wet_floor[i] - 1;
                 for (k, list) in crossing.iter().enumerate() {
                     if weights[k] < 0.5 || list.is_empty() {
                         continue;
                     }
                     let f = &prepared[k].def.ravines;
-                    let roof = if dry { top } else { top - prepared[k].def.roof as i32 };
+                    let roof = if dry { top } else { top - prepared[k].def.roof as i32 }.min(shore);
                     first = first.min(f.low.max(min_y + 1));
                     last = last.max((f.high + 1).min(roof));
                 }
@@ -387,7 +394,7 @@ fn compute(layers: &CaveLayers, present: &[u16], ground: &Tile, pos: TilePos, mi
                                 if x < bx0 || x > bx1 {
                                     continue;
                                 }
-                                let roof = if b.open.is_some() && dry { top } else { top - prepared[k].def.roof as i32 };
+                                let roof = if b.open.is_some() && dry { top } else { top - prepared[k].def.roof as i32 }.min(shore);
                                 if y < roof && b.reach(x, y, z, top) < 1.0 {
                                     carved = true;
                                     break 'ravines;
@@ -397,7 +404,9 @@ fn compute(layers: &CaveLayers, present: &[u16], ground: &Tile, pos: TilePos, mi
                     }
                     let fill = if carved {
                         match &lead.zones {
-                            Some(zones) => zones.fill(x, y, z),
+                            // Fluid a block under the ground around at
+                            // least, or rock where it would be higher.
+                            Some(zones) => zones.fill(x, y, z).filter(|&f| f == Fill::Air || y < low_ground[i] - 1),
                             None => Some(Fill::Air),
                         }
                     } else {
@@ -460,6 +469,35 @@ fn dilate(on: &[bool], r: usize) -> Vec<bool> {
             if rows[z * n + x] {
                 for zz in z.saturating_sub(r)..(z + r + 1).min(n) {
                     out[zz * n + x] = true;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Per column, the lowest of `tops` over the columns within `r` of it
+/// (in the tile) where `on` holds; `i32::MAX` where none does.
+fn lowest(tops: &[i32], on: impl Fn(usize) -> bool, r: usize) -> Vec<i32> {
+    let n = TILE_SIZE as usize;
+    let mut rows = vec![i32::MAX; TILE_AREA];
+    for z in 0..n {
+        for x in 0..n {
+            let i = z * n + x;
+            if on(i) {
+                for xx in x.saturating_sub(r)..(x + r + 1).min(n) {
+                    rows[z * n + xx] = rows[z * n + xx].min(tops[i]);
+                }
+            }
+        }
+    }
+    let mut out = vec![i32::MAX; TILE_AREA];
+    for z in 0..n {
+        for x in 0..n {
+            let v = rows[z * n + x];
+            if v != i32::MAX {
+                for zz in z.saturating_sub(r)..(z + r + 1).min(n) {
+                    out[zz * n + x] = out[zz * n + x].min(v);
                 }
             }
         }
