@@ -130,6 +130,37 @@ Outputs:
 }
 ```
 
+### World file (1.2) — `legacy.file_input`
+
+A world brought in (WorldPainter's .world, Massif's .massif): its surface, its water and its colours. Path is the world's file; Fit stretches it over the terrain, or lays it at its own blocks. Low and High are the heights a height map's black and white stand for (Heightmap reads those better).
+
+A simulation: it works over the whole terrain at the simulations' resolution.
+
+It reads the files its settings name, and follows them when they change.
+
+Outputs:
+
+- `height` (height) — The world's surface.
+- `water` (mask) — Where water lies.
+- `colour` (color) — The colour of its ground.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `path` | file | — | .world, .massif, .png, .r16, .r32 | The file. |
+| `low` | number | 40 | -4096 to 4096 blocks | The height black stands for. In blocks. |
+| `high` | number | 220 | -4096 to 4096 blocks | The height white stands for. In blocks. |
+| `fit` | boolean | true |  | Stretched over the terrain, or at its own blocks. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "file_input": { "type": "legacy.file_input", "params": { "path": "heightmap.png" } },
+    "out": { "type": "output.map", "inputs": { "height": "file_input" } }
+  }
+}
+```
+
 ## Primitives
 
 ### Constant — `pattern.constant`
@@ -290,6 +321,33 @@ Outputs:
     "out": { "type": "output.map", "inputs": { "height": "relief", "mask.mask": "shape" } },
     "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
     "shape": { "type": "pattern.shape", "params": { "center": [{ "x": 0.35, "z": 0.4 }, { "x": 0.65, "z": 0.6 }] } }
+  }
+}
+```
+
+### Rocks (1.2) — `legacy.rocks`
+
+Rocky detail around 0, to add to a relief. Scale is the size of the rocks, Height how high they stand, Sharpness from rounded boulders (0) to sharp crags (1). Add it to a relief with Blend.
+
+A simulation: it works over the whole terrain at the simulations' resolution.
+
+Outputs:
+
+- `out` (height) — The rocks, around 0.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `scale` | number | 90 | 2 to 8000 blocks | The size of the rocks. In blocks. |
+| `height` | number | 12 | 0 to 1000 blocks | How high they stand. In blocks. |
+| `sharpness` | number | 0.6 | 0 to 1 | From rounded boulders (0) to sharp crags (1). |
+| `seed` | integer | 10 | 0 to 4294967295 | Another seed places them otherwise. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "out": { "type": "output.map", "inputs": { "height": "rocks" } },
+    "rocks": { "type": "legacy.rocks" }
   }
 }
 ```
@@ -818,6 +876,68 @@ Outputs:
 }
 ```
 
+### Floating islands (1.2) — `legacy.floating_islands`
+
+Islands of rock floating in the air: a rolling top on sheer sides, over an underside hanging down to a point. Altitude is the height of their middles and Spread how much it varies; Size the radius of the largest; Coverage how many of the places one could float have one; Depth how far the underside hangs, as a multiple of the radius. Top and Bottom feed a layer of the Map Output.
+
+A simulation: it works over the whole terrain at the simulations' resolution.
+
+Outputs:
+
+- `top` (height) — The islands' top (the bottom where there is none).
+- `bottom` (height) — Their underside.
+- `islands` (mask) — Where they are.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `altitude` | number | 230 | -64 to 4096 blocks | The height of their middles. In blocks. |
+| `spread` | number | 25 | 0 to 1000 blocks | How much their altitude varies. In blocks. |
+| `size` | number | 70 | 4 to 4000 blocks | The radius of the largest. In blocks. |
+| `coverage` | number | 0.5 | 0 to 1 | How many of the places one could float have one. |
+| `depth` | number | 1.3 | 0 to 10 | How far the underside hangs, as a multiple of the radius. |
+| `seed` | integer | 11 | 0 to 4294967295 | Another seed places them otherwise. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "floating_islands": { "type": "legacy.floating_islands" },
+    "out": { "type": "output.map", "inputs": { "height": "floating_islands" } }
+  }
+}
+```
+
+### Tectonic plates (1.2) — `legacy.tectonic`
+
+Relief from tectonic plates: continents and oceans, mountains where plates collide, rifts where they pull apart. Plates are 1.2's plates, as JSON. Relief is the height of the highest ranges, Width how wide the belts along the boundaries are, Roughness how much the boundaries wind, Sea the sea level the oceans lie under.
+
+A simulation: it works over the whole terrain at the simulations' resolution.
+
+Outputs:
+
+- `height` (height) — The relief.
+- `ranges` (mask) — Where plates collide.
+- `faults` (mask) — Where they pull apart.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `plates` | text | `[]` |  | The plates, as 1.2 wrote them (JSON). |
+| `relief` | number | 170 | 0 to 4096 blocks | The height of the highest ranges. In blocks. |
+| `width` | number | 260 | 1 to 20000 blocks | How wide the belts along the boundaries are. In blocks. |
+| `roughness` | number | 0.6 | 0 to 1 | How much the boundaries wind. |
+| `sea` | number | 63 | -64 to 320 blocks | The sea level the oceans lie under. In blocks. |
+| `seed` | integer | 7 | 0 to 4294967295 | Another seed varies the boundaries. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "out": { "type": "output.map", "inputs": { "height": "tectonic" } },
+    "tectonic": { "type": "legacy.tectonic" }
+  }
+}
+```
+
 ## Adjust
 
 ### Levels — `adjust.levels`
@@ -870,6 +990,7 @@ Outputs:
 | `in_high` | number | 300 | -4096 to 4096 blocks | The value at the curve's right. In blocks. Usually -64 to 320. |
 | `out_low` | number | 62 | -4096 to 4096 blocks | What the curve's bottom stands for. In blocks. Usually -64 to 320. |
 | `out_high` | number | 300 | -4096 to 4096 blocks | What the curve's top stands for. In blocks. Usually -64 to 320. |
+| `range` | choice | `given` | `given`, `own` | Whether the curve goes from In low to In high, or over the input's own range (its ends then stand for the input's lowest and highest points). `given`: Between the heights set. `own`: From the input's lowest point to its highest, measured over the whole terrain. |
 
 ```json
 {
@@ -900,6 +1021,8 @@ Outputs:
 | `sharpness` | number | 0.7 | 0 to 1 | How abrupt the risers are. |
 | `low` | number | 62 | -4096 to 4096 blocks | Where the steps begin, in blocks. Usually -64 to 320. |
 | `high` | number | 300 | -4096 to 4096 blocks | Where they end, in blocks. Usually -64 to 320. |
+| `strength` | number | 1 | 0 to 1 | How much the steps replace the slope: 0 leaves the relief as it is. |
+| `range` | choice | `given` | `given`, `own` | Whether the steps go from Low to High, or from the input's lowest point to its highest. `given`: Between the heights set. `own`: From the input's lowest point to its highest, measured over the whole terrain. |
 
 ```json
 {
@@ -908,6 +1031,36 @@ Outputs:
     "out": { "type": "output.map", "inputs": { "height": "terrace" } },
     "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
     "terrace": { "type": "adjust.terrace", "inputs": { "in": "relief" } }
+  }
+}
+```
+
+### Strata — `adjust.stratify`
+
+Layers of rock of uneven thickness cut into a relief: ledges on the slopes, as sedimentary rock weathers. Layers is how many beds the relief's range is cut into, of thicknesses that vary; Strength how flat their ledges are; Tilt leans the beds across the terrain, from west to east. Works over the input's own range.
+
+Inputs:
+
+- `in` (height) — The relief (or mask) to adjust.
+
+Outputs:
+
+- `out` (height) — The relief adjusted.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `layers` | integer | 14 | 1 to 200 | How many beds the range is cut into. |
+| `strength` | number | 0.7 | 0 to 1 | How flat their ledges are. |
+| `tilt` | number | 6 | -60 to 60 degrees | How much the beds lean, from west to east. In degrees. |
+| `seed` | seed | — | 0 to 4294967295 | Another seed gives another variation of the same settings. Left out, it comes from the node's name. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "out": { "type": "output.map", "inputs": { "height": "stratify" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
+    "stratify": { "type": "adjust.stratify", "inputs": { "in": "relief" } }
   }
 }
 ```
@@ -935,6 +1088,57 @@ Outputs:
   "nodes": {
     "clamp": { "type": "adjust.clamp", "inputs": { "in": "relief" } },
     "out": { "type": "output.map", "inputs": { "height": "clamp" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } }
+  }
+}
+```
+
+### Fold — `adjust.fold`
+
+Mirrors what rises over a level back down: ridges folded into crests and troughs. Everything above Level is reflected under it, as if the relief were folded there: a smooth hill becomes a ring of ridges, noise becomes sharp crests. Strength mixes the fold with the relief as it was.
+
+Inputs:
+
+- `in` (height) — The relief (or mask) to adjust.
+
+Outputs:
+
+- `out` (height) — The relief adjusted.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `level` | number | 120 | -4096 to 4096 blocks | Where the relief is folded, in blocks. Usually -64 to 320. |
+| `strength` | number | 1 | 0 to 1 | How much of the fold is taken. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "fold": { "type": "adjust.fold", "inputs": { "in": "relief" } },
+    "out": { "type": "output.map", "inputs": { "height": "fold" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } }
+  }
+}
+```
+
+### Invert — `adjust.invert`
+
+Turns a relief upside down within its own range: its highest point where its lowest was. Valleys become ridges and peaks become pits, between the same lowest and highest heights, measured over the whole terrain. For a mask, Invert in Masks is 1 − the mask.
+
+Inputs:
+
+- `in` (height) — The relief (or mask) to adjust.
+
+Outputs:
+
+- `out` (height) — The relief adjusted.
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "invert": { "type": "adjust.invert", "inputs": { "in": "relief" } },
+    "out": { "type": "output.map", "inputs": { "height": "invert" } },
     "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } }
   }
 }
@@ -995,6 +1199,162 @@ Outputs:
 }
 ```
 
+### Sharpen — `adjust.sharpen`
+
+Brings out a relief's detail: what stands above its surroundings rises, what lies below sinks. The relief minus its blur over Radius, times Amount, is added back: crests and gullies about Radius wide stand out more. Large amounts make a relief look carved.
+
+Inputs:
+
+- `in` (height) — The relief (or mask) to adjust.
+
+Outputs:
+
+- `out` (height) — The relief adjusted.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `radius` | number | 24 | 1 to 1024 blocks | The size of the detail brought out, in blocks. Usually 2 to 256. |
+| `amount` | number | 0.8 | 0 to 8 | How much it is brought out. Usually 0 to 3. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "out": { "type": "output.map", "inputs": { "height": "sharpen" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
+    "sharpen": { "type": "adjust.sharpen", "inputs": { "in": "relief" } }
+  }
+}
+```
+
+### Warp — `adjust.warp`
+
+Pushes a relief around by a noise: straight lines wander, round shapes twist, everything looks less made. Each place takes the height found up to Amount blocks away, in a direction that changes smoothly over Scale. Small amounts take the regularity off shapes; large ones swirl them like rock under pressure.
+
+Inputs:
+
+- `in` (height) — The relief (or mask) to adjust.
+
+Outputs:
+
+- `out` (height) — The relief adjusted.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `amount` | number | 60 | 0 to 4096 blocks | How far the relief is pushed, in blocks. Usually 0 to 600. |
+| `scale` | number | 400 | 4 to 65536 blocks | The size of the pushes, in blocks. Usually 32 to 4000. |
+| `octaves` | integer | 3 | 1 to 8 | How much finer turns the pushes have. |
+| `seed` | seed | — | 0 to 4294967295 | Another seed gives another variation of the same settings. Left out, it comes from the node's name. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "out": { "type": "output.map", "inputs": { "height": "warp" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
+    "warp": { "type": "adjust.warp", "inputs": { "in": "relief" } }
+  }
+}
+```
+
+### Transform — `adjust.transform`
+
+Scales, turns and moves a relief over the terrain. Scale above 1 enlarges the relief around the terrain's middle; Rotate turns it, in degrees clockwise; Offset moves it, as fractions of the terrain. Worked over the whole terrain at the simulations' resolution.
+
+A simulation: it works over the whole terrain at the simulations' resolution.
+
+Inputs:
+
+- `in` (height) — The relief (or mask) to adjust.
+
+Outputs:
+
+- `out` (height) — The relief adjusted.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `scale` | number | 1 | 0.01 to 100 | How much larger the relief is drawn. Usually 0.25 to 4. |
+| `rotate` | number | 0 | -360 to 360 degrees | How far it is turned, clockwise. In degrees. |
+| `offset_x` | number | 0 | -1 to 1 fraction of the terrain's side | How far it is moved east, as a fraction of the terrain. |
+| `offset_z` | number | 0 | -1 to 1 fraction of the terrain's side | How far it is moved south, as a fraction of the terrain. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "out": { "type": "output.map", "inputs": { "height": "transform" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
+    "transform": { "type": "adjust.transform", "inputs": { "in": "relief" } }
+  }
+}
+```
+
+### Swirl — `adjust.swirl`
+
+Twists a relief around a point, most at the middle, not at all at Radius. Angle is how far the middle turns, in degrees; Radius how far the twist reaches, as a fraction of the terrain; X and Z where its middle is. Worked over the whole terrain at the simulations' resolution.
+
+A simulation: it works over the whole terrain at the simulations' resolution.
+
+Inputs:
+
+- `in` (height) — The relief (or mask) to adjust.
+
+Outputs:
+
+- `out` (height) — The relief adjusted.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `angle` | number | 120 | -1080 to 1080 degrees | How far the middle turns. In degrees. |
+| `radius` | number | 0.5 | 0.01 to 2 fraction of the terrain's side | How far the twist reaches, as a fraction of the terrain. |
+| `x` | number | 0.5 | -1 to 2 fraction of the terrain's side | Where its middle is, west to east. In fraction of the terrain's side. |
+| `z` | number | 0.5 | -1 to 2 fraction of the terrain's side | Where its middle is, north to south. In fraction of the terrain's side. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "out": { "type": "output.map", "inputs": { "height": "swirl" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
+    "swirl": { "type": "adjust.swirl", "inputs": { "in": "relief" } }
+  }
+}
+```
+
+### Overhang (1.2) — `legacy.overhang`
+
+Rims jutting out from the top of cliffs over the void below: a slab of rock, as its top and bottom. Reach is how far the rims jut out, Thickness how thick they are where they leave the cliff, Drop the smallest drop that makes a cliff, Variation how unevenly they jut out along it. Top and Bottom feed a layer of the Map Output.
+
+A simulation: it works over the whole terrain at the simulations' resolution.
+
+Inputs:
+
+- `in` (height) — The relief it works on.
+
+Outputs:
+
+- `top` (height) — The rims' top (the bottom where there is none).
+- `bottom` (height) — Their underside.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `reach` | number | 10 | 0 to 200 blocks | How far the rims jut out. In blocks. |
+| `thickness` | number | 8 | 1 to 200 blocks | How thick a rim is where it leaves the cliff. In blocks. |
+| `drop` | number | 24 | 1 to 400 blocks | The smallest drop that makes a cliff. In blocks. |
+| `variation` | number | 0.6 | 0 to 1 | How unevenly the rims jut out along the cliffs. |
+| `seed` | integer | 12 | 0 to 4294967295 | Another seed varies them otherwise. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "out": { "type": "output.map", "inputs": { "height": "overhang" } },
+    "overhang": { "type": "legacy.overhang", "inputs": { "in": "relief" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } }
+  }
+}
+```
+
 ## Simulate
 
 ### Thermal erosion — `erosion.thermal`
@@ -1025,6 +1385,174 @@ Outputs:
     "out": { "type": "output.map", "inputs": { "height": "thermal" } },
     "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
     "thermal": { "type": "erosion.thermal", "inputs": { "height": "relief" } }
+  }
+}
+```
+
+### Erosion (1.2) — `legacy.erosion`
+
+Water running down the slopes carries soil from the heights to the valleys: gullies, smoothed slopes, alluvial fans. Rain is how many drops fall on each sample; Erosion and Deposition how much soil a drop takes and leaves; Capacity how much it can carry; Evaporation how fast it dries; Radius the brush a drop wears with, in blocks.
+
+A simulation: it works over the whole terrain at the simulations' resolution.
+
+Inputs:
+
+- `in` (height) — The relief it works on.
+
+Outputs:
+
+- `height` (height) — The relief worn.
+- `flow` (mask) — Where water ran.
+- `deposits` (mask) — Where soil settled.
+- `wear` (mask) — Where soil was taken.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `rain` | number | 1 | 0 to 20 | Drops on each sample. |
+| `erosion` | number | 0.3 | 0 to 1 | How much soil a drop takes. |
+| `deposition` | number | 0.3 | 0 to 1 | How much soil a drop leaves. |
+| `capacity` | number | 4 | 0 to 64 | How much soil a drop can carry. |
+| `evaporation` | number | 0.02 | 0 to 0.5 | How fast a drop dries. |
+| `radius` | number | 6 | 1 to 64 blocks | The brush a drop wears with. In blocks. |
+| `seed` | integer | 5 | 0 to 4294967295 | Another seed drops the rain otherwise. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "erosion": { "type": "legacy.erosion", "inputs": { "in": "relief" } },
+    "out": { "type": "output.map", "inputs": { "height": "erosion" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } }
+  }
+}
+```
+
+### Rivers (1.2) — `legacy.rivers`
+
+Rivers traced where the water of the whole terrain runs, wider and deeper downstream, dug into their valleys, with lakes in the hollows they cross. Threshold is how much land must drain to a place for a river to run there (higher: fewer, larger rivers); Depth and Width those of the largest; Sea the level where rivers end; Banks how far the banks slope down, in river widths; Lakes which hollows hold lakes.
+
+A simulation: it works over the whole terrain at the simulations' resolution.
+
+Inputs:
+
+- `in` (height) — The relief it works on.
+- `water_level` (height, optional) — Water already there (rivers of another node).
+
+Outputs:
+
+- `height` (height) — The relief with the rivers dug.
+- `rivers` (mask) — Where they run.
+- `water` (height) — The water's level.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `threshold` | number | 0.55 | 0 to 1 | How much land must drain to a place for a river to run there. |
+| `depth` | number | 5 | 0 to 100 blocks | The depth of the largest river. In blocks. |
+| `width` | number | 14 | 1 to 400 blocks | The width of the largest river. In blocks. |
+| `sea` | number | 63 | -10000 to 320 blocks | The sea level, where rivers end (−10000: no sea). In blocks. |
+| `banks` | number | 1 | 0 to 10 | How far the banks slope down to the water, in river widths. |
+| `lakes` | number | 0.5 | 0 to 1 | Which hollows the rivers cross hold lakes. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "out": { "type": "output.map", "inputs": { "height": "rivers" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
+    "rivers": { "type": "legacy.rivers", "inputs": { "in": "relief" } }
+  }
+}
+```
+
+### Lakes (1.2) — `legacy.lakes`
+
+The hollows water would fill, filled: lakes and flat valley floors. Amount goes from nothing (0) to every hollow full (1); Sea is the level under which a hollow is the sea's, not a lake.
+
+A simulation: it works over the whole terrain at the simulations' resolution.
+
+Inputs:
+
+- `in` (height) — The relief it works on.
+
+Outputs:
+
+- `height` (height) — The relief.
+- `lakes` (mask) — Where the lakes are.
+- `water` (height) — The lakes' level.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `amount` | number | 1 | 0 to 1 | From nothing to every hollow full. |
+| `sea` | number | 63 | -10000 to 320 blocks | The sea level (−10000: no sea). In blocks. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "lakes": { "type": "legacy.lakes", "inputs": { "in": "relief" } },
+    "out": { "type": "output.map", "inputs": { "height": "lakes" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } }
+  }
+}
+```
+
+### Sea (1.2) — `legacy.sea`
+
+A sea level: where the ground is under water, and its shore. Level is the sea's height; Shore how wide the shore is, in blocks of height around it.
+
+A simulation: it works over the whole terrain at the simulations' resolution.
+
+Inputs:
+
+- `in` (height) — The relief it works on.
+
+Outputs:
+
+- `height` (height) — The relief.
+- `water` (mask) — Where the sea is.
+- `shore` (mask) — Its shore.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `level` | number | 62 | -64 to 320 blocks | The sea's height. In blocks. |
+| `shore` | number | 4 | 0 to 100 blocks | How wide the shore is, in blocks of height. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "out": { "type": "output.map", "inputs": { "height": "sea" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } },
+    "sea": { "type": "legacy.sea", "inputs": { "in": "relief" } }
+  }
+}
+```
+
+### Flow (1.2) — `legacy.flow`
+
+Where the water of the terrain runs and gathers. Spread is how much small rills show beside the big rivers.
+
+A simulation: it works over the whole terrain at the simulations' resolution.
+
+Inputs:
+
+- `in` (height) — The relief it works on.
+
+Outputs:
+
+- `mask` (mask) — Where water runs, 1 in the largest rivers.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `spread` | number | 0.5 | 0 to 1 | How much small rills show beside the big rivers. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "flow": { "type": "legacy.flow", "inputs": { "in": "relief" } },
+    "out": { "type": "output.map", "inputs": { "height": "relief", "mask.mask": "flow" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } }
   }
 }
 ```
@@ -1702,7 +2230,7 @@ Outputs:
 
 ### Terrain layers — `terrain.layers`
 
-The terrain (block material) of each place, from masks: a base terrain, and up to six layers laid over it where their masks say. Base is the terrain everywhere; each layer lays its terrain where its mask passes Threshold, later layers over earlier ones (rock on slopes, then gravel on scree, then sand on beaches, then snow). Dither frays the edges so that terrains mix block by block. Terrains are named as in the world's terrain list (Grass, Rock, Gravel, Sand, Snow…). Feed the Map Output's Terrain with it.
+The terrain (block material) of each place, from masks: a base terrain, and up to six layers laid over it where their masks say. Base is the terrain everywhere (or Under, where connected); each layer lays its terrain where its mask passes Threshold, later layers over earlier ones (rock on slopes, then gravel on scree, then sand on beaches, then snow). Dither frays the edges so that terrains mix block by block. Terrains are named as in the world's terrain list (Grass, Rock, Gravel, Sand, Snow…). Feed the Map Output's Terrain with it.
 
 Inputs:
 
@@ -1712,6 +2240,7 @@ Inputs:
 - `mask_4` (mask, optional) — Where this layer's terrain lies.
 - `mask_5` (mask, optional) — Where this layer's terrain lies.
 - `mask_6` (mask, optional) — Where this layer's terrain lies.
+- `under` (terrain, optional) — The terrains where no layer is laid (the map's own, through a Map input). Left empty: Base everywhere.
 
 Outputs:
 
@@ -1769,6 +2298,38 @@ Outputs:
 }
 ```
 
+### Auto colour (1.2) — `legacy.auto_color`
+
+Natural colours from the relief alone: valleys, meadows, rock on the steep slopes, snow on the peaks. Palette is the land's colours; Snow line where snow starts, in blocks; Rock slope the slope where rock shows, in degrees.
+
+A simulation: it works over the whole terrain at the simulations' resolution.
+
+Inputs:
+
+- `height` (height) — The relief to colour.
+
+Outputs:
+
+- `colour` (color) — Its colours.
+
+| Setting | Kind | Default | Range | What it does |
+|---|---|---|---|---|
+| `palette` | choice | `temperate` | `temperate`, `alpine`, `desert`, `arctic`, `volcanic`, `tropical`, `lunar`, `martian` | The land's colours. `temperate`: Meadows, forests, grey rock, snow. `alpine`: High meadows, scree, snow. `desert`: Sand and red rock. `arctic`: Tundra, ice, snow. `volcanic`: Ash and basalt. `tropical`: Jungle and dark rock. `lunar`: Greys of the moon. `martian`: Rusty dust and rock. |
+| `snow_line` | number | 200 | -64 to 4096 blocks | Where snow starts. In blocks. |
+| `rock_slope` | number | 38 | 0 to 90 degrees | The slope where rock shows. In degrees. |
+| `seed` | integer | 1 | 0 to 4294967295 | Another seed varies the colours. |
+
+```json
+{
+  "terrain": { "seed": 0, "size": 4096 },
+  "nodes": {
+    "auto_color": { "type": "legacy.auto_color", "inputs": { "height": "relief" } },
+    "out": { "type": "output.map", "inputs": { "albedo": "auto_color", "height": "relief" } },
+    "relief": { "type": "noise.fbm", "params": { "height": 250, "scale": 1500 } }
+  }
+}
+```
+
 ## Combine
 
 ### Blend — `combine.blend`
@@ -1820,8 +2381,16 @@ Inputs:
 - `caves` (mask, optional) — Where caves form, and how many, from 0 to 1. Left empty: the map's cave settings.
 - `layer.1.top` (height, optional) — The top of a layer of rock over the ground: floating islands, overhangs, arches. Left empty: none.
 - `layer.1.bottom` (height, optional) — The underside of that layer: where it is above the ground, the void lies between. Left empty: none.
+- `layer.1.color` (color, optional) — The colour of that layer's rock: the blocks nearest to it are chosen, from the Albedo palette. Left empty: the colour of the rock.
 - `layer.2.top` (height, optional) — The top of a layer of rock over the ground: floating islands, overhangs, arches. Left empty: none.
 - `layer.2.bottom` (height, optional) — The underside of that layer: where it is above the ground, the void lies between. Left empty: none.
+- `layer.2.color` (color, optional) — The colour of that layer's rock: the blocks nearest to it are chosen, from the Albedo palette. Left empty: the colour of the rock.
+- `layer.3.top` (height, optional) — The top of a layer of rock over the ground: floating islands, overhangs, arches. Left empty: none.
+- `layer.3.bottom` (height, optional) — The underside of that layer: where it is above the ground, the void lies between. Left empty: none.
+- `layer.3.color` (color, optional) — The colour of that layer's rock: the blocks nearest to it are chosen, from the Albedo palette. Left empty: the colour of the rock.
+- `layer.4.top` (height, optional) — The top of a layer of rock over the ground: floating islands, overhangs, arches. Left empty: none.
+- `layer.4.bottom` (height, optional) — The underside of that layer: where it is above the ground, the void lies between. Left empty: none.
+- `layer.4.color` (color, optional) — The colour of that layer's rock: the blocks nearest to it are chosen, from the Albedo palette. Left empty: the colour of the rock.
 - `mask.flow` (mask, optional) — Where water runs, written to the map as the mask “flow”. Left empty: none.
 - `mask.wear` (mask, optional) — Where the ground was worn away, written as the mask “wear”. Left empty: none.
 - `mask.deposition` (mask, optional) — Where sediment settled, written as the mask “deposition”. Left empty: none.
@@ -1831,6 +2400,8 @@ Inputs:
 | Setting | Kind | Default | Range | What it does |
 |---|---|---|---|---|
 | `active` | boolean | true |  | Whether the map takes this output, when the graph has several. |
+| `albedo_palette` | choice | `natural` | `natural`, `rock`, `desert`, `snowy`, `every` | The blocks Albedo and the layers' colours turn into. `natural`: Soils, stone, sand, snow: the blocks of a natural landscape. `rock`: Stones only. `desert`: Sands, sandstones, terracottas. `snowy`: Snow, ice, pale stone. `every`: Every full block of the game. |
+| `paint_biomes` | boolean | false |  | Paints the ground to suit the biomes: sand in the deserts, snow in the tundra. |
 
 ```json
 {

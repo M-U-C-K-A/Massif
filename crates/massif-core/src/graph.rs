@@ -1981,6 +1981,15 @@ pub struct Progress {
     pub node: std::sync::atomic::AtomicU32,
 }
 
+/// Runs one node of `kind` over `extent`, its inputs given in the order of
+/// [`NodeKind::inputs`]: what the terrain generator of Massif 1.3 does for
+/// the kinds it has no node of its own for. `None` when an input it needs is
+/// missing (a Map node, which needs a map, always is) or it was cancelled.
+pub fn run_node(kind: &NodeKind, extent: &Extent, inputs: &[Option<Value>], cancel: &AtomicBool) -> Option<Vec<Value>> {
+    let wanted = vec![true; kind.outputs().len()];
+    ops::run(kind, extent, inputs, &wanted, cancel, None, &|_| {}).ok()
+}
+
 /// What a graph sends to the map.
 #[derive(Debug, Default, Clone)]
 pub struct Outputs {

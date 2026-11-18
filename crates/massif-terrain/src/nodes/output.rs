@@ -1,7 +1,7 @@
 //! The Map Output: what the graph gives the map, as Blender's Material
 //! Output takes what a material gives a surface.
 
-use crate::registry::{Family, Kernel, NodeSpec, ParamSpec, PortKind, PortSpec};
+use crate::registry::{Choice, Family, Kernel, NodeSpec, ParamSpec, PortKind, PortSpec};
 
 /// The node types of this family, in the library's order.
 pub static NODES: &[&NodeSpec] = &[&MAP];
@@ -12,6 +12,15 @@ const fn input(name: &'static str, label: &'static str, kind: PortKind, help: &'
 
 const LAYER_TOP: &str = "The top of a layer of rock over the ground: floating islands, overhangs, arches.";
 const LAYER_BOTTOM: &str = "The underside of that layer: where it is above the ground, the void lies between.";
+const LAYER_COLOR: &str = "The colour of that layer's rock: the blocks nearest to it are chosen, from the Albedo palette.";
+
+const PALETTES: &[Choice] = &[
+    Choice { value: "natural", label: "Natural", help: "Soils, stone, sand, snow: the blocks of a natural landscape." },
+    Choice { value: "rock", label: "Rock", help: "Stones only." },
+    Choice { value: "desert", label: "Desert", help: "Sands, sandstones, terracottas." },
+    Choice { value: "snowy", label: "Snowy", help: "Snow, ice, pale stone." },
+    Choice { value: "every", label: "Every block", help: "Every full block of the game." },
+];
 
 pub static MAP: NodeSpec = NodeSpec {
     id: "output.map",
@@ -32,8 +41,16 @@ pub static MAP: NodeSpec = NodeSpec {
         input("caves", "Caves", PortKind::Mask, "Where caves form, and how many, from 0 to 1.", "the map's cave settings"),
         input("layer.1.top", "Layer 1 top", PortKind::Height, LAYER_TOP, "none"),
         input("layer.1.bottom", "Layer 1 bottom", PortKind::Height, LAYER_BOTTOM, "none"),
+        input("layer.1.color", "Layer 1 colour", PortKind::Color, LAYER_COLOR, "the colour of the rock"),
         input("layer.2.top", "Layer 2 top", PortKind::Height, LAYER_TOP, "none"),
         input("layer.2.bottom", "Layer 2 bottom", PortKind::Height, LAYER_BOTTOM, "none"),
+        input("layer.2.color", "Layer 2 colour", PortKind::Color, LAYER_COLOR, "the colour of the rock"),
+        input("layer.3.top", "Layer 3 top", PortKind::Height, LAYER_TOP, "none"),
+        input("layer.3.bottom", "Layer 3 bottom", PortKind::Height, LAYER_BOTTOM, "none"),
+        input("layer.3.color", "Layer 3 colour", PortKind::Color, LAYER_COLOR, "the colour of the rock"),
+        input("layer.4.top", "Layer 4 top", PortKind::Height, LAYER_TOP, "none"),
+        input("layer.4.bottom", "Layer 4 bottom", PortKind::Height, LAYER_BOTTOM, "none"),
+        input("layer.4.color", "Layer 4 colour", PortKind::Color, LAYER_COLOR, "the colour of the rock"),
         input("mask.flow", "Flow", PortKind::Mask, "Where water runs, written to the map as the mask “flow”.", "none"),
         input("mask.wear", "Wear", PortKind::Mask, "Where the ground was worn away, written as the mask “wear”.", "none"),
         input("mask.deposition", "Deposition", PortKind::Mask, "Where sediment settled, written as the mask “deposition”.", "none"),
@@ -41,7 +58,11 @@ pub static MAP: NodeSpec = NodeSpec {
     ],
     open_inputs: Some(input("mask.", "Mask", PortKind::Mask, "Any other mask, written to the map under its name (mask.moss writes “moss”).", "none")),
     outputs: &[],
-    params: &[ParamSpec::flag("active", "Active", true, "Whether the map takes this output, when the graph has several.")],
+    params: &[
+        ParamSpec::flag("active", "Active", true, "Whether the map takes this output, when the graph has several."),
+        ParamSpec::choice("albedo_palette", "Albedo blocks", PALETTES, "natural", "The blocks Albedo and the layers' colours turn into."),
+        ParamSpec::flag("paint_biomes", "Paint biomes", false, "Paints the ground to suit the biomes: sand in the deserts, snow in the tundra."),
+    ],
     kernel: Kernel::Output,
     ..NodeSpec::BASE
 };
