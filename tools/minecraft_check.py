@@ -8,6 +8,11 @@ by column, what Massif says it wrote there: the top block, the water over
 it, the biome. Reports what matches, what does not, and any error the game
 logged while reading the chunks.
 
+With --structures it also checks the structures placed on the map (see
+`massif-cli structure`): their blocks, that their chests keep their loot
+tables and that the game knows those tables, that the shriekers of an
+Ancient City can summon the warden, and that their villagers came along.
+
 Running a Minecraft server means accepting Mojang's EULA
 (https://aka.ms/MinecraftEULA): the script does not start the server
 unless --accept-eula is given.
@@ -81,6 +86,7 @@ def main() -> int:
     ap.add_argument("--java")
     ap.add_argument("--probes", type=int, default=40, help="random columns to check")
     ap.add_argument("--at", nargs="*", default=[], help="more columns to check, as x,z")
+    ap.add_argument("--structures", action="store_true", help="check the structures placed on the map too")
     ap.add_argument("--accept-eula", action="store_true", help="you accept Mojang's EULA for this local server")
     args = ap.parse_args()
 
@@ -103,6 +109,16 @@ def main() -> int:
         if p.get("top") is not None:
             probes.append(p)
     print(f"{len(probes)} columns to check")
+    checks = []
+    if args.structures:
+        out = subprocess.run([str(cli), "structure-checks", str(args.world)], check=True, capture_output=True, text=True).stdout
+        checks = [json.loads(line) for line in out.splitlines() if line.strip()]
+        kinds = {}
+        for c in checks:
+            for k in ("block", "loot", "shrieker", "entities"):
+                if k in c:
+                    kinds[k] = kinds.get(k, 0) + 1
+        print(f"structure checks: {kinds}")
 
     if not args.accept_eula:
         print("\nNot starting the server: running one means accepting Mojang's EULA (https://aka.ms/MinecraftEULA).")
@@ -150,9 +166,24 @@ def main() -> int:
         print("the server did not start:\n" + "\n".join(log[-40:]))
         server.kill()
         return 1
+    if checks:
+        send("scoreboard objectives add massif dummy")
     for p in probes:
         send(f"forceload add {p['x']} {p['z']}")
-    time.sleep(4)
+    # The structures' chunks, all of them, so that their entities load.
+    areas = set()
+    for c in checks:
+        pos = c.get("block") or c.get("loot") or c.get("shrieker")
+        if pos:
+            areas.add((pos[0] >> 4, pos[2] >> 4))
+        if "area" in c:
+            a = c["area"]
+            for cx in range(a[0] >> 4, (a[3] >> 4) + 1):
+                for cz in range(a[2] >> 4, (a[5] >> 4) + 1):
+                    areas.add((cx, cz))
+    for cx, cz in sorted(areas):
+        send(f"forceload add {cx * 16} {cz * 16}")
+    time.sleep(4 + len(areas) / 40)
     for k, p in enumerate(probes):
         x, y, z = p["x"], p["top"], p["z"]
         send(f"execute if block {x} {y} {z} {p['block']} run say MASSIF {k} top ok")
@@ -164,8 +195,36 @@ def main() -> int:
         if p.get("biome"):
             send(f"execute if biome {x} {y} {z} {p['biome']} run say MASSIF {k} biome ok")
             send(f"execute unless biome {x} {y} {z} {p['biome']} run say MASSIF {k} biome BAD")
+    base = len(probes)
+    for k, c in enumerate(checks):
+        n = base + k
+        if "block" in c:
+            x, y, z = c["block"]
+            # The block, whatever its properties (in water it holds water).
+            name = c["state"].split("[")[0]
+            send(f"execute if block {x} {y} {z} {name} run say MASSIF {n} block ok")
+            send(f"execute unless block {x} {y} {z} {name} run say MASSIF {n} block BAD")
+        elif "loot" in c:
+            x, y, z = c["loot"]
+            send(f"execute if data block {x} {y} {z} LootTable run say MASSIF {n} loot-kept ok")
+            send(f"execute unless data block {x} {y} {z} LootTable run say MASSIF {n} loot-kept BAD")
+            # The game knows the table: it draws from it.
+            send(f"execute store success score #massif massif run loot spawn {x} {y + 1} {z} loot {c['table']}")
+            send(f"execute if score #massif massif matches 1 run say MASSIF {n} loot-table ok")
+            send(f"execute unless score #massif massif matches 1 run say MASSIF {n} loot-table BAD")
+        elif "shrieker" in c:
+            x, y, z = c["shrieker"]
+            send(f"execute if block {x} {y} {z} minecraft:sculk_shrieker[can_summon=true] run say MASSIF {n} shrieker ok")
+            send(f"execute unless block {x} {y} {z} minecraft:sculk_shrieker[can_summon=true] run say MASSIF {n} shrieker BAD")
+        elif "entities" in c:
+            a = c["area"]
+            sel = f"@e[type=!minecraft:item,x={a[0]},y={a[1]},z={a[2]},dx={a[3] - a[0]},dy={a[4] - a[1]},dz={a[5] - a[2]}]"
+            send(f"execute if entity {sel} run say MASSIF {n} entities ok")
+            send(f"execute unless entity {sel} run say MASSIF {n} entities BAD")
+    if checks:
+        send("kill @e[type=minecraft:item]")
     send("say MASSIF end")
-    wait_for("MASSIF end", 120)
+    wait_for("MASSIF end", 180)
     send("stop")
     try:
         server.wait(timeout=120)
@@ -177,7 +236,16 @@ def main() -> int:
     print(f"\n{len(results) - len(bad)} checks passed, {len(bad)} failed, over {len(probes)} columns")
     for r in bad:
         k = int(r.split()[0])
-        print("  failed:", r, json.dumps(probes[k]))
+        print("  failed:", r, json.dumps(probes[k] if k < len(probes) else checks[k - len(probes)]))
+    if checks:
+        kinds = {}
+        for r in results:
+            k = int(r.split()[0])
+            if k >= len(probes):
+                what = r.split()[1]
+                ok = not r.endswith("BAD")
+                kinds.setdefault(what, [0, 0])[0 if ok else 1] += 1
+        print("structures:", ", ".join(f"{w} {v[0]} ok / {v[1]} bad" for w, v in sorted(kinds.items())))
     if problems:
         print(f"\n{len(problems)} lines of errors in the game's log:")
         for l in problems[:30]:

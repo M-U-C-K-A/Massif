@@ -24,6 +24,8 @@ USAGE
   massif-cli spring <world.massif> <out.massif> <x> <z>…
   massif-cli crop <world.massif> <out.massif> <x0> <z0> <x1> <z1>
   massif-cli script [--world <map>] [--out <map.massif>] [--allow <folder>]… [--param name=value]… <script.js> [arguments…]
+  massif-cli structure <world.massif> <out.massif> <kind> <x> <z> [--y Y] [--seed N] [--turn T] [--jar PATH] [--keep-land]
+  massif-cli structure-checks <world.massif>
 
   --size      map size in tiles of 128 blocks (default 8x8 = 1024x1024 blocks)
   --landform  flat | plains | hills | mountains | islands (default hills)
@@ -46,6 +48,13 @@ USAGE
 
   analyse prints the survival check of Edit ▸ Analyse the map as Markdown: every
   block counted as the export writes it, what breaks survival, what is missing.
+
+  structure places one of the game's structures as the Structure tool does, read
+  from the game's jar (--jar, else the newest found): village_plains,
+  ancient_city, trial_chambers… (--y: its height, for those placed at a depth).
+  structure-checks prints, one JSON object a line, what tools/minecraft_check.py
+  asks the game to confirm of the structures placed: blocks, loot chests,
+  shriekers that summon the warden, entities.
 ";
 
 type Res<T> = Result<T, String>;
@@ -768,6 +777,124 @@ fn cmd_script(args: Vec<String>) -> ExitCode {
     }
 }
 
+/// Place one of the game's structures, as the Structure tool does.
+fn cmd_structure(mut args: Args) -> Res<()> {
+    let number = |v: Option<String>, name: &str| -> Res<Option<i64>> { v.map(|v| v.parse::<i64>().map_err(|_| format!("{name} needs a whole number, not {v}"))).transpose() };
+    let y = number(args.option("--y")?, "--y")?;
+    let seed = number(args.option("--seed")?, "--seed")?.unwrap_or(1) as u64;
+    let turn = number(args.option("--turn")?, "--turn")?.map(|t| (t & 3) as u8);
+    let jar = args.option("--jar")?;
+    let keep = args.flag("--keep-land");
+    let mut rest = args.0.into_iter();
+    let path = PathBuf::from(rest.next().ok_or("structure needs <world.massif>")?);
+    let out = PathBuf::from(rest.next().ok_or("structure needs <out.massif>")?);
+    let kind = rest.next().ok_or("structure needs <kind>")?;
+    let kind = massif_structures::vanilla::kind(&kind).ok_or_else(|| format!("unknown structure \"{kind}\": {}", massif_structures::vanilla::KINDS.iter().map(|k| k.id).collect::<Vec<_>>().join(", ")))?;
+    let x: i32 = rest.next().ok_or("structure needs <x> <z>")?.parse().map_err(|_| "x: a block coordinate")?;
+    let z: i32 = rest.next().ok_or("structure needs <x> <z>")?.parse().map_err(|_| "z: a block coordinate")?;
+    let (jar, version) = match jar {
+        Some(j) => {
+            let p = PathBuf::from(j);
+            let v = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            (p, v)
+        }
+        None => {
+            let j = massif_assets::find_jars().into_iter().next().ok_or("no Minecraft found: give its jar with --jar")?;
+            (j.path, j.version)
+        }
+    };
+    let lib = massif_structures::Library::open(&jar, &version, &[]).map_err(|e| e.to_string())?;
+    let mut world = massif_format::load(&path).map_err(|e| e.to_string())?;
+    let y = match kind.height {
+        massif_structures::vanilla::Height::Depth(d) => y.map_or(d, |y| y as i32),
+        _ => 0,
+    };
+    let started = Instant::now();
+    let id = massif_core::structures::next_id(&world.dims[0].structures);
+    let req = massif_structures::vanilla::Request { kind, at: [x, y, z], turn, seed, flatten: kind.flattens && !keep, id };
+    let built = {
+        let ground = massif_structures::ground::MapGround::new(&world, 0);
+        massif_structures::vanilla::build(&lib, &ground, &req)?
+    };
+    let s = &built.structure;
+    eprintln!(
+        "{}: {} pieces, {} blocks, from ({}, {}, {}) to ({}, {}, {}), {} block entities, {} entities, {} columns flattened, {:.2} s",
+        s.name,
+        s.pieces.len(),
+        s.block_count(),
+        s.min[0],
+        s.min[1],
+        s.min[2],
+        s.max[0],
+        s.max[1],
+        s.max[2],
+        s.block_entities.len(),
+        s.entities.len(),
+        built.heights.len(),
+        started.elapsed().as_secs_f32()
+    );
+    for u in &built.unknown {
+        eprintln!("  not known: {u}");
+    }
+    let mut history = massif_core::history::History::new(1);
+    history.begin("Structure", 0);
+    massif_structures::vanilla::apply(&mut history.edit(&mut world, 0), &built);
+    history.commit();
+    massif_format::save(&world.snapshot(), &out).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// What the game should find of the structures placed.
+fn cmd_structure_checks(args: Args) -> Res<()> {
+    let [path] = args.positional(["<world.massif>"])?;
+    let world = massif_format::load(&path).map_err(|e| e.to_string())?;
+    let dim = &world.dims[0];
+    for s in &dim.structures {
+        // Blocks: some of each kind, up to 60 in all.
+        let mut seen: std::collections::HashMap<u16, usize> = Default::default();
+        let mut n = 0;
+        'sections: for sec in &s.sections {
+            for &(i, k) in sec.blocks.iter().step_by(37) {
+                let state = &s.palette[k as usize];
+                if *seen.get(&k).unwrap_or(&0) >= 2 || state.contains("air") || state.contains("water") || state.contains("lava") {
+                    continue;
+                }
+                *seen.entry(k).or_default() += 1;
+                let [x, y, z] = sec.block(i);
+                println!("{{\"structure\":{},\"block\":[{x},{y},{z}],\"state\":{}}}", s.id, json_string(state));
+                n += 1;
+                if n >= 60 {
+                    break 'sections;
+                }
+            }
+        }
+        for be in &s.block_entities {
+            let text = String::from_utf8_lossy(&be.nbt).into_owned();
+            if let Some(table) = text.split("LootTable").nth(1).and_then(|rest| rest.get(2..)).and_then(|rest| rest.split(|c: char| !(c.is_ascii_alphanumeric() || "_:/.-".contains(c))).next()) {
+                let [x, y, z] = be.pos;
+                println!("{{\"structure\":{},\"loot\":[{x},{y},{z}],\"table\":{}}}", s.id, json_string(table));
+            }
+        }
+        for sec in &s.sections {
+            for &(i, k) in &sec.blocks {
+                if s.palette[k as usize].starts_with("minecraft:sculk_shrieker[can_summon=true") {
+                    let [x, y, z] = sec.block(i);
+                    println!("{{\"structure\":{},\"shrieker\":[{x},{y},{z}]}}", s.id);
+                }
+            }
+        }
+        if !s.entities.is_empty() {
+            let r = s.columns();
+            println!("{{\"structure\":{},\"entities\":{},\"area\":[{},{},{},{},{},{}]}}", s.id, s.entities.len(), r.x0, s.min[1], r.z0, r.x1 - 1, s.max[1], r.z1 - 1);
+        }
+    }
+    Ok(())
+}
+
+fn json_string(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
 fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     // A script's arguments are its own, `--help` among them.
@@ -792,6 +919,8 @@ fn main() -> ExitCode {
         "lakes" => cmd_lakes(args),
         "spring" => cmd_spring(args),
         "crop" => cmd_crop(args),
+        "structure" => cmd_structure(args),
+        "structure-checks" => cmd_structure_checks(args),
         "analyse" | "analyze" => cmd_analyse(args),
         other => Err(format!("unknown command \"{other}\"\n\n{USAGE}")),
     };
