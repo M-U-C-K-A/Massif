@@ -13711,7 +13711,7 @@ mod tests {
     /// The water of a map at a few places, for the eye: the map
     /// MASSIF_WATER_VIEW_WORLD (a .massif), each place of
     /// MASSIF_WATER_VIEWS ("name:x,z,yaw,pitch,distance;…") drawn on the 2D
-    /// map (128 blocks around it, four pixels a block) and in the 3D view
+    /// map (the 256 blocks around it, four pixels a block) and in the 3D view
     /// (looking at it from `distance` blocks), saved as `<name>-2d.png` and
     /// `<name>-3d.png` in MASSIF_SNAPSHOT_DIR.
     #[test]
@@ -13759,7 +13759,9 @@ mod tests {
                 let app = h.state();
                 let dim = app.doc.dimension();
                 let style = crate::map_render::MapStyle { seed: app.doc.world.meta.seed, ..crate::map_render::MapStyle::default() };
-                let image = crate::map_render::render_region(dim, &app.doc.world.registry, app.doc.world.meta.sea_level as f32, style, 0, x - 64, z - 64, 1, 1);
+                // The 2 × 2 chunks of the map (128 blocks each) around it.
+                let (x0, z0) = ((x - 64).div_euclid(128) * 128, (z - 64).div_euclid(128) * 128);
+                let image = crate::map_render::render_region(dim, &app.doc.world.registry, app.doc.world.meta.sea_level as f32, style, 0, x0, z0, 2, 2);
                 let (w, d) = (image.width(), image.height());
                 let mut rgba = vec![0u8; w * d * 16 * 4];
                 for j in 0..d * 4 {
