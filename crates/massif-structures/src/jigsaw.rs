@@ -127,6 +127,12 @@ pub fn parse_aliases(json: Option<&serde_json::Value>) -> Vec<Alias> {
 /// turned `turn` quarter turns (drawn when `None`). Its pieces, the first
 /// first; empty when the start pool has nothing to place.
 pub fn assemble(lib: &Library, spec: &Spec, start: [i32; 3], turn: Option<u8>, rng: &mut Rng, ground: &dyn Ground) -> Vec<Placed> {
+    assemble_within(lib, spec, start, turn, rng, ground, &|_| true)
+}
+
+/// [`assemble`], each piece's box also asked of `within` (a village kept to
+/// a selection).
+pub fn assemble_within(lib: &Library, spec: &Spec, start: [i32; 3], turn: Option<u8>, rng: &mut Rng, ground: &dyn Ground, within: &dyn Fn(&BBox) -> bool) -> Vec<Placed> {
     let aliases = draw_aliases(&spec.aliases, rng);
     let alias = |pool: &str| -> String {
         let id = full_id(pool);
@@ -166,6 +172,9 @@ pub fn assemble(lib: &Library, spec: &Spec, start: [i32; 3], turn: Option<u8>, r
     origin[1] += shift;
     bbox = bbox.moved([0, shift, 0]);
     let y = cy + (start[1] - (origin[1] - shift));
+    if !within(&bbox) {
+        return Vec::new();
+    }
     let mut pieces = vec![Placed { element, origin, turn, bbox, depth: 0, ground_delta: delta, junctions: Vec::new() }];
     if spec.depth == 0 {
         return pieces;
@@ -277,7 +286,7 @@ pub fn assemble(lib: &Library, spec: &Spec, start: [i32; 3], turn: Option<u8>, r
                             let top = (expansion + 1).max(placed_box.max[1] - placed_box.min[1]);
                             placed_box.max[1] = placed_box.max[1].max(placed_box.min[1] + top);
                         }
-                        if !frees[room].fits(&placed_box) {
+                        if !frees[room].fits(&placed_box) || !within(&placed_box) {
                             continue;
                         }
                         frees[room].take(placed_box);

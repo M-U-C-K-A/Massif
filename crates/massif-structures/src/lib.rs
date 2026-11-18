@@ -30,5 +30,6 @@ pub mod template;
 #[doc(hidden)]
 pub mod testing;
 pub mod vanilla;
+pub mod village;
 
 pub use library::Library;
