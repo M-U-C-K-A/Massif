@@ -1,0 +1,23 @@
+[package]
+name = "massif-script"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+massif-core.workspace = true
+massif-format.workspace = true
+massif-anvil.workspace = true
+massif-legacy.workspace = true
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+# QuickJS: measured against Boa on calls into Massif (the loops of
+# WorldPainter's scripts), about six times less CPU a call. No module
+# loader and no `std`/`os` modules: a script reaches files and the world
+# only through what this crate gives it.
+rquickjs = { version = "0.14", default-features = false, features = ["std", "array-buffer"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "tiff"] }
+png = "0.18"

@@ -10,4 +10,5 @@ mod tables;
 pub mod terrains;
 pub mod worldpainter;
 
-pub use worldpainter::{ImportError, ImportProgress, ImportReport, import_world};
+pub use tables::{BIOMES, TERRAINS};
+pub use worldpainter::{ImportError, ImportProgress, ImportReport, import_world, read_terrain_file};

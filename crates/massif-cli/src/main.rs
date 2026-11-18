@@ -23,6 +23,7 @@ USAGE
   massif-cli lakes <world.massif> <out.massif>
   massif-cli spring <world.massif> <out.massif> <x> <z>…
   massif-cli crop <world.massif> <out.massif> <x0> <z0> <x1> <z1>
+  massif-cli script [--world <map>] [--out <map.massif>] [--allow <folder>]… [--param name=value]… <script.js> [arguments…]
 
   --size      map size in tiles of 128 blocks (default 8x8 = 1024x1024 blocks)
   --landform  flat | plains | hills | mountains | islands (default hills)
@@ -34,6 +35,13 @@ USAGE
   probe prints, for each column, what the export writes there, one JSON object a
   line: its top solid block (y and block state), the water over it, its biome —
   what tools/minecraft_check.py asks the game itself to confirm.
+
+  script runs a JavaScript script: WorldPainter's (its `wp` API, `arguments`, `params`)
+  or one of Massif's own API (`massif`, see docs/scripting.md). Everything after the
+  script is its arguments. --world opens a map as the script's `world` (a .massif or a
+  WorldPainter .world), --out saves it once the script is done. A script reads and
+  writes only files in its own folder, in the current folder, ones given as arguments
+  and folders given with --allow; it has no network.
 
   analyse prints the survival check of Edit ▸ Analyse the map as Markdown: every
   block counted as the export writes it, what breaks survival, what is missing.
@@ -611,8 +619,160 @@ fn cmd_spring(args: Args) -> Res<()> {
     Ok(())
 }
 
+/// `massif-cli script`: options, then the script, then its arguments.
+fn cmd_script(args: Vec<String>) -> ExitCode {
+    use massif_script::{Ending, Line, Options, ParamValue, Script};
+    use std::io::IsTerminal;
+    use std::sync::Arc;
+    let fail = |message: String| {
+        eprintln!("error: {message}");
+        ExitCode::FAILURE
+    };
+    let (mut world_file, mut out, mut allow, mut params_given) = (None, None, Vec::new(), Vec::new());
+    let mut rest = args.into_iter();
+    let script = loop {
+        let Some(a) = rest.next() else { return fail(format!("expected: a script\n\n{USAGE}")) };
+        let mut value = |name: &str| rest.next().ok_or_else(|| format!("{name} needs a value"));
+        match a.as_str() {
+            "--world" => match value("--world") {
+                Ok(v) => world_file = Some(PathBuf::from(v)),
+                Err(e) => return fail(e),
+            },
+            "--out" => match value("--out") {
+                Ok(v) => out = Some(PathBuf::from(v)),
+                Err(e) => return fail(e),
+            },
+            "--allow" => match value("--allow") {
+                Ok(v) => allow.push(PathBuf::from(v)),
+                Err(e) => return fail(e),
+            },
+            "--param" => match value("--param") {
+                Ok(v) => match v.split_once('=') {
+                    Some((k, v)) => params_given.push((k.to_owned(), v.to_owned())),
+                    None => return fail("--param expects name=value".into()),
+                },
+                Err(e) => return fail(e),
+            },
+            other if other.starts_with("--") => return fail(format!("unknown option {other} (options come before the script)")),
+            path => break PathBuf::from(path),
+        }
+    };
+    let script_args: Vec<String> = rest.collect();
+    let script = match Script::load(&script) {
+        Ok(s) => s,
+        Err(e) => return fail(e),
+    };
+    let cwd = std::env::current_dir().unwrap_or_default();
+    // The current folder and the paths given are the user's choice.
+    allow.push(cwd.clone());
+    for a in &script_args {
+        let p = cwd.join(a);
+        if p.exists() {
+            allow.push(p);
+        }
+    }
+    let descriptor = script.descriptor();
+    let mut params = descriptor.defaults();
+    for (k, v) in params_given {
+        match descriptor.params.iter().find(|p| p.name == k) {
+            Some(p) => {
+                let value = p.parse(&v);
+                if let ParamValue::File(Some(f)) = &value {
+                    allow.push(cwd.join(f));
+                }
+                match params.iter_mut().find(|(n, _)| *n == k) {
+                    Some(slot) => slot.1 = value,
+                    None => params.push((k, value)),
+                }
+            }
+            None => return fail(format!("the script has no parameter \"{k}\"")),
+        }
+    }
+    let world = match &world_file {
+        None => None,
+        Some(f) => {
+            let ext = f.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+            let loaded = if ext == massif_format::EXTENSION { massif_format::load(f).map_err(|e| e.to_string()) } else { massif_legacy::import_world(f, None).map(|(w, _)| w).map_err(|e| e.to_string()) };
+            match loaded {
+                Ok(w) => Some((w, 0)),
+                Err(e) => return fail(format!("{}: {e}", f.display())),
+            }
+        }
+    };
+    let progress = Arc::new(massif_script::Progress::default());
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // What it is doing, on a terminal.
+    let ticker = std::io::stderr().is_terminal().then(|| {
+        let (p, d) = (progress.clone(), done.clone());
+        std::thread::spawn(move || {
+            let mut shown = String::new();
+            while !d.load(std::sync::atomic::Ordering::Relaxed) {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                let label = p.label();
+                let line = if label.is_empty() { String::new() } else { format!("{label} {:.0}%", p.fraction() * 100.0) };
+                if line != shown {
+                    eprint!("\r\x1b[2K{line}");
+                    shown = line;
+                }
+            }
+            if !shown.is_empty() {
+                eprint!("\r\x1b[2K");
+            }
+        })
+    });
+    let options = Options {
+        args: script_args,
+        params,
+        base: cwd,
+        allow,
+        world,
+        world_path: world_file.clone(),
+        out: Arc::new(|line| match line {
+            Line::Out(s) => println!("{s}"),
+            Line::Warn(s) => eprintln!("warning: {s}"),
+            Line::Error(s) => eprintln!("{s}"),
+        }),
+        progress,
+        cancel,
+    };
+    let outcome = massif_script::run(&script, options);
+    done.store(true, std::sync::atomic::Ordering::Relaxed);
+    if let Some(t) = ticker {
+        t.join().ok();
+    }
+    if let (Some(world), true) = (&outcome.world, outcome.changed) {
+        match &out {
+            Some(path) if matches!(outcome.ending, Ending::Done | Ending::Exit(0)) => {
+                if let Err(e) = massif_format::save(&world.clone().snapshot(), path) {
+                    return fail(format!("{}: {e}", path.display()));
+                }
+                eprintln!("saved {}", path.display());
+            }
+            Some(_) => eprintln!("the map was not saved: the script did not end well"),
+            None => eprintln!("warning: the script changed the map; give --out <map.massif> to save it"),
+        }
+    }
+    match outcome.ending {
+        Ending::Done => ExitCode::SUCCESS,
+        Ending::Exit(code) => ExitCode::from(code.clamp(0, 255) as u8),
+        Ending::Cancelled => fail("cancelled".into()),
+        Ending::Failed(e) => {
+            eprintln!("error: {e}");
+            if !e.stack.is_empty() {
+                eprintln!("{}", e.stack);
+            }
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
+    // A script's arguments are its own, `--help` among them.
+    if args.first().is_some_and(|a| a == "script") {
+        return cmd_script(args.split_off(1));
+    }
     if args.is_empty() || args.iter().any(|a| a == "--help" || a == "-h") {
         print!("{USAGE}");
         return ExitCode::SUCCESS;
