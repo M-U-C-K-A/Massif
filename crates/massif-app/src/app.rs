@@ -13300,6 +13300,81 @@ mod tests {
         }
     }
 
+    /// The water of a map at a few places, for the eye: the map
+    /// MASSIF_WATER_VIEW_WORLD (a .massif), each place of
+    /// MASSIF_WATER_VIEWS ("name:x,z,yaw,pitch,distance;…") drawn on the 2D
+    /// map (128 blocks around it, four pixels a block) and in the 3D view
+    /// (looking at it from `distance` blocks), saved as `<name>-2d.png` and
+    /// `<name>-3d.png` in MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn water_views_of_a_map() {
+        let (Some(dir), Some(path), Some(views)) = (
+            std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from),
+            std::env::var_os("MASSIF_WATER_VIEW_WORLD").map(PathBuf::from),
+            std::env::var("MASSIF_WATER_VIEWS").ok(),
+        ) else {
+            return;
+        };
+        let views: Vec<(String, [f32; 5])> = views
+            .split(';')
+            .filter_map(|v| {
+                let (name, nums) = v.trim().split_once(':')?;
+                let n: Vec<f32> = nums.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                (n.len() == 5).then(|| (name.to_owned(), [n[0], n[1], n[2], n[3], n[4]]))
+            })
+            .collect();
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let ctx = h.ctx.clone();
+        h.state_mut().jobs.push(Job::open(&ctx, path));
+        while !h.state().jobs.is_empty() {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.state_mut().dialog = None;
+        h.state_mut().layout.active = 4; // 3D Sculpt
+        h.state_mut().tools.sculpt.player = false;
+        h.run_steps(5);
+        let wait = |h: &mut egui_kittest::Harness<'_, MassifApp>| {
+            let mut quiet = 0;
+            for _ in 0..3000 {
+                h.step();
+                quiet = if h.state().sculpt3d.pending() == 0 { quiet + 1 } else { 0 };
+                if quiet >= 5 {
+                    break;
+                }
+            }
+        };
+        for (name, v) in &views {
+            let (x, z) = (v[0] as i32, v[1] as i32);
+            {
+                let app = h.state();
+                let dim = app.doc.dimension();
+                let style = crate::map_render::MapStyle { seed: app.doc.world.meta.seed, ..crate::map_render::MapStyle::default() };
+                let image = crate::map_render::render_region(dim, &app.doc.world.registry, app.doc.world.meta.sea_level as f32, style, 0, x - 64, z - 64, 1, 1);
+                let (w, d) = (image.width(), image.height());
+                let mut rgba = vec![0u8; w * d * 16 * 4];
+                for j in 0..d * 4 {
+                    for i in 0..w * 4 {
+                        let c = image.pixels[(j / 4) * w + i / 4].to_srgba_unmultiplied();
+                        rgba[(j * w * 4 + i) * 4..][..4].copy_from_slice(&c);
+                    }
+                }
+                image::save_buffer(dir.join(format!("{name}-2d.png")), &rgba, (w * 4) as u32, (d * 4) as u32, image::ColorType::Rgba8).unwrap();
+            }
+            {
+                let app = h.state_mut();
+                let p = crate::tools::probe(&app.doc, x, z);
+                let y = p.map_or(80.0, |p| if p.fluid != massif_core::tile::NO_FLUID { (p.fluid as f32).max(p.height) } else { p.height });
+                app.sculpt3d.camera = crate::view3d::Camera { target: [x as f64 + 0.5, y as f64, z as f64 + 0.5], yaw: v[2], pitch: v[3], distance: v[4] };
+            }
+            h.run_steps(4);
+            wait(&mut h);
+            let (w, hgt, rgba) = h.state().sculpt3d.read_back().expect("the 3D view rendered");
+            image::save_buffer(dir.join(format!("{name}-3d.png")), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+        }
+    }
+
     /// A river from a source high on a steep slope of a real map
     /// (MASSIF_RIVER_WORLD, "Continent and islands" or the part of it
     /// around (-102, -1607)), down to the sea: the 2D map and two 3D views of
