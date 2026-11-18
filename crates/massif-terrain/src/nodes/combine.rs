@@ -4,6 +4,9 @@ use super::height_out;
 use crate::kernel::{Ctx, GpuKernel, Uniforms};
 use crate::registry::{Choice, Family, Kernel, NodeSpec, ParamSpec, PortKind, PortSpec, Unit};
 
+/// The node types of this family, in the library's order.
+pub static NODES: &[&NodeSpec] = &[&BLEND];
+
 const MODES: &[Choice] = &[
     Choice { value: "add", label: "Add", help: "A + B: B raised on top of A." },
     Choice { value: "subtract", label: "Subtract", help: "A − B: B dug out of A." },
@@ -35,7 +38,7 @@ pub static BLEND: NodeSpec = NodeSpec {
         ParamSpec::float("strength", "Strength", Unit::Ratio, 1.0, 0.0, 1.0, "How much of the combination is taken: 0 leaves A."),
     ],
     kernel: Kernel::Point { cpu: blend_cpu, gpu: Some(&BLEND_GPU) },
-    open_inputs: None,
+    ..NodeSpec::BASE
 };
 
 fn mode(ctx: &Ctx) -> u32 {

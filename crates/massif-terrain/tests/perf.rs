@@ -52,8 +52,7 @@ fn build_16k() {
         sum_cpu = sum;
     }
     println!("{size}² on the CPU ({} threads): {best_cpu:.2} s, {:.0} M samples/s", rayon::current_num_threads(), samples / best_cpu / 1e6);
-    #[cfg(feature = "gpu")]
-    if let Some(gpu) = massif_terrain::gpu::Gpu::headless() {
+        if let Some(gpu) = massif_terrain::gpu::Gpu::headless() {
         let mut best = f64::MAX;
         let mut sum_gpu = 0.0;
         for _ in 0..3 {

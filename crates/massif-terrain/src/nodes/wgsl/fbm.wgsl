@@ -3,11 +3,16 @@ struct U {
     count: u32,
     height: f32,
     base: f32,
+    // Whether a field drives the height, the base.
+    height_driven: u32,
+    base_driven: u32,
     oct: array<Octave, 16>,
 }
 
 @group(0) @binding(0) var<uniform> u: U;
-@group(0) @binding(1) var<storage, read_write> out0: array<f32>;
+@group(0) @binding(1) var<storage, read> drive_height: array<f32>;
+@group(0) @binding(2) var<storage, read> drive_base: array<f32>;
+@group(0) @binding(3) var<storage, read_write> out0: array<f32>;
 
 @compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -36,5 +41,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if u.style != 1u {
         v = 0.5 + 0.5 * v;
     }
-    out0[id.y * TILE + id.x] = u.base + u.height * v;
+    let k = id.y * TILE + id.x;
+    var height = u.height;
+    if u.height_driven != 0u {
+        height = drive_height[k];
+    }
+    var base = u.base;
+    if u.base_driven != 0u {
+        base = drive_base[k];
+    }
+    out0[k] = base + height * v;
 }

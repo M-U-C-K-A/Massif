@@ -4,6 +4,9 @@ use crate::kernel::{Ctx, Footprint, Grid};
 use crate::params::Params;
 use crate::registry::{Family, Kernel, NodeSpec, ParamSpec, PortKind, PortSpec, Unit};
 
+/// The node types of this family, in the library's order.
+pub static NODES: &[&NodeSpec] = &[&SLOPE];
+
 pub static SLOPE: NodeSpec = NodeSpec {
     id: "mask.slope",
     label: "Slope",
@@ -17,8 +20,8 @@ pub static SLOPE: NodeSpec = NodeSpec {
         ParamSpec::float("from", "From", Unit::Degrees, 25.0, 0.0, 90.0, "Slopes gentler than this are 0."),
         ParamSpec::float("to", "To", Unit::Degrees, 45.0, 0.0, 90.0, "Slopes steeper than this are 1."),
     ],
-    kernel: Kernel::Local { cpu: slope_cpu, footprint: |_: &Params, lod, _| Footprint { lod, halo: 1 } },
-    open_inputs: None,
+    kernel: Kernel::Local { cpu: slope_cpu, gpu: None, footprint: |_: &Params, lod, _| Footprint { lod, halo: 1 } },
+    ..NodeSpec::BASE
 };
 
 fn smoothstep(a: f32, b: f32, x: f32) -> f32 {

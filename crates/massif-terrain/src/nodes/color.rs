@@ -3,6 +3,9 @@
 use crate::kernel::Ctx;
 use crate::registry::{Family, Kernel, NodeSpec, ParamSpec, PortKind, PortSpec, Unit};
 
+/// The node types of this family, in the library's order.
+pub static NODES: &[&NodeSpec] = &[&RAMP];
+
 pub static RAMP: NodeSpec = NodeSpec {
     id: "color.ramp",
     label: "Colour ramp",
@@ -19,7 +22,7 @@ pub static RAMP: NodeSpec = NodeSpec {
         ParamSpec::color("color_high", "High colour", "#e8e8ea", "The colour of the high ground."),
     ],
     kernel: Kernel::Point { cpu: ramp_cpu, gpu: None },
-    open_inputs: None,
+    ..NodeSpec::BASE
 };
 
 fn ramp_cpu(ctx: &Ctx, inputs: &[Option<&[f32]>], out: &mut [Vec<f32>]) {

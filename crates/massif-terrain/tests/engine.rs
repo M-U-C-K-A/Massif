@@ -281,7 +281,33 @@ fn the_map_output_takes_typed_inputs() {
     assert!(diags.iter().any(|d| d.path == "nodes.out.inputs.mask.Bad name"), "{diags:?}");
 }
 
-#[cfg(feature = "gpu")]
+#[test]
+fn fields_drive_settings() {
+    let text = r#"{ "nodes": {
+        "zero": { "type": "pattern.constant", "params": { "value": 0 } },
+        "lift": { "type": "pattern.constant", "params": { "value": 100 } },
+        "flat": { "type": "noise.fbm", "inputs": { "@height": "zero", "@base": "lift" } },
+        "half": { "type": "noise.fbm", "inputs": { "@height": "lift" }, "params": { "seed": 5, "base": 0 } },
+        "same": { "type": "noise.fbm", "params": { "seed": 5, "base": 0, "height": 100 } }
+    } }"#;
+    let g = Graph::from_json(text).unwrap();
+    let (c, diags) = compile(&g, Space::new(1024), 256);
+    assert!(diags.is_empty(), "{diags:?}");
+    let e = engine();
+    let r = Rect::new(0, 0, 300, 300);
+    let flat = e.region(&c, c.source("flat", None).unwrap(), 1, r, &never).unwrap();
+    assert!(flat.data.iter().all(|v| *v == 100.0));
+    // Driven by a field of 100 everywhere is the same as set to 100.
+    let half = e.region(&c, c.source("half", None).unwrap(), 1, r, &never).unwrap();
+    let same = e.region(&c, c.source("same", None).unwrap(), 1, r, &never).unwrap();
+    assert_eq!(half, same);
+    // Only numbers made to be driven can be, and a near miss is named.
+    let bad = Graph::from_json(r#"{ "nodes": { "z": { "type": "pattern.constant" }, "n": { "type": "noise.fbm", "inputs": { "@style": "z", "@heigth": "z" } } } }"#).unwrap();
+    let (_, diags) = compile(&bad, Space::new(1024), 256);
+    assert!(diags.iter().any(|d| d.path == "nodes.n.inputs.@style" && d.message.contains("cannot be driven")), "{diags:?}");
+    assert!(diags.iter().any(|d| d.path == "nodes.n.inputs.@heigth" && d.message.contains("“@height”")), "{diags:?}");
+}
+
 #[test]
 fn the_graphics_card_computes_what_the_cpu_does() {
     use massif_terrain::gpu::Gpu;
@@ -299,12 +325,13 @@ fn the_graphics_card_computes_what_the_cpu_does() {
     g.nodes.insert("lev".into(), Node::new("adjust.levels").input("in", "rolling").with("in_low", 40).with("in_high", 290).with("out_low", 10).with("out_high", 400).with("gamma", 2.2));
     g.nodes.insert("sum".into(), Node::new("combine.blend").input("a", "lev").input("b", "ridges").input("mask", "puffs").with("mode", "max"));
     g.nodes.insert("over".into(), Node::new("combine.blend").input("a", "sum").input("b", "flat").with("mode", "overlay").with("strength", 0.3));
+    g.nodes.insert("driven".into(), Node::new("noise.fbm").input("@height", "puffs").input("@base", "lev").with("scale", 150));
     g.nodes.insert("out".into(), Node::new("output.map").input("height", "over"));
     let c = compiled(&g, 65536, 2048);
     let cpu = engine();
     let gpu = Engine::with_gpu(gpu, Settings { cache_mb: 512 });
     for (lod, rect) in [(0, Rect::new(30_000, 40_000, 600, 300)), (4, Rect::new(0, 0, 512, 512))] {
-        for id in ["flat", "rolling", "ridges", "puffs", "lev", "sum", "over"] {
+        for id in ["flat", "rolling", "ridges", "puffs", "lev", "sum", "over", "driven"] {
             let src = c.source(id, None).unwrap();
             let a = cpu.region(&c, src, lod, rect, &never).unwrap();
             let b = gpu.region(&c, src, lod, rect, &never).unwrap();
@@ -314,4 +341,30 @@ fn the_graphics_card_computes_what_the_cpu_does() {
         }
     }
     assert!(gpu.counters.gpu_tiles.load(Ordering::Relaxed) > 0);
+}
+
+#[test]
+fn simulations_on_the_graphics_card_match_the_cpu() {
+    use massif_terrain::gpu::Gpu;
+    let Some(gpu) = Gpu::headless() else {
+        eprintln!("no graphics card: skipped");
+        return;
+    };
+    let mut g = Graph::default();
+    g.nodes.insert("peaks".into(), Node::new("noise.fbm").with("style", "ridged").with("scale", 200).with("height", 300).with("base", 0));
+    g.nodes.insert("worn".into(), Node::new("erosion.thermal").input("height", "peaks").with("angle", 30).with("iterations", 41));
+    let c = compiled(&g, 1024, 256);
+    let cpu = engine();
+    let on_gpu = Engine::with_gpu(gpu, Settings { cache_mb: 512 });
+    for (port, tolerance) in [(None, 0.05), (Some("talus"), 0.03)] {
+        let src = c.source("worn", port).unwrap();
+        for lod in [2, 0] {
+            let r = Rect::new(100, 100, 200, 200);
+            let a = cpu.region(&c, src, lod, r, &never).unwrap();
+            let b = on_gpu.region(&c, src, lod, r, &never).unwrap();
+            let d = max_diff(&a, &b);
+            assert!(d < tolerance, "{port:?} at level {lod}: {d}");
+        }
+    }
+    assert_eq!(on_gpu.counters.gpu_globals.load(Ordering::Relaxed), 1);
 }

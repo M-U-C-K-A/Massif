@@ -2,32 +2,35 @@
 //!
 //! A request asks for tiles of one node's output at one level of detail.
 //! The engine plans it first, walking back from that node: each tile it
-//! lacks needs tiles of the nodes feeding it — the same tiles for a point
-//! node, the tiles around them for a local one (at the level its footprint
-//! says) — down to tiles in the cache or nodes with no inputs. Then it
-//! computes node after node, all the tiles a node needs at once (in
-//! parallel on the CPU, or in one submission on the graphics card), so
-//! nothing ever waits on a lock while computing.
+//! lacks needs tiles of what feeds it — its inputs and the fields driving
+//! its settings — the same tiles for a point node, the tiles around them
+//! for a local one (at the level its footprint says), down to tiles in the
+//! cache or nodes with no inputs. Then it computes node after node, all the
+//! tiles a node needs at once (in parallel on the CPU, or in one submission
+//! on the graphics card), so nothing ever waits on a lock while computing.
 //!
-//! Every tile is cached under the hash of its node — its type, settings and
-//! inputs' hashes — with its output, level and place: changing a setting
-//! changes the hash of that node and of those after it only, whose tiles
-//! are then made again, and undoing it finds the old ones. A simulation is
-//! made over the whole terrain at the simulation's level, cached whole,
-//! and its tiles at finer levels are the input's tiles with the change the
-//! simulation made, resampled (or its outputs resampled).
+//! Every tile is cached under the hash of its node — its type, settings,
+//! inputs' hashes and what it reads outside the graph — with its output,
+//! level and place: changing a setting changes the hash of that node and of
+//! those after it only, whose tiles are then made again, and undoing it
+//! finds the old ones. A simulation is made over the whole terrain at the
+//! simulation's level, cached whole, and its tiles at finer levels are the
+//! input's tiles with the change the simulation made, resampled (or its
+//! outputs resampled).
+//!
+//! Tiles stay where they were made (the CPU or the graphics card) until
+//! something needs them elsewhere: [`Engine::tiles`] gives them on the CPU,
+//! [`Engine::gpu_tiles`] on the card, for views that draw from it.
 
-use crate::compile::{CNode, Compiled};
+use crate::compile::Compiled;
+use crate::gpu::{Gpu, GpuGrid, GpuTile, Job};
 use crate::kernel::{Grid, Stats};
 use crate::registry::Kernel;
-use crate::space::{Rect, TILE};
+use crate::space::{Rect, Space, TILE};
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-
-#[cfg(feature = "gpu")]
-use crate::gpu::{Gpu, GpuTile};
 
 /// Says to stop: checked between tiles and between steps of simulations.
 pub type Cancel<'a> = &'a (dyn Fn() -> bool + Sync);
@@ -51,18 +54,16 @@ pub enum EvalError {
 pub struct TileData {
     planes: usize,
     cpu: OnceLock<Arc<[f32]>>,
-    #[cfg(feature = "gpu")]
     gpu: OnceLock<GpuTile>,
 }
 
 impl TileData {
     pub fn cpu(data: Vec<f32>) -> Self {
-        let t = Self { planes: data.len() / (TILE * TILE) as usize, ..Default::default() };
+        let t = Self { planes: (data.len() / (TILE * TILE) as usize).max(1), ..Default::default() };
         let _ = t.cpu.set(data.into());
         t
     }
 
-    #[cfg(feature = "gpu")]
     fn gpu(tile: GpuTile, planes: usize) -> Self {
         let t = Self { planes, ..Default::default() };
         let _ = t.gpu.set(tile);
@@ -73,10 +74,16 @@ impl TileData {
         self.planes
     }
 
-    /// The samples, row by row, when they are on the CPU (every tile an
-    /// evaluation gives back is).
+    /// The samples, planes one after the other, each row by row, when they
+    /// are on the CPU (every tile [`Engine::tiles`] gives back is).
     pub fn values(&self) -> Option<&[f32]> {
         self.cpu.get().map(|v| &v[..])
+    }
+
+    /// The tile's buffer on the graphics card, when it is there (every tile
+    /// [`Engine::gpu_tiles`] gives back is, when the engine has a card).
+    pub fn gpu_buffer(&self) -> Option<&wgpu::Buffer> {
+        self.gpu.get().map(GpuTile::buffer)
     }
 }
 
@@ -102,9 +109,11 @@ pub struct Counters {
     pub gpu_tiles: AtomicU64,
     /// Tiles found in the cache.
     pub hits: AtomicU64,
-    /// Simulations run over the whole terrain.
+    /// Simulations run over the whole terrain (on the graphics card: `gpu_globals`).
     pub globals: AtomicU64,
-    /// Time spent by each node, by node name: tiles made and milliseconds.
+    pub gpu_globals: AtomicU64,
+    /// Time spent by each node, by node name: tiles made and milliseconds
+    /// (a simulation's time counts the inputs it evaluated).
     pub by_node: Mutex<HashMap<String, (u64, f64)>>,
 }
 
@@ -126,10 +135,15 @@ impl Counters {
     }
 }
 
+/// What the cache keeps, under the hash of the node that made it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Key {
+    /// A tile of an output.
     Tile { hash: u64, port: u8, lod: u8, x: i32, z: i32 },
+    /// A simulation's output over the whole terrain at its level (the
+    /// change it made, for the outputs it carries).
     Whole { hash: u64, port: u8, lod: u8 },
+    /// Figures over a whole output.
     Stats { hash: u64, port: u8, lod: u8 },
 }
 
@@ -191,9 +205,20 @@ impl Cache {
 /// A tile of a node's output: node, output, level, place.
 type At = (usize, u8, u8, i32, i32);
 
+/// Where a local kernel read each input: level and samples.
+type Reads = Vec<Option<(u8, Rect)>>;
+
+/// What a tile of a node reads of something feeding it: whose output, at
+/// what level, which samples.
+#[derive(Debug, Clone, Copy)]
+struct Feed {
+    src: (usize, u8),
+    lod: u8,
+    rect: Rect,
+}
+
 pub struct Engine {
     cache: Mutex<Cache>,
-    #[cfg(feature = "gpu")]
     gpu: Option<Arc<Gpu>>,
     pub counters: Counters,
 }
@@ -207,16 +232,10 @@ impl std::fmt::Debug for Engine {
 impl Engine {
     /// An engine on the CPU only.
     pub fn new(settings: Settings) -> Self {
-        Self {
-            cache: Mutex::new(Cache { budget: settings.cache_mb << 20, ..Default::default() }),
-            #[cfg(feature = "gpu")]
-            gpu: None,
-            counters: Counters::default(),
-        }
+        Self { cache: Mutex::new(Cache { budget: settings.cache_mb << 20, ..Default::default() }), gpu: None, counters: Counters::default() }
     }
 
     /// An engine running what it can on `gpu`.
-    #[cfg(feature = "gpu")]
     pub fn with_gpu(gpu: Arc<Gpu>, settings: Settings) -> Self {
         let mut e = Self::new(settings);
         e.gpu = Some(gpu);
@@ -224,15 +243,12 @@ impl Engine {
     }
 
     /// The graphics card it runs on, if any.
+    pub fn gpu(&self) -> Option<&Arc<Gpu>> {
+        self.gpu.as_ref()
+    }
+
     pub fn gpu_name(&self) -> Option<&str> {
-        #[cfg(feature = "gpu")]
-        {
-            self.gpu.as_deref().map(Gpu::name)
-        }
-        #[cfg(not(feature = "gpu"))]
-        {
-            None
-        }
+        self.gpu.as_deref().map(Gpu::name)
     }
 
     /// Forgets everything computed.
@@ -267,15 +283,40 @@ impl Engine {
         Ok(grid)
     }
 
+    /// The whole terrain at `lod` of output `out`.
+    pub fn whole(&self, c: &Compiled, out: (usize, u8), lod: u8, cancel: Cancel) -> Result<Grid, EvalError> {
+        self.region(c, out, lod, c.space.whole(lod), cancel)
+    }
+
     /// Tiles `keys` of output `out` at `lod`, their samples on the CPU.
     pub fn tiles(&self, c: &Compiled, out: (usize, u8), lod: u8, keys: &[(i32, i32)], cancel: Cancel) -> Result<Vec<Arc<TileData>>, EvalError> {
+        let tiles = self.evaluate(c, out, lod, keys, cancel)?;
+        self.to_cpu(&tiles.iter().map(|t| &**t).collect::<Vec<_>>());
+        Ok(tiles)
+    }
+
+    /// Tiles `keys` of output `out` at `lod`, their samples on the graphics
+    /// card ([`TileData::gpu_buffer`]); on the CPU when the engine has no
+    /// card.
+    pub fn gpu_tiles(&self, c: &Compiled, out: (usize, u8), lod: u8, keys: &[(i32, i32)], cancel: Cancel) -> Result<Vec<Arc<TileData>>, EvalError> {
+        let tiles = self.evaluate(c, out, lod, keys, cancel)?;
+        let refs: Vec<&TileData> = tiles.iter().map(|t| &**t).collect();
+        match &self.gpu {
+            Some(_) => self.to_gpu(&refs),
+            None => self.to_cpu(&refs),
+        }
+        Ok(tiles)
+    }
+
+    /// Plans and makes tiles `keys` of `out` at `lod`, wherever they are made.
+    fn evaluate(&self, c: &Compiled, out: (usize, u8), lod: u8, keys: &[(i32, i32)], cancel: Cancel) -> Result<Vec<Arc<TileData>>, EvalError> {
         let (root, port) = out;
         let node = &c.nodes[root];
         if node.spec.is_output() {
-            let Some(src) = node.inputs[0] else {
-                return Err(EvalError::Broken { node: node.id.clone(), why: node.broken.clone().unwrap_or_else(|| "it has no input".to_owned()) });
+            let Some(src) = node.inputs.first().copied().flatten() else {
+                return Err(EvalError::Broken { node: node.id.clone(), why: node.broken.clone().unwrap_or_else(|| "nothing feeds it".to_owned()) });
             };
-            return self.tiles(c, src, lod, keys, cancel);
+            return self.evaluate(c, src, lod, keys, cancel);
         }
 
         // Plan: what each node must make, walking back from the root.
@@ -291,9 +332,8 @@ impl Engine {
             if let Some(why) = &node.broken {
                 return Err(EvalError::Broken { node: node.id.clone(), why: why.clone() });
             }
-            let wanted = std::mem::take(&mut need[n]);
-            for (l, x, z) in wanted {
-                if let Some(found) = self.cached(node, l, x, z) {
+            for (l, x, z) in std::mem::take(&mut need[n]) {
+                if let Some(found) = self.cached(c, n, l, x, z) {
                     self.counters.hits.fetch_add(1, Ordering::Relaxed);
                     for (p, t) in found.into_iter().enumerate() {
                         have.insert((n, p as u8, l, x, z), t);
@@ -301,30 +341,10 @@ impl Engine {
                     continue;
                 }
                 todo[n].push((l, x, z));
-                match node.spec.kernel {
-                    Kernel::Point { .. } | Kernel::Stats { .. } => {
-                        for (s, _) in node.inputs.iter().flatten() {
-                            need[*s].insert((l, x, z));
-                        }
+                for f in feeds(c, n, l, x, z).into_iter().flatten() {
+                    for (tx, tz) in f.rect.tiles() {
+                        need[f.src.0].insert((f.lod, tx, tz));
                     }
-                    Kernel::Local { footprint, .. } => {
-                        for (k, input) in node.inputs.iter().enumerate() {
-                            if let Some((s, _)) = input {
-                                let f = footprint(&node.params, l, k);
-                                for (tx, tz) in Rect::tile(x, z).at_lod(l, f.lod).expand(f.halo).tiles() {
-                                    need[*s].insert((f.lod, tx, tz));
-                                }
-                            }
-                        }
-                    }
-                    Kernel::Global { carry, .. } => {
-                        for k in carry.iter().flatten() {
-                            if let Some((s, _)) = node.inputs[*k as usize] {
-                                need[s].insert((l, x, z));
-                            }
-                        }
-                    }
-                    Kernel::Output => unreachable!("outputs feed nothing"),
                 }
             }
         }
@@ -341,22 +361,20 @@ impl Engine {
             let made = self.make(c, n, todo, &have, cancel)?;
             self.counters.add(&c.nodes[n].id, todo.len(), started.elapsed().as_secs_f64() * 1000.0);
             self.counters.tiles.fetch_add(todo.len() as u64, Ordering::Relaxed);
-            let node = &c.nodes[n];
+            let hash = c.nodes[n].hash;
             for (&(l, x, z), outs) in todo.iter().zip(made) {
                 for (p, t) in outs.into_iter().enumerate() {
-                    self.put(Key::Tile { hash: node.hash, port: p as u8, lod: l, x, z }, Entry::Tile(t.clone()));
+                    self.put(Key::Tile { hash, port: p as u8, lod: l, x, z }, Entry::Tile(t.clone()));
                     have.insert((n, p as u8, l, x, z), t);
                 }
             }
         }
-
-        let out: Vec<Arc<TileData>> = keys.iter().map(|&(x, z)| have[&(root, port, lod, x, z)].clone()).collect();
-        self.to_cpu(&out.iter().map(|t| &**t).collect::<Vec<_>>());
-        Ok(out)
+        Ok(keys.iter().map(|&(x, z)| have[&(root, port, lod, x, z)].clone()).collect())
     }
 
     /// All of a node's outputs at a tile, when the cache has them.
-    fn cached(&self, node: &CNode, lod: u8, x: i32, z: i32) -> Option<Vec<Arc<TileData>>> {
+    fn cached(&self, c: &Compiled, n: usize, lod: u8, x: i32, z: i32) -> Option<Vec<Arc<TileData>>> {
+        let node = &c.nodes[n];
         let mut cache = self.cache.lock().expect("lock");
         (0..node.spec.outputs.len())
             .map(|p| match cache.get(&Key::Tile { hash: node.hash, port: p as u8, lod, x, z }) {
@@ -366,96 +384,106 @@ impl Engine {
             .collect()
     }
 
-    /// Makes `tiles` of node `n`, its inputs' tiles in `have`.
+    /// Makes `tiles` of node `n`, what feeds them in `have`.
     fn make(&self, c: &Compiled, n: usize, tiles: &[(u8, i32, i32)], have: &HashMap<At, Arc<TileData>>, cancel: Cancel) -> Result<Vec<Vec<Arc<TileData>>>, EvalError> {
         let node = &c.nodes[n];
-        let nout = node.spec.outputs.len();
         let area = (TILE * TILE) as usize;
         let planes: Vec<usize> = node.spec.outputs.iter().map(|o| o.kind.planes()).collect();
         let fresh = || planes.iter().map(|p| vec![0.0f32; area * p]).collect::<Vec<_>>();
-        let input = |k: usize, l: u8, x: i32, z: i32| node.inputs[k].map(|(s, p)| &have[&(s, p, l, x, z)]);
+        let ninputs = node.inputs.len();
+        // A tile fed at its own place: point kernels' inputs and driving fields.
+        let same = |src: Option<(usize, u8)>, l: u8, x: i32, z: i32| src.map(|(s, p)| &have[&(s, p, l, x, z)]);
+        let driving = |i: usize| node.driven.get(i).copied().flatten();
+        let done = |outs: Vec<Vec<f32>>| outs.into_iter().map(|o| Arc::new(TileData::cpu(o))).collect::<Vec<_>>();
         match node.spec.kernel {
             Kernel::Point { cpu, gpu } => {
-                #[cfg(feature = "gpu")]
                 if let (Some(g), Some(kernel)) = (&self.gpu, gpu)
-                    && g.takes(kernel)
+                    && g.takes(kernel.name)
                 {
-                    let connected: Vec<bool> = node.inputs.iter().map(Option::is_some).collect();
-                    let ins: Vec<Vec<Option<&TileData>>> = tiles.iter().map(|&(l, x, z)| (0..node.inputs.len()).map(|k| input(k, l, x, z).map(|t| &**t)).collect()).collect();
-                    for row in &ins {
-                        for t in row.iter().flatten() {
-                            t.gpu.get_or_init(|| g.upload(t.values().expect("a tile is on the CPU when not on the GPU")));
-                        }
-                    }
-                    let jobs: Vec<(Vec<u8>, Vec<Option<&GpuTile>>)> = tiles
+                    // Bound after the uniforms: the inputs, then each drivable setting.
+                    let drivable: Vec<usize> = node.spec.params.iter().enumerate().filter(|(_, p)| p.drivable).map(|(i, _)| i).collect();
+                    let sources: Vec<Option<(usize, u8)>> = node.inputs.iter().copied().chain(drivable.iter().map(|&i| driving(i))).collect();
+                    let connected: Vec<bool> = sources.iter().map(Option::is_some).collect();
+                    let fed: Vec<Vec<Option<&TileData>>> = tiles.iter().map(|&(l, x, z)| sources.iter().map(|s| same(*s, l, x, z).map(|t| &**t)).collect()).collect();
+                    self.to_gpu(&fed.iter().flatten().flatten().copied().collect::<Vec<_>>());
+                    let jobs: Vec<Job> = tiles
                         .iter()
-                        .zip(&ins)
-                        .map(|(&(l, x, z), row)| ((kernel.uniforms)(&node.ctx(&c.space, l, Rect::tile(x, z)), &connected), row.iter().map(|t| t.and_then(|t| t.gpu.get())).collect()))
+                        .zip(&fed)
+                        .map(|(&(l, x, z), row)| ((kernel.uniforms)(&c.ctx(n, l, Rect::tile(x, z), &[], &[]), &connected), row.iter().map(|t| t.and_then(TileData::gpu_buffer)).collect()))
                         .collect();
-                    if let Some(made) = g.run_point(kernel, &jobs, &planes) {
+                    if let Some(made) = g.run_tiles(kernel.name, kernel.source, &jobs, &planes) {
                         self.counters.gpu_tiles.fetch_add(tiles.len() as u64, Ordering::Relaxed);
                         return Ok(made.into_iter().map(|outs| outs.into_iter().zip(&planes).map(|(t, p)| Arc::new(TileData::gpu(t, *p))).collect()).collect());
                     }
                 }
-                #[cfg(not(feature = "gpu"))]
-                let _ = gpu;
-                self.inputs_to_cpu(node, tiles, have, |l, x, z| vec![(l, Rect::tile(x, z)); node.inputs.len()]);
+                self.feeds_to_cpu(c, n, tiles, have);
                 tiles
                     .par_iter()
                     .map(|&(l, x, z)| {
                         if cancel() {
                             return Err(EvalError::Cancelled);
                         }
-                        let ins: Vec<Option<&[f32]>> = (0..node.inputs.len()).map(|k| input(k, l, x, z).map(|t| t.values().expect("inputs are on the CPU"))).collect();
+                        let ins: Vec<Option<&[f32]>> = (0..ninputs).map(|k| same(node.inputs[k], l, x, z).map(|t| t.values().expect("fed on the CPU"))).collect();
+                        let driven: Vec<Option<&[f32]>> = (0..node.spec.params.len()).map(|i| same(driving(i), l, x, z).map(|t| t.values().expect("fed on the CPU"))).collect();
                         let mut outs = fresh();
-                        cpu(&node.ctx(&c.space, l, Rect::tile(x, z)), &ins, &mut outs);
-                        Ok(outs.into_iter().map(|o| Arc::new(TileData::cpu(o))).collect())
+                        cpu(&c.ctx(n, l, Rect::tile(x, z), &driven, &[]), &ins, &mut outs);
+                        Ok(done(outs))
                     })
                     .collect()
             }
             Kernel::Stats { cpu } => {
                 let stats: Vec<Option<Stats>> = node.inputs.iter().map(|i| i.map(|src| self.stats(c, src, cancel)).transpose()).collect::<Result<_, _>>()?;
-                self.inputs_to_cpu(node, tiles, have, |l, x, z| vec![(l, Rect::tile(x, z)); node.inputs.len()]);
+                self.feeds_to_cpu(c, n, tiles, have);
                 tiles
                     .par_iter()
                     .map(|&(l, x, z)| {
                         if cancel() {
                             return Err(EvalError::Cancelled);
                         }
-                        let ins: Vec<Option<&[f32]>> = (0..node.inputs.len()).map(|k| input(k, l, x, z).map(|t| t.values().expect("inputs are on the CPU"))).collect();
+                        let ins: Vec<Option<&[f32]>> = (0..ninputs).map(|k| same(node.inputs[k], l, x, z).map(|t| t.values().expect("fed on the CPU"))).collect();
                         let mut outs = fresh();
-                        cpu(&node.ctx(&c.space, l, Rect::tile(x, z)), &stats, &ins, &mut outs);
-                        Ok(outs.into_iter().map(|o| Arc::new(TileData::cpu(o))).collect())
+                        cpu(&c.ctx(n, l, Rect::tile(x, z), &[], &[]), &stats, &ins, &mut outs);
+                        Ok(done(outs))
                     })
                     .collect()
             }
-            Kernel::Local { cpu, footprint } => {
-                let read = |k: usize, l: u8, x: i32, z: i32| {
-                    let f = footprint(&node.params, l, k);
-                    (f.lod, Rect::tile(x, z).at_lod(l, f.lod).expand(f.halo))
+            Kernel::Local { cpu, gpu, .. } => {
+                self.feeds_to_cpu(c, n, tiles, have);
+                let regions = |l: u8, x: i32, z: i32| -> (Reads, Vec<Option<Grid>>) {
+                    let fs = feeds(c, n, l, x, z);
+                    let reads = fs[..ninputs].iter().map(|f| f.map(|f| (f.lod, f.rect))).collect();
+                    let grids = fs[..ninputs].iter().map(|f| f.map(|f| assemble(have, f.src, f.lod, f.rect))).collect();
+                    (reads, grids)
                 };
-                self.inputs_to_cpu(node, tiles, have, |l, x, z| (0..node.inputs.len()).map(|k| read(k, l, x, z)).collect());
+                if let (Some(g), Some(kernel)) = (&self.gpu, gpu)
+                    && g.takes(kernel.name)
+                {
+                    let connected: Vec<bool> = node.inputs.iter().map(Option::is_some).collect();
+                    let prepared: Vec<(Vec<u8>, Vec<Option<wgpu::Buffer>>)> = tiles
+                        .iter()
+                        .map(|&(l, x, z)| {
+                            let (reads, grids) = regions(l, x, z);
+                            let uniforms = (kernel.uniforms)(&c.ctx(n, l, Rect::tile(x, z), &[], &reads), &connected);
+                            (uniforms, grids.iter().map(|gr| gr.as_ref().map(|gr| g.upload_grid(gr).buffer)).collect())
+                        })
+                        .collect();
+                    let jobs: Vec<Job> = prepared.iter().map(|(u, b)| (u.clone(), b.iter().map(Option::as_ref).collect())).collect();
+                    if let Some(made) = g.run_tiles(kernel.name, kernel.source, &jobs, &planes) {
+                        self.counters.gpu_tiles.fetch_add(tiles.len() as u64, Ordering::Relaxed);
+                        return Ok(made.into_iter().map(|outs| outs.into_iter().zip(&planes).map(|(t, p)| Arc::new(TileData::gpu(t, *p))).collect()).collect());
+                    }
+                }
                 tiles
                     .par_iter()
                     .map(|&(l, x, z)| {
                         if cancel() {
                             return Err(EvalError::Cancelled);
                         }
-                        let grids: Vec<Option<Grid>> = node
-                            .inputs
-                            .iter()
-                            .enumerate()
-                            .map(|(k, i)| {
-                                i.map(|(s, p)| {
-                                    let (fl, r) = read(k, l, x, z);
-                                    assemble(have, (s, p), fl, r)
-                                })
-                            })
-                            .collect();
+                        let (reads, grids) = regions(l, x, z);
                         let ins: Vec<Option<&Grid>> = grids.iter().map(Option::as_ref).collect();
                         let mut outs = fresh();
-                        cpu(&node.ctx(&c.space, l, Rect::tile(x, z)), &ins, &mut outs);
-                        Ok(outs.into_iter().map(|o| Arc::new(TileData::cpu(o))).collect())
+                        cpu(&c.ctx(n, l, Rect::tile(x, z), &[], &reads), &ins, &mut outs);
+                        Ok(done(outs))
                     })
                     .collect()
             }
@@ -463,10 +491,9 @@ impl Engine {
                 let lods: BTreeSet<u8> = tiles.iter().map(|t| t.0).collect();
                 let mut wholes: HashMap<u8, Vec<Arc<Grid>>> = HashMap::new();
                 for l in lods {
-                    let run = l.max(c.sim_lod());
-                    wholes.insert(l, self.global(c, n, run, cancel)?);
+                    wholes.insert(l, self.global(c, n, l.max(c.sim_lod()), cancel)?);
                 }
-                self.inputs_to_cpu(node, tiles, have, |l, x, z| vec![(l, Rect::tile(x, z)); node.inputs.len()]);
+                self.feeds_to_cpu(c, n, tiles, have);
                 tiles
                     .par_iter()
                     .map(|&(l, x, z)| {
@@ -474,13 +501,13 @@ impl Engine {
                             return Err(EvalError::Cancelled);
                         }
                         let run = l.max(c.sim_lod());
-                        let f = crate::space::Space::spacing(l) / crate::space::Space::spacing(run);
+                        let f = Space::spacing(l) / Space::spacing(run);
                         let rect = Rect::tile(x, z);
-                        let outs = (0..nout)
+                        let outs = (0..planes.len())
                             .map(|p| {
                                 let g = &wholes[&l][p];
                                 let kind = node.spec.outputs[p].kind;
-                                let base = carry[p].and_then(|k| input(k as usize, l, x, z)).map(|t| t.values().expect("inputs are on the CPU"));
+                                let base = carry[p].and_then(|k| same(node.inputs[k as usize], l, x, z)).map(|t| t.values().expect("fed on the CPU"));
                                 let mut o = vec![0.0f32; area * planes[p]];
                                 for q in 0..planes[p] {
                                     for (j, row) in o[q * area..(q + 1) * area].chunks_mut(TILE as usize).enumerate() {
@@ -513,10 +540,11 @@ impl Engine {
     }
 
     /// A simulation over the whole terrain at level `run`: for each output,
-    /// the change it made to the input it carries (or its value).
+    /// the change it made to the input it carries (or its value). On the
+    /// graphics card when the node can and the card takes it.
     fn global(&self, c: &Compiled, n: usize, run: u8, cancel: Cancel) -> Result<Vec<Arc<Grid>>, EvalError> {
         let node = &c.nodes[n];
-        let Kernel::Global { cpu, carry } = node.spec.kernel else { unreachable!("only simulations run whole") };
+        let Kernel::Global { cpu, gpu, carry } = node.spec.kernel else { unreachable!("only simulations run whole") };
         let keys: Vec<Key> = (0..node.spec.outputs.len()).map(|p| Key::Whole { hash: node.hash, port: p as u8, lod: run }).collect();
         let found: Option<Vec<Arc<Grid>>> = keys
             .iter()
@@ -530,8 +558,31 @@ impl Engine {
         }
         let whole = c.space.whole(run);
         let inputs: Vec<Option<Grid>> = node.inputs.iter().map(|i| i.map(|src| self.region(c, src, run, whole, cancel)).transpose()).collect::<Result<_, _>>()?;
-        let ins: Vec<Option<&Grid>> = inputs.iter().map(Option::as_ref).collect();
-        let outs = cpu(&node.ctx(&c.space, run, whole), &ins, cancel).ok_or(EvalError::Cancelled)?;
+        let driven_grids: Vec<Option<Grid>> = (0..node.spec.params.len()).map(|i| node.driven.get(i).copied().flatten().map(|src| self.region(c, src, run, whole, cancel)).transpose()).collect::<Result<_, _>>()?;
+        let driven: Vec<Option<&[f32]>> = driven_grids.iter().map(|g| g.as_ref().map(|g| g.plane(0))).collect();
+        let ctx = c.ctx(n, run, whole, &driven, &[]);
+        let mut outs: Option<Vec<Vec<f32>>> = None;
+        if let (Some(g), Some(kernel)) = (&self.gpu, gpu)
+            && g.takes(node.spec.id)
+        {
+            let up: Vec<Option<GpuGrid>> = inputs.iter().map(|i| i.as_ref().map(|i| g.upload_grid(i))).collect();
+            let refs: Vec<Option<&GpuGrid>> = up.iter().map(Option::as_ref).collect();
+            match kernel(g, &ctx, &refs, cancel) {
+                Some(made) => {
+                    self.counters.gpu_globals.fetch_add(1, Ordering::Relaxed);
+                    outs = Some(made.iter().map(|m| g.download_grid(m).data).collect());
+                }
+                None if cancel() => return Err(EvalError::Cancelled),
+                None => g.refuse(node.spec.id, "its kernel gave nothing"),
+            }
+        }
+        let outs = match outs {
+            Some(o) => o,
+            None => {
+                let ins: Vec<Option<&Grid>> = inputs.iter().map(Option::as_ref).collect();
+                cpu(&ctx, &ins, cancel).ok_or(EvalError::Cancelled)?
+            }
+        };
         self.counters.globals.fetch_add(1, Ordering::Relaxed);
         let grids: Vec<Arc<Grid>> = outs
             .into_iter()
@@ -561,23 +612,20 @@ impl Engine {
         if let Some(Entry::Stats(s)) = self.get(&key) {
             return Ok(s);
         }
-        let g = self.region(c, src, lod, c.space.whole(lod), cancel)?;
+        let g = self.whole(c, src, lod, cancel)?;
         let s = Stats::of(g.plane(0));
         self.put(key, Entry::Stats(s));
         Ok(s)
     }
 
-    /// Brings to the CPU the input tiles a CPU kernel will read: for each
-    /// tile made, `reads` gives the level and samples it reads of each input.
-    fn inputs_to_cpu(&self, node: &CNode, tiles: &[(u8, i32, i32)], have: &HashMap<At, Arc<TileData>>, reads: impl Fn(u8, i32, i32) -> Vec<(u8, Rect)>) {
+    /// Brings to the CPU every tile feeding `tiles` of node `n`.
+    fn feeds_to_cpu(&self, c: &Compiled, n: usize, tiles: &[(u8, i32, i32)], have: &HashMap<At, Arc<TileData>>) {
         let mut wanted: Vec<&TileData> = Vec::new();
         for &(l, x, z) in tiles {
-            for (input, (rl, r)) in node.inputs.iter().zip(reads(l, x, z)) {
-                if let Some((s, p)) = input {
-                    for (tx, tz) in r.tiles() {
-                        if let Some(t) = have.get(&(*s, *p, rl, tx, tz)) {
-                            wanted.push(t);
-                        }
+            for f in feeds(c, n, l, x, z).into_iter().flatten() {
+                for (tx, tz) in f.rect.tiles() {
+                    if let Some(t) = have.get(&(f.src.0, f.src.1, f.lod, tx, tz)) {
+                        wanted.push(t);
                     }
                 }
             }
@@ -587,20 +635,57 @@ impl Engine {
 
     /// Reads back the tiles that are only on the graphics card.
     fn to_cpu(&self, tiles: &[&TileData]) {
-        #[cfg(feature = "gpu")]
-        if let Some(g) = &self.gpu {
-            let mut seen = std::collections::HashSet::new();
-            let missing: Vec<&TileData> = tiles.iter().copied().filter(|t| t.cpu.get().is_none() && seen.insert(*t as *const TileData)).collect();
-            if missing.is_empty() {
-                return;
-            }
-            let gpu: Vec<&GpuTile> = missing.iter().map(|t| t.gpu.get().expect("a tile is somewhere")).collect();
-            for (t, data) in missing.iter().zip(g.download(&gpu)) {
-                let _ = t.cpu.set(data.into());
-            }
+        let Some(g) = &self.gpu else { return };
+        let mut seen = std::collections::HashSet::new();
+        let missing: Vec<&TileData> = tiles.iter().copied().filter(|t| t.cpu.get().is_none() && seen.insert(*t as *const TileData)).collect();
+        if missing.is_empty() {
+            return;
         }
-        #[cfg(not(feature = "gpu"))]
-        let _ = tiles;
+        let gpu: Vec<&GpuTile> = missing.iter().map(|t| t.gpu.get().expect("a tile is somewhere")).collect();
+        for (t, data) in missing.iter().zip(g.download(&gpu)) {
+            let _ = t.cpu.set(data.into());
+        }
+    }
+
+    /// Sends to the graphics card the tiles that are only on the CPU.
+    fn to_gpu(&self, tiles: &[&TileData]) {
+        let Some(g) = &self.gpu else { return };
+        for t in tiles {
+            t.gpu.get_or_init(|| g.upload(t.values().expect("a tile is somewhere")));
+        }
+    }
+}
+
+/// What tile `(x, z)` at `l` of node `n` reads: one entry per input, then
+/// one per setting (the field driving it), `None` where nothing is read
+/// tile by tile (what is unconnected, and what a simulation reads whole).
+fn feeds(c: &Compiled, n: usize, l: u8, x: i32, z: i32) -> Vec<Option<Feed>> {
+    let node = &c.nodes[n];
+    let tile = Rect::tile(x, z);
+    let at_tile = |src: Option<(usize, u8)>| src.map(|src| Feed { src, lod: l, rect: tile });
+    let driven = (0..node.spec.params.len()).map(|i| node.driven.get(i).copied().flatten());
+    match node.spec.kernel {
+        Kernel::Point { .. } | Kernel::Stats { .. } => node.inputs.iter().map(|i| at_tile(*i)).chain(driven.map(at_tile)).collect(),
+        Kernel::Local { footprint, .. } => node
+            .inputs
+            .iter()
+            .enumerate()
+            .map(|(k, i)| {
+                i.map(|src| {
+                    let f = footprint(&node.params, l, k);
+                    Feed { src, lod: f.lod, rect: tile.at_lod(l, f.lod).expand(f.halo) }
+                })
+            })
+            .chain(driven.map(|_| None))
+            .collect(),
+        Kernel::Global { carry, .. } => node
+            .inputs
+            .iter()
+            .enumerate()
+            .map(|(k, i)| if carry.contains(&Some(k as u8)) { at_tile(*i) } else { None })
+            .chain(driven.map(|_| None))
+            .collect(),
+        Kernel::Output => Vec::new(),
     }
 }
 
@@ -628,7 +713,7 @@ fn assemble(have: &HashMap<At, Arc<TileData>>, (s, p): (usize, u8), lod: u8, rec
     let mut grid = Grid::new(lod, rect, vec![0.0; rect.area() * planes]);
     for (tx, tz) in tiles {
         let t = &have[&(s, p, lod, tx, tz)];
-        copy_into(&mut grid, Rect::tile(tx, tz), t.values().expect("inputs are on the CPU"));
+        copy_into(&mut grid, Rect::tile(tx, tz), t.values().expect("fed on the CPU"));
     }
     grid
 }
