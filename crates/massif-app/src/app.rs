@@ -3442,8 +3442,12 @@ impl MassifApp {
         // shown.
         let areas: Vec<(AreaId, Rect)> = ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap_or_default();
         let map = areas.iter().filter(|(id, _)| self.layout.current().root.editor_of(*id) == Some(EditorKind::Map)).map(|(_, r)| *r).max_by(|a, b| a.area().total_cmp(&b.area()));
+        // Over the bar of a river or a road being laid out, at the bottom of
+        // the map, so that its buttons stay in reach.
+        let drafting = (self.tools.tool == Tool::River && self.tools.river_draft.is_some()) || (self.tools.tool == Tool::Road && self.tools.road_draft.is_some());
+        let lift = if drafting { crate::map_view::DRAFT_BAR + 6.0 - theme::PAD } else { 0.0 };
         let (corner, room) = match map {
-            Some(map) if map.width() > 320.0 => (map.right_bottom() - vec2(theme::PAD, crate::map_view::FOOTER + theme::PAD), map.width() - 2.0 * theme::PAD),
+            Some(map) if map.width() > 320.0 => (map.right_bottom() - vec2(theme::PAD, crate::map_view::FOOTER + theme::PAD + lift), map.width() - 2.0 * theme::PAD),
             _ => (ctx.content_rect().right_bottom() - vec2(20.0, 20.0), f32::INFINITY),
         };
         egui::Area::new(Id::unique("notices"))
@@ -6181,6 +6185,10 @@ fn covers_key(reg: &massif_core::Registry) -> u64 {
 }
 
 #[cfg(test)]
+#[path = "water_ux_tests.rs"]
+mod water_ux_tests;
+
+#[cfg(test)]
 mod tests {
     thread_local! {
         /// Make the next frame panic, as a bug would.
@@ -6953,7 +6961,7 @@ mod tests {
             h.run_steps(3);
             assert_eq!(h.state().tools.water_height(tool), WaterHeight::Start);
             for (label, mode, words) in [
-                (start, WaterHeight::Start, if tool == Tool::Flood { "Dry land: fills the hollow clicked" } else { "Each stroke fills to the height where it starts" }),
+                (start, WaterHeight::Start, if tool == Tool::Flood { "Dry land: the water runs down into the hollow" } else { "Each stroke fills to the height where it starts" }),
                 ("Sea level (63)", WaterHeight::Sea, if tool == Tool::Flood { "Dry land: fills the area clicked up to y 63" } else { "Water is laid up to y 63" }),
                 ("Fixed", WaterHeight::Fixed, "up to y 63"),
             ] {
@@ -7031,19 +7039,20 @@ mod tests {
     }
 
     /// Settings saved before the water heights: From the click on is Where
-    /// I start (or click), off is Fixed at the level that was set; and a
-    /// Drain tool saved is Flood.
+    /// I start (or click), off is Fixed at the level that was set for the
+    /// Water brush (Flood, its height never picked, is Where I click); and
+    /// a Drain tool saved is Flood.
     #[test]
     fn the_old_water_settings_carry_over() {
         use crate::tools::{ToolState, WaterHeight};
         for (old, want) in [(r#"{"water_from_click": true, "water_level": 70}"#, WaterHeight::Start), (r#"{"water_from_click": false, "water_level": 70}"#, WaterHeight::Fixed), (r#"{"flood_from_click": false}"#, WaterHeight::Fixed), (r#"{}"#, WaterHeight::Start)] {
             let mut tools: ToolState = serde_json::from_str(old).unwrap();
             tools.settle();
-            assert_eq!((tools.flood_height, tools.brush_height), (want, want), "{old}");
+            assert_eq!((tools.flood_height, tools.brush_height), (WaterHeight::Start, want), "{old}");
             let saved = serde_json::to_string(&tools).unwrap();
             assert!(!saved.contains("from_click"), "no longer written");
             let again: ToolState = serde_json::from_str(&saved).unwrap();
-            assert_eq!((again.flood_height, again.brush_height), (want, want));
+            assert_eq!((again.flood_height, again.brush_height), (WaterHeight::Start, want));
         }
         assert_eq!(serde_json::from_str::<ToolState>(r#"{"water_level": 70}"#).unwrap().water_level, 70);
         let mut tools: ToolState = serde_json::from_str(r#"{"tool": "Drain", "previous": "Drain", "tried": ["Drain"]}"#).unwrap();
@@ -7569,10 +7578,15 @@ mod tests {
     }
 
     fn harness(theme: ThemeChoice) -> egui_kittest::Harness<'static, MassifApp> {
+        // MASSIF_SNAPSHOT_PPP=2: as on a Retina screen.
+        harness_with(theme, std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0))
+    }
+
+    /// [`harness`] at `ppp` pixels per point.
+    pub(super) fn harness_with(theme: ThemeChoice, ppp: f32) -> egui_kittest::Harness<'static, MassifApp> {
         egui_kittest::Harness::builder()
             .with_size(vec2(1600.0, 1000.0))
-            // MASSIF_SNAPSHOT_PPP=2: as on a Retina screen.
-            .with_pixels_per_point(std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0))
+            .with_pixels_per_point(ppp)
             .with_accessibility_check(false)
             .wgpu()
             .build_eframe(move |cc| {
@@ -12928,7 +12942,7 @@ mod tests {
     }
 
     /// A click and the pointer let go at `p`.
-    fn click_on(h: &mut egui_kittest::Harness<'_, MassifApp>, p: egui::Pos2, button: egui::PointerButton) {
+    pub(super) fn click_on(h: &mut egui_kittest::Harness<'_, MassifApp>, p: egui::Pos2, button: egui::PointerButton) {
         h.event(egui::Event::PointerMoved(p));
         h.step();
         for pressed in [true, false] {
@@ -12944,7 +12958,7 @@ mod tests {
     }
 
     /// The left button held from `from` to `to`.
-    fn drag_on(h: &mut egui_kittest::Harness<'_, MassifApp>, from: egui::Pos2, to: egui::Pos2) {
+    pub(super) fn drag_on(h: &mut egui_kittest::Harness<'_, MassifApp>, from: egui::Pos2, to: egui::Pos2) {
         h.event(egui::Event::PointerMoved(from));
         h.step();
         h.event(egui::Event::PointerButton {

@@ -409,6 +409,9 @@ fn bar(ui: &mut Ui, painter: &egui::Painter, canvas: Rect, id: egui::Id, summary
     painter.galley(pos2(bar.min.x + pad, mid - text.size().y / 2.0), text.clone(), Color32::from_gray(225));
     let go_rect = Rect::from_min_size(pos2(bar.min.x + pad + text.size().x + 16.0, mid - h / 2.0), vec2(go_w, h));
     let cancel_rect = Rect::from_min_size(pos2(go_rect.max.x + gap, mid - h / 2.0), vec2(cancel_w, h));
+    // The bar takes the pointer, under its buttons too: a click or a drag
+    // begun on it never reaches the map.
+    ui.interact(bar, id.with("road bar"), Sense::click_and_drag());
     let go_hit = ui.interact(go_rect, id.with("build road"), if ready { Sense::click() } else { Sense::hover() });
     let cancel_hit = ui.interact(cancel_rect, id.with("drop road"), Sense::click());
     let accent = theme::accent();

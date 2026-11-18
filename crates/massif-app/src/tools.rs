@@ -429,9 +429,14 @@ pub struct ToolState {
     pub show_sizes: bool,
     /// The water's level of the Fixed water height.
     pub water_level: i16,
-    /// Where Flood takes the water's height from: the hollow clicked, up to
-    /// where it spills; the sea's level; or `water_level`.
+    /// Where Flood takes the water's height from: the hollow the water
+    /// runs into, up to where it spills; the sea's level; or `water_level`.
     pub flood_height: WaterHeight,
+    /// Flood's water height was picked in Tool Settings. Until it is, it
+    /// is Where I click, the one that puts water anywhere: a height read
+    /// from an older version, which never said, is set back to it
+    /// ([`ToolState::settle`]).
+    pub flood_height_chosen: bool,
     /// Where the Water brush takes it from: where each stroke starts (the
     /// water's surface there, or a block over the ground); the sea's level;
     /// or `water_level`.
@@ -971,6 +976,26 @@ impl RiverDraft {
     }
 }
 
+/// Take point `k` (in the order of [`RiverLayout::anchors`]) away from
+/// the river being laid out, the others staying where they are: the next
+/// one becomes the source, the one before it the end. False when it was
+/// the only point: no river is left.
+pub fn remove_river_point(draft: &mut RiverDraft, k: usize) -> bool {
+    let layout = &mut draft.layout;
+    match k {
+        0 if !layout.through.is_empty() => layout.source = layout.through.remove(0),
+        0 => match layout.end.take() {
+            Some(end) => layout.source = end,
+            None => return false,
+        },
+        k if k <= layout.through.len() => {
+            layout.through.remove(k - 1);
+        }
+        _ => layout.end = layout.through.pop(),
+    }
+    true
+}
+
 /// Begin a river at block `(x, z)`: its source. Refused in water.
 pub fn start_river(doc: &Document, tools: &mut ToolState, x: f32, z: f32) -> Feedback {
     let sea = doc.world.meta.sea_level as f32;
@@ -1032,6 +1057,7 @@ impl Default for ToolState {
             show_sizes: false,
             water_level: 63,
             flood_height: WaterHeight::Start,
+            flood_height_chosen: false,
             brush_height: WaterHeight::Start,
             old_from_click: None,
             flood_warn: true,
@@ -1098,6 +1124,10 @@ impl ToolState {
         // From the click off: both at the level that was set.
         if self.old_from_click.take() == Some(false) {
             (self.flood_height, self.brush_height) = (WaterHeight::Fixed, WaterHeight::Fixed);
+        }
+        // Flood's height never picked in Tool Settings: Where I click.
+        if !self.flood_height_chosen {
+            self.flood_height = WaterHeight::Start;
         }
     }
 
@@ -1736,37 +1766,76 @@ fn brush_level(doc: &Document, tools: &ToolState, x: i32, z: i32) -> i16 {
     }
 }
 
-/// The level Flood fills to from column `(x, z)`, under the limit; or what
-/// to say instead, a question asked included.
-fn pour_mode(doc: &Document, tools: &mut ToolState, x: i32, z: i32) -> Result<i16, Feedback> {
-    let level = match tools.flood_height.level(doc, tools) {
-        Some(level) => level,
-        // Where I click: the hollow clicked, up to where it spills.
-        None => match ops::spill_level(doc.dimension(), x, z, 16 << 20) {
-            Some(level) => level,
-            // Not in a hollow: the water would run away. Made to stay a
-            // block over the spot, it spreads as far as the land lies under
-            // it: asked first, unless told not to.
-            None => {
-                let Some(level) = ops::pour_level(doc.dimension(), x, z) else {
-                    return Err(Some(tr!("There is no land here to hold water.").to_owned()));
-                };
-                let level = tools.limit_water(level);
-                if tools.flood_warn {
-                    let columns = ops::flood_count(doc.dimension(), x, z, Flood::Fill(level), FLOOD_MAX);
-                    tools.flood_ask = Some(FloodAsk { x, z, level, columns, more: columns >= FLOOD_MAX, at_rim: false });
-                    return Err(None);
-                }
-                level
-            }
-        },
-    };
+/// Columns of water a hollow holds at least for Flood to stop at it:
+/// water poured on a slope runs on past a smaller puddle.
+const POND: usize = 12;
+/// Blocks from the column clicked water poured there runs at most, down to
+/// the hollow it fills.
+const POUR_REACH: i32 = 256;
+
+/// Where Flood fills from, on dry land, and up to what level.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Fill {
+    /// The column it fills from: the one clicked, or the bottom of the
+    /// hollow the water runs into.
+    x: i32,
+    z: i32,
+    level: i16,
+    /// Up to the level set (Sea level or Fixed), rather than to where a
+    /// hollow spills.
+    set: bool,
+    /// The level set, as high as the land clicked or under it: the hollow
+    /// the water runs into instead.
+    above: Option<i16>,
+    /// The water poured on the column clicked runs away: the nearest
+    /// hollow around it.
+    near: bool,
+}
+
+/// Where Flood fills from on dry column `(x, z)`, and up to what level,
+/// under the limit; or what to say instead, a question asked included.
+/// Under a level set, the area clicked up to it; otherwise (Where I click,
+/// or land as high as the level set) the hollow the water poured there
+/// runs into, up to where it spills.
+fn pour_mode(doc: &Document, tools: &mut ToolState, x: i32, z: i32) -> Result<Fill, Feedback> {
     // Never over the top of the world.
-    let level = tools.limit_water(level).min(doc.dimension().max_y as i16);
-    if tools.water_limit_on && ground_top(doc, x, z).is_some_and(|g| g >= level as i32) {
-        return Err(Some(under_the_limit(tools)));
+    let top = doc.dimension().max_y as i16;
+    let ground = ground_top(doc, x, z);
+    let above = tools.flood_height.level(doc, tools).map(|level| tools.limit_water(level).min(top));
+    if let Some(level) = above
+        && ground.is_some_and(|g| g < level as i32)
+    {
+        return Ok(Fill { x, z, level, set: true, above: None, near: false });
     }
-    Ok(level)
+    match ops::pour_target(doc.dimension(), x, z, POND, POUR_REACH, 16 << 20) {
+        None => Err(Some(tr!("There is no land here to hold water.").to_owned())),
+        Some(ops::Pour::Hollow { x: hx, z: hz, level, near, .. }) => {
+            let level = tools.limit_water(level).min(top);
+            // Only a height limit keeps a hollow dry.
+            if ground_top(doc, hx, hz).is_some_and(|g| g >= level as i32) {
+                return Err(Some(under_the_limit(tools)));
+            }
+            Ok(Fill { x: hx, z: hz, level, set: false, above, near })
+        }
+        // Not in a hollow: the water would run away. Made to stay a block
+        // over the spot, it spreads as far as the land lies under it:
+        // asked first, unless told not to.
+        Some(_) => {
+            let Some(level) = ops::pour_level(doc.dimension(), x, z) else {
+                return Err(Some(tr!("There is no land here to hold water.").to_owned()));
+            };
+            let level = tools.limit_water(level).min(top);
+            if ground.is_some_and(|g| g >= level as i32) {
+                return Err(Some(under_the_limit(tools)));
+            }
+            if tools.flood_warn {
+                let columns = ops::flood_count(doc.dimension(), x, z, Flood::Fill(level), FLOOD_MAX);
+                tools.flood_ask = Some(FloodAsk { x, z, level, columns, more: columns >= FLOOD_MAX, at_rim: false });
+                return Err(None);
+            }
+            Ok(Fill { x, z, level, set: false, above, near: false })
+        }
+    }
 }
 
 /// The top of the ground at column `(x, z)`, as a block's y.
@@ -1798,20 +1867,26 @@ fn dry_here(tools: &ToolState, level: i16) -> String {
 /// What the water tool in hand would do at column `(x, z)`, for the tag
 /// by the cursor: the level it fills to, or why it stays dry. A stroke of
 /// the Water brush under way lays its water at `stroke`.
+#[cfg(test)]
 pub fn water_hint(doc: &Document, tools: &ToolState, x: i32, z: i32, stroke: Option<i16>) -> Option<String> {
+    water_tag(doc, tools, x, z, stroke).map(|t| t.0)
+}
+
+/// [`water_hint`], and where Flood's water would run down to when it
+/// leaves the column dry: the bottom of the hollow it fills.
+pub fn water_tag(doc: &Document, tools: &ToolState, x: i32, z: i32, stroke: Option<i16>) -> Option<(String, Option<(i32, i32)>)> {
     let ground = ground_top(doc, x, z)?;
     let water = ops::water_at(doc.dimension(), x, z);
     let fills = |level: i16| if ground >= level as i32 { dry_here(tools, level) } else { tr!("Fills to y {level}", level) };
     match tools.tool {
-        Tool::Water => Some(fills(stroke.unwrap_or_else(|| tools.limit_water(brush_level(doc, tools, x, z))))),
+        Tool::Water => Some((fills(stroke.unwrap_or_else(|| tools.limit_water(brush_level(doc, tools, x, z)))), None)),
         Tool::Flood => {
-            let fill = |level: i16| if ground >= level as i32 { dry_here(tools, level) } else { tr!("Fill to y {level}", level) };
             // On water, whatever the height chosen: a block higher. The rim
             // is worked out over a hollow of a reasonable size only, the
             // cursor moving on.
             if let Some(w) = water {
                 let higher = w.saturating_add(1);
-                return Some(if higher > doc.dimension().max_y as i16 {
+                return Some((if higher > doc.dimension().max_y as i16 {
                     tr!("The water here is at the top of the world already").to_owned()
                 } else if tools.limit_water(higher) < higher {
                     limit_reached(tools)
@@ -1819,20 +1894,54 @@ pub fn water_hint(doc: &Document, tools: &ToolState, x: i32, z: i32, stroke: Opt
                     tr!("At the rim, y {level}: a block more spills", level = w)
                 } else {
                     tr!("Raise this water to y {level}", level = higher)
-                });
+                }, None));
             }
-            if let Some(level) = tools.flood_height.level(doc, tools) {
-                return Some(fill(tools.limit_water(level)));
-            }
-            // Where I click: the hollow up to its rim.
-            Some(match ops::spill_level_within(doc.dimension(), x, z, 1 << 16) {
-                Some(Some(level)) => fill(tools.limit_water(level)),
-                Some(None) => tr!("Not in a hollow: the water would spread").to_owned(),
-                None => tr!("Fills the hollow up to where it spills").to_owned(),
-            })
+            flood_hint(doc, tools, x, z, ground)
         }
         _ => None,
     }
+}
+
+/// What Flood would do on dry column `(x, z)`, whose ground is at
+/// `ground`, for the tag by the cursor; and the bottom of the hollow the
+/// water would run down into, when it leaves the column dry. The hollow
+/// is looked for over a reasonable stretch only, the cursor moving on.
+fn flood_hint(doc: &Document, tools: &ToolState, x: i32, z: i32, ground: i32) -> Option<(String, Option<(i32, i32)>)> {
+    let top = doc.dimension().max_y as i16;
+    let above = tools.flood_height.level(doc, tools).map(|level| tools.limit_water(level).min(top));
+    if let Some(level) = above
+        && ground < level as i32
+    {
+        return Some((tr!("Fill to y {level}", level), None));
+    }
+    Some(match ops::pour_target(doc.dimension(), x, z, POND, POUR_REACH, 1 << 16)? {
+        ops::Pour::Hollow { x: hx, z: hz, level, capped, near, .. } => {
+            let level = tools.limit_water(level).min(top);
+            // The hollow the water runs down into covers the column if it
+            // fills higher; the nearest one around lies apart from it.
+            let here = !near && ground < level as i32;
+            let target = (!here).then_some((hx, hz));
+            if ground_top(doc, hx, hz).is_some_and(|g| g >= level as i32) {
+                (dry_here(tools, level), None)
+            } else {
+                let text = match (above, near, capped, here) {
+                    (None, true, ..) => tr!("No hollow here: fills the nearest one, to y {level}", level),
+                    (Some(above), true, ..) => tr!("Above y {above}: fills the nearest hollow, to y {level}", above, level),
+                    (None, false, true, _) => tr!("Fills the hollow up to where it spills").to_owned(),
+                    (Some(above), false, true, _) => tr!("Above y {above}: fills the hollow up to where it spills", above),
+                    (None, false, false, true) => tr!("Fill to y {level}", level),
+                    (Some(above), false, false, true) => tr!("Above y {above}: fills this hollow instead, to y {level}", above, level),
+                    (None, false, false, false) => tr!("Runs down into a hollow: fills it to y {level}", level),
+                    (Some(above), false, false, false) => tr!("Above y {above}: runs down into a hollow, fills it to y {level}", above, level),
+                };
+                (text, target)
+            }
+        }
+        _ => match above {
+            None => (tr!("Not in a hollow: the water would spread").to_owned(), None),
+            Some(above) => (tr!("Above y {above}, and not in a hollow: the water would spread", above), None),
+        },
+    })
 }
 
 /// What Flood says when the water stands at the height limit.
@@ -1862,6 +1971,14 @@ pub struct WaterHold {
     level: Option<i16>,
     /// The press began on dry land: the columns its flood covered.
     flooded: Option<usize>,
+    /// The water ran down into a hollow, leaving the column pressed dry.
+    ran: bool,
+    /// The level set, as high as the land pressed: the hollow the water
+    /// runs into was filled instead.
+    above: Option<i16>,
+    /// The water poured where pressed ran away: the nearest hollow around
+    /// was filled.
+    near: bool,
     /// Why it goes no further.
     end: Option<HoldEnd>,
 }
@@ -1911,7 +2028,7 @@ pub fn press_water(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, lo
         return (None, Some(poured(doc, tools, x, z, false, 0, n)));
     }
     let water = ops::water_at(doc.dimension(), x, z);
-    let mut hold = WaterHold { x, z, lower, step: 0, label: String::new(), rim: None, wait: 0.0, blocks: 0, level: water, flooded: None, end: None };
+    let mut hold = WaterHold { x, z, lower, step: 0, label: String::new(), rim: None, wait: 0.0, blocks: 0, level: water, flooded: None, ran: false, above: None, near: false, end: None };
     match (lower, water) {
         (true, None) => return (None, Some(tr!("No water here to lower").to_owned())),
         (true, Some(_)) => hold.label = tr!("Lower the water").to_owned(),
@@ -1938,20 +2055,25 @@ pub fn press_water(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, lo
         // Dry land: flooded up to the level chosen (Where I click, the
         // hold raising it on from there).
         (false, None) => {
-            let level = match pour_mode(doc, tools, x, z) {
-                Ok(level) => level,
+            let fill = match pour_mode(doc, tools, x, z) {
+                Ok(fill) => fill,
                 Err(note) => return (None, note),
             };
             hold.label = tr!("Flood").to_owned();
             hold.step = doc.history.begin(hold.label.clone(), doc.dim);
-            let n = ops::flood_fill(&mut doc.history.edit(&mut doc.world, 0), x, z, Flood::Fill(level), FLOOD_MAX);
+            let n = ops::flood_fill(&mut doc.history.edit(&mut doc.world, 0), fill.x, fill.z, Flood::Fill(fill.level), FLOOD_MAX);
             if n == 0 {
                 doc.commit();
-                return (None, Some(poured(doc, tools, x, z, true, level, n)));
+                return (None, Some(poured(doc, tools, fill.x, fill.z, true, fill.level, n)));
             }
+            // Held, the water it laid rises on.
+            (hold.x, hold.z) = (fill.x, fill.z);
             hold.flooded = Some(n);
-            hold.level = ops::water_at(doc.dimension(), x, z);
-            if tools.flood_height != WaterHeight::Start {
+            hold.level = ops::water_at(doc.dimension(), fill.x, fill.z);
+            hold.ran = ops::water_at(doc.dimension(), x, z).is_none();
+            hold.above = fill.above;
+            hold.near = fill.near;
+            if fill.set {
                 hold.end = Some(HoldEnd::Still);
             }
             return (Some(hold), None);
@@ -2040,7 +2162,14 @@ pub fn release_water(doc: &mut Document, hold: WaterHold) -> Feedback {
     end_step(doc, hold.step);
     let level = hold.level;
     Some(match (hold.flooded, hold.lower, hold.end, level) {
-        (Some(n), _, _, Some(level)) if hold.blocks == 0 => tr!("Flooded {n} columns up to {water_level}", water_level = level, n),
+        (Some(n), _, _, Some(level)) if hold.blocks == 0 => match (hold.above, hold.ran, hold.near) {
+            (None, false, _) => tr!("Flooded {n} columns up to {water_level}", water_level = level, n),
+            (None, true, false) => tr!("The water ran down into a hollow: flooded {n} columns up to {water_level}", water_level = level, n),
+            (None, true, true) => tr!("No hollow here: filled the nearest one, {n} columns up to {water_level}", water_level = level, n),
+            (Some(above), false, _) => tr!("The land is above y {above}: filled the hollow here instead, {n} columns up to {water_level}", above, water_level = level, n),
+            (Some(above), true, false) => tr!("The land is above y {above}: the water ran down into a hollow, {n} columns up to {water_level}", above, water_level = level, n),
+            (Some(above), true, true) => tr!("The land is above y {above}: filled the nearest hollow, {n} columns up to {water_level}", above, water_level = level, n),
+        },
         (_, true, _, None) => tr!("The water is gone").to_owned(),
         (_, true, _, Some(level)) => trn!("Water lowered by {n} block, to {level}", "Water lowered by {n} blocks, to {level}", n = hold.blocks, level),
         (_, false, Some(HoldEnd::Rim), Some(level)) => trn!("Water raised by {n} block, to {level}: it is at the rim of its hollow, a block more and it spills.", "Water raised by {n} blocks, to {level}: it is at the rim of its hollow, a block more and it spills.", n = hold.blocks, level),
@@ -2540,8 +2669,9 @@ mod tests {
         assert_eq!(probe(&d, 100, 100).unwrap().fluid, NO_FLUID);
     }
 
-    /// Flood from the click: on flat ground there is no hollow, and it says
-    /// so; with a level of its own under the ground it says how to raise it.
+    /// Flood on flat ground: there is no hollow, and it asks before
+    /// spreading the water, whatever the height chosen; under a height
+    /// limit it says how to fill it.
     #[test]
     fn flood_says_why_nothing_fills() {
         let mut d = doc();
@@ -2556,10 +2686,13 @@ mod tests {
         assert!(ask.columns > 1000 && !ask.more, "{ask:?}");
         assert_eq!(d.history.undo_count(), steps);
         assert_eq!(probe(&d, 50, 50).unwrap().fluid, NO_FLUID);
+        // A level of its own under the ground, and no hollow the water
+        // would run into: asked as well.
         tools.flood_height = WaterHeight::Fixed;
         tools.water_level = 40;
-        let msg = click(&mut d, &mut tools, 50, 50, false).unwrap();
-        assert_eq!(msg, "Dry here: the ground is at or above y 40.");
+        assert_eq!(click(&mut d, &mut tools, 50, 50, false), None);
+        assert!(tools.flood_ask.take().is_some_and(|ask| (ask.x, ask.z) == (50, 50)));
+        assert_eq!(d.history.undo_count(), steps);
         // With a limit, never higher than it; under the spot, it says so.
         tools.water_level = 70;
         tools.water_limit_on = true;
@@ -2955,10 +3088,12 @@ mod tests {
         tools.water_limit = bottom - 1;
         assert_eq!(hint(&d, &tools, 60, 60), format!("Dry here: the height limit, y {}, is under the ground.", bottom - 1));
         tools.water_limit_on = false;
-        // Flood, where I click: the hollow up to its rim; flat ground spreads.
+        // Flood, where I click: the hollow up to its rim; on flat ground the
+        // nearest hollow, 64 blocks around at most; further, it spreads.
         tools.select(Tool::Flood);
         assert_eq!(hint(&d, &tools, 60, 60), format!("Fill to y {rim}"));
-        assert_eq!(hint(&d, &tools, 120, 120), "Not in a hollow: the water would spread");
+        assert_eq!(hint(&d, &tools, 120, 120), format!("No hollow here: fills the nearest one, to y {rim}"));
+        assert_eq!(hint(&d, &tools, -100, -100), "Not in a hollow: the water would spread");
         tools.flood_height = WaterHeight::Fixed;
         tools.water_level = bottom + 2;
         assert_eq!(hint(&d, &tools, 60, 60), format!("Fill to y {}", bottom + 2));

@@ -1249,6 +1249,261 @@ pub fn pour_level(dim: &Dimension, x: i32, z: i32) -> Option<i16> {
     Some((surface + 1).clamp(i16::MIN as i32, i16::MAX as i32) as i16)
 }
 
+/// Where water poured on a column comes to rest ([`pour_target`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pour {
+    /// The hollow whose bottom is `(x, z)`, filled up to `level`, where it
+    /// would spill (a fluid level, as [`Flood::Fill`] takes it); `columns`
+    /// it covers then, or at least that many when `capped` (the hollow was
+    /// larger than looked at). `near`: water poured on the column runs away,
+    /// and this is the nearest hollow around it, rather than the one it
+    /// runs down into.
+    Hollow { x: i32, z: i32, level: i16, columns: usize, capped: bool, near: bool },
+    /// It runs into the water standing on `(x, z)`, at `level`.
+    Water { x: i32, z: i32, level: i16 },
+    /// It runs off the map, or further than looked, and no hollow is near.
+    Away,
+}
+
+/// Blocks across a flat that water poured on it runs to lower land; on a
+/// wider one it spreads out where it is.
+const FLAT_RUN: i32 = 16;
+/// Blocks around a column where water poured runs away that the nearest
+/// hollow is looked for in.
+const NEAR: i32 = 64;
+/// Columns of a lake that water poured runs into looked at to tell whether
+/// it can rise (the sea cannot).
+const LAKE_CAP: usize = 1 << 18;
+
+/// A hollow filled from its bottom, lowest first.
+struct Filled {
+    /// Where it would spill, as a block's y (its bottom when it holds
+    /// nothing).
+    level: i32,
+    /// Columns under that level.
+    columns: usize,
+    capped: bool,
+    /// The first column lower than the water, where it spills (`i32::MIN`
+    /// off the map).
+    exit: Option<(i32, i32, i32)>,
+    /// The columns filled or at its rim.
+    inside: Vec<(i32, i32)>,
+}
+
+/// Fill the hollow whose bottom is `(bx, bz)`, at `bottom`, lowest first up
+/// to where it spills, nearest first at a height (so that across a flat the
+/// nearest lower land is found), over `cap` columns at most. Water met
+/// counts as ground at its surface.
+fn fill_from(surface: &mut impl FnMut(i32, i32) -> Option<(i32, bool)>, bx: i32, bz: i32, bottom: i32, cap: usize) -> Filled {
+    use std::cmp::Reverse;
+    use std::collections::{BinaryHeap, HashSet};
+    let near = |cx: i32, cz: i32| (cx - bx) as i64 * (cx - bx) as i64 + (cz - bz) as i64 * (cz - bz) as i64;
+    let mut level = bottom;
+    let mut seen: HashSet<(i32, i32)> = HashSet::from([(bx, bz)]);
+    let mut heap = BinaryHeap::from([Reverse((bottom, 0i64, bx, bz))]);
+    let mut inside = Vec::new();
+    let mut heights = Vec::new();
+    let mut exit = None;
+    let mut capped = false;
+    while let Some(Reverse((h, _, cx, cz))) = heap.pop() {
+        if h < level {
+            exit = Some((cx, cz, h));
+            break;
+        }
+        level = h;
+        inside.push((cx, cz));
+        heights.push(h);
+        if inside.len() > cap {
+            capped = true;
+            break;
+        }
+        for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let n = (cx + dx, cz + dz);
+            if seen.insert(n) {
+                heap.push(Reverse((surface(n.0, n.1).map_or(i32::MIN, |s| s.0), near(n.0, n.1), n.0, n.1)));
+            }
+        }
+    }
+    let columns = heights.iter().filter(|&&h| h < level).count();
+    Filled { level, columns, capped, exit, inside }
+}
+
+/// Where water poured on column `(x, z)` comes to rest. In a hollow that
+/// holds the column (within [`NEAR`] blocks of it, `least` columns of water
+/// at least), up to where it would spill. Otherwise down the steepest way,
+/// and across a flat to lower land [`FLAT_RUN`] blocks away at most, to the
+/// bottom of a hollow, which it fills up to where it would spill; a hollow
+/// that holds fewer than `least` columns of water it fills, spills from and
+/// runs on. Into a lake that can rise, up to its rim. Where it runs away
+/// (into the sea, off the map, out on a wide flat, back into a hollow it
+/// filled, or more than `reach` blocks from the column), the nearest hollow
+/// around the column, or else the first small one it met. Over a hollow of
+/// more than `cap` columns, the level reached by then. `None` off the map.
+pub fn pour_target(dim: &Dimension, x: i32, z: i32, least: usize, reach: i32, cap: usize) -> Option<Pour> {
+    let mut ground = crate::river::Ground::new(dim.ground());
+    // The surface water runs on, and whether it is water's.
+    let mut surface = |x: i32, z: i32| ground.at(x, z).map(|(h, w)| w.map_or((block_top(h), false), |w| ((w as i32).max(block_top(h)), true)));
+    let (start, wet) = surface(x, z)?;
+    let fluid = |h: i32| h.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+    if wet {
+        return Some(Pour::Water { x, z, level: fluid(start) });
+    }
+    if let Some((level, columns)) = hollow_around(&mut surface, x, z, start, NEAR.min(reach))
+        && columns >= least
+    {
+        return Some(Pour::Hollow { x, z, level: fluid(level), columns, capped: false, near: false });
+    }
+    let far = |cx: i32, cz: i32| (cx - x).abs().max((cz - z).abs()) > reach;
+    let mut first: Option<Pour> = None;
+    // The columns of the hollows filled on the way: water coming back to
+    // one would go round in circles.
+    let mut filled = std::collections::HashSet::new();
+    let mut at = (x, z, start);
+    // Where the walk down ended: a hollow, water, or away.
+    let ended: Pour = 'walk: loop {
+        // Down the steepest way, a column at a time.
+        loop {
+            let (cx, cz, h) = at;
+            let mut low: Option<(i32, i32, i32, bool)> = None;
+            for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                match surface(cx + dx, cz + dz) {
+                    Some((nh, nw)) if nh < h && low.is_none_or(|l| nh < l.2) => low = Some((cx + dx, cz + dz, nh, nw)),
+                    Some(_) => {}
+                    // Off the map: the water runs off it.
+                    None => break 'walk Pour::Away,
+                }
+            }
+            let Some((nx, nz, nh, nw)) = low else { break };
+            if nw {
+                break 'walk Pour::Water { x: nx, z: nz, level: fluid(nh) };
+            }
+            at = (nx, nz, nh);
+            if far(nx, nz) || filled.contains(&(nx, nz)) {
+                break 'walk Pour::Away;
+            }
+        }
+        // A bottom, or a flat: filled up to where it spills.
+        let (bx, bz, bottom) = at;
+        let hollow = fill_from(&mut surface, bx, bz, bottom, cap);
+        if hollow.level > bottom {
+            let pour = Pour::Hollow { x: bx, z: bz, level: fluid(hollow.level), columns: hollow.columns, capped: hollow.capped, near: false };
+            if hollow.capped || hollow.columns >= least {
+                return Some(pour);
+            }
+            first.get_or_insert(pour);
+        } else if hollow.exit.is_some_and(|(ex, ez, _)| (ex - bx).abs().max((ez - bz).abs()) > FLAT_RUN) {
+            // A wide flat: the water spreads out on it.
+            break 'walk Pour::Away;
+        }
+        filled.extend(hollow.inside);
+        // Run on from where it spills.
+        match hollow.exit {
+            Some((ex, ez, eh)) if eh != i32::MIN && !far(ex, ez) && !filled.contains(&(ex, ez)) => {
+                if surface(ex, ez).is_some_and(|s| s.1) {
+                    break 'walk Pour::Water { x: ex, z: ez, level: fluid(eh) };
+                }
+                at = (ex, ez, eh);
+            }
+            _ => break 'walk Pour::Away,
+        }
+    };
+    // Into a lake that can rise: up to its rim.
+    if let Pour::Water { x: wx, z: wz, level } = ended {
+        let lake = fill_from(&mut surface, wx, wz, level as i32, cap.min(LAKE_CAP));
+        if lake.level > level as i32 && !lake.capped {
+            return Some(Pour::Hollow { x: wx, z: wz, level: fluid(lake.level), columns: lake.columns, capped: false, near: false });
+        }
+    }
+    // The nearest hollow around, or the first small one met on the way.
+    if let Some(near) = near_hollow(&mut surface, x, z, NEAR.min(reach), least, cap) {
+        return Some(near);
+    }
+    Some(first.unwrap_or(ended))
+}
+
+/// The hollow that holds column `(x, z)`, whose surface is at `start`:
+/// water poured there and made to rise gets out of it (off the map, into
+/// water, or more than `radius` blocks away) at the level returned, higher
+/// than the column; and the columns under that level. `None` where it gets
+/// out no higher than the column: no hollow holds it.
+fn hollow_around(surface: &mut impl FnMut(i32, i32) -> Option<(i32, bool)>, x: i32, z: i32, start: i32, radius: i32) -> Option<(i32, usize)> {
+    use std::cmp::Reverse;
+    use std::collections::{BinaryHeap, HashSet};
+    // Lowest first: the level water must reach to get to each column, the
+    // highest on the lowest way to it.
+    let mut level = start;
+    let mut seen: HashSet<(i32, i32)> = HashSet::from([(x, z)]);
+    let mut heap = BinaryHeap::from([Reverse((start, x, z))]);
+    let mut reached = Vec::new();
+    while let Some(Reverse((h, cx, cz))) = heap.pop() {
+        if h == i32::MIN || (cx - x).abs().max((cz - z).abs()) > radius {
+            // Out, at the level reached.
+            if level <= start {
+                return None;
+            }
+            let columns = reached.iter().filter(|&&(h, before)| h < level && before < level).count();
+            return Some((level, columns));
+        }
+        let before = level;
+        level = level.max(h);
+        reached.push((h, before));
+        for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let n = (cx + dx, cz + dz);
+            if seen.insert(n) {
+                // Off the map, or water: out there.
+                let nh = surface(n.0, n.1).map_or(i32::MIN, |(nh, wet)| if wet { i32::MIN } else { nh });
+                heap.push(Reverse((nh, n.0, n.1)));
+            }
+        }
+    }
+    None
+}
+
+/// The nearest hollow around column `(x, z)`, `radius` blocks at most
+/// away, that holds `least` columns of water at least: from the nearest
+/// bottom out (a dry column no neighbour of which is lower, and one
+/// higher), each filled up to where it spills, the work kept to a few
+/// times `cap` columns.
+fn near_hollow(surface: &mut impl FnMut(i32, i32) -> Option<(i32, bool)>, x: i32, z: i32, radius: i32, least: usize, cap: usize) -> Option<Pour> {
+    // The land around, read once: a ring of a column more for the
+    // neighbours of its edge.
+    let side = 2 * radius + 3;
+    let grid: Vec<Option<(i32, bool)>> = (0..side * side).map(|i| surface(x - radius - 1 + i % side, z - radius - 1 + i / side)).collect();
+    let at = |dx: i32, dz: i32| grid[((dz + radius + 1) * side + dx + radius + 1) as usize];
+    let mut bottoms = Vec::new();
+    for dz in -radius..=radius {
+        for dx in -radius..=radius {
+            let Some((h, false)) = at(dx, dz) else { continue };
+            let around = [at(dx - 1, dz), at(dx + 1, dz), at(dx, dz - 1), at(dx, dz + 1)];
+            // Off the map counts as lower: water runs off there.
+            if around.iter().all(|n| n.is_some_and(|n| n.0 >= h)) && around.iter().any(|n| n.is_some_and(|n| n.0 > h)) {
+                bottoms.push((dx * dx + dz * dz, dx, dz, h));
+            }
+        }
+    }
+    bottoms.sort_unstable();
+    let mut covered = std::collections::HashSet::new();
+    let mut work = 0usize;
+    let budget = cap.saturating_mul(4).min(1 << 20);
+    for (_, dx, dz, h) in bottoms {
+        let (bx, bz) = (x + dx, z + dz);
+        if covered.contains(&(bx, bz)) {
+            continue;
+        }
+        let filled = fill_from(surface, bx, bz, h, cap);
+        if filled.level > h && (filled.capped || filled.columns >= least) {
+            let level = filled.level.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            return Some(Pour::Hollow { x: bx, z: bz, level, columns: filled.columns, capped: filled.capped, near: true });
+        }
+        work += filled.inside.len();
+        covered.extend(filled.inside);
+        if work > budget {
+            break;
+        }
+    }
+    None
+}
+
 /// The columns a flood from `(x, z)` changes and the water of the tiles it
 /// changes, as [`flood_fill`] would write them.
 #[allow(clippy::type_complexity)]
@@ -1482,6 +1737,78 @@ mod tests {
             hist.undo(&mut w);
             assert_eq!(at(&w, 22, 0), (80, NO_FLUID));
         }
+    }
+
+    /// Water poured on a slope runs down into the hollow below and fills
+    /// it, past a dent of a block on its way; poured where no hollow holds
+    /// it, it runs off the map; on a wide flat, it spreads where it is.
+    #[test]
+    fn water_poured_runs_into_the_hollow_below() {
+        let mut w = world(1);
+        let positions: Vec<TilePos> = w.dims[0].ground().positions().collect();
+        for pos in positions {
+            let tile = w.dims[0].ground_mut().tile_mut(pos).unwrap();
+            let (ox, oz) = pos.origin();
+            for c in 0..TILE_AREA {
+                let (x, z) = (ox + (c % 128) as i32, oz + (c / 128) as i32);
+                // Rising to the east, a bowl of 12 blocks at the origin, a
+                // dent of a column up the slope.
+                let mut h = 90.0 + 0.25 * x as f32;
+                let d = (x as f32).hypot(z as f32);
+                if d < 12.0 {
+                    h -= 8.0 * (1.0 - d / 12.0);
+                }
+                if (x, z) == (30, 0) {
+                    h -= 2.0;
+                }
+                tile.top.set(c, h);
+            }
+        }
+        let dim = &w.dims[0];
+        let rim = spill_level(dim, 0, 0, 1 << 20).unwrap();
+        let Some(Pour::Hollow { x, z, level, columns, capped: false, near: false }) = pour_target(dim, 40, 0, 12, 256, 1 << 20) else { panic!("{:?}", pour_target(dim, 40, 0, 12, 256, 1 << 20)) };
+        assert_eq!(level, rim, "filled up to where it spills");
+        assert!((x.abs(), z.abs()) <= (2, 2) && columns > 100, "the bowl: {x} {z} {columns}");
+        // The dent, kept when puddles are enough.
+        assert!(matches!(pour_target(dim, 31, 0, 1, 256, 1 << 20), Some(Pour::Hollow { x: 30, z: 0, columns: 1, .. })));
+        // Up the slope beside the bowl: the water runs off the west edge
+        // of the map, and the bowl is the nearest hollow; further, nothing.
+        assert!(matches!(pour_target(dim, 40, 50, 12, 256, 1 << 20), Some(Pour::Hollow { level, near: true, .. }) if level == rim), "{:?}", pour_target(dim, 40, 50, 12, 256, 1 << 20));
+        assert_eq!(pour_target(dim, 40, 110, 12, 256, 1 << 20), Some(Pour::Away));
+        // Not further than asked: the dent met on the way, rather than
+        // nothing.
+        assert!(matches!(pour_target(dim, 40, 0, 12, 20, 1 << 20), Some(Pour::Hollow { x: 30, z: 0, .. })));
+        let flat = world(1);
+        assert_eq!(pour_target(&flat.dims[0], 50, 50, 12, 256, 1 << 20), Some(Pour::Away));
+    }
+
+    /// Clicked on the floor of a pit with a dent in it, beside the dent:
+    /// the whole pit fills up to its rim, from the column clicked, rather
+    /// than the dent alone; two dents side by side on a slope send the walk
+    /// round no circle.
+    #[test]
+    fn water_poured_in_a_pit_fills_the_pit() {
+        let mut w = world(1);
+        let positions: Vec<TilePos> = w.dims[0].ground().positions().collect();
+        for pos in positions {
+            let tile = w.dims[0].ground_mut().tile_mut(pos).unwrap();
+            let (ox, oz) = pos.origin();
+            for c in 0..TILE_AREA {
+                let (x, z) = (ox + (c % 128) as i32, oz + (c / 128) as i32);
+                let mut h = if (x as f32).hypot(z as f32) < 20.0 { 70.0 } else { 80.0 };
+                if (8..12).contains(&x) && (-2..2).contains(&z) {
+                    h = 67.0;
+                }
+                tile.top.set(c, h);
+            }
+        }
+        let dim = &w.dims[0];
+        let Some(Pour::Hollow { x: -10, z: 0, level: 80, columns, capped: false, near: false }) = pour_target(dim, -10, 0, 12, 256, 1 << 20) else { panic!("{:?}", pour_target(dim, -10, 0, 12, 256, 1 << 20)) };
+        let mut hist = History::default();
+        hist.begin("flood", 0);
+        let n = flood_fill(&mut hist.edit(&mut w, 0), -10, 0, Flood::Fill(80), usize::MAX);
+        hist.commit();
+        assert!(n == columns && n > 1200, "the pit, its dent with it: {n} {columns}");
     }
 
     fn hard_brush(radius: f32) -> Brush {

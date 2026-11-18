@@ -108,6 +108,9 @@ type BlockStrengthKey = ((BrushShape, massif_core::Profile, u32, usize), u32, u3
 const MIN_ZOOM: f32 = 1.0 / 2048.0;
 const MAX_ZOOM: f32 = 48.0;
 pub const FOOTER: f32 = 28.0;
+/// How high over the bottom of the map the bar of a river or a road being
+/// laid out reaches (its middle 30 points up, 40 high).
+pub const DRAFT_BAR: f32 = 50.0;
 /// The least room, in points each way, the map is framed by itself in.
 const FIT_ROOM: f32 = 64.0;
 /// Points of scrolling per brush size step (about one wheel notch).
@@ -142,8 +145,9 @@ pub fn mode_selector(ui: &mut Ui, mode: &mut MapMode, narrow: bool, id: &str) {
 }
 
 /// Per-area state of a map editor.
-/// How near a handle of a river the pointer takes hold of it, in points.
-const HANDLE_REACH: f32 = 11.0;
+/// How near a handle of a river the pointer takes hold of it, in points:
+/// on the handle drawn, or just by it.
+const HANDLE_REACH: f32 = 10.0;
 
 /// What the pointer is over, on a river being laid out.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -218,6 +222,9 @@ fn auto_rules_key(doc: &Document, tools: &ToolState) -> u64 {
 
 /// What the tag of the water tools was worked out for: the column, the
 /// map's state, the tool and its settings, a stroke's level.
+/// What a water tool says by the cursor, and where Flood's water would
+/// run down to.
+type WaterTag = (String, Option<(i32, i32)>);
 type WaterTagKey = ((i32, i32), (u64, usize, u32), Tool, (tools::WaterHeight, tools::WaterHeight, i16, i32), (bool, i16, bool), Option<i16>);
 
 pub struct MapView {
@@ -241,7 +248,7 @@ pub struct MapView {
     water: Option<(tools::WaterHold, bool)>,
     /// What the water tool in hand would do under the cursor, and what it
     /// was worked out for.
-    water_tag: Option<(WaterTagKey, Option<String>)>,
+    water_tag: Option<(WaterTagKey, Option<WaterTag>)>,
     last_time: f64,
     probe: Option<((i32, i32, u64), Option<tools::Probe>)>,
     /// Scrolling not yet turned into brush size steps.
@@ -255,8 +262,14 @@ pub struct MapView {
     /// Close up, the strength column by column over the columns the brush
     /// changes, and their corners `[x0, z0, x1, z1]`.
     block_strength: Option<(BlockStrengthKey, egui::TextureHandle, [i32; 4])>,
-    /// The anchor of the river being laid out that is being dragged.
+    /// The anchor of the river being laid out that is being dragged, and
+    /// where it was from the pointer when taken hold of, in points: held
+    /// by its edge, it does not jump to the pointer.
     river_grab: Option<usize>,
+    river_offset: Vec2,
+    /// The bar over a river being laid out, and its Dig river and Cancel
+    /// buttons, as last drawn.
+    river_bar: Option<[Rect; 3]>,
     /// Where water let go under the pointer would go (River tool, before a
     /// source is placed): for the block and the document's revision it was
     /// found for.
@@ -321,6 +334,8 @@ impl Default for MapView {
             block_strength: None,
             canvas: Rect::NOTHING,
             river_grab: None,
+            river_offset: Vec2::ZERO,
+            river_bar: None,
             spring: None,
             spring_rest: None,
             auto_preview: None,
@@ -512,21 +527,23 @@ impl MapView {
             painter.circle_stroke(p, r + 1.0, Line::new(3.0, Color32::from_black_alpha(90)));
             painter.circle_stroke(p, r, Line::new(2.0, Color32::WHITE));
         }
+        // Each point numbered in the order the river runs through them:
+        // the source blue, the points it passes white, the end it was
+        // given dark.
+        let deep = Color32::from_rgb(6, 24, 56);
         for (k, &(x, z)) in anchors.iter().enumerate() {
             let p = self.to_screen(canvas, x as f64, z as f64);
-            let grow = if lit(k) { 2.0 } else { 0.0 };
-            painter.circle_filled(p + vec2(0.0, 1.0), 8.0 + grow, Color32::from_black_alpha(70));
-            if k == 0 {
-                // The source.
-                painter.circle(p, 7.0 + grow, water, Line::new(2.0, Color32::WHITE));
-                painter.circle_filled(p, 2.2, Color32::WHITE);
+            let r = if lit(k) { 9.5 } else { 8.0 };
+            painter.circle_filled(p + vec2(0.0, 1.0), r + 1.5, Color32::from_black_alpha(70));
+            let (fill, ring, ink) = if k == 0 {
+                (water, Color32::WHITE, Color32::WHITE)
             } else if k == last && draft.layout.end.is_some() {
-                // The end it was given.
-                painter.circle(p, 6.5 + grow, Color32::WHITE, Line::new(2.5, water));
-                painter.circle_filled(p, 2.5, water);
+                (deep, water, Color32::WHITE)
             } else {
-                painter.circle(p, 5.0 + grow, Color32::WHITE, Line::new(2.0, water));
-            }
+                (Color32::WHITE, water, deep)
+            };
+            painter.circle(p, r, fill, Line::new(2.0, ring));
+            painter.text(p + vec2(0.0, 0.5), Align2::CENTER_CENTER, (k + 1).to_string(), FontId::proportional(if k >= 9 { 9.0 } else { 10.5 }), ink);
         }
     }
 
@@ -534,6 +551,7 @@ impl MapView {
     /// goes, and the buttons to dig it or drop it.
     #[allow(clippy::too_many_arguments)]
     fn river_bar(&mut self, ui: &mut Ui, painter: &egui::Painter, canvas: Rect, id: egui::Id, doc: &mut Document, tools: &mut ToolState, feedback: &mut Option<String>) {
+        self.river_bar = None;
         let Some(draft) = &tools.river_draft else { return };
         let font = FontId::proportional(12.5);
         let text = painter.layout_no_wrap(draft.summary(), font.clone(), Color32::from_gray(225));
@@ -552,6 +570,11 @@ impl MapView {
         painter.galley(pos2(bar.min.x + pad, mid - text.size().y / 2.0), text.clone(), Color32::from_gray(225));
         let dig_rect = Rect::from_min_size(pos2(bar.min.x + pad + text.size().x + 16.0, mid - h / 2.0), vec2(dig_w, h));
         let cancel_rect = Rect::from_min_size(pos2(dig_rect.max.x + gap, mid - h / 2.0), vec2(cancel_w, h));
+        // The bar takes the pointer, under its buttons too: a click or a
+        // drag begun on it never reaches the map (a button only takes
+        // clicks, and its drag would go to the map under it).
+        ui.interact(bar, id.with("river bar"), Sense::click_and_drag());
+        self.river_bar = Some([bar, dig_rect, cancel_rect]);
         let dig_hit = ui.interact(dig_rect, id.with("dig river"), Sense::click()).on_hover_text(tr!("Dig it into the map (Enter)"));
         let cancel_hit = ui.interact(cancel_rect, id.with("drop river"), Sense::click()).on_hover_text(tr!("Drop this river (Esc)"));
         let accent = theme::accent();
@@ -787,6 +810,33 @@ impl MapView {
     #[cfg(test)]
     pub fn screen_of(&self, x: f64, z: f64) -> Pos2 {
         self.to_screen(self.canvas, x, z)
+    }
+
+    /// The block position under screen point `p`, as the last frame drew
+    /// the map.
+    #[cfg(test)]
+    pub fn world_at(&self, p: Pos2) -> (f64, f64) {
+        self.to_world(self.canvas, p)
+    }
+
+    /// The tag a water tool shows by the cursor, and where Flood's water
+    /// would run down to.
+    #[cfg(test)]
+    pub fn water_tag_shown(&self) -> Option<WaterTag> {
+        self.water_tag.as_ref().and_then(|t| t.1.clone())
+    }
+
+    /// The map's area on screen, under its bar.
+    #[cfg(test)]
+    pub fn canvas(&self) -> Rect {
+        self.canvas
+    }
+
+    /// The bar over a river being laid out, its Dig river button and its
+    /// Cancel button, as last drawn.
+    #[cfg(test)]
+    pub fn river_bar_rects(&self) -> Option<[Rect; 3]> {
+        self.river_bar
     }
 
     fn to_screen(&self, canvas: Rect, x: f64, z: f64) -> Pos2 {
@@ -1142,8 +1192,10 @@ impl MapView {
         } else {
             None
         };
+        // A press let go within the same frame, on a slow one, is a click
+        // all the same.
         if let Some(button) = button
-            && response.is_pointer_button_down_on()
+            && (response.is_pointer_button_down_on() || response.clicked_by(button))
             && self.stroke.is_none()
             && self.water.is_none()
             && !self.view3d_grab
@@ -1163,6 +1215,7 @@ impl MapView {
                     (Some(draft), Some(p)) => self.river_hit(canvas, draft, &tools.river, p),
                     _ => None,
                 };
+                self.river_offset = Vec2::ZERO;
                 match (&mut tools.river_draft, hit, secondary) {
                     // The first click: where it springs (dragged, it moves).
                     (None, _, false) => {
@@ -1171,32 +1224,50 @@ impl MapView {
                             self.river_grab = Some(0);
                         }
                     }
-                    (Some(_), Some(RiverHit::Anchor(k)), false) => self.river_grab = Some(k),
-                    // A point it passes, or its chosen end, taken away.
-                    (Some(draft), Some(RiverHit::Anchor(k)), true) if k > 0 => {
-                        if k <= draft.layout.through.len() {
-                            draft.layout.through.remove(k - 1);
-                        } else {
-                            draft.layout.end = None;
+                    // A point taken hold of: dragged, it moves by as much as
+                    // the pointer, not to it.
+                    (Some(draft), Some(RiverHit::Anchor(k)), false) => {
+                        if let (Some(&a), Some(p)) = (draft.layout.anchors().get(k), pointer) {
+                            self.river_offset = self.to_screen(canvas, a.0 as f64, a.1 as f64) - p;
                         }
-                        draft.plan(doc, &tools.river, None);
+                        self.river_grab = Some(k);
+                    }
+                    // A point taken away.
+                    (Some(draft), Some(RiverHit::Anchor(k)), true) => {
+                        if tools::remove_river_point(draft, k) {
+                            draft.plan(doc, &tools.river, None);
+                        } else {
+                            tools.river_draft = None;
+                            *feedback = Some(tr!("River dropped").into());
+                        }
                     }
                     // Where it runs to by itself, held: its end, to move.
                     (Some(draft), Some(RiverHit::Mouth), false) => {
-                        draft.layout.end = draft.plan.course.last().copied();
+                        let mouth = draft.plan.course.last().copied().unwrap_or(at);
+                        if let Some(p) = pointer {
+                            self.river_offset = self.to_screen(canvas, mouth.0 as f64, mouth.1 as f64) - p;
+                        }
+                        draft.layout.end = Some(mouth);
                         self.river_grab = Some(draft.layout.anchors().len() - 1);
                     }
-                    // The course itself, held: a point it must pass, to drag.
+                    // The course itself: a point it must pass, between the
+                    // two points that leg of it joins, where clicked.
                     (Some(draft), Some(RiverHit::Course(i)), false) => {
                         let leg = draft.stops.iter().rposition(|&s| s <= i).unwrap_or(0);
                         let k = leg.min(draft.layout.through.len());
                         draft.layout.through.insert(k, at);
+                        draft.plan(doc, &tools.river, Some(k + 1));
                         self.river_grab = Some(k + 1);
                     }
-                    // Anywhere else: that is where it ends.
+                    // Anywhere else: a point more, where clicked, the last
+                    // one: the river ends there.
                     (Some(draft), None, false) => {
-                        draft.layout.end = Some(at);
-                        self.river_grab = Some(draft.layout.anchors().len() - 1);
+                        if let Some(end) = draft.layout.end.replace(at) {
+                            draft.layout.through.push(end);
+                        }
+                        let k = draft.layout.anchors().len() - 1;
+                        draft.plan(doc, &tools.river, Some(k));
+                        self.river_grab = Some(k);
                     }
                     _ => {}
                 }
@@ -1229,9 +1300,13 @@ impl MapView {
             match tools.river_draft.as_mut() {
                 Some(draft) if tools.tool == Tool::River => {
                     if down[0] {
-                        if let Some((x, z)) = world_pointer {
-                            draft.layout.set(k, (x as f32, z as f32));
-                            draft.plan(doc, &tools.river, Some(k));
+                        if let Some(p) = pointer {
+                            let at = self.to_world(canvas, p + self.river_offset);
+                            let at = (at.0 as f32, at.1 as f32);
+                            if draft.layout.anchors().get(k) != Some(&at) {
+                                draft.layout.set(k, at);
+                                draft.plan(doc, &tools.river, Some(k));
+                            }
                         }
                         ui.ctx().request_repaint();
                     } else {
@@ -1576,6 +1651,8 @@ impl MapView {
         }
         if tools.tool == Tool::River && tools.river_draft.is_some() {
             self.river_bar(ui, &painter, canvas, response.id, doc, tools, feedback);
+        } else {
+            self.river_bar = None;
         }
 
         // Brush outline.
@@ -1712,9 +1789,21 @@ impl MapView {
                 stroke,
             );
             if self.water_tag.as_ref().is_none_or(|(k, _)| *k != key) {
-                self.water_tag = Some((key, tools::water_hint(doc, tools, bx, bz, stroke)));
+                self.water_tag = Some((key, tools::water_tag(doc, tools, bx, bz, stroke)));
             }
-            if let Some((_, Some(text))) = &self.water_tag {
+            if let Some((_, Some((text, target)))) = &self.water_tag {
+                // Where the water poured here would run down to: a ring on
+                // the bottom of the hollow it fills, a dotted line to it.
+                if let Some((tx, tz)) = *target {
+                    let t = self.to_screen(canvas, tx as f64 + 0.5, tz as f64 + 0.5);
+                    if t.distance(p) > 10.0 {
+                        let ink = Color32::from_rgb(56, 146, 255);
+                        let dots = egui::Shape::dotted_line(&[p, t], Color32::from_white_alpha(200), 6.0, 1.3);
+                        painter.extend(dots);
+                        painter.circle_stroke(t, 7.0, Line::new(3.0, Color32::from_black_alpha(90)));
+                        painter.circle(t, 6.0, ink.gamma_multiply(0.85), Line::new(2.0, Color32::WHITE));
+                    }
+                }
                 // Folded past a width, so that a long reason stays a note.
                 let (pad_x, pad_y) = (theme::FLOAT_PAD_X - 2.0, theme::FLOAT_PAD_Y - 3.0);
                 let galley = painter.layout(text.clone(), FontId::proportional(12.0), Color32::from_gray(235), (theme::FLOAT_MAX_W - 2.0 * pad_x).min(canvas.width() - 2.0 * theme::PAD - 2.0 * pad_x).max(80.0));
@@ -1730,6 +1819,15 @@ impl MapView {
                     at.y = p.y - 18.0 - size.y;
                 }
                 at = at.max(edge.min);
+                // Clear of the ring where the water would go, on another
+                // side of the cursor.
+                if let Some((tx, tz)) = *target {
+                    let ring = Rect::from_center_size(self.to_screen(canvas, tx as f64 + 0.5, tz as f64 + 0.5), vec2(20.0, 20.0));
+                    let sides = [at, pos2(p.x - 18.0 - size.x, at.y), pos2(at.x, p.y - 18.0 - size.y), pos2(p.x - 18.0 - size.x, p.y - 18.0 - size.y)];
+                    if let Some(side) = sides.into_iter().find(|s| !Rect::from_min_size(*s, size).intersects(ring) && edge.contains_rect(Rect::from_min_size(*s, size))) {
+                        at = side;
+                    }
+                }
                 let back = Rect::from_min_size(at, size);
                 let radius = theme::TILE_RADIUS;
                 painter.rect_filled(back.translate(vec2(0.0, 1.5)), radius, Color32::from_black_alpha(55));

@@ -5433,6 +5433,9 @@ impl View3d {
             crate::reticle::paint(&painter, c, &crate::reticle::get(ui.ctx()));
         }
         let bar = Rect::from_min_max(pos2(rect.left(), rect.bottom() - BAR_HEIGHT), rect.right_bottom());
+        // The bar takes the pointer, under its controls too: a click or a
+        // drag begun on it never reaches the view.
+        ui.interact(bar, ui.scope_id().with("player bar"), Sense::click_and_drag());
         painter.rect_filled(bar, 0, pal.panel.gamma_multiply(0.94));
         painter.hline(bar.x_range(), bar.top(), egui::Stroke::new(1.0, pal.border));
         // What the buttons do with the tool chosen.

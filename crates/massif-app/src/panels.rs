@@ -336,6 +336,7 @@ fn water_settings(ui: &mut Ui, tools: &mut ToolState, doc: &Document, tool: Tool
     if let Some(k) = crate::widgets::button_group(ui, if flood { "flood height" } else { "brush height" }, &labels, &WaterHeight::ALL.map(|h| h == height)) {
         if flood {
             tools.flood_height = WaterHeight::ALL[k];
+            tools.flood_height_chosen = true;
         } else {
             tools.brush_height = WaterHeight::ALL[k];
         }
@@ -349,19 +350,17 @@ fn water_settings(ui: &mut Ui, tools: &mut ToolState, doc: &Document, tool: Tool
     hint(
         ui,
         &match (flood, height) {
-            (true, WaterHeight::Start) => tr!("Dry land: fills the hollow clicked up to where it would spill. On water: raises it a block.").to_owned(),
-            (true, _) => tr!("Dry land: fills the area clicked up to y {level}, wherever the land lies lower. On water: raises it a block.", level),
+            (true, WaterHeight::Start) => tr!("Dry land: the water runs down into the hollow under the click and fills it up to where it would spill. On water: raises it a block.").to_owned(),
+            (true, _) => tr!("Dry land: fills the area clicked up to y {level}, wherever the land lies lower; above y {level}, the hollow the water runs into, as Where I click does. On water: raises it a block.", level),
             (false, WaterHeight::Start) => tr!("Each stroke fills to the height where it starts: the water's surface there, or a block over the ground.").to_owned(),
             (false, _) => tr!("Water is laid up to y {level}: ground at or above it stays dry.", level),
         },
     );
     if flood {
         ui.add_space(4.0);
-        if height == WaterHeight::Start {
-            crate::widgets::checkbox(ui, &mut tools.flood_warn, tr!("Warn before flooding beyond a hollow"));
-            hint(ui, tr!("Out of a hollow, or past its rim, the water spreads wherever the land lies lower: off, it floods at once."));
-            ui.add_space(4.0);
-        }
+        crate::widgets::checkbox(ui, &mut tools.flood_warn, tr!("Warn before flooding beyond a hollow"));
+        hint(ui, tr!("Out of a hollow, or past its rim, the water spreads wherever the land lies lower: off, it floods at once."));
+        ui.add_space(4.0);
         slider_row(ui, tr!("Hold speed"), |ui| ui.add(crate::widgets::Field::new(&mut tools.water_rate, 1.0..=30.0).logarithmic(true).suffix(" b/s")));
     }
     // The height limit: apart, folded, its state in its title.

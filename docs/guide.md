@@ -1451,32 +1451,48 @@ water always raises it a block, whatever the choice.
 
 - **Where I start** (Water brush): each stroke fills to the height where
   it starts, the surface of the water there, or a block over the ground.
-  **Where I click** (Flood): the hollow clicked fills up to the lowest
-  point of its rim, where it would spill; a lake already in it counts as
-  its floor.
+  **Where I click** (Flood, and what it is set to until you pick another):
+  the water poured where you click runs down the slope into the hollow
+  below, and fills it up to the lowest point of its rim, where it would
+  spill; a lake already in it counts as its floor. Clicked in a hollow,
+  that is the hollow clicked.
 - **Sea level (63)**: the water is laid up to the map's sea level.
 - **Fixed**: up to a level of your own, set in the **Level** field shown
-  in this mode. This is the water's level, not a limit: ground at or above
-  it stays dry, and the tool says so.
+  in this mode. This is the water's level, not a limit: the Water brush
+  leaves ground at or above it dry, and says so. Flood, clicked on land
+  as high as that level or higher, fills the hollow the water runs into
+  instead, as Where I click does, and says so by the cursor (**Above y
+  63: fills this hollow instead, to y 118**) and once it is done.
 
 Over the map, a tag by the cursor says what the tool would do there:
-**Fills to y 74** (the Water brush), **Fill to y 63** or **Raise this
-water to y 64** (Flood), **Height limit y 80 reached**, or why the ground stays dry
-(**Dry here: the ground is at or above y 62.**), so that a level is never
-a surprise. Settings saved by an older version carry over: From the click
-on is Where I start (or click), off is Fixed at the level that was set.
+**Fills to y 74** (the Water brush), **Fill to y 63**, **Runs down into a
+hollow: fills it to y 104** (with a ring on the hollow and a dotted line
+to it) or **Raise this water to y 64** (Flood), **Height limit y 80
+reached**, or why the ground stays dry (**Dry here: the ground is at or
+above y 62.**), so that a level is never a surprise. Settings saved by an
+older version carry over: From the click on is Where I start, off is
+Fixed at the level that was set, for the Water brush; Flood's water
+height comes back to Where I click until you pick one.
 
 **Flood.**
 
-- Clicked on dry land, it fills the hollow (or, with Sea level or Fixed,
-  the area clicked, wherever the land lies lower). With Where I click, a
-  spot where water would only run away (a slope, a hilltop, flat ground)
-  asks first: made to stay a block over the spot, the water would spread
-  wherever the land lies lower, and the question says over how many
-  columns and up to what level; **Flood anyway** floods it (one step to
-  undo, inside the selection only when there is one), **Cancel** leaves
-  the map as it was. With **Warn before flooding beyond a hollow** off,
-  it floods at once.
+- Clicked on dry land, it puts water there: in the hollow clicked, or, on
+  a slope or a hilltop, in the hollow the water runs down into, up to
+  where it would spill (with Sea level or Fixed under the land clicked,
+  the area clicked, wherever the land lies lower). Puddles of fewer than
+  a dozen columns on the way are run past. The message says where it
+  went: **Flooded 230 columns up to 104**, or **The water ran down into
+  a hollow: flooded 230 columns up to 104**. Running into a lake that is
+  not full, it raises it up to its rim. Where the water would run away
+  (into the sea, off the map, more than 256 blocks down, or out on wide
+  flat ground), it fills the nearest hollow within 64 blocks of the click
+  instead (**No hollow here: filled the nearest one, 140 columns up to
+  96**). Only with no hollow near does it ask first: made to stay a
+  block over the spot, the water would spread wherever the land lies
+  lower, and the question says over how many columns and up to what
+  level; **Flood anyway** floods it (one step to undo, inside the
+  selection only when there is one), **Cancel** leaves the map as it was.
+  With **Warn before flooding beyond a hollow** off, it floods at once.
 - Clicked on water, whatever the water height chosen, it raises that body
   of water by one block: it covers the shore a block above it, as far as
   it reaches. A lake at y 63 clicked with Fixed at y 63 goes to y 64. At
@@ -1516,14 +1532,21 @@ The **River** tool (Water group) lays a river out from its source:
   to where it overflows, and it goes on from there — to the sea, into water
   already there, or off the map. Before the click, hovering shows where the
   water would go.
-- **Click elsewhere**: that is where it ends. The way there is worked out
-  over the land, as water would take it: along the valleys, climbing as
-  little as it can, into the water it meets, keeping near the line
-  between the two.
-- **Drag the river** anywhere along its course to bend it: the point held
-  becomes a point it must pass, and the way on either side follows the land
-  again. Drag the source, those points or the end to move them; right-click
-  one to take it away (the end: back to where the water goes by itself).
+- **Click elsewhere**: a point more, exactly where you clicked, and the
+  river ends there; each click on the land after that adds a point at the
+  end, the points already laid staying where they are. The way from one
+  point to the next is worked out over the land, as water would take it:
+  along the valleys, climbing as little as it can, into the water it
+  meets, keeping near the line between the two. The points are numbered
+  in the order the river runs through them: the source blue, the end
+  dark.
+- **Click on the river**, or drag it, anywhere along its course to bend
+  it: a point it must pass, between the two points that stretch joins.
+  Drag a point (its handle, the numbered circle) to move it: it alone
+  moves, by as much as the pointer, and a click on a handle without
+  dragging moves nothing. **Right-click** a point to take it away: the
+  others stay, the point before the end becomes the end, and the one after
+  the source the source.
 - **Dig river** (or Enter) digs it, one undoable step; **Cancel** (or Esc)
   drops it. The bar over the map says how long it is and where it goes.
 
