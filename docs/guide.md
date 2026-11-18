@@ -1365,6 +1365,9 @@ level is not a limit.
 from one choice in Tool Settings, with a line under it saying in plain
 words what will happen:
 
+For Flood, this height is the level of a new fill, on dry land: a click on
+water always raises it a block, whatever the choice.
+
 - **Where I start** (Water brush): each stroke fills to the height where
   it starts, the surface of the water there, or a block over the ground.
   **Where I click** (Flood): the hollow clicked fills up to the lowest
@@ -1376,7 +1379,8 @@ words what will happen:
   it stays dry, and the tool says so.
 
 Over the map, a tag by the cursor says what the tool would do there:
-**Fills to y 74**, **Raises to y 75**, or why the ground stays dry
+**Fills to y 74** (the Water brush), **Fill to y 63** or **Raise this
+water to y 64** (Flood), **Height limit y 80 reached**, or why the ground stays dry
 (**Dry here: the ground is at or above y 62.**), so that a level is never
 a surprise. Settings saved by an older version carry over: From the click
 on is Where I start (or click), off is Fixed at the level that was set.
@@ -1392,11 +1396,12 @@ on is Where I start (or click), off is Fixed at the level that was set.
   undo, inside the selection only when there is one), **Cancel** leaves
   the map as it was. With **Warn before flooding beyond a hollow** off,
   it floods at once.
-- Clicked on water with Where I click, it raises that body of water by one
-  block: it covers the shore a block above it, as far as it reaches. At
+- Clicked on water, whatever the water height chosen, it raises that body
+  of water by one block: it covers the shore a block above it, as far as
+  it reaches. A lake at y 63 clicked with Fixed at y 63 goes to y 64. At
   the rim of its hollow, where a block more would spill, it asks first, as
-  above. With Sea level or Fixed, it fills water lower than that level up
-  to it, and says so when the water is already there.
+  above. At the height limit, when it is on, it stays and says **Height
+  limit y 80 reached**.
 - Its **right button** lowers the body of water clicked by one block: its
   top layer goes, and the shore it uncovers stays as the ground was. When
   the last layer goes, the water is gone. **Shift + right click** drains

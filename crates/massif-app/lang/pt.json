@@ -2808,8 +2808,6 @@
  "Dry here: the height limit, y {water_limit}, is under the ground.": "Seco aqui: o limite de altura, y {water_limit}, está abaixo do terreno.",
  "Each stroke fills to the height where it starts: the water's surface there, or a block over the ground.": "Cada traço enche até à altura onde começa: a superfície da água ali, ou um bloco acima do chão.",
  "Every water tool stops here, whatever the water height: no water is laid above it.": "Todas as ferramentas de água param aqui, seja qual for a altura da água: nenhuma água é posta acima.",
- "Fills the area clicked up to y {level}, wherever the land lies lower: ground at or above it stays dry.": "Enche a área clicada até y {level}, por onde o terreno é mais baixo: o terreno a essa altura ou acima fica seco.",
- "Fills the hollow clicked up to where it would spill; on water, raises it a block.": "Enche a depressão clicada até onde transbordaria; sobre a água, sobe-a um bloco.",
  "Fills the hollow up to where it spills": "Enche a depressão até onde transborda",
  "Fills to y {level}": "Enche até y {level}",
  "Fixed": "Fixo",
@@ -2817,10 +2815,7 @@
  "Lay water under the brush. Right button: take it off.": "Pôr água sob o pincel. Botão direito: tirá-la.",
  "Lays water under the brush, up to the water height chosen in Tool Settings.": "Põe água sob o pincel, até à altura da água escolhida nas definições da ferramenta.",
  "Not in a hollow: the water would spread": "Fora de uma depressão: a água espalhar-se-ia",
- "Raises to y {level}": "Sobe para y {level}",
- "The water here is already at y {level}: choose Where I click in Tool Settings to raise it a block at a time.": "A água aqui já está em y {level}: escolha Onde clico nas definições da ferramenta para a subir bloco a bloco.",
  "The water here is at the top of the world already": "A água aqui já está no topo do mundo",
- "The water here is at y {level}": "A água aqui está em y {level}",
  "There is no land here to hold water.": "Não há terreno aqui para reter a água.",
  "Water height": "Altura da água",
  "Water is laid up to y {level}: ground at or above it stays dry.": "A água é posta até y {level}: o terreno a essa altura ou acima fica seco.",
@@ -2836,5 +2831,14 @@
  "A biome id is namespace:biome, in a-z, 0-9, _ - and .": "Um id de bioma é namespace:bioma, com a-z, 0-9, _ - e .",
  "Pick the brush in the Brushes panel; its size, intensity and rotation in Brush Settings.": "Escolha o pincel no painel Pincéis; o tamanho, a intensidade e a rotação em Ajustes do pincel.",
  "Pick the brush in the Brushes panel; its size, intensity and rotation in Brush Settings. 3D Sculpt shapes {most:.0} blocks around at most.": "Escolha o pincel no painel Pincéis; o tamanho, a intensidade e a rotação em Ajustes do pincel. Escultura 3D molda no máximo {most:.0} blocos ao redor.",
- "3D Sculpt takes {most:.0} at most": "Escultura 3D usa no máximo {most:.0}"
+ "3D Sculpt takes {most:.0} at most": "Escultura 3D usa no máximo {most:.0}",
+ "Fill to y {level}": "Encher até y {level}",
+ "Raise this water to y {level}": "Subir esta água para y {level}",
+ "Height limit y {water_limit} reached": "Limite de altura y {water_limit} atingido",
+ "Dry land: fills the hollow clicked up to where it would spill. On water: raises it a block.": "Em terra: enche a cavidade até transbordar. Na água: sobe-a um bloco.",
+ "Dry land: fills the area clicked up to y {level}, wherever the land lies lower. On water: raises it a block.": "Em terra: enche a zona até y {level}, onde o terreno estiver mais baixo. Na água: sobe-a um bloco.",
+ "Water raised by {n} blocks, to {level}: height limit reached": {
+  "one": "Água subida {n} bloco, para {level}: limite de altura atingido",
+  "other": "Água subida {n} blocos, para {level}: limite de altura atingido"
+ }
 }

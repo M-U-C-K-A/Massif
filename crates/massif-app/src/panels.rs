@@ -341,8 +341,8 @@ fn water_settings(ui: &mut Ui, tools: &mut ToolState, doc: &Document, tool: Tool
     hint(
         ui,
         &match (flood, height) {
-            (true, WaterHeight::Start) => tr!("Fills the hollow clicked up to where it would spill; on water, raises it a block.").to_owned(),
-            (true, _) => tr!("Fills the area clicked up to y {level}, wherever the land lies lower: ground at or above it stays dry.", level),
+            (true, WaterHeight::Start) => tr!("Dry land: fills the hollow clicked up to where it would spill. On water: raises it a block.").to_owned(),
+            (true, _) => tr!("Dry land: fills the area clicked up to y {level}, wherever the land lies lower. On water: raises it a block.", level),
             (false, WaterHeight::Start) => tr!("Each stroke fills to the height where it starts: the water's surface there, or a block over the ground.").to_owned(),
             (false, _) => tr!("Water is laid up to y {level}: ground at or above it stays dry.", level),
         },

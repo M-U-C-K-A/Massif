@@ -6637,8 +6637,8 @@ mod tests {
             h.run_steps(3);
             assert_eq!(h.state().tools.water_height(tool), WaterHeight::Start);
             for (label, mode, words) in [
-                (start, WaterHeight::Start, if tool == Tool::Flood { "Fills the hollow clicked" } else { "Each stroke fills to the height where it starts" }),
-                ("Sea level (63)", WaterHeight::Sea, if tool == Tool::Flood { "Fills the area clicked up to y 63" } else { "Water is laid up to y 63" }),
+                (start, WaterHeight::Start, if tool == Tool::Flood { "Dry land: fills the hollow clicked" } else { "Each stroke fills to the height where it starts" }),
+                ("Sea level (63)", WaterHeight::Sea, if tool == Tool::Flood { "Dry land: fills the area clicked up to y 63" } else { "Water is laid up to y 63" }),
                 ("Fixed", WaterHeight::Fixed, "up to y 63"),
             ] {
                 h.get_by_label(label).scroll_to_me();
