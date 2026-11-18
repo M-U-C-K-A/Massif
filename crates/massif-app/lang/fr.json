@@ -2921,10 +2921,7 @@
  },
  "Run": "Exécuter",
  "Run Script…": "Exécuter un script…",
- "A WorldPainter script run on the map, as it is": "Un script WorldPainter exécuté sur la carte, tel quel",
  "Script to run": "Script à exécuter",
- "JavaScript": "JavaScript",
- "A WorldPainter script, run as it is.": "Un script WorldPainter, exécuté tel quel.",
  "{name} (optional)": "{name} (facultatif)",
  "Arguments, one a line": "Arguments, un par ligne",
  "Running…": "En cours…",
@@ -2938,5 +2935,8 @@
  "Error; the map is as it was.": "Erreur ; la carte est restée telle quelle.",
  "Run again": "Relancer",
  "Copy output": "Copier la sortie",
- "Script {name}": "Script {name}"
+ "Script {name}": "Script {name}",
+ "Scripts": "Scripts",
+ "A script run on the map: one of Massif's, in Lua, or one of WorldPainter's, as it is": "Un script exécuté sur la carte : un de Massif, en Lua, ou un de WorldPainter, tel quel",
+ "A script: one of Massif's, in Lua, or one of WorldPainter's, run as it is.": "Un script : un de Massif, en Lua, ou un de WorldPainter, exécuté tel quel."
 }

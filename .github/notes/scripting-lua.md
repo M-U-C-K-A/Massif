@@ -1,0 +1,3 @@
+**Scripts in Lua, Massif's own API**
+
+Besides WorldPainter's scripts, File ▸ Run Script… and `massif-cli script` run scripts written for Massif itself, in Lua (Luau): the open map is `massif.map`, or open, create, save and export maps; read and write rectangles of columns at once (heights, water, terrains, biomes, layers, annotations); paint masks from images in Massif's own terms with `map:import_mask` (600 masks on a 4096 × 4096 map in under 3 seconds); run Edit ▸ Whole map's passes (erosion, rivers, lakes…) with `map:whole_map`. Lua scripts run in a sandbox: no files but those they may use, no network, no programs. It is the API Massif's plugins will be written with. See docs/scripting.md.

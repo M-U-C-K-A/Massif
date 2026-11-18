@@ -228,8 +228,86 @@ pub fn call(s: &mut Session, name: &str, args: &Value) -> R<Value> {
             slot.changed = true;
             Ok(json!({ "columns": changes.columns, "tiles": changes.tiles.len() }))
         }
+        "importMask" => {
+            let w = world_of(args)?;
+            let dim = int(args, "dim").unwrap_or(0) as i32;
+            let file = text(args, "file")?;
+            let o = args.get("options").cloned().unwrap_or(Value::Null);
+            let channel = match o.get("channel").and_then(Value::as_str) {
+                None => None,
+                Some("red") => Some(0),
+                Some("green") => Some(1),
+                Some("blue") => Some(2),
+                Some(other) => return Err(format!("Unknown channel \"{other}\": red, green or blue")),
+            };
+            let h = s.load_heightmap(file, channel)?;
+            let bits = s.heightmaps[h].header.bits.min(16);
+            let white = ((1u32 << bits) - 1) as i32;
+            let (native, grey) = native_mask(&o, white)?;
+            let num = |k: &str| o.get(k).and_then(Value::as_f64);
+            s.queue(crate::apply::MapOp {
+                world: w,
+                dim,
+                ceiling: false,
+                height_map: Some(h),
+                scale: (num("scale").unwrap_or(1.0) * 100.0).round() as i32,
+                dx: num("x").unwrap_or(0.0) as i32,
+                dy: num("z").unwrap_or(0.0) as i32,
+                grey,
+                colour: Vec::new(),
+                layer: None,
+                terrain: -1,
+                layer_value: 0,
+                mode: crate::apply::Mode::Set,
+                filter: None,
+                line: 0,
+                call: "import_mask".into(),
+                native: Some(native),
+            })?;
+            Ok(Value::Null)
+        }
         _ => Err(format!("massif.{name}() is not supported yet")),
     }
+}
+
+/// What `map:import_mask()` paints, and the mapping of the image's levels
+/// (0 to `white`) that does it: where a pixel is on (`threshold`, 0 to 1 of
+/// white, 0.5 by default; `invert` for the dark ones), the target's value;
+/// for heights, `black` to `white` across the levels.
+fn native_mask(o: &Value, white: i32) -> R<(crate::apply::Native, Vec<[i32; 4]>)> {
+    use crate::apply::{HEIGHT_OFFSET, Native};
+    let num = |k: &str| o.get(k).and_then(Value::as_f64);
+    if let Some(m) = o.get("mode").and_then(Value::as_str).filter(|m| *m != "replace") {
+        return Err(format!("map:import_mask() with mode \"{m}\" is not supported yet: it paints where the image is on"));
+    }
+    let paint = o.get("paint").and_then(Value::as_str).unwrap_or("annotations");
+    let value = || num("value").map(|v| v as i64).ok_or_else(|| format!("A mask painting {paint} needs a value: which one"));
+    let id = |v: i64| u16::try_from(v).map_err(|_| format!("{v} is not one of the map's"));
+    let native = match paint {
+        "annotations" => Native::Annotations(value()?.clamp(1, 15) as u16),
+        "terrain" => Native::Terrain(id(value()?)?),
+        "biome" => Native::Biome(id(value()?)?),
+        "cover" => Native::Cover(id(value()?)?),
+        "trees" => Native::Trees(id(value()?)?),
+        "understory" => Native::Understory(id(value()?)?),
+        "pockets" => Native::Pockets(id(value()?)?),
+        "sizes" => Native::Sizes(id(value()?)?.clamp(1, 4)),
+        "water" => Native::Water((value()? + 1).clamp(i16::MIN as i64 + 1, i16::MAX as i64) as i16),
+        "height" => {
+            let (black, white_h) = (num("black").unwrap_or(0.0).round() as i32, num("white").unwrap_or(255.0).round() as i32);
+            let from = if o.get("black_is_none").and_then(Value::as_bool).unwrap_or(false) { 1 } else { 0 };
+            return Ok((Native::Height, vec![[from, white, black + HEIGHT_OFFSET, white_h + HEIGHT_OFFSET]]));
+        }
+        other => return Err(format!("A mask cannot paint \"{other}\": annotations, terrain, biome, cover, trees, understory, pockets, sizes, water or height")),
+    };
+    let t = match o.get("threshold") {
+        Some(Value::Bool(false)) => return Err("map:import_mask() with threshold = false (a strength scattered over the columns) is not supported yet: give a threshold".into()),
+        Some(v) => v.as_f64().ok_or("threshold is a number from 0 to 1")?,
+        None => 0.5,
+    };
+    let at = ((t.clamp(0.0, 1.0) * white as f64).ceil() as i32).max(if t > 0.0 { 1 } else { 0 });
+    let rule = if o.get("invert").and_then(Value::as_bool).unwrap_or(false) { [0, white - at, 1, 1] } else { [at, white, 1, 1] };
+    Ok((native, vec![rule]))
 }
 
 fn capitalised(s: &str) -> String {

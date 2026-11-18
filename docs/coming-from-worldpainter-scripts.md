@@ -80,3 +80,10 @@ These stop the script with "… is not supported yet":
 
 Populate and Read Only do nothing in Massif, which writes finished chunks:
 it says so once.
+
+## Going further
+
+New scripts are best written for [Massif's own API, in Lua](scripting.md#massifs-own-api-in-lua):
+it reads and writes rectangles of columns at once, paints masks in Massif's
+own terms (its terrains, layers and biomes, by name), runs Edit ▸ Whole map's
+passes, and is the API Massif's plugins will be written with.

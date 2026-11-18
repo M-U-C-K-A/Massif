@@ -3262,7 +3262,7 @@ impl MassifApp {
             Command::Caves => self.open_caves(),
             Command::ImportMask => self.pick_mask(ctx, false),
             Command::RunScript => {
-                if let Some(path) = rfd::FileDialog::new().set_title(tr!("Script to run")).add_filter(tr!("JavaScript"), &["js"]).pick_file() {
+                if let Some(path) = rfd::FileDialog::new().set_title(tr!("Script to run")).add_filter(tr!("Scripts"), &["lua", "js"]).pick_file() {
                     self.dialog = Some(Dialog::Script(Box::new(crate::run_script::ScriptForm::new(path))));
                 }
             }

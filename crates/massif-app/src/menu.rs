@@ -251,7 +251,7 @@ pub fn menus(state: &State) -> Vec<Menu> {
         tipped(Command::ExportRegion, Icon::ImageDown, tr!("Export Region…"), map, tr!("A part of the map as a heightmap and masks, to work on in another tool and import back in place")),
         item(Command::Export, Icon::Package, tr!("Export to Minecraft…"), map),
         Entry::Separator,
-        tipped(Command::RunScript, Icon::FileCode, tr!("Run Script…"), map, tr!("A WorldPainter script run on the map, as it is")),
+        tipped(Command::RunScript, Icon::FileCode, tr!("Run Script…"), map, tr!("A script run on the map: one of Massif's, in Lua, or one of WorldPainter's, as it is")),
         Entry::Separator,
         tipped(Command::ImportPack, Icon::Import, tr!("Import Pack…"), free, tr!("Add a .massifpack file someone shared to your packs")),
         tipped(Command::ExportPack, Icon::FileDown, tr!("Export Pack…"), map, tr!("Make a .massifpack file of the map's layers, to share")),

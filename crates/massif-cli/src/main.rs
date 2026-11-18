@@ -36,12 +36,13 @@ USAGE
   line: its top solid block (y and block state), the water over it, its biome —
   what tools/minecraft_check.py asks the game itself to confirm.
 
-  script runs a JavaScript script: WorldPainter's (its `wp` API, `arguments`, `params`)
-  or one of Massif's own API (`massif`, see docs/scripting.md). Everything after the
-  script is its arguments. --world opens a map as the script's `world` (a .massif or a
-  WorldPainter .world), --out saves it once the script is done. A script reads and
-  writes only files in its own folder, in the current folder, ones given as arguments
-  and folders given with --allow; it has no network.
+  script runs a script: one of Massif's own API in Lua (.lua, see docs/scripting.md)
+  or one of WorldPainter's in JavaScript (.js: its wp API, arguments, params).
+  Everything after the script is its arguments. --world opens a map as the
+  script's world (a .massif or a WorldPainter .world), --out saves it once the
+  script is done. A script reads and writes only files in its own folder, in the
+  current folder, ones given as arguments and folders given with --allow; it
+  has no network.
 
   analyse prints the survival check of Edit ▸ Analyse the map as Markdown: every
   block counted as the export writes it, what breaks survival, what is missing.

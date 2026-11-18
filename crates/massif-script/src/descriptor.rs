@@ -1,6 +1,7 @@
 //! A script's descriptor, as WorldPainter reads it: `key=value` comments
 //! before the first line of code naming the script, describing it and its
-//! parameters, which the Run script dialog asks for.
+//! parameters, which the Run script dialog asks for; `//` comments in
+//! JavaScript, `--` ones in Lua.
 //!
 //! ```text
 //! // script.name=Rivers
@@ -80,7 +81,7 @@ impl Descriptor {
             if t.is_empty() {
                 continue;
             }
-            let Some(body) = t.strip_prefix("//") else { break };
+            let Some(body) = t.strip_prefix("//").or_else(|| t.strip_prefix("--")) else { break };
             let Some((key, value)) = body.trim().split_once('=') else { continue };
             let (key, value) = (key.trim(), value.trim().replace("\\n", "\n"));
             match key {

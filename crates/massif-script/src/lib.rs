@@ -1,5 +1,5 @@
 //! Scripts: WorldPainter's JavaScript scripts run as they are (on QuickJS),
-//! and Massif's own scripting API.
+//! and Massif's own scripting API, in Lua (Luau).
 //!
 //! [`run`] runs a script on a thread of its own caller's choosing: the
 //! command line's `massif-cli script`, or the app's File ▸ Run script…,
@@ -8,9 +8,9 @@
 //! * `wp`: WorldPainter's `ScriptingContext` and the Java objects its
 //!   scripts use (`world`, `dimension`, `org.pepsoft.worldpainter.Terrain`,
 //!   layers…), over Massif's map ([`session`], [`apply`], `wp.js`);
-//! * the operations Massif's own API is made of: maps read and written by
-//!   regions ([`region`]), and whole maps opened, made, saved, exported and
-//!   changed ([`api`]).
+//! * Massif's own API, in Lua: maps read and written by regions
+//!   ([`region`]), whole maps opened, made, saved, exported and changed
+//!   ([`api`]), through thin bindings (`lua.rs`) over the same operations.
 //!
 //! A script reads and writes only files under its own folder and those the
 //! user picked ([`access`]), and has no network.
@@ -21,6 +21,7 @@ pub mod apply;
 pub mod descriptor;
 pub mod image;
 mod js;
+mod lua;
 pub mod region;
 pub mod session;
 #[doc(hidden)]
@@ -134,7 +135,8 @@ pub fn run(script: &Script, options: Options) -> Outcome {
         open = Some((w, kind));
     }
     let bindings = js::Bindings { args: options.args.clone(), params: options.params.clone(), script_dir: folder.display().to_string(), open };
-    let (mut session, end) = js::run(session, &script.source, &script.file_name(), &bindings);
+    let lua = script.path.extension().is_some_and(|e| e.eq_ignore_ascii_case("lua") || e.eq_ignore_ascii_case("luau"));
+    let (mut session, end) = if lua { lua::run(session, &script.source, &script.file_name(), &bindings) } else { js::run(session, &script.source, &script.file_name(), &bindings) };
     let mut ending = match end {
         js::End::Done => Ending::Done,
         js::End::Exit(code) => Ending::Exit(code),

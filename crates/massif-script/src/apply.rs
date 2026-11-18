@@ -38,6 +38,27 @@ fn minus_one() -> i32 {
     -1
 }
 
+/// What an image paints in Massif's own terms (`map:import_mask()`), where
+/// a WorldPainter mapping paints WorldPainter's layers and terrains.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Native {
+    Annotations(u16),
+    Terrain(u16),
+    Biome(u16),
+    Cover(u16),
+    Trees(u16),
+    Understory(u16),
+    Pockets(u16),
+    Sizes(u16),
+    /// The fluid's surface, one over the top water block.
+    Water(i16),
+    /// The height the mapping gives, over [`HEIGHT_OFFSET`].
+    Height,
+}
+
+/// What a mapping to heights adds, its values being whole and not negative.
+pub const HEIGHT_OFFSET: i32 = 4096;
+
 /// One `go()` of a `MappingOp`, as the script set it up.
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -73,6 +94,10 @@ pub struct MapOp {
     /// What the script called: `applyHeightMap`, `applyLayer`, `applyTerrain`.
     #[serde(default)]
     pub call: String,
+    /// Massif's own target, which the mapping's values (1, or heights)
+    /// paint instead of WorldPainter's.
+    #[serde(skip)]
+    pub native: Option<Native>,
 }
 
 /// A filter's condition as one world has it.
@@ -163,6 +188,11 @@ impl Session {
         }
         let slot = self.slot(op.world).map_err(|_| "world not specified".to_owned())?;
         slot.dim_index(op.dim)?;
+        if op.native.is_some() {
+            self.heightmap(op.height_map.ok_or("No image given")?)?;
+            self.pending.push(op);
+            return Ok(());
+        }
         if op.mode == Mode::Terrain {
             if op.height_map.is_none() && op.layer.is_none() {
                 self.slot(op.world)?.terrain_id(op.terrain)?;
@@ -279,8 +309,8 @@ impl Session {
             None if op.mode != Mode::Terrain || op.layer.is_some() => Src::Constant(op.layer_value),
             None => Src::Constant(op.terrain),
         };
-        let bound = match op.mode {
-            Mode::Terrain => None,
+        let bound = match (op.native, op.mode) {
+            (Some(_), _) | (None, Mode::Terrain) => None,
             _ => Some(self.bind(op.layer.ok_or("layer not specified")?, op.world)?),
         };
         let filter = op.filter.map(|f| self.filter_of(f, op.world)).transpose()?;
@@ -399,6 +429,9 @@ impl Session {
             return Ok(());
         }
         touched.sort_unstable_by_key(|t| (t.0.z, t.0.x));
+        if let Some(native) = op.native {
+            return self.paint_native(w, op.dim, native, touched);
+        }
 
         // Resolve what the values become in this world.
         let mut warn = None;
@@ -526,6 +559,37 @@ impl Session {
                     crate::session::paint(&mut slot.painted, d, pos, b, order, i as usize, v as i32);
                 }
             }
+        }
+        slot.changed = true;
+        Ok(())
+    }
+}
+
+impl Session {
+    /// Write what an image gave each column as Massif's own `native`
+    /// target: the mapping's value is 1 where it paints, or the height.
+    fn paint_native(&mut self, w: usize, dim: i32, native: Native, touched: Vec<(TilePos, Vec<(u16, i16)>)>) -> R<()> {
+        let slot = self.slot(w)?;
+        let d = slot.dim_index(dim)?;
+        let level = slot.world.dims[d].ground_mut();
+        for (pos, entries) in touched {
+            let Some(t) = level.tile_mut(pos) else { continue };
+            for (i, v) in entries {
+                let i = i as usize;
+                match native {
+                    Native::Annotations(c) => t.annotations.set(i, c),
+                    Native::Terrain(id) => t.terrain.set(i, id),
+                    Native::Biome(id) => t.biome.set(i, id),
+                    Native::Cover(n) => t.cover.set(i, n),
+                    Native::Trees(n) => t.objects.set(i, n),
+                    Native::Understory(n) => t.understory.set(i, n),
+                    Native::Pockets(n) => t.pockets.set(i, n),
+                    Native::Sizes(n) => t.sizes.set(i, n),
+                    Native::Water(f) => t.fluid.set(i, f),
+                    Native::Height => t.top.set(i, (v as i32 - HEIGHT_OFFSET + 1) as f32),
+                }
+            }
+            t.compact();
         }
         slot.changed = true;
         Ok(())
