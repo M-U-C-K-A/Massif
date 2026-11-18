@@ -1079,8 +1079,8 @@ fn cmd_structure_checks(args: Args) -> Res<()> {
             }
         }
         for be in &s.block_entities {
-            let text = String::from_utf8_lossy(&be.nbt).into_owned();
-            if let Some(table) = text.split("LootTable").nth(1).and_then(|rest| rest.get(2..)).and_then(|rest| rest.split(|c: char| !(c.is_ascii_alphanumeric() || "_:/.-".contains(c))).next()) {
+            let data = massif_structures::nbt::from_bytes(&be.nbt).unwrap_or_default();
+            if let Some(table) = massif_structures::nbt::string(&data, "LootTable") {
                 let [x, y, z] = be.pos;
                 println!("{{\"structure\":{},\"loot\":[{x},{y},{z}],\"table\":{}}}", s.id, json_string(table));
             }
