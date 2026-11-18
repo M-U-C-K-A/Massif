@@ -4,7 +4,7 @@
 
 use massif_terrain::compile::compile;
 use massif_terrain::engine::{Engine, never};
-use massif_terrain::kernel::NoEnv;
+use massif_terrain::kernel::{Env, NoEnv};
 use massif_terrain::live::{Live, Mode, Phase, Ready, Settings, view_lod};
 use massif_terrain::model::Graph;
 use massif_terrain::space::{Rect, Space, TileKey};
@@ -103,8 +103,9 @@ fn a_new_version_replaces_the_old() {
     let live = live(Settings::default());
     live.set_view(Rect::new(0, 0, 2048, 2048), 4.0);
     let (a, b) = (hills(100.0), hills(160.0));
-    live.set_graph(&a, Space::new(2048), Arc::new(NoEnv), 1);
-    live.set_graph(&b, Space::new(2048), Arc::new(NoEnv), 2);
+    let env: Arc<dyn Env> = Arc::new(NoEnv);
+    live.set_graph(&a, Space::new(2048), env.clone(), 1);
+    live.set_graph(&b, Space::new(2048), env.clone(), 2);
     let tiles = idle(&live);
     // Whatever of the first was made came before the second.
     let first_b = tiles.iter().position(|t| t.revision == 2).expect("the second version's tiles");
@@ -113,6 +114,11 @@ fn a_new_version_replaces_the_old() {
     assert_eq!(shown, (0..4).map(|k| TileKey::new(2, k % 2, k / 2)).collect());
     let t = &tiles[first_b];
     assert_eq!(t.tile.values().unwrap(), &expected(&b, 2048, 2048, t.key)[..]);
+    // Only the editor's layout changed: nothing is made again.
+    let mut moved = b.clone();
+    moved.editor = serde_json::json!({ "frames": [{ "title": "Hills", "rect": [0, 0, 100, 100] }] });
+    live.set_graph(&moved, Space::new(2048), env.clone(), 2);
+    assert!(idle(&live).is_empty());
     // Going back is found in the cache.
     let before = live.engine().counters.tiles();
     live.set_graph(&a, Space::new(2048), Arc::new(NoEnv), 3);
