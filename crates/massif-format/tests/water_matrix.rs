@@ -311,7 +311,14 @@ fn check_step(world: &mut World, step: Step, course: Course) -> Found {
         // The water along the course never rises downstream.
         let mut last: Option<(i16, usize, (i32, i32))> = None;
         let mut first = Vec::new();
-        for (k, p) in course(world).into_iter().enumerate() {
+        // Water runs from the higher end to the lower one, whichever way
+        // the course was laid out (a branch may join a river further up).
+        let mut points = course(world);
+        let wet: Vec<i16> = points.iter().filter_map(|p| column(world, p.0.floor() as i32, p.1.floor() as i32).and_then(|c| c.1)).collect();
+        if wet.first() < wet.last() {
+            points.reverse();
+        }
+        for (k, p) in points.into_iter().enumerate() {
             let (x, z) = (p.0.floor() as i32, p.1.floor() as i32);
             if let Some((_, Some(w))) = column(world, x, z) {
                 if let Some((l, at, lp)) = last
