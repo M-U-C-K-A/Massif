@@ -70,13 +70,14 @@ pub struct RenderSide {
     dirty: HashSet<TilePos>,
     moving_until: f64,
     last: Option<(Orbit, Light, [u32; 2])>,
-    /// Time of the last frame's sample, smoothed.
-    sample_ms: f32,
+    /// When the image last started adding samples up, and its samples
+    /// then: how many it adds a second.
+    since: Option<(Instant, u32)>,
 }
 
 impl Default for RenderSide {
     fn default() -> Self {
-        Self { scene: None, orbit: None, light: Light::default(), texture: None, dirty: HashSet::new(), moving_until: 0.0, last: None, sample_ms: 0.0 }
+        Self { scene: None, orbit: None, light: Light::default(), texture: None, dirty: HashSet::new(), moving_until: 0.0, last: None, since: None }
     }
 }
 
@@ -194,7 +195,7 @@ impl RenderSide {
 
         // The camera: drag to turn about the point looked at, right-drag
         // (or middle) to slide over the land, the wheel to come closer.
-        let response = ui.interact(view, ui.id().with("render view"), Sense::click_and_drag());
+        let response = ui.interact(view, egui::Id::new("massif render view"), Sense::click_and_drag());
         let now = ui.input(|i| i.time);
         let extent = scene.renderer.extent();
         let span = extent.width.max(extent.depth) as f64 * 16.0;
@@ -246,13 +247,14 @@ impl RenderSide {
         // sooner and stops there.
         let most = if theme::reduce_motion(ui.ctx()) { 64 } else { MOST_SAMPLES };
         if moving || scene.renderer.samples < most {
-            let t = Instant::now();
             if let Some(cmd) = scene.renderer.render(&orbit.camera(), &self.light, moving) {
                 queue.submit([cmd]);
             }
-            let ms = t.elapsed().as_secs_f32() * 1000.0;
-            self.sample_ms = if self.sample_ms == 0.0 { ms } else { self.sample_ms * 0.9 + ms * 0.1 };
             ui.ctx().request_repaint();
+        }
+        let samples = scene.renderer.samples;
+        if samples <= 1 || self.since.is_some_and(|(_, n)| samples < n) {
+            self.since = (samples == 1).then(|| (Instant::now(), 1));
         }
         if let Some(id) = self.texture {
             ui.painter().image(id, view, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
@@ -328,8 +330,9 @@ impl RenderSide {
             row(ui, tr!("Graphics memory"), |ui| {
                 ui.label(mb(memory.total()));
             });
-            row(ui, tr!("A sample"), |ui| {
-                ui.label(format!("{:.1} ms", self.sample_ms));
+            row(ui, tr!("Samples a second"), |ui| {
+                let rate = self.since.filter(|_| samples > 4 && samples < most).map(|(t, n)| (samples - n) as f64 / t.elapsed().as_secs_f64().max(1e-3));
+                ui.label(rate.map_or_else(|| "—".to_owned(), |r| format!("{r:.0}")));
             });
         });
         col.add_space(4.0);
