@@ -3757,6 +3757,9 @@ impl MassifApp {
                     self.say(ctx, msg, false, Some(dir));
                 }
                 Outcome::Failed(message) => {
+                    if job.kind == jobs::JobKind::Structure {
+                        self.tools.structure.rt.done(None, Some(message.clone()));
+                    }
                     self.after_save = None;
                     self.task_done(ctx, Cue::Error, tr!("Something failed"), &message, secs);
                     self.say(ctx, message, true, None);
@@ -3957,6 +3960,43 @@ impl MassifApp {
                             form.zone = Some((zone, base));
                         }
                         self.dialog = Some(Dialog::ImportMask(Box::new(form)));
+                    }
+                }
+                Outcome::Structure { built, at, replace, dim } => {
+                    if other_map || dim != self.doc.dim {
+                        self.tools.structure.rt.done(None, None);
+                        crate::sounds::play(Cue::Warning);
+                        self.say(ctx, tr!("Structure: {meanwhile}, nothing was done", meanwhile), true, None);
+                    } else {
+                        let mut built = *built;
+                        crate::structure_tool::colors_of(&mut built.structure, self.blocks.catalogue.as_deref());
+                        let s = &built.structure;
+                        let name = crate::i18n::tr_name(&s.name).to_owned();
+                        // A number of its own, whatever was placed meanwhile.
+                        let structures = &self.doc.world.dims[dim].structures;
+                        built.structure.id = massif_core::structures::next_id(structures);
+                        let id = built.structure.id;
+                        let replaced = replace.and_then(|r| structures.iter().position(|t| t.id == r));
+                        self.doc.history.begin(tr!("Place {name}", name = name.clone()), dim);
+                        {
+                            let mut edit = self.doc.history.edit(&mut self.doc.world, 0);
+                            if let Some(k) = replaced {
+                                edit.structures_mut().remove(k);
+                            }
+                            massif_structures::vanilla::apply(&mut edit, &built);
+                        }
+                        self.doc.commit();
+                        let s = &built.structure;
+                        let mut msg = tr!("{name} placed: {blocks} blocks, {chests} block entities, {entities} entities, y {y0}…{y1}, in {secs:.1} s", name, blocks = s.block_count(), chests = s.block_entities.len(), entities = s.entities.len(), y0 = s.min[1], y1 = s.max[1], secs);
+                        if !built.unknown.is_empty() {
+                            log::info!("structure {}: not known: {:?}", s.name, built.unknown);
+                        }
+                        if s.kind == "minecraft:ancient_city" {
+                            let shriekers: usize = s.sections.iter().map(|sec| sec.blocks.iter().filter(|b| s.palette[b.1 as usize].starts_with("minecraft:sculk_shrieker[can_summon=true")).count()).sum();
+                            msg.push_str(&tr!(", {shriekers} shriekers that call the warden", shriekers));
+                        }
+                        self.tools.structure.rt.done(Some((at.0, at.1, id)), Some(msg.clone()));
+                        self.say(ctx, msg, false, None);
                     }
                 }
                 Outcome::Cancelled => {
@@ -5486,6 +5526,17 @@ impl MassifApp {
             && let Some(outcome) = crate::pack_share::dialog(ctx, &mut self.pack_dialog, &mut self.layers_ui.library, &self.doc.world.registry, &mut self.settings.pack_author)
         {
             self.pack_outcome(ctx, outcome);
+        }
+        // The Structure tool: the game's files read once, a click built off
+        // the interface's thread.
+        if self.tools.tool == Tool::Structure || self.tools.structure.rt.is_busy() {
+            self.tools.structure.rt.ensure_library(ctx, self.settings.minecraft_jar.clone(), self.settings.mod_jars.clone());
+            if let Some((x, z, replace, lib)) = self.tools.structure.rt.take_pending() {
+                let snapshot = self.doc.world.snapshot();
+                let id = massif_core::structures::next_id(&self.doc.dimension().structures);
+                let req = self.tools.structure.request(x, z, id);
+                self.jobs.push(Job::structure(ctx, snapshot, self.doc.dim, lib, req, replace).on(self.doc.generation));
+            }
         }
         if let Some(biomes) = self.tools.run_auto.take() {
             let snapshot = self.doc.world.snapshot();
@@ -12670,6 +12721,69 @@ mod tests {
         for (a, b) in before.iter().zip(&after) {
             assert!((a - b).abs() < 0.02, "{a} came back as {b}");
         }
+    }
+
+    /// The Structure tool: a click places a village (from a tiny one made
+    /// by hand, the game not being installed everywhere), as one step to
+    /// undo; a right-click takes it away; Draw it again puts another draw
+    /// in its place.
+    #[test]
+    fn placing_structures() {
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        {
+            let s = h.state_mut();
+            s.tools.structure.rt.set_library(std::sync::Arc::new(massif_structures::testing::village()));
+            s.tools.select(Tool::Structure);
+            s.tools.structure.kind = "village_plains".into();
+        }
+        h.run_steps(3);
+        let wait = |h: &mut egui_kittest::Harness<'static, MassifApp>| {
+            let started = std::time::Instant::now();
+            while !h.state().jobs.is_empty() || h.state().tools.structure.rt.is_busy() {
+                assert!(started.elapsed().as_secs() < 60, "placing timed out");
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            h.run_steps(2);
+        };
+        let note = {
+            let s = h.state_mut();
+            crate::structure_tool::click(&mut s.doc, &mut s.tools, 30, 30, false)
+        };
+        assert!(note.is_some_and(|n| n.contains("Plains village")));
+        h.run_steps(2);
+        wait(&mut h);
+        assert_eq!(h.state().doc.history.undo_label(), Some("Place Plains village"));
+        let placed = h.state().doc.dimension().structures.clone();
+        assert_eq!(placed.len(), 1);
+        let s = &placed[0];
+        assert!(s.columns().contains(30, 30) || s.columns().intersect(&massif_core::BlockRect::new(0, 0, 60, 60)).width() > 0);
+        assert!(!s.block_entities.is_empty() && !s.entities.is_empty(), "the houses' chests and villagers");
+        assert_eq!(s.colors.len(), s.palette.len(), "its blocks' colours");
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("structure-tool-placed.png")).unwrap();
+        }
+        // Drawn again: another in its place, one step.
+        {
+            let s = h.state_mut();
+            s.tools.structure.seed += 1;
+        }
+        let (x, z) = ((s.min[0] + s.max[0]) / 2, (s.min[2] + s.max[2]) / 2);
+        // Taken away with the right button, on its columns.
+        let inside = if s.columns().contains(x, z) { (x, z) } else { (s.min[0], s.min[2]) };
+        let note = {
+            let st = h.state_mut();
+            crate::structure_tool::click(&mut st.doc, &mut st.tools, inside.0, inside.1, true)
+        };
+        assert!(note.is_some());
+        assert!(h.state().doc.dimension().structures.is_empty());
+        assert_eq!(h.state().doc.history.undo_label(), Some("Remove Plains village"));
+        h.state_mut().doc.undo();
+        assert_eq!(h.state().doc.dimension().structures.len(), 1);
+        h.state_mut().doc.undo();
+        assert!(h.state().doc.dimension().structures.is_empty(), "placed in one step");
     }
 
     /// Edit ▸ Caves…: the dialog pictures the caves of the layer (a plan

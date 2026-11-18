@@ -75,6 +75,7 @@ mod startup;
 #[allow(dead_code)]
 mod terrain_live;
 mod terrain;
+mod structure_tool;
 mod terrain_view;
 mod theme;
 mod tools;

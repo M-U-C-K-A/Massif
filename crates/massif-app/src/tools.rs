@@ -47,6 +47,9 @@ pub enum Tool {
     CaveBiome,
     /// A combined layer: several layers painted at once.
     Combined,
+    /// One of the game's structures — a village, an Ancient City — placed
+    /// with a click.
+    Structure,
     /// The biome the land calls for; the terrain the biome calls for.
     AutoBiome,
     AutoPaint,
@@ -94,7 +97,7 @@ impl Tool {
             &[Tool::PaintTerrain, Tool::Gradient, Tool::PaintBiome, Tool::AutoPaint, Tool::AutoBiome, Tool::Annotate],
         ),
         (SELECT_GROUP, Icon::SquareDashed, &[Tool::SelectRect, Tool::SelectEllipse, Tool::SelectLasso, Tool::SelectBrush]),
-        (tn!("Decor"), Icon::Shrub, &[Tool::Cover, Tool::Objects, Tool::TreeSize, Tool::Pockets, Tool::Slabs, Tool::Combined]),
+        (tn!("Decor"), Icon::Shrub, &[Tool::Cover, Tool::Objects, Tool::TreeSize, Tool::Pockets, Tool::Slabs, Tool::Combined, Tool::Structure]),
         (WATER_GROUP, Icon::Droplet, &[Tool::Water, Tool::Flood, Tool::River]),
         (tn!("Underground"), Icon::Pickaxe, &[Tool::Caves, Tool::CaveBiome]),
         (tn!("Levels"), Icon::Layers, &[Tool::StampSlab, Tool::EraseSlab]),
@@ -103,7 +106,7 @@ impl Tool {
 
     /// Tools new in this version: the Tools panel marks them until they
     /// are first tried.
-    pub const NEW: [Tool; 4] = [Tool::Gradient, Tool::Slabs, Tool::Caves, Tool::CaveBiome];
+    pub const NEW: [Tool; 5] = [Tool::Gradient, Tool::Slabs, Tool::Caves, Tool::CaveBiome, Tool::Structure];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -125,6 +128,7 @@ impl Tool {
             Tool::Caves => tr!("Caves"),
             Tool::CaveBiome => tr!("Cave biome"),
             Tool::Combined => tr!("Combined layer"),
+            Tool::Structure => tr!("Structure"),
             Tool::AutoBiome => tr!("Auto biome"),
             Tool::AutoPaint => tr!("Auto paint"),
             Tool::Eyedropper => tr!("Eyedropper"),
@@ -164,6 +168,7 @@ impl Tool {
             Tool::Caves => Icon::Shovel,
             Tool::CaveBiome => Icon::Leaf,
             Tool::Combined => Icon::Combine,
+            Tool::Structure => Icon::Castle,
             Tool::AutoBiome => Icon::Earth,
             Tool::AutoPaint => Icon::WandSparkles,
             Tool::Eyedropper => Icon::Pipette,
@@ -231,6 +236,7 @@ impl Tool {
             Tool::Caves => tr!("Paint where a cave layer carves its caves: chambers, tunnels, ravines and lakes of water and lava, as the game's. Right button: no caves there."),
             Tool::CaveBiome => tr!("Paint a cave biome between two heights: lush caves, dripstone caves, the deep dark, each decorated as in the game. Right button: rub it out."),
             Tool::Combined => tr!("Paint several layers at once: a terrain, a biome, a ground cover, trees, pockets, each over its share. Right button: rub out what it paints."),
+            Tool::Structure => tr!("Click: place one of the game's structures — a village, an Ancient City, Trial Chambers. Right button: take away the structure clicked."),
             Tool::AutoBiome => {
                 tr!("Sets the biome the land calls for: beach, forest, peaks…")
             }
@@ -265,7 +271,7 @@ impl Tool {
     }
 
     pub const fn uses_brush(self) -> bool {
-        !matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso)
+        !matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::Structure)
     }
 
     /// The tools that draw the selection.
@@ -275,7 +281,7 @@ impl Tool {
 
     /// Tools that apply once per click rather than continuously.
     pub const fn is_click(self) -> bool {
-        matches!(self, Tool::Eyedropper | Tool::Flood)
+        matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Structure)
     }
 
     pub const fn needs_slab_level(self) -> bool {
@@ -307,7 +313,7 @@ impl Tool {
             // passes): Smooth3d, from its shortcut, melts sculpted matter.
             Tool::Smooth3d => Use3d::Smooth,
             Tool::PaintTerrain => Use3d::Paint,
-            Tool::Eyedropper | Tool::Flood => Use3d::Click,
+            Tool::Eyedropper | Tool::Flood | Tool::Structure => Use3d::Click,
             Tool::Pan | Tool::Road | Tool::River | Tool::Annotate | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush => Use3d::MapOnly,
             Tool::Smooth
             | Tool::Flatten
@@ -636,6 +642,8 @@ pub struct ToolState {
     pub select_feather: i32,
     /// "Select by": what, and its limits.
     pub select_by: crate::select::SelectBy,
+    /// The Structure tool: what it places and how.
+    pub structure: crate::structure_tool::StructureSettings,
 }
 
 /// The 3D Sculpt editor's own settings. It works with the tool of the
@@ -1246,6 +1254,7 @@ impl Default for ToolState {
             select_mode: Default::default(),
             select_feather: 0,
             select_by: Default::default(),
+            structure: Default::default(),
         }
     }
 }
@@ -1829,7 +1838,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                     massif_core::voxel::sculpt(&mut edit, brush, [x, y, z], strength, mode);
                 }
             }
-            Tool::Eyedropper | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush => {}
+            Tool::Eyedropper | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush | Tool::Structure => {}
         }
     }
     // A combined layer's pockets, painted from another level: the same
@@ -2666,6 +2675,7 @@ pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse:
                 }
             }
         }
+        Tool::Structure => crate::structure_tool::click(doc, tools, x, z, inverse),
         // Flood's own button, the right one: a block lower (Shift: drained
         // whole).
         Tool::Flood => {

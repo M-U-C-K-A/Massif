@@ -523,6 +523,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
         Tool::Caves => crate::caves::cave_settings(ui, tools, doc),
         Tool::CaveBiome => crate::caves::cave_biome_settings(ui, tools, doc),
         Tool::Combined => combined_settings(ui, tools, doc),
+        Tool::Structure => crate::structure_tool::settings(ui, tools, doc),
         Tool::PaintBiome => {
             let reg = &doc.world.registry;
             let def = reg.biome(BiomeId(tools.biome));
@@ -662,7 +663,7 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
     }
 
     // Which level the tool edits.
-    if !matches!(tool, Tool::Pan | Tool::Flood | Tool::Eyedropper) && !tool.is_sculpt() && !tool.is_select() {
+    if !matches!(tool, Tool::Pan | Tool::Flood | Tool::Eyedropper | Tool::Structure) && !tool.is_sculpt() && !tool.is_select() {
         section(ui, Icon::Layers, tr!("Level"));
         let levels: Vec<(String, LevelKind)> = doc.dimension().levels.iter().map(|l| (crate::i18n::tr_name(&l.name).to_owned(), l.kind)).collect();
         let pick = |ui: &mut Ui, doc: &mut Document| {

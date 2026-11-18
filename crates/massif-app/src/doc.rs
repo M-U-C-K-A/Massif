@@ -183,6 +183,10 @@ pub struct Document {
     /// What the map's check found and set right as it was opened, to say
     /// once (see [`Document::check`]).
     checked: Option<String>,
+    /// The structures the views drew last, by where they are in memory,
+    /// with their columns: one placed or taken away (by a tool, an undo)
+    /// has its tiles drawn again.
+    shown_structures: Vec<(usize, massif_core::BlockRect)>,
 }
 
 /// The least time between two readings of the map's own terrain
@@ -207,6 +211,7 @@ impl Document {
             heights: HeightsJob::default(),
             read_only: None,
             checked: None,
+            shown_structures: Vec::new(),
         }
         .check()
     }
@@ -377,6 +382,17 @@ impl Document {
         }
         if dim.voxels.has_dirty() {
             set.extend(dim.voxels.take_dirty());
+        }
+        // Structures placed or taken away since: their tiles.
+        let now: Vec<(usize, massif_core::BlockRect)> = dim.structures.iter().map(|s| (std::sync::Arc::as_ptr(s) as usize, s.columns())).collect();
+        if now != self.shown_structures {
+            for (ptr, rect) in now.iter().chain(&self.shown_structures) {
+                let in_both = now.iter().any(|e| e.0 == *ptr) && self.shown_structures.iter().any(|e| e.0 == *ptr);
+                if !in_both {
+                    set.extend(rect.tiles());
+                }
+            }
+            self.shown_structures = now;
         }
         set.into_iter().collect()
     }
