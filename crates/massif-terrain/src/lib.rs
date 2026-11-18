@@ -28,6 +28,7 @@ pub mod filters;
 pub mod geom;
 pub mod gpu;
 pub mod kernel;
+pub mod live;
 pub mod model;
 pub mod noise;
 mod nodes;
