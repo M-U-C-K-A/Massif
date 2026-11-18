@@ -126,9 +126,45 @@ pub struct Structure {
     /// The data version of the game it was read from.
     #[serde(default)]
     pub data_version: i32,
+    /// The colour of each entry of its palette, the game's own when it was
+    /// known (see [`Structure::color`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub colors: Vec<[u8; 3]>,
 }
 
 impl Structure {
+    /// The colour of palette entry `k`.
+    pub fn color(&self, k: u16) -> [u8; 3] {
+        match self.colors.get(k as usize) {
+            Some(&c) => c,
+            None => self.palette.get(k as usize).map_or([125, 125, 125], |s| crate::objects::guess_color(s)),
+        }
+    }
+
+    /// Whether palette entry `k` is air, which shows nothing.
+    pub fn is_air(&self, k: u16) -> bool {
+        self.palette.get(k as usize).is_none_or(|s| crate::objects::is_nothing(s))
+    }
+
+    /// Its topmost block in each of its columns, by column of sections:
+    /// `(x, z) → (height, state)`, air left out.
+    pub fn tops(&self) -> std::collections::HashMap<(i32, i32), (i32, u16)> {
+        let mut out: std::collections::HashMap<(i32, i32), (i32, u16)> = std::collections::HashMap::new();
+        for sec in &self.sections {
+            for &(i, k) in &sec.blocks {
+                if self.is_air(k) {
+                    continue;
+                }
+                let [x, y, z] = sec.block(i);
+                let e = out.entry((x, z)).or_insert((y, k));
+                if y > e.0 {
+                    *e = (y, k);
+                }
+            }
+        }
+        out
+    }
+
     /// The columns its blocks stand in.
     pub fn columns(&self) -> BlockRect {
         BlockRect::new(self.min[0], self.min[2], self.max[0] + 1, self.max[2] + 1)
@@ -287,13 +323,14 @@ mod tests {
             waterlog: true,
             biome: None,
             data_version: 4671,
+            colors: Vec::new(),
         };
         // A floor of planks 3 × 3 at y 64 across a section's edge, air
         // above it, a chest in the middle.
         let mut sections: std::collections::BTreeMap<[i32; 3], Vec<(u16, u16)>> = Default::default();
-        for x in -1..2 {
-            for z in 0..3 {
-                for y in 64..67 {
+        for x in -1i32..2 {
+            for z in 0i32..3 {
+                for y in 64i32..67 {
                     let k = if y == 64 { 1 } else if (x, y, z) == (0, 65, 1) { 2 } else { 0 };
                     sections.entry([x.div_euclid(16), y.div_euclid(16), z.div_euclid(16)]).or_default().push((Section::index(x, y, z), k));
                 }
@@ -326,7 +363,21 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         let back: Structure = serde_json::from_str(&json).unwrap();
         assert_eq!(back, s);
-        assert_eq!(next_id(&[std::sync::Arc::new(s)]), 2);
+        assert_eq!(next_id(&[std::sync::Arc::new(s.clone())]), 2);
         assert_eq!(next_id(&[]), 1);
+        // The boxes the caves keep their fluids from: its own (it has no
+        // pieces), max exclusive, in the tiles it reaches only.
+        let mut dim = crate::world::Dimension::new(crate::world::DimensionKind::Overworld, -64, 320);
+        dim.structures.push(std::sync::Arc::new(s.clone()));
+        assert_eq!(dim.structure_boxes(crate::coords::TilePos::new(0, 0)), vec![([-1, 64, 0], [2, 67, 3])]);
+        assert_eq!(dim.structure_boxes(crate::coords::TilePos::new(-1, 0)), vec![([-1, 64, 0], [2, 67, 3])]);
+        assert!(dim.structure_boxes(crate::coords::TilePos::new(3, 3)).is_empty());
+        // With pieces: theirs.
+        let mut t = s;
+        t.pieces = vec![Piece { min: [10, 60, 10], max: [19, 70, 19], template: String::new(), origin: [10, 60, 10], turn: 0, depth: 0, ground_delta: 1, rigid: true, processors: String::new() }];
+        t.min = [-1, 60, 0];
+        t.max = [19, 70, 19];
+        dim.structures[0] = std::sync::Arc::new(t);
+        assert_eq!(dim.structure_boxes(crate::coords::TilePos::new(0, 0)), vec![([10, 60, 10], [20, 71, 20])]);
     }
 }
