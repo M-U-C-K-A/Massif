@@ -66,11 +66,13 @@ struct BlockStates<'a> {
     data: Option<fastnbt::borrow::LongArray<'a>>,
 }
 
+/// A state of a section's palette: `Name` and `Properties` up to 1.21,
+/// `id` and `properties` since 26.1.
 #[derive(Deserialize)]
 struct PaletteEntry<'a> {
-    #[serde(rename = "Name", borrow)]
+    #[serde(rename = "Name", alias = "id", borrow)]
     name: Cow<'a, str>,
-    #[serde(rename = "Properties", default)]
+    #[serde(rename = "Properties", alias = "properties", default)]
     properties: BTreeMap<String, String>,
 }
 
@@ -78,7 +80,16 @@ struct PaletteEntry<'a> {
 /// with the sections from `min_y` (a multiple of 16) up, `sections` of
 /// them. `None`: not a chunk of that kind.
 pub fn decode(nbt: &[u8], materials: &Materials, min_y: i32, sections: usize) -> Option<Chunk> {
-    let chunk: NbtChunk = fastnbt::from_bytes(nbt).ok()?;
+    let chunk: NbtChunk = match fastnbt::from_bytes(nbt) {
+        Ok(c) => c,
+        Err(e) => {
+            log::debug!("a chunk that does not read: {e}");
+            if std::env::var_os("MASSIF_RENDER_DEBUG").is_some() {
+                eprintln!("a chunk that does not read: {e}; starts {:?}", &nbt[..nbt.len().min(16)]);
+            }
+            return None;
+        }
+    };
     let mut out = Chunk { x: chunk.x, z: chunk.z, sections: vec![Section::EMPTY; sections] };
     let mut ids = Vec::new();
     for section in &chunk.sections {
@@ -152,3 +163,4 @@ mod tests {
         assert_eq!(unpack(&[3], None::<std::iter::Empty<i64>>), Section::Uniform(3));
     }
 }
+

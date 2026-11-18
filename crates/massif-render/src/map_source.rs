@@ -143,6 +143,7 @@ impl MapBuilder {
                                 scratch.lay_ores(&ctx, &stack, pos);
                                 let steady = if planner.as_ref().is_some_and(|p| p.needs(pos)) { massif_core::water::steady_tile(d, pos, planner.as_ref()) } else { Vec::new() };
                                 let mut patch = Patch::new(pos.x * TILE_CHUNKS, pos.z * TILE_CHUNKS, TILE_CHUNKS as usize, TILE_CHUNKS as usize, sections);
+                                patch.edges = edges(d, pos, ctx.min_y, sections);
                                 for cz in 0..TILE_CHUNKS as usize {
                                     for cx in 0..TILE_CHUNKS as usize {
                                         let nbt = build_chunk(&ctx, &stack, pos, cx, cz, &objects, &steady, scratch);
@@ -217,6 +218,37 @@ impl Drop for MapBuilder {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
     }
+}
+
+/// What the tiles around `pos` hold just beside it, from their solid
+/// spans (the levels, what they carve and the sculpted volumes): the
+/// faces of the tile's sides against their ground are hidden, and not
+/// kept as walls between the tiles. The objects and the caves the export
+/// adds are not in the spans: the faces against them are only kept where
+/// the spans have air.
+fn edges(d: &massif_core::world::Dimension, pos: TilePos, min_y: i32, sections: usize) -> [Option<Vec<u8>>; 4] {
+    let h = sections * 16;
+    let mut spans = Vec::new();
+    let mut out = [None, None, None, None];
+    for (side, (dx, dz)) in [(-1, 0), (1, 0), (0, -1), (0, 1)].into_iter().enumerate() {
+        let Some(stack) = TileStack::new(d, TilePos::new(pos.x + dx, pos.z + dz), true) else { continue };
+        let mut edge = vec![0u8; 128 * h];
+        for along in 0..128usize {
+            let (x, z) = match side {
+                0 => (127, along),
+                1 => (0, along),
+                2 => (along, 127),
+                _ => (along, 0),
+            };
+            stack.spans(massif_core::coords::cell_index(x, z), &mut spans);
+            for s in &spans {
+                let (y0, y1) = ((s.y0 - min_y).clamp(0, h as i32) as usize, (s.y1 - min_y).clamp(0, h as i32) as usize);
+                edge[along * h + y0..along * h + y1].fill(1);
+            }
+        }
+        out[side] = Some(edge);
+    }
+    out
 }
 
 /// The tiles of a dimension, nearest `(x, z)` (blocks) first.
