@@ -211,9 +211,9 @@ struct Layout {
     /// written is not written again.
     by_ptr: HashMap<usize, (u64, u32)>,
     by_content: HashMap<(u32, u32), Vec<(u64, usize)>>,
-    /// The sections of structures written, by the structures they hold: a
-    /// save point's, mostly the map's own, are not written again.
-    structures: HashMap<Vec<usize>, u32>,
+    /// The sections of structures written, by what they hold: a save
+    /// point's, mostly the map's own, are not written again.
+    structures: HashMap<Vec<u8>, u32>,
 }
 
 /// The address of a blob's bytes, to know a shared tile without reading it.
@@ -307,13 +307,13 @@ impl Layout {
             let structures = if dim.structures.is_empty() {
                 None
             } else {
-                let key: Vec<usize> = dim.structures.iter().map(|s| std::sync::Arc::as_ptr(s) as usize).collect();
-                match self.structures.get(&key) {
+                let list: Vec<&massif_core::structures::Structure> = dim.structures.iter().map(|s| &**s).collect();
+                let json = serde_json::to_vec(&list)?;
+                match self.structures.get(&json) {
                     Some(&id) => Some(id),
                     None => {
-                        let list: Vec<&massif_core::structures::Structure> = dim.structures.iter().map(|s| &**s).collect();
-                        let id = self.section(structure_kind, FLAG_ZSTD, codec::zstd_compress(&serde_json::to_vec(&list)?));
-                        self.structures.insert(key, id);
+                        let id = self.section(structure_kind, FLAG_ZSTD, codec::zstd_compress(&json));
+                        self.structures.insert(json, id);
                         Some(id)
                     }
                 }
@@ -657,8 +657,10 @@ struct Parsed<'a> {
     voxels: Vec<(u32, Vec<u8>)>,
     /// Selections per `SELN` section id, still encoded.
     selections: Vec<(u32, Vec<u8>)>,
-    /// Structures per `STRC` section id, still encoded.
+    /// Structures per `STRC` section id, still encoded, and those read: a
+    /// save point's that are the map's are one in memory.
     structures: Vec<(u32, Vec<u8>)>,
+    structures_read: std::sync::Mutex<HashMap<u32, Vec<std::sync::Arc<massif_core::structures::Structure>>>>,
     /// The save points, and their pictures per `VTHM` section id.
     points: Vec<PointDoc>,
     point_thumbnails: Vec<(u32, Vec<u8>)>,
@@ -778,6 +780,7 @@ fn parse(src: &dyn Source) -> Result<Parsed<'_>> {
         voxels,
         selections,
         structures,
+        structures_read: Default::default(),
         points,
         point_thumbnails,
     })
@@ -850,11 +853,19 @@ fn read_dims(parsed: &Parsed, docs: &[DimDoc], frames: &mut Frames, keep: bool) 
             dimension.selection = (!selection.is_empty()).then(|| std::sync::Arc::new(selection));
         }
         if let Some(id) = dim.structures {
-            let Some((_, raw)) = parsed.structures.iter().find(|(i, _)| *i == id) else {
-                return corrupt(format!("the structures {id} are missing"));
+            let known = parsed.structures_read.lock().unwrap_or_else(|e| e.into_inner()).get(&id).cloned();
+            dimension.structures = match known {
+                Some(list) => list,
+                None => {
+                    let Some((_, raw)) = parsed.structures.iter().find(|(i, _)| *i == id) else {
+                        return corrupt(format!("the structures {id} are missing"));
+                    };
+                    let list: Vec<massif_core::structures::Structure> = serde_json::from_slice(raw)?;
+                    let list: Vec<std::sync::Arc<massif_core::structures::Structure>> = list.into_iter().map(std::sync::Arc::new).collect();
+                    parsed.structures_read.lock().unwrap_or_else(|e| e.into_inner()).insert(id, list.clone());
+                    list
+                }
             };
-            let list: Vec<massif_core::structures::Structure> = serde_json::from_slice(raw)?;
-            dimension.structures = list.into_iter().map(std::sync::Arc::new).collect();
         }
         dims.push(dimension);
     }
@@ -1090,6 +1101,7 @@ mod tests {
             waterlog: true,
             biome: None,
             data_version: 4671,
+            colors: Vec::new(),
         };
         hut.finish();
         hist.edit(&mut world, 0).structures_mut().push(std::sync::Arc::new(hut));
@@ -1415,8 +1427,9 @@ mod tests {
         let alone = to_bytes(&mut map_alone);
         let with_points = to_bytes(&mut world);
         // Every section older versions know is the same, at the same place
-        // but for the frames the points add before them.
-        let old = [KIND_META, KIND_TILE_INDEX, KIND_VOXELS, KIND_SELECTION, KIND_THUMBNAIL];
+        // but for the frames the points add before them. (The map's
+        // structures, which versions before them skip, are the map's own.)
+        let old = [KIND_META, KIND_TILE_INDEX, KIND_VOXELS, KIND_SELECTION, KIND_THUMBNAIL, KIND_STRUCTURES];
         let kinds = |bytes: &[u8]| -> Vec<[u8; 4]> {
             let (at, len) = (u64_at(bytes, 0x10) as usize, u32_at(bytes, 0x18) as usize);
             bytes[at..at + len].as_chunks::<SECTION_LEN>().0.iter().map(|e| e[..4].try_into().unwrap()).collect()
@@ -1424,7 +1437,7 @@ mod tests {
         assert!(kinds(&alone).iter().all(|k| old.contains(k)));
         assert!(kinds(&with_points).iter().any(|k| !old.contains(k)));
         // A reader that knows none of the new sections reads the map as it is.
-        let seen_by_old = without_sections(&with_points, &[KIND_POINTS, KIND_POINT_INDEX, KIND_POINT_VOXELS, KIND_POINT_SELECTION, KIND_POINT_THUMBNAIL]);
+        let seen_by_old = without_sections(&with_points, &[KIND_POINTS, KIND_POINT_INDEX, KIND_POINT_VOXELS, KIND_POINT_SELECTION, KIND_POINT_THUMBNAIL, KIND_POINT_STRUCTURES]);
         let mut back = read(&seen_by_old).unwrap();
         assert!(back.points.is_empty());
         assert_same(&mut map_alone, &mut back);
