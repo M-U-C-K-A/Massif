@@ -3156,16 +3156,11 @@ impl MassifApp {
             let title = format!("{}{}", self.doc.title(), if self.doc.is_modified() { " •" } else { "" });
             let bar = ui.max_rect();
             let left = ui.cursor().min.x;
+            // The right end holds no button of its own (the theme is in
+            // Settings ▸ Appearance and the View menu): only the offer of a
+            // newer version, at the bar's margin, as the first command is at
+            // the left one.
             let right = ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
-                let (icon, next) = match self.settings.theme {
-                    ThemeChoice::System => (Icon::SunMoon, ThemeChoice::Light),
-                    ThemeChoice::Light => (Icon::Sun, ThemeChoice::Dark),
-                    ThemeChoice::Dark => (Icon::Moon, ThemeChoice::System),
-                };
-                if bar_button(ui, tr!("Theme"), true, false, |p, r, c| glyph_in(p, r, icon, c)).clicked() {
-                    self.settings.theme = next;
-                    crate::sounds::play(Cue::Toggle);
-                }
                 if let Some(version) = self.update_offer().map(|r| r.tag_name.trim_start_matches('v').to_owned())
                     && update_pill(ui, &version).clicked()
                 {
@@ -7139,6 +7134,45 @@ mod tests {
         let image = h.render().expect("rendered");
         let crop = image::imageops::crop_imm(&image, 0, 0, 640, 48).to_image();
         crop.save(dir.join("menu-bar-mac.png")).unwrap();
+    }
+
+    /// The title bar has no theme button: the theme follows the system
+    /// unless chosen in Settings ▸ Appearance or the View menu, and a theme
+    /// chosen before, with the button that was there, is kept. With
+    /// MASSIF_SNAPSHOT_DIR, the bar rendered in light and dark, at
+    /// MASSIF_SNAPSHOT_PPP, as elsewhere and as on a Mac.
+    #[test]
+    fn the_title_bar_has_no_theme_button() {
+        use egui_kittest::kittest::Queryable;
+        assert_eq!(Settings::default().theme, ThemeChoice::System);
+        for (saved, kept) in [(r#"{"theme": "Dark"}"#, ThemeChoice::Dark), (r#"{"theme": "Light"}"#, ThemeChoice::Light), ("{}", ThemeChoice::System)] {
+            assert_eq!(serde_json::from_str::<Settings>(saved).unwrap().theme, kept, "{saved}");
+        }
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        for theme in [ThemeChoice::Light, ThemeChoice::Dark] {
+            let mut h = harness(theme);
+            h.run_steps(3);
+            assert!(h.query_by_label("Theme").is_none(), "no theme button in the bar");
+            h.get_by_role_and_label(egui::accesskit::Role::Button, "View").click();
+            h.run_steps(3);
+            for choice in ["Follow the system", "Light", "Dark"] {
+                assert!(h.query_all_by_label_contains(choice).next().is_some(), "{choice} in the View menu");
+            }
+            h.key_press(Key::Escape);
+            h.event(egui::Event::PointerGone);
+            h.run_steps(2);
+            let Some(dir) = &dir else { continue };
+            let ppp = h.ctx.pixels_per_point();
+            let name = if theme == ThemeChoice::Light { "light" } else { "dark" };
+            for mac in [false, true] {
+                h.state_mut().unified_titlebar = mac;
+                h.state_mut().menus_in_menu_bar = mac;
+                h.run_steps(3);
+                let image = h.render().unwrap();
+                let width = image.width();
+                image::imageops::crop_imm(&image, 0, 0, width, (44.0 * ppp) as u32).to_image().save(dir.join(format!("title-bar-{}{name}-{ppp}x.png", if mac { "mac-" } else { "" }))).unwrap();
+            }
+        }
     }
 
     /// On a Mac the system's menu bar holds File, Edit, View and Help, and

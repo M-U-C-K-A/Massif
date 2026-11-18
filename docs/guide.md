@@ -193,7 +193,8 @@ field or in Edit ▸ Ores as before, and ⌘C, ⌘V and ⌘A work in text fields
 the home screen's sidebar) has ten sections, in a window of
 their own:
 
-- **Appearance**: the theme, the accent colour (the colour of what is
+- **Appearance**: the theme (**Follow the system**, the default, **Light**
+  or **Dark**; also in the **View** menu), the accent colour (the colour of what is
   chosen, of the main buttons and of the home screen's art: eight colours, or
   any other), the **Loader** shown while Massif works (eight grids of dots
   lighting in patterns — Orbit, Ripple, Scan, Rain, Bars, Spiral, Sweep,
