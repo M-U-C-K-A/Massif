@@ -98,6 +98,34 @@ impl std::fmt::Display for LayerFileError {
     }
 }
 
+/// The custom ground cover a `.layer` file holds, if it is one: what a
+/// `.world` painted with it imports as (see [`crate::layers::apply_after`]).
+pub fn read_ground_cover(bytes: &[u8]) -> Option<crate::layers::GroundCover> {
+    let mut raw = Vec::new();
+    let data: &[u8] = if bytes.starts_with(&[0x1f, 0x8b]) {
+        flate2::read::GzDecoder::new(bytes).take(MAX_LAYER + 1).read_to_end(&mut raw).ok()?;
+        &raw
+    } else {
+        bytes
+    };
+    let mut parser = Parser::new(data).ok()?;
+    let value = match parser.next_object() {
+        Ok(Some(v @ Value::Ref(_))) => v,
+        _ => return None,
+    };
+    let Value::Ref(handle) = value else { return None };
+    let arena = &parser.arena;
+    if !arena.class_name(value)?.ends_with("GroundCoverLayer") {
+        return None;
+    }
+    let mut mapper = Mapper::new(Registry::vanilla());
+    let mut conv = Converter::default();
+    match conv.parts(arena, value, handle, &mut mapper).first() {
+        Some((Conv::GroundCover(k), _)) => conv.ground_covers.get(*k as usize).cloned(),
+        _ => None,
+    }
+}
+
 /// The most a `.layer` file may hold once inflated.
 const MAX_LAYER: u64 = 64 << 20;
 

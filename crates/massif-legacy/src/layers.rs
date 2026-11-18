@@ -337,20 +337,10 @@ pub fn convert(arena: &Arena, key: Value, class: &str, reg: &mut Registry) -> Op
     let short = class.strip_prefix(LAYERS)?;
     let string = |name: &str| arena.field(key, name).and_then(|v| arena.string(v)).map(str::to_owned);
     let objects = |n: u16, curve: Curve, reg: &Registry| Conv::Objects(n, curve, reg.object_layer(n).is_some_and(|l| l.understory));
-    let forest = |name: &str, kinds: &[(TreeKind, u16)], reg: &mut Registry| {
-        let n = massif_core::treepack::install_mix(name, kinds, reg);
-        Some(objects(n, Curve::Square, reg))
-    };
+    if let Some(conv) = standard(short, reg) {
+        return Some(conv);
+    }
     match short {
-        "Frost" => Some(Conv::Cover(frost_cover(reg))),
-        "FloodWithLava" => Some(Conv::Cover(match reg.covers.iter().position(|c| c.lava && !c.removed) {
-            Some(k) => k as u16 + 1,
-            None => reg.add_cover(CoverDef::lava()),
-        })),
-        "DeciduousForest" => forest("Deciduous", &[(TreeKind::BigOak, 3), (TreeKind::Birch, 2)], reg),
-        "PineForest" => forest("Pine", &[(TreeKind::TallSpruce, 2), (TreeKind::SlenderSpruce, 2), (TreeKind::Fir, 1)], reg),
-        "Jungle" => forest("Jungle", &[(TreeKind::Rainforest, 3), (TreeKind::Bush, 1)], reg),
-        "SwampLand" => forest("Swamp", &[(TreeKind::Willow, 1)], reg),
         "Bo2Layer" => {
             // The trees of the tree pack (which WorldPainter Modernised
             // describes as such, and older versions only name, its trees
@@ -371,6 +361,29 @@ pub fn convert(arena: &Arena, key: Value, class: &str, reg: &mut Registry) -> Op
             }
         }
         "plants.PlantLayer" => plant_cover(arena, key, reg).map(Conv::Cover),
+        _ => None,
+    }
+}
+
+/// What one of WorldPainter's own layers (its class, after
+/// `org.pepsoft.worldpainter.layers.`) becomes in `reg`, adding what it
+/// needs there, as a `.world`'s: Frost, Lava (`FloodWithLava`), the four
+/// forests, Void and Annotations. `None` for any other.
+pub fn standard(class: &str, reg: &mut Registry) -> Option<Conv> {
+    let forest = |name: &str, kinds: &[(TreeKind, u16)], reg: &mut Registry| {
+        let n = massif_core::treepack::install_mix(name, kinds, reg);
+        Some(Conv::Objects(n, Curve::Square, reg.object_layer(n).is_some_and(|l| l.understory)))
+    };
+    match class {
+        "Frost" => Some(Conv::Cover(frost_cover(reg))),
+        "FloodWithLava" => Some(Conv::Cover(match reg.covers.iter().position(|c| c.lava && !c.removed) {
+            Some(k) => k as u16 + 1,
+            None => reg.add_cover(CoverDef::lava()),
+        })),
+        "DeciduousForest" => forest("Deciduous", &[(TreeKind::BigOak, 3), (TreeKind::Birch, 2)], reg),
+        "PineForest" => forest("Pine", &[(TreeKind::TallSpruce, 2), (TreeKind::SlenderSpruce, 2), (TreeKind::Fir, 1)], reg),
+        "Jungle" => forest("Jungle", &[(TreeKind::Rainforest, 3), (TreeKind::Bush, 1)], reg),
+        "SwampLand" => forest("Swamp", &[(TreeKind::Willow, 1)], reg),
         "Void" => Some(Conv::Void),
         "Annotations" => Some(Conv::Annotations),
         _ => None,
@@ -844,7 +857,7 @@ pub fn dig_painted_rivers(dim: &mut Dimension, tiles: &[(TilePos, &Vec<u8>)], re
 
 /// The terrain of a custom ground cover over terrain `base`: the cover's
 /// blocks, as thick as it is, over the strata of `base`; made once.
-fn ground_terrain(reg: &mut Registry, cover: &GroundCover, base: u16) -> u16 {
+pub fn ground_terrain(reg: &mut Registry, cover: &GroundCover, base: u16) -> u16 {
     let under = reg.terrain(TerrainId(base)).clone();
     let name = format!("{} on {}", cover.name, under.name);
     if let Some(t) = reg.terrain_by_name(&name) {
