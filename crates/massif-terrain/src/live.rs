@@ -242,14 +242,26 @@ impl Live {
     /// Shows `graph` over `space` (its own terrain settings win), reading
     /// the map and files through `env`; `revision` tags the tiles made from
     /// it. Gives what compiling it found wrong.
+    /// A graph that makes the same terrain as the one shown (only the
+    /// editor's layout changed) is taken without making anything again.
     pub fn set_graph(&self, graph: &Graph, space: Space, env: Arc<dyn Env>, revision: u64) -> Vec<Diagnostic> {
         let source = Source { graph: graph.clone(), space, env, revision };
-        let mut st = self.shared.state.lock().expect("lock");
+        let mut guard = self.shared.state.lock().expect("lock");
+        let st = &mut *guard;
+        if st.graphs.is_some()
+            && let Some(old) = &mut st.source
+            && old.graph.same_terrain(graph)
+            && old.space == space
+            && Arc::ptr_eq(&old.env, &source.env)
+        {
+            *old = source;
+            return Vec::new();
+        }
         let (graphs, diags) = compile(&source, &st.settings);
         st.source = Some(source);
         st.graphs = Some(graphs);
         st.changed = Instant::now();
-        self.restart(&mut st);
+        self.restart(st);
         diags
     }
 

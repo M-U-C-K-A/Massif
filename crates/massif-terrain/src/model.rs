@@ -16,8 +16,8 @@
 //! Nodes are named (the names are the ids), an input names the node it
 //! comes from and, after a dot, which of its outputs (the first when left
 //! out). Parameters left out take their defaults. The editor's layout is
-//! kept apart, under `ui`, so that reading or writing a graph never needs
-//! it. [`crate::registry`] says what every type of node takes.
+//! kept apart, under `ui` (where nodes sit) and `editor` (the rest, as the
+//! editor writes it), so that reading or writing a graph never needs it. [`crate::registry`] says what every type of node takes.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -49,11 +49,15 @@ pub struct Graph {
     /// Where nodes sit in the editor, by node.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub ui: BTreeMap<String, NodeUi>,
+    /// The rest of the editor's layout (frames, points on wires, the
+    /// view…), as the editor writes it; never read to evaluate the graph.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub editor: serde_json::Value,
 }
 
 impl Default for Graph {
     fn default() -> Self {
-        Self { format: format_name(), version: VERSION, terrain: Terrain::default(), nodes: BTreeMap::new(), ui: BTreeMap::new() }
+        Self { format: format_name(), version: VERSION, terrain: Terrain::default(), nodes: BTreeMap::new(), ui: BTreeMap::new(), editor: serde_json::Value::Null }
     }
 }
 
@@ -138,6 +142,12 @@ pub fn valid_id(id: &str) -> bool {
 }
 
 impl Graph {
+    /// Whether `other` makes the same terrain: the same nodes and terrain
+    /// settings, whatever the editor's layout.
+    pub fn same_terrain(&self, other: &Graph) -> bool {
+        self.terrain == other.terrain && self.nodes == other.nodes
+    }
+
     pub fn from_json(text: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(text)
     }
@@ -195,6 +205,28 @@ mod tests {
         assert_eq!(g, again);
         // A misspelt field is an error, not silently dropped.
         assert!(Graph::from_json(r#"{ "nodes": { "a": { "type": "noise.fbm", "param": {} } } }"#).is_err());
+        assert!(Graph::from_json(r#"{ "nodes": {}, "editr": {} }"#).is_err());
+        // Nothing written for an editor's layout that is not there.
+        assert!(!g.to_json().contains("editor"));
+    }
+
+    #[test]
+    fn keeps_the_editors_layout() {
+        let text = r##"{
+            "nodes": { "hills": { "type": "noise.fbm" } },
+            "ui": { "hills": { "pos": [10, 20] } },
+            "editor": { "frames": [{ "title": "Coast", "rect": [0, 0, 300, 200], "color": "#3a6ea5" }], "reroutes": { "out.height": [[5, 5]] } }
+        }"##;
+        let g = Graph::from_json(text).unwrap();
+        assert_eq!(g.editor["frames"][0]["title"], "Coast");
+        let again = Graph::from_json(&g.to_json()).unwrap();
+        assert_eq!(g, again);
+        let mut moved = g.clone();
+        moved.editor["frames"][0]["rect"][0] = 40.into();
+        moved.ui.get_mut("hills").unwrap().pos = [0.0, 0.0];
+        assert!(moved.same_terrain(&g) && moved != g);
+        moved.set("hills", "scale", 900);
+        assert!(!moved.same_terrain(&g));
     }
 
     #[test]
