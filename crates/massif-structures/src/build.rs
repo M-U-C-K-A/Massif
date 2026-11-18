@@ -166,6 +166,7 @@ impl<'a> Builder<'a> {
             waterlog,
             biome: None,
             data_version,
+            colors: Vec::new(),
         };
         s.finish();
         s

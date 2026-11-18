@@ -269,6 +269,34 @@ impl Dimension {
         }
     }
 
+    /// The boxes of the structures placed that reach into the columns of
+    /// tile `tile`: each piece's box (the whole structure's, for one built
+    /// without pieces), as `(min, max)` in blocks, `max` exclusive. The
+    /// caves keep their water and lava away from them, so that none runs
+    /// into an Ancient City's halls.
+    pub fn structure_boxes(&self, tile: TilePos) -> Vec<([i32; 3], [i32; 3])> {
+        let rect = tile.rect();
+        let mut out = Vec::new();
+        for s in &self.structures {
+            if s.columns().intersect(&rect).is_empty() {
+                continue;
+            }
+            let mut add = |min: [i32; 3], max: [i32; 3]| {
+                if !BlockRect::new(min[0], min[2], max[0] + 1, max[2] + 1).intersect(&rect).is_empty() {
+                    out.push((min, [max[0] + 1, max[1] + 1, max[2] + 1]));
+                }
+            };
+            if s.pieces.is_empty() {
+                add(s.min, s.max);
+            } else {
+                for p in &s.pieces {
+                    add(p.min, p.max);
+                }
+            }
+        }
+        out
+    }
+
     /// Inclusive tile bounds of the ground level: the extent of the map.
     pub fn bounds(&self) -> Option<(TilePos, TilePos)> {
         self.ground().bounds()
