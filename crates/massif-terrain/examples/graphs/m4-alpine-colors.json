@@ -1,0 +1,15 @@
+{ "terrain": { "size": 8192, "seed": 42 },
+  "nodes": {
+    "alps": { "type": "mountain.alpine", "params": { "coverage": 0.75 } },
+    "worn": { "type": "erosion.thermal", "inputs": { "height": "alps" }, "params": { "iterations": 30 } },
+    "slope": { "type": "mask.slope", "inputs": { "height": "worn" }, "params": { "from": 28, "to": 40 } },
+    "snow": { "type": "mask.snow", "inputs": { "height": "worn" }, "params": { "line": 225 } },
+    "base": { "type": "color.gradient", "inputs": { "in": "worn" }, "params": { "preset": "alpine", "low": 70, "high": 300 } },
+    "rock": { "type": "color.solid", "params": { "color": "#6f6a64" } },
+    "white": { "type": "color.solid", "params": { "color": "#f4f6f8" } },
+    "rocky": { "type": "color.mix", "inputs": { "a": "base", "b": "rock", "mask": "slope" } },
+    "albedo": { "type": "color.mix", "inputs": { "a": "rocky", "b": "white", "mask": "snow" } },
+    "terrains": { "type": "terrain.layers", "inputs": { "mask_1": "slope", "mask_2": "worn.talus", "mask_4": "snow" }, "params": { "terrain_3": "" } },
+    "out": { "type": "output.map", "inputs": { "height": "worn", "albedo": "albedo", "terrain": "terrains", "mask.snow": "snow" } }
+  }
+}

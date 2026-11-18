@@ -413,6 +413,9 @@ pub static BIOMES: NodeSpec = NodeSpec {
     params: &[
         ParamSpec::float("peaks", "Peaks", Unit::Blocks, 170.0, 0.0, 4096.0, "How high over the sea the peaks begin, in blocks.").soft(0.0, 300.0),
         ParamSpec::float("beach", "Beach", Unit::Blocks, 3.0, 0.0, 64.0, "How high over the sea beaches reach, in blocks."),
+        ParamSpec::float("wiggle", "Wiggle", Unit::Ratio, 0.5, 0.0, 1.0, "How much the borders between biomes wander instead of following the climate's smooth lines.").section(Section::Detail),
+        ParamSpec::float("wiggle_scale", "Wiggle scale", Unit::Blocks, 300.0, 16.0, 16000.0, "The size of the borders' wanderings, in blocks.").soft(50.0, 2000.0).section(Section::Detail),
+        ParamSpec::seed(),
     ],
     kernel: Kernel::Point { cpu: biomes_cpu, gpu: None },
     ..NodeSpec::BASE
@@ -425,14 +428,19 @@ fn biomes_cpu(ctx: &Ctx, inputs: &[Option<&[f32]>], out: &mut [Vec<f32>]) {
     let (t, hum) = (inputs[0].expect("biomes have a temperature"), inputs[1].expect("biomes have a humidity"));
     let sea = ctx.space.sea_level;
     let (peaks, beach) = (p.f("peaks"), p.f("beach"));
+    let wiggle = p.f("wiggle");
+    let (dt, dh) = (Fbm::new(p.num("wiggle_scale"), 3, 0.55, ctx.seed), Fbm::new(p.num("wiggle_scale"), 3, 0.55, ctx.seed ^ 0x5bd1));
     let n = ctx.rect.area();
+    let w = ctx.rect.w as usize;
     for k in 0..n {
         let over = inputs[2].map(|h| h[k] - sea);
+        let (x, z) = ctx.world(ctx.rect.x + (k % w) as i32, ctx.rect.z + (k / w) as i32);
+        let (jt, jh) = if wiggle > 0.0 { (wiggle * 3.0 * dt.at(x, z), wiggle * 0.08 * dh.at(x, z)) } else { (0.0, 0.0) };
         let water = match (inputs[3], inputs[2]) {
             (Some(w), Some(h)) => w[k] > h[k] + 0.5 && h[k] >= sea - 0.5,
             _ => false,
         };
-        let b = classify(to_celsius(t[k]), hum[k], over, water, peaks, beach) as usize;
+        let b = classify(to_celsius(t[k]) + jt, (hum[k] + jh).clamp(0.0, 1.0), over, water, peaks, beach) as usize;
         out[0][k] = ids[b];
         for c in 0..3 {
             out[1][c * n + k] = colors[b][c];
