@@ -1884,5 +1884,91 @@ fn smooth_terrain_follows_the_painted_terrain() {
     assert_eq!(r.block(-1, 64, 25), "minecraft:oak_stairs", "the chosen slab's stairs at the step");
     assert_eq!(r.block(-1, 64, -10), "minecraft:air", "elsewhere, the map is not smoothed");
     assert_eq!(r.block(-70, 63, -10), "minecraft:stone");
+
+/// The NBT of the chunk holding column `(x, z)`, from the region files in
+/// `dir` (`region` or `entities`).
+fn raw_chunk(dir: &Path, kind: &str, x: i32, z: i32) -> Option<fastnbt::Value> {
+    let (cx, cz) = (x >> 4, z >> 4);
+    let folder = if kind == "region" { region_dir(dir) } else { region_dir(dir).with_file_name(kind) };
+    let file = std::fs::File::open(folder.join(format!("r.{}.{}.mca", cx >> 5, cz >> 5))).ok()?;
+    let mut region = Region::from_stream(file).ok()?;
+    let data = region.read_chunk((cx & 31) as usize, (cz & 31) as usize).ok()??;
+    fastnbt::from_bytes(&data).ok()
+}
+
+fn list<'a>(v: &'a fastnbt::Value, path: &[&str]) -> &'a [fastnbt::Value] {
+    let mut v = v;
+    for k in path {
+        let fastnbt::Value::Compound(c) = v else { return &[] };
+        match c.get(*k) {
+            Some(x) => v = x,
+            None => return &[],
+        }
+    }
+    match v {
+        fastnbt::Value::List(l) => l,
+        _ => &[],
+    }
+}
+
+#[test]
+fn structures_are_written_with_their_chests_and_villagers() {
+    use massif_structures::build::{Builder, loot};
+    use massif_structures::ground::Flat;
+    let mut w = generate(&GenParams { tiles_x: 2, tiles_z: 2, landform: Landform::Hills, seed: 3, ..GenParams::default() });
+    // A hall carved in the rock at y 30 to 33, a loot chest in it, a
+    // villager on its floor, a stair in a lake on the surface.
+    let ground = Flat { height: 200, water: None };
+    let mut b = Builder::new(&ground, 5);
+    for y in 30..34 {
+        for z in -40..-30 {
+            for x in 10..30 {
+                b.set([x, y, z], "minecraft:cave_air", None);
+            }
+        }
+    }
+    let mut rng = massif_structures::rng::Rng::new(1);
+    b.set([12, 30, -35], "minecraft:chest[facing=north,type=single,waterlogged=false]", Some(loot("minecraft:chest", "minecraft:chests/ancient_city", &mut rng)));
+    let mut villager = massif_structures::nbt::Compound::new();
+    villager.insert("id".into(), fastnbt::Value::String("minecraft:villager".into()));
+    b.add_entity([14.5, 30.0, -34.5], villager);
+    let mut s = b.finish(1, "Hall", "minecraft:ancient_city", true, 4671);
+    s.biome = Some("minecraft:deep_dark".into());
+    if w.registry.biome_by_id("minecraft:deep_dark").is_none() {
+        w.registry.biomes.push(massif_core::registry::BiomeDef { id: "minecraft:deep_dark".into(), ..w.registry.biomes[0].clone() });
+    }
+    let mut h = History::default();
+    h.begin("structure", 0);
+    h.edit(&mut w, 0).structures_mut().push(std::sync::Arc::new(s));
+    h.commit();
+    let snapshot = w.snapshot();
+
+    let dir = temp_dir("structures");
+    export(&snapshot, &dir, &ExportOptions { target: Target::release("1.21.11").unwrap(), ..ExportOptions::default() }, &Progress::default()).unwrap();
+    let mut r = Reader::new(&dir);
+    assert_eq!(r.block(20, 31, -35), "minecraft:air", "the hall is carved");
+    assert_ne!(r.block(20, 29, -35), "minecraft:air", "its floor is the rock");
+    assert_eq!(r.block(12, 30, -35), "minecraft:chest");
+    let chunk = raw_chunk(&dir, "region", 12, -35).unwrap();
+    let bes = list(&chunk, &["block_entities"]);
+    assert_eq!(bes.len(), 1);
+    let fastnbt::Value::Compound(be) = &bes[0] else { panic!() };
+    assert_eq!(be.get("LootTable"), Some(&fastnbt::Value::String("minecraft:chests/ancient_city".into())));
+    assert_eq!((be.get("x"), be.get("y"), be.get("z")), (Some(&fastnbt::Value::Int(12)), Some(&fastnbt::Value::Int(30)), Some(&fastnbt::Value::Int(-35))));
+    let ents = raw_chunk(&dir, "entities", 14, -35).expect("an entity file");
+    let list_e = list(&ents, &["Entities"]);
+    assert_eq!(list_e.len(), 1);
+    let fastnbt::Value::Compound(v) = &list_e[0] else { panic!() };
+    assert_eq!(v.get("id"), Some(&fastnbt::Value::String("minecraft:villager".into())));
+    assert!(matches!(r.biome(20, 31, -35), fastanvil::biome::Biome::DeepDark | fastanvil::biome::Biome::Unknown), "{:?}", r.biome(20, 31, -35));
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    // 1.16: the entities and block entities in the chunk itself.
+    let dir = temp_dir("structures-1.16");
+    export(&snapshot, &dir, &ExportOptions { target: Target::release("1.16.5").unwrap(), ..ExportOptions::default() }, &Progress::default()).unwrap();
+    let chunk = raw_chunk(&dir, "region", 12, -35).unwrap();
+    assert_eq!(list(&chunk, &["Level", "TileEntities"]).len(), 1);
+    let chunk = raw_chunk(&dir, "region", 14, -35).unwrap();
+    assert_eq!(list(&chunk, &["Level", "Entities"]).len(), 1);
     std::fs::remove_dir_all(&dir).unwrap();
 }

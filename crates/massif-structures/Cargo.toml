@@ -1,0 +1,20 @@
+[package]
+name = "massif-structures"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Structures for Massif: the game's jigsaw structures (villages, Ancient Cities, Trial Chambers) assembled from the player's own game, its other structures, and villages from builders' packs"
+
+[dependencies]
+massif-core.workspace = true
+massif-assets.workspace = true
+massif-objects.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+rayon.workspace = true
+fastnbt = "2.6"
+
+[dev-dependencies]
+flate2.workspace = true

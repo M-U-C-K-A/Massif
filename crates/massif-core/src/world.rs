@@ -96,6 +96,9 @@ pub struct Dimension {
     pub voxels: crate::voxel::VoxelLayer,
     /// The part of the map the tools may change; `None`: all of it.
     pub selection: Option<std::sync::Arc<crate::selection::Selection>>,
+    /// The structures placed on it, in the order they were placed: where
+    /// two meet, the later wins.
+    pub structures: Vec<std::sync::Arc<crate::structures::Structure>>,
     next_level_id: u32,
 }
 
@@ -109,6 +112,7 @@ impl Dimension {
             levels: vec![Level::new(LevelId(0), "Ground", LevelKind::Ground)],
             voxels: Default::default(),
             selection: None,
+            structures: Vec::new(),
             next_level_id: 1,
         }
     }
@@ -127,6 +131,7 @@ impl Dimension {
             levels,
             voxels: Default::default(),
             selection: None,
+            structures: Vec::new(),
             next_level_id,
         }
     }
@@ -186,6 +191,7 @@ impl Dimension {
             levels: self.snapshot_levels(),
             voxels: self.voxels.clone(),
             selection: self.selection.clone(),
+            structures: self.structures.clone(),
             next_level_id: self.next_level_id,
         }
     }
@@ -199,6 +205,7 @@ impl Dimension {
             levels: self.levels.iter().map(Level::copy_unfrozen).collect(),
             voxels: self.voxels.clone(),
             selection: self.selection.clone(),
+            structures: self.structures.clone(),
             next_level_id: self.next_level_id,
         }
     }
@@ -231,6 +238,8 @@ impl Dimension {
         for pos in out {
             self.voxels.remove(pos);
         }
+        // A structure stays while some of it is on the map still.
+        self.structures.retain(|s| !s.columns().intersect(&rect).is_empty());
         self.selection = None;
         let ground = self.ground_mut();
         let added: Vec<TilePos> = rect.tiles().filter(|p| !ground.contains(*p)).collect();

@@ -94,6 +94,14 @@ pub fn read_bytes(name: &str, bytes: &[u8]) -> Result<Imported, ObjectError> {
 
 // ------------------------------------------------------------------ NBT --
 
+/// The NBT of a file, gzipped or not, read whole: checked first, so that a
+/// damaged or hostile file is an error, never a crash.
+pub fn parse_nbt(bytes: &[u8]) -> Result<Value, ObjectError> {
+    let raw = if bytes.starts_with(&[0x1f, 0x8b]) { inflate(bytes)? } else { bytes.to_vec() };
+    check_nbt(&raw).map_err(ObjectError::Corrupt)?;
+    fastnbt::from_bytes(&raw).map_err(|e| ObjectError::Corrupt(e.to_string()))
+}
+
 /// The most a schematic may inflate to: a full 256³ Sponge schematic takes
 /// about 32 MB.
 const MAX_INFLATED: u64 = 256 << 20;

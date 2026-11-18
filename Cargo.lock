@@ -2058,6 +2058,7 @@ dependencies = [
  "libc",
  "massif-assets",
  "massif-core",
+ "massif-structures",
  "rayon",
  "thiserror 2.0.21",
 ]
@@ -2174,6 +2175,21 @@ dependencies = [
  "fastnbt",
  "flate2",
  "massif-core",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "massif-structures"
+version = "1.0.0"
+dependencies = [
+ "fastnbt",
+ "flate2",
+ "massif-assets",
+ "massif-core",
+ "massif-objects",
+ "rayon",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 

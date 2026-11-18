@@ -55,6 +55,7 @@ pub mod road;
 pub mod selection;
 pub mod shapes;
 pub mod stamps;
+pub mod structures;
 pub mod thumbnail;
 pub mod treepack;
 pub mod tile;
