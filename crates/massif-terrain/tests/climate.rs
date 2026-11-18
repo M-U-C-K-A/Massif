@@ -55,7 +55,8 @@ fn damp_by_the_sea_dry_inland() {
     // Sea in the west, land rising to the east.
     let c = compiled(r#"{ "nodes": {
         "land": { "type": "pattern.gradient", "params": { "ends": [[0, 0.5], [1, 0.5]], "height": 80, "base": 30 } },
-        "hum": { "type": "climate.humidity", "inputs": { "height": "land" }, "params": { "inland": 300, "variation": 0 } }
+        "hum": { "type": "climate.humidity", "inputs": { "height": "land" }, "params": { "inland": 300, "variation": 0, "irregularity": 0 } },
+        "wavy": { "type": "climate.humidity", "inputs": { "height": "land" }, "params": { "inland": 300, "variation": 0 } }
     } }"#);
     let h = grid(&c, "hum", None, 2);
     // The shore is about 820 blocks from the west edge (sample 205).
@@ -63,6 +64,11 @@ fn damp_by_the_sea_dry_inland() {
     assert!(h.at(215, 200) > 0.8, "by the shore: {}", h.at(215, 200));
     // 1180 blocks from the shore.
     assert!(h.at(500, 200) < 0.03, "far inland: {}", h.at(500, 200));
+    // Irregular: the band's width varies along the coast.
+    let w = grid(&c, "wavy", None, 2);
+    let along: Vec<f32> = (0..512).step_by(16).map(|z| w.at(260, z)).collect();
+    let (lo, hi) = along.iter().fold((f32::MAX, f32::MIN), |(a, b), v| (a.min(*v), b.max(*v)));
+    assert!(hi - lo > 0.1, "{lo} {hi}");
 }
 
 #[test]
