@@ -55,6 +55,7 @@ const TAG_SIZES: u8 = 10;
 const TAG_POCKETS: u8 = 11;
 const TAG_SLABS: u8 = 12;
 const TAG_CAVES: u8 = 13;
+const TAG_CAVE_BIOMES: u8 = 14;
 
 /// The tree sizes a column may ask for (see [`Tile::sizes`]): any size,
 /// then bushes, small, medium and large trees.
@@ -107,6 +108,9 @@ pub struct Tile {
     /// The cave layer painted, by number (0: none; see [`crate::caves`]):
     /// on the ground level only.
     pub caves: Plane<u16>,
+    /// The cave biomes painted in volume (see [`crate::caves::CaveBiomes`]):
+    /// on the ground level only.
+    pub cave_biomes: crate::caves::CaveBiomes,
     /// Planes written by a newer version, preserved verbatim.
     pub unknown: Vec<(u8, Vec<u8>)>,
 }
@@ -128,6 +132,7 @@ impl Tile {
             pockets: Plane::Uniform(0),
             slabs: Plane::Uniform(0),
             caves: Plane::Uniform(0),
+            cave_biomes: Default::default(),
             unknown: Vec::new(),
         }
     }
@@ -148,6 +153,7 @@ impl Tile {
             pockets: Plane::Uniform(0),
             slabs: Plane::Uniform(0),
             caves: Plane::Uniform(0),
+            cave_biomes: Default::default(),
             unknown: Vec::new(),
         }
     }
@@ -209,6 +215,7 @@ impl Tile {
             + self.pockets.heap_bytes()
             + self.slabs.heap_bytes()
             + self.caves.heap_bytes()
+            + self.cave_biomes.heap_bytes()
     }
 
     /// Encode to the compressed cold form (a zstd frame).
@@ -267,6 +274,9 @@ impl Tile {
         if self.caves.uniform_value() != Some(0) {
             plane(TAG_CAVES, &mut |o| codec::encode_categorical(&self.caves, o));
         }
+        if !self.cave_biomes.is_empty() {
+            plane(TAG_CAVE_BIOMES, &mut |o| self.cave_biomes.encode(o));
+        }
         for (tag, payload) in &self.unknown {
             plane(*tag, &mut |o| o.extend_from_slice(payload));
         }
@@ -296,6 +306,7 @@ impl Tile {
             pockets: Plane::Uniform(0),
             slabs: Plane::Uniform(0),
             caves: Plane::Uniform(0),
+            cave_biomes: Default::default(),
             unknown: Vec::new(),
         };
         loop {
@@ -322,6 +333,7 @@ impl Tile {
                 TAG_POCKETS => tile.pockets = codec::decode_categorical(&mut p)?,
                 TAG_SLABS => tile.slabs = codec::decode_categorical(&mut p)?,
                 TAG_CAVES => tile.caves = codec::decode_categorical(&mut p)?,
+                TAG_CAVE_BIOMES => tile.cave_biomes = crate::caves::CaveBiomes::decode(&mut p)?,
                 _ => tile.unknown.push((tag, payload.to_vec())),
             }
         }
@@ -386,6 +398,7 @@ mod tests {
         for i in 3200..3900 {
             t.caves.set(i, 1 + (i % 2) as u16);
         }
+        t.cave_biomes.paint((1, 9), (-16, -6), (4, 20), 40, |_, _, _| true);
         t
     }
 
@@ -407,6 +420,7 @@ mod tests {
         assert_eq!(back.pockets.dense(), t.pockets.dense());
         assert_eq!(back.slabs.dense(), t.slabs.dense());
         assert_eq!(back.caves.dense(), t.caves.dense());
+        assert_eq!(back.cave_biomes, t.cave_biomes);
         // Encoding is canonical: re-encoding the decoded tile is identical.
         assert_eq!(back.encode(), blob);
     }

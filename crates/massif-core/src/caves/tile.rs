@@ -188,7 +188,7 @@ impl Prepared<'_> {
 /// The caves of the tile at `pos`, whose ground is `ground`, in a
 /// dimension from `min_y` to `max_y` with cave layers `layers`; `None`
 /// where none is painted.
-pub fn tile_caves(layers: &CaveLayers, ground: &Tile, pos: TilePos, min_y: i32, max_y: i32) -> Option<Arc<TileCaves>> {
+pub fn tile_caves(layers: &CaveLayers, ground: &Tile, pos: TilePos, min_y: i32, max_y: i32, dry: &[super::CaveBox]) -> Option<Arc<TileCaves>> {
     let plane = &ground.caves;
     if plane.uniform_value() == Some(0) || layers.is_empty() {
         return None;
@@ -213,12 +213,13 @@ pub fn tile_caves(layers: &CaveLayers, ground: &Tile, pos: TilePos, min_y: i32, 
         plane.for_each_run(|v, len| (v, len).hash(&mut h));
         ground.top.for_each_run(|v, len| (v.to_bits(), len).hash(&mut h));
         ground.fluid.for_each_run(|v, len| (v, len).hash(&mut h));
+        dry.hash(&mut h);
         h.finish()
     };
     if let Some(found) = cache().lock().ok().and_then(|mut c| c.get(key)) {
         return Some(found);
     }
-    let made = Arc::new(compute(layers, &present, ground, pos, min_y, max_y));
+    let made = Arc::new(compute(layers, &present, ground, pos, min_y, max_y, dry));
     if let Ok(mut c) = cache().lock() {
         c.put(key, made.clone());
     }
@@ -235,7 +236,11 @@ fn hash_def(d: &CaveDef, h: &mut impl Hasher) {
     (a.on, a.density.to_bits(), a.size.to_bits(), a.low, a.high, a.lava.to_bits(), a.lava_under, a.lava_floor).hash(h);
 }
 
-fn compute(layers: &CaveLayers, present: &[u16], ground: &Tile, pos: TilePos, min_y: i32, max_y: i32) -> TileCaves {
+fn compute(layers: &CaveLayers, present: &[u16], ground: &Tile, pos: TilePos, min_y: i32, max_y: i32, dry: &[super::CaveBox]) -> TileCaves {
+    // The structures over the tile: no fluid within a block of them.
+    let (x0t, z0t) = pos.origin();
+    let reach = super::STRUCTURE_MARGIN + 1;
+    let structures: Vec<super::CaveBox> = dry.iter().copied().filter(|(a, b)| b[0] + reach > x0t && a[0] - reach < x0t + TILE_SIZE && b[2] + reach > z0t && a[2] - reach < z0t + TILE_SIZE).collect();
     let n = TILE_SIZE as usize;
     let (x0, z0) = pos.origin();
     let mask = ground.caves.dense();
@@ -406,7 +411,7 @@ fn compute(layers: &CaveLayers, present: &[u16], ground: &Tile, pos: TilePos, mi
                         match &lead.zones {
                             // Fluid a block under the ground around at
                             // least, or rock where it would be higher.
-                            Some(zones) => zones.fill(x, y, z).filter(|&f| f == Fill::Air || y < low_ground[i] - 1),
+                            Some(zones) => zones.fill(x, y, z).filter(|&f| f == Fill::Air || (y < low_ground[i] - 1 && !super::in_boxes(&structures, x, y, z, super::STRUCTURE_MARGIN + 1))),
                             None => Some(Fill::Air),
                         }
                     } else {
@@ -625,8 +630,8 @@ mod tests {
         let w = world(2, 120.0, |x, _| x < 192);
         let dim = &w.dims[0];
         let ground = dim.ground().view(TilePos::new(0, 0)).unwrap();
-        let a = tile_caves(&dim.caves, &ground, TilePos::new(0, 0), dim.min_y, dim.max_y).unwrap();
-        let b = tile_caves(&dim.caves, &ground, TilePos::new(0, 0), dim.min_y, dim.max_y).unwrap();
+        let a = tile_caves(&dim.caves, &ground, TilePos::new(0, 0), dim.min_y, dim.max_y, &[]).unwrap();
+        let b = tile_caves(&dim.caves, &ground, TilePos::new(0, 0), dim.min_y, dim.max_y, &[]).unwrap();
         assert!(Arc::ptr_eq(&a, &b), "kept in the cache");
         let (carved, wet) = a.count();
         // Of the rock from −56 to 120.

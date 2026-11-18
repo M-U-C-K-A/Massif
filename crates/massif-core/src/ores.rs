@@ -157,6 +157,10 @@ pub struct OreSettings {
     #[serde(default = "one")]
     pub richness: f32,
     pub ores: Vec<OreRule>,
+    /// The game's large veins since 1.18 (see [`Veins`]): copper in granite,
+    /// iron in tuff, with blocks of raw metal. Off in maps made before them.
+    #[serde(default)]
+    pub veins: bool,
 }
 
 impl Default for OreSettings {
@@ -223,7 +227,7 @@ impl Preset {
                 rule(Emerald, &[Band::new(4, [4, 32], 32, 6.0, 1)]),
             ],
         };
-        OreSettings { on: true, richness: 1.0, ores }
+        OreSettings { on: true, richness: 1.0, ores, veins: self == Preset::Modern }
     }
 }
 
@@ -562,6 +566,183 @@ impl Vein {
 /// The lowest and highest heights the solid ground of a tile's stack may
 /// hold, for [`Placer::chunks`]: from the floor of the world up to the
 /// highest top of its levels (to the top of the world where it was sculpted).
+/// What a large vein lays in a block (see [`Veins`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum VeinBlock {
+    CopperOre,
+    RawCopper,
+    Granite,
+    IronOre,
+    RawIron,
+    Tuff,
+}
+
+impl VeinBlock {
+    pub const ALL: [VeinBlock; 6] = [VeinBlock::CopperOre, VeinBlock::RawCopper, VeinBlock::Granite, VeinBlock::IronOre, VeinBlock::RawIron, VeinBlock::Tuff];
+
+    /// Its block state.
+    pub const fn state(self) -> &'static str {
+        match self {
+            VeinBlock::CopperOre => "minecraft:copper_ore",
+            VeinBlock::RawCopper => "minecraft:raw_copper_block",
+            VeinBlock::Granite => "minecraft:granite",
+            VeinBlock::IronOre => "minecraft:deepslate_iron_ore",
+            VeinBlock::RawIron => "minecraft:raw_iron_block",
+            VeinBlock::Tuff => "minecraft:tuff",
+        }
+    }
+}
+
+/// The game's large ore veins since 1.18: where a slow noise rises far
+/// enough from 0, ribbons where two finer noises are both near 0 — of
+/// copper ore in granite between y 0 and 50 where the slow noise is over 0,
+/// of iron ore in tuff between y −60 and −8 where it is under —, thinning
+/// out toward the ends of their heights, an ore in a block of the ribbon
+/// now and then (more toward the vein's heart), and one in fifty of those a
+/// block of raw metal. As the game's: a vein takes the place of stone and
+/// deepslate only.
+pub struct Veins {
+    seed: u64,
+}
+
+/// The heights of the copper veins and of the iron veins.
+const COPPER: (i32, i32) = (0, 50);
+const IRON: (i32, i32) = (-60, -8);
+
+impl Veins {
+    pub fn new(seed: i64) -> Self {
+        Self { seed: seed as u64 ^ 0x0E5E_1E15 }
+    }
+
+    /// The heights veins may be at.
+    pub const fn heights() -> (i32, i32) {
+        (IRON.0, COPPER.1)
+    }
+
+    /// The slow noise: which metal, and whether a vein is there at all.
+    #[inline]
+    fn veininess(&self, x: f32, y: f32, z: f32) -> f32 {
+        crate::caves::noise::gradient(self.seed, x / 170.0, y / 170.0, z / 170.0) * 1.6
+    }
+
+    /// The vein's block at `(x, y, z)` given the slow noise `v` there.
+    #[inline]
+    fn block(&self, x: i32, y: i32, z: i32, v: f32) -> Option<VeinBlock> {
+        let copper = v > 0.0;
+        let (lo, hi) = if copper { COPPER } else { IRON };
+        if y < lo || y > hi {
+            return None;
+        }
+        let edge = (y - lo).min(hi - y) as f32;
+        let e = v.abs();
+        if e + (-0.2 + 0.2 * (edge / 20.0).min(1.0)) < 0.4 {
+            return None;
+        }
+        let r = |salt: u64| (crate::caves::noise::hash3(self.seed ^ salt, x, y, z) >> 40) as f32 / (1u64 << 24) as f32;
+        if r(1) > 0.7 {
+            return None;
+        }
+        let (fx, fy, fz) = (x as f32 / 32.0, y as f32 / 32.0, z as f32 / 32.0);
+        let a = crate::caves::noise::gradient(self.seed ^ 0xA, fx, fy, fz);
+        let b = crate::caves::noise::gradient(self.seed ^ 0xB, fx, fy, fz);
+        if a.abs().max(b.abs()) - 0.08 >= 0.0 {
+            return None;
+        }
+        let ore = 0.1 + 0.2 * ((e - 0.4) / 0.2).clamp(0.0, 1.0);
+        let gap = crate::caves::noise::gradient(self.seed ^ 0x6A9, fx, fy, fz);
+        Some(if r(2) < ore && gap > -0.3 {
+            match (copper, r(3) < 0.02) {
+                (true, false) => VeinBlock::CopperOre,
+                (true, true) => VeinBlock::RawCopper,
+                (false, false) => VeinBlock::IronOre,
+                (false, true) => VeinBlock::RawIron,
+            }
+        } else if copper {
+            VeinBlock::Granite
+        } else {
+            VeinBlock::Tuff
+        })
+    }
+
+    /// The veins of the 16 × 16 columns from `(x0, z0)` between heights
+    /// `y0..y1`, as `(x, y, z, block)`: the slow noise worked out every 4
+    /// blocks and blended in between, the fine ones where it calls for a
+    /// vein.
+    pub fn chunk(&self, x0: i32, z0: i32, (y0, y1): (i32, i32), mut put: impl FnMut(i32, i32, i32, VeinBlock)) {
+        let (vlo, vhi) = Self::heights();
+        let (y0, y1) = (y0.max(vlo), y1.min(vhi + 1));
+        if y1 <= y0 {
+            return;
+        }
+        let ly0 = y0.div_euclid(4);
+        let ny = ((y1 - 1).div_euclid(4) - ly0 + 2) as usize;
+        let mut lattice = vec![0f32; 5 * 5 * ny];
+        for j in 0..5 {
+            for i in 0..5 {
+                for k in 0..ny {
+                    lattice[(j * 5 + i) * ny + k] = self.veininess((x0 + i as i32 * 4) as f32, ((ly0 + k as i32) * 4) as f32, (z0 + j as i32 * 4) as f32);
+                }
+            }
+        }
+        // The slow noise never reaches far from 0 in this chunk: no vein.
+        if lattice.iter().all(|v| v.abs() < 0.3) {
+            return;
+        }
+        for lz in 0..16 {
+            for lx in 0..16 {
+                let (ci, cj) = (lx as usize / 4, lz as usize / 4);
+                let (fx, fz) = ((lx % 4) as f32 / 4.0, (lz % 4) as f32 / 4.0);
+                for y in y0..y1 {
+                    let t = (y as f32 / 4.0) - ly0 as f32;
+                    let k = (t.floor() as usize).min(ny - 2);
+                    let fy = t - k as f32;
+                    let at = |i: usize, j: usize, k: usize| lattice[(j * 5 + i) * ny + k];
+                    let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
+                    let v0 = lerp(lerp(at(ci, cj, k), at(ci + 1, cj, k), fx), lerp(at(ci, cj + 1, k), at(ci + 1, cj + 1, k), fx), fz);
+                    let v1 = lerp(lerp(at(ci, cj, k + 1), at(ci + 1, cj, k + 1), fx), lerp(at(ci, cj + 1, k + 1), at(ci + 1, cj + 1, k + 1), fx), fz);
+                    let v = lerp(v0, v1, fy);
+                    if v.abs() < 0.2 {
+                        continue;
+                    }
+                    if let Some(b) = self.block(x0 + lx, y, z0 + lz, v) {
+                        put(x0 + lx, y, z0 + lz, b);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod vein_tests {
+    use super::*;
+
+    /// Copper veins in granite over y 0, iron in tuff under −8, with ores
+    /// in them and a few raw blocks; nothing outside their heights.
+    #[test]
+    fn veins_keep_to_their_heights_and_metals() {
+        let veins = Veins::new(42);
+        let mut found: std::collections::HashMap<VeinBlock, usize> = std::collections::HashMap::new();
+        for cz in 0..12 {
+            for cx in 0..12 {
+                veins.chunk(cx * 16, cz * 16, (-64, 120), |_, y, _, b| {
+                    match b {
+                        VeinBlock::CopperOre | VeinBlock::RawCopper | VeinBlock::Granite => assert!((0..=50).contains(&y), "{b:?} at {y}"),
+                        _ => assert!((-60..=-8).contains(&y), "{b:?} at {y}"),
+                    }
+                    *found.entry(b).or_insert(0) += 1;
+                });
+            }
+        }
+        for b in [VeinBlock::CopperOre, VeinBlock::Granite, VeinBlock::IronOre, VeinBlock::Tuff] {
+            assert!(found.get(&b).copied().unwrap_or(0) > 20, "{b:?}: {found:?}");
+        }
+        let ores = found.get(&VeinBlock::CopperOre).copied().unwrap_or(0) + found.get(&VeinBlock::IronOre).copied().unwrap_or(0);
+        let fillers = found[&VeinBlock::Granite] + found[&VeinBlock::Tuff];
+        assert!(ores * 2 < fillers, "mostly filler: {found:?}");
+    }
+}
+
 pub fn stack_heights(stack: &crate::compose::TileStack, min_y: i32, max_y: i32) -> (i32, i32) {
     if stack.is_sculpted() {
         return (min_y, max_y);
@@ -794,6 +975,7 @@ mod tests {
             on: true,
             richness: 1.0,
             ores: vec![OreRule::new(Mineral::Coal, &[Band::new(40, [40, 40], 40, 40.0, 30)])],
+            veins: false,
         };
         let placer = Placer::new(&settings, 1).unwrap();
         let mut got = HashSet::new();

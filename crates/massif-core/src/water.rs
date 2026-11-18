@@ -134,11 +134,11 @@ fn columns_in(dim: &Dimension, rect: crate::coords::BlockRect, own: Option<TileP
                 }
                 continue;
             }
-            let Some(stack) = stacks.entry(p).or_insert_with(|| TileStack::new(dim, p, false)) else { continue };
+            let Some(stack) = stacks.entry(p).or_insert_with(|| TileStack::from_above(dim, p, false)) else { continue };
             if !stack.ground().present(cell) {
                 continue;
             }
-            if !stack.is_sculpted() && stack.layers().nth(1).is_none() {
+            if !stack.is_sculpted() && stack.caves().is_none() && stack.layers().nth(1).is_none() {
                 let g = stack.ground();
                 out[(j * w + i) as usize] = Some(ground_column(dim, crate::compose::block_top(g.top.get(cell)), g.fluid.get(cell)));
                 continue;
@@ -966,7 +966,7 @@ impl Planner {
         let kinds = tiles
             .par_iter()
             .map(|&p| {
-                let kind = match TileStack::new(dim, p, false) {
+                let kind = match TileStack::from_above(dim, p, false) {
                     Some(stack) if !stack.is_sculpted() && stack.layers().count() == 1 => {
                         let t = stack.ground();
                         match t.fluid.uniform_value() {
