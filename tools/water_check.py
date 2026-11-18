@@ -116,8 +116,18 @@ def chunk(region_dir: Path, cx: int, cz: int):
 
 
 def state_name(entry) -> str:
-    props = entry.get("Properties") or {}
-    name = entry["Name"]
+    # A state is a compound of Name and Properties; 26.3 writes `id` and
+    # `properties`, and a state without properties as its name alone.
+    if isinstance(entry, str):
+        return entry
+    # A list of states and names mixed wraps each element in a compound of
+    # one unnamed entry.
+    if "" in entry:
+        return state_name(entry[""])
+    props = entry.get("Properties") or entry.get("properties") or {}
+    name = entry.get("Name") or entry.get("id")
+    if name is None:
+        raise KeyError(f"a block state of keys {sorted(entry)}")
     if props:
         name += "[" + ",".join(f"{k}={v}" for k, v in sorted(props.items())) + "]"
     return name
@@ -260,7 +270,9 @@ def main() -> int:
         k, v = e.split("=", 1)
         env[k] = v
     subprocess.run([str(cli), "export", str(args.world), str(world_dir), "--version", args.version, "--void", "--overwrite"], check=True, env=env)
-    region = world_dir / "region"
+    # 26.1 on keeps the overworld's regions under dimensions/.
+    split = world_dir / "dimensions/minecraft/overworld/region"
+    region = split if split.is_dir() else world_dir / "region"
     before = [blocks_of(region, b) for b in boxes]
     for b, blocks in zip(boxes, before):
         water = sum(1 for s in blocks.values() if is_water(s))
