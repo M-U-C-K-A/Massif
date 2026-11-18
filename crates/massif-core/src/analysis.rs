@@ -1108,9 +1108,12 @@ impl<'a> Ctx<'a> {
                 }
                 // Underground pockets, in the place of the rock.
                 let pocket = ground.pockets.get(cell);
-                if let Some(col) = self.pockets.as_ref().and_then(|p| p.column(pocket, spans, &self.mat, x, z)) {
+                if let Some(col) = self.pockets.as_ref().and_then(|p| p.column(pocket, spans, stack.cave_ground(cell), &self.mat, x, z)) {
                     for y in col.low..=col.high {
-                        if let Some(b) = col.at(x, y, z) {
+                        // In rock only, not in the air of a cave.
+                        if let Some(b) = col.at(x, y, z)
+                            && spans.iter().any(|s| s.y0 <= y && y < s.y1)
+                        {
                             t.blocks[self.mat.substrate(x, y, z).index()] -= 1;
                             t.blocks[b.index()] += 1;
                         }
@@ -1231,7 +1234,7 @@ impl<'a> Ctx<'a> {
                     &chunk,
                     |x, y, z| {
                         let cell = crate::coords::local_index(x, z);
-                        let pockets = self.pockets.as_ref().and_then(|p| p.column(ground.pockets.get(cell), run(cell), &self.mat, x, z));
+                        let pockets = self.pockets.as_ref().and_then(|p| p.column(ground.pockets.get(cell), run(cell), stack.cave_ground(cell), &self.mat, x, z));
                         crate::ores::rock_at(run(cell), &self.mat, &self.hosts, pockets.as_ref(), x, y, z, self.max_y)
                     },
                     |x, y, z| biomes[(((z - oz) >> 2) * 32 + ((x - ox) >> 2)) as usize].of_block(y),
@@ -2252,9 +2255,11 @@ mod tests {
                         grid[at(cell, y)] = if y < split { mat.substrate(x, y, z) } else { mat.block(span, x, y, z, submerged) }.0;
                     }
                 }
-                if let Some(col) = pockets.as_ref().and_then(|p| p.column(stack.ground().pockets.get(cell), &spans, &mat, x, z)) {
+                if let Some(col) = pockets.as_ref().and_then(|p| p.column(stack.ground().pockets.get(cell), &spans, stack.cave_ground(cell), &mat, x, z)) {
                     for y in col.low..=col.high {
-                        if let Some(b) = col.at(x, y, z) {
+                        if let Some(b) = col.at(x, y, z)
+                            && grid[at(cell, y)] != AIR
+                        {
                             grid[at(cell, y)] = b.0;
                         }
                     }

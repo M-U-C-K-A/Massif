@@ -121,14 +121,22 @@ impl<'a> Pockets<'a> {
     /// the rock of its lowest run, under its terrain's layers, over the
     /// bedrock floor, between the layer's heights. `None` where it has
     /// none, or its lowest run does not start at the floor of the world.
-    pub fn column(&self, n: u16, spans: &[Span], mat: &Materializer, x: i32, z: i32) -> Option<Column<'a>> {
+    /// Where caves cut the ground (`ground`: the block over its top and its
+    /// terrain, as the stack composes it with caves), in the rock of all
+    /// its runs under the layers of its surface: the blocks of a pocket
+    /// that fall in a cave are air.
+    pub fn column(&self, n: u16, spans: &[Span], ground: Option<(i32, crate::registry::TerrainId)>, mat: &Materializer, x: i32, z: i32) -> Option<Column<'a>> {
         if n == 0 {
             return None;
         }
         let def = self.reg.pocket(n)?;
         let first = spans.first().filter(|s| s.y0 <= self.min_y)?;
-        let recipe = mat.recipe_depth(first.terrain, x, z);
-        let split = if recipe >= (first.y1 - first.y0) as u32 { first.y0 } else { first.y1 - recipe as i32 };
+        let (y0, y1, terrain) = match ground {
+            Some((top, terrain)) => (first.y0, top, terrain),
+            None => (first.y0, first.y1, first.terrain),
+        };
+        let recipe = mat.recipe_depth(terrain, x, z);
+        let split = if recipe >= (y1 - y0) as u32 { y0 } else { y1 - recipe as i32 };
         let (low, high) = (def.low.max(self.min_y + FLOOR), def.high.min(split - 1));
         (low <= high).then(|| Column { def, level: self.levels[n as usize - 1], seed: self.seed, low, high })
     }
@@ -235,13 +243,13 @@ mod tests {
         let mat = Materializer::new(&reg, 5, -64);
         let pockets = Pockets::new(&reg, 5, -64).expect("a pocket layer");
         let run = Span { y0: -64, y1: 70, terrain, top: 70.0 };
-        let col = pockets.column(n, &[run], &mat, 3, 4).expect("pockets in the column");
+        let col = pockets.column(n, &[run], None, &mat, 3, 4).expect("pockets in the column");
         let recipe = mat.recipe_depth(terrain, 3, 4) as i32;
         assert_eq!((col.low, col.high), (-59, 70 - recipe - 1), "over the floor, under the layers");
         assert!((col.low..=col.high).all(|y| col.at(3, y, 4) == Some(clay)), "all of it at a share of 1");
         assert_eq!((col.at(3, col.low - 1, 4), col.at(3, col.high + 1, 4)), (None, None));
-        assert!(pockets.column(0, &[run], &mat, 3, 4).is_none(), "not painted");
-        assert!(pockets.column(n, &[Span { y0: 20, ..run }], &mat, 3, 4).is_none(), "a floating island has none");
+        assert!(pockets.column(0, &[run], None, &mat, 3, 4).is_none(), "not painted");
+        assert!(pockets.column(n, &[Span { y0: 20, ..run }], None, &mat, 3, 4).is_none(), "a floating island has none");
         let mut gone = reg.clone();
         gone.pockets[0].removed = true;
         assert!(Pockets::new(&gone, 5, -64).is_none(), "no layer left");

@@ -32,6 +32,8 @@ struct Step {
     voxel_seen: HashSet<ChunkPos>,
     /// Pre-image of the selection, when the step changed it.
     selection: Option<Option<Arc<Selection>>>,
+    /// Pre-image of the dimension's cave layers, when the step changed them.
+    caves: Option<crate::caves::CaveLayers>,
     /// Pre-image of the whole map, for a save point put back: its settings,
     /// blocks and dimensions (not its save points).
     whole: Option<Box<Whole>>,
@@ -76,6 +78,7 @@ impl Step {
             voxels: Vec::new(),
             voxel_seen: HashSet::new(),
             selection: None,
+            caves: None,
             whole: None,
             size: 0,
         }
@@ -92,7 +95,7 @@ impl Step {
     }
 
     fn is_empty(&self) -> bool {
-        self.tiles.is_empty() && self.structure.is_none() && self.voxels.is_empty() && self.selection.is_none() && self.whole.is_none()
+        self.tiles.is_empty() && self.structure.is_none() && self.voxels.is_empty() && self.selection.is_none() && self.caves.is_none() && self.whole.is_none()
     }
 }
 
@@ -238,6 +241,9 @@ impl History {
         if let Some(selection) = &step.selection {
             dim.selection = selection.clone();
         }
+        if let Some(caves) = &step.caves {
+            dim.caves = caves.clone();
+        }
         for (pos, state) in step.voxels.iter().rev() {
             dim.voxels.restore(*pos, state.clone());
         }
@@ -321,6 +327,20 @@ impl History {
         self.commit()
     }
 
+    /// Give dimension `dim` the cave layers `caves` (a layer added, its
+    /// settings changed), as one step to undo labelled `label`. Returns
+    /// whether they changed.
+    pub fn set_caves(&mut self, world: &mut World, dim: usize, label: impl Into<String>, caves: crate::caves::CaveLayers) -> bool {
+        let Some(d) = world.dims.get_mut(dim) else { return false };
+        if d.caves == caves {
+            return false;
+        }
+        self.begin(label, dim);
+        let step = self.open.as_mut().expect("just begun");
+        step.caves = Some(std::mem::replace(&mut d.caves, caves));
+        self.commit()
+    }
+
     /// Put the map back as `point` holds it (its settings, blocks and
     /// dimensions; the map keeps its name and its save points), as one step
     /// to undo labelled `label`.
@@ -398,6 +418,9 @@ fn swap(step: Step, world: &mut World) -> Step {
     if let Some(selection) = step.selection {
         inverse.selection = Some(std::mem::replace(&mut dim.selection, selection));
     }
+    if let Some(caves) = step.caves {
+        inverse.caves = Some(std::mem::replace(&mut dim.caves, caves));
+    }
     for (pos, state) in step.voxels.into_iter().rev() {
         inverse.voxels.push((pos, dim.voxels.get_shared(pos)));
         dim.voxels.restore(pos, state);
@@ -422,6 +445,7 @@ pub struct Others<'a> {
     before: &'a [Level],
     after: &'a [Level],
     voxels: &'a crate::voxel::VoxelLayer,
+    caves: &'a crate::caves::CaveLayers,
     min_y: i32,
     max_y: i32,
 }
@@ -460,7 +484,9 @@ impl<'a> Others<'a> {
         if layers.first().is_none_or(|l| l.1 != LevelKind::Ground) {
             return None;
         }
-        Some(crate::compose::TileStack::gather(self.min_y, self.max_y, self.voxels, pos, layers))
+        let mut stack = crate::compose::TileStack::gather(self.min_y, self.max_y, self.voxels, pos, layers);
+        stack.with_cave_layers(self.caves, pos, crate::compose::Caves::All);
+        Some(stack)
     }
 }
 
@@ -484,6 +510,16 @@ impl Edit<'_> {
     /// The layers brushes leave as they are.
     pub fn locks(&self) -> &crate::registry::Locks {
         self.locks
+    }
+
+    /// Give the dimension the cave layers `caves`, in the step (its first
+    /// layers kept to undo).
+    pub fn set_caves(&mut self, caves: crate::caves::CaveLayers) {
+        if self.dim.caves == caves {
+            return;
+        }
+        let before = std::mem::replace(&mut self.dim.caves, caves);
+        self.step.caves.get_or_insert(before);
     }
 
     pub fn level(&self) -> &Level {
@@ -616,13 +652,14 @@ impl Edit<'_> {
         let sculpted: HashSet<TilePos> = positions.iter().copied().filter(|p| self.dim.voxels.has_tile(*p)).collect();
         let moved: Vec<(TilePos, Vec<bool>)> = {
             let (min_y, max_y) = (self.dim.min_y, self.dim.max_y);
-            let voxels = &self.dim.voxels;
+            let (voxels, caves) = (&self.dim.voxels, &self.dim.caves);
             let (before, rest) = self.dim.levels.split_at_mut(self.level);
             let (level, after) = rest.split_first_mut().expect("the edited level exists");
             let others = Others {
                 before: &*before,
                 after: &*after,
                 voxels,
+                caves,
                 min_y,
                 max_y,
             };

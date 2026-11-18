@@ -595,6 +595,73 @@ pub fn move_object_layer(edit: &mut Edit, n: u16, under: bool) -> usize {
     moved.into_inner()
 }
 
+/// Paint a cave layer of the dimension by its number (0 removes it), on
+/// the ground level: where it may carve caves (see [`crate::caves`]). A
+/// column painted with a locked layer keeps it. `salt` should change from
+/// dab to dab.
+pub fn paint_caves(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, layer: u16, salt: u64) {
+    let dab = Dab::new(edit, brush, cx, cz);
+    if dab.idle {
+        return;
+    }
+    let caves = edit.dim().caves.clone();
+    let locked = |v: u16| caves.get(v).is_some_and(|d| d.locked);
+    let footprint = BlockRect::around(cx, cz, brush.reach());
+    edit.par_tiles(footprint.tiles(), footprint, false, |_, clip, tile| {
+        for z in clip.z0..clip.z1 {
+            for x in dab.row(z, &clip) {
+                let w = dab.weight(x, z);
+                if w <= 0.0 || !paint_hit(w, brush.strength, x, z, salt) {
+                    continue;
+                }
+                let i = local_index(x, z);
+                if !locked(tile.caves.get(i)) {
+                    tile.caves.set(i, layer);
+                }
+            }
+        }
+    });
+}
+
+/// Paint cave layer `layer` (0: none) over the whole map, or over its
+/// selection where it is selected by half or more (a feathered edge
+/// dithered by its weight), as Edit ▸ Whole map ▸ Caves does; locked
+/// layers keep their columns. Returns the columns painted.
+pub fn fill_caves(edit: &mut Edit, layer: u16) -> usize {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let selection = edit.dim().selection.clone();
+    let caves = edit.dim().caves.clone();
+    let locked = |v: u16| caves.get(v).is_some_and(|d| d.locked);
+    let tiles: Vec<TilePos> = match &selection {
+        Some(sel) => sel.positions().filter(|p| edit.level().contains(*p)).collect(),
+        None => edit.level().positions().collect(),
+    };
+    let painted = AtomicUsize::new(0);
+    let everywhere = BlockRect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX);
+    edit.par_tiles(tiles, everywhere, false, |pos, _, tile| {
+        let weights = selection.as_ref().map(|s| crate::selection::tile_weights(s.tile(pos)));
+        let (x0, z0) = pos.origin();
+        let mut n = 0;
+        for i in 0..TILE_AREA {
+            let w = weights.as_ref().map_or(255, |w| w[i]);
+            if w == 0 {
+                continue;
+            }
+            let (x, z) = (x0 + (i % 128) as i32, z0 + (i / 128) as i32);
+            if w < 255 && hash2(x, z, 0x0CA7_E5F1) as f32 >= w as f32 / 255.0 * u32::MAX as f32 {
+                continue;
+            }
+            if tile.caves.get(i) != layer && !locked(tile.caves.get(i)) {
+                tile.caves.set(i, layer);
+                n += 1;
+            }
+        }
+        tile.caves.compact();
+        painted.fetch_add(n, Ordering::Relaxed);
+    });
+    painted.into_inner()
+}
+
 /// Paint a layer of underground pockets by its number (0 removes it), on
 /// the ground level. `salt` should change from dab to dab.
 pub fn paint_pockets(edit: &mut Edit, brush: &Brush, cx: f32, cz: f32, layer: u16, salt: u64) {

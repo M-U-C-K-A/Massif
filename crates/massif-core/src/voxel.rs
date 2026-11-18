@@ -216,7 +216,16 @@ impl VoxelChunk {
     /// (whose voxels all follow their columns): no matter of its own, no
     /// terrain, no fluid.
     pub fn is_bare(&self, bare: &VoxelChunk) -> bool {
-        self.density == bare.density && self.terrain.as_ref().is_none_or(|plane| plane.iter().all(|&t| t == FOLLOW))
+        if self.density != bare.density {
+            return false;
+        }
+        // The water and lava of caves the levels compose are the bare
+        // chunk's too.
+        let mark = |c: &VoxelChunk, i: usize| c.terrain.as_ref().map_or(FOLLOW, |p| p[i]);
+        (0..VOLUME).all(|i| {
+            let own = mark(self, i);
+            own == FOLLOW && mark(bare, i) == FOLLOW || (own == WATER_MARK || own == LAVA_MARK) && own == mark(bare, i)
+        })
     }
 
     /// Column `(lx, lz)` as `bare` has it: what was sculpted there gives
@@ -225,6 +234,9 @@ impl VoxelChunk {
         for ly in 0..SIZE {
             self.set(lx, ly, lz, bare.get(lx, ly, lz));
             self.set_terrain(lx, ly, lz, None);
+            if let Some(f) = bare.fluid(lx, ly, lz) {
+                self.set_fluid(lx, ly, lz, Some(f));
+            }
         }
     }
 }
@@ -588,18 +600,7 @@ pub fn bare_densities(dim: &Dimension, positions: &[ChunkPos]) -> Vec<(ChunkPos,
     by_tile
         .par_iter()
         .flat_map_iter(|(tile, chunks)| {
-            let empty = VoxelLayer::default();
-            let stack = dim.ground().view(*tile).map(|ground| {
-                let mut layers = vec![(0, crate::level::LevelKind::Ground, ground)];
-                for (index, level) in dim.levels.iter().enumerate().skip(1) {
-                    if level.visible
-                        && let Some(t) = level.view(*tile)
-                    {
-                        layers.push((index, level.kind, t));
-                    }
-                }
-                TileStack::gather(dim.min_y, dim.max_y, &empty, *tile, layers)
-            });
+            let stack = TileStack::new(dim, *tile, false).map(TileStack::without_sculpt);
             let made: Vec<(ChunkPos, VoxelChunk)> = chunks
                 .par_iter()
                 .map(|&p| {
@@ -650,6 +651,7 @@ fn densities_in(stack: &TileStack, pos: ChunkPos) -> VoxelChunk {
     let mut chunk = VoxelChunk::air();
     let (x0, y0, z0) = pos.origin();
     let mut spans = Vec::new();
+    let mut fluids = Vec::new();
     for lz in 0..SIZE {
         for lx in 0..SIZE {
             let cell = local_index(x0 + lx, z0 + lz);
@@ -667,6 +669,17 @@ fn densities_in(stack: &TileStack, pos: ChunkPos) -> VoxelChunk {
                             let d = ((s.top - y as f32).clamp(0.0, 1.0) * 255.0).round() as u8;
                             let d = if y < s.y1 { d.max(SOLID) } else { d.min(SOLID - 1) };
                             chunk.set(lx, y - y0, lz, d);
+                        }
+                    }
+                }
+            }
+            // The water and lava of the caves the levels compose there.
+            if stack.caves().is_some_and(|c| c.has_fluid()) {
+                stack.cave_fluids(cell, &mut fluids);
+                for &(a, b, f) in &fluids {
+                    for y in a.max(y0)..b.min(y0 + SIZE) {
+                        if !chunk.solid(lx, y - y0, lz) {
+                            chunk.set_fluid(lx, y - y0, lz, Some(f));
                         }
                     }
                 }

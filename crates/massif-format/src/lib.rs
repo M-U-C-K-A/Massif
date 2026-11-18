@@ -139,6 +139,9 @@ struct DimDoc {
     /// Id of the `SELN` section holding the selection, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     selection: Option<u32>,
+    /// Its cave layers (1.2 on; older versions read no cave).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    caves: Vec<massif_core::caves::CaveDef>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -301,6 +304,7 @@ impl Layout {
                 levels,
                 voxels,
                 selection,
+                caves: dim.caves.to_vec(),
             });
         }
         Ok(dims)
@@ -805,6 +809,9 @@ fn read_dims(parsed: &Parsed, docs: &[DimDoc], frames: &mut Frames, keep: bool) 
             levels.push(level);
         }
         let mut dimension = Dimension::from_levels(dim.kind, dim.min_y, dim.max_y, levels);
+        if !dim.caves.is_empty() {
+            dimension.caves = massif_core::caves::CaveLayers::new(dim.caves.clone());
+        }
         if let Some(id) = dim.voxels {
             let Some((_, raw)) = parsed.voxels.iter().find(|(i, _)| *i == id) else {
                 return corrupt(format!("the sculpted chunks {id} are missing"));
@@ -1118,6 +1125,24 @@ mod tests {
         let back = read(&bytes).unwrap();
         assert_eq!(back.registry.pockets, world.registry.pockets);
         assert_eq!(back.registry.combined, world.registry.combined);
+    }
+
+    /// A dimension's cave layers are saved with it, and its tiles' caves
+    /// plane with them; a map without any is written as before.
+    #[test]
+    fn cave_layers_round_trip() {
+        let mut world = sample_world();
+        let plain = to_bytes(&mut world);
+        assert!(!String::from_utf8_lossy(&plain).contains("\"caves\""), "nothing written for no cave layer");
+        let dim = &mut world.dims[0];
+        dim.caves = massif_core::caves::CaveLayers::new(vec![massif_core::caves::CaveDef::vanilla("Caves", 3, dim.min_y, dim.max_y, 63)]);
+        let pos = dim.ground().positions().next().unwrap();
+        dim.ground_mut().tile_mut(pos).unwrap().caves.set(5, 1);
+        let bytes = to_bytes(&mut world);
+        let back = read(&bytes).unwrap();
+        assert_eq!(back.dims[0].caves, world.dims[0].caves);
+        let mut ground = back.dims[0].ground().clone();
+        assert_eq!(ground.tile_mut(pos).unwrap().caves.get(5), 1);
     }
 
     #[test]
