@@ -309,7 +309,7 @@ pub fn assemble_within(lib: &Library, spec: &Spec, start: [i32; 3], turn: Option
                             junctions: vec![[jigsaw.pos[0], junction_y - cjy + ground_delta, jigsaw.pos[2], -dy]],
                         };
                         pieces.push(child);
-                        if parent.depth + 1 <= spec.depth {
+                        if parent.depth < spec.depth {
                             // The room the child's own children take from:
                             // the same room as itself.
                             order += 1;

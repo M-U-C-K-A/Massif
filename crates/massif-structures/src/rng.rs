@@ -32,7 +32,7 @@ impl Rng {
             return 0;
         }
         // Lemire's method: no bias worth speaking of at these sizes.
-        ((self.next_u64() >> 32) * bound as u64 >> 32) as u32
+        (((self.next_u64() >> 32) * bound as u64) >> 32) as u32
     }
 
     /// A whole number in `lo..=hi`.
