@@ -86,6 +86,17 @@ pub enum CaveKind {
     Tunnels,
 }
 
+impl CaveKind {
+    /// Its name in WorldPainter.
+    pub const fn name(self) -> &'static str {
+        match self {
+            CaveKind::Caverns => "Caverns",
+            CaveKind::Chasms => "Chasms",
+            CaveKind::Tunnels => "Caves",
+        }
+    }
+}
+
 /// A custom ground cover layer of WorldPainter: a layer of blocks over the
 /// terrain, so many blocks thick (or into it, for a negative thickness).
 #[derive(Debug, Clone, PartialEq)]
@@ -652,36 +663,59 @@ pub fn apply_after(dim: &mut Dimension, painted: &[(TilePos, After)], conv: &Con
         dim.levels[level].take_dirty();
     }
 
-    // Caves, each kind over the columns painted with it, as many as the
-    // strength they were painted at (WorldPainter carves more of them the
-    // stronger a layer is).
-    for (n, kind) in [CaveKind::Caverns, CaveKind::Chasms, CaveKind::Tunnels].into_iter().enumerate() {
-        let tiles: Vec<(TilePos, &Vec<u8>)> = of(Conv::Caves(kind)).collect();
-        let (columns, total) = tiles.iter().flat_map(|t| t.1.iter()).filter(|&&s| s > 0).fold((0u64, 0u64), |(n, sum), &s| (n + 1, sum + s as u64));
-        if columns == 0 {
-            continue;
+    // Caves: a cave layer for each mix of WorldPainter's cave layers
+    // painted together on a column — Caverns as chambers, Chasms as
+    // ravines, Caves as tunnels and noodles —, each kind as dense as the
+    // strength it was painted at on average, the ground's caves plane
+    // painted with it where it was painted (Edit ▸ Caves, or the Caves
+    // tool, change them after).
+    let kinds = [CaveKind::Caverns, CaveKind::Chasms, CaveKind::Tunnels];
+    let painted_kinds: Vec<HashMap<TilePos, &Vec<u8>>> = kinds.iter().map(|&k| of(Conv::Caves(k)).collect()).collect();
+    if painted_kinds.iter().any(|p| !p.is_empty()) {
+        // The share each kind takes where painted, from its strength.
+        let share: Vec<f32> = painted_kinds
+            .iter()
+            .map(|tiles| {
+                let (n, sum) = tiles.values().flat_map(|s| s.iter()).filter(|&&v| v > 0).fold((0u64, 0u64), |(n, sum), &v| (n + 1, sum + v as u64));
+                if n == 0 { 0.0 } else { sum as f32 / n as f32 / 255.0 }
+            })
+            .collect();
+        let mut defs = dim.caves.to_vec();
+        let (min_y, max_y) = (dim.min_y, dim.max_y);
+        let mut layer_of: HashMap<u8, u16> = HashMap::new();
+        let mut tiles: Vec<TilePos> = painted_kinds.iter().flat_map(|p| p.keys().copied()).collect();
+        tiles.sort();
+        tiles.dedup();
+        for pos in tiles {
+            let Some(tile) = dim.ground_mut().tile_mut(pos) else { continue };
+            for i in 0..AREA {
+                let mut mix = 0u8;
+                for (k, p) in painted_kinds.iter().enumerate() {
+                    if p.get(&pos).is_some_and(|s| s[i] > 0) {
+                        mix |= 1 << k;
+                    }
+                }
+                if mix == 0 {
+                    continue;
+                }
+                let n = *layer_of.entry(mix).or_insert_with(|| {
+                    let names: Vec<&str> = kinds.iter().enumerate().filter(|(k, _)| mix & (1 << k) != 0).map(|(_, k)| k.name()).collect();
+                    let mut def = massif_core::caves::CaveDef::vanilla(&names.join(" + "), (seed as u32).wrapping_add(mix as u32), min_y, max_y, sea);
+                    let on = |k: usize| mix & (1 << k) != 0;
+                    (def.cheese.on, def.cheese.density) = (on(0), share[0]);
+                    (def.ravines.on, def.ravines.density) = (on(1), share[1]);
+                    (def.spaghetti.on, def.spaghetti.density) = (on(2), share[2]);
+                    (def.noodles.on, def.noodles.density) = (on(2), share[2] * 0.5);
+                    def.openings = 0.0;
+                    def.aquifers.on = false;
+                    defs.push(def);
+                    defs.len() as u16
+                });
+                tile.caves.set(i, n);
+            }
+            tile.compact();
         }
-        let mut settings = massif_core::caves::CaveSettings::for_dimension(dim, sea);
-        (settings.caverns, settings.ravines, settings.tunnels) = (kind == CaveKind::Caverns, kind == CaveKind::Chasms, kind == CaveKind::Tunnels);
-        settings.seed = (seed as u32).wrapping_add(n as u32);
-        settings.openings = 0.0;
-        // Massif's own caverns and ravines are rare (a few in ten tiles);
-        // WorldPainter fills what is painted with them: at full strength,
-        // about one cavern and three ravines a tile.
-        let share = total as f32 / columns as f32 / 255.0;
-        settings.density = share
-            * match kind {
-                CaveKind::Caverns => 14.0,
-                CaveKind::Chasms => 20.0,
-                CaveKind::Tunnels => 1.6,
-            };
-        let weights = tiles.iter().map(|(p, s)| (*p, s.iter().map(|&v| if v > 0 { massif_core::selection::IN } else { 0 }).collect()));
-        dim.selection = Some(std::sync::Arc::new(massif_core::selection::Selection::from_tiles(weights)));
-        let carved = massif_core::caves::carve(dim, &settings, &massif_core::auto::Steps::default());
-        dim.selection = None;
-        for (pos, chunk) in carved.chunks {
-            dim.voxels.insert(pos, chunk);
-        }
+        dim.caves = massif_core::caves::CaveLayers::new(defs);
     }
     dim.ground_mut().take_dirty();
     dim.voxels.take_dirty();
@@ -1600,9 +1634,15 @@ mod tests {
         assert!(!carve.present(2 * 128 + 9) && !carve.present(4 * 128 + 9));
         drop(carve);
 
-        // Caverns in the tile painted, nowhere else.
-        assert!(!dim.voxels.is_empty(), "caverns carved");
-        assert!(dim.voxels.iter().all(|(p, _)| p.tile() == TilePos::new(-1, -1)));
+        // Caverns: a layer of chambers, painted in the tile painted, nowhere
+        // else.
+        assert_eq!(dim.caves.defs().len(), 1);
+        let caverns = &dim.caves.defs()[0];
+        assert_eq!(caverns.name, "Caverns");
+        assert!(caverns.cheese.on && !caverns.ravines.on && !caverns.spaghetti.on && caverns.cheese.density == 1.0);
+        assert_eq!(dim.ground().view(TilePos::new(-1, -1)).unwrap().caves.uniform_value(), Some(1));
+        assert_eq!(dim.ground().view(TilePos::new(0, 0)).unwrap().caves.uniform_value(), Some(0));
+        assert!(dim.voxels.is_empty(), "nothing sculpted");
         assert!(dim.selection.is_none());
     }
 

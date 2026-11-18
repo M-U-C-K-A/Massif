@@ -77,16 +77,6 @@ pub enum Outcome {
         revision: u64,
         dim: usize,
     },
-    /// Caves carved into a copy of the map: the sculpted chunks they
-    /// changed, to put in place in one undoable step.
-    Caves {
-        chunks: Vec<(massif_core::voxel::ChunkPos, Arc<massif_core::voxel::VoxelChunk>)>,
-        blocks: usize,
-        flooded: usize,
-        /// The document's revision and dimension it was worked out from.
-        revision: u64,
-        dim: usize,
-    },
     /// The relief of a real place written into a copy of the map: the
     /// tiles it changed, to put in place in one undoable step.
     RealTerrain {
@@ -519,28 +509,6 @@ impl Job {
                 Ok(files) => Outcome::RegionExported { dir, files },
                 Err(_) if p.cancel.load(std::sync::atomic::Ordering::Relaxed) => Outcome::Cancelled,
                 Err(e) => Outcome::Failed(tr!("The region could not be exported: {e}", e)),
-            }
-        })
-    }
-
-    /// Caves carved into dimension `dim` of a snapshot of the document at
-    /// `revision` (over its selection when it has one).
-    pub fn caves(ctx: &egui::Context, snapshot: World, dim: usize, settings: massif_core::caves::CaveSettings, revision: u64) -> Job {
-        use massif_core::auto::Steps;
-        let progress = Arc::new(Steps::default());
-        let p = progress.clone();
-        let label = if snapshot.dims[dim].selection.is_some() { tr!("Carving caves in the selection") } else { tr!("Carving caves over the whole map") };
-        Job::spawn(JobKind::Auto, label.to_owned(), Some(progress as Arc<dyn JobProgress>), ctx, move || {
-            let carved = massif_core::caves::carve(&snapshot.dims[dim], &settings, &p);
-            if carved.cancelled {
-                return Outcome::Cancelled;
-            }
-            Outcome::Caves {
-                chunks: carved.chunks,
-                blocks: carved.blocks,
-                flooded: carved.flooded,
-                revision,
-                dim,
             }
         })
     }

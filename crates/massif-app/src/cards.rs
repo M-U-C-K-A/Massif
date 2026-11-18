@@ -246,6 +246,18 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
             Some(tr!("Edit ▸ Smooth terrain… turns it on for the whole map and sets each terrain's pieces.")),
             Some(Demo::Slabs),
         ),
+        Tool::Caves => card(
+            tr!("Paints where a cave layer carves its caves, as the game's since 1.18: chambers with pillars, winding tunnels, noodles, ravines, and lakes of water and lava at their own levels."),
+            vec![(tr!("Drag"), tr!("Paint caves")), (tr!("Right-drag"), tr!("No caves there"))],
+            Some(tr!("Each layer's settings change its caves wherever it is painted. Edit ▸ Whole map ▸ Caves paints one over the map or the selection.")),
+            Some(Demo::Caves),
+        ),
+        Tool::CaveBiome => card(
+            tr!("Paints a cave biome between two heights: lush caves, dripstone caves, the deep dark. The export decorates their caves as the game does."),
+            vec![(tr!("Drag"), tr!("Paint the biome")), (tr!("Right-drag"), tr!("Rub it out"))],
+            Some(tr!("The game keeps a biome every 4 blocks in each direction: so does the painting.")),
+            Some(Demo::CaveBiome),
+        ),
         Tool::Combined => card(
             tr!("Paints several layers at once, as WorldPainter's combined layers: a forest's terrain, biome, ground cover and trees in one stroke."),
             vec![(tr!("Drag"), tr!("Paint them all")), (tr!("Right-drag"), tr!("Rub them out"))],
@@ -376,6 +388,8 @@ pub enum Demo {
     TreeSize,
     Slabs,
     Pockets,
+    Caves,
+    CaveBiome,
     Combined,
     AutoPaint,
     AutoBiome,
@@ -643,6 +657,33 @@ impl Demo {
                         if hash(i * 5 + 1) < 0.45 {
                             t[i] = Some([136, 128, 120]);
                         }
+                    });
+                }
+                stroke(9.0)
+            }
+            Demo::Caves => {
+                // Dark winding hollows open in the rock where the brush
+                // goes, as a cut through it would show them.
+                for k in 0..steps {
+                    let (x, y) = sweep(k as f64 / SAMPLES as f64);
+                    let t = &mut s.tint;
+                    Scene::near(x, y, 9.0, |i, _| {
+                        let (px, py) = ((i % W) as f64, (i / W) as f64);
+                        if ((px * 0.35).sin() * 4.0 - (py - H as f64 / 2.0)).abs() < 2.6 || hash(i * 7 + 3) < 0.12 {
+                            t[i] = Some([44, 40, 52]);
+                        }
+                    });
+                }
+                stroke(9.0)
+            }
+            Demo::CaveBiome => {
+                // Moss and dripleaves over the rock of a cave where the
+                // brush goes.
+                for k in 0..steps {
+                    let (x, y) = sweep(k as f64 / SAMPLES as f64);
+                    let t = &mut s.tint;
+                    Scene::near(x, y, 9.0, |i, _| {
+                        t[i] = Some(if hash(i * 3 + 11) < 0.3 { [88, 150, 58] } else { [62, 112, 44] });
                     });
                 }
                 stroke(9.0)

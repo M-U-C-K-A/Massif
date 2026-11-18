@@ -76,7 +76,7 @@ fn sample_heights(dim: &Dimension, revision: u64, generation: u64) -> Heights {
         .map(|&t| {
             let mut out = Vec::with_capacity(1024);
             let mut highest: Option<(f32, i32)> = None;
-            if let Some(stack) = massif_core::compose::TileStack::new(dim, t, false) {
+            if let Some(stack) = massif_core::compose::TileStack::from_above(dim, t, false) {
                 let mut sampler = crate::map_render::ColumnSampler::default();
                 for j in (2..TILE_SIZE).step_by(4) {
                     for i in (2..TILE_SIZE).step_by(4) {
@@ -125,7 +125,7 @@ fn sample_heights(dim: &Dimension, revision: u64, generation: u64) -> Heights {
             .par_iter()
             .map(|&t| {
                 let mut out = Vec::new();
-                if let Some(stack) = massif_core::compose::TileStack::new(dim, t, false) {
+                if let Some(stack) = massif_core::compose::TileStack::from_above(dim, t, false) {
                     let mut sampler = crate::map_render::ColumnSampler::default();
                     for i in (0..TILE_SIZE).step_by(every) {
                         let x = t.x * TILE_SIZE + i;
@@ -178,6 +178,8 @@ pub struct Document {
     /// measures from the boundary as it first was (see
     /// [`massif_core::gradient::Sides`]).
     pub gradient_sides: Option<massif_core::gradient::Sides>,
+    /// The settings of a cave layer changed: every view draws again.
+    pub caves_changed: bool,
     /// What the map's check found and set right as it was opened, to say
     /// once (see [`Document::check`]).
     checked: Option<String>,
@@ -196,6 +198,7 @@ impl Document {
             generation,
             auto_base: std::sync::Mutex::new(None),
             gradient_sides: None,
+            caves_changed: false,
             max_hot_tiles: MAX_HOT_TILES,
             heights: HeightsJob::default(),
             read_only: None,

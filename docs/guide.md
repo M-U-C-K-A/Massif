@@ -558,7 +558,11 @@ copper around 48; gold, redstone, lapis and diamonds deep down, diamonds
 mostly in deepslate; emeralds high in mountains only. **Before 1.18** lays
 them as older versions did, from 0 to 128. They are approximations of the
 game, not its exact generator. **Richness** multiplies every band's veins;
-**Lay ores** turns them all off.
+**Lay ores** turns them all off. **Large veins** adds the game's large ore
+veins since 1.18: ribbons of copper ore in granite between y 0 and 50, of
+iron ore in tuff between y −60 and −8, with a block of raw metal now and
+then; new maps have them, maps made before them keep their ores as they
+were until it is turned on.
 
 Ores only take the place of natural rock — stone, granite, diorite and
 andesite; deepslate and tuff get the deepslate ores — and never of a block
@@ -832,38 +836,102 @@ two or three, terraces and smoothing under half a second.
 
 ## Caves
 
-**Edit ▸ Caves…** carves caves into the rock of the whole map, or of the
-selection when there is one:
+Caves are a layer painted on the map, carved as Minecraft carves them since
+1.18 wherever it is painted. A **cave layer** says what its caves are:
 
-- **Tunnels and chambers**: winding tunnels that branch, as Minecraft's
-  "spaghetti" caves, and now and then a wide chamber with thin pillars of
-  rock left standing in it (its "cheese" caves).
+- **Chambers**: large rooms with thin pillars of rock left standing in
+  them, the game's "cheese" caves.
+- **Tunnels**: long winding tunnels, its "spaghetti" caves.
+- **Noodles**: thin tunnels, many of them, in half of the rock.
 - **Ravines**: long, deep, narrow cuts with steep walls, narrower toward
   their floor.
-- **Caverns**: large open halls with a flatter floor and a rough outline,
-  tunnels leading out of them.
 
-**Density** sets how many, **Size** how wide and long (1×: about as
-Minecraft carves them). **Highest** and **Lowest** are the heights the caves
-keep to; closed caves also keep a roof of 5 blocks under the ground, so
-they never break through by chance. **Open to the surface** is the share
-of tunnels that start from the ground and of ravines cut open to the sky;
-those reach up from the range to the surface. **Fill with** puts a lake of
-water or lava in the caverns, up to the height **Up to**, whatever the
-world's own fluid. The **seed** sets the layout: the same seed carves the
-same caves, and a part of the map carved alone gets the caves the whole
-map would have there.
+Each has its **Density** (the share of the rock it takes, from none to the
+most), its **Size** (1×: as the game carves them) and the heights it keeps
+to (**Highest**, **Lowest**); it thins out toward the ends of its heights
+rather than stop flat. The caves keep a **Roof** of rock under the ground's
+surface, except where they **open to the sky**: the share of dry land where
+they may break through, never within three blocks of water, so that no lake
+or sea pours into them.
 
-**Carve** works on a copy of the map in the background, with its progress
-and a Cancel, and puts the caves in place as one step to undo. They are
-carved into the 3D matter, as **3D Sculpt**'s Dig would: they show in the 3D
-view and in 3D Sculpt, where they can be dug further or filled, and the
-export writes them as air (their lakes as water or lava). Only the 16-block
-cubes the caves reach into are kept, about 23 a tile with the default
-settings: on a map of 8,192 blocks a side, carving takes half a second on a
-ten-core Mac and the caves about 400 MB of memory (26 MB in the file).
-Within a selection, the caves keep to it, fading out along a feathered
-edge.
+**Aquifers** fill the caves with water, and with lava deep down, at levels
+of their own, as the game's: the rock is cut into zones some fifty blocks
+across, each dry or holding water up to its own level (**Lakes**: the share
+of zones that hold some; **Lava lakes**: the share of those under **Lava
+under** that hold lava), and where zones of different levels meet, a wall
+of rock stays between them. **Lava floor** fills every cave under a height
+with lava, as the game's under y −54. Water and lava never run once the
+game updates a block beside them: no fluid lies beside the open air or over
+a cave, the caves keep a block under the floor of any lake or sea next to
+them, and the export makes rock of the few blocks that would still let a
+fluid run (a carve's room or a sculpted hollow beside a lake, say).
+
+The **Caves** tool (Underground group) paints a layer where its caves go;
+the right button rubs it out. Its settings, in Tool Settings, change the
+caves wherever the layer is painted, at any time: nothing is carved for
+good. **New cave layer** makes one as the game's. A layer's edges fade:
+caves thin out across the last few blocks painted.
+
+**Edit ▸ Whole map ▸ Caves…** paints a layer — a new one, or one of the
+map's with its settings changed — over the whole map, or over the
+selection by its weight, as one step to undo. Before anything is done it
+pictures the caves of two tiles in the middle of the map: a plan of the
+caves at a height you choose, and a cut through the land, their water and
+lava in their colours.
+
+Caves are worked out as the map is drawn and exported, from the layer, the
+ground and the seed alone, a tile at a time (36 ms of processor time a
+tile, 5.6 s for a map of 4,096 blocks a side on a ten-core Mac): they take
+no room in the file, and the last tiles worked out are kept in memory
+(384 MB at most). The 2D map and the 3D views show the caves open to the
+sky; **Underground** on the 2D map and **X-ray** in the 3D views show the
+others. 3D Sculpt digs and builds in them as anywhere: a cube of 16³ blocks
+sculpted starts from the caves there, with their water and lava, and keeps
+them as they were when it was sculpted.
+
+### Cave biomes
+
+The **Cave biome** tool (Underground group) paints **Lush caves**,
+**Dripstone caves** or the **Deep dark** between two heights (**Highest**,
+**Lowest**): the game keeps a biome for every cell of 4 × 4 × 4 blocks, and
+so does the painting, so a biome can lie under another or under the
+surface's. The export writes them as the game's cave biomes, and decorates
+their caves as the game does:
+
+- **Lush caves**: moss over the floor and the ceiling, carpets of moss,
+  grass, azaleas and flowering azaleas, cave vines hanging with glow
+  berries, spore blossoms, rooted dirt with hanging roots, and small pools
+  of water lined with clay, where big and small dripleaves stand.
+- **Dripstone caves**: dripstone blocks in patches over floors, walls and
+  ceilings, stalactites hanging and stalagmites standing, of pointed
+  dripstone thick at their base and thin at their tip (merged where they
+  meet).
+- **Deep dark**: sculk over the floor, the walls and the ceiling, sculk
+  veins clinging to the rock around, sculk sensors, shriekers (which can
+  call the Warden, as the game's own) and catalysts, each with its block
+  entity.
+- Other caves: glow lichen here and there on walls and ceilings.
+
+What a block of a cave's surface gets follows its place: a floor, a wall or
+a ceiling, how flat the floor is, how much room there is above or below. The
+decoration is the same every time, whatever part of the map is exported.
+Sculk needs 1.19 or later; older versions get what they have.
+
+### X-ray in the 3D views
+
+**X-ray** in the header of the 3D View and of 3D Sculpt (the scanning eye)
+draws the floors and ceilings of the caves under the ground through it,
+see-through, warm near the surface and cold deep down: where the cave
+layers carve, how deep, how the networks run. Walking or flying in the land
+(the Player, its Ghost) shows every cave as it is, to go into.
+
+### Underground on the 2D map
+
+**Underground** in the 2D map's header (the split square) cuts the map
+through at a height: the rock in greys (deepslate darker), the caves dark,
+lit by the relief of their floor and tinted by their cave biome, their
+water and lava in their colours, the land over the cut faded. Set the
+height beside it.
 
 ## Import mask
 
@@ -1269,7 +1337,7 @@ and corners half). Exports to 1.12 and older have no pieces.
 | Void | Columns of nothing: lower the land to the floor of the world | Converted: nothing in those columns |
 | Annotations | Annotations | Converted, colour for colour |
 | Biomes, custom terrains | Biomes, terrains | Converted |
-| Caverns, Chasms, Caves | Edit ▸ Caves (over the map or a selection: paint the selection with the Selection brush, then carve) | Converted: caverns, ravines or tunnels carved where painted, the more the stronger they were painted (about one cavern and three ravines a tile at full strength), always under the ground |
+| Caverns, Chasms, Caves | Cave layers (the Caves tool, Edit ▸ Whole map ▸ Caves) | Converted: a cave layer for each mix of them painted together — Caverns as chambers, Chasms as ravines, Caves as tunnels and noodles —, as dense as they were painted on average, painted where they were; closed under the ground, without lakes (set them in the layer) |
 | Resources | Edit ▸ Ores | Massif lays its own ores |
 | Tunnels, floating layers | Levels: Carve and Solid | Converted: a Carve level each (a Solid level for a floating one), its floor and roof where WorldPainter puts them (at a height, so deep under the ground, inverted, so high over the floor, within their limits), flooded up to its level; their noise and their floor, wall and roof materials are left out (the floor keeps the ground's terrain) |
 | Custom ground cover layers | Terrains with strata | Converted: a terrain of the cover's blocks over each terrain it lies on ("Snow Block on Grass"), the land raised by the cover's thickness, or the top of the land replaced for a negative thickness; its edges are sheer |

@@ -97,19 +97,20 @@ impl<'a> TileStack<'a> {
     /// Compose `view` of the caves of `dim`'s cave layers painted over the
     /// stack's tile, at `pos`.
     pub fn set_caves(&mut self, dim: &Dimension, pos: TilePos, view: Caves) {
-        self.with_cave_layers(&dim.caves, pos, view);
+        let dry = if dim.caves.is_empty() { Vec::new() } else { crate::caves::kept_dry(dim, pos) };
+        self.with_cave_layers(&dim.caves, pos, view, &dry);
     }
 
     /// Compose `view` of the caves of `layers` painted over the stack's
-    /// tile, at `pos`.
-    pub fn with_cave_layers(&mut self, layers: &crate::caves::CaveLayers, pos: TilePos, view: Caves) {
+    /// tile, at `pos`, kept off `dry` (see [`crate::caves::kept_dry`]).
+    pub fn with_cave_layers(&mut self, layers: &crate::caves::CaveLayers, pos: TilePos, view: Caves, dry: &[crate::caves::CaveBox]) {
         self.cave_view = view;
         let ground = self.ground();
         self.caves = match view {
             Caves::Hidden => None,
             // Only the tiles some layer of which may open to the sky.
             Caves::Openings if !opening_layers(layers, ground) => None,
-            _ => crate::caves::tile_caves(layers, ground, pos, self.min_y, self.max_y),
+            _ => crate::caves::tile_caves(layers, ground, pos, self.min_y, self.max_y, dry),
         };
         if view == Caves::Openings && self.caves.as_ref().is_some_and(|c| !c.opens()) {
             self.caves = None;
@@ -494,6 +495,13 @@ impl<'a> TileStack<'a> {
         if out.base == 0 {
             let (surface, terrain) = top().unwrap_or((auto.floor, TerrainId::ROCK));
             out.base = auto.pick(reg, terrain, surface, ground.fluid.get(cell));
+        }
+        // The cave biomes painted in its cells, under the levels' own.
+        if !ground.cave_biomes.is_empty() {
+            let (lx, lz) = (cell % 128, cell / 128);
+            let mut runs = Vec::new();
+            ground.cave_biomes.column(lx / 4, lz / 4, &mut runs);
+            out.overrides.extend(runs);
         }
         for (_, _, tile) in self.layers().skip(1) {
             let biome = tile.biome.get(cell);

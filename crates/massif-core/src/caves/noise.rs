@@ -86,6 +86,26 @@ pub fn fbm(seed: u64, x: f32, y: f32, z: f32, octaves: u32) -> f32 {
     sum / norm
 }
 
+fn value_hash(seed: u64, a: i64, b: i64, salt: u64) -> u64 {
+    let mut r = super::ravines::Rng::new(seed.wrapping_mul(0x2545_F491_4F6C_DD1D) ^ (a as u64).wrapping_mul(0x9E37_79B1) ^ (b as u64).wrapping_mul(0x85EB_CA77_C2B2_AE63) ^ salt);
+    r.next()
+}
+
+/// Value noise in 3D, 0 to 1, smooth: the underground pockets' (see
+/// [`crate::pockets`]), which must stay as they are block for block.
+pub fn noise3(seed: u64, x: f32, y: f32, z: f32) -> f32 {
+    let (xf, yf, zf) = (x.floor(), y.floor(), z.floor());
+    let (xi, yi, zi) = (xf as i64, yf as i64, zf as i64);
+    let s = |t: f32| t * t * (3.0 - 2.0 * t);
+    let (u, v, w) = (s(x - xf), s(y - yf), s(z - zf));
+    let at = |i: i64, j: i64, k: i64| (value_hash(seed, (i * 73_856_093) ^ (k * 19_349_663), j, 7) >> 40) as f32 / (1u64 << 24) as f32;
+    let x00 = lerp(at(xi, yi, zi), at(xi + 1, yi, zi), u);
+    let x10 = lerp(at(xi, yi + 1, zi), at(xi + 1, yi + 1, zi), u);
+    let x01 = lerp(at(xi, yi, zi + 1), at(xi + 1, yi, zi + 1), u);
+    let x11 = lerp(at(xi, yi + 1, zi + 1), at(xi + 1, yi + 1, zi + 1), u);
+    lerp(lerp(x00, x10, v), lerp(x01, x11, v), w)
+}
+
 /// The share of space where a noise lies under a value, measured once over
 /// many points: `quantile(p)` is the value under which a share `p` of space
 /// lies.
@@ -103,7 +123,7 @@ impl Quantiles {
         let n = 1 << 17;
         let mut all: Vec<f32> = (0..n)
             .map(|i: u32| {
-                let h = hash3(0x0A5E_ED, i as i32, 7, 11);
+                let h = hash3(0x000A_5EED, i as i32, 7, 11);
                 let at = |s: u32| ((h >> s) & 0xFFFF) as f32 / 65536.0 * 4096.0;
                 sample(at(0), at(16), at(32))
             })
@@ -155,6 +175,14 @@ mod tests {
         }
         assert!(max <= 1.2 && max > 0.5, "{max}");
         assert_eq!(gradient(3, 5.0, 6.0, 7.0), 0.0, "0 at lattice points");
+    }
+
+    /// The pockets' noise, as it was: the same blocks in maps made before.
+    #[test]
+    fn the_pockets_noise_stays_the_same() {
+        // As the carver of 1.0 worked them out.
+        let v = [noise3(7, 1.5, 2.25, -3.75), noise3(0x706f_636b_6574, 10.1, -4.2, 7.7)];
+        assert_eq!(v.map(f32::to_bits), [0x3f22_8923, 0x3f06_4ef4]);
     }
 
     #[test]

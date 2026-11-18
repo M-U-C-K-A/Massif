@@ -43,6 +43,15 @@ pub const FLAG_MULTI: u8 = 1;
 pub const FLAG_FLOATING: u8 = 2;
 /// The column's steps are smoothed with slabs (the Slabs tool).
 pub const FLAG_SLABS: u8 = 4;
+/// Column flags of a cut through the map at a height (see
+/// [`MapStyle::cut`]): rock there, a cave's air (its floor's height as the
+/// column's), water or lava in a cave, the open air over the land (the
+/// land's height).
+pub const FLAG_CUT_ROCK: u8 = 8;
+pub const FLAG_CUT_CAVE: u8 = 16;
+pub const FLAG_CUT_WATER: u8 = 32;
+pub const FLAG_CUT_LAVA: u8 = 64;
+pub const FLAG_CUT_SKY: u8 = 128;
 
 /// What one column looks like from above.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -229,12 +238,56 @@ impl ColumnSampler {
     }
 }
 
+impl ColumnSampler {
+    /// Column `cell` of a stack cut through at height `y` (see
+    /// [`MapStyle::cut`]).
+    pub fn cut(&mut self, stack: &TileStack, cell: usize, y: i32) -> Sample {
+        stack.spans(cell, &mut self.spans);
+        let Some(last) = self.spans.last().copied() else { return Sample::EMPTY };
+        let ground = stack.ground();
+        let mut sample = Sample { annotation: ground.annotations.get(cell) as u8, ..Sample::EMPTY };
+        if y >= last.y1 {
+            // Over the land: the land, seen from the cut.
+            return Sample { height: last.top, terrain: last.terrain.0, flags: FLAG_CUT_SKY, ..sample };
+        }
+        if let Some(s) = self.spans.iter().find(|s| s.y0 <= y && y < s.y1) {
+            return Sample { height: y as f32 + 1.0, terrain: s.terrain.0, flags: FLAG_CUT_ROCK, ..sample };
+        }
+        // In a cave: its floor, what fills it, its cave biome.
+        let floor = self.spans.iter().filter(|s| s.y1 <= y).map(|s| s.y1).max().unwrap_or(stack.min_y);
+        sample.height = floor as f32;
+        sample.terrain = self.spans.iter().find(|s| s.y1 == floor).map_or(0, |s| s.terrain.0);
+        let (lx, lz) = ((cell % 128) as i32, (cell / 128) as i32);
+        sample.biome = ground.cave_biomes.get(lx, y, lz);
+        let mut fluids = Vec::new();
+        stack.cave_fluids(cell, &mut fluids);
+        sample.flags = match fluids.iter().find(|f| f.0 <= y && y < f.1) {
+            Some((_, _, massif_core::voxel::Fluid::Lava)) => FLAG_CUT_LAVA,
+            Some(_) => FLAG_CUT_WATER,
+            None => {
+                stack.fluids(cell, &self.spans, &mut self.fluids);
+                if self.fluids.iter().any(|f| f.0 <= y && y < f.1) { FLAG_CUT_WATER } else { FLAG_CUT_CAVE }
+            }
+        };
+        sample
+    }
+}
+
 /// The composed surface of every column of one tile.
 pub struct SurfaceGrid(pub Vec<Sample>);
 
 impl SurfaceGrid {
-    pub fn build(dim: &Dimension, pos: TilePos) -> Option<SurfaceGrid> {
+    /// The tile's columns as the map shows them: from above, or cut
+    /// through at height `cut` (see [`MapStyle::cut`]).
+    pub fn build_at(dim: &Dimension, pos: TilePos, cut: Option<i32>) -> Option<SurfaceGrid> {
+        let Some(y) = cut else { return Self::build(dim, pos) };
         let stack = TileStack::new(dim, pos, false)?;
+        let mut sampler = ColumnSampler::default();
+        Some(SurfaceGrid((0..TILE_AREA).map(|i| sampler.cut(&stack, i, y)).collect()))
+    }
+
+    pub fn build(dim: &Dimension, pos: TilePos) -> Option<SurfaceGrid> {
+        let stack = TileStack::from_above(dim, pos, false)?;
         let samples = if stack.is_ground_only() {
             let g = stack.ground();
             let (top, terrain) = (g.top.dense(), g.terrain.dense());
@@ -265,8 +318,19 @@ fn summary_size(lod: u8) -> usize {
 }
 
 impl Summary {
-    pub fn build(dim: &Dimension, pos: TilePos, size: usize) -> Option<Summary> {
+    /// [`Summary::build`], or cut through at height `cut`.
+    pub fn build_at(dim: &Dimension, pos: TilePos, size: usize, cut: Option<i32>) -> Option<Summary> {
+        let Some(y) = cut else { return Self::build(dim, pos, size) };
         let stack = TileStack::new(dim, pos, false)?;
+        let mut sampler = ColumnSampler::default();
+        let step = 128 / size;
+        let at = |i: usize| i * step + SUMMARY_OFFSET as usize;
+        let samples = (0..size * size).map(|k| sampler.cut(&stack, cell_index(at(k % size), at(k / size)), y)).collect();
+        Some(Summary { size, samples })
+    }
+
+    pub fn build(dim: &Dimension, pos: TilePos, size: usize) -> Option<Summary> {
+        let stack = TileStack::from_above(dim, pos, false)?;
         let mut sampler = ColumnSampler::default();
         let step = 128 / size;
         let at = |i: usize| i * step + SUMMARY_OFFSET as usize;
@@ -336,6 +400,7 @@ impl Default for MapStyle {
             sizes: false,
             pockets: false,
             slabs: false,
+            cut: None,
         }
     }
 }
@@ -393,6 +458,9 @@ pub struct MapStyle {
     pub pockets: bool,
     /// Where the steps are smoothed with slabs is drawn over the map.
     pub slabs: bool,
+    /// The map cut through at this height: its caves, their water and
+    /// lava, the rock around them, as a plan.
+    pub cut: Option<i32>,
 }
 
 /// Default light direction: from the north-west, like WorldPainter.
@@ -635,6 +703,35 @@ impl<'a> Colorizer<'a> {
     /// blocks (the plants of covers show one by one). `steps`: the lines of
     /// the one-block steps across the texel, added to its light (see
     /// [`block_step_shades`]).
+    /// A texel of the map cut through at height `y`: rock in greys (stone,
+    /// deepslate under 0), caves dark, lit by the relief of their floor and
+    /// tinted by their cave biome, water and lava in their colours, the land
+    /// over the cut faded.
+    fn cut_pixel(&self, c: &Sample, y: i32, shade: f32) -> Color32 {
+        let rgb = if c.flags & FLAG_CUT_ROCK != 0 {
+            let base = if y < 0 { [74.0, 74.0, 82.0] } else { [128.0, 128.0, 126.0] };
+            scale(base, 0.88 + 0.12 * shade)
+        } else if c.flags & FLAG_CUT_WATER != 0 {
+            [52.0, 98.0, 200.0]
+        } else if c.flags & FLAG_CUT_LAVA != 0 {
+            [226.0, 104.0, 36.0]
+        } else if c.flags & FLAG_CUT_CAVE != 0 {
+            // Deeper under the cut, darker.
+            let deep = ((y as f32 - c.height) / 24.0).clamp(0.0, 1.0);
+            let base = mix([92.0, 84.0, 104.0], [30.0, 27.0, 36.0], deep);
+            let base = match self.biome.get(c.biome as usize) {
+                Some(&tint) if c.biome != 0 => mix(base, tint, 0.45),
+                _ => base,
+            };
+            scale(base, 0.55 + 0.45 * shade)
+        } else {
+            // The land over the cut, faded toward the sky.
+            let ground = self.terrain_rgb(c.terrain);
+            mix(scale(ground, 0.6 + 0.4 * shade), [214.0, 222.0, 232.0], 0.62)
+        };
+        to_color(rgb)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn pixel(
         &self,
@@ -675,6 +772,9 @@ impl<'a> Colorizer<'a> {
         };
         let shade = if blocks { step_shade(dx, dz, self.light) } else { hillshade(dx * exaggeration, dz * exaggeration, self.light) };
         let shade = steps.map_or(shade, |line| (shade + line).clamp(0.3, 1.32));
+        if let Some(y) = self.style.cut {
+            return self.cut_pixel(c, y, shade);
+        }
 
         let mut out = match self.style.mode {
             MapMode::Terrain => {
@@ -1212,6 +1312,8 @@ pub struct MapCache {
     /// Chunk textures kept around (64 KiB each).
     pub max_chunks: usize,
     busy: bool,
+    /// The height the grids and summaries were cut through at.
+    cut: Option<i32>,
 }
 
 impl MapCache {
@@ -1239,6 +1341,7 @@ impl Default for MapCache {
             max_summary_bytes: DEFAULT_SUMMARY_BYTES,
             max_chunks: 1400,
             busy: false,
+            cut: None,
         }
     }
 }
@@ -1344,6 +1447,11 @@ impl MapCache {
         wanted: &[ChunkKey],
         budget: Duration,
     ) -> bool {
+        // Cut through at another height: every column read again.
+        if style.cut != self.cut {
+            self.cut = style.cut;
+            self.invalidate_all();
+        }
         // What was used before this update may shrink.
         let first = self.clock + 1;
         self.busy = self.build(ctx, dim, reg, sea, style, wanted, budget);
@@ -1447,7 +1555,7 @@ impl MapCache {
             if !fine_reads.is_empty() {
                 let built: Vec<(TilePos, Option<Arc<SurfaceGrid>>)> = fine_reads
                     .par_iter()
-                    .map(|(&t, _)| (t, SurfaceGrid::build(dim, t).map(Arc::new)))
+                    .map(|(&t, _)| (t, SurfaceGrid::build_at(dim, t, style.cut).map(Arc::new)))
                     .collect();
                 for (t, grid) in built {
                     self.grids.insert(t, GridEntry { grid, used: clock });
@@ -1456,7 +1564,7 @@ impl MapCache {
             if !coarse_reads.is_empty() {
                 let built: Vec<(TilePos, Option<Arc<Summary>>)> = coarse_reads
                     .par_iter()
-                    .map(|(&t, &size)| (t, Summary::build(dim, t, size).map(Arc::new)))
+                    .map(|(&t, &size)| (t, Summary::build_at(dim, t, size, style.cut).map(Arc::new)))
                     .collect();
                 for (t, summary) in built {
                     let entry = SummaryEntry { summary, used: clock };

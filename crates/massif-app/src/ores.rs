@@ -455,6 +455,12 @@ impl OresView {
                     widgets::Field::new(&mut self.settings.richness, 0.0..=4.0).max_decimals(2).suffix("×").text(tr!("Richness")).width(150.0),
                 )
                 .on_hover_text(tr!("Every band's veins, times this"));
+                ui.add_space(8.0);
+                ui.add_enabled_ui(self.settings.on, |ui| {
+                    widgets::switch(ui, &mut self.settings.veins).on_hover_text(tr!("The game's large veins since 1.18: copper ore in granite between y 0 and 50, iron ore in tuff between y −60 and −8, with blocks of raw metal"));
+                });
+                ui.label(RichText::new(tr!("Large veins")).size(12.5));
+                ui.add_space(8.0);
                 let label = self.settings.preset().map_or(tr!("Custom"), |p| crate::i18n::tr_name(p.label()));
                 widgets::combo("ore preset").selected_text(label).width(150.0).show_ui(ui, |ui| {
                     for p in Preset::ALL {
