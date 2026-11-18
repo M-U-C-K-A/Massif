@@ -740,6 +740,23 @@ kind of land, the three terrains of each biome. They are kept with the
 settings. Forests are told from the ground for now (podzol, coarse dirt);
 trees will count when layers exist.
 
+## Map size
+
+**Edit ▸ Map Size…** makes the map larger or smaller by whole tiles of 128 blocks, on any side, with nothing to redo by hand at its edges.
+
+- **Tiles on each side**: tiles added to the north, south, west or east of the map; a negative number crops that side. The tiles added make a whole band along the side, even where the map has holes.
+- **The picture**: a click on a tile adds it or takes it away, a drag does the same over every tile it crosses (the first tile decides which), as WorldPainter's Add/Remove Tiles. The tiles added show in the accent colour, those taken away crossed out, the new map's outline around them. **Reset** forgets the sides and the clicks.
+- **The land added**:
+  - **The edges continued**: the heights, water, terrains and biomes of the map's edges carried on outward. Next to the edge the land starts from the very column of the edge; farther out the heights are smoothed (as a membrane stretched from the edge) and take on some relief of their own, as much as the edge has about there. Seas and lakes along the edge go on.
+  - **Sea**: the land slopes down from the edges to a sea floor **Depth** blocks under the water level.
+  - **Flat land**: the edges ease to a plain at **Height**.
+  - **Generated**: the hills of the generator of new maps, seeded by the map's seed.
+
+  **Eased over** (Sea, Flat land, Generated) sets over how many blocks the edges ease into that land: no cliff at the seam.
+- The summary says the new size and how many tiles are added and taken away; a side is at most 32,768 blocks.
+
+**Apply** works in the background and is one step to undo. A tile taken away goes on every level, with its sculpted matter, and drops the selection.
+
 ## The whole map at once
 
 **Edit ▸ Whole map** runs one of the terrain graph's filters over the whole

@@ -11,9 +11,10 @@ massif-core.workspace = true
 rayon.workspace = true
 flate2.workspace = true
 thiserror.workspace = true
+serde.workspace = true
+fastanvil = { version = "0.32", default-features = false }
+fastnbt = "2.6"
 
 [dev-dependencies]
 massif-assets.workspace = true
-fastanvil = { version = "0.32", default-features = false }
-fastnbt = "2.6"
 libc = "0.2"

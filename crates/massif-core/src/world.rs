@@ -216,16 +216,7 @@ impl Dimension {
     /// Returns the ground tiles added.
     pub fn resize(&mut self, rect: BlockRect, blank: impl Fn() -> Tile) -> Vec<TilePos> {
         let inside: HashSet<TilePos> = rect.tiles().collect();
-        for level in &mut self.levels {
-            let out: Vec<TilePos> = level.positions().filter(|p| !inside.contains(p)).collect();
-            for pos in out {
-                level.remove(pos);
-            }
-        }
-        let out: Vec<ChunkPos> = self.voxels.iter().map(|(p, _)| p).filter(|p| !inside.contains(&p.tile())).collect();
-        for pos in out {
-            self.voxels.remove(pos);
-        }
+        self.keep_tiles(&inside);
         self.selection = None;
         let ground = self.ground_mut();
         let added: Vec<TilePos> = rect.tiles().filter(|p| !ground.contains(*p)).collect();
@@ -233,6 +224,31 @@ impl Dimension {
             ground.insert(pos, blank());
         }
         added
+    }
+}
+
+impl Dimension {
+    /// Drop the tiles of every level and the sculpted chunks outside
+    /// `inside`; the selection too when something was dropped. Returns
+    /// whether anything was.
+    pub fn keep_tiles(&mut self, inside: &HashSet<TilePos>) -> bool {
+        let mut dropped = false;
+        for level in &mut self.levels {
+            let out: Vec<TilePos> = level.positions().filter(|p| !inside.contains(p)).collect();
+            dropped |= !out.is_empty();
+            for pos in out {
+                level.remove(pos);
+            }
+        }
+        let out: Vec<ChunkPos> = self.voxels.iter().map(|(p, _)| p).filter(|p| !inside.contains(&p.tile())).collect();
+        dropped |= !out.is_empty();
+        for pos in out {
+            self.voxels.remove(pos);
+        }
+        if dropped {
+            self.selection = None;
+        }
+        dropped
     }
 }
 

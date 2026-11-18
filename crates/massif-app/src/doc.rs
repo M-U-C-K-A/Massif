@@ -421,6 +421,14 @@ impl Document {
         self.after_history();
     }
 
+    /// [`Document::replace_dimension`], the world's seed set to `seed` in
+    /// the same step.
+    pub fn replace_dimension_and_seed(&mut self, dim: usize, dimension: massif_core::world::Dimension, seed: i64, label: &str) {
+        let settings = (massif_core::WorldMeta { seed, ..self.world.meta.clone() }, self.world.registry.clone());
+        self.history.replace_dimension_and_settings(&mut self.world, dim, dimension, Some(settings), label);
+        self.after_history();
+    }
+
     /// Take back every change made to a map open read-only. Returns whether
     /// there was one.
     pub fn take_back(&mut self) -> bool {
