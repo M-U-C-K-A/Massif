@@ -15,6 +15,7 @@ pub mod gpu;
 pub mod map_source;
 pub mod materials;
 pub mod scene;
+pub mod sky;
 
 pub use camera::{Camera, Light};
 pub use gpu::{Memory, Renderer};

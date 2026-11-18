@@ -11,9 +11,11 @@ struct Params {
     up: vec4<f32>,       // w: the angle of a pixel, radians
     forward: vec4<f32>,  // w: exposure
     sun: vec4<f32>,      // direction toward the sun; w: cos of its radius
-    sun_light: vec4<f32>,  // irradiance / pi; w: the sun's disc, radiance
-    sky_zenith: vec4<f32>, // w: brightness of the sky
-    sky_horizon: vec4<f32>,
+    sun_light: vec4<f32>,  // the sun's illuminance above the air (tinted); w: the sky's strength
+    air: vec4<f32>,      // the air's scattering, the haze's, its anisotropy, the eyes' height (km)
+    fog: vec4<f32>,      // extinction a block at its base, base height (scene), falloff (blocks), anisotropy
+    media: vec4<f32>,    // shafts on, sea level (scene), emission strength, the lens's radius
+    lens: vec4<f32>,     // focus distance
     size: vec4<u32>,     // width, height, seed of the frame, sample (0: start over)
     grid: vec4<i32>,     // chunks across, chunks down, height in blocks, sections
     info: vec4<u32>,     // words a chunk's record, pyramid levels, bounces, shift (pixels per side of a ray: 1 << shift)
@@ -32,13 +34,21 @@ struct Params {
 @group(0) @binding(8) var out_image: texture_storage_2d<rgba8unorm, write>;
 @group(0) @binding(9) var atlas: texture_2d_array<f32>;
 @group(0) @binding(10) var atlas_sampler: sampler;
+@group(0) @binding(11) var transmittance_lut: texture_2d<f32>;
+@group(0) @binding(12) var multi_lut: texture_2d<f32>;
+@group(0) @binding(13) var sky_view_lut: texture_2d<f32>;
+@group(0) @binding(14) var lut_sampler: sampler;
 
 const UNIFORM: u32 = 0x80000000u;
 const CLASS_CUTOUT: u32 = 2u;
 const CLASS_WATER: u32 = 3u;
 const MAX_STEPS: i32 = 1536;
-const PI: f32 = 3.14159265;
 const EPS: f32 = 0.004;
+// How far a ray that leaves the scene goes through the fog.
+const FAR: f32 = 30000.0;
+
+// The sun's light at the scene (through the air), set once a pixel.
+var<private> SUN_LIGHT: vec3<f32>;
 
 struct Hit {
     found: bool,
@@ -302,17 +312,211 @@ fn sun_sample(s: ptr<function, u32>) -> vec3<f32> {
     return normalize(basis(P.sun.xyz) * vec3<f32>(st * cos(phi), st * sin(phi), c));
 }
 
+fn observer_r() -> f32 {
+    return BOTTOM + max(P.air.w, 0.001);
+}
+
+// The sky's light along d (the sun's disc aside), from the sky-view table.
 fn sky(d: vec3<f32>) -> vec3<f32> {
-    let h = d.y;
-    var c: vec3<f32>;
-    if (h >= 0.0) {
-        c = mix(P.sky_zenith.rgb, P.sky_horizon.rgb, pow(1.0 - h, 4.0));
-    } else {
-        c = P.sky_horizon.rgb * mix(1.0, 0.35, min(-h * 3.0, 1.0));
+    let r = observer_r();
+    var cos_az = 1.0;
+    let ls = length(P.sun.xz);
+    let ld = length(d.xz);
+    if (ls > 1e-4 && ld > 1e-4) {
+        cos_az = dot(P.sun.xz / ls, d.xz / ld);
     }
-    // The light around the sun.
-    let glow = pow(max(dot(d, P.sun.xyz), 0.0), 24.0) * 0.6;
-    return (c + P.sun_light.rgb * glow * 0.15) * P.sky_zenith.w;
+    let l = textureSampleLevel(sky_view_lut, lut_sampler, sky_view_uv(r, d.y, cos_az), 0.0).rgb;
+    return l * P.sun_light.rgb * P.sun_light.w;
+}
+
+// The sun's illuminance once through the air, at the eyes' height.
+fn sun_through_air() -> vec3<f32> {
+    let r = observer_r();
+    let mu = P.sun.y;
+    if (hits_ground(r, mu)) {
+        return vec3<f32>(0.0);
+    }
+    return P.sun_light.rgb * textureSampleLevel(transmittance_lut, lut_sampler, transmittance_uv(r, mu), 0.0).rgb;
+}
+
+// Light the air scatters more than once, a unit of scattering (Hillaire's
+// isotropic approximation), at the eyes' height.
+fn multi_scattering() -> vec3<f32> {
+    let uv = vec2<f32>(P.sun.y * 0.5 + 0.5, clamp(P.air.w / (TOP - BOTTOM), 0.0, 1.0));
+    let st = (uv * (MULTI_SIZE - 1.0) + 0.5) / MULTI_SIZE;
+    return textureSampleLevel(multi_lut, lut_sampler, st, 0.0).rgb * P.sun_light.rgb * P.sun_light.w;
+}
+
+// The media of the scene, each thinning exponentially with height: 0 the
+// air, 1 the haze (aerosols), 2 the fog. Per block (a metre).
+fn medium_base(k: i32) -> f32 {
+    if (k == 2) {
+        return P.fog.y;
+    }
+    return P.media.y;
+}
+
+fn medium_height(k: i32) -> f32 {
+    if (k == 0) {
+        return RAYLEIGH_HEIGHT * 1000.0;
+    }
+    if (k == 1) {
+        return MIE_HEIGHT * 1000.0;
+    }
+    return P.fog.z;
+}
+
+fn medium_extinction(k: i32) -> vec3<f32> {
+    if (k == 0) {
+        return RAYLEIGH_SCATTERING * 0.001 * P.air.x;
+    }
+    if (k == 1) {
+        return vec3<f32>(MIE_EXTINCTION * 0.001 * P.air.y);
+    }
+    return vec3<f32>(P.fog.x);
+}
+
+fn medium_scattering(k: i32) -> vec3<f32> {
+    if (k == 1) {
+        return vec3<f32>(MIE_SCATTERING * 0.001 * P.air.y);
+    }
+    return medium_extinction(k);
+}
+
+fn medium_phase(k: i32, c: f32) -> f32 {
+    if (k == 0) {
+        return rayleigh_phase(c);
+    }
+    if (k == 1) {
+        return mie_phase(c, P.air.z);
+    }
+    return hg_phase(c, P.fog.w);
+}
+
+fn density(k: i32, y: f32) -> f32 {
+    return exp(clamp(-(y - medium_base(k)) / medium_height(k), -40.0, 8.0));
+}
+
+// The integral of the density along a ray from height oy going up dy a
+// block, over t blocks.
+fn depth_along(k: i32, oy: f32, dy: f32, t: f32) -> f32 {
+    let h = medium_height(k);
+    let a = density(k, oy);
+    if (abs(dy * t) < h * 1e-3) {
+        return a * t;
+    }
+    let b = density(k, oy + dy * t);
+    return h / dy * (a - b);
+}
+
+// The distance along the ray at which the integral of the density reaches
+// `depth` (the inverse of depth_along).
+fn distance_at(k: i32, oy: f32, dy: f32, depth: f32) -> f32 {
+    let h = medium_height(k);
+    let a = density(k, oy);
+    if (abs(dy) < 1e-5) {
+        return depth / max(a, 1e-30);
+    }
+    let inner = a - depth * dy / h;
+    if (inner <= 0.0) {
+        return 1e30;
+    }
+    return (medium_base(k) - oy - h * log(inner)) / dy;
+}
+
+fn medium_on(k: i32) -> bool {
+    return dot(medium_extinction(k), vec3<f32>(1.0)) > 0.0;
+}
+
+// How much of the sun gets down to height y through the scene's media.
+fn sun_through_media(y: f32) -> vec3<f32> {
+    let dy = max(P.sun.y, 0.02);
+    var depth = vec3<f32>(0.0);
+    for (var k = 0; k < 3; k++) {
+        if (medium_on(k)) {
+            depth += medium_extinction(k) * medium_height(k) / dy * density(k, y);
+        }
+    }
+    return exp(-depth);
+}
+
+// The light the media scatter toward the eyes along a ray from ro, over
+// t_end blocks (to what it hit, or out of the scene), and how much of what
+// lies beyond gets through: one point of scattering, drawn in proportion
+// to the media's density and transmittance (`first`: the air and the haze
+// too; a ray out of the scene has them in the sky already).
+struct Through {
+    transmittance: vec3<f32>,
+    light: vec3<f32>,
+}
+
+fn through_media(ro: vec3<f32>, rd: vec3<f32>, t_end: f32, all: bool, seed: ptr<function, u32>) -> Through {
+    var out: Through;
+    out.transmittance = vec3<f32>(1.0);
+    out.light = vec3<f32>(0.0);
+    var depth = vec3<f32>(0.0);
+    var share = array<f32, 3>(0.0, 0.0, 0.0);
+    var total = 0.0;
+    for (var k = 0; k < 3; k++) {
+        if (!medium_on(k) || (!all && k < 2)) {
+            continue;
+        }
+        let d = depth_along(k, ro.y, rd.y, t_end);
+        let tau = medium_extinction(k) * d;
+        depth += tau;
+        share[k] = (tau.x + tau.y + tau.z) / 3.0;
+        total += share[k];
+    }
+    out.transmittance = exp(-depth);
+    if (total < 1e-5) {
+        return out;
+    }
+    // A medium in proportion to its depth, then a distance in it.
+    let pick = rand(seed) * total;
+    var k = 2;
+    if (pick < share[0]) {
+        k = 0;
+    } else if (pick < share[0] + share[1]) {
+        k = 1;
+    }
+    let sigma_k = (medium_extinction(k).x + medium_extinction(k).y + medium_extinction(k).z) / 3.0;
+    let goal = -log(1.0 - rand(seed) * (1.0 - exp(-share[k])));
+    let s = clamp(distance_at(k, ro.y, rd.y, goal / max(sigma_k, 1e-30)), 0.0, t_end);
+    let x = ro + rd * s;
+    // The probability of that distance, over the three ways to draw it.
+    var pdf = 0.0;
+    var depth_s = vec3<f32>(0.0);
+    var scattering = vec3<f32>(0.0);
+    var phased = vec3<f32>(0.0);
+    let c = dot(rd, P.sun.xyz);
+    for (var j = 0; j < 3; j++) {
+        if (!medium_on(j) || (!all && j < 2)) {
+            continue;
+        }
+        let rho = density(j, x.y);
+        let dj = depth_along(j, ro.y, rd.y, s);
+        depth_s += medium_extinction(j) * dj;
+        let sj = (medium_extinction(j).x + medium_extinction(j).y + medium_extinction(j).z) / 3.0;
+        if (share[j] > 0.0) {
+            pdf += share[j] / total * sj * rho * exp(-sj * dj) / max(1.0 - exp(-share[j]), 1e-8);
+        }
+        scattering += medium_scattering(j) * rho;
+        phased += medium_scattering(j) * rho * medium_phase(j, c);
+    }
+    if (pdf <= 0.0) {
+        return out;
+    }
+    // The sun there, unless a block hides it (the shafts of light).
+    var sun = SUN_LIGHT * sun_through_media(x.y);
+    if (P.media.x > 0.5 && P.sun.y > -0.02) {
+        let shadow = trace(x, P.sun.xyz, 1e30);
+        if (shadow.found) {
+            sun = vec3<f32>(0.0);
+        }
+    }
+    let inscatter = phased * sun + scattering * multi_scattering();
+    out.light = exp(-depth_s) * inscatter / pdf;
+    return out;
 }
 
 fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
@@ -337,10 +541,22 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
     var sum = vec3<f32>(0.0);
     for (var bounce = 0u; bounce <= P.info.z; bounce++) {
         let hit = trace(ro, rd, 1e30);
+        if (bounce == 0u) {
+            // The air, the haze and the fog between the eyes and what they see.
+            var t_end = hit.t;
+            if (!hit.found) {
+                t_end = FAR;
+            }
+            let m = through_media(ro, rd, t_end, hit.found, seed);
+            sum += m.light;
+            throughput *= m.transmittance;
+        }
         if (!hit.found) {
             var s = sky(rd);
             if (bounce == 0u && dot(rd, P.sun.xyz) > P.sun.w) {
-                s += P.sun_light.rgb * P.sun_light.w;
+                // The sun's disc, bright enough to bloom, not to stay a
+                // firefly once added up.
+                s += SUN_LIGHT * 40.0;
             }
             sum += throughput * s;
             break;
@@ -356,7 +572,7 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
         let top = hit.axis == 1 && rd.y < 0.0;
         let albedo = tex.rgb * unpack_rgb(select(m.w, m.z, top));
         if (((m.y >> 21u) & 1u) != 0u) {
-            sum += throughput * albedo * 6.0;
+            sum += throughput * albedo * 6.0 * P.media.z;
         }
         let pos = p + n * EPS;
         // The sun, straight.
@@ -365,7 +581,7 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
         if (ndl > 0.0 && P.sun.y > -0.05) {
             let shadow = trace(pos, l, 1e30);
             if (!shadow.found) {
-                sum += throughput * albedo * P.sun_light.rgb * ndl;
+                sum += throughput * albedo / PI * SUN_LIGHT * sun_through_media(pos.y) * ndl;
             }
         }
         if (bounce == P.info.z) {
@@ -396,12 +612,23 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     var seed = pcg(gid.x * 1973u + gid.y * 9277u + P.size.z * 26699u) | 1u;
+    SUN_LIGHT = sun_through_air();
     let block = f32(1u << shift);
     let jitter = vec2<f32>(rand(&seed), rand(&seed)) * block;
     let ndc = (vec2<f32>(px) + jitter) / vec2<f32>(f32(w), f32(h)) * 2.0 - 1.0;
-    let dir = normalize(P.forward.xyz + P.right.xyz * (ndc.x * P.eye.w * P.right.w) - P.up.xyz * (ndc.y * P.eye.w));
+    var dir = normalize(P.forward.xyz + P.right.xyz * (ndc.x * P.eye.w * P.right.w) - P.up.xyz * (ndc.y * P.eye.w));
+    var eye = P.eye.xyz;
+    if (P.media.w > 0.0) {
+        // A thin lens: the rays of a pixel cross at the distance in focus,
+        // from points spread over the opening.
+        let focus = eye + dir * (P.lens.x / max(dot(dir, P.forward.xyz), 1e-3));
+        let r = sqrt(rand(&seed)) * P.media.w;
+        let a = 2.0 * PI * rand(&seed);
+        eye += P.right.xyz * (r * cos(a)) + P.up.xyz * (r * sin(a));
+        dir = normalize(focus - eye);
+    }
     // Fireflies of a rare path are clipped: the image settles sooner.
-    let l = min(radiance(P.eye.xyz, dir, &seed), vec3<f32>(32.0));
+    let l = min(radiance(eye, dir, &seed), vec3<f32>(32.0));
     let n = 1u << shift;
     for (var dy = 0u; dy < n; dy++) {
         for (var dx = 0u; dx < n; dx++) {

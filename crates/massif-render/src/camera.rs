@@ -46,7 +46,8 @@ impl Camera {
     }
 }
 
-/// The sun and the sky, and how the image is exposed.
+/// The sun, the sky, the air and the lens: everything the image is lit
+/// and seen through.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Light {
     /// Of the sun: from north toward east, and up from the horizon, radians.
@@ -54,12 +55,30 @@ pub struct Light {
     pub sun_elevation: f32,
     /// The sun's angular radius, radians (the real one: 0.27°).
     pub sun_radius: f32,
-    pub sun_color: [f32; 3],
-    /// Irradiance of the sun on a surface facing it.
+    /// Illuminance of the sun above the air, and a tint for it.
     pub sun_strength: f32,
-    pub zenith: [f32; 3],
-    pub horizon: [f32; 3],
+    pub sun_tint: [f32; 3],
+    /// The sky's light, times.
     pub sky_strength: f32,
+    /// The air's scattering (1: the Earth's) and the aerosols' (haze), with
+    /// their anisotropy.
+    pub air: f32,
+    pub haze: f32,
+    pub haze_g: f32,
+    /// Fog: its extinction a block at its base height (world y), how many
+    /// blocks it takes to thin by e above it, and its anisotropy.
+    pub fog: f32,
+    pub fog_height: f32,
+    pub fog_falloff: f32,
+    pub fog_g: f32,
+    /// Shadows in the air: shafts of light through the fog and the haze.
+    pub shafts: bool,
+    /// Light of the blocks that glow, times.
+    pub emission: f32,
+    /// The lens's opening (radius, blocks; 0: all sharp) and the distance
+    /// in focus.
+    pub aperture: f32,
+    pub focus: f32,
     /// Bounces of light after the first surface met.
     pub bounces: u32,
     pub exposure: f32,
@@ -71,11 +90,20 @@ impl Default for Light {
             sun_azimuth: 2.4,
             sun_elevation: 0.62,
             sun_radius: 0.0047,
-            sun_color: [1.0, 0.94, 0.86],
-            sun_strength: 5.0,
-            zenith: [0.22, 0.42, 0.85],
-            horizon: [0.72, 0.82, 0.95],
+            sun_strength: 6.0,
+            sun_tint: [1.0; 3],
             sky_strength: 1.0,
+            air: 1.0,
+            haze: 1.0,
+            haze_g: 0.8,
+            fog: 0.0,
+            fog_height: 64.0,
+            fog_falloff: 24.0,
+            fog_g: 0.6,
+            shafts: true,
+            emission: 1.0,
+            aperture: 0.0,
+            focus: 100.0,
             bounces: 2,
             exposure: 1.0,
         }
@@ -89,6 +117,27 @@ impl Light {
         let (se, ce) = self.sun_elevation.sin_cos();
         Vec3::new(sa * ce, se, -ca * ce).normalize()
     }
+
+    /// Put the sun where it is at `hour` (local solar time) on day `day` of
+    /// the year at `latitude` (degrees), the map's north turned `north`
+    /// degrees from the world's.
+    pub fn set_time(&mut self, hour: f32, day: f32, latitude: f32, north: f32) {
+        let (azimuth, elevation) = sun_position(hour, day, latitude);
+        self.sun_azimuth = azimuth + north.to_radians();
+        self.sun_elevation = elevation;
+    }
+}
+
+/// The sun's azimuth (from north toward east) and elevation, radians, at
+/// `hour` of day `day` at `latitude` degrees: the usual approximation, good
+/// to a degree or so.
+pub fn sun_position(hour: f32, day: f32, latitude: f32) -> (f32, f32) {
+    let declination = 23.44f32.to_radians() * (std::f32::consts::TAU * (284.0 + day) / 365.0).sin();
+    let h = (15.0 * (hour - 12.0)).to_radians();
+    let lat = latitude.to_radians();
+    let elevation = (lat.sin() * declination.sin() + lat.cos() * declination.cos() * h.cos()).clamp(-1.0, 1.0).asin();
+    let azimuth = h.sin().atan2(h.cos() * lat.sin() - declination.tan() * lat.cos()) + std::f32::consts::PI;
+    (azimuth, elevation)
 }
 
 #[cfg(test)]
@@ -105,5 +154,18 @@ mod tests {
         let b = c.basis();
         assert!(b.right.dot(b.forward).abs() < 1e-5 && b.up.y > 0.0);
         assert!(Camera { eye: [0.0; 3], yaw: 0.0, pitch: 0.0, fov_y: 1.0 }.forward().z < -0.99, "yaw 0 looks north");
+    }
+
+    #[test]
+    fn the_sun_rises_east_peaks_south_and_sets_west() {
+        let deg = |(a, e): (f32, f32)| (a.to_degrees(), e.to_degrees());
+        // Midsummer at 45° north.
+        let (az, el) = deg(sun_position(12.0, 172.0, 45.0));
+        assert!((az - 180.0).abs() < 1.0 && (el - 68.4).abs() < 1.0, "noon: {az} {el}");
+        let (az, el) = deg(sun_position(6.0, 172.0, 45.0));
+        assert!(az > 50.0 && az < 90.0 && el > 0.0 && el < 20.0, "morning: {az} {el}");
+        let (az, el) = deg(sun_position(19.0, 172.0, 45.0));
+        assert!(az > 270.0 && az < 320.0 && el > -5.0 && el < 10.0, "evening: {az} {el}");
+        assert!(deg(sun_position(0.0, 172.0, 45.0)).1 < -15.0, "night");
     }
 }

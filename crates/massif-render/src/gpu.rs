@@ -3,6 +3,7 @@
 //! sample a pixel each time it runs (see `trace.wgsl`).
 
 use crate::camera::{Camera, Light};
+use crate::sky::{Sky, SkyState};
 use crate::map_source::Extent;
 use crate::materials::{LAYER_BYTES, Layer, Materials, SIDE};
 use crate::scene::GpuChunk;
@@ -28,8 +29,10 @@ struct Params {
     forward: [f32; 4],
     sun: [f32; 4],
     sun_light: [f32; 4],
-    sky_zenith: [f32; 4],
-    sky_horizon: [f32; 4],
+    air: [f32; 4],
+    fog: [f32; 4],
+    media: [f32; 4],
+    lens: [f32; 4],
     size: [u32; 4],
     grid: [i32; 4],
     info: [u32; 4],
@@ -193,6 +196,9 @@ pub struct Renderer {
     atlas_view: wgpu::TextureView,
     atlas_layers: u32,
     materials_revision: u64,
+    sky: Sky,
+    /// The world's sea level, from which the air thins.
+    pub sea_level: f64,
     image: Option<Image>,
     bind_group: Option<wgpu::BindGroup>,
     pyramid: Pyramid,
@@ -219,7 +225,14 @@ fn storage(device: &wgpu::Device, label: &str, bytes: u64) -> wgpu::Buffer {
 
 impl Renderer {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, extent: Extent) -> Self {
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("massif render trace"), source: wgpu::ShaderSource::Wgsl(include_str!("trace.wgsl").into()) });
+        let source = format!("{}\n{}", crate::sky::ATMOSPHERE, include_str!("trace.wgsl"));
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("massif render trace"), source: wgpu::ShaderSource::Wgsl(source.into()) });
+        let lut = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+            count: None,
+        };
         let buffer = |binding: u32, read_only: bool| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::COMPUTE,
@@ -255,6 +268,10 @@ impl Renderer {
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry { binding: 10, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+                lut(11),
+                lut(12),
+                lut(13),
+                wgpu::BindGroupLayoutEntry { binding: 14, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("massif render"), bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
@@ -299,6 +316,8 @@ impl Renderer {
             atlas_view,
             atlas_layers: 1,
             materials_revision: 0,
+            sky: Sky::new(device),
+            sea_level: 63.0,
             image: None,
             bind_group: None,
             pyramid,
@@ -590,6 +609,10 @@ impl Renderer {
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&image.storage) },
                     wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(&self.atlas_view) },
                     wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                    wgpu::BindGroupEntry { binding: 11, resource: wgpu::BindingResource::TextureView(self.sky.transmittance()) },
+                    wgpu::BindGroupEntry { binding: 12, resource: wgpu::BindingResource::TextureView(self.sky.multi()) },
+                    wgpu::BindGroupEntry { binding: 13, resource: wgpu::BindingResource::TextureView(self.sky.sky_view()) },
+                    wgpu::BindGroupEntry { binding: 14, resource: wgpu::BindingResource::Sampler(self.sky.sampler()) },
                 ],
             }));
         }
@@ -608,15 +631,27 @@ impl Renderer {
             level_w[l] = lw;
         }
         let sun = light.sun_direction();
+        let sea = (self.sea_level - origin[1]) as f32;
+        // The sky as seen from the eyes' height over the sea, by the 10 m:
+        // its tables are filled again only when that changes.
+        let altitude = ((camera.eye[1] - self.sea_level).max(0.0) / 1000.0 * 100.0).round() as f32 / 100.0 + 0.02;
+        let state = SkyState { sun: sun.to_array(), rayleigh: light.air, mie: light.haze, mie_g: light.haze_g, altitude };
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("massif render") });
+        if self.sky.update(&self.queue, &mut encoder, state) && !coarse {
+            self.samples = 0;
+        }
+        let tint = light.sun_tint.map(|c| c * light.sun_strength);
         let params = Params {
             eye: [eye[0], eye[1], eye[2], tan],
             right: [basis.right.x, basis.right.y, basis.right.z, w as f32 / h as f32],
             up: [basis.up.x, basis.up.y, basis.up.z, 2.0 * tan / h as f32],
             forward: [basis.forward.x, basis.forward.y, basis.forward.z, light.exposure],
             sun: [sun.x, sun.y, sun.z, light.sun_radius.cos()],
-            sun_light: [light.sun_color[0] * light.sun_strength / std::f32::consts::PI, light.sun_color[1] * light.sun_strength / std::f32::consts::PI, light.sun_color[2] * light.sun_strength / std::f32::consts::PI, 400.0],
-            sky_zenith: [light.zenith[0], light.zenith[1], light.zenith[2], light.sky_strength],
-            sky_horizon: [light.horizon[0], light.horizon[1], light.horizon[2], 0.0],
+            sun_light: [tint[0], tint[1], tint[2], light.sky_strength],
+            air: [light.air, light.haze, light.haze_g, altitude],
+            fog: [light.fog, light.fog_height - origin[1] as f32, light.fog_falloff.max(0.5), light.fog_g],
+            media: [light.shafts as u8 as f32, sea, light.emission, light.aperture],
+            lens: [light.focus.max(0.1), 0.0, 0.0, 0.0],
             size: [w, h, self.frame.wrapping_mul(2654435761).wrapping_add(1), self.samples],
             grid: [e.width as i32, e.depth as i32, e.height(), e.sections as i32],
             info: [self.stride(), self.pyramid.levels.len() as u32, light.bounces, coarse as u32],
@@ -624,7 +659,6 @@ impl Renderer {
             level_w,
         };
         self.queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("massif render") });
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("massif render trace"), timestamp_writes: None });
             pass.set_pipeline(&self.pipeline);
@@ -676,6 +710,72 @@ impl Renderer {
         (top > 0).then(|| (e.min_y + top as i32) as f64)
     }
 
+    /// The distance from `from` (the world's blocks) along `dir` to the
+    /// first block a ray stops at, if within `most` blocks: for the focus
+    /// picked on the image. Walks the scene's copy here, block by block.
+    pub fn pick(&self, from: [f64; 3], dir: [f64; 3], most: f64) -> Option<f64> {
+        let e = self.extent;
+        let origin = [e.x0 as f64 * 16.0, e.min_y as f64, e.z0 as f64 * 16.0];
+        let p = [from[0] - origin[0], from[1] - origin[1], from[2] - origin[2]];
+        let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+        if len == 0.0 {
+            return None;
+        }
+        let d = dir.map(|c| c / len);
+        let dims = [e.width as i64 * 16, e.height() as i64, e.depth as i64 * 16];
+        let stride = self.stride() as usize;
+        let occupied = |v: [i64; 3]| -> bool {
+            if (0..3).any(|a| v[a] < 0 || v[a] >= dims[a]) {
+                return false;
+            }
+            let (cx, cz) = (v[0] >> 4, v[2] >> 4);
+            let slot = self.grid.cpu[(cz * e.width as i64 + cx) as usize];
+            if slot == 0 {
+                return false;
+            }
+            let rec = (slot - 1) as usize * stride;
+            let entry = self.records.cpu[rec + 4 + (v[1] >> 4) as usize];
+            if entry == 0 {
+                return false;
+            }
+            if entry & crate::scene::UNIFORM != 0 {
+                return true;
+            }
+            let root = (self.records.cpu[rec + 1] + entry - 1) as usize;
+            let mask = self.tree.cpu[root] as u64 | (self.tree.cpu[root + 1] as u64) << 32;
+            let b = [(v[0] & 15) >> 2, (v[1] & 15) >> 2, (v[2] & 15) >> 2];
+            let bi = (b[0] + b[2] * 4 + b[1] * 16) as u32;
+            if mask >> bi & 1 == 0 {
+                return false;
+            }
+            let brick = self.records.cpu[rec + 1] as usize + self.tree.cpu[root + 2] as usize + (mask & ((1u64 << bi) - 1)).count_ones() as usize * 3;
+            let bm = self.tree.cpu[brick] as u64 | (self.tree.cpu[brick + 1] as u64) << 32;
+            let w = [v[0] & 3, v[1] & 3, v[2] & 3];
+            bm >> (w[0] + w[2] * 4 + w[1] * 16) & 1 != 0
+        };
+        // A plain walk from block to block (Amanatides and Woo).
+        let mut v = p.map(|c| c.floor() as i64);
+        let step = d.map(|c| if c > 0.0 { 1 } else { -1 });
+        let mut next = [0.0; 3];
+        let mut delta = [0.0; 3];
+        for a in 0..3 {
+            delta[a] = if d[a] == 0.0 { f64::INFINITY } else { (1.0 / d[a]).abs() };
+            let edge = if d[a] > 0.0 { v[a] as f64 + 1.0 } else { v[a] as f64 };
+            next[a] = if d[a] == 0.0 { f64::INFINITY } else { (edge - p[a]) / d[a] };
+        }
+        let mut t = 0.0;
+        while t < most {
+            let a = (0..3).min_by(|&i, &j| next[i].total_cmp(&next[j])).expect("three axes");
+            t = next[a];
+            v[a] += step[a];
+            next[a] += delta[a];
+            if occupied(v) {
+                return Some(t);
+            }
+        }
+        None
+    }
+
     /// Chunks in the scene.
     pub fn chunks(&self) -> usize {
         self.residents.len()
@@ -689,7 +789,7 @@ impl Renderer {
             (s.width as u64 * s.height as u64 * 4 * s.depth_or_array_layers as u64) * 4 / 3
         };
         let image = self.image.as_ref().map_or(0, |i| i.size[0] as u64 * i.size[1] as u64 * (16 + 4));
-        Memory { scene, textures, image }
+        Memory { scene, textures: textures + self.sky.bytes(), image }
     }
 
     /// Words of the scene's trees and voxels, and of them, those of chunks

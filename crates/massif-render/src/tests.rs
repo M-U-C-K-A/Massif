@@ -97,6 +97,7 @@ fn a_map_path_traced() {
     let chunk_count: usize = built.iter().map(|b| b.chunks.len()).sum();
 
     let mut r = Renderer::new(&device, &queue, extent);
+    r.sea_level = sea;
     r.sync_materials(&materials);
     let started = Instant::now();
     for b in built {
@@ -120,15 +121,21 @@ fn a_map_path_traced() {
     let ground = |x: f64, z: f64| r.surface(x, z).unwrap_or(sea);
     let span = extent.width.max(extent.depth) as f64 * 16.0;
     let fov = 50f32.to_radians();
+    // Noon over the whole map; golden hour in haze halfway; a foggy
+    // morning close up, the lens focused on the point looked at.
+    let noon = Light::default();
+    let mut golden = Light { haze: 4.0, exposure: 2.5, ..Light::default() };
+    golden.set_time(18.8, 172.0, 45.0, 0.0);
+    let mut morning = Light { fog: 0.02, fog_height: sea as f32 + 6.0, fog_falloff: 14.0, aperture: 0.6, focus: 48.0, ..Light::default() };
+    morning.set_time(7.0, 172.0, 45.0, 0.0);
     let views = [
-        ("whole", Camera::orbit([center[0], ground(center[0], center[2]), center[2]], 0.65, -0.55, span * 0.75, fov)),
-        ("halfway", Camera::orbit([center[0], ground(center[0], center[2]), center[2]], 2.2, -0.35, 260.0, fov)),
-        ("near", Camera::orbit([center[0] + 40.0, ground(center[0] + 40.0, center[2] - 30.0), center[2] - 30.0], 4.0, -0.22, 48.0, fov)),
+        ("whole", Camera::orbit([center[0], ground(center[0], center[2]), center[2]], 0.65, -0.55, span * 0.75, fov), noon),
+        ("halfway", Camera::orbit([center[0], ground(center[0], center[2]), center[2]], 2.2, -0.35, 260.0, fov), golden),
+        ("near", Camera::orbit([center[0] + 40.0, ground(center[0] + 40.0, center[2] - 30.0), center[2] - 30.0], 4.0, -0.22, 48.0, fov), morning),
     ];
     let (w, h) = (1280, 720);
     r.resize(w, h);
-    let light = Light::default();
-    for (view, camera) in views {
+    for (view, camera, light) in views {
         // The first frame waits for the shader to be made.
         r.restart();
         let frame = |r: &mut Renderer, coarse: bool| {
