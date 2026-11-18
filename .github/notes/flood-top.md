@@ -1,1 +1,0 @@
-**Flood stops at the top of the world.** Held down on water with no height limit set (and Warn before flooding beyond a hollow off), Flood raised the water a block at a time for as long as the button was held, on past the top of the world where the game can place no block. It now stops there, and a click on water already at the top says so.

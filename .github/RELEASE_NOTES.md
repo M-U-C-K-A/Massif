@@ -210,6 +210,59 @@ Opened on a very large map, the 3D view used to show a large flat black shape un
 
 The Water brush and Flood each take the water's height from one choice in Tool Settings, **Water height**: **Where I start** (the brush fills to the height where each stroke starts; for Flood, **Where I click**: the hollow up to where it would spill), **Sea level**, or **Fixed**, with its level shown only in that mode, and a line under it saying in plain words what will happen. Over the map, a tag by the cursor says the level the tool fills to (**Fills to y 74**) or why the ground stays dry (**Dry here: the ground is at or above y 62.**). The fixed level is the water's level, not a limit: the only limit is **Height limit**, folded apart with its state in its title. Settings from before carry over (From the click on is Where I start, off is Fixed at the same level). The Drain tool is gone: Flood's right click lowers water a block and Shift + right click drains it whole, and a Drain saved in your settings becomes Flood. The Water group is now the Water brush, Flood and River, with new icons for the Water brush (a brush and a drop) and Flood (a hollow filling up).
 
+**Massif's Discord**
+
+Massif now has a community server on Discord. **Help ▸ Join the Discord…** opens it in your browser, to ask a question, show your maps or share ideas, and **Help ▸ Report a Problem…** links to its **#bug-reports** channel, beside GitHub's issues, as the place to send the report.
+
+
+**Import mask**
+
+Edit ▸ Import mask… paints an image onto the map, as WorldPainter's Import mask: the annotations (each colour of the image becomes the nearest of the 15, or one colour where it is drawn), any layer (ground covers, trees, under the trees, pockets, tree sizes), a terrain, a biome, water or the height (a heightmap with its offset and scale). The image lands at the world's origin or fitted to the map, with a scale and an offset, shown over the map small before importing; a grey is on from a threshold or a strength scattered over the columns, from black to white or the image's own range, inverted or not, black leaving the map as it is; Replace, Add, Max or Min say how it goes with what is painted. Locked layers keep their columns and the import is one step to undo. PNG, TIFF, BMP and JPEG, grey, colour or 16-bit, are read; large images stream through (16,384² in about 4 s). The image can stay on the 2D map as a guide to trace over, at an opacity, never saved nor exported.
+
+
+**Every panel fits a narrow window, in every language.** In a small window, or with the sidebar dragged narrow, texts and controls ran past the right edge of their panel and were cut off: Info's name and seed fields, the River's bed, the Blocks panel's buttons, the level buttons, a ground cover's plants, the Road's lists, the render settings, and long titles in German, French, Spanish or Portuguese. Panel titles, settings names and lists now shorten with an ellipsis (whole on hover), buttons go to the next line, and the map's name in the top bar no longer runs over the toolbar's buttons.
+
+
+**Regions out and back, several masks at once**
+
+File ▸ Export Region… writes a part of the map (the selection, the whole map or blocks typed in) as images of 1 pixel a block: a 16-bit heightmap, an image for each terrain and layer found there, and on demand the biomes, the water and the annotations, with a region.txt that says where it lies. Edit ▸ Import Mask… takes several images at once, each with its own target, all in the same place and as one step to undo; given the images of a region, it puts them back where they came from and gives each the target its name says. A heightmap of a part of the map can fade into the land around it over a number of blocks, without a cliff at the seam.
+
+
+**Flood stops at the top of the world.** Held down on water with no height limit set (and Warn before flooding beyond a hollow off), Flood raised the water a block at a time for as long as the button was held, on past the top of the world where the game can place no block. It now stops there, and a click on water already at the top says so.
+
+
+**Dialogs fit a small window.** In a window under about 1,200 points wide or 700 high, the Ores window and Settings ▸ Keyboard ran past both sides of the screen, their Done button out of reach, and tall dialogs such as Real terrain lost their title and their buttons past the top and bottom. The Ores window and the keyboard's columns now take the room the window has, the keyboard's buttons go to a second line, an ore band's settings wrap, and a dialog taller than the window scrolls.
+
+
+**Search fields keep their text inside.** In the Blocks panel and every other search field (Terrain, Biomes, Packs, a ground cover's or a palette's Add a block, Settings ▸ Keyboard, the help, the graph's node search, the ores' biomes), the start of a long text being typed slid under the field's rounded left edge, and the grey hint sat a little high. The magnifier is now drawn inside the field on its own, the text starts after it and is cut there as it scrolls, and the hint is centred top to bottom. Reported by Fenrir.
+
+
+**Biomes of mods and data packs.** Once a mod is read in the Blocks panel, the Biomes panel lists the biomes the game, its mods and its data packs define (Regions Unexplored's 78, say, and the instance's data packs), grouped under each mod's name with their own colours, and Auto biome's rules offer them for each kind of land; in the 3D view, grass and leaves take each biome's colours. Any biome can be typed by its id (`terralith:moonlight_grove`) for a mod that is not read here. The export writes them by their ids, so the game shows them with the mod installed. A mod's profile can also give a terrain of one of its blocks a biome (Regions Unexplored's peat mud makes a bayou). The Blocks panel shows more of a mod's plants and ground at first: Regions Unexplored's duckweed, clover, leaf litter, ivy, tassels, dusktrap and hyacinths, and its paths and farmland, which were only found under All shapes.
+
+
+**Fields and buttons read cleanly in narrow panels.** The Blocks panel's search now takes the panel's whole width, with more room after its magnifier, and the block-id field and its two buttons no longer run past the panel. Buttons such as Import WorldPainter layer…, New combined layer, New cover or Add mods… no longer fold their words onto two lines inside their outline: they keep one line, going under the button before or, in the narrowest panel, cut with an ellipsis (the whole name on hover). The text of every field now sits in its middle, top to bottom, where it sat a point and a half high.
+
+
+**Ridges behind the home screen**
+
+The home screen now shows, by default, ranges of mountains seen from afar in the colours of your theme instead of a picture: six jagged crests over dark land, one in front of the other, grey with sparks of the accent and white-hot near a large glow of the accent low on the right, as of a sun gone down, under a clean dark sky, all made of the same square dots as before. They drift slowly, the nearer faster, grow quieter where the settings are written, and stop when the window is behind another one. In high contrast only the crests are drawn. Settings ▸ Appearance ▸ **Animate the background** keeps them still, as Reduce motion does. Dropping the pictures makes the app about 18 MB smaller.
+
+
+**The map's status line no longer runs under its zoom buttons.** In a narrow window, the line under the map saying where the pointer is (its height, terrain, water and biome) was drawn under the zoom slider and buttons at its right. It now stops before them, cut with an ellipsis, the whole line on hover.
+
+
+**3D Sculpt uses the brush of the Brushes panel**
+
+3D Sculpt no longer has a brush menu of its own: it shapes with the brush picked in the Brushes panel, at the size, intensity and rotation of Brush Settings, exactly as the map does, and a brush picked there is 3D Sculpt's at once. The top of the view shows the brush with its size and intensity; a click on it shows the Brushes panel, which the 3D Sculpt workspace now has under the map. A brush larger than 64 blocks of radius still shapes 64 in 3D, as before: the size shows in the accent, and Brush Settings says so under Size while 3D Sculpt is shown.
+
+The brush also faces the way the land faces over its whole area rather than the face of the one block under the cursor: on a slope of one-block steps it no longer turns on its side when the cursor is over a step's riser. Raise / Lower works straight up on gentle slopes, on the same columns as on the map, and along the surface on cliffs and in caves; Paint terrain shows the columns it paints.
+
+
+**Rivers keep to the way you give them.** A river laid out with the River tool could run far from the points it was dragged through: let go, its way was worked out again and could take another valley than the one shown, up to a hundred blocks off on steep land; between two points it could wander far from the line joining them; and the bed dug missed the points dragged by up to eleven blocks. Now it goes through every point dragged and ends where you clicked, keeps near the line between them, takes the valley shown while dragging, and digs what was shown.
+
+
+**A real place in the blocks of your choice.** Edit ▸ Relief of a Real Place… and File ▸ New World from a Real Place… now have the Blocks menu of the New map dialog: Vanilla, your own palettes, and those of the mods whose blocks are loaded, such as Conquest Reforged. A new world from a real place is made of the palette chosen. Into an existing map the menu starts on the map's palette; picking another one switches the map's palette along with the relief, and one undo takes both back.
+
 ## New in 0.6.0
 
 **Massif in French and German.** The whole interface (menus, panels, tools and their cards, tooltips, dialogs, the home screen, Settings and the macOS menu bar) is now also in French and in German, in the words Minecraft and WorldPainter players use. Massif follows the system's language by default; **Settings ▸ Appearance ▸ Language** picks another, and the change applies at once, without a restart. A text not yet translated shows in English rather than in pieces, and the help and the online guide stay in English for now. Names that belong to your map (layers, levels, workspaces you renamed) stay as you wrote them.
