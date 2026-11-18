@@ -45,6 +45,9 @@ pub enum Tool {
     /// One of the game's structures — a village, an Ancient City — placed
     /// with a click.
     Structure,
+    /// A village filling the selection: districts, roads, buildings of a
+    /// theme, walls.
+    Village,
     /// The biome the land calls for; the terrain the biome calls for.
     AutoBiome,
     AutoPaint,
@@ -87,7 +90,7 @@ impl Tool {
             &[Tool::PaintTerrain, Tool::Gradient, Tool::PaintBiome, Tool::AutoPaint, Tool::AutoBiome, Tool::Annotate],
         ),
         (tn!("Select"), Icon::SquareDashed, &[Tool::SelectRect, Tool::SelectEllipse, Tool::SelectLasso, Tool::SelectBrush]),
-        (tn!("Decor"), Icon::Shrub, &[Tool::Cover, Tool::Objects, Tool::TreeSize, Tool::Pockets, Tool::Slabs, Tool::Combined, Tool::Structure]),
+        (tn!("Decor"), Icon::Shrub, &[Tool::Cover, Tool::Objects, Tool::TreeSize, Tool::Pockets, Tool::Slabs, Tool::Combined, Tool::Structure, Tool::Village]),
         (tn!("Water"), Icon::Droplet, &[Tool::Water, Tool::Flood, Tool::River]),
         (tn!("Levels"), Icon::Layers, &[Tool::StampSlab, Tool::EraseSlab]),
         (tn!("Navigate"), Icon::Compass, &[Tool::Pan, Tool::Eyedropper]),
@@ -95,7 +98,7 @@ impl Tool {
 
     /// Tools new in this version: the Tools panel marks them until they
     /// are first tried.
-    pub const NEW: [Tool; 3] = [Tool::Gradient, Tool::Slabs, Tool::Structure];
+    pub const NEW: [Tool; 4] = [Tool::Gradient, Tool::Slabs, Tool::Structure, Tool::Village];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -116,6 +119,7 @@ impl Tool {
             Tool::Slabs => tr!("Smoothing"),
             Tool::Combined => tr!("Combined layer"),
             Tool::Structure => tr!("Structure"),
+            Tool::Village => tr!("Village brush"),
             Tool::AutoBiome => tr!("Auto biome"),
             Tool::AutoPaint => tr!("Auto paint"),
             Tool::Eyedropper => tr!("Eyedropper"),
@@ -154,6 +158,7 @@ impl Tool {
             Tool::Slabs => Icon::ChartNoAxesColumn,
             Tool::Combined => Icon::Combine,
             Tool::Structure => Icon::Castle,
+            Tool::Village => Icon::House,
             Tool::AutoBiome => Icon::Earth,
             Tool::AutoPaint => Icon::WandSparkles,
             Tool::Eyedropper => Icon::Pipette,
@@ -199,6 +204,7 @@ impl Tool {
             Tool::Slabs => tr!("Paint where Smooth terrain builds the top of the land in partial blocks, or where it does not, whatever the map's setting. Right button: back to the map's setting."),
             Tool::Combined => tr!("Paint several layers at once: a terrain, a biome, a ground cover, trees, pockets, each over its share. Right button: rub out what it paints."),
             Tool::Structure => tr!("Click: place one of the game's structures — a village, an Ancient City, Trial Chambers. Right button: take away the structure clicked."),
+            Tool::Village => tr!("Click in the selection: fill it with a village of a theme — the game's own, or a builder's pack. Its size follows the selection's."),
             Tool::AutoBiome => {
                 tr!("Sets the biome the land calls for: beach, forest, peaks…")
             }
@@ -233,7 +239,7 @@ impl Tool {
     }
 
     pub const fn uses_brush(self) -> bool {
-        !matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::Structure)
+        !matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::Structure | Tool::Village)
     }
 
     /// The tools that draw the selection.
@@ -243,7 +249,7 @@ impl Tool {
 
     /// Tools that apply once per click rather than continuously.
     pub const fn is_click(self) -> bool {
-        matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Structure)
+        matches!(self, Tool::Eyedropper | Tool::Flood | Tool::Structure | Tool::Village)
     }
 
     pub const fn needs_slab_level(self) -> bool {
@@ -275,7 +281,7 @@ impl Tool {
             // passes): Smooth3d, from its shortcut, melts sculpted matter.
             Tool::Smooth3d => Use3d::Smooth,
             Tool::PaintTerrain => Use3d::Paint,
-            Tool::Eyedropper | Tool::Flood | Tool::Structure => Use3d::Click,
+            Tool::Eyedropper | Tool::Flood | Tool::Structure | Tool::Village => Use3d::Click,
             Tool::Pan | Tool::Road | Tool::River | Tool::Annotate | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush => Use3d::MapOnly,
             Tool::Smooth
             | Tool::Flatten
@@ -517,6 +523,8 @@ pub struct ToolState {
     pub select_by: crate::select::SelectBy,
     /// The Structure tool: what it places and how.
     pub structure: crate::structure_tool::StructureSettings,
+    /// The village brush: its theme, walls and density.
+    pub village: crate::structure_tool::VillageSettings,
 }
 
 /// The 3D Sculpt editor's own settings. It works with the tool of the
@@ -1098,6 +1106,7 @@ impl Default for ToolState {
             select_feather: 0,
             select_by: Default::default(),
             structure: Default::default(),
+            village: Default::default(),
         }
     }
 }
@@ -1517,7 +1526,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
                     massif_core::voxel::sculpt(&mut edit, brush, [x, y, z], strength, mode);
                 }
             }
-            Tool::Eyedropper | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush | Tool::Structure => {}
+            Tool::Eyedropper | Tool::Flood | Tool::Pan | Tool::River | Tool::Road | Tool::SelectRect | Tool::SelectEllipse | Tool::SelectLasso | Tool::SelectBrush | Tool::Structure | Tool::Village => {}
         }
     }
     // A combined layer's pockets, painted from another level: the same
@@ -2213,6 +2222,7 @@ pub fn click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32, inverse:
             Some(tr!("Picked {terrain_name} at height {block_top}", block_top = block_top(p.height), terrain_name))
         }
         Tool::Structure => crate::structure_tool::click(doc, tools, x, z, inverse),
+        Tool::Village => crate::structure_tool::village_click(doc, tools, x, z),
         // Flood's own button, the right one: a block lower (Shift: drained
         // whole).
         Tool::Flood => {
