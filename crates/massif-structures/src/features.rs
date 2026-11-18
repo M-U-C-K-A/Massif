@@ -14,30 +14,105 @@ use serde_json::Value;
 /// Grow feature `id` (a placed feature, as pools name them, or a
 /// configured one) at `pos`. Whether Massif knows how.
 pub fn place(lib: &Library, b: &mut Builder, id: &str, pos: [i32; 3], rng: &mut Rng) -> bool {
-    let config = match lib.json(Kind::PlacedFeature, id) {
-        Some(placed) => match placed.get("feature") {
-            Some(Value::String(inner)) => lib.json(Kind::Feature, inner),
-            Some(inline @ Value::Object(_)) => Some(inline.clone()),
-            _ => None,
-        },
-        None => lib.json(Kind::Feature, id),
-    };
-    match config {
-        Some(c) => configured(lib, b, &c, pos, rng),
+    match lib.json(Kind::PlacedFeature, id).or_else(|| lib.json(Kind::Feature, id)) {
+        Some(v) => run_placed(lib, b, &v, pos, rng),
         None => false,
+    }
+}
+
+/// A placed feature (`{"feature": …, "placement": […]}`), or a feature
+/// alone, grown at `pos`: where its placement puts it.
+fn run_placed(lib: &Library, b: &mut Builder, v: &Value, pos: [i32; 3], rng: &mut Rng) -> bool {
+    let (feature, placement) = match v.get("feature") {
+        Some(Value::String(id)) => (lib.json(Kind::Feature, id), v.get("placement")),
+        Some(inline @ Value::Object(_)) => (Some(inline.clone()), v.get("placement")),
+        _ => (Some(v.clone()), None),
+    };
+    let Some(feature) = feature else { return false };
+    let mut known = true;
+    for p in placements(lib, b, placement, pos, rng) {
+        known &= configured(lib, b, &feature, p, rng);
+    }
+    known
+}
+
+/// Where a placed feature's placement modifiers put it, from `pos`: the
+/// common ones (count, chance, offsets, block predicates); the others leave
+/// the place as it is.
+fn placements(lib: &Library, b: &Builder, list: Option<&Value>, pos: [i32; 3], rng: &mut Rng) -> Vec<[i32; 3]> {
+    let mut out = vec![pos];
+    for m in list.and_then(|l| l.as_array()).into_iter().flatten() {
+        let kind = m.get("type").and_then(|t| t.as_str()).unwrap_or("");
+        let sample = |v: Option<&Value>, rng: &mut Rng| {
+            let (lo, hi) = int_provider(v);
+            rng.between(lo, hi)
+        };
+        out = match kind.strip_prefix("minecraft:").unwrap_or(kind) {
+            "count" => out.iter().flat_map(|&p| std::iter::repeat_n(p, sample(m.get("count"), rng).clamp(0, 256) as usize)).collect(),
+            "random_chance" => {
+                let c = m.get("chance").and_then(|c| c.as_f64()).unwrap_or(1.0) as f32;
+                out.into_iter().filter(|_| rng.float() < c).collect()
+            }
+            "rarity_filter" => {
+                let c = m.get("chance").and_then(|c| c.as_u64()).unwrap_or(1).max(1) as u32;
+                out.into_iter().filter(|_| rng.below(c) == 0).collect()
+            }
+            "offset" | "random_offset" => {
+                let (kx, ky, kz) = if kind.ends_with("random_offset") { ("xz_spread", "y_spread", "xz_spread") } else { ("x", "y", "z") };
+                out.into_iter().map(|p| [p[0] + sample(m.get(kx), rng), p[1] + sample(m.get(ky), rng), p[2] + sample(m.get(kz), rng)]).collect()
+            }
+            "block_predicate_filter" => out.into_iter().filter(|&p| test_block(lib, b, m.get("predicate"), p)).collect(),
+            _ => out,
+        };
+    }
+    out
+}
+
+/// A block predicate of the game's, asked at `p`.
+fn test_block(lib: &Library, b: &Builder, v: Option<&Value>, p: [i32; 3]) -> bool {
+    let Some(v) = v else { return true };
+    let kind = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+    let at = |v: &Value| -> [i32; 3] {
+        let o = v.get("offset").and_then(|o| o.as_array()).map(|a| a.iter().map(|x| x.as_i64().unwrap_or(0) as i32).collect::<Vec<_>>()).unwrap_or_default();
+        [p[0] + o.first().copied().unwrap_or(0), p[1] + o.get(1).copied().unwrap_or(0), p[2] + o.get(2).copied().unwrap_or(0)]
+    };
+    let all = |key: &str| v.get(key).and_then(|l| l.as_array()).map(|l| l.iter().map(|x| test_block(lib, b, Some(x), p)).collect::<Vec<_>>()).unwrap_or_default();
+    match kind.strip_prefix("minecraft:").unwrap_or(kind) {
+        "all_of" => all("predicates").iter().all(|&t| t),
+        "any_of" => all("predicates").iter().any(|&t| t),
+        "not" => !test_block(lib, b, v.get("predicate"), p),
+        "has_sturdy_face" | "solid" => b.is_sturdy(at(v)),
+        "replaceable" => b.is_air(at(v)),
+        "matching_blocks" => {
+            let q = at(v);
+            let name = b.block(q);
+            let names: Vec<String> = match v.get("blocks") {
+                Some(Value::String(s)) => vec![crate::source::full_id(s)],
+                Some(Value::Array(a)) => a.iter().filter_map(|x| x.as_str()).map(crate::source::full_id).collect(),
+                _ => Vec::new(),
+            };
+            names.iter().any(|n| if n == "minecraft:air" { b.is_air(q) } else { nbt::block_name(&name) == n })
+        }
+        "matching_block_tag" => {
+            let q = at(v);
+            let tag = v.get("tag").and_then(|t| t.as_str()).unwrap_or("");
+            if crate::source::full_id(tag) == "minecraft:air" { b.is_air(q) } else { lib.tag(tag).contains(nbt::block_name(&b.block(q))) }
+        }
+        _ => true,
     }
 }
 
 fn configured(lib: &Library, b: &mut Builder, json: &Value, pos: [i32; 3], rng: &mut Rng) -> bool {
     let kind = json.get("type").and_then(|t| t.as_str()).unwrap_or("");
-    let config = json.get("config").cloned().unwrap_or(Value::Null);
+    // Before 26.3 a feature's settings were under `config`.
+    let config = json.get("config").cloned().unwrap_or_else(|| json.clone());
     match kind.strip_prefix("minecraft:").unwrap_or(kind) {
         "tree" => {
-            tree(b, &config, pos, rng);
+            tree(lib, b, &config, pos, rng);
             true
         }
         "block_pile" => {
-            pile(b, &config, pos, rng);
+            pile(lib, b, &config, pos, rng);
             true
         }
         "random_patch" | "flower" | "no_bonemeal_flower" => {
@@ -46,36 +121,53 @@ fn configured(lib: &Library, b: &mut Builder, json: &Value, pos: [i32; 3], rng: 
         }
         "simple_block" => {
             if b.is_air(pos)
-                && let Some(state) = provide(config.get("to_place"), rng)
+                && let Some(state) = provide(lib, config.get("to_place"), rng)
             {
                 b.set(pos, &state, None);
             }
             true
         }
         "block_column" => {
-            column(b, &config, pos, rng);
+            column(lib, b, &config, pos, rng);
             true
         }
         "sculk_patch" => {
             sculk_patch(lib, b, &config, pos, rng);
             true
         }
+        // 26.3 makes a feature of several, one after the other.
+        "sequence" | "overlay" => {
+            let mut known = true;
+            for f in config.get("features").and_then(|f| f.as_array()).into_iter().flatten() {
+                known &= run_placed(lib, b, f, pos, rng);
+            }
+            known
+        }
         _ => false,
     }
 }
 
-/// A block state from a state provider.
-fn provide(v: Option<&Value>, rng: &mut Rng) -> Option<String> {
+/// A block state from a state provider: one of the game's kinds, a state
+/// alone, or (from 26.3) the name of a provider of its own.
+fn provide(lib: &Library, v: Option<&Value>, rng: &mut Rng) -> Option<String> {
     let v = v?;
+    if let Some(name) = v.as_str() {
+        return match lib.json(Kind::StateProvider, name) {
+            Some(named) => provide(lib, Some(&named), rng),
+            None => Some(nbt::state_of_text(name)),
+        };
+    }
     let kind = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
     let state = |s: Option<&Value>| s.and_then(nbt::state_of_json);
     match kind.strip_prefix("minecraft:").unwrap_or(kind) {
-        "simple_state_provider" => state(v.get("state")),
-        "rotated_block_provider" => {
+        // A state, as such.
+        "" => state(Some(v)),
+        "simple_state_provider" | "simple" => state(v.get("state")),
+        "rotated_block_provider" | "rotated" => {
             let s = state(v.get("state"))?;
             Some(nbt::set_property(&s, "axis", ["x", "y", "z"][rng.below(3) as usize]))
         }
-        "weighted_state_provider" => {
+        "weighted_state_provider" | "weighted" => {
             let entries: Vec<(String, u32)> = v.get("entries")?.as_array()?.iter().filter_map(|e| Some((state(e.get("data"))?, e.get("weight").and_then(|w| w.as_u64()).unwrap_or(1) as u32))).collect();
             let total: u32 = entries.iter().map(|e| e.1).sum();
             let mut r = rng.below(total.max(1));
@@ -88,7 +180,7 @@ fn provide(v: Option<&Value>, rng: &mut Rng) -> Option<String> {
                 }
             }).map(|e| e.0)
         }
-        "noise_threshold_provider" | "noise_provider" | "dual_noise_provider" => {
+        "noise_threshold_provider" | "noise_provider" | "dual_noise_provider" | "noise_threshold" | "noise" | "dual_noise" => {
             let mut all: Vec<String> = Vec::new();
             for key in ["default_state", "high_states", "low_states", "states"] {
                 match v.get(key) {
@@ -99,16 +191,16 @@ fn provide(v: Option<&Value>, rng: &mut Rng) -> Option<String> {
             }
             rng.pick(&all).cloned()
         }
-        "randomized_int_state_provider" => provide(v.get("source"), rng),
-        _ => None,
+        "randomized_int_state_provider" | "randomized_int" => provide(lib, v.get("source"), rng),
+        _ => state(v.get("state")),
     }
 }
 
 /// A tree: its trunk, then its leaves as its foliage placer lays them
 /// (blob, spruce, pine, acacia; the others as a blob).
-fn tree(b: &mut Builder, config: &Value, pos: [i32; 3], rng: &mut Rng) {
-    let Some(log) = provide(config.get("trunk_provider"), rng) else { return };
-    let Some(leaves) = provide(config.get("foliage_provider"), rng) else { return };
+fn tree(lib: &Library, b: &mut Builder, config: &Value, pos: [i32; 3], rng: &mut Rng) {
+    let Some(log) = provide(lib, config.get("trunk_provider"), rng) else { return };
+    let Some(leaves) = provide(lib, config.get("foliage_provider"), rng) else { return };
     let below = [pos[0], pos[1] - 1, pos[2]];
     if !b.is_sturdy(below) || !b.is_air(pos) {
         return;
@@ -204,7 +296,7 @@ fn tree(b: &mut Builder, config: &Value, pos: [i32; 3], rng: &mut Rng) {
 }
 
 /// A pile of blocks: hay bales, pumpkins, melons, ice.
-fn pile(b: &mut Builder, config: &Value, pos: [i32; 3], rng: &mut Rng) {
+fn pile(lib: &Library, b: &mut Builder, config: &Value, pos: [i32; 3], rng: &mut Rng) {
     let (rx, rz) = (2 + rng.below(2) as i32, 2 + rng.below(2) as i32);
     for y in 0..2 {
         for dz in -rz..=rz {
@@ -215,7 +307,7 @@ fn pile(b: &mut Builder, config: &Value, pos: [i32; 3], rng: &mut Rng) {
                 if keep
                     && b.is_air(p)
                     && b.is_sturdy([p[0], p[1] - 1, p[2]])
-                    && let Some(state) = provide(config.get("state_provider"), rng)
+                    && let Some(state) = provide(lib, config.get("state_provider"), rng)
                 {
                     b.set(p, &state, None);
                 }
@@ -230,12 +322,11 @@ fn patch(lib: &Library, b: &mut Builder, config: &Value, pos: [i32; 3], rng: &mu
     let tries = config.get("tries").and_then(|t| t.as_u64()).unwrap_or(32).min(256);
     let xz = config.get("xz_spread").and_then(|t| t.as_i64()).unwrap_or(7) as i32;
     let ys = config.get("y_spread").and_then(|t| t.as_i64()).unwrap_or(3) as i32;
-    let inner = config.get("feature").and_then(|f| f.get("feature").or(Some(f))).cloned();
-    let Some(inner) = inner else { return };
-    // The inner feature may be a named one.
-    let inner = match &inner {
-        Value::String(id) => lib.json(Kind::Feature, id).unwrap_or(Value::Null),
-        _ => inner,
+    // A placed feature, or one named: grown as it says, at each try.
+    let inner = match config.get("feature") {
+        Some(Value::String(id)) => serde_json::json!({ "feature": id }),
+        Some(f) => f.clone(),
+        None => return,
     };
     for _ in 0..tries {
         let p = [pos[0] + rng.between(-xz, xz) - rng.between(-xz, xz) / 2, pos[1] + rng.between(-ys, ys) / 2, pos[2] + rng.between(-xz, xz) - rng.between(-xz, xz) / 2];
@@ -248,12 +339,12 @@ fn patch(lib: &Library, b: &mut Builder, config: &Value, pos: [i32; 3], rng: &mu
         if cactus && !ground.contains("sand") || !cactus && !(ground.contains("grass_block") || ground.contains("dirt") || ground.contains("podzol") || ground.contains("moss")) {
             continue;
         }
-        configured(lib, b, &inner, p, rng);
+        run_placed(lib, b, &inner, p, rng);
     }
 }
 
 /// A column of blocks (a cactus).
-fn column(b: &mut Builder, config: &Value, pos: [i32; 3], rng: &mut Rng) {
+fn column(lib: &Library, b: &mut Builder, config: &Value, pos: [i32; 3], rng: &mut Rng) {
     let mut y = pos[1];
     for layer in config.get("layers").and_then(|l| l.as_array()).into_iter().flatten() {
         let h = match layer.get("height") {
@@ -269,7 +360,7 @@ fn column(b: &mut Builder, config: &Value, pos: [i32; 3], rng: &mut Rng) {
             if !b.is_air(p) {
                 return;
             }
-            if let Some(state) = provide(layer.get("provider"), rng) {
+            if let Some(state) = provide(lib, layer.get("provider"), rng) {
                 b.set(p, &state, None);
             }
             y += 1;
@@ -355,8 +446,8 @@ fn sculk_patch(lib: &Library, b: &mut Builder, config: &Value, pos: [i32; 3], rn
         growths += 1;
     }
     // A catalyst at the start, half the time, over a whole block.
-    let catalyst = config.get("catalyst_chance").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
-    if rng.float() <= catalyst && b.is_sturdy([pos[0], pos[1] - 1, pos[2]]) {
+    let catalyst = config.get("catalyst_chance").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+    if catalyst > 0.0 && rng.float() <= catalyst && b.is_sturdy([pos[0], pos[1] - 1, pos[2]]) {
         b.set(pos, "minecraft:sculk_catalyst[bloom=false]", None);
     }
     // The rare growths: shriekers around the start that call the warden.
