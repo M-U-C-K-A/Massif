@@ -281,7 +281,6 @@ fn the_map_output_takes_typed_inputs() {
     assert!(diags.iter().any(|d| d.path == "nodes.out.inputs.mask.Bad name"), "{diags:?}");
 }
 
-#[cfg(feature = "gpu")]
 #[test]
 fn the_graphics_card_computes_what_the_cpu_does() {
     use massif_terrain::gpu::Gpu;

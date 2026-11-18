@@ -3,6 +3,7 @@
 
 use crate::params::Params;
 use crate::space::{Rect, Space};
+use std::sync::Arc;
 
 /// What a kernel knows of the computation it is part of.
 pub struct Ctx<'a> {
@@ -14,9 +15,31 @@ pub struct Ctx<'a> {
     /// The node's own seed, mixed with the terrain's.
     pub seed: u32,
     pub params: &'a Params,
+    /// For each setting (by its index), the field driving it, sample by
+    /// sample over `rect`, when one does (see [`Ctx::num_at`]).
+    pub driven: &'a [Option<&'a [f32]>],
+    /// Where a local kernel's inputs were read: level and samples.
+    pub reads: &'a [Option<(u8, Rect)>],
+    /// The world outside the graph: the map, files.
+    pub env: &'a dyn Env,
 }
 
 impl Ctx<'_> {
+    /// Number setting `name` at sample `k` of `rect`: the field driving it
+    /// there, or its value.
+    #[inline]
+    pub fn num_at(&self, name: &str, k: usize) -> f32 {
+        match self.params.spec().param(name).and_then(|(i, _)| self.driven.get(i).copied().flatten()) {
+            Some(field) => field[k],
+            None => self.params.f(name),
+        }
+    }
+
+    /// The field driving setting `name`, when one does.
+    pub fn driven(&self, name: &str) -> Option<&[f32]> {
+        self.params.spec().param(name).and_then(|(i, _)| self.driven.get(i).copied().flatten())
+    }
+
     /// Blocks between samples.
     pub fn spacing(&self) -> f64 {
         Space::spacing(self.lod)
@@ -183,19 +206,102 @@ pub type StatsFn = fn(&Ctx, &[Option<Stats>], &[Option<&[f32]>], &mut [Vec<f32>]
 /// Makes the outputs over the whole terrain (`ctx.rect`) from the inputs
 /// over it; `None` when cancelled.
 pub type GlobalFn = fn(&Ctx, &[Option<&Grid>], &(dyn Fn() -> bool + Sync)) -> Option<Vec<Vec<f32>>>;
+/// A global kernel on the graphics card: the inputs and outputs are grids
+/// over the whole terrain in its memory. `None` when cancelled or when the
+/// device refused it (the engine then runs the CPU kernel, unless
+/// cancelled). Must give the same result each time on a given device: no
+/// order-dependent float atomics.
+pub type GlobalGpuFn = fn(&crate::gpu::Gpu, &Ctx, &[Option<&crate::gpu::GpuGrid>], &(dyn Fn() -> bool + Sync)) -> Option<Vec<crate::gpu::GpuGrid>>;
 
-/// A point kernel's twin on the graphics card: a WGSL compute shader.
+/// A point or local kernel's twin on the graphics card: a WGSL compute
+/// shader with an entry point `main`.
 ///
 /// Its bindings: `0` a uniform block (`uniforms` writes it), then one
-/// read-only `array<f32>` per input (a stand-in when unconnected), then
-/// one read-write `array<f32>` per output. Each tile is [`crate::TILE`]²
-/// samples, dispatched as 16 × 16 workgroups of 16 × 16.
+/// read-only `array<f32>` per input (a stand-in when unconnected), then one
+/// per drivable setting in order (a stand-in when not driven), then one
+/// read-write `array<f32>` per output, planes one after the other. Each
+/// tile is [`crate::TILE`]² samples, dispatched as 16 × 16 workgroups of
+/// 16 × 16. A local kernel's inputs are the regions `Ctx::reads` gives,
+/// which its uniforms must pass to the shader. `uniforms` is told which
+/// inputs, then which drivable settings, are connected.
 pub struct GpuKernel {
     pub name: &'static str,
     /// The kernel; [`crate::nodes::WGSL_COMMON`] is put before it.
     pub source: &'static str,
     pub uniforms: fn(&Ctx, &[bool]) -> Vec<u8>,
 }
+
+/// What the map holds, as map inputs read it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MapLayer {
+    /// The ground's height, in blocks.
+    Height,
+    /// The water's surface where there is water, the ground's elsewhere.
+    Water,
+    /// The terrain of each column, by id.
+    Terrain,
+    /// The biome of each column, by id (0: automatic).
+    Biome,
+}
+
+/// A decoded image, as file inputs read it: rows from the north,
+/// `channels` values per pixel, each from 0 to 1 (or as stored, for
+/// floating-point images).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Image {
+    pub width: u32,
+    pub height: u32,
+    pub channels: u8,
+    pub data: Vec<f32>,
+}
+
+/// The world outside the graph, as the host (the app, a test) gives it.
+/// Every method has a default: a graph evaluated with [`NoEnv`] has no map
+/// and no files.
+pub trait Env: Send + Sync {
+    /// Changes whenever the map changes.
+    fn map_revision(&self) -> u64 {
+        0
+    }
+
+    /// Fills `out` (`rect` at `lod` of `space`, row by row) with the map's
+    /// `layer`; `false` when there is no map.
+    fn read_map(&self, layer: MapLayer, space: &Space, lod: u8, rect: Rect, out: &mut [f32]) -> bool {
+        let _ = (layer, space, lod, rect, out);
+        false
+    }
+
+    /// Changes whenever the file at `path` changes.
+    fn file_stamp(&self, path: &str) -> u64 {
+        let _ = path;
+        0
+    }
+
+    /// The image at `path`, decoded (and kept by the host between calls).
+    fn image(&self, path: &str) -> Option<Arc<Image>> {
+        let _ = path;
+        None
+    }
+
+    /// The id of the terrain named `name` (Massif's `TerrainId`).
+    fn terrain_id(&self, name: &str) -> Option<u16> {
+        let _ = name;
+        None
+    }
+
+    /// The id of the biome named `name` (`minecraft:plains`; Massif's
+    /// `BiomeId`, 0 being automatic).
+    fn biome_id(&self, name: &str) -> Option<u16> {
+        let _ = name;
+        None
+    }
+}
+
+/// No map, no files.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoEnv;
+
+impl Env for NoEnv {}
 
 /// Writes a WGSL uniform block field by field, with its alignments.
 #[derive(Default)]

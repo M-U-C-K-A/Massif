@@ -5,7 +5,7 @@
 //! builds its panels from it, the format checks graphs against it, the
 //! schema and the catalogue a model reads are written from it.
 
-use crate::kernel::{FootprintFn, GlobalFn, GpuKernel, LocalFn, PointFn, StatsFn};
+use crate::kernel::{FootprintFn, GlobalFn, GlobalGpuFn, GpuKernel, LocalFn, PointFn, StatsFn};
 
 /// Families of nodes, in the order the library shows them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -208,6 +208,34 @@ pub enum ParamKind {
     /// The node's seed; left out, it comes from the node's name, so two
     /// nodes of a type never repeat each other.
     Seed,
+    /// Points placed on the terrain (peaks, craters…): positions as
+    /// fractions of the terrain, each with the values `fields` names.
+    /// Written `[{ "x": 0.3, "z": 0.6, "height": 900 }, …]`.
+    Points { fields: &'static [Field], max: usize },
+    /// A line drawn on the terrain through control points (a range's
+    /// spine, a coast, a river), each with the values `fields` names;
+    /// `closed`, an area. Written as points, in order.
+    Curve { fields: &'static [Field], closed: bool },
+    /// A curve from 0–1 to 0–1 through control points, smooth and never
+    /// overshooting (a transfer curve, a profile). Written `[[0, 0], [1, 1]]`.
+    Profile { default: &'static [[f64; 2]] },
+    /// Colours along 0–1. Written `[{ "at": 0, "color": "#rrggbb" }, …]`.
+    Gradient { default: &'static [(f64, &'static str)] },
+    Text { default: &'static str },
+    /// A file, by its path (relative to the world's folder, or absolute).
+    File { extensions: &'static [&'static str] },
+}
+
+/// One value each point of a Points or Curve setting carries.
+#[derive(Debug, Clone, Copy)]
+pub struct Field {
+    pub name: &'static str,
+    pub label: &'static str,
+    pub unit: Unit,
+    pub default: f64,
+    pub min: f64,
+    pub max: f64,
+    pub help: &'static str,
 }
 
 /// Where a setting shows in the panel.
@@ -228,31 +256,68 @@ pub struct ParamSpec {
     pub help: &'static str,
     pub kind: ParamKind,
     pub section: Section,
+    /// A number a field can drive (the ◇ beside it): connected through the
+    /// input `@name`, it takes each sample's value there.
+    pub drivable: bool,
 }
 
 impl ParamSpec {
+    const fn of(name: &'static str, label: &'static str, kind: ParamKind, help: &'static str) -> Self {
+        Self { name, label, help, kind, section: Section::Main, drivable: false }
+    }
+
     pub const fn float(name: &'static str, label: &'static str, unit: Unit, default: f64, min: f64, max: f64, help: &'static str) -> Self {
-        Self { name, label, help, kind: ParamKind::Float { min, max, soft: [min, max], default, unit }, section: Section::Main }
+        Self::of(name, label, ParamKind::Float { min, max, soft: [min, max], default, unit }, help)
     }
 
     pub const fn int(name: &'static str, label: &'static str, default: i64, min: i64, max: i64, help: &'static str) -> Self {
-        Self { name, label, help, kind: ParamKind::Int { min, max, default }, section: Section::Main }
+        Self::of(name, label, ParamKind::Int { min, max, default }, help)
     }
 
     pub const fn flag(name: &'static str, label: &'static str, default: bool, help: &'static str) -> Self {
-        Self { name, label, help, kind: ParamKind::Bool { default }, section: Section::Main }
+        Self::of(name, label, ParamKind::Bool { default }, help)
     }
 
     pub const fn choice(name: &'static str, label: &'static str, options: &'static [Choice], default: &'static str, help: &'static str) -> Self {
-        Self { name, label, help, kind: ParamKind::Choice { options, default }, section: Section::Main }
+        Self::of(name, label, ParamKind::Choice { options, default }, help)
     }
 
     pub const fn color(name: &'static str, label: &'static str, default: &'static str, help: &'static str) -> Self {
-        Self { name, label, help, kind: ParamKind::Color { default }, section: Section::Main }
+        Self::of(name, label, ParamKind::Color { default }, help)
     }
 
     pub const fn seed() -> Self {
-        Self { name: "seed", label: "Seed", help: "Another seed gives another variation of the same settings.", kind: ParamKind::Seed, section: Section::Detail }
+        Self::of("seed", "Seed", ParamKind::Seed, "Another seed gives another variation of the same settings.").section(Section::Detail)
+    }
+
+    pub const fn points(name: &'static str, label: &'static str, fields: &'static [Field], max: usize, help: &'static str) -> Self {
+        Self::of(name, label, ParamKind::Points { fields, max }, help)
+    }
+
+    pub const fn curve(name: &'static str, label: &'static str, fields: &'static [Field], closed: bool, help: &'static str) -> Self {
+        Self::of(name, label, ParamKind::Curve { fields, closed }, help)
+    }
+
+    pub const fn profile(name: &'static str, label: &'static str, default: &'static [[f64; 2]], help: &'static str) -> Self {
+        Self::of(name, label, ParamKind::Profile { default }, help)
+    }
+
+    pub const fn gradient(name: &'static str, label: &'static str, default: &'static [(f64, &'static str)], help: &'static str) -> Self {
+        Self::of(name, label, ParamKind::Gradient { default }, help)
+    }
+
+    pub const fn text(name: &'static str, label: &'static str, default: &'static str, help: &'static str) -> Self {
+        Self::of(name, label, ParamKind::Text { default }, help)
+    }
+
+    pub const fn file(name: &'static str, label: &'static str, extensions: &'static [&'static str], help: &'static str) -> Self {
+        Self::of(name, label, ParamKind::File { extensions }, help)
+    }
+
+    /// A number a field can drive (through the input `@name`).
+    pub const fn drivable(mut self) -> Self {
+        self.drivable = true;
+        self
     }
 
     /// With a slider range narrower than what can be typed.
@@ -277,16 +342,27 @@ pub enum Kernel {
     Point { cpu: PointFn, gpu: Option<&'static GpuKernel> },
     /// Each output sample from the input samples around it (`footprint`
     /// says how far, and at what level of detail it reads them).
-    Local { cpu: LocalFn, footprint: FootprintFn },
+    Local { cpu: LocalFn, gpu: Option<&'static GpuKernel>, footprint: FootprintFn },
     /// A point kernel that needs figures over the whole of its inputs
     /// (their lowest and highest values).
     Stats { cpu: StatsFn },
     /// The whole terrain at once, at the simulation's resolution: erosion,
     /// water. Finer tiles take the input's tile with the change the node
     /// made (`carry[output] = Some(input)`), or its output resampled.
-    Global { cpu: GlobalFn, carry: &'static [Option<u8>] },
-    /// What the graph gives the map: its input, as it is.
+    Global { cpu: GlobalFn, gpu: Option<GlobalGpuFn>, carry: &'static [Option<u8>] },
+    /// What the graph gives the map: never evaluated, its inputs are.
     Output,
+}
+
+/// What a node reads outside the graph, which its results (and so its
+/// hash) must follow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reads {
+    Nothing,
+    /// The map as it is ([`crate::kernel::Env::map_revision`]).
+    Map,
+    /// The files its File settings name ([`crate::kernel::Env::file_stamp`]).
+    Files,
 }
 
 pub struct NodeSpec {
@@ -307,6 +383,25 @@ pub struct NodeSpec {
     pub outputs: &'static [PortSpec],
     pub params: &'static [ParamSpec],
     pub kernel: Kernel,
+    pub reads: Reads,
+}
+
+impl NodeSpec {
+    /// What a node type leaves out: `NodeSpec { id: …, ..NodeSpec::BASE }`.
+    pub const BASE: NodeSpec = NodeSpec {
+        id: "",
+        label: "",
+        family: Family::Primitive,
+        summary: "",
+        help: "",
+        keywords: &[],
+        inputs: &[],
+        open_inputs: None,
+        outputs: &[],
+        params: &[],
+        kernel: Kernel::Output,
+        reads: Reads::Nothing,
+    };
 }
 
 impl std::fmt::Debug for NodeSpec {
@@ -342,9 +437,10 @@ impl NodeSpec {
     }
 }
 
-/// Every type of node.
+/// Every type of node, in the library's order (with the internal ones,
+/// whose family is [`Family::Internal`]).
 pub fn all() -> &'static [&'static NodeSpec] {
-    crate::nodes::ALL
+    crate::nodes::all()
 }
 
 /// The type of node named `id`.
@@ -385,8 +481,16 @@ mod tests {
                     ParamKind::Int { min, max, default } => assert!((min..=max).contains(&default), "{}.{}", s.id, p.name),
                     ParamKind::Choice { options, default } => assert!(options.iter().any(|o| o.value == default), "{}.{}", s.id, p.name),
                     ParamKind::Color { default } => assert!(crate::params::parse_color(default).is_some(), "{}.{}", s.id, p.name),
+                    ParamKind::Gradient { default } => assert!(!default.is_empty() && default.iter().all(|(at, c)| (0.0..=1.0).contains(at) && crate::params::parse_color(c).is_some()), "{}.{}", s.id, p.name),
+                    ParamKind::Profile { default } => assert!(default.len() >= 2 && default.windows(2).all(|w| w[0][0] < w[1][0]), "{}.{}", s.id, p.name),
+                    ParamKind::Points { fields, .. } | ParamKind::Curve { fields, .. } => {
+                        assert!(fields.iter().all(|f| (f.min..=f.max).contains(&f.default) && !f.help.is_empty()), "{}.{}", s.id, p.name)
+                    }
                     _ => {}
                 }
+            }
+            for p in s.params.iter().filter(|p| p.drivable) {
+                assert!(matches!(p.kind, ParamKind::Float { .. }) && matches!(s.kernel, Kernel::Point { .. } | Kernel::Global { .. }), "{}.{} cannot be driven", s.id, p.name);
             }
             let names: Vec<_> = s.params.iter().map(|p| p.name).chain(s.inputs.iter().map(|p| p.name)).collect();
             let unique: std::collections::HashSet<_> = names.iter().collect();

@@ -26,7 +26,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-#[cfg(feature = "gpu")]
 use crate::gpu::{Gpu, GpuTile};
 
 /// Says to stop: checked between tiles and between steps of simulations.
@@ -51,8 +50,7 @@ pub enum EvalError {
 pub struct TileData {
     planes: usize,
     cpu: OnceLock<Arc<[f32]>>,
-    #[cfg(feature = "gpu")]
-    gpu: OnceLock<GpuTile>,
+        gpu: OnceLock<GpuTile>,
 }
 
 impl TileData {
@@ -62,8 +60,7 @@ impl TileData {
         t
     }
 
-    #[cfg(feature = "gpu")]
-    fn gpu(tile: GpuTile, planes: usize) -> Self {
+        fn gpu(tile: GpuTile, planes: usize) -> Self {
         let t = Self { planes, ..Default::default() };
         let _ = t.gpu.set(tile);
         t
@@ -193,8 +190,7 @@ type At = (usize, u8, u8, i32, i32);
 
 pub struct Engine {
     cache: Mutex<Cache>,
-    #[cfg(feature = "gpu")]
-    gpu: Option<Arc<Gpu>>,
+        gpu: Option<Arc<Gpu>>,
     pub counters: Counters,
 }
 
@@ -209,15 +205,13 @@ impl Engine {
     pub fn new(settings: Settings) -> Self {
         Self {
             cache: Mutex::new(Cache { budget: settings.cache_mb << 20, ..Default::default() }),
-            #[cfg(feature = "gpu")]
-            gpu: None,
+                        gpu: None,
             counters: Counters::default(),
         }
     }
 
     /// An engine running what it can on `gpu`.
-    #[cfg(feature = "gpu")]
-    pub fn with_gpu(gpu: Arc<Gpu>, settings: Settings) -> Self {
+        pub fn with_gpu(gpu: Arc<Gpu>, settings: Settings) -> Self {
         let mut e = Self::new(settings);
         e.gpu = Some(gpu);
         e
@@ -225,12 +219,9 @@ impl Engine {
 
     /// The graphics card it runs on, if any.
     pub fn gpu_name(&self) -> Option<&str> {
-        #[cfg(feature = "gpu")]
-        {
+                {
             self.gpu.as_deref().map(Gpu::name)
         }
-        #[cfg(not(feature = "gpu"))]
-        {
             None
         }
     }
@@ -376,8 +367,7 @@ impl Engine {
         let input = |k: usize, l: u8, x: i32, z: i32| node.inputs[k].map(|(s, p)| &have[&(s, p, l, x, z)]);
         match node.spec.kernel {
             Kernel::Point { cpu, gpu } => {
-                #[cfg(feature = "gpu")]
-                if let (Some(g), Some(kernel)) = (&self.gpu, gpu)
+                                if let (Some(g), Some(kernel)) = (&self.gpu, gpu)
                     && g.takes(kernel)
                 {
                     let connected: Vec<bool> = node.inputs.iter().map(Option::is_some).collect();
@@ -397,8 +387,6 @@ impl Engine {
                         return Ok(made.into_iter().map(|outs| outs.into_iter().zip(&planes).map(|(t, p)| Arc::new(TileData::gpu(t, *p))).collect()).collect());
                     }
                 }
-                #[cfg(not(feature = "gpu"))]
-                let _ = gpu;
                 self.inputs_to_cpu(node, tiles, have, |l, x, z| vec![(l, Rect::tile(x, z)); node.inputs.len()]);
                 tiles
                     .par_iter()
@@ -587,8 +575,7 @@ impl Engine {
 
     /// Reads back the tiles that are only on the graphics card.
     fn to_cpu(&self, tiles: &[&TileData]) {
-        #[cfg(feature = "gpu")]
-        if let Some(g) = &self.gpu {
+                if let Some(g) = &self.gpu {
             let mut seen = std::collections::HashSet::new();
             let missing: Vec<&TileData> = tiles.iter().copied().filter(|t| t.cpu.get().is_none() && seen.insert(*t as *const TileData)).collect();
             if missing.is_empty() {
@@ -599,8 +586,6 @@ impl Engine {
                 let _ = t.cpu.set(data.into());
             }
         }
-        #[cfg(not(feature = "gpu"))]
-        let _ = tiles;
     }
 }
 
