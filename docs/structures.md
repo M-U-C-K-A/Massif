@@ -45,6 +45,25 @@ with where it is; its bin button takes one away.
 - **Trial Chambers** are walled in by rock where a cave runs by, as the game
   does.
 
+## The village brush
+
+**Village brush** (Decor group) fills the selection with a village sized by
+it: a hamlet round a well for about 100 × 100 blocks, a village round its
+square for 300 × 300, a town of several districts for 1000 × 1000. Each
+district has its square; main roads join them and lead out of the village,
+finding their way over the land (gentle slopes and dry land first, planks
+over water); side roads branch off them; the buildings stand along both,
+their doors to the road, on ground levelled to their floor, with villagers
+in the houses. **Walls** runs a wall round it, a few blocks inside the
+selection's edge, with towers at its corners and along it, and a gate where
+a road crosses.
+
+Its themes are the game's own villages (plains, desert, savanna, taiga,
+snowy: each district a village assembled by the jigsaw engine, kept to the
+selection), or a builder's pack, added with **Add a pack…**: a folder of
+schematics by theme and type with a small manifest, described in
+[Village packs](village-packs.md).
+
 ## Underground
 
 An Ancient City, Trial Chambers or a stronghold carve their own halls: the

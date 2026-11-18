@@ -246,6 +246,12 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
             Some(tr!("Edit ▸ Smooth terrain… turns it on for the whole map and sets each terrain's pieces.")),
             Some(Demo::Slabs),
         ),
+        Tool::Village => card(
+            tr!("Fills the selection with a village: a square in each district, roads that follow the land, buildings along them with their doors to the road, walls if you want them."),
+            vec![(tr!("Click"), tr!("Fill the selection"))],
+            Some(tr!("Its themes: the game's villages, or a builder's pack of schematics.")),
+            None,
+        ),
         Tool::Structure => card(
             tr!("Places one of the game's structures where you click: a village, an Ancient City with its warden, Trial Chambers, a shipwreck — read from your own game, assembled as the game assembles them."),
             vec![(tr!("Click"), tr!("Place it")), (tr!("Right-click"), tr!("Take it away"))],
