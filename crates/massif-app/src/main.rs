@@ -42,6 +42,7 @@ mod picker;
 mod player;
 mod quit;
 mod real_terrain;
+mod game_server;
 mod map_size;
 mod region_export;
 mod report;

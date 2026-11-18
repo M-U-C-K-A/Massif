@@ -85,9 +85,13 @@ pub fn chunk_surface(nbt: &[u8], min_y: i32) -> Option<ChunkSurface> {
         return None;
     }
     let min_y = chunk.y_pos.map_or(min_y, |y| y * 16);
-    let ground = heightmap(chunk.heightmaps.OCEAN_FLOOR.as_deref()?, 9).map(|v| (v as i32 + min_y) as i16);
+    // The ocean floor stops on leaves, the motion-blocking heightmap
+    // without leaves on water: the lower of the two is the ground under
+    // trees and under water alike (a trunk's own column aside).
+    let floor = heightmap(chunk.heightmaps.OCEAN_FLOOR.as_deref()?, 9).map(|v| (v as i32 + min_y) as i16);
     let top = heightmap(chunk.heightmaps.MOTION_BLOCKING_NO_LEAVES.as_deref()?, 9).map(|v| (v as i32 + min_y) as i16);
-    let fluid: [i16; 256] = std::array::from_fn(|i| if top[i] > ground[i] { top[i] } else { massif_core::NO_FLUID });
+    let ground: [i16; 256] = std::array::from_fn(|i| floor[i].min(top[i]));
+    let fluid: [i16; 256] = std::array::from_fn(|i| if top[i] > floor[i] { top[i] } else { massif_core::NO_FLUID });
     let mut names: Vec<String> = Vec::new();
     let mut index: HashMap<(i8, usize), u8> = HashMap::new();
     let sections: HashMap<i8, &Section> = chunk.sections.iter().map(|s| (s.y, s)).collect();

@@ -1255,4 +1255,35 @@ mod tests {
         eprintln!("{land} land, {sea} sea, {:.1} µs a column", t.elapsed().as_secs_f64() * 1e6 / (land + sea) as f64);
         assert!(land > 100 && sea > 100);
     }
+
+    /// A band eased into a seed's world: the seam starts from the map,
+    /// past the band the land is the seed's, its biomes the game's.
+    #[test]
+    fn a_band_eases_into_the_seeds_world() {
+        use crate::expand::{Fill, FillSettings, Sides, Surroundings, apply, sided};
+        use crate::{TILE_AREA, TILE_SIZE, Tile, TilePos, World, WorldMeta};
+        let mut world = World::new(WorldMeta::default());
+        let square: std::collections::HashSet<TilePos> = (0..2).flat_map(|z| (0..2).map(move |x| TilePos::new(x, z))).collect();
+        for p in &square {
+            world.dims[0].ground_mut().insert(*p, Tile::ground(90.0, 0, crate::NO_FLUID));
+        }
+        let reg = world.registry.clone();
+        let around = VanillaAround::new(12345, &reg, None);
+        let settings = FillSettings { fill: Fill::World, ease: 96.0, sea_level: 63, lava: false, seed: 12345, min_y: -64, max_y: 320 };
+        let target = sided(&square, Sides { west: 1, east: 1, north: 1, south: 1 });
+        apply(&mut world.dims[0], &target, &settings, &reg, Some(&around), &std::sync::atomic::AtomicBool::new(false));
+        let col = |x: i32, z: i32| {
+            let p = TilePos::containing(x, z);
+            let t = world.dims[0].ground().view(p).unwrap();
+            let (ox, oz) = p.origin();
+            let i = ((z - oz) * TILE_SIZE + x - ox) as usize;
+            assert!(i < TILE_AREA);
+            (t.top.get(i), t.biome.get(i))
+        };
+        assert!((col(256, 100).0 - 90.0).abs() < 1.5, "the seam {}", col(256, 100).0);
+        let (h, b) = col(256 + 120, 100);
+        assert!((h - around.height(256 + 120, 100).max(-63.0)).abs() < 1.0, "past the band {h}");
+        assert_eq!(b, around.biome(256 + 120, 100), "the game's biome past the band");
+        assert_ne!(b, 0);
+    }
 }
