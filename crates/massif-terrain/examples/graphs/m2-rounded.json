@@ -1,0 +1,4 @@
+{ "terrain": { "size": 8192, "seed": 14 },
+  "nodes": {
+    "old": { "type": "mountain.rounded" },
+    "out": { "type": "output.map", "inputs": { "height": "old" } } } }

@@ -1,0 +1,4 @@
+{ "terrain": { "size": 8192, "seed": 16 },
+  "nodes": {
+    "isles": { "type": "coast.archipelago", "params": { "count": 24, "chain": [{"x":0.1,"z":0.8},{"x":0.45,"z":0.5},{"x":0.9,"z":0.35}], "spread": 900 } },
+    "out": { "type": "output.map", "inputs": { "height": "isles" } } } }

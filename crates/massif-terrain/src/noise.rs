@@ -228,3 +228,183 @@ mod tests {
         }
     }
 }
+
+// ------------------------------------------------- noise for shapes (CPU) --
+
+/// fade'(t), for derivatives.
+#[inline]
+fn fade_d(t: f32) -> f32 {
+    30.0 * t * t * (t * (t - 2.0) + 1.0)
+}
+
+/// Gradient noise at any world position (lattice units), in double
+/// precision before the cell is found: exact however far from the origin.
+/// About ±1.
+#[inline]
+pub fn noise2(x: f64, z: f64, seed: u32) -> f32 {
+    let (fx, fz) = (x.floor(), z.floor());
+    gradient((fx as i64) as u32, (fz as i64) as u32, (x - fx) as f32, (z - fz) as f32, seed)
+}
+
+/// [`noise2`] with its derivatives along x and z (lattice units).
+#[inline]
+pub fn noise2_d(x: f64, z: f64, seed: u32) -> (f32, f32, f32) {
+    let (fx, fz) = (x.floor(), z.floor());
+    let (cx, cz) = ((fx as i64) as u32, (fz as i64) as u32);
+    let (tx, tz) = ((x - fx) as f32, (z - fz) as f32);
+    let g = |dx: u32, dz: u32| GRADS[(hash2(cx.wrapping_add(dx), cz.wrapping_add(dz), seed) & 15) as usize];
+    let (g00, g10, g01, g11) = (g(0, 0), g(1, 0), g(0, 1), g(1, 1));
+    let a = g00[0] * tx + g00[1] * tz;
+    let b = g10[0] * (tx - 1.0) + g10[1] * tz;
+    let c = g01[0] * tx + g01[1] * (tz - 1.0);
+    let d = g11[0] * (tx - 1.0) + g11[1] * (tz - 1.0);
+    let (u, v) = (fade(tx), fade(tz));
+    let (du, dv) = (fade_d(tx), fade_d(tz));
+    let k = a - b - c + d;
+    let n = a + (b - a) * u + (c - a) * v + k * u * v;
+    let nx = g00[0] + (g10[0] - g00[0]) * u + (b - a) * du + (g01[0] - g00[0]) * v + (g00[0] - g10[0] - g01[0] + g11[0]) * u * v + k * du * v;
+    let nz = g00[1] + (g10[1] - g00[1]) * u + (g01[1] - g00[1]) * v + (c - a) * dv + (g00[1] - g10[1] - g01[1] + g11[1]) * u * v + k * u * dv;
+    (n * NORM, nx * NORM, nz * NORM)
+}
+
+/// Noise along a line (a curve's length, an angle), about ±1.
+#[inline]
+pub fn noise1(t: f64, seed: u32) -> f32 {
+    noise2(t, 0.37, seed)
+}
+
+/// A fractal at a world position (blocks), for shapes: `octaves` of
+/// [`noise2`] from cells `scale` blocks wide, each `lacunarity` times finer
+/// and `gain` times weaker, turned so that their lattices never line up.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Fbm {
+    pub scale: f64,
+    pub octaves: u32,
+    pub lacunarity: f64,
+    pub gain: f64,
+    pub seed: u32,
+    /// Each octave's frequency, turn (sine, cosine), seed and shift.
+    oct: [(f64, f64, f64, u32, f64, f64); MAX_OCTAVES],
+}
+
+impl Fbm {
+    pub fn new(scale: f64, octaves: u32, gain: f64, seed: u32) -> Self {
+        let scale = scale.max(1e-3);
+        let octaves = octaves.clamp(1, MAX_OCTAVES as u32);
+        let mut oct = [(0.0, 0.0, 1.0, 0, 0.0, 0.0); MAX_OCTAVES];
+        for (k, o) in oct.iter_mut().enumerate().take(octaves as usize) {
+            let f = 2.0f64.powi(k as i32) / scale;
+            let (s, c) = (0.6 + k as f64 * 1.1).sin_cos();
+            let sd = mix32(seed ^ (k as u32).wrapping_mul(0x9e37_79b9));
+            *o = (f, s, c, sd, (sd & 0xfff) as f64, (sd >> 20) as f64);
+        }
+        Self { scale, octaves, lacunarity: 2.0, gain, seed, oct }
+    }
+
+    /// Octaves fine enough to reach `finest` blocks.
+    pub fn down_to(scale: f64, finest: f64, gain: f64, seed: u32) -> Self {
+        let octaves = ((scale / finest.max(0.5)).log2().ceil() as u32).clamp(1, MAX_OCTAVES as u32);
+        Self::new(scale, octaves, gain, seed)
+    }
+
+    #[inline]
+    fn octave(&self, k: u32, x: f64, z: f64) -> (f64, f64, u32) {
+        let (f, s, c, seed, ox, oz) = self.oct[k as usize];
+        let (px, pz) = (x * f, z * f);
+        (c * px - s * pz + ox, s * px + c * pz + oz, seed)
+    }
+
+    /// Summed octaves, about ±1.
+    pub fn at(&self, x: f64, z: f64) -> f32 {
+        let (mut sum, mut norm, mut amp) = (0.0f32, 0.0f32, 1.0f32);
+        for k in 0..self.octaves {
+            let (qx, qz, seed) = self.octave(k, x, z);
+            sum += amp * noise2(qx, qz, seed);
+            norm += amp;
+            amp *= self.gain as f32;
+        }
+        sum / norm
+    }
+
+    /// Ridged: crests where the noise crosses zero, from 0 to 1, finer
+    /// crests where the coarser ones are high. `sharpness` (0–1) narrows
+    /// the crests.
+    pub fn ridged(&self, x: f64, z: f64, sharpness: f32) -> f32 {
+        let power = 1.0 + 3.0 * sharpness;
+        let (mut sum, mut norm, mut amp, mut weight) = (0.0f32, 0.0f32, 1.0f32, 1.0f32);
+        for k in 0..self.octaves {
+            let (qx, qz, seed) = self.octave(k, x, z);
+            let r = (1.0 - noise2(qx, qz, seed).abs()).max(0.0).powf(power) * weight;
+            weight = (r * 2.0).clamp(0.0, 1.0);
+            sum += amp * r;
+            norm += amp;
+            amp *= self.gain as f32;
+        }
+        sum / norm
+    }
+
+    /// Mountains: ridged octaves whose crests sharpen with each octave —
+    /// the first broad, its flanks straight from crest to valley, the last
+    /// as sharp as `sharpness` says — finer crests where the coarser ones
+    /// are high. From 0 to 1.
+    pub fn mountains(&self, x: f64, z: f64, sharpness: f32) -> f32 {
+        let (mut sum, mut norm, mut amp, mut weight) = (0.0f32, 0.0f32, 1.0f32, 1.0f32);
+        let last = (self.octaves.max(2) - 1) as f32;
+        for k in 0..self.octaves {
+            let (qx, qz, seed) = self.octave(k, x, z);
+            let power = 1.0 + 2.5 * sharpness * (k as f32 / last);
+            let r = (1.0 - noise2(qx, qz, seed).abs()).max(0.0).powf(power) * weight;
+            weight = (r * 1.6).clamp(0.0, 1.0);
+            sum += amp * r;
+            norm += amp;
+            amp *= self.gain as f32;
+        }
+        sum / norm
+    }
+
+    /// Eroded: octaves damped where the coarser ones slope, so that slopes
+    /// stay smooth, valleys gather and detail stays on the heights (after
+    /// Iñigo Quilez). From 0 to 1, about.
+    pub fn eroded(&self, x: f64, z: f64, strength: f32) -> f32 {
+        let (mut sum, mut norm, mut amp) = (0.0f32, 0.0f32, 1.0f32);
+        let (mut dx, mut dz) = (0.0f32, 0.0f32);
+        for k in 0..self.octaves {
+            let (qx, qz, seed) = self.octave(k, x, z);
+            let (n, nx, nz) = noise2_d(qx, qz, seed);
+            dx += nx;
+            dz += nz;
+            sum += amp * n / (1.0 + strength * (dx * dx + dz * dz));
+            norm += amp;
+            amp *= self.gain as f32;
+        }
+        (0.5 + 0.5 * sum / norm).clamp(0.0, 1.0)
+    }
+}
+
+#[cfg(test)]
+mod shape_noise_tests {
+    use super::*;
+
+    #[test]
+    fn derivatives_match_differences() {
+        let h = 1e-3;
+        for (x, z) in [(3.3, 7.9), (-12.6, 0.2), (100.05, -40.7)] {
+            let (n, dx, dz) = noise2_d(x, z, 77);
+            assert!((n - noise2(x, z, 77)).abs() < 1e-6);
+            let ex = (noise2(x + h, z, 77) - noise2(x - h, z, 77)) / (2.0 * h as f32);
+            let ez = (noise2(x, z + h, 77) - noise2(x, z - h, 77)) / (2.0 * h as f32);
+            assert!((dx - ex).abs() < 2e-2 && (dz - ez).abs() < 2e-2, "{dx} {ex} {dz} {ez}");
+        }
+    }
+
+    #[test]
+    fn shape_fractals_are_bounded() {
+        let f = Fbm::down_to(500.0, 4.0, 0.5, 3);
+        for k in 0..2000 {
+            let (x, z) = (k as f64 * 37.1, k as f64 * 11.3 - 5000.0);
+            let r = f.ridged(x, z, 0.7);
+            let e = f.eroded(x, z, 1.0);
+            assert!((0.0..=1.0).contains(&r) && (0.0..=1.0).contains(&e) && f.at(x, z).abs() <= 1.01);
+        }
+    }
+}

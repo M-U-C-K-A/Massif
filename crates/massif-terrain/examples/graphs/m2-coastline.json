@@ -1,0 +1,4 @@
+{ "terrain": { "size": 8192, "seed": 17 },
+  "nodes": {
+    "coast": { "type": "coast.coastline", "params": { "land": 0.55, "scale": 5000, "fjords": 0.6, "height": 120 } },
+    "out": { "type": "output.map", "inputs": { "height": "coast" } } } }
