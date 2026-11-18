@@ -1,0 +1,4 @@
+{ "terrain": { "size": 8192, "seed": 13 },
+  "nodes": {
+    "alps": { "type": "mountain.alpine" },
+    "out": { "type": "output.map", "inputs": { "height": "alps" } } } }

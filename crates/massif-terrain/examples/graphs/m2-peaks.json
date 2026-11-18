@@ -1,0 +1,39 @@
+{
+  "terrain": {
+    "size": 8192,
+    "seed": 12
+  },
+  "nodes": {
+    "peaks": {
+      "type": "mountain.peaks",
+      "params": {
+        "peaks": [
+          {
+            "x": 0.35,
+            "z": 0.4,
+            "height": 250,
+            "radius": 1000
+          },
+          {
+            "x": 0.62,
+            "z": 0.55,
+            "height": 200,
+            "radius": 800
+          },
+          {
+            "x": 0.45,
+            "z": 0.75,
+            "height": 160,
+            "radius": 650
+          }
+        ]
+      }
+    },
+    "out": {
+      "type": "output.map",
+      "inputs": {
+        "height": "peaks"
+      }
+    }
+  }
+}

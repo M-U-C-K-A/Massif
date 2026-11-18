@@ -1,0 +1,21 @@
+{
+  "terrain": {
+    "size": 8192,
+    "seed": 15
+  },
+  "nodes": {
+    "isle": {
+      "type": "coast.island",
+      "params": {
+        "radius": 2400,
+        "height": 70
+      }
+    },
+    "out": {
+      "type": "output.map",
+      "inputs": {
+        "height": "isle"
+      }
+    }
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "terrain": {
+    "size": 8192,
+    "seed": 11
+  },
+  "nodes": {
+    "range": {
+      "type": "mountain.range",
+      "params": {
+        "spine": [
+          {
+            "x": 0.1,
+            "z": 0.7
+          },
+          {
+            "x": 0.35,
+            "z": 0.45,
+            "height": 1.3
+          },
+          {
+            "x": 0.6,
+            "z": 0.42,
+            "width": 1.4
+          },
+          {
+            "x": 0.9,
+            "z": 0.2,
+            "height": 0.7
+          }
+        ],
+        "height": 240,
+        "width": 1900
+      }
+    },
+    "out": {
+      "type": "output.map",
+      "inputs": {
+        "height": "range"
+      }
+    }
+  }
+}

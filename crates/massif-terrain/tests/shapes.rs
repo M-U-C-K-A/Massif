@@ -1,0 +1,114 @@
+//! Shapes: they stay within their heights, have no seams, go where they are
+//! placed, and cover what they are asked to.
+
+use massif_terrain::compile::{Compiled, compile};
+use massif_terrain::engine::{Engine, Settings, never};
+use massif_terrain::kernel::Grid;
+use massif_terrain::model::Graph;
+use massif_terrain::registry::{self, Family};
+use massif_terrain::space::{Rect, Space};
+
+fn compiled(json: &str) -> Compiled {
+    let g = Graph::from_json(json).unwrap();
+    let (c, diags) = compile(&g, Space::new(4096), 1024);
+    assert!(diags.is_empty(), "{diags:?}");
+    c
+}
+
+fn whole(c: &Compiled, id: &str, port: Option<&str>, lod: u8) -> Grid {
+    Engine::new(Settings::default()).whole(c, c.source(id, port).unwrap(), lod, &never).unwrap()
+}
+
+/// The largest step between neighbouring samples, in blocks per block.
+fn steepest_step(g: &Grid) -> f32 {
+    let spacing = (1u32 << g.lod) as f32;
+    let mut s = 0.0f32;
+    for z in g.rect.z..g.rect.z1() - 1 {
+        for x in g.rect.x..g.rect.x1() - 1 {
+            s = s.max((g.at(x + 1, z) - g.at(x, z)).abs()).max((g.at(x, z + 1) - g.at(x, z)).abs());
+        }
+    }
+    s / spacing
+}
+
+#[test]
+fn every_shape_evaluates_with_its_defaults_within_its_heights() {
+    for spec in registry::all().iter().filter(|s| s.family == Family::Shape) {
+        let c = compiled(&format!(r#"{{ "nodes": {{ "n": {{ "type": "{}" }} }} }}"#, spec.id));
+        let g = whole(&c, "n", None, 3);
+        assert!(g.data.iter().all(|v| v.is_finite()), "{}", spec.id);
+        let (lo, hi) = g.range();
+        assert!(lo >= -1100.0 && hi <= 4096.0 + 2048.0 && hi > lo + 10.0, "{}: {lo}..{hi}", spec.id);
+        for port in spec.outputs.iter().filter(|p| p.kind == registry::PortKind::Mask) {
+            let m = whole(&c, "n", Some(port.name), 3);
+            let (lo, hi) = m.range();
+            assert!(lo >= 0.0 && hi <= 1.0 && hi > 0.0, "{}.{}: {lo}..{hi}", spec.id, port.name);
+        }
+    }
+}
+
+#[test]
+fn a_range_has_no_seam_where_its_spine_bends() {
+    // A sharp bend: the nearest point of the spine jumps from one stretch
+    // to the other inside it.
+    let c = compiled(r#"{ "nodes": { "r": { "type": "mountain.range", "params": {
+        "spine": [{ "x": 0.15, "z": 0.8 }, { "x": 0.5, "z": 0.3 }, { "x": 0.85, "z": 0.8 }],
+        "height": 200, "width": 1400, "warp": 0, "roughness": 0 } } } }"#);
+    let g = whole(&c, "r", None, 1);
+    // Steep in places, never a cliff: a seam would be a step of many blocks.
+    let s = steepest_step(&g);
+    assert!(s < 2.5, "{s}");
+}
+
+#[test]
+fn peaks_stand_where_they_are_placed() {
+    let c = compiled(r#"{ "nodes": { "p": { "type": "mountain.peaks", "params": {
+        "peaks": [{ "x": 0.25, "z": 0.25, "height": 200, "radius": 600 }, { "x": 0.7, "z": 0.6, "height": 120, "radius": 500 }],
+        "base": 70, "roughness": 0, "warp": 0 } } } }"#);
+    let g = whole(&c, "p", None, 2);
+    // At 4 blocks a sample, the peaks at (1024, 1024) and (2867, 2458).
+    assert!((g.at(256, 256) - 270.0).abs() < 4.0, "{}", g.at(256, 256));
+    assert!((g.at(717, 614) - 190.0).abs() < 4.0, "{}", g.at(717, 614));
+    assert_eq!(g.at(1000, 50), 70.0, "far from them, the base");
+}
+
+#[test]
+fn a_coastline_makes_as_much_land_as_asked() {
+    for land in [0.3, 0.7] {
+        let c = compiled(&format!(r#"{{ "nodes": {{ "c": {{ "type": "coast.coastline", "params": {{ "land": {land}, "scale": 1200 }} }} }} }}"#));
+        let m = whole(&c, "c", Some("land"), 3);
+        let share = m.data.iter().filter(|v| **v > 0.5).count() as f32 / m.data.len() as f32;
+        assert!((share - land).abs() < 0.12, "asked {land}, got {share}");
+    }
+}
+
+#[test]
+fn islands_meet_without_seams() {
+    let c = compiled(r#"{ "nodes": { "a": { "type": "coast.archipelago", "params": {
+        "count": 0, "islands": [{ "x": 0.45, "z": 0.5, "radius": 700, "height": 60 }, { "x": 0.6, "z": 0.5, "radius": 600, "height": 30 }],
+        "roughness": 0, "hills": 0 } } } }"#);
+    let g = whole(&c, "a", None, 1);
+    let s = steepest_step(&g);
+    assert!(s < 1.5, "{s}");
+    // Both islands are land, the sea around them is not.
+    let land = whole(&c, "a", Some("land"), 3);
+    assert!(land.at(230, 256) > 0.9 && land.at(307, 256) > 0.9 && land.at(30, 30) < 0.1);
+}
+
+#[test]
+fn shapes_tile_without_seams() {
+    // The same samples whether asked for in one region or tile by tile.
+    let c = compiled(r#"{ "nodes": { "a": { "type": "mountain.alpine" }, "r": { "type": "mountain.range" }, "i": { "type": "coast.island" } } }"#);
+    for id in ["a", "r", "i"] {
+        let e = Engine::new(Settings::default());
+        let src = c.source(id, None).unwrap();
+        let big = e.region(&c, src, 2, Rect::new(200, 200, 400, 300), &never).unwrap();
+        let fresh = Engine::new(Settings::default());
+        let part = fresh.region(&c, src, 2, Rect::new(250, 260, 100, 100), &never).unwrap();
+        for z in 260..360 {
+            for x in 250..350 {
+                assert_eq!(big.at(x, z), part.at(x, z), "{id} at {x}, {z}");
+            }
+        }
+    }
+}
