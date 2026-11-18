@@ -14,6 +14,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+massif-structures.workspace = true
 massif-assets.workspace = true
 fastanvil = { version = "0.32", default-features = false }
 fastnbt = "2.6"

@@ -668,7 +668,7 @@ mod packed {
     }
 }
 
-mod base64 {
+pub(crate) mod base64 {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
     pub fn encode(bytes: &[u8]) -> String {

@@ -94,6 +94,10 @@ const KIND_POINT_INDEX: [u8; 4] = *b"VIDX";
 const KIND_POINT_VOXELS: [u8; 4] = *b"VVOX";
 const KIND_POINT_SELECTION: [u8; 4] = *b"VSEL";
 const KIND_POINT_THUMBNAIL: [u8; 4] = *b"VTHM";
+/// The structures placed on a dimension (a village, an Ancient City), and
+/// those of a save point's.
+const KIND_STRUCTURES: [u8; 4] = *b"STRC";
+const KIND_POINT_STRUCTURES: [u8; 4] = *b"VSTR";
 const FLAG_ZSTD: u32 = 1;
 /// In the header's flags: the file is a contribution (`.massifpatch`, see
 /// [`patch`]), not a map.
@@ -153,6 +157,9 @@ struct DimDoc {
     /// Its cave layers (1.2 on; older versions read no cave).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     caves: Vec<massif_core::caves::CaveDef>,
+    /// Id of the `STRC` section holding the structures placed, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    structures: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -229,6 +236,9 @@ struct Layout {
     /// written is not written again.
     by_ptr: HashMap<usize, (u64, u32)>,
     by_content: HashMap<(u32, u32), Vec<(u64, usize)>>,
+    /// The sections of structures written, by the structures they hold: a
+    /// save point's, mostly the map's own, are not written again.
+    structures: HashMap<Vec<usize>, u32>,
 }
 
 /// The address of a blob's bytes, to know a shared tile without reading it.
@@ -248,10 +258,10 @@ impl Layout {
     /// a tile already written is pointed at instead of written again, and
     /// the sections are of the kinds older versions skip (a save point's).
     fn dims(&mut self, world: &World, share: bool) -> Result<Vec<DimDoc>> {
-        let (index_kind, voxel_kind, selection_kind) = if share {
-            (KIND_POINT_INDEX, KIND_POINT_VOXELS, KIND_POINT_SELECTION)
+        let (index_kind, voxel_kind, selection_kind, structure_kind) = if share {
+            (KIND_POINT_INDEX, KIND_POINT_VOXELS, KIND_POINT_SELECTION, KIND_POINT_STRUCTURES)
         } else {
-            (KIND_TILE_INDEX, KIND_VOXELS, KIND_SELECTION)
+            (KIND_TILE_INDEX, KIND_VOXELS, KIND_SELECTION, KIND_STRUCTURES)
         };
         let mut dims = Vec::new();
         for dim in &world.dims {
@@ -319,6 +329,20 @@ impl Layout {
                 .as_ref()
                 .filter(|s| !s.is_empty())
                 .map(|s| self.section(selection_kind, 0, s.encode()));
+            let structures = if dim.structures.is_empty() {
+                None
+            } else {
+                let key: Vec<usize> = dim.structures.iter().map(|s| std::sync::Arc::as_ptr(s) as usize).collect();
+                match self.structures.get(&key) {
+                    Some(&id) => Some(id),
+                    None => {
+                        let list: Vec<&massif_core::structures::Structure> = dim.structures.iter().map(|s| &**s).collect();
+                        let id = self.section(structure_kind, FLAG_ZSTD, codec::zstd_compress(&serde_json::to_vec(&list)?));
+                        self.structures.insert(key, id);
+                        Some(id)
+                    }
+                }
+            };
             dims.push(DimDoc {
                 kind: dim.kind,
                 min_y: dim.min_y,
@@ -327,6 +351,7 @@ impl Layout {
                 voxels,
                 selection,
                 caves: dim.caves.to_vec(),
+                structures,
             });
         }
         Ok(dims)
@@ -349,6 +374,7 @@ pub fn write<W: Write>(world: &World, mut out: W) -> Result<Stats> {
         next_section: 1,
         by_ptr: HashMap::new(),
         by_content: HashMap::new(),
+        structures: HashMap::new(),
     };
     let dims = layout.dims(world, false)?;
     let map_bytes = layout.offset - HEADER_LEN as u64;
@@ -670,6 +696,8 @@ struct Parsed<'a> {
     voxels: Vec<(u32, Vec<u8>)>,
     /// Selections per `SELN` section id, still encoded.
     selections: Vec<(u32, Vec<u8>)>,
+    /// Structures per `STRC` section id, still encoded.
+    structures: Vec<(u32, Vec<u8>)>,
     /// The save points, and their pictures per `VTHM` section id.
     points: Vec<PointDoc>,
     point_thumbnails: Vec<(u32, Vec<u8>)>,
@@ -754,6 +782,7 @@ fn parse(src: &dyn Source) -> Result<Parsed<'_>> {
     let mut indices = Vec::new();
     let mut voxels = Vec::new();
     let mut selections = Vec::new();
+    let mut structures = Vec::new();
     let mut points = Vec::new();
     let mut point_thumbnails = Vec::new();
     for entry in directory.as_chunks::<SECTION_LEN>().0 {
@@ -786,6 +815,7 @@ fn parse(src: &dyn Source) -> Result<Parsed<'_>> {
             }
             KIND_VOXELS | KIND_POINT_VOXELS => voxels.push((id, section_payload(src, entry, "the sculpted chunks")?)),
             KIND_SELECTION | KIND_POINT_SELECTION => selections.push((id, section_payload(src, entry, "the selection")?)),
+            KIND_STRUCTURES | KIND_POINT_STRUCTURES => structures.push((id, section_payload(src, entry, "the structures")?)),
             KIND_POINTS => {
                 let json = section_payload(src, entry, "the save points")?;
                 points = serde_json::from_slice::<Vec<PointDoc>>(&json)?;
@@ -805,6 +835,7 @@ fn parse(src: &dyn Source) -> Result<Parsed<'_>> {
         indices,
         voxels,
         selections,
+        structures,
         points,
         point_thumbnails,
     })
@@ -878,6 +909,13 @@ fn read_dims(parsed: &Parsed, docs: &[DimDoc], frames: &mut Frames, keep: bool) 
             };
             let selection = massif_core::selection::Selection::decode(raw).map_err(FormatError::Corrupt)?;
             dimension.selection = (!selection.is_empty()).then(|| std::sync::Arc::new(selection));
+        }
+        if let Some(id) = dim.structures {
+            let Some((_, raw)) = parsed.structures.iter().find(|(i, _)| *i == id) else {
+                return corrupt(format!("the structures {id} are missing"));
+            };
+            let list: Vec<massif_core::structures::Structure> = serde_json::from_slice(raw)?;
+            dimension.structures = list.into_iter().map(std::sync::Arc::new).collect();
         }
         dims.push(dimension);
     }
@@ -1112,6 +1150,27 @@ pub(crate) mod tests {
         hist.begin("dig", 0);
         massif_core::voxel::sculpt(&mut hist.edit(&mut world, 0), &brush, [10.5, 40.5, 10.5], 1.0, massif_core::voxel::SculptMode::Remove);
         hist.commit();
+        // A structure: a block of planks and a chest by it.
+        hist.begin("structure", 0);
+        let mut hut = massif_core::structures::Structure {
+            id: 1,
+            name: "Hut".into(),
+            kind: "minecraft:igloo".into(),
+            seed: 3,
+            palette: vec!["minecraft:oak_planks".into(), "minecraft:chest[facing=west,type=single,waterlogged=false]".into()],
+            sections: vec![massif_core::structures::Section { pos: [0, 4, 0], blocks: vec![(0, 0), (1, 1)] }],
+            block_entities: vec![massif_core::structures::BlockEntity { pos: [1, 64, 0], nbt: vec![10, 0, 0, 8, 0, 2, b'i', b'd', 0, 1, b'x', 0] }],
+            entities: Vec::new(),
+            pieces: Vec::new(),
+            min: [0; 3],
+            max: [0; 3],
+            waterlog: true,
+            biome: None,
+            data_version: 4671,
+        };
+        hut.finish();
+        hist.edit(&mut world, 0).structures_mut().push(std::sync::Arc::new(hut));
+        hist.commit();
         world
     }
 
@@ -1136,6 +1195,7 @@ pub(crate) mod tests {
                 assert_eq!(la.blobs().unwrap(), lb.blobs().unwrap(), "level {}", la.name);
             }
             assert_eq!(da.selection, db.selection);
+            assert_eq!(da.structures, db.structures);
             assert_eq!(da.voxels.len(), db.voxels.len());
             for (pos, chunk) in da.voxels.iter() {
                 assert_eq!(db.voxels.get(pos), Some(&**chunk), "sculpted chunk {pos:?}");

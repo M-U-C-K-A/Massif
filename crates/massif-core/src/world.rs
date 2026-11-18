@@ -151,6 +151,9 @@ pub struct Dimension {
     /// Its cave layers, which the ground's tiles paint by number (see
     /// [`crate::caves`]).
     pub caves: crate::caves::CaveLayers,
+    /// The structures placed on it, in the order they were placed: where
+    /// two meet, the later wins.
+    pub structures: Vec<std::sync::Arc<crate::structures::Structure>>,
     next_level_id: u32,
 }
 
@@ -165,6 +168,7 @@ impl Dimension {
             voxels: Default::default(),
             selection: None,
             caves: Default::default(),
+            structures: Vec::new(),
             next_level_id: 1,
         }
     }
@@ -184,6 +188,7 @@ impl Dimension {
             voxels: Default::default(),
             selection: None,
             caves: Default::default(),
+            structures: Vec::new(),
             next_level_id,
         }
     }
@@ -244,6 +249,7 @@ impl Dimension {
             voxels: self.voxels.clone(),
             selection: self.selection.clone(),
             caves: self.caves.clone(),
+            structures: self.structures.clone(),
             next_level_id: self.next_level_id,
         }
     }
@@ -258,6 +264,7 @@ impl Dimension {
             voxels: self.voxels.clone(),
             selection: self.selection.clone(),
             caves: self.caves.clone(),
+            structures: self.structures.clone(),
             next_level_id: self.next_level_id,
         }
     }
@@ -290,6 +297,8 @@ impl Dimension {
         for pos in out {
             self.voxels.remove(pos);
         }
+        // A structure stays while some of it is on the map still.
+        self.structures.retain(|s| !s.columns().intersect(&rect).is_empty());
         self.selection = None;
         let ground = self.ground_mut();
         let added: Vec<TilePos> = rect.tiles().filter(|p| !ground.contains(*p)).collect();
