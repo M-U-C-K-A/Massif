@@ -6398,6 +6398,33 @@ mod tests {
         w
     }
 
+    /// With markers on, each object of a layer stands as one column of its
+    /// layer's colour, as tall as it, instead of its blocks.
+    #[test]
+    fn objects_show_as_markers() {
+        let mut w = stepped_world();
+        let reg = &mut w.registry;
+        reg.objects.push(massif_core::objects::ObjectDef::new("Pole", [1, 5, 1], vec!["minecraft:air".into(), "minecraft:oak_log".into()], vec![1; 5]));
+        let mut layer = massif_core::objects::ObjectLayerDef::new("Poles", &[0], reg);
+        layer.color = [250, 20, 200];
+        layer.soil_only = false;
+        let n = reg.add_object_layer(layer);
+        let mut h = massif_core::History::new(4);
+        h.begin("poles", 0);
+        let all = massif_core::Brush { strength: 1.0, ..massif_core::Brush::symmetric(massif_core::BrushShape::Square, massif_core::Profile::Constant, 400.0) };
+        massif_core::ops::paint_objects(&mut h.edit(&mut w, 0), &all, 0.0, 0.0, n, 1);
+        h.commit();
+        let tile = TilePos::new(-1, -1);
+        let pink = |b: &TileBuild| b.faces.solid.iter().filter(|f| f.color[..3] == [250, 20, 200] && f.dir == UP).count();
+        let markers = build_tile(&w.dims[0], &w.registry, 63.0, w.meta.seed, tile, Style { markers: true, ..STYLE });
+        let blocks = build_tile(&w.dims[0], &w.registry, 63.0, w.meta.seed, tile, STYLE);
+        let placed = object_markers(&w.dims[0], &w.registry, w.meta.seed, false, tile);
+        assert!(placed.len() > 10, "objects stand on the tile: {}", placed.len());
+        assert_eq!(pink(&markers), placed.len(), "one marker top per object");
+        assert!(placed.iter().all(|m| m.3 - m.2 == 5), "as tall as the object");
+        assert_eq!(pink(&blocks), 0, "without markers, the objects' own blocks");
+    }
+
     /// The steps smoothed with slabs show in 3D: half a block high at the
     /// foot of each step of stone, none on grass, which has no slab.
     #[test]
@@ -6954,7 +6981,7 @@ mod perf {
         let n = TILE_SIZE as usize;
         let t = Instant::now();
         for _ in 0..10 {
-            let standing = Standing { reg, seed: world.meta.seed, lava: false, markers: false };
+            let standing = Standing { reg, seed: world.meta.seed, lava: false };
             std::hint::black_box(compose_area(dim, -1, -1, n + 2, n + 2, style.mode, style.water, Some(standing)));
         }
         eprintln!("compose a tile: {:.1} ms", t.elapsed().as_secs_f32() * 100.0);

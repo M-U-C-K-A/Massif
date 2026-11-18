@@ -3292,6 +3292,22 @@ mod tests {
     /// (`sculpt.brush`, `sculpt.source`): they read, that brush is let go,
     /// and 3D Sculpt shapes with the brush of every tool, at its size and
     /// intensity.
+    /// A limit dragged between two blocks of the noise gives the ground
+    /// between them to one or the other; the others keep their shares.
+    #[test]
+    fn a_noise_limit_moves_ground_between_neighbours() {
+        let mut ps = PatternSettings::default();
+        ps.terrains = vec![("A".into(), 1.0), ("B".into(), 1.0), ("C".into(), 2.0)];
+        ps.set_limit(0, 0.4);
+        let shares: Vec<f32> = (0..3).map(|k| ps.share(k)).collect();
+        assert!((shares[0] - 0.4).abs() < 1e-5 && (shares[1] - 0.1).abs() < 1e-5 && (shares[2] - 0.5).abs() < 1e-5, "{shares:?}");
+        // Not past the next limit.
+        ps.set_limit(0, 0.9);
+        assert!((ps.share(0) - 0.5).abs() < 1e-5 && ps.share(1) < 1e-5 && (ps.share(2) - 0.5).abs() < 1e-5);
+        ps.set_limit(2, 0.1);
+        assert!((ps.share(2) - 0.5).abs() < 1e-5, "no limit after the last block");
+    }
+
     #[test]
     fn the_old_3d_brush_gives_way_to_the_shared_one() {
         let mut shared = ToolState::default();

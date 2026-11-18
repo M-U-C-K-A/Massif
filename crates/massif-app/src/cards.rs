@@ -244,7 +244,7 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
             tr!("Smooths the land's one-block steps with slabs when it is exported, as the half blocks of WorldPainter: a slab of the block at the surface at the foot of each step, stairs in the inner corners."),
             vec![(tr!("Drag"), tr!("Smooth the steps")), (tr!("Right-drag"), tr!("Rub it out"))],
             Some(tr!("Edit ▸ Whole map ▸ Slabs does the whole map. A block without a slab (grass, sand) stays whole, unless a slab is chosen by hand.")),
-            None,
+            Some(Demo::Slabs),
         ),
         Tool::Combined => card(
             tr!("Paints several layers at once, as WorldPainter's combined layers: a forest's terrain, biome, ground cover and trees in one stroke."),
@@ -374,6 +374,7 @@ pub enum Demo {
     Objects,
     Annotate,
     TreeSize,
+    Slabs,
     Pockets,
     Combined,
     AutoPaint,
@@ -641,6 +642,21 @@ impl Demo {
                     Scene::near(x, y, 9.0, |i, _| {
                         if hash(i * 5 + 1) < 0.45 {
                             t[i] = Some([136, 128, 120]);
+                        }
+                    });
+                }
+                stroke(9.0)
+            }
+            Demo::Slabs => {
+                // Terraced land; where the brush goes, a pale half step at
+                // the foot of each terrace.
+                s.add_hills(2.0);
+                for k in 0..steps {
+                    let (x, y) = sweep(k as f64 / SAMPLES as f64);
+                    let t = &mut s.tint;
+                    Scene::near(x, y, 9.0, |i, _| {
+                        if (i % W).is_multiple_of(6) {
+                            t[i] = Some([196, 196, 190]);
                         }
                     });
                 }

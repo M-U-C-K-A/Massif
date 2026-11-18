@@ -968,8 +968,12 @@ learns its own spread and paints by rank). Drag a block's icon to move it in
 the list; click its name to put another block in its place; **Add a block**
 offers the map's terrains and every whole block of the installed game (a
 block becomes a terrain the first time). Pictures show the ground it paints,
-its noise, and how the noise's values spread between the blocks; hovered over
-the map, the brush shows what it would paint before the first stroke.
+its noise, and the **distribution** of the noise's values, low to high, as a
+curve in the colours of the blocks they give, with each block's share under
+it. Drag a limit between two blocks along the curve to give one of them more
+of the ground: the two share what lies between their outer limits, the
+others keep theirs. Hovered over the map, the brush shows what it would
+paint before the first stroke.
 Presets (Meadow, Forest floor, Rocky ground, Gravel paths, Snowy rocks,
 Dunes, Fields) are a start, and any pattern can be saved under a name.
 
@@ -1494,8 +1498,17 @@ and a river biome on its water.
   dragged its way is worked out coarsely; let go, finely, along the way
   shown rather than down another valley.
 - Water runs from the source down. Its level along the river is the lowest
-  the land allows so far, a
-  little under the banks: it never rises downstream, whatever the bumps.
+  the land allows so far, under the banks by **Under the banks**: **Auto**
+  (a third of its depth, a block at least), or as many blocks as you set —
+  0 for water flush with the land, more for a river running in a cut. It
+  never rises downstream, whatever the bumps.
+- **Shift + click** on the course places a **waterfall** there, of the
+  height set in **Waterfall** (Tool Settings): the water drops that many
+  blocks from the level just upstream, a plunge pool is dug at its foot,
+  and downstream the river runs that much lower, cut into the land, until
+  the land comes down to it. A white bar across the river marks it, its
+  height beside it; right-click it to take it away. It is dug with the
+  river.
 - Where the land is really steep (the river would drop seven blocks or
   more over the next 24, a grade of some 30 %), it falls from pool to pool
   instead of stepping down a block every few blocks: its water stays level
@@ -1968,6 +1981,14 @@ every way) is exported for 1.20.1 and read back with an independent reader:
 every block state written is one of the 726,881 the game registers.
 Conquest Reforged's 222 MB jar is read with Minecraft 1.20.1 in about half
 a second, and its blocks take about 70 MB of memory.
+
+### Object markers
+
+The tree button in the 3D View's header shows the objects of the layers as
+**markers**: one column of its layer's colour for each tree, bush or rock,
+standing where the export puts it and as tall as the object, instead of the
+object block by block. It shows how dense a forest grows before the map is
+exported, and it is quicker to draw. Hidden layers show no markers.
 
 ## 3D Sculpt
 

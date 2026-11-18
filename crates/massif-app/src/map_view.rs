@@ -1567,7 +1567,7 @@ impl MapView {
                     ui.ctx().set_cursor_icon(match (self.river_grab, hover) {
                         (Some(_), _) => CursorIcon::Grabbing,
                         (None, Some(RiverHit::Anchor(_) | RiverHit::Mouth)) => CursorIcon::Grab,
-                        (None, Some(RiverHit::Course(_))) => CursorIcon::PointingHand,
+                        (None, Some(RiverHit::Course(_) | RiverHit::Fall(_))) => CursorIcon::PointingHand,
                         (None, None) => CursorIcon::Crosshair,
                     });
                 }
