@@ -205,6 +205,9 @@ pub struct Renderer {
     atlas_view: wgpu::TextureView,
     atlas_layers: u32,
     materials_revision: u64,
+    /// Where the shaped blocks' faces start in the materials' buffer, in
+    /// groups of four words.
+    quad_base: u32,
     sky: Sky,
     /// The world's sea level, from which the air thins.
     pub sea_level: f64,
@@ -329,6 +332,7 @@ impl Renderer {
             atlas_view,
             atlas_layers: 1,
             materials_revision: 0,
+            quad_base: 0,
             sky: Sky::new(device),
             sea_level: 63.0,
             image: None,
@@ -410,8 +414,12 @@ impl Renderer {
         if materials.revision() == self.materials_revision {
             return;
         }
-        let (revision, list, layers) = materials.snapshot();
-        let bytes: &[u8] = bytemuck::cast_slice(&list);
+        let (revision, list, quads, layers) = materials.snapshot();
+        // The materials, then the faces of the shaped ones, in one buffer.
+        let mut words: Vec<u32> = bytemuck::cast_slice(&list).to_vec();
+        self.quad_base = (words.len() / 4) as u32;
+        words.extend_from_slice(bytemuck::cast_slice(&quads));
+        let bytes: &[u8] = bytemuck::cast_slice(&words);
         if bytes.len() as u64 > self.materials_buf.size() {
             self.materials_buf = storage(&self.device, "massif render materials", (bytes.len() as u64 * 2).next_power_of_two());
             self.bind_group = None;
@@ -727,7 +735,7 @@ impl Renderer {
             air: [light.air, light.haze, light.haze_g, altitude],
             fog: [light.fog, light.fog_height - origin[1] as f32, light.fog_falloff.max(0.5), light.fog_g],
             media: [light.shafts as u8 as f32, sea, light.emission, light.aperture],
-            lens: [light.focus.max(0.1), light.sea as u8 as f32, 0.0, 0.0],
+            lens: [light.focus.max(0.1), light.sea as u8 as f32, self.quad_base as f32, 0.0],
             clouds: [light.cloud_cover, light.cloud_height - origin[1] as f32, light.cloud_thickness.max(1.0), if light.cloud_cover > 0.0 { light.cloud_density } else { 0.0 }],
             wind: [light.wind[0], light.wind[1], 1.0 / light.cloud_size.max(1.0), 0.0],
             size: [w, h, self.frame.wrapping_mul(2654435761).wrapping_add(1), self.samples],

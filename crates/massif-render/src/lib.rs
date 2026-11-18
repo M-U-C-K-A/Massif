@@ -14,6 +14,7 @@ pub mod chunk;
 pub mod gpu;
 pub mod map_source;
 pub mod materials;
+pub mod models;
 pub mod scene;
 pub mod sky;
 

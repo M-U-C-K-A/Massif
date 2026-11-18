@@ -33,6 +33,9 @@ pub enum Class {
     Cutout = 2,
     Water = 3,
     Lava = 4,
+    /// A block drawn by its model's faces (a slab, a fence, a torch, a
+    /// plant): light goes around them.
+    Shaped = 5,
 }
 
 impl Class {
@@ -41,7 +44,7 @@ impl Class {
     /// and anything but itself and opaque blocks.
     pub fn shows_to(self, next: Class) -> bool {
         match next {
-            Class::Air | Class::Cutout => true,
+            Class::Air | Class::Cutout | Class::Shaped => true,
             Class::Opaque => false,
             Class::Water | Class::Lava => next != self,
         }
@@ -56,8 +59,18 @@ impl Class {
 /// * 2, 3: the tints of the top and of the sides, sRGB, `r | g << 8 | b << 16`
 /// * 4: the colour of its light, sRGB, | its light level (the game's, 0 to
 ///   15) << 24
-/// * 5 to 7: unused
+/// * 5, 6: a shaped block's first face and how many (see [`GpuQuad`])
+/// * 7: unused
 pub type GpuMaterial = [u32; 8];
+
+/// A face of a shaped block as the shader reads it: sixteen words, the
+/// floats as their bits.
+///
+/// * 0..3: its corner (the block's space, 0 to 1), its texture layer |
+///   the texture's turn << 16 | tinted << 18
+/// * 4..6: the edge toward u1; 8..10: the edge toward v1
+/// * 12..15: the part of the texture it shows (u0, v0, u1, v1), 0 to 1
+pub type GpuQuad = [u32; 16];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Material {
@@ -72,16 +85,19 @@ struct Material {
     glow: [u8; 3],
     top_tint: [u8; 3],
     side_tint: [u8; 3],
+    /// A shaped block's faces: the first, and how many.
+    first_quad: u32,
+    quads: u16,
 }
 
 impl Material {
     fn gpu(&self) -> GpuMaterial {
         let flags = self.class as u32 | (self.axis as u32) << 3 | ((self.light > 0) as u32) << 5;
         let rgb = |c: [u8; 3]| c[0] as u32 | (c[1] as u32) << 8 | (c[2] as u32) << 16;
-        [self.top as u32 | (self.side as u32) << 16, self.bottom as u32 | flags << 16, rgb(self.top_tint), rgb(self.side_tint), rgb(self.glow) | (self.light as u32) << 24, 0, 0, 0]
+        [self.top as u32 | (self.side as u32) << 16, self.bottom as u32 | flags << 16, rgb(self.top_tint), rgb(self.side_tint), rgb(self.glow) | (self.light as u32) << 24, self.first_quad, self.quads as u32, 0]
     }
 
-    const AIR: Material = Material { top: 0, side: 0, bottom: 0, class: Class::Air, axis: 0, light: 0, glow: [0; 3], top_tint: [255; 3], side_tint: [255; 3] };
+    const AIR: Material = Material { top: 0, side: 0, bottom: 0, class: Class::Air, axis: 0, light: 0, glow: [0; 3], top_tint: [255; 3], side_tint: [255; 3], first_quad: 0, quads: 0 };
 
     /// A light without a block to draw yet (a torch, a lantern: their
     /// models come with milestone 3).
@@ -93,6 +109,7 @@ impl Material {
 struct Inner {
     by_state: HashMap<String, u16>,
     list: Vec<Material>,
+    quads: Vec<GpuQuad>,
     layers: Vec<Layer>,
     layer_of: HashMap<String, u16>,
     /// Changes whenever a material or a layer is added.
@@ -102,6 +119,8 @@ struct Inner {
 /// The materials of every block state met so far.
 pub struct Materials {
     cat: Option<Arc<Catalogue>>,
+    /// The game's models and the textures the catalogue does not keep.
+    library: Option<crate::models::Library>,
     inner: Mutex<Inner>,
     /// The class of every material, and the light it gives, for the
     /// builders of the scene.
@@ -116,8 +135,9 @@ impl Materials {
     /// Materials textured from `cat`, or in flat colours without it.
     pub fn new(cat: Option<Arc<Catalogue>>, most_layers: usize) -> Self {
         // Layer 0 is plain white: what has no texture keeps its tint.
-        let inner = Inner { by_state: HashMap::new(), list: vec![Material::AIR], layers: vec![[255; LAYER_BYTES]], layer_of: HashMap::new(), revision: 1 };
-        Self { cat, inner: Mutex::new(inner), classes: RwLock::new(vec![Class::Air]), lights: RwLock::new(vec![0]), most_layers: most_layers.clamp(1, u16::MAX as usize) }
+        let inner = Inner { by_state: HashMap::new(), list: vec![Material::AIR], quads: Vec::new(), layers: vec![[255; LAYER_BYTES]], layer_of: HashMap::new(), revision: 1 };
+        let library = cat.as_deref().map(crate::models::Library::of);
+        Self { cat, library, inner: Mutex::new(inner), classes: RwLock::new(vec![Class::Air]), lights: RwLock::new(vec![0]), most_layers: most_layers.clamp(1, u16::MAX as usize) }
     }
 
     /// The material of a block state: `name` with its properties.
@@ -166,11 +186,11 @@ impl Materials {
         self.inner.lock().unwrap().revision
     }
 
-    /// The materials as the shader reads them, and the texture layers, with
-    /// the revision they are of.
-    pub fn snapshot(&self) -> (u64, Vec<GpuMaterial>, Vec<Layer>) {
+    /// The materials as the shader reads them, the faces of the shaped
+    /// ones, and the texture layers, with the revision they are of.
+    pub fn snapshot(&self) -> (u64, Vec<GpuMaterial>, Vec<GpuQuad>, Vec<Layer>) {
         let inner = self.inner.lock().unwrap();
-        (inner.revision, inner.list.iter().map(Material::gpu).collect(), inner.layers.clone())
+        (inner.revision, inner.list.iter().map(Material::gpu).collect(), inner.quads.clone(), inner.layers.clone())
     }
 
     /// How many materials there are, air included.
@@ -216,8 +236,14 @@ impl Materials {
             }
             let color = guess_color(short);
             let class = if short.contains("leaves") || short.contains("glass") { Class::Cutout } else { Class::Opaque };
-            return Material { top: 0, side: 0, bottom: 0, class, axis, light, glow: color, top_tint: color, side_tint: color };
+            return Material { class, axis, light, glow: color, top_tint: color, side_tint: color, ..Material::AIR };
         };
+        // A block that is not a whole cube: its model's faces.
+        if !block.full_cube
+            && let Some(shaped) = self.shaped(inner, name, properties, block, light)
+        {
+            return shaped;
+        }
         let cube = block.full_cube || nearly_whole(short);
         if !cube || thin(short) {
             // Plants and the blocks not drawn as cubes yet (their models
@@ -255,14 +281,54 @@ impl Materials {
             glow,
             top_tint: tint(top, block.top_tint, block.color),
             side_tint: tint(side, block.side_tint, block.side_color),
+            ..Material::AIR
         }
+    }
+
+    /// A block drawn by its model, if its model has faces (an entity's
+    /// block, a chest or a sign, has none).
+    fn shaped(&self, inner: &mut Inner, name: &str, properties: &[(&str, &str)], block: &massif_assets::Block, light: u8) -> Option<Material> {
+        let quads = self.library.as_ref()?.quads(name, properties);
+        if quads.is_empty() || inner.quads.len() + quads.len() > u32::MAX as usize {
+            return None;
+        }
+        let first = inner.quads.len() as u32;
+        let count = quads.len().min(u16::MAX as usize);
+        for q in quads.iter().take(count) {
+            let layer = self.layer(inner, &q.texture) as u32;
+            let f = |x: f32| x.to_bits();
+            inner.quads.push([
+                f(q.origin[0]),
+                f(q.origin[1]),
+                f(q.origin[2]),
+                layer | (q.rotation as u32 & 3) << 16 | (q.tinted as u32) << 18,
+                f(q.u[0]),
+                f(q.u[1]),
+                f(q.u[2]),
+                0,
+                f(q.v[0]),
+                f(q.v[1]),
+                f(q.v[2]),
+                0,
+                f(q.uv[0] / 16.0),
+                f(q.uv[1] / 16.0),
+                f(q.uv[2] / 16.0),
+                f(q.uv[3] / 16.0),
+            ]);
+        }
+        inner.revision += 1;
+        // The biome's tint of its tinted faces: the block's own.
+        let tint = if block.top_tint != Tint::None { block.top_tint } else if block.side_tint != Tint::None { block.side_tint } else { Tint::Grass };
+        let short = name.rsplit(':').next().unwrap_or(name);
+        let glow = if light == 0 { [0; 3] } else { glow_color(short) };
+        Some(Material { class: Class::Shaped, light, glow, top_tint: tint.color(), side_tint: tint.color(), first_quad: first, quads: count as u16, ..Material::AIR })
     }
 
     fn fluid(&self, inner: &mut Inner, class: Class, key: &str, tint: [u8; 3]) -> Material {
         let layer = self.layer(inner, key);
         let color = if layer == 0 { if class == Class::Water { [0x3f, 0x76, 0xe4] } else { [0xcf, 0x5b, 0x14] } } else { tint };
         let (light, glow) = if class == Class::Lava { (15, [255, 130, 40]) } else { (0, [0; 3]) };
-        Material { top: layer, side: layer, bottom: layer, class, axis: 0, light, glow, top_tint: color, side_tint: color }
+        Material { top: layer, side: layer, bottom: layer, class, axis: 0, light, glow, top_tint: color, side_tint: color, ..Material::AIR }
     }
 
     /// The layer of a texture, read once.
@@ -270,7 +336,15 @@ impl Materials {
         if let Some(&k) = inner.layer_of.get(key) {
             return k;
         }
-        let k = match self.cat.as_ref().and_then(|c| c.texture(key)) {
+        let owned;
+        let tex = match self.cat.as_ref().and_then(|c| c.texture(key)) {
+            Some(t) => Some(&**t),
+            None => {
+                owned = self.library.as_ref().and_then(|l| l.texture(key));
+                owned.as_ref()
+            }
+        };
+        let k = match tex {
             Some(tex) if inner.layers.len() < self.most_layers => {
                 inner.layers.push(make_layer(tex));
                 inner.revision += 1;

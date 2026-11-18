@@ -263,3 +263,120 @@ fn a_night_lit_by_its_blocks() {
         image::save_buffer(dir.join("render-night.png"), &rgba, w, h, image::ColorType::Rgba8).unwrap();
     }
 }
+
+/// Blocks drawn by their models, up close in the afternoon: stairs, slabs,
+/// a fence, a wall, panes, a door, plants, torches, a lantern, snow
+/// layers, a carpet, rails, a potted flower, a campfire
+/// (MASSIF_SNAPSHOT_DIR: the image).
+#[test]
+fn models_up_close() {
+    use crate::chunk::{Chunk, Section, VOLUME};
+    use crate::scene::Patch;
+    let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+    if dir.is_none() && std::env::var_os("MASSIF_PERF").is_none() {
+        return;
+    }
+    let Some((device, queue)) = device() else { return };
+    let Some(Ok(cat)) = massif_assets::load_newest() else {
+        eprintln!("Minecraft is not installed here: skipping");
+        return;
+    };
+    let materials = Materials::new(Some(Arc::new(cat)), device.limits().max_texture_array_layers as usize);
+    let id = |name: &str, props: &[(&str, &str)]| materials.id(&format!("minecraft:{name}"), props);
+    let grass = id("grass_block", &[("snowy", "false")]);
+    let bricks = id("stone_bricks", &[]);
+    let mut blocks: Vec<(i32, i32, i32, u16)> = Vec::new();
+    let mut put = |x: i32, y: i32, z: i32, m: u16| blocks.push((x, y, z, m));
+    for x in 4..9 {
+        put(x, 0, 4, id("oak_stairs", &[("facing", "north"), ("half", "bottom"), ("shape", "straight"), ("waterlogged", "false")]));
+        put(x, 0, 6, id("stone_slab", &[("type", "bottom"), ("waterlogged", "false")]));
+        put(x, 1, 7, id("stone_slab", &[("type", "top"), ("waterlogged", "false")]));
+    }
+    put(9, 0, 4, id("oak_stairs", &[("facing", "west"), ("half", "bottom"), ("shape", "outer_right"), ("waterlogged", "false")]));
+    for x in 11..17 {
+        let (w, e) = (if x > 11 { "true" } else { "false" }, if x < 16 { "true" } else { "false" });
+        put(x, 0, 4, id("oak_fence", &[("east", e), ("west", w), ("north", "false"), ("south", "false"), ("waterlogged", "false")]));
+    }
+    for z in 8..14 {
+        let (n, s) = (if z > 8 { "low" } else { "none" }, if z < 13 { "low" } else { "none" });
+        let up = if z == 8 || z == 13 { "true" } else { "false" };
+        put(17, 0, z, id("cobblestone_wall", &[("north", n), ("south", s), ("east", "none"), ("west", "none"), ("up", up), ("waterlogged", "false")]));
+    }
+    for x in 4..10 {
+        let (w, e) = (if x > 4 { "true" } else { "false" }, if x < 9 { "true" } else { "false" });
+        put(x, 0, 12, id("glass_pane", &[("east", e), ("west", w), ("north", "false"), ("south", "false"), ("waterlogged", "false")]));
+        put(x, 1, 12, id("glass_pane", &[("east", e), ("west", w), ("north", "false"), ("south", "false"), ("waterlogged", "false")]));
+    }
+    for y in 0..3 {
+        put(12, y, 14, bricks);
+        put(13, y, 14, bricks);
+    }
+    put(12, 1, 13, id("wall_torch", &[("facing", "north")]));
+    put(13, 0, 13, id("ladder", &[("facing", "north"), ("waterlogged", "false")]));
+    put(13, 1, 13, id("ladder", &[("facing", "north"), ("waterlogged", "false")]));
+    put(10, 0, 8, id("torch", &[]));
+    put(14, 0, 10, id("lantern", &[("hanging", "false"), ("waterlogged", "false")]));
+    put(15, 0, 6, id("oak_door", &[("facing", "east"), ("half", "lower"), ("hinge", "left"), ("open", "false"), ("powered", "false")]));
+    put(15, 1, 6, id("oak_door", &[("facing", "east"), ("half", "upper"), ("hinge", "left"), ("open", "false"), ("powered", "false")]));
+    for (x, z) in [(2, 14), (3, 14), (2, 15), (3, 15)] {
+        put(x, 0, z, id("snow", &[("layers", "3")]));
+    }
+    for (x, z) in [(6, 14), (7, 14), (6, 15), (7, 15)] {
+        put(x, 0, z, id("red_carpet", &[]));
+    }
+    for z in 1..7 {
+        put(1, 0, z, id("rail", &[("shape", "north_south"), ("waterlogged", "false")]));
+    }
+    put(10, 0, 11, id("potted_poppy", &[]));
+    put(3, 0, 10, id("campfire", &[("facing", "north"), ("lit", "true"), ("signal_fire", "false"), ("waterlogged", "false")]));
+    let plants = ["short_grass", "poppy", "dandelion", "cornflower", "fern", "short_grass", "oxeye_daisy", "short_grass"];
+    for k in 0..40 {
+        let (x, z) = ((k * 7 + 3) % 18 + 1, (k * 11 + 5) % 4 + 17);
+        put(x, 0, z, id(plants[k as usize % plants.len()], &[]));
+    }
+    put(9, 0, 18, id("tall_grass", &[("half", "lower")]));
+    put(9, 1, 18, id("tall_grass", &[("half", "upper")]));
+    // 2 × 2 chunks: grass up to scene y 15, the blocks from 16.
+    let mut patch = Patch::new(0, 0, 2, 2, 2);
+    for cz in 0..2 {
+        for cx in 0..2 {
+            let mut lower = Box::new([grass; VOLUME]);
+            for k in 0..VOLUME - 256 {
+                lower[k] = id("dirt", &[]);
+            }
+            let mut upper = Box::new([crate::materials::AIR; VOLUME]);
+            for &(x, y, z, m) in &blocks {
+                let (lx, lz) = (x - cx * 16, z - cz * 16);
+                if (0..16).contains(&lx) && (0..16).contains(&lz) {
+                    upper[((y as usize) * 16 + lz as usize) * 16 + lx as usize] = m;
+                }
+            }
+            patch.put(Chunk { x: cx, z: cz, sections: vec![Section::Mixed(lower), Section::Mixed(upper)] });
+        }
+    }
+    let built = patch.build(&materials.classes(), &materials.lights());
+    let extent = Extent { x0: 0, z0: 0, width: 2, depth: 2, min_y: 0, sections: 2 };
+    let mut r = Renderer::new(&device, &queue, extent);
+    r.sea_level = 0.0;
+    r.sync_materials(&materials);
+    assert!(r.put(built));
+    r.flush();
+    let mut light = Light { haze: 2.0, ..Light::default() };
+    light.set_time(16.5, 172.0, 45.0, 0.0);
+    let (w, h) = (1280, 800);
+    r.resize(w, h);
+    for (name, camera) in [("models", Camera::orbit([10.0, 16.5, 10.0], 3.0, -0.5, 17.0, 55f32.to_radians())), ("models-plants", Camera::orbit([9.0, 16.4, 18.0], 0.4, -0.25, 7.0, 55f32.to_radians()))] {
+        r.restart();
+        let t = Instant::now();
+        while r.samples < 256 {
+            let cmd = r.render(&camera, &light, false).unwrap();
+            queue.submit([cmd]);
+        }
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        eprintln!("{name}: 256 samples at {w}×{h} in {:.2} s", t.elapsed().as_secs_f64());
+        if let Some(dir) = &dir {
+            let (iw, ih, rgba) = r.read_image().unwrap();
+            image::save_buffer(dir.join(format!("render-{name}.png")), &rgba, iw, ih, image::ColorType::Rgba8).unwrap();
+        }
+    }
+}

@@ -17,10 +17,11 @@ wgpu = { version = "30", default-features = false, features = ["wgsl", "std", "m
 bytemuck = { version = "1.25", features = ["derive"] }
 glam = "0.34"
 fastnbt = "2.6"
+serde_json.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [dev-dependencies]
 massif-format.workspace = true
 massif-legacy.workspace = true
 libc = "0.2"
 pollster = "1"
-image = { version = "0.25", default-features = false, features = ["png"] }

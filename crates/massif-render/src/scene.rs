@@ -286,6 +286,7 @@ fn from_u8(c: u8) -> Class {
         2 => Class::Cutout,
         3 => Class::Water,
         4 => Class::Lava,
+        5 => Class::Shaped,
         _ => Class::Air,
     }
 }

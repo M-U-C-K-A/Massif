@@ -15,7 +15,7 @@ struct Params {
     air: vec4<f32>,      // the air's scattering, the haze's, its anisotropy, the eyes' height (km)
     fog: vec4<f32>,      // extinction a block at its base, base height (scene), falloff (blocks), anisotropy
     media: vec4<f32>,    // shafts on, sea level (scene), emission strength, the lens's radius
-    lens: vec4<f32>,     // focus distance, a sea around the map
+    lens: vec4<f32>,     // focus distance, a sea around the map, where the shaped blocks' faces start
     clouds: vec4<f32>,   // cover (0..1), base height (scene), thickness, extinction a block (0: none)
     wind: vec4<f32>,     // how far the wind moved them (x, z), 1 / the size of their shapes
     size: vec4<u32>,     // width, height, seed of the frame, sample (0: start over)
@@ -47,6 +47,7 @@ struct Params {
 const UNIFORM: u32 = 0x80000000u;
 const CLASS_CUTOUT: u32 = 2u;
 const CLASS_WATER: u32 = 3u;
+const CLASS_SHAPED: u32 = 5u;
 const MAX_STEPS: i32 = 1536;
 const EPS: f32 = 0.004;
 // How far a ray that leaves the scene goes through the fog.
@@ -59,7 +60,93 @@ struct Hit {
     found: bool,
     t: f32,
     mat: u32,
+    // The face's axis on a cube; -1 on a shaped block, whose face is quad.
     axis: i32,
+    quad: u32,
+    // The cell of a shaped block hit.
+    cell: vec3<i32>,
+}
+
+// ---- shaped blocks ------------------------------------------------------------
+
+struct Quad {
+    origin: vec3<f32>,
+    u: vec3<f32>,
+    v: vec3<f32>,
+    uv: vec4<f32>,
+    layer: u32,
+    turn: u32,
+    tinted: bool,
+}
+
+fn quad_at(i: u32) -> Quad {
+    let at = u32(P.lens.z) + i * 4u;
+    let a = materials[at];
+    let b = materials[at + 1u];
+    let c = materials[at + 2u];
+    let d = materials[at + 3u];
+    var q: Quad;
+    q.origin = bitcast<vec3<f32>>(a.xyz);
+    q.layer = a.w & 0xffffu;
+    q.turn = (a.w >> 16u) & 3u;
+    q.tinted = ((a.w >> 18u) & 1u) != 0u;
+    q.u = bitcast<vec3<f32>>(b.xyz);
+    q.v = bitcast<vec3<f32>>(c.xyz);
+    q.uv = bitcast<vec4<f32>>(d);
+    return q;
+}
+
+// Where on a quad the point h (the block's space) lies: (a, b) along its
+// edges.
+fn quad_coords(q: Quad, h: vec3<f32>) -> vec2<f32> {
+    let d = h - q.origin;
+    return vec2<f32>(dot(d, q.u) / max(dot(q.u, q.u), 1e-12), dot(d, q.v) / max(dot(q.v, q.v), 1e-12));
+}
+
+// The texture's coordinates at (a, b) on a quad, turned as the model says.
+fn quad_uv(q: Quad, ab: vec2<f32>) -> vec2<f32> {
+    var s = ab;
+    if (q.turn == 1u) {
+        s = vec2<f32>(ab.y, 1.0 - ab.x);
+    } else if (q.turn == 2u) {
+        s = vec2<f32>(1.0 - ab.x, 1.0 - ab.y);
+    } else if (q.turn == 3u) {
+        s = vec2<f32>(1.0 - ab.y, ab.x);
+    }
+    return mix(q.uv.xy, q.uv.zw, s);
+}
+
+// The nearest face of a shaped block in the cell at `cell` that a ray from
+// ro along rd crosses between t0 and t1 (holes in its texture let it
+// through): (t, the face's number in the material), or y < 0.
+fn shaped_hit(mat: u32, ro: vec3<f32>, rd: vec3<f32>, cell: vec3<i32>, t0: f32, t1: f32) -> vec2<f32> {
+    let w = materials[mat * 2u + 1u];
+    let first = w.y;
+    let count = w.z;
+    let o = ro - vec3<f32>(cell);
+    var best = vec2<f32>(t1, -1.0);
+    for (var k = 0u; k < count; k++) {
+        let q = quad_at(first + k);
+        let n = cross(q.u, q.v);
+        let denom = dot(rd, n);
+        if (abs(denom) < 1e-12) {
+            continue;
+        }
+        let t = dot(q.origin - o, n) / denom;
+        // A face on the side the ray came in by counts (t at t0).
+        if (t <= 1e-5 || t < t0 - 1e-3 || t >= best.x) {
+            continue;
+        }
+        let ab = quad_coords(q, o + rd * t);
+        if (any(ab < vec2<f32>(0.0)) || any(ab > vec2<f32>(1.0))) {
+            continue;
+        }
+        if (textureSampleLevel(atlas, atlas_sampler, quad_uv(q, ab), i32(q.layer), 0.0).a < 0.5) {
+            continue;
+        }
+        best = vec2<f32>(t, f32(k));
+    }
+    return best;
 }
 
 fn level_offset(l: u32) -> u32 {
@@ -232,7 +319,20 @@ fn trace(ro: vec3<f32>, rd: vec3<f32>, tmax: f32) -> Hit {
                 }
             }
         }
-        if (mat != 0u && axis >= 0) {
+        if (mat != 0u && class_of(materials[mat * 2u]) == CLASS_SHAPED) {
+            // A model's faces, inside the cell.
+            let exit = (select(vec3<f32>(v), vec3<f32>(v + 1), rd > vec3<f32>(0.0)) - ro) * inv;
+            let q = shaped_hit(mat, ro, rd, v, t, min(min(exit.x, exit.y), exit.z) + 1e-4);
+            if (q.y >= 0.0) {
+                h.found = true;
+                h.t = q.x;
+                h.mat = mat;
+                h.axis = -1;
+                h.quad = u32(q.y);
+                h.cell = v;
+                return h;
+            }
+        } else if (mat != 0u && axis >= 0) {
             let m = materials[mat * 2u];
             var stops = true;
             if (class_of(m) == CLASS_CUTOUT) {
@@ -776,20 +876,38 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
         let glow = materials[hit.mat * 2u + 1u].x;
         let p = ro + rd * hit.t;
         var n = vec3<f32>(0.0);
-        n[hit.axis] = -sign(rd[hit.axis]);
-        let uvl = face_uv(m, p, hit.axis, rd);
+        var uvl: vec3<f32>;
+        var tint: vec3<f32>;
+        if (hit.axis >= 0) {
+            n[hit.axis] = -sign(rd[hit.axis]);
+            uvl = face_uv(m, p, hit.axis, rd);
+            let top = hit.axis == 1 && rd.y < 0.0;
+            tint = unpack_rgb(select(m.w, m.z, top));
+        } else {
+            // A model's face: its own normal, toward the eyes (faces are
+            // seen from both sides).
+            let q = quad_at(materials[hit.mat * 2u + 1u].y + hit.quad);
+            n = normalize(cross(q.u, q.v));
+            if (dot(n, rd) > 0.0) {
+                n = -n;
+            }
+            let ab = quad_coords(q, p - vec3<f32>(hit.cell));
+            uvl = vec3<f32>(quad_uv(q, clamp(ab, vec2<f32>(0.0), vec2<f32>(1.0))), f32(q.layer));
+            tint = select(vec3<f32>(1.0), unpack_rgb(m.z), q.tinted);
+        }
         // Coarser textures the smaller a block is on screen.
         let lod = clamp(log2(max(hit.t * P.up.w * 16.0, 1e-6)), 0.0, 4.0);
         let tex = textureSampleLevel(atlas, atlas_sampler, uvl.xy, i32(uvl.z), lod);
-        let top = hit.axis == 1 && rd.y < 0.0;
-        let albedo = tex.rgb * unpack_rgb(select(m.w, m.z, top));
+        let albedo = tex.rgb * tint;
         if (((m.y >> 21u) & 1u) != 0u) {
             // A glowing block seen: by the eyes, or by a bounce from too far
             // for its light to be among those drawn there (block_light).
             let c = vec2<i32>(floor(p.xz / 16.0));
             if (bounce == 0u || any(abs(c - last_chunk) > vec2<i32>(1))) {
+                // Its bright pixels glow (a torch's flame, not its stick).
                 let level = f32(glow >> 24u) / 15.0;
-                sum += throughput * albedo * (8.0 * level * P.media.z);
+                let bright = smoothstep(0.35, 0.7, max(tex.r, max(tex.g, tex.b)));
+                sum += throughput * albedo * (8.0 * level * bright * P.media.z);
             }
         }
         let pos = p + n * EPS;
