@@ -652,6 +652,8 @@ pub struct MassifApp {
     brushes_called: Option<f64>,
     /// The terrain graph editor.
     graph: crate::graph_editor::GraphEditor,
+    /// The terrain generator of 1.3 (made the first time it is shown).
+    terrain_panel: Option<crate::terrain::TerrainPanel>,
     /// The game's real blocks.
     blocks: BlockLibrary,
     allow_close: bool,
@@ -1240,6 +1242,7 @@ impl MassifApp {
             new_group: None,
             brushes_called: None,
             graph: Default::default(),
+            terrain_panel: None,
             blocks: BlockLibrary::default(),
             allow_close: false,
             title: String::new(),
@@ -3567,6 +3570,15 @@ impl MassifApp {
     }
 
     fn undo(&mut self, ctx: &egui::Context) {
+        // Over the terrain generator of 1.3, its own changes.
+        if self.over_editor(ctx, EditorKind::TerrainGraph)
+            && let Some(p) = &mut self.terrain_panel
+            && p.undo()
+        {
+            p.commit(&mut self.doc);
+            self.say(ctx, tr!("Undid a change to the graph"), false, None);
+            return;
+        }
         // On the Terrain side, the graph's changes and its conversions, in
         // the order they were made.
         if self.layout.terrain()
@@ -3586,6 +3598,14 @@ impl MassifApp {
     }
 
     fn redo(&mut self, ctx: &egui::Context) {
+        if self.over_editor(ctx, EditorKind::TerrainGraph)
+            && let Some(p) = &mut self.terrain_panel
+            && p.redo()
+        {
+            p.commit(&mut self.doc);
+            self.say(ctx, tr!("Redid a change to the graph"), false, None);
+            return;
+        }
         if self.layout.terrain()
             && let Some(done) = self.graph.redo(&mut self.doc)
             && matches!(done, crate::graph_editor::Undone::Graph)
@@ -4011,7 +4031,7 @@ impl MassifApp {
         }
         // Select all, deselect and invert, but in the graph, which picks
         // its nodes with ⌘A and ⌘D.
-        let over_graph = ctx.input(|i| i.pointer.hover_pos()).and_then(|p| self.area_at(ctx, p)).and_then(|id| self.layout.current().root.editor_of(id)).is_some_and(|k| matches!(k, EditorKind::Graph | EditorKind::GraphView | EditorKind::GraphProps));
+        let over_graph = ctx.input(|i| i.pointer.hover_pos()).and_then(|p| self.area_at(ctx, p)).and_then(|id| self.layout.current().root.editor_of(id)).is_some_and(|k| matches!(k, EditorKind::Graph | EditorKind::GraphView | EditorKind::GraphProps | EditorKind::TerrainGraph));
         if !over_graph {
             for (action, command) in [(Action::InvertSelection, Command::InvertSelection), (Action::SelectAll, Command::SelectAll), (Action::Deselect, Command::Deselect)] {
                 if pressed(action) {
@@ -4083,6 +4103,11 @@ impl MassifApp {
     }
 
     /// The area under a screen position, from the last layout pass.
+    /// Whether the pointer is over an area showing `kind`.
+    fn over_editor(&self, ctx: &egui::Context, kind: EditorKind) -> bool {
+        ctx.input(|i| i.pointer.hover_pos()).and_then(|p| self.area_at(ctx, p)).and_then(|id| self.layout.current().root.editor_of(id)) == Some(kind)
+    }
+
     fn area_at(&self, ctx: &egui::Context, p: egui::Pos2) -> Option<AreaId> {
         let areas: Vec<(AreaId, Rect)> = ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap_or_default();
         areas.into_iter().find(|(_, r)| r.contains(p)).map(|(id, _)| id)
@@ -5351,6 +5376,7 @@ impl MassifApp {
             EditorKind::Timeline => {
                 egui::Frame::new().inner_margin(egui::Margin::symmetric(theme::PAD as i8 - 1, 8)).show(&mut cui, |ui| self.render_side.timeline_ui(ui, &mut self.doc));
             }
+            EditorKind::TerrainGraph => self.terrain_panel.get_or_insert_with(|| crate::terrain::TerrainPanel::for_app(frame, &self.doc.world.registry)).ui_in(&mut cui, &mut self.doc),
             EditorKind::Developer => {
                 if self.settings.developer {
                     let info = crate::devtools::DevInfo { gpu: frame.wgpu_render_state(), ..self.dev_info() };

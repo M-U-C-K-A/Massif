@@ -74,6 +74,7 @@ mod startup;
 // wired to the Terrain side when the new panel lands.
 #[allow(dead_code)]
 mod terrain_live;
+mod terrain;
 mod terrain_view;
 mod theme;
 mod tools;

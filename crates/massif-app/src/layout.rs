@@ -45,6 +45,9 @@ pub enum EditorKind {
     GraphProps,
     /// Sun, clouds and the rest of how the graph's viewport renders.
     RenderSettings,
+    /// The terrain generator of 1.3: library, lit viewer, node graph and
+    /// settings in one area (`crate::terrain`).
+    TerrainGraph,
     /// How Massif runs, live (with Settings ▸ Developer on).
     Developer,
     /// The map's save points: to restore, open, compare.
@@ -87,7 +90,7 @@ impl EditorKind {
         &[(tn!("Paint"), &[EditorKind::Terrain, EditorKind::Layers, EditorKind::Packs, EditorKind::Blocks, EditorKind::Biomes, EditorKind::Levels])],
         &[(
             tn!("Terrain"),
-            &[EditorKind::GraphView, EditorKind::Graph, EditorKind::GraphProps, EditorKind::RenderSettings],
+            &[EditorKind::TerrainGraph, EditorKind::GraphView, EditorKind::Graph, EditorKind::GraphProps, EditorKind::RenderSettings],
         )],
         &[(
             tn!("Render"),
@@ -122,6 +125,7 @@ impl EditorKind {
             EditorKind::GraphView => tr!("The graph's terrain in relief, under its sky"),
             EditorKind::GraphProps => tr!("The settings of the selected node"),
             EditorKind::RenderSettings => tr!("Sun, clouds and haze, and images saved from the viewport"),
+            EditorKind::TerrainGraph => crate::terrain::text::t("The new terrain generator: nodes, lit previews and the Map Output"),
             EditorKind::Developer => tr!("Frames, memory and processor, live"),
             EditorKind::Versions => tr!("Save points of the map: restore, open or compare them"),
             EditorKind::RenderView => tr!("The map path-traced under a real sky, growing clean while it stays still"),
@@ -155,6 +159,7 @@ impl EditorKind {
             EditorKind::GraphView => tr!("Graph Viewport"),
             EditorKind::GraphProps => tr!("Node Properties"),
             EditorKind::RenderSettings => tr!("Render Settings"),
+            EditorKind::TerrainGraph => crate::terrain::text::t("Terrain Generator"),
             EditorKind::Developer => tr!("Developer"),
             EditorKind::Versions => tr!("Versions"),
             EditorKind::RenderView => tr!("Render Viewport"),
@@ -193,6 +198,7 @@ impl EditorKind {
             EditorKind::GraphView => Icon::MountainSnow,
             EditorKind::GraphProps => Icon::SlidersVertical,
             EditorKind::RenderSettings => Icon::Sun,
+            EditorKind::TerrainGraph => Icon::Network,
             EditorKind::Developer => Icon::Activity,
             EditorKind::Versions => Icon::History,
             EditorKind::RenderView => Icon::Aperture,
