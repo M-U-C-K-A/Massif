@@ -12819,6 +12819,96 @@ mod tests {
         assert!(h.state().doc.dimension().structures.is_empty(), "placed in one step");
     }
 
+    /// The game's own structures from the game installed here, as the tools
+    /// show them: a village and an Ancient City placed, on the map and in
+    /// the 3D view (structure-*.png). Runs with MASSIF_SNAPSHOT_DIR (and
+    /// MASSIF_SNAPSHOT_PPP=2 as on a Retina screen), and a game found.
+    #[test]
+    fn structure_renders() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else { return };
+        let Some(jar) = massif_assets::find_jars().into_iter().next() else { return };
+        let lib = std::sync::Arc::new(massif_structures::Library::open(&jar.path, &jar.version, &[]).unwrap());
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        // Land with room round it: the column whose 48 blocks round are the
+        // most land over the sea.
+        let spot = {
+            let dim = h.state().doc.dimension();
+            let sea = h.state().doc.world.meta.sea_level as f32;
+            let height = |x: i32, z: i32| massif_core::ops::height_at(dim, 0, x, z, massif_core::ops::Surface::Top).unwrap_or(0.0);
+            let mut best = ((0, 0), 0);
+            for z in (-400..400).step_by(16) {
+                for x in (-400..400).step_by(16) {
+                    let dry = (-48..=48).step_by(12).flat_map(|dz| (-48..=48).step_by(12).map(move |dx| (dx, dz))).filter(|&(dx, dz)| height(x + dx, z + dz) > sea + 2.0).count();
+                    if dry > best.1 {
+                        best = ((x, z), dry);
+                    }
+                }
+            }
+            best.0
+        };
+        {
+            let s = h.state_mut();
+            s.tools.structure.rt.set_library(lib);
+            s.tools.select(Tool::Structure);
+            s.tools.structure.kind = "village_plains".into();
+            s.tools.structure.seed = 4;
+        }
+        h.run_steps(3);
+        let place = |h: &mut egui_kittest::Harness<'static, MassifApp>, at: (i32, i32)| {
+            {
+                let s = h.state_mut();
+                crate::structure_tool::click(&mut s.doc, &mut s.tools, at.0, at.1, false);
+            }
+            let started = std::time::Instant::now();
+            while !h.state().jobs.is_empty() || h.state().tools.structure.rt.is_busy() {
+                assert!(started.elapsed().as_secs() < 120, "placing timed out");
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            h.run_steps(5);
+        };
+        place(&mut h, spot);
+        let id = h.state().active_map.or_else(|| h.state().maps.keys().next().copied()).expect("a map view");
+        {
+            let view = h.state_mut().maps.get_mut(&id).unwrap();
+            view.center = [spot.0 as f64, spot.1 as f64];
+            view.zoom = 3.0;
+        }
+        let ppp = h.ctx.pixels_per_point();
+        h.run_steps(20);
+        h.render().unwrap().save(dir.join(format!("structure-village-map-{ppp}x.png"))).unwrap();
+        // In the 3D view, close.
+        let top = massif_core::ops::height_at(h.state().doc.dimension(), 0, spot.0, spot.1, massif_core::ops::Surface::Top).unwrap_or(64.0);
+        h.state_mut().layout.current_mut().maximized = None;
+        h.state_mut().layout.active = 3;
+        h.state_mut().view3d.camera = crate::view3d::Camera { target: [spot.0 as f64, top as f64, spot.1 as f64], yaw: 0.7, pitch: 0.6, distance: 150.0 };
+        let mut frames = 0;
+        while frames < 30 || h.state().view3d.pending() > 0 {
+            h.step();
+            frames += 1;
+            if frames > 4000 {
+                break;
+            }
+        }
+        h.run_steps(10);
+        h.render().unwrap().save(dir.join(format!("structure-village-3d-{ppp}x.png"))).unwrap();
+        // An Ancient City beside it, deep under the land: its outline.
+        h.state_mut().layout.active = 0;
+        h.state_mut().tools.structure.kind = "ancient_city".into();
+        place(&mut h, (spot.0 + 260, spot.1));
+        {
+            let view = h.state_mut().maps.get_mut(&id).unwrap();
+            view.center = [spot.0 as f64 + 200.0, spot.1 as f64];
+            view.zoom = 1.0;
+        }
+        h.run_steps(20);
+        h.render().unwrap().save(dir.join(format!("structure-ancient-city-map-{ppp}x.png"))).unwrap();
+        let placed = &h.state().doc.dimension().structures;
+        assert_eq!(placed.len(), 2);
+        assert!(placed[1].min[1] < -40, "deep: {:?}", placed[1].min);
+    }
+
     /// The village brush fills the selection with the game's village
     /// (from a tiny one made by hand) in one step to undo.
     #[test]
