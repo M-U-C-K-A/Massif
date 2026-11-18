@@ -3,8 +3,8 @@
 //! that only ever runs down.
 //!
 //! The points are joined by a curve through all of them. Along it the
-//! water's level is the lowest the land allows so far, a little under the
-//! ground: it never rises downstream, whatever the bumps. The bed lies
+//! water's level is the lowest the land allows so far, under the ground
+//! by [`RiverSpec::under_banks`]: it never rises downstream, whatever the bumps. The bed lies
 //! `depth` under the water in the middle and rises to the water's edge;
 //! past it, banks `banks` blocks wide climb back to the ground. A course
 //! that starts in water (a river already there) leaves it at that water's
@@ -36,6 +36,9 @@ pub struct RiverSpec {
     pub depth_end: f32,
     /// Width of each bank, from the water's edge to the untouched ground.
     pub banks: f32,
+    /// How far the water's surface lies under the land along the river, in
+    /// blocks (`None`: a third of its depth, a block at least).
+    pub under_banks: Option<f32>,
     /// Fill the bed with water.
     pub water: bool,
     /// Terrain of the bed under the water (`None`: left as it is).
@@ -64,6 +67,7 @@ impl Default for RiverSpec {
             depth: 4.0,
             depth_end: 4.0,
             banks: 10.0,
+            under_banks: None,
             water: true,
             bed: None,
             shore: None,
@@ -72,6 +76,15 @@ impl Default for RiverSpec {
             biome: None,
         }
     }
+}
+
+/// A waterfall placed by hand on a river: where (the nearest point of its
+/// course), and how many blocks the water drops there.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Fall {
+    pub x: f32,
+    pub z: f32,
+    pub height: f32,
 }
 
 /// What a river dug.
@@ -253,6 +266,40 @@ pub(crate) fn pools_and_falls(level: &mut [f32], step: f32, half: &dyn Fn(usize)
         }
     }
     plunge
+}
+
+/// Waterfalls placed by hand on a river (`course`: a point every [`STEP`]
+/// blocks, from the source, on land): at the point of the course nearest
+/// each, the water drops by its height from the level just upstream, and
+/// stays at least that much lower downstream, never under `floor` (the
+/// water it runs into); a plunge pool is dug at its foot (`plunge`), as
+/// deep as most of the fall (4 blocks at most) and as long as twice the
+/// river is wide there (`half`: half its width).
+fn hand_falls(level: &mut [f32], plunge: &mut [f32], course: &[(f32, f32)], falls: &[Fall], floor: f32, half: &dyn Fn(usize) -> f32) {
+    let mut falls: Vec<(usize, f32)> = falls
+        .iter()
+        .filter(|f| f.height >= 1.0)
+        .filter_map(|f| {
+            let k = (0..course.len()).min_by(|&a, &b| (course[a].0 - f.x).hypot(course[a].1 - f.z).total_cmp(&(course[b].0 - f.x).hypot(course[b].1 - f.z)))?;
+            (k > 0).then_some((k, f.height.round()))
+        })
+        .collect();
+    falls.sort_by_key(|f| f.0);
+    for (k, height) in falls {
+        let cap = (level[k - 1].round() - height).max(floor);
+        if cap >= level[k] {
+            continue;
+        }
+        for l in level[k..].iter_mut() {
+            *l = l.min(cap);
+        }
+        let deeper = (height * 0.6).clamp(1.0, 4.0);
+        let reach = ((4.0 * half(k)).max(6.0) / STEP).ceil() as usize;
+        for (j, d) in plunge.iter_mut().enumerate().skip(k).take(reach) {
+            let t = (j - k) as f32 / reach as f32;
+            *d = d.max(deeper * (1.0 - t * t));
+        }
+    }
 }
 
 /// The way a river's channel goes on under the sea from the end of
@@ -453,6 +500,14 @@ fn catchment(ground: &mut Ground, course: &[(f32, f32)], n: usize, sea: f32) -> 
 /// Dig a river along `points` (block coordinates, in any order of flow)
 /// into the level `edit` works on, recorded for undo.
 pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> RiverReport {
+    carve_river_with(edit, points, spec, &[])
+}
+
+/// [`carve_river`], with waterfalls placed by hand: at each, the water
+/// drops by its height, the river downstream cut as much deeper into the
+/// land until the land comes down to it, and a plunge pool is dug at its
+/// foot.
+pub fn carve_river_with(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec, falls: &[Fall]) -> RiverReport {
     let mut course = smooth_course(points);
     if course.len() < 2 {
         return RiverReport::default();
@@ -461,7 +516,7 @@ pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> 
     let half = |w: f32| w.max(1.0) / 2.0;
     let reach = half(spec.width.max(spec.width_end)) + spec.banks.max(0.0) + 1.0;
     let depth = spec.depth.max(spec.depth_end).max(0.5);
-    let freeboard = (depth * 0.3).max(1.0);
+    let freeboard = spec.under_banks.map_or((depth * 0.3).max(1.0), |u| u.clamp(0.0, 64.0));
 
     // The land along the course: its ground (or the surface of the water
     // it crosses), smoothed over the river's width.
@@ -585,7 +640,9 @@ pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> 
     // Pools and falls down the steep stretches, a plunge pool under each
     // fall; through the water it crosses, it keeps that water's level.
     let crossed: Vec<bool> = land.iter().map(|l| l.1.is_some()).collect();
-    let plunge = pools_and_falls(&mut level, STEP, &|k| widths[k], &|k| crossed[k]);
+    let mut plunge = pools_and_falls(&mut level, STEP, &|k| widths[k], &|k| crossed[k]);
+    // The falls placed by hand, over those of the land.
+    hand_falls(&mut level, &mut plunge, &course[..coast], falls, mouth.unwrap_or(f32::MIN), &|k| widths[k]);
     // Under a fall, its pool rounds out, a quarter wider.
     let widths: Vec<f32> = widths.iter().zip(&plunge).map(|(w, p)| w * (1.0 + 0.25 * (p / 3.0).min(1.0))).collect();
     // The valley's floor along the river, for its banks: the water's level
@@ -1139,6 +1196,12 @@ pub fn descend(level: &crate::level::Level, start: (i32, i32), sea: f32, max_len
 /// lakes filled to their level, then its bed along its course
 /// ([`carve_river`]). Recorded for undo.
 pub fn dig_descent(edit: &mut Edit, descent: &Descent, spec: &RiverSpec) -> RiverReport {
+    dig_descent_with(edit, descent, spec, &[])
+}
+
+/// [`dig_descent`], with waterfalls placed by hand (see
+/// [`carve_river_with`]).
+pub fn dig_descent_with(edit: &mut Edit, descent: &Descent, spec: &RiverSpec, falls: &[Fall]) -> RiverReport {
     if spec.water {
         let (lo, hi) = (edit.dim().min_y as f32, (edit.dim().max_y - 1) as f32);
         for (cells, level) in &descent.lakes {
@@ -1180,7 +1243,7 @@ pub fn dig_descent(edit: &mut Edit, descent: &Descent, spec: &RiverSpec) -> Rive
         sea: spec.sea.or(descent.sea),
         ..*spec
     };
-    carve_river(edit, &points, &spec)
+    carve_river_with(edit, &points, &spec, falls)
 }
 
 // ------------------------------------------------------- natural course --
@@ -2288,6 +2351,67 @@ mod tests {
         // Undone in one step.
         h.undo(&mut world);
         assert_eq!(column(&world, 20, 64).1, NO_FLUID);
+    }
+
+    /// The water lies as far under the banks as asked: flush with the land
+    /// at 0, a few blocks under it in a cut, a third of the depth when
+    /// left automatic.
+    #[test]
+    fn the_water_lies_as_far_under_the_banks_as_asked() {
+        let grade = 20.0 / 256.0;
+        let ground = |x: i32| 120.0 - x as f32 * grade;
+        // The mean of how far the water lies under the land it was dug in,
+        // along the middle of the course.
+        let under = |under_banks: Option<f32>| {
+            let mut world = slope_of(grade);
+            let mut h = History::default();
+            h.begin("river", 0);
+            let spec = RiverSpec { width: 8.0, width_end: 8.0, depth: 4.0, depth_end: 4.0, banks: 8.0, under_banks, ..RiverSpec::default() };
+            carve_river(&mut h.edit(&mut world, 0), &[(10.0, 64.0), (200.0, 64.0)], &spec);
+            h.commit();
+            let gaps: Vec<f32> = (40..170).map(|x| ground(x) - column(&world, x, 64).1 as f32).collect();
+            gaps.iter().sum::<f32>() / gaps.len() as f32
+        };
+        let (flush, auto, deep) = (under(Some(0.0)), under(None), under(Some(6.0)));
+        assert!(flush < 1.0, "flush with the land: {flush}");
+        assert!((auto - 1.2).abs() < 1.0, "a third of the depth: {auto}");
+        assert!((deep - 6.0).abs() < 1.0 && deep > auto + 3.5, "six blocks under: {deep} (auto {auto})");
+    }
+
+    /// A waterfall placed by hand: the water drops by its height there,
+    /// stays that much lower downstream until the land comes down to it,
+    /// and a plunge pool is dug at its foot.
+    #[test]
+    fn a_waterfall_placed_by_hand() {
+        let grade = 20.0 / 256.0;
+        let dig = |falls: &[Fall]| {
+            let mut world = slope_of(grade);
+            let mut h = History::default();
+            h.begin("river", 0);
+            let spec = RiverSpec { width: 8.0, width_end: 8.0, depth: 3.0, depth_end: 3.0, banks: 8.0, ..RiverSpec::default() };
+            carve_river_with(&mut h.edit(&mut world, 0), &[(10.0, 64.0), (220.0, 64.0)], &spec, falls);
+            h.commit();
+            world
+        };
+        let (plain, fall) = (dig(&[]), dig(&[Fall { x: 100.0, z: 64.0, height: 6.0 }]));
+        let water = |w: &World, x: i32| column(w, x, 64).1 as f32;
+        // Above the fall, as without it; below, six blocks lower.
+        assert_eq!(water(&fall, 90), water(&plain, 90));
+        let drop = water(&fall, 98) - water(&fall, 103);
+        assert!((5.0..=7.0).contains(&drop), "a drop of six blocks: {drop}");
+        assert!(water(&plain, 98) - water(&plain, 103) <= 1.0);
+        // A plunge pool at its foot: the bed deeper than the river's own.
+        let bed = |w: &World, x: i32| water(w, x) - column(w, x, 64).0;
+        assert!(bed(&fall, 104) > bed(&plain, 104) + 1.5, "{} vs {}", bed(&fall, 104), bed(&plain, 104));
+        // Downstream, it never rises.
+        let mut last = f32::MAX;
+        for x in 20..215 {
+            let w = water(&fall, x);
+            if w > column(&fall, x, 64).0 {
+                assert!(w <= last, "rises at {x}");
+                last = w;
+            }
+        }
     }
 
     #[test]

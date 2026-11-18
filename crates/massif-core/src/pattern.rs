@@ -223,6 +223,23 @@ pub struct Spread {
     /// Where the values of each terrain end, as a fraction of the way from
     /// the lowest value to the highest, in the order of the terrains.
     pub limits: Vec<f32>,
+    /// The share of the ground whose value is under each step's start
+    /// (`density.len() + 1` of them, 0 to 1): what a limit moved to a
+    /// value gives the terrains under it (see [`Spread::share_under`]).
+    pub cdf: Vec<f32>,
+}
+
+impl Spread {
+    /// The share of the ground whose value is under `f` (a fraction of the
+    /// way from the lowest value to the highest).
+    pub fn share_under(&self, f: f32) -> f32 {
+        let n = self.cdf.len().saturating_sub(1).max(1);
+        let x = f.clamp(0.0, 1.0) * n as f32;
+        let k = (x.floor() as usize).min(n - 1);
+        let t = x - k as f32;
+        let (a, b) = (self.cdf.get(k).copied().unwrap_or(0.0), self.cdf.get(k + 1).copied().unwrap_or(1.0));
+        a + (b - a) * t
+    }
 }
 
 impl PatternSampler {
@@ -275,9 +292,17 @@ impl PatternSampler {
                 if *c >= 0.9999 { 1.0 } else { at(q[k]) as f32 }
             })
             .collect();
+        let mut cdf = Vec::with_capacity(bins + 1);
+        let mut acc = 0.0f32;
+        cdf.push(0.0);
+        for c in &counts {
+            acc += c;
+            cdf.push(acc / q.len() as f32);
+        }
         Spread {
             density: density.into_iter().map(|d| d / peak).collect(),
             limits,
+            cdf,
         }
     }
 }
@@ -490,6 +515,13 @@ mod tests {
         // The middle terrain, half of the ground, takes the middle values:
         // a narrower band than half the range.
         assert!(spread.limits[1] - spread.limits[0] < 0.5, "{:?}", spread.limits);
+        // The share under each limit is the ground of the terrains up to
+        // it: a limit dragged to a value gives back its share.
+        assert_eq!((spread.cdf.len(), spread.cdf[0], *spread.cdf.last().unwrap()), (49, 0.0, 1.0));
+        assert!(spread.cdf.windows(2).all(|w| w[0] <= w[1]));
+        for (limit, share) in spread.limits.iter().zip([0.25, 0.75]) {
+            assert!((spread.share_under(*limit) - share).abs() < 0.04, "{limit}: {}", spread.share_under(*limit));
+        }
     }
 
     #[test]

@@ -584,9 +584,24 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
             changed |= tip_row(ui, tr!("Width"), tr!("Width of the water at the source"), |ui| ui.add(crate::widgets::Field::new(&mut r.width, 2.0..=200.0).suffix(tr!(" blocks")).max_decimals(0)));
             changed |= tip_row(ui, tr!("Flow"), tr!("How much wider and deeper it grows downstream"), |ui| ui.add(percent(&mut r.flow)));
             changed |= tip_row(ui, tr!("Depth"), tr!("Depth of the water at the source"), |ui| ui.add(crate::widgets::Field::new(&mut r.depth, 1.0..=30.0).suffix(tr!(" blocks")).max_decimals(0)));
+            changed |= tip_row(ui, tr!("Under the banks"), tr!("How far the water's surface lies under the land beside it. Auto: a third of its depth, a block at least"), |ui| {
+                let mut auto = r.under_banks.is_none();
+                let mut response = crate::widgets::checkbox(ui, &mut auto, tr!("Auto"));
+                if response.changed() {
+                    r.under_banks = if auto { None } else { Some((r.depth * 0.3).max(1.0).round()) };
+                }
+                if let Some(under) = &mut r.under_banks {
+                    let field = ui.add(crate::widgets::Field::new(under, 0.0..=32.0).suffix(tr!(" blocks")).max_decimals(1));
+                    if field.changed() {
+                        response.mark_changed();
+                    }
+                }
+                response
+            });
             changed |= tip_row(ui, tr!("Erosion"), tr!("How much it wears the land beside its bed"), |ui| ui.add(percent(&mut r.erosion)));
             changed |= tip_row(ui, tr!("Banks"), tr!("How far its banks slope back up to the land"), |ui| ui.add(crate::widgets::Field::new(&mut r.banks, 0.0..=120.0).suffix(tr!(" blocks")).max_decimals(0)));
             changed |= tip_row(ui, tr!("Lakes"), tr!("Which hollows on its way fill up as lakes: none, the deep ones, all"), |ui| ui.add(percent(&mut r.lakes)));
+            tip_row(ui, tr!("Waterfall"), tr!("How far the water drops at a waterfall placed with Shift + click on the river"), |ui| ui.add(crate::widgets::Field::new(&mut r.fall_height, 1.0..=64.0).suffix(tr!(" blocks")).max_decimals(0)));
             crate::widgets::checkbox(ui, &mut r.water, tr!("Fill it with water"));
             crate::widgets::checkbox(ui, &mut r.biome, tr!("River biome on its water"));
             ui.horizontal(|ui| {
@@ -2674,7 +2689,7 @@ fn pattern_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, bloc
 /// Pictures of a pattern: the ground it paints and its noise, side by side,
 /// eight of its shapes across, and how its values spread between its
 /// blocks.
-fn pattern_pictures(ui: &mut Ui, tools: &ToolState, doc: &Document) {
+fn pattern_pictures(ui: &mut Ui, tools: &mut ToolState, doc: &Document) {
     let pal = Palette::of(ui);
     let reg = &doc.world.registry;
     let Some(sampler) = (|| {
@@ -2728,25 +2743,60 @@ fn pattern_pictures(ui: &mut Ui, tools: &ToolState, doc: &Document) {
             });
         }
     });
-    // The spread of its values, each step in the colour of its block.
+    // The distribution of its values, low to high, each step in the colour
+    // of the block it gives; the limits between blocks dragged to give
+    // them more or less of the ground, as Axiom's noise painter.
     let width = 2.0 * side + ui.spacing().item_spacing.x;
-    let (rect, response) = ui.allocate_exact_size(vec2(width, 34.0), Sense::hover());
-    let painter = ui.painter_at(rect);
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 72.0), Sense::hover());
+    let painter = ui.painter_at(rect.expand(2.0));
     painter.rect_filled(rect, 4, pal.header);
+    let plot = Rect::from_min_max(rect.min + vec2(0.0, 4.0), rect.max - vec2(0.0, 16.0));
     let bins = spread.density.len();
+    let x_of = |f: f32| plot.left() + plot.width() * f;
+    let y_of = |d: f32| plot.bottom() - plot.height() * d;
+    let band_of = |f: f32| spread.limits.iter().position(|l| f < *l).unwrap_or(spread.limits.len().saturating_sub(1));
+    let mut outline = Vec::with_capacity(bins + 2);
     for (k, d) in spread.density.iter().enumerate() {
-        let (x0, x1) = (rect.left() + rect.width() * k as f32 / bins as f32, rect.left() + rect.width() * (k + 1) as f32 / bins as f32);
-        let middle = (k as f32 + 0.5) / bins as f32;
-        let band = spread.limits.iter().position(|l| middle < *l).unwrap_or(spread.limits.len().saturating_sub(1));
-        let colour = colours.get(band).copied().unwrap_or(pal.weak);
-        let top = rect.bottom() - (rect.height() - 3.0) * d;
-        painter.rect_filled(Rect::from_min_max(pos2(x0, top), pos2(x1 + 0.5, rect.bottom())), 0, colour);
+        let (x0, x1) = (x_of(k as f32 / bins as f32), x_of((k + 1) as f32 / bins as f32));
+        let colour = colours.get(band_of((k as f32 + 0.5) / bins as f32)).copied().unwrap_or(pal.weak);
+        painter.rect_filled(Rect::from_min_max(pos2(x0, y_of(*d)), pos2(x1 + 0.5, plot.bottom())), 0, colour.gamma_multiply(0.85));
+        outline.push(pos2((x0 + x1) / 2.0, y_of(*d)));
     }
-    for l in &spread.limits[..spread.limits.len().saturating_sub(1)] {
-        let x = rect.left() + rect.width() * l;
-        painter.vline(x, rect.y_range(), Stroke::new(1.0, pal.text.gamma_multiply(0.55)));
+    painter.add(egui::Shape::line(outline, Stroke::new(1.2, pal.text.gamma_multiply(0.7))));
+    // The share of each block under its band, where there is room.
+    let mut start = 0.0;
+    let total = spread.limits.len();
+    for (k, end) in spread.limits.iter().enumerate() {
+        let share = spread.share_under(*end) - spread.share_under(start);
+        let (a, b) = (x_of(start), x_of(*end));
+        if b - a > 26.0 {
+            painter.text(pos2((a + b) / 2.0, rect.bottom() - 7.0), egui::Align2::CENTER_CENTER, format!("{:.0}%", share * 100.0), egui::FontId::proportional(10.0), pal.weak);
+        }
+        if k + 1 < total {
+            start = *end;
+        }
     }
-    response.on_hover_text(tr!("How often each value of the noise comes, low to high, in the colour of the block it gives"));
+    // The limits: a line through the curve, a knob on top to drag.
+    let draggable = colours.len() == tools.pattern.terrains.len();
+    let mut tip = response.on_hover_text(tr!("How often each value of the noise comes, low to high, in the colour of the block it gives. Drag a limit between two blocks to give one more of the ground."));
+    for (k, l) in spread.limits[..total.saturating_sub(1)].iter().enumerate() {
+        let x = x_of(*l);
+        let knob = Rect::from_center_size(pos2(x, plot.top() + 4.0), vec2(9.0, 9.0));
+        let hit = ui.interact(Rect::from_center_size(pos2(x, plot.center().y), vec2(12.0, plot.height() + 8.0)), egui::Id::unique(("noise limit", k)), if draggable { Sense::drag() } else { Sense::hover() });
+        let lit = hit.hovered() || hit.dragged();
+        painter.vline(x, plot.y_range(), Stroke::new(if lit { 2.0 } else { 1.2 }, if lit { pal.accent } else { pal.text.gamma_multiply(0.6) }));
+        painter.rect(knob, 3, if lit { pal.accent } else { pal.text }, Stroke::new(1.0, pal.header), StrokeKind::Middle);
+        if draggable {
+            let hit = hit.on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+            if hit.dragged()
+                && let Some(p) = hit.interact_pointer_pos()
+            {
+                tools.pattern.set_limit(k, spread.share_under((p.x - plot.left()) / plot.width()));
+            }
+            tip = tip.union(hit);
+        }
+    }
+    let _ = tip;
     hint(ui, &tr!("{value:.0} blocks across", value = tools.pattern.pattern.scale * 8.0));
 }
 

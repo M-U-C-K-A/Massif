@@ -610,6 +610,27 @@ impl PatternSettings {
         }
     }
 
+    /// Move the limit between terrain `k` and the next so that the
+    /// terrains up to `k` take `under` of the ground (0 to 1): the two
+    /// share what lies between their outer limits, the others keep theirs.
+    pub fn set_limit(&mut self, k: usize, under: f32) {
+        let n = self.terrains.len();
+        if k + 1 >= n {
+            return;
+        }
+        let shares: Vec<f32> = (0..n).map(|j| self.share(j)).collect();
+        let before: f32 = shares[..k].iter().sum();
+        let after = before + shares[k] + shares[k + 1];
+        let under = under.clamp(before, after);
+        for (j, t) in self.terrains.iter_mut().enumerate() {
+            t.1 = match j {
+                _ if j == k => under - before,
+                _ if j == k + 1 => after - under,
+                _ => shares[j],
+            };
+        }
+    }
+
     /// Add a terrain with an even share (`1 / n` of the ground), the others
     /// keeping theirs in proportion; a terrain already there is left as is.
     pub fn add(&mut self, name: &str) {
@@ -751,6 +772,9 @@ pub struct RiverSettings {
     pub width_end: f32,
     pub depth: f32,
     pub banks: f32,
+    /// How far the water's surface lies under the banks, in blocks
+    /// (`None`: automatic, a third of its depth, a block at least).
+    pub under_banks: Option<f32>,
     pub water: bool,
     /// Terrain of the bed, by name ("": left as it is).
     pub bed: String,
@@ -765,6 +789,8 @@ pub struct RiverSettings {
     /// From a spring: which hollows it fills with a lake (0: none, it cuts
     /// through their rims; 1: all).
     pub lakes: f32,
+    /// How many blocks the water drops at a waterfall placed by hand.
+    pub fall_height: f32,
 }
 
 impl Default for RiverSettings {
@@ -774,12 +800,14 @@ impl Default for RiverSettings {
             width_end: 20.0,
             depth: 4.0,
             banks: 12.0,
+            under_banks: None,
             water: true,
             bed: "Gravel".into(),
             biome: true,
             flow: 0.5,
             erosion: 0.3,
             lakes: 0.5,
+            fall_height: 6.0,
         }
     }
 }
@@ -800,6 +828,7 @@ impl RiverSettings {
             depth: self.depth,
             depth_end: self.depth * (1.0 + 1.5 * flow),
             banks: self.banks + self.erosion.clamp(0.0, 1.0) * 4.0 * self.width,
+            under_banks: self.under_banks,
             water: self.water,
             bed: if self.bed.is_empty() { None } else { reg.terrain_by_name(&self.bed) },
             // Sand in the shallows, wherever the bed is painted.
@@ -860,6 +889,8 @@ pub struct RiverDraft {
     pub plan: massif_core::river::Descent,
     /// Where each anchor lies on the course (indices into it).
     pub stops: Vec<usize>,
+    /// Waterfalls placed by hand (Shift + click on the course), dug with it.
+    pub falls: Vec<massif_core::river::Fall>,
     planned: Option<u64>,
     revision: u64,
     legs: std::collections::HashMap<LegKey, Vec<(f32, f32)>>,
@@ -997,7 +1028,7 @@ pub fn dig_draft(doc: &mut Document, tools: &mut ToolState) -> Feedback {
     }
     let spec = tools.river.spring_spec(&doc.world.registry);
     doc.history.begin(tr!("River"), doc.dim);
-    let report = massif_core::river::dig_descent(&mut doc.history.edit(&mut doc.world, 0), &draft.plan, &spec);
+    let report = massif_core::river::dig_descent_with(&mut doc.history.edit(&mut doc.world, 0), &draft.plan, &spec, &draft.falls);
     doc.commit();
     let note = tr!("Dug a river {summary} · from Y {source:.0}", summary = draft.summary(), source = report.source);
     tools.river_note = Some(note.clone());

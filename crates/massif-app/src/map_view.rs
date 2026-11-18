@@ -154,6 +154,8 @@ enum RiverHit {
     Mouth,
     /// Its course, at this point of it.
     Course(usize),
+    /// A waterfall placed on it by hand.
+    Fall(usize),
 }
 
 /// What the automatic tools would change under the brush: the new terrain
@@ -391,6 +393,11 @@ impl MapView {
                 return Some(RiverHit::Anchor(k));
             }
         }
+        for (k, f) in draft.falls.iter().enumerate().rev() {
+            if screen((f.x, f.z)).distance(p) <= HANDLE_REACH {
+                return Some(RiverHit::Fall(k));
+            }
+        }
         if draft.layout.end.is_none()
             && let Some(&m) = draft.plan.course.last()
             && screen(m).distance(p) <= HANDLE_REACH
@@ -500,6 +507,24 @@ impl MapView {
             }
             return;
         };
+        // The waterfalls placed by hand: a white bar across the river, its
+        // height beside it.
+        for (k, f) in draft.falls.iter().enumerate() {
+            let at = plan.course.iter().enumerate().min_by(|a, b| (a.1.0 - f.x).hypot(a.1.1 - f.z).total_cmp(&(b.1.0 - f.x).hypot(b.1.1 - f.z)));
+            let Some((i, _)) = at else { continue };
+            let (a, b) = (plan.course[i.saturating_sub(2)], plan.course[(i + 2).min(plan.course.len() - 1)]);
+            let p = self.to_screen(canvas, f.x as f64, f.z as f64);
+            let d = self.to_screen(canvas, b.0 as f64, b.1 as f64) - self.to_screen(canvas, a.0 as f64, a.1 as f64);
+            let dir = if d.length() > 0.1 { d.normalized() } else { vec2(1.0, 0.0) };
+            let across = vec2(-dir.y, dir.x) * (spec.width * self.zoom / 2.0 + 4.0).clamp(7.0, 40.0);
+            let lit = hover == Some(RiverHit::Fall(k));
+            painter.line_segment([p - across, p + across], Line::new(if lit { 6.0 } else { 5.0 }, Color32::from_black_alpha(90)));
+            painter.line_segment([p - across, p + across], Line::new(if lit { 4.0 } else { 3.0 }, Color32::WHITE));
+            let label = format!("↓{:.0}", f.height);
+            let tag = p + across + across.normalized() * 6.0;
+            painter.text(tag + vec2(0.0, 1.0), egui::Align2::CENTER_CENTER, &label, FontId::proportional(12.0), Color32::from_black_alpha(160));
+            painter.text(tag, egui::Align2::CENTER_CENTER, &label, FontId::proportional(12.0), Color32::WHITE);
+        }
         let lit = |k: usize| hover == Some(RiverHit::Anchor(k)) || grab == Some(k);
         let anchors = draft.layout.anchors();
         let last = anchors.len() - 1;
@@ -1164,6 +1189,17 @@ impl MapView {
                     _ => None,
                 };
                 match (&mut tools.river_draft, hit, secondary) {
+                    // Shift + click on the course: a waterfall there; Shift
+                    // + right-click on one: taken away.
+                    (Some(draft), Some(RiverHit::Course(i)), false) if modifiers.shift => {
+                        let (fx, fz) = draft.plan.course[i];
+                        draft.falls.push(massif_core::river::Fall { x: fx, z: fz, height: tools.river.fall_height.max(1.0) });
+                        *feedback = Some(tr!("A waterfall of {height:.0} blocks: Enter digs the river with it", height = tools.river.fall_height.max(1.0)));
+                    }
+                    (Some(draft), Some(RiverHit::Fall(k)), true) => {
+                        draft.falls.remove(k);
+                    }
+                    (Some(_), Some(RiverHit::Fall(_)), false) => {}
                     // The first click: where it springs (dragged, it moves).
                     (None, _, false) => {
                         *feedback = tools::start_river(doc, tools, at.0, at.1);

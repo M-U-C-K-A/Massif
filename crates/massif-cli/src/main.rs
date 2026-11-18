@@ -576,6 +576,7 @@ fn cmd_spring(args: Args) -> Res<()> {
         depth: 4.0,
         depth_end: 4.0 * 1.75,
         banks: 12.0 + 0.3 * 4.0 * 12.0,
+        under_banks: None,
         water: true,
         bed: reg.terrain_by_name("Gravel"),
         shore: reg.terrain_by_name("Sand"),

@@ -263,6 +263,28 @@ fn object_runs(dim: &Dimension, s: Standing, x0: i32, z0: i32, w: usize, d: usiz
     runs
 }
 
+/// The objects anchored in tile `tile`, as markers: where each stands
+/// (`x`, `z`), from its foot up to its top (`y0..y1`), in its layer's
+/// colour; none of a hidden layer.
+fn object_markers(dim: &Dimension, reg: &Registry, seed: i64, lava: bool, tile: TilePos) -> Vec<(i32, i32, i32, i32, [u8; 3])> {
+    if !reg.object_layers.iter().any(|l| !l.removed && !l.hidden && !l.objects.is_empty()) {
+        return Vec::new();
+    }
+    let Some(stack) = TileStack::new(dim, tile, false) else { return Vec::new() };
+    let mat = Materializer::new(reg, seed, dim.min_y);
+    let rect = tile.rect();
+    massif_core::objects::tile_placements(reg, &mat, seed as u64, lava, &stack, tile)
+        .into_iter()
+        .filter(|p| rect.x0 <= p.x && p.x < rect.x1 && rect.z0 <= p.z && p.z < rect.z1)
+        .filter_map(|p| {
+            let layer = reg.object_layer(p.layer).filter(|l| !l.hidden)?;
+            let def = reg.objects.get(p.object as usize)?;
+            let foot = p.y - def.anchor[1] as i32;
+            Some((p.x, p.z, foot, foot + (def.size[1] as i32).max(1), layer.color))
+        })
+        .collect()
+}
+
 /// Merged solid spans, surface water and top sample of every column of a
 /// rectangle.
 struct Grid {
@@ -427,6 +449,10 @@ pub struct Style {
     pub water: bool,
     /// The world's fluid is lava.
     pub lava: bool,
+    /// The objects of the layers shown as markers, a column of their
+    /// layer's colour as tall as each, rather than block by block: their
+    /// density at a glance, cheaply.
+    pub markers: bool,
 }
 
 struct Colors<'a> {
@@ -695,7 +721,7 @@ fn build_tile_part(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: T
     // neighbour, and the heights around that).
     let ring = (if style.mode == MapMode::Slope { SLOPE_REACH } else { 1 }).max(if style.water { 2 } else { 1 });
     let standing = Standing { reg, seed, lava: style.lava };
-    let grid = compose_area(dim, cx - ring, cz - ring, n + 2 * ring as usize, n + 2 * ring as usize, style.mode, style.water, Some(standing));
+    let grid = compose_area(dim, cx - ring, cz - ring, n + 2 * ring as usize, n + 2 * ring as usize, style.mode, style.water, (!style.markers).then_some(standing));
     let wk = reg.well_known;
     let colors = Colors {
         reg,
@@ -913,6 +939,19 @@ fn build_tile_part(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: T
                 }
             }
             runs.flush(None, &mut emit);
+        }
+    }
+
+    // The objects as markers: a column of their layer's colour, as tall as
+    // each object, where its anchor stands.
+    if style.markers {
+        for (x, z, y0, y1, color) in object_markers(dim, reg, seed, style.lava, tile) {
+            let (i, j) = ((x - cx) as u8, (z - cz) as u8);
+            let (top, side) = (rgba(color, 255), rgba(color.map(|v| (v as f32 * 0.75) as u8), 255));
+            out.solid.push(face(i, j, UP, 1, clamp16(y1), 1, top, 0));
+            for (dir, (dx, dz)) in [(EAST, (1, 0)), (WEST, (-1, 0)), (SOUTH, (0, 1)), (NORTH, (0, -1))] {
+                out.solid.push(face(i + dx.max(0) as u8, j + dz.max(0) as u8, dir, 1, clamp16(y0), clamp16(y1 - y0), side, 0));
+            }
         }
     }
 
@@ -4176,6 +4215,8 @@ type Cells = ((u64, usize, i32), std::sync::Arc<[TilePos]>);
 pub struct View3d {
     pub mode: MapMode,
     pub water: bool,
+    /// The objects shown as markers (see [`Style::markers`]).
+    pub markers: bool,
     pub camera: Camera,
     renderer: Option<Renderer3d>,
     texture: Option<egui::TextureId>,
@@ -4391,6 +4432,7 @@ impl Default for View3d {
         Self {
             mode: MapMode::Terrain,
             water: true,
+            markers: false,
             camera: Camera::default(),
             renderer: None,
             texture: None,
@@ -4442,6 +4484,8 @@ impl View3d {
         ui.separator();
         ui.toggle_value(&mut self.water, theme::glyph(Icon::Waves).to_string())
             .on_hover_text(tr!("Show water"));
+        ui.toggle_value(&mut self.markers, theme::glyph(Icon::TreePine).to_string())
+            .on_hover_text(tr!("Objects as markers: a column in its layer's colour for each tree, bush or rock, as tall as it, to judge how dense they grow"));
         if ui
             .small_button(theme::glyph(Icon::Crosshair).to_string())
             .on_hover_text(tr!("Look at the middle of the map view"))
@@ -5097,6 +5141,7 @@ impl View3d {
             mode: self.mode,
             water: self.water,
             lava: doc.world.meta.lava,
+            markers: self.markers,
         };
         let stride = self.grid.as_ref().map_or(1, |g| g.stride);
         // A builder for another map, colouring or grid stops.
@@ -5505,6 +5550,7 @@ impl View3d {
             mode: self.mode,
             water: self.water,
             lava: doc.world.meta.lava,
+            markers: self.markers,
         };
         if self.style != Some(style) {
             self.style = Some(style);
@@ -6203,6 +6249,7 @@ mod tests {
         mode: MapMode::Terrain,
         water: true,
         lava: false,
+        markers: false,
     };
 
     /// A coarse cell of the grid keeps, of each tile, the columns at the
@@ -6443,7 +6490,7 @@ mod tests {
         let w = world();
         let dim = &w.dims[0];
         let tile = TilePos::new(0, -1);
-        let b = build_tile(dim, &w.registry, 63.0, w.meta.seed, tile, Style { mode: MapMode::Height, water: false, lava: false });
+        let b = build_tile(dim, &w.registry, 63.0, w.meta.seed, tile, Style { mode: MapMode::Height, water: false, lava: false, markers: false });
         let grid = compose_area(dim, -1, -129, 130, 130, MapMode::Height, false, None);
         let mut expected = 0i64;
         let mut gaps = Vec::new();
@@ -6750,7 +6797,7 @@ mod perf {
         let world = massif_format::load(std::path::Path::new(&path)).unwrap();
         let dim = &world.dims[0];
         let mut renderer = Renderer3d::new(&device, &queue);
-        let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false, markers: false };
         let shape = GridShape::of(dim, PAGE_BUDGET).unwrap();
         renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).unwrap();
         let stride = shape.stride;
@@ -6835,7 +6882,7 @@ mod perf {
             massif_assets::apply_colors(&mut world.registry, cat);
         }
         let mut renderer = Renderer3d::new(&device, &queue);
-        let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false, markers: false };
         let dim = &world.dims[0];
         let shape = GridShape::of(dim, PAGE_BUDGET).unwrap();
         renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).unwrap();
@@ -6902,12 +6949,12 @@ mod perf {
         let dim = &world.dims[0];
         eprintln!("chunks sculpted: {}", dim.voxels.len());
         let tile = TilePos::new(0, 0);
-        let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false, markers: false };
         let reg = &world.registry;
         let n = TILE_SIZE as usize;
         let t = Instant::now();
         for _ in 0..10 {
-            let standing = Standing { reg, seed: world.meta.seed, lava: false };
+            let standing = Standing { reg, seed: world.meta.seed, lava: false, markers: false };
             std::hint::black_box(compose_area(dim, -1, -1, n + 2, n + 2, style.mode, style.water, Some(standing)));
         }
         eprintln!("compose a tile: {:.1} ms", t.elapsed().as_secs_f32() * 100.0);
@@ -6928,7 +6975,7 @@ pub fn probe_ms(device: &wgpu::Device, queue: &wgpu::Queue) -> f32 {
     use massif_core::generate::{GenParams, Landform, generate};
     let world = generate(&GenParams { tiles_x: 8, tiles_z: 8, landform: Landform::Hills, seed: 3, ..GenParams::default() });
     let dim = &world.dims[0];
-    let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+    let style = Style { mode: MapMode::Terrain, water: true, lava: false, markers: false };
     let mut renderer = Renderer3d::with_samples(device, queue, SAMPLES);
     let Some(shape) = GridShape::of(dim, 64) else { return 0.0 };
     if renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).is_err() {
@@ -7021,7 +7068,7 @@ mod graphics_perf {
             massif_assets::apply_colors(&mut world.registry, cat);
         }
         let dim = &world.dims[0];
-        let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false, markers: false };
         let (lo, hi) = dim.bounds().unwrap();
         let (x0, z0, x1, z1) = ((lo.x * 128) as f64, (lo.z * 128) as f64, ((hi.x + 1) * 128) as f64, ((hi.z + 1) * 128) as f64);
         let extent = (x1 - x0).max(z1 - z0);
@@ -7138,7 +7185,7 @@ mod gradient_shots {
     /// The world drawn as the game's look draws it, from `camera`.
     fn game_look(device: &wgpu::Device, queue: &wgpu::Queue, world: &World, cat: &massif_assets::Catalogue, camera: Camera, size: [u32; 2]) -> image::RgbImage {
         let mut renderer = Renderer3d::new(device, queue);
-        let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false, markers: false };
         let dim = &world.dims[0];
         let shape = GridShape::of(dim, PAGE_BUDGET).unwrap();
         renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).unwrap();
