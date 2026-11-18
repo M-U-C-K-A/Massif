@@ -177,3 +177,88 @@ fn a_map_path_traced() {
     let m = r.memory();
     eprintln!("  on the graphics card: scene {:.1} MB, textures {:.1} MB, image {:.1} MB", mb(m.scene), mb(m.textures), mb(m.image));
 }
+
+/// A night lit by its own blocks: a courtyard of 4 × 4 chunks, glowstone
+/// and a sea lantern on the ground, torches on the walls (not drawn yet,
+/// their light only), a redstone torch (MASSIF_SNAPSHOT_DIR: the image).
+#[test]
+fn a_night_lit_by_its_blocks() {
+    use crate::chunk::{Chunk, Section, VOLUME};
+    use crate::scene::Patch;
+    let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+    if dir.is_none() && std::env::var_os("MASSIF_PERF").is_none() {
+        return;
+    }
+    let Some((device, queue)) = device() else { return };
+    let cat = massif_assets::load_newest().and_then(Result::ok).map(Arc::new);
+    let materials = Materials::new(cat, device.limits().max_texture_array_layers as usize);
+    let id = |name: &str, props: &[(&str, &str)]| materials.id(name, props);
+    let (grass, bricks, glowstone, lantern, torch, redstone, cobble) = (
+        id("minecraft:grass_block", &[]),
+        id("minecraft:stone_bricks", &[]),
+        id("minecraft:glowstone", &[]),
+        id("minecraft:sea_lantern", &[]),
+        id("minecraft:wall_torch", &[("facing", "south")]),
+        id("minecraft:redstone_torch", &[("lit", "true")]),
+        id("minecraft:cobblestone", &[]),
+    );
+    // Scene y: ground up to 16, walls 4 high around the middle.
+    let mut patch = Patch::new(0, 0, 4, 4, 4);
+    for cz in 0..4 {
+        for cx in 0..4 {
+            let mut lower = Box::new([cobble; VOLUME]);
+            for z in 0..16 {
+                for x in 0..16 {
+                    lower[(15 * 16 + z) * 16 + x] = grass;
+                }
+            }
+            let mut upper = Box::new([crate::materials::AIR; VOLUME]);
+            let mut put = |x: i32, y: i32, z: i32, m: u16| {
+                let (lx, lz) = (x - cx * 16, z - cz * 16);
+                if (0..16).contains(&lx) && (0..16).contains(&lz) {
+                    upper[((y as usize) * 16 + lz as usize) * 16 + lx as usize] = m;
+                }
+            };
+            for k in 20..44 {
+                for y in 0..4 {
+                    // Walls around a yard from 20 to 43, a gap in the south.
+                    put(k, y, 20, bricks);
+                    put(20, y, k, bricks);
+                    put(43, y, k, bricks);
+                    if !(30..34).contains(&k) {
+                        put(k, y, 43, bricks);
+                    }
+                }
+            }
+            put(26, 0, 26, glowstone);
+            put(37, 0, 30, lantern);
+            put(32, 2, 21, torch);
+            put(21, 2, 36, torch);
+            put(40, 0, 38, redstone);
+            patch.put(Chunk { x: cx, z: cz, sections: vec![Section::Mixed(lower), Section::Mixed(upper), Section::EMPTY, Section::EMPTY] });
+        }
+    }
+    let built = patch.build(&materials.classes(), &materials.lights());
+    let extent = Extent { x0: 0, z0: 0, width: 4, depth: 4, min_y: 0, sections: 4 };
+    let mut r = Renderer::new(&device, &queue, extent);
+    r.sea_level = 0.0;
+    r.sync_materials(&materials);
+    assert!(r.put(built));
+    r.flush();
+    assert_eq!(r.light_count(), 5, "the glowstone, the lantern, two torches, the redstone torch");
+    let mut night = Light { exposure: 1.6, ..Light::default() };
+    night.set_time(23.0, 172.0, 45.0, 0.0);
+    let camera = Camera::orbit([32.0, 16.5, 31.0], 3.4, -0.55, 30.0, 55f32.to_radians());
+    r.resize(960, 600);
+    let t = Instant::now();
+    while r.samples < 256 {
+        let cmd = r.render(&camera, &night, false).unwrap();
+        queue.submit([cmd]);
+    }
+    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    eprintln!("night: 256 samples at 960×600 in {:.2} s", t.elapsed().as_secs_f64());
+    if let Some(dir) = &dir {
+        let (w, h, rgba) = r.read_image().unwrap();
+        image::save_buffer(dir.join("render-night.png"), &rgba, w, h, image::ColorType::Rgba8).unwrap();
+    }
+}

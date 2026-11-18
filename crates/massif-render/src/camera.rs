@@ -75,6 +75,8 @@ pub struct Light {
     pub shafts: bool,
     /// Light of the blocks that glow, times.
     pub emission: f32,
+    /// The moon's light, a share of the sun's.
+    pub moon: f32,
     /// The lens's opening (radius, blocks; 0: all sharp) and the distance
     /// in focus.
     pub aperture: f32,
@@ -102,6 +104,7 @@ impl Default for Light {
             fog_g: 0.6,
             shafts: true,
             emission: 1.0,
+            moon: 1.0 / 300.0,
             aperture: 0.0,
             focus: 100.0,
             bounces: 2,
@@ -116,6 +119,18 @@ impl Light {
         let (sa, ca) = self.sun_azimuth.sin_cos();
         let (se, ce) = self.sun_elevation.sin_cos();
         Vec3::new(sa * ce, se, -ca * ce).normalize()
+    }
+
+    /// What lights the scene from the sky: the sun, or once it is well
+    /// under the horizon, the moon facing it (full), bluish and some 300
+    /// times dimmer. Its direction, illuminance and tint.
+    pub fn source(&self) -> (Vec3, f32, [f32; 3]) {
+        let sun = self.sun_direction();
+        if self.sun_elevation > -4f32.to_radians() {
+            return (sun, self.sun_strength, self.sun_tint);
+        }
+        let moon = Vec3::new(-sun.x, -sun.y, -sun.z);
+        (moon, self.sun_strength * self.moon, [0.72 * self.sun_tint[0], 0.8 * self.sun_tint[1], 1.0 * self.sun_tint[2]])
     }
 
     /// Put the sun where it is at `hour` (local solar time) on day `day` of

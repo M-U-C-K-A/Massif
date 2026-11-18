@@ -48,13 +48,16 @@ impl Class {
     }
 }
 
-/// A material as the shader reads it: four words.
+/// A material as the shader reads it: eight words.
 ///
 /// * 0: top layer | side layer << 16
 /// * 1: bottom layer | flags << 16 (class: 3 bits, axis of a log: 2 bits,
-///   emissive: 1 bit)
+///   glows: 1 bit)
 /// * 2, 3: the tints of the top and of the sides, sRGB, `r | g << 8 | b << 16`
-pub type GpuMaterial = [u32; 4];
+/// * 4: the colour of its light, sRGB, | its light level (the game's, 0 to
+///   15) << 24
+/// * 5 to 7: unused
+pub type GpuMaterial = [u32; 8];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Material {
@@ -64,19 +67,27 @@ struct Material {
     class: Class,
     /// Along which axis a log lies: 0 y, 1 x, 2 z.
     axis: u8,
-    emissive: bool,
+    /// The light it gives, as the game's levels (0: none), and its colour.
+    light: u8,
+    glow: [u8; 3],
     top_tint: [u8; 3],
     side_tint: [u8; 3],
 }
 
 impl Material {
     fn gpu(&self) -> GpuMaterial {
-        let flags = self.class as u32 | (self.axis as u32) << 3 | (self.emissive as u32) << 5;
+        let flags = self.class as u32 | (self.axis as u32) << 3 | ((self.light > 0) as u32) << 5;
         let rgb = |c: [u8; 3]| c[0] as u32 | (c[1] as u32) << 8 | (c[2] as u32) << 16;
-        [self.top as u32 | (self.side as u32) << 16, self.bottom as u32 | flags << 16, rgb(self.top_tint), rgb(self.side_tint)]
+        [self.top as u32 | (self.side as u32) << 16, self.bottom as u32 | flags << 16, rgb(self.top_tint), rgb(self.side_tint), rgb(self.glow) | (self.light as u32) << 24, 0, 0, 0]
     }
 
-    const AIR: Material = Material { top: 0, side: 0, bottom: 0, class: Class::Air, axis: 0, emissive: false, top_tint: [255; 3], side_tint: [255; 3] };
+    const AIR: Material = Material { top: 0, side: 0, bottom: 0, class: Class::Air, axis: 0, light: 0, glow: [0; 3], top_tint: [255; 3], side_tint: [255; 3] };
+
+    /// A light without a block to draw yet (a torch, a lantern: their
+    /// models come with milestone 3).
+    fn glow_only(light: u8, glow: [u8; 3]) -> Material {
+        Material { light, glow, ..Material::AIR }
+    }
 }
 
 struct Inner {
@@ -92,8 +103,10 @@ struct Inner {
 pub struct Materials {
     cat: Option<Arc<Catalogue>>,
     inner: Mutex<Inner>,
-    /// The class of every material, for the builders of the scene.
+    /// The class of every material, and the light it gives, for the
+    /// builders of the scene.
     classes: RwLock<Vec<Class>>,
+    lights: RwLock<Vec<u8>>,
     /// The most layers the texture array may have (the graphics card's
     /// limit); the textures past them keep their colour only.
     most_layers: usize,
@@ -104,7 +117,7 @@ impl Materials {
     pub fn new(cat: Option<Arc<Catalogue>>, most_layers: usize) -> Self {
         // Layer 0 is plain white: what has no texture keeps its tint.
         let inner = Inner { by_state: HashMap::new(), list: vec![Material::AIR], layers: vec![[255; LAYER_BYTES]], layer_of: HashMap::new(), revision: 1 };
-        Self { cat, inner: Mutex::new(inner), classes: RwLock::new(vec![Class::Air]), most_layers: most_layers.clamp(1, u16::MAX as usize) }
+        Self { cat, inner: Mutex::new(inner), classes: RwLock::new(vec![Class::Air]), lights: RwLock::new(vec![0]), most_layers: most_layers.clamp(1, u16::MAX as usize) }
     }
 
     /// The material of a block state: `name` with its properties.
@@ -121,7 +134,7 @@ impl Materials {
             return id;
         }
         let material = self.resolve(&mut inner, name, properties);
-        let id = if material.class == Class::Air {
+        let id = if material.class == Class::Air && material.light == 0 {
             AIR
         } else if let Some(k) = inner.list.iter().position(|m| *m == material) {
             k as u16
@@ -129,6 +142,7 @@ impl Materials {
             inner.list.push(material);
             inner.revision += 1;
             self.classes.write().unwrap().push(material.class);
+            self.lights.write().unwrap().push(material.light);
             (inner.list.len() - 1) as u16
         } else {
             AIR
@@ -140,6 +154,11 @@ impl Materials {
     /// The class of every material so far, by number.
     pub fn classes(&self) -> Vec<Class> {
         self.classes.read().unwrap().clone()
+    }
+
+    /// The light every material gives so far (the game's levels), by number.
+    pub fn lights(&self) -> Vec<u8> {
+        self.lights.read().unwrap().clone()
     }
 
     /// Changes whenever a material or a texture is added.
@@ -182,21 +201,35 @@ impl Materials {
             Some("z") => 2,
             _ => 0,
         };
+        let light = light_level(short, &prop);
         let Some(block) = self.cat.as_ref().and_then(|c| c.block(name)) else {
             // Not in the game's blocks read (or none read): a cube of the
             // colour its name suggests.
             if !cube_without_catalogue(short) {
-                return if prop("waterlogged") == Some("true") { self.fluid(inner, Class::Water, "block/water_still", Tint::Water.color()) } else { Material::AIR };
+                return if light > 0 {
+                    Material::glow_only(light, glow_color(short))
+                } else if prop("waterlogged") == Some("true") {
+                    self.fluid(inner, Class::Water, "block/water_still", Tint::Water.color())
+                } else {
+                    Material::AIR
+                };
             }
             let color = guess_color(short);
             let class = if short.contains("leaves") || short.contains("glass") { Class::Cutout } else { Class::Opaque };
-            return Material { top: 0, side: 0, bottom: 0, class, axis, emissive: emits(short, prop("lit")), top_tint: color, side_tint: color };
+            return Material { top: 0, side: 0, bottom: 0, class, axis, light, glow: color, top_tint: color, side_tint: color };
         };
         let cube = block.full_cube || nearly_whole(short);
         if !cube || thin(short) {
             // Plants and the blocks not drawn as cubes yet (their models
-            // come with milestone 3): air, or the water they stand in.
-            return if prop("waterlogged") == Some("true") { self.fluid(inner, Class::Water, "block/water_still", Tint::Water.color()) } else { Material::AIR };
+            // come with milestone 3): air, the water they stand in, or the
+            // light they give (a torch, a lantern).
+            return if light > 0 {
+                Material::glow_only(light, glow_color(short))
+            } else if prop("waterlogged") == Some("true") {
+                self.fluid(inner, Class::Water, "block/water_still", Tint::Water.color())
+            } else {
+                Material::AIR
+            };
         }
         let side_key = block.side.as_deref().or(block.top.as_deref());
         let top_key = block.top.as_deref().or(side_key);
@@ -206,13 +239,20 @@ impl Materials {
         // A face without its texture keeps the block's colour.
         let tint = |l: u16, t: Tint, color: [u8; 3]| if l == 0 { color } else { t.color() };
         let class = if short.contains("leaves") || (short.contains("glass") && !short.contains("pane")) || short == "spawner" { Class::Cutout } else { Class::Opaque };
+        // A glowing block's light has the colour of its texture.
+        let glow = if light == 0 {
+            [0; 3]
+        } else {
+            top_key.and_then(|k| self.cat.as_ref().and_then(|c| c.texture(k))).map_or(block.color, |t| t.mean(Tint::None))
+        };
         Material {
             top,
             side,
             bottom,
             class,
             axis,
-            emissive: emits(short, prop("lit")),
+            light,
+            glow,
             top_tint: tint(top, block.top_tint, block.color),
             side_tint: tint(side, block.side_tint, block.side_color),
         }
@@ -221,7 +261,8 @@ impl Materials {
     fn fluid(&self, inner: &mut Inner, class: Class, key: &str, tint: [u8; 3]) -> Material {
         let layer = self.layer(inner, key);
         let color = if layer == 0 { if class == Class::Water { [0x3f, 0x76, 0xe4] } else { [0xcf, 0x5b, 0x14] } } else { tint };
-        Material { top: layer, side: layer, bottom: layer, class, axis: 0, emissive: class == Class::Lava, top_tint: color, side_tint: color }
+        let (light, glow) = if class == Class::Lava { (15, [255, 130, 40]) } else { (0, [0; 3]) };
+        Material { top: layer, side: layer, bottom: layer, class, axis: 0, light, glow, top_tint: color, side_tint: color }
     }
 
     /// The layer of a texture, read once.
@@ -341,12 +382,58 @@ fn thin(short: &str) -> bool {
         && !short.ends_with("_slab")
         && !short.ends_with("_stairs")
         && short != "snow_block"
+        && !matches!(short, "sea_lantern" | "jack_o_lantern")
 }
 
-/// Whether a block gives light.
-fn emits(short: &str, lit: Option<&str>) -> bool {
-    matches!(short, "glowstone" | "sea_lantern" | "shroomlight" | "magma_block" | "jack_o_lantern" | "ochre_froglight" | "verdant_froglight" | "pearlescent_froglight" | "beacon" | "crying_obsidian" | "end_gateway" | "respawn_anchor")
-        || (lit == Some("true") && matches!(short, "redstone_lamp" | "furnace" | "smoker" | "blast_furnace" | "redstone_ore" | "deepslate_redstone_ore" | "copper_bulb"))
+/// The light a block gives, as the game's levels (0 to 15).
+fn light_level<'a>(short: &str, prop: &impl Fn(&str) -> Option<&'a str>) -> u8 {
+    let lit = prop("lit") != Some("false");
+    let count = |p: &str| prop(p).and_then(|v| v.parse::<u8>().ok()).unwrap_or(1);
+    match short {
+        "glowstone" | "sea_lantern" | "shroomlight" | "ochre_froglight" | "verdant_froglight" | "pearlescent_froglight" | "jack_o_lantern" | "lava" | "beacon" | "conduit" | "end_portal" | "end_gateway" | "fire" | "lantern" => 15,
+        "end_rod" | "torch" | "wall_torch" => 14,
+        "soul_torch" | "soul_wall_torch" | "soul_lantern" | "soul_fire" | "crying_obsidian" => 10,
+        "campfire" => if lit { 15 } else { 0 },
+        "soul_campfire" => if lit { 10 } else { 0 },
+        "redstone_lamp" | "copper_bulb" | "waxed_copper_bulb" => if prop("lit") == Some("true") { 15 } else { 0 },
+        "exposed_copper_bulb" | "waxed_exposed_copper_bulb" => if prop("lit") == Some("true") { 12 } else { 0 },
+        "weathered_copper_bulb" | "waxed_weathered_copper_bulb" => if prop("lit") == Some("true") { 8 } else { 0 },
+        "oxidized_copper_bulb" | "waxed_oxidized_copper_bulb" => if prop("lit") == Some("true") { 4 } else { 0 },
+        "furnace" | "smoker" | "blast_furnace" => if prop("lit") == Some("true") { 13 } else { 0 },
+        "redstone_torch" | "redstone_wall_torch" => if lit { 7 } else { 0 },
+        "redstone_ore" | "deepslate_redstone_ore" => if prop("lit") == Some("true") { 9 } else { 0 },
+        "magma_block" => 3,
+        "glow_lichen" | "enchanting_table" | "ender_chest" => 7,
+        "nether_portal" => 11,
+        "amethyst_cluster" => 5,
+        "large_amethyst_bud" => 4,
+        "medium_amethyst_bud" => 2,
+        "small_amethyst_bud" => 1,
+        "sea_pickle" => if prop("waterlogged") == Some("true") { 3 + 3 * count("pickles").min(4) } else { 0 },
+        "cave_vines" | "cave_vines_plant" => if prop("berries") == Some("true") { 14 } else { 0 },
+        "respawn_anchor" => [0, 3, 7, 11, 15][prop("charges").and_then(|v| v.parse::<usize>().ok()).unwrap_or(0).min(4)],
+        _ if short.ends_with("candle") => if prop("lit") == Some("true") { 3 * count("candles").min(4) } else { 0 },
+        _ => 0,
+    }
+}
+
+/// The colour of the light of a block not drawn yet (as its flame).
+fn glow_color(short: &str) -> [u8; 3] {
+    if short.starts_with("soul_") {
+        [110, 220, 255]
+    } else if short.starts_with("redstone") {
+        [255, 70, 45]
+    } else if short == "end_rod" {
+        [255, 240, 235]
+    } else if short == "sea_pickle" {
+        [190, 255, 160]
+    } else if short == "glow_lichen" {
+        [200, 245, 215]
+    } else if short.contains("amethyst") {
+        [205, 150, 255]
+    } else {
+        [255, 185, 105]
+    }
 }
 
 /// Without the game's blocks: whether a block is a cube, by its name.
@@ -407,6 +494,17 @@ mod tests {
         // Properties in any order are the same state.
         assert_eq!(m.id("minecraft:oak_stairs", &[("facing", "east"), ("half", "top")]), m.id("minecraft:oak_stairs", &[("half", "top"), ("facing", "east")]));
         assert_eq!(m.id("minecraft:short_grass", &[]), AIR, "plants wait for their models");
+        // A torch is not drawn yet, but gives its light.
+        let torch = m.id("minecraft:wall_torch", &[("facing", "north")]);
+        assert_ne!(torch, AIR);
+        assert_eq!((m.classes()[torch as usize], m.lights()[torch as usize]), (Class::Air, 14));
+        let candles = m.id("minecraft:candle", &[("candles", "3"), ("lit", "true")]);
+        assert_eq!(m.lights()[candles as usize], 9);
+        assert_eq!(m.id("minecraft:candle", &[("candles", "3"), ("lit", "false")]), AIR);
+        let sea_lantern = m.id("minecraft:sea_lantern", &[]);
+        assert_eq!(m.classes()[sea_lantern as usize], Class::Opaque, "a sea lantern is a whole block");
+        let glowstone = m.id("minecraft:glowstone", &[]);
+        assert_eq!(m.lights()[glowstone as usize], 15);
         assert_eq!(m.classes()[m.id("minecraft:seagrass", &[]) as usize], Class::Water, "a plant under water shows the water");
     }
 

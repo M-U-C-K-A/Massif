@@ -190,6 +190,13 @@ pub struct Renderer {
     records: Mirror,
     tree: Mirror,
     voxels: Mirror,
+    /// For every chunk, where its list of lights starts and how long it is
+    /// (the lights of it and of the 8 chunks around: those that light
+    /// it), then the lists: `[x, y, z, material]` each.
+    lights: Mirror,
+    /// The lights of each chunk, in the scene's blocks.
+    chunk_lights: HashMap<(i32, i32), Vec<[u32; 4]>>,
+    lights_dirty: bool,
     pyramid_buf: wgpu::Buffer,
     materials_buf: wgpu::Buffer,
     atlas: wgpu::Texture,
@@ -255,6 +262,7 @@ impl Renderer {
                 buffer(5, true),
                 buffer(6, true),
                 buffer(7, false),
+                buffer(15, true),
                 wgpu::BindGroupLayoutEntry {
                     binding: 8,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -310,6 +318,9 @@ impl Renderer {
             records: Mirror::new(device, "massif render records", stride as usize * 64),
             tree: Mirror::new(device, "massif render tree", 0),
             voxels: Mirror::new(device, "massif render voxels", 0),
+            lights: Mirror::new(device, "massif render lights", cells as usize * 2),
+            chunk_lights: HashMap::new(),
+            lights_dirty: false,
             pyramid_buf: storage(device, "massif render pyramid", pyramid.data.len() as u64 * 4),
             materials_buf: storage(device, "massif render materials", 16 * 256),
             atlas,
@@ -445,6 +456,16 @@ impl Renderer {
             return true;
         }
         let cell = cz as usize * e.width as usize + cx as usize;
+        // Its lights, in the scene's blocks.
+        let lights: Vec<[u32; 4]> = chunk.lights.iter().map(|&[p, m]| [(cx as u32) * 16 + (p & 15), p >> 8, (cz as u32) * 16 + ((p >> 4) & 15), m]).collect();
+        if !lights.is_empty() || self.chunk_lights.contains_key(&(chunk.x, chunk.z)) {
+            self.lights_dirty = true;
+            if lights.is_empty() {
+                self.chunk_lights.remove(&(chunk.x, chunk.z));
+            } else {
+                self.chunk_lights.insert((chunk.x, chunk.z), lights);
+            }
+        }
         let slot = match self.residents.remove(&(chunk.x, chunk.z)) {
             Some(old) => {
                 self.garbage += old.tree_len as u64 + old.voxel_len as u64;
@@ -520,12 +541,63 @@ impl Renderer {
         self.garbage = 0;
     }
 
+    /// The lists of lights again: each chunk's, then for each chunk those
+    /// of it and of the 8 around it.
+    fn index_lights(&mut self) {
+        let e = self.extent;
+        let (w, d) = (e.width as i64, e.depth as i64);
+        let cells = (w * d) as usize;
+        let mut count = vec![0u32; cells];
+        let near = |x: i32, z: i32| {
+            let (cx, cz) = ((x - e.x0) as i64, (z - e.z0) as i64);
+            (-1..=1).flat_map(move |dz| (-1..=1).map(move |dx| (cx + dx, cz + dz))).filter(move |&(x, z)| x >= 0 && z >= 0 && x < w && z < d).map(move |(x, z)| (z * w + x) as usize)
+        };
+        for (&(x, z), list) in &self.chunk_lights {
+            for c in near(x, z) {
+                count[c] += list.len() as u32;
+            }
+        }
+        let mut words = vec![0u32; cells * 2];
+        let mut at = 0u32;
+        for c in 0..cells {
+            words[c * 2] = at;
+            at += count[c];
+        }
+        let mut entries = vec![0u32; at as usize * 4];
+        let mut fill = vec![0u32; cells];
+        for (&(x, z), list) in &self.chunk_lights {
+            for c in near(x, z) {
+                for l in list {
+                    let k = (words[c * 2] + fill[c]) as usize * 4;
+                    entries[k..k + 4].copy_from_slice(l);
+                    fill[c] += 1;
+                }
+            }
+        }
+        for c in 0..cells {
+            words[c * 2 + 1] = fill[c];
+        }
+        words.extend_from_slice(&entries);
+        let n = words.len();
+        self.lights.cpu = words;
+        self.lights.mark(0, n);
+        self.lights_dirty = false;
+    }
+
+    /// Lights in the scene.
+    pub fn light_count(&self) -> usize {
+        self.chunk_lights.values().map(Vec::len).sum()
+    }
+
     /// Send the scene's changes to the graphics card.
     pub fn flush(&mut self) {
+        if self.lights_dirty {
+            self.index_lights();
+        }
         let most = self.max_binding;
         let (device, queue) = (&self.device, &self.queue);
         let mut remade = false;
-        for m in [&mut self.grid, &mut self.records, &mut self.tree, &mut self.voxels] {
+        for m in [&mut self.grid, &mut self.records, &mut self.tree, &mut self.voxels, &mut self.lights] {
             match m.flush(device, queue, most) {
                 Ok(r) => remade |= r,
                 Err(()) => self.full = true,
@@ -606,6 +678,7 @@ impl Renderer {
                     entry(5, &self.pyramid_buf),
                     entry(6, &self.materials_buf),
                     entry(7, &image.accum),
+                    entry(15, &self.lights.gpu),
                     wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&image.storage) },
                     wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(&self.atlas_view) },
                     wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::Sampler(&self.sampler) },
@@ -630,7 +703,8 @@ impl Renderer {
             level_off[l] = at;
             level_w[l] = lw;
         }
-        let sun = light.sun_direction();
+        // The sun, or the moon at night.
+        let (sun, strength, tint) = light.source();
         let sea = (self.sea_level - origin[1]) as f32;
         // The sky as seen from the eyes' height over the sea, by the 10 m:
         // its tables are filled again only when that changes.
@@ -640,7 +714,7 @@ impl Renderer {
         if self.sky.update(&self.queue, &mut encoder, state) && !coarse {
             self.samples = 0;
         }
-        let tint = light.sun_tint.map(|c| c * light.sun_strength);
+        let tint = tint.map(|c| c * strength);
         let params = Params {
             eye: [eye[0], eye[1], eye[2], tan],
             right: [basis.right.x, basis.right.y, basis.right.z, w as f32 / h as f32],
@@ -783,7 +857,7 @@ impl Renderer {
 
     /// What the scene takes on the graphics card.
     pub fn memory(&self) -> Memory {
-        let scene = self.grid.gpu.size() + self.records.gpu.size() + self.tree.gpu.size() + self.voxels.gpu.size() + self.pyramid_buf.size() + self.materials_buf.size();
+        let scene = self.grid.gpu.size() + self.records.gpu.size() + self.tree.gpu.size() + self.voxels.gpu.size() + self.lights.gpu.size() + self.pyramid_buf.size() + self.materials_buf.size();
         let textures = {
             let s = self.atlas.size();
             (s.width as u64 * s.height as u64 * 4 * s.depth_or_array_layers as u64) * 4 / 3

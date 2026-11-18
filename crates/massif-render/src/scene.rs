@@ -40,6 +40,10 @@ pub struct GpuChunk {
     pub entries: Vec<u32>,
     pub tree: Vec<u32>,
     pub voxels: Vec<u16>,
+    /// The blocks that give light, seen or not (a torch is not drawn yet):
+    /// `x | z << 4 | y << 8` in the chunk (y from the bottom of the scene),
+    /// and their material.
+    pub lights: Vec<[u32; 2]>,
 }
 
 impl GpuChunk {
@@ -111,8 +115,9 @@ impl Patch {
         }
     }
 
-    /// Build every chunk of the patch.
-    pub fn build(&self, classes: &[Class]) -> Vec<GpuChunk> {
+    /// Build every chunk of the patch; `lights`: the light each material
+    /// gives (the game's levels).
+    pub fn build(&self, classes: &[Class], lights: &[u8]) -> Vec<GpuChunk> {
         // Whether each section is opaque throughout, to leave the buried
         // ones out without looking at their blocks.
         let solid: Vec<Vec<bool>> = self.chunks.iter().map(|c| c.as_ref().map_or_else(Vec::new, |c| c.sections.iter().map(|s| all_opaque(classes, s)).collect())).collect();
@@ -130,7 +135,7 @@ impl Patch {
         for cz in 0..self.depth as i32 {
             for cx in 0..self.width as i32 {
                 let Some(chunk) = &self.chunks[cz as usize * self.width + cx as usize] else { continue };
-                let mut gpu = GpuChunk { x: chunk.x, z: chunk.z, top: 0, entries: vec![0; self.sections], tree: Vec::new(), voxels: Vec::new() };
+                let mut gpu = GpuChunk { x: chunk.x, z: chunk.z, top: 0, entries: vec![0; self.sections], tree: Vec::new(), voxels: Vec::new(), lights: Vec::new() };
                 for s in 0..self.sections as i32 {
                     let section = &chunk.sections[s as usize];
                     if *section == Section::EMPTY {
@@ -140,7 +145,7 @@ impl Patch {
                     if buried {
                         continue;
                     }
-                    if let Some(high) = self.build_section(classes, cx, cz, s, section, &mut gpu, &mut scratch) {
+                    if let Some(high) = self.build_section(classes, lights, cx, cz, s, section, &mut gpu, &mut scratch) {
                         gpu.top = gpu.top.max((s * 16 + high + 1) as u32);
                     }
                 }
@@ -153,7 +158,7 @@ impl Patch {
     /// The tree of one section into its chunk; the highest block kept in
     /// it, if any.
     #[allow(clippy::too_many_arguments)]
-    fn build_section(&self, classes: &[Class], cx: i32, cz: i32, s: i32, section: &Section, gpu: &mut GpuChunk, scratch: &mut Scratch) -> Option<i32> {
+    fn build_section(&self, classes: &[Class], lights: &[u8], cx: i32, cz: i32, s: i32, section: &Section, gpu: &mut GpuChunk, scratch: &mut Scratch) -> Option<i32> {
         // The classes of the section with a border of one block around it
         // (its faces' neighbours only: no ray goes diagonally).
         const P: usize = 18;
@@ -193,6 +198,11 @@ impl Patch {
                     kept[(y * 16 + z) * 16 + x] = show;
                     if show {
                         high = Some(y as i32);
+                    }
+                    // A light seen, or one not drawn (a torch).
+                    let m = mats[(y * 16 + z) * 16 + x];
+                    if lights.get(m as usize).is_some_and(|&l| l > 0) && (show || c == Class::Air) {
+                        gpu.lights.push([x as u32 | (z as u32) << 4 | ((s as u32) * 16 + y as u32) << 8, m as u32]);
                     }
                 }
             }
@@ -389,7 +399,7 @@ mod tests {
                 patch.put(ground(cx, cz));
             }
         }
-        let built = patch.build(&CLASSES);
+        let built = patch.build(&CLASSES, &[0; 8]);
         assert_eq!(built.len(), 9);
         let c = built.iter().find(|c| (c.x, c.z) == (1, 1)).unwrap();
         assert_eq!(c.top, 46, "the trunk's top");
@@ -420,7 +430,7 @@ mod tests {
                 let edge: Vec<u8> = (0..16 * 64).map(|k| (k % 64 < 40) as u8).collect();
                 patch.edges = [Some(edge.clone()), Some(edge.clone()), Some(edge.clone()), Some(edge)];
             }
-            let built = patch.build(&CLASSES);
+            let built = patch.build(&CLASSES, &[0; 8]);
             built[0].tree.chunks(3).map(|b| (b[0].count_ones() + b[1].count_ones()) as usize).sum::<usize>()
         };
         let (blind, known) = (build(false), build(true));
@@ -432,7 +442,7 @@ mod tests {
         // Leaves let the light through: every one of them can be seen.
         let mut patch = Patch::new(0, 0, 1, 1, 4);
         patch.put(Chunk { x: 0, z: 0, sections: vec![Section::Uniform(7), Section::EMPTY, Section::EMPTY, Section::EMPTY] });
-        let built = patch.build(&CLASSES);
+        let built = patch.build(&CLASSES, &[0; 8]);
         assert_eq!(built[0].entries[0], UNIFORM | 7);
         assert!(built[0].tree.is_empty() && built[0].voxels.is_empty());
         assert_eq!(built[0].top, 16);

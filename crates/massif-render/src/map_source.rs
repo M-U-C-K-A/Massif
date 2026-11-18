@@ -156,7 +156,7 @@ impl MapBuilder {
                                         }
                                     }
                                 }
-                                Some(Built { tile: pos, chunks: patch.build(&materials.classes()) })
+                                Some(Built { tile: pos, chunks: patch.build(&materials.classes(), &materials.lights()) })
                             },
                         )
                         .for_each_with(tx.clone(), |tx, built| {

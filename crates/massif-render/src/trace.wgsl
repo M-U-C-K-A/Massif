@@ -38,6 +38,9 @@ struct Params {
 @group(0) @binding(12) var multi_lut: texture_2d<f32>;
 @group(0) @binding(13) var sky_view_lut: texture_2d<f32>;
 @group(0) @binding(14) var lut_sampler: sampler;
+// For every chunk, where its list of lights starts and how many: those of
+// it and of the 8 chunks around; then the lists, [x, y, z, material] each.
+@group(0) @binding(15) var<storage, read> lights: array<u32>;
 
 const UNIFORM: u32 = 0x80000000u;
 const CLASS_CUTOUT: u32 = 2u;
@@ -228,7 +231,7 @@ fn trace(ro: vec3<f32>, rd: vec3<f32>, tmax: f32) -> Hit {
             }
         }
         if (mat != 0u && axis >= 0) {
-            let m = materials[mat];
+            let m = materials[mat * 2u];
             var stops = true;
             if (class_of(m) == CLASS_CUTOUT) {
                 // Through the holes of leaves and glass.
@@ -534,11 +537,48 @@ fn tonemap(c: vec3<f32>) -> vec3<f32> {
     return pow(mapped, vec3<f32>(1.0 / 2.2));
 }
 
+// The light of one of the glowing blocks near p (those of its chunk and
+// the 8 around), drawn at random among them: a point in the block, a
+// shadow ray, and the falloff with distance.
+fn block_light(p: vec3<f32>, n: vec3<f32>, albedo: vec3<f32>, seed: ptr<function, u32>) -> vec3<f32> {
+    if (P.media.z <= 0.0) {
+        return vec3<f32>(0.0);
+    }
+    let c = clamp(vec2<i32>(floor(p.xz / 16.0)), vec2<i32>(0), vec2<i32>(P.grid.x - 1, P.grid.y - 1));
+    let cell = u32(c.y * P.grid.x + c.x) * 2u;
+    let count = lights[cell + 1u];
+    if (count == 0u) {
+        return vec3<f32>(0.0);
+    }
+    let k = lights[cell] + min(u32(rand(seed) * f32(count)), count - 1u);
+    let at = u32(P.grid.x * P.grid.y) * 2u + k * 4u;
+    let jitter = vec3<f32>(rand(seed), rand(seed), rand(seed)) * 0.5 + 0.25;
+    let q = vec3<f32>(f32(lights[at]), f32(lights[at + 1u]), f32(lights[at + 2u])) + jitter;
+    let glow = materials[lights[at + 3u] * 2u + 1u].x;
+    let to = q - p;
+    let d2 = max(dot(to, to), 0.25);
+    let d = sqrt(d2);
+    let l = to / d;
+    let ndl = dot(n, l);
+    if (ndl <= 0.0) {
+        return vec3<f32>(0.0);
+    }
+    // Up to the light's own block, which it lights from inside.
+    let shadow = trace(p, l, max(d - 0.75, 0.0));
+    if (shadow.found) {
+        return vec3<f32>(0.0);
+    }
+    let level = f32(glow >> 24u) / 15.0;
+    let intensity = level * level * 24.0 * P.media.z;
+    return albedo / PI * unpack_rgb(glow) * intensity * ndl / d2 * f32(count);
+}
+
 fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec3<f32> {
     var ro = ro_in;
     var rd = rd_in;
     var throughput = vec3<f32>(1.0);
     var sum = vec3<f32>(0.0);
+    var last_chunk = vec2<i32>(-1000000);
     for (var bounce = 0u; bounce <= P.info.z; bounce++) {
         let hit = trace(ro, rd, 1e30);
         if (bounce == 0u) {
@@ -561,7 +601,8 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
             sum += throughput * s;
             break;
         }
-        let m = materials[hit.mat];
+        let m = materials[hit.mat * 2u];
+        let glow = materials[hit.mat * 2u + 1u].x;
         let p = ro + rd * hit.t;
         var n = vec3<f32>(0.0);
         n[hit.axis] = -sign(rd[hit.axis]);
@@ -572,9 +613,18 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
         let top = hit.axis == 1 && rd.y < 0.0;
         let albedo = tex.rgb * unpack_rgb(select(m.w, m.z, top));
         if (((m.y >> 21u) & 1u) != 0u) {
-            sum += throughput * albedo * 6.0 * P.media.z;
+            // A glowing block seen: by the eyes, or by a bounce from too far
+            // for its light to be among those drawn there (block_light).
+            let c = vec2<i32>(floor(p.xz / 16.0));
+            if (bounce == 0u || any(abs(c - last_chunk) > vec2<i32>(1))) {
+                let level = f32(glow >> 24u) / 15.0;
+                sum += throughput * albedo * (8.0 * level * P.media.z);
+            }
         }
         let pos = p + n * EPS;
+        // The glowing blocks around, one drawn among them.
+        sum += throughput * block_light(pos, n, albedo, seed);
+        last_chunk = vec2<i32>(floor(pos.xz / 16.0));
         // The sun, straight.
         let l = sun_sample(seed);
         let ndl = dot(n, l);
