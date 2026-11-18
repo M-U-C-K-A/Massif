@@ -260,6 +260,10 @@ impl MaskForm {
                     self.placement_fields(ui);
                     ui.add_space(10.0);
                     self.reference_ui(ui);
+                    if self.zone.is_some() {
+                        ui.add_space(10.0);
+                        self.zone_ui(ui);
+                    }
                 });
             });
         });

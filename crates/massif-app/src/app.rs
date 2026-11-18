@@ -43,6 +43,15 @@ pub(crate) enum ThemeChoice {
     Dark,
 }
 
+/// A map's shared folder on this computer: the map's identifier, the
+/// folder, and whether this person keeps the map.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct DepotLink {
+    map: String,
+    path: PathBuf,
+    owner: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 struct Settings {
@@ -111,11 +120,14 @@ struct Settings {
     /// The suggestion of a lighter graphics preset when the 3D views stay
     /// slow was dismissed: it is not made again.
     no_slow_note: bool,
-    /// The author written in the packs exported.
+    /// The author written in the packs exported, and the name versions and
+    /// contributions are signed with.
     pack_author: String,
     /// The 2D map shows the biomes while a biome tool is in hand, the
     /// terrains while a terrain one is (Settings ▸ Appearance).
     map_follows_tool: bool,
+    /// The shared folders of the maps (see `collab::DepotState`), by map.
+    depots: Vec<DepotLink>,
     /// The language of the interface: the system's, or one chosen.
     language: crate::i18n::Language,
     /// The keyboard shortcuts: a preset and what was changed in it.
@@ -197,6 +209,7 @@ impl Default for Settings {
             no_slow_note: false,
             pack_author: String::new(),
             map_follows_tool: true,
+            depots: Vec::new(),
             language: crate::i18n::Language::System,
             tour_done: false,
             origin_asked: false,
@@ -408,6 +421,10 @@ enum Dialog {
     PointName(Option<usize>, String),
     /// A save point to delete, once sure.
     DeletePoint(usize),
+    /// An area of the contribution under review in conflict, to settle.
+    Resolve(Box<crate::collab::Resolver>),
+    /// The map's changes since a version, to write as a `.massifpatch`.
+    ExportChanges(Box<crate::collab::ExportForm>),
     /// Massif stopped on an error during a frame: what it said, and the
     /// copy of the map written then.
     Crashed(String, Option<PathBuf>),
@@ -2411,7 +2428,318 @@ impl MassifApp {
                 }
             }
             Action::Compare(index) => self.versions.compare_with(&self.doc.world.points, index),
+            Action::Home(crate::collab::HomeAction::Start) => self.versions_action(ctx, Action::Make),
+            Action::Home(crate::collab::HomeAction::Import) => self.import_contribution(ctx),
+            Action::Home(crate::collab::HomeAction::ExportZone) => self.command(ctx, crate::menu::Command::ExportRegion),
+            Action::Review(a) => self.review_action(ctx, a),
+            Action::Share(a) => self.share_action(ctx, a),
         }
+    }
+
+    /// What the Versions panel's Share part asks.
+    fn share_action(&mut self, ctx: &egui::Context, action: crate::collab::ShareAction) {
+        use crate::collab::ShareAction;
+        use massif_format::depot::Depot;
+        if self.doc.read_only.is_some() {
+            return;
+        }
+        match action {
+            ShareAction::ExportChanges => {
+                if self.doc.world.points.is_empty() {
+                    self.say(ctx, tr!("Make a version of the map first: the changes are counted from one"), true, None);
+                    return;
+                }
+                let mut form = crate::collab::ExportForm::new(&self.doc.world, &self.settings.pack_author);
+                if let Some(d) = &self.versions.depot {
+                    form.folder = Some(d.depot.describe());
+                    form.into_folder = true;
+                }
+                self.dialog = Some(Dialog::ExportChanges(Box::new(form)));
+            }
+            ShareAction::Import => self.import_contribution(ctx),
+            ShareAction::ExportZone => self.command(ctx, crate::menu::Command::ExportRegion),
+            ShareAction::ChooseFolder => self.choose_depot(ctx),
+            ShareAction::Publish => self.publish_map(ctx),
+            ShareAction::Review(i) => {
+                let Some(path) = self.versions.depot.as_ref().and_then(|d| d.waiting.get(i)).map(|w| w.path.clone()) else { return };
+                let snapshot = self.doc.world.snapshot();
+                self.jobs.push(Job::review_patch(ctx, path, snapshot, self.doc.revision).on(self.doc.generation));
+            }
+            ShareAction::SetAside(i) => {
+                let Some(d) = &mut self.versions.depot else { return };
+                let Some(w) = d.waiting.get(i) else { return };
+                let (id, who) = (w.manifest.id, w.manifest.author.clone());
+                match d.depot.mark_merged(id) {
+                    Ok(()) => {
+                        d.refresh();
+                        let who = if who.is_empty() { tr!("someone").to_owned() } else { who };
+                        self.say(ctx, tr!("Set aside the contribution of {who}: it is still in the folder", who), false, None);
+                    }
+                    Err(e) => self.say(ctx, tr!("The shared folder could not be written: {e}", e), true, None),
+                }
+            }
+        }
+    }
+
+    /// Look for the map's shared folder, when the map or its file changed:
+    /// the one chosen for it on this computer, or the folder the map was
+    /// opened from when it is a shared folder of this map. Read its
+    /// contributions again from time to time.
+    fn sync_depot(&mut self) {
+        let key = (self.doc.world.meta.map_id, self.doc.path.clone());
+        if self.versions.depot_key.as_ref() != Some(&key) {
+            self.versions.depot_key = Some(key.clone());
+            self.versions.depot = None;
+            if let Some(map) = key.0 {
+                let hex = map.hex();
+                let linked = self.settings.depots.iter().find(|l| l.map == hex).cloned();
+                let found = match linked {
+                    Some(link) => massif_format::depot::FolderDepot::open(&link.path).ok().map(|d| (d, link.owner)),
+                    None => key.1.as_ref().and_then(|p| p.parent()).and_then(|dir| massif_format::depot::FolderDepot::open(dir).ok()).map(|d| {
+                        // Opened from the shared folder: a contributor's link.
+                        self.settings.depots.push(DepotLink { map: hex.clone(), path: d.root().to_path_buf(), owner: false });
+                        (d, false)
+                    }),
+                };
+                use massif_format::depot::Depot;
+                self.versions.depot = found.filter(|(d, _)| d.info().map == map).map(|(d, owner)| crate::collab::DepotState::new(d, owner));
+            }
+        }
+        if let Some(d) = &mut self.versions.depot
+            && d.due()
+        {
+            d.refresh();
+        }
+    }
+
+    /// Choose the map's shared folder: a depot of this map already, or a
+    /// folder to make one (the map then kept by this person).
+    fn choose_depot(&mut self, ctx: &egui::Context) {
+        if self.doc.world.points.is_empty() {
+            self.say(ctx, tr!("Make a version of the map first: a shared folder holds the map from a version"), true, None);
+            return;
+        }
+        let Some(folder) = rfd::FileDialog::new().set_title(tr!("The shared folder of the map")).pick_folder() else { return };
+        self.link_depot(ctx, folder);
+    }
+
+    /// Make `folder` the map's shared folder (see [`MassifApp::choose_depot`]).
+    fn link_depot(&mut self, ctx: &egui::Context, folder: PathBuf) {
+        use massif_format::depot::Depot;
+        if self.doc.world.meta.map_id.is_none() {
+            self.doc.world.map_id();
+            self.doc.mark_changed();
+        }
+        let me = self.settings.pack_author.trim().to_owned();
+        let existed = folder.join(massif_format::depot::DEPOT_FILE).exists();
+        match massif_format::depot::FolderDepot::create(&folder, &self.doc.world, &me) {
+            Ok(depot) => {
+                let owner = !existed || (!me.is_empty() && depot.info().owner == me);
+                let hex = depot.info().map.hex();
+                self.settings.depots.retain(|l| l.map != hex);
+                self.settings.depots.push(DepotLink { map: hex, path: folder.clone(), owner });
+                let name = depot.describe();
+                let msg = if existed {
+                    tr!("Linked to the shared folder “{name}”", name)
+                } else {
+                    tr!("“{name}” is the map's shared folder now: Publish puts the map in it for others to start from", name)
+                };
+                self.versions.depot_key = Some((self.doc.world.meta.map_id, self.doc.path.clone()));
+                self.versions.depot = Some(crate::collab::DepotState::new(depot, owner));
+                self.say(ctx, msg, false, Some(folder));
+            }
+            Err(e) => self.say(ctx, tr!("That folder cannot be the map's shared folder: {e}", e), true, None),
+        }
+    }
+
+    /// Publish the map into its shared folder: as the version it stands on
+    /// when it is as it was then, or as a new version.
+    fn publish_map(&mut self, ctx: &egui::Context) {
+        let Some(d) = &self.versions.depot else { return };
+        if !d.owner {
+            return;
+        }
+        let depot = d.depot.clone();
+        let head = self.doc.world.meta.head.and_then(|h| self.doc.world.points.iter().find(|p| p.id == h)).cloned();
+        let snapshot = self.doc.world.snapshot();
+        let point = match head {
+            Some(h) if massif_core::versions::unchanged_since(&snapshot, &h) => h,
+            _ => {
+                let mut point = massif_core::versions::SavePoint::new(&mut self.doc.world, tr!("Published"), massif_core::versions::now());
+                point.author = self.settings.pack_author.clone();
+                self.doc.world.points.push(point.clone());
+                self.doc.mark_changed();
+                point
+            }
+        };
+        let snapshot = self.doc.world.snapshot();
+        self.jobs.push(Job::publish(ctx, depot, snapshot, point).on(self.doc.generation));
+    }
+
+    /// Show `kind` in an area if none shows it: in place of the tools'
+    /// settings, or else of the first area that is not a view of the map.
+    fn show_editor(&mut self, kind: EditorKind) {
+        let root = &mut self.layout.current_mut().root;
+        if root.shows(kind) {
+            return;
+        }
+        let mut areas = Vec::new();
+        root.areas(&mut areas);
+        let pick = areas
+            .iter()
+            .find(|a| a.1 == EditorKind::ToolSettings)
+            .or_else(|| areas.iter().find(|a| !matches!(a.1, EditorKind::Map | EditorKind::View3d | EditorKind::Sculpt3d | EditorKind::GraphView)));
+        if let Some(&(id, _)) = pick {
+            root.set_editor(id, kind);
+        }
+    }
+
+    /// The branch a new version goes on: the map's own line, but for a
+    /// contributor of its shared folder, whose versions go on a branch of
+    /// their name.
+    fn branch(&self) -> String {
+        if self.versions.depot.as_ref().is_none_or(|d| d.owner) {
+            return String::new();
+        }
+        let name: String = self.settings.pack_author.trim().to_lowercase().chars().map(|c| if c.is_alphanumeric() { c } else { '-' }).collect();
+        let name = name.trim_matches('-').to_owned();
+        if name.is_empty() { tr!("my-changes").to_owned() } else { name }
+    }
+
+    /// Pick a contribution to review: a `.massifpatch`, or the zone.json
+    /// (or any file) of a zone brought back from another tool, whose
+    /// images are read for Import Mask's dialog to review them.
+    fn import_contribution(&mut self, ctx: &egui::Context) {
+        if self.doc.read_only.is_some() {
+            return;
+        }
+        let Some(path) = rfd::FileDialog::new()
+            .set_title(tr!("A contribution to review"))
+            .add_filter(tr!("Contribution or zone"), &[massif_core::patch::EXTENSION, "json", "txt", "png", "tif", "tiff"])
+            .pick_file()
+        else {
+            return;
+        };
+        if path.extension().is_some_and(|e| e.eq_ignore_ascii_case(massif_core::patch::EXTENSION)) {
+            let snapshot = self.doc.world.snapshot();
+            self.jobs.push(Job::review_patch(ctx, path, snapshot, self.doc.revision).on(self.doc.generation));
+            return;
+        }
+        // A zone: every image of its folder.
+        let Some(dir) = path.parent() else { return };
+        let mut images: Vec<PathBuf> = std::fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().and_then(|e| e.to_str()).is_some_and(|e| ["png", "jpg", "jpeg", "tif", "tiff", "bmp"].contains(&e.to_ascii_lowercase().as_str())))
+                    .collect()
+            })
+            .unwrap_or_default();
+        images.sort();
+        if images.is_empty() {
+            self.say(ctx, tr!("No image in that folder: a zone comes back as the images Export Region wrote, beside its zone.json"), true, None);
+            return;
+        }
+        let snapshot = self.doc.world.snapshot();
+        self.jobs.push(Job::read_mask(ctx, images, Some(snapshot)).on(self.doc.generation));
+    }
+
+    /// What the review of a contribution asks.
+    fn review_action(&mut self, ctx: &egui::Context, action: crate::collab::ReviewAction) {
+        use crate::collab::ReviewAction;
+        match action {
+            ReviewAction::Cancel => {
+                self.versions.reviewing = None;
+                self.dialog = None;
+            }
+            ReviewAction::Show(i) => {
+                let Some(r) = &self.versions.reviewing else { return };
+                let Some(area) = r.review.areas.get(i) else { return };
+                if area.dim != self.doc.dim && area.dim < self.doc.world.dims.len() {
+                    self.doc.dim = area.dim;
+                }
+                let rect = area.rect();
+                for view in self.maps.values_mut() {
+                    view.glide_to(rect);
+                }
+            }
+            ReviewAction::Resolve(i) => {
+                if let Some(r) = &self.versions.reviewing
+                    && i < r.review.areas.len()
+                {
+                    self.dialog = Some(Dialog::Resolve(Box::new(crate::collab::Resolver::new(r, i))));
+                }
+            }
+            ReviewAction::Apply => self.apply_review(ctx),
+        }
+    }
+
+    /// Merge what was accepted of the contribution under review: one step
+    /// to undo, then a version of the map as it is after.
+    fn apply_review(&mut self, ctx: &egui::Context) {
+        if self.doc.read_only.is_some() {
+            return;
+        }
+        let Some(mut r) = self.versions.reviewing.take() else { return };
+        let map = self.doc.world.snapshot();
+        // The map changed during the review: what the owner accepted may be
+        // in conflict now.
+        if self.doc.revision != r.revision {
+            let fresh = massif_core::merge::classify(&map, &r.patch);
+            let worse = r.review.areas.iter().zip(&r.verdicts).any(|(a, v)| {
+                *v == crate::collab::Verdict::Accepted && a.tiles.iter().any(|&(p, _)| fresh.items.iter().any(|it| it.dim == a.dim && it.pos == p && it.status == massif_core::merge::Status::Conflict))
+            });
+            if worse {
+                let ready = crate::collab::ReviewReady { patch: r.patch.clone(), review: fresh, registry: r.registry.clone(), added: r.added.clone(), source: r.source.clone(), base_known: r.base_known, revision: self.doc.revision };
+                self.versions.reviewing = Some(crate::collab::Reviewing::new(ready));
+                self.say(ctx, tr!("The map changed during the review and some accepted tiles are in conflict now: look at them again"), true, None);
+                return;
+            }
+            r.revision = self.doc.revision;
+        }
+        let decision = r.decision();
+        let (meta, _, dims) = massif_core::merge::apply(&map, &r.patch, &decision);
+        let m = &r.patch.manifest;
+        let from = if m.kind == massif_core::patch::Kind::External {
+            tr!("the zone").to_owned()
+        } else if m.author.is_empty() {
+            m.base.name.clone()
+        } else {
+            m.author.clone()
+        };
+        let label = tr!("Merge of {from}", from);
+        self.doc.history.replace_world(&mut self.doc.world, meta, r.registry.clone(), dims, label.clone());
+        // Merged from the shared folder: no longer waiting there.
+        if let Some(d) = &mut self.versions.depot
+            && d.owner
+            && m.kind == massif_core::patch::Kind::Contribution
+        {
+            use massif_format::depot::Depot;
+            if d.depot.info().map == m.map && d.depot.mark_merged(m.id).is_ok() {
+                d.refresh();
+            }
+        }
+        self.doc.mark_changed();
+        self.map_cache.invalidate_all();
+        self.view3d.invalidate_all();
+        self.sculpt3d.invalidate_all();
+        // The version after it: on the map's line, merging the
+        // contributor's last version when it came from another copy.
+        let other = match m.kind {
+            massif_core::patch::Kind::External => None,
+            _ => Some(m.head.as_ref().map_or(m.base.id, |h| h.id)),
+        };
+        let name = match m.kind {
+            massif_core::patch::Kind::External => tr!("Zone brought back").to_owned(),
+            _ if !m.message.is_empty() => tr!("Merged: {message}", message = m.message),
+            _ => tr!("Merged from {from}", from),
+        };
+        let snapshot = massif_core::versions::SavePoint::copy_of(&mut self.doc.world);
+        let branch = self.branch();
+        self.jobs.push(Job::merge_point(ctx, snapshot, name, other, self.settings.pack_author.clone(), branch).on(self.doc.generation));
+        let n = decision.take.len();
+        self.say(ctx, trn!("Merged {n} tile from {from}: undo to take it back", "Merged {n} tiles from {from}: undo to take it back", n = n, from), false, None);
     }
 
     /// Pick images to import as masks, and read them in the background:
@@ -2601,7 +2929,16 @@ impl MassifApp {
         if self.jobs.iter().any(|j| j.kind == jobs::JobKind::Save) {
             return true;
         }
-        let save_as = save_as || self.doc.read_only.is_some();
+        // The map of a shared folder is its owner's to write: a contributor
+        // saves their work as a map of their own.
+        let shared = self.versions.depot.as_ref().is_some_and(|d| {
+            use massif_format::depot::Depot;
+            !d.owner && d.depot.published_map().is_some_and(|p| Some(&p) == self.doc.path.as_ref())
+        });
+        if shared && !save_as {
+            self.say(ctx, tr!("This is the shared folder's map, its owner's to write: save your work as a map of your own"), false, None);
+        }
+        let save_as = save_as || self.doc.read_only.is_some() || shared;
         let path = match (&self.doc.path, save_as) {
             (Some(p), false) => Some(p.clone()),
             _ => rfd::FileDialog::new()
@@ -2848,6 +3185,8 @@ impl MassifApp {
                         self.say(ctx, tr!("The save point “{name}” was dropped: {meanwhile}", name = point.name, meanwhile), true, None);
                     } else {
                         let name = point.name.clone();
+                        // The map now stands on this version.
+                        self.doc.world.meta.head = Some(point.id);
                         self.doc.world.points.push(point);
                         self.doc.mark_changed();
                         let msg = match &self.doc.path {
@@ -2997,11 +3336,49 @@ impl MassifApp {
                         self.say(ctx, note.map_or_else(|| msg.clone(), |n| format!("{msg}. {n}")), false, None);
                     }
                 }
-                Outcome::RegionExported { dir, files } => {
+                Outcome::RegionExported { dir, files, point, zone } => {
                     let n = files.len().saturating_sub(1);
-                    let msg = tr!("Exported the region: {n} images and region.txt in {secs:.1} s", n, secs);
+                    if let Some(point) = point
+                        && !other_map
+                    {
+                        self.doc.world.meta.head = Some(point.id);
+                        self.doc.world.points.push(point);
+                        self.doc.mark_changed();
+                    }
+                    let msg = if zone {
+                        tr!("Exported the region: {n} images, region.txt and zone.json in {secs:.1} s. Bring it back with Versions ▸ Import a contribution…", n, secs)
+                    } else {
+                        tr!("Exported the region: {n} images and region.txt in {secs:.1} s", n, secs)
+                    };
                     self.task_done(ctx, Cue::Ready, tr!("Region exported"), &msg, secs);
                     self.say(ctx, msg, false, Some(dir));
+                }
+                Outcome::Review(ready) => {
+                    if !other_map {
+                        let r = crate::collab::Reviewing::new(*ready);
+                        let msg = if r.review.areas.is_empty() {
+                            tr!("Nothing in it differs from the map").to_owned()
+                        } else {
+                            trn!("To review in the Versions panel: {n} area of changed tiles", "To review in the Versions panel: {n} areas of changed tiles", n = r.review.areas.len())
+                        };
+                        self.versions.compare = None;
+                        self.versions.reviewing = Some(r);
+                        self.show_editor(EditorKind::Versions);
+                        self.say(ctx, msg, false, None);
+                    }
+                }
+                Outcome::Published { name, path } => {
+                    // Read the folder again: its published version changed.
+                    self.versions.depot_key = None;
+                    let msg = tr!("Published “{name}” in the shared folder: contributors start from it", name);
+                    self.task_done(ctx, Cue::Ready, tr!("Map published"), &msg, secs);
+                    self.say(ctx, msg, false, path.parent().map(|p| p.to_path_buf()));
+                }
+                Outcome::PatchWritten { path, tiles, bytes } => {
+                    let msg = trn!("Wrote {n} tile ({size}) to {file}", "Wrote {n} tiles ({size}) to {file}", n = tiles, size = crate::collab::bytes(bytes), file = crate::jobs::display_name(&path));
+                    self.task_done(ctx, Cue::Ready, tr!("Contribution written"), &msg, secs);
+                    let dir = path.parent().map(|d| d.to_path_buf());
+                    self.say(ctx, msg, false, dir);
                 }
                 Outcome::MaskRead { images, map, columns } => {
                     if let Some(Dialog::ImportMask(form)) = &mut self.dialog {
@@ -3010,7 +3387,19 @@ impl MassifApp {
                         let dim = &self.doc.world.dims[self.doc.dim];
                         let t = massif_core::TILE_SIZE;
                         let bounds = dim.bounds().map_or([0, 0, t, t], |(a, b)| [a.x * t, a.z * t, (b.x + 1) * t, (b.z + 1) * t]);
-                        let form = crate::import_mask::MaskForm::new(images, &self.doc.world.registry, bounds, (dim.min_y, dim.max_y), self.doc.world.meta.sea_level, map, columns);
+                        // Images of a zone of this map exported to come back:
+                        // reviewed against the version it left from.
+                        let zone = images
+                            .first()
+                            .and_then(|(p, _)| p.parent())
+                            .and_then(massif_core::patch::Zone::read)
+                            .filter(|z| self.doc.world.meta.map_id == Some(z.map));
+                        let mut form = crate::import_mask::MaskForm::new(images, &self.doc.world.registry, bounds, (dim.min_y, dim.max_y), self.doc.world.meta.sea_level, map, columns);
+                        if let Some(zone) = zone {
+                            let base = self.doc.world.points.iter().position(|p| p.id == zone.base.id);
+                            form.review = base.is_some();
+                            form.zone = Some((zone, base));
+                        }
                         self.dialog = Some(Dialog::ImportMask(Box::new(form)));
                     }
                 }
@@ -3276,11 +3665,36 @@ impl MassifApp {
             let title = format!("{}{}", self.doc.title(), if self.doc.is_modified() { " •" } else { "" });
             let bar = ui.max_rect();
             let left = ui.cursor().min.x;
-            // The right end holds no button of its own (the theme is in
-            // Settings ▸ Appearance and the View menu): only the offer of a
-            // newer version, at the bar's margin, as the first command is at
+            // The right end: the map's Versions button, and the offer of a
+            // newer version, at the bar's margin as the first command is at
             // the left one.
+            self.sync_depot();
             let right = ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                // The map's versions: the one it stands on, its branch, and a
+                // dot when a contribution waits or is under review.
+                if self.has_map {
+                    let points = &self.doc.world.points;
+                    let head = self.doc.world.meta.head.and_then(|h| points.iter().find(|p| p.id == h));
+                    let label = match head {
+                        Some(p) if !p.branch.is_empty() => format!("{} · {}", p.branch, p.name),
+                        Some(p) => p.name.clone(),
+                        None => tr!("Versions").to_owned(),
+                    };
+                    let waiting = self.versions.depot.as_ref().map_or(0, |d| d.waiting.len());
+                    let reviewing = self.versions.reviewing.is_some();
+                    let dot = (waiting > 0 || reviewing).then_some(pal.accent);
+                    let tip = if reviewing {
+                        tr!("A contribution is under review in the Versions panel").to_owned()
+                    } else if waiting > 0 {
+                        trn!("{n} contribution waits in the shared folder", "{n} contributions wait in the shared folder", n = waiting)
+                    } else {
+                        tr!("The map's versions, branches and contributions").to_owned()
+                    };
+                    let branch = head.is_some_and(|p| !p.branch.is_empty());
+                    if versions_pill(ui, &label, branch, dot).on_hover_text(tip).clicked() {
+                        self.show_editor(EditorKind::Versions);
+                    }
+                }
                 if let Some(version) = self.update_offer().map(|r| r.tag_name.trim_start_matches('v').to_owned())
                     && update_pill(ui, &version).clicked()
                 {
@@ -4334,6 +4748,7 @@ impl MassifApp {
                 }
             }
             EditorKind::Versions => {
+                self.sync_depot();
                 let busy = self.jobs.iter().any(|j| j.kind == jobs::JobKind::SavePoint);
                 let mut action = None;
                 scrolled(&mut cui, &mut |ui| action = self.versions.panel(ui, &self.doc, busy));
@@ -4896,7 +5311,8 @@ impl MassifApp {
                             }
                             None => {
                                 let snapshot = massif_core::versions::SavePoint::copy_of(&mut self.doc.world);
-                                self.jobs.push(Job::save_point(ctx, snapshot, name).on(self.doc.generation));
+                                let branch = self.branch();
+                                self.jobs.push(Job::merge_point(ctx, snapshot, name, None, self.settings.pack_author.clone(), branch).on(self.doc.generation));
                             }
                         }
                     }
@@ -5027,6 +5443,80 @@ impl MassifApp {
                     }
                 }
             }
+            Dialog::Resolve(mut resolver) => {
+                let Some(reviewing) = self.versions.reviewing.as_mut() else { return };
+                if resolver.area >= reviewing.review.areas.len() {
+                    return;
+                }
+                if resolver.needs_pictures() {
+                    let map = self.doc.world.snapshot();
+                    resolver.draw_pictures(ctx, &map, reviewing);
+                }
+                let mut choice = crate::collab::ResolverChoice::Keep;
+                let response = modal(ctx, "resolve conflict").show(ctx, |ui| {
+                    choice = resolver.ui(ui, reviewing);
+                });
+                match choice {
+                    crate::collab::ResolverChoice::Done(taken) => {
+                        reviewing.verdicts[resolver.area] = crate::collab::Verdict::Resolved(taken);
+                    }
+                    crate::collab::ResolverChoice::Cancel => {}
+                    crate::collab::ResolverChoice::Keep => {
+                        if !response.should_close() {
+                            self.dialog = Some(Dialog::Resolve(resolver));
+                        }
+                    }
+                }
+            }
+            Dialog::ExportChanges(mut form) => {
+                use crate::collab::ExportChoice;
+                let mut choice = ExportChoice::Keep;
+                let response = modal(ctx, "export changes").show(ctx, |ui| {
+                    choice = form.ui(ui);
+                });
+                match choice {
+                    ExportChoice::Export if form.into_folder && self.versions.depot.is_some() => {
+                        let author = form.author.trim().to_owned();
+                        self.settings.pack_author = author.clone();
+                        if let (Some(base), Some(d)) = (self.doc.world.points.get(form.base).cloned(), &self.versions.depot) {
+                            let depot = d.depot.clone();
+                            if self.doc.world.meta.map_id.is_none() {
+                                self.doc.world.map_id();
+                                self.doc.mark_changed();
+                            }
+                            let snapshot = self.doc.world.snapshot();
+                            self.jobs.push(Job::send_patch(ctx, base, snapshot, depot, author, form.message.trim().to_owned()));
+                        }
+                    }
+                    ExportChoice::Export => {
+                        let author = form.author.trim().to_owned();
+                        self.settings.pack_author = author.clone();
+                        let file = massif_core::mask::file_safe(&if author.is_empty() { self.doc.world.meta.name.clone() } else { format!("{} {author}", self.doc.world.meta.name) });
+                        if let Some(base) = self.doc.world.points.get(form.base).cloned()
+                            && let Some(path) = rfd::FileDialog::new()
+                                .set_title(tr!("Where to write the contribution"))
+                                .set_file_name(format!("{file}.{}", massif_core::patch::EXTENSION))
+                                .add_filter(tr!("Massif contribution"), &[massif_core::patch::EXTENSION])
+                                .save_file()
+                        {
+                            if self.doc.world.meta.map_id.is_none() {
+                                self.doc.world.map_id();
+                                self.doc.mark_changed();
+                            }
+                            let snapshot = self.doc.world.snapshot();
+                            self.jobs.push(Job::write_patch(ctx, base, snapshot, path, author, form.message.trim().to_owned()));
+                        } else {
+                            self.dialog = Some(Dialog::ExportChanges(form));
+                        }
+                    }
+                    ExportChoice::Close => {}
+                    ExportChoice::Keep => {
+                        if !response.should_close() {
+                            self.dialog = Some(Dialog::ExportChanges(form));
+                        }
+                    }
+                }
+            }
             Dialog::DeletePoint(index) => {
                 let mut choice = None;
                 let name = self.doc.world.points.get(index).map(|p| p.name.clone()).unwrap_or_default();
@@ -5122,6 +5612,17 @@ impl MassifApp {
                     Choice::Keep => {}
                     Choice::Close => keep = false,
                     Choice::AddImages => self.pick_mask(ctx, true),
+                    Choice::Import(images) if form.review => {
+                        keep = false;
+                        if let Some((zone, Some(base))) = form.zone.clone()
+                            && let Some(point) = self.doc.world.points.get(base).cloned()
+                        {
+                            let snapshot = self.doc.world.snapshot();
+                            let locks = massif_core::registry::Locks::of(&self.doc.world.registry);
+                            let dim = zone.dim.min(self.doc.world.dims.len() - 1);
+                            self.jobs.push(Job::review_zone(ctx, point, snapshot, dim, images, locks, zone, self.doc.revision).on(self.doc.generation));
+                        }
+                    }
                     Choice::Import(images) => {
                         keep = false;
                         // The image stays where it lands, to see under
@@ -5155,8 +5656,17 @@ impl MassifApp {
                         if let Some(folder) = rfd::FileDialog::new().set_title(tr!("A folder to write the region in")).pick_folder() {
                             keep = false;
                             let name = massif_core::mask::file_safe(&format!("{} region {} {}", self.doc.world.meta.name, rect.x0, rect.z0));
+                            let review = form.review.then(|| {
+                                // The map's identifier first, for the zone and its version to name it.
+                                if self.doc.world.meta.map_id.is_none() {
+                                    self.doc.world.map_id();
+                                    self.doc.mark_changed();
+                                }
+                                let head = self.doc.world.meta.head.and_then(|h| self.doc.world.points.iter().find(|p| p.id == h)).cloned();
+                                (head, tr!("Before the zone {x}, {z} went out", x = rect.x0, z = rect.z0))
+                            });
                             let snapshot = self.doc.world.snapshot();
-                            self.jobs.push(Job::export_region(ctx, snapshot, self.doc.dim, rect, folder.join(name), parts));
+                            self.jobs.push(Job::export_region(ctx, snapshot, self.doc.dim, rect, folder.join(name), parts, review).on(self.doc.generation));
                         }
                     }
                 }
@@ -6187,6 +6697,27 @@ fn bar_button(ui: &mut Ui, tip: &str, enabled: bool, selected: bool, paint: impl
     };
     paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), color);
     response.on_hover_text(tip)
+}
+
+/// The top bar's Versions button: a glyph (a branch on a branch), the
+/// version the map stands on, cut short, and a dot in `dot`'s colour.
+fn versions_pill(ui: &mut Ui, label: &str, branch: bool, dot: Option<Color32>) -> egui::Response {
+    let pal = Palette::of(ui);
+    let glyph = theme::glyph(if branch { Icon::GitBranch } else { Icon::History });
+    let short: String = if label.chars().count() > 24 { format!("{}…", label.chars().take(23).collect::<String>()) } else { label.to_owned() };
+    let text = ui.painter().layout_no_wrap(format!("{glyph}  {short}"), FontId::proportional(12.0), pal.text);
+    let extra = if dot.is_some() { 12.0 } else { 0.0 };
+    let (rect, response) = ui.allocate_exact_size(vec2(text.size().x + 20.0 + extra, 24.0), Sense::click());
+    let fill = if response.hovered() { theme::mix(pal.app_bg, pal.text, 0.08) } else { theme::mix(pal.app_bg, pal.text, 0.04) };
+    ui.painter().rect(rect, theme::PILL, fill, Stroke::new(1.0, pal.border), egui::StrokeKind::Inside);
+    ui.painter().galley(pos2(rect.left() + 10.0, rect.center().y - text.size().y / 2.0), text, pal.text);
+    if let Some(c) = dot {
+        ui.painter().circle_filled(pos2(rect.right() - 11.0, rect.center().y), 3.5, c);
+    }
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response
 }
 
 /// The top bar's word that a newer version is out: a small pill in the
@@ -10991,7 +11522,7 @@ mod tests {
         {
             let app = h.state_mut();
             let snapshot = app.doc.world.snapshot();
-            app.jobs.push(Job::export_region(&ctx, snapshot, app.doc.dim, rect, out.clone(), massif_core::mask::RegionParts::default()));
+            app.jobs.push(Job::export_region(&ctx, snapshot, app.doc.dim, rect, out.clone(), massif_core::mask::RegionParts::default(), None));
         }
         wait(&mut h);
         let mut files: Vec<PathBuf> = std::fs::read_dir(&out).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "png")).collect();
@@ -18005,6 +18536,366 @@ mod tests {
         h.run_steps(2);
         assert_eq!(h.state().doc.world.points.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["After the hill"]);
         assert!(h.state().doc.is_modified());
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
+
+    /// The Versions panel's home, while the map has no version: three cards
+    /// side by side where the panel is wide, one above the other where it is
+    /// narrow (renders with MASSIF_SNAPSHOT_DIR).
+    #[test]
+    fn the_versions_home() {
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        for theme in [ThemeChoice::Dark, ThemeChoice::Light] {
+            let mut h = harness(theme);
+            h.run_steps(5);
+            let mut areas = Vec::new();
+            h.state().layout.current().root.areas(&mut areas);
+            let area = areas.iter().find(|a| a.1 != EditorKind::Map).expect("an area beside the map").0;
+            h.state_mut().layout.current_mut().root.set_editor(area, EditorKind::Versions);
+            h.run_steps(4);
+            assert!(h.state().doc.world.points.is_empty());
+            let name = if theme == ThemeChoice::Dark { "dark" } else { "light" };
+            if let Some(dir) = &dir {
+                h.render().unwrap().save(dir.join(format!("versions-home-narrow-{name}.png"))).unwrap();
+                h.state_mut().layout.toggle_maximize(area);
+                h.run_steps(4);
+                h.render().unwrap().save(dir.join(format!("versions-home-wide-{name}.png"))).unwrap();
+                h.state_mut().layout.toggle_maximize(area);
+                h.run_steps(2);
+            }
+            // Start a version: the dialog of its name.
+            let ctx = h.ctx.clone();
+            h.state_mut().versions_action(&ctx, crate::versions::Action::Home(crate::collab::HomeAction::Start));
+            h.run_steps(2);
+            assert!(matches!(h.state().dialog, Some(Dialog::PointName(None, _))));
+        }
+    }
+
+    /// A zone goes out to another tool and comes back as a contribution:
+    /// Export Region keeps a version and writes zone.json; the heightmap,
+    /// raised over a part in the other tool, is painted onto that version
+    /// and what it changes is reviewed on the map. The owner changed one of
+    /// its tiles meanwhile: a conflict, settled for theirs. Applied, the map
+    /// has the zone, a new version stands on the first, and undo takes it
+    /// all back (renders of the review and the resolver with
+    /// MASSIF_SNAPSHOT_DIR).
+    #[test]
+    fn a_zone_comes_back_as_a_contribution() {
+        use egui_kittest::kittest::Queryable;
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let out = std::env::temp_dir().join(format!("massif-zone-app-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        let wait = |h: &mut egui_kittest::Harness<'static, MassifApp>| {
+            let started = std::time::Instant::now();
+            while !h.state().jobs.is_empty() {
+                assert!(started.elapsed().as_secs() < 60, "the job timed out");
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            h.run_steps(3);
+        };
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let ctx = h.ctx.clone();
+        let mut areas = Vec::new();
+        h.state().layout.current().root.areas(&mut areas);
+        let panel = areas.iter().find(|a| a.1 != EditorKind::Map).expect("an area beside the map").0;
+        h.state_mut().layout.current_mut().root.set_editor(panel, EditorKind::Versions);
+        let rect = massif_core::BlockRect::new(-200, -150, 100, 110);
+        {
+            let app = h.state_mut();
+            app.doc.world.map_id();
+            let snapshot = app.doc.world.snapshot();
+            app.jobs.push(Job::export_region(&ctx, snapshot, app.doc.dim, rect, out.clone(), massif_core::mask::RegionParts::default(), Some((None, "Before the zone".into()))));
+        }
+        wait(&mut h);
+        let points = &h.state().doc.world.points;
+        assert_eq!(points.len(), 1, "a version to come back to");
+        assert_eq!(h.state().doc.world.meta.head, Some(points[0].id));
+        let zone = massif_core::patch::Zone::read(&out).expect("zone.json beside the images");
+        assert_eq!((zone.base.id, zone.rect), (points[0].id, [-200, -150, 100, 110]));
+        // In the other tool: a hill raised over a part of the zone.
+        let height = out.join("height.png");
+        let mut img = image::open(&height).unwrap().into_luma16();
+        for z in 30..110 {
+            for x in 30..130 {
+                let p = img.get_pixel_mut(x, z);
+                p.0[0] = p.0[0].saturating_add(8000);
+            }
+        }
+        img.save(&height).unwrap();
+        // Meanwhile the owner flattened a part of it too.
+        let height_at = |h: &egui_kittest::Harness<'static, MassifApp>, x: i32, z: i32| massif_core::ops::height_at(h.state().doc.dimension(), 0, x, z, massif_core::ops::Surface::Top).unwrap();
+        let mine = massif_core::BlockRect::new(-110, -110, -70, -70);
+        {
+            let app = h.state_mut();
+            app.doc.history.begin("flatten", app.doc.dim);
+            let mut edit = app.doc.history.edit(&mut app.doc.world, 0);
+            edit.par_tiles(mine.tiles(), mine, false, |_, clip, tile| {
+                for z in clip.z0..clip.z1 {
+                    for x in clip.x0..clip.x1 {
+                        tile.top.set(massif_core::coords::local_index(x, z), 10.0);
+                    }
+                }
+            });
+            app.doc.commit();
+        }
+        let (hill_x, hill_z) = (-200 + 80, -150 + 40);
+        let before = height_at(&h, hill_x, hill_z);
+        let undo_before = h.state().doc.history.undo_count();
+        // Brought back: Import Mask's dialog offers the review.
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&out).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "png")).collect();
+        files.sort();
+        {
+            let app = h.state_mut();
+            let snapshot = app.doc.world.snapshot();
+            app.jobs.push(Job::read_mask(&ctx, files.clone(), Some(snapshot)).on(app.doc.generation));
+        }
+        wait(&mut h);
+        let Some(Dialog::ImportMask(form)) = &mut h.state_mut().dialog else {
+            panic!("the dialog opens");
+        };
+        assert!(form.review && form.zone.as_ref().is_some_and(|(_, base)| *base == Some(0)), "reviewed against the version it left from");
+        form.feather = 0;
+        h.run_steps(2);
+        h.get_by_label("Review…").click();
+        h.run_steps(2);
+        wait(&mut h);
+        assert_eq!(h.state().doc.history.undo_count(), undo_before, "nothing changed yet");
+        let r = h.state().versions.reviewing.as_ref().expect("the review opens");
+        assert_eq!(r.patch.manifest.kind, massif_core::patch::Kind::External);
+        let (_, changed, conflicts) = r.review.counts();
+        assert!(changed > 0, "the hill's tiles are changed");
+        assert!(conflicts > 0, "the tile the owner flattened is in conflict");
+        // Only the tiles of the hill: the rest came back a hair off at most.
+        assert!(r.patch.tiles() <= 4, "{} tiles", r.patch.tiles());
+        let conflict = r.review.areas.iter().position(|a| a.status() == massif_core::merge::Status::Conflict).unwrap();
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("versions-review.png")).unwrap();
+            h.state_mut().layout.toggle_maximize(panel);
+            h.run_steps(3);
+            h.render().unwrap().save(dir.join("versions-review-panel.png")).unwrap();
+            h.state_mut().layout.toggle_maximize(panel);
+            h.run_steps(2);
+        }
+        h.state_mut().review_action(&ctx, crate::collab::ReviewAction::Resolve(conflict));
+        h.run_steps(3);
+        assert!(matches!(h.state().dialog, Some(Dialog::Resolve(_))));
+        if let Some(dir) = &dir {
+            h.run_steps(3);
+            h.render().unwrap().save(dir.join("versions-resolve.png")).unwrap();
+        }
+        if let Some(Dialog::Resolve(resolver)) = &mut h.state_mut().dialog {
+            resolver.keep = crate::collab::Keep::Theirs;
+        }
+        h.run_steps(2);
+        h.get_by_label("Resolve area").click();
+        h.run_steps(2);
+        {
+            let r = h.state_mut().versions.reviewing.as_mut().unwrap();
+            assert!(matches!(r.verdicts[conflict], crate::collab::Verdict::Resolved(_)));
+            r.accept_clean();
+        }
+        h.state_mut().review_action(&ctx, crate::collab::ReviewAction::Apply);
+        wait(&mut h);
+        assert!(h.state().versions.reviewing.is_none());
+        let after = height_at(&h, hill_x, hill_z);
+        assert!(after > before + 30.0, "the hill came back: {before} → {after}");
+        assert!(height_at(&h, -90, -90) > 10.5, "the conflict settled for theirs");
+        let points = &h.state().doc.world.points;
+        assert_eq!(points.len(), 2);
+        assert_eq!(points[1].name, "Zone brought back");
+        assert_eq!(points[1].parents, vec![points[0].id]);
+        assert_eq!(h.state().doc.world.meta.head, Some(points[1].id));
+        if let Some(dir) = &dir {
+            h.state_mut().layout.toggle_maximize(panel);
+            h.run_steps(4);
+            h.render().unwrap().save(dir.join("versions-after-merge.png")).unwrap();
+            h.state_mut().layout.toggle_maximize(panel);
+            h.run_steps(2);
+        }
+        // One step to undo.
+        assert_eq!(h.state().doc.history.undo_count(), undo_before + 1);
+        h.state_mut().undo(&ctx);
+        assert!((height_at(&h, hill_x, hill_z) - before).abs() < 0.01);
+        std::fs::remove_dir_all(&out).unwrap();
+    }
+
+    /// A shared folder carries the map and its contributions: the owner
+    /// makes it and publishes the map; a contributor starts from the
+    /// published map and sends changes into it; the owner sees them waiting,
+    /// reviews and merges one, and it waits no more; a contributor saving
+    /// the folder's map is asked for a file of their own.
+    #[test]
+    fn a_shared_folder_carries_the_map_and_its_contributions() {
+        use massif_format::depot::Depot;
+        let wait = |h: &mut egui_kittest::Harness<'static, MassifApp>| {
+            let started = std::time::Instant::now();
+            while !h.state().jobs.is_empty() {
+                assert!(started.elapsed().as_secs() < 60, "the job timed out");
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            h.run_steps(3);
+        };
+        let folder = std::env::temp_dir().join(format!("massif-shared-folder-app-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let ctx = h.ctx.clone();
+        let mut areas = Vec::new();
+        h.state().layout.current().root.areas(&mut areas);
+        let panel = areas.iter().find(|a| a.1 != EditorKind::Map).expect("an area beside the map").0;
+        h.state_mut().layout.current_mut().root.set_editor(panel, EditorKind::Versions);
+        h.state_mut().settings.pack_author = "Hugo".into();
+        // No version yet: no shared folder.
+        h.state_mut().share_action(&ctx, crate::collab::ShareAction::ChooseFolder);
+        assert!(h.state().versions.depot.is_none());
+        let first = massif_core::versions::SavePoint::new(&mut h.state_mut().doc.world, "Base terrain", 1);
+        h.state_mut().doc.world.points.push(first);
+        h.state_mut().link_depot(&ctx, folder.clone());
+        assert!(h.state().versions.depot.as_ref().is_some_and(|d| d.owner));
+        assert!(folder.join(massif_format::depot::DEPOT_FILE).exists());
+        // Published: the map stands on its version, so that one is published.
+        h.state_mut().share_action(&ctx, crate::collab::ShareAction::Publish);
+        wait(&mut h);
+        let depot = massif_format::depot::FolderDepot::open(&folder).unwrap();
+        let published = depot.published_map().expect("the map is in the folder");
+        assert_eq!(depot.info().published.as_ref().map(|v| v.name.as_str()), Some("Base terrain"));
+        // A contributor starts from it and sends changes.
+        let mut theirs = massif_format::load(&published).unwrap();
+        let base = theirs.points[0].clone();
+        theirs.dims[0].ground_mut().insert(massif_core::TilePos::new(1, 1), massif_core::Tile::ground(90.0, 1, -1));
+        let patch = massif_core::patch::Patch::since(&base, &theirs.snapshot(), massif_core::patch::Kind::Contribution, "Jack", "A hill", 2).unwrap();
+        depot.send(&patch).unwrap();
+        // The owner sees it waiting, and merges it.
+        h.state_mut().versions.depot_key = None;
+        h.run_steps(3);
+        let waiting = &h.state().versions.depot.as_ref().unwrap().waiting;
+        assert_eq!(waiting.iter().map(|w| w.manifest.message.as_str()).collect::<Vec<_>>(), ["A hill"]);
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            h.state_mut().layout.toggle_maximize(panel);
+            h.run_steps(4);
+            h.render().unwrap().save(dir.join("versions-shared-folder.png")).unwrap();
+            h.state_mut().layout.toggle_maximize(panel);
+            h.run_steps(2);
+        }
+        h.state_mut().share_action(&ctx, crate::collab::ShareAction::Review(0));
+        wait(&mut h);
+        h.state_mut().versions.reviewing.as_mut().expect("the review opens").accept_clean();
+        h.state_mut().review_action(&ctx, crate::collab::ReviewAction::Apply);
+        wait(&mut h);
+        assert!(h.state().versions.depot.as_ref().unwrap().waiting.is_empty(), "merged: it waits no more");
+        assert_eq!(massif_format::depot::FolderDepot::open(&folder).unwrap().info().merged, vec![patch.manifest.id]);
+        // A contributor's copy of the folder's map is saved elsewhere.
+        h.state_mut().doc.path = Some(published.clone());
+        h.state_mut().settings.depots.iter_mut().for_each(|l| l.owner = false);
+        h.state_mut().versions.depot_key = None;
+        h.run_steps(3);
+        assert!(h.state().versions.depot.as_ref().is_some_and(|d| !d.owner));
+        // A contributor's versions go on a branch of their name, shown in a
+        // lane of the timeline and on the top bar's Versions button.
+        assert_eq!(h.state().branch(), "hugo");
+        {
+            let app = h.state_mut();
+            let snapshot = massif_core::versions::SavePoint::copy_of(&mut app.doc.world);
+            let branch = app.branch();
+            app.jobs.push(Job::merge_point(&ctx, snapshot, "My valley".into(), None, "Hugo".into(), branch).on(app.doc.generation));
+        }
+        wait(&mut h);
+        let last = h.state().doc.world.points.last().unwrap();
+        assert_eq!((last.name.as_str(), last.branch.as_str()), ("My valley", "hugo"));
+        if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
+            h.run_steps(3);
+            h.render().unwrap().save(dir.join("versions-topbar.png")).unwrap();
+            h.state_mut().layout.toggle_maximize(panel);
+            h.run_steps(4);
+            h.render().unwrap().save(dir.join("versions-timeline.png")).unwrap();
+            h.state_mut().layout.toggle_maximize(panel);
+            h.run_steps(2);
+        }
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
+
+    /// A contribution from another copy of the map: written as a
+    /// .massifpatch since a version, read and reviewed by the owner, merged
+    /// as a version with two parents. A contribution to another map is
+    /// refused.
+    #[test]
+    fn a_contribution_goes_from_one_copy_to_the_other() {
+        let wait = |h: &mut egui_kittest::Harness<'static, MassifApp>| {
+            let started = std::time::Instant::now();
+            while !h.state().jobs.is_empty() {
+                assert!(started.elapsed().as_secs() < 60, "the job timed out");
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            h.run_steps(3);
+        };
+        let folder = std::env::temp_dir().join(format!("massif-contribution-app-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join("riverlands.massifpatch");
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let ctx = h.ctx.clone();
+        let base = massif_core::versions::SavePoint::new(&mut h.state_mut().doc.world, "Before the rivers", 1);
+        h.state_mut().doc.world.points.push(base.clone());
+        // The contributor's copy: a hill, a version of theirs, and the file.
+        let mut theirs = h.state_mut().doc.world.snapshot();
+        let brush = massif_core::Brush {
+            shape: massif_core::BrushShape::Circle,
+            radius: 50.0,
+            profile: massif_core::Profile::Dome,
+            strength: 1.0,
+            rotation: 0.0,
+            mask: None,
+            filter: None,
+        };
+        let mut history = massif_core::history::History::new(4);
+        history.begin("Raise", 0);
+        massif_core::ops::raise(&mut history.edit(&mut theirs, 0), &brush, 200.0, 200.0, 25.0, massif_core::ops::Surface::Top);
+        history.commit();
+        let mut head = massif_core::versions::SavePoint::new(&mut theirs, "Valley", 2);
+        head.author = "Jack".into();
+        theirs.points.push(head.clone());
+        h.state_mut().jobs.push(Job::write_patch(&ctx, base.clone(), theirs.snapshot(), path.clone(), "Jack".into(), "Rivers of the northern valley".into()));
+        wait(&mut h);
+        assert!(path.exists());
+        // The owner reviews and merges it.
+        let before = massif_core::ops::height_at(h.state().doc.dimension(), 0, 200, 200, massif_core::ops::Surface::Top).unwrap();
+        {
+            let app = h.state_mut();
+            let snapshot = app.doc.world.snapshot();
+            app.jobs.push(Job::review_patch(&ctx, path.clone(), snapshot, app.doc.revision).on(app.doc.generation));
+        }
+        wait(&mut h);
+        let r = h.state_mut().versions.reviewing.as_mut().expect("the review opens");
+        assert!(r.base_known);
+        assert_eq!(r.patch.manifest.author, "Jack");
+        assert_eq!(r.review.counts().2, 0, "no conflict");
+        r.accept_clean();
+        h.state_mut().review_action(&ctx, crate::collab::ReviewAction::Apply);
+        wait(&mut h);
+        let after = massif_core::ops::height_at(h.state().doc.dimension(), 0, 200, 200, massif_core::ops::Surface::Top).unwrap();
+        assert!(after > before + 10.0, "{before} → {after}");
+        let points = &h.state().doc.world.points;
+        assert_eq!(points.len(), 2);
+        assert_eq!(points[1].parents, vec![base.id, head.id], "a merge: the owner's line and the contributor's version");
+        assert_eq!(points[1].name, "Merged: Rivers of the northern valley");
+        // A contribution to another map is refused.
+        let mut other = generate(&GenParams { tiles_x: 2, tiles_z: 2, ..GenParams::default() });
+        let other_base = massif_core::versions::SavePoint::new(&mut other, "base", 1);
+        let foreign = massif_core::patch::Patch::since(&other_base, &other.snapshot(), massif_core::patch::Kind::Contribution, "", "", 2).unwrap();
+        let foreign_path = folder.join("foreign.massifpatch");
+        massif_format::save_patch(&foreign, &foreign_path).unwrap();
+        {
+            let app = h.state_mut();
+            let snapshot = app.doc.world.snapshot();
+            app.jobs.push(Job::review_patch(&ctx, foreign_path, snapshot, app.doc.revision).on(app.doc.generation));
+        }
+        wait(&mut h);
+        assert!(h.state().versions.reviewing.is_none(), "not reviewed");
         std::fs::remove_dir_all(&folder).unwrap();
     }
 

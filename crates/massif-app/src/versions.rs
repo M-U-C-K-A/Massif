@@ -6,8 +6,8 @@
 //! its height does (the stronger, the more blocks), grey where only its
 //! paint does (terrain, biome, ground cover, objects or water).
 
-use crate::theme::{self, Icon, Palette};
-use egui::{Color32, RichText, Sense, Ui, vec2};
+use crate::theme::{self, Icon, Palette, RichTextExt};
+use egui::{Color32, Pos2, RichText, Sense, Stroke, Ui, pos2, vec2};
 use massif_core::coords::{TILE_SIZE, local_index};
 use massif_core::versions::SavePoint;
 use massif_core::{TilePos, World};
@@ -28,6 +28,12 @@ pub enum Action {
     Delete(usize),
     /// Compare a point with the map, or stop comparing.
     Compare(Option<usize>),
+    /// What the panel's home asks.
+    Home(crate::collab::HomeAction),
+    /// What the review of a contribution asks.
+    Review(crate::collab::ReviewAction),
+    /// What the panel's Share part asks.
+    Share(crate::collab::ShareAction),
 }
 
 /// The longest side of the comparison's picture, in pixels.
@@ -190,11 +196,20 @@ pub struct Compare {
     texture: Option<(egui::TextureHandle, [i32; 4], Color32)>,
 }
 
-/// The panel's state: the points' pictures, the comparison.
+/// The panel's state: the points' pictures, the comparison, the review of
+/// a contribution.
 #[derive(Default)]
 pub struct VersionsUi {
     thumbs: HashMap<usize, egui::TextureHandle>,
     pub compare: Option<Compare>,
+    pub reviewing: Option<crate::collab::Reviewing>,
+    /// The shared folder of the map, when it has one.
+    pub depot: Option<crate::collab::DepotState>,
+    /// The version picked in the timeline (the one the map stands on
+    /// until one is picked).
+    pub selected: Option<massif_core::versions::Id>,
+    /// The map and file the shared folder was last looked for with.
+    pub depot_key: Option<(Option<massif_core::versions::Id>, Option<std::path::PathBuf>)>,
 }
 
 /// A point's date, said as the panel says it: how long ago within a week,
@@ -244,6 +259,10 @@ impl VersionsUi {
     /// gone, worked out again a moment after the map changed. Returns the
     /// picture to draw over the map, and its block coordinates.
     pub fn overlay(&mut self, ctx: &egui::Context, doc: &crate::doc::Document) -> Option<(egui::TextureHandle, [i32; 4])> {
+        // A contribution under review shows its tiles instead.
+        if let Some(r) = &mut self.reviewing {
+            return r.overlay(ctx, doc.dim);
+        }
         let compare = self.compare.as_mut()?;
         // The point, wherever it now is in the list.
         let Some(index) = doc.world.points.iter().position(|p| (p.created, &p.name) == (compare.key.0, &compare.key.1)) else {
@@ -325,6 +344,13 @@ impl VersionsUi {
         let pal = Palette::of(ui);
         let mut action = None;
         let points = &doc.world.points;
+        let can_edit = doc.read_only.is_none();
+        if let Some(r) = &mut self.reviewing {
+            return r.panel(ui, can_edit).map(Action::Review);
+        }
+        if points.is_empty() && can_edit {
+            return crate::collab::home(ui, busy, can_edit).map(Action::Home);
+        }
         // Pictures of points gone are let go.
         if self.thumbs.len() > points.len() {
             let alive: Vec<usize> = points.iter().filter_map(|p| p.thumbnail.as_ref().map(|j| j.as_ptr() as usize)).collect();
@@ -346,79 +372,187 @@ impl VersionsUi {
             return action;
         }
         crate::panels::hint(ui, tr!("Kept in the map's file. A point takes only the tiles changed since."));
-        ui.add_space(2.0);
+        ui.add_space(4.0);
         let now = massif_core::versions::now();
         let comparing = self.compare.as_ref().map(|c| c.index);
-        for index in (0..points.len()).rev() {
-            let point = &points[index];
-            let thumb = self.thumbnail(ui.ctx(), point);
-            let active = comparing == Some(index);
-            let frame = egui::Frame::new()
-                .fill(if active { pal.accent_soft } else { Color32::TRANSPARENT })
-                .stroke(egui::Stroke::new(1.0, if active { pal.accent } else { pal.border }))
-                .corner_radius(theme::TILE_RADIUS)
-                .inner_margin(egui::Margin::same(6));
-            frame.show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    // The picture, at most 72 × 48.
-                    let size = thumb.as_ref().map_or(vec2(72.0, 48.0), |t| {
-                        let s = t.size_vec2();
-                        let k = (72.0 / s.x).min(48.0 / s.y);
-                        s * k
-                    });
-                    let (rect, _) = ui.allocate_exact_size(vec2(72.0, 48.0), Sense::hover());
-                    ui.painter().rect_filled(rect, theme::TILE_RADIUS / 2, pal.canvas);
-                    if let Some(t) = &thumb {
-                        let r = egui::Rect::from_center_size(rect.center(), size);
-                        ui.painter().image(t.id(), r, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
-                    }
+        let head = doc.world.meta.head;
+        let selected = self
+            .selected
+            .and_then(|id| points.iter().position(|p| p.id == id))
+            .or_else(|| head.and_then(|h| points.iter().position(|p| p.id == h)))
+            .unwrap_or(points.len() - 1);
+        // The timeline: the newest version on top, the map's own line on the
+        // left and a lane for each branch.
+        let (lane_of, lanes) = lanes(points);
+        const ROW: f32 = 42.0;
+        let lane_x = |left: f32, lane: usize| left + 12.0 + lane as f32 * 14.0;
+        let gutter = 18.0 + lanes as f32 * 14.0;
+        let mut dots = vec![Pos2::ZERO; points.len()];
+        let frame = egui::Frame::new().fill(pal.well()).stroke(Stroke::new(1.0, pal.border)).corner_radius(theme::GROUP_RADIUS).inner_margin(egui::Margin::same(4));
+        let shown = frame.show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for index in (0..points.len()).rev() {
+                let point = &points[index];
+                let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
+                if index == selected {
+                    ui.painter().rect_filled(rect, theme::TILE_RADIUS, pal.accent_soft);
+                } else if response.hovered() {
+                    ui.painter().rect_filled(rect, theme::TILE_RADIUS, pal.accent_soft.gamma_multiply(0.5));
+                }
+                if response.clicked() {
+                    self.selected = Some(point.id);
+                }
+                dots[index] = pos2(lane_x(rect.left(), lane_of[index]), rect.center().y);
+                let text = rect.with_min_x(rect.left() + gutter).shrink2(vec2(4.0, 0.0));
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(text).layout(egui::Layout::right_to_left(egui::Align::Center)));
+                let ui = &mut child;
+                ui.spacing_mut().item_spacing.x = 4.0;
+                if head == Some(point.id) {
+                    crate::collab::status_pill(ui, tr!("Current"), pal.weak);
+                }
+                if point.parents.len() > 1 {
+                    crate::collab::status_pill(ui, tr!("Merge"), pal.accent);
+                }
+                if !point.branch.is_empty() {
+                    crate::collab::status_pill(ui, &point.branch, pal.accent);
+                }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 2.0;
-                        ui.horizontal(|ui| {
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.menu_button(theme::glyph(Icon::Ellipsis).to_string(), |ui| {
-                                    if ui.button(tr!("{glyph}  Open as a copy", glyph = theme::glyph(Icon::Copy))).clicked() {
-                                        action = Some(Action::Open { index, read_only: false });
-                                    }
-                                    if ui.button(tr!("{glyph}  Open read-only", glyph = theme::glyph(Icon::Lock))).clicked() {
-                                        action = Some(Action::Open { index, read_only: true });
-                                    }
-                                    ui.separator();
-                                    if ui.button(tr!("{glyph}  Rename…", glyph = theme::glyph(Icon::Pencil))).clicked() {
-                                        action = Some(Action::Rename(index));
-                                    }
-                                    if ui.button(tr!("{glyph}  Delete…", glyph = theme::glyph(Icon::Trash2))).clicked() {
-                                        action = Some(Action::Delete(index));
-                                    }
-                                });
-                                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                    ui.add(egui::Label::new(RichText::new(&point.name).size(13.0).strong()).truncate());
-                                });
-                            });
-                        });
-                        ui.label(RichText::new(when(point.created, now)).size(11.0).color(pal.weak));
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 4.0;
-                            if ui.small_button(tr!("Restore")).on_hover_text(tr!("Put the map back as it was then, as one step to undo")).clicked() {
-                                action = Some(Action::Restore(index));
-                            }
-                            let label = if active { tr!("Stop") } else { tr!("Compare") };
-                            let r = ui.small_button(label);
-                            let r = if active { r.on_hover_text(tr!("Stop comparing")) } else { r.on_hover_text(tr!("Show on the 2D map where the map differs from this point")) };
-                            if r.clicked() {
-                                action = Some(Action::Compare((!active).then_some(index)));
-                            }
-                        });
+                        ui.spacing_mut().item_spacing.y = 1.0;
+                        ui.add(egui::Label::new(RichText::new(&point.name).size(13.0).medium()).truncate());
+                        let said = if point.author.is_empty() { when(point.created, now) } else { format!("{} · {}", point.author, when(point.created, now)) };
+                        ui.add(egui::Label::new(RichText::new(said).size(11.0).color(pal.weak)).truncate());
                     });
                 });
-                if active {
-                    compare_legend(ui, self.compare.as_ref().and_then(|c| c.diff.as_deref()));
-                }
+            }
+        });
+        // The lines between the versions, under their dots.
+        let painter = ui.painter().with_clip_rect(shown.response.rect);
+        let main = Stroke::new(1.5, pal.weak.gamma_multiply(0.6));
+        let branch = Stroke::new(1.5, pal.accent);
+        for (index, point) in points.iter().enumerate() {
+            for parent in &point.parents {
+                let Some(from) = points.iter().position(|p| p.id == *parent) else { continue };
+                let stroke = if lane_of[index] == 0 && lane_of[from] == 0 { main } else { branch };
+                edge(&painter, dots[index], dots[from], ROW, stroke);
+            }
+        }
+        for (index, point) in points.iter().enumerate() {
+            let at = dots[index];
+            if point.parents.len() > 1 {
+                painter.circle_filled(at, 5.0, pal.well());
+                painter.circle_stroke(at, 4.5, Stroke::new(2.0, pal.accent));
+            } else {
+                painter.circle_filled(at, 4.5, if lane_of[index] == 0 { pal.text } else { pal.accent });
+            }
+            if head == Some(point.id) {
+                painter.circle_stroke(at, 8.0, Stroke::new(1.0, pal.weak));
+            }
+        }
+        // The version picked: its picture, and what to do with it.
+        let index = selected;
+        let point = &points[index];
+        let thumb = self.thumbnail(ui.ctx(), point);
+        let active = comparing == Some(index);
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            let size = thumb.as_ref().map_or(vec2(84.0, 56.0), |t| {
+                let s = t.size_vec2();
+                let k = (84.0 / s.x).min(56.0 / s.y);
+                s * k
             });
-            ui.add_space(3.0);
+            let (rect, _) = ui.allocate_exact_size(vec2(84.0, 56.0), Sense::hover());
+            ui.painter().rect_filled(rect, theme::TILE_RADIUS / 2, pal.canvas);
+            if let Some(t) = &thumb {
+                let r = egui::Rect::from_center_size(rect.center(), size);
+                ui.painter().image(t.id(), r, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+            }
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.add(egui::Label::new(RichText::new(&point.name).size(14.0).strong()).truncate());
+                let said = if point.author.is_empty() { when(point.created, now) } else { format!("{} · {}", point.author, when(point.created, now)) };
+                ui.add(egui::Label::new(RichText::new(said).size(11.5).color(pal.weak)).truncate());
+            });
+        });
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+            if ui.add(egui::Button::new(tr!("Restore")).truncate()).on_hover_text(tr!("Put the map back as it was then, as one step to undo")).clicked() {
+                action = Some(Action::Restore(index));
+            }
+            let label = if active { tr!("Stop") } else { tr!("Compare") };
+            let r = ui.add(egui::Button::new(label).truncate());
+            let r = if active { r.on_hover_text(tr!("Stop comparing")) } else { r.on_hover_text(tr!("Show on the 2D map where the map differs from this point")) };
+            if r.clicked() {
+                action = Some(Action::Compare((!active).then_some(index)));
+            }
+            if ui.add(egui::Button::new(tr!("{glyph}  Open as a copy", glyph = theme::glyph(Icon::Copy))).truncate()).clicked() {
+                action = Some(Action::Open { index, read_only: false });
+            }
+            if ui.add(egui::Button::new(tr!("{glyph}  Open read-only", glyph = theme::glyph(Icon::Lock))).truncate()).clicked() {
+                action = Some(Action::Open { index, read_only: true });
+            }
+            if ui.add(egui::Button::new(tr!("{glyph}  Rename…", glyph = theme::glyph(Icon::Pencil))).truncate()).clicked() {
+                action = Some(Action::Rename(index));
+            }
+            if ui.add(egui::Button::new(tr!("{glyph}  Delete…", glyph = theme::glyph(Icon::Trash2))).truncate()).clicked() {
+                action = Some(Action::Delete(index));
+            }
+        });
+        if active {
+            compare_legend(ui, self.compare.as_ref().and_then(|c| c.diff.as_deref()));
+        }
+        // Working with others: what to send and bring in.
+        ui.add_space(8.0);
+        if let Some(a) = crate::collab::share(ui, self.depot.as_ref(), can_edit) {
+            action = Some(Action::Share(a));
         }
         action
+    }
+}
+
+/// Each version's lane in the timeline: the map's own line (0), then a lane
+/// for each branch, in the order the branches appear; and how many lanes.
+fn lanes(points: &[SavePoint]) -> (Vec<usize>, usize) {
+    let mut names: Vec<&str> = Vec::new();
+    let lanes = points
+        .iter()
+        .map(|p| {
+            if p.branch.is_empty() {
+                return 0;
+            }
+            match names.iter().position(|n| *n == p.branch) {
+                Some(i) => i + 1,
+                None => {
+                    names.push(&p.branch);
+                    names.len()
+                }
+            }
+        })
+        .collect();
+    (lanes, names.len() + 1)
+}
+
+/// The line from a version (`a`, above) to one it was made from (`b`,
+/// below), `row` apart at least: straight along a lane, or leaving its lane
+/// with a curve where a branch starts (near `b`) or is merged (near `a`).
+fn edge(painter: &egui::Painter, a: Pos2, b: Pos2, row: f32, stroke: Stroke) {
+    use egui::epaint::CubicBezierShape;
+    if (a.x - b.x).abs() < 0.5 {
+        painter.line_segment([a, b], stroke);
+    } else if a.x > b.x {
+        // A branch: down its own lane, then into the version it left.
+        let turn = (b.y - row * 0.7).max(a.y);
+        painter.line_segment([a, pos2(a.x, turn)], stroke);
+        let curve = [pos2(a.x, turn), pos2(a.x, turn + row * 0.35), pos2(b.x, b.y - row * 0.3), b];
+        painter.add(CubicBezierShape::from_points_stroke(curve, false, Color32::TRANSPARENT, stroke));
+    } else {
+        // A merge: out to the merged lane just under the merge, then down.
+        let turn = (a.y + row * 0.7).min(b.y);
+        let curve = [a, pos2(a.x, a.y + row * 0.3), pos2(b.x, turn - row * 0.35), pos2(b.x, turn)];
+        painter.add(CubicBezierShape::from_points_stroke(curve, false, Color32::TRANSPARENT, stroke));
+        painter.line_segment([pos2(b.x, turn), b], stroke);
     }
 }
 
