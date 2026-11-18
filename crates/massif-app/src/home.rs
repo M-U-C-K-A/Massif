@@ -175,7 +175,7 @@ pub enum HomeAction {
 
 /// Frames a second of the waves behind the home screen. They move slowly,
 /// a cell of their dither every second or so: more would show nothing new.
-const WAVE_FPS: f64 = 15.0;
+const WAVE_FPS: f64 = 12.0;
 
 /// The waves behind the home screen: one frame of them, dithered for one
 /// size and theme, on the graphics card.
@@ -969,9 +969,9 @@ impl Home {
         self.backdrop = Some(Backdrop { key, frames });
     }
 
-    /// The ridges behind `rect`: ranges seen from afar, their crests in the
-    /// accent, a glow behind them, dithered in a few colours (see
-    /// [`wave_frame`]) and fading out where the settings are written (`calm`). Drawn again for each
+    /// The ridges behind `rect`: ranges seen from afar under a glow of the
+    /// accent, dithered (see [`wave_frame`]), their light held down where
+    /// the settings are written (`calm`). Drawn again for each
     /// frame of [`WAVE_FPS`] while they move: with the setting on, Reduce
     /// motion off and the window in front; still otherwise, at their first
     /// frame or where they stopped.
@@ -1324,52 +1324,88 @@ const BAYER: [[u8; 8]; 8] = [
     [63, 31, 55, 23, 61, 29, 53, 21],
 ];
 
-/// The colours the ridges are dithered into: a cell is so much grey (the
-/// land, lighter far off) and so much accent (the crests, the glow), each
-/// put to one of a few steps by an ordered dither, its colour looked up.
+/// How the ridges are coloured for a theme: the page, the accent, the land
+/// far and near, the crests away from the glow, the glow's hot core.
 struct WaveLook {
-    /// By grey step, then accent step.
-    table: Vec<Color32>,
-    greys: usize,
-    tints: usize,
-    /// A glow behind the ranges, as of a sun gone down (not in high
-    /// contrast: crests only).
-    glow: f32,
-    /// How much land the ridges have under their crests (0–1).
-    land: f32,
-    /// How much is taken away under the words (0–1).
+    dark: bool,
+    high: bool,
+    bg: [f32; 3],
+    accent: [f32; 3],
+    /// What the land's ink goes toward from the page's colour: white in
+    /// the dark theme, black in the light one.
+    ink: [f32; 3],
+    /// How much ink the land of the farthest range has, and of the nearest
+    /// (haze: the far paler in the dark theme, lighter in the light one).
+    ink_far: f32,
+    ink_near: f32,
+    /// The ink of a crest's highlight, away from the glow.
+    crest: f32,
+    /// The glow's hottest colour, and a crest's facing it.
+    hot: [f32; 3],
+    /// How much is taken away under the words (0–1, high contrast).
     hush: f32,
+    /// The luminance a cell may have under the words, at most (dark
+    /// theme) or at least (light), for muted text to keep 3:1 on it.
+    limit: f32,
+}
+
+/// The relative luminance of `c` (0–1 channels), as contrast ratios take it.
+fn luminance(c: [f32; 3]) -> f32 {
+    let lin = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+    0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2])
+}
+
+/// `c` as red, green and blue from 0 to 1.
+fn rgb_f(c: Color32) -> [f32; 3] {
+    [c.r(), c.g(), c.b()].map(|v| v as f32 / 255.0)
+}
+
+fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
+    [0, 1, 2].map(|i| a[i] + (b[i] - a[i]) * t)
 }
 
 impl WaveLook {
     fn of(pal: &Palette) -> Self {
-        let bg = backdrop_fill(pal);
-        // The land: from the page's colour to a grey, lighter in the dark
-        // theme, darker in the light one.
-        let grey = if pal.dark { Color32::from_rgb(132, 132, 140) } else { Color32::from_rgb(96, 96, 104) };
-        let (greys, tints, glow, land, hush) = if pal.high { (3, 3, 0.0, 0.0, 1.0) } else { (5, 5, 1.0, 1.0, 0.75) };
-        let mut table = Vec::with_capacity(greys * tints);
-        for g in 0..greys {
-            let ground = theme::mix(bg, grey, 0.62 * g as f32 / (greys - 1) as f32);
-            for a in 0..tints {
-                table.push(theme::mix(ground, pal.accent, a as f32 / (tints - 1) as f32));
-            }
-        }
-        Self { table, greys, tints, glow, land, hush }
+        let accent = rgb_f(pal.accent);
+        let (ink, ink_far, ink_near, crest, hot) = if pal.dark { ([1.0; 3], 0.17, 0.04, 0.8, [1.0, 0.95, 0.86]) } else { ([0.0; 3], 0.05, 0.15, 0.68, accent.map(|c| c * 0.8)) };
+        let bg = rgb_f(backdrop_fill(pal));
+        let limit = art_limit(luminance(rgb_f(art_weak(pal))), bg[1], pal.dark);
+        Self { dark: pal.dark, high: pal.high, bg, accent, ink, ink_far, ink_near, crest, hot, hush: 1.0, limit }
     }
 }
 
+/// How much of the art shows through the halo [`paint_on_art`] lays around
+/// letters, at most: its rings of the page's colour cover at least half of
+/// what is next to a letter, more where they overlap; taken as 35 %.
+const HALO: f32 = 0.35;
+
+/// The luminance the art may have under muted text (`muted`, its
+/// luminance) on a page whose grey is `page` (0–1): at most in the dark
+/// theme, at least in the light one, for the text to keep 3:1 on the art
+/// seen through its halo — 3.35 rather than 3, as dots dithered between
+/// levels average a little further from the page than the colour they
+/// stand for.
+fn art_limit(muted: f32, page: f32, dark: bool) -> f32 {
+    let to_srgb = |l: f32| if l <= 0.003_130_8 { l * 12.92 } else { 1.055 * l.powf(1.0 / 2.4) - 0.055 };
+    let to_light = |v: f32| if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
+    let seen = if dark { (muted + 0.05) / 3.35 - 0.05 } else { 3.35 * (muted + 0.05) - 0.05 };
+    // What is seen is the art blended with the page, in gamma space as the
+    // interface is drawn: the art itself may go this far.
+    let art = ((to_srgb(seen.clamp(0.0, 1.0)) - (1.0 - HALO) * page) / HALO).clamp(0.0, 1.0);
+    to_light(art)
+}
+
 /// The ranges, far to near: where each stands (in heights of the area, from
-/// the top), how far it rises and falls, how fine it is, how fast it drifts
-/// (heights a second: the nearer, the faster), how grey its land is just
-/// under its crest.
+/// the top) on the left, how much higher it stands on the right, toward the
+/// glow; how far it rises and falls, how fine it is, how fast it drifts
+/// (heights a second: the nearer, the faster).
 const RIDGES: [(f32, f32, f32, f32, f32); 6] = [
-    (0.55, 0.050, 3.2, 0.0020, 0.58),
-    (0.61, 0.060, 2.6, 0.0030, 0.46),
-    (0.68, 0.070, 2.1, 0.0042, 0.36),
-    (0.75, 0.075, 1.7, 0.0058, 0.28),
-    (0.83, 0.080, 1.4, 0.0078, 0.21),
-    (0.91, 0.085, 1.1, 0.0100, 0.15),
+    (0.560, 0.000, 0.020, 2.4, 0.0020),
+    (0.630, 0.030, 0.045, 1.5, 0.0030),
+    (0.715, 0.140, 0.070, 1.1, 0.0042),
+    (0.770, 0.080, 0.075, 1.0, 0.0058),
+    (0.840, 0.030, 0.070, 0.9, 0.0078),
+    (0.915, 0.010, 0.060, 0.8, 0.0100),
 ];
 
 /// A smooth noise along a line, from -1 to 1: values at whole numbers,
@@ -1389,91 +1425,261 @@ fn noise_1d(x: f32, seed: u32) -> f32 {
 }
 
 /// One frame of the backdrop, `cols` × `rows` cells, `t` seconds in: six
-/// ranges seen from afar, one behind the other, each a jagged crest drawn in
-/// the accent — brighter on the side of the glow — over land that darkens
-/// down from it; a glow of the accent low on the right, behind the farthest,
-/// as of a sun gone down; an empty sky above. The ranges drift, the nearer
-/// faster, and breathe; the glow pulses, slowly. Quieter around `calm` (in
-/// cells, where the words are). Each cell is put to a colour of `look` by an
-/// ordered dither, fixed on the screen while the ranges move through it.
-/// The crests are worked out once a column, so that a cell costs a few
-/// comparisons.
+/// ranges of mountains seen from afar, one in front of the other, under a
+/// glow of the accent low on the right, as of a sun gone down. Each range
+/// is a band: a jagged crest — white-hot near the glow, grey with sparks of
+/// the accent away from it — over land that darkens down from it, the far
+/// ranges paler in the haze, warmed where the glow reaches. The sky is the
+/// page's colour, but for the glow. The ranges drift, the nearer faster,
+/// and breathe; the glow pulses. Quieter around `calm` (in cells, where the
+/// words are). Every cell is then dithered, each of its channels to one of
+/// a few levels (finer in the dark), by the same ordered threshold, so that
+/// the light is made of dots; the plain sky is left as it is.
 fn wave_frame(look: &WaveLook, cols: usize, rows: usize, calm: [i32; 4], t: f64) -> egui::ColorImage {
     use std::f32::consts::TAU;
     let h = rows.max(1) as f32;
     let w = cols.max(1) as f32;
     // Kept small: f32 would lose the seconds of a long session.
     let t = (t % 7200.0) as f32;
+    let n = RIDGES.len();
     let crests: Vec<Vec<f32>> = RIDGES
         .iter()
         .enumerate()
-        .map(|(k, &(base, rise, fine, drift, _))| {
+        .map(|(k, &(base, lift, rise, fine, drift))| {
             let seed = 0x6d61_7373 + k as u32 * 977;
-            let breathe = 1.0 + 0.08 * (TAU * t / 41.0 + k as f32 * 1.3).sin();
+            let breathe = 1.0 + 0.1 * (TAU * t / 41.0 + k as f32 * 1.3).sin();
             (0..cols)
                 .map(|x| {
+                    let across = x as f32 / w;
                     let u = (x as f32 + 0.5) / h * fine + drift * t * fine;
                     // Octaves: broad swells, then ever finer jags.
-                    let mut n = 0.0;
+                    let mut s = 0.0;
                     let (mut f, mut a) = (1.0, 1.0);
-                    for o in 0..5 {
-                        n += a * noise_1d(u * f, seed + o);
-                        f *= 2.17;
-                        a *= 0.5;
+                    for o in 0..7 {
+                        s += a * noise_1d(u * f, seed + o);
+                        f *= 2.13;
+                        a *= 0.58;
                     }
-                    (base - rise * breathe * n) * h
+                    // Higher toward the glow, as a range catching the light.
+                    let toward = across * across * (3.0 - 2.0 * across);
+                    (base - lift * toward - rise * breathe * s) * h
                 })
                 .collect()
         })
         .collect();
-    // The glow: low on the right, wide, at the farthest range's foot.
-    let pulse = 1.0 + 0.1 * (TAU * t / 13.0).sin();
-    let (gx, gy) = (0.84 * w, 0.56 * h);
-    let (grx, gry) = (0.36 * w, 0.2 * h);
-    let glow_x: Vec<f32> = (0..cols).map(|x| (-((x as f32 - gx) / grx).powi(2)).exp()).collect();
-    let glow_y: Vec<f32> = (0..rows).map(|y| (-((y as f32 - gy) / gry).powi(2)).exp() * look.glow * pulse).collect();
+    // The glow: low on the right, wide, its core on the farthest range.
+    let pulse = 1.0 + 0.08 * (TAU * t / 13.0).sin();
+    let (gx, gy) = (0.9 * w, 0.548 * h);
+    // A bright core hugging the horizon, in a wide halo that rises.
+    let core_x: Vec<f32> = (0..cols).map(|x| (-((x as f32 - gx) / (0.14 * w)).powi(2)).exp()).collect();
+    let halo_x: Vec<f32> = (0..cols).map(|x| (-((x as f32 - gx) / (0.42 * w)).powi(2)).exp()).collect();
+    let core_y = |y: f32| (-((y - gy) / if y < gy { 0.09 * h } else { 0.03 * h }).powi(2)).exp() * pulse;
+    let halo_y = |y: f32| 0.6 * (-((y - gy) / if y < gy { 0.22 * h } else { 0.05 * h }).powi(2)).exp() * pulse;
+    let glow_at = |x: usize, y: f32| 1.25 * core_x[x] * core_y(y) + halo_x[x] * halo_y(y);
+    let rows_core: Vec<f32> = (0..rows).map(|y| core_y(y as f32 + 0.5)).collect();
+    let rows_halo: Vec<f32> = (0..rows).map(|y| halo_y(y as f32 + 0.5)).collect();
     // Where the words are: the whole column, fading out around it.
     let [cx0, cy0, cx1, cy1] = calm.map(|v| v as f32);
-    let soft = 0.16 * h;
-    let inside = |p: f32, lo: f32, hi: f32| {
-        let out = (lo - p).max(p - hi).max(0.0) / soft;
-        (1.0 - out).max(0.0).powi(2)
+    let inside = |p: f32, lo: f32, hi: f32, soft: f32| {
+        let out = ((lo - p).max(p - hi).max(0.0) / soft).min(1.0);
+        1.0 - out * out * (3.0 - 2.0 * out)
     };
-    let across: Vec<f32> = (0..cols).map(|x| inside(x as f32, cx0, cx1)).collect();
-    let down: Vec<f32> = (0..rows).map(|y| inside(y as f32, cy0, cy1)).collect();
-    let (greys, tints) = ((look.greys - 1) as f32, (look.tints - 1) as f32);
-    let fall = 1.0 / (h * 0.05);
+    let mask_x: Vec<f32> = (0..cols).map(|x| inside(x as f32, cx0, cx1, 0.1 * w)).collect();
+    let mask_y: Vec<f32> = (0..rows).map(|y| inside(y as f32, cy0, cy1, 0.08 * h)).collect();
+    let bg = look.bg;
+    let bg_px = Color32::from_rgb((bg[0] * 255.0) as u8, (bg[1] * 255.0) as u8, (bg[2] * 255.0) as u8);
+    let a = look.accent;
+    // The glow's colour by its strength: the page's colour, a deep accent,
+    // the accent, its hot core.
+    let glow_colour = |i: f32| -> [f32; 3] {
+        let i = i.min(1.4);
+        // Dark theme: a deep accent, the accent, then near white; light
+        // theme: a pale accent, the accent, then a darker one.
+        let deep = if look.dark { a.map(|c| c * 0.55) } else { lerp3(bg, a, 0.5) };
+        if i < 0.5 {
+            let t = i / 0.5;
+            lerp3(bg, deep, t * t.sqrt())
+        } else if i < 0.95 {
+            lerp3(deep, a, (i - 0.5) / 0.45)
+        } else {
+            lerp3(a, lerp3(a, look.hot, if look.dark { 0.25 } else { 0.7 }), ((i - 1.0) / 0.4).clamp(0.0, 1.0))
+        }
+    };
+    // Levels a channel is dithered to, from 0 to `LEVELS`, on the square
+    // root of its distance from the page's colour: finer near it.
+    const LEVELS: f32 = 7.0;
+    // Each channel from the page's colour toward white (dark theme) or
+    // black (light), the first level the page itself: a channel's value
+    // (in 1024ths) to its place among the levels, and a level to its byte,
+    // in tables.
+    const STEPS: usize = 1024;
+    let place: [[f32; STEPS + 1]; 3] = std::array::from_fn(|i| {
+        let b = bg[i];
+        std::array::from_fn(|j| {
+            let ch = j as f32 / STEPS as f32;
+            let ink = if look.dark { (ch - b) / (1.0 - b) } else { (b - ch) / b };
+            ink.clamp(0.0, 1.0).sqrt() * LEVELS
+        })
+    });
+    let level: [[u8; LEVELS as usize + 1]; 3] = std::array::from_fn(|i| {
+        let b = bg[i];
+        std::array::from_fn(|l| {
+            let l = l as f32 / LEVELS;
+            ((if look.dark { b + l * l * (1.0 - b) } else { b - l * l * b }) * 255.0).round() as u8
+        })
+    });
+    let quantize = |c: [f32; 3], th: f32| -> [u8; 3] {
+        [0, 1, 2].map(|i| {
+            let at = place[i][(c[i].clamp(0.0, 1.0) * STEPS as f32) as usize];
+            level[i][((at + th) as usize).min(LEVELS as usize)]
+        })
+    };
+    // A channel to its light and back, in tables: luminance, as contrast
+    // ratios take it, is a sum of the lights, so that under the words a
+    // colour is brought to the luminance wanted in one step.
+    const LIGHTS: usize = 4096;
+    let to_light: [f32; STEPS + 1] = std::array::from_fn(|j| {
+        let v = j as f32 / STEPS as f32;
+        if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+    });
+    let from_light: [f32; LIGHTS + 1] = std::array::from_fn(|j| {
+        let l = j as f32 / LIGHTS as f32;
+        if l <= 0.003_130_8 { l * 12.92 } else { 1.055 * l.powf(1.0 / 2.4) - 0.055 }
+    });
+    let light = |c: [f32; 3]| c.map(|v| to_light[(v.clamp(0.0, 1.0) * STEPS as f32) as usize]);
+    let luminance = |l: [f32; 3]| 0.2126 * l[0] + 0.7152 * l[1] + 0.0722 * l[2];
+    let bg_light = light(bg);
+    // Worked out once a range, and once a range and column.
+    let depth: Vec<f32> = (0..n).map(|k| k as f32 / (n - 1) as f32).collect();
+    let base: Vec<f32> = depth.iter().map(|d| look.ink_far + (look.ink_near - look.ink_far) * d.powf(0.3)).collect();
+    let grey = |ink: f32| lerp3(bg, look.ink, ink);
+    // The accent the land warms to: deep in the dark theme, light in the
+    // light one.
+    let warm = if look.dark { a.map(|v| v * 0.55) } else { lerp3(bg, a, 0.75) };
+    let (band_fall, warm_fall, slope_fall) = (1.0 / (0.012 * h), 1.0 / (0.03 * h), 1.0 / (0.07 * h));
+    // The glow where a range's crest stands (it thickens and whitens the
+    // crest), and with it the light it spreads over the ranges on its side,
+    // less on the near (it warms them).
+    let direct: Vec<Vec<f32>> = (0..n).map(|k| (0..cols).map(|x| glow_at(x, crests[k][x]).min(1.0)).collect()).collect();
+    let ambient: Vec<f32> = (0..cols).map(|x| (-((x as f32 - gx) / (0.6 * w)).powi(2)).exp()).collect();
+    let lit: Vec<Vec<f32>> = (0..n).map(|k| (0..cols).map(|x| (direct[k][x] + 0.6 * ambient[x] * (1.0 - 0.35 * depth[k])).min(1.0)).collect()).collect();
+    let lb = luminance(bg_light);
     let mut pixels = Vec::with_capacity(cols * rows);
+    // Cells over a crest its bloom reaches.
+    const RIM: f32 = 3.0;
+    // Above every crest, and where no glow reaches, a row is the page.
+    let highest = crests.iter().flat_map(|row| row.iter()).fold(f32::MAX, |a, &b| a.min(b));
     for y in 0..rows {
         let v = y as f32 + 0.5;
+        if v < highest - RIM && (look.high || 1.25 * rows_core[y] + rows_halo[y] < 0.004) {
+            pixels.extend(std::iter::repeat_n(bg_px, cols));
+            continue;
+        }
         let bayer = &BAYER[y % 8];
         for x in 0..cols {
-            // The sky: near the page's colour, the glow over it.
-            let glow = glow_x[x] * glow_y[y];
-            let (mut g, mut a) = (0.06 * look.land * (v / h).powi(2), 0.7 * glow);
-            // The nearest range this cell is on.
-            for k in (0..RIDGES.len()).rev() {
+            let mut c = None;
+            // The nearest crest just under this cell, of a range in front:
+            // its glow blooms a little above it.
+            let (mut rim_d, mut rim_k) = (f32::MAX, 0);
+            for k in (0..n).rev() {
                 let d = v - crests[k][x];
-                if d >= 0.0 {
-                    let near = 1.0 / (1.0 + d * fall);
-                    g = look.land * RIDGES[k].4 * (0.25 + 0.75 * near);
-                    // The glow, faint on the land, through the far ranges.
-                    a = 0.18 * glow * (1.0 - k as f32 / RIDGES.len() as f32);
-                    if d < 1.0 {
-                        // The crest: lit by the glow, dotted far from it.
-                        a = 0.22 + 0.78 * glow_x[x];
-                        g += 0.25;
+                if d < 0.0 {
+                    if -d < rim_d {
+                        (rim_d, rim_k) = (-d, k);
                     }
+                    continue;
+                }
+                if look.high {
+                    c = (d < 1.0).then_some(a);
                     break;
                 }
+                let (depth, lit, direct) = (depth[k], lit[k][x], direct[k][x]);
+                // Sparks: whether this cell of a crest is the accent's or
+                // the grey's, more of the accent toward the glow.
+                let spark = || (BAYER[(x * 3 + k) % 8][(x + y * 5) % 8] as f32 + 0.5) / 64.0 < 0.35 + 0.65 * (1.5 * lit).min(1.0);
+                if d < 1.0 + 0.8 * lit {
+                    // The crest's top: a highlight, pale with sparks of the
+                    // accent away from the glow, white-hot toward it.
+                    let hi = grey(look.crest * (1.0 - 0.45 * depth));
+                    let hot = lerp3(a, look.hot, ((1.4 * direct - 0.3) * (1.0 - 0.5 * depth)).clamp(0.0, 1.0));
+                    c = Some(lerp3(hi, hot, if spark() { 0.5 + 0.5 * lit } else { lit }));
+                } else if d < 2.0 + 0.8 * lit + 1.5 * direct {
+                    // Under it, the accent: bright toward the glow, sparks
+                    // on grey away from it.
+                    let accent = a.map(|v| v * (0.55 + 0.45 * lit));
+                    c = Some(if spark() || lit > 0.5 { lerp3(grey(0.4), accent, 0.6 + 0.4 * lit) } else { grey(look.crest * 0.5 * (1.0 - 0.4 * depth)) });
+                } else {
+                    // The land: dense just under the crest, fading to a
+                    // faint texture; paler far off; warmed by the glow on
+                    // its side (falloffs as ratios, cheaper than
+                    // exponentials).
+                    let below = d - 2.0;
+                    let e = 1.0 / (1.0 + below * band_fall);
+                    // Darker down the slope, so that each range stands out
+                    // from the one behind it.
+                    let slope = 1.0 / (1.0 + below * slope_fall);
+                    let ground = grey(base[k] * (0.45 + 0.55 * slope) + 0.16 * e * e * (1.0 - 0.4 * depth));
+                    let e = 1.0 / (1.0 + below * warm_fall);
+                    let warmth = (1.3 * lit * e * e).min(1.0);
+                    c = Some(lerp3(ground, warm, 0.85 * warmth));
+                }
+                break;
             }
-            let quiet = 1.0 - look.hush * across[x] * down[y];
-            let (g, a) = (g * quiet, a * quiet);
-            let d1 = (bayer[x % 8] as f32 + 0.5) / 64.0;
-            let d2 = (BAYER[x % 8][(y + 3) % 8] as f32 + 0.5) / 64.0;
-            let gi = ((g * greys + d1) as usize).min(look.greys - 1);
-            let ai = ((a * tints + d2) as usize).min(look.tints - 1);
-            pixels.push(look.table[gi * look.tints + ai]);
+            let c = match c {
+                Some(c) => c,
+                None if look.high => {
+                    pixels.push(bg_px);
+                    continue;
+                }
+                None => {
+                    let glow = 1.25 * core_x[x] * rows_core[y] + halo_x[x] * rows_halo[y];
+                    if glow < 0.004 && rim_d >= RIM {
+                        pixels.push(bg_px);
+                        continue;
+                    }
+                    glow_colour(glow)
+                }
+            };
+            // The bloom over a crest lit by the glow.
+            let c = if rim_d < RIM && !look.high {
+                let f = 1.0 - rim_d / RIM;
+                lerp3(c, a, (0.6 * lit[rim_k][x] * f * f).min(1.0))
+            } else {
+                c
+            };
+            let th = (bayer[x % 8] as f32 + 0.5) / 64.0;
+            let m = mask_x[x] * mask_y[y];
+            if look.high {
+                let [r, g, b] = quantize(lerp3(c, bg, look.hush * m), th);
+                pixels.push(Color32::from_rgb(r, g, b));
+                continue;
+            }
+            if m <= 0.0 {
+                let [r, g, b] = quantize(c, th);
+                pixels.push(Color32::from_rgb(r, g, b));
+                continue;
+            }
+            // Under the words: the light pressed under (dark theme) or the
+            // shade lifted over (light) a luminance, softly — no edge where
+            // it starts —, the colour drawn toward the page's until it is.
+            let allowed = if look.dark { 1.0 + (look.limit - 1.0) * m } else { look.limit * m };
+            let cl = light(c);
+            let lc = luminance(cl);
+            // How far from the page's luminance it may go, and how far it is.
+            let (room, far) = if look.dark { (allowed - lb, lc - lb) } else { (lb - allowed, lb - lc) };
+            let c = if far > 0.6 * room && room > 0.0 {
+                let knee = 0.6 * room;
+                let wanted = knee + 0.4 * room * (1.0 - (-(far - knee) / (0.4 * room)).exp());
+                // Drawn toward the page's colour in light, by as much.
+                let f = wanted / far;
+                [0, 1, 2].map(|i| from_light[((bg_light[i] + (cl[i] - bg_light[i]) * f).clamp(0.0, 1.0) * LIGHTS as f32) as usize])
+            } else if room <= 0.0 {
+                bg
+            } else {
+                c
+            };
+            let px = quantize(c, th);
+            pixels.push(Color32::from_rgb(px[0], px[1], px[2]));
         }
     }
     egui::ColorImage::new([cols, rows], pixels)
@@ -2264,9 +2470,9 @@ mod backdrop_tests {
         }
     }
 
-    /// The waves move, keep to their few colours, and leave the words of
-    /// every theme legible: text past 4.5 to 1, muted text past 3 to 1, on
-    /// any cell where the words are, at any time.
+    /// The ridges move and leave the words of every theme legible: text
+    /// past 4.5 to 1, muted text past 3 to 1, on any patch of dots where the
+    /// words are, at any time, with any accent.
     #[test]
     fn the_waves_move_and_stay_calm_under_the_words() {
         let (cols, rows) = (420, 300);
@@ -2282,13 +2488,31 @@ mod backdrop_tests {
             let frames: Vec<egui::ColorImage> = [0.0, 2.5, 9.0, 600.0].iter().map(|&t| wave_frame(&look, cols, rows, calm, t)).collect();
             assert!(frames.windows(2).all(|w| w[0].pixels != w[1].pixels), "dark {dark}, high {high}: the waves move");
             let used: std::collections::HashSet<Color32> = frames.iter().flat_map(|f| f.pixels.iter().copied()).collect();
-            assert!(used.iter().all(|c| look.table.contains(c)), "only the table's colours");
-            assert!(used.len() >= look.greys.max(look.tints), "dark {dark}, high {high}: {} of {} colours used", used.len(), look.table.len());
+            assert!(used.len() >= 4, "dark {dark}, high {high}: {} colours used", used.len());
             let (mut text, mut weak) = (f32::MAX, f32::MAX);
+            // Against what is around a letter: the dots of a 4 × 4 cells
+            // patch (8 points), averaged in light, through the halo
+            // `paint_on_art` lays around it.
+            let lin = |v: u8| {
+                let v = v as f32 / 255.0;
+                if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+            };
+            let srgb = |l: f32| ((if l <= 0.0031308 { l * 12.92 } else { 1.055 * l.powf(1.0 / 2.4) - 0.055 }) * 255.0).round() as u8;
             for f in &frames {
-                for y in calm[1]..calm[3] {
-                    for x in calm[0]..calm[2] {
-                        let c = f.pixels[y as usize * cols + x as usize];
+                for y in (calm[1]..calm[3] - 4).step_by(2) {
+                    for x in (calm[0]..calm[2] - 4).step_by(2) {
+                        let mut sum = [0.0f32; 3];
+                        for dy in 0..4 {
+                            for dx in 0..4 {
+                                let c = f.pixels[(y + dy) as usize * cols + (x + dx) as usize];
+                                for (s, v) in sum.iter_mut().zip([c.r(), c.g(), c.b()]) {
+                                    *s += lin(v) / 16.0;
+                                }
+                            }
+                        }
+                        // Seen through the letters' halo of the page's colour.
+                        let page = backdrop_fill(&pal);
+                        let c = theme::mix(page, Color32::from_rgb(srgb(sum[0]), srgb(sum[1]), srgb(sum[2])), HALO);
                         text = text.min(theme::contrast(pal.text, c));
                         weak = weak.min(theme::contrast(art_weak(&pal), c));
                     }
@@ -2297,6 +2521,38 @@ mod backdrop_tests {
             eprintln!("dark {dark}, high {high}, accent {accent:?}: text {text:.1}:1, muted {weak:.1}:1 at worst under the words");
             assert!(text >= if high { 7.0 } else { 4.5 } && weak >= 3.0, "dark {dark}, high {high}: text {text:.1}, muted {weak:.1}");
         }
+    }
+
+    /// The ridges beside the picture they are drawn after (MASSIF_RIDGES_REF,
+    /// a PNG of a home screen 2000 × 1301 whose backdrop starts 354 pixels
+    /// in), at its size, dithered in cells of 4 pixels: written to
+    /// MASSIF_RIDGES_OUT, the reference on the left. Then the light theme
+    /// and high contrast, under it.
+    #[test]
+    fn ridges_beside_the_reference() {
+        let (Some(reference), Some(out)) = (std::env::var_os("MASSIF_RIDGES_REF"), std::env::var_os("MASSIF_RIDGES_OUT")) else {
+            return;
+        };
+        let reference = image::open(reference).unwrap().to_rgb8();
+        let (rx, ry, rw, rh) = (354u32, 45u32, 1644u32, 1256u32);
+        let (cols, rows) = ((rw / 4) as usize, (rh / 4) as usize);
+        let calm = [(cols as f32 * 0.21) as i32, (rows as f32 * 0.1) as i32, (cols as f32 * 0.79) as i32, rows as i32];
+        let t: f64 = std::env::var("MASSIF_RIDGES_T").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+        let mut sheet = image::RgbImage::new(rw * 2, rh * 2);
+        image::imageops::replace(&mut sheet, &image::imageops::crop_imm(&reference, rx, ry, rw, rh).to_image(), 0, 0);
+        let shots = [(true, false, rw as i64, 0i64), (false, false, 0, rh as i64), (true, true, rw as i64, rh as i64)];
+        for (dark, high, ox, oy) in shots {
+            let base = Palette::themed(dark, high);
+            let accent = if high { theme::legible(theme::rgb(theme::DEFAULT_ACCENT), base.panel, 4.5) } else { theme::rgb(theme::DEFAULT_ACCENT) };
+            let pal = Palette { accent, ..base };
+            let frame = wave_frame(&WaveLook::of(&pal), cols, rows, calm, t);
+            let img = image::RgbImage::from_fn(cols as u32 * 4, rows as u32 * 4, |x, y| {
+                let c = frame.pixels[(y / 4) as usize * cols + (x / 4) as usize];
+                image::Rgb([c.r(), c.g(), c.b()])
+            });
+            image::imageops::replace(&mut sheet, &img, ox, oy);
+        }
+        sheet.save(out).unwrap();
     }
 
     /// What a frame of the waves costs (MASSIF_PERF): over the home screen

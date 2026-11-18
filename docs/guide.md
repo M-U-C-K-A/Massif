@@ -57,14 +57,20 @@ light jumps from one part to the next rather than gliding.
 
 Behind it, as **Home background** says (Settings ▸ Appearance), ridges or
 pictures. The ridges, the default: six ranges of mountains seen from afar, one
-behind the other, each a jagged crest drawn in the accent colour over land
-that darkens down from it, the far ones paler in the haze; low on the right,
-a glow of the accent behind them, as of a sun gone down; an empty sky above.
-All of it is made of dots, an ordered dither in square cells. The ranges
-drift slowly, the nearer faster, and the glow pulses; where the settings are
-written they fade out. Light theme: the same on a light page, grey land. High
-contrast: the crests alone, none under the words. They are drawn on the processor at 15 frames a
-second, only while the home screen is shown and the window is in front; with
+in front of the other, under a glow of the accent low on the right, as of a
+sun gone down, deep at its edge and bright at its core on the horizon. Each
+range is a band: a jagged crest, grey with sparks of the accent away from the
+glow, thicker and white-hot toward it, over land that darkens down from the
+crest, the far ranges paler in the haze, the near ones almost black, all of
+them warmed where the glow reaches. The sky is the page's own colour but for
+the glow. Every cell is dithered, its colour put to one of a few levels by an
+ordered threshold, so that the light is made of dots. The ranges drift
+slowly, the nearer faster, and breathe; the glow pulses. Where the settings
+are written their light is held down, softly, so that muted text keeps 3 to
+1 on them. Light theme: the same on a light page, pale grey land. High
+contrast: the crests alone, none under the words. They are drawn on the
+processor at 12 frames a second, only while the home screen is shown and the
+window is in front; with
 **Animate the background** off (Settings ▸ Appearance) or Reduce motion on,
 they stand still. The pictures are those of
 [`crates/massif-app/assets/backdrops`](../crates/massif-app/assets/backdrops) —
