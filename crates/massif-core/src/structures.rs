@@ -198,6 +198,32 @@ impl Structure {
     }
 }
 
+/// Give the columns of `heights` the height of their top, the first free
+/// block above it (the land flattened under a structure's buildings), on
+/// the level edited.
+pub fn set_heights(edit: &mut crate::history::Edit, heights: &std::collections::HashMap<(i32, i32), i32>) {
+    if heights.is_empty() {
+        return;
+    }
+    let (lo, hi) = (edit.dim().min_y as f32, edit.dim().max_y as f32);
+    let (mut x0, mut z0, mut x1, mut z1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+    for &(x, z) in heights.keys() {
+        (x0, z0, x1, z1) = (x0.min(x), z0.min(z), x1.max(x + 1), z1.max(z + 1));
+    }
+    let rect = BlockRect::new(x0, z0, x1, z1);
+    edit.par_tiles(rect.tiles(), rect, false, |_, clip, tile| {
+        let top = tile.top.dense_mut();
+        for z in clip.z0..clip.z1 {
+            for x in clip.x0..clip.x1 {
+                if let Some(&h) = heights.get(&(x, z)) {
+                    // Elevation `h` puts the first free block at `h`.
+                    top[crate::coords::local_index(x, z)] = crate::codec::snap_height((h as f32).clamp(lo, hi));
+                }
+            }
+        }
+    });
+}
+
 /// The number the next structure placed in `structures` takes.
 pub fn next_id(structures: &[std::sync::Arc<Structure>]) -> u32 {
     structures.iter().map(|s| s.id).max().map_or(1, |m| m + 1)
