@@ -42,6 +42,15 @@ pub struct WorldMeta {
     /// is exported (see [`crate::shapes`]).
     #[serde(default, skip_serializing_if = "crate::shapes::SmoothSettings::is_off")]
     pub smooth: crate::shapes::SmoothSettings,
+    /// The map's identifier, the same in every copy of it: given at its
+    /// first version (see [`World::map_id`]), so that versions and
+    /// contributions know which map they belong to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub map_id: Option<crate::versions::Id>,
+    /// The version the map stands on: the save point made or put back
+    /// last, the parent of the next one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<crate::versions::Id>,
 }
 
 impl Default for WorldMeta {
@@ -58,6 +67,8 @@ impl Default for WorldMeta {
             fill: None,
             palette: Default::default(),
             smooth: Default::default(),
+            map_id: None,
+            head: None,
         }
     }
 }
@@ -273,6 +284,11 @@ impl World {
             dims: vec![Dimension::new(DimensionKind::Overworld, -64, 320)],
             points: Vec::new(),
         }
+    }
+
+    /// The map's identifier, given now if it had none.
+    pub fn map_id(&mut self) -> crate::versions::Id {
+        *self.meta.map_id.get_or_insert_with(crate::versions::Id::random)
     }
 
     /// A fully cold copy, cheap to send to a background thread.

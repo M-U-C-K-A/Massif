@@ -197,6 +197,24 @@ impl VoxelChunk {
         self.get(lx, ly, lz) >= SOLID
     }
 
+    /// Read the terrain of every voxel brought by sculpting through `f`
+    /// (the numbers of another registry made this one's).
+    pub fn remap_terrains(&mut self, f: impl Fn(u16) -> u16) {
+        if let Some(t) = &mut self.terrain {
+            for v in t.iter_mut() {
+                if *v < LAVA_MARK {
+                    *v = f(*v);
+                }
+            }
+        }
+    }
+
+    /// The terrain of every voxel, [`FOLLOW`] where it is the column's.
+    pub fn terrains(&self) -> Option<&[u16; VOLUME]> {
+        self.terrain.as_deref()
+    }
+
+    /// The density of every voxel, in (y, z, x) order.
     pub fn densities(&self) -> &[u8; VOLUME] {
         &self.density
     }
