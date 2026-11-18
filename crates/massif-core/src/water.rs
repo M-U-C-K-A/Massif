@@ -108,23 +108,29 @@ fn ground_column(dim: &Dimension, top: i32, fluid: i16) -> Column {
 /// [`columns_around`], the columns of the other tiles taken from the edges
 /// `planner` keeps of them where it has them.
 fn columns_with(dim: &Dimension, pos: TilePos, margin: i32, planner: Option<&Planner>) -> Vec<Option<Column>> {
-    let n = TILE_SIZE + 2 * margin;
-    let mut out = vec![None; (n * n) as usize];
-    let (ox, oz) = pos.origin();
+    columns_in(dim, pos.rect().expand(margin), Some(pos), planner)
+}
+
+/// The columns of `rect` as the export composes them (`None` off the map),
+/// row by row; those of tiles other than `own` from the edges `planner`
+/// keeps of them where it has them.
+fn columns_in(dim: &Dimension, rect: crate::coords::BlockRect, own: Option<TilePos>, planner: Option<&Planner>) -> Vec<Option<Column>> {
+    let (w, d) = (rect.width(), rect.depth());
+    let mut out = vec![None; (w * d) as usize];
     let (mut spans, mut fluids): (Vec<Span>, Vec<(i32, i32)>) = (Vec::new(), Vec::new());
     let mut stacks: std::collections::HashMap<TilePos, Option<TileStack>> = std::collections::HashMap::new();
-    for j in 0..n {
-        for i in 0..n {
-            let (x, z) = (ox + i - margin, oz + j - margin);
+    for j in 0..d {
+        for i in 0..w {
+            let (x, z) = (rect.x0 + i, rect.z0 + j);
             let p = TilePos::containing(x, z);
             let cell = local_index(x, z);
-            if p != pos
+            if Some(p) != own
                 && let Some(ring) = planner.and_then(|pl| pl.rings.get(&p))
             {
                 if let Some(&(top, fluid)) = ring.get(ring_index(cell))
                     && top != i16::MIN
                 {
-                    out[(j * n + i) as usize] = Some(ground_column(dim, top as i32, fluid));
+                    out[(j * w + i) as usize] = Some(ground_column(dim, top as i32, fluid));
                 }
                 continue;
             }
@@ -134,7 +140,7 @@ fn columns_with(dim: &Dimension, pos: TilePos, margin: i32, planner: Option<&Pla
             }
             if !stack.is_sculpted() && stack.layers().nth(1).is_none() {
                 let g = stack.ground();
-                out[(j * n + i) as usize] = Some(ground_column(dim, crate::compose::block_top(g.top.get(cell)), g.fluid.get(cell)));
+                out[(j * w + i) as usize] = Some(ground_column(dim, crate::compose::block_top(g.top.get(cell)), g.fluid.get(cell)));
                 continue;
             }
             stack.spans(cell, &mut spans);
@@ -148,7 +154,7 @@ fn columns_with(dim: &Dimension, pos: TilePos, margin: i32, planner: Option<&Pla
                 stack.sculpted_fluids(cell, &mut cave);
                 column.water.extend(cave.iter().map(|c| (c.0, c.1)));
             }
-            out[(j * n + i) as usize] = Some(column);
+            out[(j * w + i) as usize] = Some(column);
         }
     }
     out
@@ -324,10 +330,11 @@ pub fn seal(edit: &mut crate::history::Edit, rect: crate::coords::BlockRect, ris
     changed.len()
 }
 
-/// The lowest ground water of `cols` (`n` a side) may run down to: under
+/// The lowest ground water of `cols` (`w` wide, `d` deep) may run down to: under
 /// the air beside it, the ground or water lower down. `None` where no
 /// water has air beside it.
-fn restless(cols: &[Option<Column>], n: usize) -> Option<i32> {
+fn restless(cols: &[Option<Column>], w: usize, d: usize) -> Option<i32> {
+    let n = w;
     let covered = |b: &Column, y0: i32, y1: i32| {
         let mut runs: Vec<(i32, i32)> = b.solid.iter().chain(&b.water).copied().filter(|r| r.1 > y0 && r.0 < y1).collect();
         runs.sort_unstable();
@@ -341,13 +348,13 @@ fn restless(cols: &[Option<Column>], n: usize) -> Option<i32> {
         y >= y1
     };
     let mut lowest: Option<i32> = None;
-    for j in 0..n {
+    for j in 0..d {
         for i in 0..n {
             let Some(c) = &cols[j * n + i] else { continue };
             for &(y0, y1) in &c.water {
                 for (di, dj) in [(-1i32, 0i32), (1, 0), (0, -1), (0, 1)] {
                     let (a, b) = (i as i32 + di, j as i32 + dj);
-                    if a < 0 || b < 0 || a >= n as i32 || b >= n as i32 {
+                    if a < 0 || b < 0 || a >= n as i32 || b >= d as i32 {
                         continue;
                     }
                     if let Some(b) = &cols[b as usize * n + a as usize]
@@ -376,19 +383,31 @@ type GridAndEdges = (crate::flow::Grid, Vec<Option<Column>>, Vec<(i32, i32, i32)
 
 /// [`grid_around`], with the water blocks that have air beside them.
 fn grid_and_edges(dim: &Dimension, pos: TilePos, margin: i32, planner: Option<&Planner>) -> Option<GridAndEdges> {
-    use crate::flow::{Block, Grid};
+    let rect = pos.rect().expand(margin);
     let cols = columns_with(dim, pos, margin, planner);
-    let floor = restless(&cols, (TILE_SIZE + 2 * margin) as usize)?;
+    let (g, edges) = grid_of(dim, rect, &cols)?;
+    Some((g, cols, edges))
+}
+
+/// Blocks, by (x, y, z).
+type Blocks = Vec<(i32, i32, i32)>;
+
+/// The blocks of `rect` (its columns `cols`, row by row) as water sees
+/// them, between a little under its lowest surface and over its highest
+/// water, and its water with air beside it; `None` if it holds no water
+/// that can run.
+fn grid_of(dim: &Dimension, rect: crate::coords::BlockRect, cols: &[Option<Column>]) -> Option<(crate::flow::Grid, Blocks)> {
+    use crate::flow::{Block, Grid};
+    let (n, nd) = (rect.width() as usize, rect.depth() as usize);
+    let floor = restless(cols, n, nd)?;
     let top_water = cols.iter().flatten().flat_map(|c| c.water.iter().map(|w| w.1)).max()?;
     let y1 = (top_water + 2).min(dim.max_y);
     // Water runs down to the lowest land, or the lowest water's surface.
     let lowest = cols.iter().flatten().map(|c| c.water.last().map_or_else(|| c.solid.last().map_or(dim.min_y, |s| s.1), |w| w.1 - 1)).min()?.min(floor);
     let y0 = (lowest - 1).max(y1 - 192).max(dim.min_y);
-    let n = (TILE_SIZE + 2 * margin) as usize;
-    let (ox, oz) = pos.origin();
     let ny = (y1 - y0) as usize;
-    let mut g = Grid::new(ox - margin, y0, oz - margin, n, ny, n);
-    let layer = n * n;
+    let mut g = Grid::new(rect.x0, y0, rect.z0, n, ny, nd);
+    let layer = n * nd;
     for (k, c) in cols.iter().enumerate() {
         let Some(c) = c else {
             for j in 0..ny {
@@ -414,14 +433,14 @@ fn grid_and_edges(dim: &Dimension, pos: TilePos, margin: i32, planner: Option<&P
                 let base = (y - y0) as usize * layer;
                 if [(-1i32, 0i32), (1, 0), (0, -1), (0, 1)].iter().any(|&(di, dj)| {
                     let (p, q) = (i + di, j + dj);
-                    p >= 0 && q >= 0 && p < n as i32 && q < n as i32 && g.blocks[base + q as usize * n + p as usize] == Block::Air
+                    p >= 0 && q >= 0 && p < n as i32 && q < nd as i32 && g.blocks[base + q as usize * n + p as usize] == Block::Air
                 }) {
                     edges.push((g.x0 + i, y, g.z0 + j));
                 }
             }
         }
     }
-    Some((g, cols, edges))
+    Some((g, edges))
 }
 
 /// What the game does to the water of a tile once every block of it is
@@ -570,6 +589,161 @@ pub fn steady_tile(dim: &Dimension, pos: TilePos, planner: Option<&Planner>) -> 
     out
 }
 
+/// How far around the two tiles of a seam the water is read, and how far
+/// from the seam the water ticks, for [`seam_run`].
+const SEAM_AROUND: i32 = 24;
+const SEAM_BAND: i32 = 16;
+
+/// What the game does to the water along the seam between the tiles `a`
+/// and `b` (`a` west or north of `b`), each tile's water as `steady`
+/// writes it (those it lacks as the map holds it), once the water within
+/// [`SEAM_BAND`] blocks of the seam with air beside it ticks, as it does
+/// when a block of that air changes: whether it settled, and the blocks
+/// that changed, each with what the map holds there and what it became.
+#[allow(clippy::type_complexity)]
+fn seam_run(dim: &Dimension, a: TilePos, b: TilePos, steady: &std::collections::HashMap<TilePos, Vec<Steady>>) -> (bool, Vec<((i32, i32, i32), crate::flow::Block, crate::flow::Block)>) {
+    use crate::coords::BlockRect;
+    use crate::flow::Block;
+    let rect = BlockRect::new(a.x * TILE_SIZE - SEAM_AROUND, a.z * TILE_SIZE - SEAM_AROUND, (b.x + 1) * TILE_SIZE + SEAM_AROUND, (b.z + 1) * TILE_SIZE + SEAM_AROUND);
+    let cols = columns_in(dim, rect, None, None);
+    let Some((mut g, _)) = grid_of(dim, rect, &cols) else { return (true, Vec::new()) };
+    let base = g.blocks.clone();
+    // The water as the export writes it, each tile's its own.
+    for t in rect.tiles() {
+        let (ox, oz) = t.origin();
+        for s in steady.get(&t).into_iter().flatten() {
+            let (x, z) = (ox + s.cell as i32 % TILE_SIZE, oz + s.cell as i32 / TILE_SIZE);
+            if x >= rect.x0 && x < rect.x1 && z >= rect.z0 && z < rect.z1 {
+                g.set(x, s.y, z, s.block);
+            }
+        }
+    }
+    let written = g.blocks.clone();
+    let by_seam = |x: i32, z: i32| {
+        if a.x != b.x {
+            (x - b.x * TILE_SIZE).abs() < SEAM_BAND && z >= a.z * TILE_SIZE && z < (a.z + 1) * TILE_SIZE
+        } else {
+            (z - b.z * TILE_SIZE).abs() < SEAM_BAND && x >= a.x * TILE_SIZE && x < (a.x + 1) * TILE_SIZE
+        }
+    };
+    // The water with air beside, above or under it ticks, as it does when a
+    // block of that air changes.
+    let airy = |x: i32, y: i32, z: i32| [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)].iter().any(|(dx, dy, dz)| g.get(x + dx, y + dy, z + dz) == Block::Air);
+    let mut queue: std::collections::VecDeque<(i32, i32, i32)> = g.restless().into_iter().filter(|&(x, y, z)| by_seam(x, z) && airy(x, y, z)).collect();
+    let budget = 400 * g.nx * g.nz;
+    let settled = g.run(&mut queue, budget).1;
+    let mut changed = Vec::new();
+    for (i, (was, now)) in written.iter().zip(&g.blocks).enumerate() {
+        if was != now {
+            let p = (g.x0 + (i % g.nx) as i32, g.y0 + (i / (g.nx * g.nz)) as i32, g.z0 + ((i / g.nx) % g.nz) as i32);
+            changed.push((p, base[i], *now));
+        }
+    }
+    (settled, changed)
+}
+
+/// The seams between the tiles of `tiles` and the tiles beside them, each
+/// once, west or north tile first.
+fn seams_of(dim: &Dimension, tiles: impl Iterator<Item = TilePos>) -> Vec<(TilePos, TilePos)> {
+    let mut seams = std::collections::BTreeSet::new();
+    for p in tiles {
+        for (dx, dz) in [(1, 0), (0, 1), (-1, 0), (0, -1)] {
+            let q = p.offset(dx, dz);
+            if dim.ground().view(q).is_some() {
+                seams.insert(if dx + dz > 0 { ((p.x, p.z), (q.x, q.z)) } else { ((q.x, q.z), (p.x, p.z)) });
+            }
+        }
+    }
+    seams.into_iter().map(|(a, b)| (TilePos::new(a.0, a.1), TilePos::new(b.0, b.1))).collect()
+}
+
+/// The water of every tile of `dim` the export settles, as it writes it:
+/// each tile's worked out on its own ([`steady_tile`]), then made to agree
+/// along the seams between tiles. Worked out alone, two tiles side by side
+/// may each leave their side of a seam as it holds against what they
+/// guessed of the other, and not against what the other writes: there the
+/// game would move the water (flowing water evened out, a source made)
+/// once a block beside it changed. Along each seam the game's rules run
+/// over both tiles as written ([`seam_run`]), and what they change is
+/// written instead, round after round until nothing changes. By tile, the
+/// blocks written otherwise than the map holds them, by column then
+/// height; a tile not there is written as the map holds it.
+pub fn steady_all(dim: &Dimension, planner: &Planner) -> std::collections::HashMap<TilePos, Vec<Steady>> {
+    use std::collections::{BTreeMap, HashMap, HashSet};
+    let tiles: Vec<TilePos> = dim.ground().positions().filter(|&p| planner.needs(p)).collect();
+    let mut steady: HashMap<TilePos, Vec<Steady>> = tiles.par_iter().map(|&p| (p, steady_tile(dim, p, Some(planner)))).collect();
+    let mut seams = seams_of(dim, tiles.iter().copied());
+    for _ in 0..4 {
+        if seams.is_empty() {
+            break;
+        }
+        let runs: Vec<_> = seams.par_iter().map(|&(a, b)| seam_run(dim, a, b, &steady).1).collect();
+        // What the game changed, by tile: what is written there instead.
+        // By column and height: what the map holds there, what it becomes.
+        type Edits = BTreeMap<(u16, i32), (crate::flow::Block, crate::flow::Block)>;
+        let mut edits: HashMap<TilePos, Edits> = HashMap::new();
+        for ((x, y, z), base, now) in runs.into_iter().flatten() {
+            edits.entry(TilePos::containing(x, z)).or_default().insert((local_index(x, z) as u16, y), (base, now));
+        }
+        if edits.is_empty() {
+            break;
+        }
+        let touched: HashSet<TilePos> = edits.keys().copied().collect();
+        for (t, cells) in edits {
+            let list = steady.entry(t).or_default();
+            let mut all: BTreeMap<(u16, i32), crate::flow::Block> = list.iter().map(|s| ((s.cell, s.y), s.block)).collect();
+            for (k, (base, now)) in cells {
+                if now == base {
+                    all.remove(&k);
+                } else {
+                    all.insert(k, now);
+                }
+            }
+            *list = all.into_iter().map(|((cell, y), block)| Steady { cell, y, block }).collect();
+        }
+        seams = seams_of(dim, touched.into_iter());
+    }
+    steady
+}
+
+/// The water the export writes along the seams between its tiles
+/// ([`steady_all`]; `joined` false: each tile's as worked out on its own,
+/// [`steady_tile`]), as the game finds it ([`seam_run`]): what the game
+/// would change there once a block beside it is updated (nothing, if the
+/// tiles agree), and where (x, y, z), the first few of each seam.
+pub fn check_seams(dim: &Dimension, joined: bool) -> (Settled, Vec<(i32, i32, i32)>) {
+    let planner = Planner::new(dim);
+    let steady = if joined {
+        steady_all(dim, &planner)
+    } else {
+        dim.ground().positions().filter(|&p| planner.needs(p)).collect::<Vec<_>>().par_iter().map(|&p| (p, steady_tile(dim, p, Some(&planner)))).collect()
+    };
+    let seams = seams_of(dim, steady.keys().copied());
+    let found: Vec<(Settled, Blocks)> = seams
+        .par_iter()
+        .map(|&(a, b)| {
+            let (settled, changed) = seam_run(dim, a, b, &steady);
+            let mut r = Settled { unsettled: (!settled) as u64, ..Settled::default() };
+            let mut at = Vec::new();
+            for &(p, _, now) in &changed {
+                if at.len() < 8 {
+                    at.push(p);
+                }
+                r.changed += 1;
+                r.sources += (now == crate::flow::Block::Source) as u64;
+            }
+            (r, at)
+        })
+        .collect();
+    let mut total = Settled::default();
+    let mut at = Vec::new();
+    for (r, p) in found {
+        total = total.add(r);
+        at.extend(p);
+    }
+    (total, at)
+}
+
 /// What a tile holds, for [`Planner`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -593,7 +767,7 @@ pub struct Planner {
 }
 
 /// How far into the tiles beside it the water of a tile is worked out.
-const RING: i32 = 8;
+const RING: i32 = 24;
 
 /// The place of a column of a tile's edge in its ring, past the end for
 /// one inside.
@@ -699,6 +873,42 @@ mod tests {
         dim.ground_mut().insert(TilePos::new(0, 0), tile);
         world.dims = vec![dim];
         world
+    }
+
+    /// A river dug with the River tool across the seams of a hilly map:
+    /// each tile's water, worked out on its own, disagrees with the next
+    /// one's along their seams (the game evens the flowing water out and
+    /// makes sources there once a block beside it changes); made to agree,
+    /// the game leaves all of it as it is.
+    #[test]
+    fn the_tiles_agree_along_their_seams() {
+        let mut world = crate::generate::generate(&crate::generate::GenParams { tiles_x: 4, tiles_z: 4, landform: crate::generate::Landform::Hills, seed: 1, ..crate::generate::GenParams::default() });
+        let sea = world.meta.sea_level as f32;
+        let level = world.dims[0].ground();
+        let mut d = crate::river::descend(level, (-208, -240), sea, 60_000, 2_000_000, 13.0);
+        d.course = crate::river::natural_course(level, &d.course, 24.0, &[0]).0;
+        let reg = world.registry.clone();
+        let spec = crate::river::RiverSpec {
+            width: 12.0,
+            width_end: 36.0,
+            depth: 4.0,
+            depth_end: 7.0,
+            banks: 26.4,
+            water: true,
+            bed: reg.terrain_by_name("Gravel"),
+            shore: reg.terrain_by_name("Sand"),
+            clay: reg.terrain_by_name("Clay"),
+            sea: None,
+            biome: reg.biome_by_id("minecraft:river"),
+        };
+        let mut h = History::default();
+        h.begin("river", 0);
+        crate::river::dig_descent(&mut h.edit(&mut world, 0), &d, &spec);
+        h.commit();
+        let (alone, at) = check_seams(&world.dims[0], false);
+        assert!(alone.changed > 0, "the tiles alone disagree: {alone:?}");
+        let (joined, at_joined) = check_seams(&world.dims[0], true);
+        assert_eq!(joined.changed, 0, "{joined:?} at {at_joined:?} (alone: {} at {:?})", alone.changed, &at[..at.len().min(4)]);
     }
 
     #[test]

@@ -186,15 +186,18 @@ def water_key(state):
     return state.split("[", 1)[0]
 
 
-def auto_boxes(cli: Path, world: Path, n: int):
+def auto_boxes(cli: Path, world: Path, n: int, seams: bool = False):
     """The `n` boxes holding the most of the places where the water of
-    `world` steps, falls or spills, as `massif-cli water` lists them: a box
-    at a time, the points it holds left out of the next."""
-    out = subprocess.run([str(cli), "water", str(world)], env={**os.environ, "MASSIF_WATER_WHERE": "all"}, capture_output=True, text=True, check=True).stdout
+    `world` steps, falls or spills, as `massif-cli water` lists them (with
+    `seams`: where the tiles' water, each worked out on its own, disagreed
+    along their seams): a box at a time, the points it holds left out of
+    the next."""
+    env = {**os.environ, "MASSIF_WATER_SEAMS": "1", "MASSIF_SEAMS_UNJOINED": "1"} if seams else {**os.environ, "MASSIF_WATER_WHERE": "all"}
+    out = subprocess.run([str(cli), "water", str(world)], env=env, capture_output=True, text=True, check=True).stdout
     points = []
     for line in out.splitlines():
-        m = re.match(r"(\w+) at (-?\d+) (-?\d+) (-?\d+)", line)
-        if m:
+        m = re.match(r"\s*(\w+(?: change)?) at (-?\d+) (-?\d+) (-?\d+)", line)
+        if m and (seams == (m[1] == "seam change")):
             points.append((m[1], int(m[2]), int(m[3]), int(m[4])))
     kinds = {}
     for k, *_ in points:
@@ -229,6 +232,7 @@ def main() -> int:
     ap.add_argument("--world", required=True, type=Path)
     ap.add_argument("--box", action="append", default=[], help="a box of 32 blocks a side from its lowest corner, as x,y,z")
     ap.add_argument("--auto", type=int, default=0, help="also the N boxes with the most steps, falls and spills of the map's water")
+    ap.add_argument("--seams", type=int, default=0, help="also the N boxes where the tiles' water, each worked out alone, disagreed along their seams")
     ap.add_argument("--version", default="1.21.11")
     ap.add_argument("--minecraft", type=Path, default=Path.home() / "Library/Application Support/minecraft")
     ap.add_argument("--java")
@@ -245,6 +249,8 @@ def main() -> int:
     cli = ROOT / "target/release/massif-cli"
     if args.auto:
         boxes += auto_boxes(cli, args.world, args.auto)
+    if args.seams:
+        boxes += auto_boxes(cli, args.world, args.seams, seams=True)
     if not boxes:
         ap.error("no box to check: give --box or --auto")
     work = Path(tempfile.mkdtemp(prefix="massif-water-check-"))
@@ -342,6 +348,11 @@ def main() -> int:
                     others[(a, c)] = others.get((a, c), 0) + 1
             for (a, c), n in sorted(others.items(), key=lambda kv: -kv[1])[:6]:
                 print(f"   other: {n} × {a} -> {c}")
+    # What the game answered to the fills: each must have changed blocks,
+    # or nothing was updated and the check says nothing.
+    answers = [l for l in log if "filled" in l.lower() or "could not" in l.lower() or "too many blocks" in l.lower() or "not loaded" in l.lower()]
+    for l in answers:
+        print("  game:", l.split("]: ", 1)[-1])
     problems = [l for l in log if any(w in l for w in ("ERROR", "Exception", "Couldn't load", "Failed to load", "Recreating"))]
     for l in problems[:10]:
         print("  game:", l)
