@@ -17155,7 +17155,7 @@ mod tests {
             let t = std::time::Instant::now();
             h.step();
             still.push(t.elapsed().as_secs_f32() * 1000.0);
-            if settled.is_none() && !h.state().view3d.building() && h.state().view3d.pending() == 0 {
+            if settled.is_none() && (h.state().view3d.stride() == 1 || h.state().view3d.near_shown()) && !h.state().view3d.building() {
                 settled = Some(still_from.elapsed().as_secs_f32());
             }
             if settled.is_some() && still.len() > 60 {
@@ -17167,17 +17167,113 @@ mod tests {
             v[(v.len() - 1) * q / 100]
         };
         eprintln!(
-            "frame's work zooming: middle {:.1} ms, p95 {:.1}; up close: middle {:.1}, p95 {:.1}; near land built after {}",
+            "frame's work zooming: middle {:.1} ms, p95 {:.1}; up close: middle {:.1}, p95 {:.1}; every block near the eyes after {}",
             p(&mut moving, 50),
             p(&mut moving, 95),
             p(&mut still, 50),
             p(&mut still, 95),
             settled.map_or("more than 30 s".to_owned(), |s| format!("{s:.2} s"))
         );
-        eprintln!("a column every {} blocks", h.state().view3d.stride());
+        eprintln!("a column every {} blocks; every block near the eyes: {}", h.state().view3d.stride(), h.state().view3d.near_shown());
         if let (Some(dir), Some((w, hh, rgba))) = (&dir, h.state().view3d.read_back()) {
             let name = path.file_stem().unwrap().to_string_lossy();
             image::save_buffer(dir.join(format!("close-{name}-{ppp}x.png")), &rgba, w, hh, image::ColorType::Rgba8).unwrap();
         }
+        // Then over land: the highest of a few hundred places near the
+        // middle of the map, looked at from 2,500 blocks, the wheel turned
+        // toward it.
+        {
+            let app = h.state_mut();
+            let dim = app.doc.dimension();
+            let (lo, hi) = dim.bounds().unwrap();
+            let (cx, cz) = ((lo.x + hi.x + 1) * 64, (lo.z + hi.z + 1) * 64);
+            let (x, z, y) = (-10..10)
+                .flat_map(|j| (-10..10).map(move |i| (cx + i * 200, cz + j * 200)))
+                .filter_map(|(x, z)| massif_core::ops::height_at(dim, 0, x, z, massif_core::ops::Surface::Top).map(|y| (x, z, y)))
+                .fold((cx, cz, f32::MIN), |b, c| if c.2 > b.2 { c } else { b });
+            app.view3d.camera = crate::view3d::Camera { target: [x as f64 + 0.5, y as f64, z as f64 + 0.5], yaw: 0.6, pitch: 0.5, distance: 2500.0 };
+        }
+        h.run_steps(20);
+        for _ in 0..90 {
+            h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, 40.0), phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel, modifiers: Modifiers::NONE });
+            h.step();
+        }
+        // The wheel a little back: some land in sight.
+        for _ in 0..12 {
+            h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, -40.0), phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel, modifiers: Modifiers::NONE });
+            h.step();
+        }
+        let from = std::time::Instant::now();
+        while !(h.state().view3d.stride() == 1 || h.state().view3d.near_shown()) && from.elapsed().as_secs() < 30 {
+            h.step();
+        }
+        let shown_after = from.elapsed().as_secs_f32();
+        h.run_steps(30);
+        let (above, ahead, dist) = ground_gap(&h);
+        eprintln!("over land: eyes {above:.1} blocks over the surface, {ahead:.1} to the land ahead, orbit distance {dist:.1}; every block near the eyes after {shown_after:.2} s");
+        if let (Some(dir), Some((w, hh, rgba))) = (&dir, h.state().view3d.read_back()) {
+            let name = path.file_stem().unwrap().to_string_lossy();
+            image::save_buffer(dir.join(format!("land-{name}-{ppp}x.png")), &rgba, w, hh, image::ColorType::Rgba8).unwrap();
+        }
+        // From 400 blocks, low over the land: every block near, the grid's
+        // columns farther, and where they meet.
+        h.state_mut().view3d.camera.distance = 400.0;
+        h.state_mut().view3d.camera.pitch = 0.25;
+        h.run_steps(30);
+        if let (Some(dir), Some((w, hh, rgba))) = (&dir, h.state().view3d.read_back()) {
+            let name = path.file_stem().unwrap().to_string_lossy();
+            image::save_buffer(dir.join(format!("seam-{name}-{ppp}x.png")), &rgba, w, hh, image::ColorType::Rgba8).unwrap();
+        }
+    }
+
+    /// On a map too large for every block on the graphics card (here, for
+    /// 16 pages: a column every 2 blocks), the 3D View draws every block
+    /// around the eyes once they come low over the land, the pages it
+    /// draws staying while they are made again; an edit there is built
+    /// again; high over the map, the grid alone draws it again.
+    #[test]
+    fn every_block_near_the_eyes_of_a_map_too_large() {
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1280.0, 800.0))
+            .with_step_dt(1.0 / 60.0)
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_eframe(move |cc| {
+                theme::install(&cc.egui_ctx);
+                crate::graphics::set(crate::graphics::Graphics { gpu_pages: 16, ..crate::graphics::Graphics::of(crate::graphics::Preset::Low) });
+                let world = generate(&GenParams { tiles_x: 40, tiles_z: 40, landform: Landform::Hills, ..GenParams::default() });
+                let mut app = MassifApp::for_tests(world);
+                let with_3d = app.layout.workspaces.iter().position(|w| w.root.shows(EditorKind::View3d)).unwrap();
+                app.layout.active = with_3d;
+                app
+            });
+        let settle = |h: &mut egui_kittest::Harness<'_, MassifApp>, until: &dyn Fn(&MassifApp) -> bool| {
+            let started = std::time::Instant::now();
+            while !until(h.state()) && started.elapsed().as_secs() < 60 {
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            until(h.state())
+        };
+        h.run_steps(5);
+        assert!(settle(&mut h, &|a| a.view3d.stride() > 1), "a coarse grid");
+        // Low over the land in the middle of the map.
+        let y = massif_core::ops::height_at(h.state().doc.dimension(), 0, 100, 100, massif_core::ops::Surface::Top).unwrap() as f64;
+        h.state_mut().view3d.camera = crate::view3d::Camera { target: [100.5, y, 100.5], yaw: 0.6, pitch: 0.5, distance: 40.0 };
+        assert!(settle(&mut h, &|a| a.view3d.near_shown()), "every block near the eyes");
+        assert!(h.state().view3d.stride() > 1);
+        // Into another page: the pages shown stay while the next are made.
+        h.state_mut().view3d.camera.target[0] += 1100.0;
+        h.step();
+        assert!(h.state().view3d.near_shown(), "the old pages stay");
+        assert!(settle(&mut h, &|a| a.view3d.near_settled()), "the new pages made");
+        // An edit near the eyes is built again.
+        let tile = TilePos::containing(1200, 100);
+        h.state_mut().view3d.invalidate(&[tile]);
+        assert!(!h.state().view3d.near_settled(), "to build again");
+        assert!(settle(&mut h, &|a| a.view3d.near_settled()), "built again");
+        // High over the map: the grid alone.
+        h.state_mut().view3d.camera.distance = 20_000.0;
+        assert!(settle(&mut h, &|a| !a.view3d.near_shown()), "the grid alone");
     }
 }

@@ -2041,6 +2041,7 @@
  "The whole check as Markdown, to paste where people talk about the map": "A verificação inteira em Markdown, para colar onde se fala do mapa",
  "The whole map in 3D, block by block": "O mapa inteiro em 3D, bloco a bloco",
  "The whole map, a column every {stride} blocks (too large for every block) · {usize} tiles · {div_ceil} MB": "O mapa inteiro, uma coluna a cada {stride} blocos (grande demais para cada bloco) · {usize} ladrilhos · {div_ceil} MB",
+ "every block near the eyes": "cada bloco perto dos olhos",
  "The whole map, every block · {n} tiles · {div_ceil} MB": "O mapa inteiro, cada bloco · {n} ladrilhos · {div_ceil} MB",
  "The whole map, seen from above. The cross marks its centre.": "O mapa inteiro visto de cima. A cruz marca o centro.",
  "The whole map, small: a sample every few blocks.": "O mapa inteiro, pequeno: uma amostra a cada poucos blocos.",

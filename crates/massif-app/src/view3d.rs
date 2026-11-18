@@ -52,6 +52,17 @@ const ROUGH_FROM: usize = 256;
 /// while a view moves, less.
 const UPLOAD_BUDGET: Duration = Duration::from_millis(6);
 const UPLOAD_BUDGET_MOVING: Duration = Duration::from_millis(2);
+/// Pages across and down (of [`PAGE`] blocks) drawn with every block
+/// around the eyes on a map drawn with a column every few blocks: the eyes'
+/// page and those around it, a page of land at least on every side.
+const NEAR_PAGES: i32 = 3;
+/// How high over the land the eyes may be for every block around them to
+/// be drawn: higher, a block is smaller than a pixel anyway.
+const NEAR_HEIGHT: f64 = 1500.0;
+/// Time a still frame spends building again the tiles around the eyes an
+/// edit changed (the others are built away from the frames).
+const NEAR_BUDGET: Duration = Duration::from_millis(8);
+
 /// The closest the orbiting camera comes to the point it turns about, in
 /// blocks: wheeled toward the land, a few blocks over it, whatever the
 /// size of the map.
@@ -1230,6 +1241,10 @@ struct TerrainUniform {
     size: [i32; 4],
     stone: [f32; 4],
     deepslate: [f32; 4],
+    /// Columns x0, z0, x1, z1 of the grid where the near grid draws every
+    /// block (see [`Renderer3d::begin_near`]): empty for this one. None
+    /// when x1 ≤ x0.
+    hole: [i32; 4],
 }
 
 /// Colours of the rock under the soil, shown on cliffs.
@@ -1541,6 +1556,8 @@ struct Terrain {
     size: vec4<i32>,
     stone: vec4<f32>,
     deepslate: vec4<f32>,
+    // Columns [x0, x1) × [z0, z1) the near grid draws: empty here.
+    hole: vec4<i32>,
 };
 @group(1) @binding(0) var<uniform> terrain: Terrain;
 // Packed columns, one page of 1024 × 1024 per layer: height above the
@@ -1587,6 +1604,15 @@ fn cells_at(level: i32) -> vec2<i32> {
 
 /// The highest column (above the bottom of the world) of cell `c` of `level`.
 fn cell_max(level: i32, c: vec2<i32>) -> u32 {
+    // A square wholly in the near grid's room is empty for this grid: the
+    // ray goes over it at once, the near grid drawing what lies there.
+    if (terrain.hole.z > terrain.hole.x) {
+        let a = c << vec2<u32>(u32(level));
+        let b = a + vec2<i32>(1 << u32(level));
+        if (all(a >= terrain.hole.xy) && all(b <= terrain.hole.zw)) {
+            return 0u;
+        }
+    }
     if (level >= PAGE_SHIFT) {
         return textureLoad(pyramid, c, level - PAGE_SHIFT).r;
     }
@@ -2300,6 +2326,9 @@ pub struct Renderer3d {
     /// rather than one through its middle, which smooths the edges of the
     /// traced ground as the samples do the meshes'. Built with 4 samples.
     trace_fine_pipeline: Option<[wgpu::RenderPipeline; 3]>,
+    /// The same over what is drawn already, nearer only: the near grid.
+    trace_near_pipeline: [wgpu::RenderPipeline; 3],
+    trace_fine_near_pipeline: Option<[wgpu::RenderPipeline; 3]>,
     /// The next frames trace a ray a sample (when it was built): a still
     /// view. Moving, one a pixel is enough, and four times cheaper.
     pub fine: bool,
@@ -2334,6 +2363,12 @@ pub struct Renderer3d {
     look_bytes: u64,
     fluid_layers: [u16; 2],
     tracer: Option<Tracer>,
+    /// On a map drawn with a column every few blocks, every block around
+    /// the eyes: the near grid shown, and the one being made as the eyes
+    /// move on (see [`Self::begin_near`]), and their uniforms.
+    near: Option<Tracer>,
+    near_next: Option<Tracer>,
+    near_terrain: wgpu::Buffer,
     target: Option<Target>,
     chunks: HashMap<TilePos, GpuChunk>,
 }
@@ -2447,6 +2482,12 @@ impl Renderer3d {
         });
         let terrain = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("massif 3d terrain"),
+            size: size_of::<TerrainUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let near_terrain = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("massif 3d near terrain"),
             size: size_of::<TerrainUniform>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -2566,7 +2607,7 @@ impl Renderer3d {
         };
         let opaque_pipeline = mesh_shaders.each_ref().map(|m| pipeline("massif 3d opaque", wgpu::BlendState::REPLACE, true, Some(wgpu::Face::Back), m));
         let water_pipeline = water_shaders.each_ref().map(|m| pipeline("massif 3d water", wgpu::BlendState::ALPHA_BLENDING, false, None, m));
-        let trace = |trace_shader: &wgpu::ShaderModule| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let trace = |trace_shader: &wgpu::ShaderModule, compare: wgpu::CompareFunction| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("massif 3d tracer"),
             layout: Some(&trace_pipeline_layout),
             vertex: wgpu::VertexState {
@@ -2576,11 +2617,12 @@ impl Renderer3d {
                 buffers: &[],
             },
             primitive: wgpu::PrimitiveState::default(),
-            // First in the frame, it writes every pixel, the sky included.
+            // First in the frame, it writes every pixel, the sky included
+            // (Always); the near grid's, over it, where it is nearer (Less).
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: DEPTH_FORMAT,
                 depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Always),
+                depth_compare: Some(compare),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -2594,8 +2636,10 @@ impl Renderer3d {
             multiview_mask: None,
             cache: None,
         });
-        let trace_pipeline = trace_shaders.each_ref().map(trace);
-        let trace_fine_pipeline = fine_shaders.as_ref().map(|f| f.each_ref().map(trace));
+        let trace_pipeline = trace_shaders.each_ref().map(|m| trace(m, wgpu::CompareFunction::Always));
+        let trace_fine_pipeline = fine_shaders.as_ref().map(|f| f.each_ref().map(|m| trace(m, wgpu::CompareFunction::Always)));
+        let trace_near_pipeline = trace_shaders.each_ref().map(|m| trace(m, wgpu::CompareFunction::Less));
+        let trace_fine_near_pipeline = fine_shaders.as_ref().map(|f| f.each_ref().map(|m| trace(m, wgpu::CompareFunction::Less)));
         let (chunk_tiles, chunk_group) = Self::make_chunk_tiles(device, &chunk_layout, &[]);
         let errors: Vec<String> = [pollster::block_on(validation.pop()), pollster::block_on(internal.pop())].into_iter().flatten().map(|e| e.to_string()).collect();
         let looks_failed = (!errors.is_empty()).then(|| errors.join("; "));
@@ -2611,6 +2655,8 @@ impl Renderer3d {
             water_pipeline,
             trace_pipeline,
             trace_fine_pipeline,
+            trace_near_pipeline,
+            trace_fine_near_pipeline,
             fine: false,
             globals,
             bind_group,
@@ -2633,6 +2679,9 @@ impl Renderer3d {
             look_bytes: made.bytes,
             fluid_layers: [0, 0],
             tracer: None,
+            near: None,
+            near_next: None,
+            near_terrain,
             target: None,
             chunks: HashMap::new(),
             copier: crate::view_image::Copier::new(device),
@@ -2981,10 +3030,18 @@ impl Renderer3d {
     /// with a layer for each page `present` says holds tiles (row-major).
     /// Everything uploaded before is dropped.
     pub fn set_grid(&mut self, stride: i32, page0: (i32, i32), pages: (u32, u32), present: &[bool]) -> Result<(), String> {
+        self.tracer = None;
+        self.end_near();
+        self.tracer = Some(self.make_tracer(stride, page0, pages, present, &self.terrain)?);
+        Ok(())
+    }
+
+    /// The textures and bind group of a tracer over `pages` pages from
+    /// `page0`, its uniforms in `uniform`.
+    fn make_tracer(&self, stride: i32, page0: (i32, i32), pages: (u32, u32), present: &[bool], uniform: &wgpu::Buffer) -> Result<Tracer, String> {
         let count = present.iter().filter(|p| **p).count().max(1) as u32;
         let limit = self.device.limits().max_texture_array_layers;
         if count > limit {
-            self.tracer = None;
             return Err(format!(
                 "This map needs {count} pages of {PAGE} × {PAGE} blocks; this GPU holds {limit}"
             ));
@@ -3047,7 +3104,7 @@ impl Renderer3d {
         let views = [array(&cols), array(&maxes), flat(&table_tex), flat(&pyramid), flat(&self.palette), flat(&self.pair_mats)];
         let mut entries = vec![wgpu::BindGroupEntry {
             binding: 0,
-            resource: self.terrain.as_entire_binding(),
+            resource: uniform.as_entire_binding(),
         }];
         for (k, v) in views.iter().enumerate() {
             entries.push(wgpu::BindGroupEntry {
@@ -3061,7 +3118,7 @@ impl Renderer3d {
             entries: &entries,
         });
         let per_layer = (page * page * 4) as u64 + (page * page / 4 * 2) as u64 * 4 / 3;
-        self.tracer = Some(Tracer {
+        Ok(Tracer {
             stride: stride.max(1),
             page0,
             pages,
@@ -3076,14 +3133,61 @@ impl Renderer3d {
             pyramid,
             group,
             bytes: per_layer * layers as u64,
-        });
-        Ok(())
+        })
     }
 
     /// Put the packed columns of a tile (row-major, `TILE_SIZE`²) in the
     /// tracer's textures, with the max pyramid over them.
     pub fn upload_columns(&mut self, tile: TilePos, packed: &[u32]) {
-        let Some(tr) = &mut self.tracer else { return };
+        if let Some(tr) = &mut self.tracer {
+            write_columns(&self.queue, tr, tile, packed);
+        }
+    }
+
+    /// Put a tile's packed columns in the near grid being made (`next`) or
+    /// in the one shown (see [`Self::begin_near`]).
+    pub fn upload_near_columns(&mut self, tile: TilePos, packed: &[u32], next: bool) {
+        if let Some(tr) = if next { &mut self.near_next } else { &mut self.near } {
+            write_columns(&self.queue, tr, tile, packed);
+        }
+    }
+
+    /// Make the near grid of `pages` pages from `page0`, every block, to
+    /// fill with [`Self::upload_near_columns`] while the one shown stays,
+    /// and show with [`Self::show_near`] once whole: the grid's own tracer
+    /// leaves that room empty (its `hole`) and the near one draws it, over
+    /// it in a pass of its own.
+    pub fn begin_near(&mut self, page0: (i32, i32), pages: (u32, u32)) -> Result<(), String> {
+        let present = vec![true; (pages.0 * pages.1) as usize];
+        self.near_next = Some(self.make_tracer(1, page0, pages, &present, &self.near_terrain)?);
+        Ok(())
+    }
+
+    /// Show the near grid made since [`Self::begin_near`], in the place of
+    /// the one shown.
+    pub fn show_near(&mut self) {
+        if self.near_next.is_some() {
+            self.near = self.near_next.take();
+        }
+    }
+
+    /// No near grid: the grid's own tracer draws everything again.
+    pub fn end_near(&mut self) {
+        self.near = None;
+        self.near_next = None;
+    }
+
+    /// The meshed faces of a tile gone, its columns left.
+    pub fn forget_faces(&mut self, tile: TilePos) {
+        if let Some(old) = self.chunks.remove(&tile) {
+            self.free_chunk(old);
+        }
+    }
+}
+
+/// Write a tile's packed columns in `tr`, and the maxes of its squares.
+fn write_columns(queue: &wgpu::Queue, tr: &mut Tracer, tile: TilePos, packed: &[u32]) {
+    {
         let Some((page, layer)) = tr.page_of(tile) else { return };
         let n = TILE_SIZE as u32;
         let (lx, lz) = (tile.x.rem_euclid(PAGE_TILES) as u32 * n, tile.z.rem_euclid(PAGE_TILES) as u32 * n);
@@ -3108,23 +3212,33 @@ impl Renderer3d {
                 },
             );
         };
-        write(&self.queue, &tr.cols, 0, lx, lz, n, bytemuck::cast_slice(packed), 4);
+        write(queue, &tr.cols, 0, lx, lz, n, bytemuck::cast_slice(packed), 4);
         // Mips 0 to 6 of the maxes: squares of 2 to 128 columns.
         let mut level: Vec<u16> = packed.iter().map(|&c| (c & HEIGHT_MASK) as u16).collect();
         let mut side = n as usize;
         for mip in 0..7u32 {
             level = halve(&level, side);
             side /= 2;
-            write(&self.queue, &tr.maxes, mip, lx >> (mip + 1), lz >> (mip + 1), side as u32, bytemuck::cast_slice(&level), 2);
+            write(queue, &tr.maxes, mip, lx >> (mip + 1), lz >> (mip + 1), side as u32, bytemuck::cast_slice(&level), 2);
         }
         tr.tile_tops.insert(tile, level[0]);
         tr.dirty_pages.insert(page);
     }
+}
 
+impl Renderer3d {
     /// After tiles were uploaded: the maxes of their pages and the pyramid
-    /// over pages.
+    /// over pages, of every tracer.
     pub fn flush(&mut self) {
-        let Some(tr) = &mut self.tracer else { return };
+        for tr in [&mut self.tracer, &mut self.near, &mut self.near_next].into_iter().flatten() {
+            flush_tracer(&self.queue, tr);
+        }
+    }
+}
+
+/// The maxes of the pages tiles were written in, and the pyramid over pages.
+fn flush_tracer(queue: &wgpu::Queue, tr: &mut Tracer) {
+    {
         if tr.dirty_pages.is_empty() {
             return;
         }
@@ -3145,7 +3259,7 @@ impl Renderer3d {
             for mip in 7..PAGE_SHIFT {
                 level = halve(&level, side);
                 side /= 2;
-                self.queue.write_texture(
+                queue.write_texture(
                     wgpu::TexelCopyTextureInfo {
                         texture: &tr.maxes,
                         mip_level: mip,
@@ -3183,7 +3297,7 @@ impl Renderer3d {
         let mut s = side;
         let mut mip = 0;
         loop {
-            self.queue.write_texture(
+            queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &tr.pyramid,
                     mip_level: mip,
@@ -3210,7 +3324,9 @@ impl Renderer3d {
             mip += 1;
         }
     }
+}
 
+impl Renderer3d {
     /// The colours and blocks the packed columns point at.
     pub fn set_palette(&mut self, pairs: &[Skin]) {
         let n = pairs.len().min(MAX_PAIRS);
@@ -3284,12 +3400,13 @@ impl Renderer3d {
         self.slot_tiles.clear();
         self.free_slots.clear();
         self.tracer = None;
+        self.end_near();
     }
 
     /// Bytes of GPU memory the terrain takes.
     pub fn bytes(&self) -> u64 {
         let faces: u64 = self.arenas.iter().flatten().map(|a| a.capacity as u64 * size_of::<Face>() as u64).sum();
-        self.tracer.as_ref().map_or(0, |t| t.bytes) + faces + self.chunk_tiles.height() as u64 * SLOT_ROW as u64 * 8
+        [&self.tracer, &self.near, &self.near_next].into_iter().flatten().map(|t| t.bytes).sum::<u64>() + faces + self.chunk_tiles.height() as u64 * SLOT_ROW as u64 * 8
     }
 
     /// Make sure the render target has `size` pixels. Returns whether it was
@@ -3368,10 +3485,10 @@ impl Renderer3d {
         };
         let draws = [runs(0), runs(1)];
         self.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(globals));
-        if let Some(tr) = &self.tracer {
+        let unit = |c: [u8; 3]| [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0, 1.0];
+        let uniform = |tr: &Tracer, hole: [i32; 4]| {
             let top = tr.page_tops.iter().copied().max().unwrap_or(0);
-            let unit = |c: [u8; 3]| [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0, 1.0];
-            let u = TerrainUniform {
+            TerrainUniform {
                 origin: [
                     (tr.page0.0 * PAGE * tr.stride - origin.0) as f32,
                     (tr.page0.1 * PAGE * tr.stride - origin.1) as f32,
@@ -3386,8 +3503,24 @@ impl Renderer3d {
                     c
                 },
                 deepslate: unit(substrate.deepslate),
+                hole,
+            }
+        };
+        if let Some(tr) = &self.tracer {
+            // The near grid's room, in this grid's columns: pages of every
+            // block are whole columns of any stride.
+            let hole = match &self.near {
+                Some(n) => {
+                    let x0 = (n.page0.0 * PAGE - tr.page0.0 * PAGE * tr.stride) / tr.stride;
+                    let z0 = (n.page0.1 * PAGE - tr.page0.1 * PAGE * tr.stride) / tr.stride;
+                    [x0, z0, x0 + n.pages.0 as i32 * PAGE / tr.stride, z0 + n.pages.1 as i32 * PAGE / tr.stride]
+                }
+                None => [0; 4],
             };
-            self.queue.write_buffer(&self.terrain, 0, bytemuck::bytes_of(&u));
+            self.queue.write_buffer(&self.terrain, 0, bytemuck::bytes_of(&uniform(tr, hole)));
+        }
+        if let Some(n) = &self.near {
+            self.queue.write_buffer(&self.near_terrain, 0, bytemuck::bytes_of(&uniform(n, [0; 4])));
         }
         let target = self.target.as_ref().expect("checked above");
         let mut encoder = self
@@ -3436,6 +3569,13 @@ impl Renderer3d {
                 pass.set_pipeline(&pipelines[look]);
                 pass.set_bind_group(1, &tr.group, &[]);
                 pass.draw(0..3, 0..1);
+                // Every block near the eyes, where the grid left room.
+                if let Some(near) = &self.near {
+                    let pipelines = self.trace_fine_near_pipeline.as_ref().filter(|_| self.fine).unwrap_or(&self.trace_near_pipeline);
+                    pass.set_pipeline(&pipelines[look]);
+                    pass.set_bind_group(1, &near.group, &[]);
+                    pass.draw(0..3, 0..1);
+                }
             }
             for (kind, runs) in draws.iter().enumerate() {
                 if runs.is_empty() {
@@ -3756,6 +3896,110 @@ fn zoom_point(dim: &Dimension, o: [f64; 3], d: [f64; 3], max: f64) -> Option<[f6
         }
     }
     Some(hit.point)
+}
+
+/// The pages around the eyes drawn with every block on a map drawn with a
+/// column every few blocks (see [`Renderer3d::begin_near`]).
+struct Near {
+    /// The window's north-west page (pages of [`PAGE`] blocks), of
+    /// [`NEAR_PAGES`] × [`NEAR_PAGES`].
+    page0: (i32, i32),
+    /// The map's tiles in it, and of those built, the faces they mesh.
+    tiles: Vec<TilePos>,
+    built: HashMap<TilePos, usize>,
+    /// Built tiles changed since: built again.
+    stale: HashSet<TilePos>,
+    /// What they were built for.
+    generation: u64,
+    style: Style,
+    /// The tiles built away from the frames, from a cold copy of the map
+    /// (as [`Builder`]'s), and what stops that.
+    results: Option<std::sync::mpsc::Receiver<(TilePos, TileBuild)>>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for Near {
+    fn drop(&mut self) {
+        self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl Near {
+    fn new(dim: &Dimension, page0: (i32, i32), generation: u64, style: Style) -> Self {
+        let ground = dim.ground();
+        let side = NEAR_PAGES * PAGE_TILES;
+        let tiles = (0..side * side).map(|k| TilePos::new(page0.0 * PAGE_TILES + k % side, page0.1 * PAGE_TILES + k / side)).filter(|t| ground.contains(*t)).collect();
+        Self {
+            page0,
+            tiles,
+            built: HashMap::new(),
+            stale: HashSet::new(),
+            generation,
+            style,
+            results: None,
+            cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// Build the window's tiles away from the frames, the nearest `eye`
+    /// first, from a cold copy of the map.
+    fn start(&mut self, doc: &mut Document, eye: [f64; 3], ctx: &egui::Context) {
+        let mut order = self.tiles.clone();
+        let n = TILE_SIZE as f64;
+        order.sort_by(|a, b| {
+            let d = |t: &TilePos| ((t.x as f64 + 0.5) * n - eye[0]).hypot((t.z as f64 + 0.5) * n - eye[2]);
+            d(a).total_cmp(&d(b))
+        });
+        let mut dim = doc.world.dims[doc.dim].snapshot();
+        let reg = doc.world.registry.clone();
+        let style = self.style;
+        let ring = if style.mode == MapMode::Slope { SLOPE_REACH } else { 1 };
+        let around = ((massif_core::objects::max_reach(&reg) + ring).max(1) as u32).div_ceil(TILE_SIZE as u32) as i32;
+        let (sea, seed) = (doc.world.meta.sea_level as f32, doc.world.meta.seed);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let stop = self.cancel.clone();
+        let ctx = ctx.clone();
+        let spawned = std::thread::Builder::new().name("massif 3d near builder".into()).spawn(move || {
+            let pool = builders();
+            pool.install(|| {
+                for part in order.chunks(pool.current_num_threads().max(1)) {
+                    if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        return;
+                    }
+                    // Each tile the part reads decoded once (see `Builder`).
+                    let mut read: Vec<TilePos> = part.iter().flat_map(|&c| cell_reads(c, 1, around)).collect();
+                    read.sort_unstable_by_key(|t| (t.z, t.x));
+                    read.dedup();
+                    for level in &mut dim.levels {
+                        level.warm(&read);
+                        level.trim(WARM_TILES.max(read.len()));
+                    }
+                    let built: Vec<(TilePos, TileBuild)> = part.par_iter().map(|&t| (t, build_cell(&dim, &reg, sea, seed, t, 1, style))).collect();
+                    for b in built {
+                        if tx.send(b).is_err() {
+                            return;
+                        }
+                    }
+                    ctx.request_repaint();
+                }
+            });
+        });
+        if spawned.is_ok() {
+            self.results = Some(rx);
+        }
+    }
+
+    /// Every tile built, none changed since.
+    fn whole(&self) -> bool {
+        self.stale.is_empty() && self.tiles.iter().all(|t| self.built.contains_key(t))
+    }
+
+    /// Whether `tile` is in the window.
+    fn holds(&self, tile: TilePos) -> bool {
+        let (x0, z0) = (self.page0.0 * PAGE_TILES, self.page0.1 * PAGE_TILES);
+        let side = NEAR_PAGES * PAGE_TILES;
+        (x0..x0 + side).contains(&tile.x) && (z0..z0 + side).contains(&tile.z)
+    }
 }
 
 /// A camera showing the whole map.
@@ -4141,6 +4385,10 @@ pub struct View3d {
     renderer: Option<Renderer3d>,
     texture: Option<egui::TextureId>,
     tiles: HashMap<TilePos, TileInfo>,
+    /// On a map drawn with a column every few blocks, the pages around the
+    /// eyes drawn with every block: shown, and being made as the eyes move.
+    near: Option<Near>,
+    near_next: Option<Near>,
     /// Tiles being built away from the frames.
     builder: Option<Builder>,
     /// The tiles of the grid the map covers, and what they were listed for.
@@ -4356,6 +4604,8 @@ impl Default for View3d {
             renderer: None,
             texture: None,
             tiles: HashMap::new(),
+            near: None,
+            near_next: None,
             builder: None,
             cells: None,
             grid: None,
@@ -4419,6 +4669,144 @@ impl View3d {
         }
     }
 
+    /// No pages of every block around the eyes: their faces gone, the grid
+    /// drawing everything again.
+    fn drop_near(&mut self, renderer: &mut Renderer3d) {
+        for n in [self.near.take(), self.near_next.take()].into_iter().flatten() {
+            for t in n.built.keys() {
+                renderer.forget_faces(*t);
+            }
+        }
+        renderer.end_near();
+        self.needs_render = true;
+    }
+
+    /// On a map drawn with a column every few blocks, the pages around the
+    /// eyes with every block, while they are low enough over the land for
+    /// a block to show: made as the eyes move into another page (the pages
+    /// shown staying until the new ones are whole), the nearest tiles
+    /// first, for [`NEAR_BUDGET`] a frame. Whether some remain to build.
+    fn update_near(&mut self, doc: &mut Document, renderer: &mut Renderer3d, moving: bool, ctx: &egui::Context) -> bool {
+        let stride = self.grid.as_ref().map_or(1, |g| g.stride);
+        let style = Style {
+            mode: self.mode,
+            water: self.water,
+            lava: doc.world.meta.lava,
+        };
+        let eye = self.camera.eye();
+        let low = stride > 1 && ground_at(doc, eye[0], eye[2]).is_some_and(|g| eye[1] - g < NEAR_HEIGHT);
+        let fits = |n: &Near| n.generation == doc.generation && n.style == style;
+        if !low || self.near.as_ref().is_some_and(|n| !fits(n)) || self.near_next.as_ref().is_some_and(|n| !fits(n)) {
+            if self.near.is_some() || self.near_next.is_some() {
+                self.drop_near(renderer);
+            }
+            if !low {
+                return false;
+            }
+        }
+        // The eyes' page in the middle.
+        let page = ((eye[0] / PAGE as f64).floor() as i32, (eye[2] / PAGE as f64).floor() as i32);
+        let page0 = (page.0 - NEAR_PAGES / 2, page.1 - NEAR_PAGES / 2);
+        let made = self.near_next.as_ref().or(self.near.as_ref()).map(|n| n.page0);
+        if made != Some(page0) {
+            if let Err(e) = renderer.begin_near(page0, (NEAR_PAGES as u32, NEAR_PAGES as u32)) {
+                log::warn!("the 3D view's near pages: {e}");
+                return false;
+            }
+            if let Some(old) = self.near_next.take() {
+                for t in old.built.keys().filter(|t| !self.near.as_ref().is_some_and(|n| n.built.contains_key(t))) {
+                    renderer.forget_faces(*t);
+                }
+            }
+            let mut next = Near::new(doc.dimension(), page0, doc.generation, style);
+            next.start(doc, eye, ctx);
+            self.near_next = Some(next);
+        }
+        // What the builder brought for the pages being made, a frame's
+        // share of it; then, still, what changed in those shown, built
+        // here (an edit's few tiles).
+        let started = Instant::now();
+        let share = if moving { UPLOAD_BUDGET_MOVING } else { UPLOAD_BUDGET };
+        let mut built_any = false;
+        let mut more = false;
+        let mut done = Vec::new();
+        if let Some(rx) = self.near_next.as_ref().and_then(|n| n.results.as_ref()) {
+            while started.elapsed() <= share || done.is_empty() {
+                match rx.try_recv() {
+                    Ok(b) => done.push(b),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                }
+                // Each one's upload is counted in the share.
+                let (t, b) = done.last().expect("just pushed");
+                let packed = self.pairs.pack(b);
+                renderer.upload_near_columns(*t, &packed, true);
+                renderer.upload(*t, &b.faces);
+            }
+            more = !done.is_empty();
+        }
+        if let Some(n) = self.near_next.as_mut() {
+            for (t, b) in &done {
+                // Changed since the copy: built again.
+                if n.stale.contains(t) {
+                    continue;
+                }
+                n.built.insert(*t, b.faces.solid.len() + b.faces.water.len());
+                built_any = true;
+            }
+        }
+        if !moving {
+            let dim = doc.dimension();
+            let reg = &doc.world.registry;
+            let (sea, seed) = (doc.world.meta.sea_level as f32, doc.world.meta.seed);
+            let batch = rayon::current_num_threads().clamp(2, 16);
+            for next in [true, false] {
+                let Some(n) = (if next { &self.near_next } else { &self.near }) else { continue };
+                let todo: Vec<TilePos> = n.stale.iter().copied().collect();
+                for part in todo.chunks(batch) {
+                    if started.elapsed() > NEAR_BUDGET {
+                        more = true;
+                        break;
+                    }
+                    let built: Vec<(TilePos, TileBuild)> = part.par_iter().map(|&t| (t, build_cell(dim, reg, sea, seed, t, 1, style))).collect();
+                    for (t, b) in built {
+                        let packed = self.pairs.pack(&b);
+                        renderer.upload_near_columns(t, &packed, next);
+                        renderer.upload(t, &b.faces);
+                        let n = if next { self.near_next.as_mut() } else { self.near.as_mut() }.expect("listed above");
+                        n.built.insert(t, b.faces.solid.len() + b.faces.water.len());
+                        n.stale.remove(&t);
+                        built_any = true;
+                    }
+                }
+            }
+        } else if self.near.as_ref().is_some_and(|n| !n.stale.is_empty()) {
+            more = true;
+        }
+        if built_any {
+            renderer.flush();
+            if self.pairs.dirty {
+                renderer.set_palette(self.pairs.list());
+                self.pairs.dirty = false;
+            }
+            self.needs_render = true;
+        }
+        // The pages made whole: shown in the place of the others, whose
+        // tiles out of the new ones lose their faces.
+        if self.near_next.as_ref().is_some_and(Near::whole) {
+            let next = self.near_next.take().expect("checked");
+            if let Some(old) = self.near.take() {
+                for t in old.built.keys().filter(|t| !next.holds(**t)) {
+                    renderer.forget_faces(*t);
+                }
+            }
+            renderer.show_near();
+            self.near = Some(next);
+            self.needs_render = true;
+        }
+        more || self.near_next.is_some()
+    }
+
     /// Terrain changed: rebuild the tiles showing it, and their neighbours
     /// (whose walls and slopes depend on it).
     pub fn invalidate(&mut self, tiles: &[TilePos]) {
@@ -4435,6 +4823,14 @@ impl View3d {
                     && b.given.contains(&cell)
                 {
                     b.edited.insert(cell);
+                }
+                // Its every block near the eyes: built again, and what the
+                // near builder brings of it, from a copy made before, left.
+                let near = t.offset(dx, dz);
+                for n in [&mut self.near, &mut self.near_next].into_iter().flatten() {
+                    if n.built.contains_key(&near) || (n.results.is_some() && n.tiles.contains(&near)) {
+                        n.stale.insert(near);
+                    }
                 }
             }
         }
@@ -4458,6 +4854,8 @@ impl View3d {
             log::info!("3D view out of sight for {HIDDEN_RELEASE} s: {} tiles and {} MB of the graphics card given back", self.tiles.len(), self.gpu_bytes() / 1_000_000);
             self.renderer = None;
             self.tiles.clear();
+            self.near = None;
+            self.near_next = None;
             self.grid = None;
             self.look_key = None;
             self.look_seen = None;
@@ -4471,6 +4869,9 @@ impl View3d {
             c.stale = true;
         }
         self.builder = None;
+        for n in [&mut self.near, &mut self.near_next].into_iter().flatten() {
+            n.stale.extend(n.built.keys().copied());
+        }
     }
 
     /// Where the cursor points, with a sculpting tool.
@@ -4515,6 +4916,18 @@ impl View3d {
     #[cfg(test)]
     pub fn stride(&self) -> i32 {
         self.grid.as_ref().map_or(1, |g| g.stride)
+    }
+
+    /// Whether the pages around the eyes are drawn with every block.
+    #[cfg(test)]
+    pub fn near_shown(&self) -> bool {
+        self.near.is_some()
+    }
+
+    /// The pages around the eyes shown, whole, and none being made.
+    #[cfg(test)]
+    pub fn near_settled(&self) -> bool {
+        self.near_next.is_none() && self.near.as_ref().is_some_and(Near::whole)
     }
 
     /// Tiles still to build.
@@ -5786,6 +6199,12 @@ impl View3d {
                 }
                 self.tiles.clear();
             }
+            // The pages of every block near the eyes go with the grid.
+            for n in [self.near.take(), self.near_next.take()].into_iter().flatten() {
+                for t in n.built.keys() {
+                    renderer.forget_faces(*t);
+                }
+            }
             match &shape {
                 Some(s) => match renderer.set_grid(s.stride, s.page0, s.pages, &s.present) {
                     Ok(()) => self.error = None,
@@ -5811,6 +6230,9 @@ impl View3d {
             BUILD_BUDGET
         };
         if self.build_tiles(doc, budget, &mut renderer, ui.ctx()) {
+            ui.ctx().request_repaint();
+        }
+        if self.update_near(doc, &mut renderer, budget.is_zero(), ui.ctx()) {
             ui.ctx().request_repaint();
         }
 
@@ -5944,11 +6366,14 @@ impl View3d {
             let m = Mat4::from_cols_array_2d(&globals.view_proj);
             let dim = doc.dimension();
             let (lo_y, hi_y) = (dim.min_y as f32, dim.max_y as f32);
+            // The faces of every block near the eyes, when shown.
+            let near = self.near.iter().flat_map(|n| n.built.iter().filter(|(_, f)| **f > 0).map(|(t, _)| *t));
             let meshed: Vec<TilePos> = self
                 .tiles
                 .iter()
                 .filter(|(_, info)| info.faces > 0)
                 .map(|(t, _)| *t)
+                .chain(near)
                 .filter(|t| {
                     let (x, z) = ((t.x * TILE_SIZE - origin.0) as f32, (t.z * TILE_SIZE - origin.1) as f32);
                     let n = TILE_SIZE as f32;
@@ -6088,7 +6513,11 @@ impl View3d {
         // ---- overlay -------------------------------------------------------
         let stride = self.grid.as_ref().map_or(1, |g| g.stride);
         let mut text = if stride > 1 {
-            tr!("The whole map, a column every {stride} blocks (too large for every block) · {usize} tiles · {div_ceil} MB", usize = self.tiles.len() * (stride * stride) as usize, div_ceil = bytes.div_ceil(1 << 20), stride)
+            let mut text = tr!("The whole map, a column every {stride} blocks (too large for every block) · {usize} tiles · {div_ceil} MB", usize = self.tiles.len() * (stride * stride) as usize, div_ceil = bytes.div_ceil(1 << 20), stride);
+            if self.near.is_some() {
+                text = format!("{text} · {}", tr!("every block near the eyes"));
+            }
+            text
         } else {
             tr!("The whole map, every block · {n} tiles · {div_ceil} MB", n = self.tiles.len(), div_ceil = bytes.div_ceil(1 << 20))
         };

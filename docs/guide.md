@@ -236,6 +236,12 @@ their own:
   how much of the map the 3D view keeps on the graphics card (about 320 MB, 800 MB or
   2 GB): a larger map is drawn with a column every 2, 4 or 8 blocks, all of
   it, coarser — on a huge map with much water, far faster than every block.
+  Come low over the land (within 1,500 blocks of it), and the 3D views draw
+  every block, textured, over about 3 km around the eyes, made away from
+  the frames in a second or so and made again as the eyes move on, the
+  land farther off as before; the status line says so (every block near
+  the eyes). Water there is drawn as on a smaller map, clearer over the
+  shallows, where farther off it is a plain surface.
   The Terrain viewport: its **Light and shadows** (the steps of its
   shadows, clouds and sky light; saved images always take the most) and its
   **Clouds**, what costs the most there. Then the map view's images kept on
