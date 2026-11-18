@@ -7,6 +7,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
+mod terrain;
+
 const USAGE: &str = "\
 massif-cli — Massif worlds from the command line
 
@@ -23,6 +25,10 @@ USAGE
   massif-cli lakes <world.massif> <out.massif>
   massif-cli spring <world.massif> <out.massif> <x> <z>…
   massif-cli crop <world.massif> <out.massif> <x0> <z0> <x1> <z1>
+  massif-cli terrain schema | catalog [--json]
+  massif-cli terrain validate <graph.json>
+  massif-cli terrain patch <graph.json> <edits.json> [--out FILE] [--layout]
+  massif-cli terrain render <graph.json> <out.png> [--pixels N] [--size BLOCKS] [--cpu]
 
   --size      map size in tiles of 128 blocks (default 8x8 = 1024x1024 blocks)
   --landform  flat | plains | hills | mountains | islands (default hills)
@@ -34,6 +40,11 @@ USAGE
   probe prints, for each column, what the export writes there, one JSON object a
   line: its top solid block (y and block state), the water over it, its biome —
   what tools/minecraft_check.py asks the game itself to confirm.
+
+  terrain works on the terrain graphs of 1.3: schema writes their JSON Schema,
+  catalog every type of node with an example (Markdown, or JSON for a model),
+  validate their mistakes with paths, patch applies edits (add, set, link,
+  unlink, remove, rename, or a JSON Patch), render a shaded picture.
 
   analyse prints the survival check of Edit ▸ Analyse the map as Markdown: every
   block counted as the export writes it, what breaks survival, what is missing.
@@ -620,6 +631,7 @@ fn main() -> ExitCode {
         "spring" => cmd_spring(args),
         "crop" => cmd_crop(args),
         "analyse" | "analyze" => cmd_analyse(args),
+        "terrain" => terrain::cmd(args),
         other => Err(format!("unknown command \"{other}\"\n\n{USAGE}")),
     };
     match result {
