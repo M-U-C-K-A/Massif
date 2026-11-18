@@ -57,21 +57,49 @@ struct Laid {
     coarse: Vec<(f32, f32)>,
     found: Vec<(f32, f32)>,
     shown: Vec<(f32, f32)>,
+    stops: Vec<usize>,
 }
 
 fn lay_out(level: &Level, anchors: &[(f32, f32)], width: f32) -> Laid {
+    lay_out_as(level, anchors, width, true)
+}
+
+/// [`lay_out`], each leg dragged first (`dragged`) or clicked at once.
+fn lay_out_as(level: &Level, anchors: &[(f32, f32)], width: f32, dragged: bool) -> Laid {
     let mut found = vec![anchors[0]];
     let mut coarse = vec![anchors[0]];
     let mut stops = vec![0];
     for w in anchors.windows(2) {
         let guide = route(level, w[0], w[1], 40_000);
-        let leg = route_near(level, w[0], w[1], 400_000, &guide);
+        let leg = route_near(level, w[0], w[1], 400_000, if dragged { &guide } else { &[] });
         coarse.extend(guide.iter().skip(1));
         found.extend(leg.iter().skip(1));
         stops.push(found.len() - 1);
     }
-    let (shown, _) = natural_course(level, &found, width, &stops);
-    Laid { coarse, found, shown }
+    let (shown, stops) = natural_course(level, &found, width, &stops);
+    Laid { coarse, found, shown, stops }
+}
+
+/// Spurs at the points dragged: near each, coming to it, the course gets
+/// nearer it at every point, and leaving it, farther. The worst
+/// backtrack, in blocks.
+fn spur(laid: &Laid) -> f32 {
+    let mut worst = 0.0f32;
+    for &a in &laid.stops[1..laid.stops.len() - 1] {
+        let p = laid.shown[a];
+        let d = |k: usize| (laid.shown[k].0 - p.0).hypot(laid.shown[k].1 - p.1);
+        let mut k = a;
+        while k > 0 && d(k - 1) < 12.0 {
+            worst = worst.max(d(k) - d(k - 1));
+            k -= 1;
+        }
+        let mut k = a;
+        while k + 1 < laid.shown.len() && d(k + 1) < 12.0 {
+            worst = worst.max(d(k) - d(k + 1));
+            k += 1;
+        }
+    }
+    worst
 }
 
 /// Rivers laid out as a user lays them: a source, an end, three points
@@ -123,6 +151,7 @@ fn check(name: &str, level: &Level, width: f32) {
         assert!(fine.0 <= GUIDE_REACH + 2.0, "{name}: the way let go strays {:.1} from the way dragged", fine.0);
         assert!(anchor <= 1.0, "{name}: a point dragged lies {anchor:.1} from what is dug");
         assert!(end <= 1.0, "{name}: it ends {end:.1} from the end clicked");
+        assert!(spur(&laid) <= 0.5, "{name}: a spur of {:.1} at a point dragged", spur(&laid));
         assert_eq!(crossings(&laid.shown), 0, "{name}: the course crosses itself");
         assert_eq!(crossings(&curve), 0, "{name}: what is dug crosses itself");
     }
@@ -164,4 +193,30 @@ fn a_laid_out_river_keeps_to_its_way_over_ridges() {
     }
     world.dims = vec![dim];
     check("ridges", world.dims[0].ground(), 24.0);
+}
+
+/// The spurs found at points dragged (an overshoot past the point and
+/// back): over hills and mountains, a point dragged on either side.
+#[test]
+fn no_spur_at_a_point_dragged() {
+    for (landform, seed, anchors) in [
+        (Landform::Hills, 7, [(192.0, 0.0), (60.0, 70.0), (-152.0, 200.0)]),
+        (Landform::Mountains, 3, [(-240.0, -192.0), (4.0, -210.0), (168.0, -168.0)]),
+    ] {
+        let world = generate(&GenParams {
+            tiles_x: 4,
+            tiles_z: 4,
+            landform,
+            seed,
+            ..GenParams::default()
+        });
+        for dragged in [false, true] {
+            let laid = lay_out_as(world.dims[0].ground(), &anchors, 24.0, dragged);
+            let s = spur(&laid);
+            eprintln!("{landform:?} seed {seed}, dragged {dragged}: spur {s:.1}");
+            assert!(s <= 0.5, "{landform:?}: a spur of {s:.1} at the point dragged");
+            let a = laid.stops[1];
+            assert!((laid.shown[a].0 - anchors[1].0).hypot(laid.shown[a].1 - anchors[1].1) < 0.01, "through the point");
+        }
+    }
 }

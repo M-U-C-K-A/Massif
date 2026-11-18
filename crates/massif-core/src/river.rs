@@ -1199,6 +1199,62 @@ pub fn dig_descent(edit: &mut Edit, descent: &Descent, spec: &RiverSpec) -> Rive
 ///   long, half a width to either side, smaller where it would climb out
 ///   of its valley, none near its ends and its anchors.
 pub fn natural_course(level: &crate::level::Level, course: &[(f32, f32)], width: f32, anchors: &[usize]) -> (Vec<(f32, f32)>, Vec<usize>) {
+    let (course, anchors) = trim_spurs(course, anchors, (0.5 * width).max(8.0));
+    natural(level, &course, width, &anchors)
+}
+
+/// A course without the spurs at its anchors: the ways found to a point
+/// and on from it end and begin on cells of a grid, which can lie past
+/// it, so that the course overshoots the point and comes back to it, or
+/// leaves it back the way it came. Points within `reach` of an anchor
+/// that come at it from the side it leaves by (or leave it towards the
+/// side it came from) are dropped. Returns the course and its anchors'
+/// new places.
+fn trim_spurs(course: &[(f32, f32)], anchors: &[usize], reach: f32) -> (Vec<(f32, f32)>, Vec<usize>) {
+    let n = course.len();
+    let mut keep = vec![true; n];
+    let is_anchor = |k: usize| anchors.contains(&k);
+    let dist = |a: (f32, f32), b: (f32, f32)| (a.0 - b.0).hypot(a.1 - b.1);
+    for &a in anchors {
+        if a == 0 || a + 1 >= n {
+            continue;
+        }
+        let p = course[a];
+        // Its way on and its way in, from beyond `reach`.
+        let ahead = (a + 1..n).find(|&k| dist(course[k], p) >= reach || is_anchor(k)).unwrap_or(n - 1);
+        let out = (course[ahead].0 - p.0, course[ahead].1 - p.1);
+        let mut j = a;
+        while j > 0 {
+            j -= 1;
+            let q = course[j];
+            if is_anchor(j) || dist(q, p) > reach || (p.0 - q.0) * out.0 + (p.1 - q.1) * out.1 >= 0.0 {
+                break;
+            }
+            keep[j] = false;
+        }
+        let behind = (0..a).rev().find(|&k| keep[k] && (dist(course[k], p) >= reach || is_anchor(k))).unwrap_or(0);
+        let inn = (p.0 - course[behind].0, p.1 - course[behind].1);
+        for k in a + 1..ahead {
+            let q = course[k];
+            if (q.0 - p.0) * inn.0 + (q.1 - p.1) * inn.1 >= 0.0 {
+                break;
+            }
+            keep[k] = false;
+        }
+    }
+    let mut out = Vec::with_capacity(n);
+    let mut place = vec![0; n];
+    for k in 0..n {
+        if keep[k] {
+            out.push(course[k]);
+        }
+        place[k] = out.len().saturating_sub(1);
+    }
+    (out, anchors.iter().map(|&a| place[a]).collect())
+}
+
+/// [`natural_course`], its spurs trimmed.
+fn natural(level: &crate::level::Level, course: &[(f32, f32)], width: f32, anchors: &[usize]) -> (Vec<(f32, f32)>, Vec<usize>) {
     let n = course.len();
     if n < 8 {
         return (course.to_vec(), anchors.to_vec());
