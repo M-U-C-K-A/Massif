@@ -1,0 +1,14 @@
+{
+  "format": "massif.terrain-graph",
+  "version": 2,
+  "terrain": { "size": 8192, "seed": 2026 },
+  "nodes": {
+    "plains": { "type": "noise.fbm", "params": { "scale": 3000, "height": 90, "base": 40 }, "note": "Broad lowlands and the sea." },
+    "ridges": { "type": "noise.fbm", "params": { "style": "ridged", "scale": 1400, "height": 420, "base": 0, "octaves": 10 } },
+    "where": { "type": "noise.fbm", "params": { "scale": 4000, "height": 1, "base": 0, "octaves": 3 }, "note": "Where the mountains rise." },
+    "mask": { "type": "adjust.levels", "inputs": { "in": "where" }, "params": { "in_low": 0.45, "in_high": 0.7, "out_low": 0, "out_high": 1 } },
+    "land": { "type": "combine.blend", "inputs": { "a": "plains", "b": "ridges", "mask": "mask" }, "params": { "mode": "add" } },
+    "worn": { "type": "erosion.thermal", "inputs": { "height": "land" }, "params": { "angle": 38, "iterations": 40 } },
+    "out": { "type": "output.map", "inputs": { "height": "worn" } }
+  }
+}
