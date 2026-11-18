@@ -3,6 +3,9 @@
 
 use crate::registry::{Family, Kernel, NodeSpec, ParamSpec, PortKind, PortSpec};
 
+/// The node types of this family, in the library's order.
+pub static NODES: &[&NodeSpec] = &[&MAP];
+
 const fn input(name: &'static str, label: &'static str, kind: PortKind, help: &'static str, default: &'static str) -> PortSpec {
     PortSpec::new(name, label, kind, help).or(default)
 }
@@ -40,4 +43,5 @@ pub static MAP: NodeSpec = NodeSpec {
     outputs: &[],
     params: &[ParamSpec::flag("active", "Active", true, "Whether the map takes this output, when the graph has several.")],
     kernel: Kernel::Output,
+    ..NodeSpec::BASE
 };

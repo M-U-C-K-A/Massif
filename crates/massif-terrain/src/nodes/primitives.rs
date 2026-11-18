@@ -5,6 +5,9 @@ use crate::kernel::{Ctx, GpuKernel, Uniforms};
 use crate::noise::{Fractal, MAX_OCTAVES, Octave, Style, fractal};
 use crate::registry::{Choice, Family, Kernel, NodeSpec, ParamSpec, Section, Unit};
 
+/// The node types of this family, in the library's order.
+pub static NODES: &[&NodeSpec] = &[&CONSTANT, &FBM];
+
 pub static CONSTANT: NodeSpec = NodeSpec {
     id: "pattern.constant",
     label: "Constant",
@@ -16,7 +19,7 @@ pub static CONSTANT: NodeSpec = NodeSpec {
     outputs: &[height_out("The height, everywhere.")],
     params: &[ParamSpec::float("value", "Height", Unit::Blocks, 64.0, -2048.0, 4096.0, "The height of the ground everywhere, in blocks.").soft(-64.0, 320.0)],
     kernel: Kernel::Point { cpu: constant_cpu, gpu: Some(&CONSTANT_GPU) },
-    open_inputs: None,
+    ..NodeSpec::BASE
 };
 
 fn constant_cpu(ctx: &Ctx, _: &[Option<&[f32]>], out: &mut [Vec<f32>]) {
@@ -47,8 +50,8 @@ pub static FBM: NodeSpec = NodeSpec {
     params: &[
         ParamSpec::choice("style", "Style", STYLES, "fbm", "How the octaves add up."),
         ParamSpec::float("scale", "Scale", Unit::Blocks, 1000.0, 2.0, 65536.0, "Blocks across the largest features.").soft(16.0, 8000.0),
-        ParamSpec::float("height", "Height", Unit::Blocks, 200.0, 0.0, 4096.0, "How far the lowest and the highest points lie apart, in blocks.").soft(0.0, 1000.0),
-        ParamSpec::float("base", "Base", Unit::Blocks, 40.0, -2048.0, 4096.0, "The height of the lowest points, in blocks.").soft(-64.0, 320.0),
+        ParamSpec::float("height", "Height", Unit::Blocks, 200.0, 0.0, 4096.0, "How far the lowest and the highest points lie apart, in blocks.").soft(0.0, 1000.0).drivable(),
+        ParamSpec::float("base", "Base", Unit::Blocks, 40.0, -2048.0, 4096.0, "The height of the lowest points, in blocks.").soft(-64.0, 320.0).drivable(),
         ParamSpec::int("octaves", "Detail", 8, 1, MAX_OCTAVES as i64, "Octaves summed: each adds detail twice as fine.").section(Section::Detail),
         ParamSpec::float("roughness", "Roughness", Unit::Ratio, 0.5, 0.05, 0.95, "How strong each octave is next to the one before: higher, rougher.").section(Section::Detail),
         ParamSpec::float("lacunarity", "Lacunarity", Unit::Ratio, 2.0, 1.2, 4.0, "How much finer each octave is than the one before.").section(Section::Advanced),
@@ -57,7 +60,7 @@ pub static FBM: NodeSpec = NodeSpec {
         ParamSpec::seed(),
     ],
     kernel: Kernel::Point { cpu: fbm_cpu, gpu: Some(&FBM_GPU) },
-    open_inputs: None,
+    ..NodeSpec::BASE
 };
 
 fn style(ctx: &Ctx) -> Style {
@@ -84,11 +87,11 @@ fn octaves(ctx: &Ctx) -> Vec<Octave> {
 fn fbm_cpu(ctx: &Ctx, _: &[Option<&[f32]>], out: &mut [Vec<f32>]) {
     let octs = octaves(ctx);
     let style = style(ctx);
-    let (height, base) = (ctx.params.f("height"), ctx.params.f("base"));
     let w = ctx.rect.w as usize;
     for (j, row) in out[0].chunks_mut(w).enumerate() {
         for (i, v) in row.iter_mut().enumerate() {
-            *v = base + height * fractal(&octs, style, i as f32, j as f32);
+            let k = j * w + i;
+            *v = ctx.num_at("base", k) + ctx.num_at("height", k) * fractal(&octs, style, i as f32, j as f32);
         }
     }
 }
@@ -96,10 +99,11 @@ fn fbm_cpu(ctx: &Ctx, _: &[Option<&[f32]>], out: &mut [Vec<f32>]) {
 static FBM_GPU: GpuKernel = GpuKernel {
     name: "noise.fbm",
     source: include_str!("wgsl/fbm.wgsl"),
-    uniforms: |ctx, _| {
+    uniforms: |ctx, driven| {
         let octs = octaves(ctx);
         let mut u = Uniforms::default();
         u.u32(style(ctx) as u32).u32(octs.len() as u32).f32(ctx.params.f("height")).f32(ctx.params.f("base"));
+        u.u32(driven[0] as u32).u32(driven[1] as u32);
         for k in 0..MAX_OCTAVES {
             octs.get(k).copied().unwrap_or_default().write(&mut u);
         }

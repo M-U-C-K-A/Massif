@@ -4,6 +4,9 @@
 use crate::kernel::Ctx;
 use crate::registry::{Family, Kernel, NodeSpec, PortKind, PortSpec};
 
+/// The node types of this family, in the library's order.
+pub static NODES: &[&NodeSpec] = &[&LUMINANCE, &GREY];
+
 pub static LUMINANCE: NodeSpec = NodeSpec {
     id: "convert.luminance",
     label: "Brightness",
@@ -15,7 +18,7 @@ pub static LUMINANCE: NodeSpec = NodeSpec {
     outputs: &[PortSpec::new("value", "Value", PortKind::Mask, "Its brightness.")],
     params: &[],
     kernel: Kernel::Point { cpu: luminance_cpu, gpu: None },
-    open_inputs: None,
+    ..NodeSpec::BASE
 };
 
 fn luminance_cpu(ctx: &Ctx, inputs: &[Option<&[f32]>], out: &mut [Vec<f32>]) {
@@ -37,7 +40,7 @@ pub static GREY: NodeSpec = NodeSpec {
     outputs: &[PortSpec::new("color", "Colour", PortKind::Color, "The grey.")],
     params: &[],
     kernel: Kernel::Point { cpu: grey_cpu, gpu: None },
-    open_inputs: None,
+    ..NodeSpec::BASE
 };
 
 fn grey_cpu(ctx: &Ctx, inputs: &[Option<&[f32]>], out: &mut [Vec<f32>]) {

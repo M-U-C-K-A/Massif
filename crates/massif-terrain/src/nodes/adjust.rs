@@ -5,6 +5,9 @@ use crate::params::Params;
 use crate::registry::{Family, Kernel, NodeSpec, ParamSpec, PortKind, PortSpec, Unit};
 use crate::space::Space;
 
+/// The node types of this family, in the library's order.
+pub static NODES: &[&NodeSpec] = &[&LEVELS, &NORMALIZE, &BLUR];
+
 const IN: PortSpec = PortSpec::new("in", "In", PortKind::Height, "The relief (or mask) to adjust.");
 const OUT: PortSpec = PortSpec::new("out", "Out", PortKind::Height, "The relief adjusted.");
 
@@ -25,7 +28,7 @@ pub static LEVELS: NodeSpec = NodeSpec {
         ParamSpec::float("gamma", "Gamma", Unit::Ratio, 1.0, 0.05, 20.0, "Above 1 lifts the middle of the range, below 1 lowers it.").soft(0.2, 5.0),
     ],
     kernel: Kernel::Point { cpu: levels_cpu, gpu: Some(&LEVELS_GPU) },
-    open_inputs: None,
+    ..NodeSpec::BASE
 };
 
 /// In low, the signed span of the range (never zero), Out low, Out's span,
@@ -75,7 +78,7 @@ pub static NORMALIZE: NodeSpec = NodeSpec {
         ParamSpec::float("high", "High", Unit::Blocks, 1.0, -4096.0, 4096.0, "Where the highest point goes (1 for a mask).").soft(-64.0, 512.0),
     ],
     kernel: Kernel::Stats { cpu: normalize_cpu },
-    open_inputs: None,
+    ..NodeSpec::BASE
 };
 
 fn normalize_cpu(ctx: &Ctx, stats: &[Option<Stats>], inputs: &[Option<&[f32]>], out: &mut [Vec<f32>]) {
@@ -98,8 +101,8 @@ pub static BLUR: NodeSpec = NodeSpec {
     inputs: &[IN],
     outputs: &[OUT],
     params: &[ParamSpec::float("radius", "Radius", Unit::Blocks, 32.0, 0.0, 8192.0, "How far the smoothing reaches, in blocks.").soft(1.0, 512.0)],
-    kernel: Kernel::Local { cpu: blur_cpu, footprint: blur_footprint },
-    open_inputs: None,
+    kernel: Kernel::Local { cpu: blur_cpu, gpu: None, footprint: blur_footprint },
+    ..NodeSpec::BASE
 };
 
 /// The blur's standard deviation in blocks.

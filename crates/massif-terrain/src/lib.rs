@@ -23,7 +23,6 @@
 
 pub mod compile;
 pub mod engine;
-#[cfg(feature = "gpu")]
 pub mod gpu;
 pub mod kernel;
 pub mod model;

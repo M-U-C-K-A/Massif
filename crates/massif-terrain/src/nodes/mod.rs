@@ -1,36 +1,36 @@
-//! The node set: one module per family.
+//! The node set: one module per family, each listing its node types in
+//! `NODES`. A session adding nodes touches only its family's files (and
+//! `erosion/` belongs to the erosion work); the list below is the only
+//! shared line per family.
 
 mod adjust;
+mod climate;
 mod color;
 mod combine;
 mod convert;
+mod erosion;
+mod inputs;
 mod masks;
 mod output;
 mod primitives;
-mod simulate;
+mod shapes;
 
-use crate::registry::NodeSpec;
+use crate::registry::{NodeSpec, PortKind, PortSpec};
+use std::sync::OnceLock;
 
 /// The WGSL every kernel starts with: the noise, the tile size.
 pub const WGSL_COMMON: &str = include_str!("wgsl/common.wgsl");
 
-/// Every type of node, in the library's order.
-pub static ALL: &[&NodeSpec] = &[
-    &primitives::CONSTANT,
-    &primitives::FBM,
-    &adjust::LEVELS,
-    &adjust::NORMALIZE,
-    &adjust::BLUR,
-    &simulate::THERMAL,
-    &masks::SLOPE,
-    &combine::BLEND,
-    &color::RAMP,
-    &output::MAP,
-    &convert::LUMINANCE,
-    &convert::GREY,
-];
+/// Every type of node, family by family in the library's order, then the
+/// conversions the compiler puts on wires.
+pub fn all() -> &'static [&'static NodeSpec] {
+    static ALL: OnceLock<Vec<&'static NodeSpec>> = OnceLock::new();
+    ALL.get_or_init(|| {
+        [inputs::NODES, primitives::NODES, shapes::NODES, adjust::NODES, erosion::NODES, climate::NODES, masks::NODES, color::NODES, combine::NODES, output::NODES, convert::NODES].concat()
+    })
+}
 
 /// The common words of a node's height output.
-pub(crate) const fn height_out(help: &'static str) -> crate::registry::PortSpec {
-    crate::registry::PortSpec::new("height", "Height", crate::registry::PortKind::Height, help)
+pub(crate) const fn height_out(help: &'static str) -> PortSpec {
+    PortSpec::new("height", "Height", PortKind::Height, help)
 }

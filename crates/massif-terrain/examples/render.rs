@@ -29,15 +29,10 @@ fn main() {
     if diags.iter().any(|d| d.severity == Severity::Error) {
         std::process::exit(1);
     }
-    #[cfg(feature = "gpu")]
-    let engine = match (cpu_only, massif_terrain::gpu::Gpu::headless()) {
-        (false, Some(gpu)) => Engine::with_gpu(gpu, Settings::default()),
-        _ => Engine::new(Settings::default()),
-    };
-    #[cfg(not(feature = "gpu"))]
-    let engine = {
-        let _ = cpu_only;
-        Engine::new(Settings::default())
+    let gpu = if cpu_only { None } else { massif_terrain::gpu::Gpu::headless() };
+    let engine = match gpu {
+        Some(gpu) => Engine::with_gpu(gpu, Settings::default()),
+        None => Engine::new(Settings::default()),
     };
     let out = c.output("height").expect("the graph’s Map Output has a Height");
     let lod = c.space.lod_for(pixels);
