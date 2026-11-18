@@ -121,6 +121,16 @@ pub enum Outcome {
         dir: PathBuf,
         files: Vec<PathBuf>,
     },
+    /// One of the game's structures assembled on a copy of the map, to
+    /// place in one undoable step, where it was clicked (in the place of
+    /// structure `replace`, drawn again).
+    Structure {
+        built: Box<massif_structures::vanilla::Built>,
+        at: (i32, i32),
+        replace: Option<u32>,
+        /// The dimension it was worked out on.
+        dim: usize,
+    },
     Failed(String),
     Cancelled,
 }
@@ -134,6 +144,8 @@ pub enum JobKind {
     Export,
     Auto,
     SavePoint,
+    /// A structure being assembled: editing goes on meanwhile.
+    Structure,
 }
 
 impl JobKind {
@@ -519,6 +531,19 @@ impl Job {
                 Ok(files) => Outcome::RegionExported { dir, files },
                 Err(_) if p.cancel.load(std::sync::atomic::Ordering::Relaxed) => Outcome::Cancelled,
                 Err(e) => Outcome::Failed(tr!("The region could not be exported: {e}", e)),
+            }
+        })
+    }
+
+    /// The structure `req` asks for, assembled on dimension `dim` of a
+    /// snapshot of the document from the game's files `lib`.
+    pub fn structure(ctx: &egui::Context, snapshot: World, dim: usize, lib: Arc<massif_structures::Library>, req: massif_structures::vanilla::Request, replace: Option<u32>) -> Job {
+        let label = tr!("Assembling {name}", name = crate::i18n::tr_name(req.kind.name));
+        Job::spawn(JobKind::Structure, label, None, ctx, move || {
+            let ground = massif_structures::ground::MapGround::new(&snapshot, dim);
+            match massif_structures::vanilla::build(&lib, &ground, &req) {
+                Ok(built) => Outcome::Structure { built: Box::new(built), at: (req.at[0], req.at[2]), replace, dim },
+                Err(e) => Outcome::Failed(tr!("{name} could not be placed: {e}", name = crate::i18n::tr_name(req.kind.name), e)),
             }
         })
     }

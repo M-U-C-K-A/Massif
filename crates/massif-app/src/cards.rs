@@ -246,6 +246,12 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
             Some(tr!("Edit ▸ Smooth terrain… turns it on for the whole map and sets each terrain's pieces.")),
             Some(Demo::Slabs),
         ),
+        Tool::Structure => card(
+            tr!("Places one of the game's structures where you click: a village, an Ancient City with its warden, Trial Chambers, a shipwreck — read from your own game, assembled as the game assembles them."),
+            vec![(tr!("Click"), tr!("Place it")), (tr!("Right-click"), tr!("Take it away"))],
+            Some(tr!("Its chests keep their loot tables, its spawners their mobs, its villages their villagers.")),
+            None,
+        ),
         Tool::Combined => card(
             tr!("Paints several layers at once, as WorldPainter's combined layers: a forest's terrain, biome, ground cover and trees in one stroke."),
             vec![(tr!("Drag"), tr!("Paint them all")), (tr!("Right-drag"), tr!("Rub them out"))],

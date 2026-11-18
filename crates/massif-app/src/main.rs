@@ -60,6 +60,7 @@ mod textures;
 mod tiles;
 mod smooth_page;
 mod startup;
+mod structure_tool;
 mod terrain_view;
 mod theme;
 mod tools;

@@ -206,66 +206,7 @@ fn jigsaw(pos: [i32; 3], state: &str, data: Option<&Compound>) -> Option<Jigsaw>
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-
-    /// The NBT of a template of `size` holding `blocks` (`(pos, state,
-    /// nbt)`).
-    pub fn template_bytes(size: [i32; 3], blocks: &[([i32; 3], &str, Option<Compound>)], entities: &[([f64; 3], Compound)]) -> Vec<u8> {
-        let mut palette: Vec<String> = Vec::new();
-        let mut list = Vec::new();
-        for (pos, state, data) in blocks {
-            let k = palette.iter().position(|p| p == state).unwrap_or_else(|| {
-                palette.push(state.to_string());
-                palette.len() - 1
-            });
-            let mut b: Compound = Compound::new();
-            b.insert("pos".into(), Value::List(pos.iter().map(|&v| Value::Int(v)).collect()));
-            b.insert("state".into(), Value::Int(k as i32));
-            if let Some(d) = data {
-                b.insert("nbt".into(), Value::Compound(d.clone()));
-            }
-            list.push(Value::Compound(b));
-        }
-        let entry = |s: &String| {
-            let (name, props) = s.split_once('[').map_or((s.as_str(), ""), |(n, p)| (n, p.trim_end_matches(']')));
-            let mut c = Compound::new();
-            c.insert("Name".into(), Value::String(name.to_owned()));
-            let props: Compound = props.split(',').filter_map(|kv| kv.split_once('=')).map(|(k, v)| (k.to_owned(), Value::String(v.to_owned()))).collect();
-            if !props.is_empty() {
-                c.insert("Properties".into(), Value::Compound(props));
-            }
-            Value::Compound(c)
-        };
-        let mut root = Compound::new();
-        root.insert("size".into(), Value::List(size.iter().map(|&v| Value::Int(v)).collect()));
-        root.insert("palette".into(), Value::List(palette.iter().map(entry).collect()));
-        root.insert("blocks".into(), Value::List(list));
-        root.insert(
-            "entities".into(),
-            Value::List(
-                entities
-                    .iter()
-                    .map(|(pos, data)| {
-                        let mut e = Compound::new();
-                        e.insert("pos".into(), nbt::doubles(*pos));
-                        e.insert("blockPos".into(), Value::List(pos.iter().map(|&v| Value::Int(v.floor() as i32)).collect()));
-                        e.insert("nbt".into(), Value::Compound(data.clone()));
-                        Value::Compound(e)
-                    })
-                    .collect(),
-            ),
-        );
-        root.insert("DataVersion".into(), Value::Int(4671));
-        fastnbt::to_bytes(&Value::Compound(root)).unwrap()
-    }
-
-    /// A jigsaw's block entity.
-    pub fn jig(name: &str, target: &str, pool: &str, final_state: &str) -> Option<Compound> {
-        let mut c = Compound::new();
-        for (k, v) in [("name", name), ("target", target), ("pool", pool), ("final_state", final_state), ("joint", "aligned"), ("id", "minecraft:jigsaw")] {
-            c.insert(k.into(), Value::String(v.into()));
-        }
-        Some(c)
-    }
+    use crate::testing::{jig, template_bytes};
 
     #[test]
     fn templates_and_their_jigsaws_are_read() {
