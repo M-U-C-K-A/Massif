@@ -1011,6 +1011,7 @@ pub fn new_world(name: &str, samples: &Samples, fit: &Fit, area: &Area, sea_leve
         sea_level,
         lava: false,
         graph: None,
+        terrain_graph: None,
         ores: Default::default(),
         gradients: Vec::new(),
         fill: None,
