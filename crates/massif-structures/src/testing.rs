@@ -139,6 +139,8 @@ pub fn village() -> Library {
     add("data/t/worldgen/template_pool/streets.json", pool(&[("t:street", "terrain_matching", 1)], "t:ends"));
     add("data/t/worldgen/template_pool/ends.json", br#"{"fallback": "minecraft:empty", "elements": [{"weight": 1, "element": {"element_type": "minecraft:empty_pool_element"}}]}"#.to_vec());
     add("data/t/worldgen/template_pool/houses.json", pool(&[("t:house", "rigid", 1)], "minecraft:empty"));
+    // As the game's plains villages, so that the one-click kind finds it.
+    add("data/minecraft/worldgen/structure/village_plains.json", br#"{"type": "minecraft:jigsaw", "start_pool": "t:centers", "size": 4, "max_distance_from_center": 60, "project_start_to_heightmap": "WORLD_SURFACE_WG", "start_height": {"absolute": 0}, "use_expansion_hack": true, "terrain_adaptation": "beard_thin"}"#.to_vec());
     Library::new(Source::Memory(files), "test")
 }
 

@@ -374,14 +374,29 @@ pub fn flatten_under(pieces: &[Placed], ground: &dyn Ground, margin: i32) -> Has
 /// the game carves an Ancient City's halls out of the deep dark: the land
 /// there becomes air before the pieces are laid.
 pub fn carve_boxes(b: &mut Builder, pieces: &[Placed]) {
+    // The game's carving fades out over a few blocks around each box: the
+    // halls open on a cavern with ragged walls, not on a box cut clean.
+    const MARGIN: i32 = 4;
     for p in pieces {
         if p.element.projection() != Projection::Rigid || !matches!(*p.element, Element::Single { .. } | Element::List { .. }) {
             continue;
         }
         let floor = (p.bbox.min[1] + p.ground_delta).max(p.bbox.min[1]);
-        for y in floor..=p.bbox.max[1] {
-            for z in p.bbox.min[2]..=p.bbox.max[2] {
-                for x in p.bbox.min[0]..=p.bbox.max[0] {
+        let (lo, hi) = (p.bbox.min, p.bbox.max);
+        for y in floor..=hi[1] + MARGIN {
+            for z in lo[2] - MARGIN..=hi[2] + MARGIN {
+                for x in lo[0] - MARGIN..=hi[0] + MARGIN {
+                    let dx = (lo[0] - x).max(x - hi[0]).max(0);
+                    let dz = (lo[2] - z).max(z - hi[2]).max(0);
+                    let dy = (y - hi[1]).max(0);
+                    let d2 = (dx * dx + dy * dy + dz * dz) as f32;
+                    if d2 > 2.25 {
+                        // Less and less likely, the farther out.
+                        let mut rng = Rng::at(b.seed ^ 0x6265_6172_64, [x, y, z]);
+                        if d2 > (MARGIN * MARGIN) as f32 || rng.float() > (-d2 / 8.0).exp() {
+                            continue;
+                        }
+                    }
                     if b.get([x, y, z]).is_none() && !b.ground.is_air(x, y, z) {
                         b.set([x, y, z], "minecraft:cave_air", None);
                     }

@@ -330,7 +330,7 @@ pub fn colors_of(s: &mut massif_core::structures::Structure, catalogue: Option<&
 /// The settings of the tool, in Tool Settings.
 pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
     use crate::panels::{hint, section};
-    use crate::widgets::{button, button_group, checkbox, combo, row, well};
+    use crate::widgets::{button, checkbox, combo, row, well};
     let s = &mut tools.structure;
     let kind = s.kind();
     well(ui, |ui| {
@@ -355,11 +355,14 @@ pub fn settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
             });
         }
         row(ui, tr!("Turn"), |ui| {
-            let labels = [tr!("Any"), "0°", "90°", "180°", "270°"];
-            let on = [s.turn.is_none(), s.turn == Some(0), s.turn == Some(1), s.turn == Some(2), s.turn == Some(3)];
-            if let Some(k) = button_group(ui, "structure turn", &labels, &on) {
-                s.turn = if k == 0 { None } else { Some(k as u8 - 1) };
-            }
+            let label = |t: Option<u8>| t.map_or_else(|| tr!("Any").to_owned(), |t| format!("{}°", t as u32 * 90));
+            combo("structure turn").selected_text(label(s.turn)).width((ui.available_width() * 0.62).min(190.0)).show_ui(ui, |ui| {
+                for t in [None, Some(0), Some(1), Some(2), Some(3)] {
+                    if ui.selectable_label(s.turn == t, label(t)).clicked() {
+                        s.turn = t;
+                    }
+                }
+            });
         });
         row(ui, tr!("Draw"), |ui| {
             crate::widgets::drag(ui, egui::DragValue::new(&mut s.seed).speed(1.0));
