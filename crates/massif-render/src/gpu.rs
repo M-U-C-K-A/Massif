@@ -137,7 +137,9 @@ impl Mirror {
             if need > most {
                 return Err(());
             }
-            self.gpu = storage(device, self.label, (need * 3 / 2).next_power_of_two().min(most).max(need));
+            // A quarter more, by the megabyte: room for what comes next
+            // without making it again each frame.
+            self.gpu = storage(device, self.label, (need + need / 4).next_multiple_of(1 << 20).min(most).max(need));
             self.dirty = Some((0, self.cpu.len()));
             remade = true;
         }
