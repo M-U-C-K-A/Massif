@@ -2121,9 +2121,11 @@ version = "1.0.0"
 dependencies = [
  "image",
  "massif-anvil",
+ "massif-assets",
  "massif-core",
  "massif-format",
  "massif-legacy",
+ "massif-structures",
  "rayon",
 ]
 

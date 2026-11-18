@@ -94,14 +94,14 @@ struct Column {
     fluids: Vec<(i32, i32)>,
 }
 
-/// The map's land: what the export would write, read column by column
-/// (each column composed once).
+/// The map's land: what the export would write, read tile by tile (each
+/// tile's columns composed once, when the structure first reaches it).
 pub struct MapGround<'a> {
     dim: &'a Dimension,
     mat: Materializer<'a>,
     reg: &'a massif_core::registry::Registry,
     lava: bool,
-    columns: Mutex<HashMap<(i32, i32), std::sync::Arc<Column>>>,
+    tiles: Mutex<HashMap<TilePos, std::sync::Arc<Vec<Column>>>>,
 }
 
 impl<'a> MapGround<'a> {
@@ -112,28 +112,44 @@ impl<'a> MapGround<'a> {
             mat: Materializer::new(&world.registry, world.meta.seed, d.min_y),
             reg: &world.registry,
             lava: world.meta.lava,
-            columns: Mutex::new(HashMap::new()),
+            tiles: Mutex::new(HashMap::new()),
         }
     }
 
-    fn column(&self, x: i32, z: i32) -> std::sync::Arc<Column> {
-        if let Some(c) = self.columns.lock().unwrap_or_else(|e| e.into_inner()).get(&(x, z)) {
-            return c.clone();
-        }
+    /// The columns of the tile holding `(x, z)`, and the index of that
+    /// column among them.
+    fn tile(&self, x: i32, z: i32) -> (std::sync::Arc<Vec<Column>>, usize) {
         let pos = TilePos::containing(x, z);
-        let mut col = Column::default();
-        if let Some(stack) = TileStack::new(self.dim, pos, true) {
-            let cell = local_index(x, z);
-            stack.spans(cell, &mut col.spans);
-            stack.fluids(cell, &col.spans, &mut col.fluids);
+        let cell = local_index(x, z);
+        if let Some(t) = self.tiles.lock().unwrap_or_else(|e| e.into_inner()).get(&pos) {
+            return (t.clone(), cell);
         }
-        let col = std::sync::Arc::new(col);
-        let mut cache = self.columns.lock().unwrap_or_else(|e| e.into_inner());
-        if cache.len() > 1 << 20 {
+        let n = (massif_core::coords::TILE_SIZE * massif_core::coords::TILE_SIZE) as usize;
+        let columns: Vec<Column> = match TileStack::new(self.dim, pos, true) {
+            Some(stack) => (0..n)
+                .map(|c| {
+                    let mut col = Column::default();
+                    stack.spans(c, &mut col.spans);
+                    stack.fluids(c, &col.spans, &mut col.fluids);
+                    col
+                })
+                .collect(),
+            None => vec![Column::default(); n],
+        };
+        let t = std::sync::Arc::new(columns);
+        let mut cache = self.tiles.lock().unwrap_or_else(|e| e.into_inner());
+        // A structure reaches a few tiles; a village brush over a large
+        // selection more: the memory kept stays bounded.
+        if cache.len() > 256 {
             cache.clear();
         }
-        cache.insert((x, z), col.clone());
-        col
+        cache.insert(pos, t.clone());
+        (t, cell)
+    }
+
+    fn column(&self, x: i32, z: i32) -> Column {
+        let (t, cell) = self.tile(x, z);
+        t[cell].clone()
     }
 
     fn top(&self, col: &Column) -> i32 {
@@ -175,7 +191,8 @@ impl Ground for MapGround<'_> {
     }
 
     fn is_air(&self, x: i32, y: i32, z: i32) -> bool {
-        let col = self.column(x, z);
+        let (t, cell) = self.tile(x, z);
+        let col = &t[cell];
         !col.spans.iter().any(|s| y >= s.y0 && y < s.y1) && !col.fluids.iter().any(|f| y >= f.0 && y < f.1)
     }
 }
