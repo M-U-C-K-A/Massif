@@ -31,6 +31,8 @@ USAGE
   massif-cli terrain validate <graph.json>
   massif-cli terrain patch <graph.json> <edits.json> [--out FILE] [--layout]
   massif-cli terrain render <graph.json> <out.png> [--pixels N] [--size BLOCKS] [--cpu]
+  massif-cli terrain migrate <world.massif> [--out FILE]
+  massif-cli terrain build <world.massif> <out.massif> [--graph FILE] [--samples N] [--cpu]
 
   --size      map size in tiles of 128 blocks (default 8x8 = 1024x1024 blocks)
   --landform  flat | plains | hills | mountains | islands (default hills)
@@ -54,7 +56,9 @@ USAGE
   terrain works on the terrain graphs of 1.3: schema writes their JSON Schema,
   catalog every type of node with an example (Markdown, or JSON for a model),
   validate their mistakes with paths, patch applies edits (add, set, link,
-  unlink, remove, rename, or a JSON Patch), render a shaded picture.
+  unlink, remove, rename, or a JSON Patch), render a shaded picture, migrate
+  the graph a world of 1.2 keeps, build a graph into a world (its own, or one
+  given) as Convert does.
 
   analyse prints the survival check of Edit ▸ Analyse the map as Markdown: every
   block counted as the export writes it, what breaks survival, what is missing.
