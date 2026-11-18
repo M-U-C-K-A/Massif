@@ -525,6 +525,17 @@ pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> 
             *l = l.max(mouth);
         }
     }
+    // Nor under the water it crosses further down: a lake on its way
+    // (filled before the river is dug) stands at its own level, and the
+    // river above it may not stand lower, or the lake would stand over the
+    // river that feeds it.
+    let mut below = f32::MIN;
+    for k in (0..level.len()).rev() {
+        if let Some(w) = land[k].1 {
+            below = below.max(w);
+        }
+        level[k] = level[k].max(below);
+    }
     let length = coast as f32 * STEP;
     // From the source to the mouth: under the sea, as at the mouth.
     // From the source to the mouth, wider and deeper as the land draining
@@ -2230,6 +2241,51 @@ mod tests {
         h.commit();
         let (rim, _) = column(&world, 192, 64);
         assert!(rim < 130.0 - 192.0 * 0.25 - 2.0, "the rim is cut: {rim}, {report:?}");
+    }
+
+    /// A deep river (its water well under the land) that fills lakes on
+    /// its way stands at a lake's level at least above it: a lake never
+    /// stands over the river that feeds it, and the water never rises
+    /// downstream. Here, in the hills, water let go at a spring fills two
+    /// hollows; dug wide and deep, the river stood at 63 where it ran into
+    /// a lake at 68.
+    #[test]
+    fn a_deep_river_feeds_its_lakes_from_above() {
+        let mut world = crate::generate::generate(&crate::generate::GenParams {
+            tiles_x: 4,
+            tiles_z: 4,
+            landform: crate::generate::Landform::Hills,
+            seed: 1,
+            ..crate::generate::GenParams::default()
+        });
+        let sea = world.meta.sea_level as f32;
+        let mut d = descend(world.dims[0].ground(), (-208, -240), sea, 60_000, 2_000_000, 1.0);
+        assert!(!d.lakes.is_empty(), "lakes on its way");
+        // As the River tool lays it out, 40 blocks wide and its flow all
+        // the way up.
+        d.course = natural_course(world.dims[0].ground(), &d.course, 120.0, &[0]).0;
+        let spec = RiverSpec { width: 40.0, width_end: 200.0, depth: 10.0, depth_end: 25.0, banks: 200.0, ..RiverSpec::default() };
+        let mut h = History::default();
+        h.begin("spring", 0);
+        dig_descent(&mut h.edit(&mut world, 0), &d, &spec);
+        h.commit();
+        let lakes: Vec<i16> = d.lakes.iter().map(|l| l.1.floor() as i16).collect();
+        let (mut lowest, mut fed) = (i16::MAX, 0);
+        for &(x, z) in &d.course {
+            let (x, z) = (x.floor() as i32, z.floor() as i32);
+            if world.dims[0].ground().view(TilePos::containing(x, z)).is_none() {
+                continue;
+            }
+            let (top, fluid) = column(&world, x, z);
+            if fluid == NO_FLUID || fluid as f32 <= top {
+                continue;
+            }
+            assert!(fluid <= lowest, "the water rises from {lowest} to {fluid} at {x}, {z} (its lakes at {lakes:?})");
+            lowest = fluid;
+            fed += lakes.contains(&fluid) as usize;
+        }
+        assert!(fed > 0, "the river runs through its lakes, at {lakes:?}");
+        assert_eq!(crate::water::check(&world.dims[0]).spills, 0);
     }
 
     #[test]
