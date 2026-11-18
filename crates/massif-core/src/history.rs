@@ -537,6 +537,15 @@ impl Edit<'_> {
         }
     }
 
+    /// The tile at `pos` of the edited level as it was when this step
+    /// began, if this step has changed it (`None` too where the level had
+    /// no tile there).
+    pub fn original(&self, pos: TilePos) -> Option<Tile> {
+        let id = self.dim.levels[self.level].id;
+        let blob = self.step.tiles.iter().find(|t| t.0 == id && t.1 == pos)?.2.as_ref()?;
+        Tile::decode(blob).ok()
+    }
+
     fn touch(&mut self, pos: TilePos) {
         if self.step.structure.is_some() {
             return; // the snapshot already covers every tile

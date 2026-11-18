@@ -232,6 +232,112 @@ pub fn check(dim: &Dimension) -> WaterCheck {
     tiles.par_iter().map(|&p| check_tile(dim, p)).reduce(WaterCheck::default, WaterCheck::add)
 }
 
+/// Water runs into the land lowered beside it: over `rect` of the ground
+/// level, each dry column whose ground lies under the surface of the water
+/// beside it takes that water, the highest first, and so on across `rect`
+/// and across the land this step has lowered (a stroke that reaches the
+/// water from afar), never further. Lowering the shore of a lake, or the
+/// bank of a river, widens its water instead of leaving a dry hole beside
+/// it, which the game would fill with running water. Returns the columns
+/// that took water.
+pub fn fill_lowered(edit: &mut crate::history::Edit, rect: crate::coords::BlockRect) -> usize {
+    use crate::compose::block_top;
+    use crate::tile::NO_FLUID;
+    use std::collections::HashMap;
+    if rect.is_empty() || edit.level_index() != 0 {
+        return 0;
+    }
+    // Nothing to do without water in `rect` or beside it.
+    let around = crate::coords::BlockRect::new(rect.x0 - 1, rect.z0 - 1, rect.x1 + 1, rect.z1 + 1);
+    if !around.tiles().any(|p| edit.view(p).is_some_and(|t| t.fluid.uniform_value() != Some(NO_FLUID))) {
+        return 0;
+    }
+    // Each column's ground (its top block; MAX: no column), its water
+    // (NO_FLUID: dry), and the ground it had when the step began: read a
+    // tile at a time, as the fill reaches it.
+    struct Read {
+        top: Vec<i32>,
+        water: Vec<i16>,
+        was: Option<Vec<i32>>,
+    }
+    fn read(tiles: &mut HashMap<TilePos, Option<Read>>, edit: &crate::history::Edit, p: TilePos) -> bool {
+        tiles
+            .entry(p)
+            .or_insert_with(|| {
+                let t = edit.view(p)?;
+                let top: Vec<i32> = (0..crate::coords::TILE_AREA).map(|i| if t.present(i) { block_top(t.top.get(i)) } else { i32::MAX }).collect();
+                let water = (0..crate::coords::TILE_AREA)
+                    .map(|i| {
+                        let f = t.fluid.get(i);
+                        if f != NO_FLUID && f as i32 > top[i] { f } else { NO_FLUID }
+                    })
+                    .collect();
+                let was = edit.original(p).map(|o| (0..crate::coords::TILE_AREA).map(|i| block_top(o.top.get(i))).collect());
+                Some(Read { top, water, was })
+            })
+            .is_some()
+    }
+    let mut tiles: HashMap<TilePos, Option<Read>> = HashMap::new();
+    for p in around.tiles() {
+        read(&mut tiles, edit, p);
+    }
+    let get = |tiles: &HashMap<TilePos, Option<Read>>, x: i32, z: i32| -> Option<(i32, i16, Option<i32>)> {
+        let r = tiles.get(&TilePos::containing(x, z))?.as_ref()?;
+        let i = local_index(x, z);
+        Some((r.top[i], r.water[i], r.was.as_ref().map(|w| w[i])))
+    };
+    let inside = |x: i32, z: i32| x >= rect.x0 && x < rect.x1 && z >= rect.z0 && z < rect.z1;
+    let mut heap = std::collections::BinaryHeap::new();
+    for z in rect.z0..rect.z1 {
+        for x in rect.x0..rect.x1 {
+            let Some((top, water, _)) = get(&tiles, x, z) else { continue };
+            if water != NO_FLUID || top == i32::MAX {
+                continue;
+            }
+            let beside = [(1, 0), (-1, 0), (0, 1), (0, -1)].into_iter().filter_map(|(dx, dz)| get(&tiles, x + dx, z + dz)).map(|c| c.1).filter(|&l| l != NO_FLUID).max();
+            if let Some(l) = beside
+                && l as i32 > top
+            {
+                heap.push((l, x, z));
+            }
+        }
+    }
+    let mut taken: HashMap<TilePos, Vec<(usize, i16)>> = HashMap::new();
+    let mut n = 0;
+    while let Some((l, x, z)) = heap.pop() {
+        let p = TilePos::containing(x, z);
+        let i = local_index(x, z);
+        let Some(Some(r)) = tiles.get_mut(&p) else { continue };
+        if r.water[i] != NO_FLUID {
+            continue;
+        }
+        r.water[i] = l;
+        taken.entry(p).or_default().push((i, l));
+        n += 1;
+        for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            let (nx, nz) = (x + dx, z + dz);
+            if !read(&mut tiles, edit, TilePos::containing(nx, nz)) {
+                continue;
+            }
+            let Some((top, water, was)) = get(&tiles, nx, nz) else { continue };
+            // Into `rect`, and past it into the land this step lowered.
+            let open = inside(nx, nz) || was.is_some_and(|w| w > top);
+            if open && water == NO_FLUID && top != i32::MAX && l as i32 > top {
+                heap.push((l, nx, nz));
+            }
+        }
+    }
+    for (pos, cells) in taken {
+        if let Some(tile) = edit.tile_mut(pos) {
+            for (i, l) in cells {
+                tile.fluid.set(i, l);
+            }
+            tile.fluid.compact();
+        }
+    }
+    n
+}
+
 /// Make the water of the edited level over `rect` stay where it is: no
 /// water block with open land beside it lower than its surface. Where a
 /// column's water stands over a dry neighbour, that neighbour's ground
