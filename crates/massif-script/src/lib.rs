@@ -1,5 +1,5 @@
-//! Scripts: WorldPainter's JavaScript scripts run as they are, and
-//! Massif's own scripting API, on QuickJS.
+//! Scripts: WorldPainter's JavaScript scripts run as they are (on QuickJS),
+//! and Massif's own scripting API.
 //!
 //! [`run`] runs a script on a thread of its own caller's choosing: the
 //! command line's `massif-cli script`, or the app's File ▸ Run script…,
@@ -8,8 +8,9 @@
 //! * `wp`: WorldPainter's `ScriptingContext` and the Java objects its
 //!   scripts use (`world`, `dimension`, `org.pepsoft.worldpainter.Terrain`,
 //!   layers…), over Massif's map ([`session`], [`apply`], `wp.js`);
-//! * `massif`: Massif's API, maps read and written by regions as typed
-//!   arrays ([`region`], [`api`], `massif.js`).
+//! * the operations Massif's own API is made of: maps read and written by
+//!   regions ([`region`]), and whole maps opened, made, saved, exported and
+//!   changed ([`api`]).
 //!
 //! A script reads and writes only files under its own folder and those the
 //! user picked ([`access`]), and has no network.
@@ -22,6 +23,8 @@ pub mod image;
 mod js;
 pub mod region;
 pub mod session;
+#[doc(hidden)]
+pub mod testing;
 pub mod worlds;
 
 pub use descriptor::{Descriptor, Param, ParamKind, Value as ParamValue};

@@ -1,5 +1,4 @@
-//! File ▸ Run Script…: a WorldPainter script, or one written for Massif's
-//! own API, run on the open map. The dialog asks for the parameters its
+//! File ▸ Run Script…: a WorldPainter script run on the open map. The dialog asks for the parameters its
 //! descriptor names (and its arguments, unless it hides them), runs it on
 //! a thread of its own over a copy of the map, shows what it prints, its
 //! progress and the line of its error, and stops it when asked. What it
@@ -151,7 +150,7 @@ impl ScriptForm {
             ui.label(RichText::new(theme::glyph(Icon::FileCode).to_string()).size(17.0).color(pal.accent));
             ui.label(RichText::new(self.name()).size(16.0).bold());
         });
-        let about = self.descriptor.description.clone().unwrap_or_else(|| tr!("A script: WorldPainter's, or one written for Massif's own API.").to_owned());
+        let about = self.descriptor.description.clone().unwrap_or_else(|| tr!("A WorldPainter script, run as it is.").to_owned());
         ui.add(egui::Label::new(RichText::new(about).size(12.0).color(pal.weak)).wrap());
         ui.label(RichText::new(self.path.display().to_string()).size(11.0).color(pal.weak));
         ui.add_space(10.0);
@@ -171,8 +170,9 @@ impl ScriptForm {
                                 Value::Text(t) => ui.add(egui::TextEdit::singleline(t).desired_width(220.0)),
                                 Value::Number(n) => match p.kind {
                                     ParamKind::Percentage => ui.add(Field::new(n, 0.0..=100.0).suffix(" %").max_decimals(0).width(140.0)),
-                                    ParamKind::Integer => ui.add(Field::new(n, -1e9..=1e9).max_decimals(0).width(140.0)),
-                                    _ => ui.add(Field::new(n, -1e9..=1e9).max_decimals(4).width(140.0)),
+                                    // Numbers without bounds: typed or dragged, no bar to fill.
+                                    ParamKind::Integer => crate::widgets::drag(ui, egui::DragValue::new(n).speed(1.0).max_decimals(0)),
+                                    _ => crate::widgets::drag(ui, egui::DragValue::new(n).speed(0.1).max_decimals(4)),
                                 },
                                 Value::Flag(b) => switch(ui, b),
                                 Value::File(f) => {
@@ -237,8 +237,8 @@ impl ScriptForm {
             State::Done { ending, elapsed, changed } => {
                 let secs = elapsed.as_secs_f32();
                 let (text, colour) = match ending {
-                    Ending::Done | Ending::Exit(0) if *changed => (tr!("Done in {secs:.1} s: the map changed, one step to undo.", secs), pal.success),
-                    Ending::Done | Ending::Exit(0) => (tr!("Done in {secs:.1} s: the map did not change.", secs), pal.success),
+                    Ending::Done | Ending::Exit(0) if *changed => (tr!("Done in {secs:.2} s: the map changed, one step to undo.", secs), pal.success),
+                    Ending::Done | Ending::Exit(0) => (tr!("Done in {secs:.2} s: the map did not change.", secs), pal.success),
                     Ending::Exit(code) => (tr!("The script ended with code {code}; the map is as it was.", code), pal.danger),
                     Ending::Cancelled => (tr!("Stopped; the map is as it was.").to_owned(), pal.weak),
                     Ending::Failed(e) => (

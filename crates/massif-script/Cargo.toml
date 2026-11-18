@@ -21,3 +21,5 @@ log.workspace = true
 rquickjs = { version = "0.14", default-features = false, features = ["std", "array-buffer"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "tiff"] }
 png = "0.18"
+
+[dev-dependencies]

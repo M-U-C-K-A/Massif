@@ -20,6 +20,14 @@ fn load(path: &Path) -> World {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // --fingerprint <map> [prefix…]: what massif_script::testing keeps of it.
+    if args.first().is_some_and(|a| a == "--fingerprint") {
+        let world = load(Path::new(&args[1]));
+        let prefixes: Vec<&str> = args[2..].iter().map(String::as_str).collect();
+        let print = massif_script::testing::only(&massif_script::testing::fingerprint(&world), &prefixes);
+        println!("{}", serde_json::to_string_pretty(&print).expect("numbers"));
+        return;
+    }
     let (a, b) = (load(Path::new(&args[0])), load(Path::new(&args[1])));
     let only: Vec<&str> = args[2..].iter().map(String::as_str).collect();
     let want = |p: &str| only.is_empty() || only.contains(&p);

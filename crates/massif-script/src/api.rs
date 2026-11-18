@@ -95,8 +95,7 @@ pub fn call(s: &mut Session, name: &str, args: &Value) -> R<Value> {
             if let Some(v) = args.get("version").and_then(Value::as_str) {
                 options.target = massif_anvil::Target::release(v).ok_or_else(|| format!("Massif does not export for Minecraft {v}"))?;
             }
-            let slot = s.slot(w)?;
-            crate::session::carve(slot);
+            let slot = s.settle(w)?;
             let stats = massif_anvil::export(&slot.world, &dir, &options, &massif_anvil::Progress::default()).map_err(|e| e.to_string())?;
             Ok(json!({ "dir": dir.display().to_string(), "chunks": stats.chunks, "regions": stats.regions }))
         }

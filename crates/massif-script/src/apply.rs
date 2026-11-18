@@ -493,25 +493,11 @@ impl Session {
         // Write.
         let combined: Vec<Vec<massif_core::combined::Component>> = std::iter::once(Vec::new()).chain(slot.world.registry.combined.iter().map(|c| c.parts.clone())).collect();
         let beaches = terrain_ids.values().any(|&t| t == massif_legacy::terrains::BEACH_MARK).then(|| slot.beaches());
-        let cover = match bound {
-            Some(Bound::GroundCover(k)) => self.ground_covers.get(k as usize).cloned(),
-            _ => None,
-        };
         let slot = self.slot(w)?;
         let mut kept: Vec<(TilePos, Vec<(u16, i16)>)> = Vec::new();
         for (pos, entries) in writes {
             if bound.is_some_and(crate::session::overlaid) {
                 kept.push((pos, entries));
-                continue;
-            }
-            if let (Some(Bound::GroundCover(k)), Some(cover)) = (bound, &cover) {
-                let massif_core::World { registry, dims, .. } = &mut slot.world;
-                let Some(tile) = dims[d].ground_mut().tile_mut(pos) else { continue };
-                for (i, v) in entries {
-                    if v != 0 {
-                        crate::session::paint_ground_cover(cover, k, tile, i as usize, registry, &mut slot.ground_made);
-                    }
-                }
                 continue;
             }
             let Some(tile) = slot.world.dims[d].ground_mut().tile_mut(pos) else { continue };

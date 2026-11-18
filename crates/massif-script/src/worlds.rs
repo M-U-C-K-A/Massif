@@ -2,7 +2,7 @@
 //! from a height map as `wp.createWorld()` does, saved, exported to
 //! Minecraft; WorldPainter's map formats and biome numbers.
 
-use crate::session::{Line, R, Session, carve, java_round, massif_path};
+use crate::session::{Line, R, Session, java_round, massif_path};
 use massif_core::coords::{TILE_AREA, TILE_SIZE, TilePos, local_index};
 use massif_core::plane::Plane;
 use massif_core::tile::{NO_FLUID, Tile};
@@ -108,8 +108,7 @@ impl Session {
             std::fs::rename(&path, &backup).map_err(|e| format!("Could not move {} to {}: {e}", path.display(), backup.display()))?;
         }
         self.io.progress.set(0.0, "Saving");
-        let slot = self.slot(w)?;
-        carve(slot);
+        let slot = self.settle(w)?;
         // Written from a cold copy: what is decoded stays so for the script.
         let copy = slot.world.copy_unfrozen().snapshot();
         massif_format::save(&copy, &path).map_err(|e| format!("I/O error saving file (message: {e})"))?;
@@ -128,8 +127,7 @@ impl Session {
         if !base.is_dir() {
             return Err(format!("Directory {} does not exist or is not a directory", base.display()));
         }
-        let slot = self.slot(w)?;
-        carve(slot);
+        let slot = self.settle(w)?;
         let name = slot.world.meta.name.clone();
         let clean: String = name.chars().map(|c| if matches!(c, '/' | '\\' | ':' | '\0') { '_' } else { c }).collect();
         let to = base.join(clean.trim());
@@ -275,9 +273,9 @@ impl Session {
                         if int_height >= k_frost {
                             cover[i] = frost;
                         }
-                        if water > int_height {
-                            fluid[i] = (water + 1) as i16;
-                        }
+                        // The water's level in every column, as WorldPainter
+                        // keeps it: no water where the ground is over it.
+                        fluid[i] = (water + 1) as i16;
                     }
                 }
                 let mut tile = Tile::ground(0.0, 0, NO_FLUID);

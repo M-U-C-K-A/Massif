@@ -1,6 +1,8 @@
-//! The JavaScript side: a QuickJS runtime per run, the natives `wp.js` and
-//! `massif.js` are written over (an object `__m` they take and hide), and
-//! the run itself: bindings, the script, its errors with their line.
+//! The JavaScript side, WorldPainter's: a QuickJS runtime per run, the
+//! natives `wp.js` is written over (an object `__m` it takes and hides),
+//! and the run itself: bindings, the script, its errors with their line.
+//! Massif's own scripting API is Lua's; JavaScript is here so that
+//! WorldPainter's scripts run as they are.
 //!
 //! Natives find the run's [`Session`] through a thread-local, so that each
 //! is a plain function taking numbers and strings: the calls a script's
@@ -9,7 +11,7 @@
 //! script called, so that their stack names its line.
 
 use crate::session::{CANCELLED, Line, R, Session};
-use rquickjs::{Ctx, Exception, Function, Object, TypedArray, Value};
+use rquickjs::{Ctx, Exception, Function, Object};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -195,8 +197,11 @@ fn int_height(ctx: Ctx<'_>, w: f64, d: f64, x: f64, y: f64, default: f64) -> Q<f
 fn set_height(ctx: Ctx<'_>, w: f64, d: f64, x: f64, y: f64, h: f64) -> Q<()> {
     with(&ctx, |s| {
         let (slot, d) = s.column(w as usize, d as i32)?;
-        let (min, max) = (slot.world.dims[d].min_y as f32, slot.world.dims[d].max_y as f32);
-        let top = (h as f32 + 1.0).clamp(min, max);
+        // As WorldPainter keeps it: past the build limits too (a script
+        // reads back what it wrote), within what its whole numbers of
+        // 1/256th of a block hold, as a .world's import keeps it.
+        let min = slot.world.dims[d].min_y as f32;
+        let top = (h as f32 + 1.0).clamp(min - 8_388_608.0, min + 8_388_607.0);
         slot.write(d, x as i32, y as i32, |t, i| t.top.set(i, top));
         Ok(())
     })
@@ -212,9 +217,9 @@ fn water(ctx: Ctx<'_>, w: f64, d: f64, x: f64, y: f64) -> Q<f64> {
 fn set_water(ctx: Ctx<'_>, w: f64, d: f64, x: f64, y: f64, level: f64) -> Q<()> {
     with(&ctx, |s| {
         let (slot, d) = s.column(w as usize, d as i32)?;
-        let min = slot.world.dims[d].min_y;
-        let level = level as i32;
-        let fluid = if level < min { massif_core::tile::NO_FLUID } else { (level + 1).clamp(i16::MIN as i32 + 1, i16::MAX as i32) as i16 };
+        // Any level, as WorldPainter keeps it: one under the ground is no
+        // water.
+        let fluid = (level as i32 + 1).clamp(i16::MIN as i32 + 1, i16::MAX as i32) as i16;
         slot.write(d, x as i32, y as i32, |t, i| t.fluid.set(i, fluid));
         Ok(())
     })
@@ -321,17 +326,6 @@ fn set_layer_value(ctx: Ctx<'_>, w: f64, dim: f64, l: f64, x: f64, y: f64, v: f6
                 }
                 crate::session::paint(&mut slot.painted, d, pos, b, order, massif_core::coords::local_index(x, z), v);
                 slot.changed = true;
-            }
-            crate::session::Bound::GroundCover(k) => {
-                if v != 0 {
-                    let cover = s.ground_covers.get(k as usize).cloned().ok_or("no such ground cover")?;
-                    let (slot, d) = s.column(w as usize, 0)?;
-                    let massif_core::World { registry, dims, .. } = &mut slot.world;
-                    if let Some(t) = dims[d].ground_mut().tile_mut(massif_core::TilePos::containing(x, z)) {
-                        crate::session::paint_ground_cover(&cover, k, t, massif_core::coords::local_index(x, z), registry, &mut slot.ground_made);
-                        slot.changed = true;
-                    }
-                }
             }
             b => {
                 let min = slot.world.dims[d].min_y;
@@ -563,53 +557,6 @@ fn progress(ctx: Ctx<'_>, fraction: f64, label: Option<String>) -> Q<()> {
     })
 }
 
-// Massif's own API: regions of columns at once, as typed arrays.
-
-/// The rectangle `[x0, z0, x1, z1]` a script gave.
-fn rect(ctx: &Ctx<'_>, r: &[f64]) -> Q<(i32, i32, i32, i32)> {
-    match r {
-        [x0, z0, x1, z1] => Ok((*x0 as i32, *z0 as i32, *x1 as i32, *z1 as i32)),
-        _ => Err(Exception::throw_type(ctx, "A region is [x0, z0, x1, z1]")),
-    }
-}
-
-fn region_get<'js>(ctx: Ctx<'js>, w: f64, d: f64, what: String, r: Vec<f64>) -> Q<Value<'js>> {
-    let (x0, z0, x1, z1) = rect(&ctx, &r)?;
-    let data = with(&ctx, |s| crate::region::get(s, w as usize, d as i32, &what, x0, z0, x1, z1))?;
-    Ok(match data {
-        crate::region::Data::F32(v) => TypedArray::<f32>::new(ctx.clone(), v)?.into_value(),
-        crate::region::Data::U16(v) => TypedArray::<u16>::new(ctx.clone(), v)?.into_value(),
-        crate::region::Data::I32(v) => TypedArray::<i32>::new(ctx.clone(), v)?.into_value(),
-    })
-}
-
-fn region_set<'js>(ctx: Ctx<'js>, w: f64, d: f64, what: String, r: Vec<f64>, values: Value<'js>) -> Q<()> {
-    let (x0, z0, x1, z1) = rect(&ctx, &r)?;
-    let data = if let Some(a) = values.as_object().and_then(|o| o.as_typed_array::<f32>()) {
-        crate::region::Data::F32(unsafe { a.as_slice() }.to_vec())
-    } else if let Some(a) = values.as_object().and_then(|o| o.as_typed_array::<u16>()) {
-        crate::region::Data::U16(unsafe { a.as_slice() }.to_vec())
-    } else if let Some(a) = values.as_object().and_then(|o| o.as_typed_array::<i32>()) {
-        crate::region::Data::I32(unsafe { a.as_slice() }.to_vec())
-    } else if let Some(arr) = values.as_array() {
-        let mut v = Vec::with_capacity(arr.len());
-        for k in 0..arr.len() {
-            v.push(arr.get::<f64>(k)? as f32);
-        }
-        crate::region::Data::F32(v)
-    } else {
-        return Err(Exception::throw_type(&ctx, "values must be a Float32Array, Uint16Array, Int32Array or an array of numbers"));
-    };
-    with(&ctx, |s| crate::region::set(s, w as usize, d as i32, &what, x0, z0, x1, z1, data))
-}
-
-fn massif_call(ctx: Ctx<'_>, name: String, args: String) -> Q<String> {
-    with(&ctx, |s| {
-        let args: serde_json::Value = json(&args)?;
-        crate::api::call(s, &name, &args).map(|v| v.to_string())
-    })
-}
-
 /// Make `__m`, the natives.
 fn natives<'js>(ctx: &Ctx<'js>) -> Q<Object<'js>> {
     let m = Object::new(ctx.clone())?;
@@ -672,9 +619,6 @@ fn natives<'js>(ctx: &Ctx<'js>) -> Q<Object<'js>> {
         "biomeId" => biome_id,
         "flush" => flush,
         "progress" => progress,
-        "regionGet" => region_get,
-        "regionSet" => region_set,
-        "call" => massif_call,
     }
     Ok(m)
 }
@@ -796,9 +740,7 @@ fn run_in(source: &str, file: &str, bindings: &Bindings, cancel: std::sync::Arc<
     ctx.with(|ctx| {
         let setup = || -> Q<()> {
             let g = ctx.globals();
-            let m = natives(&ctx)?;
-            g.set("__m", m.clone())?;
-            g.set("__massif", m)?;
+            g.set("__m", natives(&ctx)?)?;
             let argv: Vec<String> = std::iter::once(file.to_owned()).chain(bindings.args.iter().cloned()).collect();
             g.set("argc", argv.len() as i32)?;
             g.set("argv", argv)?;
@@ -820,12 +762,8 @@ fn run_in(source: &str, file: &str, bindings: &Bindings, cancel: std::sync::Arc<
             o.strict = false;
             o.filename = Some("wp.js".into());
             ctx.eval_with_options::<(), _>(include_str!("wp.js"), o)?;
-            let mut o = rquickjs::context::EvalOptions::default();
-            o.strict = false;
-            o.filename = Some("massif.js".into());
-            ctx.eval_with_options::<(), _>(include_str!("massif.js"), o)?;
             if let Some((w, d)) = bindings.open {
-                ctx.eval::<(), _>(format!("var world = __wp.world({w}); var dimension = __wp.dimension({w}, {d}); __massifOpen({w}, {d});"))?;
+                ctx.eval::<(), _>(format!("var world = __wp.world({w}); var dimension = __wp.dimension({w}, {d});"))?;
             }
             Ok(())
         };

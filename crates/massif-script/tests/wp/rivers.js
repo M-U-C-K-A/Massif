@@ -16,11 +16,15 @@ for (var y = y0; y < y0 + depth; y++) {
         if (mask.getHeight(x, y) <= 0) {
             continue;
         }
-        // The bed: under the lowest ground around, as deep as DEPTH.
+        // The bed: under the lowest ground around (on the map), as deep as
+        // DEPTH.
         var low = 1e9;
         for (var dy = -1; dy <= 1; dy++) {
             for (var dx = -1; dx <= 1; dx++) {
-                low = Math.min(low, dim.getHeightAt(x + dx, y + dy));
+                var around = dim.getHeightAt(x + dx, y + dy);
+                if (around > -1e30) {
+                    low = Math.min(low, around);
+                }
             }
         }
         var bed = Math.floor(low) - DEPTH;

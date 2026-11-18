@@ -88,7 +88,7 @@ pub fn index_of_ordinal(ordinal: u8) -> Option<i32> {
 
 /// Whether painting layer `b` keeps its strength until the map is saved.
 pub fn overlaid(b: Bound) -> bool {
-    matches!(b, Bound::Caves(_) | Bound::Objects { .. } | Bound::Cover { bit: false, .. })
+    matches!(b, Bound::Caves(_) | Bound::Objects { .. } | Bound::Cover { bit: false, .. } | Bound::GroundCover(_))
 }
 
 /// A line of a script's output.
@@ -977,16 +977,35 @@ impl Session {
     pub fn finish(&mut self) -> R<()> {
         self.flush()?;
         for slot in self.worlds.iter_mut().flatten() {
-            carve(slot);
+            carve(slot, &self.ground_covers);
         }
         Ok(())
+    }
+
+    /// World `w` as it will be saved: what was painted with a strength
+    /// resolved (see [`resolve`]), the caves carved.
+    pub fn settle(&mut self, w: usize) -> R<&mut Slot> {
+        self.flush()?;
+        let covers = self.ground_covers.clone();
+        let slot = self.slot(w)?;
+        carve(slot, &covers);
+        Ok(slot)
+    }
+
+    /// World `w` with what was painted with a strength resolved, its caves
+    /// still to carve: for reading and writing its layers' planes.
+    pub fn resolved(&mut self, w: usize) -> R<&mut Slot> {
+        let covers = self.ground_covers.clone();
+        let slot = self.slot(w)?;
+        resolve(slot, &covers);
+        Ok(slot)
     }
 }
 
 /// Resolve what was painted with a strength in `slot`, and carve the caves
 /// painted, as a `.world`'s are.
-pub fn carve(slot: &mut Slot) {
-    resolve(slot);
+pub fn carve(slot: &mut Slot, covers: &[massif_legacy::layers::GroundCover]) {
+    resolve(slot, covers);
     if slot.painted.is_empty() {
         return;
     }
@@ -1043,9 +1062,11 @@ pub fn paint(painted: &mut Painted, d: usize, pos: TilePos, b: Bound, order: u8,
 /// Turn the object layers and ground covers painted with a strength into
 /// Massif's single layer of each slot, as a `.world`'s import does: the
 /// strongest object layer kept in a column (the share of columns its
-/// strength says), the first ground cover kept. A layer painted at 0 where
-/// it was takes itself away. Caves stay, to be carved.
-pub fn resolve(slot: &mut Slot) {
+/// strength says), the first ground cover kept; and WorldPainter's custom
+/// ground covers over the terrain the column has now ("River on Gravel").
+/// A layer painted at 0 where it was takes itself away. Caves stay, to be
+/// carved.
+pub fn resolve(slot: &mut Slot, covers: &[massif_legacy::layers::GroundCover]) {
     let mut caves: Painted = HashMap::new();
     let painted = std::mem::take(&mut slot.painted);
     for ((d, pos), layers) in painted {
@@ -1059,10 +1080,20 @@ pub fn resolve(slot: &mut Slot) {
         if apply.is_empty() {
             continue;
         }
-        let Some(tile) = slot.world.dims[d].ground_mut().tile_mut(pos) else { continue };
+        let massif_core::World { registry, dims, .. } = &mut slot.world;
+        let Some(tile) = dims[d].ground_mut().tile_mut(pos) else { continue };
         let (ox, oz) = pos.origin();
         for i in 0..massif_core::TILE_AREA {
             let (x, z) = (ox + (i & 127) as i32, oz + (i >> 7) as i32);
+            // Custom ground covers, over the terrain as it is now.
+            for (b, _, values) in &apply {
+                if let Bound::GroundCover(k) = *b
+                    && values[i] > 1
+                    && let Some(cover) = covers.get(k as usize)
+                {
+                    paint_ground_cover(cover, k, tile, i, registry, &mut slot.ground_made);
+                }
+            }
             let mut best: [Option<(u16, u8)>; 2] = [None, None];
             let mut cover: Option<u16> = None;
             let mut gone: [Vec<u16>; 3] = [Vec::new(), Vec::new(), Vec::new()];
