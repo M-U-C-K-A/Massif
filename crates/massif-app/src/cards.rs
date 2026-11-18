@@ -250,13 +250,13 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
             tr!("Fills the selection with a village: a square in each district, roads that follow the land, buildings along them with their doors to the road, walls if you want them."),
             vec![(tr!("Click"), tr!("Fill the selection"))],
             Some(tr!("Its themes: the game's villages, or a builder's pack of schematics.")),
-            None,
+            Some(Demo::Village),
         ),
         Tool::Structure => card(
             tr!("Places one of the game's structures where you click: a village, an Ancient City with its warden, Trial Chambers, a shipwreck — read from your own game, assembled as the game assembles them."),
             vec![(tr!("Click"), tr!("Place it")), (tr!("Right-click"), tr!("Take it away"))],
             Some(tr!("Its chests keep their loot tables, its spawners their mobs, its villages their villagers.")),
-            None,
+            Some(Demo::Structure),
         ),
         Tool::Combined => card(
             tr!("Paints several layers at once, as WorldPainter's combined layers: a forest's terrain, biome, ground cover and trees in one stroke."),
@@ -400,6 +400,8 @@ pub enum Demo {
     EraseSlab,
     Select,
     Pan,
+    Structure,
+    Village,
 }
 
 fn smooth_step(edge0: f64, edge1: f64, x: f64) -> f64 {
@@ -834,6 +836,59 @@ impl Demo {
                 }
                 let last = points[clicked - 1];
                 (progress < 0.5).then_some((last.0, last.1, 2.0, (progress / 0.12) % 1.0 < 0.3))
+            }
+            Demo::Structure => {
+                // A click, then the land levelled and the building rising on
+                // it: its walls, its roof.
+                s.add_hills(5.0);
+                let (cx, cy) = (64.0, 32.0);
+                s.markers = vec![(cx, cy)];
+                let rise = smooth_step(0.3, 0.9, progress) as f32;
+                if rise > 0.0 {
+                    let floor = s.heights[32 * W + 64];
+                    let (heights, terrain) = (&mut s.heights, &mut s.terrain);
+                    for y in 18..46 {
+                        for x in 44..84 {
+                            let i = y * W + x;
+                            let wall = x == 44 || x == 83 || y == 18 || y == 45 || x == 64;
+                            let target = floor + if wall { 6.0 } else { 3.0 };
+                            heights[i] += (target - heights[i]) * rise;
+                            terrain[i] = if wall { STONE } else { SAND };
+                        }
+                    }
+                }
+                (progress < 0.35).then_some((cx, cy, 2.0, progress % 0.35 < 0.12))
+            }
+            Demo::Village => {
+                // The selection, then its roads, then its houses along them.
+                s.add_hills(4.0);
+                s.markers = vec![(10.0, 6.0), (118.0, 6.0), (118.0, 58.0), (10.0, 58.0)];
+                let roads = smooth_step(0.15, 0.5, progress);
+                let houses = smooth_step(0.45, 0.95, progress);
+                let terrain = &mut s.terrain;
+                for x in 10..((10.0 + 108.0 * roads) as usize).min(118) {
+                    for y in 30..33 {
+                        terrain[y * W + x] = SAND;
+                    }
+                }
+                for y in 6..((6.0 + 52.0 * roads) as usize).min(58) {
+                    for x in 62..65 {
+                        terrain[y * W + x] = SAND;
+                    }
+                }
+                let lots = [(18, 20), (34, 20), (78, 20), (96, 20), (18, 36), (40, 36), (80, 36), (100, 36), (50, 8), (70, 48)];
+                let shown = (houses * lots.len() as f64).round() as usize;
+                for &(x0, y0) in &lots[..shown] {
+                    let floor = s.heights[(y0 + 3) * W + x0 + 4];
+                    for y in y0..y0 + 7 {
+                        for x in x0..x0 + 9 {
+                            let i = y * W + x;
+                            s.heights[i] = floor + 3.0;
+                            s.terrain[i] = STONE;
+                        }
+                    }
+                }
+                None
             }
             Demo::Road => {
                 s.add_hills(9.0);
