@@ -29,7 +29,7 @@ fn report(diags: &[Diagnostic]) -> usize {
 
 pub fn cmd(mut args: Args) -> Res<()> {
     if args.0.is_empty() {
-        return Err("terrain needs a command: schema, catalog, validate, patch or render".into());
+        return Err("terrain needs a command: schema, catalog, validate, patch, render, migrate or build".into());
     }
     let sub = args.0.remove(0);
     match sub.as_str() {
@@ -114,6 +114,79 @@ pub fn cmd(mut args: Args) -> Res<()> {
             let img = image::RgbImage::from_raw(grid.rect.w, grid.rect.h, rgb.into_iter().flatten().collect()).expect("one pixel a sample");
             img.save(&out).map_err(|e| format!("{}: {e}", out.display()))
         }
-        other => Err(format!("unknown terrain command \"{other}\": schema, catalog, validate, patch or render")),
+        "migrate" => {
+            let out = args.option("--out")?;
+            let [file] = args.positional(["<world.massif>"])?;
+            let world = massif_format::load(&file).map_err(|e| e.to_string())?;
+            let (g, diags) = massif_terrain::world::graph_of(&world).ok_or("the world has no terrain graph")?;
+            report(&diags);
+            match out {
+                Some(path) => std::fs::write(&path, g.to_json() + "\n").map_err(|e| format!("{path}: {e}"))?,
+                None => println!("{}", g.to_json()),
+            }
+            Ok(())
+        }
+        "build" => build(args),
+        other => Err(format!("unknown terrain command \"{other}\": schema, catalog, validate, patch, render, migrate or build")),
     }
+}
+
+/// Builds a graph into a world: the world's own graph (1.2's migrated) or
+/// one given, over its map, its ground and terrains written as Convert
+/// writes them.
+fn build(mut args: Args) -> Res<()> {
+    let given = args.option("--graph")?;
+    let samples: Option<u32> = args.option("--samples")?.map(|p| p.parse().map_err(|_| "--samples: a whole number")).transpose()?;
+    let cpu = args.flag("--cpu");
+    let [file, out] = args.positional(["<world.massif>", "<out.massif>"])?;
+    let mut world = massif_format::load(&file).map_err(|e| e.to_string())?;
+    let g = match &given {
+        Some(path) => graph(Path::new(path))?,
+        None => {
+            let (g, diags) = massif_terrain::world::graph_of(&world).ok_or("the world has no terrain graph: give one with --graph")?;
+            report(&diags);
+            g
+        }
+    };
+    let space = massif_terrain::world::space_of(&world, 0, &g);
+    let folder = file.parent().map(Path::to_path_buf).unwrap_or_default();
+    let env = std::sync::Arc::new(massif_terrain::world::MapEnv::new(&world, 0, 1, folder));
+    let samples = samples.unwrap_or(space.size.min(8192));
+    let (c, diags) = massif_terrain::compile::compile_in(&g, space, samples.min(4096), env);
+    if report(&diags) > 0 {
+        return Err("the graph has errors".into());
+    }
+    let gpu = if cpu { None } else { massif_terrain::gpu::Gpu::headless() };
+    let engine = match gpu {
+        Some(gpu) => Engine::with_gpu(gpu, Settings::default()),
+        None => Engine::new(Settings::default()),
+    };
+    let lod = c.space.lod_for(samples.max(1));
+    let started = Instant::now();
+    let (extent, outputs) = massif_terrain::world::outputs(&engine, &c, lod, &never).map_err(|e| e.to_string())?;
+    eprintln!("{}² samples over {} blocks on {} in {:.1} s", extent.n, c.space.size, engine.gpu_name().unwrap_or("the CPU"), started.elapsed().as_secs_f64());
+    let reg = &world.registry;
+    let palette: Vec<(massif_core::TerrainId, [u8; 3])> = (0..reg.terrains.len()).map(|k| (massif_core::TerrainId(k as u16), reg.terrain(massif_core::TerrainId(k as u16)).color)).collect();
+    let climate = massif_core::graph::ClimateTable::new(reg);
+    let blank = reg.terrain_by_name("Grass").unwrap_or(massif_core::TerrainId::ROCK);
+    let rect = massif_core::BlockRect::new(c.space.x0, c.space.z0, c.space.x0 + c.space.size as i32, c.space.z0 + c.space.size as i32);
+    let tiles: Vec<massif_core::TilePos> = rect.tiles().collect();
+    let (seed, sea) = (world.meta.seed as u64, world.meta.sea_level);
+    let mut history = massif_core::History::new(1);
+    history.begin("Terrain graph", 0);
+    {
+        let paint = massif_core::graph::Painting { palette: &palette, climate: Some(&climate) };
+        let write = massif_core::graph::GroundWrite { tiles: &tiles, create: true, map: None, sea, blank };
+        let edit = &mut history.edit(&mut world, 0);
+        massif_core::graph::apply(edit, &extent, &outputs, seed, &paint, &write);
+        if outputs.biomes.is_some() {
+            massif_core::graph::apply_biomes(edit, &extent, &outputs, &climate, &tiles);
+        }
+    }
+    if !outputs.layers.is_empty() {
+        eprintln!("{} layers of rock are not written by the command line yet: Convert in the app writes them", outputs.layers.len());
+    }
+    world.meta.terrain_graph = Some(serde_json::to_value(&g).expect("graphs serialise"));
+    massif_format::save(&world.snapshot(), &out).map_err(|e| e.to_string())?;
+    Ok(())
 }
