@@ -25,6 +25,7 @@ USAGE
   massif-cli crop <world.massif> <out.massif> <x0> <z0> <x1> <z1>
   massif-cli structure <world.massif> <out.massif> <kind> <x> <z> [--y Y] [--seed N] [--turn T] [--jar PATH] [--keep-land]
   massif-cli structure-checks <world.massif>
+  massif-cli village <world.massif> <out.massif> <x0> <z0> <x1> <z1> [--theme NAME | --pack DIR] [--walls] [--seed N] [--jar PATH]
 
   --size      map size in tiles of 128 blocks (default 8x8 = 1024x1024 blocks)
   --landform  flat | plains | hills | mountains | islands (default hills)
@@ -687,6 +688,60 @@ fn cmd_structure(mut args: Args) -> Res<()> {
     Ok(())
 }
 
+/// Fill a rectangle with a village, as the village brush fills a
+/// selection.
+fn cmd_village(mut args: Args) -> Res<()> {
+    let theme_name = args.option("--theme")?.unwrap_or_else(|| "Plains".into());
+    let pack = args.option("--pack")?.map(PathBuf::from);
+    let seed: u64 = args.option("--seed")?.map(|s| s.parse().map_err(|_| "--seed expects an integer")).transpose()?.unwrap_or(1);
+    let jar = args.option("--jar")?;
+    let walls = args.flag("--walls");
+    let mut rest = args.0.into_iter();
+    let path = PathBuf::from(rest.next().ok_or("village needs <world.massif>")?);
+    let out = PathBuf::from(rest.next().ok_or("village needs <out.massif>")?);
+    let c: Vec<i32> = rest.map(|a| a.parse::<i32>().map_err(|_| format!("not a block coordinate: {a}"))).collect::<Res<_>>()?;
+    let [x0, z0, x1, z1] = c[..] else { return Err("village needs <x0> <z0> <x1> <z1>".into()) };
+    let themes = match &pack {
+        Some(dir) => massif_structures::village::read_pack(dir)?,
+        None => massif_structures::village::built_in(),
+    };
+    let theme = themes.iter().find(|t| t.name.eq_ignore_ascii_case(&theme_name)).or_else(|| themes.first()).ok_or("no theme")?.clone();
+    let lib = if theme.vanilla.is_some() {
+        let (jar, version) = match jar {
+            Some(j) => {
+                let p = PathBuf::from(j);
+                let v = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                (p, v)
+            }
+            None => {
+                let j = massif_assets::find_jars().into_iter().next().ok_or("no Minecraft found: give its jar with --jar")?;
+                (j.path, j.version)
+            }
+        };
+        Some(massif_structures::Library::open(&jar, &version, &[]).map_err(|e| e.to_string())?)
+    } else {
+        None
+    };
+    let mut world = massif_format::load(&path).map_err(|e| e.to_string())?;
+    let rect = massif_core::BlockRect::new(x0.min(x1), z0.min(z1), x0.max(x1), z0.max(z1));
+    let inside = |x: i32, z: i32| rect.contains(x, z);
+    let started = Instant::now();
+    let id = massif_core::structures::next_id(&world.dims[0].structures);
+    let built = {
+        let ground = massif_structures::ground::MapGround::new(&world, 0);
+        let req = massif_structures::village::Request { theme: &theme, rect, inside: &inside, seed, walls, density: 0.7, id };
+        massif_structures::village::build(lib.as_ref(), &ground, &req)?
+    };
+    let s = &built.structure;
+    eprintln!("{}: {} buildings, {} blocks, {} block entities, {} entities, {} columns levelled, {:.2} s", s.name, s.pieces.len(), s.block_count(), s.block_entities.len(), s.entities.len(), built.heights.len(), started.elapsed().as_secs_f32());
+    let mut history = massif_core::history::History::new(1);
+    history.begin("Village", 0);
+    massif_structures::vanilla::apply(&mut history.edit(&mut world, 0), &built);
+    history.commit();
+    massif_format::save(&world.snapshot(), &out).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// What the game should find of the structures placed.
 fn cmd_structure_checks(args: Args) -> Res<()> {
     let [path] = args.positional(["<world.massif>"])?;
@@ -760,6 +815,7 @@ fn main() -> ExitCode {
         "crop" => cmd_crop(args),
         "structure" => cmd_structure(args),
         "structure-checks" => cmd_structure_checks(args),
+        "village" => cmd_village(args),
         "analyse" | "analyze" => cmd_analyse(args),
         other => Err(format!("unknown command \"{other}\"\n\n{USAGE}")),
     };
