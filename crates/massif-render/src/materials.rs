@@ -109,24 +109,15 @@ impl Materials {
 
     /// The material of a block state: `name` with its properties.
     pub fn id(&self, name: &str, properties: &[(&str, &str)]) -> u16 {
-        let mut key = String::with_capacity(name.len() + 16 * properties.len());
-        key.push_str(name);
-        if !properties.is_empty() {
-            let mut sorted: Vec<&(&str, &str)> = properties.iter().collect();
-            sorted.sort_unstable();
-            key.push('[');
-            for (k, (p, v)) in sorted.into_iter().enumerate() {
-                if k > 0 {
-                    key.push(',');
-                }
-                key.push_str(p);
-                key.push('=');
-                key.push_str(v);
-            }
-            key.push(']');
-        }
+        let mut key = String::new();
+        state_key(&mut key, name, properties);
+        self.id_of(&key, name, properties)
+    }
+
+    /// The material of the state written `key` (see [`state_key`]).
+    pub fn id_of(&self, key: &str, name: &str, properties: &[(&str, &str)]) -> u16 {
         let mut inner = self.inner.lock().unwrap();
-        if let Some(&id) = inner.by_state.get(&key) {
+        if let Some(&id) = inner.by_state.get(key) {
             return id;
         }
         let material = self.resolve(&mut inner, name, properties);
@@ -142,7 +133,7 @@ impl Materials {
         } else {
             AIR
         };
-        inner.by_state.insert(key, id);
+        inner.by_state.insert(key.to_owned(), id);
         id
     }
 
@@ -248,6 +239,47 @@ impl Materials {
         };
         inner.layer_of.insert(key.to_owned(), k);
         k
+    }
+}
+
+/// A block state written out, `name[p=v,q=w]`, its properties sorted, into
+/// `key`.
+pub fn state_key(key: &mut String, name: &str, properties: &[(&str, &str)]) {
+    key.clear();
+    key.push_str(name);
+    if !properties.is_empty() {
+        let mut sorted: Vec<&(&str, &str)> = properties.iter().collect();
+        sorted.sort_unstable();
+        key.push('[');
+        for (k, (p, v)) in sorted.into_iter().enumerate() {
+            if k > 0 {
+                key.push(',');
+            }
+            key.push_str(p);
+            key.push('=');
+            key.push_str(v);
+        }
+        key.push(']');
+    }
+}
+
+/// The materials a thread has met, so that it asks [`Materials`] (and waits
+/// for its lock) once a state only.
+#[derive(Default)]
+pub struct Lookup {
+    key: String,
+    known: std::collections::HashMap<String, u16>,
+}
+
+impl Lookup {
+    pub fn id(&mut self, materials: &Materials, name: &str, properties: &[(&str, &str)]) -> u16 {
+        state_key(&mut self.key, name, properties);
+        if let Some(&id) = self.known.get(self.key.as_str()) {
+            return id;
+        }
+        let id = materials.id_of(&self.key, name, properties);
+        self.known.insert(self.key.clone(), id);
+        id
     }
 }
 
