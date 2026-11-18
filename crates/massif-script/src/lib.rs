@@ -58,8 +58,10 @@ impl Script {
         self.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "script.js".into())
     }
 
+    /// The folder the script is in, absolute.
     pub fn folder(&self) -> PathBuf {
-        self.path.parent().map(Path::to_path_buf).unwrap_or_default()
+        let absolute = std::path::absolute(&self.path).unwrap_or_else(|_| self.path.clone());
+        absolute.parent().map(Path::to_path_buf).unwrap_or_default()
     }
 }
 
