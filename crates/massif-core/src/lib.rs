@@ -54,6 +54,7 @@ pub mod river;
 pub mod road;
 pub mod selection;
 pub mod stamps;
+pub mod structures;
 pub mod thumbnail;
 pub mod treepack;
 pub mod tile;

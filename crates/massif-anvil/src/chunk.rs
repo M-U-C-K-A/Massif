@@ -26,9 +26,14 @@ use massif_core::compose::{AutoBiomes, BiomeColumn, Materializer, Span, TileStac
 use massif_core::coords::{BlockRect, TilePos, cell_index};
 use massif_core::objects::Placement;
 use massif_core::registry::{BlockDef, Registry, is_soil, is_tall_plant};
+use massif_core::structures::Structure;
 use massif_core::world::{Dimension, World};
+use std::sync::Arc;
 
 const SECTION_VOLUME: usize = 4096;
+/// The data version from which the entities are kept in files of their
+/// own (`entities/r.x.z.mca`): 1.17.
+pub const ENTITY_FILES: i32 = 2724;
 const UNSET: u16 = u16::MAX;
 /// A block of an object the version has nothing like: left out.
 const SKIP: u16 = u16::MAX;
@@ -110,6 +115,10 @@ pub struct ExportContext<'a> {
     bands: [(i32, i32, Option<u16>); 4],
     /// The biomes of columns left on automatic.
     auto: AutoBiomes,
+    /// The structures placed, each with the state each entry of its palette
+    /// is written as (0: air; [`SKIP`]: a block the version has nothing
+    /// like) and the biome it brings, if any.
+    structures: Vec<(Arc<Structure>, Vec<u16>, Option<u16>)>,
 }
 
 impl<'a> ExportContext<'a> {
@@ -267,6 +276,51 @@ impl<'a> ExportContext<'a> {
             }
             objects.push(ways);
         }
+        // The structures' blocks, as they stand.
+        let mut structures = Vec::with_capacity(dim.structures.len());
+        for s in &dim.structures {
+            let ids: Vec<u16> = s
+                .palette
+                .iter()
+                .map(|state| {
+                    let name = state.split('[').next().unwrap_or(state);
+                    if matches!(name, "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air") {
+                        return 0;
+                    }
+                    if let Some(&id) = known.get(state) {
+                        return id;
+                    }
+                    let block = BlockDef { state: state.clone(), color: [0; 3] };
+                    let (name, kept) = target.block(block.name());
+                    let number = match era {
+                        Era::Numbered => target.numbered_known(name),
+                        _ => Some((0, 0)),
+                    };
+                    let id = match number {
+                        Some(number) if name != "minecraft:air" && name.contains(':') => {
+                            let props: Vec<(String, String)> = if kept { block.properties().map(|(k, v)| (k.to_owned(), v.to_owned())).collect() } else { Vec::new() };
+                            let dry = props.iter().any(|(k, v)| k == "waterlogged" && v == "false");
+                            states.push((name.to_owned(), props.clone()));
+                            if era == Era::Numbered {
+                                numbered.push(number);
+                            }
+                            let id = (states.len() - 1).min(SKIP as usize - 1) as u16;
+                            if dry && era != Era::Numbered {
+                                let wet = props.into_iter().map(|(k, v)| if k == "waterlogged" { (k, "true".to_owned()) } else { (k, v) }).collect();
+                                states.push((name.to_owned(), wet));
+                                waterlogged.push((id, (states.len() - 1).min(SKIP as usize - 1) as u16));
+                            }
+                            id
+                        }
+                        _ => SKIP,
+                    };
+                    known.insert(state.clone(), id);
+                    id
+                })
+                .collect();
+            let biome = s.biome.as_deref().and_then(|b| reg.biome_by_id(b)).map(|b| b.0);
+            structures.push((s.clone(), ids, biome));
+        }
         // Flowing water, of each level.
         let flowing: Vec<u16> = if world.meta.lava {
             Vec::new()
@@ -402,7 +456,57 @@ impl<'a> ExportContext<'a> {
             pockets: massif_core::pockets::Pockets::new(reg, world.meta.seed as u64, dim.min_y),
             hosts,
             auto: AutoBiomes::new(reg, world.meta.sea_level, min_y),
+            structures,
         })
+    }
+
+    /// Whether structures are placed: their blocks, block entities and
+    /// entities are written.
+    pub fn has_structures(&self) -> bool {
+        !self.structures.is_empty()
+    }
+
+    /// The structures placed whose columns meet the chunk at block
+    /// `(x0, z0)`.
+    fn structures_in(&self, x0: i32, z0: i32) -> impl Iterator<Item = &(Arc<Structure>, Vec<u16>, Option<u16>)> {
+        let chunk = BlockRect::new(x0, z0, x0 + 16, z0 + 16);
+        self.structures.iter().filter(move |(s, _, _)| !s.columns().intersect(&chunk).is_empty())
+    }
+
+    /// The block entities of the structures in the chunk at block `(x0,
+    /// z0)`, within the heights written: each its compound's entries and
+    /// its place, the later structure's where two meet.
+    fn block_entities(&self, x0: i32, z0: i32) -> Vec<(&[u8], [i32; 3])> {
+        let mut out: Vec<(&[u8], [i32; 3])> = Vec::new();
+        for (s, _, _) in self.structures_in(x0, z0) {
+            for be in &s.block_entities {
+                let [x, y, z] = be.pos;
+                if x >> 4 == x0 >> 4 && z >> 4 == z0 >> 4 && y >= self.min_y && y < self.max_y
+                    && let Some(body) = compound_body(&be.nbt)
+                {
+                    out.retain(|(_, p)| *p != be.pos);
+                    out.push((body, be.pos));
+                }
+            }
+        }
+        out
+    }
+
+    /// The entities of the structures standing in the chunk at block `(x0,
+    /// z0)`: each its compound's entries.
+    pub fn entities(&self, x0: i32, z0: i32) -> Vec<&[u8]> {
+        let mut out = Vec::new();
+        for (s, _, _) in self.structures_in(x0, z0) {
+            for e in &s.entities {
+                let (x, y, z) = (e.pos[0].floor() as i32, e.pos[1].floor() as i32, e.pos[2].floor() as i32);
+                if x >> 4 == x0 >> 4 && z >> 4 == z0 >> 4 && y >= self.min_y && y < self.max_y
+                    && let Some(body) = compound_body(&e.nbt)
+                {
+                    out.push(body);
+                }
+            }
+        }
+        out
     }
 
     pub fn sections(&self) -> usize {
@@ -657,6 +761,79 @@ pub fn tile_placements(ctx: &ExportContext, world: &World, dim: &Dimension, pos:
     }
 }
 
+/// The entries of an NBT compound kept as a file holds it (a root tag with
+/// its name, then the entries, then the end of the compound): what a list
+/// of compounds holds of it.
+fn compound_body(nbt: &[u8]) -> Option<&[u8]> {
+    if nbt.len() < 4 || nbt[0] != 10 {
+        return None;
+    }
+    let name = u16::from_be_bytes([nbt[1], nbt[2]]) as usize;
+    let body = nbt.get(3 + name..nbt.len() - 1)?;
+    (nbt.last() == Some(&0)).then_some(body)
+}
+
+/// Write `list` (entries of compounds) as a list named `name`, each with
+/// its coordinates when it has some.
+fn write_compounds(w: &mut NbtWriter, name: &str, list: &[(&[u8], Option<[i32; 3]>)]) {
+    w.list(name, TagType::Compound, list.len());
+    for (body, pos) in list {
+        w.item_compound();
+        w.raw(body);
+        if let Some([x, y, z]) = pos {
+            w.int("x", *x);
+            w.int("y", *y);
+            w.int("z", *z);
+            w.byte("keepPacked", 0);
+        }
+        w.end();
+    }
+}
+
+/// Lay the structures' blocks over the chunk whose corner is `(x0, z0)`;
+/// returns the height above the highest block they set.
+fn lay_structures(ctx: &ExportContext, x0: i32, z0: i32, blocks: &mut [u16]) -> i32 {
+    let (min_y, max_y) = (ctx.min_y, ctx.max_y);
+    let mut top = min_y;
+    for (s, ids, _) in ctx.structures_in(x0, z0) {
+        for sec in s.sections_at(x0 >> 4, z0 >> 4) {
+            let y0 = sec.pos[1] * 16;
+            if y0 + 16 <= min_y || y0 >= max_y {
+                continue;
+            }
+            for &(i, k) in &sec.blocks {
+                let y = y0 + (i >> 8) as i32;
+                if y < min_y || y >= max_y {
+                    continue;
+                }
+                let state = ids.get(k as usize).copied().unwrap_or(SKIP);
+                if state == SKIP {
+                    continue;
+                }
+                let at = (((y - min_y) as usize) << 8) | (i & 255) as usize;
+                // A block that can hold water does, set in still water.
+                let wet = if s.waterlog && blocks[at] == ctx.water && !ctx.lava { ctx.waterlogged.binary_search_by_key(&state, |w| w.0).ok().map(|k| ctx.waterlogged[k].1) } else { None };
+                blocks[at] = wet.unwrap_or(state);
+                if state != 0 {
+                    top = top.max(y + 1);
+                }
+            }
+        }
+    }
+    top
+}
+
+/// The NBT of a chunk of an entity file (1.17 and later): the entities
+/// `list` holds (each its compound's entries).
+pub fn entity_chunk(ctx: &ExportContext, list: &[&[u8]], chunk_x: i32, chunk_z: i32) -> Vec<u8> {
+    let mut w = NbtWriter::with_capacity(4 * 1024);
+    w.int("DataVersion", ctx.target.data_version);
+    w.int_array("Position", &[chunk_x, chunk_z]);
+    let list: Vec<(&[u8], Option<[i32; 3]>)> = list.iter().map(|b| (*b, None)).collect();
+    write_compounds(&mut w, "Entities", &list);
+    w.finish()
+}
+
 /// Stand objects in the blocks of the chunk whose corner is `(x0, z0)`.
 fn stand_objects(ctx: &ExportContext, objects: &[Placement], x0: i32, z0: i32, blocks: &mut [u16]) {
     let (min_y, max_y) = (ctx.min_y, ctx.max_y);
@@ -859,6 +1036,16 @@ pub fn build_chunk(
                 spans.last().map(|s| (s.y1, s.terrain))
             };
             stack.biome_column(cell, ctx.reg, &ctx.auto, top, &mut biome_columns[bz * 4 + bx]);
+            // The biome a structure brings (an Ancient City's deep dark),
+            // from its bottom to its top.
+            let (x, z) = (bx0 + bx as i32 * 4 + 2, bz0 + bz as i32 * 4 + 2);
+            for (s, _, biome) in ctx.structures_in(bx0, bz0) {
+                if let Some(biome) = biome
+                    && s.columns().contains(x, z)
+                {
+                    biome_columns[bz * 4 + bx].overrides.push((s.min[1], s.max[1] + 1, *biome));
+                }
+            }
         }
     }
 
@@ -910,6 +1097,12 @@ pub fn build_chunk(
             }
         }
     }
+
+    // ---- structures ---------------------------------------------------------
+    // Over everything: their air carves their halls out of the rock.
+    if ctx.has_structures() {
+        top = top.max(lay_structures(ctx, bx0, bz0, blocks));
+    }
     // The sections that hold something; those above are air.
     let filled = (((top.min(max_y) - min_y).max(0) as usize).div_ceil(16)).min(sections);
     *dirty = filled * SECTION_VOLUME;
@@ -918,7 +1111,7 @@ pub fn build_chunk(
     match ctx.era {
         Era::Modern => {}
         Era::Numbered => return numbered_chunk(ctx, blocks, biome_columns, bx0 >> 4, bz0 >> 4),
-        _ => return flat_chunk(ctx, blocks, biome_columns, lookup, palette, packed, bx0 >> 4, bz0 >> 4),
+        _ => return flat_chunk(ctx, blocks, biome_columns, lookup, palette, packed, bx0, bz0),
     }
     let mut w = NbtWriter::with_capacity(32 * 1024);
     w.int("DataVersion", ctx.target.data_version);
@@ -1009,7 +1202,8 @@ pub fn build_chunk(
         w.end(); // section
     }
 
-    w.list("block_entities", TagType::Compound, 0);
+    let block_entities: Vec<(&[u8], Option<[i32; 3]>)> = ctx.block_entities(bx0, bz0).into_iter().map(|(b, p)| (b, Some(p))).collect();
+    write_compounds(&mut w, "block_entities", &block_entities);
     w.list("block_ticks", TagType::Compound, 0);
     w.list("fluid_ticks", TagType::Compound, 0);
     w.compound("Heightmaps");
@@ -1052,9 +1246,10 @@ fn flat_chunk(
     lookup: &mut [u16],
     palette: &mut Vec<u16>,
     packed: &mut Vec<i64>,
-    chunk_x: i32,
-    chunk_z: i32,
+    x0: i32,
+    z0: i32,
 ) -> Vec<u8> {
+    let (chunk_x, chunk_z) = (x0 >> 4, z0 >> 4);
     let mut w = NbtWriter::with_capacity(32 * 1024);
     w.int("DataVersion", ctx.target.data_version);
     w.compound("Level");
@@ -1109,8 +1304,11 @@ fn flat_chunk(
         w.end();
     }
 
-    w.list("Entities", TagType::Compound, 0);
-    w.list("TileEntities", TagType::Compound, 0);
+    // From 1.17 the entities have files of their own.
+    let entities: Vec<(&[u8], Option<[i32; 3]>)> = if ctx.target.data_version < ENTITY_FILES { ctx.entities(x0, z0).into_iter().map(|b| (b, None)).collect() } else { Vec::new() };
+    write_compounds(&mut w, "Entities", &entities);
+    let block_entities: Vec<(&[u8], Option<[i32; 3]>)> = ctx.block_entities(x0, z0).into_iter().map(|(b, p)| (b, Some(p))).collect();
+    write_compounds(&mut w, "TileEntities", &block_entities);
     w.list("TileTicks", TagType::Compound, 0);
     w.list("LiquidTicks", TagType::Compound, 0);
     w.compound("Heightmaps");

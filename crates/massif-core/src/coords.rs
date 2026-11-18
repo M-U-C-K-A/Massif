@@ -115,6 +115,11 @@ impl BlockRect {
         self.z1 - self.z0
     }
 
+    /// Whether column `(x, z)` lies inside.
+    pub const fn contains(&self, x: i32, z: i32) -> bool {
+        x >= self.x0 && x < self.x1 && z >= self.z0 && z < self.z1
+    }
+
     pub fn intersect(&self, o: &BlockRect) -> BlockRect {
         BlockRect {
             x0: self.x0.max(o.x0),

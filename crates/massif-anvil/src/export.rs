@@ -173,6 +173,15 @@ pub fn export(
                 std::fs::remove_file(path)?;
             }
         }
+        // The entities of the export before, which stood on its land.
+        if let Ok(read) = std::fs::read_dir(dir.join(entity_dir(&options.target))) {
+            for entry in read {
+                let path = entry?.path();
+                if path.extension().is_some_and(|e| e == "mca") {
+                    std::fs::remove_file(path)?;
+                }
+            }
+        }
     }
 
     let now = SystemTime::now()
@@ -254,6 +263,30 @@ pub fn export(
             let written = massif_core::atomic::write_with(&path, false, |out| region.write(out, timestamp))?;
             bytes.fetch_add(written, Ordering::Relaxed);
             chunks.fetch_add(region.chunk_count(), Ordering::Relaxed);
+            // The structures' villagers and animals: from 1.17, in files of
+            // their own beside the region's.
+            if ctx.has_structures() && options.target.data_version >= crate::chunk::ENTITY_FILES {
+                let mut entities = RegionBuilder::new();
+                for pos in tiles {
+                    for cz in 0..CHUNKS_PER_TILE as i32 {
+                        for cx in 0..CHUNKS_PER_TILE as i32 {
+                            let (ox, oz) = pos.origin();
+                            let (x0, z0) = (ox + cx * 16, oz + cz * 16);
+                            let list = ctx.entities(x0, z0);
+                            if list.is_empty() {
+                                continue;
+                            }
+                            let nbt = crate::chunk::entity_chunk(&ctx, &list, x0 >> 4, z0 >> 4);
+                            entities.put((x0 >> 4).rem_euclid(32) as usize, (z0 >> 4).rem_euclid(32) as usize, &nbt, level)?;
+                        }
+                    }
+                }
+                if entities.chunk_count() > 0 {
+                    let dir = dir.join(entity_dir(&options.target));
+                    std::fs::create_dir_all(&dir)?;
+                    massif_core::atomic::write_with(&dir.join(format!("r.{rx}.{rz}.mca")), false, |out| entities.write(out, timestamp))?;
+                }
+            }
             Ok(())
         })?;
 
@@ -308,6 +341,12 @@ pub fn export(
         bytes: bytes.load(Ordering::Relaxed),
         elapsed: started.elapsed(),
     })
+}
+
+/// Where the entities of the regions go: beside their `region` folder.
+fn entity_dir(target: &crate::version::Target) -> String {
+    let region = target.region_dir();
+    format!("{}entities", region.strip_suffix("region").unwrap_or(""))
 }
 
 /// The data pack that gives the overworld the build limits of a map that

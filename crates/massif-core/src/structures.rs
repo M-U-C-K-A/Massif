@@ -1,0 +1,306 @@
+//! Structures placed on the map: an Ancient City, a village, a Trial
+//! Chambers, a builder's house.
+//!
+//! A structure is kept with the map as what it sets in the world, resolved
+//! once when it is placed (by the `massif-structures` crate, from the
+//! player's own game): its blocks — air too, which carves its halls out of
+//! the rock —, its block entities (chests with their loot tables, spawners,
+//! beds, signs) and its entities (villagers, animals). The export writes
+//! them over the land, the map and the 3D view draw them, and the pieces it
+//! was assembled from are kept to tell the game where it stands.
+
+use crate::coords::BlockRect;
+use serde::{Deserialize, Serialize};
+
+/// The blocks of a structure in one section of 16³ blocks of the world.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Section {
+    /// The section's coordinates: those of its blocks divided by 16.
+    pub pos: [i32; 3],
+    /// Each block's place in the section (`y << 8 | z << 4 | x`) and its
+    /// state, an index into [`Structure::palette`]; sorted by place.
+    #[serde(with = "packed")]
+    pub blocks: Vec<(u16, u16)>,
+}
+
+impl Section {
+    /// The place of block `(x, y, z)` (world coordinates) in its section.
+    #[inline]
+    pub fn index(x: i32, y: i32, z: i32) -> u16 {
+        ((y & 15) << 8 | (z & 15) << 4 | (x & 15)) as u16
+    }
+
+    /// The world coordinates of the block at place `i`.
+    #[inline]
+    pub fn block(&self, i: u16) -> [i32; 3] {
+        let i = i as i32;
+        [self.pos[0] * 16 + (i & 15), self.pos[1] * 16 + (i >> 8), self.pos[2] * 16 + (i >> 4 & 15)]
+    }
+}
+
+/// A chest, a spawner, a bed: a block's data, as the game keeps it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlockEntity {
+    pub pos: [i32; 3],
+    /// Its NBT, a compound as a file of NBT holds it (an unnamed root):
+    /// its `id` and its data, without its coordinates, which the export
+    /// writes.
+    #[serde(with = "bytes")]
+    pub nbt: Vec<u8>,
+}
+
+/// A villager, a horse, an armor stand.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Entity {
+    pub pos: [f64; 3],
+    /// Its NBT as a file of NBT holds it: its `id`, `Pos`, `Rotation`,
+    /// `UUID` and the rest.
+    #[serde(with = "bytes")]
+    pub nbt: Vec<u8>,
+}
+
+/// One piece a structure was assembled from: a template placed in a box.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Piece {
+    /// Its box, both corners inclusive.
+    pub min: [i32; 3],
+    pub max: [i32; 3],
+    /// The template (`minecraft:ancient_city/structures/barracks`); empty
+    /// for what has none (a tree, a road Massif laid).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub template: String,
+    /// Where the template's corner went, and its quarter turns clockwise
+    /// seen from above.
+    pub origin: [i32; 3],
+    pub turn: u8,
+    /// How many jigsaw connections away from the first piece it is.
+    #[serde(default)]
+    pub depth: u16,
+    /// Blocks from the bottom of its box to the ground it stands on.
+    #[serde(default)]
+    pub ground_delta: i32,
+    /// Placed as it is, rather than following the land block by block.
+    #[serde(default)]
+    pub rigid: bool,
+    /// The processors it was placed with, as the game names their list
+    /// (empty: none, or some of its own).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub processors: String,
+}
+
+/// A structure placed on the map.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Structure {
+    /// Its number in the map, never given twice.
+    pub id: u32,
+    /// What the player sees: "Ancient City", "Plains village".
+    pub name: String,
+    /// The game's own name of the structure (`minecraft:ancient_city`), to
+    /// tell the game where it stands; empty for one of Massif's.
+    #[serde(default)]
+    pub kind: String,
+    /// The draw it was assembled from: the same draw, at the same place,
+    /// assembles it the same.
+    pub seed: u64,
+    /// Block states, `minecraft:chest[facing=north,type=single,waterlogged=false]`.
+    pub palette: Vec<String>,
+    /// Sorted by the column of sections (x, then z), then by height.
+    pub sections: Vec<Section>,
+    #[serde(default)]
+    pub block_entities: Vec<BlockEntity>,
+    #[serde(default)]
+    pub entities: Vec<Entity>,
+    #[serde(default)]
+    pub pieces: Vec<Piece>,
+    /// The box of its blocks, both corners inclusive.
+    pub min: [i32; 3],
+    pub max: [i32; 3],
+    /// Its blocks that can hold water do where they are set in still water,
+    /// as the game's structures do (Trial Chambers' do not).
+    #[serde(default)]
+    pub waterlog: bool,
+    /// The biome it brings with it, between the bottom and the top of its
+    /// box (`minecraft:deep_dark` for an Ancient City); none: the land's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub biome: Option<String>,
+    /// The data version of the game it was read from.
+    #[serde(default)]
+    pub data_version: i32,
+}
+
+impl Structure {
+    /// The columns its blocks stand in.
+    pub fn columns(&self) -> BlockRect {
+        BlockRect::new(self.min[0], self.min[2], self.max[0] + 1, self.max[2] + 1)
+    }
+
+    /// How many blocks it sets.
+    pub fn block_count(&self) -> usize {
+        self.sections.iter().map(|s| s.blocks.len()).sum()
+    }
+
+    /// Its sections in the column of sections `(sx, sz)`, low to high.
+    pub fn sections_at(&self, sx: i32, sz: i32) -> &[Section] {
+        let lo = self.sections.partition_point(|s| (s.pos[0], s.pos[2]) < (sx, sz));
+        let hi = lo + self.sections[lo..].partition_point(|s| (s.pos[0], s.pos[2]) == (sx, sz));
+        &self.sections[lo..hi]
+    }
+
+    /// Its blocks in column `(x, z)`, low to high: their height and state.
+    pub fn column(&self, x: i32, z: i32, out: &mut Vec<(i32, u16)>) {
+        out.clear();
+        let (lx, lz) = (x & 15, z & 15);
+        for s in self.sections_at(x.div_euclid(16), z.div_euclid(16)) {
+            for ly in 0..16 {
+                let i = (ly << 8 | lz << 4 | lx) as u16;
+                if let Ok(k) = s.blocks.binary_search_by_key(&i, |b| b.0) {
+                    out.push((s.pos[1] * 16 + ly, s.blocks[k].1));
+                }
+            }
+        }
+    }
+
+    /// Put its sections in the order [`Structure::sections_at`] reads them,
+    /// and its box around its blocks.
+    pub fn finish(&mut self) {
+        self.sections.retain(|s| !s.blocks.is_empty());
+        self.sections.sort_by_key(|s| (s.pos[0], s.pos[2], s.pos[1]));
+        let mut lo = [i32::MAX; 3];
+        let mut hi = [i32::MIN; 3];
+        for s in &self.sections {
+            for &(i, _) in &s.blocks {
+                let p = s.block(i);
+                for a in 0..3 {
+                    lo[a] = lo[a].min(p[a]);
+                    hi[a] = hi[a].max(p[a]);
+                }
+            }
+        }
+        for e in &self.block_entities {
+            for a in 0..3 {
+                lo[a] = lo[a].min(e.pos[a]);
+                hi[a] = hi[a].max(e.pos[a]);
+            }
+        }
+        if lo[0] > hi[0] {
+            (lo, hi) = ([0; 3], [0; 3]);
+        }
+        (self.min, self.max) = (lo, hi);
+    }
+
+    /// Whether it is air or the rock it was carved from where nothing of it
+    /// stands: whether its top is under the land around (an Ancient City)
+    /// rather than standing on it (a village). Told from its pieces.
+    pub fn is_underground(&self, surface_at: impl Fn(i32, i32) -> i32) -> bool {
+        let r = self.columns();
+        let mid = ((r.x0 + r.x1) / 2, (r.z0 + r.z1) / 2);
+        self.max[1] < surface_at(mid.0, mid.1) - 4
+    }
+}
+
+/// The number the next structure placed in `structures` takes.
+pub fn next_id(structures: &[std::sync::Arc<Structure>]) -> u32 {
+    structures.iter().map(|s| s.id).max().map_or(1, |m| m + 1)
+}
+
+/// Blocks of sections in files: zstd-compressed little-endian `u16` pairs,
+/// in base 64.
+mod packed {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(blocks: &[(u16, u16)], s: S) -> Result<S::Ok, S::Error> {
+        let bytes: Vec<u8> = blocks.iter().flat_map(|&(i, k)| [i.to_le_bytes(), k.to_le_bytes()]).flatten().collect();
+        let packed = zstd::bulk::compress(&bytes, 9).map_err(serde::ser::Error::custom)?;
+        s.serialize_str(&crate::objects::base64::encode(&packed))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<(u16, u16)>, D::Error> {
+        let text = String::deserialize(d)?;
+        let packed = crate::objects::base64::decode(&text).ok_or_else(|| serde::de::Error::custom("the blocks of a structure are not in base 64"))?;
+        let bytes = crate::codec::zstd_decompress_section(&packed).map_err(serde::de::Error::custom)?;
+        let mut out: Vec<(u16, u16)> = bytes.as_chunks::<4>().0.iter().map(|c| (u16::from_le_bytes([c[0], c[1]]), u16::from_le_bytes([c[2], c[3]]))).collect();
+        // Sorted and once each, whatever the file says: lookups search them.
+        out.sort_by_key(|b| b.0);
+        out.dedup_by_key(|b| b.0);
+        out.retain(|b| b.0 < 4096);
+        Ok(out)
+    }
+}
+
+/// NBT in files: in base 64.
+mod bytes {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&crate::objects::base64::encode(bytes))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        let text = String::deserialize(d)?;
+        crate::objects::base64::decode(&text).ok_or_else(|| serde::de::Error::custom("the data of a structure's block is not in base 64"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    pub(crate) fn hut() -> Structure {
+        let mut s = Structure {
+            id: 1,
+            name: "Hut".into(),
+            kind: String::new(),
+            seed: 7,
+            palette: vec!["minecraft:air".into(), "minecraft:oak_planks".into(), "minecraft:chest[facing=north,type=single,waterlogged=false]".into()],
+            sections: Vec::new(),
+            block_entities: vec![BlockEntity { pos: [1, 65, 1], nbt: vec![10, 0, 0, 0] }],
+            entities: Vec::new(),
+            pieces: Vec::new(),
+            min: [0; 3],
+            max: [0; 3],
+            waterlog: true,
+            biome: None,
+            data_version: 4671,
+        };
+        // A floor of planks 3 × 3 at y 64 across a section's edge, air
+        // above it, a chest in the middle.
+        let mut sections: std::collections::BTreeMap<[i32; 3], Vec<(u16, u16)>> = Default::default();
+        for x in -1..2 {
+            for z in 0..3 {
+                for y in 64..67 {
+                    let k = if y == 64 { 1 } else if (x, y, z) == (0, 65, 1) { 2 } else { 0 };
+                    sections.entry([x.div_euclid(16), y.div_euclid(16), z.div_euclid(16)]).or_default().push((Section::index(x, y, z), k));
+                }
+            }
+        }
+        s.sections = sections
+            .into_iter()
+            .map(|(pos, mut blocks)| {
+                blocks.sort_by_key(|b| b.0);
+                Section { pos, blocks }
+            })
+            .collect();
+        s.finish();
+        s
+    }
+
+    #[test]
+    fn structures_read_by_column_and_round_trip() {
+        let s = hut();
+        assert_eq!((s.min, s.max), ([-1, 64, 0], [1, 66, 2]));
+        assert_eq!(s.block_count(), 27);
+        assert_eq!(s.columns(), BlockRect::new(-1, 0, 2, 3));
+        let mut column = Vec::new();
+        s.column(0, 1, &mut column);
+        assert_eq!(column, vec![(64, 1), (65, 2), (66, 0)]);
+        s.column(-1, 2, &mut column);
+        assert_eq!(column, vec![(64, 1), (65, 0), (66, 0)]);
+        s.column(5, 5, &mut column);
+        assert!(column.is_empty());
+        let json = serde_json::to_string(&s).unwrap();
+        let back: Structure = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, s);
+        assert_eq!(next_id(&[std::sync::Arc::new(s)]), 2);
+        assert_eq!(next_id(&[]), 1);
+    }
+}

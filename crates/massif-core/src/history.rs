@@ -32,6 +32,8 @@ struct Step {
     voxel_seen: HashSet<ChunkPos>,
     /// Pre-image of the selection, when the step changed it.
     selection: Option<Option<Arc<Selection>>>,
+    /// Pre-image of the structures placed, when the step changed them.
+    placed: Option<Vec<Arc<crate::structures::Structure>>>,
     /// Pre-image of the whole map, for a save point put back: its settings,
     /// blocks and dimensions (not its save points).
     whole: Option<Box<Whole>>,
@@ -76,6 +78,7 @@ impl Step {
             voxels: Vec::new(),
             voxel_seen: HashSet::new(),
             selection: None,
+            placed: None,
             whole: None,
             size: 0,
         }
@@ -92,7 +95,7 @@ impl Step {
     }
 
     fn is_empty(&self) -> bool {
-        self.tiles.is_empty() && self.structure.is_none() && self.voxels.is_empty() && self.selection.is_none() && self.whole.is_none()
+        self.tiles.is_empty() && self.structure.is_none() && self.voxels.is_empty() && self.selection.is_none() && self.placed.is_none() && self.whole.is_none()
     }
 }
 
@@ -237,6 +240,9 @@ impl History {
         };
         if let Some(selection) = &step.selection {
             dim.selection = selection.clone();
+        }
+        if let Some(placed) = &step.placed {
+            dim.structures = placed.clone();
         }
         for (pos, state) in step.voxels.iter().rev() {
             dim.voxels.restore(*pos, state.clone());
@@ -397,6 +403,9 @@ fn swap(step: Step, world: &mut World) -> Step {
     };
     if let Some(selection) = step.selection {
         inverse.selection = Some(std::mem::replace(&mut dim.selection, selection));
+    }
+    if let Some(placed) = step.placed {
+        inverse.placed = Some(std::mem::replace(&mut dim.structures, placed));
     }
     for (pos, state) in step.voxels.into_iter().rev() {
         inverse.voxels.push((pos, dim.voxels.get_shared(pos)));
@@ -766,6 +775,15 @@ impl Edit<'_> {
             self.touch_voxel(pos);
             self.dim.voxels.insert(pos, chunk);
         }
+    }
+
+    /// The structures placed on the dimension, to add to or take from: what
+    /// they were is kept to undo.
+    pub fn structures_mut(&mut self) -> &mut Vec<Arc<crate::structures::Structure>> {
+        if self.step.placed.is_none() {
+            self.step.placed = Some(self.dim.structures.clone());
+        }
+        &mut self.dim.structures
     }
 
     /// Drop slab tiles of the level that no longer hold any column.
