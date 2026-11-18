@@ -326,6 +326,31 @@ impl Fbm {
         sum / norm
     }
 
+    /// [`Fbm::at`] with its gradient (per block).
+    pub fn at_d(&self, x: f64, z: f64) -> (f32, f32, f32) {
+        let (mut sum, mut gx, mut gz, mut norm, mut amp) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 1.0f32);
+        for k in 0..self.octaves {
+            let (f, s, c, _, _, _) = self.oct[k as usize];
+            let (qx, qz, seed) = self.octave(k, x, z);
+            let (n, dx, dz) = noise2_d(qx, qz, seed);
+            // Back from the octave's turned lattice to the world.
+            let (wx, wz) = ((c * dx as f64 + s * dz as f64) * f, (-s * dx as f64 + c * dz as f64) * f);
+            sum += amp * n;
+            gx += amp * wx as f32;
+            gz += amp * wz as f32;
+            norm += amp;
+            amp *= self.gain as f32;
+        }
+        (sum / norm, gx / norm, gz / norm)
+    }
+
+    /// How far, in blocks, the nearest place where the fractal crosses zero
+    /// lies: its value over its slope, the first-order estimate.
+    pub fn zero_distance(&self, x: f64, z: f64) -> f32 {
+        let (v, gx, gz) = self.at_d(x, z);
+        v.abs() / gx.hypot(gz).max(1e-6)
+    }
+
     /// Ridged: crests where the noise crosses zero, from 0 to 1, finer
     /// crests where the coarser ones are high. `sharpness` (0–1) narrows
     /// the crests.
@@ -398,6 +423,19 @@ mod shape_noise_tests {
     }
 
     #[test]
+    fn fractal_gradients_match_differences() {
+        let f = Fbm::new(300.0, 5, 0.5, 9);
+        for (x, z) in [(10.0, 20.0), (-3000.5, 777.25)] {
+            let (v, gx, gz) = f.at_d(x, z);
+            let h = 0.01;
+            assert!((v - f.at(x, z)).abs() < 1e-6);
+            let ex = (f.at(x + h, z) - f.at(x - h, z)) / (2.0 * h as f32);
+            let ez = (f.at(x, z + h) - f.at(x, z - h)) / (2.0 * h as f32);
+            assert!((gx - ex).abs() < 2e-4 && (gz - ez).abs() < 2e-4, "{gx} {ex} {gz} {ez}");
+        }
+    }
+
+    #[test]
     fn shape_fractals_are_bounded() {
         let f = Fbm::down_to(500.0, 4.0, 0.5, 3);
         for k in 0..2000 {
@@ -407,4 +445,31 @@ mod shape_noise_tests {
             assert!((0.0..=1.0).contains(&r) && (0.0..=1.0).contains(&e) && f.at(x, z).abs() <= 1.01);
         }
     }
+}
+
+/// Cellular (Worley) noise at lattice position `(x, z)`: the distances to
+/// the nearest and the second nearest of the points scattered one per cell
+/// (`jitter` from 0, a grid, to 1, at random), in cells, and a hash of the
+/// nearest point's cell.
+pub fn voronoi(x: f64, z: f64, jitter: f64, seed: u32) -> (f32, f32, u32) {
+    let (cx, cz) = (x.floor() as i64, z.floor() as i64);
+    let (mut f1, mut f2, mut id) = (f64::MAX, f64::MAX, 0u32);
+    for dz in -1..=1 {
+        for dx in -1..=1 {
+            let (gx, gz) = (cx + dx, cz + dz);
+            let h = hash2(gx as u32, gz as u32, seed);
+            let jx = (h & 0xffff) as f64 / 65535.0 - 0.5;
+            let jz = (h >> 16) as f64 / 65535.0 - 0.5;
+            let (px, pz) = (gx as f64 + 0.5 + jitter * jx, gz as f64 + 0.5 + jitter * jz);
+            let d = (x - px).hypot(z - pz);
+            if d < f1 {
+                f2 = f1;
+                f1 = d;
+                id = h;
+            } else if d < f2 {
+                f2 = d;
+            }
+        }
+    }
+    (f1 as f32, f2 as f32, id)
 }

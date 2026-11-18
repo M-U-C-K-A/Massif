@@ -1,0 +1,4 @@
+{ "terrain": { "size": 4096, "seed": 26 },
+  "nodes": {
+    "k": { "type": "land.karst", "params": { "base": 58, "height": 90 } },
+    "out": { "type": "output.map", "inputs": { "height": "k" } } } }

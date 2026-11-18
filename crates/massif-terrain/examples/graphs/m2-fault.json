@@ -1,0 +1,5 @@
+{ "terrain": { "size": 4096, "seed": 28 },
+  "nodes": {
+    "hills": { "type": "mountain.rounded", "params": { "coverage": 0.8, "height": 60, "peak_spacing": 600 } },
+    "f": { "type": "fault.scarp", "inputs": { "height": "hills" }, "params": { "path": [{"x":0.0,"z":0.6},{"x":0.5,"z":0.45},{"x":1.0,"z":0.55}], "throw": 45, "width": 50 } },
+    "out": { "type": "output.map", "inputs": { "height": "f" } } } }

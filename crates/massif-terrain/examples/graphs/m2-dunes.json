@@ -1,0 +1,9 @@
+{ "terrain": { "size": 4096, "seed": 25 },
+  "nodes": {
+    "t": { "type": "land.dunes", "params": { "kind": "transverse" } },
+    "s": { "type": "land.dunes", "params": { "kind": "star", "wavelength": 300, "height": 25 } },
+    "half": { "type": "pattern.constant", "params": { "value": 0 } },
+    "where": { "type": "noise.fbm", "params": { "scale": 2500, "height": 1, "base": 0, "octaves": 2 } },
+    "m": { "type": "adjust.levels", "inputs": { "in": "where" }, "params": { "in_low": 0.45, "in_high": 0.55, "out_low": 0, "out_high": 1 } },
+    "d": { "type": "combine.blend", "inputs": { "a": "t", "b": "s", "mask": "m" }, "params": { "mode": "replace" } },
+    "out": { "type": "output.map", "inputs": { "height": "d" } } } }

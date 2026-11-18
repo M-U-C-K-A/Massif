@@ -1,0 +1,5 @@
+{ "terrain": { "size": 8192, "seed": 23 },
+  "nodes": {
+    "plateau": { "type": "noise.fbm", "params": { "scale": 4000, "height": 30, "base": 150, "octaves": 6 } },
+    "c": { "type": "valley.canyon", "inputs": { "height": "plateau" }, "params": { "path": [{"x":0.05,"z":0.3},{"x":0.3,"z":0.55,"width":1.5},{"x":0.55,"z":0.4,"depth":1.4},{"x":0.95,"z":0.7}], "depth": 90, "width": 500, "steps": 4 } },
+    "out": { "type": "output.map", "inputs": { "height": "c" } } } }
