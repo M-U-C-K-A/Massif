@@ -186,11 +186,9 @@ impl WavesPalette {
         }
     }
 
-    /// Its colours as a swatch shows them, deep to light, for `pal`.
+    /// Its colours as a swatch shows them, top to ground, for `pal`.
     pub fn swatch(self, pal: &Palette, page: Color32) -> Vec<Color32> {
-        let ramp = waves_ramp(self, pal, rgb_f(page));
-        let ramp: Vec<[f32; 3]> = if pal.dark { ramp.to_vec() } else { ramp.iter().rev().copied().collect() };
-        ramp.into_iter().map(to_color).collect()
+        waves_ramp(self, pal, rgb_f(page)).into_iter().map(to_color).collect()
     }
 }
 
@@ -362,18 +360,30 @@ fn calm(c: [f32; 3], page: [f32; 3]) -> [f32; 3] {
     lerp3(page, [l; 3], 0.45)
 }
 
-/// The six colours of the waves, from the top (beside the page's colour:
-/// deep on the dark page, light on the light one) to the ground.
+/// The six colours of the waves, from the top to the ground: in the same
+/// order on both pages, deep at the top and light at the foot. On the light
+/// page they are softened toward it — the top a pale tint, no colour
+/// darker than a pastel, the ground not blown out to white — for a calm
+/// picture behind dark words.
 fn waves_ramp(palette: WavesPalette, pal: &Palette, page: [f32; 3]) -> [[f32; 3]; 6] {
     let mut ramp = match palette.colours() {
         Some(c) => {
             let c = c.map(hex);
-            if pal.dark { c } else { [c[5], c[4], c[3], c[2], c[1], c[0]] }
+            if pal.dark {
+                c
+            } else {
+                [lerp3(page, c[1], 0.22), lerp3(page, c[1], 0.32), lerp3(page, c[2], 0.42), lerp3(page, c[3], 0.5), lerp3(page, c[4], 0.52), lerp3(page, c[4], 0.36)]
+            }
         }
         None => {
             let a = rgb_f(pal.accent);
-            let far = if pal.dark { [1.0, 0.97, 0.94] } else { [0.12, 0.08, 0.1] };
-            [lerp3(page, a, 0.1), lerp3(page, hue_shift(a, -30.0), 0.32), lerp3(page, hue_shift(a, -14.0), 0.62), a, lerp3(a, far, 0.4), lerp3(a, far, 0.72)]
+            if pal.dark {
+                let far = [1.0, 0.97, 0.94];
+                [lerp3(page, a, 0.1), lerp3(page, hue_shift(a, -30.0), 0.32), lerp3(page, hue_shift(a, -14.0), 0.62), a, lerp3(a, far, 0.4), lerp3(a, far, 0.72)]
+            } else {
+                let (cool, warm) = (hue_shift(a, -30.0), hue_shift(a, -14.0));
+                [lerp3(page, cool, 0.2), lerp3(page, cool, 0.3), lerp3(page, warm, 0.4), lerp3(page, a, 0.5), lerp3(page, a, 0.42), lerp3(page, a, 0.28)]
+            }
         }
     };
     if pal.high {
@@ -510,14 +520,33 @@ fn axes(direction: Direction, u: f32, v: f32, aspect: f32) -> (f32, f32) {
     }
 }
 
+/// How the waves are drawn: how broad their swells are, how soft their
+/// seams, how tall their swells, and the side they rise from.
+#[derive(Clone, Copy)]
+struct Shaping {
+    scale: f32,
+    melt: f32,
+    swell: f32,
+    direction: Direction,
+}
+
+impl Shaping {
+    /// For `pal`: calmer on the light page, the seams softer and the swells
+    /// lower.
+    fn new(pal: &Palette, scale: f32, melt: f32, direction: Direction) -> Self {
+        if pal.dark { Self { scale, melt, swell: 1.0, direction } } else { Self { scale, melt: melt.max(0.75), swell: 0.7, direction } }
+    }
+}
+
 /// Where the waves' five seams stand at `a` across (in heights of the
-/// area), `t` seconds in, from the foot: each swelling and rolling.
-fn waves_seams(scale: f32, a: f32, t: f32) -> [f32; 5] {
+/// area), `t` seconds in, from the foot: each swelling (by `swell`) and
+/// rolling.
+fn waves_seams(scale: f32, swell: f32, a: f32, t: f32) -> [f32; 5] {
     use std::f32::consts::TAU;
     const BASES: [f32; 5] = [0.10, 0.21, 0.32, 0.44, 0.58];
     let scale = scale.clamp(0.5, 2.0);
     let freq = 0.5 / scale;
-    let amp = 0.09 * scale.sqrt();
+    let amp = 0.09 * scale.sqrt() * swell;
     std::array::from_fn(|k| {
         let kf = k as f32;
         let wave = 0.65 * (TAU * (freq * a + 0.13 * kf) + 0.12 * t).sin() + 0.35 * (TAU * (2.3 * freq * a - 0.29 * kf) - 0.08 * t + kf).sin();
@@ -539,9 +568,9 @@ fn waves_colour(ramp: &[[f32; 3]; 6], seams: &[f32; 5], melt: f32, s: f32) -> [f
 
 /// The waves' colour at (`u`, `v`) (in heights of the area, from the top
 /// left), `t` seconds in.
-fn waves_at(ramp: &[[f32; 3]; 6], scale: f32, melt: f32, direction: Direction, (u, v): (f32, f32), aspect: f32, t: f32) -> [f32; 3] {
-    let (a, s) = axes(direction, u, v, aspect);
-    waves_colour(ramp, &waves_seams(scale, a, t), melt, s)
+fn waves_at(ramp: &[[f32; 3]; 6], shaping: &Shaping, (u, v): (f32, f32), aspect: f32, t: f32) -> [f32; 3] {
+    let (a, s) = axes(shaping.direction, u, v, aspect);
+    waves_colour(ramp, &waves_seams(shaping.scale, shaping.swell, a, t), shaping.melt, s)
 }
 
 /// Columns across the prism.
@@ -585,24 +614,25 @@ pub fn meshes(background: &Background, pal: &Palette, page: Color32, guard: &Gua
         Style::Waves => {
             let b = &background.waves;
             let ramp = waves_ramp(b.palette, pal, page_f);
+            let shaping = Shaping::new(pal, b.scale, b.melt, b.direction);
             let t = t * b.speed.clamp(0.0, 2.0);
             // A grid fine enough for the sharpest seams; the card blends
             // between its corners.
-            let ny = (64.0 + 96.0 * (1.0 - b.melt.clamp(0.0, 1.0))) as usize;
+            let ny = (64.0 + 96.0 * (1.0 - shaping.melt.clamp(0.0, 1.0))) as usize;
             let nx = ((ny as f32 * aspect).ceil() as usize).max(2);
             // The seams depend on one axis only: worked out once along it.
             let vertical = matches!(b.direction, Direction::Up | Direction::Down);
             let seams: Vec<[f32; 5]> = if vertical {
-                (0..=nx).map(|i| waves_seams(b.scale, i as f32 / nx as f32 * aspect, t)).collect()
+                (0..=nx).map(|i| waves_seams(shaping.scale, shaping.swell, i as f32 / nx as f32 * aspect, t)).collect()
             } else {
-                (0..=ny).map(|j| waves_seams(b.scale, j as f32 / ny as f32, t)).collect()
+                (0..=ny).map(|j| waves_seams(shaping.scale, shaping.swell, j as f32 / ny as f32, t)).collect()
             };
             let colours: Vec<Color32> = (0..=ny)
                 .flat_map(|j| (0..=nx).map(move |i| (i, j)))
                 .map(|(i, j)| {
                     let (u, v) = (i as f32 / nx as f32 * aspect, j as f32 / ny as f32);
                     let (_, along) = axes(b.direction, u, v, aspect);
-                    let c = waves_colour(&ramp, &seams[if vertical { i } else { j }], b.melt, along);
+                    let c = waves_colour(&ramp, &seams[if vertical { i } else { j }], shaping.melt, along);
                     to_color(guard.hold(c, point(u, v)))
                 })
                 .collect();
@@ -621,6 +651,7 @@ pub fn meshes(background: &Background, pal: &Palette, page: Color32, guard: &Gua
         Style::Pixel => {
             let b = &background.pixel;
             let ramp = waves_ramp(b.palette, pal, page_f);
+            let pixel_shaping = Shaping::new(pal, 1.0, 0.6, Direction::Up);
             let t = t * b.speed.clamp(0.0, 2.0);
             let across = b.across.clamp(12.0, 96.0).round();
             let side = w / across;
@@ -633,7 +664,7 @@ pub fn meshes(background: &Background, pal: &Palette, page: Color32, guard: &Gua
                     let x0 = rect.left() + i as f32 * side;
                     let centre = pos2(x0 + side / 2.0, (y0 + y1) / 2.0);
                     let (u, v) = ((centre.x - rect.left()) / h, (centre.y - rect.top()) / h);
-                    let c = to_color(guard.hold(waves_at(&ramp, 1.0, 0.6, Direction::Up, (u, v), aspect, t), centre));
+                    let c = to_color(guard.hold(waves_at(&ramp, &pixel_shaping, (u, v), aspect, t), centre));
                     quad(&mut mesh, [pos2(x0, y0), pos2(x0 + side, y0), pos2(x0 + side, y1), pos2(x0, y1)], [c; 4]);
                 }
             }
@@ -705,7 +736,7 @@ pub fn colour_at(background: &Background, pal: &Palette, page: Color32, guard: &
     let c = match background.style {
         Style::Waves => {
             let b = &background.waves;
-            waves_at(&waves_ramp(b.palette, pal, page_f), b.scale, b.melt, b.direction, (u, v), aspect, t * b.speed)
+            waves_at(&waves_ramp(b.palette, pal, page_f), &Shaping::new(pal, b.scale, b.melt, b.direction), (u, v), aspect, t * b.speed)
         }
         Style::Pixel => {
             let b = &background.pixel;
@@ -715,7 +746,7 @@ pub fn colour_at(background: &Background, pal: &Palette, page: Color32, guard: &
             let j = ((rect.bottom() - p.y) / side).floor();
             let centre = pos2(rect.left() + (i + 0.5) * side, rect.bottom() - (j + 0.5) * side);
             let (u, v) = ((centre.x - rect.left()) / h, (centre.y - rect.top()) / h);
-            let c = waves_at(&waves_ramp(b.palette, pal, page_f), 1.0, 0.6, Direction::Up, (u, v), aspect, t * b.speed);
+            let c = waves_at(&waves_ramp(b.palette, pal, page_f), &Shaping::new(pal, 1.0, 0.6, Direction::Up), (u, v), aspect, t * b.speed);
             return guard.hold(c, centre);
         }
         Style::Prism => {

@@ -458,14 +458,21 @@ impl Home {
         ui.add_space(2.0);
         art_label(ui, RichText::new(subtitle).size(13.0).color(art_weak(&pal)));
         ui.add_space(22.0);
-        // Laid on the backdrop itself, not in a card.
-        ui.allocate_ui_with_layout(vec2(width - 34.0, 0.0), egui::Layout::top_down(Align::Min), |ui| {
+        // Laid on the ridges themselves; on a background of colours, on a
+        // solid surface of the card's colour, so that it reads over any.
+        let surface = (self.background.style != backdrop::Style::Ridges).then(|| ui.painter().add(egui::Shape::Noop));
+        let laid = ui.allocate_ui_with_layout(vec2(width - 34.0, 0.0), egui::Layout::top_down(Align::Min), |ui| {
             ui.set_width(width - 34.0);
             match self.page {
                 Page::NewMap => self.new_map_card(ui, action),
                 Page::FromHeightmap => self.heightmap_card(ui, action),
             }
         });
+        if let Some(surface) = surface {
+            let rect = laid.response.rect.expand2(vec2(17.0, 14.0));
+            let edge = if pal.high { pal.control_border() } else { pal.border };
+            ui.painter().set(surface, egui::epaint::RectShape::new(rect, theme::CARD_RADIUS, pal.panel, Stroke::new(1.0, edge), StrokeKind::Inside));
+        }
         ui.add_space(14.0);
         let links: [(Icon, &str, &str, HomeAction); 4] = [
             (Icon::FolderOpen, tr!("Open a map"), tr!("A Massif map (.massif)"), HomeAction::Open),

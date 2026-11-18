@@ -84,9 +84,11 @@ background**, one of four styles:
   **Petrol**, **Citron**, **Blue hour**).
 
 The page shows the background alive above its settings; it looks right
-without touching any of them. In the light theme each comes on a light page;
-in high contrast its colours turn to calm greys (the ridges keep only their
-crests). Whatever the choice, the colours are held toward the page's own
+without touching any of them. In the light theme the waves keep their order —
+deep at the top, light at the foot — softened into pastels with softer seams
+and lower swells; in high contrast the colours turn to calm greys (the ridges
+keep only their crests). Over Waves, Pixel and Prism, the settings of a new
+map sit on a solid surface of the card's colour. Whatever the choice, the colours are held toward the page's own
 under the settings and around them, a soft haze that fades out, so that
 muted text keeps at least 3 to 1 on them. The ridges are drawn on the
 processor; the other styles are meshes of a few thousand corners whose
