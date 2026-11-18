@@ -464,12 +464,22 @@ pub fn carve_river(edit: &mut Edit, points: &[(f32, f32)], spec: &RiverSpec) -> 
     let freeboard = (depth * 0.3).max(1.0);
 
     // The land along the course: its ground (or the surface of the water
-    // it crosses), smoothed over the river's width.
+    // it crosses), smoothed over the river's width. Off the map (a river
+    // running off its edge), the land at the edge: taken for the bottom of
+    // the world, it pulled the water of the last blocks down into a pool.
     let read = |course: &[(f32, f32)], ground: &mut Ground| -> Vec<(f32, Option<f32>)> {
-        course
-            .iter()
-            .map(|&(x, z)| ground.at(x.floor() as i32, z.floor() as i32).unwrap_or((lo, None)))
-            .collect()
+        let mut land: Vec<Option<(f32, Option<f32>)>> = course.iter().map(|&(x, z)| ground.at(x.floor() as i32, z.floor() as i32)).collect();
+        for k in 1..land.len() {
+            if land[k].is_none() {
+                land[k] = land[k - 1];
+            }
+        }
+        for k in (0..land.len().saturating_sub(1)).rev() {
+            if land[k].is_none() {
+                land[k] = land[k + 1];
+            }
+        }
+        land.into_iter().map(|l| l.unwrap_or((lo, None))).collect()
     };
     let mut ground = Ground {
         level: edit.level(),
@@ -2285,6 +2295,34 @@ mod tests {
             fed += lakes.contains(&fluid) as usize;
         }
         assert!(fed > 0, "the river runs through its lakes, at {lakes:?}");
+        assert_eq!(crate::water::check(&world.dims[0]).spills, 0);
+    }
+
+    /// A river that runs off the edge of the map keeps its level to the
+    /// edge: the land past the edge is not the bottom of the world, and no
+    /// pit is dug at the edge.
+    #[test]
+    fn a_river_runs_off_the_edge_at_its_level() {
+        let mut world = slope_of(0.02);
+        // No lake: the land goes on down to the east edge, at x = 256.
+        for tx in 0..2 {
+            let tile = world.dims[0].ground_mut().tile_mut(TilePos::new(tx, 0)).unwrap();
+            for z in 0..128 {
+                for x in 0..128 {
+                    let i = local_index(tx * 128 + x, z);
+                    tile.top.set(i, 90.0 - (tx * 128 + x) as f32 * 0.02);
+                    tile.fluid.set(i, NO_FLUID);
+                }
+            }
+        }
+        let mut h = History::default();
+        h.begin("river", 0);
+        let spec = RiverSpec { width: 6.0, width_end: 6.0, depth: 2.0, depth_end: 2.0, banks: 4.0, ..RiverSpec::default() };
+        let report = carve_river(&mut h.edit(&mut world, 0), &[(10.0, 64.0), (140.0, 64.0), (262.0, 64.0)], &spec);
+        h.commit();
+        assert!(report.mouth > 80.0, "the water at the edge, as the land there: {report:?}");
+        let deepest = (200..256).map(|x| column(&world, x, 64).0).fold(f32::MAX, f32::min);
+        assert!(deepest > 80.0, "no pit at the edge: the bed down to {deepest}");
         assert_eq!(crate::water::check(&world.dims[0]).spills, 0);
     }
 
