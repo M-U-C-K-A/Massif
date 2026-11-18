@@ -62,11 +62,13 @@ pub fn triple_f(v: Option<&Value>) -> Option<[f64; 3]> {
 }
 
 /// A block state from a palette entry: its `Name` and its `Properties` in
-/// the game's order (by name).
+/// the game's order (by name) — `id` and `properties` from 26.3, which
+/// renamed them.
 pub fn state_of(entry: &Value) -> String {
     let Value::Compound(c) = entry else { return "minecraft:air".to_owned() };
-    let name = string(c, "Name").unwrap_or("minecraft:air");
+    let name = string(c, "Name").or_else(|| string(c, "id")).unwrap_or("minecraft:air");
     let props: Vec<(String, String)> = compound(c, "Properties")
+        .or_else(|| compound(c, "properties"))
         .map(|p| {
             p.iter()
                 .map(|(k, v)| {
@@ -95,9 +97,14 @@ pub fn with_props(name: &str, mut props: Vec<(String, String)>) -> String {
 
 /// A block state from JSON (`{"Name": …, "Properties": {…}}`).
 pub fn state_of_json(v: &serde_json::Value) -> Option<String> {
-    let name = v.get("Name")?.as_str()?;
+    // 26.3 writes a state without properties as its name alone.
+    if let Some(text) = v.as_str() {
+        return Some(state_of_text(text));
+    }
+    let name = v.get("Name").or_else(|| v.get("id"))?.as_str()?;
     let props = v
         .get("Properties")
+        .or_else(|| v.get("properties"))
         .and_then(|p| p.as_object())
         .map(|p| p.iter().map(|(k, v)| (k.clone(), v.as_str().map_or_else(|| v.to_string(), str::to_owned))).collect())
         .unwrap_or_default();

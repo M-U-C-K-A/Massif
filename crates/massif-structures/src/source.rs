@@ -81,7 +81,9 @@ pub fn paths(kind: Kind, id: &str) -> Vec<String> {
         Kind::Processors => vec![format!("data/{ns}/worldgen/processor_list/{path}.json")],
         Kind::Structure => vec![format!("data/{ns}/worldgen/structure/{path}.json")],
         Kind::BlockTag => vec![format!("data/{ns}/tags/block/{path}.json"), format!("data/{ns}/tags/blocks/{path}.json")],
-        Kind::Feature => vec![format!("data/{ns}/worldgen/configured_feature/{path}.json")],
+        // 26.3 calls them `feature`.
+        Kind::Feature => vec![format!("data/{ns}/worldgen/configured_feature/{path}.json"), format!("data/{ns}/worldgen/feature/{path}.json")],
+        Kind::StateProvider => vec![format!("data/{ns}/worldgen/block_state_provider/{path}.json")],
         Kind::PlacedFeature => vec![format!("data/{ns}/worldgen/placed_feature/{path}.json")],
     }
 }
@@ -95,6 +97,7 @@ pub enum Kind {
     BlockTag,
     Feature,
     PlacedFeature,
+    StateProvider,
 }
 
 #[cfg(test)]
