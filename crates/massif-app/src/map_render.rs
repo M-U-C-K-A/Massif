@@ -565,9 +565,16 @@ pub struct Colorizer<'a> {
     pockets: Vec<Option<[u8; 3]>>,
     auto: AutoBiome,
     light: [f32; 3],
+    /// The structures placed, drawn over the land where they stand on it.
+    structures: &'a [Arc<massif_core::structures::Structure>],
 }
 
 impl<'a> Colorizer<'a> {
+    /// The same, drawing the structures `structures` too.
+    pub fn with_structures(self, structures: &'a [Arc<massif_core::structures::Structure>]) -> Self {
+        Self { structures, ..self }
+    }
+
     pub fn new(reg: &'a Registry, style: MapStyle, sea: f32) -> Self {
         Self {
             reg,
@@ -584,6 +591,7 @@ impl<'a> Colorizer<'a> {
                 .map(|t| t.strata.first().is_some_and(|s| s.blocks.iter().any(|(b, _)| massif_core::registry::is_soil(&reg.block(*b).state))))
                 .collect(),
             auto: AutoBiome::new(reg),
+            structures: &[],
         }
     }
 
@@ -1038,6 +1046,7 @@ fn build_chunk(key: ChunkKey, sources: &Sources, colorizer: &Colorizer) -> Color
         }
     }
     draw_objects(key, sources, colorizer, &mut pixels);
+    draw_structures(key, sources, colorizer, &mut pixels);
     ColorImage::new([CHUNK_PX, CHUNK_PX], pixels)
 }
 
@@ -1141,6 +1150,67 @@ fn draw_objects(key: ChunkKey, sources: &Sources, colorizer: &Colorizer, pixels:
                 None => color,
             });
         }
+    }
+}
+
+/// The structures placed over the chunk at `key`, seen from above: their
+/// topmost blocks where they stand over the land (a village's roofs and
+/// paths; an Ancient City, under it, shows nothing), when a pixel is at
+/// most four blocks across.
+fn draw_structures(key: ChunkKey, sources: &Sources, colorizer: &Colorizer, pixels: &mut [Color32]) {
+    if key.lod > 2 || colorizer.structures.is_empty() || colorizer.style.mode == MapMode::Slope {
+        return;
+    }
+    let lod = key.lod as i64;
+    let (x0, z0) = key.origin();
+    let span = key.blocks();
+    let area = massif_core::BlockRect::new(x0 as i32, z0 as i32, (x0 + span) as i32, (z0 + span) as i32);
+    // Each pixel's highest block of a structure: its height, its colour.
+    let mut tops: Vec<Option<(i32, [u8; 3])>> = vec![None; CHUNK_PX * CHUNK_PX];
+    let mut any = false;
+    for s in colorizer.structures {
+        if s.columns().intersect(&area).is_empty() {
+            continue;
+        }
+        for sec in &s.sections {
+            let (sx, sz) = (sec.pos[0] as i64 * 16, sec.pos[2] as i64 * 16);
+            if sx + 16 <= x0 || sx >= x0 + span || sz + 16 <= z0 || sz >= z0 + span {
+                continue;
+            }
+            for &(i, k) in &sec.blocks {
+                if s.is_air(k) {
+                    continue;
+                }
+                let [x, y, z] = sec.block(i);
+                let (px, pz) = ((x as i64 - x0) >> lod, (z as i64 - z0) >> lod);
+                if !(0..CHUNK_PX as i64).contains(&px) || !(0..CHUNK_PX as i64).contains(&pz) {
+                    continue;
+                }
+                let t = &mut tops[pz as usize * CHUNK_PX + px as usize];
+                if t.is_none_or(|(ty, _)| y > ty) {
+                    *t = Some((y, s.color(k)));
+                    any = true;
+                }
+            }
+        }
+    }
+    if !any {
+        return;
+    }
+    for (t, top) in tops.iter().enumerate() {
+        let Some((y, color)) = *top else { continue };
+        let (x, z) = ((x0 + (((t % CHUNK_PX) as i64) << lod)) as i32, (z0 + (((t / CHUNK_PX) as i64) << lod)) as i32);
+        let at = sources.sample(0, x, z);
+        let land = if at.is_empty() { i32::MIN } else { block_top(at.height) };
+        // Under the land (and its water): hidden. A path one block down,
+        // in the land's top, shows.
+        let water = if at.fluid != NO_FLUID { at.fluid as i32 } else { i32::MIN };
+        if y + 1 < land.max(water) {
+            continue;
+        }
+        // Higher over the land, lighter: a roof shows over its walls.
+        let shade = 0.82 + 0.05 * ((y - land + 1).clamp(0, 6) as f32);
+        pixels[t] = to_color(scale(rgb(color), shade));
     }
 }
 
@@ -1362,7 +1432,7 @@ impl MapCache {
         if todo.is_empty() {
             return false;
         }
-        let colorizer = Colorizer::new(reg, style, sea);
+        let colorizer = Colorizer::new(reg, style, sea).with_structures(&dim.structures);
         let ground = dim.ground();
         let mut cursor = 0;
         // The chunk whose tiles are being read: the tiles it needs, and those
@@ -1575,7 +1645,7 @@ pub fn render_region(
     chunks_x: i32,
     chunks_z: i32,
 ) -> ColorImage {
-    let colorizer = Colorizer::new(reg, style, sea);
+    let colorizer = Colorizer::new(reg, style, sea).with_structures(&dim.structures);
     let first = ChunkKey {
         lod,
         x: x0.div_euclid((CHUNK_PX as i32) << lod),

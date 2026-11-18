@@ -218,14 +218,15 @@ fn object_runs(dim: &Dimension, s: Standing, x0: i32, z0: i32, w: usize, d: usiz
     use massif_core::objects::{max_reach, tile_placements};
     let mut runs: Vec<Vec<ObjectRun>> = vec![Vec::new(); w * d];
     let reg = s.reg;
-    if !reg.object_layers.iter().any(|l| !l.removed && !l.hidden && !l.objects.is_empty()) {
+    let objects = reg.object_layers.iter().any(|l| !l.removed && !l.hidden && !l.objects.is_empty());
+    if !objects && dim.structures.is_empty() {
         return runs;
     }
     let bases = object_bases(reg);
     let area = massif_core::BlockRect::new(x0, z0, x0 + w as i32, z0 + d as i32);
     let mat = Materializer::new(reg, s.seed, dim.min_y);
     let mut placed = Vec::new();
-    for t in area.expand(max_reach(reg)).tiles() {
+    for t in area.expand(max_reach(reg)).tiles().filter(|_| objects) {
         let Some(stack) = TileStack::new(dim, t, false) else { continue };
         for p in tile_placements(reg, &mat, s.seed as u64, s.lava, &stack, t) {
             if reg.object_layer(p.layer).is_some_and(|l| !l.hidden) && reg.objects.get(p.object as usize).is_some_and(|def| !p.bounds(def).intersect(&area).is_empty()) {
@@ -253,6 +254,30 @@ fn object_runs(dim: &Dimension, s: Standing, x0: i32, z0: i32, w: usize, d: usiz
                         column.push((y + by, def.color(k), material(base + k as u32)));
                     }
                 }
+            }
+        }
+    }
+    // The structures placed, over the objects as in the export: their
+    // blocks (their air, which carves their halls, is not drawn).
+    for st in &dim.structures {
+        if st.columns().intersect(&area).is_empty() {
+            continue;
+        }
+        for sec in &st.sections {
+            let (sx, sz) = (sec.pos[0] * 16, sec.pos[2] * 16);
+            if sx + 16 <= x0 || sx >= x0 + w as i32 || sz + 16 <= z0 || sz >= z0 + d as i32 {
+                continue;
+            }
+            for &(i, k) in &sec.blocks {
+                if st.is_air(k) {
+                    continue;
+                }
+                let [x, y, z] = sec.block(i);
+                let (i, j) = (x - x0, z - z0);
+                if i < 0 || j < 0 || i >= w as i32 || j >= d as i32 {
+                    continue;
+                }
+                blocks[j as usize * w + i as usize].push((y, st.color(k), 0));
             }
         }
     }

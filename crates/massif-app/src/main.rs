@@ -56,6 +56,7 @@ mod sounds;
 mod textures;
 mod tiles;
 mod startup;
+mod structure_tool;
 mod terrain_view;
 mod theme;
 mod tools;

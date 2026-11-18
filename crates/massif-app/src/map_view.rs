@@ -1576,6 +1576,14 @@ impl MapView {
         if tools.tool == Tool::River && tools.river_draft.is_some() {
             self.river_bar(ui, &painter, canvas, response.id, doc, tools, feedback);
         }
+        if tools.tool == Tool::Structure {
+            let screen = |q: (f32, f32)| self.to_screen(canvas, q.0 as f64, q.1 as f64);
+            let hover = pointer.filter(|_| response.hovered()).map(|p| self.to_world(canvas, p)).map(|(x, z)| (x.floor() as i32, z.floor() as i32));
+            crate::structure_tool::draw(ui.ctx(), &painter, canvas, &screen, self.zoom, hover, doc, tools);
+            if hover.is_some() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            }
+        }
 
         // Brush outline.
         if let Some(p) = pointer.filter(|p| canvas.contains(*p))

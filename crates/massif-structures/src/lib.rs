@@ -27,6 +27,8 @@ pub mod processor;
 pub mod rng;
 pub mod source;
 pub mod template;
+#[doc(hidden)]
+pub mod testing;
 pub mod vanilla;
 
 pub use library::Library;
