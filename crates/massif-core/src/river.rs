@@ -1199,8 +1199,63 @@ pub fn dig_descent(edit: &mut Edit, descent: &Descent, spec: &RiverSpec) -> Rive
 ///   long, half a width to either side, smaller where it would climb out
 ///   of its valley, none near its ends and its anchors.
 pub fn natural_course(level: &crate::level::Level, course: &[(f32, f32)], width: f32, anchors: &[usize]) -> (Vec<(f32, f32)>, Vec<usize>) {
-    let (course, anchors) = trim_spurs(course, anchors, (0.5 * width).max(8.0));
+    let (course, anchors) = erase_loops(course, anchors);
+    let (course, anchors) = trim_spurs(&course, &anchors, (0.5 * width).max(8.0));
     natural(level, &course, width, &anchors)
+}
+
+/// A course without its small loops: where water filling a hollow, or a
+/// way over a grid, comes back within a block and a half of where it was
+/// before (wandering round a cell, stepping back onto it), what lies
+/// between is cut out. Never a loop through an anchor. Returns the course
+/// and its anchors' new places.
+fn erase_loops(course: &[(f32, f32)], anchors: &[usize]) -> (Vec<(f32, f32)>, Vec<usize>) {
+    const NEAR: f32 = 1.5;
+    let key = |p: (f32, f32)| ((p.0 / NEAR).floor() as i32, (p.1 / NEAR).floor() as i32);
+    // The indices into `course` of the points kept, and by cell their
+    // places among those (stale once that place holds another).
+    let mut kept: Vec<usize> = Vec::with_capacity(course.len());
+    let mut seen: HashMap<(i32, i32), Vec<(usize, usize)>> = HashMap::new();
+    // The place of the last anchor kept: no loop is cut back past it.
+    let mut floor = 0;
+    for (k, &p) in course.iter().enumerate() {
+        let (cx, cz) = key(p);
+        let mut back: Option<usize> = None;
+        for dz in -1..=1 {
+            for dx in -1..=1 {
+                for &(j, orig) in seen.get(&(cx + dx, cz + dz)).into_iter().flatten() {
+                    if kept.get(j) != Some(&orig) || j < floor || j + 2 > kept.len() {
+                        continue;
+                    }
+                    let q = course[orig];
+                    if (q.0 - p.0).hypot(q.1 - p.1) <= NEAR && back.is_none_or(|b| j < b) {
+                        back = Some(j);
+                    }
+                }
+            }
+        }
+        let anchor = anchors.contains(&k);
+        if let Some(j) = back {
+            kept.truncate(j + 1);
+            // Back on a point kept: it adds nothing, unless it is an anchor
+            // (then it takes that point's place).
+            let q = course[kept[j]];
+            if (q.0 - p.0).hypot(q.1 - p.1) < 0.5 && !anchor && k + 1 < course.len() {
+                continue;
+            }
+            if anchor && (q.0 - p.0).hypot(q.1 - p.1) < 0.5 && j > floor {
+                kept.pop();
+            }
+        }
+        seen.entry((cx, cz)).or_default().push((kept.len(), k));
+        kept.push(k);
+        if anchor {
+            floor = kept.len() - 1;
+        }
+    }
+    let out: Vec<(f32, f32)> = kept.iter().map(|&k| course[k]).collect();
+    let at = anchors.iter().map(|a| kept.iter().position(|k| k == a).unwrap_or(kept.len() - 1)).collect();
+    (out, at)
 }
 
 /// A course without the spurs at its anchors: the ways found to a point

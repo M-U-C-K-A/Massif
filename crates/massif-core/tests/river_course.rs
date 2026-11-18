@@ -220,3 +220,59 @@ fn no_spur_at_a_point_dragged() {
         }
     }
 }
+
+/// Where the water goes on by itself past the last point (no end): its
+/// course neither loops nor steps back on itself (a spring over
+/// mountains, wide, with lakes everywhere).
+#[test]
+fn a_spring_neither_loops_nor_steps_back() {
+    use massif_core::river::descend;
+    for (seed, source, through, lake_depth) in [(3, Some((0.0, -240.0)), (4.0, -210.0), 13.0), (1, None, (0.0, 0.0), 1.0)] {
+        let world = generate(&GenParams {
+            tiles_x: 4,
+            tiles_z: 4,
+            landform: Landform::Mountains,
+            seed,
+            ..GenParams::default()
+        });
+        let level = world.dims[0].ground();
+        // No source given: the highest point.
+        let start = source.unwrap_or_else(
+            || {
+                let mut best = ((0.0, 0.0), f32::MIN);
+                for z in -250..250 {
+                    for x in -250..250 {
+                        let h = level.view(TilePos::containing(x, z)).map_or(f32::MIN, |t| t.top.get(local_index(x, z)));
+                        if h > best.1 {
+                            best = ((x as f32, z as f32), h);
+                        }
+                    }
+                }
+                best.0
+            },
+        );
+        let (mut course, mut stops) = (vec![start], vec![0]);
+        if source.is_some() {
+            course = route(level, start, through, 400_000);
+            stops.push(course.len() - 1);
+        }
+        let last = *course.last().unwrap();
+        let tail = descend(level, (last.0.floor() as i32, last.1.floor() as i32), 63.0, 60_000, 2_000_000, lake_depth);
+        course.extend(tail.course.iter().skip(1));
+        let (shown, _) = natural_course(level, &course, 120.0, &stops);
+        let mut pts: Vec<(f32, f32)> = Vec::new();
+        for &p in &shown {
+            if pts.last().is_none_or(|q: &(f32, f32)| (q.0 - p.0).hypot(q.1 - p.1) >= 1.5) {
+                pts.push(p);
+            }
+        }
+        let back = pts.windows(3).filter(|w| {
+            let (a, b) = ((w[1].0 - w[0].0, w[1].1 - w[0].1), (w[2].0 - w[1].0, w[2].1 - w[1].1));
+            (a.0 * b.0 + a.1 * b.1) / (a.0.hypot(a.1) * b.0.hypot(b.1)) < -0.5
+        }).count();
+        let jump = shown.windows(2).map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)).fold(0.0, f32::max);
+        eprintln!("seed {seed}: {} points, crossings {}, steps back {back}, longest step {jump:.1}", shown.len(), crossings(&shown));
+        assert_eq!(crossings(&shown), 0, "seed {seed}: it crosses itself");
+        assert_eq!(back, 0, "seed {seed}: it steps back");
+    }
+}
