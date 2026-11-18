@@ -1260,24 +1260,24 @@ impl MassifApp {
                 }
             });
         });
-        ui.add_space(14.0);
-        ui.label(RichText::new(tr!("Home background")).size(13.0).medium());
-        ui.add_space(4.0);
-        self.prefs_home_background(ui, ctx);
-        ui.add_space(14.0);
-        ui.label(RichText::new(tr!("Crosshair")).size(13.0).medium());
-        ui.add_space(4.0);
-        self.prefs_reticle(ui, ctx);
         if crate::i18n::current() != crate::i18n::Language::English {
             ui.add_space(8.0);
             ui.add(egui::Label::new(RichText::new(tr!("Massif Help and the guide on the website are in English for now.")).size(11.5).color(pal.weak)).wrap());
         }
+        ui.add_space(14.0);
+        ui.label(RichText::new(tr!("Crosshair")).size(13.0).medium());
+        ui.add_space(4.0);
+        self.prefs_reticle(ui, ctx);
+        ui.add_space(14.0);
+        ui.label(RichText::new(tr!("Home background")).size(13.0).medium());
+        ui.add_space(4.0);
+        self.prefs_home_background(ui, ctx);
     }
 
     /// The home screen's background: its style, a live picture of it, and
     /// that style's few settings — none to touch for it to look right.
     fn prefs_home_background(&mut self, ui: &mut Ui, ctx: &egui::Context) {
-        use crate::backdrop::{Direction, FPS, Motion, PrismPalette, Shape, Style, WavesPalette};
+        use crate::backdrop::{Direction, FPS, Motion, PrismPalette, RidgesPalette, Shape, Style, WavesPalette};
         let pal = Palette::of(ui);
         let page = crate::home::backdrop_fill(&pal);
         let reduced = theme::reduce_motion(ctx);
@@ -1356,7 +1356,22 @@ impl MassifApp {
             let ways: Vec<&str> = Direction::ALL.iter().map(|d| crate::i18n::tr_name(d.label())).collect();
             let b = &mut self.settings.backdrop;
             match b.style {
-                Style::Ridges => {}
+                Style::Ridges => {
+                    let names = RidgesPalette::ALL.iter().map(|p| (p.label(), p.swatch(&pal, page))).collect();
+                    if let Some(k) = palette_row(ui, "ridges palette", names, RidgesPalette::ALL.iter().position(|p| *p == b.ridges.palette).unwrap_or(0)) {
+                        b.ridges.palette = RidgesPalette::ALL[k];
+                        crate::sounds::play(Cue::Select);
+                    }
+                    crate::widgets::row(ui, tr!("Height"), |ui| {
+                        ui.add(crate::widgets::Field::new(&mut b.ridges.height, 0.6..=1.4).custom_formatter(percent).custom_parser(parse).width(150.0));
+                    });
+                    crate::widgets::row(ui, tr!("Glow"), |ui| {
+                        ui.add(crate::widgets::Field::new(&mut b.ridges.glow, 0.0..=1.5).custom_formatter(percent).custom_parser(parse).width(150.0));
+                    });
+                    crate::widgets::row(ui, tr!("Ranges"), |ui| {
+                        ui.add(crate::widgets::Field::new(&mut b.ridges.ranges, 3..=8).width(150.0));
+                    });
+                }
                 Style::Waves => {
                     let names = WavesPalette::ALL.iter().map(|p| (p.label(), p.swatch(&pal, page))).collect();
                     if let Some(k) = palette_row(ui, "waves palette", names, WavesPalette::ALL.iter().position(|p| *p == b.waves.palette).unwrap_or(0)) {
@@ -15453,17 +15468,31 @@ mod tests {
                 fit(&h.render().unwrap())
             };
             let reference = refs.as_ref().and_then(|r| image::open(r.join(format!("{name}.png"))).ok()).map(|i| fit(&i.to_rgba8()));
-            let cells = [
-                reference,
-                Some(shot(&mut h, base, ThemeChoice::Dark, false, 0.0)),
-                Some(shot(&mut h, base, ThemeChoice::Light, false, 0.0)),
-                Some(shot(&mut h, base, ThemeChoice::Dark, false, 4.0)),
-                Some(shot(&mut h, base, ThemeChoice::Dark, false, 8.0)),
-                Some(shot(&mut h, base, ThemeChoice::Dark, false, 12.0)),
-                Some(shot(&mut h, base, ThemeChoice::Dark, true, 0.0)),
-                Some(shot(&mut h, base, ThemeChoice::Light, true, 0.0)),
-                (style != Style::Ridges).then(|| shot(&mut h, other, ThemeChoice::Dark, false, 0.0)),
-            ];
+            let cells: Vec<Option<image::RgbaImage>> = if style == Style::Ridges {
+                // A palette a row: the dark theme low and tall, the light one.
+                let mut cells = Vec::new();
+                for palette in [crate::backdrop::RidgesPalette::Theme, crate::backdrop::RidgesPalette::Glacier, crate::backdrop::RidgesPalette::Dusk] {
+                    for (theme, height) in [(ThemeChoice::Dark, 0.7), (ThemeChoice::Dark, 1.3), (ThemeChoice::Light, 1.0)] {
+                        let mut b = base;
+                        b.ridges.palette = palette;
+                        b.ridges.height = height;
+                        cells.push(Some(shot(&mut h, b, theme, false, 0.0)));
+                    }
+                }
+                cells
+            } else {
+                vec![
+                    reference,
+                    Some(shot(&mut h, base, ThemeChoice::Dark, false, 0.0)),
+                    Some(shot(&mut h, base, ThemeChoice::Light, false, 0.0)),
+                    Some(shot(&mut h, base, ThemeChoice::Dark, false, 4.0)),
+                    Some(shot(&mut h, base, ThemeChoice::Dark, false, 8.0)),
+                    Some(shot(&mut h, base, ThemeChoice::Dark, false, 12.0)),
+                    Some(shot(&mut h, base, ThemeChoice::Dark, true, 0.0)),
+                    Some(shot(&mut h, base, ThemeChoice::Light, true, 0.0)),
+                    Some(shot(&mut h, other, ThemeChoice::Dark, false, 0.0)),
+                ]
+            };
             let gap = 8u32;
             let mut sheet = image::RgbaImage::from_pixel(3 * cw + 4 * gap, 3 * ch + 4 * gap, image::Rgba([12, 12, 14, 255]));
             for (k, cell) in cells.iter().enumerate() {
@@ -15497,15 +15526,15 @@ mod tests {
         assert_eq!(h.state().settings.backdrop.style, Style::Ridges, "the ridges by default");
         h.state_mut().dialog = Some(Dialog::Preferences(PrefsSection::Appearance));
         h.run_steps(4);
-        assert!(h.query_by_label("Melt").is_none(), "the ridges have no settings of their own");
-        // The background's settings, lower in the page.
+        assert!(h.query_by_label("Melt").is_none(), "the waves' settings are not shown under the ridges");
+        // The background's settings, at the bottom of the page.
         h.event(egui::Event::PointerMoved(pos2(880.0, 560.0)));
-        for _ in 0..4 {
+        for _ in 0..12 {
             h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, -120.0), modifiers: egui::Modifiers::NONE, phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel });
             h.run_steps(2);
         }
         h.run_steps(10);
-        for (label, style, own) in [("Waves", Style::Waves, "Melt"), ("Pixel", Style::Pixel, "Pixel size"), ("Prism", Style::Prism, "Motion"), ("Ridges", Style::Ridges, "Style")] {
+        for (label, style, own) in [("Waves", Style::Waves, "Melt"), ("Pixel", Style::Pixel, "Pixel size"), ("Prism", Style::Prism, "Motion"), ("Ridges", Style::Ridges, "Glow")] {
             h.get_by_label(label).click();
             h.run_steps(4);
             assert_eq!(h.state().settings.backdrop.style, style);

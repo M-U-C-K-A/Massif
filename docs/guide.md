@@ -67,6 +67,10 @@ background**, one of four styles:
   page's own colour but for the glow. Every cell is dithered, its colour put
   to one of a few levels by an ordered threshold, so that the light is made of
   dots. The ranges drift, the nearer faster, and breathe; the glow pulses.
+  **Palette** colours the glow and the crests (**Theme**, the accent, by
+  default; **Ember**, **Glacier**, **Dusk**, **Forest**), **Height** sets how
+  tall the ranges rise (60 to 140 %), **Glow** how strong the glow is (0 to
+  150 %) and **Ranges** how many there are, one behind the other (3 to 8).
 - **Waves**: smooth bands of colour rising from the foot and melting into
   each other, a deep colour above them, their seams curving and rolling
   slowly. **Palette** picks their six colours (**Theme**, from the accent;
@@ -195,15 +199,14 @@ their own:
   lighting in patterns — Orbit, Ripple, Scan, Rain, Bars, Spiral, Sweep,
   Twinkle — each alive in its tile, still with Reduce motion), the **Tool
   icons** (**Line**, the default, in the style of the interface's other
-  icons, or **Classic**, Massif's first drawings), the **Home background**
-  (**Ridges**, **Waves**, **Pixel** or **Prism**, alive in a picture above its
-  few settings, and **Animate the background**; see
-  [the home screen](#the-home-screen)), and the **Crosshair** of the player's view: a **Dot**, a
+  icons, or **Classic**, Massif's first drawings), the **Crosshair** of the player's view: a **Dot**, a
   **Cross** (the default: four short strokes around an open middle), a
   **Circle**, a plain **Minecraft** plus, or **None**, with its **Size** (6
   to 32 points) and **Opacity**, beside a preview on light ground and dark.
   It is drawn white in a soft dark outline, so that it shows on snow as on
-  deep water.
+  deep water. Last, the **Home background** (**Ridges**, **Waves**, **Pixel**
+  or **Prism**, alive in a picture above its few settings, and **Animate the
+  background**; see [the home screen](#the-home-screen)).
 - **Accessibility**: **High contrast** — text black or white, muted text
   past 7 to 1 on the cards, lines and the edges of controls past 3 to 1, the
   accent darkened or lightened until it reads, links underlined, and the

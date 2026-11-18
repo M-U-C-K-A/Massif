@@ -238,6 +238,90 @@ impl PrismPalette {
     }
 }
 
+/// The colours of the ridges' glow and crests.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default, Serialize, Deserialize)]
+pub enum RidgesPalette {
+    /// The accent of the settings.
+    #[default]
+    Theme,
+    Ember,
+    Glacier,
+    Dusk,
+    Forest,
+}
+
+impl RidgesPalette {
+    pub const ALL: [RidgesPalette; 5] = [RidgesPalette::Theme, RidgesPalette::Ember, RidgesPalette::Glacier, RidgesPalette::Dusk, RidgesPalette::Forest];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            RidgesPalette::Theme => tn!("Theme"),
+            RidgesPalette::Ember => tn!("Ember"),
+            RidgesPalette::Glacier => tn!("Glacier"),
+            RidgesPalette::Dusk => tn!("Dusk"),
+            RidgesPalette::Forest => tn!("Forest"),
+        }
+    }
+
+    /// Its glow and the glow's hot core (on the dark page); none for the
+    /// theme's, the accent's.
+    fn colours(self) -> Option<(u32, u32)> {
+        match self {
+            RidgesPalette::Theme => None,
+            RidgesPalette::Ember => Some((0xff6a2b, 0xfff1dc)),
+            RidgesPalette::Glacier => Some((0x4f9dff, 0xeef6ff)),
+            RidgesPalette::Dusk => Some((0xd2569c, 0xffe8f2)),
+            RidgesPalette::Forest => Some((0x5fb85f, 0xf2ffe2)),
+        }
+    }
+
+    /// The glow, and its hot core, for `pal` (the accent in high contrast,
+    /// made legible there).
+    fn glow(self, pal: &Palette) -> ([f32; 3], [f32; 3]) {
+        let accent = match self.colours() {
+            Some((glow, _)) if !pal.high => hex(glow),
+            _ => rgb_f(pal.accent),
+        };
+        let hot = if !pal.dark {
+            accent.map(|c| c * 0.8)
+        } else {
+            match self.colours() {
+                Some((_, hot)) if !pal.high => hex(hot),
+                _ => [1.0, 0.95, 0.86],
+            }
+        };
+        (accent, hot)
+    }
+
+    /// Its colours as a swatch shows them: a deep glow, the glow, its core
+    /// and the land's grey.
+    pub fn swatch(self, pal: &Palette, page: Color32) -> Vec<Color32> {
+        let (glow, hot) = self.glow(pal);
+        let page = rgb_f(page);
+        let land = if pal.dark { lerp3(page, [1.0; 3], 0.25) } else { lerp3(page, [0.0; 3], 0.3) };
+        [glow.map(|c| c * 0.55), glow, hot, land].into_iter().map(to_color).collect()
+    }
+}
+
+/// The ridges' settings.
+#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Ridges {
+    pub palette: RidgesPalette,
+    /// How tall the ranges rise: 1 as made, from 0.6 to 1.4.
+    pub height: f32,
+    /// How strong the glow is: 1 as made, from 0 to 1.5.
+    pub glow: f32,
+    /// How many ranges there are, one behind the other, from 3 to 8.
+    pub ranges: u8,
+}
+
+impl Default for Ridges {
+    fn default() -> Self {
+        Self { palette: RidgesPalette::Theme, height: 1.0, glow: 1.0, ranges: 6 }
+    }
+}
+
 /// The waves' settings.
 #[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -297,6 +381,7 @@ impl Default for Prism {
 #[serde(default)]
 pub struct Background {
     pub style: Style,
+    pub ridges: Ridges,
     pub waves: Waves,
     pub pixel: Pixels,
     pub prism: Prism,
@@ -857,13 +942,14 @@ pub struct Look {
 }
 
 impl Look {
-    /// For the palette `pal` (its theme and accent), the page's colour `page`
-    /// and the ink of muted words over the background, `muted`.
-    pub fn new(pal: &Palette, page: Color32, muted: Color32) -> Self {
+    /// For the palette `pal` (its theme and accent), the page's colour `page`,
+    /// the ink of muted words over the background, `muted`, and the ridges'
+    /// colours, `palette`.
+    pub fn new(pal: &Palette, page: Color32, muted: Color32, palette: RidgesPalette) -> Self {
         let dark = pal.dark;
         let bg = rgb_f(page);
-        let accent = rgb_f(pal.accent);
-        let (ink, ink_far, ink_near, crest, hot) = if dark { ([1.0; 3], 0.17, 0.04, 0.8, [1.0, 0.95, 0.86]) } else { ([0.0; 3], 0.05, 0.15, 0.68, accent.map(|c| c * 0.8)) };
+        let (accent, hot) = palette.glow(pal);
+        let (ink, ink_far, ink_near, crest) = if dark { ([1.0; 3], 0.17, 0.04, 0.8) } else { ([0.0; 3], 0.05, 0.15, 0.68) };
         let limit = art_limit(luminance(rgb_f(muted)), bg[1], dark);
         let place = std::array::from_fn(|i| {
             let b = bg[i];
@@ -990,15 +1076,15 @@ fn noise_1d(x: f32, seed: u32) -> f32 {
     hash(i as i32, 0, seed) * (1.0 - f) + hash(i as i32 + 1, 0, seed) * f
 }
 
-/// One frame of the ridges, `cols` × `rows` cells, `t` seconds in, their
-/// light held down around `calm` (cells, where the words are; none for a
-/// preview).
-pub fn frame(look: &Look, cols: usize, rows: usize, calm: Option<[i32; 4]>, t: f64) -> egui::ColorImage {
+/// One frame of the ridges as `settings` have them, `cols` × `rows` cells,
+/// `t` seconds in, their light held down around `calm` (cells, where the
+/// words are; none for a preview).
+pub fn frame(look: &Look, settings: &Ridges, cols: usize, rows: usize, calm: Option<[i32; 4]>, t: f64) -> egui::ColorImage {
     let (cols, rows) = (cols.max(1), rows.max(1));
     // Kept small: f32 would lose the seconds of a long session.
     let tf = (t % 7200.0) as f32;
     let finish = Finish::new(look, cols, rows, calm);
-    ridges(look, &finish, cols, rows, tf)
+    ridges(look, settings, &finish, cols, rows, tf)
 }
 
 /// The ridges: six ranges of mountains seen from afar, one in front of the
@@ -1009,7 +1095,7 @@ pub fn frame(look: &Look, cols: usize, rows: usize, calm: Option<[i32; 4]>, t: f
 /// reaches. The sky is the page's colour, but for the glow. The ranges
 /// drift, the nearer faster, and breathe; the glow pulses. The crests are
 /// worked out once a column, so that a cell costs a few comparisons.
-fn ridges(look: &Look, finish: &Finish, cols: usize, rows: usize, t: f32) -> egui::ColorImage {
+fn ridges(look: &Look, settings: &Ridges, finish: &Finish, cols: usize, rows: usize, t: f32) -> egui::ColorImage {
     use std::f32::consts::TAU;
     /// The ranges, far to near: where each stands (in heights of the area,
     /// from the top) on the left, how much higher it stands on the right,
@@ -1024,8 +1110,22 @@ fn ridges(look: &Look, finish: &Finish, cols: usize, rows: usize, t: f32) -> egu
         (0.915, 0.010, 0.060, 0.8, 0.0100),
     ];
     let (w, h) = (cols as f32, rows as f32);
-    let n = RIDGES.len();
-    let crests: Vec<Vec<f32>> = RIDGES
+    // As many ranges as the settings say, spread over the six as made; as
+    // tall as they say, from the foot.
+    let n = settings.ranges.clamp(3, 8) as usize;
+    let height = settings.height.clamp(0.6, 1.4);
+    let glow = settings.glow.clamp(0.0, 1.5);
+    let ranges: Vec<(f32, f32, f32, f32, f32)> = (0..n)
+        .map(|k| {
+            let at = k as f32 / (n - 1) as f32 * (RIDGES.len() - 1) as f32;
+            let (i, f) = ((at as usize).min(RIDGES.len() - 2), at - (at as usize).min(RIDGES.len() - 2) as f32);
+            let (a, b) = (RIDGES[i], RIDGES[i + 1]);
+            let mix = |x: f32, y: f32| x + (y - x) * f;
+            let (base, lift, rise) = (mix(a.0, b.0), mix(a.1, b.1), mix(a.2, b.2));
+            (1.0 - (1.0 - base) * height, lift * height, rise * height, mix(a.3, b.3), mix(a.4, b.4))
+        })
+        .collect();
+    let crests: Vec<Vec<f32>> = ranges
         .iter()
         .enumerate()
         .map(|(k, &(base, lift, rise, fine, drift))| {
@@ -1051,8 +1151,8 @@ fn ridges(look: &Look, finish: &Finish, cols: usize, rows: usize, t: f32) -> egu
         })
         .collect();
     // The glow: low on the right, wide, its core on the farthest range.
-    let pulse = 1.0 + 0.08 * (TAU * t / 13.0).sin();
-    let (gx, gy) = (0.9 * w, 0.548 * h);
+    let pulse = (1.0 + 0.08 * (TAU * t / 13.0).sin()) * glow;
+    let (gx, gy) = (0.9 * w, (1.0 - 0.452 * height) * h);
     // A bright core hugging the horizon, in a wide halo that rises.
     let core_x: Vec<f32> = (0..cols).map(|x| (-((x as f32 - gx) / (0.14 * w)).powi(2)).exp()).collect();
     let halo_x: Vec<f32> = (0..cols).map(|x| (-((x as f32 - gx) / (0.42 * w)).powi(2)).exp()).collect();
@@ -1092,7 +1192,7 @@ fn ridges(look: &Look, finish: &Finish, cols: usize, rows: usize, t: f32) -> egu
     // less on the near (it warms them).
     let direct: Vec<Vec<f32>> = (0..n).map(|k| (0..cols).map(|x| glow_at(x, crests[k][x]).min(1.0)).collect()).collect();
     let ambient: Vec<f32> = (0..cols).map(|x| (-((x as f32 - gx) / (0.6 * w)).powi(2)).exp()).collect();
-    let lit: Vec<Vec<f32>> = (0..n).map(|k| (0..cols).map(|x| (direct[k][x] + 0.6 * ambient[x] * (1.0 - 0.35 * depth[k])).min(1.0)).collect()).collect();
+    let lit: Vec<Vec<f32>> = (0..n).map(|k| (0..cols).map(|x| (direct[k][x] + 0.6 * glow * ambient[x] * (1.0 - 0.35 * depth[k])).min(1.0)).collect()).collect();
     let mut pixels = Vec::with_capacity(cols * rows);
     // Cells over a crest its bloom reaches.
     const RIM: f32 = 3.0;
@@ -1220,7 +1320,7 @@ impl Preview {
         }
         let t = frame as f64 / FPS;
         let (image, options) = if background.style == Style::Ridges {
-            (self::frame(&Look::new(pal, page, muted), cols, rows, None, t), egui::TextureOptions::NEAREST)
+            (self::frame(&Look::new(pal, page, muted, background.ridges.palette), &background.ridges, cols, rows, None, t), egui::TextureOptions::NEAREST)
         } else {
             let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(cols as f32 * 4.0, rows as f32 * 4.0));
             let options = if background.style == Style::Waves { egui::TextureOptions::LINEAR } else { egui::TextureOptions::NEAREST };
@@ -1329,7 +1429,7 @@ mod tests {
     /// The ridges move and leave the words of every theme legible: text
     /// past 4.5 to 1, muted text past 3 to 1, on any patch of dots where the
     /// words are, seen through the letters' halo, at any time, with any
-    /// accent.
+    /// accent and palette, as made and at their tallest, brightest and most.
     #[test]
     fn the_ridges_move_and_stay_calm_under_the_words() {
         let (cols, rows) = (420, 300);
@@ -1339,11 +1439,19 @@ mod tests {
             if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
         };
         let srgb = |l: f32| ((if l <= 0.0031308 { l * 12.92 } else { 1.055 * l.powf(1.0 / 2.4) - 0.055 }) * 255.0).round() as u8;
+        let made = Ridges::default();
+        let most = Ridges { height: 1.4, glow: 1.5, ranges: 8, ..made };
+        // Every palette (the theme's with every accent), as made and at most.
+        let configs: Vec<(Ridges, [u8; 3])> = RidgesPalette::ALL
+            .iter()
+            .flat_map(|&p| if p == RidgesPalette::Theme { theme::ACCENTS.iter().map(|(_, a)| (p, *a)).collect::<Vec<_>>() } else { vec![(p, theme::DEFAULT_ACCENT)] })
+            .flat_map(|(p, a)| [(Ridges { palette: p, ..made }, a), (Ridges { palette: p, ..most }, a)])
+            .collect();
         for (dark, high) in [(true, false), (false, false), (true, true), (false, true)] {
-            for (_, accent) in theme::ACCENTS {
+            for &(settings, accent) in &configs {
                 let pal = palette(dark, high, theme::rgb(accent));
-                let look = Look::new(&pal, page(dark), muted(&pal));
-                let frames: Vec<egui::ColorImage> = [0.0, 9.0, 600.0].iter().map(|&t| frame(&look, cols, rows, Some(calm), t)).collect();
+                let look = Look::new(&pal, page(dark), muted(&pal), settings.palette);
+                let frames: Vec<egui::ColorImage> = [0.0, 9.0, 600.0].iter().map(|&t| frame(&look, &settings, cols, rows, Some(calm), t)).collect();
                 assert!(frames.windows(2).all(|w| w[0].pixels != w[1].pixels), "dark {dark} high {high}: it moves");
                 for f in &frames {
                     for y in (calm[1]..calm[3] - 4).step_by(2) {
@@ -1359,7 +1467,7 @@ mod tests {
                             }
                             let c = theme::mix(page(dark), Color32::from_rgb(srgb(sum[0]), srgb(sum[1]), srgb(sum[2])), HALO);
                             let (text, weak) = (theme::contrast(pal.text, c), theme::contrast(muted(&pal), c));
-                            assert!(text >= if high { 7.0 } else { 4.5 } && weak >= 3.0, "dark {dark} high {high} {accent:?}: text {text:.1}, muted {weak:.1}");
+                            assert!(text >= if high { 7.0 } else { 4.5 } && weak >= 3.0, "dark {dark} high {high} {accent:?} {settings:?}: text {text:.1}, muted {weak:.1}");
                         }
                     }
                 }
@@ -1382,12 +1490,12 @@ mod tests {
         for style in Style::ALL {
             let b = Background { style, ..Background::default() };
             let guard = Guard::new(&pal, page, muted, Some(column), area);
-            let look = Look::new(&pal, page, muted);
+            let look = Look::new(&pal, page, muted, RidgesPalette::Theme);
             let (mut best, mut all, mut corners) = (f64::MAX, 0.0, 0);
             for k in 0..40 {
                 let start = std::time::Instant::now();
                 if style == Style::Ridges {
-                    std::hint::black_box(frame(&look, 680, 500, Some([170, 60, 510, 490]), k as f64 / FPS));
+                    std::hint::black_box(frame(&look, &b.ridges, 680, 500, Some([170, 60, 510, 490]), k as f64 / FPS));
                 } else {
                     let m = meshes(&b, &pal, page, &guard, area, k as f32 / FPS as f32).unwrap();
                     corners = m.iter().map(|m| m.vertices.len()).sum();

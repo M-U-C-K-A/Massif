@@ -191,6 +191,7 @@ struct WavesKey {
     /// Pixels a cell.
     pitch: usize,
     look: LookKey,
+    ridges: backdrop::Ridges,
 }
 
 /// What the ridges' colours are worked out for.
@@ -199,6 +200,7 @@ struct LookKey {
     dark: bool,
     high: bool,
     accent: Color32,
+    palette: backdrop::RidgesPalette,
 }
 
 /// When maps were last changed, `None` for those that are not there.
@@ -794,14 +796,15 @@ impl Home {
         let in_cells = |p: egui::Pos2| [((p.x - shown.left()) / cell) as i32, ((p.y - shown.top()) / cell) as i32];
         let ([x0, y0], [x1, y1]) = (in_cells(calm.min), in_cells(calm.max));
         let calm = [x0, y0, x1, y1].map(|v| v.div_euclid(8) * 8);
-        let look_key = LookKey { dark: pal.dark, high: pal.high, accent: pal.accent };
-        let key = WavesKey { cols, rows, calm, pitch, look: look_key };
+        let ridges = self.background.ridges;
+        let look_key = LookKey { dark: pal.dark, high: pal.high, accent: pal.accent, palette: ridges.palette };
+        let key = WavesKey { cols, rows, calm, pitch, look: look_key, ridges };
         if self.waves.as_ref().is_none_or(|w| w.key != key || w.frame != frame) {
             if self.look.as_ref().is_none_or(|(k, _)| *k != look_key) {
-                self.look = Some((look_key, backdrop::Look::new(&pal, backdrop_fill(&pal), art_weak(&pal))));
+                self.look = Some((look_key, backdrop::Look::new(&pal, backdrop_fill(&pal), art_weak(&pal), ridges.palette)));
             }
             let Some((_, look)) = &self.look else { return };
-            let image = backdrop::frame(look, cols, rows, Some(calm), frame as f64 / backdrop::FPS);
+            let image = backdrop::frame(look, &ridges, cols, rows, Some(calm), frame as f64 / backdrop::FPS);
             match &mut self.waves {
                 Some(w) => {
                     w.texture.set(image, egui::TextureOptions::NEAREST);
