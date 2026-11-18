@@ -127,6 +127,11 @@ fn main() -> eframe::Result {
             .required_limits
             .max_texture_array_layers
             .max(adapter.limits().max_texture_array_layers.min(2048));
+        // The Render side keeps a map's blocks in storage buffers: as large
+        // as the card binds, up to 2 GiB.
+        let most = adapter.limits();
+        desc.required_limits.max_storage_buffer_binding_size = desc.required_limits.max_storage_buffer_binding_size.max(most.max_storage_buffer_binding_size.min(2 << 30));
+        desc.required_limits.max_buffer_size = desc.required_limits.max_buffer_size.max(most.max_buffer_size.min(2 << 30));
         desc
     });
     let wgpu_options = egui_wgpu::WgpuConfiguration::default();

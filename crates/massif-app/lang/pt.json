@@ -2834,14 +2834,12 @@
  "Pick the brush in the Brushes panel; its size, intensity and rotation in Brush Settings. 3D Sculpt shapes {most:.0} blocks around at most.": "Escolha o pincel no painel Pincéis; o tamanho, a intensidade e a rotação em Ajustes do pincel. Escultura 3D molda no máximo {most:.0} blocos ao redor.",
  "3D Sculpt takes {most:.0} at most": "Escultura 3D usa no máximo {most:.0}",
  "Beta": "Beta",
- "Coming in the Massif 2.0 beta": "Chega com o beta do Massif 2.0",
  "Fill to y {level}": "Encher até y {level}",
  "Raise this water to y {level}": "Subir esta água para y {level}",
  "Height limit y {water_limit} reached": "Limite de altura y {water_limit} atingido",
  "Dry land: fills the hollow clicked up to where it would spill. On water: raises it a block.": "Em terra: enche a cavidade até transbordar. Na água: sobe-a um bloco.",
  "Dry land: fills the area clicked up to y {level}, wherever the land lies lower. On water: raises it a block.": "Em terra: enche a zona até y {level}, onde o terreno estiver mais baixo. Na água: sobe-a um bloco.",
  "Path-traced images of the map, under a real sky": "Imagens do mapa com path tracing, sob um céu real",
- "Photorealistic images of your map, path-traced on the graphics card with the game's textures and resource packs, under a sky with a sun, haze and fog. Then large stills, camera paths and Minecraft worlds opened as they are.": "Imagens fotorrealistas do seu mapa, calculadas por path tracing na placa de vídeo com as texturas do jogo e os pacotes de recursos, sob um céu com sol, névoa e neblina. Depois, imagens grandes, trajetos de câmera e mundos do Minecraft abertos como estão.",
  "Water raised by {n} blocks, to {level}: height limit reached": {
   "one": "Água subida {n} bloco, para {level}: limite de altura atingido",
   "other": "Água subida {n} blocos, para {level}: limite de altura atingido"
