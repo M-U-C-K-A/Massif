@@ -229,10 +229,11 @@ pub fn export(
                         }
                         scratch.lay_ores(&ctx, &stack, pos);
                         let steady = if planner.as_ref().is_some_and(|p| p.needs(pos)) { massif_core::water::steady_tile(dim, pos, planner.as_ref()) } else { Vec::new() };
+                        let caves = crate::chunk::CaveWork::of(world, dim, pos, true);
                         let mut out = Vec::with_capacity(CHUNKS_PER_TILE * CHUNKS_PER_TILE);
                         for cz in 0..CHUNKS_PER_TILE {
                             for cx in 0..CHUNKS_PER_TILE {
-                                let nbt = build_chunk(&ctx, &stack, pos, cx, cz, &objects, &steady, scratch);
+                                let nbt = build_chunk(&ctx, &stack, pos, cx, cz, &objects, &steady, &caves, scratch);
                                 let chunk_x = pos.x * CHUNKS_PER_TILE as i32 + cx as i32;
                                 let chunk_z = pos.z * CHUNKS_PER_TILE as i32 + cz as i32;
                                 out.push((chunk_x.rem_euclid(32) as usize, chunk_z.rem_euclid(32) as usize, compressor.record(&nbt)?));

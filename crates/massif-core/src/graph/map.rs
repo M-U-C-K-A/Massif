@@ -115,7 +115,7 @@ pub fn sample_map(dim: &Dimension, e: &Extent, fallback: f32, colors: &[[u8; 3]]
             while end < n && ((e.x0 + (end as f64 + 0.5) * spacing).floor() as i32).div_euclid(TILE_SIZE) == tx {
                 end += 1;
             }
-            if let Some(stack) = TileStack::new_with(dim, TilePos::new(tx, tz), |_, level| reads_level(level, own)) {
+            if let Some(stack) = TileStack::new_seen(dim, TilePos::new(tx, tz), crate::compose::Caves::Openings, |_, level| reads_level(level, own)) {
                 for r in 0..rows {
                     let z = (e.z0 + ((j0 + r) as f64 + 0.5) * spacing).floor() as i32;
                     let lz = z.rem_euclid(TILE_SIZE) as usize;

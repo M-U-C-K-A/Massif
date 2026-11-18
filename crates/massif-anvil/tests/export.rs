@@ -327,9 +327,11 @@ fn expected_with_pockets(world: &World, x: i32, z: i32) -> Vec<String> {
     let cell = local_index(x, z);
     let mut spans = Vec::new();
     stack.spans(cell, &mut spans);
-    if let Some(col) = pockets.column(stack.ground().pockets.get(cell), &spans, &mat, x, z) {
+    if let Some(col) = pockets.column(stack.ground().pockets.get(cell), &spans, stack.cave_ground(cell), &mat, x, z) {
         for y in col.low..=col.high {
-            if let Some(b) = col.at(x, y, z) {
+            if let Some(b) = col.at(x, y, z)
+                && spans.iter().any(|s| s.y0 <= y && y < s.y1)
+            {
                 column[(y - dim.min_y) as usize] = reg.block(b).name().to_owned();
             }
         }
@@ -350,6 +352,18 @@ fn expected_with_ores(world: &World, x: i32, z: i32) -> Vec<String> {
     let pockets = massif_core::pockets::Pockets::new(reg, world.meta.seed as u64, dim.min_y);
     let placer = massif_core::ores::Placer::new(&world.meta.ores, world.meta.seed).unwrap();
     let (cx, cz) = (x >> 4, z >> 4);
+    // The large veins first, in the rock an ore could take.
+    let rock: std::collections::HashSet<&str> = reg.blocks.iter().zip(&hosts).filter(|(_, h)| h.is_some()).map(|(b, _)| b.name()).collect();
+    let mut veined = std::collections::HashSet::new();
+    if world.meta.ores.veins {
+        massif_core::ores::Veins::new(world.meta.seed).chunk(cx * 16, cz * 16, (dim.min_y, dim.max_y), |bx, by, bz, b| {
+            let i = (by - dim.min_y) as usize;
+            if (bx, bz) == (x, z) && rock.contains(column[i].as_str()) {
+                column[i] = b.state().to_owned();
+                veined.insert(by);
+            }
+        });
+    }
     let mut runs: HashMap<(i32, i32), (Vec<massif_core::Span>, u16)> = HashMap::new();
     for bz in cz * 16..cz * 16 + 16 {
         for bx in cx * 16..cx * 16 + 16 {
@@ -364,12 +378,13 @@ fn expected_with_ores(world: &World, x: i32, z: i32) -> Vec<String> {
         cz,
         |bx, by, bz| {
             let (spans, n) = &runs[&(bx, bz)];
-            let col = pockets.as_ref().and_then(|p| p.column(*n, spans, &mat, bx, bz));
+            let col = pockets.as_ref().and_then(|p| p.column(*n, spans, None, &mat, bx, bz));
             massif_core::ores::rock_at(spans, &mat, &hosts, col.as_ref(), bx, by, bz, dim.max_y)
         },
         |bx, by, bz| biome_of_block(world, bx, by, bz),
         |b, (_, host)| {
-            if (b.x, b.z) == (x, z) {
+            // Not in a vein's block: no longer rock an ore takes.
+            if (b.x, b.z) == (x, z) && !veined.contains(&b.y) {
                 let (stone, deep) = massif_core::ores::ore_blocks(world.meta.ores.ores[b.ore as usize].mineral);
                 let name = if host == massif_core::ores::Host::Deepslate { deep } else { stone };
                 column[(b.y - dim.min_y) as usize] = name.split('[').next().unwrap().to_owned();
@@ -1339,69 +1354,200 @@ fn an_export_can_keep_to_the_selection() {
     }
 }
 
-/// Caves carved by the generator are exported as air, their lakes as lava
-/// in a world of water: every block of every chunk they changed.
+/// A room sculpted in 3D under the hills, half full of lava in a world of
+/// water: its air and its lake are exported as such, every block of it,
+/// and the columns through it as the model composes them, the lake aside.
 #[test]
-fn generated_caves_are_exported() {
-    use massif_core::caves::{CaveSettings, carve};
-    use massif_core::voxel::Fluid;
+fn sculpted_cave_lakes_are_exported() {
+    use massif_core::voxel::{ChunkPos, Fluid, densities_of};
     let mut world = build_world();
-    // A seed whose four tiles hold a cavern (they are rarer than tunnels).
-    let carved = (1..200)
-        .map(|seed| {
-            let settings = CaveSettings { seed, density: 1.0, openings: 0.3, low: -50, high: 60, lake: Some(Fluid::Lava), lake_level: -10, ..CaveSettings::for_dimension(&world.dims[0], world.meta.sea_level) };
-            carve(&world.dims[0], &settings, &massif_core::auto::Steps::default())
-        })
-        .find(|c| c.flooded > 0)
-        .expect("a seed with a cavern");
-    assert!(carved.blocks > 1000 && carved.flooded > 0, "{} carved, {} flooded", carved.blocks, carved.flooded);
-    let mut h = History::default();
-    h.begin("caves", 0);
-    h.edit(&mut world, 0).set_voxels(carved.chunks.clone());
-    h.commit();
-    let dir = temp_dir("caves");
-    export(&world.snapshot(), &dir, &ExportOptions::default(), &Progress::default()).unwrap();
-    let mut reader = Reader::new(&dir);
-    let (mut air, mut lava) = (0, 0);
-    for (pos, chunk) in &carved.chunks {
-        let (ox, oy, oz) = pos.origin();
-        for ly in 0..16 {
-            for lz in 0..16 {
-                for lx in 0..16 {
-                    let (x, y, z) = (ox + lx, oy + ly, oz + lz);
-                    if chunk.solid(lx, ly, lz) {
-                        continue;
-                    }
-                    let got = reader.block(x, y, z);
-                    match chunk.fluid(lx, ly, lz) {
-                        Some(Fluid::Lava) => {
-                            assert_eq!(got, "minecraft:lava", "({x}, {y}, {z})");
-                            lava += 1;
-                        }
-                        _ => {
-                            assert!(got == "minecraft:air" || got == "minecraft:water" || got == "minecraft:cave_air", "({x}, {y}, {z}): {got}");
-                            air += 1;
-                        }
-                    }
+    let pos = ChunkPos::containing(-90, 0, -90);
+    let (ox, oy, oz) = pos.origin();
+    let mut chunk = densities_of(&world.dims[0], &[pos]).pop().unwrap().1;
+    for ly in 2..12 {
+        for lz in 2..14 {
+            for lx in 2..14 {
+                chunk.set(lx, ly, lz, 0);
+                if ly < 6 {
+                    chunk.set_fluid(lx, ly, lz, Some(Fluid::Lava));
                 }
             }
         }
     }
-    assert_eq!(lava, carved.flooded);
-    assert!(air > 0);
-    // And the whole of a few carved columns, block by block, as the model
-    // composes them (lakes aside).
-    for (pos, _) in carved.chunks.iter().step_by(7).take(20) {
-        let (x, _, z) = pos.origin();
-        let expected = expected_column(&world, x + 5, z + 9);
-        for (i, want) in expected.iter().enumerate() {
-            let y = -64 + i as i32;
-            let got = reader.block(x + 5, y, z + 9);
-            if got != "minecraft:lava" {
-                assert_eq!(&got, want, "block at ({}, {y}, {})", x + 5, z + 9);
+    let mut h = History::default();
+    h.begin("room", 0);
+    h.edit(&mut world, 0).set_voxels(vec![(pos, std::sync::Arc::new(chunk.clone()))]);
+    h.commit();
+    let dir = temp_dir("sculpted-lakes");
+    export(&world.snapshot(), &dir, &ExportOptions::default(), &Progress::default()).unwrap();
+    let mut reader = Reader::new(&dir);
+    let (mut air, mut lava) = (0, 0);
+    for ly in 2..12 {
+        for lz in 2..14 {
+            for lx in 2..14 {
+                let got = reader.block(ox + lx, oy + ly, oz + lz);
+                if ly < 6 {
+                    assert_eq!(got, "minecraft:lava", "({}, {}, {})", ox + lx, oy + ly, oz + lz);
+                    lava += 1;
+                } else {
+                    assert!(got == "minecraft:air" || got == "minecraft:cave_air", "({}, {}, {}): {got}", ox + lx, oy + ly, oz + lz);
+                    air += 1;
+                }
             }
         }
     }
+    assert_eq!((lava, air), (4 * 144, 6 * 144));
+    for (x, z) in [(ox + 5, oz + 9), (ox + 2, oz + 13), (ox, oz)] {
+        let expected = expected_column(&world, x, z);
+        for (i, want) in expected.iter().enumerate() {
+            let y = -64 + i as i32;
+            let got = reader.block(x, y, z);
+            if got != "minecraft:lava" {
+                assert_eq!(&got, want, "block at ({x}, {y}, {z})");
+            }
+        }
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The block entities of the chunk holding `(x, z)`: their ids and places.
+fn block_entities(dir: &Path, x: i32, z: i32) -> Vec<(String, i32, i32, i32)> {
+    use fastnbt::Value;
+    let (cx, cz) = (x >> 4, z >> 4);
+    let path = region_dir(dir).join(format!("r.{}.{}.mca", cx >> 5, cz >> 5));
+    let mut region = Region::from_stream(std::fs::File::open(path).unwrap()).unwrap();
+    let data = region.read_chunk((cx & 31) as usize, (cz & 31) as usize).unwrap().unwrap();
+    let root: Value = fastnbt::from_bytes(&data).unwrap();
+    let Value::Compound(root) = root else { panic!("a chunk is a compound") };
+    let Some(Value::List(list)) = root.get("block_entities") else { return Vec::new() };
+    list.iter()
+        .filter_map(|e| {
+            let Value::Compound(e) = e else { return None };
+            let int = |k: &str| match e.get(k) {
+                Some(Value::Int(v)) => *v,
+                _ => panic!("{k} of a block entity"),
+            };
+            let Some(Value::String(id)) = e.get("id") else { return None };
+            Some((id.clone(), int("x"), int("y"), int("z")))
+        })
+        .collect()
+}
+
+/// Caves of a layer painted over the whole map, with cave biomes painted in
+/// three of its tiles: the caves come out as air, their aquifers as water
+/// and lava that never runs (no air beside or under them), the cave biomes
+/// as the game's, each decorated as the game's own (moss and vines,
+/// stalactites thickening toward their base, sculk with its sensors and
+/// their block entities).
+#[test]
+fn cave_layers_are_exported() {
+    use massif_core::caves::{CaveDef, CaveLayers};
+    let mut world = generate(&GenParams { tiles_x: 2, tiles_z: 2, landform: Landform::Hills, seed: 5, ..GenParams::default() });
+    world.meta.ores.on = false;
+    let (min_y, max_y, sea) = (world.dims[0].min_y, world.dims[0].max_y, world.meta.sea_level);
+    world.dims[0].caves = CaveLayers::new(vec![CaveDef::vanilla("Caves", 9, min_y, max_y, sea)]);
+    let id = |w: &World, b: &str| w.registry.biome_by_id(b).unwrap().0;
+    let (lush, drip, dark) = (id(&world, "minecraft:lush_caves"), id(&world, "minecraft:dripstone_caves"), id(&world, "minecraft:deep_dark"));
+    let mut h = History::default();
+    h.begin("caves", 0);
+    {
+        let mut e = h.edit(&mut world, 0);
+        ops::fill_caves(&mut e, 1);
+        ops::paint_cave_biome_box(&mut e, [-128, -20, -128], [0, 64, 0], lush);
+        ops::paint_cave_biome_box(&mut e, [0, -30, -128], [128, 60, 0], drip);
+        ops::paint_cave_biome_box(&mut e, [-128, -64, 0], [0, 10, 128], dark);
+    }
+    h.commit();
+    for release in ["26.3", "1.19"] {
+        caves_of_release(&mut world, release);
+    }
+}
+
+/// The checks of [`cave_layers_are_exported`], for one release.
+fn caves_of_release(world: &mut World, release: &str) {
+    let min_y = world.dims[0].min_y;
+    let dir = temp_dir(&format!("cave-layers-{release}"));
+    let options = ExportOptions { target: Target::release(release).unwrap(), ..ExportOptions::default() };
+    export(&world.snapshot(), &dir, &options, &Progress::default()).unwrap();
+    let mut reader = Reader::new(&dir);
+    let dim = &world.dims[0];
+    // Blocks water flowing out would carry off or run into.
+    let open = |b: &str| {
+        b == "minecraft:air"
+            || b == "minecraft:cave_air"
+            || ["carpet", "grass", "azalea", "vines", "lichen", "vein", "dripleaf", "pointed_dripstone", "roots", "blossom"].iter().any(|k| b.contains(k))
+    };
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    let (mut air, mut fluid) = (0, 0);
+    for (x0, z0) in [(-100, -100), (20, -100), (-100, 20), (20, 20)] {
+        for z in (z0..z0 + 64).step_by(2) {
+            for x in x0..x0 + 64 {
+                let stack = TileStack::new(dim, TilePos::containing(x, z), true).unwrap();
+                let mut spans = Vec::new();
+                stack.spans(local_index(x, z), &mut spans);
+                let top = spans.last().unwrap().y1;
+                for y in min_y + 1..top - 1 {
+                    let b = reader.block(x, y, z);
+                    if b == "minecraft:air" || b == "minecraft:cave_air" {
+                        air += 1;
+                    }
+                    if b == "minecraft:water" || b == "minecraft:lava" {
+                        fluid += 1;
+                        for (dx, dy, dz) in [(1, 0, 0), (-1, 0, 0), (0, 0, 1), (0, 0, -1), (0, -1, 0)] {
+                            let n = reader.block(x + dx, y + dy, z + dz);
+                            assert!(!open(&n), "{b} at ({x}, {y}, {z}) beside {n} ({dx}, {dy}, {dz})");
+                        }
+                    }
+                    *counts.entry(b).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+    assert!(air > 20_000 && fluid > 500, "{air} air, {fluid} water and lava underground");
+    let count = |k: &str| counts.get(k).copied().unwrap_or(0);
+    for block in ["moss_block", "moss_carpet", "cave_vines", "dripstone_block", "pointed_dripstone", "sculk", "sculk_vein", "glow_lichen"] {
+        assert!(count(&format!("minecraft:{block}")) > 0, "some {block}: {counts:?}");
+    }
+    // Stalactites thicken toward the ceiling, from tip to base.
+    let mut checked = 0;
+    for z in -128..0 {
+        for x in (0..128).step_by(3) {
+            for y in -30..60 {
+                let s = reader.state(x, y, z);
+                if !s.contains("pointed_dripstone") || !s.contains("vertical_direction=down") || !s.contains("thickness=tip") || s.contains("tip_merge") {
+                    continue;
+                }
+                // Up from the tip: frustum, middles, base, then rock.
+                let mut n = 1;
+                while reader.state(x, y + n, z).contains("vertical_direction=down") {
+                    n += 1;
+                }
+                let want = massif_core::caves::decorate::column(n, false);
+                for k in 0..n {
+                    let got = reader.state(x, y + n - 1 - k, z);
+                    assert!(got.contains(&format!("thickness={}", want[k as usize].name())), "{got} at {k} of {n} over ({x}, {y}, {z})");
+                }
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 0, "stalactites were checked");
+    // The cave biomes, as the game names them.
+    assert_eq!(reader.biome(-60, 30, -60), Biome::LushCaves);
+    assert_eq!(reader.biome(60, 10, -60), Biome::DripstoneCaves);
+    assert_eq!(reader.biome(-60, -40, 60), Biome::DeepDark);
+    // Every sculk sensor, shrieker and catalyst has its block entity.
+    let mut entities = 0;
+    for cz in (0..128).step_by(16) {
+        for cx in (-128..0).step_by(16) {
+            for (id, x, y, z) in block_entities(&dir, cx, cz) {
+                assert!(id.starts_with("minecraft:sculk"), "{id}");
+                assert_eq!(reader.block(x, y, z), id, "the block of the entity at ({x}, {y}, {z})");
+                entities += 1;
+            }
+        }
+    }
+    assert!(entities > 0, "sculk sensors, shriekers or catalysts");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

@@ -510,7 +510,7 @@ impl Surface {
             let mut spans: Vec<Span> = Vec::new();
             for tx in rect.x0.div_euclid(TILE_SIZE)..=(rect.x1 - 1).div_euclid(TILE_SIZE) {
                 let pos = TilePos::new(tx, tz);
-                let Some(stack) = TileStack::new(dim, pos, false) else { continue };
+                let Some(stack) = TileStack::from_above(dim, pos, false) else { continue };
                 let clip = rect.intersect(&pos.rect());
                 let ground = stack.ground();
                 let flat = stack.is_ground_only().then(|| (ground.top.dense(), ground.terrain.dense()));

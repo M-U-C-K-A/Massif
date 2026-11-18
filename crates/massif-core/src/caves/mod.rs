@@ -20,13 +20,15 @@
 //! keeps the caves it was sculpted from.
 
 mod aquifer;
+mod biomes;
+pub mod decorate;
 pub mod noise;
-mod old;
 mod ravines;
 mod seal;
 mod tile;
 
-pub use old::{CaveSettings, Carved, carve, noise3};
+pub use noise::noise3;
+pub use biomes::{CELLS, CaveBiomes};
 pub use seal::{Seals, seal_tile};
 pub use tile::{Fill, Run, TileCaves, cache_bytes, tile_caves};
 
@@ -154,6 +156,24 @@ impl CaveDef {
         let on = [&self.cheese, &self.spaghetti, &self.noodles, &self.ravines].into_iter().filter(|f| f.carves());
         on.fold((i32::MAX, i32::MIN), |(lo, hi), f| (lo.min(f.low), hi.max(f.high)))
     }
+}
+
+/// A box of blocks, `min..max` (max exclusive).
+pub type CaveBox = ([i32; 3], [i32; 3]);
+
+/// The boxes of the structures placed over tile `pos` of `dim`, which bring
+/// their own air: no water nor lava of a cave comes within a block of them
+/// (a shell of rock stays), and no decoration of caves goes in them. The
+/// structures' engine (branch `structures`) gives them by
+/// `Dimension::structure_boxes`; until it lands, none.
+pub fn kept_dry(dim: &crate::world::Dimension, pos: crate::coords::TilePos) -> Vec<CaveBox> {
+    let _ = (dim, pos);
+    Vec::new()
+}
+
+/// Whether block `(x, y, z)` lies in one of `boxes` grown by `margin`.
+pub fn in_boxes(boxes: &[CaveBox], x: i32, y: i32, z: i32, margin: i32) -> bool {
+    boxes.iter().any(|(a, b)| x >= a[0] - margin && x < b[0] + margin && y >= a[1] - margin && y < b[1] + margin && z >= a[2] - margin && z < b[2] + margin)
 }
 
 /// The cave layers of a dimension, numbered from 1 (0 in a tile: none).

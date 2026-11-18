@@ -159,6 +159,9 @@ impl Skin {
 pub struct ChunkFaces {
     pub solid: Vec<Face>,
     pub water: Vec<Face>,
+    /// The floors and ceilings of the caves under the ground, drawn through
+    /// it while the X-ray is on.
+    pub xray: Vec<Face>,
 }
 
 #[derive(Clone, Copy)]
@@ -226,7 +229,7 @@ fn object_runs(dim: &Dimension, s: Standing, x0: i32, z0: i32, w: usize, d: usiz
     let mat = Materializer::new(reg, s.seed, dim.min_y);
     let mut placed = Vec::new();
     for t in area.expand(max_reach(reg)).tiles() {
-        let Some(stack) = TileStack::new(dim, t, false) else { continue };
+        let Some(stack) = TileStack::from_above(dim, t, false) else { continue };
         for p in tile_placements(reg, &mat, s.seed as u64, s.lava, &stack, t) {
             if reg.object_layer(p.layer).is_some_and(|l| !l.hidden) && reg.objects.get(p.object as usize).is_some_and(|def| !p.bounds(def).intersect(&area).is_empty()) {
                 placed.push(p);
@@ -309,13 +312,14 @@ impl Grid {
 /// Compose the columns of the `w` × `d` rectangle at `(x0, z0)`, with the
 /// objects `standing` on them.
 #[allow(clippy::too_many_arguments)]
-fn compose_area(dim: &Dimension, x0: i32, z0: i32, w: usize, d: usize, mode: MapMode, water: bool, standing: Option<Standing>) -> Grid {
+#[allow(clippy::too_many_arguments)]
+fn compose_area(dim: &Dimension, x0: i32, z0: i32, w: usize, d: usize, mode: MapMode, water: bool, caves: massif_core::compose::Caves, standing: Option<Standing>) -> Grid {
     let runs = standing.map(|s| object_runs(dim, s, x0, z0, w, d));
     // The tiles the area lies on, each composed once; then its rows side by
     // side (a tile rebuilt alone, as while sculpting, uses every core).
     let (t0, t1) = (TilePos::containing(x0, z0), TilePos::containing(x0 + w as i32 - 1, z0 + d as i32 - 1));
     let tiles: Vec<TilePos> = (t0.z..=t1.z).flat_map(|tz| (t0.x..=t1.x).map(move |tx| TilePos::new(tx, tz))).collect();
-    let stacks: HashMap<TilePos, TileStack> = tiles.par_iter().filter_map(|&p| TileStack::new(dim, p, false).map(|s| (p, s))).collect();
+    let stacks: HashMap<TilePos, TileStack> = tiles.par_iter().filter_map(|&p| TileStack::new_seen(dim, p, caves, |_, level| level.visible).map(|s| (p, s))).collect();
     let rows: Vec<GridRow> = (0..d as i32)
         .into_par_iter()
         .map(|j| {
@@ -435,6 +439,11 @@ pub struct Style {
     pub water: bool,
     /// The world's fluid is lava.
     pub lava: bool,
+    /// The caves of the cave layers drawn: those open to the sky seen from
+    /// above, all of them from inside (walking, as a ghost).
+    pub caves: massif_core::compose::Caves,
+    /// The caves under the ground drawn through it (the X-ray).
+    pub xray: bool,
 }
 
 struct Colors<'a> {
@@ -684,6 +693,16 @@ fn air_bits(spans: &[CellSpan], min_y: i32) -> u32 {
     ((lo - min_y).clamp(0, 1023) as u32) << HEIGHT_BITS | ((hi - min_y).clamp(1, 1023) as u32) << 22
 }
 
+/// The colour of a cave's floor or ceiling at `y` seen through the ground,
+/// from the bottom of the world `min_y` to the land at `top`: warm near the
+/// surface, cold deep down, see-through.
+fn xray_color(y: i32, min_y: i32, top: i32) -> [u8; 4] {
+    let t = ((y - min_y) as f32 / (top - min_y).max(1) as f32).clamp(0.0, 1.0);
+    let (deep, high) = ([90.0, 120.0, 255.0], [255.0, 196.0, 90.0]);
+    let c = |k: usize| (deep[k] + (high[k] - deep[k]) * t) as u8;
+    [c(0), c(1), c(2), 70]
+}
+
 /// Build tile `tile`: heights and colours of its columns of plain ground,
 /// faces of the others and of its water.
 pub fn build_tile(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: TilePos, style: Style) -> TileBuild {
@@ -703,7 +722,7 @@ fn build_tile_part(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: T
     // neighbour, and the heights around that).
     let ring = (if style.mode == MapMode::Slope { SLOPE_REACH } else { 1 }).max(if style.water { 2 } else { 1 });
     let standing = Standing { reg, seed, lava: style.lava };
-    let grid = compose_area(dim, cx - ring, cz - ring, n + 2 * ring as usize, n + 2 * ring as usize, style.mode, style.water, Some(standing));
+    let grid = compose_area(dim, cx - ring, cz - ring, n + 2 * ring as usize, n + 2 * ring as usize, style.mode, style.water, style.caves, Some(standing));
     let wk = reg.well_known;
     let colors = Colors {
         reg,
@@ -854,6 +873,20 @@ fn build_tile_part(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: T
                         None => (theme_dark(colors.substrate(s.y0)), ROCK),
                     };
                     out.solid.push(face(i as u8, j as u8, DOWN, 1, clamp16(s.y0), 1, rgba(under, 255), mat));
+                }
+            }
+            // Through the ground: the floors and ceilings of the air under
+            // the top run, coloured by depth, see-through.
+            if style.xray && spans.len() > 1 {
+                let top = spans.last().map_or(max_y, |s| s.y0);
+                for w in spans.windows(2) {
+                    let (floor, ceiling) = (w[0].y1, w[1].y0);
+                    if ceiling > top || ceiling <= floor {
+                        continue;
+                    }
+                    let c = xray_color(floor, min_y, top);
+                    out.xray.push(face(i as u8, j as u8, UP, 1, clamp16(floor), 1, c, 0));
+                    out.xray.push(face(i as u8, j as u8, DOWN, 1, clamp16(ceiling), 1, [c[0] / 2, c[1] / 2, c[2] / 2, c[3]], 0));
                 }
             }
         }
@@ -2186,6 +2219,7 @@ struct GpuChunk {
     slot: u16,
     solid: Option<Range>,
     water: Option<Range>,
+    xray: Option<Range>,
 }
 
 /// One vertex buffer holding the faces of many chunks, each a range of it:
@@ -2321,6 +2355,8 @@ pub struct Renderer3d {
     /// In each [`Look`].
     opaque_pipeline: [wgpu::RenderPipeline; 3],
     water_pipeline: [wgpu::RenderPipeline; 3],
+    /// The caves through the ground: see-through, over everything.
+    xray_pipeline: [wgpu::RenderPipeline; 3],
     trace_pipeline: [wgpu::RenderPipeline; 3],
     /// The tracer once a sample: a ray through each of a pixel's samples
     /// rather than one through its middle, which smooths the edges of the
@@ -2343,7 +2379,7 @@ pub struct Renderer3d {
     slot_tiles: Vec<[i32; 2]>,
     free_slots: Vec<u16>,
     /// The faces of every chunk: solid, then water.
-    arenas: [Vec<Arena>; 2],
+    arenas: [Vec<Arena>; 3],
     terrain: wgpu::Buffer,
     palette: wgpu::Texture,
     /// The blocks of every colour pair (see [`Skin`]).
@@ -2557,11 +2593,11 @@ impl Renderer3d {
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &attributes,
         })];
-        let depth = |write: bool| {
+        let depth = |write: bool, compare: wgpu::CompareFunction| {
             Some(wgpu::DepthStencilState {
                 format: DEPTH_FORMAT,
                 depth_write_enabled: Some(write),
-                depth_compare: Some(wgpu::CompareFunction::Less),
+                depth_compare: Some(compare),
                 stencil: Default::default(),
                 bias: Default::default(),
             })
@@ -2577,7 +2613,7 @@ impl Renderer3d {
             count: samples,
             ..Default::default()
         };
-        let pipeline = |label: &str, blend: wgpu::BlendState, depth_write: bool, cull: Option<wgpu::Face>, mesh_shader: &wgpu::ShaderModule| {
+        let pipeline = |label: &str, blend: wgpu::BlendState, depth_write: bool, compare: wgpu::CompareFunction, cull: Option<wgpu::Face>, mesh_shader: &wgpu::ShaderModule| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&mesh_layout),
@@ -2593,7 +2629,7 @@ impl Renderer3d {
                     cull_mode: cull,
                     ..Default::default()
                 },
-                depth_stencil: depth(depth_write),
+                depth_stencil: depth(depth_write, compare),
                 multisample,
                 fragment: Some(wgpu::FragmentState {
                     module: mesh_shader,
@@ -2605,8 +2641,9 @@ impl Renderer3d {
                 cache: None,
             })
         };
-        let opaque_pipeline = mesh_shaders.each_ref().map(|m| pipeline("massif 3d opaque", wgpu::BlendState::REPLACE, true, Some(wgpu::Face::Back), m));
-        let water_pipeline = water_shaders.each_ref().map(|m| pipeline("massif 3d water", wgpu::BlendState::ALPHA_BLENDING, false, None, m));
+        let opaque_pipeline = mesh_shaders.each_ref().map(|m| pipeline("massif 3d opaque", wgpu::BlendState::REPLACE, true, wgpu::CompareFunction::Less, Some(wgpu::Face::Back), m));
+        let water_pipeline = water_shaders.each_ref().map(|m| pipeline("massif 3d water", wgpu::BlendState::ALPHA_BLENDING, false, wgpu::CompareFunction::Less, None, m));
+        let xray_pipeline = mesh_shaders.each_ref().map(|m| pipeline("massif 3d x-ray", wgpu::BlendState::ALPHA_BLENDING, false, wgpu::CompareFunction::Always, None, m));
         let trace = |trace_shader: &wgpu::ShaderModule, compare: wgpu::CompareFunction| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("massif 3d tracer"),
             layout: Some(&trace_pipeline_layout),
@@ -2653,6 +2690,7 @@ impl Renderer3d {
             samples,
             opaque_pipeline,
             water_pipeline,
+            xray_pipeline,
             trace_pipeline,
             trace_fine_pipeline,
             trace_near_pipeline,
@@ -2666,7 +2704,7 @@ impl Renderer3d {
             chunk_group,
             slot_tiles: Vec::new(),
             free_slots: Vec::new(),
-            arenas: [Vec::new(), Vec::new()],
+            arenas: [Vec::new(), Vec::new(), Vec::new()],
             terrain,
             palette,
             pair_mats,
@@ -3000,7 +3038,7 @@ impl Renderer3d {
                 // A new page, twice the last (or as large as these faces).
                 let capacity = arenas.last().map_or(FIRST_ARENA_FACES, |a| (a.capacity * 2).min(ARENA_FACES)).max(count);
                 let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some(if kind == 0 { "massif 3d faces" } else { "massif 3d water faces" }),
+                    label: Some(["massif 3d faces", "massif 3d water faces", "massif 3d x-ray faces"][kind]),
                     size: capacity as u64 * size_of::<Face>() as u64,
                     usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
@@ -3018,7 +3056,7 @@ impl Renderer3d {
 
     /// Give a chunk's faces and slot back.
     fn free_chunk(&mut self, chunk: GpuChunk) {
-        for (kind, range) in [(0, chunk.solid), (1, chunk.water)] {
+        for (kind, range) in [(0, chunk.solid), (1, chunk.water), (2, chunk.xray)] {
             if let Some(r) = range {
                 self.arenas[kind][r.page as usize].free.give(r.start, r.count);
             }
@@ -3377,13 +3415,14 @@ impl Renderer3d {
         if let Some(old) = self.chunks.remove(&tile) {
             self.free_chunk(old);
         }
-        if faces.solid.is_empty() && faces.water.is_empty() {
+        if faces.solid.is_empty() && faces.water.is_empty() && faces.xray.is_empty() {
             return;
         }
         let slot = self.take_slot(tile);
         let solid = self.place(0, &faces.solid, slot);
         let water = self.place(1, &faces.water, slot);
-        self.chunks.insert(tile, GpuChunk { slot, solid, water });
+        let xray = self.place(2, &faces.xray, slot);
+        self.chunks.insert(tile, GpuChunk { slot, solid, water, xray });
     }
 
     /// Forget a tile that left the map.
@@ -3396,7 +3435,7 @@ impl Renderer3d {
 
     pub fn clear(&mut self) {
         self.chunks.clear();
-        self.arenas = [Vec::new(), Vec::new()];
+        self.arenas = [Vec::new(), Vec::new(), Vec::new()];
         self.slot_tiles.clear();
         self.free_slots.clear();
         self.tracer = None;
@@ -3472,7 +3511,7 @@ impl Renderer3d {
         // The faces to draw, solid and water, in the order they lie in the
         // arenas: ranges side by side are drawn in one call.
         let runs = |kind: usize| -> Vec<Range> {
-            let mut ranges: Vec<Range> = tiles.iter().filter_map(|t| self.chunks.get(t)).filter_map(|c| if kind == 0 { c.solid } else { c.water }).collect();
+            let mut ranges: Vec<Range> = tiles.iter().filter_map(|t| self.chunks.get(t)).filter_map(|c| [c.solid, c.water, c.xray][kind]).collect();
             ranges.sort_unstable_by_key(|r| (r.page, r.start));
             let mut runs: Vec<Range> = Vec::with_capacity(ranges.len());
             for r in ranges {
@@ -3483,7 +3522,7 @@ impl Renderer3d {
             }
             runs
         };
-        let draws = [runs(0), runs(1)];
+        let draws = [runs(0), runs(1), runs(2)];
         self.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(globals));
         let unit = |c: [u8; 3]| [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0, 1.0];
         let uniform = |tr: &Tracer, hole: [i32; 4]| {
@@ -3581,7 +3620,7 @@ impl Renderer3d {
                 if runs.is_empty() {
                     continue;
                 }
-                pass.set_pipeline(if kind == 1 { &self.water_pipeline[look] } else { &self.opaque_pipeline[look] });
+                pass.set_pipeline([&self.opaque_pipeline[look], &self.water_pipeline[look], &self.xray_pipeline[look]][kind]);
                 pass.set_bind_group(1, &self.chunk_group, &[]);
                 let mut page = u32::MAX;
                 for r in runs {
@@ -4427,6 +4466,8 @@ pub struct View3d {
     frame_map: bool,
     /// Walking in the view (3D Sculpt's player mode).
     walk: Option<Walk>,
+    /// The caves under the ground drawn through it.
+    pub xray: bool,
     /// The turn (yaw, pitch, radians a second) and the move (blocks a
     /// second) a drag let go while moving leaves the view, dying away; and
     /// when the drag last moved.
@@ -4626,6 +4667,7 @@ impl Default for View3d {
             goto_map: false,
             frame_map: false,
             walk: None,
+            xray: false,
             spin: [0.0; 2],
             drift: [0.0; 2],
             dragged_at: 0.0,
@@ -4647,12 +4689,21 @@ impl Default for View3d {
 }
 
 impl View3d {
+    /// The caves the chunks show: all of them while walking or flying in
+    /// the land (a ghost goes into the rock), those open to the sky seen
+    /// from above.
+    fn caves_drawn(&self) -> massif_core::compose::Caves {
+        if self.walk.is_some() || self.xray { massif_core::compose::Caves::All } else { massif_core::compose::Caves::Openings }
+    }
+
     pub fn header(&mut self, ui: &mut Ui) {
         let narrow = ui.available_width() < 480.0;
         crate::map_view::mode_selector(ui, &mut self.mode, narrow, "3d mode");
         ui.separator();
         ui.toggle_value(&mut self.water, theme::glyph(Icon::Waves).to_string())
             .on_hover_text(tr!("Show water"));
+        ui.toggle_value(&mut self.xray, theme::glyph(Icon::ScanEye).to_string())
+            .on_hover_text(tr!("X-ray: the caves under the ground drawn through it, warm near the surface, cold deep down"));
         if ui
             .small_button(theme::glyph(Icon::Crosshair).to_string())
             .on_hover_text(tr!("Look at the middle of the map view"))
@@ -4692,6 +4743,8 @@ impl View3d {
             mode: self.mode,
             water: self.water,
             lava: doc.world.meta.lava,
+            caves: self.caves_drawn(),
+            xray: self.xray,
         };
         let eye = self.camera.eye();
         let low = stride > 1 && ground_at(doc, eye[0], eye[2]).is_some_and(|g| eye[1] - g < NEAR_HEIGHT);
@@ -5471,6 +5524,8 @@ impl View3d {
             mode: self.mode,
             water: self.water,
             lava: doc.world.meta.lava,
+            caves: self.caves_drawn(),
+            xray: self.xray,
         };
         let stride = self.grid.as_ref().map_or(1, |g| g.stride);
         // A builder for another map, colouring or grid stops.
@@ -5879,6 +5934,8 @@ impl View3d {
             mode: self.mode,
             water: self.water,
             lava: doc.world.meta.lava,
+            caves: self.caves_drawn(),
+            xray: self.xray,
         };
         if self.style != Some(style) {
             self.style = Some(style);
@@ -6593,6 +6650,8 @@ mod tests {
         mode: MapMode::Terrain,
         water: true,
         lava: false,
+        caves: massif_core::compose::Caves::Openings,
+        xray: false,
     };
 
     /// A coarse cell of the grid keeps, of each tile, the columns at the
@@ -6723,7 +6782,7 @@ mod tests {
         let tile = TilePos::new(0, -1);
         let b = build_tile(dim, &w.registry, 63.0, w.meta.seed, tile, STYLE);
         assert!(!b.faces.solid.is_empty() && !b.faces.water.is_empty());
-        let grid = compose_area(dim, 0, -128, 128, 128, MapMode::Terrain, false, None);
+        let grid = compose_area(dim, 0, -128, 128, 128, MapMode::Terrain, false, massif_core::compose::Caves::Openings, None);
         // Top faces of the meshed columns, per column.
         let mut tops = vec![0u8; 128 * 128];
         for f in b.faces.solid.iter().filter(|f| f.dir == UP) {
@@ -6784,8 +6843,8 @@ mod tests {
         let w = world();
         let dim = &w.dims[0];
         let tile = TilePos::new(0, -1);
-        let b = build_tile(dim, &w.registry, 63.0, w.meta.seed, tile, Style { mode: MapMode::Height, water: false, lava: false });
-        let grid = compose_area(dim, -1, -129, 130, 130, MapMode::Height, false, None);
+        let b = build_tile(dim, &w.registry, 63.0, w.meta.seed, tile, Style { mode: MapMode::Height, water: false, lava: false, caves: massif_core::compose::Caves::Openings, xray: false });
+        let grid = compose_area(dim, -1, -129, 130, 130, MapMode::Height, false, massif_core::compose::Caves::Openings, None);
         let mut expected = 0i64;
         let mut gaps = Vec::new();
         for z in -128..0 {
@@ -7091,7 +7150,7 @@ mod perf {
         let world = massif_format::load(std::path::Path::new(&path)).unwrap();
         let dim = &world.dims[0];
         let mut renderer = Renderer3d::new(&device, &queue);
-        let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false, caves: massif_core::compose::Caves::Openings, xray: false };
         let shape = GridShape::of(dim, PAGE_BUDGET).unwrap();
         renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).unwrap();
         let stride = shape.stride;
@@ -7176,7 +7235,7 @@ mod perf {
             massif_assets::apply_colors(&mut world.registry, cat);
         }
         let mut renderer = Renderer3d::new(&device, &queue);
-        let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false, caves: massif_core::compose::Caves::Openings, xray: false };
         let dim = &world.dims[0];
         let shape = GridShape::of(dim, PAGE_BUDGET).unwrap();
         renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).unwrap();
@@ -7243,13 +7302,13 @@ mod perf {
         let dim = &world.dims[0];
         eprintln!("chunks sculpted: {}", dim.voxels.len());
         let tile = TilePos::new(0, 0);
-        let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false, caves: massif_core::compose::Caves::Openings, xray: false };
         let reg = &world.registry;
         let n = TILE_SIZE as usize;
         let t = Instant::now();
         for _ in 0..10 {
             let standing = Standing { reg, seed: world.meta.seed, lava: false };
-            std::hint::black_box(compose_area(dim, -1, -1, n + 2, n + 2, style.mode, style.water, Some(standing)));
+            std::hint::black_box(compose_area(dim, -1, -1, n + 2, n + 2, style.mode, style.water, style.caves, Some(standing)));
         }
         eprintln!("compose a tile: {:.1} ms", t.elapsed().as_secs_f32() * 100.0);
         let t = Instant::now();
@@ -7269,7 +7328,7 @@ pub fn probe_ms(device: &wgpu::Device, queue: &wgpu::Queue) -> f32 {
     use massif_core::generate::{GenParams, Landform, generate};
     let world = generate(&GenParams { tiles_x: 8, tiles_z: 8, landform: Landform::Hills, seed: 3, ..GenParams::default() });
     let dim = &world.dims[0];
-    let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+    let style = Style { mode: MapMode::Terrain, water: true, lava: false, caves: massif_core::compose::Caves::Openings, xray: false };
     let mut renderer = Renderer3d::with_samples(device, queue, SAMPLES);
     let Some(shape) = GridShape::of(dim, 64) else { return 0.0 };
     if renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).is_err() {
@@ -7362,7 +7421,7 @@ mod graphics_perf {
             massif_assets::apply_colors(&mut world.registry, cat);
         }
         let dim = &world.dims[0];
-        let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false, caves: massif_core::compose::Caves::Openings, xray: false };
         let (lo, hi) = dim.bounds().unwrap();
         let (x0, z0, x1, z1) = ((lo.x * 128) as f64, (lo.z * 128) as f64, ((hi.x + 1) * 128) as f64, ((hi.z + 1) * 128) as f64);
         let extent = (x1 - x0).max(z1 - z0);
@@ -7479,7 +7538,7 @@ mod gradient_shots {
     /// The world drawn as the game's look draws it, from `camera`.
     fn game_look(device: &wgpu::Device, queue: &wgpu::Queue, world: &World, cat: &massif_assets::Catalogue, camera: Camera, size: [u32; 2]) -> image::RgbImage {
         let mut renderer = Renderer3d::new(device, queue);
-        let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false, caves: massif_core::compose::Caves::Openings, xray: false };
         let dim = &world.dims[0];
         let shape = GridShape::of(dim, PAGE_BUDGET).unwrap();
         renderer.set_grid(shape.stride, shape.page0, shape.pages, &shape.present).unwrap();

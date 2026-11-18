@@ -536,6 +536,8 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
         Tool::Annotate => annotation_settings(ui, tools),
         Tool::TreeSize => tree_size_settings(ui, tools),
         Tool::Pockets => pocket_settings(ui, tools, doc, blocks),
+        Tool::Caves => crate::caves::cave_settings(ui, tools, doc),
+        Tool::CaveBiome => crate::caves::cave_biome_settings(ui, tools, doc),
         Tool::Combined => combined_settings(ui, tools, doc),
         Tool::PaintBiome => {
             let reg = &doc.world.registry;

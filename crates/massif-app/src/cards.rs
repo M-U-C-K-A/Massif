@@ -240,6 +240,18 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
             Some(tr!("They take their share of the rock between their heights, never the strata of the ground.")),
             Some(Demo::Pockets),
         ),
+        Tool::Caves => card(
+            tr!("Paints where a cave layer carves its caves, as the game's since 1.18: chambers with pillars, winding tunnels, noodles, ravines, and lakes of water and lava at their own levels."),
+            vec![(tr!("Drag"), tr!("Paint caves")), (tr!("Right-drag"), tr!("No caves there"))],
+            Some(tr!("Each layer's settings change its caves wherever it is painted. Edit ▸ Whole map ▸ Caves paints one over the map or the selection.")),
+            None,
+        ),
+        Tool::CaveBiome => card(
+            tr!("Paints a cave biome between two heights: lush caves, dripstone caves, the deep dark. The export decorates their caves as the game does."),
+            vec![(tr!("Drag"), tr!("Paint the biome")), (tr!("Right-drag"), tr!("Rub it out"))],
+            Some(tr!("The game keeps a biome every 4 blocks in each direction: so does the painting.")),
+            None,
+        ),
         Tool::Combined => card(
             tr!("Paints several layers at once, as WorldPainter's combined layers: a forest's terrain, biome, ground cover and trees in one stroke."),
             vec![(tr!("Drag"), tr!("Paint them all")), (tr!("Right-drag"), tr!("Rub them out"))],
