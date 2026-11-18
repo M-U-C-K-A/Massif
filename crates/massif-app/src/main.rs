@@ -49,6 +49,7 @@ mod report_view;
 mod render_side;
 mod reshape;
 mod reticle;
+mod run_script;
 mod road_draft;
 mod select;
 mod settings_backup;

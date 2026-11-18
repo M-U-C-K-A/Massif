@@ -390,6 +390,8 @@ enum Dialog {
     /// Flood from the click on a spot that is not in a hollow: how far the
     /// water would spread, to flood anyway or not.
     FloodAsk(crate::tools::FloodAsk),
+    /// A script to run on the map: its parameters, its output.
+    Script(Box<crate::run_script::ScriptForm>),
 }
 
 struct Status {
@@ -3259,6 +3261,11 @@ impl MassifApp {
             Command::SmoothTerrain => self.dialog = Some(Dialog::Smooth(Box::new(crate::smooth_page::SmoothForm::new(self.doc.world.meta.smooth.clone(), &self.doc.world.registry, self.doc.dimension())))),
             Command::Caves => self.open_caves(),
             Command::ImportMask => self.pick_mask(ctx, false),
+            Command::RunScript => {
+                if let Some(path) = rfd::FileDialog::new().set_title(tr!("Script to run")).add_filter(tr!("JavaScript"), &["js"]).pick_file() {
+                    self.dialog = Some(Dialog::Script(Box::new(crate::run_script::ScriptForm::new(path))));
+                }
+            }
             Command::RealTerrain => self.open_real(false),
             Command::FromRealPlace => self.open_real(true),
             Command::SavePoint => self.versions_action(ctx, crate::versions::Action::Make),
@@ -4653,6 +4660,30 @@ impl MassifApp {
                 }
                 if keep {
                     self.dialog = Some(Dialog::Caves(form));
+                }
+            }
+            Dialog::Script(mut form) => {
+                use crate::run_script::Choice;
+                let mut choice = Choice::Keep;
+                let response = modal(ctx, "run script").show(ctx, |ui| {
+                    choice = form.ui(ui);
+                });
+                // A running script is stopped from the dialog, not closed
+                // with it.
+                if response.should_close() && !form.running() {
+                    keep = false;
+                }
+                match choice {
+                    Choice::Keep => {}
+                    Choice::Close => keep = false,
+                    Choice::Run => {
+                        let copy = self.doc.world.snapshot();
+                        form.start(copy, self.doc.dim, self.doc.path.clone());
+                    }
+                    Choice::Apply(world, label) => self.doc.apply_script(*world, &label),
+                }
+                if keep {
+                    self.dialog = Some(Dialog::Script(form));
                 }
             }
             Dialog::ImportMask(mut form) => {

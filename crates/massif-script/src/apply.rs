@@ -210,8 +210,10 @@ impl Session {
                 end += 1;
             }
             // Decode the batch's images side by side.
+            let timer = std::time::Instant::now();
             let wanted: Vec<usize> = seen.into_iter().filter(|&h| self.heightmaps[h].image.is_none()).collect();
             let decoded: Vec<(usize, R<Image>)> = wanted.par_iter().map(|&h| (h, crate::image::decode(&self.heightmaps[h].path, self.heightmaps[h].channel))).collect();
+            let decoding = timer.elapsed();
             for (h, img) in decoded {
                 match img {
                     Ok(img) => self.heightmaps[h].image = Some(Arc::new(img)),
@@ -221,11 +223,15 @@ impl Session {
                     }
                 }
             }
+            let timer = std::time::Instant::now();
             for (j, op) in ops[k..end].iter().enumerate() {
                 self.io.check()?;
                 let label = format!("{} {} of {total}", if op.height_map.is_some() { "Applying mask" } else { "Applying" }, k + j + 1);
                 self.io.progress.set((k + j) as f32 / total as f32, &label);
                 self.apply(op).map_err(|e| at(op, e))?;
+            }
+            if std::env::var_os("MASSIF_PERF").is_some() {
+                eprintln!("{} operations: {} images decoded in {:.2?}, applied in {:.2?}", end - k, wanted.len(), decoding, timer.elapsed());
             }
             for op in &ops[k..end] {
                 if let Some(h) = op.height_map {
@@ -279,6 +285,7 @@ impl Session {
         };
         let filter = op.filter.map(|f| self.filter_of(f, op.world)).transpose()?;
         let size = op.layer.and_then(|l| self.layers.get(l)).map_or(Size::None, |l| l.size);
+        let order = op.layer.and_then(|l| self.layers.get(l)).map_or(0, |l| crate::session::bucket(&l.id));
         let bit = size.is_bit();
         // WorldPainter scales a value by a feathered filter's strength when
         // a grey mapping was given (`toLevel()` makes one even for a layer).
@@ -355,6 +362,27 @@ impl Session {
                 let r = pos.rect();
                 let (cx0, cz0, cx1, cz1) = (r.x0.max(x0), r.z0.max(z0), r.x1.min(x1), r.z1.min(z1));
                 let mut out = Vec::new();
+                // The common case, fast: 8 bits a pixel, one for one, rows
+                // of black (unmapped) skipped eight pixels at a time.
+                if let (true, Src::Grey(img, table)) = (translate, &src)
+                    && let crate::image::Samples::U8(samples) = &img.samples
+                {
+                    let skip_black = table[0] < 0;
+                    for z in cz0..cz1 {
+                        let start = (z - op.dy) as usize * iw as usize + (cx0 - op.dx) as usize;
+                        let row = &samples[start..start + (cx1 - cx0) as usize];
+                        if skip_black && all_zero(row) {
+                            continue;
+                        }
+                        for (k, &px) in row.iter().enumerate() {
+                            let v = table[px as usize];
+                            if v >= 0 {
+                                out.push((local_index(cx0 + k as i32, z) as u16, v));
+                            }
+                        }
+                    }
+                    return (!out.is_empty()).then_some((pos, out));
+                }
                 for z in cz0..cz1 {
                     for x in cx0..cx1 {
                         let v = value_at(x, z);
@@ -373,6 +401,7 @@ impl Session {
         touched.sort_unstable_by_key(|t| (t.0.z, t.0.x));
 
         // Resolve what the values become in this world.
+        let mut warn = None;
         let slot = self.slot(w)?;
         let mut terrain_ids: HashMap<i16, u16> = HashMap::new();
         let mut biome_ids: HashMap<i16, u16> = HashMap::new();
@@ -383,6 +412,11 @@ impl Session {
             for v in values {
                 match bound {
                     None => {
+                        if let Some(n) = crate::session::custom_slot(v as i32)
+                            && !slot.custom.contains_key(&n)
+                        {
+                            warn = Some(format!("Custom terrain {n} is not installed in this world (wp.installCustomTerrain()): painted as an empty terrain, as WorldPainter does"));
+                        }
                         terrain_ids.insert(v, slot.terrain_id(v as i32)?);
                     }
                     Some(Bound::Biome) => {
@@ -392,6 +426,10 @@ impl Session {
                 }
             }
         }
+        if let Some(message) = warn {
+            self.warn_once(message);
+        }
+        let slot = self.slot(w)?;
         // The tiles, decoded once, with their neighbours for the slope.
         let mut warm: Vec<TilePos> = touched.iter().map(|t| t.0).collect();
         if filter.as_ref().is_some_and(|f| f.slope.is_some()) {
@@ -460,10 +498,10 @@ impl Session {
             _ => None,
         };
         let slot = self.slot(w)?;
-        let mut caves: Vec<(TilePos, Vec<(u16, i16)>)> = Vec::new();
+        let mut kept: Vec<(TilePos, Vec<(u16, i16)>)> = Vec::new();
         for (pos, entries) in writes {
-            if let Some(Bound::Caves(_)) = bound {
-                caves.push((pos, entries));
+            if bound.is_some_and(crate::session::overlaid) {
+                kept.push((pos, entries));
                 continue;
             }
             if let (Some(Bound::GroundCover(k)), Some(cover)) = (bound, &cover) {
@@ -495,24 +533,24 @@ impl Session {
                 }
             }
         }
-        if let Some(Bound::Caves(kind)) = bound {
-            for (pos, entries) in caves {
-                let painted = slot.caves.entry((d, pos)).or_default();
-                let k = match painted.iter().position(|c| c.0 == kind) {
-                    Some(k) => k,
-                    None => {
-                        painted.push((kind, vec![0u8; massif_core::TILE_AREA]));
-                        painted.len() - 1
-                    }
-                };
+        // Layers of a strength: kept as painted until the script is done.
+        if let Some(b) = bound {
+            for (pos, entries) in kept {
                 for (i, v) in entries {
-                    painted[k].1[i as usize] = (v.clamp(0, 15) * 17) as u8;
+                    crate::session::paint(&mut slot.painted, d, pos, b, order, i as usize, v as i32);
                 }
             }
         }
         slot.changed = true;
         Ok(())
     }
+}
+
+/// Whether every byte of `row` is 0, eight at a time.
+#[inline]
+fn all_zero(row: &[u8]) -> bool {
+    let (words, rest) = row.split_at(row.len() / 8 * 8);
+    words.as_chunks::<8>().0.iter().all(|w| u64::from_ne_bytes(*w) == 0) && rest.iter().all(|&b| b == 0)
 }
 
 fn at(op: &MapOp, e: String) -> String {
