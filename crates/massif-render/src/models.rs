@@ -253,7 +253,10 @@ fn when<'a>(w: &Value, prop: &impl Fn(&str) -> Option<&'a str>) -> bool {
 /// Where a face of an element from `from` to `to` lies (pixels): its
 /// corner at the texture's (u0, v0), its edges toward u1 and v1, and the
 /// texture's part it shows when the model does not say.
-fn face_frame(dir: &str, f: [f32; 3], t: [f32; 3]) -> Option<([f32; 3], [f32; 3], [f32; 3], [f32; 4])> {
+/// A face's corner, its two edges, and the part of its texture.
+type Frame = ([f32; 3], [f32; 3], [f32; 3], [f32; 4]);
+
+fn face_frame(dir: &str, f: [f32; 3], t: [f32; 3]) -> Option<Frame> {
     let (dx, dy, dz) = (t[0] - f[0], t[1] - f[1], t[2] - f[2]);
     Some(match dir {
         "up" => ([f[0], t[1], f[2]], [dx, 0.0, 0.0], [0.0, 0.0, dz], [f[0], f[2], t[0], t[2]]),
@@ -403,3 +406,4 @@ mod game {
         assert!(stairs >= 10 && poppy == 4 && pane > 6, "a cross is two planes, seen from both sides: four faces");
     }
 }
+

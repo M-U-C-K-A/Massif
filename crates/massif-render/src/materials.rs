@@ -60,14 +60,15 @@ impl Class {
 /// * 4: the colour of its light, sRGB, | its light level (the game's, 0 to
 ///   15) << 24
 /// * 5, 6: a shaped block's first face and how many (see [`GpuQuad`])
-/// * 7: unused
+/// * 7: the box around its faces, in pixels: x0, y0, z0, x1, y1, z1, 5
+///   bits each from the lowest
 pub type GpuMaterial = [u32; 8];
 
 /// A face of a shaped block as the shader reads it: sixteen words, the
 /// floats as their bits.
 ///
 /// * 0..3: its corner (the block's space, 0 to 1), its texture layer |
-///   the texture's turn << 16 | tinted << 18
+///   the texture's turn << 16 | tinted << 18 | its texture has holes << 19
 /// * 4..6: the edge toward u1; 8..10: the edge toward v1
 /// * 12..15: the part of the texture it shows (u0, v0, u1, v1), 0 to 1
 pub type GpuQuad = [u32; 16];
@@ -85,19 +86,21 @@ struct Material {
     glow: [u8; 3],
     top_tint: [u8; 3],
     side_tint: [u8; 3],
-    /// A shaped block's faces: the first, and how many.
+    /// A shaped block's faces: the first, and how many, and the box
+    /// around them (see [`GpuMaterial`]).
     first_quad: u32,
     quads: u16,
+    bounds: u32,
 }
 
 impl Material {
     fn gpu(&self) -> GpuMaterial {
         let flags = self.class as u32 | (self.axis as u32) << 3 | ((self.light > 0) as u32) << 5;
         let rgb = |c: [u8; 3]| c[0] as u32 | (c[1] as u32) << 8 | (c[2] as u32) << 16;
-        [self.top as u32 | (self.side as u32) << 16, self.bottom as u32 | flags << 16, rgb(self.top_tint), rgb(self.side_tint), rgb(self.glow) | (self.light as u32) << 24, self.first_quad, self.quads as u32, 0]
+        [self.top as u32 | (self.side as u32) << 16, self.bottom as u32 | flags << 16, rgb(self.top_tint), rgb(self.side_tint), rgb(self.glow) | (self.light as u32) << 24, self.first_quad, self.quads as u32, self.bounds]
     }
 
-    const AIR: Material = Material { top: 0, side: 0, bottom: 0, class: Class::Air, axis: 0, light: 0, glow: [0; 3], top_tint: [255; 3], side_tint: [255; 3], first_quad: 0, quads: 0 };
+    const AIR: Material = Material { top: 0, side: 0, bottom: 0, class: Class::Air, axis: 0, light: 0, glow: [0; 3], top_tint: [255; 3], side_tint: [255; 3], first_quad: 0, quads: 0, bounds: 0 };
 
     /// A light without a block to draw yet (a torch, a lantern: their
     /// models come with milestone 3).
@@ -257,9 +260,14 @@ impl Materials {
                 Material::AIR
             };
         }
-        let side_key = block.side.as_deref().or(block.top.as_deref());
-        let top_key = block.top.as_deref().or(side_key);
-        let bottom_key = block.bottom.as_deref().or(top_key);
+        // The catalogue's textures, or where it has none (a model of 26.1
+        // and later naming its texture as `{"sprite": …}`: glass), those of
+        // the model's faces.
+        let from_model = if block.top.is_none() && block.side.is_none() { self.library.as_ref().map(|l| cube_textures(&l.quads(name, properties))) } else { None };
+        let (model_top, model_side, model_bottom) = from_model.unwrap_or_default();
+        let side_key = block.side.as_deref().or(model_side.as_deref()).or(block.top.as_deref());
+        let top_key = block.top.as_deref().or(model_top.as_deref()).or(side_key);
+        let bottom_key = block.bottom.as_deref().or(model_bottom.as_deref()).or(top_key);
         let mut layer = |key: Option<&str>| key.map_or(0, |k| self.layer(inner, k));
         let (top, side, bottom) = (layer(top_key), layer(side_key), layer(bottom_key));
         // A face without its texture keeps the block's colour.
@@ -296,12 +304,14 @@ impl Materials {
         let count = quads.len().min(u16::MAX as usize);
         for q in quads.iter().take(count) {
             let layer = self.layer(inner, &q.texture) as u32;
+            // Only a texture with holes needs looking at where a ray meets it.
+            let holes = inner.layers.get(layer as usize).is_some_and(|l| l.chunks(4).any(|p| p[3] < 128));
             let f = |x: f32| x.to_bits();
             inner.quads.push([
                 f(q.origin[0]),
                 f(q.origin[1]),
                 f(q.origin[2]),
-                layer | (q.rotation as u32 & 3) << 16 | (q.tinted as u32) << 18,
+                layer | (q.rotation as u32 & 3) << 16 | (q.tinted as u32) << 18 | (holes as u32) << 19,
                 f(q.u[0]),
                 f(q.u[1]),
                 f(q.u[2]),
@@ -317,11 +327,24 @@ impl Materials {
             ]);
         }
         inner.revision += 1;
+        // The box around the faces, in whole pixels, within the block.
+        let (mut lo, mut hi) = ([16.0f32; 3], [0.0f32; 3]);
+        for q in quads.iter().take(count) {
+            for (a, b) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
+                for k in 0..3 {
+                    let c = (q.origin[k] + q.u[k] * a + q.v[k] * b) * 16.0;
+                    lo[k] = lo[k].min(c);
+                    hi[k] = hi[k].max(c);
+                }
+            }
+        }
+        let px = |c: f32, up: bool| (if up { c.ceil() } else { c.floor() }).clamp(0.0, 16.0) as u32;
+        let bounds = px(lo[0], false) | px(lo[1], false) << 5 | px(lo[2], false) << 10 | px(hi[0], true) << 15 | px(hi[1], true) << 20 | px(hi[2], true) << 25;
         // The biome's tint of its tinted faces: the block's own.
         let tint = if block.top_tint != Tint::None { block.top_tint } else if block.side_tint != Tint::None { block.side_tint } else { Tint::Grass };
         let short = name.rsplit(':').next().unwrap_or(name);
         let glow = if light == 0 { [0; 3] } else { glow_color(short) };
-        Some(Material { class: Class::Shaped, light, glow, top_tint: tint.color(), side_tint: tint.color(), first_quad: first, quads: count as u16, ..Material::AIR })
+        Some(Material { class: Class::Shaped, light, glow, top_tint: tint.color(), side_tint: tint.color(), first_quad: first, quads: count as u16, bounds, ..Material::AIR })
     }
 
     fn fluid(&self, inner: &mut Inner, class: Class, key: &str, tint: [u8; 3]) -> Material {
@@ -396,6 +419,17 @@ impl Lookup {
         self.known.insert(self.key.clone(), id);
         id
     }
+}
+
+/// The textures of a cube's top, sides and bottom, from its model's faces.
+fn cube_textures(quads: &[crate::models::Quad]) -> (Option<String>, Option<String>, Option<String>) {
+    let (mut top, mut side, mut bottom) = (None, None, None);
+    for q in quads {
+        let n = [q.u[1] * q.v[2] - q.u[2] * q.v[1], q.u[2] * q.v[0] - q.u[0] * q.v[2], q.u[0] * q.v[1] - q.u[1] * q.v[0]];
+        let slot = if n[1].abs() > n[0].abs().max(n[2].abs()) { if q.origin[1] > 0.5 { &mut top } else { &mut bottom } } else { &mut side };
+        slot.get_or_insert_with(|| q.texture.to_string());
+    }
+    (top, side, bottom)
 }
 
 /// A texture as a 16 × 16 layer: the first square of an animated strip,

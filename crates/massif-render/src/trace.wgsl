@@ -77,6 +77,7 @@ struct Quad {
     layer: u32,
     turn: u32,
     tinted: bool,
+    holes: bool,
 }
 
 fn quad_at(i: u32) -> Quad {
@@ -90,6 +91,7 @@ fn quad_at(i: u32) -> Quad {
     q.layer = a.w & 0xffffu;
     q.turn = (a.w >> 16u) & 3u;
     q.tinted = ((a.w >> 18u) & 1u) != 0u;
+    q.holes = ((a.w >> 19u) & 1u) != 0u;
     q.u = bitcast<vec3<f32>>(b.xyz);
     q.v = bitcast<vec3<f32>>(c.xyz);
     q.uv = bitcast<vec4<f32>>(d);
@@ -125,6 +127,18 @@ fn shaped_hit(mat: u32, ro: vec3<f32>, rd: vec3<f32>, cell: vec3<i32>, t0: f32, 
     let count = w.z;
     let o = ro - vec3<f32>(cell);
     var best = vec2<f32>(t1, -1.0);
+    // The box around the model's faces first: most rays miss a carpet.
+    let b = w.w;
+    let lo = vec3<f32>(f32(b & 31u), f32((b >> 5u) & 31u), f32((b >> 10u) & 31u)) / 16.0 - 1e-3;
+    let hi = vec3<f32>(f32((b >> 15u) & 31u), f32((b >> 20u) & 31u), f32((b >> 25u) & 31u)) / 16.0 + 1e-3;
+    let inv = 1.0 / select(rd, select(vec3<f32>(-1e-12), vec3<f32>(1e-12), rd >= vec3<f32>(0.0)), abs(rd) < vec3<f32>(1e-12));
+    let ta = (lo - o) * inv;
+    let tb = (hi - o) * inv;
+    let near = max(max(min(ta.x, tb.x), min(ta.y, tb.y)), min(ta.z, tb.z));
+    let far = min(min(max(ta.x, tb.x), max(ta.y, tb.y)), max(ta.z, tb.z));
+    if (far < max(near, 0.0) || near > t1) {
+        return best;
+    }
     for (var k = 0u; k < count; k++) {
         let q = quad_at(first + k);
         let n = cross(q.u, q.v);
@@ -141,7 +155,7 @@ fn shaped_hit(mat: u32, ro: vec3<f32>, rd: vec3<f32>, cell: vec3<i32>, t0: f32, 
         if (any(ab < vec2<f32>(0.0)) || any(ab > vec2<f32>(1.0))) {
             continue;
         }
-        if (textureSampleLevel(atlas, atlas_sampler, quad_uv(q, ab), i32(q.layer), 0.0).a < 0.5) {
+        if (q.holes && textureSampleLevel(atlas, atlas_sampler, quad_uv(q, ab), i32(q.layer), 0.0).a < 0.5) {
             continue;
         }
         best = vec2<f32>(t, f32(k));
