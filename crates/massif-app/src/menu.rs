@@ -41,6 +41,8 @@ pub enum Command {
     AutoPaint,
     AutoRules,
     WholeMap(WholeOp),
+    /// Edit ▸ Smooth terrain…: the top of the land in partial blocks.
+    SmoothTerrain,
     Caves,
     /// An image painted onto the map (see `import_mask`).
     ImportMask,
@@ -263,6 +265,7 @@ pub fn menus(state: &State) -> Vec<Menu> {
         tipped(Command::AutoBiome, Icon::Earth, tr!("Auto biome: whole map"), map, tr!("Give every column the biome its land calls for")),
         tipped(Command::AutoPaint, Icon::WandSparkles, tr!("Auto paint: whole map"), map, tr!("Paint every column as its biome calls for")),
         item(Command::AutoRules, Icon::Settings2, tr!("Automatic rules…"), map),
+        tipped(Command::SmoothTerrain, Icon::ChartNoAxesColumn, tr!("Smooth terrain…"), map, tr!("The top of the land in partial blocks when it is exported: layers, slabs, stairs, terrain by terrain")),
         Entry::Separator,
         Entry::Submenu {
             label: tr!("Whole map").to_owned(),

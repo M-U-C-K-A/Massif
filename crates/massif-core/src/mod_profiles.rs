@@ -25,6 +25,11 @@ pub struct ModProfile {
     /// on automatic (Auto biome, the export).
     #[serde(default)]
     pub biomes: std::collections::BTreeMap<String, String>,
+    /// Its partial blocks for Smooth terrain: the suffixes of each shape's
+    /// blocks and the shapes its blocks may use by default (see
+    /// [`crate::shapes`]).
+    #[serde(default)]
+    pub smooth: Option<crate::shapes::SmoothProfile>,
     /// A palette of its blocks, offered once the mod is read.
     #[serde(skip)]
     pub palette: Option<Palette>,

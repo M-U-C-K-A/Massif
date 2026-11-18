@@ -41,6 +41,8 @@ const SHRUNK_SIZE: usize = 4;
 pub const FLAG_MULTI: u8 = 1;
 /// Column flag: the topmost surface is not connected to the world floor.
 pub const FLAG_FLOATING: u8 = 2;
+/// The column's steps are smoothed with slabs (the Slabs tool).
+pub const FLAG_SLABS: u8 = 4;
 
 /// What one column looks like from above.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -103,7 +105,7 @@ impl Sample {
 
 #[inline]
 #[allow(clippy::too_many_arguments)]
-fn ground_sample(top: f32, terrain: u16, fluid: i16, biome: u16, cover: u16, objects: u16, annotation: u16, understory: u16, size: u16, pockets: u16) -> Sample {
+fn ground_sample(top: f32, terrain: u16, fluid: i16, biome: u16, cover: u16, objects: u16, annotation: u16, understory: u16, size: u16, pockets: u16, slabs: u16) -> Sample {
     let fluid = if fluid != NO_FLUID && fluid as i32 > block_top(top) {
         fluid
     } else {
@@ -120,7 +122,7 @@ fn ground_sample(top: f32, terrain: u16, fluid: i16, biome: u16, cover: u16, obj
         understory,
         size: size as u8,
         pockets,
-        flags: 0,
+        flags: if slabs != 0 { FLAG_SLABS } else { 0 },
         levels: 1,
     }
 }
@@ -148,6 +150,7 @@ impl ColumnSampler {
                 g.understory.get(cell),
                 g.sizes.get(cell),
                 g.pockets.get(cell),
+                g.slabs.get(cell),
             );
         }
         stack.spans(cell, &mut self.spans);
@@ -176,6 +179,9 @@ impl ColumnSampler {
         }
         if self.spans[start].y0 > stack.min_y {
             flags |= FLAG_FLOATING;
+        }
+        if stack.ground().slabs.get(cell) != 0 {
+            flags |= FLAG_SLABS;
         }
 
         let fluid = match self.fluids.last() {
@@ -233,9 +239,9 @@ impl SurfaceGrid {
             let g = stack.ground();
             let (top, terrain) = (g.top.dense(), g.terrain.dense());
             let (fluid, biome, cover, objects) = (g.fluid.dense(), g.biome.dense(), g.cover.dense(), g.objects.dense());
-            let (annotations, understory, sizes, pockets) = (g.annotations.dense(), g.understory.dense(), g.sizes.dense(), g.pockets.dense());
+            let (annotations, understory, sizes, pockets, slabs) = (g.annotations.dense(), g.understory.dense(), g.sizes.dense(), g.pockets.dense(), g.slabs.dense());
             (0..TILE_AREA)
-                .map(|i| ground_sample(top[i], terrain[i], fluid[i], biome[i], cover[i], objects[i], annotations[i], understory[i], sizes[i], pockets[i]))
+                .map(|i| ground_sample(top[i], terrain[i], fluid[i], biome[i], cover[i], objects[i], annotations[i], understory[i], sizes[i], pockets[i], slabs[i]))
                 .collect()
         } else {
             let mut sampler = ColumnSampler::default();
@@ -329,6 +335,7 @@ impl Default for MapStyle {
             annotations: true,
             sizes: false,
             pockets: false,
+            slabs: false,
         }
     }
 }
@@ -384,6 +391,8 @@ pub struct MapStyle {
     pub sizes: bool,
     /// The underground pockets are drawn over the map.
     pub pockets: bool,
+    /// Where the steps are smoothed with slabs is drawn over the map.
+    pub slabs: bool,
 }
 
 /// Default light direction: from the north-west, like WorldPainter.
@@ -719,6 +728,11 @@ impl<'a> Colorizer<'a> {
             && at.is_none_or(|(x, z)| (x + z).rem_euclid(4) < 2)
         {
             out = mix(out, color.map(|v| v as f32), 0.55);
+        }
+        // The steps smoothed with slabs, while they are painted: hatched
+        // the other way.
+        if self.style.slabs && c.flags & FLAG_SLABS != 0 && at.is_none_or(|(x, z)| (x - z).rem_euclid(4) < 2) {
+            out = mix(out, [232.0, 176.0, 64.0], 0.55);
         }
         // Tree sizes, under the annotations.
         if self.style.sizes

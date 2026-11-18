@@ -1744,3 +1744,145 @@ fn modded_biomes_are_exported_by_their_ids() {
     assert!(!biome_ids(&dir, 0, 0).iter().any(|b| !b.starts_with("minecraft:")), "the rest of the map keeps the game's");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// The palettes of an export's chunks: each state as `name[k=v,…]`, its
+/// properties sorted (fastanvil leaves some out).
+fn palette_set(dir: &Path) -> std::collections::BTreeSet<String> {
+    let mut states = std::collections::BTreeSet::new();
+    for chunk in chunk_values(dir) {
+        let Some(fastnbt::Value::List(sections)) = chunk.get("sections") else { continue };
+        for section in sections {
+            let fastnbt::Value::Compound(section) = section else { continue };
+            let Some(fastnbt::Value::Compound(bs)) = section.get("block_states") else { continue };
+            let Some(fastnbt::Value::List(palette)) = bs.get("palette") else { continue };
+            for entry in palette {
+                let fastnbt::Value::Compound(entry) = entry else { continue };
+                let Some(fastnbt::Value::String(name)) = entry.get("Name") else { continue };
+                let mut props: Vec<String> = match entry.get("Properties") {
+                    Some(fastnbt::Value::Compound(p)) => p.iter().map(|(k, v)| format!("{k}={}", match v { fastnbt::Value::String(s) => s.as_str(), _ => "?" })).collect(),
+                    _ => Vec::new(),
+                };
+                props.sort();
+                states.insert(format!("{name}[{}]", props.join(",")));
+            }
+        }
+    }
+    states
+}
+
+/// Smooth terrain: the top of the land in partial blocks of the block at
+/// the surface, by its precise height and its steps — slabs and stairs of
+/// the game's stone, a mod's layers for the game's grass, a mod's rock's
+/// whole range — waterlogged in water, and nothing for a block without
+/// them; a slab chosen by hand with the brush, whatever the block.
+#[test]
+fn smooth_terrain_follows_the_painted_terrain() {
+    use massif_core::registry::{Mix, Stratum, TerrainDef, TerrainId};
+    use massif_core::shapes;
+    let mut world = generate(&GenParams { tiles_x: 2, tiles_z: 2, landform: Landform::Hills, seed: 3, ..GenParams::default() });
+    world.meta.ores.on = false;
+    world.meta.smooth.on = true;
+    let stone = world.registry.terrain_by_name("Stone").unwrap();
+    let grass = world.registry.terrain_by_name("Grass").unwrap();
+    let glow = {
+        let reg = &mut world.registry;
+        let b = reg.intern_block("minecraft:glowstone", [200, 180, 90]);
+        reg.terrains.push(TerrainDef { name: "Glow".into(), group: "Test".into(), color: [200, 180, 90], strata: vec![Stratum { blocks: vec![(b, 1)], depth: (3, 5), mix: Mix::Grain }], submerged_top: None, biome_hint: None });
+        TerrainId((reg.terrains.len() - 1) as u16)
+    };
+    let rock = {
+        let reg = &mut world.registry;
+        let b = reg.intern_block("conquest:gray_limestone", [128, 128, 128]);
+        reg.terrains.push(TerrainDef { name: "Gray limestone".into(), group: "Conquest Reforged".into(), color: [128, 128, 128], strata: vec![Stratum { blocks: vec![(b, 1)], depth: (3, 5), mix: Mix::Grain }], submerged_top: None, biome_hint: None });
+        TerrainId((reg.terrains.len() - 1) as u16)
+    };
+    let positions: Vec<TilePos> = world.dims[0].ground().positions().collect();
+    for pos in positions {
+        let (ox, oz) = pos.origin();
+        let tile = world.dims[0].ground_mut().tile_mut(pos).unwrap();
+        for i in 0..massif_core::TILE_AREA {
+            let (x, z) = (ox + (i % 128) as i32, oz + (i / 128) as i32);
+            // A step up east of x = 0, a notch north of (-1, -5); a pool
+            // west of x = -30 level with the land; west of x = -60, a
+            // slope whose precise height is 63.6 (five eighths over the
+            // top block's bottom at 63).
+            let high = x >= 0 || (x, z) == (-1, -6);
+            let pool = (-60..-30).contains(&x);
+            let h = if high { 65.0 } else if pool { 63.0 } else if x < -60 { 63.6 } else { 64.0 };
+            tile.top.set(i, h);
+            tile.fluid.set(i, if pool { 64 } else { massif_core::NO_FLUID });
+            let t = match z {
+                ..0 => stone,
+                0..20 => rock,
+                20..40 => grass,
+                _ => glow,
+            };
+            tile.terrain.set(i, t.0);
+            tile.cover.set(i, 0);
+            tile.objects.set(i, 0);
+        }
+    }
+    let props = |p: &str| p.split(',').map(String::from).collect::<Vec<_>>();
+    let mods: std::collections::HashMap<String, Vec<String>> = [
+        ("conquest:gray_limestone", ""),
+        ("conquest:gray_limestone_slab", "layers,type,waterlogged"),
+        ("conquest:gray_limestone_stairs", "facing,half,shape,waterlogged"),
+        ("conquest:gray_limestone_vertical_slab", "extension_toggle,facing,layer,waterlogged"),
+        ("conquest:gray_limestone_corner_slab", "facing,type,waterlogged"),
+        ("conquest:grass_block_layer", "layers"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_owned(), if v.is_empty() { Vec::new() } else { props(v) }))
+    .collect();
+    let options = ExportOptions { target: Target::release("1.20.1").unwrap(), mod_blocks: std::sync::Arc::new(mods), ..ExportOptions::default() };
+    let dir = temp_dir("smooth");
+    export(&world.snapshot(), &dir, &options, &Progress::default()).unwrap();
+    let mut r = Reader::new(&dir);
+    let has = |s: &str, parts: &[&str]| parts.iter().all(|p| s.contains(p));
+    // Stone at the foot of the step: a stair facing it.
+    let s = r.state(-1, 64, -10);
+    assert!(has(&s, &["minecraft:stone_stairs", "facing=east", "half=bottom", "shape=straight"]), "{s}");
+    // In the inner corner, steps up north and east: an inner stair.
+    let s = r.state(-1, 64, -5);
+    assert!(has(&s, &["minecraft:stone_stairs", "facing=north", "shape=inner_right"]), "{s}");
+    // On top of the step and away from it: nothing.
+    assert_eq!(r.block(0, 65, -10), "minecraft:air");
+    assert_eq!(r.block(-5, 64, -10), "minecraft:air");
+    // Five eighths of stone: a slab in place of the top block.
+    assert_eq!(r.block(-70, 63, -10), "minecraft:stone_slab");
+    assert_eq!(r.block(-70, 62, -10), "minecraft:stone");
+    // At the pool's edge, under water: a stair, waterlogged (see below).
+    assert_eq!(r.block(-31, 63, -10), "minecraft:stone_stairs");
+    // The game's grass, with the mod's layers: five layers in its place.
+    let s = r.state(-70, 63, 25);
+    assert!(has(&s, &["conquest:grass_block_layer", "layers=5"]), "{s}");
+    assert_eq!(r.block(-1, 64, 25), "conquest:grass_block_layer", "half a block of layers at the step's foot");
+    // The mod's rock: its slab by eighths, its stairs.
+    let s = r.state(-70, 63, 5);
+    assert!(has(&s, &["conquest:gray_limestone_slab", "layers=5", "type=bottom"]), "{s}");
+    assert_eq!(r.block(-1, 64, 5), "conquest:gray_limestone_stairs");
+    // Glowstone has none: whole blocks.
+    assert_eq!(r.block(-70, 63, 50), "minecraft:glowstone");
+    assert_eq!(r.block(-1, 64, 50), "minecraft:air");
+    let states = palette_set(&dir);
+    for want in ["minecraft:stone_stairs[facing=west,half=bottom,shape=straight,waterlogged=true]", "minecraft:stone_slab[type=bottom,waterlogged=false]", "conquest:grass_block_layer[layers=5]"] {
+        assert!(states.contains(want), "{want} in {:?}", states.iter().filter(|s| s.contains("slab") || s.contains("stairs") || s.contains("layer")).collect::<Vec<_>>());
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    // The map's switch off: nothing; the brush on here and a slab chosen
+    // by hand: that slab at the step, whatever the block.
+    world.meta.smooth.on = false;
+    let oak = world.registry.intern_block("minecraft:oak_slab", [160, 130, 80]);
+    let mut h = History::default();
+    h.begin("oak", 0);
+    ops::paint_slabs(&mut h.edit(&mut world, 0), &hard(30.0), 0.0, 25.0, shapes::value(Some(oak), false), 1);
+    h.commit();
+    let dir = temp_dir("smooth-oak");
+    export(&world.snapshot(), &dir, &options, &Progress::default()).unwrap();
+    let mut r = Reader::new(&dir);
+    assert_eq!(r.block(-1, 64, 25), "minecraft:oak_stairs", "the chosen slab's stairs at the step");
+    assert_eq!(r.block(-1, 64, -10), "minecraft:air", "elsewhere, the map is not smoothed");
+    assert_eq!(r.block(-70, 63, -10), "minecraft:stone");
+    std::fs::remove_dir_all(&dir).unwrap();
+}

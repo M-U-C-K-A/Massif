@@ -104,6 +104,31 @@ pub const EAST: u8 = 2;
 pub const WEST: u8 = 3;
 pub const SOUTH: u8 = 4;
 pub const NORTH: u8 = 5;
+/// A face's direction with a piece's height, in eighths of a block (1 to
+/// 7): its top (up) lies that much over `y`, its sides are that part of
+/// `h` high (see [`Kind::eighths`](massif_core::shapes::Kind::eighths)).
+pub const fn part(dir: u8, eighths: u8) -> u8 {
+    dir | (eighths & 7) << 3
+}
+
+/// The settings of Smooth terrain the tiles are built with (the map's,
+/// set by the view before it builds them).
+static SMOOTH: std::sync::RwLock<Option<std::sync::Arc<massif_core::shapes::SmoothSettings>>> = std::sync::RwLock::new(None);
+
+/// Build the tiles with these settings of Smooth terrain; whether they
+/// changed.
+pub fn set_smooth(settings: &massif_core::shapes::SmoothSettings) -> bool {
+    let Ok(mut s) = SMOOTH.write() else { return false };
+    if s.as_deref() == Some(settings) {
+        return false;
+    }
+    *s = Some(std::sync::Arc::new(settings.clone()));
+    true
+}
+
+fn smooth_settings() -> std::sync::Arc<massif_core::shapes::SmoothSettings> {
+    SMOOTH.read().ok().and_then(|s| s.clone()).unwrap_or_default()
+}
 
 /// One face, drawn as an instanced quad. Positions are in blocks from the
 /// north-west corner of the chunk.
@@ -269,6 +294,56 @@ fn object_runs(dim: &Dimension, s: Standing, x0: i32, z0: i32, w: usize, d: usiz
         }
     }
     runs
+}
+
+/// The pieces of Smooth terrain of tile `tile`, as the export lays them:
+/// where (`i`, `j` in the tile), at what height and how many eighths high,
+/// and their colour and material. A piece in place of its column's top
+/// block lowers the column in `grid` a block. Pieces of a terrain's mix
+/// take its first block's.
+fn smooth_pieces(dim: &Dimension, reg: &Registry, tile: TilePos, grid: &mut Grid) -> Vec<(usize, usize, i32, u8, [u8; 3], u16)> {
+    use massif_core::shapes::{Shape, ShapeSet, choose, family, plan_tile, top_block};
+    let settings = smooth_settings();
+    let plan = plan_tile(dim, &settings, tile);
+    if plan.is_empty() {
+        return Vec::new();
+    }
+    let mods = crate::blocks::mod_blocks();
+    let known = massif_core::shapes::Known { vanilla: &crate::blocks::vanilla_exists, mods: &mods };
+    let mut families: HashMap<u16, massif_core::shapes::Family> = HashMap::new();
+    let (cx, cz) = tile.origin();
+    let n = TILE_SIZE as usize;
+    let mut out = Vec::new();
+    for c in plan {
+        let (i, j) = (c.cell as usize % n, c.cell as usize / n);
+        let (x, z) = (cx + i as i32, cz + j as i32);
+        let Some(block) = c.block.or_else(|| top_block(reg, c.terrain)) else { continue };
+        let f = families.entry(block.0).or_insert_with(|| family(reg.block(block).name(), &known));
+        let may = match c.block {
+            Some(_) => ShapeSet::of(&[Shape::Slab, Shape::Stairs]),
+            None => settings.shapes_of(reg, c.terrain),
+        }
+        .and(f.shapes());
+        let Some(piece) = choose(&c, may, f.slab_layers) else { continue };
+        // Only on the ground's top, in the air (as the export: never under
+        // an object or a level over it).
+        let cell = grid.cell(x, z);
+        let (a, b) = (grid.offsets[cell] as usize, grid.offsets[cell + 1] as usize);
+        let Some(last) = grid.spans[a..b].last().copied() else { continue };
+        if last.y1 != c.y1 || last.color.is_some() || grid.cover[cell] != 0 {
+            continue;
+        }
+        if piece.replaces {
+            grid.spans[b - 1].y1 -= 1;
+            grid.spans[b - 1].top -= 1.0;
+            if grid.spans[b - 1].y1 <= grid.spans[b - 1].y0 {
+                continue;
+            }
+        }
+        let (color, mat) = (reg.block(block).color, material(block.0 as u32));
+        out.push((i, j, piece.y, piece.kind.eighths(), color, mat));
+    }
+    out
 }
 
 /// Merged solid spans, surface water and top sample of every column of a
@@ -703,7 +778,11 @@ fn build_tile_part(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: T
     // neighbour, and the heights around that).
     let ring = (if style.mode == MapMode::Slope { SLOPE_REACH } else { 1 }).max(if style.water { 2 } else { 1 });
     let standing = Standing { reg, seed, lava: style.lava };
-    let grid = compose_area(dim, cx - ring, cz - ring, n + 2 * ring as usize, n + 2 * ring as usize, style.mode, style.water, Some(standing));
+    let mut grid = compose_area(dim, cx - ring, cz - ring, n + 2 * ring as usize, n + 2 * ring as usize, style.mode, style.water, Some(standing));
+    // Smooth terrain: the piece of each column, as the export lays it (of
+    // its terrain's top block); a piece in place of its top block lowers
+    // the column a block first.
+    let smoothed = if every.is_none() { smooth_pieces(dim, reg, tile, &mut grid) } else { Vec::new() };
     let wk = reg.well_known;
     let colors = Colors {
         reg,
@@ -921,6 +1000,21 @@ fn build_tile_part(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, tile: T
                 }
             }
             runs.flush(None, &mut emit);
+        }
+    }
+
+    // The pieces of Smooth terrain, as boxes of their height.
+    let solid_at = |x: i32, z: i32, y: i32| grid.spans(x, z).iter().any(|s| s.y0 <= y && y < s.y1);
+    for &(i, j, y, eighths, color, mat) in &smoothed {
+        let (x, z) = (cx + i as i32, cz + j as i32);
+        let c = rgba(color, 255);
+        out.solid.push(face(i as u8, j as u8, part(UP, eighths), 1, clamp16(y), 1, c, mat));
+        for (dir, (dx, dz)) in [(EAST, (1, 0)), (WEST, (-1, 0)), (SOUTH, (0, 1)), (NORTH, (0, -1))] {
+            if solid_at(x + dx, z + dz, y) {
+                continue;
+            }
+            let (fx, fz) = (i as i32 + dx.max(0), j as i32 + dz.max(0));
+            out.solid.push(face(fx as u8, fz as u8, part(dir, eighths), 1, clamp16(y), 1, c, mat));
         }
     }
 
@@ -1356,12 +1450,17 @@ fn vs_main(@builtin(vertex_index) vi: u32, f: FaceIn) -> VertexOut {
     // Corners (0,0) (1,0) (1,1) (0,0) (1,1) (0,1): two triangles.
     let u = f32((0x16u >> vi) & 1u);
     let v = f32((0x34u >> vi) & 1u);
-    let dir = f.xz_dir_len.z;
+    // A slab's faces: half a block high.
+    // A piece of Smooth terrain: its height in eighths of a block.
+    let eighths = (f.xz_dir_len.z >> 3u) & 7u;
+    let part = f32(eighths) / 8.0;
+    let half = eighths != 0u;
+    let dir = f.xz_dir_len.z & 7u;
     let x = f32(f.xz_dir_len.x);
     let z = f32(f.xz_dir_len.y);
     let len = f32(f.xz_dir_len.w);
-    let y = f32(f.y_h.x);
-    let h = f32(f.y_h.y);
+    let y = f32(f.y_h.x) + select(0.0, part, half && dir == 0u);
+    let h = f32(f.y_h.y) * select(1.0, part, half && dir >= 2u);
     let slot = i32(f.mat.y);
     let tile = textureLoad(chunk_tiles, vec2<i32>(slot % 256, slot / 256), 0).xy;
     // Where the chunk is from the frame's origin, in whole blocks.
@@ -5880,7 +5979,8 @@ impl View3d {
             water: self.water,
             lava: doc.world.meta.lava,
         };
-        if self.style != Some(style) {
+        let smooth_changed = set_smooth(&doc.world.meta.smooth);
+        if self.style != Some(style) || smooth_changed {
             self.style = Some(style);
             self.invalidate_all();
         }
@@ -6714,6 +6814,56 @@ mod tests {
         assert!(rects.len() <= 4, "{rects:?}");
     }
 
+    /// A map whose land steps up a block east of x = 0, stone south of
+    /// z = 0 and grass north of it, its steps smoothed with slabs.
+    pub(crate) fn stepped_world() -> World {
+        let mut w = generate(&GenParams { tiles_x: 2, tiles_z: 2, landform: Landform::Hills, seed: 3, ..GenParams::default() });
+        let (stone, grass) = (w.registry.terrain_by_name("Stone").unwrap(), w.registry.terrain_by_name("Grass").unwrap());
+        let positions: Vec<TilePos> = w.dims[0].ground().positions().collect();
+        for pos in positions {
+            let (ox, oz) = pos.origin();
+            let tile = w.dims[0].ground_mut().tile_mut(pos).unwrap();
+            for i in 0..massif_core::TILE_AREA {
+                let (x, z) = (ox + (i % 128) as i32, oz + (i / 128) as i32);
+                // Steps up east every 4 blocks from x = -24, and a notch.
+                let step = ((x + 24).max(0) / 4).min(12) as f32;
+                tile.top.set(i, 64.0 + step + if (x, z) == (-1, -6) { 1.0 } else { 0.0 });
+                tile.fluid.set(i, massif_core::NO_FLUID);
+                tile.terrain.set(i, if z < 0 { stone.0 } else { grass.0 });
+                tile.cover.set(i, 0);
+                tile.objects.set(i, 0);
+            }
+        }
+        let mut h = massif_core::History::new(4);
+        h.begin("slabs", 0);
+        massif_core::shapes::fill_slabs(&mut h.edit(&mut w, 0), massif_core::shapes::value(None, true));
+        h.commit();
+        w
+    }
+
+    /// Smooth terrain shows in 3D: a stair (drawn three quarters high) at
+    /// the foot of each step of stone, none on grass, which has no pieces
+    /// in the game.
+    #[test]
+    fn slabs_show_half_a_block_high() {
+        let w = stepped_world();
+        let dim = &w.dims[0];
+        let tile = TilePos::new(-1, -1);
+        let b = build_tile(dim, &w.registry, 63.0, w.meta.seed, tile, STYLE);
+        let tops: Vec<&Face> = b.faces.solid.iter().filter(|f| f.dir == part(UP, 6)).collect();
+        // The foot of the step at x = -1 (its top at 69, x = 0.s at 70)…
+        let (i, j) = ((-1 - tile.x * 128) as u8, (-10 - tile.z * 128) as u8);
+        let foot = tops.iter().find(|f| f.x == i && f.z == j).expect("a slab at the foot of the step");
+        assert_eq!(foot.y, 69);
+        // …and a side half a block high toward the lower land west of it.
+        assert!(b.faces.solid.iter().any(|f| f.dir == part(WEST, 6) && f.x == i && f.z == j && f.h == 1));
+        // None on the flat land west of the steps.
+        assert!(!tops.iter().any(|f| (f.x as i32 + tile.x * 128) < -25));
+        // None on grass, north of z = 0.
+        let b = build_tile(dim, &w.registry, 63.0, w.meta.seed, TilePos::new(-1, 0), STYLE);
+        assert!(!b.faces.solid.iter().any(|f| f.dir >> 3 != 0), "grass has no pieces of its own");
+    }
+
     /// Columns of plain ground go to the tracer at their exact height; the
     /// others (the island, the cave) are meshed, block by block.
     #[test]
@@ -7514,6 +7664,48 @@ mod gradient_shots {
         h.begin("shot", 0);
         f(&mut h.edit(world, 0));
         h.commit();
+    }
+
+    /// Smooth terrain on hills, off and on, in the game's look, at 1× and
+    /// 2× (MASSIF_SNAPSHOT_DIR; needs Minecraft, and with MASSIF_CONQUEST_JAR
+    /// the grass takes Conquest Reforged's layers): grass west, stone east.
+    #[test]
+    fn smooth_terrain_in_3d_renders() {
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(std::path::PathBuf::from) else {
+            return;
+        };
+        let Some((vanilla, modded)) = shots::catalogues() else {
+            eprintln!("needs Minecraft: skipping");
+            return;
+        };
+        let cat = modded.unwrap_or(vanilla);
+        let shared = std::sync::Arc::new(cat.clone());
+        crate::blocks::note_catalogue(Some(&shared));
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+            eprintln!("no GPU adapter: skipping");
+            return;
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+        let mut world = generate(&GenParams { tiles_x: 2, tiles_z: 2, landform: Landform::Hills, seed: 21, ..GenParams::default() });
+        massif_assets::apply_colors(&mut world.registry, &cat);
+        let (grass, stone) = (world.registry.terrain_by_name("Grass").unwrap(), world.registry.terrain_by_name("Stone").unwrap());
+        let half = Brush { strength: 1.0, ..Brush::symmetric(BrushShape::Square, Profile::Constant, 64.0) };
+        edit(&mut world, |e| {
+            ops::paint_terrain(e, &half, -64.0, 0.0, grass, 1);
+            ops::paint_terrain(e, &half, 64.0, 0.0, stone, 2);
+        });
+        let h = ops::height_at(&world.dims[0], 0, 0, 0, Surface::Top).unwrap_or(70.0) as f64;
+        let camera = Camera { target: [0.0, h, 0.0], yaw: 0.75, pitch: 0.45, distance: 46.0 };
+        let tag = if cat.mods.is_empty() { "vanilla" } else { "conquest" };
+        for (scale, ppp) in [(1, "1x"), (2, "2x")] {
+            let size = [1200 * scale, 760 * scale];
+            set_smooth(&massif_core::shapes::SmoothSettings::default());
+            game_look(&device, &queue, &world, &cat, camera, size).save(dir.join(format!("3d-smooth-{tag}-off-{ppp}.png"))).unwrap();
+            set_smooth(&massif_core::shapes::SmoothSettings { on: true, ..Default::default() });
+            game_look(&device, &queue, &world, &cat, camera, size).save(dir.join(format!("3d-smooth-{tag}-on-{ppp}.png"))).unwrap();
+        }
+        set_smooth(&massif_core::shapes::SmoothSettings::default());
     }
 
     #[test]

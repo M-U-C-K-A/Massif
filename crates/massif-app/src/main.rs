@@ -57,6 +57,7 @@ mod memory_tests;
 mod sounds;
 mod textures;
 mod tiles;
+mod smooth_page;
 mod startup;
 mod terrain_view;
 mod theme;

@@ -536,6 +536,10 @@ pub fn tool_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blo
         Tool::Annotate => annotation_settings(ui, tools),
         Tool::TreeSize => tree_size_settings(ui, tools),
         Tool::Pockets => pocket_settings(ui, tools, doc, blocks),
+        Tool::Slabs => {
+            slab_settings(ui, tools, blocks, "tool");
+            hint(ui, tr!("Shown over the map while the tool is in hand. Edit ▸ Smooth terrain… sets it for the whole map, terrain by terrain."));
+        }
         Tool::Combined => combined_settings(ui, tools, doc),
         Tool::PaintBiome => {
             let reg = &doc.world.registry;
@@ -1698,6 +1702,82 @@ fn pocket_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, block
 
 /// The settings of the pocket layer picked (`tools.pocket_layer`), as Tool
 /// Settings and the layer's own dialog show them.
+/// What the Smoothing brush paints: Smooth terrain on or off here,
+/// whatever the map's setting, or a slab chosen by hand.
+pub fn slab_settings(ui: &mut Ui, tools: &mut ToolState, blocks: &mut BlockLibrary, id: &str) {
+    let ctx = ui.ctx().clone();
+    let catalogue = blocks.catalogue.clone();
+    let (off, chosen) = (tools.smooth_off, !tools.smooth_off && tools.slab_block.is_some());
+    crate::widgets::well(ui, |ui| {
+        crate::widgets::row(ui, tr!("Paint"), |ui| {
+            if let Some(k) = crate::widgets::button_group(ui, &format!("{id} slab source"), &[tr!("On"), tr!("Off"), tr!("A slab")], &[!off && !chosen, off, chosen]) {
+                tools.smooth_off = k == 1;
+                tools.slab_block = match k {
+                    2 => tools.slab_block.clone().or_else(|| Some("minecraft:stone_slab".to_owned())),
+                    _ => None,
+                };
+            }
+        });
+        if let Some(state) = tools.slab_block.clone().filter(|_| !tools.smooth_off) {
+            crate::widgets::row(ui, tr!("Block"), |ui| {
+                let search_id = egui::Id::unique(id).with("slab block search");
+                let mut picked = None;
+                crate::widgets::menu_button(ui, plant_name(&state), |ui| {
+                    ui.set_max_width(300.0);
+                    let mut search: String = ui.ctx().data(|d| d.get_temp(search_id)).unwrap_or_default();
+                    crate::widgets::search(ui, &mut search, tr!("Search, or type a block id"), 280.0).request_focus();
+                    let needle = search.trim().to_lowercase();
+                    egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
+                        let mut shown = 0;
+                        if let Some(cat) = &catalogue {
+                            for b in cat.blocks.iter().filter(|b| b.id.ends_with("_slab")) {
+                                if !needle.is_empty() && !b.name.to_lowercase().contains(&needle) && !b.id.contains(&needle) {
+                                    continue;
+                                }
+                                shown += 1;
+                                if shown > 300 {
+                                    break;
+                                }
+                                ui.horizontal(|ui| {
+                                    let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
+                                    if let Some(t) = blocks.icon(&ctx, b) {
+                                        ui.painter().image(t, r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                                    }
+                                    if ui.selectable_label(false, &b.name).on_hover_text(&b.id).clicked() {
+                                        picked = Some(b.id.clone());
+                                    }
+                                });
+                            }
+                        }
+                        if needle.contains(':') || (shown == 0 && !needle.is_empty()) {
+                            let id = if needle.contains(':') { needle.clone() } else { format!("minecraft:{}", needle.replace(' ', "_")) };
+                            if crate::widgets::button(ui, tr!("Use {id}", id)).clicked() {
+                                picked = Some(id);
+                            }
+                        }
+                    });
+                    ui.ctx().data_mut(|d| d.insert_temp(search_id, search));
+                    if picked.is_some() {
+                        ui.close();
+                    }
+                })
+                .on_hover_text(state.as_str());
+                if picked.is_some() {
+                    tools.slab_block = picked;
+                }
+            });
+        }
+    });
+    hint(
+        ui,
+        match (tools.smooth_off, &tools.slab_block) {
+            (true, _) => tr!("Whole blocks here, even with Smooth terrain on."),
+            (false, None) => tr!("Smooth terrain here, even with it off for the map: each terrain with its own shapes."),
+            (false, Some(_)) => tr!("This slab at the steps, and its stairs, whatever the block at the surface."),
+        },
+    );
+}
+
 pub fn pocket_editor(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document, blocks: &mut BlockLibrary) {
     let pal = Palette::of(ui);
     let ctx = ui.ctx().clone();

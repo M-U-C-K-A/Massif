@@ -240,6 +240,12 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
             Some(tr!("They take their share of the rock between their heights, never the strata of the ground.")),
             Some(Demo::Pockets),
         ),
+        Tool::Slabs => card(
+            tr!("Paints where Smooth terrain builds the top of the land in partial blocks (layers, slabs, stairs) or where it leaves whole blocks, whatever the map's setting; or a slab of your choice."),
+            vec![(tr!("Drag"), tr!("Paint it")), (tr!("Right-drag"), tr!("Back to the map's setting"))],
+            Some(tr!("Edit ▸ Smooth terrain… turns it on for the whole map and sets each terrain's pieces.")),
+            Some(Demo::Slabs),
+        ),
         Tool::Combined => card(
             tr!("Paints several layers at once, as WorldPainter's combined layers: a forest's terrain, biome, ground cover and trees in one stroke."),
             vec![(tr!("Drag"), tr!("Paint them all")), (tr!("Right-drag"), tr!("Rub them out"))],
@@ -368,6 +374,7 @@ pub enum Demo {
     Objects,
     Annotate,
     TreeSize,
+    Slabs,
     Pockets,
     Combined,
     AutoPaint,
@@ -635,6 +642,21 @@ impl Demo {
                     Scene::near(x, y, 9.0, |i, _| {
                         if hash(i * 5 + 1) < 0.45 {
                             t[i] = Some([136, 128, 120]);
+                        }
+                    });
+                }
+                stroke(9.0)
+            }
+            Demo::Slabs => {
+                // Terraced land; where the brush goes, a pale half step at
+                // the foot of each terrace.
+                s.add_hills(2.0);
+                for k in 0..steps {
+                    let (x, y) = sweep(k as f64 / SAMPLES as f64);
+                    let t = &mut s.tint;
+                    Scene::near(x, y, 9.0, |i, _| {
+                        if (i % W).is_multiple_of(6) {
+                            t[i] = Some([196, 196, 190]);
                         }
                     });
                 }

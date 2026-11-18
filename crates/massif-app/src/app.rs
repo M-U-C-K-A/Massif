@@ -385,6 +385,8 @@ enum Dialog {
     LayerImport(Vec<crate::layers::LayerImport>),
     /// The block palettes window.
     Palettes(Box<crate::palettes::PaletteEditor>),
+    /// Edit ▸ Smooth terrain…: the map's switch and each terrain's shapes.
+    Smooth(Box<crate::smooth_page::SmoothForm>),
     /// Flood from the click on a spot that is not in a hollow: how far the
     /// water would spread, to flood anyway or not.
     FloodAsk(crate::tools::FloodAsk),
@@ -3259,6 +3261,7 @@ impl MassifApp {
             Command::AutoPaint => self.tools.run_auto = Some(false),
             Command::AutoRules => self.dialog = Some(Dialog::AutoRules(false)),
             Command::WholeMap(what) => self.open_reshape(what),
+            Command::SmoothTerrain => self.dialog = Some(Dialog::Smooth(Box::new(crate::smooth_page::SmoothForm::new(self.doc.world.meta.smooth.clone(), &self.doc.world.registry, self.doc.dimension())))),
             Command::Caves => self.open_caves(),
             Command::ImportMask => self.pick_mask(ctx, false),
             Command::RealTerrain => self.open_real(false),
@@ -4571,6 +4574,30 @@ impl MassifApp {
                     }
                 }
             }
+            Dialog::Smooth(mut form) => {
+                let mut choice = crate::smooth_page::Choice::Keep;
+                let reg = self.doc.world.registry.clone();
+                let response = modal(ctx, "smooth terrain").show(ctx, |ui| {
+                    choice = form.ui(ui, &reg, &mut self.blocks);
+                });
+                match choice {
+                    crate::smooth_page::Choice::Apply => {
+                        if form.settings != self.doc.world.meta.smooth {
+                            let meta = massif_core::WorldMeta { smooth: form.settings.clone(), ..self.doc.world.meta.clone() };
+                            self.doc.history.replace_settings(&mut self.doc.world, meta, reg, tr!("Smooth terrain"));
+                            self.doc.mark_changed();
+                            let msg = if form.settings.on { tr!("Smooth terrain is on: the export builds the top of the land in partial blocks") } else { tr!("Smooth terrain is off for the map") };
+                            self.say(ctx, msg, false, None);
+                        }
+                    }
+                    crate::smooth_page::Choice::Cancel => {}
+                    crate::smooth_page::Choice::Keep => {
+                        if !response.should_close() {
+                            self.dialog = Some(Dialog::Smooth(form));
+                        }
+                    }
+                }
+            }
             Dialog::DeletePoint(index) => {
                 let mut choice = None;
                 let name = self.doc.world.points.get(index).map(|p| p.name.clone()).unwrap_or_default();
@@ -5095,6 +5122,7 @@ impl MassifApp {
                         spawn: Some(form.spawn),
                         target: form.target.clone(),
                         selection_only: form.has_selection && form.selection_only,
+                        mod_blocks: crate::blocks::mod_block_ids(self.blocks.catalogue.as_deref()),
                         ..ExportOptions::default()
                     };
                     // Keeping to the selection, players appear in it.
@@ -5393,6 +5421,7 @@ impl MassifApp {
         self.blocks.poll();
         // The player's view draws the game's own textures.
         self.view3d.catalogue.clone_from(&self.blocks.catalogue);
+        crate::blocks::note_catalogue(self.blocks.catalogue.as_ref());
         self.sculpt3d.catalogue.clone_from(&self.blocks.catalogue);
         if let Some(cat) = self.blocks.catalogue.clone()
             && self.blocks.applied != Some(self.doc.generation)
@@ -6815,6 +6844,56 @@ mod tests {
         h.key_press_modifiers(Modifiers::COMMAND, egui::Key::D);
         h.run_steps(2);
         assert!(h.state().doc.selection().is_none());
+    }
+
+    /// Smooth terrain: Edit ▸ Smooth terrain… turns it on for the map and
+    /// sets a terrain's shapes, as one step to undo; the Smoothing brush
+    /// paints it on, off or a slab chosen by hand (rendered with
+    /// MASSIF_SNAPSHOT_DIR, at MASSIF_SNAPSHOT_PPP).
+    #[test]
+    fn smooth_terrain_page_and_brush() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(3);
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let ppp = h.ctx.pixels_per_point();
+        let tag = if ppp > 1.5 { "2x" } else { "1x" };
+        let ctx = h.ctx.clone();
+        h.state_mut().command(&ctx, Command::SmoothTerrain);
+        h.run_steps(4);
+        assert!(!h.state().doc.world.meta.smooth.on);
+        if let Some(Dialog::Smooth(form)) = &mut h.state_mut().dialog {
+            form.settings.on = true;
+        }
+        h.run_steps(3);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join(format!("smooth-terrain-page-{tag}.png"))).unwrap();
+        }
+        h.get_by_label("Apply").click();
+        h.run_steps(3);
+        assert!(h.state().doc.world.meta.smooth.on);
+        assert!(h.state().dialog.is_none());
+        h.state_mut().command(&ctx, Command::Undo);
+        h.run_steps(2);
+        assert!(!h.state().doc.world.meta.smooth.on, "one step to undo");
+        // The brush: off here, a slab chosen by hand.
+        h.state_mut().tools.select(Tool::Slabs);
+        h.run_steps(3);
+        h.get_by_label("Off").click();
+        h.run_steps(2);
+        assert!(h.state().tools.smooth_off);
+        let value = crate::tools::slab_value(&h.state().tools.clone(), &mut h.state_mut().doc.world.registry);
+        assert_eq!(value, massif_core::shapes::OFF);
+        h.get_by_label("A slab").click();
+        h.run_steps(3);
+        assert!(!h.state().tools.smooth_off && h.state().tools.slab_block.as_deref() == Some("minecraft:stone_slab"));
+        if let Some(dir) = &dir {
+            let image = h.render().unwrap();
+            let rect = h.get_by_label("A slab").rect();
+            let (x0, y0) = (((rect.left() - 140.0).max(0.0) * ppp) as u32, ((rect.top() - 120.0).max(0.0) * ppp) as u32);
+            let crop = image::imageops::crop_imm(&image, x0, y0, (380.0 * ppp) as u32, (300.0 * ppp) as u32).to_image();
+            crop.save(dir.join(format!("tool-settings-smoothing-{tag}.png"))).unwrap();
+        }
     }
 
     #[test]
@@ -17281,6 +17360,7 @@ mod tests {
         openers.push(("Update".into(), Box::new(|app: &mut MassifApp, _: &egui::Context| app.dialog = Some(Dialog::Update))));
         openers.push(("Crashed".into(), Box::new(|app: &mut MassifApp, _: &egui::Context| app.dialog = Some(Dialog::Crashed("index out of bounds: the len is 3 but the index is 7".into(), None)))));
         openers.push(("PointName".into(), Box::new(|app: &mut MassifApp, _: &egui::Context| app.dialog = Some(Dialog::PointName(None, "Before the rivers".into())))));
+        openers.push(("SmoothTerrain".into(), Box::new(|app: &mut MassifApp, ctx: &egui::Context| app.command(ctx, Command::SmoothTerrain))));
         openers.push(("FloodAsk".into(), Box::new(|app: &mut MassifApp, _: &egui::Context| app.dialog = Some(Dialog::FloodAsk(crate::tools::FloodAsk { x: 0, z: 0, level: 70, columns: 65536, more: true, at_rim: false })))));
         // What is past the window with no dialog (the 3D View's header, cut
         // by its area) is not the dialogs'.

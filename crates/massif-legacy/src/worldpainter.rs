@@ -894,6 +894,7 @@ pub fn import_stream<R: Read + Send>(reader: R, progress: &ImportProgress) -> Re
             gradients: Vec::new(),
             fill: None,
             palette: Default::default(),
+            smooth: Default::default(),
         },
         registry: mapper.registry,
         dims,

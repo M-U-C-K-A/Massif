@@ -37,6 +37,9 @@ pub enum Tool {
     TreeSize,
     /// Pockets of other blocks in the rock under the ground.
     Pockets,
+    /// Smoothing: where Smooth terrain is on or off whatever the map's
+    /// switch, or a slab chosen by hand (shown as "Smoothing").
+    Slabs,
     /// A combined layer: several layers painted at once.
     Combined,
     /// The biome the land calls for; the terrain the biome calls for.
@@ -81,7 +84,7 @@ impl Tool {
             &[Tool::PaintTerrain, Tool::Gradient, Tool::PaintBiome, Tool::AutoPaint, Tool::AutoBiome, Tool::Annotate],
         ),
         (tn!("Select"), Icon::SquareDashed, &[Tool::SelectRect, Tool::SelectEllipse, Tool::SelectLasso, Tool::SelectBrush]),
-        (tn!("Decor"), Icon::Shrub, &[Tool::Cover, Tool::Objects, Tool::TreeSize, Tool::Pockets, Tool::Combined]),
+        (tn!("Decor"), Icon::Shrub, &[Tool::Cover, Tool::Objects, Tool::TreeSize, Tool::Pockets, Tool::Slabs, Tool::Combined]),
         (tn!("Water"), Icon::Droplet, &[Tool::Water, Tool::Flood, Tool::River]),
         (tn!("Levels"), Icon::Layers, &[Tool::StampSlab, Tool::EraseSlab]),
         (tn!("Navigate"), Icon::Compass, &[Tool::Pan, Tool::Eyedropper]),
@@ -89,7 +92,7 @@ impl Tool {
 
     /// Tools new in this version: the Tools panel marks them until they
     /// are first tried.
-    pub const NEW: [Tool; 1] = [Tool::Gradient];
+    pub const NEW: [Tool; 2] = [Tool::Gradient, Tool::Slabs];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -107,6 +110,7 @@ impl Tool {
             Tool::Annotate => tr!("Annotations"),
             Tool::TreeSize => tr!("Tree sizes"),
             Tool::Pockets => tr!("Underground pockets"),
+            Tool::Slabs => tr!("Smoothing"),
             Tool::Combined => tr!("Combined layer"),
             Tool::AutoBiome => tr!("Auto biome"),
             Tool::AutoPaint => tr!("Auto paint"),
@@ -143,6 +147,7 @@ impl Tool {
             Tool::Annotate => Icon::PenLine,
             Tool::TreeSize => Icon::ChartNoAxesColumnIncreasing,
             Tool::Pockets => Icon::Gem,
+            Tool::Slabs => Icon::ChartNoAxesColumn,
             Tool::Combined => Icon::Combine,
             Tool::AutoBiome => Icon::Earth,
             Tool::AutoPaint => Icon::WandSparkles,
@@ -186,6 +191,7 @@ impl Tool {
             Tool::Annotate => tr!("Mark the map in colour, to plan it: never exported. Right button: rub out."),
             Tool::TreeSize => tr!("Mark where bushes, small, medium or large trees grow: the object layers painted there take objects of that size. Right button: any size."),
             Tool::Pockets => tr!("Paint pockets of other blocks into the rock under the ground: gravel, clay, a mod's stone. Right button: rub them out."),
+            Tool::Slabs => tr!("Paint where Smooth terrain builds the top of the land in partial blocks, or where it does not, whatever the map's setting. Right button: back to the map's setting."),
             Tool::Combined => tr!("Paint several layers at once: a terrain, a biome, a ground cover, trees, pockets, each over its share. Right button: rub out what it paints."),
             Tool::AutoBiome => {
                 tr!("Sets the biome the land calls for: beach, forest, peaks…")
@@ -275,6 +281,7 @@ impl Tool {
             | Tool::Objects
             | Tool::TreeSize
             | Tool::Pockets
+            | Tool::Slabs
             | Tool::Combined
             | Tool::AutoBiome
             | Tool::AutoPaint
@@ -410,6 +417,12 @@ pub struct ToolState {
     /// The layer of underground pockets painted, by its number (0: none
     /// yet).
     pub pocket_layer: u16,
+    /// What the Smoothing brush paints: Smooth terrain on here (`None`,
+    /// with the shapes of each terrain), or a slab chosen by hand (its
+    /// state), its stairs at the steps.
+    pub slab_block: Option<String>,
+    /// The Smoothing brush paints Smooth terrain off.
+    pub smooth_off: bool,
     /// The combined layer painted, by its number (0: none yet).
     pub combined: u16,
     /// The tree sizes shown over the map even when another tool is in hand.
@@ -1013,6 +1026,8 @@ impl Default for ToolState {
             annotation: 14,
             tree_size: 2,
             pocket_layer: 0,
+            slab_block: None,
+            smooth_off: false,
             combined: 0,
             show_sizes: false,
             water_level: 63,
@@ -1340,7 +1355,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
     let dt = dt.clamp(0.0, 0.1);
     // Annotations are marks on the map, whatever the level: on the ground's.
     // Pockets are in the rock of the ground: on its level too.
-    let level = if matches!(stroke.tool, Tool::Annotate | Tool::Pockets) { 0 } else { stroke.level.min(doc.dimension().levels.len() - 1) };
+    let level = if matches!(stroke.tool, Tool::Annotate | Tool::Pockets | Tool::Slabs) { 0 } else { stroke.level.min(doc.dimension().levels.len() - 1) };
     let understory = doc.world.registry.object_layer(tools.object_layer).is_some_and(|l| l.understory);
     let (parts, below): (Vec<massif_core::combined::Component>, Vec<massif_core::combined::Component>) = match &combined {
         Some((parts, _)) if level != 0 => parts.iter().partition(|c| c.part != massif_core::combined::Part::Pockets),
@@ -1351,6 +1366,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
     // Locked layers keep their blocks.
     doc.history.locks = massif_core::registry::Locks::of(&doc.world.registry);
     let surface = tools.surface();
+    let slabs = if stroke.tool == Tool::Slabs { slab_value(tools, &mut doc.world.registry) } else { 0 };
     let mut edit = doc.history.edit(&mut doc.world, level);
     for k in 1..=n {
         let t = k as f32 / n as f32;
@@ -1408,6 +1424,7 @@ pub fn continue_stroke(doc: &mut Document, tools: &ToolState, stroke: &mut Strok
             Tool::Objects => ops::paint_objects(&mut edit, brush, x, z, if invert { 0 } else { tools.object_layer }, stroke.salt),
             Tool::TreeSize => ops::paint_tree_size(&mut edit, brush, x, z, if invert { 0 } else { tools.tree_size.clamp(1, 4) }, stroke.salt),
             Tool::Pockets => ops::paint_pockets(&mut edit, brush, x, z, if invert { 0 } else { tools.pocket_layer }, stroke.salt),
+            Tool::Slabs => ops::paint_slabs(&mut edit, brush, x, z, if invert { 0 } else { slabs }, stroke.salt),
             Tool::Combined => {
                 ops::paint_parts(&mut edit, brush, x, z, &parts, stroke.salt);
                 // The terrain put back as Paint terrain's right button does.
@@ -3428,4 +3445,14 @@ mod auto_biome_tests {
         assert!(kept > 500 && changed > 500, "kept {kept}, changed {changed}");
     }
 
+}
+
+/// The value of the slabs plane the Smoothing brush lays, as `tools`
+/// asks: the slab chosen by hand registered in `reg` first.
+pub fn slab_value(tools: &ToolState, reg: &mut massif_core::Registry) -> u16 {
+    if tools.smooth_off {
+        return massif_core::shapes::OFF;
+    }
+    let block = tools.slab_block.as_deref().map(|state| reg.intern_block(state, massif_core::objects::guess_color(state)));
+    massif_core::shapes::value(block, true)
 }

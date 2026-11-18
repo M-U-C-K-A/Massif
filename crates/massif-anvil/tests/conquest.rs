@@ -23,7 +23,7 @@ use massif_core::objects::{ObjectDef, ObjectLayerDef};
 use massif_core::ops;
 use massif_core::pattern::Pattern;
 use massif_core::registry::{CoverDef, Mix, Stratum, TerrainDef, TerrainId};
-use massif_core::{Brush, BrushShape, Profile, World};
+use massif_core::{Brush, BrushShape, Profile, TilePos, World};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -579,4 +579,64 @@ fn every_mod_profile_palette_exports_its_blocks() {
         eprintln!("{}: {} states of its blocks written for {version}, of the {} its palette uses", profile.name, written.len(), wanted.iter().filter(|(id, _)| id.starts_with(&prefix)).count());
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+/// Smooth terrain on Conquest Reforged itself (MASSIF_CONQUEST_DIR): hills
+/// of its rock, its soils and the game's grass and sand, smoothed, exported
+/// for 1.20.1; every piece written is a state of the game's — layers,
+/// slabs by eighths, stairs, vertical slabs and corners —, of its own
+/// blocks and for the game's (`grass_block_layer`).
+#[test]
+fn conquest_smooth_terrain_writes_the_games_states() {
+    let Some(inst) = conquest_instance() else { return };
+    if inst.lists.is_empty() {
+        eprintln!("{} has no lists of Conquest's blocks: skipping", inst.name);
+        return;
+    }
+    let version = inst.minecraft.clone().unwrap_or_else(|| "1.20.1".to_owned());
+    let Some(jar) = massif_assets::find_jars().into_iter().find(|j| j.version == version) else {
+        eprintln!("Minecraft {version} is not installed here: skipping");
+        return;
+    };
+    let Ok(cat) = massif_assets::load_with_mods(&jar.path, &jar.version, &inst.files()) else { return };
+    let mods: HashMap<String, Vec<String>> = cat
+        .definitions
+        .iter()
+        .filter(|(id, _)| id.starts_with("conquest:"))
+        .map(|(id, d)| (id.clone(), d.properties.iter().map(|p| p.name.clone()).collect()))
+        .collect();
+    let mut w = generate(&GenParams { tiles_x: 2, tiles_z: 2, landform: Landform::Hills, seed: 11, ..GenParams::default() });
+    w.meta.ores.on = false;
+    w.meta.smooth.on = true;
+    let blocks = ["conquest:gray_limestone", "conquest:mossy_limestone", "minecraft:grass_block", "minecraft:sand", "minecraft:gravel", "minecraft:stone"];
+    let terrains: Vec<TerrainId> = blocks.iter().map(|b| terrain(&mut w, b, &[(b, 1)], Mix::Grain)).collect();
+    // Bands of each across the hills, and a cliff for vertical slabs.
+    let positions: Vec<TilePos> = w.dims[0].ground().positions().collect();
+    for pos in positions {
+        let (ox, _) = pos.origin();
+        let tile = w.dims[0].ground_mut().tile_mut(pos).unwrap();
+        for i in 0..massif_core::TILE_AREA {
+            let x = ox + (i % 128) as i32;
+            tile.terrain.set(i, terrains[((x + 128) / 43).clamp(0, 5) as usize].0);
+            tile.cover.set(i, 0);
+            tile.objects.set(i, 0);
+            if (x + 128) % 43 == 20 {
+                tile.top.set(i, tile.top.get(i) + 3.0);
+            }
+        }
+    }
+    let dir = temp_dir("conquest-smooth");
+    let options = ExportOptions { target: Target::release("1.20.1").unwrap(), mod_blocks: std::sync::Arc::new(mods), ..ExportOptions::default() };
+    export(&w.snapshot(), &dir, &options, &Progress::default()).unwrap();
+    let used: HashSet<String> = palette_states(&dir, options.target.data_version).keys().map(|s| split(s).0).filter(|n| n.starts_with("conquest:")).collect();
+    let truth = real_truth(&cat, &inst.dir, &used);
+    let written = check_world(&dir, &truth);
+    let kinds = ["_layer[", "_slab[", "_stairs[", "_vertical_slab[", "_corner_slab["];
+    let count = |k: &str| written.iter().filter(|s| s.contains(k)).count();
+    eprintln!("{} Conquest states written, each the game's: {:?}", written.len(), kinds.map(|k| (k, count(k))));
+    for k in ["_layer[", "_slab[", "_stairs["] {
+        assert!(count(k) > 0, "no {k} among {written:?}");
+    }
+    assert!(written.iter().any(|s| s.starts_with("conquest:grass_block_layer[")), "the game's grass takes Conquest's layers");
+    let _ = std::fs::remove_dir_all(&dir);
 }

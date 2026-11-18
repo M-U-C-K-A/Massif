@@ -1212,6 +1212,49 @@ gravel or clay; the export, the survival check and the cut of the Ores
 window agree block for block, so a pocket of diamond blocks is caught as
 riches lying around.
 
+### Smooth terrain
+
+**Edit ▸ Smooth terrain…** builds the top of the land in partial blocks when
+the map is exported, so that it follows its precise height rather than
+whole blocks — what WorldPainter's half blocks and the plugins that used a
+mod's full range of models did, without a layer to keep in step with the
+terrain by hand. One switch, **Smooth the whole map**, turns it on; then
+each column takes the pieces of the block painted there, and repainting
+grass as sand makes the smoothing follow.
+
+- **Layers** (eighths of a block, as snow's): the land's height between two
+  blocks picks how many, in place of the top block or over it.
+- **Slabs**: a half step, by the same height — by eighths for a mod's slabs
+  that have them (Conquest Reforged's).
+- **Stairs**: at the foot of a one-block step, a stair facing it; in an
+  inner corner an inner stair, at an outer corner an outer one.
+- **Vertical slabs**, at the foot of a cliff of two blocks or more, against
+  it; **Corners**, corner pieces at the outer corners of steps.
+
+The page lists the terrains painted on the map (**Every terrain** shows them
+all), each with the pieces it may use: a box per kind, greyed where its top
+block has none in the game or the mods read. Those you change are in bold;
+the others take the defaults of their block, from the game (slabs and stairs
+for stone, bricks and planks, layers for snow) and from the mods' profiles —
+Conquest Reforged's gives its soils, sands and gravels layers and its rock
+and masonry the whole range. **Back to the defaults** forgets the changes;
+**Apply** is one step to undo.
+
+The pieces are found by name, as the Blocks panel finds the shapes of a
+block, among the blocks of the version exported to and of the mods read: a
+mod's profile adds its suffixes as data (`_layer`, `_vertical_slab`,
+`_corner_slab`…), in its own namespace or for the game's blocks (Conquest's
+`grass_block_layer` for the game's grass). A block without a piece stays
+whole. A piece only goes in the air or in still water over the top block (in
+water it is waterlogged), never under a plant, snow or an object.
+
+The **Smoothing** brush (Decor group) paints over the map's setting: **On**
+here, **Off** here, or **A slab** of your choice at the steps with its
+stairs, whatever the block; the right button gives the map's setting back.
+What it painted shows hatched while it is in hand. The 3D View shows the
+pieces as boxes of their height (stairs three quarters high, vertical slabs
+and corners half). Exports to 1.12 and older have no pieces.
+
 ### WorldPainter's layers in Massif
 
 | WorldPainter | In Massif | From a `.world` |

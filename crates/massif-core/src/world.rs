@@ -38,6 +38,10 @@ pub struct WorldMeta {
     /// mod's (see [`crate::materials`]).
     #[serde(default, skip_serializing_if = "crate::materials::Palette::is_vanilla")]
     pub palette: crate::materials::Palette,
+    /// Smooth terrain: the top of the land built of partial blocks when it
+    /// is exported (see [`crate::shapes`]).
+    #[serde(default, skip_serializing_if = "crate::shapes::SmoothSettings::is_off")]
+    pub smooth: crate::shapes::SmoothSettings,
 }
 
 impl Default for WorldMeta {
@@ -53,6 +57,7 @@ impl Default for WorldMeta {
             gradients: Vec::new(),
             fill: None,
             palette: Default::default(),
+            smooth: Default::default(),
         }
     }
 }

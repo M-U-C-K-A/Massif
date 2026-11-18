@@ -330,3 +330,52 @@ fn make_sections(cat: &Catalogue, needle: &str, all: bool) -> Vec<Section> {
     }
     out
 }
+
+/// The blocks of the mods the catalogue read, by id, with the names of
+/// their properties when a list of them was read (empty otherwise): Smooth
+/// terrain's partial blocks are found among them.
+pub fn mod_block_ids(cat: Option<&Catalogue>) -> std::sync::Arc<HashMap<String, Vec<String>>> {
+    let Some(cat) = cat else { return Default::default() };
+    let props = |id: &str| cat.definitions.get(id).map(|d| d.properties.iter().map(|p| p.name.clone()).collect()).unwrap_or_default();
+    let mut ids: HashMap<String, Vec<String>> = cat.blocks.iter().filter(|b| massif_assets::namespace(&b.id) != "minecraft").map(|b| (b.id.clone(), props(&b.id))).collect();
+    for (ns, names) in &cat.registered {
+        if ns != "minecraft" {
+            for n in names {
+                ids.entry(n.clone()).or_insert_with(|| props(n));
+            }
+        }
+    }
+    for id in cat.definitions.keys().filter(|id| massif_assets::namespace(id) != "minecraft") {
+        ids.entry(id.clone()).or_insert_with(|| props(id));
+    }
+    std::sync::Arc::new(ids)
+}
+
+/// Whether a block of the game exists, by id, in the newest version known.
+pub fn vanilla_exists(id: &str) -> bool {
+    static NEWEST: std::sync::OnceLock<massif_anvil::Target> = std::sync::OnceLock::new();
+    id.strip_prefix("minecraft:").is_some_and(|short| NEWEST.get_or_init(|| massif_anvil::Target::releases().into_iter().next().unwrap_or_default()).has_block(short))
+}
+
+/// The blocks of the mods read, as [`mod_block_ids`] lists them, for the 3D
+/// View's slabs: kept up to date by [`note_catalogue`].
+/// Blocks of mods by id, with their properties' names.
+type ModBlocks = std::sync::Arc<HashMap<String, Vec<String>>>;
+static MOD_BLOCKS: std::sync::RwLock<Option<ModBlocks>> = std::sync::RwLock::new(None);
+/// The catalogue they were listed from (its address; 0: none).
+static NOTED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// List the mods' blocks of a catalogue newly read, once.
+pub fn note_catalogue(cat: Option<&std::sync::Arc<Catalogue>>) {
+    let at = cat.map_or(0, |c| std::sync::Arc::as_ptr(c) as usize);
+    if NOTED.swap(at, std::sync::atomic::Ordering::Relaxed) != at
+        && let Ok(mut m) = MOD_BLOCKS.write()
+    {
+        *m = Some(mod_block_ids(cat.map(|c| &**c)));
+    }
+}
+
+/// The blocks of the mods read (see [`note_catalogue`]).
+pub fn mod_blocks() -> std::sync::Arc<HashMap<String, Vec<String>>> {
+    MOD_BLOCKS.read().ok().and_then(|m| m.clone()).unwrap_or_default()
+}

@@ -21,6 +21,7 @@
 //! only for chunks of older versions, and are left out as the game does.
 
 use crate::nbt::{NbtWriter, TagType};
+use std::collections::HashMap;
 use crate::version::{Era, Target};
 use massif_core::compose::{AutoBiomes, BiomeColumn, Materializer, Span, TileStack};
 use massif_core::coords::{BlockRect, TilePos, cell_index};
@@ -110,12 +111,34 @@ pub struct ExportContext<'a> {
     bands: [(i32, i32, Option<u16>); 4],
     /// The biomes of columns left on automatic.
     auto: AutoBiomes,
+    /// Smooth terrain: of each block of the registry (by `BlockId`), its
+    /// partial blocks as written (see [`Pieces`]); `None` for a block with
+    /// none, all `None` when nothing is smoothed.
+    pieces: Vec<Option<Pieces>>,
+    /// The shapes each terrain may use, by `TerrainId`.
+    terrain_shapes: Vec<massif_core::shapes::ShapeSet>,
+}
+
+/// The partial blocks of one block, as states: of each piece, dry and in
+/// water (the same state twice for a block that holds no water).
+#[derive(Debug, Clone)]
+struct Pieces {
+    shapes: massif_core::shapes::ShapeSet,
+    slab_layers: bool,
+    states: HashMap<massif_core::shapes::Kind, [u16; 2]>,
 }
 
 impl<'a> ExportContext<'a> {
     /// Fails with a description if the registry or the build limits cannot be
     /// exported.
     pub fn new(world: &'a World, dim: &Dimension, target: &Target) -> Result<Self, String> {
+        Self::with_mods(world, dim, target, &HashMap::new())
+    }
+
+    /// [`Self::new`], knowing the blocks of the mods read (`mods`, by id):
+    /// the slabs and stairs that smooth the land's steps are found among
+    /// them and the version's own.
+    pub fn with_mods(world: &'a World, dim: &Dimension, target: &Target, mods: &HashMap<String, Vec<String>>) -> Result<Self, String> {
         let reg = &world.registry;
         let era = target.era();
         let (min_y, max_y) = target.heights(dim.min_y, dim.max_y);
@@ -319,6 +342,92 @@ impl<'a> ExportContext<'a> {
                 })
             })
             .collect();
+        // Smooth terrain: the partial blocks of the blocks that may top a
+        // column (of the terrains, and slabs chosen by hand), after the ores
+        // (the ground, which objects do not take the place of). Only by
+        // name, from 1.13 on.
+        let smooth = &world.meta.smooth;
+        let terrain_shapes: Vec<massif_core::shapes::ShapeSet> = (0..reg.terrains.len()).map(|t| smooth.shapes_of(reg, massif_core::TerrainId(t as u16))).collect();
+        let pieces: Vec<Option<Pieces>> = if era == Era::Numbered {
+            Vec::new()
+        } else {
+            use massif_core::shapes::{Kind, Side, StairShape, family};
+            let vanilla = |id: &str| id.strip_prefix("minecraft:").is_some_and(|short| target.has_block(short));
+            let known = massif_core::shapes::Known { vanilla: &vanilla, mods };
+            let mut tops: std::collections::HashSet<usize> = reg.terrains.iter().flat_map(|t| t.strata.iter().flat_map(|s| s.blocks.iter().map(|b| b.0.index())).chain(t.submerged_top.map(|b| b.index()))).collect();
+            tops.extend(reg.blocks.iter().enumerate().filter(|(_, b)| b.name().ends_with("_slab")).map(|(k, _)| k));
+            let mut add = |name: &str, props: Vec<(String, String)>| {
+                let (name, kept) = target.block(name);
+                states.push((name.to_owned(), if kept { props } else { Vec::new() }));
+                (states.len() - 1).min(SKIP as usize - 1) as u16
+            };
+            (0..reg.blocks.len())
+                .map(|k| {
+                    if !tops.contains(&k) {
+                        return None;
+                    }
+                    let f = family(reg.blocks[k].name(), &known);
+                    let shapes = f.shapes();
+                    if shapes.is_empty() {
+                        return None;
+                    }
+                    let mut kinds: Vec<Kind> = Vec::new();
+                    if f.layers.is_some() {
+                        kinds.extend((1..8).map(Kind::Layers));
+                    }
+                    if f.slab.is_some() {
+                        if f.slab_layers { kinds.extend((1..8).map(Kind::Slab)) } else { kinds.push(Kind::Slab(4)) }
+                    }
+                    for side in Side::ALL {
+                        if f.stairs.is_some() {
+                            kinds.extend([StairShape::Straight, StairShape::InnerRight, StairShape::OuterRight].map(|sh| Kind::Stairs(side, sh)));
+                        }
+                        if f.vertical_slab.is_some() {
+                            kinds.push(Kind::VerticalSlab(side));
+                        }
+                        if f.corner.is_some() {
+                            kinds.push(Kind::Corner(side));
+                        }
+                    }
+                    let mut out = HashMap::new();
+                    for kind in kinds {
+                        let Some(name) = f.get(kind.shape()) else { continue };
+                        let s = |a: &str, b: &str| (a.to_owned(), b.to_owned());
+                        let mut props: Vec<(String, String)> = match kind {
+                            Kind::Layers(n) => vec![s("layers", &n.to_string())],
+                            Kind::Slab(n) if f.slab_layers => vec![s("layers", &n.to_string()), s("type", "bottom")],
+                            Kind::Slab(_) => vec![s("type", "bottom")],
+                            Kind::Stairs(side, sh) => vec![s("facing", side.id()), s("half", "bottom"), s("shape", sh.id())],
+                            Kind::VerticalSlab(side) => {
+                                let mut v = vec![s("facing", side.id())];
+                                if known.has_property(name, "layer") {
+                                    v.push(s("layer", "2"));
+                                }
+                                v
+                            }
+                            Kind::Corner(side) => vec![s("facing", side.id()), s("type", "bottom")],
+                        };
+                        let wet = known.has_property(name, "waterlogged");
+                        let dry_props = {
+                            let mut p = props.clone();
+                            if wet {
+                                p.push(s("waterlogged", "false"));
+                            }
+                            p
+                        };
+                        let dry = add(name, dry_props);
+                        let in_water = if wet {
+                            props.push(s("waterlogged", "true"));
+                            add(name, props)
+                        } else {
+                            UNSET
+                        };
+                        out.insert(kind, [dry, in_water]);
+                    }
+                    Some(Pieces { shapes, slab_layers: f.slab_layers, states: out })
+                })
+                .collect()
+        };
         if states.len() >= UNSET as usize {
             return Err("the covers and objects use too many blocks".into());
         }
@@ -402,6 +511,8 @@ impl<'a> ExportContext<'a> {
             pockets: massif_core::pockets::Pockets::new(reg, world.meta.seed as u64, dim.min_y),
             hosts,
             auto: AutoBiomes::new(reg, world.meta.sea_level, min_y),
+            pieces,
+            terrain_shapes,
         })
     }
 
@@ -716,6 +827,7 @@ pub fn build_chunk(
     cz: usize,
     objects: &[Placement],
     steady: &[massif_core::water::Steady],
+    smooth: &[massif_core::shapes::Column],
     scratch: &mut Scratch,
 ) -> Vec<u8> {
     let (ox, oz) = tile.origin();
@@ -910,6 +1022,49 @@ pub fn build_chunk(
             }
         }
     }
+    // ---- smooth terrain ----------------------------------------------------
+    // The top of the land in partial blocks, last: only in the air or the
+    // still water over the top block (or in place of it, with air or water
+    // over it), so never under what grows or stands there.
+    if !smooth.is_empty() && !ctx.pieces.is_empty() {
+        use massif_core::shapes::{Shape, ShapeSet, choose};
+        for c in smooth {
+            let (lx, lz) = (c.cell as usize % massif_core::TILE_SIZE as usize, c.cell as usize / massif_core::TILE_SIZE as usize);
+            if lx / 16 != cx || lz / 16 != cz || c.y1 - 1 <= min_y || c.y1 + 1 >= max_y {
+                continue;
+            }
+            let column = ((lz & 15) << 4) | (lx & 15);
+            let at = |y: i32| (((y - min_y) as usize) << 8) | column;
+            let top_block = blocks[at(c.y1 - 1)];
+            // The slab chosen by hand, or the pieces of the top block.
+            let source = c.block.map_or(top_block, |b| b.0);
+            let Some(Some(pieces)) = ctx.pieces.get(source as usize) else { continue };
+            let may = match c.block {
+                Some(_) => ShapeSet::of(&[Shape::Slab, Shape::Stairs]),
+                None => ctx.terrain_shapes.get(c.terrain.index()).copied().unwrap_or_default(),
+            }
+            .and(pieces.shapes);
+            let Some(piece) = choose(c, may, pieces.slab_layers) else { continue };
+            let Some(states) = pieces.states.get(&piece.kind) else { continue };
+            // Where it goes must be air or still water; in place of the top,
+            // with air or water over it.
+            let over = blocks[at(piece.y + 1)];
+            let here = blocks[at(piece.y)];
+            let free = |b: u16| b == 0 || (b == ctx.water && !ctx.lava);
+            let ok = if piece.replaces { here == top_block && free(over) } else { free(here) };
+            if !ok {
+                continue;
+            }
+            let wet = if piece.replaces { over == ctx.water } else { here == ctx.water } && !ctx.lava;
+            let state = states[wet as usize];
+            if state == UNSET {
+                continue;
+            }
+            blocks[at(piece.y)] = state;
+            top = top.max(piece.y + 1);
+        }
+    }
+
     // The sections that hold something; those above are air.
     let filled = (((top.min(max_y) - min_y).max(0) as usize).div_ceil(16)).min(sections);
     *dirty = filled * SECTION_VOLUME;
