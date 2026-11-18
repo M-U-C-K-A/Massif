@@ -71,10 +71,15 @@ pub enum Tool {
     Pan,
 }
 
+/// The names of the groups of tools the WorldPainter tour points at.
+pub const SCULPT_GROUP: &str = tn!("Sculpt terrain");
+pub const SELECT_GROUP: &str = tn!("Select");
+pub const WATER_GROUP: &str = tn!("Water");
+
 impl Tool {
     pub const GROUPS: [(&'static str, Icon, &'static [Tool]); 7] = [
         (
-            tn!("Sculpt terrain"),
+            SCULPT_GROUP,
             Icon::Mountain,
             &[Tool::Raise, Tool::Smooth, Tool::Flatten, Tool::SetHeight, Tool::Roughen, Tool::Road],
         ),
@@ -83,9 +88,9 @@ impl Tool {
             Icon::Paintbrush,
             &[Tool::PaintTerrain, Tool::Gradient, Tool::PaintBiome, Tool::AutoPaint, Tool::AutoBiome, Tool::Annotate],
         ),
-        (tn!("Select"), Icon::SquareDashed, &[Tool::SelectRect, Tool::SelectEllipse, Tool::SelectLasso, Tool::SelectBrush]),
+        (SELECT_GROUP, Icon::SquareDashed, &[Tool::SelectRect, Tool::SelectEllipse, Tool::SelectLasso, Tool::SelectBrush]),
         (tn!("Decor"), Icon::Shrub, &[Tool::Cover, Tool::Objects, Tool::TreeSize, Tool::Pockets, Tool::Slabs, Tool::Combined]),
-        (tn!("Water"), Icon::Droplet, &[Tool::Water, Tool::Flood, Tool::River]),
+        (WATER_GROUP, Icon::Droplet, &[Tool::Water, Tool::Flood, Tool::River]),
         (tn!("Levels"), Icon::Layers, &[Tool::StampSlab, Tool::EraseSlab]),
         (tn!("Navigate"), Icon::Compass, &[Tool::Pan, Tool::Eyedropper]),
     ];
@@ -171,6 +176,27 @@ impl Tool {
     /// Its first shortcut as text (⌥H), as the keymap has it now.
     pub fn shortcut_text(self) -> Option<String> {
         crate::keymap::get().label(crate::keymap::Action::Tool(self))
+    }
+
+    /// What WorldPainter calls it (or what of WorldPainter it does), for
+    /// those who come from it: its tools' names are WorldPainter's own, in
+    /// English, as its interface shows them.
+    pub fn worldpainter(self) -> Option<&'static str> {
+        Some(match self {
+            Tool::Raise => "Height, Raise Mountain, Raise Pyramid",
+            Tool::Smooth => "Smooth",
+            Tool::Flatten => "Flatten",
+            Tool::Road => "Path",
+            Tool::PaintTerrain => "Pencil, Spray Paint, Fill (a terrain)",
+            Tool::PaintBiome => "Pencil, Spray Paint, Fill (a biome)",
+            Tool::Cover | Tool::Objects | Tool::Combined => "Pencil, Spray Paint, Fill (a layer)",
+            Tool::Annotate => "Annotations layer, Text",
+            Tool::Pockets => "Underground Pockets layer",
+            Tool::Flood => "Flood, Sponge",
+            Tool::SelectRect => "Select",
+            Tool::SelectBrush => "Select with Brush",
+            _ => return None,
+        })
     }
 
     pub fn help(self) -> &'static str {

@@ -59,6 +59,8 @@ pub enum Command {
     Shortcuts,
     /// The guided tour of the editor.
     Tour,
+    /// The tour of where WorldPainter's tools are in Massif.
+    WorldPainterTour,
     HomeScreen,
     About,
     /// Ask GitHub now whether a newer version is out.
@@ -312,6 +314,7 @@ pub fn menus(state: &State) -> Vec<Menu> {
         item(Command::Help, Icon::BookOpen, tr!("Massif Help"), free),
         item(Command::Shortcuts, Icon::Keyboard, tr!("Keyboard shortcuts"), free),
         item(Command::Tour, Icon::Compass, tr!("Take the tour"), free),
+        tipped(Command::WorldPainterTour, Icon::Map, tr!("Where are my WorldPainter tools?"), free, tr!("A short tour for those who come from WorldPainter: where each of its tools is in Massif")),
         item(Command::ReportProblem, Icon::Bug, tr!("Report a Problem…"), free),
         tipped(Command::JoinDiscord, Icon::MessagesSquare, tr!("Join the Discord…"), free, tr!("Massif's community server, in your browser: questions, maps, #bug-reports")),
         Entry::Separator,

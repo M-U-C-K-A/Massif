@@ -135,7 +135,7 @@ pub fn tools_panel(ui: &mut Ui, tools: &mut ToolState) {
     let compact = ui.available_width() - 12.0 < 58.0 + 4.0 + most * 32.0;
     let label_w = if compact { 20.0 } else { 58.0 };
     for (group, icon, list) in Tool::GROUPS {
-        egui::Frame::new()
+        let row = egui::Frame::new()
             .fill(fill)
             .corner_radius(theme::GROUP_RADIUS)
             .inner_margin(egui::Margin::symmetric(6, 3))
@@ -167,6 +167,7 @@ pub fn tools_panel(ui: &mut Ui, tools: &mut ToolState) {
                     }
                 });
             });
+        crate::tour::mark(ui.ctx(), crate::tour::Target::Tools(group), row.response.rect);
     }
 }
 

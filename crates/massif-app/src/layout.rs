@@ -466,7 +466,7 @@ pub enum Side {
 
 /// The workspaces a layout saved by an older version lacks are added to it
 /// once: this is the version they come with.
-const LAYOUT_VERSION: u32 = 6;
+const LAYOUT_VERSION: u32 = 7;
 
 /// The share of the window's width the column of the tools takes on the
 /// left of the Layout, Sculpting and Painting workspaces: the same in all
@@ -526,6 +526,31 @@ fn sculpt_workspace(b: &mut Builder) -> Node {
     let centre = b.row(0.78, view, side);
     b.row(SIDEBAR, left, centre)
 }
+
+/// The WorldPainter workspace, for those who come from it: the map big in
+/// the middle, the tools on the left as WorldPainter's tool palette (and
+/// the tool's and the brush's settings under them), the terrain, the
+/// layers and the brushes on the right. No 3D view and no graph: both stay
+/// one click away (an area's editor, the Terrain side).
+fn worldpainter_workspace(b: &mut Builder) -> Node {
+    use EditorKind::*;
+    let left = {
+        let (tools, settings, brush) = (b.area(Tools), b.area(ToolSettings), b.area(BrushSettings));
+        let lower = b.column(0.45, settings, brush);
+        b.column(0.34, tools, lower)
+    };
+    let right = {
+        let (terrain, layers, brushes) = (b.area(Terrain), b.area(Layers), b.area(Brushes));
+        let lower = b.column(0.55, layers, brushes);
+        b.column(0.36, terrain, lower)
+    };
+    let map = b.area(Map);
+    let centre = b.row(0.78, map, right);
+    b.row(SIDEBAR, left, centre)
+}
+
+/// The name of the WorldPainter workspace.
+pub const WORLDPAINTER: &str = tn!("WorldPainter");
 
 /// Give every area of `node` a new id, from `next` on, so that no view
 /// state is shared with the areas it was copied from.
@@ -643,6 +668,10 @@ impl Default for Layout {
         for w in workspaces.iter_mut().rev().take(2) {
             w.terrain = true;
         }
+        // WorldPainter: laid out as WorldPainter is. Last in the list, so
+        // that the others keep their place; its tab is the map editor's
+        // last.
+        workspaces.push(Workspace { name: WORLDPAINTER.into(), root: worldpainter_workspace(&mut b), maximized: None, terrain: false });
 
         let first_terrain = workspaces.iter().position(|w| w.terrain).unwrap_or(0);
         Layout {
@@ -737,8 +766,28 @@ impl Layout {
                     || w.root.add_below(EditorKind::BrushSettings, EditorKind::Brushes, 0.5, &mut self.next_id);
             }
         }
+        // Version 7: the WorldPainter workspace, at the end (its tab after
+        // the map editor's others).
+        if self.version < 7 && !self.workspaces.iter().any(|w| !w.terrain && w.name == WORLDPAINTER) {
+            let root = worldpainter_workspace(&mut Builder(&mut self.next_id));
+            self.workspaces.push(Workspace { name: WORLDPAINTER.into(), root, maximized: None, terrain: false });
+        }
         self.version = LAYOUT_VERSION;
         self
+    }
+
+    /// The WorldPainter workspace, shown (made again if it was removed).
+    pub fn show_worldpainter(&mut self) {
+        let index = match self.workspaces.iter().position(|w| !w.terrain && w.name == WORLDPAINTER) {
+            Some(k) => k,
+            None => {
+                let root = worldpainter_workspace(&mut Builder(&mut self.next_id));
+                self.workspaces.push(Workspace { name: WORLDPAINTER.into(), root, maximized: None, terrain: false });
+                self.workspaces.len() - 1
+            }
+        };
+        self.activate(index);
+        self.current_mut().maximized = None;
     }
 
     /// Show an editor of `kind` in the current workspace: an area of it
@@ -1014,8 +1063,9 @@ mod tests {
     #[test]
     fn default_layout_is_well_formed() {
         let layout = Layout::default();
-        assert_eq!(layout.workspaces.len(), 9);
-        // Two sides: seven workspaces to edit the map, two to generate terrain.
+        assert_eq!(layout.workspaces.len(), 10);
+        // Two sides: eight workspaces to edit the map, two to generate
+        // terrain (the WorldPainter workspace last, after them).
         assert_eq!(layout.workspaces.iter().filter(|w| w.terrain).count(), 2);
         let mut seen = std::collections::HashSet::new();
         for ws in &layout.workspaces {
@@ -1053,6 +1103,53 @@ mod tests {
         assert_eq!(layout.side(), Side::World, "a workspace shown leaves the Render side");
     }
 
+    /// The WorldPainter workspace: the map big in the middle, the tools on
+    /// the left, Terrain, Layers and Brushes on the right, no 3D view and
+    /// no graph; given once to layouts saved before it, made again when
+    /// it is asked for after being removed.
+    #[test]
+    fn the_worldpainter_workspace() {
+        let layout = Layout::default();
+        let wp = layout.workspaces.iter().find(|w| w.name == WORLDPAINTER).unwrap();
+        assert!(!wp.terrain);
+        for kind in [EditorKind::Map, EditorKind::Tools, EditorKind::ToolSettings, EditorKind::BrushSettings, EditorKind::Terrain, EditorKind::Layers, EditorKind::Brushes] {
+            assert!(wp.root.shows(kind), "{kind:?}");
+        }
+        for kind in [EditorKind::View3d, EditorKind::Sculpt3d, EditorKind::Graph, EditorKind::GraphView] {
+            assert!(!wp.root.shows(kind), "{kind:?}");
+        }
+        // Tools left, the map in the middle and widest, the palettes right.
+        let Node::Split { dir: Dir::Row, ratio, a, b } = &wp.root else { panic!() };
+        assert!((ratio - SIDEBAR).abs() < 1e-6 && a.shows(EditorKind::Tools));
+        let Node::Split { dir: Dir::Row, ratio, a, b } = &**b else { panic!() };
+        assert!(matches!(**a, Node::Area { editor: EditorKind::Map, .. }) && *ratio > 0.7);
+        assert!(b.shows(EditorKind::Terrain) && b.shows(EditorKind::Layers) && b.shows(EditorKind::Brushes));
+
+        // A layout of version 6: given it once, at the end, the active
+        // workspace and the Graph remembered still the same.
+        let mut old = Layout::default();
+        old.workspaces.retain(|w| w.name != WORLDPAINTER);
+        old.version = 6;
+        old.activate(old.workspaces.iter().position(|w| w.name == "Graph").unwrap());
+        let json = serde_json::to_string(&old).unwrap();
+        let back = serde_json::from_str::<Layout>(&json).unwrap().sanitize();
+        assert_eq!(back.workspaces.iter().map(|w| w.name.as_str()).collect::<Vec<_>>(), Layout::default().workspaces.iter().map(|w| w.name.as_str()).collect::<Vec<_>>());
+        assert_eq!(back.current().name, "Graph");
+        let again = serde_json::from_str::<Layout>(&serde_json::to_string(&back).unwrap()).unwrap().sanitize();
+        assert_eq!(again.workspaces.len(), back.workspaces.len(), "once");
+
+        // Removed by hand: shown again when asked for.
+        let mut layout = back;
+        let k = layout.workspaces.iter().position(|w| w.name == WORLDPAINTER).unwrap();
+        layout.remove_workspace(k);
+        let removed = serde_json::from_str::<Layout>(&serde_json::to_string(&layout).unwrap()).unwrap().sanitize();
+        assert!(!removed.workspaces.iter().any(|w| w.name == WORLDPAINTER), "not forced back on");
+        layout.show_worldpainter();
+        assert_eq!((layout.current().name.as_str(), layout.side()), (WORLDPAINTER, Side::World));
+        layout.switch_side(true);
+        assert_eq!(layout.current().name, "Graph");
+    }
+
     #[test]
     fn the_two_sides_remember_their_workspace() {
         let mut layout = Layout::default();
@@ -1075,7 +1172,7 @@ mod tests {
         let mut old = Layout::default();
         old.workspaces.retain(|w| w.name != "3D Sculpt");
         old.version = 0;
-        old.active = 6;
+        old.active = old.workspaces.iter().position(|w| w.name == "Graph").unwrap();
         let json = serde_json::to_string(&old).unwrap().replace(",\"version\":0", "");
         let back: Layout = serde_json::from_str(&json).unwrap();
         let back = back.sanitize();

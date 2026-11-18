@@ -37,6 +37,8 @@ pub struct Card<'a> {
     pub preview: Option<Preview<'a>>,
     /// A word beside the title, in the accent ("New").
     pub badge: Option<&'a str>,
+    /// What WorldPainter calls it, under the title.
+    pub worldpainter: Option<&'a str>,
 }
 
 /// Show `card` as the tooltip of `response`, while it is hovered.
@@ -64,6 +66,7 @@ pub fn brush(response: egui::Response, name: &str, key: &str, brush: Option<&Bru
             tip: None,
             preview: Some(Preview::Relief { key: key.to_owned(), brush }),
             badge: None,
+            worldpainter: None,
         }),
         None => response.on_hover_text(name),
     }
@@ -137,6 +140,9 @@ pub(crate) fn show(ui: &mut Ui, card: &Card) {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| chip(ui, key, &pal));
         }
     });
+    if let Some(wp) = card.worldpainter {
+        ui.label(RichText::new(tr!("In WorldPainter: {wp}", wp)).size(11.5).color(pal.weak));
+    }
     ui.label(RichText::new(card.body).size(12.5).color(pal.text));
     if !card.actions.is_empty() {
         ui.add_space(4.0);
@@ -166,6 +172,7 @@ pub fn tool_card(tool: Tool) -> Card<'static> {
         tip,
         preview: demo.map(Preview::Demo),
         badge: Tool::NEW.contains(&tool).then_some(tr!("New")),
+        worldpainter: tool.worldpainter(),
     };
     match tool {
         Tool::Raise => card(
@@ -1321,6 +1328,7 @@ mod tests {
                             tip: None,
                             preview: Some(Preview::Relief { key: "sine".into(), brush: &brush }),
                             badge: None,
+                            worldpainter: None,
                         },
                     };
                     show(ui, &card);

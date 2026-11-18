@@ -567,6 +567,9 @@ impl Action {
             Delete => vec![k(Key::Delete), k(Key::Backspace)],
             Cancel => vec![k(Key::Escape)],
             Tool(tool) => match tool {
+                // WorldPainter's Height is ⌥H, its Raise Mountain ⌥M: both
+                // are Raise / Lower here.
+                crate::tools::Tool::Raise if wp => vec![alt(Key::H), alt(Key::M)],
                 crate::tools::Tool::Raise => vec![alt(Key::H)],
                 crate::tools::Tool::Flatten => vec![alt(Key::A)],
                 crate::tools::Tool::Smooth => vec![alt(Key::S)],
@@ -982,6 +985,9 @@ mod tests {
         assert_eq!(wp.keys(Action::Redo)[0].id(), "Cmd+Y");
         assert_eq!(wp.keys(Action::MapZoomIn)[0].id(), "Cmd+Plus");
         assert!(wp.keys(Action::UiZoomIn).is_empty());
+        // Its tools: Height ⌥H and Raise Mountain ⌥M are both Raise / Lower.
+        assert_eq!(wp.keys(Action::Tool(Tool::Raise)).iter().map(|c| c.id()).collect::<Vec<_>>(), ["Alt+H", "Alt+M"]);
+        assert_eq!(wp.keys(Action::Tool(Tool::Flood))[0].id(), "Alt+F");
     }
 
     #[test]
