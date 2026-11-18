@@ -12875,6 +12875,116 @@ mod tests {
         image::save_buffer(dir.join("real-river-tool-3d.png"), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
     }
 
+    /// The River tool on New World's hills: a source, three points dragged
+    /// off the way and an end; the map before (the course shown) and after
+    /// it is dug, the course shown drawn over it in magenta, and a 3D view.
+    /// Needs a GPU: runs with MASSIF_SNAPSHOT_DIR.
+    #[test]
+    fn river_tool_keeps_to_its_way() {
+        use massif_core::generate::{GenParams, Landform, generate};
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else { return };
+        let tag = std::env::var("MASSIF_RIVER_TAG").unwrap_or_default();
+        let mut h = harness(ThemeChoice::Dark);
+        {
+            let app = h.state_mut();
+            let world = generate(&GenParams {
+                tiles_x: 8,
+                tiles_z: 8,
+                // MASSIF_RIVER_LANDFORM=Mountains: over mountains instead.
+                landform: if std::env::var("MASSIF_RIVER_LANDFORM").is_ok_and(|v| v == "Mountains") { Landform::Mountains } else { Landform::Hills },
+                ..GenParams::default()
+            });
+            app.doc = crate::doc::Document::new(world, None, 9);
+            app.map_cache.invalidate_all();
+            app.view3d.invalidate_all();
+            app.tools.select(Tool::River);
+        }
+        h.run_steps(5);
+        for m in h.state_mut().maps.values_mut() {
+            m.center = [0.0, 0.0];
+            m.zoom = 0.8;
+        }
+        h.run_steps(5);
+        let (s, e) = ((-420.0f32, 300.0f32), (380.0f32, -350.0f32));
+        let (dx, dz) = (e.0 - s.0, e.1 - s.1);
+        let l = dx.hypot(dz);
+        let n = (-dz / l, dx / l);
+        let through: Vec<(f32, f32)> = [(0.25, 70.0), (0.5, -90.0), (0.75, 60.0)].iter().map(|&(t, o)| (s.0 + dx * t + n.0 * o, s.1 + dz * t + n.1 * o)).collect();
+        {
+            let app = h.state_mut();
+            let mut draft = crate::tools::RiverDraft::new(s);
+            draft.layout.through = through;
+            draft.layout.end = Some(e);
+            // The middle point dragged (its legs worked out coarsely)…
+            draft.plan(&app.doc, &app.tools.river, Some(2));
+            app.tools.river_draft = Some(draft);
+        }
+        h.run_steps(10);
+        h.render().unwrap().save(dir.join(format!("river-way{tag}-dragged.png"))).unwrap();
+        // …then let go.
+        {
+            let app = h.state_mut();
+            let mut draft = app.tools.river_draft.take().unwrap();
+            draft.plan(&app.doc, &app.tools.river, None);
+            app.tools.river_draft = Some(draft);
+        }
+        h.run_steps(10);
+        h.render().unwrap().save(dir.join(format!("river-way{tag}-shown.png"))).unwrap();
+        let draft = h.state().tools.river_draft.clone().unwrap();
+        let shown = draft.plan.course.clone();
+        let anchors = draft.layout.anchors();
+        h.event(egui::Event::Key {
+            key: egui::Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(20);
+        let note = h.state().tools.river_note.clone().unwrap_or_default();
+        eprintln!("{note}");
+        let ppp = h.ctx.pixels_per_point();
+        let mut img = h.render().unwrap();
+        let at = |h: &egui_kittest::Harness<'_, MassifApp>, p: (f32, f32)| h.state().maps.values().next().unwrap().screen_of(p.0 as f64, p.1 as f64) * ppp;
+        let (w, hh) = (img.width() as i32, img.height() as i32);
+        let dot = |img: &mut image::RgbaImage, p: egui::Pos2, r: i32, c: [u8; 4]| {
+            for j in -r..=r {
+                for i in -r..=r {
+                    let (x, y) = (p.x as i32 + i, p.y as i32 + j);
+                    if x >= 0 && y >= 0 && x < w && y < hh && i * i + j * j <= r * r {
+                        img.put_pixel(x as u32, y as u32, image::Rgba(c));
+                    }
+                }
+            }
+        };
+        for win in shown.windows(2) {
+            let (a, b) = (at(&h, win[0]), at(&h, win[1]));
+            let steps = (a.distance(b).ceil() as usize).max(1);
+            for k in 0..=steps {
+                dot(&mut img, a + (b - a) * (k as f32 / steps as f32), 0, [255, 0, 255, 255]);
+            }
+        }
+        for &a in &anchors {
+            dot(&mut img, at(&h, a), 4, [255, 220, 0, 255]);
+        }
+        img.save(dir.join(format!("river-way{tag}-dug.png"))).unwrap();
+        {
+            let app = h.state_mut();
+            app.layout.activate(3);
+            app.view3d.camera.target = [0.0, 90.0, 0.0];
+            app.view3d.camera.distance = 900.0;
+            app.view3d.camera.pitch = 0.75;
+            app.view3d.camera.yaw = 0.3;
+        }
+        h.run_steps(5);
+        while h.state().view3d.pending() > 0 {
+            h.step();
+        }
+        h.run_steps(3);
+        let (w, hgt, rgba) = h.state().view3d.read_back().expect("the 3D view rendered");
+        image::save_buffer(dir.join(format!("river-way{tag}-3d.png")), &rgba, w, hgt, image::ColorType::Rgba8).unwrap();
+    }
+
     /// Views of a map as it is (MASSIF_RIVER_WORLD), for the eye: the 2D map
     /// centred on the first view, and a 3D view for each of MASSIF_VIEWS
     /// ("x,z,distance,pitch,yaw;…", the camera's target on the ground at x,

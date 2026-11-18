@@ -90,7 +90,8 @@ pub struct RiverReport {
 /// Blocks between the points of the smoothed course.
 pub const STEP: f32 = 0.5;
 
-/// The curve through `points` (Catmull-Rom), a point every [`STEP`] blocks.
+/// The curve through `points` (centripetal Catmull-Rom: no loop nor cusp
+/// where it turns sharply), a point every [`STEP`] blocks.
 pub fn smooth_course(points: &[(f32, f32)]) -> Vec<(f32, f32)> {
     let mut pts: Vec<(f32, f32)> = Vec::with_capacity(points.len());
     for &p in points {
@@ -104,17 +105,50 @@ pub fn smooth_course(points: &[(f32, f32)]) -> Vec<(f32, f32)> {
         1 => return pts,
         _ => {}
     }
-    let at = |k: isize| pts[k.clamp(0, pts.len() as isize - 1) as usize];
+    // Past its ends, points as far on the way out: no bunching there.
+    let n = pts.len() as isize;
+    let at = |k: isize| match k {
+        -1 => (2.0 * pts[0].0 - pts[1].0, 2.0 * pts[0].1 - pts[1].1),
+        k if k == n => (2.0 * pts[(n - 1) as usize].0 - pts[(n - 2) as usize].0, 2.0 * pts[(n - 1) as usize].1 - pts[(n - 2) as usize].1),
+        k => pts[k.clamp(0, n - 1) as usize],
+    };
     let mut out = Vec::new();
     for i in 0..pts.len() - 1 {
         let (p0, p1, p2, p3) = (at(i as isize - 1), at(i as isize), at(i as isize + 1), at(i as isize + 2));
         let len = (p2.0 - p1.0).hypot(p2.1 - p1.1);
         let steps = (len / STEP).ceil().max(1.0) as usize;
+        // Knots spaced as the square root of the distances.
+        let gap = |a: (f32, f32), b: (f32, f32)| (a.0 - b.0).hypot(a.1 - b.1).sqrt().max(1e-3);
+        let (t0, t1) = (0.0, gap(p0, p1));
+        let t2 = t1 + gap(p1, p2);
+        let t3 = t2 + gap(p2, p3);
+        let lerp = |a: (f32, f32), b: (f32, f32), ta: f32, tb: f32, t: f32| {
+            let (u, v) = ((tb - t) / (tb - ta), (t - ta) / (tb - ta));
+            (a.0 * u + b.0 * v, a.1 * u + b.1 * v)
+        };
+        let curve = |s: f32| {
+            let t = t1 + (t2 - t1) * s;
+            let (a1, a2, a3) = (lerp(p0, p1, t0, t1, t), lerp(p1, p2, t1, t2, t), lerp(p2, p3, t2, t3, t));
+            let (b1, b2) = (lerp(a1, a2, t0, t2, t), lerp(a2, a3, t1, t3, t));
+            lerp(b1, b2, t1, t2, t)
+        };
+        // Its pace varies: points spaced evenly along it, as the levels
+        // along the course count them, read off a finer sampling.
+        let fine: Vec<(f32, f32)> = (0..=steps * 4).map(|s| curve(s as f32 / (steps * 4) as f32)).collect();
+        let mut run = vec![0.0f32];
+        for w in fine.windows(2) {
+            run.push(run.last().expect("a start") + (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1));
+        }
+        let total = *run.last().expect("a start");
+        let mut f = 0;
         for s in 0..steps {
-            let t = s as f32 / steps as f32;
-            let (t2, t3) = (t * t, t * t * t);
-            let f = |a: f32, b: f32, c: f32, d: f32| 0.5 * (2.0 * b + (c - a) * t + (2.0 * a - 5.0 * b + 4.0 * c - d) * t2 + (3.0 * b - a - 3.0 * c + d) * t3);
-            out.push((f(p0.0, p1.0, p2.0, p3.0), f(p0.1, p1.1, p2.1, p3.1)));
+            let want = total * s as f32 / steps as f32;
+            while f + 1 < run.len() - 1 && run[f + 1] < want {
+                f += 1;
+            }
+            let span = (run[f + 1] - run[f]).max(1e-6);
+            let u = ((want - run[f]) / span).clamp(0.0, 1.0);
+            out.push((fine[f].0 + (fine[f + 1].0 - fine[f].0) * u, fine[f].1 + (fine[f + 1].1 - fine[f].1) * u));
         }
     }
     out.push(*pts.last().expect("two points or more"));
@@ -1138,14 +1172,9 @@ pub fn dig_descent(edit: &mut Edit, descent: &Descent, spec: &RiverSpec) -> Rive
             crate::water::seal(edit, rect, &|_, _| f32::MIN, &|x, z| set.contains(&(x, z)), i16::MIN);
         }
     }
-    // A point every two blocks is plenty for the curve.
-    let points: Vec<(f32, f32)> = descent
-        .course
-        .iter()
-        .enumerate()
-        .filter(|(k, _)| k % 2 == 0 || *k + 1 == descent.course.len())
-        .map(|(_, p)| *p)
-        .collect();
+    // Every point of the course: the curve passes through those it was
+    // dragged through, and runs where it was shown.
+    let points = descent.course.clone();
     // Into the sea: its channel goes on under it.
     let spec = RiverSpec {
         sea: spec.sea.or(descent.sea),
@@ -1311,7 +1340,142 @@ pub fn natural_course(level: &crate::level::Level, course: &[(f32, f32)], width:
         *d = (avg.0 / m, avg.1 / m);
     }
     anchor_at.sort_unstable();
-    (done, anchor_at)
+    keep_to(course, anchors, done, anchor_at, 0.5 * width)
+}
+
+/// A course made natural (`done`, its anchors at `done_at`) held to the
+/// way it was made from (`course`, its anchors at `anchors`): no point
+/// farther than `reach` from it, pulled back where it strays; and each
+/// stretch between two anchors that crosses itself or another, or turns
+/// back on itself, the way it was made from instead.
+fn keep_to(course: &[(f32, f32)], anchors: &[usize], mut done: Vec<(f32, f32)>, done_at: Vec<usize>, reach: f32) -> (Vec<(f32, f32)>, Vec<usize>) {
+    // The nearest point of the course, by cells of `reach`.
+    let cell = reach.max(2.0);
+    let key = |p: (f32, f32)| ((p.0 / cell).floor() as i32, (p.1 / cell).floor() as i32);
+    let mut segs: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+    for (k, w) in course.windows(2).enumerate() {
+        let (a, b) = (key(w[0]), key(w[1]));
+        for j in a.1.min(b.1) - 1..=a.1.max(b.1) + 1 {
+            for i in a.0.min(b.0) - 1..=a.0.max(b.0) + 1 {
+                segs.entry((i, j)).or_default().push(k);
+            }
+        }
+    }
+    let nearest = |p: (f32, f32)| -> Option<(f32, f32)> {
+        let mut best: Option<((f32, f32), f32)> = None;
+        for &k in segs.get(&key(p)).into_iter().flatten() {
+            let (a, b) = (course[k], course[k + 1]);
+            let (dx, dz) = (b.0 - a.0, b.1 - a.1);
+            let l2 = dx * dx + dz * dz;
+            let t = if l2 > 0.0 { (((p.0 - a.0) * dx + (p.1 - a.1) * dz) / l2).clamp(0.0, 1.0) } else { 0.0 };
+            let q = (a.0 + t * dx, a.1 + t * dz);
+            let d = (p.0 - q.0).hypot(p.1 - q.1);
+            if best.is_none_or(|b| d < b.1) {
+                best = Some((q, d));
+            }
+        }
+        best.map(|b| b.0)
+    };
+    for p in done.iter_mut() {
+        match nearest(*p) {
+            Some(q) => {
+                let d = (p.0 - q.0).hypot(p.1 - q.1);
+                if d > reach {
+                    *p = (q.0 + (p.0 - q.0) * reach / d, q.1 + (p.1 - q.1) * reach / d);
+                }
+            }
+            // Farther than a cell from any of it: back onto the course.
+            None => {
+                let q = course.iter().copied().min_by(|a, b| (a.0 - p.0).hypot(a.1 - p.1).total_cmp(&(b.0 - p.0).hypot(b.1 - p.1))).unwrap_or(*p);
+                *p = q;
+            }
+        }
+    }
+    // Stretch by stretch between anchors: the natural one where it is sound,
+    // else the way it was made from.
+    let mut cuts_d = vec![0];
+    cuts_d.extend(done_at.iter().copied().filter(|&k| k > 0 && k + 1 < done.len()));
+    cuts_d.push(done.len() - 1);
+    let mut cuts_c = vec![0];
+    cuts_c.extend(anchors.iter().copied().filter(|&k| k > 0 && k + 1 < course.len()));
+    cuts_c.push(course.len() - 1);
+    if cuts_d.len() != cuts_c.len() {
+        return (done, done_at);
+    }
+    let mut out: Vec<(f32, f32)> = vec![done[0]];
+    let mut out_at = Vec::with_capacity(done_at.len());
+    if done_at.contains(&0) {
+        out_at.push(0);
+    }
+    let mut pieces: Vec<Vec<(f32, f32)>> = Vec::new();
+    for s in 0..cuts_d.len() - 1 {
+        let natural = &done[cuts_d[s]..=cuts_d[s + 1]];
+        let sound = !turns_back(natural) && crossings(natural, &pieces) == 0;
+        let piece = if sound { natural.to_vec() } else { course[cuts_c[s]..=cuts_c[s + 1]].to_vec() };
+        out.extend(piece.iter().skip(1));
+        if s + 2 < cuts_d.len() || done_at.contains(&(done.len() - 1)) {
+            out_at.push(out.len() - 1);
+        }
+        pieces.push(piece);
+    }
+    (out, out_at)
+}
+
+/// Whether a course turns back on itself: two blocks on, its way reversed
+/// by more than 120°.
+fn turns_back(line: &[(f32, f32)]) -> bool {
+    // Points a block and a half apart at least.
+    let mut pts: Vec<(f32, f32)> = Vec::with_capacity(line.len());
+    for &p in line {
+        if pts.last().is_none_or(|q: &(f32, f32)| (q.0 - p.0).hypot(q.1 - p.1) >= 1.5) {
+            pts.push(p);
+        }
+    }
+    pts.windows(3).any(|w| {
+        let (a, b) = ((w[1].0 - w[0].0, w[1].1 - w[0].1), (w[2].0 - w[1].0, w[2].1 - w[1].1));
+        let cos = (a.0 * b.0 + a.1 * b.1) / (a.0.hypot(a.1) * b.0.hypot(b.1)).max(1e-6);
+        cos < -0.5
+    })
+}
+
+/// How many times `line` crosses itself or any of `others`.
+fn crossings(line: &[(f32, f32)], others: &[Vec<(f32, f32)>]) -> usize {
+    let cross = |a: (f32, f32), b: (f32, f32), c: (f32, f32), d: (f32, f32)| {
+        let o = |p: (f32, f32), q: (f32, f32), r: (f32, f32)| (q.0 - p.0) * (r.1 - p.1) - (q.1 - p.1) * (r.0 - p.0);
+        let (d1, d2, d3, d4) = (o(c, d, a), o(c, d, b), o(a, b, c), o(a, b, d));
+        d1 * d2 < 0.0 && d3 * d4 < 0.0
+    };
+    // By cells of 8 blocks: only segments that share one are compared.
+    let key = |p: (f32, f32)| ((p.0 / 8.0).floor() as i32, (p.1 / 8.0).floor() as i32);
+    let mut cells: HashMap<(i32, i32), Vec<(usize, usize)>> = HashMap::new();
+    let all: Vec<&[(f32, f32)]> = std::iter::once(line).chain(others.iter().map(|v| v.as_slice())).collect();
+    for (l, pts) in all.iter().enumerate() {
+        for k in 0..pts.len().saturating_sub(1) {
+            let (a, b) = (key(pts[k]), key(pts[k + 1]));
+            for j in a.1.min(b.1)..=a.1.max(b.1) {
+                for i in a.0.min(b.0)..=a.0.max(b.0) {
+                    cells.entry((i, j)).or_default().push((l, k));
+                }
+            }
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    for list in cells.values() {
+        for &(_, k1) in list.iter().filter(|s| s.0 == 0) {
+            for &(l2, k2) in list {
+                // Neighbours share an end; so do the ends of joined stretches.
+                if (l2 == 0 && k2 <= k1 + 1) || (l2 > 0 && l2 == all.len() - 1 && k1 == 0 && k2 + 2 == all[l2].len()) {
+                    continue;
+                }
+                let (a, b) = (all[0][k1], all[0][k1 + 1]);
+                let (c, d) = (all[l2][k2], all[l2][k2 + 1]);
+                if cross(a, b, c, d) {
+                    seen.insert((k1, l2, k2));
+                }
+            }
+        }
+    }
+    seen.len()
 }
 
 // ------------------------------------------------------------- routes --
@@ -1325,22 +1489,24 @@ const CLIMB: f32 = 14.0;
 /// meets — the cheapest path over a grid of the ground of `cells` samples
 /// at most (coarser for longer ways). Points in blocks, `from` first and
 /// `to` last; a straight line where no way is found.
+///
+/// It keeps near the line from `from` to `to`: wandering off it by more
+/// than a sixth of its length (32 blocks at least) costs more the farther,
+/// so that it takes the valleys along the way it was given rather than one
+/// far off.
 pub fn route(level: &crate::level::Level, from: (f32, f32), to: (f32, f32), cells: usize) -> Vec<(f32, f32)> {
-    use std::cmp::Reverse;
-    use std::collections::BinaryHeap;
-    #[derive(PartialEq)]
-    struct Key(f32);
-    impl Eq for Key {}
-    impl Ord for Key {
-        fn cmp(&self, o: &Self) -> std::cmp::Ordering {
-            self.0.total_cmp(&o.0)
-        }
-    }
-    impl PartialOrd for Key {
-        fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> {
-            Some(self.cmp(o))
-        }
-    }
+    route_near(level, from, to, cells, &[])
+}
+
+/// Blocks either side of a way already shown that [`route_near`] keeps to.
+pub const GUIDE_REACH: f32 = 12.0;
+
+/// [`route`], within [`GUIDE_REACH`] of `guide` (a way found over a coarser
+/// grid, shown while its ends were dragged) when it is not empty: the way
+/// worked out finely once they are let go is the one that was shown, not
+/// another down the next valley. Where no way is found within it, the way
+/// [`route`] finds.
+pub fn route_near(level: &crate::level::Level, from: (f32, f32), to: (f32, f32), cells: usize, guide: &[(f32, f32)]) -> Vec<(f32, f32)> {
     let dist = (to.0 - from.0).hypot(to.1 - from.1);
     if dist < 3.0 {
         return vec![from, to];
@@ -1391,6 +1557,83 @@ pub fn route(level: &crate::level::Level, from: (f32, f32), to: (f32, f32), cell
             1.0 + 1.6 * (h[k] - lo) / span + 0.3 * noise.fbm(x as f64 / 40.0, z as f64 / 40.0, 3, 2.0, 0.5) as f32
         })
         .collect();
+    // Off the line between its ends: a cost growing as the square of how
+    // far past a sixth of its length.
+    let free = (dist / 6.0).max(32.0);
+    let (lx, lz) = ((to.0 - from.0) / dist, (to.1 - from.1) / dist);
+    let mut cost = cost;
+    for (k, c) in cost.iter_mut().enumerate() {
+        if c.is_finite() {
+            let (x, z) = at(k);
+            let t = ((x - from.0) * lx + (z - from.1) * lz).clamp(0.0, dist);
+            let off = (x - from.0 - t * lx).hypot(z - from.1 - t * lz);
+            if off > free {
+                let e = (off - free) / free;
+                *c += 1.5 * e * e;
+            }
+        }
+    }
+    // Along the way shown: nowhere else.
+    if guide.len() >= 2 {
+        let mut inside = vec![false; nx * nz];
+        let r = (GUIDE_REACH / step).ceil() as i32;
+        let mut stamp = |p: (f32, f32)| {
+            let (ci, cj) = (((p.0 - x0) / step).round() as i32, ((p.1 - z0) / step).round() as i32);
+            for dj in -r..=r {
+                for di in -r..=r {
+                    let (i, j) = (ci + di, cj + dj);
+                    if i >= 0 && j >= 0 && i < nx as i32 && j < nz as i32 && ((di * di + dj * dj) as f32) * step * step <= GUIDE_REACH * GUIDE_REACH {
+                        inside[j as usize * nx + i as usize] = true;
+                    }
+                }
+            }
+        };
+        for w in guide.windows(2) {
+            let n = ((w[1].0 - w[0].0).hypot(w[1].1 - w[0].1) / (0.5 * step).max(1.0)).ceil().max(1.0) as usize;
+            for s in 0..=n {
+                let t = s as f32 / n as f32;
+                stamp((w[0].0 + (w[1].0 - w[0].0) * t, w[0].1 + (w[1].1 - w[0].1) * t));
+            }
+        }
+        stamp(from);
+        stamp(to);
+        if inside[start] && inside[goal] {
+            let mut kept = cost.clone();
+            for (c, &i) in kept.iter_mut().zip(&inside) {
+                if !i {
+                    *c = f32::INFINITY;
+                }
+            }
+            if let Some(way) = cheapest(&kept, &h, (nx, nz), step, (start, goal), at) {
+                return finish(way, from, to, at);
+            }
+        }
+    }
+    match cheapest(&cost, &h, (nx, nz), step, (start, goal), at) {
+        Some(way) => finish(way, from, to, at),
+        None => vec![from, to],
+    }
+}
+
+/// The cheapest way over a grid of `nx` × `nz` samples `step` blocks
+/// apart (`cost` of crossing each, `h` its height) from sample `start` to
+/// `goal`, as their indices; `None` where there is none.
+fn cheapest(cost: &[f32], h: &[f32], (nx, nz): (usize, usize), step: f32, (start, goal): (usize, usize), at: impl Fn(usize) -> (f32, f32)) -> Option<Vec<usize>> {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+    #[derive(PartialEq)]
+    struct Key(f32);
+    impl Eq for Key {}
+    impl Ord for Key {
+        fn cmp(&self, o: &Self) -> std::cmp::Ordering {
+            self.0.total_cmp(&o.0)
+        }
+    }
+    impl PartialOrd for Key {
+        fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> {
+            Some(self.cmp(o))
+        }
+    }
     let (gx, gz) = at(goal);
     let guess = |k: usize| {
         let (x, z) = at(k);
@@ -1430,13 +1673,19 @@ pub fn route(level: &crate::level::Level, from: (f32, f32), to: (f32, f32), cell
         }
     }
     if goal != start && came[goal] == u32::MAX {
-        return vec![from, to];
+        return None;
     }
     let mut way = vec![goal];
     while *way.last().expect("the goal") != start {
         way.push(came[*way.last().expect("the goal")] as usize);
     }
     way.reverse();
+    Some(way)
+}
+
+/// The way over the grid (`way`, samples' indices) in blocks, from `from`
+/// to `to`, its corners cut.
+fn finish(way: Vec<usize>, from: (f32, f32), to: (f32, f32), at: impl Fn(usize) -> (f32, f32)) -> Vec<(f32, f32)> {
     let mut points: Vec<(f32, f32)> = Vec::with_capacity(way.len() + 2);
     points.push(from);
     points.extend(way[1..way.len().saturating_sub(1)].iter().map(|&k| at(k)).map(|(x, z)| (x + 0.5, z + 0.5)));

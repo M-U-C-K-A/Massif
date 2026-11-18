@@ -1436,7 +1436,8 @@ The **River** tool (Water group) lays a river out from its source:
   water would go.
 - **Click elsewhere**: that is where it ends. The way there is worked out
   over the land, as water would take it: along the valleys, climbing as
-  little as it can, into the water it meets.
+  little as it can, into the water it meets, keeping near the line
+  between the two.
 - **Drag the river** anywhere along its course to bend it: the point held
   becomes a point it must pass, and the way on either side follows the land
   again. Drag the source, those points or the end to move them; right-click
@@ -1463,7 +1464,13 @@ and a river biome on its water.
   block in twenty) it meanders: a wave across its way some ten times its
   width long and up to half its width to either side, smaller where it
   would climb out of its valley, none near its ends and the points you
-  dragged it through. Then a smooth curve runs through all of it.
+  dragged it through. None of this moves it more than half its width from
+  the way found, nor across itself or back on itself: a stretch between
+  two points that would is left as found. Then a smooth curve runs
+  through all of it, through every point you dragged it through and to
+  the end you clicked: what is dug is what was shown. While a point is
+  dragged its way is worked out coarsely; let go, finely, along the way
+  shown rather than down another valley.
 - Water runs from the source down. Its level along the river is the lowest
   the land allows so far, a
   little under the banks: it never rises downstream, whatever the bumps.

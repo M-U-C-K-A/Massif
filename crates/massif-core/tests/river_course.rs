@@ -1,0 +1,167 @@
+//! A river laid out by hand keeps to the way it was given: through every
+//! point dragged, to the end clicked, what is shown being what is dug.
+
+use massif_core::coords::{TilePos, local_index};
+use massif_core::generate::{GenParams, Landform, generate};
+use massif_core::level::Level;
+use massif_core::river::{GUIDE_REACH, natural_course, route, route_near, smooth_course};
+use massif_core::tile::{NO_FLUID, Tile};
+use massif_core::world::{Dimension, DimensionKind, World, WorldMeta};
+
+/// The distance from `p` to the polyline `line`.
+fn off(p: (f32, f32), line: &[(f32, f32)]) -> f32 {
+    if line.len() == 1 {
+        return (p.0 - line[0].0).hypot(p.1 - line[0].1);
+    }
+    let mut best = f32::MAX;
+    for w in line.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        let (dx, dz) = (b.0 - a.0, b.1 - a.1);
+        let l2 = dx * dx + dz * dz;
+        let t = if l2 > 0.0 { (((p.0 - a.0) * dx + (p.1 - a.1) * dz) / l2).clamp(0.0, 1.0) } else { 0.0 };
+        best = best.min((p.0 - a.0 - t * dx).hypot(p.1 - a.1 - t * dz));
+    }
+    best
+}
+
+/// The max and mean distance of the points of `a` from the polyline `b`.
+fn stray(a: &[(f32, f32)], b: &[(f32, f32)]) -> (f32, f32) {
+    let d: Vec<f32> = a.iter().map(|&p| off(p, b)).collect();
+    (d.iter().copied().fold(0.0, f32::max), d.iter().sum::<f32>() / d.len().max(1) as f32)
+}
+
+/// Pairs of segments of `line` that cross, not neighbours.
+fn crossings(line: &[(f32, f32)]) -> usize {
+    let cross = |a: (f32, f32), b: (f32, f32), c: (f32, f32), d: (f32, f32)| {
+        let o = |p: (f32, f32), q: (f32, f32), r: (f32, f32)| (q.0 - p.0) * (r.1 - p.1) - (q.1 - p.1) * (r.0 - p.0);
+        let (d1, d2, d3, d4) = (o(c, d, a), o(c, d, b), o(a, b, c), o(a, b, d));
+        d1 * d2 < 0.0 && d3 * d4 < 0.0
+    };
+    let n = line.len();
+    let mut count = 0;
+    for i in 0..n.saturating_sub(1) {
+        for j in i + 2..n - 1 {
+            if cross(line[i], line[i + 1], line[j], line[j + 1]) {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+/// A course laid out as the River tool lays it, each leg dragged first
+/// (worked out coarsely) then let go (finely, along the coarse way): the
+/// coarse way shown while dragged, the way found, the course made natural
+/// (what is shown, then dug).
+struct Laid {
+    coarse: Vec<(f32, f32)>,
+    found: Vec<(f32, f32)>,
+    shown: Vec<(f32, f32)>,
+}
+
+fn lay_out(level: &Level, anchors: &[(f32, f32)], width: f32) -> Laid {
+    let mut found = vec![anchors[0]];
+    let mut coarse = vec![anchors[0]];
+    let mut stops = vec![0];
+    for w in anchors.windows(2) {
+        let guide = route(level, w[0], w[1], 40_000);
+        let leg = route_near(level, w[0], w[1], 400_000, &guide);
+        coarse.extend(guide.iter().skip(1));
+        found.extend(leg.iter().skip(1));
+        stops.push(found.len() - 1);
+    }
+    let (shown, _) = natural_course(level, &found, width, &stops);
+    Laid { coarse, found, shown }
+}
+
+/// Rivers laid out as a user lays them: a source, an end, three points
+/// dragged off the straight way between.
+fn layouts(level: &Level) -> Vec<Vec<(f32, f32)>> {
+    let on = |p: (f32, f32)| level.view(TilePos::containing(p.0 as i32, p.1 as i32)).is_some();
+    let mut out = Vec::new();
+    for (s, e) in [((-400.0, -400.0), (400.0, 380.0)), ((-420.0, 300.0), (380.0, -350.0)), ((0.0, -450.0), (20.0, 450.0)), ((-450.0, 0.0), (450.0, 40.0)), ((-300.0, -100.0), (250.0, 120.0))] {
+        let (s, e): ((f32, f32), (f32, f32)) = (s, e);
+        if !on(s) || !on(e) {
+            continue;
+        }
+        let (dx, dz) = (e.0 - s.0, e.1 - s.1);
+        let l = dx.hypot(dz);
+        let n = (-dz / l, dx / l);
+        let mut a = vec![s];
+        a.extend([(0.25, 70.0), (0.5, -90.0), (0.75, 60.0)].iter().map(|&(t, o)| (s.0 + dx * t + n.0 * o, s.1 + dz * t + n.1 * o)));
+        a.push(e);
+        out.push(a);
+    }
+    out
+}
+
+/// Checks rivers laid out over `level` against the way they were given,
+/// and says how far they strayed.
+fn check(name: &str, level: &Level, width: f32) {
+    let layouts = layouts(level);
+    assert!(!layouts.is_empty());
+    for anchors in layouts {
+        let laid = lay_out(level, &anchors, width);
+        // What gets dug: the curve through the course, as `dig_descent`
+        // hands it to `carve_river`.
+        let curve = smooth_course(&laid.shown);
+        let natural = stray(&laid.shown, &laid.found);
+        let dug = {
+            let (a, b) = (stray(&curve, &laid.shown), stray(&laid.shown, &curve));
+            (a.0.max(b.0), a.1)
+        };
+        let fine = stray(&laid.found, &laid.coarse);
+        let anchor = anchors.iter().map(|&a| off(a, &curve)).fold(0.0, f32::max);
+        let last = *anchors.last().unwrap();
+        let end = curve.last().map_or(f32::MAX, |p| (p.0 - last.0).hypot(p.1 - last.1));
+        eprintln!(
+            "{name}: shown from found max {:.1} mean {:.1} · dug from shown max {:.1} mean {:.2} · let go from dragged max {:.1} · points off dug {:.1} · end {:.1}",
+            natural.0, natural.1, dug.0, dug.1, fine.0, anchor, end
+        );
+        assert!(natural.0 <= 0.5 * width + 0.5, "{name}: the course strays {:.1} from the way found", natural.0);
+        assert!(dug.0 <= 3.0_f32.min(width), "{name}: what is dug strays {:.1} from what is shown", dug.0);
+        assert!(fine.0 <= GUIDE_REACH + 2.0, "{name}: the way let go strays {:.1} from the way dragged", fine.0);
+        assert!(anchor <= 1.0, "{name}: a point dragged lies {anchor:.1} from what is dug");
+        assert!(end <= 1.0, "{name}: it ends {end:.1} from the end clicked");
+        assert_eq!(crossings(&laid.shown), 0, "{name}: the course crosses itself");
+        assert_eq!(crossings(&curve), 0, "{name}: what is dug crosses itself");
+    }
+}
+
+/// New World's hills (the user's map), and mountains, 1,024 blocks across.
+#[test]
+fn a_laid_out_river_keeps_to_its_way() {
+    for landform in [Landform::Hills, Landform::Mountains] {
+        let world = generate(&GenParams {
+            tiles_x: 8,
+            tiles_z: 8,
+            landform,
+            ..GenParams::default()
+        });
+        check(&format!("{landform:?}"), world.dims[0].ground(), 24.0);
+        check(&format!("{landform:?}, narrow"), world.dims[0].ground(), 8.0);
+    }
+}
+
+/// Valleys and ridges across the way, terraced a block at a time, as on
+/// the user's map: the river goes through every point dragged all the same.
+#[test]
+fn a_laid_out_river_keeps_to_its_way_over_ridges() {
+    let mut world = World::new(WorldMeta::default());
+    let mut dim = Dimension::new(DimensionKind::Overworld, -64, 320);
+    for tz in -4..4 {
+        for tx in -4..4 {
+            let mut tile = Tile::ground(0.0, 1, NO_FLUID);
+            for z in 0..128 {
+                for x in 0..128 {
+                    let (bx, bz) = (tx * 128 + x, tz * 128 + z);
+                    let h = 100.0 + 30.0 * (bx as f32 / 45.0).sin() * (bz as f32 / 70.0).cos() + 12.0 * (bz as f32 / 23.0 + bx as f32 / 61.0).sin();
+                    tile.top.set(local_index(bx, bz), h.floor());
+                }
+            }
+            dim.ground_mut().insert(TilePos::new(tx, tz), tile);
+        }
+    }
+    world.dims = vec![dim];
+    check("ridges", world.dims[0].ground(), 24.0);
+}

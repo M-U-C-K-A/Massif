@@ -901,11 +901,14 @@ impl RiverDraft {
         let mut stops = vec![0];
         for (k, w) in anchors.windows(2).enumerate() {
             let cells = if moving.is_some_and(|m| m == k || m == k + 1) { COARSE_LEG } else { FINE_LEG };
-            let leg = self
-                .legs
-                .entry((quarter(w[0]), quarter(w[1]), cells))
-                .or_insert_with(|| massif_core::river::route(level, w[0], w[1], cells));
-            course.extend(leg.iter().skip(1));
+            let key = (quarter(w[0]), quarter(w[1]), cells);
+            if !self.legs.contains_key(&key) {
+                // Worked out finely where it was shown coarsely while
+                // dragged: along the way shown, not down another valley.
+                let guide = if cells == FINE_LEG { self.legs.get(&(key.0, key.1, COARSE_LEG)).cloned().unwrap_or_default() } else { Vec::new() };
+                self.legs.insert(key, massif_core::river::route_near(level, w[0], w[1], cells, &guide));
+            }
+            course.extend(self.legs[&key].iter().skip(1));
             stops.push(course.len() - 1);
         }
         let (lakes, mouth) = match self.layout.end {
