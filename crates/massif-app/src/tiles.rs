@@ -146,11 +146,14 @@ impl TileStore {
         matches!(self.slots.lock().expect("not poisoned").get(&key), Some(Slot::Failed(_)))
     }
 
-    /// Forget what is asked for and not begun: the dialog moved on.
+    /// Forget what is asked for and not begun: the dialog moved on. A tile
+    /// had meanwhile (put in memory) stays.
     pub fn forget_queue(&self) {
         let mut slots = self.slots.lock().expect("not poisoned");
         for key in self.queue.lock().expect("not poisoned").drain(..) {
-            slots.remove(&key);
+            if matches!(slots.get(&key), Some(Slot::Asked)) {
+                slots.remove(&key);
+            }
         }
     }
 
@@ -175,6 +178,11 @@ impl TileStore {
             };
             {
                 let mut slots = self.slots.lock().expect("not poisoned");
+                // A tile put in memory meanwhile is never undone by a
+                // failure to have it.
+                if matches!(slots.get(&key), Some(Slot::Ready(_))) && matches!(slot, Slot::Failed(_)) {
+                    continue;
+                }
                 slots.insert(key, slot);
                 let mut order = self.order.lock().expect("not poisoned");
                 order.push_back(key);
@@ -510,6 +518,24 @@ fn parse_places(body: &str) -> Result<Vec<Place>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A tile put in memory after it was asked for offline stays: neither
+    /// the failure to have it nor the dialog forgetting its queue undoes it
+    /// (two tests at once, one asking and one putting tiles there, left a
+    /// preview waiting forever).
+    #[test]
+    fn a_tile_put_in_memory_is_never_undone() {
+        let store = Arc::new(TileStore::new(None, false));
+        let ctx = egui::Context::default();
+        let key = TileKey { z: 3, x: 4, y: 2 };
+        assert!(store.get(key, &ctx).is_none(), "asked");
+        store.insert(key, Arc::new(DemTile { metres: vec![1.0; TILE_PX * TILE_PX] }));
+        store.forget_queue();
+        // The workers fail to load it offline meanwhile.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(store.get(key, &ctx).is_some(), "still in memory");
+        assert!(!store.failed(key));
+    }
     use massif_core::real::{TILE_PX, encode_terrarium};
 
     #[test]

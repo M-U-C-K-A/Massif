@@ -17218,6 +17218,9 @@ mod tests {
         use crate::menu::Command;
         use egui_kittest::kittest::{NodeT, Queryable};
         let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        // The real place's dialog asks the global store for tiles: one test
+        // at a time does (it could undo those another one put there).
+        let _store = crate::real_terrain::tests::STORE.lock().unwrap_or_else(|e| e.into_inner());
         let (w, hgt) = (960.0, 640.0);
         let mut h = egui_kittest::Harness::builder()
             .with_size(vec2(w, hgt))
