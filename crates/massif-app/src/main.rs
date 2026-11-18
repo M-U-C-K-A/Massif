@@ -141,15 +141,15 @@ fn main() -> eframe::Result {
     let base = setup.device_descriptor.clone();
     setup.device_descriptor = std::sync::Arc::new(move |adapter| {
         let mut desc = base(adapter);
-        desc.required_limits.max_texture_array_layers = desc
-            .required_limits
-            .max_texture_array_layers
-            .max(adapter.limits().max_texture_array_layers.min(2048));
-        // The Render side keeps a map's blocks in storage buffers: as large
-        // as the card binds, up to 2 GiB.
-        let most = adapter.limits();
-        desc.required_limits.max_storage_buffer_binding_size = desc.required_limits.max_storage_buffer_binding_size.max(most.max_storage_buffer_binding_size.min(2 << 30));
-        desc.required_limits.max_buffer_size = desc.required_limits.max_buffer_size.max(most.max_buffer_size.min(2 << 30));
+        let can = adapter.limits();
+        let want = &mut desc.required_limits;
+        want.max_texture_array_layers = want.max_texture_array_layers.max(can.max_texture_array_layers.min(2048));
+        // The Render side keeps a map's blocks in storage buffers, and the
+        // terrain generator's simulations their grids (8192 × 8192 samples,
+        // 256 MB): as large as the card binds, up to 2 GiB, 16 a stage.
+        want.max_storage_buffer_binding_size = want.max_storage_buffer_binding_size.max(can.max_storage_buffer_binding_size.min(2 << 30));
+        want.max_buffer_size = want.max_buffer_size.max(can.max_buffer_size.min(2 << 30));
+        want.max_storage_buffers_per_shader_stage = want.max_storage_buffers_per_shader_stage.max(can.max_storage_buffers_per_shader_stage.min(16));
         desc
     });
     let wgpu_options = egui_wgpu::WgpuConfiguration::default();
