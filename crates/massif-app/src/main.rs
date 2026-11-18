@@ -122,10 +122,14 @@ fn main() -> eframe::Result {
     let base = setup.device_descriptor.clone();
     setup.device_descriptor = std::sync::Arc::new(move |adapter| {
         let mut desc = base(adapter);
-        desc.required_limits.max_texture_array_layers = desc
-            .required_limits
-            .max_texture_array_layers
-            .max(adapter.limits().max_texture_array_layers.min(2048));
+        let can = adapter.limits();
+        let want = &mut desc.required_limits;
+        want.max_texture_array_layers = want.max_texture_array_layers.max(can.max_texture_array_layers.min(2048));
+        // The terrain generator's simulations hold grids of 8192 × 8192
+        // samples (256 MB) on the graphics card: as large as it allows.
+        want.max_storage_buffer_binding_size = want.max_storage_buffer_binding_size.max(can.max_storage_buffer_binding_size.min(1 << 30));
+        want.max_buffer_size = want.max_buffer_size.max(can.max_buffer_size.min(1 << 31));
+        want.max_storage_buffers_per_shader_stage = want.max_storage_buffers_per_shader_stage.max(can.max_storage_buffers_per_shader_stage.min(16));
         desc
     });
     let wgpu_options = egui_wgpu::WgpuConfiguration::default();

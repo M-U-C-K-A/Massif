@@ -12,7 +12,7 @@ use crate::model::Graph;
 use crate::space::{Rect, Space};
 use massif_core::graph::{self as v1, BiomeOut, BlockPalette, ColorField, Extent, Field, LayerOut, NO_WATER, Outputs};
 use massif_core::world::Dimension;
-use massif_core::{BlockRect, Span, TILE_SIZE, TerrainId, TileStack, TilePos, World};
+use massif_core::{BlockRect, Registry, Span, TILE_SIZE, TerrainId, TileStack, TilePos, World};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -72,14 +72,20 @@ pub struct MapEnv {
 
 impl MapEnv {
     /// The map of `dim` as it is at `revision` (a number that changes with
-    /// it), files read from beside the world, in `folder`.
+    /// it), files read from beside the world, in `folder`. Copies the
+    /// dimension: an app keeping one open passes a snapshot to [`MapEnv::of`].
     pub fn new(world: &World, dim: usize, revision: u64, folder: impl Into<PathBuf>) -> Self {
-        let reg = &world.registry;
-        let count = reg.terrains.len();
-        let terrains = (0..count).map(|k| (reg.terrain(TerrainId(k as u16)).name.to_ascii_lowercase(), k as u16)).collect();
-        let colors = (0..count).map(|k| reg.terrain(TerrainId(k as u16)).color.map(v1::decode_srgb)).collect();
+        Self::of(world.dims[dim].clone(), &world.registry, revision, folder)
+    }
+
+    /// The map of `dim` (a snapshot: `Dimension::snapshot`), its terrains
+    /// named by `registry`.
+    pub fn of(dim: Dimension, registry: &Registry, revision: u64, folder: impl Into<PathBuf>) -> Self {
+        let count = registry.terrains.len();
+        let terrains = (0..count).map(|k| (registry.terrain(TerrainId(k as u16)).name.to_ascii_lowercase(), k as u16)).collect();
+        let colors = (0..count).map(|k| registry.terrain(TerrainId(k as u16)).color.map(v1::decode_srgb)).collect();
         let own = (1..=4).map(|k| LayerOut::level_name("", k)).collect();
-        Self { dim: Arc::new(world.dims[dim].clone()), revision, own, terrains, colors, files: DiskEnv::new(folder) }
+        Self { dim: Arc::new(dim), revision, own, terrains, colors, files: DiskEnv::new(folder) }
     }
 }
 
