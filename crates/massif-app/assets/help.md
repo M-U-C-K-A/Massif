@@ -24,7 +24,7 @@ The first time a map is open, a short tour of six steps shows the window: the Wo
 - **Heights**: **Exaggeration** makes the relief taller; **Sea level** is where the sea stands, and **Real height there** the real height that stands at it (0: the sea's; higher for a place inland, its valleys then filled). **Range** and **Lowest**, **Highest**: the heights the ground keeps to; **Squeeze into the range** brings mountains too tall (and seas too deep) into it rather than cutting them off.
 The picture under the map shows the ground it makes and the heights it reaches. Gaps, spikes and pits of the data are filled from the heights around them; sand lies only along the water, snow only above the snow line of the latitude. Tiles are kept on disk: a place seen once works offline. The ground is painted by the automatic paint; in the map it is one step to undo. Elevation: Terrain Tiles by Mapzen on AWS Open Data (SRTM, GMTED2010, ETOPO1, 3DEP, EU-DEM and others; **All the sources** in the dialog lists them); search: Nominatim, © OpenStreetMap contributors.
 
-Behind the home screen, ranges of mountains drift slowly, their crests in the accent colour, a glow behind them; **Home background** (Settings ▸ Appearance) shows pictures instead, a new one each time Massif opens (the button at the bottom right shows another). **Animate the background** stops either, and so does Reduce motion.
+Behind the home screen, ranges of mountains drift slowly, their crests in the accent colour, a glow behind them; **Animate the background** (Settings ▸ Appearance) stops them, and so does Reduce motion.
 
 ## Saving and exporting
 - `⌘S` saves the map as a `.massif` file. The Finder and Explorer show the map as the file's picture.
@@ -265,7 +265,7 @@ Its layers come too. Forests (Deciduous, Pine, Jungle, Swamp) and the trees of W
 
 # Settings
 **Settings…** (`⌘,`: in the **Massif** menu, or the home screen's sidebar) has ten sections.
-- **Appearance**: the theme, the accent colour, the loader shown while Massif works (a grid of dots in one of eight patterns), the tool icons (Line or Classic), the **Home background** (Ridges or Pictures), **Animate the background** (drifting or still), and the crosshair of the player's view (a dot, a cross, a circle, Minecraft's plus or none, its size and opacity, with a preview).
+- **Appearance**: the theme, the accent colour, the loader shown while Massif works (a grid of dots in one of eight patterns), the tool icons (Line or Classic), **Animate the background** (the home screen's ridges drifting or still), and the crosshair of the player's view (a dot, a cross, a circle, Minecraft's plus or none, its size and opacity, with a preview).
 - **Typeface**: what the interface is set in — the system's own typeface, or Inter, Geist, IBM Plex Sans or Manrope, built into Massif. Each is shown in itself; a click sets the whole interface in it.
 - **Sounds**: little sounds for what happens, made by Massif as it plays them. **Essential**: tasks done, saving, errors. **All**: the interface too (choices, switches, windows, workspaces). Each can be heard from there. The sound output is held only while a sound plays: headphones are free to go to another device.
 - **Notifications**: the system tells when a long task ends (an export, an import, a conversion, a pass over the whole map): never, while Massif is in the background, or always.

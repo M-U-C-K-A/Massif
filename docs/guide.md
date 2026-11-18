@@ -55,9 +55,8 @@ own; **Help ▸ Take the tour** shows it again (over a sample, from the home
 screen). Massif shows no other tips or popups. With Reduce motion on, the
 light jumps from one part to the next rather than gliding.
 
-Behind it, as **Home background** says (Settings ▸ Appearance), ridges or
-pictures. The ridges, the default: six ranges of mountains seen from afar, one
-in front of the other, under a glow of the accent low on the right, as of a
+Behind it, ridges: six ranges of mountains seen from afar, one in front of
+the other, under a glow of the accent low on the right, as of a
 sun gone down, deep at its edge and bright at its core on the horizon. Each
 range is a band: a jagged crest, grey with sparks of the accent away from the
 glow, thicker and white-hot toward it, over land that darkens down from the
@@ -70,16 +69,8 @@ are written their light is held down, softly, so that muted text keeps 3 to
 1 on them. Light theme: the same on a light page, pale grey land. High
 contrast: the crests alone, none under the words. They are drawn on the
 processor at 12 frames a second, only while the home screen is shown and the
-window is in front; with
-**Animate the background** off (Settings ▸ Appearance) or Reduce motion on,
-they stand still. The pictures are those of
-[`crates/massif-app/assets/backdrops`](../crates/massif-app/assets/backdrops) —
-ten scenes at night: a canyon, the Alps, volcanic islands, stone pillars in
-the mist, dunes, a fjord under the northern lights, terraced fields, chalk
-cliffs, a lake in the pines, a desert under a ringed planet —, a new one each
-time Massif opens (those not shown yet first; the button at the bottom right
-shows another), reduced to sixteen colours of its own with an ordered dither
-that moves on about once a second, at dawn in the light theme.
+window is in front; with **Animate the background** off (Settings ▸
+Appearance) or Reduce motion on, they stand still.
 
 ## The window
 
@@ -178,9 +169,8 @@ their own:
   lighting in patterns — Orbit, Ripple, Scan, Rain, Bars, Spiral, Sweep,
   Twinkle — each alive in its tile, still with Reduce motion), the **Tool
   icons** (**Line**, the default, in the style of the interface's other
-  icons, or **Classic**, Massif's first drawings), the **Home background**
-  (**Ridges** or **Pictures**), **Animate the background** (the ridges
-  drifting, a picture's dither moving on, or still), and the **Crosshair** of the player's view: a **Dot**, a
+  icons, or **Classic**, Massif's first drawings), **Animate the background**
+  (the ridges behind the home screen drifting, or still), and the **Crosshair** of the player's view: a **Dot**, a
   **Cross** (the default: four short strokes around an open middle), a
   **Circle**, a plain **Minecraft** plus, or **None**, with its **Size** (6
   to 32 points) and **Opacity**, beside a preview on light ground and dark.
