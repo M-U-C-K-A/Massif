@@ -345,17 +345,20 @@ impl History {
     /// another size, say), as one step to undo labelled `label`: undone, the
     /// whole map is back as it was.
     pub fn replace_dimension(&mut self, world: &mut World, dim: usize, dimension: Dimension, label: impl Into<String>) {
+        self.replace_dimension_and_settings(world, dim, dimension, None, label);
+    }
+
+    /// The same, the map given the settings and blocks `settings` too (its
+    /// terrains made of another palette's blocks, say), in the same step.
+    pub fn replace_dimension_and_settings(&mut self, world: &mut World, dim: usize, dimension: Dimension, settings: Option<(crate::world::WorldMeta, crate::registry::Registry)>, label: impl Into<String>) {
         self.begin(label, dim);
         // The map as it is, cold, to undo it.
         let before = world.snapshot();
         world.dims = before.dims;
         let mut dims = world.dims.clone();
         dims[dim] = dimension;
-        let whole = Whole {
-            meta: world.meta.clone(),
-            registry: world.registry.clone(),
-            dims,
-        };
+        let (meta, registry) = settings.unwrap_or_else(|| (world.meta.clone(), world.registry.clone()));
+        let whole = Whole { meta, registry, dims };
         let step = self.open.as_mut().expect("just begun");
         step.whole = Some(Box::new(whole.swap(world)));
         self.commit();

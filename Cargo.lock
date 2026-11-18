@@ -2072,6 +2072,7 @@ dependencies = [
  "egui",
  "egui-wgpu",
  "egui_kittest",
+ "fastanvil",
  "fastnbt",
  "flate2",
  "glam",

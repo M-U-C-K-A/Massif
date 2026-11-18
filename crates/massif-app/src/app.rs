@@ -431,6 +431,9 @@ pub struct MassifApp {
     /// The place, scale and heights the relief of a real place was last
     /// made with (per run of the app).
     real: Option<crate::real_terrain::Remembered>,
+    /// The real place's dialog, set aside while the palettes window it
+    /// opened is open: shown again when that closes.
+    real_parked: Option<Box<crate::real_terrain::RealForm>>,
     /// The Versions panel: the save points' pictures and the comparison.
     versions: crate::versions::VersionsUi,
     layout: Layout,
@@ -1000,6 +1003,7 @@ impl MassifApp {
             caves: None,
             guide: None,
             real: None,
+            real_parked: None,
             versions: Default::default(),
             layout,
             tools,
@@ -2172,7 +2176,14 @@ impl MassifApp {
             let Some(rect) = rect else { return };
             (Target::Map { rect, selected: dim.selection.is_some(), min_y: dim.min_y, max_y: dim.max_y }, self.doc.world.meta.sea_level)
         };
-        let form = RealForm::new(target, sea, self.real, crate::tiles::TileStore::global());
+        // Its blocks: a new world's those the new map has chosen, else the
+        // map's.
+        let palette = match (&self.home, target) {
+            (Some(home), Target::NewWorld) => home.new_map.params.palette.clone(),
+            (None, Target::NewWorld) => massif_core::materials::Palette::vanilla(),
+            _ => self.doc.world.meta.palette.clone(),
+        };
+        let form = RealForm::new(target, sea, self.real, crate::tiles::TileStore::global(), palette, self.all_palettes());
         self.dialog = Some(Dialog::Real(Box::new(form)));
     }
 
@@ -2677,18 +2688,26 @@ impl MassifApp {
                         self.say(ctx, note.map_or_else(|| msg.clone(), |n| format!("{msg}. {n}")), false, None);
                     }
                 }
-                Outcome::RealMap { dimension, columns, revision, dim, note } => {
+                Outcome::RealMap { dimension, palette, resized, columns, revision, dim, note } => {
                     if other_map || revision != self.doc.revision || dim != self.doc.dim {
                         crate::sounds::play(Cue::Warning);
                         self.say(ctx, tr!("Relief of a real place: {meanwhile}, nothing was done", meanwhile), true, None);
                     } else {
                         let rect = dimension.bounds().map(|(lo, hi)| ((hi.x - lo.x + 1) * massif_core::TILE_SIZE, (hi.z - lo.z + 1) * massif_core::TILE_SIZE));
-                        self.doc.replace_dimension(dim, *dimension, tr!("Real terrain"));
+                        if palette.is_some() {
+                            // The terrains' new blocks in their real colours.
+                            self.blocks.applied = None;
+                        }
+                        self.doc.replace_dimension(dim, *dimension, palette, tr!("Real terrain"));
                         self.map_cache.invalidate_all();
                         self.view3d.invalidate_all();
                         self.sculpt3d.invalidate_all();
                         let (w, d) = rect.unwrap_or_default();
-                        let msg = tr!("Relief of a real place: the map is now {w} × {d} blocks, {columns} columns written in {secs:.1} s", w, d, columns, secs);
+                        let msg = if resized {
+                            tr!("Relief of a real place: the map is now {w} × {d} blocks, {columns} columns written in {secs:.1} s", w, d, columns, secs)
+                        } else {
+                            tr!("Relief of a real place: {columns} columns changed in {secs:.1} s", columns, secs)
+                        };
                         self.task_done(ctx, Cue::Ready, tr!("Relief of a real place done"), &msg, secs);
                         self.say(ctx, note.map_or_else(|| msg.clone(), |n| format!("{msg}. {n}")), false, None);
                     }
@@ -3924,6 +3943,13 @@ impl MassifApp {
                             let p = &mut home.new_map.params.palette;
                             *p = all.iter().find(|q| q.name == p.name).cloned().unwrap_or_default();
                         }
+                        // The real place's dialog back, its palettes too.
+                        if let Some(mut form) = self.real_parked.take() {
+                            let p = &mut form.palette;
+                            *p = all.iter().find(|q| q.name == p.name).cloned().unwrap_or_else(|| form.map_palette.clone());
+                            form.palettes = all;
+                            self.dialog = Some(Dialog::Real(form));
+                        }
                     }
                     None => self.dialog = Some(Dialog::Palettes(editor)),
                 }
@@ -4473,8 +4499,17 @@ impl MassifApp {
                 match choice {
                     Choice::Keep => {}
                     Choice::Close => keep = false,
+                    Choice::EditPalettes => {
+                        let shown = form.palette.name.clone();
+                        self.real_parked = Some(form);
+                        self.open_palettes(Some(&shown));
+                        return;
+                    }
                     Choice::Make(job) => {
                         keep = false;
+                        // A palette of a mod's blocks: its blocks read, from
+                        // an instance found here, to show and export them.
+                        self.read_mods_of(ctx, &job.palette);
                         if job.target == crate::real_terrain::Target::NewWorld {
                             self.request(ctx, Pending::Real(job));
                         } else {
@@ -9273,6 +9308,178 @@ mod tests {
             h.run_steps(20);
             h.render().unwrap().save(dir.join("real-place-new-world.png")).unwrap();
         }
+    }
+
+    /// Edit ▸ Relief of a Real Place with another block palette: the
+    /// dialog offers the palettes as New map does (a mod's only once its
+    /// blocks are read), the map's by default. Into the map, Conquest
+    /// Reforged's switches the map's palette with the relief, its export
+    /// writes Conquest's blocks, and one undo puts back the heights and the
+    /// game's blocks; a new world from a real place is made of it. Renders
+    /// the dialog with MASSIF_SNAPSHOT_DIR (MASSIF_SNAPSHOT_LANG for another
+    /// language).
+    #[test]
+    fn real_place_with_another_palette() {
+        use egui_kittest::kittest::Queryable;
+        use massif_core::materials::Palette as BlockPalette;
+        let _store = crate::real_terrain::tests::STORE.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let store = crate::tiles::TileStore::global();
+        let conquest = BlockPalette::of_mod("conquest").unwrap();
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let wait = |h: &mut egui_kittest::Harness<'static, MassifApp>, done: &dyn Fn(&MassifApp) -> bool| {
+            let started = std::time::Instant::now();
+            while !done(h.state()) {
+                assert!(started.elapsed().as_secs() < 120, "timed out: {:?}", h.state().status.as_ref().map(|s| s.text.clone()));
+                h.step();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            h.run_steps(3);
+        };
+        let has_picture = |app: &MassifApp| matches!(&app.dialog, Some(Dialog::Real(form)) if form.has_picture());
+
+        // Not offered while Conquest's blocks are not read.
+        h.state_mut().open_real(false);
+        {
+            let Some(Dialog::Real(form)) = &h.state().dialog else { panic!("the dialog opens") };
+            assert!(form.palette.is_vanilla(), "the map's palette by default");
+            assert!(!form.palettes.iter().any(|p| p.name == conquest.name));
+        }
+        h.state_mut().dialog = None;
+        // A catalogue with only the mod's name in it, as in
+        // block_palettes_in_the_app.
+        let mods = vec![massif_assets::ModInfo { name: "Conquest Reforged".to_owned(), namespaces: vec!["conquest".to_owned()], kind: massif_assets::SourceKind::Mod, ..Default::default() }];
+        let cat = massif_assets::Catalogue { version: "1.20.1".into(), source: PathBuf::new(), blocks: Vec::new(), textures: Default::default(), mods, skipped: Vec::new(), definitions: Default::default(), registered: Default::default(), biomes: Vec::new() };
+        h.state_mut().blocks.catalogue = Some(std::sync::Arc::new(cat));
+
+        // Into the whole map.
+        let before = h.state_mut().doc.world.snapshot();
+        let undo_before = h.state().doc.history.undo_count();
+        h.state_mut().open_real(false);
+        let area = {
+            let Some(Dialog::Real(form)) = &mut h.state_mut().dialog else { panic!("the dialog opens") };
+            assert!(form.palettes.iter().any(|p| p.name == conquest.name), "offered once its blocks are read");
+            form.area.blocks_per_metre = 0.02;
+            form.area
+        };
+        crate::real_terrain::tests::seed_store(&store, &area);
+        wait(&mut h, &has_picture);
+        // The dialog's menu, over the map settings' own.
+        h.query_all_by_value("Vanilla").last().expect("the dialog's menu").click();
+        h.run_steps(2);
+        h.get_by_label("Conquest Reforged").click();
+        h.run_steps(3);
+        {
+            let Some(Dialog::Real(form)) = &h.state().dialog else { panic!("the dialog stays") };
+            assert_eq!(form.palette, conquest);
+        }
+        if std::env::var("MASSIF_SNAPSHOT_LANG").is_err() {
+            let _ = h.get_by_label_contains("The map's palette becomes Conquest Reforged");
+        }
+        if let Some(dir) = &dir {
+            let lang = std::env::var("MASSIF_SNAPSHOT_LANG").unwrap_or_else(|_| "en".into());
+            // In the smallest window the app opens (see main.rs).
+            h.set_size(egui::vec2(960.0, 640.0));
+            h.run_steps(5);
+            // The menu and its note scrolled into view.
+            h.query_all_by_value("Conquest Reforged").last().expect("the dialog's menu").scroll_to_me();
+            h.run_steps(5);
+            h.render().unwrap().save(dir.join(format!("dialog-real-place-palette-{lang}.png"))).unwrap();
+            h.set_size(egui::vec2(1600.0, 1000.0));
+            h.run_steps(3);
+        }
+        // Rendered in another language: the rest is the same.
+        if std::env::var("MASSIF_SNAPSHOT_LANG").is_ok_and(|l| l != "en") {
+            return;
+        }
+        h.get_by_label("Apply").click();
+        h.run_steps(2);
+        wait(&mut h, &|app| app.jobs.is_empty());
+        let doc = &h.state().doc;
+        assert_eq!(doc.history.undo_label(), Some("Real terrain"), "{:?}", h.state().status.as_ref().map(|s| s.text.clone()));
+        assert_eq!(doc.history.undo_count(), undo_before + 1, "one step");
+        assert_eq!(doc.world.meta.palette, conquest);
+        let reg = &doc.world.registry;
+        let grass = reg.terrain(reg.terrain_by_name("Grass").unwrap());
+        assert!(grass.strata[0].blocks.iter().any(|b| reg.block(b.0).state.starts_with("conquest:")));
+        let pos = before.dims[0].ground().positions().next().unwrap();
+        let top = |dim: &massif_core::world::Dimension| (0..massif_core::TILE_AREA).step_by(97).map(|i| massif_core::TileStack::new(dim, pos, false).unwrap().ground().top.get(i)).collect::<Vec<_>>();
+        assert_ne!(top(doc.dimension()), top(&before.dims[0]), "the relief written");
+
+        // Its export writes Conquest's blocks.
+        let out = std::env::temp_dir().join(format!("massif-real-palette-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        let options = ExportOptions { target: massif_anvil::Target::release("1.20.1").unwrap(), ..ExportOptions::default() };
+        let snapshot = h.state_mut().doc.world.snapshot();
+        massif_anvil::export(&snapshot, &out, &options, &massif_anvil::Progress::default()).unwrap();
+        let mut names = std::collections::BTreeSet::new();
+        for entry in std::fs::read_dir(out.join("region")).unwrap().flatten() {
+            if entry.path().extension().is_none_or(|e| e != "mca") {
+                continue;
+            }
+            let mut region = fastanvil::Region::from_stream(std::fs::File::open(entry.path()).unwrap()).unwrap();
+            for chunk in region.iter().flatten() {
+                let fastnbt::Value::Compound(root) = fastnbt::from_bytes(&chunk.data).unwrap() else { panic!("a chunk is a compound") };
+                let Some(fastnbt::Value::List(sections)) = root.get("sections") else { continue };
+                for section in sections {
+                    if let fastnbt::Value::Compound(section) = section
+                        && let Some(fastnbt::Value::Compound(states)) = section.get("block_states")
+                        && let Some(fastnbt::Value::List(palette)) = states.get("palette")
+                    {
+                        for entry in palette {
+                            if let fastnbt::Value::Compound(entry) = entry
+                                && let Some(fastnbt::Value::String(name)) = entry.get("Name")
+                            {
+                                names.insert(name.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&out);
+        // Its grass and sand, the terrains the real place paints most.
+        for want in ["conquest:clover_covered_grass", "conquest:tan_sand"] {
+            assert!(names.contains(want), "no {want} among {names:?}");
+        }
+
+        // One undo: the heights and the game's blocks back.
+        let ctx = h.ctx.clone();
+        h.state_mut().undo(&ctx);
+        h.run_steps(2);
+        let doc = &h.state().doc;
+        assert_eq!(doc.history.undo_count(), undo_before);
+        assert!(doc.world.meta.palette.is_vanilla());
+        // Each terrain made of the blocks it was (their colours may have
+        // been read since).
+        let recipes = |reg: &massif_core::registry::Registry| reg.terrains.iter().map(|t| (t.name.clone(), t.strata.iter().flat_map(|s| s.blocks.iter().map(|b| reg.block(b.0).state.clone())).collect::<Vec<_>>())).collect::<Vec<_>>();
+        assert_eq!(recipes(&doc.world.registry), recipes(&before.registry), "the game's blocks back");
+        assert_eq!(top(doc.dimension()), top(&before.dims[0]), "the heights back");
+
+        // A new world from a real place, of Conquest's blocks (in an app
+        // with no changes to save first).
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        h.state_mut().open_real(true);
+        let area = {
+            let Some(Dialog::Real(form)) = &mut h.state_mut().dialog else { panic!("the dialog opens") };
+            form.palette = conquest.clone();
+            form.area.blocks_per_metre = 0.02;
+            form.area.width = 256;
+            form.area.depth = 256;
+            form.name = "Conquest place".into();
+            form.area
+        };
+        crate::real_terrain::tests::seed_store(&store, &area);
+        wait(&mut h, &has_picture);
+        h.get_by_label("Make the world").click();
+        h.run_steps(2);
+        wait(&mut h, &|app| app.jobs.is_empty() && app.dialog.is_none() && app.doc.world.meta.name == "Conquest place");
+        let world = &h.state().doc.world;
+        assert_eq!(world.meta.palette, conquest);
+        let grass = world.registry.terrain(world.registry.terrain_by_name("Grass").unwrap());
+        assert!(grass.strata[0].blocks.iter().any(|b| world.registry.block(b.0).state.starts_with("conquest:")));
     }
 
     /// Edit ▸ Relief of a Real Place over the whole map, made another size

@@ -1628,6 +1628,12 @@ A world, or a part of one, from the relief of a real place on the Earth.
   covers and object layers painted there, so the old map's sand pits and
   biomes do not lie at random over the new relief. **Keep** writes only
   the heights and the water, the terrains and everything painted staying.
+- **Blocks.** The block palette, as in the New map dialog: Vanilla, your
+  own palettes, and those of the mods whose blocks are read (Conquest
+  Reforged's, say). A new world is made of it. Into the map it starts as
+  the map's palette; another one switches the map's palette with the
+  relief, its terrains made of that palette's blocks all over the map, in
+  the same step to undo.
 - **Map size.** Over the whole map (no selection), the dialog's **Map**
   section says plainly that the map's land is replaced, and its **Size**
   can be kept or changed: **Change it** takes a new width and depth in

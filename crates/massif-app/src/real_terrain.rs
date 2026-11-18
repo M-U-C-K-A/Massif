@@ -9,6 +9,7 @@ use crate::widgets::{Field, Part, button_group, input_group, row, switch, well};
 use egui::{Color32, ColorImage, Rect, RichText, Sense, TextureHandle, TextureOptions, Ui, pos2, vec2};
 use massif_core::coords::BlockRect;
 use massif_core::heightmap::Heightmap;
+use massif_core::materials::Palette as BlockPalette;
 use massif_core::real::{Area, Bounds, DemTile, Elevation, Fit, Grid, MAX_SCALE, MAX_SIZE, MAX_ZOOM, MIN_SCALE, Samples, Span, TILE_PX, TileKey, Tiles, Vertical, metres_per_px, to_px, from_px};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -98,6 +99,9 @@ pub struct RealJob {
     /// Into the map: paint the land again from the new relief (see
     /// [`massif_core::real::write_ground`]).
     pub repaint: bool,
+    /// What the built-in terrains are made of: a new world's, or, into the
+    /// map, the map's after it (another one switched in the same step).
+    pub palette: BlockPalette,
 }
 
 impl std::fmt::Debug for RealJob {
@@ -118,6 +122,8 @@ pub enum Choice {
     Keep,
     Close,
     Make(Box<RealJob>),
+    /// Open the palettes window, and this dialog again after it.
+    EditPalettes,
 }
 
 /// What a tile of the map takes in memory, compressed (as the home screen
@@ -166,6 +172,11 @@ pub struct RealForm {
     /// (its painted biomes, covers and objects taken off), else its painted
     /// terrains kept.
     pub repaint: bool,
+    /// The block palette chosen, the one the map has (a new world's
+    /// default), and those to choose from (see `App::all_palettes`).
+    pub palette: BlockPalette,
+    pub map_palette: BlockPalette,
+    pub palettes: Vec<BlockPalette>,
     query: String,
     places: Vec<Place>,
     searching: Option<Receiver<Result<Vec<Place>, String>>>,
@@ -180,7 +191,7 @@ pub struct RealForm {
 }
 
 impl RealForm {
-    pub fn new(target: Target, sea_level: i32, kept: Option<Remembered>, store: Arc<TileStore>) -> Self {
+    pub fn new(target: Target, sea_level: i32, kept: Option<Remembered>, store: Arc<TileStore>, palette: BlockPalette, palettes: Vec<BlockPalette>) -> Self {
         let mut area = kept.map_or(Area { lat: 45.8326, lon: 6.8652, blocks_per_metre: 0.5, width: 2048, depth: 2048 }, |k| k.area);
         let mut vertical = kept.map_or(Vertical { datum: 0.0, sea_level, exaggeration: 1.0, low: -64, high: 320, fit: true }, |k| k.vertical);
         if let Target::Map { rect, min_y, max_y, .. } = target {
@@ -200,6 +211,9 @@ impl RealForm {
             keep_size: true,
             new_size: (area.width, area.depth),
             repaint: true,
+            map_palette: palette.clone(),
+            palette,
+            palettes,
             query: String::new(),
             places: Vec::new(),
             searching: None,
@@ -262,7 +276,11 @@ impl RealForm {
                 ui.set_width(350.0);
                 // As tall as the window lets the dialog be.
                 let tall = (ui.ctx().content_rect().height() - 330.0).clamp(300.0, 640.0);
-                egui::ScrollArea::vertical().max_height(tall).auto_shrink([false, true]).show(ui, |ui| self.settings(ui));
+                egui::ScrollArea::vertical().max_height(tall).auto_shrink([false, true]).show(ui, |ui| {
+                    if self.settings(ui) {
+                        choice = Choice::EditPalettes;
+                    }
+                });
             });
             ui.add_space(14.0);
             ui.vertical(|ui| {
@@ -321,11 +339,30 @@ impl RealForm {
             target: self.target,
             resize: self.resize(),
             repaint: self.repaint,
+            palette: self.palette.clone(),
         }
     }
 
-    fn settings(&mut self, ui: &mut Ui) {
+    /// The palette menu, and what it says under it into a map.
+    fn palette_rows(&mut self, ui: &mut Ui, edit: &mut bool) {
+        row(ui, tr!("Blocks"), |ui| {
+            let width = (ui.available_width() - 4.0).clamp(40.0, 170.0);
+            match crate::palettes::choose(ui, "real palette", &self.palettes, &self.palette, width) {
+                Some(crate::palettes::Picked::Use(p)) => self.palette = p,
+                Some(crate::palettes::Picked::Edit) => *edit = true,
+                None => {}
+            }
+        });
+        if !self.new_world() && self.palette.name != self.map_palette.name {
+            let pal = Palette::of(ui);
+            let name = if self.palette.is_vanilla() { tr!("Vanilla").to_owned() } else { self.palette.name.clone() };
+            ui.add(egui::Label::new(RichText::new(tr!("The map's palette becomes {name}: its terrains change blocks all over it, in the same step to undo.", name)).size(11.0).color(pal.weak)).wrap());
+        }
+    }
+
+    fn settings(&mut self, ui: &mut Ui) -> bool {
         let pal = Palette::of(ui);
+        let mut edit = false;
         let head = |ui: &mut Ui, text: &str| {
             ui.label(RichText::new(text).size(11.5).color(pal.weak).medium());
             ui.add_space(4.0);
@@ -350,14 +387,23 @@ impl RealForm {
         }
         if !self.new_world() {
             head(ui, tr!("Map"));
-            well(ui, |ui| self.map_rows(ui));
+            well(ui, |ui| {
+                self.map_rows(ui);
+                self.palette_rows(ui, &mut edit);
+            });
             ui.add_space(10.0);
         }
         head(ui, tr!("Size and scale"));
-        well(ui, |ui| self.scale_rows(ui));
+        well(ui, |ui| {
+            self.scale_rows(ui);
+            if self.new_world() {
+                self.palette_rows(ui, &mut edit);
+            }
+        });
         ui.add_space(10.0);
         head(ui, tr!("Heights"));
         well(ui, |ui| self.height_rows(ui));
+        edit
     }
 
     fn file_rows(&mut self, ui: &mut Ui) {

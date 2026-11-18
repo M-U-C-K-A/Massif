@@ -2748,6 +2748,7 @@
  "Back to the game's": "Voltar ao do jogo",
  "Block palettes": "Paletas de blocos",
  "Blocks: {name}": "Blocos: {name}",
+ "The map's palette becomes {name}: its terrains change blocks all over it, in the same step to undo.": "A paleta do mapa passa a ser {name}: os seus terrenos mudam de blocos em todo o mapa, no mesmo passo a desfazer.",
  "Edit palettes…": "Editar paletas…",
  "From this map": "Deste mapa",
  "How many blocks thick, from column to column": "Quantos blocos de espessura, de coluna em coluna",

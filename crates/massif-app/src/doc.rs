@@ -409,9 +409,15 @@ impl Document {
     }
 
     /// Put `dimension` in place of dimension `dim` (the map made another
-    /// size), as one step to undo named `label`.
-    pub fn replace_dimension(&mut self, dim: usize, dimension: massif_core::world::Dimension, label: &str) {
-        self.history.replace_dimension(&mut self.world, dim, dimension, label);
+    /// size), as one step to undo named `label`; the map's terrains made of
+    /// `palette`'s blocks too when it is given, in the same step.
+    pub fn replace_dimension(&mut self, dim: usize, dimension: massif_core::world::Dimension, palette: Option<massif_core::materials::Palette>, label: &str) {
+        let settings = palette.map(|palette| {
+            let mut registry = self.world.registry.clone();
+            massif_core::materials::apply(&mut registry, &palette);
+            (massif_core::WorldMeta { palette, ..self.world.meta.clone() }, registry)
+        });
+        self.history.replace_dimension_and_settings(&mut self.world, dim, dimension, settings, label);
         self.after_history();
     }
 

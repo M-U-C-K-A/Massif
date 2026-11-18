@@ -99,8 +99,12 @@ pub enum Outcome {
     },
     /// The same, the map made another size first: the whole dimension, to
     /// put in place of the map's in one undoable step.
+    /// The map's palette switched too (`palette`), in the same step; the
+    /// map made another size or not (`resized`).
     RealMap {
         dimension: Box<massif_core::world::Dimension>,
+        palette: Option<massif_core::materials::Palette>,
+        resized: bool,
         columns: usize,
         revision: u64,
         dim: usize,
@@ -619,6 +623,9 @@ impl Job {
                 None => {
                     let (lo, hi) = (job.vertical.low, job.vertical.high);
                     let mut world = massif_core::real::new_world(&job.name, &samples, &fit, &area, sea, lo, hi);
+                    // Its terrains of the palette's blocks, as a new map's.
+                    massif_core::materials::apply(&mut world.registry, &job.palette);
+                    world.meta.palette = job.palette.clone();
                     drop(samples);
                     p.step.store(1, Relaxed);
                     let mut history = massif_core::history::History::new(1);
@@ -636,6 +643,13 @@ impl Job {
                         (crate::real_terrain::Target::Map { rect, .. }, None) => rect,
                         (crate::real_terrain::Target::NewWorld, _) => unreachable!("a snapshot is of a map"),
                     };
+                    // Another palette: the map's terrains made of its blocks
+                    // before the ground is written and painted.
+                    let palette = (job.palette != snapshot.meta.palette).then(|| job.palette.clone());
+                    if let Some(p) = &palette {
+                        massif_core::materials::apply(&mut snapshot.registry, p);
+                        snapshot.meta.palette = p.clone();
+                    }
                     if job.resize.is_some() {
                         let ground = fit.sea.floor();
                         snapshot.dims[dim].resize(rect, || massif_core::tile::Tile::ground(ground, 0, massif_core::tile::NO_FLUID));
@@ -654,9 +668,11 @@ impl Job {
                     if painted.cancelled {
                         return Outcome::Cancelled;
                     }
-                    if job.resize.is_some() {
+                    if job.resize.is_some() || palette.is_some() {
                         return Outcome::RealMap {
                             dimension: Box::new(snapshot.dims[dim].snapshot()),
+                            palette,
+                            resized: job.resize.is_some(),
                             columns: written.columns,
                             revision,
                             dim,
