@@ -1086,6 +1086,18 @@ mod tests {
         assert_eq!(to_bytes(&mut back), bytes);
     }
 
+    /// The terrain graph of 1.3 is kept as written, and nothing is written
+    /// for a map without one.
+    #[test]
+    fn terrain_graphs_round_trip() {
+        let mut world = sample_world();
+        assert!(serde_json::to_string(&world.meta).unwrap().find("terrain_graph").is_none());
+        let graph = serde_json::json!({ "format": "massif.terrain-graph", "version": 2, "nodes": { "hills": { "type": "noise.fbm" } }, "editor": { "frames": [] } });
+        world.meta.terrain_graph = Some(graph.clone());
+        let back = read(&to_bytes(&mut world)).unwrap();
+        assert_eq!(back.meta.terrain_graph, Some(graph));
+    }
+
     /// A map's block palette is saved with it and read back as it was; a
     /// map of the game's blocks writes none.
     #[test]
