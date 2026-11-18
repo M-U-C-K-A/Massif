@@ -666,7 +666,7 @@ pub fn village_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) 
         });
     });
     checkbox(ui, &mut v.walls, tr!("Walls, with towers and gates"));
-    if ui.add(egui::Button::new(theme::with_icon(Icon::FolderPlus, tr!("Add a pack…")))).on_hover_text(tr!("A folder of schematics by theme and type: see Village packs in the guide")).clicked()
+    if button(ui, theme::with_icon(Icon::FolderPlus, tr!("Add a pack…"))).on_hover_text(tr!("A folder of schematics by theme and type: see Village packs in the guide")).clicked()
         && let Some(dir) = rfd::FileDialog::new().set_title(tr!("A village pack")).pick_folder()
         && !v.packs.contains(&dir)
     {
@@ -687,7 +687,7 @@ pub fn village_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) 
             };
             hint(ui, &tr!("The selection, as large as {side} × {side} blocks: {size}.", side, size));
             let busy = v.rt.is_busy();
-            if ui.add_enabled(!busy, egui::Button::new(theme::with_icon(Icon::House, tr!("Fill the selection")))).clicked() {
+            if ui.add_enabled(!busy, egui::Button::new(theme::with_icon(Icon::House, tr!("Fill the selection"))).truncate()).clicked() {
                 v.rt.ask();
             }
         }
