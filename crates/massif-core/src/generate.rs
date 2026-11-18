@@ -416,8 +416,7 @@ pub fn generate(params: &GenParams) -> World {
         fill: params.surface,
         palette: params.palette.clone(),
         smooth: Default::default(),
-        animation: None,
-        references: Vec::new(),
+        ..Default::default()
     });
     crate::materials::apply(&mut world.registry, &params.palette);
     let (bottom, top) = build_limits(params.min_y, params.max_y);
@@ -478,8 +477,7 @@ pub fn from_heightmap(map: &crate::heightmap::Heightmap, how: &FromHeightmap) ->
         fill: None,
         palette: Default::default(),
         smooth: Default::default(),
-        animation: None,
-        references: Vec::new(),
+        ..Default::default()
     });
     let (bottom, ceiling) = build_limits(how.min_y, how.max_y);
     world.dims[0].min_y = bottom;

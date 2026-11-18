@@ -10,7 +10,7 @@
 //! │ 0x00 [u8; 8] magic  "MASSIF\x1a\n"                                      │
 //! │ 0x08 u16     format version                                             │
 //! │ 0x0A u16     oldest reader version able to read this file               │
-//! │ 0x0C u32     flags (0)                                                  │
+//! │ 0x0C u32     flags (bit 0: a contribution, see [`patch`])               │
 //! │ 0x10 u64     directory offset                                           │
 //! │ 0x18 u32     directory length in bytes                                  │
 //! │ 0x1C u32     directory CRC32C                                           │
@@ -57,13 +57,17 @@ use massif_core::codec::{self, CodecError};
 use massif_core::level::{Blob, Level, LevelId, LevelKind};
 use massif_core::registry::Registry;
 use massif_core::world::{Dimension, DimensionKind, World, WorldMeta};
-use massif_core::versions::SavePoint;
+use massif_core::versions::{Id, SavePoint};
 use massif_core::{Tile, TilePos};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::Path;
+
+pub mod depot;
+pub mod patch;
+pub use patch::{load_patch, read_manifest, read_patch, save_patch, write_patch};
 
 /// File extension, without the dot.
 pub const EXTENSION: &str = "massif";
@@ -91,6 +95,9 @@ const KIND_POINT_VOXELS: [u8; 4] = *b"VVOX";
 const KIND_POINT_SELECTION: [u8; 4] = *b"VSEL";
 const KIND_POINT_THUMBNAIL: [u8; 4] = *b"VTHM";
 const FLAG_ZSTD: u32 = 1;
+/// In the header's flags: the file is a contribution (`.massifpatch`, see
+/// [`patch`]), not a map.
+const FLAG_PATCH: u32 = 1;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FormatError {
@@ -106,6 +113,10 @@ pub enum FormatError {
     Meta(#[from] serde_json::Error),
     #[error("the world has unsaved hot tiles; snapshot or freeze it before writing")]
     NotFrozen,
+    #[error("this is a contribution (.massifpatch), not a map: import it from the Versions panel")]
+    IsPatch,
+    #[error("this is not a contribution (.massifpatch)")]
+    NotPatch,
     #[error("{0}")]
     Codec(#[from] CodecError),
 }
@@ -155,7 +166,18 @@ struct LevelDoc {
 /// A save point (see [`massif_core::versions`]), in the `VERS` section.
 #[derive(Debug, Serialize, Deserialize)]
 struct PointDoc {
+    /// The version's identifier and its parents' (1.1 on): a file from an
+    /// older version has neither, and they are derived on reading (see
+    /// [`read_from`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    id: Option<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parents: Option<Vec<Id>>,
     name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    author: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    branch: String,
     created: u64,
     world: WorldMeta,
     /// `None`: the map's.
@@ -331,7 +353,11 @@ pub fn write<W: Write>(world: &World, mut out: W) -> Result<Stats> {
         let dimensions = layout.dims(&point.world, true)?;
         let thumbnail = point.thumbnail.as_ref().map(|jpeg| layout.section(KIND_POINT_THUMBNAIL, 0, jpeg.to_vec()));
         points.push(PointDoc {
+            id: Some(point.id),
+            parents: Some(point.parents.clone()),
             name: point.name.clone(),
+            author: point.author.clone(),
+            branch: point.branch.clone(),
             created: point.created,
             world: point.world.meta.clone(),
             registry: (point.world.registry != world.registry).then(|| point.world.registry.clone()),
@@ -341,7 +367,6 @@ pub fn write<W: Write>(world: &World, mut out: W) -> Result<Stats> {
     }
     let tile_bytes = layout.offset - HEADER_LEN as u64;
     let Layout {
-        mut offset,
         frames,
         mut sections,
         next_section,
@@ -384,9 +409,22 @@ pub fn write<W: Write>(world: &World, mut out: W) -> Result<Stats> {
         });
     }
 
+    let file_len = finish(&mut out, &frames, &sections, 0)?;
+    Ok(Stats {
+        file_len,
+        tiles: frames.len(),
+        tile_bytes,
+        point_bytes: tile_bytes - map_bytes,
+    })
+}
+
+/// Write a file of the container: its header (with `flags`, see
+/// [`FLAG_PATCH`]), the tile frames, the sections and their directory.
+/// Returns the file's length.
+fn finish<W: Write>(out: &mut W, frames: &[Blob], sections: &[Section], flags: u32) -> Result<u64> {
     // A section this version could not read back is refused before anything
     // is written: the file saved before stays as it was.
-    for s in &sections {
+    for s in sections {
         if (s.flags & FLAG_ZSTD != 0 || [KIND_VOXELS, KIND_POINT_VOXELS, KIND_SELECTION, KIND_POINT_SELECTION].contains(&s.kind))
             && codec::zstd_content_size(&s.payload).is_none_or(|n| n > codec::MAX_RAW_SECTION)
         {
@@ -395,8 +433,9 @@ pub fn write<W: Write>(world: &World, mut out: W) -> Result<Stats> {
     }
 
     // Sections follow the frames, the directory follows the sections.
+    let mut offset = HEADER_LEN as u64 + frames.iter().map(|f| f.len() as u64).sum::<u64>();
     let mut directory = Vec::with_capacity(sections.len() * SECTION_LEN);
-    for s in &sections {
+    for s in sections {
         directory.extend_from_slice(&s.kind);
         directory.extend_from_slice(&s.id.to_le_bytes());
         directory.extend_from_slice(&offset.to_le_bytes());
@@ -412,6 +451,7 @@ pub fn write<W: Write>(world: &World, mut out: W) -> Result<Stats> {
     header[0x00..0x08].copy_from_slice(&MAGIC);
     header[0x08..0x0A].copy_from_slice(&VERSION.to_le_bytes());
     header[0x0A..0x0C].copy_from_slice(&VERSION.to_le_bytes());
+    header[0x0C..0x10].copy_from_slice(&flags.to_le_bytes());
     header[0x10..0x18].copy_from_slice(&directory_offset.to_le_bytes());
     header[0x18..0x1C].copy_from_slice(&(directory.len() as u32).to_le_bytes());
     header[0x1C..0x20].copy_from_slice(&crc32c::crc32c(&directory).to_le_bytes());
@@ -420,20 +460,15 @@ pub fn write<W: Write>(world: &World, mut out: W) -> Result<Stats> {
     header[0x3C..0x40].copy_from_slice(&crc.to_le_bytes());
 
     out.write_all(&header)?;
-    for frame in &frames {
+    for frame in frames {
         out.write_all(frame)?;
     }
-    for s in &sections {
+    for s in sections {
         out.write_all(&s.payload)?;
     }
     out.write_all(&directory)?;
     out.flush()?;
-    Ok(Stats {
-        file_len,
-        tiles: frames.len(),
-        tile_bytes,
-        point_bytes: tile_bytes - map_bytes,
-    })
+    Ok(file_len)
 }
 
 /// Write a frozen world to `path` atomically: the data goes to a temporary
@@ -658,7 +693,14 @@ fn section_payload(src: &dyn Source, entry: &[u8], what: &str) -> Result<Vec<u8>
     }
 }
 
-fn parse(src: &dyn Source) -> Result<Parsed<'_>> {
+/// A file's header and section directory, checked.
+struct Container<'a> {
+    version: u16,
+    flags: u32,
+    directory: std::borrow::Cow<'a, [u8]>,
+}
+
+fn container(src: &dyn Source) -> Result<Container<'_>> {
     if src.size() < HEADER_LEN as u64 {
         return Err(FormatError::NotMassif);
     }
@@ -690,6 +732,18 @@ fn parse(src: &dyn Source) -> Result<Parsed<'_>> {
     }
     if directory.len() % SECTION_LEN != 0 {
         return corrupt("the section directory has a ragged length");
+    }
+    Ok(Container {
+        version,
+        flags: u32_at(&header, 0x0C),
+        directory,
+    })
+}
+
+fn parse(src: &dyn Source) -> Result<Parsed<'_>> {
+    let Container { version, flags, directory } = container(src)?;
+    if flags & FLAG_PATCH != 0 {
+        return Err(FormatError::IsPatch);
     }
 
     let mut meta = None;
@@ -838,10 +892,17 @@ fn read_from(src: &dyn Source) -> Result<World> {
     let mut parsed = parse(src)?;
     let mut frames = Frames::new();
     let dims = read_dims(&parsed, &parsed.meta.dimensions, &mut frames, !parsed.points.is_empty())?;
-    let mut points = Vec::with_capacity(parsed.points.len());
-    for doc in std::mem::take(&mut parsed.points) {
+    let mut points: Vec<SavePoint> = Vec::with_capacity(parsed.points.len());
+    for (i, doc) in std::mem::take(&mut parsed.points).into_iter().enumerate() {
+        // A point saved before versions had identifiers: its identifier is
+        // derived from what it is (so the same at every reading), and it
+        // stands on the point before it, as the list was made.
+        let id = doc.id.unwrap_or_else(|| Id::derived(&[b"save point", &(i as u64).to_le_bytes(), &doc.created.to_le_bytes(), doc.name.as_bytes()]));
+        let parents = doc.parents.unwrap_or_else(|| points.last().map(|p| p.id).into_iter().collect());
+        let mut meta = doc.world;
+        meta.head = Some(id);
         let world = World {
-            meta: doc.world,
+            meta,
             registry: doc.registry.unwrap_or_else(|| parsed.meta.registry.clone()),
             dims: read_dims(&parsed, &doc.dimensions, &mut frames, true)?,
             points: Vec::new(),
@@ -851,14 +912,23 @@ fn read_from(src: &dyn Source) -> Result<World> {
             .and_then(|id| parsed.point_thumbnails.iter().find(|(i, _)| *i == id))
             .map(|(_, jpeg)| std::sync::Arc::<[u8]>::from(jpeg.as_slice()));
         points.push(SavePoint {
+            id,
+            parents,
             name: doc.name,
+            author: doc.author,
+            branch: doc.branch,
             created: doc.created,
             world: std::sync::Arc::new(world),
             thumbnail,
         });
     }
+    let mut meta = parsed.meta.world;
+    // A map saved before versions stands on its last point.
+    if meta.head.is_none() {
+        meta.head = points.last().map(|p| p.id);
+    }
     Ok(World {
-        meta: parsed.meta.world,
+        meta,
         registry: parsed.meta.registry,
         dims,
         points,
@@ -991,7 +1061,7 @@ pub fn inspect(bytes: &[u8]) -> Result<FileInfo> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use massif_core::generate::{GenParams, Landform, generate};
     use massif_core::history::History;
@@ -1038,7 +1108,7 @@ mod tests {
         world
     }
 
-    fn to_bytes(world: &mut World) -> Vec<u8> {
+    pub(crate) fn to_bytes(world: &mut World) -> Vec<u8> {
         let mut bytes = Vec::new();
         let stats = write(&world.snapshot(), &mut bytes).unwrap();
         assert_eq!(stats.file_len, bytes.len() as u64);
@@ -1274,6 +1344,92 @@ mod tests {
         out
     }
 
+    /// The file with the section of kind `kind` (and flags `flags`) holding
+    /// `payload` in place of what it held.
+    pub(crate) fn with_section(bytes: &[u8], kind: [u8; 4], flags: u32, payload: &[u8]) -> Vec<u8> {
+        let stripped = without_sections(bytes, &[kind]);
+        let dir_off = u64_at(&stripped, 0x10) as usize;
+        let dir_len = u32_at(&stripped, 0x18) as usize;
+        let mut out = stripped[..dir_off].to_vec();
+        let at = out.len() as u64;
+        out.extend_from_slice(payload);
+        let mut dir = stripped[dir_off..dir_off + dir_len].to_vec();
+        dir.extend_from_slice(&kind);
+        dir.extend_from_slice(&999u32.to_le_bytes());
+        dir.extend_from_slice(&at.to_le_bytes());
+        dir.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+        dir.extend_from_slice(&crc32c::crc32c(payload).to_le_bytes());
+        dir.extend_from_slice(&flags.to_le_bytes());
+        let new_dir_off = out.len() as u64;
+        out.extend_from_slice(&dir);
+        let file_len = out.len() as u64;
+        out[0x10..0x18].copy_from_slice(&new_dir_off.to_le_bytes());
+        out[0x18..0x1C].copy_from_slice(&(dir.len() as u32).to_le_bytes());
+        out[0x1C..0x20].copy_from_slice(&crc32c::crc32c(&dir).to_le_bytes());
+        out[0x20..0x28].copy_from_slice(&file_len.to_le_bytes());
+        let crc = crc32c::crc32c(&out[..0x3C]);
+        out[0x3C..0x40].copy_from_slice(&crc.to_le_bytes());
+        out
+    }
+
+    /// Versions keep their identifiers, parents, author and branch in the
+    /// file; the save points of a file from before versions become
+    /// versions, each on the one before, with identifiers that are the
+    /// same at every reading, and the map stands on the last.
+    #[test]
+    fn save_points_become_versions() {
+        let mut world = sample_world();
+        let mut hist = History::default();
+        let mut first = SavePoint::new(&mut world, "first", 1);
+        first.author = "Jack".into();
+        first.branch = "riverlands".into();
+        world.points.push(first);
+        raise_at(&mut world, &mut hist, 40.0, 40.0);
+        let second = SavePoint::new(&mut world, "second", 2);
+        world.points.push(second);
+        let bytes = to_bytes(&mut world);
+        let back = read(&bytes).unwrap();
+        assert_eq!(back.meta.map_id, world.meta.map_id);
+        assert_eq!(back.meta.head, Some(world.points[1].id));
+        for (a, b) in world.points.iter().zip(&back.points) {
+            assert_eq!((a.id, &a.parents, &a.author, &a.branch), (b.id, &b.parents, &b.author, &b.branch));
+            assert_eq!(b.world.meta.head, Some(b.id));
+        }
+        assert_eq!(back.points[1].parents, vec![back.points[0].id]);
+
+        // As 0.6 to 1.0 wrote it: no identifiers anywhere.
+        let src = bytes.as_slice();
+        let parsed = parse(&src).unwrap();
+        let mut docs = serde_json::to_value(&parsed.points).unwrap();
+        for doc in docs.as_array_mut().unwrap() {
+            let doc = doc.as_object_mut().unwrap();
+            for key in ["id", "parents", "author", "branch"] {
+                doc.remove(key);
+            }
+            let meta = doc.get_mut("world").unwrap().as_object_mut().unwrap();
+            meta.remove("map_id");
+            meta.remove("head");
+        }
+        let mut meta = serde_json::to_value(&parsed.meta).unwrap();
+        let world_meta = meta.get_mut("world").unwrap().as_object_mut().unwrap();
+        world_meta.remove("map_id");
+        world_meta.remove("head");
+        let old = with_section(&bytes, KIND_POINTS, FLAG_ZSTD, &codec::zstd_compress(&serde_json::to_vec(&docs).unwrap()));
+        let old = with_section(&old, KIND_META, FLAG_ZSTD, &codec::zstd_compress(&serde_json::to_vec(&meta).unwrap()));
+        let (a, b) = (read(&old).unwrap(), read(&old).unwrap());
+        assert!(a.meta.map_id.is_none());
+        assert_eq!(a.points.iter().map(|p| p.id).collect::<Vec<_>>(), b.points.iter().map(|p| p.id).collect::<Vec<_>>());
+        assert_ne!(a.points[0].id, a.points[1].id);
+        assert!(a.points[0].parents.is_empty());
+        assert_eq!(a.points[1].parents, vec![a.points[0].id]);
+        assert_eq!(a.meta.head, Some(a.points[1].id));
+        assert!(a.points.iter().all(|p| p.world.meta.head == Some(p.id) && p.author.is_empty()));
+        // Saved again, they keep the identifiers they were given.
+        let mut a = a;
+        let again = read(&to_bytes(&mut a)).unwrap();
+        assert_eq!(again.points.iter().map(|p| (p.id, p.parents.clone())).collect::<Vec<_>>(), a.points.iter().map(|p| (p.id, p.parents.clone())).collect::<Vec<_>>());
+    }
+
     /// Raise the land in a circle at (`x`, `z`), as one step.
     fn raise_at(world: &mut World, hist: &mut History, x: f32, z: f32) {
         let brush = Brush {
@@ -1392,8 +1548,11 @@ mod tests {
         let mut after = world.snapshot();
         let point = world.points[0].world.clone();
         hist.restore_point(&mut world, &point, "Restore “first”");
-        // The map is the point's, but keeps its name and its points.
+        // The map is the point's, but keeps its name and its points, and
+        // stands on that point.
         before.meta.name = "Renamed".into();
+        before.meta.map_id = world.meta.map_id;
+        before.meta.head = Some(world.points[0].id);
         before.points = world.points.clone();
         assert_same(&mut before, &mut world);
         assert_eq!(world.points.len(), 1);

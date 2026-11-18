@@ -317,7 +317,7 @@ impl Tile {
 }
 
 /// Convert a plane cell by cell, keeping its representation.
-fn map_plane<A: Copy + PartialEq, B: Copy + PartialEq>(
+pub(crate) fn map_plane<A: Copy + PartialEq, B: Copy + PartialEq>(
     p: &Plane<A>,
     f: impl Fn(A) -> B,
 ) -> Plane<B> {

@@ -333,11 +333,27 @@ impl History {
         self.begin(label, 0);
         let mut meta = point.meta.clone();
         meta.name = world.meta.name.clone();
+        // A point made before the map had its identifier has none.
+        meta.map_id = world.meta.map_id.or(meta.map_id);
         let whole = Whole {
             meta,
             registry: point.registry.clone(),
             dims: point.dims.clone(),
         };
+        // The map as it is, cold, to undo it.
+        let before = world.snapshot();
+        world.dims = before.dims;
+        let step = self.open.as_mut().expect("just begun");
+        step.whole = Some(Box::new(whole.swap(world)));
+        self.commit();
+    }
+
+    /// Put the map's settings, registry and dimensions in place of its own
+    /// (a contribution merged into it, say), as one step to undo labelled
+    /// `label`. The map keeps its save points.
+    pub fn replace_world(&mut self, world: &mut World, meta: crate::world::WorldMeta, registry: crate::registry::Registry, dims: Vec<Dimension>, label: impl Into<String>) {
+        self.begin(label, 0);
+        let whole = Whole { meta, registry, dims };
         // The map as it is, cold, to undo it.
         let before = world.snapshot();
         world.dims = before.dims;
