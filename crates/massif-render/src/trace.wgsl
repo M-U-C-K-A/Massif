@@ -19,7 +19,7 @@ struct Params {
     clouds: vec4<f32>,   // cover (0..1), base height (scene), thickness, extinction a block (0: none)
     wind: vec4<f32>,     // how far the wind moved them (x, z), 1 / the size of their shapes
     water: vec4<f32>,    // the waves' slope, 1 / their size, time (s), how much light water takes (0: water as the game's texture)
-    wet: vec4<f32>,      // wetness, puddles, 1 / the puddles' size
+    wet: vec4<f32>,      // wetness, puddles, 1 / the puddles' size, a pack's LabPBR maps on
     size: vec4<u32>,     // width, height, seed of the frame, sample (0: start over)
     grid: vec4<i32>,     // chunks across, chunks down, height in blocks, sections
     info: vec4<u32>,     // words a chunk's record, pyramid levels, bounces, shift (pixels per side of a ray: 1 << shift)
@@ -45,6 +45,9 @@ struct Params {
 // For every chunk, where its list of lights starts and how many: those of
 // it and of the 8 chunks around; then the lists, [x, y, z, material] each.
 @group(0) @binding(15) var<storage, read> lights: array<u32>;
+// A resource pack's LabPBR maps, layer for layer with the atlas.
+@group(0) @binding(16) var normal_maps: texture_2d_array<f32>;
+@group(0) @binding(17) var specular_maps: texture_2d_array<f32>;
 
 const UNIFORM: u32 = 0x80000000u;
 const CLASS_CUTOUT: u32 = 2u;
@@ -1051,11 +1054,21 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
         var n = vec3<f32>(0.0);
         var uvl: vec3<f32>;
         var tint: vec3<f32>;
+        // The texture's directions on the face, for a pack's normal maps.
+        var tangent = vec3<f32>(1.0, 0.0, 0.0);
+        var bitangent = vec3<f32>(0.0, 0.0, 1.0);
         if (hit.axis >= 0) {
             n[hit.axis] = -sign(rd[hit.axis]);
             uvl = face_uv(m, p, hit.axis, rd);
             let top = hit.axis == 1 && rd.y < 0.0;
             tint = unpack_rgb(select(m.w, m.z, top));
+            if (hit.axis == 0) {
+                tangent = vec3<f32>(0.0, 0.0, select(1.0, -1.0, rd.x < 0.0));
+                bitangent = vec3<f32>(0.0, -1.0, 0.0);
+            } else if (hit.axis == 2) {
+                tangent = vec3<f32>(select(-1.0, 1.0, rd.z < 0.0), 0.0, 0.0);
+                bitangent = vec3<f32>(0.0, -1.0, 0.0);
+            }
         } else {
             // A model's face: its own normal, toward the eyes (faces are
             // seen from both sides).
@@ -1067,6 +1080,8 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
             let ab = quad_coords(q, p - vec3<f32>(hit.cell));
             uvl = vec3<f32>(quad_uv(q, clamp(ab, vec2<f32>(0.0), vec2<f32>(1.0))), f32(q.layer));
             tint = select(vec3<f32>(1.0), unpack_rgb(m.z), q.tinted);
+            tangent = normalize(q.u);
+            bitangent = normalize(q.v);
         }
         if (realistic && class_of(m) == CLASS_WATER) {
             // Water's surface: a mirror or a window, as Fresnel says; its
@@ -1095,8 +1110,37 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
         let tex = textureSampleLevel(atlas, atlas_sampler, uvl.xy, i32(uvl.z), lod);
         var surf: Surface;
         surf.albedo = tex.rgb * tint;
-        let metal = bitcast<f32>(look.y);
+        var metal = bitcast<f32>(look.y);
         var rough = bitcast<f32>(look.x);
+        // A pack's LabPBR maps: the normal (and its occlusion), the
+        // smoothness, the reflectance or a metal, the emission.
+        var ns = n;
+        var occlusion = 1.0;
+        var emission = 0.0;
+        var f0 = 0.04;
+        if (P.wet.w > 0.5) {
+            let nm = textureSampleLevel(normal_maps, atlas_sampler, uvl.xy, i32(uvl.z), lod);
+            let xy = nm.rg * 2.0 - 1.0;
+            let local = vec3<f32>(xy, sqrt(max(1.0 - dot(xy, xy), 0.0)));
+            let bent = normalize(tangent * local.x + bitangent * local.y + n * local.z);
+            if (dot(bent, -rd) > 0.02) {
+                ns = bent;
+            }
+            occlusion = nm.b;
+            let sp = textureSampleLevel(specular_maps, atlas_sampler, uvl.xy, i32(uvl.z), lod);
+            if (sp.r + sp.g + sp.b + sp.a > 0.0) {
+                rough = 1.0 - sp.r;
+                if (sp.g > 229.5 / 255.0) {
+                    metal = 1.0;
+                } else {
+                    f0 = sp.g;
+                    metal = 0.0;
+                }
+                if (sp.a < 254.5 / 255.0) {
+                    emission = sp.a * 255.0 / 254.0;
+                }
+            }
+        }
         // Wet ground: darker and shinier; puddles a mirror of water.
         let wet = P.wet.x;
         let pud = puddle(p, n);
@@ -1106,8 +1150,11 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
             rough = mix(rough, 0.03, pud);
         }
         surf.alpha = max(rough * rough, 0.002);
-        surf.f0 = mix(vec3<f32>(mix(0.04, 0.02, pud)), surf.albedo, metal);
-        surf.diffuse = surf.albedo * (1.0 - metal);
+        surf.f0 = mix(vec3<f32>(mix(f0, 0.02, pud)), surf.albedo, metal);
+        surf.diffuse = surf.albedo * (1.0 - metal) * occlusion;
+        if (emission > 0.0) {
+            sum += throughput * surf.albedo * emission * 4.0 * P.media.z;
+        }
         if (((m.y >> 21u) & 1u) != 0u) {
             // A glowing block seen: by the eyes, or by a bounce from too far
             // for its light to be among those drawn there (block_light).
@@ -1122,11 +1169,11 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
         let v = -rd;
         let pos = p + n * EPS;
         // The glowing blocks around, one drawn among them.
-        sum += throughput * block_light(pos, n, v, surf, seed);
+        sum += throughput * block_light(pos, ns, v, surf, seed);
         last_chunk = vec2<i32>(floor(pos.xz / 16.0));
         // The sun, straight (through water, if under it).
         let l = sun_sample(seed);
-        if (dot(n, l) > 0.0 && P.sun.y > -0.05) {
+        if (dot(ns, l) > 0.0 && dot(n, l) > 0.0 && P.sun.y > -0.05) {
             let shadow = trace(pos, l, 1e30, SHADOW);
             if (!shadow.found) {
                 // The clouds' shadows on what the eyes see (not on the bounces).
@@ -1137,7 +1184,7 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
                 if (in_water && shadow.water >= 0.0) {
                     light *= water_through(shadow.water) * (1.0 - fresnel(max(P.sun.y, 0.05), 1.0 / 1.33));
                 }
-                sum += throughput * brdf(surf, n, v, l, light);
+                sum += throughput * brdf(surf, ns, v, l, light);
             }
         }
         if (bounce == P.info.z) {
@@ -1145,15 +1192,15 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
         }
         // One bounce more: off the shine, or the diffuse light of the sky
         // and the land around.
-        let f = schlick(surf.f0, max(dot(n, v), 0.0));
+        let f = schlick(surf.f0, max(dot(ns, v), 0.0));
         let p_spec = clamp((f.x + f.y + f.z) / 3.0 * (1.0 + (1.0 - rough) * 2.0), 0.02, 0.95);
         if (rand(seed) < p_spec) {
-            let frame = basis(n);
+            let frame = basis(ns);
             let vl = transpose(frame) * v;
             let hm = frame * sample_vndf(vl, surf.alpha, rand(seed), rand(seed));
             let l2 = reflect(-v, hm);
-            let nl = dot(n, l2);
-            if (nl <= 0.0) {
+            let nl = dot(ns, l2);
+            if (nl <= 0.0 || dot(n, l2) <= 0.0) {
                 break;
             }
             throughput *= schlick(surf.f0, dot(v, hm)) * smith_g1(nl, surf.alpha * surf.alpha) / p_spec;
@@ -1161,7 +1208,10 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
             mirror = surf.alpha < 0.01;
         } else {
             throughput *= surf.diffuse * (vec3<f32>(1.0) - f) / (1.0 - p_spec);
-            rd = cosine_sample(n, seed);
+            rd = cosine_sample(ns, seed);
+            if (dot(rd, n) <= 0.0) {
+                break;
+            }
             mirror = false;
         }
         bounce += 1u;

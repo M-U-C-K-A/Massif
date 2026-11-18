@@ -392,3 +392,133 @@ fn models_up_close() {
         }
     }
 }
+
+/// A zip of `(name, bytes)` stored as they are (no compression, no CRC:
+/// the reader needs neither), for a resource pack made in a test.
+fn stored_zip(files: &[(&str, Vec<u8>)]) -> Vec<u8> {
+    let (mut out, mut central) = (Vec::new(), Vec::new());
+    let le16 = |v: &mut Vec<u8>, x: u16| v.extend_from_slice(&x.to_le_bytes());
+    let le32 = |v: &mut Vec<u8>, x: u32| v.extend_from_slice(&x.to_le_bytes());
+    for (name, data) in files {
+        let at = out.len() as u32;
+        le32(&mut out, 0x0403_4b50);
+        for x in [20u16, 0, 0, 0, 0] {
+            le16(&mut out, x);
+        }
+        for x in [0u32, data.len() as u32, data.len() as u32] {
+            le32(&mut out, x);
+        }
+        le16(&mut out, name.len() as u16);
+        le16(&mut out, 0);
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(data);
+        le32(&mut central, 0x0201_4b50);
+        for x in [20u16, 20, 0, 0, 0, 0] {
+            le16(&mut central, x);
+        }
+        for x in [0u32, data.len() as u32, data.len() as u32] {
+            le32(&mut central, x);
+        }
+        for x in [name.len() as u16, 0, 0, 0, 0] {
+            le16(&mut central, x);
+        }
+        le32(&mut central, 0);
+        le32(&mut central, at);
+        central.extend_from_slice(name.as_bytes());
+    }
+    let (dir_at, dir_len, count) = (out.len() as u32, central.len() as u32, files.len() as u16);
+    out.extend_from_slice(&central);
+    le32(&mut out, 0x0605_4b50);
+    for x in [0u16, 0, count, count] {
+        le16(&mut out, x);
+    }
+    le32(&mut out, dir_len);
+    le32(&mut out, dir_at);
+    le16(&mut out, 0);
+    out
+}
+
+fn png(w: u32, h: u32, f: impl Fn(u32, u32) -> [u8; 4]) -> Vec<u8> {
+    let img = image::RgbaImage::from_fn(w, h, |x, y| image::Rgba(f(x, y)));
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+    bytes.into_inner()
+}
+
+/// Shine and relief from a LabPBR pack, metals and polished stone, wet
+/// ground at sunset (MASSIF_SNAPSHOT_DIR: the image).
+#[test]
+fn pbr_and_metals() {
+    use crate::chunk::{Chunk, Section, VOLUME};
+    use crate::scene::Patch;
+    let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+    if dir.is_none() && std::env::var_os("MASSIF_PERF").is_none() {
+        return;
+    }
+    let Some((device, queue)) = device() else { return };
+    let Some(Ok(cat)) = massif_assets::load_newest() else { return };
+    // Stone bricks with mortar: bricks of 8 × 4 pixels, their edges bent
+    // out, smooth bricks and rough mortar.
+    let mortar = |x: u32, y: u32| y % 4 == 3 || (x + if (y / 4) % 2 == 0 { 0 } else { 4 }) % 8 == 7;
+    let normal = png(16, 16, |x, y| {
+        if mortar(x, y) {
+            [128, 128, 200, 255]
+        } else {
+            let (dx, dy) = (if x % 8 == 0 { -40i32 } else { 0 }, if y % 4 == 0 { -40i32 } else { 0 });
+            [(128 + dx) as u8, (128 + dy) as u8, 255, 255]
+        }
+    });
+    let specular = png(16, 16, |x, y| if mortar(x, y) { [20, 10, 0, 255] } else { [210, 18, 0, 255] });
+    let pack = stored_zip(&[("assets/minecraft/textures/block/stone_bricks_n.png", normal), ("assets/minecraft/textures/block/stone_bricks_s.png", specular)]);
+    let archives = vec![massif_assets::zip::Archive::open(&cat.source).unwrap(), massif_assets::zip::Archive::from_bytes(pack).unwrap()];
+    let library = crate::models::Library::of_archives(archives);
+    let materials = Materials::with_library(Some(Arc::new(cat)), Some(library), device.limits().max_texture_array_layers as usize);
+    let id = |name: &str| materials.id(&format!("minecraft:{name}"), &[]);
+    let (floor, bricks, gold, iron, copper, glass, quartz) = (id("polished_andesite"), id("stone_bricks"), id("gold_block"), id("iron_block"), id("copper_block"), id("glass"), id("quartz_block"));
+    assert!(materials.pbr().is_some(), "the pack's maps were read");
+    let mut patch = Patch::new(0, 0, 2, 2, 2);
+    for cz in 0..2 {
+        for cx in 0..2 {
+            let lower = Box::new([floor; VOLUME]);
+            let mut upper = Box::new([crate::materials::AIR; VOLUME]);
+            let mut put = |x: i32, y: i32, z: i32, m: u16| {
+                let (lx, lz) = (x - cx * 16, z - cz * 16);
+                if (0..16).contains(&lx) && (0..16).contains(&lz) {
+                    upper[((y as usize) * 16 + lz as usize) * 16 + lx as usize] = m;
+                }
+            };
+            for k in 4..28 {
+                for y in 0..5 {
+                    put(k, y, 26, bricks);
+                    put(26, y, k, bricks);
+                }
+            }
+            for (k, m) in [gold, iron, copper, quartz, glass].into_iter().enumerate() {
+                put(8 + k as i32 * 3, 0, 18, m);
+                put(8 + k as i32 * 3, 1, 18, m);
+            }
+            patch.put(Chunk { x: cx, z: cz, sections: vec![Section::Mixed(lower), Section::Mixed(upper)] });
+        }
+    }
+    let built = patch.build(&materials.classes(), &materials.lights());
+    let mut r = Renderer::new(&device, &queue, Extent { x0: 0, z0: 0, width: 2, depth: 2, min_y: 0, sections: 2 });
+    r.sea_level = 0.0;
+    r.sync_materials(&materials);
+    assert!(r.put(built));
+    r.flush();
+    let mut light = Light { haze: 3.0, exposure: 1.8, wetness: 0.35, ..Light::default() };
+    light.set_time(18.9, 172.0, 45.0, 120.0);
+    r.resize(1280, 800);
+    let camera = Camera::orbit([18.0, 17.5, 20.0], 3.6, -0.2, 16.0, 55f32.to_radians());
+    let t = Instant::now();
+    while r.samples < 384 {
+        let cmd = r.render(&camera, &light, false).unwrap();
+        queue.submit([cmd]);
+    }
+    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    eprintln!("pbr: 384 samples at 1280×800 in {:.2} s", t.elapsed().as_secs_f64());
+    if let Some(dir) = &dir {
+        let (w, h, rgba) = r.read_image().unwrap();
+        image::save_buffer(dir.join("render-pbr.png"), &rgba, w, h, image::ColorType::Rgba8).unwrap();
+    }
+}

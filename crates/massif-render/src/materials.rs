@@ -119,6 +119,12 @@ struct Inner {
     list: Vec<Material>,
     quads: Vec<GpuQuad>,
     layers: Vec<Layer>,
+    /// A resource pack's LabPBR maps of each layer (`_n`: normal, ambient
+    /// occlusion, height; `_s`: smoothness, reflectance or metal, porosity,
+    /// emission), flat and empty where it has none; whether any has.
+    normals: Vec<Layer>,
+    speculars: Vec<Layer>,
+    pbr: bool,
     layer_of: HashMap<String, u16>,
     /// Changes whenever a material or a layer is added.
     revision: u64,
@@ -143,8 +149,13 @@ impl Materials {
     /// Materials textured from `cat`, or in flat colours without it.
     pub fn new(cat: Option<Arc<Catalogue>>, most_layers: usize) -> Self {
         // Layer 0 is plain white: what has no texture keeps its tint.
-        let inner = Inner { by_state: HashMap::new(), list: vec![Material::AIR], quads: Vec::new(), layers: vec![[255; LAYER_BYTES]], layer_of: HashMap::new(), revision: 1 };
         let library = cat.as_deref().map(crate::models::Library::of);
+        Self::with_library(cat, library, most_layers)
+    }
+
+    /// Materials whose models and packs come from `library`.
+    pub fn with_library(cat: Option<Arc<Catalogue>>, library: Option<crate::models::Library>, most_layers: usize) -> Self {
+        let inner = Inner { by_state: HashMap::new(), list: vec![Material::AIR], quads: Vec::new(), layers: vec![[255; LAYER_BYTES]], normals: vec![FLAT], speculars: vec![[0; LAYER_BYTES]], pbr: false, layer_of: HashMap::new(), revision: 1 };
         Self { cat, library, inner: Mutex::new(inner), classes: RwLock::new(vec![Class::Air]), lights: RwLock::new(vec![0]), most_layers: most_layers.clamp(1, u16::MAX as usize) }
     }
 
@@ -199,6 +210,13 @@ impl Materials {
     pub fn snapshot(&self) -> (u64, Vec<GpuMaterial>, Vec<GpuQuad>, Vec<Layer>) {
         let inner = self.inner.lock().unwrap();
         (inner.revision, inner.list.iter().map(Material::gpu).collect(), inner.quads.clone(), inner.layers.clone())
+    }
+
+    /// The LabPBR maps of every layer (normals, speculars), if a pack has
+    /// any.
+    pub fn pbr(&self) -> Option<(Vec<Layer>, Vec<Layer>)> {
+        let inner = self.inner.lock().unwrap();
+        inner.pbr.then(|| (inner.normals.clone(), inner.speculars.clone()))
     }
 
     /// How many materials there are, air included.
@@ -384,6 +402,12 @@ impl Materials {
         let k = match tex {
             Some(tex) if inner.layers.len() < self.most_layers => {
                 inner.layers.push(make_layer(tex));
+                // Its LabPBR maps, from a pack.
+                let map = |suffix: &str| self.library.as_ref().and_then(|l| l.texture(&format!("{key}{suffix}"))).map(|t| make_layer(&t));
+                let (n, sp) = (map("_n"), map("_s"));
+                inner.pbr |= n.is_some() || sp.is_some();
+                inner.normals.push(n.unwrap_or(FLAT));
+                inner.speculars.push(sp.unwrap_or([0; LAYER_BYTES]));
                 inner.revision += 1;
                 (inner.layers.len() - 1) as u16
             }
@@ -463,6 +487,20 @@ fn cube_textures(quads: &[crate::models::Quad]) -> (Option<String>, Option<Strin
     }
     (top, side, bottom)
 }
+
+/// A flat normal map: straight out, nothing occluded, at the top.
+const FLAT: Layer = {
+    let mut l = [0u8; LAYER_BYTES];
+    let mut k = 0;
+    while k < LAYER_BYTES {
+        l[k] = 128;
+        l[k + 1] = 128;
+        l[k + 2] = 255;
+        l[k + 3] = 255;
+        k += 4;
+    }
+    l
+};
 
 /// A texture as a 16 × 16 layer: the first square of an animated strip,
 /// averaged down from a pack's larger textures (by coverage, so that holes

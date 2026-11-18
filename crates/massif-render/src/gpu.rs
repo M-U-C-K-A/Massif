@@ -206,6 +206,11 @@ pub struct Renderer {
     atlas: wgpu::Texture,
     atlas_view: wgpu::TextureView,
     atlas_layers: u32,
+    /// A pack's LabPBR maps, layer for layer with the atlas (one empty layer
+    /// without a pack).
+    normals: (wgpu::Texture, wgpu::TextureView),
+    speculars: (wgpu::Texture, wgpu::TextureView),
+    pbr_layers: u32,
     materials_revision: u64,
     /// Where the shaped blocks' faces start in the materials' buffer, in
     /// groups of four words.
@@ -287,6 +292,18 @@ impl Renderer {
                 lut(12),
                 lut(13),
                 wgpu::BindGroupLayoutEntry { binding: 14, visibility: wgpu::ShaderStages::COMPUTE, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 16,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2Array, multisampled: false },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 17,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D2Array, multisampled: false },
+                    count: None,
+                },
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: Some("massif render"), bind_group_layouts: &[Some(&layout)], immediate_size: 0 });
@@ -333,6 +350,9 @@ impl Renderer {
             atlas,
             atlas_view,
             atlas_layers: 1,
+            normals: Self::make_array(device, 1, wgpu::TextureFormat::Rgba8Unorm),
+            speculars: Self::make_array(device, 1, wgpu::TextureFormat::Rgba8Unorm),
+            pbr_layers: 0,
             materials_revision: 0,
             quad_base: 0,
             sky: Sky::new(device),
@@ -358,13 +378,17 @@ impl Renderer {
     }
 
     fn make_atlas(device: &wgpu::Device, layers: u32) -> (wgpu::Texture, wgpu::TextureView) {
+        Self::make_array(device, layers, wgpu::TextureFormat::Rgba8UnormSrgb)
+    }
+
+    fn make_array(device: &wgpu::Device, layers: u32, format: wgpu::TextureFormat) -> (wgpu::Texture, wgpu::TextureView) {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("massif render atlas"),
             size: wgpu::Extent3d { width: SIDE as u32, height: SIDE as u32, depth_or_array_layers: layers.max(1) },
             mip_level_count: MIPS,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -375,11 +399,17 @@ impl Renderer {
     /// One layer and its smaller levels (alpha-weighted averages, so that
     /// holes do not darken the colours around them).
     fn write_layer(&self, layer: u32, rgba: &Layer) {
+        Self::write_into(&self.queue, &self.atlas, layer, rgba, true);
+    }
+
+    /// One layer of an array and its smaller levels; `holes`: averaged by
+    /// alpha (colours), else plainly (a pack's maps).
+    fn write_into(queue: &wgpu::Queue, texture: &wgpu::Texture, layer: u32, rgba: &Layer, holes: bool) {
         let mut level = rgba.to_vec();
         let mut side = SIDE;
         for mip in 0..MIPS {
-            self.queue.write_texture(
-                wgpu::TexelCopyTextureInfo { texture: &self.atlas, mip_level: mip, origin: wgpu::Origin3d { x: 0, y: 0, z: layer }, aspect: wgpu::TextureAspect::All },
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo { texture, mip_level: mip, origin: wgpu::Origin3d { x: 0, y: 0, z: layer }, aspect: wgpu::TextureAspect::All },
                 &level,
                 wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(side as u32 * 4), rows_per_image: Some(side as u32) },
                 wgpu::Extent3d { width: side as u32, height: side as u32, depth_or_array_layers: 1 },
@@ -394,16 +424,25 @@ impl Renderer {
                     let (mut sum, mut alpha) = ([0u32; 3], 0u32);
                     for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
                         let p = &level[((y * 2 + dy) * side + x * 2 + dx) * 4..][..4];
+                        let w = if holes { p[3] as u32 } else { 255 };
                         for k in 0..3 {
-                            sum[k] += p[k] as u32 * p[3] as u32;
+                            sum[k] += p[k] as u32 * w;
                         }
-                        alpha += p[3] as u32;
+                        alpha += if holes { p[3] as u32 } else { 255 };
+                    }
+                    if !holes {
+                        alpha = alpha.max(1);
                     }
                     let o = &mut next[(y * half + x) * 4..][..4];
                     for k in 0..3 {
                         o[k] = sum[k].checked_div(alpha).unwrap_or(0) as u8;
                     }
-                    o[3] = (alpha / 4) as u8;
+                    o[3] = if holes {
+                        (alpha / 4) as u8
+                    } else {
+                        let a: u32 = [(0, 0), (1, 0), (0, 1), (1, 1)].iter().map(|(dx, dy)| level[((y * 2 + dy) * side + x * 2 + dx) * 4 + 3] as u32).sum();
+                        (a / 4) as u8
+                    };
                 }
             }
             level = next;
@@ -442,6 +481,20 @@ impl Renderer {
             self.write_layer(k as u32, layer);
         }
         self.atlas_layers = layers.len().min(room) as u32;
+        // A pack's maps, in arrays as large as the atlas.
+        if let Some((normals, speculars)) = materials.pbr() {
+            if self.normals.0.size().depth_or_array_layers as usize != room {
+                self.normals = Self::make_array(&self.device, room as u32, wgpu::TextureFormat::Rgba8Unorm);
+                self.speculars = Self::make_array(&self.device, room as u32, wgpu::TextureFormat::Rgba8Unorm);
+                self.pbr_layers = 0;
+                self.bind_group = None;
+            }
+            for k in (self.pbr_layers as usize)..normals.len().min(room) {
+                Self::write_into(&self.queue, &self.normals.0, k as u32, &normals[k], false);
+                Self::write_into(&self.queue, &self.speculars.0, k as u32, &speculars[k], false);
+            }
+            self.pbr_layers = normals.len().min(room) as u32;
+        }
         self.materials_revision = revision;
         self.samples = 0;
     }
@@ -698,6 +751,8 @@ impl Renderer {
                     wgpu::BindGroupEntry { binding: 12, resource: wgpu::BindingResource::TextureView(self.sky.multi()) },
                     wgpu::BindGroupEntry { binding: 13, resource: wgpu::BindingResource::TextureView(self.sky.sky_view()) },
                     wgpu::BindGroupEntry { binding: 14, resource: wgpu::BindingResource::Sampler(self.sky.sampler()) },
+                    wgpu::BindGroupEntry { binding: 16, resource: wgpu::BindingResource::TextureView(&self.normals.1) },
+                    wgpu::BindGroupEntry { binding: 17, resource: wgpu::BindingResource::TextureView(&self.speculars.1) },
                 ],
             }));
         }
@@ -741,7 +796,7 @@ impl Renderer {
             clouds: [light.cloud_cover, light.cloud_height - origin[1] as f32, light.cloud_thickness.max(1.0), if light.cloud_cover > 0.0 { light.cloud_density } else { 0.0 }],
             wind: [light.wind[0], light.wind[1], 1.0 / light.cloud_size.max(1.0), 0.0],
             water: [light.waves, 1.0 / light.wave_size.max(0.5), light.time, if light.real_water { light.water_clarity.max(0.01) } else { 0.0 }],
-            wet: [light.wetness, light.puddles, 1.0 / light.puddle_size.max(1.0), 0.0],
+            wet: [light.wetness, light.puddles, 1.0 / light.puddle_size.max(1.0), (self.pbr_layers > 0) as u8 as f32],
             size: [w, h, self.frame.wrapping_mul(2654435761).wrapping_add(1), self.samples],
             grid: [e.width as i32, e.depth as i32, e.height(), e.sections as i32],
             info: [self.stride(), self.pyramid.levels.len() as u32, light.bounces, coarse as u32],

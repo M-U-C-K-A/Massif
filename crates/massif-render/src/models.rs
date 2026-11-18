@@ -78,9 +78,13 @@ impl Library {
     }
 
     pub fn open<'a>(paths: impl Iterator<Item = &'a Path>) -> Self {
+        Self::of_archives(paths.filter_map(|p| Archive::open(p).ok()).collect())
+    }
+
+    /// Archives already open, a later one's files replacing an earlier's.
+    pub fn of_archives(archives: Vec<Archive>) -> Self {
         let mut lib = Library { archives: Vec::new(), states: HashMap::new(), models: HashMap::new(), textures: HashMap::new(), parsed: Mutex::new(HashMap::new()) };
-        for path in paths {
-            let Ok(archive) = Archive::open(path) else { continue };
+        for archive in archives {
             let k = lib.archives.len();
             for n in archive.names() {
                 if let Some(key) = asset_key(n, "models", ".json") {
