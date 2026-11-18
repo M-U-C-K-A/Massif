@@ -15325,6 +15325,88 @@ mod tests {
         }
     }
 
+    /// Contact sheets of the home backgrounds, to judge them by eye
+    /// (MASSIF_BACKGROUND_PREVIEWS, a folder): one PNG a style, named
+    /// `<style>-<n>.png`, `n` one more than the last one there. On a sheet,
+    /// a cell a picture: the reference the style is drawn after (from
+    /// MASSIF_BACKGROUND_REFS, `<style>.png`, where there is one), the dark
+    /// theme, the light one; three moments of the dark theme 4 s apart;
+    /// high contrast dark and light, and another palette. MASSIF_BACKGROUND_ONLY
+    /// (styles, by name, with commas) draws only those.
+    #[test]
+    fn background_previews() {
+        use crate::backdrop::{Background, PrismPalette, Style, WavesPalette};
+        let Some(out) = std::env::var_os("MASSIF_BACKGROUND_PREVIEWS").map(PathBuf::from) else {
+            return;
+        };
+        let refs = std::env::var_os("MASSIF_BACKGROUND_REFS").map(PathBuf::from);
+        let only = std::env::var("MASSIF_BACKGROUND_ONLY").ok();
+        std::fs::create_dir_all(&out).unwrap();
+        let mut h = harness(ThemeChoice::Dark);
+        {
+            let app = h.state_mut();
+            app.has_map = false;
+            app.settings.recent.clear();
+            app.open_home(Page::NewMap);
+        }
+        h.run_steps(5);
+        let (cw, ch) = (800u32, 500u32);
+        let fit = |img: &image::RgbaImage| -> image::RgbaImage {
+            let k = (cw as f32 / img.width() as f32).min(ch as f32 / img.height() as f32);
+            let small = image::imageops::resize(img, (img.width() as f32 * k) as u32, (img.height() as f32 * k) as u32, image::imageops::FilterType::Triangle);
+            let mut cell = image::RgbaImage::from_pixel(cw, ch, image::Rgba([24, 24, 27, 255]));
+            image::imageops::replace(&mut cell, &small, ((cw - small.width()) / 2) as i64, ((ch - small.height()) / 2) as i64);
+            cell
+        };
+        for (style, name) in [(Style::Waves, "waves"), (Style::Pixel, "pixel"), (Style::Prism, "prism"), (Style::Ridges, "ridges")] {
+            if only.as_deref().is_some_and(|o| !o.split(',').any(|n| n.trim() == name)) {
+                continue;
+            }
+            let base = Background { style, ..Background::default() };
+            let mut other = base;
+            other.waves.palette = WavesPalette::Lagoon;
+            other.pixel.palette = WavesPalette::Lagoon;
+            other.prism.palette = PrismPalette::Ultraviolet;
+            let shot = |h: &mut egui_kittest::Harness<'static, MassifApp>, b: Background, theme: ThemeChoice, high: bool, t: f64| {
+                h.state_mut().settings.backdrop = b;
+                h.state_mut().settings.theme = theme;
+                h.state_mut().settings.high_contrast = if high { Follow::On } else { Follow::Off };
+                h.state_mut().home.as_mut().unwrap().wave_time = Some(t);
+                h.run_steps(3);
+                fit(&h.render().unwrap())
+            };
+            let reference = refs.as_ref().and_then(|r| image::open(r.join(format!("{name}.png"))).ok()).map(|i| fit(&i.to_rgba8()));
+            let cells = [
+                reference,
+                Some(shot(&mut h, base, ThemeChoice::Dark, false, 0.0)),
+                Some(shot(&mut h, base, ThemeChoice::Light, false, 0.0)),
+                Some(shot(&mut h, base, ThemeChoice::Dark, false, 4.0)),
+                Some(shot(&mut h, base, ThemeChoice::Dark, false, 8.0)),
+                Some(shot(&mut h, base, ThemeChoice::Dark, false, 12.0)),
+                Some(shot(&mut h, base, ThemeChoice::Dark, true, 0.0)),
+                Some(shot(&mut h, base, ThemeChoice::Light, true, 0.0)),
+                (style != Style::Ridges).then(|| shot(&mut h, other, ThemeChoice::Dark, false, 0.0)),
+            ];
+            let gap = 8u32;
+            let mut sheet = image::RgbaImage::from_pixel(3 * cw + 4 * gap, 3 * ch + 4 * gap, image::Rgba([12, 12, 14, 255]));
+            for (k, cell) in cells.iter().enumerate() {
+                if let Some(cell) = cell {
+                    let (col, row) = (k as u32 % 3, k as u32 / 3);
+                    image::imageops::replace(&mut sheet, cell, (gap + col * (cw + gap)) as i64, (gap + row * (ch + gap)) as i64);
+                }
+            }
+            // The next number of this style.
+            let n = std::fs::read_dir(&out)
+                .unwrap()
+                .filter_map(|e| e.ok()?.file_name().into_string().ok())
+                .filter_map(|f| f.strip_prefix(&format!("{name}-"))?.strip_suffix(".png")?.parse::<u32>().ok())
+                .max()
+                .unwrap_or(0)
+                + 1;
+            sheet.save(out.join(format!("{name}-{n}.png"))).unwrap();
+        }
+    }
+
     /// Settings ▸ Appearance ▸ Home background: a click on a style shows its
     /// picture and its own few settings; the page rendered for each style
     /// with MASSIF_SNAPSHOT_DIR, in both themes.
