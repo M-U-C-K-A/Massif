@@ -96,6 +96,8 @@ struct Cut {
     runs: Vec<Vec<Span>>,
     /// The layer of underground pockets of each column (0: none).
     pockets: Vec<u16>,
+    /// Where caves cut the ground of each column: its top and terrain.
+    grounds: Vec<Option<(i32, massif_core::TerrainId)>>,
     /// The biomes the export writes over each column of the cut.
     biomes: Vec<BiomeColumn>,
     terrain: TextureHandle,
@@ -947,6 +949,7 @@ impl OresView {
         let mut pixels = vec![Color32::TRANSPARENT; across * h];
         let mut runs = Vec::with_capacity(across);
         let mut pockets = Vec::with_capacity(across);
+        let mut grounds = Vec::with_capacity(across);
         let in_rock = massif_core::pockets::Pockets::new(reg, world.meta.seed as u64, dim.min_y);
         let (mut spans, mut fluids) = (Vec::new(), Vec::new());
         let mut stacks: Vec<(TilePos, Option<TileStack>)> = Vec::new();
@@ -967,6 +970,7 @@ impl OresView {
             let Some(stack) = &stacks[k].1 else {
                 runs.push(Vec::new());
                 pockets.push(0);
+                grounds.push(None);
                 biomes.push(BiomeColumn::default());
                 continue;
             };
@@ -984,7 +988,8 @@ impl OresView {
             stack.spans(cell, &mut spans);
             stack.fluids(cell, &spans, &mut fluids);
             let pocket = stack.ground().pockets.get(cell);
-            let column = in_rock.as_ref().and_then(|p| p.column(pocket, &spans, &mat, x, z));
+            let ground = stack.cave_ground(cell);
+            let column = in_rock.as_ref().and_then(|p| p.column(pocket, &spans, ground, &mat, x, z));
             for s in &spans {
                 let submerged = fluids.iter().any(|f| f.0 == s.y1);
                 let recipe = mat.recipe_depth(s.terrain, x, z);
@@ -1006,9 +1011,10 @@ impl OresView {
             }
             runs.push(spans.clone());
             pockets.push(pocket);
+            grounds.push(ground);
         }
         let image = ColorImage::new([across, h], pixels);
-        Cut { key, runs, pockets, biomes, terrain: ctx.load_texture("ores cut", image, TextureOptions::NEAREST), ores: None }
+        Cut { key, runs, pockets, grounds, biomes, terrain: ctx.load_texture("ores cut", image, TextureOptions::NEAREST), ores: None }
     }
 
     // ---------------------------------------------------------- chart --
@@ -1325,7 +1331,7 @@ fn ores_image(world: &World, dim: usize, settings: &OreSettings, cut: &Cut) -> (
                         return None;
                     }
                     let i = (bx - x0) as usize;
-                    let pockets = in_rock.as_ref().and_then(|p| p.column(cut.pockets[i], &cut.runs[i], &mat, bx, bz));
+                    let pockets = in_rock.as_ref().and_then(|p| p.column(cut.pockets[i], &cut.runs[i], cut.grounds[i], &mat, bx, bz));
                     rock_at(&cut.runs[i], &mat, &hosts, pockets.as_ref(), bx, by, bz, d.max_y)
                 },
                 |bx, by, _| cut.biomes[(bx - x0) as usize].of_block(by),

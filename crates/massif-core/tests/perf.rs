@@ -351,30 +351,51 @@ fn world_stone(edit: &mut massif_core::Edit, radius: f32, stone: TerrainId) {
     ops::paint_terrain(edit, &Brush::symmetric(BrushShape::Circle, Profile::Constant, radius * 0.6), 0.0, 0.0, stone, 1);
 }
 
-/// Caves over a large generated map (MASSIF_TILES a side, 64 by default):
-/// the time, the chunks made and the memory they take, the voxel file
-/// section's size.
+/// Caves over a large generated map (MASSIF_TILES a side, 32 by default),
+/// a layer as the game's painted over all of it: the time to work out the
+/// caves of every tile (CPU and wall clock), the blocks carved and flooded,
+/// the memory the results take, and the time to paint the layer.
 #[test]
 #[ignore]
 fn caves_over_a_large_map() {
-    use massif_core::caves::{CaveSettings, carve};
-    let n: i32 = std::env::var("MASSIF_TILES").ok().and_then(|v| v.parse().ok()).unwrap_or(64);
+    use massif_core::caves::{CaveDef, CaveLayers, tile_caves};
+    use rayon::prelude::*;
+    let n: i32 = std::env::var("MASSIF_TILES").ok().and_then(|v| v.parse().ok()).unwrap_or(32);
     let mut world = time(&format!("generate {n} × {n} tiles"), || generate(&GenParams { tiles_x: n, tiles_z: n, landform: Landform::Mountains, seed: 3, ..GenParams::default() }));
     let sea = world.meta.sea_level;
-    let settings = CaveSettings::for_dimension(&world.dims[0], sea);
-    let steps = massif_core::auto::Steps::default();
-    let cpu = cpu_seconds();
-    let carved = time("carve caves (default settings)", || carve(&world.dims[0], &settings, &steps));
-    eprintln!("CPU {:.1} s", cpu_seconds() - cpu);
-    let chunks = carved.chunks.len();
-    let bytes: usize = carved.chunks.iter().map(|(_, c)| 4096 + if c.has_fluid() { 8192 } else { 0 }).sum();
-    eprintln!("{} blocks carved, {chunks} chunks ({:.1} a tile), {:.0} MB of densities", carved.blocks, chunks as f64 / (n * n) as f64, bytes as f64 / 1e6);
+    let dim = &mut world.dims[0];
+    dim.caves = CaveLayers::new(vec![CaveDef::vanilla("Caves", 3, dim.min_y, dim.max_y, sea)]);
     let mut history = History::new(1);
     history.begin("caves", 0);
-    time("put the chunks in place", || history.edit(&mut world, 0).set_voxels(carved.chunks));
+    let painted = time("paint the layer over the whole map", || ops::fill_caves(&mut history.edit(&mut world, 0), 1));
     history.commit();
-    let encoded = time("encode the sculpted chunks", || world.dims[0].voxels.encode());
-    eprintln!("saved: {:.1} MB", encoded.len() as f64 / 1e6);
+    eprintln!("{painted} columns painted");
+    let dim = &world.dims[0];
+    let tiles: Vec<_> = dim.ground().positions().collect();
+    for pass in 0..2 {
+        let cpu = cpu_seconds();
+        let started = Instant::now();
+        let made: Vec<(usize, usize, usize)> = tiles
+            .par_iter()
+            .map(|&p| {
+                let ground = dim.ground().view(p).unwrap();
+                let c = tile_caves(&dim.caves, &ground, p, dim.min_y, dim.max_y).unwrap();
+                let (all, wet) = c.count();
+                (all, wet, c.bytes())
+            })
+            .collect();
+        let wall = started.elapsed().as_secs_f64();
+        let (all, wet, bytes) = made.iter().fold((0, 0, 0), |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2));
+        eprintln!(
+            "pass {pass}: {:.2} s, CPU {:.1} s ({:.1} ms a tile), {all} blocks carved, {wet} flooded, {:.0} MB of runs ({:.0} KB a tile), cache {:.0} MB",
+            wall,
+            cpu_seconds() - cpu,
+            (cpu_seconds() - cpu) * 1000.0 / tiles.len() as f64,
+            bytes as f64 / 1e6,
+            bytes as f64 / 1e3 / tiles.len() as f64,
+            massif_core::caves::cache_bytes() as f64 / 1e6
+        );
+    }
 }
 
 /// The most memory this process has held, in megabytes.

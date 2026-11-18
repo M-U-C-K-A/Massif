@@ -794,9 +794,12 @@ pub fn build_chunk(
             }
             // Underground pockets, in the rock of the ground under its
             // strata, between the layer's heights.
-            if let Some(col) = ctx.pockets.as_ref().and_then(|p| p.column(stack.ground().pockets.get(cell), spans, &ctx.mat, x, z)) {
+            if let Some(col) = ctx.pockets.as_ref().and_then(|p| p.column(stack.ground().pockets.get(cell), spans, stack.cave_ground(cell), &ctx.mat, x, z)) {
                 for y in col.low.max(min_y)..=col.high.min(max_y - 1) {
-                    if let Some(b) = col.at(x, y, z) {
+                    // Not in the air of a cave.
+                    if let Some(b) = col.at(x, y, z)
+                        && blocks[at(y)] != 0
+                    {
                         blocks[at(y)] = b.0;
                     }
                 }
