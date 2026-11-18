@@ -2182,6 +2182,7 @@ name = "massif-terrain"
 version = "1.0.0"
 dependencies = [
  "bytemuck",
+ "image",
  "log",
  "png",
  "pollster",

@@ -295,6 +295,13 @@ pub trait Env: Send + Sync {
         let _ = name;
         None
     }
+
+    /// The colour terrain `id` is shown in (linear light), for previews of
+    /// the map's own terrains.
+    fn terrain_color(&self, id: u16) -> Option<[f32; 3]> {
+        let _ = id;
+        None
+    }
 }
 
 /// No map, no files.
