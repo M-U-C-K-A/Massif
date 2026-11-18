@@ -362,7 +362,7 @@ mod tests {
     /// water in one corner and a tree trunk.
     fn ground(cx: i32, cz: i32) -> Chunk {
         let mut sections = vec![Section::EMPTY; 4];
-        for s in 0..4usize {
+        for (s, section) in sections.iter_mut().enumerate() {
             let mut b = Box::new([AIR; VOLUME]);
             for y in 0..16 {
                 for z in 0..16 {
@@ -383,7 +383,7 @@ mod tests {
                     }
                 }
             }
-            sections[s] = Section::Mixed(b);
+            *section = Section::Mixed(b);
         }
         Chunk { x: cx, z: cz, sections }
     }

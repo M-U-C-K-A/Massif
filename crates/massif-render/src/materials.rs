@@ -412,7 +412,7 @@ fn light_level<'a>(short: &str, prop: &impl Fn(&str) -> Option<&'a str>) -> u8 {
         "sea_pickle" => if prop("waterlogged") == Some("true") { 3 + 3 * count("pickles").min(4) } else { 0 },
         "cave_vines" | "cave_vines_plant" => if prop("berries") == Some("true") { 14 } else { 0 },
         "respawn_anchor" => [0, 3, 7, 11, 15][prop("charges").and_then(|v| v.parse::<usize>().ok()).unwrap_or(0).min(4)],
-        _ if short.ends_with("candle") => if prop("lit") == Some("true") { 3 * count("candles").min(4) } else { 0 },
+        _ if short.ends_with("candle") && prop("lit") == Some("true") => 3 * count("candles").min(4),
         _ => 0,
     }
 }

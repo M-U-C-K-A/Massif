@@ -727,7 +727,7 @@ impl Renderer {
             air: [light.air, light.haze, light.haze_g, altitude],
             fog: [light.fog, light.fog_height - origin[1] as f32, light.fog_falloff.max(0.5), light.fog_g],
             media: [light.shafts as u8 as f32, sea, light.emission, light.aperture],
-            lens: [light.focus.max(0.1), 0.0, 0.0, 0.0],
+            lens: [light.focus.max(0.1), light.sea as u8 as f32, 0.0, 0.0],
             clouds: [light.cloud_cover, light.cloud_height - origin[1] as f32, light.cloud_thickness.max(1.0), if light.cloud_cover > 0.0 { light.cloud_density } else { 0.0 }],
             wind: [light.wind[0], light.wind[1], 1.0 / light.cloud_size.max(1.0), 0.0],
             size: [w, h, self.frame.wrapping_mul(2654435761).wrapping_add(1), self.samples],

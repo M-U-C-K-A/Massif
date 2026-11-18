@@ -15,7 +15,7 @@ struct Params {
     air: vec4<f32>,      // the air's scattering, the haze's, its anisotropy, the eyes' height (km)
     fog: vec4<f32>,      // extinction a block at its base, base height (scene), falloff (blocks), anisotropy
     media: vec4<f32>,    // shafts on, sea level (scene), emission strength, the lens's radius
-    lens: vec4<f32>,     // focus distance
+    lens: vec4<f32>,     // focus distance, a sea around the map
     clouds: vec4<f32>,   // cover (0..1), base height (scene), thickness, extinction a block (0: none)
     wind: vec4<f32>,     // how far the wind moved them (x, z), 1 / the size of their shapes
     size: vec4<u32>,     // width, height, seed of the frame, sample (0: start over)
@@ -726,9 +726,19 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
     var last_chunk = vec2<i32>(-1000000);
     for (var bounce = 0u; bounce <= P.info.z; bounce++) {
         let hit = trace(ro, rd, 1e30);
+        // Out of the scene, down to the sea around the map.
+        var sea_t = -1.0;
+        if (!hit.found && P.lens.y > 0.5 && rd.y < -1e-4) {
+            let ts = (P.media.y - ro.y) / rd.y;
+            if (ts > 0.0) {
+                sea_t = ts;
+            }
+        }
         if (bounce == 0u) {
             var t_end = hit.t;
-            if (!hit.found) {
+            if (sea_t > 0.0) {
+                t_end = sea_t;
+            } else if (!hit.found) {
                 t_end = FAR;
             }
             // A cloud before what the eyes would see: its light ends the path.
@@ -738,9 +748,19 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
                 return m.light + m.transmittance * cloud.light;
             }
             // The air, the haze and the fog between the eyes and what they see.
-            let m = through_media(ro, rd, t_end, hit.found, seed);
+            let m = through_media(ro, rd, t_end, hit.found || sea_t > 0.0, seed);
             sum += m.light;
             throughput *= m.transmittance;
+        }
+        if (sea_t > 0.0) {
+            // The sea: the sky mirrored as much as Fresnel says, its deep
+            // blue for the rest.
+            let c = clamp(-rd.y, 0.0, 1.0);
+            let fresnel = 0.02 + 0.98 * pow(1.0 - c, 5.0);
+            let mirrored = sky(reflect(rd, vec3<f32>(0.0, 1.0, 0.0)));
+            let deep = vec3<f32>(0.012, 0.045, 0.075) * (sky(vec3<f32>(0.0, 1.0, 0.0)) + SUN_LIGHT * max(P.sun.y, 0.0) * 0.1);
+            sum += throughput * mix(deep, mirrored, fresnel);
+            break;
         }
         if (!hit.found) {
             var s = sky(rd);

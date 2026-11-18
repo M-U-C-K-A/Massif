@@ -173,7 +173,7 @@ impl MapBuilder {
     }
 
     /// A tile built, if one is ready.
-    pub fn next(&mut self) -> Option<Built> {
+    pub fn take(&mut self) -> Option<Built> {
         match self.rx.try_recv() {
             Ok(b) => Some(b),
             Err(TryRecvError::Empty) => None,

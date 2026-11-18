@@ -26,7 +26,45 @@ const UPLOAD_BUDGET: Duration = Duration::from_millis(6);
 const STILL_AFTER: f64 = 0.2;
 /// Samples a pixel the image stops at.
 const MOST_SAMPLES: u32 = 2048;
-const FOV: f32 = 50.0 * std::f32::consts::PI / 180.0;
+
+/// The time and place the sun is put by.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Time {
+    /// Local solar time, hours.
+    hour: f32,
+    /// Day of the year.
+    day: f32,
+    /// Degrees, north positive.
+    latitude: f32,
+    /// How far the map's north is turned from the world's, degrees.
+    north: f32,
+}
+
+impl Default for Time {
+    fn default() -> Self {
+        Self { hour: 15.0, day: 172.0, latitude: 45.0, north: 0.0 }
+    }
+}
+
+/// The ready-made looks of the sky, by name.
+const PRESETS: [&str; 6] = [tn!("Clear noon"), tn!("Fair weather"), tn!("Golden hour"), tn!("Blue hour"), tn!("Foggy morning"), tn!("Night")];
+
+/// Put a ready-made look of the sky on `light`, its sun by `time` (the fog
+/// and clouds from the sea level `sea`).
+fn preset(k: usize, light: &mut Light, time: &mut Time, sea: f32) {
+    let base = Light { fog_height: sea + 8.0, cloud_height: sea + 1200.0, aperture: light.aperture, focus: light.focus, bounces: light.bounces, ..Light::default() };
+    let (hour, l) = match k {
+        0 => (12.5, base),
+        1 => (14.5, Light { cloud_cover: 0.42, ..base }),
+        2 => (18.8, Light { haze: 4.0, cloud_cover: 0.2, exposure: 2.5, ..base }),
+        3 => (20.25, Light { haze: 2.0, exposure: 7.0, ..base }),
+        4 => (7.0, Light { fog: 0.02, fog_falloff: 16.0, haze: 2.0, exposure: 1.4, ..base }),
+        _ => (23.0, Light { exposure: 6.0, moon: 1.0 / 150.0, ..base }),
+    };
+    *light = l;
+    time.hour = hour;
+    light.set_time(time.hour, time.day, time.latitude, time.north);
+}
 
 /// The camera of the Render side: turning about a point.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -38,8 +76,8 @@ struct Orbit {
 }
 
 impl Orbit {
-    fn camera(&self) -> Camera {
-        Camera::orbit(self.target, self.yaw, self.pitch, self.distance, FOV)
+    fn camera(&self, fov: f32) -> Camera {
+        Camera::orbit(self.target, self.yaw, self.pitch, self.distance, fov.to_radians())
     }
 }
 
@@ -65,11 +103,15 @@ pub struct RenderSide {
     scene: Option<Scene>,
     orbit: Option<Orbit>,
     light: Light,
+    time: Time,
+    /// The vertical field of view, degrees.
+    fov: f32,
+    preset: usize,
     texture: Option<egui::TextureId>,
     /// Tiles edited since they were built.
     dirty: HashSet<TilePos>,
     moving_until: f64,
-    last: Option<(Orbit, Light, [u32; 2])>,
+    last: Option<(Orbit, Light, [u32; 2], f32)>,
     /// When the image last started adding samples up, and its samples
     /// then: how many it adds a second.
     since: Option<(Instant, u32)>,
@@ -77,7 +119,10 @@ pub struct RenderSide {
 
 impl Default for RenderSide {
     fn default() -> Self {
-        Self { scene: None, orbit: None, light: Light::default(), texture: None, dirty: HashSet::new(), moving_until: 0.0, last: None, since: None }
+        let mut light = Light::default();
+        let time = Time::default();
+        light.set_time(time.hour, time.day, time.latitude, time.north);
+        Self { scene: None, orbit: None, light, time, fov: 50.0, preset: usize::MAX, texture: None, dirty: HashSet::new(), moving_until: 0.0, last: None, since: None }
     }
 }
 
@@ -145,8 +190,13 @@ impl RenderSide {
             });
             self.dirty.clear();
             self.last = None;
+            // The fog and the clouds where they belong on this map.
+            let sea = doc.world.meta.sea_level as f32;
+            self.light.fog_height = sea + 8.0;
+            self.light.cloud_height = sea + 1200.0;
         }
         let scene = self.scene.as_mut().expect("made above");
+        scene.renderer.sea_level = doc.world.meta.sea_level as f64;
         let orbit = self.orbit.get_or_insert_with(|| framing(&scene.renderer.extent(), doc.world.meta.sea_level as f64));
 
         // Edits since: their tiles first, then those not built yet, from a
@@ -175,7 +225,7 @@ impl RenderSide {
         let mut changed = false;
         if let Some(builder) = &mut scene.builder {
             while started.elapsed() < UPLOAD_BUDGET {
-                let Some(built) = builder.next() else { break };
+                let Some(built) = builder.take() else { break };
                 scene.built.insert(built.tile);
                 if !scene.renderer.put(built.chunks) {
                     scene.full = true;
@@ -195,7 +245,7 @@ impl RenderSide {
 
         // The camera: drag to turn about the point looked at, right-drag
         // (or middle) to slide over the land, the wheel to come closer.
-        let response = ui.interact(view, egui::Id::new("massif render view"), Sense::click_and_drag());
+        let response = ui.interact(view, egui::Id::unique("massif render view"), Sense::click_and_drag());
         let now = ui.input(|i| i.time);
         let extent = scene.renderer.extent();
         let span = extent.width.max(extent.depth) as f64 * 16.0;
@@ -220,6 +270,24 @@ impl RenderSide {
         if response.double_clicked() {
             *orbit = framing(&extent, doc.world.meta.sea_level as f64);
         }
+        // Shift-click: in focus there.
+        if response.clicked()
+            && ui.input(|i| i.modifiers.shift)
+            && let Some(at) = response.interact_pointer_pos()
+        {
+            let camera = orbit.camera(self.fov);
+            let b = camera.basis();
+            let tan = (camera.fov_y * 0.5).tan();
+            let ndc = [((at.x - view.left()) / view.width()) * 2.0 - 1.0, ((at.y - view.top()) / view.height()) * 2.0 - 1.0];
+            let dir = b.forward + b.right * (ndc[0] * tan * view.width() / view.height()) - b.up * (ndc[1] * tan);
+            let d = dir.normalize();
+            if let Some(t) = scene.renderer.pick(camera.eye, [d.x as f64, d.y as f64, d.z as f64], 50000.0) {
+                self.light.focus = (t * d.dot(b.forward) as f64) as f32;
+                if self.light.aperture == 0.0 {
+                    self.light.aperture = 0.4;
+                }
+            }
+        }
 
         // The image: as large as the view, in pixels.
         let ppp = ui.ctx().pixels_per_point();
@@ -234,8 +302,8 @@ impl RenderSide {
                 None => self.texture = Some(egui_renderer.register_native_texture(device, image, wgpu::FilterMode::Linear)),
             }
         }
-        let shown = (*orbit, self.light, px);
-        if self.last.is_some_and(|l| l.0 != shown.0) {
+        let shown = (*orbit, self.light, px, self.fov);
+        if self.last.is_some_and(|l| l.0 != shown.0 || l.3 != shown.3) {
             self.moving_until = now + STILL_AFTER;
         }
         if self.last.is_some_and(|l| l.1 != shown.1) || changed {
@@ -247,7 +315,7 @@ impl RenderSide {
         // sooner and stops there.
         let most = if theme::reduce_motion(ui.ctx()) { 64 } else { MOST_SAMPLES };
         if moving || scene.renderer.samples < most {
-            if let Some(cmd) = scene.renderer.render(&orbit.camera(), &self.light, moving) {
+            if let Some(cmd) = scene.renderer.render(&orbit.camera(self.fov), &self.light, moving) {
                 queue.submit([cmd]);
             }
             ui.ctx().request_repaint();
@@ -275,47 +343,130 @@ impl RenderSide {
         ui.painter().rect(back, theme::PILL, pal.panel, egui::Stroke::new(1.0, pal.border), egui::StrokeKind::Inside);
         ui.painter().galley(back.min + vec2(8.0, 4.0), galley, pal.text);
 
-        // The settings beside.
-        let mut col = ui.new_child(egui::UiBuilder::new().max_rect(side).layout(egui::Layout::top_down(egui::Align::Min)));
-        col.spacing_mut().item_spacing.y = 6.0;
-        col.horizontal(|ui| {
+        // The settings beside, in a column that scrolls.
+        let mut outer = ui.new_child(egui::UiBuilder::new().max_rect(side).layout(egui::Layout::top_down(egui::Align::Min)));
+        outer.horizontal(|ui| {
             ui.label(RichText::new(theme::with_icon(Icon::Aperture, tr!("Render"))).size(14.0).medium());
             ui.label(RichText::new(tr!("Beta")).size(11.0).strong().color(pal.accent));
         });
-        col.add_space(2.0);
-        let light = &mut self.light;
-        let mut azimuth = light.sun_azimuth.to_degrees();
-        let mut elevation = light.sun_elevation.to_degrees();
-        col.label(RichText::new(tr!("Sun")).size(12.0).color(pal.weak));
-        well(&mut col, |ui| {
-            row(ui, tr!("Direction"), |ui| {
-                ui.add(Field::new(&mut azimuth, 0.0..=360.0).suffix("°").max_decimals(0));
+        outer.add_space(4.0);
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(&mut outer, |col| {
+        col.spacing_mut().item_spacing.y = 6.0;
+        let sea = doc.world.meta.sea_level as f32;
+        let (light, time) = (&mut self.light, &mut self.time);
+        let mut picked = None;
+        col.label(RichText::new(tr!("Sun and sky")).size(12.0).color(pal.weak));
+        let before = *time;
+        well(col, |ui| {
+            row(ui, tr!("Look"), |ui| {
+                let name = PRESETS.get(self.preset).map_or(tr!("Custom"), |n| crate::i18n::tr_name(n));
+                crate::widgets::combo("render preset").selected_text(name).show_ui(ui, |ui| {
+                    for (k, n) in PRESETS.iter().enumerate() {
+                        if ui.selectable_label(self.preset == k, crate::i18n::tr_name(n)).clicked() {
+                            picked = Some(k);
+                        }
+                    }
+                });
             });
-            row(ui, tr!("Height"), |ui| {
-                ui.add(Field::new(&mut elevation, -10.0..=90.0).suffix("°").max_decimals(0));
+            row(ui, tr!("Time"), |ui| {
+                ui.add(Field::new(&mut time.hour, 0.0..=24.0).suffix(" h").max_decimals(2));
             });
-            row(ui, tr!("Strength"), |ui| {
+            row(ui, tr!("Day"), |ui| {
+                ui.add(Field::new(&mut time.day, 1.0..=365.0).max_decimals(0));
+            });
+            row(ui, tr!("Latitude"), |ui| {
+                ui.add(Field::new(&mut time.latitude, -66.0..=66.0).suffix("°").max_decimals(0));
+            });
+            row(ui, tr!("North"), |ui| {
+                ui.add(Field::new(&mut time.north, 0.0..=360.0).suffix("°").max_decimals(0));
+            });
+            row(ui, tr!("Sun"), |ui| {
                 ui.add(Field::new(&mut light.sun_strength, 0.0..=20.0).max_decimals(1));
             });
-        });
-        light.sun_azimuth = azimuth.to_radians();
-        light.sun_elevation = elevation.to_radians();
-        col.label(RichText::new(tr!("Image")).size(12.0).color(pal.weak));
-        well(&mut col, |ui| {
             row(ui, tr!("Sky"), |ui| {
                 ui.add(Field::new(&mut light.sky_strength, 0.0..=4.0).max_decimals(2));
+            });
+        });
+        if *time != before {
+            light.set_time(time.hour, time.day, time.latitude, time.north);
+        }
+        col.label(RichText::new(tr!("Atmosphere")).size(12.0).color(pal.weak));
+        well(col, |ui| {
+            row(ui, tr!("Air"), |ui| {
+                ui.add(Field::new(&mut light.air, 0.0..=4.0).max_decimals(2));
+            });
+            row(ui, tr!("Haze"), |ui| {
+                ui.add(Field::new(&mut light.haze, 0.0..=30.0).logarithmic(false).max_decimals(1));
+            });
+            row(ui, tr!("Fog"), |ui| {
+                ui.add(Field::new(&mut light.fog, 0.0..=0.1).max_decimals(3));
+            });
+            row(ui, tr!("Fog height"), |ui| {
+                ui.add(Field::new(&mut light.fog_height, sea - 64.0..=sea + 256.0).max_decimals(0));
+            });
+            row(ui, tr!("Fog fade"), |ui| {
+                ui.add(Field::new(&mut light.fog_falloff, 2.0..=200.0).suffix(" blocks").max_decimals(0));
+            });
+            row(ui, tr!("Shafts of light"), |ui| {
+                crate::widgets::switch(ui, &mut light.shafts);
+            });
+            row(ui, tr!("Sea around the map"), |ui| {
+                crate::widgets::switch(ui, &mut light.sea);
+            });
+        });
+        col.label(RichText::new(tr!("Clouds")).size(12.0).color(pal.weak));
+        well(col, |ui| {
+            row(ui, tr!("Cover"), |ui| {
+                ui.add(Field::new(&mut light.cloud_cover, 0.0..=1.0).max_decimals(2));
+            });
+            row(ui, tr!("Height"), |ui| {
+                ui.add(Field::new(&mut light.cloud_height, sea..=sea + 4000.0).max_decimals(0));
+            });
+            row(ui, tr!("Thickness"), |ui| {
+                ui.add(Field::new(&mut light.cloud_thickness, 50.0..=2000.0).max_decimals(0));
+            });
+            row(ui, tr!("Density"), |ui| {
+                ui.add(Field::new(&mut light.cloud_density, 0.002..=0.1).logarithmic(true).max_decimals(3));
+            });
+            row(ui, tr!("Size"), |ui| {
+                ui.add(Field::new(&mut light.cloud_size, 200.0..=6000.0).logarithmic(true).max_decimals(0));
+            });
+            row(ui, tr!("Wind"), |ui| {
+                ui.add(Field::new(&mut light.wind[0], 0.0..=20000.0).max_decimals(0));
+            });
+        });
+        col.label(RichText::new(tr!("Lens")).size(12.0).color(pal.weak));
+        well(col, |ui| {
+            row(ui, tr!("Angle"), |ui| {
+                ui.add(Field::new(&mut self.fov, 10.0..=100.0).suffix("°").max_decimals(0));
+            });
+            row(ui, tr!("Aperture"), |ui| {
+                ui.add(Field::new(&mut light.aperture, 0.0..=4.0).suffix(" blocks").max_decimals(2));
+            });
+            row(ui, tr!("Focus"), |ui| {
+                ui.add(Field::new(&mut light.focus, 1.0..=5000.0).logarithmic(true).suffix(" blocks").max_decimals(0));
+            });
+        });
+        col.label(RichText::new(tr!("Image")).size(12.0).color(pal.weak));
+        well(col, |ui| {
+            row(ui, tr!("Glow"), |ui| {
+                ui.add(Field::new(&mut light.emission, 0.0..=8.0).max_decimals(2));
             });
             row(ui, tr!("Bounces"), |ui| {
                 ui.add(Field::new(&mut light.bounces, 0..=6));
             });
             row(ui, tr!("Exposure"), |ui| {
-                ui.add(Field::new(&mut light.exposure, 0.1..=8.0).logarithmic(true).max_decimals(2));
+                ui.add(Field::new(&mut light.exposure, 0.1..=16.0).logarithmic(true).max_decimals(2));
             });
         });
+        if let Some(k) = picked {
+            self.preset = k;
+            preset(k, light, time, sea);
+        }
         col.label(RichText::new(tr!("Scene")).size(12.0).color(pal.weak));
         let memory = scene.renderer.memory();
         let mb = |b: u64| format!("{:.0} MB", b as f64 / (1 << 20) as f64);
-        well(&mut col, |ui| {
+        well(col, |ui| {
             row(ui, tr!("Tiles"), |ui| {
                 ui.label(format!("{} / {}", scene.built.len(), scene.tiles));
             });
@@ -336,7 +487,8 @@ impl RenderSide {
             });
         });
         col.add_space(4.0);
-        col.label(RichText::new(tr!("Drag: turn · right-drag: slide · wheel: closer · double-click: the whole map")).size(11.0).color(pal.weak));
+        col.label(RichText::new(tr!("Drag: turn · right-drag: slide · wheel: closer · shift-click: focus there · double-click: the whole map")).size(11.0).color(pal.weak));
+        });
     }
 }
 

@@ -73,6 +73,8 @@ pub struct Light {
     pub fog_g: f32,
     /// Shadows in the air: shafts of light through the fog and the haze.
     pub shafts: bool,
+    /// A sea at sea level all around the map, out to the horizon.
+    pub sea: bool,
     /// Light of the blocks that glow, times.
     pub emission: f32,
     /// The moon's light, a share of the sun's.
@@ -113,6 +115,7 @@ impl Default for Light {
             fog_falloff: 24.0,
             fog_g: 0.6,
             shafts: true,
+            sea: true,
             emission: 1.0,
             moon: 1.0 / 300.0,
             cloud_cover: 0.0,
@@ -137,12 +140,12 @@ impl Light {
         Vec3::new(sa * ce, se, -ca * ce).normalize()
     }
 
-    /// What lights the scene from the sky: the sun, or once it is well
-    /// under the horizon, the moon facing it (full), bluish and some 300
+    /// What lights the scene from the sky: the sun, or once it is 6° under
+    /// the horizon (past the blue hour), the moon facing it (full), bluish and some 300
     /// times dimmer. Its direction, illuminance and tint.
     pub fn source(&self) -> (Vec3, f32, [f32; 3]) {
         let sun = self.sun_direction();
-        if self.sun_elevation > -4f32.to_radians() {
+        if self.sun_elevation > -6f32.to_radians() {
             return (sun, self.sun_strength, self.sun_tint);
         }
         let moon = Vec3::new(-sun.x, -sun.y, -sun.z);
