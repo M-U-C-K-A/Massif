@@ -435,7 +435,7 @@ mod tests {
     use super::*;
 
     /// Every tool, in the order of the Tools panel.
-    pub(super) const ALL: [Tool; 32] = [
+    pub(super) const ALL: [Tool; 33] = [
         Tool::Raise,
         Tool::Smooth,
         Tool::Flatten,

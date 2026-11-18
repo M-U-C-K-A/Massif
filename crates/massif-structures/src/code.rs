@@ -558,7 +558,7 @@ fn portal_room(f: &mut Frame, rng: &mut Rng) {
     f.fill((3, 1, 3), (7, 1, 7), "minecraft:stone_bricks");
     f.fill((4, 1, 4), (6, 1, 6), "minecraft:lava[level=0]");
     // The frames round the well, one block up, facing in.
-    let mut frame = |f: &mut Frame, x: i32, z: i32, facing: Dir, rng: &mut Rng| {
+    let frame = |f: &mut Frame, x: i32, z: i32, facing: Dir, rng: &mut Rng| {
         let eye = rng.chance(0.1);
         f.set(x, 2, z, &format!("minecraft:end_portal_frame[eye={eye},facing={}]", facing.name()));
     };
