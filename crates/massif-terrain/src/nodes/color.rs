@@ -331,7 +331,7 @@ pub static LAYERS: NodeSpec = NodeSpec {
     label: "Terrain layers",
     family: Family::Color,
     summary: "The terrain (block material) of each place, from masks: a base terrain, and up to six layers laid over it where their masks say.",
-    help: "Base is the terrain everywhere; each layer lays its terrain where its mask passes Threshold, later layers over earlier ones (rock on slopes, then gravel on scree, then sand on beaches, then snow). Dither frays the edges so that terrains mix block by block. Terrains are named as in the world's terrain list (Grass, Rock, Gravel, Sand, Snow…). Feed the Map Output's Terrain with it.",
+    help: "Base is the terrain everywhere (or Under, where connected); each layer lays its terrain where its mask passes Threshold, later layers over earlier ones (rock on slopes, then gravel on scree, then sand on beaches, then snow). Dither frays the edges so that terrains mix block by block. Terrains are named as in the world's terrain list (Grass, Rock, Gravel, Sand, Snow…). Feed the Map Output's Terrain with it.",
     keywords: &["terrain", "material", "blocks", "layers", "paint", "splat", "texture"],
     inputs: &[
         layer_mask("mask_1", "Layer 1"),
@@ -340,6 +340,7 @@ pub static LAYERS: NodeSpec = NodeSpec {
         layer_mask("mask_4", "Layer 4"),
         layer_mask("mask_5", "Layer 5"),
         layer_mask("mask_6", "Layer 6"),
+        PortSpec::new("under", "Under", PortKind::Terrain, "The terrains where no layer is laid (the map's own, through a Map input).").or("Base everywhere"),
     ],
     outputs: &[PortSpec::new("terrain", "Terrain", PortKind::Terrain, "The terrain of each place."), PortSpec::new("color", "Colour", PortKind::Color, "Each terrain's colour, for previews.")],
     params: &[
@@ -371,7 +372,7 @@ fn layers_cpu(ctx: &Ctx, inputs: &[Option<&[f32]>], out: &mut [Vec<f32>]) {
         let (x, z) = ctx.world(i, j);
         let fray = (crate::noise::hash2(x as i64 as u32, z as i64 as u32, ctx.seed) & 0xffff) as f32 / 65535.0 - 0.5;
         let mut chosen = 0usize;
-        for (layer, mask) in inputs.iter().enumerate() {
+        for (layer, mask) in inputs[..6].iter().enumerate() {
             if let Some(m) = mask
                 && !names[layer + 1].trim().is_empty()
                 && m[k] > threshold + dither * fray
@@ -379,7 +380,10 @@ fn layers_cpu(ctx: &Ctx, inputs: &[Option<&[f32]>], out: &mut [Vec<f32>]) {
                 chosen = layer + 1;
             }
         }
-        out[0][k] = ids[chosen];
+        out[0][k] = match (chosen, inputs.get(6).copied().flatten()) {
+            (0, Some(under)) => under[k],
+            _ => ids[chosen],
+        };
         for q in 0..3 {
             out[1][q * n + k] = colors[chosen][q];
         }

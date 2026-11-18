@@ -238,6 +238,28 @@
                 320.0
               ],
               "x-unit": "blocks"
+            },
+            "range": {
+              "default": "given",
+              "description": "Whether the curve goes from In low to In high, or over the input's own range (its ends then stand for the input's lowest and highest points).",
+              "enum": [
+                "given",
+                "own"
+              ],
+              "title": "Range",
+              "x-options": [
+                {
+                  "help": "Between the heights set.",
+                  "label": "Given",
+                  "value": "given"
+                },
+                {
+                  "help": "From the input's lowest point to its highest, measured over the whole terrain.",
+                  "label": "Its own",
+                  "value": "own"
+                }
+              ],
+              "x-section": "advanced"
             }
           },
           "type": "object"
@@ -251,6 +273,111 @@
         "inputs"
       ],
       "title": "Curve",
+      "type": "object"
+    },
+    "adjust.fold": {
+      "additionalProperties": false,
+      "description": "Mirrors what rises over a level back down: ridges folded into crests and troughs. Everything above Level is reflected under it, as if the relief were folded there: a smooth hill becomes a ring of ridges, noise becomes sharp crests. Strength mixes the fold with the relief as it was.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "in": {
+              "$ref": "#/$defs/source",
+              "description": "The relief (or mask) to adjust. (height)",
+              "title": "In"
+            }
+          },
+          "required": [
+            "in"
+          ],
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "level": {
+              "default": 120.0,
+              "description": "Where the relief is folded, in blocks. Usually -64 to 320.",
+              "maximum": 4096.0,
+              "minimum": -4096.0,
+              "title": "Level",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -64.0,
+                320.0
+              ],
+              "x-unit": "blocks"
+            },
+            "strength": {
+              "default": 1.0,
+              "description": "How much of the fold is taken.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Strength",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "adjust.fold"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Fold",
+      "type": "object"
+    },
+    "adjust.invert": {
+      "additionalProperties": false,
+      "description": "Turns a relief upside down within its own range: its highest point where its lowest was. Valleys become ridges and peaks become pits, between the same lowest and highest heights, measured over the whole terrain. For a mask, Invert in Masks is 1 − the mask.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "in": {
+              "$ref": "#/$defs/source",
+              "description": "The relief (or mask) to adjust. (height)",
+              "title": "In"
+            }
+          },
+          "required": [
+            "in"
+          ],
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {},
+          "type": "object"
+        },
+        "type": {
+          "const": "adjust.invert"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Invert",
       "type": "object"
     },
     "adjust.levels": {
@@ -429,6 +556,252 @@
       "title": "Normalize",
       "type": "object"
     },
+    "adjust.sharpen": {
+      "additionalProperties": false,
+      "description": "Brings out a relief's detail: what stands above its surroundings rises, what lies below sinks. The relief minus its blur over Radius, times Amount, is added back: crests and gullies about Radius wide stand out more. Large amounts make a relief look carved.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "in": {
+              "$ref": "#/$defs/source",
+              "description": "The relief (or mask) to adjust. (height)",
+              "title": "In"
+            }
+          },
+          "required": [
+            "in"
+          ],
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "default": 0.8,
+              "description": "How much it is brought out. Usually 0 to 3.",
+              "maximum": 8.0,
+              "minimum": 0.0,
+              "title": "Amount",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                3.0
+              ],
+              "x-unit": "ratio"
+            },
+            "radius": {
+              "default": 24.0,
+              "description": "The size of the detail brought out, in blocks. Usually 2 to 256.",
+              "maximum": 1024.0,
+              "minimum": 1.0,
+              "title": "Radius",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                2.0,
+                256.0
+              ],
+              "x-unit": "blocks"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "adjust.sharpen"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Sharpen",
+      "type": "object"
+    },
+    "adjust.stratify": {
+      "additionalProperties": false,
+      "description": "Layers of rock of uneven thickness cut into a relief: ledges on the slopes, as sedimentary rock weathers. Layers is how many beds the relief's range is cut into, of thicknesses that vary; Strength how flat their ledges are; Tilt leans the beds across the terrain, from west to east. Works over the input's own range.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "in": {
+              "$ref": "#/$defs/source",
+              "description": "The relief (or mask) to adjust. (height)",
+              "title": "In"
+            }
+          },
+          "required": [
+            "in"
+          ],
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "layers": {
+              "default": 14,
+              "description": "How many beds the range is cut into.",
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Layers",
+              "type": "integer",
+              "x-section": "main"
+            },
+            "seed": {
+              "description": "Another seed gives another variation of the same settings. Left out, it comes from the node's name.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "detail"
+            },
+            "strength": {
+              "default": 0.7,
+              "description": "How flat their ledges are.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Strength",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "tilt": {
+              "default": 6.0,
+              "description": "How much the beds lean, from west to east. In degrees.",
+              "maximum": 60.0,
+              "minimum": -60.0,
+              "title": "Tilt",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -60.0,
+                60.0
+              ],
+              "x-unit": "degrees"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "adjust.stratify"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Strata",
+      "type": "object"
+    },
+    "adjust.swirl": {
+      "additionalProperties": false,
+      "description": "Twists a relief around a point, most at the middle, not at all at Radius. Angle is how far the middle turns, in degrees; Radius how far the twist reaches, as a fraction of the terrain; X and Z where its middle is. Worked over the whole terrain at the simulations' resolution.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "in": {
+              "$ref": "#/$defs/source",
+              "description": "The relief (or mask) to adjust. (height)",
+              "title": "In"
+            }
+          },
+          "required": [
+            "in"
+          ],
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "angle": {
+              "default": 120.0,
+              "description": "How far the middle turns. In degrees.",
+              "maximum": 1080.0,
+              "minimum": -1080.0,
+              "title": "Angle",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -1080.0,
+                1080.0
+              ],
+              "x-unit": "degrees"
+            },
+            "radius": {
+              "default": 0.5,
+              "description": "How far the twist reaches, as a fraction of the terrain.",
+              "maximum": 2.0,
+              "minimum": 0.01,
+              "title": "Radius",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.01,
+                2.0
+              ],
+              "x-unit": "fraction"
+            },
+            "x": {
+              "default": 0.5,
+              "description": "Where its middle is, west to east. In fraction of the terrain's side.",
+              "maximum": 2.0,
+              "minimum": -1.0,
+              "title": "X",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -1.0,
+                2.0
+              ],
+              "x-unit": "fraction"
+            },
+            "z": {
+              "default": 0.5,
+              "description": "Where its middle is, north to south. In fraction of the terrain's side.",
+              "maximum": 2.0,
+              "minimum": -1.0,
+              "title": "Z",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -1.0,
+                2.0
+              ],
+              "x-unit": "fraction"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "adjust.swirl"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Swirl",
+      "type": "object"
+    },
     "adjust.terrace": {
       "additionalProperties": false,
       "description": "Steps cut into a relief between two heights: flat ledges joined by risers, as rock beds or rice terraces make them. Steps is how many ledges there are between Low and High; Sharpness how abrupt the risers are (0 a gentle ramp, 1 a wall). Outside Low and High the relief is left as it is.",
@@ -482,6 +855,28 @@
               ],
               "x-unit": "blocks"
             },
+            "range": {
+              "default": "given",
+              "description": "Whether the steps go from Low to High, or from the input's lowest point to its highest.",
+              "enum": [
+                "given",
+                "own"
+              ],
+              "title": "Range",
+              "x-options": [
+                {
+                  "help": "Between the heights set.",
+                  "label": "Given",
+                  "value": "given"
+                },
+                {
+                  "help": "From the input's lowest point to its highest, measured over the whole terrain.",
+                  "label": "Its own",
+                  "value": "own"
+                }
+              ],
+              "x-section": "advanced"
+            },
             "sharpness": {
               "default": 0.7,
               "description": "How abrupt the risers are.",
@@ -504,6 +899,20 @@
               "title": "Steps",
               "type": "integer",
               "x-section": "main"
+            },
+            "strength": {
+              "default": 1.0,
+              "description": "How much the steps replace the slope: 0 leaves the relief as it is.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Strength",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
             }
           },
           "type": "object"
@@ -517,6 +926,185 @@
         "inputs"
       ],
       "title": "Terraces",
+      "type": "object"
+    },
+    "adjust.transform": {
+      "additionalProperties": false,
+      "description": "Scales, turns and moves a relief over the terrain. Scale above 1 enlarges the relief around the terrain's middle; Rotate turns it, in degrees clockwise; Offset moves it, as fractions of the terrain. Worked over the whole terrain at the simulations' resolution.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "in": {
+              "$ref": "#/$defs/source",
+              "description": "The relief (or mask) to adjust. (height)",
+              "title": "In"
+            }
+          },
+          "required": [
+            "in"
+          ],
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "offset_x": {
+              "default": 0.0,
+              "description": "How far it is moved east, as a fraction of the terrain.",
+              "maximum": 1.0,
+              "minimum": -1.0,
+              "title": "Offset east",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -1.0,
+                1.0
+              ],
+              "x-unit": "fraction"
+            },
+            "offset_z": {
+              "default": 0.0,
+              "description": "How far it is moved south, as a fraction of the terrain.",
+              "maximum": 1.0,
+              "minimum": -1.0,
+              "title": "Offset south",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -1.0,
+                1.0
+              ],
+              "x-unit": "fraction"
+            },
+            "rotate": {
+              "default": 0.0,
+              "description": "How far it is turned, clockwise. In degrees.",
+              "maximum": 360.0,
+              "minimum": -360.0,
+              "title": "Rotate",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -360.0,
+                360.0
+              ],
+              "x-unit": "degrees"
+            },
+            "scale": {
+              "default": 1.0,
+              "description": "How much larger the relief is drawn. Usually 0.25 to 4.",
+              "maximum": 100.0,
+              "minimum": 0.01,
+              "title": "Scale",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.25,
+                4.0
+              ],
+              "x-unit": "ratio"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "adjust.transform"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Transform",
+      "type": "object"
+    },
+    "adjust.warp": {
+      "additionalProperties": false,
+      "description": "Pushes a relief around by a noise: straight lines wander, round shapes twist, everything looks less made. Each place takes the height found up to Amount blocks away, in a direction that changes smoothly over Scale. Small amounts take the regularity off shapes; large ones swirl them like rock under pressure.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "in": {
+              "$ref": "#/$defs/source",
+              "description": "The relief (or mask) to adjust. (height)",
+              "title": "In"
+            }
+          },
+          "required": [
+            "in"
+          ],
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "default": 60.0,
+              "description": "How far the relief is pushed, in blocks. Usually 0 to 600.",
+              "maximum": 4096.0,
+              "minimum": 0.0,
+              "title": "Amount",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                600.0
+              ],
+              "x-unit": "blocks"
+            },
+            "octaves": {
+              "default": 3,
+              "description": "How much finer turns the pushes have.",
+              "maximum": 8,
+              "minimum": 1,
+              "title": "Detail",
+              "type": "integer",
+              "x-section": "detail"
+            },
+            "scale": {
+              "default": 400.0,
+              "description": "The size of the pushes, in blocks. Usually 32 to 4000.",
+              "maximum": 65536.0,
+              "minimum": 4.0,
+              "title": "Scale",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                32.0,
+                4000.0
+              ],
+              "x-unit": "blocks"
+            },
+            "seed": {
+              "description": "Another seed gives another variation of the same settings. Left out, it comes from the node's name.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "detail"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "adjust.warp"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Warp",
       "type": "object"
     },
     "climate.biomes": {
@@ -3911,6 +4499,1057 @@
       "title": "Karst",
       "type": "object"
     },
+    "legacy.auto_color": {
+      "additionalProperties": false,
+      "description": "Natural colours from the relief alone: valleys, meadows, rock on the steep slopes, snow on the peaks. Palette is the land's colours; Snow line where snow starts, in blocks; Rock slope the slope where rock shows, in degrees.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "height": {
+              "$ref": "#/$defs/source",
+              "description": "The relief to colour. (height)",
+              "title": "Height"
+            }
+          },
+          "required": [
+            "height"
+          ],
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "palette": {
+              "default": "temperate",
+              "description": "The land's colours.",
+              "enum": [
+                "temperate",
+                "alpine",
+                "desert",
+                "arctic",
+                "volcanic",
+                "tropical",
+                "lunar",
+                "martian"
+              ],
+              "title": "Palette",
+              "x-options": [
+                {
+                  "help": "Meadows, forests, grey rock, snow.",
+                  "label": "Temperate",
+                  "value": "temperate"
+                },
+                {
+                  "help": "High meadows, scree, snow.",
+                  "label": "Alpine",
+                  "value": "alpine"
+                },
+                {
+                  "help": "Sand and red rock.",
+                  "label": "Desert",
+                  "value": "desert"
+                },
+                {
+                  "help": "Tundra, ice, snow.",
+                  "label": "Arctic",
+                  "value": "arctic"
+                },
+                {
+                  "help": "Ash and basalt.",
+                  "label": "Volcanic",
+                  "value": "volcanic"
+                },
+                {
+                  "help": "Jungle and dark rock.",
+                  "label": "Tropical",
+                  "value": "tropical"
+                },
+                {
+                  "help": "Greys of the moon.",
+                  "label": "Lunar",
+                  "value": "lunar"
+                },
+                {
+                  "help": "Rusty dust and rock.",
+                  "label": "Martian",
+                  "value": "martian"
+                }
+              ],
+              "x-section": "main"
+            },
+            "rock_slope": {
+              "default": 38.0,
+              "description": "The slope where rock shows. In degrees.",
+              "maximum": 90.0,
+              "minimum": 0.0,
+              "title": "Rock slope",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                90.0
+              ],
+              "x-unit": "degrees"
+            },
+            "seed": {
+              "default": 1,
+              "description": "Another seed varies the colours.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "main"
+            },
+            "snow_line": {
+              "default": 200.0,
+              "description": "Where snow starts. In blocks.",
+              "maximum": 4096.0,
+              "minimum": -64.0,
+              "title": "Snow line",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -64.0,
+                4096.0
+              ],
+              "x-unit": "blocks"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "legacy.auto_color"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Auto colour (1.2)",
+      "type": "object"
+    },
+    "legacy.erosion": {
+      "additionalProperties": false,
+      "description": "Water running down the slopes carries soil from the heights to the valleys: gullies, smoothed slopes, alluvial fans. Rain is how many drops fall on each sample; Erosion and Deposition how much soil a drop takes and leaves; Capacity how much it can carry; Evaporation how fast it dries; Radius the brush a drop wears with, in blocks.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "in": {
+              "$ref": "#/$defs/source",
+              "description": "The relief it works on. (height)",
+              "title": "In"
+            }
+          },
+          "required": [
+            "in"
+          ],
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "capacity": {
+              "default": 4.0,
+              "description": "How much soil a drop can carry.",
+              "maximum": 64.0,
+              "minimum": 0.0,
+              "title": "Capacity",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                64.0
+              ],
+              "x-unit": "ratio"
+            },
+            "deposition": {
+              "default": 0.3,
+              "description": "How much soil a drop leaves.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Deposition",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "erosion": {
+              "default": 0.3,
+              "description": "How much soil a drop takes.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Erosion",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "evaporation": {
+              "default": 0.02,
+              "description": "How fast a drop dries.",
+              "maximum": 0.5,
+              "minimum": 0.0,
+              "title": "Evaporation",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                0.5
+              ],
+              "x-unit": "ratio"
+            },
+            "radius": {
+              "default": 6.0,
+              "description": "The brush a drop wears with. In blocks.",
+              "maximum": 64.0,
+              "minimum": 1.0,
+              "title": "Radius",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                1.0,
+                64.0
+              ],
+              "x-unit": "blocks"
+            },
+            "rain": {
+              "default": 1.0,
+              "description": "Drops on each sample.",
+              "maximum": 20.0,
+              "minimum": 0.0,
+              "title": "Rain",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                20.0
+              ],
+              "x-unit": "ratio"
+            },
+            "seed": {
+              "default": 5,
+              "description": "Another seed drops the rain otherwise.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "main"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "legacy.erosion"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Erosion (1.2)",
+      "type": "object"
+    },
+    "legacy.file_input": {
+      "additionalProperties": false,
+      "description": "A world brought in (WorldPainter's .world, Massif's .massif): its surface, its water and its colours. Path is the world's file; Fit stretches it over the terrain, or lays it at its own blocks. Low and High are the heights a height map's black and white stand for (Heightmap reads those better).",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {},
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "fit": {
+              "default": true,
+              "description": "Stretched over the terrain, or at its own blocks.",
+              "title": "Fit",
+              "type": "boolean",
+              "x-section": "main"
+            },
+            "high": {
+              "default": 220.0,
+              "description": "The height white stands for. In blocks.",
+              "maximum": 4096.0,
+              "minimum": -4096.0,
+              "title": "High",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -4096.0,
+                4096.0
+              ],
+              "x-unit": "blocks"
+            },
+            "low": {
+              "default": 40.0,
+              "description": "The height black stands for. In blocks.",
+              "maximum": 4096.0,
+              "minimum": -4096.0,
+              "title": "Low",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -4096.0,
+                4096.0
+              ],
+              "x-unit": "blocks"
+            },
+            "path": {
+              "description": "The file.",
+              "title": "Path",
+              "type": "string",
+              "x-extensions": [
+                "world",
+                "massif",
+                "png",
+                "r16",
+                "r32"
+              ],
+              "x-section": "main"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "legacy.file_input"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "World file (1.2)",
+      "type": "object"
+    },
+    "legacy.floating_islands": {
+      "additionalProperties": false,
+      "description": "Islands of rock floating in the air: a rolling top on sheer sides, over an underside hanging down to a point. Altitude is the height of their middles and Spread how much it varies; Size the radius of the largest; Coverage how many of the places one could float have one; Depth how far the underside hangs, as a multiple of the radius. Top and Bottom feed a layer of the Map Output.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {},
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "altitude": {
+              "default": 230.0,
+              "description": "The height of their middles. In blocks.",
+              "maximum": 4096.0,
+              "minimum": -64.0,
+              "title": "Altitude",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -64.0,
+                4096.0
+              ],
+              "x-unit": "blocks"
+            },
+            "coverage": {
+              "default": 0.5,
+              "description": "How many of the places one could float have one.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Coverage",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "depth": {
+              "default": 1.3,
+              "description": "How far the underside hangs, as a multiple of the radius.",
+              "maximum": 10.0,
+              "minimum": 0.0,
+              "title": "Depth",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                10.0
+              ],
+              "x-unit": "ratio"
+            },
+            "seed": {
+              "default": 11,
+              "description": "Another seed places them otherwise.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "main"
+            },
+            "size": {
+              "default": 70.0,
+              "description": "The radius of the largest. In blocks.",
+              "maximum": 4000.0,
+              "minimum": 4.0,
+              "title": "Size",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                4.0,
+                4000.0
+              ],
+              "x-unit": "blocks"
+            },
+            "spread": {
+              "default": 25.0,
+              "description": "How much their altitude varies. In blocks.",
+              "maximum": 1000.0,
+              "minimum": 0.0,
+              "title": "Spread",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1000.0
+              ],
+              "x-unit": "blocks"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "legacy.floating_islands"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Floating islands (1.2)",
+      "type": "object"
+    },
+    "legacy.flow": {
+      "additionalProperties": false,
+      "description": "Where the water of the terrain runs and gathers. Spread is how much small rills show beside the big rivers.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "in": {
+              "$ref": "#/$defs/source",
+              "description": "The relief it works on. (height)",
+              "title": "In"
+            }
+          },
+          "required": [
+            "in"
+          ],
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "spread": {
+              "default": 0.5,
+              "description": "How much small rills show beside the big rivers.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Spread",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "legacy.flow"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Flow (1.2)",
+      "type": "object"
+    },
+    "legacy.lakes": {
+      "additionalProperties": false,
+      "description": "The hollows water would fill, filled: lakes and flat valley floors. Amount goes from nothing (0) to every hollow full (1); Sea is the level under which a hollow is the sea's, not a lake.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "in": {
+              "$ref": "#/$defs/source",
+              "description": "The relief it works on. (height)",
+              "title": "In"
+            }
+          },
+          "required": [
+            "in"
+          ],
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "amount": {
+              "default": 1.0,
+              "description": "From nothing to every hollow full.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Amount",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "sea": {
+              "default": 63.0,
+              "description": "The sea level (−10000: no sea). In blocks.",
+              "maximum": 320.0,
+              "minimum": -10000.0,
+              "title": "Sea",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -10000.0,
+                320.0
+              ],
+              "x-unit": "blocks"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "legacy.lakes"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Lakes (1.2)",
+      "type": "object"
+    },
+    "legacy.overhang": {
+      "additionalProperties": false,
+      "description": "Rims jutting out from the top of cliffs over the void below: a slab of rock, as its top and bottom. Reach is how far the rims jut out, Thickness how thick they are where they leave the cliff, Drop the smallest drop that makes a cliff, Variation how unevenly they jut out along it. Top and Bottom feed a layer of the Map Output.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "in": {
+              "$ref": "#/$defs/source",
+              "description": "The relief it works on. (height)",
+              "title": "In"
+            }
+          },
+          "required": [
+            "in"
+          ],
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "drop": {
+              "default": 24.0,
+              "description": "The smallest drop that makes a cliff. In blocks.",
+              "maximum": 400.0,
+              "minimum": 1.0,
+              "title": "Drop",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                1.0,
+                400.0
+              ],
+              "x-unit": "blocks"
+            },
+            "reach": {
+              "default": 10.0,
+              "description": "How far the rims jut out. In blocks.",
+              "maximum": 200.0,
+              "minimum": 0.0,
+              "title": "Reach",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                200.0
+              ],
+              "x-unit": "blocks"
+            },
+            "seed": {
+              "default": 12,
+              "description": "Another seed varies them otherwise.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "main"
+            },
+            "thickness": {
+              "default": 8.0,
+              "description": "How thick a rim is where it leaves the cliff. In blocks.",
+              "maximum": 200.0,
+              "minimum": 1.0,
+              "title": "Thickness",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                1.0,
+                200.0
+              ],
+              "x-unit": "blocks"
+            },
+            "variation": {
+              "default": 0.6,
+              "description": "How unevenly the rims jut out along the cliffs.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Variation",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "legacy.overhang"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Overhang (1.2)",
+      "type": "object"
+    },
+    "legacy.rivers": {
+      "additionalProperties": false,
+      "description": "Rivers traced where the water of the whole terrain runs, wider and deeper downstream, dug into their valleys, with lakes in the hollows they cross. Threshold is how much land must drain to a place for a river to run there (higher: fewer, larger rivers); Depth and Width those of the largest; Sea the level where rivers end; Banks how far the banks slope down, in river widths; Lakes which hollows hold lakes.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "in": {
+              "$ref": "#/$defs/source",
+              "description": "The relief it works on. (height)",
+              "title": "In"
+            },
+            "water_level": {
+              "$ref": "#/$defs/source",
+              "description": "Water already there (rivers of another node). (height)",
+              "title": "Water level"
+            }
+          },
+          "required": [
+            "in"
+          ],
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "banks": {
+              "default": 1.0,
+              "description": "How far the banks slope down to the water, in river widths.",
+              "maximum": 10.0,
+              "minimum": 0.0,
+              "title": "Banks",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                10.0
+              ],
+              "x-unit": "ratio"
+            },
+            "depth": {
+              "default": 5.0,
+              "description": "The depth of the largest river. In blocks.",
+              "maximum": 100.0,
+              "minimum": 0.0,
+              "title": "Depth",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                100.0
+              ],
+              "x-unit": "blocks"
+            },
+            "lakes": {
+              "default": 0.5,
+              "description": "Which hollows the rivers cross hold lakes.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Lakes",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "sea": {
+              "default": 63.0,
+              "description": "The sea level, where rivers end (−10000: no sea). In blocks.",
+              "maximum": 320.0,
+              "minimum": -10000.0,
+              "title": "Sea",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -10000.0,
+                320.0
+              ],
+              "x-unit": "blocks"
+            },
+            "threshold": {
+              "default": 0.55,
+              "description": "How much land must drain to a place for a river to run there.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Threshold",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "width": {
+              "default": 14.0,
+              "description": "The width of the largest river. In blocks.",
+              "maximum": 400.0,
+              "minimum": 1.0,
+              "title": "Width",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                1.0,
+                400.0
+              ],
+              "x-unit": "blocks"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "legacy.rivers"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Rivers (1.2)",
+      "type": "object"
+    },
+    "legacy.rocks": {
+      "additionalProperties": false,
+      "description": "Rocky detail around 0, to add to a relief. Scale is the size of the rocks, Height how high they stand, Sharpness from rounded boulders (0) to sharp crags (1). Add it to a relief with Blend.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {},
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "height": {
+              "default": 12.0,
+              "description": "How high they stand. In blocks.",
+              "maximum": 1000.0,
+              "minimum": 0.0,
+              "title": "Height",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1000.0
+              ],
+              "x-unit": "blocks"
+            },
+            "scale": {
+              "default": 90.0,
+              "description": "The size of the rocks. In blocks.",
+              "maximum": 8000.0,
+              "minimum": 2.0,
+              "title": "Scale",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                2.0,
+                8000.0
+              ],
+              "x-unit": "blocks"
+            },
+            "seed": {
+              "default": 10,
+              "description": "Another seed places them otherwise.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "main"
+            },
+            "sharpness": {
+              "default": 0.6,
+              "description": "From rounded boulders (0) to sharp crags (1).",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Sharpness",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "legacy.rocks"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Rocks (1.2)",
+      "type": "object"
+    },
+    "legacy.sea": {
+      "additionalProperties": false,
+      "description": "A sea level: where the ground is under water, and its shore. Level is the sea's height; Shore how wide the shore is, in blocks of height around it.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {
+            "in": {
+              "$ref": "#/$defs/source",
+              "description": "The relief it works on. (height)",
+              "title": "In"
+            }
+          },
+          "required": [
+            "in"
+          ],
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "level": {
+              "default": 62.0,
+              "description": "The sea's height. In blocks.",
+              "maximum": 320.0,
+              "minimum": -64.0,
+              "title": "Level",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -64.0,
+                320.0
+              ],
+              "x-unit": "blocks"
+            },
+            "shore": {
+              "default": 4.0,
+              "description": "How wide the shore is, in blocks of height.",
+              "maximum": 100.0,
+              "minimum": 0.0,
+              "title": "Shore",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                100.0
+              ],
+              "x-unit": "blocks"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "legacy.sea"
+        }
+      },
+      "required": [
+        "type",
+        "inputs"
+      ],
+      "title": "Sea (1.2)",
+      "type": "object"
+    },
+    "legacy.tectonic": {
+      "additionalProperties": false,
+      "description": "Relief from tectonic plates: continents and oceans, mountains where plates collide, rifts where they pull apart. Plates are 1.2's plates, as JSON. Relief is the height of the highest ranges, Width how wide the belts along the boundaries are, Roughness how much the boundaries wind, Sea the sea level the oceans lie under.",
+      "properties": {
+        "inputs": {
+          "additionalProperties": false,
+          "properties": {},
+          "type": "object"
+        },
+        "note": {
+          "description": "A note for whoever reads the graph.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": false,
+          "properties": {
+            "plates": {
+              "default": "[]",
+              "description": "The plates, as 1.2 wrote them (JSON).",
+              "title": "Plates",
+              "type": "string",
+              "x-section": "main"
+            },
+            "relief": {
+              "default": 170.0,
+              "description": "The height of the highest ranges. In blocks.",
+              "maximum": 4096.0,
+              "minimum": 0.0,
+              "title": "Relief",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                4096.0
+              ],
+              "x-unit": "blocks"
+            },
+            "roughness": {
+              "default": 0.6,
+              "description": "How much the boundaries wind.",
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "title": "Roughness",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                0.0,
+                1.0
+              ],
+              "x-unit": "ratio"
+            },
+            "sea": {
+              "default": 63.0,
+              "description": "The sea level the oceans lie under. In blocks.",
+              "maximum": 320.0,
+              "minimum": -64.0,
+              "title": "Sea",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                -64.0,
+                320.0
+              ],
+              "x-unit": "blocks"
+            },
+            "seed": {
+              "default": 7,
+              "description": "Another seed varies the boundaries.",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "title": "Seed",
+              "type": "integer",
+              "x-section": "main"
+            },
+            "width": {
+              "default": 260.0,
+              "description": "How wide the belts along the boundaries are. In blocks.",
+              "maximum": 20000.0,
+              "minimum": 1.0,
+              "title": "Width",
+              "type": "number",
+              "x-section": "main",
+              "x-soft": [
+                1.0,
+                20000.0
+              ],
+              "x-unit": "blocks"
+            }
+          },
+          "type": "object"
+        },
+        "type": {
+          "const": "legacy.tectonic"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Tectonic plates (1.2)",
+      "type": "object"
+    },
     "mask.curvature": {
       "additionalProperties": false,
       "description": "Where the ground bulges into ridges or hollows into valleys, at the scale asked for. Compares the relief with its own smoothing over Scale blocks: higher than its surroundings is a ridge, lower a hollow. A small scale finds gullies and crests, a large one valleys and spurs. Sensitivity says how slight a bulge or hollow reaches 1. Ridges take rock and wind, hollows soil, water and snow drifts.",
@@ -6455,6 +8094,21 @@
           "if": {
             "properties": {
               "type": {
+                "const": "adjust.stratify"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/adjust.stratify"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
                 "const": "adjust.clamp"
               }
             },
@@ -6464,6 +8118,36 @@
           },
           "then": {
             "$ref": "#/$defs/adjust.clamp"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "adjust.fold"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/adjust.fold"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "adjust.invert"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/adjust.invert"
           }
         },
         {
@@ -6494,6 +8178,66 @@
           },
           "then": {
             "$ref": "#/$defs/adjust.blur"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "adjust.sharpen"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/adjust.sharpen"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "adjust.warp"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/adjust.warp"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "adjust.transform"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/adjust.transform"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "adjust.swirl"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/adjust.swirl"
           }
         },
         {
@@ -6890,6 +8634,171 @@
           "if": {
             "properties": {
               "type": {
+                "const": "legacy.floating_islands"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/legacy.floating_islands"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "legacy.overhang"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/legacy.overhang"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "legacy.rocks"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/legacy.rocks"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "legacy.tectonic"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/legacy.tectonic"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "legacy.file_input"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/legacy.file_input"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "legacy.erosion"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/legacy.erosion"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "legacy.rivers"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/legacy.rivers"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "legacy.lakes"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/legacy.lakes"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "legacy.sea"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/legacy.sea"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "legacy.flow"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/legacy.flow"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "legacy.auto_color"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/legacy.auto_color"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
                 "const": "output.map"
               }
             },
@@ -6933,9 +8842,16 @@
             "adjust.levels",
             "adjust.curve",
             "adjust.terrace",
+            "adjust.stratify",
             "adjust.clamp",
+            "adjust.fold",
+            "adjust.invert",
             "adjust.normalize",
             "adjust.blur",
+            "adjust.sharpen",
+            "adjust.warp",
+            "adjust.transform",
+            "adjust.swirl",
             "erosion.thermal",
             "climate.temperature",
             "climate.wind",
@@ -6962,6 +8878,17 @@
             "terrain.layers",
             "terrain.select",
             "combine.blend",
+            "legacy.floating_islands",
+            "legacy.overhang",
+            "legacy.rocks",
+            "legacy.tectonic",
+            "legacy.file_input",
+            "legacy.erosion",
+            "legacy.rivers",
+            "legacy.lakes",
+            "legacy.sea",
+            "legacy.flow",
+            "legacy.auto_color",
             "output.map"
           ]
         }
@@ -7454,6 +9381,11 @@
               "description": "The underside of that layer: where it is above the ground, the void lies between. (height) Left empty: none.",
               "title": "Layer 1 bottom"
             },
+            "layer.1.color": {
+              "$ref": "#/$defs/source",
+              "description": "The colour of that layer's rock: the blocks nearest to it are chosen, from the Albedo palette. (color) Left empty: the colour of the rock.",
+              "title": "Layer 1 colour"
+            },
             "layer.1.top": {
               "$ref": "#/$defs/source",
               "description": "The top of a layer of rock over the ground: floating islands, overhangs, arches. (height) Left empty: none.",
@@ -7464,10 +9396,45 @@
               "description": "The underside of that layer: where it is above the ground, the void lies between. (height) Left empty: none.",
               "title": "Layer 2 bottom"
             },
+            "layer.2.color": {
+              "$ref": "#/$defs/source",
+              "description": "The colour of that layer's rock: the blocks nearest to it are chosen, from the Albedo palette. (color) Left empty: the colour of the rock.",
+              "title": "Layer 2 colour"
+            },
             "layer.2.top": {
               "$ref": "#/$defs/source",
               "description": "The top of a layer of rock over the ground: floating islands, overhangs, arches. (height) Left empty: none.",
               "title": "Layer 2 top"
+            },
+            "layer.3.bottom": {
+              "$ref": "#/$defs/source",
+              "description": "The underside of that layer: where it is above the ground, the void lies between. (height) Left empty: none.",
+              "title": "Layer 3 bottom"
+            },
+            "layer.3.color": {
+              "$ref": "#/$defs/source",
+              "description": "The colour of that layer's rock: the blocks nearest to it are chosen, from the Albedo palette. (color) Left empty: the colour of the rock.",
+              "title": "Layer 3 colour"
+            },
+            "layer.3.top": {
+              "$ref": "#/$defs/source",
+              "description": "The top of a layer of rock over the ground: floating islands, overhangs, arches. (height) Left empty: none.",
+              "title": "Layer 3 top"
+            },
+            "layer.4.bottom": {
+              "$ref": "#/$defs/source",
+              "description": "The underside of that layer: where it is above the ground, the void lies between. (height) Left empty: none.",
+              "title": "Layer 4 bottom"
+            },
+            "layer.4.color": {
+              "$ref": "#/$defs/source",
+              "description": "The colour of that layer's rock: the blocks nearest to it are chosen, from the Albedo palette. (color) Left empty: the colour of the rock.",
+              "title": "Layer 4 colour"
+            },
+            "layer.4.top": {
+              "$ref": "#/$defs/source",
+              "description": "The top of a layer of rock over the ground: floating islands, overhangs, arches. (height) Left empty: none.",
+              "title": "Layer 4 top"
             },
             "mask.deposition": {
               "$ref": "#/$defs/source",
@@ -7523,6 +9490,53 @@
               "default": true,
               "description": "Whether the map takes this output, when the graph has several.",
               "title": "Active",
+              "type": "boolean",
+              "x-section": "main"
+            },
+            "albedo_palette": {
+              "default": "natural",
+              "description": "The blocks Albedo and the layers' colours turn into.",
+              "enum": [
+                "natural",
+                "rock",
+                "desert",
+                "snowy",
+                "every"
+              ],
+              "title": "Albedo blocks",
+              "x-options": [
+                {
+                  "help": "Soils, stone, sand, snow: the blocks of a natural landscape.",
+                  "label": "Natural",
+                  "value": "natural"
+                },
+                {
+                  "help": "Stones only.",
+                  "label": "Rock",
+                  "value": "rock"
+                },
+                {
+                  "help": "Sands, sandstones, terracottas.",
+                  "label": "Desert",
+                  "value": "desert"
+                },
+                {
+                  "help": "Snow, ice, pale stone.",
+                  "label": "Snowy",
+                  "value": "snowy"
+                },
+                {
+                  "help": "Every full block of the game.",
+                  "label": "Every block",
+                  "value": "every"
+                }
+              ],
+              "x-section": "main"
+            },
+            "paint_biomes": {
+              "default": false,
+              "description": "Paints the ground to suit the biomes: sand in the deserts, snow in the tundra.",
+              "title": "Paint biomes",
               "type": "boolean",
               "x-section": "main"
             }
@@ -8075,7 +10089,7 @@
     },
     "terrain.layers": {
       "additionalProperties": false,
-      "description": "The terrain (block material) of each place, from masks: a base terrain, and up to six layers laid over it where their masks say. Base is the terrain everywhere; each layer lays its terrain where its mask passes Threshold, later layers over earlier ones (rock on slopes, then gravel on scree, then sand on beaches, then snow). Dither frays the edges so that terrains mix block by block. Terrains are named as in the world's terrain list (Grass, Rock, Gravel, Sand, Snow…). Feed the Map Output's Terrain with it.",
+      "description": "The terrain (block material) of each place, from masks: a base terrain, and up to six layers laid over it where their masks say. Base is the terrain everywhere (or Under, where connected); each layer lays its terrain where its mask passes Threshold, later layers over earlier ones (rock on slopes, then gravel on scree, then sand on beaches, then snow). Dither frays the edges so that terrains mix block by block. Terrains are named as in the world's terrain list (Grass, Rock, Gravel, Sand, Snow…). Feed the Map Output's Terrain with it.",
       "properties": {
         "inputs": {
           "additionalProperties": false,
@@ -8109,6 +10123,11 @@
               "$ref": "#/$defs/source",
               "description": "Where this layer's terrain lies. (mask)",
               "title": "Layer 6"
+            },
+            "under": {
+              "$ref": "#/$defs/source",
+              "description": "The terrains where no layer is laid (the map's own, through a Map input). (terrain) Left empty: Base everywhere.",
+              "title": "Under"
             }
           },
           "type": "object"
