@@ -110,6 +110,18 @@ pub enum Outcome {
         dim: usize,
         note: Option<String>,
     },
+    /// The map made another size: the whole dimension, to put in place of
+    /// the map's in one undoable step.
+    Resized {
+        dimension: Box<massif_core::world::Dimension>,
+        added: usize,
+        removed: usize,
+        /// The world's seed, set in the same step (the land eased into a
+        /// Minecraft world's).
+        seed: Option<i64>,
+        revision: u64,
+        dim: usize,
+    },
     /// Images to import as masks, each read once through, and the map's
     /// picture with the blocks it covers (when asked for).
     MaskRead {
@@ -520,6 +532,25 @@ impl Job {
                 Err(_) if p.cancel.load(std::sync::atomic::Ordering::Relaxed) => Outcome::Cancelled,
                 Err(e) => Outcome::Failed(tr!("The region could not be exported: {e}", e)),
             }
+        })
+    }
+
+    /// Dimension `dim` of a snapshot of the document at `revision` made the
+    /// tiles of `target`, those added filled by `settings`.
+    pub fn map_size(ctx: &egui::Context, mut snapshot: World, dim: usize, target: std::collections::HashSet<massif_core::TilePos>, settings: massif_core::expand::FillSettings, around: Option<Arc<massif_core::vanilla::VanillaAround>>, revision: u64) -> Job {
+        use massif_core::auto::Steps;
+        let progress = Arc::new(Steps::default());
+        let p = progress.clone();
+        Job::spawn(JobKind::Auto, tr!("Changing the map's size").to_owned(), Some(progress as Arc<dyn JobProgress>), ctx, move || {
+            let reg = snapshot.registry.clone();
+            let mut dimension = std::mem::replace(&mut snapshot.dims[dim], massif_core::world::Dimension::new(massif_core::world::DimensionKind::Overworld, -64, 320));
+            let world = around.as_deref().map(|a| a as &dyn massif_core::expand::Surroundings);
+            let applied = massif_core::expand::apply(&mut dimension, &target, &settings, &reg, world, &p.cancel);
+            if applied.cancelled {
+                return Outcome::Cancelled;
+            }
+            let seed = around.map(|a| a.vanilla().seed);
+            Outcome::Resized { dimension: Box::new(dimension), added: applied.added, removed: applied.removed, seed, revision, dim }
         })
     }
 

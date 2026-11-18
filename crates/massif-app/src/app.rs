@@ -364,6 +364,8 @@ enum Dialog {
     ImportMask(Box<crate::import_mask::MaskForm>),
     /// A part of the map to write as images: where, and what.
     ExportRegion(Box<crate::region_export::RegionForm>),
+    /// The map made larger or smaller: its new tiles, and what fills them.
+    MapSize(Box<crate::map_size::SizeForm>),
     /// The relief of a real place: where, at what scale, how high.
     Real(Box<crate::real_terrain::RealForm>),
     /// A save point to make (`None`) or rename (its index): its name.
@@ -2688,6 +2690,25 @@ impl MassifApp {
                         self.say(ctx, note.map_or_else(|| msg.clone(), |n| format!("{msg}. {n}")), false, None);
                     }
                 }
+                Outcome::Resized { dimension, added, removed, seed, revision, dim } => {
+                    if other_map || revision != self.doc.revision || dim != self.doc.dim {
+                        crate::sounds::play(Cue::Warning);
+                        self.say(ctx, tr!("Map size: {meanwhile}, nothing was done", meanwhile), true, None);
+                    } else {
+                        let size = dimension.bounds().map(|(lo, hi)| ((hi.x - lo.x + 1) * massif_core::TILE_SIZE, (hi.z - lo.z + 1) * massif_core::TILE_SIZE));
+                        match seed {
+                            Some(seed) => self.doc.replace_dimension_and_seed(dim, *dimension, seed, tr!("Map size")),
+                            None => self.doc.replace_dimension(dim, *dimension, None, tr!("Map size")),
+                        }
+                        self.map_cache.invalidate_all();
+                        self.view3d.invalidate_all();
+                        self.sculpt3d.invalidate_all();
+                        let (w, d) = size.unwrap_or_default();
+                        let msg = tr!("Map size: the map is now {w} × {d} blocks, {added} tiles added and {removed} taken away in {secs:.1} s", w, d, added, removed, secs);
+                        self.task_done(ctx, Cue::Ready, tr!("Map size changed"), &msg, secs);
+                        self.say(ctx, msg, false, None);
+                    }
+                }
                 Outcome::RegionExported { dir, files } => {
                     let n = files.len().saturating_sub(1);
                     let msg = tr!("Exported the region: {n} images and region.txt in {secs:.1} s", n, secs);
@@ -3072,6 +3093,11 @@ impl MassifApp {
             Command::Caves => self.open_caves(),
             Command::ImportMask => self.pick_mask(ctx, false),
             Command::RealTerrain => self.open_real(false),
+            Command::MapSize => {
+                if self.doc.dimension().bounds().is_some() {
+                    self.dialog = Some(Dialog::MapSize(Box::new(crate::map_size::SizeForm::new(&self.doc.world, self.doc.dim))));
+                }
+            }
             Command::FromRealPlace => self.open_real(true),
             Command::SavePoint => self.versions_action(ctx, crate::versions::Action::Make),
             Command::Ores => self.open_ores(ctx),
@@ -4435,6 +4461,30 @@ impl MassifApp {
                 }
                 if keep {
                     self.dialog = Some(Dialog::ImportMask(form));
+                }
+            }
+            Dialog::MapSize(mut form) => {
+                use crate::map_size::Choice;
+                let mut choice = Choice::Keep;
+                let response = modal(ctx, "map size").show(ctx, |ui| {
+                    choice = form.ui(ui);
+                });
+                if response.should_close() {
+                    keep = false;
+                }
+                match choice {
+                    Choice::Keep => {}
+                    Choice::Close => keep = false,
+                    Choice::Apply => {
+                        keep = false;
+                        let settings = form.settings();
+                        let around = form.around();
+                        let snapshot = self.doc.world.snapshot();
+                        self.jobs.push(Job::map_size(ctx, snapshot, self.doc.dim, form.target(), settings, around, self.doc.revision).on(self.doc.generation));
+                    }
+                }
+                if keep {
+                    self.dialog = Some(Dialog::MapSize(form));
                 }
             }
             Dialog::ExportRegion(mut form) => {
@@ -9587,6 +9637,84 @@ mod tests {
         h.state_mut().redo(&ctx);
         h.run_steps(2);
         check_resized(&h);
+    }
+
+    /// Edit ▸ Map Size…: two tiles more on the east and one less on the
+    /// north, a tile clicked off; the new land continues the edges; one
+    /// undo takes it all back.
+    #[test]
+    fn map_size_grows_and_crops_the_map() {
+        use egui_kittest::kittest::Queryable;
+        use massif_core::{TILE_SIZE, TilePos};
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let before: std::collections::HashSet<TilePos> = h.state().doc.dimension().ground().positions().collect();
+        let (lo, hi) = h.state().doc.dimension().bounds().unwrap();
+        let ctx = h.ctx.clone();
+        h.state_mut().command(&ctx, Command::MapSize);
+        let started = std::time::Instant::now();
+        while !matches!(&h.state().dialog, Some(Dialog::MapSize(form)) if form.preview_ready()) {
+            assert!(started.elapsed().as_secs() < 30, "no picture");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let corner = TilePos::new(hi.x, hi.z);
+        if let Some(Dialog::MapSize(form)) = &mut h.state_mut().dialog {
+            form.sides.east = 2;
+            form.sides.north = -1;
+            form.toggle(corner);
+        }
+        let started = std::time::Instant::now();
+        while !matches!(&h.state().dialog, Some(Dialog::MapSize(form)) if form.preview_ready()) {
+            assert!(started.elapsed().as_secs() < 30, "no preview");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.run_steps(3);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("dialog-map-size.png")).unwrap();
+        }
+        let target = match &h.state().dialog {
+            Some(Dialog::MapSize(form)) => form.target(),
+            _ => panic!("the dialog stays open"),
+        };
+        h.get_by_label("Apply").click();
+        h.run_steps(2);
+        let started = std::time::Instant::now();
+        while !h.state().jobs.is_empty() {
+            assert!(started.elapsed().as_secs() < 120, "the job timed out");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        h.run_steps(3);
+        assert_eq!(h.state().doc.history.undo_label(), Some("Map size"), "{:?}", h.state().status.as_ref().map(|s| s.text.clone()));
+        let after: std::collections::HashSet<TilePos> = h.state().doc.dimension().ground().positions().collect();
+        assert_eq!(after, target);
+        assert!(!after.contains(&corner) && !after.contains(&TilePos::new(lo.x, lo.z)));
+        assert!(after.contains(&TilePos::new(hi.x + 2, hi.z - 1)));
+        // The seam: the first column added is close to the last of the map.
+        {
+            let dim = h.state().doc.dimension();
+            let z = (lo.z + 1) * TILE_SIZE + 40;
+            let col = |x: i32| {
+                let p = TilePos::containing(x, z);
+                let s = massif_core::TileStack::new(dim, p, false).unwrap();
+                let (ox, oz) = p.origin();
+                s.ground().top.get(((z - oz) * TILE_SIZE + x - ox) as usize)
+            };
+            let edge = (hi.x + 1) * TILE_SIZE;
+            assert!((col(edge) - col(edge - 1)).abs() < 3.0, "seam {} → {}", col(edge - 1), col(edge));
+        }
+        if let Some(dir) = &dir {
+            h.state_mut().command(&ctx, Command::FitMap);
+            h.run_steps(20);
+            h.render().unwrap().save(dir.join("map-size-applied.png")).unwrap();
+        }
+        h.state_mut().undo(&ctx);
+        h.run_steps(2);
+        let undone: std::collections::HashSet<TilePos> = h.state().doc.dimension().ground().positions().collect();
+        assert_eq!(undone, before, "one undo takes it back");
     }
 
     /// The sizes typed for the map are whole tiles of 128 blocks, from one

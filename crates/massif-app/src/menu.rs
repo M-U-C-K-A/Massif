@@ -46,6 +46,8 @@ pub enum Command {
     ImportMask,
     /// The relief of a real place, into the map.
     RealTerrain,
+    /// The map made larger or smaller by tiles.
+    MapSize,
     Ores,
     Analyse,
     Theme(ThemeChoice),
@@ -273,6 +275,7 @@ pub fn menus(state: &State) -> Vec<Menu> {
                 .map(|&op| tipped(Command::WholeMap(op), op.icon(), &format!("{}…", crate::i18n::tr_name(op.label())), map, crate::i18n::tr_name(op.about())))
                 .collect(),
         },
+        tipped(Command::MapSize, Icon::Scaling, tr!("Map Size…"), map, tr!("Add tiles to any side of the map or take them away, the new land eased out of its edges")),
         tipped(Command::RealTerrain, Icon::Earth, tr!("Relief of a Real Place…"), map, tr!("The heights of a place on the Earth, into the selection or the whole map")),
         tipped(Command::Caves, Icon::Shovel, tr!("Caves…"), map, tr!("Tunnels, ravines and caverns carved into the rock, over the whole map or the selection")),
         tipped(Command::ImportMask, Icon::ImageUp, tr!("Import Mask…"), map, tr!("An image painted onto the map: annotations, a layer, a terrain, a biome, water or the height")),
