@@ -149,6 +149,15 @@ const PREVIEW: egui::Vec2 = vec2(330.0, 190.0);
 /// Tiles of elevation the preview reads at most.
 const PREVIEW_TILES: usize = 16;
 
+/// The height the window leaves the dialog's two columns, and the map of
+/// tiles and the preview as tall as fits in it with their words: the whole
+/// dialog on screen, Apply included, down to a window 640 points high.
+fn room(ctx: &egui::Context) -> (f32, egui::Vec2, egui::Vec2) {
+    let room = (ctx.content_rect().height() - 330.0).clamp(170.0, 640.0);
+    let k = ((room - 70.0) / (PICKER.y + PREVIEW.y)).clamp(0.3, 1.0);
+    (room, vec2(PICKER.x, (PICKER.y * k).round()), vec2(PREVIEW.x, (PREVIEW.y * k).round()))
+}
+
 struct Picture {
     made_for: String,
     texture: TextureHandle,
@@ -275,7 +284,7 @@ impl RealForm {
             ui.vertical(|ui| {
                 ui.set_width(350.0);
                 // As tall as the window lets the dialog be.
-                let tall = (ui.ctx().content_rect().height() - 330.0).clamp(300.0, 640.0);
+                let (tall, _, _) = room(ui.ctx());
                 egui::ScrollArea::vertical().max_height(tall).auto_shrink([false, true]).show(ui, |ui| {
                     if self.settings(ui) {
                         choice = Choice::EditPalettes;
@@ -729,7 +738,8 @@ impl RealForm {
             }
         });
         if self.sources && self.online {
-            egui::ScrollArea::vertical().id_salt("real credits").max_height(90.0).show(ui, |ui| {
+            let tall = if ui.ctx().content_rect().height() < 760.0 { 40.0 } else { 90.0 };
+            egui::ScrollArea::vertical().id_salt("real credits").max_height(tall).show(ui, |ui| {
                 for line in massif_core::real::ATTRIBUTION {
                     ui.add(egui::Label::new(RichText::new(tr!("• {line}", line)).size(10.5).color(pal.weak)).wrap());
                 }
@@ -741,14 +751,15 @@ impl RealForm {
     fn picker(&mut self, ui: &mut Ui) {
         let pal = Palette::of(ui);
         let metres = self.area.metres();
+        let (_, size, _) = room(ui.ctx());
         if metres != self.fitted_for {
             // The area about half the width of the map.
-            let wanted = metres.0.max(metres.1 * PICKER.x as f64 / PICKER.y as f64) / (0.55 * PICKER.x as f64);
+            let wanted = metres.0.max(metres.1 * size.x as f64 / size.y as f64) / (0.55 * size.x as f64);
             let at0 = metres_per_px(self.area.lat, 0);
             self.view_zoom = (at0 / wanted.max(1e-3)).log2().clamp(1.0, MAX_ZOOM as f64 + 0.99);
             self.fitted_for = metres;
         }
-        let (rect, response) = ui.allocate_exact_size(PICKER, Sense::click_and_drag());
+        let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
         let z = (self.view_zoom.floor() as u8).min(MAX_ZOOM);
         let k = 2f64.powf(self.view_zoom - z as f64);
         let (cx, cy) = to_px(self.area.lat, self.area.lon, z);
@@ -821,7 +832,7 @@ impl RealForm {
     fn preview(&mut self, ui: &mut Ui) {
         let pal = Palette::of(ui);
         let ctx = ui.ctx().clone();
-        let (rect, _) = ui.allocate_exact_size(PREVIEW, Sense::hover());
+        let (rect, _) = ui.allocate_exact_size(room(&ctx).2, Sense::hover());
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, theme::TILE_RADIUS, pal.well());
         // The picture keeps the area's shape, in the box.

@@ -16808,6 +16808,20 @@ mod tests {
                 {
                     faults.push(format!("{language:?} {name}: the dialog from y {:.0} to {:.0}", rect.top(), rect.bottom()));
                 }
+                // Its buttons to finish with on screen, with no scrolling.
+                if language == Language::English {
+                    for node in h.query_all_by(|n| n.role() == egui::accesskit::Role::Button) {
+                        let label = node.accesskit_node().label().unwrap_or_default();
+                        if !["Apply", "Done", "Cancel", "Close", "OK", "Make the world", "Export"].contains(&label.as_str()) {
+                            continue;
+                        }
+                        let Some(bb) = node.accesskit_node().bounding_box() else { continue };
+                        let r = Rect::from_min_max(pos2(bb.x0 as f32, bb.y0 as f32), pos2(bb.x1 as f32, bb.y1 as f32)) / h.ctx.pixels_per_point();
+                        if r.top() < -0.5 || r.bottom() > hgt + 0.5 {
+                            faults.push(format!("{name}: {label} at y {:.0}…{:.0}, off the window", r.top(), r.bottom()));
+                        }
+                    }
+                }
                 for fault in past(&h) {
                     let fault = format!("{language:?} {name}: {fault}");
                     if !behind.iter().any(|b| fault.ends_with(b.as_str())) && !faults.contains(&fault) {
