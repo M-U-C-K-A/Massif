@@ -117,8 +117,8 @@ impl MapBuilder {
                     batch
                         .par_iter()
                         .map_init(
-                            || Scratch::new(&ctx),
-                            |scratch, &pos| {
+                            || (Scratch::new(&ctx), crate::materials::Lookup::default()),
+                            |(scratch, lookup), &pos| {
                                 if stop.load(Ordering::Relaxed) {
                                     return None;
                                 }
@@ -147,7 +147,7 @@ impl MapBuilder {
                                 for cz in 0..TILE_CHUNKS as usize {
                                     for cx in 0..TILE_CHUNKS as usize {
                                         let nbt = build_chunk(&ctx, &stack, pos, cx, cz, &objects, &steady, scratch);
-                                        if let Some(c) = chunk::decode(&nbt, &materials, ctx.min_y, sections) {
+                                        if let Some(c) = chunk::decode(&nbt, &materials, lookup, ctx.min_y, sections) {
                                             patch.put(c);
                                         }
                                     }

@@ -86,8 +86,68 @@ impl Pyramid {
 struct Resident {
     slot: u32,
     tree_at: u32,
+    tree_len: u32,
     voxel_at: u32,
-    chunk: GpuChunk,
+    voxel_len: u32,
+}
+
+/// A storage buffer and its copy here: changes are made to the copy and
+/// sent at once before a frame, one write a buffer.
+struct Mirror {
+    label: &'static str,
+    gpu: wgpu::Buffer,
+    cpu: Vec<u32>,
+    /// Words changed since the last time they were sent.
+    dirty: Option<(usize, usize)>,
+}
+
+impl Mirror {
+    fn new(device: &wgpu::Device, label: &'static str, words: usize) -> Self {
+        Self { label, gpu: storage(device, label, words as u64 * 4), cpu: vec![0; words], dirty: None }
+    }
+
+    fn mark(&mut self, from: usize, to: usize) {
+        self.dirty = Some(match self.dirty {
+            Some((a, b)) => (a.min(from), b.max(to)),
+            None => (from, to),
+        });
+    }
+
+    fn set(&mut self, at: usize, words: &[u32]) {
+        if self.cpu.len() < at + words.len() {
+            self.cpu.resize(at + words.len(), 0);
+        }
+        self.cpu[at..at + words.len()].copy_from_slice(words);
+        self.mark(at, at + words.len());
+    }
+
+    fn push(&mut self, words: &[u32]) -> usize {
+        let at = self.cpu.len();
+        self.cpu.extend_from_slice(words);
+        self.mark(at, self.cpu.len());
+        at
+    }
+
+    /// Send what changed, the buffer made larger first if it must be.
+    /// `Err`: larger than the card can bind. `Ok(true)`: made again.
+    fn flush(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, most: u64) -> Result<bool, ()> {
+        let need = self.cpu.len() as u64 * 4;
+        let mut remade = false;
+        if need > self.gpu.size() {
+            if need > most {
+                return Err(());
+            }
+            self.gpu = storage(device, self.label, (need * 3 / 2).next_power_of_two().min(most).max(need));
+            self.dirty = Some((0, self.cpu.len()));
+            remade = true;
+        }
+        if let Some((a, b)) = self.dirty.take()
+            && b > a
+        {
+            queue.write_buffer(&self.gpu, a as u64 * 4, bytemuck::cast_slice(&self.cpu[a..b]));
+        }
+        Ok(remade)
+    }
 }
 
 /// What the graphics card holds of the scene, in bytes.
@@ -121,10 +181,10 @@ pub struct Renderer {
     layout: wgpu::BindGroupLayout,
     params: wgpu::Buffer,
     sampler: wgpu::Sampler,
-    grid: wgpu::Buffer,
-    records: wgpu::Buffer,
-    tree: wgpu::Buffer,
-    voxels: wgpu::Buffer,
+    grid: Mirror,
+    records: Mirror,
+    tree: Mirror,
+    voxels: Mirror,
     pyramid_buf: wgpu::Buffer,
     materials_buf: wgpu::Buffer,
     atlas: wgpu::Texture,
@@ -137,11 +197,10 @@ pub struct Renderer {
     residents: HashMap<(i32, i32), Resident>,
     free_slots: Vec<u32>,
     slots: u32,
-    /// Words used in the tree and voxel buffers, and of them, those of
-    /// chunks since replaced.
-    tree_used: u32,
-    voxel_used: u32,
+    /// Words of the tree and voxel buffers left by chunks since replaced.
     garbage: u64,
+    /// A chunk did not fit the graphics card's buffers.
+    full: bool,
     /// Samples added up in the image so far.
     pub samples: u32,
     frame: u32,
@@ -228,10 +287,10 @@ impl Renderer {
             layout,
             params,
             sampler,
-            grid: storage(device, "massif render grid", cells * 4),
-            records: storage(device, "massif render records", stride * 4 * 1024),
-            tree: storage(device, "massif render tree", 4 << 20),
-            voxels: storage(device, "massif render voxels", 4 << 20),
+            grid: Mirror::new(device, "massif render grid", cells as usize),
+            records: Mirror::new(device, "massif render records", stride as usize * 64),
+            tree: Mirror::new(device, "massif render tree", 0),
+            voxels: Mirror::new(device, "massif render voxels", 0),
             pyramid_buf: storage(device, "massif render pyramid", pyramid.data.len() as u64 * 4),
             materials_buf: storage(device, "massif render materials", 16 * 256),
             atlas,
@@ -244,9 +303,8 @@ impl Renderer {
             residents: HashMap::new(),
             free_slots: Vec::new(),
             slots: 0,
-            tree_used: 0,
-            voxel_used: 0,
             garbage: 0,
+            full: false,
             samples: 0,
             frame: 0,
             max_binding,
@@ -365,11 +423,10 @@ impl Renderer {
         if cx < 0 || cz < 0 || cx >= e.width as i32 || cz >= e.depth as i32 || chunk.entries.len() != e.sections as usize {
             return true;
         }
-        let tree_words = chunk.tree.len() as u32;
-        let voxel_words = chunk.voxels.len().div_ceil(2) as u32;
+        let cell = cz as usize * e.width as usize + cx as usize;
         let slot = match self.residents.remove(&(chunk.x, chunk.z)) {
             Some(old) => {
-                self.garbage += old.chunk.tree.len() as u64 + old.chunk.voxels.len().div_ceil(2) as u64;
+                self.garbage += old.tree_len as u64 + old.voxel_len as u64;
                 old.slot
             }
             None => self.free_slots.pop().unwrap_or_else(|| {
@@ -377,112 +434,98 @@ impl Renderer {
                 self.slots - 1
             }),
         };
-        if chunk.top == 0 && chunk.tree.is_empty() {
+        if chunk.top == 0 {
             // Nothing a ray can reach: no record.
-            self.grid_write(cx as u32, cz as u32, 0);
+            self.grid.set(cell, &[0]);
             self.pyramid.set(cx as u32, cz as u32, 0);
             self.free_slots.push(slot);
             return true;
         }
-        // Room in the buffers: grown (and packed) when full.
-        let need_records = (slot as u64 + 1) * self.stride() as u64 * 4;
-        if need_records > self.records.size() {
-            let bytes = (need_records * 2).min(self.max_binding).max(need_records);
-            if need_records > self.max_binding {
+        let voxel_words: Vec<u32> = chunk.voxels.chunks(2).map(|p| p[0] as u32 | (p.get(1).copied().unwrap_or(0) as u32) << 16).collect();
+        let most = (self.max_binding / 4) as usize;
+        if self.tree.cpu.len() + chunk.tree.len() > most || self.voxels.cpu.len() + voxel_words.len() > most {
+            self.pack();
+            if self.tree.cpu.len() + chunk.tree.len() > most || self.voxels.cpu.len() + voxel_words.len() > most {
                 self.free_slots.push(slot);
-                return false;
-            }
-            self.records = storage(&self.device, "massif render records", bytes);
-            self.bind_group = None;
-            self.rewrite_all_records();
-        }
-        if (self.tree_used + tree_words) as u64 * 4 > self.tree.size() || (self.voxel_used + voxel_words) as u64 * 4 > self.voxels.size() {
-            if !self.repack(tree_words as u64, voxel_words as u64) {
-                self.free_slots.push(slot);
+                self.grid.set(cell, &[0]);
+                self.pyramid.set(cx as u32, cz as u32, 0);
+                self.full = true;
                 return false;
             }
         }
-        let (tree_at, voxel_at) = (self.tree_used, self.voxel_used);
-        self.tree_used += tree_words;
-        self.voxel_used += voxel_words;
-        let resident = Resident { slot, tree_at, voxel_at, chunk };
-        self.upload(&resident);
-        self.grid_write(cx as u32, cz as u32, slot + 1);
-        self.pyramid.set(cx as u32, cz as u32, resident.chunk.top);
-        self.residents.insert((resident.chunk.x, resident.chunk.z), resident);
+        let tree_at = self.tree.push(&chunk.tree) as u32;
+        let voxel_at = self.voxels.push(&voxel_words) as u32;
+        let stride = self.stride() as usize;
+        let mut record = Vec::with_capacity(stride);
+        record.extend_from_slice(&[chunk.top, tree_at, voxel_at * 2, 0]);
+        record.extend_from_slice(&chunk.entries);
+        self.records.set(slot as usize * stride, &record);
+        self.grid.set(cell, &[slot + 1]);
+        self.pyramid.set(cx as u32, cz as u32, chunk.top);
+        self.residents.insert((chunk.x, chunk.z), Resident { slot, tree_at, tree_len: chunk.tree.len() as u32, voxel_at, voxel_len: voxel_words.len() as u32 });
+        if self.garbage > 1 << 20 && self.garbage * 2 > (self.tree.cpu.len() + self.voxels.cpu.len()) as u64 {
+            self.pack();
+        }
         true
     }
 
-    fn grid_write(&self, cx: u32, cz: u32, value: u32) {
-        let at = (cz as u64 * self.extent.width as u64 + cx as u64) * 4;
-        self.queue.write_buffer(&self.grid, at, bytemuck::bytes_of(&value));
-    }
-
-    fn record(&self, r: &Resident) -> Vec<u32> {
-        let mut words = Vec::with_capacity(self.stride() as usize);
-        words.extend_from_slice(&[r.chunk.top, r.tree_at, r.voxel_at * 2, 0]);
-        words.extend_from_slice(&r.chunk.entries);
-        words
-    }
-
-    fn upload(&self, r: &Resident) {
-        let stride = self.stride() as u64 * 4;
-        self.queue.write_buffer(&self.records, r.slot as u64 * stride, bytemuck::cast_slice(&self.record(r)));
-        if !r.chunk.tree.is_empty() {
-            self.queue.write_buffer(&self.tree, r.tree_at as u64 * 4, bytemuck::cast_slice(&r.chunk.tree));
+    /// Lay every chunk's words again one after the other, leaving out
+    /// those of chunks replaced since.
+    fn pack(&mut self) {
+        if self.garbage == 0 {
+            return;
         }
-        if !r.chunk.voxels.is_empty() {
-            let mut words: Vec<u32> = r.chunk.voxels.chunks(2).map(|p| p[0] as u32 | (p.get(1).copied().unwrap_or(0) as u32) << 16).collect();
-            words.truncate(r.chunk.voxels.len().div_ceil(2));
-            self.queue.write_buffer(&self.voxels, r.voxel_at as u64 * 4, bytemuck::cast_slice(&words));
-        }
-    }
-
-    fn rewrite_all_records(&self) {
-        for r in self.residents.values() {
-            let stride = self.stride() as u64 * 4;
-            self.queue.write_buffer(&self.records, r.slot as u64 * stride, bytemuck::cast_slice(&self.record(r)));
-        }
-    }
-
-    /// Lay every chunk again from the start of new buffers, large enough
-    /// for them and `more` words besides. False when that is past what the
-    /// graphics card can bind.
-    fn repack(&mut self, more_tree: u64, more_voxels: u64) -> bool {
-        let live_tree: u64 = self.residents.values().map(|r| r.chunk.tree.len() as u64).sum::<u64>() + more_tree;
-        let live_voxels: u64 = self.residents.values().map(|r| r.chunk.voxels.len().div_ceil(2) as u64).sum::<u64>() + more_voxels;
-        let size = |live: u64, now: u64| -> u64 {
-            let want = (live * 4 * 3 / 2).max(now);
-            if live * 4 * 2 < now { now } else { want.next_power_of_two() }
-        };
-        let (tree_bytes, voxel_bytes) = (size(live_tree, self.tree.size()).min(self.max_binding), size(live_voxels, self.voxels.size()).min(self.max_binding));
-        if live_tree * 4 > tree_bytes || live_voxels * 4 > voxel_bytes {
-            return false;
-        }
-        if tree_bytes != self.tree.size() {
-            self.tree = storage(&self.device, "massif render tree", tree_bytes);
-        }
-        if voxel_bytes != self.voxels.size() {
-            self.voxels = storage(&self.device, "massif render voxels", voxel_bytes);
-        }
-        self.bind_group = None;
-        let (mut tree_at, mut voxel_at) = (0u32, 0u32);
         let mut keys: Vec<(i32, i32)> = self.residents.keys().copied().collect();
         keys.sort_unstable();
+        let (mut tree, mut voxels) = (Vec::with_capacity(self.tree.cpu.len()), Vec::with_capacity(self.voxels.cpu.len()));
+        let stride = self.stride() as usize;
         for key in keys {
-            let r = self.residents.get_mut(&key).unwrap();
-            r.tree_at = tree_at;
-            r.voxel_at = voxel_at;
-            tree_at += r.chunk.tree.len() as u32;
-            voxel_at += r.chunk.voxels.len().div_ceil(2) as u32;
+            let r = self.residents.get_mut(&key).expect("listed");
+            let (t, v) = (tree.len() as u32, voxels.len() as u32);
+            tree.extend_from_slice(&self.tree.cpu[r.tree_at as usize..(r.tree_at + r.tree_len) as usize]);
+            voxels.extend_from_slice(&self.voxels.cpu[r.voxel_at as usize..(r.voxel_at + r.voxel_len) as usize]);
+            r.tree_at = t;
+            r.voxel_at = v;
+            let at = r.slot as usize * stride;
+            self.records.cpu[at + 1] = t;
+            self.records.cpu[at + 2] = v * 2;
         }
-        for r in self.residents.values() {
-            self.upload(r);
-        }
-        self.tree_used = tree_at;
-        self.voxel_used = voxel_at;
+        self.tree.cpu = tree;
+        self.voxels.cpu = voxels;
+        let (t, v, r) = (self.tree.cpu.len(), self.voxels.cpu.len(), self.records.cpu.len());
+        self.tree.mark(0, t);
+        self.voxels.mark(0, v);
+        self.records.mark(0, r);
         self.garbage = 0;
-        true
+    }
+
+    /// Send the scene's changes to the graphics card.
+    pub fn flush(&mut self) {
+        let most = self.max_binding;
+        let (device, queue) = (&self.device, &self.queue);
+        let mut remade = false;
+        for m in [&mut self.grid, &mut self.records, &mut self.tree, &mut self.voxels] {
+            match m.flush(device, queue, most) {
+                Ok(r) => remade |= r,
+                Err(()) => self.full = true,
+            }
+        }
+        if self.pyramid.dirty {
+            if self.pyramid_buf.size() < self.pyramid.data.len() as u64 * 4 {
+                self.pyramid_buf = storage(device, "massif render pyramid", self.pyramid.data.len() as u64 * 4);
+                remade = true;
+            }
+            queue.write_buffer(&self.pyramid_buf, 0, bytemuck::cast_slice(&self.pyramid.data));
+            self.pyramid.dirty = false;
+        }
+        if remade {
+            self.bind_group = None;
+        }
+    }
+
+    /// Whether part of the scene did not fit the graphics card.
+    pub fn is_full(&self) -> bool {
+        self.full
     }
 
     /// The image the renderer draws into, `width` × `height`: its texture
@@ -503,7 +546,8 @@ impl Renderer {
             view_formats: &[IMAGE_VIEW_FORMAT],
         });
         let storage_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let view = texture.create_view(&wgpu::TextureViewDescriptor { format: Some(IMAGE_VIEW_FORMAT), ..Default::default() });
+        // Shown through an sRGB view of the same pixels, which only samples.
+        let view = texture.create_view(&wgpu::TextureViewDescriptor { format: Some(IMAGE_VIEW_FORMAT), usage: Some(wgpu::TextureUsages::TEXTURE_BINDING), ..Default::default() });
         let accum = storage(&self.device, "massif render accumulation", size[0] as u64 * size[1] as u64 * 16);
         self.image = Some(Image { size, texture, storage: storage_view, view, accum });
         self.bind_group = None;
@@ -524,16 +568,9 @@ impl Renderer {
     /// pixel (`coarse` false), or one sample for each 2 × 2 pixels, which
     /// starts the image over, while the view moves.
     pub fn render(&mut self, camera: &Camera, light: &Light, coarse: bool) -> Option<wgpu::CommandBuffer> {
+        self.flush();
         let image = self.image.as_ref()?;
         let [w, h] = image.size;
-        if self.pyramid.dirty {
-            if self.pyramid_buf.size() < self.pyramid.data.len() as u64 * 4 {
-                self.pyramid_buf = storage(&self.device, "massif render pyramid", self.pyramid.data.len() as u64 * 4);
-                self.bind_group = None;
-            }
-            self.queue.write_buffer(&self.pyramid_buf, 0, bytemuck::cast_slice(&self.pyramid.data));
-            self.pyramid.dirty = false;
-        }
         if self.bind_group.is_none() {
             let image = self.image.as_ref()?;
             self.bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -541,10 +578,10 @@ impl Renderer {
                 layout: &self.layout,
                 entries: &[
                     entry(0, &self.params),
-                    entry(1, &self.grid),
-                    entry(2, &self.records),
-                    entry(3, &self.tree),
-                    entry(4, &self.voxels),
+                    entry(1, &self.grid.gpu),
+                    entry(2, &self.records.gpu),
+                    entry(3, &self.tree.gpu),
+                    entry(4, &self.voxels.gpu),
                     entry(5, &self.pyramid_buf),
                     entry(6, &self.materials_buf),
                     entry(7, &image.accum),
@@ -644,7 +681,7 @@ impl Renderer {
 
     /// What the scene takes on the graphics card.
     pub fn memory(&self) -> Memory {
-        let scene = self.grid.size() + self.records.size() + self.tree.size() + self.voxels.size() + self.pyramid_buf.size() + self.materials_buf.size();
+        let scene = self.grid.gpu.size() + self.records.gpu.size() + self.tree.gpu.size() + self.voxels.gpu.size() + self.pyramid_buf.size() + self.materials_buf.size();
         let textures = {
             let s = self.atlas.size();
             (s.width as u64 * s.height as u64 * 4 * s.depth_or_array_layers as u64) * 4 / 3
@@ -653,8 +690,9 @@ impl Renderer {
         Memory { scene, textures, image }
     }
 
-    /// Words of the scene in use (tree and voxels), live and replaced.
+    /// Words of the scene's trees and voxels, and of them, those of chunks
+    /// replaced since.
     pub fn words(&self) -> (u64, u64) {
-        (self.tree_used as u64 + self.voxel_used as u64, self.garbage)
+        ((self.tree.cpu.len() + self.voxels.cpu.len()) as u64, self.garbage)
     }
 }

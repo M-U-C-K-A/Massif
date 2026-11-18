@@ -102,6 +102,7 @@ fn a_map_path_traced() {
     for b in built {
         assert!(r.put(b.chunks), "the scene fits the graphics card");
     }
+    r.flush();
     queue.submit([]);
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
     let upload = started.elapsed();
