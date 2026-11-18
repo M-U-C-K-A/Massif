@@ -109,6 +109,10 @@ pub struct Request {
     pub id: u32,
 }
 
+/// A structure laid, and the heights to give the columns flattened under
+/// it.
+pub type Laid = (Structure, HashMap<(i32, i32), i32>);
+
 /// A structure ready to place: its blocks, and the heights to give the
 /// columns flattened under it.
 #[derive(Debug, Clone)]
@@ -312,7 +316,7 @@ fn loot_below(b: &mut Builder, tables: &[(&str, &str)], rng: &mut Rng) {
     }
 }
 
-fn igloo(lib: &Library, ground: &dyn Ground, req: &Request, rng: &mut Rng) -> Result<(Structure, HashMap<(i32, i32), i32>), String> {
+fn igloo(lib: &Library, ground: &dyn Ground, req: &Request, rng: &mut Rng) -> Result<Laid, String> {
     let turn = req.turn.unwrap_or_else(|| rng.below(4) as u8);
     let (x, z) = (req.at[0], req.at[2]);
     let surface = ground.surface(x, z);
@@ -389,7 +393,7 @@ fn beached(name: &str) -> bool {
     !name.starts_with("upsidedown") && !(name.starts_with("sideways") && name.ends_with("degraded"))
 }
 
-fn shipwreck(lib: &Library, ground: &dyn Ground, req: &Request, rng: &mut Rng) -> Result<(Structure, HashMap<(i32, i32), i32>), String> {
+fn shipwreck(lib: &Library, ground: &dyn Ground, req: &Request, rng: &mut Rng) -> Result<Laid, String> {
     let turn = req.turn.unwrap_or_else(|| rng.below(4) as u8);
     let (x, z) = (req.at[0], req.at[2]);
     let dry = ground.surface(x, z) <= ground.floor(x, z);
@@ -418,7 +422,7 @@ fn shipwreck(lib: &Library, ground: &dyn Ground, req: &Request, rng: &mut Rng) -
     Ok((b.finish(req.id, req.kind.name, req.kind.game_id, true, 0), HashMap::new()))
 }
 
-fn ocean_ruin(lib: &Library, ground: &dyn Ground, req: &Request, warm: bool, rng: &mut Rng) -> Result<(Structure, HashMap<(i32, i32), i32>), String> {
+fn ocean_ruin(lib: &Library, ground: &dyn Ground, req: &Request, warm: bool, rng: &mut Rng) -> Result<Laid, String> {
     let turn = req.turn.unwrap_or_else(|| rng.below(4) as u8);
     let (x, z) = (req.at[0], req.at[2]);
     let mut b = Builder::new(ground, req.seed);

@@ -2164,6 +2164,8 @@ fn smooth_terrain_follows_the_painted_terrain() {
     assert_eq!(r.block(-1, 64, 25), "minecraft:oak_stairs", "the chosen slab's stairs at the step");
     assert_eq!(r.block(-1, 64, -10), "minecraft:air", "elsewhere, the map is not smoothed");
     assert_eq!(r.block(-70, 63, -10), "minecraft:stone");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
 
 /// The NBT of the chunk holding column `(x, z)`, from the region files in
 /// `dir` (`region` or `entities`).

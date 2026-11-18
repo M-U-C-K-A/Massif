@@ -209,7 +209,7 @@ impl Processor {
                 if rottable.as_ref().is_some_and(|t| !t.contains(nbt::block_name(&current.state))) {
                     return Some(current);
                 }
-                let mut rng = Rng::at(ctx.seed ^ 0x726f_74, current.pos);
+                let mut rng = Rng::at(ctx.seed ^ 0x0072_6f74, current.pos);
                 (rng.float() <= *integrity).then_some(current)
             }
             Processor::Gravity { heightmap, offset } => {
@@ -259,7 +259,7 @@ impl Processor {
                 (nbt::block_name(&state) != "minecraft:structure_void").then(|| BlockInfo { pos: current.pos, state: state.into(), nbt: None })
             }
             Processor::Age { mossiness } => {
-                let mut rng = Rng::at(ctx.seed ^ 0x6167_65, current.pos);
+                let mut rng = Rng::at(ctx.seed ^ 0x0061_6765, current.pos);
                 let name = nbt::block_name(&current.state);
                 let out = match name {
                     "minecraft:stone_bricks" | "minecraft:stone" | "minecraft:chiseled_stone_bricks" if rng.float() < 0.5 => {

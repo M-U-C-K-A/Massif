@@ -212,10 +212,12 @@ fn pile(b: &mut Builder, config: &Value, pos: [i32; 3], rng: &mut Rng) {
                 let p = [pos[0] + dx, pos[1] + y, pos[2] + dz];
                 let d2 = (dx * dx + dz * dz) as f32;
                 let keep = d2 <= rng.float() * 10.0 - rng.float() * 6.0 || rng.float() < 0.031;
-                if keep && b.is_air(p) && b.is_sturdy([p[0], p[1] - 1, p[2]]) {
-                    if let Some(state) = provide(config.get("state_provider"), rng) {
-                        b.set(p, &state, None);
-                    }
+                if keep
+                    && b.is_air(p)
+                    && b.is_sturdy([p[0], p[1] - 1, p[2]])
+                    && let Some(state) = provide(config.get("state_provider"), rng)
+                {
+                    b.set(p, &state, None);
                 }
             }
         }
