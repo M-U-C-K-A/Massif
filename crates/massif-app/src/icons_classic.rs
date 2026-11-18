@@ -222,6 +222,12 @@ pub fn paint(painter: &Painter, rect: Rect, tool: Tool, color: Color32) {
             pen.ring(12.0, 15.0, 6.0);
             pen.line(&[(9.0, 18.0), (15.0, 12.0)]);
         }
+        // Two houses by a road.
+        Tool::Village => {
+            pen.line(&[(2.0, 21.0), (22.0, 21.0)]);
+            pen.line(&[(4.0, 21.0), (4.0, 13.0), (8.0, 9.0), (12.0, 13.0), (12.0, 21.0)]);
+            pen.line(&[(13.5, 21.0), (13.5, 15.0), (17.0, 11.5), (20.5, 15.0), (20.5, 21.0)]);
+        }
         // A tower with its battlements, on the ground.
         Tool::Structure => {
             pen.line(&[(2.0, 21.0), (22.0, 21.0)]);

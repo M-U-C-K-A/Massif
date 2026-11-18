@@ -3759,6 +3759,7 @@ impl MassifApp {
                 Outcome::Failed(message) => {
                     if job.kind == jobs::JobKind::Structure {
                         self.tools.structure.rt.done(None, Some(message.clone()));
+                        self.tools.village.rt.done(Some(message.clone()));
                     }
                     self.after_save = None;
                     self.task_done(ctx, Cue::Error, tr!("Something failed"), &message, secs);
@@ -3996,6 +3997,24 @@ impl MassifApp {
                             msg.push_str(&tr!(", {shriekers} shriekers that call the warden", shriekers));
                         }
                         self.tools.structure.rt.done(Some((at.0, at.1, id)), Some(msg.clone()));
+                        self.say(ctx, msg, false, None);
+                    }
+                }
+                Outcome::Village { built, dim } => {
+                    if other_map || dim != self.doc.dim {
+                        self.tools.village.rt.done(None);
+                        crate::sounds::play(Cue::Warning);
+                        self.say(ctx, tr!("Village: {meanwhile}, nothing was done", meanwhile), true, None);
+                    } else {
+                        let mut built = *built;
+                        crate::structure_tool::colors_of(&mut built.structure, self.blocks.catalogue.as_deref());
+                        built.structure.id = massif_core::structures::next_id(&self.doc.world.dims[dim].structures);
+                        self.doc.history.begin(tr!("Build a village"), dim);
+                        massif_structures::vanilla::apply(&mut self.doc.history.edit(&mut self.doc.world, 0), &built);
+                        self.doc.commit();
+                        let s = &built.structure;
+                        let msg = tr!("Village built: {buildings} buildings, {blocks} blocks, {villagers} villagers, in {secs:.1} s", buildings = s.pieces.len(), blocks = s.block_count(), villagers = s.entities.len(), secs);
+                        self.tools.village.rt.done(Some(msg.clone()));
                         self.say(ctx, msg, false, None);
                     }
                 }
@@ -5536,6 +5555,20 @@ impl MassifApp {
                 let id = massif_core::structures::next_id(&self.doc.dimension().structures);
                 let req = self.tools.structure.request(x, z, id);
                 self.jobs.push(Job::structure(ctx, snapshot, self.doc.dim, lib, req, replace).on(self.doc.generation));
+            }
+        }
+        // The village brush: the game's files read (for its own themes),
+        // the selection filled off the interface's thread.
+        if self.tools.tool == Tool::Village || self.tools.village.rt.is_busy() {
+            self.tools.structure.rt.ensure_library(ctx, self.settings.minecraft_jar.clone(), self.settings.mod_jars.clone());
+            let theme = self.tools.village.theme();
+            let lib = self.tools.structure.rt.library();
+            let ready = theme.as_ref().is_some_and(|t| t.vanilla.is_none() || lib.is_some());
+            if ready && let Some(selection) = self.doc.selection().cloned() && self.tools.village.rt.take_pending() {
+                let snapshot = self.doc.world.snapshot();
+                let id = massif_core::structures::next_id(&self.doc.dimension().structures);
+                let v = &self.tools.village;
+                self.jobs.push(Job::village(ctx, snapshot, self.doc.dim, lib, theme.expect("ready"), selection, v.seed, v.walls, v.density, id).on(self.doc.generation));
             }
         }
         if let Some(biomes) = self.tools.run_auto.take() {
@@ -12784,6 +12817,47 @@ mod tests {
         assert_eq!(h.state().doc.dimension().structures.len(), 1);
         h.state_mut().doc.undo();
         assert!(h.state().doc.dimension().structures.is_empty(), "placed in one step");
+    }
+
+    /// The village brush fills the selection with the game's village
+    /// (from a tiny one made by hand) in one step to undo.
+    #[test]
+    fn building_villages() {
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        {
+            let s = h.state_mut();
+            s.tools.structure.rt.set_library(std::sync::Arc::new(massif_structures::testing::village()));
+            s.tools.select(Tool::Village);
+            let rect = massif_core::BlockRect::new(-150, -150, 150, 150);
+            s.doc.select("Select", Some(massif_core::selection::Selection::rasterize(rect, |_, _, row| row.fill(255))));
+        }
+        h.run_steps(3);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("village-brush-settings.png")).unwrap();
+        }
+        let note = {
+            let s = h.state_mut();
+            crate::structure_tool::village_click(&mut s.doc, &mut s.tools, 0, 0)
+        };
+        assert!(note.is_some());
+        let started = std::time::Instant::now();
+        while !h.state().jobs.is_empty() || h.state().tools.village.rt.is_busy() {
+            assert!(started.elapsed().as_secs() < 60, "building timed out");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.run_steps(3);
+        assert_eq!(h.state().doc.history.undo_label(), Some("Build a village"));
+        let placed = h.state().doc.dimension().structures.clone();
+        assert_eq!(placed.len(), 1);
+        assert!(placed[0].pieces.len() >= 3, "{} pieces", placed[0].pieces.len());
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("village-brush-built.png")).unwrap();
+        }
+        h.state_mut().doc.undo();
+        assert!(h.state().doc.dimension().structures.is_empty());
     }
 
     /// Edit ▸ Caves…: the dialog pictures the caves of the layer (a plan

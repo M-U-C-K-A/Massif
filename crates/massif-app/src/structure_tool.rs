@@ -499,3 +499,210 @@ fn label(painter: &egui::Painter, at: Pos2, text: &str) {
     painter.rect_filled(back, theme::PILL, Color32::from_black_alpha(165));
     painter.galley(back.min + vec2(5.0, 2.0), galley, Color32::from_gray(240));
 }
+
+// ------------------------------------------------------- the village brush --
+
+/// The names of the game's villages as themes (see
+/// [`massif_structures::village::built_in`]), as the language files know
+/// them.
+#[allow(dead_code)]
+const THEMES: [&str; 5] = [tn!("Plains"), tn!("Desert"), tn!("Savanna"), tn!("Taiga"), tn!("Snowy")];
+
+/// The settings of the village brush.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VillageSettings {
+    /// The theme, by its pack and name (`Countryside`, or the game's
+    /// `Plains`).
+    pub theme: (String, String),
+    /// The folders of the packs added.
+    pub packs: Vec<PathBuf>,
+    pub walls: bool,
+    /// How built up, 20 % to 100 %.
+    pub density: f32,
+    pub seed: u64,
+    #[serde(skip)]
+    pub rt: VillageRuntime,
+}
+
+impl Default for VillageSettings {
+    fn default() -> Self {
+        Self { theme: (String::new(), "Plains".into()), packs: Vec::new(), walls: false, density: 0.7, seed: 1, rt: VillageRuntime::default() }
+    }
+}
+
+/// The themes read, the click waiting to be built.
+#[derive(Clone, Default)]
+pub struct VillageRuntime(Arc<Mutex<VillageInner>>);
+
+impl PartialEq for VillageRuntime {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for VillageRuntime {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("VillageRuntime")
+    }
+}
+
+#[derive(Default)]
+pub struct VillageInner {
+    /// The themes offered, and the packs they were read from.
+    themes: Option<(Vec<PathBuf>, Vec<massif_structures::village::Theme>)>,
+    errors: Vec<String>,
+    pending: bool,
+    busy: bool,
+    note: Option<String>,
+}
+
+impl VillageRuntime {
+    fn lock(&self) -> MutexGuard<'_, VillageInner> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The themes offered: the game's, then those of the packs `packs`
+    /// (read again when they change).
+    pub fn themes(&self, packs: &[PathBuf]) -> Vec<massif_structures::village::Theme> {
+        let mut inner = self.lock();
+        if inner.themes.as_ref().is_none_or(|(p, _)| p != packs) {
+            let mut all = massif_structures::village::built_in();
+            let mut errors = Vec::new();
+            for p in packs {
+                match massif_structures::village::read_pack(p) {
+                    Ok(t) => all.extend(t),
+                    Err(e) => errors.push(e),
+                }
+            }
+            inner.themes = Some((packs.to_vec(), all));
+            inner.errors = errors;
+        }
+        inner.themes.as_ref().map(|t| t.1.clone()).unwrap_or_default()
+    }
+
+    /// The fill asked for, once nothing else is being built.
+    pub fn take_pending(&self) -> bool {
+        let mut inner = self.lock();
+        if inner.busy || !inner.pending {
+            return false;
+        }
+        inner.pending = false;
+        inner.busy = true;
+        true
+    }
+
+    pub fn is_busy(&self) -> bool {
+        let inner = self.lock();
+        inner.busy || inner.pending
+    }
+
+    pub fn done(&self, note: Option<String>) {
+        let mut inner = self.lock();
+        inner.busy = false;
+        inner.note = note;
+    }
+
+    fn ask(&self) {
+        self.lock().pending = true;
+    }
+}
+
+impl VillageSettings {
+    /// The theme chosen, among those offered.
+    pub fn theme(&self) -> Option<massif_structures::village::Theme> {
+        let themes = self.rt.themes(&self.packs);
+        themes.iter().find(|t| t.pack == self.theme.0 && t.name == self.theme.1).or_else(|| themes.first()).cloned()
+    }
+}
+
+/// A click of the village brush: fill the selection, if the click is in it.
+pub fn village_click(doc: &mut Document, tools: &mut ToolState, x: i32, z: i32) -> Feedback {
+    let Some(sel) = doc.selection() else {
+        return Some(tr!("Select an area first: the village fills the selection.").to_owned());
+    };
+    if sel.get(x, z) < 128 {
+        return Some(tr!("Click inside the selection: the village fills it.").to_owned());
+    }
+    tools.village.rt.ask();
+    Some(tr!("Building the village…").to_owned())
+}
+
+/// The settings of the village brush, in Tool Settings.
+pub fn village_settings(ui: &mut Ui, tools: &mut ToolState, doc: &mut Document) {
+    use crate::panels::hint;
+    use crate::widgets::{Field, button, checkbox, combo, row, well};
+    let v = &mut tools.village;
+    let themes = v.rt.themes(&v.packs);
+    let chosen = v.theme();
+    well(ui, |ui| {
+        row(ui, tr!("Theme"), |ui| {
+            let shown = chosen.as_ref().map_or_else(String::new, |t| if t.pack.is_empty() { crate::i18n::tr_name(&t.name).to_owned() } else { format!("{} · {}", t.pack, t.name) });
+            combo("village theme").selected_text(shown).width((ui.available_width() * 0.62).min(190.0)).truncate().show_ui(ui, |ui| {
+                ui.label(egui::RichText::new(tr!("The game's villages")).small().weak());
+                for t in themes.iter().filter(|t| t.pack.is_empty()) {
+                    if ui.selectable_label(v.theme == (t.pack.clone(), t.name.clone()), crate::i18n::tr_name(&t.name)).clicked() {
+                        v.theme = (t.pack.clone(), t.name.clone());
+                    }
+                }
+                if themes.iter().any(|t| !t.pack.is_empty()) {
+                    ui.label(egui::RichText::new(tr!("Packs")).small().weak());
+                }
+                for t in themes.iter().filter(|t| !t.pack.is_empty()) {
+                    if ui.selectable_label(v.theme == (t.pack.clone(), t.name.clone()), format!("{} · {}", t.pack, t.name)).clicked() {
+                        v.theme = (t.pack.clone(), t.name.clone());
+                    }
+                }
+            });
+        });
+        row(ui, tr!("Density"), |ui| {
+            ui.add(Field::new(&mut v.density, 0.2..=1.0).custom_formatter(|x, _| format!("{:.0}%", x * 100.0)).custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|x| x / 100.0)).width((ui.available_width() * 0.55).min(120.0)));
+        });
+        row(ui, tr!("Draw"), |ui| {
+            crate::widgets::drag(ui, egui::DragValue::new(&mut v.seed).speed(1.0));
+            if button(ui, theme::with_icon(Icon::Dices, "")).on_hover_text(tr!("Another draw: other pieces, another layout")).clicked() {
+                v.seed = v.seed.wrapping_mul(0x9e37_79b9_7f4a_7c15).wrapping_add(1) % 1_000_000;
+            }
+        });
+    });
+    checkbox(ui, &mut v.walls, tr!("Walls, with towers and gates"));
+    if ui.add(egui::Button::new(theme::with_icon(Icon::FolderPlus, tr!("Add a pack…")))).on_hover_text(tr!("A folder of schematics by theme and type: see Village packs in the guide")).clicked()
+        && let Some(dir) = rfd::FileDialog::new().set_title(tr!("A village pack")).pick_folder()
+        && !v.packs.contains(&dir)
+    {
+        v.packs.push(dir);
+    }
+    for e in v.rt.lock().errors.clone() {
+        ui.colored_label(Palette::of(ui).danger, e);
+    }
+    let selection = doc.selection().map(|s| s.area());
+    match selection {
+        Some(area) => {
+            // As large as a square of its area.
+            let side = area.sqrt().round() as i64;
+            let size = match side {
+                ..160 => tr!("a hamlet"),
+                160..480 => tr!("a village"),
+                _ => tr!("a town of several districts"),
+            };
+            hint(ui, &tr!("The selection, as large as {side} × {side} blocks: {size}.", side, size));
+            let busy = v.rt.is_busy();
+            if ui.add_enabled(!busy, egui::Button::new(theme::with_icon(Icon::House, tr!("Fill the selection")))).clicked() {
+                v.rt.ask();
+            }
+        }
+        None => hint(ui, tr!("Select an area first (Select group): the village fills it, sized by it.")),
+    }
+    let (busy, note) = {
+        let inner = v.rt.lock();
+        (inner.busy || inner.pending, inner.note.clone())
+    };
+    if busy {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(tr!("Building the village…"));
+        });
+    } else if let Some(note) = note {
+        hint(ui, &note);
+    }
+}

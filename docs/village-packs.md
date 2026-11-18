@@ -31,7 +31,6 @@ Medieval Towns/                 the pack
     well/
     market/
     walls/                      the pieces of the walls (see below)
-      segment.schem
       tower.schem
       gate.schem
   Winter/
@@ -114,15 +113,15 @@ With **Walls** ticked, the brush runs a wall round the village, inside the
 selection's edge: corner towers where it turns, a tower every `towers`
 blocks along it, a gate wherever a road crosses it. It follows the land.
 
-The pieces come from the theme's `walls/` folder when it has them:
+The wall itself is of the manifest's block (stone bricks unless it says
+otherwise), crenellated, following the land. Its towers and gates come from
+the theme's `walls/` folder when it has them:
 
-- `segment.schem` — a straight piece of wall, along x, its outside to the
-  south, as long as you like (16 is a good length): repeated end to end.
 - `tower.schem` — a tower, its middle on the wall's line.
 - `gate.schem` — a gate, the road passing through it north to south.
 
-Without them, walls of the manifest's block (or stone bricks), crenellated,
-with towers of the same.
+Without them, towers of the wall's block, five blocks across, with a floor
+on top and a ladder up, and gates that are an arch over the road.
 
 ## Sizes
 
