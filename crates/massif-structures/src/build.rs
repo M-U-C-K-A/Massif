@@ -122,7 +122,16 @@ impl<'a> Builder<'a> {
     }
 
     /// The structure laid, named `name`, of the game's kind `kind`.
-    pub fn finish(self, id: u32, name: &str, kind: &str, waterlog: bool, data_version: i32) -> Structure {
+    pub fn finish(mut self, id: u32, name: &str, kind: &str, waterlog: bool, data_version: i32) -> Structure {
+        // A block entity the game creates itself where the block is set (a
+        // processor gave suspicious gravel its loot): its `id`, from the
+        // block, which the game needs to read it from a chunk.
+        let missing: Vec<([i32; 3], String)> = self.block_entities.iter().filter(|(_, d)| !d.contains_key("id")).filter_map(|(p, _)| Some((*p, block_entity_id(self.get(*p)?)))).collect();
+        for (p, id) in missing {
+            if let Some(d) = self.block_entities.get_mut(&p) {
+                d.insert("id".into(), Value::String(id));
+            }
+        }
         let mut sections: Vec<Section> = self
             .sections
             .into_iter()
@@ -171,6 +180,25 @@ impl<'a> Builder<'a> {
         s.finish();
         s
     }
+}
+
+/// The block entity a block has, by its name.
+pub fn block_entity_id(state: &str) -> String {
+    let name = nbt::block_name(state);
+    let n = name.strip_prefix("minecraft:").unwrap_or(name);
+    let id = match n {
+        _ if n.starts_with("suspicious_") => "brushable_block",
+        _ if n.ends_with("_bed") => "bed",
+        _ if n.ends_with("_wall_banner") || n.ends_with("_banner") => "banner",
+        _ if n.ends_with("_hanging_sign") || n.ends_with("_wall_hanging_sign") => "hanging_sign",
+        _ if n.ends_with("_sign") => "sign",
+        _ if n.ends_with("_skull") || n.ends_with("_head") => "skull",
+        _ if n.ends_with("shulker_box") => "shulker_box",
+        "spawner" => "mob_spawner",
+        "sculk_sensor" | "calibrated_sculk_sensor" => n,
+        _ => n,
+    };
+    if name.contains(':') && !name.starts_with("minecraft:") { name.to_owned() } else { format!("minecraft:{id}") }
 }
 
 pub fn is_air(state: &str) -> bool {

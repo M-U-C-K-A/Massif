@@ -18,6 +18,7 @@ massif-anvil.workspace = true
 massif-legacy.workspace = true
 massif-assets.workspace = true
 massif-objects.workspace = true
+massif-structures.workspace = true
 massif-thumbnails.workspace = true
 log.workspace = true
 rayon.workspace = true
