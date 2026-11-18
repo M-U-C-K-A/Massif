@@ -34,7 +34,10 @@ fn tint(h: f32) -> [f32; 3] {
 /// The relief in `heights` as sRGB pixels, row by row: tinted by height
 /// over `sea` (water below it), lit from the north-west.
 pub fn shade(heights: &Grid, sea: f32) -> Vec<[u8; 3]> {
-    let spacing = Space::spacing(heights.lod) as f32;
+    // Slopes drawn steeper than they are, as relief maps do, so that a
+    // gentle relief still reads.
+    const EXAGGERATION: f32 = 2.5;
+    let spacing = Space::spacing(heights.lod) as f32 / EXAGGERATION;
     let r = heights.rect;
     let sun = {
         let (x, y, z) = (-1.0f32, 1.1f32, -1.0f32);

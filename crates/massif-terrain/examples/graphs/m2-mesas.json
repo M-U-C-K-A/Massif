@@ -1,0 +1,33 @@
+{
+  "terrain": {
+    "size": 8192,
+    "seed": 22
+  },
+  "nodes": {
+    "m": {
+      "type": "plateau.mesa",
+      "params": {
+        "height": 70,
+        "scale": 1200,
+        "base": 110
+      }
+    },
+    "c": {
+      "type": "valley.canyon",
+      "inputs": {
+        "height": "m"
+      },
+      "params": {
+        "depth": 40,
+        "width": 180,
+        "scale": 2400
+      }
+    },
+    "out": {
+      "type": "output.map",
+      "inputs": {
+        "height": "c"
+      }
+    }
+  }
+}

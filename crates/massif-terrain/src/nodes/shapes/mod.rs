@@ -8,14 +8,32 @@
 //! its layout on a larger terrain, which then holds more of them.
 
 mod coasts;
+mod landforms;
 mod mountains;
+mod valleys;
 
 use crate::kernel::Ctx;
 use crate::noise::Fbm;
 use crate::registry::NodeSpec;
 
 /// The node types of this family, in the library's order.
-pub static NODES: &[&NodeSpec] = &[&mountains::ALPINE, &mountains::ROUNDED, &mountains::RANGE, &mountains::PEAKS, &coasts::ISLAND, &coasts::ARCHIPELAGO, &coasts::COASTLINE];
+pub static NODES: &[&NodeSpec] = &[
+    &mountains::ALPINE,
+    &mountains::ROUNDED,
+    &mountains::RANGE,
+    &mountains::PEAKS,
+    &landforms::VOLCANO,
+    &landforms::MESA,
+    &valleys::CANYON,
+    &valleys::GLACIAL,
+    &valleys::FAULT,
+    &landforms::DUNES,
+    &landforms::KARST,
+    &landforms::CRATERS,
+    &coasts::ISLAND,
+    &coasts::ARCHIPELAGO,
+    &coasts::COASTLINE,
+];
 
 pub(crate) fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
     let t = ((x - a) / (b - a)).clamp(0.0, 1.0);

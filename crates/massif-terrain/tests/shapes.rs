@@ -112,3 +112,27 @@ fn shapes_tile_without_seams() {
         }
     }
 }
+
+#[test]
+fn every_node_evaluates_with_its_defaults() {
+    // Each node type, its required inputs fed by a noise.
+    for spec in registry::all().iter().filter(|s| !s.is_output() && s.family != Family::Internal) {
+        let mut inputs = String::new();
+        for (k, port) in spec.inputs.iter().enumerate() {
+            if !port.optional {
+                let src = if port.kind == registry::PortKind::Color { "paint" } else { "feed" };
+                inputs.push_str(&format!(r#"{}"{}": "{}""#, if k > 0 && !inputs.is_empty() { ", " } else { "" }, port.name, src));
+            }
+        }
+        let json = format!(
+            r#"{{ "nodes": {{ "feed": {{ "type": "noise.fbm" }}, "paint": {{ "type": "color.ramp", "inputs": {{ "height": "feed" }} }}, "n": {{ "type": "{}", "inputs": {{ {inputs} }} }} }} }}"#,
+            spec.id
+        );
+        let c = compiled(&json);
+        for (p, port) in spec.outputs.iter().enumerate() {
+            let g = whole(&c, "n", Some(port.name), 4);
+            assert!(g.data.iter().all(|v| v.is_finite()), "{}.{}", spec.id, port.name);
+            let _ = p;
+        }
+    }
+}

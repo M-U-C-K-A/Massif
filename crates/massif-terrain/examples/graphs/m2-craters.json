@@ -1,0 +1,5 @@
+{ "terrain": { "size": 4096, "seed": 27 },
+  "nodes": {
+    "ground": { "type": "noise.fbm", "params": { "scale": 1500, "height": 30, "base": 90 } },
+    "c": { "type": "crater.field", "inputs": { "height": "ground" }, "params": { "count": 60, "largest": 500, "craters": [{"x":0.5,"z":0.5,"radius":700,"depth":90}] } },
+    "out": { "type": "output.map", "inputs": { "height": "c" } } } }
