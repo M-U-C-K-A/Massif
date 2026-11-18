@@ -75,6 +75,20 @@ pub struct Light {
     pub shafts: bool,
     /// A sea at sea level all around the map, out to the horizon.
     pub sea: bool,
+    /// Water as water (a surface that mirrors and lets see through, its
+    /// depth taking the light), or as the game's texture; its waves' slope
+    /// and size (blocks), and how much light it takes (1: clear sea water).
+    pub real_water: bool,
+    pub waves: f32,
+    pub wave_size: f32,
+    pub water_clarity: f32,
+    /// After rain: how wet everything is, and how much of flat ground holds
+    /// puddles, of what size (blocks).
+    pub wetness: f32,
+    pub puddles: f32,
+    pub puddle_size: f32,
+    /// Seconds, for what moves: the waves.
+    pub time: f32,
     /// Light of the blocks that glow, times.
     pub emission: f32,
     /// The moon's light, a share of the sun's.
@@ -116,6 +130,14 @@ impl Default for Light {
             fog_g: 0.6,
             shafts: true,
             sea: true,
+            real_water: true,
+            waves: 0.12,
+            wave_size: 4.0,
+            water_clarity: 1.0,
+            wetness: 0.0,
+            puddles: 0.0,
+            puddle_size: 6.0,
+            time: 0.0,
             emission: 1.0,
             moon: 1.0 / 300.0,
             cloud_cover: 0.0,

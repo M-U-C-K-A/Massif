@@ -51,7 +51,7 @@ impl Class {
     }
 }
 
-/// A material as the shader reads it: eight words.
+/// A material as the shader reads it: twelve words.
 ///
 /// * 0: top layer | side layer << 16
 /// * 1: bottom layer | flags << 16 (class: 3 bits, axis of a log: 2 bits,
@@ -62,7 +62,9 @@ impl Class {
 /// * 5, 6: a shaped block's first face and how many (see [`GpuQuad`])
 /// * 7: the box around its faces, in pixels: x0, y0, z0, x1, y1, z1, 5
 ///   bits each from the lowest
-pub type GpuMaterial = [u32; 8];
+/// * 8, 9: its roughness and how metallic it is, 0 to 1, as float bits
+/// * 10, 11: unused
+pub type GpuMaterial = [u32; 12];
 
 /// A face of a shaped block as the shader reads it: sixteen words, the
 /// floats as their bits.
@@ -91,16 +93,19 @@ struct Material {
     first_quad: u32,
     quads: u16,
     bounds: u32,
+    /// How rough its surface is (1: no shine at all) and how metallic.
+    roughness: f32,
+    metal: f32,
 }
 
 impl Material {
     fn gpu(&self) -> GpuMaterial {
         let flags = self.class as u32 | (self.axis as u32) << 3 | ((self.light > 0) as u32) << 5;
         let rgb = |c: [u8; 3]| c[0] as u32 | (c[1] as u32) << 8 | (c[2] as u32) << 16;
-        [self.top as u32 | (self.side as u32) << 16, self.bottom as u32 | flags << 16, rgb(self.top_tint), rgb(self.side_tint), rgb(self.glow) | (self.light as u32) << 24, self.first_quad, self.quads as u32, self.bounds]
+        [self.top as u32 | (self.side as u32) << 16, self.bottom as u32 | flags << 16, rgb(self.top_tint), rgb(self.side_tint), rgb(self.glow) | (self.light as u32) << 24, self.first_quad, self.quads as u32, self.bounds, self.roughness.to_bits(), self.metal.to_bits(), 0, 0]
     }
 
-    const AIR: Material = Material { top: 0, side: 0, bottom: 0, class: Class::Air, axis: 0, light: 0, glow: [0; 3], top_tint: [255; 3], side_tint: [255; 3], first_quad: 0, quads: 0, bounds: 0 };
+    const AIR: Material = Material { top: 0, side: 0, bottom: 0, class: Class::Air, axis: 0, light: 0, glow: [0; 3], top_tint: [255; 3], side_tint: [255; 3], first_quad: 0, quads: 0, bounds: 0, roughness: 0.9, metal: 0.0 };
 
     /// A light without a block to draw yet (a torch, a lantern: their
     /// models come with milestone 3).
@@ -206,6 +211,15 @@ impl Materials {
     }
 
     fn resolve(&self, inner: &mut Inner, name: &str, properties: &[(&str, &str)]) -> Material {
+        let mut m = self.resolve_shape(inner, name, properties);
+        if !matches!(m.class, Class::Water | Class::Lava) {
+            let short = name.rsplit(':').next().unwrap_or(name);
+            (m.roughness, m.metal) = surface(short);
+        }
+        m
+    }
+
+    fn resolve_shape(&self, inner: &mut Inner, name: &str, properties: &[(&str, &str)]) -> Material {
         let short = name.rsplit(':').next().unwrap_or(name);
         let prop = |p: &str| properties.iter().find(|(k, _)| *k == p).map(|(_, v)| *v);
         const NOTHING: [&str; 6] = ["air", "cave_air", "void_air", "barrier", "light", "structure_void"];
@@ -421,6 +435,24 @@ impl Lookup {
     }
 }
 
+/// How rough a block's surface is and how metallic, by its name: ice and
+/// glass smooth, polished stone and glazed terracotta with some shine, the
+/// blocks of metal metallic; everything else matt.
+fn surface(short: &str) -> (f32, f32) {
+    let has = |w: &str| short.contains(w);
+    if has("ice") || has("glass") {
+        (0.06, 0.0)
+    } else if ["iron_block", "gold_block", "netherite_block", "raw_iron_block", "raw_gold_block", "raw_copper_block", "iron_bars", "iron_door", "iron_trapdoor", "chain", "lantern", "anvil", "cauldron", "bell", "heavy_core"].iter().any(|n| short.ends_with(n) && !short.starts_with("waxed_") || short == *n) || (has("copper") && !has("ore")) {
+        (if has("raw_") { 0.6 } else { 0.32 }, 1.0)
+    } else if has("polished") || has("smooth") || has("glazed_terracotta") || has("quartz") || has("prismarine") || has("purpur") || has("_concrete") && !has("powder") || has("amethyst") || has("obsidian") || matches!(short, "diamond_block" | "emerald_block" | "lapis_block") {
+        (0.38, 0.0)
+    } else if has("leaves") || has("grass") || has("fern") || has("flower") {
+        (0.75, 0.0)
+    } else {
+        (0.88, 0.0)
+    }
+}
+
 /// The textures of a cube's top, sides and bottom, from its model's faces.
 fn cube_textures(quads: &[crate::models::Quad]) -> (Option<String>, Option<String>, Option<String>) {
     let (mut top, mut side, mut bottom) = (None, None, None);
@@ -613,7 +645,8 @@ mod tests {
         assert_eq!(m.classes()[sea_lantern as usize], Class::Opaque, "a sea lantern is a whole block");
         let glowstone = m.id("minecraft:glowstone", &[]);
         assert_eq!(m.lights()[glowstone as usize], 15);
-        assert_eq!(m.classes()[m.id("minecraft:seagrass", &[]) as usize], Class::Water, "a plant under water shows the water");
+        let seagrass = m.id("minecraft:seagrass", &[]);
+        assert_eq!(m.classes()[seagrass as usize], Class::Water, "a plant under water shows the water");
     }
 
     #[test]

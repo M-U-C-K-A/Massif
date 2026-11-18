@@ -133,6 +133,12 @@ fn a_map_path_traced() {
         ("halfway", Camera::orbit([center[0], ground(center[0], center[2]), center[2]], 2.2, -0.35, 260.0, fov), golden),
         ("near", Camera::orbit([center[0] + 40.0, ground(center[0] + 40.0, center[2] - 30.0), center[2] - 30.0], 4.0, -0.22, 48.0, fov), morning),
         ("sky", Camera::orbit([center[0], ground(center[0], center[2]) + 30.0, center[2]], 2.6, 0.12, 60.0, fov), noon),
+        // Low over the sea by the west edge, toward the land, late in the day.
+        ("water", Camera::orbit([extent.x0 as f64 * 16.0 + span * 0.12, sea + 1.0, center[2]], 1.35, -0.12, 30.0, fov), {
+            let mut l = Light { haze: 2.0, exposure: 1.4, ..Light::default() };
+            l.set_time(17.5, 172.0, 45.0, 0.0);
+            l
+        }),
     ];
     let (w, h) = (1280, 720);
     r.resize(w, h);
@@ -365,7 +371,13 @@ fn models_up_close() {
     light.set_time(16.5, 172.0, 45.0, 0.0);
     let (w, h) = (1280, 800);
     r.resize(w, h);
-    for (name, camera) in [("models", Camera::orbit([10.0, 16.5, 10.0], 3.0, -0.5, 17.0, 55f32.to_radians())), ("models-plants", Camera::orbit([9.0, 16.4, 18.0], 0.4, -0.25, 7.0, 55f32.to_radians()))] {
+    let mut rain = Light { wetness: 0.8, puddles: 0.55, puddle_size: 5.0, haze: 3.0, exposure: 1.6, ..Light::default() };
+    rain.set_time(18.6, 172.0, 45.0, 0.0);
+    for (name, camera, light) in [
+        ("models", Camera::orbit([10.0, 16.5, 10.0], 3.0, -0.5, 17.0, 55f32.to_radians()), light),
+        ("models-plants", Camera::orbit([9.0, 16.4, 18.0], 0.4, -0.25, 7.0, 55f32.to_radians()), light),
+        ("models-rain", Camera::orbit([9.0, 16.2, 9.0], 3.6, -0.22, 13.0, 55f32.to_radians()), rain),
+    ] {
         r.restart();
         let t = Instant::now();
         while r.samples < 256 {

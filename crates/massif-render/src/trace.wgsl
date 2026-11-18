@@ -18,6 +18,8 @@ struct Params {
     lens: vec4<f32>,     // focus distance, a sea around the map, where the shaped blocks' faces start
     clouds: vec4<f32>,   // cover (0..1), base height (scene), thickness, extinction a block (0: none)
     wind: vec4<f32>,     // how far the wind moved them (x, z), 1 / the size of their shapes
+    water: vec4<f32>,    // the waves' slope, 1 / their size, time (s), how much light water takes (0: water as the game's texture)
+    wet: vec4<f32>,      // wetness, puddles, 1 / the puddles' size
     size: vec4<u32>,     // width, height, seed of the frame, sample (0: start over)
     grid: vec4<i32>,     // chunks across, chunks down, height in blocks, sections
     info: vec4<u32>,     // words a chunk's record, pyramid levels, bounces, shift (pixels per side of a ray: 1 << shift)
@@ -65,6 +67,8 @@ struct Hit {
     quad: u32,
     // The cell of a shaped block hit.
     cell: vec3<i32>,
+    // A shadow ray: how far it went before meeting water (-1: none).
+    water: f32,
 }
 
 // ---- shaped blocks ------------------------------------------------------------
@@ -122,7 +126,7 @@ fn quad_uv(q: Quad, ab: vec2<f32>) -> vec2<f32> {
 // ro along rd crosses between t0 and t1 (holes in its texture let it
 // through): (t, the face's number in the material), or y < 0.
 fn shaped_hit(mat: u32, ro: vec3<f32>, rd: vec3<f32>, cell: vec3<i32>, t0: f32, t1: f32) -> vec2<f32> {
-    let w = materials[mat * 2u + 1u];
+    let w = materials[mat * 3u + 1u];
     let first = w.y;
     let count = w.z;
     let o = ro - vec3<f32>(cell);
@@ -239,8 +243,15 @@ fn face_uv(m: vec4<u32>, p: vec3<f32>, axis: i32, rd: vec3<f32>) -> vec3<f32> {
 
 // The first block along a ray from ro (inside the scene or not) that stops
 // it, up to tmax.
-fn trace(ro: vec3<f32>, rd: vec3<f32>, tmax: f32) -> Hit {
+// Modes of trace: what the eyes and the bounces see (water stops them, at
+// its surface), and a shadow ray's (water lets it through; where it met
+// water first is kept).
+const SEE: u32 = 0u;
+const SHADOW: u32 = 1u;
+
+fn trace(ro: vec3<f32>, rd: vec3<f32>, tmax: f32, mode: u32) -> Hit {
     var h: Hit;
+    h.water = -1.0;
     h.found = false;
     h.t = tmax;
     h.mat = 0u;
@@ -333,7 +344,7 @@ fn trace(ro: vec3<f32>, rd: vec3<f32>, tmax: f32) -> Hit {
                 }
             }
         }
-        if (mat != 0u && class_of(materials[mat * 2u]) == CLASS_SHAPED) {
+        if (mat != 0u && class_of(materials[mat * 3u]) == CLASS_SHAPED) {
             // A model's faces, inside the cell.
             let exit = (select(vec3<f32>(v), vec3<f32>(v + 1), rd > vec3<f32>(0.0)) - ro) * inv;
             let q = shaped_hit(mat, ro, rd, v, t, min(min(exit.x, exit.y), exit.z) + 1e-4);
@@ -347,8 +358,14 @@ fn trace(ro: vec3<f32>, rd: vec3<f32>, tmax: f32) -> Hit {
                 return h;
             }
         } else if (mat != 0u && axis >= 0) {
-            let m = materials[mat * 2u];
+            let m = materials[mat * 3u];
             var stops = true;
+            if (class_of(m) == CLASS_WATER && P.water.w > 0.0 && mode == SHADOW) {
+                stops = false;
+                if (h.water < 0.0) {
+                    h.water = t;
+                }
+            }
             if (class_of(m) == CLASS_CUTOUT) {
                 // Through the holes of leaves and glass.
                 let uvl = face_uv(m, ro + rd * t, axis, rd);
@@ -629,7 +646,7 @@ fn through_media(ro: vec3<f32>, rd: vec3<f32>, t_end: f32, all: bool, seed: ptr<
     // much as the clouds let through.
     var sun = SUN_LIGHT * sun_through_media(x.y);
     if (P.media.x > 0.5 && P.sun.y > -0.02) {
-        let shadow = trace(x, P.sun.xyz, 1e30);
+        let shadow = trace(x, P.sun.xyz, 1e30, SHADOW);
         if (shadow.found) {
             sun = vec3<f32>(0.0);
         } else {
@@ -796,10 +813,126 @@ fn cloud_hit(ro: vec3<f32>, rd: vec3<f32>, t_end: f32, seed: ptr<function, u32>)
     return out;
 }
 
+// ---- surfaces -------------------------------------------------------------
+
+// What a surface is made of, where a ray met it: its colour, its
+// reflectance head-on, how rough it is (alpha, GGX's), how much of it is
+// diffuse.
+struct Surface {
+    albedo: vec3<f32>,
+    f0: vec3<f32>,
+    alpha: f32,
+    diffuse: vec3<f32>,
+}
+
+fn schlick(f0: vec3<f32>, c: f32) -> vec3<f32> {
+    return f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - clamp(c, 0.0, 1.0), 5.0);
+}
+
+fn ggx_d(nh: f32, a2: f32) -> f32 {
+    let d = nh * nh * (a2 - 1.0) + 1.0;
+    return a2 / (PI * d * d);
+}
+
+fn smith_g1(nx: f32, a2: f32) -> f32 {
+    return 2.0 * nx / (nx + sqrt(a2 + (1.0 - a2) * nx * nx));
+}
+
+// The light a surface sends toward v from light of irradiance e coming
+// along l (both away from the surface).
+fn brdf(s: Surface, n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, e: vec3<f32>) -> vec3<f32> {
+    let nl = dot(n, l);
+    let nv = dot(n, v);
+    if (nl <= 0.0 || nv <= 0.0) {
+        return vec3<f32>(0.0);
+    }
+    let h = normalize(v + l);
+    let f = schlick(s.f0, dot(v, h));
+    let a2 = max(s.alpha * s.alpha, 1e-6);
+    let spec = f * ggx_d(max(dot(n, h), 0.0), a2) * smith_g1(nl, a2) * smith_g1(nv, a2) / (4.0 * nl * nv);
+    let diff = s.diffuse * (vec3<f32>(1.0) - f) / PI;
+    return (diff + spec) * e * nl;
+}
+
+// A microfacet normal seen from v (Heitz's sampling of the visible
+// normals), in the frame of n.
+fn sample_vndf(v: vec3<f32>, alpha: f32, u1: f32, u2: f32) -> vec3<f32> {
+    let vh = normalize(vec3<f32>(alpha * v.x, alpha * v.y, v.z));
+    let lensq = vh.x * vh.x + vh.y * vh.y;
+    var t1 = vec3<f32>(1.0, 0.0, 0.0);
+    if (lensq > 0.0) {
+        t1 = vec3<f32>(-vh.y, vh.x, 0.0) / sqrt(lensq);
+    }
+    let t2 = cross(vh, t1);
+    let r = sqrt(u1);
+    let phi = 2.0 * PI * u2;
+    let p1 = r * cos(phi);
+    let s = 0.5 * (1.0 + vh.z);
+    let p2 = (1.0 - s) * sqrt(max(1.0 - p1 * p1, 0.0)) + s * r * sin(phi);
+    let nh = p1 * t1 + p2 * t2 + sqrt(max(0.0, 1.0 - p1 * p1 - p2 * p2)) * vh;
+    return normalize(vec3<f32>(alpha * nh.x, alpha * nh.y, max(0.0, nh.z)));
+}
+
+// ---- water ------------------------------------------------------------------
+
+fn wave_height(p: vec2<f32>) -> f32 {
+    let q = p * P.water.y;
+    let t = P.water.z;
+    return value_noise(vec3<f32>(q.x + t * 0.3, t * 0.25, q.y)) * 0.65 + value_noise(vec3<f32>(q.x * 2.7 - t * 0.5, t * 0.4 + 7.0, q.y * 2.7 + 3.1)) * 0.35;
+}
+
+// The water's surface turned by its waves.
+fn wave_normal(p: vec2<f32>) -> vec3<f32> {
+    let e = 0.1 / P.water.y;
+    let h = wave_height(p);
+    let dx = (wave_height(p + vec2<f32>(e, 0.0)) - h) / e;
+    let dz = (wave_height(p + vec2<f32>(0.0, e)) - h) / e;
+    let k = P.water.x / P.water.y;
+    return normalize(vec3<f32>(-dx * k, 1.0, -dz * k));
+}
+
+// How much of light gets through d blocks of water: red goes first.
+fn water_through(d: f32) -> vec3<f32> {
+    return exp(-vec3<f32>(0.45, 0.11, 0.075) * P.water.w * max(d, 0.0));
+}
+
+// The light water scatters toward the eyes over d blocks.
+fn water_glow(d: f32) -> vec3<f32> {
+    let lit = sky(vec3<f32>(0.0, 1.0, 0.0)) * 0.6 + SUN_LIGHT * max(P.sun.y, 0.0) * 0.08;
+    return (vec3<f32>(1.0) - water_through(d)) * vec3<f32>(0.035, 0.13, 0.15) * lit;
+}
+
+// Fresnel's reflectance of a smooth surface between two media, eta the
+// ratio of their indices (the first over the second).
+fn fresnel(cos_i: f32, eta: f32) -> f32 {
+    let sin_t2 = eta * eta * max(1.0 - cos_i * cos_i, 0.0);
+    if (sin_t2 >= 1.0) {
+        return 1.0;
+    }
+    let cos_t = sqrt(1.0 - sin_t2);
+    let rs = (eta * cos_i - cos_t) / (eta * cos_i + cos_t);
+    let rp = (cos_i - eta * cos_t) / (cos_i + eta * cos_t);
+    return 0.5 * (rs * rs + rp * rp);
+}
+
+// ---- puddles ----------------------------------------------------------------
+
+// Where water stands on flat ground: 0 dry, 1 a puddle.
+fn puddle(p: vec3<f32>, n: vec3<f32>) -> f32 {
+    if (P.wet.y <= 0.0 || n.y < 0.9) {
+        return 0.0;
+    }
+    let q = p.xz * P.wet.z;
+    let h = value_noise(vec3<f32>(q.x, 3.7, q.y)) * 0.65 + value_noise(vec3<f32>(q.x * 3.1, 8.3, q.y * 3.1)) * 0.35;
+    return smoothstep(0.8 - P.wet.y * 0.5, 0.84 - P.wet.y * 0.5, h);
+}
+
+// ---- lights -----------------------------------------------------------------
+
 // The light of one of the glowing blocks near p (those of its chunk and
 // the 8 around), drawn at random among them: a point in the block, a
 // shadow ray, and the falloff with distance.
-fn block_light(p: vec3<f32>, n: vec3<f32>, albedo: vec3<f32>, seed: ptr<function, u32>) -> vec3<f32> {
+fn block_light(p: vec3<f32>, n: vec3<f32>, v: vec3<f32>, s: Surface, seed: ptr<function, u32>) -> vec3<f32> {
     if (P.media.z <= 0.0) {
         return vec3<f32>(0.0);
     }
@@ -813,23 +946,22 @@ fn block_light(p: vec3<f32>, n: vec3<f32>, albedo: vec3<f32>, seed: ptr<function
     let at = u32(P.grid.x * P.grid.y) * 2u + k * 4u;
     let jitter = vec3<f32>(rand(seed), rand(seed), rand(seed)) * 0.5 + 0.25;
     let q = vec3<f32>(f32(lights[at]), f32(lights[at + 1u]), f32(lights[at + 2u])) + jitter;
-    let glow = materials[lights[at + 3u] * 2u + 1u].x;
+    let glow = materials[lights[at + 3u] * 3u + 1u].x;
     let to = q - p;
     let d2 = max(dot(to, to), 0.25);
     let d = sqrt(d2);
     let l = to / d;
-    let ndl = dot(n, l);
-    if (ndl <= 0.0) {
+    if (dot(n, l) <= 0.0) {
         return vec3<f32>(0.0);
     }
     // Up to the light's own block, which it lights from inside.
-    let shadow = trace(p, l, max(d - 0.75, 0.0));
+    let shadow = trace(p, l, max(d - 0.75, 0.0), SHADOW);
     if (shadow.found) {
         return vec3<f32>(0.0);
     }
     let level = f32(glow >> 24u) / 15.0;
     let intensity = level * level * 24.0 * P.media.z;
-    return albedo / PI * unpack_rgb(glow) * intensity * ndl / d2 * f32(count);
+    return brdf(s, n, v, l, unpack_rgb(glow) * intensity / d2) * f32(count);
 }
 
 fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec3<f32> {
@@ -838,17 +970,25 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
     var throughput = vec3<f32>(1.0);
     var sum = vec3<f32>(0.0);
     var last_chunk = vec2<i32>(-1000000);
-    for (var bounce = 0u; bounce <= P.info.z; bounce++) {
-        let hit = trace(ro, rd, 1e30);
+    // Diffuse bounces made; whether the last turn was a mirror's (the eyes'
+    // ray counts as one: the sun's disc shows in it); in water or not.
+    var bounce = 0u;
+    var mirror = true;
+    var in_water = false;
+    var first = true;
+    let realistic = P.water.w > 0.0;
+    for (var step = 0u; step < 16u; step++) {
+        let hit = trace(ro, rd, 1e30, SEE);
         // Out of the scene, down to the sea around the map.
         var sea_t = -1.0;
-        if (!hit.found && P.lens.y > 0.5 && rd.y < -1e-4) {
+        if (!hit.found && !in_water && P.lens.y > 0.5 && rd.y < -1e-4) {
             let ts = (P.media.y - ro.y) / rd.y;
             if (ts > 0.0) {
                 sea_t = ts;
             }
         }
-        if (bounce == 0u) {
+        if (first) {
+            first = false;
             var t_end = hit.t;
             if (sea_t > 0.0) {
                 t_end = sea_t;
@@ -866,19 +1006,37 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
             sum += m.light;
             throughput *= m.transmittance;
         }
+        if (in_water) {
+            // Through the water to what the ray meets.
+            var d = hit.t;
+            if (!hit.found) {
+                d = 64.0;
+            }
+            sum += throughput * water_glow(d);
+            throughput *= water_through(d);
+        }
         if (sea_t > 0.0) {
-            // The sea: the sky mirrored as much as Fresnel says, its deep
-            // blue for the rest.
-            let c = clamp(-rd.y, 0.0, 1.0);
-            let fresnel = 0.02 + 0.98 * pow(1.0 - c, 5.0);
-            let mirrored = sky(reflect(rd, vec3<f32>(0.0, 1.0, 0.0)));
+            // The sea: the sky mirrored as much as Fresnel says, under the
+            // waves, its deep blue for the rest.
+            let x = ro + rd * sea_t;
+            var n = vec3<f32>(0.0, 1.0, 0.0);
+            if (realistic) {
+                n = wave_normal(x.xz);
+            }
+            let c = clamp(-dot(rd, n), 0.0, 1.0);
+            let f = fresnel(c, 1.0 / 1.33);
+            let r = reflect(rd, n);
+            var mirrored = sky(r);
+            if (dot(r, P.sun.xyz) > P.sun.w) {
+                mirrored += SUN_LIGHT * 40.0;
+            }
             let deep = vec3<f32>(0.012, 0.045, 0.075) * (sky(vec3<f32>(0.0, 1.0, 0.0)) + SUN_LIGHT * max(P.sun.y, 0.0) * 0.1);
-            sum += throughput * mix(deep, mirrored, fresnel);
+            sum += throughput * mix(deep, mirrored, f);
             break;
         }
         if (!hit.found) {
             var s = sky(rd);
-            if (bounce == 0u && dot(rd, P.sun.xyz) > P.sun.w) {
+            if (mirror && dot(rd, P.sun.xyz) > P.sun.w) {
                 // The sun's disc, bright enough to bloom, not to stay a
                 // firefly once added up.
                 s += SUN_LIGHT * 40.0;
@@ -886,8 +1044,9 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
             sum += throughput * s;
             break;
         }
-        let m = materials[hit.mat * 2u];
-        let glow = materials[hit.mat * 2u + 1u].x;
+        let m = materials[hit.mat * 3u];
+        let glow = materials[hit.mat * 3u + 1u].x;
+        let look = materials[hit.mat * 3u + 2u];
         let p = ro + rd * hit.t;
         var n = vec3<f32>(0.0);
         var uvl: vec3<f32>;
@@ -900,7 +1059,7 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
         } else {
             // A model's face: its own normal, toward the eyes (faces are
             // seen from both sides).
-            let q = quad_at(materials[hit.mat * 2u + 1u].y + hit.quad);
+            let q = quad_at(materials[hit.mat * 3u + 1u].y + hit.quad);
             n = normalize(cross(q.u, q.v));
             if (dot(n, rd) > 0.0) {
                 n = -n;
@@ -909,10 +1068,46 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
             uvl = vec3<f32>(quad_uv(q, clamp(ab, vec2<f32>(0.0), vec2<f32>(1.0))), f32(q.layer));
             tint = select(vec3<f32>(1.0), unpack_rgb(m.z), q.tinted);
         }
+        if (realistic && class_of(m) == CLASS_WATER) {
+            // Water's surface: a mirror or a window, as Fresnel says; its
+            // waves on top.
+            if (hit.axis == 1) {
+                let w = wave_normal(p.xz);
+                n = select(-w, w, n.y > 0.0);
+            }
+            let c = clamp(-dot(rd, n), 0.0, 1.0);
+            let eta = select(1.0 / 1.33, 1.33, in_water);
+            let f = fresnel(c, eta);
+            let t = refract(rd, n, eta);
+            if (rand(seed) < f || dot(t, t) == 0.0) {
+                rd = reflect(rd, n);
+                ro = p + n * EPS;
+            } else {
+                rd = normalize(t);
+                ro = p - n * EPS;
+                in_water = !in_water;
+            }
+            mirror = true;
+            continue;
+        }
         // Coarser textures the smaller a block is on screen.
         let lod = clamp(log2(max(hit.t * P.up.w * 16.0, 1e-6)), 0.0, 4.0);
         let tex = textureSampleLevel(atlas, atlas_sampler, uvl.xy, i32(uvl.z), lod);
-        let albedo = tex.rgb * tint;
+        var surf: Surface;
+        surf.albedo = tex.rgb * tint;
+        let metal = bitcast<f32>(look.y);
+        var rough = bitcast<f32>(look.x);
+        // Wet ground: darker and shinier; puddles a mirror of water.
+        let wet = P.wet.x;
+        let pud = puddle(p, n);
+        if (wet > 0.0 || pud > 0.0) {
+            surf.albedo *= mix(1.0, 0.55, max(wet, pud));
+            rough = mix(rough, 0.3, wet);
+            rough = mix(rough, 0.03, pud);
+        }
+        surf.alpha = max(rough * rough, 0.002);
+        surf.f0 = mix(vec3<f32>(mix(0.04, 0.02, pud)), surf.albedo, metal);
+        surf.diffuse = surf.albedo * (1.0 - metal);
         if (((m.y >> 21u) & 1u) != 0u) {
             // A glowing block seen: by the eyes, or by a bounce from too far
             // for its light to be among those drawn there (block_light).
@@ -921,33 +1116,56 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
                 // Its bright pixels glow (a torch's flame, not its stick).
                 let level = f32(glow >> 24u) / 15.0;
                 let bright = smoothstep(0.35, 0.7, max(tex.r, max(tex.g, tex.b)));
-                sum += throughput * albedo * (8.0 * level * bright * P.media.z);
+                sum += throughput * surf.albedo * (8.0 * level * bright * P.media.z);
             }
         }
+        let v = -rd;
         let pos = p + n * EPS;
         // The glowing blocks around, one drawn among them.
-        sum += throughput * block_light(pos, n, albedo, seed);
+        sum += throughput * block_light(pos, n, v, surf, seed);
         last_chunk = vec2<i32>(floor(pos.xz / 16.0));
-        // The sun, straight.
+        // The sun, straight (through water, if under it).
         let l = sun_sample(seed);
-        let ndl = dot(n, l);
-        if (ndl > 0.0 && P.sun.y > -0.05) {
-            let shadow = trace(pos, l, 1e30);
+        if (dot(n, l) > 0.0 && P.sun.y > -0.05) {
+            let shadow = trace(pos, l, 1e30, SHADOW);
             if (!shadow.found) {
                 // The clouds' shadows on what the eyes see (not on the bounces).
-                var clouds = 1.0;
+                var light = SUN_LIGHT * sun_through_media(pos.y);
                 if (bounce == 0u) {
-                    clouds = cloud_shadow(pos, seed);
+                    light *= cloud_shadow(pos, seed);
                 }
-                sum += throughput * albedo / PI * SUN_LIGHT * sun_through_media(pos.y) * clouds * ndl;
+                if (in_water && shadow.water >= 0.0) {
+                    light *= water_through(shadow.water) * (1.0 - fresnel(max(P.sun.y, 0.05), 1.0 / 1.33));
+                }
+                sum += throughput * brdf(surf, n, v, l, light);
             }
         }
         if (bounce == P.info.z) {
             break;
         }
-        // The light of the sky and of the land around: one bounce more.
-        throughput *= albedo;
-        if (bounce >= 1u) {
+        // One bounce more: off the shine, or the diffuse light of the sky
+        // and the land around.
+        let f = schlick(surf.f0, max(dot(n, v), 0.0));
+        let p_spec = clamp((f.x + f.y + f.z) / 3.0 * (1.0 + (1.0 - rough) * 2.0), 0.02, 0.95);
+        if (rand(seed) < p_spec) {
+            let frame = basis(n);
+            let vl = transpose(frame) * v;
+            let hm = frame * sample_vndf(vl, surf.alpha, rand(seed), rand(seed));
+            let l2 = reflect(-v, hm);
+            let nl = dot(n, l2);
+            if (nl <= 0.0) {
+                break;
+            }
+            throughput *= schlick(surf.f0, dot(v, hm)) * smith_g1(nl, surf.alpha * surf.alpha) / p_spec;
+            rd = l2;
+            mirror = surf.alpha < 0.01;
+        } else {
+            throughput *= surf.diffuse * (vec3<f32>(1.0) - f) / (1.0 - p_spec);
+            rd = cosine_sample(n, seed);
+            mirror = false;
+        }
+        bounce += 1u;
+        if (bounce >= 2u) {
             let q = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.05, 1.0);
             if (rand(seed) > q) {
                 break;
@@ -955,7 +1173,6 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
             throughput /= q;
         }
         ro = pos;
-        rd = cosine_sample(n, seed);
     }
     return sum;
 }
