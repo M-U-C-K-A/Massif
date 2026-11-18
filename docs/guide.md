@@ -1999,9 +1999,11 @@ to the shared one.)
   player's view the blocks of those columns marked at any height, cliffs
   included. The tools that shape in 3D show the brush laid along the slope.
 - Shift + drag moves the view, Alt + drag (or the middle button) turns it.
-  The wheel brings the view closer around what it turns about; Shift +
-  wheel moves forward over the land; Alt + wheel flies toward the point
-  under the cursor; ⌘ (Ctrl) + wheel sizes the brush. In 3D a brush
+  The wheel flies toward the land under the cursor, down to a few blocks
+  over it on a map of any size, and the view turns about that point
+  from then on; Alt + wheel brings the view closer around what it turns
+  about; Shift + wheel moves forward over the land; ⌘ (Ctrl) + wheel
+  sizes the brush. In 3D a brush
   sculpts 64 blocks around at most: the work of a dab grows with the cube
   of its size — a dab of Raise / Lower takes about 18 ms at 64, 50 ms at
   96 and 145 ms at 128, smoothing sculpted matter 32, 200 and 310 ms —, so

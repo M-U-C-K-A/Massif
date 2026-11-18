@@ -221,7 +221,7 @@ Levels lay rock over the ground or dig into it, each in its own layer that can b
 # 3D
 ## The 3D view
 - Left drag turns the view, right drag moves it.
-- Scroll comes closer and goes back; `Shift` + scroll moves the view, `Alt` + scroll flies toward the point under the cursor.
+- Scroll flies toward the land under the cursor (down to a few blocks over it, whatever the size of the map) and goes back; `Alt` + scroll comes closer around the point the view turns about, `Shift` + scroll moves the view.
 - `W` `A` `S` `D` or the arrows fly over the map, `Q` and `E` go down and up (`Shift`: faster).
 - Double-click looks at the point under the cursor.
 - A turn or a move let go while moving goes on a little and dies away; flying with the keys starts and stops softly; a double-click glides to the point.

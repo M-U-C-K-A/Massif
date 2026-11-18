@@ -52,6 +52,10 @@ const ROUGH_FROM: usize = 256;
 /// while a view moves, less.
 const UPLOAD_BUDGET: Duration = Duration::from_millis(6);
 const UPLOAD_BUDGET_MOVING: Duration = Duration::from_millis(2);
+/// The closest the orbiting camera comes to the point it turns about, in
+/// blocks: wheeled toward the land, a few blocks over it, whatever the
+/// size of the map.
+const MIN_DISTANCE: f32 = 3.0;
 /// Vertical field of view of the camera.
 const FOV_Y: f32 = 50.0 * std::f32::consts::PI / 180.0;
 /// Walking, Minecraft's (wider: the land is all around).
@@ -3736,6 +3740,24 @@ fn map_rect(doc: &Document) -> Option<(f64, f64, f64, f64)> {
     Some((lo.x as f64 * t, lo.z as f64 * t, (hi.x + 1) as f64 * t, (hi.z + 1) as f64 * t))
 }
 
+/// Where the wheel takes the view: the land the ray `o + t d` meets, or the
+/// surface of the water over it (the rays go through water to its bed, and
+/// the view would have gone under the sea).
+fn zoom_point(dim: &Dimension, o: [f64; 3], d: [f64; 3], max: f64) -> Option<[f64; 3]> {
+    let hit = massif_core::voxel::raycast(dim, o, d, max)?;
+    let (x, _, z) = hit.block;
+    if let Some(level) = massif_core::ops::water_at(dim, x, z)
+        && d[1] < 0.0
+        && (level as f64) > hit.point[1]
+    {
+        let t = (level as f64 - o[1]) / d[1];
+        if t > 0.0 && t < hit.distance {
+            return Some([o[0] + d[0] * t, level as f64, o[2] + d[2] * t]);
+        }
+    }
+    Some(hit.point)
+}
+
 /// A camera showing the whole map.
 fn framing(doc: &Document) -> Camera {
     let Some((x0, z0, x1, z1)) = map_rect(doc) else { return Camera::default() };
@@ -4486,6 +4508,13 @@ impl View3d {
     #[cfg(test)]
     pub fn last_region(&self) -> [u32; 2] {
         self.last_region
+    }
+
+    /// Blocks per column of the view's grid: 1, or more on a map too large
+    /// for every block.
+    #[cfg(test)]
+    pub fn stride(&self) -> i32 {
+        self.grid.as_ref().map_or(1, |g| g.stride)
     }
 
     /// Tiles still to build.
@@ -5554,9 +5583,9 @@ impl View3d {
                 ui.ctx().request_repaint();
             }
         }
-        // The wheel: closer or farther around what the view turns about;
-        // with Shift, forward or back over the land; with Alt, toward the
-        // point under the cursor or away from it; with ⌘ (Ctrl), the size
+        // The wheel: toward the land under the cursor or away from it;
+        // with Alt, closer or farther around what the view turns about;
+        // with Shift, forward or back over the land; with ⌘ (Ctrl), the size
         // of the sculpting brush.
         if response.hovered() {
             let (zoom, scroll) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta.y + i.smooth_scroll_delta.x));
@@ -5569,20 +5598,6 @@ impl View3d {
                 *r = (r.min(most) * zoom).clamp(1.0, most);
             } else if walking {
                 // Walking, the wheel only sizes the brush.
-            } else if alt && scroll != 0.0 {
-                let factor = (-scroll * 0.003).exp();
-                if let Some(p) = response.hover_pos() {
-                    let (o, d) = self.ray(rect, p);
-                    let to = massif_core::voxel::raycast(doc.dimension(), o, d, (self.camera.distance as f64 + extent as f64) * 1.5)
-                        .map(|hit| hit.point)
-                        .unwrap_or([o[0] + d[0] * self.camera.distance as f64, o[1] + d[1] * self.camera.distance as f64, o[2] + d[2] * self.camera.distance as f64]);
-                    // The point stays under the cursor as the view nears it.
-                    let k = 1.0 - factor as f64;
-                    for (t, p) in self.camera.target.iter_mut().zip(to) {
-                        *t += (p - *t) * k;
-                    }
-                }
-                self.camera.distance = (self.camera.distance * factor).clamp(2.0, far);
             } else if shift && scroll != 0.0 {
                 let step = self.camera.distance as f64 * 0.002 * scroll as f64;
                 let (s, c) = (self.camera.yaw.sin() as f64, self.camera.yaw.cos() as f64);
@@ -5590,8 +5605,26 @@ impl View3d {
                 self.camera.target[2] -= c * step;
             } else {
                 let factor = if zoom != 1.0 { 1.0 / zoom } else { (-scroll * 0.003).exp() };
+                // Toward the land under the cursor, which stays under it,
+                // the view turning about it from then on: on a large map the
+                // point the view first turns about is high over the land,
+                // and closing in on it alone stopped the eyes far over the
+                // ground. With Alt, around that point as it is. Each turn of
+                // the wheel goes a share of the way: slower near the land.
+                if factor != 1.0
+                    && !alt
+                    && let Some(p) = response.hover_pos()
+                {
+                    let (o, d) = self.ray(rect, p);
+                    if let Some(point) = zoom_point(doc.dimension(), o, d, (self.camera.distance as f64 + extent as f64) * 1.5) {
+                        let k = 1.0 - factor as f64;
+                        for (t, p) in self.camera.target.iter_mut().zip(point) {
+                            *t += (p - *t) * k;
+                        }
+                    }
+                }
                 if factor != 1.0 {
-                    self.camera.distance = (self.camera.distance * factor).clamp(2.0, far);
+                    self.camera.distance = (self.camera.distance * factor).clamp(MIN_DISTANCE, far);
                 }
             }
         }

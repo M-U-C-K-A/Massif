@@ -10723,14 +10723,20 @@ mod tests {
         let radius = h.state().tools.brush.radius;
         wheel(&mut h, Modifiers::COMMAND);
         assert!(h.state().tools.brush.radius > radius, "{} after {radius}", h.state().tools.brush.radius);
-        // Alt + wheel: toward the point under the cursor.
+        // The wheel: toward the point under the cursor.
         let (target, distance) = (h.state().sculpt3d.camera.target, h.state().sculpt3d.camera.distance);
         let pointed = h.state().sculpt3d.hover().expect("the cursor points at the terrain").point;
-        wheel(&mut h, Modifiers::ALT);
+        wheel(&mut h, Modifiers::NONE);
         let camera = h.state().sculpt3d.camera;
         assert!(camera.distance < distance, "nearer: {} after {distance}", camera.distance);
         let gap = |t: [f64; 3]| ((t[0] - pointed[0]).powi(2) + (t[2] - pointed[2]).powi(2)).sqrt();
         assert!(gap(camera.target) < gap(target), "toward the point: {:?} after {target:?}", camera.target);
+        h.state_mut().sculpt3d.camera = crate::view3d::Camera { target, distance, ..camera };
+        h.run_steps(5);
+        // Alt + wheel: nearer around the point the view turns about.
+        wheel(&mut h, Modifiers::ALT);
+        let camera = h.state().sculpt3d.camera;
+        assert!(camera.distance < distance && camera.target == target, "around it: {camera:?}");
         h.state_mut().sculpt3d.camera = crate::view3d::Camera { target, distance, ..camera };
         h.run_steps(5);
         // The left button adds matter.
@@ -17051,5 +17057,127 @@ mod tests {
         }
         set_language(Language::English);
         assert!(faults.is_empty(), "{}:\n{}", faults.len(), faults.join("\n"));
+    }
+
+    /// Zooming in with the wheel in the 3D View of a huge map
+    /// (MASSIF_CLOSE_WORLD, a .massif; MASSIF_GRAPHICS_PRESET), the pointer
+    /// on the land in the middle of the view, as a tester did: how close the
+    /// eyes come to the ground, the frame's work up close and while zooming,
+    /// and (with MASSIF_SNAPSHOT_DIR) the view up close.
+    #[test]
+    fn zooming_in_on_a_huge_map() {
+        let Some(path) = std::env::var_os("MASSIF_CLOSE_WORLD").map(PathBuf::from) else {
+            return;
+        };
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let ppp: f32 = std::env::var("MASSIF_SNAPSHOT_PPP").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1440.0, 900.0))
+            .with_pixels_per_point(ppp)
+            .with_step_dt(1.0 / 60.0)
+            .with_accessibility_check(false)
+            .wgpu()
+            .build_eframe(move |cc| {
+                theme::install(&cc.egui_ctx);
+                let mut app = MassifApp::for_tests(generate(&GenParams { tiles_x: 2, tiles_z: 2, ..GenParams::default() }));
+                // The game's blocks, for its textures up close.
+                if let Some(jar) = massif_assets::find_jars().first() {
+                    app.blocks.catalogue = massif_assets::load(&jar.path, &jar.version).ok().map(std::sync::Arc::new);
+                }
+                app
+            });
+        h.run_steps(3);
+        if let Ok(name) = std::env::var("MASSIF_GRAPHICS_PRESET") {
+            use crate::graphics::{Graphics, Preset};
+            let preset = [Preset::Low, Preset::Medium, Preset::High].into_iter().find(|p| format!("{p:?}").eq_ignore_ascii_case(&name)).expect("low, medium or high");
+            crate::graphics::set(Graphics::of(preset));
+        }
+        let ctx = h.ctx.clone();
+        h.state_mut().jobs.push(Job::open(&ctx, path.clone()));
+        while !h.state().jobs.is_empty() {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.state_mut().dialog = None;
+        let with_3d = h.state().layout.workspaces.iter().position(|w| w.root.shows(EditorKind::Map) && w.root.shows(EditorKind::View3d)).unwrap();
+        h.state_mut().layout.active = with_3d;
+        let started = std::time::Instant::now();
+        while (h.state().view3d.building() || h.state().view3d.pending() > 0) && started.elapsed().as_secs() < 120 {
+            h.step();
+        }
+        // The 3D View over the whole window, framed over land near the
+        // middle of the map (the highest of a few hundred places), the
+        // pointer in its middle.
+        let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        let id = areas.iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::View3d)).map(|(id, _)| *id).unwrap();
+        h.state_mut().layout.toggle_maximize(id);
+        // As the map opened: the view framing it whole, from high over it.
+        h.run_steps(30);
+        let areas: Vec<(AreaId, Rect)> = h.ctx.data(|d| d.get_temp(Id::unique("massif areas"))).unwrap();
+        let view = areas.iter().find(|(id, _)| h.state().layout.current().root.editor_of(*id) == Some(EditorKind::View3d)).map(|(_, r)| *r).unwrap();
+        let at = view.center();
+        h.event(egui::Event::PointerMoved(at));
+        h.run_steps(3);
+        let ground_gap = |h: &egui_kittest::Harness<'_, MassifApp>| {
+            let cam = h.state().view3d.camera;
+            let eye = cam.eye();
+            let dim = h.state().doc.dimension();
+            let (ex, ez) = (eye[0].floor() as i32, eye[2].floor() as i32);
+            // Over the land, or over the water's surface.
+            let ground = massif_core::ops::height_at(dim, 0, ex, ez, massif_core::ops::Surface::Top).unwrap_or(0.0) as f64;
+            let under = massif_core::ops::water_at(dim, ex, ez).map_or(ground, |w| ground.max(w as f64));
+            let d = [cam.target[0] - eye[0], cam.target[1] - eye[1], cam.target[2] - eye[2]];
+            let n = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            let ahead = massif_core::voxel::raycast(h.state().doc.dimension(), eye, [d[0] / n, d[1] / n, d[2] / n], 100_000.0).map_or(f64::NAN, |hit| hit.distance);
+            (eye[1] - under, ahead, cam.distance)
+        };
+        if let (Some(dir), Some((w, hh, rgba))) = (&dir, h.state().view3d.read_back()) {
+            let name = path.file_stem().unwrap().to_string_lossy();
+            image::save_buffer(dir.join(format!("framed-{name}-{ppp}x.png")), &rgba, w, hh, image::ColorType::Rgba8).unwrap();
+        }
+        let (above, ahead, dist) = ground_gap(&h);
+        eprintln!("framed: eyes {above:.0} blocks over the surface, {ahead:.0} to the land ahead, orbit distance {dist:.0}");
+        // A second and a half of the wheel turned toward the land.
+        let mut moving = Vec::new();
+        for _ in 0..90 {
+            h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, 40.0), phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel, modifiers: Modifiers::NONE });
+            let t = std::time::Instant::now();
+            h.step();
+            moving.push(t.elapsed().as_secs_f32() * 1000.0);
+        }
+        let (above, ahead, dist) = ground_gap(&h);
+        eprintln!("zoomed in: eyes {above:.1} blocks over the surface (land or water), {ahead:.1} to the land ahead, orbit distance {dist:.1}");
+        // Up close, still: the near land built.
+        let still_from = std::time::Instant::now();
+        let mut still = Vec::new();
+        let mut settled = None;
+        while still_from.elapsed().as_secs() < 30 {
+            let t = std::time::Instant::now();
+            h.step();
+            still.push(t.elapsed().as_secs_f32() * 1000.0);
+            if settled.is_none() && !h.state().view3d.building() && h.state().view3d.pending() == 0 {
+                settled = Some(still_from.elapsed().as_secs_f32());
+            }
+            if settled.is_some() && still.len() > 60 {
+                break;
+            }
+        }
+        let p = |v: &mut Vec<f32>, q: usize| {
+            v.sort_by(f32::total_cmp);
+            v[(v.len() - 1) * q / 100]
+        };
+        eprintln!(
+            "frame's work zooming: middle {:.1} ms, p95 {:.1}; up close: middle {:.1}, p95 {:.1}; near land built after {}",
+            p(&mut moving, 50),
+            p(&mut moving, 95),
+            p(&mut still, 50),
+            p(&mut still, 95),
+            settled.map_or("more than 30 s".to_owned(), |s| format!("{s:.2} s"))
+        );
+        eprintln!("a column every {} blocks", h.state().view3d.stride());
+        if let (Some(dir), Some((w, hh, rgba))) = (&dir, h.state().view3d.read_back()) {
+            let name = path.file_stem().unwrap().to_string_lossy();
+            image::save_buffer(dir.join(format!("close-{name}-{ppp}x.png")), &rgba, w, hh, image::ColorType::Rgba8).unwrap();
+        }
     }
 }
