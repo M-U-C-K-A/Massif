@@ -318,6 +318,9 @@ The **Terrain** side builds land from nodes, as in Gaea: generators (mountains, 
 ## The viewport
 The viewport shows the graph's output in 3D, with its sun, clouds, haze and sea (**Render**). When nothing feeds the Height output, it says so: **Start from this map** adds a Map node, to work from the map that is open.
 
+## The new terrain generator (beta)
+**Settings ▸ General ▸ New terrain generator (beta)** opens the new generator on the Terrain side; the graph above stays as it is. Its graph ends in one **Map Output** with an input for each thing the map takes (Height, Water, Albedo, Terrain, Biome, climate, layers of rock, masks), each optional. **Live** shows the graph on the World side's map as it is edited, without writing it; **Apply** writes it, undoably. A world's older graph opens migrated.
+
 ## Converting
 **Convert to voxels** writes the graph to the map: into its ground, or over it (**over the map**: what the graph digs and raises goes into levels of their own, and the map stays as it was). Templates give a whole graph at once.
 
