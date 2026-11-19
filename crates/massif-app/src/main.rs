@@ -70,6 +70,10 @@ mod textures;
 mod tiles;
 mod smooth_page;
 mod startup;
+// The Live preview of the new terrain generator on the World side's map;
+// wired to the Terrain side when the new panel lands.
+#[allow(dead_code)]
+mod terrain_live;
 mod terrain_view;
 mod theme;
 mod tools;

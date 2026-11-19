@@ -299,6 +299,12 @@ pub struct MapView {
     select: crate::select::SelectView,
     /// The mark of the 3D view is held: the 3D view follows the pointer.
     view3d_grab: bool,
+    /// The terrain generator's Live preview, drawn over the map without
+    /// writing it: each picture, its blocks (west, north, east, south) and
+    /// the part of it to show, coarsest first (see `terrain_live`).
+    pub live: Vec<(egui::TextureId, [i32; 4], Rect)>,
+    /// What the preview says it is, on a badge in the corner.
+    pub live_note: Option<String>,
 }
 
 /// What the view glides to.
@@ -353,6 +359,8 @@ impl Default for MapView {
             ping: None,
             select: Default::default(),
             view3d_grab: false,
+            live: Vec::new(),
+            live_note: None,
         }
     }
 }
@@ -966,6 +974,18 @@ impl MapView {
     #[cfg(test)]
     pub fn river_bar_rects(&self) -> Option<[Rect; 3]> {
         self.river_bar
+    }
+
+    /// The blocks the view showed last frame (west, north, east, south),
+    /// and its zoom in screen points a block; `None` before it is drawn.
+    /// (The Live preview asks for the tiles of that view.)
+    #[allow(dead_code)]
+    pub fn visible(&self) -> Option<([f64; 4], f32)> {
+        self.canvas.is_positive().then(|| {
+            let (x0, z0) = self.to_world(self.canvas, self.canvas.min);
+            let (x1, z1) = self.to_world(self.canvas, self.canvas.max);
+            ([x0, z0, x1, z1], self.zoom)
+        })
     }
 
     fn to_screen(&self, canvas: Rect, x: f64, z: f64) -> Pos2 {
@@ -1823,6 +1843,13 @@ impl MapView {
                 let rect = Rect::from_min_max(self.to_screen(canvas, r[0] as f64, r[1] as f64), self.to_screen(canvas, r[2] as f64, r[3] as f64));
                 painter.image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             }
+            // The terrain generator's Live preview, over the map as it is.
+            for (tex, r, uv) in &self.live {
+                let rect = Rect::from_min_max(self.to_screen(canvas, r[0] as f64, r[1] as f64), self.to_screen(canvas, r[2] as f64, r[3] as f64));
+                if rect.intersects(canvas) {
+                    painter.image(*tex, rect, *uv, Color32::WHITE);
+                }
+            }
 
             // Map outline.
             let t = TILE_SIZE as f64;
@@ -2195,6 +2222,15 @@ impl MapView {
         self.draw_scale(&painter, canvas, pal);
         if self.mode == MapMode::TrueColour {
             Self::true_colour_note(&painter, canvas, pal, doc);
+        }
+        if let Some(note) = &self.live_note {
+            let font = egui::FontId::proportional(11.5);
+            let galley = painter.layout_no_wrap(note.clone(), font, pal.text);
+            let at = canvas.left_top() + egui::vec2(theme::PAD, theme::PAD);
+            let pill = Rect::from_min_size(at, galley.size() + egui::vec2(16.0, 8.0));
+            painter.rect_filled(pill, theme::PILL, theme::scale(pal.panel, 0.96));
+            painter.rect_stroke(pill, theme::PILL, Line::new(1.0, pal.accent), StrokeKind::Inside);
+            painter.galley(at + egui::vec2(8.0, 4.0), galley, pal.text);
         }
         self.footer(ui, footer, doc, pal, *hover);
     }

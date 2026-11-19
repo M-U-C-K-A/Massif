@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 massif-core.workspace = true
 massif-format.workspace = true
+massif-terrain = { path = "../massif-terrain" }
 massif-anvil.workspace = true
 massif-legacy.workspace = true
 massif-script.workspace = true

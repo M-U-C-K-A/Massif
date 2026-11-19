@@ -547,15 +547,122 @@ struct Clip {
 }
 
 /// A finished build: what to write to the map.
-struct Built {
-    extent: Extent,
-    outputs: Outputs,
+pub(crate) struct Built {
+    pub(crate) extent: Extent,
+    pub(crate) outputs: Outputs,
     /// The tiles it covers.
-    tiles: Vec<massif_core::TilePos>,
+    pub(crate) tiles: Vec<massif_core::TilePos>,
     /// Whether the graph started from the map.
-    reads_map: bool,
+    pub(crate) reads_map: bool,
     /// The levels it writes ([`Graph::own_levels`]).
-    own: Vec<String>,
+    pub(crate) own: Vec<String>,
+}
+
+/// Writes a finished build to the map in one undoable step: its ground
+/// (`over`: over the map, left as it is, on levels of their own; else into
+/// the ground itself), its layers of rock, the terrains of the map's own
+/// surfaces where the graph started from the map, and the biomes of its
+/// climate. Gives what it wrote, to say. Shared by the graph editors.
+pub(crate) fn write_build(doc: &mut Document, blocks: &BlockLibrary, built: &Built, over: bool, took: f32) -> String {
+    let palette = match &built.outputs.colors {
+        Some((colors, set)) => block_palette(doc, blocks, *set, colors),
+        None => Vec::new(),
+    };
+    let layer_palettes: Vec<_> = built
+        .outputs
+        .layers
+        .iter()
+        .map(|l| match &l.colors {
+            Some((colors, set)) => block_palette(doc, blocks, *set, colors),
+            None => Vec::new(),
+        })
+        .collect();
+    doc.history.begin(tr!("Terrain graph"), doc.dim);
+    let overlay = overlay_levels(doc, over);
+    let levels = layer_levels(doc, &built.outputs.layers, built.reads_map);
+    let overlay = overlay.map(|_| overlay_levels(doc, true).expect("made above"));
+    let seed = doc.world.meta.seed as u64;
+    let sea = doc.world.meta.sea_level;
+    let own = &built.own;
+    let tiles = &built.tiles;
+    let grass = doc.world.registry.terrain_by_name("Grass").unwrap_or(TerrainId::ROCK);
+    let climate = ClimateTable::new(&doc.world.registry);
+    let paint = Painting {
+        palette: &palette,
+        climate: Some(&climate),
+    };
+    // The tiles the terrain adds to the map take it as it is.
+    let missing: Vec<massif_core::TilePos> = tiles.iter().copied().filter(|p| !doc.dimension().ground().contains(*p)).collect();
+    let write = |tiles, map| massif_core::graph::GroundWrite {
+        tiles,
+        create: true,
+        map,
+        sea,
+        blank: grass,
+    };
+    match overlay {
+        Some((dug, raised)) => {
+            if !missing.is_empty() {
+                let edit = &mut doc.history.edit(&mut doc.world, 0);
+                massif_core::graph::apply(edit, &built.extent, &built.outputs, seed, &paint, &write(&missing, None));
+            }
+            for (index, side) in [(dug, Overlay::Dug), (raised, Overlay::Raised)] {
+                let edit = &mut doc.history.edit(&mut doc.world, index);
+                massif_core::graph::apply_overlay(edit, side, &built.extent, &built.outputs, seed, &paint, own, tiles);
+            }
+        }
+        None => {
+            let map = built.reads_map.then_some(&own[..]);
+            let edit = &mut doc.history.edit(&mut doc.world, 0);
+            massif_core::graph::apply(edit, &built.extent, &built.outputs, seed, &paint, &write(tiles, map));
+            // New ground: what was sculpted in 3D on the
+            // old one would stand over it as it was.
+            if built.outputs.heights.is_some() {
+                edit.clear_voxels(tiles);
+            }
+        }
+    }
+    for ((layer, index), layer_palette) in built.outputs.layers.iter().zip(&levels).zip(&layer_palettes) {
+        let edit = &mut doc.history.edit(&mut doc.world, *index);
+        massif_core::graph::apply_layer(edit, &built.extent, layer, seed, layer_palette, grass, tiles);
+    }
+    // The terrains of the map's own surfaces — its ground,
+    // the tops of its rock, the floors of its pits — where
+    // the graph left them where they were.
+    if overlay.is_some() || built.reads_map {
+        let painted: Vec<usize> = doc
+            .dimension()
+            .levels
+            .iter()
+            .enumerate()
+            .filter(|(k, l)| *k == 0 || massif_core::graph::reads_level(l, own))
+            .map(|(k, _)| k)
+            .collect();
+        for index in painted {
+            let edit = &mut doc.history.edit(&mut doc.world, index);
+            massif_core::graph::paint_surface(edit, &built.extent, &built.outputs, seed, &paint, tiles);
+        }
+    }
+    // The biomes of its climate.
+    if built.outputs.biomes.is_some() {
+        let edit = &mut doc.history.edit(&mut doc.world, 0);
+        massif_core::graph::apply_biomes(edit, &built.extent, &built.outputs, &climate, tiles);
+    }
+    doc.commit();
+    doc.clamp_active_level();
+    let blocks_note = if palette.is_empty() { String::new() } else { tr!(", {n} kinds of blocks", n = palette.len()) };
+    let mut layers_note = match built.outputs.layers.len() {
+        0 => String::new(),
+        1 => tr!(", 1 rock level").to_owned(),
+        k => tr!(", {k} rock levels", k),
+    };
+    if built.outputs.water.is_some() {
+        layers_note.push_str(tr!(", water"));
+    }
+    if overlay.is_some() {
+        layers_note.push_str(tr!(" · map ground kept"));
+    }
+    tr!("Converted at {n} × {n2} in {took:.1} s{blocks_note}{layers_note}", n = built.extent.n, n2 = built.extent.n, took, blocks_note, layers_note)
 }
 
 /// The levels an overlay conversion writes to (what the graph digs, what it
@@ -1538,110 +1645,12 @@ impl GraphEditor {
                     });
                 }
                 Ok(built) => {
-                    let palette = match &built.outputs.colors {
-                        Some((colors, set)) => block_palette(doc, blocks, *set, colors),
-                        None => Vec::new(),
-                    };
-                    let layer_palettes: Vec<_> = built
-                        .outputs
-                        .layers
-                        .iter()
-                        .map(|l| match &l.colors {
-                            Some((colors, set)) => block_palette(doc, blocks, *set, colors),
-                            None => Vec::new(),
-                        })
-                        .collect();
-                    doc.history.begin(tr!("Terrain graph"), doc.dim);
                     // Over the map (left as it is) or into its ground.
                     let over = self.building_over && built.outputs.heights.is_some();
-                    let overlay = overlay_levels(doc, over);
-                    let levels = layer_levels(doc, &built.outputs.layers, built.reads_map);
-                    let overlay = overlay.map(|_| overlay_levels(doc, true).expect("made above"));
-                    let seed = doc.world.meta.seed as u64;
-                    let sea = doc.world.meta.sea_level;
-                    let own = &built.own;
-                    let tiles = &built.tiles;
-                    let grass = doc.world.registry.terrain_by_name("Grass").unwrap_or(TerrainId::ROCK);
-                    let climate = ClimateTable::new(&doc.world.registry);
-                    let paint = Painting {
-                        palette: &palette,
-                        climate: Some(&climate),
-                    };
-                    // The tiles the terrain adds to the map take it as it is.
-                    let missing: Vec<massif_core::TilePos> = tiles.iter().copied().filter(|p| !doc.dimension().ground().contains(*p)).collect();
-                    let write = |tiles, map| massif_core::graph::GroundWrite {
-                        tiles,
-                        create: true,
-                        map,
-                        sea,
-                        blank: grass,
-                    };
-                    match overlay {
-                        Some((dug, raised)) => {
-                            if !missing.is_empty() {
-                                let edit = &mut doc.history.edit(&mut doc.world, 0);
-                                massif_core::graph::apply(edit, &built.extent, &built.outputs, seed, &paint, &write(&missing, None));
-                            }
-                            for (index, side) in [(dug, Overlay::Dug), (raised, Overlay::Raised)] {
-                                let edit = &mut doc.history.edit(&mut doc.world, index);
-                                massif_core::graph::apply_overlay(edit, side, &built.extent, &built.outputs, seed, &paint, own, tiles);
-                            }
-                        }
-                        None => {
-                            let map = built.reads_map.then_some(&own[..]);
-                            let edit = &mut doc.history.edit(&mut doc.world, 0);
-                            massif_core::graph::apply(edit, &built.extent, &built.outputs, seed, &paint, &write(tiles, map));
-                            // New ground: what was sculpted in 3D on the
-                            // old one would stand over it as it was.
-                            if built.outputs.heights.is_some() {
-                                edit.clear_voxels(tiles);
-                            }
-                        }
-                    }
-                    for ((layer, index), layer_palette) in built.outputs.layers.iter().zip(&levels).zip(&layer_palettes) {
-                        let edit = &mut doc.history.edit(&mut doc.world, *index);
-                        massif_core::graph::apply_layer(edit, &built.extent, layer, seed, layer_palette, grass, tiles);
-                    }
-                    // The terrains of the map's own surfaces — its ground,
-                    // the tops of its rock, the floors of its pits — where
-                    // the graph left them where they were.
-                    if overlay.is_some() || built.reads_map {
-                        let painted: Vec<usize> = doc
-                            .dimension()
-                            .levels
-                            .iter()
-                            .enumerate()
-                            .filter(|(k, l)| *k == 0 || massif_core::graph::reads_level(l, own))
-                            .map(|(k, _)| k)
-                            .collect();
-                        for index in painted {
-                            let edit = &mut doc.history.edit(&mut doc.world, index);
-                            massif_core::graph::paint_surface(edit, &built.extent, &built.outputs, seed, &paint, tiles);
-                        }
-                    }
-                    // The biomes of its climate.
-                    if built.outputs.biomes.is_some() {
-                        let edit = &mut doc.history.edit(&mut doc.world, 0);
-                        massif_core::graph::apply_biomes(edit, &built.extent, &built.outputs, &climate, tiles);
-                    }
-                    doc.commit();
-                    doc.clamp_active_level();
+                    let message = write_build(doc, blocks, &built, over, took);
                     // ⌘Z on the Terrain side undoes it in turn.
                     self.undo.push(Step::Converted);
                     self.redo.clear();
-                    let blocks_note = if palette.is_empty() { String::new() } else { tr!(", {n} kinds of blocks", n = palette.len()) };
-                    let mut layers_note = match built.outputs.layers.len() {
-                        0 => String::new(),
-                        1 => tr!(", 1 rock level").to_owned(),
-                        k => tr!(", {k} rock levels", k),
-                    };
-                    if built.outputs.water.is_some() {
-                        layers_note.push_str(tr!(", water"));
-                    }
-                    if overlay.is_some() {
-                        layers_note.push_str(tr!(" · map ground kept"));
-                    }
-                    let message = tr!("Converted at {n} × {n2} in {took:.1} s{blocks_note}{layers_note}", n = built.extent.n, n2 = built.extent.n, took, blocks_note, layers_note);
                     self.done = Some((true, message.clone(), took));
                     feedback = Some(message);
                 }
