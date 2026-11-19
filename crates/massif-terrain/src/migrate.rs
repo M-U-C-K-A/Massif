@@ -471,7 +471,7 @@ impl Mig<'_> {
                     self.layers += 1;
                     let k = self.layers;
                     for (i, part) in ["top", "bottom", "color"].iter().enumerate() {
-                        self.input(n, i as u8, OUT, &format!("layer.{k}.{part}"));
+                        self.input(n, i as u8, OUT, &format!("level.{k}.{part}"));
                     }
                     self.palette.get_or_insert(palette_name(*palette));
                 } else {

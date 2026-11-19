@@ -2377,20 +2377,18 @@ Inputs:
 - `biome` (biome, optional) — The game's biome of each column. Left empty: from Temperature and Humidity when given, else the map's biomes.
 - `temperature` (mask, optional) — The climate's temperature: 0 is −30 °C, 1 is +45 °C. Left empty: none.
 - `humidity` (mask, optional) — How wet the climate is, from 0 to 1. Left empty: none.
-- `vegetation` (mask, optional) — How densely trees and plants grow, from 0 to 1. Left empty: none: the graph places no plants.
-- `caves` (mask, optional) — Where caves form, and how many, from 0 to 1. Left empty: the map's cave settings.
-- `layer.1.top` (height, optional) — The top of a layer of rock over the ground: floating islands, overhangs, arches. Left empty: none.
-- `layer.1.bottom` (height, optional) — The underside of that layer: where it is above the ground, the void lies between. Left empty: none.
-- `layer.1.color` (color, optional) — The colour of that layer's rock: the blocks nearest to it are chosen, from the Albedo palette. Left empty: the colour of the rock.
-- `layer.2.top` (height, optional) — The top of a layer of rock over the ground: floating islands, overhangs, arches. Left empty: none.
-- `layer.2.bottom` (height, optional) — The underside of that layer: where it is above the ground, the void lies between. Left empty: none.
-- `layer.2.color` (color, optional) — The colour of that layer's rock: the blocks nearest to it are chosen, from the Albedo palette. Left empty: the colour of the rock.
-- `layer.3.top` (height, optional) — The top of a layer of rock over the ground: floating islands, overhangs, arches. Left empty: none.
-- `layer.3.bottom` (height, optional) — The underside of that layer: where it is above the ground, the void lies between. Left empty: none.
-- `layer.3.color` (color, optional) — The colour of that layer's rock: the blocks nearest to it are chosen, from the Albedo palette. Left empty: the colour of the rock.
-- `layer.4.top` (height, optional) — The top of a layer of rock over the ground: floating islands, overhangs, arches. Left empty: none.
-- `layer.4.bottom` (height, optional) — The underside of that layer: where it is above the ground, the void lies between. Left empty: none.
-- `layer.4.color` (color, optional) — The colour of that layer's rock: the blocks nearest to it are chosen, from the Albedo palette. Left empty: the colour of the rock.
+- `level.1.top` (height, optional) — The top of a level of rock over the ground (a Solid level of its own): floating islands, overhangs, arches. Left empty: none.
+- `level.1.bottom` (height, optional) — The underside of that level: where it is above the ground, the void lies between. Left empty: none.
+- `level.1.color` (color, optional) — The colour of that level's rock: the blocks nearest to it are chosen, from the Albedo palette. Left empty: the colour of the rock.
+- `level.2.top` (height, optional) — The top of a level of rock over the ground (a Solid level of its own): floating islands, overhangs, arches. Left empty: none.
+- `level.2.bottom` (height, optional) — The underside of that level: where it is above the ground, the void lies between. Left empty: none.
+- `level.2.color` (color, optional) — The colour of that level's rock: the blocks nearest to it are chosen, from the Albedo palette. Left empty: the colour of the rock.
+- `level.3.top` (height, optional) — The top of a level of rock over the ground (a Solid level of its own): floating islands, overhangs, arches. Left empty: none.
+- `level.3.bottom` (height, optional) — The underside of that level: where it is above the ground, the void lies between. Left empty: none.
+- `level.3.color` (color, optional) — The colour of that level's rock: the blocks nearest to it are chosen, from the Albedo palette. Left empty: the colour of the rock.
+- `level.4.top` (height, optional) — The top of a level of rock over the ground (a Solid level of its own): floating islands, overhangs, arches. Left empty: none.
+- `level.4.bottom` (height, optional) — The underside of that level: where it is above the ground, the void lies between. Left empty: none.
+- `level.4.color` (color, optional) — The colour of that level's rock: the blocks nearest to it are chosen, from the Albedo palette. Left empty: the colour of the rock.
 - `mask.flow` (mask, optional) — Where water runs, written to the map as the mask “flow”. Left empty: none.
 - `mask.wear` (mask, optional) — Where the ground was worn away, written as the mask “wear”. Left empty: none.
 - `mask.deposition` (mask, optional) — Where sediment settled, written as the mask “deposition”. Left empty: none.
@@ -2400,7 +2398,7 @@ Inputs:
 | Setting | Kind | Default | Range | What it does |
 |---|---|---|---|---|
 | `active` | boolean | true |  | Whether the map takes this output, when the graph has several. |
-| `albedo_palette` | choice | `natural` | `natural`, `rock`, `desert`, `snowy`, `every` | The blocks Albedo and the layers' colours turn into. `natural`: Soils, stone, sand, snow: the blocks of a natural landscape. `rock`: Stones only. `desert`: Sands, sandstones, terracottas. `snowy`: Snow, ice, pale stone. `every`: Every full block of the game. |
+| `albedo_palette` | choice | `natural` | `natural`, `rock`, `desert`, `snowy`, `every` | The blocks Albedo and the levels' colours turn into. `natural`: Soils, stone, sand, snow: the blocks of a natural landscape. `rock`: Stones only. `desert`: Sands, sandstones, terracottas. `snowy`: Snow, ice, pale stone. `every`: Every full block of the game. |
 | `paint_biomes` | boolean | false |  | Paints the ground to suit the biomes: sand in the deserts, snow in the tundra. |
 
 ```json

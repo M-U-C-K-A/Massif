@@ -10,9 +10,9 @@ const fn input(name: &'static str, label: &'static str, kind: PortKind, help: &'
     PortSpec::new(name, label, kind, help).or(default)
 }
 
-const LAYER_TOP: &str = "The top of a layer of rock over the ground: floating islands, overhangs, arches.";
-const LAYER_BOTTOM: &str = "The underside of that layer: where it is above the ground, the void lies between.";
-const LAYER_COLOR: &str = "The colour of that layer's rock: the blocks nearest to it are chosen, from the Albedo palette.";
+const LAYER_TOP: &str = "The top of a level of rock over the ground (a Solid level of its own): floating islands, overhangs, arches.";
+const LAYER_BOTTOM: &str = "The underside of that level: where it is above the ground, the void lies between.";
+const LAYER_COLOR: &str = "The colour of that level's rock: the blocks nearest to it are chosen, from the Albedo palette.";
 
 const PALETTES: &[Choice] = &[
     Choice { value: "natural", label: "Natural", help: "Soils, stone, sand, snow: the blocks of a natural landscape." },
@@ -37,20 +37,18 @@ pub static MAP: NodeSpec = NodeSpec {
         input("biome", "Biome", PortKind::Biome, "The game's biome of each column.", "from Temperature and Humidity when given, else the map's biomes"),
         input("temperature", "Temperature", PortKind::Mask, "The climate's temperature: 0 is −30 °C, 1 is +45 °C.", "none"),
         input("humidity", "Humidity", PortKind::Mask, "How wet the climate is, from 0 to 1.", "none"),
-        input("vegetation", "Vegetation", PortKind::Mask, "How densely trees and plants grow, from 0 to 1.", "none: the graph places no plants"),
-        input("caves", "Caves", PortKind::Mask, "Where caves form, and how many, from 0 to 1.", "the map's cave settings"),
-        input("layer.1.top", "Layer 1 top", PortKind::Height, LAYER_TOP, "none"),
-        input("layer.1.bottom", "Layer 1 bottom", PortKind::Height, LAYER_BOTTOM, "none"),
-        input("layer.1.color", "Layer 1 colour", PortKind::Color, LAYER_COLOR, "the colour of the rock"),
-        input("layer.2.top", "Layer 2 top", PortKind::Height, LAYER_TOP, "none"),
-        input("layer.2.bottom", "Layer 2 bottom", PortKind::Height, LAYER_BOTTOM, "none"),
-        input("layer.2.color", "Layer 2 colour", PortKind::Color, LAYER_COLOR, "the colour of the rock"),
-        input("layer.3.top", "Layer 3 top", PortKind::Height, LAYER_TOP, "none"),
-        input("layer.3.bottom", "Layer 3 bottom", PortKind::Height, LAYER_BOTTOM, "none"),
-        input("layer.3.color", "Layer 3 colour", PortKind::Color, LAYER_COLOR, "the colour of the rock"),
-        input("layer.4.top", "Layer 4 top", PortKind::Height, LAYER_TOP, "none"),
-        input("layer.4.bottom", "Layer 4 bottom", PortKind::Height, LAYER_BOTTOM, "none"),
-        input("layer.4.color", "Layer 4 colour", PortKind::Color, LAYER_COLOR, "the colour of the rock"),
+        input("level.1.top", "Level 1 top", PortKind::Height, LAYER_TOP, "none"),
+        input("level.1.bottom", "Level 1 bottom", PortKind::Height, LAYER_BOTTOM, "none"),
+        input("level.1.color", "Level 1 colour", PortKind::Color, LAYER_COLOR, "the colour of the rock"),
+        input("level.2.top", "Level 2 top", PortKind::Height, LAYER_TOP, "none"),
+        input("level.2.bottom", "Level 2 bottom", PortKind::Height, LAYER_BOTTOM, "none"),
+        input("level.2.color", "Level 2 colour", PortKind::Color, LAYER_COLOR, "the colour of the rock"),
+        input("level.3.top", "Level 3 top", PortKind::Height, LAYER_TOP, "none"),
+        input("level.3.bottom", "Level 3 bottom", PortKind::Height, LAYER_BOTTOM, "none"),
+        input("level.3.color", "Level 3 colour", PortKind::Color, LAYER_COLOR, "the colour of the rock"),
+        input("level.4.top", "Level 4 top", PortKind::Height, LAYER_TOP, "none"),
+        input("level.4.bottom", "Level 4 bottom", PortKind::Height, LAYER_BOTTOM, "none"),
+        input("level.4.color", "Level 4 colour", PortKind::Color, LAYER_COLOR, "the colour of the rock"),
         input("mask.flow", "Flow", PortKind::Mask, "Where water runs, written to the map as the mask “flow”.", "none"),
         input("mask.wear", "Wear", PortKind::Mask, "Where the ground was worn away, written as the mask “wear”.", "none"),
         input("mask.deposition", "Deposition", PortKind::Mask, "Where sediment settled, written as the mask “deposition”.", "none"),
@@ -60,7 +58,7 @@ pub static MAP: NodeSpec = NodeSpec {
     outputs: &[],
     params: &[
         ParamSpec::flag("active", "Active", true, "Whether the map takes this output, when the graph has several."),
-        ParamSpec::choice("albedo_palette", "Albedo blocks", PALETTES, "natural", "The blocks Albedo and the layers' colours turn into."),
+        ParamSpec::choice("albedo_palette", "Albedo blocks", PALETTES, "natural", "The blocks Albedo and the levels' colours turn into."),
         ParamSpec::flag("paint_biomes", "Paint biomes", false, "Paints the ground to suit the biomes: sand in the deserts, snow in the tundra."),
     ],
     kernel: Kernel::Output,

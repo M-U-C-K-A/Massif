@@ -9361,11 +9361,6 @@
               "description": "The game's biome of each column. (biome) Left empty: from Temperature and Humidity when given, else the map's biomes.",
               "title": "Biome"
             },
-            "caves": {
-              "$ref": "#/$defs/source",
-              "description": "Where caves form, and how many, from 0 to 1. (mask) Left empty: the map's cave settings.",
-              "title": "Caves"
-            },
             "height": {
               "$ref": "#/$defs/source",
               "description": "The ground's height, in blocks. (height) Left empty: the map's ground as it is.",
@@ -9376,65 +9371,65 @@
               "description": "How wet the climate is, from 0 to 1. (mask) Left empty: none.",
               "title": "Humidity"
             },
-            "layer.1.bottom": {
+            "level.1.bottom": {
               "$ref": "#/$defs/source",
-              "description": "The underside of that layer: where it is above the ground, the void lies between. (height) Left empty: none.",
-              "title": "Layer 1 bottom"
+              "description": "The underside of that level: where it is above the ground, the void lies between. (height) Left empty: none.",
+              "title": "Level 1 bottom"
             },
-            "layer.1.color": {
+            "level.1.color": {
               "$ref": "#/$defs/source",
-              "description": "The colour of that layer's rock: the blocks nearest to it are chosen, from the Albedo palette. (color) Left empty: the colour of the rock.",
-              "title": "Layer 1 colour"
+              "description": "The colour of that level's rock: the blocks nearest to it are chosen, from the Albedo palette. (color) Left empty: the colour of the rock.",
+              "title": "Level 1 colour"
             },
-            "layer.1.top": {
+            "level.1.top": {
               "$ref": "#/$defs/source",
-              "description": "The top of a layer of rock over the ground: floating islands, overhangs, arches. (height) Left empty: none.",
-              "title": "Layer 1 top"
+              "description": "The top of a level of rock over the ground (a Solid level of its own): floating islands, overhangs, arches. (height) Left empty: none.",
+              "title": "Level 1 top"
             },
-            "layer.2.bottom": {
+            "level.2.bottom": {
               "$ref": "#/$defs/source",
-              "description": "The underside of that layer: where it is above the ground, the void lies between. (height) Left empty: none.",
-              "title": "Layer 2 bottom"
+              "description": "The underside of that level: where it is above the ground, the void lies between. (height) Left empty: none.",
+              "title": "Level 2 bottom"
             },
-            "layer.2.color": {
+            "level.2.color": {
               "$ref": "#/$defs/source",
-              "description": "The colour of that layer's rock: the blocks nearest to it are chosen, from the Albedo palette. (color) Left empty: the colour of the rock.",
-              "title": "Layer 2 colour"
+              "description": "The colour of that level's rock: the blocks nearest to it are chosen, from the Albedo palette. (color) Left empty: the colour of the rock.",
+              "title": "Level 2 colour"
             },
-            "layer.2.top": {
+            "level.2.top": {
               "$ref": "#/$defs/source",
-              "description": "The top of a layer of rock over the ground: floating islands, overhangs, arches. (height) Left empty: none.",
-              "title": "Layer 2 top"
+              "description": "The top of a level of rock over the ground (a Solid level of its own): floating islands, overhangs, arches. (height) Left empty: none.",
+              "title": "Level 2 top"
             },
-            "layer.3.bottom": {
+            "level.3.bottom": {
               "$ref": "#/$defs/source",
-              "description": "The underside of that layer: where it is above the ground, the void lies between. (height) Left empty: none.",
-              "title": "Layer 3 bottom"
+              "description": "The underside of that level: where it is above the ground, the void lies between. (height) Left empty: none.",
+              "title": "Level 3 bottom"
             },
-            "layer.3.color": {
+            "level.3.color": {
               "$ref": "#/$defs/source",
-              "description": "The colour of that layer's rock: the blocks nearest to it are chosen, from the Albedo palette. (color) Left empty: the colour of the rock.",
-              "title": "Layer 3 colour"
+              "description": "The colour of that level's rock: the blocks nearest to it are chosen, from the Albedo palette. (color) Left empty: the colour of the rock.",
+              "title": "Level 3 colour"
             },
-            "layer.3.top": {
+            "level.3.top": {
               "$ref": "#/$defs/source",
-              "description": "The top of a layer of rock over the ground: floating islands, overhangs, arches. (height) Left empty: none.",
-              "title": "Layer 3 top"
+              "description": "The top of a level of rock over the ground (a Solid level of its own): floating islands, overhangs, arches. (height) Left empty: none.",
+              "title": "Level 3 top"
             },
-            "layer.4.bottom": {
+            "level.4.bottom": {
               "$ref": "#/$defs/source",
-              "description": "The underside of that layer: where it is above the ground, the void lies between. (height) Left empty: none.",
-              "title": "Layer 4 bottom"
+              "description": "The underside of that level: where it is above the ground, the void lies between. (height) Left empty: none.",
+              "title": "Level 4 bottom"
             },
-            "layer.4.color": {
+            "level.4.color": {
               "$ref": "#/$defs/source",
-              "description": "The colour of that layer's rock: the blocks nearest to it are chosen, from the Albedo palette. (color) Left empty: the colour of the rock.",
-              "title": "Layer 4 colour"
+              "description": "The colour of that level's rock: the blocks nearest to it are chosen, from the Albedo palette. (color) Left empty: the colour of the rock.",
+              "title": "Level 4 colour"
             },
-            "layer.4.top": {
+            "level.4.top": {
               "$ref": "#/$defs/source",
-              "description": "The top of a layer of rock over the ground: floating islands, overhangs, arches. (height) Left empty: none.",
-              "title": "Layer 4 top"
+              "description": "The top of a level of rock over the ground (a Solid level of its own): floating islands, overhangs, arches. (height) Left empty: none.",
+              "title": "Level 4 top"
             },
             "mask.deposition": {
               "$ref": "#/$defs/source",
@@ -9466,11 +9461,6 @@
               "description": "The terrain (the block material) of each column. (terrain) Left empty: from Albedo when it is given, else the map's terrains.",
               "title": "Terrain"
             },
-            "vegetation": {
-              "$ref": "#/$defs/source",
-              "description": "How densely trees and plants grow, from 0 to 1. (mask) Left empty: none: the graph places no plants.",
-              "title": "Vegetation"
-            },
             "water": {
               "$ref": "#/$defs/source",
               "description": "The surface of rivers and lakes, in blocks: where it lies above the ground, water fills up to it. (height) Left empty: none: the world's sea only.",
@@ -9495,7 +9485,7 @@
             },
             "albedo_palette": {
               "default": "natural",
-              "description": "The blocks Albedo and the layers' colours turn into.",
+              "description": "The blocks Albedo and the levels' colours turn into.",
               "enum": [
                 "natural",
                 "rock",

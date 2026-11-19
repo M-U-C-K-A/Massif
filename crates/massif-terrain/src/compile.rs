@@ -202,8 +202,11 @@ pub fn compile_in(graph: &Graph, mut space: Space, sim_res: u32, env: Arc<dyn En
     if graph.format != crate::model::FORMAT {
         diags.push(Diagnostic::warning("format", format!("expected “{}”", crate::model::FORMAT)));
     }
-    if graph.version > crate::model::VERSION {
-        diags.push(Diagnostic::warning("version", format!("written by a later Massif (version {}); this one reads up to {}", graph.version, crate::model::VERSION)));
+    // A document of a later format is not half-understood: nothing of it is
+    // evaluated (and it is saved back as it was).
+    let newer = graph.version > crate::model::VERSION;
+    if newer {
+        diags.push(Diagnostic::error("version", format!("made with a newer Massif (format version {}); this one reads up to {}", graph.version, crate::model::VERSION)));
     }
     if let Some(size) = graph.terrain.size {
         space.size = size.clamp(16, 1 << 17);
@@ -232,9 +235,17 @@ pub fn compile_in(graph: &Graph, mut space: Space, sim_res: u32, env: Arc<dyn En
         }
         let spec = registry::spec(&node.kind).filter(|s| s.family != registry::Family::Internal);
         if spec.is_none() {
-            let hint = closest(&node.kind, registry::all().iter().filter(|s| s.family != registry::Family::Internal).map(|s| s.id)).map(|c| format!(" (did you mean “{c}”?)")).unwrap_or_default();
-            diags.push(Diagnostic::error(format!("{path}.type"), format!("no type of node is called “{}”{hint}", node.kind)));
+            let base = node.kind.split('@').next().unwrap_or("");
+            if let Some(known) = registry::latest(base).filter(|s| s.family != registry::Family::Internal) {
+                diags.push(Diagnostic::error(format!("{path}.type"), format!("“{}” is a version of {} newer than this Massif knows (up to {}): it was made with a newer Massif", node.kind, known.id, known.version)));
+            } else {
+                let hint = closest(&node.kind, registry::all().iter().filter(|s| s.family != registry::Family::Internal).map(|s| s.id)).map(|c| format!(" (did you mean “{c}”?)")).unwrap_or_default();
+                diags.push(Diagnostic::error(format!("{path}.type"), format!("no type of node is called “{}”{hint}", node.kind)));
+            }
             broken = Some(format!("its type “{}” is unknown", node.kind));
+        }
+        if newer {
+            broken = Some("the graph was made with a newer Massif".to_owned());
         }
         let params = spec.map(|s| Params::decode(s, id, &node.params, &format!("{path}.params"), &mut diags));
         let mut inputs: Vec<Option<Wire>> = vec![None; spec.map_or(0, |s| s.inputs.len())];

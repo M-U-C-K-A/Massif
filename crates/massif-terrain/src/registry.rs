@@ -370,6 +370,10 @@ pub enum Reads {
 pub struct NodeSpec {
     /// `family.name`, as graphs write it.
     pub id: &'static str,
+    /// Which version of the type this is: a graph writes `id` for the first
+    /// and `id@N` for the others. A released version's settings, defaults
+    /// and results never change; changing them makes a new version.
+    pub version: u16,
     pub label: &'static str,
     pub family: Family,
     /// One sentence: what the node makes.
@@ -392,6 +396,7 @@ impl NodeSpec {
     /// What a node type leaves out: `NodeSpec { id: …, ..NodeSpec::BASE }`.
     pub const BASE: NodeSpec = NodeSpec {
         id: "",
+        version: 1,
         label: "",
         family: Family::Primitive,
         summary: "",
@@ -413,6 +418,11 @@ impl std::fmt::Debug for NodeSpec {
 }
 
 impl NodeSpec {
+    /// The type as graphs write it: `id`, or `id@N` from version 2.
+    pub fn type_name(&self) -> String {
+        if self.version == 1 { self.id.to_owned() } else { format!("{}@{}", self.id, self.version) }
+    }
+
     pub fn param(&self, name: &str) -> Option<(usize, &ParamSpec)> {
         self.params.iter().enumerate().find(|(_, p)| p.name == name)
     }
@@ -445,9 +455,19 @@ pub fn all() -> &'static [&'static NodeSpec] {
     crate::nodes::all()
 }
 
-/// The type of node named `id`.
+/// The type of node a graph names `id` (`family.name`, or `family.name@N`
+/// for a version after the first).
 pub fn spec(id: &str) -> Option<&'static NodeSpec> {
-    all().iter().copied().find(|s| s.id == id)
+    let (base, version) = match id.split_once('@') {
+        Some((base, v)) => (base, v.parse::<u16>().ok()?),
+        None => (id, 1),
+    };
+    all().iter().copied().find(|s| s.id == base && s.version == version)
+}
+
+/// The latest version of type `id` (`family.name`), the one new nodes get.
+pub fn latest(id: &str) -> Option<&'static NodeSpec> {
+    all().iter().copied().filter(|s| s.id == id).max_by_key(|s| s.version)
 }
 
 #[cfg(test)]
@@ -470,7 +490,7 @@ mod tests {
     fn the_registry_holds_together() {
         let mut ids = std::collections::HashSet::new();
         for s in all() {
-            assert!(ids.insert(s.id), "{} twice", s.id);
+            assert!(ids.insert(s.type_name()), "{} twice", s.type_name());
             let (family, name) = s.id.split_once('.').expect("ids are family.name");
             assert!(!family.is_empty() && crate::model::valid_id(name), "{}", s.id);
             assert!(s.summary.ends_with('.') && !s.help.is_empty(), "{} needs words", s.id);
