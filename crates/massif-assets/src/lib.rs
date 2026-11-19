@@ -327,6 +327,9 @@ pub struct Block {
     pub side_tint: Tint,
     /// A whole cube: usable as ground.
     pub full_cube: bool,
+    /// Drawn see-through by the game: glass, stained glass, ice (its model
+    /// says so of its textures since 26.1, `force_translucent`).
+    pub translucent: bool,
     /// Two blocks high, in a lower and an upper half (`half=lower`,
     /// `half=upper`): tall plants, doors.
     pub tall: bool,
@@ -767,6 +770,8 @@ struct Models {
 #[derive(Default)]
 struct Resolved {
     textures: HashMap<String, String>,
+    /// Texture keys the model draws see-through (`force_translucent`).
+    translucent: std::collections::HashSet<String>,
     faces: HashMap<String, (String, bool)>,
     full_cube: bool,
     /// The model and its parents, by key, the model first.
@@ -792,8 +797,13 @@ impl Models {
         for model in chain.iter().rev() {
             if let Some(t) = model.get("textures").and_then(Value::as_object) {
                 for (k, v) in t {
-                    if let Some(v) = v.as_str() {
-                        r.textures.insert(k.clone(), v.to_owned());
+                    // A name, or since 26.1 `{"sprite": name,
+                    // "force_translucent": true}`.
+                    if let Some(name) = v.as_str().or_else(|| v.get("sprite").and_then(Value::as_str)) {
+                        r.textures.insert(k.clone(), name.to_owned());
+                        if v.get("force_translucent").and_then(Value::as_bool) == Some(true) {
+                            r.translucent.insert(key(name));
+                        }
                     }
                 }
             }
@@ -1200,6 +1210,7 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
                 chain.extend(models.resolve(upper).chain);
             }
             let category = Category::of_block(id, &chain, [top.as_deref(), side.as_deref()], model.full_cube);
+            let translucent = [&top, &side, &bottom].into_iter().flatten().any(|t| model.translucent.contains(t));
             Block {
                 id: id.clone(),
                 name: names_en.get(id).cloned().unwrap_or_else(|| display_name(id)),
@@ -1211,6 +1222,7 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
                 top_tint,
                 side_tint,
                 full_cube: model.full_cube,
+                translucent,
                 tall: *tall,
                 category,
             }
@@ -1226,7 +1238,7 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
         .map(|(id, def)| {
             let c = def.map_color.unwrap_or([128, 128, 128]);
             let tall = def.property("half").is_some_and(|p| p.values.iter().any(|v| v == "lower") && p.values.iter().any(|v| v == "upper"));
-            Block { id: id.clone(), name: names_en.get(id).cloned().unwrap_or_else(|| display_name(id)), top: None, side: None, bottom: None, top_tint: Tint::None, side_tint: Tint::None, full_cube: def.plain_cube(), tall, color: c, side_color: c, category: Category::of(id) }
+            Block { id: id.clone(), name: names_en.get(id).cloned().unwrap_or_else(|| display_name(id)), top: None, side: None, bottom: None, top_tint: Tint::None, side_tint: Tint::None, full_cube: def.plain_cube(), translucent: false, tall, color: c, side_color: c, category: Category::of(id) }
         })
         .collect();
     blocks.extend(listed);
@@ -1733,6 +1745,71 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// What the game's jars named in MASSIF_DIGEST_JARS (`;` apart) read
+    /// to: per jar, its blocks, those with a texture, those see-through,
+    /// and a digest of every block's textures, tints, shape, category and
+    /// colours, to compare two versions of the reader.
+    #[test]
+    fn jars_digest() {
+        use std::hash::{Hash, Hasher};
+        let Ok(jars) = std::env::var("MASSIF_DIGEST_JARS") else { return };
+        for jar in jars.split(';').filter(|j| !j.is_empty()) {
+            let cat = load(std::path::Path::new(jar), "digest").unwrap();
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            for b in &cat.blocks {
+                (&b.id, &b.top, &b.side, &b.bottom, format!("{:?}{:?}{:?}", b.top_tint, b.side_tint, b.category), b.full_cube, b.tall, b.color, b.side_color).hash(&mut h);
+            }
+            let textured = cat.blocks.iter().filter(|b| b.top.is_some() && cat.textures.contains_key(b.top.as_deref().unwrap())).count();
+            let see_through = cat.blocks.iter().filter(|b| b.translucent).count();
+            eprintln!("{jar}: {} blocks, {textured} with a top texture, {see_through} see-through, digest {:016x}", cat.blocks.len(), h.finish());
+        }
+    }
+
+    /// Since Minecraft 26.1 a model's texture may be an object,
+    /// `{"sprite": name, "force_translucent": true}` (glass, stained glass):
+    /// read as the name, the block see-through; a plain name as before.
+    #[test]
+    fn textures_written_as_sprites_are_read() {
+        let png = |c: [u8; 4]| {
+            let mut out = Vec::new();
+            image::RgbaImage::from_pixel(16, 16, image::Rgba(c)).write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
+            out
+        };
+        let (glass_png, stone_png) = (png([200, 220, 230, 90]), png([120, 120, 120, 255]));
+        let files: Vec<(&str, &[u8], bool)> = vec![
+            ("assets/minecraft/blockstates/glass.json", br#"{"variants":{"":{"model":"minecraft:block/glass"}}}"#, true),
+            ("assets/minecraft/blockstates/stone.json", br#"{"variants":{"":{"model":"minecraft:block/stone"}}}"#, true),
+            ("assets/minecraft/models/block/block.json", br#"{"textures":{}}"#, true),
+            (
+                "assets/minecraft/models/block/cube.json",
+                br##"{"parent":"block/block","elements":[{"from":[0,0,0],"to":[16,16,16],"faces":{"up":{"texture":"#up"},"down":{"texture":"#down"},"north":{"texture":"#north"}}}]}"##,
+                true,
+            ),
+            ("assets/minecraft/models/block/cube_all.json", br##"{"parent":"block/cube","textures":{"particle":"#all","up":"#all","down":"#all","north":"#all"}}"##, true),
+            // As 26.3 writes glass.
+            ("assets/minecraft/models/block/glass.json", br#"{"parent":"minecraft:block/cube_all","textures":{"all":{"force_translucent":true,"sprite":"minecraft:block/glass"}}}"#, true),
+            ("assets/minecraft/models/block/stone.json", br#"{"parent":"minecraft:block/cube_all","textures":{"all":"minecraft:block/stone"}}"#, true),
+            ("assets/minecraft/textures/block/glass.png", &glass_png, false),
+            ("assets/minecraft/textures/block/stone.png", &stone_png, false),
+        ];
+        let zip = zip::tests_support::tiny_zip(&files);
+        let dir = std::env::temp_dir().join(format!("massif-assets-sprites-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.jar");
+        std::fs::write(&path, zip).unwrap();
+        let cat = load(&path, "26.3").unwrap();
+        let glass = cat.block("minecraft:glass").unwrap();
+        assert_eq!(glass.top.as_deref(), Some("block/glass"));
+        assert_eq!(glass.side.as_deref(), Some("block/glass"));
+        assert!(cat.textures.contains_key("block/glass"), "its texture read");
+        assert!(glass.full_cube && glass.translucent);
+        assert_eq!(glass.color, [200, 220, 230], "its texture's colour, not grey");
+        let stone = cat.block("minecraft:stone").unwrap();
+        assert_eq!(stone.top.as_deref(), Some("block/stone"));
+        assert!(!stone.translucent);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// The biomes of the game, of a mod and of a data pack left as a folder:
     /// each with its name (its language file's, else its id's), its source,
     /// its grass and leaves (its own colours, else the game's colour maps at
@@ -1808,7 +1885,7 @@ mod tests {
     #[test]
     fn profiles_give_mod_terrains_their_biomes() {
         let mut reg = Registry::vanilla();
-        let block = |id: &str| Block { id: id.into(), name: display_name(id), top: None, side: None, bottom: None, top_tint: Tint::None, side_tint: Tint::None, full_cube: true, tall: false, color: [80, 60, 50], side_color: [80, 60, 50], category: Category::Natural };
+        let block = |id: &str| Block { id: id.into(), name: display_name(id), top: None, side: None, bottom: None, top_tint: Tint::None, side_tint: Tint::None, full_cube: true, translucent: false, tall: false, color: [80, 60, 50], side_color: [80, 60, 50], category: Category::Natural };
         let t = block_terrain(&mut reg, &block("regions_unexplored:peat_mud"));
         let b = reg.terrain(t).biome_hint.expect("a biome");
         assert_eq!((reg.biome(b).id.as_str(), reg.biome(b).name.as_str()), ("regions_unexplored:bayou", "Bayou"));
