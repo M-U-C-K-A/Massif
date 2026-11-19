@@ -166,6 +166,103 @@ pub(super) fn accumulate(rcv: &[u32], rain: Option<&[f32]>, n: usize) -> Vec<u32
     d
 }
 
+/// A float as a whole number in the same order (to keep the least by
+/// whole-number atomics), and back.
+#[inline]
+pub(super) fn ord(v: f32) -> u32 {
+    let b = v.to_bits();
+    if b & 0x8000_0000 != 0 { !b } else { b | 0x8000_0000 }
+}
+
+#[inline]
+pub(super) fn unord(b: u32) -> f32 {
+    f32::from_bits(if b & 0x8000_0000 != 0 { b & 0x7fff_ffff } else { !b })
+}
+
+/// The least of `values` (whole numbers, as [`ord`] makes them) over each
+/// sample and all those whose water passes through it, by the jumps of
+/// [`accumulate`].
+pub(super) fn lowest_upstream(rcv: &[u32], values: Vec<u32>) -> Vec<u32> {
+    let mut d = values;
+    let mut j = rcv.to_vec();
+    loop {
+        let next: Vec<AtomicU32> = d.par_iter().map(|&v| AtomicU32::new(v)).collect();
+        (0..d.len()).into_par_iter().for_each(|k| {
+            if j[k] != NONE {
+                next[j[k] as usize].fetch_min(d[k], Ordering::Relaxed);
+            }
+        });
+        let jumped: Vec<u32> = j.par_iter().map(|&t| if t == NONE { NONE } else { j[t as usize] }).collect();
+        let active = j.par_iter().any(|&t| t != NONE);
+        d = next.into_iter().map(AtomicU32::into_inner).collect();
+        j = jumped;
+        if !active {
+            break;
+        }
+    }
+    d
+}
+
+/// The jumps of the nearest-seed search for a reach of `reach` samples:
+/// halving powers of two from the reach down to 1, then 1 again.
+fn jumps(reach: usize) -> Vec<usize> {
+    let mut s = reach.max(1).next_power_of_two();
+    let mut v = Vec::new();
+    while s >= 1 {
+        v.push(s);
+        s /= 2;
+    }
+    v.push(1);
+    v
+}
+
+/// For each sample, the nearest of the seeds (samples whose `seeds` entry
+/// is their own index; [`NONE`] elsewhere) within about `reach` samples,
+/// found by jump flooding: each sample looks at the seeds its neighbours
+/// `s` apart know, `s` halving. Ties go to the lower index, so that the
+/// card finds the same.
+pub(super) fn nearest(mut seeds: Vec<u32>, n: usize, reach: usize) -> Vec<u32> {
+    for s in jumps(reach) {
+        let prev = seeds.clone();
+        seeds.par_chunks_mut(n).enumerate().for_each(|(z, row)| {
+            for (x, out) in row.iter_mut().enumerate() {
+                let mut best = prev[z * n + x];
+                let mut bd = dist2(x, z, best, n);
+                for dz in -1i64..=1 {
+                    for dx in -1i64..=1 {
+                        let (cx, cz) = (x as i64 + dx * s as i64, z as i64 + dz * s as i64);
+                        if cx < 0 || cz < 0 || cx >= n as i64 || cz >= n as i64 {
+                            continue;
+                        }
+                        let c = prev[cz as usize * n + cx as usize];
+                        if c == NONE {
+                            continue;
+                        }
+                        let d = dist2(x, z, c, n);
+                        if d < bd || (d == bd && c < best) {
+                            (best, bd) = (c, d);
+                        }
+                    }
+                }
+                *out = best;
+            }
+        });
+    }
+    seeds
+}
+
+/// Squared distance in samples from `(x, z)` to sample `s` ([`NONE`]: as
+/// far as can be).
+#[inline]
+fn dist2(x: usize, z: usize, s: u32, n: usize) -> u32 {
+    if s == NONE {
+        return u32::MAX;
+    }
+    let (sx, sz) = ((s as usize % n) as i64, (s as usize / n) as i64);
+    let (dx, dz) = (sx - x as i64, sz - z as i64);
+    (dx * dx + dz * dz) as u32
+}
+
 /// Draining area (in samples) as a mask: its logarithm over the whole
 /// terrain's, raised to `gamma` (small rills show more under 1).
 #[inline]
@@ -183,6 +280,9 @@ pub(super) struct FlowGpu {
     copy: wgpu::ComputePipeline,
     add: wgpu::ComputePipeline,
     mask: wgpu::ComputePipeline,
+    min_init: wgpu::ComputePipeline,
+    min_add: wgpu::ComputePipeline,
+    jfa: wgpu::ComputePipeline,
     pub rs: Resample,
     count: wgpu::Buffer,
 }
@@ -199,6 +299,9 @@ impl FlowGpu {
             copy: p("acc_copy")?,
             add: p("acc_add")?,
             mask: p("flow_mask")?,
+            min_init: p("min_init")?,
+            min_add: p("min_add")?,
+            jfa: p("jfa_step")?,
             rs: Resample::new(k)?,
             count: k.buf("erosion count", 4),
         })
@@ -276,18 +379,35 @@ impl FlowGpu {
         let (d1, j0, j1) = (k.tmp(n * n), k.tmp(n * n), k.tmp(n * n));
         let bg = k.bind(&self.init, &[(0, &u), (5, rcv), (6, rain.unwrap_or(&self.count)), (7, out), (9, &j0)]);
         k.run(&self.init, &bg, n);
+        self.double(k, &u, out, (d1, j0, j1), &self.add, n);
+    }
+
+    /// The lowest of `values` (as [`ord`] keeps floats in whole numbers)
+    /// over each sample and all those whose water passes through it, into
+    /// `out`: what a level that only goes down along the water's way is.
+    pub fn lowest_upstream(&self, k: &mut Kit, rcv: &wgpu::Buffer, values: &wgpu::Buffer, n: usize, out: &wgpu::Buffer) {
+        let u = Self::uniform(k, n, n, 0.0, 0.0, false, 0);
+        let (d1, j0, j1) = (k.tmp(n * n), k.tmp(n * n), k.tmp(n * n));
+        let bg = k.bind(&self.min_init, &[(0, &u), (5, rcv), (6, values), (7, out), (9, &j0)]);
+        k.run(&self.min_init, &bg, n);
+        self.double(k, &u, out, (d1, j0, j1), &self.min_add, n);
+    }
+
+    /// The doubling jumps of [`FlowGpu::accumulate`] with `add` (sums or
+    /// least), from `out` and the first jumps in `j0`.
+    fn double(&self, k: &mut Kit, u: &wgpu::Buffer, out: &wgpu::Buffer, (d1, j0, j1): (wgpu::Buffer, wgpu::Buffer, wgpu::Buffer), add: &wgpu::ComputePipeline, n: usize) {
         let pairs = [(out, &d1, &j0, &j1), (&d1, out, &j1, &j0)];
         let groups: Vec<_> = pairs
             .iter()
-            .map(|(a, b, ja, jb)| (k.bind(&self.copy, &[(0, &u), (4, &self.count), (7, a), (8, b), (9, ja), (10, jb)]), k.bind(&self.add, &[(0, &u), (7, a), (8, b), (9, ja)])))
+            .map(|(a, b, ja, jb)| (k.bind(&self.copy, &[(0, u), (4, &self.count), (7, a), (8, b), (9, ja), (10, jb)]), k.bind(add, &[(0, u), (7, a), (8, b), (9, ja)])))
             .collect();
         // Two steps at a time, so that the sums end in `out`; stops once no
         // sample jumps any more (a path of 2^steps samples at most).
         for _ in 0..32 {
             k.clear(&self.count);
-            for (copy, add) in &groups {
+            for (copy, adding) in &groups {
                 k.run(&self.copy, copy, n);
-                k.run(&self.add, add, n);
+                k.run(add, adding, n);
             }
             if k.read_u32(&self.count) == 0 {
                 break;
@@ -300,6 +420,24 @@ impl FlowGpu {
 }
 
 impl FlowGpu {
+    /// The nearest of the samples `seeds` holds (its own index, or [`NONE`])
+    /// for each sample within `reach` samples, in `seeds`, as [`nearest`].
+    pub fn nearest(&self, k: &mut Kit, seeds: &wgpu::Buffer, n: usize, reach: usize) {
+        let other = k.tmp(n * n);
+        let mut from_seeds = true;
+        for s in jumps(reach) {
+            let u = k.uniform(Uniforms::default().u32(n as u32).u32(s as u32).f32(0.0).f32(0.0).f32(0.0).u32(0).f32(0.0).f32(0.0).u32(0));
+            let (a, b) = if from_seeds { (seeds, &other) } else { (&other, seeds) };
+            let bg = k.bind(&self.jfa, &[(0, &u), (9, a), (10, b)]);
+            k.run(&self.jfa, &bg, n);
+            from_seeds = !from_seeds;
+        }
+        if !from_seeds {
+            k.copy(&other, seeds, (n * n * 4) as u64);
+        }
+        k.put(other);
+    }
+
     /// The draining area `acc` as a mask into `out`, as [`flow_mask`].
     pub fn mask(&self, k: &mut Kit, acc: &wgpu::Buffer, n: usize, gamma: f32, out: &wgpu::Buffer) {
         let u = k.uniform(Uniforms::default().u32(n as u32).u32(n as u32).f32(0.0).f32(0.0).f32(0.0).u32(0).f32(rain_scale(n)).f32(gamma).u32(0));

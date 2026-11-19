@@ -7,6 +7,7 @@ struct U {
     strength: f32,
     drop_axis: f32,
     drop_diag: f32,
+    has_hard: u32,
 }
 
 @group(0) @binding(0) var<uniform> u: U;
@@ -14,6 +15,7 @@ struct U {
 @group(0) @binding(2) var<storage, read_write> shed: array<f32>;
 @group(0) @binding(3) var<storage, read_write> total: array<f32>;
 @group(0) @binding(4) var<storage, read_write> next: array<f32>;
+@group(0) @binding(5) var<storage, read> hard: array<f32>;
 
 var<private> NB: array<vec3<i32>, 8> = array<vec3<i32>, 8>(
     vec3<i32>(-1, -1, 1), vec3<i32>(0, -1, 0), vec3<i32>(1, -1, 1), vec3<i32>(-1, 0, 0),
@@ -53,7 +55,11 @@ fn excess(@builtin(global_invocation_id) id: vec3<u32>) {
             most = max(most, e);
         }
     }
-    shed[k] = u.strength * 0.5 * most;
+    var s = u.strength;
+    if u.has_hard != 0u {
+        s *= 1.0 - clamp(hard[k], 0.0, 1.0);
+    }
+    shed[k] = s * 0.5 * most;
     total[k] = sum;
 }
 

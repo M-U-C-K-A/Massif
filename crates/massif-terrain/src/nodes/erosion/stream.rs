@@ -59,6 +59,9 @@ pub(super) struct P {
     pub iterations: usize,
     pub seed: u32,
     pub sea: f32,
+    /// Blocks of loose material the source sheds over the run where the
+    /// slope is steep (`sediment.deposit`; 0 for stream erosion).
+    pub supply: f32,
 }
 
 impl P {
@@ -86,8 +89,41 @@ impl P {
             iterations: ctx.params.int("iterations").max(1) as usize,
             seed: ctx.seed,
             sea: ctx.space.sea_level,
+            supply: 0.0,
         }
     }
+
+    /// The settings of `sediment.deposit`: no rivers cutting, the source
+    /// shedding Amount blocks from its steep slopes, carried down and laid
+    /// where the water slows.
+    pub fn deposit(ctx: &Ctx, input: &[f32]) -> Self {
+        let (lo, _) = range(input);
+        Self {
+            kt: 0.0,
+            m: 0.5,
+            n_exp: 1.0,
+            channel: 0.0,
+            deposition: ctx.params.f("deposition"),
+            uplift: 0.0,
+            lift_blocks: 0.0,
+            lo,
+            sed_share: 1.0,
+            diffusion: ctx.params.f("creep"),
+            talus: 70f32.to_radians().tan(),
+            iterations: ctx.params.int("iterations").max(1) as usize,
+            seed: ctx.seed,
+            sea: ctx.space.sea_level,
+            supply: ctx.params.f("amount"),
+        }
+    }
+}
+
+/// How much a slope sheds of the source's supply: nothing on the flat, all
+/// from about 30°.
+#[inline]
+pub(super) fn sheds(slope: f32) -> f32 {
+    let t = ((slope - 0.15) / 0.45).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 /// The levels: samples a side of each, finest first.
@@ -155,6 +191,10 @@ fn step(p: &P, h: &[f32], out: &mut [f32], qs: &[f32], qs_out: &mut [f32], worn:
                     v = (hk + c * hr) / (1.0 + c);
                 }
             }
+            let lm = lift.map_or(1.0, |m| m[k].clamp(0.0, 1.0));
+            if p.supply > 0.0 && r != NONE {
+                v -= p.supply * dt * lm * sheds(slope);
+            }
             let e = hk - v;
             let total = qin + e * p.sed_share;
             let f = if r == NONE {
@@ -182,7 +222,7 @@ fn step(p: &P, h: &[f32], out: &mut [f32], qs: &[f32], qs_out: &mut [f32], worn:
                 h[nz as usize * n + nx as usize]
             };
             v += diff * (at(-1, 0) + at(1, 0) + at(0, -1) + at(0, 1) - 4.0 * hk);
-            v += p.lift_blocks * dt * lift.map_or(1.0, |m| m[k].clamp(0.0, 1.0));
+            v += p.lift_blocks * dt * lm;
             row[x] = v;
         }
     });
@@ -281,7 +321,7 @@ pub(super) fn run_cpu(p: &P, h0: &[f32], n: usize, sp0: f32, hard: Option<&[f32]
             }
             step(p, &h, &mut next, &qs, &mut qs_next, &mut worn, &mut laid, &rcv, &acc, hards[l].as_deref(), lifts[l].as_deref(), n, sp, dt);
             std::mem::swap(&mut qs, &mut qs_next);
-            thermal_pass(&next, &mut h, &mut shed, &mut total, n, drop, 0.5);
+            thermal_pass(&next, &mut h, &mut shed, &mut total, n, drop, 0.5, hards[l].as_deref());
         }
         last = Run { h: Vec::new(), acc, qs, worn: Vec::new(), laid: Vec::new() };
     }
@@ -329,17 +369,33 @@ pub(super) fn sediment_of(q: f32) -> f32 {
 }
 
 pub(super) fn stream_cpu(ctx: &Ctx, inputs: &[Option<&Grid>], cancel: &(dyn Fn() -> bool + Sync)) -> Option<Vec<Vec<f32>>> {
+    run_node(ctx, inputs, cancel, P::of)
+}
+
+/// `sediment.deposit` (inputs height and source): outputs height,
+/// deposition, wear and sediment.
+pub(super) fn deposit_cpu(ctx: &Ctx, inputs: &[Option<&Grid>], cancel: &(dyn Fn() -> bool + Sync)) -> Option<Vec<Vec<f32>>> {
+    let ins = [inputs[0], None, None, inputs.get(1).copied().flatten()];
+    let mut o = run_node(ctx, &ins, cancel, P::deposit)?;
+    let (sed, dep, wear) = (o.pop()?, o.pop()?, o.pop()?);
+    Some(vec![o.swap_remove(0), dep, wear, sed])
+}
+
+/// Stream erosion's run with settings made by `settings`, for any node
+/// that runs it (inputs height, hardness, rain, uplift or source).
+fn run_node(ctx: &Ctx, inputs: &[Option<&Grid>], cancel: &(dyn Fn() -> bool + Sync), settings: fn(&Ctx, &[f32]) -> P) -> Option<Vec<Vec<f32>>> {
     let src = inputs[0].expect("stream erosion has its input");
     let n = src.rect.w as usize;
-    let p = P::of(ctx, src.plane(0));
+    let p = settings(ctx, src.plane(0));
     let plane = |i: usize| inputs.get(i).copied().flatten().map(|g| g.plane(0));
     let own;
     let lift = match plane(3) {
         Some(l) => Some(l),
-        None => {
+        None if p.lift_blocks > 0.0 => {
             own = relative(src.plane(0), ctx.space.sea_level);
             Some(&own[..])
         }
+        None => None,
     };
     let run = run_cpu(&p, src.plane(0), n, ctx.spacing() as f32, plane(1), plane(2), lift, cancel)?;
     Some(outputs(run, n))
@@ -353,7 +409,7 @@ fn plain_uniform(n: usize, factor: f32, height: f32) -> Uniforms {
     for _ in 0..7 {
         u.f32(0.0);
     }
-    u.f32(factor).f32(0.0).f32(height).u32(0).u32(0).u32(0).f32(rain_scale(n)).u32(0);
+    u.f32(factor).f32(0.0).f32(height).u32(0).u32(0).u32(0).f32(rain_scale(n)).f32(0.0).f32(0.0);
     u
 }
 
@@ -361,10 +417,21 @@ const STREAM_WGSL: &str = concat!(include_str!("prelude.wgsl"), include_str!("st
 const THERMAL_WGSL: &str = include_str!("thermal.wgsl");
 
 pub(super) fn stream_gpu(g: &Gpu, ctx: &Ctx, inputs: &[Option<&GpuGrid>], cancel: &(dyn Fn() -> bool + Sync)) -> Option<Vec<GpuGrid>> {
+    run_node_gpu(g, ctx, inputs, cancel, P::of, "erosion.stream")
+}
+
+pub(super) fn deposit_gpu(g: &Gpu, ctx: &Ctx, inputs: &[Option<&GpuGrid>], cancel: &(dyn Fn() -> bool + Sync)) -> Option<Vec<GpuGrid>> {
+    let ins = [inputs[0], None, None, inputs.get(1).copied().flatten()];
+    let mut o = run_node_gpu(g, ctx, &ins, cancel, P::deposit, "sediment.deposit")?;
+    let (sed, dep, wear) = (o.pop()?, o.pop()?, o.pop()?);
+    Some(vec![o.swap_remove(0), dep, wear, sed])
+}
+
+fn run_node_gpu(g: &Gpu, ctx: &Ctx, inputs: &[Option<&GpuGrid>], cancel: &(dyn Fn() -> bool + Sync), settings: fn(&Ctx, &[f32]) -> P, name: &'static str) -> Option<Vec<GpuGrid>> {
     let src = inputs[0]?;
     let n0 = src.side() as usize;
     let input = g.download_grid(src);
-    let p = P::of(ctx, input.plane(0));
+    let p = settings(ctx, input.plane(0));
     let mut k = Kit::new(g);
     let scope = g.device().push_error_scope(wgpu::ErrorFilter::Validation);
     let fl = FlowGpu::new(&k)?;
@@ -392,6 +459,9 @@ pub(super) fn stream_gpu(g: &Gpu, ctx: &Ctx, inputs: &[Option<&GpuGrid>], cancel
             })
         };
         let lift = copy_of(&mut k, opt(3)).or_else(|| {
+            if p.lift_blocks <= 0.0 {
+                return None;
+            }
             // The relief itself, from 0 to 1, as the CPU makes it.
             let rel = relative(input.plane(0), ctx.space.sea_level);
             let b = k.buf("stream uplift", n0 * n0);
@@ -455,7 +525,8 @@ pub(super) fn stream_gpu(g: &Gpu, ctx: &Ctx, inputs: &[Option<&GpuGrid>], cancel
                 .u32(rain_in.is_some() as u32)
                 .u32(lift.is_some() as u32)
                 .f32(rain_scale(n))
-                .f32(p.sed_share),
+                .f32(p.sed_share)
+                .f32(p.supply),
         );
         // The rain, varied by the seed.
         let rain = k.buf("stream rain", n * n);
@@ -465,7 +536,7 @@ pub(super) fn stream_gpu(g: &Gpu, ctx: &Ctx, inputs: &[Option<&GpuGrid>], cancel
         let (qa, qb) = (k.buf("stream sediment", n * n), k.buf("stream sediment", n * n));
         let (rcv, acc) = (k.buf("stream receivers", n * n), k.buf("stream drainage", n * n));
         let (shed, total) = (k.buf("thermal shed", n * n), k.buf("thermal total", n * n));
-        let tu = g.uniform("thermal", &Uniforms::default().u32(n as u32).f32(0.5).f32(p.talus * sp).f32(p.talus * sp * std::f32::consts::SQRT_2).finish());
+        let tu = g.uniform("thermal", &Uniforms::default().u32(n as u32).f32(0.5).f32(p.talus * sp).f32(p.talus * sp * std::f32::consts::SQRT_2).u32(hard.is_some() as u32).finish());
         let mk = |k: &Kit, qi: &wgpu::Buffer, qo: &wgpu::Buffer| {
             k.bind(
                 &stepp,
@@ -473,7 +544,7 @@ pub(super) fn stream_gpu(g: &Gpu, ctx: &Ctx, inputs: &[Option<&GpuGrid>], cancel
             )
         };
         let step_groups = [mk(&k, &qa, &qb), mk(&k, &qb, &qa)];
-        let ex = k.bind(&excess, &[(0, &tu), (1, &hb), (2, &shed), (3, &total)]);
+        let ex = k.bind(&excess, &[(0, &tu), (1, &hb), (2, &shed), (3, &total), (5, hard.as_ref().unwrap_or(&stand_in))]);
         let ga = k.bind(&gather, &[(0, &tu), (1, &hb), (2, &shed), (3, &total), (4, &ha)]);
         let eps = 1e-3 * sp;
         let mut w: Option<wgpu::Buffer> = None;
@@ -567,7 +638,7 @@ pub(super) fn stream_gpu(g: &Gpu, ctx: &Ctx, inputs: &[Option<&GpuGrid>], cancel
     k.copy(&h, &height.buffer, (n * n * 4) as u64);
     k.flush();
     if let Some(e) = pollster::block_on(scope.pop()) {
-        g.refuse("erosion.stream", e);
+        g.refuse(name, e);
         return None;
     }
     let mut v = vec![height];

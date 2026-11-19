@@ -5,8 +5,11 @@
 
 mod common;
 mod flow;
+mod glacier;
+mod particle;
 mod stream;
 mod water;
+mod wind;
 
 use crate::nodes::height_out;
 use crate::gpu::{Gpu, GpuGrid};
@@ -15,7 +18,7 @@ use crate::registry::{Family, Kernel, NodeSpec, ParamSpec, PortKind, PortSpec, S
 use rayon::prelude::*;
 
 /// The node types of this family, in the library's order.
-pub static NODES: &[&NodeSpec] = &[&STREAM, &THERMAL, &FLOW];
+pub static NODES: &[&NodeSpec] = &[&STREAM, &PARTICLE, &THERMAL, &DEPOSIT, &GLACIER, &WIND, &FLOW, &RIVERS, &LAKES, &SEA];
 
 /// The masks every erosion node gives beside its height, named as the Map
 /// Output's inputs are.
@@ -25,7 +28,7 @@ const DEPOSITION_OUT: PortSpec = PortSpec::new("deposition", "Deposition", PortK
 const SEDIMENT_OUT: PortSpec = PortSpec::new("sediment", "Sediment", PortKind::Mask, "How much sediment the water carries at the end: muddy rivers, gravel beds.");
 
 const HARDNESS_IN: PortSpec = PortSpec::new("hardness", "Hardness", PortKind::Mask, "Rock that resists: 1 wears twenty times slower than 0.").or("soft rock everywhere");
-const RAIN_IN: PortSpec = PortSpec::new("rain", "Rain", PortKind::Mask, "How much rain falls where: a rainfall map, a rain shadow.").or("the same rain everywhere");
+const RAIN_IN: PortSpec = PortSpec::new("rainfall", "Rainfall", PortKind::Mask, "How much rain falls where: a rainfall map, a rain shadow.").or("the same rain everywhere");
 
 pub static STREAM: NodeSpec = NodeSpec {
     id: "erosion.stream",
@@ -57,6 +60,96 @@ pub static STREAM: NodeSpec = NodeSpec {
     ..NodeSpec::BASE
 };
 
+pub static DEPOSIT: NodeSpec = NodeSpec {
+    id: "sediment.deposit",
+    label: "Sediment",
+    family: Family::Simulate,
+    summary: "Loose rock and soil shed by steep slopes run down with the water and settle where it slows: fans at the feet of mountains, filled valleys and basins, deltas at the sea.",
+    help: "Lays down what the mountains shed, without cutting anything: the steep slopes of Source give Amount blocks of material over the run, the water carries it down its ways and drops it where they flatten, spreading alluvial fans at the mouths of valleys, flat floors in the valleys and basins, and deltas where rivers meet the sea. Use it after Stream erosion, or on any range, to soften its feet into the plains.",
+    keywords: &["sediment", "alluvial fan", "deposition", "valley fill", "delta", "basin", "bajada"],
+    inputs: &[PortSpec::new("height", "Height", PortKind::Height, "The relief that sheds and gathers."), PortSpec::new("source", "Source", PortKind::Mask, "Where loose material comes from (still only from its steep slopes).").or("every steep slope")],
+    outputs: &[height_out("The relief with its sediment laid down."), DEPOSITION_OUT, PortSpec::new("wear", "Source", PortKind::Mask, "Where the material came from."), SEDIMENT_OUT],
+    params: &[
+        ParamSpec::float("amount", "Amount", Unit::Blocks, 6.0, 0.0, 200.0, "Blocks of material the steepest slopes shed over the run.").soft(0.0, 40.0),
+        ParamSpec::float("deposition", "Deposition", Unit::Ratio, 0.7, 0.0, 1.0, "How readily the water drops what it carries: higher, shorter and steeper fans; lower, material carried far down the valleys and into the sea."),
+        ParamSpec::int("iterations", "Iterations", 150, 10, 2000, "Steps at each level of the simulation: more, fans spreading further."),
+        ParamSpec::float("creep", "Creep", Unit::Ratio, 0.05, 0.0, 1.0, "How much the loose ground creeps and smooths.").section(Section::Detail),
+        ParamSpec::seed(),
+    ],
+    kernel: Kernel::Global { cpu: stream::deposit_cpu, gpu: Some(stream::deposit_gpu), carry: &[Some(0), None, None, None] },
+    ..NodeSpec::BASE
+};
+
+pub static GLACIER: NodeSpec = NodeSpec {
+    id: "ice.glacier",
+    label: "Glaciers",
+    family: Family::Simulate,
+    summary: "Ice gathers above the snow line, flows down the valleys and scours them into U-shapes, with cirques at their heads, fjords below the sea and moraines at their ends.",
+    help: "Snow above the equilibrium line (ELA) turns to ice, which flows downhill and melts below the line. Where it slides it wears its bed: V-shaped river valleys become broad U-shaped troughs, their heads armchair cirques, side valleys left hanging, and valleys the ice carried below the sea become fjords. Moraines are laid along its edges and where it ends. Lower the line or raise Accumulation for larger glaciers; Strength is how deep they cut.",
+    keywords: &["glacier", "ice", "U-valley", "cirque", "fjord", "moraine", "ice age", "glacial"],
+    inputs: &[PortSpec::new("height", "Height", PortKind::Height, "The relief the ice covers."), PortSpec::new("snow", "Snow", PortKind::Mask, "Where snow falls (a snow or rainfall map): 0 no ice grows.").or("the same snow everywhere")],
+    outputs: &[height_out("The relief scoured by the ice, its moraines laid."), PortSpec::new("ice", "Ice", PortKind::Mask, "Where the ice lies at the end, by how thick (1 for 30 blocks and more)."), WEAR_OUT, PortSpec::new("deposition", "Moraines", PortKind::Mask, "Where the ice laid its moraines, along its edges and where it ends.")],
+    params: &[
+        ParamSpec::float("ela", "Snow line", Unit::Blocks, 170.0, -64.0, 320.0, "The equilibrium line: above it snow gathers into ice, below it the ice melts.").soft(60.0, 300.0),
+        ParamSpec::float("accumulation", "Accumulation", Unit::Ratio, 1.0, 0.0, 10.0, "How fast ice gathers above the line, and melts below: higher, thicker glaciers reaching further down.").soft(0.0, 4.0),
+        ParamSpec::float("strength", "Strength", Unit::Ratio, 1.0, 0.0, 10.0, "How deep the ice scours its bed.").soft(0.0, 4.0),
+        ParamSpec::int("iterations", "Iterations", 800, 10, 10000, "Steps of the simulation: more, an older ice age, deeper troughs."),
+        ParamSpec::float("moraines", "Moraines", Unit::Blocks, 3.0, 0.0, 32.0, "How high the ridges of rubble along the ice's edges stand.").section(Section::Detail),
+        ParamSpec::float("flow", "Flow", Unit::Ratio, 1.0, 0.0, 10.0, "How readily the ice flows and slides: higher, thinner and faster glaciers.").section(Section::Advanced),
+    ],
+    kernel: Kernel::Global { cpu: glacier::glacier_cpu, gpu: Some(glacier::glacier_gpu), carry: &[Some(0), None, None, None] },
+    ..NodeSpec::BASE
+};
+
+pub static WIND: NodeSpec = NodeSpec {
+    id: "wind.erosion",
+    label: "Wind",
+    family: Family::Simulate,
+    summary: "The wind blows loose sand into dunes, ridged where sand is plenty and crescents where it is scarce, and wears bare rock that faces it.",
+    help: "Spreads Sand blocks of loose sand (where the Sand mask says) and lets the wind work it: it lifts sand in the open, carries it a hop downwind, and drops it in the lee of every rise, so that dunes grow with gentle backs to the wind and steep slip faces away from it. Plenty of sand makes transverse ridges; little makes barchans. Abrasion wears rock facing the wind into streamlined ridges (yardangs). Connect a wind vector (Climate's wind) to make the wind turn over the land.",
+    keywords: &["wind", "dunes", "sand", "desert", "barchan", "aeolian", "yardang", "erg"],
+    inputs: &[
+        PortSpec::new("height", "Height", PortKind::Height, "The ground under the sand."),
+        PortSpec::new("sand", "Sand", PortKind::Mask, "Where loose sand lies at first.").or("sand everywhere"),
+        PortSpec::new("wind", "Wind", PortKind::Vector, "The wind's way at each place.").or("the Direction setting everywhere"),
+    ],
+    outputs: &[height_out("The ground with its dunes."), PortSpec::new("sand", "Sand", PortKind::Mask, "How deep the sand lies (1 for 8 blocks and more)."), WEAR_OUT],
+    params: &[
+        ParamSpec::float("direction", "Direction", Unit::Degrees, 0.0, 0.0, 360.0, "Where the wind blows towards: 0° east, 90° south."),
+        ParamSpec::float("sand_depth", "Sand", Unit::Blocks, 6.0, 0.0, 64.0, "Blocks of loose sand to blow around: plenty, transverse ridges; little, crescents.").soft(0.0, 24.0),
+        ParamSpec::float("hop", "Hop", Unit::Blocks, 12.0, 1.0, 128.0, "How far a grain flies in one hop: longer, larger dunes further apart.").soft(4.0, 48.0),
+        ParamSpec::int("iterations", "Iterations", 400, 10, 10000, "Steps of the simulation: more, dunes grown larger and more regular."),
+        ParamSpec::float("strength", "Strength", Unit::Ratio, 1.0, 0.0, 5.0, "How much sand the wind lifts at each step.").section(Section::Detail),
+        ParamSpec::float("abrasion", "Abrasion", Unit::Ratio, 0.0, 0.0, 5.0, "How fast blown sand wears the bare rock that faces the wind.").section(Section::Detail),
+        ParamSpec::seed(),
+    ],
+    kernel: Kernel::Global { cpu: wind::wind_cpu, gpu: Some(wind::wind_gpu), carry: &[Some(0), None, None] },
+    ..NodeSpec::BASE
+};
+
+pub static PARTICLE: NodeSpec = NodeSpec {
+    id: "erosion.particle",
+    label: "Particle erosion",
+    family: Family::Simulate,
+    summary: "Raindrops run down the slopes, wearing gullies and rills where they speed up and laying soil where they slow down.",
+    help: "The fine detail of erosion: each drop of rain runs downhill, picks up soil where it gathers speed and drops it where it slows, in hollows and at the feet of slopes. Use it after Stream erosion, or on its own on hills and cliffs, for gullies, rills, scree fans and soft valley floors. More Rain cuts deeper; Capacity is how much a drop carries; Radius how wide it wears.",
+    keywords: &["hydraulic", "droplets", "rain", "gullies", "rills", "erosion", "sediment"],
+    inputs: &[PortSpec::new("height", "Height", PortKind::Height, "The relief to erode."), HARDNESS_IN, RAIN_IN],
+    outputs: &[height_out("The relief eroded."), FLOW_OUT, WEAR_OUT, DEPOSITION_OUT],
+    params: &[
+        ParamSpec::float("rain", "Rain", Unit::Ratio, 1.0, 0.05, 16.0, "Raindrops for each sample of the simulation: more, deeper gullies, slower.").soft(0.1, 4.0),
+        ParamSpec::float("erosion", "Erosion", Unit::Ratio, 0.3, 0.0, 1.0, "How fast a drop picks up soil where it can carry more."),
+        ParamSpec::float("deposition", "Deposition", Unit::Ratio, 0.3, 0.0, 1.0, "How fast a drop lays down what it carries beyond what it can."),
+        ParamSpec::float("capacity", "Capacity", Unit::Ratio, 4.0, 0.0, 32.0, "How much soil a fast drop on a steep slope can carry.").soft(0.5, 16.0),
+        ParamSpec::float("evaporation", "Evaporation", Unit::Ratio, 0.02, 0.0, 0.5, "How much of its water a drop loses at each step: higher, shorter gullies.").section(Section::Detail),
+        ParamSpec::float("radius", "Radius", Unit::Blocks, 6.0, 1.0, 64.0, "How wide a drop wears the ground around it.").section(Section::Detail),
+        ParamSpec::float("inertia", "Inertia", Unit::Ratio, 0.05, 0.0, 0.95, "How much a drop keeps its way rather than turning downhill: higher, straighter and longer gullies.").section(Section::Advanced),
+        ParamSpec::seed(),
+    ],
+    kernel: Kernel::Global { cpu: particle::particle_cpu, gpu: Some(particle::particle_gpu), carry: &[Some(0), None, None, None] },
+    ..NodeSpec::BASE
+};
+
 pub static FLOW: NodeSpec = NodeSpec {
     id: "water.flow",
     label: "Flow",
@@ -76,9 +169,9 @@ pub static THERMAL: NodeSpec = NodeSpec {
     label: "Thermal erosion",
     family: Family::Simulate,
     summary: "Loose rock slides down slopes steeper than its angle of repose, and gathers at their feet as scree.",
-    help: "Wears cliffs back and fills the feet of slopes with talus, the way frost and gravity do: what is steeper than Talus angle sheds material to the lower neighbours until it is stable. More iterations go further towards that angle; Strength is how much moves at each. The Talus output is where material came to rest: scree, gravel, rubble.",
+    help: "Wears cliffs back and fills the feet of slopes with talus, the way frost and gravity do: what is steeper than Talus angle sheds material to the lower neighbours until it is stable. More iterations go further towards that angle; Strength is how much moves at each; Hardness keeps cliffs of hard rock standing while soft beds crumble. The Talus output is where material came to rest: scree, gravel, rubble.",
     keywords: &["talus", "scree", "weathering", "slope", "repose"],
-    inputs: &[PortSpec::new("height", "Height", PortKind::Height, "The relief to wear.")],
+    inputs: &[PortSpec::new("height", "Height", PortKind::Height, "The relief to wear."), PortSpec::new("hardness", "Hardness", PortKind::Mask, "Rock that holds: 1 never crumbles, 0 crumbles as Strength says.").or("the same rock everywhere")],
     outputs: &[height_out("The relief worn."), PortSpec::new("talus", "Talus", PortKind::Mask, "Where material came to rest, by how much (1 for 2 blocks and more).")],
     params: &[
         ParamSpec::float("angle", "Talus angle", Unit::Degrees, 35.0, 5.0, 80.0, "The steepest slope loose material holds on."),
@@ -94,7 +187,8 @@ pub static THERMAL: NodeSpec = NodeSpec {
 /// proportion to their excess; each sample then gathers what its
 /// neighbours shed to it. Gathering rather than scattering keeps it
 /// parallel and the same on any number of threads.
-pub(super) fn thermal_pass(h: &[f32], next: &mut [f32], shed: &mut [f32], total: &mut [f32], n: usize, drop: [f32; 2], strength: f32) {
+#[allow(clippy::too_many_arguments)]
+pub(super) fn thermal_pass(h: &[f32], next: &mut [f32], shed: &mut [f32], total: &mut [f32], n: usize, drop: [f32; 2], strength: f32, hard: Option<&[f32]>) {
     const NB: [(i32, i32, usize); 8] = [(-1, -1, 1), (0, -1, 0), (1, -1, 1), (-1, 0, 0), (1, 0, 0), (-1, 1, 1), (0, 1, 0), (1, 1, 1)];
     let inside = |x: i32, z: i32| x >= 0 && z >= 0 && x < n as i32 && z < n as i32;
     shed.par_chunks_mut(n).zip(total.par_chunks_mut(n)).enumerate().for_each(|(z, (srow, trow))| {
@@ -112,7 +206,8 @@ pub(super) fn thermal_pass(h: &[f32], next: &mut [f32], shed: &mut [f32], total:
                     most = most.max(e);
                 }
             }
-            srow[x] = strength * 0.5 * most;
+            let s = strength * (1.0 - hard.map_or(0.0, |m| m[z * n + x].clamp(0.0, 1.0)));
+            srow[x] = s * 0.5 * most;
             trow[x] = sum;
         }
     });
@@ -152,7 +247,7 @@ fn thermal_cpu(ctx: &Ctx, inputs: &[Option<&Grid>], cancel: &(dyn Fn() -> bool +
         if cancel() {
             return None;
         }
-        thermal_pass(&h, &mut next, &mut shed, &mut total, n, drop, strength);
+        thermal_pass(&h, &mut next, &mut shed, &mut total, n, drop, strength, inputs.get(1).copied().flatten().map(|g| g.plane(0)));
         std::mem::swap(&mut h, &mut next);
     }
     let talus: Vec<f32> = h.par_iter().zip(&src.data).map(|(a, b)| ((a - b) / 2.0).clamp(0.0, 1.0)).collect();
@@ -168,7 +263,9 @@ fn thermal_gpu(g: &Gpu, ctx: &Ctx, inputs: &[Option<&GpuGrid>], cancel: &(dyn Fn
     let n = src.side();
     let spacing = ctx.spacing() as f32;
     let slope = ctx.params.f("angle").to_radians().tan();
-    let u = g.uniform("thermal", &Uniforms::default().u32(n).f32(ctx.params.f("strength")).f32(slope * spacing).f32(slope * spacing * std::f32::consts::SQRT_2).finish());
+    let hard = inputs.get(1).copied().flatten().map(|g| &g.buffer);
+    let u = g.uniform("thermal", &Uniforms::default().u32(n).f32(ctx.params.f("strength")).f32(slope * spacing).f32(slope * spacing * std::f32::consts::SQRT_2).u32(hard.is_some() as u32).finish());
+    let stand_in = g.buffer("thermal stand-in", 16);
     let excess = g.compute("erosion.thermal", THERMAL_WGSL, "excess")?;
     let gather = g.compute("erosion.thermal", THERMAL_WGSL, "gather")?;
     let talus = g.compute("erosion.thermal", THERMAL_WGSL, "talus")?;
@@ -186,6 +283,9 @@ fn thermal_gpu(g: &Gpu, ctx: &Ctx, inputs: &[Option<&GpuGrid>], cancel: &(dyn Fn
         ];
         if let Some(next) = next {
             entries.push(wgpu::BindGroupEntry { binding: 4, resource: next.as_entire_binding() });
+        } else if std::ptr::eq(p, &excess) {
+            // What `excess` alone reads: the hardness.
+            entries.push(wgpu::BindGroupEntry { binding: 5, resource: hard.unwrap_or(&stand_in).as_entire_binding() });
         }
         device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &p.get_bind_group_layout(0), entries: &entries })
     };
@@ -240,3 +340,63 @@ fn thermal_gpu(g: &Gpu, ctx: &Ctx, inputs: &[Option<&GpuGrid>], cancel: &(dyn Fn
     }
     Some(vec![worn, out_talus])
 }
+
+/// The water output's words: a surface where there is water.
+const WATER_OUT: PortSpec = PortSpec::new("water", "Water", PortKind::Height, "The surface of the water where there is some, in blocks; well under the ground elsewhere.");
+
+pub static RIVERS: NodeSpec = NodeSpec {
+    id: "water.rivers",
+    label: "Rivers",
+    family: Family::Simulate,
+    summary: "Rivers where enough of the land drains, their beds and banks dug into the relief, wider and deeper downstream, holding lakes in deep hollows.",
+    help: "Follows the rain to the sea or the terrain's edge and lays a river wherever enough land drains: a thread at its source, wider and deeper as water joins it. Its water only ever goes down, cutting through the rims of shallow hollows and filling deep ones with lakes. Threshold sets how many rivers there are; Width and Depth those of the largest; Banks how gently the land slopes down to them. Water already on the map (wired to Water) is kept, and rivers end where they reach it.",
+    keywords: &["river", "stream", "channel", "riverbed", "drainage", "water", "lakes"],
+    inputs: &[PortSpec::new("height", "Height", PortKind::Height, "The relief the rivers run over."), PortSpec::new("water", "Water", PortKind::Height, "Water already there (a map's rivers and lakes): kept, and rivers end in it.").or("no water yet")],
+    outputs: &[height_out("The relief with the rivers' beds and banks dug in."), PortSpec::new("rivers", "Rivers", PortKind::Mask, "1 in the rivers' beds, fading out over their banks."), WATER_OUT],
+    params: &[
+        ParamSpec::float("threshold", "Threshold", Unit::Ratio, 0.55, 0.0, 1.0, "How much land must drain to a place for a river to run there: higher, fewer and larger rivers."),
+        ParamSpec::float("width", "Width", Unit::Blocks, 14.0, 1.0, 256.0, "The width of the largest river; the smallest are a quarter of it.").soft(2.0, 64.0),
+        ParamSpec::float("depth", "Depth", Unit::Blocks, 5.0, 0.5, 64.0, "The depth of the largest river.").soft(1.0, 16.0),
+        ParamSpec::float("banks", "Banks", Unit::Ratio, 1.0, 0.0, 8.0, "How far the banks slope down to the water, in river widths.").soft(0.0, 4.0),
+        ParamSpec::float("lakes", "Lakes", Unit::Ratio, 0.5, 0.0, 1.0, "Which hollows hold lakes rather than being cut through: 0 none, 1 every hollow a block deep."),
+        ParamSpec::float("sea", "Sea level", Unit::Blocks, 62.0, -64.0, 320.0, "Rivers end where the ground goes under it.").section(Section::Detail),
+        ParamSpec::seed(),
+    ],
+    kernel: Kernel::Global { cpu: water::rivers_cpu, gpu: Some(water::rivers_gpu), carry: &[Some(0), None, None] },
+    ..NodeSpec::BASE
+};
+
+pub static LAKES: NodeSpec = NodeSpec {
+    id: "water.lakes",
+    label: "Lakes",
+    family: Family::Simulate,
+    summary: "Every hollow fills up to where it spills: with water, or with ground.",
+    help: "Finds every hollow of the relief, where rain would gather, and fills it to the level where it overflows. Amount 0 makes them lakes; 1 fills them with ground, as sediment would, smoothing the land; between, both. What lies under the sea level is the sea's, not a lake.",
+    keywords: &["lake", "pond", "hollow", "depression", "basin", "fill", "water"],
+    inputs: &[PortSpec::new("height", "Height", PortKind::Height, "The relief whose hollows fill.")],
+    outputs: &[height_out("The relief, its hollows filled with ground as much as Amount says."), PortSpec::new("lakes", "Lakes", PortKind::Mask, "Where the lakes are, by how deep (1 for a block and a half and more)."), WATER_OUT],
+    params: &[
+        ParamSpec::float("amount", "Amount", Unit::Ratio, 0.0, 0.0, 1.0, "How much of each hollow fills with ground rather than water: 0, lakes; 1, flat ground."),
+        ParamSpec::float("sea", "Sea level", Unit::Blocks, 62.0, -64.0, 320.0, "Under it the hollows are the sea's: hollows spill into it."),
+    ],
+    kernel: Kernel::Global { cpu: water::lakes_cpu, gpu: Some(water::lakes_gpu), carry: &[Some(0), None, None] },
+    ..NodeSpec::BASE
+};
+
+pub static SEA: NodeSpec = NodeSpec {
+    id: "water.sea",
+    label: "Sea",
+    family: Family::Simulate,
+    summary: "The sea up to a level, where the terrain's edge lets it in, and the shore around it.",
+    help: "Floods the relief up to Level from the terrain's edge: low ground behind higher ground stays dry unless Connected is off. Its Shore mask follows the coast, a band of height around the level, for beaches and cliffs' feet.",
+    keywords: &["sea", "ocean", "coast", "shore", "beach", "water level"],
+    inputs: &[PortSpec::new("height", "Height", PortKind::Height, "The relief the sea floods.")],
+    outputs: &[height_out("The relief, as it is."), WATER_OUT, PortSpec::new("shore", "Shore", PortKind::Mask, "A band along the coast, Shore blocks of height either side of the level.")],
+    params: &[
+        ParamSpec::float("level", "Level", Unit::Blocks, 62.0, -64.0, 320.0, "The sea's surface."),
+        ParamSpec::float("shore", "Shore", Unit::Blocks, 4.0, 0.5, 64.0, "How many blocks of height either side of the level the shore takes.").soft(0.5, 16.0),
+        ParamSpec::flag("connected", "Connected", true, "Only where the sea comes in from the terrain's edge; off, every place under the level is sea."),
+    ],
+    kernel: Kernel::Global { cpu: water::sea_cpu, gpu: Some(water::sea_gpu), carry: &[Some(0), None, None] },
+    ..NodeSpec::BASE
+};
