@@ -486,7 +486,16 @@ fn header(ui: &mut Ui, icon: Icon, title: &str, add: &str, tip: &str) -> bool {
         // The button first, from the right; the title takes what is left,
         // cut short with … in a narrow panel or a long language.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            clicked = ui.add(egui::Button::new(RichText::new(theme::with_icon(Icon::Plus, add)).size(11.5)).frame(false)).on_hover_text(tip).clicked();
+            // Too long for the panel beside a bit of the title (a narrow
+            // panel, a long language): the + alone, its name on hover.
+            let text = theme::with_icon(Icon::Plus, add);
+            let wide = ui.fonts(|f| f.layout_no_wrap(text.clone(), egui::FontId::proportional(11.5), pal.text).size().x) + 2.0 * ui.spacing().button_padding.x;
+            let button = if wide + 60.0 <= ui.available_width() {
+                ui.add(egui::Button::new(RichText::new(text).size(11.5)).frame(false)).on_hover_text(tip)
+            } else {
+                ui.add(egui::Button::new(RichText::new(theme::glyph(Icon::Plus).to_string()).size(11.5)).frame(false)).on_hover_text(format!("{add}: {tip}"))
+            };
+            clicked = button.clicked();
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 ui.add(egui::Label::new(RichText::new(format!("{}  {}", theme::glyph(icon), title.to_uppercase())).size(10.5).strong().color(pal.weak)).truncate());
             });
