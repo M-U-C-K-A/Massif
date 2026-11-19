@@ -176,6 +176,7 @@ impl<'a> Builder<'a> {
             biome: None,
             data_version,
             colors: Vec::new(),
+            source: massif_core::structures::StructureSource::User,
         };
         s.finish();
         s

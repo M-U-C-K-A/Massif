@@ -1179,6 +1179,7 @@ pub(crate) mod tests {
             biome: None,
             data_version: 4671,
             colors: Vec::new(),
+            source: massif_core::structures::StructureSource::User,
         };
         hut.finish();
         hist.edit(&mut world, 0).structures_mut().push(std::sync::Arc::new(hut));
