@@ -12,6 +12,9 @@
 #                                already (--force builds it again)
 #   tools/task.sh notes          move the notes waiting in .github/notes into the top
 #                                section of .github/RELEASE_NOTES.md (before a release)
+#   tools/task.sh cargo <args>   run cargo when one of the machine's build slots is free
+#                                (MASSIF_BUILD_SLOTS, default 2): every build and test
+#                                goes through it, so sessions take turns on the CPU
 #   tools/task.sh status         the worktrees, and whether the main checkout is clean
 set -eu
 export PATH="$HOME/.cargo/bin:$PATH"
@@ -35,6 +38,7 @@ finish() {
     code=$?
     [ -z "$build" ] || rm -rf "$build"
     [ -z "$held" ] || rm -rf "$held"
+    [ -z "${land_turn:-}" ] || rm -rf "$land_turn"  # the land or install turn, held beside a build slot
     [ "$code" -eq 0 ] || echo "tools/task.sh $args: stopped (exit $code). Main moves only once it says \"Landed\"; fix the cause, commit, run it again." >&2
 }
 trap finish EXIT
@@ -93,7 +97,43 @@ take_turn() {
     echo $$ > "$1/pid"
 }
 
+# The machine runs at most MASSIF_BUILD_SLOTS builds at once, every session
+# and land together: more side by side only slows each one and the user's
+# desktop. A build waits for a free slot. take_slot <what is happening>.
+slots=${MASSIF_BUILD_SLOTS:-2}
+take_slot() {
+    said=""
+    while :; do
+        i=1
+        while [ "$i" -le "$slots" ]; do
+            slot="$common/massif-build-slot-$i.lock"
+            if mkdir "$slot" 2>/dev/null; then
+                held="$slot"
+                echo $$ > "$slot/pid"
+                return 0
+            fi
+            owner=$(cat "$slot/pid" 2>/dev/null || true)
+            if { [ -n "$owner" ] && ! ps -p "$owner" -o command= 2>/dev/null | grep -q "task.sh"; } || { [ -z "$owner" ] && [ -n "$(find "$slot" -maxdepth 0 -mmin +1 2>/dev/null)" ]; }; then
+                rm -rf "$slot"
+                continue
+            fi
+            i=$((i + 1))
+        done
+        if [ -z "$said" ]; then
+            echo "All $slots build slots are busy: waiting for one to free up before $1."
+            said=1
+        fi
+        sleep 5
+    done
+}
+
 case "${1:-status}" in
+cargo)
+    shift
+    take_slot "cargo $*"
+    export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4}
+    nice -n 5 cargo "$@"
+    ;;
 start)
     name=${2:?"a name for the task: tools/task.sh start <name>"}
     git -C "$main" worktree add "$main/.worktrees/$name" -b "$name" main
@@ -108,6 +148,8 @@ land)
     branch=$(git -C "$here" symbolic-ref --short HEAD)
     clean "$here" || { echo "Commit the changes first." >&2; exit 1; }
     take_turn "$land_lock" "landing on main"
+    land_turn="$held"
+    take_slot "landing"
     git -C "$here" rebase main
     # The version is the next release: not one already tagged, and the same
     # as the top of the release notes. A beta of it (vX.Y.Z-beta.N) does not
@@ -134,6 +176,8 @@ land)
     ;;
 install)
     take_turn "$lock" "installing Massif"
+    land_turn="$held"
+    take_slot "installing"
     # Main as it is once this install's turn has come.
     clean "$main" || { echo "The main checkout has changes that are not committed: install once they are landed." >&2; exit 1; }
     head=$(git -C "$main" rev-parse HEAD)
@@ -188,6 +232,7 @@ status)
     git -C "$main" worktree list
     if clean "$main"; then echo "The main checkout is clean."; else echo "The main checkout has changes that are not committed:"; git -C "$main" status --short --untracked-files=no; fi
     if [ -d "$land_lock" ]; then echo "A land is running (process $(cat "$land_lock/pid" 2>/dev/null || echo ?))."; fi
+    for slot in "$common"/massif-build-slot-*.lock; do [ -d "$slot" ] && echo "A build holds $(basename "$slot" .lock) (process $(cat "$slot/pid" 2>/dev/null || echo ?))."; done
     if [ -d "$lock" ]; then echo "An install is running (process $(cat "$lock/pid" 2>/dev/null || echo ?))."; fi
     echo "$(free_gb) GB free."
     if [ -d "$build_disk" ]; then echo "Build caches on $build_disk: $(du -sh "$builds" 2>/dev/null | cut -f1) in $builds, $(df -h "$build_disk" | awk 'NR == 2 { print $4 }') free there."; else echo "$build_disk is not plugged in: builds stay on the Mac."; fi

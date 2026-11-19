@@ -36,6 +36,7 @@ Several sessions work on this repository at the same time, each with its own sub
 ## Building and testing
 
 - Put `export PATH="$HOME/.cargo/bin:$PATH"` first in every command (Homebrew's cargo crashes). `rust-toolchain.toml` pins the toolchain.
+- Run every build and test through `tools/task.sh cargo <args>` (for example `tools/task.sh cargo test -p massif-core`), never `cargo` directly. The machine runs at most two builds at once across all sessions, lands and installs included, each with four jobs; a build waits for a free slot by itself, so never write a wait loop around it.
 - Never run `cargo fmt`. The code is formatted by hand with long lines. Write new code in the style around it.
 - Tests:
   - `cargo test --workspace`;
