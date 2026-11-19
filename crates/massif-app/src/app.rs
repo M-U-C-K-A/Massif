@@ -17432,7 +17432,8 @@ mod tests {
             settle(&mut h);
             h.render().unwrap().save(name("workspace")).unwrap();
             // A tool's card, with its WorldPainter name.
-            h.get_by_label("Raise / Lower").hover();
+            // The Tools panel's button (the top bar has one too).
+            h.get_all_by_label("Raise / Lower").last().unwrap().hover();
             settle(&mut h);
             h.render().unwrap().save(name("card")).unwrap();
             let ctx = h.ctx.clone();
