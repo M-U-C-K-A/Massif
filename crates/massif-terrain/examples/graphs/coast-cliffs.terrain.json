@@ -1,0 +1,282 @@
+{
+  "format": "massif.terrain-graph",
+  "version": 2,
+  "terrain": {
+    "size": 4096,
+    "seed": 11
+  },
+  "nodes": {
+    "albedo": {
+      "type": "color.mix",
+      "inputs": {
+        "a": "cliffs",
+        "b": "sand",
+        "mask": "beach"
+      }
+    },
+    "beach": {
+      "type": "combine.blend",
+      "inputs": {
+        "a": "near",
+        "b": "low"
+      },
+      "params": {
+        "mode": "multiply"
+      }
+    },
+    "beds": {
+      "type": "adjust.stratify",
+      "inputs": {
+        "in": "land"
+      },
+      "params": {
+        "layers": 9,
+        "strength": 0.45,
+        "tilt": 2
+      }
+    },
+    "chalk": {
+      "type": "color.solid",
+      "params": {
+        "color": "#dcd8cc"
+      }
+    },
+    "cliff": {
+      "type": "mask.slope",
+      "inputs": {
+        "height": "worn"
+      },
+      "params": {
+        "from": 34,
+        "to": 48
+      }
+    },
+    "cliffs": {
+      "type": "color.mix",
+      "inputs": {
+        "a": "grass",
+        "b": "chalk",
+        "mask": "cliff"
+      }
+    },
+    "grass": {
+      "type": "color.gradient",
+      "inputs": {
+        "in": "worn"
+      },
+      "params": {
+        "gradient": [
+          {
+            "at": 0,
+            "color": "#56763a"
+          },
+          {
+            "at": 0.6,
+            "color": "#6f8a45"
+          },
+          {
+            "at": 1,
+            "color": "#8a9a58"
+          }
+        ],
+        "high": 130,
+        "low": 62,
+        "preset": "custom"
+      }
+    },
+    "land": {
+      "type": "coast.coastline",
+      "params": {
+        "beach": 6,
+        "depth": 30,
+        "height": 64,
+        "hills": 0.3,
+        "inland": 900,
+        "land": 0.55,
+        "profile": [
+          [
+            0,
+            0
+          ],
+          [
+            0.03,
+            0.86
+          ],
+          [
+            0.3,
+            0.94
+          ],
+          [
+            1,
+            1
+          ]
+        ],
+        "roughness": 0.6,
+        "scale": 3200,
+        "shelf": 250
+      },
+      "note": "Downs ending in sheer cliffs: the land rises at once from the shore."
+    },
+    "low": {
+      "type": "mask.height",
+      "inputs": {
+        "height": "worn"
+      },
+      "params": {
+        "from": -64,
+        "softness": 2,
+        "to": 66
+      }
+    },
+    "near": {
+      "type": "mask.distance",
+      "inputs": {
+        "mask": "sea"
+      },
+      "params": {
+        "reach": 30
+      }
+    },
+    "out": {
+      "type": "output.map",
+      "inputs": {
+        "albedo": "albedo",
+        "height": "worn",
+        "terrain": "terrains"
+      }
+    },
+    "sand": {
+      "type": "color.solid",
+      "params": {
+        "color": "#e2d4a6"
+      }
+    },
+    "sea": {
+      "type": "mask.height",
+      "inputs": {
+        "height": "worn"
+      },
+      "params": {
+        "from": -64,
+        "softness": 1,
+        "to": 62
+      }
+    },
+    "terrains": {
+      "type": "terrain.layers",
+      "inputs": {
+        "mask_1": "cliff",
+        "mask_2": "beach"
+      },
+      "params": {
+        "base": "Grass",
+        "terrain_1": "Calcite",
+        "terrain_2": "Sand",
+        "terrain_3": "",
+        "terrain_4": ""
+      }
+    },
+    "worn": {
+      "type": "erosion.thermal",
+      "inputs": {
+        "height": "beds"
+      },
+      "params": {
+        "angle": 62,
+        "iterations": 8
+      }
+    }
+  },
+  "ui": {
+    "albedo": {
+      "pos": [
+        1560.0,
+        0.0
+      ]
+    },
+    "beach": {
+      "pos": [
+        1300.0,
+        0.0
+      ]
+    },
+    "beds": {
+      "pos": [
+        260.0,
+        0.0
+      ]
+    },
+    "chalk": {
+      "pos": [
+        0.0,
+        0.0
+      ]
+    },
+    "cliff": {
+      "pos": [
+        780.0,
+        0.0
+      ]
+    },
+    "cliffs": {
+      "pos": [
+        1040.0,
+        0.0
+      ]
+    },
+    "grass": {
+      "pos": [
+        780.0,
+        160.0
+      ]
+    },
+    "land": {
+      "pos": [
+        0.0,
+        160.0
+      ]
+    },
+    "low": {
+      "pos": [
+        780.0,
+        320.0
+      ]
+    },
+    "near": {
+      "pos": [
+        1040.0,
+        160.0
+      ]
+    },
+    "out": {
+      "pos": [
+        1820.0,
+        0.0
+      ]
+    },
+    "sand": {
+      "pos": [
+        0.0,
+        320.0
+      ]
+    },
+    "sea": {
+      "pos": [
+        780.0,
+        480.0
+      ]
+    },
+    "terrains": {
+      "pos": [
+        1560.0,
+        160.0
+      ]
+    },
+    "worn": {
+      "pos": [
+        520.0,
+        0.0
+      ]
+    }
+  }
+}
