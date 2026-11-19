@@ -80,7 +80,7 @@ The window is made of areas, as in Blender. Each area shows one editor: the map,
 - `Ctrl Space` maximises the area under the pointer, and gives it back its place.
 
 ## Workspaces
-The tabs at the top are workspaces: arrangements of areas for a kind of work. The sides of Massif are switched at the top left: **Terrain**, the terrain generator, **World**, the map editor, and **Render** (Beta), where path-traced images of the map will be made: it comes with the Massif 2.0 beta.
+The tabs at the top are workspaces: arrangements of areas for a kind of work. The sides of Massif are switched at the top left: **Terrain**, the terrain generator, **World**, the map editor, and **Render** (Beta), where the map is path-traced and saved as images (see Render).
 - `+` adds a copy of the workspace shown.
 - Right-click a tab: **Reset** puts it back as it was at first, **Duplicate** copies it, **Delete** removes it.
 
@@ -248,6 +248,15 @@ The brush faces the way the land faces over its whole area, not the face of the 
 - Walking into a step of one block jumps onto it (Minecraft's Auto-Jump).
 - **Ghost** (at the bottom right, or `G`) flies through everything, as the game's spectator mode: into caves, under overhangs, along tunnels. With your eyes in the ground the view sees through it to the air beyond, a cave's walls, and the cursor and brush work on what it shows. `G` again flies out (from the first air above, if you are in the ground).
 Water slows you and lets you swim, and under it the world turns blue and dim, as in the game; a fall off the map puts you back where you last stood. Turn **Player** off to get the orbit camera back.
+
+# Render
+The **Render** side draws the open map path-traced: sunlight and skylight bouncing off the land, soft shadows, water that mirrors the sky and shows the shallows' floor, glowing blocks lighting what is around them, with the game's textures and models. The map is built as an export would write it, nearest the view first. Still, the image grows clean; moving, it is drawn coarser.
+
+- Drag to turn, right-drag to slide, the wheel to come closer, double-click for the whole map, Shift-click to focus there.
+- **Sun and sky**: a **Look** (Clear noon, Fair weather, Golden hour, Blue hour, Foggy morning, Night), the **Time**, **Day** and **Latitude** put the sun, **North** turns the map. A moon at night.
+- **Atmosphere**: **Air**, **Haze**, a **Fog** filling low ground first, **Shafts of light**, a **Sea around the map**. **Clouds**: cover, height, thickness, density, size, wind; they shade the land.
+- **Lens**: angle, aperture, focus. **Image**: glow, bounces, exposure.
+- **Image to save**: a size (the view's, HD, 4K, 8K) and samples a pixel, then **Save image…** writes a PNG, drawn a band at a time, with its progress and **Cancel**.
 
 # Terrain graphs
 ## Nodes

@@ -445,6 +445,8 @@ pub struct MassifApp {
     maps: HashMap<AreaId, MapView>,
     map_cache: MapCache,
     view3d: View3d,
+    /// The Render side: the map path-traced.
+    render_side: crate::render_side::RenderSide,
     /// The 3D Sculpt editor's view: its own camera and tiles.
     sculpt3d: View3d,
     hover: Option<(i32, i32)>,
@@ -1010,6 +1012,7 @@ impl MassifApp {
             maps: HashMap::new(),
             map_cache: MapCache::default(),
             view3d: View3d::default(),
+            render_side: Default::default(),
             sculpt3d: View3d::default(),
             hover: None,
             map_center: None,
@@ -5549,7 +5552,7 @@ impl MassifApp {
             .show(ui, |ui| {
                 if self.layout.render {
                     ui.ctx().data_mut(|d| d.insert_temp(Id::unique("massif areas"), Vec::<(AreaId, Rect)>::new()));
-                    crate::render_side::ui(ui);
+                    self.render_side.ui(ui, frame, &mut self.doc, self.blocks.catalogue.clone());
                 } else {
                     self.dock(ui, frame);
                 }
@@ -5566,6 +5569,7 @@ impl MassifApp {
             self.map_cache.invalidate(&dirty);
             self.view3d.invalidate(&dirty);
             self.sculpt3d.invalidate(&dirty);
+            self.render_side.invalidate(&dirty);
             ctx.request_repaint();
         }
         let title = format!("{}{} — Massif", self.doc.title(), if self.doc.is_modified() { " •" } else { "" });
@@ -7712,11 +7716,31 @@ mod tests {
         h.get_by_label_contains(&label(Icon::Aperture, "Render")).click();
         h.run_steps(3);
         assert_eq!(h.state().layout.side(), Side::Render);
-        h.get_by_label("Coming in the Massif 2.0 beta");
+        h.get_by_label("Sun");
         assert!(h.query_by_label("Layout").is_none(), "no workspace tabs on the Render side");
+        // The map's chunks built and path-traced, the image settling.
+        let started = std::time::Instant::now();
+        while h.state().render_side.building() && started.elapsed().as_secs() < 120 {
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!h.state().render_side.building(), "the scene was built");
+        h.run_steps(24);
+        assert!(h.state().render_side.samples() > 8, "samples add up while the view stays still");
         if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
             h.render().unwrap().save(dir.join("render-side.png")).unwrap();
         }
+        // A still saved: drawn a band at a time, then written as a PNG.
+        let out = std::env::var_os("MASSIF_SNAPSHOT_DIR").map_or_else(std::env::temp_dir, PathBuf::from).join("render-still.png");
+        let _ = std::fs::remove_file(&out);
+        h.state_mut().render_side.save_still(out.clone(), [1920, 1080], 32);
+        let started = std::time::Instant::now();
+        while h.state().render_side.saving() && started.elapsed().as_secs() < 120 {
+            h.step();
+        }
+        assert!(matches!(h.state().render_side.saved(), Some(Ok(_))), "{:?}", h.state().render_side.saved());
+        let (w, hgt) = image::image_dimensions(&out).unwrap();
+        assert_eq!((w, hgt), (1920, 1080));
         h.get_by_label_contains(&label(Icon::Map, "World")).click();
         h.run_steps(3);
         assert_eq!((h.state().layout.side(), h.state().layout.active), (Side::World, world));

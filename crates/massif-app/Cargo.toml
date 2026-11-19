@@ -20,6 +20,7 @@ massif-script.workspace = true
 massif-assets.workspace = true
 massif-objects.workspace = true
 massif-thumbnails.workspace = true
+massif-render.workspace = true
 log.workspace = true
 rayon.workspace = true
 serde.workspace = true

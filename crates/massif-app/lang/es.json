@@ -2892,7 +2892,6 @@
  "Pick the brush in the Brushes panel; its size, intensity and rotation in Brush Settings. 3D Sculpt shapes {most:.0} blocks around at most.": "Elige el pincel en el panel Pinceles; su tamaño, intensidad y rotación en Ajustes del pincel. Esculpir 3D modela como mucho {most:.0} bloques alrededor.",
  "3D Sculpt takes {most:.0} at most": "Esculpir 3D toma {most:.0} como mucho",
  "Beta": "Beta",
- "Coming in the Massif 2.0 beta": "Llega con la beta de Massif 2.0",
  "Fill to y {level}": "Llenar hasta y {level}",
  "Raise this water to y {level}": "Subir esta agua a y {level}",
  "Height limit y {water_limit} reached": "Límite de altura y {water_limit} alcanzado",
@@ -2911,7 +2910,6 @@
  "No hollow here: filled the nearest one, {n} columns up to {water_level}": "No hay hondonada aquí: se llenó la más cercana, {n} columnas hasta {water_level}",
  "The land is above y {above}: filled the nearest hollow, {n} columns up to {water_level}": "El terreno está por encima de y {above}: se llenó la hondonada más cercana, {n} columnas hasta {water_level}",
  "Path-traced images of the map, under a real sky": "Imágenes del mapa con trazado de rutas, bajo un cielo real",
- "Photorealistic images of your map, path-traced on the graphics card with the game's textures and resource packs, under a sky with a sun, haze and fog. Then large stills, camera paths and Minecraft worlds opened as they are.": "Imágenes fotorrealistas de tu mapa, calculadas por trazado de rutas en la tarjeta gráfica con las texturas del juego y los paquetes de recursos, bajo un cielo con sol, bruma y niebla. Después, imágenes grandes, recorridos de cámara y mundos de Minecraft abiertos tal cual.",
  "Water raised by {n} blocks, to {level}: height limit reached": {
   "one": "Agua subida {n} bloque, a {level}: límite de altura alcanzado",
   "other": "Agua subida {n} bloques, a {level}: límite de altura alcanzado"

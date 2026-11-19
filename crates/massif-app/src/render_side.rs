@@ -1,38 +1,672 @@
-//! The Render side: path-traced images of the map. For now, what it will
-//! be, until the renderer of Massif 2.0 comes.
+//! The Render side: the open map path-traced on the graphics card
+//! (`massif_render`), a sample a pixel a frame, added up while the view
+//! stays still; the sun, the sky and the exposure beside it.
+//!
+//! The map's chunks are built in the background by the exporter, nearest
+//! the view first, and put on the graphics card as they come, so the
+//! image fills in from the middle out; an edit made on the World side
+//! builds its tiles again when the Render side is shown next.
 
-use egui::{Rect, RichText, Ui, vec2};
-
+use crate::doc::Document;
 use crate::theme::{self, Icon, Palette, RichTextExt};
+use crate::widgets::{Field, row, well};
+use egui::{Align2, Color32, FontId, PointerButton, Rect, RichText, Sense, Ui, pos2, vec2};
+use massif_core::coords::TilePos;
+use massif_render::map_source::{Extent, MapBuilder, target_for, tiles_by_distance};
+use massif_render::{Camera, Light, Materials, Renderer};
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::mpsc::Receiver;
+use std::time::{Duration, Instant};
 
-/// The Render side, over the whole of the window under its bars.
-pub fn ui(ui: &mut Ui) {
-    let pal = Palette::of(ui);
-    let rect = ui.available_rect_before_wrap();
-    ui.painter().rect_filled(rect, theme::CARD_RADIUS, pal.canvas);
-    let column = Rect::from_center_size(rect.center(), vec2(420.0_f32.min(rect.width() - 32.0), 260.0));
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(column).layout(egui::Layout::top_down(egui::Align::Center)));
-    child.label(RichText::new(theme::glyph(Icon::Aperture).to_string()).size(28.0).color(pal.weak));
-    child.add_space(8.0);
-    child.horizontal(|ui| {
-        // Centred: the title and its tag, side by side.
-        let tag = RichText::new(tr!("Beta")).size(11.0).strong().color(pal.accent);
-        let title = RichText::new(tr!("Render")).size(16.0).medium();
-        let width = ui.fonts_mut(|f| f.layout_no_wrap(tr!("Render").to_owned(), egui::FontId::proportional(16.0), pal.text).size().x + f.layout_no_wrap(tr!("Beta").to_owned(), egui::FontId::proportional(11.0), pal.text).size().x) + ui.spacing().item_spacing.x;
-        ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
-        ui.label(title);
-        ui.label(tag);
-    });
-    child.add_space(2.0);
-    child.label(RichText::new(tr!("Coming in the Massif 2.0 beta")).size(12.5).color(pal.text));
-    child.add_space(8.0);
-    child.add(
-        egui::Label::new(
-            RichText::new(tr!("Photorealistic images of your map, path-traced on the graphics card with the game's textures and resource packs, under a sky with a sun, haze and fog. Then large stills, camera paths and Minecraft worlds opened as they are."))
-                .size(12.0)
-                .color(pal.weak),
-        )
-        .halign(egui::Align::Center)
-        .wrap(),
-    );
+/// Width of the column of settings.
+const SIDEBAR: f32 = 280.0;
+/// Time a frame spends putting built chunks on the graphics card.
+const UPLOAD_BUDGET: Duration = Duration::from_millis(6);
+/// Seconds after the view last moved that it is drawn sharp again.
+const STILL_AFTER: f64 = 0.2;
+/// Samples a pixel the image stops at.
+const MOST_SAMPLES: u32 = 2048;
+
+/// The sizes a still is saved at: the view's, or one of the usual ones.
+const STILL_SIZES: [(&str, Option<[u32; 2]>); 4] = [(tn!("The view's"), None), ("HD", Some([1920, 1080])), ("4K", Some([3840, 2160])), ("8K", Some([7680, 4320]))];
+/// Pixels a frame adds a sample to while a still is drawn: about a view's
+/// worth, a short job for the graphics card whatever the still's size.
+const STILL_BAND: u32 = 2_000_000;
+
+/// A still being drawn: where it goes, at what size and to how many
+/// samples a pixel, from the camera and in the light it was asked in, and
+/// the next row of its next band.
+struct Still {
+    path: PathBuf,
+    size: [u32; 2],
+    samples: u32,
+    camera: Camera,
+    light: Light,
+    row: u32,
+    started: Instant,
+}
+
+/// The time and place the sun is put by.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Time {
+    /// Local solar time, hours.
+    hour: f32,
+    /// Day of the year.
+    day: f32,
+    /// Degrees, north positive.
+    latitude: f32,
+    /// How far the map's north is turned from the world's, degrees.
+    north: f32,
+}
+
+impl Default for Time {
+    fn default() -> Self {
+        Self { hour: 15.0, day: 172.0, latitude: 45.0, north: 0.0 }
+    }
+}
+
+/// The ready-made looks of the sky, by name.
+const PRESETS: [&str; 6] = [tn!("Clear noon"), tn!("Fair weather"), tn!("Golden hour"), tn!("Blue hour"), tn!("Foggy morning"), tn!("Night")];
+
+/// Put a ready-made look of the sky on `light`, its sun by `time` (the fog
+/// and clouds from the sea level `sea`).
+fn preset(k: usize, light: &mut Light, time: &mut Time, sea: f32) {
+    let base = Light { fog_height: sea + 8.0, cloud_height: sea + 1200.0, aperture: light.aperture, focus: light.focus, bounces: light.bounces, ..Light::default() };
+    let (hour, l) = match k {
+        0 => (12.5, base),
+        1 => (14.5, Light { cloud_cover: 0.42, ..base }),
+        2 => (18.8, Light { haze: 4.0, cloud_cover: 0.2, exposure: 2.5, ..base }),
+        3 => (20.25, Light { haze: 2.0, exposure: 7.0, ..base }),
+        4 => (7.0, Light { fog: 0.02, fog_falloff: 16.0, haze: 2.0, exposure: 1.4, ..base }),
+        _ => (23.0, Light { exposure: 6.0, moon: 1.0 / 150.0, ..base }),
+    };
+    *light = l;
+    time.hour = hour;
+    light.set_time(time.hour, time.day, time.latitude, time.north);
+}
+
+/// The camera of the Render side: turning about a point.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Orbit {
+    target: [f64; 3],
+    yaw: f32,
+    pitch: f32,
+    distance: f64,
+}
+
+impl Orbit {
+    fn camera(&self, fov: f32) -> Camera {
+        Camera::orbit(self.target, self.yaw, self.pitch, self.distance, fov.to_radians())
+    }
+}
+
+/// What the renderer holds of the open map.
+struct Scene {
+    renderer: Renderer,
+    materials: Arc<Materials>,
+    builder: Option<MapBuilder>,
+    /// Tiles on the graphics card, and all of the map's.
+    built: HashSet<TilePos>,
+    tiles: usize,
+    started: Instant,
+    /// How long the whole map took to build, once built.
+    took: Option<Duration>,
+    /// The map is larger than the graphics card's buffers.
+    full: bool,
+    generation: u64,
+    catalogue: Option<usize>,
+    dim: usize,
+}
+
+pub struct RenderSide {
+    scene: Option<Scene>,
+    orbit: Option<Orbit>,
+    light: Light,
+    time: Time,
+    /// The vertical field of view, degrees.
+    fov: f32,
+    preset: usize,
+    texture: Option<egui::TextureId>,
+    /// Tiles edited since they were built.
+    dirty: HashSet<TilePos>,
+    moving_until: f64,
+    last: Option<(Orbit, Light, [u32; 2], f32)>,
+    /// When the image last started adding samples up, and its samples
+    /// then: how many it adds a second.
+    since: Option<(Instant, u32)>,
+    /// The size a still is saved at (in [`STILL_SIZES`]) and its samples
+    /// a pixel; the one being drawn; the one being written; what became of
+    /// the last.
+    still_size: usize,
+    still_samples: u32,
+    still: Option<Still>,
+    writing: Option<Receiver<Result<String, String>>>,
+    saved: Option<Result<String, String>>,
+    /// The size the image's texture was shown at.
+    texture_size: [u32; 2],
+}
+
+impl Default for RenderSide {
+    fn default() -> Self {
+        let mut light = Light::default();
+        let time = Time::default();
+        light.set_time(time.hour, time.day, time.latitude, time.north);
+        Self { scene: None, orbit: None, light, time, fov: 50.0, preset: usize::MAX, texture: None, dirty: HashSet::new(), moving_until: 0.0, last: None, since: None, still_size: 2, still_samples: 256, still: None, writing: None, saved: None, texture_size: [0; 2] }
+    }
+}
+
+impl RenderSide {
+    /// Whether the map's chunks are being built.
+    #[cfg(test)]
+    pub fn building(&self) -> bool {
+        self.scene.as_ref().is_none_or(|s| s.builder.is_some())
+    }
+
+    /// Samples a pixel added up in the image.
+    #[cfg(test)]
+    pub fn samples(&self) -> u32 {
+        self.scene.as_ref().map_or(0, |s| s.renderer.samples)
+    }
+
+    /// Draw a still now, without asking where: for tests.
+    #[cfg(test)]
+    pub fn save_still(&mut self, path: PathBuf, size: [u32; 2], samples: u32) {
+        let fov = self.fov;
+        if let Some(orbit) = self.orbit {
+            self.still = Some(Still { path, size, samples, camera: orbit.camera(fov), light: self.light, row: 0, started: Instant::now() });
+        }
+    }
+
+    /// Whether a still is being drawn or written.
+    #[cfg(test)]
+    pub fn saving(&self) -> bool {
+        self.still.is_some() || self.writing.is_some()
+    }
+
+    /// What became of the last still: its file's name, or why it failed.
+    #[cfg(test)]
+    pub fn saved(&self) -> Option<&Result<String, String>> {
+        self.saved.as_ref()
+    }
+
+    /// Tiles the map changed in: built again when the side is shown.
+    pub fn invalidate(&mut self, tiles: &[TilePos]) {
+        if self.scene.is_some() {
+            self.dirty.extend(tiles.iter().copied());
+        }
+    }
+
+    /// The Render side, over the whole of the window under its bars.
+    pub fn ui(&mut self, ui: &mut Ui, frame: &eframe::Frame, doc: &mut Document, catalogue: Option<Arc<massif_assets::Catalogue>>) {
+        let pal = Palette::of(ui);
+        let whole = ui.available_rect_before_wrap();
+        let view = Rect::from_min_max(whole.min, pos2((whole.right() - SIDEBAR - 8.0).max(whole.left() + 100.0), whole.bottom()));
+        let side = Rect::from_min_max(pos2(view.right() + 8.0, whole.top()), whole.max);
+        ui.painter().rect_filled(view, theme::CARD_RADIUS, pal.canvas);
+        let Some(render_state) = frame.wgpu_render_state() else {
+            ui.painter().text(view.center(), Align2::CENTER_CENTER, tr!("Rendering needs the wgpu renderer"), FontId::proportional(13.0), pal.weak);
+            return;
+        };
+        let (device, queue) = (&render_state.device, &render_state.queue);
+        let cat_key = catalogue.as_ref().map(|c| Arc::as_ptr(c) as usize);
+        // A new map (or the game's textures read since): a new scene.
+        if self.scene.as_ref().is_some_and(|s| s.generation != doc.generation || s.catalogue != cat_key || s.dim != doc.dim) {
+            self.scene = None;
+            self.orbit = None;
+        }
+        if self.scene.is_none() {
+            let target = target_for(catalogue.as_ref().map(|c| c.version.as_str()));
+            let Some(extent) = Extent::of_map(&doc.world, doc.dim, &target) else {
+                ui.painter().text(view.center(), Align2::CENTER_CENTER, tr!("Nothing to render: the map is empty"), FontId::proportional(13.0), pal.weak);
+                return;
+            };
+            let orbit = *self.orbit.get_or_insert_with(|| framing(&extent, doc.world.meta.sea_level as f64));
+            let materials = Arc::new(Materials::new(catalogue.clone(), device.limits().max_texture_array_layers as usize));
+            let tiles = tiles_by_distance(&doc.world, doc.dim, orbit.target[0], orbit.target[2]);
+            let count = tiles.len();
+            let builder = MapBuilder::start(doc.world.snapshot(), doc.dim, target, materials.clone(), tiles);
+            self.scene = Some(Scene {
+                renderer: Renderer::new(device, queue, extent),
+                materials,
+                builder: Some(builder),
+                built: HashSet::new(),
+                tiles: count,
+                started: Instant::now(),
+                took: None,
+                full: false,
+                generation: doc.generation,
+                catalogue: cat_key,
+                dim: doc.dim,
+            });
+            self.dirty.clear();
+            self.last = None;
+            // The fog and the clouds where they belong on this map.
+            let sea = doc.world.meta.sea_level as f32;
+            self.light.fog_height = sea + 8.0;
+            self.light.cloud_height = sea + 1200.0;
+        }
+        let scene = self.scene.as_mut().expect("made above");
+        scene.renderer.sea_level = doc.world.meta.sea_level as f64;
+        let orbit = self.orbit.get_or_insert_with(|| framing(&scene.renderer.extent(), doc.world.meta.sea_level as f64));
+
+        // Edits since: their tiles first, then those not built yet, from a
+        // snapshot of the map as it is now.
+        if !self.dirty.is_empty() {
+            let mut first: Vec<TilePos> = self.dirty.drain().collect();
+            let near = |p: &TilePos| {
+                let (x, z) = ((p.x as f64 + 0.5) * 128.0 - orbit.target[0], (p.z as f64 + 0.5) * 128.0 - orbit.target[2]);
+                x * x + z * z
+            };
+            first.sort_by(|a, b| near(a).total_cmp(&near(b)));
+            let again: HashSet<TilePos> = first.iter().copied().collect();
+            let rest: Vec<TilePos> = tiles_by_distance(&doc.world, doc.dim, orbit.target[0], orbit.target[2]).into_iter().filter(|p| !scene.built.contains(p) && !again.contains(p)).collect();
+            for p in &first {
+                scene.built.remove(p);
+            }
+            first.extend(rest);
+            let target = target_for(catalogue.as_ref().map(|c| c.version.as_str()));
+            scene.builder = Some(MapBuilder::start(doc.world.snapshot(), doc.dim, target, scene.materials.clone(), first));
+            scene.took = None;
+            scene.started = Instant::now();
+        }
+
+        // Built chunks onto the graphics card, a few milliseconds' worth.
+        let started = Instant::now();
+        let mut changed = false;
+        if let Some(builder) = &mut scene.builder {
+            while started.elapsed() < UPLOAD_BUDGET {
+                let Some(built) = builder.take() else { break };
+                scene.built.insert(built.tile);
+                if !scene.renderer.put(built.chunks) {
+                    scene.full = true;
+                }
+                changed = true;
+            }
+            if builder.finished() {
+                if let Some(e) = builder.error() {
+                    log::warn!("render scene: {e}");
+                }
+                scene.builder = None;
+                scene.took = Some(scene.started.elapsed());
+            }
+            ui.ctx().request_repaint();
+        }
+        scene.renderer.sync_materials(&scene.materials);
+
+        // The camera: drag to turn about the point looked at, right-drag
+        // (or middle) to slide over the land, the wheel to come closer.
+        let sense = if self.still.is_some() { Sense::hover() } else { Sense::click_and_drag() };
+        let response = ui.interact(view, egui::Id::unique("massif render view"), sense);
+        let now = ui.input(|i| i.time);
+        let extent = scene.renderer.extent();
+        let span = extent.width.max(extent.depth) as f64 * 16.0;
+        if response.dragged_by(PointerButton::Primary) {
+            let d = response.drag_delta();
+            orbit.yaw += d.x * 0.006;
+            orbit.pitch = (orbit.pitch - d.y * 0.006).clamp(-1.55, 1.2);
+        }
+        if response.dragged_by(PointerButton::Secondary) || response.dragged_by(PointerButton::Middle) {
+            let d = response.drag_delta();
+            let k = orbit.distance * 0.0016;
+            let (s, c) = (orbit.yaw.sin() as f64, orbit.yaw.cos() as f64);
+            orbit.target[0] -= (c * d.x as f64 - s * d.y as f64) * k;
+            orbit.target[2] -= (s * d.x as f64 + c * d.y as f64) * k;
+        }
+        if response.hovered() && self.still.is_none() {
+            let scroll = ui.input(|i| i.smooth_scroll_delta.y + i.smooth_scroll_delta.x);
+            if scroll != 0.0 {
+                orbit.distance = (orbit.distance * (-scroll as f64 * 0.003).exp()).clamp(3.0, span * 3.0 + 2000.0);
+            }
+        }
+        if response.double_clicked() {
+            *orbit = framing(&extent, doc.world.meta.sea_level as f64);
+        }
+        // Shift-click: in focus there.
+        if response.clicked()
+            && ui.input(|i| i.modifiers.shift)
+            && let Some(at) = response.interact_pointer_pos()
+        {
+            let camera = orbit.camera(self.fov);
+            let b = camera.basis();
+            let tan = (camera.fov_y * 0.5).tan();
+            let ndc = [((at.x - view.left()) / view.width()) * 2.0 - 1.0, ((at.y - view.top()) / view.height()) * 2.0 - 1.0];
+            let dir = b.forward + b.right * (ndc[0] * tan * view.width() / view.height()) - b.up * (ndc[1] * tan);
+            let d = dir.normalize();
+            if let Some(t) = scene.renderer.pick(camera.eye, [d.x as f64, d.y as f64, d.z as f64], 50000.0) {
+                self.light.focus = (t * d.dot(b.forward) as f64) as f32;
+                if self.light.aperture == 0.0 {
+                    self.light.aperture = 0.4;
+                }
+            }
+        }
+
+        // The image: as large as the view, in pixels; a still's own size
+        // while one is drawn.
+        let ppp = ui.ctx().pixels_per_point();
+        let px = [(view.width() * ppp).round().max(1.0) as u32, (view.height() * ppp).round().max(1.0) as u32];
+        let wanted = self.still.as_ref().map_or(px, |s| s.size);
+        scene.renderer.resize(wanted[0], wanted[1]);
+        if scene.renderer.size() != Some(self.texture_size) || self.texture.is_none() {
+            let image = scene.renderer.view().expect("made by resize");
+            let mut egui_renderer = render_state.renderer.write();
+            match self.texture {
+                Some(id) => egui_renderer.update_egui_texture_from_wgpu_texture(device, image, wgpu::FilterMode::Linear, id),
+                None => self.texture = Some(egui_renderer.register_native_texture(device, image, wgpu::FilterMode::Linear)),
+            }
+            self.texture_size = scene.renderer.size().unwrap_or(wanted);
+        }
+        let most = if theme::reduce_motion(ui.ctx()) { 64 } else { MOST_SAMPLES };
+        if let Some(still) = &mut self.still {
+            // A band of rows a frame, every row a sample before the next.
+            let [w, h] = still.size;
+            let rows = ((STILL_BAND / w.max(1)) / 8 * 8).clamp(8, h.max(8));
+            if still.row == 0 && scene.renderer.samples == 0 {
+                scene.renderer.restart();
+            }
+            if let Some(cmd) = scene.renderer.render_rows(&still.camera, &still.light, still.row, (still.row + rows).min(h)) {
+                queue.submit([cmd]);
+            }
+            still.row += rows;
+            if still.row >= h {
+                still.row = 0;
+                scene.renderer.sample_done();
+            }
+            ui.ctx().request_repaint();
+            if scene.renderer.samples >= still.samples {
+                // Done: read it back, and write it away from the frames.
+                let still = self.still.take().expect("drawn above");
+                let image = scene.renderer.read_image();
+                let (tx, rx) = std::sync::mpsc::channel();
+                let took = still.started.elapsed().as_secs_f64();
+                std::thread::spawn(move || {
+                    let name = still.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    let result = match image {
+                        Some((w, h, rgba)) => {
+                            let mut png = Vec::new();
+                            image::write_buffer_with_format(&mut std::io::Cursor::new(&mut png), &rgba, w, h, image::ColorType::Rgba8, image::ImageFormat::Png)
+                                .map_err(|e| e.to_string())
+                                .and_then(|()| massif_core::atomic::write(&still.path, &png, true).map_err(|e| massif_core::atomic::describe(&e, &still.path)))
+                                .map(|()| format!("{name} · {w} × {h} · {took:.0} s"))
+                        }
+                        None => Err(tr!("the graphics card gave no image").to_owned()),
+                    };
+                    let _ = tx.send(result.map_err(|e| tr!("The image could not be saved: {e}", e)));
+                });
+                self.writing = Some(rx);
+                scene.renderer.restart();
+            }
+        } else {
+            let shown = (*orbit, self.light, px, self.fov);
+            if self.last.is_some_and(|l| l.0 != shown.0 || l.3 != shown.3) {
+                self.moving_until = now + STILL_AFTER;
+            }
+            if self.last.is_some_and(|l| l.1 != shown.1) || changed {
+                scene.renderer.restart();
+            }
+            self.last = Some(shown);
+            let moving = now < self.moving_until;
+            // With less motion (Settings ▸ Accessibility), the image settles
+            // sooner and stops there.
+            if moving || scene.renderer.samples < most {
+                if let Some(cmd) = scene.renderer.render(&orbit.camera(self.fov), &self.light, moving) {
+                    queue.submit([cmd]);
+                }
+                ui.ctx().request_repaint();
+            }
+        }
+        if let Some(rx) = &self.writing {
+            match rx.try_recv() {
+                Ok(result) => {
+                    self.saved = Some(result);
+                    self.writing = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.writing = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => ui.ctx().request_repaint_after(Duration::from_millis(50)),
+            }
+        }
+        let samples = scene.renderer.samples;
+        if samples <= 1 || self.since.is_some_and(|(_, n)| samples < n) {
+            self.since = (samples == 1).then(|| (Instant::now(), 1));
+        }
+        if let Some(id) = self.texture {
+            // A still fits the view, its own shape kept.
+            let [w, h] = self.texture_size;
+            let fit = if self.still.is_some() {
+                let k = (view.width() / w.max(1) as f32).min(view.height() / h.max(1) as f32);
+                Rect::from_center_size(view.center(), vec2(w as f32 * k, h as f32 * k))
+            } else {
+                view
+            };
+            ui.painter().image(id, fit, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        }
+
+        // What it is at, over the bottom left of the image.
+        let status = match (&scene.builder, scene.full) {
+            _ if self.still.is_some() => {
+                let s = self.still.as_ref().expect("checked");
+                let done = (scene.renderer.samples as f32 + s.row as f32 / s.size[1].max(1) as f32) / s.samples.max(1) as f32;
+                tr!("Drawing the image: {percent} %", percent = (done * 100.0).floor() as u32)
+            }
+            (_, true) => tr!("The map is larger than the graphics card holds: part of it is missing").to_owned(),
+            (Some(b), _) => {
+                let (done, all) = b.progress();
+                tr!("Building the scene: {done} of {all} tiles", done, all)
+            }
+            (None, _) => trn!("{n} sample a pixel", "{n} samples a pixel", n = scene.renderer.samples),
+        };
+        let at = view.left_bottom() + vec2(theme::PAD, -theme::PAD);
+        let galley = ui.painter().layout_no_wrap(status, FontId::proportional(12.0), pal.text);
+        let back = Rect::from_min_size(at - vec2(0.0, galley.size().y + 8.0), galley.size() + vec2(16.0, 8.0));
+        ui.painter().rect(back, theme::PILL, pal.panel, egui::Stroke::new(1.0, pal.border), egui::StrokeKind::Inside);
+        ui.painter().galley(back.min + vec2(8.0, 4.0), galley, pal.text);
+
+        // The settings beside, in a column that scrolls.
+        let mut outer = ui.new_child(egui::UiBuilder::new().max_rect(side).layout(egui::Layout::top_down(egui::Align::Min)));
+        outer.horizontal(|ui| {
+            ui.label(RichText::new(theme::with_icon(Icon::Aperture, tr!("Render"))).size(14.0).medium());
+            ui.label(RichText::new(tr!("Beta")).size(11.0).strong().color(pal.accent));
+        });
+        outer.add_space(4.0);
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(&mut outer, |col| {
+        col.spacing_mut().item_spacing.y = 6.0;
+        let sea = doc.world.meta.sea_level as f32;
+        let (light, time) = (&mut self.light, &mut self.time);
+        let mut picked = None;
+        col.label(RichText::new(tr!("Sun and sky")).size(12.0).color(pal.weak));
+        let before = *time;
+        well(col, |ui| {
+            row(ui, tr!("Look"), |ui| {
+                let name = PRESETS.get(self.preset).map_or(tr!("Custom"), |n| crate::i18n::tr_name(n));
+                crate::widgets::combo("render preset").selected_text(name).show_ui(ui, |ui| {
+                    for (k, n) in PRESETS.iter().enumerate() {
+                        if ui.selectable_label(self.preset == k, crate::i18n::tr_name(n)).clicked() {
+                            picked = Some(k);
+                        }
+                    }
+                });
+            });
+            row(ui, tr!("Time"), |ui| {
+                ui.add(Field::new(&mut time.hour, 0.0..=24.0).suffix(" h").max_decimals(2));
+            });
+            row(ui, tr!("Day"), |ui| {
+                ui.add(Field::new(&mut time.day, 1.0..=365.0).max_decimals(0));
+            });
+            row(ui, tr!("Latitude"), |ui| {
+                ui.add(Field::new(&mut time.latitude, -66.0..=66.0).suffix("°").max_decimals(0));
+            });
+            row(ui, tr!("North"), |ui| {
+                ui.add(Field::new(&mut time.north, 0.0..=360.0).suffix("°").max_decimals(0));
+            });
+            row(ui, tr!("Sun"), |ui| {
+                ui.add(Field::new(&mut light.sun_strength, 0.0..=20.0).max_decimals(1));
+            });
+            row(ui, tr!("Sky"), |ui| {
+                ui.add(Field::new(&mut light.sky_strength, 0.0..=4.0).max_decimals(2));
+            });
+        });
+        if *time != before {
+            light.set_time(time.hour, time.day, time.latitude, time.north);
+        }
+        col.label(RichText::new(tr!("Atmosphere")).size(12.0).color(pal.weak));
+        well(col, |ui| {
+            row(ui, tr!("Air"), |ui| {
+                ui.add(Field::new(&mut light.air, 0.0..=4.0).max_decimals(2));
+            });
+            row(ui, tr!("Haze"), |ui| {
+                ui.add(Field::new(&mut light.haze, 0.0..=30.0).logarithmic(false).max_decimals(1));
+            });
+            row(ui, tr!("Fog"), |ui| {
+                ui.add(Field::new(&mut light.fog, 0.0..=0.1).max_decimals(3));
+            });
+            row(ui, tr!("Fog height"), |ui| {
+                ui.add(Field::new(&mut light.fog_height, sea - 64.0..=sea + 256.0).max_decimals(0));
+            });
+            row(ui, tr!("Fog fade"), |ui| {
+                ui.add(Field::new(&mut light.fog_falloff, 2.0..=200.0).suffix(" blocks").max_decimals(0));
+            });
+            row(ui, tr!("Shafts of light"), |ui| {
+                crate::widgets::switch(ui, &mut light.shafts);
+            });
+            row(ui, tr!("Sea around the map"), |ui| {
+                crate::widgets::switch(ui, &mut light.sea);
+            });
+        });
+        col.label(RichText::new(tr!("Clouds")).size(12.0).color(pal.weak));
+        well(col, |ui| {
+            row(ui, tr!("Cover"), |ui| {
+                ui.add(Field::new(&mut light.cloud_cover, 0.0..=1.0).max_decimals(2));
+            });
+            row(ui, tr!("Height"), |ui| {
+                ui.add(Field::new(&mut light.cloud_height, sea..=sea + 4000.0).max_decimals(0));
+            });
+            row(ui, tr!("Thickness"), |ui| {
+                ui.add(Field::new(&mut light.cloud_thickness, 50.0..=2000.0).max_decimals(0));
+            });
+            row(ui, tr!("Density"), |ui| {
+                ui.add(Field::new(&mut light.cloud_density, 0.002..=0.1).logarithmic(true).max_decimals(3));
+            });
+            row(ui, tr!("Size"), |ui| {
+                ui.add(Field::new(&mut light.cloud_size, 200.0..=6000.0).logarithmic(true).max_decimals(0));
+            });
+            row(ui, tr!("Wind"), |ui| {
+                ui.add(Field::new(&mut light.wind[0], 0.0..=20000.0).max_decimals(0));
+            });
+        });
+        col.label(RichText::new(tr!("Lens")).size(12.0).color(pal.weak));
+        well(col, |ui| {
+            row(ui, tr!("Angle"), |ui| {
+                ui.add(Field::new(&mut self.fov, 10.0..=100.0).suffix("°").max_decimals(0));
+            });
+            row(ui, tr!("Aperture"), |ui| {
+                ui.add(Field::new(&mut light.aperture, 0.0..=4.0).suffix(" blocks").max_decimals(2));
+            });
+            row(ui, tr!("Focus"), |ui| {
+                ui.add(Field::new(&mut light.focus, 1.0..=5000.0).logarithmic(true).suffix(" blocks").max_decimals(0));
+            });
+        });
+        col.label(RichText::new(tr!("Image")).size(12.0).color(pal.weak));
+        well(col, |ui| {
+            row(ui, tr!("Glow"), |ui| {
+                ui.add(Field::new(&mut light.emission, 0.0..=8.0).max_decimals(2));
+            });
+            row(ui, tr!("Bounces"), |ui| {
+                ui.add(Field::new(&mut light.bounces, 0..=6));
+            });
+            row(ui, tr!("Exposure"), |ui| {
+                ui.add(Field::new(&mut light.exposure, 0.1..=16.0).logarithmic(true).max_decimals(2));
+            });
+        });
+        if let Some(k) = picked {
+            self.preset = k;
+            preset(k, light, time, sea);
+        }
+        col.label(RichText::new(tr!("Image to save")).size(12.0).color(pal.weak));
+        let mut start = false;
+        well(col, |ui| {
+            row(ui, tr!("Size"), |ui| {
+                let (name, size) = STILL_SIZES[self.still_size.min(STILL_SIZES.len() - 1)];
+                let text = size.map_or_else(|| crate::i18n::tr_name(name).to_owned(), |[w, h]| format!("{name} · {w} × {h}"));
+                crate::widgets::combo("render still size").selected_text(text).show_ui(ui, |ui| {
+                    for (k, (name, size)) in STILL_SIZES.iter().enumerate() {
+                        let text = size.map_or_else(|| crate::i18n::tr_name(name).to_owned(), |[w, h]| format!("{name} · {w} × {h}"));
+                        ui.selectable_value(&mut self.still_size, k, text);
+                    }
+                });
+            });
+            row(ui, tr!("Samples a pixel"), |ui| {
+                ui.add(Field::new(&mut self.still_samples, 16..=4096).logarithmic(true));
+            });
+        });
+        if self.still.is_some() {
+            col.horizontal(|ui| {
+                let s = self.still.as_ref().expect("checked");
+                let done = (scene.renderer.samples as f32 + s.row as f32 / s.size[1].max(1) as f32) / s.samples.max(1) as f32;
+                ui.add(egui::ProgressBar::new(done.clamp(0.0, 1.0)).desired_width(ui.available_width() - 90.0));
+                if ui.button(tr!("Cancel")).clicked() {
+                    self.still = None;
+                    scene.renderer.restart();
+                }
+            });
+        } else if col
+            .add_enabled(self.writing.is_none(), theme::primary_button(col, theme::with_icon(Icon::Camera, tr!("Save image…"))))
+            .on_hover_text(tr!("Render the view at full quality and save it as a PNG"))
+            .clicked()
+        {
+            start = true;
+        }
+        match &self.saved {
+            Some(Ok(name)) => {
+                col.label(RichText::new(tr!("Saved {name}", name)).size(11.5).color(pal.weak));
+            }
+            Some(Err(e)) => {
+                col.label(RichText::new(e.as_str()).size(11.5).color(pal.danger));
+            }
+            None => {}
+        }
+        if start {
+            let size = STILL_SIZES[self.still_size.min(STILL_SIZES.len() - 1)].1.unwrap_or(px);
+            if !scene.renderer.fits(size[0], size[1]) {
+                self.saved = Some(Err(tr!("This size is larger than the graphics card can draw").to_owned()));
+            } else if let Some(path) = rfd::FileDialog::new().set_file_name(format!("{}.png", doc.title())).add_filter(tr!("PNG image"), &["png"]).save_file() {
+                self.saved = None;
+                self.still = Some(Still { path, size, samples: self.still_samples, camera: orbit.camera(self.fov), light: self.light, row: 0, started: Instant::now() });
+                scene.renderer.restart();
+            }
+        }
+        col.label(RichText::new(tr!("Scene")).size(12.0).color(pal.weak));
+        let memory = scene.renderer.memory();
+        let mb = |b: u64| format!("{:.0} MB", b as f64 / (1 << 20) as f64);
+        well(col, |ui| {
+            row(ui, tr!("Tiles"), |ui| {
+                ui.label(format!("{} / {}", scene.built.len(), scene.tiles));
+            });
+            row(ui, tr!("Chunks"), |ui| {
+                ui.label(scene.renderer.chunks().to_string());
+            });
+            if let Some(took) = scene.took {
+                row(ui, tr!("Built in"), |ui| {
+                    ui.label(format!("{:.1} s", took.as_secs_f64()));
+                });
+            }
+            row(ui, tr!("Graphics memory"), |ui| {
+                ui.label(mb(memory.total()));
+            });
+            row(ui, tr!("Samples a second"), |ui| {
+                let rate = self.since.filter(|_| samples > 4 && samples < most).map(|(t, n)| (samples - n) as f64 / t.elapsed().as_secs_f64().max(1e-3));
+                ui.label(rate.map_or_else(|| "—".to_owned(), |r| format!("{r:.0}")));
+            });
+        });
+        col.add_space(4.0);
+        col.label(RichText::new(tr!("Drag: turn · right-drag: slide · wheel: closer · shift-click: focus there · double-click: the whole map")).size(11.0).color(pal.weak));
+        });
+    }
+}
+
+/// The whole map, seen from above its south-east, a little high.
+fn framing(extent: &Extent, sea: f64) -> Orbit {
+    let c = extent.center();
+    let span = extent.width.max(extent.depth) as f64 * 16.0;
+    Orbit { target: [c[0], sea, c[2]], yaw: 0.65, pitch: -0.55, distance: span * 0.8 }
 }

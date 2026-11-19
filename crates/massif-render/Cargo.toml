@@ -1,0 +1,27 @@
+[package]
+name = "massif-render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Massif's renderer: a GPU path tracer of Minecraft worlds, from the open map or a world's region files"
+
+[dependencies]
+massif-core.workspace = true
+massif-anvil.workspace = true
+massif-assets.workspace = true
+rayon.workspace = true
+serde.workspace = true
+log.workspace = true
+wgpu = { version = "30", default-features = false, features = ["wgsl", "std", "metal", "dx12", "vulkan", "gles"] }
+bytemuck = { version = "1.25", features = ["derive"] }
+glam = "0.34"
+fastnbt = "2.6"
+serde_json.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[dev-dependencies]
+massif-format.workspace = true
+massif-legacy.workspace = true
+libc = "0.2"
+pollster = "1"
