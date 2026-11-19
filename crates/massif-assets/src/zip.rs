@@ -68,11 +68,17 @@ impl Data {
     }
 }
 
-/// A zip archive, in memory or read from its file as it goes.
+/// A zip archive, in memory or read from its file as it goes; or a folder
+/// read as one (a resource pack left unzipped, KubeJS's `kubejs/assets`).
 pub struct Archive {
     data: Data,
     entries: HashMap<String, Entry>,
+    /// For a folder: its files, by their names in it.
+    folder: Option<HashMap<String, std::path::PathBuf>>,
 }
+
+/// The most files a folder read as an archive may list.
+const MAX_FOLDER_FILES: usize = 1 << 20;
 
 fn u16_at(b: &[u8], at: usize) -> Option<u16> {
     b.get(at..at + 2).map(|s| u16::from_le_bytes([s[0], s[1]]))
@@ -177,7 +183,37 @@ impl Archive {
 
     fn with(data: Data) -> Result<Self, ZipError> {
         let (dir, count) = directory(&data)?;
-        Ok(Self { entries: entries(&dir, count)?.into_iter().collect(), data })
+        Ok(Self { entries: entries(&dir, count)?.into_iter().collect(), data, folder: None })
+    }
+
+    /// A folder read as an archive: the files under its subfolders `under`
+    /// (`assets`), named from the folder with `/` between their parts, as a
+    /// zip's entries are. Nothing is read until asked for; links to other
+    /// folders are not followed.
+    pub fn folder(root: &std::path::Path, under: &[&str]) -> Result<Self, ZipError> {
+        let mut files = HashMap::new();
+        let mut stack: Vec<std::path::PathBuf> = under.iter().map(|u| root.join(u)).filter(|d| d.is_dir()).collect();
+        if stack.is_empty() {
+            return Err(ZipError::NotZip);
+        }
+        while let Some(dir) = stack.pop() {
+            for e in std::fs::read_dir(&dir)?.flatten() {
+                let Ok(kind) = e.file_type() else { continue };
+                let path = e.path();
+                if kind.is_dir() {
+                    stack.push(path);
+                } else if kind.is_file()
+                    && let Ok(rel) = path.strip_prefix(root)
+                {
+                    let name = rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
+                    files.insert(name, path);
+                    if files.len() > MAX_FOLDER_FILES {
+                        return Err(ZipError::Damaged("too many files"));
+                    }
+                }
+            }
+        }
+        Ok(Self { data: Data::Memory(Vec::new()), entries: HashMap::new(), folder: Some(files) })
     }
 
     /// The names of a zip file's entries, reading only its directory: to
@@ -189,15 +225,18 @@ impl Archive {
     }
 
     pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.entries.keys().map(String::as_str)
+        self.entries.keys().chain(self.folder.iter().flat_map(HashMap::keys)).map(String::as_str)
     }
 
     pub fn contains(&self, name: &str) -> bool {
-        self.entries.contains_key(name)
+        self.entries.contains_key(name) || self.folder.as_ref().is_some_and(|f| f.contains_key(name))
     }
 
     /// The bytes of an entry, inflated.
     pub fn read(&self, name: &str) -> Option<Result<Vec<u8>, ZipError>> {
+        if let Some(files) = &self.folder {
+            return files.get(name).map(|p| std::fs::read(p).map_err(ZipError::from));
+        }
         let e = *self.entries.get(name)?;
         Some(self.read_entry(e))
     }

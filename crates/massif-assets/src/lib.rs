@@ -521,6 +521,38 @@ fn block_tag_key(name: &str) -> Option<String> {
     (!ns.is_empty() && !path.is_empty()).then(|| format!("{ns}:{path}"))
 }
 
+/// Whether a folder is KubeJS's (`kubejs` in an instance).
+fn is_kubejs(path: &Path) -> bool {
+    path.is_dir() && path.file_name().is_some_and(|n| n.eq_ignore_ascii_case("kubejs"))
+}
+
+/// The tile a block shows of a texture made for Fusion, from its
+/// `.mcmeta`: `(x, y, width, height)` in a texture `w` × `h`. Fusion draws
+/// a connected texture (`connecting`) by a block's neighbours, a
+/// `continuous` one across blocks and a `random` one by position, from a
+/// sheet of tiles; Massif shows a block alone, so the tile of a block with
+/// no neighbours (the first, but `overlay`'s), at the size of one block.
+/// `None` for a texture that is not Fusion's or does not divide.
+pub fn fusion_tile(meta: &Value, w: u32, h: u32) -> Option<(u32, u32, u32, u32)> {
+    let f = meta.get("fusion")?;
+    let count = |key: &str, default: u32| f.get(key).and_then(Value::as_u64).map_or(default, |v| v.clamp(1, 256) as u32);
+    // Columns and rows of the sheet, and the tile shown.
+    let (columns, rows, tile) = match f.get("type").and_then(Value::as_str)? {
+        "continuous" | "random" => (count("columns", 1), count("rows", 1), (0, 0)),
+        "connecting" => match f.get("layout").and_then(Value::as_str).unwrap_or("full") {
+            "simple" => (4, 4, (0, 0)),
+            "vertical" => (1, 4, (0, 0)),
+            "horizontal" => (4, 1, (0, 0)),
+            "compact" | "pieced" => (5, 1, (0, 0)),
+            "overlay" => (6, 3, (1, 1)),
+            _ => (8, 6, (0, 0)),
+        },
+        _ => return None,
+    };
+    let (tw, th) = (w / columns, h / rows);
+    (tw > 0 && th > 0).then_some((tile.0 * tw, tile.1 * th, tw, th))
+}
+
 /// A file of a data pack left as a folder: its name in the pack, its bytes.
 type FolderFile = (String, Vec<u8>);
 
@@ -1233,7 +1265,17 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
     let mut folders: Vec<(PathBuf, Vec<FolderFile>)> = Vec::new();
     for m in mods {
         if m.is_dir() {
-            folders.push((m.clone(), folder_files(m)));
+            // A folder of resources reads as a pack (KubeJS's `kubejs`, a
+            // resource pack left unzipped); its data, as a data pack's.
+            if m.join("assets").is_dir() {
+                match zip::Archive::folder(m, &["assets"]) {
+                    Ok(a) => archives.push((a, Some(m.clone()))),
+                    Err(e) => skipped.push((m.clone(), e.to_string())),
+                }
+            }
+            if m.join("data").is_dir() {
+                folders.push((m.clone(), folder_files(m)));
+            }
             continue;
         }
         if materials::is_list(m) {
@@ -1313,15 +1355,17 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
             // a mod.
             let says_mod = ["fabric.mod.json", "quilt.mod.json", "META-INF/mods.toml", "META-INF/neoforge.mods.toml", "mcmod.info"].iter().any(|f| a.contains(f));
             let jar = p.extension().is_some_and(|e| e.eq_ignore_ascii_case("jar"));
-            let kind = if says_mod || jar { SourceKind::Mod } else { SourceKind::Pack };
-            let name = if kind == SourceKind::Pack { p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default() } else { display_mod_name(&mod_meta(a), p) };
+            // KubeJS's folder brings the blocks its scripts make, as a mod.
+            let kubejs = is_kubejs(p);
+            let kind = if says_mod || jar || kubejs { SourceKind::Mod } else { SourceKind::Pack };
+            let name = if kubejs { "KubeJS".to_owned() } else if kind == SourceKind::Pack { p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default() } else { display_mod_name(&mod_meta(a), p) };
             mod_infos.push(ModInfo {
                 name,
                 path: p.clone(),
                 kind,
                 namespaces: namespaces.into_iter().collect(),
                 blocks: added,
-                minecraft: if kind == SourceKind::Mod { mod_minecraft(a, p) } else { None },
+                minecraft: if kind == SourceKind::Mod && !kubejs { mod_minecraft(a, p) } else { None },
                 groups: mod_groups(a, &names, &lang),
                 unregistered: 0,
             });
@@ -1472,10 +1516,13 @@ pub fn load_with_mods(path: &Path, version: &str, mods: &[PathBuf]) -> Result<Ca
             let bytes = archives[*k].0.read(n)?.ok()?;
             let img = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).ok()?.to_rgba8();
             let (w, h) = img.dimensions();
-            // Animated textures are a strip of square frames.
-            let side = w.min(h);
-            let frame = image::imageops::crop_imm(&img, 0, 0, w, side).to_image();
-            Some((key.to_owned(), Arc::new(Texture { width: w, height: side, rgba: frame.into_raw() })))
+            // A texture of Fusion's (connected, continuous or random) is a
+            // sheet of tiles: the block shows one. Animated textures are a
+            // strip of square frames.
+            let meta = archives[*k].0.read(&format!("{n}.mcmeta")).and_then(Result::ok).and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+            let (x, y, tw, th) = meta.as_ref().and_then(|m| fusion_tile(m, w, h)).unwrap_or((0, 0, w, w.min(h)));
+            let frame = image::imageops::crop_imm(&img, x, y, tw, th).to_image();
+            Some((key.to_owned(), Arc::new(Texture { width: tw, height: th, rgba: frame.into_raw() })))
         })
         .collect();
     for b in &mut blocks {
@@ -2271,6 +2318,70 @@ mod tests {
         let top = reg.terrain(t).strata[0].blocks[0].0;
         assert_eq!(reg.block(top).state, "conquest:old_red_bricks");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// An instance whose KubeJS scripts make blocks: its `kubejs` folder
+    /// is read as a mod beside its jars, and a texture of its made for
+    /// Fusion (a sheet of 2 × 2 tiles, continuous) shows one tile.
+    #[test]
+    fn kubejs_blocks_and_fusion_textures_load() {
+        let png = |w: u32, h: u32| {
+            let mut out = Vec::new();
+            // Each tile of 16 its own colour, so that the tile shown tells.
+            let img = image::RgbaImage::from_fn(w, h, |x, y| image::Rgba([(x / 16 * 100) as u8, (y / 16 * 100) as u8, 50, 255]));
+            img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
+            out
+        };
+        let stone = png(16, 16);
+        let game: Vec<(&str, &[u8], bool)> = vec![
+            ("assets/minecraft/blockstates/stone.json", br#"{"variants":{"":{"model":"minecraft:block/stone"}}}"#, true),
+            ("assets/minecraft/models/block/cube.json", br##"{"elements":[{"from":[0,0,0],"to":[16,16,16],"faces":{"up":{"texture":"#up"},"north":{"texture":"#north"},"down":{"texture":"#down"}}}]}"##, true),
+            ("assets/minecraft/models/block/cube_all.json", br##"{"parent":"block/cube","textures":{"particle":"#all","up":"#all","north":"#all","down":"#all"}}"##, true),
+            ("assets/minecraft/models/block/stone.json", br#"{"parent":"minecraft:block/cube_all","textures":{"all":"minecraft:block/stone"}}"#, true),
+            ("assets/minecraft/textures/block/stone.png", &stone, false),
+        ];
+        let dir = std::env::temp_dir().join(format!("massif-assets-kubejs-{}", std::process::id()));
+        let game_dir = dir.join("instance/minecraft");
+        let assets = game_dir.join("kubejs/assets/kubejs");
+        for sub in ["blockstates", "models/block", "textures/block/rock"] {
+            std::fs::create_dir_all(assets.join(sub)).unwrap();
+        }
+        std::fs::create_dir_all(game_dir.join("mods")).unwrap();
+        std::fs::write(assets.join("blockstates/pavement.json"), br#"{"variants":{"":{"model":"kubejs:block/pavement"}}}"#).unwrap();
+        std::fs::write(assets.join("models/block/pavement.json"), br#"{"loader":"fusion:model","type":"base","parent":"minecraft:block/cube_all","textures":{"all":"kubejs:block/rock/pavement"}}"#).unwrap();
+        std::fs::write(assets.join("textures/block/rock/pavement.png"), png(32, 32)).unwrap();
+        std::fs::write(assets.join("textures/block/rock/pavement.png.mcmeta"), br#"{"fusion":{"type":"continuous","rows":2,"columns":2}}"#).unwrap();
+        let game_jar = dir.join("1.21.jar");
+        std::fs::write(&game_jar, zip::tests_support::tiny_zip(&game)).unwrap();
+
+        let instance = instance::Instance::read(&dir.join("instance")).unwrap();
+        assert_eq!(instance.mod_names, ["KubeJS"]);
+        assert_eq!(instance.namespaces, ["kubejs"]);
+        let cat = load_with_mods(&game_jar, "1.21", &instance.files()).unwrap();
+        let pavement = cat.block("kubejs:pavement").unwrap();
+        assert_eq!(pavement.top.as_deref(), Some("kubejs:block/rock/pavement"));
+        let tile = cat.texture("kubejs:block/rock/pavement").unwrap();
+        assert_eq!((tile.width, tile.height), (16, 16), "one tile of the sheet");
+        assert_eq!(&tile.rgba[..4], &[0, 0, 50, 255], "the first");
+        assert_eq!(cat.mods.len(), 1);
+        assert_eq!((cat.mods[0].name.as_str(), cat.mods[0].kind, cat.mods[0].blocks), ("KubeJS", SourceKind::Mod, 1));
+        assert!(cat.skipped.is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn fusion_sheets_show_one_tile() {
+        let meta = |s: &str| serde_json::from_str::<Value>(s).unwrap();
+        assert_eq!(fusion_tile(&meta(r#"{"fusion":{"type":"continuous","rows":8,"columns":8}}"#), 1024, 1024), Some((0, 0, 128, 128)));
+        assert_eq!(fusion_tile(&meta(r#"{"fusion":{"type":"random","rows":5,"columns":6}}"#), 512, 384), Some((0, 0, 85, 76)));
+        assert_eq!(fusion_tile(&meta(r#"{"fusion":{"type":"connecting","layout":"pieced"}}"#), 80, 16), Some((0, 0, 16, 16)));
+        assert_eq!(fusion_tile(&meta(r#"{"fusion":{"type":"connecting","layout":"full"}}"#), 128, 96), Some((0, 0, 16, 16)));
+        assert_eq!(fusion_tile(&meta(r#"{"fusion":{"type":"connecting"}}"#), 128, 96), Some((0, 0, 16, 16)), "full by default");
+        assert_eq!(fusion_tile(&meta(r#"{"fusion":{"type":"connecting","layout":"overlay"}}"#), 96, 48), Some((16, 16, 16, 16)));
+        // Not Fusion's, of a type it does not know, or too small to divide.
+        assert_eq!(fusion_tile(&meta(r#"{"animation":{"frametime":2}}"#), 16, 64), None);
+        assert_eq!(fusion_tile(&meta(r#"{"fusion":{"type":"other"}}"#), 16, 16), None);
+        assert_eq!(fusion_tile(&meta(r#"{"fusion":{"type":"continuous","rows":64,"columns":64}}"#), 16, 16), None);
     }
 
     /// Conquest Reforged as its jar is made, in small: a block whose states

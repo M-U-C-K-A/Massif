@@ -5,7 +5,8 @@
 //!
 //! Reading an instance is what makes a modpack's blocks one step away: a
 //! block mod's instance gives its jar, its resource packs and the list of
-//! blocks the mod writes for WorldPainter (`<mod>_wp.csv`) at once. Every
+//! blocks the mod writes for WorldPainter (`<mod>_wp.csv`) at once, and
+//! the blocks its KubeJS scripts make (`kubejs/assets`). Every
 //! instance with a mod with blocks is found the same way, whatever the mod.
 
 use crate::materials;
@@ -22,7 +23,8 @@ pub struct Instance {
     pub name: String,
     /// The version of the game it plays (`1.20.1`).
     pub minecraft: Option<String>,
-    /// The jars of its mods that have blocks, by name.
+    /// The jars of its mods that have blocks, by name, then its `kubejs`
+    /// folder when its scripts make blocks.
     pub mods: Vec<PathBuf>,
     /// Those mods as a player knows them, by name: see [`InstanceMod`].
     pub mod_list: Vec<InstanceMod>,
@@ -106,6 +108,19 @@ impl Instance {
                 instance.mod_list.push(InstanceMod { name: crate::display_mod_name(&meta, &jar), id: meta.id, jar: jar.clone(), namespaces: spaces.clone(), blocks });
                 namespaces.extend(spaces);
                 instance.mods.push(jar);
+            }
+        }
+        // KubeJS's folder: the blocks its scripts make, with their states,
+        // models and textures, as a mod's (after the mods, whose textures
+        // its models may use).
+        let kubejs = dir.join("kubejs");
+        if let Ok(archive) = Archive::folder(&kubejs, &["assets"]) {
+            let spaces = namespaces_in(archive.names());
+            if !spaces.is_empty() {
+                let blocks = archive.names().filter(|n| is_blockstate(n)).count();
+                instance.mod_list.push(InstanceMod { name: "KubeJS".to_owned(), id: Some("kubejs".to_owned()), jar: kubejs.clone(), namespaces: spaces.clone(), blocks });
+                namespaces.extend(spaces);
+                instance.mods.push(kubejs);
             }
         }
         instance.mod_list.sort_by_cached_key(|m| (m.name.to_lowercase(), m.file_name()));
