@@ -2147,6 +2147,7 @@ dependencies = [
  "libc",
  "massif-assets",
  "massif-core",
+ "massif-structures",
  "rayon",
  "serde_json",
  "thiserror 2.0.21",
@@ -2178,6 +2179,7 @@ dependencies = [
  "massif-objects",
  "massif-render",
  "massif-script",
+ "massif-structures",
  "massif-thumbnails",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
@@ -2213,10 +2215,12 @@ version = "1.2.0"
 dependencies = [
  "image",
  "massif-anvil",
+ "massif-assets",
  "massif-core",
  "massif-format",
  "massif-legacy",
  "massif-script",
+ "massif-structures",
  "rayon",
 ]
 
@@ -2312,6 +2316,21 @@ dependencies = [
  "rquickjs",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "massif-structures"
+version = "1.0.0"
+dependencies = [
+ "fastnbt",
+ "flate2",
+ "massif-assets",
+ "massif-core",
+ "massif-objects",
+ "rayon",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
