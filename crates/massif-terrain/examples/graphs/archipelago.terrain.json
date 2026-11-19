@@ -1,0 +1,301 @@
+{
+  "format": "massif.terrain-graph",
+  "version": 2,
+  "terrain": {
+    "size": 8192,
+    "seed": 31
+  },
+  "nodes": {
+    "albedo": {
+      "type": "color.mix",
+      "inputs": {
+        "a": "rocky",
+        "b": "sand",
+        "mask": "beach"
+      }
+    },
+    "beach": {
+      "type": "mask.height",
+      "inputs": {
+        "height": "worn"
+      },
+      "params": {
+        "from": 60,
+        "softness": 1.5,
+        "to": 65
+      }
+    },
+    "biomes": {
+      "type": "climate.biomes",
+      "inputs": {
+        "height": "worn",
+        "humidity": "hum",
+        "temperature": "temp"
+      },
+      "params": {
+        "beach": 3
+      }
+    },
+    "green": {
+      "type": "color.gradient",
+      "inputs": {
+        "in": "worn"
+      },
+      "params": {
+        "high": 260,
+        "low": 58,
+        "preset": "tropical"
+      }
+    },
+    "hum": {
+      "type": "climate.humidity",
+      "inputs": {
+        "height": "worn"
+      },
+      "params": {
+        "inland": 2500,
+        "variation": 0.15
+      }
+    },
+    "isles": {
+      "type": "coast.archipelago",
+      "params": {
+        "beach": 30,
+        "chain": [
+          {
+            "x": 0.12,
+            "z": 0.74
+          },
+          {
+            "x": 0.38,
+            "z": 0.5
+          },
+          {
+            "x": 0.66,
+            "z": 0.42
+          },
+          {
+            "x": 0.9,
+            "z": 0.2
+          }
+        ],
+        "count": 22,
+        "depth": 45,
+        "height": 70,
+        "hills": 0.4,
+        "largest": 1300,
+        "shelf": 500,
+        "smallest": 80,
+        "spread": 1800
+      },
+      "note": "Islands strung along an arc, as over a hot spot."
+    },
+    "lava": {
+      "type": "color.solid",
+      "params": {
+        "color": "#3b3735"
+      }
+    },
+    "out": {
+      "type": "output.map",
+      "inputs": {
+        "albedo": "albedo",
+        "biome": "biomes",
+        "height": "worn",
+        "humidity": "hum",
+        "temperature": "temp",
+        "terrain": "terrains"
+      }
+    },
+    "relief": {
+      "type": "combine.blend",
+      "inputs": {
+        "a": "isles",
+        "b": "volcanoes"
+      },
+      "params": {
+        "mode": "max"
+      }
+    },
+    "rocky": {
+      "type": "color.mix",
+      "inputs": {
+        "a": "green",
+        "b": "lava",
+        "mask": "steep"
+      }
+    },
+    "sand": {
+      "type": "color.solid",
+      "params": {
+        "color": "#efe3bd"
+      }
+    },
+    "steep": {
+      "type": "mask.slope",
+      "inputs": {
+        "height": "worn"
+      },
+      "params": {
+        "from": 30,
+        "to": 42
+      }
+    },
+    "temp": {
+      "type": "climate.temperature",
+      "inputs": {
+        "height": "worn"
+      },
+      "params": {
+        "cold": 26,
+        "lapse": 6,
+        "warm": 30
+      }
+    },
+    "terrains": {
+      "type": "terrain.layers",
+      "inputs": {
+        "mask_1": "steep",
+        "mask_2": "beach"
+      },
+      "params": {
+        "base": "Grass",
+        "terrain_1": "Basalt",
+        "terrain_2": "Sand",
+        "terrain_3": "",
+        "terrain_4": ""
+      }
+    },
+    "volcanoes": {
+      "type": "mountain.volcano",
+      "params": {
+        "base": 0,
+        "crater": 0.08,
+        "crater_depth": 25,
+        "kind": "strato",
+        "volcanoes": [
+          {
+            "height": 230,
+            "radius": 1500,
+            "x": 0.4,
+            "z": 0.5
+          },
+          {
+            "height": 180,
+            "radius": 1100,
+            "x": 0.66,
+            "z": 0.42
+          }
+        ]
+      }
+    },
+    "worn": {
+      "type": "erosion.thermal",
+      "inputs": {
+        "height": "relief"
+      },
+      "params": {
+        "angle": 35,
+        "iterations": 25
+      }
+    }
+  },
+  "ui": {
+    "albedo": {
+      "pos": [
+        1300.0,
+        0.0
+      ]
+    },
+    "beach": {
+      "pos": [
+        780.0,
+        0.0
+      ]
+    },
+    "biomes": {
+      "pos": [
+        1040.0,
+        0.0
+      ]
+    },
+    "green": {
+      "pos": [
+        780.0,
+        160.0
+      ]
+    },
+    "hum": {
+      "pos": [
+        780.0,
+        320.0
+      ]
+    },
+    "isles": {
+      "pos": [
+        0.0,
+        0.0
+      ]
+    },
+    "lava": {
+      "pos": [
+        0.0,
+        160.0
+      ]
+    },
+    "out": {
+      "pos": [
+        1560.0,
+        0.0
+      ]
+    },
+    "relief": {
+      "pos": [
+        260.0,
+        0.0
+      ]
+    },
+    "rocky": {
+      "pos": [
+        1040.0,
+        160.0
+      ]
+    },
+    "sand": {
+      "pos": [
+        0.0,
+        320.0
+      ]
+    },
+    "steep": {
+      "pos": [
+        780.0,
+        480.0
+      ]
+    },
+    "temp": {
+      "pos": [
+        780.0,
+        640.0
+      ]
+    },
+    "terrains": {
+      "pos": [
+        1040.0,
+        320.0
+      ]
+    },
+    "volcanoes": {
+      "pos": [
+        0.0,
+        480.0
+      ]
+    },
+    "worn": {
+      "pos": [
+        520.0,
+        0.0
+      ]
+    }
+  }
+}

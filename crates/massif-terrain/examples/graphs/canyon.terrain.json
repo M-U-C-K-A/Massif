@@ -1,0 +1,322 @@
+{
+  "format": "massif.terrain-graph",
+  "version": 2,
+  "terrain": {
+    "size": 4096,
+    "seed": 5
+  },
+  "nodes": {
+    "albedo": {
+      "type": "color.mix",
+      "inputs": {
+        "a": "top",
+        "b": "walls2",
+        "mask": "inside"
+      }
+    },
+    "beds": {
+      "type": "adjust.stratify",
+      "inputs": {
+        "in": "canyon"
+      },
+      "params": {
+        "layers": 12,
+        "strength": 0.55,
+        "tilt": 0
+      }
+    },
+    "below_rim": {
+      "type": "mask.height",
+      "inputs": {
+        "height": "canyon"
+      },
+      "params": {
+        "from": -64,
+        "softness": 4,
+        "to": 160
+      }
+    },
+    "canyon": {
+      "type": "valley.canyon",
+      "inputs": {
+        "height": "plateau"
+      },
+      "params": {
+        "branches": 0.6,
+        "depth": 104,
+        "floor": 0.14,
+        "meander": 0.55,
+        "path": [
+          {
+            "x": 0.03,
+            "z": 0.32
+          },
+          {
+            "x": 0.26,
+            "z": 0.44
+          },
+          {
+            "x": 0.5,
+            "z": 0.34
+          },
+          {
+            "x": 0.7,
+            "z": 0.58
+          },
+          {
+            "x": 0.97,
+            "z": 0.52
+          }
+        ],
+        "steps": 6,
+        "width": 760
+      },
+      "note": "The canyon, with side canyons branching off."
+    },
+    "carved": {
+      "type": "combine.blend",
+      "inputs": {
+        "a": "canyon",
+        "b": "beds",
+        "mask": "below_rim"
+      },
+      "params": {
+        "mode": "replace"
+      },
+      "note": "Beds of rock in the canyon's walls only."
+    },
+    "floor": {
+      "type": "mask.height",
+      "inputs": {
+        "height": "worn"
+      },
+      "params": {
+        "from": -64,
+        "softness": 6,
+        "to": 60
+      }
+    },
+    "green": {
+      "type": "color.solid",
+      "params": {
+        "color": "#6b7a3c"
+      }
+    },
+    "inside": {
+      "type": "mask.height",
+      "inputs": {
+        "height": "worn"
+      },
+      "params": {
+        "from": -64,
+        "softness": 5,
+        "to": 156
+      }
+    },
+    "out": {
+      "type": "output.map",
+      "inputs": {
+        "albedo": "albedo",
+        "height": "worn",
+        "terrain": "terrains"
+      }
+    },
+    "plateau": {
+      "type": "noise.eroded",
+      "params": {
+        "base": 165,
+        "erosion": 1.2,
+        "height": 20,
+        "scale": 2600
+      },
+      "note": "A high, gently rolling plateau."
+    },
+    "shade": {
+      "type": "color.solid",
+      "params": {
+        "color": "#7c4a32"
+      }
+    },
+    "steep": {
+      "type": "mask.slope",
+      "inputs": {
+        "height": "worn"
+      },
+      "params": {
+        "from": 30,
+        "to": 45
+      }
+    },
+    "strata": {
+      "type": "color.gradient",
+      "inputs": {
+        "in": "worn"
+      },
+      "params": {
+        "auto": true,
+        "preset": "badlands",
+        "variation": 0.12
+      }
+    },
+    "terrains": {
+      "type": "terrain.layers",
+      "inputs": {
+        "mask_1": "steep",
+        "mask_2": "floor"
+      },
+      "params": {
+        "base": "Red Sand",
+        "terrain_1": "Terracotta",
+        "terrain_2": "Grass",
+        "terrain_3": "",
+        "terrain_4": ""
+      }
+    },
+    "top": {
+      "type": "color.solid",
+      "params": {
+        "color": "#b5895c"
+      }
+    },
+    "walls": {
+      "type": "color.mix",
+      "inputs": {
+        "a": "strata",
+        "b": "shade",
+        "mask": "steep"
+      },
+      "params": {
+        "mode": "multiply",
+        "strength": 0.5
+      }
+    },
+    "walls2": {
+      "type": "color.mix",
+      "inputs": {
+        "a": "walls",
+        "b": "green",
+        "mask": "floor"
+      }
+    },
+    "worn": {
+      "type": "erosion.thermal",
+      "inputs": {
+        "height": "carved"
+      },
+      "params": {
+        "angle": 40,
+        "iterations": 25
+      }
+    }
+  },
+  "ui": {
+    "albedo": {
+      "pos": [
+        2080.0,
+        0.0
+      ]
+    },
+    "beds": {
+      "pos": [
+        520.0,
+        0.0
+      ]
+    },
+    "below_rim": {
+      "pos": [
+        520.0,
+        160.0
+      ]
+    },
+    "canyon": {
+      "pos": [
+        260.0,
+        0.0
+      ]
+    },
+    "carved": {
+      "pos": [
+        780.0,
+        0.0
+      ]
+    },
+    "floor": {
+      "pos": [
+        1300.0,
+        0.0
+      ]
+    },
+    "green": {
+      "pos": [
+        0.0,
+        0.0
+      ]
+    },
+    "inside": {
+      "pos": [
+        1300.0,
+        160.0
+      ]
+    },
+    "out": {
+      "pos": [
+        2340.0,
+        0.0
+      ]
+    },
+    "plateau": {
+      "pos": [
+        0.0,
+        160.0
+      ]
+    },
+    "shade": {
+      "pos": [
+        0.0,
+        320.0
+      ]
+    },
+    "steep": {
+      "pos": [
+        1300.0,
+        320.0
+      ]
+    },
+    "strata": {
+      "pos": [
+        1300.0,
+        480.0
+      ]
+    },
+    "terrains": {
+      "pos": [
+        1560.0,
+        0.0
+      ]
+    },
+    "top": {
+      "pos": [
+        0.0,
+        480.0
+      ]
+    },
+    "walls": {
+      "pos": [
+        1560.0,
+        160.0
+      ]
+    },
+    "walls2": {
+      "pos": [
+        1820.0,
+        0.0
+      ]
+    },
+    "worn": {
+      "pos": [
+        1040.0,
+        0.0
+      ]
+    }
+  }
+}

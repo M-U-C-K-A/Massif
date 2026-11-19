@@ -1,0 +1,217 @@
+{
+  "format": "massif.terrain-graph",
+  "version": 2,
+  "terrain": {
+    "size": 4096,
+    "seed": 23
+  },
+  "nodes": {
+    "albedo": {
+      "type": "color.mix",
+      "inputs": {
+        "a": "strata",
+        "b": "sand",
+        "mask": "low"
+      },
+      "params": {
+        "strength": 0.7
+      }
+    },
+    "canyons": {
+      "type": "valley.canyon",
+      "inputs": {
+        "height": "mesas"
+      },
+      "params": {
+        "branches": 0.5,
+        "depth": 18,
+        "scale": 1500,
+        "steps": 2,
+        "width": 120
+      },
+      "note": "A network of washes cut into the plain."
+    },
+    "dunes": {
+      "type": "land.dunes",
+      "inputs": {
+        "sand": "low"
+      },
+      "params": {
+        "base": 0,
+        "direction": 70,
+        "height": 7,
+        "kind": "barchan",
+        "wavelength": 110
+      }
+    },
+    "ground": {
+      "type": "combine.blend",
+      "inputs": {
+        "a": "worn",
+        "b": "dunes",
+        "mask": "low"
+      },
+      "params": {
+        "mode": "add"
+      }
+    },
+    "low": {
+      "type": "mask.height",
+      "inputs": {
+        "height": "worn"
+      },
+      "params": {
+        "from": 0,
+        "softness": 6,
+        "to": 98
+      }
+    },
+    "mesas": {
+      "type": "plateau.mesa",
+      "params": {
+        "base": 92,
+        "cliff": 0.9,
+        "coverage": 0.38,
+        "dissection": 0.45,
+        "height": 72,
+        "layers": 4,
+        "scale": 900,
+        "talus": 0.55
+      },
+      "note": "Flat-topped buttes in four beds of rock."
+    },
+    "out": {
+      "type": "output.map",
+      "inputs": {
+        "albedo": "albedo",
+        "height": "ground",
+        "terrain": "terrains"
+      }
+    },
+    "sand": {
+      "type": "color.solid",
+      "params": {
+        "color": "#d8a46c"
+      }
+    },
+    "steep": {
+      "type": "mask.slope",
+      "inputs": {
+        "height": "ground"
+      },
+      "params": {
+        "from": 32,
+        "to": 45
+      }
+    },
+    "strata": {
+      "type": "color.gradient",
+      "inputs": {
+        "in": "ground"
+      },
+      "params": {
+        "auto": true,
+        "preset": "badlands",
+        "variation": 0.08
+      }
+    },
+    "terrains": {
+      "type": "terrain.layers",
+      "inputs": {
+        "mask_1": "steep",
+        "mask_2": "low"
+      },
+      "params": {
+        "base": "Terracotta",
+        "terrain_1": "Red Sand",
+        "terrain_2": "Red Sand",
+        "terrain_3": "",
+        "terrain_4": ""
+      }
+    },
+    "worn": {
+      "type": "erosion.thermal",
+      "inputs": {
+        "height": "canyons"
+      },
+      "params": {
+        "angle": 40,
+        "iterations": 20
+      }
+    }
+  },
+  "ui": {
+    "albedo": {
+      "pos": [
+        1820.0,
+        0.0
+      ]
+    },
+    "canyons": {
+      "pos": [
+        260.0,
+        0.0
+      ]
+    },
+    "dunes": {
+      "pos": [
+        1040.0,
+        0.0
+      ]
+    },
+    "ground": {
+      "pos": [
+        1300.0,
+        0.0
+      ]
+    },
+    "low": {
+      "pos": [
+        780.0,
+        0.0
+      ]
+    },
+    "mesas": {
+      "pos": [
+        0.0,
+        0.0
+      ]
+    },
+    "out": {
+      "pos": [
+        2080.0,
+        0.0
+      ]
+    },
+    "sand": {
+      "pos": [
+        0.0,
+        160.0
+      ]
+    },
+    "steep": {
+      "pos": [
+        1560.0,
+        0.0
+      ]
+    },
+    "strata": {
+      "pos": [
+        1560.0,
+        160.0
+      ]
+    },
+    "terrains": {
+      "pos": [
+        1820.0,
+        160.0
+      ]
+    },
+    "worn": {
+      "pos": [
+        520.0,
+        0.0
+      ]
+    }
+  }
+}

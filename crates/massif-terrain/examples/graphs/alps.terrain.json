@@ -1,0 +1,271 @@
+{
+  "format": "massif.terrain-graph",
+  "version": 2,
+  "terrain": {
+    "size": 8192,
+    "seed": 7
+  },
+  "nodes": {
+    "albedo": {
+      "type": "color.mix",
+      "inputs": {
+        "a": "rocky",
+        "b": "white",
+        "mask": "snow"
+      }
+    },
+    "base": {
+      "type": "color.gradient",
+      "inputs": {
+        "in": "worn"
+      },
+      "params": {
+        "high": 300,
+        "low": 70,
+        "preset": "alpine"
+      }
+    },
+    "foothills": {
+      "type": "mountain.alpine",
+      "params": {
+        "base": 66,
+        "coverage": 0.55,
+        "height": 125,
+        "peak_spacing": 650,
+        "sharpness": 0.6
+      }
+    },
+    "out": {
+      "type": "output.map",
+      "inputs": {
+        "albedo": "albedo",
+        "height": "worn",
+        "mask.snow": "snow",
+        "terrain": "terrains"
+      }
+    },
+    "range": {
+      "type": "mountain.range",
+      "params": {
+        "base": 70,
+        "height": 238,
+        "peak_spacing": 600,
+        "sharpness": 0.85,
+        "spine": [
+          {
+            "x": 0.1,
+            "z": 0.66
+          },
+          {
+            "x": 0.32,
+            "z": 0.48
+          },
+          {
+            "x": 0.58,
+            "z": 0.52
+          },
+          {
+            "x": 0.9,
+            "z": 0.3
+          }
+        ],
+        "spur_spacing": 300,
+        "spurs": 0.8,
+        "width": 3600
+      },
+      "note": "The main chain, along its crest."
+    },
+    "relief": {
+      "type": "combine.blend",
+      "inputs": {
+        "a": "foothills",
+        "b": "range"
+      },
+      "params": {
+        "mode": "max"
+      }
+    },
+    "rock": {
+      "type": "color.solid",
+      "params": {
+        "color": "#76716a"
+      }
+    },
+    "rocky": {
+      "type": "color.mix",
+      "inputs": {
+        "a": "base",
+        "b": "rock",
+        "mask": "steep"
+      }
+    },
+    "snow": {
+      "type": "mask.snow",
+      "inputs": {
+        "height": "worn"
+      },
+      "params": {
+        "line": 205,
+        "max_slope": 44,
+        "north_bias": 25
+      }
+    },
+    "steep": {
+      "type": "mask.slope",
+      "inputs": {
+        "height": "worn"
+      },
+      "params": {
+        "from": 30,
+        "to": 44
+      }
+    },
+    "terrains": {
+      "type": "terrain.layers",
+      "inputs": {
+        "mask_1": "steep",
+        "mask_2": "worn.talus",
+        "mask_4": "snow"
+      },
+      "params": {
+        "base": "Grass",
+        "terrain_1": "Rock",
+        "terrain_2": "Gravel",
+        "terrain_3": "",
+        "terrain_4": "Snow"
+      }
+    },
+    "valley": {
+      "type": "valley.glacial",
+      "inputs": {
+        "height": "relief"
+      },
+      "params": {
+        "drop": 24,
+        "floor_height": 102,
+        "path": [
+          {
+            "x": 0.22,
+            "z": 0.95
+          },
+          {
+            "x": 0.4,
+            "z": 0.7
+          },
+          {
+            "x": 0.47,
+            "z": 0.5
+          },
+          {
+            "x": 0.6,
+            "z": 0.12
+          }
+        ],
+        "width": 1100
+      },
+      "note": "A U-shaped valley the old glacier left."
+    },
+    "white": {
+      "type": "color.solid",
+      "params": {
+        "color": "#f3f5f8"
+      }
+    },
+    "worn": {
+      "type": "erosion.thermal",
+      "inputs": {
+        "height": "valley"
+      },
+      "params": {
+        "angle": 37,
+        "iterations": 40
+      }
+    }
+  },
+  "ui": {
+    "albedo": {
+      "pos": [
+        1560.0,
+        0.0
+      ]
+    },
+    "base": {
+      "pos": [
+        1040.0,
+        0.0
+      ]
+    },
+    "foothills": {
+      "pos": [
+        0.0,
+        0.0
+      ]
+    },
+    "out": {
+      "pos": [
+        1820.0,
+        0.0
+      ]
+    },
+    "range": {
+      "pos": [
+        0.0,
+        160.0
+      ]
+    },
+    "relief": {
+      "pos": [
+        260.0,
+        0.0
+      ]
+    },
+    "rock": {
+      "pos": [
+        0.0,
+        320.0
+      ]
+    },
+    "rocky": {
+      "pos": [
+        1300.0,
+        0.0
+      ]
+    },
+    "snow": {
+      "pos": [
+        1040.0,
+        160.0
+      ]
+    },
+    "steep": {
+      "pos": [
+        1040.0,
+        320.0
+      ]
+    },
+    "terrains": {
+      "pos": [
+        1300.0,
+        160.0
+      ]
+    },
+    "valley": {
+      "pos": [
+        520.0,
+        0.0
+      ]
+    },
+    "white": {
+      "pos": [
+        0.0,
+        480.0
+      ]
+    },
+    "worn": {
+      "pos": [
+        780.0,
+        0.0
+      ]
+    }
+  }
+}
