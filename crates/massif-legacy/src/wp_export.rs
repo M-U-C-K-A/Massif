@@ -178,6 +178,22 @@ pub fn platform_for(minecraft: &str) -> &'static PlatformSpec {
     PLATFORMS.iter().find(|p| p.id == id).expect("a known platform")
 }
 
+/// WorldPainter's versions of Minecraft to choose from, newest first: its
+/// name for each, and a version of Minecraft that picks it.
+pub fn platform_choices() -> Vec<(&'static str, &'static str)> {
+    const VERSIONS: [(&str, &str); 8] = [
+        ("org.pepsoft.anvil.26.1", "26.1"),
+        ("org.pepsoft.anvil.1.21.11", "1.21.11"),
+        ("org.pepsoft.anvil.1.20.5", "1.21.10"),
+        ("org.pepsoft.anvil.1.19", "1.20.4"),
+        ("org.pepsoft.anvil.1.18", "1.18.2"),
+        ("org.pepsoft.anvil.1.17", "1.17.1"),
+        ("org.pepsoft.anvil.1.13", "1.16.5"),
+        ("org.pepsoft.anvil", "1.12.2"),
+    ];
+    VERSIONS.iter().filter_map(|&(id, v)| PLATFORMS.iter().find(|p| p.id == id).map(|p| (p.display_name, v))).collect()
+}
+
 fn platform_int(p: &PlatformSpec, name: &str) -> i32 {
     p.ints.iter().find(|i| i.0 == name).map_or(0, |i| i.1)
 }
@@ -1619,11 +1635,10 @@ pub fn export_world(world: &World, path: &Path, options: &WpOptions, progress: O
         let mut w = Writer::new(&mut gz);
         write_world(&mut w, world, &plan, &dims, options, progress)?;
         w.finish()?;
-        let total = gz.total_out;
         let file = gz.finish()?;
         let file = file.into_inner().map_err(|e| e.into_error())?;
         file.sync_all()?;
-        Ok(total + 8)
+        Ok(file.metadata()?.len())
     })();
     match result {
         Ok(bytes) => {
@@ -1728,6 +1743,15 @@ pub(crate) mod tests {
         assert_eq!(platform_for("26.1.2").id, "org.pepsoft.anvil.26.1");
         assert_eq!(platform_for("26.3").id, "org.pepsoft.anvil.26.1");
         assert_eq!(platform_for("?").id, "org.pepsoft.anvil.26.1");
+    }
+
+    #[test]
+    fn each_choice_picks_its_platform() {
+        let choices = platform_choices();
+        assert_eq!(choices.len(), 8);
+        for (name, version) in choices {
+            assert_eq!(platform_for(version).display_name, name);
+        }
     }
 
     #[test]

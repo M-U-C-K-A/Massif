@@ -69,6 +69,7 @@ mod versions;
 mod view3d;
 mod view_image;
 mod widgets;
+mod wp_export_ui;
 
 use std::path::PathBuf;
 

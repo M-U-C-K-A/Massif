@@ -368,6 +368,10 @@ enum Dialog {
     ImportMask(Box<crate::import_mask::MaskForm>),
     /// A part of the map to write as images: where, and what.
     ExportRegion(Box<crate::region_export::RegionForm>),
+    /// The map to write as a WorldPainter world: for which version.
+    WpExport(Box<crate::wp_export_ui::WpForm>),
+    /// What a WorldPainter export wrote and left out, and the file.
+    WpReport(Box<massif_legacy::WpReport>, PathBuf),
     /// The relief of a real place: where, at what scale, how high.
     Real(Box<crate::real_terrain::RealForm>),
     /// A save point to make (`None`) or rename (its index): its name.
@@ -2778,6 +2782,11 @@ impl MassifApp {
                     self.task_done(ctx, Cue::Ready, tr!("Export done"), &msg, secs);
                     self.say(ctx, msg, false, Some(dir));
                 }
+                Outcome::WpExported { path, report } => {
+                    let msg = tr!("Wrote {file} for WorldPainter ({size}) in {secs:.1} s", file = jobs::display_name(&path), size = panels::human(report.bytes), secs);
+                    self.task_done(ctx, Cue::Ready, tr!("Export done"), &msg, secs);
+                    self.dialog = Some(Dialog::WpReport(report, path));
+                }
                 Outcome::Failed(message) => {
                     self.after_save = None;
                     self.task_done(ctx, Cue::Error, tr!("Something failed"), &message, secs);
@@ -3241,6 +3250,19 @@ impl MassifApp {
                 }
             }
             Command::Export => self.open_export_dialog(),
+            Command::ExportWorldPainter => {
+                // For the version the map's mods are made for, else the
+                // newest game installed here.
+                let versions = export_versions();
+                let mods = mod_uses(&self.doc.world.registry, self.blocks.catalogue.as_deref());
+                let version = mods
+                    .iter()
+                    .filter_map(|m| m.minecraft.as_deref())
+                    .find_map(|v| versions.iter().find(|(t, _)| t.name == v))
+                    .or_else(|| versions.iter().find(|(_, installed)| *installed))
+                    .map_or_else(|| "1.21.11".to_owned(), |(t, _)| t.name.clone());
+                self.dialog = Some(Dialog::WpExport(Box::new(crate::wp_export_ui::WpForm::new(&version))));
+            }
             // Asked first if the map has changes (see `handle_close`).
             Command::Quit => ctx.send_viewport_cmd(ViewportCommand::Close),
             Command::Undo => self.undo(ctx),
@@ -4736,6 +4758,55 @@ impl MassifApp {
                 }
                 if keep {
                     self.dialog = Some(Dialog::ExportRegion(form));
+                }
+            }
+            Dialog::WpExport(mut form) => {
+                use crate::wp_export_ui::Choice;
+                let mut choice = Choice::Keep;
+                let response = modal(ctx, "wp export").show(ctx, |ui| {
+                    choice = form.ui(ui);
+                });
+                if response.should_close() {
+                    keep = false;
+                }
+                match choice {
+                    Choice::Keep => {}
+                    Choice::Close => keep = false,
+                    Choice::Export(minecraft) => {
+                        let name = massif_core::mask::file_safe(&self.doc.world.meta.name);
+                        let mut dialog = rfd::FileDialog::new().set_title(tr!("Save the WorldPainter world")).add_filter(tr!("WorldPainter world"), &["world"]).set_file_name(format!("{name}.world"));
+                        if let Some(dir) = self.doc.path.as_ref().and_then(|p| p.parent()) {
+                            dialog = dialog.set_directory(dir);
+                        }
+                        if let Some(path) = dialog.save_file() {
+                            keep = false;
+                            let path = if path.extension().is_some_and(|e| e == "world") { path } else { path.with_extension("world") };
+                            let snapshot = self.doc.world.snapshot();
+                            let options = massif_legacy::WpOptions { minecraft, ..Default::default() };
+                            self.jobs.push(Job::wp_export(ctx, snapshot, path, options));
+                        }
+                    }
+                }
+                if keep {
+                    self.dialog = Some(Dialog::WpExport(form));
+                }
+            }
+            Dialog::WpReport(report, path) => {
+                use crate::wp_export_ui::ReportChoice;
+                let mut choice = ReportChoice::Keep;
+                let response = modal(ctx, "wp report").show(ctx, |ui| {
+                    choice = crate::wp_export_ui::report_ui(ui, &report, &path);
+                });
+                if response.should_close() {
+                    keep = false;
+                }
+                match choice {
+                    ReportChoice::Keep => {}
+                    ReportChoice::Close => keep = false,
+                    ReportChoice::Reveal(file) => jobs::reveal(&file),
+                }
+                if keep {
+                    self.dialog = Some(Dialog::WpReport(report, path));
                 }
             }
             Dialog::Real(mut form) => {
@@ -9470,6 +9541,52 @@ mod tests {
         let share = |h: &egui_kittest::Harness<'static, MassifApp>, x0: i32| (0..64).flat_map(|z| (x0..x0 + 64).map(move |x| (x, z))).filter(|&(x, z)| at(h, x, z).1 == 1).count() as f32 / 4096.0;
         let (west, east) = (share(&h, -500), share(&h, 400));
         assert!(west < 0.08 && east > 0.85, "{west} {east}");
+    }
+
+    /// File ▸ Export WorldPainter World asks for the version of Minecraft,
+    /// writes the map as a .world in the background and shows what it
+    /// wrote and left out; the file reads back as the map (renders of the
+    /// dialog and the report with MASSIF_SNAPSHOT_DIR).
+    #[test]
+    fn the_map_goes_back_to_worldpainter() {
+        let dir = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from);
+        let path = std::env::temp_dir().join(format!("massif-wp-app-{}.world", std::process::id()));
+        let mut h = harness(ThemeChoice::Dark);
+        h.run_steps(5);
+        let ctx = h.ctx.clone();
+        h.state_mut().command(&ctx, Command::ExportWorldPainter);
+        h.run_steps(3);
+        assert!(matches!(h.state().dialog, Some(Dialog::WpExport(_))));
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("dialog-export-worldpainter.png")).unwrap();
+        }
+        h.state_mut().dialog = None;
+        {
+            let app = h.state_mut();
+            let snapshot = app.doc.world.snapshot();
+            app.jobs.push(Job::wp_export(&ctx, snapshot, path.clone(), massif_legacy::WpOptions::default()));
+        }
+        let started = std::time::Instant::now();
+        while !h.state().jobs.is_empty() {
+            assert!(started.elapsed().as_secs() < 60, "the export timed out");
+            h.step();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.run_steps(4);
+        let Some(Dialog::WpReport(report, written)) = &h.state().dialog else { panic!("the report is shown") };
+        assert_eq!(written, &path);
+        assert!(report.tiles > 0 && report.bytes > 0);
+        if let Some(dir) = &dir {
+            h.render().unwrap().save(dir.join("dialog-worldpainter-report.png")).unwrap();
+        }
+        let (back, _) = massif_legacy::import_world(&path, None).unwrap();
+        let dim = h.state().doc.dimension();
+        for (x, z) in [(0, 0), (100, -60), (-200, 150)] {
+            let a = massif_core::ops::height_at(dim, 0, x, z, massif_core::ops::Surface::Top);
+            let b = massif_core::ops::height_at(&back.dims[0], 0, x, z, massif_core::ops::Surface::Top);
+            assert_eq!(a, b, "height at {x},{z}");
+        }
+        let _ = std::fs::remove_file(&path);
     }
 
     /// File ▸ Export Region writes a part of the map as a heightmap and

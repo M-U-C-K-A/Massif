@@ -31,6 +31,8 @@ pub enum Command {
     /// A part of the map as images, to bring back with Import mask.
     ExportRegion,
     Export,
+    /// The map as a WorldPainter world (see `wp_export_ui`).
+    ExportWorldPainter,
     Quit,
     Undo,
     Redo,
@@ -250,6 +252,7 @@ pub fn menus(state: &State) -> Vec<Menu> {
         item(Command::ExportHeightMap, Icon::ImageDown, tr!("Export Height Map…"), map),
         tipped(Command::ExportRegion, Icon::ImageDown, tr!("Export Region…"), map, tr!("A part of the map as a heightmap and masks, to work on in another tool and import back in place")),
         item(Command::Export, Icon::Package, tr!("Export to Minecraft…"), map),
+        tipped(Command::ExportWorldPainter, Icon::Upload, tr!("Export WorldPainter World…"), map, tr!("The map as a WorldPainter world (.world), to open and go on with in WorldPainter")),
         Entry::Separator,
         tipped(Command::RunScript, Icon::FileCode, tr!("Run Script…"), map, tr!("A script run on the map: one of Massif's, in Lua, or one of WorldPainter's, as it is")),
         Entry::Separator,
@@ -532,6 +535,7 @@ mod tests {
                 "Export Height Map…",
                 "Export Region…",
                 "Export to Minecraft…",
+                "Export WorldPainter World…",
                 "Run Script…",
                 "Import Pack…",
                 "Export Pack…",
@@ -554,7 +558,7 @@ mod tests {
     fn what_can_be_used_when() {
         let recent = [PathBuf::from("/maps/Alps.massif")];
         let home = menus(&State { editor: false, ..state(&recent) });
-        for command in [Command::Save, Command::SaveAs, Command::Export, Command::ExportPack, Command::ExportHeightMap, Command::ExportRegion, Command::Undo, Command::Ores, Command::Analyse, Command::HomeScreen, Command::WholeMap(WholeOp::Rivers), Command::Caves, Command::ImportMask, Command::RealTerrain, Command::SavePoint] {
+        for command in [Command::Save, Command::SaveAs, Command::Export, Command::ExportWorldPainter, Command::ExportPack, Command::ExportHeightMap, Command::ExportRegion, Command::Undo, Command::Ores, Command::Analyse, Command::HomeScreen, Command::WholeMap(WholeOp::Rivers), Command::Caves, Command::ImportMask, Command::RealTerrain, Command::SavePoint] {
             assert!(!enabled(&home, &command), "{command:?} needs a map");
         }
         for command in [Command::NewWorld, Command::Open, Command::ImportWorld, Command::ImportPack, Command::FromRealPlace, Command::OpenRecent(recent[0].clone()), Command::Settings, Command::Help, Command::About, Command::Quit, Command::Theme(ThemeChoice::Light)] {

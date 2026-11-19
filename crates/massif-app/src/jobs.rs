@@ -5,7 +5,7 @@
 //! editing while a save or an export runs.
 
 use massif_anvil::{ExportOptions, ExportStats, Progress};
-use massif_legacy::{ImportProgress, ImportReport};
+use massif_legacy::{ImportProgress, ImportReport, WpProgress, WpReport};
 use massif_core::World;
 use massif_core::generate::{GenParams, generate};
 use std::path::PathBuf;
@@ -31,6 +31,11 @@ pub enum Outcome {
     Exported {
         dir: PathBuf,
         stats: ExportStats,
+    },
+    /// The map written as a WorldPainter world.
+    WpExported {
+        path: PathBuf,
+        report: Box<WpReport>,
     },
     /// A backup left by a run that closed without saving, read back (see
     /// `autosave`).
@@ -147,6 +152,15 @@ impl JobKind {
 pub trait JobProgress: Send + Sync {
     fn fraction(&self) -> f32;
     fn cancel(&self);
+}
+
+impl JobProgress for WpProgress {
+    fn fraction(&self) -> f32 {
+        WpProgress::fraction(self)
+    }
+    fn cancel(&self) {
+        self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 impl JobProgress for Progress {
@@ -695,6 +709,19 @@ impl Job {
                     }
                 }
             }
+        })
+    }
+
+    /// Write a WorldPainter world.
+    pub fn wp_export(ctx: &egui::Context, snapshot: World, path: PathBuf, options: massif_legacy::WpOptions) -> Job {
+        let progress = Arc::new(WpProgress::default());
+        let label = tr!("Exporting to {file}", file = display_name(&path));
+        let p = progress.clone();
+        Job::spawn(JobKind::Export, label, Some(progress as Arc<dyn JobProgress>), ctx, move || match massif_legacy::export_world(&snapshot, &path, &options, Some(&p)) {
+            Ok(report) => Outcome::WpExported { path, report: Box::new(report) },
+            Err(massif_legacy::WpExportError::Cancelled) => Outcome::Cancelled,
+            Err(massif_legacy::WpExportError::Io(e)) => Outcome::Failed(tr!("Export failed. {why}.", why = massif_core::atomic::cause(&e, &path))),
+            Err(e) => Outcome::Failed(tr!("Export failed: {e}", e)),
         })
     }
 
