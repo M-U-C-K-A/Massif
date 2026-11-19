@@ -120,6 +120,10 @@ struct Settings {
     /// it existed are of someone who knows Massif already.
     #[serde(default = "yes")]
     tour_done: bool,
+    /// "Coming from WorldPainter?" was answered at the first start.
+    /// Settings saved before it was asked are of someone who knows Massif.
+    #[serde(default = "yes")]
+    origin_asked: bool,
     /// What the graphics card is asked to do (Settings ▸ Graphics); None
     /// until the first start picks a preset for the card.
     graphics: Option<crate::graphics::Graphics>,
@@ -189,6 +193,7 @@ impl Default for Settings {
             pack_author: String::new(),
             language: crate::i18n::Language::System,
             tour_done: false,
+            origin_asked: false,
             graphics: None,
             graphics_chosen_for: None,
             keys: crate::keymap::Saved::default(),
@@ -340,6 +345,8 @@ fn export_versions() -> Vec<(massif_anvil::Target, bool)> {
 }
 
 enum Dialog {
+    /// "Coming from WorldPainter?", at the first start.
+    Origin,
     Export(ExportForm),
     Unsaved(Pending),
     About,
@@ -549,6 +556,9 @@ pub struct MassifApp {
     /// The tour asked for (Help ▸ Take the tour, or the first run): shown
     /// once a map is open, with nothing else in the way.
     tour_wanted: bool,
+    /// Which tour: Massif's, or the one for those who come from
+    /// WorldPainter.
+    tour_kind: crate::tour::Kind,
     /// The live picture of the home screen's background in Settings ▸
     /// Appearance.
     backdrop_preview: crate::backdrop::Preview,
@@ -943,7 +953,8 @@ impl MassifApp {
             self.doc.forget_changes();
         }
         let clear = self.dialog.is_none() && self.pack_dialog.is_none() && self.blocking_job().is_none() && self.sample.is_none();
-        if self.tour.is_none() && self.tour_wanted && self.has_map && clear {
+        // Not before "Coming from WorldPainter?" is answered: it picks the tour.
+        if self.tour.is_none() && self.tour_wanted && self.has_map && clear && self.settings.origin_asked {
             self.tour_wanted = false;
             self.start_tour();
         }
@@ -961,9 +972,15 @@ impl MassifApp {
     }
 
     /// Show the tour, on the World side, in a workspace with the parts it
-    /// talks about.
+    /// talks about: the WorldPainter workspace for the WorldPainter tour.
     fn start_tour(&mut self) {
         use crate::layout::EditorKind as E;
+        if self.tour_kind == crate::tour::Kind::WorldPainter {
+            self.layout.show_worldpainter();
+            self.tour = Some(crate::tour::Tour::new(crate::tour::Kind::WorldPainter));
+            crate::sounds::play(Cue::Open);
+            return;
+        }
         self.layout.switch_side(false);
         let parts = [E::Map, E::Tools, E::BrushSettings, E::View3d];
         let has_all = |w: &crate::layout::Workspace| !w.terrain && parts.iter().all(|k| w.root.shows(*k));
@@ -977,10 +994,28 @@ impl MassifApp {
         crate::sounds::play(Cue::Open);
     }
 
+    /// "Coming from WorldPainter?" answered. Yes: the WorldPainter
+    /// workspace and keys, and the WorldPainter tour once a map is open
+    /// (in place of Massif's). No: Massif's own start, as before.
+    fn answer_origin(&mut self, from_wp: bool) {
+        self.settings.origin_asked = true;
+        if from_wp {
+            self.layout.show_worldpainter();
+            self.settings.keys.preset = crate::keymap::Preset::WorldPainter;
+            self.tour_kind = crate::tour::Kind::WorldPainter;
+            // The tour is offered even to one who skipped Massif's before.
+            self.tour_wanted = true;
+        }
+        crate::sounds::play(Cue::Close);
+    }
+
     /// Help ▸ Take the tour: over the map open, or over a sample made for
     /// it when there is none.
-    fn take_the_tour(&mut self, ctx: &egui::Context) {
+    fn take_the_tour(&mut self, ctx: &egui::Context, kind: crate::tour::Kind) {
         self.tour_wanted = true;
+        self.tour_kind = kind;
+        // A tour under way gives way to the one asked for.
+        self.tour = None;
         if self.home.is_some() {
             if self.has_map {
                 self.home_action(ctx, HomeAction::Back);
@@ -1071,6 +1106,7 @@ impl MassifApp {
             menus_in_menu_bar: false,
             tour: None,
             tour_wanted: false,
+            tour_kind: crate::tour::Kind::Massif,
             backdrop_preview: Default::default(),
             sample: None,
         }
@@ -1096,6 +1132,7 @@ impl MassifApp {
             high_contrast: Follow::Off,
             reduce_motion: Follow::Off,
             tour_done: true,
+            origin_asked: true,
             ..Settings::default()
         };
         Self::with_world(world, Layout::default(), ToolState::default(), settings)
@@ -3143,9 +3180,12 @@ impl MassifApp {
             if icon(ui, Icon::FilePlus2, tr!("New world (⌘N)"), !busy) {
                 self.open_home(Page::NewMap);
             }
+            let open_from = ui.cursor().min.x;
             if icon(ui, Icon::FolderOpen, tr!("Open (⌘O)"), !busy) {
                 self.request(&ctx, Pending::Open(None));
             }
+            let open = Rect::from_x_y_ranges(open_from..=ui.cursor().min.x - ui.spacing().item_spacing.x, ui.max_rect().y_range());
+            crate::tour::mark(&ctx, crate::tour::Target::Open, open);
             let save_from = ui.cursor().min.x;
             if icon(ui, Icon::Save, tr!("Save (⌘S)"), !busy) {
                 self.save(&ctx, false);
@@ -3292,7 +3332,8 @@ impl MassifApp {
             Command::Settings => self.dialog = Some(Dialog::Preferences(PrefsSection::Appearance)),
             Command::ResetWorkspaces => self.layout = Layout::default(),
             Command::Help => self.dialog = Some(Dialog::Help(crate::help::HelpState::default())),
-            Command::Tour => self.take_the_tour(ctx),
+            Command::Tour => self.take_the_tour(ctx, crate::tour::Kind::Massif),
+            Command::WorldPainterTour => self.take_the_tour(ctx, crate::tour::Kind::WorldPainter),
             Command::Shortcuts => {
                 self.dialog = Some(Dialog::Help(crate::help::HelpState {
                     topic: crate::help::topic_index("Shortcuts"),
@@ -4145,6 +4186,11 @@ impl MassifApp {
     // ------------------------------------------------------------ dialogs --
 
     fn dialogs(&mut self, ctx: &egui::Context) {
+        // The very first start: "Coming from WorldPainter?", before the tour
+        // and before anything else is asked.
+        if !self.settings.origin_asked && self.dialog.is_none() && self.pack_dialog.is_none() && self.blocking_job().is_none() && self.sample.is_none() {
+            self.dialog = Some(Dialog::Origin);
+        }
         if let Some(job) = self.blocking_job() {
             let label = job.label.clone();
             let secs = job.started.elapsed().as_secs_f32();
@@ -5361,6 +5407,19 @@ impl MassifApp {
                     self.dialog = Some(Dialog::ImportReport(report, thumbnail));
                 }
             }
+            Dialog::Origin => {
+                let mut choice = None;
+                let response = modal(ctx, "origin").show(ctx, |ui| {
+                    choice = origin_ui(ui);
+                });
+                if choice.is_none() && response.should_close() {
+                    choice = Some(false);
+                }
+                match choice {
+                    Some(from_wp) => self.answer_origin(from_wp),
+                    None => self.dialog = Some(Dialog::Origin),
+                }
+            }
             Dialog::Update => {
                 let Some(release) = self.update_offer().cloned() else { return };
                 let version = release.tag_name.trim_start_matches('v').to_owned();
@@ -5841,6 +5900,32 @@ fn header_style(ui: &mut Ui) {
         state.bg_stroke = Stroke::NONE;
         state.corner_radius = egui::CornerRadius::same(theme::HEADER_CONTROL_RADIUS);
     }
+}
+
+/// "Coming from WorldPainter?": what each answer does, and the two
+/// answers. Whether the user comes from WorldPainter, once answered.
+fn origin_ui(ui: &mut Ui) -> Option<bool> {
+    let pal = Palette::of(ui);
+    let mut choice = None;
+    ui.set_width(460.0);
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(theme::glyph(Icon::Map).to_string()).size(17.0).color(pal.accent));
+        ui.label(RichText::new(tr!("Coming from WorldPainter?")).bold().size(15.0));
+    });
+    ui.add_space(4.0);
+    ui.add(egui::Label::new(RichText::new(tr!("Massif can start laid out as WorldPainter is: the map big in the middle, the tools on the left, Terrain, Layers and Brushes on the right, and WorldPainter's keyboard shortcuts. A short tour then shows where each of your tools is.")).color(pal.weak)).wrap());
+    ui.add_space(6.0);
+    ui.add(egui::Label::new(RichText::new(tr!("Nothing is taken away: the 3D view, the node graph and the other workspaces stay one click away, and Settings ▸ Keyboard changes the keys back.")).size(12.0).color(pal.weak)).wrap());
+    ui.add_space(14.0);
+    ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+        if ui.add(theme::primary_button(ui, tr!("Yes, set it up like WorldPainter"))).clicked() {
+            choice = Some(true);
+        }
+        if crate::widgets::button(ui, tr!("No, I'm new to both")).clicked() {
+            choice = Some(false);
+        }
+    });
+    choice
 }
 
 pub(crate) fn modal(ctx: &egui::Context, id: &str) -> Modal {
@@ -17495,6 +17580,140 @@ mod tests {
                     if k + 1 < crate::tour::STEP_COUNT {
                         h.get_by_label("Next").click();
                     }
+                }
+            }
+        }
+    }
+
+    /// An app at its very first start, the question not answered yet: a
+    /// map open (`map`) or the home screen, in a window of `size`.
+    fn first_start(theme: ThemeChoice, size: egui::Vec2, map: bool) -> egui_kittest::Harness<'static, MassifApp> {
+        let mut h = first_run(theme, size);
+        let app = h.state_mut();
+        app.settings.origin_asked = false;
+        // The harness's first frames came before the question was unanswered.
+        app.tour = None;
+        app.tour_wanted = true;
+        if !map {
+            app.has_map = false;
+            app.settings.recent.clear();
+            app.open_home(Page::NewMap);
+        }
+        h
+    }
+
+    /// The first start asks "Coming from WorldPainter?" before anything
+    /// else. Yes: the WorldPainter workspace and keys, and the WorldPainter
+    /// tour, each of its steps lighting the part it talks about. No:
+    /// Massif's start as before. Asked once; settings from before it count
+    /// as answered; Help ▸ Where are my WorldPainter tools? shows the tour.
+    #[test]
+    fn coming_from_worldpainter() {
+        use crate::keymap::{Action, Preset};
+        use egui_kittest::kittest::Queryable;
+        let mut h = first_start(ThemeChoice::Light, vec2(1600.0, 1000.0), true);
+        h.run_steps(4);
+        assert!(matches!(h.state().dialog, Some(Dialog::Origin)), "asked first");
+        assert!(h.state().tour.is_none(), "the tour waits for the answer");
+        h.get_by_label("Yes, set it up like WorldPainter").click();
+        h.run_steps(4);
+        let app = h.state();
+        assert!(app.settings.origin_asked && app.dialog.is_none());
+        assert_eq!(app.layout.current().name, crate::layout::WORLDPAINTER);
+        assert_eq!(app.settings.keys.preset, Preset::WorldPainter);
+        assert_eq!(app.settings.keys.keymap().label(Action::Tool(Tool::Raise)).as_deref(), Some(if cfg!(target_os = "macos") { "⌥H" } else { "Alt+H" }));
+        let titles = ["Your .world files", "Height brushes", "Painting terrain", "Layers", "Water", "Selections", "Export", "What Massif adds"];
+        assert_eq!(titles.len(), crate::tour::WP_STEP_COUNT);
+        for (k, title) in titles.iter().enumerate() {
+            let tour = h.state().tour.as_ref().expect("the WorldPainter tour");
+            assert_eq!((tour.kind, tour.title()), (crate::tour::Kind::WorldPainter, *title));
+            assert!(tour.lit, "step {} lights what it talks about", k + 1);
+            h.get_by_label(if k + 1 == titles.len() { "Done" } else { "Next" }).click();
+            h.run_steps(3);
+        }
+        assert!(h.state().tour.is_none() && h.state().settings.tour_done);
+        let saved: Settings = serde_json::from_str(&serde_json::to_string(&h.state().settings).unwrap()).unwrap();
+        assert!(saved.origin_asked && saved.keys.preset == Preset::WorldPainter);
+        // Help ▸ Where are my WorldPainter tools?, from another workspace.
+        h.state_mut().layout.activate(0);
+        let ctx = h.ctx.clone();
+        h.state_mut().command(&ctx, Command::WorldPainterTour);
+        h.run_steps(3);
+        assert_eq!(h.state().tour.as_ref().map(|t| t.title()), Some("Your .world files"));
+        assert_eq!(h.state().layout.current().name, crate::layout::WORLDPAINTER);
+
+        // No: Massif's own start, as before.
+        let mut h = first_start(ThemeChoice::Dark, vec2(1600.0, 1000.0), true);
+        h.run_steps(4);
+        h.get_by_label("No, I'm new to both").click();
+        h.run_steps(4);
+        let app = h.state();
+        assert!(app.settings.origin_asked);
+        assert_eq!(app.settings.keys.preset, Preset::Massif);
+        assert_eq!(app.layout.current().name, "Layout");
+        assert_eq!(app.tour.as_ref().map(|t| t.title()), Some("Welcome to Massif"));
+        // Escape answers No.
+        let mut h = first_start(ThemeChoice::Dark, vec2(1600.0, 1000.0), false);
+        h.run_steps(4);
+        assert!(matches!(h.state().dialog, Some(Dialog::Origin)), "over the home screen too");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(h.state().settings.origin_asked && h.state().settings.keys.preset == Preset::Massif && h.state().dialog.is_none());
+        // Settings from before the question: someone who knows Massif.
+        let old: Settings = serde_json::from_str(r#"{"theme":"Dark","recent":[]}"#).unwrap();
+        assert!(old.origin_asked);
+        assert!(!Settings::default().origin_asked);
+    }
+
+    /// The question, the WorldPainter workspace and every step of the
+    /// WorldPainter tour, for the eye (MASSIF_SNAPSHOT_DIR), light and dark
+    /// (MASSIF_SNAPSHOT_PPP=2 for a Retina screen).
+    #[test]
+    fn worldpainter_snapshots() {
+        use egui_kittest::kittest::Queryable;
+        let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) else {
+            return;
+        };
+        let ppp = std::env::var("MASSIF_SNAPSHOT_PPP").unwrap_or_else(|_| "1".into());
+        let settle = |h: &mut egui_kittest::Harness<'static, MassifApp>| {
+            for _ in 0..30 {
+                h.step();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(350));
+            h.run_steps(3);
+        };
+        for theme in [ThemeChoice::Light, ThemeChoice::Dark] {
+            let shade = if theme == ThemeChoice::Dark { "dark" } else { "light" };
+            let name = |what: &str| dir.join(format!("wp-{what}-{shade}-{ppp}x.png"));
+            // The question, over the home screen as at a first start.
+            let mut h = first_start(theme, vec2(1440.0, 900.0), false);
+            settle(&mut h);
+            h.render().unwrap().save(name("question")).unwrap();
+            // The workspace, the tour set aside.
+            let mut h = first_start(theme, vec2(1440.0, 900.0), true);
+            h.run_steps(4);
+            h.get_by_label("Yes, set it up like WorldPainter").click();
+            h.run_steps(3);
+            h.state_mut().tour = None;
+            h.state_mut().tour_wanted = false;
+            settle(&mut h);
+            h.render().unwrap().save(name("workspace")).unwrap();
+            // A tool's card, with its WorldPainter name.
+            // The Tools panel's button: after the top bar's, before Tool
+            // Settings' title. Past the tooltip's delay.
+            h.get_all_by_label("Raise / Lower").nth(1).unwrap().hover();
+            settle(&mut h);
+            std::thread::sleep(std::time::Duration::from_millis(700));
+            settle(&mut h);
+            h.render().unwrap().save(name("card")).unwrap();
+            let ctx = h.ctx.clone();
+            h.state_mut().command(&ctx, Command::WorldPainterTour);
+            settle(&mut h);
+            for k in 0..crate::tour::WP_STEP_COUNT {
+                settle(&mut h);
+                h.render().unwrap().save(name(&format!("tour-{}", k + 1))).unwrap();
+                if k + 1 < crate::tour::WP_STEP_COUNT {
+                    h.get_by_label("Next").click();
                 }
             }
         }

@@ -6,6 +6,11 @@
 //! from Help ▸ Take the tour. Escape, Skip or Done end it; with "Don't show
 //! again" ticked (as it is at first) it does not come back on its own.
 //!
+//! Those who come from WorldPainter get a tour of their own instead,
+//! "Where are my WorldPainter tools?" (also in the Help menu): eight steps
+//! from where WorldPainter put each thing to where Massif has it, then
+//! what Massif adds.
+//!
 //! The parts of the window mark where they were drawn each frame
 //! ([`mark`]); the tour, drawn last, reads them back. A part not shown in
 //! the workspace leaves the card in the middle of the window, with nothing
@@ -22,6 +27,11 @@ pub enum Target {
     Sides,
     /// The top bar's Save and Export buttons.
     SaveExport,
+    /// The top bar's Open button.
+    Open,
+    /// The row of a group of the Tools panel, by its name in
+    /// `Tool::GROUPS`.
+    Tools(&'static str),
     /// An area showing this editor (the first one drawn).
     Editor(EditorKind),
 }
@@ -29,53 +39,134 @@ pub enum Target {
 struct Step {
     targets: &'static [Target],
     title: &'static str,
-    body: &'static str,
+    body: std::borrow::Cow<'static, str>,
 }
 
-/// How many steps the tour has.
-pub const STEP_COUNT: usize = 6;
+/// Which tour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Kind {
+    /// Massif's own, for a first start.
+    #[default]
+    Massif,
+    /// "Where are my WorldPainter tools?": for those who come from it.
+    WorldPainter,
+}
 
-/// The steps, in the language of the interface.
-fn steps() -> [Step; STEP_COUNT] {
+/// How many steps Massif's tour has.
+pub const STEP_COUNT: usize = 6;
+/// How many steps the WorldPainter tour has.
+pub const WP_STEP_COUNT: usize = 8;
+
+/// The steps of a tour, in the language of the interface.
+fn steps(kind: Kind) -> Vec<Step> {
+    match kind {
+        Kind::Massif => massif_steps(),
+        Kind::WorldPainter => worldpainter_steps(),
+    }
+}
+
+/// The keys of an action as the keymap has them now ("⌥H"), or nothing.
+fn key(action: crate::keymap::Action) -> String {
+    crate::keymap::get().label(action).unwrap_or_default()
+}
+
+/// The WorldPainter tour: where each thing of WorldPainter is in Massif,
+/// then what Massif adds. Its keys are the keymap's (WorldPainter's, once
+/// the first start set them).
+fn worldpainter_steps() -> Vec<Step> {
+    use crate::keymap::Action;
+    use crate::tools::Tool;
+    vec![
+        Step {
+            targets: &[Target::Open],
+            title: tr!("Your .world files"),
+            body: tr!("Open ({open}) reads a WorldPainter .world as it is: its heights, terrains, layers, water, biomes and annotations. File ▸ Import WorldPainter World… does the same. Save it then as a .massif: your .world is never written to.", open = key(Action::Open))
+            .into(),
+        },
+        Step {
+            targets: &[Target::Tools(crate::tools::SCULPT_GROUP)],
+            title: tr!("Height brushes"),
+            body: tr!("WorldPainter's Height and Raise Mountain are Raise / Lower here ({raise}); Smooth and Flatten keep their names, and Path is Road. The brushes, WorldPainter's shapes and your custom ones, are in the Brushes panel on the right; size and intensity in Brush Settings, under the tools.", raise = key(Action::Tool(Tool::Raise)))
+            .into(),
+        },
+        Step {
+            targets: &[Target::Editor(EditorKind::Terrain)],
+            title: tr!("Painting terrain"),
+            body: tr!("Pick a terrain here and paint it with Paint terrain ({paint}), as with WorldPainter's Pencil. Every block of the game and its mods is in the Blocks panel; biomes are painted with Paint biome.", paint = key(Action::Tool(Tool::PaintTerrain)))
+            .into(),
+        },
+        Step {
+            targets: &[Target::Editor(EditorKind::Layers)],
+            title: tr!("Layers"),
+            body: tr!("Frost, trees, plants, underground pockets and your custom layers: every layer of the map is here, to paint, show, hide or edit. Import WorldPainter layer… brings in your .layer files; the layers of a .world come in with it.").into(),
+        },
+        Step {
+            targets: &[Target::Tools(crate::tools::WATER_GROUP)],
+            title: tr!("Water"),
+            body: tr!("Flood ({flood}) fills a basin, as WorldPainter's does; Shift and the right button drain it, as its Sponge. River lays a river from its source down the land; Water brush paints water by hand.", flood = key(Action::Tool(Tool::Flood)))
+            .into(),
+        },
+        Step {
+            targets: &[Target::Tools(crate::tools::SELECT_GROUP)],
+            title: tr!("Selections"),
+            body: tr!("A rectangle, an ellipse, a lasso, or painted with the brush as WorldPainter's Select with Brush: the other tools then act only inside it. {all} selects the whole map, {none} clears the selection.", all = key(Action::SelectAll), none = key(Action::Deselect))
+            .into(),
+        },
+        Step {
+            targets: &[Target::SaveExport],
+            title: tr!("Export"),
+            body: tr!("Export to Minecraft ({export}) writes the world, as WorldPainter's Export does: version, difficulty, border, spawn, data packs. Save ({save}) keeps your work as a .massif file.", export = key(Action::Export), save = key(Action::Save))
+            .into(),
+        },
+        Step {
+            targets: &[Target::Sides],
+            title: tr!("What Massif adds"),
+            body: tr!("The 3D view, the world as it will stand in the game (the 3D workspace). The Terrain side: a graph of nodes that grows relief and erodes it, then sends it to the map. Smooth terrain: slabs and stairs on top of the land (Edit ▸ Smooth terrain…). Scripts in Lua, or WorldPainter's own (File ▸ Run Script…). The tabs above switch workspaces; Help ▸ Where are my WorldPainter tools? shows this again.").into(),
+        },
+    ]
+}
+
+/// Massif's own tour.
+fn massif_steps() -> Vec<Step> {
     let mac = cfg!(target_os = "macos");
-    [
+    vec![
         Step {
             targets: &[Target::Sides],
             title: tr!("Welcome to Massif"),
-            body: tr!("Massif has three sides. Terrain grows relief from a graph of nodes, then sends it to the map. World is the map itself: you sculpt it, paint it and export it. Render, coming with Massif 2.0, will make path-traced images of it."),
+            body: tr!("Massif has three sides. Terrain grows relief from a graph of nodes, then sends it to the map. World is the map itself: you sculpt it, paint it and export it. Render, coming with Massif 2.0, will make path-traced images of it.").into(),
         },
         Step {
             targets: &[Target::Editor(EditorKind::Tools), Target::Editor(EditorKind::ToolSettings)],
             title: tr!("Tools"),
-            body: tr!("Raise, smooth, flatten, flood with water, paint terrains: one, a noise of several, or a gradient that blends two into each other… Pick a tool here; its own settings show just below. A dot marks the tools new in this version."),
+            body: tr!("Raise, smooth, flatten, flood with water, paint terrains: one, a noise of several, or a gradient that blends two into each other… Pick a tool here; its own settings show just below. A dot marks the tools new in this version.").into(),
         },
         Step {
             targets: &[Target::Editor(EditorKind::BrushSettings)],
             title: tr!("Brush Settings"),
-            body: tr!("The size, strength and shape of the brush. While painting, the scroll wheel changes the size and 1 to 0 the strength."),
+            body: tr!("The size, strength and shape of the brush. While painting, the scroll wheel changes the size and 1 to 0 the strength.").into(),
         },
         Step {
             targets: &[Target::Editor(EditorKind::Map)],
             title: tr!("The 2D map"),
-            body: if mac {
+            body: (if mac {
                 tr!("Paint with the left button, the inverse with the right. Pinch or ⌘-scroll to zoom; drag with the middle button or Space held to move around.")
             } else {
                 tr!("Paint with the left button, the inverse with the right. Ctrl-scroll to zoom; drag with the middle button or Space held to move around.")
-            },
+            }).into(),
         },
         Step {
             targets: &[Target::Editor(EditorKind::View3d)],
             title: tr!("The 3D view"),
-            body: tr!("The world as it will stand in the game, redrawn as you paint. Drag to turn around it, scroll to come closer, double-click to look at a spot."),
+            body: tr!("The world as it will stand in the game, redrawn as you paint. Drag to turn around it, scroll to come closer, double-click to look at a spot.").into(),
         },
         Step {
             targets: &[Target::SaveExport],
             title: tr!("Save and export"),
-            body: if mac {
+            body: (if mac {
                 tr!("⌘S saves the map as a .massif file to come back to. Export (⌘E) writes it as a Minecraft world, ready to play.")
             } else {
                 tr!("Ctrl+S saves the map as a .massif file to come back to. Export (Ctrl+E) writes it as a Minecraft world, ready to play.")
-            },
+            }).into(),
         },
     ]
 }
@@ -91,20 +182,25 @@ const MOVE_SECS: f32 = 0.28;
 
 /// The tour, while it is shown.
 pub struct Tour {
+    pub kind: Kind,
     pub step: usize,
     /// "Don't show again": ticked, the tour does not come back on its own
     /// once it is closed.
     pub dont_show: bool,
     /// The card's size last frame, to place it before it is laid out.
     card: egui::Vec2,
+    /// Whether the step shown lit a part of the window last frame (tests).
+    pub lit: bool,
 }
 
 impl Default for Tour {
     fn default() -> Self {
         Self {
+            kind: Kind::Massif,
             step: 0,
             dont_show: true,
             card: vec2(CARD_W, 168.0),
+            lit: false,
         }
     }
 }
@@ -165,11 +261,23 @@ fn marked(ctx: &egui::Context, targets: &[Target]) -> Option<Rect> {
 }
 
 impl Tour {
+    /// A tour of `kind`, at its first step.
+    pub fn new(kind: Kind) -> Self {
+        Self { kind, ..Self::default() }
+    }
+
+    /// How many steps it has.
+    pub fn count(&self) -> usize {
+        match self.kind {
+            Kind::Massif => STEP_COUNT,
+            Kind::WorldPainter => WP_STEP_COUNT,
+        }
+    }
+
     /// The title of the step shown (for tests).
     #[cfg(test)]
     pub fn title(&self) -> &'static str {
-        let [a, b, c, d, e, f] = steps();
-        [a, b, c, d, e, f][self.step].title
+        steps(self.kind)[self.step].title
     }
 
     /// Draw the tour over the window: the window dimmed but for what the
@@ -179,9 +287,10 @@ impl Tour {
         let mut closed = None;
         let screen = ctx.content_rect();
         let still = theme::reduce_motion(ctx);
-        let steps = steps();
-        let step = &steps[self.step.min(STEP_COUNT - 1)];
+        let steps = steps(self.kind);
+        let step = &steps[self.step.min(steps.len() - 1)];
         let target = marked(ctx, step.targets).map(|r| r.expand(HALO).intersect(screen.shrink(2.0)));
+        self.lit = target.is_some();
 
         // The light glides from one part to the next (not with less motion).
         let hole = target.map(|r| {
@@ -250,7 +359,7 @@ impl Tour {
 
     /// The next step, or the end after the last one.
     fn next(&mut self) -> Option<Closed> {
-        if self.step + 1 >= STEP_COUNT {
+        if self.step + 1 >= self.count() {
             Some(Closed::Finished)
         } else {
             self.step += 1;
@@ -260,11 +369,12 @@ impl Tour {
 
     fn card_ui(&mut self, ui: &mut egui::Ui, pal: &Palette) -> Option<Closed> {
         let mut closed = None;
-        let steps = steps();
-        let step = &steps[self.step.min(STEP_COUNT - 1)];
+        let steps = steps(self.kind);
+        let count = steps.len();
+        let step = &steps[self.step.min(count - 1)];
         // Where the tour is, and the way out.
         ui.horizontal(|ui| {
-            progress(ui, pal, self.step);
+            progress(ui, pal, self.step, count);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let skip = egui::Button::new(RichText::new(tr!("Skip tour")).size(12.0).color(pal.weak)).frame(false);
                 if ui.add(skip).on_hover_text("Esc").clicked() {
@@ -275,12 +385,12 @@ impl Tour {
         ui.add_space(10.0);
         ui.label(RichText::new(step.title).size(16.0).medium().color(pal.text));
         ui.add_space(4.0);
-        ui.label(RichText::new(step.body).size(12.5).color(theme::mix(pal.text, pal.weak, 0.45)));
+        ui.label(RichText::new(step.body.as_ref()).size(12.5).color(theme::mix(pal.text, pal.weak, 0.45)));
         ui.add_space(16.0);
         ui.horizontal(|ui| {
             crate::widgets::checkbox(ui, &mut self.dont_show, RichText::new(tr!("Don't show again")).size(12.0).color(pal.weak));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let last = self.step + 1 == STEP_COUNT;
+                let last = self.step + 1 == count;
                 if ui.add(theme::primary_button(ui, if last { tr!("Done") } else { tr!("Next") })).clicked() {
                     closed = self.next();
                 }
@@ -294,14 +404,14 @@ impl Tour {
 }
 
 /// Where the tour is: a dot a step, the one shown long, in the accent.
-fn progress(ui: &mut egui::Ui, pal: &Palette, step: usize) {
+fn progress(ui: &mut egui::Ui, pal: &Palette, step: usize, count: usize) {
     let (w, h, gap) = (6.0, 6.0, 5.0);
     let long = 16.0;
-    let width = w * (STEP_COUNT - 1) as f32 + long + gap * (STEP_COUNT - 1) as f32;
+    let width = w * (count - 1) as f32 + long + gap * (count - 1) as f32;
     let (rect, response) = ui.allocate_exact_size(vec2(width, 14.0), Sense::hover());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, tr!("Step {n} of {count}", n = step + 1, count = STEP_COUNT)));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, tr!("Step {n} of {count}", n = step + 1, count)));
     let mut x = rect.left();
-    for k in 0..STEP_COUNT {
+    for k in 0..count {
         let len = if k == step { long } else { w };
         let dot = Rect::from_min_size(pos2(x, rect.center().y - h / 2.0), vec2(len, h));
         let color = if k == step {
