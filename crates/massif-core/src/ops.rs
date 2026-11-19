@@ -812,6 +812,41 @@ pub fn fill_caves(edit: &mut Edit, layer: u16) -> usize {
     painted.into_inner()
 }
 
+/// Paint cave layers from a raster, as a terrain graph fills them: `at(x,
+/// z)` gives each column's layer (0: none) and its strength, 0 to 1. A
+/// column takes the layer in a share of the columns as large as the
+/// strength, the same columns for the same strength (dithered as a
+/// selection's feathered edge is), so that the caves thin out where the
+/// strength falls: the plane holds layer numbers only, and a layer's caves
+/// fade over the share of the columns around painted with it. A column of
+/// a locked layer keeps it. Over `tiles` of the edited level (the ground's).
+/// Returns the columns changed.
+pub fn fill_caves_from(edit: &mut Edit, tiles: &[TilePos], at: impl Fn(i32, i32) -> (u16, f32) + Sync) -> usize {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let caves = edit.dim().caves.clone();
+    let locked = |v: u16| caves.get(v).is_some_and(|d| d.locked);
+    let changed = AtomicUsize::new(0);
+    let everywhere = BlockRect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX);
+    edit.par_tiles(tiles.to_vec(), everywhere, false, |pos, _, tile| {
+        let (x0, z0) = pos.origin();
+        let mut n = 0;
+        for i in 0..TILE_AREA {
+            let (x, z) = (x0 + (i % 128) as i32, z0 + (i / 128) as i32);
+            let (layer, strength) = at(x, z);
+            let kept = strength >= 1.0 || (strength > 0.0 && (hash2(x, z, 0x0CA7_E5F1) as f32) < strength * u32::MAX as f32);
+            let value = if kept { layer } else { 0 };
+            let old = tile.caves.get(i);
+            if old != value && !locked(old) {
+                tile.caves.set(i, value);
+                n += 1;
+            }
+        }
+        tile.caves.compact();
+        changed.fetch_add(n, Ordering::Relaxed);
+    });
+    changed.into_inner()
+}
+
 /// Paint cave biome `biome` (0: none, the columns' own) from height `y0`
 /// up to `y1` under the brush, on the ground level: the cells of 4 × 4 × 4
 /// blocks whose middle column the brush reaches (see
@@ -2873,4 +2908,30 @@ mod tests {
         assert_eq!(tile.terrain.get(local_index(0, 0)), 1);
     }
 
+    /// A raster of cave layers: each column painted in a share as large as
+    /// its strength, nothing where it is 0, a locked layer kept.
+    #[test]
+    fn caves_fill_from_a_raster() {
+        let mut w = World::new(WorldMeta::default());
+        w.dims[0].ground_mut().insert(TilePos::new(0, 0), Tile::ground(70.0, 1, NO_FLUID));
+        let defs = vec![crate::caves::CaveDef::vanilla("A", 1, -64, 320, 63), crate::caves::CaveDef { locked: true, ..crate::caves::CaveDef::vanilla("B", 2, -64, 320, 63) }];
+        w.dims[0].caves = crate::caves::CaveLayers::new(defs);
+        let mut h = History::default();
+        h.begin("caves", 0);
+        let changed = fill_caves_from(&mut h.edit(&mut w, 0), &[TilePos::new(0, 0)], |x, _| (1, x as f32 / 127.0));
+        h.commit();
+        let t = w.dims[0].ground().view(TilePos::new(0, 0)).unwrap();
+        let share = |x0: i32, x1: i32| (0..128).flat_map(|z| (x0..x1).map(move |x| (x, z))).filter(|&(x, z)| t.caves.get(local_index(x, z)) == 1).count() as f32 / (128 * (x1 - x0)) as f32;
+        assert!(share(0, 16) < 0.12 && share(112, 128) > 0.88, "{} {}", share(0, 16), share(112, 128));
+        assert_eq!(t.caves.get(local_index(0, 5)), 0, "nothing at strength 0");
+        assert!(changed > 6000, "{changed}");
+        drop(t);
+        // A locked layer keeps its columns.
+        h.begin("locked", 0);
+        h.edit(&mut w, 0).par_tiles(vec![TilePos::new(0, 0)], BlockRect::new(0, 0, 128, 128), false, |_, _, tile| tile.caves.set(local_index(3, 3), 2));
+        fill_caves_from(&mut h.edit(&mut w, 0), &[TilePos::new(0, 0)], |_, _| (1, 1.0));
+        h.commit();
+        let t = w.dims[0].ground().view(TilePos::new(0, 0)).unwrap();
+        assert_eq!((t.caves.get(local_index(3, 3)), t.caves.get(local_index(4, 3))), (2, 1));
+    }
 }
