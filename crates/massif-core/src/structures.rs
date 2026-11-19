@@ -130,6 +130,26 @@ pub struct Structure {
     /// known (see [`Structure::color`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub colors: Vec<[u8; 3]>,
+    /// Who placed it: a tool by hand, or the terrain graph (which replaces
+    /// its own as it applies again, never those placed by hand).
+    #[serde(default, skip_serializing_if = "StructureSource::is_user")]
+    pub source: StructureSource,
+}
+
+/// Who placed a structure.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StructureSource {
+    /// A tool, by hand: the Structure tool, the village brush.
+    #[default]
+    User,
+    /// The terrain graph, when it applied revision `revision` of itself.
+    Graph { revision: u64 },
+}
+
+impl StructureSource {
+    pub fn is_user(&self) -> bool {
+        *self == StructureSource::User
+    }
 }
 
 impl Structure {
@@ -324,6 +344,7 @@ mod tests {
             biome: None,
             data_version: 4671,
             colors: Vec::new(),
+            source: StructureSource::User,
         };
         // A floor of planks 3 × 3 at y 64 across a section's edge, air
         // above it, a chest in the middle.
@@ -363,6 +384,10 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         let back: Structure = serde_json::from_str(&json).unwrap();
         assert_eq!(back, s);
+        assert!(!json.contains("source"), "placed by hand: as before");
+        let graph = Structure { source: StructureSource::Graph { revision: 9 }, ..s.clone() };
+        let back: Structure = serde_json::from_str(&serde_json::to_string(&graph).unwrap()).unwrap();
+        assert_eq!(back.source, StructureSource::Graph { revision: 9 });
         assert_eq!(next_id(&[std::sync::Arc::new(s.clone())]), 2);
         assert_eq!(next_id(&[]), 1);
         // The boxes the caves keep their fluids from: its own (it has no
