@@ -421,9 +421,10 @@ from a height map takes a height too.
 
 **File ▸ Export** writes the world to a Minecraft saves folder for the
 version of the game you choose — the newest one installed on the computer
-to begin with — with its game mode, difficulty, cheats, hardcore,
-structures beyond the map, world border, spawn point, what surrounds the
-map (vanilla terrain or void) and data packs (copied in and enabled).
+to begin with — with its cheats, structures beyond the map, world border,
+spawn point, what surrounds the map (vanilla terrain or void), data packs
+(copied in and enabled), and, in its **Rules** tab, its game mode,
+difficulty, hardcore and world rules (see [World rules](#world-rules)).
 Versions before 1.18 hold 256 blocks of height: the map is cut below 0 and
 above 255, and the dialog says so. The water is written so that the game
 leaves it as it is (see [Water in the game](#water-in-the-game)). **Test Export** writes only the 3 × 3
@@ -450,6 +451,43 @@ and later the world is laid out as 26.1 lays it — the regions under
 `dimensions/minecraft/overworld/`, the world's generation, weather, time
 of day and border in files of their own. The game opens the world as it
 is, with no "make a backup" question and nothing converted.
+
+### World rules
+
+The export dialog's **Rules** tab sets what goes on by itself in the world,
+written into it so that it opens as set: no `/gamerule` to type after each
+export.
+
+- **Game**: the game mode, the difficulty, hardcore.
+- **Preset**: **Creative / Frozen** (nothing spawns, spreads, grows or
+  decays: no mobs, patrols, wandering trader nor phantoms, random ticks at
+  0, fire that does not spread, mobs that break no blocks, no weather nor
+  day going by, noon for good — to walk round a map as it was built),
+  **Survival safe** (fire does not spread and mobs break no blocks, the
+  rest as the game has it) and **Vanilla** (the game's own rules). Under
+  **Yours**, the presets you saved: change a rule and **Save as preset…**
+  keeps the rules under a name of your own. **Settings ▸ Export** lists
+  them, to rename or remove.
+- **Mobs**: mobs spawn, pillager patrols, the wandering trader, phantoms,
+  mobs change blocks (creepers, endermen…).
+- **Blocks and players**: fire spreads, **Random ticks** (the blocks ticked
+  at random in each chunk section every game tick, 3 in the game: crops and
+  grass grow, leaves decay, ice melts; 0 stops all of it), keep inventory.
+- **Time and weather**: day and night go by, the time of day the world
+  starts at (or stays at: morning, noon, sunset, night), the weather
+  changes, and the weather it starts with (or keeps: clear, rain,
+  thunder).
+
+The rules are written as each version keeps them: as `GameRules` in
+`level.dat` up to 1.21.10 (`doMobSpawning`, `randomTickSpeed`…), under the
+new names from 1.21.11 (`minecraft:spawn_mobs`, `minecraft:random_tick_speed`,
+fire spread as `minecraft:fire_spread_radius_around_player`…), and in
+`data/minecraft/game_rules.dat` from 26.1. A rule a version does not have
+(the patrols and the wandering trader before 1.15.2, phantoms before 1.15,
+the weather cycle before 1.11) is greyed, and left out of its world; only
+the rules that differ from the game's are written. The map keeps the rules,
+game mode and difficulty of its last export, and the dialog offers them
+again.
 
 ## Survival check
 

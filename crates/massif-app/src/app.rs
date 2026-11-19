@@ -16583,12 +16583,12 @@ mod tests {
             let mut h = harness(theme);
             h.run_steps(3);
             h.state_mut().open_export_dialog();
-            let form = |h: &mut egui_kittest::Harness<'static, MassifApp>| -> &mut ExportForm {
+            fn form<'a>(h: &'a mut egui_kittest::Harness<'static, MassifApp>) -> &'a mut ExportForm {
                 match &mut h.state_mut().dialog {
                     Some(Dialog::Export(form)) => form,
                     _ => panic!("the export dialog"),
                 }
-            };
+            }
             form(&mut h).tab = ExportTab::Rules;
             form(&mut h).target = massif_anvil::Target::release("1.21.11").unwrap();
             form(&mut h).parent = out.clone();
