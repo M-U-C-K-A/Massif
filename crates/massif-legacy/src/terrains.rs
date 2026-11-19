@@ -384,6 +384,9 @@ pub struct Mapper {
     pending_custom: BTreeMap<usize, u16>,
     /// Columns per WorldPainter terrain, for the report.
     pub terrain_use: BTreeMap<String, u64>,
+    /// The world's custom biomes (a mod's, or a newer version's), by
+    /// number: their identifiers.
+    custom_biomes: BTreeMap<u8, String>,
 }
 
 impl Mapper {
@@ -394,6 +397,15 @@ impl Mapper {
             biomes: [None; 256],
             pending_custom: BTreeMap::new(),
             terrain_use: BTreeMap::new(),
+            custom_biomes: BTreeMap::new(),
+        }
+    }
+
+    /// A custom biome of the world: WorldPainter's number for it, and its
+    /// identifier (`terralith:alpine_grove`).
+    pub fn custom_biome(&mut self, number: u8, id: &str) {
+        if crate::BIOMES[number as usize].is_none() && !id.is_empty() {
+            self.custom_biomes.insert(number, if id.contains(':') { id.to_owned() } else { format!("minecraft:{id}") });
         }
     }
 
@@ -558,13 +570,16 @@ impl Mapper {
         if let Some(id) = self.biomes[wp as usize] {
             return id;
         }
-        let id = match BIOMES[wp as usize] {
+        let custom = self.custom_biomes.get(&wp).cloned();
+        let id = match BIOMES[wp as usize].map(str::to_owned).or(custom) {
             None => 0,
-            Some(name) => match self.registry.biome_by_id(name) {
+            Some(name) => match self.registry.biome_by_id(&name) {
                 Some(id) => id.0,
                 None => {
                     let pretty = name
-                        .trim_start_matches("minecraft:")
+                        .rsplit(':')
+                        .next()
+                        .unwrap_or(&name)
                         .split('_')
                         .map(|w| {
                             let mut c = w.chars();
@@ -573,9 +588,9 @@ impl Mapper {
                         .collect::<Vec<_>>()
                         .join(" ");
                     self.registry.biomes.push(BiomeDef {
-                        id: name.into(),
+                        id: name.clone(),
                         name: pretty,
-                        color: block_color(name),
+                        color: block_color(&name),
                         ..Default::default()
                     });
                     (self.registry.biomes.len() - 1) as u16

@@ -16,6 +16,7 @@ USAGE
   massif-cli verify <world.massif>
   massif-cli export <world.massif> <folder> [--version V] [--void] [--survival] [--no-ores] [--overwrite]
   massif-cli import <old.world> <out.massif>
+  massif-cli to-worldpainter <world.massif> <out.world> [--version V] [--probe <columns.tsv> [--samples N]]
   massif-cli probe <world.massif> [<x> <z>…] [--random N]
   massif-cli analyse <world.massif>
   massif-cli water <world.massif>
@@ -31,6 +32,12 @@ USAGE
               which every later version opens)
   --void      nothing generates around the exported map (default: vanilla terrain)
   --no-ores   lay no ores in the rock (default: the map's own, see Edit ▸ Ores)
+
+  to-worldpainter writes the map as a WorldPainter world (.world) that WorldPainter
+  opens and saves as its own; --version picks the Minecraft version it is for
+  (default 1.21.11). It prints what WorldPainter could not take. --probe writes
+  what WorldPainter should find at N columns (default 2000), for
+  tools/worldpainter/check.sh world <out.world> --expect <columns.tsv>.
 
   probe prints, for each column, what the export writes there, one JSON object a
   line: its top solid block (y and block state), the water over it, its biome —
@@ -239,6 +246,33 @@ fn cmd_export(mut args: Args) -> Res<()> {
         human(stats.bytes)
     );
     println!("loaded in {loaded:.2?}, exported in {:.2?}", stats.elapsed);
+    Ok(())
+}
+
+fn cmd_to_worldpainter(mut args: Args) -> Res<()> {
+    let mut options = massif_legacy::WpOptions::default();
+    if let Some(v) = args.option("--version")? {
+        options.minecraft = v;
+    }
+    let probe = args.option("--probe")?;
+    let samples: usize = args.option("--samples")?.map_or(Ok(2000), |s| s.parse().map_err(|_| "--samples expects a number"))?;
+    let [input, out] = args.positional(["<world.massif>", "<out.world>"])?;
+    let t = Instant::now();
+    let world = if input.extension().is_some_and(|e| e == "world") {
+        massif_legacy::import_world(&input, None).map(|(w, _)| w).map_err(|e| e.to_string())?
+    } else {
+        massif_format::load(&input).map_err(|e| e.to_string())?
+    };
+    let loaded = t.elapsed();
+    let t = Instant::now();
+    let report = massif_legacy::export_world(&world, &out, &options, None).map_err(|e| e.to_string())?;
+    println!("{} → {}", input.display(), out.display());
+    println!("{}", report.text());
+    println!("  loaded in {loaded:.2?}, written in {:.2?}: {:.1} MB", t.elapsed(), report.bytes as f64 / 1e6);
+    if let Some(probe) = probe {
+        std::fs::write(&probe, massif_legacy::wp_export::expectations(&world, &options, samples)).map_err(|e| e.to_string())?;
+        println!("  {samples} columns as WorldPainter should find them: {probe}");
+    }
     Ok(())
 }
 
@@ -786,6 +820,7 @@ fn main() -> ExitCode {
         "verify" => cmd_verify(args),
         "export" => cmd_export(args),
         "import" => cmd_import(args),
+        "to-worldpainter" => cmd_to_worldpainter(args),
         "probe" => cmd_probe(args),
         "water" => cmd_water(args),
         "rivers" => cmd_rivers(args),

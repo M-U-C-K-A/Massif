@@ -215,6 +215,20 @@ impl Converter {
                 if thickness == 0 {
                     return Vec::new();
                 }
+                // One of Massif's ground covers of plants a WorldPainter
+                // world kept as a layer of its blocks: a cover again.
+                if thickness == 1 && arena.field(key, "description").and_then(|d| arena.string(d)).is_some_and(|d| d.ends_with(crate::wp_export::COVER_MARK)) {
+                    let plants: Vec<(String, u16)> = blocks.iter().map(|(s, n)| (s.clone(), (*n).clamp(1, u16::MAX as u32) as u16)).collect();
+                    let color = arena.field(key, "colour").and_then(|c| arena.int(c)).map_or([96, 160, 72], |c| [(c >> 16) as u8, (c >> 8) as u8, c as u8]);
+                    let mut def = CoverDef::new(&name, color, &[], 1.0);
+                    def.plants = plants;
+                    def.soil_only = false;
+                    let n = match mapper.registry.cover_by_name(&name) {
+                        Some(n) if mapper.registry.covers[n as usize - 1].plants == def.plants => n,
+                        _ => mapper.registry.add_cover(def),
+                    };
+                    return vec![(Conv::Cover(n), 1.0)];
+                }
                 self.ground_covers.push(GroundCover { name, blocks, thickness });
                 vec![(Conv::GroundCover(self.ground_covers.len() as u16 - 1), 1.0)]
             }
@@ -561,6 +575,32 @@ fn wp_object(arena: &Arena, object: Value) -> Option<(massif_core::objects::Obje
                 [c("x"), c("z"), c("y")]
             });
             Some((def, Some(std::array::from_fn(|k| lo[k] + origin[k]))))
+        }
+        // WorldPainter's own objects (and those Massif writes): a material
+        // or nothing for each block, x first, then WorldPainter's y
+        // (Massif's z), then up — Massif's order.
+        "GenericObject" => {
+            let (w, l, h) = (int("dimX")?, int("dimY")?, int("dimZ")?);
+            let items = match arena.field(object, "data").and_then(|d| arena.array(d))? {
+                Array::Object(items) if items.len() == w * l * h => items,
+                _ => return None,
+            };
+            if !fits(w, h, l) {
+                return None;
+            }
+            let mut palette = vec![String::new()];
+            let mut index: HashMap<Handle, u16> = HashMap::new();
+            let blocks = items
+                .iter()
+                .map(|&m| {
+                    let Value::Ref(h) = m else { return 0 };
+                    *index.entry(h).or_insert_with(|| {
+                        palette.push(state(m));
+                        (palette.len() - 1) as u16
+                    })
+                })
+                .collect();
+            Some((ObjectDef::new(&name, [w as u16, h as u16, l as u16], palette, blocks), None))
         }
         _ => None,
     }
@@ -1094,6 +1134,18 @@ const PLANTS: &[(&str, Kind)] = &[
     ("short_dry_grass", Plain),
     ("tall_dry_grass", Plain),
 ];
+
+/// The blocks of WorldPainter's plants, in the order of its catalogue (an
+/// empty name for one a cover does not grow).
+pub(crate) fn plant_names() -> impl Iterator<Item = &'static str> {
+    PLANTS.iter().map(|p| p.0)
+}
+
+/// Whether plant `k` of WorldPainter's catalogue grows several blocks high
+/// (cactus, sugar cane, kelp, bamboo), its growth being its height.
+pub(crate) fn plant_grows_tall(k: usize) -> bool {
+    PLANTS.get(k).is_some_and(|p| p.1 == Kind::Tall) || PLANTS.get(k).is_some_and(|p| p.0 == "kelp")
+}
 
 #[cfg(test)]
 mod tests {

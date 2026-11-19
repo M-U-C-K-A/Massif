@@ -34,6 +34,7 @@ const TILE_CLASS: &str = "org.pepsoft.worldpainter.Tile";
 const WORLD_CLASS: &str = "org.pepsoft.worldpainter.World2";
 const LEGACY_WORLD_CLASS: &str = "org.pepsoft.worldpainter.World";
 const BIOME_LAYER: &str = "org.pepsoft.worldpainter.layers.Biome";
+const CUSTOM_BIOME_CLASS: &str = "org.pepsoft.worldpainter.biomeschemes.CustomBiome";
 
 #[derive(Debug, thiserror::Error)]
 pub enum ImportError {
@@ -359,6 +360,15 @@ struct TileHook<'m> {
 impl TileHook<'_> {
     fn extract(&mut self, arena: &mut Arena, h: Handle) -> Option<RawTile> {
         let v = Value::Ref(h);
+        if arena.class_name(v) == Some(CUSTOM_BIOME_CLASS) {
+            // A dimension's custom biomes come before its tiles.
+            let number = arena.field(v, "id").and_then(|i| arena.int(i));
+            let name = arena.field(v, "name").and_then(|n| arena.string(n));
+            if let (Some(number @ 0..=254), Some(name)) = (number, name) {
+                self.mapper.custom_biome(number as u8, name);
+            }
+            return None;
+        }
         if arena.class_name(v) != Some(TILE_CLASS) {
             return None;
         }
