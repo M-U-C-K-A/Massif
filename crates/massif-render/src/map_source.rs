@@ -132,7 +132,13 @@ impl MapBuilder {
                                             let cached = placed.lock().unwrap().get(&here).cloned();
                                             let list = cached.unwrap_or_else(|| {
                                                 let list = Arc::new(tile_placements(&ctx, &world, d, here));
-                                                placed.lock().unwrap().insert(here, list.clone());
+                                                let mut cache = placed.lock().unwrap();
+                                                // Kept for the tiles around, within bounds on a
+                                                // huge map: dropped and made again past that.
+                                                if cache.len() > 4096 {
+                                                    cache.clear();
+                                                }
+                                                cache.insert(here, list.clone());
                                                 list
                                             });
                                             objects.extend(list.iter().filter(|p| area.x0 <= p.x && p.x < area.x1 && area.z0 <= p.z && p.z < area.z1).copied());
@@ -147,7 +153,7 @@ impl MapBuilder {
                                 let steady = if planner.as_ref().is_some_and(|p| p.needs(pos)) { massif_core::water::steady_tile(d, pos, planner.as_ref()) } else { Vec::new() };
                                 let slabs = massif_core::shapes::plan_tile(d, &world.meta.smooth, pos);
                                 let mut patch = Patch::new(pos.x * TILE_CHUNKS, pos.z * TILE_CHUNKS, TILE_CHUNKS as usize, TILE_CHUNKS as usize, sections);
-                                patch.edges = edges(d, pos, ctx.min_y, sections);
+                                patch.edges = edges(d, pos, ctx.min_y, sections, world.meta.lava);
                                 for cz in 0..TILE_CHUNKS as usize {
                                     for cx in 0..TILE_CHUNKS as usize {
                                         let nbt = build_chunk(&ctx, &stack, pos, cx, cz, &objects, &steady, &slabs, scratch);
@@ -225,14 +231,16 @@ impl Drop for MapBuilder {
 }
 
 /// What the tiles around `pos` hold just beside it, from their solid
-/// spans (the levels, what they carve and the sculpted volumes): the
-/// faces of the tile's sides against their ground are hidden, and not
-/// kept as walls between the tiles. The objects and the caves the export
-/// adds are not in the spans: the faces against them are only kept where
-/// the spans have air.
-fn edges(d: &massif_core::world::Dimension, pos: TilePos, min_y: i32, sections: usize) -> [Option<Vec<u8>>; 4] {
+/// spans (the levels, what they carve and the sculpted volumes) and their
+/// water: the faces of the tile's sides against their ground, and its
+/// water against theirs, are hidden, and not kept as walls between the
+/// tiles. The objects and the caves the export adds are not in the spans:
+/// the faces against them are only kept where the spans have air.
+fn edges(d: &massif_core::world::Dimension, pos: TilePos, min_y: i32, sections: usize, lava: bool) -> [Option<Vec<u8>>; 4] {
     let h = sections * 16;
     let mut spans = Vec::new();
+    let mut fluids = Vec::new();
+    let fluid = if lava { crate::materials::Class::Lava } else { crate::materials::Class::Water } as u8;
     let mut out = [None, None, None, None];
     for (side, (dx, dz)) in [(-1, 0), (1, 0), (0, -1), (0, 1)].into_iter().enumerate() {
         let Some(stack) = TileStack::new(d, TilePos::new(pos.x + dx, pos.z + dz), true) else { continue };
@@ -244,10 +252,20 @@ fn edges(d: &massif_core::world::Dimension, pos: TilePos, min_y: i32, sections: 
                 2 => (along, 127),
                 _ => (along, 0),
             };
-            stack.spans(massif_core::coords::cell_index(x, z), &mut spans);
+            let cell = massif_core::coords::cell_index(x, z);
+            stack.spans(cell, &mut spans);
             for s in &spans {
                 let (y0, y1) = ((s.y0 - min_y).clamp(0, h as i32) as usize, (s.y1 - min_y).clamp(0, h as i32) as usize);
                 edge[along * h + y0..along * h + y1].fill(1);
+            }
+            stack.fluids(cell, &spans, &mut fluids);
+            for &(y0, y1) in &fluids {
+                let (y0, y1) = ((y0 - min_y).clamp(0, h as i32) as usize, (y1 - min_y).clamp(0, h as i32) as usize);
+                for v in &mut edge[along * h + y0..along * h + y1] {
+                    if *v == 0 {
+                        *v = fluid;
+                    }
+                }
             }
         }
         out[side] = Some(edge);

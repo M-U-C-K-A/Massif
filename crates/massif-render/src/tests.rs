@@ -86,7 +86,11 @@ fn a_map_path_traced() {
     let extent = Extent::of_map(&world, 0, &target).unwrap();
     let materials = Arc::new(Materials::new(cat.clone(), device.limits().max_texture_array_layers as usize));
     let center = extent.center();
-    let tiles = map_source::tiles_by_distance(&world, 0, center[0], center[2]);
+    let mut tiles = map_source::tiles_by_distance(&world, 0, center[0], center[2]);
+    // MASSIF_RENDER_TILES: only the nearest tiles of a huge map.
+    if let Some(n) = std::env::var("MASSIF_RENDER_TILES").ok().and_then(|v| v.parse().ok()) {
+        tiles.truncate(n);
+    }
     let tile_count = tiles.len();
     let (wall, cpu) = (Instant::now(), cpu_time());
     let mut builder = MapBuilder::start(world, 0, target, materials.clone(), tiles);
@@ -459,7 +463,7 @@ fn pbr_and_metals() {
     let Some(Ok(cat)) = massif_assets::load_newest() else { return };
     // Stone bricks with mortar: bricks of 8 × 4 pixels, their edges bent
     // out, smooth bricks and rough mortar.
-    let mortar = |x: u32, y: u32| y % 4 == 3 || (x + if (y / 4) % 2 == 0 { 0 } else { 4 }) % 8 == 7;
+    let mortar = |x: u32, y: u32| y % 4 == 3 || (x + if (y / 4).is_multiple_of(2) { 0 } else { 4 }) % 8 == 7;
     let normal = png(16, 16, |x, y| {
         if mortar(x, y) {
             [128, 128, 200, 255]

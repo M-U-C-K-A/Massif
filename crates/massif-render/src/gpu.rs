@@ -712,6 +712,11 @@ impl Renderer {
         self.samples = 0;
     }
 
+    /// The image's size in pixels, once there is one.
+    pub fn size(&self) -> Option<[u32; 2]> {
+        self.image.as_ref().map(|i| i.size)
+    }
+
     /// The image, as an sRGB view to show.
     pub fn view(&self) -> Option<&wgpu::TextureView> {
         self.image.as_ref().map(|i| &i.view)
@@ -726,6 +731,32 @@ impl Renderer {
     /// pixel (`coarse` false), or one sample for each 2 × 2 pixels, which
     /// starts the image over, while the view moves.
     pub fn render(&mut self, camera: &Camera, light: &Light, coarse: bool) -> Option<wgpu::CommandBuffer> {
+        let h = self.image.as_ref()?.size[1];
+        let cmd = self.encode(camera, light, coarse, 0, h)?;
+        self.samples = if coarse { 0 } else { self.samples + 1 };
+        Some(cmd)
+    }
+
+    /// Add this sample to the rows `y0..y1` of the image only: a large still
+    /// is drawn a band at a time, each a short job for the graphics card
+    /// (whose watchdog stops long ones), then [`Self::sample_done`] once
+    /// every band has its sample.
+    pub fn render_rows(&mut self, camera: &Camera, light: &Light, y0: u32, y1: u32) -> Option<wgpu::CommandBuffer> {
+        self.encode(camera, light, false, y0, y1)
+    }
+
+    /// Every band of the image has its sample: on to the next.
+    pub fn sample_done(&mut self) {
+        self.samples += 1;
+    }
+
+    /// Whether an image of `width` × `height` fits the graphics card (its
+    /// buffer of samples is the largest).
+    pub fn fits(&self, width: u32, height: u32) -> bool {
+        width as u64 * height as u64 * 16 <= self.max_binding && width <= self.device.limits().max_texture_dimension_2d && height <= self.device.limits().max_texture_dimension_2d
+    }
+
+    fn encode(&mut self, camera: &Camera, light: &Light, coarse: bool, y0: u32, y1: u32) -> Option<wgpu::CommandBuffer> {
         self.flush();
         let image = self.image.as_ref()?;
         let [w, h] = image.size;
@@ -792,7 +823,7 @@ impl Renderer {
             air: [light.air, light.haze, light.haze_g, altitude],
             fog: [light.fog, light.fog_height - origin[1] as f32, light.fog_falloff.max(0.5), light.fog_g],
             media: [light.shafts as u8 as f32, sea, light.emission, light.aperture],
-            lens: [light.focus.max(0.1), light.sea as u8 as f32, self.quad_base as f32, 0.0],
+            lens: [light.focus.max(0.1), light.sea as u8 as f32, self.quad_base as f32, y0 as f32],
             clouds: [light.cloud_cover, light.cloud_height - origin[1] as f32, light.cloud_thickness.max(1.0), if light.cloud_cover > 0.0 { light.cloud_density } else { 0.0 }],
             wind: [light.wind[0], light.wind[1], 1.0 / light.cloud_size.max(1.0), 0.0],
             water: [light.waves, 1.0 / light.wave_size.max(0.5), light.time, if light.real_water { light.water_clarity.max(0.01) } else { 0.0 }],
@@ -809,10 +840,10 @@ impl Renderer {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, self.bind_group.as_ref(), &[]);
             let shift = coarse as u32;
-            pass.dispatch_workgroups((w >> shift).max(1).div_ceil(8) + shift, (h >> shift).max(1).div_ceil(8) + shift, 1);
+            let rows = y1.min(h).saturating_sub(y0);
+            pass.dispatch_workgroups((w >> shift).max(1).div_ceil(8) + shift, (rows >> shift).max(1).div_ceil(8) + shift, 1);
         }
         self.frame = self.frame.wrapping_add(1);
-        self.samples = if coarse { 0 } else { self.samples + 1 };
         Some(encoder.finish())
     }
 

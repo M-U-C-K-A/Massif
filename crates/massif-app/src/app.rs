@@ -7730,6 +7730,17 @@ mod tests {
         if let Some(dir) = std::env::var_os("MASSIF_SNAPSHOT_DIR").map(PathBuf::from) {
             h.render().unwrap().save(dir.join("render-side.png")).unwrap();
         }
+        // A still saved: drawn a band at a time, then written as a PNG.
+        let out = std::env::var_os("MASSIF_SNAPSHOT_DIR").map_or_else(std::env::temp_dir, PathBuf::from).join("render-still.png");
+        let _ = std::fs::remove_file(&out);
+        h.state_mut().render_side.save_still(out.clone(), [1920, 1080], 32);
+        let started = std::time::Instant::now();
+        while h.state().render_side.saving() && started.elapsed().as_secs() < 120 {
+            h.step();
+        }
+        assert!(matches!(h.state().render_side.saved(), Some(Ok(_))), "{:?}", h.state().render_side.saved());
+        let (w, hgt) = image::image_dimensions(&out).unwrap();
+        assert_eq!((w, hgt), (1920, 1080));
         h.get_by_label_contains(&label(Icon::Map, "World")).click();
         h.run_steps(3);
         assert_eq!((h.state().layout.side(), h.state().layout.active), (Side::World, world));

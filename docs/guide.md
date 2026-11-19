@@ -120,9 +120,9 @@ brushes, terrain and biome palettes, levels or world info.
 - The app has three sides, switched at the top left: **Terrain**, the
   terrain generator (Graph and Render), **World**, the map editor
   (workspaces Layout, Sculpting, Painting, 3D, 3D Sculpt, Maps, Minimal),
-  and **Render**, marked Beta, where path-traced images of the map will be
-  made (it comes with the Massif 2.0 beta and says so until then). Each
-  side remembers the workspace it was left on.
+  and **Render**, marked Beta, where the map is path-traced and saved as
+  images (see [Render](#render)). Each side remembers the workspace it was
+  left on.
 - Workspaces are tabs of arrangements; duplicate one with `+`, right-click
   it to reset it (back to how it was at first; a copy goes back to what it
   was copied from), duplicate it or delete it. The layout is remembered.
@@ -2051,6 +2051,49 @@ every way) is exported for 1.20.1 and read back with an independent reader:
 every block state written is one of the 726,881 the game registers.
 Conquest Reforged's 222 MB jar is read with Minecraft 1.20.1 in about half
 a second, and its blocks take about 70 MB of memory.
+
+## Render
+
+The **Render** side (Beta, at the top left after Terrain and World) draws
+the open map path-traced on the graphics card: the light of the sun and
+the sky bounces off the land, shadows are soft, water mirrors the sky and
+lets the sea floor show in the shallows, and glowing blocks (glowstone,
+lanterns, torches, lava…) light what is around them. The map is built as
+the game would get it from an export (its levels, covers, trees and
+objects, ores and water), with the game's textures and models, nearest
+the view first: the image fills in from the middle out. While the view
+stays still it adds a sample a pixel a frame and grows clean; moving, it
+draws a quarter of the pixels and starts again.
+
+- **Drag** to turn about the point looked at, **right-drag** (or middle)
+  to slide over the land, the **wheel** to come closer, **double-click**
+  for the whole map again, **Shift-click** to focus the lens there.
+- **Sun and sky**: a **Look** to start from (Clear noon, Fair weather,
+  Golden hour, Blue hour, Foggy morning, Night), then the **Time**, the
+  **Day** of the year and the **Latitude** put the sun; **North** turns the
+  map under it. **Sun** and **Sky** set their light. At night, a moon.
+- **Atmosphere**: the **Air**'s blue, **Haze**, a **Fog** that fills the
+  low ground first (its **height** and how fast it **fades** above),
+  **Shafts of light** through it, and a **Sea around the map** out to the
+  horizon.
+- **Clouds**: their **Cover** (0: none), **Height**, **Thickness**,
+  **Density**, **Size**, and how far the **Wind** has moved them; they
+  shade the land.
+- **Lens**: the **Angle** of view, the **Aperture** (0: all sharp) and the
+  **Focus** distance, for a depth of field.
+- **Image**: how much the glowing blocks **Glow**, the light's
+  **Bounces**, and the **Exposure**.
+- **Image to save**: a **Size** (the view's, HD, 4K or 8K) and the
+  **Samples a pixel** (more: cleaner and slower), then **Save image…**
+  asks where and draws the image a band of rows at a time, the view showing
+  it as it comes, with its progress and **Cancel**; it is written as a PNG.
+  A size larger than the graphics card can draw is refused.
+- **Scene**: tiles built, chunks, the time they took, the graphics
+  memory, and the samples a second.
+
+A map larger than the graphics card's buffers is drawn in part, and says
+so. With less motion (Settings ▸ Accessibility), the view stops at 64
+samples a pixel.
 
 ## 3D Sculpt
 

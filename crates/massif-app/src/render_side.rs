@@ -15,7 +15,9 @@ use massif_core::coords::TilePos;
 use massif_render::map_source::{Extent, MapBuilder, target_for, tiles_by_distance};
 use massif_render::{Camera, Light, Materials, Renderer};
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 /// Width of the column of settings.
@@ -26,6 +28,25 @@ const UPLOAD_BUDGET: Duration = Duration::from_millis(6);
 const STILL_AFTER: f64 = 0.2;
 /// Samples a pixel the image stops at.
 const MOST_SAMPLES: u32 = 2048;
+
+/// The sizes a still is saved at: the view's, or one of the usual ones.
+const STILL_SIZES: [(&str, Option<[u32; 2]>); 4] = [(tn!("The view's"), None), ("HD", Some([1920, 1080])), ("4K", Some([3840, 2160])), ("8K", Some([7680, 4320]))];
+/// Pixels a frame adds a sample to while a still is drawn: about a view's
+/// worth, a short job for the graphics card whatever the still's size.
+const STILL_BAND: u32 = 2_000_000;
+
+/// A still being drawn: where it goes, at what size and to how many
+/// samples a pixel, from the camera and in the light it was asked in, and
+/// the next row of its next band.
+struct Still {
+    path: PathBuf,
+    size: [u32; 2],
+    samples: u32,
+    camera: Camera,
+    light: Light,
+    row: u32,
+    started: Instant,
+}
 
 /// The time and place the sun is put by.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -115,6 +136,16 @@ pub struct RenderSide {
     /// When the image last started adding samples up, and its samples
     /// then: how many it adds a second.
     since: Option<(Instant, u32)>,
+    /// The size a still is saved at (in [`STILL_SIZES`]) and its samples
+    /// a pixel; the one being drawn; the one being written; what became of
+    /// the last.
+    still_size: usize,
+    still_samples: u32,
+    still: Option<Still>,
+    writing: Option<Receiver<Result<String, String>>>,
+    saved: Option<Result<String, String>>,
+    /// The size the image's texture was shown at.
+    texture_size: [u32; 2],
 }
 
 impl Default for RenderSide {
@@ -122,7 +153,7 @@ impl Default for RenderSide {
         let mut light = Light::default();
         let time = Time::default();
         light.set_time(time.hour, time.day, time.latitude, time.north);
-        Self { scene: None, orbit: None, light, time, fov: 50.0, preset: usize::MAX, texture: None, dirty: HashSet::new(), moving_until: 0.0, last: None, since: None }
+        Self { scene: None, orbit: None, light, time, fov: 50.0, preset: usize::MAX, texture: None, dirty: HashSet::new(), moving_until: 0.0, last: None, since: None, still_size: 2, still_samples: 256, still: None, writing: None, saved: None, texture_size: [0; 2] }
     }
 }
 
@@ -137,6 +168,27 @@ impl RenderSide {
     #[cfg(test)]
     pub fn samples(&self) -> u32 {
         self.scene.as_ref().map_or(0, |s| s.renderer.samples)
+    }
+
+    /// Draw a still now, without asking where: for tests.
+    #[cfg(test)]
+    pub fn save_still(&mut self, path: PathBuf, size: [u32; 2], samples: u32) {
+        let fov = self.fov;
+        if let Some(orbit) = self.orbit {
+            self.still = Some(Still { path, size, samples, camera: orbit.camera(fov), light: self.light, row: 0, started: Instant::now() });
+        }
+    }
+
+    /// Whether a still is being drawn or written.
+    #[cfg(test)]
+    pub fn saving(&self) -> bool {
+        self.still.is_some() || self.writing.is_some()
+    }
+
+    /// What became of the last still: its file's name, or why it failed.
+    #[cfg(test)]
+    pub fn saved(&self) -> Option<&Result<String, String>> {
+        self.saved.as_ref()
     }
 
     /// Tiles the map changed in: built again when the side is shown.
@@ -245,7 +297,8 @@ impl RenderSide {
 
         // The camera: drag to turn about the point looked at, right-drag
         // (or middle) to slide over the land, the wheel to come closer.
-        let response = ui.interact(view, egui::Id::unique("massif render view"), Sense::click_and_drag());
+        let sense = if self.still.is_some() { Sense::hover() } else { Sense::click_and_drag() };
+        let response = ui.interact(view, egui::Id::unique("massif render view"), sense);
         let now = ui.input(|i| i.time);
         let extent = scene.renderer.extent();
         let span = extent.width.max(extent.depth) as f64 * 16.0;
@@ -261,7 +314,7 @@ impl RenderSide {
             orbit.target[0] -= (c * d.x as f64 - s * d.y as f64) * k;
             orbit.target[2] -= (s * d.x as f64 + c * d.y as f64) * k;
         }
-        if response.hovered() {
+        if response.hovered() && self.still.is_none() {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y + i.smooth_scroll_delta.x);
             if scroll != 0.0 {
                 orbit.distance = (orbit.distance * (-scroll as f64 * 0.003).exp()).clamp(3.0, span * 3.0 + 2000.0);
@@ -289,47 +342,113 @@ impl RenderSide {
             }
         }
 
-        // The image: as large as the view, in pixels.
+        // The image: as large as the view, in pixels; a still's own size
+        // while one is drawn.
         let ppp = ui.ctx().pixels_per_point();
         let px = [(view.width() * ppp).round().max(1.0) as u32, (view.height() * ppp).round().max(1.0) as u32];
-        let had = scene.renderer.view().is_some();
-        scene.renderer.resize(px[0], px[1]);
-        if !had || self.last.is_none_or(|l| l.2 != px) {
+        let wanted = self.still.as_ref().map_or(px, |s| s.size);
+        scene.renderer.resize(wanted[0], wanted[1]);
+        if scene.renderer.size() != Some(self.texture_size) || self.texture.is_none() {
             let image = scene.renderer.view().expect("made by resize");
             let mut egui_renderer = render_state.renderer.write();
             match self.texture {
                 Some(id) => egui_renderer.update_egui_texture_from_wgpu_texture(device, image, wgpu::FilterMode::Linear, id),
                 None => self.texture = Some(egui_renderer.register_native_texture(device, image, wgpu::FilterMode::Linear)),
             }
+            self.texture_size = scene.renderer.size().unwrap_or(wanted);
         }
-        let shown = (*orbit, self.light, px, self.fov);
-        if self.last.is_some_and(|l| l.0 != shown.0 || l.3 != shown.3) {
-            self.moving_until = now + STILL_AFTER;
-        }
-        if self.last.is_some_and(|l| l.1 != shown.1) || changed {
-            scene.renderer.restart();
-        }
-        self.last = Some(shown);
-        let moving = now < self.moving_until;
-        // With less motion (Settings ▸ Accessibility), the image settles
-        // sooner and stops there.
         let most = if theme::reduce_motion(ui.ctx()) { 64 } else { MOST_SAMPLES };
-        if moving || scene.renderer.samples < most {
-            if let Some(cmd) = scene.renderer.render(&orbit.camera(self.fov), &self.light, moving) {
+        if let Some(still) = &mut self.still {
+            // A band of rows a frame, every row a sample before the next.
+            let [w, h] = still.size;
+            let rows = ((STILL_BAND / w.max(1)) / 8 * 8).clamp(8, h.max(8));
+            if still.row == 0 && scene.renderer.samples == 0 {
+                scene.renderer.restart();
+            }
+            if let Some(cmd) = scene.renderer.render_rows(&still.camera, &still.light, still.row, (still.row + rows).min(h)) {
                 queue.submit([cmd]);
             }
+            still.row += rows;
+            if still.row >= h {
+                still.row = 0;
+                scene.renderer.sample_done();
+            }
             ui.ctx().request_repaint();
+            if scene.renderer.samples >= still.samples {
+                // Done: read it back, and write it away from the frames.
+                let still = self.still.take().expect("drawn above");
+                let image = scene.renderer.read_image();
+                let (tx, rx) = std::sync::mpsc::channel();
+                let took = still.started.elapsed().as_secs_f64();
+                std::thread::spawn(move || {
+                    let name = still.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    let result = match image {
+                        Some((w, h, rgba)) => {
+                            let mut png = Vec::new();
+                            image::write_buffer_with_format(&mut std::io::Cursor::new(&mut png), &rgba, w, h, image::ColorType::Rgba8, image::ImageFormat::Png)
+                                .map_err(|e| e.to_string())
+                                .and_then(|()| massif_core::atomic::write(&still.path, &png, true).map_err(|e| massif_core::atomic::describe(&e, &still.path)))
+                                .map(|()| format!("{name} · {w} × {h} · {took:.0} s"))
+                        }
+                        None => Err(tr!("the graphics card gave no image").to_owned()),
+                    };
+                    let _ = tx.send(result.map_err(|e| tr!("The image could not be saved: {e}", e)));
+                });
+                self.writing = Some(rx);
+                scene.renderer.restart();
+            }
+        } else {
+            let shown = (*orbit, self.light, px, self.fov);
+            if self.last.is_some_and(|l| l.0 != shown.0 || l.3 != shown.3) {
+                self.moving_until = now + STILL_AFTER;
+            }
+            if self.last.is_some_and(|l| l.1 != shown.1) || changed {
+                scene.renderer.restart();
+            }
+            self.last = Some(shown);
+            let moving = now < self.moving_until;
+            // With less motion (Settings ▸ Accessibility), the image settles
+            // sooner and stops there.
+            if moving || scene.renderer.samples < most {
+                if let Some(cmd) = scene.renderer.render(&orbit.camera(self.fov), &self.light, moving) {
+                    queue.submit([cmd]);
+                }
+                ui.ctx().request_repaint();
+            }
+        }
+        if let Some(rx) = &self.writing {
+            match rx.try_recv() {
+                Ok(result) => {
+                    self.saved = Some(result);
+                    self.writing = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.writing = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => ui.ctx().request_repaint_after(Duration::from_millis(50)),
+            }
         }
         let samples = scene.renderer.samples;
         if samples <= 1 || self.since.is_some_and(|(_, n)| samples < n) {
             self.since = (samples == 1).then(|| (Instant::now(), 1));
         }
         if let Some(id) = self.texture {
-            ui.painter().image(id, view, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            // A still fits the view, its own shape kept.
+            let [w, h] = self.texture_size;
+            let fit = if self.still.is_some() {
+                let k = (view.width() / w.max(1) as f32).min(view.height() / h.max(1) as f32);
+                Rect::from_center_size(view.center(), vec2(w as f32 * k, h as f32 * k))
+            } else {
+                view
+            };
+            ui.painter().image(id, fit, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
 
         // What it is at, over the bottom left of the image.
         let status = match (&scene.builder, scene.full) {
+            _ if self.still.is_some() => {
+                let s = self.still.as_ref().expect("checked");
+                let done = (scene.renderer.samples as f32 + s.row as f32 / s.size[1].max(1) as f32) / s.samples.max(1) as f32;
+                tr!("Drawing the image: {percent} %", percent = (done * 100.0).floor() as u32)
+            }
             (_, true) => tr!("The map is larger than the graphics card holds: part of it is missing").to_owned(),
             (Some(b), _) => {
                 let (done, all) = b.progress();
@@ -462,6 +581,59 @@ impl RenderSide {
         if let Some(k) = picked {
             self.preset = k;
             preset(k, light, time, sea);
+        }
+        col.label(RichText::new(tr!("Image to save")).size(12.0).color(pal.weak));
+        let mut start = false;
+        well(col, |ui| {
+            row(ui, tr!("Size"), |ui| {
+                let (name, size) = STILL_SIZES[self.still_size.min(STILL_SIZES.len() - 1)];
+                let text = size.map_or_else(|| crate::i18n::tr_name(name).to_owned(), |[w, h]| format!("{name} · {w} × {h}"));
+                crate::widgets::combo("render still size").selected_text(text).show_ui(ui, |ui| {
+                    for (k, (name, size)) in STILL_SIZES.iter().enumerate() {
+                        let text = size.map_or_else(|| crate::i18n::tr_name(name).to_owned(), |[w, h]| format!("{name} · {w} × {h}"));
+                        ui.selectable_value(&mut self.still_size, k, text);
+                    }
+                });
+            });
+            row(ui, tr!("Samples a pixel"), |ui| {
+                ui.add(Field::new(&mut self.still_samples, 16..=4096).logarithmic(true));
+            });
+        });
+        if self.still.is_some() {
+            col.horizontal(|ui| {
+                let s = self.still.as_ref().expect("checked");
+                let done = (scene.renderer.samples as f32 + s.row as f32 / s.size[1].max(1) as f32) / s.samples.max(1) as f32;
+                ui.add(egui::ProgressBar::new(done.clamp(0.0, 1.0)).desired_width(ui.available_width() - 90.0));
+                if ui.button(tr!("Cancel")).clicked() {
+                    self.still = None;
+                    scene.renderer.restart();
+                }
+            });
+        } else if col
+            .add_enabled(self.writing.is_none(), theme::primary_button(col, theme::with_icon(Icon::Camera, tr!("Save image…"))))
+            .on_hover_text(tr!("Render the view at full quality and save it as a PNG"))
+            .clicked()
+        {
+            start = true;
+        }
+        match &self.saved {
+            Some(Ok(name)) => {
+                col.label(RichText::new(tr!("Saved {name}", name)).size(11.5).color(pal.weak));
+            }
+            Some(Err(e)) => {
+                col.label(RichText::new(e.as_str()).size(11.5).color(pal.danger));
+            }
+            None => {}
+        }
+        if start {
+            let size = STILL_SIZES[self.still_size.min(STILL_SIZES.len() - 1)].1.unwrap_or(px);
+            if !scene.renderer.fits(size[0], size[1]) {
+                self.saved = Some(Err(tr!("This size is larger than the graphics card can draw").to_owned()));
+            } else if let Some(path) = rfd::FileDialog::new().set_file_name(format!("{}.png", doc.title())).add_filter(tr!("PNG image"), &["png"]).save_file() {
+                self.saved = None;
+                self.still = Some(Still { path, size, samples: self.still_samples, camera: orbit.camera(self.fov), light: self.light, row: 0, started: Instant::now() });
+                scene.renderer.restart();
+            }
         }
         col.label(RichText::new(tr!("Scene")).size(12.0).color(pal.weak));
         let memory = scene.renderer.memory();

@@ -65,7 +65,7 @@ pub struct Patch {
     /// By `z * width + x`.
     pub chunks: Vec<Option<Chunk>>,
     /// What is known of the blocks just outside the patch, on its west,
-    /// east, north and south sides: 1 where they are opaque, by
+    /// east, north and south sides: their class (see [`Class`]; 0, air), by
     /// `along * height + y` (`along`: z on the west and east, x on the
     /// north and south). Without it, a side's faces are all kept.
     pub edges: [Option<Vec<u8>>; 4],
@@ -106,8 +106,7 @@ impl Patch {
                 (_, _, true) => (2, x),
                 _ => (3, x),
             };
-            let opaque = self.edges[side].as_ref().is_some_and(|e| e.get((along * h + y) as usize).is_some_and(|&o| o != 0));
-            return if opaque { Class::Opaque } else { Class::Air };
+            return self.edges[side].as_ref().and_then(|e| e.get((along * h + y) as usize)).map_or(Class::Air, |&c| from_u8(c));
         }
         match self.section(x >> 4, z >> 4, y >> 4) {
             Some(s) => class(classes, s.get((x & 15) as usize, (y & 15) as usize, (z & 15) as usize)),

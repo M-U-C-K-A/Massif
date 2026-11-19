@@ -15,7 +15,7 @@ struct Params {
     air: vec4<f32>,      // the air's scattering, the haze's, its anisotropy, the eyes' height (km)
     fog: vec4<f32>,      // extinction a block at its base, base height (scene), falloff (blocks), anisotropy
     media: vec4<f32>,    // shafts on, sea level (scene), emission strength, the lens's radius
-    lens: vec4<f32>,     // focus distance, a sea around the map, where the shaped blocks' faces start
+    lens: vec4<f32>,     // focus distance, a sea around the map, where the shaped blocks' faces start, the first row drawn
     clouds: vec4<f32>,   // cover (0..1), base height (scene), thickness, extinction a block (0: none)
     wind: vec4<f32>,     // how far the wind moved them (x, z), 1 / the size of their shapes
     water: vec4<f32>,    // the waves' slope, 1 / their size, time (s), how much light water takes (0: water as the game's texture)
@@ -1094,12 +1094,13 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
             let eta = select(1.0 / 1.33, 1.33, in_water);
             let f = fresnel(c, eta);
             let t = refract(rd, n, eta);
+            let off = n * max(EPS, max(abs(p.x), max(abs(p.y), abs(p.z))) * 3e-7);
             if (rand(seed) < f || dot(t, t) == 0.0) {
                 rd = reflect(rd, n);
-                ro = p + n * EPS;
+                ro = p + off;
             } else {
                 rd = normalize(t);
-                ro = p - n * EPS;
+                ro = p - off;
                 in_water = !in_water;
             }
             mirror = true;
@@ -1167,7 +1168,9 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
             }
         }
         let v = -rd;
-        let pos = p + n * EPS;
+        // Off the surface by more far from the scene's corner, where floats
+        // are coarser.
+        let pos = p + n * max(EPS, max(abs(p.x), max(abs(p.y), abs(p.z))) * 3e-7);
         // The glowing blocks around, one drawn among them.
         sum += throughput * block_light(pos, ns, v, surf, seed);
         last_chunk = vec2<i32>(floor(pos.xz / 16.0));
@@ -1230,7 +1233,7 @@ fn radiance(ro_in: vec3<f32>, rd_in: vec3<f32>, seed: ptr<function, u32>) -> vec
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let shift = P.info.w;
-    let px = gid.xy << vec2<u32>(shift);
+    let px = (gid.xy << vec2<u32>(shift)) + vec2<u32>(0u, u32(P.lens.w));
     let w = P.size.x;
     let h = P.size.y;
     if (px.x >= w || px.y >= h) {
