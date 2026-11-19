@@ -1235,13 +1235,15 @@ impl Pairs {
 
     /// The columns of a tile, packed for the tracer: height, then colours,
     /// then the depth of water over it.
+    /// A colour a build does not have (it never should) is the list's
+    /// first, rather than a panic in the middle of a frame.
     pub fn pack(&mut self, b: &TileBuild) -> Vec<u32> {
         let map: Vec<u32> = b.pairs.iter().map(|&p| self.get(p) as u32).collect();
         b.heights
             .iter()
             .zip(&b.colors)
             .enumerate()
-            .map(|(k, (&h, &c))| if h == 0 { b.airs.get(k).copied().unwrap_or(0) } else { h as u32 | map[c as usize] << HEIGHT_BITS | (b.depths.get(k).copied().unwrap_or(0) as u32) << 24 })
+            .map(|(k, (&h, &c))| if h == 0 { b.airs.get(k).copied().unwrap_or(0) } else { h as u32 | map.get(c as usize).copied().unwrap_or(0) << HEIGHT_BITS | (b.depths.get(k).copied().unwrap_or(0) as u32) << 24 })
             .collect()
     }
 
@@ -4049,7 +4051,10 @@ impl Near {
             let d = |t: &TilePos| ((t.x as f64 + 0.5) * n - eye[0]).hypot((t.z as f64 + 0.5) * n - eye[2]);
             d(a).total_cmp(&d(b))
         });
-        let mut dim = doc.world.dims[doc.dim].snapshot();
+        // A copy that encodes nothing here: the tiles changed since they
+        // were last saved are encoded by the builder's thread (a map
+        // edited at length took seconds of the frame to freeze).
+        let copy = doc.world.dims[doc.dim].copy_unfrozen();
         let reg = doc.world.registry.clone();
         let style = self.style;
         let ring = if style.mode == MapMode::Slope { SLOPE_REACH } else { 1 };
@@ -4059,6 +4064,8 @@ impl Near {
         let stop = self.cancel.clone();
         let ctx = ctx.clone();
         let spawned = std::thread::Builder::new().name("massif 3d near builder".into()).spawn(move || {
+            let mut copy = copy;
+            let mut dim = copy.snapshot();
             let pool = builders();
             pool.install(|| {
                 for part in order.chunks(pool.current_num_threads().max(1)) {
@@ -4322,6 +4329,11 @@ fn build_sampled(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, cell: Til
     let mut pairs: Vec<Skin> = Vec::new();
     let water_pair = if style.lava { Skin::flat([207, 92, 20], [160, 60, 10]) } else { Skin::flat([52, 96, 200], [40, 70, 160]) };
     let mut water_at: Option<u16> = None;
+    // The colour of the columns the meshes draw (overhangs, caves, levels)
+    // in a tile the tracer draws none of: rock.
+    let rock = reg.block(reg.well_known.stone).color;
+    let rock_pair = Skin::flat(rock, rock);
+    let mut rock_at: Option<u16> = None;
     for rz in 0..stride {
         for rx in 0..stride {
             let real = TilePos::new(cell.x * stride + rx, cell.z * stride + rz);
@@ -4339,8 +4351,16 @@ fn build_sampled(dim: &Dimension, reg: &Registry, sea: f32, seed: i64, cell: Til
                     let fluid = view.fluid.get(c);
                     let (mut h, mut col) = (b.heights[c], base + b.colors[c]);
                     if h == 0 {
-                        // Overhangs and caves: their ground, at this scale.
+                        // Overhangs and caves: their ground, at this scale,
+                        // in a colour of the tile (rock where the tracer
+                        // draws none of its columns: it has no colours).
                         h = (massif_core::compose::block_top(top) - dim.min_y).clamp(1, HEIGHT_MASK as i32) as u16;
+                        if b.pairs.is_empty() {
+                            col = *rock_at.get_or_insert_with(|| {
+                                pairs.push(rock_pair);
+                                (pairs.len() - 1) as u16
+                            });
+                        }
                     }
                     if style.water && fluid != NO_FLUID && fluid as f32 > top + 0.3 {
                         h = (fluid as i32 - dim.min_y).clamp(1, HEIGHT_MASK as i32) as u16;
@@ -5723,7 +5743,10 @@ impl View3d {
     /// Build `order`'s tiles away from the frames, from a cold copy of the
     /// map (see [`Builder`]).
     fn start_builder(&mut self, doc: &mut Document, order: Vec<TilePos>, style: Style, stride: i32, ctx: &egui::Context) {
-        let mut dim = doc.world.dims[doc.dim].snapshot();
+        // A copy that encodes nothing here: the tiles changed since they
+        // were last saved are encoded by the builder's thread (a map
+        // edited at length took seconds of the frame to freeze).
+        let copy = doc.world.dims[doc.dim].copy_unfrozen();
         let reg = doc.world.registry.clone();
         // The tiles around a cell its build reads: its neighbours' columns
         // (walls, slopes), the objects that reach over it.
@@ -5740,6 +5763,8 @@ impl View3d {
         let ctx = ctx.clone();
         let given: HashSet<TilePos> = order.iter().copied().collect();
         let spawned = std::thread::Builder::new().name("massif 3d builder".into()).spawn(move || {
+            let mut copy = copy;
+            let mut dim = copy.snapshot();
             let pool = builders();
             pool.install(|| {
                 // Many cells: a first look at all of them first, the nearest
@@ -6668,6 +6693,109 @@ mod tests {
     use massif_core::level::LevelKind;
     use massif_core::ops::{self, Anchor, Surface};
     use massif_core::{Brush, BrushShape, Profile, World};
+
+    /// Where the water of MASSIF_WATER_WORLD (a .massif) stands over what
+    /// is beside it with nothing to hold it: a column of water whose level
+    /// is more than a block over a neighbour's water or ground, in clusters,
+    /// with the levels and the levels of the map there.
+    #[test]
+    fn water_standing_over_its_neighbours() {
+        let Some(path) = std::env::var_os("MASSIF_WATER_WORLD") else { return };
+        let world = massif_format::load(std::path::Path::new(&path)).unwrap();
+        let dim = &world.dims[0];
+        eprintln!("levels: {:?}", dim.levels.iter().map(|l| (l.name.clone(), l.kind, l.len())).collect::<Vec<_>>());
+        eprintln!("sea {}, bounds {:?}, min_y {}, max_y {}", world.meta.sea_level, dim.bounds(), dim.min_y, dim.max_y);
+        let ground = dim.ground();
+        let (lo, hi) = dim.bounds().unwrap();
+        let at = |x: i32, z: i32| -> Option<(f32, i16)> {
+            let t = ground.view(TilePos::containing(x, z))?;
+            let i = massif_core::coords::local_index(x, z);
+            Some((t.top.get(i), t.fluid.get(i)))
+        };
+        let mut found: Vec<(i32, i32, i16, i32)> = Vec::new();
+        for tz in lo.z..=hi.z {
+            for tx in lo.x..=hi.x {
+                let pos = TilePos::new(tx, tz);
+                let Some(t) = ground.view(pos) else { continue };
+                if t.fluid.get(0) == NO_FLUID && matches!(t.fluid, massif_core::Plane::Uniform(_)) {
+                    continue;
+                }
+                for k in 0..(TILE_SIZE * TILE_SIZE) as usize {
+                    let (x, z) = (tx * TILE_SIZE + (k as i32 % TILE_SIZE), tz * TILE_SIZE + (k as i32 / TILE_SIZE));
+                    let (top, f) = (t.top.get(k), t.fluid.get(k));
+                    if f == NO_FLUID || f as f32 <= top {
+                        continue;
+                    }
+                    for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                        let Some((nt, nf)) = at(x + dx, z + dz) else { continue };
+                        let held = (massif_core::compose::block_top(nt) as i32) >= f as i32 - 1;
+                        let level = if nf != NO_FLUID && nf as f32 > nt { nf as i32 } else { massif_core::compose::block_top(nt) + 1 };
+                        if !held && level < f as i32 - 1 {
+                            found.push((x, z, f, level));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("{} columns of water standing over a neighbour", found.len());
+        // In clusters of 256 × 256.
+        let mut groups: std::collections::BTreeMap<(i32, i32), (usize, i16, i16, i32, i32)> = std::collections::BTreeMap::new();
+        for &(x, z, f, l) in &found {
+            let e = groups.entry((x.div_euclid(256), z.div_euclid(256))).or_insert((0, i16::MAX, i16::MIN, i32::MAX, i32::MIN));
+            e.0 += 1;
+            e.1 = e.1.min(f);
+            e.2 = e.2.max(f);
+            e.3 = e.3.min(l);
+            e.4 = e.4.max(l);
+        }
+        let mut top: Vec<_> = groups.into_iter().collect();
+        top.sort_by_key(|g| std::cmp::Reverse(g.1.0));
+        for ((gx, gz), (n, fmin, fmax, lmin, lmax)) in top.iter().take(20) {
+            eprintln!("  around x {}, z {}: {n} columns, water {fmin}…{fmax}, beside {lmin}…{lmax}", gx * 256 + 128, gz * 256 + 128);
+        }
+    }
+
+    /// A tile none of whose columns the tracer draws (a slab floating over
+    /// the whole of it: two spans a column) has no colours of its own; on a
+    /// grid of a column every few blocks its columns took the colour after
+    /// the tile's last, past the end of the list, and packing them panicked
+    /// in the middle of a frame (a user's crash: "the len is 0 but the index
+    /// is 0"). They are rock, and the packing never panics.
+    #[test]
+    fn a_tile_the_tracer_draws_none_of_packs_on_a_coarse_grid() {
+        let mut w = generate(&GenParams { tiles_x: 1, tiles_z: 1, landform: Landform::Flat, ..GenParams::default() });
+        let tile = w.dims[0].ground().positions().next().unwrap();
+        let slab = w.dims[0].add_level("Floating", LevelKind::Solid);
+        let mut t = massif_core::tile::Tile::empty_slab();
+        t.top = massif_core::Plane::Uniform(160.0);
+        t.bottom = Some(massif_core::Plane::Uniform(150.0));
+        t.terrain = massif_core::Plane::Uniform(1);
+        w.dims[0].levels[slab].insert(tile, t);
+        let style = Style { mode: MapMode::Terrain, water: true, lava: false };
+        let dim = &w.dims[0];
+        for stride in [2, 4] {
+            let cell = grid_tile(tile, stride);
+            for rough in [1, ROUGH] {
+                let b = build_sampled(dim, &w.registry, 63.0, 1, cell, stride, rough, style);
+                assert!(b.heights.iter().any(|&h| h > 0), "drawn");
+                for (k, &h) in b.heights.iter().enumerate() {
+                    if h > 0 {
+                        assert!((b.colors[k] as usize) < b.pairs.len(), "stride {stride}, rough {rough}: colour {} of {}", b.colors[k], b.pairs.len());
+                    }
+                }
+                let mut pairs = Pairs::default();
+                pairs.pack(&b);
+            }
+        }
+        // A build whose colours point past its list packs all the same.
+        let mut b = build_tile(dim, &w.registry, 63.0, 1, tile, style);
+        b.pairs.clear();
+        b.heights[0] = 10;
+        b.colors[0] = 3;
+        let packed = Pairs::default().pack(&b);
+        assert_eq!(packed[0] & HEIGHT_MASK, 10);
+    }
 
     fn world() -> World {
         let mut w = generate(&GenParams {
