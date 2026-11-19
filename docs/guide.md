@@ -1929,6 +1929,10 @@ come first. **Instance…** reads any other modpack: choose its folder (the one 
 - reads its mods that have blocks (the others, Sodium, Iris and the like,
   are left out), its list of blocks made for WorldPainter (see below), and
   the resource packs it has turned on in the game;
+- reads the blocks its KubeJS scripts make, with their states, models and
+  textures from its `kubejs/assets` folder, as a mod named KubeJS (blocks a
+  script makes without writing their files there, nor a resource pack of
+  the instance, are not known);
 - reads them over the version of the game the instance plays, when that version is installed here;
   otherwise over the version read now, and the panel says so.
 
@@ -1937,6 +1941,14 @@ come first. **Instance…** reads any other modpack: choose its folder (the one 
 a pack's textures replace its mod's) and lists of blocks for WorldPainter
 (`.csv`). Each shows as a chip; clicking it takes it out. They are
 remembered, and read again each time Massif starts.
+
+**Textures made for Fusion.** Fusion draws a texture across blocks
+(continuous), by position (random) or joined to the blocks beside it
+(connecting), from a sheet of tiles that its `.png.mcmeta` describes. Massif
+shows each block with one tile of the sheet, at the size of a block: the
+first, the tile of a block with no neighbours for a connected texture.
+Without it, the whole sheet would be drawn on one block. The tiles do not
+join or vary from block to block yet.
 
 **The blocks.** A mod's blocks come after the game's, in its own creative
 tabs when it gives them (`assets/<namespace>/groups/*.txt`: Conquest
