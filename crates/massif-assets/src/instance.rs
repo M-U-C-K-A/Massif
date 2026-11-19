@@ -5,7 +5,8 @@
 //!
 //! Reading an instance is what makes a modpack's blocks one step away: a
 //! block mod's instance gives its jar, its resource packs and the list of
-//! blocks the mod writes for WorldPainter (`<mod>_wp.csv`) at once. Every
+//! blocks the mod writes for WorldPainter (`<mod>_wp.csv`) at once, and
+//! the blocks its KubeJS scripts make (`kubejs/assets`). Every
 //! instance with a mod with blocks is found the same way, whatever the mod.
 
 use crate::materials;
@@ -22,7 +23,8 @@ pub struct Instance {
     pub name: String,
     /// The version of the game it plays (`1.20.1`).
     pub minecraft: Option<String>,
-    /// The jars of its mods that have blocks, by name.
+    /// The jars of its mods that have blocks, by name, then its `kubejs`
+    /// folder when its scripts make blocks.
     pub mods: Vec<PathBuf>,
     /// Those mods' names, as their jars give them, in the same order.
     pub mod_names: Vec<String>,
@@ -68,6 +70,18 @@ impl Instance {
                 namespaces.extend(spaces);
                 instance.mods.push(jar);
                 instance.mod_names.push(name);
+            }
+        }
+        // KubeJS's folder: the blocks its scripts make, with their states,
+        // models and textures, as a mod's (after the mods, whose textures
+        // its models may use).
+        let kubejs = dir.join("kubejs");
+        if let Ok(archive) = Archive::folder(&kubejs, &["assets"]) {
+            let spaces = namespaces_in(archive.names());
+            if !spaces.is_empty() {
+                namespaces.extend(spaces);
+                instance.mods.push(kubejs);
+                instance.mod_names.push("KubeJS".to_owned());
             }
         }
         namespaces.sort();
