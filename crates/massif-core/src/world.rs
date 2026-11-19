@@ -42,6 +42,22 @@ pub struct WorldMeta {
     /// is exported (see [`crate::shapes`]).
     #[serde(default, skip_serializing_if = "crate::shapes::SmoothSettings::is_off")]
     pub smooth: crate::shapes::SmoothSettings,
+    /// The rules, game mode and difficulty last exported with: the export
+    /// dialog offers them again. `None`: never chosen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub export_rules: Option<ExportRules>,
+}
+
+/// What the world is played with, kept with the map from one export to the
+/// next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportRules {
+    pub rules: crate::rules::GameRules,
+    /// 0 survival, 1 creative, 2 adventure, 3 spectator, as the game numbers
+    /// them.
+    pub game_mode: u8,
+    /// 0 peaceful to 3 hard.
+    pub difficulty: u8,
 }
 
 impl Default for WorldMeta {
@@ -58,6 +74,7 @@ impl Default for WorldMeta {
             fill: None,
             palette: Default::default(),
             smooth: Default::default(),
+            export_rules: None,
         }
     }
 }

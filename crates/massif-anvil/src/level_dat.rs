@@ -17,8 +17,17 @@
 //!
 //! Written as the version itself writes it, the world opens without the
 //! game upgrading anything.
+//!
+//! The game rules (`/gamerule`) were strings in a `GameRules` compound,
+//! named in camel case, up to 1.21.10; 1.21.11 made them a registry
+//! (`GameRuleRegistryFix`, data version 4658): a `game_rules` compound of
+//! typed values under ids such as `minecraft:spawn_mobs`, `doFireTick`
+//! becoming the radius fire spreads in around players; 26.1 moved that
+//! compound to `data/minecraft/game_rules.dat`. Only the rules that differ
+//! from the game's are written: a world with the game's rules is as it was.
 
 use crate::version::{Era, Target};
+use massif_core::rules::{GameRules, Weather};
 use crate::nbt::{NbtWriter, TagType};
 use flate2::Compression;
 use flate2::write::GzEncoder;
@@ -83,6 +92,84 @@ pub struct LevelSettings {
     pub border: WorldBorder,
     /// Data packs to enable besides vanilla, by their id (`file/name.zip`).
     pub datapacks: Vec<String>,
+    /// The game rules, the weather and the time of day it starts with.
+    pub rules: GameRules,
+}
+
+/// The value of a game rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleValue {
+    Bool(bool),
+    Int(i32),
+}
+
+/// A game rule as the versions name it: its name up to 1.21.10, its id
+/// from 1.21.11, the first data version that has it, and its value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rule {
+    pub name: &'static str,
+    pub id: &'static str,
+    pub since: i32,
+    pub value: RuleValue,
+}
+
+/// From 1.21.11, the rules are a registry, typed (see the module's notes).
+pub const RULE_REGISTRY: i32 = 4658;
+
+/// The game rules `rules` sets apart from the game's, as `target` names
+/// them, the ones it does not have left out.
+pub fn game_rules(rules: &GameRules, target: &Target) -> Vec<Rule> {
+    let game = GameRules::vanilla();
+    let dv = target.data_version;
+    // The versions before 1.9 have no data version: 1.8 brought the random
+    // tick speed.
+    let old = target.name == "1.7.10";
+    let mut out = Vec::new();
+    let mut bool_rule = |name, id, since, on: bool, game: bool| {
+        if on != game {
+            out.push(Rule { name, id, since, value: RuleValue::Bool(on) });
+        }
+    };
+    bool_rule("doMobSpawning", "minecraft:spawn_mobs", 0, rules.spawn_mobs, game.spawn_mobs);
+    // 1.15.2 brought these two rules; 1.15 the phantoms'.
+    bool_rule("doPatrolSpawning", "minecraft:spawn_patrols", 2230, rules.spawn_patrols, game.spawn_patrols);
+    bool_rule("doTraderSpawning", "minecraft:spawn_wandering_traders", 2230, rules.spawn_traders, game.spawn_traders);
+    bool_rule("doInsomnia", "minecraft:spawn_phantoms", 2225, rules.spawn_phantoms, game.spawn_phantoms);
+    bool_rule("doDaylightCycle", "minecraft:advance_time", 0, rules.advance_time, game.advance_time);
+    // 1.11.
+    bool_rule("doWeatherCycle", "minecraft:advance_weather", 819, rules.advance_weather, game.advance_weather);
+    bool_rule("mobGriefing", "minecraft:mob_griefing", 0, rules.mob_griefing, game.mob_griefing);
+    bool_rule("keepInventory", "minecraft:keep_inventory", 0, rules.keep_inventory, game.keep_inventory);
+    if !rules.fire_spreads {
+        // From 1.21.11, the radius around players fire spreads in, 0 for
+        // none (the game's 128 when it spreads).
+        let value = if dv >= RULE_REGISTRY { RuleValue::Int(0) } else { RuleValue::Bool(false) };
+        out.push(Rule { name: "doFireTick", id: "minecraft:fire_spread_radius_around_player", since: 0, value });
+    }
+    let speed = rules.random_tick_speed.clamp(0, GameRules::MAX_TICK_SPEED);
+    if speed != game.random_tick_speed && !old {
+        out.push(Rule { name: "randomTickSpeed", id: "minecraft:random_tick_speed", since: 0, value: RuleValue::Int(speed) });
+    }
+    out.retain(|r| dv >= r.since || (dv == 0 && r.since == 0));
+    out
+}
+
+/// The rules as `target` keeps them: strings in `GameRules` before
+/// 1.21.11, typed values under their ids from it.
+fn write_rules(w: &mut NbtWriter, rules: &[Rule], target: &Target) {
+    for rule in rules {
+        if target.data_version >= RULE_REGISTRY {
+            match rule.value {
+                RuleValue::Bool(on) => w.bool(rule.id, on),
+                RuleValue::Int(n) => w.int(rule.id, n),
+            }
+        } else {
+            match rule.value {
+                RuleValue::Bool(on) => w.string(rule.name, if on { "true" } else { "false" }),
+                RuleValue::Int(n) => w.string(rule.name, &n.to_string()),
+            }
+        }
+    }
 }
 
 /// The data version from which a dimension's generator has no seed of its
@@ -159,6 +246,12 @@ pub fn level_nbt(s: &LevelSettings, target: &Target) -> Vec<u8> {
     w.bool("allowCommands", s.allow_commands);
     // Tells the game the spawn point is already chosen.
     w.bool("initialized", true);
+    let rules = game_rules(&s.rules, target);
+    if !rules.is_empty() && !split {
+        w.compound(if dv >= RULE_REGISTRY { "game_rules" } else { "GameRules" });
+        write_rules(&mut w, &rules, target);
+        w.end();
+    }
 
     if dv >= COMPOUNDS {
         w.compound("spawn");
@@ -176,10 +269,10 @@ pub fn level_nbt(s: &LevelSettings, target: &Target) -> Vec<u8> {
 
     w.long("Time", 0);
     if !split {
-        w.long("DayTime", DAY_TIME);
-        w.bool("raining", false);
+        w.long("DayTime", s.rules.time);
+        w.bool("raining", s.rules.weather != Weather::Clear);
         w.int("rainTime", 0);
-        w.bool("thundering", false);
+        w.bool("thundering", s.rules.weather == Weather::Thunder);
         w.int("thunderTime", 0);
         w.int("clearWeatherTime", 0);
     }
@@ -269,9 +362,6 @@ pub fn level_nbt(s: &LevelSettings, target: &Target) -> Vec<u8> {
     w.end(); // Data
     w.finish()
 }
-
-/// The time of day a world starts at: morning.
-const DAY_TIME: i64 = 1000;
 
 /// The inside of a border compound, as 1.21.9 writes it: its warning time
 /// in seconds before 1.21.11, in ticks from it.
@@ -382,19 +472,23 @@ pub fn world_files(s: &LevelSettings, target: &Target) -> io::Result<Vec<(String
                 w.int("clear_weather_time", 0);
                 w.int("rain_time", 0);
                 w.int("thunder_time", 0);
-                w.bool("raining", false);
-                w.bool("thundering", false);
+                w.bool("raining", s.rules.weather != Weather::Clear);
+                w.bool("thundering", s.rules.weather == Weather::Thunder);
             })?,
         ));
         files.push((
             data("world_clocks"),
             saved_data(target, |w| {
                 w.compound("minecraft:overworld");
-                w.long("total_ticks", DAY_TIME);
+                w.long("total_ticks", s.rules.time);
                 w.bool("paused", false);
                 w.end();
             })?,
         ));
+        let rules = game_rules(&s.rules, target);
+        if !rules.is_empty() {
+            files.push((data("game_rules"), saved_data(target, |w| write_rules(w, &rules, target))?));
+        }
         files.push((
             data("wandering_trader"),
             saved_data(target, |w| {
@@ -450,6 +544,7 @@ mod tests {
                 size: 4096.0,
             },
             datapacks: vec!["file/rivers.zip".into()],
+            rules: Default::default(),
         }
     }
 
@@ -534,6 +629,7 @@ mod digests {
             hardcore: true,
             border: WorldBorder { center: [100.0, -50.0], size: 4096.0 },
             datapacks: vec!["file/rivers.zip".into()],
+            rules: Default::default(),
         }
     }
 
@@ -582,6 +678,65 @@ mod digests {
 
     fn files(name: &str, surroundings: Surroundings) -> HashMap<String, HashMap<String, Value>> {
         world_files(&settings(surroundings), &crate::Target::release(name).unwrap()).unwrap().into_iter().map(|(path, bytes)| (path, read(&bytes))).collect()
+    }
+
+    /// The game rules, as each version keeps them: strings named in camel
+    /// case in level.dat up to 1.21.10, typed values under their ids from
+    /// 1.21.11, in a file of their own from 26.1; the rules a version lacks
+    /// left out, and nothing at all for the game's own rules. The weather
+    /// and the time of day follow the rules.
+    #[test]
+    fn the_game_rules_are_written_as_each_version_keeps_them() {
+        use massif_core::rules::{GameRules, Preset, Weather};
+        let frozen = Preset::Frozen.rules();
+        let read_rules = |name: &str, rules: GameRules| -> (HashMap<String, Value>, Option<HashMap<String, Value>>) {
+            let target = crate::Target::release(name).unwrap();
+            let files: HashMap<String, HashMap<String, Value>> = world_files(&LevelSettings { rules, ..settings(Surroundings::Vanilla) }, &target).unwrap().into_iter().map(|(path, bytes)| (path, read(&bytes))).collect();
+            let data = compound(&files["level.dat"]["Data"]).clone();
+            let rules = files.get("data/minecraft/game_rules.dat").map(|f| compound(&f["data"]).clone()).or_else(|| data.get("game_rules").map(|c| compound(c).clone())).or_else(|| data.get("GameRules").map(|c| compound(c).clone()));
+            (data, rules)
+        };
+        let s = |v: &str| Value::String(v.into());
+        // Up to 1.21.10: strings.
+        let (data, rules) = read_rules("1.21.1", frozen);
+        let rules = rules.expect("GameRules");
+        assert!(data.contains_key("GameRules"));
+        for (name, value) in [("doMobSpawning", "false"), ("doWeatherCycle", "false"), ("doDaylightCycle", "false"), ("randomTickSpeed", "0"), ("doFireTick", "false"), ("mobGriefing", "false"), ("doPatrolSpawning", "false"), ("doTraderSpawning", "false"), ("doInsomnia", "false")] {
+            assert_eq!(rules[name], s(value), "1.21.1 {name}");
+        }
+        assert!(!rules.contains_key("keepInventory"), "the game's own value is not written");
+        assert_eq!(data["DayTime"], Value::Long(6000));
+        // 1.14: no patrol, trader nor phantom rule yet.
+        let (_, rules) = read_rules("1.14.4", frozen);
+        let rules = rules.unwrap();
+        assert!(rules.contains_key("doMobSpawning") && !rules.contains_key("doPatrolSpawning") && !rules.contains_key("doInsomnia"));
+        // 1.21.11: the registry, typed, in level.dat.
+        let (data, rules) = read_rules("1.21.11", GameRules { keep_inventory: true, ..frozen });
+        let rules = rules.unwrap();
+        assert!(data.contains_key("game_rules") && !data.contains_key("GameRules"));
+        for (id, value) in [("minecraft:spawn_mobs", Value::Byte(0)), ("minecraft:advance_weather", Value::Byte(0)), ("minecraft:advance_time", Value::Byte(0)), ("minecraft:random_tick_speed", Value::Int(0)), ("minecraft:fire_spread_radius_around_player", Value::Int(0)), ("minecraft:mob_griefing", Value::Byte(0)), ("minecraft:spawn_patrols", Value::Byte(0)), ("minecraft:spawn_wandering_traders", Value::Byte(0)), ("minecraft:spawn_phantoms", Value::Byte(0)), ("minecraft:keep_inventory", Value::Byte(1))] {
+            assert_eq!(rules[id], value, "1.21.11 {id}");
+        }
+        // 26.1 on: a file of their own; the weather and the clock apart.
+        for name in ["26.1", "26.3"] {
+            let target = crate::Target::release(name).unwrap();
+            let files: HashMap<String, HashMap<String, Value>> = world_files(&LevelSettings { rules: GameRules { weather: Weather::Thunder, ..frozen }, ..settings(Surroundings::Vanilla) }, &target).unwrap().into_iter().map(|(path, bytes)| (path, read(&bytes))).collect();
+            let rules = compound(&files["data/minecraft/game_rules.dat"]["data"]);
+            assert_eq!(rules["minecraft:spawn_mobs"], Value::Byte(0), "{name}");
+            assert_eq!(files["data/minecraft/game_rules.dat"]["DataVersion"], Value::Int(target.data_version));
+            assert!(!compound(&files["level.dat"]["Data"]).contains_key("game_rules"), "{name}");
+            let weather = compound(&files["data/minecraft/weather.dat"]["data"]);
+            assert_eq!((&weather["raining"], &weather["thundering"]), (&Value::Byte(1), &Value::Byte(1)), "{name}");
+            assert_eq!(compound(&compound(&files["data/minecraft/world_clocks.dat"]["data"])["minecraft:overworld"])["total_ticks"], Value::Long(6000), "{name}");
+        }
+        // The game's own rules: nothing written, the files as they were.
+        for name in ["1.12.2", "1.21.1", "1.21.11", "26.3"] {
+            let (data, rules) = read_rules(name, GameRules::vanilla());
+            assert!(rules.is_none() && data.get("DayTime").is_none_or(|t| *t == Value::Long(1000)), "{name}");
+        }
+        // Fire alone, from 1.21.11: the radius it spreads in.
+        let (_, rules) = read_rules("1.21.11", Preset::SurvivalSafe.rules());
+        assert_eq!(rules.unwrap().len(), 2);
     }
 
     /// From 1.19 on, each version's level.dat and saved data hold what the

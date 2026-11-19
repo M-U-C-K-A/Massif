@@ -53,6 +53,8 @@ pub struct ExportOptions {
     pub border: WorldBorder,
     /// Data packs (folders or zip files) copied into the world and enabled.
     pub datapacks: Vec<PathBuf>,
+    /// The game rules, the weather and the time of day.
+    pub rules: massif_core::rules::GameRules,
     /// Where players appear; `None`: the world's own spawn point.
     pub spawn: Option<[i32; 3]>,
     /// Only export the tiles in this rectangle (inclusive), for a quick test.
@@ -83,6 +85,7 @@ impl Default for ExportOptions {
             hardcore: false,
             border: WorldBorder::default(),
             datapacks: Vec::new(),
+            rules: Default::default(),
             spawn: None,
             area: None,
             selection_only: false,
@@ -297,6 +300,7 @@ pub fn export(
         hardcore: options.hardcore,
         border: options.border,
         datapacks: packs,
+        rules: options.rules,
     };
     // The saved data first and level.dat last: a world is whole once its
     // level.dat is there.
